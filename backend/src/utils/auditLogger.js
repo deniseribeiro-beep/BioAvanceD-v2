@@ -1,0 +1,420 @@
+const logService = require('../services/log.service');
+const { sanitizePatientForLogs } = require('./patientAnonymization');
+const { getUserAnonId, anonymizeLogUser } = require('./userAnonymization');
+
+/**
+ * Logger Central de Auditoria
+ * Sistema padronizado de logging para o BioAvanceD
+ * Garante rastreabilidade total sem dados sensíveis (LGPD)
+ */
+
+class AuditLogger {
+  constructor() {
+    this.db = null;
+  }
+
+  /**
+   * Inicializa o logger com instância do banco
+   */
+  init(db) {
+    this.db = db;
+  }
+
+  /**
+   * Extrai informações da requisição HTTP para rastreamento
+   */
+  extractRequestInfo(req) {
+    if (!req) return {};
+
+    // Captura IP real considerando proxies e load balancers
+    let ip = 'N/A';
+    if (req.ip) {
+      ip = req.ip;
+    } else if (req.headers['x-forwarded-for']) {
+      // X-Forwarded-For pode conter múltiplos IPs (cliente, proxy1, proxy2)
+      const forwardedIps = req.headers['x-forwarded-for'].split(',');
+      ip = forwardedIps[0].trim(); // Primeiro IP é o cliente real
+    } else if (req.headers['x-real-ip']) {
+      ip = req.headers['x-real-ip'];
+    } else if (req.connection?.remoteAddress) {
+      ip = req.connection.remoteAddress;
+    } else if (req.socket?.remoteAddress) {
+      ip = req.socket.remoteAddress;
+    }
+
+    // Remove porta do IP se presente (ex: ::ffff:192.168.1.1:12345 -> ::ffff:192.168.1.1)
+    if (ip && ip.includes(':')) {
+      const parts = ip.split(':');
+      if (parts.length > 2) {
+        // IPv6 com porta
+        ip = parts.slice(0, -1).join(':');
+      } else if (parts.length === 2 && !parts[0].includes('.')) {
+        // IPv4 com porta
+        ip = parts[0];
+      }
+    }
+
+    return {
+      ip: ip,
+      ipOriginal: req.ip || req.connection?.remoteAddress || 'N/A',
+      forwardedFor: req.headers['x-forwarded-for'] || null,
+      realIp: req.headers['x-real-ip'] || null,
+      userAgent: req.headers['user-agent'] || 'N/A',
+      method: req.method || 'N/A',
+      path: req.path || req.url || 'N/A',
+      origin: req.headers.origin || 'N/A',
+      referer: req.headers.referer || req.headers.referrer || null,
+      host: req.headers.host || 'N/A',
+      protocol: req.protocol || 'http',
+      secure: req.secure || false,
+      headers: {
+        'accept': req.headers.accept || null,
+        'accept-language': req.headers['accept-language'] || null,
+        'accept-encoding': req.headers['accept-encoding'] || null,
+        'content-type': req.headers['content-type'] || null
+      }
+    };
+  }
+
+  /**
+   * Extrai informações do usuário (anonimizado para LGPD)
+   */
+  async extractUserInfo(req, db = null) {
+    if (!req || !req.user) return {};
+
+    const userID = req.user.userID || req.user._id?.toString() || null;
+    
+    // Obtém identificador anonimizado
+    const anonId = await getUserAnonId(req.user, db);
+
+    return {
+      userID: anonId, // Usa identificador anonimizado
+      userName: anonId, // Usa identificador anonimizado em vez de nome
+      userRole: req.user.roleName || (req.user.accessType === 4 ? 'Administrador' : 
+              req.user.accessType === 3 ? 'Coordenador' : 
+              req.user.accessType === 2 ? 'Técnico' : 'Usuário Externo')
+    };
+  }
+
+  /**
+   * Sanitiza payload removendo dados sensíveis
+   */
+  sanitizePayload(payload, entity) {
+    if (!payload || typeof payload !== 'object') return payload;
+
+    const sanitized = { ...payload };
+
+    // Remove campos sensíveis
+    const sensitiveFields = [
+      'password', 'passwordHash', 'mfaSecret', 'token', 'secret',
+      'patientName', 'name', 'email', 'cpf', 'document', 'address',
+      'phone', 'telefone', 'birthDate', 'dataNascimento'
+    ];
+
+    sensitiveFields.forEach(field => {
+      if (sanitized[field] !== undefined) {
+        delete sanitized[field];
+      }
+    });
+
+    // Se for entidade Patient, sanitiza usando utilitário específico
+    if (entity === 'Patient' && sanitized.patientID) {
+      return sanitizePatientForLogs(sanitized);
+    }
+
+    return sanitized;
+  }
+
+  /**
+   * Extrai stack simplificado de erro
+   */
+  extractErrorStack(error) {
+    if (!error || !error.stack) return null;
+
+    const stack = error.stack.split('\n').slice(0, 5).join('\n');
+    return stack;
+  }
+
+  /**
+   * Determina módulo de origem baseado no path da requisição
+   */
+  determineModule(path) {
+    if (!path) return 'Sistema';
+
+    const pathLower = path.toLowerCase();
+
+    if (pathLower.includes('/auth') || pathLower.includes('/login') || pathLower.includes('/logout')) {
+      return 'Autenticação';
+    }
+    if (pathLower.includes('/patient') || pathLower.includes('/paciente')) {
+      return 'Cadastro';
+    }
+    if (pathLower.includes('/sample') || pathLower.includes('/amostra')) {
+      return 'Amostras';
+    }
+    if (pathLower.includes('/import')) {
+      return 'Importação';
+    }
+    if (pathLower.includes('/user')) {
+      return 'Usuários';
+    }
+    if (pathLower.includes('/config') || pathLower.includes('/settings')) {
+      return 'Configurações';
+    }
+    if (pathLower.includes('/assistant') || pathLower.includes('/ia')) {
+      return 'IA Assistente';
+    }
+    if (pathLower.includes('/security') || pathLower.includes('/mfa')) {
+      return 'Segurança';
+    }
+    if (pathLower.includes('/backup')) {
+      return 'Backup';
+    }
+    if (pathLower.includes('/report')) {
+      return 'Relatórios';
+    }
+
+    return 'Sistema';
+  }
+
+  /**
+   * Registra log de auditoria
+   */
+  async log(options) {
+    if (!this.db) {
+      console.error('AuditLogger não foi inicializado. Chame init(db) primeiro.');
+      return;
+    }
+
+    const {
+      action,           // Tipo de ação (LOGIN, CREATE, UPDATE, etc.)
+      entity,           // Entidade afetada (Patient, Sample, User, etc.)
+      entityID,         // ID da entidade (sem dados sensíveis)
+      result,           // 'success', 'error', 'warning'
+      severity,         // 'info', 'warning', 'error', 'critical'
+      message,          // Mensagem detalhada
+      payload,          // Payload relevante (sanitizado)
+      error,            // Objeto de erro (opcional)
+      req,              // Requisição HTTP (opcional)
+      module            // Módulo de origem (opcional, será determinado automaticamente)
+    } = options;
+
+    try {
+      const requestInfo = this.extractRequestInfo(req);
+      const userInfo = await this.extractUserInfo(req, this.db);
+      const moduleName = module || (req ? this.determineModule(req.path || req.url) : 'Sistema');
+
+      // Sanitiza payload
+      const sanitizedPayload = payload ? this.sanitizePayload(payload, entity) : null;
+
+      // Extrai stack de erro se houver
+      const errorStack = error ? this.extractErrorStack(error) : null;
+
+      const logData = {
+        userID: userInfo.userID || 'USR-SYSTEM',
+        userName: userInfo.userName || 'USR-SYSTEM', // Já anonimizado pelo extractUserInfo
+        action: action.toUpperCase(),
+        entity: entity || 'Sistema',
+        entityID: entityID || null,
+        result: result || 'success',
+        severity: severity || 'info',
+        sourceIP: requestInfo.ip, // IP principal para compatibilidade
+        ipSource: requestInfo.ip, // Alias para compatibilidade
+        source: requestInfo.origin,
+        module: moduleName,
+        message: message || `${action} em ${entity}`,
+        payload: sanitizedPayload,
+        errorStack: errorStack,
+        timestamp: new Date(),
+        dateTime: new Date(),
+        metadata: {
+          // Dados de rastreamento completos
+          tracking: {
+            ip: requestInfo.ip,
+            ipOriginal: requestInfo.ipOriginal,
+            forwardedFor: requestInfo.forwardedFor,
+            realIp: requestInfo.realIp,
+            userAgent: requestInfo.userAgent,
+            referer: requestInfo.referer,
+            host: requestInfo.host,
+            protocol: requestInfo.protocol,
+            secure: requestInfo.secure
+          },
+          // Dados da requisição
+          request: {
+            method: requestInfo.method,
+            path: requestInfo.path,
+            origin: requestInfo.origin,
+            headers: requestInfo.headers
+          },
+          // Dados do usuário (anonimizado)
+          user: {
+            userID: userInfo.userID, // Identificador anonimizado
+            userRole: userInfo.userRole
+            // userName removido - não deve conter dados pessoais
+          }
+        }
+      };
+
+      // Garante anonimização completa antes de salvar
+      const anonymizedLogData = await anonymizeLogUser(logData, this.db);
+      
+      await logService.createLog(this.db, anonymizedLogData, req);
+    } catch (error) {
+      console.error('Erro ao registrar log de auditoria:', error.message);
+    }
+  }
+
+  /**
+   * Métodos de conveniência para ações comuns
+   */
+  async logLogin(req, success, error = null) {
+    await this.log({
+      action: 'LOGIN',
+      entity: 'Authentication',
+      result: success ? 'success' : 'error',
+      severity: success ? 'info' : 'warning',
+      message: success 
+        ? `Login realizado com sucesso`
+        : `Tentativa de login falhou: ${error?.message || 'Credenciais inválidas'}`,
+      error: error,
+      req: req,
+      module: 'Autenticação'
+    });
+  }
+
+  async logLogout(req) {
+    await this.log({
+      action: 'LOGOUT',
+      entity: 'Authentication',
+      result: 'success',
+      severity: 'info',
+      message: 'Logout realizado',
+      req: req,
+      module: 'Autenticação'
+    });
+  }
+
+  async logCreate(req, entity, entityID, payload = null) {
+    await this.log({
+      action: 'CREATE',
+      entity: entity,
+      entityID: entityID,
+      result: 'success',
+      severity: 'info',
+      message: `${entity} criado com sucesso`,
+      payload: payload,
+      req: req
+    });
+  }
+
+  async logUpdate(req, entity, entityID, payload = null) {
+    await this.log({
+      action: 'UPDATE',
+      entity: entity,
+      entityID: entityID,
+      result: 'success',
+      severity: 'info',
+      message: `${entity} atualizado com sucesso`,
+      payload: payload,
+      req: req
+    });
+  }
+
+  async logDelete(req, entity, entityID) {
+    await this.log({
+      action: 'DELETE',
+      entity: entity,
+      entityID: entityID,
+      result: 'success',
+      severity: 'warning',
+      message: `${entity} deletado`,
+      req: req
+    });
+  }
+
+  async logImport(req, entity, result, total, success, errors, context = {}) {
+    // Conforme fluxograma: registra após processamento com métricas consolidadas
+    const payload = {
+      total,
+      success,
+      errors,
+      jobID: context.jobID || null,
+      dataType: context.dataType || entity.toLowerCase(),
+      fhirResourcesCreated: context.fhirResourcesCreated || 0,
+      fhirResourcesUpdated: context.fhirResourcesUpdated || 0,
+      processingTime: context.processingTime || null,
+      status: result || 'pending',
+    };
+
+    await this.log({
+      action: 'IMPORT',
+      entity: entity,
+      result: errors > 0 ? 'warning' : (result === 'pending' ? 'info' : 'success'),
+      severity: errors > 0 ? 'warning' : (result === 'pending' ? 'info' : 'info'),
+      message: `Importação de ${entity}: ${success}/${total} registros importados${errors > 0 ? ` com ${errors} erro(s)` : ''}${context.jobID ? ` (Job: ${context.jobID})` : ''}`,
+      payload: payload,
+      req: req,
+      module: 'Importação'
+    });
+  }
+
+  async logError(req, entity, error, context = null) {
+    await this.log({
+      action: 'ERROR',
+      entity: entity || 'Sistema',
+      result: 'error',
+      severity: 'error',
+      message: `Erro: ${error?.message || 'Erro desconhecido'}`,
+      error: error,
+      payload: context,
+      req: req
+    });
+  }
+
+  async logLanguageChange(req, language) {
+    await this.log({
+      action: 'CONFIG',
+      entity: 'Settings',
+      result: 'success',
+      severity: 'info',
+      message: `Idioma alterado para ${language}`,
+      payload: { language },
+      req: req,
+      module: 'Configurações'
+    });
+  }
+
+  async logPermissionChange(req, targetUser, changes) {
+    await this.log({
+      action: 'UPDATE',
+      entity: 'User',
+      entityID: targetUser,
+      result: 'success',
+      severity: 'info',
+      message: 'Permissões ou cargo alterados',
+      payload: changes,
+      req: req,
+      module: 'Usuários'
+    });
+  }
+
+  async logAssistant(req, question, response) {
+    await this.log({
+      action: 'QUERY',
+      entity: 'Assistant',
+      result: 'success',
+      severity: 'info',
+      message: 'Consulta ao assistente IA',
+      payload: { questionLength: question?.length || 0, responseLength: response?.length || 0 },
+      req: req,
+      module: 'IA Assistente'
+    });
+  }
+}
+
+// Singleton instance
+const auditLogger = new AuditLogger();
+
+module.exports = auditLogger;
+

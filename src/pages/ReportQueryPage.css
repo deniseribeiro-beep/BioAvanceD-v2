@@ -1,0 +1,85 @@
+.report-query-page {
+  padding: 2rem;
+}
+
+.report-query-content {
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+}
+
+.filters-card,
+.preview-card {
+  padding: 2rem;
+}
+
+.filters-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 1.5rem;
+}
+
+.filter-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.preview-data {
+  max-height: 600px;
+  overflow-y: auto;
+  padding: 1rem;
+  background-color: #f8f9fa;
+  border-radius: 6px;
+}
+
+.preview-data pre {
+  margin: 0;
+  font-size: 0.875rem;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+/* Melhorias para tabelas na pré-visualização */
+.preview-card table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.preview-card table th {
+  text-align: left;
+  padding: 0.75rem;
+  background-color: #f1f5f9;
+  font-weight: 600;
+  border-bottom: 2px solid #e2e8f0;
+}
+
+.preview-card table td {
+  padding: 0.75rem;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.preview-card table tr:hover {
+  background-color: #f8fafc;
+}
+
+/* Scroll horizontal para tabelas grandes */
+.preview-card > div[style*="overflowX"] {
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  margin-top: 1rem;
+}
+
+@media print {
+  .filters-card,
+  .page-header,
+  button {
+    display: none !important;
+  }
+
+  .preview-card {
+    box-shadow: none;
+    border: none;
+  }
+}
+

@@ -1,0 +1,788 @@
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
+const XLSX = require('xlsx');
+const importLGPDService = require('../services/import-lgpd.service');
+const logService = require('../services/log.service');
+const logger = require('../utils/logger');
+const { sanitizePatientForLogs } = require('../utils/patientAnonymization');
+
+// Configuração do multer para upload
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const uploadsDir = path.join(__dirname, '../../uploads/temp');
+    if (!fs.existsSync(uploadsDir)) {
+      fs.mkdirSync(uploadsDir, { recursive: true });
+    }
+    cb(null, uploadsDir);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, uniqueSuffix + path.extname(file.originalname));
+  }
+});
+
+const upload = multer({
+  storage: storage,
+  limits: { fileSize: 100 * 1024 * 1024 } // 100MB
+});
+
+/**
+ * Controller de Importação LGPD
+ * Implementa importação de pacientes e amostras via CSV/Excel
+ * com total conformidade com anonimização LGPD
+ */
+class ImportLGPDController {
+  /**
+   * Middleware de upload
+   */
+  uploadMiddleware() {
+    return upload.single('file');
+  }
+
+  /**
+   * Importa pacientes via CSV/Excel
+   * Gera IDs automaticamente conforme LGPD
+   */
+  async importPatients(req, res) {
+    try {
+      const db = req.app.locals.db;
+      if (!db) {
+        return res.status(503).json({
+          success: false,
+          error: 'Banco de dados não disponível'
+        });
+      }
+
+      const file = req.file;
+
+      if (!file) {
+        return res.status(400).json({
+          success: false,
+          error: 'Arquivo não fornecido'
+        });
+      }
+
+      // Valida formato
+      if (!importLGPDService.validateFileFormat(file, 'patients')) {
+        importLGPDService.cleanupFile(file.path);
+        return res.status(400).json({
+          success: false,
+          error: 'Formato de arquivo inválido',
+          message: 'Apenas arquivos CSV ou Excel (.xlsx) são aceitos'
+        });
+      }
+
+      // Processa importação
+      const results = await importLGPDService.importPatients(db, file);
+
+      // Registra log sanitizado (anonimizado via auditLogger)
+      if (req.user) {
+        const auditLogger = require('../utils/auditLogger');
+        auditLogger.init(db);
+        await auditLogger.logImport(
+          req, 
+          'Patient', 
+          results.errors.length === 0 ? 'success' : 'partial',
+          results.total, 
+          results.success, 
+          results.errors.length
+        );
+      }
+
+      // Limpa arquivo temporário
+      importLGPDService.cleanupFile(file.path);
+
+      // Determina mensagem baseada no resultado
+      let message = 'Importação concluída';
+      if (results.errors.length === 0) {
+        message = `Importação concluída com sucesso! ${results.success} paciente(s) cadastrado(s) no sistema.`;
+      } else if (results.success > 0) {
+        message = `Importação parcialmente concluída: ${results.success} paciente(s) importado(s) com sucesso. ${results.errors.length} registro(s) apresentaram erro(s) e não foram importados.`;
+      } else {
+        message = `Importação não realizada: ${results.errors.length} erro(s) encontrado(s). Nenhum paciente foi cadastrado. Verifique os detalhes dos erros para corrigir o arquivo.`;
+      }
+
+      return res.status(200).json({
+        success: results.errors.length === 0,
+        message: message,
+        data: {
+          total: results.total,
+          success: results.success,
+          errors: results.errors.length,
+          errorsDetails: results.errors.map(err => ({
+            row: err.row,
+            errors: Array.isArray(err.errors) ? err.errors : [err.errors]
+            // NÃO inclui dados sensíveis
+          }))
+        }
+      });
+
+    } catch (error) {
+      logger.error('Erro ao importar pacientes:', error);
+      logger.error('Stack trace:', error.stack);
+      
+      // Registra log de erro (anonimizado via auditLogger)
+      if (req.user) {
+        try {
+          const auditLogger = require('../utils/auditLogger');
+          auditLogger.init(db);
+          await auditLogger.logError(
+            req,
+            'Patient',
+            error,
+            { action: 'IMPORT', fileName: req.file?.originalname || 'N/A' }
+          );
+        } catch (logError) {
+          logger.error('Erro ao registrar log de auditoria:', logError);
+        }
+      }
+      
+      // Limpa arquivo em caso de erro
+      if (req.file) {
+        importLGPDService.cleanupFile(req.file.path);
+      }
+
+      // Retorna mensagem de erro mais detalhada
+      const errorMessage = error.message || 'Erro desconhecido ao importar pacientes';
+      
+      return res.status(500).json({
+        success: false,
+        error: 'Erro ao importar pacientes',
+        message: errorMessage
+      });
+    }
+  }
+
+  /**
+   * Importa amostras via CSV/Excel
+   * Valida IDs de pacientes sem expor dados sensíveis
+   */
+  async importSamples(req, res) {
+    try {
+      const db = req.app.locals.db;
+      if (!db) {
+        return res.status(503).json({
+          success: false,
+          error: 'Banco de dados não disponível'
+        });
+      }
+
+      const file = req.file;
+
+      if (!file) {
+        return res.status(400).json({
+          success: false,
+          error: 'Arquivo não fornecido'
+        });
+      }
+
+      // Valida formato
+      if (!importLGPDService.validateFileFormat(file, 'samples')) {
+        importLGPDService.cleanupFile(file.path);
+        return res.status(400).json({
+          success: false,
+          error: 'Formato de arquivo inválido',
+          message: 'Apenas arquivos CSV ou Excel (.xlsx) são aceitos'
+        });
+      }
+
+      // Obtém parâmetros de localização e auto-incremento do FormData
+      const startLocationID = req.body.locationID ? parseInt(req.body.locationID) : null;
+      const autoIncrement = req.body.autoIncrement === 'true' || req.body.autoIncrement === true || req.body.autoIncrement === '1';
+      
+      logger.debug('Parâmetros de importação:', { startLocationID, autoIncrement });
+
+      // Processa importação
+      const results = await importLGPDService.importSamples(db, file, {
+        startLocationID,
+        autoIncrement
+      });
+
+      // Registra log sanitizado (anonimizado via auditLogger)
+      if (req.user) {
+        const auditLogger = require('../utils/auditLogger');
+        auditLogger.init(db);
+        await auditLogger.logImport(
+          req, 
+          'Sample', 
+          results.errors.length === 0 ? 'success' : 'partial',
+          results.total, 
+          results.success, 
+          results.errors.length
+        );
+      }
+
+      // Limpa arquivo temporário
+      importLGPDService.cleanupFile(file.path);
+
+      return res.status(200).json({
+        success: true,
+        message: 'Importação concluída',
+        data: {
+          total: results.total,
+          success: results.success,
+          errors: results.errors.length,
+          errorsDetails: results.errors.map(err => ({
+            row: err.row,
+            errors: err.errors,
+            patientID: err.data?.patientID || null // Apenas ID, sem dados sensíveis
+          }))
+        }
+      });
+
+    } catch (error) {
+      logger.error('Erro ao importar amostras:', error.message);
+      
+      // Limpa arquivo em caso de erro
+      if (req.file) {
+        importLGPDService.cleanupFile(req.file.path);
+      }
+
+      return res.status(500).json({
+        success: false,
+        error: 'Erro ao importar amostras',
+        message: error.message
+      });
+    }
+  }
+
+  /**
+   * Gera template CSV para pacientes
+   */
+
+  /**
+   * Gera template Excel para pacientes com instruções completas
+   */
+  async downloadPatientTemplateExcel(req, res) {
+    try {
+      const workbook = XLSX.utils.book_new();
+      
+      // ========== ABA DE INSTRUÇÕES ==========
+      const instructionsData = [
+        ['INSTRUÇÕES PARA PREENCHIMENTO DO TEMPLATE DE PACIENTES'],
+        [],
+        ['IMPORTANTE:'],
+        ['• O ID do paciente (patientID) será gerado automaticamente pelo sistema - NÃO preencha esta coluna'],
+        ['• Campos marcados com (*) são OBRIGATÓRIOS'],
+        ['• Campos não marcados são OPCIONAIS'],
+        ['• Mantenha o formato das colunas conforme especificado abaixo'],
+        [],
+        ['CAMPOS OBRIGATÓRIOS (*):'],
+        ['• patientName: Nome completo do paciente (Texto)'],
+        ['• birthDate: Data de nascimento no formato DD/MM/YYYY (Ex: 15/03/1985)'],
+        ['• sex: Sexo do paciente - use M (Masculino), F (Feminino) ou O (Outro)'],
+        [],
+        ['FORMATOS E TIPOS DE DADOS:'],
+        ['• patientName: Texto (obrigatório)'],
+        ['• birthDate: Data no formato DD/MM/YYYY (obrigatório) - Ex: 15/03/1985'],
+        ['• sex: M, F ou O (obrigatório) - Aceita também "Masculino" ou "Feminino"'],
+        ['• weight: Número decimal (opcional) - Peso em quilos - Ex: 65.5'],
+        ['• heightCm: Número decimal (opcional) - Altura em centímetros - Ex: 165'],
+        ['• recordNumber: Número ou texto (opcional) - Número do prontuário'],
+        ['• clinicalUnit: Texto (opcional) - Nome da unidade clínica'],
+        ['• unitAcronym: Texto (opcional) - Sigla da unidade (gerada automaticamente se não informada)'],
+        ['• diagnosticHypothesis: Texto (opcional) - Hipótese diagnóstica'],
+        ['• icdCode: Texto (opcional) - Código CID (Classificação Internacional de Doenças)'],
+        ['• hypertension: Sim/Não ou true/false (opcional) - Hipertensão'],
+        ['• obesity: Sim/Não ou true/false (opcional) - Obesidade'],
+        ['• diabetesType1: Sim/Não ou true/false (opcional) - Diabetes Tipo 1'],
+        ['• diabetesType2: Sim/Não ou true/false (opcional) - Diabetes Tipo 2'],
+        ['• copd: Sim/Não ou true/false (opcional) - Doença Pulmonar Obstrutiva Crônica'],
+        ['• ckd: Sim/Não ou true/false (opcional) - Doença Renal Crônica'],
+        ['• smoking: Sim/Não ou true/false (opcional) - Tabagismo'],
+        ['• alcoholUse: Sim/Não ou true/false (opcional) - Uso de álcool'],
+        ['• asthma: Sim/Não ou true/false (opcional) - Asma'],
+        ['• antibioticUse: Sim/Não ou true/false (opcional) - Uso de antibióticos'],
+        ['• insulinUse: Sim/Não ou true/false (opcional) - Uso de insulina'],
+        ['• antiviralUse: Sim/Não ou true/false (opcional) - Uso de antivirais'],
+        ['• geneticVariant: Texto (opcional) - Variante genética identificada'],
+        ['• alphaGal: Número decimal (opcional) - Resultado de α-Galactosidase (U/mL)'],
+        ['• lysoGb3: Número decimal (opcional) - Resultado de Lyso-Gb3 (ng/mL)'],
+        ['• notes: Texto (opcional) - Observações adicionais'],
+        [],
+        ['VALORES ACEITOS PARA CAMPOS BOOLEANOS:'],
+        ['• true, false (recomendado)'],
+        ['• Sim, Não'],
+        ['• sim, não'],
+        ['• S, N'],
+        ['• 1, 0'],
+        [],
+        ['VALORES ACEITOS PARA SEXO:'],
+        ['• M ou Masculino (Masculino)'],
+        ['• F ou Feminino (Feminino)'],
+        ['• O (Outro)'],
+        [],
+        ['EXEMPLO DE PREENCHIMENTO:'],
+        ['patientName: João Silva Santos'],
+        ['birthDate: 15/03/1985'],
+        ['sex: M'],
+        ['weight: 75.5'],
+        ['heightCm: 175'],
+        ['recordNumber: 2024001'],
+        ['clinicalUnit: Hospital Universitário'],
+        ['hypertension: Sim'],
+        ['diabetesType2: Não'],
+        [],
+        ['OBSERVAÇÕES IMPORTANTES:'],
+        ['• Não inclua a coluna patientID - ela será gerada automaticamente'],
+        ['• Mantenha os nomes das colunas exatamente como aparecem no template'],
+        ['• Não deixe linhas vazias entre os registros'],
+        ['• Certifique-se de que as datas estão no formato DD/MM/YYYY'],
+        ['• Valores numéricos devem usar ponto (.) como separador decimal'],
+        ['• O sistema validará todos os dados antes de importar'],
+      ];
+      
+      const instructionsSheet = XLSX.utils.aoa_to_sheet(instructionsData);
+      // Ajusta largura das colunas
+      instructionsSheet['!cols'] = [{ wch: 80 }];
+      XLSX.utils.book_append_sheet(workbook, instructionsSheet, 'Instruções');
+      
+      // ========== ABA DE DADOS (TEMPLATE) ==========
+      // Headers limpos (sem asteriscos ou descrições - serão usados para importação)
+      const headers = [
+        'patientName',
+        'birthDate',
+        'sex',
+        'weight',
+        'heightCm',
+        'recordNumber',
+        'clinicalUnit',
+        'unitAcronym',
+        'diagnosticHypothesis',
+        'icdCode',
+        'hypertension',
+        'obesity',
+        'diabetesType1',
+        'diabetesType2',
+        'copd',
+        'ckd',
+        'smoking',
+        'alcoholUse',
+        'asthma',
+        'antibioticUse',
+        'insulinUse',
+        'antiviralUse',
+        'geneticVariant',
+        'alphaGal',
+        'lysoGb3',
+        'notes'
+      ];
+      
+      // Linha de exemplo (primeira linha de dados) - ordem deve corresponder exatamente aos headers
+      const exampleRow = [
+        'João Silva Santos',        // patientName
+        '15/03/1985',               // birthDate
+        'M',                         // sex
+        '75.5',                      // weight
+        '175',                       // heightCm
+        '2024001',                   // recordNumber
+        'Hospital Universitário São Francisco de Assis', // clinicalUnit
+        'HUSF',                      // unitAcronym
+        'Doença de Fabry',           // diagnosticHypothesis
+        'E75.21',                    // icdCode
+        'false',                     // hypertension (boolean)
+        'false',                     // obesity (boolean)
+        'false',                     // diabetesType1 (boolean)
+        'true',                      // diabetesType2 (boolean)
+        'false',                     // copd (boolean)
+        'false',                     // ckd (boolean)
+        'false',                     // smoking (boolean)
+        'false',                     // alcoholUse (boolean)
+        'false',                     // asthma (boolean)
+        'false',                     // antibioticUse (boolean)
+        'true',                      // insulinUse (boolean)
+        'false',                     // antiviralUse (boolean)
+        'GLA337T>C, p.Ala143Thr',    // geneticVariant
+        '0.15',                      // alphaGal
+        '7.5',                       // lysoGb3
+        'Paciente em acompanhamento regular' // notes
+      ];
+      
+      // Cria planilha apenas com headers limpos e exemplo
+      const dataSheet = XLSX.utils.aoa_to_sheet([
+        headers,
+        exampleRow
+      ]);
+      
+      // Ajusta largura das colunas
+      const colWidths = headers.map((header, idx) => {
+        const maxLength = Math.max(
+          header.length,
+          exampleRow[idx]?.toString().length || 0,
+          15
+        );
+        return { wch: Math.min(maxLength + 2, 40) };
+      });
+      dataSheet['!cols'] = colWidths;
+      
+      // Congela primeira linha (headers)
+      dataSheet['!freeze'] = { xSplit: 0, ySplit: 1, topLeftCell: 'A2', activePane: 'bottomLeft' };
+      
+      XLSX.utils.book_append_sheet(workbook, dataSheet, 'Pacientes');
+
+      const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', 'attachment; filename="pacientes_template.xlsx"');
+      res.send(buffer);
+
+    } catch (error) {
+      logger.error('Erro ao gerar template Excel de pacientes:', error.message);
+      return res.status(500).json({
+        success: false,
+        error: 'Erro ao gerar template',
+        message: error.message
+      });
+    }
+  }
+
+  /**
+   * Gera template CSV para amostras
+   */
+  async downloadSampleTemplateCSV(req, res) {
+    try {
+      const { stringify } = require('csv-stringify/sync');
+      const db = req.app.locals.db;
+      
+      // Busca valores do banco de dados
+      let sampleTypes = [];
+      let sampleOrigins = [];
+      let extractionProtocols = [];
+      
+      if (db) {
+        try {
+          const sampleTypesCollection = db.collection('sampleTypes');
+          sampleTypes = await sampleTypesCollection.find({}).toArray();
+          
+          const sampleOriginsCollection = db.collection('sampleOrigins');
+          sampleOrigins = await sampleOriginsCollection.find({}).toArray();
+          
+          const extractionProtocolsCollection = db.collection('extractionProtocols');
+          extractionProtocols = await extractionProtocolsCollection.find({}).toArray();
+        } catch (err) {
+          logger.warn('Erro ao buscar valores do banco para template:', err.message);
+        }
+      }
+      
+      // Headers do template (incluindo patientID obrigatório)
+      // quality usa legenda MIABIS: 0=Não avaliada, 1=Adequada, 2=Inadequada
+      // locationID e barcode são opcionais - barcode será gerado automaticamente se não fornecido
+      const headers = [
+        'patientID',
+        'sampleType',
+        'sampleOrigin',
+        'extractionProtocol',
+        'barcode (opcional - será gerado automaticamente se não fornecido)',
+        'registrationDate',
+        'quantity',
+        'quality (MIABIS 0=Não avaliada, 1=Adequada, 2=Inadequada)',
+        'locationID (opcional - pode ser selecionado após upload)',
+        'linkedProject',
+        'currentStatus'
+      ];
+
+      // Linha de exemplo com valores do banco ou padrão
+      const exampleRow = [
+        '12345678',
+        sampleTypes.length > 0 ? sampleTypes[0].description : 'Sangue',
+        sampleOrigins.length > 0 ? sampleOrigins[0].description : 'Coleta',
+        extractionProtocols.length > 0 ? extractionProtocols[0].description : 'QIAGEN',
+        '', // barcode deixado vazio (opcional - será gerado automaticamente)
+        new Date().toLocaleDateString('pt-BR'),
+        '500.5',
+        '1',
+        '', // locationID deixado vazio (opcional - pode ser selecionado após upload)
+        'Projeto Genoma',
+        'Available'
+      ];
+
+      // Adiciona comentários com valores válidos
+      const comments = [];
+      if (sampleTypes.length > 0) {
+        comments.push(`# Valores válidos para sampleType: ${sampleTypes.map(t => t.description).join(', ')}`);
+      }
+      if (sampleOrigins.length > 0) {
+        comments.push(`# Valores válidos para sampleOrigin: ${sampleOrigins.map(o => o.description).join(', ')}`);
+      }
+      if (extractionProtocols.length > 0) {
+        comments.push(`# Valores válidos para extractionProtocol: ${extractionProtocols.map(p => p.description).join(', ')}`);
+      }
+
+      const rows = [
+        ...comments.map(c => [c]),
+        headers,
+        exampleRow
+      ];
+      
+      const csvContent = stringify(rows);
+
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', 'attachment; filename="amostras_template.csv"');
+      res.send(csvContent);
+
+    } catch (error) {
+      logger.error('Erro ao gerar template CSV de amostras:', error.message);
+      return res.status(500).json({
+        success: false,
+        error: 'Erro ao gerar template',
+        message: error.message
+      });
+    }
+  }
+
+  /**
+   * Gera template Excel para amostras (RF004)
+   */
+  async downloadSampleTemplateExcel(req, res) {
+    try {
+      const db = req.app.locals.db;
+      
+      // Busca valores do banco de dados (com fallback para valores padrão)
+      let sampleTypes = [];
+      let sampleOrigins = [];
+      let extractionProtocols = [];
+      
+      if (db) {
+        try {
+          const sampleTypesCollection = db.collection('sampleTypes');
+          sampleTypes = await sampleTypesCollection.find({}).toArray();
+        } catch (err) {
+          logger.warn('Erro ao buscar sampleTypes do banco para template Excel:', err.message);
+          sampleTypes = [];
+        }
+        
+        try {
+          const sampleOriginsCollection = db.collection('sampleOrigins');
+          sampleOrigins = await sampleOriginsCollection.find({}).toArray();
+        } catch (err) {
+          logger.warn('Erro ao buscar sampleOrigins do banco para template Excel:', err.message);
+          sampleOrigins = [];
+        }
+        
+        try {
+          const extractionProtocolsCollection = db.collection('extractionProtocols');
+          extractionProtocols = await extractionProtocolsCollection.find({}).toArray();
+        } catch (err) {
+          logger.warn('Erro ao buscar extractionProtocols do banco para template Excel:', err.message);
+          extractionProtocols = [];
+        }
+      } else {
+        logger.warn('Banco de dados não disponível, usando valores padrão para template Excel');
+      }
+      
+      const workbook = XLSX.utils.book_new();
+      
+      // ========== ABA DE INSTRUÇÕES ==========
+      const instructionsData = [
+        ['INSTRUÇÕES PARA PREENCHIMENTO DO TEMPLATE DE AMOSTRAS (RF004)'],
+        [],
+        ['IMPORTANTE:'],
+        ['• A maioria dos campos são OBRIGATÓRIOS, exceto locationID e barcode que são OPCIONAIS'],
+        ['• O patientID deve ser um ID anonimizado de 8 dígitos numéricos (ex: 12345678)'],
+        ['• O patientID deve existir no sistema (cadastrado previamente)'],
+        ['• Mantenha o formato das colunas conforme especificado abaixo'],
+        ['• O barcode é OPCIONAL - será gerado automaticamente se não fornecido'],
+        ['• Se fornecido, o barcode deve ser único (não pode estar duplicado)'],
+        ['• locationID é OPCIONAL - se não fornecido, você poderá selecionar após o upload'],
+        [],
+        ['CAMPOS OBRIGATÓRIOS:'],
+        ['• patientID: ID anonimizado de 8 dígitos do paciente (Texto) - Ex: 12345678'],
+        ['• sampleType: Tipo de amostra conforme MIABIS (Texto)'],
+        ['• sampleOrigin: Origem da amostra conforme MIABIS (Texto)'],
+        ['• extractionProtocol: Protocolo de extração conforme MIABIS (Texto)'],
+        ['• registrationDate: Data de registro no formato DD/MM/YYYY ou YYYY-MM-DD (Data)'],
+        ['• quantity: Quantidade em microlitros (µL) - Número decimal maior que zero'],
+        ['• quality: Qualidade conforme escala MIABIS (Número inteiro: 0=Não avaliada, 1=Adequada, 2=Inadequada)'],
+        ['• linkedProject: Nome do projeto vinculado (Texto)'],
+        ['• currentStatus: Status atual - Available, Withdrawn, Expired ou Destroyed'],
+        [],
+        ['CAMPOS OPCIONAIS:'],
+        ['• barcode: Código de barras único (Texto) - OPCIONAL. Se não fornecido, será gerado automaticamente no formato BR-YYYY-NNN'],
+        ['• locationID: ID da localização (Número inteiro) - OPCIONAL. Se não fornecido, pode ser selecionado após o upload do arquivo'],
+        [],
+        ['VALORES ACEITOS PARA sampleType (MIABIS):'],
+        ['• Sangue'],
+        ['• Urina'],
+        ['• Saliva'],
+        ['• Tecido'],
+        ['• DNA'],
+        ['• RNA'],
+        ['• Plasma'],
+        ['• Soro'],
+        ['• Líquido Cefalorraquidiano'],
+        [],
+        ['VALORES ACEITOS PARA sampleOrigin (MIABIS):'],
+        ['• Coleta'],
+        ['• Transferência'],
+        ['• Doação'],
+        ['• Pesquisa'],
+        [],
+        ['VALORES ACEITOS PARA extractionProtocol (MIABIS):'],
+        ['• Protocolo A'],
+        ['• Protocolo B'],
+        ['• Protocolo C'],
+        ['• QIAGEN'],
+        ['• Phenol-Chloroform'],
+        ['• Automated'],
+        ['• Ou qualquer protocolo com pelo menos 3 caracteres'],
+        [],
+        ['VALORES ACEITOS PARA quality (ESCALA MIABIS):'],
+        ['• 0 - Não avaliada (Not assessed)'],
+        ['• 1 - Adequada (Suitable)'],
+        ['• 2 - Inadequada (Not suitable)'],
+        ['• IMPORTANTE: Apenas valores 0, 1 ou 2 são aceitos'],
+        ['• Não são aceitos textos como "Alta", "Boa", "Ruim", etc.'],
+        [],
+        ['VALORES ACEITOS PARA currentStatus:'],
+        ['• Available (Disponível)'],
+        ['• Withdrawn (Retirada)'],
+        ['• Expired (Expirada)'],
+        ['• Destroyed (Destruída)'],
+        [],
+        ['EXEMPLO DE PREENCHIMENTO:'],
+        ['patientID: 12345678'],
+        ['sampleType: Sangue'],
+        ['sampleOrigin: Coleta'],
+        ['extractionProtocol: QIAGEN'],
+        ['barcode: BR-2024-001'],
+        ['registrationDate: 15/03/2024'],
+        ['quantity: 500.5'],
+        ['quality: 1'],
+        ['locationID: (deixe vazio para selecionar após upload)'],
+        ['linkedProject: Projeto Genoma'],
+        ['currentStatus: Available'],
+        [],
+        ['OBSERVAÇÕES IMPORTANTES:'],
+        ['• O patientID deve ter exatamente 8 dígitos numéricos'],
+        ['• O patientID deve existir no sistema (cadastrado previamente)'],
+        ['• O barcode é OPCIONAL - se não fornecido, será gerado automaticamente no formato BR-YYYY-NNN'],
+        ['• Se você fornecer um barcode, ele deve ser único (não pode estar duplicado)'],
+        ['• A quantidade deve ser maior que zero'],
+        ['• A data pode estar no formato DD/MM/YYYY ou YYYY-MM-DD'],
+        ['• O locationID é OPCIONAL - se não fornecido, você poderá selecionar após o upload'],
+        ['• Se locationID não for fornecido, será necessário selecionar uma localização inicial após o upload'],
+        ['• O sistema validará todos os dados antes de importar'],
+        ['• O sistema verificará duplicidade por barcode (apenas se fornecido)'],
+        ['• Nenhum dado pessoal do paciente será exposto (LGPD)'],
+      ];
+      
+      const instructionsSheet = XLSX.utils.aoa_to_sheet(instructionsData);
+      // Ajusta largura das colunas
+      instructionsSheet['!cols'] = [{ wch: 80 }];
+      XLSX.utils.book_append_sheet(workbook, instructionsSheet, 'Instruções');
+      
+      // ========== ABA DE DADOS (TEMPLATE) ==========
+      // Headers conforme RF004
+      // quality usa legenda MIABIS: 0=Não avaliada, 1=Adequada, 2=Inadequada
+      // barcode é opcional - será gerado automaticamente se não fornecido
+      const headers = [
+        'patientID',
+        'sampleType',
+        'sampleOrigin',
+        'extractionProtocol',
+        'barcode (opcional - será gerado automaticamente se não fornecido)',
+        'registrationDate',
+        'quantity',
+        'quality (MIABIS 0=Não avaliada, 1=Adequada, 2=Inadequada)',
+        'locationID (opcional - pode ser selecionado após upload)',
+        'linkedProject',
+        'currentStatus'
+      ];
+      
+      // Linha de exemplo (primeira linha de dados) - usa valores do banco
+      const exampleRow = [
+        '12345678',              // patientID (8 dígitos)
+        (sampleTypes.length > 0 && sampleTypes[0]?.description) ? sampleTypes[0].description : 'Sangue',                // sampleType
+        (sampleOrigins.length > 0 && sampleOrigins[0]?.description) ? sampleOrigins[0].description : 'Coleta',                // sampleOrigin
+        (extractionProtocols.length > 0 && extractionProtocols[0]?.description) ? extractionProtocols[0].description : 'QIAGEN',                // extractionProtocol
+        '',                      // barcode (opcional - deixado vazio para demonstrar geração automática)
+        new Date().toLocaleDateString('pt-BR'),            // registrationDate
+        '500.5',                 // quantity (µL)
+        '1',                     // quality (ID)
+        '',                      // locationID (opcional - deixado vazio no exemplo)
+        'Projeto Genoma',        // linkedProject
+        'Available'              // currentStatus
+      ];
+      
+      // Cria planilha apenas com headers e exemplo
+      const dataSheet = XLSX.utils.aoa_to_sheet([
+        headers,
+        exampleRow
+      ]);
+      
+      // Cria aba de referência com valores válidos
+      if (sampleTypes.length > 0 || sampleOrigins.length > 0 || extractionProtocols.length > 0) {
+        const referenceData = [];
+        referenceData.push(['REFERÊNCIA DE VALORES VÁLIDOS']);
+        referenceData.push([]);
+        
+        if (sampleTypes.length > 0) {
+          referenceData.push(['Tipo de Amostra (sampleType):']);
+          referenceData.push(['Descrição']);
+          sampleTypes.forEach(type => {
+            referenceData.push([type?.description || type?.name || 'N/A']);
+          });
+          referenceData.push([]);
+        }
+        
+        if (sampleOrigins.length > 0) {
+          referenceData.push(['Origem (sampleOrigin):']);
+          referenceData.push(['Descrição']);
+          sampleOrigins.forEach(origin => {
+            referenceData.push([origin?.description || origin?.name || 'N/A']);
+          });
+          referenceData.push([]);
+        }
+        
+        if (extractionProtocols.length > 0) {
+          referenceData.push(['Protocolo de Extração (extractionProtocol):']);
+          referenceData.push(['Descrição']);
+          extractionProtocols.forEach(protocol => {
+            referenceData.push([protocol?.description || protocol?.name || 'N/A']);
+          });
+        }
+        
+        const referenceSheet = XLSX.utils.aoa_to_sheet(referenceData);
+        referenceSheet['!cols'] = [{ wch: 50 }];
+        XLSX.utils.book_append_sheet(workbook, referenceSheet, 'Valores Válidos');
+      }
+      
+      // Ajusta largura das colunas
+      const colWidths = headers.map((header, idx) => {
+        const maxLength = Math.max(
+          header.length,
+          exampleRow[idx]?.toString().length || 0,
+          15
+        );
+        return { wch: Math.min(maxLength + 2, 40) };
+      });
+      dataSheet['!cols'] = colWidths;
+      
+      // Congela primeira linha (headers)
+      dataSheet['!freeze'] = { xSplit: 0, ySplit: 1, topLeftCell: 'A2', activePane: 'bottomLeft' };
+      
+      XLSX.utils.book_append_sheet(workbook, dataSheet, 'Amostras');
+
+      const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', 'attachment; filename="amostras_template.xlsx"');
+      res.send(buffer);
+
+    } catch (error) {
+      logger.error('Erro ao gerar template Excel de amostras:', error);
+      if (error.stack) {
+        logger.error('Stack trace:', error.stack);
+      }
+      return res.status(500).json({
+        success: false,
+        error: 'Erro ao gerar template',
+        message: error.message || 'Erro desconhecido ao gerar template Excel'
+      });
+    }
+  }
+}
+
+module.exports = new ImportLGPDController();
+

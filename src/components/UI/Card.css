@@ -1,0 +1,63 @@
+.card {
+  background-color: var(--surface);
+  border-radius: 0.75rem;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.card-header {
+  padding: 1.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.card-title {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.card-body {
+  padding: 1.5rem;
+}
+
+/* Tablet */
+@media (max-width: 1024px) {
+  .card-header,
+  .card-body {
+    padding: 1.25rem;
+  }
+  
+  .card-title {
+    font-size: 1.125rem;
+  }
+}
+
+/* Mobile */
+@media (max-width: 768px) {
+  .card {
+    border-radius: 0.5rem;
+  }
+  
+  .card-header,
+  .card-body {
+    padding: 1rem;
+  }
+  
+  .card-title {
+    font-size: 1rem;
+  }
+}
+
+/* Small Mobile */
+@media (max-width: 480px) {
+  .card-header,
+  .card-body {
+    padding: 0.875rem;
+  }
+  
+  .card-title {
+    font-size: 0.9375rem;
+  }
+}
+
+

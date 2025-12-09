@@ -1,0 +1,82 @@
+import { useState, useEffect } from 'react';
+import { Policy } from '../types/models';
+import { policyService } from '../services/api';
+
+export function usePolicies() {
+  const [policies, setPolicies] = useState<Policy[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    loadPolicies();
+  }, []);
+
+  const loadPolicies = async () => {
+    try {
+      setLoading(true);
+      const response = await policyService.getAll();
+      // Garante que seja um array
+      const policiesData = Array.isArray(response.data) 
+        ? response.data 
+        : (response.data?.data || []);
+      setPolicies(policiesData);
+      setError(null);
+    } catch (err: any) {
+      setError(err.message || 'Erro ao carregar políticas');
+      setPolicies([]); // Garante array vazio em caso de erro
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const getActiveLimit = async (policyID: number, isMax: boolean = true) => {
+    try {
+      const response = await policyService.getActiveLimit(policyID, isMax);
+      return response.data;
+    } catch (err: any) {
+      throw new Error(err.message || 'Erro ao obter limite ativo');
+    }
+  };
+
+  const createPolicy = async (data: Partial<Policy>) => {
+    try {
+      const response = await policyService.create(data);
+      setPolicies([...policies, response.data]);
+      return response.data;
+    } catch (err: any) {
+      throw new Error(err.message || 'Erro ao criar política');
+    }
+  };
+
+  const updatePolicy = async (id: number, data: Partial<Policy>) => {
+    try {
+      const response = await policyService.update(id, data);
+      setPolicies(policies.map((p) => (p.policyID === id ? response.data : p)));
+      return response.data;
+    } catch (err: any) {
+      throw new Error(err.message || 'Erro ao atualizar política');
+    }
+  };
+
+  const deletePolicy = async (id: number) => {
+    try {
+      await policyService.delete(id);
+      setPolicies(policies.filter((p) => p.policyID !== id));
+    } catch (err: any) {
+      throw new Error(err.message || 'Erro ao deletar política');
+    }
+  };
+
+  return {
+    policies,
+    loading,
+    error,
+    loadPolicies,
+    getActiveLimit,
+    createPolicy,
+    updatePolicy,
+    deletePolicy,
+  };
+}
+
+

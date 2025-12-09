@@ -1,0 +1,977 @@
+const csv = require('csv-parser');
+const XLSX = require('xlsx');
+const fs = require('fs');
+const path = require('path');
+const logger = require('../utils/logger');
+const PatientModel = require('../models/Patient');
+const SampleModel = require('../models/Sample');
+const patientService = require('./patient.service');
+const { generateUniquePatientID, validatePatientID, sanitizePatientForLogs } = require('../utils/patientAnonymization');
+
+/**
+ * Service de Importação LGPD
+ * Implementa importação de pacientes e amostras via CSV/Excel
+ * com total conformidade com anonimização LGPD
+ */
+class ImportLGPDService {
+  /**
+   * Valida formato do arquivo
+   */
+  validateFileFormat(file, allowedTypes) {
+    const ext = path.extname(file.originalname).toLowerCase();
+    const mimeType = file.mimetype;
+
+    const validExtensions = {
+      'patients': ['.csv', '.xlsx'],
+      'samples': ['.csv', '.xlsx']
+    };
+
+    const validMimeTypes = {
+      'patients': ['text/csv', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
+      'samples': ['text/csv', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet']
+    };
+
+    const extensions = validExtensions[allowedTypes] || [];
+    const mimeTypes = validMimeTypes[allowedTypes] || [];
+
+    return extensions.includes(ext) || mimeTypes.includes(mimeType);
+  }
+
+  /**
+   * Lê arquivo CSV e retorna array de objetos
+   */
+  async readCSV(filePath) {
+    return new Promise((resolve, reject) => {
+      if (!fs.existsSync(filePath)) {
+        return reject(new Error('Arquivo não encontrado'));
+      }
+      
+      const rows = [];
+      fs.createReadStream(filePath)
+        .pipe(csv({
+          skipEmptyLines: true,
+          skipLinesWithError: false
+        }))
+        .on('data', (row) => {
+          // Filtra linhas vazias
+          const hasData = Object.values(row).some(val => val && String(val).trim());
+          if (hasData) {
+            rows.push(row);
+          }
+        })
+        .on('end', () => {
+          if (rows.length === 0) {
+            return reject(new Error('Arquivo CSV está vazio ou não contém dados válidos'));
+          }
+          resolve(rows);
+        })
+        .on('error', (error) => {
+          logger.error('Erro ao ler arquivo CSV:', error);
+          reject(new Error('Erro ao processar arquivo CSV: ' + (error.message || 'Erro desconhecido')));
+        });
+    });
+  }
+
+  /**
+   * Lê arquivo Excel e retorna array de objetos
+   * @param {string} filePath - Caminho do arquivo
+   * @param {string} dataType - Tipo de dados: 'patients' ou 'samples'
+   */
+  async readExcel(filePath, dataType = 'patients') {
+    try {
+      if (!fs.existsSync(filePath)) {
+        throw new Error('Arquivo não encontrado');
+      }
+      
+      const workbook = XLSX.readFile(filePath, { 
+        cellDates: true,
+        cellNF: false,
+        cellText: false
+      });
+      
+      if (!workbook.SheetNames || workbook.SheetNames.length === 0) {
+        throw new Error('Arquivo Excel não contém planilhas');
+      }
+      
+      // Busca a aba apropriada baseado no tipo de dados
+      let sheetName = null;
+      let worksheet = null;
+      
+      if (dataType === 'patients') {
+        // Prioridade: 1) Aba "Pacientes", 2) Primeira aba que não seja "Instruções"
+        if (workbook.SheetNames.includes('Pacientes')) {
+          sheetName = 'Pacientes';
+          worksheet = workbook.Sheets[sheetName];
+        } else {
+          // Procura primeira aba que não seja "Instruções"
+          for (const name of workbook.SheetNames) {
+            if (name.toLowerCase() !== 'instruções' && name.toLowerCase() !== 'instrucoes') {
+              sheetName = name;
+              worksheet = workbook.Sheets[name];
+              break;
+            }
+          }
+          
+          // Se não encontrou, usa a primeira aba
+          if (!sheetName) {
+            sheetName = workbook.SheetNames[0];
+            worksheet = workbook.Sheets[sheetName];
+          }
+        }
+      } else if (dataType === 'samples') {
+        // Prioridade: 1) Aba "Amostras", 2) Primeira aba que não seja "Instruções"
+        if (workbook.SheetNames.includes('Amostras')) {
+          sheetName = 'Amostras';
+          worksheet = workbook.Sheets[sheetName];
+        } else {
+          // Procura primeira aba que não seja "Instruções"
+          for (const name of workbook.SheetNames) {
+            if (name.toLowerCase() !== 'instruções' && name.toLowerCase() !== 'instrucoes') {
+              sheetName = name;
+              worksheet = workbook.Sheets[name];
+              break;
+            }
+          }
+          
+          // Se não encontrou, usa a primeira aba
+          if (!sheetName) {
+            sheetName = workbook.SheetNames[0];
+            worksheet = workbook.Sheets[sheetName];
+          }
+        }
+      }
+      
+      if (!worksheet) {
+        throw new Error(`Planilha "${sheetName}" não encontrada`);
+      }
+      
+      // Lê todas as linhas primeiro
+      const allRows = XLSX.utils.sheet_to_json(worksheet, {
+        defval: null,
+        raw: false,
+        header: 1 // Retorna como array de arrays para identificar headers
+      });
+      
+      if (!allRows || allRows.length === 0) {
+        throw new Error('Planilha está vazia');
+      }
+      
+      // Encontra a linha de headers baseado no tipo de dados
+      let headerRowIndex = -1;
+      const searchFields = dataType === 'patients' 
+        ? ['patientname', 'patientname'] 
+        : ['patientid', 'patientid', 'sampletype', 'sampletype'];
+      
+      for (let i = 0; i < allRows.length; i++) {
+        const row = allRows[i];
+        if (Array.isArray(row)) {
+          const rowStr = row.map(cell => String(cell || '').toLowerCase()).join(' ');
+          if (searchFields.some(field => rowStr.includes(field))) {
+            headerRowIndex = i;
+            break;
+          }
+        }
+      }
+      
+      if (headerRowIndex === -1) {
+        const requiredField = dataType === 'patients' ? 'patientName' : 'patientID ou sampleType';
+        throw new Error(`Não foi possível encontrar a linha de cabeçalhos (headers) na planilha. Certifique-se de que a coluna "${requiredField}" está presente.`);
+      }
+      
+      // Extrai headers e remove caracteres especiais (como (*))
+      const headerRow = allRows[headerRowIndex];
+      const cleanHeaders = headerRow.map(h => {
+        if (!h) return null;
+        const headerStr = String(h).trim();
+        // Remove asteriscos e parênteses (ex: "patientName (*)" -> "patientName")
+        return headerStr.replace(/\s*\([^)]*\)\s*/g, '').trim();
+      });
+      
+      // Filtra headers nulos
+      const validHeaders = cleanHeaders.filter(h => h && h.length > 0);
+      
+      // Converte linhas seguintes para objetos usando os headers limpos
+      const dataRows = [];
+      for (let i = headerRowIndex + 1; i < allRows.length; i++) {
+        const row = allRows[i];
+        if (!Array.isArray(row)) continue;
+        
+        // Verifica se a linha está vazia (todos os valores são null/empty)
+        const isEmpty = row.every(cell => !cell || String(cell).trim() === '');
+        if (isEmpty) continue;
+        
+        // Cria objeto usando headers limpos
+        const rowObj = {};
+        validHeaders.forEach((header, index) => {
+          if (header) {
+            const value = row[index];
+            // Ignora valores vazios mas mantém null para campos opcionais
+            rowObj[header] = (value !== undefined && value !== null && String(value).trim() !== '') ? value : null;
+          }
+        });
+        
+        // Só adiciona se tiver pelo menos um campo preenchido
+        if (Object.values(rowObj).some(v => v !== null && v !== '')) {
+          dataRows.push(rowObj);
+        }
+      }
+      
+      if (dataRows.length === 0) {
+        throw new Error('Nenhum dado válido encontrado na planilha. Certifique-se de que há dados além dos cabeçalhos.');
+      }
+      
+      return dataRows;
+    } catch (error) {
+      logger.error('Erro ao ler arquivo Excel:', error);
+      throw new Error('Erro ao processar arquivo Excel: ' + (error.message || 'Erro desconhecido'));
+    }
+  }
+
+  /**
+   * Lê arquivo (CSV ou Excel) e retorna array de objetos
+   * @param {string} filePath - Caminho do arquivo
+   * @param {string} originalName - Nome original do arquivo
+   * @param {string} dataType - Tipo de dados: 'patients' ou 'samples'
+   */
+  async readFile(filePath, originalName, dataType = 'patients') {
+    const ext = path.extname(originalName).toLowerCase();
+    
+    if (ext === '.csv') {
+      return await this.readCSV(filePath);
+    } else if (ext === '.xlsx') {
+      return await this.readExcel(filePath, dataType);
+    } else {
+      throw new Error('Formato de arquivo não suportado. Use CSV ou Excel (.xlsx)');
+    }
+  }
+
+  /**
+   * Importa pacientes com geração automática de ID (LGPD)
+   */
+  async importPatients(db, file) {
+    const results = {
+      total: 0,
+      success: 0,
+      errors: [],
+      generatedIDs: [] // Não será exposto na resposta final
+    };
+
+    try {
+      const rows = await this.readFile(file.path, file.originalname, 'patients');
+      const patientsCollection = db.collection('pacientes');
+
+      // Verifica se o arquivo está vazio
+      if (!rows || rows.length === 0) {
+        throw new Error('Arquivo está vazio ou não contém dados válidos');
+      }
+
+      // Campos obrigatórios para pacientes (sem patientID, pois será gerado)
+      const requiredFields = ['patientName', 'birthDate', 'sex'];
+      
+      // Valida headers - verifica se há dados válidos
+      if (rows.length === 0) {
+        throw new Error('Arquivo está vazio ou não contém dados válidos');
+      }
+      
+      // Pega headers da primeira linha válida
+      const firstRow = rows.find(r => r && Object.keys(r).length > 0);
+      if (!firstRow) {
+        throw new Error('Arquivo não contém dados válidos');
+      }
+      
+      const headers = Object.keys(firstRow);
+      
+      // Verifica se há headers válidos
+      if (headers.length === 0) {
+        throw new Error('Arquivo não contém colunas válidas');
+      }
+      
+      // Normaliza headers (remove espaços, converte para lowercase para comparação)
+      const normalizedHeaders = headers.map(h => h.trim().toLowerCase());
+      const normalizedRequired = requiredFields.map(f => f.toLowerCase());
+      
+      // Verifica campos obrigatórios (case-insensitive)
+      const missingFields = requiredFields.filter(field => {
+        const fieldLower = field.toLowerCase();
+        return !normalizedHeaders.includes(fieldLower);
+      });
+      
+      if (missingFields.length > 0) {
+        // Tenta encontrar headers similares para ajudar o usuário
+        const foundHeaders = headers.filter(h => h && h.trim().length > 0);
+        throw new Error(`Campos obrigatórios ausentes: ${missingFields.join(', ')}. Campos encontrados: ${foundHeaders.slice(0, 10).join(', ')}${foundHeaders.length > 10 ? '...' : ''}`);
+      }
+      
+      // Verifica se patientID está presente (não deve estar)
+      if (normalizedHeaders.includes('patientid')) {
+        logger.warn('Arquivo contém coluna patientID - será ignorada. IDs serão gerados automaticamente.');
+      }
+
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        const rowNumber = i + 2; // +2 porque linha 1 é header e arrays começam em 0
+
+        try {
+          // Ignora linhas vazias
+          if (!row || Object.keys(row).length === 0) {
+            continue;
+          }
+          
+          // Verifica se a linha tem dados válidos (pelo menos um campo não vazio)
+          const hasData = Object.values(row).some(v => v !== null && v !== undefined && String(v).trim() !== '');
+          if (!hasData) {
+            continue;
+          }
+          
+          // Parse dos dados do CSV/Excel
+          const patientData = this.parsePatientRow(row);
+
+          // Remove patientID se fornecido (será gerado automaticamente)
+          delete patientData.patientID;
+          
+          // Remove campo height se existir (não deve ser salvo no banco)
+          delete patientData.height;
+
+          // Valida dados básicos antes da validação do modelo
+          if (!patientData.patientName || (typeof patientData.patientName === 'string' && patientData.patientName.trim().length === 0)) {
+            results.errors.push({
+              row: rowNumber,
+              errors: [`Linha ${rowNumber}: Nome do paciente (patientName) é obrigatório e não pode estar vazio`],
+              data: this.sanitizeRowForError(row)
+            });
+            continue;
+          }
+          
+          if (!patientData.birthDate || !(patientData.birthDate instanceof Date) || isNaN(patientData.birthDate.getTime())) {
+            const receivedValue = row.birthDate || 'não informado';
+            results.errors.push({
+              row: rowNumber,
+              errors: [`Linha ${rowNumber}: Data de nascimento (birthDate) é obrigatória e deve ser uma data válida no formato DD/MM/YYYY ou YYYY-MM-DD. Valor recebido: "${receivedValue}"`],
+              data: this.sanitizeRowForError(row)
+            });
+            continue;
+          }
+          
+          if (!patientData.sex || !['M', 'F', 'O'].includes(patientData.sex)) {
+            const receivedValue = row.sex || 'não informado';
+            results.errors.push({
+              row: rowNumber,
+              errors: [`Linha ${rowNumber}: Sexo (sex) é obrigatório e deve ser M (Masculino), F (Feminino) ou O (Outro). Valor recebido: "${receivedValue}"`],
+              data: this.sanitizeRowForError(row)
+            });
+            continue;
+          }
+          
+          // Converte recordNumber para número se for string numérica
+          // Se for string vazia ou inválida, define como null
+          if (patientData.recordNumber !== undefined && patientData.recordNumber !== null) {
+            if (typeof patientData.recordNumber === 'string') {
+              const trimmed = patientData.recordNumber.trim();
+              if (trimmed === '' || trimmed === 'null' || trimmed === 'undefined' || trimmed === 'NaN') {
+                patientData.recordNumber = null;
+              } else {
+                const num = parseInt(trimmed, 10);
+                if (!isNaN(num) && isFinite(num)) {
+                  patientData.recordNumber = num;
+                }
+                // Se não for número válido, mantém como string
+              }
+            }
+          } else {
+            patientData.recordNumber = null;
+          }
+          
+          // Valida dados
+          const validation = PatientModel.validate(patientData);
+          if (!validation.isValid) {
+            // Adiciona número da linha em cada erro para melhor rastreabilidade
+            const detailedErrors = validation.errors.map(err => `Linha ${rowNumber}: ${err}`);
+            results.errors.push({
+              row: rowNumber,
+              errors: detailedErrors,
+              data: this.sanitizeRowForError(row) // Remove dados sensíveis do erro
+            });
+            continue;
+          }
+
+          // GERA ID ÚNICO DE 8 DÍGITOS AUTOMATICAMENTE (LGPD)
+          const patientID = await generateUniquePatientID(db, 'pacientes');
+          patientData.patientID = patientID;
+
+          // Valida unidade clínica se fornecida
+          if (patientData.clinicalUnit && !PatientModel.validateUnit(patientData.clinicalUnit)) {
+            results.errors.push({
+              row: rowNumber,
+              errors: ['Unidade clínica inválida'],
+              data: this.sanitizeRowForError(row)
+            });
+            continue;
+          }
+
+          // Gera sigla se não fornecida
+          if (patientData.clinicalUnit && !patientData.unitAcronym) {
+            patientData.unitAcronym = PatientModel.fillAcronym(patientData.clinicalUnit);
+          }
+
+          // Verifica duplicidade antes de inserir
+          const patientService = require('./patient.service');
+          const duplicate = await patientService.checkDuplicatePatient(db, patientData);
+          if (duplicate) {
+            let birthDateStr = 'N/A';
+            if (patientData.birthDate instanceof Date) {
+              birthDateStr = patientData.birthDate.toLocaleDateString('pt-BR');
+            } else if (typeof patientData.birthDate === 'string') {
+              birthDateStr = patientData.birthDate;
+            }
+            results.errors.push({
+              row: rowNumber,
+              errors: [`Paciente duplicado: já existe um paciente com o nome "${patientData.patientName}" e data de nascimento "${birthDateStr}" cadastrado no sistema`],
+              data: this.sanitizeRowForError(row)
+            });
+            continue;
+          }
+
+          // Cria paciente
+          const patient = PatientModel.create(patientData);
+          
+          // Insere no banco
+          await patientsCollection.insertOne(patient);
+          
+          results.success++;
+          // ID gerado não é adicionado ao array (LGPD - não expor)
+          
+        } catch (error) {
+          logger.error(`Erro ao processar linha ${rowNumber}:`, error);
+          results.errors.push({
+            row: rowNumber,
+            errors: [error.message || 'Erro desconhecido ao processar linha'],
+            data: this.sanitizeRowForError(row)
+          });
+        }
+
+        results.total++;
+      }
+
+      // Log sanitizado (sem dados sensíveis)
+      logger.info(`Importação de pacientes concluída: ${results.success}/${results.total} registros importados com sucesso`);
+
+      return {
+        total: results.total,
+        success: results.success,
+        errors: results.errors,
+        // NÃO retorna IDs gerados (LGPD)
+      };
+
+    } catch (error) {
+      logger.error('Erro ao importar pacientes:', error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Encontra a próxima localização disponível baseada na localização inicial
+   */
+  async getNextAvailableLocation(db, startLocationID, index) {
+    try {
+      const locationsCollection = db.collection('locations');
+      
+      // Encontra a localização inicial
+      const startLocation = await locationsCollection.findOne({ locationID: startLocationID });
+      if (!startLocation) {
+        return null;
+      }
+
+      // Busca todas as localizações e ordena por block, rack, drawer, box
+      const allLocations = await locationsCollection.find({}).toArray();
+      const sortedLocations = allLocations.sort((a, b) => {
+        if (a.block !== b.block) return (a.block || 0) - (b.block || 0);
+        if (a.rack !== b.rack) return (a.rack || 0) - (b.rack || 0);
+        if (a.drawer !== b.drawer) return (a.drawer || 0) - (b.drawer || 0);
+        return (a.box || 0) - (b.box || 0);
+      });
+
+      // Encontra o índice da localização inicial
+      const startIndex = sortedLocations.findIndex(loc => loc.locationID === startLocationID);
+      if (startIndex === -1) {
+        return null;
+      }
+
+      // Retorna a localização no índice startIndex + index (ou null se não existir)
+      const nextIndex = startIndex + index;
+      if (nextIndex < sortedLocations.length) {
+        return sortedLocations[nextIndex].locationID;
+      }
+
+      return null;
+    } catch (error) {
+      logger.error('Erro ao buscar próxima localização:', error.message);
+      return null;
+    }
+  }
+
+  /**
+   * Importa amostras com validação de ID de paciente (LGPD)
+   * @param {Object} db - Instância do banco de dados
+   * @param {Object} file - Arquivo a ser importado
+   * @param {Object} options - Opções de importação { startLocationID, autoIncrement }
+   */
+  async importSamples(db, file, options = {}) {
+    const { startLocationID = null, autoIncrement = false } = options;
+    const results = {
+      total: 0,
+      success: 0,
+      errors: []
+    };
+
+    try {
+      const rows = await this.readFile(file.path, file.originalname, 'samples');
+      const samplesCollection = db.collection('amostras');
+
+      // Campos obrigatórios para amostras (incluindo patientID)
+      const requiredFields = ['patientID', 'sampleType', 'sampleOrigin'];
+      
+      // Valida headers
+      if (rows.length > 0) {
+        const headers = Object.keys(rows[0]);
+        const missingFields = requiredFields.filter(field => !headers.includes(field));
+        if (missingFields.length > 0) {
+          throw new Error(`Campos obrigatórios ausentes: ${missingFields.join(', ')}`);
+        }
+      }
+
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        const rowNumber = i + 2; // +2 porque linha 1 é header e arrays começam em 0
+
+        try {
+          // Parse dos dados do CSV/Excel
+          const sampleData = this.parseSampleRow(row);
+
+          // VALIDA ID DE PACIENTE (LGPD)
+          if (!sampleData.patientID) {
+            results.errors.push({
+              row: rowNumber,
+              errors: ['ID de paciente é obrigatório'],
+              data: { patientID: null }
+            });
+            continue;
+          }
+
+          // Valida formato do ID (8 dígitos)
+          const patientIDStr = String(sampleData.patientID).trim();
+          if (patientIDStr.length !== 8 || !/^\d{8}$/.test(patientIDStr)) {
+            results.errors.push({
+              row: rowNumber,
+              errors: [`ID de paciente inválido: deve ter exatamente 8 dígitos numéricos`],
+              data: { patientID: patientIDStr }
+            });
+            continue;
+          }
+
+          // Valida se o ID existe (sem expor dados sensíveis)
+          const patientExists = await validatePatientID(db, patientIDStr, 'pacientes');
+          if (!patientExists) {
+            results.errors.push({
+              row: rowNumber,
+              errors: [`ID de paciente ${patientIDStr} não encontrado no sistema`],
+              data: { patientID: patientIDStr }
+            });
+            continue;
+          }
+
+          // Valida quality MIABIS antes da validação geral
+          const { validateQualityMIABIS } = require('../utils/qualityMIABISValidator');
+          if (sampleData.quality !== undefined && sampleData.quality !== null) {
+            if (!validateQualityMIABIS(sampleData.quality)) {
+              results.errors.push({
+                row: rowNumber,
+                errors: [`quality deve estar na escala MIABIS: 0 (Não avaliada), 1 (Adequada) ou 2 (Inadequada). Valor recebido: ${sampleData.quality}`],
+                data: { patientID: patientIDStr } // Apenas ID, sem dados sensíveis
+              });
+              continue;
+            }
+          }
+
+          // Valida dados da amostra
+          const validation = SampleModel.validate(sampleData);
+          if (!validation.isValid) {
+            results.errors.push({
+              row: rowNumber,
+              errors: validation.errors,
+              data: { patientID: patientIDStr } // Apenas ID, sem dados sensíveis
+            });
+            continue;
+          }
+
+          // Validações específicas - verifica se os valores existem no banco
+          if (sampleData.sampleType) {
+            const sampleTypesCollection = db.collection('sampleTypes');
+            const validSampleType = await sampleTypesCollection.findOne({ description: sampleData.sampleType });
+            if (!validSampleType && !SampleModel.validateSampleType(sampleData.sampleType)) {
+              results.errors.push({
+                row: rowNumber,
+                errors: [`Tipo de amostra "${sampleData.sampleType}" não encontrado no banco de dados. Use um valor cadastrado.`],
+                data: { patientID: patientIDStr }
+              });
+              continue;
+            }
+          }
+          
+          if (sampleData.sampleOrigin) {
+            const sampleOriginsCollection = db.collection('sampleOrigins');
+            const validOrigin = await sampleOriginsCollection.findOne({ description: sampleData.sampleOrigin });
+            if (!validOrigin && !SampleModel.validateSampleOrigin(sampleData.sampleOrigin)) {
+              results.errors.push({
+                row: rowNumber,
+                errors: [`Origem "${sampleData.sampleOrigin}" não encontrada no banco de dados. Use um valor cadastrado.`],
+                data: { patientID: patientIDStr }
+              });
+              continue;
+            }
+          }
+          
+          if (sampleData.extractionProtocol) {
+            const extractionProtocolsCollection = db.collection('extractionProtocols');
+            const validProtocol = await extractionProtocolsCollection.findOne({ description: sampleData.extractionProtocol });
+            if (!validProtocol && !SampleModel.validateExtractionType(sampleData.extractionProtocol)) {
+              results.errors.push({
+                row: rowNumber,
+                errors: [`Protocolo de extração "${sampleData.extractionProtocol}" não encontrado no banco de dados. Use um valor cadastrado.`],
+                data: { patientID: patientIDStr }
+              });
+              continue;
+            }
+          }
+
+          // RF004 - Verifica duplicidade por barcode (se fornecido)
+          if (sampleData.barcode) {
+            const existingSample = await samplesCollection.findOne({ barcode: sampleData.barcode });
+            if (existingSample) {
+              results.errors.push({
+                row: rowNumber,
+                errors: [`Já existe uma amostra com o código de barras ${sampleData.barcode}`],
+                data: { patientID: patientIDStr, barcode: sampleData.barcode }
+              });
+              continue;
+            }
+          }
+
+          // Processa localização: se autoIncrement estiver ativo e startLocationID fornecido
+          if (autoIncrement && startLocationID) {
+            // Se a linha não tem locationID ou está vazia, usa incremento automático
+            if (!sampleData.locationID || sampleData.locationID === null || sampleData.locationID === '') {
+              const nextLocationID = await this.getNextAvailableLocation(db, startLocationID, results.success);
+              if (nextLocationID) {
+                sampleData.locationID = nextLocationID;
+                logger.debug(`Localização automática atribuída: ${nextLocationID} para linha ${rowNumber}`);
+              } else {
+                results.errors.push({
+                  row: rowNumber,
+                  errors: ['Não há mais localizações disponíveis para incremento automático'],
+                  data: { patientID: patientIDStr }
+                });
+                continue;
+              }
+            }
+          } else if (startLocationID && (!sampleData.locationID || sampleData.locationID === null || sampleData.locationID === '')) {
+            // Se não for autoIncrement mas startLocationID foi fornecido, usa ele para todas as amostras sem locationID
+            sampleData.locationID = startLocationID;
+          }
+
+          // Gera código de barras automaticamente se não fornecido
+          if (!sampleData.barcode || (typeof sampleData.barcode === 'string' && sampleData.barcode.trim() === '')) {
+            const { generateUniqueBarcode } = require('../utils/barcodeGenerator');
+            sampleData.barcode = await generateUniqueBarcode(db, 'amostras');
+            logger.info(`Código de barras gerado automaticamente para linha ${rowNumber}: ${sampleData.barcode}`);
+          } else {
+            // Converte para string se necessário
+            sampleData.barcode = String(sampleData.barcode).trim();
+          }
+
+          // Cria amostra
+          const sample = SampleModel.create(sampleData);
+          
+          // Insere no banco
+          await samplesCollection.insertOne(sample);
+          
+          results.success++;
+          
+        } catch (error) {
+          results.errors.push({
+            row: rowNumber,
+            errors: [error.message],
+            data: { patientID: sampleData?.patientID || null }
+          });
+        }
+
+        results.total++;
+      }
+
+      // Log sanitizado (sem dados sensíveis)
+      logger.info(`Importação de amostras concluída: ${results.success}/${results.total} registros importados com sucesso`);
+
+      return {
+        total: results.total,
+        success: results.success,
+        errors: results.errors
+      };
+
+    } catch (error) {
+      logger.error('Erro ao importar amostras:', error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Parse data de nascimento de vários formatos
+   */
+  parseBirthDate(dateStr) {
+    if (!dateStr) return null;
+    
+    // Se já for um objeto Date, retorna diretamente
+    if (dateStr instanceof Date) {
+      if (!isNaN(dateStr.getTime())) {
+        return dateStr;
+      }
+      return null;
+    }
+    
+    const str = String(dateStr).trim();
+    if (!str || str === '') return null;
+    
+    // Tenta formato DD/MM/YYYY
+    const ddmmyyyy = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(str);
+    if (ddmmyyyy) {
+      const day = parseInt(ddmmyyyy[1], 10);
+      const month = parseInt(ddmmyyyy[2], 10) - 1; // Mês começa em 0
+      const year = parseInt(ddmmyyyy[3], 10);
+      const date = new Date(year, month, day);
+      if (date.getDate() === day && date.getMonth() === month && date.getFullYear() === year) {
+        return date;
+      }
+    }
+    
+    // Tenta formato YYYY-MM-DD
+    const yyyymmdd = /^(\d{4})-(\d{2})-(\d{2})$/.exec(str);
+    if (yyyymmdd) {
+      const year = parseInt(yyyymmdd[1], 10);
+      const month = parseInt(yyyymmdd[2], 10) - 1;
+      const day = parseInt(yyyymmdd[3], 10);
+      const date = new Date(year, month, day);
+      if (date.getDate() === day && date.getMonth() === month && date.getFullYear() === year) {
+        return date;
+      }
+    }
+    
+    // Tenta formato DD-MM-YYYY
+    const ddmmyyyy2 = /^(\d{2})-(\d{2})-(\d{4})$/.exec(str);
+    if (ddmmyyyy2) {
+      const day = parseInt(ddmmyyyy2[1], 10);
+      const month = parseInt(ddmmyyyy2[2], 10) - 1;
+      const year = parseInt(ddmmyyyy2[3], 10);
+      const date = new Date(year, month, day);
+      if (date.getDate() === day && date.getMonth() === month && date.getFullYear() === year) {
+        return date;
+      }
+    }
+    
+    // Tenta formato padrão do JavaScript (ISO, etc)
+    const date = new Date(str);
+    if (!isNaN(date.getTime()) && date.getFullYear() > 1900 && date.getFullYear() < 2100) {
+      return date;
+    }
+    
+    return null;
+  }
+
+  /**
+   * Parse sexo de vários formatos para M, F ou O
+   */
+  parseSex(sexStr) {
+    if (!sexStr) return null;
+    
+    const str = String(sexStr).trim().toUpperCase();
+    
+    // Aceita M, F, O diretamente
+    if (['M', 'F', 'O'].includes(str)) {
+      return str;
+    }
+    
+    // Converte "Masculino" ou variações para M
+    if (str.startsWith('M') || str.includes('MASCULINO') || str === 'MALE') {
+      return 'M';
+    }
+    
+    // Converte "Feminino" ou variações para F
+    if (str.startsWith('F') || str.includes('FEMININO') || str === 'FEMALE') {
+      return 'F';
+    }
+    
+    // Outros casos
+    if (str.startsWith('O') || str.includes('OUTRO') || str === 'OTHER') {
+      return 'O';
+    }
+    
+    return null;
+  }
+
+  /**
+   * Parse linha CSV/Excel para Patient
+   */
+  parsePatientRow(row) {
+    // Parse birthDate com suporte a múltiplos formatos
+    const birthDate = this.parseBirthDate(row.birthDate);
+    
+    // Parse sex com suporte a múltiplos formatos
+    const sex = this.parseSex(row.sex);
+    
+    // Parse recordNumber - aceita string ou número
+    let recordNumber = null;
+    if (row.recordNumber !== undefined && row.recordNumber !== null && row.recordNumber !== '') {
+      const recordStr = String(row.recordNumber).trim();
+      if (recordStr && recordStr !== 'null' && recordStr !== 'undefined' && recordStr !== 'NaN') {
+        // Tenta como número primeiro
+        const num = parseInt(recordStr, 10);
+        if (!isNaN(num) && isFinite(num)) {
+          recordNumber = num;
+        } else {
+          // Se não for número válido, mantém como string (se não estiver vazio)
+          if (recordStr.length > 0) {
+            recordNumber = recordStr;
+          }
+        }
+      }
+    }
+    
+    // Parse heightCm - também aceita height (em metros, converte para cm)
+    let heightCm = null;
+    if (row.heightCm) {
+      const height = parseFloat(row.heightCm);
+      if (!isNaN(height)) {
+        // Se o valor for menor que 3, assume que está em metros e converte para cm
+        heightCm = height < 3 ? height * 100 : height;
+      }
+    } else if (row.height) {
+      // Aceita também "height" como alternativa (em metros, converte para cm)
+      const height = parseFloat(row.height);
+      if (!isNaN(height)) {
+        // Se o valor for menor que 3, assume que está em metros e converte para cm
+        heightCm = height < 3 ? height * 100 : height;
+      }
+    }
+    
+    return {
+      patientName: row.patientName?.trim() || null,
+      birthDate: birthDate,
+      sex: sex,
+      weight: this.parseFloatField(row.weight),
+      heightCm: heightCm,
+      recordNumber: recordNumber,
+      clinicalUnit: row.clinicalUnit?.trim() || null,
+      unitAcronym: row.unitAcronym?.trim() || null,
+      diagnosticHypothesis: row.diagnosticHypothesis?.trim() || null,
+      icdCode: row.icdCode?.trim() || null,
+      hypertension: this.parseBoolean(row.hypertension),
+      obesity: this.parseBoolean(row.obesity),
+      diabetesType1: this.parseBoolean(row.diabetesType1),
+      diabetesType2: this.parseBoolean(row.diabetesType2),
+      copd: this.parseBoolean(row.copd),
+      ckd: this.parseBoolean(row.ckd),
+      smoking: this.parseBoolean(row.smoking),
+      alcoholUse: this.parseBoolean(row.alcoholUse),
+      asthma: this.parseBoolean(row.asthma),
+      antibioticUse: this.parseBoolean(row.antibioticUse),
+      insulinUse: this.parseBoolean(row.insulinUse),
+      antiviralUse: this.parseBoolean(row.antiviralUse),
+      geneticVariant: row.geneticVariant?.trim() || null,
+      alphaGal: this.parseFloatField(row.alphaGal),
+      lysoGb3: this.parseFloatField(row.lysoGb3),
+      notes: row.notes?.trim() || null
+    };
+  }
+
+  /**
+   * Parse linha CSV/Excel para Sample (RF004)
+   */
+  parseSampleRow(row) {
+    const { parseQualityMIABIS } = require('../utils/qualityMIABISValidator');
+    // Parse de data de registro
+    let registerDate = null;
+    if (row.registerDate) {
+      registerDate = this.parseBirthDate(row.registerDate);
+    } else if (row.registrationDate) {
+      registerDate = this.parseBirthDate(row.registrationDate);
+    }
+    if (!registerDate) {
+      registerDate = new Date(); // Padrão: hoje
+    }
+
+    return {
+      patientID: row.patientID?.trim() || row.patientId?.trim() || null, // Aceita patientID ou patientId
+      sampleType: row.sampleType?.trim() || null,
+      sampleOrigin: row.sampleOrigin?.trim() || null,
+      extractionProtocol: row.extractionProtocol?.trim() || null,
+      barcode: row.barcode ? String(row.barcode).trim() : null, // RF004 - barcode como string
+      registerDate: registerDate,
+      registrationDate: registerDate,
+      quantity: row.quantity ? parseFloat(row.quantity) : null,
+      quality: parseQualityMIABIS(row.quality), // Valida e converte para escala MIABIS (0, 1, 2)
+      locationID: row.locationID || row.locationId ? parseInt(row.locationID || row.locationId) : null,
+      linkedProject: row.linkedProject?.trim() || null,
+      currentStatus: row.currentStatus?.trim() || 'Available'
+    };
+  }
+
+  /**
+   * Parse boolean de string
+   */
+  parseBoolean(value) {
+    if (value === undefined || value === null || value === '') return false;
+    const str = String(value).toLowerCase().trim();
+    return str === 'true' || str === '1' || str === 'sim' || str === 'yes' || str === 's';
+  }
+
+  /**
+   * Parse campo numérico (float) de string
+   * Retorna null se o valor for inválido, vazio ou não numérico
+   */
+  parseFloatField(value) {
+    if (value === undefined || value === null || value === '') return null;
+    const str = String(value).trim();
+    if (str === '' || str === 'null' || str === 'undefined' || str === 'NaN' || str === 'N/A' || str === '-') {
+      return null;
+    }
+    const num = parseFloat(str);
+    if (isNaN(num) || !isFinite(num)) {
+      return null;
+    }
+    return num;
+  }
+
+  /**
+   * Sanitiza linha para erro (remove dados sensíveis)
+   */
+  sanitizeRowForError(row) {
+    // Retorna apenas campos não sensíveis para debug
+    return {
+      // Não retorna patientName, birthDate, etc.
+      // Apenas campos técnicos se necessário
+    };
+  }
+
+  /**
+   * Limpa arquivo temporário
+   */
+  cleanupFile(filePath) {
+    try {
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+      }
+    } catch (error) {
+      logger.error('Erro ao limpar arquivo temporário:', error.message);
+    }
+  }
+}
+
+module.exports = new ImportLGPDService();
+

@@ -1,0 +1,388 @@
+import { useState, useCallback } from 'react';
+import { userSecurityService } from '../services/api';
+
+interface SecurityStatus {
+  securityScore: number;
+  overallLevel: 'strong' | 'medium' | 'weak';
+  alternativeMethodsCount: number;
+}
+
+interface MFAStatus {
+  primaryEnabled: boolean;
+  primarySetupDate?: string | Date;
+  phoneEnabled: boolean;
+  phoneNumber?: string;
+  passkeys?: Array<{ id: string; name?: string }>;
+  recoveryCodes?: {
+    remaining: number;
+    codes?: string[];
+  };
+}
+
+interface PasswordStatus {
+  lastChanged?: string | Date;
+  expiresAt?: string | Date;
+  strength?: 'weak' | 'medium' | 'strong';
+  strengthScore?: number;
+}
+
+interface Session {
+  id: string;
+  deviceName?: string;
+  browser?: string;
+  os?: string;
+  location?: string;
+  lastAccess: string | Date;
+  isCurrent: boolean;
+}
+
+export function useUserSecurity() {
+  const [securityStatus, setSecurityStatus] = useState<SecurityStatus | null>(null);
+  const [mfaStatus, setMfaStatus] = useState<MFAStatus | null>(null);
+  const [passwordStatus, setPasswordStatus] = useState<PasswordStatus | null>(null);
+  const [sessions, setSessions] = useState<Session[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const refreshData = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      // Tenta buscar dados do backend
+      try {
+        const [statusRes, mfaRes, passwordRes, sessionsRes] = await Promise.all([
+          userSecurityService.getStatus(),
+          userSecurityService.getMFAStatus(),
+          userSecurityService.getPasswordStatus(),
+          userSecurityService.getSessions()
+        ]);
+
+        setSecurityStatus(statusRes.data?.data || statusRes.data);
+        setMfaStatus(mfaRes.data?.data || mfaRes.data);
+        setPasswordStatus(passwordRes.data?.data || passwordRes.data);
+        setSessions(sessionsRes.data?.data || sessionsRes.data || []);
+      } catch (apiErr: any) {
+        // Se o backend não estiver disponível, usa dados mockados para desenvolvimento
+        console.warn('Backend não disponível, usando dados mockados:', apiErr.message);
+        
+        // Dados mockados para desenvolvimento
+        const mockSecurityStatus: SecurityStatus = {
+          securityScore: 75,
+          overallLevel: 'medium',
+          alternativeMethodsCount: 1
+        };
+
+        const mockMFAStatus: MFAStatus = {
+          primaryEnabled: true,
+          primarySetupDate: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), // 30 dias atrás
+          phoneEnabled: false,
+          passkeys: [],
+          recoveryCodes: {
+            remaining: 8,
+            codes: []
+          }
+        };
+
+        const mockPasswordStatus: PasswordStatus = {
+          lastChanged: new Date(Date.now() - 60 * 24 * 60 * 60 * 1000), // 60 dias atrás
+          expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // Expira em 30 dias
+          strength: 'strong',
+          strengthScore: 4
+        };
+
+        const mockSessions: Session[] = [
+          {
+            id: '1',
+            deviceName: 'Chrome no Windows',
+            browser: 'Chrome 120',
+            os: 'Windows 11',
+            location: 'São Paulo, Brasil',
+            lastAccess: new Date(),
+            isCurrent: true
+          },
+          {
+            id: '2',
+            deviceName: 'Firefox no Linux',
+            browser: 'Firefox 121',
+            os: 'Ubuntu 22.04',
+            location: 'Rio de Janeiro, Brasil',
+            lastAccess: new Date(Date.now() - 2 * 60 * 60 * 1000), // 2 horas atrás
+            isCurrent: false
+          }
+        ];
+
+        setSecurityStatus(mockSecurityStatus);
+        setMfaStatus(mockMFAStatus);
+        setPasswordStatus(mockPasswordStatus);
+        setSessions(mockSessions);
+      }
+    } catch (err: any) {
+      setError(err.response?.data?.error || err.message || 'Erro ao carregar dados de segurança');
+      console.error('Erro ao carregar dados de segurança:', err);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const updateMFA = useCallback(async (method: 'phone' | 'passkey', enabled: boolean) => {
+    try {
+      await userSecurityService.updateMFA(method, enabled);
+      await refreshData();
+    } catch (err: any) {
+      throw new Error(err.response?.data?.error || err.message || 'Erro ao atualizar MFA');
+    }
+  }, [refreshData]);
+
+  const updatePassword = useCallback(async (currentPassword: string, newPassword: string) => {
+    try {
+      await userSecurityService.updatePassword(currentPassword, newPassword);
+      await refreshData();
+    } catch (err: any) {
+      throw new Error(err.response?.data?.error || err.message || 'Erro ao atualizar senha');
+    }
+  }, [refreshData]);
+
+  const updatePhone = useCallback(async (phone: string) => {
+    try {
+      const response = await userSecurityService.updatePhone(phone);
+      
+      // Aguarda um pouco para garantir que o banco foi atualizado
+      await new Promise(resolve => setTimeout(resolve, 300));
+      
+      // Atualiza os dados
+      await refreshData();
+      
+      return response;
+    } catch (err: any) {
+      const errorMessage = err.response?.data?.error || 
+                          err.response?.data?.message || 
+                          err.message || 
+                          'Erro ao atualizar telefone';
+      throw new Error(errorMessage);
+    }
+  }, [refreshData]);
+
+  const addPasskey = useCallback(async () => {
+    try {
+      // Verifica se WebAuthn está disponível
+      if (!window.PublicKeyCredential) {
+        throw new Error('WebAuthn não é suportado neste navegador. Use um navegador moderno (Chrome, Firefox, Edge, Safari).');
+      }
+
+      // Verifica se está em contexto seguro (HTTPS ou localhost)
+      // WebAuthn requer HTTPS ou localhost/127.0.0.1
+      const hostname = window.location.hostname;
+      const protocol = window.location.protocol;
+      const isLocalhost = hostname === 'localhost' || hostname === '127.0.0.1';
+      const isHTTPS = protocol === 'https:';
+      const isSecureContext = window.isSecureContext || isHTTPS || isLocalhost;
+      
+      if (!isSecureContext) {
+        const isIP = hostname.match(/^\d+\.\d+\.\d+\.\d+$/);
+        if (isIP) {
+          throw new Error('WebAuthn requer HTTPS para endereços IP. Acesse via HTTPS (https://) ou use localhost.');
+        } else {
+          throw new Error('WebAuthn requer HTTPS ou localhost. Acesse via HTTPS (https://) ou localhost.');
+        }
+      }
+      
+      // Aviso para IPs em HTTP (pode não funcionar)
+      const isIP = hostname.match(/^\d+\.\d+\.\d+\.\d+$/);
+      if (isIP && !isHTTPS) {
+        console.warn('WebAuthn pode não funcionar com endereços IP em HTTP. Use HTTPS ou localhost para melhor compatibilidade.');
+      }
+
+      // Primeiro, solicita ao backend para iniciar o registro
+      const challengeResponse = await userSecurityService.startPasskeyRegistration();
+      const responseData = challengeResponse.data?.data || challengeResponse.data;
+      const challenge = responseData?.challenge;
+      const userId = responseData?.userId;
+      const userEmail = responseData?.userEmail;
+      const userName = responseData?.userName;
+
+      if (!challenge) {
+        throw new Error('Erro ao obter desafio do servidor');
+      }
+
+      if (!userId) {
+        throw new Error('Erro ao obter ID do usuário');
+      }
+
+      // Converte challenge de base64 para ArrayBuffer
+      const challengeBuffer = Uint8Array.from(atob(challenge), c => c.charCodeAt(0));
+
+      // Prepara dados do usuário - userId deve ser um ArrayBuffer
+      // Converte o userId (string) para ArrayBuffer usando TextEncoder
+      const encoder = new TextEncoder();
+      const userIdBuffer = encoder.encode(userId);
+
+      // Determina o rp.id baseado no hostname
+      // WebAuthn requer um domínio válido ou localhost
+      let rpId = window.location.hostname;
+      if (rpId === 'localhost' || rpId === '127.0.0.1') {
+        rpId = 'localhost';
+      } else if (rpId.match(/^\d+\.\d+\.\d+\.\d+$/)) {
+        // WebAuthn não funciona bem com IPs - precisa de um domínio válido
+        // Tenta usar o IP, mas pode falhar
+        console.warn('WebAuthn pode não funcionar com endereços IP. Use um domínio válido ou localhost.');
+        rpId = window.location.hostname;
+      }
+
+      // Cria credencial usando WebAuthn API
+      const credential = await navigator.credentials.create({
+        publicKey: {
+          challenge: challengeBuffer,
+          rp: {
+            name: 'BioAvanceD',
+            id: rpId
+          },
+          user: {
+            id: userIdBuffer,
+            name: userEmail || 'user@bioavanced.com',
+            displayName: userName || 'Usuário BioAvanceD'
+          },
+          pubKeyCredParams: [
+            { alg: -7, type: 'public-key' }, // ES256
+            { alg: -257, type: 'public-key' } // RS256
+          ],
+          authenticatorSelection: {
+            authenticatorAttachment: 'cross-platform', // Permite tanto platform quanto cross-platform
+            userVerification: 'preferred',
+            requireResidentKey: false
+          },
+          timeout: 60000,
+          attestation: 'none'
+        }
+      }) as PublicKeyCredential;
+
+      if (!credential || !credential.response) {
+        throw new Error('Erro ao criar credencial. Tente novamente.');
+      }
+
+      const response = credential.response as AuthenticatorAttestationResponse;
+
+      // Converte os dados para base64
+      const credentialIdArray = new Uint8Array(credential.rawId);
+      const credentialIdBase64 = btoa(String.fromCharCode(...credentialIdArray));
+
+      const attestationObjectArray = new Uint8Array(response.attestationObject);
+      const attestationObjectBase64 = btoa(String.fromCharCode(...attestationObjectArray));
+
+      // PublicKey pode não estar disponível em todos os casos
+      let publicKeyBase64 = '';
+      if (response.getPublicKey) {
+        const publicKeyArray = new Uint8Array(response.getPublicKey());
+        publicKeyBase64 = btoa(String.fromCharCode(...publicKeyArray));
+      }
+
+      // Obtém nome do dispositivo
+      const deviceName = navigator.userAgentData?.platform || 
+                        navigator.platform || 
+                        'Dispositivo Desconhecido';
+
+      await userSecurityService.completePasskeyRegistration({
+        credentialId: credentialIdBase64,
+        publicKey: publicKeyBase64,
+        attestationObject: attestationObjectBase64,
+        deviceName: deviceName
+      });
+
+      await refreshData();
+    } catch (err: any) {
+      // Trata erros específicos do WebAuthn
+      if (err.name === 'NotAllowedError') {
+        throw new Error('Operação cancelada pelo usuário ou timeout. Tente novamente.');
+      } else if (err.name === 'InvalidStateError') {
+        throw new Error('Esta passkey já está cadastrada ou há um erro no estado da autenticação.');
+      } else if (err.name === 'NotSupportedError') {
+        throw new Error('Seu dispositivo ou navegador não suporta passkeys. Use um navegador moderno com suporte a WebAuthn.');
+      } else if (err.name === 'SecurityError') {
+        throw new Error('Erro de segurança. WebAuthn requer HTTPS ou localhost. Certifique-se de que está usando um contexto seguro.');
+      } else if (err.name === 'TypeError' && err.message.includes('credentials')) {
+        throw new Error('Erro ao acessar a API de credenciais. Verifique se o navegador suporta WebAuthn.');
+      } else if (err.name === 'AbortError') {
+        throw new Error('Operação cancelada.');
+      }
+      
+      // Log do erro completo para debug
+      console.error('Erro ao adicionar passkey:', err);
+      
+      throw new Error(err.response?.data?.error || err.response?.data?.message || err.message || 'Erro ao adicionar passkey');
+    }
+  }, [refreshData]);
+
+  const removePasskey = useCallback(async (passkeyId: string) => {
+    try {
+      await userSecurityService.removePasskey(passkeyId);
+      await refreshData();
+    } catch (err: any) {
+      throw new Error(err.response?.data?.error || err.message || 'Erro ao remover passkey');
+    }
+  }, [refreshData]);
+
+  const generateRecoveryCodes = useCallback(async () => {
+    try {
+      const response = await userSecurityService.generateRecoveryCodes();
+      const codes = response.data?.data?.codes || response.data?.codes || [];
+      
+      if (!codes || codes.length === 0) {
+        throw new Error('Nenhum código foi gerado');
+      }
+      
+      // Atualiza o estado local com os códigos retornados
+      // O getMFAStatus não retorna códigos em texto claro (por segurança),
+      // então precisamos manter os códigos gerados no estado
+      setMfaStatus(prev => prev ? {
+        ...prev,
+        recoveryCodes: {
+          remaining: codes.length,
+          codes: codes // Mantém os códigos em texto claro para exibição
+        }
+      } : prev);
+      
+      // Atualiza o remaining sem fazer refresh completo (para não perder os códigos)
+      // O refresh completo será feito quando o modal for fechado
+      
+      return codes;
+    } catch (err: any) {
+      throw new Error(err.response?.data?.error || err.message || 'Erro ao gerar códigos de recuperação');
+    }
+  }, []);
+
+  const revokeSession = useCallback(async (sessionId: string) => {
+    try {
+      await userSecurityService.revokeSession(sessionId);
+      await refreshData();
+    } catch (err: any) {
+      throw new Error(err.response?.data?.error || err.message || 'Erro ao revogar sessão');
+    }
+  }, [refreshData]);
+
+  const revokeAllSessions = useCallback(async () => {
+    try {
+      await userSecurityService.revokeAllSessions();
+      await refreshData();
+    } catch (err: any) {
+      throw new Error(err.response?.data?.error || err.message || 'Erro ao revogar todas as sessões');
+    }
+  }, [refreshData]);
+
+  return {
+    securityStatus,
+    mfaStatus,
+    passwordStatus,
+    sessions,
+    loading,
+    error,
+    refreshData,
+    updateMFA,
+    updatePassword,
+    updatePhone,
+    addPasskey,
+    removePasskey,
+    generateRecoveryCodes,
+    revokeSession,
+    revokeAllSessions
+  };
+}
+

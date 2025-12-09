@@ -1,0 +1,321 @@
+const { MongoClient } = require('mongodb');
+const env = require('../config/env');
+
+let client = null;
+let db = null;
+let newDb = null;
+
+/**
+ * Codifica a senha na URI do MongoDB para evitar erros com caracteres especiais
+ * @param {string} uri - URI do MongoDB
+ * @param {boolean} debug - Se true, mostra logs de debug
+ * @returns {string} URI com senha codificada
+ */
+function encodeMongoURI(uri, debug = false) {
+  try {
+    if (!uri) {
+      return uri;
+    }
+
+    // Padrão para identificar a parte da senha na URI
+    // Suporta mongodb:// e mongodb+srv://
+    // mongodb+srv://usuario:senha@cluster... ou mongodb://usuario:senha@host...
+    const uriPattern = /^(mongodb(?:\+srv)?:\/\/)([^:]+):([^@]+)@(.+)$/;
+    const match = uri.match(uriPattern);
+
+    if (match) {
+      const [, protocol, username, password, rest] = match;
+      
+      if (debug) {
+        console.log('🔍 [DEBUG] URI original detectada');
+        console.log('🔍 [DEBUG] Usuário:', username);
+        console.log('🔍 [DEBUG] Senha (primeiros 3 chars):', password.substring(0, 3) + '***');
+      }
+      
+      // Verifica se a senha já está codificada
+      // Tenta decodificar e verificar se muda
+      let isEncoded = false;
+      try {
+        const decoded = decodeURIComponent(password);
+        isEncoded = (decoded !== password && password.includes('%'));
+      } catch (e) {
+        // Se não conseguir decodificar, provavelmente não está codificada
+        isEncoded = false;
+      }
+      
+      if (isEncoded) {
+        if (debug) {
+          console.log('🔍 [DEBUG] Senha já está codificada, usando URI original');
+        }
+        // Senha já está codificada, retorna a URI original
+        return uri;
+      }
+      
+      // Codifica apenas caracteres especiais que precisam ser codificados
+      // encodeURIComponent codifica tudo, mas para senhas do MongoDB, alguns caracteres
+      // podem não precisar de codificação dependendo da versão
+      const encodedPassword = encodeURIComponent(password);
+      
+      if (debug) {
+        console.log('🔍 [DEBUG] Senha codificada (primeiros 10 chars):', encodedPassword.substring(0, 10) + '***');
+      }
+      
+      // Reconstrói a URI com a senha codificada
+      const encodedURI = `${protocol}${username}:${encodedPassword}@${rest}`;
+      
+      if (debug) {
+        console.log('🔍 [DEBUG] URI codificada (sem senha visível):', encodedURI.replace(/:([^@]+)@/, ':****@'));
+      }
+      
+      return encodedURI;
+    }
+
+    // Se não corresponde ao padrão (pode ser URI sem autenticação), retorna a URI original
+    if (debug) {
+      console.log('🔍 [DEBUG] URI não corresponde ao padrão esperado (sem autenticação?)');
+    }
+    return uri;
+  } catch (error) {
+    // Em caso de erro, retorna a URI original
+    console.warn('⚠️ Aviso: Não foi possível codificar a URI do MongoDB:', error.message);
+    return uri;
+  }
+}
+
+/**
+ * Conecta ao banco de dados principal (MONGO_DB)
+ * @returns {Promise<Object>} Objeto do banco de dados
+ */
+async function connectDB() {
+  try {
+    // Verifica variáveis de ambiente com fallback para process.env
+    const mongoUri = env.MONGO_URI || process.env.MONGO_URI;
+    const mongoDb = env.MONGO_DB || process.env.MONGO_DB;
+    
+    if (!mongoUri) {
+      throw new Error('MONGO_URI não está definida no arquivo .env. Verifique se a variável está configurada.');
+    }
+
+    if (!mongoDb) {
+      throw new Error('MONGO_DB não está definida no arquivo .env. Verifique se a variável está configurada.');
+    }
+    
+    // Atualiza env para usar os valores corretos (para compatibilidade)
+    if (!env.MONGO_URI) env.MONGO_URI = mongoUri;
+    if (!env.MONGO_DB) env.MONGO_DB = mongoDb;
+
+    // Se já existe uma conexão ativa, verifica se ainda está conectada
+    if (client && db) {
+      try {
+        // Testa a conexão fazendo um ping
+        await client.db('admin').command({ ping: 1 });
+        return db;
+      } catch (error) {
+        // Se o ping falhar, a conexão está morta, limpa e reconecta
+        console.warn('⚠️ Conexão MongoDB perdida, reconectando...');
+        try {
+          await client.close();
+        } catch (e) {
+          // Ignora erros ao fechar
+        }
+        client = null;
+        db = null;
+      }
+    }
+
+    // Tenta conectar com URI codificada primeiro
+    const isDevelopment = env.NODE_ENV === 'development';
+    const encodedURI = encodeMongoURI(mongoUri, isDevelopment);
+
+    // Cria nova conexão
+    client = new MongoClient(encodedURI, {
+      serverSelectionTimeoutMS: 30000,
+      socketTimeoutMS: 45000,
+      connectTimeoutMS: 30000,
+      maxPoolSize: 10,
+      minPoolSize: 2,
+      maxIdleTimeMS: 30000,
+      retryWrites: true,
+      w: 'majority',
+    });
+
+    await client.connect();
+    db = client.db(mongoDb);
+
+    console.log(`✅ MongoDB Connected: ${client.options.srvHost || 'localhost'}`);
+    console.log(`📊 Database: ${mongoDb}`);
+
+    return db;
+  } catch (error) {
+    // Se o erro for de autenticação, tenta com a URI original (sem codificação)
+    if (error.message && error.message.includes('Authentication failed') || error.message.includes('bad auth')) {
+      console.warn('⚠️ Tentando conexão com URI original (sem codificação)...');
+      
+      try {
+        // Limpa a conexão anterior
+        if (client) {
+          try {
+            await client.close();
+          } catch (e) {
+            // Ignora erros ao fechar
+          }
+          client = null;
+          db = null;
+        }
+
+        // Tenta com a URI original
+        client = new MongoClient(mongoUri, {
+          serverSelectionTimeoutMS: 30000,
+          socketTimeoutMS: 45000,
+          connectTimeoutMS: 30000,
+          maxPoolSize: 10,
+          minPoolSize: 2,
+          maxIdleTimeMS: 30000,
+          retryWrites: true,
+          w: 'majority',
+        });
+
+        await client.connect();
+        db = client.db(mongoDb);
+
+        console.log(`✅ MongoDB Connected (URI original): ${client.options.srvHost || 'localhost'}`);
+        console.log(`📊 Database: ${mongoDb}`);
+
+        return db;
+      } catch (retryError) {
+        console.error('❌ Erro ao conectar ao MongoDB (tentativa com URI original):', retryError.message);
+        console.error('\n💡 Dicas para resolver o problema de autenticação:');
+        console.error('   1. Verifique se o usuário e senha estão corretos no arquivo .env');
+        console.error('   2. Se a senha contém caracteres especiais, certifique-se de que estão codificados na URI');
+        console.error('   3. Verifique se o usuário tem permissões no MongoDB Atlas');
+        console.error('   4. Verifique se o IP está na whitelist do MongoDB Atlas');
+        throw retryError;
+      }
+    }
+
+    console.error('❌ Erro ao conectar ao MongoDB:', error.message);
+    if (error.message && error.message.includes('Authentication failed') || error.message.includes('bad auth')) {
+      console.error('\n💡 Dicas para resolver o problema de autenticação:');
+      console.error('   1. Verifique se o usuário e senha estão corretos no arquivo .env');
+      console.error('   2. Se a senha contém caracteres especiais (@, #, %, etc), você precisa codificá-los manualmente');
+      console.error('   3. Exemplo: se a senha é "senha@123", use "senha%40123" na URI');
+      console.error('   4. Verifique se o usuário tem permissões no MongoDB Atlas');
+      console.error('   5. Verifique se o IP está na whitelist do MongoDB Atlas');
+    }
+    throw error;
+  }
+}
+
+/**
+ * Conecta ao banco de dados novo (MONGO_DB_NOVO)
+ * @returns {Promise<Object>} Objeto do banco de dados novo
+ */
+async function connectNewDB() {
+  try {
+    if (!env.MONGO_URI) {
+      throw new Error('MONGO_URI não está definida no arquivo .env');
+    }
+
+    if (!env.MONGO_DB_NOVO) {
+      throw new Error('MONGO_DB_NOVO não está definida no arquivo .env');
+    }
+
+    // Se já existe uma conexão ativa para o banco novo, retorna
+    if (client && newDb) {
+      return newDb;
+    }
+
+    // Se já existe um client conectado, reutiliza; senão cria novo
+    if (!client) {
+      const isDevelopment = env.NODE_ENV === 'development';
+      const encodedURI = encodeMongoURI(env.MONGO_URI, isDevelopment);
+
+      client = new MongoClient(encodedURI, {
+        serverSelectionTimeoutMS: 30000,
+        socketTimeoutMS: 45000,
+        connectTimeoutMS: 30000,
+        maxPoolSize: 10,
+        minPoolSize: 2,
+        maxIdleTimeMS: 30000,
+        retryWrites: true,
+        w: 'majority',
+      });
+      await client.connect();
+    }
+
+    // Sempre cria/atualiza a referência ao banco novo
+    newDb = client.db(env.MONGO_DB_NOVO);
+
+    console.log(`✅ MongoDB Connected (Novo): ${client.options.srvHost || 'localhost'}`);
+    console.log(`📊 Database: ${env.MONGO_DB_NOVO}`);
+
+    return newDb;
+  } catch (error) {
+    // Se o erro for de autenticação, tenta com a URI original
+    if (error.message && (error.message.includes('Authentication failed') || error.message.includes('bad auth'))) {
+      console.warn('⚠️ Tentando conexão com URI original (sem codificação)...');
+      
+      try {
+        if (client) {
+          try {
+            await client.close();
+          } catch (e) {
+            // Ignora erros ao fechar
+          }
+          client = null;
+          newDb = null;
+        }
+
+        client = new MongoClient(env.MONGO_URI, {
+          serverSelectionTimeoutMS: 30000,
+          socketTimeoutMS: 45000,
+          connectTimeoutMS: 30000,
+          maxPoolSize: 10,
+          minPoolSize: 2,
+          maxIdleTimeMS: 30000,
+          retryWrites: true,
+          w: 'majority',
+        });
+
+        await client.connect();
+        newDb = client.db(env.MONGO_DB_NOVO);
+
+        console.log(`✅ MongoDB Connected (Novo, URI original): ${client.options.srvHost || 'localhost'}`);
+        console.log(`📊 Database: ${env.MONGO_DB_NOVO}`);
+
+        return newDb;
+      } catch (retryError) {
+        console.error('❌ Erro ao conectar ao MongoDB Novo:', retryError.message);
+        throw retryError;
+      }
+    }
+
+    console.error('❌ Erro ao conectar ao MongoDB Novo:', error.message);
+    throw error;
+  }
+}
+
+/**
+ * Fecha a conexão com o MongoDB
+ */
+async function closeConnection() {
+  try {
+    if (client) {
+      await client.close();
+      client = null;
+      db = null;
+      newDb = null;
+      console.log('✅ Conexão MongoDB fechada');
+    }
+  } catch (error) {
+    console.error('❌ Erro ao fechar conexão MongoDB:', error.message);
+    throw error;
+  }
+}
+
+module.exports = {
+  connectDB,
+  connectNewDB,
+  closeConnection
+};
+

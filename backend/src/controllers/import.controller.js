@@ -1,0 +1,206 @@
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
+const importService = require('../services/import.service');
+const logService = require('../services/log.service');
+const logger = require('../utils/logger');
+
+// Configuração do multer para upload
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const uploadsDir = path.join(__dirname, '../../uploads/temp');
+    if (!fs.existsSync(uploadsDir)) {
+      fs.mkdirSync(uploadsDir, { recursive: true });
+    }
+    cb(null, uploadsDir);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, uniqueSuffix + path.extname(file.originalname));
+  }
+});
+
+const upload = multer({
+  storage: storage,
+  limits: { fileSize: 100 * 1024 * 1024 } // 100MB
+});
+
+/**
+ * Controller de Importação
+ * RF007 - Upload e Importação de Dados
+ */
+class ImportController {
+  /**
+   * Middleware de upload
+   */
+  uploadMiddleware() {
+    return upload.single('file');
+  }
+
+  /**
+   * Valida arquivo antes de importar
+   */
+  async validate(req, res) {
+    try {
+      const db = req.app.locals.db;
+      if (!db) {
+        return res.status(503).json({
+          success: false,
+          error: 'Banco de dados não disponível'
+        });
+      }
+
+      const { dataType } = req.body;
+      const file = req.file;
+
+      if (!file) {
+        return res.status(400).json({
+          success: false,
+          error: 'Arquivo não fornecido'
+        });
+      }
+
+      if (!dataType || !['patients', 'samples', 'results', 'temperature'].includes(dataType)) {
+        return res.status(400).json({
+          success: false,
+          error: 'Tipo de dados inválido'
+        });
+      }
+
+      // Valida formato
+      if (!importService.validateFileFormat(file, dataType)) {
+        importService.cleanupFile(file.path);
+        return res.status(400).json({
+          success: false,
+          error: 'Formato de arquivo não suportado para este tipo de dados'
+        });
+      }
+
+      // Valida estrutura (CSV)
+      if (path.extname(file.originalname).toLowerCase() === '.csv') {
+        try {
+          const validation = await importService.validateCSVStructure(file, dataType);
+          return res.status(200).json({
+            success: true,
+            message: 'Arquivo válido',
+            data: {
+              valid: true,
+              rowCount: validation.rowCount,
+              headers: validation.headers
+            }
+          });
+        } catch (error) {
+          importService.cleanupFile(file.path);
+          return res.status(400).json({
+            success: false,
+            error: 'Estrutura do arquivo inválida',
+            message: error.message
+          });
+        }
+      }
+
+      // JSON - validação básica
+      return res.status(200).json({
+        success: true,
+        message: 'Arquivo válido',
+        data: { valid: true }
+      });
+    } catch (error) {
+      logger.error('Erro na validação:', error.message);
+      if (req.file) {
+        importService.cleanupFile(req.file.path);
+      }
+      return res.status(500).json({
+        success: false,
+        error: 'Erro ao validar arquivo',
+        message: error.message
+      });
+    }
+  }
+
+  /**
+   * Importa dados
+   */
+  async import(req, res) {
+    try {
+      const db = req.app.locals.db;
+      if (!db) {
+        return res.status(503).json({
+          success: false,
+          error: 'Banco de dados não disponível'
+        });
+      }
+
+      const { dataType } = req.body;
+      const file = req.file;
+
+      if (!file) {
+        return res.status(400).json({
+          success: false,
+          error: 'Arquivo não fornecido'
+        });
+      }
+
+      let results;
+
+      try {
+        switch (dataType) {
+          case 'patients':
+            results = await importService.importPatients(db, file);
+            break;
+          case 'samples':
+            results = await importService.importSamples(db, file);
+            break;
+          case 'temperature':
+            results = await importService.importTemperature(db, file);
+            break;
+          case 'results':
+            // TODO: Implementar importação de resultados
+            results = { success: 0, errors: [{ error: 'Importação de resultados ainda não implementada' }], total: 0 };
+            break;
+          default:
+            throw new Error('Tipo de dados não suportado');
+        }
+
+        // Registra log de importação (anonimizado via auditLogger)
+        if (req.user) {
+          const auditLogger = require('../utils/auditLogger');
+          auditLogger.init(db);
+          await auditLogger.logImport(
+            req, 
+            dataType.charAt(0).toUpperCase() + dataType.slice(1), 
+            results.errors.length === 0 ? 'success' : 'partial',
+            results.total, 
+            results.success, 
+            results.errors.length
+          );
+        }
+
+        // Limpa arquivo temporário
+        importService.cleanupFile(file.path);
+
+        return res.status(200).json({
+          success: true,
+          message: 'Importação concluída',
+          data: results
+        });
+      } catch (error) {
+        importService.cleanupFile(file.path);
+        throw error;
+      }
+    } catch (error) {
+      logger.error('Erro na importação:', error.message);
+      if (req.file) {
+        importService.cleanupFile(req.file.path);
+      }
+      return res.status(500).json({
+        success: false,
+        error: 'Erro ao importar dados',
+        message: error.message
+      });
+    }
+  }
+}
+
+module.exports = new ImportController();
+

@@ -1,0 +1,221 @@
+/**
+ * Configuração de Conexão Redis
+ * Cliente Redis usando ioredis para BullMQ
+ */
+
+require('dotenv').config({ path: require('path').join(__dirname, '..', '..', '.env') });
+const Redis = require('ioredis');
+const logger = require('../utils/logger');
+const {
+  REDIS_HOST,
+  REDIS_PORT,
+  REDIS_PASSWORD,
+  REDIS_USERNAME,
+  REDIS_TLS,
+} = require('./env');
+
+/**
+ * Cria instância Redis
+ * Usa configuração do env.js
+ */
+function createRedisConnection() {
+  // Validação básica
+  if (!REDIS_HOST) {
+    throw new Error('REDIS_HOST não está definido no .env');
+  }
+
+  if (!REDIS_PORT) {
+    throw new Error('REDIS_PORT não está definido no .env');
+  }
+
+  if (!REDIS_PASSWORD) {
+    throw new Error('REDIS_PASSWORD não está definido no .env');
+  }
+
+  // Log de configuração
+  logger.info('[INFO] 🔍 Config Redis:');
+  logger.info(`   host: ${REDIS_HOST || 'undefined'}`);
+  logger.info(`   port: ${REDIS_PORT || 'undefined'}`);
+  logger.info(`   username: ${REDIS_USERNAME || 'undefined'}`);
+  logger.info(`   tls: ${REDIS_TLS}`);
+  logger.info(`   hasPassword: ${!!REDIS_PASSWORD}`);
+  
+  // Valida variáveis undefined
+  if (!REDIS_HOST) {
+    logger.error('[ERROR] Variável REDIS_HOST não definida no .env');
+  }
+  if (!REDIS_PORT) {
+    logger.error('[ERROR] Variável REDIS_PORT não definida no .env');
+  }
+  if (!REDIS_PASSWORD) {
+    logger.error('[ERROR] Variável REDIS_PASSWORD não definida no .env');
+  }
+
+  // Aviso sobre TLS para Redis Cloud
+  if (!REDIS_TLS && REDIS_HOST && REDIS_HOST.includes('cloud.redislabs.com')) {
+    logger.warn('[WARN] ⚠️ REDIS_TLS está como false, mas você está usando Redis Cloud!');
+    logger.warn('[WARN] ⚠️ Redis Cloud requer TLS. Configure REDIS_TLS=true no .env');
+  }
+
+  // Configuração Redis
+  const config = {
+    host: REDIS_HOST,
+    port: Number(REDIS_PORT),
+    username: REDIS_USERNAME || 'default',
+    password: REDIS_PASSWORD,
+    maxRetriesPerRequest: null, // Requerido pelo BullMQ
+    enableReadyCheck: false, // Requerido pelo BullMQ
+    tls: REDIS_TLS ? {} : undefined, // TLS como objeto vazio quando true
+    connectTimeout: 10000,
+    retryStrategy: (times) => {
+      const delay = Math.min(times * 50, 2000);
+      return delay;
+    },
+    reconnectOnError: (err) => {
+      const targetError = 'READONLY';
+      if (err.message.includes(targetError)) {
+        logger.warn('[WARN] Redis em modo READONLY, reconectando...');
+        return true;
+      }
+      return false;
+    }
+  };
+
+  // Cria conexão Redis
+  const redis = new Redis(config);
+
+  // Event listeners
+  redis.on('connect', () => {
+    logger.info('[INFO] Redis conectado');
+  });
+
+  redis.on('ready', () => {
+    logger.info('[INFO] Redis pronto para uso');
+  });
+
+  redis.on('error', (err) => {
+    logger.error('[ERROR] Erro na conexão Redis:', err.message);
+  });
+
+  redis.on('close', () => {
+    logger.warn('[WARN] Conexão Redis fechada');
+  });
+
+  redis.on('reconnecting', (delay) => {
+    logger.warn(`[WARN] Reconectando ao Redis em ${delay}ms...`);
+  });
+
+  return redis;
+}
+
+// Instância singleton
+let redisInstance = null;
+
+/**
+ * Obtém instância Redis (singleton)
+ */
+function getRedisInstance() {
+  if (!redisInstance) {
+    redisInstance = createRedisConnection();
+  }
+  return redisInstance;
+}
+
+/**
+ * Testa conexão Redis
+ */
+async function testRedisConnection() {
+  try {
+    const redis = getRedisInstance();
+    
+    // Aguarda conexão estar pronta (máximo 15 segundos)
+    if (redis.status !== 'ready') {
+      await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          reject(new Error('Timeout ao aguardar conexão Redis estar pronta (15s)'));
+        }, 15000);
+
+        const cleanup = () => {
+          clearTimeout(timeout);
+          redis.removeListener('ready', readyHandler);
+          redis.removeListener('error', errorHandler);
+        };
+
+        const readyHandler = () => {
+          cleanup();
+          resolve();
+        };
+
+        const errorHandler = (err) => {
+          cleanup();
+          reject(err);
+        };
+
+        if (redis.status === 'ready') {
+          cleanup();
+          resolve();
+        } else {
+          redis.once('ready', readyHandler);
+          redis.once('error', errorHandler);
+        }
+      });
+    }
+
+    // Testa com PING
+    const result = await redis.ping();
+    if (result === 'PONG') {
+      logger.info('[INFO] Teste de conexão Redis: SUCESSO');
+      return true;
+    } else {
+      logger.error('[ERROR] Teste de conexão Redis: FALHOU (resposta inesperada)');
+      return false;
+    }
+  } catch (error) {
+    logger.error('[ERROR] Teste de conexão Redis falhou:', error.message);
+    if (error.code) {
+      logger.error(`[ERROR] Código do erro: ${error.code}`);
+    }
+    if (error.syscall) {
+      logger.error(`[ERROR] Syscall: ${error.syscall}`);
+    }
+    if (error.address) {
+      logger.error(`[ERROR] Endereço: ${error.address}:${error.port || ''}`);
+    }
+    
+    // Dicas de solução
+    if (error.message.includes('ECONNREFUSED')) {
+      logger.error('[ERROR] 💡 Dica: Verifique se o Redis está rodando e acessível');
+      logger.error('[ERROR] 💡 Dica: Para Redis Cloud, verifique se REDIS_TLS=true está configurado');
+    }
+    if (error.message.includes('ETIMEDOUT') || error.message.includes('Timeout')) {
+      logger.error('[ERROR] 💡 Dica: Verifique se o host e porta estão corretos');
+      logger.error('[ERROR] 💡 Dica: Verifique se há firewall bloqueando a conexão');
+    }
+    
+    return false;
+  }
+}
+
+/**
+ * Fecha conexão Redis
+ */
+async function closeRedisConnection() {
+  if (redisInstance) {
+    try {
+      await redisInstance.quit();
+      redisInstance = null;
+      logger.info('[INFO] Conexão Redis fechada');
+    } catch (error) {
+      logger.error('[ERROR] Erro ao fechar conexão Redis:', error.message);
+      throw error;
+    }
+  }
+}
+
+// Exporta instância Redis diretamente (para compatibilidade)
+const redis = getRedisInstance();
+
+module.exports = redis;
+module.exports.getRedisInstance = getRedisInstance;
+module.exports.testRedisConnection = testRedisConnection;
+module.exports.closeRedisConnection = closeRedisConnection;
