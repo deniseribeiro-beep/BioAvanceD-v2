@@ -51,10 +51,13 @@
     "socket.io-client": "^4.8.1",
     "speakeasy": "^2.0.0",
     "uuid": "^9.0.1",
-    "xlsx": "^0.18.5",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "yauzl": "^2.10.0"
   },
   "devDependencies": {
     "nodemon": "^3.0.2"
+  },
+  "overrides": {
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   }
 }
