@@ -8,7 +8,6 @@ Sistema React desenvolvido com base no diagrama UML de classes para gerenciament
 - **TypeScript** - Superset JavaScript com tipagem estática
 - **Vite** - Build tool moderna e rápida
 - **React Router** - Roteamento para aplicações React
-- **Lucide React** - Ícones modernos e leves
 
 ## 📋 Funcionalidades
 
@@ -54,10 +53,20 @@ npm install
 
 2. Inicie o servidor de desenvolvimento:
 ```bash
+npm run start
+```
+
+3. Inicie o worker para gerenciamento de importação de arquivos
+   ```bash
+npm run worker
+```
+
+4. Inicie o Vite (Layout do Software)
+   ```bash
 npm run dev
 ```
 
-3. Acesse a aplicação em `http://localhost:5173`
+5. Acesse a aplicação em `http://localhost:5173`
 
 ## 🏃 Scripts Disponíveis
 
