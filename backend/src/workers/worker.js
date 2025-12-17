@@ -9,6 +9,14 @@ const { initWorker } = require('./import-worker');
 const { testConnection } = require('../config/queue');
 const logger = require('../utils/logger');
 
+// Register background jobs
+// daily-merkle schedules itself when required
+try {
+  require('./jobs/daily-merkle.job');
+} catch (err) {
+  logger.warn('daily-merkle.job not registered:', err.message || err);
+}
+
 /**
  * Inicializa worker com testes automáticos
  */

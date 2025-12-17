@@ -24,7 +24,9 @@
     "check-ports": "node scripts/check-ports.js",
     "cleanup": "node ../scripts/cleanup-complete.js",
     "clean": "node ../scripts/cleanup-complete.js",
-    "test:redis": "node scripts/test-redis-connection.js"
+    "test:redis": "node scripts/test-redis-connection.js",
+    "test": "node test/run-tests.js",
+    "test:ci": "node test/run-tests.js && node test/cli.repair-smoke.test.js && node test/integrityCheckService.mock.test.js && node test/cli.audit-smoke.test.js && node test/integration/auditRoot.service.mock.test.js"
   },
   "dependencies": {
     "argon2": "^0.31.2",
