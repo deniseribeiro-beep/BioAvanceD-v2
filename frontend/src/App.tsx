@@ -13,6 +13,9 @@ import NewUserPage from './pages/NewUserPage';
 import NewUserSuccessPage from './pages/NewUserSuccessPage';
 import LogsPage from './pages/LogsPage';
 import LogDetailPage from './pages/LogDetailPage';
+import SampleLabelPage from './pages/SampleLabelPage';
+import SampleChainPage from './pages/SampleChainPage';
+import SampleMovementsPage from './pages/SampleMovementsPage';
 import FacilityManagementPage from './pages/FacilityManagementPage';
 import SystemManagementPage from './pages/SystemManagementPage';
 import ReportsPage from './pages/ReportsPage';
@@ -51,6 +54,9 @@ function App() {
                 <Route path="/samples" element={<ProtectedRoute><SamplesPage /></ProtectedRoute>} />
                 <Route path="/samples/:id" element={<ProtectedRoute><SampleDetailsPage /></ProtectedRoute>} />
                 <Route path="/samples/new" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}><NewSamplePage /></ProtectedRoute>} />
+                <Route path="/samples/:id/label" element={<ProtectedRoute><SampleLabelPage /></ProtectedRoute>} />
+                <Route path="/samples/:id/chain" element={<ProtectedRoute><SampleChainPage /></ProtectedRoute>} />
+                <Route path="/samples/:id/movements" element={<ProtectedRoute><SampleMovementsPage /></ProtectedRoute>} />
                 <Route path="/results" element={<ProtectedRoute><ResultsPage /></ProtectedRoute>} />
                 <Route path="/system-management" element={<ProtectedRoute requiredRole="Administrador"><SystemManagementPage /></ProtectedRoute>} />
                 {/* Rotas antigas redirecionam para a nova página consolidada */}

@@ -188,6 +188,18 @@ export default function SampleDetailsPage() {
           <h1 className="page-title">
             Detalhes da Amostra - {sample.barcode || sample.sampleID || 'N/A'}
           </h1>
+
+          <div style={{ marginTop: '0.5rem', display: 'flex', gap: '0.5rem' }}>
+            <Button variant="secondary" onClick={() => navigate(`/samples/${id}/label`)} style={{ padding: '0.25rem 0.5rem', fontSize: '0.85rem' }}>
+              {t('samples.label') || 'Etiqueta'}
+            </Button>
+            <Button variant="secondary" onClick={() => navigate(`/samples/${id}/chain`)} style={{ padding: '0.25rem 0.5rem', fontSize: '0.85rem' }}>
+              {t('samples.chain') || 'Fluxo'}
+            </Button>
+            <Button variant="secondary" onClick={() => navigate(`/samples/${id}/movements`)} style={{ padding: '0.25rem 0.5rem', fontSize: '0.85rem' }}>
+              {t('samples.movements') || 'Movimentações'}
+            </Button>
+          </div>
         </div>
       </div>
 
