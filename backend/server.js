@@ -2,31 +2,51 @@ require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
+const rateLimit = require("express-rate-limit");
 const http = require("http");
 const { Server } = require("socket.io");
 const logger = require("./src/utils/logger");
 const { connectDB } = require("./src/database/mongo");
 const portManager = require("./src/utils/portManager");
+const env = require("./src/config/env");
 
 const app = express();
+
+// ==== Critical env check (halt if missing) ====
+if (!env.MONGO_URI || !env.JWT_SECRET) {
+  logger.error("Critical environment variables missing: MONGO_URI and JWT_SECRET are required.");
+  process.exit(1);
+}
+
+// ==== CORS whitelist (env-based) ====
+const allowedOrigins = (env.ALLOWED_ORIGINS || env.FRONTEND_URL || "")
+  .split(",")
+  .map((o) => o.trim())
+  .filter(Boolean);
+if (allowedOrigins.length === 0) {
+  allowedOrigins.push("http://localhost:3000");
+}
+const isDev = env.NODE_ENV !== "production";
 
 // =======================
 // MIDDLEWARES
 // =======================
-// Security headers
-app.use(helmet({
-  contentSecurityPolicy: {
+// Security headers (production-safe defaults)
+app.use(helmet());
+app.use(
+  helmet.contentSecurityPolicy({
     directives: {
       defaultSrc: ["'self'"],
-      styleSrc: ["'self'", "'unsafe-inline'"],
-      scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"], // Needed for Vite dev
+      styleSrc: ["'self'", ...(isDev ? ["'unsafe-inline'"] : [])],
+      scriptSrc: ["'self'", ...(isDev ? ["'unsafe-inline'", "'unsafe-eval'"] : [])],
       imgSrc: ["'self'", "data:", "https:"],
-      connectSrc: ["'self'", "ws:", "wss:"],
+      connectSrc: ["'self'", "ws:", "wss:", ...allowedOrigins],
     },
-  },
-  xContentTypeOptions: true,
-  hidePoweredBy: true, // Remove X-Powered-By header
-}));
+  })
+);
+app.use(helmet.noSniff());
+app.use(helmet.frameguard({ action: "sameorigin" }));
+app.use(helmet.referrerPolicy({ policy: "no-referrer" }));
 
 // Cache-Control and Content-Type charset for API responses
 app.use((req, res, next) => {
@@ -55,13 +75,66 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(cors({ origin: "*", credentials: true }));
+// CORS restricted to whitelist
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true);
+      if (allowedOrigins.includes(origin)) return callback(null, true);
+      return callback(new Error("Not allowed by CORS"));
+    },
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "DELETE", "PATCH"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
+  })
+);
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+
+// ==== NoSQL Injection sanitization (remove keys containing $ or .) ====
+function sanitizeObject(obj) {
+  if (!obj || typeof obj !== "object") return;
+  if (Array.isArray(obj)) {
+    for (const item of obj) sanitizeObject(item);
+    return;
+  }
+  for (const key of Object.keys(obj)) {
+    if (key.includes("$") || key.includes(".")) {
+      delete obj[key];
+      continue;
+    }
+    sanitizeObject(obj[key]);
+  }
+}
+app.use((req, _res, next) => {
+  try {
+    ["body", "query", "params"].forEach((k) => sanitizeObject(req[k]));
+  } catch (_) {}
+  next();
+});
 
 // Idioma e auditoria
 app.use(require("./src/i18n").languageMiddleware);
 app.use(require("./src/middleware/audit.middleware").auditRequest);
+
+// =======================
+// RATE LIMITING
+// =======================
+const globalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+const authLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 5,
+  message: "Too many requests to auth endpoints. Try again later.",
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+app.use(globalLimiter);
+app.use("/api/auth", authLimiter);
 
 // =======================
 // ROTAS
@@ -76,6 +149,10 @@ app.use("/api/locations", require("./src/routes/location.routes"));
 app.use("/api/policies", require("./src/routes/policy.routes"));
 app.use("/api/sensors", require("./src/routes/sensor.routes"));
 app.use("/api/temperature", require("./src/routes/temperature.routes"));
+// Rotas de Gerenciamento do Sistema (Admin)
+app.use("/api/users", require("./src/routes/user.routes"));
+app.use("/api/access", require("./src/routes/access.routes"));
+app.use("/api/security", require("./src/routes/security.routes"));
 
 app.get("/api/health", (req, res) => {
   res.json({ status: "OK", db: !!req.app.locals.db });
@@ -98,9 +175,9 @@ async function startServer() {
     // Criar servidor HTTP unificado
     const httpServer = http.createServer(app);
 
-    // Criar Socket.IO
+    // Criar Socket.IO (CORS alinhado ao app)
     const io = new Server(httpServer, {
-      cors: { origin: "*", methods: ["GET", "POST"] },
+      cors: { origin: allowedOrigins, methods: ["GET", "POST"], credentials: true },
     });
 
     io.on("connection", (socket) => {

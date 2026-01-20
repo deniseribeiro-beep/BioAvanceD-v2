@@ -1988,7 +1988,10 @@ function WithdrawalModal({
         return;
       }
       
-      if (!response.data.sample) {
+      // Compatibilidade com estrutura { success, data: { sample, patient } }
+      const result = response.data?.data || response.data;
+      
+      if (!result.sample) {
         setError('Amostra não encontrada com este código de barras');
         setSearchedSample(null);
         setPatientInfo(null);
@@ -1996,12 +1999,12 @@ function WithdrawalModal({
         return;
       }
       
-      setSearchedSample(response.data.sample);
-      setPatientInfo(response.data.patient);
+      setSearchedSample(result.sample);
+      setPatientInfo(result.patient);
 
       // Validação baseada no modo
-      const availableQty = response.data.sample.availableQuantity ?? response.data.sample.quantity ?? 0;
-      const totalQty = response.data.sample.quantity ?? 0;
+      const availableQty = result.sample.availableQuantity ?? result.sample.quantity ?? 0;
+      const totalQty = result.sample.quantity ?? 0;
       const withdrawnQty = totalQty - availableQty;
       
       if (mode === 'withdrawal' && availableQty <= 0) {

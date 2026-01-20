@@ -16,6 +16,7 @@ import LogDetailPage from './pages/LogDetailPage';
 import SampleLabelPage from './pages/SampleLabelPage';
 import SampleChainPage from './pages/SampleChainPage';
 import SampleMovementsPage from './pages/SampleMovementsPage';
+import SampleWithdrawalReturnPage from './pages/SampleWithdrawalReturnPage';
 import FacilityManagementPage from './pages/FacilityManagementPage';
 import SystemManagementPage from './pages/SystemManagementPage';
 import ReportsPage from './pages/ReportsPage';
@@ -57,6 +58,7 @@ function App() {
                 <Route path="/samples/:id/label" element={<ProtectedRoute><SampleLabelPage /></ProtectedRoute>} />
                 <Route path="/samples/:id/chain" element={<ProtectedRoute><SampleChainPage /></ProtectedRoute>} />
                 <Route path="/samples/:id/movements" element={<ProtectedRoute><SampleMovementsPage /></ProtectedRoute>} />
+                <Route path="/samples/withdrawal-return" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}><SampleWithdrawalReturnPage /></ProtectedRoute>} />
                 <Route path="/results" element={<ProtectedRoute><ResultsPage /></ProtectedRoute>} />
                 <Route path="/system-management" element={<ProtectedRoute requiredRole="Administrador"><SystemManagementPage /></ProtectedRoute>} />
                 {/* Rotas antigas redirecionam para a nova página consolidada */}

@@ -1,4 +1,5 @@
 const SampleModel = require('../models/Sample');
+const SampleMovementModel = require('../models/SampleMovement');
 const logger = require('../utils/logger');
 const { validatePatientID } = require('../utils/patientAnonymization');
 const { generateUniqueBarcode } = require('../utils/barcodeGenerator');
@@ -125,48 +126,130 @@ class SampleService {
     }
   }
 
-  async withdrawSample(db, sampleID, withdrawalData) {
+  async withdrawSample(db, sampleID, withdrawalData, auditInfo = {}) {
     try {
       const samplesCollection = db.collection('amostras');
-      const sample = await samplesCollection.findOne({ _id: sampleID });
+      const movementsCollection = db.collection('sample_movements');
+      
+      // Busca a amostra (suporta ObjectId ou barcode)
+      let sample = await samplesCollection.findOne({ _id: sampleID });
+      
+      if (!sample) {
+        // Tenta buscar por barcode se não encontrou por ID
+        if (typeof sampleID === 'string' && !sampleID.match(/^[0-9a-fA-F]{24}$/)) {
+          const result = await this.getSampleByBarcode(db, sampleID);
+          sample = result.sample;
+        }
+      }
 
       if (!sample) {
         throw new Error('Amostra não encontrada');
       }
 
-      if (sample.currentStatus !== 'Available') {
-        throw new Error('Amostra não está disponível para retirada');
+      // Validações de status
+      const invalidStatuses = ['TotallyWithdrawn', 'Destroyed', 'Unusable', 'Expired'];
+      if (invalidStatuses.includes(sample.currentStatus)) {
+        throw new Error(`Amostra não está disponível para retirada (Status: ${sample.currentStatus})`);
       }
 
       // Validações MIABIS
       if (!SampleModel.validateWithdrawalType(withdrawalData.withdrawalType)) {
-        throw new Error('Tipo de retirada inválido conforme MIABIS');
+        throw new Error('Tipo de retirada inválido. Deve ser: Parcial ou Total');
       }
 
       if (!withdrawalData.withdrawalResponsible || !SampleModel.validateResponsibleName(withdrawalData.withdrawalResponsible)) {
-        throw new Error('Nome do responsável deve conter nome e sobrenome (MIABIS)');
+        throw new Error('Nome do responsável deve conter nome e sobrenome');
       }
 
       if (!withdrawalData.linkedProject || withdrawalData.linkedProject.trim() === '') {
-        throw new Error('Projeto vinculado é obrigatório (RF006)');
+        throw new Error('Projeto vinculado é obrigatório');
       }
 
+      // Calcular quantidade disponível atual
+      const availableQty = sample.availableQuantity !== undefined 
+        ? sample.availableQuantity 
+        : sample.quantity;
+      
+      // Determinar quantidade a retirar
+      let withdrawQty;
+      if (withdrawalData.withdrawalType === 'Total') {
+        withdrawQty = availableQty;
+      } else {
+        // Retirada parcial - quantidade obrigatória
+        withdrawQty = parseFloat(withdrawalData.withdrawalQuantity || withdrawalData.quantity);
+        if (!withdrawQty || withdrawQty <= 0) {
+          throw new Error('Quantidade a retirar é obrigatória para retirada parcial');
+        }
+        if (withdrawQty > availableQty) {
+          throw new Error(`Quantidade indisponível. Disponível: ${availableQty} ${sample.unit || 'µL'}`);
+        }
+      }
+
+      // Calcular novo saldo
+      const newAvailableQty = availableQty - withdrawQty;
+      const totalWithdrawn = (sample.totalWithdrawn || 0) + withdrawQty;
+
+      // Determinar novo status
+      let newStatus;
+      if (newAvailableQty <= 0) {
+        newStatus = 'TotallyWithdrawn';
+      } else {
+        newStatus = 'PartiallyWithdrawn';
+      }
+
+      // Registrar movimentação no ledger (imutável)
+      const movementID = await SampleMovementModel.generateMovementID(db);
+      const movement = SampleMovementModel.create({
+        movementID,
+        sampleID: sample._id.toString(),
+        barcode: sample.barcode,
+        type: 'withdraw',
+        quantity: withdrawQty,
+        unit: sample.unit || 'µL',
+        responsible: withdrawalData.withdrawalResponsible,
+        destination: withdrawalData.sampleDestination || withdrawalData.withdrawalDestination,
+        purpose: withdrawalData.purpose || withdrawalData.justification,
+        linkedProject: withdrawalData.linkedProject || sample.linkedProject,
+        observations: withdrawalData.observations || withdrawalData.notes,
+        userId: auditInfo.userId || null,
+        userName: auditInfo.userName || null,
+        userRole: auditInfo.userRole || null,
+        ipAddress: auditInfo.ipAddress || null,
+        userAgent: auditInfo.userAgent || null,
+        previousQuantity: availableQty,
+        newQuantity: newAvailableQty
+      });
+
+      await movementsCollection.insertOne(movement);
+
+      // Atualizar amostra
       const update = {
-        currentStatus: withdrawalData.withdrawalType === 'Total' ? 'Withdrawn' : 'Available',
+        currentStatus: newStatus,
+        availableQuantity: newAvailableQty,
+        totalWithdrawn: totalWithdrawn,
         withdrawalDate: new Date(),
         withdrawalType: withdrawalData.withdrawalType,
         withdrawalResponsible: withdrawalData.withdrawalResponsible,
         sampleDestination: withdrawalData.sampleDestination || withdrawalData.withdrawalDestination,
         linkedProject: withdrawalData.linkedProject || sample.linkedProject,
+        lastWithdrawalID: movementID,
         updatedAt: new Date()
       };
 
       await samplesCollection.updateOne(
-        { _id: sampleID },
+        { _id: sample._id },
         { $set: update }
       );
 
-      return { success: true };
+      logger.info(`Retirada registrada: Sample ${sample.barcode || sample._id}, Qtd: ${withdrawQty}, Novo saldo: ${newAvailableQty}`);
+
+      return { 
+        success: true, 
+        movementID,
+        withdrawnQuantity: withdrawQty,
+        remainingQuantity: newAvailableQty,
+        newStatus
+      };
     } catch (error) {
       logger.error('Erro ao retirar amostra:', error.message);
       throw error;
@@ -314,14 +397,20 @@ class SampleService {
         logger.warn(`Amostra não encontrada com código de barras: "${barcodeStr}". Total de amostras: ${sampleCount}. Exemplos de barcodes: ${JSON.stringify(sampleExamples.map(s => s.barcode))}`);
         return { sample: null, patient: null };
       }
-
       let patient = null;
       if (sample.patientID) {
         patient = await patientsCollection.findOne({ patientID: sample.patientID });
         if (patient) {
+          // LGPD: Anonimizar nome do paciente - mostrar apenas iniciais
+          const anonymizeName = (name) => {
+            if (!name) return '***';
+            const parts = name.trim().split(' ');
+            if (parts.length === 1) return parts[0].charAt(0) + '***';
+            return parts[0].charAt(0) + '. ' + parts[parts.length - 1].charAt(0) + '.';
+          };
           patient = {
             patientID: patient.patientID,
-            patientName: patient.patientName,
+            patientName: anonymizeName(patient.patientName),
             recordNumber: patient.recordNumber
           };
         }
@@ -351,36 +440,171 @@ class SampleService {
     }
   }
 
-  async returnSample(db, sampleID, returnData) {
+  async returnSample(db, sampleID, returnData, auditInfo = {}) {
     try {
       const samplesCollection = db.collection('amostras');
-      const sample = await samplesCollection.findOne({ _id: sampleID });
+      const movementsCollection = db.collection('sample_movements');
+      
+      // Busca a amostra (suporta ObjectId ou barcode)
+      let sample = await samplesCollection.findOne({ _id: sampleID });
+      
+      if (!sample) {
+        // Tenta buscar por barcode se não encontrou por ID
+        if (typeof sampleID === 'string' && !sampleID.match(/^[0-9a-fA-F]{24}$/)) {
+          const result = await this.getSampleByBarcode(db, sampleID);
+          sample = result.sample;
+        }
+      }
 
       if (!sample) {
         throw new Error('Amostra não encontrada');
       }
 
-      if (sample.currentStatus !== 'Withdrawn') {
-        throw new Error('Amostra não está retirada');
+      // Validação: só pode devolver se houver quantidade retirada
+      const totalWithdrawn = sample.totalWithdrawn || 0;
+      const totalReturned = sample.totalReturned || 0;
+      const pendingReturn = totalWithdrawn - totalReturned;
+
+      if (pendingReturn <= 0) {
+        throw new Error('Não há quantidade pendente de devolução para esta amostra');
       }
 
+      // Validação do responsável
+      if (!returnData.returnResponsible || returnData.returnResponsible.trim().length < 3) {
+        throw new Error('Responsável pela devolução é obrigatório');
+      }
+
+      // Validação da condição
+      const validConditions = Object.values(SampleMovementModel.RETURN_CONDITIONS);
+      if (!returnData.condition || !validConditions.includes(returnData.condition)) {
+        throw new Error('Condição da amostra é obrigatória (Íntegra, Parcialmente comprometida ou Inutilizada)');
+      }
+
+      // Observações obrigatórias se condição não for íntegra
+      if (returnData.condition !== 'Íntegra' && (!returnData.observations || returnData.observations.trim() === '')) {
+        throw new Error('Observações são obrigatórias quando a condição não é Íntegra');
+      }
+
+      // Determinar quantidade a devolver
+      let returnQty;
+      if (returnData.returnType === 'Total') {
+        returnQty = pendingReturn;
+      } else {
+        returnQty = parseFloat(returnData.returnQuantity || returnData.quantity);
+        if (!returnQty || returnQty <= 0) {
+          throw new Error('Quantidade a devolver é obrigatória');
+        }
+        if (returnQty > pendingReturn) {
+          throw new Error(`Quantidade excede o pendente de devolução. Pendente: ${pendingReturn} ${sample.unit || 'µL'}`);
+        }
+      }
+
+      // Calcular novos saldos
+      let newAvailableQty = (sample.availableQuantity || 0);
+      let newTotalReturned = totalReturned + returnQty;
+      
+      // Se condição é inutilizada, a quantidade não retorna ao estoque
+      if (returnData.condition !== 'Inutilizada') {
+        newAvailableQty += returnQty;
+      }
+
+      // Determinar novo status
+      let newStatus;
+      if (returnData.condition === 'Inutilizada' && newAvailableQty <= 0) {
+        newStatus = 'Unusable';
+      } else if (newAvailableQty >= (sample.originalQuantity || sample.quantity)) {
+        newStatus = 'Available';
+      } else if (newAvailableQty > 0) {
+        newStatus = sample.totalWithdrawn > newTotalReturned ? 'PartiallyWithdrawn' : 'Available';
+      } else {
+        newStatus = 'TotallyWithdrawn';
+      }
+
+      // Registrar movimentação no ledger (imutável)
+      const movementID = await SampleMovementModel.generateMovementID(db);
+      const movement = SampleMovementModel.create({
+        movementID,
+        sampleID: sample._id.toString(),
+        barcode: sample.barcode,
+        type: 'return',
+        quantity: returnQty,
+        unit: sample.unit || 'µL',
+        responsible: returnData.returnResponsible,
+        condition: returnData.condition,
+        linkedProject: returnData.linkedProject || sample.linkedProject,
+        observations: returnData.observations || returnData.notes,
+        relatedWithdrawalID: sample.lastWithdrawalID || null,
+        userId: auditInfo.userId || null,
+        userName: auditInfo.userName || null,
+        userRole: auditInfo.userRole || null,
+        ipAddress: auditInfo.ipAddress || null,
+        userAgent: auditInfo.userAgent || null,
+        previousQuantity: sample.availableQuantity || 0,
+        newQuantity: newAvailableQty
+      });
+
+      await movementsCollection.insertOne(movement);
+
+      // Atualizar amostra
       const update = {
-        currentStatus: 'Available',
-        withdrawalDate: null,
-        withdrawalType: null,
-        withdrawalResponsible: null,
-        sampleDestination: null,
+        currentStatus: newStatus,
+        availableQuantity: newAvailableQty,
+        totalReturned: newTotalReturned,
         updatedAt: new Date()
       };
 
+      // Limpar campos de retirada se voltou ao estado disponível
+      if (newStatus === 'Available') {
+        update.withdrawalDate = null;
+        update.withdrawalType = null;
+        update.withdrawalResponsible = null;
+        update.sampleDestination = null;
+      }
+
       await samplesCollection.updateOne(
-        { _id: sampleID },
+        { _id: sample._id },
         { $set: update }
       );
 
-      return { success: true };
+      logger.info(`Devolução registrada: Sample ${sample.barcode || sample._id}, Qtd: ${returnQty}, Condição: ${returnData.condition}, Novo saldo: ${newAvailableQty}`);
+
+      return { 
+        success: true, 
+        movementID,
+        returnedQuantity: returnQty,
+        condition: returnData.condition,
+        newAvailableQuantity: newAvailableQty,
+        newStatus
+      };
     } catch (error) {
       logger.error('Erro ao retornar amostra:', error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Obtém histórico de movimentações de uma amostra
+   */
+  async getSampleMovements(db, sampleID) {
+    try {
+      const movementsCollection = db.collection('sample_movements');
+      
+      // Suporta busca por ObjectId ou string de ID
+      const sampleIDStr = sampleID.toString ? sampleID.toString() : sampleID;
+      
+      const movements = await movementsCollection
+        .find({ 
+          $or: [
+            { sampleID: sampleIDStr },
+            { barcode: sampleIDStr }
+          ]
+        })
+        .sort({ timestamp: -1 })
+        .toArray();
+
+      return movements;
+    } catch (error) {
+      logger.error('Erro ao buscar movimentações:', error.message);
       throw error;
     }
   }

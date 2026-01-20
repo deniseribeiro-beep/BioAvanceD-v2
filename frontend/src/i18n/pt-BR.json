@@ -91,7 +91,8 @@
     "dashboard": "Dashboard",
     "language": "Idioma",
     "portuguese": "Português (Brasil)",
-    "english": "English (US)"
+    "english": "English (US)",
+    "spanish": "Espanhol (ES)"
   },
   "dashboard": {
     "title": "Painel de Controle",
@@ -112,6 +113,7 @@
     "dashboard": "Dashboard",
     "patients": "Pacientes",
     "samples": "Amostras",
+    "withdrawalReturn": "Retirada/Devolução",
     "results": "Resultados",
     "equipment": "Equipamentos",
     "locations": "Localizações",
@@ -398,7 +400,41 @@
     "withdrawalDateRequired": "Data de retirada é obrigatória quando status é Withdrawn",
     "withdrawalTypeRequired": "Tipo de retirada é obrigatório",
     "withdrawalResponsibleRequired": "Responsável pela retirada é obrigatório",
-    "sampleDestinationRequired": "Destino da amostra é obrigatório"
+    "sampleDestinationRequired": "Destino da amostra é obrigatório",
+    "withdrawalReturn": "Retirada e Devolução de Amostras",
+    "withdrawalReturnSubtitle": "Registre retiradas e devoluções de amostras biológicas com rastreabilidade completa",
+    "sampleData": "Dados da Amostra",
+    "withdrawForm": "Formulário de Retirada",
+    "returnForm": "Formulário de Devolução",
+    "return": "Registrar Devolução",
+    "withdraw": "Retirar Amostra",
+    "movementHistory": "Histórico de Movimentações",
+    "withdrawSuccess": "Retirada registrada com sucesso",
+    "returnSuccess": "Devolução registrada com sucesso",
+    "quantityUnavailable": "Quantidade indisponível",
+    "noPendingReturn": "Não há quantidade pendente de devolução",
+    "conditionRequired": "Condição da amostra é obrigatória",
+    "observationsRequiredForCondition": "Observações são obrigatórias quando a condição não é Íntegra",
+    "confirmWithdrawal": "Confirmar Retirada",
+    "confirmReturn": "Confirmar Devolução",
+    "originalQuantity": "Quantidade Original",
+    "availableQuantity": "Quantidade Disponível",
+    "totalWithdrawn": "Total Retirado",
+    "pendingReturn": "Pendente de Devolução",
+    "returnCondition": {
+      "intact": "Íntegra",
+      "partiallyCompromised": "Parcialmente comprometida",
+      "unusable": "Inutilizada"
+    },
+    "statusLabels": {
+      "Available": "Disponível",
+      "PartiallyWithdrawn": "Parcialmente Retirada",
+      "TotallyWithdrawn": "Totalmente Retirada",
+      "Withdrawn": "Retirada",
+      "Unusable": "Inutilizada",
+      "Expired": "Expirada",
+      "Destroyed": "Destruída"
+    }
   },
   "results": {
     "title": "Resultados",
@@ -791,6 +827,7 @@
       "logExpiration": "Registrar logs quando sessão for expirada"
     },
     "login": {
+      "title": "Tentativas de Login e Bloqueio",
       "maxAttempts": "Máximo de tentativas antes do bloqueio",
       "lockoutDuration": "Duração do bloqueio (minutos)",
       "trackIP": "Rastrear tentativas por IP",
@@ -822,7 +859,10 @@
     "privacy": {
       "title": "Privacidade e Retenção de Dados",
       "anonymizeLogs": "Anonimizar logs automaticamente",
-      "dataRetentionDays": "Retenção de dados (dias)"
+      "dataRetentionDays": "Retenção de dados (dias)",
+      "autoPurge": "Expurgo automático de dados antigos",
+      "purgeAfterDays": "Expurgar após (dias)",
+      "anonymizeAfterDays": "Anonimizar após (dias)"
     },
     "lgpd": {
       "title": "Preferências de Proteção LGPD",
@@ -840,14 +880,6 @@
       "sessionTimeoutMinutes": "Timeout de sessão (minutos)",
       "logAllActions": "Registrar todas as ações",
       "blockUnusualActivity": "Bloquear atividade incomum"
-    },
-    "privacy": {
-      "autoPurge": "Expurgo automático de dados antigos",
-      "purgeAfterDays": "Expurgar após (dias)",
-      "anonymizeAfterDays": "Anonimizar após (dias)"
-    },
-    "login": {
-      "title": "Tentativas de Login e Bloqueio"
     }
   },
   "userSecurity": {

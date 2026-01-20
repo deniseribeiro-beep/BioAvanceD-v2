@@ -11,11 +11,13 @@ export function useAccess() {
     loadAccesses();
   }, []);
 
-  const loadAccesses = async () => {
+   const loadAccesses = async () => {
     try {
       setLoading(true);
       const response = await accessService.getAll();
-      setAccesses(response.data);
+      // Backend retorna { success: true, data: [...] }
+      const data = response.data?.data || response.data || [];
+      setAccesses(Array.isArray(data) ? data : []);
       setError(null);
     } catch (err: any) {
       setError(err.message || 'Erro ao carregar acessos');

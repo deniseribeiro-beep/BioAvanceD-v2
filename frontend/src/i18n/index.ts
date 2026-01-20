@@ -1,11 +1,13 @@
 import ptBR from './pt-BR.json';
 import enUS from './en-US.json';
+import esES from './es-ES.json';
 
-export type Language = 'pt-BR' | 'en-US';
+export type Language = 'pt-BR' | 'en-US' | 'es-ES';
 
 const translations: Record<Language, any> = {
   'pt-BR': ptBR,
   'en-US': enUS,
+  'es-ES': esES,
 };
 
 let currentLanguage: Language = 'pt-BR';
@@ -51,6 +53,10 @@ export function initLanguage(): Language {
     if (browserLang.startsWith('en')) {
       currentLanguage = 'en-US';
       return 'en-US';
+    }
+    if (browserLang.startsWith('es')) {
+      currentLanguage = 'es-ES';
+      return 'es-ES';
     }
     if (browserLang.startsWith('pt')) {
       currentLanguage = 'pt-BR';

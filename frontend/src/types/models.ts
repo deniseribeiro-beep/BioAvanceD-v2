@@ -82,15 +82,26 @@ export interface Sample {
   quantity?: number;
   quality?: number; // Escala MIABIS: 0 (Não avaliada), 1 (Adequada), 2 (Inadequada)
   qualityID?: number; // Mantido para compatibilidade, mas quality é o campo principal
+  unit?: string; // Unidade de medida (µL, mL, etc.)
   unitID?: number; // Relacionamento Sample → SampleWithMeasurementUnit
   locationID?: number;
   linkedProject?: string;
   // Campos de movimentação
   movementType?: 'Armazenamento' | 'Transferência';
+  // Controle de quantidade (novos campos)
+  availableQuantity?: number; // Quantidade disponível após retiradas
+  originalQuantity?: number; // Quantidade original (nunca muda)
+  totalWithdrawn?: number; // Total já retirado
+  totalReturned?: number; // Total já devolvido
+  lastWithdrawalID?: number; // ID da última retirada
   // Status de disponibilidade
   availabilityStatus?: 'Disponível' | 'Parcialmente Disponível' | 'Indisponível';
-  availableQuantity?: number; // Quantidade disponível (pode ser menor que quantity após retiradas)
-  currentStatus?: string;
+  currentStatus?: 'Available' | 'PartiallyWithdrawn' | 'TotallyWithdrawn' | 'Withdrawn' | 'Expired' | 'Destroyed' | 'Unusable';
+  // Campos de retirada
+  withdrawalDate?: Date | string;
+  withdrawalType?: 'Parcial' | 'Total';
+  withdrawalResponsible?: string;
+  sampleDestination?: string;
   // Soft delete fields
   deleted?: boolean;
   deletedAt?: Date | string;
@@ -373,11 +384,43 @@ export interface Return {
   returnQuantity: number; // Quantidade devolvida
   returnResponsible: string;
   linkedProject: string; // Campo obrigatório
-  condition?: string; // Condição da amostra ao devolver
+  condition?: 'Íntegra' | 'Parcialmente comprometida' | 'Inutilizada'; // Condição da amostra ao devolver
   notes?: string; // Observações sobre a devolução
   relatedWithdrawalID?: number; // Referência à retirada original
   createdAt?: Date | string;
   updatedAt?: Date | string;
+}
+
+// Interface para movimentações de amostras (ledger imutável)
+export interface SampleMovement {
+  _id?: string;
+  movementID: number;
+  sampleID: string;
+  barcode?: string;
+  type: 'withdraw' | 'return' | 'adjust';
+  quantity: number;
+  unit?: string;
+  responsible: string;
+  // Campos de retirada
+  destination?: string;
+  purpose?: string;
+  linkedProject?: string;
+  // Campos de devolução
+  condition?: 'Íntegra' | 'Parcialmente comprometida' | 'Inutilizada';
+  relatedWithdrawalID?: number;
+  // Observações
+  observations?: string;
+  // Auditoria
+  userId?: string;
+  userName?: string;
+  userRole?: string;
+  ipAddress?: string;
+  // Saldos
+  previousQuantity?: number;
+  newQuantity?: number;
+  // Timestamps
+  timestamp: Date | string;
+  createdAt?: Date | string;
 }
 
 // ========== IMPORT SYSTEM TYPES ==========

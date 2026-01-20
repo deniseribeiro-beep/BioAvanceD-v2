@@ -68,7 +68,21 @@
     "disable": "Disable MFA",
     "mandatoryWarning": "⚠️ MFA setup is mandatory on first access. You will not be able to access the system until you configure two-factor authentication.",
     "invalidCode": "Invalid MFA code",
-    "setupSuccess": "MFA configured successfully"
+    "setupSuccess": "MFA configured successfully",
+    "requiredSetup": "Mandatory 2FA Setup",
+    "requiredWarning": "Attention: Mandatory Setup",
+    "requiredMessage": "Two-factor authentication (2FA) setup is mandatory on first login. You will not be able to access the system without configuring 2FA.",
+    "generatingQR": "Generating QR Code...",
+    "generateQR": "Generate QR Code",
+    "manualCode": "Or type this code manually:",
+    "verificationCode": "Verification Code (6 digits)",
+    "verifying": "Verifying...",
+    "verifyAndEnable": "Verify and Enable",
+    "setupSuccessMessage": "Two-factor authentication was enabled successfully. You will be redirected to the dashboard.",
+    "setupComplete": "Setup Complete",
+    "setupCompleteMessage": "Your first access has been completed successfully. From now on, you will need to use the Google Authenticator code whenever you log in.",
+    "continueToSystem": "Continue to System",
+    "credentialsNotFound": "Credentials not found. Please log in again."
   },
   "app": {
     "title": "BioAvanceD",
@@ -76,8 +90,9 @@
     "welcome": "Welcome",
     "dashboard": "Dashboard",
     "language": "Language",
-    "portuguese": "Português (Brasil)",
-    "english": "English (US)"
+    "portuguese": "Portuguese (Brazil)",
+    "english": "English (US)",
+    "spanish": "Spanish (ES)"
   },
   "dashboard": {
     "title": "Control Panel",
@@ -98,6 +113,7 @@
     "dashboard": "Dashboard",
     "patients": "Patients",
     "samples": "Samples",
+    "withdrawalReturn": "Withdraw/Return",
     "results": "Results",
     "equipment": "Equipment",
     "locations": "Locations",
@@ -384,7 +400,41 @@
     "withdrawalDateRequired": "Withdrawal date is required when status is Withdrawn",
     "withdrawalTypeRequired": "Withdrawal type is required",
     "withdrawalResponsibleRequired": "Withdrawal responsible is required",
-    "sampleDestinationRequired": "Sample destination is required"
+    "sampleDestinationRequired": "Sample destination is required",
+    "withdrawalReturn": "Sample Withdrawal and Return",
+    "withdrawalReturnSubtitle": "Register withdrawals and returns of biological samples with full traceability",
+    "sampleData": "Sample Data",
+    "withdrawForm": "Withdrawal Form",
+    "returnForm": "Return Form",
+    "return": "Register Return",
+    "withdraw": "Withdraw Sample",
+    "movementHistory": "Movement History",
+    "withdrawSuccess": "Withdrawal registered successfully",
+    "returnSuccess": "Return registered successfully",
+    "quantityUnavailable": "Quantity unavailable",
+    "noPendingReturn": "No pending quantity to return",
+    "conditionRequired": "Sample condition is required",
+    "observationsRequiredForCondition": "Observations are required when condition is not Intact",
+    "confirmWithdrawal": "Confirm Withdrawal",
+    "confirmReturn": "Confirm Return",
+    "originalQuantity": "Original Quantity",
+    "availableQuantity": "Available Quantity",
+    "totalWithdrawn": "Total Withdrawn",
+    "pendingReturn": "Pending Return",
+    "returnCondition": {
+      "intact": "Intact",
+      "partiallyCompromised": "Partially compromised",
+      "unusable": "Unusable"
+    },
+    "statusLabels": {
+      "Available": "Available",
+      "PartiallyWithdrawn": "Partially Withdrawn",
+      "TotallyWithdrawn": "Totally Withdrawn",
+      "Withdrawn": "Withdrawn",
+      "Unusable": "Unusable",
+      "Expired": "Expired",
+      "Destroyed": "Destroyed"
+    }
   },
   "results": {
     "title": "Results",
@@ -777,6 +827,7 @@
       "logExpiration": "Log when session expires"
     },
     "login": {
+      "title": "Login Attempts and Lockout",
       "maxAttempts": "Maximum attempts before lockout",
       "lockoutDuration": "Lockout duration (minutes)",
       "trackIP": "Track attempts by IP",
@@ -808,7 +859,10 @@
     "privacy": {
       "title": "Privacy and Data Retention",
       "anonymizeLogs": "Automatically anonymize logs",
-      "dataRetentionDays": "Data retention (days)"
+      "dataRetentionDays": "Data retention (days)",
+      "autoPurge": "Automatic purge of old data",
+      "purgeAfterDays": "Purge after (days)",
+      "anonymizeAfterDays": "Anonymize after (days)"
     },
     "lgpd": {
       "title": "LGPD Protection Preferences",
@@ -826,14 +880,6 @@
       "sessionTimeoutMinutes": "Session timeout (minutes)",
       "logAllActions": "Log all actions",
       "blockUnusualActivity": "Block unusual activity"
-    },
-    "privacy": {
-      "autoPurge": "Automatic purge of old data",
-      "purgeAfterDays": "Purge after (days)",
-      "anonymizeAfterDays": "Anonymize after (days)"
-    },
-    "login": {
-      "title": "Login Attempts and Lockout"
     }
   },
   "userSecurity": {

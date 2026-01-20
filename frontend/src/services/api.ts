@@ -185,12 +185,13 @@ export const sampleService = {
   getById: (id: number) => api.get<Sample>(`/samples/${id}`),
   getByBarcode: (barcode: string) => api.get<{ sample: Sample; patient: { patientID: number; patientName: string; recordNumber: number } | null }>(`/samples/by-barcode/${encodeURIComponent(barcode)}`),
   getResults: (id: number) => api.get<Result[]>(`/samples/${id}/results`), // Implementa Sample.getResults()
+  getMovements: (id: string) => api.get<{ success: boolean; data: any[] }>(`/samples/${id}/movements`), // Histórico de movimentações
   create: (data: Partial<Sample>) => api.post<Sample>('/samples', data),
   update: (id: number | string, data: Partial<Sample>) => api.put<Sample>(`/samples/${id}`, data),
   delete: (id: number | string) => api.delete(`/samples/${id}`),
-  withdraw: (sampleID: number, data: Partial<Withdrawal>) => 
+  withdraw: (sampleID: number | string, data: Partial<Withdrawal>) => 
     api.post(`/samples/${sampleID}/withdraw`, data),
-  return: (sampleID: number, data: Partial<Return>) => 
+  return: (sampleID: number | string, data: Partial<Return>) => 
     api.post(`/samples/${sampleID}/return`, data),
   // RF007 - Upload de arquivos de análise
   uploadFile: (sampleID: string, formData: FormData) => 

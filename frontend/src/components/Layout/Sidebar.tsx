@@ -41,6 +41,7 @@ export default function Sidebar() {
     { path: '/dashboard', icon: LayoutDashboard, label: t('navigation.dashboard'), roles: ['Administrador', 'Coordenador', 'Técnico', 'Usuário Externo'] },
     { path: '/patients', icon: Users, label: t('navigation.patients'), roles: ['Administrador', 'Coordenador', 'Técnico'] },
     { path: '/samples', icon: FlaskConical, label: t('navigation.samples'), roles: ['Administrador', 'Coordenador', 'Técnico'] },
+    { path: '/samples/withdrawal-return', icon: FlaskConical, label: t('navigation.withdrawalReturn') || 'Retirada/Devolução', roles: ['Administrador', 'Coordenador', 'Técnico'] },
     { path: '/results', icon: FileText, label: t('navigation.results'), roles: ['Administrador', 'Coordenador', 'Técnico'] },
     { path: '/facility-management', icon: Box, label: t('navigation.facilityManagement'), roles: ['Administrador', 'Coordenador', 'Técnico'] },
     { path: '/assistant', icon: MessageCircle, label: t('navigation.assistant'), roles: ['Administrador', 'Coordenador', 'Técnico', 'Usuário Externo'] },

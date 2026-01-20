@@ -216,7 +216,17 @@ router.post('/:id/withdraw',
       }
 
       const { ObjectId } = require('mongodb');
-      const result = await sampleService.withdrawSample(db, new ObjectId(req.params.id), req.body);
+      
+      // Preparar informações de auditoria
+      const auditInfo = {
+        userId: req.user?.id || req.user?._id?.toString(),
+        userName: req.user?.name || req.user?.username,
+        userRole: req.user?.roleName || req.user?.role,
+        ipAddress: req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress,
+        userAgent: req.headers['user-agent']
+      };
+      
+      const result = await sampleService.withdrawSample(db, new ObjectId(req.params.id), req.body, auditInfo);
 
       // Registra log de alta severidade (RF006)
       if (req.user) {
@@ -228,12 +238,15 @@ router.post('/:id/withdraw',
           entityID: req.params.id,
           result: 'success',
           severity: 'high',
-          message: `Amostra retirada - Tipo: ${req.body.withdrawalType}, Responsável: ${req.body.withdrawalResponsible}`,
+          message: `Amostra retirada - Tipo: ${req.body.withdrawalType}, Responsável: ${req.body.withdrawalResponsible}, Qtd: ${result.withdrawnQuantity}`,
           payload: {
             withdrawalType: req.body.withdrawalType,
             withdrawalResponsible: req.body.withdrawalResponsible,
             sampleDestination: req.body.sampleDestination,
-            linkedProject: req.body.linkedProject
+            linkedProject: req.body.linkedProject,
+            withdrawnQuantity: result.withdrawnQuantity,
+            remainingQuantity: result.remainingQuantity,
+            movementID: result.movementID
           },
           req: req,
           module: 'Amostras'
@@ -242,7 +255,7 @@ router.post('/:id/withdraw',
 
       return res.status(200).json({
         success: true,
-        message: 'Amostra retirada com sucesso',
+        message: req.t?.('samples.withdrawSuccess') || 'Retirada registrada com sucesso',
         data: result
       });
     } catch (error) {
@@ -476,7 +489,17 @@ router.post('/:id/return', authenticate, requirePermission('withdrawSample'), as
     }
 
     const { ObjectId } = require('mongodb');
-    const result = await sampleService.returnSample(db, new ObjectId(req.params.id), req.body);
+    
+    // Preparar informações de auditoria
+    const auditInfo = {
+      userId: req.user?.id || req.user?._id?.toString(),
+      userName: req.user?.name || req.user?.username,
+      userRole: req.user?.roleName || req.user?.role,
+      ipAddress: req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress,
+      userAgent: req.headers['user-agent']
+    };
+    
+    const result = await sampleService.returnSample(db, new ObjectId(req.params.id), req.body, auditInfo);
 
     // Registra log (anonimizado via auditLogger)
     if (req.user) {
@@ -487,15 +510,23 @@ router.post('/:id/return', authenticate, requirePermission('withdrawSample'), as
         entity: 'Sample',
         entityID: req.params.id,
         result: 'success',
-        severity: 'info',
-        message: 'Amostra retornada',
-        req: req
+        severity: 'high',
+        message: `Amostra devolvida - Qtd: ${result.returnedQuantity}, Condição: ${result.condition}`,
+        payload: {
+          returnedQuantity: result.returnedQuantity,
+          condition: result.condition,
+          returnResponsible: req.body.returnResponsible,
+          newAvailableQuantity: result.newAvailableQuantity,
+          movementID: result.movementID
+        },
+        req: req,
+        module: 'Amostras'
       });
     }
 
     return res.status(200).json({
       success: true,
-      message: 'Amostra retornada com sucesso',
+      message: req.t?.('samples.returnSuccess') || 'Devolução registrada com sucesso',
       data: result
     });
   } catch (error) {
@@ -503,6 +534,33 @@ router.post('/:id/return', authenticate, requirePermission('withdrawSample'), as
     return res.status(400).json({
       success: false,
       error: 'Erro ao retornar amostra',
+      message: error.message
+    });
+  }
+});
+
+// Obter movimentações de uma amostra
+router.get('/:id/movements', authenticate, async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    if (!db) {
+      return res.status(503).json({
+        success: false,
+        error: 'Banco de dados não disponível'
+      });
+    }
+
+    const movements = await sampleService.getSampleMovements(db, req.params.id);
+
+    return res.status(200).json({
+      success: true,
+      data: movements
+    });
+  } catch (error) {
+    logger.error('Erro ao buscar movimentações:', error.message);
+    return res.status(500).json({
+      success: false,
+      error: 'Erro ao buscar movimentações',
       message: error.message
     });
   }

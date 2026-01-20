@@ -1,0 +1,374 @@
+/* ========== Página de Retirada e Devolução de Amostras ========== */
+
+.withdrawal-return-page {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 1.5rem;
+}
+
+.withdrawal-return-page h1 {
+  margin-bottom: 0.5rem;
+  color: var(--primary);
+}
+
+.page-subtitle {
+  color: var(--text-light);
+  margin-bottom: 1.5rem;
+}
+
+/* Mensagens */
+.message {
+  padding: 1rem;
+  border-radius: 8px;
+  margin-bottom: 1rem;
+  font-weight: 500;
+}
+
+.message-success {
+  background-color: rgba(40, 167, 69, 0.1);
+  border: 1px solid var(--success);
+  color: var(--success);
+}
+
+.message-error {
+  background-color: rgba(220, 53, 69, 0.1);
+  border: 1px solid var(--danger);
+  color: var(--danger);
+}
+
+/* Card de Busca */
+.search-card {
+  margin-bottom: 1.5rem;
+}
+
+.search-section {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-end;
+}
+
+.search-section .input-group {
+  flex: 1;
+  max-width: 400px;
+}
+
+/* Card de Informações da Amostra */
+.sample-info-card {
+  margin-bottom: 1.5rem;
+}
+
+.sample-info-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1.5rem;
+}
+
+.info-section {
+  background: var(--surface);
+  padding: 1rem;
+  border-radius: 8px;
+}
+
+.info-section h4 {
+  margin: 0 0 1rem 0;
+  padding-bottom: 0.5rem;
+  border-bottom: 2px solid var(--primary);
+  color: var(--primary);
+  font-size: 1rem;
+}
+
+.info-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.info-row:last-child {
+  border-bottom: none;
+}
+
+.info-row.highlight {
+  background: rgba(0, 123, 255, 0.1);
+  margin: 0 -0.5rem;
+  padding: 0.5rem;
+  border-radius: 4px;
+}
+
+.info-label {
+  font-weight: 500;
+  color: var(--text-light);
+  font-size: 0.9rem;
+}
+
+.info-value {
+  font-weight: 600;
+  text-align: right;
+}
+
+.info-value.barcode {
+  font-family: monospace;
+  background: var(--background);
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+}
+
+.info-value.available-qty {
+  color: var(--primary);
+  font-size: 1.1rem;
+}
+
+.info-value.pending-qty {
+  color: var(--warning);
+}
+
+.info-value.status-badge {
+  font-weight: 700;
+  text-transform: uppercase;
+  font-size: 0.85rem;
+}
+
+/* Abas de Operação */
+.operation-tabs {
+  display: flex;
+  gap: 0;
+  margin-bottom: 0;
+}
+
+.tab-button {
+  flex: 1;
+  padding: 1rem 1.5rem;
+  border: none;
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  border-bottom: 3px solid transparent;
+}
+
+.tab-button:first-child {
+  border-radius: 8px 0 0 0;
+}
+
+.tab-button:last-child {
+  border-radius: 0 8px 0 0;
+}
+
+.tab-button:hover:not(:disabled) {
+  background: var(--background);
+}
+
+.tab-button.active {
+  background: var(--card-bg);
+  border-bottom-color: var(--primary);
+  color: var(--primary);
+}
+
+.tab-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Card de Operação */
+.operation-card {
+  border-radius: 0 0 8px 8px;
+  margin-bottom: 1.5rem;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 1rem;
+}
+
+.form-full-width {
+  grid-column: 1 / -1;
+}
+
+.form-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+  gap: 1rem;
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.warning-box {
+  background: rgba(255, 193, 7, 0.15);
+  border: 1px solid var(--warning);
+  padding: 1rem;
+  border-radius: 8px;
+  color: var(--warning);
+}
+
+/* Card de Histórico */
+.history-card {
+  margin-top: 1.5rem;
+}
+
+.table-wrapper {
+  overflow-x: auto;
+}
+
+.movements-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.movements-table th,
+.movements-table td {
+  padding: 0.75rem;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+
+.movements-table th {
+  background: var(--surface);
+  font-weight: 600;
+  color: var(--text-light);
+  text-transform: uppercase;
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.movements-table tbody tr:hover {
+  background: var(--surface);
+}
+
+.movement-type-badge {
+  display: inline-block;
+  padding: 0.25rem 0.75rem;
+  border-radius: 20px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.movement-type-badge.withdraw {
+  background: rgba(220, 53, 69, 0.15);
+  color: var(--danger);
+}
+
+.movement-type-badge.return {
+  background: rgba(40, 167, 69, 0.15);
+  color: var(--success);
+}
+
+.movement-type-badge.adjust {
+  background: rgba(0, 123, 255, 0.15);
+  color: var(--primary);
+}
+
+.observations-cell {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.no-movements {
+  text-align: center;
+  color: var(--text-light);
+  padding: 2rem;
+}
+
+/* Modal de Confirmação */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.confirm-modal {
+  background: var(--card-bg);
+  padding: 2rem;
+  border-radius: 12px;
+  max-width: 500px;
+  width: 90%;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+}
+
+.confirm-modal h3 {
+  margin: 0 0 1rem 0;
+  color: var(--primary);
+}
+
+.confirm-modal p {
+  margin-bottom: 1rem;
+  color: var(--text);
+}
+
+.confirm-details {
+  background: var(--surface);
+  padding: 1rem;
+  border-radius: 8px;
+  margin-bottom: 1.5rem;
+}
+
+.confirm-details p {
+  margin: 0.5rem 0;
+}
+
+.confirm-details .warning-text {
+  color: var(--danger);
+  font-weight: 600;
+  margin-top: 1rem;
+}
+
+.modal-actions {
+  display: flex;
+  gap: 1rem;
+  justify-content: flex-end;
+}
+
+/* Responsivo */
+@media (max-width: 768px) {
+  .withdrawal-return-page {
+    padding: 1rem;
+  }
+
+  .search-section {
+    flex-direction: column;
+  }
+
+  .search-section .input-group {
+    max-width: none;
+  }
+
+  .sample-info-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .operation-tabs {
+    flex-direction: column;
+  }
+
+  .tab-button:first-child,
+  .tab-button:last-child {
+    border-radius: 0;
+  }
+
+  .form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .movements-table {
+    font-size: 0.8rem;
+  }
+
+  .movements-table th,
+  .movements-table td {
+    padding: 0.5rem;
+  }
+}

@@ -7,7 +7,7 @@ export default function LanguageSelector() {
   const selectId = 'language-selector';
 
   const handleLanguageChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const newLang = e.target.value as 'pt-BR' | 'en-US';
+    const newLang = e.target.value as 'pt-BR' | 'en-US' | 'es-ES';
     setLanguage(newLang);
   };
 
@@ -27,6 +27,7 @@ export default function LanguageSelector() {
       >
         <option value="pt-BR">{t('app.portuguese')}</option>
         <option value="en-US">{t('app.english')}</option>
+        <option value="es-ES">{t('app.spanish')}</option>
       </select>
     </div>
   );

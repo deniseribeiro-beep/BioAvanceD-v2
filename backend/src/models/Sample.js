@@ -133,7 +133,12 @@ class SampleModel {
       withdrawalType: data.withdrawalType || null,
       withdrawalResponsible: data.withdrawalResponsible || null,
       sampleDestination: data.sampleDestination || null,
-      currentStatus: data.currentStatus || 'Available', // Available, Withdrawn conforme dicionário
+      currentStatus: data.currentStatus || 'Available', // Available, PartiallyWithdrawn, TotallyWithdrawn, Expired, Destroyed
+      // Controle de quantidade disponível (para retiradas parciais)
+      availableQuantity: data.availableQuantity !== undefined ? data.availableQuantity : data.quantity,
+      originalQuantity: data.originalQuantity || data.quantity, // Quantidade original (nunca muda)
+      totalWithdrawn: data.totalWithdrawn || 0, // Total já retirado
+      totalReturned: data.totalReturned || 0,   // Total já devolvido
       // HL7 FHIR - Campos obrigatórios
       accessionNumber: data.accessionNumber || null, // Número de acesso único (FHIR)
       orderNumber: data.orderNumber || null, // Número do pedido/ordem (FHIR)
@@ -153,7 +158,7 @@ class SampleModel {
   }
 
   static validateSampleStatus(status) {
-    return ['Available', 'Withdrawn', 'Expired', 'Destroyed'].includes(status);
+    return ['Available', 'PartiallyWithdrawn', 'TotallyWithdrawn', 'Withdrawn', 'Expired', 'Destroyed', 'Unusable'].includes(status);
   }
 
   // Métodos de validação MIABIS conforme requisitos RF004

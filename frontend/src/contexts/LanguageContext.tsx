@@ -2,6 +2,7 @@ import { createContext, useContext, useState, useMemo, useCallback, ReactNode } 
 import { setLanguage, getLanguage, initLanguage, Language } from '../i18n';
 import ptBR from '../i18n/pt-BR.json';
 import enUS from '../i18n/en-US.json';
+import esES from '../i18n/es-ES.json';
 
 interface LanguageContextType {
   language: Language;
@@ -36,8 +37,13 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
     return (key: string, fallback?: string) => {
       // Usa o idioma atual do estado, não da variável global
       const keys = key.split('.');
-      const langTranslations = language === 'en-US' ? enUS : ptBR;
-      
+      const dictMap: Record<Language, any> = {
+        'pt-BR': ptBR,
+        'en-US': enUS,
+        'es-ES': esES,
+      };
+      const langTranslations = dictMap[language] || ptBR;
+
       let value: any = langTranslations;
       for (const k of keys) {
         if (value && typeof value === 'object' && k in value) {

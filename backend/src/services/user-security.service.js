@@ -745,6 +745,12 @@ class UserSecurityService {
       if (result.matchedCount === 0) {
         throw new Error('Sessão não encontrada');
       }
+
+      // Limpa cache em memória do sessionService
+      const sessionService = require('./session.service');
+      if (sessionService.sessions) {
+        sessionService.sessions.delete(sessionId);
+      }
     } catch (error) {
       logger.error('Erro ao revogar sessão:', error.message);
       throw error;
@@ -771,6 +777,16 @@ class UserSecurityService {
           }
         }
       );
+
+      // Limpa cache em memória do sessionService (exceto sessão atual)
+      const sessionService = require('./session.service');
+      if (sessionService.sessions) {
+        for (const [sessionID, session] of sessionService.sessions.entries()) {
+          if (session.userID === userID.toString() && session.token !== currentToken) {
+            sessionService.sessions.delete(sessionID);
+          }
+        }
+      }
     } catch (error) {
       logger.error('Erro ao revogar todas as sessões:', error.message);
       throw error;
