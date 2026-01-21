@@ -390,28 +390,28 @@
 }
 
 .action-button {
-  background: none;
-  border: none;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
   cursor: pointer;
   padding: 0.375rem;
   border-radius: 0.25rem;
-  color: var(--text-light);
-  transition: all 0.15s;
+  color: var(--text);
+  transition: none;
   display: flex;
   align-items: center;
   justify-content: center;
-  opacity: 0.7;
+  opacity: 1;
 }
 
 .action-button:hover {
   background-color: transparent;
-  color: var(--text);
-  opacity: 1;
+  color: var(--text-light);
+  opacity: 0.7;
 }
 
 .action-button.danger:hover {
-  color: var(--danger);
-  opacity: 1;
+  color: var(--text-light);
+  opacity: 0.7;
 }
 
 /* Tablet */
@@ -464,8 +464,8 @@
   }
 }
 
-/* Small Mobile */
-@media (max-width: 480px) {
+    color: var(--danger);
+    opacity: 1;
   .page-title {
     font-size: 1.25rem;
   }
@@ -480,6 +480,7 @@
   
   .form-select {
     font-size: 0.875rem;
+    color: var(--danger);
     padding: 0.625rem;
   }
 }

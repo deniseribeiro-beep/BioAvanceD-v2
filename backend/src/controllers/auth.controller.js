@@ -1,6 +1,8 @@
 const authService = require('../services/auth.service');
 const logger = require('../utils/logger');
 const auditLogger = require('../utils/auditLogger');
+const bcrypt = require('bcryptjs');
+const passwordService = require('../services/password.service');
 
 /**
  * Controller de Autenticação
@@ -244,6 +246,79 @@ class AuthController {
       return res.status(400).json({
         success: false,
         error: (req.t && req.t('auth.resetPasswordError')) || 'Erro ao resetar senha',
+        message: error.message
+      });
+    }
+  }
+
+  async changePassword(req, res) {
+    try {
+      const db = req.app.locals.db;
+      if (!db) {
+        return res.status(503).json({
+          success: false,
+          error: (req.t && req.t('errors.databaseUnavailable')) || 'Banco de dados não disponível'
+        });
+      }
+
+      const { oldPassword, newPassword } = req.body;
+
+      if (!oldPassword || !newPassword) {
+        return res.status(400).json({
+          success: false,
+          error: 'oldPassword e newPassword são obrigatórios'
+        });
+      }
+
+      const { ObjectId } = require('mongodb');
+      const usersCollection = db.collection('users');
+      const user = await usersCollection.findOne({ _id: new ObjectId(req.user.userID) });
+
+      if (!user) {
+        return res.status(404).json({
+          success: false,
+          error: (req.t && req.t('users.notFound')) || 'Usuário não encontrado'
+        });
+      }
+
+      const oldMatches = await bcrypt.compare(oldPassword, user.password);
+      if (!oldMatches) {
+        return res.status(400).json({
+          success: false,
+          error: (req.t && req.t('auth.invalidCurrentPassword')) || 'Senha atual incorreta'
+        });
+      }
+
+      passwordService.validateStrength(newPassword);
+      await passwordService.validateReuse(newPassword, user);
+
+      const newHash = await bcrypt.hash(newPassword, 10);
+      const history = Array.isArray(user.passwordHistory) ? user.passwordHistory : [];
+      const updatedHistory = [user.password, ...history].slice(0, 3);
+
+      await usersCollection.updateOne(
+        { _id: user._id },
+        {
+          $set: {
+            password: newHash,
+            passwordHistory: updatedHistory,
+            lastPasswordChange: new Date(),
+            forceReset: false,
+            failedLoginAttempts: 0,
+            updatedAt: new Date()
+          }
+        }
+      );
+
+      return res.status(200).json({
+        success: true,
+        message: (req.t && req.t('auth.passwordChangeSuccess')) || 'Senha alterada com sucesso'
+      });
+    } catch (error) {
+      logger.error('Erro ao trocar senha:', error.message);
+      return res.status(400).json({
+        success: false,
+        error: (req.t && req.t('auth.passwordChangeError')) || 'Erro ao trocar senha',
         message: error.message
       });
     }

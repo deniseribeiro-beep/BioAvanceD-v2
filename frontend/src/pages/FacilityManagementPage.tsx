@@ -13,6 +13,7 @@ import { useTemperature } from '../hooks/useTemperature';
 import { useSensors } from '../hooks/useSensors';
 import { usePolicies } from '../hooks/usePolicies';
 import { validateReading, validateTemperatureUnit, generateAlert, validateThresholds } from '../utils/validations';
+import { CryoBoxGrid } from '../components/CryoBoxGrid';
 import './FacilityManagementPage.css';
 
 type TabType = 'equipment' | 'locations' | 'temperature' | 'sensors' | 'policies';
@@ -395,6 +396,11 @@ function LocationsSection() {
             </tr>
           ))}
         </Table>
+      </Card>
+
+      {/* Visualizador de Caixa 9x9 (UI-only, sem lógica de negócio) */}
+      <Card title="Visualizador de Caixa (9x9)">
+        <CryoBoxGrid occupiedPositions={[]} selectedPosition={null} onSelect={() => {}} />
       </Card>
 
       <Modal

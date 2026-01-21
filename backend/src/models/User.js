@@ -41,15 +41,32 @@ class UserModel {
     
     // Se senha for fornecida, valida complexidade
     if (data.password) {
-      const PasswordValidator = require('../utils/passwordValidator');
-      const passwordValidation = PasswordValidator.validate(data.password);
-      if (!passwordValidation.isValid) {
-        errors.push(...passwordValidation.errors.map(err => `password: ${err}`));
+      const passwordService = require('../services/password.service');
+      try {
+        passwordService.validateStrength(data.password);
+      } catch (err) {
+        errors.push(`password: ${err.message}`);
       }
     }
 
     if (data.accessType && !this.isValidAccessType(data.accessType)) {
       errors.push('accessType inválido');
+    }
+
+    if (data.passwordHistory && !Array.isArray(data.passwordHistory)) {
+      errors.push('passwordHistory deve ser um array');
+    }
+
+    if (data.lastPasswordChange && isNaN(new Date(data.lastPasswordChange))) {
+      errors.push('lastPasswordChange deve ser uma data válida');
+    }
+
+    if (data.forceReset !== undefined && typeof data.forceReset !== 'boolean') {
+      errors.push('forceReset deve ser boolean');
+    }
+
+    if (data.failedLoginAttempts !== undefined && typeof data.failedLoginAttempts !== 'number') {
+      errors.push('failedLoginAttempts deve ser número');
     }
 
     // Valida status - aceita tanto formato inglês quanto português
@@ -82,7 +99,11 @@ class UserModel {
       anonId: data.anonId || null, // Identificador anonimizado para LGPD (gerado após inserção)
       createdAt: new Date(),
       updatedAt: new Date(),
-      lastLogin: null
+      lastLogin: null,
+      passwordHistory: Array.isArray(data.passwordHistory) ? data.passwordHistory : [],
+      lastPasswordChange: data.lastPasswordChange || new Date(),
+      forceReset: data.forceReset || false,
+      failedLoginAttempts: data.failedLoginAttempts || 0
     };
   }
 

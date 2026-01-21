@@ -6,11 +6,14 @@ import Input from '../components/UI/Input';
 import { authService } from '../services/api';
 import { CheckCircle, AlertCircle, Lock } from 'lucide-react';
 import { validatePasswordAndGetError } from '../utils/passwordValidator';
+import { getPasswordIssues } from '../utils/passwordRules';
+import { useLanguage } from '../contexts/LanguageContext';
 import './ResetPasswordPage.css';
 
 export default function ResetPasswordPage() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
+  const { t } = useLanguage();
   const token = searchParams.get('token');
   
   const [newPassword, setNewPassword] = useState('');
@@ -19,7 +22,8 @@ export default function ResetPasswordPage() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState(false);
   
-  const specialChars = '!@#$%^&*()_+-=[]{}|;:,.<>?';
+  const passwordIssues = getPasswordIssues(newPassword);
+  const confirmMismatch = newPassword && confirmPassword && newPassword !== confirmPassword;
 
   useEffect(() => {
     if (!token) {
@@ -32,7 +36,7 @@ export default function ResetPasswordPage() {
     setError('');
 
     if (!newPassword || !confirmPassword) {
-      setError('Preencha todos os campos');
+      setError(t('password.error.requiredFields') || 'Preencha todos os campos');
       return;
     }
 
@@ -44,12 +48,12 @@ export default function ResetPasswordPage() {
     }
 
     if (newPassword !== confirmPassword) {
-      setError('As senhas não coincidem');
+      setError(t('password.mismatch') || 'As senhas não coincidem');
       return;
     }
 
     if (!token) {
-      setError('Token inválido');
+      setError(t('auth.invalidToken') || 'Token inválido');
       return;
     }
 
@@ -61,7 +65,7 @@ export default function ResetPasswordPage() {
         navigate('/login');
       }, 3000);
     } catch (err: any) {
-      setError(err.response?.data?.error || 'Erro ao redefinir senha');
+      setError(err.response?.data?.error || err.response?.data?.message || t('auth.passwordResetError') || 'Erro ao redefinir senha');
     } finally {
       setLoading(false);
     }
@@ -125,10 +129,10 @@ export default function ResetPasswordPage() {
               type="password"
               value={newPassword}
               onChange={(e) => setNewPassword(e.target.value)}
-              placeholder="Mínimo 12 caracteres com maiúscula, minúscula e especial"
+              placeholder={t('password.requirements.placeholder') || 'Mínimo 8 caracteres com maiúscula, minúscula, número e símbolo'}
               required
               autoFocus
-              minLength={12}
+              minLength={8}
             />
 
             <Input
@@ -138,17 +142,43 @@ export default function ResetPasswordPage() {
               onChange={(e) => setConfirmPassword(e.target.value)}
               placeholder="Digite a senha novamente"
               required
-              minLength={12}
+              minLength={8}
             />
 
             <div className="password-requirements">
-              <p><strong>Requisitos da senha:</strong></p>
-              <ul>
-                <li>Mínimo de 12 caracteres</li>
-                <li>Pelo menos uma letra maiúscula</li>
-                <li>Pelo menos uma letra minúscula</li>
-                <li>Pelo menos um caractere especial ({specialChars})</li>
+              <p><strong>{t('password.requirements.title')}</strong></p>
+              <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'grid', gap: '0.35rem' }}>
+                {[{
+                  key: 'minLength',
+                  label: t('password.requirements.minLength')
+                }, {
+                  key: 'upper',
+                  label: t('password.requirements.upper')
+                }, {
+                  key: 'lower',
+                  label: t('password.requirements.lower')
+                }, {
+                  key: 'number',
+                  label: t('password.requirements.number')
+                }, {
+                  key: 'symbol',
+                  label: t('password.requirements.symbol')
+                }].map((item) => {
+                  const ok = !passwordIssues.includes(item.key as any);
+                  return (
+                    <li key={item.key} style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', color: ok ? 'var(--success)' : 'var(--text)' }}>
+                      {ok ? '✓' : '•'}
+                      <span style={{ color: ok ? 'var(--success)' : 'var(--text-light)' }}>{item.label}</span>
+                    </li>
+                  );
+                })}
               </ul>
+              {confirmMismatch && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', marginTop: '0.5rem', color: 'var(--danger)' }}>
+                  <AlertCircle size={16} />
+                  <span>{t('password.mismatch')}</span>
+                </div>
+              )}
             </div>
 
             <Button

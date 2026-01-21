@@ -185,12 +185,22 @@ class PatientModel {
    */
   static fillAcronym(clinicalUnit) {
     if (!clinicalUnit) return null;
-    // Lógica para gerar sigla (exemplo: pegar primeiras letras)
-    return clinicalUnit
-      .split(' ')
-      .map(word => word[0]?.toUpperCase())
-      .join('')
-      .substring(0, 5);
+
+    const map = {
+      'Cardiologia': 'CARDIO',
+      'Oncologia': 'ONCO',
+      'Genética': 'GEN'
+    };
+
+    const normalized = clinicalUnit.trim();
+    const mapped = map[normalized];
+
+    if (mapped) {
+      return mapped.toUpperCase();
+    }
+
+    const fallback = normalized.replace(/\s+/g, '').substring(0, 3);
+    return fallback.toUpperCase();
   }
 }
 

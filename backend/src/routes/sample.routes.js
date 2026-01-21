@@ -59,6 +59,14 @@ router.post('/',
       if (error.stack) {
         logger.error('Stack trace:', error.stack);
       }
+
+      if (error.status === 409) {
+        return res.status(409).json({
+          success: false,
+          error: 'Posição ocupada',
+          message: errorMessage
+        });
+      }
       
       // Log de erro
       if (req.user) {

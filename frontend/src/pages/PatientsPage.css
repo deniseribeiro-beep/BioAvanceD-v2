@@ -17,11 +17,11 @@
 }
 
 .action-button {
-  background: none;
-  border: none;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
   padding: 0.5rem;
   border-radius: 0.25rem;
-  color: var(--text-light);
+  color: var(--text);
   cursor: pointer;
   transition: all 0.2s;
   display: flex;
@@ -30,11 +30,15 @@
 }
 
 .action-button:hover {
-  background-color: var(--background);
-  color: var(--primary);
+  background-color: transparent;
+  color: var(--text-light);
 }
 
 .action-button.danger:hover {
+  color: var(--danger);
+}
+
+.action-button.danger {
   color: var(--danger);
 }
 
@@ -95,6 +99,7 @@
   cursor: pointer;
   font-size: 0.875rem;
   color: var(--text);
+  -webkit-user-select: none;
   user-select: none;
   transition: color 0.2s;
 }

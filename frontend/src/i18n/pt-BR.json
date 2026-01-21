@@ -53,6 +53,7 @@
     "passwordResetRequest": "Solicitar Redefinição de Senha",
     "passwordResetSuccess": "Link de redefinição enviado para seu email",
     "passwordResetError": "Erro ao solicitar redefinição de senha",
+    "invalidToken": "Token inválido ou expirado",
     "enterEmail": "Digite seu email",
     "sendResetLink": "Enviar Link de Redefinição",
     "newPassword": "Nova Senha",
@@ -176,6 +177,23 @@
     "thinking": "Pensando...",
     "error": "Erro ao processar pergunta",
     "noQuestion": "Pergunta é obrigatória"
+  },
+  "password": {
+    "requirements": {
+      "title": "Requisitos da senha",
+      "minLength": "Mínimo de 8 caracteres",
+      "upper": "Pelo menos uma letra maiúscula",
+      "lower": "Pelo menos uma letra minúscula",
+      "number": "Pelo menos um número",
+      "symbol": "Pelo menos um símbolo (!@#$%^&*()_-+=[]{}|;:,.<>?/)",
+      "placeholder": "Mínimo 8 caracteres com maiúscula, minúscula, número e símbolo"
+    },
+    "mismatch": "As senhas não coincidem",
+    "error": {
+      "reused": "Senha já utilizada recentemente",
+      "weak": "Senha não atende aos requisitos de segurança",
+      "requiredFields": "Preencha todos os campos"
+    }
   },
   "patients": {
     "title": "Pacientes",

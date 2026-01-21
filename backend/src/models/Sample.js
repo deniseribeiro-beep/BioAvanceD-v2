@@ -129,6 +129,7 @@ class SampleModel {
       unit: data.unit || 'µL', // Unidade de medida (µL, mL, L, mg, g, kg, unidades, etc.)
       quality: data.quality !== undefined && data.quality !== null ? data.quality : (data.qualityID !== undefined && data.qualityID !== null ? data.qualityID : null), // Int conforme escala MIABIS (0, 1, 2)
       locationID: data.locationID || null,
+      location: data.location || null,
       linkedProject: data.linkedProject || null,
       withdrawalType: data.withdrawalType || null,
       withdrawalResponsible: data.withdrawalResponsible || null,

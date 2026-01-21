@@ -24,6 +24,32 @@ const storage = multer.diskStorage({
 
 const upload = multer({
   storage: storage,
+  fileFilter: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    const blockedExts = ['.exe', '.sh', '.bat'];
+
+    if (blockedExts.includes(ext)) {
+      const err = new Error('Formato de arquivo não seguro');
+      err.status = 400;
+      return cb(err, false);
+    }
+
+    const allowedMimes = [
+      'text/csv',
+      'application/vnd.ms-excel',
+      'application/json',
+      'application/zip',
+      'application/x-zip-compressed'
+    ];
+
+    if (!allowedMimes.includes(file.mimetype)) {
+      const err = new Error('Formato de arquivo não seguro');
+      err.status = 400;
+      return cb(err, false);
+    }
+
+    cb(null, true);
+  },
   limits: { fileSize: 100 * 1024 * 1024 } // 100MB
 });
 
@@ -473,11 +499,11 @@ class ImportLGPDController {
         'sampleType',
         'sampleOrigin',
         'extractionProtocol',
-        'barcode (opcional - será gerado automaticamente se não fornecido)',
+        'barcode', // opcional - gerado automaticamente se vazio
         'registrationDate',
         'quantity',
-        'quality (MIABIS 0=Não avaliada, 1=Adequada, 2=Inadequada)',
-        'locationID (opcional - pode ser selecionado após upload)',
+        'quality', // MIABIS: 0=Não avaliada, 1=Adequada, 2=Inadequada
+        'locationID', // opcional - pode ser selecionado após upload
         'linkedProject',
         'currentStatus'
       ];
@@ -489,7 +515,7 @@ class ImportLGPDController {
         sampleOrigins.length > 0 ? sampleOrigins[0].description : 'Coleta',
         extractionProtocols.length > 0 ? extractionProtocols[0].description : 'QIAGEN',
         '', // barcode deixado vazio (opcional - será gerado automaticamente)
-        new Date().toLocaleDateString('pt-BR'),
+        new Date().toISOString().slice(0, 10), // ISO YYYY-MM-DD
         '500.5',
         '1',
         '', // locationID deixado vazio (opcional - pode ser selecionado após upload)
@@ -499,6 +525,7 @@ class ImportLGPDController {
 
       // Adiciona comentários com valores válidos
       const comments = [];
+      comments.push('# Instruções: patientID obrigatório (8 dígitos); barcode e locationID são opcionais; quality usa MIABIS 0,1,2; registrationDate no formato YYYY-MM-DD');
       if (sampleTypes.length > 0) {
         comments.push(`# Valores válidos para sampleType: ${sampleTypes.map(t => t.description).join(', ')}`);
       }
@@ -515,7 +542,7 @@ class ImportLGPDController {
         exampleRow
       ];
       
-      const csvContent = stringify(rows);
+      const csvContent = '\uFEFF' + stringify(rows); // BOM para compatibilidade Excel
 
       res.setHeader('Content-Type', 'text/csv; charset=utf-8');
       res.setHeader('Content-Disposition', 'attachment; filename="amostras_template.csv"');

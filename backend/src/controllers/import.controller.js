@@ -22,6 +22,32 @@ const storage = multer.diskStorage({
 
 const upload = multer({
   storage: storage,
+  fileFilter: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    const blockedExts = ['.exe', '.sh', '.bat'];
+
+    if (blockedExts.includes(ext)) {
+      const err = new Error('Formato de arquivo não seguro');
+      err.status = 400;
+      return cb(err, false);
+    }
+
+    const allowedMimes = [
+      'text/csv',
+      'application/vnd.ms-excel',
+      'application/json',
+      'application/zip',
+      'application/x-zip-compressed'
+    ];
+
+    if (!allowedMimes.includes(file.mimetype)) {
+      const err = new Error('Formato de arquivo não seguro');
+      err.status = 400;
+      return cb(err, false);
+    }
+
+    cb(null, true);
+  },
   limits: { fileSize: 100 * 1024 * 1024 } // 100MB
 });
 

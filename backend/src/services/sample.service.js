@@ -22,6 +22,7 @@ class SampleService {
       
       // Se for import, permite locationID null (será atribuído depois)
       const isImport = options.isImport === true;
+      const samplesCollection = db.collection('amostras');
 
       // VALIDAÇÃO DE ID DE PACIENTE (LGPD)
       // O ID de paciente é obrigatório e deve existir no banco
@@ -76,6 +77,32 @@ class SampleService {
         }
       }
 
+      // Valida conflito físico de localização (freezer/rack/box/position)
+      const hasLocationDetails = sampleData.location &&
+        sampleData.location.freezer !== undefined &&
+        sampleData.location.rack !== undefined &&
+        sampleData.location.box !== undefined &&
+        sampleData.location.position !== undefined;
+
+      if (hasLocationDetails) {
+        const conflict = await samplesCollection.findOne({
+          'location.freezer': sampleData.location.freezer,
+          'location.rack': sampleData.location.rack,
+          'location.box': sampleData.location.box,
+          'location.position': sampleData.location.position,
+          'location.status': 'Occupied'
+        });
+
+        if (conflict) {
+          const err = new Error(`Posição [${sampleData.location.position}] já ocupada pela amostra [${conflict.sampleID || conflict._id?.toString()}]`);
+          err.status = 409;
+          throw err;
+        }
+
+        // Marca a nova alocação como ocupada
+        sampleData.location.status = 'Occupied';
+      }
+
       // Gera código de barras automaticamente se não fornecido
       if (!sampleData.barcode || (typeof sampleData.barcode === 'string' && sampleData.barcode.trim() === '')) {
         sampleData.barcode = await generateUniqueBarcode(db, 'amostras');
@@ -85,7 +112,6 @@ class SampleService {
         sampleData.barcode = String(sampleData.barcode).trim();
         
         // RF004 - Verifica duplicidade por barcode (se fornecido)
-        const samplesCollection = db.collection('amostras');
         const existingSample = await samplesCollection.findOne({ barcode: sampleData.barcode });
         if (existingSample) {
           throw new Error(`Já existe uma amostra com o código de barras ${sampleData.barcode}`);
@@ -98,14 +124,11 @@ class SampleService {
         logger.info(`ID único de amostra gerado automaticamente: ${sampleData.sampleID}`);
       } else {
         // Verifica se o sampleID fornecido já existe
-        const samplesCollection = db.collection('amostras');
         const existingSample = await samplesCollection.findOne({ sampleID: sampleData.sampleID });
         if (existingSample) {
           throw new Error(`Já existe uma amostra com o ID ${sampleData.sampleID}`);
         }
       }
-
-      const samplesCollection = db.collection('amostras');
       const sample = SampleModel.create(sampleData);
 
       const result = await samplesCollection.insertOne(sample);

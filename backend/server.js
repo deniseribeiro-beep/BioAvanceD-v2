@@ -27,6 +27,12 @@ if (allowedOrigins.length === 0) {
   allowedOrigins.push("http://localhost:3000");
 }
 const isDev = env.NODE_ENV !== "production";
+// Add common Vite dev origins when in development
+if (isDev) {
+  ["http://localhost:5173", "http://127.0.0.1:5173"].forEach((origin) => {
+    if (!allowedOrigins.includes(origin)) allowedOrigins.push(origin);
+  });
+}
 
 // =======================
 // MIDDLEWARES
@@ -153,6 +159,8 @@ app.use("/api/temperature", require("./src/routes/temperature.routes"));
 app.use("/api/users", require("./src/routes/user.routes"));
 app.use("/api/access", require("./src/routes/access.routes"));
 app.use("/api/security", require("./src/routes/security.routes"));
+// Rotas de Importação compatíveis com LGPD (templates e uploads)
+app.use("/api/import-lgpd", require("./src/routes/import-lgpd.routes"));
 
 app.get("/api/health", (req, res) => {
   res.json({ status: "OK", db: !!req.app.locals.db });

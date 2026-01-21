@@ -178,58 +178,76 @@ export default function Dashboard() {
   }, [user, stats, t, language]);
 
   return (
-    <div className="dashboard">
-      <div className="dashboard-header">
-        <h1 className="page-title">{t('dashboard.title')}</h1>
-        <p className="page-subtitle">{t('dashboard.subtitle')}</p>
+    <div className="dashboard-bento">
+      <div className="page-header">
+        <div>
+          <h1 className="page-title">{t('dashboard.title')}</h1>
+          <p className="page-subtitle">{t('dashboard.subtitle')}</p>
+        </div>
       </div>
 
-      {loading && (
-        <div className="dashboard-loading">
-          <p>{t('common.loading')}</p>
-        </div>
-      )}
-
-      <div className="dashboard-stats">
+      {/* KPIs Top */}
+      <div className="kpi-grid">
         {statCards.map((stat) => {
           const Icon = stat.icon;
           const handleClick = () => {
-            if (stat.link) {
-              navigate(stat.link);
-            }
+            if (stat.link) navigate(stat.link);
           };
+          const isAlert = stat.title === t('dashboard.temperatureAlerts');
+          const variant = stat.link === '/patients'
+            ? 'primary'
+            : stat.link === '/samples'
+            ? 'success'
+            : stat.link === '/sensors'
+            ? 'action'
+            : stat.link === '/temperature'
+            ? 'danger'
+            : 'primary';
           return (
-            <Card 
-              key={stat.title} 
-              className="stat-card" 
-              style={{ cursor: stat.link ? 'pointer' : 'default' }}
+            <Card
+              key={stat.title}
+              className={`kpi-card ${isAlert ? 'alert' : ''}`}
+              style={{ background: 'var(--color-surface)', boxShadow: 'var(--shadow-card)', borderRadius: '8px', cursor: stat.link ? 'pointer' : 'default' }}
               onClick={handleClick}
             >
-              <div className="stat-card-content">
-                <div className="stat-card-icon" style={{ backgroundColor: `${stat.color}20`, color: stat.color }}>
-                  <Icon size={24} />
-                </div>
-                <div className="stat-card-info">
-                  <p className="stat-card-title">{stat.title}</p>
-                  <p className="stat-card-value">{loading ? '...' : stat.value}</p>
-                </div>
+              <div className={`kpi-icon kpi-icon--${variant}`}>
+                <Icon size={22} />
+              </div>
+              <div className="kpi-info">
+                <p className="kpi-title">{stat.title}</p>
+                <p className="kpi-value">{loading ? '...' : stat.value}</p>
               </div>
             </Card>
           );
         })}
       </div>
 
-      <div className="dashboard-content">
-        {stats.temperatureAlerts > 0 && (
-          <Card className="dashboard-card alert-card">
-            <h3 className="dashboard-card-title" style={{ color: 'var(--danger)' }}>
-              ⚠️ {t('dashboard.temperatureAlertsActive')}
-            </h3>
-            <p className="alert-message">
-              {t('dashboard.temperatureAlertsMessage').replace('{count}', stats.temperatureAlerts.toString())}
-            </p>
-          </Card>
-        )}
+      {/* Main Area: Temperature Chart + Alerts */}
+      <div className="content-grid">
+        <Card
+          className="temperature-card"
+          style={{ background: 'var(--color-surface)', boxShadow: 'var(--shadow-card)', borderRadius: '12px' }}
+        >
+          <div className="temperature-card-header">
+            <h2 className="temperature-card-title">Gráfico de Temperatura</h2>
+            <p className="temperature-card-subtitle">Monitoramento térmico contínuo</p>
+          </div>
+          <div className="temperature-chart-slot">
+            {/* Mantenha o componente atual do gráfico aqui, se existir */}
+          </div>
+        </Card>
+
+        <Card
+          className="side-card"
+          style={{ background: 'var(--color-surface)', boxShadow: 'var(--shadow-card)', borderRadius: '12px' }}
+        >
+          <h3 className="side-card-title">{t('dashboard.temperatureAlertsActive')}</h3>
+          <p className="side-card-text">
+            {stats.temperatureAlerts > 0
+              ? t('dashboard.temperatureAlertsMessage').replace('{count}', stats.temperatureAlerts.toString())
+              : 'Nenhum alerta ativo no momento.'}
+          </p>
+        </Card>
       </div>
     </div>
   );

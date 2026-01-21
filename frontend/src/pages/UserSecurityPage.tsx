@@ -29,6 +29,7 @@ import { useUserSecurity } from '../hooks/useUserSecurity';
 import { useToast } from '../components/UI/ToastContainer';
 import { userSecurityService } from '../services/api';
 import { validatePasswordAndGetError } from '../utils/passwordValidator';
+import { getPasswordIssues } from '../utils/passwordRules';
 import './UserSecurityPage.css';
 
 export default function UserSecurityPage() {
@@ -139,6 +140,9 @@ export default function UserSecurityPage() {
     const days = Math.ceil((new Date(expirationDate).getTime() - Date.now()) / (1000 * 60 * 60 * 24));
     return days;
   };
+
+  const passwordIssues = getPasswordIssues(newPassword.new);
+  const confirmMismatch = newPassword.new && newPassword.confirm && newPassword.new !== newPassword.confirm;
 
   if (loading && !securityStatus) {
     return (
@@ -751,6 +755,41 @@ export default function UserSecurityPage() {
                 {showPasswords.confirm ? <EyeOff size={18} /> : <Eye size={18} />}
               </button>
             </div>
+          </div>
+          <div className="password-requirements" style={{ margin: '0.75rem 0' }}>
+            <p style={{ fontWeight: 600, marginBottom: '0.5rem' }}>{t('password.requirements.title')}</p>
+            <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'grid', gap: '0.35rem' }}>
+              {[{
+                key: 'minLength',
+                label: t('password.requirements.minLength')
+              }, {
+                key: 'upper',
+                label: t('password.requirements.upper')
+              }, {
+                key: 'lower',
+                label: t('password.requirements.lower')
+              }, {
+                key: 'number',
+                label: t('password.requirements.number')
+              }, {
+                key: 'symbol',
+                label: t('password.requirements.symbol')
+              }].map((item) => {
+                const ok = !passwordIssues.includes(item.key as any);
+                return (
+                  <li key={item.key} style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', color: ok ? 'var(--success)' : 'var(--text)' }}>
+                    {ok ? <CheckCircle size={16} /> : <XCircle size={16} color="var(--danger)" />}
+                    <span style={{ color: ok ? 'var(--success)' : 'var(--text)' }}>{item.label}</span>
+                  </li>
+                );
+              })}
+            </ul>
+            {confirmMismatch && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', marginTop: '0.5rem', color: 'var(--danger)' }}>
+                <AlertTriangle size={16} />
+                <span>{t('password.mismatch')}</span>
+              </div>
+            )}
           </div>
           {passwordError && (
             <div className="form-error">

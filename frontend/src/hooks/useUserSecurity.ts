@@ -99,22 +99,14 @@ export function useUserSecurity() {
             location: 'São Paulo, Brasil',
             lastAccess: new Date(),
             isCurrent: true
-          },
-          {
-            id: '2',
-            deviceName: 'Firefox no Linux',
-            browser: 'Firefox 121',
-            os: 'Ubuntu 22.04',
-            location: 'Rio de Janeiro, Brasil',
-            lastAccess: new Date(Date.now() - 2 * 60 * 60 * 1000), // 2 horas atrás
-            isCurrent: false
           }
         ];
 
         setSecurityStatus(mockSecurityStatus);
         setMfaStatus(mockMFAStatus);
         setPasswordStatus(mockPasswordStatus);
-        setSessions(mockSessions);
+        // Não sobrescreve a lista atual se já houver sessões carregadas (evita reintroduzir mocks após revogação)
+        setSessions(prev => (prev && prev.length ? prev : mockSessions));
       }
     } catch (err: any) {
       setError(err.response?.data?.error || err.message || 'Erro ao carregar dados de segurança');
@@ -352,6 +344,8 @@ export function useUserSecurity() {
   const revokeSession = useCallback(async (sessionId: string) => {
     try {
       await userSecurityService.revokeSession(sessionId);
+      // Remoção otimista da lista
+      setSessions(prev => prev.filter(s => s.id !== sessionId));
       await refreshData();
     } catch (err: any) {
       throw new Error(err.response?.data?.error || err.message || 'Erro ao revogar sessão');
@@ -361,6 +355,8 @@ export function useUserSecurity() {
   const revokeAllSessions = useCallback(async () => {
     try {
       await userSecurityService.revokeAllSessions();
+      // Mantém apenas a sessão atual na lista (otimista)
+      setSessions(prev => prev.filter(s => s.isCurrent));
       await refreshData();
     } catch (err: any) {
       throw new Error(err.response?.data?.error || err.message || 'Erro ao revogar todas as sessões');

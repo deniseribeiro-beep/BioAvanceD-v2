@@ -1,3 +1,104 @@
+.dashboard-bento {
+  background: var(--color-bg);
+  min-height: 100vh;
+  padding: 1.5rem;
+  display: grid;
+  grid-template-rows: auto auto 1fr;
+  gap: 1.5rem;
+}
+
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 1rem;
+}
+
+.kpi-card {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  padding: 1rem 1.1rem;
+}
+
+.kpi-card.alert {
+  border-left: 4px solid var(--color-danger);
+}
+
+.kpi-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.kpi-icon--primary { color: var(--color-primary); background-color: rgba(0,114,178,0.1); }
+.kpi-icon--success { color: var(--color-success); background-color: rgba(0,158,115,0.1); }
+.kpi-icon--action { color: var(--color-action); background-color: rgba(86,180,233,0.1); }
+.kpi-icon--danger { color: var(--color-danger); background-color: rgba(213,94,0,0.1); }
+
+.kpi-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.kpi-title {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--color-text);
+}
+
+.kpi-value {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+.content-grid {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 1.25rem;
+  align-items: start;
+}
+
+.temperature-card {
+  padding: 1.25rem;
+  min-height: 360px;
+}
+
+.temperature-card-header {
+  margin-bottom: 0.75rem;
+}
+
+.temperature-card-title {
+  margin: 0;
+  color: var(--color-text);
+}
+
+.temperature-card-subtitle {
+  margin: 0.35rem 0 0 0;
+  color: var(--color-text);
+  opacity: 0.7;
+}
+
+.temperature-chart-slot {
+  margin-top: 0.5rem;
+  min-height: 280px;
+  border: 1px dashed var(--color-text);
+  border-radius: 10px;
+  background: linear-gradient(135deg, rgba(0,114,178,0.04), rgba(86,180,233,0.04));
+}
+
+.side-card { padding: 1.25rem; }
+.side-card-title { margin: 0; color: var(--color-text); }
+.side-card-text { color: var(--color-text); margin-top: 0.5rem; }
+
+@media (max-width: 1024px) {
+  .content-grid { grid-template-columns: 1fr; }
+}
 .dashboard {
   display: flex;
   flex-direction: column;

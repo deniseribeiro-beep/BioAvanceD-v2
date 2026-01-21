@@ -95,9 +95,12 @@ class PatientService {
         throw new Error('Unidade clínica inválida');
       }
 
-      // Gera sigla se não fornecida
+      // Gera sigla se não fornecida e garante uppercase
       if (patientData.clinicalUnit && !patientData.unitAcronym) {
         patientData.unitAcronym = PatientModel.fillAcronym(patientData.clinicalUnit);
+      }
+      if (patientData.unitAcronym) {
+        patientData.unitAcronym = patientData.unitAcronym.toUpperCase();
       }
 
       // GERA ID ÚNICO DE 8 DÍGITOS AUTOMATICAMENTE (LGPD)

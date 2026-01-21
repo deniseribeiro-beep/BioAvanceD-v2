@@ -1,11 +1,13 @@
 /**
  * Utilitário para validação de senha no frontend
  * Requisitos:
- * - Mínimo de 12 caracteres
+ * - Mínimo de 8 caracteres
  * - Pelo menos uma letra maiúscula
  * - Pelo menos uma letra minúscula
+ * - Pelo menos um número
  * - Pelo menos um caractere especial
  */
+import { getPasswordIssues, PasswordIssue, meetsAllPasswordRules } from './passwordRules';
 
 export interface PasswordValidationResult {
   isValid: boolean;
@@ -23,28 +25,22 @@ export function validatePassword(password: string): PasswordValidationResult {
     return { isValid: false, errors };
   }
 
-  // Verifica comprimento mínimo
-  if (password.length < 12) {
-    errors.push('A senha deve ter no mínimo 12 caracteres');
-  }
+  const issues = getPasswordIssues(password);
 
-  // Verifica letra maiúscula
-  if (!/[A-Z]/.test(password)) {
-    errors.push('A senha deve conter pelo menos uma letra maiúscula');
-  }
+  const issueMessages: Record<PasswordIssue, string> = {
+    minLength: 'A senha deve ter no mínimo 8 caracteres',
+    upper: 'A senha deve conter pelo menos uma letra maiúscula',
+    lower: 'A senha deve conter pelo menos uma letra minúscula',
+    number: 'A senha deve conter pelo menos um número',
+    symbol: 'A senha deve conter pelo menos um caractere especial (!@#$%^&*()_-+=[]{}|;:,.<>?/)' 
+  };
 
-  // Verifica letra minúscula
-  if (!/[a-z]/.test(password)) {
-    errors.push('A senha deve conter pelo menos uma letra minúscula');
-  }
-
-  // Verifica caractere especial
-  if (!/[!@#$%^&*()_+\-=\[\]{}|;:,.<>?]/.test(password)) {
-    errors.push('A senha deve conter pelo menos um caractere especial (!@#$%^&*()_+-=[]{}|;:,.<>?)');
-  }
+  issues.forEach((issue) => {
+    errors.push(issueMessages[issue]);
+  });
 
   return {
-    isValid: errors.length === 0,
+    isValid: meetsAllPasswordRules(password),
     errors
   };
 }

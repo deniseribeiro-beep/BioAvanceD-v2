@@ -20,6 +20,9 @@ router.post('/login', (req, res) => {
 // RF003 - Cadastro de usuário (pode ser público ou protegido dependendo da regra)
 router.post('/register', authController.register.bind(authController));
 
+// Troca de senha autenticada
+router.post('/change-password', authenticate, authController.changePassword.bind(authController));
+
 // MFA - Requer autenticação (compatível com frontend)
 router.get('/two-factor/qr', authenticate, authController.setupMFA.bind(authController));
 router.post('/two-factor/enable', authenticate, (req, res) => {

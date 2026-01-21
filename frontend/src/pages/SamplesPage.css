@@ -170,17 +170,17 @@
 }
 
 .action-button {
-  background: none;
-  border: none;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
   padding: 0.375rem;
   border-radius: 4px;
-  color: var(--text-light);
+  color: var(--text);
   cursor: pointer;
   transition: all 0.15s ease;
   display: flex;
   align-items: center;
   justify-content: center;
-  opacity: 0.6;
+  opacity: 1;
   position: relative;
   z-index: 1;
   min-width: 28px;
@@ -192,14 +192,18 @@
 }
 
 .action-button:hover {
-  background-color: rgba(0, 0, 0, 0.03);
-  color: var(--text);
-  opacity: 1;
+  background-color: transparent;
+  color: var(--text-light);
+  opacity: 0.6;
 }
 
 .action-button.danger:hover {
   color: var(--danger);
-  background-color: rgba(239, 68, 68, 0.08);
+  background-color: transparent;
+}
+
+.action-button.danger {
+  color: var(--danger);
 }
 
 .action-button:disabled {

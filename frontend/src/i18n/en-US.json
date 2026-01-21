@@ -53,6 +53,7 @@
     "passwordResetRequest": "Request Password Reset",
     "passwordResetSuccess": "Reset link sent to your email",
     "passwordResetError": "Error requesting password reset",
+    "invalidToken": "Invalid or expired token",
     "enterEmail": "Enter your email",
     "sendResetLink": "Send Reset Link",
     "newPassword": "New Password",
@@ -176,6 +177,23 @@
     "thinking": "Thinking...",
     "error": "Error processing question",
     "noQuestion": "Question is required"
+  },
+  "password": {
+    "requirements": {
+      "title": "Password requirements",
+      "minLength": "At least 8 characters",
+      "upper": "At least one uppercase letter",
+      "lower": "At least one lowercase letter",
+      "number": "At least one number",
+      "symbol": "At least one symbol (!@#$%^&*()_-+=[]{}|;:,.<>?/)",
+      "placeholder": "Minimum 8 chars with upper, lower, number and symbol"
+    },
+    "mismatch": "Passwords do not match",
+    "error": {
+      "reused": "Password was recently used. Choose a different one.",
+      "weak": "Password does not meet security requirements",
+      "requiredFields": "Fill all required fields"
+    }
   },
   "patients": {
     "title": "Patients",

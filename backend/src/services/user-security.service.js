@@ -728,12 +728,21 @@ class UserSecurityService {
   async revokeSession(db, userID, sessionId) {
     try {
       const sessionsCollection = db.collection('sessions');
-      
+      const { ObjectId } = require('mongodb');
+
+      // Suporta documentos que usam sessionID ou apenas _id
+      const query = {
+        userID: userID.toString(),
+        $or: [
+          { sessionID: sessionId }
+        ]
+      };
+      if (ObjectId.isValid(sessionId)) {
+        query.$or.push({ _id: new ObjectId(sessionId) });
+      }
+
       const result = await sessionsCollection.updateOne(
-        {
-          sessionID: sessionId,
-          userID: userID.toString()
-        },
+        query,
         {
           $set: {
             isActive: false,
@@ -749,7 +758,14 @@ class UserSecurityService {
       // Limpa cache em memória do sessionService
       const sessionService = require('./session.service');
       if (sessionService.sessions) {
-        sessionService.sessions.delete(sessionId);
+        // Tenta remover pelo sessionID; se não existir, remove pela correspondência de _id
+        if (!sessionService.sessions.delete(sessionId)) {
+          for (const [sid, s] of sessionService.sessions.entries()) {
+            if (sid === sessionId || s.sessionID === sessionId || (s._id && s._id.toString && s._id.toString() === sessionId)) {
+              sessionService.sessions.delete(sid);
+            }
+          }
+        }
       }
     } catch (error) {
       logger.error('Erro ao revogar sessão:', error.message);

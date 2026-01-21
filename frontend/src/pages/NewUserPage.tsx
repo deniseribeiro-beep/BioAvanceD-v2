@@ -8,6 +8,7 @@ import { useUsers } from '../hooks/useUsers';
 import { getAccessTypeForRole, getRoleDescription, RoleName } from '../utils/rolePermissions';
 import { useLanguage } from '../contexts/LanguageContext';
 import { validatePassword } from '../utils/passwordValidator';
+import { getPasswordIssues } from '../utils/passwordRules';
 import './NewUserPage.css';
 
 export default function NewUserPage() {
@@ -89,6 +90,7 @@ export default function NewUserPage() {
 
   const [formData, setFormData] = useState<Partial<User>>(getInitialFormData());
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const passwordIssues = getPasswordIssues(formData.password || '');
 
   // Função para formatar telefone durante digitação: (XX) XXXXX-XXXX
   const formatPhoneInput = (value: string): string => {
@@ -343,6 +345,35 @@ export default function NewUserPage() {
             }
             required={!editingUser}
           />
+          <div style={{ gridColumn: '1 / -1', marginTop: '-0.5rem' }}>
+            <p style={{ fontWeight: 600, marginBottom: '0.35rem' }}>{t('password.requirements.title')}</p>
+            <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'grid', gap: '0.25rem' }}>
+              {[{
+                key: 'minLength',
+                label: t('password.requirements.minLength')
+              }, {
+                key: 'upper',
+                label: t('password.requirements.upper')
+              }, {
+                key: 'lower',
+                label: t('password.requirements.lower')
+              }, {
+                key: 'number',
+                label: t('password.requirements.number')
+              }, {
+                key: 'symbol',
+                label: t('password.requirements.symbol')
+              }].map((item) => {
+                const ok = !passwordIssues.includes(item.key as any);
+                return (
+                  <li key={item.key} style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', color: ok ? 'var(--success)' : 'var(--text)' }}>
+                    {ok ? '✓' : '•'}
+                    <span style={{ color: ok ? 'var(--success)' : 'var(--text-light)' }}>{item.label}</span>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
           <div className="form-grid-full">
             <label htmlFor={roleSelectId} className="form-label">{t('users.roleLabel')} *</label>
             <select

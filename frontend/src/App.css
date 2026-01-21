@@ -5,46 +5,32 @@
 }
 
 :root {
-  /* Cores acessíveis para pessoas daltônicas */
-  /* Azul - funciona bem para todos os tipos de daltonismo */
-  --primary: #0066cc;
-  --primary-dark: #004499;
-  --primary-light: #3385d6;
-  
-  /* Cinza neutro - universalmente acessível */
-  --secondary: #6b7280;
-  --secondary-dark: #4b5563;
-  
-  /* Verde - ajustado para ser mais distinguível (mais azulado) */
-  --success: #059669;
-  --success-dark: #047857;
-  --success-bg: #d1fae5;
-  
-  /* Laranja/Amarelo - funciona bem para daltonismo vermelho-verde */
-  --warning: #d97706;
-  --warning-dark: #b45309;
-  --warning-bg: #fef3c7;
-  
-  /* Vermelho - ajustado para melhor contraste */
-  --danger: #dc2626;
-  --danger-dark: #b91c1c;
-  --danger-bg: #fee2e2;
-  
-  /* Cores neutras */
-  --background: #f9fafb;
-  --surface: #ffffff;
-  --border: #e5e7eb;
-  --text: #111827;
-  --text-secondary: #4b5563;
-  --text-light: #6b7280;
-  
-  /* Sombras */
-  --shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
-  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
-  
-  /* Cores adicionais para estados */
-  --info: #0284c7;
-  --info-bg: #e0f2fe;
+  /* Paleta Okabe-Ito Acessível */
+  --color-primary: #0072B2;      /* Royal Blue - Menus/Cabeçalhos */
+  --color-action: #56B4E9;       /* Sky Blue - Botões de Ação */
+  --color-success: #009E73;      /* Bluish Green - Status OK/Salvo */
+  --color-warning: #F0E442;      /* Yellow - Alertas leves */
+  --color-danger: #D55E00;       /* Vermilion - Erros/Crítico */
+  --color-text: #333333;         /* Dark Grey - Texto */
+  --color-bg: #F4F6F8;           /* Off-white Clínico - Fundo */
+  --color-surface: #FFFFFF;      /* Branco - Cards/Superfície */
+  --shadow-card: 0 2px 4px rgba(0,0,0,0.05);
+
+  /* Compatibilidade com variáveis existentes */
+  --primary: var(--color-primary);
+  --secondary: #475569; /* Slate-like secundário para botões e ações neutras */
+  --success: var(--color-success);
+  --warning: #b89c00; /* texto sobre amarelo com contraste AA */
+  --danger: var(--color-danger);
+  --background: var(--color-bg);
+  --bg-secondary: #E9EEF2; /* Fundo secundário sutil para ícones/ações */
+  --surface: var(--color-surface);
+  --border: #d8dde3;
+  --text: var(--color-text);
+  --text-secondary: #4f5964;
+  --text-light: #6b7380;
+  --shadow: var(--shadow-card);
+  --shadow-md: 0 4px 6px rgba(0,0,0,0.1);
 }
 
 html {
@@ -83,6 +69,91 @@ button {
 
 input, select, textarea {
   font-family: inherit;
+}
+
+/* Botões com fundo sólido (aplicação global) */
+button,
+.btn,
+.action-button {
+  background-color: var(--color-action);
+  color: #fff;
+  border: 1px solid transparent;
+  box-shadow: var(--shadow-card);
+  transition: none;
+}
+
+/* Variantes sólidas */
+.btn-primary,
+button.primary,
+.action-button.primary {
+  background-color: var(--color-primary);
+  color: #fff;
+}
+
+.btn-secondary,
+button.secondary,
+.action-button.secondary,
+.header-button,
+.logout-button {
+  background-color: var(--secondary);
+  color: #fff;
+}
+
+.btn-success,
+button.success,
+.action-button.success {
+  background-color: var(--color-success);
+  color: #fff;
+}
+
+.btn-danger,
+button.danger,
+.action-button.danger {
+  background-color: var(--color-danger);
+  color: #fff;
+}
+
+/* Remover mudança visual no hover (mantém sólido) */
+button:hover,
+.btn:hover,
+.action-button:hover,
+.btn-primary:hover,
+.btn-secondary:hover,
+.btn-success:hover,
+.btn-danger:hover,
+.action-button.primary:hover,
+.action-button.secondary:hover,
+.action-button.success:hover,
+.action-button.danger:hover {
+  background-color: inherit;
+  color: inherit;
+  opacity: 1;
+  filter: none;
+}
+
+/* Acessibilidade: foco visível */
+button:focus-visible,
+.btn:focus-visible,
+.action-button:focus-visible {
+  outline: 3px solid var(--color-action);
+  outline-offset: 2px;
+}
+
+/* Estado desabilitado (ainda visível) */
+button:disabled,
+.btn:disabled,
+.action-button:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+/* Botão fantasma (visível) */
+.btn-ghost,
+button.ghost,
+.action-button.ghost {
+  background-color: var(--bg-secondary);
+  color: var(--text);
+  border: 1px solid var(--border);
 }
 
 /* Estilos globais para páginas */
