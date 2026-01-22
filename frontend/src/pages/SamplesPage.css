@@ -79,6 +79,10 @@
   border-left: 2px solid var(--border);
 }
 
+.print-scope {
+  position: relative;
+}
+
 .result-item h4 {
   margin: 0 0 0.5rem 0;
   color: var(--text);
@@ -187,6 +191,30 @@
   min-height: 28px;
 }
 
+.print-preview {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 1rem;
+}
+
+.batch-label-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(50mm, 1fr));
+  gap: 10px;
+  padding: 10px 0;
+}
+
+.batch-label-item {
+  display: flex;
+  justify-content: center;
+  page-break-inside: avoid;
+  break-inside: avoid;
+}
+
+.printable-batch-scope {
+  position: relative;
+}
+
 .action-button:active {
   transform: scale(0.95);
 }
@@ -249,6 +277,79 @@
 
 .sample-row:last-child td {
   border-bottom: none;
+}
+
+@media print {
+  @page {
+    size: A4;
+    margin: 10mm;
+  }
+
+  body {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .modal-overlay {
+    position: static !important;
+    width: auto !important;
+    height: auto !important;
+    min-width: auto !important;
+    min-height: auto !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+  }
+
+  .modal-content {
+    box-shadow: none !important;
+    border: none !important;
+    max-width: none !important;
+    width: auto !important;
+  }
+
+  .modal-header,
+  .modal-close,
+  .print-actions {
+    display: none !important;
+  }
+
+  .print-preview,
+  .barcode-label {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  /* Oculta tudo fora do escopo de impressão de etiqueta individual */
+  body * {
+    visibility: hidden;
+  }
+  .print-scope,
+  .print-scope *,
+  #printable-barcode-area,
+  #printable-barcode-area * {
+    visibility: visible;
+  }
+  .print-scope {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+  }
+
+  #printable-barcode-area {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(50mm, 1fr));
+    gap: 5mm;
+    padding: 10mm;
+  }
+
+  #printable-barcode-area .barcode-label {
+    border: 1px dashed #ccc;
+  }
 }
 
 

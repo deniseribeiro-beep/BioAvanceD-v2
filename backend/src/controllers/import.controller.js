@@ -192,9 +192,10 @@ class ImportController {
         if (req.user) {
           const auditLogger = require('../utils/auditLogger');
           auditLogger.init(db);
+          const entityName = mapDataTypeToEntity(dataType);
           await auditLogger.logImport(
             req, 
-            dataType.charAt(0).toUpperCase() + dataType.slice(1), 
+            entityName, 
             results.errors.length === 0 ? 'success' : 'partial',
             results.total, 
             results.success, 
@@ -226,6 +227,15 @@ class ImportController {
       });
     }
   }
+}
+
+function mapDataTypeToEntity(dataType) {
+  const s = (dataType || '').toString().toLowerCase();
+  if (s.includes('sample')) return 'Sample';
+  if (s.includes('patient')) return 'Patient';
+  if (s.includes('result')) return 'Result';
+  if (s.includes('temper')) return 'Temperature';
+  return 'Import';
 }
 
 module.exports = new ImportController();

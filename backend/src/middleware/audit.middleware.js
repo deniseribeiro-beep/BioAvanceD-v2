@@ -145,6 +145,7 @@ function determineEntity(path) {
     'patient': 'Patient',
     'samples': 'Sample',
     'sample': 'Sample',
+    'Samples': 'Sample',
     'amostras': 'Sample',
     'temperature': 'Temperature',
     'sensors': 'Sensor',

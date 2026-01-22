@@ -4,6 +4,42 @@
 const { validateQualityMIABIS, validateQualityMIABISOrThrow } = require('../utils/qualityMIABISValidator');
 
 class SampleModel {
+  static STATUS = {
+    AVAILABLE: 'AVAILABLE',
+    PARTIAL: 'PARTIAL',
+    DEPLETED: 'DEPLETED',
+    UNAVAILABLE: 'UNAVAILABLE'
+  };
+
+  static validateLifecycleStatus(status) {
+    return Object.values(this.STATUS).includes(status);
+  }
+
+  static computeStatus(initialVolume, currentVolume, currentStatus) {
+    const init = Number(initialVolume ?? 0);
+    const curr = Number(currentVolume ?? 0);
+
+    if (curr <= 0) return this.STATUS.DEPLETED;
+    if (currentStatus === this.STATUS.UNAVAILABLE) return this.STATUS.UNAVAILABLE;
+    if (init > 0 && curr < init) return this.STATUS.PARTIAL;
+    return this.STATUS.AVAILABLE;
+  }
+
+  static mapLifecycleToLegacy(status) {
+    switch (status) {
+      case this.STATUS.AVAILABLE:
+        return 'Available';
+      case this.STATUS.PARTIAL:
+        return 'PartiallyWithdrawn';
+      case this.STATUS.DEPLETED:
+        return 'TotallyWithdrawn';
+      case this.STATUS.UNAVAILABLE:
+        return 'Unusable';
+      default:
+        return 'Available';
+    }
+  }
+
   static validate(data) {
     const errors = [];
 
@@ -94,6 +130,10 @@ class SampleModel {
       errors.push('currentStatus deve ser: Available, Withdrawn, Expired ou Destroyed');
     }
 
+    if (data.status && !this.validateLifecycleStatus(data.status)) {
+      errors.push('status deve ser: AVAILABLE, PARTIAL, DEPLETED ou UNAVAILABLE');
+    }
+
     return {
       isValid: errors.length === 0,
       errors
@@ -115,6 +155,12 @@ class SampleModel {
     const receivedTime = data.receivedTime ? (data.receivedTime instanceof Date ? data.receivedTime : new Date(data.receivedTime)) : registerDate;
     const processingStatus = data.processingStatus || data.processing?.status || 'pending'; // pending, processing, completed, failed
 
+    // Volumes e status de ciclo de vida
+    const availableQuantity = data.availableQuantity !== undefined ? data.availableQuantity : data.quantity;
+    const originalQuantity = data.originalQuantity || data.quantity;
+    const lifecycleStatus = this.computeStatus(originalQuantity, availableQuantity, data.status);
+    const legacyStatus = data.currentStatus || this.mapLifecycleToLegacy(lifecycleStatus);
+
     return {
       patientID: data.patientID,
       sampleID: data.sampleID || null,
@@ -134,10 +180,11 @@ class SampleModel {
       withdrawalType: data.withdrawalType || null,
       withdrawalResponsible: data.withdrawalResponsible || null,
       sampleDestination: data.sampleDestination || null,
-      currentStatus: data.currentStatus || 'Available', // Available, PartiallyWithdrawn, TotallyWithdrawn, Expired, Destroyed
+      currentStatus: legacyStatus, // Legacy status textual
       // Controle de quantidade disponível (para retiradas parciais)
-      availableQuantity: data.availableQuantity !== undefined ? data.availableQuantity : data.quantity,
-      originalQuantity: data.originalQuantity || data.quantity, // Quantidade original (nunca muda)
+      availableQuantity,
+      originalQuantity, // Quantidade original (nunca muda)
+      status: lifecycleStatus,
       totalWithdrawn: data.totalWithdrawn || 0, // Total já retirado
       totalReturned: data.totalReturned || 0,   // Total já devolvido
       // HL7 FHIR - Campos obrigatórios

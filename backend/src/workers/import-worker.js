@@ -12,6 +12,9 @@ const temperatureWorker = require('./workers/temperature-worker');
 const importAsyncService = require('../services/import-async.service');
 const { connectDB } = require('../database/mongo');
 
+// Lazy getter para evitar TDZ/ciclos de require
+const getNotificationService = () => require('../services/notification.service');
+
 /**
  * Worker de Importação
  * Processa jobs da fila de importação
@@ -58,6 +61,16 @@ async function initWorker() {
         try {
           // Atualiza status para processing
           await updateJobStatus(db, jobID, 'processing', 0, { startedAt: new Date() });
+
+          // Notifica início
+          const notificationService = getNotificationService();
+          await notificationService.notifyJobStarted(userID, {
+            jobID,
+            status: 'processing',
+            dataType,
+            fileName,
+            progress: 0,
+          });
 
           let result;
 
@@ -117,12 +130,22 @@ async function initWorker() {
             fhirResourcesUpdated: result.fhirResourcesUpdated || 0,
           });
 
-          // Registra no AuditLog conforme fluxograma
+          // Registra no AuditLog conforme fluxograma (entidade segura)
           const auditLogger = require('../utils/auditLogger');
+          const entityName = dataType === 'samples'
+            ? 'Sample'
+            : dataType === 'patients'
+              ? 'Patient'
+              : dataType === 'results'
+                ? 'Result'
+                : dataType === 'temperature'
+                  ? 'Temperature'
+                  : (dataType || 'Import');
+
           auditLogger.init(db);
           await auditLogger.logImport(
             null, // req não disponível no worker
-            dataType.charAt(0).toUpperCase() + dataType.slice(1),
+            entityName,
             'completed',
             result.total,
             result.success,
@@ -137,8 +160,7 @@ async function initWorker() {
           );
 
           // Envia notificação assíncrona
-          const notificationService = require('../services/notification.service');
-          await notificationService.notifyJobCompleted(userID, {
+          await getNotificationService().notifyJobCompleted(userID, {
             jobID,
             status: 'completed',
             dataType,
@@ -163,16 +185,25 @@ async function initWorker() {
           // Registra no AuditLog
           const auditLogger = require('../utils/auditLogger');
           auditLogger.init(db);
+          const entityFailName = dataType === 'samples'
+            ? 'Sample'
+            : dataType === 'patients'
+              ? 'Patient'
+              : dataType === 'results'
+                ? 'Result'
+                : dataType === 'temperature'
+                  ? 'Temperature'
+                  : (dataType || 'Import');
+
           await auditLogger.logError(
             null,
-            dataType.charAt(0).toUpperCase() + dataType.slice(1),
+            entityFailName,
             error,
             { action: 'IMPORT', jobID, dataType, fileName }
           );
 
           // Envia notificação de falha
-          const notificationService = require('../services/notification.service');
-          await notificationService.notifyJobFailed(userID, {
+          await getNotificationService().notifyJobFailed(userID, {
             jobID,
             status: 'failed',
             dataType,

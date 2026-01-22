@@ -18,6 +18,7 @@ export function useAsyncImport() {
   const [creating, setCreating] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [currentJobID, setCurrentJobID] = useState<string | null>(null);
+  const [jobCallbacks, setJobCallbacks] = useState<Pick<AsyncImportOptions, 'onCompleted' | 'onFailed' | 'onProgress'>>({});
 
   // Hook para monitorar job atual
   const {
@@ -30,14 +31,7 @@ export function useAsyncImport() {
     stopPolling,
     cancelJob,
     getReport,
-  } = useImportJob(currentJobID, {
-    onCompleted: (job) => {
-      // Callback será chamado pelo useImportJob
-    },
-    onFailed: (job) => {
-      // Callback será chamado pelo useImportJob
-    },
-  });
+  } = useImportJob(currentJobID, jobCallbacks);
 
   // Valida arquivo
   const validateFile = useCallback(async (file: File, dataType: string) => {
@@ -116,6 +110,13 @@ export function useAsyncImport() {
     dataType: string,
     options: AsyncImportOptions = {}
   ) => {
+    // Atualiza callbacks que serão disparados pelo monitoramento do job
+    setJobCallbacks({
+      onCompleted: options.onCompleted,
+      onFailed: options.onFailed,
+      onProgress: options.onProgress,
+    });
+
     // 1. Valida arquivo
     const validation = await validateFile(file, dataType);
     

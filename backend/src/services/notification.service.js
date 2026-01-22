@@ -47,21 +47,40 @@ class NotificationService {
   /**
    * Inicializa Socket.IO
    */
-  initSocketIO(server) {
+  initSocketIO(serverOrIo) {
     if (this.io) {
       return this.io;
     }
 
     const { Server } = require('socket.io');
-    this.io = new Server(server, {
-      cors: {
-        origin: process.env.FRONTEND_URL || '*',
-        methods: ['GET', 'POST'],
-      },
-    });
+
+    // Aceita instância existente de Server ou cria uma nova a partir do HTTP server
+    if (serverOrIo && typeof serverOrIo.of === 'function' && typeof serverOrIo.emit === 'function') {
+      this.io = serverOrIo;
+    } else {
+      this.io = new Server(serverOrIo, {
+        cors: {
+          origin: process.env.FRONTEND_URL || '*',
+          methods: ['GET', 'POST'],
+        },
+        pingTimeout: 30000,
+        pingInterval: 25000,
+      });
+    }
 
     this.io.on('connection', (socket) => {
       logger.info(`✅ Cliente WebSocket conectado: ${socket.id}`);
+
+      // Salas por usuário e por job
+      socket.on('subscribe:user', (userID) => {
+        if (!userID) return;
+        socket.join(`user-${userID}`);
+      });
+
+      socket.on('subscribe:job', (jobID) => {
+        if (!jobID) return;
+        socket.join(jobID);
+      });
 
       socket.on('disconnect', () => {
         logger.info(`❌ Cliente WebSocket desconectado: ${socket.id}`);
@@ -72,6 +91,28 @@ class NotificationService {
     return this.io;
   }
 
+  // Eventos de ciclo de vida do job
+  async notifyJobQueued(userID, payload) {
+    if (!this.io) return;
+    this.io.to(`user-${userID}`).emit('import-queued', payload);
+  }
+
+  async notifyJobStarted(userID, payload) {
+    if (!this.io) return;
+    this.io.to(`user-${userID}`).emit('import-started', payload);
+    if (payload?.jobID) {
+      this.io.to(payload.jobID).emit('import-started', payload);
+    }
+  }
+
+  async notifyJobProgress(userID, payload) {
+    if (!this.io) return;
+    this.io.to(`user-${userID}`).emit('import-progress', payload);
+    if (payload?.jobID) {
+      this.io.to(payload.jobID).emit('import-progress', payload);
+    }
+  }
+
   /**
    * Envia notificação de job completado
    */
@@ -79,14 +120,18 @@ class NotificationService {
     try {
       // Notificação WebSocket
       if (this.io) {
-        this.io.to(`user-${userID}`).emit('import-completed', {
+        const payload = {
           jobID: jobData.jobID,
           status: jobData.status,
           dataType: jobData.dataType,
           successCount: jobData.successCount,
           errorCount: jobData.errorCount,
           message: `Importação de ${jobData.dataType} concluída`,
-        });
+        };
+        this.io.to(`user-${userID}`).emit('import-completed', payload);
+        if (jobData.jobID) {
+          this.io.to(jobData.jobID).emit('import-completed', payload);
+        }
       }
 
       // Notificação Email (se configurado)
@@ -112,13 +157,17 @@ class NotificationService {
     try {
       // Notificação WebSocket
       if (this.io) {
-        this.io.to(`user-${userID}`).emit('import-failed', {
+        const payload = {
           jobID: jobData.jobID,
           status: jobData.status,
           dataType: jobData.dataType,
           error: jobData.error,
           message: `Importação de ${jobData.dataType} falhou`,
-        });
+        };
+        this.io.to(`user-${userID}`).emit('import-failed', payload);
+        if (jobData.jobID) {
+          this.io.to(jobData.jobID).emit('import-failed', payload);
+        }
       }
 
       // Notificação Email (se configurado)

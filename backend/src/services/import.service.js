@@ -20,16 +20,16 @@ class ImportService {
     const mimeType = file.mimetype;
 
     const validExtensions = {
-      'patients': ['.csv', '.json'],
-      'samples': ['.csv', '.json'],
-      'results': ['.zip', '.raw', '.csv'],
+      'patients': ['.csv', '.json', '.xlsx'],
+      'samples': ['.csv', '.json', '.xlsx'],
+      'results': ['.zip', '.raw', '.csv', '.xlsx'],
       'temperature': ['.csv']
     };
 
     const validMimeTypes = {
-      'patients': ['text/csv', 'application/json'],
-      'samples': ['text/csv', 'application/json'],
-      'results': ['application/zip', 'application/octet-stream', 'text/csv'],
+      'patients': ['text/csv', 'application/json', 'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
+      'samples': ['text/csv', 'application/json', 'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
+      'results': ['application/zip', 'application/octet-stream', 'text/csv', 'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
       'temperature': ['text/csv']
     };
 
@@ -201,6 +201,14 @@ class ImportService {
           results.total++;
         }
       } else if (ext === '.csv') {
+        // Valida cabecalhos antes de processar o arquivo inteiro
+        try {
+          await this.validateCSVStructure(file, 'samples');
+        } catch (structError) {
+          results.errors.push({ row: 0, error: structError.message });
+          return results;
+        }
+
         const rows = [];
         await new Promise((resolve, reject) => {
           fs.createReadStream(file.path)
@@ -212,7 +220,17 @@ class ImportService {
 
         for (const row of rows) {
           try {
-            const sampleData = this.parseSampleCSV(row);
+            const { data: sampleData, parseErrors } = this.parseSampleCSV(row);
+
+            if (parseErrors.length > 0) {
+              results.errors.push({
+                row: results.total + 1,
+                errors: parseErrors
+              });
+              results.total++;
+              continue;
+            }
+
             const validation = SampleModel.validate(sampleData);
             
             if (!validation.isValid) {
@@ -220,6 +238,7 @@ class ImportService {
                 row: results.total + 1,
                 errors: validation.errors
               });
+              results.total++;
               continue;
             }
 
@@ -329,19 +348,59 @@ class ImportService {
    * Parse CSV para Sample
    */
   parseSampleCSV(row) {
-    return {
-      patientID: parseInt(row.patientID),
-      sampleType: row.sampleType,
-      sampleOrigin: row.sampleOrigin,
-      extractionProtocol: row.extractionProtocol || null,
-      barcode: row.barcode ? parseInt(row.barcode) : null,
-      registrationDate: row.registerDate ? new Date(row.registerDate) : new Date(),
-      quantity: row.quantity ? parseFloat(row.quantity) : null,
-      quality: row.quality ? parseInt(row.quality) : null,
-      locationID: row.locationID ? parseInt(row.locationID) : null,
-      linkedProject: row.linkedProject || null,
-      currentStatus: row.currentStatus || 'Available'
+    const parseErrors = [];
+
+    const normalizeString = (value) => {
+      if (typeof value !== 'string') return value;
+      const trimmed = value.trim();
+      return trimmed === '' ? null : trimmed;
     };
+
+    const toInt = (value, fieldName) => {
+      if (value === undefined || value === null || value === '') return null;
+      const parsed = parseInt(String(value).trim(), 10);
+      if (Number.isNaN(parsed)) {
+        parseErrors.push(`${fieldName} invalido`);
+        return null;
+      }
+      return parsed;
+    };
+
+    const toFloat = (value, fieldName) => {
+      if (value === undefined || value === null || value === '') return null;
+      const parsed = parseFloat(String(value).trim());
+      if (Number.isNaN(parsed)) {
+        parseErrors.push(`${fieldName} invalido`);
+        return null;
+      }
+      return parsed;
+    };
+
+    const toDate = (value, fieldName) => {
+      if (!value) return null;
+      const parsed = new Date(value);
+      if (Number.isNaN(parsed.getTime())) {
+        parseErrors.push(`${fieldName} em formato invalido`);
+        return null;
+      }
+      return parsed;
+    };
+
+    const sampleData = {
+      patientID: toInt(row.patientID, 'patientID'),
+      sampleType: normalizeString(row.sampleType),
+      sampleOrigin: normalizeString(row.sampleOrigin),
+      extractionProtocol: normalizeString(row.extractionProtocol),
+      barcode: toInt(row.barcode, 'barcode'),
+      registrationDate: toDate(row.registerDate, 'registerDate') || new Date(),
+      quantity: toFloat(row.quantity, 'quantity'),
+      quality: toInt(row.quality, 'quality'),
+      locationID: toInt(row.locationID, 'locationID'),
+      linkedProject: normalizeString(row.linkedProject),
+      currentStatus: normalizeString(row.currentStatus) || 'Available'
+    };
+
+    return { data: sampleData, parseErrors };
   }
 
   /**

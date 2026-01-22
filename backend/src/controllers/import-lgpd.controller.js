@@ -536,8 +536,8 @@ class ImportLGPDController {
         comments.push(`# Valores válidos para extractionProtocol: ${extractionProtocols.map(p => p.description).join(', ')}`);
       }
 
+      // CSV deve começar em linha 1 com cabeçalhos (sem comentários antes)
       const rows = [
-        ...comments.map(c => [c]),
         headers,
         exampleRow
       ];

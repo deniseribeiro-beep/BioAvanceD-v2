@@ -212,13 +212,12 @@ class SampleService {
       const newAvailableQty = availableQty - withdrawQty;
       const totalWithdrawn = (sample.totalWithdrawn || 0) + withdrawQty;
 
-      // Determinar novo status
-      let newStatus;
-      if (newAvailableQty <= 0) {
-        newStatus = 'TotallyWithdrawn';
-      } else {
-        newStatus = 'PartiallyWithdrawn';
-      }
+      const lifecycleStatus = SampleModel.computeStatus(
+        sample.originalQuantity || sample.quantity,
+        newAvailableQty,
+        sample.status
+      );
+      const legacyStatus = SampleModel.mapLifecycleToLegacy(lifecycleStatus);
 
       // Registrar movimentação no ledger (imutável)
       const movementID = await SampleMovementModel.generateMovementID(db);
@@ -247,7 +246,7 @@ class SampleService {
 
       // Atualizar amostra
       const update = {
-        currentStatus: newStatus,
+        currentStatus: legacyStatus,
         availableQuantity: newAvailableQty,
         totalWithdrawn: totalWithdrawn,
         withdrawalDate: new Date(),
@@ -256,6 +255,7 @@ class SampleService {
         sampleDestination: withdrawalData.sampleDestination || withdrawalData.withdrawalDestination,
         linkedProject: withdrawalData.linkedProject || sample.linkedProject,
         lastWithdrawalID: movementID,
+        status: lifecycleStatus,
         updatedAt: new Date()
       };
 
@@ -271,7 +271,7 @@ class SampleService {
         movementID,
         withdrawnQuantity: withdrawQty,
         remainingQuantity: newAvailableQty,
-        newStatus
+        newStatus: lifecycleStatus
       };
     } catch (error) {
       logger.error('Erro ao retirar amostra:', error.message);
@@ -327,11 +327,34 @@ class SampleService {
   async updateSample(db, sampleID, updateData) {
     try {
       const samplesCollection = db.collection('amostras');
-      updateData.updatedAt = new Date();
+      const existing = await samplesCollection.findOne({ _id: sampleID });
+      if (!existing) {
+        return null;
+      }
+
+      const nextAvailable = updateData.availableQuantity !== undefined
+        ? updateData.availableQuantity
+        : existing.availableQuantity ?? existing.quantity;
+      const nextOriginal = updateData.originalQuantity !== undefined
+        ? updateData.originalQuantity
+        : existing.originalQuantity ?? existing.quantity;
+
+      const lifecycleStatus = SampleModel.computeStatus(
+        nextOriginal,
+        nextAvailable,
+        updateData.status || existing.status
+      );
+
+      const payload = {
+        ...updateData,
+        status: lifecycleStatus,
+        currentStatus: SampleModel.mapLifecycleToLegacy(lifecycleStatus),
+        updatedAt: new Date()
+      };
       
       const result = await samplesCollection.updateOne(
         { _id: sampleID },
-        { $set: updateData }
+        { $set: payload }
       );
 
       if (result.matchedCount === 0) {
@@ -531,17 +554,12 @@ class SampleService {
         newAvailableQty += returnQty;
       }
 
-      // Determinar novo status
-      let newStatus;
-      if (returnData.condition === 'Inutilizada' && newAvailableQty <= 0) {
-        newStatus = 'Unusable';
-      } else if (newAvailableQty >= (sample.originalQuantity || sample.quantity)) {
-        newStatus = 'Available';
-      } else if (newAvailableQty > 0) {
-        newStatus = sample.totalWithdrawn > newTotalReturned ? 'PartiallyWithdrawn' : 'Available';
-      } else {
-        newStatus = 'TotallyWithdrawn';
-      }
+      const lifecycleStatus = SampleModel.computeStatus(
+        sample.originalQuantity || sample.quantity,
+        newAvailableQty,
+        sample.status
+      );
+      const legacyStatus = SampleModel.mapLifecycleToLegacy(lifecycleStatus);
 
       // Registrar movimentação no ledger (imutável)
       const movementID = await SampleMovementModel.generateMovementID(db);
@@ -570,14 +588,15 @@ class SampleService {
 
       // Atualizar amostra
       const update = {
-        currentStatus: newStatus,
+        currentStatus: legacyStatus,
         availableQuantity: newAvailableQty,
         totalReturned: newTotalReturned,
+        status: lifecycleStatus,
         updatedAt: new Date()
       };
 
       // Limpar campos de retirada se voltou ao estado disponível
-      if (newStatus === 'Available') {
+      if (legacyStatus === 'Available') {
         update.withdrawalDate = null;
         update.withdrawalType = null;
         update.withdrawalResponsible = null;
@@ -597,7 +616,7 @@ class SampleService {
         returnedQuantity: returnQty,
         condition: returnData.condition,
         newAvailableQuantity: newAvailableQty,
-        newStatus
+        newStatus: lifecycleStatus
       };
     } catch (error) {
       logger.error('Erro ao retornar amostra:', error.message);

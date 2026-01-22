@@ -6,6 +6,9 @@ const logger = require('../utils/logger');
 const { v4: uuidv4 } = require('uuid');
 const path = require('path');
 const fs = require('fs');
+const notificationService = require('./notification.service');
+const csv = require('csv-parser');
+let XLSX;
 
 /**
  * Serviço de Importação Assíncrona
@@ -50,11 +53,114 @@ class ImportAsyncService {
       errors.push('Arquivo não encontrado');
     }
 
+    // Tenta coletar e normalizar headers antecipadamente para CSV/XLSX
+    try {
+      if (metadata.extension === '.csv' || metadata.extension === '.xlsx') {
+        metadata.headers = await this.getHeadersFromFile(file, dataType);
+      }
+    } catch (e) {
+      logger.warn('Não foi possível normalizar cabeçalhos:', e.message);
+    }
+
     return {
       valid: errors.length === 0,
       errors,
       metadata,
     };
+  }
+
+  /**
+   * Normaliza texto de header: remove BOM, espaços, acentos e parênteses; lower-case
+   */
+  normalizeHeader(header) {
+    if (header === undefined || header === null) return '';
+    let s = String(header).replace(/^[\uFEFF]/, '').trim().toLowerCase();
+    s = s.replace(/\s*\([^)]*\)\s*/g, ' ');
+    s = s.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    s = s.replace(/\s+/g, '');
+    s = s.replace(/[^a-z0-9]/g, '');
+    return s;
+  }
+
+  /**
+   * Mapeia aliases para a chave canônica
+   */
+  canonicalizeHeader(original) {
+    const normalized = this.normalizeHeader(original);
+    const fieldMapping = {
+      // patientId aliases
+      patientid: 'patientID',
+      idpaciente: 'patientID',
+      idpaciente: 'patientID',
+      // sampleType aliases
+      sampletype: 'sampleType',
+      tipoamostra: 'sampleType',
+      // collection/registration date aliases
+      collectiondate: 'registrationDate',
+      datacoleta: 'registrationDate',
+      registerdate: 'registrationDate',
+    };
+    return fieldMapping[normalized] || (typeof original === 'string' ? original.trim() : normalized);
+  }
+
+  /**
+   * Encontra índice da linha de cabeçalhos em XLSX
+   */
+  findHeaderRow(sheetRows, dataType) {
+    const candidates = new Set([
+      'patientid', 'sampletype', 'sampleorigin', 'extractionprotocol'
+    ]);
+    for (let i = 0; i < sheetRows.length; i++) {
+      const row = sheetRows[i];
+      if (!Array.isArray(row)) continue;
+      const normalizedRow = row.map(h => this.normalizeHeader(h));
+      const hit = normalizedRow.some(h => candidates.has(h));
+      if (hit) return i;
+    }
+    return -1;
+  }
+
+  /**
+   * Lê headers de arquivo CSV/XLSX e aplica canonicalização
+   */
+  async getHeadersFromFile(file, dataType) {
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (ext === '.csv') {
+      return await new Promise((resolve) => {
+        let resolved = false;
+        fs.createReadStream(file.path)
+          .pipe(csv())
+          .on('headers', (headers) => {
+            if (resolved) return;
+            const canonical = headers.map(h => this.canonicalizeHeader(h));
+            resolved = true;
+            resolve(canonical);
+          })
+          .on('error', () => resolve([]))
+          .on('end', () => {
+            if (!resolved) resolve([]);
+          });
+      });
+    }
+
+    if (ext === '.xlsx') {
+      try {
+        if (!XLSX) XLSX = require('xlsx');
+        const workbook = XLSX.readFile(file.path, { cellDates: true });
+        let sheetName = workbook.SheetNames[0];
+        const ws = workbook.Sheets[sheetName];
+        const rows = XLSX.utils.sheet_to_json(ws, { defval: null, raw: false, header: 1 }) || [];
+        const headerIndex = this.findHeaderRow(rows, dataType);
+        if (headerIndex === -1) return [];
+        const headers = (rows[headerIndex] || []).map(h => this.canonicalizeHeader(h));
+        return headers;
+      } catch (e) {
+        logger.warn('Falha ao ler headers XLSX:', e.message);
+        return [];
+      }
+    }
+
+    return [];
   }
 
   /**
@@ -68,6 +174,15 @@ class ImportAsyncService {
       // Valida arquivo
       const validation = await this.validateFile(file, dataType);
       if (!validation.valid) {
+        // Notifica falha imediata com jobID gerado, sem enfileirar
+        await notificationService.notifyJobFailed(userID, {
+          jobID,
+          status: 'failed',
+          dataType,
+          fileName: file.originalname,
+          error: validation.errors.join(', '),
+          completedAt: new Date(),
+        });
         throw new Error(`Validação falhou: ${validation.errors.join(', ')}`);
       }
 
@@ -118,6 +233,15 @@ class ImportAsyncService {
       );
 
       logger.info(`Job ${jobID} criado na fila`);
+
+      // Notifica que job foi enfileirado
+      await notificationService.notifyJobQueued(userID, {
+        jobID,
+        status: 'pending',
+        dataType,
+        fileName: file.originalname,
+        progress: 0,
+      });
 
       return {
         jobID,

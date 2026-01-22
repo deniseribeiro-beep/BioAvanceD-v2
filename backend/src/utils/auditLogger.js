@@ -213,8 +213,8 @@ class AuditLogger {
       const logData = {
         userID: userInfo.userID || 'USR-SYSTEM',
         userName: userInfo.userName || 'USR-SYSTEM', // Já anonimizado pelo extractUserInfo
-        action: action.toUpperCase(),
-        entity: entity || 'Sistema',
+        action: (action || 'LOG').toString().toUpperCase(),
+        entity: formatEntity(entity),
         entityID: entityID || null,
         result: result || 'success',
         severity: severity || 'info',
@@ -410,6 +410,17 @@ class AuditLogger {
       req: req,
       module: 'IA Assistente'
     });
+  }
+}
+
+function formatEntity(entity) {
+  if (!entity) return 'Unknown';
+  const s = entity.toString().trim();
+  if (!s) return 'Unknown';
+  try {
+    return s.charAt(0).toUpperCase() + s.slice(1);
+  } catch (_) {
+    return 'Unknown';
   }
 }
 

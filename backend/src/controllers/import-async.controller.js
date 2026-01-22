@@ -34,6 +34,7 @@ const upload = multer({
     const allowedMimes = [
       'text/csv',
       'application/vnd.ms-excel',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       'application/json',
       'application/zip',
       'application/x-zip-compressed'
@@ -180,9 +181,10 @@ class ImportAsyncController {
       if (req.user) {
         const auditLogger = require('../utils/auditLogger');
         auditLogger.init(db);
+        const entityName = mapDataTypeToEntity(dataType);
         await auditLogger.logImport(
           req,
-          dataType.charAt(0).toUpperCase() + dataType.slice(1),
+          entityName,
           'pending',
           0,
           0,
@@ -337,6 +339,15 @@ class ImportAsyncController {
       });
     }
   }
+}
+
+function mapDataTypeToEntity(dataType) {
+  const s = (dataType || '').toString().toLowerCase();
+  if (s.includes('sample')) return 'Sample';
+  if (s.includes('patient')) return 'Patient';
+  if (s.includes('result')) return 'Result';
+  if (s.includes('temper')) return 'Temperature';
+  return 'Import';
 }
 
 module.exports = new ImportAsyncController();

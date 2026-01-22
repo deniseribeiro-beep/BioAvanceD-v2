@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Card from '../components/UI/Card';
 import Button from '../components/UI/Button';
+import Modal from '../components/UI/Modal';
+import BarcodeLabel from '../components/BarcodeLabel';
 import { Upload, FileText, FileSpreadsheet, ArrowLeft, CheckCircle, XCircle, AlertCircle, Clock } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { importLGPDService } from '../services/api';
@@ -24,11 +26,86 @@ export default function ImportPage() {
     job,
     isPolling,
     importFile,
+    getReport,
     reset,
   } = useAsyncImport();
+  const [showBatchLabels, setShowBatchLabels] = useState(false);
+  const [batchSamples, setBatchSamples] = useState<Array<{ sampleId: string | number; barcode: string; acronym?: string }>>([]);
+  const [loadingLabels, setLoadingLabels] = useState(false);
+  const [labelsError, setLabelsError] = useState<string | null>(null);
 
   const canImportPatients = user?.roleName === 'Administrador' || user?.roleName === 'Coordenador' || user?.accessType === 3 || user?.accessType === 4;
   const canImportSamples = user?.roleName === 'Administrador' || user?.roleName === 'Coordenador' || user?.roleName === 'Técnico' || user?.accessType === 2 || user?.accessType === 3 || user?.accessType === 4;
+
+  const normalizeSamplesFromReport = (report: any) => {
+    const candidates = [
+      report?.samples,
+      report?.createdSamples,
+      report?.successfulSamples,
+      report?.records,
+      report?.data?.samples,
+      report?.data?.records,
+    ];
+
+    const firstList = candidates.find(Array.isArray) || [];
+
+    const mapped = firstList.map((entry: any, index: number) => {
+      const fallbackId = `amostra-${index + 1}`;
+      const sampleId =
+        entry?.sampleID ??
+        entry?.sampleId ??
+        entry?._id ??
+        entry?.id ??
+        entry?.resource?.id ??
+        entry?.resource?.identifier?.[0]?.value ??
+        fallbackId;
+
+      const barcodeValue =
+        entry?.barcode ??
+        entry?.sampleID ??
+        entry?.sampleId ??
+        entry?._id ??
+        entry?.id ??
+        entry?.resource?.identifier?.[0]?.value ??
+        sampleId;
+
+      const acronym =
+        entry?.acronym ??
+        entry?.sampleType ??
+        entry?.type ??
+        (entry?.patientID ? `P${entry.patientID}` : undefined) ??
+        (entry?.resource?.subject?.reference || undefined);
+
+      return {
+        sampleId: sampleId || fallbackId,
+        barcode: String(barcodeValue || sampleId || fallbackId),
+        acronym,
+      };
+    });
+
+    if (mapped.length > 0) {
+      return mapped;
+    }
+
+    if (Array.isArray(report?.fhirResources)) {
+      return report.fhirResources.map((resource: any, index: number) => {
+        const fallbackId = `fhir-${index + 1}`;
+        const sampleId = resource?.id || resource?.resource?.id || fallbackId;
+        const barcodeValue =
+          resource?.identifier?.[0]?.value ||
+          resource?.resource?.identifier?.[0]?.value ||
+          sampleId;
+        const acronym = resource?.resourceType || resource?.resource?.resourceType;
+        return {
+          sampleId,
+          barcode: String(barcodeValue || sampleId || fallbackId),
+          acronym,
+        };
+      });
+    }
+
+    return [];
+  };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
@@ -89,6 +166,26 @@ export default function ImportPage() {
       window.URL.revokeObjectURL(url);
     } catch (err: any) {
       alert(err.response?.data?.error || t('import.errors.templateError'));
+    }
+  };
+
+  const handleOpenBatchLabels = async () => {
+    if (!job?.jobID) return;
+    setLabelsError(null);
+    setLoadingLabels(true);
+    try {
+      const response = await getReport();
+      const reportData = (response as any)?.data?.data || (response as any)?.data || response;
+      const parsed = normalizeSamplesFromReport(reportData || {});
+      setBatchSamples(parsed);
+      setShowBatchLabels(true);
+      if (!parsed || parsed.length === 0) {
+        setLabelsError('Nenhuma amostra retornada para este lote.');
+      }
+    } catch (err: any) {
+      setLabelsError(err?.message || 'Erro ao carregar etiquetas');
+    } finally {
+      setLoadingLabels(false);
     }
   };
 
@@ -291,6 +388,20 @@ export default function ImportPage() {
               )}
             </div>
 
+            {job.status === 'completed' && importType === 'samples' && (
+              <div className="label-print-actions">
+                <Button
+                  variant="primary"
+                  onClick={handleOpenBatchLabels}
+                  disabled={loadingLabels}
+                  title="Imprimir etiquetas das amostras importadas"
+                >
+                  🖨️ Imprimir Etiquetas do Lote
+                </Button>
+                {labelsError && <p className="label-print-error">{labelsError}</p>}
+              </div>
+            )}
+
             {/* Detalhes de Erros */}
             {job.errors && job.errors.length > 0 && (
               <div className="errors-details" style={{ marginTop: '1rem' }}>
@@ -334,6 +445,43 @@ export default function ImportPage() {
             <AlertCircle size={20} />
             <span>{validationError}</span>
           </Card>
+        )}
+
+        {showBatchLabels && (
+          <Modal
+            isOpen={showBatchLabels}
+            onClose={() => setShowBatchLabels(false)}
+            title="Etiquetas das amostras importadas"
+          >
+            <div className="label-print-scope">
+              {loadingLabels ? (
+                <p>Carregando etiquetas...</p>
+              ) : batchSamples.length === 0 ? (
+                <p>Nenhuma amostra retornada para este lote.</p>
+              ) : (
+                <div className="label-print-grid">
+                  {batchSamples.map((sample) => (
+                    <div key={String(sample.sampleId)} className="label-item">
+                      <BarcodeLabel
+                        sampleId={sample.sampleId}
+                        barcode={sample.barcode}
+                        acronym={sample.acronym}
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="label-modal-actions">
+                <Button variant="secondary" onClick={() => setShowBatchLabels(false)}>
+                  Fechar
+                </Button>
+                <Button onClick={() => window.print()} disabled={loadingLabels || batchSamples.length === 0}>
+                  Imprimir
+                </Button>
+              </div>
+            </div>
+          </Modal>
         )}
       </div>
     </div>

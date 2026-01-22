@@ -213,6 +213,107 @@
   flex-shrink: 0;
 }
 
+.label-print-actions {
+  margin-top: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.label-print-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 0.9rem;
+}
+
+.label-print-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+  margin-top: 1rem;
+}
+
+.label-item {
+  display: flex;
+  justify-content: center;
+  page-break-inside: avoid;
+  break-inside: avoid;
+}
+
+.label-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.label-print-scope {
+  position: relative;
+}
+
+@media print {
+  @page {
+    size: A4;
+    margin: 10mm;
+  }
+
+  body {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .modal-overlay {
+    position: static !important;
+    width: auto !important;
+    height: auto !important;
+    min-width: auto !important;
+    min-height: auto !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+  }
+
+  .modal-content {
+    box-shadow: none !important;
+    border: none !important;
+    max-width: none !important;
+    width: auto !important;
+    max-height: none !important;
+  }
+
+  .modal-header,
+  .label-modal-actions,
+  .modal-close {
+    display: none !important;
+  }
+
+  .label-print-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+    margin: 0;
+  }
+
+  .label-item,
+  .barcode-label {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  /* Oculta tudo fora do escopo de impressão de etiquetas */
+  body * {
+    visibility: hidden;
+  }
+  .label-print-scope,
+  .label-print-scope * {
+    visibility: visible;
+  }
+  .label-print-scope {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+  }
+}
+
 /* Responsividade */
 @media (max-width: 768px) {
   .import-container {

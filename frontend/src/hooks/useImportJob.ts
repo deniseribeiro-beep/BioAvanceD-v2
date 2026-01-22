@@ -63,6 +63,49 @@ export function useImportJob(jobID: string | null, options: UseImportJobOptions 
   
   const socketRef = useRef<any>(null);
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const safetyIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const callbacksRef = useRef({ onCompleted, onFailed, onProgress });
+  const jobRef = useRef<ImportJob | null>(null);
+
+  useEffect(() => {
+    callbacksRef.current = { onCompleted, onFailed, onProgress };
+  }, [onCompleted, onFailed, onProgress]);
+
+  useEffect(() => {
+    jobRef.current = job;
+  }, [job]);
+
+  // Busca status do job
+  const fetchJobStatus = useCallback(async () => {
+    if (!jobID) return;
+
+    try {
+      setLoading(true);
+      const response = await importService.getJobStatus(jobID);
+      const jobData = response.data?.data || response.data;
+
+      setJob(jobData);
+      setError(null);
+
+      // Mantém loading enquanto job estiver pendente/processando
+      const isActive = jobData.status === 'pending' || jobData.status === 'processing';
+      setLoading(isActive);
+
+      // Chama callbacks atuais sem reabrir socket por mudança de identidade
+      const { onCompleted: completedCb, onFailed: failedCb, onProgress: progressCb } = callbacksRef.current;
+      if (jobData.status === 'completed' && completedCb) {
+        completedCb(jobData);
+      } else if (jobData.status === 'failed' && failedCb) {
+        failedCb(jobData);
+      } else if (progressCb) {
+        progressCb(jobData);
+      }
+    } catch (err: any) {
+      setError(err.message || 'Erro ao buscar status do job');
+      console.error('Erro ao buscar status do job:', err);
+      setLoading(false);
+    }
+  }, [jobID]);
 
   // Conecta ao WebSocket
   useEffect(() => {
@@ -110,23 +153,48 @@ export function useImportJob(jobID: string | null, options: UseImportJobOptions 
 
     socket.on('connect', () => {
       console.log('WebSocket conectado para monitoramento de importação');
+      socket.emit('subscribe:job', { jobID });
+      if (jobRef.current?.userID) {
+        socket.emit('subscribe:user', { userID: jobRef.current.userID });
+      }
+    });
+
+    // Loga qualquer evento recebido pelo socket.io
+    socket.onAny((eventName, ...args) => {
+      console.log('📡 WS Event:', eventName, 'Payload:', args);
+    });
+
+    // Loga mensagens brutas e tenta parsear para inspecionar jobID/status
+    socket.on('message', (data: any) => {
+      console.log('📡 WS Raw Message:', data);
+      try {
+        const parsed = typeof data === 'string' ? JSON.parse(data) : data;
+        console.log('📦 WS Parsed:', parsed, 'Waiting for JobID:', jobID);
+        if (parsed?.jobID && parsed.jobID === jobID) {
+          fetchJobStatus();
+        }
+      } catch (e) {
+        console.error('❌ Erro no parse do WS:', e);
+      }
     });
 
     socket.on('import-completed', (data: { jobID: string; [key: string]: any }) => {
-      if (data.jobID === jobID) {
-        fetchJobStatus();
-        if (onCompleted && job) {
-          onCompleted(job);
-        }
+      if (data.jobID !== jobID) return;
+      fetchJobStatus();
+      const currentJob = jobRef.current;
+      const cb = callbacksRef.current.onCompleted;
+      if (cb && currentJob) {
+        cb(currentJob);
       }
     });
 
     socket.on('import-failed', (data: { jobID: string; [key: string]: any }) => {
-      if (data.jobID === jobID) {
-        fetchJobStatus();
-        if (onFailed && job) {
-          onFailed(job);
-        }
+      if (data.jobID !== jobID) return;
+      fetchJobStatus();
+      const currentJob = jobRef.current;
+      const cb = callbacksRef.current.onFailed;
+      if (cb && currentJob) {
+        cb(currentJob);
       }
     });
 
@@ -137,35 +205,56 @@ export function useImportJob(jobID: string | null, options: UseImportJobOptions 
         socket.disconnect();
       }
     };
-  }, [jobID, enableWebSocket, onCompleted, onFailed, job]);
+  }, [jobID, enableWebSocket, fetchJobStatus]);
 
-  // Busca status do job
-  const fetchJobStatus = useCallback(async () => {
-    if (!jobID) return;
-
-    try {
-      setLoading(true);
-      const response = await importService.getJobStatus(jobID);
-      const jobData = response.data;
-
-      setJob(jobData);
-      setError(null);
-
-      // Chama callbacks
-      if (jobData.status === 'completed' && onCompleted) {
-        onCompleted(jobData);
-      } else if (jobData.status === 'failed' && onFailed) {
-        onFailed(jobData);
-      } else if (onProgress) {
-        onProgress(jobData);
+  // Safety net: polling de backup enquanto loading estiver true
+  useEffect(() => {
+    if (!jobID || !loading) {
+      if (safetyIntervalRef.current) {
+        clearInterval(safetyIntervalRef.current);
+        safetyIntervalRef.current = null;
       }
-    } catch (err: any) {
-      setError(err.message || 'Erro ao buscar status do job');
-      console.error('Erro ao buscar status do job:', err);
-    } finally {
-      setLoading(false);
+      return;
     }
-  }, [jobID, onCompleted, onFailed, onProgress]);
+
+    if (safetyIntervalRef.current) return;
+
+    safetyIntervalRef.current = setInterval(async () => {
+      try {
+        const response = await importService.getJobStatus(jobID);
+        const jobData = response.data?.data || response.data;
+
+        setJob(jobData);
+        setError(null);
+
+        const isActive = jobData.status === 'pending' || jobData.status === 'processing';
+        setLoading(isActive);
+
+        const { onCompleted: completedCb, onFailed: failedCb, onProgress: progressCb } = callbacksRef.current;
+
+        if (jobData.status === 'completed') {
+          if (completedCb) completedCb(jobData);
+          clearInterval(safetyIntervalRef.current as NodeJS.Timeout);
+          safetyIntervalRef.current = null;
+        } else if (jobData.status === 'failed') {
+          if (failedCb) failedCb(jobData);
+          clearInterval(safetyIntervalRef.current as NodeJS.Timeout);
+          safetyIntervalRef.current = null;
+        } else if (progressCb) {
+          progressCb(jobData);
+        }
+      } catch (err) {
+        console.error('Erro no polling de backup do job:', err);
+      }
+    }, 2000);
+
+    return () => {
+      if (safetyIntervalRef.current) {
+        clearInterval(safetyIntervalRef.current);
+        safetyIntervalRef.current = null;
+      }
+    };
+  }, [jobID, loading]);
 
   // Polling automático
   useEffect(() => {

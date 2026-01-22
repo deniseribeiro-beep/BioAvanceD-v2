@@ -94,9 +94,14 @@ export interface Sample {
   totalWithdrawn?: number; // Total já retirado
   totalReturned?: number; // Total já devolvido
   lastWithdrawalID?: number; // ID da última retirada
+  // Controle de volume (normaliza naming para front/back)
+  volumeInitial?: number; // Volume inicial
+  volumeCurrent?: number; // Volume atual
+  checked?: boolean; // Flag opcional para seleção em UI (fallback a arrays de IDs)
   // Status de disponibilidade
   availabilityStatus?: 'Disponível' | 'Parcialmente Disponível' | 'Indisponível';
   currentStatus?: 'Available' | 'PartiallyWithdrawn' | 'TotallyWithdrawn' | 'Withdrawn' | 'Expired' | 'Destroyed' | 'Unusable';
+  status?: 'AVAILABLE' | 'PARTIAL' | 'DEPLETED' | 'UNAVAILABLE';
   // Campos de retirada
   withdrawalDate?: Date | string;
   withdrawalType?: 'Parcial' | 'Total';
