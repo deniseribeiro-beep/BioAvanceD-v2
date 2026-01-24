@@ -55,8 +55,17 @@ async function initWorker() {
       'import-queue',
       async (job) => {
         const { jobID, userID, dataType, filePath, fileName, options } = job.data;
+        const dataTypeNormalized = (dataType || '').toString().trim().toLowerCase();
+        const allowedTypes = new Set(['patients', 'samples', 'results', 'temperature', 'temperature-iot']);
 
-        logger.info(`🔄 Processando job ${jobID} - Tipo: ${dataType}`);
+        if (!dataTypeNormalized) {
+          throw new Error(`dataType ausente no job ${job.id || jobID || '(sem id)'}`);
+        }
+        if (!allowedTypes.has(dataTypeNormalized)) {
+          throw new Error(`Tipo de dados não suportado: ${dataType}`);
+        }
+
+        logger.info(`🔄 Processando job ${jobID || job.id} - Tipo: ${dataTypeNormalized}`);
 
         try {
           // Atualiza status para processing
@@ -67,7 +76,7 @@ async function initWorker() {
           await notificationService.notifyJobStarted(userID, {
             jobID,
             status: 'processing',
-            dataType,
+            dataType: dataTypeNormalized,
             fileName,
             progress: 0,
           });
@@ -75,7 +84,7 @@ async function initWorker() {
           let result;
 
           // Processa baseado no tipo
-          switch (dataType) {
+          switch (dataTypeNormalized) {
             case 'patients':
               result = await patientWorker.process(db, jobID, filePath, options);
               break;
@@ -121,7 +130,7 @@ async function initWorker() {
           await importAsyncService.saveMetrics(db, {
             jobID,
             userID,
-            dataType,
+            dataType: dataTypeNormalized,
             totalRecords: result.total,
             successCount: result.success,
             errorCount: result.errors.length,
@@ -132,15 +141,15 @@ async function initWorker() {
 
           // Registra no AuditLog conforme fluxograma (entidade segura)
           const auditLogger = require('../utils/auditLogger');
-          const entityName = dataType === 'samples'
+          const entityName = dataTypeNormalized === 'samples'
             ? 'Sample'
-            : dataType === 'patients'
+            : dataTypeNormalized === 'patients'
               ? 'Patient'
-              : dataType === 'results'
+              : dataTypeNormalized === 'results'
                 ? 'Result'
-                : dataType === 'temperature'
+                : dataTypeNormalized === 'temperature'
                   ? 'Temperature'
-                  : (dataType || 'Import');
+                  : (dataTypeNormalized || 'Import');
 
           auditLogger.init(db);
           await auditLogger.logImport(
@@ -152,7 +161,7 @@ async function initWorker() {
             result.errors.length,
             {
               jobID,
-              dataType,
+              dataType: dataTypeNormalized,
               fhirResourcesCreated: result.fhirResourcesCreated || 0,
               fhirResourcesUpdated: result.fhirResourcesUpdated || 0,
               processingTime: result.processingTime || 0,
@@ -163,7 +172,7 @@ async function initWorker() {
           await getNotificationService().notifyJobCompleted(userID, {
             jobID,
             status: 'completed',
-            dataType,
+            dataType: dataTypeNormalized,
             fileName: fileName,
             successCount: result.success,
             errorCount: result.errors.length,
@@ -185,28 +194,28 @@ async function initWorker() {
           // Registra no AuditLog
           const auditLogger = require('../utils/auditLogger');
           auditLogger.init(db);
-          const entityFailName = dataType === 'samples'
+          const entityFailName = dataTypeNormalized === 'samples'
             ? 'Sample'
-            : dataType === 'patients'
+            : dataTypeNormalized === 'patients'
               ? 'Patient'
-              : dataType === 'results'
+              : dataTypeNormalized === 'results'
                 ? 'Result'
-                : dataType === 'temperature'
+                : dataTypeNormalized === 'temperature'
                   ? 'Temperature'
-                  : (dataType || 'Import');
+                  : (dataTypeNormalized || 'Import');
 
           await auditLogger.logError(
             null,
             entityFailName,
             error,
-            { action: 'IMPORT', jobID, dataType, fileName }
+            { action: 'IMPORT', jobID, dataType: dataTypeNormalized, fileName }
           );
 
           // Envia notificação de falha
           await getNotificationService().notifyJobFailed(userID, {
             jobID,
             status: 'failed',
-            dataType,
+            dataType: dataTypeNormalized,
             fileName: fileName,
             error: error.message,
             completedAt: new Date(),

@@ -7,7 +7,7 @@ class ImportJob {
   constructor(data) {
     this.jobID = data.jobID || null;
     this.userID = data.userID || null;
-    this.dataType = data.dataType || null; // 'patients', 'samples', 'results', 'temperature'
+    this.dataType = data.dataType || null; // 'patients', 'samples', 'results', 'temperature', 'temperature-iot'
     this.filePath = data.filePath || null;
     this.fileName = data.fileName || null;
     this.fileSize = data.fileSize || null;
@@ -34,7 +34,7 @@ class ImportJob {
 
     if (!data.dataType) {
       errors.push('Tipo de dados (dataType) é obrigatório');
-    } else if (!['patients', 'samples', 'results', 'temperature'].includes(data.dataType)) {
+    } else if (!['patients', 'samples', 'results', 'temperature', 'temperature-iot'].includes(data.dataType)) {
       errors.push('Tipo de dados inválido');
     }
 

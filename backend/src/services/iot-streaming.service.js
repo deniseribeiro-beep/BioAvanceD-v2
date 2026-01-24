@@ -125,14 +125,18 @@ class IoTStreamingService {
 
       // Adiciona job na fila para processamento assíncrono
       const queue = getQueue();
+      const jobId = `temp-iot-${Date.now()}-${deviceId}`;
+
       await queue.add(
         'temperature-iot',
         {
+          jobID: jobId,
+          dataType: 'temperature-iot',
           temperatureData,
           deviceId,
         },
         {
-          jobId: `temp-iot-${Date.now()}-${deviceId}`,
+          jobId,
           priority: 5, // Alta prioridade para dados em tempo real
         }
       );

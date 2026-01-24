@@ -29,10 +29,32 @@ if (allowedOrigins.length === 0) {
 const isDev = env.NODE_ENV !== "production";
 // Add common Vite dev origins when in development
 if (isDev) {
-  ["http://localhost:5173", "http://127.0.0.1:5173"].forEach((origin) => {
+  [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:4173",
+    "http://127.0.0.1:4173",
+  ].forEach((origin) => {
     if (!allowedOrigins.includes(origin)) allowedOrigins.push(origin);
   });
 }
+
+// Allow-all switch for troubleshooting (use only in controlled envs)
+const allowAllCors = Boolean(env.CORS_ALLOW_ALL);
+
+// Normalize origins to avoid trailing-slash or case issues
+const normalizeOrigin = (origin) => {
+  if (!origin) return "";
+  try {
+    const url = new URL(origin);
+    return `${url.protocol}//${url.host}`.replace(/\/$/, "").toLowerCase();
+  } catch (_) {
+    // If it's not a valid URL, fallback to trimmed lower-case
+    return origin.replace(/\/$/, "").toLowerCase();
+  }
+};
+
+const normalizedAllowed = new Set(allowedOrigins.map(normalizeOrigin));
 
 // =======================
 // MIDDLEWARES
@@ -85,8 +107,20 @@ app.use((req, res, next) => {
 app.use(
   cors({
     origin: (origin, callback) => {
+      if (allowAllCors) return callback(null, true);
       if (!origin) return callback(null, true);
-      if (allowedOrigins.includes(origin)) return callback(null, true);
+
+      const normalizedOrigin = normalizeOrigin(origin);
+      if (normalizedAllowed.has(normalizedOrigin)) return callback(null, true);
+
+      // Also allow when only host matches (e.g., different dev ports)
+      try {
+        const url = new URL(origin);
+        const hostOnly = `${url.protocol}//${url.hostname}`;
+        if (normalizedAllowed.has(normalizeOrigin(hostOnly))) return callback(null, true);
+      } catch (_) {}
+
+      logger.warn(`CORS bloqueado para origem: ${origin}`);
       return callback(new Error("Not allowed by CORS"));
     },
     credentials: true,
