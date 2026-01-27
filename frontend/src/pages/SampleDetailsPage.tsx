@@ -1,11 +1,14 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
 import Button from '../components/UI/Button';
 import Card from '../components/UI/Card';
+import Input from '../components/UI/Input';
+import Select from '../components/UI/Select';
 import { useSamples } from '../hooks/useSamples';
 import { useLocations } from '../hooks/useLocations';
 import { useLanguage } from '../contexts/LanguageContext';
+import { useAuth } from '../contexts/AuthContext';
 import SampleFilesSection from '../components/SampleFilesSection';
 import { Sample } from '../types/models';
 import './SamplesPage.css';
@@ -14,9 +17,49 @@ export default function SampleDetailsPage() {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
   const { t } = useLanguage();
-  const { samples, loading, error } = useSamples();
+  const { user, hasRole } = useAuth();
+  const { samples, loading, error, updateSample } = useSamples();
   const { locations = [], loadLocations } = useLocations();
   const [sample, setSample] = useState<Sample | null>(null);
+  const [isEditing, setIsEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [form, setForm] = useState({
+    locationID: '',
+    linkedProject: '',
+    availableQuantity: '',
+    currentStatus: '',
+  });
+
+  const computeAvailability = (s: Sample | null | undefined) => {
+    const initial = s?.volumeInitial ?? s?.originalQuantity ?? s?.quantity ?? 0;
+    const current = s?.volumeCurrent ?? s?.availableQuantity ?? s?.quantity ?? 0;
+
+    if (current <= 0) {
+      return {
+        label: 'Indisponível',
+        className: 'availability-indisponível',
+        current,
+        initial,
+      };
+    }
+
+    if (current < initial) {
+      return {
+        label: 'Parcialmente Disponível',
+        className: 'availability-parcialmente-disponível',
+        current,
+        initial,
+      };
+    }
+
+    return {
+      label: 'Disponível',
+      className: 'availability-disponível',
+      current,
+      initial,
+    };
+  };
 
   // Carrega localizações ao montar
   useEffect(() => {
@@ -50,6 +93,12 @@ export default function SampleDetailsPage() {
       
       if (foundSample) {
         setSample(foundSample);
+        setForm({
+          locationID: foundSample.locationID ? String(foundSample.locationID) : '',
+          linkedProject: foundSample.linkedProject || '',
+          availableQuantity: (foundSample.volumeCurrent ?? foundSample.availableQuantity ?? foundSample.quantity ?? '').toString(),
+          currentStatus: foundSample.currentStatus || 'Available',
+        });
       } else {
         // Se carregou mas não encontrou, define como null
         console.warn('Amostra não encontrada:', { 
@@ -173,6 +222,107 @@ export default function SampleDetailsPage() {
     );
   }
 
+  const effectiveSample = useMemo(() => {
+    if (!isEditing) return sample;
+    const parsedAvailable = Number(form.availableQuantity);
+    const parsedLocation = form.locationID ? Number(form.locationID) : undefined;
+    return {
+      ...sample,
+      availableQuantity: Number.isFinite(parsedAvailable) ? parsedAvailable : sample?.availableQuantity,
+      volumeCurrent: Number.isFinite(parsedAvailable) ? parsedAvailable : sample?.volumeCurrent,
+      locationID: parsedLocation ?? sample?.locationID,
+      linkedProject: form.linkedProject || sample?.linkedProject,
+      currentStatus: (form.currentStatus as Sample['currentStatus']) || sample?.currentStatus,
+    } as Sample;
+  }, [isEditing, sample, form.availableQuantity, form.locationID, form.linkedProject, form.currentStatus]);
+
+  const availabilityPreview = computeAvailability(effectiveSample);
+
+  const locationOptions = useMemo(() => {
+    if (!locations || locations.length === 0) {
+      return [{ value: '', label: t('samples.noLocations', 'Sem localizações disponíveis') }];
+    }
+    return [
+      { value: '', label: t('common.select') || 'Selecione' },
+      ...locations.map(loc => ({
+        value: loc.locationID,
+        label: `${loc.locationID} - Bloco ${loc.block} / Prat. ${loc.rack} / Gav. ${loc.drawer} / Caixa ${loc.box}`,
+      })),
+    ];
+  }, [locations, t]);
+
+  const statusOptions = useMemo(() => ([
+    { value: 'Available', label: t('samples.status.available', 'Disponível') },
+    { value: 'PartiallyWithdrawn', label: t('samples.status.partiallyWithdrawn', 'Parcialmente Retirada') },
+    { value: 'TotallyWithdrawn', label: t('samples.status.totallyWithdrawn', 'Totalmente Retirada') },
+    { value: 'Withdrawn', label: t('samples.status.withdrawn', 'Retirada') },
+    { value: 'Expired', label: t('samples.status.expired', 'Expirada') },
+    { value: 'Destroyed', label: t('samples.status.destroyed', 'Destruída') },
+    { value: 'Unusable', label: t('samples.status.unusable', 'Inutilizada') },
+  ]), [t]);
+
+  const handleChange = (field: keyof typeof form, value: string) => {
+    setForm(prev => ({ ...prev, [field]: value }));
+  };
+
+  const handleCancel = () => {
+    if (sample) {
+      setForm({
+        locationID: sample.locationID ? String(sample.locationID) : '',
+        linkedProject: sample.linkedProject || '',
+        availableQuantity: (sample.volumeCurrent ?? sample.availableQuantity ?? sample.quantity ?? '').toString(),
+        currentStatus: sample.currentStatus || 'Available',
+      });
+    }
+    setSaveError(null);
+    setIsEditing(false);
+  };
+
+  const handleSave = async () => {
+    if (!sample) return;
+    setSaving(true);
+    setSaveError(null);
+
+    const parsedAvailable = form.availableQuantity === '' ? null : Number(form.availableQuantity);
+    if (parsedAvailable !== null && (!Number.isFinite(parsedAvailable) || parsedAvailable < 0)) {
+      setSaveError('Quantidade disponível inválida');
+      setSaving(false);
+      return;
+    }
+
+    const payload: Partial<Sample> = {
+      linkedProject: form.linkedProject?.trim() || undefined,
+      locationID: form.locationID ? Number(form.locationID) : undefined,
+      currentStatus: (form.currentStatus as Sample['currentStatus']) || undefined,
+    };
+
+    if (parsedAvailable !== null) {
+      payload.availableQuantity = parsedAvailable;
+      payload.volumeCurrent = parsedAvailable;
+    }
+
+    try {
+      const targetId = sample._id || sample.sampleID || id || '';
+      const updated = await updateSample(targetId, payload);
+      // Atualiza estado local para refletir a edição imediatamente
+      setSample(prev => ({
+        ...prev!,
+        ...payload,
+        availableQuantity: payload.availableQuantity ?? prev?.availableQuantity,
+        volumeCurrent: payload.volumeCurrent ?? prev?.volumeCurrent,
+      }));
+      // Se backend retornou amostra, sincroniza
+      if (updated) {
+        setSample(updated as Sample);
+      }
+      setIsEditing(false);
+    } catch (err: any) {
+      setSaveError(err?.message || 'Erro ao salvar alterações');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <div className="page">
       <div className="page-header">
@@ -189,17 +339,40 @@ export default function SampleDetailsPage() {
             Detalhes da Amostra - {sample.barcode || sample.sampleID || 'N/A'}
           </h1>
 
-          <div style={{ marginTop: '0.5rem', display: 'flex', gap: '0.5rem' }}>
-            <Button variant="secondary" onClick={() => navigate(`/samples/${id}/label`)} style={{ padding: '0.25rem 0.5rem', fontSize: '0.85rem' }}>
-              {t('samples.label') || 'Etiqueta'}
-            </Button>
+          <div style={{ marginBottom: '0.5rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
             <Button variant="secondary" onClick={() => navigate(`/samples/${id}/chain`)} style={{ padding: '0.25rem 0.5rem', fontSize: '0.85rem' }}>
               {t('samples.chain') || 'Fluxo'}
             </Button>
-            <Button variant="secondary" onClick={() => navigate(`/samples/${id}/movements`)} style={{ padding: '0.25rem 0.5rem', fontSize: '0.85rem' }}>
-              {t('samples.movements') || 'Movimentações'}
-            </Button>
+            {(hasRole(['Administrador', 'Coordenador']) || user?.roleName === 'Administrador' || user?.roleName === 'Coordenador') && (
+              <Button
+                variant={isEditing ? 'secondary' : 'primary'}
+                onClick={() => setIsEditing(!isEditing)}
+                style={{ padding: '0.25rem 0.5rem', fontSize: '0.85rem' }}
+              >
+                {isEditing ? (t('common.cancel') || 'Cancelar') : (t('common.edit') || 'Editar')}
+              </Button>
+            )}
           </div>
+          {isEditing && (
+            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
+              <Button
+                variant="primary"
+                onClick={handleSave}
+                disabled={saving}
+                style={{ padding: '0.35rem 0.75rem' }}
+              >
+                {saving ? (t('common.loading') || 'Salvando...') : (t('common.save') || 'Salvar')}
+              </Button>
+              <Button variant="secondary" onClick={handleCancel} disabled={saving} style={{ padding: '0.35rem 0.75rem' }}>
+                {t('common.cancel') || 'Cancelar'}
+              </Button>
+              {saveError && (
+                <span style={{ color: 'var(--danger)', alignSelf: 'center', fontSize: '0.9rem' }}>
+                  {saveError}
+                </span>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
@@ -248,28 +421,43 @@ export default function SampleDetailsPage() {
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', backgroundColor: 'var(--surface)', borderRadius: '4px' }}>
               <span style={{ fontWeight: 500, color: 'var(--text-light)' }}>Quantidade Total:</span>
               <span style={{ color: 'var(--text)' }}>
-                {sample.quantity?.toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) || 'N/A'} µL
+                {availabilityPreview.initial.toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} µL
               </span>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', backgroundColor: 'var(--surface)', borderRadius: '4px' }}>
               <span style={{ fontWeight: 500, color: 'var(--text-light)' }}>Quantidade Disponível:</span>
-              <span style={{ color: 'var(--text)' }}>
-                {sample.availableQuantity?.toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) || sample.quantity?.toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) || 'N/A'} µL
-              </span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', backgroundColor: 'var(--surface)', borderRadius: '4px' }}>
-              <span style={{ fontWeight: 500, color: 'var(--text-light)' }}>Status de Disponibilidade:</span>
-              <span className={`availability-badge availability-${(sample.availabilityStatus || 'Disponível').toLowerCase().replace(' ', '-')}`}>
-                {sample.availabilityStatus || 'Disponível'}
-              </span>
+              {isEditing ? (
+                <div style={{ width: '180px' }}>
+                  <Input
+                    type="number"
+                    step="0.1"
+                    min="0"
+                    value={form.availableQuantity}
+                    onChange={(e) => handleChange('availableQuantity', e.target.value)}
+                    placeholder={t('samples.quantity', 'Quantidade') || 'Quantidade'}
+                  />
+                </div>
+              ) : (
+                <span style={{ color: 'var(--text)' }}>
+                  {availabilityPreview.current.toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} µL
+                </span>
+              )}
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', backgroundColor: 'var(--surface)', borderRadius: '4px' }}>
               <span style={{ fontWeight: 500, color: 'var(--text-light)' }}>Status Atual:</span>
-              <span className={`status-badge status-${(sample.currentStatus || 'Available').toLowerCase()}`}>
-                {sample.currentStatus === 'Available' ? 'Disponível' : 
-                 sample.currentStatus === 'Withdrawn' ? 'Retirada' : 
-                 sample.currentStatus || 'Disponível'}
-              </span>
+              {isEditing ? (
+                <div style={{ minWidth: '220px' }}>
+                  <Select
+                    value={form.currentStatus}
+                    onChange={(e) => handleChange('currentStatus', e.target.value)}
+                    options={statusOptions}
+                  />
+                </div>
+              ) : (
+                <span className={`availability-badge ${availabilityPreview.className}`}>
+                  {availabilityPreview.label}
+                </span>
+              )}
             </div>
           </div>
         </Card>
@@ -283,14 +471,24 @@ export default function SampleDetailsPage() {
             <div style={{ padding: '0.75rem', backgroundColor: 'var(--surface)', borderRadius: '4px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
                 <span style={{ fontWeight: 500, color: 'var(--text-light)' }}>Localização:</span>
-                <span style={{ 
-                  fontFamily: 'monospace', 
-                  color: 'var(--primary)', 
-                  fontWeight: 600,
-                  fontSize: '0.875rem'
-                }}>
-                  {getLocationInfo(sample.locationID).summary}
-                </span>
+                {isEditing ? (
+                  <div style={{ minWidth: '260px' }}>
+                    <Select
+                      value={form.locationID}
+                      onChange={(e) => handleChange('locationID', e.target.value)}
+                      options={locationOptions}
+                    />
+                  </div>
+                ) : (
+                  <span style={{ 
+                    fontFamily: 'monospace', 
+                    color: 'var(--primary)', 
+                    fontWeight: 600,
+                    fontSize: '0.875rem'
+                  }}>
+                    {getLocationInfo(effectiveSample?.locationID).summary}
+                  </span>
+                )}
               </div>
               <div style={{ 
                 fontSize: '0.8125rem', 
@@ -299,12 +497,22 @@ export default function SampleDetailsPage() {
                 paddingTop: '0.5rem',
                 borderTop: '1px solid var(--border)'
               }}>
-                {getLocationInfo(sample.locationID).details}
+                {getLocationInfo(effectiveSample?.locationID).details}
               </div>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', backgroundColor: 'var(--surface)', borderRadius: '4px' }}>
               <span style={{ fontWeight: 500, color: 'var(--text-light)' }}>Projeto Vinculado:</span>
-              <span style={{ color: 'var(--text)' }}>{sample.linkedProject || 'N/A'}</span>
+              {isEditing ? (
+                <div style={{ flex: 1, maxWidth: '420px', marginLeft: '1rem' }}>
+                  <Input
+                    value={form.linkedProject}
+                    onChange={(e) => handleChange('linkedProject', e.target.value)}
+                    placeholder={t('samples.linkedProject', 'Projeto vinculado') || 'Projeto vinculado'}
+                  />
+                </div>
+              ) : (
+                <span style={{ color: 'var(--text)' }}>{effectiveSample?.linkedProject || 'N/A'}</span>
+              )}
             </div>
           </div>
         </Card>

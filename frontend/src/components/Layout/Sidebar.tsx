@@ -4,19 +4,19 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useLanguage } from '../../contexts/LanguageContext';
 import { canRoleAccessRoute } from '../../utils/rolePermissions';
 import { 
+  Menu, 
+  X, 
   LayoutDashboard, 
   Users, 
   FlaskConical, 
   FileText, 
-  UserCog,
-  Shield,
-  FileSearch,
-  Box,
-  BarChart3,
-  MessageCircle,
-  Database,
-  Menu,
-  X
+  Box, 
+  MessageCircle, 
+  Shield, 
+  BarChart3, 
+  FileSearch, 
+  Database, 
+  UserCog 
 } from 'lucide-react';
 import './Sidebar.css';
 
@@ -42,6 +42,7 @@ export default function Sidebar() {
     { path: '/patients', icon: Users, label: t('navigation.patients'), roles: ['Administrador', 'Coordenador', 'Técnico'] },
     { path: '/samples', icon: FlaskConical, label: t('navigation.samples'), roles: ['Administrador', 'Coordenador', 'Técnico'] },
     { path: '/samples/withdrawal-return', icon: FlaskConical, label: t('navigation.withdrawalReturn') || 'Retirada/Devolução', roles: ['Administrador', 'Coordenador', 'Técnico'] },
+    { path: '/samples/custody-reports', icon: FileSearch, label: t('navigation.custodyReports') || 'Relatórios de Custódia', roles: ['Administrador', 'Coordenador', 'Técnico'] },
     { path: '/results', icon: FileText, label: t('navigation.results'), roles: ['Administrador', 'Coordenador', 'Técnico'] },
     { path: '/facility-management', icon: Box, label: t('navigation.facilityManagement'), roles: ['Administrador', 'Coordenador', 'Técnico'] },
     { path: '/assistant', icon: MessageCircle, label: t('navigation.assistant'), roles: ['Administrador', 'Coordenador', 'Técnico', 'Usuário Externo'] },

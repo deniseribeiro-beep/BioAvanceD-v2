@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Card from '../components/UI/Card';
-import { Users, FlaskConical, FileText, Thermometer, Box, Radio, Shield } from 'lucide-react';
+import { Users, FlaskConical, FileText, Thermometer, Box, Radio, Shield, FileSearch } from 'lucide-react';
 import { usePatients } from '../hooks/usePatients';
 import { useSamples } from '../hooks/useSamples';
 import { useResults } from '../hooks/useResults';
@@ -104,6 +104,15 @@ export default function Dashboard() {
         link: '/samples',
         allowedRoles: ['Administrador', 'Coordenador', 'Técnico'],
         allowedAccessTypes: [1, 2, 3],
+      },
+      {
+        title: t('dashboard.custodyReports') || 'Relatórios de Custódia',
+        value: stats.samples,
+        icon: FileSearch,
+        color: '#4b5563',
+        link: '/samples/custody-reports',
+        allowedRoles: ['Administrador', 'Coordenador', 'Técnico'],
+        allowedAccessTypes: [2, 3, 4],
       },
       {
         title: t('dashboard.results'),

@@ -1,78 +1,86 @@
-import { useEffect, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
+import Card from '../components/UI/Card';
 import Button from '../components/UI/Button';
-import { useLanguage } from '../contexts/LanguageContext';
-import { sampleChainApi } from '../services/sampleChainApi';
+import BarcodeLabel from '../components/BarcodeLabel';
+import { useSamples } from '../hooks/useSamples';
 
 export default function SampleLabelPage() {
   const { id } = useParams<{ id: string }>();
-  const { t } = useLanguage();
-  const [loading, setLoading] = useState(true);
-  const [blobUrl, setBlobUrl] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { samples, loading } = useSamples();
+  const [hasPrinted, setHasPrinted] = useState(false);
 
-  useEffect(() => {
-    if (!id) return;
-    setLoading(true);
-    sampleChainApi.getLabelBlob(id)
-      .then(res => {
-        const url = URL.createObjectURL(res.data);
-        setBlobUrl(url);
-      })
-      .catch(err => {
-        console.error(err);
-        setError(err?.message || 'Erro ao buscar etiqueta');
-      })
-      .finally(() => setLoading(false));
+  const sample = useMemo(() => {
+    if (!samples || !id) return null;
+    const search = String(id).trim().toLowerCase();
+    return samples.find((s) => {
+      const keys = [
+        s._id,
+        s.id,
+        s.sampleID,
+        s.sampleId,
+        s.barcode,
+        s.code,
+      ].map((v) => String(v ?? '').trim().toLowerCase());
+      return keys.includes(search);
+    }) || null;
+  }, [samples, id]);
 
-    return () => {
-      if (blobUrl) {
-        URL.revokeObjectURL(blobUrl);
-      }
-    };
-  }, [id]);
-
-  const handleDownload = () => {
-    if (!blobUrl || !id) return;
-    const a = document.createElement('a');
-    a.href = blobUrl;
-    a.download = `label_${id}.png`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-  };
+  const formattedBarcode = useMemo(() => {
+    if (!sample) return '';
+    const base =
+      sample.barcode ||
+      sample.code ||
+      sample.sampleID ||
+      sample.sampleId ||
+      sample._id ||
+      sample.id ||
+      '';
+    const value = String(base).trim();
+    if (!value) return '';
+    return value.startsWith('BR-') ? value : `BR-${value}`;
+  }, [sample]);
 
   const handlePrint = () => {
-    if (!blobUrl) return;
-    const w = window.open('', '_blank');
-    if (!w) return;
-    w.document.write(`<img src="${blobUrl}" style="max-width:100%;height:auto;" />`);
-    w.document.close();
-    w.focus();
-    setTimeout(() => w.print(), 300);
+    if (hasPrinted) return;
+    window.print();
+    setHasPrinted(true);
   };
+
+  if (loading && !sample) {
+    return (
+      <div className="page">
+        <p>Carregando...</p>
+      </div>
+    );
+  }
+
+  if (!sample) {
+    return (
+      <div className="page">
+        <p>Amostra não encontrada.</p>
+      </div>
+    );
+  }
 
   return (
     <div className="page">
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-        <h1>{t('samples.label') || 'Etiqueta da Amostra'}</h1>
-        <div>
-          <Button variant="secondary" onClick={handleDownload} style={{ marginRight: '0.5rem', padding: '0.35rem 0.6rem', fontSize: '0.9rem' }}>
-            {t('common.download') || 'Download'}
-          </Button>
-          <Button variant="secondary" onClick={handlePrint} style={{ padding: '0.35rem 0.6rem', fontSize: '0.9rem' }}>
-            {t('common.print') || 'Print'}
-          </Button>
-        </div>
+      <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <h1 className="page-title">Etiqueta</h1>
+        <Button variant="primary" onClick={handlePrint} disabled={hasPrinted}>
+          {hasPrinted ? 'Impressão realizada' : 'Imprimir Etiqueta'}
+        </Button>
       </div>
 
-      {loading && <p>{t('common.loading') || 'Carregando...'}</p>}
-      {error && <p style={{ color: 'var(--danger)' }}>{t('common.error') || 'Erro'}: {error}</p>}
-      {blobUrl && (
-        <div style={{ textAlign: 'center' }}>
-          <img src={blobUrl} alt="Label" style={{ maxWidth: '100%', border: '1px solid var(--surface)' }} />
+      <Card>
+        <div style={{ display: 'flex', justifyContent: 'center', padding: '2rem' }}>
+          <BarcodeLabel
+            title={sample.sampleType || 'Amostra'}
+            barcode={formattedBarcode}
+            code={formattedBarcode}
+          />
         </div>
-      )}
+      </Card>
     </div>
   );
 }

@@ -33,7 +33,8 @@
     "select": "Selecione",
     "basicData": "Dados Básicos",
     "quantity": "Quantidade",
-    "location": "Localização"
+    "location": "Localização",
+    "details": "Detalhes"
   },
   "auth": {
     "login": "Login",
@@ -131,7 +132,8 @@
     "access": "Acessos",
     "backup": "Backup",
     "security": "Segurança",
-    "userSecurity": "Minha Segurança"
+    "userSecurity": "Minha Segurança",
+    "custodyReports": "Relatórios de Custódia"
   },
   "roles": {
     "administrator": "Administrador",
@@ -283,6 +285,10 @@
     "createError": "Erro ao cadastrar amostra",
     "sampleOrigin": "Origem da Amostra",
     "extractionProtocol": "Protocolo de Extração",
+    "label": "Etiqueta",
+    "chain": "Cadeia de Custódia",
+    "chainDescription": "Use a tela dedicada para registrar retiradas e devoluções. Acompanhe abaixo links rápidos para movimentações.",
+    "movements": "Movimentações",
     "barcode": "Código de Barras",
     "registerDate": "Data de Registro",
     "quantity": "Quantidade",
@@ -341,6 +347,8 @@
     "sampleType": "Tipo de Amostra",
     "collectionDate": "Data de Coleta",
     "withdraw": "Retirar Amostra",
+    "viewMovements": "Ver movimentos da amostra",
+    "goToWithdrawalReturn": "Ir para Retirada/Devolução",
     "deleteConfirm": "Tem certeza que deseja excluir esta amostra?",
     "noResults": "Nenhum resultado associado a esta amostra",
     "noBarcode": "Esta amostra não possui código de barras",
@@ -429,6 +437,7 @@
     "movementHistory": "Histórico de Movimentações",
     "withdrawSuccess": "Retirada registrada com sucesso",
     "returnSuccess": "Devolução registrada com sucesso",
+    "labelUnavailable": "Etiqueta não disponível para esta amostra no momento.",
     "quantityUnavailable": "Quantidade indisponível",
     "noPendingReturn": "Não há quantidade pendente de devolução",
     "conditionRequired": "Condição da amostra é obrigatória",
