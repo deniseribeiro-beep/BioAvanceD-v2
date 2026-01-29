@@ -8,6 +8,7 @@ const { authenticate } = require('../middleware/auth');
 const { requirePermission } = require('../middleware/rbac');
 const logger = require('../utils/logger');
 const ResultModel = require('../models/Result');
+const consentValidator = require('../services/consent.validator');
 
 const getResultFileType = (fileName) => {
   const ext = path.extname(fileName).toLowerCase();
@@ -118,6 +119,12 @@ router.post('/upload', authenticate, requirePermission('uploadFiles'), resultUpl
         error: 'Banco de dados não disponível'
       });
     }
+
+    consentValidator.init(db);
+    await consentValidator.validateAccess(
+      req.body?.sampleID,
+      req.body?.requiredScope || req.body?.consentScope || null
+    );
 
     const { sampleID, description, method, responsibleResearcher, equipmentID, equipmentName, analysisType } = req.body;
     const file = req.file;
@@ -385,6 +392,12 @@ router.post('/', authenticate, requirePermission('createPatient'), async (req, r
         error: 'Banco de dados não disponível'
       });
     }
+
+    consentValidator.init(db);
+    await consentValidator.validateAccess(
+      req.body?.sampleID,
+      req.body?.requiredScope || req.body?.consentScope || null
+    );
 
     const validation = ResultModel.validate(req.body);
     if (!validation.isValid) {

@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const sampleService = require('../services/sample.service');
 const logService = require('../services/log.service');
+const consentValidator = require('../services/consent.validator');
 const { authenticate } = require('../middleware/auth');
 const { requirePermission } = require('../middleware/rbac');
 const logger = require('../utils/logger');
@@ -222,6 +223,12 @@ router.post('/:id/withdraw',
           error: 'Banco de dados não disponível'
         });
       }
+
+      consentValidator.init(db);
+      await consentValidator.validateAccess(
+        req.params.id,
+        req.body?.requiredScope || req.body?.consentScope || null
+      );
 
       const { ObjectId } = require('mongodb');
       

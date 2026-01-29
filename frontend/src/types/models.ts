@@ -159,6 +159,33 @@ export interface Result {
   updatedAt?: Date | string;
 }
 
+export interface ConsentPermission {
+  key: string;
+  label: string;
+}
+
+export interface ConsentTemplate {
+  _id?: string;
+  title: string;
+  content: string;
+  version: string;
+  active: boolean;
+  permissions: ConsentPermission[];
+  createdAt?: Date | string;
+}
+
+export interface PatientConsent {
+  _id?: string;
+  patientId: string;
+  templateId: string;
+  signedAt?: Date | string;
+  status: 'ACTIVE' | 'REVOKED';
+  revokedAt?: Date | string | null;
+  ipAddress?: string;
+  userAgent?: string;
+  responses: Record<string, boolean>;
+}
+
 export enum FileType {
   PDF = 'PDF',
   IMAGE = 'IMAGE',

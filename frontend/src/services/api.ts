@@ -3,6 +3,8 @@ import {
   Patient,
   Sample,
   Result,
+  ConsentTemplate,
+  PatientConsent,
   Equipment,
   Location,
   Temperature,
@@ -601,6 +603,19 @@ export const assistantService = {
   getContextualHelp: (context: string) => api.post('/assistant/contextual-help', { context }),
   requestTutorial: (topic: string) => api.post('/assistant/tutorial', { topic }),
   getSuggestions: (context: string) => api.post('/assistant/suggestions', { context }),
+};
+
+// ========== CONSENT SERVICES ==========
+export const consentService = {
+  createTemplate: (data: Partial<ConsentTemplate>) => api.post<ConsentTemplate>('/consent-templates', data),
+  getActiveTemplate: () => api.get<{ success: boolean; data: ConsentTemplate }>('/consent-templates/active'),
+  createPatientConsent: (data: {
+    patientId: string;
+    templateId: string;
+    responses: Record<string, boolean>;
+  }) => api.post<PatientConsent>('/consents', data),
+  revokeConsent: (consentId: string) => api.post(`/consents/${consentId}/revoke`),
+  getPatientConsent: (patientId: string) => api.get<{ success: boolean; data: PatientConsent }>(`/patients/${patientId}/consent`)
 };
 
 // ========== IMPORT LGPD SERVICES ==========

@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const patientController = require('../controllers/paciente.controller');
+const consentController = require('../controllers/consent.controller');
 const { authenticate } = require('../middleware/auth');
 const { requirePermission } = require('../middleware/rbac');
 
@@ -12,6 +13,9 @@ router.get('/', authenticate, patientController.listar.bind(patientController));
 
 // Buscar pacientes (busca flexível)
 router.get('/search', authenticate, patientController.search.bind(patientController));
+
+// Buscar consentimento atual do paciente
+router.get('/:patientId/consent', authenticate, consentController.getPatientConsent.bind(consentController));
 
 // Buscar paciente por ID
 router.get('/:id', authenticate, patientController.buscar.bind(patientController));

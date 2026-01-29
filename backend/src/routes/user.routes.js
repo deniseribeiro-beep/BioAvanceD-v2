@@ -4,6 +4,7 @@ const authService = require('../services/auth.service');
 const { authenticate } = require('../middleware/auth');
 const { requirePermission } = require('../middleware/rbac');
 const logger = require('../utils/logger');
+const consentValidator = require('../services/consent.validator');
 
 // RF003 - Cadastro de usuário
 router.post('/register',
@@ -506,6 +507,12 @@ router.post('/record-withdrawal', authenticate, requirePermission('withdrawSampl
         error: 'Banco de dados não disponível'
       });
     }
+
+    consentValidator.init(db);
+    await consentValidator.validateAccess(
+      req.body?.sampleID,
+      req.body?.requiredScope || req.body?.consentScope || null
+    );
 
     const { sampleID, ...withdrawalData } = req.body;
     if (!sampleID) {

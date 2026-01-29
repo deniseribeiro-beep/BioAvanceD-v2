@@ -190,6 +190,7 @@ app.use("/api/locations", require("./src/routes/location.routes"));
 app.use("/api/policies", require("./src/routes/policy.routes"));
 app.use("/api/sensors", require("./src/routes/sensor.routes"));
 app.use("/api/temperature", require("./src/routes/temperature.routes"));
+app.use("/api", require("./src/routes/consent.routes"));
 // Rotas de Gerenciamento do Sistema (Admin)
 app.use("/api/users", require("./src/routes/user.routes"));
 app.use("/api/access", require("./src/routes/access.routes"));

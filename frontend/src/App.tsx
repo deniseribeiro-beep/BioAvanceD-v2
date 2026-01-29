@@ -5,6 +5,7 @@ import LoginPage from './pages/LoginPage';
 import Dashboard from './pages/Dashboard';
 import PatientsPage from './pages/PatientsPage';
 import NewPatientPage from './pages/NewPatientPage';
+import ConsentPage from './pages/ConsentPage';
 import SamplesPage from './pages/SamplesPage';
 import SampleDetailsPage from './pages/SampleDetailsPage';
 import NewSamplePage from './pages/NewSamplePage';
@@ -54,6 +55,7 @@ function App() {
                 <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
                 <Route path="/patients" element={<ProtectedRoute><PatientsPage /></ProtectedRoute>} />
                 <Route path="/patients/new" element={<ProtectedRoute><NewPatientPage /></ProtectedRoute>} />
+                <Route path="/patients/:id/consent" element={<ProtectedRoute><ConsentPage /></ProtectedRoute>} />
                 <Route path="/samples" element={<ProtectedRoute><SamplesPage /></ProtectedRoute>} />
                 <Route path="/samples/:id" element={<ProtectedRoute><SampleDetailsPage /></ProtectedRoute>} />
                 <Route path="/samples/new" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}><NewSamplePage /></ProtectedRoute>} />
