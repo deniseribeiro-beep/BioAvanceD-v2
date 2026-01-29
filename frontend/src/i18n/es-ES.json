@@ -29,6 +29,7 @@
         "reset": "Restablecer",
         "exporting": "Exportando...",
         "deleting": "Eliminando...",
+        "print": "Imprimir",
         "refresh": "Actualizar lista",
         "select": "Seleccionar",
         "basicData": "Datos básicos",
@@ -276,6 +277,9 @@
         "sampleType": "Tipo de muestra",
         "collectionDate": "Fecha de recolección",
         "withdraw": "Retirar muestra",
+        "viewMovements": "Ver movimientos de la muestra",
+        "viewSampleMovements": "Ver movimientos de la muestra",
+        "hideMovements": "Ocultar movimientos",
         "deleteConfirm": "¿Seguro que deseas eliminar esta muestra?",
         "noResults": "No hay resultados asociados a esta muestra",
         "noBarcode": "Esta muestra no tiene código de barras",
@@ -604,9 +608,36 @@
         "generateHint": "Genera un reporte usando las tarjetas de arriba para comenzar.",
         "downloadJSON": "Descargar JSON"
       },
+      "consent": {
+        "form": {
+          "header": "Consentimiento informado",
+          "patientLabel": "Paciente:",
+          "panelTitle": "Panel de control",
+          "required": "Obligatorio",
+          "contentLabel": "Texto del consentimiento",
+          "signatureLabel": "Escribe tu nombre completo para firmar",
+          "signaturePlaceholder": "Nombre completo",
+          "hint": "Marca los Términos Generales para continuar."
+        },
+        "page": {
+          "defaultPatientName": "Paciente",
+          "loadError": "Error al cargar datos del consentimiento",
+          "missingPatient": "Paciente no identificado",
+          "submitSuccess": "Consentimiento registrado con éxito",
+          "submitError": "Error al registrar consentimiento",
+          "loading": "Cargando consentimiento...",
+          "cardTitle": "Consentimiento",
+          "noActiveTemplate": "No se encontró un término activo."
+        }
+      },
       "import": {
         "title": "Importación de datos",
         "subtitle": "Importa pacientes y muestras vía CSV o Excel",
+        "template": {
+          "downloadLabel": "Descargar plantilla:",
+          "csv": "CSV",
+          "excel": "Excel"
+        },
         "patients": {
           "title": "Importación de pacientes",
           "description": "Importa pacientes vía CSV o Excel. IDs de 8 dígitos se generarán automáticamente.",
@@ -625,12 +656,44 @@
           "importing": "Importando...",
           "import": "Importar muestras"
         },
+        "locations": {
+          "title": "Importación de ubicaciones",
+          "description": "Importa ubicaciones en lote vía CSV.",
+          "noPermission": "No tienes permiso para importar ubicaciones.",
+          "selectFile": "Selecciona un archivo CSV",
+          "importAction": "Importar ubicaciones"
+        },
+        "status": {
+          "validating": "Validando...",
+          "creatingJob": "Creando job...",
+          "processingWithProgress": "Procesando... {progress}%"
+        },
+        "jobStatus": {
+          "completed": "Completado",
+          "failed": "Falló",
+          "processing": "Procesando",
+          "pending": "Pendiente",
+          "progress": "Progreso: {progress}%"
+        },
+        "labels": {
+          "printTitle": "Imprimir etiquetas de muestras importadas",
+          "printBatch": "Imprimir etiquetas del lote",
+          "loading": "Cargando etiquetas...",
+          "noSamples": "No se devolvieron muestras para este lote.",
+          "loadError": "Error al cargar etiquetas",
+          "modalTitle": "Etiquetas de muestras importadas"
+        },
+        "validation": {
+          "viewTechnicalDetails": "Ver detalles técnicos",
+          "detailsTitle": "Detalles técnicos (FHIR)"
+        },
         "errors": {
           "invalidFileType": "Solo se aceptan archivos CSV o Excel (.xlsx)",
           "noFileSelected": "Selecciona un archivo antes de importar",
           "importError": "Error al importar archivo",
           "templateError": "Error al descargar plantilla",
-          "importWithErrors": "Importación completada con {count} error(es). Revisa los detalles abajo."
+          "importWithErrors": "Importación completada con {count} error(es). Revisa los detalles abajo.",
+          "startError": "Error al iniciar importación"
         },
         "result": {
           "title": "Resultado de la importación",
@@ -638,7 +701,10 @@
           "successful": "Importados con éxito",
           "errors": "Errores",
           "errorDetails": "Detalles de errores",
-          "row": "Fila"
+          "row": "Fila",
+          "errorLabel": "Error:",
+          "moreErrors": "... y {count} error(es) más",
+          "allRecordsSuccess": "¡Todos los registros se importaron con éxito!"
         }
       },
       "logs": {

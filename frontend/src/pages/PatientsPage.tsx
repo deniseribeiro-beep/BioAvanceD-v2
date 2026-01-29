@@ -366,25 +366,19 @@ export default function PatientsPage() {
             )}
           </div>
           <Button 
-            onClick={async () => {
-              try {
-                const response = await importLGPDService.downloadTemplate('patients', 'xlsx');
-                const url = window.URL.createObjectURL(new Blob([response.data]));
-                const link = document.createElement('a');
-                link.href = url;
-                link.setAttribute('download', 'pacientes_template.xlsx');
-                document.body.appendChild(link);
-                link.click();
-                link.remove();
-                window.URL.revokeObjectURL(url);
-              } catch (err: any) {
-                alert(err.response?.data?.error || 'Erro ao baixar template');
-              }
+            onClick={() => {
+              const url = '/import-templates/patients-template.xlsx';
+              const link = document.createElement('a');
+              link.href = url;
+              link.setAttribute('download', 'patients-template.xlsx');
+              document.body.appendChild(link);
+              link.click();
+              link.remove();
             }}
             variant="secondary"
           >
             <FileSpreadsheet size={18} />
-            Template
+            Baixar Template Excel
           </Button>
           <div style={{ position: 'relative', display: 'inline-block' }}>
             <input
@@ -428,7 +422,7 @@ export default function PatientsPage() {
                 }}
             >
               <Upload size={18} />
-                {t('patients.importPatients')}
+                Importar Pacientes
             </Button>
               {importProgress && (
                 <div style={{

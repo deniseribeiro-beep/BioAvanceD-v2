@@ -61,8 +61,6 @@ export function useTemperature() {
 
   const viewControl = async (sensorID?: string, policyID?: string) => {
     // TEMPORARIAMENTE DESATIVADO: Não há sensores cadastrados ainda
-    const TEMPERATURE_READING_DISABLED = true;
-    
     if (TEMPERATURE_READING_DISABLED) {
       console.info('Leitura de temperatura desativada temporariamente - não há sensores cadastrados');
       return [];

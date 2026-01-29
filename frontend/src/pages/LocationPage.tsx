@@ -29,6 +29,28 @@ export default function LocationPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingLocation, setEditingLocation] = useState<Location | null>(null);
 
+  // Importação de localizações
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [importProgress, setImportProgress] = useState('');
+
+  const handleImportLocations = async (file?: File) => {
+    const fileToImport = file || importFile;
+    if (!fileToImport) {
+      alert('Selecione um arquivo para importar.');
+      return;
+    }
+    setImporting(true);
+    setImportProgress(`Arquivo: ${fileToImport.name}`);
+    // Aqui você pode implementar a chamada real para o backend
+    setTimeout(() => {
+      setImporting(false);
+      setImportProgress('Importação concluída (simulação)');
+      setImportFile(null);
+    }, 2000);
+  };
+
+
   return (
     <div className="page">
       <div className="page-header">
@@ -41,6 +63,47 @@ export default function LocationPage() {
           Nova Localização
         </Button>
       </div>
+
+      {/* Seção de importação de localizações */}
+      <Card className="import-card" style={{ marginBottom: 24 }}>
+        <div className="import-card-header">
+          <h2>Importação de Localizações</h2>
+          <p>Importe localizações em lote via CSV ou Excel. Siga o template para garantir o formato correto.</p>
+        </div>
+        <div className="import-actions" style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+          <Button variant="secondary" onClick={() => {
+            const url = '/import-templates/locations-template.csv';
+            const link = document.createElement('a');
+            link.href = url;
+            link.setAttribute('download', 'locations-template.csv');
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+          }}>Baixar Template CSV</Button>
+          <Button variant="secondary" onClick={() => {
+            const url = '/import-templates/locations-template.xlsx';
+            const link = document.createElement('a');
+            link.href = url;
+            link.setAttribute('download', 'locations-template.xlsx');
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+          }}>Baixar Template Excel</Button>
+        </div>
+        <div className="import-upload" style={{ border: '1px dashed #ccc', padding: 16, borderRadius: 8, marginBottom: 16 }}>
+          <input type="file" accept=".csv, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={e => {
+            const file = e.target.files?.[0];
+            if (file) {
+              setImportFile(file);
+              setImportProgress('');
+              setTimeout(() => handleImportLocations(file), 100);
+            }
+          }} />
+          <p style={{ fontSize: 12, color: '#666' }}>Selecione um arquivo CSV ou Excel conforme o template.</p>
+        </div>
+        {importing && <p>Importando localizações...</p>}
+        {importProgress && <p style={{ color: '#166534' }}>{importProgress}</p>}
+      </Card>
 
       {loading && <p>Carregando...</p>}
       {error && <p style={{ color: 'var(--danger)' }}>Erro: {error}</p>}

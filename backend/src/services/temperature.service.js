@@ -166,6 +166,10 @@ class TemperatureService {
 
   async getActiveAlerts(db) {
     try {
+      if (!db) {
+        // Se o banco não está disponível, retorna array vazio
+        return [];
+      }
       const alertsCollection = db.collection('alerts');
       const alerts = await alertsCollection
         .find({ status: 'active' })
@@ -174,8 +178,9 @@ class TemperatureService {
 
       return alerts;
     } catch (error) {
+      // Em caso de erro (ex: IoT/sensores offline), retorna array vazio
       logger.error('Erro ao buscar alertas:', error.message);
-      throw error;
+      return [];
     }
   }
 }

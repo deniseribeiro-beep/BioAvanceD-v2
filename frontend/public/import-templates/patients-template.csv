@@ -1,0 +1,7 @@
+# Template de Importação de Pacientes
+# Instruções: Preencha cada linha com os dados de um paciente. Não altere o cabeçalho.
+# IDs de 8 dígitos serão gerados automaticamente se não preenchidos.
+# Campos obrigatórios: nome, dataNascimento, sexo, documento
+nome,dataNascimento,sexo,documento
+João da Silva,1980-05-10,M,12345678900
+Maria Souza,1975-12-22,F,98765432100

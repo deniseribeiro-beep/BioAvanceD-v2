@@ -3,17 +3,20 @@ import { useNavigate, useParams } from 'react-router-dom';
 import ConsentForm from '../components/ConsentForm';
 import Card from '../components/UI/Card';
 import Button from '../components/UI/Button';
+import Spinner from '../components/UI/Spinner';
 import { consentService, patientService } from '../services/api';
 import { ConsentTemplate } from '../types/models';
 import { useToast } from '../components/UI/ToastContainer';
+import { useLanguage } from '../contexts/LanguageContext';
 import './ConsentPage.css';
 
 export default function ConsentPage() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { showToast } = useToast();
+  const { t } = useLanguage();
 
-  const [patientName, setPatientName] = useState('Paciente');
+  const [patientName, setPatientName] = useState(t('consent.page.defaultPatientName'));
   const [template, setTemplate] = useState<ConsentTemplate | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -36,12 +39,14 @@ export default function ConsentPage() {
         const name = patientPayload?.patientName || patientPayload?.patientID || patientId;
 
         if (isMounted) {
-          setPatientName(name ? String(name) : 'Paciente');
+          setPatientName(name ? String(name) : t('consent.page.defaultPatientName'));
           setTemplate(templateResponse.data?.data || null);
         }
       } catch (fetchError: any) {
         if (isMounted) {
-          setError(fetchError?.message || 'Erro ao carregar dados do consentimento');
+          const message = fetchError?.message || t('consent.page.loadError');
+          setError(message);
+          showToast(message, 'error');
         }
       } finally {
         if (isMounted) {
@@ -54,7 +59,7 @@ export default function ConsentPage() {
       fetchData();
     } else {
       setLoading(false);
-      setError('Paciente não identificado');
+      setError(t('consent.page.missingPatient'));
     }
 
     return () => {
@@ -73,10 +78,10 @@ export default function ConsentPage() {
         signatureName: payload.signatureName
       } as any);
 
-      showToast('Consentimento registrado com sucesso', 'success');
+      showToast(t('consent.page.submitSuccess'), 'success');
       navigate('/patients');
     } catch (submitError: any) {
-      showToast(submitError?.message || 'Erro ao registrar consentimento', 'error');
+      showToast(submitError?.message || t('consent.page.submitError'), 'error');
     }
   };
 
@@ -88,7 +93,10 @@ export default function ConsentPage() {
     return (
       <div className="consent-page">
         <Card>
-          <div className="consent-page-status">Carregando consentimento...</div>
+          <div className="consent-page-status">
+            <Spinner size="sm" label={t('consent.page.loading')} />
+            <span>{t('consent.page.loading')}</span>
+          </div>
         </Card>
       </div>
     );
@@ -97,12 +105,12 @@ export default function ConsentPage() {
   if (error || !template) {
     return (
       <div className="consent-page">
-        <Card title="Consentimento">
+        <Card title={t('consent.page.cardTitle')}>
           <div className="consent-page-error">
-            {error || 'Nenhum termo ativo encontrado.'}
+            {error || t('consent.page.noActiveTemplate')}
           </div>
           <Button variant="secondary" onClick={handleCancel}>
-            Voltar
+            {t('common.back')}
           </Button>
         </Card>
       </div>

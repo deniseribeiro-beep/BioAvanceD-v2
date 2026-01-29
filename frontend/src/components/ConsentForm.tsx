@@ -3,6 +3,7 @@ import Card from './UI/Card';
 import Button from './UI/Button';
 import Input from './UI/Input';
 import { ConsentPermission } from '../types/models';
+import { useLanguage } from '../contexts/LanguageContext';
 import './ConsentForm.css';
 
 interface ConsentFormProps {
@@ -20,6 +21,7 @@ export default function ConsentForm({
   onSubmit,
   onCancel
 }: ConsentFormProps) {
+  const { t } = useLanguage();
   const [responses, setResponses] = useState<Record<string, boolean>>({});
   const [signatureName, setSignatureName] = useState('');
 
@@ -59,13 +61,13 @@ export default function ConsentForm({
   return (
     <div className="consent-form">
       <div className="consent-form-header">
-        <h2>Consentimento Livre e Esclarecido</h2>
-        <p>Paciente: <strong>{patientName}</strong></p>
+        <h2>{t('consent.form.header')}</h2>
+        <p>{t('consent.form.patientLabel')} <strong>{patientName}</strong></p>
       </div>
 
       <div className="consent-form-grid">
         <Card className="consent-document">
-          <div className="consent-content" role="region" aria-label="Texto do consentimento">
+          <div className="consent-content" role="region" aria-label={t('consent.form.contentLabel')}>
             {isHtmlContent ? (
               <div dangerouslySetInnerHTML={{ __html: templateText }} />
             ) : (
@@ -75,7 +77,7 @@ export default function ConsentForm({
         </Card>
 
         <div className="consent-panel">
-          <Card title="Painel de Controle">
+          <Card title={t('consent.form.panelTitle')}>
             <div className="consent-permissions">
               {(permissions || []).map((permission) => {
                 const isRequired = permission.key === requiredPermissionKey;
@@ -88,7 +90,7 @@ export default function ConsentForm({
                     />
                     <span>
                       {permission.label}
-                      {isRequired && <strong className="consent-required"> (Obrigatório)</strong>}
+                      {isRequired && <strong className="consent-required"> ({t('consent.form.required')})</strong>}
                     </span>
                   </label>
                 );
@@ -96,22 +98,22 @@ export default function ConsentForm({
             </div>
 
             <Input
-              label="Digite seu nome completo para assinar"
+              label={t('consent.form.signatureLabel')}
               value={signatureName}
               onChange={(event) => setSignatureName(event.target.value)}
-              placeholder="Nome completo"
+              placeholder={t('consent.form.signaturePlaceholder')}
             />
 
             <div className="consent-actions">
               <Button variant="secondary" onClick={onCancel}>
-                Cancelar
+                {t('common.cancel')}
               </Button>
               <Button variant="primary" onClick={() => onSubmit({ responses, signatureName })} disabled={!canSubmit}>
-                Confirmar
+                {t('common.confirm')}
               </Button>
             </div>
             {!hasRequiredConsent && (
-              <span className="consent-hint">Marque os Termos Gerais para continuar.</span>
+              <span className="consent-hint">{t('consent.form.hint')}</span>
             )}
           </Card>
         </div>

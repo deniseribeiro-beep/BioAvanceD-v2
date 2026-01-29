@@ -29,6 +29,7 @@
     "reset": "Reset",
     "exporting": "Exporting...",
     "deleting": "Deleting...",
+    "print": "Print",
     "refresh": "Refresh List",
     "select": "Select",
     "basicData": "Basic Data",
@@ -284,6 +285,8 @@
     "collectionDate": "Collection Date",
     "withdraw": "Withdraw Sample",
     "viewMovements": "View sample movements",
+    "viewSampleMovements": "View sample movements",
+    "hideMovements": "Hide movements",
     "goToWithdrawalReturn": "Go to Withdraw/Return",
     "deleteConfirm": "Are you sure you want to delete this sample?",
     "noResults": "No results associated with this sample",
@@ -618,9 +621,36 @@
     "generateHint": "Generate a report using the cards above to get started.",
     "downloadJSON": "Download JSON"
   },
+  "consent": {
+    "form": {
+      "header": "Informed Consent",
+      "patientLabel": "Patient:",
+      "panelTitle": "Control Panel",
+      "required": "Required",
+      "contentLabel": "Consent text",
+      "signatureLabel": "Type your full name to sign",
+      "signaturePlaceholder": "Full name",
+      "hint": "Check General Terms to continue."
+    },
+    "page": {
+      "defaultPatientName": "Patient",
+      "loadError": "Error loading consent data",
+      "missingPatient": "Patient not identified",
+      "submitSuccess": "Consent recorded successfully",
+      "submitError": "Error recording consent",
+      "loading": "Loading consent...",
+      "cardTitle": "Consent",
+      "noActiveTemplate": "No active terms found."
+    }
+  },
   "import": {
     "title": "Data Import",
     "subtitle": "Import patients and samples via CSV or Excel",
+    "template": {
+      "downloadLabel": "Download template:",
+      "csv": "CSV",
+      "excel": "Excel"
+    },
     "patients": {
       "title": "Patients Import",
       "description": "Import patients via CSV or Excel. 8-digit IDs will be generated automatically.",
@@ -639,12 +669,44 @@
       "importing": "Importing...",
       "import": "Import Samples"
     },
+    "locations": {
+      "title": "Locations Import",
+      "description": "Import locations in batch via CSV.",
+      "noPermission": "You do not have permission to import locations.",
+      "selectFile": "Select a CSV file",
+      "importAction": "Import Locations"
+    },
+    "status": {
+      "validating": "Validating...",
+      "creatingJob": "Creating job...",
+      "processingWithProgress": "Processing... {progress}%"
+    },
+    "jobStatus": {
+      "completed": "Completed",
+      "failed": "Failed",
+      "processing": "Processing",
+      "pending": "Pending",
+      "progress": "Progress: {progress}%"
+    },
+    "labels": {
+      "printTitle": "Print labels for imported samples",
+      "printBatch": "Print Batch Labels",
+      "loading": "Loading labels...",
+      "noSamples": "No samples returned for this batch.",
+      "loadError": "Error loading labels",
+      "modalTitle": "Imported samples labels"
+    },
+    "validation": {
+      "viewTechnicalDetails": "View Technical Details",
+      "detailsTitle": "Technical Details (FHIR)"
+    },
     "errors": {
       "invalidFileType": "Only CSV or Excel (.xlsx) files are accepted",
       "noFileSelected": "Select a file before importing",
       "importError": "Error importing file",
       "templateError": "Error downloading template",
-      "importWithErrors": "Import completed with {count} error(s). Check the details below."
+      "importWithErrors": "Import completed with {count} error(s). Check the details below.",
+      "startError": "Error starting import"
     },
     "result": {
       "title": "Import Result",
@@ -652,7 +714,10 @@
       "successful": "Successfully imported",
       "errors": "Errors",
       "errorDetails": "Error Details",
-      "row": "Row"
+      "row": "Row",
+      "errorLabel": "Error:",
+      "moreErrors": "... and {count} more error(s)",
+      "allRecordsSuccess": "All records were imported successfully!"
     }
   },
   "assistant": {

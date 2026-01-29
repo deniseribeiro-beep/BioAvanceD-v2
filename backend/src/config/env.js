@@ -28,4 +28,11 @@ module.exports = {
   REDIS_PASSWORD: process.env.REDIS_PASSWORD,
   REDIS_USERNAME: process.env.REDIS_USERNAME || 'default',
   REDIS_TLS: process.env.REDIS_TLS === 'true' || process.env.REDIS_TLS === '1',
+
+  // Backup / Monitoring
+  BACKUP_DIR: process.env.BACKUP_DIR,
+  BACKUP_CRON: process.env.BACKUP_CRON,
+  BACKUP_RETENTION_DAYS: process.env.BACKUP_RETENTION_DAYS,
+  TEMP_MONITOR_CRON: process.env.TEMP_MONITOR_CRON,
+  TEMP_STALE_MINUTES: process.env.TEMP_STALE_MINUTES,
 };

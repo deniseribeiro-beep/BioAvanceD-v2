@@ -26,12 +26,14 @@ export default function ResultsPage() {
   const [showReportModal, setShowReportModal] = useState(false);
   const [importError, setImportError] = useState('');
   const [showUploadModal, setShowUploadModal] = useState(false);
+  const [showOutcomeModal, setShowOutcomeModal] = useState(false);
 
   // Hook de importação assíncrona
   const {
     validating,
     creating,
     validationError,
+    validationOutcome,
     job: currentJob,
     isPolling,
     importFile,
@@ -152,8 +154,6 @@ export default function ResultsPage() {
         return <AlertCircle className="status-icon" />;
     }
   };
-        validationOutcome,
-
   const getStatusLabel = (status: ImportJobStatus) => {
     const labels = {
       pending: 'Pendente',
@@ -163,7 +163,6 @@ export default function ResultsPage() {
       cancelled: 'Cancelado'
     };
     return labels[status] || status;
-      const [showOutcomeModal, setShowOutcomeModal] = useState(false);
   };
 
   return (

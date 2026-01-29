@@ -9,6 +9,7 @@ const logger = require("./src/utils/logger");
 const { connectDB } = require("./src/database/mongo");
 const portManager = require("./src/utils/portManager");
 const env = require("./src/config/env");
+const { initScheduler } = require("./src/services/scheduler.service");
 
 const app = express();
 
@@ -243,6 +244,13 @@ async function startServer() {
       }
     } catch (seedError) {
       logger.error('Erro ao realizar seed de tipos de análise:', seedError.message);
+    }
+
+    // Iniciar scheduler (backup + monitoramento)
+    try {
+      initScheduler({ db });
+    } catch (schedulerError) {
+      logger.error('Erro ao iniciar scheduler:', schedulerError.message);
     }
 
     // Criar servidor HTTP unificado

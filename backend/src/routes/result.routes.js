@@ -6,9 +6,9 @@ const multer = require('multer');
 const router = express.Router();
 const { authenticate } = require('../middleware/auth');
 const { requirePermission } = require('../middleware/rbac');
+const { enforceCommercialConsent } = require('../middleware/consent.enforcement');
 const logger = require('../utils/logger');
 const ResultModel = require('../models/Result');
-const consentValidator = require('../services/consent.validator');
 
 const getResultFileType = (fileName) => {
   const ext = path.extname(fileName).toLowerCase();
@@ -110,7 +110,7 @@ router.get('/', authenticate, async (req, res) => {
   }
 });
 
-router.post('/upload', authenticate, requirePermission('uploadFiles'), resultUpload.single('file'), async (req, res) => {
+router.post('/upload', authenticate, requirePermission('uploadFiles'), enforceCommercialConsent({ resolveSampleId: (req) => req.body?.sampleID }), resultUpload.single('file'), async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
@@ -119,12 +119,6 @@ router.post('/upload', authenticate, requirePermission('uploadFiles'), resultUpl
         error: 'Banco de dados não disponível'
       });
     }
-
-    consentValidator.init(db);
-    await consentValidator.validateAccess(
-      req.body?.sampleID,
-      req.body?.requiredScope || req.body?.consentScope || null
-    );
 
     const { sampleID, description, method, responsibleResearcher, equipmentID, equipmentName, analysisType } = req.body;
     const file = req.file;
@@ -383,7 +377,7 @@ router.get('/:id/download', authenticate, async (req, res) => {
   }
 });
 
-router.post('/', authenticate, requirePermission('createPatient'), async (req, res) => {
+router.post('/', authenticate, requirePermission('createPatient'), enforceCommercialConsent({ resolveSampleId: (req) => req.body?.sampleID }), async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
@@ -392,12 +386,6 @@ router.post('/', authenticate, requirePermission('createPatient'), async (req, r
         error: 'Banco de dados não disponível'
       });
     }
-
-    consentValidator.init(db);
-    await consentValidator.validateAccess(
-      req.body?.sampleID,
-      req.body?.requiredScope || req.body?.consentScope || null
-    );
 
     const validation = ResultModel.validate(req.body);
     if (!validation.isValid) {

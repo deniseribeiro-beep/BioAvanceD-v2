@@ -309,13 +309,82 @@ function LocationsSection() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingLocation, setEditingLocation] = useState<Location | null>(null);
 
-  // Carrega localizações ao montar o componente
-  useEffect(() => {
-    loadLocations();
-  }, [loadLocations]);
+  // Importação de localizações
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [importProgress, setImportProgress] = useState('');
+  const [showImportModal, setShowImportModal] = useState(false);
+
+  const handleImportLocations = async (file?: File) => {
+    const fileToImport = file || importFile;
+    if (!fileToImport) {
+      alert('Selecione um arquivo para importar.');
+      return;
+    }
+    setImporting(true);
+    setImportProgress(`Arquivo: ${fileToImport.name}`);
+    // Aqui você pode implementar a chamada real para o backend
+    setTimeout(() => {
+      setImporting(false);
+      setImportProgress('Importação concluída (simulação)');
+      setImportFile(null);
+    }, 2000);
+  };
 
   return (
     <>
+      {/* Botão para abrir modal de importação */}
+      <div className="section-header" style={{ display: 'flex', gap: 12 }}>
+        <Button onClick={() => setIsModalOpen(true)}>
+          <Plus size={18} />
+          Nova Localização
+        </Button>
+        <Button variant="secondary" onClick={() => setShowImportModal(true)}>
+          Importar Localizações
+        </Button>
+      </div>
+
+      {/* Modal de importação de localizações */}
+      <Modal isOpen={showImportModal} onClose={() => setShowImportModal(false)} title="Importação de Localizações">
+        <div className="import-card-header">
+          <h2 style={{ marginTop: 0 }}>Importação de Localizações</h2>
+          <p>Importe localizações em lote via CSV ou Excel. Siga o template para garantir o formato correto.</p>
+        </div>
+        <div className="import-actions" style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+          <Button variant="secondary" onClick={() => {
+            const url = '/import-templates/locations-template.csv';
+            const link = document.createElement('a');
+            link.href = url;
+            link.setAttribute('download', 'locations-template.csv');
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+          }}>Baixar Template CSV</Button>
+          <Button variant="secondary" onClick={() => {
+            const url = '/import-templates/locations-template.xlsx';
+            const link = document.createElement('a');
+            link.href = url;
+            link.setAttribute('download', 'locations-template.xlsx');
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+          }}>Baixar Template Excel</Button>
+        </div>
+        <div className="import-upload" style={{ border: '1px dashed #ccc', padding: 16, borderRadius: 8, marginBottom: 16 }}>
+          <input type="file" accept=".csv, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={e => {
+            const file = e.target.files?.[0];
+            if (file) {
+              setImportFile(file);
+              setImportProgress('');
+              setTimeout(() => handleImportLocations(file), 100);
+            }
+          }} />
+          <p style={{ fontSize: 12, color: '#666' }}>Selecione um arquivo CSV ou Excel conforme o template.</p>
+        </div>
+        {importing && <p>Importando localizações...</p>}
+        {importProgress && <p style={{ color: '#166534' }}>{importProgress}</p>}
+      </Modal>
+
       <div className="section-header">
         <Button onClick={() => setIsModalOpen(true)}>
           <Plus size={18} />
@@ -424,11 +493,9 @@ function LocationsSection() {
               }
               setIsModalOpen(false);
               setEditingLocation(null);
-              await loadLocations(); // Recarrega a lista após salvar
+              await loadLocations();
             } catch (err: any) {
-              const errorMessage = err.response?.data?.message || err.response?.data?.error || err.message || 'Erro ao salvar localização';
-              alert(errorMessage);
-              console.error('Erro ao salvar localização:', err);
+              alert(err.message);
             }
           }}
           onCancel={() => {

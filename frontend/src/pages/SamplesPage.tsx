@@ -134,27 +134,16 @@ export default function SamplesPage() {
   const selectedSamples = filteredSamples.filter((s: any) => selectedSampleIds.includes(s.id));
   const isImporting = importLoading || importJob?.status === 'pending' || importJob?.status === 'processing';
 
-  const downloadTemplate = async (format: 'csv' | 'xlsx') => {
-    try {
-      setDownloadingTemplate(format);
-      const response = await importLGPDService.downloadTemplate('samples', format);
-      const blob = new Blob([response.data], {
-        type: format === 'csv' ? 'text/csv' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      });
-      const url = window.URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `template-amostras.${format}`;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      window.URL.revokeObjectURL(url);
-    } catch (err) {
-      console.error('Erro ao baixar template', err);
-      alert('Não foi possível baixar o template.');
-    } finally {
-      setDownloadingTemplate(null);
-    }
+  // Download de template estático com instruções
+  const downloadTemplate = (format: 'csv' | 'xlsx') => {
+    const fileName = format === 'csv' ? 'samples-template.csv' : 'samples-template.xlsx';
+    const url = `/import-templates/${fileName}`;
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
   };
 
   return (
@@ -204,21 +193,13 @@ export default function SamplesPage() {
                 </Button>
               </div>
               <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginLeft: 'auto' }}>
-                <Button
-                  variant="secondary"
-                  onClick={() => downloadTemplate('xlsx')}
-                  disabled={!!downloadingTemplate}
-                >
+                <Button variant="secondary" onClick={() => downloadTemplate('xlsx')}>
                   <Download size={16} />
-                  Template XLSX
+                  Baixar Template Excel
                 </Button>
-                <Button
-                  variant="secondary"
-                  onClick={() => downloadTemplate('csv')}
-                  disabled={!!downloadingTemplate}
-                >
+                <Button variant="secondary" onClick={() => downloadTemplate('csv')}>
                   <Download size={16} />
-                  Template CSV
+                  Baixar Template CSV
                 </Button>
               </div>
             </div>

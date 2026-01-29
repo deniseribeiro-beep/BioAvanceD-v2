@@ -1,0 +1,5 @@
+# Template de Importação de Amostras
+# Instruções: Preencha cada linha com os dados de uma amostra. Não altere o cabeçalho.
+# Campos obrigatórios: sampleID, patientID, sampleType, collectionDate
+sampleID,patientID,sampleType,collectionDate
+12345678,87654321,Sangue,2026-01-29

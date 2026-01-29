@@ -3,6 +3,7 @@ const router = express.Router();
 const sampleService = require('../services/sample.service');
 const logService = require('../services/log.service');
 const consentValidator = require('../services/consent.validator');
+const { enforceCommercialConsent } = require('../middleware/consent.enforcement');
 const { authenticate } = require('../middleware/auth');
 const { requirePermission } = require('../middleware/rbac');
 const logger = require('../utils/logger');
@@ -615,18 +616,21 @@ router.delete('/:sampleID/files/:fileID',
 // HL7 v2.x
 router.get('/:sampleID/files/:fileID/export/hl7',
   authenticate,
+  enforceCommercialConsent({ resolveSampleId: (req) => req.params.sampleID }),
   sampleFileController.exportHL7v2.bind(sampleFileController)
 );
 
 // FHIR R4 JSON
 router.get('/:sampleID/files/:fileID/export/fhir',
   authenticate,
+  enforceCommercialConsent({ resolveSampleId: (req) => req.params.sampleID }),
   sampleFileController.exportFHIR.bind(sampleFileController)
 );
 
 // CDA XML
 router.get('/:sampleID/files/:fileID/export/cda',
   authenticate,
+  enforceCommercialConsent({ resolveSampleId: (req) => req.params.sampleID }),
   sampleFileController.exportCDA.bind(sampleFileController)
 );
 

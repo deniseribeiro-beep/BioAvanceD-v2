@@ -1,21 +1,26 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Card from '../components/UI/Card';
 import Button from '../components/UI/Button';
 import Modal from '../components/UI/Modal';
+import Spinner from '../components/UI/Spinner';
 import BarcodeLabel from '../components/BarcodeLabel';
 import { Upload, FileText, FileSpreadsheet, ArrowLeft, CheckCircle, XCircle, AlertCircle, Clock } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { importLGPDService } from '../services/api';
 import { useAsyncImport } from '../hooks/useAsyncImport';
 import { useLanguage } from '../contexts/LanguageContext';
+import { useToast } from '../components/UI/ToastContainer';
 import './ImportPage.css';
 
 export default function ImportPage() {
   const navigate = useNavigate();
   const { t } = useLanguage();
   const { user } = useAuth();
-  const [file, setFile] = useState<File | null>(null);
+  const { showToast } = useToast();
+  const [patientFile, setPatientFile] = useState<File | null>(null);
+  const [sampleFile, setSampleFile] = useState<File | null>(null);
+  const [locationFile, setLocationFile] = useState<File | null>(null);
   const [importType, setImportType] = useState<'patients' | 'samples' | 'locations' | null>(null);
   
   // Hook de importação assíncrona
@@ -110,21 +115,32 @@ export default function ImportPage() {
     return [];
   };
 
-  const handleFileChange = (allowedExtensions: string[]) => (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = (
+    allowedExtensions: string[],
+    setSelectedFile: React.Dispatch<React.SetStateAction<File | null>>
+  ) => (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
     if (selectedFile) {
       const ext = selectedFile.name.toLowerCase().split('.').pop();
       if (!ext || !allowedExtensions.includes(ext)) {
-        setFile(null);
+        setSelectedFile(null);
         return;
       }
-      setFile(selectedFile);
+      setSelectedFile(selectedFile);
       reset(); // Reseta estado anterior ao selecionar novo arquivo
     }
   };
 
+  const resolveFileByType = (type: 'patients' | 'samples' | 'locations') => {
+    if (type === 'patients') return patientFile;
+    if (type === 'samples') return sampleFile;
+    return locationFile;
+  };
+
   const handleImport = async (type: 'patients' | 'samples' | 'locations') => {
-    if (!file) {
+    const selectedFile = resolveFileByType(type);
+    if (!selectedFile) {
+      showToast(t('import.errors.noFileSelected'), 'error');
       return;
     }
 
@@ -132,7 +148,7 @@ export default function ImportPage() {
     reset(); // Reseta estado anterior
 
     try {
-      await importFile(file, type, {
+      await importFile(selectedFile, type, {
         onCompleted: (job) => {
           // Sucesso - job já contém os resultados
           console.log('Importação concluída:', job);
@@ -140,19 +156,14 @@ export default function ImportPage() {
         onFailed: (job) => {
           // Falha - job contém os erros
           console.error('Importação falhou:', job);
+          showToast(t('import.errors.importError'), 'error');
         },
       });
     } catch (err: any) {
       console.error('Erro ao iniciar importação:', err);
+      showToast(err?.message || t('import.errors.startError'), 'error');
     }
   };
-
-  // Reseta quando arquivo muda
-  useEffect(() => {
-    if (!file) {
-      reset();
-    }
-  }, [file, reset]);
 
   const handleDownloadTemplate = async (type: 'patients' | 'samples', format: 'csv' | 'xlsx') => {
     try {
@@ -168,7 +179,7 @@ export default function ImportPage() {
       link.remove();
       window.URL.revokeObjectURL(url);
     } catch (err: any) {
-      alert(err.response?.data?.error || t('import.errors.templateError'));
+      showToast(err.response?.data?.error || t('import.errors.templateError'), 'error');
     }
   };
 
@@ -197,10 +208,12 @@ export default function ImportPage() {
       setBatchSamples(parsed);
       setShowBatchLabels(true);
       if (!parsed || parsed.length === 0) {
-        setLabelsError('Nenhuma amostra retornada para este lote.');
+        setLabelsError(t('import.labels.noSamples'));
       }
     } catch (err: any) {
-      setLabelsError(err?.message || 'Erro ao carregar etiquetas');
+      const message = err?.message || t('import.labels.loadError');
+      setLabelsError(message);
+      showToast(message, 'error');
     } finally {
       setLoadingLabels(false);
     }
@@ -221,64 +234,6 @@ export default function ImportPage() {
       </div>
 
       <div className="import-container">
-        {/* Importação de Pacientes */}
-        <Card className="import-card">
-          <div className="import-card-header">
-            <h2>{t('import.patients.title')}</h2>
-            <p>{t('import.patients.description')}</p>
-          </div>
-
-          {!canImportPatients && (
-            <div className="import-warning">
-              <AlertCircle size={20} />
-              <span>{t('import.patients.noPermission')}</span>
-            </div>
-          )}
-
-          {canImportPatients && (
-            <>
-              <div className="import-actions">
-                <div className="template-downloads">
-                  <span>Baixar template:</span>
-                  <Button
-                    variant="secondary"
-                    onClick={() => handleDownloadTemplate('patients', 'xlsx')}
-                  >
-                    <FileSpreadsheet size={16} />
-                    Excel
-                  </Button>
-                </div>
-              </div>
-
-              <div className="import-upload">
-                <input
-                  type="file"
-                  id="patients-file"
-                  accept=".csv,.xlsx"
-                  onChange={handleFileChange(['csv', 'xlsx'])}
-                  disabled={isPolling && importType === 'patients'}
-                  style={{ display: 'none' }}
-                />
-                <label htmlFor="patients-file" className="file-input-label">
-                  <Upload size={20} />
-                  {file ? file.name : 'Selecione um arquivo CSV ou Excel'}
-                </label>
-              </div>
-
-              <Button
-                onClick={() => handleImport('patients')}
-                disabled={!file || validating || creating || (isPolling && importType === 'patients')}
-                style={{ marginTop: '1rem', width: '100%' }}
-              >
-                {validating && importType === 'patients' && 'Validando...'}
-                {creating && importType === 'patients' && 'Criando job...'}
-                {isPolling && importType === 'patients' && job && `Processando... ${job.progress}%`}
-                {!validating && !creating && !(isPolling && importType === 'patients') && t('import.patients.import')}
-              </Button>
-            </>
-          )}
-        </Card>
-
         {/* Importação de Amostras */}
         <Card className="import-card">
           <div className="import-card-header">
@@ -303,14 +258,14 @@ export default function ImportPage() {
                     onClick={() => handleDownloadTemplate('samples', 'csv')}
                   >
                     <FileText size={16} />
-                    CSV
+                    {t('import.template.csv')}
                   </Button>
                   <Button
                     variant="secondary"
                     onClick={() => handleDownloadTemplate('samples', 'xlsx')}
                   >
                     <FileSpreadsheet size={16} />
-                    Excel
+                    {t('import.template.excel')}
                   </Button>
                 </div>
               </div>
@@ -320,87 +275,45 @@ export default function ImportPage() {
                   type="file"
                   id="samples-file"
                   accept=".csv,.xlsx"
-                  onChange={handleFileChange(['csv', 'xlsx'])}
+                  onChange={handleFileChange(['csv', 'xlsx'], setSampleFile)}
                   disabled={isPolling && importType === 'samples'}
                   style={{ display: 'none' }}
                 />
                 <label htmlFor="samples-file" className="file-input-label">
                   <Upload size={20} />
-                  {file ? file.name : t('import.samples.selectFile')}
+                  {sampleFile ? sampleFile.name : t('import.samples.selectFile')}
                 </label>
               </div>
 
               <Button
                 onClick={() => handleImport('samples')}
-                disabled={!file || validating || creating || (isPolling && importType === 'samples')}
+                disabled={!sampleFile || validating || creating || (isPolling && importType === 'samples')}
                 style={{ marginTop: '1rem', width: '100%' }}
               >
-                {validating && importType === 'samples' && 'Validando...'}
-                {creating && importType === 'samples' && 'Criando job...'}
-                {isPolling && importType === 'samples' && job && `Processando... ${job.progress}%`}
+                {validating && importType === 'samples' && (
+                  <>
+                    <Spinner size="sm" style={{ marginRight: '0.5rem' }} />
+                    {t('import.status.validating')}
+                  </>
+                )}
+                {creating && importType === 'samples' && (
+                  <>
+                    <Spinner size="sm" style={{ marginRight: '0.5rem' }} />
+                    {t('import.status.creatingJob')}
+                  </>
+                )}
+                {isPolling && importType === 'samples' && job && (
+                  <>
+                    <Spinner size="sm" style={{ marginRight: '0.5rem' }} />
+                    {t('import.status.processingWithProgress').replace('{progress}', String(job.progress))}
+                  </>
+                )}
                 {!validating && !creating && !(isPolling && importType === 'samples') && t('import.samples.import')}
               </Button>
             </>
           )}
         </Card>
 
-        {/* Importação de Localizações */}
-        <Card className="import-card">
-          <div className="import-card-header">
-            <h2>Importação de Localizações</h2>
-            <p>Importe localizações em lote via CSV.</p>
-          </div>
-
-          {!canImportLocations && (
-            <div className="import-warning">
-              <AlertCircle size={20} />
-              <span>Você não tem permissão para importar localizações.</span>
-            </div>
-          )}
-
-          {canImportLocations && (
-            <>
-              <div className="import-actions">
-                <div className="template-downloads">
-                  <span>Baixar template:</span>
-                  <Button
-                    variant="secondary"
-                    onClick={handleDownloadLocationTemplate}
-                  >
-                    <FileText size={16} />
-                    CSV
-                  </Button>
-                </div>
-              </div>
-
-              <div className="import-upload">
-                <input
-                  type="file"
-                  id="locations-file"
-                  accept=".csv"
-                  onChange={handleFileChange(['csv'])}
-                  disabled={isPolling && importType === 'locations'}
-                  style={{ display: 'none' }}
-                />
-                <label htmlFor="locations-file" className="file-input-label">
-                  <Upload size={20} />
-                  {file ? file.name : 'Selecione um arquivo CSV'}
-                </label>
-              </div>
-
-              <Button
-                onClick={() => handleImport('locations')}
-                disabled={!file || validating || creating || (isPolling && importType === 'locations')}
-                style={{ marginTop: '1rem', width: '100%' }}
-              >
-                {validating && importType === 'locations' && 'Validando...'}
-                {creating && importType === 'locations' && 'Criando job...'}
-                {isPolling && importType === 'locations' && job && `Processando... ${job.progress}%`}
-                {!validating && !creating && !(isPolling && importType === 'locations') && 'Importar Localizações'}
-              </Button>
-            </>
-          )}
-        </Card>
 
         {/* Status do Job de Importação */}
         {job && importType && (
@@ -413,10 +326,10 @@ export default function ImportPage() {
               {job.status === 'failed' && <XCircle size={20} className="status-icon failed" style={{ color: '#f44336' }} />}
               {(job.status === 'processing' || job.status === 'pending') && <Clock size={20} className="status-icon processing" style={{ color: '#FF9800' }} />}
               <span style={{ fontWeight: 'bold', textTransform: 'capitalize' }}>
-                {job.status === 'completed' && 'Concluído'}
-                {job.status === 'failed' && 'Falhou'}
-                {job.status === 'processing' && 'Processando'}
-                {job.status === 'pending' && 'Pendente'}
+                {job.status === 'completed' && t('import.jobStatus.completed')}
+                {job.status === 'failed' && t('import.jobStatus.failed')}
+                {job.status === 'processing' && t('import.jobStatus.processing')}
+                {job.status === 'pending' && t('import.jobStatus.pending')}
               </span>
             </div>
 
@@ -438,7 +351,7 @@ export default function ImportPage() {
                   }} />
                 </div>
                 <p style={{ marginTop: '0.5rem', fontSize: '0.9rem', color: '#666' }}>
-                  Progresso: {job.progress}%
+                  {t('import.jobStatus.progress').replace('{progress}', String(job.progress))}
                 </p>
               </div>
             )}
@@ -469,9 +382,9 @@ export default function ImportPage() {
                   variant="primary"
                   onClick={handleOpenBatchLabels}
                   disabled={loadingLabels}
-                  title="Imprimir etiquetas das amostras importadas"
+                  title={t('import.labels.printTitle')}
                 >
-                  🖨️ Imprimir Etiquetas do Lote
+                  🖨️ {t('import.labels.printBatch')}
                 </Button>
                 {labelsError && <p className="label-print-error">{labelsError}</p>}
               </div>
@@ -484,7 +397,7 @@ export default function ImportPage() {
                 <div className="errors-list">
                   {job.errors.slice(0, 10).map((err: any, index: number) => (
                     <div key={index} className="error-item">
-                      <strong>{err.row ? `${t('import.result.row')} ${err.row}:` : 'Erro:'}</strong>
+                      <strong>{err.row ? `${t('import.result.row')} ${err.row}:` : t('import.result.errorLabel')}</strong>
                       <ul>
                         <li>{err.error || (Array.isArray(err.errors) ? err.errors.join(', ') : String(err.errors))}</li>
                       </ul>
@@ -492,7 +405,7 @@ export default function ImportPage() {
                   ))}
                   {job.errors.length > 10 && (
                     <p style={{ fontStyle: 'italic', color: '#666' }}>
-                      ... e mais {job.errors.length - 10} erro(s)
+                      {t('import.result.moreErrors').replace('{count}', String(job.errors.length - 10))}
                     </p>
                   )}
                 </div>
@@ -508,7 +421,7 @@ export default function ImportPage() {
                 borderRadius: '4px',
                 color: '#2e7d32'
               }}>
-                ✅ {t('import.result.successful')}: Todos os registros foram importados com sucesso!
+                ✅ {t('import.result.successful')}: {t('import.result.allRecordsSuccess')}
               </div>
             )}
           </Card>
@@ -525,7 +438,7 @@ export default function ImportPage() {
                 onClick={() => setShowOutcomeModal(true)}
                 style={{ marginLeft: '0.75rem' }}
               >
-                Ver Detalhes Técnicos
+                {t('import.validation.viewTechnicalDetails')}
               </Button>
             )}
           </Card>
@@ -535,13 +448,13 @@ export default function ImportPage() {
           <Modal
             isOpen={showBatchLabels}
             onClose={() => setShowBatchLabels(false)}
-            title="Etiquetas das amostras importadas"
+            title={t('import.labels.modalTitle')}
           >
             <div className="label-print-scope">
               {loadingLabels ? (
-                <p>Carregando etiquetas...</p>
+                <p><Spinner size="sm" label={t('import.labels.loading')} /> {t('import.labels.loading')}</p>
               ) : batchSamples.length === 0 ? (
-                <p>Nenhuma amostra retornada para este lote.</p>
+                <p>{t('import.labels.noSamples')}</p>
               ) : (
                 <div className="label-print-grid">
                   {batchSamples.map((sample) => (
@@ -558,10 +471,10 @@ export default function ImportPage() {
 
               <div className="label-modal-actions">
                 <Button variant="secondary" onClick={() => setShowBatchLabels(false)}>
-                  Fechar
+                  {t('common.close')}
                 </Button>
                 <Button onClick={() => window.print()} disabled={loadingLabels || batchSamples.length === 0}>
-                  Imprimir
+                  {t('common.print')}
                 </Button>
               </div>
             </div>
@@ -572,7 +485,7 @@ export default function ImportPage() {
           <Modal
             isOpen={showOutcomeModal}
             onClose={() => setShowOutcomeModal(false)}
-            title="Detalhes Técnicos (FHIR)"
+            title={t('import.validation.detailsTitle')}
           >
             <pre style={{ whiteSpace: 'pre-wrap', fontSize: '0.85rem' }}>
               {JSON.stringify(validationOutcome, null, 2)}
