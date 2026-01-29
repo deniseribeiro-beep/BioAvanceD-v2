@@ -21,7 +21,7 @@ class AuditRootService {
       await coll.createIndex({ chainIndex: 1 });
       await coll.createIndex({ previousRootHash: 1 });
     } catch (err) {
-      logger.warn('Could not create indexes for audit_roots:', err.message);
+      logger.warn('Não foi possível criar índices para audit_roots:', err.message);
     }
   }
 
@@ -53,7 +53,7 @@ class AuditRootService {
 
       return await coll.findOne({ date });
     } catch (error) {
-      logger.error('Error saving daily root:', error.message);
+      logger.error('Erro ao salvar root diária:', error.message);
       throw error;
     } finally {
       if (localDb) await closeConnection();
@@ -96,12 +96,12 @@ class AuditRootService {
         const item = chain[i];
         if (i === 0) {
           if (item.previousRootHash) {
-            anomalies.push({ index: i, reason: 'first item has previousRootHash' });
+            anomalies.push({ index: i, reason: 'primeiro item contém previousRootHash' });
           }
         } else {
           const prev = chain[i - 1];
           if (item.previousRootHash !== prev.root) {
-            anomalies.push({ index: i, reason: 'previousRootHash mismatch', expected: prev.root, actual: item.previousRootHash });
+            anomalies.push({ index: i, reason: 'previousRootHash divergente', expected: prev.root, actual: item.previousRootHash });
           }
         }
 
@@ -110,7 +110,7 @@ class AuditRootService {
           const integrityService = require('./integrityCheckService');
           const res = await integrityService.buildMerkleForDate(item.date, db);
           if (!res || res.root !== item.root) {
-            anomalies.push({ index: i, reason: 'root recalculation mismatch', date: item.date, saved: item.root, recalculated: res ? res.root : null });
+            anomalies.push({ index: i, reason: 'divergência na recomputação da root', date: item.date, saved: item.root, recalculated: res ? res.root : null });
           }
         }
       }

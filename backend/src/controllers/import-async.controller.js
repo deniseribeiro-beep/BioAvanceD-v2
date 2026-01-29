@@ -106,7 +106,8 @@ class ImportAsyncController {
           success: false,
           error: 'Validação falhou',
           errors: validation.errors,
-          metadata: validation.metadata
+          metadata: validation.metadata,
+          operationOutcome: validation.metadata?.operationOutcome
         });
       }
 

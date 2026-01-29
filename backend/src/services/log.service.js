@@ -61,6 +61,11 @@ class LogService {
       const logsCollection = db.collection('logs');
       const log = LogModel.create(sanitizedLogData, req);
 
+      if (!log.auditHash) {
+        const integrityService = require('./integrityCheckService');
+        log.auditHash = integrityService.computeAuditHash(log);
+      }
+
       const result = await logsCollection.insertOne(log);
 
       const createdLog = {

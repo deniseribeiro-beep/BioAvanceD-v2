@@ -28,16 +28,16 @@ async function runOnce() {
   let db = null;
   try {
     db = await connectDB();
-    logger.info(`[daily-merkle] Generating Merkle Root for ${targetDate}`);
-    const result = await integrityService.buildMerkleForDate(targetDate, db);
+    logger.info(`[daily-merkle] Gerando Merkle Root para ${targetDate}`);
+    const result = await integrityService.buildMerkleForDate(targetDate, db, { persistMissing: true });
     if (!result || !result.root) {
-      logger.warn(`[daily-merkle] No root produced for ${targetDate}`);
+      logger.warn(`[daily-merkle] Nenhuma root gerada para ${targetDate}`);
     }
 
     await auditRootService.saveDailyRoot({ date: targetDate, root: result.root, db });
-    logger.info(`[daily-merkle] Saved Merkle Root for ${targetDate} -> ${result.root}`);
+    logger.info(`[daily-merkle] Root salva para ${targetDate} -> ${result.root}`);
   } catch (error) {
-    logger.error('[daily-merkle] Error running daily merkle job:', error.message || error);
+    logger.error('[daily-merkle] Erro ao executar job diário de Merkle:', error.message || error);
   } finally {
     if (db) await closeConnection();
   }
@@ -45,12 +45,12 @@ async function runOnce() {
 
 function scheduleNextRun() {
   const delay = msUntilNextRun();
-  logger.info(`[daily-merkle] Next run in ${Math.round(delay / 1000)}s`);
+  logger.info(`[daily-merkle] Próxima execução em ${Math.round(delay / 1000)}s`);
   setTimeout(async () => {
     try {
       await runOnce();
     } catch (e) {
-      logger.error('[daily-merkle] Run error:', e.message || e);
+      logger.error('[daily-merkle] Erro na execução:', e.message || e);
     } finally {
       // always reschedule
       scheduleNextRun();

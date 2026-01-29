@@ -2,6 +2,7 @@ const { getQueue } = require('../config/queue');
 const ImportJob = require('../models/ImportJob');
 const ImportMetrics = require('../models/ImportMetrics');
 const fhirService = require('./fhir.service');
+const fhirValidator = require('./fhir-validator.service');
 const logger = require('../utils/logger');
 const { v4: uuidv4 } = require('uuid');
 const path = require('path');
@@ -36,6 +37,7 @@ class ImportAsyncService {
       samples: ['.csv', '.xlsx', '.json'],
       results: ['.zip', '.raw', '.csv'],
       temperature: ['.csv'],
+      locations: ['.csv', '.json'],
     };
 
     const validExtensions = validFormats[dataType] || [];
@@ -60,6 +62,28 @@ class ImportAsyncService {
       }
     } catch (e) {
       logger.warn('Não foi possível normalizar cabeçalhos:', e.message);
+    }
+
+    // Validação FHIR para JSON
+    if (metadata.extension === '.json') {
+      try {
+        const raw = fs.readFileSync(file.path, 'utf8');
+        const payload = JSON.parse(raw);
+
+        if (fhirValidator.isFhirResource(payload)) {
+          const fhirValidation = fhirValidator.validatePayload(payload, ['Patient', 'Specimen', 'Observation', 'Organization', 'Bundle']);
+          metadata.fhir = true;
+          metadata.fhirResourcesValidated = fhirValidation.resourcesValidated || 0;
+
+          if (!fhirValidation.valid) {
+            const operationOutcome = fhirValidator.buildOperationOutcome(fhirValidation.issues || []);
+            metadata.operationOutcome = operationOutcome;
+            errors.push(...(fhirValidation.issues || []).map(issue => issue.diagnostics));
+          }
+        }
+      } catch (error) {
+        errors.push(error.message || 'Arquivo JSON inválido');
+      }
     }
 
     return {
@@ -99,6 +123,23 @@ class ImportAsyncService {
       collectiondate: 'registrationDate',
       datacoleta: 'registrationDate',
       registerdate: 'registrationDate',
+      // location aliases
+      locationid: 'locationID',
+      idlocalizacao: 'locationID',
+      equipmenttype: 'equipmentType',
+      tipoequipamento: 'equipmentType',
+      equipmentid: 'equipmentID',
+      idequipamento: 'equipmentID',
+      block: 'block',
+      bloco: 'block',
+      rack: 'rack',
+      prateleira: 'rack',
+      drawer: 'drawer',
+      gaveta: 'drawer',
+      box: 'box',
+      caixa: 'box',
+      wellposition: 'wellPosition',
+      eppendorfwell: 'wellPosition',
     };
     return fieldMapping[normalized] || (typeof original === 'string' ? original.trim() : normalized);
   }
@@ -108,7 +149,8 @@ class ImportAsyncService {
    */
   findHeaderRow(sheetRows, dataType) {
     const candidates = new Set([
-      'patientid', 'sampletype', 'sampleorigin', 'extractionprotocol'
+      'patientid', 'sampletype', 'sampleorigin', 'extractionprotocol',
+      'equipmenttype', 'block', 'rack', 'drawer', 'box'
     ]);
     for (let i = 0; i < sheetRows.length; i++) {
       const row = sheetRows[i];

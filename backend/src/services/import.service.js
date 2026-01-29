@@ -5,6 +5,8 @@ const logger = require('../utils/logger');
 const PatientModel = require('../models/Patient');
 const SampleModel = require('../models/Sample');
 const TemperatureModel = require('../models/Temperature');
+const LocationModel = require('../models/Location');
+const fhirValidator = require('./fhir-validator.service');
 
 /**
  * Service de Importação de Dados
@@ -23,14 +25,16 @@ class ImportService {
       'patients': ['.csv', '.json', '.xlsx'],
       'samples': ['.csv', '.json', '.xlsx'],
       'results': ['.zip', '.raw', '.csv', '.xlsx'],
-      'temperature': ['.csv']
+      'temperature': ['.csv'],
+      'locations': ['.csv', '.json']
     };
 
     const validMimeTypes = {
       'patients': ['text/csv', 'application/json', 'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
       'samples': ['text/csv', 'application/json', 'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
       'results': ['application/zip', 'application/octet-stream', 'text/csv', 'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
-      'temperature': ['text/csv']
+      'temperature': ['text/csv'],
+      'locations': ['text/csv', 'application/json']
     };
 
     const extensions = validExtensions[allowedTypes] || [];
@@ -81,9 +85,50 @@ class ImportService {
       'patients': ['patientName', 'birthDate', 'sex'],
       'samples': ['patientID', 'sampleType', 'sampleOrigin'],
       'temperature': ['sensorId', 'temperatureValue', 'timestamp'],
-      'results': ['sampleID', 'fileType', 'filePath']
+      'results': ['sampleID', 'fileType', 'filePath'],
+      'locations': ['equipmentType', 'block', 'rack', 'drawer', 'box']
     };
     return fields[dataType] || [];
+  }
+
+  /**
+   * Valida arquivo JSON como FHIR R4 (Patient/Specimen/Observation/Organization)
+   */
+  validateFHIRFile(file) {
+    try {
+      const raw = fs.readFileSync(file.path, 'utf8');
+      const payload = JSON.parse(raw);
+
+      if (!fhirValidator.isFhirResource(payload)) {
+        return { isFhir: false, valid: true };
+      }
+
+      const result = fhirValidator.validatePayload(payload, ['Patient', 'Specimen', 'Observation', 'Organization', 'Bundle']);
+      const operationOutcome = fhirValidator.buildOperationOutcome(result.issues || []);
+
+      return {
+        isFhir: true,
+        valid: result.valid,
+        issues: result.issues || [],
+        resourcesValidated: result.resourcesValidated || 0,
+        operationOutcome
+      };
+    } catch (error) {
+      return {
+        isFhir: false,
+        valid: false,
+        issues: [{
+          severity: 'error',
+          code: 'invalid',
+          diagnostics: error.message || 'Arquivo JSON inválido',
+          expression: '/'
+        }],
+        resourcesValidated: 0,
+        operationOutcome: fhirValidator.buildOperationOutcome([
+          { severity: 'error', code: 'invalid', diagnostics: error.message || 'Arquivo JSON inválido', expression: '/' }
+        ])
+      };
+    }
   }
 
   /**
@@ -263,6 +308,143 @@ class ImportService {
   }
 
   /**
+   * Processa importação de localizações
+   */
+  async importLocations(db, file) {
+    try {
+      const ext = path.extname(file.originalname).toLowerCase();
+      const locationsCollection = db.collection('locations');
+      const results = { success: 0, errors: [], total: 0 };
+
+      if (ext === '.json') {
+        const data = JSON.parse(fs.readFileSync(file.path, 'utf8'));
+        const locations = Array.isArray(data) ? data : [data];
+
+        for (const locationDataRaw of locations) {
+          try {
+            const { data: locationData, parseErrors } = this.parseLocationData(locationDataRaw);
+
+            if (parseErrors.length > 0) {
+              results.errors.push({
+                row: results.total + 1,
+                errors: parseErrors
+              });
+              results.total++;
+              continue;
+            }
+
+            const validation = LocationModel.validate(locationData);
+            if (!validation.isValid) {
+              results.errors.push({
+                row: results.total + 1,
+                errors: validation.errors
+              });
+              results.total++;
+              continue;
+            }
+
+            if (locationData.locationID !== undefined && locationData.locationID !== null) {
+              const existing = await locationsCollection.findOne({ locationID: Number(locationData.locationID) });
+              if (existing) {
+                results.errors.push({
+                  row: results.total + 1,
+                  errors: [`locationID ${locationData.locationID} já existe`]
+                });
+                results.total++;
+                continue;
+              }
+            } else {
+              const { generateUniqueLocationID } = require('../utils/locationIDGenerator');
+              locationData.locationID = await generateUniqueLocationID(db, 'locations');
+            }
+
+            const location = LocationModel.create(locationData);
+            await locationsCollection.insertOne(location);
+            results.success++;
+          } catch (error) {
+            results.errors.push({
+              row: results.total + 1,
+              error: error.message
+            });
+          }
+          results.total++;
+        }
+      } else if (ext === '.csv') {
+        try {
+          await this.validateCSVStructure(file, 'locations');
+        } catch (structError) {
+          results.errors.push({ row: 0, error: structError.message });
+          return results;
+        }
+
+        const rows = [];
+        await new Promise((resolve, reject) => {
+          fs.createReadStream(file.path)
+            .pipe(csv())
+            .on('data', (row) => rows.push(row))
+            .on('end', resolve)
+            .on('error', reject);
+        });
+
+        for (const row of rows) {
+          try {
+            const { data: locationData, parseErrors } = this.parseLocationCSV(row);
+
+            if (parseErrors.length > 0) {
+              results.errors.push({
+                row: results.total + 1,
+                errors: parseErrors
+              });
+              results.total++;
+              continue;
+            }
+
+            const validation = LocationModel.validate(locationData);
+            if (!validation.isValid) {
+              results.errors.push({
+                row: results.total + 1,
+                errors: validation.errors
+              });
+              results.total++;
+              continue;
+            }
+
+            if (locationData.locationID !== undefined && locationData.locationID !== null) {
+              const existing = await locationsCollection.findOne({ locationID: Number(locationData.locationID) });
+              if (existing) {
+                results.errors.push({
+                  row: results.total + 1,
+                  errors: [`locationID ${locationData.locationID} já existe`]
+                });
+                results.total++;
+                continue;
+              }
+            } else {
+              const { generateUniqueLocationID } = require('../utils/locationIDGenerator');
+              locationData.locationID = await generateUniqueLocationID(db, 'locations');
+            }
+
+            const location = LocationModel.create(locationData);
+            await locationsCollection.insertOne(location);
+            results.success++;
+          } catch (error) {
+            results.errors.push({
+              row: results.total + 1,
+              error: error.message
+            });
+          }
+          results.total++;
+        }
+      }
+
+      return results;
+    } catch (error) {
+      logger.error('Erro ao importar localizações:', error.message);
+      throw error;
+    }
+  }
+
+  /**
    * Processa importação de temperatura
    */
   async importTemperature(db, file) {
@@ -401,6 +583,40 @@ class ImportService {
     };
 
     return { data: sampleData, parseErrors };
+  }
+
+  /**
+   * Parse CSV/JSON para Location
+   */
+  parseLocationData(data) {
+    const parseErrors = [];
+
+    const toNumber = (value, fieldName) => {
+      if (value === undefined || value === null || value === '') return null;
+      const parsed = Number(String(value).trim());
+      if (Number.isNaN(parsed)) {
+        parseErrors.push(`${fieldName} invalido`);
+        return null;
+      }
+      return parsed;
+    };
+
+    const locationData = {
+      locationID: toNumber(data.locationID, 'locationID'),
+      equipmentType: toNumber(data.equipmentType, 'equipmentType'),
+      equipmentID: toNumber(data.equipmentID, 'equipmentID'),
+      block: toNumber(data.block, 'block'),
+      rack: toNumber(data.rack, 'rack'),
+      drawer: toNumber(data.drawer, 'drawer'),
+      box: toNumber(data.box, 'box'),
+      wellPosition: data.wellPosition || data.eppendorfWell || null
+    };
+
+    return { data: locationData, parseErrors };
+  }
+
+  parseLocationCSV(row) {
+    return this.parseLocationData(row);
   }
 
   /**

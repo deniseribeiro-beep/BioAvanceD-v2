@@ -1,16 +1,20 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, Download } from 'lucide-react';
 import Button from '../components/UI/Button';
 import Card from '../components/UI/Card';
 import Input from '../components/UI/Input';
 import Select from '../components/UI/Select';
+import Table from '../components/UI/Table';
 import { useSamples } from '../hooks/useSamples';
 import { useLocations } from '../hooks/useLocations';
+import { useResults } from '../hooks/useResults';
+import { useEquipment } from '../hooks/useEquipment';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useAuth } from '../contexts/AuthContext';
-import SampleFilesSection from '../components/SampleFilesSection';
+import AnalysisUploadModal from '../components/AnalysisUploadModal';
 import { Sample } from '../types/models';
+import { resultService } from '../services/api';
 import './SamplesPage.css';
 
 export default function SampleDetailsPage() {
@@ -19,17 +23,25 @@ export default function SampleDetailsPage() {
   const { t } = useLanguage();
   const { user, hasRole } = useAuth();
   const { samples, loading, error, updateSample } = useSamples();
+  const { results, loadResults } = useResults();
+  const { equipment } = useEquipment();
   const { locations = [], loadLocations } = useLocations();
   const [sample, setSample] = useState<Sample | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [showUploadModal, setShowUploadModal] = useState(false);
   const [form, setForm] = useState({
     locationID: '',
     linkedProject: '',
     availableQuantity: '',
     currentStatus: '',
+    sampleOrigin: '',
+    extractionProtocol: '',
+    patientID: '',
   });
+
+  const canEdit = hasRole(['Administrador', 'Coordenador']) || user?.roleName === 'Administrador' || user?.roleName === 'Coordenador';
 
   const computeAvailability = (s: Sample | null | undefined) => {
     const initial = s?.volumeInitial ?? s?.originalQuantity ?? s?.quantity ?? 0;
@@ -98,6 +110,9 @@ export default function SampleDetailsPage() {
           linkedProject: foundSample.linkedProject || '',
           availableQuantity: (foundSample.volumeCurrent ?? foundSample.availableQuantity ?? foundSample.quantity ?? '').toString(),
           currentStatus: foundSample.currentStatus || 'Available',
+          sampleOrigin: foundSample.sampleOrigin || '',
+          extractionProtocol: foundSample.extractionProtocol || '',
+          patientID: foundSample.patientID ? String(foundSample.patientID) : '',
         });
       } else {
         // Se carregou mas não encontrou, define como null
@@ -142,6 +157,62 @@ export default function SampleDetailsPage() {
       : `Localização ID: ${locationID}`;
 
     return { summary, details };
+  };
+
+  const effectiveSample = useMemo(() => {
+    if (!isEditing) return sample;
+    const parsedAvailable = Number(form.availableQuantity);
+    const parsedLocation = form.locationID ? Number(form.locationID) : undefined;
+    return {
+      ...sample,
+      availableQuantity: Number.isFinite(parsedAvailable) ? parsedAvailable : sample?.availableQuantity,
+      volumeCurrent: Number.isFinite(parsedAvailable) ? parsedAvailable : sample?.volumeCurrent,
+      locationID: parsedLocation ?? sample?.locationID,
+      linkedProject: form.linkedProject || sample?.linkedProject,
+      currentStatus: (form.currentStatus as Sample['currentStatus']) || sample?.currentStatus,
+    } as Sample;
+  }, [isEditing, sample, form.availableQuantity, form.locationID, form.linkedProject, form.currentStatus]);
+
+  const availabilityPreview = computeAvailability(effectiveSample);
+
+  const locationOptions = useMemo(() => {
+    if (!locations || locations.length === 0) {
+      return [{ value: '', label: t('samples.noLocations', 'Sem localizações disponíveis') }];
+    }
+    return [
+      { value: '', label: t('common.select') || 'Selecione' },
+      ...locations.map(loc => ({
+        value: loc.locationID,
+        label: `${loc.locationID} - Bloco ${loc.block} / Prat. ${loc.rack} / Gav. ${loc.drawer} / Caixa ${loc.box}`,
+      })),
+    ];
+  }, [locations, t]);
+
+  const statusOptions = useMemo(() => ([
+    { value: 'Available', label: t('samples.status.available', 'Disponível') },
+    { value: 'PartiallyWithdrawn', label: t('samples.status.partiallyWithdrawn', 'Parcialmente Retirada') },
+    { value: 'TotallyWithdrawn', label: t('samples.status.totallyWithdrawn', 'Totalmente Retirada') },
+    { value: 'Withdrawn', label: t('samples.status.withdrawn', 'Retirada') },
+    { value: 'Expired', label: t('samples.status.expired', 'Expirada') },
+    { value: 'Destroyed', label: t('samples.status.destroyed', 'Destruída') },
+    { value: 'Unusable', label: t('samples.status.unusable', 'Inutilizada') },
+  ]), [t]);
+
+  const sampleResults = useMemo(() => {
+    if (!sample) return [];
+    const sampleKeys = new Set([
+      String(sample._id || ''),
+      String(sample.sampleID || '')
+    ]);
+    return results.filter(result => sampleKeys.has(String(result.sampleID)));
+  }, [results, sample]);
+
+  const getResultEquipmentLabel = (equipmentID?: number, equipmentName?: string) => {
+    if (equipmentID) {
+      const match = equipment.find((item) => item.equipmentID === equipmentID);
+      return match?.equipmentDescription || `Equipamento #${equipmentID}`;
+    }
+    return equipmentName || 'Não informado';
   };
 
   if (loading) {
@@ -222,45 +293,6 @@ export default function SampleDetailsPage() {
     );
   }
 
-  const effectiveSample = useMemo(() => {
-    if (!isEditing) return sample;
-    const parsedAvailable = Number(form.availableQuantity);
-    const parsedLocation = form.locationID ? Number(form.locationID) : undefined;
-    return {
-      ...sample,
-      availableQuantity: Number.isFinite(parsedAvailable) ? parsedAvailable : sample?.availableQuantity,
-      volumeCurrent: Number.isFinite(parsedAvailable) ? parsedAvailable : sample?.volumeCurrent,
-      locationID: parsedLocation ?? sample?.locationID,
-      linkedProject: form.linkedProject || sample?.linkedProject,
-      currentStatus: (form.currentStatus as Sample['currentStatus']) || sample?.currentStatus,
-    } as Sample;
-  }, [isEditing, sample, form.availableQuantity, form.locationID, form.linkedProject, form.currentStatus]);
-
-  const availabilityPreview = computeAvailability(effectiveSample);
-
-  const locationOptions = useMemo(() => {
-    if (!locations || locations.length === 0) {
-      return [{ value: '', label: t('samples.noLocations', 'Sem localizações disponíveis') }];
-    }
-    return [
-      { value: '', label: t('common.select') || 'Selecione' },
-      ...locations.map(loc => ({
-        value: loc.locationID,
-        label: `${loc.locationID} - Bloco ${loc.block} / Prat. ${loc.rack} / Gav. ${loc.drawer} / Caixa ${loc.box}`,
-      })),
-    ];
-  }, [locations, t]);
-
-  const statusOptions = useMemo(() => ([
-    { value: 'Available', label: t('samples.status.available', 'Disponível') },
-    { value: 'PartiallyWithdrawn', label: t('samples.status.partiallyWithdrawn', 'Parcialmente Retirada') },
-    { value: 'TotallyWithdrawn', label: t('samples.status.totallyWithdrawn', 'Totalmente Retirada') },
-    { value: 'Withdrawn', label: t('samples.status.withdrawn', 'Retirada') },
-    { value: 'Expired', label: t('samples.status.expired', 'Expirada') },
-    { value: 'Destroyed', label: t('samples.status.destroyed', 'Destruída') },
-    { value: 'Unusable', label: t('samples.status.unusable', 'Inutilizada') },
-  ]), [t]);
-
   const handleChange = (field: keyof typeof form, value: string) => {
     setForm(prev => ({ ...prev, [field]: value }));
   };
@@ -272,13 +304,16 @@ export default function SampleDetailsPage() {
         linkedProject: sample.linkedProject || '',
         availableQuantity: (sample.volumeCurrent ?? sample.availableQuantity ?? sample.quantity ?? '').toString(),
         currentStatus: sample.currentStatus || 'Available',
+        sampleOrigin: sample.sampleOrigin || '',
+        extractionProtocol: sample.extractionProtocol || '',
+        patientID: sample.patientID ? String(sample.patientID) : '',
       });
     }
     setSaveError(null);
     setIsEditing(false);
   };
 
-  const handleSave = async () => {
+  const handleUpdate = async () => {
     if (!sample) return;
     setSaving(true);
     setSaveError(null);
@@ -294,6 +329,9 @@ export default function SampleDetailsPage() {
       linkedProject: form.linkedProject?.trim() || undefined,
       locationID: form.locationID ? Number(form.locationID) : undefined,
       currentStatus: (form.currentStatus as Sample['currentStatus']) || undefined,
+      sampleOrigin: form.sampleOrigin?.trim() || undefined,
+      extractionProtocol: form.extractionProtocol?.trim() || undefined,
+      patientID: form.patientID?.trim() || undefined,
     };
 
     if (parsedAvailable !== null) {
@@ -323,56 +361,65 @@ export default function SampleDetailsPage() {
     }
   };
 
+  const handleUploadSuccess = () => {
+    loadResults();
+    setShowUploadModal(false);
+  };
+
   return (
     <div className="page">
       <div className="page-header">
         <div>
-          <Button 
-            variant="secondary" 
-            onClick={() => navigate('/samples')}
-            style={{ marginBottom: '1rem' }}
-          >
-            <ArrowLeft size={18} style={{ marginRight: '0.5rem' }} />
-            {t('common.back') || 'Voltar'}
-          </Button>
           <h1 className="page-title">
             Detalhes da Amostra - {sample.barcode || sample.sampleID || 'N/A'}
           </h1>
 
           <div style={{ marginBottom: '0.5rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-            <Button variant="secondary" onClick={() => navigate(`/samples/${id}/chain`)} style={{ padding: '0.25rem 0.5rem', fontSize: '0.85rem' }}>
-              {t('samples.chain') || 'Fluxo'}
-            </Button>
-            {(hasRole(['Administrador', 'Coordenador']) || user?.roleName === 'Administrador' || user?.roleName === 'Coordenador') && (
+            {!isEditing ? (
+              <>
+                {canEdit && (
+                  <Button
+                    variant="primary"
+                    onClick={() => setIsEditing(true)}
+                    style={{ padding: '0.25rem 0.5rem', fontSize: '0.85rem' }}
+                  >
+                    {t('common.edit') || 'Editar'}
+                  </Button>
+                )}
+                <Button variant="secondary" onClick={() => navigate(`/samples/${id}/chain`)} style={{ padding: '0.25rem 0.5rem', fontSize: '0.85rem' }}>
+                  {t('samples.chain') || 'Cadeia de Custódia'}
+                </Button>
+                <Button variant="secondary" onClick={() => navigate('/samples')} style={{ padding: '0.25rem 0.5rem', fontSize: '0.85rem' }}>
+                  <ArrowLeft size={18} style={{ marginRight: '0.5rem' }} />
+                  {t('common.back') || 'Voltar'}
+                </Button>
+              </>
+            ) : (
+              <>
+                <Button
+                  variant="primary"
+                  onClick={handleUpdate}
+                  disabled={saving}
+                  style={{ padding: '0.25rem 0.5rem', fontSize: '0.85rem' }}
+                >
+                  {saving ? (t('common.loading') || 'Salvando...') : (t('common.save') || 'Salvar')}
+                </Button>
               <Button
-                variant={isEditing ? 'secondary' : 'primary'}
-                onClick={() => setIsEditing(!isEditing)}
-                style={{ padding: '0.25rem 0.5rem', fontSize: '0.85rem' }}
-              >
-                {isEditing ? (t('common.cancel') || 'Cancelar') : (t('common.edit') || 'Editar')}
-              </Button>
+                  variant="secondary"
+                  onClick={handleCancel}
+                  disabled={saving}
+                  style={{ padding: '0.25rem 0.5rem', fontSize: '0.85rem' }}
+                >
+                  {t('common.cancel') || 'Cancelar'}
+                </Button>
+              </>
+            )}
+            {saveError && (
+              <span style={{ color: 'var(--danger)', alignSelf: 'center', fontSize: '0.9rem' }}>
+                {saveError}
+              </span>
             )}
           </div>
-          {isEditing && (
-            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
-              <Button
-                variant="primary"
-                onClick={handleSave}
-                disabled={saving}
-                style={{ padding: '0.35rem 0.75rem' }}
-              >
-                {saving ? (t('common.loading') || 'Salvando...') : (t('common.save') || 'Salvar')}
-              </Button>
-              <Button variant="secondary" onClick={handleCancel} disabled={saving} style={{ padding: '0.35rem 0.75rem' }}>
-                {t('common.cancel') || 'Cancelar'}
-              </Button>
-              {saveError && (
-                <span style={{ color: 'var(--danger)', alignSelf: 'center', fontSize: '0.9rem' }}>
-                  {saveError}
-                </span>
-              )}
-            </div>
-          )}
         </div>
       </div>
 
@@ -397,11 +444,31 @@ export default function SampleDetailsPage() {
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', backgroundColor: 'var(--surface)', borderRadius: '4px' }}>
               <span style={{ fontWeight: 500, color: 'var(--text-light)' }}>Origem:</span>
-              <span style={{ color: 'var(--text)' }}>{sample.sampleOrigin || 'N/A'}</span>
+              {isEditing ? (
+                <div style={{ width: '280px' }}>
+                  <Input
+                    value={form.sampleOrigin}
+                    onChange={(e) => handleChange('sampleOrigin', e.target.value)}
+                    placeholder={t('samples.origin', 'Origem') || 'Origem'}
+                  />
+                </div>
+              ) : (
+                <span style={{ color: 'var(--text)' }}>{sample.sampleOrigin || 'N/A'}</span>
+              )}
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', backgroundColor: 'var(--surface)', borderRadius: '4px' }}>
               <span style={{ fontWeight: 500, color: 'var(--text-light)' }}>Protocolo de Extração:</span>
-              <span style={{ color: 'var(--text)' }}>{sample.extractionProtocol || 'N/A'}</span>
+              {isEditing ? (
+                <div style={{ width: '280px' }}>
+                  <Input
+                    value={form.extractionProtocol}
+                    onChange={(e) => handleChange('extractionProtocol', e.target.value)}
+                    placeholder={t('samples.protocol', 'Protocolo') || 'Protocolo'}
+                  />
+                </div>
+              ) : (
+                <span style={{ color: 'var(--text)' }}>{sample.extractionProtocol || 'N/A'}</span>
+              )}
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', backgroundColor: 'var(--surface)', borderRadius: '4px' }}>
               <span style={{ fontWeight: 500, color: 'var(--text-light)' }}>Data de Registro:</span>
@@ -525,20 +592,102 @@ export default function SampleDetailsPage() {
           <div style={{ display: 'grid', gap: '0.75rem' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', backgroundColor: 'var(--surface)', borderRadius: '4px' }}>
               <span style={{ fontWeight: 500, color: 'var(--text-light)' }}>ID do Paciente:</span>
-              <span style={{ fontFamily: 'monospace', color: 'var(--text)', fontWeight: 500 }}>
-                {sample.patientID || 'N/A'}
-              </span>
+              {isEditing ? (
+                <div style={{ width: '220px' }}>
+                  <Input
+                    value={form.patientID}
+                    onChange={(e) => handleChange('patientID', e.target.value)}
+                    placeholder={t('samples.patient', 'Paciente') || 'Paciente'}
+                  />
+                </div>
+              ) : (
+                <span style={{ fontFamily: 'monospace', color: 'var(--text)', fontWeight: 500 }}>
+                  {sample.patientID || 'N/A'}
+                </span>
+              )}
             </div>
           </div>
         </Card>
 
         {/* Arquivos de Análise */}
-        {sample._id && (
+        {sample && (
           <Card>
-            <SampleFilesSection sampleID={sample._id} />
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+              <h3 style={{ fontSize: '1rem', fontWeight: 600, margin: 0, color: 'var(--text)' }}>
+                Arquivos de Análise
+              </h3>
+              {canEdit && (
+                <Button variant="primary" onClick={() => setShowUploadModal(true)}>
+                  Enviar Arquivo
+                </Button>
+              )}
+            </div>
+
+            {sampleResults.length === 0 ? (
+              <div style={{
+                textAlign: 'center',
+                padding: '2rem',
+                backgroundColor: 'var(--surface)',
+                borderRadius: '6px',
+                color: 'var(--text-light)'
+              }}>
+                <p>Nenhum arquivo associado a esta amostra</p>
+              </div>
+            ) : (
+              <div style={{ overflowX: 'auto' }}>
+                <Table
+                  headers={[
+                    'ID',
+                    'Tipo',
+                    'Método',
+                    'Pesquisador',
+                    'Equipamento',
+                    'Descrição',
+                    'Ações',
+                  ]}
+                >
+                  {sampleResults.map((result) => (
+                    <tr key={result._id || result.resultID}>
+                      <td>{result.resultID || result._id}</td>
+                      <td><span className="file-type-badge">{result.fileType}</span></td>
+                      <td>{result.method || 'N/A'}</td>
+                      <td>{result.responsibleResearcher || 'N/A'}</td>
+                      <td>{getResultEquipmentLabel(result.equipmentID, result.equipmentName)}</td>
+                      <td>{result.description || 'N/A'}</td>
+                      <td>
+                        <div className="table-actions">
+                          <Button
+                            variant="secondary"
+                            onClick={async () => {
+                              try {
+                                await resultService.download(result._id || result.resultID);
+                              } catch (err: any) {
+                                alert(`Erro ao fazer download: ${err.message || 'Erro desconhecido'}`);
+                              }
+                            }}
+                          >
+                            <Download size={16} />
+                            Download
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </Table>
+              </div>
+            )}
           </Card>
         )}
       </div>
+
+      {sample && (
+        <AnalysisUploadModal
+          isOpen={showUploadModal}
+          onClose={() => setShowUploadModal(false)}
+          onSuccess={handleUploadSuccess}
+          sampleId={String(sample._id || sample.sampleID || '')}
+        />
+      )}
     </div>
   );
 }

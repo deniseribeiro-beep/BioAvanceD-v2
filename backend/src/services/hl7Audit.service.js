@@ -25,7 +25,7 @@ class HL7AuditService {
         const hash = sha256Hex(json);
         results.push({ type: 'fhir', sampleId: doc._id, hash, doc });
       } catch (err) {
-        logger.error('Error hashing FHIR for sample:', err.message || err);
+        logger.error('Erro ao gerar hash FHIR da amostra:', err.message || err);
       }
     }
     return results;
@@ -52,10 +52,10 @@ class HL7AuditService {
         } else {
           // Fallback to fileName+meta hashing
           const hash = sha256Hex(f.fileName + '|' + (f.fileSize || 0));
-          results.push({ type: 'hl7', fileId: f._id, hash, note: 'file missing on disk' });
+          results.push({ type: 'hl7', fileId: f._id, hash, note: 'arquivo não encontrado em disco' });
         }
       } catch (err) {
-        logger.error('Error hashing HL7 file:', err.message || err);
+        logger.error('Erro ao gerar hash do arquivo HL7:', err.message || err);
       }
     }
     return results;

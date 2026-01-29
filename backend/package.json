@@ -29,6 +29,8 @@
     "test:ci": "node test/run-tests.js && node test/cli.repair-smoke.test.js && node test/integrityCheckService.mock.test.js && node test/cli.audit-smoke.test.js && node test/integration/auditRoot.service.mock.test.js"
   },
   "dependencies": {
+    "ajv": "^8.17.1",
+    "ajv-formats": "^2.1.1",
     "argon2": "^0.31.2",
     "bcryptjs": "^2.4.3",
     "bullmq": "^3.16.2",

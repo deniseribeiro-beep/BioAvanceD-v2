@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, useMemo, useCallback, ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, useMemo, useCallback, useRef, ReactNode } from 'react';
 import { User } from '../types/models';
 import { authService } from '../services/api';
 import { hasRoleAccess, canRoleAccessRoute, getAccessTypeForRole, RoleName } from '../utils/rolePermissions';
@@ -24,6 +24,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>(localStorage.getItem('token'));
   const [isLoading, setIsLoading] = useState(true);
   const [skipVerification, setSkipVerification] = useState(false);
+  const verifyInFlightRef = useRef(false);
+  const lastVerifyAtRef = useRef(0);
+  const retryTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // Verifica token apenas na montagem inicial do componente
   useEffect(() => {
@@ -34,9 +37,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const storedToken = localStorage.getItem('token');
       if (storedToken) {
         try {
+          const now = Date.now();
+          if (verifyInFlightRef.current) {
+            if (isMounted) {
+              setIsLoading(false);
+            }
+            return;
+          }
+
+          if (now - lastVerifyAtRef.current < 5000) {
+            if (isMounted) {
+              setIsLoading(false);
+            }
+            return;
+          }
+
+          verifyInFlightRef.current = true;
+          lastVerifyAtRef.current = now;
+
           // Verifica se acabou de fazer login (evita verificação imediata após login)
           const lastLoginTime = sessionStorage.getItem('lastLoginTime');
-          const now = Date.now();
           const timeSinceLogin = lastLoginTime ? now - parseInt(lastLoginTime, 10) : Infinity;
           
           // Se fez login há menos de 2 segundos, não verifica ainda
@@ -92,7 +112,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             const now = Date.now();
             const timeSinceLogin = lastLoginTime ? now - parseInt(lastLoginTime, 10) : Infinity;
             
-            if (error.response?.status === 401 && timeSinceLogin < 5000) {
+            if (error.response?.status === 429) {
+              console.warn('Muitas requisições na verificação de token. Reagendando verificação.');
+              if (retryTimeoutRef.current) {
+                clearTimeout(retryTimeoutRef.current);
+              }
+              retryTimeoutRef.current = setTimeout(() => {
+                if (isMounted) {
+                  verifyToken();
+                }
+              }, 15000);
+            } else if (error.response?.status === 401 && timeSinceLogin < 5000) {
               console.log('Login recente detectado, mantendo token mesmo com erro 401');
             } else if (error.response?.status === 401) {
               // Erro 401 após login - pode ser token expirado, mas não remove automaticamente
@@ -107,6 +137,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             // O logout só deve acontecer quando o usuário explicitamente faz logout
             // ou quando uma requisição autenticada falha (não na verificação)
           }
+        } finally {
+          verifyInFlightRef.current = false;
         }
       } else if (isMounted) {
         setToken(null);
@@ -155,6 +187,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isMounted = false;
       if (verificationTimeout) {
         clearTimeout(verificationTimeout);
+      }
+      if (retryTimeoutRef.current) {
+        clearTimeout(retryTimeoutRef.current);
+        retryTimeoutRef.current = null;
       }
       window.removeEventListener('storage', handleStorageChange);
     };

@@ -30,6 +30,7 @@ import BackupPage from './pages/BackupPage';
 import UserSecurityPage from './pages/UserSecurityPage';
 import MFASetupPage from './pages/MFASetupPage';
 import ResetPasswordPage from './pages/ResetPasswordPage';
+import SettingsParametersPage from './pages/SettingsParametersPage';
 import './App.css';
 
 function App() {
@@ -85,6 +86,7 @@ function App() {
                 <Route path="/import" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}><ImportPage /></ProtectedRoute>} />
                 <Route path="/assistant" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico', 'Usuário Externo']}><AssistantPage /></ProtectedRoute>} />
                 <Route path="/backup" element={<ProtectedRoute requiredRole="Administrador"><BackupPage /></ProtectedRoute>} />
+                <Route path="/settings/parameters" element={<ProtectedRoute requiredRole="Administrador"><SettingsParametersPage /></ProtectedRoute>} />
                 <Route path="/user/security" element={<ProtectedRoute><UserSecurityPage /></ProtectedRoute>} />
                 <Route path="/security/mfa-setup" element={<ProtectedRoute><MFASetupPage /></ProtectedRoute>} />
               </Routes>

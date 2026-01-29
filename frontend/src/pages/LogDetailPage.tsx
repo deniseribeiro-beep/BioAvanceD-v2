@@ -6,6 +6,7 @@ import { Log } from '../types/models';
 import { logService } from '../services/api';
 import { formatPayload, formatMetadata } from '../utils/logFormatter';
 import { formatEntityID } from '../utils/entityIdFormatter';
+import { useLanguage } from '../contexts/LanguageContext';
 import { 
   ArrowLeft,
   XCircle,
@@ -19,14 +20,16 @@ import './LogsPage.css';
 export default function LogDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const { t } = useLanguage();
   const [log, setLog] = useState<Log | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     const loadLog = async () => {
       if (!id) {
-        setError('ID do log não fornecido');
+        setError(t('logs.detailPage.errors.missingId'));
         setLoading(false);
         return;
       }
@@ -46,17 +49,17 @@ export default function LogDetailPage() {
           } else if (response.data.error) {
             setError(response.data.error);
           } else {
-            setError('Log não encontrado');
+            setError(t('logs.detailPage.notFound'));
           }
         } else {
-          setError('Resposta inválida do servidor');
+          setError(t('logs.detailPage.errors.invalidResponse'));
         }
       } catch (err: any) {
         console.error('Erro ao carregar log:', err);
         const errorMessage = err.response?.data?.error || 
                            err.response?.data?.message || 
                            err.message || 
-                           'Erro ao carregar log';
+                           t('logs.detailPage.errors.load');
         setError(errorMessage);
       } finally {
         setLoading(false);
@@ -183,12 +186,34 @@ export default function LogDetailPage() {
     return 'var(--text-light)';
   };
 
+  const handleCopy = async (value: string) => {
+    try {
+      if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(value);
+      } else {
+        const textarea = document.createElement('textarea');
+        textarea.value = value;
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.focus();
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+      }
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (e) {
+      console.error('Erro ao copiar hash:', e);
+    }
+  };
+
   if (loading) {
     return (
       <div className="logs-page">
         <Card>
           <div style={{ padding: '2rem', textAlign: 'center' }}>
-            <p>Carregando detalhes do log...</p>
+            <p>{t('logs.detailPage.loading')}</p>
           </div>
         </Card>
       </div>
@@ -200,10 +225,10 @@ export default function LogDetailPage() {
       <div className="logs-page">
         <Card>
           <div style={{ padding: '2rem', textAlign: 'center' }}>
-            <p style={{ color: 'var(--danger)' }}>{error || 'Log não encontrado'}</p>
+            <p style={{ color: 'var(--danger)' }}>{error || t('logs.detailPage.notFound')}</p>
             <Button onClick={() => navigate('/logs')} style={{ marginTop: '1rem' }}>
               <ArrowLeft size={18} />
-              Voltar para Logs
+              {t('logs.detailPage.back')}
             </Button>
           </div>
         </Card>
@@ -221,20 +246,20 @@ export default function LogDetailPage() {
             style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}
           >
             <ArrowLeft size={18} />
-            Voltar para Logs
+            {t('logs.detailPage.back')}
           </Button>
         </div>
 
         <h1 style={{ marginBottom: '1.5rem', fontSize: '1.5rem', fontWeight: 600 }}>
-          Detalhes do Log
+          {t('logs.detailPage.title')}
         </h1>
 
         <div className="log-details">
           <div className="detail-section">
-            <h3>Informações Básicas</h3>
+            <h3>{t('logs.detailPage.sections.basic')}</h3>
             <div className="detail-grid">
               <div className="detail-item">
-                <label>ID:</label>
+                <label>{t('logs.detailPage.labels.id')}</label>
                 <span style={{ fontFamily: 'monospace', fontSize: '0.8125rem' }}>
                   {(() => {
                     const id = log._id || log.logID;
@@ -252,11 +277,11 @@ export default function LogDetailPage() {
                 </span>
               </div>
               <div className="detail-item">
-                <label>Data/Hora:</label>
+                <label>{t('logs.detailPage.labels.dateTime')}</label>
                 <span>{formatTimestamp(log)}</span>
               </div>
               <div className="detail-item">
-                <label>Timestamp ISO:</label>
+                <label>{t('logs.detailPage.labels.timestampISO')}</label>
                 <span style={{ fontFamily: 'monospace', fontSize: '0.8125rem' }}>
                   {(() => {
                     try {
@@ -283,23 +308,42 @@ export default function LogDetailPage() {
                   })()}
                 </span>
               </div>
+              {log.auditHash && (
+                <div className="detail-item">
+                  <label>{t('logs.details.auditHash')}</label>
+                  <span style={{ fontFamily: 'monospace', fontSize: '0.8125rem', wordBreak: 'break-all', display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}>
+                    {log.auditHash}
+                    <button
+                      type="button"
+                      className="view-log-button"
+                      onClick={() => handleCopy(log.auditHash as string)}
+                      title={t('logs.details.copyHash')}
+                    >
+                      {t('logs.details.copyHash')}
+                    </button>
+                    {copied && (
+                      <span style={{ color: 'var(--success)', fontSize: '0.75rem' }}>{t('logs.details.copied')}</span>
+                    )}
+                  </span>
+                </div>
+              )}
               <div className="detail-item">
-                <label>Mensagem:</label>
+                <label>{t('logs.detailPage.labels.message')}</label>
                 <span style={{ wordBreak: 'break-word' }}>
                   {log.message || 'N/A'}
                 </span>
               </div>
               <div className="detail-item">
-                <label>Usuário (Identificador Anonimizado):</label>
+                <label>{t('logs.detailPage.labels.user')}</label>
                 <span style={{ fontFamily: 'monospace', fontWeight: 600, fontSize: '0.9375rem' }}>
                   {log.userName || log.userID || 'USR-SYSTEM'}
                 </span>
                 <small style={{ display: 'block', color: 'var(--text-light)', marginTop: '0.25rem', fontSize: '0.75rem', fontStyle: 'italic' }}>
-                  Identificador anonimizado conforme LGPD
+                  {t('logs.details.userHint')}
                 </small>
               </div>
               <div className="detail-item">
-                <label>Ação:</label>
+                <label>{t('logs.detailPage.labels.action')}</label>
                 <span 
                   className="action-badge"
                   style={{
@@ -318,19 +362,19 @@ export default function LogDetailPage() {
                 </span>
               </div>
               <div className="detail-item">
-                <label>Entidade:</label>
+                <label>{t('logs.detailPage.labels.entity')}</label>
                 <span style={{ fontWeight: 500 }}>
                   {log.entity || 'N/A'}
                 </span>
               </div>
               <div className="detail-item">
-                <label>ID da Entidade:</label>
+                <label>{t('logs.details.entityID')}</label>
                 <span style={{ fontFamily: 'monospace', fontSize: '0.8125rem' }}>
                   {formatEntityID(log.entityID)}
                 </span>
               </div>
               <div className="detail-item">
-                <label>Severidade:</label>
+                <label>{t('logs.detailPage.labels.severity')}</label>
                 <span
                   className="severity-badge"
                   style={{ 
@@ -345,7 +389,7 @@ export default function LogDetailPage() {
                 </span>
               </div>
               <div className="detail-item">
-                <label>Resultado:</label>
+                <label>{t('logs.detailPage.labels.result')}</label>
                 <span
                   className="result-badge"
                   style={{ 
@@ -363,7 +407,7 @@ export default function LogDetailPage() {
                 </span>
               </div>
               <div className="detail-item">
-                <label>Módulo:</label>
+                <label>{t('logs.details.module')}</label>
                 <span
                   className="module-badge"
                   style={{ 
@@ -385,10 +429,10 @@ export default function LogDetailPage() {
           </div>
 
           <div className="detail-section">
-            <h3>Rastreamento</h3>
+            <h3>{t('logs.detailPage.sections.tracking')}</h3>
             <div className="detail-grid">
               <div className="detail-item">
-                <label>IP de Origem:</label>
+                <label>{t('logs.detailPage.labels.ipSource')}</label>
                 <span style={{ fontFamily: 'monospace' }}>
                   {log.ipSource || log.sourceIP || log.metadata?.tracking?.ip || 'N/A'}
                 </span>
@@ -396,38 +440,38 @@ export default function LogDetailPage() {
               {log.metadata && typeof log.metadata === 'object' && log.metadata.tracking && (
                 <>
                   <div className="detail-item">
-                    <label>IP Original:</label>
+                    <label>{t('logs.detailPage.labels.ipOriginal')}</label>
                     <span style={{ fontFamily: 'monospace' }}>
                       {(log.metadata.tracking as any)?.ipOriginal || 'N/A'}
                     </span>
                   </div>
                   <div className="detail-item">
-                    <label>X-Forwarded-For:</label>
+                    <label>{t('logs.detailPage.labels.forwardedFor')}</label>
                     <span style={{ fontFamily: 'monospace' }}>
                       {(log.metadata.tracking as any)?.forwardedFor || 'N/A'}
                     </span>
                   </div>
                   <div className="detail-item">
-                    <label>User-Agent:</label>
+                    <label>{t('logs.detailPage.labels.userAgent')}</label>
                     <span style={{ fontSize: '0.875rem', wordBreak: 'break-word' }}>
                       {(log.metadata.tracking as any)?.userAgent || 'N/A'}
                     </span>
                   </div>
                   <div className="detail-item">
-                    <label>Referer:</label>
+                    <label>{t('logs.detailPage.labels.referer')}</label>
                     <span>{(log.metadata.tracking as any)?.referer || 'N/A'}</span>
                   </div>
                   <div className="detail-item">
-                    <label>Host:</label>
+                    <label>{t('logs.detailPage.labels.host')}</label>
                     <span>{(log.metadata.tracking as any)?.host || 'N/A'}</span>
                   </div>
                   <div className="detail-item">
-                    <label>Protocol:</label>
+                    <label>{t('logs.detailPage.labels.protocol')}</label>
                     <span>{(log.metadata.tracking as any)?.protocol || 'N/A'}</span>
                   </div>
                   <div className="detail-item">
-                    <label>Secure:</label>
-                    <span>{(log.metadata.tracking as any)?.secure ? 'Sim' : 'Não'}</span>
+                    <label>{t('logs.detailPage.labels.secure')}</label>
+                    <span>{(log.metadata.tracking as any)?.secure ? t('logs.detailPage.labels.secureYes') : t('logs.detailPage.labels.secureNo')}</span>
                   </div>
                 </>
               )}
@@ -436,7 +480,7 @@ export default function LogDetailPage() {
 
           {log.payload && (
             <div className="detail-section">
-              <h3>Payload</h3>
+              <h3>{t('logs.detailPage.sections.payload')}</h3>
               <pre className="payload-content" style={{ 
                 whiteSpace: 'pre-wrap', 
                 wordBreak: 'break-word',
@@ -447,7 +491,7 @@ export default function LogDetailPage() {
                     return formatPayload(log.payload);
                   } catch (error) {
                     console.error('Erro ao formatar payload:', error);
-                    return JSON.stringify(log.payload, null, 2) || 'Erro ao formatar payload';
+                    return JSON.stringify(log.payload, null, 2) || t('logs.detailPage.errors.payloadFormat');
                   }
                 })()}
               </pre>
@@ -456,7 +500,7 @@ export default function LogDetailPage() {
 
           {log.errorStack && (
             <div className="detail-section">
-              <h3>Stack de Erro</h3>
+              <h3>{t('logs.detailPage.sections.stack')}</h3>
               <pre className="error-stack-content" style={{ 
                 whiteSpace: 'pre-wrap', 
                 wordBreak: 'break-word',
@@ -469,7 +513,7 @@ export default function LogDetailPage() {
 
           {log.metadata && (
             <div className="detail-section">
-              <h3>Metadados</h3>
+              <h3>{t('logs.detailPage.sections.metadata')}</h3>
               <pre className="metadata-content" style={{ 
                 whiteSpace: 'pre-wrap', 
                 wordBreak: 'break-word',
@@ -480,7 +524,7 @@ export default function LogDetailPage() {
                     return formatMetadata(log.metadata);
                   } catch (error) {
                     console.error('Erro ao formatar metadata:', error);
-                    return JSON.stringify(log.metadata, null, 2) || 'Erro ao formatar metadata';
+                    return JSON.stringify(log.metadata, null, 2) || t('logs.detailPage.errors.metadataFormat');
                   }
                 })()}
               </pre>

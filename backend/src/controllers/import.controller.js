@@ -86,7 +86,7 @@ class ImportController {
         });
       }
 
-      if (!dataType || !['patients', 'samples', 'results', 'temperature'].includes(dataType)) {
+      if (!dataType || !['patients', 'samples', 'results', 'temperature', 'locations'].includes(dataType)) {
         return res.status(400).json({
           success: false,
           error: 'Tipo de dados inválido'
@@ -126,6 +126,27 @@ class ImportController {
       }
 
       // JSON - validação básica
+      if (path.extname(file.originalname).toLowerCase() === '.json') {
+        const fhirValidation = importService.validateFHIRFile(file);
+
+        if (fhirValidation.isFhir && !fhirValidation.valid) {
+          logger.warn('Validação FHIR falhou (sync import):', JSON.stringify(fhirValidation.operationOutcome));
+          importService.cleanupFile(file.path);
+          return res.status(400).json({
+            success: false,
+            error: 'Validação FHIR falhou',
+            errors: fhirValidation.issues.map(issue => issue.diagnostics),
+            operationOutcome: fhirValidation.operationOutcome
+          });
+        }
+
+        return res.status(200).json({
+          success: true,
+          message: fhirValidation.isFhir ? 'Arquivo FHIR válido' : 'Arquivo válido',
+          data: { valid: true, fhir: fhirValidation.isFhir, resourcesValidated: fhirValidation.resourcesValidated || 0 }
+        });
+      }
+
       return res.status(200).json({
         success: true,
         message: 'Arquivo válido',
@@ -179,6 +200,9 @@ class ImportController {
             break;
           case 'temperature':
             results = await importService.importTemperature(db, file);
+            break;
+          case 'locations':
+            results = await importService.importLocations(db, file);
             break;
           case 'results':
             // TODO: Implementar importação de resultados

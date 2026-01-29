@@ -1,0 +1,27 @@
+{
+  "$id": "http://hl7.org/fhir/R4/Patient",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "FHIR R4 Patient",
+  "type": "object",
+  "required": ["resourceType", "name", "gender", "birthDate"],
+  "properties": {
+    "resourceType": { "const": "Patient" },
+    "id": { "type": "string" },
+    "name": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "properties": {
+          "family": { "type": "string" },
+          "given": { "type": "array", "items": { "type": "string" } },
+          "text": { "type": "string" }
+        }
+      }
+    },
+    "gender": { "type": "string", "enum": ["male", "female", "other", "unknown"] },
+    "birthDate": { "type": "string" },
+    "identifier": { "type": "array" }
+  },
+  "additionalProperties": true
+}

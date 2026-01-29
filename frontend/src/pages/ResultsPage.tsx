@@ -4,21 +4,19 @@ import Card from '../components/UI/Card';
 import Table from '../components/UI/Table';
 import Button from '../components/UI/Button';
 import Modal from '../components/UI/Modal';
-import Input from '../components/UI/Input';
 import { FileText, Download, X, Upload, CheckCircle, XCircle, Clock, AlertCircle, ExternalLink } from 'lucide-react';
-import { Result, FileType, Sample, Equipment, ImportDataType, ImportJob, ImportJobStatus } from '../types/models';
+import { ImportDataType, ImportJob, ImportJobStatus } from '../types/models';
 import { useResults } from '../hooks/useResults';
-import { useSamples } from '../hooks/useSamples';
 import { useEquipment } from '../hooks/useEquipment';
-import { sampleService, resultService, importService } from '../services/api';
+import { resultService, importService } from '../services/api';
 import { useAsyncImport } from '../hooks/useAsyncImport';
+import AnalysisUploadModal from '../components/AnalysisUploadModal';
 import './ResultsPage.css';
 
 export default function ResultsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const importJobID = searchParams.get('importJobID') || undefined;
   const { results, loading, error, loadResults } = useResults(importJobID);
-  const { samples } = useSamples();
   const { equipment } = useEquipment();
   // Estados para importação
   const [showImportSection, setShowImportSection] = useState(false);
@@ -27,6 +25,7 @@ export default function ResultsPage() {
   const [selectedJob, setSelectedJob] = useState<ImportJob | null>(null);
   const [showReportModal, setShowReportModal] = useState(false);
   const [importError, setImportError] = useState('');
+  const [showUploadModal, setShowUploadModal] = useState(false);
 
   // Hook de importação assíncrona
   const {
@@ -153,6 +152,7 @@ export default function ResultsPage() {
         return <AlertCircle className="status-icon" />;
     }
   };
+        validationOutcome,
 
   const getStatusLabel = (status: ImportJobStatus) => {
     const labels = {
@@ -163,11 +163,27 @@ export default function ResultsPage() {
       cancelled: 'Cancelado'
     };
     return labels[status] || status;
+      const [showOutcomeModal, setShowOutcomeModal] = useState(false);
   };
 
   return (
     <div className="page">
       <div className="page-header">
+
+              {validationError && (
+                <div className="error-message" style={{ marginBottom: '1rem' }}>
+                  <AlertCircle size={16} /> {validationError}
+                  {validationOutcome && (
+                    <Button
+                      variant="secondary"
+                      onClick={() => setShowOutcomeModal(true)}
+                      style={{ marginLeft: '0.75rem' }}
+                    >
+                      Ver Detalhes Técnicos
+                    </Button>
+                  )}
+                </div>
+              )}
         <div>
           <h1 className="page-title">Resultados</h1>
           <p className="page-subtitle">
@@ -175,11 +191,22 @@ export default function ResultsPage() {
               ? `Resultados da importação ${importJobID}` 
               : 'Resultados de análises laboratoriais'}
           </p>
+
+          {showOutcomeModal && validationOutcome && (
+            <Modal
+              isOpen={showOutcomeModal}
+              onClose={() => setShowOutcomeModal(false)}
+              title="Detalhes Técnicos (FHIR)"
+            >
+              <pre style={{ whiteSpace: 'pre-wrap', fontSize: '0.85rem' }}>
+                {JSON.stringify(validationOutcome, null, 2)}
+              </pre>
+            </Modal>
+          )}
           {importJobID && (
             <div style={{ marginTop: '0.5rem' }}>
               <Button
                 variant="secondary"
-                size="small"
                 onClick={clearFilter}
               >
                 <X size={16} /> Limpar Filtro
@@ -187,13 +214,21 @@ export default function ResultsPage() {
             </div>
           )}
         </div>
-        <Button
-          onClick={() => setShowImportSection(!showImportSection)}
-          variant={showImportSection ? "secondary" : "primary"}
-        >
-          <Upload size={18} />
-          {showImportSection ? 'Ocultar Importação' : 'Importar Resultados'}
-        </Button>
+        <div style={{ display: 'flex', gap: '0.5rem' }}>
+          <Button
+            onClick={() => setShowUploadModal(true)}
+            variant="primary"
+          >
+            <Upload size={18} />
+            Importar Resultados
+          </Button>
+          <Button
+            onClick={() => setShowImportSection(!showImportSection)}
+            variant="secondary"
+          >
+            {showImportSection ? 'Ocultar Importação em Lote' : 'Importação em Lote'}
+          </Button>
+        </div>
       </div>
 
       {/* Seção de Importação */}
@@ -257,10 +292,7 @@ export default function ResultsPage() {
                 </>
               )}
             </Button>
-          </div>
 
-          {/* Histórico de Importações */}
-          <div style={{ borderTop: '1px solid #e0e0e0', paddingTop: '1.5rem' }}>
             <h3 style={{ marginBottom: '1rem' }}>Histórico de Importações</h3>
             {importJobs.length === 0 ? (
               <p style={{ color: 'var(--text-secondary)' }}>Nenhuma importação realizada ainda</p>
@@ -297,7 +329,6 @@ export default function ResultsPage() {
                         {job.status === 'completed' && (
                           <Button
                             variant="primary"
-                            size="small"
                             onClick={() => {
                               const newParams = new URLSearchParams(searchParams);
                               newParams.set('importJobID', job.jobID);
@@ -311,7 +342,6 @@ export default function ResultsPage() {
                         {(job.status === 'completed' || job.status === 'failed') && (
                           <Button
                             variant="secondary"
-                            size="small"
                             onClick={() => handleViewReport(job)}
                           >
                             <Download size={16} /> Relatório
@@ -360,8 +390,8 @@ export default function ResultsPage() {
         >
           {results.map((result) => {
             return (
-              <tr key={result.resultID}>
-                <td>{result.resultID}</td>
+              <tr key={result._id || result.resultID}>
+                <td>{result.resultID || result._id}</td>
                 <td>
                   <span className="file-type-badge">{result.fileType}</span>
                 </td>
@@ -371,8 +401,8 @@ export default function ResultsPage() {
                 <td>
                   {result.equipmentID
                     ? equipment.find((e) => e.equipmentID === result.equipmentID)
-                        ?.equipmentDescription || 'N/A'
-                    : 'Não vinculado'}
+                        ?.equipmentDescription || `Equipamento #${result.equipmentID}`
+                    : result.equipmentName || 'Não vinculado'}
                 </td>
                 <td>
                   <span style={{ color: 'var(--success)', fontSize: '0.875rem' }}>
@@ -385,7 +415,7 @@ export default function ResultsPage() {
                       variant="secondary"
                       onClick={async () => {
                         try {
-                          await resultService.download(result.resultID);
+                          await resultService.download(result._id || result.resultID);
                         } catch (err: any) {
                           alert(`Erro ao fazer download: ${err.message || 'Erro desconhecido'}`);
                         }
@@ -401,6 +431,14 @@ export default function ResultsPage() {
           })}
         </Table>
       </Card>
+
+      <AnalysisUploadModal
+        isOpen={showUploadModal}
+        onClose={() => setShowUploadModal(false)}
+        onSuccess={() => {
+          loadResults();
+        }}
+      />
 
       {/* Modal de Relatório de Importação */}
       {showReportModal && selectedJob && (

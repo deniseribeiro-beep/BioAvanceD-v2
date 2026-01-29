@@ -227,12 +227,16 @@ export const resultService = {
     });
   },
   getById: (id: number) => api.get<Result>(`/results/${id}`),
+  upload: (formData: FormData) =>
+    api.post('/results/upload', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' }
+    }),
   create: (data: Partial<Result>) => api.post<Result>('/results', data),
   linkSample: (id: number, sampleID: number) => 
     api.put<Result>(`/results/${id}/link-sample`, { sampleID }), // Implementa Result.linkSample()
   update: (id: number, data: Partial<Result>) => api.put<Result>(`/results/${id}`, data),
   delete: (id: number) => api.delete(`/results/${id}`),
-  download: async (id: number) => {
+  download: async (id: number | string) => {
     try {
       // Usa axios com responseType: 'blob' para download de arquivos
       const response = await api.get(`/results/${id}/download`, {
@@ -461,6 +465,12 @@ export const sampleTypeService = {
   create: (data: Partial<any>) => api.post<any>('/sample-types', data),
 };
 
+// ========== ANALYSIS TYPE SERVICES ==========
+export const analysisTypeService = {
+  getAll: () => api.get<any[]>('/analysis-types'),
+  create: (data: { name: string; code?: string }) => api.post<any>('/analysis-types', data),
+};
+
 // ========== SAMPLE ORIGIN SERVICES ==========
 export const sampleOriginService = {
   getAll: () => api.get<any[]>('/sample-origins'),
@@ -484,6 +494,16 @@ export const logService = {
   registerEvent: (data: Partial<Log>) => api.post<{ success: boolean; data: Log }>('/logs/register', data),
   exportCSV: (filters?: any) => api.get('/logs/export/csv', { params: filters, responseType: 'blob' }),
   exportExcel: (filters?: any) => api.get('/logs/export/xlsx', { params: filters, responseType: 'blob' }),
+};
+
+// ========== AUDIT SERVICES ==========
+export const auditService = {
+  getReport: (date: string, hash?: string) =>
+    api.get<{ success: boolean; data: any }>(`/audit/report/${date}`, {
+      params: hash ? { hash } : undefined
+    }),
+  verify: (hash: string, proof: any[], root: string) =>
+    api.post<{ success: boolean; verified: boolean }>('/audit/verify', { hash, proof, root })
 };
 
 // ========== AUTH SERVICES ==========

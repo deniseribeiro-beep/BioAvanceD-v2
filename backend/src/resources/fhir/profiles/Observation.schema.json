@@ -1,0 +1,21 @@
+{
+  "$id": "http://hl7.org/fhir/R4/Observation",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "FHIR R4 Observation",
+  "type": "object",
+  "required": ["resourceType", "status", "code"],
+  "properties": {
+    "resourceType": { "const": "Observation" },
+    "id": { "type": "string" },
+    "status": {
+      "type": "string",
+      "enum": ["registered", "preliminary", "final", "amended", "corrected", "cancelled", "entered-in-error", "unknown"]
+    },
+    "code": { "type": "object" },
+    "subject": { "type": "object" },
+    "effectiveDateTime": { "type": "string" },
+    "valueQuantity": { "type": "object" },
+    "valueString": { "type": "string" }
+  },
+  "additionalProperties": true
+}

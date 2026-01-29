@@ -8,12 +8,12 @@ class AuditController {
     try {
       const date = req.params.date;
       const db = req.app.locals.db;
-      if (!db) return res.status(503).json({ success: false, error: 'DB not available' });
+      if (!db) return res.status(503).json({ success: false, error: 'Banco de dados não disponível' });
 
       const result = await integrityService.buildMerkleForDate(date, db);
       return res.status(200).json({ success: true, data: result });
     } catch (error) {
-      logger.error('Error getMerkleRoot:', error.message || error);
+      logger.error('Erro ao obter Merkle Root:', error.message || error);
       return res.status(500).json({ success: false, error: error.message });
     }
   }
@@ -25,7 +25,7 @@ class AuditController {
       const ok = audit.verifyProof(hash, proof, root);
       return res.status(200).json({ success: true, verified: !!ok });
     } catch (error) {
-      return res.status(400).json({ success: false, error: error.message });
+      return res.status(400).json({ success: false, error: error.message || 'Erro ao verificar prova' });
     }
   }
 
@@ -34,7 +34,7 @@ class AuditController {
     try {
       const date = req.params.date;
       const db = req.app.locals.db;
-      if (!db) return res.status(503).json({ success: false, error: 'DB not available' });
+      if (!db) return res.status(503).json({ success: false, error: 'Banco de dados não disponível' });
 
       const saved = await auditRootService.getRootByDate(date, db);
       const recalculated = await integrityService.buildMerkleForDate(date, db);
@@ -60,7 +60,7 @@ class AuditController {
         }
       });
     } catch (error) {
-      logger.error('Error report:', error.message || error);
+      logger.error('Erro ao gerar relatório:', error.message || error);
       return res.status(500).json({ success: false, error: error.message });
     }
   }
@@ -70,7 +70,7 @@ class AuditController {
     try {
       const date = req.params.date;
       const db = req.app.locals.db;
-      if (!db) return res.status(503).json({ success: false, error: 'DB not available' });
+      if (!db) return res.status(503).json({ success: false, error: 'Banco de dados não disponível' });
 
       const saved = await auditRootService.getRootByDate(date, db);
       const recalculated = await integrityService.buildMerkleForDate(date, db);
@@ -83,7 +83,7 @@ class AuditController {
 
       return res.status(200).json({ success: true, data: { tampered, root_saved: saved ? saved.root : null, root_current: recalculated ? recalculated.root : null, diff } });
     } catch (error) {
-      logger.error('Error compare:', error.message || error);
+      logger.error('Erro ao comparar roots:', error.message || error);
       return res.status(500).json({ success: false, error: error.message });
     }
   }
@@ -93,12 +93,12 @@ class AuditController {
     try {
       const date = req.params.date;
       const db = req.app.locals.db;
-      if (!db) return res.status(503).json({ success: false, error: 'DB not available' });
+      if (!db) return res.status(503).json({ success: false, error: 'Banco de dados não disponível' });
 
       const resHL7 = await hl7AuditService.buildHL7MerkleForDate(date, db);
       return res.status(200).json({ success: true, data: resHL7 });
     } catch (error) {
-      logger.error('Error hl7Report:', error.message || error);
+      logger.error('Erro ao gerar relatório HL7:', error.message || error);
       return res.status(500).json({ success: false, error: error.message });
     }
   }
@@ -107,12 +107,12 @@ class AuditController {
   async dashboardDates(req, res) {
     try {
       const db = req.app.locals.db;
-      if (!db) return res.status(503).json({ success: false, error: 'DB not available' });
+      if (!db) return res.status(503).json({ success: false, error: 'Banco de dados não disponível' });
       const chain = await auditRootService.getChain(db);
       const dates = chain.map(c => ({ date: c.date, chainIndex: c.chainIndex, root: c.root }));
       return res.status(200).json({ success: true, data: dates });
     } catch (error) {
-      logger.error('Error dashboardDates:', error.message || error);
+      logger.error('Erro ao listar datas do dashboard:', error.message || error);
       return res.status(500).json({ success: false, error: error.message });
     }
   }
@@ -121,7 +121,7 @@ class AuditController {
     try {
       const date = req.params.date;
       const db = req.app.locals.db;
-      if (!db) return res.status(503).json({ success: false, error: 'DB not available' });
+      if (!db) return res.status(503).json({ success: false, error: 'Banco de dados não disponível' });
 
       const recalculated = await integrityService.buildMerkleForDate(date, db);
       const hl7Count = await db.collection('logs').countDocuments({ action: 'HL7_HASH', date });
@@ -136,7 +136,7 @@ class AuditController {
       };
       return res.status(200).json({ success: true, data: stats });
     } catch (error) {
-      logger.error('Error dashboardStats:', error.message || error);
+      logger.error('Erro ao obter estatísticas do dashboard:', error.message || error);
       return res.status(500).json({ success: false, error: error.message });
     }
   }
@@ -144,11 +144,11 @@ class AuditController {
   async dashboardRoots(req, res) {
     try {
       const db = req.app.locals.db;
-      if (!db) return res.status(503).json({ success: false, error: 'DB not available' });
+      if (!db) return res.status(503).json({ success: false, error: 'Banco de dados não disponível' });
       const chain = await auditRootService.getChain(db);
       return res.status(200).json({ success: true, data: chain });
     } catch (error) {
-      logger.error('Error dashboardRoots:', error.message || error);
+      logger.error('Erro ao listar roots do dashboard:', error.message || error);
       return res.status(500).json({ success: false, error: error.message });
     }
   }

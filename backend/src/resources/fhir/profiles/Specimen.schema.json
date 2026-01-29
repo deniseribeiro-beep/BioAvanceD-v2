@@ -1,0 +1,27 @@
+{
+  "$id": "http://hl7.org/fhir/R4/Specimen",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "FHIR R4 Specimen",
+  "type": "object",
+  "required": ["resourceType", "subject", "type"],
+  "properties": {
+    "resourceType": { "const": "Specimen" },
+    "id": { "type": "string" },
+    "subject": {
+      "type": "object",
+      "required": ["reference"],
+      "properties": {
+        "reference": { "type": "string" }
+      }
+    },
+    "type": {
+      "type": "object",
+      "properties": {
+        "coding": { "type": "array" }
+      }
+    },
+    "receivedTime": { "type": "string" },
+    "quantity": { "type": "object" }
+  },
+  "additionalProperties": true
+}

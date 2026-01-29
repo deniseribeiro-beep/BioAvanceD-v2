@@ -14,7 +14,7 @@ const logger = require('../utils/logger');
 try {
   require('./jobs/daily-merkle.job');
 } catch (err) {
-  logger.warn('daily-merkle.job not registered:', err.message || err);
+  logger.warn('Job daily-merkle não registrado:', err.message || err);
 }
 
 /**

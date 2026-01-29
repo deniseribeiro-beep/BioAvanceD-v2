@@ -25,7 +25,7 @@ import {
   Database
 } from 'lucide-react';
 import { useLogs } from '../hooks/useLogs';
-import { logService } from '../services/api';
+import { logService, auditService } from '../services/api';
 import { extractPayloadSummary } from '../utils/logFormatter';
 import { formatEntityID } from '../utils/entityIdFormatter';
 import { useLanguage } from '../contexts/LanguageContext';
@@ -72,18 +72,38 @@ export default function LogsPage() {
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
 
+  // Verificação Merkle
+  const [verifyDate, setVerifyDate] = useState('');
+  const [verifyHash, setVerifyHash] = useState('');
+  const [verifyLoading, setVerifyLoading] = useState(false);
+  const [verifyError, setVerifyError] = useState<string | null>(null);
+  const [verifyResult, setVerifyResult] = useState<null | {
+    verified: boolean;
+    rootUsed: string | null;
+    savedRoot: string | null;
+    recalculatedRoot: string | null;
+    tampered: boolean | null;
+  }>(null);
+  const [copiedHash, setCopiedHash] = useState<string | null>(null);
+
   // Carrega logs iniciais
   useEffect(() => {
     loadLogs();
   }, []);
 
-  // Aplica filtros e busca quando logs ou filtros mudarem
+  // Reseta paginação quando filtros ou busca mudarem
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [filters, searchTerm]);
+
+  // Aplica filtros e busca quando logs, filtros, paginação ou ordenação mudarem
   useEffect(() => {
     applyFilters();
-  }, [filters, searchTerm, logs, sortField, sortOrder]);
+  }, [filters, searchTerm, logs, sortField, sortOrder, currentPage, pageSize]);
 
 
   const applyFilters = () => {
+    const normalize = (value: unknown) => String(value ?? '').trim().toLowerCase();
     let filtered = [...logs];
 
     // Filtro de busca por texto (busca por identificador anonimizado, não por nome real)
@@ -101,29 +121,34 @@ export default function LogsPage() {
     // Aplica filtros individuais
     if (filters.userName) {
       filtered = filtered.filter(log => 
-        (log.userName || '').toLowerCase().includes(filters.userName.toLowerCase())
+        normalize(log.userName).includes(normalize(filters.userName))
       );
     }
     if (filters.action) {
-      filtered = filtered.filter(log => log.action === filters.action);
+      const actionFilter = normalize(filters.action);
+      filtered = filtered.filter(log => normalize(log.action) === actionFilter);
     }
     if (filters.entity) {
-      filtered = filtered.filter(log => log.entity === filters.entity);
+      const entityFilter = normalize(filters.entity);
+      filtered = filtered.filter(log => normalize(log.entity) === entityFilter);
     }
     if (filters.severity) {
-      filtered = filtered.filter(log => log.severity === filters.severity);
+      const severityFilter = normalize(filters.severity);
+      filtered = filtered.filter(log => normalize(log.severity) === severityFilter);
     }
     if (filters.result) {
-      filtered = filtered.filter(log => log.result === filters.result);
+      const resultFilter = normalize(filters.result);
+      filtered = filtered.filter(log => normalize(log.result) === resultFilter);
     }
     if (filters.ip) {
-      const ip = filters.ip.toLowerCase();
+      const ip = normalize(filters.ip);
       filtered = filtered.filter(log => 
-        (log.ipSource || log.sourceIP || '').toLowerCase().includes(ip)
+        normalize(log.ipSource || log.sourceIP).includes(ip)
       );
     }
     if (filters.module) {
-      filtered = filtered.filter(log => log.module === filters.module);
+      const moduleFilter = normalize(filters.module);
+      filtered = filtered.filter(log => normalize(log.module) === moduleFilter);
     }
     if (filters.startDate) {
       try {
@@ -275,6 +300,69 @@ export default function LogsPage() {
     setFilteredLogs(paginatedLogs);
     setTotalLogs(filtered.length);
     setTotalPages(Math.ceil(filtered.length / pageSize));
+  };
+
+  const handleVerifyHash = async () => {
+    if (!verifyDate || !verifyHash) {
+      setVerifyError(t('logs.verify.errorRequired'));
+      setVerifyResult(null);
+      return;
+    }
+
+    try {
+      setVerifyLoading(true);
+      setVerifyError(null);
+      setVerifyResult(null);
+
+      const reportResponse = await auditService.getReport(verifyDate, verifyHash.trim());
+      const reportData = reportResponse?.data?.data;
+
+      const proof = reportData?.proof || null;
+      const savedRoot = reportData?.savedRoot || null;
+      const recalculatedRoot = reportData?.recalculatedRoot || null;
+      const rootUsed = savedRoot || recalculatedRoot || null;
+
+      if (!rootUsed || !proof || !Array.isArray(proof)) {
+        setVerifyError(t('logs.verify.errorNoProof'));
+        return;
+      }
+
+      const verifyResponse = await auditService.verify(verifyHash.trim(), proof, rootUsed);
+      setVerifyResult({
+        verified: !!verifyResponse?.data?.verified,
+        rootUsed,
+        savedRoot,
+        recalculatedRoot,
+        tampered: typeof reportData?.tampered === 'boolean' ? reportData.tampered : null
+      });
+    } catch (err: any) {
+      const message = err.response?.data?.error || err.response?.data?.message || err.message || t('logs.verify.errorGeneric');
+      setVerifyError(message);
+    } finally {
+      setVerifyLoading(false);
+    }
+  };
+
+  const handleCopy = async (value: string) => {
+    try {
+      if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(value);
+      } else {
+        const textarea = document.createElement('textarea');
+        textarea.value = value;
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.focus();
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+      }
+      setCopiedHash(value);
+      setTimeout(() => setCopiedHash((current) => (current === value ? null : current)), 2000);
+    } catch (e) {
+      console.error('Erro ao copiar hash:', e);
+    }
   };
 
   const handleSort = (field: string) => {
@@ -790,6 +878,7 @@ export default function LogsPage() {
                   <div className="filter-group">
                     <label>{t('logs.filters.action')}</label>
                     <select
+                      aria-label={t('logs.filters.action')}
                       value={filters.action}
                       onChange={(e) => setFilters({ ...filters, action: e.target.value })}
                     >
@@ -805,6 +894,7 @@ export default function LogsPage() {
                   <div className="filter-group">
                     <label>{t('logs.filters.entity')}</label>
                     <select
+                      aria-label={t('logs.filters.entity')}
                       value={filters.entity}
                       onChange={(e) => setFilters({ ...filters, entity: e.target.value })}
                     >
@@ -818,6 +908,7 @@ export default function LogsPage() {
                   <div className="filter-group">
                     <label>{t('logs.filters.severity')}</label>
                     <select
+                      aria-label={t('logs.filters.severity')}
                       value={filters.severity}
                       onChange={(e) => setFilters({ ...filters, severity: e.target.value })}
                     >
@@ -832,6 +923,7 @@ export default function LogsPage() {
                   <div className="filter-group">
                     <label>{t('logs.filters.result')}</label>
                     <select
+                      aria-label={t('logs.filters.result')}
                       value={filters.result}
                       onChange={(e) => setFilters({ ...filters, result: e.target.value })}
                     >
@@ -854,6 +946,7 @@ export default function LogsPage() {
                   <div className="filter-group">
                     <label>{t('logs.filters.module')}</label>
                     <select
+                      aria-label={t('logs.filters.module')}
                       value={filters.module}
                       onChange={(e) => setFilters({ ...filters, module: e.target.value })}
                     >
@@ -894,6 +987,67 @@ export default function LogsPage() {
             )}
           </Card>
 
+          <Card className="logs-filters-card" style={{ marginTop: '1rem' }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', alignItems: 'flex-end' }}>
+              <div style={{ minWidth: '180px' }}>
+                <label style={{ display: 'block', marginBottom: '0.25rem' }}>
+                  {t('logs.verify.date')}
+                </label>
+                <Input
+                  type="date"
+                  value={verifyDate}
+                  onChange={(e) => setVerifyDate(e.target.value)}
+                />
+              </div>
+              <div style={{ flex: 1, minWidth: '260px' }}>
+                <label style={{ display: 'block', marginBottom: '0.25rem' }}>
+                  {t('logs.verify.hash')}
+                </label>
+                <Input
+                  placeholder={t('logs.verify.hashPlaceholder')}
+                  value={verifyHash}
+                  onChange={(e) => setVerifyHash(e.target.value)}
+                />
+              </div>
+              <Button
+                variant="secondary"
+                onClick={handleVerifyHash}
+                disabled={verifyLoading}
+                style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+              >
+                <Shield size={18} />
+                {verifyLoading ? t('common.loading') : t('logs.verify.action')}
+              </Button>
+            </div>
+            {verifyError && (
+              <div className="error-message" style={{ marginTop: '0.75rem' }}>
+                <AlertCircle size={18} />
+                <div>{verifyError}</div>
+              </div>
+            )}
+            {verifyResult && (
+              <div style={{ marginTop: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                <div>
+                  <strong>{t('logs.verify.status')}:</strong>{' '}
+                  <span style={{ color: verifyResult.verified ? 'var(--success)' : 'var(--danger)' }}>
+                    {verifyResult.verified ? t('logs.verify.ok') : t('logs.verify.fail')}
+                  </span>
+                </div>
+                {verifyResult.rootUsed && (
+                  <div style={{ fontFamily: 'monospace', fontSize: '0.8125rem' }}>
+                    {t('logs.verify.root')}: {verifyResult.rootUsed}
+                  </div>
+                )}
+                {verifyResult.tampered !== null && (
+                  <div>
+                    <strong>{t('logs.verify.tamperedLabel')}:</strong>{' '}
+                    {verifyResult.tampered ? t('logs.verify.tamperedYes') : t('logs.verify.tamperedNo')}
+                  </div>
+                )}
+              </div>
+            )}
+          </Card>
+
           {/* Tabela de logs */}
           <Card>
             <div className="logs-table-container">
@@ -913,7 +1067,23 @@ export default function LogsPage() {
                 {filteredLogs.length === 0 ? (
                   <tr>
                     <td colSpan={6} className="no-logs-message">
-                      {t('logs.noLogsFound')}
+                      <div style={{ display: 'grid', gap: '0.5rem', justifyItems: 'center' }}>
+                        <span>
+                          {hasActiveFilters
+                            ? (t('logs.noLogsFound') || 'Nenhum resultado encontrado com os filtros atuais.')
+                            : 'Nenhum log disponível.'}
+                        </span>
+                        <div style={{ display: 'flex', gap: '0.5rem' }}>
+                          {hasActiveFilters && (
+                            <Button variant="secondary" onClick={clearFilters}>
+                              {t('logs.filters.clearFilters')}
+                            </Button>
+                          )}
+                          <Button variant="secondary" onClick={loadLogs}>
+                            Recarregar
+                          </Button>
+                        </div>
+                      </div>
                     </td>
                   </tr>
                 ) : (
@@ -1110,6 +1280,29 @@ export default function LogsPage() {
                                     </span>
                                   </div>
                                 )}
+                                {log.auditHash && (
+                                  <div className="log-detail-item" style={{ gridColumn: '1 / -1' }}>
+                                    <span className="log-detail-label">
+                                      {t('logs.details.auditHash')}
+                                    </span>
+                                    <span className="log-detail-value" style={{ fontFamily: 'monospace', wordBreak: 'break-all', display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}>
+                                      {log.auditHash}
+                                      <button
+                                        type="button"
+                                        className="view-log-button"
+                                        onClick={() => handleCopy(log.auditHash as string)}
+                                        title={t('logs.details.copyHash')}
+                                      >
+                                        {t('logs.details.copyHash')}
+                                      </button>
+                                      {copiedHash === log.auditHash && (
+                                        <span style={{ color: 'var(--success)', fontSize: '0.75rem' }}>
+                                          {t('logs.details.copied')}
+                                        </span>
+                                      )}
+                                    </span>
+                                  </div>
+                                )}
                                 {log.payload && (
                                   <div className="log-detail-item" style={{ gridColumn: '1 / -1' }}>
                                     <span className="log-detail-label">
@@ -1223,6 +1416,7 @@ export default function LogsPage() {
                 <div className="pagination-size">
                   <label>{t('logs.pagination.itemsPerPage')}</label>
                   <select
+                    aria-label={t('logs.pagination.itemsPerPage')}
                     value={pageSize}
                     onChange={(e) => {
                       setPageSize(Number(e.target.value));

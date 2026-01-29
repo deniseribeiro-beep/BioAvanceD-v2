@@ -134,16 +134,26 @@ export interface SampleWithQualityDescription {
   updatedAt?: Date | string;
 }
 
+export interface AnalysisType {
+  _id?: string; // MongoDB ID
+  name: string;
+  code: string;
+  active?: boolean;
+  createdAt?: Date | string;
+}
+
 export interface Result {
   _id?: string; // MongoDB ID
   resultID: number;
   fileType: FileType;
   filePath: string;
   description: string; // Obrigatório
+  analysisType?: string;
   method?: string;
   responsibleResearcher?: string;
   sampleID: number; // Obrigatório - deve estar vinculado a uma amostra
   equipmentID?: number; // Associação Result → Equipment
+  equipmentName?: string;
   importJobID?: string; // Vincula resultado com job de importação
   createdAt?: Date | string;
   updatedAt?: Date | string;
@@ -288,6 +298,7 @@ export interface Log {
   dateTime?: Date | string;
   timestampISO?: string;
   timestampFormatted?: string;
+  auditHash?: string;
   userID?: string;
   userId?: string;
   userName?: string;

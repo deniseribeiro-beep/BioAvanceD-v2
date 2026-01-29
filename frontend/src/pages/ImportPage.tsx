@@ -16,13 +16,14 @@ export default function ImportPage() {
   const { t } = useLanguage();
   const { user } = useAuth();
   const [file, setFile] = useState<File | null>(null);
-  const [importType, setImportType] = useState<'patients' | 'samples' | null>(null);
+  const [importType, setImportType] = useState<'patients' | 'samples' | 'locations' | null>(null);
   
   // Hook de importação assíncrona
   const {
     validating,
     creating,
     validationError,
+    validationOutcome,
     job,
     isPolling,
     importFile,
@@ -33,9 +34,11 @@ export default function ImportPage() {
   const [batchSamples, setBatchSamples] = useState<Array<{ sampleId: string | number; barcode: string; acronym?: string }>>([]);
   const [loadingLabels, setLoadingLabels] = useState(false);
   const [labelsError, setLabelsError] = useState<string | null>(null);
+  const [showOutcomeModal, setShowOutcomeModal] = useState(false);
 
   const canImportPatients = user?.roleName === 'Administrador' || user?.roleName === 'Coordenador' || user?.accessType === 3 || user?.accessType === 4;
   const canImportSamples = user?.roleName === 'Administrador' || user?.roleName === 'Coordenador' || user?.roleName === 'Técnico' || user?.accessType === 2 || user?.accessType === 3 || user?.accessType === 4;
+  const canImportLocations = canImportSamples;
 
   const normalizeSamplesFromReport = (report: any) => {
     const candidates = [
@@ -107,11 +110,11 @@ export default function ImportPage() {
     return [];
   };
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = (allowedExtensions: string[]) => (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
     if (selectedFile) {
       const ext = selectedFile.name.toLowerCase().split('.').pop();
-      if (ext !== 'csv' && ext !== 'xlsx') {
+      if (!ext || !allowedExtensions.includes(ext)) {
         setFile(null);
         return;
       }
@@ -120,7 +123,7 @@ export default function ImportPage() {
     }
   };
 
-  const handleImport = async (type: 'patients' | 'samples') => {
+  const handleImport = async (type: 'patients' | 'samples' | 'locations') => {
     if (!file) {
       return;
     }
@@ -167,6 +170,20 @@ export default function ImportPage() {
     } catch (err: any) {
       alert(err.response?.data?.error || t('import.errors.templateError'));
     }
+  };
+
+  const handleDownloadLocationTemplate = () => {
+    const headers = ['locationID', 'equipmentType', 'equipmentID', 'block', 'rack', 'drawer', 'box', 'wellPosition'];
+    const csvContent = `${headers.join(',')}\n`;
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', 'locations_template.csv');
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(url);
   };
 
   const handleOpenBatchLabels = async () => {
@@ -238,7 +255,7 @@ export default function ImportPage() {
                   type="file"
                   id="patients-file"
                   accept=".csv,.xlsx"
-                  onChange={handleFileChange}
+                  onChange={handleFileChange(['csv', 'xlsx'])}
                   disabled={isPolling && importType === 'patients'}
                   style={{ display: 'none' }}
                 />
@@ -303,7 +320,7 @@ export default function ImportPage() {
                   type="file"
                   id="samples-file"
                   accept=".csv,.xlsx"
-                  onChange={handleFileChange}
+                  onChange={handleFileChange(['csv', 'xlsx'])}
                   disabled={isPolling && importType === 'samples'}
                   style={{ display: 'none' }}
                 />
@@ -322,6 +339,64 @@ export default function ImportPage() {
                 {creating && importType === 'samples' && 'Criando job...'}
                 {isPolling && importType === 'samples' && job && `Processando... ${job.progress}%`}
                 {!validating && !creating && !(isPolling && importType === 'samples') && t('import.samples.import')}
+              </Button>
+            </>
+          )}
+        </Card>
+
+        {/* Importação de Localizações */}
+        <Card className="import-card">
+          <div className="import-card-header">
+            <h2>Importação de Localizações</h2>
+            <p>Importe localizações em lote via CSV.</p>
+          </div>
+
+          {!canImportLocations && (
+            <div className="import-warning">
+              <AlertCircle size={20} />
+              <span>Você não tem permissão para importar localizações.</span>
+            </div>
+          )}
+
+          {canImportLocations && (
+            <>
+              <div className="import-actions">
+                <div className="template-downloads">
+                  <span>Baixar template:</span>
+                  <Button
+                    variant="secondary"
+                    onClick={handleDownloadLocationTemplate}
+                  >
+                    <FileText size={16} />
+                    CSV
+                  </Button>
+                </div>
+              </div>
+
+              <div className="import-upload">
+                <input
+                  type="file"
+                  id="locations-file"
+                  accept=".csv"
+                  onChange={handleFileChange(['csv'])}
+                  disabled={isPolling && importType === 'locations'}
+                  style={{ display: 'none' }}
+                />
+                <label htmlFor="locations-file" className="file-input-label">
+                  <Upload size={20} />
+                  {file ? file.name : 'Selecione um arquivo CSV'}
+                </label>
+              </div>
+
+              <Button
+                onClick={() => handleImport('locations')}
+                disabled={!file || validating || creating || (isPolling && importType === 'locations')}
+                style={{ marginTop: '1rem', width: '100%' }}
+              >
+                {validating && importType === 'locations' && 'Validando...'}
+                {creating && importType === 'locations' && 'Criando job...'}
+                {isPolling && importType === 'locations' && job && `Processando... ${job.progress}%`}
+                {!validating && !creating && !(isPolling && importType === 'locations') && 'Importar Localizações'}
               </Button>
             </>
           )}
@@ -444,6 +519,15 @@ export default function ImportPage() {
           <Card className="import-error-card">
             <AlertCircle size={20} />
             <span>{validationError}</span>
+            {validationOutcome && (
+              <Button
+                variant="secondary"
+                onClick={() => setShowOutcomeModal(true)}
+                style={{ marginLeft: '0.75rem' }}
+              >
+                Ver Detalhes Técnicos
+              </Button>
+            )}
           </Card>
         )}
 
@@ -481,6 +565,18 @@ export default function ImportPage() {
                 </Button>
               </div>
             </div>
+          </Modal>
+        )}
+
+        {showOutcomeModal && validationOutcome && (
+          <Modal
+            isOpen={showOutcomeModal}
+            onClose={() => setShowOutcomeModal(false)}
+            title="Detalhes Técnicos (FHIR)"
+          >
+            <pre style={{ whiteSpace: 'pre-wrap', fontSize: '0.85rem' }}>
+              {JSON.stringify(validationOutcome, null, 2)}
+            </pre>
           </Modal>
         )}
       </div>

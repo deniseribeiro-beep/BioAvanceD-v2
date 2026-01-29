@@ -14,7 +14,7 @@ const app = express();
 
 // ==== Critical env check (halt if missing) ====
 if (!env.MONGO_URI || !env.JWT_SECRET) {
-  logger.error("Critical environment variables missing: MONGO_URI and JWT_SECRET are required.");
+  logger.error("Variáveis críticas ausentes: MONGO_URI e JWT_SECRET são obrigatórias.");
   process.exit(1);
 }
 
@@ -121,7 +121,7 @@ app.use(
       } catch (_) {}
 
       logger.warn(`CORS bloqueado para origem: ${origin}`);
-      return callback(new Error("Not allowed by CORS"));
+      return callback(new Error("Origem não permitida pelo CORS"));
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "PATCH"],
@@ -169,7 +169,7 @@ const globalLimiter = rateLimit({
 const authLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 5,
-  message: "Too many requests to auth endpoints. Try again later.",
+  message: "Muitas requisições para autenticação. Tente novamente mais tarde.",
   standardHeaders: true,
   legacyHeaders: false,
 });
@@ -184,6 +184,7 @@ app.use("/api/patients", require("./src/routes/patient.routes"));
 app.use("/api/samples", require("./src/routes/sample.routes"));
 app.use("/api/import", require("./src/routes/import.routes"));
 app.use("/api/results", require("./src/routes/result.routes"));
+app.use("/api/analysis-types", require("./src/routes/analysis-type.routes"));
 app.use("/api/equipment", require("./src/routes/equipment.routes"));
 app.use("/api/locations", require("./src/routes/location.routes"));
 app.use("/api/policies", require("./src/routes/policy.routes"));
@@ -213,6 +214,35 @@ async function startServer() {
     // Conecta banco
     const db = await connectDB();
     app.locals.db = db;
+
+    // Seed inicial de tipos de análise
+    try {
+      const AnalysisTypeModel = require("./src/models/AnalysisType");
+      const analysisTypesCollection = db.collection('analysisTypes');
+      const existingCount = await analysisTypesCollection.countDocuments();
+
+      if (existingCount === 0) {
+        const defaults = [
+          'PCR Real Time',
+          'Sequenciamento (Sanger)',
+          'Sequenciamento (NGS)',
+          'Microscopia',
+          'Eletroforese'
+        ];
+
+        const seedDocs = defaults.map((name) => ({
+          name,
+          code: AnalysisTypeModel.slugify(name),
+          active: true,
+          createdAt: new Date()
+        }));
+
+        await analysisTypesCollection.insertMany(seedDocs);
+        logger.info('Tipos de análise padrão inseridos.');
+      }
+    } catch (seedError) {
+      logger.error('Erro ao realizar seed de tipos de análise:', seedError.message);
+    }
 
     // Criar servidor HTTP unificado
     const httpServer = http.createServer(app);

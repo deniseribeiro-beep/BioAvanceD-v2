@@ -17,6 +17,7 @@ export function useAsyncImport() {
   const [validating, setValidating] = useState(false);
   const [creating, setCreating] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
+  const [validationOutcome, setValidationOutcome] = useState<any | null>(null);
   const [currentJobID, setCurrentJobID] = useState<string | null>(null);
   const [jobCallbacks, setJobCallbacks] = useState<Pick<AsyncImportOptions, 'onCompleted' | 'onFailed' | 'onProgress'>>({});
 
@@ -37,6 +38,7 @@ export function useAsyncImport() {
   const validateFile = useCallback(async (file: File, dataType: string) => {
     setValidating(true);
     setValidationError(null);
+    setValidationOutcome(null);
 
     try {
       const response = await importService.validateFile(file, dataType);
@@ -45,6 +47,7 @@ export function useAsyncImport() {
       if (!data.success) {
         const errors = data.errors || ['Validação falhou'];
         setValidationError(errors.join(', '));
+        setValidationOutcome(data.operationOutcome || null);
         return { valid: false, errors, metadata: data.metadata };
       }
 
@@ -57,10 +60,12 @@ export function useAsyncImport() {
       const errorMessage = err.response?.data?.error || err.response?.data?.message || err.message || 'Erro ao validar arquivo';
       const errors = err.response?.data?.errors || [errorMessage];
       setValidationError(errorMessage);
+      setValidationOutcome(err.response?.data?.operationOutcome || null);
       return {
         valid: false,
         errors,
         metadata: null,
+        operationOutcome: err.response?.data?.operationOutcome || null,
       };
     } finally {
       setValidating(false);
@@ -149,6 +154,7 @@ export function useAsyncImport() {
   const reset = useCallback(() => {
     setCurrentJobID(null);
     setValidationError(null);
+    setValidationOutcome(null);
     stopPolling();
   }, [stopPolling]);
 
@@ -157,6 +163,7 @@ export function useAsyncImport() {
     validating,
     creating,
     validationError,
+    validationOutcome,
     currentJobID,
     job,
     jobLoading,

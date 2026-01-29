@@ -1,9 +1,65 @@
 const express = require('express');
+const path = require('path');
+const fs = require('fs');
+const crypto = require('crypto');
+const multer = require('multer');
 const router = express.Router();
 const { authenticate } = require('../middleware/auth');
 const { requirePermission } = require('../middleware/rbac');
 const logger = require('../utils/logger');
 const ResultModel = require('../models/Result');
+
+const getResultFileType = (fileName) => {
+  const ext = path.extname(fileName).toLowerCase();
+  if (ext === '.pdf') return 'PDF';
+  if (ext === '.zip') return 'ZIP';
+  if (ext === '.csv') return 'CSV';
+  if (ext === '.raw') return 'RAW';
+  return null;
+};
+
+const resultStorage = multer.diskStorage({
+  destination: async (req, file, cb) => {
+    try {
+      const { sampleID } = req.body;
+      if (!sampleID) {
+        return cb(new Error('sampleID é obrigatório'), null);
+      }
+
+      const resultDir = path.join(__dirname, '../../storage/results', String(sampleID));
+      if (!fs.existsSync(resultDir)) {
+        fs.mkdirSync(resultDir, { recursive: true });
+      }
+      cb(null, resultDir);
+    } catch (error) {
+      cb(error, null);
+    }
+  },
+  filename: (req, file, cb) => {
+    try {
+      const ext = path.extname(file.originalname);
+      const baseName = path.basename(file.originalname, ext);
+      const sanitizedBaseName = baseName.replace(/[^a-zA-Z0-9_-]/g, '_');
+      const uniqueId = crypto.randomBytes(16).toString('hex');
+      const finalFileName = `${sanitizedBaseName}_${uniqueId}${ext}`;
+      cb(null, finalFileName);
+    } catch (error) {
+      cb(error, null);
+    }
+  }
+});
+
+const resultUpload = multer({
+  storage: resultStorage,
+  fileFilter: (req, file, cb) => {
+    const fileType = getResultFileType(file.originalname);
+    if (!fileType) {
+      return cb(new Error('Formato de arquivo inválido. Apenas PDF, ZIP, CSV ou RAW são permitidos.'), false);
+    }
+    cb(null, true);
+  },
+  limits: { fileSize: 100 * 1024 * 1024 }
+});
 
 // CRUD de Resultados
 router.get('/', authenticate, async (req, res) => {
@@ -48,6 +104,134 @@ router.get('/', authenticate, async (req, res) => {
     return res.status(500).json({
       success: false,
       error: 'Erro ao listar resultados',
+      message: error.message
+    });
+  }
+});
+
+router.post('/upload', authenticate, requirePermission('uploadFiles'), resultUpload.single('file'), async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    if (!db) {
+      return res.status(503).json({
+        success: false,
+        error: 'Banco de dados não disponível'
+      });
+    }
+
+    const { sampleID, description, method, responsibleResearcher, equipmentID, equipmentName, analysisType } = req.body;
+    const file = req.file;
+
+    if (!file) {
+      return res.status(400).json({
+        success: false,
+        error: 'Arquivo não fornecido'
+      });
+    }
+
+    if (!sampleID) {
+      if (fs.existsSync(file.path)) {
+        fs.unlinkSync(file.path);
+      }
+      return res.status(400).json({
+        success: false,
+        error: 'sampleID é obrigatório'
+      });
+    }
+
+    const samplesCollection = db.collection('amostras');
+    let sample;
+    try {
+      const { ObjectId } = require('mongodb');
+      sample = await samplesCollection.findOne({ _id: new ObjectId(sampleID) });
+    } catch (idError) {
+      sample = await samplesCollection.findOne({ sampleID: Number(sampleID) });
+    }
+
+    if (!sample) {
+      if (fs.existsSync(file.path)) {
+        fs.unlinkSync(file.path);
+      }
+      return res.status(404).json({
+        success: false,
+        error: 'Amostra não encontrada'
+      });
+    }
+
+    const fileType = getResultFileType(file.originalname);
+    if (!fileType) {
+      if (fs.existsSync(file.path)) {
+        fs.unlinkSync(file.path);
+      }
+      return res.status(400).json({
+        success: false,
+        error: 'Tipo de arquivo inválido'
+      });
+    }
+
+    const resultsCollection = db.collection('results');
+    const resultPayload = {
+      sampleID: sample._id ? sample._id.toString() : sampleID,
+      fileType,
+      filePath: file.path,
+      description: description || null,
+      analysisType: analysisType || null,
+      method: method || null,
+      responsibleResearcher: responsibleResearcher || null,
+      equipmentID: equipmentID ? Number(equipmentID) : null,
+      equipmentName: equipmentName || null,
+      fileSize: file.size,
+      uploadedAt: new Date()
+    };
+
+    const validation = ResultModel.validate(resultPayload);
+    if (!validation.isValid) {
+      if (fs.existsSync(file.path)) {
+        fs.unlinkSync(file.path);
+      }
+      return res.status(400).json({
+        success: false,
+        error: 'Dados inválidos',
+        message: validation.errors.join(', ')
+      });
+    }
+
+    const result = ResultModel.create(resultPayload);
+    const insertResult = await resultsCollection.insertOne(result);
+
+    if (req.user) {
+      const auditLogger = require('../utils/auditLogger');
+      auditLogger.init(db);
+      await auditLogger.log({
+        action: 'CREATE',
+        entity: 'Result',
+        entityID: insertResult.insertedId.toString(),
+        result: 'success',
+        severity: 'info',
+        message: 'Resultado criado via upload',
+        payload: { sampleID: result.sampleID || null },
+        req: req,
+        module: 'Resultados'
+      });
+    }
+
+    return res.status(201).json({
+      success: true,
+      message: 'Resultado criado com sucesso',
+      data: { _id: insertResult.insertedId, ...result }
+    });
+  } catch (error) {
+    logger.error('Erro ao fazer upload de resultado:', error.message);
+    if (req.file && fs.existsSync(req.file.path)) {
+      try {
+        fs.unlinkSync(req.file.path);
+      } catch (unlinkError) {
+        logger.error('Erro ao remover arquivo temporário:', unlinkError.message);
+      }
+    }
+    return res.status(400).json({
+      success: false,
+      error: 'Erro ao fazer upload de resultado',
       message: error.message
     });
   }
@@ -171,11 +355,16 @@ router.get('/:id/download', authenticate, async (req, res) => {
       });
     }
 
-    // Se for arquivo local, retorna erro (não implementado ainda)
-    return res.status(501).json({
+    if (result.filePath) {
+      const resolvedPath = path.resolve(result.filePath);
+      if (fs.existsSync(resolvedPath)) {
+        return res.download(resolvedPath);
+      }
+    }
+
+    return res.status(404).json({
       success: false,
-      error: 'Download de arquivo local não implementado',
-      message: 'Use a URL externa fornecida no resultado'
+      error: 'Arquivo de resultado não encontrado'
     });
   } catch (error) {
     logger.error('Erro ao fazer download:', error.message);
