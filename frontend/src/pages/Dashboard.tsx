@@ -11,6 +11,7 @@ import { useEquipment } from '../hooks/useEquipment';
 import { useSensors } from '../hooks/useSensors';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
+import { securityService } from '../services/api';
 import './Dashboard.css';
 
 export default function Dashboard() {
@@ -24,6 +25,8 @@ export default function Dashboard() {
   const { policies, loading: loadingPolicies } = usePolicies();
   const { equipment, loading: loadingEquipment } = useEquipment();
   const { sensors, loading: loadingSensors } = useSensors();
+  const [consentQueueStats, setConsentQueueStats] = useState<{ waiting: number; delayed: number; active: number; failed: number; totalQueued: number; available: boolean } | null>(null);
+  const [loadingConsentQueue, setLoadingConsentQueue] = useState(false);
 
   // TEMPORARIAMENTE DESATIVADO: Não há sensores cadastrados ainda
   const TEMPERATURE_READING_DISABLED = true;
@@ -81,6 +84,39 @@ export default function Dashboard() {
 
   const loading = loadingPatients || loadingSamples || loadingResults || loadingTemperatures || 
                   loadingPolicies || loadingEquipment || loadingSensors;
+
+  const isAdmin = user?.roleName === 'Administrador' || user?.accessType === 4;
+
+  useEffect(() => {
+    if (!isAdmin) return;
+
+    let mounted = true;
+    const fetchQueueStats = async () => {
+      setLoadingConsentQueue(true);
+      try {
+        const response = await securityService.getConsentQueueStatus();
+        const payload = (response as any)?.data?.data;
+        if (mounted) {
+          setConsentQueueStats(payload || null);
+        }
+      } catch (error) {
+        if (mounted) {
+          setConsentQueueStats(null);
+        }
+      } finally {
+        if (mounted) {
+          setLoadingConsentQueue(false);
+        }
+      }
+    };
+
+    fetchQueueStats();
+    const interval = setInterval(fetchQueueStats, 15000);
+    return () => {
+      mounted = false;
+      clearInterval(interval);
+    };
+  }, [isAdmin]);
 
   // Define quais cards cada tipo de acesso pode ver
   const statCards = useMemo(() => {
@@ -246,17 +282,48 @@ export default function Dashboard() {
           </div>
         </Card>
 
-        <Card
-          className="side-card"
-          style={{ background: 'var(--color-surface)', boxShadow: 'var(--shadow-card)', borderRadius: '12px' }}
-        >
-          <h3 className="side-card-title">{t('dashboard.temperatureAlertsActive')}</h3>
-          <p className="side-card-text">
-            {stats.temperatureAlerts > 0
-              ? t('dashboard.temperatureAlertsMessage').replace('{count}', stats.temperatureAlerts.toString())
-              : 'Nenhum alerta ativo no momento.'}
-          </p>
-        </Card>
+        <div className="side-card-stack">
+          <Card
+            className="side-card"
+            style={{ background: 'var(--color-surface)', boxShadow: 'var(--shadow-card)', borderRadius: '12px' }}
+          >
+            <h3 className="side-card-title">{t('dashboard.temperatureAlertsActive')}</h3>
+            <p className="side-card-text">
+              {stats.temperatureAlerts > 0
+                ? t('dashboard.temperatureAlertsMessage').replace('{count}', stats.temperatureAlerts.toString())
+                : 'Nenhum alerta ativo no momento.'}
+            </p>
+          </Card>
+
+          {isAdmin && (
+            <Card
+              className="side-card consent-queue-card"
+              style={{ background: 'var(--color-surface)', boxShadow: 'var(--shadow-card)', borderRadius: '12px' }}
+            >
+              <h3 className="side-card-title">Fila de Consentimentos</h3>
+              {loadingConsentQueue ? (
+                <p className="side-card-text">Carregando...</p>
+              ) : consentQueueStats?.available ? (
+                <div className="consent-queue-metrics">
+                  <div>
+                    <span className="consent-queue-label">Na fila</span>
+                    <strong>{consentQueueStats.totalQueued ?? 0}</strong>
+                  </div>
+                  <div>
+                    <span className="consent-queue-label">Em envio</span>
+                    <strong>{consentQueueStats.active ?? 0}</strong>
+                  </div>
+                  <div>
+                    <span className="consent-queue-label">Falhas</span>
+                    <strong>{consentQueueStats.failed ?? 0}</strong>
+                  </div>
+                </div>
+              ) : (
+                <p className="side-card-text">Fila indisponível (Redis não configurado).</p>
+              )}
+            </Card>
+          )}
+        </div>
       </div>
     </div>
   );

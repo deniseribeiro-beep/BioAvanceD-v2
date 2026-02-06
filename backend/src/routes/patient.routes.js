@@ -17,6 +17,9 @@ router.get('/search', authenticate, patientController.search.bind(patientControl
 // Buscar consentimento atual do paciente
 router.get('/:patientId/consent', authenticate, consentController.getPatientConsent.bind(consentController));
 
+// Reenviar notificações de consentimento
+router.post('/:id/consent/resend', authenticate, requirePermission('createPatient'), patientController.resendConsentNotification.bind(patientController));
+
 // Buscar paciente por ID
 router.get('/:id', authenticate, patientController.buscar.bind(patientController));
 

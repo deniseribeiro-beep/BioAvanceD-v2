@@ -91,7 +91,7 @@ export default function ConsentPage() {
 
   if (loading) {
     return (
-      <div className="consent-page">
+      <div className="page consent-page">
         <Card>
           <div className="consent-page-status">
             <Spinner size="sm" label={t('consent.page.loading')} />
@@ -104,7 +104,7 @@ export default function ConsentPage() {
 
   if (error || !template) {
     return (
-      <div className="consent-page">
+      <div className="page consent-page">
         <Card title={t('consent.page.cardTitle')}>
           <div className="consent-page-error">
             {error || t('consent.page.noActiveTemplate')}
@@ -118,10 +118,10 @@ export default function ConsentPage() {
   }
 
   return (
-    <div className="consent-page">
+    <div className="page consent-page">
       <ConsentForm
         patientName={patientName}
-        templateText={template.content}
+        templateText={template.htmlContent || template.content}
         permissions={template.permissions || []}
         onSubmit={handleSubmit}
         onCancel={handleCancel}

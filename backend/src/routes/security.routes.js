@@ -3,6 +3,7 @@ const router = express.Router();
 const { authenticate } = require('../middleware/auth');
 const { requireRole } = require('../middleware/rbac');
 const securityService = require('../services/security.service');
+const notificationService = require('../services/notification.service');
 const logger = require('../utils/logger');
 const auditLogger = require('../utils/auditLogger');
 
@@ -160,6 +161,28 @@ router.get('/permissions', async (req, res) => {
     return res.status(500).json({
       success: false,
       error: (req.t && req.t('security.getPermissionsError')) || 'Erro ao buscar permissões',
+      message: error.message
+    });
+  }
+});
+
+/**
+ * GET /api/security/consent-queue
+ * Retorna status da fila de notificações de consentimento
+ */
+router.get('/consent-queue', async (_req, res) => {
+  try {
+    const stats = await notificationService.getConsentQueueStats();
+
+    return res.status(200).json({
+      success: true,
+      data: stats
+    });
+  } catch (error) {
+    logger.error('Erro ao buscar status da fila de consentimento:', error.message);
+    return res.status(500).json({
+      success: false,
+      error: 'Erro ao buscar status da fila de consentimento',
       message: error.message
     });
   }

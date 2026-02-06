@@ -22,6 +22,7 @@ const getNotificationService = () => require('../services/notification.service')
  */
 
 let worker = null;
+let notificationWorker = null;
 let db = null;
 
 /**
@@ -268,6 +269,43 @@ async function initWorker() {
 
     logger.info('✅ Worker de importação inicializado');
 
+    if (!notificationWorker) {
+      notificationWorker = new Worker(
+        'notification-queue',
+        async (job) => {
+          if (job.name !== 'consent-notification') {
+            logger.warn(`Job desconhecido em notification-queue: ${job.name}`);
+            return null;
+          }
+
+          const notificationService = getNotificationService();
+          return notificationService.processConsentNotificationJob(job.data);
+        },
+        {
+          connection,
+          concurrency: parseInt(process.env.NOTIFICATION_WORKER_CONCURRENCY || '3', 10),
+          limiter: {
+            max: parseInt(process.env.NOTIFICATION_WORKER_RATE_MAX || '3', 10),
+            duration: parseInt(process.env.NOTIFICATION_WORKER_RATE_DURATION || '1000', 10),
+          }
+        }
+      );
+
+      notificationWorker.on('completed', (job) => {
+        logger.info(`✅ Notification job ${job.id} completado`);
+      });
+
+      notificationWorker.on('failed', (job, err) => {
+        logger.error(`❌ Notification job ${job?.id} falhou:`, err.message);
+      });
+
+      notificationWorker.on('error', (err) => {
+        logger.error('[ERROR] Erro no notification worker:', err.message);
+      });
+
+      logger.info('✅ Worker de notificações inicializado');
+    }
+
     return worker;
   } catch (error) {
     logger.error('❌ Erro ao inicializar worker:', error);
@@ -305,6 +343,12 @@ async function closeWorker() {
     await worker.close();
     worker = null;
     logger.info('✅ Worker fechado');
+  }
+
+  if (notificationWorker) {
+    await notificationWorker.close();
+    notificationWorker = null;
+    logger.info('✅ Worker de notificações fechado');
   }
 }
 

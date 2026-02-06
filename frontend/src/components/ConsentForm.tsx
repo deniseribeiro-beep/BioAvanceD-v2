@@ -40,13 +40,21 @@ export default function ConsentForm({
     }));
   };
 
-  const requiredPermissionKey = useMemo(() => {
+  const requiredPermissionKeys = useMemo(() => {
+    const explicitRequired = (permissions || [])
+      .filter((permission) => permission.required)
+      .map((permission) => permission.key);
+
+    if (explicitRequired.length > 0) {
+      return explicitRequired;
+    }
+
     const normalized = (permissions || []).find((permission) =>
       permission.key?.toLowerCase().includes('terms') ||
       permission.key?.toLowerCase().includes('termos') ||
       permission.label?.toLowerCase().includes('termos gerais')
     );
-    return normalized?.key || permissions?.[0]?.key || '';
+    return normalized?.key ? [normalized.key] : permissions?.[0]?.key ? [permissions[0].key] : [];
   }, [permissions]);
 
   const isHtmlContent = useMemo(() => {
@@ -54,7 +62,9 @@ export default function ConsentForm({
     return /<\/?[a-z][\s\S]*>/i.test(templateText);
   }, [templateText]);
 
-  const hasRequiredConsent = requiredPermissionKey ? responses[requiredPermissionKey] === true : false;
+  const hasRequiredConsent = requiredPermissionKeys.length === 0
+    ? false
+    : requiredPermissionKeys.every((key) => responses[key] === true);
   const hasSignature = signatureName.trim().length > 3;
   const canSubmit = hasRequiredConsent && hasSignature;
 
@@ -80,7 +90,7 @@ export default function ConsentForm({
           <Card title={t('consent.form.panelTitle')}>
             <div className="consent-permissions">
               {(permissions || []).map((permission) => {
-                const isRequired = permission.key === requiredPermissionKey;
+                const isRequired = requiredPermissionKeys.includes(permission.key);
                 return (
                   <label key={permission.key} className="consent-switch">
                     <input

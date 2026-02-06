@@ -65,6 +65,12 @@ export interface Patient {
   notes?: string;
   
   // Campos de sistema
+  status?: 'PENDING_CONSENT' | 'ACTIVE' | 'INACTIVE';
+  consentToken?: string | null;
+  consentTokenCreatedAt?: Date | string | null;
+  consentTokenExpiresAt?: Date | string | null;
+  consentNotifiedAt?: Date | string | null;
+  consentAcceptedAt?: Date | string | null;
   sampleList?: Sample[] | string[];
   createdAt?: Date | string;
   updatedAt?: Date | string;
@@ -162,16 +168,38 @@ export interface Result {
 export interface ConsentPermission {
   key: string;
   label: string;
+  required?: boolean;
+}
+
+export interface ConsentPolicyPermission {
+  key: string;
+  label: string;
+  required?: boolean;
 }
 
 export interface ConsentTemplate {
   _id?: string;
   title: string;
   content: string;
+  htmlContent?: string;
   version: string;
   active: boolean;
   permissions: ConsentPermission[];
+  granularPermissions?: ConsentPolicyPermission[];
+  validFrom?: Date | string;
   createdAt?: Date | string;
+}
+
+export interface ConsentPolicy {
+  _id?: string;
+  title: string;
+  version: string;
+  active: boolean;
+  htmlContent: string;
+  validFrom: Date | string;
+  granularPermissions: ConsentPolicyPermission[];
+  createdAt?: Date | string;
+  updatedAt?: Date | string;
 }
 
 export interface PatientConsent {

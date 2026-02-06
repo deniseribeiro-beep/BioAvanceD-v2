@@ -1,7 +1,113 @@
 const consentService = require('../services/consent.service');
+const patientService = require('../services/patient.service');
 const logger = require('../utils/logger');
 
 class ConsentController {
+  async createPolicy(req, res) {
+    try {
+      const db = req.app.locals.db;
+      if (!db) {
+        return res.status(503).json({
+          success: false,
+          error: 'Banco de dados não disponível'
+        });
+      }
+
+      const policy = await consentService.createPolicy(db, req.body);
+
+      if (req.user) {
+        const auditLogger = require('../utils/auditLogger');
+        auditLogger.init(db);
+        await auditLogger.log({
+          action: 'CREATE',
+          entity: 'ConsentPolicy',
+          entityID: policy._id.toString(),
+          result: 'success',
+          severity: 'info',
+          message: `Política de consentimento criada (${policy.version})`,
+          payload: {
+            title: policy.title,
+            version: policy.version,
+            active: policy.active,
+            permissions: policy.granularPermissions?.map(p => p.key) || []
+          },
+          req: req,
+          module: 'Consentimento'
+        });
+      }
+
+      return res.status(201).json({
+        success: true,
+        message: 'Política de consentimento criada com sucesso',
+        data: policy
+      });
+    } catch (error) {
+      logger.error('Erro ao criar política de consentimento:', error.message);
+      return res.status(400).json({
+        success: false,
+        error: 'Erro ao criar política de consentimento',
+        message: error.message
+      });
+    }
+  }
+
+  async getActivePolicy(req, res) {
+    try {
+      const db = req.app.locals.db;
+      if (!db) {
+        return res.status(503).json({
+          success: false,
+          error: 'Banco de dados não disponível'
+        });
+      }
+
+      const policy = await consentService.getActivePolicy(db);
+      if (!policy) {
+        return res.status(404).json({
+          success: false,
+          error: 'Nenhuma política ativa encontrada'
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        data: policy
+      });
+    } catch (error) {
+      logger.error('Erro ao buscar política ativa:', error.message);
+      return res.status(500).json({
+        success: false,
+        error: 'Erro ao buscar política ativa',
+        message: error.message
+      });
+    }
+  }
+
+  async getAllPolicies(req, res) {
+    try {
+      const db = req.app.locals.db;
+      if (!db) {
+        return res.status(503).json({
+          success: false,
+          error: 'Banco de dados não disponível'
+        });
+      }
+
+      const policies = await consentService.getAllPolicies(db);
+      return res.status(200).json({
+        success: true,
+        data: policies
+      });
+    } catch (error) {
+      logger.error('Erro ao listar políticas:', error.message);
+      return res.status(500).json({
+        success: false,
+        error: 'Erro ao listar políticas',
+        message: error.message
+      });
+    }
+  }
+
   async createTemplate(req, res) {
     try {
       const db = req.app.locals.db;
@@ -216,6 +322,65 @@ class ConsentController {
       return res.status(500).json({
         success: false,
         error: 'Erro ao buscar consentimento',
+        message: error.message
+      });
+    }
+  }
+
+  async validateConsentToken(req, res) {
+    try {
+      const db = req.app.locals.db;
+      if (!db) {
+        return res.status(503).json({
+          success: false,
+          error: 'Banco de dados não disponível'
+        });
+      }
+
+      const patientId = req.body.patientId || req.body.patientID || req.query.patientId || req.query.patientID;
+      const token = req.body.token || req.query.token;
+
+      const result = await patientService.validateConsentToken(db, String(patientId), String(token));
+
+      return res.status(200).json({
+        success: true,
+        data: result
+      });
+    } catch (error) {
+      logger.error('Erro ao validar token de consentimento:', error.message);
+      return res.status(400).json({
+        success: false,
+        error: 'Token inválido',
+        message: error.message
+      });
+    }
+  }
+
+  async acceptConsentToken(req, res) {
+    try {
+      const db = req.app.locals.db;
+      if (!db) {
+        return res.status(503).json({
+          success: false,
+          error: 'Banco de dados não disponível'
+        });
+      }
+
+      const patientId = req.body.patientId || req.body.patientID || req.query.patientId || req.query.patientID;
+      const token = req.body.token || req.query.token;
+
+      const result = await patientService.acceptConsentToken(db, String(patientId), String(token));
+
+      return res.status(200).json({
+        success: true,
+        message: 'Consentimento confirmado com sucesso',
+        data: result
+      });
+    } catch (error) {
+      logger.error('Erro ao aceitar consentimento:', error.message);
+      return res.status(400).json({
+        success: false,
+        error: 'Erro ao aceitar consentimento',
         message: error.message
       });
     }

@@ -1,13 +1,14 @@
-import { useState, useEffect, useId } from 'react';
+import { useState, useEffect, useId, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Button from '../components/UI/Button';
 import Input from '../components/UI/Input';
 import PatientSearchInput from '../components/UI/PatientSearchInput';
 import { ArrowLeft } from 'lucide-react';
-import { Sample } from '../types/models';
+import { Patient, Sample } from '../types/models';
 import { useSamples } from '../hooks/useSamples';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useLocations } from '../hooks/useLocations';
+import { patientService } from '../services/api';
 // Removido useQualityDescriptions - agora usamos escala MIABIS diretamente (0, 1, 2)
 
 export default function NewSamplePage() {
@@ -44,6 +45,9 @@ export default function NewSamplePage() {
   const [selectedUnit, setSelectedUnit] = useState<string>('');
   const [patientIDValid, setPatientIDValid] = useState<boolean | null>(null);
   const [pageLoading, setPageLoading] = useState(false);
+  const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
+  const [patientFetchLoading, setPatientFetchLoading] = useState(false);
+  const [resendingConsent, setResendingConsent] = useState(false);
 
   // Carrega localizações ao montar (apenas uma vez)
   useEffect(() => {
@@ -64,6 +68,29 @@ export default function NewSamplePage() {
   const handleValidationChange = (isValid: boolean | null) => {
     setPatientIDValid(isValid);
   };
+
+  const fetchPatientConsentStatus = useCallback(async (patientID: string) => {
+    setPatientFetchLoading(true);
+    try {
+      const response = await patientService.getById(patientID);
+      const payload = (response as any)?.data?.data ?? (response as any)?.data;
+      setSelectedPatient(payload || null);
+    } catch (err) {
+      setSelectedPatient(null);
+    } finally {
+      setPatientFetchLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const patientIDStr = String(formData.patientID || '').trim();
+    if (!patientIDValid || patientIDStr.length !== 8 || !/^\d{8}$/.test(patientIDStr)) {
+      setSelectedPatient(null);
+      return;
+    }
+
+    fetchPatientConsentStatus(patientIDStr);
+  }, [formData.patientID, patientIDValid, fetchPatientConsentStatus]);
 
   const formatDate = (date: Date | string | undefined): string => {
     if (!date) return '';
@@ -88,6 +115,11 @@ export default function NewSamplePage() {
 
     if (!patientIDValid) {
       alert(t('samples.patientIDNotFound') || 'ID de paciente não encontrado');
+      return;
+    }
+
+    if (selectedPatient?.status === 'PENDING_CONSENT') {
+      alert('Paciente com consentimento pendente. Reenvie as notificações e aguarde a confirmação.');
       return;
     }
 
@@ -294,6 +326,58 @@ export default function NewSamplePage() {
         padding: '2rem',
         border: '1px solid var(--border)'
       }}>
+        {selectedPatient?.status === 'PENDING_CONSENT' && (
+          <div
+            style={{
+              padding: '0.75rem 1rem',
+              backgroundColor: '#fef3c7',
+              border: '1px solid #f59e0b',
+              borderRadius: '8px',
+              marginBottom: '1.5rem',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: '1rem'
+            }}
+          >
+            <div style={{ color: '#92400e', fontSize: '0.9rem' }}>
+              <strong>Consentimento pendente.</strong> O paciente ainda não confirmou o TCLE.
+              {selectedPatient.consentTokenExpiresAt && (
+                <span style={{ marginLeft: '0.5rem' }}>
+                  Token válido até {new Date(selectedPatient.consentTokenExpiresAt).toLocaleDateString()}.
+                </span>
+              )}
+            </div>
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={async () => {
+                const patientIDStr = String(formData.patientID || '').trim();
+                if (!patientIDStr) return;
+                setResendingConsent(true);
+                try {
+                  await patientService.resendConsentNotification(patientIDStr);
+                  await fetchPatientConsentStatus(patientIDStr);
+                  alert('Notificações de consentimento reenviadas.');
+                } catch (err: any) {
+                  const errorMsg = err.response?.data?.message || err.message || 'Erro ao reenviar notificações.';
+                  alert(errorMsg);
+                } finally {
+                  setResendingConsent(false);
+                }
+              }}
+              disabled={resendingConsent}
+            >
+              {resendingConsent ? 'Reenviando...' : 'Reenviar Notificações'}
+            </Button>
+          </div>
+        )}
+
+        {patientFetchLoading && (
+          <div style={{ marginBottom: '1rem', color: 'var(--text-light)', fontSize: '0.85rem' }}>
+            Verificando status de consentimento...
+          </div>
+        )}
         {/* Seção 1: Dados Básicos */}
         <div style={{ marginBottom: '2rem' }}>
           <h2 style={{ 
@@ -727,7 +811,7 @@ export default function NewSamplePage() {
           >
             {t('common.cancel') || 'Cancelar'}
           </Button>
-          <Button type="submit">
+          <Button type="submit" disabled={selectedPatient?.status === 'PENDING_CONSENT' || patientFetchLoading}>
             {t('samples.create') || 'Criar Amostra'}
           </Button>
         </div>

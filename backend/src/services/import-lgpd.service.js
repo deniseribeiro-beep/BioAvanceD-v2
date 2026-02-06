@@ -6,6 +6,7 @@ const logger = require('../utils/logger');
 const PatientModel = require('../models/Patient');
 const SampleModel = require('../models/Sample');
 const patientService = require('./patient.service');
+const notificationService = require('./notification.service');
 const { generateUniquePatientID, validatePatientID, sanitizePatientForLogs } = require('../utils/patientAnonymization');
 
 /**
@@ -398,6 +399,12 @@ class ImportLGPDService {
           const patientID = await generateUniquePatientID(db, 'pacientes');
           patientData.patientID = patientID;
 
+          const consentMetadata = notificationService.buildConsentMetadata();
+          patientData.status = 'PENDING_CONSENT';
+          patientData.consentToken = consentMetadata.token;
+          patientData.consentTokenCreatedAt = consentMetadata.createdAt;
+          patientData.consentTokenExpiresAt = consentMetadata.expiresAt;
+
           // Valida unidade clínica se fornecida
           if (patientData.clinicalUnit && !PatientModel.validateUnit(patientData.clinicalUnit)) {
             results.errors.push({
@@ -435,7 +442,18 @@ class ImportLGPDService {
           const patient = PatientModel.create(patientData);
           
           // Insere no banco
-          await patientsCollection.insertOne(patient);
+          const insertResult = await patientsCollection.insertOne(patient);
+
+          try {
+            const consentLink = notificationService.buildConsentLink(patient, consentMetadata.token);
+            await notificationService.enqueueConsentNotification(patientData, consentLink);
+            await patientsCollection.updateOne(
+              { _id: insertResult.insertedId },
+              { $set: { consentNotifiedAt: new Date() } }
+            );
+          } catch (notifyError) {
+            logger.error('Erro ao enfileirar notificações de consentimento (importação LGPD):', notifyError.message);
+          }
           
           results.success++;
           // ID gerado não é adicionado ao array (LGPD - não expor)

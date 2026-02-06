@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, Fragment } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Card from '../components/UI/Card';
 import Table from '../components/UI/Table';
@@ -24,6 +24,7 @@ export default function PatientsPage() {
   const [importing, setImporting] = useState(false);
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importProgress, setImportProgress] = useState<string>('');
+  const [resendingConsentFor, setResendingConsentFor] = useState<string | null>(null);
   
   // Handler para busca de pacientes
   const handleSearch = async (term: string) => {
@@ -385,6 +386,7 @@ export default function PatientsPage() {
               type="file"
               id="import-file"
               accept=".csv,.xlsx"
+              title="Importar arquivo de pacientes (CSV ou Excel)"
               onChange={(e) => {
                 const file = e.target.files?.[0];
                 if (file) {
@@ -503,37 +505,84 @@ export default function PatientsPage() {
             const patientID = patient.patientID 
               ? String(patient.patientID) 
               : ((patient as any).id ? String((patient as any).id) : `patient-${index}`);
+            const consentStatus = (patient as any).status;
+            const isConsentPending = consentStatus === 'PENDING_CONSENT';
             
             return (
-              <tr key={`patient-row-${index}-${patientID}`}>
-                <td>{patientID}</td>
-                {canViewFullData ? (
-                  <td>
-                    <div className="table-actions">
-                      <button
-                        className="action-button"
-                        onClick={() => handleEdit(patientID)}
-                        title={t('common.edit')}
+              <Fragment key={`patient-fragment-${patientID}`}>
+                <tr key={`patient-row-${index}-${patientID}`}>
+                  <td>{patientID}</td>
+                  {canViewFullData ? (
+                    <td>
+                      <div className="table-actions">
+                        <button
+                          className="action-button"
+                          onClick={() => handleEdit(patientID)}
+                          title={t('common.edit')}
+                        >
+                          <Edit size={16} />
+                        </button>
+                        <button
+                          className="action-button danger"
+                          onClick={() => handleDelete(patientID)}
+                          title={t('common.delete')}
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    </td>
+                  ) : (
+                    <td>
+                      <span style={{ color: 'var(--text-light)', fontSize: '0.875rem' }}>
+                        {t('patients.viewOnly')}
+                      </span>
+                    </td>
+                  )}
+                </tr>
+                {isConsentPending && (
+                  <tr key={`patient-consent-${patientID}`}>
+                    <td colSpan={2}>
+                      <div
+                        style={{
+                          padding: '0.75rem 1rem',
+                          backgroundColor: '#fef3c7',
+                          border: '1px solid #f59e0b',
+                          borderRadius: '8px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          gap: '1rem'
+                        }}
                       >
-                        <Edit size={16} />
-                      </button>
-                      <button
-                        className="action-button danger"
-                        onClick={() => handleDelete(patientID)}
-                        title={t('common.delete')}
-                      >
-                        <Trash2 size={16} />
-                      </button>
-                    </div>
-                  </td>
-                ) : (
-                  <td>
-                    <span style={{ color: 'var(--text-light)', fontSize: '0.875rem' }}>
-                      {t('patients.viewOnly')}
-                    </span>
-                  </td>
+                        <div style={{ color: '#92400e', fontSize: '0.9rem' }}>
+                          <strong>Consentimento pendente.</strong> Paciente precisa aceitar o TCLE.
+                        </div>
+                        {canViewFullData && (
+                          <Button
+                            variant="secondary"
+                            onClick={async () => {
+                              setResendingConsentFor(patientID);
+                              try {
+                                await patientService.resendConsentNotification(patientID);
+                                await loadPatients();
+                                alert('Notificações de consentimento reenviadas.');
+                              } catch (err: any) {
+                                const errorMsg = err.response?.data?.message || err.message || 'Erro ao reenviar notificações.';
+                                alert(errorMsg);
+                              } finally {
+                                setResendingConsentFor(null);
+                              }
+                            }}
+                            disabled={resendingConsentFor === patientID}
+                          >
+                            {resendingConsentFor === patientID ? 'Reenviando...' : 'Reenviar Notificações'}
+                          </Button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
                 )}
-              </tr>
+              </Fragment>
             );
           })}
         </Table>

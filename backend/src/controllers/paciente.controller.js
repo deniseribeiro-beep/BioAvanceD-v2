@@ -104,7 +104,7 @@ class PacienteController {
       const hasCreatePatientPermission = permissions.createPatient?.includes(userRole) || false;
       
       if (!hasCreatePatientPermission) {
-        // MÓDULO OPERACIONAL: retorna apenas IDs, sem dados sensíveis
+        // MÓDULO OPERACIONAL: retorna apenas IDs + status de consentimento, sem dados sensíveis
         const filters = {
           limit: parseInt(req.query.limit) || 50,
           skip: parseInt(req.query.skip) || 0
@@ -112,14 +112,14 @@ class PacienteController {
 
         const patientsCollection = db.collection('pacientes');
         const patients = await patientsCollection
-          .find({}, { projection: { patientID: 1, _id: 0 } }) // Apenas ID
+          .find({}, { projection: { patientID: 1, status: 1, consentNotifiedAt: 1, consentTokenExpiresAt: 1, _id: 0 } })
           .limit(filters.limit)
           .skip(filters.skip)
           .toArray();
 
         const total = await patientsCollection.countDocuments({});
 
-        // Registra log de consulta (módulo operacional - apenas IDs)
+        // Registra log de consulta (módulo operacional - apenas IDs + status)
         const auditLogger = require('../utils/auditLogger');
         auditLogger.init(db);
         await auditLogger.log({
@@ -136,7 +136,7 @@ class PacienteController {
         return res.status(200).json({
           success: true,
           data: {
-            patients: patients.map(p => ({ patientID: p.patientID })), // Apenas IDs
+            patients: patients.map(p => ({ patientID: p.patientID, status: p.status || 'PENDING_CONSENT', consentNotifiedAt: p.consentNotifiedAt || null, consentTokenExpiresAt: p.consentTokenExpiresAt || null })),
             total,
             limit: filters.limit,
             skip: filters.skip
@@ -243,7 +243,12 @@ class PacienteController {
         
         return res.status(200).json({
           success: true,
-          data: { patientID: patient.patientID } // Apenas ID, sem dados sensíveis
+          data: {
+            patientID: patient.patientID,
+            status: patient.status || 'PENDING_CONSENT',
+            consentNotifiedAt: patient.consentNotifiedAt || null,
+            consentTokenExpiresAt: patient.consentTokenExpiresAt || null
+          }
         });
       }
 
@@ -271,6 +276,42 @@ class PacienteController {
       return res.status(500).json({
         success: false,
         error: 'Erro interno do servidor',
+        message: error.message
+      });
+    }
+  }
+
+  async resendConsentNotification(req, res) {
+    try {
+      const db = req.app.locals.db;
+
+      if (!db) {
+        return res.status(503).json({
+          success: false,
+          error: 'Banco de dados não disponível'
+        });
+      }
+
+      const patientID = String(req.params.id || req.body.patientID || req.body.patientId || '').trim();
+      if (!patientID) {
+        return res.status(400).json({
+          success: false,
+          error: 'patientId é obrigatório'
+        });
+      }
+
+      const result = await patientService.resendConsentNotification(db, patientID);
+
+      return res.status(200).json({
+        success: true,
+        message: 'Notificações de consentimento reenviadas com sucesso',
+        data: result
+      });
+    } catch (error) {
+      logger.error('Erro ao reenviar notificações de consentimento:', error.message);
+      return res.status(400).json({
+        success: false,
+        error: 'Erro ao reenviar notificações de consentimento',
         message: error.message
       });
     }

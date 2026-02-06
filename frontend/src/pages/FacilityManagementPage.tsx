@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import Card from '../components/UI/Card';
 import Table from '../components/UI/Table';
@@ -12,6 +12,7 @@ import { useLocations } from '../hooks/useLocations';
 import { useTemperature } from '../hooks/useTemperature';
 import { useSensors } from '../hooks/useSensors';
 import { usePolicies } from '../hooks/usePolicies';
+import { useSamples } from '../hooks/useSamples';
 import { validateReading, validateTemperatureUnit, generateAlert, validateThresholds } from '../utils/validations';
 import { CryoBoxGrid } from '../components/CryoBoxGrid';
 import './FacilityManagementPage.css';
@@ -306,6 +307,47 @@ function getEquipmentTypeDescription(equipmentType: number | undefined): string 
 function LocationsSection() {
   const { equipment } = useEquipment();
   const { locations, loading, error, createLocation, updateLocation, deleteLocation, loadLocations } = useLocations();
+  const { samples } = useSamples();
+  const [selectedBox, setSelectedBox] = useState<number | null>(null);
+  const [currentPage, setCurrentPage] = useState(0);
+  const PAGE_SIZE = 81;
+
+  const getSampleBox = (sample: any): number | null => {
+    const value = sample?.box ?? sample?.boxNumber ?? sample?.locationBox;
+    return typeof value === 'number' ? value : value ? Number(value) : null;
+  };
+
+  const getSampleWell = (sample: any): string | null => {
+    return sample?.wellPosition ?? sample?.eppendorfWell ?? sample?.well ?? sample?.position ?? null;
+  };
+
+  const getSampleLabel = (sample: any): string => {
+    const code = sample?.barcode ?? sample?.sampleID ?? sample?.patientID ?? 'Amostra';
+    const type = sample?.sampleType ? ` - ${sample.sampleType}` : '';
+    const status = sample?.currentStatus ?? sample?.status;
+    return `${code}${type}${status ? ` (${status})` : ''}`;
+  };
+
+  // Filtra amostras da caixa selecionada
+  const boxSamples = useMemo(() => {
+    if (selectedBox == null) return [];
+    return samples.filter((s: any) => getSampleBox(s) === selectedBox);
+  }, [samples, selectedBox]);
+
+  // Paginação das amostras
+  const paginatedSamples = useMemo(() => {
+    const start = currentPage * PAGE_SIZE;
+    return boxSamples.slice(start, start + PAGE_SIZE);
+  }, [boxSamples, currentPage]);
+
+  // Posições ocupadas (wellPosition ou eppendorfWell)
+  const occupiedPositions = useMemo(() => {
+    return paginatedSamples.map((s: any) => getSampleWell(s)).filter(Boolean) as string[];
+  }, [paginatedSamples]);
+
+  useEffect(() => {
+    setCurrentPage(0);
+  }, [selectedBox]);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingLocation, setEditingLocation] = useState<Location | null>(null);
 
@@ -385,12 +427,6 @@ function LocationsSection() {
         {importProgress && <p style={{ color: '#166534' }}>{importProgress}</p>}
       </Modal>
 
-      <div className="section-header">
-        <Button onClick={() => setIsModalOpen(true)}>
-          <Plus size={18} />
-          Nova Localização
-        </Button>
-      </div>
 
       {loading && <p>Carregando...</p>}
       {error && <p style={{ color: 'var(--danger)' }}>Erro: {error}</p>}
@@ -405,6 +441,7 @@ function LocationsSection() {
             'Gaveta',
             'Caixa',
             'Poço Eppendorf',
+            'Descrição Detalhada',
             'Ações',
           ]}
         >
@@ -430,8 +467,30 @@ function LocationsSection() {
               <td>{location.block}</td>
               <td>{location.rack}</td>
               <td>{location.drawer}</td>
-              <td>{location.box}</td>
+              <td>
+                <button style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#166534', textDecoration: 'underline' }}
+                  onClick={() => {
+                    const boxValue = typeof location.box === 'number' ? location.box : Number(location.box);
+                    if (!Number.isNaN(boxValue)) {
+                      setSelectedBox(boxValue);
+                    }
+                  }}
+                  title="Visualizar caixa 9x9"
+                >
+                  {location.box}
+                </button>
+              </td>
               <td>{location.wellPosition || location.eppendorfWell || '-'}</td>
+              <td>
+                {/* Descrição detalhada: lista de amostras na caixa */}
+                {samples
+                  .filter((s: any) => getSampleBox(s) === location.box)
+                  .map((s: any) => (
+                    <div key={String(s?._id ?? s?.sampleID ?? s?.barcode ?? s?.patientID)} style={{ fontSize: 12, color: '#444', marginBottom: 2 }}>
+                      <strong>{getSampleLabel(s)}</strong>
+                    </div>
+                  ))}
+              </td>
               <td>
                 <div className="table-actions">
                   <button
@@ -467,9 +526,26 @@ function LocationsSection() {
         </Table>
       </Card>
 
-      {/* Visualizador de Caixa 9x9 (UI-only, sem lógica de negócio) */}
+      {/* Visualizador de Caixa 9x9 com amostras e paginação */}
       <Card title="Visualizador de Caixa (9x9)">
-        <CryoBoxGrid occupiedPositions={[]} selectedPosition={null} onSelect={() => {}} />
+        {selectedBox == null ? (
+          <div style={{ color: '#666', padding: 16 }}>Selecione uma caixa na tabela para visualizar as amostras alocadas.</div>
+        ) : (
+          <>
+            <CryoBoxGrid occupiedPositions={occupiedPositions} selectedPosition={null} onSelect={() => {}} />
+            {/* Paginação */}
+            {boxSamples.length > PAGE_SIZE && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 12 }}>
+                <Button variant="secondary" disabled={currentPage === 0} onClick={() => setCurrentPage(p => p - 1)}>Anterior</Button>
+                <span>Página {currentPage + 1} de {Math.ceil(boxSamples.length / PAGE_SIZE)}</span>
+                <Button variant="secondary" disabled={currentPage >= Math.ceil(boxSamples.length / PAGE_SIZE) - 1} onClick={() => setCurrentPage(p => p + 1)}>Próxima</Button>
+              </div>
+            )}
+            <div style={{ marginTop: 8, fontSize: 13, color: '#444' }}>
+              <strong>{boxSamples.length}</strong> amostras alocadas nesta caixa.
+            </div>
+          </>
+        )}
       </Card>
 
       <Modal
@@ -594,8 +670,9 @@ function LocationForm({
     <form onSubmit={handleSubmit} className="form">
       <div className="form-grid">
         <div className="form-grid-full">
-          <label className="input-label">Tipo de Equipamento *</label>
+          <label className="input-label" htmlFor="equipmentTypeSelect">Tipo de Equipamento *</label>
           <select
+            id="equipmentTypeSelect"
             className="input"
             value={formData.equipmentType || ''}
             onChange={(e) =>
@@ -612,8 +689,9 @@ function LocationForm({
           </select>
         </div>
         <div className="form-grid-full">
-          <label className="input-label">Equipamento Cadastrado no Sistema *</label>
+          <label className="input-label" htmlFor="equipmentSelect">Equipamento Cadastrado no Sistema *</label>
           <select
+            id="equipmentSelect"
             className="input"
             value={formData.equipmentID || ''}
             onChange={(e) =>
@@ -1048,8 +1126,9 @@ function SensorForm({
           }
         />
         <div className="form-grid-full">
-          <label className="input-label">Status de Manutenção</label>
+          <label className="input-label" htmlFor="maintenanceStatusSelect">Status de Manutenção</label>
           <select
+            id="maintenanceStatusSelect"
             className="input"
             value={formData.maintenanceStatus || 'Operacional'}
             onChange={(e) =>
@@ -1104,8 +1183,9 @@ function SensorForm({
           }
         />
         <div className="form-grid-full">
-          <label className="input-label">Localização</label>
+          <label className="input-label" htmlFor="sensorLocationSelect">Localização</label>
           <select
+            id="sensorLocationSelect"
             className="input"
             value={formData.locationID || ''}
             onChange={(e) =>
@@ -1131,8 +1211,9 @@ function SensorForm({
           </select>
         </div>
         <div className="form-grid-full">
-          <label className="input-label">Política de Temperatura</label>
+          <label className="input-label" htmlFor="sensorPolicySelect">Política de Temperatura</label>
           <select
+            id="sensorPolicySelect"
             className="input"
             value={formData.policyID || ''}
             onChange={(e) =>
@@ -1390,8 +1471,9 @@ function PolicyForm({
           helperText="Tempo em minutos que a temperatura deve estar fora dos limites antes de gerar um alerta."
         />
         <div className="form-grid-full">
-          <label className="input-label">Unidade de Temperatura *</label>
+          <label className="input-label" htmlFor="temperatureUnitSelect">Unidade de Temperatura *</label>
           <select
+            id="temperatureUnitSelect"
             className="input"
             value={formData.temperatureUnit || '°C'}
             onChange={(e) =>

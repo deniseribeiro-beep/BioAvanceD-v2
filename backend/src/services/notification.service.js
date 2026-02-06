@@ -1,5 +1,238 @@
+const crypto = require('crypto');
 const nodemailer = require('nodemailer');
+const { Queue } = require('bullmq');
 const logger = require('../utils/logger');
+const env = require('../config/env');
+const { initRedis } = require('../config/queue');
+
+const DEFAULT_FRONTEND_URL = 'http://localhost:5173';
+const CONSENT_TOKEN_TTL_DAYS = 7;
+
+const getFrontendUrl = () => {
+  return env.FRONTEND_URL || DEFAULT_FRONTEND_URL;
+};
+
+const formatConsentMessage = (name, link) => {
+  const safeName = name || 'Paciente';
+  return `BioAvanceD: Olá ${safeName}, sua participação no biobanco exige o aceite do termo de consentimento. Acesse: ${link}`;
+};
+
+const resolveEmail = (patientData) => {
+  return patientData.email || patientData.emailAddress || patientData.contactEmail || null;
+};
+
+const DEFAULT_COUNTRY_CODE = process.env.CONSENT_DEFAULT_COUNTRY_CODE || process.env.DEFAULT_COUNTRY_CODE || '55';
+
+const normalizePhoneE164 = (rawPhone) => {
+  if (!rawPhone) return null;
+  const trimmed = String(rawPhone).trim();
+  if (!trimmed) return null;
+
+  if (trimmed.startsWith('+')) {
+    return trimmed;
+  }
+
+  let digits = trimmed.replace(/\D/g, '');
+  if (!digits) return null;
+
+  if (digits.startsWith('00')) {
+    digits = digits.slice(2);
+  }
+
+  if (digits.startsWith(DEFAULT_COUNTRY_CODE)) {
+    return `+${digits}`;
+  }
+
+  return `+${DEFAULT_COUNTRY_CODE}${digits}`;
+};
+
+const resolvePhone = (patientData) => {
+  const rawPhone = patientData.phone || patientData.mobile || patientData.whatsapp || patientData.phoneNumber || null;
+  return normalizePhoneE164(rawPhone);
+};
+
+const getEmailTransporter = () => {
+  const host = process.env.SMTP_HOST;
+  const port = process.env.SMTP_PORT ? Number(process.env.SMTP_PORT) : undefined;
+  const user = process.env.SMTP_USER;
+  const pass = process.env.SMTP_PASS;
+
+  if (!host || !port || !user || !pass) {
+    return null;
+  }
+
+  const secure = process.env.SMTP_SECURE === 'true' || port === 465;
+  return nodemailer.createTransport({
+    host,
+    port,
+    secure,
+    auth: { user, pass }
+  });
+};
+
+const sendEmail = async (patientData, consentLink) => {
+  const email = resolveEmail(patientData);
+  if (!email) {
+    logger.warn('Consentimento: email ausente para paciente', { patientID: patientData.patientID });
+    return { channel: 'email', success: false, reason: 'missing_email' };
+  }
+
+  const transporter = getEmailTransporter();
+  const message = formatConsentMessage(patientData.patientName, consentLink);
+
+  if (!transporter) {
+    logger.info(`Consentimento EMAIL (mock) enviado para ${email}`);
+    return { channel: 'email', success: true, provider: 'mock' };
+  }
+
+  const from = process.env.SMTP_FROM || process.env.SMTP_USER;
+  await transporter.sendMail({
+    from,
+    to: email,
+    subject: 'BioAvanceD - Termo de Consentimento',
+    text: message
+  });
+
+  logger.info(`Consentimento EMAIL enviado para ${email}`);
+  return { channel: 'email', success: true, provider: 'smtp' };
+};
+
+const sendSms = async (patientData, consentLink) => {
+  const phone = resolvePhone(patientData);
+  if (!phone) {
+    logger.warn('Consentimento: telefone ausente para SMS', { patientID: patientData.patientID });
+    return { channel: 'sms', success: false, reason: 'missing_phone' };
+  }
+
+  const message = formatConsentMessage(patientData.patientName, consentLink);
+  logger.info(`Consentimento SMS (mock) enviado para ${phone}`, { message });
+  return { channel: 'sms', success: true, provider: 'mock' };
+};
+
+const sendWhatsApp = async (patientData, consentLink) => {
+  const phone = resolvePhone(patientData);
+  if (!phone) {
+    logger.warn('Consentimento: telefone ausente para WhatsApp', { patientID: patientData.patientID });
+    return { channel: 'whatsapp', success: false, reason: 'missing_phone' };
+  }
+
+  const message = formatConsentMessage(patientData.patientName, consentLink);
+  logger.info(`Consentimento WhatsApp (mock) enviado para ${phone}`, { message });
+  return { channel: 'whatsapp', success: true, provider: 'mock' };
+};
+
+const notifyPatientConsent = async (patientData, consentLink) => {
+  const results = await Promise.allSettled([
+    sendEmail(patientData, consentLink),
+    sendSms(patientData, consentLink),
+    sendWhatsApp(patientData, consentLink)
+  ]);
+
+  const summary = results.map((result) => {
+    if (result.status === 'fulfilled') {
+      return result.value;
+    }
+    return { channel: 'unknown', success: false, reason: result.reason?.message || 'failed' };
+  });
+
+  summary.forEach((item) => {
+    if (item.success) {
+      logger.info(`Consentimento enviado com sucesso (${item.channel})`, item);
+    } else {
+      logger.warn(`Falha ao enviar consentimento (${item.channel})`, item);
+    }
+  });
+
+  return summary;
+};
+
+const getConsentQueueStats = async () => {
+  const queue = getNotificationQueue();
+  if (!queue) {
+    return {
+      available: false,
+      counts: { waiting: 0, delayed: 0, active: 0, failed: 0 },
+      totalQueued: 0
+    };
+  }
+
+  const counts = await queue.getJobCounts('waiting', 'delayed', 'active', 'failed');
+  const waiting = counts.waiting || 0;
+  const delayed = counts.delayed || 0;
+  const active = counts.active || 0;
+  const failed = counts.failed || 0;
+
+  return {
+    available: true,
+    counts: { waiting, delayed, active, failed },
+    totalQueued: waiting + delayed,
+    active
+  };
+};
+
+let notificationQueue = null;
+
+const getNotificationQueue = () => {
+  if (notificationQueue) return notificationQueue;
+  const connection = initRedis();
+  if (!connection) {
+    logger.warn('[WARN] Fila de notificações não inicializada (Redis não configurado)');
+    return null;
+  }
+
+  notificationQueue = new Queue('notification-queue', {
+    connection,
+    defaultJobOptions: {
+      attempts: 3,
+      backoff: { type: 'exponential', delay: 2000 },
+      removeOnComplete: { age: 24 * 3600, count: 1000 },
+      removeOnFail: { age: 7 * 24 * 3600 }
+    }
+  });
+
+  return notificationQueue;
+};
+
+const enqueueConsentNotification = async (patientData, consentLink) => {
+  const queue = getNotificationQueue();
+  if (!queue) {
+    return notifyPatientConsent(patientData, consentLink);
+  }
+
+  await queue.add('consent-notification', {
+    patientData,
+    consentLink
+  });
+
+  return [{ channel: 'queue', success: true, provider: 'bullmq' }];
+};
+
+const processConsentNotificationJob = async (jobData) => {
+  return notifyPatientConsent(jobData.patientData, jobData.consentLink);
+};
+
+const generateConsentToken = () => {
+  return crypto.randomBytes(32).toString('hex');
+};
+
+const buildConsentLink = (patientData, token) => {
+  const baseUrl = getFrontendUrl().replace(/\/$/, '');
+  const patientId = patientData.patientID || patientData.patientId || patientData.id;
+  const encodedToken = encodeURIComponent(token);
+  return `${baseUrl}/patients/${patientId}/consent?token=${encodedToken}`;
+};
+
+const buildConsentMetadata = () => {
+  const token = generateConsentToken();
+  const createdAt = new Date();
+  const expiresAt = new Date(Date.now() + CONSENT_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000);
+
+  return {
+    token,
+    createdAt,
+    expiresAt
+  };
+};
 
 /**
  * Serviço de Notificações Assíncronas
@@ -304,5 +537,14 @@ class NotificationService {
   }
 }
 
-module.exports = new NotificationService();
+const notificationInstance = new NotificationService();
+notificationInstance.notifyPatientConsent = notifyPatientConsent;
+notificationInstance.enqueueConsentNotification = enqueueConsentNotification;
+notificationInstance.processConsentNotificationJob = processConsentNotificationJob;
+notificationInstance.getConsentQueueStats = getConsentQueueStats;
+notificationInstance.generateConsentToken = generateConsentToken;
+notificationInstance.buildConsentLink = buildConsentLink;
+notificationInstance.buildConsentMetadata = buildConsentMetadata;
+
+module.exports = notificationInstance;
 

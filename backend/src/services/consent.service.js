@@ -2,6 +2,7 @@ const Ajv = require('ajv');
 const addFormats = require('ajv-formats');
 const { ObjectId } = require('mongodb');
 const ConsentTemplateModel = require('../models/ConsentTemplate');
+const ConsentPolicyModel = require('../models/ConsentPolicy');
 const PatientConsentModel = require('../models/PatientConsent');
 const { validatePatientID } = require('../utils/patientAnonymization');
 const logger = require('../utils/logger');
@@ -15,6 +16,7 @@ const consentTemplateSchema = {
   properties: {
     title: { type: 'string', minLength: 1 },
     content: { type: 'string', minLength: 1 },
+    htmlContent: { type: 'string' },
     version: { type: 'string', minLength: 1 },
     active: { type: 'boolean' },
     permissions: {
@@ -24,7 +26,34 @@ const consentTemplateSchema = {
         required: ['key', 'label'],
         properties: {
           key: { type: 'string', minLength: 1 },
-          label: { type: 'string', minLength: 1 }
+          label: { type: 'string', minLength: 1 },
+          required: { type: 'boolean' }
+        },
+        additionalProperties: false
+      }
+    }
+  },
+  additionalProperties: true
+};
+
+const consentPolicySchema = {
+  type: 'object',
+  required: ['title', 'htmlContent', 'version', 'validFrom', 'granularPermissions'],
+  properties: {
+    title: { type: 'string', minLength: 1 },
+    htmlContent: { type: 'string', minLength: 1 },
+    version: { type: 'string', minLength: 1 },
+    validFrom: { type: 'string', format: 'date-time' },
+    active: { type: 'boolean' },
+    granularPermissions: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['key', 'label'],
+        properties: {
+          key: { type: 'string', minLength: 1 },
+          label: { type: 'string', minLength: 1 },
+          required: { type: 'boolean' }
         },
         additionalProperties: false
       }
@@ -51,6 +80,7 @@ const patientConsentSchema = {
 };
 
 const validateTemplateSchema = ajv.compile(consentTemplateSchema);
+const validatePolicySchema = ajv.compile(consentPolicySchema);
 const validatePatientConsentSchema = ajv.compile(patientConsentSchema);
 
 class ConsentService {
@@ -58,6 +88,14 @@ class ConsentService {
     const valid = validateTemplateSchema(payload);
     if (!valid) {
       const errors = (validateTemplateSchema.errors || []).map(err => `${err.instancePath || 'template'} ${err.message}`);
+      throw new Error(errors.join(', '));
+    }
+  }
+
+  validatePolicyPayload(payload) {
+    const valid = validatePolicySchema(payload);
+    if (!valid) {
+      const errors = (validatePolicySchema.errors || []).map(err => `${err.instancePath || 'policy'} ${err.message}`);
       throw new Error(errors.join(', '));
     }
   }
@@ -90,6 +128,11 @@ class ConsentService {
       throw new Error(`Respostas inválidas: ${missing.map(p => p.key).join(', ')} devem ser boolean`);
     }
 
+    const missingRequired = permissions.filter(permission => permission.required && responses[permission.key] !== true);
+    if (missingRequired.length > 0) {
+      throw new Error(`Permissões obrigatórias não aceitas: ${missingRequired.map(p => p.key).join(', ')}`);
+    }
+
     const extraKeys = Object.keys(responses).filter(key => !keys.has(key));
     if (extraKeys.length > 0) {
       throw new Error(`Respostas contém chaves inválidas: ${extraKeys.join(', ')}`);
@@ -108,7 +151,8 @@ class ConsentService {
       const permissions = Array.isArray(payload.permissions)
         ? payload.permissions.map(permission => ({
             key: permission.key.trim(),
-            label: permission.label.trim()
+            label: permission.label.trim(),
+            required: Boolean(permission.required)
           }))
         : [];
       this.ensureUniquePermissionKeys(permissions);
@@ -135,6 +179,61 @@ class ConsentService {
     }
   }
 
+  async createPolicy(db, payload) {
+    try {
+      const normalizedPayload = {
+        ...payload,
+        htmlContent: payload.htmlContent || payload.content,
+        validFrom: payload.validFrom || new Date().toISOString(),
+        granularPermissions: payload.granularPermissions || payload.permissions || []
+      };
+
+      this.validatePolicyPayload(normalizedPayload);
+
+      const validation = ConsentPolicyModel.validate(normalizedPayload);
+      if (!validation.isValid) {
+        throw new Error(validation.errors.join(', '));
+      }
+
+      const permissions = Array.isArray(normalizedPayload.granularPermissions)
+        ? normalizedPayload.granularPermissions.map(permission => ({
+            key: permission.key.trim(),
+            label: permission.label.trim(),
+            required: Boolean(permission.required)
+          }))
+        : [];
+      this.ensureUniquePermissionKeys(permissions);
+
+      const templatesCollection = db.collection('consent_templates');
+
+      if (normalizedPayload.active === undefined || normalizedPayload.active === true) {
+        await templatesCollection.updateMany({ active: true }, { $set: { active: false, updatedAt: new Date() } });
+      }
+
+      const policy = ConsentPolicyModel.create({
+        ...normalizedPayload,
+        granularPermissions: permissions
+      });
+
+      const document = {
+        ...policy,
+        content: policy.htmlContent,
+        permissions: permissions,
+        htmlContent: policy.htmlContent,
+        granularPermissions: permissions
+      };
+
+      const result = await templatesCollection.insertOne(document);
+      return {
+        _id: result.insertedId,
+        ...document
+      };
+    } catch (error) {
+      logger.error('Erro ao criar política de consentimento:', error.message);
+      throw error;
+    }
+  }
+
   async getActiveTemplate(db) {
     const templatesCollection = db.collection('consent_templates');
     const template = await templatesCollection
@@ -144,6 +243,25 @@ class ConsentService {
       .toArray();
 
     return template[0] || null;
+  }
+
+  async getActivePolicy(db) {
+    const templatesCollection = db.collection('consent_templates');
+    const template = await templatesCollection
+      .find({ active: true })
+      .sort({ createdAt: -1 })
+      .limit(1)
+      .toArray();
+
+    return template[0] || null;
+  }
+
+  async getAllPolicies(db) {
+    const templatesCollection = db.collection('consent_templates');
+    return templatesCollection
+      .find({})
+      .sort({ createdAt: -1 })
+      .toArray();
   }
 
   async createPatientConsent(db, payload) {

@@ -4,6 +4,7 @@ import {
   Sample,
   Result,
   ConsentTemplate,
+  ConsentPolicy,
   PatientConsent,
   Equipment,
   Location,
@@ -179,6 +180,7 @@ export const patientService = {
   validateID: (patientID: string) => api.post<{ valid: boolean; patientID: string }>('/patients/validate-id', { patientID }),
   findForEdit: (patientID: string) => api.post<Patient>('/patients/find-for-edit', { patientID }),
   search: (searchTerm: string) => api.get<{ patients: Patient[]; total: number }>(`/patients/search?q=${encodeURIComponent(searchTerm)}`),
+  resendConsentNotification: (patientID: string) => api.post(`/patients/${patientID}/consent/resend`),
 };
 
 // ========== SAMPLE SERVICES ==========
@@ -609,6 +611,9 @@ export const assistantService = {
 export const consentService = {
   createTemplate: (data: Partial<ConsentTemplate>) => api.post<ConsentTemplate>('/consent-templates', data),
   getActiveTemplate: () => api.get<{ success: boolean; data: ConsentTemplate }>('/consent-templates/active'),
+  createPolicy: (data: Partial<ConsentPolicy>) => api.post<ConsentPolicy>('/consent-policies', data),
+  getActivePolicy: () => api.get<{ success: boolean; data: ConsentPolicy }>('/consent-policies/active'),
+  getAllPolicies: () => api.get<{ success: boolean; data: ConsentPolicy[] }>('/consent-policies'),
   createPatientConsent: (data: {
     patientId: string;
     templateId: string;
@@ -644,6 +649,7 @@ export const securityService = {
   updateConfig: (data: any) => api.put('/security/config', data),
   getPermissions: () => api.get('/security/permissions'),
   updatePermissions: (data: any) => api.put('/security/permissions', data),
+  getConsentQueueStatus: () => api.get('/security/consent-queue'),
   exportLogs: (filters?: any, format: 'csv' | 'json' = 'csv') => {
     const params = new URLSearchParams();
     if (filters) {

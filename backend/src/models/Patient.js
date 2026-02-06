@@ -101,6 +101,25 @@ class PatientModel {
       errors.push(`Código CID (icdCode) deve ser um texto. Valor recebido: "${data.icdCode}" (tipo: ${typeof data.icdCode})`);
     }
 
+    // status de consentimento
+    if (data.status !== undefined && data.status !== null) {
+      const allowedStatuses = ['PENDING_CONSENT', 'ACTIVE', 'INACTIVE'];
+      if (!allowedStatuses.includes(data.status)) {
+        errors.push(`status inválido. Valores permitidos: ${allowedStatuses.join(', ')}`);
+      }
+    }
+
+    if (data.consentToken !== undefined && data.consentToken !== null && typeof data.consentToken !== 'string') {
+      errors.push('consentToken deve ser string');
+    }
+
+    if (data.consentAcceptedAt !== undefined && data.consentAcceptedAt !== null) {
+      const acceptedAt = new Date(data.consentAcceptedAt);
+      if (Number.isNaN(acceptedAt.getTime())) {
+        errors.push('consentAcceptedAt deve ser uma data válida');
+      }
+    }
+
     return {
       isValid: errors.length === 0,
       errors
@@ -167,6 +186,12 @@ class PatientModel {
       alphaGal: patientData.alphaGal || null, // Float U/mL - Resultado de α-Galactosidase
       lysoGb3: patientData.lysoGb3 || null, // Float ng/mL - Resultado de Lyso-Gb3
       notes: patientData.notes || null,
+      status: patientData.status || 'PENDING_CONSENT',
+      consentToken: patientData.consentToken || null,
+      consentTokenCreatedAt: patientData.consentTokenCreatedAt ? new Date(patientData.consentTokenCreatedAt) : null,
+      consentTokenExpiresAt: patientData.consentTokenExpiresAt ? new Date(patientData.consentTokenExpiresAt) : null,
+      consentNotifiedAt: patientData.consentNotifiedAt ? new Date(patientData.consentNotifiedAt) : null,
+      consentAcceptedAt: patientData.consentAcceptedAt ? new Date(patientData.consentAcceptedAt) : null,
       createdAt: new Date(),
       updatedAt: new Date()
     };

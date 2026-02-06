@@ -1,6 +1,7 @@
 const PatientModel = require('../models/Patient');
 const logger = require('../utils/logger');
 const { generateUniquePatientID, sanitizePatientForLogs } = require('../utils/patientAnonymization');
+const notificationService = require('./notification.service');
 
 /**
  * Service de Pacientes
@@ -114,10 +115,27 @@ class PatientService {
       const patientID = await generateUniquePatientID(db, 'pacientes');
       patientData.patientID = patientID;
 
+      const consentMetadata = notificationService.buildConsentMetadata();
+      patientData.status = 'PENDING_CONSENT';
+      patientData.consentToken = consentMetadata.token;
+      patientData.consentTokenCreatedAt = consentMetadata.createdAt;
+      patientData.consentTokenExpiresAt = consentMetadata.expiresAt;
+
       const patientsCollection = db.collection('pacientes');
       const patient = PatientModel.create(patientData);
 
       const result = await patientsCollection.insertOne(patient);
+
+      try {
+        const consentLink = notificationService.buildConsentLink(patient, consentMetadata.token);
+        await notificationService.enqueueConsentNotification(patientData, consentLink);
+        await patientsCollection.updateOne(
+          { _id: result.insertedId },
+          { $set: { consentNotifiedAt: new Date() } }
+        );
+      } catch (notifyError) {
+        logger.error('Erro ao enfileirar notificações de consentimento:', notifyError.message);
+      }
 
       // Log sanitizado (sem dados sensíveis)
       const sanitizedData = sanitizePatientForLogs(patient);
@@ -345,6 +363,112 @@ class PatientService {
       logger.error('Erro ao atualizar paciente:', error.message);
       throw error;
     }
+  }
+
+  async validateConsentToken(db, patientID, token) {
+    if (!patientID || !token) {
+      throw new Error('patientId e token são obrigatórios');
+    }
+
+    const patientsCollection = db.collection('pacientes');
+    const query = { patientID };
+    const patient = await patientsCollection.findOne(query);
+
+    if (!patient) {
+      throw new Error('Paciente não encontrado');
+    }
+
+    if (patient.status !== 'PENDING_CONSENT') {
+      throw new Error('Paciente não está pendente de consentimento');
+    }
+
+    if (!patient.consentToken || patient.consentToken !== token) {
+      throw new Error('Token inválido');
+    }
+
+    if (patient.consentTokenExpiresAt && new Date(patient.consentTokenExpiresAt) < new Date()) {
+      throw new Error('Token expirado');
+    }
+
+    return { valid: true, patientID: patient.patientID };
+  }
+
+  async acceptConsentToken(db, patientID, token) {
+    await this.validateConsentToken(db, patientID, token);
+
+    const patientsCollection = db.collection('pacientes');
+    await patientsCollection.updateOne(
+      { patientID },
+      {
+        $set: {
+          status: 'ACTIVE',
+          consentAcceptedAt: new Date(),
+          consentToken: null,
+          consentTokenExpiresAt: null,
+          updatedAt: new Date()
+        }
+      }
+    );
+
+    return { success: true, patientID };
+  }
+
+  async resendConsentNotification(db, patientID) {
+    if (!patientID) {
+      throw new Error('patientId é obrigatório');
+    }
+
+    const patientsCollection = db.collection('pacientes');
+    const patient = await patientsCollection.findOne({ patientID });
+
+    if (!patient) {
+      throw new Error('Paciente não encontrado');
+    }
+
+    if (patient.status !== 'PENDING_CONSENT') {
+      throw new Error('Paciente não está pendente de consentimento');
+    }
+
+    const now = new Date();
+    const expiresAt = patient.consentTokenExpiresAt ? new Date(patient.consentTokenExpiresAt) : null;
+    const hasValidToken = Boolean(patient.consentToken && expiresAt && expiresAt > now);
+
+    let token = patient.consentToken;
+    let tokenCreatedAt = patient.consentTokenCreatedAt ? new Date(patient.consentTokenCreatedAt) : null;
+    let tokenExpiresAt = expiresAt;
+
+    if (!hasValidToken) {
+      const consentMetadata = notificationService.buildConsentMetadata();
+      token = consentMetadata.token;
+      tokenCreatedAt = consentMetadata.createdAt;
+      tokenExpiresAt = consentMetadata.expiresAt;
+    }
+
+    const consentLink = notificationService.buildConsentLink(patient, token);
+    await notificationService.enqueueConsentNotification(patient, consentLink);
+
+    const updatePayload = {
+      consentNotifiedAt: new Date(),
+      updatedAt: new Date()
+    };
+
+    if (!hasValidToken) {
+      updatePayload.consentToken = token;
+      updatePayload.consentTokenCreatedAt = tokenCreatedAt;
+      updatePayload.consentTokenExpiresAt = tokenExpiresAt;
+    }
+
+    await patientsCollection.updateOne(
+      { _id: patient._id },
+      { $set: updatePayload }
+    );
+
+    return {
+      success: true,
+      patientID,
+      reusedToken: hasValidToken,
+      consentTokenExpiresAt: tokenExpiresAt
+    };
   }
 
   async deletePatient(db, patientID) {

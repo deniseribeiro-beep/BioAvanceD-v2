@@ -9,7 +9,8 @@ class ConsentTemplateModel {
       errors.push('title é obrigatório e deve ser um texto válido');
     }
 
-    if (!data.content || typeof data.content !== 'string' || data.content.trim().length === 0) {
+    const contentValue = data.content || data.htmlContent;
+    if (!contentValue || typeof contentValue !== 'string' || contentValue.trim().length === 0) {
       errors.push('content é obrigatório e deve ser um texto válido');
     }
 
@@ -36,6 +37,9 @@ class ConsentTemplateModel {
           if (!permission.label || typeof permission.label !== 'string') {
             errors.push(`permissions[${index}].label é obrigatório e deve ser string`);
           }
+          if (permission.required !== undefined && typeof permission.required !== 'boolean') {
+            errors.push(`permissions[${index}].required deve ser boolean`);
+          }
         });
       }
     }
@@ -49,7 +53,8 @@ class ConsentTemplateModel {
   static create(data) {
     return {
       title: data.title.trim(),
-      content: data.content.trim(),
+      content: (data.content || data.htmlContent).trim(),
+      htmlContent: data.htmlContent ? data.htmlContent.trim() : (data.content || '').trim(),
       version: data.version.trim(),
       active: data.active === undefined ? true : data.active,
       permissions: Array.isArray(data.permissions) ? data.permissions : [],

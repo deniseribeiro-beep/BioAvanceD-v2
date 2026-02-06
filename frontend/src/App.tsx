@@ -32,6 +32,7 @@ import UserSecurityPage from './pages/UserSecurityPage';
 import MFASetupPage from './pages/MFASetupPage';
 import ResetPasswordPage from './pages/ResetPasswordPage';
 import SettingsParametersPage from './pages/SettingsParametersPage';
+import ConsentManager from './pages/ConsentManager';
 import './App.css';
 
 function App() {
@@ -87,6 +88,7 @@ function App() {
                 <Route path="/quality-descriptions" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}><QualityDescriptionPage /></ProtectedRoute>} />
                 <Route path="/import" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}><ImportPage /></ProtectedRoute>} />
                 <Route path="/assistant" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico', 'Usuário Externo']}><AssistantPage /></ProtectedRoute>} />
+                <Route path="/consent-manager" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador']}><ConsentManager /></ProtectedRoute>} />
                 <Route path="/backup" element={<ProtectedRoute requiredRole="Administrador"><BackupPage /></ProtectedRoute>} />
                 <Route path="/settings/parameters" element={<ProtectedRoute requiredRole="Administrador"><SettingsParametersPage /></ProtectedRoute>} />
                 <Route path="/user/security" element={<ProtectedRoute><UserSecurityPage /></ProtectedRoute>} />

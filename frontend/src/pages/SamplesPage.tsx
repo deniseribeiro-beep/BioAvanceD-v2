@@ -13,7 +13,6 @@ import { useSamples } from '../hooks/useSamples';
 import { useImportJob } from '../hooks/useImportJob';
 import { useLanguage } from '../contexts/LanguageContext';
 import { Sample } from '../types/models';
-import { importLGPDService } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 import './SamplesPage.css';
 
@@ -56,7 +55,6 @@ export default function SamplesPage() {
   const [activeImportJobId] = useState<string | null>(() =>
     localStorage.getItem('lastImportJobId') || localStorage.getItem('currentImportJobId')
   );
-  const [downloadingTemplate, setDownloadingTemplate] = useState<'csv' | 'xlsx' | null>(null);
   const canEdit = user?.roleName === 'Administrador' || user?.roleName === 'Coordenador';
 
   const {

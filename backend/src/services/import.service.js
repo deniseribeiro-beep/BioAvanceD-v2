@@ -7,6 +7,7 @@ const SampleModel = require('../models/Sample');
 const TemperatureModel = require('../models/Temperature');
 const LocationModel = require('../models/Location');
 const fhirValidator = require('./fhir-validator.service');
+const notificationService = require('./notification.service');
 
 /**
  * Service de Importação de Dados
@@ -155,8 +156,29 @@ class ImportService {
               continue;
             }
 
+            const consentMetadata = notificationService.buildConsentMetadata();
+            patientData.status = 'PENDING_CONSENT';
+            patientData.consentToken = consentMetadata.token;
+            patientData.consentTokenCreatedAt = consentMetadata.createdAt;
+            patientData.consentTokenExpiresAt = consentMetadata.expiresAt;
+
             const patient = PatientModel.create(patientData);
-            await patientsCollection.insertOne(patient);
+            const insertResult = await patientsCollection.insertOne(patient);
+
+            if (patient.patientID) {
+              try {
+                const consentLink = notificationService.buildConsentLink(patient, consentMetadata.token);
+                await notificationService.enqueueConsentNotification(patientData, consentLink);
+                await patientsCollection.updateOne(
+                  { _id: insertResult.insertedId },
+                  { $set: { consentNotifiedAt: new Date() } }
+                );
+              } catch (notifyError) {
+                logger.error('Erro ao enfileirar notificações de consentimento (importação):', notifyError.message);
+              }
+            } else {
+              logger.warn('Paciente importado sem patientID. Notificação de consentimento ignorada.');
+            }
             results.success++;
           } catch (error) {
             results.errors.push({
@@ -190,8 +212,29 @@ class ImportService {
               continue;
             }
 
+            const consentMetadata = notificationService.buildConsentMetadata();
+            patientData.status = 'PENDING_CONSENT';
+            patientData.consentToken = consentMetadata.token;
+            patientData.consentTokenCreatedAt = consentMetadata.createdAt;
+            patientData.consentTokenExpiresAt = consentMetadata.expiresAt;
+
             const patient = PatientModel.create(patientData);
-            await patientsCollection.insertOne(patient);
+            const insertResult = await patientsCollection.insertOne(patient);
+
+            if (patient.patientID) {
+              try {
+                const consentLink = notificationService.buildConsentLink(patient, consentMetadata.token);
+                await notificationService.enqueueConsentNotification(patientData, consentLink);
+                await patientsCollection.updateOne(
+                  { _id: insertResult.insertedId },
+                  { $set: { consentNotifiedAt: new Date() } }
+                );
+              } catch (notifyError) {
+                logger.error('Erro ao enfileirar notificações de consentimento (importação):', notifyError.message);
+              }
+            } else {
+              logger.warn('Paciente importado sem patientID. Notificação de consentimento ignorada.');
+            }
             results.success++;
           } catch (error) {
             results.errors.push({
