@@ -90,7 +90,7 @@ function initQueue() {
   });
 
   queueEvents.on('stalled', ({ jobId }) => {
-    logger.warn(`⚠️ Job ${jobId} travado (stalled)`);
+    logger.warn(`⚠️ Job ${jobId} travado`);
   });
 
   logger.info('✅ Fila de importação inicializada');

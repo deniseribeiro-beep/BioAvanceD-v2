@@ -125,7 +125,7 @@ class ConsentService {
 
     const missing = permissions.filter(permission => typeof responses[permission.key] !== 'boolean');
     if (missing.length > 0) {
-      throw new Error(`Respostas inválidas: ${missing.map(p => p.key).join(', ')} devem ser boolean`);
+      throw new Error(`Respostas inválidas: ${missing.map(p => p.key).join(', ')} devem ser booleano`);
     }
 
     const missingRequired = permissions.filter(permission => permission.required && responses[permission.key] !== true);
@@ -135,7 +135,7 @@ class ConsentService {
 
     const extraKeys = Object.keys(responses).filter(key => !keys.has(key));
     if (extraKeys.length > 0) {
-      throw new Error(`Respostas contém chaves inválidas: ${extraKeys.join(', ')}`);
+      throw new Error(`Respostas contêm chaves inválidas: ${extraKeys.join(', ')}`);
     }
   }
 

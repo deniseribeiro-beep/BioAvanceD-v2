@@ -191,7 +191,7 @@ class UserSecurityController {
       if (typeof enabled !== 'boolean') {
         return res.status(400).json({
           success: false,
-          error: 'Campo "enabled" deve ser boolean'
+          error: 'Campo "enabled" deve ser booleano'
         });
       }
 

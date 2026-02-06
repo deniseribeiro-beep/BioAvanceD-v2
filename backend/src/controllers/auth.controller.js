@@ -266,7 +266,7 @@ class AuthController {
       if (!oldPassword || !newPassword) {
         return res.status(400).json({
           success: false,
-          error: 'oldPassword e newPassword são obrigatórios'
+          error: 'Senha atual e nova senha são obrigatórias'
         });
       }
 
@@ -338,7 +338,7 @@ class AuthController {
       if (!username || !password) {
         return res.status(400).json({
           success: false,
-          error: (req.t && req.t('auth.usernameAndPasswordRequired')) || 'Username e senha são obrigatórios'
+          error: (req.t && req.t('auth.usernameAndPasswordRequired')) || 'Usuário e senha são obrigatórios'
         });
       }
 
@@ -378,7 +378,7 @@ class AuthController {
       if (!username || !password) {
         return res.status(400).json({
           success: false,
-          error: 'Username e senha são obrigatórios'
+          error: 'Usuário e senha são obrigatórios'
         });
       }
 

@@ -22,7 +22,7 @@ class ConsentPolicyModel {
     }
 
     if (data.active !== undefined && typeof data.active !== 'boolean') {
-      errors.push('active deve ser boolean');
+      errors.push('active deve ser booleano');
     }
 
     if (!Array.isArray(data.granularPermissions)) {
@@ -40,7 +40,7 @@ class ConsentPolicyModel {
           errors.push(`granularPermissions[${index}].label é obrigatório e deve ser string`);
         }
         if (permission.required !== undefined && typeof permission.required !== 'boolean') {
-          errors.push(`granularPermissions[${index}].required deve ser boolean`);
+          errors.push(`granularPermissions[${index}].required deve ser booleano`);
         }
       });
     }

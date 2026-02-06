@@ -13,7 +13,7 @@ class PacienteController {
       if (!db) {
         return res.status(503).json({
           success: false,
-          error: 'Banco de dados não está disponível',
+          error: 'Banco de dados não disponível',
           message: 'O servidor está temporariamente indisponível'
         });
       }
@@ -60,7 +60,7 @@ class PacienteController {
       });
     } catch (error) {
       logger.error('Erro no controller de cadastro:', error.message);
-      logger.error('Stack trace:', error.stack);
+      logger.error('Rastreamento:', error.stack);
 
       // Log de erro (sanitizado)
       if (req.user) {

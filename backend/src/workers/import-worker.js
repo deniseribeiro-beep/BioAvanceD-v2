@@ -248,7 +248,7 @@ async function initWorker() {
       logger.error(`❌ Job ${job.id} falhou:`, err.message);
       // Log detalhado para debug
       if (err.stack) {
-        logger.error(`Stack trace: ${err.stack}`);
+        logger.error(`Rastreamento: ${err.stack}`);
       }
     });
 
@@ -259,7 +259,7 @@ async function initWorker() {
     worker.on('error', (err) => {
       logger.error('[ERROR] Erro no worker:', err.message);
       if (err.stack) {
-        logger.error(`Stack trace: ${err.stack}`);
+        logger.error(`Rastreamento: ${err.stack}`);
       }
     });
 
@@ -292,15 +292,15 @@ async function initWorker() {
       );
 
       notificationWorker.on('completed', (job) => {
-        logger.info(`✅ Notification job ${job.id} completado`);
+        logger.info(`✅ Job de notificação ${job.id} completado`);
       });
 
       notificationWorker.on('failed', (job, err) => {
-        logger.error(`❌ Notification job ${job?.id} falhou:`, err.message);
+        logger.error(`❌ Job de notificação ${job?.id} falhou:`, err.message);
       });
 
       notificationWorker.on('error', (err) => {
-        logger.error('[ERROR] Erro no notification worker:', err.message);
+        logger.error('[ERROR] Erro no worker de notificações:', err.message);
       });
 
       logger.info('✅ Worker de notificações inicializado');

@@ -132,7 +132,7 @@ async function testRedisConnection() {
     if (redis.status !== 'ready') {
       await new Promise((resolve, reject) => {
         const timeout = setTimeout(() => {
-          reject(new Error('Timeout ao aguardar conexão Redis estar pronta (15s)'));
+          reject(new Error('Tempo limite ao aguardar conexão Redis estar pronta (15s)'));
         }, 15000);
 
         const cleanup = () => {
@@ -176,7 +176,7 @@ async function testRedisConnection() {
       logger.error(`[ERROR] Código do erro: ${error.code}`);
     }
     if (error.syscall) {
-      logger.error(`[ERROR] Syscall: ${error.syscall}`);
+      logger.error(`[ERROR] Chamada de sistema: ${error.syscall}`);
     }
     if (error.address) {
       logger.error(`[ERROR] Endereço: ${error.address}:${error.port || ''}`);

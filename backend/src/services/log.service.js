@@ -454,7 +454,7 @@ class LogService {
       return buffer;
     } catch (error) {
       logger.error('Erro ao exportar logs para Excel:', error.message);
-      logger.error('Stack trace:', error.stack);
+      logger.error('Rastreamento:', error.stack);
       throw new Error(`Erro ao exportar logs: ${error.message}`);
     }
   }

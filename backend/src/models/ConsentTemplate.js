@@ -19,7 +19,7 @@ class ConsentTemplateModel {
     }
 
     if (data.active !== undefined && typeof data.active !== 'boolean') {
-      errors.push('active deve ser boolean');
+      errors.push('active deve ser booleano');
     }
 
     if (data.permissions !== undefined) {
@@ -38,7 +38,7 @@ class ConsentTemplateModel {
             errors.push(`permissions[${index}].label é obrigatório e deve ser string`);
           }
           if (permission.required !== undefined && typeof permission.required !== 'boolean') {
-            errors.push(`permissions[${index}].required deve ser boolean`);
+            errors.push(`permissions[${index}].required deve ser booleano`);
           }
         });
       }

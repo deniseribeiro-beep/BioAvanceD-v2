@@ -62,7 +62,7 @@ class UserModel {
     }
 
     if (data.forceReset !== undefined && typeof data.forceReset !== 'boolean') {
-      errors.push('forceReset deve ser boolean');
+      errors.push('forceReset deve ser booleano');
     }
 
     if (data.failedLoginAttempts !== undefined && typeof data.failedLoginAttempts !== 'number') {

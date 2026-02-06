@@ -585,7 +585,7 @@ class ImportService {
       if (value === undefined || value === null || value === '') return null;
       const parsed = parseInt(String(value).trim(), 10);
       if (Number.isNaN(parsed)) {
-        parseErrors.push(`${fieldName} invalido`);
+        parseErrors.push(`${fieldName} inválido`);
         return null;
       }
       return parsed;
@@ -595,7 +595,7 @@ class ImportService {
       if (value === undefined || value === null || value === '') return null;
       const parsed = parseFloat(String(value).trim());
       if (Number.isNaN(parsed)) {
-        parseErrors.push(`${fieldName} invalido`);
+        parseErrors.push(`${fieldName} inválido`);
         return null;
       }
       return parsed;
@@ -605,7 +605,7 @@ class ImportService {
       if (!value) return null;
       const parsed = new Date(value);
       if (Number.isNaN(parsed.getTime())) {
-        parseErrors.push(`${fieldName} em formato invalido`);
+        parseErrors.push(`${fieldName} em formato inválido`);
         return null;
       }
       return parsed;
@@ -638,7 +638,7 @@ class ImportService {
       if (value === undefined || value === null || value === '') return null;
       const parsed = Number(String(value).trim());
       if (Number.isNaN(parsed)) {
-        parseErrors.push(`${fieldName} invalido`);
+        parseErrors.push(`${fieldName} inválido`);
         return null;
       }
       return parsed;

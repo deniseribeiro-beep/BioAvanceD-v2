@@ -48,7 +48,7 @@ async function startWorker() {
   } catch (error) {
     logger.error('[ERROR] Erro ao iniciar worker:', error.message);
     if (error.stack) {
-      logger.error(`Stack trace: ${error.stack}`);
+      logger.error(`Rastreamento: ${error.stack}`);
     }
     process.exit(1);
   }

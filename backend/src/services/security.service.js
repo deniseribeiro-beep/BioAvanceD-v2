@@ -548,7 +548,7 @@ class SecurityService {
           throw new Error(`Permissão inválida: ${permission}`);
         }
         if (typeof permissions[profile][permission] !== 'boolean') {
-          throw new Error(`Valor de permissão deve ser boolean: ${permission}`);
+          throw new Error(`Valor de permissão deve ser booleano: ${permission}`);
         }
       }
     }

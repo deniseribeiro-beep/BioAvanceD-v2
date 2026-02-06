@@ -59,7 +59,7 @@ router.post('/',
       const errorMessage = error?.message || 'Erro desconhecido ao criar amostra';
       logger.error('Erro ao criar amostra:', errorMessage);
       if (error.stack) {
-        logger.error('Stack trace:', error.stack);
+        logger.error('Rastreamento:', error.stack);
       }
 
       if (error.status === 409) {

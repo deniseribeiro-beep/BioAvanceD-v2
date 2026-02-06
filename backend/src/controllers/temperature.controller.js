@@ -220,7 +220,7 @@ class TemperatureController {
       });
     } catch (error) {
       logger.error('Erro ao buscar controle:', error.message);
-      logger.error('Stack trace:', error.stack);
+      logger.error('Rastreamento:', error.stack);
       return res.status(500).json({
         success: false,
         error: req.t ? req.t('errors.serverError') : 'Erro ao buscar controle',

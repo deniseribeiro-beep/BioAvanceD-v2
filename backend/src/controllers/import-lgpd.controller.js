@@ -146,7 +146,7 @@ class ImportLGPDController {
 
     } catch (error) {
       logger.error('Erro ao importar pacientes:', error);
-      logger.error('Stack trace:', error.stack);
+      logger.error('Rastreamento:', error.stack);
       
       // Registra log de erro (anonimizado via auditLogger)
       if (req.user) {
@@ -800,7 +800,7 @@ class ImportLGPDController {
     } catch (error) {
       logger.error('Erro ao gerar template Excel de amostras:', error);
       if (error.stack) {
-        logger.error('Stack trace:', error.stack);
+        logger.error('Rastreamento:', error.stack);
       }
       return res.status(500).json({
         success: false,
