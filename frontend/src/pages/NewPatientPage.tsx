@@ -1,12 +1,97 @@
-import { useState } from 'react';
+import { useState, useEffect, useMemo, CSSProperties } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import Button from '../components/UI/Button';
 import Input from '../components/UI/Input';
+import Modal from '../components/UI/Modal';
 import { ArrowLeft } from 'lucide-react';
-import { Patient } from '../types/models';
+import SignaturePad from '../components/Consent/SignaturePad';
+import { Patient, ConsentPermission, ConsentTemplate } from '../types/models';
 import { usePatients } from '../hooks/usePatients';
+import { consentService, patientService } from '../services/api';
 import { validateUnit } from '../utils/validations';
 import { useLanguage } from '../contexts/LanguageContext';
+
+const styles: Record<string, CSSProperties> = {
+  consentModalContent: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '1rem'
+  },
+  consentHeader: {
+    display: 'flex',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: '1rem',
+    flexWrap: 'wrap'
+  },
+  consentModalTitle: {
+    margin: 0,
+    fontSize: '1.1rem',
+    fontWeight: 600,
+    color: 'var(--text)'
+  },
+  consentModalText: {
+    margin: 0,
+    color: 'var(--text-light)',
+    fontSize: '0.9rem'
+  },
+  consentProject: {
+    margin: 0,
+    color: 'var(--text-light)',
+    fontSize: '0.85rem'
+  },
+  consentGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1fr)',
+    gap: '1.25rem'
+  },
+  consentDocument: {
+    border: '1px solid var(--border)',
+    borderRadius: '8px',
+    backgroundColor: 'var(--surface)',
+    padding: '1rem',
+    maxHeight: '60vh',
+    overflowY: 'auto'
+  },
+  consentDocumentText: {
+    margin: 0,
+    whiteSpace: 'pre-wrap',
+    color: 'var(--text)',
+    fontSize: '0.9rem',
+    lineHeight: 1.6
+  },
+  consentPanel: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '1rem'
+  },
+  consentPermissions: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '0.75rem'
+  },
+  consentPermissionItem: {
+    display: 'flex',
+    gap: '0.5rem',
+    alignItems: 'flex-start',
+    fontSize: '0.9rem',
+    color: 'var(--text)'
+  },
+  consentRequired: {
+    color: 'var(--danger)',
+    fontWeight: 600
+  },
+  consentError: {
+    color: '#b00020',
+    fontSize: '0.85rem'
+  },
+  consentModalActions: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: '0.75rem',
+    justifyContent: 'flex-end'
+  }
+};
 
 export default function NewPatientPage() {
   const navigate = useNavigate();
@@ -55,6 +140,7 @@ export default function NewPatientPage() {
     unitAcronym: editingPatient?.unitAcronym || '',
     diagnosticHypothesis: editingPatient?.diagnosticHypothesis || '',
     icdCode: editingPatient?.icdCode || '',
+    linkedProject: editingPatient?.linkedProject || '',
     hypertension: editingPatient?.hypertension ? t('common.yes') : t('common.no'),
     obesity: editingPatient?.obesity ? t('common.yes') : t('common.no'),
     diabetesType1: editingPatient?.diabetesType1 ? t('common.yes') : t('common.no'),
@@ -72,6 +158,16 @@ export default function NewPatientPage() {
     lysoGb3: editingPatient?.lysoGb3 || undefined,
     notes: editingPatient?.notes || ''
   });
+  const [isConsentModalOpen, setIsConsentModalOpen] = useState(false);
+  const [createdPatientId, setCreatedPatientId] = useState<string | null>(null);
+  const [sendingConsent, setSendingConsent] = useState(false);
+  const [consentSent, setConsentSent] = useState(false);
+  const [consentTemplate, setConsentTemplate] = useState<ConsentTemplate | null>(null);
+  const [consentLoading, setConsentLoading] = useState(false);
+  const [consentError, setConsentError] = useState<string | null>(null);
+  const [consentResponses, setConsentResponses] = useState<Record<string, boolean>>({});
+  const [signatureName, setSignatureName] = useState('');
+  const [isSubmittingConsent, setIsSubmittingConsent] = useState(false);
 
   // Funções de conversão
   const convertSexToBackend = (sex: string | undefined): string => {
@@ -108,6 +204,136 @@ export default function NewPatientPage() {
     }
     return null;
   };
+
+  const resolveCreatedPatientID = (payload: any): string | null => {
+    if (!payload) return null;
+    const data = payload.data || payload;
+    if (!data) return null;
+    if (data.patientID) return String(data.patientID);
+    if (data.patient?.patientID) return String(data.patient.patientID);
+    if (data.data?.patientID) return String(data.data.patientID);
+    if (data.data?.patient?.patientID) return String(data.data.patient.patientID);
+    return null;
+  };
+
+  const sendConsentNotification = async (patientID: string, showFeedback = true) => {
+    setSendingConsent(true);
+    try {
+      await patientService.resendConsentNotification(patientID);
+      setConsentSent(true);
+      if (showFeedback) {
+        alert('TCLE enviado por email e SMS.');
+      }
+    } catch (consentError: any) {
+      const consentMessage = consentError?.response?.data?.message || consentError?.message || 'Falha ao enviar o termo de consentimento.';
+      if (showFeedback) {
+        alert(consentMessage);
+      }
+    } finally {
+      setSendingConsent(false);
+    }
+  };
+
+  const handleTogglePermission = (key: string) => {
+    setConsentResponses((prev) => ({
+      ...prev,
+      [key]: !prev[key]
+    }));
+  };
+
+  const requiredPermissionKeys = useMemo(() => {
+    const permissions = consentTemplate?.permissions || [];
+    const explicitRequired = permissions
+      .filter((permission) => permission.required)
+      .map((permission) => permission.key);
+
+    if (explicitRequired.length > 0) {
+      return explicitRequired;
+    }
+
+    const normalized = permissions.find((permission) =>
+      permission.key?.toLowerCase().includes('terms') ||
+      permission.key?.toLowerCase().includes('termos') ||
+      permission.label?.toLowerCase().includes('termos gerais')
+    );
+    return normalized?.key ? [normalized.key] : permissions?.[0]?.key ? [permissions[0].key] : [];
+  }, [consentTemplate]);
+
+  const hasRequiredConsent = useMemo(() => {
+    if (requiredPermissionKeys.length === 0) return false;
+    return requiredPermissionKeys.every((key) => consentResponses[key] === true);
+  }, [requiredPermissionKeys, consentResponses]);
+
+  const canSubmitConsent = useMemo(() => {
+    const hasSignatureName = signatureName.trim().length > 3;
+    return hasRequiredConsent && hasSignatureName && !!consentTemplate && !isSubmittingConsent;
+  }, [hasRequiredConsent, signatureName, consentTemplate, isSubmittingConsent]);
+
+  const isHtmlContent = useMemo(() => {
+    if (!consentTemplate) return false;
+    const content = consentTemplate.htmlContent || consentTemplate.content;
+    return /<\/?[a-z][\s\S]*>/i.test(content || '');
+  }, [consentTemplate]);
+
+  const loadConsentTemplate = async () => {
+    setConsentLoading(true);
+    setConsentError(null);
+    try {
+      const response = await consentService.getActiveTemplate();
+      const template = response.data?.data || null;
+      setConsentTemplate(template);
+
+      const permissions: ConsentPermission[] = template?.permissions || [];
+      const initialResponses: Record<string, boolean> = {};
+      permissions.forEach((permission) => {
+        initialResponses[permission.key] = false;
+      });
+      setConsentResponses(initialResponses);
+      setSignatureName('');
+    } catch (err: any) {
+      const message = err?.message || 'Erro ao carregar o TCLE ativo.';
+      setConsentError(message);
+    } finally {
+      setConsentLoading(false);
+    }
+  };
+
+  const handleConfirmSignature = async (dataUrl: string) => {
+    if (!createdPatientId || !consentTemplate?._id) {
+      setConsentError('Paciente ou template nao disponivel para assinatura.');
+      return;
+    }
+
+    if (!canSubmitConsent) {
+      setConsentError('Aceite as permissoes obrigatorias e informe o nome para assinar.');
+      return;
+    }
+
+    setIsSubmittingConsent(true);
+    setConsentError(null);
+    try {
+      await consentService.createPatientConsent({
+        patientId: createdPatientId,
+        templateId: consentTemplate._id,
+        responses: consentResponses,
+        signatureName,
+        signatureImage: dataUrl
+      } as any);
+      alert('Consentimento registrado com sucesso.');
+      setIsConsentModalOpen(false);
+      navigate('/patients');
+    } catch (err: any) {
+      const message = err?.response?.data?.message || err?.message || 'Erro ao registrar consentimento.';
+      setConsentError(message);
+    } finally {
+      setIsSubmittingConsent(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!isConsentModalOpen) return;
+    loadConsentTemplate();
+  }, [isConsentModalOpen]);
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -163,13 +389,26 @@ export default function NewPatientPage() {
         await updatePatient(patientIDStr, dataToSave);
         alert(t('patients.updateSuccess'));
       } else {
-        await createPatient(dataToSave);
+        const createdPayload = await createPatient(dataToSave);
+        const createdPatientID = resolveCreatedPatientID(createdPayload);
+
+        if (createdPatientID) {
+          setCreatedPatientId(createdPatientID);
+          setConsentSent(false);
+          setIsConsentModalOpen(true);
+          await sendConsentNotification(createdPatientID, false);
+        } else {
+          alert('Paciente criado, mas nao foi possivel identificar o ID para enviar o TCLE.');
+        }
+
         alert(t('patients.createSuccess'));
       }
       
       // Recarrega a lista e volta para a página de pacientes
       await loadPatients();
-      navigate('/patients');
+      if (editingPatient) {
+        navigate('/patients');
+      }
     } catch (err: any) {
       const errorMsg = err.response?.data?.error || err.response?.data?.message || err.message || t('patients.saveError');
       alert(errorMsg);
@@ -356,6 +595,14 @@ export default function NewPatientPage() {
               value={formData.icdCode || ''}
               onChange={(e) => setFormData({ ...formData, icdCode: e.target.value })}
             />
+
+            <Input
+              label="Projeto Vinculado (TCLE)"
+              type="text"
+              value={formData.linkedProject || ''}
+              onChange={(e) => setFormData({ ...formData, linkedProject: e.target.value })}
+              placeholder="Ex: Projeto Genoma"
+            />
             
             <Input
               label={`${t('patients.geneticVariant')} *`}
@@ -505,6 +752,94 @@ export default function NewPatientPage() {
           </Button>
         </div>
       </form>
+
+      <Modal
+        isOpen={isConsentModalOpen}
+        onClose={() => setIsConsentModalOpen(false)}
+        title="Termo de Consentimento"
+      >
+        <div style={styles.consentModalContent}>
+          <div style={styles.consentHeader}>
+            <div>
+              <h3 style={styles.consentModalTitle}>TCLE pronto para envio e assinatura</h3>
+              <p style={styles.consentModalText}>
+                {consentSent
+                  ? 'O termo foi enviado automaticamente ao paciente por email e SMS.'
+                  : 'Voce pode enviar o termo ao paciente e coletar a assinatura agora.'}
+              </p>
+              {formData.linkedProject && (
+                <p style={styles.consentProject}>Projeto selecionado: {formData.linkedProject}</p>
+              )}
+            </div>
+            <div style={styles.consentModalActions}>
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => createdPatientId && sendConsentNotification(createdPatientId)}
+                disabled={!createdPatientId || sendingConsent}
+              >
+                {sendingConsent ? 'Enviando...' : 'Reenviar TCLE (Email + SMS)'}
+              </Button>
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => setIsConsentModalOpen(false)}
+              >
+                Fechar
+              </Button>
+            </div>
+          </div>
+
+          {consentLoading && <span>Carregando TCLE...</span>}
+          {consentError && <span style={styles.consentError}>{consentError}</span>}
+
+          {consentTemplate && !consentLoading && (
+            <div style={styles.consentGrid}>
+              <div style={styles.consentDocument}>
+                {isHtmlContent ? (
+                  <div dangerouslySetInnerHTML={{ __html: consentTemplate.htmlContent || consentTemplate.content }} />
+                ) : (
+                  <p style={styles.consentDocumentText}>{consentTemplate.content}</p>
+                )}
+              </div>
+              <div style={styles.consentPanel}>
+                <div style={styles.consentPermissions}>
+                  {(consentTemplate.permissions || []).map((permission) => {
+                    const isRequired = requiredPermissionKeys.includes(permission.key);
+                    return (
+                      <label key={permission.key} style={styles.consentPermissionItem}>
+                        <input
+                          type="checkbox"
+                          checked={!!consentResponses[permission.key]}
+                          onChange={() => handleTogglePermission(permission.key)}
+                        />
+                        <span>
+                          {permission.label}
+                          {isRequired && <span style={styles.consentRequired}> (Obrigatorio)</span>}
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+
+                <Input
+                  label="Nome para assinatura"
+                  value={signatureName}
+                  onChange={(event) => setSignatureName(event.target.value)}
+                  placeholder="Digite o nome completo"
+                />
+
+                <SignaturePad
+                  onConfirm={handleConfirmSignature}
+                  onCancel={() => setIsConsentModalOpen(false)}
+                  confirmDisabled={!canSubmitConsent}
+                  confirmLabel={isSubmittingConsent ? 'Salvando...' : 'Confirmar Assinatura'}
+                />
+              </div>
+            </div>
+          )}
+        </div>
+      </Modal>
     </div>
   );
 }

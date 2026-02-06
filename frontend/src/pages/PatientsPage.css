@@ -16,6 +16,17 @@
   gap: 0.5rem;
 }
 
+.consent-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.consent-action-button {
+  white-space: nowrap;
+}
+
 .action-button {
   background: var(--bg-secondary);
   border: 1px solid var(--border);
@@ -237,6 +248,21 @@
 @media (max-width: 768px) {
   .observations-container {
     padding: 1rem;
+  }
+
+  .consent-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .consent-action-button {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .table-actions {
+    width: 100%;
+    justify-content: flex-end;
   }
   
   .textarea-field {

@@ -4582,7 +4582,7 @@ class AuthController {
       if (!oldPassword || !newPassword) {
         return res.status(400).json({
           success: false,
-          error: 'oldPassword e newPassword são obrigatórios'
+          error: 'Senha atual e nova senha são obrigatórias'
         });
       }
 
@@ -4654,7 +4654,7 @@ class AuthController {
       if (!username || !password) {
         return res.status(400).json({
           success: false,
-          error: (req.t && req.t('auth.usernameAndPasswordRequired')) || 'Username e senha são obrigatórios'
+          error: (req.t && req.t('auth.usernameAndPasswordRequired')) || 'Usuário e senha são obrigatórios'
         });
       }
 
@@ -4694,7 +4694,7 @@ class AuthController {
       if (!username || !password) {
         return res.status(400).json({
           success: false,
-          error: 'Username e senha são obrigatórios'
+          error: 'Usuário e senha são obrigatórios'
         });
       }
 
@@ -5633,7 +5633,7 @@ class ImportLGPDController {
 
     } catch (error) {
       logger.error('Erro ao importar pacientes:', error);
-      logger.error('Stack trace:', error.stack);
+      logger.error('Rastreamento:', error.stack);
       
       // Registra log de erro (anonimizado via auditLogger)
       if (req.user) {
@@ -6287,7 +6287,7 @@ class ImportLGPDController {
     } catch (error) {
       logger.error('Erro ao gerar template Excel de amostras:', error);
       if (error.stack) {
-        logger.error('Stack trace:', error.stack);
+        logger.error('Rastreamento:', error.stack);
       }
       return res.status(500).json({
         success: false,
@@ -6591,7 +6591,7 @@ class PacienteController {
       if (!db) {
         return res.status(503).json({
           success: false,
-          error: 'Banco de dados não está disponível',
+          error: 'Banco de dados não disponível',
           message: 'O servidor está temporariamente indisponível'
         });
       }
@@ -6638,7 +6638,7 @@ class PacienteController {
       });
     } catch (error) {
       logger.error('Erro no controller de cadastro:', error.message);
-      logger.error('Stack trace:', error.stack);
+      logger.error('Rastreamento:', error.stack);
 
       // Log de erro (sanitizado)
       if (req.user) {
@@ -8580,7 +8580,7 @@ class TemperatureController {
       });
     } catch (error) {
       logger.error('Erro ao buscar controle:', error.message);
-      logger.error('Stack trace:', error.stack);
+      logger.error('Rastreamento:', error.stack);
       return res.status(500).json({
         success: false,
         error: req.t ? req.t('errors.serverError') : 'Erro ao buscar controle',
@@ -8790,7 +8790,7 @@ class UserSecurityController {
       if (typeof enabled !== 'boolean') {
         return res.status(400).json({
           success: false,
-          error: 'Campo "enabled" deve ser boolean'
+          error: 'Campo "enabled" deve ser booleano'
         });
       }
 
@@ -10661,7 +10661,7 @@ class ConsentPolicyModel {
     }
 
     if (data.active !== undefined && typeof data.active !== 'boolean') {
-      errors.push('active deve ser boolean');
+      errors.push('active deve ser booleano');
     }
 
     if (!Array.isArray(data.granularPermissions)) {
@@ -10679,7 +10679,7 @@ class ConsentPolicyModel {
           errors.push(`granularPermissions[${index}].label é obrigatório e deve ser string`);
         }
         if (permission.required !== undefined && typeof permission.required !== 'boolean') {
-          errors.push(`granularPermissions[${index}].required deve ser boolean`);
+          errors.push(`granularPermissions[${index}].required deve ser booleano`);
         }
       });
     }
@@ -10731,7 +10731,7 @@ class ConsentTemplateModel {
     }
 
     if (data.active !== undefined && typeof data.active !== 'boolean') {
-      errors.push('active deve ser boolean');
+      errors.push('active deve ser booleano');
     }
 
     if (data.permissions !== undefined) {
@@ -10750,7 +10750,7 @@ class ConsentTemplateModel {
             errors.push(`permissions[${index}].label é obrigatório e deve ser string`);
           }
           if (permission.required !== undefined && typeof permission.required !== 'boolean') {
-            errors.push(`permissions[${index}].required deve ser boolean`);
+            errors.push(`permissions[${index}].required deve ser booleano`);
           }
         });
       }
@@ -12808,7 +12808,7 @@ class UserModel {
     }
 
     if (data.forceReset !== undefined && typeof data.forceReset !== 'boolean') {
-      errors.push('forceReset deve ser boolean');
+      errors.push('forceReset deve ser booleano');
     }
 
     if (data.failedLoginAttempts !== undefined && typeof data.failedLoginAttempts !== 'number') {
@@ -16865,7 +16865,7 @@ router.post('/',
       const errorMessage = error?.message || 'Erro desconhecido ao criar amostra';
       logger.error('Erro ao criar amostra:', errorMessage);
       if (error.stack) {
-        logger.error('Stack trace:', error.stack);
+        logger.error('Rastreamento:', error.stack);
       }
 
       if (error.status === 409) {
@@ -20279,7 +20279,7 @@ class ConsentService {
 
     const missing = permissions.filter(permission => typeof responses[permission.key] !== 'boolean');
     if (missing.length > 0) {
-      throw new Error(`Respostas inválidas: ${missing.map(p => p.key).join(', ')} devem ser boolean`);
+      throw new Error(`Respostas inválidas: ${missing.map(p => p.key).join(', ')} devem ser booleano`);
     }
 
     const missingRequired = permissions.filter(permission => permission.required && responses[permission.key] !== true);
@@ -20289,7 +20289,7 @@ class ConsentService {
 
     const extraKeys = Object.keys(responses).filter(key => !keys.has(key));
     if (extraKeys.length > 0) {
-      throw new Error(`Respostas contém chaves inválidas: ${extraKeys.join(', ')}`);
+      throw new Error(`Respostas contêm chaves inválidas: ${extraKeys.join(', ')}`);
     }
   }
 
@@ -24273,7 +24273,7 @@ class ImportService {
       if (value === undefined || value === null || value === '') return null;
       const parsed = parseInt(String(value).trim(), 10);
       if (Number.isNaN(parsed)) {
-        parseErrors.push(`${fieldName} invalido`);
+        parseErrors.push(`${fieldName} inválido`);
         return null;
       }
       return parsed;
@@ -24283,7 +24283,7 @@ class ImportService {
       if (value === undefined || value === null || value === '') return null;
       const parsed = parseFloat(String(value).trim());
       if (Number.isNaN(parsed)) {
-        parseErrors.push(`${fieldName} invalido`);
+        parseErrors.push(`${fieldName} inválido`);
         return null;
       }
       return parsed;
@@ -24293,7 +24293,7 @@ class ImportService {
       if (!value) return null;
       const parsed = new Date(value);
       if (Number.isNaN(parsed.getTime())) {
-        parseErrors.push(`${fieldName} em formato invalido`);
+        parseErrors.push(`${fieldName} em formato inválido`);
         return null;
       }
       return parsed;
@@ -24326,7 +24326,7 @@ class ImportService {
       if (value === undefined || value === null || value === '') return null;
       const parsed = Number(String(value).trim());
       if (Number.isNaN(parsed)) {
-        parseErrors.push(`${fieldName} invalido`);
+        parseErrors.push(`${fieldName} inválido`);
         return null;
       }
       return parsed;
@@ -25237,7 +25237,7 @@ class LogService {
       return buffer;
     } catch (error) {
       logger.error('Erro ao exportar logs para Excel:', error.message);
-      logger.error('Stack trace:', error.stack);
+      logger.error('Rastreamento:', error.stack);
       throw new Error(`Erro ao exportar logs: ${error.message}`);
     }
   }
@@ -27738,7 +27738,7 @@ class SecurityService {
           throw new Error(`Permissão inválida: ${permission}`);
         }
         if (typeof permissions[profile][permission] !== 'boolean') {
-          throw new Error(`Valor de permissão deve ser boolean: ${permission}`);
+          throw new Error(`Valor de permissão deve ser booleano: ${permission}`);
         }
       }
     }
@@ -31707,7 +31707,7 @@ async function startWorker() {
   } catch (error) {
     logger.error('[ERROR] Erro ao iniciar worker:', error.message);
     if (error.stack) {
-      logger.error(`Stack trace: ${error.stack}`);
+      logger.error(`Rastreamento: ${error.stack}`);
     }
     process.exit(1);
   }
@@ -37057,6 +37057,7 @@ ARQUIVO: C:\Projeto\BioAvanceD\frontend\package.json
     "react": "^18.2.0",
     "react-barcode": "^1.4.1",
     "react-dom": "^18.2.0",
+    "react-signature-canvas": "^1.1.0-alpha.2",
     "react-router-dom": "^6.20.0",
     "socket.io-client": "^4.8.1",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
@@ -37785,6 +37786,280 @@ export default function BarcodeLabel({ sampleId, barcode, acronym }: BarcodeLabe
       </div>
     </div>
   );
+}
+
+
+================================================================================
+ARQUIVO: C:\Projeto\BioAvanceD\frontend\src\components\Consent\PatientConsentCard.tsx
+================================================================================
+import { CSSProperties, useMemo, useState } from 'react';
+import Card from '../UI/Card';
+import Button from '../UI/Button';
+import Modal from '../UI/Modal';
+import StatusBadge, { ConsentStatus } from './StatusBadge';
+import SignaturePad from './SignaturePad';
+
+const styles: Record<string, CSSProperties> = {
+  card: {
+    maxWidth: '720px',
+    margin: '0 auto'
+  },
+  header: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: '1rem',
+    flexWrap: 'wrap'
+  },
+  title: {
+    margin: 0,
+    fontSize: '1.1rem',
+    fontWeight: 700
+  },
+  subtitle: {
+    margin: '0.35rem 0 0',
+    color: '#6b7280'
+  },
+  content: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '1rem'
+  },
+  buttonRow: {
+    display: 'flex',
+    justifyContent: 'flex-end'
+  },
+  signaturePreview: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '0.5rem',
+    padding: '0.75rem',
+    borderRadius: '12px',
+    backgroundColor: '#f9fafb'
+  },
+  signatureImage: {
+    maxWidth: '280px',
+    borderRadius: '8px',
+    border: '1px solid #e5e7eb'
+  }
+};
+
+export default function PatientConsentCard() {
+  const [status, setStatus] = useState<ConsentStatus>('PENDING');
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [signatureImage, setSignatureImage] = useState<string | null>(null);
+
+  const isGranted = useMemo(() => status === 'GRANTED', [status]);
+
+  const handleOpenModal = () => setIsModalOpen(true);
+  const handleCloseModal = () => setIsModalOpen(false);
+
+  const handleConfirmSignature = (dataUrl: string) => {
+    setSignatureImage(dataUrl);
+    setStatus('GRANTED');
+    setIsModalOpen(false);
+  };
+
+  return (
+    <Card style={styles.card}>
+      <div style={styles.content}>
+        <div style={styles.header}>
+          <div>
+            <h3 style={styles.title}>Consentimento do Paciente</h3>
+            <p style={styles.subtitle}>Status atual do TCLE</p>
+          </div>
+          <StatusBadge status={status} />
+        </div>
+
+        {signatureImage && isGranted && (
+          <div style={styles.signaturePreview}>
+            <strong>Assinatura registrada</strong>
+            <img src={signatureImage} alt="Assinatura do paciente" style={styles.signatureImage} />
+          </div>
+        )}
+
+        {!isGranted && (
+          <div style={styles.buttonRow}>
+            <Button variant="primary" onClick={handleOpenModal}>
+              Coletar Assinatura
+            </Button>
+          </div>
+        )}
+      </div>
+
+      <Modal isOpen={isModalOpen} onClose={handleCloseModal} title="Assinatura Digital">
+        <SignaturePad onConfirm={handleConfirmSignature} onCancel={handleCloseModal} />
+      </Modal>
+    </Card>
+  );
+}
+
+
+================================================================================
+ARQUIVO: C:\Projeto\BioAvanceD\frontend\src\components\Consent\SignaturePad.tsx
+================================================================================
+import { CSSProperties, useMemo, useRef, useState } from 'react';
+import SignatureCanvas from 'react-signature-canvas';
+import Button from '../UI/Button';
+
+type SignaturePadProps = {
+  onConfirm: (dataUrl: string) => void;
+  onCancel: () => void;
+  confirmDisabled?: boolean;
+  confirmLabel?: string;
+};
+
+const styles: Record<string, CSSProperties> = {
+  container: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '1rem'
+  },
+  canvasWrapper: {
+    border: '2px dashed #c7d2fe',
+    borderRadius: '12px',
+    backgroundColor: '#ffffff',
+    padding: '0.5rem',
+    minHeight: '220px'
+  },
+  canvas: {
+    width: '100%',
+    height: '220px'
+  },
+  actions: {
+    display: 'flex',
+    gap: '0.75rem',
+    justifyContent: 'flex-end',
+    flexWrap: 'wrap'
+  },
+  helperText: {
+    fontSize: '0.85rem',
+    color: '#b00020'
+  },
+  hint: {
+    fontSize: '0.85rem',
+    color: '#6b7280'
+  }
+};
+
+export default function SignaturePad({
+  onConfirm,
+  onCancel,
+  confirmDisabled,
+  confirmLabel
+}: SignaturePadProps) {
+  const signatureRef = useRef<SignatureCanvas | null>(null);
+  const [hasSignature, setHasSignature] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
+
+  const handleEnd = () => {
+    const isEmpty = signatureRef.current?.isEmpty() ?? true;
+    setHasSignature(!isEmpty);
+    if (!isEmpty) {
+      setErrorMessage('');
+    }
+  };
+
+  const handleClear = () => {
+    signatureRef.current?.clear();
+    setHasSignature(false);
+    setErrorMessage('');
+  };
+
+  const handleConfirm = () => {
+    const isEmpty = signatureRef.current?.isEmpty() ?? true;
+    if (isEmpty) {
+      setErrorMessage('Por favor, assine antes de confirmar.');
+      return;
+    }
+    const dataUrl = signatureRef.current?.toDataURL('image/png');
+    if (dataUrl) {
+      onConfirm(dataUrl);
+      handleClear();
+    }
+  };
+
+  const isConfirmDisabled = useMemo(() => (confirmDisabled ?? false) || !hasSignature, [confirmDisabled, hasSignature]);
+
+  return (
+    <div style={styles.container}>
+      <div style={styles.canvasWrapper} aria-label="Area de assinatura">
+        <SignatureCanvas
+          ref={signatureRef}
+          penColor="#1f2937"
+          onEnd={handleEnd}
+          canvasProps={{ style: styles.canvas }}
+        />
+      </div>
+
+      <span style={styles.hint}>Use o dedo ou caneta para assinar.</span>
+      {errorMessage && <span style={styles.helperText}>{errorMessage}</span>}
+
+      <div style={styles.actions}>
+        <Button variant="danger" onClick={handleClear} type="button">
+          Limpar
+        </Button>
+        <Button variant="secondary" onClick={onCancel} type="button">
+          Cancelar
+        </Button>
+        <Button variant="primary" onClick={handleConfirm} disabled={isConfirmDisabled} type="button">
+          {confirmLabel || 'Confirmar Assinatura'}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+
+================================================================================
+ARQUIVO: C:\Projeto\BioAvanceD\frontend\src\components\Consent\StatusBadge.tsx
+================================================================================
+import { CSSProperties, useMemo } from 'react';
+
+export type ConsentStatus = 'GRANTED' | 'PENDING' | 'REVOKED' | 'EXPIRED' | string;
+
+type StatusBadgeProps = {
+  status?: ConsentStatus;
+};
+
+type BadgePalette = {
+  bg: string;
+  fg: string;
+  label: string;
+};
+
+const palette: Record<string, BadgePalette> = {
+  GRANTED: { bg: '#e1f5eb', fg: '#007a4d', label: 'Assinado' },
+  PENDING: { bg: '#fff1db', fg: '#b65a00', label: 'Pendente' },
+  REVOKED: { bg: '#ffe3e3', fg: '#b00020', label: 'Revogado' },
+  DEFAULT: { bg: '#f1f3f5', fg: '#6b7280', label: 'Expirado' }
+};
+
+const styles: Record<string, CSSProperties> = {
+  badge: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: '0.35rem 0.75rem',
+    borderRadius: '999px',
+    fontSize: '0.75rem',
+    fontWeight: 700,
+    letterSpacing: '0.3px',
+    textTransform: 'uppercase',
+    lineHeight: 1
+  }
+};
+
+export default function StatusBadge({ status }: StatusBadgeProps) {
+  const normalized = useMemo(() => (status || '').toString().trim().toUpperCase(), [status]);
+  const colors = palette[normalized] || palette.DEFAULT;
+  const badgeStyle: CSSProperties = {
+    ...styles.badge,
+    backgroundColor: colors.bg,
+    color: colors.fg
+  };
+
+  return <span style={badgeStyle}>{colors.label}</span>;
 }
 
 
@@ -58867,15 +59142,100 @@ export default function MFASetupPage() {
 ================================================================================
 ARQUIVO: C:\Projeto\BioAvanceD\frontend\src\pages\NewPatientPage.tsx
 ================================================================================
-import { useState } from 'react';
+import { useState, useEffect, useMemo, CSSProperties } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import Button from '../components/UI/Button';
 import Input from '../components/UI/Input';
+import Modal from '../components/UI/Modal';
 import { ArrowLeft } from 'lucide-react';
-import { Patient } from '../types/models';
+import SignaturePad from '../components/Consent/SignaturePad';
+import { Patient, ConsentPermission, ConsentTemplate } from '../types/models';
 import { usePatients } from '../hooks/usePatients';
+import { consentService, patientService } from '../services/api';
 import { validateUnit } from '../utils/validations';
 import { useLanguage } from '../contexts/LanguageContext';
+
+const styles: Record<string, CSSProperties> = {
+  consentModalContent: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '1rem'
+  },
+  consentHeader: {
+    display: 'flex',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: '1rem',
+    flexWrap: 'wrap'
+  },
+  consentModalTitle: {
+    margin: 0,
+    fontSize: '1.1rem',
+    fontWeight: 600,
+    color: 'var(--text)'
+  },
+  consentModalText: {
+    margin: 0,
+    color: 'var(--text-light)',
+    fontSize: '0.9rem'
+  },
+  consentProject: {
+    margin: 0,
+    color: 'var(--text-light)',
+    fontSize: '0.85rem'
+  },
+  consentGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1fr)',
+    gap: '1.25rem'
+  },
+  consentDocument: {
+    border: '1px solid var(--border)',
+    borderRadius: '8px',
+    backgroundColor: 'var(--surface)',
+    padding: '1rem',
+    maxHeight: '60vh',
+    overflowY: 'auto'
+  },
+  consentDocumentText: {
+    margin: 0,
+    whiteSpace: 'pre-wrap',
+    color: 'var(--text)',
+    fontSize: '0.9rem',
+    lineHeight: 1.6
+  },
+  consentPanel: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '1rem'
+  },
+  consentPermissions: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '0.75rem'
+  },
+  consentPermissionItem: {
+    display: 'flex',
+    gap: '0.5rem',
+    alignItems: 'flex-start',
+    fontSize: '0.9rem',
+    color: 'var(--text)'
+  },
+  consentRequired: {
+    color: 'var(--danger)',
+    fontWeight: 600
+  },
+  consentError: {
+    color: '#b00020',
+    fontSize: '0.85rem'
+  },
+  consentModalActions: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: '0.75rem',
+    justifyContent: 'flex-end'
+  }
+};
 
 export default function NewPatientPage() {
   const navigate = useNavigate();
@@ -58924,6 +59284,7 @@ export default function NewPatientPage() {
     unitAcronym: editingPatient?.unitAcronym || '',
     diagnosticHypothesis: editingPatient?.diagnosticHypothesis || '',
     icdCode: editingPatient?.icdCode || '',
+    linkedProject: editingPatient?.linkedProject || '',
     hypertension: editingPatient?.hypertension ? t('common.yes') : t('common.no'),
     obesity: editingPatient?.obesity ? t('common.yes') : t('common.no'),
     diabetesType1: editingPatient?.diabetesType1 ? t('common.yes') : t('common.no'),
@@ -58941,6 +59302,16 @@ export default function NewPatientPage() {
     lysoGb3: editingPatient?.lysoGb3 || undefined,
     notes: editingPatient?.notes || ''
   });
+  const [isConsentModalOpen, setIsConsentModalOpen] = useState(false);
+  const [createdPatientId, setCreatedPatientId] = useState<string | null>(null);
+  const [sendingConsent, setSendingConsent] = useState(false);
+  const [consentSent, setConsentSent] = useState(false);
+  const [consentTemplate, setConsentTemplate] = useState<ConsentTemplate | null>(null);
+  const [consentLoading, setConsentLoading] = useState(false);
+  const [consentError, setConsentError] = useState<string | null>(null);
+  const [consentResponses, setConsentResponses] = useState<Record<string, boolean>>({});
+  const [signatureName, setSignatureName] = useState('');
+  const [isSubmittingConsent, setIsSubmittingConsent] = useState(false);
 
   // Funções de conversão
   const convertSexToBackend = (sex: string | undefined): string => {
@@ -58977,6 +59348,136 @@ export default function NewPatientPage() {
     }
     return null;
   };
+
+  const resolveCreatedPatientID = (payload: any): string | null => {
+    if (!payload) return null;
+    const data = payload.data || payload;
+    if (!data) return null;
+    if (data.patientID) return String(data.patientID);
+    if (data.patient?.patientID) return String(data.patient.patientID);
+    if (data.data?.patientID) return String(data.data.patientID);
+    if (data.data?.patient?.patientID) return String(data.data.patient.patientID);
+    return null;
+  };
+
+  const sendConsentNotification = async (patientID: string, showFeedback = true) => {
+    setSendingConsent(true);
+    try {
+      await patientService.resendConsentNotification(patientID);
+      setConsentSent(true);
+      if (showFeedback) {
+        alert('TCLE enviado por email e SMS.');
+      }
+    } catch (consentError: any) {
+      const consentMessage = consentError?.response?.data?.message || consentError?.message || 'Falha ao enviar o termo de consentimento.';
+      if (showFeedback) {
+        alert(consentMessage);
+      }
+    } finally {
+      setSendingConsent(false);
+    }
+  };
+
+  const handleTogglePermission = (key: string) => {
+    setConsentResponses((prev) => ({
+      ...prev,
+      [key]: !prev[key]
+    }));
+  };
+
+  const requiredPermissionKeys = useMemo(() => {
+    const permissions = consentTemplate?.permissions || [];
+    const explicitRequired = permissions
+      .filter((permission) => permission.required)
+      .map((permission) => permission.key);
+
+    if (explicitRequired.length > 0) {
+      return explicitRequired;
+    }
+
+    const normalized = permissions.find((permission) =>
+      permission.key?.toLowerCase().includes('terms') ||
+      permission.key?.toLowerCase().includes('termos') ||
+      permission.label?.toLowerCase().includes('termos gerais')
+    );
+    return normalized?.key ? [normalized.key] : permissions?.[0]?.key ? [permissions[0].key] : [];
+  }, [consentTemplate]);
+
+  const hasRequiredConsent = useMemo(() => {
+    if (requiredPermissionKeys.length === 0) return false;
+    return requiredPermissionKeys.every((key) => consentResponses[key] === true);
+  }, [requiredPermissionKeys, consentResponses]);
+
+  const canSubmitConsent = useMemo(() => {
+    const hasSignatureName = signatureName.trim().length > 3;
+    return hasRequiredConsent && hasSignatureName && !!consentTemplate && !isSubmittingConsent;
+  }, [hasRequiredConsent, signatureName, consentTemplate, isSubmittingConsent]);
+
+  const isHtmlContent = useMemo(() => {
+    if (!consentTemplate) return false;
+    const content = consentTemplate.htmlContent || consentTemplate.content;
+    return /<\/?[a-z][\s\S]*>/i.test(content || '');
+  }, [consentTemplate]);
+
+  const loadConsentTemplate = async () => {
+    setConsentLoading(true);
+    setConsentError(null);
+    try {
+      const response = await consentService.getActiveTemplate();
+      const template = response.data?.data || null;
+      setConsentTemplate(template);
+
+      const permissions: ConsentPermission[] = template?.permissions || [];
+      const initialResponses: Record<string, boolean> = {};
+      permissions.forEach((permission) => {
+        initialResponses[permission.key] = false;
+      });
+      setConsentResponses(initialResponses);
+      setSignatureName('');
+    } catch (err: any) {
+      const message = err?.message || 'Erro ao carregar o TCLE ativo.';
+      setConsentError(message);
+    } finally {
+      setConsentLoading(false);
+    }
+  };
+
+  const handleConfirmSignature = async (dataUrl: string) => {
+    if (!createdPatientId || !consentTemplate?._id) {
+      setConsentError('Paciente ou template nao disponivel para assinatura.');
+      return;
+    }
+
+    if (!canSubmitConsent) {
+      setConsentError('Aceite as permissoes obrigatorias e informe o nome para assinar.');
+      return;
+    }
+
+    setIsSubmittingConsent(true);
+    setConsentError(null);
+    try {
+      await consentService.createPatientConsent({
+        patientId: createdPatientId,
+        templateId: consentTemplate._id,
+        responses: consentResponses,
+        signatureName,
+        signatureImage: dataUrl
+      } as any);
+      alert('Consentimento registrado com sucesso.');
+      setIsConsentModalOpen(false);
+      navigate('/patients');
+    } catch (err: any) {
+      const message = err?.response?.data?.message || err?.message || 'Erro ao registrar consentimento.';
+      setConsentError(message);
+    } finally {
+      setIsSubmittingConsent(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!isConsentModalOpen) return;
+    loadConsentTemplate();
+  }, [isConsentModalOpen]);
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -59032,13 +59533,26 @@ export default function NewPatientPage() {
         await updatePatient(patientIDStr, dataToSave);
         alert(t('patients.updateSuccess'));
       } else {
-        await createPatient(dataToSave);
+        const createdPayload = await createPatient(dataToSave);
+        const createdPatientID = resolveCreatedPatientID(createdPayload);
+
+        if (createdPatientID) {
+          setCreatedPatientId(createdPatientID);
+          setConsentSent(false);
+          setIsConsentModalOpen(true);
+          await sendConsentNotification(createdPatientID, false);
+        } else {
+          alert('Paciente criado, mas nao foi possivel identificar o ID para enviar o TCLE.');
+        }
+
         alert(t('patients.createSuccess'));
       }
       
       // Recarrega a lista e volta para a página de pacientes
       await loadPatients();
-      navigate('/patients');
+      if (editingPatient) {
+        navigate('/patients');
+      }
     } catch (err: any) {
       const errorMsg = err.response?.data?.error || err.response?.data?.message || err.message || t('patients.saveError');
       alert(errorMsg);
@@ -59225,6 +59739,14 @@ export default function NewPatientPage() {
               value={formData.icdCode || ''}
               onChange={(e) => setFormData({ ...formData, icdCode: e.target.value })}
             />
+
+            <Input
+              label="Projeto Vinculado (TCLE)"
+              type="text"
+              value={formData.linkedProject || ''}
+              onChange={(e) => setFormData({ ...formData, linkedProject: e.target.value })}
+              placeholder="Ex: Projeto Genoma"
+            />
             
             <Input
               label={`${t('patients.geneticVariant')} *`}
@@ -59374,6 +59896,94 @@ export default function NewPatientPage() {
           </Button>
         </div>
       </form>
+
+      <Modal
+        isOpen={isConsentModalOpen}
+        onClose={() => setIsConsentModalOpen(false)}
+        title="Termo de Consentimento"
+      >
+        <div style={styles.consentModalContent}>
+          <div style={styles.consentHeader}>
+            <div>
+              <h3 style={styles.consentModalTitle}>TCLE pronto para envio e assinatura</h3>
+              <p style={styles.consentModalText}>
+                {consentSent
+                  ? 'O termo foi enviado automaticamente ao paciente por email e SMS.'
+                  : 'Voce pode enviar o termo ao paciente e coletar a assinatura agora.'}
+              </p>
+              {formData.linkedProject && (
+                <p style={styles.consentProject}>Projeto selecionado: {formData.linkedProject}</p>
+              )}
+            </div>
+            <div style={styles.consentModalActions}>
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => createdPatientId && sendConsentNotification(createdPatientId)}
+                disabled={!createdPatientId || sendingConsent}
+              >
+                {sendingConsent ? 'Enviando...' : 'Reenviar TCLE (Email + SMS)'}
+              </Button>
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => setIsConsentModalOpen(false)}
+              >
+                Fechar
+              </Button>
+            </div>
+          </div>
+
+          {consentLoading && <span>Carregando TCLE...</span>}
+          {consentError && <span style={styles.consentError}>{consentError}</span>}
+
+          {consentTemplate && !consentLoading && (
+            <div style={styles.consentGrid}>
+              <div style={styles.consentDocument}>
+                {isHtmlContent ? (
+                  <div dangerouslySetInnerHTML={{ __html: consentTemplate.htmlContent || consentTemplate.content }} />
+                ) : (
+                  <p style={styles.consentDocumentText}>{consentTemplate.content}</p>
+                )}
+              </div>
+              <div style={styles.consentPanel}>
+                <div style={styles.consentPermissions}>
+                  {(consentTemplate.permissions || []).map((permission) => {
+                    const isRequired = requiredPermissionKeys.includes(permission.key);
+                    return (
+                      <label key={permission.key} style={styles.consentPermissionItem}>
+                        <input
+                          type="checkbox"
+                          checked={!!consentResponses[permission.key]}
+                          onChange={() => handleTogglePermission(permission.key)}
+                        />
+                        <span>
+                          {permission.label}
+                          {isRequired && <span style={styles.consentRequired}> (Obrigatorio)</span>}
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+
+                <Input
+                  label="Nome para assinatura"
+                  value={signatureName}
+                  onChange={(event) => setSignatureName(event.target.value)}
+                  placeholder="Digite o nome completo"
+                />
+
+                <SignaturePad
+                  onConfirm={handleConfirmSignature}
+                  onCancel={() => setIsConsentModalOpen(false)}
+                  confirmDisabled={!canSubmitConsent}
+                  confirmLabel={isSubmittingConsent ? 'Salvando...' : 'Confirmar Assinatura'}
+                />
+              </div>
+            </div>
+          )}
+        </div>
+      </Modal>
     </div>
   );
 }
@@ -60772,6 +61382,17 @@ ARQUIVO: C:\Projeto\BioAvanceD\frontend\src\pages\PatientsPage.css
   gap: 0.5rem;
 }
 
+.consent-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.consent-action-button {
+  white-space: nowrap;
+}
+
 .action-button {
   background: var(--bg-secondary);
   border: 1px solid var(--border);
@@ -60994,6 +61615,21 @@ ARQUIVO: C:\Projeto\BioAvanceD\frontend\src\pages\PatientsPage.css
   .observations-container {
     padding: 1rem;
   }
+
+  .consent-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .consent-action-button {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .table-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
   
   .textarea-field {
     min-height: 120px;
@@ -61010,12 +61646,15 @@ ARQUIVO: C:\Projeto\BioAvanceD\frontend\src\pages\PatientsPage.css
 ================================================================================
 ARQUIVO: C:\Projeto\BioAvanceD\frontend\src\pages\PatientsPage.tsx
 ================================================================================
-import { useState, useMemo, Fragment } from 'react';
+import { useState, useMemo, Fragment, CSSProperties } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Card from '../components/UI/Card';
 import Table from '../components/UI/Table';
 import Button from '../components/UI/Button';
+import Modal from '../components/UI/Modal';
 import { Plus, Edit, Trash2, Search, ArrowLeft, Upload, FileSpreadsheet } from 'lucide-react';
+import StatusBadge, { ConsentStatus } from '../components/Consent/StatusBadge';
+import SignaturePad from '../components/Consent/SignaturePad';
 import { Patient } from '../types/models';
 import { usePatients } from '../hooks/usePatients';
 import { useAuth } from '../contexts/AuthContext';
@@ -61023,6 +61662,27 @@ import { importLGPDService } from '../services/api';
 import { patientService } from '../services/api';
 import { useLanguage } from '../contexts/LanguageContext';
 import './PatientsPage.css';
+
+const styles: Record<string, CSSProperties> = {
+  consentActions: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '0.5rem',
+    flexWrap: 'wrap'
+  },
+  consentActionButton: {
+    padding: '0.3rem 0.6rem',
+    fontSize: '0.75rem'
+  },
+  consentStatusCell: {
+    display: 'flex',
+    alignItems: 'center'
+  },
+  consentHint: {
+    fontSize: '0.8rem',
+    color: 'var(--text-light)'
+  }
+};
 
 export default function PatientsPage() {
   const navigate = useNavigate();
@@ -61037,6 +61697,37 @@ export default function PatientsPage() {
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importProgress, setImportProgress] = useState<string>('');
   const [resendingConsentFor, setResendingConsentFor] = useState<string | null>(null);
+  const [isSignatureModalOpen, setIsSignatureModalOpen] = useState(false);
+  const [activePatientId, setActivePatientId] = useState<string | null>(null);
+  const [consentOverrides, setConsentOverrides] = useState<Record<string, ConsentStatus>>({});
+
+  const normalizeConsentStatus = (value?: string): ConsentStatus => {
+    const normalized = (value || '').trim().toUpperCase();
+    if (normalized === 'GRANTED' || normalized === 'SIGNED') return 'GRANTED';
+    if (normalized === 'REVOKED') return 'REVOKED';
+    if (normalized === 'PENDING' || normalized === 'PENDING_CONSENT') return 'PENDING';
+    return 'EXPIRED';
+  };
+
+  const handleOpenSignatureModal = (patientID: string) => {
+    setActivePatientId(patientID);
+    setIsSignatureModalOpen(true);
+  };
+
+  const handleCloseSignatureModal = () => {
+    setIsSignatureModalOpen(false);
+    setActivePatientId(null);
+  };
+
+  const handleConfirmSignature = (dataUrl: string) => {
+    if (!activePatientId) return;
+    setConsentOverrides((prev) => ({
+      ...prev,
+      [activePatientId]: 'GRANTED'
+    }));
+    setIsSignatureModalOpen(false);
+    setActivePatientId(null);
+  };
   
   // Handler para busca de pacientes
   const handleSearch = async (term: string) => {
@@ -61509,6 +62200,7 @@ export default function PatientsPage() {
         <Table
           headers={[
             'ID',
+            'Consentimento',
             t('patients.actions'),
           ]}
         >
@@ -61517,59 +62209,36 @@ export default function PatientsPage() {
             const patientID = patient.patientID 
               ? String(patient.patientID) 
               : ((patient as any).id ? String((patient as any).id) : `patient-${index}`);
-            const consentStatus = (patient as any).status;
-            const isConsentPending = consentStatus === 'PENDING_CONSENT';
+            const rawConsentStatus = consentOverrides[patientID] || (patient as any).consentStatus || (patient as any).status;
+            const consentStatus = normalizeConsentStatus(String(rawConsentStatus || ''));
+            const isConsentPending = consentStatus === 'PENDING';
+            const canCollectSignature = consentStatus !== 'GRANTED';
             
             return (
               <Fragment key={`patient-fragment-${patientID}`}>
                 <tr key={`patient-row-${index}-${patientID}`}>
                   <td>{patientID}</td>
+                  <td>
+                    <div style={styles.consentStatusCell}>
+                      <StatusBadge status={consentStatus} />
+                    </div>
+                  </td>
                   {canViewFullData ? (
                     <td>
-                      <div className="table-actions">
-                        <button
-                          className="action-button"
-                          onClick={() => handleEdit(patientID)}
-                          title={t('common.edit')}
-                        >
-                          <Edit size={16} />
-                        </button>
-                        <button
-                          className="action-button danger"
-                          onClick={() => handleDelete(patientID)}
-                          title={t('common.delete')}
-                        >
-                          <Trash2 size={16} />
-                        </button>
-                      </div>
-                    </td>
-                  ) : (
-                    <td>
-                      <span style={{ color: 'var(--text-light)', fontSize: '0.875rem' }}>
-                        {t('patients.viewOnly')}
-                      </span>
-                    </td>
-                  )}
-                </tr>
-                {isConsentPending && (
-                  <tr key={`patient-consent-${patientID}`}>
-                    <td colSpan={2}>
-                      <div
-                        style={{
-                          padding: '0.75rem 1rem',
-                          backgroundColor: '#fef3c7',
-                          border: '1px solid #f59e0b',
-                          borderRadius: '8px',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'space-between',
-                          gap: '1rem'
-                        }}
-                      >
-                        <div style={{ color: '#92400e', fontSize: '0.9rem' }}>
-                          <strong>Consentimento pendente.</strong> Paciente precisa aceitar o TCLE.
-                        </div>
-                        {canViewFullData && (
+                      <div style={styles.consentActions} className="consent-actions">
+                        {canCollectSignature ? (
+                          <Button
+                            variant="primary"
+                            onClick={() => handleOpenSignatureModal(patientID)}
+                            style={styles.consentActionButton}
+                            className="consent-action-button"
+                          >
+                            Coletar Assinatura
+                          </Button>
+                        ) : (
+                          <span style={styles.consentHint}>Assinado</span>
+                        )}
+                        {isConsentPending && (
                           <Button
                             variant="secondary"
                             onClick={async () => {
@@ -61586,20 +62255,48 @@ export default function PatientsPage() {
                               }
                             }}
                             disabled={resendingConsentFor === patientID}
+                            style={styles.consentActionButton}
+                            className="consent-action-button"
                           >
                             {resendingConsentFor === patientID ? 'Reenviando...' : 'Reenviar Notificações'}
                           </Button>
                         )}
+                        <div className="table-actions">
+                          <button
+                            className="action-button"
+                            onClick={() => handleEdit(patientID)}
+                            title={t('common.edit')}
+                          >
+                            <Edit size={16} />
+                          </button>
+                          <button
+                            className="action-button danger"
+                            onClick={() => handleDelete(patientID)}
+                            title={t('common.delete')}
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        </div>
                       </div>
                     </td>
-                  </tr>
-                )}
+                  ) : (
+                    <td>
+                      <span style={{ color: 'var(--text-light)', fontSize: '0.875rem' }}>
+                        {t('patients.viewOnly')}
+                      </span>
+                    </td>
+                  )}
+                </tr>
               </Fragment>
             );
           })}
         </Table>
       </Card>
       )}
+
+      <Modal isOpen={isSignatureModalOpen} onClose={handleCloseSignatureModal} title="Assinatura Digital">
+        <SignaturePad onConfirm={handleConfirmSignature} onCancel={handleCloseSignatureModal} />
+      </Modal>
 
       {showSearchResults && (
         <div style={{ 
@@ -77113,6 +77810,8 @@ ARQUIVO: C:\Projeto\BioAvanceD\package.json
   },
   "dependencies": {
     "node-cron": "^4.2.1",
+    "react-modal": "^3.16.3",
+    "react-signature-canvas": "^1.1.0-alpha.2",
     "shelljs": "^0.10.0"
   }
 }

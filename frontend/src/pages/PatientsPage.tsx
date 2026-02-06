@@ -1,9 +1,12 @@
-import { useState, useMemo, Fragment } from 'react';
+import { useState, useMemo, Fragment, CSSProperties } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Card from '../components/UI/Card';
 import Table from '../components/UI/Table';
 import Button from '../components/UI/Button';
+import Modal from '../components/UI/Modal';
 import { Plus, Edit, Trash2, Search, ArrowLeft, Upload, FileSpreadsheet } from 'lucide-react';
+import StatusBadge, { ConsentStatus } from '../components/Consent/StatusBadge';
+import SignaturePad from '../components/Consent/SignaturePad';
 import { Patient } from '../types/models';
 import { usePatients } from '../hooks/usePatients';
 import { useAuth } from '../contexts/AuthContext';
@@ -11,6 +14,27 @@ import { importLGPDService } from '../services/api';
 import { patientService } from '../services/api';
 import { useLanguage } from '../contexts/LanguageContext';
 import './PatientsPage.css';
+
+const styles: Record<string, CSSProperties> = {
+  consentActions: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '0.5rem',
+    flexWrap: 'wrap'
+  },
+  consentActionButton: {
+    padding: '0.3rem 0.6rem',
+    fontSize: '0.75rem'
+  },
+  consentStatusCell: {
+    display: 'flex',
+    alignItems: 'center'
+  },
+  consentHint: {
+    fontSize: '0.8rem',
+    color: 'var(--text-light)'
+  }
+};
 
 export default function PatientsPage() {
   const navigate = useNavigate();
@@ -25,6 +49,37 @@ export default function PatientsPage() {
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importProgress, setImportProgress] = useState<string>('');
   const [resendingConsentFor, setResendingConsentFor] = useState<string | null>(null);
+  const [isSignatureModalOpen, setIsSignatureModalOpen] = useState(false);
+  const [activePatientId, setActivePatientId] = useState<string | null>(null);
+  const [consentOverrides, setConsentOverrides] = useState<Record<string, ConsentStatus>>({});
+
+  const normalizeConsentStatus = (value?: string): ConsentStatus => {
+    const normalized = (value || '').trim().toUpperCase();
+    if (normalized === 'GRANTED' || normalized === 'SIGNED') return 'GRANTED';
+    if (normalized === 'REVOKED') return 'REVOKED';
+    if (normalized === 'PENDING' || normalized === 'PENDING_CONSENT') return 'PENDING';
+    return 'EXPIRED';
+  };
+
+  const handleOpenSignatureModal = (patientID: string) => {
+    setActivePatientId(patientID);
+    setIsSignatureModalOpen(true);
+  };
+
+  const handleCloseSignatureModal = () => {
+    setIsSignatureModalOpen(false);
+    setActivePatientId(null);
+  };
+
+  const handleConfirmSignature = (dataUrl: string) => {
+    if (!activePatientId) return;
+    setConsentOverrides((prev) => ({
+      ...prev,
+      [activePatientId]: 'GRANTED'
+    }));
+    setIsSignatureModalOpen(false);
+    setActivePatientId(null);
+  };
   
   // Handler para busca de pacientes
   const handleSearch = async (term: string) => {
@@ -497,6 +552,7 @@ export default function PatientsPage() {
         <Table
           headers={[
             'ID',
+            'Consentimento',
             t('patients.actions'),
           ]}
         >
@@ -505,59 +561,36 @@ export default function PatientsPage() {
             const patientID = patient.patientID 
               ? String(patient.patientID) 
               : ((patient as any).id ? String((patient as any).id) : `patient-${index}`);
-            const consentStatus = (patient as any).status;
-            const isConsentPending = consentStatus === 'PENDING_CONSENT';
+            const rawConsentStatus = consentOverrides[patientID] || (patient as any).consentStatus || (patient as any).status;
+            const consentStatus = normalizeConsentStatus(String(rawConsentStatus || ''));
+            const isConsentPending = consentStatus === 'PENDING';
+            const canCollectSignature = consentStatus !== 'GRANTED';
             
             return (
               <Fragment key={`patient-fragment-${patientID}`}>
                 <tr key={`patient-row-${index}-${patientID}`}>
                   <td>{patientID}</td>
+                  <td>
+                    <div style={styles.consentStatusCell}>
+                      <StatusBadge status={consentStatus} />
+                    </div>
+                  </td>
                   {canViewFullData ? (
                     <td>
-                      <div className="table-actions">
-                        <button
-                          className="action-button"
-                          onClick={() => handleEdit(patientID)}
-                          title={t('common.edit')}
-                        >
-                          <Edit size={16} />
-                        </button>
-                        <button
-                          className="action-button danger"
-                          onClick={() => handleDelete(patientID)}
-                          title={t('common.delete')}
-                        >
-                          <Trash2 size={16} />
-                        </button>
-                      </div>
-                    </td>
-                  ) : (
-                    <td>
-                      <span style={{ color: 'var(--text-light)', fontSize: '0.875rem' }}>
-                        {t('patients.viewOnly')}
-                      </span>
-                    </td>
-                  )}
-                </tr>
-                {isConsentPending && (
-                  <tr key={`patient-consent-${patientID}`}>
-                    <td colSpan={2}>
-                      <div
-                        style={{
-                          padding: '0.75rem 1rem',
-                          backgroundColor: '#fef3c7',
-                          border: '1px solid #f59e0b',
-                          borderRadius: '8px',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'space-between',
-                          gap: '1rem'
-                        }}
-                      >
-                        <div style={{ color: '#92400e', fontSize: '0.9rem' }}>
-                          <strong>Consentimento pendente.</strong> Paciente precisa aceitar o TCLE.
-                        </div>
-                        {canViewFullData && (
+                      <div style={styles.consentActions} className="consent-actions">
+                        {canCollectSignature ? (
+                          <Button
+                            variant="primary"
+                            onClick={() => handleOpenSignatureModal(patientID)}
+                            style={styles.consentActionButton}
+                            className="consent-action-button"
+                          >
+                            Coletar Assinatura
+                          </Button>
+                        ) : (
+                          <span style={styles.consentHint}>Assinado</span>
+                        )}
+                        {isConsentPending && (
                           <Button
                             variant="secondary"
                             onClick={async () => {
@@ -574,20 +607,48 @@ export default function PatientsPage() {
                               }
                             }}
                             disabled={resendingConsentFor === patientID}
+                            style={styles.consentActionButton}
+                            className="consent-action-button"
                           >
                             {resendingConsentFor === patientID ? 'Reenviando...' : 'Reenviar Notificações'}
                           </Button>
                         )}
+                        <div className="table-actions">
+                          <button
+                            className="action-button"
+                            onClick={() => handleEdit(patientID)}
+                            title={t('common.edit')}
+                          >
+                            <Edit size={16} />
+                          </button>
+                          <button
+                            className="action-button danger"
+                            onClick={() => handleDelete(patientID)}
+                            title={t('common.delete')}
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        </div>
                       </div>
                     </td>
-                  </tr>
-                )}
+                  ) : (
+                    <td>
+                      <span style={{ color: 'var(--text-light)', fontSize: '0.875rem' }}>
+                        {t('patients.viewOnly')}
+                      </span>
+                    </td>
+                  )}
+                </tr>
               </Fragment>
             );
           })}
         </Table>
       </Card>
       )}
+
+      <Modal isOpen={isSignatureModalOpen} onClose={handleCloseSignatureModal} title="Assinatura Digital">
+        <SignaturePad onConfirm={handleConfirmSignature} onCancel={handleCloseSignatureModal} />
+      </Modal>
 
       {showSearchResults && (
         <div style={{ 
