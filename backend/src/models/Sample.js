@@ -134,6 +134,27 @@ class SampleModel {
       errors.push('status deve ser: AVAILABLE, PARTIAL, DEPLETED ou UNAVAILABLE');
     }
 
+    // Validar storageLocation se fornecido (opcional)
+    if (data.storageLocation) {
+      if (typeof data.storageLocation !== 'object') {
+        errors.push('storageLocation deve ser um objeto com boxId e position');
+      } else {
+        if (data.storageLocation.boxId && typeof data.storageLocation.boxId !== 'string') {
+          errors.push('storageLocation.boxId deve ser uma string (ObjectId)');
+        }
+        if (data.storageLocation.position && typeof data.storageLocation.position !== 'string') {
+          errors.push('storageLocation.position deve ser uma string (ex: A1)');
+        }
+        // Validar formato de position se fornecido (ex: A1, B4, I9)
+        if (data.storageLocation.position) {
+          const posRegex = /^([A-Z])(\d+)$/;
+          if (!posRegex.test(data.storageLocation.position)) {
+            errors.push('storageLocation.position deve seguir formato: Letra+Número (ex: A1, B4)');
+          }
+        }
+      }
+    }
+
     return {
       isValid: errors.length === 0,
       errors
@@ -196,6 +217,14 @@ class SampleModel {
       specimenCollection: data.specimenCollection || null, // Dados de coleta (FHIR Specimen.collection)
       linkedFiles: data.linkedFiles || [], // Arquivos vinculados (DocumentReference)
       qrCode: data.qrCode || null, // QRCode gerado automaticamente
+      // Nova armazenagem física (ISO 20387)
+      storageLocation: data.storageLocation ? {
+        boxId: data.storageLocation.boxId || null, // Referência para StorageBox._id
+        position: data.storageLocation.position || null, // Coordenada ex: A1, B4
+      } : {
+        boxId: null,
+        position: null,
+      },
       createdAt: new Date(),
       updatedAt: new Date()
     };
@@ -259,7 +288,7 @@ class SampleModel {
       const results = await resultsCollection.find({ sampleID: sampleID }).toArray();
       return results;
     } catch (error) {
-      throw new Error(`Erro ao buscar resultados: ${error.message}`);
+      throw new Error(`Erro ao buscar arquivos de analise: ${error.message}`);
     }
   }
 }

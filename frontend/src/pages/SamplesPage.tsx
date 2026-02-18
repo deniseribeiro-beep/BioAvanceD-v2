@@ -233,6 +233,7 @@ export default function SamplesPage() {
               <th>Origem</th>
               <th>Código</th>
               <th>Status</th>
+              <th>TCLE</th>
               <th>Volume</th>
               <th>Paciente (ID)</th>
               <th>Ações</th>
@@ -241,19 +242,19 @@ export default function SamplesPage() {
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={8} style={{ textAlign: 'center', padding: '1.5rem' }}>
+                <td colSpan={9} style={{ textAlign: 'center', padding: '1.5rem' }}>
                   {t('common.loading') || 'Carregando...'}
                 </td>
               </tr>
             ) : error ? (
               <tr>
-                <td colSpan={8} style={{ textAlign: 'center', padding: '1.5rem', color: 'var(--danger)' }}>
+                <td colSpan={9} style={{ textAlign: 'center', padding: '1.5rem', color: 'var(--danger)' }}>
                   {error}
                 </td>
               </tr>
             ) : filteredSamples.length === 0 ? (
               <tr>
-                <td colSpan={8} style={{ textAlign: 'center', padding: '1.5rem' }}>
+                <td colSpan={9} style={{ textAlign: 'center', padding: '1.5rem' }}>
                   Nenhuma amostra encontrada.
                 </td>
               </tr>
@@ -278,6 +279,21 @@ export default function SamplesPage() {
                       <SampleStatusBadge status={mapStatus(sample) as any} />
                     </td>
                     <td>
+                      {sample.canUse === false ? (
+                        <span className="consent-badge pending" title={sample.consentMessage || 'TCLE Pendente'}>
+                          ⚠️ Pendente
+                        </span>
+                      ) : sample.consentValid ? (
+                        <span className="consent-badge approved" title={sample.consentMessage || 'TCLE Assinado'}>
+                          ✓ Assinado
+                        </span>
+                      ) : (
+                        <span className="consent-badge unknown" title="Status desconhecido">
+                          ? Verificar
+                        </span>
+                      )}
+                    </td>
+                    <td>
                       <strong>
                         {current.toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} /{' '}
                         {initial.toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}
@@ -287,9 +303,15 @@ export default function SamplesPage() {
                     <td>
                       <Button
                         variant="secondary"
-                        disabled={!canEdit}
+                        disabled={!canEdit || sample.canUse === false}
                         onClick={() => navigate(`/samples/${sample.id}`)}
-                        title={canEdit ? 'Editar amostra' : 'Apenas administradores e coordenadores podem editar'}
+                        title={
+                          !canEdit 
+                            ? 'Apenas administradores e coordenadores podem editar'
+                            : sample.canUse === false
+                            ? 'Amostra bloqueada: TCLE pendente'
+                            : 'Editar amostra'
+                        }
                         style={{ padding: '0.35rem 0.65rem' }}
                       >
                         <Edit3 size={15} />

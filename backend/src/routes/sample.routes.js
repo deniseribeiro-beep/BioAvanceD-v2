@@ -121,6 +121,65 @@ router.get('/', authenticate, async (req, res) => {
 
     const result = await sampleService.listSamples(db, filters);
 
+    // Enriquecer amostras com informação de consentimento
+    const patientConsentsCollection = db.collection('patientConsents');
+    const patientsCollection = db.collection('patients');
+    
+    const enrichedSamples = await Promise.all(result.samples.map(async (sample) => {
+      let consentValid = false;
+      let consentMessage = '';
+      let canUse = false;
+
+      // Buscar paciente
+      const patient = await patientsCollection.findOne({ 
+        $or: [
+          { patientID: sample.patientID },
+          { _id: sample.patientID }
+        ]
+      });
+
+      if (patient) {
+        // Verificar se há consentimento ativo
+        const consent = await patientConsentsCollection.findOne({
+          patientId: patient._id.toString(),
+          status: 'ACTIVE'
+        });
+
+        if (consent) {
+          consentValid = true;
+          consentMessage = 'TCLE Assinado';
+          canUse = true;
+        } else {
+          // Verificar se o sistema de consentimento está implementado
+          const consentCount = await patientConsentsCollection.countDocuments();
+          if (consentCount === 0) {
+            // Sistema não implementado
+            consentValid = true;
+            consentMessage = 'Sistema TCLE em implementação';
+            canUse = true;
+          } else {
+            consentValid = false;
+            consentMessage = 'TCLE Pendente';
+            canUse = false;
+          }
+        }
+      } else {
+        // Paciente não encontrado - em desenvolvimento permitir
+        consentValid = true;
+        consentMessage = 'Paciente não encontrado';
+        canUse = true;
+      }
+
+      return {
+        ...sample,
+        consentValid,
+        consentMessage,
+        canUse,
+        // Compatibilidade com campo consentStatus existente
+        consentStatus: consentValid ? 'approved' : 'pending'
+      };
+    }));
+
     // Registra log de consulta de amostras
     const auditLogger = require('../utils/auditLogger');
     auditLogger.init(db);
@@ -137,7 +196,7 @@ router.get('/', authenticate, async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      data: result.samples,
+      data: enrichedSamples,
       total: result.total
     });
   } catch (error) {
@@ -386,6 +445,63 @@ router.delete('/:id', authenticate, requirePermission('deleteSample'), async (re
   }
 });
 
+// Buscar amostras por termo (barcode ou ID) - para autocomplete
+router.get('/search/by-term', authenticate, async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    if (!db) {
+      return res.status(503).json({
+        success: false,
+        error: 'Banco de dados não disponível'
+      });
+    }
+
+    const term = decodeURIComponent(req.query.q || '');
+    if (!term || term.length < 2) {
+      return res.status(400).json({
+        success: false,
+        error: 'Termo de busca deve ter no mínimo 2 caracteres'
+      });
+    }
+
+    const samplesCollection = db.collection('samples');
+    
+    // Buscar por barcode ou ID (usando regex para busca parcial)
+    const query = {
+      $or: [
+        { barcode: { $regex: term, $options: 'i' } },
+        { _id: { $regex: term, $options: 'i' } }
+      ],
+      currentStatus: { $ne: 'WITHDRAWN' } // Excluir amostras retiradas
+    };
+
+    const samples = await samplesCollection
+      .find(query)
+      .limit(10)
+      .project({
+        _id: 1,
+        barcode: 1,
+        sampleType: 1,
+        currentStatus: 1,
+        quantity: 1,
+        quantityUnit: 1
+      })
+      .toArray();
+
+    return res.status(200).json({
+      success: true,
+      data: samples
+    });
+  } catch (error) {
+    logger.error('Erro ao buscar amostras:', error.message);
+    return res.status(500).json({
+      success: false,
+      error: 'Erro ao buscar amostras',
+      message: error.message
+    });
+  }
+});
+
 // Buscar amostra por código de barras
 router.get('/by-barcode/:barcode', authenticate, async (req, res) => {
   try {
@@ -450,7 +566,7 @@ router.get('/by-barcode/:barcode', authenticate, async (req, res) => {
   }
 });
 
-// Buscar resultados de uma amostra
+// Buscar arquivos de analise de uma amostra
 router.get('/:id/results', authenticate, async (req, res) => {
   try {
     const db = req.app.locals.db;
@@ -464,7 +580,7 @@ router.get('/:id/results', authenticate, async (req, res) => {
     const { ObjectId } = require('mongodb');
     const results = await sampleService.getSampleResults(db, new ObjectId(req.params.id));
 
-    // Registra log de consulta de resultados da amostra
+    // Registra log de consulta de arquivos de analise da amostra
     const auditLogger = require('../utils/auditLogger');
     auditLogger.init(db);
     await auditLogger.log({
@@ -473,7 +589,7 @@ router.get('/:id/results', authenticate, async (req, res) => {
       entityID: req.params.id,
       result: 'success',
       severity: 'info',
-      message: `Resultados da amostra consultados - ${results.length || 0} registros`,
+      message: `Arquivos de analise da amostra consultados - ${results.length || 0} registros`,
       payload: { sampleID: req.params.id, resultsCount: results.length || 0 },
       req: req,
       module: 'Amostras'
@@ -484,10 +600,10 @@ router.get('/:id/results', authenticate, async (req, res) => {
       data: results
     });
   } catch (error) {
-    logger.error('Erro ao buscar resultados da amostra:', error.message);
+    logger.error('Erro ao buscar arquivos de analise da amostra:', error.message);
     return res.status(500).json({
       success: false,
-      error: 'Erro ao buscar resultados',
+      error: 'Erro ao buscar arquivos de analise',
       message: error.message
     });
   }

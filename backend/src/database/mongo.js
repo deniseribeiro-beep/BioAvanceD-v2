@@ -6,6 +6,38 @@ let db = null;
 let newDb = null;
 
 /**
+ * Garante que a URI tenha database e parametros basicos (tls, retryWrites, w)
+ * @param {string} uri
+ * @param {string} dbName
+ * @returns {string}
+ */
+function ensureMongoUri(uri, dbName) {
+  if (!uri) return uri;
+
+  const parts = uri.split('?');
+  let base = parts[0];
+  const query = parts[1] || '';
+
+  const protocolIndex = base.indexOf('://');
+  if (protocolIndex === -1) return uri;
+
+  const pathStart = base.indexOf('/', protocolIndex + 3);
+  if (pathStart === -1) {
+    base = `${base}/${dbName}`;
+  } else if (pathStart === base.length - 1) {
+    base = `${base}${dbName}`;
+  }
+
+  const params = new URLSearchParams(query);
+  if (!params.has('retryWrites')) params.set('retryWrites', 'true');
+  if (!params.has('w')) params.set('w', 'majority');
+  if (!params.has('tls') && !params.has('ssl')) params.set('tls', 'true');
+
+  const paramString = params.toString();
+  return paramString ? `${base}?${paramString}` : base;
+}
+
+/**
  * Codifica a senha na URI do MongoDB para evitar erros com caracteres especiais
  * @param {string} uri - URI do MongoDB
  * @param {boolean} debug - Se true, mostra logs de debug
@@ -125,7 +157,8 @@ async function connectDB() {
 
     // Tenta conectar com URI codificada primeiro
     const isDevelopment = env.NODE_ENV === 'development';
-    const encodedURI = encodeMongoURI(mongoUri, isDevelopment);
+    const normalizedUri = ensureMongoUri(mongoUri, mongoDb);
+    const encodedURI = encodeMongoURI(normalizedUri, isDevelopment);
 
     // Cria nova conexão
     client = new MongoClient(encodedURI, {
@@ -164,7 +197,8 @@ async function connectDB() {
         }
 
         // Tenta com a URI original
-        client = new MongoClient(mongoUri, {
+        const normalizedRetryUri = ensureMongoUri(mongoUri, mongoDb);
+        client = new MongoClient(normalizedRetryUri, {
           serverSelectionTimeoutMS: 30000,
           socketTimeoutMS: 45000,
           connectTimeoutMS: 30000,
@@ -228,7 +262,8 @@ async function connectNewDB() {
     // Se já existe um client conectado, reutiliza; senão cria novo
     if (!client) {
       const isDevelopment = env.NODE_ENV === 'development';
-      const encodedURI = encodeMongoURI(env.MONGO_URI, isDevelopment);
+      const normalizedUri = ensureMongoUri(env.MONGO_URI, env.MONGO_DB_NOVO);
+      const encodedURI = encodeMongoURI(normalizedUri, isDevelopment);
 
       client = new MongoClient(encodedURI, {
         serverSelectionTimeoutMS: 30000,
@@ -266,7 +301,8 @@ async function connectNewDB() {
           newDb = null;
         }
 
-        client = new MongoClient(env.MONGO_URI, {
+        const normalizedRetryUri = ensureMongoUri(env.MONGO_URI, env.MONGO_DB_NOVO);
+        client = new MongoClient(normalizedRetryUri, {
           serverSelectionTimeoutMS: 30000,
           socketTimeoutMS: 45000,
           connectTimeoutMS: 30000,

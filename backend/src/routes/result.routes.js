@@ -62,7 +62,7 @@ const resultUpload = multer({
   limits: { fileSize: 100 * 1024 * 1024 }
 });
 
-// CRUD de Resultados
+// CRUD de Arquivos de Analise
 router.get('/', authenticate, async (req, res) => {
   try {
     const db = req.app.locals.db;
@@ -90,10 +90,10 @@ router.get('/', authenticate, async (req, res) => {
       entity: 'Result',
       result: 'success',
       severity: 'info',
-      message: `Consulta de resultados - ${results.length} registros`,
+      message: `Consulta de arquivos de analise - ${results.length} registros`,
       payload: { total: results.length, filters: query },
       req: req,
-      module: 'Resultados'
+      module: 'Arquivos de Analise'
     });
 
     return res.status(200).json({
@@ -101,10 +101,10 @@ router.get('/', authenticate, async (req, res) => {
       data: results
     });
   } catch (error) {
-    logger.error('Erro ao listar resultados:', error.message);
+    logger.error('Erro ao listar arquivos de analise:', error.message);
     return res.status(500).json({
       success: false,
-      error: 'Erro ao listar resultados',
+      error: 'Erro ao listar arquivos de analise',
       message: error.message
     });
   }
@@ -170,10 +170,21 @@ router.post('/upload', authenticate, requirePermission('uploadFiles'), enforceCo
       });
     }
 
+    if (method && !ResultModel.ANALYSIS_METHODS.includes(method)) {
+      if (fs.existsSync(file.path)) {
+        fs.unlinkSync(file.path);
+      }
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid Analysis Method'
+      });
+    }
+
     const resultsCollection = db.collection('results');
     const resultPayload = {
       sampleID: sample._id ? sample._id.toString() : sampleID,
       fileType,
+      resultFilePath: file.path,
       filePath: file.path,
       description: description || null,
       analysisType: analysisType || null,
@@ -209,20 +220,20 @@ router.post('/upload', authenticate, requirePermission('uploadFiles'), enforceCo
         entityID: insertResult.insertedId.toString(),
         result: 'success',
         severity: 'info',
-        message: 'Resultado criado via upload',
+        message: 'Arquivo de analise criado via upload',
         payload: { sampleID: result.sampleID || null },
         req: req,
-        module: 'Resultados'
+        module: 'Arquivos de Analise'
       });
     }
 
     return res.status(201).json({
       success: true,
-      message: 'Resultado criado com sucesso',
+      message: 'Arquivo de analise criado com sucesso',
       data: { _id: insertResult.insertedId, ...result }
     });
   } catch (error) {
-    logger.error('Erro ao fazer upload de resultado:', error.message);
+    logger.error('Erro ao fazer upload de arquivo de analise:', error.message);
     if (req.file && fs.existsSync(req.file.path)) {
       try {
         fs.unlinkSync(req.file.path);
@@ -232,7 +243,7 @@ router.post('/upload', authenticate, requirePermission('uploadFiles'), enforceCo
     }
     return res.status(400).json({
       success: false,
-      error: 'Erro ao fazer upload de resultado',
+      error: 'Erro ao fazer upload de arquivo de analise',
       message: error.message
     });
   }
@@ -261,14 +272,14 @@ router.get('/:id', authenticate, async (req, res) => {
         entity: 'Result',
         result: 'error',
         severity: 'warning',
-        message: `Tentativa de buscar resultado inexistente: ${req.params.id}`,
+        message: `Tentativa de buscar arquivo de analise inexistente: ${req.params.id}`,
         req: req,
-        module: 'Resultados'
+        module: 'Arquivos de Analise'
       });
       
       return res.status(404).json({
         success: false,
-        error: 'Resultado não encontrado'
+        error: 'Arquivo de analise não encontrado'
       });
     }
 
@@ -281,9 +292,9 @@ router.get('/:id', authenticate, async (req, res) => {
       entityID: req.params.id,
       result: 'success',
       severity: 'info',
-      message: 'Resultado consultado',
+      message: 'Arquivo de analise consultado',
       req: req,
-      module: 'Resultados'
+      module: 'Arquivos de Analise'
     });
 
     return res.status(200).json({
@@ -291,10 +302,10 @@ router.get('/:id', authenticate, async (req, res) => {
       data: result
     });
   } catch (error) {
-    logger.error('Erro ao buscar resultado:', error.message);
+    logger.error('Erro ao buscar arquivo de analise:', error.message);
     return res.status(500).json({
       success: false,
-      error: 'Erro ao buscar resultado',
+      error: 'Erro ao buscar arquivo de analise',
       message: error.message
     });
   }
@@ -323,14 +334,14 @@ router.get('/:id/download', authenticate, async (req, res) => {
         entity: 'Result',
         result: 'error',
         severity: 'warning',
-        message: `Tentativa de download de resultado inexistente: ${req.params.id}`,
+        message: `Tentativa de download de arquivo de analise inexistente: ${req.params.id}`,
         req: req,
-        module: 'Resultados'
+        module: 'Arquivos de Analise'
       });
       
       return res.status(404).json({
         success: false,
-        error: 'Resultado não encontrado'
+        error: 'Arquivo de analise não encontrado'
       });
     }
 
@@ -343,9 +354,9 @@ router.get('/:id/download', authenticate, async (req, res) => {
       entityID: req.params.id,
       result: 'success',
       severity: 'info',
-      message: 'Download de resultado solicitado',
+      message: 'Download de arquivo de analise solicitado',
       req: req,
-      module: 'Resultados'
+      module: 'Arquivos de Analise'
     });
 
     // Se for URL externa, redireciona
@@ -365,7 +376,7 @@ router.get('/:id/download', authenticate, async (req, res) => {
 
     return res.status(404).json({
       success: false,
-      error: 'Arquivo de resultado não encontrado'
+      error: 'Arquivo de analise não encontrado'
     });
   } catch (error) {
     logger.error('Erro ao fazer download:', error.message);
@@ -411,23 +422,23 @@ router.post('/', authenticate, requirePermission('createPatient'), enforceCommer
         entityID: insertResult.insertedId.toString(),
         result: 'success',
         severity: 'info',
-        message: 'Resultado criado',
+        message: 'Arquivo de analise criado',
         payload: { sampleID: result.sampleID || null },
         req: req,
-        module: 'Resultados'
+        module: 'Arquivos de Analise'
       });
     }
 
     return res.status(201).json({
       success: true,
-      message: 'Resultado criado com sucesso',
+      message: 'Arquivo de analise criado com sucesso',
       data: { _id: insertResult.insertedId, ...result }
     });
   } catch (error) {
-    logger.error('Erro ao criar resultado:', error.message);
+    logger.error('Erro ao criar arquivo de analise:', error.message);
     return res.status(400).json({
       success: false,
-      error: 'Erro ao criar resultado',
+      error: 'Erro ao criar arquivo de analise',
       message: error.message
     });
   }
@@ -455,7 +466,7 @@ router.put('/:id', authenticate, requirePermission('createPatient'), async (req,
     if (result.matchedCount === 0) {
       return res.status(404).json({
         success: false,
-        error: 'Resultado não encontrado'
+        error: 'Arquivo de analise não encontrado'
       });
     }
 
@@ -469,21 +480,21 @@ router.put('/:id', authenticate, requirePermission('createPatient'), async (req,
         entityID: req.params.id,
         result: 'success',
         severity: 'info',
-        message: 'Resultado atualizado',
+        message: 'Arquivo de analise atualizado',
         req: req,
-        module: 'Resultados'
+        module: 'Arquivos de Analise'
       });
     }
 
     return res.status(200).json({
       success: true,
-      message: 'Resultado atualizado com sucesso'
+      message: 'Arquivo de analise atualizado com sucesso'
     });
   } catch (error) {
-    logger.error('Erro ao atualizar resultado:', error.message);
+    logger.error('Erro ao atualizar arquivo de analise:', error.message);
     return res.status(400).json({
       success: false,
-      error: 'Erro ao atualizar resultado',
+      error: 'Erro ao atualizar arquivo de analise',
       message: error.message
     });
   }
@@ -518,7 +529,7 @@ router.put('/:id/link-sample', authenticate, requirePermission('createPatient'),
     if (result.matchedCount === 0) {
       return res.status(404).json({
         success: false,
-        error: 'Resultado não encontrado'
+        error: 'Arquivo de analise não encontrado'
       });
     }
 
@@ -532,22 +543,22 @@ router.put('/:id/link-sample', authenticate, requirePermission('createPatient'),
         entityID: req.params.id,
         result: 'success',
         severity: 'info',
-        message: `Resultado vinculado à amostra: ${sampleID}`,
+        message: `Arquivo de analise vinculado à amostra: ${sampleID}`,
         payload: { sampleID },
         req: req,
-        module: 'Resultados'
+        module: 'Arquivos de Analise'
       });
     }
 
     return res.status(200).json({
       success: true,
-      message: 'Resultado vinculado à amostra com sucesso'
+      message: 'Arquivo de analise vinculado à amostra com sucesso'
     });
   } catch (error) {
-    logger.error('Erro ao vincular resultado:', error.message);
+    logger.error('Erro ao vincular arquivo de analise:', error.message);
     return res.status(400).json({
       success: false,
-      error: 'Erro ao vincular resultado',
+      error: 'Erro ao vincular arquivo de analise',
       message: error.message
     });
   }
@@ -570,7 +581,7 @@ router.delete('/:id', authenticate, requirePermission('createPatient'), async (r
     if (result.deletedCount === 0) {
       return res.status(404).json({
         success: false,
-        error: 'Resultado não encontrado'
+        error: 'Arquivo de analise não encontrado'
       });
     }
 
@@ -584,21 +595,21 @@ router.delete('/:id', authenticate, requirePermission('createPatient'), async (r
         entityID: req.params.id,
         result: 'success',
         severity: 'warning',
-        message: 'Resultado deletado',
+        message: 'Arquivo de analise deletado',
         req: req,
-        module: 'Resultados'
+        module: 'Arquivos de Analise'
       });
     }
 
     return res.status(200).json({
       success: true,
-      message: 'Resultado deletado com sucesso'
+      message: 'Arquivo de analise deletado com sucesso'
     });
   } catch (error) {
-    logger.error('Erro ao deletar resultado:', error.message);
+    logger.error('Erro ao deletar arquivo de analise:', error.message);
     return res.status(400).json({
       success: false,
-      error: 'Erro ao deletar resultado',
+      error: 'Erro ao deletar arquivo de analise',
       message: error.message
     });
   }

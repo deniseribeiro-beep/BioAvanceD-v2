@@ -12,7 +12,7 @@ const notificationService = require('./notification.service');
 /**
  * Service de Importação de Dados
  * RF007 - Upload e Importação de Dados
- * Suporta: Pacientes (CSV/JSON), Amostras (CSV/JSON), Resultados (ZIP/RAW/CSV), Temperatura (CSV/Streaming)
+ * Suporta: Pacientes (CSV/JSON), Amostras (CSV/JSON), Arquivos de Analise (ZIP/RAW/CSV), Temperatura (CSV/Streaming)
  */
 class ImportService {
   /**

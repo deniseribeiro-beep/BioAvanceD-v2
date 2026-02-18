@@ -1,7 +1,27 @@
 /**
- * Modelo de validação e estrutura para Result (Resultados de Análise)
+ * Modelo de validacao e estrutura para Result (Arquivos de Analise)
  */
 class ResultModel {
+  static ANALYSIS_METHODS = [
+    'PCR em Tempo Real',
+    'Sequenciamento NGS',
+    'ELISA',
+    'Espectrometria de Massa',
+    'Microscopia'
+  ];
+
+  static EQUIPMENT_STATUS = [
+    'Calibrado',
+    'Manutenção',
+    'Não Verificado'
+  ];
+
+  static REAGENT_TYPES = [
+    'Primer A',
+    'Reagente B',
+    'Kit Comercial'
+  ];
+
   static validate(data) {
     const errors = [];
 
@@ -13,8 +33,8 @@ class ResultModel {
       errors.push('fileType é obrigatório e deve ser: PDF, ZIP, CSV ou RAW (Enum conforme dicionário)');
     }
 
-    if (!data.filePath || typeof data.filePath !== 'string') {
-      errors.push('filePath é obrigatório e deve ser string');
+    if (!data.resultFilePath || typeof data.resultFilePath !== 'string') {
+      errors.push('resultFilePath é obrigatório e deve ser string');
     }
 
     return {
@@ -28,7 +48,8 @@ class ResultModel {
       resultID: data.resultID || null, // Int conforme dicionário
       sampleID: data.sampleID, // Referência à amostra
       fileType: data.fileType,
-      filePath: data.filePath,
+      resultFilePath: data.resultFilePath,
+      filePath: data.filePath || data.resultFilePath,
       description: data.description || null,
       analysisType: data.analysisType || null,
       method: data.method || null,

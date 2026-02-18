@@ -6,8 +6,8 @@ const yauzl = require('yauzl');
 const csv = require('csv-parser');
 
 /**
- * Worker de Importação de Resultados
- * Processa importação de resultados (ZIP/RAW/CSV) com suporte FHIR
+ * Worker de Importacao de Arquivos de Analise
+ * Processa importacao de arquivos de analise (ZIP/RAW/CSV) com suporte FHIR
  */
 
 class ResultWorker {
@@ -56,7 +56,7 @@ class ResultWorker {
         fhirResources,
       };
     } catch (error) {
-      logger.error('Erro no worker de resultados:', error);
+      logger.error('Erro no worker de arquivos de analise:', error);
       throw error;
     }
   }

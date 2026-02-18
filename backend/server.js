@@ -10,6 +10,7 @@ const { connectDB } = require("./src/database/mongo");
 const portManager = require("./src/utils/portManager");
 const env = require("./src/config/env");
 const { initScheduler } = require("./src/services/scheduler.service");
+const { initializeSecuritySystem } = require("./src/middleware/integrationSecurityMiddleware");
 
 const app = express();
 
@@ -129,8 +130,8 @@ app.use(
     allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
   })
 );
-app.use(express.json({ limit: "10mb" }));
-app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+app.use(express.json({ limit: "500mb" }));
+app.use(express.urlencoded({ extended: true, limit: "500mb" }));
 
 // ==== NoSQL Injection sanitization (remove keys containing $ or .) ====
 function sanitizeObject(obj) {
@@ -162,17 +163,21 @@ app.use(require("./src/middleware/audit.middleware").auditRequest);
 // RATE LIMITING
 // =======================
 const globalLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 100,
+  windowMs: 15 * 60 * 1000, // 15 minutos
+  max: 1000, // Aumentado de 100 para 1000 requisições
   standardHeaders: true,
   legacyHeaders: false,
+  skipSuccessfulRequests: true, // Não conta requisições bem-sucedidas (2xx/3xx)
+  skipFailedRequests: false,
+  message: "Muitas requisições. Tente novamente mais tarde.",
 });
 const authLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 5,
+  windowMs: 60 * 1000, // 1 minuto
+  max: 10, // Aumentado de 5 para 10
   message: "Muitas requisições para autenticação. Tente novamente mais tarde.",
   standardHeaders: true,
   legacyHeaders: false,
+  skipSuccessfulRequests: false,
 });
 app.use(globalLimiter);
 app.use("/api/auth", authLimiter);
@@ -185,9 +190,11 @@ app.use("/api/patients", require("./src/routes/patient.routes"));
 app.use("/api/samples", require("./src/routes/sample.routes"));
 app.use("/api/import", require("./src/routes/import.routes"));
 app.use("/api/results", require("./src/routes/result.routes"));
+app.use("/api/analysis-files", require("./src/routes/analysis-file.routes"));
 app.use("/api/analysis-types", require("./src/routes/analysis-type.routes"));
 app.use("/api/equipment", require("./src/routes/equipment.routes"));
 app.use("/api/locations", require("./src/routes/location.routes"));
+app.use("/api/storage", require("./src/routes/storage.routes")); // ISO 20387 - Armazenagem Física (Semana 2)
 app.use("/api/policies", require("./src/routes/policy.routes"));
 app.use("/api/sensors", require("./src/routes/sensor.routes"));
 app.use("/api/temperature", require("./src/routes/temperature.routes"));
@@ -198,6 +205,8 @@ app.use("/api/access", require("./src/routes/access.routes"));
 app.use("/api/security", require("./src/routes/security.routes"));
 // Rotas de Importação compatíveis com LGPD (templates e uploads)
 app.use("/api/import-lgpd", require("./src/routes/import-lgpd.routes"));
+// ===== SECURITY & COMPLIANCE ROUTES =====
+app.use("/api/compliance", require("./src/routes/compliance.routes"));
 
 app.get("/api/health", (req, res) => {
   res.json({ status: "OK", db: !!req.app.locals.db });
@@ -216,6 +225,11 @@ async function startServer() {
     // Conecta banco
     const db = await connectDB();
     app.locals.db = db;
+
+    // ===== Initialize Security System =====
+    logger.info("🔐 Ativando sistema de segurança e conformidade LGPD...");
+    await initializeSecuritySystem(app, db);
+    logger.info("✅ Sistema de segurança ativado com sucesso");
 
     // Seed inicial de tipos de análise
     try {

@@ -75,7 +75,7 @@ class SampleFileModel {
       equipmentSerialNumber: data.equipmentSerialNumber || null,
       softwareVersion: data.softwareVersion || null,
       
-      // Resultados e interpretação
+      // Arquivos de analise e interpretacao
       resultStatus: data.resultStatus || null, // F (Final), P (Preliminar), C (Cancelado)
       unitOfMeasure: data.unitOfMeasure || null, // Unidade de medida padronizada
       resultValue: data.resultValue !== undefined && data.resultValue !== null ? data.resultValue : null, // Valor numérico do resultado

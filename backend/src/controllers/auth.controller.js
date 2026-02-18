@@ -72,10 +72,14 @@ class AuthController {
         });
       }
 
-      // Log de login bem-sucedido
+      // Log de login bem-sucedido (assíncrono para não bloquear resposta)
       if (result.user) {
         req.user = result.user; // Define req.user para o auditLogger
-        await auditLogger.logLogin(req, true);
+        setImmediate(() => {
+          auditLogger.logLogin(req, true).catch((logError) => {
+            logger.error('Erro ao registrar auditoria de login:', logError.message);
+          });
+        });
       }
 
       return res.status(200).json({
@@ -86,8 +90,12 @@ class AuthController {
     } catch (error) {
       logger.error('Erro no login:', error.message);
       
-      // Log de tentativa de login falhada
-      await auditLogger.logLogin(req, false, error);
+      // Log de tentativa de login falhada (assíncrono para não bloquear resposta)
+      setImmediate(() => {
+        auditLogger.logLogin(req, false, error).catch((logError) => {
+          logger.error('Erro ao registrar auditoria de login:', logError.message);
+        });
+      });
 
       return res.status(401).json({
         success: false,

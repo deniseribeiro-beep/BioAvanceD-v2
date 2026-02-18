@@ -72,10 +72,29 @@ function verifyProof(hash, proof, root) {
   return computed === root;
 }
 
+function buildTree(leaves) {
+  return buildMerkleTree(leaves);
+}
+
+function getProof(leaves, index) {
+  if (!Array.isArray(leaves) || index < 0 || index >= leaves.length) {
+    return null;
+  }
+  const { layers } = buildMerkleTree(leaves);
+  return getProofForIndex(layers, index);
+}
+
+function _sha256(input) {
+  return sha256Hex(input);
+}
+
 module.exports = {
   sha256Hex,
   buildMerkleTree,
   getProofForIndex,
   getProofForHash,
-  verifyProof
+  verifyProof,
+  buildTree,
+  getProof,
+  _sha256
 };

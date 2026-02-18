@@ -5,7 +5,7 @@ import Table from '../components/UI/Table';
 import Button from '../components/UI/Button';
 import Modal from '../components/UI/Modal';
 import Input from '../components/UI/Input';
-import { Plus, Edit, Trash2, Radio, AlertCircle, CheckCircle, Box, MapPin, Thermometer, Radio as RadioIcon, Shield } from 'lucide-react';
+import { Plus, Edit, Trash2, Radio, AlertCircle, CheckCircle, Box, MapPin, Thermometer, Radio as RadioIcon, Shield, Package } from 'lucide-react';
 import { Equipment, Location, Temperature, Sensor, Policy } from '../types/models';
 import { useEquipment } from '../hooks/useEquipment';
 import { useLocations } from '../hooks/useLocations';
@@ -15,14 +15,16 @@ import { usePolicies } from '../hooks/usePolicies';
 import { useSamples } from '../hooks/useSamples';
 import { validateReading, validateTemperatureUnit, generateAlert, validateThresholds } from '../utils/validations';
 import { CryoBoxGrid } from '../components/CryoBoxGrid';
+import { StorageTree } from '../components/StorageTree';
+import { SampleLocator } from '../components/SampleLocator';
 import './FacilityManagementPage.css';
 
-type TabType = 'equipment' | 'locations' | 'temperature' | 'sensors' | 'policies';
+type TabType = 'equipment' | 'locations' | 'temperature' | 'sensors' | 'policies' | 'storage';
 
 export default function FacilityManagementPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const tabParam = searchParams.get('tab') as TabType | null;
-  const validTabs: TabType[] = ['equipment', 'locations', 'temperature', 'sensors', 'policies'];
+  const validTabs: TabType[] = ['equipment', 'locations', 'temperature', 'sensors', 'policies', 'storage'];
   const initialTab = (tabParam && validTabs.includes(tabParam)) ? tabParam : 'equipment';
   const [activeTab, setActiveTab] = useState<TabType>(initialTab);
 
@@ -38,6 +40,7 @@ export default function FacilityManagementPage() {
     { id: 'temperature' as TabType, label: 'Controle de Temperatura', icon: Thermometer },
     { id: 'sensors' as TabType, label: 'Sensores', icon: RadioIcon },
     { id: 'policies' as TabType, label: 'Políticas de Temperatura', icon: Shield },
+    { id: 'storage' as TabType, label: 'Armazenagem Física', icon: Package },
   ];
 
   return (
@@ -74,6 +77,7 @@ export default function FacilityManagementPage() {
         {activeTab === 'temperature' && <TemperatureSection />}
         {activeTab === 'sensors' && <SensorsSection />}
         {activeTab === 'policies' && <PoliciesSection />}
+        {activeTab === 'storage' && <StorageSection />}
       </div>
     </div>
   );
@@ -305,12 +309,21 @@ function getEquipmentTypeDescription(equipmentType: number | undefined): string 
 
 // Seção de Localizações
 function LocationsSection() {
-  const { equipment } = useEquipment();
+  const { equipment, loadEquipment } = useEquipment();
   const { locations, loading, error, createLocation, updateLocation, deleteLocation, loadLocations } = useLocations();
   const { samples } = useSamples();
   const [selectedBox, setSelectedBox] = useState<number | null>(null);
-  const [currentPage, setCurrentPage] = useState(0);
-  const PAGE_SIZE = 81;
+  const [currentPageSamples, setCurrentPageSamples] = useState(0);
+  const [currentPageLocations, setCurrentPageLocations] = useState(0);
+  const PAGE_SIZE_SAMPLES = 81;
+  const PAGE_SIZE_LOCATIONS = 10;
+
+  // Carregar dados quando o componente montar
+  useEffect(() => {
+    console.log('🔄 LocationsSection montado - carregando dados...');
+    loadLocations();
+    loadEquipment();
+  }, []);
 
   const getSampleBox = (sample: any): number | null => {
     const value = sample?.box ?? sample?.boxNumber ?? sample?.locationBox;
@@ -331,23 +344,55 @@ function LocationsSection() {
   // Filtra amostras da caixa selecionada
   const boxSamples = useMemo(() => {
     if (selectedBox == null) return [];
-    return samples.filter((s: any) => getSampleBox(s) === selectedBox);
+    const filtered = samples.filter((s: any) => getSampleBox(s) === selectedBox);
+    console.log(`📦 Box ${selectedBox} - ${filtered.length} amostras encontradas:`, filtered.map(s => ({
+      barcode: s.barcode,
+      box: getSampleBox(s),
+      well: getSampleWell(s),
+      status: s.currentStatus
+    })));
+    return filtered;
   }, [samples, selectedBox]);
 
   // Paginação das amostras
   const paginatedSamples = useMemo(() => {
-    const start = currentPage * PAGE_SIZE;
-    return boxSamples.slice(start, start + PAGE_SIZE);
-  }, [boxSamples, currentPage]);
+    const start = currentPageSamples * PAGE_SIZE_SAMPLES;
+    return boxSamples.slice(start, start + PAGE_SIZE_SAMPLES);
+  }, [boxSamples, currentPageSamples]);
 
   // Posições ocupadas (wellPosition ou eppendorfWell)
   const occupiedPositions = useMemo(() => {
-    return paginatedSamples.map((s: any) => getSampleWell(s)).filter(Boolean) as string[];
+    const positions = paginatedSamples.map((s: any) => getSampleWell(s)).filter(Boolean) as string[];
+    console.log(`📍 Ocupadas: ${positions.join(', ') || 'Nenhuma'}`);
+    return positions;
   }, [paginatedSamples]);
 
+  // Paginação da tabela de localizações
+  const paginatedLocations = useMemo(() => {
+    const start = currentPageLocations * PAGE_SIZE_LOCATIONS;
+    return locations.slice(start, start + PAGE_SIZE_LOCATIONS);
+  }, [locations, currentPageLocations]);
+
   useEffect(() => {
-    setCurrentPage(0);
+    setCurrentPageSamples(0);
   }, [selectedBox]);
+
+  // Debug: log quando locations são carregadas
+  useEffect(() => {
+    if (locations.length > 0) {
+      console.log(`📍 ${locations.length} localizações carregadas:`);
+      locations.forEach((loc, idx) => {
+        console.log(`   [${idx}] Box: ${loc.box}, Bloco: ${loc.block}, Rack: ${loc.rack}, Gaveta: ${loc.drawer}`);
+      });
+    }
+  }, [locations]);
+
+  // Debug: log quando selectedBox muda
+  useEffect(() => {
+    console.log(`📦 selectedBox mudou para: ${selectedBox}`);
+    console.log(`   occupiedPositions: ${occupiedPositions.join(', ') || 'nenhuma'}`);
+    console.log(`   boxSamples: ${boxSamples.length}`);
+  }, [selectedBox, boxSamples, occupiedPositions]);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingLocation, setEditingLocation] = useState<Location | null>(null);
 
@@ -445,7 +490,7 @@ function LocationsSection() {
             'Ações',
           ]}
         >
-          {locations.map((location, index) => (
+          {paginatedLocations.map((location, index) => (
             <tr key={(location as any)._id || index}>
               <td>{getEquipmentTypeDescription(location.equipmentType)}</td>
               <td>
@@ -468,16 +513,29 @@ function LocationsSection() {
               <td>{location.rack}</td>
               <td>{location.drawer}</td>
               <td>
-                <button style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#166534', textDecoration: 'underline' }}
-                  onClick={() => {
-                    const boxValue = typeof location.box === 'number' ? location.box : Number(location.box);
-                    if (!Number.isNaN(boxValue)) {
-                      setSelectedBox(boxValue);
+                <button 
+                  type="button"
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#166534', textDecoration: 'underline', fontWeight: 'bold', padding: '4px 8px' }}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    console.log('🖱️ Clique detectado! Box:', location.box);
+                    if (location.box !== null && location.box !== undefined) {
+                      const boxValue = Number(location.box);
+                      console.log(`   Convertendo ${location.box} para número: ${boxValue}`);
+                      if (!Number.isNaN(boxValue)) {
+                        console.log(`   ✅ Selecionando box ${boxValue}`);
+                        setSelectedBox(boxValue);
+                      } else {
+                        console.warn('❌ Conversão para número falhou');
+                      }
+                    } else {
+                      console.warn('❌ Box é null/undefined');
                     }
                   }}
-                  title="Visualizar caixa 9x9"
+                  title="Clique para visualizar caixa 9x9"
                 >
-                  {location.box}
+                  {location.box || 'N/A'}
                 </button>
               </td>
               <td>{location.wellPosition || location.eppendorfWell || '-'}</td>
@@ -526,19 +584,81 @@ function LocationsSection() {
         </Table>
       </Card>
 
+      {/* Paginação da tabela de localizações */}
+      {locations.length > PAGE_SIZE_LOCATIONS && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 12, marginBottom: 16 }}>
+          <button onClick={() => setCurrentPageLocations(p => Math.max(p - 1, 0))} disabled={currentPageLocations === 0}
+            style={{
+              padding: '6px 12px',
+              cursor: currentPageLocations === 0 ? 'not-allowed' : 'pointer',
+              opacity: currentPageLocations === 0 ? 0.5 : 1,
+              background: '#166534',
+              color: 'white',
+              border: 'none',
+              borderRadius: '4px',
+              fontSize: '12px'
+            }}>
+            ← Anterior
+          </button>
+          <span style={{ fontSize: '14px' }}>
+            Página {currentPageLocations + 1} de {Math.ceil(locations.length / PAGE_SIZE_LOCATIONS)} ({locations.length} localizações)
+          </span>
+          <button onClick={() => setCurrentPageLocations(p => p + 1)} disabled={currentPageLocations >= Math.ceil(locations.length / PAGE_SIZE_LOCATIONS) - 1}
+            style={{
+              padding: '6px 12px',
+              cursor: currentPageLocations >= Math.ceil(locations.length / PAGE_SIZE_LOCATIONS) - 1 ? 'not-allowed' : 'pointer',
+              opacity: currentPageLocations >= Math.ceil(locations.length / PAGE_SIZE_LOCATIONS) - 1 ? 0.5 : 1,
+              background: '#166534',
+              color: 'white',
+              border: 'none',
+              borderRadius: '4px',
+              fontSize: '12px'
+            }}>
+            Próxima →
+          </button>
+        </div>
+      )}
+
       {/* Visualizador de Caixa 9x9 com amostras e paginação */}
       <Card title="Visualizador de Caixa (9x9)">
         {selectedBox == null ? (
           <div style={{ color: '#666', padding: 16 }}>Selecione uma caixa na tabela para visualizar as amostras alocadas.</div>
         ) : (
           <>
+            <div style={{ marginBottom: 12 }}>
+              <strong>Caixa #{selectedBox}</strong> - {boxSamples.length} amostras no total
+            </div>
             <CryoBoxGrid occupiedPositions={occupiedPositions} selectedPosition={null} onSelect={() => {}} />
-            {/* Paginação */}
-            {boxSamples.length > PAGE_SIZE && (
+            {/* Paginação das amostras da caixa */}
+            {boxSamples.length > PAGE_SIZE_SAMPLES && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 12 }}>
-                <Button variant="secondary" disabled={currentPage === 0} onClick={() => setCurrentPage(p => p - 1)}>Anterior</Button>
-                <span>Página {currentPage + 1} de {Math.ceil(boxSamples.length / PAGE_SIZE)}</span>
-                <Button variant="secondary" disabled={currentPage >= Math.ceil(boxSamples.length / PAGE_SIZE) - 1} onClick={() => setCurrentPage(p => p + 1)}>Próxima</Button>
+                <button onClick={() => setCurrentPageSamples(p => Math.max(p - 1, 0))} disabled={currentPageSamples === 0}
+                  style={{
+                    padding: '6px 12px',
+                    cursor: currentPageSamples === 0 ? 'not-allowed' : 'pointer',
+                    opacity: currentPageSamples === 0 ? 0.5 : 1,
+                    background: '#166534',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '4px',
+                    fontSize: '12px'
+                  }}>
+                  ← Anterior
+                </button>
+                <span style={{ fontSize: '14px' }}>Página {currentPageSamples + 1} de {Math.ceil(boxSamples.length / PAGE_SIZE_SAMPLES)}</span>
+                <button onClick={() => setCurrentPageSamples(p => p + 1)} disabled={currentPageSamples >= Math.ceil(boxSamples.length / PAGE_SIZE_SAMPLES) - 1}
+                  style={{
+                    padding: '6px 12px',
+                    cursor: currentPageSamples >= Math.ceil(boxSamples.length / PAGE_SIZE_SAMPLES) - 1 ? 'not-allowed' : 'pointer',
+                    opacity: currentPageSamples >= Math.ceil(boxSamples.length / PAGE_SIZE_SAMPLES) - 1 ? 0.5 : 1,
+                    background: '#166534',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '4px',
+                    fontSize: '12px'
+                  }}>
+                  Próxima →
+                </button>
               </div>
             )}
             <div style={{ marginTop: 8, fontSize: 13, color: '#444' }}>
@@ -1250,12 +1370,14 @@ function PoliciesSection() {
   const [activeLimits, setActiveLimits] = useState<Record<number, number>>({});
 
   useEffect(() => {
-    policies.forEach(async (policy) => {
+    // Apenas processa políticas válidas com policyID definido
+    const validPolicies = policies.filter((p) => p && p.policyID);
+    validPolicies.forEach(async (policy) => {
       try {
         const limit = await getActiveLimit(policy.policyID, true);
         setActiveLimits((prev) => ({ ...prev, [policy.policyID]: limit.limit }));
       } catch (err) {
-        console.error(err);
+        console.error(`Erro ao obter limite para política ${policy.policyID}:`, err);
       }
     });
   }, [policies, getActiveLimit]);
@@ -1284,8 +1406,10 @@ function PoliciesSection() {
             'Ações',
           ]}
         >
-          {policies.map((policy) => (
-            <tr key={policy.policyID}>
+          {policies
+            .filter((policy) => policy && policy.policyID)
+            .map((policy) => (
+            <tr key={`policy-${policy.policyID}`}>
               <td>
                 {policy.targetTemperature} {policy.temperatureUnit}
               </td>
@@ -1530,6 +1654,44 @@ function PolicyForm({
         <Button type="submit">Salvar</Button>
       </div>
     </form>
+  );
+}
+
+function StorageSection() {
+  const [view, setView] = useState<'tree' | 'locator'>('tree');
+
+  return (
+    <div className="section-container">
+      <div className="section-header">
+        <h2>Armazenagem Física</h2>
+        <div className="section-controls">
+          <Button
+            onClick={() => setView('tree')}
+            variant={view === 'tree' ? 'primary' : 'secondary'}
+          >
+            Hierarquia de Armazenagem
+          </Button>
+          <Button
+            onClick={() => setView('locator')}
+            variant={view === 'locator' ? 'primary' : 'secondary'}
+          >
+            Localizar Amostra
+          </Button>
+        </div>
+      </div>
+      <div className="section-content">
+        {view === 'tree' && (
+          <div className="storage-tree-container">
+            <StorageTree />
+          </div>
+        )}
+        {view === 'locator' && (
+          <div className="sample-locator-container">
+            <SampleLocator />
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 

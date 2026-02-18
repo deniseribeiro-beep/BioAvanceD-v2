@@ -337,6 +337,16 @@ export const resultService = {
     }
   },
 };
+// ========== ANALYSIS FILE SERVICES ==========
+export const analysisFileService = {
+  validateSample: (sampleIdentifier: string) =>
+    api.get(`/analysis-files/validate/${sampleIdentifier}`),
+  upload: (formData: FormData, onUploadProgress?: (progressEvent: any) => void) =>
+    api.post('/analysis-files/upload', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      onUploadProgress,
+    }),
+};
 
 // ========== EQUIPMENT SERVICES ==========
 export const equipmentService = {

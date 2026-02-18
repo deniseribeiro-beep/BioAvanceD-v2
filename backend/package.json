@@ -26,7 +26,10 @@
     "clean": "node ../scripts/cleanup-complete.js",
     "test:redis": "node scripts/test-redis-connection.js",
     "test": "node test/run-tests.js",
-    "test:ci": "node test/run-tests.js && node test/cli.repair-smoke.test.js && node test/integrityCheckService.mock.test.js && node test/cli.audit-smoke.test.js && node test/integration/auditRoot.service.mock.test.js"
+    "test:security": "node test/unit/security.test.js",
+    "test:consent": "node test/unit/authConsent.test.js",
+    "test:unit": "node test/unit/run-tests.js && node test/unit/authConsent.test.js",
+    "test:ci": "node test/run-tests.js && node test/cli.repair-smoke.test.js && node test/integrityCheckService.mock.test.js && node test/cli.audit-smoke.test.js && node test/integration/auditRoot.service.mock.test.js && node test/unit/run-tests.js && node test/unit/authConsent.test.js"
   },
   "dependencies": {
     "ajv": "^8.17.1",
@@ -47,6 +50,7 @@
     "ioredis": "^5.3.2",
     "jsonwebtoken": "^9.0.2",
     "mongodb": "^6.3.0",
+    "mongoose": "^9.2.1",
     "multer": "^1.4.5-lts.1",
     "node-cron": "^3.0.3",
     "nodemailer": "^7.0.11",

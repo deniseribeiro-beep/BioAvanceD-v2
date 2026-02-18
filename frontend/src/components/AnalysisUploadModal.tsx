@@ -3,18 +3,21 @@ import Modal from './UI/Modal';
 import Input from './UI/Input';
 import Select from './UI/Select';
 import Button from './UI/Button';
+import Card from './UI/Card';
 import { useSamples } from '../hooks/useSamples';
 import { useEquipment } from '../hooks/useEquipment';
 import { useAnalysisTypes } from '../hooks/useAnalysisTypes';
 import { useAuth } from '../contexts/AuthContext';
 import { resultService } from '../services/api';
 import { Sample } from '../types/models';
+import { ANALYSIS_METHODS } from '../constants/labOptions';
 
 type AnalysisUploadModalProps = {
   isOpen: boolean;
   onClose: () => void;
   onSuccess?: () => void;
   sampleId?: string;
+  inline?: boolean;
 };
 
 export default function AnalysisUploadModal({
@@ -22,6 +25,7 @@ export default function AnalysisUploadModal({
   onClose,
   onSuccess,
   sampleId,
+  inline = false,
 }: AnalysisUploadModalProps) {
   const { samples } = useSamples();
   const { equipment } = useEquipment();
@@ -31,19 +35,21 @@ export default function AnalysisUploadModal({
   const [file, setFile] = useState<File | null>(null);
   const [analysisType, setAnalysisType] = useState('');
   const [equipmentId, setEquipmentId] = useState('');
-  const [equipmentName, setEquipmentName] = useState('');
   const [method, setMethod] = useState('');
   const [researcher, setResearcher] = useState('');
   const [description, setDescription] = useState('');
   const [sampleInput, setSampleInput] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
+  const [showValidation, setShowValidation] = useState(false);
 
   const resolvedSampleId = sampleId || sampleInput;
   const canEditResearcher = hasRole(['Administrador']) || user?.roleName === 'Administrador';
 
   const equipmentOptions = useMemo(() => {
-    if (!equipment || equipment.length === 0) return [];
+    if (!equipment || equipment.length === 0) {
+      return [{ value: '', label: 'Nenhum equipamento disponível' }];
+    }
     return [
       { value: '', label: 'Selecione o equipamento' },
       ...equipment.map((e) => ({
@@ -52,6 +58,16 @@ export default function AnalysisUploadModal({
       })),
     ];
   }, [equipment]);
+
+  const methodOptions = useMemo(() => {
+    return [
+      { value: '', label: 'Selecione o método' },
+      ...ANALYSIS_METHODS.map((analysisMethod) => ({
+        value: analysisMethod,
+        label: analysisMethod,
+      }))
+    ];
+  }, []);
 
   const analysisTypeOptions = useMemo(() => {
     if (loadingTypes) {
@@ -82,41 +98,34 @@ export default function AnalysisUploadModal({
   useEffect(() => {
     if (isOpen) {
       setError('');
+      setFile(null);
+      setAnalysisType('');
+      setEquipmentId('');
+      setMethod('');
+      setDescription('');
+      setSubmitting(false);
+      setShowValidation(false);
       setResearcher(
         user?.name || user?.username || user?.email || ''
       );
-      if (sampleId) setSampleInput(sampleId);
+      if (sampleId) {
+        setSampleInput(sampleId);
+      } else {
+        setSampleInput('');
+      }
     }
   }, [isOpen, sampleId, user]);
 
   const handleSubmit = async () => {
-    if (!file) {
-      setError('Selecione um arquivo');
-      return;
-    }
-    if (!analysisType) {
-      setError('Selecione o tipo de análise');
-      return;
-    }
-    if (!resolvedSampleId) {
-      setError('Selecione a amostra');
-      return;
-    }
-    if (!method.trim()) {
-      setError('Informe o método/protocolo');
-      return;
-    }
-    if (!researcher.trim()) {
-      setError('Informe o pesquisador responsável');
-      return;
-    }
-    if (!equipmentId && !equipmentName.trim()) {
-      setError('Informe o equipamento utilizado');
+    if (!isFormValid) {
+      setShowValidation(true);
+      setError('');
       return;
     }
 
     setSubmitting(true);
     setError('');
+    setShowValidation(false);
 
     try {
       const formData = new FormData();
@@ -126,12 +135,7 @@ export default function AnalysisUploadModal({
       formData.append('method', method.trim());
       formData.append('responsibleResearcher', researcher.trim());
       formData.append('description', description.trim());
-
-      if (equipmentId) {
-        formData.append('equipmentID', equipmentId);
-      } else if (equipmentName.trim()) {
-        formData.append('equipmentName', equipmentName.trim());
-      }
+      formData.append('equipmentID', equipmentId);
 
       await resultService.upload(formData);
       onSuccess?.();
@@ -139,7 +143,6 @@ export default function AnalysisUploadModal({
       setFile(null);
       setAnalysisType('');
       setEquipmentId('');
-      setEquipmentName('');
       setMethod('');
       setDescription('');
       if (!sampleId) setSampleInput('');
@@ -150,9 +153,26 @@ export default function AnalysisUploadModal({
     }
   };
 
-  return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Enviar Arquivo de Análise">
-      <div style={{ display: 'grid', gap: '1rem' }}>
+  const isFormValid = Boolean(
+    file &&
+    analysisType &&
+    resolvedSampleId &&
+    method &&
+    researcher.trim() &&
+    equipmentId
+  );
+
+  const fileError = showValidation && !file ? 'Selecione um arquivo' : '';
+  const analysisTypeError = showValidation && !analysisType ? 'Selecione o tipo de análise' : '';
+  const equipmentError = showValidation && !equipmentId ? 'Selecione o equipamento utilizado' : '';
+  const methodError = showValidation && !method ? 'Selecione o método/protocolo' : '';
+  const researcherError = showValidation && !researcher.trim() ? 'Informe o pesquisador responsável' : '';
+  const sampleError = showValidation && !resolvedSampleId ? 'Selecione a amostra' : '';
+
+  if (!isOpen) return null;
+
+  const formContent = (
+    <div style={{ display: 'grid', gap: '1rem' }}>
         {error && (
           <div style={{ color: 'var(--danger)', fontSize: '0.9rem' }}>
             {error}
@@ -167,6 +187,11 @@ export default function AnalysisUploadModal({
             onChange={(e) => setFile(e.target.files?.[0] || null)}
             disabled={submitting}
           />
+          {fileError && (
+            <span style={{ color: 'var(--danger)', fontSize: '0.85rem' }}>
+              {fileError}
+            </span>
+          )}
         </div>
 
         <div>
@@ -175,6 +200,7 @@ export default function AnalysisUploadModal({
             value={analysisType}
             onChange={(e) => setAnalysisType(e.target.value)}
             options={analysisTypeOptions}
+            error={analysisTypeError}
             disabled={loadingTypes}
           />
           {typesError && (
@@ -186,27 +212,22 @@ export default function AnalysisUploadModal({
 
         <div>
           <label>Equipamento Utilizado</label>
-          {equipmentOptions.length > 0 ? (
-            <Select
-              value={equipmentId}
-              onChange={(e) => setEquipmentId(e.target.value)}
-              options={equipmentOptions}
-            />
-          ) : (
-            <Input
-              value={equipmentName}
-              onChange={(e) => setEquipmentName(e.target.value)}
-              placeholder="Equipamento"
-            />
-          )}
+          <Select
+            value={equipmentId}
+            onChange={(e) => setEquipmentId(e.target.value)}
+            options={equipmentOptions}
+            error={equipmentError}
+            disabled={!equipment || equipment.length === 0}
+          />
         </div>
 
         <div>
           <label>Método / Protocolo</label>
-          <Input
+          <Select
             value={method}
             onChange={(e) => setMethod(e.target.value)}
-            placeholder="Método/Protocolo"
+            options={methodOptions}
+            error={methodError}
           />
         </div>
 
@@ -216,6 +237,7 @@ export default function AnalysisUploadModal({
             value={researcher}
             onChange={(e) => setResearcher(e.target.value)}
             placeholder="Pesquisador"
+            error={researcherError}
             disabled={!canEditResearcher}
           />
         </div>
@@ -228,6 +250,8 @@ export default function AnalysisUploadModal({
               value={sampleInput}
               onChange={(e) => setSampleInput(e.target.value)}
               placeholder="Digite ou selecione a amostra"
+              error={sampleError}
+              helperText="Selecione um ID cadastrado ou digite manualmente"
             />
             <datalist id="sample-list">
               {sampleOptions.map((s) => (
@@ -266,11 +290,30 @@ export default function AnalysisUploadModal({
           <Button variant="secondary" onClick={onClose} disabled={submitting}>
             Cancelar
           </Button>
-          <Button variant="primary" onClick={handleSubmit} disabled={submitting}>
+          <Button variant="primary" onClick={handleSubmit} disabled={submitting || !isFormValid}>
             {submitting ? 'Enviando...' : 'Enviar'}
           </Button>
         </div>
-      </div>
+    </div>
+  );
+
+  if (inline) {
+    return (
+      <Card style={{ marginBottom: '2rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
+          <h2 style={{ margin: 0 }}>Enviar Arquivo de Análise</h2>
+          <Button variant="secondary" onClick={onClose} disabled={submitting}>
+            Ocultar
+          </Button>
+        </div>
+        {formContent}
+      </Card>
+    );
+  }
+
+  return (
+    <Modal isOpen={isOpen} onClose={onClose} title="Enviar Arquivo de Análise">
+      {formContent}
     </Modal>
   );
 }

@@ -44,6 +44,8 @@ async function createDatabase() {
           { barcode: 1 },
           { currentStatus: 1 },
           { locationID: 1 },
+          { 'storageLocation.boxId': 1 },
+          { 'storageLocation.position': 1 },
           { createdAt: 1 }
         ],
         description: 'Amostras biológicas'
@@ -194,6 +196,38 @@ async function createDatabase() {
           { createdAt: 1 }
         ],
         description: 'Registros de retirada de amostras'
+      },
+      {
+        name: 'storageContainers',
+        indexes: [
+          { containerType: 1, status: 1 },
+          { parent_id: 1, containerType: 1 },
+          { name: 1 },
+          { containerID: 1 },
+          { createdAt: 1 }
+        ],
+        description: 'Containers de armazenagem (Freezer, Shelf, Rack) - ISO 20387'
+      },
+      {
+        name: 'storageBoxes',
+        indexes: [
+          { parent_id: 1, status: 1 },
+          { boxID: 1 },
+          { name: 1 },
+          { status: 1 },
+          { createdAt: 1 }
+        ],
+        description: 'Caixas de armazenagem com grid de posições'
+      },
+      {
+        name: 'storagePaths',
+        indexes: [
+          { freezerId: 1, shelfId: 1, rackId: 1 },
+          { boxId: 1 },
+          { path: 1 },
+          { createdAt: 1 }
+        ],
+        description: 'Índice de caminhos para árvore de armazenagem'
       }
     ];
 

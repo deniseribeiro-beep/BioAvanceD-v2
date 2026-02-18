@@ -43,9 +43,22 @@ router.get('/:id', authenticate, async (req, res) => {
       });
     }
 
-    const { ObjectId } = require('mongodb');
     const policiesCollection = db.collection('policies');
-    const policy = await policiesCollection.findOne({ _id: new ObjectId(req.params.id) });
+    // Tenta encontrar por policyId primeiro (busca numérica), depois por _id (MongoDB ObjectId)
+    const { ObjectId } = require('mongodb');
+    const id = req.params.id;
+    const numId = parseInt(id, 10);
+    
+    let policy;
+    if (!isNaN(numId)) {
+      // Se é um número, busca por policyId
+      policy = await policiesCollection.findOne({ policyId: numId });
+    }
+    
+    if (!policy && ObjectId.isValid(id)) {
+      // Se não encontrou e o id é um ObjectId válido, busca por _id
+      policy = await policiesCollection.findOne({ _id: new ObjectId(id) });
+    }
 
     if (!policy) {
       return res.status(404).json({
@@ -78,9 +91,22 @@ router.get('/:id/active-limit', authenticate, async (req, res) => {
       });
     }
 
-    const { ObjectId } = require('mongodb');
     const policiesCollection = db.collection('policies');
-    const policy = await policiesCollection.findOne({ _id: new ObjectId(req.params.id) });
+    // Tenta encontrar por policyId primeiro (busca numérica), depois por _id (MongoDB ObjectId)
+    const { ObjectId } = require('mongodb');
+    const id = req.params.id;
+    const numId = parseInt(id, 10);
+    
+    let policy;
+    if (!isNaN(numId)) {
+      // Se é um número, busca por policyId
+      policy = await policiesCollection.findOne({ policyId: numId });
+    }
+    
+    if (!policy && ObjectId.isValid(id)) {
+      // Se não encontrou e o id é um ObjectId válido, busca por _id
+      policy = await policiesCollection.findOne({ _id: new ObjectId(id) });
+    }
 
     if (!policy) {
       return res.status(404).json({

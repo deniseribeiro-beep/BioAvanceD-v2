@@ -205,8 +205,8 @@ class ImportController {
             results = await importService.importLocations(db, file);
             break;
           case 'results':
-            // TODO: Implementar importação de resultados
-            results = { success: 0, errors: [{ error: 'Importação de resultados ainda não implementada' }], total: 0 };
+            // TODO: Implementar importacao de arquivos de analise
+            results = { success: 0, errors: [{ error: 'Importacao de arquivos de analise ainda nao implementada' }], total: 0 };
             break;
           default:
             throw new Error('Tipo de dados não suportado');

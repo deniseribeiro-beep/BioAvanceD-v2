@@ -481,7 +481,7 @@ class SampleService {
       const results = await resultsCollection.find({ sampleID: sample.sampleID }).toArray();
       return results;
     } catch (error) {
-      logger.error('Erro ao buscar resultados da amostra:', error.message);
+      logger.error('Erro ao buscar arquivos de analise da amostra:', error.message);
       throw error;
     }
   }
