@@ -12,7 +12,7 @@ const dbName = process.env.MONGO_DB || 'bioavanced';
     console.log('Conectando ao MongoDB...');
     await client.connect();
     const db = client.db(dbName);
-    const usersCollection = db.collection('usuarios');
+    const usersCollection = db.collection('users');
     
     console.log('Criando usuário admin...');
     const salt = await bcrypt.genSalt(10);

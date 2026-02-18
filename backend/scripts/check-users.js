@@ -10,7 +10,7 @@ async function checkUsers() {
     logger.info('Verificando usuários no banco...');
 
     const db = await connectDB();
-    const usersCollection = db.collection('usuarios');
+    const usersCollection = db.collection('users');
 
     // Busca todos os usuários
     const users = await usersCollection.find({}).project({ email: 1, username: 1, roleName: 1, status: 1 }).toArray();
