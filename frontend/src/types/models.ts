@@ -225,8 +225,11 @@ export interface Equipment {
   _id?: string; // MongoDB ID
   equipmentID: number;
   equipmentDescription: string;
+  name?: string; // Nome amigável do equipamento
   model?: string;
   serialNumber?: string;
+  type?: 'Freezer' | 'Analytical' | 'Storage' | 'Processing' | 'Other'; // Tipo de equipamento
+  status?: 'Calibrado' | 'Maintenance' | 'Active' | 'Inactive' | 'Needs Calibration'; // Status do equipamento
   purchaseDate?: Date | string;
   createdAt?: Date | string;
   updatedAt?: Date | string;

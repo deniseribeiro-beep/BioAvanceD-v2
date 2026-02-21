@@ -48,6 +48,57 @@ router.get('/', authenticate, async (req, res) => {
   }
 });
 
+/**
+ * GET /api/equipment/analytical
+ * Retorna apenas equipamentos analíticos (excluindo freezers)
+ * Filtra por type='Analytical' e status != 'Maintenance'
+ */
+router.get('/analytical', authenticate, async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    if (!db) {
+      return res.status(503).json({
+        success: false,
+        error: 'Banco de dados não disponível'
+      });
+    }
+
+    const equipmentCollection = db.collection('equipment');
+    
+    // Filtra equipamentos analíticos que não estão em manutenção
+    const analyticalEquipment = await equipmentCollection.find({
+      type: 'Analytical',
+      status: { $ne: 'Maintenance' }
+    }).toArray();
+
+    // Registra log de consulta
+    const auditLogger = require('../utils/auditLogger');
+    auditLogger.init(db);
+    await auditLogger.log({
+      action: 'QUERY',
+      entity: 'Equipment',
+      result: 'success',
+      severity: 'info',
+      message: `Consulta de equipamentos analíticos - ${analyticalEquipment.length} registros`,
+      payload: { total: analyticalEquipment.length },
+      req: req,
+      module: 'Equipamentos'
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: analyticalEquipment
+    });
+  } catch (error) {
+    logger.error('Erro ao listar equipamentos analíticos:', error.message);
+    return res.status(500).json({
+      success: false,
+      error: 'Erro ao listar equipamentos analíticos',
+      message: error.message
+    });
+  }
+});
+
 router.get('/:id', authenticate, async (req, res) => {
   try {
     const db = req.app.locals.db;

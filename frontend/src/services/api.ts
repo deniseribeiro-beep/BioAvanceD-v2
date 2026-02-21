@@ -352,6 +352,7 @@ export const analysisFileService = {
 export const equipmentService = {
   getAll: () => api.get<Equipment[]>('/equipment'),
   getById: (id: number) => api.get<Equipment>(`/equipment/${id}`),
+  getAnalytical: () => api.get<Equipment[]>('/equipment/analytical'),
   create: (data: Partial<Equipment>) => api.post<Equipment>('/equipment', data),
   update: (id: number | string, data: Partial<Equipment>) => api.put<Equipment>(`/equipment/${id}`, data),
   delete: (id: number | string) => api.delete(`/equipment/${id}`),
