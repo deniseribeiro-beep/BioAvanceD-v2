@@ -16,6 +16,7 @@ export default function NewUserPage() {
   const location = useLocation();
   const { registerUser, updateUser, loadUsers } = useUsers();
   const { t } = useLanguage();
+  const roleSelectId = useId();
   
   // Verifica se há usuário para edição (vindo da navegação)
   const editingUser = (location.state as any)?.user as User | null;

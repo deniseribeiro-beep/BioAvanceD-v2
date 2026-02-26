@@ -14,7 +14,8 @@ class SampleMovementModel {
   static MOVEMENT_TYPES = {
     WITHDRAW: 'withdraw',      // Retirada
     RETURN: 'return',          // Devolução
-    ADJUST: 'adjust'           // Ajuste administrativo
+    ADJUST: 'adjust',          // Ajuste administrativo
+    MOVE: 'move'               // Movimentação física entre posições
   };
 
   static RETURN_CONDITIONS = {
@@ -32,7 +33,7 @@ class SampleMovementModel {
     }
 
     if (!data.type || !Object.values(this.MOVEMENT_TYPES).includes(data.type)) {
-      errors.push('type deve ser: withdraw, return ou adjust');
+      errors.push('type deve ser: withdraw, return, adjust ou move');
     }
 
     if (!data.quantity || typeof data.quantity !== 'number' || data.quantity <= 0) {

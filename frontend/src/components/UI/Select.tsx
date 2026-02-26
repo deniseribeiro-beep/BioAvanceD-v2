@@ -23,8 +23,8 @@ export default function Select({ label, error, className = '', id, name, options
         id={selectId}
         name={selectName}
         className={`select ${error ? 'select-error' : ''} ${className}`}
-        aria-label={label || props.placeholder || 'Campo de seleção'}
-        aria-invalid={error ? 'true' : 'false'}
+        aria-label={label || 'Campo de seleção'}
+        aria-invalid={Boolean(error)}
         aria-describedby={error ? `${selectId}-error` : undefined}
         {...props}
       >

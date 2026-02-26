@@ -15,8 +15,9 @@ export function useAccess() {
     try {
       setLoading(true);
       const response = await accessService.getAll();
+      const responseData: any = response.data;
       // Backend retorna { success: true, data: [...] }
-      const data = response.data?.data || response.data || [];
+      const data = responseData?.data || responseData || [];
       setAccesses(Array.isArray(data) ? data : []);
       setError(null);
     } catch (err: any) {

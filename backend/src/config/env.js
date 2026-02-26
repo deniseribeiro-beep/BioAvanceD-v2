@@ -9,6 +9,19 @@ module.exports = {
   MONGO_DB: process.env.MONGO_DB,
   MONGO_DB_NOVO: process.env.MONGO_DB_NOVO,
 
+  // Neo4j
+  NEO4J_URI: process.env.NEO4J_URI,
+  NEO4J_USERNAME: process.env.NEO4J_USERNAME,
+  NEO4J_PASSWORD: process.env.NEO4J_PASSWORD,
+  NEO4J_DATABASE: process.env.NEO4J_DATABASE || 'neo4j',
+  NEO4J_REQUIRED: process.env.NEO4J_REQUIRED === 'true' || process.env.NEO4J_REQUIRED === '1',
+
+  // InfluxDB
+  INFLUXDB_URL: process.env.INFLUXDB_URL,
+  INFLUXDB_TOKEN: process.env.INFLUXDB_TOKEN,
+  INFLUXDB_ORG: process.env.INFLUXDB_ORG,
+  INFLUXDB_BUCKET: process.env.INFLUXDB_BUCKET,
+
   // Auth
   JWT_SECRET: process.env.JWT_SECRET,
   JWT_REFRESH_SECRET: process.env.JWT_REFRESH_SECRET,

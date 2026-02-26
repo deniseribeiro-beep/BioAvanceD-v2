@@ -12,9 +12,10 @@ export function useAnalysisTypes() {
       try {
         setLoading(true);
         const response = await analysisTypeService.getAll();
-        const data = Array.isArray(response.data)
-          ? response.data
-          : (response.data?.data || []);
+        const responseData: any = response.data;
+        const data = Array.isArray(responseData)
+          ? responseData
+          : (responseData?.data || []);
         setTypes(data);
         setError(null);
       } catch (err: any) {

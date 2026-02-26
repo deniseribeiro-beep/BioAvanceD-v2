@@ -31,22 +31,23 @@ export function useTemperature() {
     try {
       setLoading(true);
       const response = await temperatureService.getAll();
+      const responseData: any = response.data;
       // API pode retornar diferentes formatos
       // Backend retorna: { success: true, data: { temperatures: [...], total: ..., limit: ..., skip: ... } }
       let temperaturesData: Temperature[] = [];
       
-      if (Array.isArray(response.data)) {
+      if (Array.isArray(responseData)) {
         // Se response.data é um array direto
-        temperaturesData = response.data;
-      } else if (response.data?.temperatures && Array.isArray(response.data.temperatures)) {
+        temperaturesData = responseData;
+      } else if (responseData?.temperatures && Array.isArray(responseData.temperatures)) {
         // Se response.data tem uma propriedade temperatures que é um array
-        temperaturesData = response.data.temperatures;
-      } else if (response.data?.data && Array.isArray(response.data.data)) {
+        temperaturesData = responseData.temperatures;
+      } else if (responseData?.data && Array.isArray(responseData.data)) {
         // Se response.data tem uma propriedade data que é um array
-        temperaturesData = response.data.data;
-      } else if (response.data?.data?.temperatures && Array.isArray(response.data.data.temperatures)) {
+        temperaturesData = responseData.data;
+      } else if (responseData?.data?.temperatures && Array.isArray(responseData.data.temperatures)) {
         // Se response.data.data tem uma propriedade temperatures
-        temperaturesData = response.data.data.temperatures;
+        temperaturesData = responseData.data.temperatures;
       }
       
       setTemperatures(temperaturesData);
@@ -68,8 +69,9 @@ export function useTemperature() {
 
     try {
       const response = await temperatureService.viewControl(sensorID, policyID);
+      const responseData: any = response.data;
       // A API pode retornar { data: [...] } ou diretamente um array
-      const data = response.data?.data || response.data || [];
+      const data = responseData?.data || responseData || [];
       return Array.isArray(data) ? data : [];
     } catch (err: any) {
       // Não lança erro, apenas loga para não bloquear a dashboard

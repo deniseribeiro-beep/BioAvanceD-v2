@@ -16,19 +16,20 @@ export function useUsers() {
       setLoading(true);
       setError(null);
       const response = await userService.getAll();
+      const responseData: any = response.data;
       
       // Garante que users seja sempre um array
       let usersData: User[] = [];
       
-      if (Array.isArray(response.data)) {
+      if (Array.isArray(responseData)) {
         // Se response.data é um array direto
-        usersData = response.data;
-      } else if (response.data && response.data.data && Array.isArray(response.data.data)) {
+        usersData = responseData;
+      } else if (responseData && responseData.data && Array.isArray(responseData.data)) {
         // Se response.data tem uma propriedade data que é um array
-        usersData = response.data.data;
-      } else if (response.data && typeof response.data === 'object') {
+        usersData = responseData.data;
+      } else if (responseData && typeof responseData === 'object') {
         // Se for um objeto único, converte em array
-        usersData = [response.data];
+        usersData = [responseData];
       }
       
       // Mapeia _id para id se necessário

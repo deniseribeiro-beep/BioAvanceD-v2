@@ -16,33 +16,34 @@ export function usePatients() {
       setLoading(true);
       setError(null);
       const response = await patientService.getAll();
+      const responseData: any = response.data;
       
       // API retorna { success: true, data: { patients: [...], total, ... } } ou { data: [...] }
       let patientsData: Patient[] = [];
       
       // Verifica se a resposta tem a estrutura esperada
-      if (response.data) {
+      if (responseData) {
         // Estrutura: { success: true, data: { patients: [...], total, ... } }
-        if (response.data.data && response.data.data.patients && Array.isArray(response.data.data.patients)) {
-          patientsData = response.data.data.patients;
+        if (responseData.data && responseData.data.patients && Array.isArray(responseData.data.patients)) {
+          patientsData = responseData.data.patients;
         }
         // Estrutura: { data: { patients: [...], total, ... } }
-        else if (response.data.patients && Array.isArray(response.data.patients)) {
-          patientsData = response.data.patients;
+        else if (responseData.patients && Array.isArray(responseData.patients)) {
+          patientsData = responseData.patients;
         }
         // Estrutura: { data: [...] } (array direto)
-        else if (Array.isArray(response.data)) {
-          patientsData = response.data;
+        else if (Array.isArray(responseData)) {
+          patientsData = responseData;
         }
         // Estrutura: { data: { data: [...] } }
-        else if (response.data.data && Array.isArray(response.data.data)) {
-          patientsData = response.data.data;
+        else if (responseData.data && Array.isArray(responseData.data)) {
+          patientsData = responseData.data;
         }
         // Se for um objeto único, converte em array
-        else if (typeof response.data === 'object' && !Array.isArray(response.data)) {
+        else if (typeof responseData === 'object' && !Array.isArray(responseData)) {
           // Verifica se é um paciente único
-          if (response.data.patientID || (response.data as any).id) {
-            patientsData = [response.data];
+          if (responseData.patientID || responseData.id) {
+            patientsData = [responseData];
           }
         }
       }

@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useMemo, useCallback, ReactNode } from 'react';
-import { setLanguage, getLanguage, initLanguage, Language } from '../i18n';
+import { setLanguage, initLanguage, Language } from '../i18n';
 import ptBR from '../i18n/pt-BR.json';
 import enUS from '../i18n/en-US.json';
 import esES from '../i18n/es-ES.json';

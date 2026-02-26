@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Sample, Result } from '../types/models';
-import { sampleService } from '../services/api';
+import { samplesApi } from '../services/samples/samplesApi';
 
 export function useSamples() {
   const [samples, setSamples] = useState<Sample[]>([]);
@@ -10,7 +10,7 @@ export function useSamples() {
   const loadSamples = async () => {
     try {
       setLoading(true);
-      const response = await sampleService.getAll();
+      const response = await samplesApi.getAll();
       // API retorna { success: true, data: [...], total: ... }
       const responseData = response.data as any;
       const samplesData = Array.isArray(responseData) 
@@ -33,7 +33,7 @@ export function useSamples() {
 
   const getSampleResults = async (sampleID: number): Promise<Result[]> => {
     try {
-      const response = await sampleService.getResults(sampleID);
+      const response = await samplesApi.getResults(sampleID);
       return response.data;
     } catch (err: any) {
       throw new Error(err.message || 'Erro ao buscar resultados');
@@ -42,7 +42,7 @@ export function useSamples() {
 
   const createSample = async (data: Partial<Sample>) => {
     try {
-      const response = await sampleService.create(data);
+      const response = await samplesApi.create(data);
       await loadSamples(); // Recarrega a lista completa
       // Backend retorna { success: true, message: '...', data: { sampleID, patientID } }
       const responseData = response.data as any;
@@ -54,7 +54,7 @@ export function useSamples() {
 
   const updateSample = async (id: number | string, data: Partial<Sample>) => {
     try {
-      const response = await sampleService.update(id, data);
+      const response = await samplesApi.update(id, data);
       await loadSamples(); // Recarrega a lista completa
       // Backend retorna { success: true, message: '...', data: sample }
       const responseData = response.data as any;
@@ -66,7 +66,7 @@ export function useSamples() {
 
   const deleteSample = async (id: number | string) => {
     try {
-      await sampleService.delete(id);
+      await samplesApi.remove(id);
       await loadSamples(); // Recarrega a lista completa
     } catch (err: any) {
       throw new Error(err.message || 'Erro ao deletar amostra');

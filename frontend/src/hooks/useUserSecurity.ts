@@ -263,13 +263,16 @@ export function useUserSecurity() {
       // PublicKey pode não estar disponível em todos os casos
       let publicKeyBase64 = '';
       if (response.getPublicKey) {
-        const publicKeyArray = new Uint8Array(response.getPublicKey());
-        publicKeyBase64 = btoa(String.fromCharCode(...publicKeyArray));
+        const publicKey = response.getPublicKey();
+        if (publicKey) {
+          const publicKeyArray = new Uint8Array(publicKey);
+          publicKeyBase64 = btoa(String.fromCharCode(...publicKeyArray));
+        }
       }
 
       // Obtém nome do dispositivo
-      const deviceName = navigator.userAgentData?.platform || 
-                        navigator.platform || 
+      const deviceName = (navigator as any).userAgentData?.platform ||
+                        navigator.platform ||
                         'Dispositivo Desconhecido';
 
       await userSecurityService.completePasskeyRegistration({

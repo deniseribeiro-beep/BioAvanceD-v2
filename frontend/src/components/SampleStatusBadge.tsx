@@ -1,4 +1,3 @@
-import React from 'react';
 import { Sample } from '../types/models';
 
 export type SampleLifecycleStatus = NonNullable<Sample['status']>;

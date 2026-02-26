@@ -15,10 +15,11 @@ export function usePolicies() {
     try {
       setLoading(true);
       const response = await policyService.getAll();
+      const responseData: any = response.data;
       // Garante que seja um array
-      const policiesData = Array.isArray(response.data) 
-        ? response.data 
-        : (response.data?.data || []);
+      const policiesData = Array.isArray(responseData) 
+        ? responseData 
+        : (responseData?.data || []);
       setPolicies(policiesData);
       setError(null);
     } catch (err: any) {

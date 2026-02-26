@@ -16,13 +16,12 @@ export function useLogs() {
       setLoading(true);
       setError(null);
       const response = await logService.getLogs(filters);
+      const responseData: any = response.data;
       
       // Trata diferentes formatos de resposta do backend
       let logsData: Log[] = [];
       
-      if (response && response.data) {
-        const responseData = response.data;
-        
+      if (responseData) {
         // Formato: { success: true, data: { logs: [...], total: ... } }
         if (responseData.success && responseData.data) {
           if (Array.isArray(responseData.data.logs)) {
@@ -76,13 +75,12 @@ export function useLogs() {
   const queryLogs = async (filters: any) => {
     try {
       const response = await logService.queryLogs(filters);
+      const responseData: any = response.data;
       
       // Trata diferentes formatos de resposta do backend
       let logsData: Log[] = [];
       
-      if (response && response.data) {
-        const responseData = response.data;
-        
+      if (responseData) {
         // Formato: { success: true, data: { logs: [...], total: ... } }
         if (responseData.success && responseData.data) {
           if (Array.isArray(responseData.data.logs)) {
@@ -133,8 +131,10 @@ export function useLogs() {
   const registerEvent = async (data: Partial<Log>) => {
     try {
       const response = await logService.registerEvent(data);
-      setLogs([response.data, ...logs]);
-      return response.data;
+      const responseData: any = response.data;
+      const newLog: Log = responseData?.data || responseData;
+      setLogs([newLog, ...logs]);
+      return newLog;
     } catch (err: any) {
       throw new Error(err.message || 'Erro ao registrar evento');
     }

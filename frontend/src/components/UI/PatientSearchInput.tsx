@@ -31,7 +31,6 @@ export default function PatientSearchInput({
   const [results, setResults] = useState<Patient[]>([]);
   const [showResults, setShowResults] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
   const [isValid, setIsValid] = useState<boolean | null>(null);
   const [validating, setValidating] = useState(false);
   const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -89,8 +88,9 @@ export default function PatientSearchInput({
     setLoading(true);
     try {
       const response = await patientService.search(term.trim());
+      const responseData: any = response.data;
       // A API retorna { success: true, data: { patients: [], total: number } }
-      const patients = response.data?.data?.patients || response.data?.patients || [];
+      const patients = responseData?.data?.patients || responseData?.patients || [];
       setResults(patients);
       setShowResults(patients.length > 0);
     } catch (err: any) {
@@ -105,7 +105,6 @@ export default function PatientSearchInput({
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const term = e.target.value;
     setSearchTerm(term);
-    setSelectedPatient(null);
     setIsValid(null);
     onValidationChange?.(null);
 
@@ -128,21 +127,11 @@ export default function PatientSearchInput({
   };
 
   const handleSelectPatient = (patient: Patient) => {
-    setSelectedPatient(patient);
     setSearchTerm(patient.patientID);
     onChange(patient.patientID);
     setShowResults(false);
     setIsValid(true);
     onValidationChange?.(true);
-  };
-
-  const formatPatientDisplay = (patient: Patient) => {
-    const parts = [];
-    parts.push(`ID: ${patient.patientID}`);
-    if (patient.recordNumber) {
-      parts.push(`Prontuário: ${patient.recordNumber}`);
-    }
-    return parts.join(' | ');
   };
 
   return (

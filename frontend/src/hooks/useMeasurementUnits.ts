@@ -15,11 +15,12 @@ export function useMeasurementUnits() {
     try {
       setLoading(true);
       const response = await measurementUnitService.getAll();
+      const responseData: any = response.data;
       // Backend retorna { success: true, data: [...] }
-      const unitsData = Array.isArray(response.data) 
-        ? response.data 
-        : (Array.isArray(response.data?.data) 
-          ? response.data.data 
+      const unitsData = Array.isArray(responseData) 
+        ? responseData 
+        : (Array.isArray(responseData?.data) 
+          ? responseData.data 
           : []);
       setUnits(unitsData);
       setError(null);

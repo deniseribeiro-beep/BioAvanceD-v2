@@ -16,11 +16,8 @@ export default function SampleLabelPage() {
     return samples.find((s) => {
       const keys = [
         s._id,
-        s.id,
         s.sampleID,
-        s.sampleId,
         s.barcode,
-        s.code,
       ].map((v) => String(v ?? '').trim().toLowerCase());
       return keys.includes(search);
     }) || null;
@@ -30,16 +27,18 @@ export default function SampleLabelPage() {
     if (!sample) return '';
     const base =
       sample.barcode ||
-      sample.code ||
       sample.sampleID ||
-      sample.sampleId ||
       sample._id ||
-      sample.id ||
       '';
     const value = String(base).trim();
     if (!value) return '';
     return value.startsWith('BR-') ? value : `BR-${value}`;
   }, [sample]);
+
+  const displaySampleId = useMemo(() => {
+    if (!sample) return '';
+    return sample.sampleID || sample._id || formattedBarcode || '';
+  }, [sample, formattedBarcode]);
 
   const handlePrint = () => {
     if (hasPrinted) return;
@@ -75,9 +74,9 @@ export default function SampleLabelPage() {
       <Card>
         <div style={{ display: 'flex', justifyContent: 'center', padding: '2rem' }}>
           <BarcodeLabel
-            title={sample.sampleType || 'Amostra'}
+            sampleId={String(displaySampleId)}
             barcode={formattedBarcode}
-            code={formattedBarcode}
+            acronym={sample.sampleType || 'Amostra'}
           />
         </div>
       </Card>

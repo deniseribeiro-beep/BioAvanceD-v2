@@ -15,10 +15,11 @@ export function useEquipment() {
     try {
       setLoading(true);
       const response = await equipmentService.getAll();
+      const responseData: any = response.data;
       // Garante que seja um array
-      const equipmentData = Array.isArray(response.data) 
-        ? response.data 
-        : (response.data?.data || []);
+      const equipmentData = Array.isArray(responseData) 
+        ? responseData 
+        : (responseData?.data || []);
       setEquipment(equipmentData);
       setError(null);
     } catch (err: any) {
@@ -32,8 +33,9 @@ export function useEquipment() {
   const createEquipment = async (data: Partial<Equipment>) => {
     try {
       const response = await equipmentService.create(data);
+      const responseData: any = response.data;
       // A resposta do backend está em response.data.data
-      const newEquipment = response.data?.data || response.data;
+      const newEquipment = responseData?.data || responseData;
       if (newEquipment) {
         setEquipment((prev) => [...prev, newEquipment]);
         return newEquipment;
@@ -51,8 +53,9 @@ export function useEquipment() {
     try {
       // Aceita tanto _id (string) quanto equipmentID (number)
       const response = await equipmentService.update(id, data);
+      const responseData: any = response.data;
       // Atualiza na lista usando _id ou equipmentID
-      const updatedEquipment = response.data?.data || response.data;
+      const updatedEquipment = responseData?.data || responseData;
       if (updatedEquipment) {
         setEquipment((prev) => prev.map((e) => {
           const eqId = (e as any)._id || e.equipmentID;

@@ -15,11 +15,12 @@ export function useSensors() {
     try {
       setLoading(true);
       const response = await sensorService.getAll();
+      const responseData: any = response.data;
       // Backend retorna { success: true, data: [...] }
-      const sensorsData = Array.isArray(response.data) 
-        ? response.data 
-        : (Array.isArray(response.data?.data) 
-          ? response.data.data 
+      const sensorsData = Array.isArray(responseData) 
+        ? responseData 
+        : (Array.isArray(responseData?.data) 
+          ? responseData.data 
           : []);
       setSensors(sensorsData);
       setError(null);
@@ -41,8 +42,9 @@ export function useSensors() {
 
     try {
       const response = await sensorService.collectReading(sensorID);
+      const responseData: any = response.data;
       // Backend retorna { success: true, data: reading }
-      return response.data?.data || response.data;
+      return responseData?.data || responseData;
     } catch (err: any) {
       throw new Error(err.message || 'Erro ao coletar leitura');
     }
@@ -51,7 +53,8 @@ export function useSensors() {
   const createSensor = async (data: Partial<Sensor>) => {
     try {
       const response = await sensorService.create(data);
-      const newSensor = response.data?.data || response.data;
+      const responseData: any = response.data;
+      const newSensor = responseData?.data || responseData;
       await loadSensors(); // Recarrega a lista completa
       return newSensor;
     } catch (err: any) {
@@ -62,8 +65,9 @@ export function useSensors() {
   const updateSensor = async (id: string, data: Partial<Sensor>) => {
     try {
       const response = await sensorService.update(id, data);
+      const responseData: any = response.data;
       await loadSensors(); // Recarrega a lista completa
-      return response.data?.data || response.data;
+      return responseData?.data || responseData;
     } catch (err: any) {
       throw new Error(err.message || 'Erro ao atualizar sensor');
     }

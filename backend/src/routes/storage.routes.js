@@ -1,6 +1,18 @@
 const express = require('express');
 const router = express.Router();
-const StorageController = require('../controllers/storage.controller');
+const { createAllocateSampleController } = require('../interface/http/controllers/allocate-sample.controller');
+const { createReleaseSampleController } = require('../interface/http/controllers/release-sample.controller');
+const { createMoveSampleController } = require('../interface/http/controllers/move-sample.controller');
+const {
+  createListFreezersController,
+  createSearchSamplesController,
+  createGetSampleLocationController,
+  createGetAvailablePositionsController,
+  createValidatePositionController,
+  createGetFreezerStatsController,
+  createCheckBoxIntegrityController,
+  createGetFreezerTreeController
+} = require('../interface/http/controllers/storage-query.controller');
 const { authenticate } = require('../middleware/auth');
 const logger = require('../utils/logger');
 
@@ -43,7 +55,7 @@ router.use((req, res, next) => {
  *   ]
  * }
  */
-router.get('/freezers', StorageController.listFreezers);
+router.get('/freezers', createListFreezersController());
 
 /**
  * GET /api/storage/samples/search?q=termo
@@ -74,7 +86,7 @@ router.get('/freezers', StorageController.listFreezers);
  *   ]
  * }
  */
-router.get('/samples/search', StorageController.searchSamples);
+router.get('/samples/search', createSearchSamplesController());
 
 /**
  * POST /api/storage/allocate
@@ -106,7 +118,22 @@ router.get('/samples/search', StorageController.searchSamples);
  *   "occupiedBySampleId": "507f..."
  * }
  */
-router.post('/allocate', StorageController.allocateSample);
+router.post('/allocate', createAllocateSampleController());
+
+/**
+ * POST /api/storage/move
+ * Mover amostra de uma posição para outra (transação Mongo + auditoria imutável).
+ *
+ * Body:
+ * {
+ *   "sampleId": "507f1f77bcf86cd799439011",
+ *   "targetBoxId": "507f1f77bcf86cd799439012",
+ *   "targetPosition": "A1",
+ *   "reason": "Reorganização de layout",
+ *   "notes": "Movido durante inventário"
+ * }
+ */
+router.post('/move', createMoveSampleController());
 
 /**
  * DELETE /api/storage/release/:sampleId
@@ -123,7 +150,7 @@ router.post('/allocate', StorageController.allocateSample);
  *   "message": "Amostra liberada de A1"
  * }
  */
-router.delete('/release/:sampleId', StorageController.releaseSample);
+router.delete('/release/:sampleId', createReleaseSampleController());
 
 /**
  * GET /api/storage/sample/:sampleId
@@ -149,7 +176,7 @@ router.delete('/release/:sampleId', StorageController.releaseSample);
  *   }
  * }
  */
-router.get('/sample/:sampleId', StorageController.getSampleLocation);
+router.get('/sample/:sampleId', createGetSampleLocationController());
 
 /**
  * GET /api/storage/box/:boxId/available
@@ -173,7 +200,7 @@ router.get('/sample/:sampleId', StorageController.getSampleLocation);
  *   }
  * }
  */
-router.get('/box/:boxId/available', StorageController.getAvailablePositions);
+router.get('/box/:boxId/available', createGetAvailablePositionsController());
 
 /**
  * GET /api/storage/validate/:boxId/:position
@@ -202,7 +229,7 @@ router.get('/box/:boxId/available', StorageController.getAvailablePositions);
  *   "occupiedBySampleId": "507f..."
  * }
  */
-router.get('/validate/:boxId/:position', StorageController.validatePosition);
+router.get('/validate/:boxId/:position', createValidatePositionController());
 
 /**
  * GET /api/storage/freezer/:freezerId/stats
@@ -233,7 +260,7 @@ router.get('/validate/:boxId/:position', StorageController.validatePosition);
  *   }
  * }
  */
-router.get('/freezer/:freezerId/stats', StorageController.getFreezerStats);
+router.get('/freezer/:freezerId/stats', createGetFreezerStatsController());
 
 /**
  * GET /api/storage/box/:boxId/integrity
@@ -268,7 +295,7 @@ router.get('/freezer/:freezerId/stats', StorageController.getFreezerStats);
  *   }
  * }
  */
-router.get('/box/:boxId/integrity', StorageController.checkBoxIntegrity);
+router.get('/box/:boxId/integrity', createCheckBoxIntegrityController());
 
 /**
  * GET /api/storage/freezer/:freezerId/tree
@@ -335,7 +362,7 @@ router.get('/box/:boxId/integrity', StorageController.checkBoxIntegrity);
  *   }
  * }
  */
-router.get('/freezer/:freezerId/tree', StorageController.getFreezerTree);
+router.get('/freezer/:freezerId/tree', createGetFreezerTreeController());
 
 // ==================== ERROR HANDLING ====================
 router.use((err, req, res, next) => {

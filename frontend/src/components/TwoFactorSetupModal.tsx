@@ -18,8 +18,6 @@ export default function TwoFactorSetupModal({ isOpen, onComplete, onClose }: Two
   const [qrCode, setQrCode] = useState<string | null>(null);
   const [secret, setSecret] = useState<string | null>(null);
   const [verificationCode, setVerificationCode] = useState('');
-  const [backupCodes, setBackupCodes] = useState<string[]>([]);
-  const [showBackupCodes, setShowBackupCodes] = useState(false);
   const [error, setError] = useState('');
   const [step, setStep] = useState<'qr' | 'verify' | 'complete'>('qr');
 

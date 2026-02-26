@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Result, Sample } from '../types/models';
+import { Result } from '../types/models';
 import { resultService } from '../services/api';
 
 export function useResults(importJobID?: string) {
@@ -16,10 +16,11 @@ export function useResults(importJobID?: string) {
     try {
       setLoading(true);
       const response = await resultService.getAll(importJobID);
+      const responseData: any = response.data;
       // API agora retorna { data: [...], pagination: {...} }
-      const resultsData = Array.isArray(response.data) 
-        ? response.data 
-        : (response.data?.data || []);
+      const resultsData = Array.isArray(responseData) 
+        ? responseData 
+        : (responseData?.data || []);
       setResults(resultsData);
       setError(null);
     } catch (err: any) {

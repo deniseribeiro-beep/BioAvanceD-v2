@@ -7,6 +7,7 @@ const http = require("http");
 const { Server } = require("socket.io");
 const logger = require("./src/utils/logger");
 const { connectDB } = require("./src/database/mongo");
+const { connectNeo4j } = require("./src/infrastructure/database/neo4j/connection");
 const portManager = require("./src/utils/portManager");
 const env = require("./src/config/env");
 const { initScheduler } = require("./src/services/scheduler.service");
@@ -225,6 +226,20 @@ async function startServer() {
     // Conecta banco
     const db = await connectDB();
     app.locals.db = db;
+
+    // Conecta Neo4j para validação e trilha de cadeia de custódia
+    try {
+      app.locals.neo4jDriver = await connectNeo4j();
+      logger.info("[ISO20387][NEO4J] Validação topológica ativa para operações de custódia");
+    } catch (neo4jError) {
+      const shouldFailHard = env.NODE_ENV === 'production' || env.NEO4J_REQUIRED;
+      logger.error("[ISO20387][NEO4J] Falha ao iniciar validação topológica:", neo4jError.message || neo4jError);
+      if (shouldFailHard) {
+        throw neo4jError;
+      }
+      app.locals.neo4jDriver = null;
+      logger.warn("[ISO20387][NEO4J] Modo permissivo habilitado (dev/test): operações seguirão sem bloqueio global");
+    }
 
     // ===== Initialize Security System =====
     logger.info("🔐 Ativando sistema de segurança e conformidade LGPD...");

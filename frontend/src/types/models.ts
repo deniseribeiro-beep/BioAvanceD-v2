@@ -72,6 +72,7 @@ export interface Patient {
   consentNotifiedAt?: Date | string | null;
   consentAcceptedAt?: Date | string | null;
   sampleList?: Sample[] | string[];
+  linkedProject?: string;
   createdAt?: Date | string;
   updatedAt?: Date | string;
 }
@@ -237,7 +238,7 @@ export interface Equipment {
 
 export interface Location {
   _id?: string; // MongoDB ID
-  locationID: number; // Identificador próprio conforme diagrama
+  locationID?: number; // Identificador próprio conforme diagrama
   equipmentType: number; // Mantido conforme diagrama
   equipmentID?: number; // Associação Equipment → Location
   block: number;
@@ -269,6 +270,7 @@ export interface User {
   twoFactorFailedAttempts?: number;
   twoFactorLockedUntil?: Date | string | null;
   firstLogin?: boolean; // Indica se é o primeiro login (2FA obrigatório)
+  mfaEnabled?: boolean;
   createdAt?: Date | string;
   updatedAt?: Date | string;
 }
