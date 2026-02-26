@@ -99,7 +99,7 @@ class PacienteController {
 
       // MÓDULO OPERACIONAL vs MÓDULO DE CADASTRO (LGPD)
       // Verifica se usuário tem permissão de createPatient
-      const { permissions } = require('../middleware/rbac');
+      const { permissions } = require('../infrastructure/middleware/rbac');
       const userRole = req.user?.accessType || 1;
       const hasCreatePatientPermission = permissions.createPatient?.includes(userRole) || false;
       
@@ -221,7 +221,7 @@ class PacienteController {
       }
 
       // Verifica permissões LGPD - módulo operacional vs cadastro
-      const { permissions } = require('../middleware/rbac');
+      const { permissions } = require('../infrastructure/middleware/rbac');
       const userRole = req.user?.accessType || 1;
       const hasCreatePatientPermission = permissions.createPatient?.includes(userRole) || false;
       

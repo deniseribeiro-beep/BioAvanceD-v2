@@ -6,14 +6,29 @@ const auditRootService = require('../../src/services/auditRoot.service');
 
   // Mock DB provides minimal API used by service
   const mockColl = [];
+
+  const createCursor = (docs) => {
+    let current = [...docs];
+
+    return {
+      sort: (criteria = {}) => {
+        const [[field, direction]] = Object.entries(criteria);
+        current.sort((a, b) => {
+          const left = a[field] ?? 0;
+          const right = b[field] ?? 0;
+          if (left === right) return 0;
+          return direction >= 0 ? (left > right ? 1 : -1) : (left > right ? -1 : 1);
+        });
+        return createCursor(current);
+      },
+      limit: (n) => createCursor(current.slice(0, n)),
+      toArray: async () => current
+    };
+  };
+
   const mockDb = {
     collection: () => ({
-      find: () => ({
-        sort: () => ({
-          limit: async () => mockColl.slice(-1),
-          toArray: async () => mockColl
-        })
-      }),
+      find: () => createCursor(mockColl),
       findOne: async (q) => mockColl.find(d => d.date === q.date) || null,
       updateOne: async (filter, update, opts) => {
         const existing = mockColl.find(d => d.date === filter.date);

@@ -6,7 +6,7 @@
  */
 
 const assert = require('assert');
-const { authConsent, createConsentMiddleware } = require('../../src/middleware/authConsent');
+const { authConsent, createConsentMiddleware } = require('../../src/infrastructure/middleware/authConsent');
 
 /**
  * Mock de requisição e resposta

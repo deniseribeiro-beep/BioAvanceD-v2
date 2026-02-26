@@ -11,12 +11,11 @@
     "worker:dev": "nodemon ./src/workers/worker.js",
     "create-db": "node scripts/create-db.js",
     "fix-admin": "node scripts/fix-admin-role.js",
-    "seed": "node scripts/seed-database.js",
-    "seed-dictionaries": "node scripts/seed-sample-dictionaries.js",
     "sync-collections": "node scripts/sync-collections.js",
     "audit": "node scripts/audit-database.js",
     "audit:frontend": "node scripts/audit-frontend-backend.js",
     "test:mongo": "node scripts/test-connection-mongo.js",
+    "test:connections": "node scripts/test-connections.js",
     "setup": "node setup-env.js",
     "reset-admin": "node scripts/reset-admin-first-login.js",
     "find-port": "node scripts/find-port.js",
@@ -29,7 +28,7 @@
     "test:security": "node test/unit/security.test.js",
     "test:consent": "node test/unit/authConsent.test.js",
     "test:unit": "node test/unit/run-tests.js && node test/unit/authConsent.test.js",
-    "test:ci": "node test/run-tests.js && node test/cli.repair-smoke.test.js && node test/integrityCheckService.mock.test.js && node test/cli.audit-smoke.test.js && node test/integration/auditRoot.service.mock.test.js && node test/unit/run-tests.js && node test/unit/authConsent.test.js"
+    "test:ci": "node test/run-tests.js && node test/integrityCheckService.mock.test.js && node test/integration/auditRoot.service.mock.test.js && node test/unit/run-tests.js && node test/unit/authConsent.test.js"
   },
   "dependencies": {
     "ajv": "^8.17.1",

@@ -11,7 +11,7 @@ const { connectNeo4j } = require("./src/infrastructure/database/neo4j/connection
 const portManager = require("./src/utils/portManager");
 const env = require("./src/config/env");
 const { initScheduler } = require("./src/services/scheduler.service");
-const { initializeSecuritySystem } = require("./src/middleware/integrationSecurityMiddleware");
+const { initializeSecuritySystem } = require("./src/infrastructure/middleware/integrationSecurityMiddleware");
 
 const app = express();
 
@@ -158,7 +158,7 @@ app.use((req, _res, next) => {
 
 // Idioma e auditoria
 app.use(require("./src/i18n").languageMiddleware);
-app.use(require("./src/middleware/audit.middleware").auditRequest);
+app.use(require("./src/infrastructure/middleware/audit.middleware").auditRequest);
 
 // =======================
 // RATE LIMITING
@@ -186,28 +186,28 @@ app.use("/api/auth", authLimiter);
 // =======================
 // ROTAS
 // =======================
-app.use("/api/auth", require("./src/routes/auth.routes"));
-app.use("/api/patients", require("./src/routes/patient.routes"));
-app.use("/api/samples", require("./src/routes/sample.routes"));
-app.use("/api/import", require("./src/routes/import.routes"));
-app.use("/api/results", require("./src/routes/result.routes"));
-app.use("/api/analysis-files", require("./src/routes/analysis-file.routes"));
-app.use("/api/analysis-types", require("./src/routes/analysis-type.routes"));
-app.use("/api/equipment", require("./src/routes/equipment.routes"));
-app.use("/api/locations", require("./src/routes/location.routes"));
-app.use("/api/storage", require("./src/routes/storage.routes")); // ISO 20387 - Armazenagem Física (Semana 2)
-app.use("/api/policies", require("./src/routes/policy.routes"));
-app.use("/api/sensors", require("./src/routes/sensor.routes"));
-app.use("/api/temperature", require("./src/routes/temperature.routes"));
-app.use("/api", require("./src/routes/consent.routes"));
+app.use("/api/auth", require("./src/interface/routes/auth.routes"));
+app.use("/api/patients", require("./src/interface/routes/patient.routes"));
+app.use("/api/samples", require("./src/interface/routes/sample.routes"));
+app.use("/api/import", require("./src/interface/routes/import.routes"));
+app.use("/api/results", require("./src/interface/routes/result.routes"));
+app.use("/api/analysis-files", require("./src/interface/routes/analysis-file.routes"));
+app.use("/api/analysis-types", require("./src/interface/routes/analysis-type.routes"));
+app.use("/api/equipment", require("./src/interface/routes/equipment.routes"));
+app.use("/api/locations", require("./src/interface/routes/location.routes"));
+app.use("/api/storage", require("./src/interface/routes/storage.routes")); // ISO 20387 - Armazenagem Física (Semana 2)
+app.use("/api/policies", require("./src/interface/routes/policy.routes"));
+app.use("/api/sensors", require("./src/interface/routes/sensor.routes"));
+app.use("/api/temperature", require("./src/interface/routes/temperature.routes"));
+app.use("/api", require("./src/interface/routes/consent.routes"));
 // Rotas de Gerenciamento do Sistema (Admin)
-app.use("/api/users", require("./src/routes/user.routes"));
-app.use("/api/access", require("./src/routes/access.routes"));
-app.use("/api/security", require("./src/routes/security.routes"));
+app.use("/api/users", require("./src/interface/routes/user.routes"));
+app.use("/api/access", require("./src/interface/routes/access.routes"));
+app.use("/api/security", require("./src/interface/routes/security.routes"));
 // Rotas de Importação compatíveis com LGPD (templates e uploads)
-app.use("/api/import-lgpd", require("./src/routes/import-lgpd.routes"));
+app.use("/api/import-lgpd", require("./src/interface/routes/import-lgpd.routes"));
 // ===== SECURITY & COMPLIANCE ROUTES =====
-app.use("/api/compliance", require("./src/routes/compliance.routes"));
+app.use("/api/compliance", require("./src/interface/routes/compliance.routes"));
 
 app.get("/api/health", (req, res) => {
   res.json({ status: "OK", db: !!req.app.locals.db });

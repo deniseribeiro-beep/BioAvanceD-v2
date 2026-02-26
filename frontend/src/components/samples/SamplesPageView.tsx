@@ -10,7 +10,7 @@ import SampleStatusBadge from '../SampleStatusBadge';
 import { Sample } from '../../types/models';
 import { SampleWithId } from '../../hooks/samples/useSamplesPage';
 import { TemplateFormat } from '../../services/samples/samplesApi';
-import '../../pages/SamplesPage.css';
+import '../../views/SamplesPage.css';
 
 type TranslatorFn = (key: string) => string;
 
