@@ -143,52 +143,56 @@ Para integrar com um backend:
 4. Adicione autenticação e autorização
 5. Implemente validações de formulário mais robustas
 
-## 🐳 Deploy Local em Produção (Docker Compose)
+## 🐳 Subir serviços localmente para testes (Docker)
 
-1. Copie as variáveis de exemplo para a raiz do projeto:
-```bash
-Copy-Item .env.prod.example .env
+Este repositório usa `docker-compose.yml` + `.env.docker` para ambiente local.
+
+1. Crie o arquivo de ambiente local a partir do exemplo:
+```powershell
+Copy-Item .env.docker.example .env.docker
 ```
 
-2. Ajuste senhas e URLs no arquivo `.env` recém-criado.
+2. Ajuste ao menos os segredos no `.env.docker`:
+- `MONGO_ROOT_PASSWORD`
+- `REDIS_PASSWORD`
+- `NEO4J_PASSWORD`
+- `JWT_SECRET`
+- `JWT_REFRESH_SECRET`
 
-3. Suba o stack completo (frontend + backend + worker + bancos):
-```bash
-docker compose -f docker-compose.prod.yml up -d --build
+3. Suba a stack local completa (frontend + backend + worker + bancos) **sem migração online**:
+```powershell
+npm run docker:local:up
 ```
 
-4. Acompanhe os logs:
-```bash
-docker compose -f docker-compose.prod.yml logs -f
+4. Verifique os serviços:
+```powershell
+npm run docker:local:ps
 ```
 
-5. Derrube o ambiente:
-```bash
-docker compose -f docker-compose.prod.yml down
+5. Acompanhe logs:
+```powershell
+npm run docker:local:logs
 ```
 
-## 🔐 Deploy Produção com TLS (HTTPS)
-
-1. Copie as variáveis TLS para a raiz do projeto:
-```bash
-Copy-Item .env.prod.tls.example .env
+6. Derrube o ambiente local:
+```powershell
+npm run docker:local:down
 ```
 
-2. Ajuste domínio e segredos no arquivo `.env`.
+### Migração opcional (online -> local)
 
-3. Coloque os certificados em `infra/nginx/certs` com os nomes:
-   - `fullchain.pem`
-   - `privkey.pem`
+Se quiser copiar dados do Mongo online para o local, preencha `MONGO_SOURCE_URI` e `MONGO_SOURCE_DB` no `.env.docker` e rode:
 
-4. Suba o stack TLS:
-```bash
-docker compose -f docker-compose.prod.tls.yml up -d --build
+```powershell
+npm run docker:local:up:migrate
 ```
 
-5. Para derrubar:
-```bash
-docker compose -f docker-compose.prod.tls.yml down
-```
+### URLs locais após subir
+
+- Frontend: `http://localhost:8080`
+- Backend API: `http://localhost:3000`
+- Neo4j Browser: `http://localhost:7474`
+- InfluxDB UI: `http://localhost:8086`
 
 ## 📝 Licença
 

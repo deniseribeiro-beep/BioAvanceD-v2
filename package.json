@@ -1,6 +1,11 @@
 {
   "scripts": {
-    "audit:full": "node scripts/audit-complete-system.js"
+    "audit:full": "node scripts/audit-complete-system.js",
+    "docker:local:up": "powershell -ExecutionPolicy Bypass -File ./scripts/start-local-stack.ps1 -EnvFile .env.docker -ComposeFile docker-compose.yml -SkipMigration",
+    "docker:local:up:migrate": "powershell -ExecutionPolicy Bypass -File ./scripts/start-local-stack.ps1 -EnvFile .env.docker -ComposeFile docker-compose.yml",
+    "docker:local:down": "powershell -ExecutionPolicy Bypass -File ./scripts/stop-local-stack.ps1 -EnvFile .env.docker -ComposeFile docker-compose.yml",
+    "docker:local:logs": "docker compose --env-file .env.docker -f docker-compose.yml logs -f",
+    "docker:local:ps": "docker compose --env-file .env.docker -f docker-compose.yml ps"
   },
   "devDependencies": {
     "baseline-browser-mapping": "^2.9.16"
