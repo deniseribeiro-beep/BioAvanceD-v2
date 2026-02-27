@@ -162,14 +162,10 @@ async function testConnection() {
     // Aguarda um pouco para a fila estar pronta
     await new Promise(resolve => setTimeout(resolve, 500));
 
-    // Testa envio de job fictício apenas se a fila estiver disponível
+    // Testa disponibilidade da fila sem enfileirar job de teste
+    // (evita falhas no worker por payload incompleto)
     if (importQueue) {
-      const testJob = await importQueue.add('test', { test: true }, { removeOnComplete: true });
-      logger.info(`[INFO] Job de teste criado: ${testJob.id}`);
-
-      // Remove job de teste imediatamente
-      await testJob.remove();
-
+      await importQueue.getJobCounts('waiting', 'active', 'completed', 'failed');
       logger.info('[INFO] Teste de conexão Redis e fila: SUCESSO');
     } else {
       logger.warn('[WARN] Fila não disponível, mas Redis está funcionando');

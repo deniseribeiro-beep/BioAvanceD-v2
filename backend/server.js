@@ -15,9 +15,23 @@ const portManager = require("./src/utils/portManager");
 const env = require("./src/config/env");
 const { initScheduler } = require("./src/services/scheduler.service");
 const { initializeSecuritySystem } = require("./src/infrastructure/middleware/integrationSecurityMiddleware");
+const { ensureInitialAdmin } = require("./src/services/bootstrap.service");
 
 const app = express();
 let httpServerInstance = null;
+
+// Confia no proxy reverso (nginx/docker) para headers X-Forwarded-*
+const trustProxyRaw = String(env.TRUST_PROXY ?? '0').trim().toLowerCase();
+let trustProxyValue = 0;
+if (trustProxyRaw === 'true') {
+  trustProxyValue = 1;
+} else if (trustProxyRaw === 'false') {
+  trustProxyValue = 0;
+} else {
+  const parsedTrustProxy = Number.parseInt(trustProxyRaw, 10);
+  trustProxyValue = Number.isNaN(parsedTrustProxy) ? 0 : parsedTrustProxy;
+}
+app.set('trust proxy', trustProxyValue);
 
 // ==== Critical env check (halt if missing) ====
 if (!env.MONGO_URI || !env.JWT_SECRET) {
@@ -195,6 +209,9 @@ app.use("/api/patients", require("./src/interface/routes/patient.routes"));
 app.use("/api/samples", require("./src/interface/routes/sample.routes"));
 app.use("/api/import", require("./src/interface/routes/import.routes"));
 app.use("/api/results", require("./src/interface/routes/result.routes"));
+app.use("/api/reports", require("./src/interface/routes/reports.routes"));
+app.use("/api/logs", require("./src/interface/routes/logs.routes"));
+app.use("/api/audit", require("./src/interface/routes/audit.routes"));
 app.use("/api/analysis-files", require("./src/interface/routes/analysis-file.routes"));
 app.use("/api/analysis-types", require("./src/interface/routes/analysis-type.routes"));
 app.use("/api/equipment", require("./src/interface/routes/equipment.routes"));
@@ -232,6 +249,13 @@ async function startServer() {
     // Conecta banco
     const db = await connectDB();
     app.locals.db = db;
+
+    // Bootstrap inicial (executa apenas no primeiro boot da base)
+    try {
+      await ensureInitialAdmin(db);
+    } catch (bootstrapError) {
+      logger.error('[BOOTSTRAP] Erro ao garantir admin inicial:', bootstrapError.message || bootstrapError);
+    }
 
     // Conecta Neo4j para validação e trilha de cadeia de custódia
     try {

@@ -1,6 +1,19 @@
-require('dotenv').config();
-const { connectDB, closeConnection } = require('./src/database/mongo');
-const logger = require('./src/utils/logger');
+const path = require('path');
+const dotenv = require('dotenv');
+const { connectDB, closeConnection } = require('../src/database/mongo');
+const logger = require('../src/utils/logger');
+
+dotenv.config({ path: path.resolve(__dirname, '../../.env.docker') });
+dotenv.config();
+
+if (!process.env.MONGO_URI && process.env.MONGO_ROOT_USERNAME && process.env.MONGO_ROOT_PASSWORD) {
+  const dbName = process.env.MONGO_DB || 'bioavanced';
+  const mongoHost = process.env.MONGO_HOST || 'localhost';
+  const mongoPort = process.env.MONGO_PORT || '27017';
+  const mongoUser = encodeURIComponent(process.env.MONGO_ROOT_USERNAME);
+  const mongoPassword = encodeURIComponent(process.env.MONGO_ROOT_PASSWORD);
+  process.env.MONGO_URI = `mongodb://${mongoUser}:${mongoPassword}@${mongoHost}:${mongoPort}/${dbName}?authSource=admin`;
+}
 
 /**
  * Script para verificar usuários no banco

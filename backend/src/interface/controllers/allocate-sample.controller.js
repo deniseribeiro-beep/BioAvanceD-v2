@@ -1,8 +1,8 @@
-const AllocateSampleUseCase = require('../../../core/use-cases/AllocateSampleUseCase');
-const MongoStorageRepository = require('../../../infrastructure/persistence/mongo/MongoStorageRepository');
-const MongoAuditRepository = require('../../../infrastructure/persistence/mongo/MongoAuditRepository');
-const LineageRepository = require('../../../infrastructure/database/neo4j/LineageRepository');
-const logger = require('../../../utils/logger');
+const AllocateSampleUseCase = require('../../core/use-cases/AllocateSampleUseCase');
+const MongoStorageRepository = require('../../infrastructure/persistence/mongo/MongoStorageRepository');
+const MongoAuditRepository = require('../../infrastructure/persistence/mongo/MongoAuditRepository');
+const LineageRepository = require('../../infrastructure/database/neo4j/LineageRepository');
+const logger = require('../../utils/logger');
 
 function createAllocateSampleController() {
   return async function allocateSampleController(req, res) {

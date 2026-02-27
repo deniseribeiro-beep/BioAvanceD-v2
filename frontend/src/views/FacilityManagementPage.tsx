@@ -44,7 +44,7 @@ export default function FacilityManagementPage() {
   ];
 
   return (
-    <div className="page">
+    <div className="page facility-management-page">
       <div className="page-header">
         <div>
           <h1 className="page-title">Gerenciamento de Instalações</h1>

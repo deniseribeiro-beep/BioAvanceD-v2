@@ -26,6 +26,8 @@
     "find-port": "node scripts/find-port.js",
     "kill-port": "node scripts/kill-port.js",
     "check-ports": "node scripts/check-ports.js",
+    "user:check": "node scripts/check-users.js",
+    "user:create-admin": "node scripts/create-admin-simple.js",
     "cleanup": "node ../scripts/cleanup-complete.js",
     "clean": "node ../scripts/cleanup-complete.js",
     "test:redis": "node scripts/test-redis-connection.js",

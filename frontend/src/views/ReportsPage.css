@@ -1,1 +1,144 @@
-.reports-page { padding: 1rem; }
+.reports-page {
+	display: grid;
+	gap: 1rem;
+}
+
+.report-state-card {
+	border: 1px solid var(--border);
+}
+
+.report-state-card--error {
+	border-color: #f6c7bd;
+	background: #fff4f1;
+}
+
+.report-state-message {
+	margin: 0;
+	padding: 0.25rem 0;
+	color: var(--text);
+}
+
+.reports-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+	gap: 0.875rem;
+}
+
+.report-card,
+.report-item,
+.no-reports-card {
+	border: 1px solid var(--border);
+}
+
+.report-card-content {
+	display: grid;
+	gap: 0.625rem;
+}
+
+.report-card {
+	height: 100%;
+}
+
+.report-icon-large {
+	font-size: 1.75rem;
+}
+
+.report-title {
+	margin: 0;
+	font-size: 1.2rem;
+}
+
+.report-description {
+	margin: 0;
+	color: var(--text-secondary);
+}
+
+.report-button {
+	justify-self: start;
+}
+
+.empty-state {
+	text-align: center;
+	padding: 2rem;
+	display: grid;
+	justify-items: center;
+	gap: 0.5rem;
+}
+
+.empty-state-icon {
+	color: var(--text-secondary);
+	margin-bottom: 0.25rem;
+}
+
+.empty-state-title {
+	margin: 0;
+	color: var(--text);
+}
+
+.empty-state-text {
+	margin: 0;
+	color: var(--text-secondary);
+}
+
+.reports-history {
+	margin-top: 1rem;
+}
+
+.reports-history h2 {
+	margin-bottom: 0.75rem;
+}
+
+.reports-list {
+	display: grid;
+	gap: 0.75rem;
+}
+
+.report-item-content {
+	display: grid;
+	grid-template-columns: auto 1fr auto;
+	align-items: center;
+	gap: 0.875rem;
+}
+
+.report-item-info h4 {
+	margin: 0 0 0.25rem;
+}
+
+.report-item-info p {
+	margin: 0;
+	color: var(--text-secondary);
+}
+
+.report-item-actions {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: flex-end;
+	gap: 0.5rem;
+}
+
+.report-viewer {
+	display: grid;
+	gap: 1rem;
+}
+
+.report-actions {
+	display: flex;
+	justify-content: flex-end;
+	flex-wrap: wrap;
+	gap: 0.5rem;
+}
+
+@media (max-width: 768px) {
+	.report-item-content {
+		grid-template-columns: 1fr;
+	}
+
+	.report-item-actions {
+		justify-content: stretch;
+	}
+
+	.report-item-actions button,
+	.report-actions button {
+		flex: 1 1 auto;
+	}
+}

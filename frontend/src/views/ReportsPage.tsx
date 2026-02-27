@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Card from '../components/UI/Card';
 import Button from '../components/UI/Button';
@@ -15,44 +15,41 @@ import './ReportsPage.css';
 export default function ReportsPage() {
   const navigate = useNavigate();
   const { t } = useLanguage();
-  const { reports, loading, error, generateReport, deleteReport } = useReports();
-  const { hasReportAccess, getAllowedReports } = useAuth();
+  const { reports, loading, error, deleteReport } = useReports();
+  const { hasReportAccess } = useAuth();
   
   const REPORT_TYPES = [
-    { type: t('reports.types.patients'), icon: '👥', description: t('reports.types.patientsDescription') },
-    { type: t('reports.types.samplesByPatient'), icon: '🔗', description: t('reports.types.samplesByPatientDescription') },
-    { type: t('reports.types.samples'), icon: '🧪', description: t('reports.types.samplesDescription') },
-    { type: t('reports.types.temperature'), icon: '🌡️', description: t('reports.types.temperatureDescription') },
-    { type: t('reports.types.temperatureControl'), icon: '🌡️', description: t('reports.types.temperatureControlDescription') },
-    { type: t('reports.types.sensors'), icon: '📡', description: t('reports.types.sensorsDescription') },
-    { type: t('reports.types.equipment'), icon: '🔧', description: t('reports.types.equipmentDescription') },
-    { type: t('reports.types.results'), icon: '📊', description: t('reports.types.resultsDescription') },
-    { type: t('reports.types.audit'), icon: '📝', description: t('reports.types.auditDescription') },
-    { type: t('reports.types.tissueOriginHistory'), icon: '🧬', description: t('reports.types.tissueOriginHistoryDescription') },
-    { type: t('reports.types.extracellularNetwork'), icon: '🔬', description: t('reports.types.extracellularNetworkDescription') },
-    { type: t('reports.types.withdrawalHistory'), icon: '📤', description: t('reports.types.withdrawalHistoryDescription') },
-    { type: t('reports.types.accessLogs'), icon: '🔐', description: t('reports.types.accessLogsDescription') },
-    { type: t('reports.types.sampleAnalysis'), icon: '🔍', description: t('reports.types.sampleAnalysisDescription') }
+    { key: 'patients', type: t('reports.types.patients'), icon: '👥', description: t('reports.types.patientsDescription') },
+    { key: 'samplesByPatient', type: t('reports.types.samplesByPatient'), icon: '🔗', description: t('reports.types.samplesByPatientDescription') },
+    { key: 'samples', type: t('reports.types.samples'), icon: '🧪', description: t('reports.types.samplesDescription') },
+    { key: 'temperature', type: t('reports.types.temperature'), icon: '🌡️', description: t('reports.types.temperatureDescription') },
+    { key: 'temperatureControl', type: t('reports.types.temperatureControl'), icon: '🌡️', description: t('reports.types.temperatureControlDescription') },
+    { key: 'sensors', type: t('reports.types.sensors'), icon: '📡', description: t('reports.types.sensorsDescription') },
+    { key: 'equipment', type: t('reports.types.equipment'), icon: '🔧', description: t('reports.types.equipmentDescription') },
+    { key: 'results', type: t('reports.types.results'), icon: '📊', description: t('reports.types.resultsDescription') },
+    { key: 'audit', type: t('reports.types.audit'), icon: '📝', description: t('reports.types.auditDescription') },
+    { key: 'tissueOriginHistory', type: t('reports.types.tissueOriginHistory'), icon: '🧬', description: t('reports.types.tissueOriginHistoryDescription') },
+    { key: 'extracellularNetwork', type: t('reports.types.extracellularNetwork'), icon: '🔬', description: t('reports.types.extracellularNetworkDescription') },
+    { key: 'withdrawalHistory', type: t('reports.types.withdrawalHistory'), icon: '📤', description: t('reports.types.withdrawalHistoryDescription') },
+    { key: 'accessLogs', type: t('reports.types.accessLogs'), icon: '🔐', description: t('reports.types.accessLogsDescription') },
+    { key: 'sampleAnalysis', type: t('reports.types.sampleAnalysis'), icon: '🔍', description: t('reports.types.sampleAnalysisDescription') }
   ];
-  const [isGenerating, setIsGenerating] = useState(false);
   const [deletingReportId, setDeletingReportId] = useState<number | null>(null);
   const [viewingReport, setViewingReport] = useState<Reports | null>(null);
   const [reportData, setReportData] = useState<any>(null);
   
   // Filtra tipos de relatórios baseado nas permissões do usuário
-  const allowedReportTypes = useMemo(() => {
-    return REPORT_TYPES.filter(report => hasReportAccess(report.type));
-  }, [hasReportAccess, getAllowedReports]);
+  const allowedReportTypes = REPORT_TYPES.filter(report => hasReportAccess(report.type) || hasReportAccess(report.key));
 
-  const handleGenerateReport = async (reportType: string) => {
+  const handleGenerateReport = async (reportType: { key: string; type: string }) => {
     // Verifica permissão antes de gerar
-    if (!hasReportAccess(reportType)) {
+    if (!hasReportAccess(reportType.type) && !hasReportAccess(reportType.key)) {
       alert(t('reports.noPermission'));
       return;
     }
     
     // Navega para página de consulta com filtros
-    navigate(`/reports/query/${encodeURIComponent(reportType)}`);
+    navigate(`/reports/query/${encodeURIComponent(reportType.key)}`);
   };
 
   const handleViewReport = (report: Reports, inPage: boolean = false) => {
@@ -176,7 +173,7 @@ export default function ReportsPage() {
   };
 
   return (
-    <div className="page">
+    <div className="page reports-page">
       <div className="page-header">
         <div>
           <h1 className="page-title">{t('reports.title')}</h1>
@@ -184,8 +181,17 @@ export default function ReportsPage() {
         </div>
       </div>
 
-      {loading && <p>{t('common.loading')}</p>}
-      {error && <p style={{ color: 'var(--danger)' }}>{t('common.error')}: {error}</p>}
+      {loading && (
+        <Card className="report-state-card">
+          <p className="report-state-message">{t('common.loading')}</p>
+        </Card>
+      )}
+
+      {error && (
+        <Card className="report-state-card report-state-card--error">
+          <p className="report-state-message">{t('common.error')}: {error}</p>
+        </Card>
+      )}
 
       {allowedReportTypes.length > 0 ? (
         <div className="reports-grid">
@@ -196,12 +202,11 @@ export default function ReportsPage() {
                 <h3 className="report-title">{reportType.type}</h3>
                 <p className="report-description">{reportType.description}</p>
                 <Button
-                  onClick={() => handleGenerateReport(reportType.type)}
+                  onClick={() => handleGenerateReport(reportType)}
                   className="report-button"
-                  disabled={isGenerating}
                 >
                   <Download size={18} />
-                  {isGenerating ? t('reports.generating') : t('reports.generate')}
+                  {t('reports.generate')}
                 </Button>
               </div>
             </Card>
@@ -209,10 +214,10 @@ export default function ReportsPage() {
         </div>
       ) : (
         <Card className="no-reports-card">
-          <div style={{ textAlign: 'center', padding: '2rem' }}>
-            <FileText size={48} style={{ color: 'var(--text-secondary)', marginBottom: '1rem' }} />
-            <h3 style={{ margin: '0 0 0.5rem 0', color: 'var(--text-primary)' }}>{t('reports.noTypesAvailable')}</h3>
-            <p style={{ margin: 0, color: 'var(--text-secondary)' }}>
+          <div className="empty-state">
+            <FileText size={48} className="empty-state-icon" />
+            <h3 className="empty-state-title">{t('reports.noTypesAvailable')}</h3>
+            <p className="empty-state-text">
               {t('reports.noPermissionContact')}
             </p>
           </div>
@@ -268,10 +273,10 @@ export default function ReportsPage() {
         </div>
       ) : (
         <Card className="no-reports-card">
-          <div style={{ textAlign: 'center', padding: '2rem' }}>
-            <FileText size={48} style={{ color: 'var(--text-secondary)', marginBottom: '1rem' }} />
-            <h3 style={{ margin: '0 0 0.5rem 0', color: 'var(--text-primary)' }}>{t('reports.noReportsGenerated')}</h3>
-            <p style={{ margin: 0, color: 'var(--text-secondary)' }}>
+          <div className="empty-state">
+            <FileText size={48} className="empty-state-icon" />
+            <h3 className="empty-state-title">{t('reports.noReportsGenerated')}</h3>
+            <p className="empty-state-text">
               {t('reports.generateHint')}
             </p>
           </div>

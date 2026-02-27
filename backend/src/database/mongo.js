@@ -31,7 +31,10 @@ function ensureMongoUri(uri, dbName) {
   const params = new URLSearchParams(query);
   if (!params.has('retryWrites')) params.set('retryWrites', 'true');
   if (!params.has('w')) params.set('w', 'majority');
-  if (!params.has('tls') && !params.has('ssl')) params.set('tls', 'true');
+  if (!params.has('tls') && !params.has('ssl')) {
+    const isSrvProtocol = base.startsWith('mongodb+srv://');
+    params.set('tls', isSrvProtocol ? 'true' : 'false');
+  }
 
   const paramString = params.toString();
   return paramString ? `${base}?${paramString}` : base;

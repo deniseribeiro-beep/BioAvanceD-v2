@@ -1,8 +1,8 @@
-const ReleaseSampleUseCase = require('../../../core/use-cases/ReleaseSampleUseCase');
-const MongoStorageRepository = require('../../../infrastructure/persistence/mongo/MongoStorageRepository');
-const MongoAuditRepository = require('../../../infrastructure/persistence/mongo/MongoAuditRepository');
-const LineageRepository = require('../../../infrastructure/database/neo4j/LineageRepository');
-const logger = require('../../../utils/logger');
+const ReleaseSampleUseCase = require('../../core/use-cases/ReleaseSampleUseCase');
+const MongoStorageRepository = require('../../infrastructure/persistence/mongo/MongoStorageRepository');
+const MongoAuditRepository = require('../../infrastructure/persistence/mongo/MongoAuditRepository');
+const LineageRepository = require('../../infrastructure/database/neo4j/LineageRepository');
+const logger = require('../../utils/logger');
 
 function createReleaseSampleController() {
   return async function releaseSampleController(req, res) {

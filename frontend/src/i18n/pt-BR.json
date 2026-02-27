@@ -102,6 +102,7 @@
     "subtitle": "Visão geral do sistema",
     "patients": "Pacientes",
     "samples": "Amostras",
+    "custodyReports": "Relatórios de Custódia",
     "results": "Arquivos de Análise",
     "temperatureAlerts": "Alertas de Temperatura",
     "temperatureAlertsActive": "Alertas de Temperatura Ativos",

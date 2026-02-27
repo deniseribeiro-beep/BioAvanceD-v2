@@ -1,1 +1,285 @@
-.facility-management-page { padding: 1rem; }
+.facility-management-page {
+	max-width: 1280px;
+	margin: 0 auto;
+	padding: 1rem;
+}
+
+.facility-management-page .page-subtitle {
+	max-width: 980px;
+}
+
+.facility-management-page .facility-tabs {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.5rem;
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: 0.75rem;
+	padding: 0.5rem;
+	box-shadow: var(--shadow);
+	margin-bottom: 1rem;
+}
+
+.facility-management-page .facility-tab {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 0.45rem;
+	padding: 0.6rem 0.85rem;
+	border: 1px solid transparent;
+	border-radius: 0.625rem;
+	background: var(--bg-secondary);
+	color: var(--text-secondary);
+	font-size: 0.875rem;
+	font-weight: 600;
+	min-height: 2.5rem;
+}
+
+.facility-management-page .facility-tab.active {
+	background: var(--primary);
+	color: var(--surface);
+	border-color: var(--primary);
+}
+
+.facility-management-page .facility-tab-content {
+	display: grid;
+	gap: 1rem;
+}
+
+.facility-management-page .facility-tab-content .section-header {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: flex-start;
+	gap: 0.75rem;
+	margin-bottom: 0.25rem;
+}
+
+.facility-management-page .facility-tab-content .card {
+	border: 1px solid var(--border);
+}
+
+.facility-management-page .table-actions {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.4rem;
+}
+
+.facility-management-page .table-actions .action-button {
+	min-width: 2rem;
+	min-height: 2rem;
+	border-radius: 0.5rem;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+}
+
+.facility-management-page .form {
+	display: grid;
+	gap: 1rem;
+}
+
+.facility-management-page .form-grid {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 0.875rem;
+}
+
+.facility-management-page .form-grid-full {
+	grid-column: 1 / -1;
+}
+
+.facility-management-page .input-label {
+	display: inline-block;
+	margin-bottom: 0.375rem;
+	font-size: 0.875rem;
+	color: var(--text-secondary);
+	font-weight: 600;
+}
+
+.facility-management-page .input,
+.facility-management-page select.input,
+.facility-management-page input.input,
+.facility-management-page textarea.input {
+	width: 100%;
+	min-height: 2.5rem;
+	border: 1px solid var(--border);
+	border-radius: 0.5rem;
+	padding: 0.5rem 0.625rem;
+	background: var(--surface);
+	color: var(--text);
+}
+
+.facility-management-page .form-help-text {
+	color: var(--text-light);
+}
+
+.facility-management-page .form-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.625rem;
+	justify-content: flex-end;
+}
+
+.facility-management-page .import-card-header h2 {
+	margin-bottom: 0.5rem;
+	color: var(--text);
+}
+
+.facility-management-page .import-card-header p {
+	margin-bottom: 0.75rem;
+	color: var(--text-secondary);
+}
+
+.facility-management-page .import-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.5rem;
+}
+
+.facility-management-page .import-upload {
+	border: 1px dashed var(--border);
+	border-radius: 0.625rem;
+	background: var(--bg-secondary);
+}
+
+.facility-management-page .temperature-grid {
+	display: grid;
+	grid-template-columns: 1fr;
+	gap: 1rem;
+}
+
+.facility-management-page .temperature-value {
+	font-weight: 700;
+	color: var(--text);
+}
+
+.facility-management-page .status-cell,
+.facility-management-page .quality-score {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.4rem;
+}
+
+.facility-management-page .status-icon.valid {
+	color: var(--success);
+}
+
+.facility-management-page .status-icon.alert {
+	color: var(--warning);
+}
+
+.facility-management-page .alerts-list {
+	display: grid;
+	gap: 0.625rem;
+}
+
+.facility-management-page .alert-item {
+	display: flex;
+	align-items: flex-start;
+	gap: 0.625rem;
+	padding: 0.75rem;
+	border-radius: 0.625rem;
+	border: 1px solid var(--border);
+	background: var(--surface);
+}
+
+.facility-management-page .alert-icon {
+	color: var(--danger);
+	flex-shrink: 0;
+	margin-top: 0.125rem;
+}
+
+.facility-management-page .alert-message {
+	color: var(--text);
+	margin-bottom: 0.25rem;
+}
+
+.facility-management-page .alert-sensor,
+.facility-management-page .empty-state {
+	color: var(--text-light);
+}
+
+.facility-management-page .section-container {
+	display: grid;
+	gap: 0.875rem;
+}
+
+.facility-management-page .section-controls {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.625rem;
+}
+
+.facility-management-page .section-content {
+	display: grid;
+	grid-template-columns: minmax(300px, 1fr) minmax(300px, 1fr);
+	gap: 1rem;
+}
+
+.facility-management-page .storage-tree-container,
+.facility-management-page .sample-locator-container {
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: 0.75rem;
+	padding: 0.75rem;
+	box-shadow: var(--shadow);
+}
+
+@media (max-width: 1024px) {
+	.facility-management-page .facility-tab {
+		font-size: 0.8125rem;
+	}
+
+	.facility-management-page .section-content {
+		grid-template-columns: 1fr;
+	}
+}
+
+@media (max-width: 768px) {
+	.facility-management-page {
+		padding: 0.75rem;
+	}
+
+	.facility-management-page .facility-tabs {
+		gap: 0.4rem;
+		padding: 0.45rem;
+	}
+
+	.facility-management-page .facility-tab {
+		flex: 1 1 calc(50% - 0.4rem);
+		min-width: 0;
+		font-size: 0.78rem;
+		padding: 0.55rem 0.6rem;
+	}
+
+	.facility-management-page .facility-tab span {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.facility-management-page .form-grid {
+		grid-template-columns: 1fr;
+	}
+
+	.facility-management-page .form-actions {
+		justify-content: stretch;
+	}
+
+	.facility-management-page .form-actions button {
+		flex: 1 1 auto;
+	}
+}
+
+@media (max-width: 480px) {
+	.facility-management-page .facility-tab {
+		flex: 1 1 100%;
+		justify-content: flex-start;
+	}
+
+	.facility-management-page .table-actions .action-button {
+		min-width: 1.9rem;
+		min-height: 1.9rem;
+	}
+}

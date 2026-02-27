@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { NavLink } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { NavLink, useLocation } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { useLanguage } from '../../contexts/LanguageContext';
 import { canRoleAccessRoute } from '../../utils/rolePermissions';
@@ -24,7 +24,41 @@ import './Sidebar.css';
 export default function Sidebar() {
   const { user } = useAuth();
   const { t } = useLanguage();
+  const location = useLocation();
   const [isOpen, setIsOpen] = useState(false);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsOpen(false);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen]);
+
+  useEffect(() => {
+    setIsOpen(false);
+  }, [location.pathname]);
+
+  useEffect(() => {
+    const isMobileOrTablet = window.matchMedia('(max-width: 1024px)').matches;
+    if (!isMobileOrTablet) return;
+
+    const previousOverflow = document.body.style.overflow;
+    if (isOpen) {
+      document.body.style.overflow = 'hidden';
+    } else {
+      document.body.style.overflow = previousOverflow || '';
+    }
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [isOpen]);
   
   // Mapeia accessType para roleName se não tiver roleName
   let roleName = user?.roleName;
@@ -73,6 +107,8 @@ export default function Sidebar() {
         className="sidebar-toggle"
         onClick={() => setIsOpen(!isOpen)}
         aria-label="Toggle menu"
+        aria-expanded={isOpen}
+        aria-controls="app-sidebar"
       >
         {isOpen ? <X size={24} /> : <Menu size={24} />}
       </button>
@@ -85,7 +121,7 @@ export default function Sidebar() {
         />
       )}
       
-      <aside className={`sidebar ${isOpen ? 'open' : ''}`}>
+      <aside id="app-sidebar" className={`sidebar ${isOpen ? 'open' : ''}`}>
         <div className="sidebar-header">
           <h1 className="sidebar-title">{t('app.title')}</h1>
           <p className="sidebar-subtitle">{t('app.subtitle')}</p>

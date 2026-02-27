@@ -187,10 +187,10 @@ export default function SecurityPage() {
   return (
     <div className="security-page">
       <div className="security-header">
-        <h1>
+        <h1 className="security-title">
           <Shield size={32} /> {t('security.title')}
         </h1>
-        <p>{t('security.subtitleFull')}</p>
+        <p className="security-subtitle">{t('security.subtitleFull')}</p>
       </div>
 
       {error && (
@@ -616,8 +616,8 @@ export default function SecurityPage() {
               </div>
               
               {/* Filtros de Exportação */}
-              <div className="config-group" style={{ marginTop: '2rem', paddingTop: '2rem', borderTop: '2px solid var(--border)' }}>
-                <h3 style={{ marginBottom: '1rem', fontSize: '1.125rem', fontWeight: 600 }}>{t('security.logging.exportFilters')}</h3>
+              <div className="config-group config-group-divider">
+                <h3 className="config-subtitle">{t('security.logging.exportFilters')}</h3>
                 <div className="config-field">
                   <label>{t('security.logging.filterSeverity')}</label>
                   <select

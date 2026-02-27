@@ -766,7 +766,7 @@ export default function LogsPage() {
           <h1 className="page-title">{t('logs.title')}</h1>
           <p className="page-subtitle">{t('logs.subtitle')}</p>
         </div>
-        <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+        <div className="logs-header-actions">
           <Button
             variant="secondary"
             onClick={() => setShowFilters(!showFilters)}
@@ -987,10 +987,10 @@ export default function LogsPage() {
             )}
           </Card>
 
-          <Card className="logs-filters-card" style={{ marginTop: '1rem' }}>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', alignItems: 'flex-end' }}>
-              <div style={{ minWidth: '180px' }}>
-                <label style={{ display: 'block', marginBottom: '0.25rem' }}>
+          <Card className="logs-filters-card logs-verify-card">
+            <div className="logs-verify-row">
+              <div className="logs-verify-date">
+                <label className="logs-inline-label">
                   {t('logs.verify.date')}
                 </label>
                 <Input
@@ -999,8 +999,8 @@ export default function LogsPage() {
                   onChange={(e) => setVerifyDate(e.target.value)}
                 />
               </div>
-              <div style={{ flex: 1, minWidth: '260px' }}>
-                <label style={{ display: 'block', marginBottom: '0.25rem' }}>
+              <div className="logs-verify-hash">
+                <label className="logs-inline-label">
                   {t('logs.verify.hash')}
                 </label>
                 <Input
@@ -1026,7 +1026,7 @@ export default function LogsPage() {
               </div>
             )}
             {verifyResult && (
-              <div style={{ marginTop: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+              <div className="logs-verify-result">
                 <div>
                   <strong>{t('logs.verify.status')}:</strong>{' '}
                   <span style={{ color: verifyResult.verified ? 'var(--success)' : 'var(--danger)' }}>
@@ -1034,7 +1034,7 @@ export default function LogsPage() {
                   </span>
                 </div>
                 {verifyResult.rootUsed && (
-                  <div style={{ fontFamily: 'monospace', fontSize: '0.8125rem' }}>
+                  <div className="logs-verify-root">
                     {t('logs.verify.root')}: {verifyResult.rootUsed}
                   </div>
                 )}
@@ -1067,13 +1067,13 @@ export default function LogsPage() {
                 {filteredLogs.length === 0 ? (
                   <tr>
                     <td colSpan={6} className="no-logs-message">
-                      <div style={{ display: 'grid', gap: '0.5rem', justifyItems: 'center' }}>
+                      <div className="no-logs-content">
                         <span>
                           {hasActiveFilters
                             ? (t('logs.noLogsFound') || 'Nenhum resultado encontrado com os filtros atuais.')
                             : 'Nenhum log disponível.'}
                         </span>
-                        <div style={{ display: 'flex', gap: '0.5rem' }}>
+                        <div className="no-logs-actions">
                           {hasActiveFilters && (
                             <Button variant="secondary" onClick={clearFilters}>
                               {t('logs.filters.clearFilters')}

@@ -1,5 +1,5 @@
-const logger = require('../../../utils/logger');
-const env = require('../../../config/env');
+const logger = require('../../utils/logger');
+const env = require('../../config/env');
 
 /**
  * Caso de uso: mover uma amostra entre posições de armazenamento.

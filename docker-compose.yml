@@ -126,8 +126,11 @@ services:
 
       LINEAGE_MODE: ${LINEAGE_MODE}
       FHIR_READ_MODE: ${FHIR_READ_MODE}
+      BACKUP_DIR: ${BACKUP_DIR}
     ports:
       - "${BACKEND_PORT}:3000"
+    volumes:
+      - backend_backups:${BACKUP_DIR}
 
   worker:
     build:
@@ -178,3 +181,4 @@ volumes:
   neo4j_logs:
   influxdb_data:
   influxdb_config:
+  backend_backups:

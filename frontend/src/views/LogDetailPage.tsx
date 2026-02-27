@@ -210,7 +210,7 @@ export default function LogDetailPage() {
 
   if (loading) {
     return (
-      <div className="logs-page">
+      <div className="page logs-page logs-detail-page">
         <Card>
           <div style={{ padding: '2rem', textAlign: 'center' }}>
             <p>{t('logs.detailPage.loading')}</p>
@@ -222,7 +222,7 @@ export default function LogDetailPage() {
 
   if (error || !log) {
     return (
-      <div className="logs-page">
+      <div className="page logs-page logs-detail-page">
         <Card>
           <div style={{ padding: '2rem', textAlign: 'center' }}>
             <p style={{ color: 'var(--danger)' }}>{error || t('logs.detailPage.notFound')}</p>
@@ -237,9 +237,9 @@ export default function LogDetailPage() {
   }
 
   return (
-    <div className="logs-page">
+    <div className="page logs-page logs-detail-page">
       <Card>
-        <div style={{ marginBottom: '1.5rem' }}>
+        <div className="log-detail-actions">
           <Button 
             onClick={() => navigate('/logs')}
             variant="secondary"
@@ -250,7 +250,7 @@ export default function LogDetailPage() {
           </Button>
         </div>
 
-        <h1 style={{ marginBottom: '1.5rem', fontSize: '1.5rem', fontWeight: 600 }}>
+        <h1 className="log-detail-title">
           {t('logs.detailPage.title')}
         </h1>
 

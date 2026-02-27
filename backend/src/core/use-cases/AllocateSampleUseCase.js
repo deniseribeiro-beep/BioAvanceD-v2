@@ -1,5 +1,5 @@
-const env = require('../../../config/env');
-const logger = require('../../../utils/logger');
+const env = require('../../config/env');
+const logger = require('../../utils/logger');
 
 /**
  * Caso de uso: alocar amostra em posição física.

@@ -1,5 +1,5 @@
-const env = require('../../../config/env');
-const logger = require('../../../utils/logger');
+const env = require('../../config/env');
+const logger = require('../../utils/logger');
 
 /**
  * Caso de uso: liberar posição física atual da amostra.

@@ -16,8 +16,8 @@ import './Dashboard.css';
 
 export default function Dashboard() {
   const navigate = useNavigate();
-  const { user, hasAccess, hasRole } = useAuth();
-  const { t, language } = useLanguage();
+  const { user } = useAuth();
+  const { t } = useLanguage();
   const { patients, loading: loadingPatients } = usePatients();
   const { samples, loading: loadingSamples } = useSamples();
   const { results, loading: loadingResults } = useResults();
@@ -142,10 +142,9 @@ export default function Dashboard() {
         allowedAccessTypes: [1, 2, 3],
       },
       {
-        title: t('dashboard.custodyReports') || 'Relatórios de Custódia',
+        title: t('dashboard.custodyReports', 'Relatórios de Custódia'),
         value: stats.samples,
         icon: FileSearch,
-        color: '#4b5563',
         link: '/samples/custody-reports',
         allowedRoles: ['Administrador', 'Coordenador', 'Técnico'],
         allowedAccessTypes: [2, 3, 4],
@@ -220,7 +219,7 @@ export default function Dashboard() {
       // Usuário Externo (1) tem acesso apenas aos seus itens
       return card.allowedAccessTypes.includes(user.accessType || 0);
     });
-  }, [user, stats, t, language]);
+  }, [user, stats, t]);
 
   return (
     <div className="dashboard-bento">
@@ -238,11 +237,13 @@ export default function Dashboard() {
           const handleClick = () => {
             if (stat.link) navigate(stat.link);
           };
-          const isAlert = stat.title === t('dashboard.temperatureAlerts');
+          const isAlert = stat.link === '/temperature';
           const variant = stat.link === '/patients'
             ? 'primary'
             : stat.link === '/samples'
             ? 'success'
+            : stat.link === '/results'
+            ? 'secondary'
             : stat.link === '/sensors'
             ? 'action'
             : stat.link === '/temperature'
@@ -251,8 +252,7 @@ export default function Dashboard() {
           return (
             <Card
               key={stat.title}
-              className={`kpi-card ${isAlert ? 'alert' : ''}`}
-              style={{ background: 'var(--color-surface)', boxShadow: 'var(--shadow-card)', borderRadius: '8px', cursor: stat.link ? 'pointer' : 'default' }}
+              className={`kpi-card ${isAlert ? 'alert' : ''} ${stat.link ? 'is-clickable' : ''}`}
               onClick={handleClick}
             >
               <div className={`kpi-icon kpi-icon--${variant}`}>
@@ -271,7 +271,6 @@ export default function Dashboard() {
       <div className="content-grid">
         <Card
           className="temperature-card"
-          style={{ background: 'var(--color-surface)', boxShadow: 'var(--shadow-card)', borderRadius: '12px' }}
         >
           <div className="temperature-card-header">
             <h2 className="temperature-card-title">Gráfico de Temperatura</h2>
@@ -285,7 +284,6 @@ export default function Dashboard() {
         <div className="side-card-stack">
           <Card
             className="side-card"
-            style={{ background: 'var(--color-surface)', boxShadow: 'var(--shadow-card)', borderRadius: '12px' }}
           >
             <h3 className="side-card-title">{t('dashboard.temperatureAlertsActive')}</h3>
             <p className="side-card-text">
@@ -298,7 +296,6 @@ export default function Dashboard() {
           {isAdmin && (
             <Card
               className="side-card consent-queue-card"
-              style={{ background: 'var(--color-surface)', boxShadow: 'var(--shadow-card)', borderRadius: '12px' }}
             >
               <h3 className="side-card-title">Fila de Consentimentos</h3>
               {loadingConsentQueue ? (

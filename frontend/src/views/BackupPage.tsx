@@ -73,7 +73,7 @@ export default function BackupPage() {
   };
 
   // Verifica se o usuário é Administrador
-  const isAdmin = user?.roleName === 'Administrador' || user?.accessType === 3;
+  const isAdmin = user?.roleName === 'Administrador' || user?.accessType === 4;
 
   if (!isAdmin) {
     return (

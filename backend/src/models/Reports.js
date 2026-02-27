@@ -20,6 +20,7 @@ class ReportsModel {
     return {
       reportID: data.reportID || null,
       reportType: data.reportType,
+      reportData: data.reportData || null,
       filters: data.filters || {},
       generatedAt: data.generatedAt || new Date(),
       generatedBy: data.generatedBy || null,

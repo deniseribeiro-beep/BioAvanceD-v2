@@ -1,12 +1,10 @@
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
-const { exec } = require('child_process');
 const router = express.Router();
 const { authenticate } = require('../../infrastructure/middleware/auth');
 const { requireRole } = require('../../infrastructure/middleware/rbac');
 const backupService = require('../../services/backup.service');
-const env = require('../../config/env');
 const logger = require('../../utils/logger');
 
 function getDirSizeSync(targetPath) {
@@ -14,17 +12,6 @@ function getDirSizeSync(targetPath) {
   const stat = fs.statSync(targetPath);
   if (stat.isFile()) return stat.size;
   return fs.readdirSync(targetPath).reduce((total, entry) => total + getDirSizeSync(path.join(targetPath, entry)), 0);
-}
-
-function runCommand(command) {
-  return new Promise((resolve, reject) => {
-    exec(command, { windowsHide: true }, (error, stdout, stderr) => {
-      if (error) {
-        return reject({ error, stdout, stderr });
-      }
-      return resolve({ stdout, stderr });
-    });
-  });
 }
 
 router.use(authenticate);
@@ -89,22 +76,14 @@ router.post('/restore/:fileName', async (req, res) => {
       return res.status(404).json({ success: false, error: 'Backup não encontrado' });
     }
 
-    const mongoUri = env.MONGO_URI || process.env.MONGO_URI;
-    if (!mongoUri) {
-      return res.status(400).json({ success: false, error: 'MONGO_URI não configurado' });
+    const result = await backupService.restoreBackup(backupPath);
+    if (!result.success) {
+      return res.status(400).json({ success: false, error: result.error || 'Erro ao restaurar backup', data: result });
     }
-
-    const dbArg = env.MONGO_DB ? ` --nsInclude="${env.MONGO_DB}.*"` : '';
-    const command = `mongorestore --uri="${mongoUri}" --drop${dbArg} "${backupPath}"`;
-
-    await runCommand(command);
 
     return res.status(200).json({
       success: true,
-      data: {
-        restoredFrom: fileName,
-        restoredAt: new Date()
-      }
+      data: result
     });
   } catch (error) {
     logger.error('Erro ao restaurar backup:', error.message || error);

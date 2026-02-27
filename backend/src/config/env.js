@@ -39,6 +39,7 @@ module.exports = {
   API_URL: process.env.API_URL,
   SUPABASE_URL: process.env.SUPABASE_URL,
   CORS_ALLOW_ALL: process.env.CORS_ALLOW_ALL === 'true' || process.env.CORS_ALLOW_ALL === '1',
+  TRUST_PROXY: process.env.TRUST_PROXY || '0',
 
   // Redis Configuration
   REDIS_HOST: process.env.REDIS_HOST,

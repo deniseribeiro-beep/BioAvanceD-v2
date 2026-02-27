@@ -1,1 +1,192 @@
-.dashboard-page { padding: 1rem; }
+.dashboard-bento {
+	width: 100%;
+	max-width: 1280px;
+	margin: 0 auto;
+	padding: 1rem;
+}
+
+.kpi-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+	gap: 0.75rem;
+}
+
+.kpi-card {
+	border: 1px solid var(--border);
+	border-radius: 0.75rem;
+	background: var(--surface);
+	box-shadow: var(--shadow);
+	padding: 0.8rem;
+	display: flex;
+	align-items: center;
+	gap: 0.7rem;
+	min-height: 82px;
+}
+
+.kpi-card.is-clickable {
+	cursor: pointer;
+}
+
+.kpi-card.alert {
+	border-color: var(--danger);
+}
+
+.kpi-icon {
+	width: 2.25rem;
+	height: 2.25rem;
+	border-radius: 0.6rem;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	color: #fff;
+	flex-shrink: 0;
+}
+
+.kpi-icon--primary {
+	background: var(--primary);
+}
+
+.kpi-icon--success {
+	background: var(--success);
+}
+
+.kpi-icon--secondary {
+	background: var(--secondary);
+}
+
+.kpi-icon--action {
+	background: var(--color-action);
+}
+
+.kpi-icon--danger {
+	background: var(--danger);
+}
+
+.kpi-info {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+}
+
+.kpi-title {
+	font-size: 0.86rem;
+	color: var(--text-secondary);
+	margin: 0;
+}
+
+.kpi-value {
+	font-size: 1.45rem;
+	font-weight: 700;
+	line-height: 1.1;
+	color: var(--text);
+	margin: 0.2rem 0 0;
+}
+
+.content-grid {
+	display: grid;
+	grid-template-columns: minmax(0, 2fr) minmax(300px, 1fr);
+	gap: 0.75rem;
+	margin-top: 0.75rem;
+	align-items: start;
+}
+
+.temperature-card,
+.side-card {
+	border: 1px solid var(--border);
+	border-radius: 0.75rem;
+	background: var(--surface);
+	box-shadow: var(--shadow);
+}
+
+.temperature-card {
+	padding: 0.95rem;
+}
+
+.temperature-card-header {
+	margin-bottom: 0.75rem;
+}
+
+.temperature-card-title {
+	font-size: 1.45rem;
+	margin: 0;
+	color: var(--text);
+}
+
+.temperature-card-subtitle {
+	margin: 0.35rem 0 0;
+	color: var(--text-secondary);
+}
+
+.temperature-chart-slot {
+	min-height: 220px;
+	border: 1px dashed var(--border);
+	border-radius: 0.65rem;
+	background: var(--bg-secondary);
+}
+
+.side-card-stack {
+	display: grid;
+	gap: 0.75rem;
+}
+
+.side-card {
+	padding: 0.85rem;
+}
+
+.side-card-title {
+	margin: 0 0 0.35rem;
+	font-size: 1.05rem;
+	color: var(--text);
+}
+
+.side-card-text {
+	margin: 0;
+	color: var(--text-secondary);
+	line-height: 1.5;
+}
+
+.consent-queue-metrics {
+	display: grid;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	gap: 0.65rem;
+}
+
+.consent-queue-metrics > div {
+	background: var(--bg-secondary);
+	border-radius: 0.5rem;
+	border: 1px solid var(--border);
+	padding: 0.55rem;
+	display: flex;
+	flex-direction: column;
+	gap: 0.25rem;
+}
+
+.consent-queue-label {
+	font-size: 0.78rem;
+	color: var(--text-secondary);
+}
+
+.consent-queue-metrics strong {
+	font-size: 1.15rem;
+	color: var(--text);
+}
+
+@media (max-width: 1024px) {
+	.content-grid {
+		grid-template-columns: 1fr;
+	}
+}
+
+@media (max-width: 768px) {
+	.dashboard-bento {
+		padding: 0.75rem;
+	}
+
+	.kpi-grid {
+		grid-template-columns: 1fr;
+	}
+
+	.temperature-card-title {
+		font-size: 1.4rem;
+	}
+}

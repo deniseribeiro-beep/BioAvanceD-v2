@@ -100,6 +100,33 @@ export default function ReportQueryPage() {
     window.print();
   };
 
+  const renderLimitWarning = (message: string) => (
+    <div className="preview-limit-warning">⚠️ {message}</div>
+  );
+
+  const getAvailabilityClass = (status: string) => {
+    const normalized = String(status || '').toLowerCase();
+    if (normalized.includes('parcial')) return 'status-badge status-warning';
+    if (normalized.includes('dispon')) return normalized.includes('indispon') ? 'status-badge status-danger' : 'status-badge status-success';
+    return 'status-badge status-neutral';
+  };
+
+  const getResultClass = (result: string) => {
+    const normalized = String(result || '').toLowerCase();
+    if (normalized.includes('success') || normalized.includes('sucesso')) return 'status-badge status-success';
+    if (normalized.includes('error') || normalized.includes('erro')) return 'status-badge status-danger';
+    if (normalized.includes('warn')) return 'status-badge status-warning';
+    return 'status-badge status-neutral';
+  };
+
+  const getSeverityClass = (severity: string) => {
+    const normalized = String(severity || '').toLowerCase();
+    if (normalized.includes('critical') || normalized.includes('error')) return 'status-badge status-danger';
+    if (normalized.includes('warning')) return 'status-badge status-warning';
+    if (normalized.includes('info')) return 'status-badge status-info';
+    return 'status-badge status-neutral';
+  };
+
   const renderFilterInput = (filter: ReportFilter) => {
     switch (filter.type) {
       case 'select':
@@ -161,7 +188,7 @@ export default function ReportQueryPage() {
     // Mensagem de erro ou dados vazios
     if (data.message) {
       return (
-        <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+        <div className="preview-empty-state">
           <p>{data.message}</p>
         </div>
       );
@@ -169,7 +196,7 @@ export default function ReportQueryPage() {
 
     if (data.total === 0) {
       return (
-        <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+        <div className="preview-empty-state">
           <p>Nenhum registro encontrado com os filtros aplicados.</p>
         </div>
       );
@@ -180,11 +207,9 @@ export default function ReportQueryPage() {
       return (
         <>
           {data.previewLimited && (
-            <div style={{ marginBottom: '1rem', padding: '0.75rem', backgroundColor: '#fef3c7', color: '#92400e', borderRadius: '6px', fontSize: '0.875rem' }}>
-              ⚠️ Mostrando apenas os primeiros 50 registros. Total: {data.total} registros.
-            </div>
+            renderLimitWarning(`Mostrando apenas os primeiros 50 registros. Total: ${data.total} registros.`)
           )}
-          <div style={{ overflowX: 'auto' }}>
+          <div className="preview-table-wrapper">
             <Table
               headers={['ID', 'Nome', 'Unidade Clínica', 'Registro', 'Data Nascimento', 'Sexo']}
             >
@@ -209,39 +234,18 @@ export default function ReportQueryPage() {
       return (
         <>
           {data.previewLimited && (
-            <div style={{ marginBottom: '1rem', padding: '0.75rem', backgroundColor: '#fef3c7', color: '#92400e', borderRadius: '6px', fontSize: '0.875rem' }}>
-              ⚠️ Mostrando apenas os primeiros 20 pacientes. Total: {data.total} pacientes.
-            </div>
+            renderLimitWarning(`Mostrando apenas os primeiros 20 pacientes. Total: ${data.total} pacientes.`)
           )}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+          <div className="preview-list-stack">
             {data.patients.map((patient: any) => (
-              <div key={patient.patientID} style={{ 
-                border: '1px solid #e2e8f0', 
-                borderRadius: '8px', 
-                padding: '1rem',
-                backgroundColor: '#f8fafc'
-              }}>
-                <div style={{ 
-                  marginBottom: '1rem', 
-                  paddingBottom: '0.75rem', 
-                  borderBottom: '2px solid #cbd5e1',
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center'
-                }}>
+              <div key={patient.patientID} className="patient-preview-card">
+                <div className="patient-preview-header">
                   <div>
-                    <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 600, color: '#1e293b' }}>
+                    <h3 className="patient-preview-name">
                       {formatPatientDisplay(patient, user)}
                     </h3>
                   </div>
-                  <div style={{
-                    padding: '0.5rem 1rem',
-                    backgroundColor: '#3b82f6',
-                    color: 'white',
-                    borderRadius: '6px',
-                    fontSize: '0.875rem',
-                    fontWeight: 600
-                  }}>
+                  <div className="patient-preview-count">
                     {patient.sampleCount || 0} {patient.sampleCount === 1 ? 'Amostra' : 'Amostras'}
                   </div>
                 </div>
@@ -249,11 +253,11 @@ export default function ReportQueryPage() {
                 {patient.samples && patient.samples.length > 0 ? (
                   <>
                     {patient.samplesLimited && (
-                      <div style={{ marginBottom: '0.5rem', padding: '0.5rem', backgroundColor: '#fef3c7', color: '#92400e', borderRadius: '4px', fontSize: '0.75rem' }}>
+                      <div className="patient-preview-limited">
                         Mostrando apenas as primeiras 10 amostras
                       </div>
                     )}
-                    <div style={{ overflowX: 'auto' }}>
+                    <div className="preview-table-wrapper">
                       <Table
                         headers={['ID Amostra', 'Código Barras', 'Tipo', 'Status', 'Disponibilidade', 'Quantidade', 'Data Registro']}
                       >
@@ -291,17 +295,10 @@ export default function ReportQueryPage() {
                               <td>{sample.sampleType || 'N/A'}</td>
                               <td>{sample.currentStatus || 'N/A'}</td>
                               <td>
-                                <span style={{
-                                  padding: '0.25rem 0.5rem',
-                                  borderRadius: '4px',
-                                  fontSize: '0.75rem',
-                                  backgroundColor: availabilityBg,
-                                  color: availabilityColor,
-                                  fontWeight: 500
-                                }}>
+                                <span className={getAvailabilityClass(availabilityStatus)}>
                                   {availabilityStatus}
                                   {availableQty !== undefined && availableQty !== totalQty && (
-                                    <span style={{ marginLeft: '0.25rem', fontSize: '0.7rem', opacity: 0.8 }}>
+                                    <span className="status-badge-meta">
                                       ({availableQty}/{totalQty})
                                     </span>
                                   )}
@@ -316,7 +313,7 @@ export default function ReportQueryPage() {
                     </div>
                   </>
                 ) : (
-                  <p style={{ color: '#64748b', fontStyle: 'italic', margin: 0 }}>
+                  <p className="patient-preview-empty">
                     Nenhuma amostra encontrada para este paciente.
                   </p>
                 )}
@@ -332,11 +329,9 @@ export default function ReportQueryPage() {
       return (
         <>
           {data.previewLimited && (
-            <div style={{ marginBottom: '1rem', padding: '0.75rem', backgroundColor: '#fef3c7', color: '#92400e', borderRadius: '6px', fontSize: '0.875rem' }}>
-              ⚠️ Mostrando apenas os primeiros 50 registros. Total: {data.total} registros.
-            </div>
+            renderLimitWarning(`Mostrando apenas os primeiros 50 registros. Total: ${data.total} registros.`)
           )}
-          <div style={{ overflowX: 'auto' }}>
+          <div className="preview-table-wrapper">
             <Table
               headers={['ID', 'Código Barras', 'Tipo', 'Status', 'Quantidade', 'Disponibilidade', 'Data Registro', 'Paciente']}
             >
@@ -378,17 +373,10 @@ export default function ReportQueryPage() {
                     <td>{s.currentStatus || 'N/A'}</td>
                     <td>{totalQty} {s.measurementUnit || ''}</td>
                     <td>
-                      <span style={{
-                        padding: '0.25rem 0.5rem',
-                        borderRadius: '4px',
-                        fontSize: '0.75rem',
-                        backgroundColor: availabilityBg,
-                        color: availabilityColor,
-                        fontWeight: 500
-                      }}>
+                      <span className={getAvailabilityClass(availabilityStatus)}>
                         {availabilityStatus}
                         {availableQty !== undefined && availableQty !== totalQty && (
-                          <span style={{ marginLeft: '0.25rem', fontSize: '0.7rem', opacity: 0.8 }}>
+                          <span className="status-badge-meta">
                             ({availableQty}/{totalQty})
                           </span>
                         )}
@@ -410,11 +398,9 @@ export default function ReportQueryPage() {
       return (
         <>
           {data.previewLimited && (
-            <div style={{ marginBottom: '1rem', padding: '0.75rem', backgroundColor: '#fef3c7', color: '#92400e', borderRadius: '6px', fontSize: '0.875rem' }}>
-              ⚠️ Mostrando apenas os primeiros 50 registros. Total: {data.total} registros.
-            </div>
+            renderLimitWarning(`Mostrando apenas os primeiros 50 registros. Total: ${data.total} registros.`)
           )}
-          <div style={{ overflowX: 'auto' }}>
+          <div className="preview-table-wrapper">
             <Table
               headers={['ID', 'Tipo Arquivo', 'Descrição', 'Método', 'Amostra ID', 'Data Criação']}
             >
@@ -438,12 +424,8 @@ export default function ReportQueryPage() {
     if (data.temperatures && Array.isArray(data.temperatures)) {
       return (
         <>
-          {data.previewLimited && (
-            <div style={{ marginBottom: '1rem', padding: '0.75rem', backgroundColor: '#fef3c7', color: '#92400e', borderRadius: '6px', fontSize: '0.875rem' }}>
-              ⚠️ Mostrando apenas os primeiros 50 registros. Total: {data.total} registros.
-            </div>
-          )}
-          <div style={{ overflowX: 'auto' }}>
+          {data.previewLimited && (renderLimitWarning(`Mostrando apenas os primeiros 50 registros. Total: ${data.total} registros.`))}
+          <div className="preview-table-wrapper">
             <Table
               headers={['ID', 'Data/Hora', 'Sensor', 'Temperatura', 'Unidade', 'Status', 'Qualidade']}
             >
@@ -455,13 +437,7 @@ export default function ReportQueryPage() {
                   <td>{t.temperatureValue !== undefined ? t.temperatureValue.toFixed(2) : 'N/A'}</td>
                   <td>{t.temperatureUnit || '°C'}</td>
                   <td>
-                    <span style={{
-                      padding: '0.25rem 0.5rem',
-                      borderRadius: '4px',
-                      fontSize: '0.75rem',
-                      backgroundColor: t.readingStatus === 'valid' ? '#d1fae5' : '#fee2e2',
-                      color: t.readingStatus === 'valid' ? '#065f46' : '#991b1b'
-                    }}>
+                    <span className={String(t.readingStatus || '').toLowerCase() === 'valid' ? 'status-badge status-success' : 'status-badge status-danger'}>
                       {t.readingStatus || 'N/A'}
                     </span>
                   </td>
@@ -478,12 +454,8 @@ export default function ReportQueryPage() {
     if (data.logs && Array.isArray(data.logs)) {
       return (
         <>
-          {data.previewLimited && (
-            <div style={{ marginBottom: '1rem', padding: '0.75rem', backgroundColor: '#fef3c7', color: '#92400e', borderRadius: '6px', fontSize: '0.875rem' }}>
-              ⚠️ Mostrando apenas os primeiros 50 registros. Total: {data.total} registros.
-            </div>
-          )}
-          <div style={{ overflowX: 'auto' }}>
+          {data.previewLimited && (renderLimitWarning(`Mostrando apenas os primeiros 50 registros. Total: ${data.total} registros.`))}
+          <div className="preview-table-wrapper">
             <Table
               headers={['ID', 'Data/Hora', 'Usuário', 'Ação', 'Entidade', 'Resultado', 'Severidade', 'IP Origem']}
             >
@@ -495,24 +467,12 @@ export default function ReportQueryPage() {
                   <td>{l.action || 'N/A'}</td>
                   <td>{l.entity || 'N/A'}</td>
                   <td>
-                    <span style={{
-                      padding: '0.25rem 0.5rem',
-                      borderRadius: '4px',
-                      fontSize: '0.75rem',
-                      backgroundColor: l.result === 'SUCCESS' ? '#d1fae5' : l.result === 'ERROR' ? '#fee2e2' : '#fef3c7',
-                      color: l.result === 'SUCCESS' ? '#065f46' : l.result === 'ERROR' ? '#991b1b' : '#92400e'
-                    }}>
+                    <span className={getResultClass(l.result)}>
                       {l.result || 'N/A'}
                     </span>
                   </td>
                   <td>
-                    <span style={{
-                      padding: '0.25rem 0.5rem',
-                      borderRadius: '4px',
-                      fontSize: '0.75rem',
-                      backgroundColor: l.severity === 'ERROR' || l.severity === 'CRITICAL' ? '#fee2e2' : l.severity === 'WARNING' ? '#fef3c7' : '#dbeafe',
-                      color: l.severity === 'ERROR' || l.severity === 'CRITICAL' ? '#991b1b' : l.severity === 'WARNING' ? '#92400e' : '#1e40af'
-                    }}>
+                    <span className={getSeverityClass(l.severity)}>
                       {l.severity || 'N/A'}
                     </span>
                   </td>
@@ -529,12 +489,8 @@ export default function ReportQueryPage() {
     if (data.equipment && Array.isArray(data.equipment)) {
       return (
         <>
-          {data.previewLimited && (
-            <div style={{ marginBottom: '1rem', padding: '0.75rem', backgroundColor: '#fef3c7', color: '#92400e', borderRadius: '6px', fontSize: '0.875rem' }}>
-              ⚠️ Mostrando apenas os primeiros 50 registros. Total: {data.total} registros.
-            </div>
-          )}
-          <div style={{ overflowX: 'auto' }}>
+          {data.previewLimited && (renderLimitWarning(`Mostrando apenas os primeiros 50 registros. Total: ${data.total} registros.`))}
+          <div className="preview-table-wrapper">
             <Table
               headers={['ID', 'Descrição', 'Data Criação', 'Data Atualização']}
             >
@@ -556,12 +512,8 @@ export default function ReportQueryPage() {
     if (data.sensors && Array.isArray(data.sensors)) {
       return (
         <>
-          {data.previewLimited && (
-            <div style={{ marginBottom: '1rem', padding: '0.75rem', backgroundColor: '#fef3c7', color: '#92400e', borderRadius: '6px', fontSize: '0.875rem' }}>
-              ⚠️ Mostrando apenas os primeiros 50 registros. Total: {data.total} registros.
-            </div>
-          )}
-          <div style={{ overflowX: 'auto' }}>
+          {data.previewLimited && (renderLimitWarning(`Mostrando apenas os primeiros 50 registros. Total: ${data.total} registros.`))}
+          <div className="preview-table-wrapper">
             <Table
               headers={['ID', 'Tipo', 'Modelo', 'Status Manutenção', 'Última Calibração', 'Próxima Calibração']}
             >
@@ -585,12 +537,8 @@ export default function ReportQueryPage() {
     if (data.withdrawals && Array.isArray(data.withdrawals)) {
       return (
         <>
-          {data.previewLimited && (
-            <div style={{ marginBottom: '1rem', padding: '0.75rem', backgroundColor: '#fef3c7', color: '#92400e', borderRadius: '6px', fontSize: '0.875rem' }}>
-              ⚠️ Mostrando apenas os primeiros 50 registros. Total: {data.total} registros.
-            </div>
-          )}
-          <div style={{ overflowX: 'auto' }}>
+          {data.previewLimited && (renderLimitWarning(`Mostrando apenas os primeiros 50 registros. Total: ${data.total} registros.`))}
+          <div className="preview-table-wrapper">
             <Table
               headers={['ID Retirada', 'ID Amostra', 'Tipo Amostra', 'Paciente', 'Tipo Retirada', 'Quantidade', 'Responsável', 'Destino', 'Data']}
             >
@@ -617,12 +565,8 @@ export default function ReportQueryPage() {
     if (data.samples && Array.isArray(data.samples) && (data.samples[0]?.sampleOrigin || data.samples[0]?.linkedProject)) {
       return (
         <>
-          {data.previewLimited && (
-            <div style={{ marginBottom: '1rem', padding: '0.75rem', backgroundColor: '#fef3c7', color: '#92400e', borderRadius: '6px', fontSize: '0.875rem' }}>
-              ⚠️ Mostrando apenas os primeiros 50 registros. Total: {data.total} registros.
-            </div>
-          )}
-          <div style={{ overflowX: 'auto' }}>
+          {data.previewLimited && (renderLimitWarning(`Mostrando apenas os primeiros 50 registros. Total: ${data.total} registros.`))}
+          <div className="preview-table-wrapper">
             <Table
               headers={['ID Amostra', 'Tipo', 'Origem', 'Projeto', 'Paciente', 'Unidade Clínica', 'Data Registro']}
             >
@@ -648,27 +592,25 @@ export default function ReportQueryPage() {
       return (
         <>
           {data.previewLimited && (
-            <div style={{ marginBottom: '1rem', padding: '0.75rem', backgroundColor: '#fef3c7', color: '#92400e', borderRadius: '6px', fontSize: '0.875rem' }}>
-              ⚠️ Mostrando apenas os primeiros 20 registros. Total: {data.total} amostras.
-            </div>
+            renderLimitWarning(`Mostrando apenas os primeiros 20 registros. Total: ${data.total} amostras.`)
           )}
           {data.withResults !== undefined && (
-            <div style={{ marginBottom: '1rem', padding: '1rem', backgroundColor: '#eff6ff', borderRadius: '6px' }}>
+            <div className="analysis-summary">
               <strong>Estatísticas:</strong> {data.withResults} amostras com resultados, {data.withoutResults} sem resultados
             </div>
           )}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          <div className="analysis-list">
             {data.analysis.map((item: any) => (
-              <div key={item.sampleID} style={{ border: '1px solid #e2e8f0', borderRadius: '6px', padding: '1rem' }}>
-                <div style={{ marginBottom: '0.5rem', fontWeight: 600 }}>
+              <div key={item.sampleID} className="analysis-item-card">
+                <div className="analysis-item-title">
                   Amostra {item.sampleID} - {item.sampleType} | Paciente: {item.patientName ? getPatientDisplayName(item, user) : `Anônimo (ID: ${item.patientID})`}
                 </div>
                 <div>
                   <strong>Resultados: {item.resultsCount}</strong>
                   {item.results && item.results.length > 0 && (
-                    <div style={{ marginTop: '0.5rem', paddingLeft: '1rem' }}>
+                    <div className="analysis-item-results">
                       {item.results.map((r: any) => (
-                        <div key={r.resultID} style={{ fontSize: '0.875rem', color: '#64748b' }}>
+                        <div key={r.resultID} className="analysis-item-result-row">
                           • {r.description || 'N/A'} ({r.fileType || 'N/A'}) - {r.method || 'N/A'}
                         </div>
                       ))}
@@ -709,7 +651,7 @@ export default function ReportQueryPage() {
           <Button
             variant="secondary"
             onClick={() => navigate('/reports')}
-            style={{ marginBottom: '1rem' }}
+            className="report-query-back-button"
           >
             <ArrowLeft size={18} />
             Voltar
@@ -720,7 +662,7 @@ export default function ReportQueryPage() {
       </div>
 
       {error && (
-        <div className="error-message" style={{ marginBottom: '1rem', padding: '1rem', backgroundColor: '#fee2e2', color: '#991b1b', borderRadius: '6px' }}>
+        <div className="error-message report-query-error-message">
           {error}
         </div>
       )}
@@ -728,7 +670,7 @@ export default function ReportQueryPage() {
       <div className="report-query-content">
         {/* Seção de Filtros */}
         <Card className="filters-card">
-          <h2 style={{ marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <h2 className="filters-title-row">
             <Filter size={20} />
             Filtros
           </h2>
@@ -745,10 +687,10 @@ export default function ReportQueryPage() {
               ))}
             </div>
           ) : (
-            <p style={{ color: 'var(--text-secondary)' }}>Nenhum filtro disponível para este tipo de relatório</p>
+            <p className="filters-empty-message">Nenhum filtro disponível para este tipo de relatório</p>
           )}
 
-          <div style={{ marginTop: '1.5rem', display: 'flex', gap: '1rem' }}>
+          <div className="filters-actions-row">
             <Button onClick={handlePreview} disabled={loading}>
               <FileText size={18} />
               Pré-visualizar
@@ -765,9 +707,9 @@ export default function ReportQueryPage() {
         {/* Seção de Pré-visualização */}
         {previewData && (
           <Card className="preview-card">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+            <div className="preview-header-row">
               <h2>Pré-visualização</h2>
-              <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <div className="preview-actions-row">
                 <Button
                   variant="secondary"
                   size="small"
@@ -799,34 +741,25 @@ export default function ReportQueryPage() {
             </div>
 
             {loading ? (
-              <div style={{ padding: '2rem', textAlign: 'center' }}>
+              <div className="preview-loading-state">
                 <p>Gerando pré-visualização...</p>
               </div>
             ) : (
               <>
                 {previewData.data.total !== undefined && (
-                  <div style={{ 
-                    marginBottom: '1rem', 
-                    padding: '1rem', 
-                    backgroundColor: '#eff6ff', 
-                    borderRadius: '6px',
-                    border: '1px solid #bfdbfe',
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center'
-                  }}>
-                    <div>
-                      <strong style={{ fontSize: '1.1rem', color: '#1e40af' }}>
+                  <div className="preview-summary-box">
+                    <div className="preview-summary-main">
+                      <strong className="preview-summary-total">
                         Total de registros: {previewData.data.total}
                       </strong>
                       {previewData.reportType && (
-                        <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.875rem', color: '#64748b' }}>
+                        <p className="preview-summary-type">
                           Tipo: {previewData.reportType}
                         </p>
                       )}
                     </div>
                     {previewData.generatedAt && (
-                      <div style={{ fontSize: '0.875rem', color: '#64748b' }}>
+                      <div className="preview-summary-date">
                         Gerado em: {new Date(previewData.generatedAt).toLocaleString('pt-BR')}
                       </div>
                     )}

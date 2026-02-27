@@ -2,6 +2,7 @@ import { Navigate, useLocation } from 'react-router-dom';
 import { useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { canRoleAccessRoute, RoleName } from '../utils/rolePermissions';
+import './ProtectedRoute.css';
 
 interface ProtectedRouteProps {
   children: React.ReactNode;
@@ -10,6 +11,15 @@ interface ProtectedRouteProps {
 }
 
 export default function ProtectedRoute({ children, requiredAccessType, requiredRole }: ProtectedRouteProps) {
+    const renderAccessDenied = (message: string, currentRole: string) => (
+      <div className="protected-route-access-denied">
+        <h2>Acesso Negado</h2>
+        <p>{message}</p>
+        <p>Sua role atual: <strong>{currentRole}</strong></p>
+        <button className="protected-route-back" onClick={() => window.history.back()}>Voltar</button>
+      </div>
+    );
+
   const { isAuthenticated, isLoading, hasAccess, hasRole, canAccessRoute, user, token } = useAuth();
   const location = useLocation();
 
@@ -88,78 +98,31 @@ export default function ProtectedRoute({ children, requiredAccessType, requiredR
       if (mappedRole && hasRole(mappedRole as any)) {
         // Role mapeada tem acesso, permite
       } else {
-        return (
-          <div style={{ 
-            display: 'flex', 
-            justifyContent: 'center', 
-            alignItems: 'center', 
-            height: '100vh',
-            flexDirection: 'column',
-            gap: '1rem'
-          }}>
-            <h2>Acesso Negado</h2>
-            <p>Esta página requer permissões de {Array.isArray(requiredRole) ? requiredRole.join(' ou ') : requiredRole}.</p>
-            <p>Sua role atual: <strong>{mappedRole || `AccessType ${user.accessType}`}</strong></p>
-            <button onClick={() => window.history.back()}>Voltar</button>
-          </div>
+        return renderAccessDenied(
+          `Esta página requer permissões de ${Array.isArray(requiredRole) ? requiredRole.join(' ou ') : requiredRole}.`,
+          mappedRole || `AccessType ${user.accessType}`
         );
       }
     } else {
-      return (
-        <div style={{ 
-          display: 'flex', 
-          justifyContent: 'center', 
-          alignItems: 'center', 
-          height: '100vh',
-          flexDirection: 'column',
-          gap: '1rem'
-        }}>
-          <h2>Acesso Negado</h2>
-          <p>Esta página requer permissões de {Array.isArray(requiredRole) ? requiredRole.join(' ou ') : requiredRole}.</p>
-          <p>Sua role atual: <strong>{user?.roleName || 'Não definida'}</strong></p>
-          <button onClick={() => window.history.back()}>Voltar</button>
-        </div>
+      return renderAccessDenied(
+        `Esta página requer permissões de ${Array.isArray(requiredRole) ? requiredRole.join(' ou ') : requiredRole}.`,
+        user?.roleName || 'Não definida'
       );
     }
   }
 
   // Verifica acesso por accessType (compatibilidade)
   if (requiredAccessType && !hasAccess(requiredAccessType)) {
-    return (
-      <div style={{ 
-        display: 'flex', 
-        justifyContent: 'center', 
-        alignItems: 'center', 
-        height: '100vh',
-        flexDirection: 'column',
-        gap: '1rem'
-      }}>
-        <h2>Acesso Negado</h2>
-        <p>Você não tem permissão para acessar esta página.</p>
-        <p>Sua role atual: <strong>{user?.roleName || 'Não definida'}</strong></p>
-        <button onClick={() => window.history.back()}>Voltar</button>
-      </div>
-    );
+    return renderAccessDenied('Você não tem permissão para acessar esta página.', user?.roleName || 'Não definida');
   }
 
   // Verifica acesso por rota (verificação adicional)
   // Permite acesso ao dashboard, /user/security e /security/mfa-setup mesmo sem roleName (para compatibilidade)
   const allowedRoutesWithoutRole = ['/dashboard', '/user/security', '/security/mfa-setup'];
   if (!allowedRoutesWithoutRole.includes(location.pathname) && !canAccessRoute(location.pathname)) {
-    return (
-      <div style={{ 
-        display: 'flex', 
-        justifyContent: 'center', 
-        alignItems: 'center', 
-        height: '100vh',
-        flexDirection: 'column',
-        gap: '1rem'
-      }}>
-        <h2>Acesso Negado</h2>
-        <p>Você não tem permissão para acessar esta página.</p>
-        <p>Sua role atual: <strong>{user?.roleName || (user?.accessType ? `AccessType ${user.accessType}` : 'Não definida')}</strong></p>
-        <button onClick={() => window.history.back()}>Voltar</button>
-      </div>
+    return renderAccessDenied(
+      'Você não tem permissão para acessar esta página.',
+      user?.roleName || (user?.accessType ? `AccessType ${user.accessType}` : 'Não definida')
     );
   }
 

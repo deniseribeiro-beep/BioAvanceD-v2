@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { exec } = require('child_process');
+const { MongoClient } = require('mongodb');
 const logger = require('../utils/logger');
 const env = require('../config/env');
 
@@ -43,6 +44,66 @@ function runCommand(command) {
   });
 }
 
+async function restoreFromJsonBackup(backupPath, mongoUri) {
+  const manifestPath = path.join(backupPath, 'manifest.json');
+  const hasManifest = fs.existsSync(manifestPath);
+
+  let manifest = null;
+  if (hasManifest) {
+    const rawManifest = await fs.promises.readFile(manifestPath, 'utf8');
+    manifest = JSON.parse(rawManifest);
+  }
+
+  const dbName = manifest?.dbName || resolveDatabaseName(mongoUri);
+  const client = new MongoClient(mongoUri);
+
+  try {
+    await client.connect();
+    const db = client.db(dbName);
+
+    let jsonFiles = [];
+    if (manifest?.collections && Array.isArray(manifest.collections)) {
+      jsonFiles = manifest.collections
+        .map((entry) => entry?.file)
+        .filter((file) => typeof file === 'string' && file.endsWith('.json'));
+    }
+
+    if (jsonFiles.length === 0) {
+      jsonFiles = (await fs.promises.readdir(backupPath))
+        .filter((file) => file.endsWith('.json') && file !== 'manifest.json');
+    }
+
+    if (jsonFiles.length === 0) {
+      throw new Error('Nenhum arquivo JSON de backup encontrado para restore');
+    }
+
+    for (const fileName of jsonFiles) {
+      const collectionName = fileName.replace(/\.json$/i, '');
+      const fullPath = path.join(backupPath, fileName);
+
+      const raw = await fs.promises.readFile(fullPath, 'utf8');
+      const docs = JSON.parse(raw);
+
+      const collection = db.collection(collectionName);
+      await collection.deleteMany({});
+
+      if (Array.isArray(docs) && docs.length > 0) {
+        await collection.insertMany(docs, { ordered: false });
+      }
+    }
+
+    return {
+      success: true,
+      restoredFrom: path.basename(backupPath),
+      restoredAt: new Date(),
+      mode: 'json-fallback',
+      collections: jsonFiles.length
+    };
+  } finally {
+    await client.close();
+  }
+}
+
 async function cleanupOldBackups(baseDir, retentionDays) {
   try {
     if (!fs.existsSync(baseDir)) return;
@@ -75,6 +136,66 @@ async function cleanupOldBackups(baseDir, retentionDays) {
   }
 }
 
+function resolveDatabaseName(mongoUri) {
+  if (env.MONGO_DB) return env.MONGO_DB;
+
+  try {
+    const parsed = new URL(mongoUri);
+    const dbFromPath = parsed.pathname ? parsed.pathname.replace(/^\//, '') : '';
+    return dbFromPath || 'bioavanced';
+  } catch (_) {
+    return 'bioavanced';
+  }
+}
+
+async function writeJsonBackup(backupDir, mongoUri) {
+  const dbName = resolveDatabaseName(mongoUri);
+  const client = new MongoClient(mongoUri);
+
+  try {
+    await client.connect();
+    const db = client.db(dbName);
+
+    ensureDirSync(backupDir);
+    const collections = await db.listCollections({}, { nameOnly: true }).toArray();
+    const manifest = {
+      createdAt: new Date().toISOString(),
+      dbName,
+      type: 'json-fallback',
+      collections: []
+    };
+
+    for (const collection of collections) {
+      const name = collection.name;
+      const docs = await db.collection(name).find({}).toArray();
+      const fileName = `${name}.json`;
+      const filePath = path.join(backupDir, fileName);
+
+      await fs.promises.writeFile(filePath, JSON.stringify(docs, null, 2), 'utf8');
+      manifest.collections.push({
+        name,
+        count: docs.length,
+        file: fileName
+      });
+    }
+
+    await fs.promises.writeFile(
+      path.join(backupDir, 'manifest.json'),
+      JSON.stringify(manifest, null, 2),
+      'utf8'
+    );
+
+    return {
+      success: true,
+      path: backupDir,
+      mode: 'json-fallback',
+      collections: manifest.collections.length
+    };
+  } finally {
+    await client.close();
+  }
+}
+
 async function runBackup() {
   const mongoUri = env.MONGO_URI;
   if (!mongoUri) {
@@ -100,13 +221,73 @@ async function runBackup() {
     return { success: true, path: backupDir };
   } catch (err) {
     const details = err && err.error ? err.error.message : err?.message;
+    const dumpBinaryMissing = /mongodump: not found|is not recognized|ENOENT/i.test(String(details || ''));
+
+    if (dumpBinaryMissing) {
+      try {
+        logger.warn('mongodump indisponível. Usando fallback de backup em JSON.');
+        const fallbackResult = await writeJsonBackup(backupDir, mongoUri);
+
+        const retentionDays = Number(env.BACKUP_RETENTION_DAYS || DEFAULT_RETENTION_DAYS);
+        await cleanupOldBackups(baseDir, retentionDays);
+
+        logger.info(`✅ Backup fallback concluído: ${backupDir}`);
+        return fallbackResult;
+      } catch (fallbackError) {
+        const fallbackDetails = fallbackError?.message || String(fallbackError);
+        logger.error('Erro no fallback de backup JSON:', fallbackDetails);
+        return { success: false, error: fallbackDetails };
+      }
+    }
+
     logger.error('Erro ao executar backup:', details || 'Erro desconhecido');
     return { success: false, error: details || 'Erro ao executar backup' };
+  }
+}
+
+async function restoreBackup(backupPath) {
+  const mongoUri = env.MONGO_URI;
+  if (!mongoUri) {
+    return { success: false, error: 'MONGO_URI não configurado' };
+  }
+
+  if (!backupPath || !fs.existsSync(backupPath)) {
+    return { success: false, error: 'Backup não encontrado' };
+  }
+
+  const dbArg = env.MONGO_DB ? ` --nsInclude="${env.MONGO_DB}.*"` : '';
+  const command = `mongorestore --uri="${mongoUri}" --drop${dbArg} "${backupPath}"`;
+
+  try {
+    await runCommand(command);
+    return {
+      success: true,
+      restoredFrom: path.basename(backupPath),
+      restoredAt: new Date(),
+      mode: 'mongorestore'
+    };
+  } catch (err) {
+    const details = err && err.error ? err.error.message : err?.message;
+    const restoreBinaryMissing = /mongorestore: not found|is not recognized|ENOENT/i.test(String(details || ''));
+
+    if (restoreBinaryMissing) {
+      try {
+        logger.warn('mongorestore indisponível. Usando fallback de restore em JSON.');
+        return await restoreFromJsonBackup(backupPath, mongoUri);
+      } catch (fallbackError) {
+        const fallbackDetails = fallbackError?.message || String(fallbackError);
+        logger.error('Erro no fallback de restore JSON:', fallbackDetails);
+        return { success: false, error: fallbackDetails };
+      }
+    }
+
+    return { success: false, error: details || 'Erro ao restaurar backup' };
   }
 }
 
 module.exports = {
   runBackup,
   cleanupOldBackups,
-  getBackupBaseDir
+  getBackupBaseDir,
+  restoreBackup
 };

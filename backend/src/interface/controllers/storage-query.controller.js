@@ -1,15 +1,15 @@
-const MongoStorageRepository = require('../../../infrastructure/persistence/mongo/MongoStorageRepository');
-const MongoPatientConsentReadRepository = require('../../../infrastructure/persistence/mongo/MongoPatientConsentReadRepository');
-const MongoStorageTopologyReadRepository = require('../../../infrastructure/persistence/mongo/MongoStorageTopologyReadRepository');
-const GetSampleStorageLocationUseCase = require('../../../core/use-cases/GetSampleStorageLocationUseCase');
-const GetBoxAvailablePositionsUseCase = require('../../../core/use-cases/GetBoxAvailablePositionsUseCase');
-const ValidateStoragePositionUseCase = require('../../../core/use-cases/ValidateStoragePositionUseCase');
-const ListOperationalFreezersUseCase = require('../../../core/use-cases/ListOperationalFreezersUseCase');
-const SearchAllocatableSamplesUseCase = require('../../../core/use-cases/SearchAllocatableSamplesUseCase');
-const GetFreezerOccupancyStatsUseCase = require('../../../core/use-cases/GetFreezerOccupancyStatsUseCase');
-const CheckStorageBoxIntegrityUseCase = require('../../../core/use-cases/CheckStorageBoxIntegrityUseCase');
-const GetFreezerTreeUseCase = require('../../../core/use-cases/GetFreezerTreeUseCase');
-const logger = require('../../../utils/logger');
+const MongoStorageRepository = require('../../infrastructure/persistence/mongo/MongoStorageRepository');
+const MongoPatientConsentReadRepository = require('../../infrastructure/persistence/mongo/MongoPatientConsentReadRepository');
+const MongoStorageTopologyReadRepository = require('../../infrastructure/persistence/mongo/MongoStorageTopologyReadRepository');
+const GetSampleStorageLocationUseCase = require('../../core/use-cases/GetSampleStorageLocationUseCase');
+const GetBoxAvailablePositionsUseCase = require('../../core/use-cases/GetBoxAvailablePositionsUseCase');
+const ValidateStoragePositionUseCase = require('../../core/use-cases/ValidateStoragePositionUseCase');
+const ListOperationalFreezersUseCase = require('../../core/use-cases/ListOperationalFreezersUseCase');
+const SearchAllocatableSamplesUseCase = require('../../core/use-cases/SearchAllocatableSamplesUseCase');
+const GetFreezerOccupancyStatsUseCase = require('../../core/use-cases/GetFreezerOccupancyStatsUseCase');
+const CheckStorageBoxIntegrityUseCase = require('../../core/use-cases/CheckStorageBoxIntegrityUseCase');
+const GetFreezerTreeUseCase = require('../../core/use-cases/GetFreezerTreeUseCase');
+const logger = require('../../utils/logger');
 
 function createListFreezersController() {
   return async function listFreezersController(req, res) {

@@ -101,6 +101,7 @@
     "subtitle": "System overview",
     "patients": "Patients",
     "samples": "Samples",
+    "custodyReports": "Custody Reports",
     "results": "Results",
     "temperatureAlerts": "Temperature Alerts",
     "temperatureAlertsActive": "Active Temperature Alerts",

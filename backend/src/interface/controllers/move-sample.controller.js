@@ -1,8 +1,8 @@
-const MoveSampleUseCase = require('../../../core/use-cases/MoveSampleUseCase');
-const MongoStorageRepository = require('../../../infrastructure/persistence/mongo/MongoStorageRepository');
-const MongoAuditRepository = require('../../../infrastructure/persistence/mongo/MongoAuditRepository');
-const LineageRepository = require('../../../infrastructure/database/neo4j/LineageRepository');
-const logger = require('../../../utils/logger');
+const MoveSampleUseCase = require('../../core/use-cases/MoveSampleUseCase');
+const MongoStorageRepository = require('../../infrastructure/persistence/mongo/MongoStorageRepository');
+const MongoAuditRepository = require('../../infrastructure/persistence/mongo/MongoAuditRepository');
+const LineageRepository = require('../../infrastructure/database/neo4j/LineageRepository');
+const logger = require('../../utils/logger');
 
 /**
  * Factory de controller HTTP para movimentação de amostras.

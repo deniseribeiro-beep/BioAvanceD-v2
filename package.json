@@ -1,6 +1,8 @@
 {
   "scripts": {
     "audit:full": "node scripts/audit-complete-system.js",
+    "backend:user:check": "npm --prefix backend run user:check",
+    "backend:user:create-admin": "npm --prefix backend run user:create-admin",
     "docker:local:up": "powershell -ExecutionPolicy Bypass -File ./scripts/start-local-stack.ps1 -EnvFile .env.docker -ComposeFile docker-compose.yml -SkipMigration",
     "docker:local:up:migrate": "powershell -ExecutionPolicy Bypass -File ./scripts/start-local-stack.ps1 -EnvFile .env.docker -ComposeFile docker-compose.yml",
     "docker:local:down": "powershell -ExecutionPolicy Bypass -File ./scripts/stop-local-stack.ps1 -EnvFile .env.docker -ComposeFile docker-compose.yml",
