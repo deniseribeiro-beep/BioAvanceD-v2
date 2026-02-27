@@ -2,6 +2,62 @@ import { useState, useEffect } from 'react';
 import { Patient } from '../types/models';
 import { patientService } from '../services/api';
 
+interface ApiLikeError {
+  message?: string;
+  response?: {
+    data?: {
+      error?: string;
+      message?: string;
+    };
+  };
+}
+
+type PatientsPayload = {
+  success?: boolean;
+  data?: unknown;
+  patients?: unknown;
+  patientID?: string;
+  id?: string;
+};
+
+type PatientWithOptionalId = Patient & { id?: string };
+
+function extractErrorMessage(error: unknown, fallback: string): string {
+  const typedError = error as ApiLikeError | null;
+  return typedError?.response?.data?.error || typedError?.response?.data?.message || typedError?.message || fallback;
+}
+
+function ensurePatientId(items: Patient[]): Patient[] {
+  return items.map((patient) => {
+    const typedPatient = patient as PatientWithOptionalId;
+    return {
+      ...patient,
+      patientID: patient.patientID || typedPatient.id || '',
+    };
+  });
+}
+
+function extractPatients(payload: unknown): Patient[] {
+  const typedPayload = payload as PatientsPayload | null;
+  const nestedData = typedPayload?.data as PatientsPayload | unknown;
+
+  let patientsData: Patient[] = [];
+
+  if (typeof nestedData === 'object' && nestedData && Array.isArray((nestedData as PatientsPayload).patients)) {
+    patientsData = (nestedData as PatientsPayload).patients as Patient[];
+  } else if (Array.isArray(typedPayload?.patients)) {
+    patientsData = typedPayload.patients as Patient[];
+  } else if (Array.isArray(payload)) {
+    patientsData = payload as Patient[];
+  } else if (Array.isArray(typedPayload?.data)) {
+    patientsData = typedPayload.data as Patient[];
+  } else if (typeof payload === 'object' && payload && ((typedPayload?.patientID || typedPayload?.id))) {
+    patientsData = [payload as Patient];
+  }
+
+  return ensurePatientId(patientsData);
+}
+
 export function usePatients() {
   const [patients, setPatients] = useState<Patient[]>([]);
   const [loading, setLoading] = useState(true);
@@ -16,49 +72,11 @@ export function usePatients() {
       setLoading(true);
       setError(null);
       const response = await patientService.getAll();
-      const responseData: any = response.data;
-      
-      // API retorna { success: true, data: { patients: [...], total, ... } } ou { data: [...] }
-      let patientsData: Patient[] = [];
-      
-      // Verifica se a resposta tem a estrutura esperada
-      if (responseData) {
-        // Estrutura: { success: true, data: { patients: [...], total, ... } }
-        if (responseData.data && responseData.data.patients && Array.isArray(responseData.data.patients)) {
-          patientsData = responseData.data.patients;
-        }
-        // Estrutura: { data: { patients: [...], total, ... } }
-        else if (responseData.patients && Array.isArray(responseData.patients)) {
-          patientsData = responseData.patients;
-        }
-        // Estrutura: { data: [...] } (array direto)
-        else if (Array.isArray(responseData)) {
-          patientsData = responseData;
-        }
-        // Estrutura: { data: { data: [...] } }
-        else if (responseData.data && Array.isArray(responseData.data)) {
-          patientsData = responseData.data;
-        }
-        // Se for um objeto único, converte em array
-        else if (typeof responseData === 'object' && !Array.isArray(responseData)) {
-          // Verifica se é um paciente único
-          if (responseData.patientID || responseData.id) {
-            patientsData = [responseData];
-          }
-        }
-      }
-      
-      // Garante que cada paciente tenha pelo menos patientID
-      patientsData = patientsData.map(p => ({
-        ...p,
-        patientID: p.patientID || (p as any).id || ''
-      }));
-      
+      const patientsData = extractPatients(response.data);
       setPatients(patientsData);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Erro ao carregar pacientes:', err);
-      const errorMessage = err.response?.data?.error || err.message || 'Erro ao carregar pacientes';
-      setError(errorMessage);
+      setError(extractErrorMessage(err, 'Erro ao carregar pacientes'));
       setPatients([]); // Garante que a lista seja limpa em caso de erro
     } finally {
       setLoading(false);
@@ -71,8 +89,8 @@ export function usePatients() {
       // Recarrega a lista completa para garantir dados atualizados
       await loadPatients();
       return response.data;
-    } catch (err: any) {
-      throw new Error(err.response?.data?.error || err.message || 'Erro ao criar paciente');
+    } catch (err: unknown) {
+      throw new Error(extractErrorMessage(err, 'Erro ao criar paciente'));
     }
   };
 
@@ -82,8 +100,8 @@ export function usePatients() {
       // Recarrega a lista completa para garantir dados atualizados
       await loadPatients();
       return response.data;
-    } catch (err: any) {
-      throw new Error(err.response?.data?.error || err.message || 'Erro ao atualizar paciente');
+    } catch (err: unknown) {
+      throw new Error(extractErrorMessage(err, 'Erro ao atualizar paciente'));
     }
   };
 
@@ -93,8 +111,8 @@ export function usePatients() {
       await patientService.delete(id);
       // Recarrega a lista completa para garantir dados atualizados
       await loadPatients();
-    } catch (err: any) {
-      throw new Error(err.response?.data?.error || err.response?.data?.message || err.message || 'Erro ao deletar paciente');
+    } catch (err: unknown) {
+      throw new Error(extractErrorMessage(err, 'Erro ao deletar paciente'));
     }
   };
 

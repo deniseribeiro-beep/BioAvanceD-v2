@@ -1,5 +1,6 @@
 const logger = require('../utils/logger');
 const { ObjectId } = require('mongodb');
+const { getCollection } = require('../utils/collectionResolver');
 
 /**
  * Service para validar amostras e consentimento de pacientes antes de upload de análise
@@ -14,7 +15,7 @@ class AnalysisValidationService {
    */
   async validateSampleExists(db, sampleIdentifier) {
     try {
-      const samplesCollection = db.collection('amostras');
+      const samplesCollection = await getCollection(db, 'samples');
       let sample = null;
 
       // Tenta buscar por ObjectId
@@ -56,7 +57,7 @@ class AnalysisValidationService {
         };
       }
 
-      const patientsCollection = db.collection('pacientes');
+      const patientsCollection = await getCollection(db, 'patients');
       
       // Busca o paciente e verifica status de consentimento
       const patient = await patientsCollection.findOne({ 

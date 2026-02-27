@@ -5,7 +5,7 @@
   "private": true,
   "dependencies": {
     "@types/qrcode": "^1.5.6",
-    "axios": "^1.6.2",
+    "axios": "^1.13.5",
     "date-fns": "^2.30.0",
     "html5-qrcode": "^2.3.8",
     "lucide-react": "^0.294.0",
@@ -13,22 +13,26 @@
     "react": "^18.2.0",
     "react-barcode": "^1.4.1",
     "react-dom": "^18.2.0",
-    "react-signature-canvas": "^1.1.0-alpha.2",
     "react-router-dom": "^6.20.0",
+    "react-signature-canvas": "^1.1.0-alpha.2",
     "socket.io-client": "^4.8.1",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
   "devDependencies": {
     "@types/react": "^18.2.43",
     "@types/react-dom": "^18.2.17",
-    "@vitejs/plugin-react": "^4.2.1",
+    "@vitejs/plugin-react": "^5.1.4",
     "baseline-browser-mapping": "^2.9.18",
+    "rollup": "^4.59.0",
     "typescript": "^5.3.3",
-    "vite": "^7.2.4"
+    "vite": "^7.3.1"
   },
   "scripts": {
     "dev": "vite --force",
-    "build": "tsc && vite build",
+    "build": "vite build",
+    "typecheck": "npm run typecheck:core",
+    "typecheck:core": "tsc --noEmit -p tsconfig.typecheck-core.json",
+    "typecheck:full": "tsc --noEmit",
     "preview": "vite preview",
     "cleanup": "node scripts/cleanup.js",
     "clean": "node scripts/cleanup.js",

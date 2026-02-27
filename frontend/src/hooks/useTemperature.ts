@@ -2,6 +2,43 @@ import { useState, useEffect } from 'react';
 import { Temperature } from '../types/models';
 import { temperatureService } from '../services/api';
 
+interface ApiLikeError {
+  message?: string;
+}
+
+type TemperaturePayload = {
+  temperatures?: unknown;
+  data?: unknown;
+};
+
+function extractTemperatures(payload: unknown): Temperature[] {
+  const typedPayload = payload as TemperaturePayload | null;
+  const nestedData = typedPayload?.data as TemperaturePayload | unknown;
+
+  if (Array.isArray(payload)) {
+    return payload as Temperature[];
+  }
+
+  if (Array.isArray(typedPayload?.temperatures)) {
+    return typedPayload.temperatures as Temperature[];
+  }
+
+  if (Array.isArray(typedPayload?.data)) {
+    return typedPayload.data as Temperature[];
+  }
+
+  if (typeof nestedData === 'object' && nestedData && Array.isArray((nestedData as TemperaturePayload).temperatures)) {
+    return (nestedData as TemperaturePayload).temperatures as Temperature[];
+  }
+
+  return [];
+}
+
+function extractErrorMessage(error: unknown, fallback: string): string {
+  const typedError = error as ApiLikeError | null;
+  return typedError?.message || fallback;
+}
+
 export function useTemperature() {
   const [temperatures, setTemperatures] = useState<Temperature[]>([]);
   const [loading, setLoading] = useState(true);
@@ -31,29 +68,12 @@ export function useTemperature() {
     try {
       setLoading(true);
       const response = await temperatureService.getAll();
-      const responseData: any = response.data;
-      // API pode retornar diferentes formatos
-      // Backend retorna: { success: true, data: { temperatures: [...], total: ..., limit: ..., skip: ... } }
-      let temperaturesData: Temperature[] = [];
-      
-      if (Array.isArray(responseData)) {
-        // Se response.data é um array direto
-        temperaturesData = responseData;
-      } else if (responseData?.temperatures && Array.isArray(responseData.temperatures)) {
-        // Se response.data tem uma propriedade temperatures que é um array
-        temperaturesData = responseData.temperatures;
-      } else if (responseData?.data && Array.isArray(responseData.data)) {
-        // Se response.data tem uma propriedade data que é um array
-        temperaturesData = responseData.data;
-      } else if (responseData?.data?.temperatures && Array.isArray(responseData.data.temperatures)) {
-        // Se response.data.data tem uma propriedade temperatures
-        temperaturesData = responseData.data.temperatures;
-      }
+      const temperaturesData = extractTemperatures(response.data);
       
       setTemperatures(temperaturesData);
       setError(null);
-    } catch (err: any) {
-      setError(err.message || 'Erro ao carregar temperaturas');
+    } catch (err: unknown) {
+      setError(extractErrorMessage(err, 'Erro ao carregar temperaturas'));
       setTemperatures([]); // Garante array vazio em caso de erro
     } finally {
       setLoading(false);
@@ -69,13 +89,13 @@ export function useTemperature() {
 
     try {
       const response = await temperatureService.viewControl(sensorID, policyID);
-      const responseData: any = response.data;
+      const responseData = response.data as TemperaturePayload | Temperature[] | null;
       // A API pode retornar { data: [...] } ou diretamente um array
-      const data = responseData?.data || responseData || [];
+      const data = (responseData as TemperaturePayload | null)?.data || responseData || [];
       return Array.isArray(data) ? data : [];
-    } catch (err: any) {
+    } catch (err: unknown) {
       // Não lança erro, apenas loga para não bloquear a dashboard
-      console.warn('Erro ao visualizar controle de temperatura:', err.message);
+      console.warn('Erro ao visualizar controle de temperatura:', extractErrorMessage(err, 'Erro desconhecido'));
       return [];
     }
   };
@@ -85,8 +105,8 @@ export function useTemperature() {
       const response = await temperatureService.create(data);
       setTemperatures([response.data, ...temperatures]);
       return response.data;
-    } catch (err: any) {
-      throw new Error(err.message || 'Erro ao criar leitura de temperatura');
+    } catch (err: unknown) {
+      throw new Error(extractErrorMessage(err, 'Erro ao criar leitura de temperatura'));
     }
   };
 

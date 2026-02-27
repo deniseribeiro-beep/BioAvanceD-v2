@@ -2,6 +2,8 @@ const PatientModel = require('../models/Patient');
 const logger = require('../utils/logger');
 const { generateUniquePatientID, sanitizePatientForLogs } = require('../utils/patientAnonymization');
 const notificationService = require('./notification.service');
+const fhirSyncService = require('./fhir-sync.service');
+const { getCollection } = require('../utils/collectionResolver');
 
 /**
  * Service de Pacientes
@@ -14,7 +16,7 @@ class PatientService {
    */
   async checkDuplicatePatient(db, patientData) {
     try {
-      const patientsCollection = db.collection('pacientes');
+      const patientsCollection = await getCollection(db, 'patients');
       
       if (!patientData.patientName || !patientData.birthDate) {
         return null; // Não pode verificar sem nome e data
@@ -112,7 +114,7 @@ class PatientService {
       delete patientData.height;
       
       // Gera ID único criptograficamente seguro
-      const patientID = await generateUniquePatientID(db, 'pacientes');
+      const patientID = await generateUniquePatientID(db);
       patientData.patientID = patientID;
 
       const consentMetadata = notificationService.buildConsentMetadata();
@@ -121,7 +123,7 @@ class PatientService {
       patientData.consentTokenCreatedAt = consentMetadata.createdAt;
       patientData.consentTokenExpiresAt = consentMetadata.expiresAt;
 
-      const patientsCollection = db.collection('pacientes');
+      const patientsCollection = await getCollection(db, 'patients');
       const patient = PatientModel.create(patientData);
 
       const result = await patientsCollection.insertOne(patient);
@@ -141,6 +143,11 @@ class PatientService {
       const sanitizedData = sanitizePatientForLogs(patient);
       logger.info('Paciente criado:', sanitizedData);
 
+      await fhirSyncService.upsertPatientFromLegacy(db, {
+        _id: result.insertedId,
+        ...patient
+      });
+
       // Retorna paciente com ID gerado
       return {
         _id: result.insertedId,
@@ -155,7 +162,12 @@ class PatientService {
 
   async getPatient(db, patientID) {
     try {
-      const patientsCollection = db.collection('pacientes');
+      const patientFromFhir = await fhirSyncService.getPatientFhirFirst(db, patientID);
+      if (patientFromFhir) {
+        return patientFromFhir;
+      }
+
+      const patientsCollection = await getCollection(db, 'patients');
       // Busca por patientID (string de 8 dígitos) ou _id (ObjectId)
       let patient;
       if (typeof patientID === 'string' && patientID.length === 8 && /^\d{8}$/.test(patientID)) {
@@ -175,7 +187,12 @@ class PatientService {
 
   async listPatients(db, filters = {}) {
     try {
-      const patientsCollection = db.collection('pacientes');
+      const listFromFhir = await fhirSyncService.listPatientsFhirFirst(db, filters);
+      if (listFromFhir) {
+        return listFromFhir;
+      }
+
+      const patientsCollection = await getCollection(db, 'patients');
       const query = {};
 
       if (filters.patientName) {
@@ -210,7 +227,12 @@ class PatientService {
    */
   async searchPatients(db, searchTerm) {
     try {
-      const patientsCollection = db.collection('pacientes');
+      const searchFromFhir = await fhirSyncService.searchPatientsFhirFirst(db, searchTerm);
+      if (searchFromFhir) {
+        return searchFromFhir;
+      }
+
+      const patientsCollection = await getCollection(db, 'patients');
       
       if (!searchTerm || typeof searchTerm !== 'string' || searchTerm.trim().length === 0) {
         return { patients: [], total: 0 };
@@ -310,7 +332,7 @@ class PatientService {
 
   async updatePatient(db, patientID, updateData) {
     try {
-      const patientsCollection = db.collection('pacientes');
+      const patientsCollection = await getCollection(db, 'patients');
       
       // Validação antes de atualizar
       if (updateData.patientID) {
@@ -370,7 +392,7 @@ class PatientService {
       throw new Error('patientId e token são obrigatórios');
     }
 
-    const patientsCollection = db.collection('pacientes');
+    const patientsCollection = await getCollection(db, 'patients');
     const query = { patientID };
     const patient = await patientsCollection.findOne(query);
 
@@ -396,7 +418,7 @@ class PatientService {
   async acceptConsentToken(db, patientID, token) {
     await this.validateConsentToken(db, patientID, token);
 
-    const patientsCollection = db.collection('pacientes');
+    const patientsCollection = await getCollection(db, 'patients');
     await patientsCollection.updateOne(
       { patientID },
       {
@@ -418,7 +440,7 @@ class PatientService {
       throw new Error('patientId é obrigatório');
     }
 
-    const patientsCollection = db.collection('pacientes');
+    const patientsCollection = await getCollection(db, 'patients');
     const patient = await patientsCollection.findOne({ patientID });
 
     if (!patient) {
@@ -473,7 +495,7 @@ class PatientService {
 
   async deletePatient(db, patientID) {
     try {
-      const patientsCollection = db.collection('pacientes');
+      const patientsCollection = await getCollection(db, 'patients');
       
       // Busca por patientID (string de 8 dígitos) ou _id (ObjectId)
       let query;

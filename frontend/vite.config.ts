@@ -38,6 +38,37 @@ export default defineConfig({
   build: {
     target: 'es2020',
     sourcemap: false,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return;
+
+          if (id.includes('react-dom') || id.includes('react/jsx-runtime') || id.includes('/react/')) {
+            return 'vendor-react';
+          }
+
+          if (id.includes('react-router-dom') || id.includes('@remix-run/router')) {
+            return 'vendor-router';
+          }
+
+          if (id.includes('xlsx')) {
+            return 'vendor-xlsx';
+          }
+
+          if (id.includes('socket.io-client') || id.includes('engine.io-client')) {
+            return 'vendor-realtime';
+          }
+
+          if (id.includes('qrcode') || id.includes('html5-qrcode') || id.includes('react-barcode')) {
+            return 'vendor-qr';
+          }
+
+          if (id.includes('date-fns') || id.includes('axios') || id.includes('lucide-react')) {
+            return 'vendor-utils';
+          }
+        },
+      },
+    },
     commonjsOptions: {
       include: [/xlsx/, /node_modules/],
     },

@@ -26,12 +26,19 @@ export function useAssistant() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const unwrap = <T,>(payload: any): T => {
+    if (payload && typeof payload === 'object' && 'data' in payload && payload.data !== undefined) {
+      return payload.data as T;
+    }
+    return payload as T;
+  };
+
   const consult = async (question: string): Promise<AssistantResponse> => {
     try {
       setLoading(true);
       setError(null);
       const response = await assistantService.consult(question);
-      return response.data;
+      return unwrap<AssistantResponse>(response.data);
     } catch (err: any) {
       setError(err.message || 'Erro ao consultar assistente');
       throw err;
@@ -45,7 +52,7 @@ export function useAssistant() {
       setLoading(true);
       setError(null);
       const response = await assistantService.answer(question);
-      return response.data;
+      return unwrap<AssistantResponse>(response.data);
     } catch (err: any) {
       setError(err.message || 'Erro ao obter resposta');
       throw err;
@@ -59,7 +66,7 @@ export function useAssistant() {
       setLoading(true);
       setError(null);
       const response = await assistantService.getContextualHelp(context);
-      return response.data;
+      return unwrap<AssistantResponse>(response.data);
     } catch (err: any) {
       setError(err.message || 'Erro ao obter ajuda contextual');
       throw err;
@@ -73,7 +80,7 @@ export function useAssistant() {
       setLoading(true);
       setError(null);
       const response = await assistantService.requestTutorial(topic);
-      return response.data;
+      return unwrap<TutorialResponse>(response.data);
     } catch (err: any) {
       setError(err.message || 'Erro ao obter tutorial');
       throw err;
@@ -87,7 +94,8 @@ export function useAssistant() {
       setLoading(true);
       setError(null);
       const response = await assistantService.getSuggestions(context);
-      return response.data.suggestions;
+      const unwrapped = unwrap<{ suggestions?: any[] }>(response.data);
+      return unwrapped?.suggestions || [];
     } catch (err: any) {
       setError(err.message || 'Erro ao obter sugestões');
       throw err;

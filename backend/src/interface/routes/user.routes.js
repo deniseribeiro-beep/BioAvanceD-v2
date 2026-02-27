@@ -5,6 +5,10 @@ const { authenticate } = require('../../infrastructure/middleware/auth');
 const { requirePermission } = require('../../infrastructure/middleware/rbac');
 const logger = require('../../utils/logger');
 const consentValidator = require('../../services/consent.validator');
+const RegisterSampleUseCase = require('../../core/use-cases/RegisterSampleUseCase');
+const LineageRepository = require('../../infrastructure/database/neo4j/LineageRepository');
+const { getCollection } = require('../../utils/collectionResolver');
+const { ObjectId } = require('mongodb');
 
 // RF003 - Cadastro de usuário
 router.post('/register',
@@ -481,7 +485,34 @@ router.post('/register-sample', authenticate, requirePermission('createSample'),
     }
 
     const sampleService = require('../../services/sample.service');
-    const sample = await sampleService.createSample(db, req.body);
+    const sampleRepository = {
+      create: async (sampleData) => sampleService.createSample(db, sampleData),
+      deleteById: async (sampleId) => {
+        const samplesCollection = await getCollection(db, 'samples');
+        const filter = ObjectId.isValid(sampleId)
+          ? { _id: new ObjectId(sampleId) }
+          : { _id: sampleId };
+        await samplesCollection.deleteOne(filter);
+      }
+    };
+
+    const registerSampleUseCase = new RegisterSampleUseCase({
+      sampleRepository,
+      lineageRepository: new LineageRepository(req.app.locals.neo4jDriver || null),
+      quarantineService: req.app.locals.neo4jQuarantineService || req.app.locals.topologicalQuarantine || null
+    });
+
+    const result = await registerSampleUseCase.execute({
+      sampleData: req.body,
+      actor: {
+        userId: req.user?.id || req.user?._id?.toString() || req.user?.userID || null,
+        userName: req.user?.name || req.user?.username || null,
+        userRole: req.user?.roleName || req.user?.role || null,
+        ipAddress: req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress || null,
+        userAgent: req.headers['user-agent'] || null
+      }
+    });
+    const sample = result.sample;
 
     return res.status(201).json({
       success: true,
@@ -490,6 +521,15 @@ router.post('/register-sample', authenticate, requirePermission('createSample'),
     });
   } catch (error) {
     logger.error('Erro ao registrar amostra:', error.message);
+
+    if (error?.statusCode === 403 || error?.code === 'STRICT_MODE_BLOCKED' || String(error?.message || '').includes('STRICT_MODE_BLOCKED')) {
+      return res.status(403).json({
+        success: false,
+        error: 'STRICT_MODE_BLOCKED',
+        message: error.message
+      });
+    }
+
     return res.status(400).json({
       success: false,
       error: req.t('users.registerSampleError'),

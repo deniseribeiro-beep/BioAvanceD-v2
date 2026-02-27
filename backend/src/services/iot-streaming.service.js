@@ -1,6 +1,7 @@
 const fhirService = require('./fhir.service');
 const logger = require('../utils/logger');
 const { getQueue } = require('../config/queue');
+const influxTelemetryWriteRepository = require('../infrastructure/persistence/influxdb/InfluxTelemetryWriteRepository');
 
 /**
  * Serviço de IoT Streaming para Temperature Control
@@ -178,6 +179,13 @@ class IoTStreamingService {
 
       // Insere registro
       const result = await temperaturesCollection.insertOne(temperatureData);
+
+      void Promise.resolve().then(() => {
+        influxTelemetryWriteRepository.enqueueTemperatureReading({
+          _id: result.insertedId,
+          ...temperatureData
+        });
+      });
 
       // Converte para FHIR
       const fhirTemperature = fhirService.temperatureToFHIR(temperatureData);

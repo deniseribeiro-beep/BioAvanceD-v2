@@ -1,4 +1,4 @@
-require('dotenv').config();
+require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') });
 const { connectDB, connectNewDB, closeConnection } = require('../src/database/mongo');
 const logger = require('../src/utils/logger');
 

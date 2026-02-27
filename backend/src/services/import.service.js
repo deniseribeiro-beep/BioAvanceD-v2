@@ -8,6 +8,7 @@ const TemperatureModel = require('../models/Temperature');
 const LocationModel = require('../models/Location');
 const fhirValidator = require('./fhir-validator.service');
 const notificationService = require('./notification.service');
+const { getCollection } = require('../utils/collectionResolver');
 
 /**
  * Service de Importação de Dados
@@ -138,7 +139,7 @@ class ImportService {
   async importPatients(db, file) {
     try {
       const ext = path.extname(file.originalname).toLowerCase();
-      const patientsCollection = db.collection('pacientes');
+      const patientsCollection = await getCollection(db, 'patients');
       const results = { success: 0, errors: [], total: 0 };
 
       if (ext === '.json') {
@@ -259,7 +260,7 @@ class ImportService {
   async importSamples(db, file) {
     try {
       const ext = path.extname(file.originalname).toLowerCase();
-      const samplesCollection = db.collection('amostras');
+      const samplesCollection = await getCollection(db, 'samples');
       const results = { success: 0, errors: [], total: 0 };
 
       if (ext === '.json') {

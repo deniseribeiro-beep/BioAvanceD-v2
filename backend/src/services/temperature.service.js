@@ -1,6 +1,7 @@
 const TemperatureModel = require('../models/Temperature');
 const PolicyModel = require('../models/Policy');
 const logger = require('../utils/logger');
+const influxTelemetryWriteRepository = require('../infrastructure/persistence/influxdb/InfluxTelemetryWriteRepository');
 
 /**
  * Service de Temperatura
@@ -23,6 +24,13 @@ class TemperatureService {
       }
 
       const result = await temperaturesCollection.insertOne(temperature);
+
+      void Promise.resolve().then(() => {
+        influxTelemetryWriteRepository.enqueueTemperatureReading({
+          _id: result.insertedId,
+          ...temperature
+        });
+      });
 
       logger.info('Leitura de temperatura registrada:', { logID: result.insertedId });
 

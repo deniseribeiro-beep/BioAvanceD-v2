@@ -1,6 +1,10 @@
 const express = require('express');
 const router = express.Router();
 const sampleService = require('../../services/sample.service');
+const RegisterSampleUseCase = require('../../core/use-cases/RegisterSampleUseCase');
+const LineageRepository = require('../../infrastructure/database/neo4j/LineageRepository');
+const { getCollection } = require('../../utils/collectionResolver');
+const { ObjectId } = require('mongodb');
 const logService = require('../../services/log.service');
 const consentValidator = require('../../services/consent.validator');
 const { enforceCommercialConsent } = require('../../infrastructure/middleware/consent.enforcement');
@@ -22,7 +26,34 @@ router.post('/',
         });
       }
 
-      const sample = await sampleService.createSample(db, req.body);
+      const sampleRepository = {
+        create: async (sampleData) => sampleService.createSample(db, sampleData),
+        deleteById: async (sampleId) => {
+          const samplesCollection = await getCollection(db, 'samples');
+          const filter = ObjectId.isValid(sampleId)
+            ? { _id: new ObjectId(sampleId) }
+            : { _id: sampleId };
+          await samplesCollection.deleteOne(filter);
+        }
+      };
+
+      const registerSampleUseCase = new RegisterSampleUseCase({
+        sampleRepository,
+        lineageRepository: new LineageRepository(req.app.locals.neo4jDriver || null),
+        quarantineService: req.app.locals.neo4jQuarantineService || req.app.locals.topologicalQuarantine || null
+      });
+
+      const result = await registerSampleUseCase.execute({
+        sampleData: req.body,
+        actor: {
+          userId: req.user?.id || req.user?._id?.toString() || req.user?.userID || null,
+          userName: req.user?.name || req.user?.username || null,
+          userRole: req.user?.roleName || req.user?.role || null,
+          ipAddress: req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress || null,
+          userAgent: req.headers['user-agent'] || null
+        }
+      });
+      const sample = result.sample;
 
       // Registra log (anonimizado via auditLogger) - RF004
       if (req.user) {
@@ -60,6 +91,14 @@ router.post('/',
       logger.error('Erro ao criar amostra:', errorMessage);
       if (error.stack) {
         logger.error('Rastreamento:', error.stack);
+      }
+
+      if (error?.statusCode === 403 || error?.code === 'STRICT_MODE_BLOCKED' || String(errorMessage).includes('STRICT_MODE_BLOCKED')) {
+        return res.status(403).json({
+          success: false,
+          error: 'STRICT_MODE_BLOCKED',
+          message: errorMessage
+        });
       }
 
       if (error.status === 409) {
@@ -122,8 +161,8 @@ router.get('/', authenticate, async (req, res) => {
     const result = await sampleService.listSamples(db, filters);
 
     // Enriquecer amostras com informação de consentimento
-    const patientConsentsCollection = db.collection('patientConsents');
-    const patientsCollection = db.collection('patients');
+    const patientConsentsCollection = await getCollection(db, 'consents');
+    const patientsCollection = await getCollection(db, 'patients');
     
     const enrichedSamples = await Promise.all(result.samples.map(async (sample) => {
       let consentValid = false;

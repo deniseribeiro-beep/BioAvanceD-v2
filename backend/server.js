@@ -8,12 +8,16 @@ const { Server } = require("socket.io");
 const logger = require("./src/utils/logger");
 const { connectDB } = require("./src/database/mongo");
 const { connectNeo4j } = require("./src/infrastructure/database/neo4j/connection");
+const LineageRepository = require("./src/infrastructure/database/neo4j/LineageRepository");
+const TopologicalQuarantine = require("./src/infrastructure/queue/TopologicalQuarantine");
+const TelemetryMonitor = require("./src/infrastructure/services/TelemetryMonitor");
 const portManager = require("./src/utils/portManager");
 const env = require("./src/config/env");
 const { initScheduler } = require("./src/services/scheduler.service");
 const { initializeSecuritySystem } = require("./src/infrastructure/middleware/integrationSecurityMiddleware");
 
 const app = express();
+let httpServerInstance = null;
 
 // ==== Critical env check (halt if missing) ====
 if (!env.MONGO_URI || !env.JWT_SECRET) {
@@ -204,6 +208,8 @@ app.use("/api", require("./src/interface/routes/consent.routes"));
 app.use("/api/users", require("./src/interface/routes/user.routes"));
 app.use("/api/access", require("./src/interface/routes/access.routes"));
 app.use("/api/security", require("./src/interface/routes/security.routes"));
+app.use("/api/backup", require("./src/interface/routes/backup.routes"));
+app.use("/api/assistant", require("./src/interface/routes/assistant.routes"));
 // Rotas de Importação compatíveis com LGPD (templates e uploads)
 app.use("/api/import-lgpd", require("./src/interface/routes/import-lgpd.routes"));
 // ===== SECURITY & COMPLIANCE ROUTES =====
@@ -232,7 +238,9 @@ async function startServer() {
       app.locals.neo4jDriver = await connectNeo4j();
       logger.info("[ISO20387][NEO4J] Validação topológica ativa para operações de custódia");
     } catch (neo4jError) {
-      const shouldFailHard = env.NODE_ENV === 'production' || env.NEO4J_REQUIRED;
+      const shouldFailHard =
+        String(env.LINEAGE_MODE || 'fail-open').toLowerCase() === 'fail-closed' ||
+        env.NEO4J_REQUIRED;
       logger.error("[ISO20387][NEO4J] Falha ao iniciar validação topológica:", neo4jError.message || neo4jError);
       if (shouldFailHard) {
         throw neo4jError;
@@ -275,15 +283,67 @@ async function startServer() {
       logger.error('Erro ao realizar seed de tipos de análise:', seedError.message);
     }
 
-    // Iniciar scheduler (backup + monitoramento)
+    // Iniciar scheduler (backup + monitoramento + sync de consentimento)
     try {
-      initScheduler({ db });
+      initScheduler({ db, neo4jDriver: app.locals.neo4jDriver || null });
     } catch (schedulerError) {
       logger.error('Erro ao iniciar scheduler:', schedulerError.message);
     }
 
+    // Fila de quarentena topológica (Redis + self-healing)
+    try {
+      const topologicalQuarantine = new TopologicalQuarantine({
+        getLineageRepository: async () => {
+          if (!app.locals.neo4jDriver) {
+            try {
+              app.locals.neo4jDriver = await connectNeo4j();
+              logger.info('[ISO20387][NEO4J] Driver recuperado para reprocessamento da quarentena');
+            } catch (error) {
+              logger.warn('[ISO20387][NEO4J] Ainda indisponível para worker de quarentena');
+              return null;
+            }
+          }
+
+          return new LineageRepository(app.locals.neo4jDriver);
+        }
+      });
+
+      await topologicalQuarantine.startWorker();
+      app.locals.topologicalQuarantine = topologicalQuarantine;
+    } catch (queueError) {
+      logger.error('[ISO20387][QUARANTINE] Falha ao iniciar worker de quarentena:', queueError.message || queueError);
+      app.locals.topologicalQuarantine = null;
+    }
+
+    // Monitor de telemetria com invalidação em cascata no Neo4j
+    try {
+      const telemetryMonitor = new TelemetryMonitor({
+        db,
+        getNeo4jDriver: async () => {
+          if (app.locals.neo4jDriver) {
+            return app.locals.neo4jDriver;
+          }
+
+          try {
+            app.locals.neo4jDriver = await connectNeo4j();
+            return app.locals.neo4jDriver;
+          } catch (error) {
+            logger.warn('[ISO20387][TELEMETRY] Neo4j indisponível para ciclo de monitoramento');
+            return null;
+          }
+        }
+      });
+
+      telemetryMonitor.start();
+      app.locals.telemetryMonitor = telemetryMonitor;
+    } catch (telemetryError) {
+      logger.error('[ISO20387][TELEMETRY] Falha ao iniciar monitor:', telemetryError.message || telemetryError);
+      app.locals.telemetryMonitor = null;
+    }
+
     // Criar servidor HTTP unificado
     const httpServer = http.createServer(app);
+    httpServerInstance = httpServer;
 
     // Criar Socket.IO (CORS alinhado ao app)
     const io = new Server(httpServer, {
@@ -328,3 +388,38 @@ async function startServer() {
 }
 
 startServer();
+
+async function gracefulShutdown(signal) {
+  try {
+    logger.warn(`Recebido ${signal}. Encerrando serviços em background...`);
+
+    try {
+      app.locals.topologicalQuarantine?.stopWorker?.();
+    } catch (error) {
+      logger.error('[Shutdown] Erro ao parar quarentena topológica:', error.message || error);
+    }
+
+    try {
+      app.locals.telemetryMonitor?.stop?.();
+    } catch (error) {
+      logger.error('[Shutdown] Erro ao parar monitor de telemetria:', error.message || error);
+    }
+
+    if (httpServerInstance) {
+      await new Promise((resolve) => httpServerInstance.close(() => resolve()));
+    }
+
+    process.exit(0);
+  } catch (error) {
+    logger.error('[Shutdown] Falha ao encerrar aplicação:', error.message || error);
+    process.exit(1);
+  }
+}
+
+process.on('SIGINT', () => {
+  void gracefulShutdown('SIGINT');
+});
+
+process.on('SIGTERM', () => {
+  void gracefulShutdown('SIGTERM');
+});

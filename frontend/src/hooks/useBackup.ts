@@ -13,12 +13,19 @@ export function useBackup() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const unwrap = <T,>(payload: any): T => {
+    if (payload && typeof payload === 'object' && 'data' in payload && payload.data !== undefined) {
+      return payload.data as T;
+    }
+    return payload as T;
+  };
+
   const performBackup = async () => {
     try {
       setLoading(true);
       setError(null);
       const response = await backupService.performBackup();
-      return response.data;
+      return unwrap<any>(response.data);
     } catch (err: any) {
       setError(err.message || 'Erro ao realizar backup');
       throw err;
@@ -32,7 +39,7 @@ export function useBackup() {
       setLoading(true);
       setError(null);
       const response = await backupService.listBackups();
-      return response.data as Backup[];
+      return unwrap<Backup[]>(response.data);
     } catch (err: any) {
       setError(err.message || 'Erro ao listar backups');
       throw err;
@@ -46,7 +53,7 @@ export function useBackup() {
       setLoading(true);
       setError(null);
       const response = await backupService.restoreBackup(fileName);
-      return response.data;
+      return unwrap<any>(response.data);
     } catch (err: any) {
       setError(err.message || 'Erro ao restaurar backup');
       throw err;

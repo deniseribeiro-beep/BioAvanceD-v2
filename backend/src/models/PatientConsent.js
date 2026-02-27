@@ -29,6 +29,22 @@ class PatientConsentModel {
       errors.push('userAgent deve ser string');
     }
 
+    if (data.signatureName && typeof data.signatureName !== 'string') {
+      errors.push('signatureName deve ser string');
+    }
+
+    if (data.signatureImageBase64 && typeof data.signatureImageBase64 !== 'string') {
+      errors.push('signatureImageBase64 deve ser string');
+    }
+
+    if (data.signatureMimeType && typeof data.signatureMimeType !== 'string') {
+      errors.push('signatureMimeType deve ser string');
+    }
+
+    if (data.signatureHash && typeof data.signatureHash !== 'string') {
+      errors.push('signatureHash deve ser string');
+    }
+
     return {
       isValid: errors.length === 0,
       errors
@@ -44,6 +60,10 @@ class PatientConsentModel {
       revokedAt: data.revokedAt ? new Date(data.revokedAt) : null,
       ipAddress: data.ipAddress || null,
       userAgent: data.userAgent || null,
+      signatureName: data.signatureName || null,
+      signatureImageBase64: data.signatureImageBase64 || null,
+      signatureMimeType: data.signatureMimeType || null,
+      signatureHash: data.signatureHash || null,
       responses: data.responses || {},
       createdAt: new Date(),
       updatedAt: new Date()

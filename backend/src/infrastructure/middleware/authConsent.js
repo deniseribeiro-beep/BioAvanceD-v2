@@ -10,6 +10,7 @@
 const { ObjectId } = require('mongodb');
 const logger = require('../../utils/logger');
 const { sanitizeInput, sanitizeSensitiveData } = require('../../utils/security');
+const { getCollection } = require('../../utils/collectionResolver');
 
 /**
  * Middleware que valida consentimento ético antes de permitir operações
@@ -69,7 +70,7 @@ function authConsent(options = {}) {
       logger.debug(`[AUTHCONSENT] Validando consentimento para patientID: ${sanitizedPatientID}`);
 
       // 2. BUSCAR CONSENTIMENTO NO BANCO
-      const patientConsentsCollection = db.collection('patient_consents');
+      const patientConsentsCollection = await getCollection(db, 'consents', 'findOne');
       
       // Busca o consentimento mais recente do paciente
       const activeConsent = await patientConsentsCollection.findOne(

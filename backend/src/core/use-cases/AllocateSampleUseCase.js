@@ -46,51 +46,56 @@ class AllocateSampleUseCase {
       reason: 'allocate'
     });
 
-    await this.storageRepository.withTransaction(async (session) => {
-      const sample = await this.storageRepository.findSampleById(command.sampleId, session);
-      if (!sample) {
-        throw new Error('Amostra não encontrada');
-      }
+    try {
+      await this.storageRepository.withTransaction(async (session) => {
+        const sample = await this.storageRepository.findSampleById(command.sampleId, session);
+        if (!sample) {
+          throw new Error('Amostra não encontrada');
+        }
 
-      const beforeLocation = sample.storageLocation
-        ? {
-            boxId: sample.storageLocation.boxId ? String(sample.storageLocation.boxId) : null,
-            position: sample.storageLocation.position ? String(sample.storageLocation.position).toUpperCase() : null
-          }
-        : null;
-
-      await this.storageRepository.allocateSamplePosition(
-        {
-          sampleId: command.sampleId,
-          boxId: command.boxId,
-          position: normalizedPosition
-        },
-        session
-      );
-
-      await this.auditRepository.appendImmutableAudit(
-        {
-          sampleId: String(sample._id),
-          barcode: sample.barcode || null,
-          eventType: 'allocate',
-          before: {
-            storageLocation: beforeLocation
-          },
-          after: {
-            storageLocation: {
-              boxId: String(command.boxId),
-              position: normalizedPosition
+        const beforeLocation = sample.storageLocation
+          ? {
+              boxId: sample.storageLocation.boxId ? String(sample.storageLocation.boxId) : null,
+              position: sample.storageLocation.position ? String(sample.storageLocation.position).toUpperCase() : null
             }
+          : null;
+
+        await this.storageRepository.allocateSamplePosition(
+          {
+            sampleId: command.sampleId,
+            boxId: command.boxId,
+            position: normalizedPosition
           },
-          context: {
-            actor: command.actor,
-            reason: 'allocate'
+          session
+        );
+
+        await this.auditRepository.appendImmutableAudit(
+          {
+            sampleId: String(sample._id),
+            barcode: sample.barcode || null,
+            eventType: 'allocate',
+            before: {
+              storageLocation: beforeLocation
+            },
+            after: {
+              storageLocation: {
+                boxId: String(command.boxId),
+                position: normalizedPosition
+              }
+            },
+            context: {
+              actor: command.actor,
+              reason: 'allocate'
+            },
+            timestamp: new Date()
           },
-          timestamp: new Date()
-        },
-        session
-      );
-    });
+          session
+        );
+      });
+    } catch (mongoError) {
+      await this.compensateLineageIfNeeded(lineageResult, String(sample._id));
+      throw mongoError;
+    }
 
     return {
       success: true,
@@ -100,7 +105,8 @@ class AllocateSampleUseCase {
         position: normalizedPosition
       },
       lineageValidated: lineageResult.lineageValidated,
-      lineagePersisted: lineageResult.lineagePersisted
+      lineagePersisted: lineageResult.lineagePersisted,
+      lineageEventId: lineageResult.eventId || null
     };
   }
 
@@ -114,7 +120,7 @@ class AllocateSampleUseCase {
   }
 
   async ensureLineageBeforeMongo(payload) {
-    const shouldFailHard = env.NODE_ENV === 'production';
+    const shouldFailHard = String(env.LINEAGE_MODE || 'fail-open').toLowerCase() === 'fail-closed';
 
     if (!this.lineageRepository) {
       const error = new Error('[ISO20387][LINEAGE] Repositório Neo4j ausente para operação de custódia');
@@ -127,14 +133,31 @@ class AllocateSampleUseCase {
 
     try {
       await this.lineageRepository.validateBeforePersistence(payload);
-      await this.lineageRepository.recordCustodyEvent(payload);
-      return { lineageValidated: true, lineagePersisted: true };
+      const persisted = await this.lineageRepository.recordCustodyEvent(payload);
+      return { lineageValidated: true, lineagePersisted: true, eventId: persisted?.eventId || null };
     } catch (error) {
       logger.error('[ISO20387][LINEAGE] Falha na validação/persistência pré-Mongo (allocate):', error.message || error);
       if (shouldFailHard) {
         throw new Error('ISO20387_LINEAGE_VALIDATION_FAILED: operação bloqueada antes do MongoDB');
       }
-      return { lineageValidated: false, lineagePersisted: false };
+      return { lineageValidated: false, lineagePersisted: false, eventId: null };
+    }
+  }
+
+  async compensateLineageIfNeeded(lineageResult, sampleId) {
+    if (!lineageResult?.lineagePersisted || !lineageResult?.eventId || !this.lineageRepository) {
+      return;
+    }
+
+    try {
+      await this.lineageRepository.compensateCustodyEvent({
+        eventId: lineageResult.eventId,
+        sampleId,
+        reason: 'mongo_transaction_failed'
+      });
+      logger.warn('[ISO20387][SAGA] Compensação Neo4j concluída após falha Mongo (allocate)');
+    } catch (compensationError) {
+      logger.error('[ISO20387][SAGA] Falha ao compensar evento de linhagem (allocate):', compensationError.message || compensationError);
     }
   }
 }

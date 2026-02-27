@@ -2,20 +2,28 @@ import { useEffect, useMemo, useState } from 'react';
 import Card from './UI/Card';
 import Button from './UI/Button';
 import Input from './UI/Input';
+import AssinaturaDigitalTCLE from './AssinaturaDigitalTCLE';
 import { ConsentPermission } from '../types/models';
 import { useLanguage } from '../contexts/LanguageContext';
 import './ConsentForm.css';
 
 interface ConsentFormProps {
   patientName: string;
+  patientId: string;
   templateText: string;
   permissions: ConsentPermission[];
-  onSubmit: (payload: { responses: Record<string, boolean>; signatureName: string }) => void;
+  onSubmit: (payload: {
+    responses: Record<string, boolean>;
+    signatureName: string;
+    signatureImageBase64?: string;
+    signatureMimeType?: string;
+  }) => void;
   onCancel: () => void;
 }
 
 export default function ConsentForm({
   patientName,
+  patientId,
   templateText,
   permissions,
   onSubmit,
@@ -24,6 +32,7 @@ export default function ConsentForm({
   const { t } = useLanguage();
   const [responses, setResponses] = useState<Record<string, boolean>>({});
   const [signatureName, setSignatureName] = useState('');
+  const [signatureImageBase64, setSignatureImageBase64] = useState('');
 
   useEffect(() => {
     const initialResponses: Record<string, boolean> = {};
@@ -66,7 +75,8 @@ export default function ConsentForm({
     ? false
     : requiredPermissionKeys.every((key) => responses[key] === true);
   const hasSignature = signatureName.trim().length > 3;
-  const canSubmit = hasRequiredConsent && hasSignature;
+  const hasDigitalSignature = signatureImageBase64.trim().length > 0;
+  const canSubmit = hasRequiredConsent && hasSignature && hasDigitalSignature;
 
   return (
     <div className="consent-form">
@@ -114,16 +124,43 @@ export default function ConsentForm({
               placeholder={t('consent.form.signaturePlaceholder')}
             />
 
+            <div className="consent-signature-canvas">
+              <AssinaturaDigitalTCLE
+                doadorId={patientId}
+                persistirNoBackend={false}
+                onAssinaturaConfirmada={({ assinaturaBase64 }) => {
+                  setSignatureImageBase64(assinaturaBase64);
+                  if (signatureName.trim().length === 0) {
+                    setSignatureName(patientName);
+                  }
+                }}
+              />
+            </div>
+
             <div className="consent-actions">
               <Button variant="secondary" onClick={onCancel}>
                 {t('common.cancel')}
               </Button>
-              <Button variant="primary" onClick={() => onSubmit({ responses, signatureName })} disabled={!canSubmit}>
+              <Button
+                variant="primary"
+                onClick={() =>
+                  onSubmit({
+                    responses,
+                    signatureName,
+                    signatureImageBase64,
+                    signatureMimeType: 'image/png'
+                  })
+                }
+                disabled={!canSubmit}
+              >
                 {t('common.confirm')}
               </Button>
             </div>
             {!hasRequiredConsent && (
               <span className="consent-hint">{t('consent.form.hint')}</span>
+            )}
+            {!hasDigitalSignature && (
+              <span className="consent-hint">Confirme a assinatura digital antes de finalizar.</span>
             )}
           </Card>
         </div>

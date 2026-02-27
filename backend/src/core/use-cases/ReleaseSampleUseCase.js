@@ -48,57 +48,63 @@ class ReleaseSampleUseCase {
 
     let releasedFrom = null;
 
-    await this.storageRepository.withTransaction(async (session) => {
-      const sample = await this.storageRepository.findSampleById(command.sampleId, session);
-      if (!sample) {
-        throw new Error('Amostra não encontrada');
-      }
+    try {
+      await this.storageRepository.withTransaction(async (session) => {
+        const sample = await this.storageRepository.findSampleById(command.sampleId, session);
+        if (!sample) {
+          throw new Error('Amostra não encontrada');
+        }
 
-      const release = await this.storageRepository.releaseSamplePosition(
-        { sampleId: command.sampleId },
-        session
-      );
+        const release = await this.storageRepository.releaseSamplePosition(
+          { sampleId: command.sampleId },
+          session
+        );
 
-      releasedFrom = {
-        sampleId: String(command.sampleId),
-        boxId: release.from.boxId,
-        position: release.from.position
-      };
+        releasedFrom = {
+          sampleId: String(command.sampleId),
+          boxId: release.from.boxId,
+          position: release.from.position
+        };
 
-      await this.auditRepository.appendImmutableAudit(
-        {
-          sampleId: String(sample._id),
-          barcode: sample.barcode || null,
-          eventType: 'release',
-          before: {
-            storageLocation: {
-              boxId: release.from.boxId,
-              position: release.from.position
-            }
+        await this.auditRepository.appendImmutableAudit(
+          {
+            sampleId: String(sample._id),
+            barcode: sample.barcode || null,
+            eventType: 'release',
+            before: {
+              storageLocation: {
+                boxId: release.from.boxId,
+                position: release.from.position
+              }
+            },
+            after: {
+              storageLocation: null
+            },
+            context: {
+              actor: command.actor,
+              reason: 'release'
+            },
+            timestamp: new Date()
           },
-          after: {
-            storageLocation: null
-          },
-          context: {
-            actor: command.actor,
-            reason: 'release'
-          },
-          timestamp: new Date()
-        },
-        session
-      );
-    });
+          session
+        );
+      });
+    } catch (mongoError) {
+      await this.compensateLineageIfNeeded(lineageResult, String(sampleSnapshot._id));
+      throw mongoError;
+    }
 
     return {
       success: true,
       releasedFrom,
       lineageValidated: lineageResult.lineageValidated,
-      lineagePersisted: lineageResult.lineagePersisted
+      lineagePersisted: lineageResult.lineagePersisted,
+      lineageEventId: lineageResult.eventId || null
     };
   }
 
   async ensureLineageBeforeMongo(payload) {
-    const shouldFailHard = env.NODE_ENV === 'production';
+    const shouldFailHard = String(env.LINEAGE_MODE || 'fail-open').toLowerCase() === 'fail-closed';
 
     if (!this.lineageRepository) {
       const error = new Error('[ISO20387][LINEAGE] Repositório Neo4j ausente para operação de custódia');
@@ -111,14 +117,31 @@ class ReleaseSampleUseCase {
 
     try {
       await this.lineageRepository.validateBeforePersistence(payload);
-      await this.lineageRepository.recordCustodyEvent(payload);
-      return { lineageValidated: true, lineagePersisted: true };
+      const persisted = await this.lineageRepository.recordCustodyEvent(payload);
+      return { lineageValidated: true, lineagePersisted: true, eventId: persisted?.eventId || null };
     } catch (error) {
       logger.error('[ISO20387][LINEAGE] Falha na validação/persistência pré-Mongo (release):', error.message || error);
       if (shouldFailHard) {
         throw new Error('ISO20387_LINEAGE_VALIDATION_FAILED: operação bloqueada antes do MongoDB');
       }
-      return { lineageValidated: false, lineagePersisted: false };
+      return { lineageValidated: false, lineagePersisted: false, eventId: null };
+    }
+  }
+
+  async compensateLineageIfNeeded(lineageResult, sampleId) {
+    if (!lineageResult?.lineagePersisted || !lineageResult?.eventId || !this.lineageRepository) {
+      return;
+    }
+
+    try {
+      await this.lineageRepository.compensateCustodyEvent({
+        eventId: lineageResult.eventId,
+        sampleId,
+        reason: 'mongo_transaction_failed'
+      });
+      logger.warn('[ISO20387][SAGA] Compensação Neo4j concluída após falha Mongo (release)');
+    } catch (compensationError) {
+      logger.error('[ISO20387][SAGA] Falha ao compensar evento de linhagem (release):', compensationError.message || compensationError);
     }
   }
 }

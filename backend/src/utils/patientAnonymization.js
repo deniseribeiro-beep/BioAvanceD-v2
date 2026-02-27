@@ -1,5 +1,8 @@
 const crypto = require('crypto');
 const logger = require('./logger');
+const env = require('../config/env');
+
+const DEFAULT_PATIENT_COLLECTION = env.COLL_PATIENTS || 'patients';
 
 /**
  * Utilitário para anonimização de pacientes conforme LGPD
@@ -13,7 +16,7 @@ const logger = require('./logger');
  * @param {string} collectionName - Nome da collection (padrão: 'pacientes')
  * @returns {Promise<string>} ID único de 8 dígitos
  */
-async function generateUniquePatientID(db, collectionName = 'pacientes') {
+async function generateUniquePatientID(db, collectionName = DEFAULT_PATIENT_COLLECTION) {
   const maxAttempts = 100; // Limite de tentativas para evitar loop infinito
   let attempts = 0;
 
@@ -49,7 +52,7 @@ async function generateUniquePatientID(db, collectionName = 'pacientes') {
  * @param {string} collectionName - Nome da collection (padrão: 'pacientes')
  * @returns {Promise<boolean>} true se o ID existe, false caso contrário
  */
-async function validatePatientID(db, patientID, collectionName = 'pacientes') {
+async function validatePatientID(db, patientID, collectionName = DEFAULT_PATIENT_COLLECTION) {
   try {
     if (!patientID || typeof patientID !== 'string' || patientID.length !== 8) {
       return false;
@@ -81,7 +84,7 @@ async function validatePatientID(db, patientID, collectionName = 'pacientes') {
  * @param {string} collectionName - Nome da collection (padrão: 'pacientes')
  * @returns {Promise<Object|null>} Objeto com apenas ID e dados não sensíveis, ou null
  */
-async function getPatientByIDOnly(db, patientID, collectionName = 'pacientes') {
+async function getPatientByIDOnly(db, patientID, collectionName = DEFAULT_PATIENT_COLLECTION) {
   try {
     const patientsCollection = db.collection(collectionName);
     const patient = await patientsCollection.findOne(

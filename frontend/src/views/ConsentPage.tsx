@@ -67,7 +67,12 @@ export default function ConsentPage() {
     };
   }, [patientId]);
 
-  const handleSubmit = async (payload: { responses: Record<string, boolean>; signatureName: string }) => {
+  const handleSubmit = async (payload: {
+    responses: Record<string, boolean>;
+    signatureName: string;
+    signatureImageBase64?: string;
+    signatureMimeType?: string;
+  }) => {
     if (!template?._id) return;
 
     try {
@@ -75,8 +80,10 @@ export default function ConsentPage() {
         patientId,
         templateId: template._id,
         responses: payload.responses,
-        signatureName: payload.signatureName
-      } as any);
+        signatureName: payload.signatureName,
+        signatureImageBase64: payload.signatureImageBase64,
+        signatureMimeType: payload.signatureMimeType
+      });
 
       showToast(t('consent.page.submitSuccess'), 'success');
       navigate('/patients');
@@ -121,6 +128,7 @@ export default function ConsentPage() {
     <div className="page consent-page">
       <ConsentForm
         patientName={patientName}
+        patientId={patientId}
         templateText={template.htmlContent || template.content}
         permissions={template.permissions || []}
         onSubmit={handleSubmit}

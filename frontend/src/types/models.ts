@@ -276,7 +276,7 @@ export interface User {
 }
 
 export interface SpecificUser extends User {
-  mfaEnabled?: string;
+  mfaEnabled?: boolean;
   mfaActivationDate?: Date | string | null;
   mfaFailedAttempts?: number;
   mfaLocked?: boolean;

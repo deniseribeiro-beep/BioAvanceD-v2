@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const { ObjectId } = require('mongodb'); // Native MongoDB driver para evitar conflitos BSON
 const logger = require('../utils/logger');
+const { getCollection } = require('../utils/collectionResolver');
 
 /**
  * Storage Service - Núcleo de Armazenamento Físico
@@ -147,7 +148,7 @@ class StorageService {
       // Iniciar transação
       await session.withTransaction(async () => {
         const storageBoxesCollection = this.db.collection('storageBoxes');
-        const samplesCollection = this.db.collection('amostras');
+        const samplesCollection = await getCollection(this.db, 'samples');
 
         // Validar disponibilidade primeiro (fora da transação para speedup)
         const validation = await this.validatePositionAvailability(boxId, position);
@@ -290,7 +291,7 @@ class StorageService {
    */
   async releaseSampleFromPosition(sampleId) {
     try {
-      const samplesCollection = this.db.collection('amostras');
+      const samplesCollection = await getCollection(this.db, 'samples');
       const storageBoxesCollection = this.db.collection('storageBoxes');
 
       // Converter sampleId
@@ -473,7 +474,7 @@ class StorageService {
    */
   async getSampleStorage(sampleId) {
     try {
-      const samplesCollection = this.db.collection('amostras');
+      const samplesCollection = await getCollection(this.db, 'samples');
       const storagePathsCollection = this.db.collection('storagePaths');
 
       const sampleObjId = ObjectId.isValid(sampleId)
@@ -566,7 +567,7 @@ class StorageService {
   async verifyBoxIntegrity(boxId) {
     try {
       const storageBoxesCollection = this.db.collection('storageBoxes');
-      const samplesCollection = this.db.collection('amostras');
+      const samplesCollection = await getCollection(this.db, 'samples');
 
       let boxObjId;
       try {

@@ -80,6 +80,10 @@
   justify-content: flex-end;
 }
 
+.consent-signature-canvas {
+  margin-top: 0.75rem;
+}
+
 .consent-hint {
   font-size: 0.75rem;
   color: var(--text-light);

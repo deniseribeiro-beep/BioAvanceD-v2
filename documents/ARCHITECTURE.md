@@ -1,19 +1,18 @@
-/**
- * ARQUITETURA DO SISTEMA DE SEGURANÇA E CONFORMIDADE
- * Implementação completa em BioAvanceD
- */
+# ARQUITETURA DO SISTEMA DE SEGURANÇA, CONFORMIDADE E RESILIÊNCIA
 
-# 🏗️ ARQUITETURA VISUAL
+Implementação consolidada do BioAvanceD (backend + frontend + stack local).
+
+# ARQUITETURA LÓGICA
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                         CAMADA DE REQUSIÇÕES                         │
+│                         CAMADA DE REQUISIÇÕES                        │
 │  POST /api/samples | POST /api/results | PUT /api/patients          │
 └────────────────────────┬────────────────────────────────────────────┘
                          │
                          ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│           MIDDLEWARE DE INTEGRAÇÃO DE SEGURANÇA (NOVO)               │
+│           MIDDLEWARE DE INTEGRAÇÃO DE SEGURANÇA                      │
 │      src/middleware/integrationSecurityMiddleware.js                │
 ├─────────────────────────────────────────────────────────────────────┤
 │ • Aplica automaticamente em rotas críticas                           │
@@ -23,15 +22,15 @@
          │                                                   │
          ▼                                                   ▼
   ┌─────────────────────────┐          ┌──────────────────────────────┐
-  │ BLOQUEIO ÉTICO (NOVO)    │          │ ALERTAS DE SEGURANÇA (NOVO)  │
+   │ BLOQUEIO ÉTICO           │          │ ALERTAS DE SEGURANÇA          │
   │ authConsent.js           │          │ securityAlerts.service.js    │
   ├─────────────────────────┤          ├──────────────────────────────┤
   │ • Valida consentimento   │          │ • Registra eventos críticos  │
   │ • Verifica REVOKED       │          │ • Detecta atividades susp.   │
-  │ • Valida escopos         │          │ • Listeners customizáveis    │
-  │ • 403 se bloqueado       │          │ • Email/Slack ready         │
+   │ • Valida escopos         │          │ • Observadores customizáveis │
+   │ • 403 se bloqueado       │          │ • Integração com e-mail/Slack│
   │                          │          │                              │
-  │ ✅ 100% testado (6/6)    │          │ ✅ Integrado com authConsent │
+   │ cobertura por testes      │          │ integração com authConsent    │
   └──────────────────────────┘          └──────────────────────────────┘
          │                                           │
          └─────────────┬──────────────────┬─────────┘
@@ -49,21 +48,21 @@
          ┌─────────────┴──────────────┐
          │                            │
    ┌─────▼──────────────┐    ┌─────────▼───────────────┐
-   │  RELATÓRIOS (NOVO) │    │ ESCOPOS CONFIG (NOVO)   │
+   │  RELATÓRIOS        │    │ CONFIGURAÇÃO DE ESCOPOS │
    │  complianceReport  │    │ consentScopes.js        │
    ├────────────────────┤    ├────────────────────────┤
-   │ • Dashboard        │    │ • 11 escopos definidos │
+   │ • Painel de controle│   │ • 11 escopos definidos │
    │ • Relatórios JSON  │    │ • Categorias           │
    │ • Relatórios CSV   │    │ • Níveis de risco      │
-   │ • Score 0-100      │    │ • Retenção de dados    │
+   │ • Índice 0-100     │    │ • Retenção de dados    │
    │ • Recomendações    │    │                        │
-   │                    │    │ ✅ URLs públicas em:   │
-   │ ✅ Completo        │    │    /api/compliance/    │
+   │                    │    │ Pontos de extremidade públicos: │
+   │ Implementado       │    │    /api/compliance/    │
    └────────────────────┘    │    scopes              │
                              └────────────────────────┘
                                       👇
                              ┌──────────────────────┐
-                             │  ROTAS API (NOVO)    │
+                             │  ROTAS DE API        │
                              │  compliance.routes.js│
                              ├──────────────────────┤
                              │ GET  /dashboard      │
@@ -77,72 +76,155 @@
 
 ---
 
-# 📦 ESTRUTURA DE PACOTES
+# ESTRUTURA DE PACOTES
+
+---
+
+# ESTRATÉGIA DE LEITURA FHIR-FIRST
+
+- Configuração: `FHIR_READ_MODE`
+   - `fhir-first` (padrão): tenta ler primeiro em `patients_fhir`, `samples_fhir`, `consents_fhir`.
+   - `legacy-first`: mantém leitura primária nas coleções canônicas legadas (`patients`, `samples`, `patientConsents`).
+- Retorno alternativo automático:
+   - Se a coleção FHIR não estiver disponível, não tiver dados, ou ocorrer incompatibilidade de driver/mock, o serviço retorna para leitura legacy sem interrupção da API.
+- Escopo atual:
+   - `patient.service.js`: `getPatient`, `listPatients`, `searchPatients`.
+   - `sample.service.js`: `getSample`, `listSamples`.
+   - `consent.service.js`: `getPatientConsent`.
+
+---
+
+# RESILIÊNCIA TOPOLÓGICA E RASTREABILIDADE (2026-02-26)
+
+## 1) Registro dinâmico de amostras (estrito/permissivo por risco)
+
+- Caso de uso: `backend/src/core/use-cases/RegisterSample.js`
+- Regras principais:
+   - linha de base por `LINEAGE_MODE` (`fail-open` / `fail-closed`)
+   - força modo estrito para alto risco (`isRareDisease`, `riskLevel`, `riskScore`)
+   - em estrito: falha de consentimento/topologia gera rollback Mongo + `403`
+   - em permissivo: falha de Neo4j não bloqueia, evento vai para quarentena Redis
+
+## 2) Quarentena topológica com auto-recuperação (Redis)
+
+- Implementação: `backend/src/infrastructure/queue/TopologicalQuarantine.js`
+- Funções:
+   - enfileirar eventos de linhagem em falhas transitórias do Neo4j
+   - processo periódico de reprocessamento com controle de lote e número máximo de tentativas
+   - tolerância a erro sem derrubar o processo
+
+## 3) Invalidação em cascata por telemetria (InfluxDB → Neo4j)
+
+- Implementação: `backend/src/infrastructure/services/TelemetryMonitor.js`
+- Comportamento:
+   - monitora temperatura crítica por janela temporal configurável
+   - identifica amostras raiz impactadas
+   - propaga status `COMPROMETIDA` no grafo de linhagem (`DERIVED_FROM`)
+   - aplica cooldown por freezer para evitar alertas redundantes
+
+## 4) Integração de runtime no servidor
+
+- `backend/server.js`:
+   - inicializa `TopologicalQuarantine` e `TelemetryMonitor`
+   - expõe instâncias via `app.locals`
+   - realiza encerramento gracioso de processos/cron em `SIGINT`/`SIGTERM`
+
+## 5) Perfis operacionais de ambiente
+
+- `backend/.env.resilience.example` (linha de base permissiva)
+- `backend/.env.resilience.strict.example` (linha de base regulada, fail-closed)
+- Variáveis-chave:
+   - `NEO4J_RETRY_QUEUE_KEY`
+   - `NEO4J_RETRY_INTERVAL_MS`
+   - `NEO4J_RETRY_BATCH_SIZE`
+   - `NEO4J_RETRY_MAX_ATTEMPTS`
+   - `TELEMETRY_MONITOR_CRON`
+   - `TELEMETRY_CRITICAL_TEMP`
+   - `TELEMETRY_CRITICAL_DURATION_HOURS`
+   - `TELEMETRY_LOOKBACK_HOURS`
+   - `TELEMETRY_TRIGGER_COOLDOWN_MINUTES`
 
 ```
+
 backend/
 ├── src/
 │   ├── config/
-│   │   └── consentScopes.js (✨ NOVO: 11 escopos)
+│   │   └── consentScopes.js (11 escopos)
+│   │   └── collections.js (resolução canônica de coleções)
 │   │
 │   ├── utils/
-│   │   └── security.js (✨ NOVO: sanitização + validação CPF)
+│   │   └── security.js (sanitização + validação CPF)
+│   │   └── collectionResolver.js (retorno alternativo por aliases/canonical)
 │   │
 │   ├── middleware/
 │   │   ├── auth.js (existente)
-│   │   ├── authConsent.js (✨ NOVO: bloqueio ético)
-│   │   └── integrationSecurityMiddleware.js (✨ NOVO: integração)
+│   │   ├── authConsent.js (bloqueio ético)
+│   │   └── integrationSecurityMiddleware.js (integração)
+│   │
+│   ├── core/
+│   │   └── use-cases/
+│   │       └── RegisterSample.js (risco dinâmico + rollback)
+│   │
+│   ├── infrastructure/
+│   │   ├── queue/
+│   │   │   └── TopologicalQuarantine.js (autorrecuperação com Redis)
+│   │   └── services/
+│   │       └── TelemetryMonitor.js (cascata Influx→Neo4j)
 │   │
 │   ├── services/
 │   │   ├── sample.service.js (sem mudanças)
-│   │   ├── securityAlerts.service.js (✨ NOVO: alertas)
-│   │   └── complianceReport.service.js (✨ NOVO: relatórios)
+│   │   ├── securityAlerts.service.js (alertas)
+│   │   ├── complianceReport.service.js (relatórios)
+│   │   ├── consentNeo4jSync.service.js (sincronização Mongo→Neo4j)
+│   │   └── fhir-sync.service.js (leitura/migração FHIR)
 │   │
-│   └── routes/
-│       ├── sample.routes.js (sem mudanças)
-│       └── compliance.routes.js (✨ NOVO: endpoints)
+│   └── interface/
+│       └── routes/
+│           ├── sample.routes.js (atualizada: integração com RegisterSample)
+│           ├── compliance.routes.js (pontos de extremidade)
+│           ├── assistant.routes.js
+│           └── backup.routes.js
 │
 ├── test/
 │   └── unit/
-│       ├── security.test.js (✨ NOVO: 18 testes)
-│       └── authConsent.test.js (✨ NOVO: 9 testes)
+│       ├── security.test.js (18 testes)
+│       └── authConsent.test.js (9 testes)
 │
 └── docs/
-    ├── INTEGRATION_GUIDE.md (✨ NOVO)
-    ├── IMPLEMENTATION_CHECKLIST.md (✨ NOVO)
-    ├── SECURITY_IMPLEMENTATION_SUMMARY.md (✨ NOVO)
-    └── USAGE_EXAMPLES.md (✨ NOVO)
+   ├── INTEGRATION_GUIDE.md
+   ├── IMPLEMENTATION_CHECKLIST.md
+   ├── SECURITY_IMPLEMENTATION_SUMMARY.md
+   └── USAGE_EXAMPLES.md
 ```
 
 ---
 
-# 🔄 FLUXO DE EXECUÇÃO
+# FLUXO DE EXECUÇÃO
 
 ```
-Usuário tenta criar amostra SEM consentimento:
-═══════════════════════════════════════════════
+Caso: tentativa de criação de amostra sem consentimento ativo
 
-1️⃣ POST /api/samples
+1. `POST /api/samples`
    ▼
-2️⃣ integrationSecurityMiddleware intercepta
+2. `integrationSecurityMiddleware` intercepta
    ▼
-3️⃣ Chama authConsent({ patientID })
+3. Chama `authConsent({ patientID })`
    ▼
-4️⃣ Busca patient_consents no DB
+4. Busca `patient_consents` no banco
    ▼
-5️⃣ Não encontra consentimento ativo
+5. Não encontra consentimento ativo
    ▼
-6️⃣ ❌ BLOQUEADO → Retorna 403
+6. Bloqueia a operação e retorna `403`
    {
-     "error": "🔒 BLOQUEIO ÉTICO: Consentimento ausente",
+     "error": "BLOQUEIO_ETICO: Consentimento ausente",
      "code": "CONSENT_REQUIRED"
    }
    ▼
-7️⃣ consentBlockAlertWrapper captura 403
+7. `consentBlockAlertWrapper` captura `403`
    ▼
-8️⃣ securityAlerts.alertConsentBlocked() chamado
+8. Chama `securityAlerts.alertConsentBlocked()`
    ▼
-9️⃣ Insere alerta em security_alerts
+9. Insere alerta em `security_alerts`
    {
      "type": "CONSENT_BLOCKED",
      "severity": "high",
@@ -151,31 +233,29 @@ Usuário tenta criar amostra SEM consentimento:
      "status": "open"
    }
    ▼
-🔟 Admin acessa /api/compliance/alerts
+10. Administrador acessa `/api/compliance/alerts`
    ▼
-⏰ Vê alerta e pode:
+11. A partir da API de alertas pode:
    • Reconhecer (acknowledge)
    • Resolver (resolve)
    • Investigar detalhes
 
-═════════════════════════════════════════════════════════
+Caso: múltiplas tentativas em janela de 5 minutos
 
-Mesmo usuário tenta 3+ vezes em 5 minutos:
-
-1️⃣ 4ª tentativa detecta padrão suspeito
+1. Na 4ª tentativa detecta padrão suspeito
    ▼
-2️⃣ detectSuspiciousActivity() chamado
+2. Chama `detectSuspiciousActivity()`
    ▼
-3️⃣ Novo alerta com type: SUSPICIOUS_ACTIVITY
+3. Gera alerta com `type: SUSPICIOUS_ACTIVITY`
    ▼
-4️⃣ Severidade: CRITICAL
+4. Define severidade `CRITICAL`
    ▼
-5️⃣ Listeners notificados (email, Slack, etc)
+5. Notifica observadores configurados (e-mail, Slack etc.)
 ```
 
 ---
 
-# 📊 DIAGRAMA DE DADOS
+# DIAGRAMA DE DADOS
 
 ```
 BANCO: BioAvanceD
@@ -195,7 +275,7 @@ BANCO: BioAvanceD
 │    revokedAt: null | Date
 │  }
 │
-├─ security_alerts (NOVO)
+├─ security_alerts
 │  {
 │    _id: ObjectId,
 │    type: "CONSENT_BLOCKED" | "SUSPICIOUS_ACTIVITY" | ...,
@@ -209,7 +289,7 @@ BANCO: BioAvanceD
 │    resolution: "falso positivo"
 │  }
 │
-├─ logs (existente, usado por complianceReport)
+├─ logs (usado por complianceReport)
 │  {
 │    action: "sample_create" | "CONSENT_BLOCKED" | ...,
 │    entity: "Sample" | "PatientConsent" | ...,
@@ -229,7 +309,7 @@ QUERIES:
     type: "CONSENT_BLOCKED"
   }).count() >= 3
 
-- Gerar dashboard:
+- Gerar painel de controle:
   db.security_alerts
     .aggregate([
       { $match: { timestamp: { $gte: Date - 30days } } },
@@ -239,85 +319,85 @@ QUERIES:
 
 ---
 
-# 🎯 MATRIZ DE DECISÃO
+# MATRIZ DE DECISÃO
 
 ```
 ┌─────────────────────┬──────────────┬────────────────┬──────────────┐
 │ Cenário             │ Ação         │ Resposta HTTP  │ Alerta       │
 ├─────────────────────┼──────────────┼────────────────┼──────────────┤
-│ Com consentimento   │ ✅ PERMITIDO │ 201/200        │ Não          │
-│ Sem consentimento   │ ❌ BLOQUEADO │ 403            │ SIM (HIGH)   │
-│ Consentimento       │ ❌ BLOQUEADO │ 403            │ SIM (HIGH)   │
+│ Com consentimento   │ PERMITIDO    │ 201/200        │ Não          │
+│ Sem consentimento   │ BLOQUEADO    │ 403            │ Sim (HIGH)   │
+│ Consentimento       │ BLOQUEADO    │ 403            │ Sim (HIGH)   │
 │ revogado            │              │                │              │
-│ Escopo              │ ❌ BLOQUEADO │ 403            │ SIM          │
+│ Escopo              │ BLOQUEADO    │ 403            │ Sim          │
 │ insuficiente        │              │                │              │
-│ 1ª tentativa        │ ❌ BLOQUEADO │ 403            │ SIM          │
-│ 2ª tentativa        │ ❌ BLOQUEADO │ 403            │ SIM          │
-│ 3ª tentativa        │ ❌ BLOQUEADO │ 403            │ SIM          │
-│ ≥ 4ª tentativa      │ ❌ BLOQUEADO │ 403            │ SIM (CRITICAL│
+│ 1ª tentativa        │ BLOQUEADO    │ 403            │ Sim          │
+│ 2ª tentativa        │ BLOQUEADO    │ 403            │ Sim          │
+│ 3ª tentativa        │ BLOQUEADO    │ 403            │ Sim          │
+│ ≥ 4ª tentativa      │ BLOQUEADO    │ 403            │ Sim (CRITICAL│
 │ (SUSPEITO)          │              │                │ + padrão)    │
 └─────────────────────┴──────────────┴────────────────┴──────────────┘
 ```
 
 ---
 
-# 🔐 GARANTIAS DE SEGURANÇA
+# GARANTIAS DE SEGURANÇA
 
 ```
 Input Sanitization:
-  ✅ XSS Prevention          → sanitizeInput() remove <script>
-  ✅ MongoDB Injection       → escapeString() escapa $ e .
-  ✅ PII Redaction          → sanitizeSensitiveData() oculta dados
-  ✅ Size Limit (DoS)       → Máximo 1000 chars por campo
+   - XSS Prevention          → `sanitizeInput()` remove `<script>`
+   - MongoDB Injection       → `escapeString()` escapa `$` e `.`
+   - PII Redaction           → `sanitizeSensitiveData()` oculta dados
+   - Size Limit (DoS)        → máximo 1000 caracteres por campo
 
 Consent Validation:
-  ✅ Consentimento requerido → 403 sem consentimento ativo
-  ✅ Revogação respeitada    → 403 imediatamente se revogado
-  ✅ Escopo validado         → 403 se escopo insuficiente
-  ✅ CPF validado            → Algoritmo real de dígito verificador
+   - Consentimento requerido → `403` sem consentimento ativo
+   - Revogação respeitada    → `403` imediatamente se revogado
+   - Escopo validado         → `403` se escopo insuficiente
+   - CPF validado            → algoritmo de dígito verificador
 
 Suspicious Activity:
-  ✅ Padrão detectado        → 3+ tentativas em 5 min = suspeito
-  ✅ Alert crítico gerado    → CRITICAL severity
-  ✅ Auditado completamente  → Todos eventos em logs
+   - Padrão detectado        → `3+` tentativas em `5` min
+   - Alerta crítico gerado   → severidade `CRITICAL`
+   - Auditoria               → eventos persistidos em `logs`
 
 Compliance Monitoring:
-  ✅ Score calculado         → 0-100 baseado em métricas
-  ✅ Recomendações           → Baseado em padrões
-  ✅ Exportável              → JSON/CSV para auditorias
+   - Índice calculado        → `0-100` baseado em métricas
+   - Recomendações           → baseadas em padrões observados
+   - Exportação              → `JSON/CSV` para auditoria
 ```
 
 ---
 
-# 📈 EVOLUÇÃO DOS TESTES
+# EVOLUÇÃO DOS TESTES
 
 ```
-Antes (PASSO 1-2):
-✅ Testes manual soltos
-❌ Sem cobertura de middleware
-❌ Sem teste de alertas
+Antes (etapas iniciais):
+- Testes manuais isolados
+- Sem cobertura de middleware
+- Sem teste de alertas
 
-Depois (PASSO 3):
-✅ 18 testes de segurança (100% pass)
-✅ 9 testes de consentimento (100% pass)
-✅ Cobertura de XSS, CPF, Email
-✅ Cobertura de 403/400/503
-✅ Teste de detecção suspeita
+Depois (etapa atual):
+- 18 testes de segurança (100% pass)
+- 9 testes de consentimento (100% pass)
+- Cobertura de XSS, CPF e e-mail
+- Cobertura de cenários HTTP 403/400/503
+- Teste de detecção de atividade suspeita
 ```
 
 ---
 
-# 🚀 PRÓXIMOS PASSOS NA ROADMAP
+# PLANO DE EVOLUÇÃO
 
 **Curto Prazo (Semana 1):**
-- ✅ Implementar sistema (CONCLUÍDO)
-- ⏳ Integrar no server.js
-- ⏳ Testar em staging
-- ⏳ Documentar procedimentos
+- Implementar sistema (concluído)
+- Integrar no `server.js` (concluído)
+- Validar `backend test:ci` (concluído)
+- Documentar perfis de ambiente resilientes (concluído)
 
 **Médio Prazo (Mês 1):**
-- ⏳ Notificações email/Slack
-- ⏳ Frontend dashboard
+- ⏳ Notificações por e-mail/Slack
+- ⏳ Painel frontend
 - ⏳ Bulk export de alertas
 - ⏳ Webhooks customizáveis
 
@@ -329,16 +409,187 @@ Depois (PASSO 3):
 
 ---
 
-# ✨ RESUMO FINAL
+# ATUALIZAÇÃO FRONTEND (2026-02-26)
+
+## 1) Arquitetura de componentes (Container/Presentational + Hooks)
+
+Refatorações implementadas no frontend para reduzir acoplamento entre UI, estado assíncrono e integração com API:
+
+- `SampleCustodyReportsPage` → container fino + `useSampleCustodyReports` + `SampleCustodyReportsView`
+- `SampleMovementsPage` → container fino + `useSampleMovements` + `SampleMovementsView`
+- Lógica compartilhada extraída para:
+   - `hooks/samples/sampleMovements.shared.ts` (normalização e parsing de erro/compliance)
+   - `components/samples/movementTypeLabel.ts` (rótulos de tipo de movimentação)
+
+Benefícios:
+- Menor duplicação de lógica de domínio
+- Maior testabilidade por separação de responsabilidades
+- Melhor manutenção de telas críticas de cadeia de custódia
+
+## 2) Robustez de tipagem e contratos de API
+
+Fortalecimento de hooks com substituição de `any` por `unknown` + funções de extração/normalização:
+
+- `useSampleCustodyReports.ts`
+- `useSampleMovements.ts`
+- `useLogs.ts`
+- `useTemperature.ts`
+- `useSamples.ts`
+- `usePatients.ts`
+- `useSecurity.ts`
+- `useUserSecurity.ts`
+
+Padrão aplicado:
+- `extractErrorMessage(...)` para mensagens padronizadas e seguras
+- `extractResponseData(...)` para envelopes de resposta heterogêneos
+- Type guards para evitar acesso inseguro a payloads dinâmicos
+
+## 3) Performance de bundle e carregamento por rota
+
+Otimizações aplicadas:
+
+- `React.lazy` + `Suspense` em rotas no `App.tsx` (segmentação de código por página)
+- `manualChunks` no `vite.config.ts` para separar dependências estratégicas:
+   - `vendor-react`
+   - `vendor-router`
+   - `vendor-realtime`
+   - `vendor-qr`
+   - `vendor-utils`
+
+Resultado observado na compilação de produção:
+
+- Segmento principal (`index-*.js`) reduzido de ~565 kB para ~159 kB
+- Remoção dos avisos de segmento > 500 kB
+- Remoção de avisos de dependência circular após ajuste de segmentação
+
+## 4) Status da arquitetura frontend
+
+- Compilação de produção validada após as alterações
+- Padrão arquitetural consistente nas áreas críticas de amostras/custódia
+- Base preparada para evolução de visualização de lineage/telemetria e observabilidade
+
+---
+
+# ASSINATURA DIGITAL TCLE (2026-02-26)
+
+## Escopo implementado (sem alterar fluxo de PDF)
+
+- Captura de assinatura manuscrita em tela com `react-signature-canvas`:
+   - `frontend/src/components/AssinaturaDigitalTCLE.jsx`
+   - `frontend/src/components/AssinaturaDigitalTCLE.css`
+- Integração no fluxo de consentimento existente:
+   - `frontend/src/components/ConsentForm.tsx`
+   - `frontend/src/views/ConsentPage.tsx`
+   - `frontend/src/services/api.ts`
+
+## Comportamento funcional
+
+- Quadro de assinatura otimizado para tablet/desktop/mobile.
+- Ações disponíveis:
+   - `Limpar Assinatura`
+   - `Confirmar e Assinar`
+- Finalização do consentimento condicionada a:
+   - permissões obrigatórias aceitas,
+   - nome do signatário,
+   - assinatura digital confirmada.
+
+## Persistência e rastreabilidade no backend
+
+Persistência adicionada no domínio de consentimento:
+
+- `backend/src/services/consent.service.js`
+   - normalização de `signatureImageBase64`, `signatureMimeType` e `signatureName`,
+   - validação de formato de imagem,
+   - geração de hash SHA-256 (`signatureHash`) para trilha auditável,
+   - proteção de tamanho para payload de assinatura.
+- `backend/src/models/PatientConsent.js`
+   - validação e armazenamento de metadados da assinatura digital.
+
+Campos persistidos no consentimento:
+
+- `signatureName`
+- `signatureImageBase64`
+- `signatureMimeType`
+- `signatureHash`
+
+## Compatibilidade
+
+- Implementação retrocompatível:
+   - payloads legados sem assinatura digital continuam válidos,
+   - fluxo de upload do termo em PDF permanece inalterado.
+
+## Verificação
+
+- Frontend build: concluído com sucesso.
+- Backend `test:ci`: concluído com sucesso.
+
+---
+
+# STACK LOCAL COM DOCKER DESKTOP (2026-02-26)
+
+## Serviços orquestrados no `docker-compose.yml`
+
+- `frontend` (Nginx + compilação Vite)
+- `backend` (API Node/Express)
+- `worker` (fila/processamento assíncrono)
+- `mongo` (MongoDB 7)
+- `redis` (Redis 7 com senha)
+- `neo4j` (Neo4j 5 Community)
+- `influxdb` (InfluxDB 2.7)
+
+## Configuração e subida
+
+1. Copiar o template de ambiente:
+   - `Copy-Item .env.docker.example .env.docker`
+2. Ajustar segredos e senhas em `.env.docker`.
+3. Execução em um comando (PowerShell):
+   - `./scripts/start-local-stack.ps1 -DropTarget`
+4. Subir todos os serviços manualmente:
+   - `docker compose --env-file .env.docker up -d --build`
+5. Ver logs:
+   - `docker compose --env-file .env.docker logs -f`
+6. Derrubar ambiente:
+   - `docker compose --env-file .env.docker down`
+7. Derrubar ambiente com script PowerShell:
+   - `./scripts/stop-local-stack.ps1`
+   - Com limpeza de volumes: `./scripts/stop-local-stack.ps1 -RemoveVolumes`
+   - Com limpeza de volumes + imagens locais: `./scripts/stop-local-stack.ps1 -RemoveVolumes -RemoveImages -RemoveOrphans`
+
+## Migração MongoDB online → Mongo local
+
+Script adicionado: `backend/scripts/migrate-mongo-online-to-local.js`
+
+Comando NPM:
+- `npm --prefix backend run migrate:mongo:online-local -- --drop-target`
+
+Variáveis relevantes (em `.env.docker` ou shell):
+- `MONGO_SOURCE_URI`
+- `MONGO_SOURCE_DB`
+- `MONGO_TARGET_URI` (default local)
+- `MONGO_TARGET_DB` (default `MONGO_DB`)
+- `MONGO_MIGRATE_BATCH_SIZE` (default 1000)
+
+Opções do script:
+- `--drop-target` apaga coleção local antes de inserir
+- `--collections=patients,samples` migra só coleções específicas
+- `--batch-size=2000` ajusta tamanho do lote
+
+Script PowerShell equivalente:
+- `./scripts/start-local-stack.ps1 -DropTarget -Collections "patients,samples" -BatchSize 2000`
+
+---
+
+# RESUMO DE STATUS
 
 | Métrica | Valor |
 |---------|-------|
-| Linhas de código | ~2500 |
-| Arquivos criados | 11 |
-| Funcionalidades | 25+ |
-| Testes | 27/27 ✅ |
-| Cobertura | 100% dos casos críticos |
-| Performance | <50ms por validação |
-| Conformidade | LGPD/ANVISA ✅ |
+| Segurança e consentimento | Implementado |
+| FHIR-first com retorno alternativo | Implementado |
+| Quarentena topológica Redis | Implementado |
+| Registro dinâmico estrito/permissivo | Implementado |
+| Invalidação em cascata por telemetria | Implementado |
+| Assinatura digital TCLE com hash | Implementado |
+| Stack local com Docker Desktop | Implementado |
+| Backend `test:ci` | Passando |
 
-**Status: PRONTO PARA PRODUÇÃO! 🎉**
+**Status atual: arquitetura consolidada e pronta para homologação/produção conforme política de implantação.**

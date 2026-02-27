@@ -1,6 +1,8 @@
 /**
  * Repositório de leitura Mongo para paciente/consentimento.
  */
+const { getCollection } = require('../../../utils/collectionResolver');
+
 class MongoPatientConsentReadRepository {
   /**
    * @param {import('mongodb').Db} db
@@ -13,8 +15,8 @@ class MongoPatientConsentReadRepository {
    * @param {Array<object>} samples
    */
   async enrichSamplesWithConsent(samples) {
-    const patientsCollection = this.db.collection('patients');
-    const patientConsentsCollection = this.db.collection('patientConsents');
+    const patientsCollection = await getCollection(this.db, 'patients');
+    const patientConsentsCollection = await getCollection(this.db, 'consents');
 
     const consentCount = await patientConsentsCollection.countDocuments();
 

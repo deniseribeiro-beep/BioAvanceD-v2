@@ -4,6 +4,8 @@ const logger = require('../utils/logger');
 const { validatePatientID } = require('../utils/patientAnonymization');
 const { generateUniqueBarcode } = require('../utils/barcodeGenerator');
 const { generateUniqueSampleID } = require('../utils/sampleIDGenerator');
+const fhirSyncService = require('./fhir-sync.service');
+const { getCollection } = require('../utils/collectionResolver');
 
 /**
  * Service de Amostras
@@ -22,7 +24,7 @@ class SampleService {
       
       // Se for import, permite locationID null (será atribuído depois)
       const isImport = options.isImport === true;
-      const samplesCollection = db.collection('amostras');
+      const samplesCollection = await getCollection(db, 'samples');
 
       // VALIDAÇÃO DE ID DE PACIENTE (LGPD)
       // O ID de paciente é obrigatório e deve existir no banco
@@ -36,7 +38,7 @@ class SampleService {
       }
 
       // Valida se o ID de paciente existe (sem expor dados sensíveis)
-      const patientExists = await validatePatientID(db, sampleData.patientID, 'pacientes');
+      const patientExists = await validatePatientID(db, sampleData.patientID);
       if (!patientExists) {
         throw new Error(`ID de paciente ${sampleData.patientID} não encontrado. Verifique se o ID está correto.`);
       }
@@ -105,7 +107,7 @@ class SampleService {
 
       // Gera código de barras automaticamente se não fornecido
       if (!sampleData.barcode || (typeof sampleData.barcode === 'string' && sampleData.barcode.trim() === '')) {
-        sampleData.barcode = await generateUniqueBarcode(db, 'amostras');
+        sampleData.barcode = await generateUniqueBarcode(db, 'samples');
         logger.info(`Código de barras gerado automaticamente: ${sampleData.barcode}`);
       } else {
         // Converte para string se necessário
@@ -120,7 +122,7 @@ class SampleService {
 
       // Gera ID único para a amostra
       if (!sampleData.sampleID) {
-        sampleData.sampleID = await generateUniqueSampleID(db, 'amostras');
+        sampleData.sampleID = await generateUniqueSampleID(db, 'samples');
         logger.info(`ID único de amostra gerado automaticamente: ${sampleData.sampleID}`);
       } else {
         // Verifica se o sampleID fornecido já existe
@@ -139,6 +141,11 @@ class SampleService {
         patientID: sample.patientID // Apenas ID, sem dados sensíveis
       });
 
+      await fhirSyncService.upsertSampleFromLegacy(db, {
+        _id: result.insertedId,
+        ...sample
+      });
+
       return {
         _id: result.insertedId,
         ...sample
@@ -151,8 +158,8 @@ class SampleService {
 
   async withdrawSample(db, sampleID, withdrawalData, auditInfo = {}) {
     try {
-      const samplesCollection = db.collection('amostras');
-      const movementsCollection = db.collection('sample_movements');
+      const samplesCollection = await getCollection(db, 'samples');
+      const movementsCollection = await getCollection(db, 'sampleMovements');
       
       // Busca a amostra (suporta ObjectId ou barcode)
       let sample = await samplesCollection.findOne({ _id: sampleID });
@@ -281,7 +288,12 @@ class SampleService {
 
   async getSample(db, sampleID) {
     try {
-      const samplesCollection = db.collection('amostras');
+      const sampleFromFhir = await fhirSyncService.getSampleFhirFirst(db, sampleID);
+      if (sampleFromFhir) {
+        return sampleFromFhir;
+      }
+
+      const samplesCollection = await getCollection(db, 'samples');
       return await samplesCollection.findOne({ _id: sampleID });
     } catch (error) {
       logger.error('Erro ao buscar amostra:', error.message);
@@ -291,7 +303,12 @@ class SampleService {
 
   async listSamples(db, filters = {}) {
     try {
-      const samplesCollection = db.collection('amostras');
+      const listFromFhir = await fhirSyncService.listSamplesFhirFirst(db, filters);
+      if (listFromFhir) {
+        return listFromFhir;
+      }
+
+      const samplesCollection = await getCollection(db, 'samples');
       const query = {};
 
       if (filters.patientID) {
@@ -326,7 +343,7 @@ class SampleService {
 
   async updateSample(db, sampleID, updateData) {
     try {
-      const samplesCollection = db.collection('amostras');
+      const samplesCollection = await getCollection(db, 'samples');
       const existing = await samplesCollection.findOne({ _id: sampleID });
       if (!existing) {
         return null;
@@ -370,7 +387,7 @@ class SampleService {
 
   async deleteSample(db, sampleID) {
     try {
-      const samplesCollection = db.collection('amostras');
+      const samplesCollection = await getCollection(db, 'samples');
       const result = await samplesCollection.deleteOne({ _id: sampleID });
       return result.deletedCount > 0;
     } catch (error) {
@@ -381,8 +398,8 @@ class SampleService {
 
   async getSampleByBarcode(db, barcode) {
     try {
-      const samplesCollection = db.collection('amostras');
-      const patientsCollection = db.collection('pacientes');
+      const samplesCollection = await getCollection(db, 'samples');
+      const patientsCollection = await getCollection(db, 'patients');
       
       // Garante que barcode seja string e normaliza (trim, uppercase para consistência)
       const barcodeStr = String(barcode).trim();
@@ -390,9 +407,16 @@ class SampleService {
       
       // Tenta múltiplas estratégias de busca para garantir compatibilidade
       let sample = null;
+
+      sample = await fhirSyncService.getSampleByBarcodeFhirFirst(db, barcodeStr);
+      if (sample) {
+        logger.info(`Amostra encontrada (FHIR-first): ${sample._id}, barcode: ${sample.barcode}`);
+      }
       
       // 1. Busca exata (string)
-      sample = await samplesCollection.findOne({ barcode: barcodeStr });
+      if (!sample) {
+        sample = await samplesCollection.findOne({ barcode: barcodeStr });
+      }
       if (sample) {
         logger.info(`Amostra encontrada (busca exata): ${sample._id}, barcode: ${sample.barcode}`);
       }
@@ -488,8 +512,8 @@ class SampleService {
 
   async returnSample(db, sampleID, returnData, auditInfo = {}) {
     try {
-      const samplesCollection = db.collection('amostras');
-      const movementsCollection = db.collection('sample_movements');
+      const samplesCollection = await getCollection(db, 'samples');
+      const movementsCollection = await getCollection(db, 'sampleMovements');
       
       // Busca a amostra (suporta ObjectId ou barcode)
       let sample = await samplesCollection.findOne({ _id: sampleID });
@@ -629,7 +653,7 @@ class SampleService {
    */
   async getSampleMovements(db, sampleID) {
     try {
-      const movementsCollection = db.collection('sample_movements');
+      const movementsCollection = await getCollection(db, 'sampleMovements');
       
       // Suporta busca por ObjectId ou string de ID
       const sampleIDStr = sampleID.toString ? sampleID.toString() : sampleID;

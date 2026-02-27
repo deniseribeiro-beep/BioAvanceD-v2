@@ -2,11 +2,13 @@ const cron = require('node-cron');
 const logger = require('../utils/logger');
 const env = require('../config/env');
 const backupService = require('./backup.service');
+const consentNeo4jSyncService = require('./consentNeo4jSync.service');
 
 const DEFAULT_STALE_MINUTES = 20;
 
 let temperatureTask = null;
 let backupTask = null;
+let consentSyncTask = null;
 
 function normalizeDate(value) {
   if (!value) return null;
@@ -138,14 +140,42 @@ function startBackupSchedule() {
   logger.info(`🗂️ Backup diário agendado (${cronExpr})`);
 }
 
-function initScheduler({ db }) {
+function startConsentSyncSchedule({ db, neo4jDriver }) {
+  if (!env.ENABLE_CONSENT_SYNC) {
+    logger.info('🔕 Sincronização Mongo→Neo4j de consentimento desativada (ENABLE_CONSENT_SYNC=false)');
+    return;
+  }
+
+  const cronExpr = env.CONSENT_SYNC_CRON || '*/30 * * * *';
+  const timezone = process.env.TZ || 'America/Sao_Paulo';
+
+  consentSyncTask = cron.schedule(cronExpr, async () => {
+    try {
+      if (!db || !neo4jDriver) {
+        logger.warn('[ISO20387][SYNC] Skip sincronização de consentimento: dependências indisponíveis');
+        return;
+      }
+
+      const result = await consentNeo4jSyncService.sync({ db, neo4jDriver });
+      logger.info(`[ISO20387][SYNC] Job agendado concluído: processadas=${result.processed}, atualizadas=${result.updated}`);
+    } catch (error) {
+      logger.error('[ISO20387][SYNC] Erro no job agendado de sincronização de consentimento:', error.message || error);
+    }
+  }, { timezone });
+
+  logger.info(`🧬 Sincronização de consentimento agendada (${cronExpr})`);
+}
+
+function initScheduler({ db, neo4jDriver }) {
   startTemperatureMonitor(db);
   startBackupSchedule();
+  startConsentSyncSchedule({ db, neo4jDriver });
 }
 
 function stopScheduler() {
   if (temperatureTask) temperatureTask.stop();
   if (backupTask) backupTask.stop();
+  if (consentSyncTask) consentSyncTask.stop();
 }
 
 module.exports = {

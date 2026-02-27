@@ -1,6 +1,43 @@
 import { useState, useEffect } from 'react';
 import { securityService } from '../services/api';
 
+interface ApiLikeError {
+  message?: string;
+  response?: {
+    data?: {
+      message?: string;
+    };
+  };
+}
+
+interface ResponseEnvelope<T> {
+  data?: {
+    data?: T;
+  };
+}
+
+const extractErrorMessage = (error: unknown, fallback: string): string => {
+  if (typeof error === 'object' && error !== null) {
+    const apiError = error as ApiLikeError;
+    return apiError.response?.data?.message || apiError.message || fallback;
+  }
+
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return fallback;
+};
+
+const extractResponseData = <T>(response: unknown): T | null => {
+  if (typeof response !== 'object' || response === null) {
+    return null;
+  }
+
+  const typedResponse = response as ResponseEnvelope<T>;
+  return typedResponse.data?.data ?? null;
+};
+
 export interface SecurityConfig {
   authentication: {
     requireMFA: boolean;
@@ -86,9 +123,9 @@ export function useSecurity() {
       setLoading(true);
       setError(null);
       const response = await securityService.getConfig();
-      setConfig(response.data.data);
-    } catch (err: any) {
-      setError(err.response?.data?.message || err.message || 'Erro ao carregar configurações');
+      setConfig(extractResponseData<SecurityConfig>(response));
+    } catch (err: unknown) {
+      setError(extractErrorMessage(err, 'Erro ao carregar configurações'));
     } finally {
       setLoading(false);
     }
@@ -98,9 +135,9 @@ export function useSecurity() {
     try {
       setError(null);
       const response = await securityService.getPermissions();
-      setPermissions(response.data.data);
-    } catch (err: any) {
-      setError(err.response?.data?.message || err.message || 'Erro ao carregar permissões');
+      setPermissions(extractResponseData<ProfilePermissions>(response));
+    } catch (err: unknown) {
+      setError(extractErrorMessage(err, 'Erro ao carregar permissões'));
     }
   };
 
@@ -109,10 +146,10 @@ export function useSecurity() {
       setSaving(true);
       setError(null);
       const response = await securityService.updateConfig(updates);
-      setConfig(response.data.data);
+      setConfig(extractResponseData<SecurityConfig>(response));
       return response.data;
-    } catch (err: any) {
-      const errorMessage = err.response?.data?.message || err.message || 'Erro ao salvar configurações';
+    } catch (err: unknown) {
+      const errorMessage = extractErrorMessage(err, 'Erro ao salvar configurações');
       setError(errorMessage);
       throw new Error(errorMessage);
     } finally {
@@ -125,10 +162,10 @@ export function useSecurity() {
       setSaving(true);
       setError(null);
       const response = await securityService.updatePermissions(updates);
-      setPermissions(response.data.data);
+      setPermissions(extractResponseData<ProfilePermissions>(response));
       return response.data;
-    } catch (err: any) {
-      const errorMessage = err.response?.data?.message || err.message || 'Erro ao salvar permissões';
+    } catch (err: unknown) {
+      const errorMessage = extractErrorMessage(err, 'Erro ao salvar permissões');
       setError(errorMessage);
       throw new Error(errorMessage);
     } finally {
@@ -136,14 +173,14 @@ export function useSecurity() {
     }
   };
 
-  const exportLogs = async (filters?: any, format: 'csv' | 'json' = 'csv') => {
+  const exportLogs = async (filters?: Record<string, unknown>, format: 'csv' | 'json' = 'csv') => {
     try {
       setError(null);
       const response = await securityService.exportLogs(filters, format);
       // Para CSV, response.data é string; para JSON, response.data é objeto
       return response;
-    } catch (err: any) {
-      const errorMessage = err.response?.data?.message || err.message || 'Erro ao exportar logs';
+    } catch (err: unknown) {
+      const errorMessage = extractErrorMessage(err, 'Erro ao exportar logs');
       setError(errorMessage);
       throw new Error(errorMessage);
     }

@@ -1,4 +1,4 @@
-require('dotenv').config();
+require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') });
 const { connectDB, closeConnection } = require('../src/database/mongo');
 const logger = require('../src/utils/logger');
 const fs = require('fs');
@@ -38,7 +38,7 @@ async function auditFrontendBackend() {
     console.log('🛣️  2. ROTAS IMPLEMENTADAS NO BACKEND');
     console.log('-'.repeat(80));
 
-    const routesPath = path.join(__dirname, '../src/routes');
+    const routesPath = path.join(__dirname, '../src/interface/routes');
     const routeFiles = fs.readdirSync(routesPath).filter(f => f.endsWith('.routes.js'));
 
     const backendRoutes = {};

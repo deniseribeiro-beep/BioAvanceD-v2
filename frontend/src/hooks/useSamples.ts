@@ -2,6 +2,48 @@ import { useState, useEffect } from 'react';
 import { Sample, Result } from '../types/models';
 import { samplesApi } from '../services/samples/samplesApi';
 
+interface ApiLikeError {
+  message?: string;
+  response?: {
+    data?: {
+      error?: string;
+      message?: string;
+    };
+  };
+}
+
+type SamplesPayload = {
+  data?: unknown;
+};
+
+function extractErrorMessage(error: unknown, fallback: string): string {
+  const typedError = error as ApiLikeError | null;
+  return typedError?.response?.data?.error || typedError?.response?.data?.message || typedError?.message || fallback;
+}
+
+function extractSamples(payload: unknown): Sample[] {
+  const typedPayload = payload as SamplesPayload | null;
+
+  if (Array.isArray(payload)) {
+    return payload as Sample[];
+  }
+
+  if (Array.isArray(typedPayload?.data)) {
+    return typedPayload.data as Sample[];
+  }
+
+  return [];
+}
+
+function extractResultItems(payload: unknown): Result[] {
+  return Array.isArray(payload) ? (payload as Result[]) : [];
+}
+
+function unwrapData<T>(payload: unknown): T | unknown {
+  const typedPayload = payload as { data?: unknown } | null;
+  return typedPayload?.data ?? payload;
+}
+
 export function useSamples() {
   const [samples, setSamples] = useState<Sample[]>([]);
   const [loading, setLoading] = useState(true);
@@ -11,15 +53,11 @@ export function useSamples() {
     try {
       setLoading(true);
       const response = await samplesApi.getAll();
-      // API retorna { success: true, data: [...], total: ... }
-      const responseData = response.data as any;
-      const samplesData = Array.isArray(responseData) 
-        ? responseData 
-        : (Array.isArray(responseData?.data) ? responseData.data : []);
+      const samplesData = extractSamples(response.data);
       setSamples(samplesData);
       setError(null);
-    } catch (err: any) {
-      setError(err.message || 'Erro ao carregar amostras');
+    } catch (err: unknown) {
+      setError(extractErrorMessage(err, 'Erro ao carregar amostras'));
       setSamples([]); // Garante array vazio em caso de erro
     } finally {
       setLoading(false);
@@ -34,9 +72,9 @@ export function useSamples() {
   const getSampleResults = async (sampleID: number): Promise<Result[]> => {
     try {
       const response = await samplesApi.getResults(sampleID);
-      return response.data;
-    } catch (err: any) {
-      throw new Error(err.message || 'Erro ao buscar resultados');
+      return extractResultItems(response.data);
+    } catch (err: unknown) {
+      throw new Error(extractErrorMessage(err, 'Erro ao buscar resultados'));
     }
   };
 
@@ -44,11 +82,9 @@ export function useSamples() {
     try {
       const response = await samplesApi.create(data);
       await loadSamples(); // Recarrega a lista completa
-      // Backend retorna { success: true, message: '...', data: { sampleID, patientID } }
-      const responseData = response.data as any;
-      return responseData?.data || responseData;
-    } catch (err: any) {
-      throw new Error(err.message || 'Erro ao criar amostra');
+      return unwrapData(response.data);
+    } catch (err: unknown) {
+      throw new Error(extractErrorMessage(err, 'Erro ao criar amostra'));
     }
   };
 
@@ -56,11 +92,9 @@ export function useSamples() {
     try {
       const response = await samplesApi.update(id, data);
       await loadSamples(); // Recarrega a lista completa
-      // Backend retorna { success: true, message: '...', data: sample }
-      const responseData = response.data as any;
-      return responseData?.data || responseData;
-    } catch (err: any) {
-      throw new Error(err.message || 'Erro ao atualizar amostra');
+      return unwrapData(response.data);
+    } catch (err: unknown) {
+      throw new Error(extractErrorMessage(err, 'Erro ao atualizar amostra'));
     }
   };
 
@@ -68,8 +102,8 @@ export function useSamples() {
     try {
       await samplesApi.remove(id);
       await loadSamples(); // Recarrega a lista completa
-    } catch (err: any) {
-      throw new Error(err.message || 'Erro ao deletar amostra');
+    } catch (err: unknown) {
+      throw new Error(extractErrorMessage(err, 'Erro ao deletar amostra'));
     }
   };
 

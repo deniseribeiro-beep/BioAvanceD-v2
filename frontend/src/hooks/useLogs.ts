@@ -2,6 +2,77 @@ import { useState, useEffect } from 'react';
 import { Log } from '../types/models';
 import { logService } from '../services/api';
 
+interface ApiLikeError {
+  response?: {
+    status?: number;
+    statusText?: string;
+    data?: {
+      error?: string;
+      message?: string;
+    };
+  };
+  message?: string;
+}
+
+type LogsPayload = {
+  success?: boolean;
+  data?: unknown;
+  logs?: unknown;
+};
+
+function extractLogsFromPayload(payload: unknown): Log[] {
+  const typedPayload = payload as LogsPayload | null;
+  const nestedData = typedPayload?.data as { logs?: unknown } | unknown;
+
+  if (typedPayload?.success && typeof nestedData === 'object' && nestedData && Array.isArray((nestedData as { logs?: unknown }).logs)) {
+    return (nestedData as { logs: Log[] }).logs;
+  }
+
+  if (typedPayload?.success && Array.isArray(typedPayload?.data)) {
+    return typedPayload.data as Log[];
+  }
+
+  if (Array.isArray(typedPayload?.logs)) {
+    return typedPayload.logs as Log[];
+  }
+
+  if (Array.isArray(payload)) {
+    return payload as Log[];
+  }
+
+  if (Array.isArray(typedPayload?.data)) {
+    return typedPayload.data as Log[];
+  }
+
+  return [];
+}
+
+function extractErrorMessage(error: unknown, fallback: string): string {
+  const typedError = error as ApiLikeError | null;
+
+  if (typedError?.response?.status === 503) {
+    return 'Banco de dados não disponível. Verifique a conexão com o MongoDB.';
+  }
+
+  if (typedError?.response?.data?.error) {
+    return typedError.response.data.error;
+  }
+
+  if (typedError?.response?.data?.message) {
+    return typedError.response.data.message;
+  }
+
+  if (typedError?.response?.status) {
+    return `${fallback} (${typedError.response.status}${typedError.response.statusText ? `: ${typedError.response.statusText}` : ''})`;
+  }
+
+  if (typedError?.message) {
+    return typedError.message;
+  }
+
+  return fallback;
+}
+
 export function useLogs() {
   const [logs, setLogs] = useState<Log[]>([]);
   const [loading, setLoading] = useState(true);
@@ -11,59 +82,18 @@ export function useLogs() {
     loadLogs();
   }, []);
 
-  const loadLogs = async (filters?: any) => {
+  const loadLogs = async (filters?: Record<string, unknown>) => {
     try {
       setLoading(true);
       setError(null);
       const response = await logService.getLogs(filters);
-      const responseData: any = response.data;
-      
-      // Trata diferentes formatos de resposta do backend
-      let logsData: Log[] = [];
-      
-      if (responseData) {
-        // Formato: { success: true, data: { logs: [...], total: ... } }
-        if (responseData.success && responseData.data) {
-          if (Array.isArray(responseData.data.logs)) {
-            logsData = responseData.data.logs;
-          } else if (Array.isArray(responseData.data)) {
-            logsData = responseData.data;
-          }
-        }
-        // Formato: { success: true, data: [...] } (array direto)
-        else if (responseData.success && Array.isArray(responseData.data)) {
-          logsData = responseData.data;
-        }
-        // Formato: { logs: [...], total: ... }
-        else if (responseData.logs && Array.isArray(responseData.logs)) {
-          logsData = responseData.logs;
-        }
-        // Formato: array direto
-        else if (Array.isArray(responseData)) {
-          logsData = responseData;
-        }
-        // Formato: { data: [...] }
-        else if (responseData.data && Array.isArray(responseData.data)) {
-          logsData = responseData.data;
-        }
-      }
+      const logsData = extractLogsFromPayload(response.data);
       
       setLogs(logsData);
       setError(null);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Erro ao carregar logs:', err);
-      let errorMessage = 'Erro ao carregar logs';
-      
-      if (err.response) {
-        // Erro com resposta do servidor
-        if (err.response.status === 503) {
-          errorMessage = 'Banco de dados não disponível. Verifique a conexão com o MongoDB.';
-        } else {
-          errorMessage = err.response.data?.error || err.response.data?.message || `Erro ${err.response.status}: ${err.response.statusText}`;
-        }
-      } else if (err.message) {
-        errorMessage = err.message;
-      }
+      const errorMessage = extractErrorMessage(err, 'Erro ao carregar logs');
       
       setError(errorMessage);
       setLogs([]); // Define array vazio em caso de erro
@@ -72,58 +102,18 @@ export function useLogs() {
     }
   };
 
-  const queryLogs = async (filters: any) => {
+  const queryLogs = async (filters: Record<string, unknown>) => {
     try {
       const response = await logService.queryLogs(filters);
-      const responseData: any = response.data;
-      
-      // Trata diferentes formatos de resposta do backend
-      let logsData: Log[] = [];
-      
-      if (responseData) {
-        // Formato: { success: true, data: { logs: [...], total: ... } }
-        if (responseData.success && responseData.data) {
-          if (Array.isArray(responseData.data.logs)) {
-            logsData = responseData.data.logs;
-          } else if (Array.isArray(responseData.data)) {
-            logsData = responseData.data;
-          }
-        }
-        // Formato: { success: true, data: [...] } (array direto)
-        else if (responseData.success && Array.isArray(responseData.data)) {
-          logsData = responseData.data;
-        }
-        // Formato: { logs: [...], total: ... }
-        else if (responseData.logs && Array.isArray(responseData.logs)) {
-          logsData = responseData.logs;
-        }
-        // Formato: array direto
-        else if (Array.isArray(responseData)) {
-          logsData = responseData;
-        }
-        // Formato: { data: [...] }
-        else if (responseData.data && Array.isArray(responseData.data)) {
-          logsData = responseData.data;
-        }
-      }
+      const logsData = extractLogsFromPayload(response.data);
       
       setLogs(logsData);
       return logsData;
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Erro ao consultar logs:', err);
       setLogs([]); // Define array vazio em caso de erro
-      
-      let errorMessage = 'Erro ao consultar logs';
-      if (err.response) {
-        if (err.response.status === 503) {
-          errorMessage = 'Banco de dados não disponível. Verifique a conexão com o MongoDB.';
-        } else {
-          errorMessage = err.response.data?.error || err.response.data?.message || `Erro ${err.response.status}`;
-        }
-      } else if (err.message) {
-        errorMessage = err.message;
-      }
-      
+
+      const errorMessage = extractErrorMessage(err, 'Erro ao consultar logs');
       throw new Error(errorMessage);
     }
   };
@@ -131,12 +121,12 @@ export function useLogs() {
   const registerEvent = async (data: Partial<Log>) => {
     try {
       const response = await logService.registerEvent(data);
-      const responseData: any = response.data;
-      const newLog: Log = responseData?.data || responseData;
+      const responseData = response.data as { data?: Log } | Log;
+      const newLog: Log = (responseData as { data?: Log })?.data || (responseData as Log);
       setLogs([newLog, ...logs]);
       return newLog;
-    } catch (err: any) {
-      throw new Error(err.message || 'Erro ao registrar evento');
+    } catch (err: unknown) {
+      throw new Error(extractErrorMessage(err, 'Erro ao registrar evento'));
     }
   };
 

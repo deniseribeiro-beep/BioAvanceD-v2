@@ -73,6 +73,39 @@ npm run dev
 - `npm run dev` - Inicia o servidor de desenvolvimento
 - `npm run build` - Cria a build de produção
 - `npm run preview` - Visualiza a build de produção
+- `npm run audit:full` - Executa auditoria completa do sistema (testes, build e análise estática de cobertura de funções) e gera relatório em `reports/system-audit/`
+
+## 🛡️ Configuração recomendada de resiliência (backend)
+
+Para activar o perfil de resiliência e validação dinâmica já implementado:
+
+1. Copie o exemplo para o ambiente do backend:
+```bash
+Copy-Item backend/.env.resilience.example backend/.env
+```
+
+   Para baseline regulatório estrito (fail-closed):
+
+```bash
+Copy-Item backend/.env.resilience.strict.example backend/.env
+```
+
+2. Ajuste os segredos e endpoints reais (Mongo, Redis, Neo4j, Influx) no `backend/.env`.
+
+3. Confirme os pontos críticos:
+- `LINEAGE_MODE=fail-open` para permitir quarentena topológica quando Neo4j cair.
+- `TELEMETRY_CRITICAL_TEMP=-80` e `TELEMETRY_CRITICAL_DURATION_HOURS=2` para gatilho IoT de invalidação em cascata.
+- `NEO4J_RETRY_*` para controlar taxa/lote/tentativas do reprocessamento de quarentena.
+
+Atalhos por ambiente (backend):
+
+```bash
+# DEV/HOMOLOG permissivo
+Copy-Item backend/.env.resilience.example backend/.env
+
+# HOMOLOG/PROD estrito (fail-closed)
+Copy-Item backend/.env.resilience.strict.example backend/.env
+```
 
 ## 🎨 Design
 
@@ -109,6 +142,53 @@ Para integrar com um backend:
 3. Implemente tratamento de erros e loading states
 4. Adicione autenticação e autorização
 5. Implemente validações de formulário mais robustas
+
+## 🐳 Deploy Local em Produção (Docker Compose)
+
+1. Copie as variáveis de exemplo para a raiz do projeto:
+```bash
+Copy-Item .env.prod.example .env
+```
+
+2. Ajuste senhas e URLs no arquivo `.env` recém-criado.
+
+3. Suba o stack completo (frontend + backend + worker + bancos):
+```bash
+docker compose -f docker-compose.prod.yml up -d --build
+```
+
+4. Acompanhe os logs:
+```bash
+docker compose -f docker-compose.prod.yml logs -f
+```
+
+5. Derrube o ambiente:
+```bash
+docker compose -f docker-compose.prod.yml down
+```
+
+## 🔐 Deploy Produção com TLS (HTTPS)
+
+1. Copie as variáveis TLS para a raiz do projeto:
+```bash
+Copy-Item .env.prod.tls.example .env
+```
+
+2. Ajuste domínio e segredos no arquivo `.env`.
+
+3. Coloque os certificados em `infra/nginx/certs` com os nomes:
+   - `fullchain.pem`
+   - `privkey.pem`
+
+4. Suba o stack TLS:
+```bash
+docker compose -f docker-compose.prod.tls.yml up -d --build
+```
+
+5. Para derrubar:
+```bash
+docker compose -f docker-compose.prod.tls.yml down
+```
 
 ## 📝 Licença
 

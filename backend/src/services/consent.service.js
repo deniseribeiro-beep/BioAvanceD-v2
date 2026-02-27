@@ -1,11 +1,14 @@
 const Ajv = require('ajv');
 const addFormats = require('ajv-formats');
+const crypto = require('crypto');
 const { ObjectId } = require('mongodb');
 const ConsentTemplateModel = require('../models/ConsentTemplate');
 const ConsentPolicyModel = require('../models/ConsentPolicy');
 const PatientConsentModel = require('../models/PatientConsent');
 const { validatePatientID } = require('../utils/patientAnonymization');
 const logger = require('../utils/logger');
+const fhirSyncService = require('./fhir-sync.service');
+const { getCollection } = require('../utils/collectionResolver');
 
 const ajv = new Ajv({ allErrors: true, strict: false, removeAdditional: 'all' });
 addFormats(ajv);
@@ -68,6 +71,10 @@ const patientConsentSchema = {
   properties: {
     patientId: { type: 'string', minLength: 1 },
     templateId: { type: 'string', minLength: 1 },
+    signatureName: { type: 'string', minLength: 1 },
+    signatureImageBase64: { type: 'string', minLength: 1 },
+    signatureMimeType: { type: 'string' },
+    signatureHash: { type: 'string' },
     responses: {
       type: 'object',
       additionalProperties: { type: 'boolean' }
@@ -84,6 +91,50 @@ const validatePolicySchema = ajv.compile(consentPolicySchema);
 const validatePatientConsentSchema = ajv.compile(patientConsentSchema);
 
 class ConsentService {
+  normalizeSignaturePayload(payload) {
+    const signatureName = typeof payload.signatureName === 'string' ? payload.signatureName.trim() : '';
+    const signatureImageBase64 = typeof payload.signatureImageBase64 === 'string' ? payload.signatureImageBase64.trim() : '';
+    const signatureMimeType = typeof payload.signatureMimeType === 'string' && payload.signatureMimeType.trim()
+      ? payload.signatureMimeType.trim().toLowerCase()
+      : 'image/png';
+
+    if (!signatureImageBase64) {
+      return {
+        signatureName,
+        signatureImageBase64: '',
+        signatureMimeType,
+        signatureHash: null,
+      };
+    }
+
+    const maxSignatureLength = 6 * 1024 * 1024;
+    if (signatureImageBase64.length > maxSignatureLength) {
+      throw new Error('Assinatura digital excede tamanho permitido');
+    }
+
+    let normalizedContent = signatureImageBase64;
+    const dataUrlMatch = signatureImageBase64.match(/^data:([^;]+);base64,(.+)$/i);
+
+    let detectedMime = signatureMimeType;
+    if (dataUrlMatch) {
+      detectedMime = dataUrlMatch[1].toLowerCase();
+      normalizedContent = dataUrlMatch[2];
+    }
+
+    if (!/^image\/(png|jpeg|jpg|webp)$/i.test(detectedMime)) {
+      throw new Error('Formato de assinatura digital inválido');
+    }
+
+    const signatureHash = crypto.createHash('sha256').update(normalizedContent).digest('hex');
+
+    return {
+      signatureName,
+      signatureImageBase64,
+      signatureMimeType: detectedMime,
+      signatureHash,
+    };
+  }
+
   validateTemplatePayload(payload) {
     const valid = validateTemplateSchema(payload);
     if (!valid) {
@@ -157,7 +208,7 @@ class ConsentService {
         : [];
       this.ensureUniquePermissionKeys(permissions);
 
-      const templatesCollection = db.collection('consent_templates');
+      const templatesCollection = await getCollection(db, 'consentTemplates');
 
       if (payload.active === undefined || payload.active === true) {
         await templatesCollection.updateMany({ active: true }, { $set: { active: false, updatedAt: new Date() } });
@@ -204,7 +255,7 @@ class ConsentService {
         : [];
       this.ensureUniquePermissionKeys(permissions);
 
-      const templatesCollection = db.collection('consent_templates');
+      const templatesCollection = await getCollection(db, 'consentTemplates');
 
       if (normalizedPayload.active === undefined || normalizedPayload.active === true) {
         await templatesCollection.updateMany({ active: true }, { $set: { active: false, updatedAt: new Date() } });
@@ -235,7 +286,7 @@ class ConsentService {
   }
 
   async getActiveTemplate(db) {
-    const templatesCollection = db.collection('consent_templates');
+    const templatesCollection = await getCollection(db, 'consentTemplates');
     const template = await templatesCollection
       .find({ active: true })
       .sort({ createdAt: -1 })
@@ -246,7 +297,7 @@ class ConsentService {
   }
 
   async getActivePolicy(db) {
-    const templatesCollection = db.collection('consent_templates');
+    const templatesCollection = await getCollection(db, 'consentTemplates');
     const template = await templatesCollection
       .find({ active: true })
       .sort({ createdAt: -1 })
@@ -257,7 +308,7 @@ class ConsentService {
   }
 
   async getAllPolicies(db) {
-    const templatesCollection = db.collection('consent_templates');
+    const templatesCollection = await getCollection(db, 'consentTemplates');
     return templatesCollection
       .find({})
       .sort({ createdAt: -1 })
@@ -266,27 +317,33 @@ class ConsentService {
 
   async createPatientConsent(db, payload) {
     try {
-      this.validatePatientConsentPayload(payload);
+      const normalizedSignature = this.normalizeSignaturePayload(payload);
+      const normalizedPayload = {
+        ...payload,
+        ...normalizedSignature,
+      };
 
-      const validation = PatientConsentModel.validate(payload);
+      this.validatePatientConsentPayload(normalizedPayload);
+
+      const validation = PatientConsentModel.validate(normalizedPayload);
       if (!validation.isValid) {
         throw new Error(validation.errors.join(', '));
       }
 
-      const patientId = payload.patientId;
-      const patientExists = await validatePatientID(db, patientId, 'pacientes');
+      const patientId = normalizedPayload.patientId;
+      const patientExists = await validatePatientID(db, patientId);
       if (!patientExists) {
         throw new Error(`Paciente ${patientId} não encontrado`);
       }
 
       let templateId;
       try {
-        templateId = new ObjectId(payload.templateId);
+        templateId = new ObjectId(normalizedPayload.templateId);
       } catch (error) {
         throw new Error('templateId inválido');
       }
 
-      const templatesCollection = db.collection('consent_templates');
+      const templatesCollection = await getCollection(db, 'consentTemplates');
       const template = await templatesCollection.findOne({ _id: templateId });
       if (!template) {
         throw new Error('Template de consentimento não encontrado');
@@ -296,21 +353,27 @@ class ConsentService {
         throw new Error('Template de consentimento não está ativo');
       }
 
-      this.validateResponsesAgainstTemplate(template, payload.responses || {});
+      this.validateResponsesAgainstTemplate(template, normalizedPayload.responses || {});
 
-      const consentsCollection = db.collection('patient_consents');
+      const consentsCollection = await getCollection(db, 'consents');
       await consentsCollection.updateMany(
         { patientId, status: 'ACTIVE' },
         { $set: { status: 'REVOKED', revokedAt: new Date(), updatedAt: new Date() } }
       );
 
       const consent = PatientConsentModel.create({
-        ...payload,
+        ...normalizedPayload,
         templateId: templateId.toString(),
         status: 'ACTIVE'
       });
 
       const insertResult = await consentsCollection.insertOne(consent);
+
+      await fhirSyncService.upsertConsentFromLegacy(db, {
+        _id: insertResult.insertedId,
+        ...consent
+      });
+
       return {
         _id: insertResult.insertedId,
         ...consent
@@ -322,7 +385,7 @@ class ConsentService {
   }
 
   async revokeConsent(db, consentId) {
-    const consentsCollection = db.collection('patient_consents');
+    const consentsCollection = await getCollection(db, 'consents');
 
     let objectId;
     try {
@@ -345,16 +408,30 @@ class ConsentService {
       { $set: { status: 'REVOKED', revokedAt: new Date(), updatedAt: new Date() } }
     );
 
-    return {
+    const revokedConsent = {
       ...consent,
       status: 'REVOKED',
       revokedAt: new Date(),
       updatedAt: new Date()
     };
+
+    await fhirSyncService.upsertConsentFromLegacy(db, {
+      _id: objectId,
+      ...revokedConsent
+    });
+
+    return {
+      ...revokedConsent
+    };
   }
 
   async getPatientConsent(db, patientId) {
-    const consentsCollection = db.collection('patient_consents');
+    const consentFromFhir = await fhirSyncService.getPatientConsentFhirFirst(db, patientId);
+    if (consentFromFhir) {
+      return consentFromFhir;
+    }
+
+    const consentsCollection = await getCollection(db, 'consents');
     const consent = await consentsCollection
       .find({ patientId })
       .sort({ signedAt: -1, createdAt: -1 })

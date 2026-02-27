@@ -1,6 +1,68 @@
 import { useState, useCallback } from 'react';
 import { userSecurityService } from '../services/api';
 
+interface ApiLikeError {
+  name?: string;
+  message?: string;
+  response?: {
+    data?: {
+      error?: string;
+      message?: string;
+    };
+  };
+}
+
+interface ResponseEnvelope<T> {
+  data?: {
+    data?: T;
+  };
+}
+
+interface UserAgentDataLike {
+  platform?: string;
+}
+
+const extractResponseData = <T>(response: unknown, fallback: T): T => {
+  if (typeof response !== 'object' || response === null) {
+    return fallback;
+  }
+
+  const typed = response as ResponseEnvelope<T>;
+  return typed.data?.data ?? (typed as unknown as { data?: T }).data ?? fallback;
+};
+
+const extractErrorMessage = (error: unknown, fallback: string): string => {
+  if (typeof error === 'object' && error !== null) {
+    const typedError = error as ApiLikeError;
+    return typedError.response?.data?.error || typedError.response?.data?.message || typedError.message || fallback;
+  }
+
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return fallback;
+};
+
+const extractErrorName = (error: unknown): string | undefined => {
+  if (typeof error === 'object' && error !== null && 'name' in error) {
+    const maybeName = (error as { name?: unknown }).name;
+    if (typeof maybeName === 'string') {
+      return maybeName;
+    }
+  }
+
+  return undefined;
+};
+
+const getUserAgentData = (): UserAgentDataLike | undefined => {
+  if (typeof navigator !== 'object' || navigator === null || !('userAgentData' in navigator)) {
+    return undefined;
+  }
+
+  return (navigator as Navigator & { userAgentData?: UserAgentDataLike }).userAgentData;
+};
+
 interface SecurityStatus {
   securityScore: number;
   overallLevel: 'strong' | 'medium' | 'weak';
@@ -57,13 +119,13 @@ export function useUserSecurity() {
           userSecurityService.getSessions()
         ]);
 
-        setSecurityStatus(statusRes.data?.data || statusRes.data);
-        setMfaStatus(mfaRes.data?.data || mfaRes.data);
-        setPasswordStatus(passwordRes.data?.data || passwordRes.data);
-        setSessions(sessionsRes.data?.data || sessionsRes.data || []);
-      } catch (apiErr: any) {
+        setSecurityStatus(extractResponseData<SecurityStatus | null>(statusRes, null));
+        setMfaStatus(extractResponseData<MFAStatus | null>(mfaRes, null));
+        setPasswordStatus(extractResponseData<PasswordStatus | null>(passwordRes, null));
+        setSessions(extractResponseData<Session[]>(sessionsRes, []));
+      } catch (apiErr: unknown) {
         // Se o backend não estiver disponível, usa dados mockados para desenvolvimento
-        console.warn('Backend não disponível, usando dados mockados:', apiErr.message);
+        console.warn('Backend não disponível, usando dados mockados:', extractErrorMessage(apiErr, 'Erro ao carregar backend'));
         
         // Dados mockados para desenvolvimento
         const mockSecurityStatus: SecurityStatus = {
@@ -108,8 +170,8 @@ export function useUserSecurity() {
         // Não sobrescreve a lista atual se já houver sessões carregadas (evita reintroduzir mocks após revogação)
         setSessions(prev => (prev && prev.length ? prev : mockSessions));
       }
-    } catch (err: any) {
-      setError(err.response?.data?.error || err.message || 'Erro ao carregar dados de segurança');
+    } catch (err: unknown) {
+      setError(extractErrorMessage(err, 'Erro ao carregar dados de segurança'));
       console.error('Erro ao carregar dados de segurança:', err);
     } finally {
       setLoading(false);
@@ -120,8 +182,8 @@ export function useUserSecurity() {
     try {
       await userSecurityService.updateMFA(method, enabled);
       await refreshData();
-    } catch (err: any) {
-      throw new Error(err.response?.data?.error || err.message || 'Erro ao atualizar MFA');
+    } catch (err: unknown) {
+      throw new Error(extractErrorMessage(err, 'Erro ao atualizar MFA'));
     }
   }, [refreshData]);
 
@@ -129,8 +191,8 @@ export function useUserSecurity() {
     try {
       await userSecurityService.updatePassword(currentPassword, newPassword);
       await refreshData();
-    } catch (err: any) {
-      throw new Error(err.response?.data?.error || err.message || 'Erro ao atualizar senha');
+    } catch (err: unknown) {
+      throw new Error(extractErrorMessage(err, 'Erro ao atualizar senha'));
     }
   }, [refreshData]);
 
@@ -145,11 +207,8 @@ export function useUserSecurity() {
       await refreshData();
       
       return response;
-    } catch (err: any) {
-      const errorMessage = err.response?.data?.error || 
-                          err.response?.data?.message || 
-                          err.message || 
-                          'Erro ao atualizar telefone';
+    } catch (err: unknown) {
+      const errorMessage = extractErrorMessage(err, 'Erro ao atualizar telefone');
       throw new Error(errorMessage);
     }
   }, [refreshData]);
@@ -271,7 +330,7 @@ export function useUserSecurity() {
       }
 
       // Obtém nome do dispositivo
-      const deviceName = (navigator as any).userAgentData?.platform ||
+      const deviceName = getUserAgentData()?.platform ||
                         navigator.platform ||
                         'Dispositivo Desconhecido';
 
@@ -283,26 +342,28 @@ export function useUserSecurity() {
       });
 
       await refreshData();
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const errorName = extractErrorName(err);
+      const errorMessage = extractErrorMessage(err, 'Erro ao adicionar passkey');
       // Trata erros específicos do WebAuthn
-      if (err.name === 'NotAllowedError') {
+      if (errorName === 'NotAllowedError') {
         throw new Error('Operação cancelada pelo usuário ou timeout. Tente novamente.');
-      } else if (err.name === 'InvalidStateError') {
+      } else if (errorName === 'InvalidStateError') {
         throw new Error('Esta passkey já está cadastrada ou há um erro no estado da autenticação.');
-      } else if (err.name === 'NotSupportedError') {
+      } else if (errorName === 'NotSupportedError') {
         throw new Error('Seu dispositivo ou navegador não suporta passkeys. Use um navegador moderno com suporte a WebAuthn.');
-      } else if (err.name === 'SecurityError') {
+      } else if (errorName === 'SecurityError') {
         throw new Error('Erro de segurança. WebAuthn requer HTTPS ou localhost. Certifique-se de que está usando um contexto seguro.');
-      } else if (err.name === 'TypeError' && err.message.includes('credentials')) {
+      } else if (errorName === 'TypeError' && errorMessage.includes('credentials')) {
         throw new Error('Erro ao acessar a API de credenciais. Verifique se o navegador suporta WebAuthn.');
-      } else if (err.name === 'AbortError') {
+      } else if (errorName === 'AbortError') {
         throw new Error('Operação cancelada.');
       }
       
       // Log do erro completo para debug
       console.error('Erro ao adicionar passkey:', err);
       
-      throw new Error(err.response?.data?.error || err.response?.data?.message || err.message || 'Erro ao adicionar passkey');
+      throw new Error(errorMessage);
     }
   }, [refreshData]);
 
@@ -310,8 +371,8 @@ export function useUserSecurity() {
     try {
       await userSecurityService.removePasskey(passkeyId);
       await refreshData();
-    } catch (err: any) {
-      throw new Error(err.response?.data?.error || err.message || 'Erro ao remover passkey');
+    } catch (err: unknown) {
+      throw new Error(extractErrorMessage(err, 'Erro ao remover passkey'));
     }
   }, [refreshData]);
 
@@ -339,8 +400,8 @@ export function useUserSecurity() {
       // O refresh completo será feito quando o modal for fechado
       
       return codes;
-    } catch (err: any) {
-      throw new Error(err.response?.data?.error || err.message || 'Erro ao gerar códigos de recuperação');
+    } catch (err: unknown) {
+      throw new Error(extractErrorMessage(err, 'Erro ao gerar códigos de recuperação'));
     }
   }, []);
 
@@ -350,8 +411,8 @@ export function useUserSecurity() {
       // Remoção otimista da lista
       setSessions(prev => prev.filter(s => s.id !== sessionId));
       await refreshData();
-    } catch (err: any) {
-      throw new Error(err.response?.data?.error || err.message || 'Erro ao revogar sessão');
+    } catch (err: unknown) {
+      throw new Error(extractErrorMessage(err, 'Erro ao revogar sessão'));
     }
   }, [refreshData]);
 
@@ -361,8 +422,8 @@ export function useUserSecurity() {
       // Mantém apenas a sessão atual na lista (otimista)
       setSessions(prev => prev.filter(s => s.isCurrent));
       await refreshData();
-    } catch (err: any) {
-      throw new Error(err.response?.data?.error || err.message || 'Erro ao revogar todas as sessões');
+    } catch (err: unknown) {
+      throw new Error(extractErrorMessage(err, 'Erro ao revogar todas as sessões'));
     }
   }, [refreshData]);
 

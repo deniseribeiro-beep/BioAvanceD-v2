@@ -629,6 +629,9 @@ export const consentService = {
     patientId: string;
     templateId: string;
     responses: Record<string, boolean>;
+    signatureName?: string;
+    signatureImageBase64?: string;
+    signatureMimeType?: string;
   }) => api.post<PatientConsent>('/consents', data),
   revokeConsent: (consentId: string) => api.post(`/consents/${consentId}/revoke`),
   getPatientConsent: (patientId: string) => api.get<{ success: boolean; data: PatientConsent }>(`/patients/${patientId}/consent`)
