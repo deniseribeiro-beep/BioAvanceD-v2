@@ -11,6 +11,34 @@
 
 const logger = require('../../utils/logger');
 
+function resolveUserRole(user = {}) {
+  const roleFromAccessType = Number(user.accessType || user.role || 0);
+  if ([1, 2, 3, 4].includes(roleFromAccessType)) {
+    return roleFromAccessType;
+  }
+
+  const normalizedRoleName = String(user.roleName || user.role || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase();
+
+  const roleNameToAccessType = {
+    administrador: 4,
+    admin: 4,
+    coordenador: 3,
+    tecnico: 2,
+    pesquisador: 1,
+    pesquisadora: 1,
+    researcher: 1,
+    'usuario externo': 1,
+    'usuário externo': 1,
+    external: 1,
+  };
+
+  return roleNameToAccessType[normalizedRoleName] || 1;
+}
+
 /**
  * Verifica se o usuário tem o nível de acesso necessário
  */
@@ -24,24 +52,7 @@ const requireRole = (...allowedRoles) => {
       });
     }
 
-    // Verifica accessType primeiro
-    let userRole = req.user.accessType || 1;
-    
-    // Se não tiver accessType mas tiver roleName, mapeia roleName para accessType
-    if (!userRole || userRole === 1) {
-      const roleName = req.user.roleName;
-      if (roleName) {
-        const roleNameToAccessType = {
-          'Administrador': 4,
-          'Coordenador': 3,
-          'Técnico': 2,
-          'Usuário Externo': 1
-        };
-        if (roleNameToAccessType[roleName]) {
-          userRole = roleNameToAccessType[roleName];
-        }
-      }
-    }
+    const userRole = resolveUserRole(req.user);
     
     // Verifica se é administrador também por roleName (fallback)
     const isAdminByRoleName = req.user.roleName === 'Administrador';
@@ -81,9 +92,9 @@ const permissions = {
   // RF004 - Cadastro de amostra
   createSample: [2, 3, 4], // Técnico (2), Coordenador (3), Administrador (4)
   
-  // Editar e deletar amostra (apenas Coordenador e Administrador)
+  // Editar e deletar amostra
   editSample: [3, 4], // Coordenador (3), Administrador (4)
-  deleteSample: [3, 4], // Coordenador (3), Administrador (4)
+  deleteSample: [4], // Least privilege: apenas Administrador (4)
 
   // RF005 - Cadastro de paciente
   createPatient: [3, 4], // Coordenador (3), Administrador (4)
@@ -130,7 +141,7 @@ const requirePermission = (permission) => {
       });
     }
 
-    const userRole = req.user.accessType || 1;
+    const userRole = resolveUserRole(req.user);
     const allowedRoles = permissions[permission];
 
     if (!allowedRoles) {

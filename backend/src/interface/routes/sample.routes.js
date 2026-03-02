@@ -12,10 +12,67 @@ const { authenticate } = require('../../infrastructure/middleware/auth');
 const { requirePermission } = require('../../infrastructure/middleware/rbac');
 const logger = require('../../utils/logger');
 
+function validateCreateSamplePayload(req, res, next) {
+  const payload = req.body || {};
+  const errors = [];
+
+  if (!payload.patientID || typeof payload.patientID !== 'string' || !/^\d{8}$/.test(payload.patientID)) {
+    errors.push('patientID deve ser uma string com 8 dígitos');
+  }
+
+  if (!payload.sampleType || typeof payload.sampleType !== 'string') {
+    errors.push('sampleType é obrigatório e deve ser string');
+  }
+
+  if (!payload.sampleOrigin || typeof payload.sampleOrigin !== 'string') {
+    errors.push('sampleOrigin é obrigatório e deve ser string');
+  }
+
+  if (!payload.extractionProtocol || typeof payload.extractionProtocol !== 'string') {
+    errors.push('extractionProtocol é obrigatório e deve ser string');
+  }
+
+  if (payload.quantity === undefined || payload.quantity === null || typeof payload.quantity !== 'number' || payload.quantity <= 0) {
+    errors.push('quantity deve ser um número maior que zero');
+  }
+
+  if (payload.quality === undefined || payload.quality === null || typeof payload.quality !== 'number' || !Number.isInteger(payload.quality)) {
+    errors.push('quality é obrigatório e deve ser inteiro');
+  }
+
+  if (!payload.linkedProject || typeof payload.linkedProject !== 'string' || payload.linkedProject.trim() === '') {
+    errors.push('linkedProject é obrigatório');
+  }
+
+  if (payload.isRareDisease !== undefined && typeof payload.isRareDisease !== 'boolean') {
+    errors.push('isRareDisease deve ser boolean');
+  }
+
+  if (payload.locationID === undefined || payload.locationID === null || (typeof payload.locationID !== 'number' && typeof payload.locationID !== 'string')) {
+    errors.push('locationID é obrigatório');
+  }
+
+  if (!payload.registerDate && !payload.registrationDate) {
+    errors.push('registerDate é obrigatório');
+  }
+
+  if (errors.length > 0) {
+    return res.status(422).json({
+      success: false,
+      error: 'Payload inválido',
+      message: errors.join(', '),
+      details: errors
+    });
+  }
+
+  return next();
+}
+
 // RF004 - Cadastro de Amostra
 router.post('/',
   authenticate,
   requirePermission('createSample'),
+  validateCreateSamplePayload,
   async (req, res) => {
     try {
       const db = req.app.locals.db;
@@ -54,6 +111,8 @@ router.post('/',
         }
       });
       const sample = result.sample;
+      const operationMode = result.strictMode ? 'STRICT' : 'PERMISSIVE';
+      const hasPartialSuccess = Boolean(result?.topology && !result.topology.synced && result.topology.fallbackQueued);
 
       // Registra log (anonimizado via auditLogger) - RF004
       if (req.user) {
@@ -78,12 +137,20 @@ router.post('/',
         });
       }
 
-      return res.status(201).json({
+      return res.status(hasPartialSuccess ? 202 : 201).json({
         success: true,
-        message: req.t('samples.createSuccess') || 'Amostra criada com sucesso',
+        partialSuccess: hasPartialSuccess,
+        message: hasPartialSuccess
+          ? (req.t('samples.createSuccess') || 'Amostra criada com sucesso') + ' (integração topológica em quarentena)'
+          : req.t('samples.createSuccess') || 'Amostra criada com sucesso',
         data: {
           sampleID: sample._id.toString(),
-          patientID: sample.patientID // Apenas ID, sem dados sensíveis (LGPD)
+          patientID: sample.patientID, // Apenas ID, sem dados sensíveis (LGPD)
+          operationMode,
+          topology: {
+            synced: Boolean(result?.topology?.synced),
+            fallbackQueued: Boolean(result?.topology?.fallbackQueued)
+          }
         }
       });
     } catch (error) {
@@ -101,10 +168,18 @@ router.post('/',
         });
       }
 
-      if (error.status === 409) {
+      if (error.status === 409 || error.statusCode === 409) {
         return res.status(409).json({
           success: false,
           error: 'Posição ocupada',
+          message: errorMessage
+        });
+      }
+
+      if (error.status === 404 || error.statusCode === 404 || errorMessage.includes('não encontrado')) {
+        return res.status(404).json({
+          success: false,
+          error: 'Recurso não encontrado',
           message: errorMessage
         });
       }

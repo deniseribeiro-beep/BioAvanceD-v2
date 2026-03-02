@@ -1,5 +1,5 @@
 const csv = require('csv-parser');
-const XLSX = require('xlsx');
+const ExcelJS = require('exceljs');
 const fs = require('fs');
 const path = require('path');
 const logger = require('../utils/logger');
@@ -83,86 +83,102 @@ class ImportLGPDService {
       if (!fs.existsSync(filePath)) {
         throw new Error('Arquivo não encontrado');
       }
-      
-      const workbook = XLSX.readFile(filePath, { 
-        cellDates: true,
-        cellNF: false,
-        cellText: false
-      });
-      
-      if (!workbook.SheetNames || workbook.SheetNames.length === 0) {
+
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.readFile(filePath);
+
+      if (!workbook.worksheets || workbook.worksheets.length === 0) {
         throw new Error('Arquivo Excel não contém planilhas');
       }
-      
+
       // Busca a aba apropriada baseado no tipo de dados
       let sheetName = null;
       let worksheet = null;
-      
+
+      const sheetNames = workbook.worksheets.map((sheet) => sheet.name);
+
       if (dataType === 'patients') {
         // Prioridade: 1) Aba "Pacientes", 2) Primeira aba que não seja "Instruções"
-        if (workbook.SheetNames.includes('Pacientes')) {
+        if (sheetNames.includes('Pacientes')) {
           sheetName = 'Pacientes';
-          worksheet = workbook.Sheets[sheetName];
+          worksheet = workbook.getWorksheet(sheetName);
         } else {
           // Procura primeira aba que não seja "Instruções"
-          for (const name of workbook.SheetNames) {
+          for (const name of sheetNames) {
             if (name.toLowerCase() !== 'instruções' && name.toLowerCase() !== 'instrucoes') {
               sheetName = name;
-              worksheet = workbook.Sheets[name];
+              worksheet = workbook.getWorksheet(name);
               break;
             }
           }
-          
+
           // Se não encontrou, usa a primeira aba
           if (!sheetName) {
-            sheetName = workbook.SheetNames[0];
-            worksheet = workbook.Sheets[sheetName];
+            sheetName = sheetNames[0];
+            worksheet = workbook.getWorksheet(sheetName);
           }
         }
       } else if (dataType === 'samples') {
         // Prioridade: 1) Aba "Amostras", 2) Primeira aba que não seja "Instruções"
-        if (workbook.SheetNames.includes('Amostras')) {
+        if (sheetNames.includes('Amostras')) {
           sheetName = 'Amostras';
-          worksheet = workbook.Sheets[sheetName];
+          worksheet = workbook.getWorksheet(sheetName);
         } else {
           // Procura primeira aba que não seja "Instruções"
-          for (const name of workbook.SheetNames) {
+          for (const name of sheetNames) {
             if (name.toLowerCase() !== 'instruções' && name.toLowerCase() !== 'instrucoes') {
               sheetName = name;
-              worksheet = workbook.Sheets[name];
+              worksheet = workbook.getWorksheet(name);
               break;
             }
           }
-          
+
           // Se não encontrou, usa a primeira aba
           if (!sheetName) {
-            sheetName = workbook.SheetNames[0];
-            worksheet = workbook.Sheets[sheetName];
+            sheetName = sheetNames[0];
+            worksheet = workbook.getWorksheet(sheetName);
           }
         }
       }
-      
+
       if (!worksheet) {
         throw new Error(`Planilha "${sheetName}" não encontrada`);
       }
-      
+
       // Lê todas as linhas primeiro
-      const allRows = XLSX.utils.sheet_to_json(worksheet, {
-        defval: null,
-        raw: false,
-        header: 1 // Retorna como array de arrays para identificar headers
+      const allRows = [];
+      worksheet.eachRow({ includeEmpty: true }, (row) => {
+        const values = [];
+        for (let cellIndex = 1; cellIndex <= row.cellCount; cellIndex += 1) {
+          const cell = row.getCell(cellIndex);
+          const rawValue = cell.value;
+          let value = null;
+
+          if (rawValue !== undefined && rawValue !== null) {
+            if (typeof rawValue === 'object' && rawValue.text !== undefined) {
+              value = rawValue.text;
+            } else if (rawValue instanceof Date) {
+              value = rawValue.toISOString();
+            } else {
+              value = String(rawValue);
+            }
+          }
+
+          values.push(value);
+        }
+        allRows.push(values);
       });
-      
+
       if (!allRows || allRows.length === 0) {
         throw new Error('Planilha está vazia');
       }
-      
+
       // Encontra a linha de headers baseado no tipo de dados
       let headerRowIndex = -1;
       const searchFields = dataType === 'patients' 
         ? ['patientname', 'patientname'] 
         : ['patientid', 'patientid', 'sampletype', 'sampletype'];
-      
+
       for (let i = 0; i < allRows.length; i++) {
         const row = allRows[i];
         if (Array.isArray(row)) {
@@ -173,12 +189,12 @@ class ImportLGPDService {
           }
         }
       }
-      
+
       if (headerRowIndex === -1) {
         const requiredField = dataType === 'patients' ? 'patientName' : 'patientID ou sampleType';
         throw new Error(`Não foi possível encontrar a linha de cabeçalhos (headers) na planilha. Certifique-se de que a coluna "${requiredField}" está presente.`);
       }
-      
+
       // Extrai headers e remove caracteres especiais (como (*))
       const headerRow = allRows[headerRowIndex];
       const cleanHeaders = headerRow.map(h => {
@@ -187,20 +203,20 @@ class ImportLGPDService {
         // Remove asteriscos e parênteses (ex: "patientName (*)" -> "patientName")
         return headerStr.replace(/\s*\([^)]*\)\s*/g, '').trim();
       });
-      
+
       // Filtra headers nulos
       const validHeaders = cleanHeaders.filter(h => h && h.length > 0);
-      
+
       // Converte linhas seguintes para objetos usando os headers limpos
       const dataRows = [];
       for (let i = headerRowIndex + 1; i < allRows.length; i++) {
         const row = allRows[i];
         if (!Array.isArray(row)) continue;
-        
+
         // Verifica se a linha está vazia (todos os valores são null/empty)
         const isEmpty = row.every(cell => !cell || String(cell).trim() === '');
         if (isEmpty) continue;
-        
+
         // Cria objeto usando headers limpos
         const rowObj = {};
         validHeaders.forEach((header, index) => {
@@ -210,17 +226,17 @@ class ImportLGPDService {
             rowObj[header] = (value !== undefined && value !== null && String(value).trim() !== '') ? value : null;
           }
         });
-        
+
         // Só adiciona se tiver pelo menos um campo preenchido
         if (Object.values(rowObj).some(v => v !== null && v !== '')) {
           dataRows.push(rowObj);
         }
       }
-      
+
       if (dataRows.length === 0) {
         throw new Error('Nenhum dado válido encontrado na planilha. Certifique-se de que há dados além dos cabeçalhos.');
       }
-      
+
       return dataRows;
     } catch (error) {
       logger.error('Erro ao ler arquivo Excel:', error);

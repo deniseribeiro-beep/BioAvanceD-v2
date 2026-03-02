@@ -9,7 +9,7 @@ const path = require('path');
 const fs = require('fs');
 const notificationService = require('./notification.service');
 const csv = require('csv-parser');
-let XLSX;
+const ExcelJS = require('exceljs');
 
 /**
  * Serviço de Importação Assíncrona
@@ -187,11 +187,32 @@ class ImportAsyncService {
 
     if (ext === '.xlsx') {
       try {
-        if (!XLSX) XLSX = require('xlsx');
-        const workbook = XLSX.readFile(file.path, { cellDates: true });
-        let sheetName = workbook.SheetNames[0];
-        const ws = workbook.Sheets[sheetName];
-        const rows = XLSX.utils.sheet_to_json(ws, { defval: null, raw: false, header: 1 }) || [];
+        const workbook = new ExcelJS.Workbook();
+        await workbook.xlsx.readFile(file.path);
+        const ws = workbook.worksheets[0];
+        if (!ws) return [];
+
+        const rows = [];
+        ws.eachRow({ includeEmpty: true }, (row) => {
+          const values = [];
+          for (let cellIndex = 1; cellIndex <= row.cellCount; cellIndex += 1) {
+            const cell = row.getCell(cellIndex);
+            const rawValue = cell.value;
+            let value = null;
+            if (rawValue !== undefined && rawValue !== null) {
+              if (typeof rawValue === 'object' && rawValue.text !== undefined) {
+                value = rawValue.text;
+              } else if (rawValue instanceof Date) {
+                value = rawValue.toISOString();
+              } else {
+                value = String(rawValue);
+              }
+            }
+            values.push(value);
+          }
+          rows.push(values);
+        });
+
         const headerIndex = this.findHeaderRow(rows, dataType);
         if (headerIndex === -1) return [];
         const headers = (rows[headerIndex] || []).map(h => this.canonicalizeHeader(h));

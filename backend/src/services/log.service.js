@@ -3,6 +3,7 @@ const logger = require('../utils/logger');
 const { sanitizePatientForLogs } = require('../utils/patientAnonymization');
 const { anonymizeLogs, anonymizeLogUser } = require('../utils/userAnonymization');
 const { serializeLogs, serializeLogSimple } = require('../utils/logSerializer');
+const ExcelJS = require('exceljs');
 
 /**
  * Service de Logs/Auditoria
@@ -160,7 +161,6 @@ class LogService {
       if (filters.search) {
         const searchConditions = [
           { message: { $regex: filters.search, $options: 'i' } },
-          { entity: { $regex: filters.search, $options: 'i' } },
           { action: { $regex: filters.search, $options: 'i' } },
           { userName: { $regex: filters.search, $options: 'i' } } // Busca por identificador anonimizado
         ];
@@ -262,7 +262,23 @@ class LogService {
    */
   async getUserLogs(db, userID, limit = 50) {
     try {
-      return await this.getLogs(db, { userID, limit });
+      const logsCollection = db.collection('logs');
+      const query = {
+        $or: [
+          { userID },
+          { userId: userID },
+          { userName: userID }
+        ]
+      };
+
+      const logs = await logsCollection
+        .find(query)
+        .sort({ dateTime: -1, timestamp: -1 })
+        .limit(limit)
+        .toArray();
+
+      const anonymizedLogs = await anonymizeLogs(logs, db);
+      return serializeLogs(anonymizedLogs);
     } catch (error) {
       logger.error('Erro ao buscar logs do usuário:', error.message);
       throw error;
@@ -344,8 +360,6 @@ class LogService {
    */
   async exportLogsToExcel(db, filters = {}) {
     try {
-      const XLSX = require('xlsx');
-      
       // Busca logs com limite alto para exportação
       const result = await this.getLogs(db, { ...filters, limit: 10000 });
       
@@ -445,13 +459,13 @@ class LogService {
         }
       });
 
-      const workbook = XLSX.utils.book_new();
-      const worksheet = XLSX.utils.aoa_to_sheet([headers, ...rows]);
-      XLSX.utils.book_append_sheet(workbook, worksheet, 'Logs');
+      const workbook = new ExcelJS.Workbook();
+      const worksheet = workbook.addWorksheet('Logs');
+      worksheet.addRow(headers);
+      rows.forEach((row) => worksheet.addRow(row));
 
-      const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
-
-      return buffer;
+      const buffer = await workbook.xlsx.writeBuffer();
+      return Buffer.from(buffer);
     } catch (error) {
       logger.error('Erro ao exportar logs para Excel:', error.message);
       logger.error('Rastreamento:', error.stack);

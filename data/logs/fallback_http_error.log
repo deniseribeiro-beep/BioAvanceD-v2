@@ -1,0 +1,2 @@
+2026/03/02 16:23:45 [error] 263#263: *1646 open() "/var/www/html/frontend" failed (2: No such file or directory), client: 172.19.0.1, server: localhost-nginx-proxy-manager, request: "GET /frontend HTTP/1.1", host: "localhost"
+2026/03/02 16:40:47 [error] 263#263: *1663 "/var/www/html/api/index.html" is not found (2: No such file or directory), client: 172.19.0.1, server: localhost-nginx-proxy-manager, request: "GET /api/?timeout=32s HTTP/1.1", host: "localhost", referrer: "http://localhost:8080/api?timeout=32s"

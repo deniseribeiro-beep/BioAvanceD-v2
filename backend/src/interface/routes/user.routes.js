@@ -513,11 +513,24 @@ router.post('/register-sample', authenticate, requirePermission('createSample'),
       }
     });
     const sample = result.sample;
+    const operationMode = result.strictMode ? 'STRICT' : 'PERMISSIVE';
+    const hasPartialSuccess = Boolean(result?.topology && !result.topology.synced && result.topology.fallbackQueued);
 
-    return res.status(201).json({
+    return res.status(hasPartialSuccess ? 202 : 201).json({
       success: true,
-      message: req.t('users.registerSampleSuccess'),
-      data: sample
+      partialSuccess: hasPartialSuccess,
+      message: hasPartialSuccess
+        ? (req.t('users.registerSampleSuccess') || 'Amostra registrada com sucesso') + ' (integração topológica em quarentena)'
+        : req.t('users.registerSampleSuccess') || 'Amostra registrada com sucesso',
+      data: {
+        sampleID: sample._id?.toString ? sample._id.toString() : String(sample._id || sample.id || ''),
+        patientID: sample.patientID,
+        operationMode,
+        topology: {
+          synced: Boolean(result?.topology?.synced),
+          fallbackQueued: Boolean(result?.topology?.fallbackQueued)
+        }
+      }
     });
   } catch (error) {
     logger.error('Erro ao registrar amostra:', error.message);

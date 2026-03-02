@@ -7,10 +7,17 @@
     "docker:local:up:migrate": "powershell -ExecutionPolicy Bypass -File ./scripts/start-local-stack.ps1 -EnvFile .env.docker -ComposeFile docker-compose.yml",
     "docker:local:down": "powershell -ExecutionPolicy Bypass -File ./scripts/stop-local-stack.ps1 -EnvFile .env.docker -ComposeFile docker-compose.yml",
     "docker:local:logs": "docker compose --env-file .env.docker -f docker-compose.yml logs -f",
-    "docker:local:ps": "docker compose --env-file .env.docker -f docker-compose.yml ps"
+    "docker:local:ps": "docker compose --env-file .env.docker -f docker-compose.yml ps",
+    "lab:test": "npm --prefix backend run lab:test",
+    "test:browser": "vitest"
   },
   "devDependencies": {
-    "baseline-browser-mapping": "^2.9.16"
+    "@vitejs/plugin-react": "^5.1.4",
+    "@vitest/browser-playwright": "^4.0.18",
+    "baseline-browser-mapping": "^2.9.16",
+    "supertest": "^7.2.2",
+    "vitest": "^4.0.18",
+    "vitest-browser-react": "^2.0.5"
   },
   "dependencies": {
     "@influxdata/influxdb-client": "^1.35.0",

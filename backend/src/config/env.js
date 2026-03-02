@@ -15,6 +15,9 @@ module.exports = {
   NEO4J_PASSWORD: process.env.NEO4J_PASSWORD,
   NEO4J_DATABASE: process.env.NEO4J_DATABASE || 'neo4j',
   NEO4J_REQUIRED: process.env.NEO4J_REQUIRED === 'true' || process.env.NEO4J_REQUIRED === '1',
+  NEO4J_CONNECT_MAX_RETRIES: process.env.NEO4J_CONNECT_MAX_RETRIES ? Number(process.env.NEO4J_CONNECT_MAX_RETRIES) : 8,
+  NEO4J_CONNECT_INITIAL_DELAY_MS: process.env.NEO4J_CONNECT_INITIAL_DELAY_MS ? Number(process.env.NEO4J_CONNECT_INITIAL_DELAY_MS) : 1000,
+  NEO4J_CONNECT_MAX_DELAY_MS: process.env.NEO4J_CONNECT_MAX_DELAY_MS ? Number(process.env.NEO4J_CONNECT_MAX_DELAY_MS) : 15000,
 
   // InfluxDB
   INFLUXDB_URL: process.env.INFLUXDB_URL,
@@ -26,6 +29,8 @@ module.exports = {
   TELEMETRY_CRITICAL_DURATION_HOURS: process.env.TELEMETRY_CRITICAL_DURATION_HOURS,
   TELEMETRY_LOOKBACK_HOURS: process.env.TELEMETRY_LOOKBACK_HOURS,
   TELEMETRY_TRIGGER_COOLDOWN_MINUTES: process.env.TELEMETRY_TRIGGER_COOLDOWN_MINUTES,
+  TELEMETRY_MIN_TEMP_ALERT: process.env.TELEMETRY_MIN_TEMP_ALERT,
+  TELEMETRY_MAX_TEMP_ALERT: process.env.TELEMETRY_MAX_TEMP_ALERT,
 
   // Auth
   JWT_SECRET: process.env.JWT_SECRET,
@@ -42,6 +47,7 @@ module.exports = {
   TRUST_PROXY: process.env.TRUST_PROXY || '0',
 
   // Redis Configuration
+  REDIS_URL: process.env.REDIS_URL,
   REDIS_HOST: process.env.REDIS_HOST,
   REDIS_PORT: process.env.REDIS_PORT ? Number(process.env.REDIS_PORT) : undefined,
   REDIS_PASSWORD: process.env.REDIS_PASSWORD,
@@ -57,6 +63,20 @@ module.exports = {
   ENABLE_CONSENT_SYNC: process.env.ENABLE_CONSENT_SYNC === 'true' || process.env.ENABLE_CONSENT_SYNC === '1',
   CONSENT_SYNC_CRON: process.env.CONSENT_SYNC_CRON,
   CONSENT_SYNC_BATCH_SIZE: process.env.CONSENT_SYNC_BATCH_SIZE,
+
+  // Notification
+  APP_DOMAIN: process.env.APP_DOMAIN,
+  SMS_MOCK: process.env.SMS_MOCK,
+  TWILIO_ACCOUNT_SID: process.env.TWILIO_ACCOUNT_SID,
+  TWILIO_AUTH_TOKEN: process.env.TWILIO_AUTH_TOKEN,
+  TWILIO_PHONE_NUMBER: process.env.TWILIO_PHONE_NUMBER,
+  ALERT_SMS_TO: process.env.ALERT_SMS_TO,
+  ALERT_EMAIL_TO: process.env.ALERT_EMAIL_TO,
+  EMAIL_FROM: process.env.EMAIL_FROM,
+  SMTP_HOST: process.env.SMTP_HOST,
+  SMTP_PORT: process.env.SMTP_PORT,
+  SMTP_USER: process.env.SMTP_USER,
+  SMTP_PASS: process.env.SMTP_PASS,
 
   // Canonical Collections
   COLL_PATIENTS: process.env.COLL_PATIENTS || 'patients',

@@ -5,6 +5,14 @@ const logger = require('../../../utils/logger');
 let neo4jDriver = null;
 let connectingPromise = null;
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function getRetryDelay(attempt, initialDelayMs, maxDelayMs) {
+  return Math.min(initialDelayMs * (2 ** attempt), maxDelayMs);
+}
+
 function getNeo4jConfig() {
   return {
     uri: env.NEO4J_URI,
@@ -41,10 +49,30 @@ async function connectNeo4j() {
       );
 
       try {
-        await driver.verifyConnectivity();
-        const session = driver.session({ database: config.database });
-        await session.run('RETURN 1 AS ok');
-        await session.close();
+        const maxRetries = env.NEO4J_CONNECT_MAX_RETRIES;
+        const initialDelayMs = env.NEO4J_CONNECT_INITIAL_DELAY_MS;
+        const maxDelayMs = env.NEO4J_CONNECT_MAX_DELAY_MS;
+        let attempt = 0;
+
+        while (attempt < maxRetries) {
+          try {
+            await driver.verifyConnectivity();
+            const session = driver.session({ database: config.database });
+            await session.run('RETURN 1 AS ok');
+            await session.close();
+            break;
+          } catch (error) {
+            attempt += 1;
+
+            if (attempt >= maxRetries) {
+              throw error;
+            }
+
+            const delayMs = getRetryDelay(attempt - 1, initialDelayMs, maxDelayMs);
+            logger.warn(`[ISO20387][NEO4J] Tentativa ${attempt}/${maxRetries} falhou. Nova tentativa em ${delayMs}ms: ${error.message}`);
+            await sleep(delayMs);
+          }
+        }
 
         neo4jDriver = driver;
         logger.info('[ISO20387][NEO4J] Conexão e validação de rastreabilidade estabelecidas');

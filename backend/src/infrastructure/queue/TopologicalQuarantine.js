@@ -17,6 +17,15 @@ class TopologicalQuarantine {
     this.timer = null;
     this.running = false;
     this.processing = false;
+    this.metrics = {
+      enqueuedTotal: 0,
+      replayAttemptsTotal: 0,
+      replaySuccessTotal: 0,
+      replayFailureTotal: 0,
+      replayDurationMsTotal: 0,
+      discardedTotal: 0,
+      lastProcessedAt: null,
+    };
   }
 
   async enqueue(payload, context = {}) {
@@ -36,6 +45,7 @@ class TopologicalQuarantine {
 
     try {
       await this.redis.rpush(this.queueKey, JSON.stringify(item));
+      this.metrics.enqueuedTotal += 1;
       logger.warn(`[ISO20387][QUARANTINE] Evento enfileirado para retry: sampleId=${payload.sampleId}, eventType=${payload.eventType}`);
       return true;
     } catch (error) {
@@ -92,9 +102,11 @@ class TopologicalQuarantine {
         }
 
         const ok = await this.reprocessItem(item);
+        this.metrics.lastProcessedAt = new Date().toISOString();
         if (!ok) {
           const attempts = Number(item?.attempts || 0) + 1;
           if (attempts >= this.maxAttempts) {
+            this.metrics.discardedTotal += 1;
             logger.error(`[ISO20387][QUARANTINE] Item descartado após ${attempts} tentativas: sampleId=${item?.payload?.sampleId || 'unknown'}`);
             continue;
           }
@@ -112,6 +124,7 @@ class TopologicalQuarantine {
   }
 
   async reprocessItem(item) {
+    const startedAt = Date.now();
     try {
       if (!this.getLineageRepository || typeof this.getLineageRepository !== 'function') {
         throw new Error('Factory de LineageRepository não configurada');
@@ -129,12 +142,62 @@ class TopologicalQuarantine {
 
       await lineageRepository.recordCustodyEvent(item.payload);
 
+      this.metrics.replaySuccessTotal += 1;
       logger.info(`[ISO20387][QUARANTINE] Reprocessamento OK: sampleId=${item.payload.sampleId}, eventType=${item.payload.eventType}`);
       return true;
     } catch (error) {
+      this.metrics.replayFailureTotal += 1;
       logger.warn(`[ISO20387][QUARANTINE] Retry falhou: ${error.message || error}`);
       return false;
+    } finally {
+      this.metrics.replayAttemptsTotal += 1;
+      this.metrics.replayDurationMsTotal += Date.now() - startedAt;
     }
+  }
+
+  async getObservabilityMetrics() {
+    let queueDepth = null;
+
+    try {
+      if (this.redis && typeof this.redis.llen === 'function') {
+        const rawDepth = await this.redis.llen(this.queueKey);
+        queueDepth = Number(rawDepth);
+      }
+    } catch (_) {
+      queueDepth = null;
+    }
+
+    const replayAttemptsTotal = Number(this.metrics.replayAttemptsTotal || 0);
+    const replayDurationMsTotal = Number(this.metrics.replayDurationMsTotal || 0);
+    const replayAverageMs = replayAttemptsTotal > 0
+      ? Number((replayDurationMsTotal / replayAttemptsTotal).toFixed(2))
+      : 0;
+
+    const replaySuccessTotal = Number(this.metrics.replaySuccessTotal || 0);
+    const discardedTotal = Number(this.metrics.discardedTotal || 0);
+    const terminalOutcomes = replaySuccessTotal + discardedTotal;
+    const discardRate = terminalOutcomes > 0
+      ? Number(((discardedTotal / terminalOutcomes) * 100).toFixed(2))
+      : 0;
+
+    return {
+      queue: {
+        key: this.queueKey,
+        depth: queueDepth,
+        enqueuedTotal: Number(this.metrics.enqueuedTotal || 0),
+      },
+      replay: {
+        attemptsTotal: replayAttemptsTotal,
+        successTotal: replaySuccessTotal,
+        failureTotal: Number(this.metrics.replayFailureTotal || 0),
+        averageReplayTimeMs: replayAverageMs,
+      },
+      discard: {
+        total: discardedTotal,
+        ratePercent: discardRate,
+      },
+      lastProcessedAt: this.metrics.lastProcessedAt,
+    };
   }
 }
 

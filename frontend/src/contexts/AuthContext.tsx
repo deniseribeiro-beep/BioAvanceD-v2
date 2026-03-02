@@ -6,7 +6,7 @@ import { hasRoleAccess, canRoleAccessRoute, getAccessTypeForRole, RoleName } fro
 interface AuthContextType {
   user: User | null;
   token: string | null;
-  login: (username: string, password: string, twoFactorCode?: string) => Promise<{ requiresTwoFactor?: boolean; requiresTwoFactorSetup?: boolean } | void>;
+  login: (username: string, password: string, twoFactorCode?: string) => Promise<{ requiresTwoFactor?: boolean; requiresTwoFactorSetup?: boolean; user?: User } | void>;
   logout: () => void;
   isAuthenticated: boolean;
   isLoading: boolean;
@@ -18,6 +18,48 @@ interface AuthContextType {
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
+
+function mapAccessTypeToRoleName(accessType?: number): RoleName {
+  const roleNameMap: Record<number, RoleName> = {
+    1: 'Usuário Externo',
+    2: 'Técnico',
+    3: 'Coordenador',
+    4: 'Administrador'
+  };
+
+  return roleNameMap[accessType || 2] || 'Técnico';
+}
+
+function decodeUserFromToken(token: string): User | null {
+  try {
+    const parts = token.split('.');
+    if (parts.length < 2) return null;
+
+    const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    const jsonPayload = decodeURIComponent(
+      atob(base64)
+        .split('')
+        .map((char) => `%${`00${char.charCodeAt(0).toString(16)}`.slice(-2)}`)
+        .join('')
+    );
+
+    const payload = JSON.parse(jsonPayload);
+    const accessType = Number(payload.accessType || payload.role || 2);
+    const roleName = payload.roleName || mapAccessTypeToRoleName(accessType);
+
+    return {
+      id: Number(payload.id || 0),
+      name: payload.name || payload.username || 'Usuário',
+      email: payload.email || 'no-email@local',
+      username: payload.username || payload.name || 'user',
+      userID: payload.userID || payload.id || payload.sub,
+      accessType,
+      roleName,
+    } as User;
+  } catch {
+    return null;
+  }
+}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
@@ -36,6 +78,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const verifyToken = async () => {
       const storedToken = localStorage.getItem('token');
       if (storedToken) {
+        const fallbackUser = decodeUserFromToken(storedToken);
+        if (fallbackUser && isMounted) {
+          setUser((currentUser) => currentUser || fallbackUser);
+          setToken(storedToken);
+        }
+
         try {
           const now = Date.now();
           if (verifyInFlightRef.current) {
@@ -80,13 +128,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           if (isMounted && userData) {
             // Se não tiver roleName mas tiver accessType, mapeia
             if (!userData.roleName && userData.accessType) {
-              const roleNameMap: Record<number, string> = {
-                1: 'Usuário Externo',
-                2: 'Técnico',
-                3: 'Coordenador',
-                4: 'Administrador'
-              };
-              userData.roleName = roleNameMap[userData.accessType] || 'Técnico';
+              userData.roleName = mapAccessTypeToRoleName(userData.accessType);
             }
             setUser(userData);
             setToken(storedToken);
@@ -196,7 +238,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []); // Executa apenas uma vez na montagem
 
-  const login = useCallback(async (username: string, password: string, twoFactorCode?: string): Promise<{ requiresTwoFactor?: boolean; requiresTwoFactorSetup?: boolean } | void> => {
+  const login = useCallback(async (username: string, password: string, twoFactorCode?: string): Promise<{ requiresTwoFactor?: boolean; requiresTwoFactorSetup?: boolean; user?: User } | void> => {
     try {
       console.log('AuthContext.login chamado', { username, hasTwoFactorCode: !!twoFactorCode });
       
@@ -249,13 +291,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         
         // Se não tiver roleName mas tiver accessType, mapeia
         if (!userData.roleName && userData.accessType) {
-          const roleNameMap: Record<number, string> = {
-            1: 'Usuário Externo',
-            2: 'Técnico',
-            3: 'Coordenador',
-            4: 'Administrador'
-          };
-          userData.roleName = roleNameMap[userData.accessType] || 'Técnico';
+          userData.roleName = mapAccessTypeToRoleName(userData.accessType);
         }
         
         localStorage.removeItem('tempUsername');
@@ -277,7 +313,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // Isso evita que o useEffect remova o token imediatamente
         setSkipVerification(true);
         
-        return { requiresTwoFactor: false };
+        return { requiresTwoFactor: false, user: userData };
       }
       
       // Caso contrário, requer 2FA

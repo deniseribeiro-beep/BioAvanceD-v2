@@ -8,6 +8,7 @@ import LanguageSelector from '../components/LanguageSelector';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import { authService } from '../services/api';
+import { getPostLoginRoute } from '../utils/rolePermissions';
 import { Mail, CheckCircle, AlertCircle } from 'lucide-react';
 import './LoginPage.css';
 
@@ -25,16 +26,16 @@ export default function LoginPage() {
   const [forgotPasswordSuccess, setForgotPasswordSuccess] = useState(false);
   const [forgotPasswordError, setForgotPasswordError] = useState('');
   const [resetLink, setResetLink] = useState('');
-  const { login, isAuthenticated } = useAuth();
+  const { login, isAuthenticated, user } = useAuth();
   const { t } = useLanguage();
   const navigate = useNavigate();
 
   // Se já estiver autenticado, redireciona
   useEffect(() => {
     if (isAuthenticated) {
-      navigate('/dashboard');
+      navigate(getPostLoginRoute(user?.roleName, user?.accessType));
     }
-  }, [isAuthenticated, navigate]);
+  }, [isAuthenticated, navigate, user?.roleName, user?.accessType]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -71,9 +72,10 @@ export default function LoginPage() {
         return;
       }
       
-      // Login bem-sucedido - redireciona
+      // Login bem-sucedido - redireciona por perfil
       console.log('Login bem-sucedido, redirecionando...');
-      navigate('/dashboard', { replace: true });
+      const targetRoute = getPostLoginRoute(result?.user?.roleName, result?.user?.accessType);
+      navigate(targetRoute, { replace: true });
     } catch (err: any) {
       console.error('Erro no login:', err);
       

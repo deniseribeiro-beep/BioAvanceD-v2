@@ -10,6 +10,51 @@ const { getCollection } = require('../utils/collectionResolver');
  * RF005 - Cadastro de Paciente com Anonimização LGPD
  */
 class PatientService {
+  normalizeCpf(cpf) {
+    if (cpf === undefined || cpf === null) return null;
+    const normalized = String(cpf).replace(/\D/g, '').trim();
+    return normalized || null;
+  }
+
+  normalizeRecordNumber(recordNumber) {
+    if (recordNumber === undefined || recordNumber === null) return null;
+    const normalized = String(recordNumber).trim();
+    return normalized || null;
+  }
+
+  async checkIdentifierConflict(db, patientData) {
+    const patientsCollection = await getCollection(db, 'patients');
+    const normalizedCpf = this.normalizeCpf(patientData?.cpf);
+    const normalizedRecordNumber = this.normalizeRecordNumber(patientData?.recordNumber);
+
+    const orFilters = [];
+    if (normalizedCpf) {
+      orFilters.push({ cpf: normalizedCpf });
+    }
+    if (normalizedRecordNumber) {
+      orFilters.push({ recordNumber: normalizedRecordNumber });
+    }
+
+    if (orFilters.length === 0) {
+      return null;
+    }
+
+    const existing = await patientsCollection.findOne({ $or: orFilters });
+    if (!existing) {
+      return null;
+    }
+
+    if (normalizedCpf && String(existing.cpf || '').replace(/\D/g, '') === normalizedCpf) {
+      return { field: 'cpf', value: normalizedCpf, existing };
+    }
+
+    if (normalizedRecordNumber && String(existing.recordNumber || '').trim() === normalizedRecordNumber) {
+      return { field: 'recordNumber', value: normalizedRecordNumber, existing };
+    }
+
+    return { field: 'identifier', value: null, existing };
+  }
+
   /**
    * Verifica se um paciente já existe (duplicidade)
    * Critério: nome + data de nascimento (normalizada)
@@ -85,6 +130,22 @@ class PatientService {
       const validation = PatientModel.validate(patientData);
       if (!validation.isValid) {
         throw new Error(validation.errors.join(', '));
+      }
+
+      patientData.cpf = this.normalizeCpf(patientData.cpf);
+      patientData.recordNumber = this.normalizeRecordNumber(patientData.recordNumber);
+
+      const identifierConflict = await this.checkIdentifierConflict(db, patientData);
+      if (identifierConflict) {
+        const conflictError = new Error(
+          identifierConflict.field === 'cpf'
+            ? `CPF ${identifierConflict.value} já cadastrado no sistema.`
+            : identifierConflict.field === 'recordNumber'
+              ? `Prontuário ${identifierConflict.value} já cadastrado no sistema.`
+              : 'Paciente com identificadores já cadastrado no sistema.'
+        );
+        conflictError.statusCode = 409;
+        throw conflictError;
       }
 
       // Verifica duplicidade antes de criar

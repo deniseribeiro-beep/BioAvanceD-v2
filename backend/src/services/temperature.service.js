@@ -2,6 +2,7 @@ const TemperatureModel = require('../models/Temperature');
 const PolicyModel = require('../models/Policy');
 const logger = require('../utils/logger');
 const influxTelemetryWriteRepository = require('../infrastructure/persistence/influxdb/InfluxTelemetryWriteRepository');
+const notificationServiceV2 = require('./NotificationService');
 
 /**
  * Service de Temperatura
@@ -88,6 +89,13 @@ class TemperatureService {
         logger.warn('Alerta de temperatura gerado:', {
           sensorId: temperature.sensorId || temperature.sensorID,
           value: temperature.temperatureValue
+        });
+
+        void notificationServiceV2.sendCriticalTempAlert(
+          temperature.sampleId || temperature.sampleID || 'N/A',
+          temperature.temperatureValue
+        ).catch((error) => {
+          logger.error('[NOTIFICATION] Falha ao disparar alerta crítico:', error.message || error);
         });
       }
     } catch (error) {

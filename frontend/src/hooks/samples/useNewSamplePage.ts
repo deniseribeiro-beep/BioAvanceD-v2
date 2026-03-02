@@ -26,6 +26,7 @@ export function useNewSamplePage(onCreated?: () => void) {
     linkedProject: '',
     locationID: undefined,
     currentStatus: 'Available',
+    isRareDisease: false,
   });
 
   const [selectedUnit, setSelectedUnit] = useState<string>('');
@@ -33,6 +34,7 @@ export function useNewSamplePage(onCreated?: () => void) {
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
   const [patientFetchLoading, setPatientFetchLoading] = useState(false);
   const [resendingConsent, setResendingConsent] = useState(false);
+  const [strictModeActivated, setStrictModeActivated] = useState(false);
 
   useEffect(() => {
     if (loadLocations && locations.length === 0) {
@@ -161,6 +163,8 @@ export function useNewSamplePage(onCreated?: () => void) {
     }
 
     try {
+      setStrictModeActivated(false);
+
       let registerDateISO: string;
       const dateToUse = formData.registerDate || formData.registrationDate;
       if (dateToUse) {
@@ -194,12 +198,21 @@ export function useNewSamplePage(onCreated?: () => void) {
         linkedProject: formData.linkedProject,
         locationID: formData.locationID,
         currentStatus: formData.currentStatus || 'Available',
+        isRareDisease: formData.isRareDisease === true,
       };
 
-      await createSample(dataToSave);
+      const result = await createSample(dataToSave);
+      const strictMode = (result as any)?.operationMode === 'STRICT';
+
+      if (strictMode) {
+        setStrictModeActivated(true);
+      }
+
       alert(t('samples.createSuccess') || 'Amostra cadastrada com sucesso');
       await loadSamples();
-      onCreated?.();
+      if (!strictMode) {
+        onCreated?.();
+      }
     } catch (err: any) {
       const errorMsg =
         err.response?.data?.error ||
@@ -219,6 +232,7 @@ export function useNewSamplePage(onCreated?: () => void) {
     selectedPatient,
     patientFetchLoading,
     resendingConsent,
+    strictModeActivated,
     locations,
     locationsLoading,
     handlePatientIDChange,

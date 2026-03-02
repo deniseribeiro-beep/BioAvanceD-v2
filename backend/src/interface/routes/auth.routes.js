@@ -9,10 +9,11 @@ const auditLogger = require('../../utils/auditLogger');
 router.post('/login', (req, res) => {
   // Frontend envia: { username, password, twoFactorCode }
   // Backend espera: { email, password, mfaCode }
-  const { username, password, twoFactorCode } = req.body;
-  logger.info(`Login request recebido - username: "${username}", password: ${password ? 'fornecida' : 'não fornecida'}`);
-  req.body.email = username; // Compatibilidade - permite login com username ou email
-  req.body.mfaCode = twoFactorCode; // Compatibilidade
+  const { username, email, password, twoFactorCode, mfaCode } = req.body;
+  const loginIdentifier = username || email;
+  logger.info(`Login request recebido - username: "${username}", email: "${email}", password: ${password ? 'fornecida' : 'não fornecida'}`);
+  req.body.email = loginIdentifier; // Compatibilidade - permite login com username ou email
+  req.body.mfaCode = twoFactorCode || mfaCode; // Compatibilidade
   logger.info(`Dados convertidos - email: "${req.body.email}", mfaCode: ${req.body.mfaCode ? 'fornecido' : 'não fornecido'}`);
   authController.login(req, res);
 });

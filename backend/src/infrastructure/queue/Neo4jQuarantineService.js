@@ -5,15 +5,32 @@ class Neo4jQuarantineService {
   constructor({ redisClient, redisOptions, queueKey, logger } = {}) {
     this.logger = logger || defaultLogger;
     this.queueKey = queueKey || process.env.NEO4J_QUARANTINE_QUEUE_KEY || 'neo4j:topological:quarantine';
-    this.redis = redisClient || new Redis(redisOptions || {
+    const nodeEnv = String(process.env.NODE_ENV || 'development').toLowerCase();
+    const isLocalEnv = nodeEnv === 'development' || nodeEnv === 'test';
+    const redisTlsRaw = String(process.env.REDIS_TLS || '').toLowerCase();
+    const redisTlsEnabled = redisTlsRaw === 'true' || redisTlsRaw === '1';
+    const shouldUseTls = redisTlsEnabled && !isLocalEnv;
+    const redisUrl = String(process.env.REDIS_URL || '').trim();
+
+    const defaultRedisOptions = {
       host: process.env.REDIS_HOST,
       port: Number(process.env.REDIS_PORT || 6379),
       username: process.env.REDIS_USERNAME || 'default',
       password: process.env.REDIS_PASSWORD,
-      tls: String(process.env.REDIS_TLS || '').toLowerCase() === 'true' ? {} : undefined,
       maxRetriesPerRequest: null,
       enableReadyCheck: false
-    });
+    };
+
+    if (shouldUseTls) {
+      defaultRedisOptions.tls = {};
+    }
+
+    if (redisOptions && Object.prototype.hasOwnProperty.call(redisOptions, 'tls') && !shouldUseTls) {
+      delete redisOptions.tls;
+    }
+
+    const effectiveOptions = redisOptions || defaultRedisOptions;
+    this.redis = redisClient || (redisUrl ? new Redis(redisUrl, effectiveOptions) : new Redis(effectiveOptions));
     this.shouldCloseClient = !redisClient;
   }
 

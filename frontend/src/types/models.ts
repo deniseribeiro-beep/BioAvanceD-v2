@@ -93,6 +93,7 @@ export interface Sample {
   unitID?: number; // Relacionamento Sample → SampleWithMeasurementUnit
   locationID?: number;
   linkedProject?: string;
+  isRareDisease?: boolean;
   // Campos de movimentação
   movementType?: 'Armazenamento' | 'Transferência';
   // Controle de quantidade (novos campos)

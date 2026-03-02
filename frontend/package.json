@@ -19,6 +19,7 @@
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
   "devDependencies": {
+    "@playwright/test": "^1.54.2",
     "@types/react": "^18.2.43",
     "@types/react-dom": "^18.2.17",
     "@vitejs/plugin-react": "^5.1.4",
@@ -34,6 +35,7 @@
     "typecheck:core": "tsc --noEmit -p tsconfig.typecheck-core.json",
     "typecheck:full": "tsc --noEmit",
     "preview": "vite preview",
+    "test:e2e": "playwright test",
     "cleanup": "node scripts/cleanup.js",
     "clean": "node scripts/cleanup.js",
     "clean:cache": "powershell -Command \"if (Test-Path node_modules\\.vite) { Remove-Item -Recurse -Force node_modules\\.vite; Write-Host 'Cache limpo' } else { Write-Host 'Cache nao existe' }\""

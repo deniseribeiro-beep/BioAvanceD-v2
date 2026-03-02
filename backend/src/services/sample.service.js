@@ -19,7 +19,9 @@ class SampleService {
       // RF004 - Validação completa
       const validation = SampleModel.validate(sampleData);
       if (!validation.isValid) {
-        throw new Error(validation.errors.join(', '));
+        const validationError = new Error(validation.errors.join(', '));
+        validationError.statusCode = 422;
+        throw validationError;
       }
       
       // Se for import, permite locationID null (será atribuído depois)
@@ -40,7 +42,9 @@ class SampleService {
       // Valida se o ID de paciente existe (sem expor dados sensíveis)
       const patientExists = await validatePatientID(db, sampleData.patientID);
       if (!patientExists) {
-        throw new Error(`ID de paciente ${sampleData.patientID} não encontrado. Verifique se o ID está correto.`);
+        const notFoundError = new Error(`ID de paciente ${sampleData.patientID} não encontrado. Verifique se o ID está correto.`);
+        notFoundError.statusCode = 404;
+        throw notFoundError;
       }
 
       // RF004 - Validações MIABIS (já validadas no modelo, mas reforça aqui)
@@ -75,7 +79,9 @@ class SampleService {
         const locationsCollection = db.collection('locations');
         const location = await locationsCollection.findOne({ locationID: sampleData.locationID });
         if (!location) {
-          throw new Error(`Localização ${sampleData.locationID} não encontrada. Verifique se a localização está cadastrada.`);
+          const locationError = new Error(`Localização ${sampleData.locationID} não encontrada. Verifique se a localização está cadastrada.`);
+          locationError.statusCode = 404;
+          throw locationError;
         }
       }
 

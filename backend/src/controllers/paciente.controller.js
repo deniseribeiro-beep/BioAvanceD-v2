@@ -79,7 +79,17 @@ class PacienteController {
         }
       }
 
-      return res.status(500).json({
+      let statusCode = error.statusCode || error.status || 500;
+      if (statusCode === 500) {
+        const errorMessage = String(error.message || '').toLowerCase();
+        if (errorMessage.includes('já cadastrado') || errorMessage.includes('duplicado')) {
+          statusCode = 409;
+        } else if (errorMessage.includes('obrigatório') || errorMessage.includes('inválido')) {
+          statusCode = 400;
+        }
+      }
+
+      return res.status(statusCode).json({
         success: false,
         error: req.t('errors.serverError'),
         message: error.message || req.t('errors.generic')

@@ -12,27 +12,43 @@ const logger = require('../utils/logger');
 function validateRedisEnv() {
   const errors = [];
   const warnings = [];
+  const nodeEnv = String(process.env.NODE_ENV || 'development').toLowerCase();
+  const isLocalEnv = nodeEnv === 'development' || nodeEnv === 'test';
+
+  const redisUrl = String(process.env.REDIS_URL || '').trim();
+  let hostFromUrl = '';
+  if (redisUrl) {
+    try {
+      hostFromUrl = new URL(redisUrl).hostname.toLowerCase();
+    } catch (_) {
+      errors.push('REDIS_URL inválida');
+    }
+  }
+
+  const host = (hostFromUrl || process.env.REDIS_HOST || '').toLowerCase();
+  const isLocalHost = ['127.0.0.1', 'localhost', '::1'].includes(host);
 
   // Variáveis obrigatórias
-  if (!process.env.REDIS_HOST) {
+  if (!redisUrl && !process.env.REDIS_HOST) {
     errors.push('REDIS_HOST não está definido no .env');
   }
 
-  if (!process.env.REDIS_PORT) {
+  if (!redisUrl && !process.env.REDIS_PORT) {
     errors.push('REDIS_PORT não está definido no .env');
-  } else {
+  } else if (!redisUrl) {
     const port = Number(process.env.REDIS_PORT);
     if (isNaN(port) || port <= 0 || port > 65535) {
       errors.push('REDIS_PORT deve ser um número válido entre 1 e 65535');
     }
   }
 
-  if (!process.env.REDIS_PASSWORD) {
+  if (!process.env.REDIS_PASSWORD && !isLocalEnv && !isLocalHost) {
     errors.push('REDIS_PASSWORD não está definido no .env');
   }
 
   // Variáveis opcionais mas recomendadas
-  if (!process.env.REDIS_TLS || (process.env.REDIS_TLS !== 'true' && process.env.REDIS_TLS !== '1')) {
+  const redisTlsEnabled = process.env.REDIS_TLS === 'true' || process.env.REDIS_TLS === '1';
+  if (!redisTlsEnabled && host.includes('cloud.redislabs.com')) {
     warnings.push('REDIS_TLS não está definido como "true" (geralmente necessário para Redis Cloud)');
   }
 

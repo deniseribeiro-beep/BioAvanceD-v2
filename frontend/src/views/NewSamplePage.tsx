@@ -15,6 +15,7 @@ export default function NewSamplePage() {
     selectedPatient,
     patientFetchLoading,
     resendingConsent,
+    strictModeActivated,
     locations,
     locationsLoading,
     handlePatientIDChange,
@@ -31,6 +32,7 @@ export default function NewSamplePage() {
       selectedPatient={selectedPatient}
       patientFetchLoading={patientFetchLoading}
       resendingConsent={resendingConsent}
+      strictModeActivated={strictModeActivated}
       locations={locations}
       locationsLoading={locationsLoading}
       onBack={() => navigate('/samples')}

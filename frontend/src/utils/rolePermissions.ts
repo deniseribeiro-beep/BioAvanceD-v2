@@ -5,6 +5,17 @@
 
 export type RoleName = 'Coordenador' | 'Técnico' | 'Administrador' | 'Usuário Externo';
 
+function mapAccessTypeToRoleName(accessType?: number): RoleName {
+  const roleNameMap: Record<number, RoleName> = {
+    1: 'Usuário Externo',
+    2: 'Técnico',
+    3: 'Coordenador',
+    4: 'Administrador',
+  };
+
+  return roleNameMap[accessType || 2] || 'Técnico';
+}
+
 /**
  * Mapeia roleName para accessType mínimo necessário
  */
@@ -120,5 +131,24 @@ export function getAllowedRoutes(roleName: RoleName | undefined): string[] {
   }
   
   return allRoutes;
+}
+
+/**
+ * Obtém rota padrão de redirecionamento após login baseado no perfil.
+ */
+export function getPostLoginRoute(roleName?: RoleName, accessType?: number): string {
+  const normalizedRole = roleName || mapAccessTypeToRoleName(accessType);
+
+  switch (normalizedRole) {
+    case 'Administrador':
+      return '/system-management';
+    case 'Coordenador':
+      return '/reports';
+    case 'Usuário Externo':
+      return '/assistant';
+    case 'Técnico':
+    default:
+      return '/dashboard';
+  }
 }
 

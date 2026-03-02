@@ -1,7 +1,7 @@
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const XLSX = require('xlsx');
+const ExcelJS = require('exceljs');
 const importLGPDService = require('../services/import-lgpd.service');
 const logService = require('../services/log.service');
 const logger = require('../utils/logger');
@@ -282,7 +282,7 @@ class ImportLGPDController {
    */
   async downloadPatientTemplateExcel(req, res) {
     try {
-      const workbook = XLSX.utils.book_new();
+      const workbook = new ExcelJS.Workbook();
       
       // ========== ABA DE INSTRUÇÕES ==========
       const instructionsData = [
@@ -359,10 +359,9 @@ class ImportLGPDController {
         ['• O sistema validará todos os dados antes de importar'],
       ];
       
-      const instructionsSheet = XLSX.utils.aoa_to_sheet(instructionsData);
-      // Ajusta largura das colunas
-      instructionsSheet['!cols'] = [{ wch: 80 }];
-      XLSX.utils.book_append_sheet(workbook, instructionsSheet, 'Instruções');
+      const instructionsSheet = workbook.addWorksheet('Instruções');
+      instructionsData.forEach((row) => instructionsSheet.addRow(row));
+      instructionsSheet.getColumn(1).width = 80;
       
       // ========== ABA DE DADOS (TEMPLATE) ==========
       // Headers limpos (sem asteriscos ou descrições - serão usados para importação)
@@ -426,10 +425,9 @@ class ImportLGPDController {
       ];
       
       // Cria planilha apenas com headers limpos e exemplo
-      const dataSheet = XLSX.utils.aoa_to_sheet([
-        headers,
-        exampleRow
-      ]);
+      const dataSheet = workbook.addWorksheet('Pacientes');
+      dataSheet.addRow(headers);
+      dataSheet.addRow(exampleRow);
       
       // Ajusta largura das colunas
       const colWidths = headers.map((header, idx) => {
@@ -440,18 +438,14 @@ class ImportLGPDController {
         );
         return { wch: Math.min(maxLength + 2, 40) };
       });
-      dataSheet['!cols'] = colWidths;
-      
-      // Congela primeira linha (headers)
-      dataSheet['!freeze'] = { xSplit: 0, ySplit: 1, topLeftCell: 'A2', activePane: 'bottomLeft' };
-      
-      XLSX.utils.book_append_sheet(workbook, dataSheet, 'Pacientes');
+      dataSheet.columns = colWidths.map((col) => ({ width: col.wch }));
+      dataSheet.views = [{ state: 'frozen', ySplit: 1 }];
 
-      const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+      const buffer = await workbook.xlsx.writeBuffer();
 
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
       res.setHeader('Content-Disposition', 'attachment; filename="pacientes_template.xlsx"');
-      res.send(buffer);
+      res.send(Buffer.from(buffer));
 
     } catch (error) {
       logger.error('Erro ao gerar template Excel de pacientes:', error.message);
@@ -598,7 +592,7 @@ class ImportLGPDController {
         logger.warn('Banco de dados não disponível, usando valores padrão para template Excel');
       }
       
-      const workbook = XLSX.utils.book_new();
+      const workbook = new ExcelJS.Workbook();
       
       // ========== ABA DE INSTRUÇÕES ==========
       const instructionsData = [
@@ -694,10 +688,9 @@ class ImportLGPDController {
         ['• Nenhum dado pessoal do paciente será exposto (LGPD)'],
       ];
       
-      const instructionsSheet = XLSX.utils.aoa_to_sheet(instructionsData);
-      // Ajusta largura das colunas
-      instructionsSheet['!cols'] = [{ wch: 80 }];
-      XLSX.utils.book_append_sheet(workbook, instructionsSheet, 'Instruções');
+      const instructionsSheet = workbook.addWorksheet('Instruções');
+      instructionsData.forEach((row) => instructionsSheet.addRow(row));
+      instructionsSheet.getColumn(1).width = 80;
       
       // ========== ABA DE DADOS (TEMPLATE) ==========
       // Headers conforme RF004
@@ -733,10 +726,9 @@ class ImportLGPDController {
       ];
       
       // Cria planilha apenas com headers e exemplo
-      const dataSheet = XLSX.utils.aoa_to_sheet([
-        headers,
-        exampleRow
-      ]);
+      const dataSheet = workbook.addWorksheet('Amostras');
+      dataSheet.addRow(headers);
+      dataSheet.addRow(exampleRow);
       
       // Cria aba de referência com valores válidos
       if (sampleTypes.length > 0 || sampleOrigins.length > 0 || extractionProtocols.length > 0) {
@@ -770,9 +762,9 @@ class ImportLGPDController {
           });
         }
         
-        const referenceSheet = XLSX.utils.aoa_to_sheet(referenceData);
-        referenceSheet['!cols'] = [{ wch: 50 }];
-        XLSX.utils.book_append_sheet(workbook, referenceSheet, 'Valores Válidos');
+        const referenceSheet = workbook.addWorksheet('Valores Válidos');
+        referenceData.forEach((row) => referenceSheet.addRow(row));
+        referenceSheet.getColumn(1).width = 50;
       }
       
       // Ajusta largura das colunas
@@ -784,18 +776,14 @@ class ImportLGPDController {
         );
         return { wch: Math.min(maxLength + 2, 40) };
       });
-      dataSheet['!cols'] = colWidths;
-      
-      // Congela primeira linha (headers)
-      dataSheet['!freeze'] = { xSplit: 0, ySplit: 1, topLeftCell: 'A2', activePane: 'bottomLeft' };
-      
-      XLSX.utils.book_append_sheet(workbook, dataSheet, 'Amostras');
+      dataSheet.columns = colWidths.map((col) => ({ width: col.wch }));
+      dataSheet.views = [{ state: 'frozen', ySplit: 1 }];
 
-      const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+      const buffer = await workbook.xlsx.writeBuffer();
 
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
       res.setHeader('Content-Disposition', 'attachment; filename="amostras_template.xlsx"');
-      res.send(buffer);
+      res.send(Buffer.from(buffer));
 
     } catch (error) {
       logger.error('Erro ao gerar template Excel de amostras:', error);

@@ -39,6 +39,17 @@ class PatientModel {
       errors.push(`Número do prontuário (recordNumber) deve ser um número ou texto. Tipo recebido: ${typeof data.recordNumber}`);
     }
 
+    if (data.cpf !== undefined && data.cpf !== null) {
+      if (typeof data.cpf !== 'string' && typeof data.cpf !== 'number') {
+        errors.push('CPF (cpf) deve ser texto ou número');
+      } else {
+        const normalizedCpf = String(data.cpf).replace(/\D/g, '');
+        if (normalizedCpf.length > 0 && normalizedCpf.length !== 11) {
+          errors.push('CPF (cpf) deve conter 11 dígitos');
+        }
+      }
+    }
+
     if (data.clinicalUnit && typeof data.clinicalUnit !== 'string') {
       errors.push('clinicalUnit deve ser string');
     }
@@ -166,6 +177,7 @@ class PatientModel {
       weight: patientData.weight || null,
       heightCm: heightCm,
       recordNumber: patientData.recordNumber || null,
+      cpf: patientData.cpf || null,
       clinicalUnit: patientData.clinicalUnit || null,
       unitAcronym: patientData.unitAcronym || null,
       diagnosticHypothesis: patientData.diagnosticHypothesis || null,
