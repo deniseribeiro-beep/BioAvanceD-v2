@@ -5,22 +5,20 @@ const notificationService = require('../src/services/NotificationService');
 
 async function runLabCycle() {
   process.env.NODE_ENV = process.env.NODE_ENV || 'development';
-  process.env.SMS_MOCK = process.env.SMS_MOCK || 'true';
 
   const sampleId = process.env.LAB_SAMPLE_ID || `LAB-SAMPLE-${Date.now()}`;
   const simulatedFailureTemp = Number(process.env.LAB_SIMULATED_TEMP || -55);
-  const otpPhone = process.env.LAB_OTP_PHONE || process.env.ALERT_SMS_TO || '+5500000000000';
-  const recoveryEmail = process.env.LAB_RECOVERY_EMAIL || process.env.ALERT_EMAIL_TO || 'auditoria@bioadvanced.dev';
+  const mfaEmail = process.env.LAB_MFA_EMAIL || process.env.ADMIN_EMAIL || process.env.ALERT_EMAIL_TO || 'auditoria@bioadvanced.dev';
+  const recoveryEmail = process.env.LAB_RECOVERY_EMAIL || process.env.ADMIN_EMAIL || process.env.ALERT_EMAIL_TO || 'auditoria@bioadvanced.dev';
 
   logger.info('[LAB] Iniciando ciclo de testes de notificação...');
 
   logger.warn(`[LAB][1/3] Simulação de falha de sensor para ${sampleId} com ${simulatedFailureTemp}°C`);
 
-  const otpResult = await notificationService.sendOTPSMS(otpPhone, '123456');
-  logger.info('[LAB][2/3] Resultado SMS OTP (Twilio mock):', otpResult);
+  const otpResult = await notificationService.sendAuthCode(mfaEmail, '123456');
+  logger.info('[LAB][2/3] Resultado MFA por e-mail:', otpResult);
 
   const criticalAlertResult = await notificationService.sendCriticalTempAlert(sampleId, simulatedFailureTemp, {
-    phone: otpPhone,
     email: recoveryEmail
   });
   logger.info('[LAB][2.1/3] Resultado alerta crítico:', criticalAlertResult);
@@ -30,7 +28,6 @@ async function runLabCycle() {
 
   const influxSimulation = await notificationService.sendCriticalTempAlertFromInflux(sampleId, {
     lookbackHours: Number(process.env.LAB_INFLUX_LOOKBACK_HOURS || 1),
-    phone: otpPhone,
     email: recoveryEmail,
     minTemp: Number(process.env.TELEMETRY_MIN_TEMP_ALERT || -196),
     maxTemp: Number(process.env.TELEMETRY_MAX_TEMP_ALERT || -80)

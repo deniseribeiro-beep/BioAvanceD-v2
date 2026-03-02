@@ -66,17 +66,9 @@ module.exports = {
 
   // Notification
   APP_DOMAIN: process.env.APP_DOMAIN,
-  SMS_MOCK: process.env.SMS_MOCK,
-  TWILIO_ACCOUNT_SID: process.env.TWILIO_ACCOUNT_SID,
-  TWILIO_AUTH_TOKEN: process.env.TWILIO_AUTH_TOKEN,
-  TWILIO_PHONE_NUMBER: process.env.TWILIO_PHONE_NUMBER,
-  ALERT_SMS_TO: process.env.ALERT_SMS_TO,
   ALERT_EMAIL_TO: process.env.ALERT_EMAIL_TO,
+  RESEND_API_KEY: process.env.RESEND_API_KEY,
   EMAIL_FROM: process.env.EMAIL_FROM,
-  SMTP_HOST: process.env.SMTP_HOST,
-  SMTP_PORT: process.env.SMTP_PORT,
-  SMTP_USER: process.env.SMTP_USER,
-  SMTP_PASS: process.env.SMTP_PASS,
 
   // Canonical Collections
   COLL_PATIENTS: process.env.COLL_PATIENTS || 'patients',

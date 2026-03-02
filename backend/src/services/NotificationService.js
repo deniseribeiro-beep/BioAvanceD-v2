@@ -1,190 +1,589 @@
-const nodemailer = require('nodemailer');
-const twilio = require('twilio');
+const { Resend } = require('resend');
+const { Queue } = require('bullmq');
+const { Server } = require('socket.io');
+const crypto = require('crypto');
 const logger = require('../utils/logger');
+const { connectDB } = require('../database/mongo');
+const { initRedis } = require('../config/queue');
 const {
   connectInfluxDB,
   getInfluxQueryApi,
   getInfluxConfig
 } = require('../infrastructure/database/influxdb/connection');
 
-class MockProvider {
-  constructor(channel) {
-    this.channel = channel;
-  }
-
-  async send(payload) {
-    logger.info(`[NOTIFICATION][MOCK][${this.channel}]`, payload);
-    return {
-      success: true,
-      mocked: true,
-      channel: this.channel,
-      payload
-    };
-  }
-}
-
-class TwilioProvider {
-  constructor() {
-    this.sid = process.env.TWILIO_ACCOUNT_SID;
-    this.token = process.env.TWILIO_AUTH_TOKEN;
-    this.from = process.env.TWILIO_PHONE_NUMBER;
-    this.smsMock = String(process.env.SMS_MOCK || '').toLowerCase() === 'true';
-    this.client = null;
-  }
-
-  getClient() {
-    if (this.client) {
-      return this.client;
-    }
-
-    if (!this.sid || !this.token) {
-      throw new Error('TWILIO_ACCOUNT_SID e TWILIO_AUTH_TOKEN são obrigatórios para envio real de SMS');
-    }
-
-    this.client = twilio(this.sid, this.token);
-    return this.client;
-  }
-
-  async send({ to, body }) {
-    if (!to || !body) {
-      throw new Error('to e body são obrigatórios para SMS');
-    }
-
-    if (this.smsMock) {
-      console.log(`[SMS_MOCK] to=${to} body=${body}`);
-      return {
-        success: true,
-        mocked: true,
-        channel: 'sms',
-        provider: 'twilio-mock'
-      };
-    }
-
-    if (!this.from) {
-      throw new Error('TWILIO_PHONE_NUMBER é obrigatório para envio real de SMS');
-    }
-
-    const client = this.getClient();
-    const response = await client.messages.create({
-      to,
-      from: this.from,
-      body
-    });
-
-    return {
-      success: true,
-      mocked: false,
-      channel: 'sms',
-      provider: 'twilio',
-      sid: response.sid
-    };
-  }
-}
-
-class EmailProvider {
-  constructor() {
-    this.from = process.env.EMAIL_FROM || 'BioAvanceD <no-reply@bioadvanced.dev>';
-    this.transporter = null;
-  }
-
-  async getTransporter() {
-    if (this.transporter) {
-      return this.transporter;
-    }
-
-    if (process.env.NODE_ENV === 'development') {
-      const account = await nodemailer.createTestAccount();
-      this.transporter = nodemailer.createTransport({
-        host: 'smtp.ethereal.email',
-        port: 587,
-        secure: false,
-        auth: {
-          user: account.user,
-          pass: account.pass
-        }
-      });
-      return this.transporter;
-    }
-
-    const smtpHost = process.env.SMTP_HOST;
-    const smtpPort = Number(process.env.SMTP_PORT || 587);
-    const smtpUser = process.env.SMTP_USER;
-    const smtpPass = process.env.SMTP_PASS;
-
-    if (!smtpHost || !smtpUser || !smtpPass) {
-      throw new Error('SMTP_HOST, SMTP_USER e SMTP_PASS são obrigatórios para e-mail fora de desenvolvimento');
-    }
-
-    this.transporter = nodemailer.createTransport({
-      host: smtpHost,
-      port: smtpPort,
-      secure: smtpPort === 465,
-      auth: {
-        user: smtpUser,
-        pass: smtpPass
-      }
-    });
-
-    return this.transporter;
-  }
-
-  async send({ to, subject, html, text }) {
-    if (!to || !subject || (!html && !text)) {
-      throw new Error('to, subject e html/text são obrigatórios para e-mail');
-    }
-
-    const transporter = await this.getTransporter();
-    const info = await transporter.sendMail({
-      from: this.from,
-      to,
-      subject,
-      html,
-      text
-    });
-
-    const previewUrl = nodemailer.getTestMessageUrl(info) || null;
-    if (previewUrl) {
-      logger.info(`[EMAIL][ETHEREAL] Preview URL: ${previewUrl}`);
-    }
-
-    return {
-      success: true,
-      mocked: false,
-      channel: 'email',
-      provider: process.env.NODE_ENV === 'development' ? 'ethereal' : 'smtp',
-      messageId: info.messageId,
-      previewUrl
-    };
-  }
-}
+const DEFAULT_FRONTEND_URL = 'http://localhost:5173';
+const CONSENT_TOKEN_TTL_DAYS = 7;
 
 class NotificationService {
   constructor() {
-    this.smsProvider = this.resolveProvider('sms');
-    this.emailProvider = this.resolveProvider('email');
+    this.resendClient = null;
+    this.emailFrom = process.env.EMAIL_FROM || 'onboarding@resend.dev';
+    this.adminEmail = process.env.ADMIN_EMAIL || '';
+    this.isDevelopment = String(process.env.NODE_ENV || 'development').toLowerCase() === 'development';
+    this.io = null;
+    this.notificationQueue = null;
   }
 
-  resolveProvider(channel) {
-    const shouldMockByEnv = process.env.NODE_ENV !== 'production';
-    if (shouldMockByEnv) {
-      return new MockProvider(channel);
+  getFrontendUrl() {
+    return process.env.FRONTEND_URL || DEFAULT_FRONTEND_URL;
+  }
+
+  normalizePhoneE164(rawPhone) {
+    if (!rawPhone) return null;
+
+    const trimmed = String(rawPhone).trim();
+    if (!trimmed) return null;
+
+    if (trimmed.startsWith('+')) {
+      return trimmed;
     }
 
-    if (channel === 'sms') {
-      return new TwilioProvider();
+    let digits = trimmed.replace(/\D/g, '');
+    if (!digits) return null;
+
+    if (digits.startsWith('00')) {
+      digits = digits.slice(2);
     }
 
-    return new EmailProvider();
+    const defaultCountryCode = process.env.CONSENT_DEFAULT_COUNTRY_CODE || process.env.DEFAULT_COUNTRY_CODE || '55';
+    if (digits.startsWith(defaultCountryCode)) {
+      return `+${digits}`;
+    }
+
+    return `+${defaultCountryCode}${digits}`;
   }
 
-  async sendOTPSMS(phone, code) {
-    const body = `BioAvanceD MFA: seu código de verificação é ${code}. Válido por 5 minutos.`;
-    return this.smsProvider.send({ to: phone, body });
+  resolvePatientEmail(patientData = {}) {
+    return patientData.email || patientData.emailAddress || patientData.contactEmail || null;
   }
 
-  async sendRecoveryEmail(email, token) {
-    const appDomain = process.env.APP_DOMAIN || 'https://bioadvanced.dev';
-    const recoveryUrl = `${appDomain.replace(/\/$/, '')}/recover-password?token=${encodeURIComponent(token)}`;
+  resolvePatientPhone(patientData = {}) {
+    const rawPhone = patientData.phone || patientData.mobile || patientData.whatsapp || patientData.phoneNumber || null;
+    return this.normalizePhoneE164(rawPhone);
+  }
+
+  formatConsentMessage(name, link) {
+    const safeName = name || 'Paciente';
+    return `BioAvanceD: Olá ${safeName}, sua participação no biobanco exige o aceite do termo de consentimento. Acesse: ${link}`;
+  }
+
+  getResendClient() {
+    if (this.resendClient) {
+      return this.resendClient;
+    }
+
+    const apiKey = process.env.RESEND_API_KEY;
+    if (!apiKey) {
+      if (this.isDevelopment) {
+        return null;
+      }
+      throw new Error('RESEND_API_KEY é obrigatório para envio de e-mails');
+    }
+
+    this.resendClient = new Resend(apiKey);
+    return this.resendClient;
+  }
+
+  resolveRecipient(originalTo) {
+    const safeTo = String(originalTo || '').trim();
+    if (!safeTo) {
+      throw new Error('Destinatário é obrigatório para envio de e-mail');
+    }
+
+    if (!this.isDevelopment) {
+      return {
+        to: safeTo,
+        redirected: false,
+        originalTo: safeTo
+      };
+    }
+
+    if (!this.adminEmail) {
+      throw new Error('ADMIN_EMAIL é obrigatório em NODE_ENV=development para redirecionamento seguro');
+    }
+
+    return {
+      to: this.adminEmail,
+      redirected: this.adminEmail !== safeTo,
+      originalTo: safeTo
+    };
+  }
+
+  async persistComplianceLog(payload) {
+    try {
+      const db = await connectDB();
+      await db.collection('notification_compliance_logs').insertOne({
+        provider: 'resend',
+        ...payload,
+        createdAt: new Date()
+      });
+    } catch (error) {
+      logger.error('[NOTIFICATION][COMPLIANCE] Falha ao persistir log de rastreabilidade:', error.message || error);
+    }
+  }
+
+  logDevelopmentPreview({ subject, text, html, originalTo, effectiveTo, notificationType }) {
+    if (!this.isDevelopment) {
+      return;
+    }
+
+    logger.info('[NOTIFICATION][DEV_PREVIEW] E-mail simulado para validação rápida', {
+      notificationType,
+      originalTo,
+      effectiveTo,
+      subject
+    });
+
+    console.log('');
+    console.log('========== [BIOAVANCED][DEV EMAIL PREVIEW] ==========');
+    console.log(`Tipo: ${notificationType}`);
+    console.log(`Para (original): ${originalTo}`);
+    console.log(`Para (efetivo): ${effectiveTo}`);
+    console.log(`Assunto: ${subject}`);
+    console.log('--- Corpo (texto) ---');
+    console.log(text || '[sem versão texto]');
+    console.log('--- Corpo (HTML) ---');
+    console.log(html || '[sem versão html]');
+    console.log('======================================================');
+    console.log('');
+  }
+
+  async sendEmail({ to, subject, html, text, notificationType, metadata = {} }) {
+    if (!subject || (!html && !text)) {
+      throw new Error('subject e html/text são obrigatórios para envio de e-mail');
+    }
+
+    const recipient = this.resolveRecipient(to);
+    this.logDevelopmentPreview({
+      subject,
+      text,
+      html,
+      originalTo: recipient.originalTo,
+      effectiveTo: recipient.to,
+      notificationType: notificationType || 'generic'
+    });
+
+    const resend = this.getResendClient();
+    let messageId = null;
+    let provider = 'resend';
+    let mocked = false;
+
+    if (!resend && this.isDevelopment) {
+      mocked = true;
+      provider = 'resend-mock';
+      messageId = `mock-${Date.now()}`;
+      logger.warn('[NOTIFICATION][DEV_MOCK] RESEND_API_KEY ausente: envio simulado para validação local');
+    } else {
+      const response = await resend.emails.send({
+        from: this.emailFrom,
+        to: recipient.to,
+        subject,
+        html,
+        text
+      });
+
+      if (response.error) {
+        throw new Error(response.error.message || 'Falha ao enviar e-mail via Resend');
+      }
+
+      messageId = response.data?.id || null;
+    }
+
+    await this.persistComplianceLog({
+      messageId,
+      provider,
+      notificationType: notificationType || 'generic',
+      subject,
+      to: recipient.to,
+      originalTo: recipient.originalTo,
+      redirectedByEnvironment: recipient.redirected,
+      metadata,
+      sentAt: new Date()
+    });
+
+    return {
+      success: true,
+      channel: 'email',
+      provider,
+      mocked,
+      notificationType: notificationType || 'generic',
+      messageId,
+      to: recipient.to,
+      originalTo: recipient.originalTo,
+      redirectedByEnvironment: recipient.redirected
+    };
+  }
+
+  getNotificationQueue() {
+    if (this.notificationQueue) {
+      return this.notificationQueue;
+    }
+
+    const connection = initRedis();
+    if (!connection) {
+      logger.warn('[WARN] Fila de notificações não inicializada (Redis não configurado)');
+      return null;
+    }
+
+    this.notificationQueue = new Queue('notification-queue', {
+      connection,
+      defaultJobOptions: {
+        attempts: 3,
+        backoff: {
+          type: 'exponential',
+          delay: 2000
+        },
+        removeOnComplete: { age: 24 * 3600, count: 1000 },
+        removeOnFail: { age: 7 * 24 * 3600 }
+      }
+    });
+
+    return this.notificationQueue;
+  }
+
+  async getConsentQueueStats() {
+    const queue = this.getNotificationQueue();
+    if (!queue) {
+      return {
+        available: false,
+        counts: { waiting: 0, delayed: 0, active: 0, failed: 0 },
+        totalQueued: 0
+      };
+    }
+
+    const counts = await queue.getJobCounts('waiting', 'delayed', 'active', 'failed');
+    const waiting = counts.waiting || 0;
+    const delayed = counts.delayed || 0;
+    const active = counts.active || 0;
+    const failed = counts.failed || 0;
+
+    return {
+      available: true,
+      counts: { waiting, delayed, active, failed },
+      totalQueued: waiting + delayed,
+      active
+    };
+  }
+
+  generateConsentToken() {
+    return crypto.randomBytes(32).toString('hex');
+  }
+
+  buildConsentMetadata() {
+    const token = this.generateConsentToken();
+    const createdAt = new Date();
+    const expiresAt = new Date(Date.now() + CONSENT_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000);
+
+    return {
+      token,
+      createdAt,
+      expiresAt
+    };
+  }
+
+  buildConsentLink(patientData, token) {
+    const baseUrl = this.getFrontendUrl().replace(/\/$/, '');
+    const patientId = patientData.patientID || patientData.patientId || patientData.id;
+    const encodedToken = encodeURIComponent(token);
+    return `${baseUrl}/patients/${patientId}/consent?token=${encodedToken}`;
+  }
+
+  async sendConsentEmail(patientData, consentLink) {
+    const email = this.resolvePatientEmail(patientData);
+    if (!email) {
+      logger.warn('Consentimento: email ausente para paciente', { patientID: patientData.patientID });
+      return { channel: 'email', success: false, reason: 'missing_email' };
+    }
+
+    const message = this.formatConsentMessage(patientData.patientName, consentLink);
+    await this.sendEmail({
+      to: email,
+      subject: 'BioAvanceD - Termo de Consentimento',
+      text: message,
+      html: `<p>${message}</p>`,
+      notificationType: 'RF_CONSENT_NOTIFICATION',
+      metadata: {
+        patientID: patientData.patientID || null
+      }
+    });
+
+    return { channel: 'email', success: true, provider: 'resend' };
+  }
+
+  async sendConsentSmsFallback(patientData, consentLink) {
+    const phone = this.resolvePatientPhone(patientData);
+    if (!phone) {
+      logger.warn('Consentimento: telefone ausente para SMS', { patientID: patientData.patientID });
+      return { channel: 'sms', success: false, reason: 'missing_phone' };
+    }
+
+    const fallbackEmail = this.adminEmail || process.env.ALERT_EMAIL_TO;
+    if (!fallbackEmail) {
+      logger.warn('Consentimento: ADMIN_EMAIL/ALERT_EMAIL_TO ausente para fallback SMS');
+      return { channel: 'sms', success: false, reason: 'missing_sms_fallback_email' };
+    }
+
+    const message = this.formatConsentMessage(patientData.patientName, consentLink);
+    await this.sendEmail({
+      to: fallbackEmail,
+      subject: 'BioAvanceD | Fallback SMS de Consentimento',
+      text: `Destino SMS: ${phone}\n\n${message}`,
+      html: `<p><strong>Destino SMS:</strong> ${phone}</p><p>${message}</p>`,
+      notificationType: 'RF_CONSENT_SMS_FALLBACK',
+      metadata: {
+        patientID: patientData.patientID || null,
+        phone
+      }
+    });
+
+    return {
+      channel: 'sms',
+      success: true,
+      mocked: true,
+      provider: 'resend-email-fallback'
+    };
+  }
+
+  async sendConsentWhatsappFallback(patientData, consentLink) {
+    const phone = this.resolvePatientPhone(patientData);
+    if (!phone) {
+      logger.warn('Consentimento: telefone ausente para WhatsApp', { patientID: patientData.patientID });
+      return { channel: 'whatsapp', success: false, reason: 'missing_phone' };
+    }
+
+    return {
+      channel: 'whatsapp',
+      success: true,
+      mocked: true,
+      provider: 'resend-email-fallback',
+      reason: 'Canal WhatsApp consolidado para envio por e-mail rastreável'
+    };
+  }
+
+  async notifyPatientConsent(patientData, consentLink) {
+    const results = await Promise.allSettled([
+      this.sendConsentEmail(patientData, consentLink),
+      this.sendConsentSmsFallback(patientData, consentLink),
+      this.sendConsentWhatsappFallback(patientData, consentLink)
+    ]);
+
+    return results.map((result) => {
+      if (result.status === 'fulfilled') {
+        return result.value;
+      }
+      return { channel: 'unknown', success: false, reason: result.reason?.message || 'failed' };
+    });
+  }
+
+  async enqueueConsentNotification(patientData, consentLink) {
+    const queue = this.getNotificationQueue();
+    if (!queue) {
+      return this.notifyPatientConsent(patientData, consentLink);
+    }
+
+    await queue.add('consent-notification', {
+      patientData,
+      consentLink
+    });
+
+    return [{ channel: 'queue', success: true, provider: 'bullmq' }];
+  }
+
+  async processConsentNotificationJob(jobData) {
+    return this.notifyPatientConsent(jobData.patientData, jobData.consentLink);
+  }
+
+  initSocketIO(serverOrIo) {
+    if (this.io) {
+      return this.io;
+    }
+
+    if (serverOrIo && typeof serverOrIo.of === 'function' && typeof serverOrIo.emit === 'function') {
+      this.io = serverOrIo;
+    } else {
+      this.io = new Server(serverOrIo, {
+        cors: {
+          origin: process.env.FRONTEND_URL || '*',
+          methods: ['GET', 'POST']
+        },
+        pingTimeout: 30000,
+        pingInterval: 25000
+      });
+    }
+
+    this.io.on('connection', (socket) => {
+      logger.info(`✅ Cliente WebSocket conectado: ${socket.id}`);
+
+      socket.on('subscribe:user', (userID) => {
+        if (!userID) return;
+        socket.join(`user-${userID}`);
+      });
+
+      socket.on('subscribe:job', (jobID) => {
+        if (!jobID) return;
+        socket.join(jobID);
+      });
+
+      socket.on('disconnect', () => {
+        logger.info(`❌ Cliente WebSocket desconectado: ${socket.id}`);
+      });
+    });
+
+    logger.info('✅ Socket.IO inicializado');
+    return this.io;
+  }
+
+  async notifyJobQueued(userID, payload) {
+    if (!this.io) return;
+    this.io.to(`user-${userID}`).emit('import-queued', payload);
+  }
+
+  async notifyJobStarted(userID, payload) {
+    if (!this.io) return;
+    this.io.to(`user-${userID}`).emit('import-started', payload);
+    if (payload?.jobID) {
+      this.io.to(payload.jobID).emit('import-started', payload);
+    }
+  }
+
+  async notifyJobProgress(userID, payload) {
+    if (!this.io) return;
+    this.io.to(`user-${userID}`).emit('import-progress', payload);
+    if (payload?.jobID) {
+      this.io.to(payload.jobID).emit('import-progress', payload);
+    }
+  }
+
+  async notifyJobCompleted(userID, jobData) {
+    try {
+      if (this.io) {
+        const payload = {
+          jobID: jobData.jobID,
+          status: jobData.status,
+          dataType: jobData.dataType,
+          successCount: jobData.successCount,
+          errorCount: jobData.errorCount,
+          message: `Importação de ${jobData.dataType} concluída`
+        };
+        this.io.to(`user-${userID}`).emit('import-completed', payload);
+        if (jobData.jobID) {
+          this.io.to(jobData.jobID).emit('import-completed', payload);
+        }
+      }
+
+      if (jobData.userEmail) {
+        await this.sendEmail({
+          to: jobData.userEmail,
+          subject: `Importação ${jobData.dataType} - Concluída`,
+          html: this.generateJobEmailTemplate(jobData),
+          notificationType: 'RF_IMPORT_COMPLETED'
+        });
+      }
+    } catch (error) {
+      logger.error('Erro ao enviar notificação de job concluído:', error);
+    }
+  }
+
+  async notifyJobFailed(userID, jobData) {
+    try {
+      if (this.io) {
+        const payload = {
+          jobID: jobData.jobID,
+          status: jobData.status,
+          dataType: jobData.dataType,
+          error: jobData.error,
+          message: `Importação de ${jobData.dataType} falhou`
+        };
+        this.io.to(`user-${userID}`).emit('import-failed', payload);
+        if (jobData.jobID) {
+          this.io.to(jobData.jobID).emit('import-failed', payload);
+        }
+      }
+
+      if (jobData.userEmail) {
+        await this.sendEmail({
+          to: jobData.userEmail,
+          subject: `Importação ${jobData.dataType} - Falhou`,
+          html: this.generateJobErrorEmailTemplate(jobData),
+          notificationType: 'RF_IMPORT_FAILED'
+        });
+      }
+    } catch (error) {
+      logger.error('Erro ao enviar notificação de job falho:', error);
+    }
+  }
+
+  generateJobEmailTemplate(jobData) {
+    return `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8">
+      </head>
+      <body>
+        <h2>Importação Concluída</h2>
+        <p><strong>Tipo:</strong> ${jobData.dataType}</p>
+        <p><strong>Sucesso:</strong> ${jobData.successCount}</p>
+        <p><strong>Erros:</strong> ${jobData.errorCount}</p>
+        <p><strong>Job ID:</strong> ${jobData.jobID}</p>
+      </body>
+      </html>
+    `;
+  }
+
+  generateJobErrorEmailTemplate(jobData) {
+    return `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8">
+      </head>
+      <body>
+        <h2>Importação Falhou</h2>
+        <p><strong>Tipo:</strong> ${jobData.dataType}</p>
+        <p><strong>Job ID:</strong> ${jobData.jobID}</p>
+        <p><strong>Erro:</strong> ${jobData.error || 'Erro desconhecido'}</p>
+      </body>
+      </html>
+    `;
+  }
+
+  async sendAuthCode(email, code) {
+    if (!email || !code) {
+      throw new Error('email e code são obrigatórios para MFA');
+    }
+
+    const html = `
+      <div style="font-family: Arial, Helvetica, sans-serif; background:#f8fafc; padding:24px; color:#0f172a;">
+        <div style="max-width:620px; margin:0 auto; background:#ffffff; border:1px solid #e2e8f0; border-radius:12px; padding:24px;">
+          <h1 style="margin:0 0 8px; color:#0f172a; font-size:22px;">BioAvanceD</h1>
+          <p style="margin:0 0 20px; color:#334155;">Código de acesso para autenticação multifator</p>
+          <p style="margin:0 0 12px; color:#334155;">Use o código abaixo para concluir seu acesso com segurança:</p>
+          <div style="margin:14px 0 20px; padding:16px; text-align:center; background:#eff6ff; border:1px solid #bfdbfe; border-radius:10px;">
+            <span style="font-size:32px; letter-spacing:6px; font-weight:700; color:#1d4ed8;">${code}</span>
+          </div>
+          <p style="margin:0 0 8px; color:#475569; font-size:13px;">Validade: 5 minutos.</p>
+          <p style="margin:0; color:#64748b; font-size:12px;">Se você não solicitou este acesso, ignore este e-mail.</p>
+        </div>
+      </div>
+    `;
+
+    const text = `BioAvanceD - Código MFA\n\nCódigo de acesso: ${code}\nValidade: 5 minutos.\n\nSe não foi você, ignore este e-mail.`;
+
+    return this.sendEmail({
+      to: email,
+      subject: 'BioAvanceD | Código de Acesso MFA',
+      html,
+      text,
+      notificationType: 'RF001_MFA_AUTH_CODE',
+      metadata: { codeLength: String(code).length }
+    });
+  }
+
+  async sendPasswordReset(email, link) {
+    if (!email || !link) {
+      throw new Error('email e link são obrigatórios para recuperação de conta');
+    }
 
     const html = `
       <div style="font-family: Arial, sans-serif; background:#f4f7fb; padding:24px; color:#1d3557;">
@@ -194,7 +593,7 @@ class NotificationService {
           <h2 style="margin:0 0 16px; color:#1d3557;">Recuperação de senha</h2>
           <p style="line-height:1.6;">Recebemos uma solicitação para redefinir sua senha. Para continuar com segurança, clique no botão abaixo.</p>
           <p style="margin:24px 0;">
-            <a href="${recoveryUrl}" style="display:inline-block; padding:12px 20px; background:#1d4ed8; color:#ffffff; text-decoration:none; border-radius:8px; font-weight:bold;">Redefinir senha</a>
+            <a href="${link}" style="display:inline-block; padding:12px 20px; background:#1d4ed8; color:#ffffff; text-decoration:none; border-radius:8px; font-weight:bold;">Redefinir senha</a>
           </p>
           <p style="font-size:13px; color:#6b7280; line-height:1.5;">Se você não solicitou esta recuperação, ignore este e-mail. Este link expira em 30 minutos.</p>
           <hr style="border:none; border-top:1px solid #e5e7eb; margin:24px 0;" />
@@ -203,22 +602,93 @@ class NotificationService {
       </div>
     `;
 
-    const text = `BioAvanceD - Recuperação de senha\n\nAcesse: ${recoveryUrl}\n\nSe você não solicitou, ignore este e-mail.`;
+    const text = `BioAvanceD - Recuperação de senha\n\nAcesse: ${link}\n\nSe você não solicitou, ignore este e-mail.`;
 
-    return this.emailProvider.send({
+    return this.sendEmail({
       to: email,
       subject: 'BioAvanceD | Recuperação de Senha',
       html,
-      text
+      text,
+      notificationType: 'RF003_PASSWORD_RESET',
+      metadata: { linkDomain: String(link).split('/')[2] || null }
     });
+  }
+
+  async sendTemperatureAlert(sampleId, currentTemp, options = {}) {
+    const targetEmail = options.email || process.env.ALERT_EMAIL_TO || this.adminEmail;
+    if (!targetEmail) {
+      throw new Error('ALERT_EMAIL_TO ou ADMIN_EMAIL deve ser configurado para alerta de temperatura');
+    }
+
+    const timestamp = new Date().toISOString();
+    const body = `[ALERTA CRÍTICO] Amostra ${sampleId} fora da faixa segura: ${currentTemp}°C | ${timestamp}`;
+    const html = `
+      <div style="font-family: Arial, Helvetica, sans-serif; background:#fff7ed; padding:24px; color:#7c2d12;">
+        <div style="max-width:680px; margin:0 auto; background:#ffffff; border:2px solid #f97316; border-radius:12px; overflow:hidden;">
+          <div style="background:#b91c1c; color:#ffffff; padding:14px 18px; font-weight:700; font-size:16px;">
+            ⚠️ ALERTA CRÍTICO: BioAvanceD - Freezer fora da faixa
+          </div>
+          <div style="padding:20px 18px;">
+            <p style="margin:0 0 12px; color:#7c2d12;">Atenção imediata necessária para preservar a cadeia de custódia das amostras.</p>
+            <table style="width:100%; border-collapse:collapse; font-size:14px;">
+              <tr>
+                <td style="padding:8px; border:1px solid #fed7aa;"><strong>ID da amostra</strong></td>
+                <td style="padding:8px; border:1px solid #fed7aa;">${sampleId}</td>
+              </tr>
+              <tr>
+                <td style="padding:8px; border:1px solid #fed7aa;"><strong>Temperatura atual</strong></td>
+                <td style="padding:8px; border:1px solid #fed7aa; color:#b91c1c; font-weight:700;">${currentTemp}°C</td>
+              </tr>
+              <tr>
+                <td style="padding:8px; border:1px solid #fed7aa;"><strong>Timestamp</strong></td>
+                <td style="padding:8px; border:1px solid #fed7aa;">${timestamp}</td>
+              </tr>
+            </table>
+            <p style="margin:14px 0 0; color:#9a3412; font-size:13px;">Ação recomendada: verificar sensor, freezer e status da política térmica imediatamente.</p>
+          </div>
+        </div>
+      </div>
+    `;
+
+    return this.sendEmail({
+      to: targetEmail,
+      subject: '⚠️ ALERTA CRÍTICO: BioAvanceD - Freezer fora da faixa',
+      html,
+      text: body,
+      notificationType: 'RF016_TEMPERATURE_ALERT',
+      metadata: {
+        sampleId,
+        currentTemp
+      }
+    });
+  }
+
+  async sendOTPSMS(_phone, code) {
+    const fallbackEmail = this.adminEmail || process.env.ALERT_EMAIL_TO;
+    if (!fallbackEmail) {
+      throw new Error('ADMIN_EMAIL é obrigatório para simular fluxo legado de SMS no modo unificado por e-mail');
+    }
+
+    const emailResult = await this.sendAuthCode(fallbackEmail, code);
+    return {
+      success: true,
+      mocked: true,
+      channel: 'sms',
+      provider: 'resend-email-fallback',
+      note: 'Fluxo legado de SMS redirecionado para e-mail no provedor único Resend',
+      emailResult
+    };
+  }
+
+  async sendRecoveryEmail(email, token) {
+    const appDomain = process.env.APP_DOMAIN || 'http://localhost:5173';
+    const link = `${appDomain.replace(/\/$/, '')}/recover-password?token=${encodeURIComponent(token)}`;
+    return this.sendPasswordReset(email, link);
   }
 
   async sendCriticalTempAlert(sampleId, temp, options = {}) {
     const minTemp = Number(options.minTemp ?? process.env.TELEMETRY_MIN_TEMP_ALERT ?? -196);
     const maxTemp = Number(options.maxTemp ?? process.env.TELEMETRY_MAX_TEMP_ALERT ?? -80);
-    const phone = options.phone || process.env.ALERT_SMS_TO;
-    const email = options.email || process.env.ALERT_EMAIL_TO;
-
     if (temp >= minTemp && temp <= maxTemp) {
       return {
         triggered: false,
@@ -226,19 +696,15 @@ class NotificationService {
       };
     }
 
-    const body = `[ALERTA CRÍTICO] Amostra ${sampleId} fora de faixa: ${temp}°C (esperado ${minTemp}°C..${maxTemp}°C)`;
-    const html = `
-      <h2>Alerta Crítico de Temperatura</h2>
-      <p><strong>Amostra:</strong> ${sampleId}</p>
-      <p><strong>Temperatura:</strong> ${temp}°C</p>
-      <p><strong>Faixa esperada:</strong> ${minTemp}°C até ${maxTemp}°C</p>
-      <p><strong>Timestamp:</strong> ${new Date().toISOString()}</p>
-    `;
+    const emailResult = await this.sendTemperatureAlert(sampleId, temp, options);
 
-    const [smsResult, emailResult] = await Promise.allSettled([
-      phone ? this.smsProvider.send({ to: phone, body }) : Promise.resolve({ skipped: true, reason: 'ALERT_SMS_TO ausente' }),
-      email ? this.emailProvider.send({ to: email, subject: `BioAvanceD ALERTA: ${sampleId}`, html, text: body }) : Promise.resolve({ skipped: true, reason: 'ALERT_EMAIL_TO ausente' })
-    ]);
+    const smsSimulation = {
+      success: true,
+      mocked: true,
+      channel: 'sms',
+      provider: 'resend-email-fallback',
+      reason: 'Canal SMS consolidado em e-mail para operação local e rastreável'
+    };
 
     return {
       triggered: true,
@@ -246,8 +712,8 @@ class NotificationService {
       temp,
       minTemp,
       maxTemp,
-      sms: smsResult.status === 'fulfilled' ? smsResult.value : { success: false, error: smsResult.reason?.message || 'sms_failed' },
-      email: emailResult.status === 'fulfilled' ? emailResult.value : { success: false, error: emailResult.reason?.message || 'email_failed' }
+      sms: smsSimulation,
+      email: emailResult
     };
   }
 
