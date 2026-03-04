@@ -7,11 +7,11 @@ import Modal from '../components/UI/Modal';
 import { Plus, Edit, Trash2, Search, ArrowLeft, Upload, FileSpreadsheet } from 'lucide-react';
 import StatusBadge, { ConsentStatus } from '../components/Consent/StatusBadge';
 import SignaturePad from '../components/Consent/SignaturePad';
-import { Patient } from '../types/models';
+import { Patient, ConsentPolicy } from '../types/models';
 import { usePatients } from '../hooks/usePatients';
 import { useAuth } from '../contexts/AuthContext';
 import { importLGPDService } from '../services/api';
-import { patientService } from '../services/api';
+import { patientService, consentService } from '../services/api';
 import { useLanguage } from '../contexts/LanguageContext';
 import './PatientsPage.css';
 
@@ -38,7 +38,7 @@ const styles: Record<string, CSSProperties> = {
 
 export default function PatientsPage() {
   const navigate = useNavigate();
-  const { t } = useLanguage();
+  const { t, language } = useLanguage();
   const { patients, loading, error, deletePatient, loadPatients } = usePatients();
   const { user } = useAuth();
   const [searchTerm, setSearchTerm] = useState<string>('');
@@ -52,6 +52,15 @@ export default function PatientsPage() {
   const [isSignatureModalOpen, setIsSignatureModalOpen] = useState(false);
   const [activePatientId, setActivePatientId] = useState<string | null>(null);
   const [consentOverrides, setConsentOverrides] = useState<Record<string, ConsentStatus>>({});
+  const [isBatchImportModalOpen, setIsBatchImportModalOpen] = useState(false);
+  const [consentPolicies, setConsentPolicies] = useState<ConsentPolicy[]>([]);
+  const [consentPolicySearch, setConsentPolicySearch] = useState('');
+  const [selectedConsentTemplateId, setSelectedConsentTemplateId] = useState('');
+  const [loadingConsentPolicies, setLoadingConsentPolicies] = useState(false);
+  const isConnectionError = (errorMessage?: string) => {
+    const normalized = String(errorMessage || '').toLowerCase();
+    return normalized.includes('econnrefused') || normalized.includes('network error') || normalized.includes('backend não está disponível') || normalized.includes('backend is unavailable');
+  };
 
   const normalizeConsentStatus = (value?: string): ConsentStatus => {
     const normalized = (value || '').trim().toUpperCase();
@@ -140,19 +149,20 @@ export default function PatientsPage() {
     navigate('/patients/new');
   };
 
-  const handleEdit = async (patientID: string | number) => {
+  const handleEdit = async (patient: Patient) => {
     try {
-      // Converte para string e garante que seja um patientID válido (8 dígitos)
-      const patientIDStr = String(patientID);
-      
-      // Valida formato do ID (deve ser 8 dígitos)
-      if (patientIDStr.length !== 8 || !/^\d{8}$/.test(patientIDStr)) {
-        alert(t('patients.invalidPatientID'));
-        return;
+      const patientIDStr = patient?.patientID ? String(patient.patientID) : '';
+      const fallbackId = (patient as any)?._id || (patient as any)?.id || '';
+
+      const response = patientIDStr && /^\d{8}$/.test(patientIDStr)
+        ? await patientService.findForEdit(patientIDStr)
+        : fallbackId
+          ? await patientService.getById(String(fallbackId))
+          : null;
+
+      if (!response) {
+        throw new Error(t('patients.patientNotFound'));
       }
-      
-      // Busca paciente completo por patientID para edição (requer acesso ao módulo de cadastro)
-      const response = await patientService.findForEdit(patientIDStr);
       
       // Verifica se a resposta foi bem-sucedida
       if (response && response.data) {
@@ -189,6 +199,8 @@ export default function PatientsPage() {
         
         // Usa patientID como string para deletar
         await deletePatient(patientIDStr);
+        setShowSearchResults(false);
+        setSearchResults([]);
         // Recarrega a lista após deletar
         await loadPatients();
         alert(t('patients.deleteSuccess'));
@@ -208,13 +220,19 @@ export default function PatientsPage() {
     }
 
     setImporting(true);
-    setImportProgress(`Arquivo: ${fileToImport.name} (${(fileToImport.size / 1024).toFixed(1)} KB)`);
+    setImportProgress(`${t('patients.importFileLabel')}: ${fileToImport.name} (${(fileToImport.size / 1024).toFixed(1)} KB)`);
     
     try {
+      if (!selectedConsentTemplateId) {
+        alert(t('patients.consentTemplateRequired'));
+        return;
+      }
+
       const formData = new FormData();
       formData.append('file', fileToImport);
+      formData.append('groupFields', JSON.stringify({ consentTemplateId: selectedConsentTemplateId }));
 
-      setImportProgress(`Processando: ${fileToImport.name}`);
+      setImportProgress(`${t('patients.importProcessingLabel')}: ${fileToImport.name}`);
 
       const response = await importLGPDService.import('patients', formData);
       
@@ -222,12 +240,12 @@ export default function PatientsPage() {
       
       if (response && response.data) {
         if (response.data.success === false) {
-          const errorMsg = response.data.error || response.data.message || 'Erro ao importar pacientes';
+          const errorMsg = response.data.error || response.data.message || t('patients.importErrorGeneric');
           throw new Error(errorMsg);
         }
         
         const importData = response.data.data || response.data;
-        const message = response.data.message || 'Importação concluída';
+        const message = response.data.message || t('patients.importCompleted');
         
         if (importData) {
           const total = importData.total || 0;
@@ -247,22 +265,22 @@ export default function PatientsPage() {
             const hasDuplicates = duplicateErrors.length > 0;
             
             if (hasDuplicates && !isPartial) {
-              errorMessage = `❌ Importação não realizada\n\nForam encontrados ${duplicateErrors.length} paciente(s) duplicado(s) no arquivo.\nNenhum registro foi importado para evitar duplicidades no sistema.\n\n📌 O que significa "duplicado"?\n   Um paciente é considerado duplicado quando já existe no sistema com o mesmo nome completo e data de nascimento.\n`;
+              errorMessage = t('patients.importDuplicateBlocked').replace('{count}', String(duplicateErrors.length));
             } else if (hasDuplicates && isPartial) {
-              errorMessage += `\n\n⚠️ ATENÇÃO: ${duplicateErrors.length} paciente(s) em duplicidade encontrado(s) e não foram importados.\n`;
+              errorMessage += `\n\n${t('patients.importDuplicateWarning').replace('{count}', String(duplicateErrors.length))}`;
             }
             
             if (errorsDetails && errorsDetails.length > 0) {
               errorMessage += '\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━';
-              errorMessage += '\n📋 DETALHAMENTO DOS ERROS:';
+              errorMessage += `\n${t('patients.importErrorsDetailTitle')}`;
               errorMessage += '\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━';
               
               const errorsToShow = errorsDetails.slice(0, 15);
               errorsToShow.forEach((err: any) => {
-                const errorList = Array.isArray(err.errors) ? err.errors : [err.errors || 'Erro desconhecido'];
+                const errorList = Array.isArray(err.errors) ? err.errors : [err.errors || t('patients.importUnknownError')];
                 const isDuplicate = errorList.some((e: string) => e.toLowerCase().includes('duplicado') || e.toLowerCase().includes('duplicate'));
                 
-                errorMessage += `\n\n${isDuplicate ? '🔄' : '📌'} Linha ${err.row || 'N/A'}:`;
+                errorMessage += `\n\n${isDuplicate ? '🔄' : '📌'} ${t('patients.importLineLabel')} ${err.row || 'N/A'}:`;
                 errorList.forEach((errorText: string) => {
                   const prefix = errorText.toLowerCase().includes('duplicado') || errorText.toLowerCase().includes('duplicate') ? '   ⚠️ ' : '   • ';
                   errorMessage += `\n${prefix}${errorText}`;
@@ -270,20 +288,20 @@ export default function PatientsPage() {
               });
               
               if (errorsDetails.length > 15) {
-                errorMessage += `\n\n... e mais ${errorsDetails.length - 15} erro(s) não exibidos`;
+                errorMessage += `\n\n${t('patients.importMoreErrorsHidden').replace('{count}', String(errorsDetails.length - 15))}`;
               }
               
               errorMessage += '\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━';
-              errorMessage += '\n💡 Como corrigir:';
+              errorMessage += `\n${t('patients.importHowToFix')}`;
               if (hasDuplicates) {
-                errorMessage += '\n   1. Verifique se os pacientes já estão cadastrados no sistema';
-                errorMessage += '\n   2. Remova as linhas duplicadas do arquivo Excel';
-                errorMessage += '\n   3. Tente importar novamente';
-                errorMessage += '\n\n   Lembre-se: Um paciente é duplicado quando tem o mesmo nome e data de nascimento.';
+                errorMessage += `\n${t('patients.importFixDuplicatesStep1')}`;
+                errorMessage += `\n${t('patients.importFixDuplicatesStep2')}`;
+                errorMessage += `\n${t('patients.importFixDuplicatesStep3')}`;
+                errorMessage += `\n\n${t('patients.importDuplicateDefinition')}`;
               } else {
-                errorMessage += '\n   1. Verifique o template oficial e as instruções de preenchimento';
-                errorMessage += '\n   2. Corrija os dados nas linhas indicadas no seu arquivo Excel';
-                errorMessage += '\n   3. Tente importar novamente';
+                errorMessage += `\n${t('patients.importFixDataStep1')}`;
+                errorMessage += `\n${t('patients.importFixDataStep2')}`;
+                errorMessage += `\n${t('patients.importFixDataStep3')}`;
               }
             }
             
@@ -292,11 +310,17 @@ export default function PatientsPage() {
             }, 100);
           } else {
             setTimeout(() => {
-              alert(`✅ Importação concluída com sucesso!\n\n📊 Resumo:\n   • Total de registros processados: ${total}\n   • Registros importados: ${success}\n   • Erros encontrados: ${errors}\n\n✨ Todos os pacientes foram cadastrados no sistema.`);
+              alert(t('patients.importSuccessSummary')
+                .replace('{total}', String(total))
+                .replace('{success}', String(success))
+                .replace('{errors}', String(errors))
+              );
             }, 100);
           }
         }
         
+        setShowSearchResults(false);
+        setSearchResults([]);
         await loadPatients();
         
         setTimeout(() => {
@@ -309,23 +333,25 @@ export default function PatientsPage() {
         }, 3000);
       }
     } catch (err: any) {
-        console.error('Erro ao importar pacientes:', err);
-        let errorMessage = 'Erro ao importar pacientes';
+      console.error('Erro ao importar pacientes:', err);
+      let errorMessage = t('patients.importErrorGeneric');
         
         if (err.response) {
           const errorData = err.response.data;
           if (errorData) {
             errorMessage = errorData.message || errorData.error || errorMessage;
           } else {
-            errorMessage = `Erro ${err.response.status}: ${err.response.statusText || 'Erro no servidor'}`;
+            errorMessage = t('patients.importServerError')
+              .replace('{status}', String(err.response.status || ''))
+              .replace('{statusText}', String(err.response.statusText || t('patients.importServerErrorFallback')));
           }
         } else if (err.request) {
-          errorMessage = `🔌 Problema de conexão\n\nNão foi possível conectar ao servidor.\n\n📋 Verifique:\n   • Sua conexão com a internet\n   • Se o servidor está em execução\n   • Se não há firewall bloqueando a conexão\n\n💡 Tente novamente em alguns instantes.`;
+          errorMessage = t('patients.importConnectionError');
         } else {
           errorMessage = err.message || errorMessage;
         }
         
-        alert(`❌ Erro ao importar pacientes\n\n${errorMessage}`);
+        alert(`${t('patients.importErrorTitle')}\n\n${errorMessage}`);
         
         setTimeout(() => {
           setImportFile(null);
@@ -338,6 +364,60 @@ export default function PatientsPage() {
     } finally {
       setImporting(false);
     }
+  };
+
+  const filteredConsentPolicies = useMemo(() => {
+    const term = consentPolicySearch.trim().toLowerCase();
+    if (!term) return consentPolicies;
+    return consentPolicies.filter((policy) => {
+      const titleValue = String(policy.title || '').toLowerCase();
+      const versionValue = String(policy.version || '').toLowerCase();
+      const caaeValue = String(policy.caae || '').toLowerCase();
+      return titleValue.includes(term) || versionValue.includes(term) || caaeValue.includes(term);
+    });
+  }, [consentPolicies, consentPolicySearch]);
+
+  const loadConsentPolicies = async () => {
+    setLoadingConsentPolicies(true);
+    try {
+      const response = await consentService.getAllPolicies();
+      const data = (response as any)?.data?.data || [];
+      setConsentPolicies(Array.isArray(data) ? data : []);
+    } catch (err: any) {
+      alert(err?.message || t('patients.consentLoadError'));
+      setConsentPolicies([]);
+    } finally {
+      setLoadingConsentPolicies(false);
+    }
+  };
+
+  const openBatchImportModal = async (file: File) => {
+    setImportFile(file);
+    setSelectedConsentTemplateId('');
+    setConsentPolicySearch('');
+    setIsBatchImportModalOpen(true);
+    await loadConsentPolicies();
+  };
+
+  const confirmBatchImport = async () => {
+    if (!selectedConsentTemplateId) {
+      alert(t('patients.consentTemplateRequired'));
+      return;
+    }
+    setIsBatchImportModalOpen(false);
+    await handleImportPatients();
+  };
+
+  const getButtonLabel = (key: string, en: string, es: string) => {
+    if (language === 'en-US') return en;
+    if (language === 'es-ES') return es;
+    return t(key);
+  };
+
+  const getPatientsActionLabel = (key: string, en: string, es: string) => {
+    if (language === 'en-US') return en;
+    if (language === 'es-ES') return es;
+    return t(key);
   };
 
   return (
@@ -423,38 +503,45 @@ export default function PatientsPage() {
           </div>
           <Button 
             onClick={() => {
-              const url = '/import-templates/patients-template.xlsx';
-              const link = document.createElement('a');
-              link.href = url;
-              link.setAttribute('download', 'patients-template.xlsx');
-              document.body.appendChild(link);
-              link.click();
-              link.remove();
+              importLGPDService.downloadTemplate('patients', 'xlsx')
+                .then((response) => {
+                  const url = window.URL.createObjectURL(new Blob([response.data]));
+                  const link = document.createElement('a');
+                  link.href = url;
+                  link.setAttribute('download', 'patients_template.xlsx');
+                  document.body.appendChild(link);
+                  link.click();
+                  link.remove();
+                  window.URL.revokeObjectURL(url);
+                })
+                .catch(() => {
+                  alert(t('patients.importErrorGeneric'));
+                });
             }}
             variant="secondary"
           >
             <FileSpreadsheet size={18} />
-            Baixar Template Excel
+            {getButtonLabel('patients.downloadTemplate', 'Download Excel Template', 'Descargar plantilla Excel')}
           </Button>
           <div style={{ position: 'relative', display: 'inline-block' }}>
             <input
               type="file"
               id="import-file"
               accept=".csv,.xlsx"
-              title="Importar arquivo de pacientes (CSV ou Excel)"
+              title={t('patients.importFileTitle')}
               onChange={(e) => {
                 const file = e.target.files?.[0];
                 if (file) {
                   const ext = file.name.toLowerCase().split('.').pop();
                   if (ext !== 'csv' && ext !== 'xlsx') {
-                    alert('Apenas arquivos CSV ou Excel (.xlsx) são aceitos');
+                    alert(t('patients.importFileTypeError'));
                     e.target.value = '';
                     return;
                   }
                   setImportFile(file);
                   setImportProgress('');
                   setTimeout(() => {
-                    handleImportPatients(file);
+                    openBatchImportModal(file);
                   }, 100);
                 }
               }}
@@ -479,7 +566,7 @@ export default function PatientsPage() {
                 }}
             >
               <Upload size={18} />
-                Importar Pacientes
+                {getButtonLabel('patients.importPatients', 'Import Patients', 'Importar pacientes')}
             </Button>
               {importProgress && (
                 <div style={{
@@ -499,7 +586,7 @@ export default function PatientsPage() {
           </div>
           <Button onClick={handleAdd}>
             <Plus size={18} />
-            {t('patients.new')}
+            {getButtonLabel('patients.new', 'New Patient', 'Nuevo paciente')}
           </Button>
         </div>
       </div>
@@ -510,7 +597,7 @@ export default function PatientsPage() {
         </div>
       )}
       
-      {error && !error.includes('Servidor backend não está disponível') && (
+      {error && !isConnectionError(error) && (
         <div style={{ 
           padding: '1rem', 
           backgroundColor: '#fee2e2', 
@@ -519,11 +606,11 @@ export default function PatientsPage() {
           marginBottom: '1rem',
           color: '#dc2626'
         }}>
-          <strong>Erro ao carregar pacientes:</strong> {error}
+          <strong>{t('patients.loadErrorLabel')}:</strong> {error}
         </div>
       )}
 
-      {error && (error.includes('Servidor backend não está disponível') || error.includes('ECONNREFUSED') || error.includes('Network Error')) && (
+      {error && isConnectionError(error) && (
         <div style={{ 
           padding: '1rem', 
           backgroundColor: '#fee2e2', 
@@ -532,7 +619,7 @@ export default function PatientsPage() {
           marginBottom: '1rem',
           color: '#dc2626'
         }}>
-          <strong>⚠️ Erro de Conexão:</strong> Não foi possível conectar ao servidor. Verifique se o backend está em execução.
+          <strong>{t('patients.connectionErrorTitle')}:</strong> {t('patients.connectionErrorMessage')}
         </div>
       )}
 
@@ -551,8 +638,8 @@ export default function PatientsPage() {
       <Card>
         <Table
           headers={[
-            'ID',
-            'Consentimento',
+            t('patients.tableId'),
+            t('patients.tableConsent'),
             t('patients.actions'),
           ]}
         >
@@ -585,10 +672,10 @@ export default function PatientsPage() {
                             style={styles.consentActionButton}
                             className="consent-action-button"
                           >
-                            Coletar Assinatura
+                            {getPatientsActionLabel('patients.collectSignature', 'Collect Signature', 'Recolectar firma')}
                           </Button>
                         ) : (
-                          <span style={styles.consentHint}>Assinado</span>
+                          <span style={styles.consentHint}>{t('patients.signed')}</span>
                         )}
                         {isConsentPending && (
                           <Button
@@ -598,9 +685,9 @@ export default function PatientsPage() {
                               try {
                                 await patientService.resendConsentNotification(patientID);
                                 await loadPatients();
-                                alert('Notificações de consentimento reenviadas.');
+                                alert(t('patients.notificationsResent'));
                               } catch (err: any) {
-                                const errorMsg = err.response?.data?.message || err.message || 'Erro ao reenviar notificações.';
+                                const errorMsg = err.response?.data?.message || err.message || t('patients.notificationsResendError');
                                 alert(errorMsg);
                               } finally {
                                 setResendingConsentFor(null);
@@ -610,13 +697,15 @@ export default function PatientsPage() {
                             style={styles.consentActionButton}
                             className="consent-action-button"
                           >
-                            {resendingConsentFor === patientID ? 'Reenviando...' : 'Reenviar Notificações'}
+                            {resendingConsentFor === patientID
+                              ? getPatientsActionLabel('patients.resending', 'Resending...', 'Reenviando...')
+                              : getPatientsActionLabel('patients.resendNotifications', 'Resend Notifications', 'Reenviar notificaciones')}
                           </Button>
                         )}
                         <div className="table-actions">
                           <button
                             className="action-button"
-                            onClick={() => handleEdit(patientID)}
+                            onClick={() => handleEdit(patient)}
                             title={t('common.edit')}
                           >
                             <Edit size={16} />
@@ -646,8 +735,77 @@ export default function PatientsPage() {
       </Card>
       )}
 
-      <Modal isOpen={isSignatureModalOpen} onClose={handleCloseSignatureModal} title="Assinatura Digital">
+      <Modal isOpen={isSignatureModalOpen} onClose={handleCloseSignatureModal} title={t('patients.digitalSignature')}>
         <SignaturePad onConfirm={handleConfirmSignature} onCancel={handleCloseSignatureModal} />
+      </Modal>
+
+      <Modal
+        isOpen={isBatchImportModalOpen}
+        onClose={() => setIsBatchImportModalOpen(false)}
+        title={t('patients.batchImportModalTitle')}
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+          <p style={{ margin: 0, color: 'var(--text-light)', fontSize: '0.9rem' }}>
+            {t('patients.batchImportModalSubtitle')}
+          </p>
+
+          <input
+            type="text"
+            value={consentPolicySearch}
+            onChange={(event) => setConsentPolicySearch(event.target.value)}
+            placeholder={t('patients.consentTemplateSearchPlaceholder')}
+            style={{
+              width: '100%',
+              padding: '0.5rem',
+              border: '1px solid var(--border)',
+              borderRadius: '6px',
+              fontSize: '0.875rem',
+              backgroundColor: 'var(--surface)',
+              color: 'var(--text)'
+            }}
+          />
+
+          <div style={{
+            border: '1px solid var(--border)',
+            borderRadius: '8px',
+            maxHeight: '220px',
+            overflowY: 'auto',
+            padding: '0.75rem',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '0.5rem'
+          }}>
+            {loadingConsentPolicies ? (
+              <span style={{ color: 'var(--text-light)' }}>{t('patients.loadingConsent')}</span>
+            ) : filteredConsentPolicies.length === 0 ? (
+              <span style={{ color: 'var(--text-light)' }}>{t('patients.consentTemplateEmpty')}</span>
+            ) : (
+              filteredConsentPolicies.map((policy) => {
+                const policyId = String(policy._id || `${policy.version}-${policy.title}`);
+                const isChecked = selectedConsentTemplateId === policyId;
+                return (
+                  <label key={policyId} style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-start' }}>
+                    <input
+                      type="checkbox"
+                      checked={isChecked}
+                      onChange={() => setSelectedConsentTemplateId(isChecked ? '' : policyId)}
+                    />
+                    <span>{policy.version} - {policy.title} ({t('patients.caaeLabel')}: {policy.caae || '--'})</span>
+                  </label>
+                );
+              })
+            )}
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
+            <Button type="button" variant="secondary" onClick={() => setIsBatchImportModalOpen(false)}>
+              {t('common.cancel')}
+            </Button>
+            <Button type="button" onClick={confirmBatchImport} disabled={!selectedConsentTemplateId || importing}>
+              {t('patients.confirmBatchImport')}
+            </Button>
+          </div>
+        </div>
       </Modal>
 
       {showSearchResults && (

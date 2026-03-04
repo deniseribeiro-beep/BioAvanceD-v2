@@ -37,6 +37,7 @@ const upload = multer({
     const allowedMimes = [
       'text/csv',
       'application/vnd.ms-excel',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       'application/json',
       'application/zip',
       'application/x-zip-compressed'
@@ -99,8 +100,24 @@ class ImportLGPDController {
         });
       }
 
+      let groupFields = {};
+      if (req.body?.groupFields) {
+        try {
+          groupFields = typeof req.body.groupFields === 'string'
+            ? JSON.parse(req.body.groupFields)
+            : req.body.groupFields;
+        } catch (error) {
+          importLGPDService.cleanupFile(file.path);
+          return res.status(400).json({
+            success: false,
+            error: 'groupFields inválido',
+            message: 'groupFields deve ser um JSON válido'
+          });
+        }
+      }
+
       // Processa importação
-      const results = await importLGPDService.importPatients(db, file);
+      const results = await importLGPDService.importPatients(db, file, { groupFields });
 
       // Registra log sanitizado (anonimizado via auditLogger)
       if (req.user) {
@@ -216,13 +233,30 @@ class ImportLGPDController {
       // Obtém parâmetros de localização e auto-incremento do FormData
       const startLocationID = req.body.locationID ? parseInt(req.body.locationID) : null;
       const autoIncrement = req.body.autoIncrement === 'true' || req.body.autoIncrement === true || req.body.autoIncrement === '1';
+
+      let groupFields = {};
+      if (req.body?.groupFields) {
+        try {
+          groupFields = typeof req.body.groupFields === 'string'
+            ? JSON.parse(req.body.groupFields)
+            : req.body.groupFields;
+        } catch (error) {
+          importLGPDService.cleanupFile(file.path);
+          return res.status(400).json({
+            success: false,
+            error: 'groupFields inválido',
+            message: 'groupFields deve ser um JSON válido'
+          });
+        }
+      }
       
       logger.debug('Parâmetros de importação:', { startLocationID, autoIncrement });
 
       // Processa importação
       const results = await importLGPDService.importSamples(db, file, {
         startLocationID,
-        autoIncrement
+        autoIncrement,
+        groupFields
       });
 
       // Registra log sanitizado (anonimizado via auditLogger)
@@ -290,17 +324,21 @@ class ImportLGPDController {
         [],
         ['IMPORTANTE:'],
         ['• O ID do paciente (patientID) será gerado automaticamente pelo sistema - NÃO preencha esta coluna'],
+        ['• O TCLE (consentTemplateId) é obrigatório e deve ser selecionado no modal de importação em lote'],
         ['• Campos marcados com (*) são OBRIGATÓRIOS'],
         ['• Campos não marcados são OPCIONAIS'],
         ['• Mantenha o formato das colunas conforme especificado abaixo'],
         [],
         ['CAMPOS OBRIGATÓRIOS (*):'],
         ['• patientName: Nome completo do paciente (Texto)'],
+        ['• email: Email válido para envio do TCLE (Texto)'],
         ['• birthDate: Data de nascimento no formato DD/MM/YYYY (Ex: 15/03/1985)'],
         ['• sex: Sexo do paciente - use M (Masculino), F (Feminino) ou O (Outro)'],
         [],
         ['FORMATOS E TIPOS DE DADOS:'],
         ['• patientName: Texto (obrigatório)'],
+        ['• email: Texto no formato email válido (obrigatório)'],
+        ['• phone: Telefone com 10 a 15 dígitos (opcional)'],
         ['• birthDate: Data no formato DD/MM/YYYY (obrigatório) - Ex: 15/03/1985'],
         ['• sex: M, F ou O (obrigatório) - Aceita também "Masculino" ou "Feminino"'],
         ['• weight: Número decimal (opcional) - Peso em quilos - Ex: 65.5'],
@@ -367,6 +405,8 @@ class ImportLGPDController {
       // Headers limpos (sem asteriscos ou descrições - serão usados para importação)
       const headers = [
         'patientName',
+        'email',
+        'phone',
         'birthDate',
         'sex',
         'weight',
@@ -397,6 +437,8 @@ class ImportLGPDController {
       // Linha de exemplo (primeira linha de dados) - ordem deve corresponder exatamente aos headers
       const exampleRow = [
         'João Silva Santos',        // patientName
+        'joao.silva@email.com',     // email
+        '5511999999999',            // phone
         '15/03/1985',               // birthDate
         'M',                         // sex
         '75.5',                      // weight

@@ -6,7 +6,7 @@ import { useAuth } from '../contexts/AuthContext';
 
 export default function SamplesPage() {
   const navigate = useNavigate();
-  const { t } = useLanguage();
+  const { t, language } = useLanguage();
   const { user } = useAuth();
   const {
     loading,
@@ -34,6 +34,7 @@ export default function SamplesPage() {
   return (
     <SamplesPageView
       t={t}
+      language={language}
       loading={loading}
       error={error}
       search={search}

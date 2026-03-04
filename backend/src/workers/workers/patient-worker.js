@@ -28,7 +28,9 @@ class PatientWorker {
       };
 
       // Processa importação
-      const results = await importLGPDService.importPatients(db, file);
+      const results = await importLGPDService.importPatients(db, file, {
+        groupFields: options.groupFields || {},
+      });
 
       // Converte para FHIR e atualiza/insere
       const patientsCollection = db.collection('pacientes');

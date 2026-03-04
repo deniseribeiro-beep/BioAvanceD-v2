@@ -7,6 +7,10 @@ export interface Patient {
   
   // 2. NOME - Caractere - Nome completo do paciente
   patientName: string;
+
+  // Contato para envio do TCLE
+  email?: string;
+  phone?: string;
   
   // 3. DATA_NASCIMENTO - Caractere - Data de nascimento (formato DD/MM/YYYY)
   birthDate: string; // Alterado para string no formato DD/MM/YYYY
@@ -66,6 +70,7 @@ export interface Patient {
   
   // Campos de sistema
   status?: 'PENDING_CONSENT' | 'ACTIVE' | 'INACTIVE';
+  consentTemplateId?: string;
   consentToken?: string | null;
   consentTokenCreatedAt?: Date | string | null;
   consentTokenExpiresAt?: Date | string | null;
@@ -185,6 +190,7 @@ export interface ConsentTemplate {
   content: string;
   htmlContent?: string;
   version: string;
+  caae: string;
   active: boolean;
   permissions: ConsentPermission[];
   granularPermissions?: ConsentPolicyPermission[];
@@ -196,6 +202,7 @@ export interface ConsentPolicy {
   _id?: string;
   title: string;
   version: string;
+  caae: string;
   active: boolean;
   htmlContent: string;
   validFrom: Date | string;

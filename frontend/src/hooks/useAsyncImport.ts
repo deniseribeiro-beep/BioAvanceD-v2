@@ -5,6 +5,7 @@ import { useImportJob, ImportJob } from './useImportJob';
 export interface AsyncImportOptions {
   startLocationID?: number;
   autoIncrement?: boolean;
+  groupFields?: Record<string, any>;
   onValidationSuccess?: (metadata: any) => void;
   onValidationError?: (errors: string[]) => void;
   onJobCreated?: (jobID: string) => void;
@@ -85,6 +86,7 @@ export function useAsyncImport() {
       const response = await importService.createImportJob(file, dataType, {
         startLocationID: options.startLocationID,
         autoIncrement: options.autoIncrement,
+        groupFields: options.groupFields,
       });
 
       const jobID = response.data.data?.jobID || response.data.jobID;

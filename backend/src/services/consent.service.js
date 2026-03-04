@@ -15,12 +15,13 @@ addFormats(ajv);
 
 const consentTemplateSchema = {
   type: 'object',
-  required: ['title', 'content', 'version'],
+  required: ['title', 'content', 'version', 'caae'],
   properties: {
     title: { type: 'string', minLength: 1 },
     content: { type: 'string', minLength: 1 },
     htmlContent: { type: 'string' },
     version: { type: 'string', minLength: 1 },
+    caae: { type: 'string', minLength: 1 },
     active: { type: 'boolean' },
     permissions: {
       type: 'array',
@@ -41,11 +42,12 @@ const consentTemplateSchema = {
 
 const consentPolicySchema = {
   type: 'object',
-  required: ['title', 'htmlContent', 'version', 'validFrom', 'granularPermissions'],
+  required: ['title', 'htmlContent', 'version', 'caae', 'validFrom', 'granularPermissions'],
   properties: {
     title: { type: 'string', minLength: 1 },
     htmlContent: { type: 'string', minLength: 1 },
     version: { type: 'string', minLength: 1 },
+    caae: { type: 'string', minLength: 1 },
     validFrom: { type: 'string', format: 'date-time' },
     active: { type: 'boolean' },
     granularPermissions: {
@@ -235,6 +237,7 @@ class ConsentService {
       const normalizedPayload = {
         ...payload,
         htmlContent: payload.htmlContent || payload.content,
+        caae: typeof payload.caae === 'string' ? payload.caae.trim() : payload.caae,
         validFrom: payload.validFrom || new Date().toISOString(),
         granularPermissions: payload.granularPermissions || payload.permissions || []
       };
@@ -271,6 +274,7 @@ class ConsentService {
         content: policy.htmlContent,
         permissions: permissions,
         htmlContent: policy.htmlContent,
+        caae: policy.caae,
         granularPermissions: permissions
       };
 

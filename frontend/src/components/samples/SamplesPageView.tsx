@@ -16,6 +16,7 @@ type TranslatorFn = (key: string) => string;
 
 interface SamplesPageViewProps {
   t: TranslatorFn;
+  language: 'pt-BR' | 'en-US' | 'es-ES';
   loading: boolean;
   error: string | null;
   search: string;
@@ -58,6 +59,7 @@ function computeVolume(sample: Sample) {
 
 export default function SamplesPageView({
   t,
+  language,
   loading,
   error,
   search,
@@ -86,31 +88,31 @@ export default function SamplesPageView({
   return (
     <div className="page">
       <div className="page-header">
-        <h1>{t('samples.title') || 'Amostras'}</h1>
+        <h1>{t('samples.title')}</h1>
         {isImporting && (
           <div className="import-banner">
             <div className="spinner" />
             <div>
-              <strong>Importando amostras</strong>
-              <div style={{ fontSize: '0.85rem' }}>{importProgress ? `${importProgress}%` : 'Processando...'}</div>
+              <strong>{t('samples.importBanner.importing')}</strong>
+              <div style={{ fontSize: '0.85rem' }}>{importProgress ? `${importProgress}%` : t('samples.importBanner.processing')}</div>
             </div>
           </div>
         )}
         {importCompleted && (
           <div className="import-banner success">
             <Check size={16} />
-            <span>Importação concluída</span>
+            <span>{t('samples.importBanner.completed')}</span>
           </div>
         )}
-        {importError && <div className="import-error">Erro na importação: {importError}</div>}
+        {importError && <div className="import-error">{t('samples.importBanner.error')}: {importError}</div>}
       </div>
 
       <Card style={{ marginBottom: '1rem' }}>
         <div style={{ display: 'flex', gap: '1rem', alignItems: 'flex-end', flexWrap: 'wrap' }}>
           <div style={{ flex: 1, minWidth: '220px' }}>
             <Input
-              label="Pesquisar"
-              placeholder="Código, tipo ou paciente"
+              label={t('samples.searchLabel')}
+              placeholder={t('samples.searchPlaceholder')}
               value={search}
               onChange={(e) => onSearchChange(e.target.value)}
             />
@@ -120,34 +122,34 @@ export default function SamplesPageView({
               <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
                 <Button onClick={onNewSample}>
                   <Plus size={16} />
-                  {t('samples.new') || 'Nova Amostra'}
+                  {t('samples.new')}
                 </Button>
                 <Button variant="secondary" onClick={onImport}>
                   <Upload size={16} />
-                  {t('import.samples.import') || 'Importar'}
+                  {t('import.samples.import')}
                 </Button>
               </div>
               <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginLeft: 'auto' }}>
                 <Button variant="secondary" onClick={() => onDownloadTemplate('xlsx')}>
                   <Download size={16} />
-                  Baixar Template Excel
+                  {t('samples.downloadTemplateExcel')}
                 </Button>
                 <Button variant="secondary" onClick={() => onDownloadTemplate('csv')}>
                   <Download size={16} />
-                  Baixar Template CSV
+                  {t('samples.downloadTemplateCsv')}
                 </Button>
               </div>
             </div>
           ) : (
             <div className="toolbar batch">
-              <span>{selectedSampleIds.length} itens selecionados</span>
+              <span>{selectedSampleIds.length} {t('samples.selectedItems')}</span>
               <Button variant="danger" onClick={onBatchDelete}>
                 <Trash2 size={16} />
-                Excluir
+                {t('samples.delete')}
               </Button>
               <Button onClick={onOpenPrintModal}>
                 <Printer size={16} />
-                Imprimir Etiquetas
+                {t('samples.printLabels')}
               </Button>
             </div>
           )}
@@ -163,24 +165,24 @@ export default function SamplesPageView({
                   type="checkbox"
                   checked={allSelected}
                   onChange={onToggleSelectAll}
-                  aria-label="Selecionar todas as amostras"
+                  aria-label={t('samples.selectAllAria')}
                 />
               </th>
-              <th>Tipo</th>
-              <th>Origem</th>
-              <th>Código</th>
-              <th>Status</th>
+              <th>{t('samples.tableHeaders.type')}</th>
+              <th>{t('samples.tableHeaders.origin')}</th>
+              <th>{t('samples.tableHeaders.barcode')}</th>
+              <th>{t('samples.tableHeaders.status')}</th>
               <th>TCLE</th>
-              <th>Volume</th>
-              <th>Paciente (ID)</th>
-              <th>Ações</th>
+              <th>{t('samples.volume')}</th>
+              <th>{t('samples.patientIdColumn')}</th>
+              <th>{t('samples.tableHeaders.actions')}</th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
               <tr>
                 <td colSpan={9} style={{ textAlign: 'center', padding: '1.5rem' }}>
-                  {t('common.loading') || 'Carregando...'}
+                  {t('common.loading')}
                 </td>
               </tr>
             ) : error ? (
@@ -192,7 +194,7 @@ export default function SamplesPageView({
             ) : filteredSamples.length === 0 ? (
               <tr>
                 <td colSpan={9} style={{ textAlign: 'center', padding: '1.5rem' }}>
-                  Nenhuma amostra encontrada.
+                  {t('samples.noSamplesFound')}
                 </td>
               </tr>
             ) : (
@@ -206,7 +208,7 @@ export default function SamplesPageView({
                         type="checkbox"
                         checked={selectedSampleIds.includes(sample.id)}
                         onChange={() => onToggleSelect(sample)}
-                        aria-label="Selecionar amostra"
+                        aria-label={t('samples.selectOneAria')}
                       />
                     </td>
                     <td>{sample.sampleType || 'N/A'}</td>
@@ -217,23 +219,23 @@ export default function SamplesPageView({
                     </td>
                     <td>
                       {sample.canUse === false ? (
-                        <span className="consent-badge pending" title={sample.consentMessage || 'TCLE Pendente'}>
-                          ⚠️ Pendente
+                        <span className="consent-badge pending" title={sample.consentMessage || t('samples.consent.pendingTitle')}>
+                          ⚠️ {t('samples.consent.pending')}
                         </span>
                       ) : sample.consentValid ? (
-                        <span className="consent-badge approved" title={sample.consentMessage || 'TCLE Assinado'}>
-                          ✓ Assinado
+                        <span className="consent-badge approved" title={sample.consentMessage || t('samples.consent.signedTitle')}>
+                          ✓ {t('samples.consent.signed')}
                         </span>
                       ) : (
-                        <span className="consent-badge unknown" title="Status desconhecido">
-                          ? Verificar
+                        <span className="consent-badge unknown" title={t('samples.consent.unknownStatus')}>
+                          ? {t('samples.consent.check')}
                         </span>
                       )}
                     </td>
                     <td>
                       <strong>
-                        {current.toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} /{' '}
-                        {initial.toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}
+                        {current.toLocaleString(language, { minimumFractionDigits: 1, maximumFractionDigits: 1 })} /{' '}
+                        {initial.toLocaleString(language, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}
                       </strong>
                     </td>
                     <td>{patientId ?? 'N/A'}</td>
@@ -244,10 +246,10 @@ export default function SamplesPageView({
                         onClick={() => onEditSample(sample.id)}
                         title={
                           !canEdit
-                            ? 'Apenas administradores e coordenadores podem editar'
+                            ? t('samples.editTooltip.noPermission')
                             : sample.canUse === false
-                              ? 'Amostra bloqueada: TCLE pendente'
-                              : 'Editar amostra'
+                              ? t('samples.editTooltip.consentPending')
+                              : t('samples.editTooltip.edit')
                         }
                         style={{ padding: '0.35rem 0.65rem' }}
                       >
@@ -263,14 +265,14 @@ export default function SamplesPageView({
       </Card>
 
       {printModalOpen && (
-        <Modal isOpen title="Imprimir Etiquetas" onClose={onClosePrintModal}>
+        <Modal isOpen title={t('samples.printLabels')} onClose={onClosePrintModal}>
           <div id="printable-area">
             {selectedSamples.map((sample) => {
               const barcodeValue = sample.barcode || sample.sampleID || sample.id;
               const patientId = sample.patientID ?? (sample as any).patient?.patientID;
               return (
                 <div key={sample.id} className="qr-label">
-                  <div className="qr-label__title">{sample.sampleType || 'Amostra'}</div>
+                  <div className="qr-label__title">{sample.sampleType || t('samples.sampleFallback')}</div>
                   <div className="qr-label__code">{barcodeValue || 'N/A'}</div>
                   {barcodeValue && (
                     <div className="qr-label__barcode">
@@ -284,11 +286,11 @@ export default function SamplesPageView({
           </div>
           <div style={{ marginTop: '1rem', display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
             <Button variant="secondary" onClick={onClosePrintModal}>
-              Fechar
+              {t('common.close')}
             </Button>
             <Button onClick={onPrint}>
               <Printer size={16} />
-              Imprimir
+              {t('common.print')}
             </Button>
           </div>
         </Modal>

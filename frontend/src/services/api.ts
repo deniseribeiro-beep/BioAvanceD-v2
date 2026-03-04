@@ -33,11 +33,20 @@ function getApiBaseUrl(): string {
   // Detecta o hostname atual da página
   const hostname = window.location.hostname;
   const protocol = window.location.protocol;
-  const port = window.location.port;
+  const currentPort = window.location.port;
   
   // Tenta obter porta do localStorage (salva quando backend usa porta alternativa)
-  const savedPort = localStorage.getItem('api_port');
-  const apiPort = savedPort || '3000';
+  const savedPortRaw = localStorage.getItem('api_port');
+  const normalizedSavedPort = savedPortRaw && /^\d+$/.test(savedPortRaw) ? savedPortRaw : null;
+
+  // Evita usar porta inválida ou a própria porta do frontend (ex.: 8080),
+  // que causa 404 ao chamar /api/* no servidor do front.
+  const shouldIgnoreSavedPort = !normalizedSavedPort || normalizedSavedPort === currentPort;
+  const apiPort = shouldIgnoreSavedPort ? '3000' : normalizedSavedPort;
+
+  if (shouldIgnoreSavedPort && savedPortRaw && savedPortRaw !== '3000') {
+    localStorage.setItem('api_port', '3000');
+  }
   
   // Se for localhost ou 127.0.0.1, usa localhost com porta configurada
   if (hostname === 'localhost' || hostname === '127.0.0.1') {
@@ -574,7 +583,7 @@ export const importService = {
   createImportJob: (
     file: File, 
     dataType: string, 
-    options?: { startLocationID?: number; autoIncrement?: boolean }
+    options?: { startLocationID?: number; autoIncrement?: boolean; groupFields?: Record<string, any> }
   ) => {
     const formData = new FormData();
     formData.append('file', file);
@@ -584,6 +593,9 @@ export const importService = {
     }
     if (options?.autoIncrement !== undefined) {
       formData.append('autoIncrement', options.autoIncrement.toString());
+    }
+    if (options?.groupFields) {
+      formData.append('groupFields', JSON.stringify(options.groupFields));
     }
     return api.post('/import/import', formData, {
       headers: {

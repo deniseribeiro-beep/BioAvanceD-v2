@@ -5,7 +5,7 @@ import Input from '../components/UI/Input';
 import Modal from '../components/UI/Modal';
 import { ArrowLeft } from 'lucide-react';
 import SignaturePad from '../components/Consent/SignaturePad';
-import { Patient, ConsentPermission, ConsentTemplate } from '../types/models';
+import { Patient, ConsentPermission, ConsentTemplate, ConsentPolicy } from '../types/models';
 import { usePatients } from '../hooks/usePatients';
 import { consentService, patientService } from '../services/api';
 import { validateUnit } from '../utils/validations';
@@ -90,13 +90,39 @@ const styles: Record<string, CSSProperties> = {
     flexWrap: 'wrap',
     gap: '0.75rem',
     justifyContent: 'flex-end'
+  },
+  consentSelectionContainer: {
+    border: '1px solid var(--border)',
+    borderRadius: '8px',
+    padding: '1rem',
+    backgroundColor: 'var(--surface)',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '0.75rem'
+  },
+  consentSelectionList: {
+    maxHeight: '200px',
+    overflowY: 'auto',
+    border: '1px solid var(--border)',
+    borderRadius: '6px',
+    padding: '0.75rem',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '0.5rem'
+  },
+  consentSelectionItem: {
+    display: 'flex',
+    alignItems: 'flex-start',
+    gap: '0.5rem',
+    color: 'var(--text)',
+    fontSize: '0.875rem'
   }
 };
 
 export default function NewPatientPage() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { t } = useLanguage();
+  const { t, language } = useLanguage();
   const { createPatient, updatePatient, loadPatients } = usePatients();
   
   // Verifica se há paciente para edição (vindo da navegação)
@@ -104,14 +130,20 @@ export default function NewPatientPage() {
   
   // Função para formatar data
   const formatDate = (date: Date | string | undefined): string => {
+    const localeByLanguage: Record<string, string> = {
+      'pt-BR': 'pt-BR',
+      'en-US': 'en-US',
+      'es-ES': 'es-ES'
+    };
+    const locale = localeByLanguage[language] || 'pt-BR';
     if (!date) return '';
     if (date instanceof Date) {
-      return date.toLocaleDateString('pt-BR');
+      return date.toLocaleDateString(locale);
     }
     if (typeof date === 'string') {
       const d = new Date(date);
       if (!isNaN(d.getTime())) {
-        return d.toLocaleDateString('pt-BR');
+        return d.toLocaleDateString(locale);
       }
       return date;
     }
@@ -131,6 +163,8 @@ export default function NewPatientPage() {
   
   const [formData, setFormData] = useState<Partial<Patient>>({
     patientName: editingPatient?.patientName || '',
+    email: editingPatient?.email || '',
+    phone: editingPatient?.phone || '',
     birthDate: editingPatient?.birthDate ? formatDate(editingPatient.birthDate) : '',
     sex: editingPatient?.sex ? convertSexFromBackend(editingPatient.sex) : t('patients.sexMale'),
     weight: editingPatient?.weight || undefined,
@@ -163,6 +197,9 @@ export default function NewPatientPage() {
   const [sendingConsent, setSendingConsent] = useState(false);
   const [consentSent, setConsentSent] = useState(false);
   const [consentTemplate, setConsentTemplate] = useState<ConsentTemplate | null>(null);
+  const [consentPolicies, setConsentPolicies] = useState<ConsentPolicy[]>([]);
+  const [selectedConsentTemplateId, setSelectedConsentTemplateId] = useState<string>(editingPatient?.consentTemplateId || '');
+  const [consentTemplateSearch, setConsentTemplateSearch] = useState('');
   const [consentLoading, setConsentLoading] = useState(false);
   const [consentError, setConsentError] = useState<string | null>(null);
   const [consentResponses, setConsentResponses] = useState<Record<string, boolean>>({});
@@ -205,6 +242,45 @@ export default function NewPatientPage() {
     return null;
   };
 
+  const normalizePhone = (value: string): string => {
+    return value.replace(/\D/g, '').slice(0, 15);
+  };
+
+  const isValidEmail = (email?: string): boolean => {
+    if (!email) return false;
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
+  };
+
+  const isValidPhone = (phone?: string): boolean => {
+    if (!phone) return true;
+    const digits = normalizePhone(phone);
+    return digits.length >= 10 && digits.length <= 15;
+  };
+
+  const normalizePolicyToTemplate = (policy: ConsentPolicy): ConsentTemplate => {
+    const permissions = Array.isArray(policy.granularPermissions)
+      ? policy.granularPermissions.map((permission) => ({
+          key: permission.key,
+          label: permission.label,
+          required: permission.required
+        }))
+      : [];
+
+    return {
+      _id: policy._id,
+      title: policy.title,
+      content: policy.htmlContent,
+      htmlContent: policy.htmlContent,
+      version: policy.version,
+      caae: policy.caae,
+      active: policy.active,
+      permissions,
+      granularPermissions: policy.granularPermissions,
+      validFrom: policy.validFrom,
+      createdAt: policy.createdAt
+    };
+  };
+
   const resolveCreatedPatientID = (payload: any): string | null => {
     if (!payload) return null;
     const data = payload.data || payload;
@@ -222,10 +298,10 @@ export default function NewPatientPage() {
       await patientService.resendConsentNotification(patientID);
       setConsentSent(true);
       if (showFeedback) {
-        alert('TCLE enviado por email e SMS.');
+        alert(t('patients.consentSentSuccess'));
       }
     } catch (consentError: any) {
-      const consentMessage = consentError?.response?.data?.message || consentError?.message || 'Falha ao enviar o termo de consentimento.';
+      const consentMessage = consentError?.response?.data?.message || consentError?.message || t('patients.consentSendError');
       if (showFeedback) {
         alert(consentMessage);
       }
@@ -279,8 +355,13 @@ export default function NewPatientPage() {
     setConsentLoading(true);
     setConsentError(null);
     try {
-      const response = await consentService.getActiveTemplate();
-      const template = response.data?.data || null;
+      const response = await consentService.getAllPolicies();
+      const policies = response.data?.data || [];
+      const normalizedPolicies = Array.isArray(policies) ? policies : [];
+      setConsentPolicies(normalizedPolicies);
+
+      const selectedPolicy = normalizedPolicies.find((policy: ConsentPolicy) => String(policy._id) === String(selectedConsentTemplateId));
+      const template = selectedPolicy ? normalizePolicyToTemplate(selectedPolicy) : null;
       setConsentTemplate(template);
 
       const permissions: ConsentPermission[] = template?.permissions || [];
@@ -291,7 +372,7 @@ export default function NewPatientPage() {
       setConsentResponses(initialResponses);
       setSignatureName('');
     } catch (err: any) {
-      const message = err?.message || 'Erro ao carregar o TCLE ativo.';
+      const message = err?.message || t('patients.consentLoadError');
       setConsentError(message);
     } finally {
       setConsentLoading(false);
@@ -300,12 +381,12 @@ export default function NewPatientPage() {
 
   const handleConfirmSignature = async (dataUrl: string) => {
     if (!createdPatientId || !consentTemplate?._id) {
-      setConsentError('Paciente ou template nao disponivel para assinatura.');
+      setConsentError(t('patients.consentUnavailableError'));
       return;
     }
 
     if (!canSubmitConsent) {
-      setConsentError('Aceite as permissoes obrigatorias e informe o nome para assinar.');
+      setConsentError(t('patients.consentRequiredError'));
       return;
     }
 
@@ -319,11 +400,11 @@ export default function NewPatientPage() {
         signatureName,
         signatureImage: dataUrl
       } as any);
-      alert('Consentimento registrado com sucesso.');
+      alert(t('patients.consentRegisteredSuccess'));
       setIsConsentModalOpen(false);
       navigate('/patients');
     } catch (err: any) {
-      const message = err?.response?.data?.message || err?.message || 'Erro ao registrar consentimento.';
+      const message = err?.response?.data?.message || err?.message || t('patients.consentRegisterError');
       setConsentError(message);
     } finally {
       setIsSubmittingConsent(false);
@@ -331,9 +412,19 @@ export default function NewPatientPage() {
   };
 
   useEffect(() => {
-    if (!isConsentModalOpen) return;
     loadConsentTemplate();
-  }, [isConsentModalOpen]);
+  }, [selectedConsentTemplateId]);
+
+  const filteredConsentPolicies = useMemo(() => {
+    const term = consentTemplateSearch.trim().toLowerCase();
+    if (!term) return consentPolicies;
+    return consentPolicies.filter((policy) => {
+      const titleValue = String(policy.title || '').toLowerCase();
+      const versionValue = String(policy.version || '').toLowerCase();
+      const caaeValue = String(policy.caae || '').toLowerCase();
+      return titleValue.includes(term) || versionValue.includes(term) || caaeValue.includes(term);
+    });
+  }, [consentPolicies, consentTemplateSearch]);
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -350,9 +441,29 @@ export default function NewPatientPage() {
       return;
     }
 
+    if (!formData.email || !isValidEmail(formData.email)) {
+      alert(t('patients.invalidEmail'));
+      return;
+    }
+
+    if (!isValidPhone(String(formData.phone || ''))) {
+      alert(t('patients.invalidPhone'));
+      return;
+    }
+
+    if (!editingPatient && !selectedConsentTemplateId) {
+      alert(t('patients.consentTemplateRequired'));
+      return;
+    }
+
     // Remove patientID se fornecido - será gerado automaticamente pelo backend
     const dataToSave: any = { ...formData };
     delete dataToSave.patientID;
+    dataToSave.email = String(formData.email || '').trim().toLowerCase();
+    dataToSave.phone = normalizePhone(String(formData.phone || '')) || null;
+    if (selectedConsentTemplateId) {
+      dataToSave.consentTemplateId = selectedConsentTemplateId;
+    }
     
     // Remove patientName ao editar para não exibir dados sensíveis
     if (editingPatient) {
@@ -393,12 +504,19 @@ export default function NewPatientPage() {
         const createdPatientID = resolveCreatedPatientID(createdPayload);
 
         if (createdPatientID) {
+          const selectedPolicy = consentPolicies.find((policy) => String(policy._id) === String(selectedConsentTemplateId));
+          if (!selectedPolicy) {
+            alert(t('patients.consentTemplateNotFound'));
+            return;
+          }
+
+          setConsentTemplate(normalizePolicyToTemplate(selectedPolicy));
           setCreatedPatientId(createdPatientID);
           setConsentSent(false);
           setIsConsentModalOpen(true);
           await sendConsentNotification(createdPatientID, false);
         } else {
-          alert('Paciente criado, mas nao foi possivel identificar o ID para enviar o TCLE.');
+          alert(t('patients.patientIdResolveError'));
         }
 
         alert(t('patients.createSuccess'));
@@ -511,6 +629,8 @@ export default function NewPatientPage() {
                 value={formData.sex || t('patients.sexMale')}
                 onChange={(e) => setFormData({ ...formData, sex: e.target.value })}
                 required
+                title={t('patients.sex')}
+                aria-label={t('patients.sex')}
                 style={{
                   width: '100%',
                   padding: '0.5rem',
@@ -526,6 +646,22 @@ export default function NewPatientPage() {
                 <option value={t('patients.sexOther')}>{t('patients.sexOther')}</option>
               </select>
             </div>
+
+            <Input
+              label={`${t('patients.email')} *`}
+              type="email"
+              value={formData.email || ''}
+              onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+              required
+            />
+
+            <Input
+              label={t('patients.phone')}
+              type="text"
+              value={formData.phone || ''}
+              onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+              placeholder="5511999999999"
+            />
             
             <Input
               label={t('patients.weight')}
@@ -597,11 +733,11 @@ export default function NewPatientPage() {
             />
 
             <Input
-              label="Projeto Vinculado (TCLE)"
+              label={t('patients.linkedProjectConsent')}
               type="text"
               value={formData.linkedProject || ''}
               onChange={(e) => setFormData({ ...formData, linkedProject: e.target.value })}
-              placeholder="Ex: Projeto Genoma"
+              placeholder={t('patients.linkedProjectConsentPlaceholder')}
             />
             
             <Input
@@ -627,6 +763,47 @@ export default function NewPatientPage() {
               value={formData.lysoGb3 || ''}
               onChange={(e) => setFormData({ ...formData, lysoGb3: parseFloat(e.target.value) || undefined })}
             />
+          </div>
+        </div>
+
+        <div style={{ marginBottom: '2rem' }}>
+          <h2 style={{ 
+            fontSize: '1.125rem', 
+            fontWeight: 600, 
+            marginBottom: '1rem',
+            color: 'var(--text)'
+          }}>
+            {t('patients.consentTemplateSelection')}
+          </h2>
+
+          <div style={styles.consentSelectionContainer}>
+            <Input
+              label={t('patients.consentTemplateSearch')}
+              value={consentTemplateSearch}
+              onChange={(event) => setConsentTemplateSearch(event.target.value)}
+              placeholder={t('patients.consentTemplateSearchPlaceholder')}
+            />
+
+            <div style={styles.consentSelectionList}>
+              {filteredConsentPolicies.length === 0 ? (
+                <span style={{ color: 'var(--text-light)', fontSize: '0.875rem' }}>{t('patients.consentTemplateEmpty')}</span>
+              ) : (
+                filteredConsentPolicies.map((policy) => {
+                  const policyId = String(policy._id || `${policy.version}-${policy.title}`);
+                  const isChecked = selectedConsentTemplateId === policyId;
+                  return (
+                    <label key={policyId} style={styles.consentSelectionItem}>
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        onChange={() => setSelectedConsentTemplateId(isChecked ? '' : policyId)}
+                      />
+                      <span>{policy.version} - {policy.title} ({t('patients.caaeLabel')}: {policy.caae || '--'})</span>
+                    </label>
+                  );
+                })
+              )}
+            </div>
           </div>
         </div>
 
@@ -756,19 +933,19 @@ export default function NewPatientPage() {
       <Modal
         isOpen={isConsentModalOpen}
         onClose={() => setIsConsentModalOpen(false)}
-        title="Termo de Consentimento"
+        title={t('patients.consentModalTitle')}
       >
         <div style={styles.consentModalContent}>
           <div style={styles.consentHeader}>
             <div>
-              <h3 style={styles.consentModalTitle}>TCLE pronto para envio e assinatura</h3>
+              <h3 style={styles.consentModalTitle}>{t('patients.consentReadyTitle')}</h3>
               <p style={styles.consentModalText}>
                 {consentSent
-                  ? 'O termo foi enviado automaticamente ao paciente por email e SMS.'
-                  : 'Voce pode enviar o termo ao paciente e coletar a assinatura agora.'}
+                  ? t('patients.consentAutoSentMessage')
+                  : t('patients.consentCollectMessage')}
               </p>
               {formData.linkedProject && (
-                <p style={styles.consentProject}>Projeto selecionado: {formData.linkedProject}</p>
+                <p style={styles.consentProject}>{t('patients.selectedProjectLabel')}: {formData.linkedProject}</p>
               )}
             </div>
             <div style={styles.consentModalActions}>
@@ -778,19 +955,19 @@ export default function NewPatientPage() {
                 onClick={() => createdPatientId && sendConsentNotification(createdPatientId)}
                 disabled={!createdPatientId || sendingConsent}
               >
-                {sendingConsent ? 'Enviando...' : 'Reenviar TCLE (Email + SMS)'}
+                {sendingConsent ? t('patients.sendingConsent') : t('patients.resendConsent')}
               </Button>
               <Button
                 type="button"
                 variant="secondary"
                 onClick={() => setIsConsentModalOpen(false)}
               >
-                Fechar
+                {t('common.close')}
               </Button>
             </div>
           </div>
 
-          {consentLoading && <span>Carregando TCLE...</span>}
+          {consentLoading && <span>{t('patients.loadingConsent')}</span>}
           {consentError && <span style={styles.consentError}>{consentError}</span>}
 
           {consentTemplate && !consentLoading && (
@@ -815,7 +992,7 @@ export default function NewPatientPage() {
                         />
                         <span>
                           {permission.label}
-                          {isRequired && <span style={styles.consentRequired}> (Obrigatorio)</span>}
+                          {isRequired && <span style={styles.consentRequired}> ({t('patients.requiredTag')})</span>}
                         </span>
                       </label>
                     );
@@ -823,17 +1000,17 @@ export default function NewPatientPage() {
                 </div>
 
                 <Input
-                  label="Nome para assinatura"
+                  label={t('patients.signatureName')}
                   value={signatureName}
                   onChange={(event) => setSignatureName(event.target.value)}
-                  placeholder="Digite o nome completo"
+                  placeholder={t('patients.signatureNamePlaceholder')}
                 />
 
                 <SignaturePad
                   onConfirm={handleConfirmSignature}
                   onCancel={() => setIsConsentModalOpen(false)}
                   confirmDisabled={!canSubmitConsent}
-                  confirmLabel={isSubmittingConsent ? 'Salvando...' : 'Confirmar Assinatura'}
+                  confirmLabel={isSubmittingConsent ? t('patients.savingConsent') : t('patients.confirmSignature')}
                 />
               </div>
             </div>

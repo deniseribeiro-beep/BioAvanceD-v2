@@ -484,7 +484,7 @@ class PacienteController {
         });
       }
 
-      const { patientID } = req.body;
+      const patientID = String(req.body?.patientID || '').trim();
       if (!patientID) {
         return res.status(400).json({
           success: false,
@@ -554,7 +554,8 @@ class PacienteController {
         });
       }
 
-      const patientsCollection = db.collection('pacientes');
+      const { getCollection } = require('../utils/collectionResolver');
+      const patientsCollection = await getCollection(db, 'patients');
       const patient = await patientsCollection.findOne({ patientID });
 
       if (!patient) {

@@ -79,11 +79,16 @@ class FhirSyncService {
     const given = Array.isArray(primaryName?.given) ? primaryName.given.filter(Boolean) : [];
     const fullName = primaryName?.text || [given.join(' '), primaryName?.family].filter(Boolean).join(' ').trim();
     const profile = doc.clinicalProfile || {};
+    const telecom = Array.isArray(doc.telecom) ? doc.telecom : [];
+    const emailContact = telecom.find((entry) => entry?.system === 'email' && entry?.value);
+    const phoneContact = telecom.find((entry) => (entry?.system === 'phone' || entry?.system === 'sms') && entry?.value);
 
     return {
       _id: doc._id,
       patientID: doc.patientID,
       patientName: fullName || 'Paciente',
+      email: emailContact?.value || null,
+      phone: phoneContact?.value || null,
       sex: this.mapSexFromFhirGender(doc.gender),
       birthDate: doc.birthDate,
       recordNumber: doc.recordNumber,
@@ -347,6 +352,22 @@ class FhirSyncService {
     const family = names.length > 1 ? names[names.length - 1] : patientName;
     const given = names.length > 1 ? names.slice(0, -1) : [patientName || 'Paciente'];
 
+    const telecom = [];
+    if (patient?.email) {
+      telecom.push({
+        system: 'email',
+        value: String(patient.email),
+        use: 'home'
+      });
+    }
+    if (patient?.phone) {
+      telecom.push({
+        system: 'phone',
+        value: String(patient.phone),
+        use: 'mobile'
+      });
+    }
+
     return {
       resourceType: 'Patient',
       identifier: [
@@ -364,7 +385,7 @@ class FhirSyncService {
           given
         }
       ],
-      telecom: [],
+      telecom,
       gender: this.mapSexToFhirGender(patient.sex),
       birthDate: patient.birthDate ? new Date(patient.birthDate) : new Date('1970-01-01T00:00:00.000Z'),
       address: [],
@@ -604,7 +625,7 @@ class FhirSyncService {
 
     const patientSourceName = await resolveSourceCollectionName(db, 'patients');
     const patientsCollection = db.collection(patientSourceName);
-    const patientsCursor = patientsCollection.find({}, { projection: { _id: 1, patientID: 1, patientName: 1, sex: 1, birthDate: 1, recordNumber: 1, unitAcronym: 1, clinicalUnit: 1, diagnosticHypothesis: 1, icdCode: 1, hypertension: 1, obesity: 1, diabetesType1: 1, diabetesType2: 1, copd: 1, ckd: 1, asthma: 1, smoking: 1, alcoholUse: 1, antibioticUse: 1, antiviralUse: 1, insulinUse: 1, geneticVariant: 1, alphaGal: 1, lysoGb3: 1, status: 1 } });
+    const patientsCursor = patientsCollection.find({}, { projection: { _id: 1, patientID: 1, patientName: 1, email: 1, phone: 1, sex: 1, birthDate: 1, recordNumber: 1, unitAcronym: 1, clinicalUnit: 1, diagnosticHypothesis: 1, icdCode: 1, hypertension: 1, obesity: 1, diabetesType1: 1, diabetesType2: 1, copd: 1, ckd: 1, asthma: 1, smoking: 1, alcoholUse: 1, antibioticUse: 1, antiviralUse: 1, insulinUse: 1, geneticVariant: 1, alphaGal: 1, lysoGb3: 1, status: 1 } });
     if (limit > 0) patientsCursor.limit(limit);
     while (await patientsCursor.hasNext()) {
       const patient = await patientsCursor.next();

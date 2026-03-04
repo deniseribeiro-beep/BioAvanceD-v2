@@ -8,6 +8,7 @@ const SampleModel = require('../models/Sample');
 const patientService = require('./patient.service');
 const notificationService = require('./notification.service');
 const { generateUniquePatientID, validatePatientID, sanitizePatientForLogs } = require('../utils/patientAnonymization');
+const { getCollection } = require('../utils/collectionResolver');
 
 /**
  * Service de Importação LGPD
@@ -265,7 +266,8 @@ class ImportLGPDService {
   /**
    * Importa pacientes com geração automática de ID (LGPD)
    */
-  async importPatients(db, file) {
+  async importPatients(db, file, options = {}) {
+    const groupFields = options?.groupFields || {};
     const results = {
       total: 0,
       success: 0,
@@ -275,7 +277,7 @@ class ImportLGPDService {
 
     try {
       const rows = await this.readFile(file.path, file.originalname, 'patients');
-      const patientsCollection = db.collection('pacientes');
+      const patientsCollection = await getCollection(db, 'patients');
 
       // Verifica se o arquivo está vazio
       if (!rows || rows.length === 0) {
@@ -283,7 +285,7 @@ class ImportLGPDService {
       }
 
       // Campos obrigatórios para pacientes (sem patientID, pois será gerado)
-      const requiredFields = ['patientName', 'birthDate', 'sex'];
+      const requiredFields = ['patientName', 'birthDate', 'sex', 'email'];
       
       // Valida headers - verifica se há dados válidos
       if (rows.length === 0) {
@@ -343,8 +345,52 @@ class ImportLGPDService {
           // Parse dos dados do CSV/Excel
           const patientData = this.parsePatientRow(row);
 
+          if (!patientData.consentTemplateId && groupFields?.consentTemplateId) {
+            patientData.consentTemplateId = String(groupFields.consentTemplateId).trim();
+          }
+
           // Remove patientID se fornecido (será gerado automaticamente)
           delete patientData.patientID;
+                    if (!patientData.email || !PatientModel.isValidEmail(patientData.email)) {
+                      const receivedValue = row.email || 'não informado';
+                      results.errors.push({
+                        row: rowNumber,
+                        errors: [`Linha ${rowNumber}: Email (email) é obrigatório e deve ser válido. Valor recebido: "${receivedValue}"`],
+                        data: this.sanitizeRowForError(row)
+                      });
+                      continue;
+                    }
+
+                    if (!patientData.consentTemplateId) {
+                      results.errors.push({
+                        row: rowNumber,
+                        errors: [`Linha ${rowNumber}: Template de consentimento (consentTemplateId) é obrigatório para importação em lote`],
+                        data: this.sanitizeRowForError(row)
+                      });
+                      continue;
+                    }
+
+                    const { ObjectId } = require('mongodb');
+                    if (!ObjectId.isValid(patientData.consentTemplateId)) {
+                      results.errors.push({
+                        row: rowNumber,
+                        errors: [`Linha ${rowNumber}: consentTemplateId inválido`],
+                        data: this.sanitizeRowForError(row)
+                      });
+                      continue;
+                    }
+
+                    const consentTemplatesCollection = await getCollection(db, 'consentTemplates');
+                    const consentTemplateExists = await consentTemplatesCollection.findOne({ _id: new ObjectId(patientData.consentTemplateId) });
+                    if (!consentTemplateExists) {
+                      results.errors.push({
+                        row: rowNumber,
+                        errors: [`Linha ${rowNumber}: Template de consentimento não encontrado para consentTemplateId informado`],
+                        data: this.sanitizeRowForError(row)
+                      });
+                      continue;
+                    }
+
           
           // Remove campo height se existir (não deve ser salvo no banco)
           delete patientData.height;
@@ -437,7 +483,6 @@ class ImportLGPDService {
           }
 
           // Verifica duplicidade antes de inserir
-          const patientService = require('./patient.service');
           const duplicate = await patientService.checkDuplicatePatient(db, patientData);
           if (duplicate) {
             let birthDateStr = 'N/A';
@@ -550,7 +595,7 @@ class ImportLGPDService {
    * @param {Object} options - Opções de importação { startLocationID, autoIncrement }
    */
   async importSamples(db, file, options = {}) {
-    const { startLocationID = null, autoIncrement = false } = options;
+    const { startLocationID = null, autoIncrement = false, groupFields = {} } = options;
     const results = {
       total: 0,
       success: 0,
@@ -559,7 +604,7 @@ class ImportLGPDService {
 
     try {
       const rows = await this.readFile(file.path, file.originalname, 'samples');
-      const samplesCollection = db.collection('amostras');
+      const samplesCollection = await getCollection(db, 'samples');
 
       // Campos obrigatórios para amostras (incluindo patientID)
       const requiredFields = ['patientID', 'sampleType', 'sampleOrigin'];
@@ -580,6 +625,16 @@ class ImportLGPDService {
         try {
           // Parse dos dados do CSV/Excel
           const sampleData = this.parseSampleRow(row);
+
+          if (!sampleData.sampleType && groupFields?.sampleType) {
+            sampleData.sampleType = String(groupFields.sampleType).trim();
+          }
+          if (!sampleData.sampleOrigin && groupFields?.sampleOrigin) {
+            sampleData.sampleOrigin = String(groupFields.sampleOrigin).trim();
+          }
+          if (!sampleData.extractionProtocol && groupFields?.extractionProtocol) {
+            sampleData.extractionProtocol = String(groupFields.extractionProtocol).trim();
+          }
 
           // VALIDA ID DE PACIENTE (LGPD)
           if (!sampleData.patientID) {
@@ -603,7 +658,7 @@ class ImportLGPDService {
           }
 
           // Valida se o ID existe (sem expor dados sensíveis)
-          const patientExists = await validatePatientID(db, patientIDStr, 'pacientes');
+          const patientExists = await validatePatientID(db, patientIDStr);
           if (!patientExists) {
             results.errors.push({
               row: rowNumber,
@@ -896,6 +951,8 @@ class ImportLGPDService {
     
     return {
       patientName: row.patientName?.trim() || null,
+      email: row.email ? String(row.email).trim().toLowerCase() : null,
+      phone: row.phone ? String(row.phone).trim() : null,
       birthDate: birthDate,
       sex: sex,
       weight: this.parseFloatField(row.weight),
@@ -920,7 +977,8 @@ class ImportLGPDService {
       geneticVariant: row.geneticVariant?.trim() || null,
       alphaGal: this.parseFloatField(row.alphaGal),
       lysoGb3: this.parseFloatField(row.lysoGb3),
-      notes: row.notes?.trim() || null
+      notes: row.notes?.trim() || null,
+      consentTemplateId: row.consentTemplateId ? String(row.consentTemplateId).trim() : null
     };
   }
 

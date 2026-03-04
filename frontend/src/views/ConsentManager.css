@@ -80,6 +80,30 @@
 	margin-bottom: 0.875rem;
 }
 
+.consent-manager-history-filters {
+	margin: 1rem 0;
+}
+
+.consent-manager-history-checklist {
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	padding: 0.75rem;
+	max-height: 180px;
+	overflow-y: auto;
+	display: flex;
+	flex-direction: column;
+	gap: 0.5rem;
+	margin-bottom: 1rem;
+}
+
+.consent-manager-check-item {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	font-size: 0.85rem;
+	color: var(--text);
+}
+
 .consent-manager-section-title {
 	font-size: 1.1rem;
 	font-weight: 700;

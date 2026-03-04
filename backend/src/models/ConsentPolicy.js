@@ -17,6 +17,10 @@ class ConsentPolicyModel {
       errors.push('version é obrigatório e deve ser um texto válido');
     }
 
+    if (!data.caae || typeof data.caae !== 'string' || data.caae.trim().length === 0) {
+      errors.push('caae é obrigatório e deve ser um texto válido');
+    }
+
     if (!data.validFrom || Number.isNaN(new Date(data.validFrom).getTime())) {
       errors.push('validFrom é obrigatório e deve ser uma data válida');
     }
@@ -57,6 +61,7 @@ class ConsentPolicyModel {
       title: data.title.trim(),
       htmlContent: data.htmlContent.trim(),
       version: data.version.trim(),
+      caae: data.caae.trim(),
       validFrom: validFrom,
       active: data.active === undefined ? true : data.active,
       granularPermissions: Array.isArray(data.granularPermissions) ? data.granularPermissions : [],

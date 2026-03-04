@@ -10,6 +10,19 @@ const { getCollection } = require('../utils/collectionResolver');
  * RF005 - Cadastro de Paciente com Anonimização LGPD
  */
 class PatientService {
+  normalizeEmail(email) {
+    if (email === undefined || email === null) return null;
+    const normalized = String(email).trim().toLowerCase();
+    return normalized || null;
+  }
+
+  normalizePhone(phone) {
+    if (phone === undefined || phone === null) return null;
+    const digits = String(phone).replace(/\D/g, '').trim();
+    if (!digits) return null;
+    return digits;
+  }
+
   normalizeCpf(cpf) {
     if (cpf === undefined || cpf === null) return null;
     const normalized = String(cpf).replace(/\D/g, '').trim();
@@ -127,6 +140,27 @@ class PatientService {
 
   async createPatient(db, patientData) {
     try {
+      patientData.email = this.normalizeEmail(patientData.email);
+      patientData.phone = this.normalizePhone(patientData.phone);
+
+      if (!patientData.consentTemplateId || typeof patientData.consentTemplateId !== 'string') {
+        throw new Error('Template de consentimento (consentTemplateId) é obrigatório');
+      }
+
+      const consentTemplateId = patientData.consentTemplateId.trim();
+      const { ObjectId } = require('mongodb');
+      if (!ObjectId.isValid(consentTemplateId)) {
+        throw new Error('consentTemplateId inválido');
+      }
+
+      const consentTemplatesCollection = await getCollection(db, 'consentTemplates');
+      const templateExists = await consentTemplatesCollection.findOne({ _id: new ObjectId(consentTemplateId) });
+      if (!templateExists) {
+        throw new Error('Template de consentimento não encontrado');
+      }
+
+      patientData.consentTemplateId = consentTemplateId;
+
       const validation = PatientModel.validate(patientData);
       if (!validation.isValid) {
         throw new Error(validation.errors.join(', '));
@@ -394,6 +428,21 @@ class PatientService {
   async updatePatient(db, patientID, updateData) {
     try {
       const patientsCollection = await getCollection(db, 'patients');
+
+      if (updateData.email !== undefined) {
+        updateData.email = this.normalizeEmail(updateData.email);
+        if (!updateData.email || !PatientModel.isValidEmail(updateData.email)) {
+          throw new Error('Email (email) inválido');
+        }
+      }
+
+      if (updateData.phone !== undefined) {
+        const normalizedPhone = this.normalizePhone(updateData.phone);
+        if (updateData.phone !== null && updateData.phone !== '' && (!normalizedPhone || normalizedPhone.length < 10 || normalizedPhone.length > 15)) {
+          throw new Error('Telefone (phone) inválido. Informe de 10 a 15 dígitos');
+        }
+        updateData.phone = normalizedPhone;
+      }
       
       // Validação antes de atualizar
       if (updateData.patientID) {

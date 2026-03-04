@@ -31,6 +31,7 @@ class SampleWorker {
       const results = await importLGPDService.importSamples(db, file, {
         startLocationID: options.startLocationID,
         autoIncrement: options.autoIncrement,
+        groupFields: options.groupFields || {},
       });
 
       // Converte para FHIR e atualiza/insere

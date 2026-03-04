@@ -3,6 +3,20 @@
  * Baseado no Diagrama de Classes
  */
 class PatientModel {
+  static isValidEmail(email) {
+    if (!email || typeof email !== 'string') return false;
+    const normalized = email.trim().toLowerCase();
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized);
+  }
+
+  static normalizePhone(phone) {
+    if (phone === undefined || phone === null) return null;
+    const digits = String(phone).replace(/\D/g, '').trim();
+    if (!digits) return null;
+    if (digits.length < 10 || digits.length > 15) return null;
+    return digits;
+  }
+
   /**
    * Valida e estrutura os dados de um paciente
    */
@@ -32,6 +46,23 @@ class PatientModel {
     if (!data.sex || !['M', 'F', 'O'].includes(data.sex)) {
       const sexValue = data.sex ? `"${data.sex}"` : 'vazio';
       errors.push(`Sexo (sex) é obrigatório e deve ser M (Masculino), F (Feminino) ou O (Outro). Valor recebido: ${sexValue}`);
+    }
+
+    if (!data.consentTemplateId || typeof data.consentTemplateId !== 'string' || data.consentTemplateId.trim().length === 0) {
+      errors.push('Template de consentimento (consentTemplateId) é obrigatório');
+    }
+
+    if (!data.email || typeof data.email !== 'string' || data.email.trim().length === 0) {
+      errors.push('Email (email) é obrigatório');
+    } else if (!PatientModel.isValidEmail(data.email)) {
+      errors.push('Email (email) inválido');
+    }
+
+    if (data.phone !== undefined && data.phone !== null) {
+      const normalizedPhone = PatientModel.normalizePhone(data.phone);
+      if (!normalizedPhone) {
+        errors.push('Telefone (phone) inválido. Informe de 10 a 15 dígitos');
+      }
     }
 
     // recordNumber pode ser number, string ou null
@@ -168,10 +199,15 @@ class PatientModel {
     // Remove o campo height se existir (não deve ser salvo no banco)
     const patientData = { ...data };
     delete patientData.height;
+
+    const normalizedEmail = typeof patientData.email === 'string' ? patientData.email.trim().toLowerCase() : null;
+    const normalizedPhone = PatientModel.normalizePhone(patientData.phone);
     
     return {
       patientID: patientData.patientID || null,
       patientName: patientData.patientName,
+      email: normalizedEmail,
+      phone: normalizedPhone,
       birthDate: birthDate instanceof Date ? birthDate : new Date(birthDate),
       sex: patientData.sex,
       weight: patientData.weight || null,
@@ -198,6 +234,7 @@ class PatientModel {
       alphaGal: patientData.alphaGal || null, // Float U/mL - Resultado de α-Galactosidase
       lysoGb3: patientData.lysoGb3 || null, // Float ng/mL - Resultado de Lyso-Gb3
       notes: patientData.notes || null,
+      consentTemplateId: patientData.consentTemplateId || null,
       status: patientData.status || 'PENDING_CONSENT',
       consentToken: patientData.consentToken || null,
       consentTokenCreatedAt: patientData.consentTokenCreatedAt ? new Date(patientData.consentTokenCreatedAt) : null,

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Card from '../components/UI/Card';
 import Button from '../components/UI/Button';
@@ -7,7 +7,7 @@ import Spinner from '../components/UI/Spinner';
 import BarcodeLabel from '../components/BarcodeLabel';
 import { Upload, FileText, FileSpreadsheet, ArrowLeft, CheckCircle, XCircle, AlertCircle, Clock } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
-import { importLGPDService } from '../services/api';
+import { extractionProtocolService, importLGPDService, sampleOriginService, sampleTypeService } from '../services/api';
 import { useAsyncImport } from '../hooks/useAsyncImport';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useToast } from '../components/UI/ToastContainer';
@@ -15,7 +15,7 @@ import './ImportPage.css';
 
 export default function ImportPage() {
   const navigate = useNavigate();
-  const { t } = useLanguage();
+  const { t, language } = useLanguage();
   const { user } = useAuth();
   const { showToast } = useToast();
   const [patientFile, setPatientFile] = useState<File | null>(null);
@@ -40,6 +40,15 @@ export default function ImportPage() {
   const [loadingLabels, setLoadingLabels] = useState(false);
   const [labelsError, setLabelsError] = useState<string | null>(null);
   const [showOutcomeModal, setShowOutcomeModal] = useState(false);
+  const [isSampleGroupModalOpen, setIsSampleGroupModalOpen] = useState(false);
+  const [loadingSampleGroupFields, setLoadingSampleGroupFields] = useState(false);
+  const [sampleGroupSearch, setSampleGroupSearch] = useState('');
+  const [sampleTypeOptions, setSampleTypeOptions] = useState<string[]>([]);
+  const [sampleOriginOptions, setSampleOriginOptions] = useState<string[]>([]);
+  const [extractionProtocolOptions, setExtractionProtocolOptions] = useState<string[]>([]);
+  const [selectedSampleType, setSelectedSampleType] = useState('');
+  const [selectedSampleOrigin, setSelectedSampleOrigin] = useState('');
+  const [selectedExtractionProtocol, setSelectedExtractionProtocol] = useState('');
 
   const canImportPatients = user?.roleName === 'Administrador' || user?.roleName === 'Coordenador' || user?.accessType === 3 || user?.accessType === 4;
   const canImportSamples = user?.roleName === 'Administrador' || user?.roleName === 'Coordenador' || user?.roleName === 'Técnico' || user?.accessType === 2 || user?.accessType === 3 || user?.accessType === 4;
@@ -137,7 +146,90 @@ export default function ImportPage() {
     return locationFile;
   };
 
-  const handleImport = async (type: 'patients' | 'samples' | 'locations') => {
+  const extractOptionLabel = (entry: any): string => {
+    const candidates = [
+      entry?.name,
+      entry?.title,
+      entry?.description,
+      entry?.sampleType,
+      entry?.sampleOrigin,
+      entry?.extractionProtocol,
+      entry?.label,
+      entry?.value,
+      entry?.code,
+    ];
+
+    for (const candidate of candidates) {
+      if (typeof candidate === 'string' && candidate.trim()) {
+        return candidate.trim();
+      }
+    }
+
+    return '';
+  };
+
+  const filteredSampleTypeOptions = useMemo(() => {
+    const term = sampleGroupSearch.trim().toLowerCase();
+    if (!term) return sampleTypeOptions;
+    return sampleTypeOptions.filter((item) => item.toLowerCase().includes(term));
+  }, [sampleTypeOptions, sampleGroupSearch]);
+
+  const filteredSampleOriginOptions = useMemo(() => {
+    const term = sampleGroupSearch.trim().toLowerCase();
+    if (!term) return sampleOriginOptions;
+    return sampleOriginOptions.filter((item) => item.toLowerCase().includes(term));
+  }, [sampleOriginOptions, sampleGroupSearch]);
+
+  const filteredExtractionProtocolOptions = useMemo(() => {
+    const term = sampleGroupSearch.trim().toLowerCase();
+    if (!term) return extractionProtocolOptions;
+    return extractionProtocolOptions.filter((item) => item.toLowerCase().includes(term));
+  }, [extractionProtocolOptions, sampleGroupSearch]);
+
+  const loadSampleGroupFieldOptions = async () => {
+    setLoadingSampleGroupFields(true);
+    try {
+      const [sampleTypeResponse, sampleOriginResponse, extractionProtocolResponse] = await Promise.all([
+        sampleTypeService.getAll(),
+        sampleOriginService.getAll(),
+        extractionProtocolService.getAll(),
+      ]);
+
+      const sampleTypeData = (sampleTypeResponse as any)?.data?.data || (sampleTypeResponse as any)?.data || [];
+      const sampleOriginData = (sampleOriginResponse as any)?.data?.data || (sampleOriginResponse as any)?.data || [];
+      const extractionProtocolData = (extractionProtocolResponse as any)?.data?.data || (extractionProtocolResponse as any)?.data || [];
+
+      const normalize = (items: any[]) => Array.from(new Set((items || [])
+        .map((item) => extractOptionLabel(item))
+        .filter((value) => Boolean(value))
+      ));
+
+      setSampleTypeOptions(normalize(sampleTypeData));
+      setSampleOriginOptions(normalize(sampleOriginData));
+      setExtractionProtocolOptions(normalize(extractionProtocolData));
+    } catch (err: any) {
+      showToast(err?.message || t('import.groupFields.loadError'), 'error');
+      setSampleTypeOptions([]);
+      setSampleOriginOptions([]);
+      setExtractionProtocolOptions([]);
+    } finally {
+      setLoadingSampleGroupFields(false);
+    }
+  };
+
+  const openSampleGroupModal = async () => {
+    setSampleGroupSearch('');
+    setSelectedSampleType('');
+    setSelectedSampleOrigin('');
+    setSelectedExtractionProtocol('');
+    setIsSampleGroupModalOpen(true);
+    await loadSampleGroupFieldOptions();
+  };
+
+  const handleImport = async (
+    type: 'patients' | 'samples' | 'locations',
+    extraOptions?: { groupFields?: Record<string, any> }
+  ) => {
     const selectedFile = resolveFileByType(type);
     if (!selectedFile) {
       showToast(t('import.errors.noFileSelected'), 'error');
@@ -149,6 +241,7 @@ export default function ImportPage() {
 
     try {
       await importFile(selectedFile, type, {
+        groupFields: extraOptions?.groupFields,
         onCompleted: (job) => {
           // Sucesso - job já contém os resultados
           console.log('Importação concluída:', job);
@@ -163,6 +256,22 @@ export default function ImportPage() {
       console.error('Erro ao iniciar importação:', err);
       showToast(err?.message || t('import.errors.startError'), 'error');
     }
+  };
+
+  const confirmSampleImport = async () => {
+    if (!selectedSampleType || !selectedSampleOrigin || !selectedExtractionProtocol) {
+      showToast(t('import.groupFields.requiredSelection'), 'error');
+      return;
+    }
+
+    setIsSampleGroupModalOpen(false);
+    await handleImport('samples', {
+      groupFields: {
+        sampleType: selectedSampleType,
+        sampleOrigin: selectedSampleOrigin,
+        extractionProtocol: selectedExtractionProtocol,
+      },
+    });
   };
 
   const handleDownloadTemplate = async (type: 'patients' | 'samples', format: 'csv' | 'xlsx') => {
@@ -217,6 +326,12 @@ export default function ImportPage() {
     } finally {
       setLoadingLabels(false);
     }
+  };
+
+  const getImportButtonLabel = (key: string, en: string, es: string) => {
+    if (language === 'en-US') return en;
+    if (language === 'es-ES') return es;
+    return t(key);
   };
 
   return (
@@ -286,7 +401,7 @@ export default function ImportPage() {
               </div>
 
               <Button
-                onClick={() => handleImport('samples')}
+                onClick={() => openSampleGroupModal()}
                 disabled={!sampleFile || validating || creating || (isPolling && importType === 'samples')}
                 style={{ marginTop: '1rem', width: '100%' }}
               >
@@ -308,7 +423,7 @@ export default function ImportPage() {
                     {t('import.status.processingWithProgress').replace('{progress}', String(job.progress))}
                   </>
                 )}
-                {!validating && !creating && !(isPolling && importType === 'samples') && t('import.samples.import')}
+                {!validating && !creating && !(isPolling && importType === 'samples') && getImportButtonLabel('import.samples.import', 'Import Samples', 'Importar muestras')}
               </Button>
             </>
           )}
@@ -384,7 +499,7 @@ export default function ImportPage() {
                   disabled={loadingLabels}
                   title={t('import.labels.printTitle')}
                 >
-                  🖨️ {t('import.labels.printBatch')}
+                  🖨️ {getImportButtonLabel('import.labels.printBatch', 'Print Batch Labels', 'Imprimir etiquetas del lote')}
                 </Button>
                 {labelsError && <p className="label-print-error">{labelsError}</p>}
               </div>
@@ -438,7 +553,7 @@ export default function ImportPage() {
                 onClick={() => setShowOutcomeModal(true)}
                 style={{ marginLeft: '0.75rem' }}
               >
-                {t('import.validation.viewTechnicalDetails')}
+                {getImportButtonLabel('import.validation.viewTechnicalDetails', 'View Technical Details', 'Ver detalles técnicos')}
               </Button>
             )}
           </Card>
@@ -492,6 +607,103 @@ export default function ImportPage() {
             </pre>
           </Modal>
         )}
+
+        <Modal
+          isOpen={isSampleGroupModalOpen}
+          onClose={() => setIsSampleGroupModalOpen(false)}
+          title={t('import.groupFields.title')}
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+            <p style={{ margin: 0, color: 'var(--text-light)', fontSize: '0.9rem' }}>
+              {t('import.groupFields.subtitle')}
+            </p>
+
+            <input
+              type="text"
+              value={sampleGroupSearch}
+              onChange={(event) => setSampleGroupSearch(event.target.value)}
+              placeholder={t('import.groupFields.searchPlaceholder')}
+              style={{
+                width: '100%',
+                padding: '0.5rem',
+                border: '1px solid var(--border)',
+                borderRadius: '6px',
+                fontSize: '0.875rem',
+                backgroundColor: 'var(--surface)',
+                color: 'var(--text)'
+              }}
+            />
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '0.75rem' }}>
+              <div>
+                <label style={{ display: 'block', marginBottom: '0.25rem', fontWeight: 600 }}>
+                  {t('import.groupFields.sampleType')}
+                </label>
+                <select
+                  value={selectedSampleType}
+                  onChange={(event) => setSelectedSampleType(event.target.value)}
+                  disabled={loadingSampleGroupFields}
+                  title={t('import.groupFields.sampleType')}
+                  style={{ width: '100%', padding: '0.5rem', borderRadius: '6px', border: '1px solid var(--border)' }}
+                >
+                  <option value="">{t('common.select')}</option>
+                  {filteredSampleTypeOptions.map((option) => (
+                    <option key={option} value={option}>{option}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label style={{ display: 'block', marginBottom: '0.25rem', fontWeight: 600 }}>
+                  {t('import.groupFields.sampleOrigin')}
+                </label>
+                <select
+                  value={selectedSampleOrigin}
+                  onChange={(event) => setSelectedSampleOrigin(event.target.value)}
+                  disabled={loadingSampleGroupFields}
+                  title={t('import.groupFields.sampleOrigin')}
+                  style={{ width: '100%', padding: '0.5rem', borderRadius: '6px', border: '1px solid var(--border)' }}
+                >
+                  <option value="">{t('common.select')}</option>
+                  {filteredSampleOriginOptions.map((option) => (
+                    <option key={option} value={option}>{option}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label style={{ display: 'block', marginBottom: '0.25rem', fontWeight: 600 }}>
+                  {t('import.groupFields.extractionProtocol')}
+                </label>
+                <select
+                  value={selectedExtractionProtocol}
+                  onChange={(event) => setSelectedExtractionProtocol(event.target.value)}
+                  disabled={loadingSampleGroupFields}
+                  title={t('import.groupFields.extractionProtocol')}
+                  style={{ width: '100%', padding: '0.5rem', borderRadius: '6px', border: '1px solid var(--border)' }}
+                >
+                  <option value="">{t('common.select')}</option>
+                  {filteredExtractionProtocolOptions.map((option) => (
+                    <option key={option} value={option}>{option}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
+              <Button type="button" variant="secondary" onClick={() => setIsSampleGroupModalOpen(false)}>
+                {t('common.cancel')}
+              </Button>
+              <Button
+                type="button"
+                onClick={confirmSampleImport}
+                disabled={loadingSampleGroupFields || !selectedSampleType || !selectedSampleOrigin || !selectedExtractionProtocol}
+              >
+                {getImportButtonLabel('import.groupFields.confirmImport', 'Confirm and import', 'Confirmar e importar')}
+              </Button>
+            </div>
+          </div>
+        </Modal>
       </div>
     </div>
   );

@@ -146,6 +146,7 @@ class ImportAsyncController {
       }
 
       const { dataType, startLocationID, autoIncrement } = req.body;
+      let parsedGroupFields = {};
       const file = req.file;
 
       if (!file) {
@@ -163,6 +164,21 @@ class ImportAsyncController {
         });
       }
 
+      if (req.body.groupFields) {
+        try {
+          parsedGroupFields = typeof req.body.groupFields === 'string'
+            ? JSON.parse(req.body.groupFields)
+            : req.body.groupFields;
+        } catch (groupFieldsError) {
+          importAsyncService.cleanupFile(file.path);
+          return res.status(400).json({
+            success: false,
+            error: 'Formato inválido para groupFields. Use JSON válido.',
+            message: groupFieldsError.message
+          });
+        }
+      }
+
       const userID = req.user?.userID || req.user?._id?.toString() || null;
 
       // Cria job na fila
@@ -174,6 +190,7 @@ class ImportAsyncController {
         {
           startLocationID: startLocationID ? parseInt(startLocationID) : null,
           autoIncrement: autoIncrement === 'true' || autoIncrement === true,
+          groupFields: parsedGroupFields,
           fileName: file.originalname,
         }
       );
