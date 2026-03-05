@@ -22,10 +22,16 @@ export interface Patient {
   recordNumber: string; // Alterado para string conforme especificação
   
   // 6. UNIDADE - Caractere - Unidade de tratamento
+  clinicalUnitId?: string;
   clinicalUnit?: string;
   
   // 7. UNIDADE_SIGLA - Caractere - Sigla da unidade
   unitAcronym?: string;
+
+  isDeceased?: boolean;
+  representativeName?: string;
+  representativeCpf?: string;
+  representativePhone?: string;
   
   // 8. SEXO - Caractere - Sexo do paciente (Masculino/Feminino)
   sex: string; // 'Masculino' | 'Feminino'
@@ -35,6 +41,12 @@ export interface Patient {
   
   // 10. CID - Caractere - Classificação Internacional de Doenças (CID-11)
   icdCode?: string; // Alterado para string conforme especificação
+  icdReference?: {
+    cidId?: string;
+    Codigo_Tabulacao?: string;
+    Codigos_CID10?: string;
+    Descricao?: string;
+  } | null;
   
   // 11. PESO - Numérico - Peso do paciente em quilos
   weight?: number;
@@ -80,6 +92,14 @@ export interface Patient {
   linkedProject?: string;
   createdAt?: Date | string;
   updatedAt?: Date | string;
+}
+
+export interface CidEntry {
+  _id?: string;
+  Capitulo?: string | null;
+  Codigo_Tabulacao: string;
+  Descricao: string;
+  Codigos_CID10: string;
 }
 
 export interface Sample {
@@ -195,6 +215,7 @@ export interface ConsentTemplate {
   permissions: ConsentPermission[];
   granularPermissions?: ConsentPolicyPermission[];
   validFrom?: Date | string;
+  validTo?: Date | string;
   createdAt?: Date | string;
 }
 
@@ -206,7 +227,10 @@ export interface ConsentPolicy {
   active: boolean;
   htmlContent: string;
   validFrom: Date | string;
+  validTo: Date | string;
   granularPermissions: ConsentPolicyPermission[];
+  revisionType?: 'create' | 'update';
+  previousPolicyId?: string | null;
   createdAt?: Date | string;
   updatedAt?: Date | string;
 }
@@ -255,6 +279,16 @@ export interface Location {
   box: number;
   eppendorfWell?: string; // Campo do frontend (string)
   wellPosition?: string; // Campo do backend (string) - posição do eppendorf
+}
+
+export interface ClinicalUnit {
+  _id?: string;
+  name: string;
+  normalizedName?: string;
+  acronym?: string | null;
+  active?: boolean;
+  createdAt?: Date | string;
+  updatedAt?: Date | string;
 }
 
 export interface User {

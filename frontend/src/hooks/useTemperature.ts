@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Temperature } from '../types/models';
 import { temperatureService } from '../services/api';
+import { onClientLogout } from '../utils/sessionCleanup';
 
 interface ApiLikeError {
   message?: string;
@@ -55,6 +56,14 @@ export function useTemperature() {
       setTemperatures([]);
       setError(null);
     }
+  }, []);
+
+  useEffect(() => {
+    return onClientLogout(() => {
+      setTemperatures([]);
+      setError(null);
+      setLoading(false);
+    });
   }, []);
 
   const loadTemperatures = async () => {

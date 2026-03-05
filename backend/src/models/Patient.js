@@ -85,6 +85,36 @@ class PatientModel {
       errors.push('clinicalUnit deve ser string');
     }
 
+    if (data.clinicalUnitId !== undefined && data.clinicalUnitId !== null && typeof data.clinicalUnitId !== 'string') {
+      errors.push('clinicalUnitId deve ser string');
+    }
+
+    if (data.isDeceased !== undefined && data.isDeceased !== null && typeof data.isDeceased !== 'boolean') {
+      errors.push('isDeceased deve ser boolean');
+    }
+
+    if (data.representativeName !== undefined && data.representativeName !== null && typeof data.representativeName !== 'string') {
+      errors.push('representativeName deve ser string');
+    }
+
+    if (data.representativeCpf !== undefined && data.representativeCpf !== null) {
+      if (typeof data.representativeCpf !== 'string' && typeof data.representativeCpf !== 'number') {
+        errors.push('representativeCpf deve ser texto ou número');
+      } else {
+        const normalizedRepresentativeCpf = String(data.representativeCpf).replace(/\D/g, '');
+        if (normalizedRepresentativeCpf.length > 0 && normalizedRepresentativeCpf.length !== 11) {
+          errors.push('representativeCpf deve conter 11 dígitos');
+        }
+      }
+    }
+
+    if (data.representativePhone !== undefined && data.representativePhone !== null) {
+      const normalizedRepresentativePhone = PatientModel.normalizePhone(data.representativePhone);
+      if (!normalizedRepresentativePhone) {
+        errors.push('representativePhone inválido. Informe de 10 a 15 dígitos');
+      }
+    }
+
     // Validações numéricas
     if (data.weight !== undefined && data.weight !== null) {
       if (typeof data.weight !== 'number') {
@@ -214,8 +244,13 @@ class PatientModel {
       heightCm: heightCm,
       recordNumber: patientData.recordNumber || null,
       cpf: patientData.cpf || null,
+      clinicalUnitId: patientData.clinicalUnitId || null,
       clinicalUnit: patientData.clinicalUnit || null,
       unitAcronym: patientData.unitAcronym || null,
+      isDeceased: Boolean(patientData.isDeceased),
+      representativeName: patientData.representativeName || null,
+      representativeCpf: patientData.representativeCpf || null,
+      representativePhone: PatientModel.normalizePhone(patientData.representativePhone),
       diagnosticHypothesis: patientData.diagnosticHypothesis || null,
       icdCode: patientData.icdCode || null, // String conforme dicionário
       hypertension: patientData.hypertension || false,
@@ -260,21 +295,21 @@ class PatientModel {
   static fillAcronym(clinicalUnit) {
     if (!clinicalUnit) return null;
 
-    const map = {
-      'Cardiologia': 'CARDIO',
-      'Oncologia': 'ONCO',
-      'Genética': 'GEN'
-    };
+    const stopWords = new Set(['DE', 'DA', 'DO', 'DAS', 'DOS', 'E', 'OF', 'THE', 'DEL', 'LA', 'EL', 'Y']);
+    const normalized = String(clinicalUnit)
+      .trim()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toUpperCase();
 
-    const normalized = clinicalUnit.trim();
-    const mapped = map[normalized];
+    if (!normalized) return null;
 
-    if (mapped) {
-      return mapped.toUpperCase();
-    }
+    const words = normalized.split(/\s+/).filter(Boolean);
+    const relevantWords = words.filter((word) => !stopWords.has(word));
+    const source = relevantWords.length > 0 ? relevantWords : words;
 
-    const fallback = normalized.replace(/\s+/g, '').substring(0, 3);
-    return fallback.toUpperCase();
+    const initials = source.map((word) => word[0]).join('').slice(0, 6);
+    return initials || null;
   }
 }
 

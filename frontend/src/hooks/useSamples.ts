@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Sample, Result } from '../types/models';
 import { samplesApi } from '../services/samples/samplesApi';
+import { onClientLogout } from '../utils/sessionCleanup';
 
 interface ApiLikeError {
   message?: string;
@@ -67,6 +68,14 @@ export function useSamples() {
   useEffect(() => {
     loadSamples();
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    return onClientLogout(() => {
+      setSamples([]);
+      setError(null);
+      setLoading(false);
+    });
   }, []);
 
   const getSampleResults = async (sampleID: number): Promise<Result[]> => {

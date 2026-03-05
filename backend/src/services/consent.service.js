@@ -42,16 +42,18 @@ const consentTemplateSchema = {
 
 const consentPolicySchema = {
   type: 'object',
-  required: ['title', 'htmlContent', 'version', 'caae', 'validFrom', 'granularPermissions'],
+  required: ['title', 'htmlContent', 'version', 'caae', 'validFrom', 'validTo', 'granularPermissions'],
   properties: {
     title: { type: 'string', minLength: 1 },
     htmlContent: { type: 'string', minLength: 1 },
     version: { type: 'string', minLength: 1 },
     caae: { type: 'string', minLength: 1 },
     validFrom: { type: 'string', format: 'date-time' },
+    validTo: { type: 'string', format: 'date-time' },
     active: { type: 'boolean' },
     granularPermissions: {
       type: 'array',
+      minItems: 1,
       items: {
         type: 'object',
         required: ['key', 'label'],
@@ -93,6 +95,28 @@ const validatePolicySchema = ajv.compile(consentPolicySchema);
 const validatePatientConsentSchema = ajv.compile(patientConsentSchema);
 
 class ConsentService {
+  parseVersionNumber(version) {
+    const value = String(version || '').trim().toLowerCase();
+    const match = value.match(/^v?(\d+)$/);
+    return match ? Number(match[1]) : 0;
+  }
+
+  async generateNextPolicyVersion(db) {
+    const templatesCollection = await getCollection(db, 'consentTemplates');
+    const latestPolicies = await templatesCollection
+      .find({}, { projection: { version: 1 } })
+      .sort({ createdAt: -1, _id: -1 })
+      .limit(200)
+      .toArray();
+
+    const maxVersion = latestPolicies.reduce((max, item) => {
+      const current = this.parseVersionNumber(item?.version);
+      return current > max ? current : max;
+    }, 0);
+
+    return `v${maxVersion + 1}`;
+  }
+
   normalizeSignaturePayload(payload) {
     const signatureName = typeof payload.signatureName === 'string' ? payload.signatureName.trim() : '';
     const signatureImageBase64 = typeof payload.signatureImageBase64 === 'string' ? payload.signatureImageBase64.trim() : '';
@@ -232,15 +256,29 @@ class ConsentService {
     }
   }
 
-  async createPolicy(db, payload) {
+  async createPolicy(db, payload, options = {}) {
     try {
+      const previousPolicyId = options?.previousPolicyId ? String(options.previousPolicyId).trim() : '';
+      const nextVersion = await this.generateNextPolicyVersion(db);
+
       const normalizedPayload = {
         ...payload,
         htmlContent: payload.htmlContent || payload.content,
         caae: typeof payload.caae === 'string' ? payload.caae.trim() : payload.caae,
         validFrom: payload.validFrom || new Date().toISOString(),
+        validTo: payload.validTo,
+        version: nextVersion,
         granularPermissions: payload.granularPermissions || payload.permissions || []
       };
+
+      const validFromDate = new Date(normalizedPayload.validFrom);
+      const validToDate = new Date(normalizedPayload.validTo);
+      if (Number.isNaN(validFromDate.getTime()) || Number.isNaN(validToDate.getTime())) {
+        throw new Error('Período de vigência inválido');
+      }
+      if (validToDate.getTime() < validFromDate.getTime()) {
+        throw new Error('Data final de vigência deve ser maior ou igual à data inicial');
+      }
 
       this.validatePolicyPayload(normalizedPayload);
 
@@ -260,6 +298,20 @@ class ConsentService {
 
       const templatesCollection = await getCollection(db, 'consentTemplates');
 
+      if (previousPolicyId) {
+        let previousObjectId;
+        try {
+          previousObjectId = new ObjectId(previousPolicyId);
+        } catch {
+          throw new Error('ID do TCLE para atualização é inválido');
+        }
+
+        const previousPolicy = await templatesCollection.findOne({ _id: previousObjectId });
+        if (!previousPolicy) {
+          throw new Error('TCLE anterior não encontrado para atualização');
+        }
+      }
+
       if (normalizedPayload.active === undefined || normalizedPayload.active === true) {
         await templatesCollection.updateMany({ active: true }, { $set: { active: false, updatedAt: new Date() } });
       }
@@ -271,11 +323,14 @@ class ConsentService {
 
       const document = {
         ...policy,
+        previousPolicyId: previousPolicyId || null,
         content: policy.htmlContent,
         permissions: permissions,
         htmlContent: policy.htmlContent,
         caae: policy.caae,
-        granularPermissions: permissions
+        granularPermissions: permissions,
+        validTo: policy.validTo,
+        revisionType: previousPolicyId ? 'update' : 'create'
       };
 
       const result = await templatesCollection.insertOne(document);
@@ -319,6 +374,72 @@ class ConsentService {
       .toArray();
   }
 
+  async getPoliciesHistory(db, options = {}) {
+    const templatesCollection = await getCollection(db, 'consentTemplates');
+    const page = Math.max(1, Number(options.page) || 1);
+    const limit = Math.max(1, Math.min(100, Number(options.limit) || 10));
+    const skip = (page - 1) * limit;
+    const search = String(options.search || '').trim();
+
+    const filter = {};
+    if (search) {
+      const escaped = search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const regex = new RegExp(escaped, 'i');
+      const normalized = search.toLowerCase();
+
+      const statusFilter = normalized === 'ativo' || normalized === 'active'
+        ? { active: true }
+        : normalized === 'inativo' || normalized === 'inactive'
+          ? { active: false }
+          : null;
+
+      const searchOr = [
+        { title: { $regex: regex } },
+        { version: { $regex: regex } },
+        { caae: { $regex: regex } },
+        { htmlContent: { $regex: regex } },
+        { 'granularPermissions.key': { $regex: regex } },
+        { 'granularPermissions.label': { $regex: regex } }
+      ];
+
+      if (statusFilter) {
+        filter.$and = [statusFilter, { $or: searchOr }];
+      } else {
+        filter.$or = searchOr;
+      }
+    }
+
+    const [items, total] = await Promise.all([
+      templatesCollection.find(filter).sort({ createdAt: -1, _id: -1 }).skip(skip).limit(limit).toArray(),
+      templatesCollection.countDocuments(filter)
+    ]);
+
+    return {
+      items,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / limit))
+      }
+    };
+  }
+
+  async updatePolicy(db, policyId, payload) {
+    return this.createPolicy(db, payload, { previousPolicyId: policyId });
+  }
+
+  async getActivePoliciesWithCaae(db) {
+    const templatesCollection = await getCollection(db, 'consentTemplates');
+    return templatesCollection
+      .find({
+        active: true,
+        caae: { $exists: true, $nin: ['', null] }
+      })
+      .sort({ createdAt: -1 })
+      .toArray();
+  }
+
   async createPatientConsent(db, payload) {
     try {
       const normalizedSignature = this.normalizeSignaturePayload(payload);
@@ -355,6 +476,18 @@ class ConsentService {
 
       if (!template.active) {
         throw new Error('Template de consentimento não está ativo');
+      }
+
+      const now = new Date();
+      const validFrom = template.validFrom ? new Date(template.validFrom) : null;
+      const validTo = template.validTo ? new Date(template.validTo) : null;
+
+      if (validFrom && !Number.isNaN(validFrom.getTime()) && now.getTime() < validFrom.getTime()) {
+        throw new Error('Template de consentimento ainda não está vigente');
+      }
+
+      if (validTo && !Number.isNaN(validTo.getTime()) && now.getTime() > validTo.getTime()) {
+        throw new Error('Template de consentimento expirado');
       }
 
       this.validateResponsesAgainstTemplate(template, normalizedPayload.responses || {});

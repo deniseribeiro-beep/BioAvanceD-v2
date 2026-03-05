@@ -447,15 +447,6 @@ function LocationsSection() {
             link.click();
             link.remove();
           }}>Baixar Template CSV</Button>
-          <Button variant="secondary" onClick={() => {
-            const url = '/import-templates/locations-template.xlsx';
-            const link = document.createElement('a');
-            link.href = url;
-            link.setAttribute('download', 'locations-template.xlsx');
-            document.body.appendChild(link);
-            link.click();
-            link.remove();
-          }}>Baixar Template Excel</Button>
         </div>
         <div className="import-upload" style={{ border: '1px dashed #ccc', padding: 16, borderRadius: 8, marginBottom: 16 }}>
           <input type="file" accept=".csv, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={e => {

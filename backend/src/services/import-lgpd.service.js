@@ -16,6 +16,57 @@ const { getCollection } = require('../utils/collectionResolver');
  * com total conformidade com anonimização LGPD
  */
 class ImportLGPDService {
+  getPatientsSmartImportMetadata() {
+    return {
+      acceptedExtensions: ['csv', 'xlsx', 'txt'],
+      invalidRowPolicy: {
+        code: 'SKIP_INVALID_ROWS',
+        message: 'Linhas inválidas não são salvas no sistema durante a importação em lote.'
+      },
+      requiredMapping: true,
+      requiredFields: [
+        {
+          field: 'patientName',
+          label: 'Nome do paciente',
+          description: 'Nome completo do paciente.'
+        },
+        {
+          field: 'birthDate',
+          label: 'Data de nascimento',
+          description: 'Formato aceito: DD/MM/AAAA ou AAAA-MM-DD.'
+        },
+        {
+          field: 'sex',
+          label: 'Sexo',
+          description: 'Valores aceitos: M, F ou O.'
+        },
+        {
+          field: 'email',
+          label: 'Email',
+          description: 'Email válido para envio de TCLE e notificações.'
+        },
+        {
+          field: 'consentTemplateId',
+          label: 'Template de consentimento (TCLE)',
+          description: 'Selecione um TCLE existente no próprio sistema para aplicar na importação em lote.'
+        }
+      ],
+      conditionalRules: [
+        {
+          when: 'isDeceased = true',
+          requiredFields: ['representativeName', 'representativeEmail'],
+          message: 'Para paciente falecido, nome e email do responsável são obrigatórios.'
+        }
+      ],
+      optionalButValidatedFields: [
+        {
+          field: 'cpf',
+          message: 'Quando informado, deve conter CPF válido.'
+        }
+      ]
+    };
+  }
+
   /**
    * Valida formato do arquivo
    */
@@ -24,12 +75,12 @@ class ImportLGPDService {
     const mimeType = file.mimetype;
 
     const validExtensions = {
-      'patients': ['.csv', '.xlsx'],
+      'patients': ['.csv', '.txt', '.xlsx'],
       'samples': ['.csv', '.xlsx']
     };
 
     const validMimeTypes = {
-      'patients': ['text/csv', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
+      'patients': ['text/csv', 'text/plain', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
       'samples': ['text/csv', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet']
     };
 
@@ -47,10 +98,27 @@ class ImportLGPDService {
       if (!fs.existsSync(filePath)) {
         return reject(new Error('Arquivo não encontrado'));
       }
+
+      const fileContent = fs.readFileSync(filePath, 'utf8');
+      const firstNonEmptyLine = fileContent
+        .split(/\r?\n/)
+        .find((line) => String(line || '').trim().length > 0) || '';
+
+      const delimiters = [',', ';', '\t', '|'];
+      let separator = ',';
+      let separatorScore = -1;
+      for (const candidate of delimiters) {
+        const count = (firstNonEmptyLine.match(new RegExp(`\\${candidate}`, 'g')) || []).length;
+        if (count > separatorScore) {
+          separatorScore = count;
+          separator = candidate;
+        }
+      }
       
       const rows = [];
       fs.createReadStream(filePath)
         .pipe(csv({
+          separator,
           skipEmptyLines: true,
           skipLinesWithError: false
         }))
@@ -254,7 +322,7 @@ class ImportLGPDService {
   async readFile(filePath, originalName, dataType = 'patients') {
     const ext = path.extname(originalName).toLowerCase();
     
-    if (ext === '.csv') {
+    if (ext === '.csv' || ext === '.txt') {
       return await this.readCSV(filePath);
     } else if (ext === '.xlsx') {
       return await this.readExcel(filePath, dataType);
@@ -1012,6 +1080,314 @@ class ImportLGPDService {
       linkedProject: row.linkedProject?.trim() || null,
       currentStatus: row.currentStatus?.trim() || 'Available'
     };
+  }
+
+  normalizeText(value, { uppercase = false } = {}) {
+    if (value === undefined || value === null) return null;
+    const normalized = String(value).trim();
+    if (!normalized) return null;
+    return uppercase ? normalized.toUpperCase() : normalized;
+  }
+
+  normalizeCpf(value) {
+    if (value === undefined || value === null) return null;
+    const digits = String(value).replace(/\D/g, '').trim();
+    return digits || null;
+  }
+
+  isValidCpf(value) {
+    const cpf = this.normalizeCpf(value);
+    if (!cpf || cpf.length !== 11) return false;
+    if (/^(\d)\1{10}$/.test(cpf)) return false;
+
+    const calcDigit = (base, factor) => {
+      let total = 0;
+      for (let i = 0; i < base.length; i += 1) {
+        total += parseInt(base[i], 10) * (factor - i);
+      }
+      const remainder = total % 11;
+      return remainder < 2 ? 0 : 11 - remainder;
+    };
+
+    const d1 = calcDigit(cpf.slice(0, 9), 10);
+    const d2 = calcDigit(cpf.slice(0, 9) + d1, 11);
+    return cpf === `${cpf.slice(0, 9)}${d1}${d2}`;
+  }
+
+  isFutureDate(date) {
+    if (!(date instanceof Date) || Number.isNaN(date.getTime())) return false;
+    const today = new Date();
+    const normalizedToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+    const normalizedDate = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+    return normalizedDate.getTime() > normalizedToday.getTime();
+  }
+
+  buildMappedPatientRow(rawRow, mapping = {}) {
+    const mapped = {};
+    Object.keys(mapping || {}).forEach((sourceColumn) => {
+      const targetField = mapping[sourceColumn];
+      if (!targetField) return;
+      mapped[targetField] = rawRow[sourceColumn];
+    });
+
+    const knownPatientFields = new Set([
+      'patientName',
+      'email',
+      'cpf',
+      'birthDate',
+      'sex',
+      'phone',
+      'recordNumber',
+      'clinicalUnit',
+      'unitAcronym',
+      'diagnosticHypothesis',
+      'icdCode',
+      'weight',
+      'heightCm',
+      'height',
+      'hypertension',
+      'obesity',
+      'diabetesType1',
+      'diabetesType2',
+      'copd',
+      'ckd',
+      'smoking',
+      'alcoholUse',
+      'asthma',
+      'antibioticUse',
+      'insulinUse',
+      'antiviralUse',
+      'geneticVariant',
+      'alphaGal',
+      'lysoGb3',
+      'notes',
+      'isDeceased',
+      'representativeName',
+      'representativeEmail',
+      'representativeCpf',
+      'consentTemplateId'
+    ]);
+
+    const canonicalHeaderMap = {
+      patientname: 'patientName',
+      nomepaciente: 'patientName',
+      name: 'patientName',
+      email: 'email',
+      cpf: 'cpf',
+      birthdate: 'birthDate',
+      datanascimento: 'birthDate',
+      sex: 'sex',
+      sexo: 'sex',
+      phone: 'phone',
+      telefone: 'phone',
+      celular: 'phone',
+      recordnumber: 'recordNumber',
+      prontuario: 'recordNumber',
+      clinicalunit: 'clinicalUnit',
+      unidadeclinica: 'clinicalUnit',
+      unitacronym: 'unitAcronym',
+      siglaunidade: 'unitAcronym',
+      diagnostichypothesis: 'diagnosticHypothesis',
+      icdcode: 'icdCode',
+      weight: 'weight',
+      heightcm: 'heightCm',
+      height: 'height',
+      hypertension: 'hypertension',
+      obesity: 'obesity',
+      diabetestype1: 'diabetesType1',
+      diabetestype2: 'diabetesType2',
+      copd: 'copd',
+      ckd: 'ckd',
+      smoking: 'smoking',
+      alcoholuse: 'alcoholUse',
+      asthma: 'asthma',
+      antibioticuse: 'antibioticUse',
+      insulinuse: 'insulinUse',
+      antiviraluse: 'antiviralUse',
+      geneticvariant: 'geneticVariant',
+      alphagal: 'alphaGal',
+      lysogb3: 'lysoGb3',
+      notes: 'notes',
+      isdeceased: 'isDeceased',
+      falecido: 'isDeceased',
+      representativename: 'representativeName',
+      responsavelnome: 'representativeName',
+      representativeemail: 'representativeEmail',
+      responsavelemail: 'representativeEmail',
+      representativecpf: 'representativeCpf',
+      responsavelcpf: 'representativeCpf',
+      consenttemplateid: 'consentTemplateId'
+    };
+
+    const hasValue = (value) => value !== undefined && value !== null && String(value).trim() !== '';
+
+    Object.keys(rawRow || {}).forEach((sourceColumn) => {
+      const rawValue = rawRow[sourceColumn];
+      if (!hasValue(rawValue)) return;
+
+      const trimmedSource = String(sourceColumn || '').trim();
+      if (!trimmedSource) return;
+
+      if (knownPatientFields.has(trimmedSource) && !hasValue(mapped[trimmedSource])) {
+        mapped[trimmedSource] = rawValue;
+      }
+
+      const normalizedSource = trimmedSource
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .replace(/[^a-z0-9]/g, '');
+
+      const canonicalTarget = canonicalHeaderMap[normalizedSource];
+      if (canonicalTarget && !hasValue(mapped[canonicalTarget])) {
+        mapped[canonicalTarget] = rawValue;
+      }
+    });
+
+    if (mapped.responsavelNome && !mapped.representativeName) {
+      mapped.representativeName = mapped.responsavelNome;
+    }
+    if (mapped.responsavelEmail && !mapped.representativeEmail) {
+      mapped.representativeEmail = mapped.responsavelEmail;
+    }
+
+    return mapped;
+  }
+
+  async importPatientsSmart(db, file, options = {}) {
+    const groupFields = options?.groupFields || {};
+    const mapping = options?.mapping || {};
+
+    if (!mapping || Object.keys(mapping).length === 0) {
+      throw new Error('Mapeamento inteligente é obrigatório para importação em lote');
+    }
+
+    const results = {
+      total: 0,
+      success: 0,
+      errors: []
+    };
+
+    const rows = await this.readFile(file.path, file.originalname, 'patients');
+    const patientsCollection = await getCollection(db, 'patients');
+    const { ObjectId } = require('mongodb');
+
+    for (let i = 0; i < rows.length; i += 1) {
+      const rawRow = rows[i];
+      const rowNumber = i + 2;
+      results.total += 1;
+
+      try {
+        const mappedRow = this.buildMappedPatientRow(rawRow, mapping);
+        const patientData = this.parsePatientRow(mappedRow);
+
+        patientData.patientName = this.normalizeText(patientData.patientName, { uppercase: true });
+        patientData.clinicalUnit = this.normalizeText(patientData.clinicalUnit, { uppercase: true });
+        if (patientData.clinicalUnit) {
+          patientData.unitAcronym = PatientModel.fillAcronym(patientData.clinicalUnit);
+        }
+
+        patientData.cpf = this.normalizeCpf(mappedRow.cpf ?? mappedRow.documento ?? mappedRow.CPF);
+        patientData.isDeceased = this.parseBoolean(mappedRow.isDeceased);
+        patientData.representativeName = this.normalizeText(mappedRow.representativeName);
+        patientData.representativeEmail = this.normalizeText(mappedRow.representativeEmail);
+
+        if (!patientData.consentTemplateId && groupFields?.consentTemplateId) {
+          patientData.consentTemplateId = String(groupFields.consentTemplateId).trim();
+        }
+
+        if (!patientData.patientName) {
+          results.errors.push({ row: rowNumber, errors: [`Linha ${rowNumber}: Nome do paciente é obrigatório`] });
+          continue;
+        }
+
+        if (!patientData.email || !PatientModel.isValidEmail(patientData.email)) {
+          results.errors.push({ row: rowNumber, errors: [`Linha ${rowNumber}: Email inválido`] });
+          continue;
+        }
+
+        if (patientData.cpf && !this.isValidCpf(patientData.cpf)) {
+          results.errors.push({ row: rowNumber, errors: [`Linha ${rowNumber}: CPF inválido`] });
+          continue;
+        }
+
+        if (!patientData.birthDate || !(patientData.birthDate instanceof Date) || Number.isNaN(patientData.birthDate.getTime())) {
+          results.errors.push({ row: rowNumber, errors: [`Linha ${rowNumber}: Data de nascimento inválida`] });
+          continue;
+        }
+
+        if (this.isFutureDate(patientData.birthDate)) {
+          results.errors.push({ row: rowNumber, errors: [`Linha ${rowNumber}: Data de nascimento futura não é permitida`] });
+          continue;
+        }
+
+        if (!patientData.consentTemplateId || !ObjectId.isValid(patientData.consentTemplateId)) {
+          results.errors.push({ row: rowNumber, errors: [`Linha ${rowNumber}: consentTemplateId inválido ou ausente`] });
+          continue;
+        }
+
+        const consentTemplatesCollection = await getCollection(db, 'consentTemplates');
+        const consentTemplateExists = await consentTemplatesCollection.findOne({ _id: new ObjectId(patientData.consentTemplateId) });
+        if (!consentTemplateExists) {
+          results.errors.push({ row: rowNumber, errors: [`Linha ${rowNumber}: Template de consentimento não encontrado`] });
+          continue;
+        }
+
+        if (patientData.isDeceased) {
+          if (!patientData.representativeName || !patientData.representativeEmail) {
+            results.errors.push({ row: rowNumber, errors: [`Linha ${rowNumber}: Para paciente falecido, responsável (nome e email) é obrigatório`] });
+            continue;
+          }
+          if (!PatientModel.isValidEmail(patientData.representativeEmail)) {
+            results.errors.push({ row: rowNumber, errors: [`Linha ${rowNumber}: Email do responsável inválido`] });
+            continue;
+          }
+        }
+
+        const validation = PatientModel.validate(patientData);
+        if (!validation.isValid) {
+          results.errors.push({ row: rowNumber, errors: validation.errors.map((error) => `Linha ${rowNumber}: ${error}`) });
+          continue;
+        }
+
+        const duplicate = await patientService.checkDuplicatePatient(db, patientData);
+        if (duplicate) {
+          results.errors.push({ row: rowNumber, errors: [`Linha ${rowNumber}: Paciente duplicado detectado`] });
+          continue;
+        }
+
+        const patientID = await generateUniquePatientID(db, 'pacientes');
+        patientData.patientID = patientID;
+
+        const consentMetadata = notificationService.buildConsentMetadata();
+        patientData.status = 'PENDING_CONSENT';
+        patientData.consentToken = consentMetadata.token;
+        patientData.consentTokenCreatedAt = consentMetadata.createdAt;
+        patientData.consentTokenExpiresAt = consentMetadata.expiresAt;
+
+        const patient = PatientModel.create(patientData);
+        const insertResult = await patientsCollection.insertOne(patient);
+
+        try {
+          const consentLink = notificationService.buildConsentLink(patient, consentMetadata.token);
+          await notificationService.enqueueConsentNotification(patientData, consentLink);
+          await patientsCollection.updateOne(
+            { _id: insertResult.insertedId },
+            { $set: { consentNotifiedAt: new Date() } }
+          );
+        } catch (notifyError) {
+          logger.error('Erro ao enfileirar notificações de consentimento (smart import):', notifyError.message);
+        }
+
+        results.success += 1;
+      } catch (error) {
+        logger.error(`Erro ao processar linha ${rowNumber} (smart import):`, error);
+        results.errors.push({ row: rowNumber, errors: [error.message || 'Erro desconhecido ao processar linha'] });
+      }
+    }
+
+    logger.info(`Smart import de pacientes concluído: ${results.success}/${results.total}`);
+    return results;
   }
 
   /**

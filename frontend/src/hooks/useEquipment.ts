@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Equipment } from '../types/models';
 import { equipmentService } from '../services/api';
+import { onClientLogout } from '../utils/sessionCleanup';
 
 export function useEquipment() {
   const [equipment, setEquipment] = useState<Equipment[]>([]);
@@ -9,6 +10,14 @@ export function useEquipment() {
 
   useEffect(() => {
     loadEquipment();
+  }, []);
+
+  useEffect(() => {
+    return onClientLogout(() => {
+      setEquipment([]);
+      setError(null);
+      setLoading(false);
+    });
   }, []);
 
   const loadEquipment = async () => {

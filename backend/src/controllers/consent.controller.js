@@ -108,6 +108,109 @@ class ConsentController {
     }
   }
 
+  async getPoliciesHistory(req, res) {
+    try {
+      const db = req.app.locals.db;
+      if (!db) {
+        return res.status(503).json({
+          success: false,
+          error: 'Banco de dados não disponível'
+        });
+      }
+
+      const page = Number(req.query.page) || 1;
+      const limit = Number(req.query.limit) || 10;
+      const search = String(req.query.search || '');
+      const result = await consentService.getPoliciesHistory(db, { page, limit, search });
+
+      return res.status(200).json({
+        success: true,
+        data: result.items,
+        pagination: result.pagination
+      });
+    } catch (error) {
+      logger.error('Erro ao listar histórico paginado de políticas:', error.message);
+      return res.status(500).json({
+        success: false,
+        error: 'Erro ao listar histórico de políticas',
+        message: error.message
+      });
+    }
+  }
+
+  async updatePolicy(req, res) {
+    try {
+      const db = req.app.locals.db;
+      if (!db) {
+        return res.status(503).json({
+          success: false,
+          error: 'Banco de dados não disponível'
+        });
+      }
+
+      const policy = await consentService.updatePolicy(db, req.params.id, req.body || {});
+
+      if (req.user) {
+        const auditLogger = require('../utils/auditLogger');
+        auditLogger.init(db);
+        await auditLogger.log({
+          action: 'UPDATE',
+          entity: 'ConsentPolicy',
+          entityID: policy._id.toString(),
+          result: 'success',
+          severity: 'info',
+          message: `Política de consentimento atualizada (${policy.version})`,
+          payload: {
+            title: policy.title,
+            version: policy.version,
+            active: policy.active,
+            previousPolicyId: policy.previousPolicyId || null
+          },
+          req: req,
+          module: 'Consentimento'
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: 'TCLE atualizado com nova versão automática',
+        data: policy
+      });
+    } catch (error) {
+      logger.error('Erro ao atualizar política de consentimento:', error.message);
+      return res.status(400).json({
+        success: false,
+        error: 'Erro ao atualizar política de consentimento',
+        message: error.message
+      });
+    }
+  }
+
+  async getActivePoliciesWithCaae(req, res) {
+    try {
+      const db = req.app.locals.db;
+      if (!db) {
+        return res.status(503).json({
+          success: false,
+          error: 'Banco de dados não disponível'
+        });
+      }
+
+      const policies = await consentService.getActivePoliciesWithCaae(db);
+      return res.status(200).json({
+        success: true,
+        data: policies
+      });
+    } catch (error) {
+      logger.error('Erro ao listar políticas ativas com CAAE:', error.message);
+      return res.status(500).json({
+        success: false,
+        error: 'Erro ao listar políticas ativas com CAAE',
+        message: error.message
+      });
+    }
+  }
+
   async createTemplate(req, res) {
     try {
       const db = req.app.locals.db;

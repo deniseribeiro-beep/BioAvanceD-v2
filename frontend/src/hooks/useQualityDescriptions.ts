@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { SampleWithQualityDescription } from '../types/models';
 import { qualityDescriptionService } from '../services/api';
+import { onClientLogout } from '../utils/sessionCleanup';
 
 export function useQualityDescriptions() {
   const [qualities, setQualities] = useState<SampleWithQualityDescription[]>([]);
@@ -9,6 +10,14 @@ export function useQualityDescriptions() {
 
   useEffect(() => {
     loadQualities();
+  }, []);
+
+  useEffect(() => {
+    return onClientLogout(() => {
+      setQualities([]);
+      setError(null);
+      setLoading(false);
+    });
   }, []);
 
   const loadQualities = async () => {

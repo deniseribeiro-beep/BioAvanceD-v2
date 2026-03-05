@@ -40,8 +40,17 @@
 
 .consent-manager-form-row {
 	display: grid;
-	grid-template-columns: repeat(3, minmax(0, 1fr));
+	grid-template-columns: repeat(4, minmax(0, 1fr));
 	gap: 0.75rem;
+}
+
+.consent-manager-edit-banner {
+	padding: 0.625rem 0.75rem;
+	border: 1px solid var(--border);
+	border-radius: 0.625rem;
+	background: var(--surface-alt);
+	color: var(--text-secondary);
+	font-size: 0.875rem;
 }
 
 .consent-manager-textarea {
@@ -82,6 +91,30 @@
 
 .consent-manager-history-filters {
 	margin: 1rem 0;
+}
+
+.consent-manager-history-pagination {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 0.75rem;
+	margin-bottom: 1rem;
+	font-size: 0.875rem;
+	color: var(--text-secondary);
+}
+
+.consent-manager-history-pagination label {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.5rem;
+}
+
+.consent-manager-history-pagination select {
+	border: 1px solid var(--border);
+	border-radius: 0.5rem;
+	background: var(--surface);
+	color: var(--text);
+	padding: 0.35rem 0.5rem;
 }
 
 .consent-manager-history-checklist {
@@ -164,6 +197,66 @@
 	color: var(--text);
 }
 
+.consent-manager-row-actions {
+	display: inline-flex;
+	gap: 0.5rem;
+}
+
+.consent-manager-history-pagination-controls {
+	margin-top: 1rem;
+	display: flex;
+	justify-content: flex-end;
+	align-items: center;
+	gap: 0.75rem;
+	color: var(--text-secondary);
+	font-size: 0.875rem;
+}
+
+.consent-manager-details {
+	margin-top: 1rem;
+	border: 1px solid var(--border);
+}
+
+.consent-manager-details-grid {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 0.5rem 1rem;
+	margin-bottom: 0.75rem;
+}
+
+.consent-manager-details-grid p {
+	margin: 0;
+	font-size: 0.9rem;
+	color: var(--text-secondary);
+}
+
+.consent-manager-details-content {
+	display: grid;
+	gap: 0.5rem;
+}
+
+.consent-manager-details-content ul {
+	margin: 0;
+	padding-left: 1rem;
+	color: var(--text-secondary);
+	font-size: 0.875rem;
+}
+
+.consent-manager-details-content pre {
+	margin: 0;
+	max-height: 220px;
+	overflow: auto;
+	padding: 0.75rem;
+	border-radius: 0.625rem;
+	border: 1px solid var(--border);
+	background: var(--surface);
+	color: var(--text);
+	white-space: pre-wrap;
+	word-break: break-word;
+	font-family: inherit;
+	font-size: 0.875rem;
+}
+
 .consent-status {
 	display: inline-flex;
 	align-items: center;
@@ -218,5 +311,15 @@
 
 	.consent-manager-actions button {
 		width: 100%;
+	}
+
+	.consent-manager-history-pagination,
+	.consent-manager-history-pagination-controls {
+		flex-direction: column;
+		align-items: stretch;
+	}
+
+	.consent-manager-details-grid {
+		grid-template-columns: 1fr;
 	}
 }

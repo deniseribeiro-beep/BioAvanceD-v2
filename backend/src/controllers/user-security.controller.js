@@ -456,69 +456,6 @@ class UserSecurityController {
   }
 
   /**
-   * POST /api/user/security/passkey (DEPRECATED - usar completePasskeyRegistration)
-   * Adiciona passkey (FIDO2/WebAuthn)
-   */
-  async addPasskey(req, res) {
-    try {
-      const db = req.app.locals.db;
-      if (!db) {
-        return res.status(503).json({
-          success: false,
-          error: (req.t && req.t('errors.databaseUnavailable')) || 'Banco de dados não disponível'
-        });
-      }
-
-      const { credentialId, publicKey, deviceName } = req.body;
-
-      if (!credentialId || !publicKey) {
-        return res.status(400).json({
-          success: false,
-          error: 'credentialId e publicKey são obrigatórios'
-        });
-      }
-
-      const passkey = await userSecurityService.addPasskey(db, req.user.userID, {
-        credentialId,
-        publicKey,
-        deviceName
-      });
-
-      // Registra auditoria
-      auditLogger.init(db);
-      await auditLogger.log({
-        action: 'CREATE',
-        entity: 'Passkey',
-        entityID: passkey._id.toString(),
-        result: 'success',
-        severity: 'critical',
-        message: 'Passkey adicionada',
-        payload: {
-          deviceName: deviceName
-        },
-        req: req,
-        module: 'Segurança do Usuário'
-      });
-
-      return res.status(201).json({
-        success: true,
-        message: (req.t && req.t('userSecurity.mfa.alternatives.passkey.addSuccess')) || 'Passkey adicionada com sucesso',
-        data: {
-          id: passkey._id.toString(),
-          deviceName: passkey.deviceName
-        }
-      });
-    } catch (error) {
-      logger.error('Erro ao adicionar passkey:', error.message);
-      return res.status(400).json({
-        success: false,
-        error: (req.t && req.t('userSecurity.mfa.alternatives.passkey.addError')) || 'Erro ao adicionar passkey',
-        message: error.message
-      });
-    }
-  }
-
-  /**
    * DELETE /api/user/security/passkey/:id
    * Remove passkey
    */

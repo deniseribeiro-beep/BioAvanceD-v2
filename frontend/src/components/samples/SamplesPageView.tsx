@@ -130,10 +130,6 @@ export default function SamplesPageView({
                 </Button>
               </div>
               <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginLeft: 'auto' }}>
-                <Button variant="secondary" onClick={() => onDownloadTemplate('xlsx')}>
-                  <Download size={16} />
-                  {t('samples.downloadTemplateExcel')}
-                </Button>
                 <Button variant="secondary" onClick={() => onDownloadTemplate('csv')}>
                   <Download size={16} />
                   {t('samples.downloadTemplateCsv')}

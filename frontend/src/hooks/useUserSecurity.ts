@@ -110,66 +110,17 @@ export function useUserSecurity() {
     setLoading(true);
     setError(null);
     try {
-      // Tenta buscar dados do backend
-      try {
-        const [statusRes, mfaRes, passwordRes, sessionsRes] = await Promise.all([
-          userSecurityService.getStatus(),
-          userSecurityService.getMFAStatus(),
-          userSecurityService.getPasswordStatus(),
-          userSecurityService.getSessions()
-        ]);
+      const [statusRes, mfaRes, passwordRes, sessionsRes] = await Promise.all([
+        userSecurityService.getStatus(),
+        userSecurityService.getMFAStatus(),
+        userSecurityService.getPasswordStatus(),
+        userSecurityService.getSessions()
+      ]);
 
-        setSecurityStatus(extractResponseData<SecurityStatus | null>(statusRes, null));
-        setMfaStatus(extractResponseData<MFAStatus | null>(mfaRes, null));
-        setPasswordStatus(extractResponseData<PasswordStatus | null>(passwordRes, null));
-        setSessions(extractResponseData<Session[]>(sessionsRes, []));
-      } catch (apiErr: unknown) {
-        // Se o backend não estiver disponível, usa dados mockados para desenvolvimento
-        console.warn('Backend não disponível, usando dados mockados:', extractErrorMessage(apiErr, 'Erro ao carregar backend'));
-        
-        // Dados mockados para desenvolvimento
-        const mockSecurityStatus: SecurityStatus = {
-          securityScore: 75,
-          overallLevel: 'medium',
-          alternativeMethodsCount: 1
-        };
-
-        const mockMFAStatus: MFAStatus = {
-          primaryEnabled: true,
-          primarySetupDate: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), // 30 dias atrás
-          phoneEnabled: false,
-          passkeys: [],
-          recoveryCodes: {
-            remaining: 8,
-            codes: []
-          }
-        };
-
-        const mockPasswordStatus: PasswordStatus = {
-          lastChanged: new Date(Date.now() - 60 * 24 * 60 * 60 * 1000), // 60 dias atrás
-          expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // Expira em 30 dias
-          strength: 'strong',
-          strengthScore: 4
-        };
-
-        const mockSessions: Session[] = [
-          {
-            id: '1',
-            deviceName: 'Chrome no Windows',
-            browser: 'Chrome 120',
-            os: 'Windows 11',
-            location: 'São Paulo, Brasil',
-            lastAccess: new Date(),
-            isCurrent: true
-          }
-        ];
-
-        setSecurityStatus(mockSecurityStatus);
-        setMfaStatus(mockMFAStatus);
-        setPasswordStatus(mockPasswordStatus);
-        // Não sobrescreve a lista atual se já houver sessões carregadas (evita reintroduzir mocks após revogação)
-        setSessions(prev => (prev && prev.length ? prev : mockSessions));
-      }
+      setSecurityStatus(extractResponseData<SecurityStatus | null>(statusRes, null));
+      setMfaStatus(extractResponseData<MFAStatus | null>(mfaRes, null));
+      setPasswordStatus(extractResponseData<PasswordStatus | null>(passwordRes, null));
+      setSessions(extractResponseData<Session[]>(sessionsRes, []));
     } catch (err: unknown) {
       setError(extractErrorMessage(err, 'Erro ao carregar dados de segurança'));
       console.error('Erro ao carregar dados de segurança:', err);

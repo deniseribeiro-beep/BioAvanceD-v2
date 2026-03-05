@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { authService } from '../services/api';
+import { clearClientSession } from '../utils/sessionCleanup';
 
 /**
  * Hook para detectar atividade do usuário e renovar sessão
@@ -26,9 +27,7 @@ export function useActivityDetector(isAuthenticated: boolean) {
       // Se sessão expirou, não faz nada (o middleware vai redirecionar)
       if (error.response?.data?.sessionExpired) {
         console.log('Sessão expirada por inatividade');
-        // Limpa token e força reload para redirecionar ao login
-        localStorage.removeItem('token');
-        window.location.href = '/login';
+        clearClientSession({ redirectToLogin: true });
       }
       // Outros erros são ignorados silenciosamente
     }

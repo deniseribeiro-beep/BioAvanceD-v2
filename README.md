@@ -194,6 +194,24 @@ npm run docker:local:up:migrate
 - Neo4j Browser: `http://localhost:7474`
 - InfluxDB UI: `http://localhost:8086`
 
+### 🔥 Frontend em tempo real no container (HMR)
+
+Para desenvolver o frontend com atualização em tempo real dentro do Docker, use também o arquivo `docker-compose.override.yml`:
+
+```powershell
+docker compose --env-file .env.docker -f docker-compose.yml -f docker-compose.override.yml up -d frontend backend
+```
+
+Depois acesse:
+
+- Frontend HMR: `http://localhost:5173`
+
+Para parar:
+
+```powershell
+docker compose --env-file .env.docker -f docker-compose.yml -f docker-compose.override.yml down
+```
+
 ## 📝 Licença
 
 Este projeto foi desenvolvido para fins educacionais e de demonstração.

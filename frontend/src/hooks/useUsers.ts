@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { User } from '../types/models';
 import { userService } from '../services/api';
+import { onClientLogout } from '../utils/sessionCleanup';
 
 export function useUsers() {
   const [users, setUsers] = useState<User[]>([]);
@@ -9,6 +10,14 @@ export function useUsers() {
 
   useEffect(() => {
     loadUsers();
+  }, []);
+
+  useEffect(() => {
+    return onClientLogout(() => {
+      setUsers([]);
+      setError(null);
+      setLoading(false);
+    });
   }, []);
 
   const loadUsers = async () => {

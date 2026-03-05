@@ -43,15 +43,7 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      console.log('handleSubmit chamado', { 
-        username, 
-        requiresTwoFactor, 
-        twoFactorCode: twoFactorCode?.length 
-      });
-
       const result = await login(username, password, requiresTwoFactor ? twoFactorCode : undefined);
-      
-      console.log('Resultado do login:', result);
       
       if (result && result.requiresTwoFactorSetup) {
         // Redireciona para página de configuração de MFA
@@ -73,12 +65,9 @@ export default function LoginPage() {
       }
       
       // Login bem-sucedido - redireciona por perfil
-      console.log('Login bem-sucedido, redirecionando...');
       const targetRoute = getPostLoginRoute(result?.user?.roleName, result?.user?.accessType);
       navigate(targetRoute, { replace: true });
     } catch (err: any) {
-      console.error('Erro no login:', err);
-      
       if (err.requiresTwoFactor) {
         setRequiresTwoFactor(true);
         setAttemptsRemaining(err.attemptsRemaining);
@@ -91,6 +80,10 @@ export default function LoginPage() {
         setError(errorMessage);
         setRequiresTwoFactor(false);
         setTwoFactorCode('');
+
+        if (import.meta.env.DEV && !(String(errorMessage).includes('credentials') || String(errorMessage).includes('Credenciais'))) {
+          console.warn('Falha inesperada no login:', err);
+        }
       }
     } finally {
       setLoading(false);

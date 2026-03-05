@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { sampleTypeService } from '../services/api';
+import { onClientLogout } from '../utils/sessionCleanup';
 
 export interface SampleType {
   _id?: string;
@@ -17,6 +18,14 @@ export function useSampleTypes() {
 
   useEffect(() => {
     loadSampleTypes();
+  }, []);
+
+  useEffect(() => {
+    return onClientLogout(() => {
+      setSampleTypes([]);
+      setError(null);
+      setLoading(false);
+    });
   }, []);
 
   const loadSampleTypes = async () => {

@@ -10,6 +10,30 @@ const LineageRepository = require('../../infrastructure/database/neo4j/LineageRe
 const { getCollection } = require('../../utils/collectionResolver');
 const { ObjectId } = require('mongodb');
 
+function buildUserFilterById(id) {
+  const rawId = String(id || '').trim();
+  const filters = [];
+
+  if (!rawId) {
+    return { _id: null };
+  }
+
+  if (ObjectId.isValid(rawId)) {
+    filters.push({ _id: new ObjectId(rawId) });
+  }
+
+  filters.push({ _id: rawId });
+  filters.push({ id: rawId });
+  filters.push({ userID: rawId });
+
+  const numericId = Number(rawId);
+  if (Number.isFinite(numericId)) {
+    filters.push({ userID: numericId });
+  }
+
+  return { $or: filters };
+}
+
 // RF003 - Cadastro de usuário
 router.post('/register',
   authenticate,
@@ -141,9 +165,9 @@ router.get('/:id', authenticate, async (req, res) => {
       });
     }
 
-    const { ObjectId } = require('mongodb');
     const usersCollection = db.collection('users');
-    const user = await usersCollection.findOne({ _id: new ObjectId(req.params.id) });
+    const userFilter = buildUserFilterById(req.params.id);
+    const user = await usersCollection.findOne(userFilter);
 
     if (!user) {
       return res.status(404).json({
@@ -184,12 +208,12 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
       });
     }
 
-    const { ObjectId } = require('mongodb');
     const UserModel = require('../../models/User');
     const usersCollection = db.collection('users');
+    const userFilter = buildUserFilterById(req.params.id);
     
     // Busca usuário atual para validação
-    const targetUser = await usersCollection.findOne({ _id: new ObjectId(req.params.id) });
+    const targetUser = await usersCollection.findOne(userFilter);
     if (!targetUser) {
       return res.status(404).json({
         success: false,
@@ -296,7 +320,7 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
     }
 
     const result = await usersCollection.updateOne(
-      { _id: new ObjectId(req.params.id) },
+      userFilter,
       { $set: req.body }
     );
 
@@ -308,7 +332,7 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
     }
 
     // Busca o usuário atualizado para retornar
-    const updatedUser = await usersCollection.findOne({ _id: new ObjectId(req.params.id) });
+    const updatedUser = await usersCollection.findOne(userFilter);
     if (!updatedUser) {
       return res.status(404).json({
         success: false,
@@ -378,9 +402,9 @@ router.delete('/:id', authenticate, requirePermission('createUser'), async (req,
       });
     }
 
-    const { ObjectId } = require('mongodb');
     const usersCollection = db.collection('users');
-    const result = await usersCollection.deleteOne({ _id: new ObjectId(req.params.id) });
+    const userFilter = buildUserFilterById(req.params.id);
+    const result = await usersCollection.deleteOne(userFilter);
 
     if (result.deletedCount === 0) {
       return res.status(404).json({
@@ -418,9 +442,9 @@ router.get('/:id/validate-status', authenticate, async (req, res) => {
       });
     }
 
-    const { ObjectId } = require('mongodb');
     const usersCollection = db.collection('users');
-    const user = await usersCollection.findOne({ _id: new ObjectId(req.params.id) });
+    const userFilter = buildUserFilterById(req.params.id);
+    const user = await usersCollection.findOne(userFilter);
 
     if (!user) {
       return res.status(404).json({
@@ -712,7 +736,8 @@ router.post('/:id/reset-mfa', authenticate, async (req, res) => {
     }
 
     // Busca o usuário alvo
-    const targetUser = await usersCollection.findOne({ _id: new ObjectId(req.params.id) });
+    const userFilter = buildUserFilterById(req.params.id);
+    const targetUser = await usersCollection.findOne(userFilter);
     
     if (!targetUser) {
       return res.status(404).json({
@@ -732,7 +757,7 @@ router.post('/:id/reset-mfa', authenticate, async (req, res) => {
 
     // Reseta MFA
     await usersCollection.updateOne(
-      { _id: new ObjectId(req.params.id) },
+      userFilter,
       {
         $set: {
           mfaEnabled: false,
@@ -785,7 +810,8 @@ router.post('/:id/disable-mfa', authenticate, async (req, res) => {
     }
 
     // Busca o usuário alvo
-    const targetUser = await usersCollection.findOne({ _id: new ObjectId(req.params.id) });
+    const userFilter = buildUserFilterById(req.params.id);
+    const targetUser = await usersCollection.findOne(userFilter);
     
     if (!targetUser) {
       return res.status(404).json({
@@ -808,7 +834,7 @@ router.post('/:id/disable-mfa', authenticate, async (req, res) => {
 
     // Desativa MFA (mantém o secret para permitir reativação fácil)
     await usersCollection.updateOne(
-      { _id: new ObjectId(req.params.id) },
+      userFilter,
       {
         $set: {
           mfaEnabled: false,

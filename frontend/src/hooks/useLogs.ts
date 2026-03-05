@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Log } from '../types/models';
 import { logService } from '../services/api';
+import { onClientLogout } from '../utils/sessionCleanup';
 
 interface ApiLikeError {
   response?: {
@@ -80,6 +81,14 @@ export function useLogs() {
 
   useEffect(() => {
     loadLogs();
+  }, []);
+
+  useEffect(() => {
+    return onClientLogout(() => {
+      setLogs([]);
+      setError(null);
+      setLoading(false);
+    });
   }, []);
 
   const loadLogs = async (filters?: Record<string, unknown>) => {

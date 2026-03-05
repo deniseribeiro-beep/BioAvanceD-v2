@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Reports } from '../types/models';
 import { reportsService } from '../services/api';
+import { onClientLogout } from '../utils/sessionCleanup';
 
 export function useReports() {
   const [reports, setReports] = useState<Reports[]>([]);
@@ -9,6 +10,14 @@ export function useReports() {
 
   useEffect(() => {
     loadReports();
+  }, []);
+
+  useEffect(() => {
+    return onClientLogout(() => {
+      setReports([]);
+      setError(null);
+      setLoading(false);
+    });
   }, []);
 
   const loadReports = async () => {

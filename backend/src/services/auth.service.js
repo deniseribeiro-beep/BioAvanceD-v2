@@ -853,29 +853,6 @@ class AuthService {
     }
   }
 
-  /**
-   * Registra evento de log (DEPRECATED - usar auditLogger)
-   * Mantido para compatibilidade, mas agora usa auditLogger que já anonimiza
-   */
-  async logEvent(db, logData, req) {
-    try {
-      const auditLogger = require('../utils/auditLogger');
-      auditLogger.init(db);
-      
-      await auditLogger.log({
-        action: logData.action || 'UNKNOWN',
-        entity: logData.entity || 'Sistema',
-        entityID: logData.entityID || null,
-        result: logData.result || 'success',
-        severity: logData.severity || 'info',
-        message: logData.message || `${logData.action} em ${logData.entity}`,
-        req: req
-      });
-    } catch (error) {
-      logger.error('Erro ao registrar log:', error.message);
-      // Não lança erro para não quebrar o fluxo principal
-    }
-  }
 }
 
 module.exports = new AuthService();

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { sampleOriginService } from '../services/api';
+import { onClientLogout } from '../utils/sessionCleanup';
 
 export interface SampleOrigin {
   _id?: string;
@@ -17,6 +18,14 @@ export function useSampleOrigins() {
 
   useEffect(() => {
     loadOrigins();
+  }, []);
+
+  useEffect(() => {
+    return onClientLogout(() => {
+      setOrigins([]);
+      setError(null);
+      setLoading(false);
+    });
   }, []);
 
   const loadOrigins = async () => {

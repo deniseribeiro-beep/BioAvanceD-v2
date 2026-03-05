@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { SampleWithMeasurementUnit } from '../types/models';
 import { measurementUnitService } from '../services/api';
+import { onClientLogout } from '../utils/sessionCleanup';
 
 export function useMeasurementUnits() {
   const [units, setUnits] = useState<SampleWithMeasurementUnit[]>([]);
@@ -9,6 +10,14 @@ export function useMeasurementUnits() {
 
   useEffect(() => {
     loadUnits();
+  }, []);
+
+  useEffect(() => {
+    return onClientLogout(() => {
+      setUnits([]);
+      setError(null);
+      setLoading(false);
+    });
   }, []);
 
   const loadUnits = async () => {

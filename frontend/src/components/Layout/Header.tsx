@@ -1,4 +1,3 @@
-import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { useLanguage } from '../../contexts/LanguageContext';
 import { User as UserType } from '../../types/models';
@@ -10,11 +9,9 @@ import './Header.css';
 export default function Header() {
   const { user, logout } = useAuth();
   const { t } = useLanguage();
-  const navigate = useNavigate();
 
   const handleLogout = async () => {
     await logout();
-    navigate('/login');
   };
 
   const getAccessTypeLabel = (user?: UserType) => {

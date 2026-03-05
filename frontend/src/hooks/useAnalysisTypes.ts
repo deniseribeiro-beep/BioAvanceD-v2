@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { analysisTypeService } from '../services/api';
 import { AnalysisType } from '../types/models';
+import { onClientLogout } from '../utils/sessionCleanup';
 
 export function useAnalysisTypes() {
   const [types, setTypes] = useState<AnalysisType[]>([]);
@@ -27,6 +28,14 @@ export function useAnalysisTypes() {
     };
 
     loadTypes();
+  }, []);
+
+  useEffect(() => {
+    return onClientLogout(() => {
+      setTypes([]);
+      setError(null);
+      setLoading(false);
+    });
   }, []);
 
   return { types, loading, error };

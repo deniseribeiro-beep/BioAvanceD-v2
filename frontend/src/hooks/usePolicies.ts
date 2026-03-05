@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Policy } from '../types/models';
 import { policyService } from '../services/api';
+import { onClientLogout } from '../utils/sessionCleanup';
 
 export function usePolicies() {
   const [policies, setPolicies] = useState<Policy[]>([]);
@@ -9,6 +10,14 @@ export function usePolicies() {
 
   useEffect(() => {
     loadPolicies();
+  }, []);
+
+  useEffect(() => {
+    return onClientLogout(() => {
+      setPolicies([]);
+      setError(null);
+      setLoading(false);
+    });
   }, []);
 
   const loadPolicies = async () => {

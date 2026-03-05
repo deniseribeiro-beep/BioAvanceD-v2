@@ -6,6 +6,42 @@ const logger = require('../utils/logger');
  * Controller para operações relacionadas a pacientes
  */
 class PacienteController {
+  sanitizePatientPayload(payload = {}) {
+    const nextPayload = { ...payload };
+
+    if (nextPayload.clinicalUnit !== undefined && nextPayload.clinicalUnit !== null) {
+      nextPayload.clinicalUnit = String(nextPayload.clinicalUnit).trim().toUpperCase();
+    }
+
+    if (nextPayload.clinicalUnitId !== undefined && nextPayload.clinicalUnitId !== null) {
+      nextPayload.clinicalUnitId = String(nextPayload.clinicalUnitId).trim();
+      if (!nextPayload.clinicalUnitId) {
+        nextPayload.clinicalUnitId = null;
+      }
+    }
+
+    if (nextPayload.unitAcronym !== undefined && nextPayload.unitAcronym !== null) {
+      nextPayload.unitAcronym = String(nextPayload.unitAcronym).trim().toUpperCase();
+    }
+
+    return nextPayload;
+  }
+
+  validateDeceasedRepresentative(payload = {}) {
+    const isDeceased = payload.isDeceased === true;
+    if (!isDeceased) return;
+
+    const representativeName = typeof payload.representativeName === 'string' ? payload.representativeName.trim() : '';
+    const representativeCpf = String(payload.representativeCpf || '').replace(/\D/g, '').trim();
+    const representativePhone = String(payload.representativePhone || '').replace(/\D/g, '').trim();
+
+    if (!representativeName || !representativeCpf || !representativePhone) {
+      const error = new Error('Para paciente falecido, nome, CPF e telefone do representante legal são obrigatórios');
+      error.statusCode = 400;
+      throw error;
+    }
+  }
+
   async cadastrar(req, res) {
     try {
       const db = req.app.locals.db;
@@ -18,7 +54,8 @@ class PacienteController {
         });
       }
 
-      const pacienteData = req.body;
+      const pacienteData = this.sanitizePatientPayload(req.body);
+      this.validateDeceasedRepresentative(pacienteData);
 
       // Validação básica
       if (!pacienteData || Object.keys(pacienteData).length === 0) {
@@ -349,7 +386,10 @@ class PacienteController {
         });
       }
       
-      const result = await patientService.updatePatient(db, id, req.body);
+      const updatePayload = this.sanitizePatientPayload(req.body);
+      this.validateDeceasedRepresentative(updatePayload);
+
+      const result = await patientService.updatePatient(db, id, updatePayload);
 
       // Registra log (sanitizado)
       if (req.user) {

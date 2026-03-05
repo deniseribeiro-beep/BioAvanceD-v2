@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Access } from '../types/models';
 import { accessService } from '../services/api';
+import { onClientLogout } from '../utils/sessionCleanup';
 
 export function useAccess() {
   const [accesses, setAccesses] = useState<Access[]>([]);
@@ -9,6 +10,14 @@ export function useAccess() {
 
   useEffect(() => {
     loadAccesses();
+  }, []);
+
+  useEffect(() => {
+    return onClientLogout(() => {
+      setAccesses([]);
+      setError(null);
+      setLoading(false);
+    });
   }, []);
 
    const loadAccesses = async () => {

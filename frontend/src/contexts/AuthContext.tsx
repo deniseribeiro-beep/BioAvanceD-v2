@@ -2,12 +2,13 @@ import { createContext, useContext, useState, useEffect, useMemo, useCallback, u
 import { User } from '../types/models';
 import { authService } from '../services/api';
 import { hasRoleAccess, canRoleAccessRoute, getAccessTypeForRole, RoleName } from '../utils/rolePermissions';
+import { clearClientSession } from '../utils/sessionCleanup';
 
 interface AuthContextType {
   user: User | null;
   token: string | null;
   login: (username: string, password: string, twoFactorCode?: string) => Promise<{ requiresTwoFactor?: boolean; requiresTwoFactorSetup?: boolean; user?: User } | void>;
-  logout: () => void;
+  logout: () => Promise<void>;
   isAuthenticated: boolean;
   isLoading: boolean;
   hasAccess: (requiredAccessType: number) => boolean;
@@ -240,12 +241,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(async (username: string, password: string, twoFactorCode?: string): Promise<{ requiresTwoFactor?: boolean; requiresTwoFactorSetup?: boolean; user?: User } | void> => {
     try {
-      console.log('AuthContext.login chamado', { username, hasTwoFactorCode: !!twoFactorCode });
-      
       const response = await authService.login(username, password, twoFactorCode);
-      
-      console.log('Resposta do authService.login:', response);
-      console.log('Response.data:', response.data);
       
       // Backend retorna diferentes estruturas:
       // 1. Login com sucesso: { success: true, data: { token, user } }
@@ -262,17 +258,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const newToken = data?.token || responseData.token;
       const userData = data?.user || responseData.user;
       
-      console.log('Dados extraídos:', { 
-        hasToken: !!newToken, 
-        hasUser: !!userData, 
-        requiresTwoFactor, 
-        requiresTwoFactorSetup,
-        responseDataKeys: Object.keys(responseData)
-      });
-      
       // Se requer configuração obrigatória de 2FA no primeiro login
       if (requiresTwoFactorSetup) {
-        console.log('Requer setup de 2FA');
         // Salva credenciais temporariamente para usar após configurar 2FA
         localStorage.setItem('tempUsername', username);
         localStorage.setItem('tempPassword', password);
@@ -281,14 +268,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       
       // Se requer 2FA mas não foi fornecido código, retorna informação para o componente
       if (requiresTwoFactor && !twoFactorCode) {
-        console.log('Requer código 2FA');
         return { requiresTwoFactor: true };
       }
       
       // Se tem token, significa que login foi bem-sucedido
       if (newToken && userData) {
-        console.log('Login bem-sucedido, salvando token e user');
-        
         // Se não tiver roleName mas tiver accessType, mapeia
         if (!userData.roleName && userData.accessType) {
           userData.roleName = mapAccessTypeToRoleName(userData.accessType);
@@ -317,22 +301,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
       
       // Caso contrário, requer 2FA
-      console.log('Requer 2FA (sem token)');
       return { requiresTwoFactor: true };
     } catch (error: any) {
-      console.error('Erro no AuthContext.login:', error);
-      console.error('Erro completo:', {
-        message: error.message,
-        response: error.response,
-        data: error.response?.data
-      });
-      
+      const statusCode = Number(error?.response?.status || 0);
       const errorMessage = error.response?.data?.error || 
                           error.response?.data?.message || 
                           error.message || 
                           'Erro ao fazer login';
       const requiresTwoFactor = error.response?.data?.requiresTwoFactor || false;
       const attemptsRemaining = error.response?.data?.attemptsRemaining;
+
+      if (statusCode === 401) {
+        throw new Error(errorMessage || 'Login error. Please check your credentials.');
+      }
       
       if (requiresTwoFactor) {
         throw { message: errorMessage, requiresTwoFactor: true, attemptsRemaining };
@@ -352,8 +333,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       console.error('Erro ao fazer logout:', error);
       // Continua mesmo se houver erro (logout local sempre funciona)
     } finally {
-      // Limpa token e estado local
-      localStorage.removeItem('token');
+      // Limpa sessão local e força saída da área autenticada
+      clearClientSession({ redirectToLogin: true });
       setToken(null);
       setUser(null);
     }

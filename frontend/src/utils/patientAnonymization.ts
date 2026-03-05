@@ -36,12 +36,3 @@ export function formatPatientOption(
   return `Anônimo (ID: ${patientID})`;
 }
 
-/**
- * @deprecated Função mantida apenas para compatibilidade
- * Não há mais verificação de permissões - todos os pacientes são sempre anônimos no frontend
- */
-export function canViewPatientDetails(user: User | null): boolean {
-  // Sempre retorna false - ninguém vê o nome no frontend
-  return false;
-}
-

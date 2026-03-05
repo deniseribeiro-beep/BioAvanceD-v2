@@ -1,11 +1,14 @@
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const ExcelJS = require('exceljs');
 const importLGPDService = require('../services/import-lgpd.service');
+const importPredictor = require('../services/ImportPredictor');
 const logService = require('../services/log.service');
 const logger = require('../utils/logger');
 const { sanitizePatientForLogs } = require('../utils/patientAnonymization');
+const { getCollection } = require('../utils/collectionResolver');
 
 // Configuração do multer para upload
 const storage = multer.diskStorage({
@@ -36,6 +39,7 @@ const upload = multer({
 
     const allowedMimes = [
       'text/csv',
+      'text/plain',
       'application/vnd.ms-excel',
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       'application/json',
@@ -60,6 +64,117 @@ const upload = multer({
  * com total conformidade com anonimização LGPD
  */
 class ImportLGPDController {
+  async persistSmartImportSummary(db, payload) {
+    const reportsCollection = db.collection('importSummaryReports');
+    const document = {
+      type: 'patients-smart-import',
+      createdAt: new Date(),
+      ...payload
+    };
+    const result = await reportsCollection.insertOne(document);
+    return {
+      ...document,
+      _id: result.insertedId
+    };
+  }
+
+  async listSmartImportReports(req, res) {
+    try {
+      const db = req.app.locals.db;
+      if (!db) {
+        return res.status(503).json({ success: false, error: 'Banco de dados não disponível' });
+      }
+
+      const limitRaw = parseInt(String(req.query.limit || '20'), 10);
+      const pageRaw = parseInt(String(req.query.page || '1'), 10);
+      const limit = Number.isNaN(limitRaw) ? 20 : Math.min(Math.max(limitRaw, 1), 100);
+      const page = Number.isNaN(pageRaw) ? 1 : Math.max(pageRaw, 1);
+      const skip = (page - 1) * limit;
+
+      const reportsCollection = db.collection('importSummaryReports');
+      const filter = { type: 'patients-smart-import' };
+
+      const [items, total] = await Promise.all([
+        reportsCollection.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).toArray(),
+        reportsCollection.countDocuments(filter)
+      ]);
+
+      return res.status(200).json({
+        success: true,
+        data: items,
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages: Math.max(Math.ceil(total / limit), 1)
+        }
+      });
+    } catch (error) {
+      logger.error('Erro ao listar summary reports de importação inteligente:', error);
+      return res.status(500).json({
+        success: false,
+        error: 'Erro ao listar summary reports',
+        message: error.message || 'Erro desconhecido'
+      });
+    }
+  }
+
+  async getPatientsSmartImportMetadata(req, res) {
+    try {
+      const db = req.app.locals.db;
+      const metadata = importLGPDService.getPatientsSmartImportMetadata();
+
+      if (!db) {
+        return res.status(200).json({
+          success: true,
+          data: {
+            ...metadata,
+            consentTemplates: {
+              available: false,
+              count: 0,
+              items: []
+            }
+          }
+        });
+      }
+
+      const consentTemplatesCollection = await getCollection(db, 'consentTemplates');
+      const [count, items] = await Promise.all([
+        consentTemplatesCollection.countDocuments({}),
+        consentTemplatesCollection
+          .find({}, { projection: { _id: 1, title: 1, version: 1, caae: 1, active: 1 } })
+          .sort({ createdAt: -1, _id: -1 })
+          .limit(20)
+          .toArray()
+      ]);
+
+      return res.status(200).json({
+        success: true,
+        data: {
+          ...metadata,
+          consentTemplates: {
+            available: count > 0,
+            count,
+            items: items.map((item) => ({
+              _id: String(item._id),
+              title: item.title || '',
+              version: item.version || '',
+              caae: item.caae || '--',
+              active: Boolean(item.active)
+            }))
+          }
+        }
+      });
+    } catch (error) {
+      logger.error('Erro ao obter metadados de smart import de pacientes:', error);
+      return res.status(500).json({
+        success: false,
+        error: 'Erro ao obter metadados de importação',
+        message: error.message || 'Erro desconhecido'
+      });
+    }
+  }
+
   /**
    * Middleware de upload
    */
@@ -72,8 +187,8 @@ class ImportLGPDController {
    * Gera IDs automaticamente conforme LGPD
    */
   async importPatients(req, res) {
+    const db = req.app.locals.db;
     try {
-      const db = req.app.locals.db;
       if (!db) {
         return res.status(503).json({
           success: false,
@@ -193,6 +308,140 @@ class ImportLGPDController {
         success: false,
         error: 'Erro ao importar pacientes',
         message: errorMessage
+      });
+    }
+  }
+
+  async predictPatientsMapping(req, res) {
+    try {
+      const file = req.file;
+      if (!file) {
+        return res.status(400).json({ success: false, error: 'Arquivo não fornecido' });
+      }
+
+      if (!importLGPDService.validateFileFormat(file, 'patients')) {
+        importLGPDService.cleanupFile(file.path);
+        return res.status(400).json({
+          success: false,
+          error: 'Formato de arquivo inválido',
+          message: 'Apenas CSV, TXT ou Excel (.xlsx) são aceitos'
+        });
+      }
+
+      const rows = await importLGPDService.readFile(file.path, file.originalname, 'patients');
+      const firstRow = rows[0] || {};
+      const headers = Object.keys(firstRow || {});
+      const prediction = importPredictor.predict(headers, firstRow);
+
+      importLGPDService.cleanupFile(file.path);
+
+      return res.status(200).json({
+        success: true,
+        message: 'Mapeamento inteligente inferido com sucesso',
+        data: prediction
+      });
+    } catch (error) {
+      logger.error('Erro ao prever mapeamento inteligente:', error);
+      if (req.file) {
+        importLGPDService.cleanupFile(req.file.path);
+      }
+      return res.status(500).json({
+        success: false,
+        error: 'Erro ao prever mapeamento',
+        message: error.message || 'Erro desconhecido'
+      });
+    }
+  }
+
+  async importPatientsSmart(req, res) {
+    const db = req.app.locals.db;
+    try {
+      if (!db) {
+        return res.status(503).json({ success: false, error: 'Banco de dados não disponível' });
+      }
+
+      const file = req.file;
+      if (!file) {
+        return res.status(400).json({ success: false, error: 'Arquivo não fornecido' });
+      }
+
+      if (!importLGPDService.validateFileFormat(file, 'patients')) {
+        importLGPDService.cleanupFile(file.path);
+        return res.status(400).json({
+          success: false,
+          error: 'Formato de arquivo inválido',
+          message: 'Apenas CSV, TXT ou Excel (.xlsx) são aceitos'
+        });
+      }
+
+      let groupFields = {};
+      if (req.body?.groupFields) {
+        groupFields = typeof req.body.groupFields === 'string' ? JSON.parse(req.body.groupFields) : req.body.groupFields;
+      }
+
+      let mapping = {};
+      if (req.body?.mapping) {
+        mapping = typeof req.body.mapping === 'string' ? JSON.parse(req.body.mapping) : req.body.mapping;
+      }
+
+      const fileBuffer = fs.readFileSync(file.path);
+      const fileHashSHA256 = crypto.createHash('sha256').update(fileBuffer).digest('hex');
+
+      const results = await importLGPDService.importPatientsSmart(db, file, { mapping, groupFields });
+
+      const summaryReport = {
+        processedAt: new Date().toISOString(),
+        totalProcessado: results.total,
+        totalFalhas: results.errors.length,
+        hashSHA256ArquivoOriginal: fileHashSHA256
+      };
+
+      const persistedSummaryReport = await this.persistSmartImportSummary(db, {
+        summaryReport,
+        fileName: file.originalname,
+        userId: req.user?.id || req.user?._id || null,
+        userName: req.user?.name || req.user?.username || null,
+        totalSucesso: results.success,
+        totalFalhas: results.errors.length,
+        errorsDetails: (Array.isArray(results.errors) ? results.errors : []).slice(0, 200)
+      });
+
+      if (req.user) {
+        const auditLogger = require('../utils/auditLogger');
+        auditLogger.init(db);
+        await auditLogger.logImport(
+          req,
+          'Patient',
+          results.errors.length === 0 ? 'success' : 'partial',
+          results.total,
+          results.success,
+          results.errors.length
+        );
+      }
+
+      importLGPDService.cleanupFile(file.path);
+
+      return res.status(200).json({
+        success: results.errors.length === 0,
+        message: 'Importação em lote concluída',
+        data: {
+          total: results.total,
+          success: results.success,
+          errors: results.errors.length,
+          errorsDetails: results.errors,
+          summaryReport,
+          summaryReportId: String(persistedSummaryReport._id)
+        }
+      });
+    } catch (error) {
+      logger.error('Erro ao executar importação inteligente de pacientes:', error);
+      if (req.file) {
+        importLGPDService.cleanupFile(req.file.path);
+      }
+      return res.status(500).json({
+        success: false,
+        error: 'Erro ao importar pacientes em lote',
+        message: error.message || 'Erro desconhecido'
       });
     }
   }

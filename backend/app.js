@@ -211,6 +211,7 @@ app.use("/api/analysis-files", require("./src/interface/routes/analysis-file.rou
 app.use("/api/analysis-types", require("./src/interface/routes/analysis-type.routes"));
 app.use("/api/equipment", require("./src/interface/routes/equipment.routes"));
 app.use("/api/locations", require("./src/interface/routes/location.routes"));
+app.use("/api/clinical-units", require("./src/interface/routes/clinical-unit.routes"));
 app.use("/api/storage", require("./src/interface/routes/storage.routes"));
 app.use("/api/policies", require("./src/interface/routes/policy.routes"));
 app.use("/api/sensors", require("./src/interface/routes/sensor.routes"));
@@ -219,10 +220,12 @@ app.use("/api", require("./src/interface/routes/consent.routes"));
 app.use("/api/users", require("./src/interface/routes/user.routes"));
 app.use("/api/access", require("./src/interface/routes/access.routes"));
 app.use("/api/security", require("./src/interface/routes/security.routes"));
+app.use("/api/user/security", require("./src/interface/routes/user-security.routes"));
 app.use("/api/backup", require("./src/interface/routes/backup.routes"));
 app.use("/api/assistant", require("./src/interface/routes/assistant.routes"));
 app.use("/api/import-lgpd", require("./src/interface/routes/import-lgpd.routes"));
 app.use("/api/compliance", require("./src/interface/routes/compliance.routes"));
+app.use("/api/cids", require("./src/interface/routes/cid.routes"));
 
 app.get("/api/health", (req, res) => {
   res.json({ status: "OK", db: !!req.app.locals.db });

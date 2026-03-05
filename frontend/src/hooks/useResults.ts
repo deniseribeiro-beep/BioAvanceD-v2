@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Result } from '../types/models';
 import { resultService } from '../services/api';
+import { onClientLogout } from '../utils/sessionCleanup';
 
 export function useResults(importJobID?: string) {
   const [results, setResults] = useState<Result[]>([]);
@@ -11,6 +12,14 @@ export function useResults(importJobID?: string) {
     loadResults();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [importJobID]);
+
+  useEffect(() => {
+    return onClientLogout(() => {
+      setResults([]);
+      setError(null);
+      setLoading(false);
+    });
+  }, []);
 
   const loadResults = async () => {
     try {

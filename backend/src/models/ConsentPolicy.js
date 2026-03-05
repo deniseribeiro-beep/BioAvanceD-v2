@@ -25,6 +25,18 @@ class ConsentPolicyModel {
       errors.push('validFrom é obrigatório e deve ser uma data válida');
     }
 
+    if (!data.validTo || Number.isNaN(new Date(data.validTo).getTime())) {
+      errors.push('validTo é obrigatório e deve ser uma data válida');
+    }
+
+    if (data.validFrom && data.validTo) {
+      const start = new Date(data.validFrom);
+      const end = new Date(data.validTo);
+      if (!Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime()) && end.getTime() < start.getTime()) {
+        errors.push('validTo deve ser maior ou igual a validFrom');
+      }
+    }
+
     if (data.active !== undefined && typeof data.active !== 'boolean') {
       errors.push('active deve ser booleano');
     }
@@ -57,12 +69,14 @@ class ConsentPolicyModel {
 
   static create(data) {
     const validFrom = new Date(data.validFrom);
+    const validTo = new Date(data.validTo);
     return {
       title: data.title.trim(),
       htmlContent: data.htmlContent.trim(),
       version: data.version.trim(),
       caae: data.caae.trim(),
       validFrom: validFrom,
+      validTo: validTo,
       active: data.active === undefined ? true : data.active,
       granularPermissions: Array.isArray(data.granularPermissions) ? data.granularPermissions : [],
       createdAt: new Date(),

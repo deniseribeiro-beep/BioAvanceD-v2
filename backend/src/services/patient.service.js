@@ -1,4 +1,5 @@
 const PatientModel = require('../models/Patient');
+const ClinicalUnitModel = require('../models/ClinicalUnit');
 const logger = require('../utils/logger');
 const { generateUniquePatientID, sanitizePatientForLogs } = require('../utils/patientAnonymization');
 const notificationService = require('./notification.service');
@@ -10,6 +11,132 @@ const { getCollection } = require('../utils/collectionResolver');
  * RF005 - Cadastro de Paciente com Anonimização LGPD
  */
 class PatientService {
+  normalizeClinicalUnit(value) {
+    if (value === undefined || value === null) return null;
+    const normalized = String(value).trim().toUpperCase();
+    return normalized || null;
+  }
+
+  async resolveClinicalUnitSnapshot(db, payload = {}) {
+    const hasClinicalUnitId = payload.clinicalUnitId !== undefined;
+    const hasClinicalUnitName = payload.clinicalUnit !== undefined;
+
+    if (!hasClinicalUnitId && !hasClinicalUnitName) {
+      return null;
+    }
+
+    const rawClinicalUnitId = payload.clinicalUnitId;
+    const rawClinicalUnitName = payload.clinicalUnit;
+
+    const normalizedClinicalUnitId =
+      rawClinicalUnitId === null || rawClinicalUnitId === ''
+        ? null
+        : String(rawClinicalUnitId).trim();
+
+    const normalizedClinicalUnitName =
+      rawClinicalUnitName === null || rawClinicalUnitName === ''
+        ? null
+        : String(rawClinicalUnitName).trim();
+
+    if (!normalizedClinicalUnitId && !normalizedClinicalUnitName) {
+      return {
+        clinicalUnitId: null,
+        clinicalUnit: null,
+        unitAcronym: null
+      };
+    }
+
+    const { ObjectId } = require('mongodb');
+    const clinicalUnitsCollection = await getCollection(db, 'clinicalUnits');
+
+    if (normalizedClinicalUnitId) {
+      if (!ObjectId.isValid(normalizedClinicalUnitId)) {
+        throw new Error('clinicalUnitId inválido');
+      }
+
+      const clinicalUnitById = await clinicalUnitsCollection.findOne({ _id: new ObjectId(normalizedClinicalUnitId) });
+      if (!clinicalUnitById) {
+        throw new Error('Unidade clínica não encontrada');
+      }
+
+      const resolvedName = String(clinicalUnitById.name || '').trim();
+      return {
+        clinicalUnitId: String(clinicalUnitById._id),
+        clinicalUnit: resolvedName || null,
+        unitAcronym: String(clinicalUnitById.acronym || '').trim() || PatientModel.fillAcronym(resolvedName)
+      };
+    }
+
+    if (!normalizedClinicalUnitName) {
+      return {
+        clinicalUnitId: null,
+        clinicalUnit: null,
+        unitAcronym: null
+      };
+    }
+
+    const normalizedName = ClinicalUnitModel.normalizeName(normalizedClinicalUnitName);
+    const clinicalUnitByName = await clinicalUnitsCollection.findOne({ normalizedName });
+
+    if (clinicalUnitByName) {
+      const resolvedName = String(clinicalUnitByName.name || '').trim();
+      return {
+        clinicalUnitId: String(clinicalUnitByName._id),
+        clinicalUnit: resolvedName || null,
+        unitAcronym: String(clinicalUnitByName.acronym || '').trim() || PatientModel.fillAcronym(resolvedName)
+      };
+    }
+
+    const fallbackClinicalUnit = this.normalizeClinicalUnit(normalizedClinicalUnitName);
+    return {
+      clinicalUnitId: null,
+      clinicalUnit: fallbackClinicalUnit,
+      unitAcronym: fallbackClinicalUnit ? PatientModel.fillAcronym(fallbackClinicalUnit) : null
+    };
+  }
+
+  normalizeRepresentativeCpf(value) {
+    if (value === undefined || value === null) return null;
+    const normalized = String(value).replace(/\D/g, '').trim();
+    return normalized || null;
+  }
+
+  normalizeRepresentativePhone(value) {
+    return this.normalizePhone(value);
+  }
+
+  applyDeceasedRepresentativeRules(payload) {
+    const isDeceased = payload.isDeceased === true;
+    payload.isDeceased = isDeceased;
+
+    if (!isDeceased) {
+      payload.representativeName = null;
+      payload.representativeCpf = null;
+      payload.representativePhone = null;
+      return;
+    }
+
+    const representativeName = typeof payload.representativeName === 'string' ? payload.representativeName.trim() : '';
+    const representativeCpf = this.normalizeRepresentativeCpf(payload.representativeCpf);
+    const representativePhone = this.normalizeRepresentativePhone(payload.representativePhone);
+
+    if (!representativeName || !representativeCpf || !representativePhone) {
+      throw new Error('Para paciente falecido, nome, CPF e telefone do representante legal são obrigatórios');
+    }
+
+    if (representativeCpf.length !== 11) {
+      throw new Error('CPF do representante legal inválido. Informe 11 dígitos');
+    }
+
+    if (representativePhone.length < 10 || representativePhone.length > 15) {
+      throw new Error('Telefone do representante legal inválido. Informe de 10 a 15 dígitos');
+    }
+
+    payload.representativeName = representativeName;
+    payload.representativeCpf = representativeCpf;
+    payload.representativePhone = representativePhone;
+  }
+
   normalizeEmail(email) {
     if (email === undefined || email === null) return null;
     const normalized = String(email).trim().toLowerCase();
@@ -143,6 +270,20 @@ class PatientService {
       patientData.email = this.normalizeEmail(patientData.email);
       patientData.phone = this.normalizePhone(patientData.phone);
 
+      const clinicalUnitSnapshot = await this.resolveClinicalUnitSnapshot(db, patientData);
+      if (clinicalUnitSnapshot) {
+        patientData.clinicalUnitId = clinicalUnitSnapshot.clinicalUnitId;
+        patientData.clinicalUnit = clinicalUnitSnapshot.clinicalUnit;
+        patientData.unitAcronym = clinicalUnitSnapshot.unitAcronym;
+      } else {
+        patientData.clinicalUnit = this.normalizeClinicalUnit(patientData.clinicalUnit);
+        patientData.unitAcronym = patientData.clinicalUnit
+          ? PatientModel.fillAcronym(patientData.clinicalUnit)
+          : null;
+      }
+
+      this.applyDeceasedRepresentativeRules(patientData);
+
       if (!patientData.consentTemplateId || typeof patientData.consentTemplateId !== 'string') {
         throw new Error('Template de consentimento (consentTemplateId) é obrigatório');
       }
@@ -193,12 +334,12 @@ class PatientService {
         throw new Error('Unidade clínica inválida');
       }
 
-      // Gera sigla se não fornecida e garante uppercase
-      if (patientData.clinicalUnit && !patientData.unitAcronym) {
+      // Gera sigla da unidade por iniciais e garante uppercase
+      if (patientData.clinicalUnit) {
         patientData.unitAcronym = PatientModel.fillAcronym(patientData.clinicalUnit);
       }
       if (patientData.unitAcronym) {
-        patientData.unitAcronym = patientData.unitAcronym.toUpperCase();
+        patientData.unitAcronym = String(patientData.unitAcronym).toUpperCase();
       }
 
       // GERA ID ÚNICO DE 8 DÍGITOS AUTOMATICAMENTE (LGPD)
@@ -429,6 +570,12 @@ class PatientService {
     try {
       const patientsCollection = await getCollection(db, 'patients');
 
+      if (updateData.unitAcronym !== undefined) {
+        updateData.unitAcronym = updateData.unitAcronym
+          ? String(updateData.unitAcronym).trim().toUpperCase()
+          : null;
+      }
+
       if (updateData.email !== undefined) {
         updateData.email = this.normalizeEmail(updateData.email);
         if (!updateData.email || !PatientModel.isValidEmail(updateData.email)) {
@@ -442,6 +589,34 @@ class PatientService {
           throw new Error('Telefone (phone) inválido. Informe de 10 a 15 dígitos');
         }
         updateData.phone = normalizedPhone;
+      }
+
+      if (updateData.clinicalUnit !== undefined || updateData.clinicalUnitId !== undefined) {
+        const clinicalUnitSnapshot = await this.resolveClinicalUnitSnapshot(db, updateData);
+        if (clinicalUnitSnapshot) {
+          updateData.clinicalUnitId = clinicalUnitSnapshot.clinicalUnitId;
+          updateData.clinicalUnit = clinicalUnitSnapshot.clinicalUnit;
+          updateData.unitAcronym = clinicalUnitSnapshot.unitAcronym;
+        }
+      }
+
+      if (updateData.isDeceased !== undefined ||
+        updateData.representativeName !== undefined ||
+        updateData.representativeCpf !== undefined ||
+        updateData.representativePhone !== undefined) {
+        const existingPatient = await this.getPatient(db, patientID);
+        const mergedPayload = {
+          isDeceased: existingPatient?.isDeceased,
+          representativeName: existingPatient?.representativeName,
+          representativeCpf: existingPatient?.representativeCpf,
+          representativePhone: existingPatient?.representativePhone,
+          ...updateData
+        };
+        this.applyDeceasedRepresentativeRules(mergedPayload);
+        updateData.isDeceased = mergedPayload.isDeceased;
+        updateData.representativeName = mergedPayload.representativeName;
+        updateData.representativeCpf = mergedPayload.representativeCpf;
+        updateData.representativePhone = mergedPayload.representativePhone;
       }
       
       // Validação antes de atualizar

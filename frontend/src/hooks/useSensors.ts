@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Sensor, Temperature } from '../types/models';
 import { sensorService } from '../services/api';
+import { onClientLogout } from '../utils/sessionCleanup';
 
 export function useSensors() {
   const [sensors, setSensors] = useState<Sensor[]>([]);
@@ -9,6 +10,14 @@ export function useSensors() {
 
   useEffect(() => {
     loadSensors();
+  }, []);
+
+  useEffect(() => {
+    return onClientLogout(() => {
+      setSensors([]);
+      setError(null);
+      setLoading(false);
+    });
   }, []);
 
   const loadSensors = async () => {

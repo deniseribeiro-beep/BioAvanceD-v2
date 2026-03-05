@@ -1,6 +1,9 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
+const pollingInterval = Number(process.env.CHOKIDAR_INTERVAL || '300');
+const usePolling = process.env.CHOKIDAR_USEPOLLING === 'true';
+
 export default defineConfig({
   plugins: [
     react(),
@@ -25,6 +28,17 @@ export default defineConfig({
     strictPort: false,
     fs: { strict: false },
     hmr: { overlay: true },
+    watch: {
+      usePolling,
+      interval: pollingInterval
+    },
+    proxy: {
+      '/api': {
+        target: process.env.VITE_PROXY_TARGET || 'http://localhost:3000',
+        changeOrigin: true,
+        secure: false
+      }
+    },
     headers: {
       'X-Content-Type-Options': 'nosniff',
       'Cache-Control': 'no-cache',

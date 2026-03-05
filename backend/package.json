@@ -14,7 +14,7 @@
     "sync-collections": "node scripts/sync-collections.js",
     "sync:consent:neo4j": "node scripts/sync-consent-neo4j.js",
     "seed:full": "node scripts/full-seed.js",
-    "migrate:fhir": "node scripts/migrate-legacy-to-fhir.js",
+    "seed:cid": "node src/scripts/seedCid.js",
     "migrate:mongo:online-local": "node scripts/migrate-mongo-online-to-local.js",
     "remediate:fhir:barcode": "node scripts/remediate-fhir-missing-barcodes.js",
     "validate:fhir:barcode": "node scripts/check-fhir-barcode-coverage.js",

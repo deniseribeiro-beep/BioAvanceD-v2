@@ -18,6 +18,32 @@ router.post('/pacientes',
   importLGPDController.importPatients.bind(importLGPDController)
 );
 
+router.post('/pacientes/predict-mapping',
+  authenticate,
+  requirePermission('createPatient'),
+  importLGPDController.uploadMiddleware(),
+  importLGPDController.predictPatientsMapping.bind(importLGPDController)
+);
+
+router.post('/pacientes/smart-import',
+  authenticate,
+  requirePermission('createPatient'),
+  importLGPDController.uploadMiddleware(),
+  importLGPDController.importPatientsSmart.bind(importLGPDController)
+);
+
+router.get('/pacientes/smart-import/reports',
+  authenticate,
+  requirePermission('createPatient'),
+  importLGPDController.listSmartImportReports.bind(importLGPDController)
+);
+
+router.get('/pacientes/smart-import/metadata',
+  authenticate,
+  requirePermission('createPatient'),
+  importLGPDController.getPatientsSmartImportMetadata.bind(importLGPDController)
+);
+
 // Importação de amostras (valida IDs de pacientes)
 router.post('/amostras',
   authenticate,

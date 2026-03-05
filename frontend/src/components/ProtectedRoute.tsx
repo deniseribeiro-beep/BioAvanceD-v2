@@ -49,27 +49,9 @@ export default function ProtectedRoute({ children, requiredAccessType, requiredR
     );
   }
 
-  // Verifica se tem token no localStorage mesmo que o estado ainda não tenha sido atualizado
-  // Isso evita logout prematuro durante re-renderizações
-  const hasStoredToken = typeof window !== 'undefined' && localStorage.getItem('token');
-  
-  if (!isAuthenticated && !hasStoredToken) {
-    console.log('[ProtectedRoute] Redirecionando para login - sem autenticação e sem token armazenado');
+  if (!isAuthenticated) {
+    console.log('[ProtectedRoute] Redirecionando para login - sem autenticação');
     return <Navigate to="/login" replace />;
-  }
-
-  // Se tem token armazenado mas ainda está carregando, aguarda
-  if (!isAuthenticated && hasStoredToken && isLoading) {
-    return (
-      <div style={{ 
-        display: 'flex', 
-        justifyContent: 'center', 
-        alignItems: 'center', 
-        height: '100vh' 
-      }}>
-        <p>Carregando...</p>
-      </div>
-    );
   }
 
   // Verifica acesso por role (prioridade)

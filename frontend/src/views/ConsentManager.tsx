@@ -20,7 +20,7 @@ export default function ConsentManager() {
   const { t } = useLanguage();
   const { showToast } = useToast();
   const [activeTab, setActiveTab] = useState<'new' | 'history'>('new');
-  const [version, setVersion] = useState('');
+  const [editingPolicyId, setEditingPolicyId] = useState<string | null>(null);
   const [title, setTitle] = useState('');
   const [htmlContent, setHtmlContent] = useState('');
   const [caae, setCaae] = useState('');
@@ -28,43 +28,46 @@ export default function ConsentManager() {
     const today = new Date();
     return today.toISOString().slice(0, 10);
   });
+  const [validTo, setValidTo] = useState(() => {
+    const nextYear = new Date();
+    nextYear.setFullYear(nextYear.getFullYear() + 1);
+    return nextYear.toISOString().slice(0, 10);
+  });
   const [permissions, setPermissions] = useState<ConsentPolicyPermission[]>([emptyPermission()]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [history, setHistory] = useState<ConsentPolicy[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [historySearch, setHistorySearch] = useState('');
-  const [selectedHistoryIds, setSelectedHistoryIds] = useState<string[]>([]);
+  const [historyPage, setHistoryPage] = useState(1);
+  const [historyLimit, setHistoryLimit] = useState(10);
+  const [historyTotal, setHistoryTotal] = useState(0);
+  const [historyTotalPages, setHistoryTotalPages] = useState(1);
+  const [selectedHistoryItem, setSelectedHistoryItem] = useState<ConsentPolicy | null>(null);
 
   const canSubmit = useMemo(() => {
-    const hasPermissions = permissions.some(permission => permission.key.trim() && permission.label.trim());
-    return version.trim() && title.trim() && caae.trim() && htmlContent.trim() && hasPermissions;
-  }, [version, title, caae, htmlContent, permissions]);
-
-  const searchableHistory = useMemo(() => {
-    const term = historySearch.trim().toLowerCase();
-    if (!term) return history;
-    return history.filter((item) => {
-      const titleValue = String(item.title || '').toLowerCase();
-      const versionValue = String(item.version || '').toLowerCase();
-      const caaeValue = String((item as any).caae || '').toLowerCase();
-      return titleValue.includes(term) || versionValue.includes(term) || caaeValue.includes(term);
-    });
-  }, [history, historySearch]);
-
-  const displayedHistory = useMemo(() => {
-    if (selectedHistoryIds.length === 0) {
-      return searchableHistory;
+    const hasPermissions = permissions.length > 0 && permissions.every(permission => permission.key.trim() && permission.label.trim());
+    if (!title.trim() || !caae.trim() || !htmlContent.trim() || !validFrom || !validTo || !hasPermissions) {
+      return false;
     }
-    const selectedSet = new Set(selectedHistoryIds);
-    return searchableHistory.filter((item) => item._id && selectedSet.has(String(item._id)));
-  }, [searchableHistory, selectedHistoryIds]);
 
-  const loadHistory = async () => {
+    const startDate = new Date(validFrom);
+    const endDate = new Date(validTo);
+    if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) return false;
+    return endDate.getTime() >= startDate.getTime();
+  }, [title, caae, htmlContent, validFrom, validTo, permissions]);
+
+  const loadHistory = async (page = historyPage, limit = historyLimit, search = historySearch) => {
     setLoadingHistory(true);
     try {
-      const response = await consentService.getAllPolicies();
-      const payload = (response as any)?.data?.data ?? (response as any)?.data ?? [];
+      const response = await consentService.getPoliciesHistory({ page, limit, search: search.trim() || undefined });
+      const payload = (response as any)?.data?.data ?? [];
+      const pagination = (response as any)?.data?.pagination || {};
+
       setHistory(Array.isArray(payload) ? payload : []);
+      setHistoryPage(Number(pagination.page) || page);
+      setHistoryLimit(Number(pagination.limit) || limit);
+      setHistoryTotal(Number(pagination.total) || 0);
+      setHistoryTotalPages(Number(pagination.totalPages) || 1);
     } catch (error: any) {
       showToast(error?.message || t('consentManager.toasts.loadHistoryError'), 'error');
     } finally {
@@ -75,6 +78,16 @@ export default function ConsentManager() {
   useEffect(() => {
     loadHistory();
   }, []);
+
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      if (activeTab === 'history') {
+        loadHistory(1, historyLimit, historySearch);
+      }
+    }, 300);
+
+    return () => clearTimeout(handler);
+  }, [historySearch]);
 
   const handleAddPermission = () => {
     setPermissions((prev) => [...prev, emptyPermission()]);
@@ -101,11 +114,11 @@ export default function ConsentManager() {
     setIsSubmitting(true);
     try {
       const payload = {
-        version: version.trim(),
         title: title.trim(),
         caae: caae.trim(),
         htmlContent: htmlContent.trim(),
         validFrom: new Date(validFrom).toISOString(),
+        validTo: new Date(validTo).toISOString(),
         active: true,
         granularPermissions: permissions
           .filter(permission => permission.key.trim() && permission.label.trim())
@@ -116,16 +129,26 @@ export default function ConsentManager() {
           }))
       };
 
-      await consentService.createPolicy(payload);
-  showToast(t('consentManager.toasts.publishSuccess'), 'success');
+      if (editingPolicyId) {
+        await consentService.updatePolicy(editingPolicyId, payload);
+        showToast(t('consentManager.toasts.updateSuccess'), 'success');
+      } else {
+        await consentService.createPolicy(payload);
+        showToast(t('consentManager.toasts.publishSuccess'), 'success');
+      }
 
-      setVersion('');
+      setEditingPolicyId(null);
       setTitle('');
       setCaae('');
       setHtmlContent('');
+      const today = new Date();
+      const nextYear = new Date();
+      nextYear.setFullYear(nextYear.getFullYear() + 1);
+      setValidFrom(today.toISOString().slice(0, 10));
+      setValidTo(nextYear.toISOString().slice(0, 10));
       setPermissions([emptyPermission()]);
       setActiveTab('history');
-      await loadHistory();
+      await loadHistory(1, historyLimit, historySearch);
     } catch (error: any) {
       showToast(error?.message || t('consentManager.toasts.publishError'), 'error');
     } finally {
@@ -133,10 +156,36 @@ export default function ConsentManager() {
     }
   };
 
-  const toggleHistorySelection = (id: string) => {
-    setSelectedHistoryIds((prev) => (
-      prev.includes(id) ? prev.filter((value) => value !== id) : [...prev, id]
-    ));
+  const handlePrepareUpdate = (policy: ConsentPolicy) => {
+    setEditingPolicyId(String(policy._id || ''));
+    setTitle(String(policy.title || ''));
+    setCaae(String(policy.caae || ''));
+    setHtmlContent(String(policy.htmlContent || (policy as any).content || ''));
+    setValidFrom(policy.validFrom ? new Date(policy.validFrom).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10));
+    setValidTo(policy.validTo ? new Date(policy.validTo).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10));
+    setPermissions(
+      Array.isArray(policy.granularPermissions) && policy.granularPermissions.length > 0
+        ? policy.granularPermissions.map((permission) => ({
+            key: String(permission.key || ''),
+            label: String(permission.label || ''),
+            required: Boolean(permission.required)
+          }))
+        : [emptyPermission()]
+    );
+    setActiveTab('new');
+  };
+
+  const handleCancelUpdate = () => {
+    setEditingPolicyId(null);
+    setTitle('');
+    setCaae('');
+    setHtmlContent('');
+    const today = new Date();
+    const nextYear = new Date();
+    nextYear.setFullYear(nextYear.getFullYear() + 1);
+    setValidFrom(today.toISOString().slice(0, 10));
+    setValidTo(nextYear.toISOString().slice(0, 10));
+    setPermissions([emptyPermission()]);
   };
 
   return (
@@ -169,8 +218,13 @@ export default function ConsentManager() {
         <div className="consent-manager-grid">
           <Card className="consent-manager-form">
             <div className="consent-manager-form-fields">
+              {editingPolicyId && (
+                <div className="consent-manager-edit-banner">
+                  {t('consentManager.form.editingBanner')}
+                </div>
+              )}
+
               <div className="consent-manager-form-row">
-                <Input label={t('consentManager.form.version')} value={version} onChange={(event) => setVersion(event.target.value)} placeholder={t('consentManager.form.versionPlaceholder')} />
                 <Input label={t('consentManager.form.title')} value={title} onChange={(event) => setTitle(event.target.value)} placeholder={t('consentManager.form.titlePlaceholder')} />
                 <Input label={t('consentManager.form.caae')} value={caae} onChange={(event) => setCaae(event.target.value)} placeholder={t('consentManager.form.caaePlaceholder')} />
                 <Input
@@ -178,6 +232,12 @@ export default function ConsentManager() {
                   type="date"
                   value={validFrom}
                   onChange={(event) => setValidFrom(event.target.value)}
+                />
+                <Input
+                  label={t('consentManager.form.expirationDate')}
+                  type="date"
+                  value={validTo}
+                  onChange={(event) => setValidTo(event.target.value)}
                 />
               </div>
 
@@ -241,10 +301,17 @@ export default function ConsentManager() {
           </Card>
 
           <div className="consent-manager-actions">
+            {editingPolicyId && (
+              <Button variant="secondary" className="btn-ghost" onClick={handleCancelUpdate} disabled={isSubmitting}>
+                {t('consentManager.actions.cancelUpdate')}
+              </Button>
+            )}
             <Button variant="primary" onClick={handleSubmit} disabled={!canSubmit || isSubmitting}>
               {isSubmitting
                 ? t('consentManager.actions.publishing')
-                : t('consentManager.actions.publish')}
+                : editingPolicyId
+                  ? t('consentManager.actions.update')
+                  : t('consentManager.actions.publish')}
             </Button>
           </div>
         </div>
@@ -262,29 +329,27 @@ export default function ConsentManager() {
               label={t('consentManager.history.searchLabel')}
               value={historySearch}
               onChange={(event) => setHistorySearch(event.target.value)}
-              placeholder={t('consentManager.history.searchPlaceholder')}
+              placeholder={t('consentManager.history.searchPlaceholderUnified')}
             />
           </div>
 
-          <div className="consent-manager-history-checklist">
-            {searchableHistory.length === 0 ? (
-              <span className="consent-manager-empty">{t('consentManager.history.emptyFilter')}</span>
-            ) : (
-              searchableHistory.map((policy) => {
-                const itemId = policy._id ? String(policy._id) : `${policy.version}-${policy.title}`;
-                const checked = selectedHistoryIds.includes(itemId);
-                return (
-                  <label key={itemId} className="consent-manager-check-item">
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      onChange={() => toggleHistorySelection(itemId)}
-                    />
-                    <span>{policy.version} - {policy.title} {(policy as any).caae ? `(CAAE: ${(policy as any).caae})` : ''}</span>
-                  </label>
-                );
-              })
-            )}
+          <div className="consent-manager-history-pagination">
+            <label>
+              {t('consentManager.history.itemsPerPage')}
+              <select
+                value={historyLimit}
+                onChange={(event) => {
+                  const nextLimit = Number(event.target.value) || 10;
+                  setHistoryLimit(nextLimit);
+                  loadHistory(1, nextLimit, historySearch);
+                }}
+              >
+                {[10, 20, 50, 100].map((value) => (
+                  <option key={value} value={value}>{value}</option>
+                ))}
+              </select>
+            </label>
+            <span>{historyTotal} {t('consentManager.history.records')}</span>
           </div>
 
           {loadingHistory ? (
@@ -298,16 +363,20 @@ export default function ConsentManager() {
               t('consentManager.table.title'),
               t('consentManager.table.caae'),
               t('consentManager.table.effectiveDate'),
-              t('consentManager.table.status')
+              t('consentManager.table.expirationDate'),
+              t('consentManager.table.status'),
+              t('consentManager.table.permissions'),
+              t('consentManager.table.content'),
+              t('common.actions')
             ]}>
-              {displayedHistory.length === 0 ? (
+              {history.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="consent-manager-empty">
+                  <td colSpan={9} className="consent-manager-empty">
                     {t('consentManager.history.emptyTable')}
                   </td>
                 </tr>
               ) : (
-                displayedHistory.map((policy) => (
+                history.map((policy) => (
                   <tr key={policy._id || `${policy.version}-${policy.title}`}>
                     <td className="consent-manager-version">{policy.version}</td>
                     <td>{policy.title}</td>
@@ -316,14 +385,80 @@ export default function ConsentManager() {
                       {policy.validFrom ? new Date(policy.validFrom).toLocaleDateString() : '--'}
                     </td>
                     <td>
+                      {policy.validTo ? new Date(policy.validTo).toLocaleDateString() : '--'}
+                    </td>
+                    <td>
                       <span className={`consent-status ${policy.active ? 'active' : 'inactive'}`}>
                         {policy.active ? t('consentManager.status.active') : t('consentManager.status.inactive')}
                       </span>
+                    </td>
+                    <td>{Array.isArray(policy.granularPermissions) ? policy.granularPermissions.length : 0}</td>
+                    <td>{String(policy.htmlContent || '').slice(0, 80)}{String(policy.htmlContent || '').length > 80 ? '...' : ''}</td>
+                    <td>
+                      <div className="consent-manager-row-actions">
+                        <Button variant="secondary" className="btn-small btn-ghost" onClick={() => setSelectedHistoryItem(policy)}>
+                          {t('common.details')}
+                        </Button>
+                        <Button variant="secondary" className="btn-small" onClick={() => handlePrepareUpdate(policy)}>
+                          {t('consentManager.actions.update')}
+                        </Button>
+                      </div>
                     </td>
                   </tr>
                 ))
               )}
             </Table>
+          )}
+
+          <div className="consent-manager-history-pagination-controls">
+            <Button
+              variant="secondary"
+              className="btn-small btn-ghost"
+              disabled={historyPage <= 1 || loadingHistory}
+              onClick={() => loadHistory(historyPage - 1, historyLimit, historySearch)}
+            >
+              {t('common.previous')}
+            </Button>
+            <span>{t('consentManager.history.page')} {historyPage} {t('consentManager.history.of')} {historyTotalPages}</span>
+            <Button
+              variant="secondary"
+              className="btn-small btn-ghost"
+              disabled={historyPage >= historyTotalPages || loadingHistory}
+              onClick={() => loadHistory(historyPage + 1, historyLimit, historySearch)}
+            >
+              {t('common.next')}
+            </Button>
+          </div>
+
+          {selectedHistoryItem && (
+            <Card className="consent-manager-details">
+              <div className="consent-manager-history-header">
+                <h3 className="consent-manager-section-title">{t('consentManager.details.title')} {selectedHistoryItem.version}</h3>
+                <Button variant="secondary" className="btn-small btn-ghost" onClick={() => setSelectedHistoryItem(null)}>
+                  {t('common.close')}
+                </Button>
+              </div>
+              <div className="consent-manager-details-grid">
+                <p><strong>{t('consentManager.details.titleLabel')}:</strong> {selectedHistoryItem.title}</p>
+                <p><strong>{t('consentManager.details.caaeLabel')}:</strong> {selectedHistoryItem.caae}</p>
+                <p><strong>{t('consentManager.details.validFromLabel')}:</strong> {selectedHistoryItem.validFrom ? new Date(selectedHistoryItem.validFrom).toLocaleDateString() : '--'}</p>
+                <p><strong>{t('consentManager.details.validToLabel')}:</strong> {selectedHistoryItem.validTo ? new Date(selectedHistoryItem.validTo).toLocaleDateString() : '--'}</p>
+                <p><strong>{t('consentManager.details.statusLabel')}:</strong> {selectedHistoryItem.active ? t('consentManager.status.active') : t('consentManager.status.inactive')}</p>
+                <p><strong>{t('consentManager.details.createdAtLabel')}:</strong> {selectedHistoryItem.createdAt ? new Date(selectedHistoryItem.createdAt).toLocaleString() : '--'}</p>
+              </div>
+              <div className="consent-manager-details-content">
+                <strong>{t('consentManager.details.permissionsLabel')}</strong>
+                <ul>
+                  {(selectedHistoryItem.granularPermissions || []).map((permission, index) => (
+                    <li key={`${permission.key}-${index}`}>
+                      {permission.key} - {permission.label} {permission.required ? `(${t('consentManager.details.required')})` : ''}
+                    </li>
+                  ))}
+                </ul>
+                <strong>{t('consentManager.details.fullContent')}</strong>
+                <pre>{selectedHistoryItem.htmlContent || ''}</pre>
+              </div>
+            </Card>
           )}
         </Card>
       )}

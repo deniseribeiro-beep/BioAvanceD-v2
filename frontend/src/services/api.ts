@@ -19,7 +19,34 @@ import {
   SampleWithQualityDescription,
   Withdrawal,
   Return,
+  CidEntry,
+  ClinicalUnit,
 } from '../types/models';
+import { clearClientSession } from '../utils/sessionCleanup';
+
+const NO_TOKEN_PROTECTED_REQUEST = 'NO_TOKEN_PROTECTED_REQUEST';
+const TOKEN_OPTIONAL_ROUTES = [
+  '/auth/login',
+  '/auth/password-reset/request',
+  '/auth/password-reset/reset',
+  '/auth/two-factor/qr-first-login',
+  '/auth/two-factor/enable-first-login',
+];
+
+let isRedirectingToLogin = false;
+
+function isTokenOptionalRoute(url = ''): boolean {
+  return TOKEN_OPTIONAL_ROUTES.some((route) => url.includes(route));
+}
+
+function terminateSessionAndRedirect() {
+  if (isRedirectingToLogin) {
+    return;
+  }
+
+  isRedirectingToLogin = true;
+  clearClientSession({ redirectToLogin: true });
+}
 
 // Função para detectar automaticamente a URL base da API
 function getApiBaseUrl(): string {
@@ -77,6 +104,15 @@ const api = axios.create({
 api.interceptors.request.use(
   (config) => {
     const token = localStorage.getItem('token');
+    const url = config.url || '';
+
+    if (!token && !isTokenOptionalRoute(url)) {
+      const error = new Error('Requisição protegida cancelada por ausência de sessão') as Error & { code?: string };
+      error.code = NO_TOKEN_PROTECTED_REQUEST;
+      terminateSessionAndRedirect();
+      return Promise.reject(error);
+    }
+
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
@@ -91,7 +127,13 @@ api.interceptors.request.use(
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
-    if (error.code === 'ECONNREFUSED' || error.message.includes('Network Error')) {
+    if (error?.code === NO_TOKEN_PROTECTED_REQUEST || axios.isCancel(error)) {
+      return Promise.reject(error);
+    }
+
+    const errorMessage = String(error?.message || '');
+
+    if (error.code === 'ECONNREFUSED' || errorMessage.includes('Network Error')) {
       console.error('❌ Erro de conexão: Backend não está respondendo');
       
       // Tenta detectar porta alternativa (3001, 3002, etc.)
@@ -138,41 +180,16 @@ api.interceptors.response.use(
       return Promise.reject(new Error(`Servidor backend não está disponível. Verifique se está rodando na porta ${currentPort}.`));
     }
     
-    // Se erro 401 (não autorizado), remove token e redireciona para login
-    // Mas NÃO faz isso durante o processo de login (evita logout imediato)
+    // Se erro 401 (não autorizado), encerra sessão imediatamente para rotas protegidas
     if (error.response?.status === 401) {
-      const isLoginRoute = error.config?.url?.includes('/auth/login');
-      const isVerifyRoute = error.config?.url?.includes('/auth/verify');
-      const isKeepaliveRoute = error.config?.url?.includes('/auth/keepalive');
+      const requestUrl = error.config?.url || '';
       
-      // NÃO remove token para rotas de autenticação (login, verify, keepalive)
-      // Isso evita que o token seja removido durante o processo de autenticação
-      if (isLoginRoute || isVerifyRoute || isKeepaliveRoute) {
-        // Para verificação de token, NÃO remove o token automaticamente
-        // A verificação é apenas informativa e não deve causar logout
-        if (isVerifyRoute) {
-          console.warn('Erro 401 na verificação de token, mas mantendo sessão ativa');
-          // NÃO remove token - apenas rejeita a promise
-          // O AuthContext já trata isso sem fazer logout
-        }
+      // Rotas públicas de autenticação não devem forçar limpeza de sessão
+      if (isTokenOptionalRoute(requestUrl)) {
         return Promise.reject(error);
       }
-      
-      // Para outras rotas (não autenticação), pode remover token após várias tentativas
-      // Mas isso não deve acontecer para /auth/verify
-      const verifyAttempts = sessionStorage.getItem('verifyAttempts') || '0';
-      const attempts = parseInt(verifyAttempts, 10);
-      
-      if (attempts >= 3) {
-        localStorage.removeItem('token');
-        sessionStorage.removeItem('verifyAttempts');
-        sessionStorage.removeItem('lastLoginTime');
-        if (window.location.pathname !== '/login') {
-          window.location.href = '/login';
-        }
-      } else {
-        sessionStorage.setItem('verifyAttempts', String(attempts + 1));
-      }
+
+      terminateSessionAndRedirect();
     }
     
     return Promise.reject(error);
@@ -190,6 +207,12 @@ export const patientService = {
   findForEdit: (patientID: string) => api.post<Patient>('/patients/find-for-edit', { patientID }),
   search: (searchTerm: string) => api.get<{ patients: Patient[]; total: number }>(`/patients/search?q=${encodeURIComponent(searchTerm)}`),
   resendConsentNotification: (patientID: string) => api.post(`/patients/${patientID}/consent/resend`),
+};
+
+export const cidService = {
+  search: (term: string, limit = 10) => api.get<{ success: boolean; data: CidEntry[] }>('/cids/search', {
+    params: { q: term, limit }
+  })
 };
 
 // ========== SAMPLE SERVICES ==========
@@ -377,6 +400,19 @@ export const locationService = {
   fixMissingLocationIDs: () => api.patch<{ success: boolean; message: string; updated: number; total: number }>('/locations/fix-missing-locationids'),
 };
 
+export const clinicalUnitService = {
+  getAll: (limit = 100, includeInactive = false) =>
+    api.get<{ success: boolean; data: ClinicalUnit[] }>('/clinical-units', {
+      params: { limit, includeInactive }
+    }),
+  search: (term: string, limit = 10) =>
+    api.get<{ success: boolean; data: ClinicalUnit[] }>('/clinical-units/search', {
+      params: { q: term, limit }
+    }),
+  create: (data: Partial<ClinicalUnit>) =>
+    api.post<{ success: boolean; data: ClinicalUnit; message?: string }>('/clinical-units', data),
+};
+
 // ========== TEMPERATURE SERVICES ==========
 export const temperatureService = {
   getAll: () => api.get<Temperature[]>('/temperature'),
@@ -535,7 +571,25 @@ export const authService = {
   login: (username: string, password: string, twoFactorCode?: string) =>
     api.post('/auth/login', { username, password, twoFactorCode }),
   logout: () => api.post('/auth/logout'),
-  verifyToken: () => api.get('/auth/verify'),
+  verifyToken: async () => {
+    try {
+      return await api.get('/auth/verify');
+    } catch (error: any) {
+      if (Number(error?.response?.status || 0) === 404) {
+        const keepAliveResponse = await api.post('/auth/keepalive');
+        return {
+          ...keepAliveResponse,
+          data: {
+            success: true,
+            data: {
+              valid: true
+            }
+          }
+        } as any;
+      }
+      throw error;
+    }
+  },
   keepAlive: () => api.post('/auth/keepalive'),
   // 2FA endpoints
   generateTwoFactorQR: () => api.get('/auth/two-factor/qr'),
@@ -635,7 +689,10 @@ export const consentService = {
   createTemplate: (data: Partial<ConsentTemplate>) => api.post<ConsentTemplate>('/consent-templates', data),
   getActiveTemplate: () => api.get<{ success: boolean; data: ConsentTemplate }>('/consent-templates/active'),
   createPolicy: (data: Partial<ConsentPolicy>) => api.post<ConsentPolicy>('/consent-policies', data),
+  updatePolicy: (id: string, data: Partial<ConsentPolicy>) => api.put<{ success: boolean; data: ConsentPolicy }>(`/consent-policies/${id}`, data),
   getActivePolicy: () => api.get<{ success: boolean; data: ConsentPolicy }>('/consent-policies/active'),
+  getActivePoliciesWithCaae: () => api.get<{ success: boolean; data: ConsentPolicy[] }>('/consent-policies/active-with-caae'),
+  getPoliciesHistory: (params?: { page?: number; limit?: number; search?: string }) => api.get<{ success: boolean; data: ConsentPolicy[]; pagination?: { page: number; limit: number; total: number; totalPages: number } }>('/consent-policies/history', { params }),
   getAllPolicies: () => api.get<{ success: boolean; data: ConsentPolicy[] }>('/consent-policies'),
   createPatientConsent: (data: {
     patientId: string;
@@ -666,6 +723,28 @@ export const importLGPDService = {
     return api.get(endpoint, {
       responseType: 'blob',
     });
+  },
+  predictPatientsMapping: (formData: FormData) => {
+    return api.post('/import-lgpd/pacientes/predict-mapping', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    });
+  },
+  smartImportPatients: (formData: FormData) => {
+    return api.post('/import-lgpd/pacientes/smart-import', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    });
+  },
+  getSmartImportReports: (params?: { page?: number; limit?: number }) => {
+    return api.get('/import-lgpd/pacientes/smart-import/reports', {
+      params,
+    });
+  },
+  getSmartImportPatientsMetadata: () => {
+    return api.get('/import-lgpd/pacientes/smart-import/metadata');
   },
 };
 

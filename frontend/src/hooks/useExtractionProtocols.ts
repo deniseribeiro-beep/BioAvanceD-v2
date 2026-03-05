@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { extractionProtocolService } from '../services/api';
+import { onClientLogout } from '../utils/sessionCleanup';
 
 export interface ExtractionProtocol {
   _id?: string;
@@ -17,6 +18,14 @@ export function useExtractionProtocols() {
 
   useEffect(() => {
     loadProtocols();
+  }, []);
+
+  useEffect(() => {
+    return onClientLogout(() => {
+      setProtocols([]);
+      setError(null);
+      setLoading(false);
+    });
   }, []);
 
   const loadProtocols = async () => {

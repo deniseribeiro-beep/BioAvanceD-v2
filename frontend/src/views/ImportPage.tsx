@@ -1,17 +1,29 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Card from '../components/UI/Card';
 import Button from '../components/UI/Button';
 import Modal from '../components/UI/Modal';
 import Spinner from '../components/UI/Spinner';
 import BarcodeLabel from '../components/BarcodeLabel';
-import { Upload, FileText, FileSpreadsheet, ArrowLeft, CheckCircle, XCircle, AlertCircle, Clock } from 'lucide-react';
+import { Upload, FileText, ArrowLeft, CheckCircle, XCircle, AlertCircle, Clock } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { extractionProtocolService, importLGPDService, sampleOriginService, sampleTypeService } from '../services/api';
 import { useAsyncImport } from '../hooks/useAsyncImport';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useToast } from '../components/UI/ToastContainer';
 import './ImportPage.css';
+
+type SmartImportReport = {
+  _id: string;
+  createdAt?: string;
+  fileName?: string;
+  userName?: string | null;
+  summaryReport?: {
+    totalProcessado?: number;
+    totalFalhas?: number;
+    hashSHA256ArquivoOriginal?: string;
+  };
+};
 
 export default function ImportPage() {
   const navigate = useNavigate();
@@ -49,6 +61,10 @@ export default function ImportPage() {
   const [selectedSampleType, setSelectedSampleType] = useState('');
   const [selectedSampleOrigin, setSelectedSampleOrigin] = useState('');
   const [selectedExtractionProtocol, setSelectedExtractionProtocol] = useState('');
+  const [smartImportReports, setSmartImportReports] = useState<SmartImportReport[]>([]);
+  const [loadingSmartImportReports, setLoadingSmartImportReports] = useState(false);
+  const [smartImportUserFilter, setSmartImportUserFilter] = useState('');
+  const [smartImportDateFilter, setSmartImportDateFilter] = useState('');
 
   const canImportPatients = user?.roleName === 'Administrador' || user?.roleName === 'Coordenador' || user?.accessType === 3 || user?.accessType === 4;
   const canImportSamples = user?.roleName === 'Administrador' || user?.roleName === 'Coordenador' || user?.roleName === 'Técnico' || user?.accessType === 2 || user?.accessType === 3 || user?.accessType === 4;
@@ -185,6 +201,34 @@ export default function ImportPage() {
     if (!term) return extractionProtocolOptions;
     return extractionProtocolOptions.filter((item) => item.toLowerCase().includes(term));
   }, [extractionProtocolOptions, sampleGroupSearch]);
+
+  const loadSmartImportReports = async () => {
+    setLoadingSmartImportReports(true);
+    try {
+      const response = await importLGPDService.getSmartImportReports({ page: 1, limit: 50 });
+      const data = (response as any)?.data?.data || [];
+      setSmartImportReports(Array.isArray(data) ? data : []);
+    } catch (error: any) {
+      setSmartImportReports([]);
+      showToast(error?.response?.data?.message || error?.message || 'Erro ao carregar histórico de importações inteligentes', 'error');
+    } finally {
+      setLoadingSmartImportReports(false);
+    }
+  };
+
+  useEffect(() => {
+    loadSmartImportReports();
+  }, []);
+
+  const filteredSmartImportReports = useMemo(() => {
+    return smartImportReports.filter((item) => {
+      const createdAt = String(item.createdAt || '');
+      const userName = String(item.userName || '').toLowerCase();
+      const userMatch = !smartImportUserFilter.trim() || userName.includes(smartImportUserFilter.trim().toLowerCase());
+      const dateMatch = !smartImportDateFilter || createdAt.startsWith(smartImportDateFilter);
+      return userMatch && dateMatch;
+    });
+  }, [smartImportReports, smartImportUserFilter, smartImportDateFilter]);
 
   const loadSampleGroupFieldOptions = async () => {
     setLoadingSampleGroupFields(true);
@@ -375,13 +419,6 @@ export default function ImportPage() {
                     <FileText size={16} />
                     {t('import.template.csv')}
                   </Button>
-                  <Button
-                    variant="secondary"
-                    onClick={() => handleDownloadTemplate('samples', 'xlsx')}
-                  >
-                    <FileSpreadsheet size={16} />
-                    {t('import.template.excel')}
-                  </Button>
                 </div>
               </div>
 
@@ -427,6 +464,92 @@ export default function ImportPage() {
               </Button>
             </>
           )}
+        </Card>
+
+        <Card>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+              <h3 style={{ margin: 0 }}>Histórico de SummaryReport (Smart Import)</h3>
+              <Button type="button" variant="secondary" onClick={loadSmartImportReports} disabled={loadingSmartImportReports}>
+                Atualizar
+              </Button>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 180px', gap: '0.5rem' }}>
+              <input
+                type="text"
+                value={smartImportUserFilter}
+                onChange={(event) => setSmartImportUserFilter(event.target.value)}
+                placeholder="Filtrar por usuário"
+                style={{
+                  width: '100%',
+                  padding: '0.5rem',
+                  border: '1px solid var(--border)',
+                  borderRadius: '6px',
+                  fontSize: '0.875rem',
+                  backgroundColor: 'var(--surface)',
+                  color: 'var(--text)'
+                }}
+              />
+              <input
+                type="date"
+                aria-label="Filtrar por data"
+                title="Filtrar por data"
+                value={smartImportDateFilter}
+                onChange={(event) => setSmartImportDateFilter(event.target.value)}
+                style={{
+                  width: '100%',
+                  padding: '0.5rem',
+                  border: '1px solid var(--border)',
+                  borderRadius: '6px',
+                  fontSize: '0.875rem',
+                  backgroundColor: 'var(--surface)',
+                  color: 'var(--text)'
+                }}
+              />
+            </div>
+
+            {loadingSmartImportReports ? (
+              <span style={{ color: 'var(--text-light)' }}>Carregando histórico...</span>
+            ) : filteredSmartImportReports.length === 0 ? (
+              <span style={{ color: 'var(--text-light)' }}>Nenhum SummaryReport encontrado.</span>
+            ) : (
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.84rem' }}>
+                  <thead>
+                    <tr>
+                      <th style={{ textAlign: 'left', borderBottom: '1px solid var(--border)', padding: '0.4rem' }}>Data</th>
+                      <th style={{ textAlign: 'left', borderBottom: '1px solid var(--border)', padding: '0.4rem' }}>Usuário</th>
+                      <th style={{ textAlign: 'left', borderBottom: '1px solid var(--border)', padding: '0.4rem' }}>Arquivo</th>
+                      <th style={{ textAlign: 'right', borderBottom: '1px solid var(--border)', padding: '0.4rem' }}>Processado</th>
+                      <th style={{ textAlign: 'right', borderBottom: '1px solid var(--border)', padding: '0.4rem' }}>Falhas</th>
+                      <th style={{ textAlign: 'left', borderBottom: '1px solid var(--border)', padding: '0.4rem' }}>SHA-256</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredSmartImportReports.map((report) => (
+                      <tr key={String(report._id)}>
+                        <td style={{ padding: '0.4rem', borderBottom: '1px solid var(--border)' }}>
+                          {report.createdAt ? new Date(report.createdAt).toLocaleString('pt-BR') : '--'}
+                        </td>
+                        <td style={{ padding: '0.4rem', borderBottom: '1px solid var(--border)' }}>{report.userName || '--'}</td>
+                        <td style={{ padding: '0.4rem', borderBottom: '1px solid var(--border)' }}>{report.fileName || '--'}</td>
+                        <td style={{ padding: '0.4rem', borderBottom: '1px solid var(--border)', textAlign: 'right' }}>
+                          {report.summaryReport?.totalProcessado ?? 0}
+                        </td>
+                        <td style={{ padding: '0.4rem', borderBottom: '1px solid var(--border)', textAlign: 'right' }}>
+                          {report.summaryReport?.totalFalhas ?? 0}
+                        </td>
+                        <td style={{ padding: '0.4rem', borderBottom: '1px solid var(--border)' }}>
+                          {String(report.summaryReport?.hashSHA256ArquivoOriginal || '--').slice(0, 16)}...
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
         </Card>
 
 

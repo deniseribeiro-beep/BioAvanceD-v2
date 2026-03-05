@@ -1,17 +1,16 @@
-import { useState, useMemo, Fragment, CSSProperties } from 'react';
+import { useState, useMemo, useRef, Fragment, CSSProperties } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Card from '../components/UI/Card';
 import Table from '../components/UI/Table';
 import Button from '../components/UI/Button';
 import Modal from '../components/UI/Modal';
-import { Plus, Edit, Trash2, Search, ArrowLeft, Upload, FileSpreadsheet } from 'lucide-react';
+import { Plus, Edit, Trash2, Search, ArrowLeft, Upload } from 'lucide-react';
 import StatusBadge, { ConsentStatus } from '../components/Consent/StatusBadge';
 import SignaturePad from '../components/Consent/SignaturePad';
-import { Patient, ConsentPolicy } from '../types/models';
+import { Patient } from '../types/models';
 import { usePatients } from '../hooks/usePatients';
 import { useAuth } from '../contexts/AuthContext';
-import { importLGPDService } from '../services/api';
-import { patientService, consentService } from '../services/api';
+import { consentService, importLGPDService, patientService } from '../services/api';
 import { useLanguage } from '../contexts/LanguageContext';
 import './PatientsPage.css';
 
@@ -33,7 +32,65 @@ const styles: Record<string, CSSProperties> = {
   consentHint: {
     fontSize: '0.8rem',
     color: 'var(--text-light)'
+  },
+  importInfoPanel: {
+    marginBottom: '1rem',
+    padding: '0.9rem 1rem',
+    border: '1px solid var(--border)',
+    borderRadius: '8px',
+    backgroundColor: 'var(--surface)'
+  },
+  importWarningText: {
+    margin: 0,
+    color: 'var(--warning)',
+    fontSize: '0.9rem',
+    fontWeight: 600
+  },
+  importPanelActions: {
+    marginTop: '0.6rem',
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: '0.75rem',
+    alignItems: 'center'
+  },
+  importHelpButton: {
+    background: 'none',
+    border: 'none',
+    color: 'var(--text)',
+    textDecoration: 'underline',
+    cursor: 'pointer',
+    padding: 0,
+    fontSize: '0.875rem'
   }
+};
+
+type SmartImportMetadata = {
+  acceptedExtensions?: string[];
+  invalidRowPolicy?: {
+    code?: string;
+    message?: string;
+  };
+  requiredFields?: Array<{
+    field: string;
+    label: string;
+    description?: string;
+  }>;
+  conditionalRules?: Array<{
+    when: string;
+    requiredFields?: string[];
+    message?: string;
+  }>;
+  consentTemplates?: {
+    available?: boolean;
+    count?: number;
+    items?: Array<{
+      _id: string;
+      title?: string;
+      version?: string;
+      caae?: string;
+      active?: boolean;
+    }>;
+  };
 };
 
 export default function PatientsPage() {
@@ -45,18 +102,52 @@ export default function PatientsPage() {
   const [searchResults, setSearchResults] = useState<Patient[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [showSearchResults, setShowSearchResults] = useState(false);
-  const [importing, setImporting] = useState(false);
-  const [importFile, setImportFile] = useState<File | null>(null);
-  const [importProgress, setImportProgress] = useState<string>('');
   const [resendingConsentFor, setResendingConsentFor] = useState<string | null>(null);
   const [isSignatureModalOpen, setIsSignatureModalOpen] = useState(false);
   const [activePatientId, setActivePatientId] = useState<string | null>(null);
   const [consentOverrides, setConsentOverrides] = useState<Record<string, ConsentStatus>>({});
-  const [isBatchImportModalOpen, setIsBatchImportModalOpen] = useState(false);
-  const [consentPolicies, setConsentPolicies] = useState<ConsentPolicy[]>([]);
-  const [consentPolicySearch, setConsentPolicySearch] = useState('');
-  const [selectedConsentTemplateId, setSelectedConsentTemplateId] = useState('');
-  const [loadingConsentPolicies, setLoadingConsentPolicies] = useState(false);
+  const [isSmartImportingPatients, setIsSmartImportingPatients] = useState(false);
+  const [isBulkImportSummaryModalOpen, setIsBulkImportSummaryModalOpen] = useState(false);
+  const [isBulkImportConfigModalOpen, setIsBulkImportConfigModalOpen] = useState(false);
+  const [smartImportMetadata, setSmartImportMetadata] = useState<SmartImportMetadata | null>(null);
+  const [selectedBulkImportConsentTemplateId, setSelectedBulkImportConsentTemplateId] = useState('');
+  const [pendingBulkImportFile, setPendingBulkImportFile] = useState<File | null>(null);
+  const [bulkImportSummary, setBulkImportSummary] = useState<{
+    fileName: string;
+    totalProcessed: number;
+    totalFailures: number;
+    hash: string;
+    errorMessage?: string;
+    firstErrorDetail?: string;
+    summaryReportId?: string;
+    errorsDetails?: string[];
+  } | null>(null);
+  const [isDownloadingPatientsTemplate, setIsDownloadingPatientsTemplate] = useState(false);
+  const [showImportErrorDetails, setShowImportErrorDetails] = useState(false);
+  const [loadingImportErrorDetails, setLoadingImportErrorDetails] = useState(false);
+  const [importErrorDetails, setImportErrorDetails] = useState<string[]>([]);
+  const [copyingImportErrors, setCopyingImportErrors] = useState(false);
+  const bulkImportInputRef = useRef<HTMLInputElement | null>(null);
+  const canImportPatients = user?.roleName === 'Administrador' || user?.roleName === 'Coordenador' || user?.accessType === 3 || user?.accessType === 4;
+  const hasSelectableConsentTemplates = Array.isArray(smartImportMetadata?.consentTemplates?.items) && smartImportMetadata.consentTemplates.items.length > 0;
+  const isConsentTemplateSelectionMissing = hasSelectableConsentTemplates && !selectedBulkImportConsentTemplateId;
+
+  const fallbackRequiredFields = useMemo(() => ([
+    { field: 'patientName', label: 'Nome do paciente', description: 'Nome completo do paciente.' },
+    { field: 'birthDate', label: 'Data de nascimento', description: 'Formato aceito: DD/MM/AAAA ou AAAA-MM-DD.' },
+    { field: 'sex', label: 'Sexo', description: 'Valores aceitos: M, F ou O.' },
+    { field: 'email', label: 'Email', description: 'Email válido para envio de TCLE e notificações.' },
+    { field: 'consentTemplateId', label: 'Template de consentimento (TCLE)', description: 'Selecione um TCLE existente no próprio sistema para aplicar na importação em lote.' },
+  ]), []);
+
+  const fallbackConditionalRules = useMemo(() => ([
+    {
+      when: 'Paciente falecido = Sim',
+      requiredFields: ['representativeName', 'representativeEmail'],
+      message: 'Para paciente falecido, nome e email do responsável são obrigatórios.'
+    }
+  ]), []);
+
   const isConnectionError = (errorMessage?: string) => {
     const normalized = String(errorMessage || '').toLowerCase();
     return normalized.includes('econnrefused') || normalized.includes('network error') || normalized.includes('backend não está disponível') || normalized.includes('backend is unavailable');
@@ -149,6 +240,237 @@ export default function PatientsPage() {
     navigate('/patients/new');
   };
 
+  const loadSmartImportMetadataWithFallback = async () => {
+    try {
+      const policiesResponse = await consentService.getAllPolicies();
+      const policies = Array.isArray((policiesResponse as any)?.data?.data)
+        ? (policiesResponse as any).data.data
+        : [];
+
+      const items = policies
+        .filter((policy: any) => policy && policy._id)
+        .map((policy: any) => ({
+          _id: String(policy._id),
+          title: String(policy.title || ''),
+          version: String(policy.version || ''),
+          caae: String(policy.caae || '--'),
+          active: Boolean(policy.active)
+        }));
+
+      setSmartImportMetadata((prev) => ({
+        ...(prev || {}),
+        consentTemplates: {
+          available: items.length > 0,
+          count: items.length,
+          items
+        }
+      }));
+    } catch {
+      setSmartImportMetadata(null);
+    }
+  };
+
+  const handleOpenBulkImport = async () => {
+    if (!canImportPatients) {
+      alert(t('import.patients.noPermission'));
+      return;
+    }
+    if (isSmartImportingPatients) return;
+    bulkImportInputRef.current?.click();
+  };
+
+  const handleDownloadPatientsTemplate = async () => {
+    if (isDownloadingPatientsTemplate) return;
+    setIsDownloadingPatientsTemplate(true);
+    try {
+      const response = await importLGPDService.downloadTemplate('patients', 'xlsx');
+      const blob = response?.data instanceof Blob
+        ? response.data
+        : new Blob([response?.data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'pacientes_template.xlsx';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (error: any) {
+      const message = error?.response?.data?.message || error?.message || t('import.errors.importError');
+      alert(message);
+    } finally {
+      setIsDownloadingPatientsTemplate(false);
+    }
+  };
+
+  const mapErrorsToMessages = (errorsDetails: any[]): string[] => {
+    if (!Array.isArray(errorsDetails)) return [];
+
+    return errorsDetails
+      .flatMap((entry) => {
+        const row = entry?.row ? `Linha ${entry.row}: ` : '';
+        if (Array.isArray(entry?.errors) && entry.errors.length > 0) {
+          return entry.errors.map((message: any) => `${row}${String(message || '').trim()}`.trim());
+        }
+        if (entry?.error) {
+          return [`${row}${String(entry.error || '').trim()}`.trim()];
+        }
+        return [];
+      })
+      .filter((message) => Boolean(String(message || '').trim()));
+  };
+
+  const handleOpenImportErrorDetails = async () => {
+    if (!bulkImportSummary || (bulkImportSummary.totalFailures || 0) <= 0) return;
+
+    setShowImportErrorDetails(true);
+
+    if (Array.isArray(bulkImportSummary.errorsDetails) && bulkImportSummary.errorsDetails.length > 0) {
+      setImportErrorDetails(bulkImportSummary.errorsDetails);
+      return;
+    }
+
+    const summaryReportId = String(bulkImportSummary.summaryReportId || '').trim();
+    if (!summaryReportId) {
+      setImportErrorDetails(['Detalhes dos erros indisponíveis para este relatório.']);
+      return;
+    }
+
+    setLoadingImportErrorDetails(true);
+    try {
+      const response = await importLGPDService.getSmartImportReports({ page: 1, limit: 20 });
+      const reports = Array.isArray((response as any)?.data?.data) ? (response as any).data.data : [];
+      const selectedReport = reports.find((item: any) => String(item?._id || '') === summaryReportId);
+      const persistedDetails = mapErrorsToMessages(Array.isArray(selectedReport?.errorsDetails) ? selectedReport.errorsDetails : []);
+      setImportErrorDetails(persistedDetails.length > 0 ? persistedDetails : ['Detalhes dos erros indisponíveis para este relatório.']);
+    } catch {
+      setImportErrorDetails(['Não foi possível carregar os detalhes dos erros no momento.']);
+    } finally {
+      setLoadingImportErrorDetails(false);
+    }
+  };
+
+  const handleCopyImportErrors = async () => {
+    const details = importErrorDetails.length > 0
+      ? importErrorDetails
+      : (bulkImportSummary?.firstErrorDetail ? [bulkImportSummary.firstErrorDetail] : []);
+
+    if (details.length === 0) {
+      alert('Nenhum detalhe de erro disponível para copiar.');
+      return;
+    }
+
+    setCopyingImportErrors(true);
+    try {
+      await navigator.clipboard.writeText(details.join('\n'));
+      alert('Detalhes de erro copiados para a área de transferência.');
+    } catch {
+      alert('Não foi possível copiar os detalhes automaticamente.');
+    } finally {
+      setCopyingImportErrors(false);
+    }
+  };
+
+  const handleConfirmBulkImportConfig = async () => {
+    if (!pendingBulkImportFile) {
+      alert(t('import.errors.fileRequired'));
+      return;
+    }
+
+    setIsBulkImportConfigModalOpen(false);
+    const selectedFile = pendingBulkImportFile;
+    const formData = new FormData();
+    formData.append('file', selectedFile);
+
+    setIsSmartImportingPatients(true);
+    try {
+      let suggestedMapping: Record<string, string> = {};
+      try {
+        const mappingResponse = await importLGPDService.predictPatientsMapping(formData);
+        suggestedMapping = (mappingResponse as any)?.data?.data?.suggestedMapping || {};
+      } catch {
+        suggestedMapping = {};
+      }
+
+      const importFormData = new FormData();
+      importFormData.append('file', selectedFile);
+      if (Object.keys(suggestedMapping).length > 0) {
+        importFormData.append('mapping', JSON.stringify(suggestedMapping));
+      }
+      if (selectedBulkImportConsentTemplateId) {
+        importFormData.append('groupFields', JSON.stringify({ consentTemplateId: selectedBulkImportConsentTemplateId }));
+      }
+
+      const response = await importLGPDService.smartImportPatients(importFormData);
+      const payload = (response as any)?.data || {};
+      const summary = payload?.data?.summaryReport || {};
+      const summaryReportId = String(payload?.data?.summaryReportId || '').trim();
+      const errorsDetails = Array.isArray(payload?.data?.errorsDetails) ? payload.data.errorsDetails : [];
+      const detailedMessages = mapErrorsToMessages(errorsDetails);
+      const firstErrorEntry = errorsDetails[0] || null;
+      const firstErrorDetail = firstErrorEntry
+        ? (Array.isArray(firstErrorEntry.errors) ? String(firstErrorEntry.errors[0] || '') : String(firstErrorEntry.error || ''))
+        : undefined;
+      const totalProcessed = Number(summary.totalProcessado || 0);
+      const totalFailures = Number(summary.totalFalhas || 0);
+      const hash = String(summary.hashSHA256ArquivoOriginal || '--');
+      const fileName = String(payload?.data?.fileName || selectedFile.name || '--');
+
+      setBulkImportSummary({
+        fileName,
+        totalProcessed,
+        totalFailures,
+        hash,
+        firstErrorDetail,
+        summaryReportId: summaryReportId || undefined,
+        errorsDetails: detailedMessages
+      });
+      setShowImportErrorDetails(false);
+      setImportErrorDetails([]);
+      setIsBulkImportSummaryModalOpen(true);
+
+      await loadPatients();
+      setShowSearchResults(false);
+      setSearchResults([]);
+    } catch (err: any) {
+      const errorMessage = err?.response?.data?.message || err?.response?.data?.error || err?.message || t('import.errors.importError');
+      setBulkImportSummary({
+        fileName: selectedFile.name,
+        totalProcessed: 0,
+        totalFailures: 0,
+        hash: '--',
+        errorMessage
+      });
+      setShowImportErrorDetails(false);
+      setImportErrorDetails([]);
+      setIsBulkImportSummaryModalOpen(true);
+    } finally {
+      setIsSmartImportingPatients(false);
+      setPendingBulkImportFile(null);
+    }
+  };
+
+  const handleBulkImportChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFile = event.target.files?.[0];
+    event.target.value = '';
+
+    if (!selectedFile) return;
+
+    const ext = selectedFile.name.toLowerCase().split('.').pop();
+    const validExtensions = ['csv', 'xlsx', 'txt'];
+    if (!ext || !validExtensions.includes(ext)) {
+      alert(t('import.errors.invalidFileType'));
+      return;
+    }
+
+    if (!smartImportMetadata) {
+      await loadSmartImportMetadataWithFallback();
+    }
+
+    setPendingBulkImportFile(selectedFile);
+    setIsBulkImportConfigModalOpen(true);
+  };
+
   const handleEdit = async (patient: Patient) => {
     try {
       const patientIDStr = patient?.patientID ? String(patient.patientID) : '';
@@ -211,203 +533,6 @@ export default function PatientsPage() {
     }
   };
 
-  const handleImportPatients = async (file?: File) => {
-    const fileToImport = file || importFile;
-    
-    if (!fileToImport) {
-      alert(t('patients.selectFile'));
-      return;
-    }
-
-    setImporting(true);
-    setImportProgress(`${t('patients.importFileLabel')}: ${fileToImport.name} (${(fileToImport.size / 1024).toFixed(1)} KB)`);
-    
-    try {
-      if (!selectedConsentTemplateId) {
-        alert(t('patients.consentTemplateRequired'));
-        return;
-      }
-
-      const formData = new FormData();
-      formData.append('file', fileToImport);
-      formData.append('groupFields', JSON.stringify({ consentTemplateId: selectedConsentTemplateId }));
-
-      setImportProgress(`${t('patients.importProcessingLabel')}: ${fileToImport.name}`);
-
-      const response = await importLGPDService.import('patients', formData);
-      
-      setImportProgress('');
-      
-      if (response && response.data) {
-        if (response.data.success === false) {
-          const errorMsg = response.data.error || response.data.message || t('patients.importErrorGeneric');
-          throw new Error(errorMsg);
-        }
-        
-        const importData = response.data.data || response.data;
-        const message = response.data.message || t('patients.importCompleted');
-        
-        if (importData) {
-          const total = importData.total || 0;
-          const success = importData.success || 0;
-          const errors = importData.errors || 0;
-          const errorsDetails = importData.errorsDetails || [];
-          
-          if (errors > 0) {
-            const isPartial = success > 0;
-            let errorMessage = message;
-            
-            const duplicateErrors = errorsDetails.filter((err: any) => {
-              const errorList = Array.isArray(err.errors) ? err.errors : [err.errors || ''];
-              return errorList.some((e: string) => e.toLowerCase().includes('duplicado') || e.toLowerCase().includes('duplicate'));
-            });
-            
-            const hasDuplicates = duplicateErrors.length > 0;
-            
-            if (hasDuplicates && !isPartial) {
-              errorMessage = t('patients.importDuplicateBlocked').replace('{count}', String(duplicateErrors.length));
-            } else if (hasDuplicates && isPartial) {
-              errorMessage += `\n\n${t('patients.importDuplicateWarning').replace('{count}', String(duplicateErrors.length))}`;
-            }
-            
-            if (errorsDetails && errorsDetails.length > 0) {
-              errorMessage += '\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━';
-              errorMessage += `\n${t('patients.importErrorsDetailTitle')}`;
-              errorMessage += '\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━';
-              
-              const errorsToShow = errorsDetails.slice(0, 15);
-              errorsToShow.forEach((err: any) => {
-                const errorList = Array.isArray(err.errors) ? err.errors : [err.errors || t('patients.importUnknownError')];
-                const isDuplicate = errorList.some((e: string) => e.toLowerCase().includes('duplicado') || e.toLowerCase().includes('duplicate'));
-                
-                errorMessage += `\n\n${isDuplicate ? '🔄' : '📌'} ${t('patients.importLineLabel')} ${err.row || 'N/A'}:`;
-                errorList.forEach((errorText: string) => {
-                  const prefix = errorText.toLowerCase().includes('duplicado') || errorText.toLowerCase().includes('duplicate') ? '   ⚠️ ' : '   • ';
-                  errorMessage += `\n${prefix}${errorText}`;
-                });
-              });
-              
-              if (errorsDetails.length > 15) {
-                errorMessage += `\n\n${t('patients.importMoreErrorsHidden').replace('{count}', String(errorsDetails.length - 15))}`;
-              }
-              
-              errorMessage += '\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━';
-              errorMessage += `\n${t('patients.importHowToFix')}`;
-              if (hasDuplicates) {
-                errorMessage += `\n${t('patients.importFixDuplicatesStep1')}`;
-                errorMessage += `\n${t('patients.importFixDuplicatesStep2')}`;
-                errorMessage += `\n${t('patients.importFixDuplicatesStep3')}`;
-                errorMessage += `\n\n${t('patients.importDuplicateDefinition')}`;
-              } else {
-                errorMessage += `\n${t('patients.importFixDataStep1')}`;
-                errorMessage += `\n${t('patients.importFixDataStep2')}`;
-                errorMessage += `\n${t('patients.importFixDataStep3')}`;
-              }
-            }
-            
-            setTimeout(() => {
-              alert(errorMessage);
-            }, 100);
-          } else {
-            setTimeout(() => {
-              alert(t('patients.importSuccessSummary')
-                .replace('{total}', String(total))
-                .replace('{success}', String(success))
-                .replace('{errors}', String(errors))
-              );
-            }, 100);
-          }
-        }
-        
-        setShowSearchResults(false);
-        setSearchResults([]);
-        await loadPatients();
-        
-        setTimeout(() => {
-          setImportFile(null);
-          setImportProgress('');
-          const fileInput = document.getElementById('import-file') as HTMLInputElement;
-          if (fileInput) {
-            fileInput.value = '';
-          }
-        }, 3000);
-      }
-    } catch (err: any) {
-      console.error('Erro ao importar pacientes:', err);
-      let errorMessage = t('patients.importErrorGeneric');
-        
-        if (err.response) {
-          const errorData = err.response.data;
-          if (errorData) {
-            errorMessage = errorData.message || errorData.error || errorMessage;
-          } else {
-            errorMessage = t('patients.importServerError')
-              .replace('{status}', String(err.response.status || ''))
-              .replace('{statusText}', String(err.response.statusText || t('patients.importServerErrorFallback')));
-          }
-        } else if (err.request) {
-          errorMessage = t('patients.importConnectionError');
-        } else {
-          errorMessage = err.message || errorMessage;
-        }
-        
-        alert(`${t('patients.importErrorTitle')}\n\n${errorMessage}`);
-        
-        setTimeout(() => {
-          setImportFile(null);
-          setImportProgress('');
-          const fileInput = document.getElementById('import-file') as HTMLInputElement;
-          if (fileInput) {
-            fileInput.value = '';
-          }
-        }, 5000);
-    } finally {
-      setImporting(false);
-    }
-  };
-
-  const filteredConsentPolicies = useMemo(() => {
-    const term = consentPolicySearch.trim().toLowerCase();
-    if (!term) return consentPolicies;
-    return consentPolicies.filter((policy) => {
-      const titleValue = String(policy.title || '').toLowerCase();
-      const versionValue = String(policy.version || '').toLowerCase();
-      const caaeValue = String(policy.caae || '').toLowerCase();
-      return titleValue.includes(term) || versionValue.includes(term) || caaeValue.includes(term);
-    });
-  }, [consentPolicies, consentPolicySearch]);
-
-  const loadConsentPolicies = async () => {
-    setLoadingConsentPolicies(true);
-    try {
-      const response = await consentService.getAllPolicies();
-      const data = (response as any)?.data?.data || [];
-      setConsentPolicies(Array.isArray(data) ? data : []);
-    } catch (err: any) {
-      alert(err?.message || t('patients.consentLoadError'));
-      setConsentPolicies([]);
-    } finally {
-      setLoadingConsentPolicies(false);
-    }
-  };
-
-  const openBatchImportModal = async (file: File) => {
-    setImportFile(file);
-    setSelectedConsentTemplateId('');
-    setConsentPolicySearch('');
-    setIsBatchImportModalOpen(true);
-    await loadConsentPolicies();
-  };
-
-  const confirmBatchImport = async () => {
-    if (!selectedConsentTemplateId) {
-      alert(t('patients.consentTemplateRequired'));
-      return;
-    }
-    setIsBatchImportModalOpen(false);
-    await handleImportPatients();
-  };
-
   const getButtonLabel = (key: string, en: string, es: string) => {
     if (language === 'en-US') return en;
     if (language === 'es-ES') return es;
@@ -433,6 +558,15 @@ export default function PatientsPage() {
           </div>
         </div>
         <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center' }}>
+          <input
+            ref={bulkImportInputRef}
+            type="file"
+            accept=".csv,.xlsx,.txt"
+            onChange={handleBulkImportChange}
+            aria-label={getButtonLabel('import.patients.import', 'Import Patients', 'Importar pacientes')}
+            title={getButtonLabel('import.patients.import', 'Import Patients', 'Importar pacientes')}
+            style={{ display: 'none' }}
+          />
           <div style={{ 
             position: 'relative', 
             display: 'flex', 
@@ -501,89 +635,12 @@ export default function PatientsPage() {
               <span style={{ fontSize: '0.75rem', color: 'var(--text-light)', whiteSpace: 'nowrap' }}>{t('common.searching')}</span>
             )}
           </div>
-          <Button 
-            onClick={() => {
-              importLGPDService.downloadTemplate('patients', 'xlsx')
-                .then((response) => {
-                  const url = window.URL.createObjectURL(new Blob([response.data]));
-                  const link = document.createElement('a');
-                  link.href = url;
-                  link.setAttribute('download', 'patients_template.xlsx');
-                  document.body.appendChild(link);
-                  link.click();
-                  link.remove();
-                  window.URL.revokeObjectURL(url);
-                })
-                .catch(() => {
-                  alert(t('patients.importErrorGeneric'));
-                });
-            }}
-            variant="secondary"
-          >
-            <FileSpreadsheet size={18} />
-            {getButtonLabel('patients.downloadTemplate', 'Download Excel Template', 'Descargar plantilla Excel')}
+          <Button onClick={handleOpenBulkImport} disabled={isSmartImportingPatients}>
+            <Upload size={18} />
+            {isSmartImportingPatients
+              ? t('import.patients.importing')
+              : getButtonLabel('import.patients.import', 'Import Patients', 'Importar pacientes')}
           </Button>
-          <div style={{ position: 'relative', display: 'inline-block' }}>
-            <input
-              type="file"
-              id="import-file"
-              accept=".csv,.xlsx"
-              title={t('patients.importFileTitle')}
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (file) {
-                  const ext = file.name.toLowerCase().split('.').pop();
-                  if (ext !== 'csv' && ext !== 'xlsx') {
-                    alert(t('patients.importFileTypeError'));
-                    e.target.value = '';
-                    return;
-                  }
-                  setImportFile(file);
-                  setImportProgress('');
-                  setTimeout(() => {
-                    openBatchImportModal(file);
-                  }, 100);
-                }
-              }}
-              style={{ display: 'none' }}
-            />
-            <div style={{ position: 'relative', display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-start', gap: '4px' }}>
-            <Button
-                onClick={(e) => {
-                  e.preventDefault();
-                  if (importing) {
-                    return;
-                  }
-                  document.getElementById('import-file')?.click();
-              }}
-              variant="secondary"
-              disabled={importing}
-                style={{
-                  position: 'relative',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.5rem'
-                }}
-            >
-              <Upload size={18} />
-                {getButtonLabel('patients.importPatients', 'Import Patients', 'Importar pacientes')}
-            </Button>
-              {importProgress && (
-                <div style={{
-                  fontSize: '0.7rem',
-                  color: 'var(--text-light)',
-                  textAlign: 'left',
-                  whiteSpace: 'nowrap',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  maxWidth: '250px',
-                  paddingLeft: '0.25rem'
-                }}>
-                  {importProgress}
-                </div>
-              )}
-            </div>
-          </div>
           <Button onClick={handleAdd}>
             <Plus size={18} />
             {getButtonLabel('patients.new', 'New Patient', 'Nuevo paciente')}
@@ -740,69 +797,178 @@ export default function PatientsPage() {
       </Modal>
 
       <Modal
-        isOpen={isBatchImportModalOpen}
-        onClose={() => setIsBatchImportModalOpen(false)}
-        title={t('patients.batchImportModalTitle')}
+        isOpen={isBulkImportSummaryModalOpen}
+        onClose={() => {
+          setIsBulkImportSummaryModalOpen(false);
+          setShowImportErrorDetails(false);
+          setImportErrorDetails([]);
+        }}
+        title={t('import.result.title')}
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-          <p style={{ margin: 0, color: 'var(--text-light)', fontSize: '0.9rem' }}>
-            {t('patients.batchImportModalSubtitle')}
-          </p>
+          {bulkImportSummary?.errorMessage ? (
+            <>
+              <p style={{ margin: 0, color: 'var(--danger)' }}>{bulkImportSummary.errorMessage}</p>
+              <p style={{ margin: 0, color: 'var(--text-light)', fontSize: '0.85rem' }}>
+                {t('import.result.fileLabel')}: {bulkImportSummary.fileName}
+              </p>
+            </>
+          ) : (
+            <>
+              <p style={{ margin: 0 }}>
+                <strong>{t('import.result.fileLabel')}:</strong> {bulkImportSummary?.fileName || '--'}
+              </p>
+              <p style={{ margin: 0 }}>
+                <strong>{t('import.result.totalRecords')}:</strong> {bulkImportSummary?.totalProcessed ?? 0}
+              </p>
+              <p style={{ margin: 0 }}>
+                <strong>{t('import.result.errors')}:</strong> {bulkImportSummary?.totalFailures ?? 0}
+              </p>
+              <p style={{ margin: 0, color: 'var(--text-light)', fontSize: '0.85rem', wordBreak: 'break-all' }}>
+                <strong>SHA-256:</strong> {bulkImportSummary?.hash || '--'}
+              </p>
+              {(bulkImportSummary?.totalFailures || 0) > 0 && (
+                <p style={{ margin: 0, color: 'var(--warning)' }}>
+                  {t('patients.importInvalidSummary').replace('{count}', String(bulkImportSummary?.totalFailures || 0))}
+                </p>
+              )}
+              {bulkImportSummary?.firstErrorDetail && (
+                <p style={{ margin: 0, color: 'var(--danger)' }}>
+                  <strong>Primeiro erro:</strong> {bulkImportSummary.firstErrorDetail}
+                </p>
+              )}
 
-          <input
-            type="text"
-            value={consentPolicySearch}
-            onChange={(event) => setConsentPolicySearch(event.target.value)}
-            placeholder={t('patients.consentTemplateSearchPlaceholder')}
-            style={{
-              width: '100%',
-              padding: '0.5rem',
-              border: '1px solid var(--border)',
-              borderRadius: '6px',
-              fontSize: '0.875rem',
-              backgroundColor: 'var(--surface)',
-              color: 'var(--text)'
-            }}
-          />
+              {(bulkImportSummary?.totalFailures || 0) > 0 && (
+                <Button variant="secondary" onClick={handleOpenImportErrorDetails} disabled={loadingImportErrorDetails}>
+                  {loadingImportErrorDetails ? 'Carregando detalhes...' : 'Ver detalhes dos erros'}
+                </Button>
+              )}
 
-          <div style={{
-            border: '1px solid var(--border)',
-            borderRadius: '8px',
-            maxHeight: '220px',
-            overflowY: 'auto',
-            padding: '0.75rem',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '0.5rem'
-          }}>
-            {loadingConsentPolicies ? (
-              <span style={{ color: 'var(--text-light)' }}>{t('patients.loadingConsent')}</span>
-            ) : filteredConsentPolicies.length === 0 ? (
-              <span style={{ color: 'var(--text-light)' }}>{t('patients.consentTemplateEmpty')}</span>
-            ) : (
-              filteredConsentPolicies.map((policy) => {
-                const policyId = String(policy._id || `${policy.version}-${policy.title}`);
-                const isChecked = selectedConsentTemplateId === policyId;
-                return (
-                  <label key={policyId} style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-start' }}>
-                    <input
-                      type="checkbox"
-                      checked={isChecked}
-                      onChange={() => setSelectedConsentTemplateId(isChecked ? '' : policyId)}
-                    />
-                    <span>{policy.version} - {policy.title} ({t('patients.caaeLabel')}: {policy.caae || '--'})</span>
-                  </label>
-                );
-              })
-            )}
+              {showImportErrorDetails && (
+                <div style={{
+                  border: '1px solid var(--border)',
+                  borderRadius: '6px',
+                  padding: '0.75rem',
+                  maxHeight: '220px',
+                  overflowY: 'auto',
+                  backgroundColor: 'var(--surface)'
+                }}>
+                  <strong style={{ display: 'block', marginBottom: '0.5rem' }}>Detalhes dos erros</strong>
+                  <ul style={{ margin: 0, paddingLeft: '1rem', display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                    {importErrorDetails.slice(0, 50).map((item, index) => (
+                      <li key={`${index}-${item}`}>{item}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {(showImportErrorDetails || bulkImportSummary?.firstErrorDetail) && (
+                <Button variant="secondary" onClick={handleCopyImportErrors} disabled={copyingImportErrors}>
+                  {copyingImportErrors ? 'Copiando...' : 'Copiar erros'}
+                </Button>
+              )}
+            </>
+          )}
+
+          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <Button variant="secondary" onClick={() => setIsBulkImportSummaryModalOpen(false)}>
+              {t('common.close')}
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal
+        isOpen={isBulkImportConfigModalOpen}
+        onClose={() => {
+          if (isSmartImportingPatients) return;
+          setIsBulkImportConfigModalOpen(false);
+          setPendingBulkImportFile(null);
+        }}
+        title={t('patients.importHelpTitle')}
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.8rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+            <p style={{ margin: 0 }}>
+              <strong>{t('import.result.fileLabel')}:</strong> {pendingBulkImportFile?.name || '--'}
+            </p>
+            <Button variant="secondary" onClick={handleDownloadPatientsTemplate} disabled={isDownloadingPatientsTemplate}>
+              {isDownloadingPatientsTemplate ? 'Baixando template...' : 'Baixar XLSX de exemplo'}
+            </Button>
           </div>
 
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
-            <Button type="button" variant="secondary" onClick={() => setIsBatchImportModalOpen(false)}>
-              {t('common.cancel')}
+          <p style={styles.importWarningText}>
+            {smartImportMetadata?.invalidRowPolicy?.message || t('patients.importInvalidRowsNotSaved')}
+          </p>
+
+          <p style={{ margin: 0, color: 'var(--text-light)' }}>
+            {t('patients.importHelpDescription')}
+          </p>
+
+          <div>
+            <strong>{t('patients.importMinimumFieldsTitle')}</strong>
+            <ul style={{ marginTop: '0.5rem', paddingLeft: '1rem' }}>
+              {(smartImportMetadata?.requiredFields?.length ? smartImportMetadata.requiredFields : fallbackRequiredFields).map((field) => (
+                <li key={field.field} style={{ marginBottom: '0.35rem' }}>
+                  <strong>{field.label}:</strong> {field.description || field.field}
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          <div>
+            <strong>{t('patients.importConditionalRulesTitle')}</strong>
+            <ul style={{ marginTop: '0.5rem', paddingLeft: '1rem' }}>
+              {(smartImportMetadata?.conditionalRules?.length ? smartImportMetadata.conditionalRules : fallbackConditionalRules).map((rule, index) => (
+                <li key={`${rule.when}-${index}`}>
+                  <strong>{rule.when}:</strong> {rule.message}
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          {Array.isArray(smartImportMetadata?.consentTemplates?.items) && smartImportMetadata.consentTemplates.items.length > 0 && (
+            <div style={styles.importPanelActions}>
+              <label htmlFor="bulk-consent-template" style={{ fontSize: '0.85rem', color: 'var(--text-light)' }}>
+                {t('patients.importConsentTemplateLabel')}
+              </label>
+              <select
+                id="bulk-consent-template"
+                value={selectedBulkImportConsentTemplateId}
+                onChange={(event) => setSelectedBulkImportConsentTemplateId(event.target.value)}
+                style={{
+                  width: '100%',
+                  padding: '0.4rem 0.5rem',
+                  border: '1px solid var(--border)',
+                  borderRadius: '6px',
+                  fontSize: '0.85rem',
+                  backgroundColor: 'var(--surface)',
+                  color: 'var(--text)'
+                }}
+              >
+                <option value="">{t('patients.importConsentTemplateAuto')}</option>
+                {smartImportMetadata.consentTemplates.items.map((template) => (
+                  <option key={template._id} value={template._id}>
+                    {`${template.version || '--'} - ${template.title || '--'} (${t('patients.caaeLabel')}: ${template.caae || '--'})`}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setIsBulkImportConfigModalOpen(false);
+                setPendingBulkImportFile(null);
+              }}
+              disabled={isSmartImportingPatients}
+            >
+              {t('common.close')}
             </Button>
-            <Button type="button" onClick={confirmBatchImport} disabled={!selectedConsentTemplateId || importing}>
-              {t('patients.confirmBatchImport')}
+            <Button onClick={handleConfirmBulkImportConfig} disabled={isSmartImportingPatients || !pendingBulkImportFile || isConsentTemplateSelectionMissing}>
+              {getButtonLabel('import.patients.import', 'Import Patients', 'Importar pacientes')}
             </Button>
           </div>
         </div>

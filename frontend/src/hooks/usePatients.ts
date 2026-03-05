@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Patient } from '../types/models';
 import { patientService } from '../services/api';
+import { onClientLogout } from '../utils/sessionCleanup';
 
 interface ApiLikeError {
   message?: string;
@@ -22,9 +23,16 @@ type PatientsPayload = {
 
 type PatientWithOptionalId = Patient & { id?: string };
 
+const NO_TOKEN_PROTECTED_REQUEST = 'NO_TOKEN_PROTECTED_REQUEST';
+
 function extractErrorMessage(error: unknown, fallback: string): string {
   const typedError = error as ApiLikeError | null;
   return typedError?.response?.data?.error || typedError?.response?.data?.message || typedError?.message || fallback;
+}
+
+function isSilentAuthAbort(error: unknown): boolean {
+  const typedError = error as { code?: string } | null;
+  return typedError?.code === NO_TOKEN_PROTECTED_REQUEST;
 }
 
 function ensurePatientId(items: Patient[]): Patient[] {
@@ -67,6 +75,14 @@ export function usePatients() {
     loadPatients();
   }, []);
 
+  useEffect(() => {
+    return onClientLogout(() => {
+      setPatients([]);
+      setError(null);
+      setLoading(false);
+    });
+  }, []);
+
   const loadPatients = async () => {
     try {
       setLoading(true);
@@ -75,6 +91,9 @@ export function usePatients() {
       const patientsData = extractPatients(response.data);
       setPatients(patientsData);
     } catch (err: unknown) {
+      if (isSilentAuthAbort(err)) {
+        return;
+      }
       console.error('Erro ao carregar pacientes:', err);
       setError(extractErrorMessage(err, 'Erro ao carregar pacientes'));
       setPatients([]); // Garante que a lista seja limpa em caso de erro
