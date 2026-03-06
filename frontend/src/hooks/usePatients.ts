@@ -109,6 +109,10 @@ export function usePatients() {
       await loadPatients();
       return response.data;
     } catch (err: unknown) {
+      const typedError = err as ApiLikeError;
+      if (typedError?.response) {
+        throw err;
+      }
       throw new Error(extractErrorMessage(err, 'Erro ao criar paciente'));
     }
   };
@@ -120,6 +124,10 @@ export function usePatients() {
       await loadPatients();
       return response.data;
     } catch (err: unknown) {
+      const typedError = err as ApiLikeError;
+      if (typedError?.response) {
+        throw err;
+      }
       throw new Error(extractErrorMessage(err, 'Erro ao atualizar paciente'));
     }
   };
@@ -131,6 +139,10 @@ export function usePatients() {
       // Recarrega a lista completa para garantir dados atualizados
       await loadPatients();
     } catch (err: unknown) {
+      const typedError = err as ApiLikeError;
+      if (typedError?.response) {
+        throw err;
+      }
       throw new Error(extractErrorMessage(err, 'Erro ao deletar paciente'));
     }
   };

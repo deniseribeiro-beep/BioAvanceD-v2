@@ -199,6 +199,8 @@ export default function NewSamplePageView({
               value={String(formData.patientID || '')}
               onChange={onPatientIDChange}
               onValidationChange={onValidationChange}
+              enableInitialDropdown
+              initialLimit={20}
               required
               placeholder={t('samples.patientIDSearchPlaceholder') || 'Buscar por ID ou prontuário...'}
             />

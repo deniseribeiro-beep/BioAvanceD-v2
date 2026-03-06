@@ -10,10 +10,13 @@ import { ConsentPolicy, ConsentPolicyPermission } from '../types/models';
 import { useLanguage } from '../contexts/LanguageContext';
 import './ConsentManager.css';
 
-const emptyPermission = (): ConsentPolicyPermission => ({
-  key: '',
-  label: '',
-  required: false
+type PermissionRow = ConsentPolicyPermission & { tempId: string };
+
+const buildPermissionRow = (permission?: Partial<ConsentPolicyPermission>): PermissionRow => ({
+  tempId: `permission-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+  key: String(permission?.key || ''),
+  label: String(permission?.label || ''),
+  required: Boolean(permission?.required)
 });
 
 export default function ConsentManager() {
@@ -33,7 +36,7 @@ export default function ConsentManager() {
     nextYear.setFullYear(nextYear.getFullYear() + 1);
     return nextYear.toISOString().slice(0, 10);
   });
-  const [permissions, setPermissions] = useState<ConsentPolicyPermission[]>([emptyPermission()]);
+  const [permissions, setPermissions] = useState<PermissionRow[]>([buildPermissionRow()]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [history, setHistory] = useState<ConsentPolicy[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
@@ -90,7 +93,7 @@ export default function ConsentManager() {
   }, [historySearch]);
 
   const handleAddPermission = () => {
-    setPermissions((prev) => [...prev, emptyPermission()]);
+    setPermissions((prev) => [...prev, buildPermissionRow()]);
   };
 
   const handleRemovePermission = (index: number) => {
@@ -146,7 +149,7 @@ export default function ConsentManager() {
       nextYear.setFullYear(nextYear.getFullYear() + 1);
       setValidFrom(today.toISOString().slice(0, 10));
       setValidTo(nextYear.toISOString().slice(0, 10));
-      setPermissions([emptyPermission()]);
+      setPermissions([buildPermissionRow()]);
       setActiveTab('history');
       await loadHistory(1, historyLimit, historySearch);
     } catch (error: any) {
@@ -165,12 +168,14 @@ export default function ConsentManager() {
     setValidTo(policy.validTo ? new Date(policy.validTo).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10));
     setPermissions(
       Array.isArray(policy.granularPermissions) && policy.granularPermissions.length > 0
-        ? policy.granularPermissions.map((permission) => ({
-            key: String(permission.key || ''),
-            label: String(permission.label || ''),
-            required: Boolean(permission.required)
-          }))
-        : [emptyPermission()]
+        ? policy.granularPermissions.map((permission) =>
+            buildPermissionRow({
+              key: String(permission.key || ''),
+              label: String(permission.label || ''),
+              required: Boolean(permission.required)
+            })
+          )
+        : [buildPermissionRow()]
     );
     setActiveTab('new');
   };
@@ -185,7 +190,7 @@ export default function ConsentManager() {
     nextYear.setFullYear(nextYear.getFullYear() + 1);
     setValidFrom(today.toISOString().slice(0, 10));
     setValidTo(nextYear.toISOString().slice(0, 10));
-    setPermissions([emptyPermission()]);
+    setPermissions([buildPermissionRow()]);
   };
 
   return (
@@ -264,7 +269,7 @@ export default function ConsentManager() {
             </div>
             <div className="consent-manager-permissions-list">
               {permissions.map((permission, index) => (
-                <div key={`${permission.key}-${index}`} className="consent-permission-card">
+                <div key={permission.tempId} className="consent-permission-card">
                   <Input
                     label={t('consentManager.permissions.id')}
                     value={permission.key}

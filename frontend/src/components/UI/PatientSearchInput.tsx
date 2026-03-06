@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useId } from 'react';
-import { Search, CheckCircle, XCircle, Loader } from 'lucide-react';
+import { Search, CheckCircle, XCircle, Loader, ChevronDown } from 'lucide-react';
 import { patientService } from '../../services/api';
 import './PatientSearchInput.css';
 
@@ -16,7 +16,17 @@ interface PatientSearchInputProps {
   label?: string;
   required?: boolean;
   placeholder?: string;
+  enableInitialDropdown?: boolean;
+  initialLimit?: number;
 }
+
+const extractPatients = (payload: any): Patient[] => {
+  if (Array.isArray(payload?.data?.patients)) return payload.data.patients;
+  if (Array.isArray(payload?.patients)) return payload.patients;
+  if (Array.isArray(payload?.data)) return payload.data;
+  if (Array.isArray(payload)) return payload;
+  return [];
+};
 
 export default function PatientSearchInput({
   value,
@@ -24,13 +34,16 @@ export default function PatientSearchInput({
   onValidationChange,
   label = 'ID do Paciente',
   required = false,
-  placeholder = 'Buscar por ID ou prontuário...'
+  placeholder = 'Buscar por ID ou prontuário...',
+  enableInitialDropdown = false,
+  initialLimit = 20,
 }: PatientSearchInputProps) {
   const inputId = useId();
   const [searchTerm, setSearchTerm] = useState('');
   const [results, setResults] = useState<Patient[]>([]);
   const [showResults, setShowResults] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [loadingInitial, setLoadingInitial] = useState(false);
   const [isValid, setIsValid] = useState<boolean | null>(null);
   const [validating, setValidating] = useState(false);
   const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -88,17 +101,31 @@ export default function PatientSearchInput({
     setLoading(true);
     try {
       const response = await patientService.search(term.trim());
-      const responseData: any = response.data;
-      // A API retorna { success: true, data: { patients: [], total: number } }
-      const patients = responseData?.data?.patients || responseData?.patients || [];
+      const patients = extractPatients(response.data);
       setResults(patients);
-      setShowResults(patients.length > 0);
+      setShowResults(true);
     } catch (err: any) {
       console.error('Erro ao buscar pacientes:', err);
       setResults([]);
-      setShowResults(false);
+      setShowResults(true);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadInitialPatients = async () => {
+    if (!enableInitialDropdown) return;
+    setLoadingInitial(true);
+    setShowResults(true);
+    try {
+      const response = await patientService.getAll({ limit: initialLimit, skip: 0 });
+      const patients = extractPatients(response.data);
+      setResults(patients);
+    } catch (err: any) {
+      console.error('Erro ao carregar pacientes iniciais:', err);
+      setResults([]);
+    } finally {
+      setLoadingInitial(false);
     }
   };
 
@@ -115,6 +142,15 @@ export default function PatientSearchInput({
       return;
     }
 
+    if (term.trim().length === 0) {
+      if (enableInitialDropdown) {
+        loadInitialPatients();
+      } else {
+        setShowResults(false);
+      }
+      return;
+    }
+
     // Limpa timeout anterior
     if (searchTimeoutRef.current) {
       clearTimeout(searchTimeoutRef.current);
@@ -124,6 +160,15 @@ export default function PatientSearchInput({
     searchTimeoutRef.current = setTimeout(() => {
       handleSearch(term);
     }, 500);
+  };
+
+  const handleToggleDropdown = () => {
+    if (!enableInitialDropdown) return;
+    if (showResults) {
+      setShowResults(false);
+      return;
+    }
+    loadInitialPatients();
   };
 
   const handleSelectPatient = (patient: Patient) => {
@@ -173,13 +218,15 @@ export default function PatientSearchInput({
                 setShowResults(true);
               } else if (searchTerm && searchTerm.length >= 2) {
                 handleSearch(searchTerm);
+              } else if (enableInitialDropdown) {
+                loadInitialPatients();
               }
             }}
             placeholder={placeholder}
             required={required}
             style={{
               width: '100%',
-              padding: '0.625rem 0.75rem 0.625rem 2.5rem',
+              padding: '0.625rem 2.5rem 0.625rem 2.5rem',
               border: `1px solid ${isValid === false ? 'var(--danger)' : isValid === true ? 'var(--success)' : 'var(--border)'}`,
               borderRadius: '6px',
               fontSize: '0.875rem',
@@ -189,12 +236,24 @@ export default function PatientSearchInput({
               transition: 'border-color 0.2s ease'
             }}
           />
+          {enableInitialDropdown && (
+            <button
+              type="button"
+              className="patient-search-toggle"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={handleToggleDropdown}
+              aria-label="Alternar lista de pacientes"
+              title="Mostrar lista de pacientes"
+            >
+              <ChevronDown size={16} className={showResults ? 'open' : ''} />
+            </button>
+          )}
           {validating && (
             <Loader 
               size={16} 
               style={{ 
                 position: 'absolute', 
-                right: '0.75rem', 
+                right: enableInitialDropdown ? '2.5rem' : '0.75rem', 
                 top: '50%', 
                 transform: 'translateY(-50%)',
                 color: 'var(--text-light)',
@@ -207,7 +266,7 @@ export default function PatientSearchInput({
               size={16} 
               style={{ 
                 position: 'absolute', 
-                right: '0.75rem', 
+                right: enableInitialDropdown ? '2.5rem' : '0.75rem', 
                 top: '50%', 
                 transform: 'translateY(-50%)',
                 color: 'var(--success)'
@@ -219,7 +278,7 @@ export default function PatientSearchInput({
               size={16} 
               style={{ 
                 position: 'absolute', 
-                right: '0.75rem', 
+                right: enableInitialDropdown ? '2.5rem' : '0.75rem', 
                 top: '50%', 
                 transform: 'translateY(-50%)',
                 color: 'var(--danger)'
@@ -256,7 +315,7 @@ export default function PatientSearchInput({
           </div>
         )}
 
-        {showResults && loading && (
+        {showResults && (loading || loadingInitial) && (
           <div className="patient-search-results">
             <div className="patient-search-loading">
               <Loader size={16} style={{ animation: 'spin 1s linear infinite' }} />
@@ -265,10 +324,10 @@ export default function PatientSearchInput({
           </div>
         )}
 
-        {showResults && !loading && results.length === 0 && searchTerm.length >= 2 && (
+        {showResults && !loading && !loadingInitial && results.length === 0 && (
           <div className="patient-search-results">
             <div className="patient-search-empty">
-              Nenhum paciente encontrado
+              {searchTerm.length >= 2 ? 'Nenhum paciente encontrado' : 'Nenhum paciente disponível'}
             </div>
           </div>
         )}

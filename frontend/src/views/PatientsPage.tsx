@@ -130,11 +130,10 @@ export default function PatientsPage() {
   const bulkImportInputRef = useRef<HTMLInputElement | null>(null);
   const canImportPatients = user?.roleName === 'Administrador' || user?.roleName === 'Coordenador' || user?.accessType === 3 || user?.accessType === 4;
   const hasSelectableConsentTemplates = Array.isArray(smartImportMetadata?.consentTemplates?.items) && smartImportMetadata.consentTemplates.items.length > 0;
-  const isConsentTemplateSelectionMissing = hasSelectableConsentTemplates && !selectedBulkImportConsentTemplateId;
 
   const fallbackRequiredFields = useMemo(() => ([
     { field: 'patientName', label: 'Nome do paciente', description: 'Nome completo do paciente.' },
-    { field: 'birthDate', label: 'Data de nascimento', description: 'Formato aceito: DD/MM/AAAA ou AAAA-MM-DD.' },
+    { field: 'birthDate', label: 'Data de nascimento', description: 'Preenchimento obrigatório no formato DD/MM/AAAA (ex.: 31/12/1990). Também aceito: AAAA-MM-DD (ex.: 1990-12-31).' },
     { field: 'sex', label: 'Sexo', description: 'Valores aceitos: M, F ou O.' },
     { field: 'email', label: 'Email', description: 'Email válido para envio de TCLE e notificações.' },
     { field: 'consentTemplateId', label: 'Template de consentimento (TCLE)', description: 'Selecione um TCLE existente no próprio sistema para aplicar na importação em lote.' },
@@ -374,6 +373,11 @@ export default function PatientsPage() {
   const handleConfirmBulkImportConfig = async () => {
     if (!pendingBulkImportFile) {
       alert(t('import.errors.fileRequired'));
+      return;
+    }
+
+    if (hasSelectableConsentTemplates && !selectedBulkImportConsentTemplateId) {
+      alert(t('patients.consentTemplateRequired'));
       return;
     }
 
@@ -967,7 +971,7 @@ export default function PatientsPage() {
             >
               {t('common.close')}
             </Button>
-            <Button onClick={handleConfirmBulkImportConfig} disabled={isSmartImportingPatients || !pendingBulkImportFile || isConsentTemplateSelectionMissing}>
+            <Button onClick={handleConfirmBulkImportConfig} disabled={isSmartImportingPatients || !pendingBulkImportFile}>
               {getButtonLabel('import.patients.import', 'Import Patients', 'Importar pacientes')}
             </Button>
           </div>

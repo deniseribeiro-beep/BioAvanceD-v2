@@ -363,7 +363,6 @@ class NotificationService {
   async notifyPatientConsent(patientData, consentLink) {
     const results = await Promise.allSettled([
       this.sendConsentEmail(patientData, consentLink),
-      this.sendConsentSmsFallback(patientData, consentLink),
       this.sendConsentWhatsappFallback(patientData, consentLink)
     ]);
 

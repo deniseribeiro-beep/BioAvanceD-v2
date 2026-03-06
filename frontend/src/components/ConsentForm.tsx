@@ -42,6 +42,12 @@ export default function ConsentForm({
     setResponses(initialResponses);
   }, [permissions]);
 
+  useEffect(() => {
+    const normalizedPatientId = String(patientId || '').trim();
+    if (!normalizedPatientId) return;
+    setSignatureName((prev) => (prev.trim().length > 0 ? prev : normalizedPatientId));
+  }, [patientId]);
+
   const handleToggle = (key: string) => {
     setResponses((prev) => ({
       ...prev,
@@ -83,6 +89,7 @@ export default function ConsentForm({
       <div className="consent-form-header">
         <h2>{t('consent.form.header')}</h2>
         <p>{t('consent.form.patientLabel')} <strong>{patientName}</strong></p>
+        <p>{t('patients.tableId')} <strong>{patientId}</strong></p>
       </div>
 
       <div className="consent-form-grid">
@@ -131,7 +138,7 @@ export default function ConsentForm({
                 onAssinaturaConfirmada={({ assinaturaBase64 }) => {
                   setSignatureImageBase64(assinaturaBase64);
                   if (signatureName.trim().length === 0) {
-                    setSignatureName(patientName);
+                    setSignatureName(patientId);
                   }
                 }}
               />

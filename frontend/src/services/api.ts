@@ -198,7 +198,8 @@ api.interceptors.response.use(
 
 // ========== PATIENT SERVICES ==========
 export const patientService = {
-  getAll: () => api.get<Patient[]>('/patients'),
+  getAll: (params?: { limit?: number; skip?: number; patientName?: string; clinicalUnit?: string }) =>
+    api.get<Patient[]>('/patients', { params }),
   getById: (id: number | string) => api.get<Patient>(`/patients/${id}`),
   create: (data: Partial<Patient>) => api.post<Patient>('/patients', data),
   update: (id: number | string, data: Partial<Patient>) => api.put<Patient>(`/patients/${id}`, data),

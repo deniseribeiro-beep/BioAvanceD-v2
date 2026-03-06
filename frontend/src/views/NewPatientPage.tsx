@@ -2,13 +2,11 @@ import { useState, useEffect, useMemo, useRef, CSSProperties } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import Button from '../components/UI/Button';
 import Input from '../components/UI/Input';
-import Modal from '../components/UI/Modal';
 import { ArrowLeft, HelpCircle } from 'lucide-react';
-import SignaturePad from '../components/Consent/SignaturePad';
 import { Patient, ConsentPermission, ConsentTemplate, ConsentPolicy, CidEntry, ClinicalUnit } from '../types/models';
 import { usePatients } from '../hooks/usePatients';
 import { useClinicalUnits } from '../hooks/useClinicalUnits';
-import { consentService, patientService, cidService } from '../services/api';
+import { consentService, cidService } from '../services/api';
 import { useLanguage } from '../contexts/LanguageContext';
 
 const styles: Record<string, CSSProperties> = {
@@ -170,6 +168,22 @@ const styles: Record<string, CSSProperties> = {
     background: 'transparent',
     cursor: 'pointer',
     color: 'var(--text-light)',
+    padding: 0
+  },
+  tooltipQuestionButton: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '18px',
+    height: '18px',
+    borderRadius: '50%',
+    border: '1px solid var(--border)',
+    background: 'var(--surface)',
+    color: 'var(--text-light)',
+    cursor: 'pointer',
+    fontSize: '0.75rem',
+    fontWeight: 700,
+    lineHeight: 1,
     padding: 0
   },
   tooltipBox: {
@@ -342,18 +356,68 @@ export default function NewPatientPage() {
     return `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`;
   };
 
+  const applyIsoBirthDateMask = (value: string): string => {
+    const digits = value.replace(/\D/g, '').slice(0, 8);
+    if (digits.length <= 4) return digits;
+    if (digits.length <= 6) return `${digits.slice(0, 4)}-${digits.slice(4)}`;
+    return `${digits.slice(0, 4)}-${digits.slice(4, 6)}-${digits.slice(6)}`;
+  };
+
+  const normalizeBirthDateInput = (value: string): string => {
+    const raw = String(value || '').trim();
+    if (!raw) return '';
+
+    // Keep frontend behavior for DD/MM and allow backend ISO format as well.
+    if (raw.includes('-')) {
+      return applyIsoBirthDateMask(raw);
+    }
+
+    if (raw.includes('/')) {
+      return applyBirthDateMask(raw);
+    }
+
+    const digits = raw.replace(/\D/g, '');
+    if (digits.length >= 4) {
+      const yearCandidate = Number(digits.slice(0, 4));
+      if (yearCandidate >= 1900 && yearCandidate <= 2100) {
+        return applyIsoBirthDateMask(digits);
+      }
+    }
+
+    return applyBirthDateMask(digits);
+  };
+
   const isValidBirthDate = (value: string): boolean => {
-    if (!/^\d{2}\/\d{2}\/\d{4}$/.test(value)) return false;
-    const [dayStr, monthStr, yearStr] = value.split('/');
-    const day = Number(dayStr);
-    const month = Number(monthStr);
-    const year = Number(yearStr);
-    const date = new Date(year, month - 1, day);
-    return (
-      date.getFullYear() === year &&
-      date.getMonth() === month - 1 &&
-      date.getDate() === day
-    );
+    const normalized = String(value || '').trim();
+    if (!normalized) return false;
+
+    if (/^\d{2}\/\d{2}\/\d{4}$/.test(normalized)) {
+      const [dayStr, monthStr, yearStr] = normalized.split('/');
+      const day = Number(dayStr);
+      const month = Number(monthStr);
+      const year = Number(yearStr);
+      const date = new Date(year, month - 1, day);
+      return (
+        date.getFullYear() === year &&
+        date.getMonth() === month - 1 &&
+        date.getDate() === day
+      );
+    }
+
+    if (/^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
+      const [yearStr, monthStr, dayStr] = normalized.split('-');
+      const day = Number(dayStr);
+      const month = Number(monthStr);
+      const year = Number(yearStr);
+      const date = new Date(year, month - 1, day);
+      return (
+        date.getFullYear() === year &&
+        date.getMonth() === month - 1 &&
+        date.getDate() === day
+      );
+    }
+
+    return false;
   };
 
   const normalizeAcronym = (value: string): string => {
@@ -501,10 +565,6 @@ export default function NewPatientPage() {
     lysoGb3: editingPatient?.lysoGb3 || undefined,
     notes: editingPatient?.notes || ''
   });
-  const [isConsentModalOpen, setIsConsentModalOpen] = useState(false);
-  const [createdPatientId, setCreatedPatientId] = useState<string | null>(null);
-  const [sendingConsent, setSendingConsent] = useState(false);
-  const [consentSent, setConsentSent] = useState(false);
   const [consentTemplate, setConsentTemplate] = useState<ConsentTemplate | null>(null);
   const [consentPolicies, setConsentPolicies] = useState<ConsentPolicy[]>([]);
   const [selectedConsentTemplateId, setSelectedConsentTemplateId] = useState<string>(editingPatient?.consentTemplateId || '');
@@ -512,14 +572,12 @@ export default function NewPatientPage() {
   const [isConsentSelectionOpen, setIsConsentSelectionOpen] = useState(false);
   const [showAllConsentTemplates, setShowAllConsentTemplates] = useState(false);
   const [consentLoading, setConsentLoading] = useState(false);
-  const [consentError, setConsentError] = useState<string | null>(null);
-  const [consentResponses, setConsentResponses] = useState<Record<string, boolean>>({});
-  const [signatureName, setSignatureName] = useState('');
-  const [isSubmittingConsent, setIsSubmittingConsent] = useState(false);
   const [selectedPhoneCountryCode, setSelectedPhoneCountryCode] = useState<string>(initialPhoneParts.countryCode);
   const [showVariantTooltip, setShowVariantTooltip] = useState(false);
   const [showAlphaGalTooltip, setShowAlphaGalTooltip] = useState(false);
   const [showLysoGb3Tooltip, setShowLysoGb3Tooltip] = useState(false);
+  const [showBirthDateTooltip, setShowBirthDateTooltip] = useState(false);
+  const [isSavingPatient, setIsSavingPatient] = useState(false);
   const [clinicalUnitSearchTerm, setClinicalUnitSearchTerm] = useState<string>(String(editingPatient?.clinicalUnit || ''));
   const [clinicalUnitDropdownOpen, setClinicalUnitDropdownOpen] = useState(false);
   const [selectedClinicalUnit, setSelectedClinicalUnit] = useState<ClinicalUnit | null>(() => {
@@ -572,17 +630,42 @@ export default function NewPatientPage() {
     return false;
   };
 
-  const parseDDMMYYYYToDate = (dateStr: string): Date | null => {
+  const parseBirthDateToDate = (dateStr: string): Date | null => {
     if (!dateStr) return null;
-    const parts = dateStr.split('/');
-    if (parts.length === 3) {
-      const day = parseInt(parts[0], 10);
-      const month = parseInt(parts[1], 10) - 1;
-      const year = parseInt(parts[2], 10);
-      if (!isNaN(day) && !isNaN(month) && !isNaN(year)) {
-        return new Date(year, month, day);
+
+    const normalized = String(dateStr).trim();
+    const brMatch = normalized.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (brMatch) {
+      const day = parseInt(brMatch[1], 10);
+      const month = parseInt(brMatch[2], 10) - 1;
+      const year = parseInt(brMatch[3], 10);
+      const parsed = new Date(year, month, day);
+      if (
+        parsed.getFullYear() === year &&
+        parsed.getMonth() === month &&
+        parsed.getDate() === day
+      ) {
+        return parsed;
       }
+      return null;
     }
+
+    const isoMatch = normalized.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (isoMatch) {
+      const year = parseInt(isoMatch[1], 10);
+      const month = parseInt(isoMatch[2], 10) - 1;
+      const day = parseInt(isoMatch[3], 10);
+      const parsed = new Date(year, month, day);
+      if (
+        parsed.getFullYear() === year &&
+        parsed.getMonth() === month &&
+        parsed.getDate() === day
+      ) {
+        return parsed;
+      }
+      return null;
+    }
+
     return null;
   };
 
@@ -715,68 +798,8 @@ export default function NewPatientPage() {
     return null;
   };
 
-  const sendConsentNotification = async (patientID: string, showFeedback = true) => {
-    setSendingConsent(true);
-    try {
-      await patientService.resendConsentNotification(patientID);
-      setConsentSent(true);
-      if (showFeedback) {
-        alert(t('patients.consentSentSuccess'));
-      }
-    } catch (consentError: any) {
-      const consentMessage = consentError?.response?.data?.message || consentError?.message || t('patients.consentSendError');
-      if (showFeedback) {
-        alert(consentMessage);
-      }
-    } finally {
-      setSendingConsent(false);
-    }
-  };
-
-  const handleTogglePermission = (key: string) => {
-    setConsentResponses((prev) => ({
-      ...prev,
-      [key]: !prev[key]
-    }));
-  };
-
-  const requiredPermissionKeys = useMemo(() => {
-    const permissions = consentTemplate?.permissions || [];
-    const explicitRequired = permissions
-      .filter((permission) => permission.required)
-      .map((permission) => permission.key);
-
-    if (explicitRequired.length > 0) {
-      return explicitRequired;
-    }
-
-    const normalized = permissions.find((permission) =>
-      permission.key?.toLowerCase().includes('terms') ||
-      permission.key?.toLowerCase().includes('termos') ||
-      permission.label?.toLowerCase().includes('termos gerais')
-    );
-    return normalized?.key ? [normalized.key] : permissions?.[0]?.key ? [permissions[0].key] : [];
-  }, [consentTemplate]);
-
-  const hasRequiredConsent = useMemo(() => {
-    if (requiredPermissionKeys.length === 0) return false;
-    return requiredPermissionKeys.every((key) => consentResponses[key] === true);
-  }, [requiredPermissionKeys, consentResponses]);
-
-  const canSubmitConsent = useMemo(() => {
-    const hasSignatureName = signatureName.trim().length > 3;
-    return hasRequiredConsent && hasSignatureName && !!consentTemplate && !isSubmittingConsent;
-  }, [hasRequiredConsent, signatureName, consentTemplate, isSubmittingConsent]);
-
-  const isHtmlContent = useMemo(() => {
-    if (!consentTemplate) return false;
-    const content = consentTemplate.htmlContent || consentTemplate.content;
-    return /<\/?[a-z][\s\S]*>/i.test(content || '');
-  }, [consentTemplate]);
-
   const loadConsentTemplate = async () => {
     setConsentLoading(true);
-    setConsentError(null);
     try {
       const response = await consentService.getAllPolicies();
       const policies = response.data?.data || [];
@@ -791,51 +814,10 @@ export default function NewPatientPage() {
       const selectedPolicy = normalizedPolicies.find((policy: ConsentPolicy) => String(policy._id) === String(selectedConsentTemplateId));
       const template = selectedPolicy ? normalizePolicyToTemplate(selectedPolicy) : null;
       setConsentTemplate(template);
-
-      const permissions: ConsentPermission[] = template?.permissions || [];
-      const initialResponses: Record<string, boolean> = {};
-      permissions.forEach((permission) => {
-        initialResponses[permission.key] = false;
-      });
-      setConsentResponses(initialResponses);
-      setSignatureName('');
     } catch (err: any) {
-      const message = err?.message || t('patients.consentLoadError');
-      setConsentError(message);
+      // Keep consent selection available even if template list fails to load.
     } finally {
       setConsentLoading(false);
-    }
-  };
-
-  const handleConfirmSignature = async (dataUrl: string) => {
-    if (!createdPatientId || !consentTemplate?._id) {
-      setConsentError(t('patients.consentUnavailableError'));
-      return;
-    }
-
-    if (!canSubmitConsent) {
-      setConsentError(t('patients.consentRequiredError'));
-      return;
-    }
-
-    setIsSubmittingConsent(true);
-    setConsentError(null);
-    try {
-      await consentService.createPatientConsent({
-        patientId: createdPatientId,
-        templateId: consentTemplate._id,
-        responses: consentResponses,
-        signatureName,
-        signatureImage: dataUrl
-      } as any);
-      alert(t('patients.consentRegisteredSuccess'));
-      setIsConsentModalOpen(false);
-      navigate('/patients');
-    } catch (err: any) {
-      const message = err?.response?.data?.message || err?.message || t('patients.consentRegisterError');
-      setConsentError(message);
-    } finally {
-      setIsSubmittingConsent(false);
     }
   };
 
@@ -951,6 +933,15 @@ export default function NewPatientPage() {
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
 
+    // Prevent duplicate submits that can trigger backend conflict (409).
+    if (isSavingPatient) {
+      return;
+    }
+
+    setIsSavingPatient(true);
+
+    try {
+
     let resolvedClinicalUnitId = String(formData.clinicalUnitId || '').trim();
     let resolvedClinicalUnitName = String(formData.clinicalUnit || '').trim();
 
@@ -980,12 +971,6 @@ export default function NewPatientPage() {
       return;
     }
     
-    // Validação: VARIANTE_GENETICA é obrigatório
-    if (!formData.geneticVariant || !formData.geneticVariant.trim()) {
-      alert(t('patients.geneticVariantRequired'));
-      return;
-    }
-
     if (!formData.email || !isValidEmail(formData.email)) {
       alert(t('patients.invalidEmail'));
       return;
@@ -1070,49 +1055,63 @@ export default function NewPatientPage() {
     
     // Converte birthDate de string DD/MM/YYYY para Date se necessário
     if (dataToSave.birthDate && typeof dataToSave.birthDate === 'string') {
-      const date = parseDDMMYYYYToDate(dataToSave.birthDate);
+      const date = parseBirthDateToDate(dataToSave.birthDate);
       if (date) {
         dataToSave.birthDate = date.toISOString();
       }
     }
 
-    try {
-      if (editingPatient) {
-        const patientIDStr = typeof editingPatient.patientID === 'string' ? editingPatient.patientID : String(editingPatient.patientID);
-        await updatePatient(patientIDStr, dataToSave);
-        alert(t('patients.updateSuccess'));
-      } else {
-        const createdPayload = await createPatient(dataToSave);
-        const createdPatientID = resolveCreatedPatientID(createdPayload);
+    if (editingPatient) {
+      const patientIDStr = typeof editingPatient.patientID === 'string' ? editingPatient.patientID : String(editingPatient.patientID);
+      await updatePatient(patientIDStr, dataToSave);
+      alert(t('patients.updateSuccess'));
+    } else {
+      const createdPayload = await createPatient(dataToSave);
+      const createdPatientID = resolveCreatedPatientID(createdPayload);
 
-        if (createdPatientID) {
-          const selectedPolicy = consentPolicies.find((policy) => String(policy._id) === String(selectedConsentTemplateId));
-          if (!selectedPolicy) {
-            alert(t('patients.consentTemplateNotFound'));
-            return;
-          }
-
-          setConsentTemplate(normalizePolicyToTemplate(selectedPolicy));
-          setCreatedPatientId(createdPatientID);
-          setConsentSent(false);
-          setIsConsentModalOpen(true);
-          await sendConsentNotification(createdPatientID, false);
-        } else {
-          alert(t('patients.patientIdResolveError'));
+      if (createdPatientID) {
+        const selectedPolicy = consentPolicies.find((policy) => String(policy._id) === String(selectedConsentTemplateId));
+        if (!selectedPolicy) {
+          alert(t('patients.consentTemplateNotFound'));
+          return;
         }
 
+        navigate(`/patients/${createdPatientID}/consent`, {
+          state: {
+            patientName: String(formData.patientName || ''),
+            linkedProject: `${selectedPolicy.title} (CAAE: ${selectedPolicy.caae || '--'})`,
+            selectedConsentTemplateId: String(selectedPolicy._id),
+            fromPatientCreation: true
+          }
+        });
         alert(t('patients.createSuccess'));
+        return;
+      } else {
+        alert(t('patients.patientIdResolveError'));
       }
-      
-      // Recarrega a lista e volta para a página de pacientes
-      await loadPatients();
-      if (editingPatient) {
-        navigate('/patients');
-      }
-    } catch (err: any) {
-      const errorMsg = err.response?.data?.error || err.response?.data?.message || err.message || t('patients.saveError');
-      alert(errorMsg);
     }
+    
+    // Recarrega a lista e volta para a página de pacientes
+    await loadPatients();
+    if (editingPatient) {
+      navigate('/patients');
+    }
+  } catch (err: any) {
+    const statusCode = Number(err?.response?.status || 0);
+    const backendMessage = err?.response?.data?.error || err?.response?.data?.message || err?.message || '';
+    const isConflict = statusCode === 409 || /duplicad|ja cadastrado|já cadastrado|already exists|conflict/i.test(String(backendMessage));
+
+    const friendlyConflictMessage =
+      language === 'en-US'
+        ? 'Patient already registered. Check if there is an existing patient with the same identifiers (ID, record, CPF) or same name and birth date.'
+        : language === 'es-ES'
+          ? 'Paciente ya registrado. Verifique si ya existe un paciente con los mismos identificadores (ID, historia clínica, CPF) o el mismo nombre y fecha de nacimiento.'
+          : 'Paciente já cadastrado. Verifique se já existe um paciente com os mesmos identificadores (ID, prontuário, CPF) ou com o mesmo nome e data de nascimento.';
+
+    alert(isConflict ? friendlyConflictMessage : (backendMessage || t('patients.saveError')));
+  } finally {
+    setIsSavingPatient(false);
+  }
   };
 
   return (
@@ -1189,17 +1188,56 @@ export default function NewPatientPage() {
               />
             )}
             
-            <Input
-              label={`${t('patients.birthDate')} *`}
-              type="text"
-              placeholder="DD/MM/YYYY"
-              value={formData.birthDate || ''}
-              onChange={(e) => setFormData({ ...formData, birthDate: applyBirthDateMask(e.target.value) })}
-              inputMode="numeric"
-              pattern="\\d{2}/\\d{2}/\\d{4}"
-              maxLength={10}
-              required
-            />
+            <div style={styles.clinicalFieldWithHelp}>
+              <label style={styles.inlineLabel}>
+                <span>{`${t('patients.birthDate')} *`}</span>
+                <button
+                  type="button"
+                  style={styles.tooltipQuestionButton}
+                  aria-label={
+                    language === 'en-US'
+                      ? 'Show accepted date formats'
+                      : language === 'es-ES'
+                        ? 'Mostrar formatos de fecha aceptados'
+                        : 'Mostrar formatos de data aceitos'
+                  }
+                  title={
+                    language === 'en-US'
+                      ? 'Accepted date formats'
+                      : language === 'es-ES'
+                        ? 'Formatos de fecha aceptados'
+                        : 'Formatos de data aceitos'
+                  }
+                  onClick={() => setShowBirthDateTooltip((prev) => !prev)}
+                >
+                  ?
+                </button>
+              </label>
+              <Input
+                type="text"
+                placeholder={
+                  language === 'en-US'
+                    ? 'DD/MM/YYYY or YYYY-MM-DD'
+                    : language === 'es-ES'
+                      ? 'DD/MM/AAAA o AAAA-MM-DD'
+                      : 'DD/MM/AAAA ou AAAA-MM-DD'
+                }
+                value={formData.birthDate || ''}
+                onChange={(e) => setFormData({ ...formData, birthDate: normalizeBirthDateInput(e.target.value) })}
+                inputMode="numeric"
+                maxLength={10}
+                required
+              />
+              {showBirthDateTooltip && (
+                <div style={styles.tooltipBox}>
+                  {language === 'en-US'
+                    ? 'Accepted formats: DD/MM/YYYY (e.g., 31/12/1990) or YYYY-MM-DD (e.g., 1990-12-31).'
+                    : language === 'es-ES'
+                      ? 'Formatos aceptados: DD/MM/AAAA (ej.: 31/12/1990) o AAAA-MM-DD (ej.: 1990-12-31).'
+                      : 'Formatos aceitos: DD/MM/AAAA (ex.: 31/12/1990) ou AAAA-MM-DD (ex.: 1990-12-31).'}
+                </div>
+              )}
+            </div>
             
             <div>
               <label style={{ 
@@ -1582,7 +1620,7 @@ export default function NewPatientPage() {
 
             <div>
               <label style={styles.inlineLabel}>
-                <span>{`${t('patients.geneticVariant')} *`}</span>
+                <span>{t('patients.geneticVariant')}</span>
                 <button
                   type="button"
                   style={styles.tooltipButton}
@@ -1597,7 +1635,6 @@ export default function NewPatientPage() {
                 type="text"
                 value={formData.geneticVariant || ''}
                 onChange={(e) => setFormData({ ...formData, geneticVariant: e.target.value })}
-                required
               />
               {showVariantTooltip && (
                 <div style={styles.tooltipBox}>{t('patients.geneticVariantHelpText')}</div>
@@ -1847,102 +1884,18 @@ export default function NewPatientPage() {
             type="button" 
             variant="secondary" 
             onClick={() => navigate('/patients')}
+            disabled={isSavingPatient}
           >
             {t('common.cancel')}
           </Button>
-          <Button type="submit">
-            {editingPatient ? t('patients.saveChanges') : t('patients.registerPatient')}
+          <Button type="submit" disabled={isSavingPatient || creatingClinicalUnit}>
+            {isSavingPatient
+              ? (language === 'en-US' ? 'Saving...' : language === 'es-ES' ? 'Guardando...' : 'Salvando...')
+              : (editingPatient ? t('patients.saveChanges') : t('patients.registerPatient'))}
           </Button>
         </div>
       </form>
 
-      <Modal
-        isOpen={isConsentModalOpen}
-        onClose={() => setIsConsentModalOpen(false)}
-        title={t('patients.consentModalTitle')}
-      >
-        <div style={styles.consentModalContent}>
-          <div style={styles.consentHeader}>
-            <div>
-              <h3 style={styles.consentModalTitle}>{t('patients.consentReadyTitle')}</h3>
-              <p style={styles.consentModalText}>
-                {consentSent
-                  ? t('patients.consentAutoSentMessage')
-                  : t('patients.consentCollectMessage')}
-              </p>
-              {formData.linkedProject && (
-                <p style={styles.consentProject}>{t('patients.selectedProjectLabel')}: {formData.linkedProject}</p>
-              )}
-            </div>
-            <div style={styles.consentModalActions}>
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={() => createdPatientId && sendConsentNotification(createdPatientId)}
-                disabled={!createdPatientId || sendingConsent}
-              >
-                {sendingConsent ? t('patients.sendingConsent') : t('patients.resendConsent')}
-              </Button>
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={() => setIsConsentModalOpen(false)}
-              >
-                {t('common.close')}
-              </Button>
-            </div>
-          </div>
-
-          {consentLoading && <span>{t('patients.loadingConsent')}</span>}
-          {consentError && <span style={styles.consentError}>{consentError}</span>}
-
-          {consentTemplate && !consentLoading && (
-            <div style={styles.consentGrid}>
-              <div style={styles.consentDocument}>
-                {isHtmlContent ? (
-                  <div dangerouslySetInnerHTML={{ __html: consentTemplate.htmlContent || consentTemplate.content }} />
-                ) : (
-                  <p style={styles.consentDocumentText}>{consentTemplate.content}</p>
-                )}
-              </div>
-              <div style={styles.consentPanel}>
-                <div style={styles.consentPermissions}>
-                  {(consentTemplate.permissions || []).map((permission) => {
-                    const isRequired = requiredPermissionKeys.includes(permission.key);
-                    return (
-                      <label key={permission.key} style={styles.consentPermissionItem}>
-                        <input
-                          type="checkbox"
-                          checked={!!consentResponses[permission.key]}
-                          onChange={() => handleTogglePermission(permission.key)}
-                        />
-                        <span>
-                          {permission.label}
-                          {isRequired && <span style={styles.consentRequired}> ({t('patients.requiredTag')})</span>}
-                        </span>
-                      </label>
-                    );
-                  })}
-                </div>
-
-                <Input
-                  label={t('patients.signatureName')}
-                  value={signatureName}
-                  onChange={(event) => setSignatureName(event.target.value)}
-                  placeholder={t('patients.signatureNamePlaceholder')}
-                />
-
-                <SignaturePad
-                  onConfirm={handleConfirmSignature}
-                  onCancel={() => setIsConsentModalOpen(false)}
-                  confirmDisabled={!canSubmitConsent}
-                  confirmLabel={isSubmittingConsent ? t('patients.savingConsent') : t('patients.confirmSignature')}
-                />
-              </div>
-            </div>
-          )}
-        </div>
-      </Modal>
     </div>
   );
 }

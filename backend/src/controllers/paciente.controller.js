@@ -1,6 +1,7 @@
 const patientService = require('../services/patient.service');
 const logService = require('../services/log.service');
 const logger = require('../utils/logger');
+const { getCollection } = require('../utils/collectionResolver');
 
 /**
  * Controller para operações relacionadas a pacientes
@@ -157,7 +158,7 @@ class PacienteController {
           skip: parseInt(req.query.skip) || 0
         };
 
-        const patientsCollection = db.collection('pacientes');
+        const patientsCollection = await getCollection(db, 'patients');
         const patients = await patientsCollection
           .find({}, { projection: { patientID: 1, status: 1, consentNotifiedAt: 1, consentTokenExpiresAt: 1, _id: 0 } })
           .limit(filters.limit)

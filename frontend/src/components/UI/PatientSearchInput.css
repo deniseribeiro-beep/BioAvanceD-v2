@@ -3,6 +3,36 @@
   width: 100%;
 }
 
+.patient-search-toggle {
+  position: absolute;
+  top: 50%;
+  right: 0.5rem;
+  transform: translateY(-50%);
+  width: 1.75rem;
+  height: 1.75rem;
+  border: none;
+  background: transparent;
+  color: var(--text-light);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.patient-search-toggle:hover {
+  background: var(--surface);
+  color: var(--text);
+}
+
+.patient-search-toggle svg {
+  transition: transform 0.2s ease;
+}
+
+.patient-search-toggle svg.open {
+  transform: rotate(180deg);
+}
+
 .patient-search-results {
   position: absolute;
   top: 100%;

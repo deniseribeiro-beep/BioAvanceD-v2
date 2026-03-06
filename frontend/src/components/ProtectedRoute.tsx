@@ -1,5 +1,4 @@
 import { Navigate, useLocation } from 'react-router-dom';
-import { useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { canRoleAccessRoute, RoleName } from '../utils/rolePermissions';
 import './ProtectedRoute.css';
@@ -20,21 +19,8 @@ export default function ProtectedRoute({ children, requiredAccessType, requiredR
       </div>
     );
 
-  const { isAuthenticated, isLoading, hasAccess, hasRole, canAccessRoute, user, token } = useAuth();
+  const { isAuthenticated, isLoading, hasAccess, hasRole, canAccessRoute, user } = useAuth();
   const location = useLocation();
-
-  // Adiciona log para debug
-  useEffect(() => {
-    if (process.env.NODE_ENV === 'development') {
-      console.log('[ProtectedRoute] Estado de autenticação:', {
-        isAuthenticated,
-        isLoading,
-        hasUser: !!user,
-        hasToken: !!token,
-        path: location.pathname
-      });
-    }
-  }, [isAuthenticated, isLoading, user, token, location.pathname]);
 
   if (isLoading) {
     return (
@@ -50,7 +36,9 @@ export default function ProtectedRoute({ children, requiredAccessType, requiredR
   }
 
   if (!isAuthenticated) {
-    console.log('[ProtectedRoute] Redirecionando para login - sem autenticação');
+    if (process.env.NODE_ENV === 'development') {
+      console.log('[ProtectedRoute] Redirecionando para login - sem autenticação');
+    }
     return <Navigate to="/login" replace />;
   }
 
