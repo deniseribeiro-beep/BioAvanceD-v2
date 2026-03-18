@@ -212,6 +212,27 @@ Para parar:
 docker compose --env-file .env.docker -f docker-compose.yml -f docker-compose.override.yml down
 ```
 
+### 🔐 Perfil TLS por ambiente (Nginx)
+
+No ambiente de desenvolvimento, o perfil TLS permanece compatível (`TLSv1.2 + TLSv1.3`) e o hardening estrito fica preparado para produção.
+
+- Arquivo dev (ativo por padrão): `infra/nginx/npm/custom/http_top.conf`
+- Arquivo prod (pré-configurado): `infra/nginx/npm/custom/http_top.prod.conf`
+
+Para ativar o perfil **de produção** (TLS 1.3 only) no momento da migração:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\activate-prod-tls.ps1
+```
+
+Para voltar ao perfil **de desenvolvimento**:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\activate-dev-tls.ps1
+```
+
+Após alternar o perfil, reinicie o serviço `nginx` (Nginx Proxy Manager).
+
 ## 📝 Licença
 
 Este projeto foi desenvolvido para fins educacionais e de demonstração.

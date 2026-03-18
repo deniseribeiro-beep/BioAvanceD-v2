@@ -67,7 +67,9 @@ class PacienteController {
         });
       }
 
-      const paciente = await patientService.createPatient(db, pacienteData);
+      const paciente = await patientService.createPatient(db, pacienteData, {
+        neo4jDriver: req.app.locals.neo4jDriver || null
+      });
 
       // Registra log de auditoria (sanitizado - sem dados sensíveis)
       if (req.user) {
@@ -390,7 +392,9 @@ class PacienteController {
       const updatePayload = this.sanitizePatientPayload(req.body);
       this.validateDeceasedRepresentative(updatePayload);
 
-      const result = await patientService.updatePatient(db, id, updatePayload);
+      const result = await patientService.updatePatient(db, id, updatePayload, {
+        neo4jDriver: req.app.locals.neo4jDriver || null
+      });
 
       // Registra log (sanitizado)
       if (req.user) {
@@ -428,7 +432,8 @@ class PacienteController {
         });
       }
       
-      return res.status(500).json({
+      const statusCode = Number(error?.statusCode || error?.status || 500);
+      return res.status(statusCode).json({
         success: false,
         error: 'Erro interno do servidor',
         message: error.message

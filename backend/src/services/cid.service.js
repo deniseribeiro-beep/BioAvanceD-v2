@@ -13,6 +13,8 @@ class CidService {
 
     const indexDefinitions = [
       [{ Codigo_Tabulacao: 1 }, { name: 'codigo_tabulacao_idx' }],
+      [{ Codigos_CID10: 1 }, { name: 'codigos_cid10_idx' }],
+      [{ Descricao: 1 }, { name: 'descricao_idx' }],
       [{ code: 1 }, { name: 'code_idx' }],
       [{ Descricao: 'text', Codigos_CID10: 'text', description: 'text', code: 'text' }, { name: 'cid_text_search_v2' }]
     ];
@@ -93,7 +95,7 @@ class CidService {
     const looksLikeCode = /^[A-Za-z0-9.\-]+$/.test(normalizedTerm);
     let textMatches = [];
 
-    if (!looksLikeCode || normalizedTerm.length >= 3) {
+    if (normalizedTerm.length >= 2) {
       try {
         textMatches = await cidsCollection
           .find({ $text: { $search: normalizedTerm } }, { projection })
@@ -106,19 +108,18 @@ class CidService {
     }
 
     if (textMatches.length >= cappedLimit) {
-      return textMatches;
+      return textMatches.map((item) => this.normalizeDocument(item));
     }
 
     const escapedTerm = escapeRegex(normalizedTerm);
-    const regexMatches = await cidsCollection
+    const codePrefixMatches = await cidsCollection
       .find(
         {
           $or: [
             { Codigo_Tabulacao: { $regex: `^${escapedTerm}`, $options: 'i' } },
-            { Codigos_CID10: { $regex: escapedTerm, $options: 'i' } },
-            { Descricao: { $regex: escapedTerm, $options: 'i' } },
+            { Codigos_CID10: { $regex: `^${escapedTerm}`, $options: 'i' } },
             { code: { $regex: `^${escapedTerm}`, $options: 'i' } },
-            { description: { $regex: escapedTerm, $options: 'i' } }
+            { description: { $regex: `^${escapedTerm}`, $options: 'i' } }
           ]
         },
         {
@@ -137,10 +138,36 @@ class CidService {
       .limit(cappedLimit)
       .toArray();
 
+    const descriptionRegexMatches = !looksLikeCode
+      ? await cidsCollection
+        .find(
+          {
+            $or: [
+              { Descricao: { $regex: escapedTerm, $options: 'i' } },
+              { description: { $regex: escapedTerm, $options: 'i' } }
+            ]
+          },
+          {
+            projection: {
+              Capitulo: 1,
+              Codigo_Tabulacao: 1,
+              Descricao: 1,
+              Codigos_CID10: 1,
+              chapter: 1,
+              code: 1,
+              description: 1
+            }
+          }
+        )
+        .sort({ Codigo_Tabulacao: 1, code: 1 })
+        .limit(cappedLimit)
+        .toArray()
+      : [];
+
     const merged = [];
     const seenIds = new Set();
 
-    [...textMatches, ...regexMatches].forEach((item) => {
+    [...textMatches, ...codePrefixMatches, ...descriptionRegexMatches].forEach((item) => {
       const key = String(item._id);
       if (seenIds.has(key)) return;
       seenIds.add(key);

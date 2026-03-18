@@ -21,6 +21,7 @@ import {
   Return,
   CidEntry,
   ClinicalUnit,
+  PhoneCodeEntry,
 } from '../types/models';
 import { clearClientSession } from '../utils/sessionCleanup';
 
@@ -212,6 +213,12 @@ export const patientService = {
 
 export const cidService = {
   search: (term: string, limit = 10) => api.get<{ success: boolean; data: CidEntry[] }>('/cids/search', {
+    params: { q: term, limit }
+  })
+};
+
+export const phoneCodeService = {
+  search: (term: string, limit = 20) => api.get<{ success: boolean; data: PhoneCodeEntry[] }>('/phone-codes/search', {
     params: { q: term, limit }
   })
 };

@@ -2,15 +2,148 @@ const PatientModel = require('../models/Patient');
 const ClinicalUnitModel = require('../models/ClinicalUnit');
 const logger = require('../utils/logger');
 const { generateUniquePatientID, sanitizePatientForLogs } = require('../utils/patientAnonymization');
+const { encryptValue, decryptValue } = require('../utils/fieldEncryption');
 const notificationService = require('./notification.service');
 const fhirSyncService = require('./fhir-sync.service');
+const patientBiomarkerTimeseriesService = require('./patientBiomarkerTimeseries.service');
+const biomarkerXaiService = require('./biomarker-xai.service');
 const { getCollection } = require('../utils/collectionResolver');
+
+const indexedPatientCollections = new Set();
 
 /**
  * Service de Pacientes
  * RF005 - Cadastro de Paciente com Anonimização LGPD
  */
 class PatientService {
+  getEncryptedFieldMap() {
+    return {
+      alphaGal: 'alphaGalEncrypted',
+      lysoGb3: 'lysoGb3Encrypted',
+      representativeCpf: 'representativeCpfEncrypted'
+    };
+  }
+
+  encryptSensitivePatientFields(patient = {}) {
+    const doc = { ...patient };
+    const encryptedFieldMap = this.getEncryptedFieldMap();
+
+    for (const [plainField, encryptedField] of Object.entries(encryptedFieldMap)) {
+      if (Object.prototype.hasOwnProperty.call(doc, plainField)) {
+        const encryptedPayload = encryptValue(doc[plainField]);
+        if (encryptedPayload) {
+          doc[encryptedField] = encryptedPayload;
+          doc[plainField] = null;
+        }
+      }
+    }
+
+    return doc;
+  }
+
+  decryptSensitivePatientFields(patient = {}) {
+    if (!patient || typeof patient !== 'object') return patient;
+
+    const doc = { ...patient };
+    const encryptedFieldMap = this.getEncryptedFieldMap();
+
+    for (const [plainField, encryptedField] of Object.entries(encryptedFieldMap)) {
+      if (doc[plainField] !== undefined && doc[plainField] !== null && doc[plainField] !== '') {
+        continue;
+      }
+
+      const payload = doc[encryptedField];
+      if (!payload) {
+        continue;
+      }
+
+      try {
+        const decryptedValue = decryptValue(payload);
+        if (decryptedValue !== null && decryptedValue !== undefined) {
+          doc[plainField] = decryptedValue;
+        }
+      } catch (error) {
+        logger.warn(`Falha ao descriptografar campo ${plainField}: ${error.message}`);
+      }
+    }
+
+    return doc;
+  }
+
+  async ensurePatientIndexes(collection, collectionName) {
+    if (!collection || !collectionName || indexedPatientCollections.has(collectionName)) return;
+
+    const indexDefinitions = [
+      [
+        { phone: 1 },
+        {
+          name: 'patients_phone_unique_sanitized_v1',
+          unique: true,
+          partialFilterExpression: {
+            phone: { $type: 'string', $ne: '' }
+          }
+        }
+      ],
+      [{ patientName: 'text', recordNumber: 'text', cpf: 'text' }, { name: 'patients_name_document_text_v1' }],
+      [{ patientName: 1 }, { name: 'patients_name_idx_v1' }],
+      [{ recordNumber: 1 }, { name: 'patients_record_number_idx_v1' }]
+    ];
+
+    for (const [keys, options] of indexDefinitions) {
+      try {
+        await collection.createIndex(keys, options);
+      } catch (error) {
+        logger.warn(`Não foi possível criar índice ${options.name} em ${collectionName}: ${error.message}`);
+      }
+    }
+
+    indexedPatientCollections.add(collectionName);
+  }
+
+  async getPatientsCollection(db) {
+    const patientsCollection = await getCollection(db, 'patients');
+    const collectionName = patientsCollection?.collectionName || 'patients';
+    await this.ensurePatientIndexes(patientsCollection, collectionName);
+    return patientsCollection;
+  }
+
+  handlePhoneUniqueConstraint(error) {
+    const keyPattern = error?.keyPattern || {};
+    const keyValue = error?.keyValue || {};
+    const isPhoneDuplicate = Boolean(keyPattern.phone || Object.prototype.hasOwnProperty.call(keyValue, 'phone'));
+    if (!isPhoneDuplicate) return;
+
+    const duplicateError = new Error(`Telefone ${String(keyValue.phone || '').trim()} já cadastrado no sistema.`);
+    duplicateError.statusCode = 409;
+    throw duplicateError;
+  }
+
+  async syncPatientPhoneToGraph(neo4jDriver, patientID, phone) {
+    const normalizedPatientId = String(patientID || '').trim();
+    if (!neo4jDriver || typeof neo4jDriver.session !== 'function' || !normalizedPatientId) return;
+
+    const session = neo4jDriver.session();
+    try {
+      await session.run(
+        `
+          MATCH (node)
+          WHERE node.patientId = $patientId OR node.patientID = $patientId
+          SET node.phone = $phone,
+              node.lastPhoneSyncAt = datetime()
+          RETURN count(node) AS updated
+        `,
+        {
+          patientId: normalizedPatientId,
+          phone: phone || null
+        }
+      );
+    } catch (error) {
+      logger.warn(`[ISO20387][NEO4J][PATIENT_PHONE_SYNC] Falha ao sincronizar telefone do paciente ${normalizedPatientId}: ${error.message}`);
+    } finally {
+      await session.close();
+    }
+  }
+
   normalizeClinicalUnit(value) {
     if (value === undefined || value === null) return null;
     const normalized = String(value).trim().toUpperCase();
@@ -163,7 +296,7 @@ class PatientService {
   }
 
   async checkIdentifierConflict(db, patientData) {
-    const patientsCollection = await getCollection(db, 'patients');
+    const patientsCollection = await this.getPatientsCollection(db);
     const normalizedCpf = this.normalizeCpf(patientData?.cpf);
     const normalizedRecordNumber = this.normalizeRecordNumber(patientData?.recordNumber);
 
@@ -201,7 +334,7 @@ class PatientService {
    */
   async checkDuplicatePatient(db, patientData) {
     try {
-      const patientsCollection = await getCollection(db, 'patients');
+      const patientsCollection = await this.getPatientsCollection(db);
       
       if (!patientData.patientName || !patientData.birthDate) {
         return null; // Não pode verificar sem nome e data
@@ -265,7 +398,7 @@ class PatientService {
     }
   }
 
-  async createPatient(db, patientData) {
+  async createPatient(db, patientData, options = {}) {
     try {
       patientData.email = this.normalizeEmail(patientData.email);
       patientData.phone = this.normalizePhone(patientData.phone);
@@ -359,10 +492,15 @@ class PatientService {
       patientData.consentTokenCreatedAt = consentMetadata.createdAt;
       patientData.consentTokenExpiresAt = consentMetadata.expiresAt;
 
-      const patientsCollection = await getCollection(db, 'patients');
+      const patientsCollection = await this.getPatientsCollection(db);
       const patient = PatientModel.create(patientData);
+      const biomarkerXai = biomarkerXaiService.evaluate(patient);
+      const persistedPatient = this.encryptSensitivePatientFields({
+        ...patient,
+        biomarkerXai
+      });
 
-      const result = await patientsCollection.insertOne(patient);
+      const result = await patientsCollection.insertOne(persistedPatient);
 
       try {
         const consentLink = notificationService.buildConsentLink(patient, consentMetadata.token);
@@ -384,13 +522,26 @@ class PatientService {
         ...patient
       });
 
+      await this.syncPatientPhoneToGraph(options?.neo4jDriver, patient.patientID, patient.phone);
+      await patientBiomarkerTimeseriesService.writePatientBiomarkers({
+        patient: {
+          ...patient,
+          _id: result.insertedId
+        },
+        eventType: 'create'
+      });
+
       // Retorna paciente com ID gerado
       return {
         _id: result.insertedId,
         ...patient,
+        biomarkerXai,
         patientID: patientID // ID gerado automaticamente
       };
     } catch (error) {
+      if (error?.code === 11000) {
+        this.handlePhoneUniqueConstraint(error);
+      }
       logger.error('Erro ao criar paciente:', error.message);
       throw error;
     }
@@ -400,10 +551,10 @@ class PatientService {
     try {
       const patientFromFhir = await fhirSyncService.getPatientFhirFirst(db, patientID);
       if (patientFromFhir) {
-        return patientFromFhir;
+        return this.decryptSensitivePatientFields(patientFromFhir);
       }
 
-      const patientsCollection = await getCollection(db, 'patients');
+      const patientsCollection = await this.getPatientsCollection(db);
       // Busca por patientID (string de 8 dígitos) ou _id (ObjectId)
       let patient;
       if (typeof patientID === 'string' && patientID.length === 8 && /^\d{8}$/.test(patientID)) {
@@ -414,7 +565,7 @@ class PatientService {
         const { ObjectId } = require('mongodb');
         patient = await patientsCollection.findOne({ _id: new ObjectId(patientID) });
       }
-      return patient;
+      return this.decryptSensitivePatientFields(patient);
     } catch (error) {
       logger.error('Erro ao buscar paciente:', error.message);
       throw error;
@@ -425,10 +576,11 @@ class PatientService {
     try {
       const listFromFhir = await fhirSyncService.listPatientsFhirFirst(db, filters);
       if (listFromFhir) {
+        listFromFhir.patients = (listFromFhir.patients || []).map((patient) => this.decryptSensitivePatientFields(patient));
         return listFromFhir;
       }
 
-      const patientsCollection = await getCollection(db, 'patients');
+      const patientsCollection = await this.getPatientsCollection(db);
       const query = {};
 
       if (filters.patientName) {
@@ -450,7 +602,7 @@ class PatientService {
 
       const total = await patientsCollection.countDocuments(query);
 
-      return { patients, total, limit, skip };
+      return { patients: patients.map((patient) => this.decryptSensitivePatientFields(patient)), total, limit, skip };
     } catch (error) {
       logger.error('Erro ao listar pacientes:', error.message);
       throw error;
@@ -465,10 +617,11 @@ class PatientService {
     try {
       const searchFromFhir = await fhirSyncService.searchPatientsFhirFirst(db, searchTerm);
       if (searchFromFhir) {
+        searchFromFhir.patients = (searchFromFhir.patients || []).map((patient) => this.decryptSensitivePatientFields(patient));
         return searchFromFhir;
       }
 
-      const patientsCollection = await getCollection(db, 'patients');
+      const patientsCollection = await this.getPatientsCollection(db);
       
       if (!searchTerm || typeof searchTerm !== 'string' || searchTerm.trim().length === 0) {
         return { patients: [], total: 0 };
@@ -559,16 +712,16 @@ class PatientService {
       const patients = await patientsCollection.find(query).limit(50).toArray();
       const total = await patientsCollection.countDocuments(query);
 
-      return { patients, total };
+      return { patients: patients.map((patient) => this.decryptSensitivePatientFields(patient)), total };
     } catch (error) {
       logger.error('Erro ao buscar pacientes:', error.message);
       throw error;
     }
   }
 
-  async updatePatient(db, patientID, updateData) {
+  async updatePatient(db, patientID, updateData, options = {}) {
     try {
-      const patientsCollection = await getCollection(db, 'patients');
+      const patientsCollection = await this.getPatientsCollection(db);
 
       if (updateData.unitAcronym !== undefined) {
         updateData.unitAcronym = updateData.unitAcronym
@@ -589,6 +742,17 @@ class PatientService {
           throw new Error('Telefone (phone) inválido. Informe de 10 a 15 dígitos');
         }
         updateData.phone = normalizedPhone;
+      }
+
+      const encryptedFieldMap = this.getEncryptedFieldMap();
+      for (const [plainField, encryptedField] of Object.entries(encryptedFieldMap)) {
+        if (Object.prototype.hasOwnProperty.call(updateData, plainField)) {
+          const encryptedPayload = encryptValue(updateData[plainField]);
+          if (encryptedPayload) {
+            updateData[encryptedField] = encryptedPayload;
+            updateData[plainField] = null;
+          }
+        }
       }
 
       if (updateData.clinicalUnit !== undefined || updateData.clinicalUnitId !== undefined) {
@@ -665,8 +829,39 @@ class PatientService {
       const sanitizedData = sanitizePatientForLogs({ patientID: typeof patientID === 'string' && patientID.length === 8 ? patientID : 'N/A' });
       logger.info('Paciente atualizado:', sanitizedData);
 
+      const updatedPatient = await patientsCollection.findOne(query);
+      await this.syncPatientPhoneToGraph(options?.neo4jDriver, updatedPatient?.patientID || patientID, updatedPatient?.phone || null);
+      const decryptedUpdatedPatient = this.decryptSensitivePatientFields(updatedPatient);
+
+      const biomarkerXai = biomarkerXaiService.evaluate(decryptedUpdatedPatient);
+      if (biomarkerXai) {
+        await patientsCollection.updateOne(query, {
+          $set: {
+            biomarkerXai,
+            biomarkerXaiUpdatedAt: new Date()
+          }
+        });
+        decryptedUpdatedPatient.biomarkerXai = biomarkerXai;
+      } else {
+        await patientsCollection.updateOne(query, {
+          $unset: {
+            biomarkerXai: '',
+            biomarkerXaiUpdatedAt: ''
+          }
+        });
+        delete decryptedUpdatedPatient.biomarkerXai;
+      }
+
+      await patientBiomarkerTimeseriesService.writePatientBiomarkers({
+        patient: decryptedUpdatedPatient,
+        eventType: 'update'
+      });
+
       return { success: true };
     } catch (error) {
+      if (error?.code === 11000) {
+        this.handlePhoneUniqueConstraint(error);
+      }
       logger.error('Erro ao atualizar paciente:', error.message);
       throw error;
     }
@@ -677,7 +872,7 @@ class PatientService {
       throw new Error('patientId e token são obrigatórios');
     }
 
-    const patientsCollection = await getCollection(db, 'patients');
+    const patientsCollection = await this.getPatientsCollection(db);
     const query = { patientID };
     const patient = await patientsCollection.findOne(query);
 
@@ -703,7 +898,7 @@ class PatientService {
   async acceptConsentToken(db, patientID, token) {
     await this.validateConsentToken(db, patientID, token);
 
-    const patientsCollection = await getCollection(db, 'patients');
+    const patientsCollection = await this.getPatientsCollection(db);
     await patientsCollection.updateOne(
       { patientID },
       {
@@ -725,7 +920,7 @@ class PatientService {
       throw new Error('patientId é obrigatório');
     }
 
-    const patientsCollection = await getCollection(db, 'patients');
+    const patientsCollection = await this.getPatientsCollection(db);
     const patient = await patientsCollection.findOne({ patientID });
 
     if (!patient) {
@@ -780,7 +975,7 @@ class PatientService {
 
   async deletePatient(db, patientID) {
     try {
-      const patientsCollection = await getCollection(db, 'patients');
+      const patientsCollection = await this.getPatientsCollection(db);
       
       // Busca por patientID (string de 8 dígitos) ou _id (ObjectId)
       let query;

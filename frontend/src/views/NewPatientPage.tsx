@@ -3,10 +3,10 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import Button from '../components/UI/Button';
 import Input from '../components/UI/Input';
 import { ArrowLeft, HelpCircle } from 'lucide-react';
-import { Patient, ConsentPermission, ConsentTemplate, ConsentPolicy, CidEntry, ClinicalUnit } from '../types/models';
+import { Patient, ConsentPermission, ConsentTemplate, ConsentPolicy, CidEntry, ClinicalUnit, PhoneCodeEntry } from '../types/models';
 import { usePatients } from '../hooks/usePatients';
 import { useClinicalUnits } from '../hooks/useClinicalUnits';
-import { consentService, cidService } from '../services/api';
+import { consentService, cidService, phoneCodeService } from '../services/api';
 import { useLanguage } from '../contexts/LanguageContext';
 
 const styles: Record<string, CSSProperties> = {
@@ -260,15 +260,13 @@ const styles: Record<string, CSSProperties> = {
   }
 };
 
-const PHONE_COUNTRY_OPTIONS = [
-  { country: 'Brasil', code: '+55' },
-  { country: 'Estados Unidos', code: '+1' },
-  { country: 'Argentina', code: '+54' },
-  { country: 'Chile', code: '+56' },
-  { country: 'México', code: '+52' },
-  { country: 'Espanha', code: '+34' },
-  { country: 'Portugal', code: '+351' },
-];
+const DEFAULT_PHONE_DIAL_CODE = '+55';
+const DEFAULT_PHONE_CODE_ENTRY: PhoneCodeEntry = {
+  countryName: 'Brasil',
+  iso2: 'BR',
+  dialCode: DEFAULT_PHONE_DIAL_CODE,
+  searchLabel: `Brasil (${DEFAULT_PHONE_DIAL_CODE})`
+};
 
 const MAX_VISIBLE_TCLE_OPTIONS = 6;
 
@@ -327,22 +325,16 @@ export default function NewPatientPage() {
 
   const getInitialPhoneParts = (rawPhone?: string) => {
     const digits = normalizePhoneDigits(String(rawPhone || ''));
-    const sortedCodes = [...PHONE_COUNTRY_OPTIONS].sort(
-      (a, b) => normalizePhoneDigits(b.code).length - normalizePhoneDigits(a.code).length
-    );
 
-    for (const option of sortedCodes) {
-      const dialCode = normalizePhoneDigits(option.code);
-      if (digits.startsWith(dialCode) && digits.length > dialCode.length) {
-        return {
-          countryCode: option.code,
-          localPhone: digits.slice(dialCode.length),
-        };
-      }
+    if (digits.length >= 12 && digits.startsWith('55')) {
+      return {
+        countryCode: '+55',
+        localPhone: digits.slice(2)
+      };
     }
 
     return {
-      countryCode: '+55',
+      countryCode: DEFAULT_PHONE_DIAL_CODE,
       localPhone: digits,
     };
   };
@@ -573,6 +565,11 @@ export default function NewPatientPage() {
   const [showAllConsentTemplates, setShowAllConsentTemplates] = useState(false);
   const [consentLoading, setConsentLoading] = useState(false);
   const [selectedPhoneCountryCode, setSelectedPhoneCountryCode] = useState<string>(initialPhoneParts.countryCode);
+  const [phoneCodeSearchTerm, setPhoneCodeSearchTerm] = useState<string>(initialPhoneParts.countryCode || DEFAULT_PHONE_DIAL_CODE);
+  const [phoneCodeResults, setPhoneCodeResults] = useState<PhoneCodeEntry[]>([DEFAULT_PHONE_CODE_ENTRY]);
+  const [phoneCodeLoading, setPhoneCodeLoading] = useState(false);
+  const [phoneCodeDropdownOpen, setPhoneCodeDropdownOpen] = useState(false);
+  const [selectedPhoneCodeEntry, setSelectedPhoneCodeEntry] = useState<PhoneCodeEntry | null>(null);
   const [showVariantTooltip, setShowVariantTooltip] = useState(false);
   const [showAlphaGalTooltip, setShowAlphaGalTooltip] = useState(false);
   const [showLysoGb3Tooltip, setShowLysoGb3Tooltip] = useState(false);
@@ -604,6 +601,7 @@ export default function NewPatientPage() {
   const [selectedCid, setSelectedCid] = useState<CidEntry | null>(initialCidReference);
   const clinicalUnitComboboxRef = useRef<HTMLDivElement | null>(null);
   const cidComboboxRef = useRef<HTMLDivElement | null>(null);
+  const phoneCodeComboboxRef = useRef<HTMLDivElement | null>(null);
   const [selectedConsentTemplateIds, setSelectedConsentTemplateIds] = useState<string[]>(
     editingPatient?.consentTemplateId ? [String(editingPatient.consentTemplateId)] : []
   );
@@ -671,6 +669,35 @@ export default function NewPatientPage() {
 
   const normalizePhone = (value: string): string => {
     return normalizePhoneDigits(value);
+  };
+
+  const normalizePhoneCodeEntry = (entry: Partial<PhoneCodeEntry>): PhoneCodeEntry => {
+    const dialDigits = normalizePhone(String(entry.dialCode || ''));
+    const dialCode = dialDigits ? `+${dialDigits}` : '';
+    const countryName = String(entry.countryName || '').trim() || 'País';
+    const iso2 = String(entry.iso2 || '').trim().toUpperCase() || null;
+
+    return {
+      _id: entry._id,
+      countryName,
+      iso2,
+      dialCode,
+      searchLabel: `${countryName}${dialCode ? ` (${dialCode})` : ''}`.trim()
+    };
+  };
+
+  const handleSelectPhoneCode = (entry: PhoneCodeEntry) => {
+    const normalizedEntry = normalizePhoneCodeEntry(entry);
+    if (!normalizedEntry.dialCode) return;
+
+    setSelectedPhoneCodeEntry(normalizedEntry);
+    setSelectedPhoneCountryCode(normalizedEntry.dialCode);
+    setPhoneCodeSearchTerm(normalizedEntry.searchLabel || normalizedEntry.dialCode);
+    setPhoneCodeDropdownOpen(false);
+    setFormData((prev) => ({
+      ...prev,
+      phone: normalizePhoneDigits(String(prev.phone || '')).slice(0, getPhoneMaxDigitsByCountry(normalizedEntry.dialCode))
+    }));
   };
 
   const getCidDisplayLabel = (cid: Partial<CidEntry>): string => {
@@ -890,13 +917,86 @@ export default function NewPatientPage() {
   }, [cidSearchTerm, cidDropdownOpen]);
 
   useEffect(() => {
+    if (!phoneCodeDropdownOpen) {
+      setPhoneCodeLoading(false);
+      return;
+    }
+
+    const rawTerm = String(phoneCodeSearchTerm || '').trim();
+    const debounce = setTimeout(async () => {
+      setPhoneCodeLoading(true);
+      try {
+        const response = await phoneCodeService.search(rawTerm, 20);
+        const items = Array.isArray(response.data?.data)
+          ? response.data.data.map((item) => normalizePhoneCodeEntry(item)).filter((item) => item.dialCode)
+          : [];
+
+        setPhoneCodeResults(items.length > 0 ? items : [DEFAULT_PHONE_CODE_ENTRY]);
+
+        if (!selectedPhoneCodeEntry) {
+          const matched = items.find((item) => item.dialCode === selectedPhoneCountryCode);
+          if (matched) {
+            setSelectedPhoneCodeEntry(matched);
+            setPhoneCodeSearchTerm(matched.searchLabel || matched.dialCode);
+          }
+        }
+      } catch {
+        setPhoneCodeResults([DEFAULT_PHONE_CODE_ENTRY]);
+      } finally {
+        setPhoneCodeLoading(false);
+      }
+    }, 250);
+
+    return () => clearTimeout(debounce);
+  }, [phoneCodeSearchTerm, phoneCodeDropdownOpen, selectedPhoneCountryCode, selectedPhoneCodeEntry]);
+
+  useEffect(() => {
+    const preload = async () => {
+      const storedPhoneDigits = normalizePhone(String(editingPatient?.phone || ''));
+      try {
+        const response = await phoneCodeService.search('', 50);
+        const items = Array.isArray(response.data?.data)
+          ? response.data.data.map((item) => normalizePhoneCodeEntry(item)).filter((item) => item.dialCode)
+          : [];
+
+        if (items.length > 0) {
+          const matchedByStoredPhone = storedPhoneDigits
+            ? [...items]
+              .sort((a, b) => normalizePhone(b.dialCode).length - normalizePhone(a.dialCode).length)
+              .find((item) => {
+                const dialDigits = normalizePhone(item.dialCode);
+                return dialDigits.length > 0 && storedPhoneDigits.startsWith(dialDigits) && storedPhoneDigits.length > dialDigits.length;
+              })
+            : null;
+
+          const matched = matchedByStoredPhone || items.find((item) => item.dialCode === selectedPhoneCountryCode) || items[0];
+          setPhoneCodeResults(items);
+          setSelectedPhoneCodeEntry(matched);
+          setSelectedPhoneCountryCode(matched.dialCode || DEFAULT_PHONE_DIAL_CODE);
+          setPhoneCodeSearchTerm(matched.searchLabel || matched.dialCode);
+          return;
+        }
+      } catch {
+      }
+
+      setPhoneCodeResults([DEFAULT_PHONE_CODE_ENTRY]);
+      setSelectedPhoneCodeEntry(DEFAULT_PHONE_CODE_ENTRY);
+      setPhoneCodeSearchTerm(DEFAULT_PHONE_CODE_ENTRY.searchLabel || DEFAULT_PHONE_DIAL_CODE);
+    };
+
+    void preload();
+  }, [editingPatient?.phone]);
+
+  useEffect(() => {
     const handleDocumentMouseDown = (event: MouseEvent) => {
       if (clinicalUnitComboboxRef.current && !clinicalUnitComboboxRef.current.contains(event.target as Node)) {
         setClinicalUnitDropdownOpen(false);
       }
-      if (!cidComboboxRef.current) return;
-      if (!cidComboboxRef.current.contains(event.target as Node)) {
+      if (cidComboboxRef.current && !cidComboboxRef.current.contains(event.target as Node)) {
         setCidDropdownOpen(false);
+      }
+      if (phoneCodeComboboxRef.current && !phoneCodeComboboxRef.current.contains(event.target as Node)) {
+        setPhoneCodeDropdownOpen(false);
       }
     };
 
@@ -1239,7 +1339,7 @@ export default function NewPatientPage() {
               )}
             </div>
             
-            <div>
+            <div ref={phoneCodeComboboxRef} style={styles.comboboxContainer}>
               <label style={{ 
                 display: 'block', 
                 marginBottom: '0.5rem', 
@@ -1294,34 +1394,61 @@ export default function NewPatientPage() {
                 gridTemplateColumns: '150px 1fr',
                 gap: '0.5rem'
               }}>
-                <select
-                  value={selectedPhoneCountryCode}
-                  onChange={(e) => {
-                    const newCode = e.target.value;
-                    setSelectedPhoneCountryCode(newCode);
-                    setFormData((prev) => ({
-                      ...prev,
-                      phone: normalizePhoneDigits(String(prev.phone || '')).slice(0, getPhoneMaxDigitsByCountry(newCode))
-                    }));
-                  }}
-                  title={t('patients.phoneCountryCode')}
-                  aria-label={t('patients.phoneCountryCode')}
-                  style={{
-                    width: '100%',
-                    padding: '0.5rem',
-                    border: '1px solid var(--border)',
-                    borderRadius: '6px',
-                    fontSize: '0.875rem',
-                    backgroundColor: 'var(--surface)',
-                    color: 'var(--text)'
-                  }}
-                >
-                  {PHONE_COUNTRY_OPTIONS.map((option) => (
-                    <option key={`${option.country}-${option.code}`} value={option.code}>
-                      {option.country} ({option.code})
-                    </option>
-                  ))}
-                </select>
+                <div style={{ position: 'relative' }}>
+                  <input
+                    type="text"
+                    value={phoneCodeSearchTerm}
+                    onFocus={() => setPhoneCodeDropdownOpen(true)}
+                    onChange={(e) => {
+                      setPhoneCodeSearchTerm(e.target.value);
+                      setPhoneCodeDropdownOpen(true);
+                    }}
+                    placeholder={t('patients.phoneCodeSearchPlaceholder')}
+                    title={t('patients.phoneCountryCode')}
+                    aria-label={t('patients.phoneCountryCode')}
+                    style={{
+                      width: '100%',
+                      padding: '0.5rem',
+                      border: '1px solid var(--border)',
+                      borderRadius: '6px',
+                      fontSize: '0.875rem',
+                      backgroundColor: 'var(--surface)',
+                      color: 'var(--text)'
+                    }}
+                  />
+                  {phoneCodeDropdownOpen && (
+                    <div style={styles.comboboxList}>
+                      <ul style={styles.comboboxUl}>
+                        {phoneCodeLoading ? (
+                          <li style={styles.comboboxInfoItem}>{t('patients.phoneCodeLoading')}</li>
+                        ) : phoneCodeResults.length > 0 ? (
+                          phoneCodeResults.map((option) => {
+                            const key = String(option._id || `${option.countryName}-${option.dialCode}`);
+                            const isActive = option.dialCode === selectedPhoneCountryCode;
+
+                            return (
+                              <li key={key}>
+                                <button
+                                  type="button"
+                                  style={{
+                                    ...styles.comboboxItem,
+                                    backgroundColor: isActive ? 'var(--background)' : 'transparent'
+                                  }}
+                                  onMouseDown={(event) => event.preventDefault()}
+                                  onClick={() => handleSelectPhoneCode(option)}
+                                >
+                                  {option.searchLabel || `${option.countryName} (${option.dialCode})`}
+                                </button>
+                              </li>
+                            );
+                          })
+                        ) : (
+                          <li style={styles.comboboxInfoItem}>{t('patients.phoneCodeNoResults')}</li>
+                        )}
+                      </ul>
+                    </div>
+                  )}
+                </div>
                 <input
                   type="text"
                   value={maskLocalPhoneByCountry(selectedPhoneCountryCode, String(formData.phone || ''))}
@@ -1341,6 +1468,7 @@ export default function NewPatientPage() {
                   }}
                 />
               </div>
+              <div style={styles.comboboxHint}>{t('patients.phoneCodeSearchHint')}</div>
             </div>
             
             <Input

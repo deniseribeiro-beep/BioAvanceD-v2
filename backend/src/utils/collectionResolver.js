@@ -1,4 +1,5 @@
 const { CANONICAL_COLLECTIONS, COLLECTION_ALIASES } = require('../config/collections');
+const { enforceAppendOnlyCollection, ensureSampleMovementIndexes } = require('./sampleMovementLedger');
 
 async function resolveCollectionName(db, key) {
   const preferred = CANONICAL_COLLECTIONS[key];
@@ -29,7 +30,12 @@ async function resolveCollectionName(db, key) {
 
 async function getCollection(db, key, requiredMethod) {
   const name = await resolveCollectionName(db, key);
-  const collection = db.collection(name);
+  let collection = db.collection(name);
+
+  if (key === 'sampleMovements') {
+    enforceAppendOnlyCollection(collection, name);
+    await ensureSampleMovementIndexes(collection);
+  }
 
   if (!requiredMethod || typeof collection?.[requiredMethod] === 'function') {
     return collection;
@@ -42,6 +48,10 @@ async function getCollection(db, key, requiredMethod) {
 
   for (const candidate of candidates) {
     const aliasCollection = db.collection(candidate);
+    if (key === 'sampleMovements') {
+      enforceAppendOnlyCollection(aliasCollection, candidate);
+      await ensureSampleMovementIndexes(aliasCollection);
+    }
     if (typeof aliasCollection?.[requiredMethod] === 'function') {
       return aliasCollection;
     }

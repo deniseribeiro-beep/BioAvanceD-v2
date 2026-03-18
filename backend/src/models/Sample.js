@@ -245,7 +245,7 @@ class SampleModel {
     }
     const validTypes = [
       'Sangue', 'Urina', 'Saliva', 'Tecido', 'DNA', 'RNA',
-      'Plasma', 'Soro', 'Líquido Cefalorraquidiano'
+      'Plasma', 'Soro', 'Eritrócitos', 'DBS', 'Líquido Cefalorraquidiano'
     ];
     return validTypes.includes(sampleType);
   }

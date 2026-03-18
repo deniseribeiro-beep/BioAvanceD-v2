@@ -1,6 +1,8 @@
 const mongoose = require('mongoose');
 const { ObjectId } = require('mongodb'); // Native MongoDB driver para evitar conflitos BSON
 const logger = require('../utils/logger');
+const SampleMovementModel = require('../models/SampleMovement');
+const { appendMovementWithHashChain, enforceAppendOnlyCollection, ensureSampleMovementIndexes } = require('../utils/sampleMovementLedger');
 const { getCollection } = require('../utils/collectionResolver');
 
 /**
@@ -227,9 +229,15 @@ class StorageService {
 
         // 4. Criar/atualizar SampleMovement (auditoria)
         const movementsCollection = this.db.collection('sample_movements');
-        await movementsCollection.insertOne(
+        enforceAppendOnlyCollection(movementsCollection, 'sample_movements');
+        await ensureSampleMovementIndexes(movementsCollection);
+
+        const movementID = await SampleMovementModel.generateMovementID(this.db);
+        await appendMovementWithHashChain(
+          movementsCollection,
           {
-            sampleID: sampleObjId,
+            movementID,
+            sampleID: sampleObjId.toString(),
             barcode: existingSample.barcode,
             type: 'allocate',
             quantity: existingSample.quantity,
@@ -241,7 +249,8 @@ class StorageService {
               boxId: boxObjId,
               position: position
             },
-            createdAt: new Date()
+            createdAt: new Date(),
+            immutable: true
           },
           { session }
         );
@@ -360,8 +369,13 @@ class StorageService {
 
       // Criar movimento de auditoria
       const movementsCollection = this.db.collection('sample_movements');
-      await movementsCollection.insertOne({
-        sampleID: sampleObjId,
+      enforceAppendOnlyCollection(movementsCollection, 'sample_movements');
+      await ensureSampleMovementIndexes(movementsCollection);
+
+      const movementID = await SampleMovementModel.generateMovementID(this.db);
+      await appendMovementWithHashChain(movementsCollection, {
+        movementID,
+        sampleID: sampleObjId.toString(),
         barcode: sample.barcode,
         type: 'release',
         quantity: sample.quantity,
@@ -373,7 +387,8 @@ class StorageService {
           position: position,
           action: 'released'
         },
-        createdAt: new Date()
+        createdAt: new Date(),
+        immutable: true
       });
 
       logger.info(`✅ Amostra ${sampleId} liberada de ${boxId}/${position}`);

@@ -3,7 +3,9 @@ const SampleMovementModel = require('../models/SampleMovement');
 const logger = require('../utils/logger');
 const { validatePatientID } = require('../utils/patientAnonymization');
 const { generateUniqueBarcode } = require('../utils/barcodeGenerator');
+const { generateBarcodeSymbologies, parseScannedBarcode } = require('../utils/barcodeSymbology');
 const { generateUniqueSampleID } = require('../utils/sampleIDGenerator');
+const { appendMovementWithHashChain } = require('../utils/sampleMovementLedger');
 const fhirSyncService = require('./fhir-sync.service');
 const { getCollection } = require('../utils/collectionResolver');
 
@@ -137,6 +139,9 @@ class SampleService {
           throw new Error(`Já existe uma amostra com o ID ${sampleData.sampleID}`);
         }
       }
+
+      sampleData.barcodeSymbologies = generateBarcodeSymbologies(sampleData.barcode);
+
       const sample = SampleModel.create(sampleData);
 
       const result = await samplesCollection.insertOne(sample);
@@ -255,7 +260,7 @@ class SampleService {
         newQuantity: newAvailableQty
       });
 
-      await movementsCollection.insertOne(movement);
+      await appendMovementWithHashChain(movementsCollection, movement);
 
       // Atualizar amostra
       const update = {
@@ -407,9 +412,9 @@ class SampleService {
       const samplesCollection = await getCollection(db, 'samples');
       const patientsCollection = await getCollection(db, 'patients');
       
-      // Garante que barcode seja string e normaliza (trim, uppercase para consistência)
-      const barcodeStr = String(barcode).trim();
-      logger.info(`Buscando amostra com código de barras: "${barcodeStr}" (tipo: ${typeof barcodeStr})`);
+      const parsedBarcode = parseScannedBarcode(barcode);
+      const barcodeStr = parsedBarcode.normalizedValue;
+      logger.info(`Buscando amostra com código de barras: "${barcodeStr}" (simbologia: ${parsedBarcode.scannerSymbology})`);
       
       // Tenta múltiplas estratégias de busca para garantir compatibilidade
       let sample = null;
@@ -614,7 +619,7 @@ class SampleService {
         newQuantity: newAvailableQty
       });
 
-      await movementsCollection.insertOne(movement);
+      await appendMovementWithHashChain(movementsCollection, movement);
 
       // Atualizar amostra
       const update = {

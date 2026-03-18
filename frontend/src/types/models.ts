@@ -102,6 +102,14 @@ export interface CidEntry {
   Codigos_CID10: string;
 }
 
+export interface PhoneCodeEntry {
+  _id?: string;
+  countryName: string;
+  iso2?: string | null;
+  dialCode: string;
+  searchLabel?: string;
+}
+
 export interface Sample {
   _id?: string; // MongoDB ID
   patientID: number | string; // ID de paciente de 8 dígitos (string) - chave única de ligação

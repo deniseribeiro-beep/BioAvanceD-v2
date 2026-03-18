@@ -1,6 +1,12 @@
 /**
  * Repositório de auditoria imutável em MongoDB.
  */
+const {
+  appendMovementWithHashChain,
+  enforceAppendOnlyCollection,
+  ensureSampleMovementIndexes
+} = require('../../../utils/sampleMovementLedger');
+
 class MongoAuditRepository {
   /**
    * @param {import('mongodb').Db} db
@@ -16,10 +22,13 @@ class MongoAuditRepository {
    */
   async appendImmutableAudit(input, session) {
     const movementsCollection = this.db.collection('sample_movements');
+    enforceAppendOnlyCollection(movementsCollection, 'sample_movements');
+    await ensureSampleMovementIndexes(movementsCollection);
 
     const movementID = await this.generateMovementID(session);
 
-    await movementsCollection.insertOne(
+    await appendMovementWithHashChain(
+      movementsCollection,
       {
         movementID,
         sampleID: input.sampleId,

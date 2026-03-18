@@ -111,6 +111,7 @@ export default function PatientsPage() {
   const [isBulkImportConfigModalOpen, setIsBulkImportConfigModalOpen] = useState(false);
   const [smartImportMetadata, setSmartImportMetadata] = useState<SmartImportMetadata | null>(null);
   const [selectedBulkImportConsentTemplateId, setSelectedBulkImportConsentTemplateId] = useState('');
+  const [bulkConsentTemplateSearch, setBulkConsentTemplateSearch] = useState('');
   const [pendingBulkImportFile, setPendingBulkImportFile] = useState<File | null>(null);
   const [bulkImportSummary, setBulkImportSummary] = useState<{
     fileName: string;
@@ -122,7 +123,6 @@ export default function PatientsPage() {
     summaryReportId?: string;
     errorsDetails?: string[];
   } | null>(null);
-  const [isDownloadingPatientsTemplate, setIsDownloadingPatientsTemplate] = useState(false);
   const [showImportErrorDetails, setShowImportErrorDetails] = useState(false);
   const [loadingImportErrorDetails, setLoadingImportErrorDetails] = useState(false);
   const [importErrorDetails, setImportErrorDetails] = useState<string[]>([]);
@@ -130,6 +130,20 @@ export default function PatientsPage() {
   const bulkImportInputRef = useRef<HTMLInputElement | null>(null);
   const canImportPatients = user?.roleName === 'Administrador' || user?.roleName === 'Coordenador' || user?.accessType === 3 || user?.accessType === 4;
   const hasSelectableConsentTemplates = Array.isArray(smartImportMetadata?.consentTemplates?.items) && smartImportMetadata.consentTemplates.items.length > 0;
+  const filteredBulkConsentTemplates = useMemo(() => {
+    const items = Array.isArray(smartImportMetadata?.consentTemplates?.items)
+      ? smartImportMetadata.consentTemplates.items
+      : [];
+    const term = String(bulkConsentTemplateSearch || '').trim().toLowerCase();
+    if (!term) return items;
+
+    return items.filter((template) => {
+      const version = String(template.version || '').toLowerCase();
+      const title = String(template.title || '').toLowerCase();
+      const caae = String(template.caae || '').toLowerCase();
+      return version.includes(term) || title.includes(term) || caae.includes(term);
+    });
+  }, [smartImportMetadata, bulkConsentTemplateSearch]);
 
   const fallbackRequiredFields = useMemo(() => ([
     { field: 'patientName', label: 'Nome do paciente', description: 'Nome completo do paciente.' },
@@ -276,30 +290,6 @@ export default function PatientsPage() {
     }
     if (isSmartImportingPatients) return;
     bulkImportInputRef.current?.click();
-  };
-
-  const handleDownloadPatientsTemplate = async () => {
-    if (isDownloadingPatientsTemplate) return;
-    setIsDownloadingPatientsTemplate(true);
-    try {
-      const response = await importLGPDService.downloadTemplate('patients', 'xlsx');
-      const blob = response?.data instanceof Blob
-        ? response.data
-        : new Blob([response?.data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-      const url = window.URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = 'pacientes_template.xlsx';
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      window.URL.revokeObjectURL(url);
-    } catch (error: any) {
-      const message = error?.response?.data?.message || error?.message || t('import.errors.importError');
-      alert(message);
-    } finally {
-      setIsDownloadingPatientsTemplate(false);
-    }
   };
 
   const mapErrorsToMessages = (errorsDetails: any[]): string[] => {
@@ -472,6 +462,7 @@ export default function PatientsPage() {
     }
 
     setPendingBulkImportFile(selectedFile);
+    setBulkConsentTemplateSearch('');
     setIsBulkImportConfigModalOpen(true);
   };
 
@@ -892,14 +883,9 @@ export default function PatientsPage() {
         title={t('patients.importHelpTitle')}
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.8rem' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
-            <p style={{ margin: 0 }}>
-              <strong>{t('import.result.fileLabel')}:</strong> {pendingBulkImportFile?.name || '--'}
-            </p>
-            <Button variant="secondary" onClick={handleDownloadPatientsTemplate} disabled={isDownloadingPatientsTemplate}>
-              {isDownloadingPatientsTemplate ? 'Baixando template...' : 'Baixar XLSX de exemplo'}
-            </Button>
-          </div>
+          <p style={{ margin: 0 }}>
+            <strong>{t('import.result.fileLabel')}:</strong> {pendingBulkImportFile?.name || '--'}
+          </p>
 
           <p style={styles.importWarningText}>
             {smartImportMetadata?.invalidRowPolicy?.message || t('patients.importInvalidRowsNotSaved')}
@@ -933,13 +919,14 @@ export default function PatientsPage() {
 
           {Array.isArray(smartImportMetadata?.consentTemplates?.items) && smartImportMetadata.consentTemplates.items.length > 0 && (
             <div style={styles.importPanelActions}>
-              <label htmlFor="bulk-consent-template" style={{ fontSize: '0.85rem', color: 'var(--text-light)' }}>
+              <label style={{ fontSize: '0.85rem', color: 'var(--text-light)' }}>
                 {t('patients.importConsentTemplateLabel')}
               </label>
-              <select
-                id="bulk-consent-template"
-                value={selectedBulkImportConsentTemplateId}
-                onChange={(event) => setSelectedBulkImportConsentTemplateId(event.target.value)}
+              <input
+                type="text"
+                value={bulkConsentTemplateSearch}
+                onChange={(event) => setBulkConsentTemplateSearch(event.target.value)}
+                placeholder={t('patients.consentTemplateSearchPlaceholder')}
                 style={{
                   width: '100%',
                   padding: '0.4rem 0.5rem',
@@ -949,14 +936,48 @@ export default function PatientsPage() {
                   backgroundColor: 'var(--surface)',
                   color: 'var(--text)'
                 }}
-              >
-                <option value="">{t('patients.importConsentTemplateAuto')}</option>
-                {smartImportMetadata.consentTemplates.items.map((template) => (
-                  <option key={template._id} value={template._id}>
-                    {`${template.version || '--'} - ${template.title || '--'} (${t('patients.caaeLabel')}: ${template.caae || '--'})`}
-                  </option>
-                ))}
-              </select>
+              />
+
+              <div style={{
+                width: '100%',
+                maxHeight: '180px',
+                overflowY: 'auto',
+                border: '1px solid var(--border)',
+                borderRadius: '6px',
+                padding: '0.5rem',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '0.45rem'
+              }}>
+                <label style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-start', fontSize: '0.85rem' }}>
+                  <input
+                    type="radio"
+                    name="bulk-consent-template"
+                    checked={!selectedBulkImportConsentTemplateId}
+                    onChange={() => setSelectedBulkImportConsentTemplateId('')}
+                  />
+                  <span>{t('patients.importConsentTemplateAuto')}</span>
+                </label>
+
+                {filteredBulkConsentTemplates.length > 0 ? (
+                  filteredBulkConsentTemplates.map((template) => {
+                    const templateLabel = `${template.version || '--'} - ${template.title || '--'} (${t('patients.caaeLabel')}: ${template.caae || '--'})`;
+                    return (
+                      <label key={template._id} style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-start', fontSize: '0.85rem' }}>
+                        <input
+                          type="radio"
+                          name="bulk-consent-template"
+                          checked={selectedBulkImportConsentTemplateId === template._id}
+                          onChange={() => setSelectedBulkImportConsentTemplateId(template._id)}
+                        />
+                        <span title={templateLabel}>{templateLabel}</span>
+                      </label>
+                    );
+                  })
+                ) : (
+                  <span style={{ color: 'var(--text-light)', fontSize: '0.82rem' }}>{t('patients.consentTemplateEmpty')}</span>
+                )}
+              </div>
             </div>
           )}
 

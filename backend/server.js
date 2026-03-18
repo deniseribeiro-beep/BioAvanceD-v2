@@ -7,6 +7,7 @@ const { connectNeo4j } = require("./src/infrastructure/database/neo4j/connection
 const LineageRepository = require("./src/infrastructure/database/neo4j/LineageRepository");
 const TopologicalQuarantine = require("./src/infrastructure/queue/TopologicalQuarantine");
 const TelemetryMonitor = require("./src/infrastructure/services/TelemetryMonitor");
+const mqttTelemetryService = require("./src/services/mqtt-telemetry.service");
 const portManager = require("./src/utils/portManager");
 const env = require("./src/config/env");
 const { initScheduler } = require("./src/services/scheduler.service");
@@ -151,6 +152,15 @@ async function startServer() {
       app.locals.telemetryMonitor = null;
     }
 
+    // Ingestão MQTT de telemetria IoT
+    try {
+      await mqttTelemetryService.start(db);
+      app.locals.mqttTelemetryService = mqttTelemetryService;
+    } catch (mqttError) {
+      logger.error('[ISO20387][MQTT] Falha ao iniciar ingestão MQTT:', mqttError.message || mqttError);
+      app.locals.mqttTelemetryService = null;
+    }
+
     // Criar servidor HTTP unificado
     const httpServer = http.createServer(app);
     httpServerInstance = httpServer;
@@ -217,6 +227,12 @@ async function gracefulShutdown(signal) {
       app.locals.telemetryMonitor?.stop?.();
     } catch (error) {
       logger.error('[Shutdown] Erro ao parar monitor de telemetria:', error.message || error);
+    }
+
+    try {
+      await app.locals.mqttTelemetryService?.stop?.();
+    } catch (error) {
+      logger.error('[Shutdown] Erro ao parar ingestão MQTT:', error.message || error);
     }
 
     if (httpServerInstance) {

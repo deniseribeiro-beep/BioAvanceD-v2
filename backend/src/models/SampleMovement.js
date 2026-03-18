@@ -123,17 +123,38 @@ class SampleMovementModel {
    * Gera ID único para movimentação
    */
   static async generateMovementID(db) {
+    try {
+      const countersCollection = db.collection('counters');
+      const counter = await countersCollection.findOneAndUpdate(
+        { _id: 'sample_movements' },
+        {
+          $inc: { seq: 1 },
+          $setOnInsert: { createdAt: new Date() }
+        },
+        {
+          upsert: true,
+          returnDocument: 'after'
+        }
+      );
+
+      if (counter?.value?.seq) {
+        return counter.value.seq;
+      }
+    } catch (_) {
+      // fallback para compatibilidade com ambientes de teste/mocks
+    }
+
     const collection = db.collection('sample_movements');
     const lastMovement = await collection
       .find({})
       .sort({ movementID: -1 })
       .limit(1)
       .toArray();
-    
-    const lastID = lastMovement.length > 0 && lastMovement[0].movementID 
-      ? lastMovement[0].movementID 
+
+    const lastID = lastMovement.length > 0 && lastMovement[0].movementID
+      ? lastMovement[0].movementID
       : 0;
-    
+
     return lastID + 1;
   }
 }

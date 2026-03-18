@@ -134,6 +134,8 @@ class PatientModel {
 
     if (data.lysoGb3 !== undefined && data.lysoGb3 !== null && typeof data.lysoGb3 !== 'number') {
       errors.push(`Lyso-Gb3 (lysoGb3) deve ser um número. Valor recebido: "${data.lysoGb3}" (tipo: ${typeof data.lysoGb3})`);
+    } else if (typeof data.lysoGb3 === 'number' && data.lysoGb3 < 0) {
+      errors.push('Lyso-Gb3 (lysoGb3) não pode ser negativo');
     }
 
     // Validações booleanas
@@ -166,11 +168,26 @@ class PatientModel {
     // alphaGal é Float (pode ser null)
     if (data.alphaGal !== undefined && data.alphaGal !== null && typeof data.alphaGal !== 'number') {
       errors.push(`α-Galactosidase (alphaGal) deve ser um número decimal (U/mL) ou vazio. Valor recebido: "${data.alphaGal}" (tipo: ${typeof data.alphaGal})`);
+    } else if (typeof data.alphaGal === 'number' && data.alphaGal < 0) {
+      errors.push('α-Galactosidase (alphaGal) não pode ser negativa');
     }
 
     // icdCode é String
     if (data.icdCode !== undefined && data.icdCode !== null && typeof data.icdCode !== 'string') {
       errors.push(`Código CID (icdCode) deve ser um texto. Valor recebido: "${data.icdCode}" (tipo: ${typeof data.icdCode})`);
+    }
+
+    if (data.icdReference !== undefined && data.icdReference !== null) {
+      if (typeof data.icdReference !== 'object' || Array.isArray(data.icdReference)) {
+        errors.push('icdReference deve ser um objeto válido');
+      } else {
+        const referenceFields = ['cidId', 'Codigo_Tabulacao', 'Codigos_CID10', 'Descricao'];
+        referenceFields.forEach((field) => {
+          if (data.icdReference[field] !== undefined && data.icdReference[field] !== null && typeof data.icdReference[field] !== 'string') {
+            errors.push(`icdReference.${field} deve ser string`);
+          }
+        });
+      }
     }
 
     // status de consentimento
@@ -253,6 +270,7 @@ class PatientModel {
       representativePhone: PatientModel.normalizePhone(patientData.representativePhone),
       diagnosticHypothesis: patientData.diagnosticHypothesis || null,
       icdCode: patientData.icdCode || null, // String conforme dicionário
+      icdReference: patientData.icdReference || null,
       hypertension: patientData.hypertension || false,
       obesity: patientData.obesity || false,
       diabetesType1: patientData.diabetesType1 || false,
