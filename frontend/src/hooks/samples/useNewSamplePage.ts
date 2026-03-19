@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Patient, Sample } from '../../types/models';
+import { useLanguage } from '@/contexts/LanguageContext';
+import { patientService } from '@/services/api';
+import { Patient, Sample } from '@/types/models';
 import { useSamples } from '../useSamples';
 import { useLocations } from '../useLocations';
-import { patientService } from '../../services/api';
-import { useLanguage } from '../../contexts/LanguageContext';
 
 type NewSampleFormData = Partial<Sample> & { registerDate?: string; quality?: number };
 

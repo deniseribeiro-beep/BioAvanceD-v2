@@ -1,4 +1,4 @@
-import { SampleMovementItem } from '../../hooks/samples/useSampleMovements';
+import { SampleMovementItem } from '@/hooks/samples/useSampleMovements';
 import { mapMovementTypeLabel, TranslatorFn } from './movementTypeLabel';
 
 interface SampleMovementsViewProps {

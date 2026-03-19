@@ -1,5 +1,5 @@
 import { sampleService } from '../api';
-import { Sample } from '../../types/models';
+import { Sample } from '@/types/models';
 
 export type TemplateFormat = 'csv' | 'xlsx';
 

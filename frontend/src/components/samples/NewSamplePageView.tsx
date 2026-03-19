@@ -1,9 +1,9 @@
 import { useId } from 'react';
 import { ArrowLeft } from 'lucide-react';
+import { Location, Patient, Sample } from '@/types/models';
 import Button from '../UI/Button';
 import Input from '../UI/Input';
 import PatientSearchInput from '../UI/PatientSearchInput';
-import { Location, Patient, Sample } from '../../types/models';
 
 type TranslatorFn = (key: string) => string;
 type NewSampleFormData = Partial<Sample> & { registerDate?: string; quality?: number };

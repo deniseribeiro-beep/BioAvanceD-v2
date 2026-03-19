@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
+import { samplesApi, TemplateFormat } from '@/services/samples/samplesApi';
+import { Sample } from '@/types/models';
 import { useSamples } from '../useSamples';
 import { useImportJob } from '../useImportJob';
-import { Sample } from '../../types/models';
-import { samplesApi, TemplateFormat } from '../../services/samples/samplesApi';
 
 export type SampleWithId = Sample & {
   id: string;

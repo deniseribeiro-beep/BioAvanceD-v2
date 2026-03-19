@@ -1,15 +1,15 @@
 /* eslint-disable no-inline-styles */
 import { Check, Download, Edit3, Plus, Printer, Trash2, Upload } from 'lucide-react';
 import Barcode from 'react-barcode';
+import { SampleWithId } from '@/hooks/samples/useSamplesPage';
+import { TemplateFormat } from '@/services/samples/samplesApi';
+import { Sample } from '@/types/models';
 import Card from '../UI/Card';
 import Button from '../UI/Button';
 import Input from '../UI/Input';
 import Modal from '../UI/Modal';
 import Table from '../UI/Table';
 import SampleStatusBadge from '../SampleStatusBadge';
-import { Sample } from '../../types/models';
-import { SampleWithId } from '../../hooks/samples/useSamplesPage';
-import { TemplateFormat } from '../../services/samples/samplesApi';
 import '../../views/SamplesPage.css';
 
 type TranslatorFn = (key: string) => string;

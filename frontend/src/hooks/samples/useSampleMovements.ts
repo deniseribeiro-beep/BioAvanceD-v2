@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { sampleChainApi } from '../../services/sampleChainApi';
+import { sampleChainApi } from '@/services/sampleChainApi';
 import { normalizeMovementList, parseComplianceError, SampleMovementItem } from './sampleMovements.shared';
 
 

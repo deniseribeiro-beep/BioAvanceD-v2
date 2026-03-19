@@ -1,7 +1,7 @@
 import React from 'react';
+import { SampleCustodyRow, SampleMovementState, resolvePatientId, resolveSampleId } from '@/hooks/samples/useSampleCustodyReports';
 import Button from '../UI/Button';
 import Card from '../UI/Card';
-import { SampleCustodyRow, SampleMovementState, resolvePatientId, resolveSampleId } from '../../hooks/samples/useSampleCustodyReports';
 import { mapMovementTypeLabel, TranslatorFn } from './movementTypeLabel';
 
 interface SampleCustodyReportsViewProps {

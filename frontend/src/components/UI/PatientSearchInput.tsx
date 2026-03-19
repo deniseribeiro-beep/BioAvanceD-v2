@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useId } from 'react';
 import { Search, CheckCircle, XCircle, Loader, ChevronDown } from 'lucide-react';
-import { patientService } from '../../services/api';
+import { patientService } from '@/services/api';
 import './PatientSearchInput.css';
 
 interface Patient {

@@ -1,8 +1,8 @@
 import { useMemo, useState } from 'react';
+import { sampleChainApi } from '@/services/sampleChainApi';
+import { Sample } from '@/types/models';
 import { useSamples } from '../useSamples';
-import { sampleChainApi } from '../../services/sampleChainApi';
 import { normalizeMovementList, parseComplianceError, SampleMovementItem } from './sampleMovements.shared';
-import { Sample } from '../../types/models';
 
 export type SampleMovement = SampleMovementItem;
 

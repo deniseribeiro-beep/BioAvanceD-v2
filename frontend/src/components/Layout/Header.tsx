@@ -1,6 +1,6 @@
-import { useAuth } from '../../contexts/AuthContext';
-import { useLanguage } from '../../contexts/LanguageContext';
-import { User as UserType } from '../../types/models';
+import { useAuth } from '@/contexts/AuthContext';
+import { useLanguage } from '@/contexts/LanguageContext';
+import { User as UserType } from '@/types/models';
 import Button from '../UI/Button';
 import LanguageSelector from '../LanguageSelector';
 import { LogOut, User } from 'lucide-react';
