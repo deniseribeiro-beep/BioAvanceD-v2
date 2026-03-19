@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"],
+      "@config/*": ["src/config/*"],
+      "@controllers/*": ["src/controllers/*"],
+      "@services/*": ["src/services/*"],
+      "@utils/*": ["src/utils/*"],
+      "@models/*": ["src/models/*"],
+      "@database/*": ["src/database/*"],
+      "@constants/*": ["src/constants/*"],
+      "@routes/*": ["src/interface/routes/*"]
+    },
+    "checkJs": false
+  },
+  "include": ["src/**/*.js", "app.js", "server.js"]
+}

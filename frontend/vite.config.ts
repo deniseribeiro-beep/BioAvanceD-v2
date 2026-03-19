@@ -1,10 +1,16 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import path from 'path'
 
 const pollingInterval = Number(process.env.CHOKIDAR_INTERVAL || '300');
 const usePolling = process.env.CHOKIDAR_USEPOLLING === 'true';
 
 export default defineConfig({
+  resolve: {
+    alias: {
+      '@': path.resolve(__dirname, 'src'),
+    },
+  },
   plugins: [
     react(),
 
