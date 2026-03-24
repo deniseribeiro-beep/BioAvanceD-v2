@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useLanguage } from '../../../contexts/LanguageContext';
 import { z } from 'zod';
 import { ArrowLeft, ArrowRight, CheckCircle2, FlaskConical, Pill, PlusCircle, Send, ShieldCheck, Stethoscope } from 'lucide-react';
 import Button from '../../../components/UI/Button';
@@ -7,7 +8,15 @@ import Input from '../../../components/UI/Input';
 import Select from '../../../components/UI/Select';
 import Modal from '../../../components/UI/Modal';
 import Textarea from '../../../components/UI/Textarea';
+import CidAsyncAutocomplete from '../../../components/CidAsyncAutocomplete';
 import { apiClient, notifyApiToast } from '../../../api/client';
+
+// Exemplo de uso do componente CidAsyncAutocomplete:
+// <CidAsyncAutocomplete
+//   value={formData.diagnosisCid}
+//   onChange={cid => setFormData(prev => ({ ...prev, diagnosisCid: cid }))}
+//   placeholder="Buscar CID por código ou descrição..."
+// />
 import intakeService from '../../../api/intake.service';
 import { cidService, consentService } from '../../../services/api';
 import { LIMITS } from '../../../config/constants/limits.constants';
@@ -569,9 +578,10 @@ function buildSubmissionPayload(formData, clinicalComorbidityItems = [], biomark
 }
 
 export default function ClinicalIntakeWizard({
+    const { t } = useLanguage();
   onStepChange,
   onValidityChange,
-  submitLabel = 'Finalizar Cadastro Integrado',
+  submitLabel = t('intake.finalizeRegistration', 'Finalizar Cadastro Integrado'),
   className = '',
   dictionaries = {},
   dictionariesLoading = true,
@@ -1146,19 +1156,19 @@ export default function ClinicalIntakeWizard({
     <form className={`clinical-intake-wizard ${className}`} onSubmit={handleFinalize} noValidate>
       <header className="clinical-intake-wizard__header">
         <div>
-          <p className="clinical-intake-wizard__eyebrow">Cadastro Integrado</p>
-          <h3>Wizard clínico em três etapas</h3>
+          <p className="clinical-intake-wizard__eyebrow">{t('intake.headerTitle', 'Cadastro Integrado')}</p>
+          <h3>{t('intake.headerSubtitle', 'Wizard clínico em três etapas')}</h3>
           <p>
-            O fluxo impede avanço prematuro no Passo 1 e só exibe a finalização no Passo 3.
+            {t('intake.headerDescription', 'O fluxo impede avanço prematuro no Passo 1 e só exibe a finalização no Passo 3.')}
           </p>
         </div>
         <div className="clinical-intake-wizard__badge">
           <Pill size={16} />
-          <span>Passo a passo seguro</span>
+          <span>{t('intake.safeStep', 'Passo a passo seguro')}</span>
         </div>
       </header>
 
-      <section className="clinical-intake-wizard__stepper" aria-label="Etapas do cadastro integrado">
+      <section className="clinical-intake-wizard__stepper" aria-label={t('intake.stepperAria', 'Etapas do cadastro integrado')}>
         {stepMeta.map((step, index) => {
           const Icon = step.icon;
           const isActive = index === activeStep;
@@ -1176,8 +1186,8 @@ export default function ClinicalIntakeWizard({
                 {isComplete ? <CheckCircle2 size={16} /> : <Icon size={16} />}
               </span>
               <span>
-                <strong>{step.label}</strong>
-                <small>{step.title}</small>
+                <strong>{t(`intake.step${index+1}Label`, step.label)}</strong>
+                <small>{t(`intake.step${index+1}Title`, step.title)}</small>
               </span>
             </button>
           );
@@ -1188,17 +1198,17 @@ export default function ClinicalIntakeWizard({
         <div className="clinical-intake-wizard__progress-track">
           <div className="clinical-intake-wizard__progress-fill" style={{ width: `${stepProgress}%` }} />
         </div>
-        <span>{activeStep + 1} de 3</span>
+        <span>{t('intake.progress', `${activeStep + 1} de 3`, { step: activeStep + 1, total: 3 })}</span>
       </div>
 
       <Card className="clinical-intake-wizard__panel">
         <div className="clinical-intake-wizard__panel-header">
           <div className="clinical-intake-wizard__panel-eyebrow">
             <ActiveIcon size={18} />
-            <span>{activeMeta.label}</span>
+            <span>{t(`intake.step${activeStep+1}Label`, activeMeta.label)}</span>
           </div>
-          <h4>{activeMeta.title}</h4>
-          <p>{activeMeta.helper}</p>
+          <h4>{t(`intake.step${activeStep+1}Title`, activeMeta.title)}</h4>
+          <p>{t(`intake.step${activeStep+1}Helper`, activeMeta.helper)}</p>
         </div>
 
         {dictionariesError && (
@@ -1706,19 +1716,20 @@ export default function ClinicalIntakeWizard({
         )}
 
         <div className="clinical-intake-wizard__actions">
+
           <Button variant="secondary" type="button" onClick={goBack} disabled={activeStep === 0}>
             <ArrowLeft size={16} />
-            Voltar
+            {t('common.back', 'Voltar')}
           </Button>
 
           {activeStep < 2 ? (
             <Button type="button" onClick={goNext} disabled={isSubmitting || (activeStep === 0 ? !isStep1Valid : !isStep2Valid)}>
-              Próximo
+              {t('common.next', 'Próximo')}
               <ArrowRight size={16} />
             </Button>
           ) : (
             <Button type="submit" variant="success" disabled={isSubmitting || !isStep1Valid || !isStep2Valid || !isStep3Valid}>
-              {isSubmitting ? 'Salvando...' : submitLabel}
+              {isSubmitting ? t('common.saving', 'Salvando...') : submitLabel}
             </Button>
           )}
         </div>

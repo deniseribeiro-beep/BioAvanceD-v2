@@ -1,4 +1,3 @@
-require('dotenv').config();
 
 const fs = require('fs');
 const path = require('path');
@@ -387,8 +386,8 @@ async function run() {
     throw new Error(`Arquivo XML ou CSV não encontrado. XMLs: ${xmlPaths} | CSV: ${CSV_PATH}`);
   }
 
+
   if (rows.length === 0) {
-    console.log('Nenhum registro válido encontrado na fonte selecionada.');
     return;
   }
 
@@ -434,11 +433,7 @@ async function run() {
     { name: 'cid_text_search' }
   );
 
-  console.log('✅ Seed de CID concluído');
-  console.log(`📄 Linhas lidas: ${rows.length}`);
-  console.log(`🔁 Registros existentes encontrados: ${totalMatched}`);
-  console.log(`✏️ Registros atualizados: ${totalModified}`);
-  console.log(`🆕 Registros inseridos (upsert): ${totalUpserted}`);
+
 }
 
 run()

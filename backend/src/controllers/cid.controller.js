@@ -11,18 +11,21 @@ const search = async (req, res) => {
       });
     }
 
-    const term = String(req.query.q || '').trim();
+    const q = String(req.query.q || '').trim();
+    if (q.length < 2) {
+      return res.json([]);
+    }
 
-    const requestedLimit = Number(req.query.limit);
-    const limit = Number.isFinite(requestedLimit) ? requestedLimit : 10;
-    const requestedPage = Number(req.query.page);
-    const page = Number.isFinite(requestedPage) && requestedPage > 0 ? requestedPage : 1;
-    const result = await cidService.searchPaginated(db, term, page, limit);
-    return res.status(200).json({
-      success: true,
-      data: result.items,
-      pagination: result.pagination
-    });
+    // Busca otimizada: código ou descrição, regex, case-insensitive, limit 20
+    const regex = new RegExp(q, 'i');
+    const collection = db.collection('cids');
+    const results = await collection.find({
+      $or: [
+        { Codigo_Tabulacao: { $regex: regex } },
+        { Descricao: { $regex: regex } }
+      ]
+    }).limit(20).toArray();
+    return res.json(results);
   } catch (error) {
     logger.error('Erro ao buscar CIDs:', error.message);
     return res.status(500).json({

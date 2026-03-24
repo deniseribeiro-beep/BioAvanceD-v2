@@ -227,6 +227,8 @@ app.use("/api/assistant", require("./src/interface/routes/assistant.routes"));
 app.use("/api/import-lgpd", require("./src/interface/routes/import-lgpd.routes"));
 app.use("/api/compliance", require("./src/interface/routes/compliance.routes"));
 app.use("/api/cids", require("./src/interface/routes/cid.routes"));
+
+app.use("/api/biomarker-requests", require("./src/routes/biomarkerRequest.routes"));
 app.use("/api/phone-codes", require("./src/interface/routes/phone-codes.routes"));
 
 app.get("/api/health", (req, res) => {

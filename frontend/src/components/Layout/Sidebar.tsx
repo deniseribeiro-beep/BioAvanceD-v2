@@ -143,8 +143,25 @@ export default function Sidebar() {
                 className={({ isActive }) =>
                   `sidebar-link ${item.featured ? 'sidebar-link--featured' : ''} ${isActive ? 'active' : ''}`
                 }
-                onClick={() => setIsOpen(false)}
+                onClick={e => {
+                  setIsOpen(false);
+                  // fallback manual se o NavLink não funcionar
+                  if (e.button === 0 && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+                    e.preventDefault();
+                    window.history.pushState({}, '', item.path);
+                    window.dispatchEvent(new PopStateEvent('popstate'));
+                  }
+                }}
                 aria-label={item.label}
+                tabIndex={0}
+                role="link"
+                onKeyDown={e => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    setIsOpen(false);
+                    window.history.pushState({}, '', item.path);
+                    window.dispatchEvent(new PopStateEvent('popstate'));
+                  }
+                }}
               >
                 <span className="sidebar-link__icon" aria-hidden="true">
                   <Icon size={18} />

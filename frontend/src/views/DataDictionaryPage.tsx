@@ -1,4 +1,22 @@
 import { useEffect, useMemo, useState } from 'react';
+type BiomarkerRequest = {
+  _id?: string;
+  biomarkerName: string;
+  measurementUnit: string;
+  justification: string;
+  source?: string;
+  requestedAt?: string;
+  status?: string;
+};
+async function fetchPendingBiomarkerRequests(): Promise<BiomarkerRequest[]> {
+  try {
+    const response = await apiClient.get('/biomarker-requests/pending', { suppressErrorToast: true } as any);
+    const payload = response?.data?.requests ?? [];
+    return Array.isArray(payload) ? payload : [];
+  } catch {
+    return [];
+  }
+}
 import { Ban, Database, Edit2, Plus, FlaskConical, Dna, FileText, Layers3, CheckCircle2 } from 'lucide-react';
 import Card from '../components/UI/Card';
 import Table from '../components/UI/Table';
@@ -6,6 +24,7 @@ import Button from '../components/UI/Button';
 import Modal from '../components/UI/Modal';
 import Input from '../components/UI/Input';
 import Textarea from '../components/UI/Textarea';
+import CidAsyncAutocomplete from '../components/CidAsyncAutocomplete';
 import { apiClient, notifyApiToast } from '../api/client';
 import { cidService } from '../services/api';
 import {
@@ -15,6 +34,13 @@ import {
 } from '../config/constants/intake-dictionaries.constants';
 import { EXTRACTION_PROTOCOLS, MIABIS_QUALITY, SAMPLE_ORIGINS, SPECIMEN_TYPES } from '../config/constants/specimen.constants';
 import './DataDictionaryPage.css';
+
+// Exemplo de uso do componente CidAsyncAutocomplete:
+// <CidAsyncAutocomplete
+//   value={selectedCid}
+//   onChange={cid => setSelectedCid(cid)}
+//   placeholder="Buscar CID por código ou descrição..."
+// />
 
 type DictionaryCategoryKey =
   | 'sample-types'
@@ -341,6 +367,25 @@ export default function DataDictionaryPage() {
   const [editingItem, setEditingItem] = useState<DictionaryItem | null>(null);
   const [formState, setFormState] = useState<DictionaryFormState>(initialFormState);
   const [formError, setFormError] = useState('');
+
+  // Novos estados para solicitações pendentes de biomarcadores
+  const [pendingBiomarkerRequests, setPendingBiomarkerRequests] = useState<BiomarkerRequest[]>([]);
+  const [loadingBiomarkerRequests, setLoadingBiomarkerRequests] = useState(false);
+  // Carregar solicitações pendentes de biomarcadores quando categoria for 'biomarkers'
+  useEffect(() => {
+    if (activeCategoryKey !== 'biomarkers') {
+      setPendingBiomarkerRequests([]);
+      return;
+    }
+    let mounted = true;
+    setLoadingBiomarkerRequests(true);
+    fetchPendingBiomarkerRequests().then((requests) => {
+      if (mounted) setPendingBiomarkerRequests(requests);
+    }).finally(() => {
+      if (mounted) setLoadingBiomarkerRequests(false);
+    });
+    return () => { mounted = false; };
+  }, [activeCategoryKey]);
 
   const activeCategory = useMemo(
     () => categories.find((category) => category.key === activeCategoryKey) || categories[0],
@@ -751,6 +796,40 @@ export default function DataDictionaryPage() {
 
         <main className="data-dictionary-main">
           <Card className="data-dictionary-panel">
+            {/* Exibir solicitações pendentes de biomarcadores */}
+            {activeCategoryKey === 'biomarkers' && (
+              <div className="data-dictionary-biomarker-requests">
+                <h3>Solicitações de Biomarcadores Pendentes</h3>
+                {loadingBiomarkerRequests ? (
+                  <div>Carregando solicitações...</div>
+                ) : pendingBiomarkerRequests.length === 0 ? (
+                  <div>Nenhuma solicitação pendente.</div>
+                ) : (
+                  <table className="biomarker-requests-table">
+                    <thead>
+                      <tr>
+                        <th>Nome</th>
+                        <th>Unidade</th>
+                        <th>Justificativa</th>
+                        <th>Data</th>
+                        <th>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {pendingBiomarkerRequests.map((req) => (
+                        <tr key={req._id || req.biomarkerName + req.requestedAt}>
+                          <td>{req.biomarkerName}</td>
+                          <td>{req.measurementUnit}</td>
+                          <td>{req.justification}</td>
+                          <td>{req.requestedAt ? new Date(req.requestedAt).toLocaleString() : '-'}</td>
+                          <td>{req.status || 'Pendente'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            )}
             <div className="data-dictionary-toolbar">
               <div>
                 <p className="data-dictionary-toolbar__eyebrow">Tabela Dinâmica</p>
