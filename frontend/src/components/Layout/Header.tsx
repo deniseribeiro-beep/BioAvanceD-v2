@@ -1,14 +1,18 @@
 import { useAuth } from '@/contexts/AuthContext';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { User as UserType } from '@/types/models';
+import { useNavigate } from 'react-router-dom';
 import Button from '../UI/Button';
 import LanguageSelector from '../LanguageSelector';
-import { LogOut, User } from 'lucide-react';
+import { canRoleAccessRoute } from '@/utils/rolePermissions';
+import { LogOut, User, Workflow } from 'lucide-react';
 import './Header.css';
 
 export default function Header() {
   const { user, logout } = useAuth();
   const { t } = useLanguage();
+  const navigate = useNavigate();
+  const canOpenIntake = canRoleAccessRoute(user?.roleName, '/next/intake');
 
   const handleLogout = async () => {
     await logout();
@@ -50,6 +54,12 @@ export default function Header() {
                 <span className="user-access">{t('roles.access')}: {getAccessTypeLabel(user)}</span>
               </div>
             </div>
+          )}
+          {canOpenIntake && (
+            <Button variant="secondary" onClick={() => navigate('/next/intake')} className="intake-button">
+              <Workflow size={18} />
+              {t('navigation.newIntake')}
+            </Button>
           )}
           <Button variant="secondary" onClick={handleLogout} className="logout-button">
             <LogOut size={18} />

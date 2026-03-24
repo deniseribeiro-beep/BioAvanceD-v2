@@ -10,6 +10,8 @@ import { useLanguage } from '../contexts/LanguageContext';
 import { authService } from '../services/api';
 import { getPostLoginRoute } from '../utils/rolePermissions';
 import { Mail, CheckCircle, AlertCircle } from 'lucide-react';
+import { LIMITS } from '../config/constants/limits.constants';
+import { VALIDATION_PATTERNS } from '../config/constants/validation.constants';
 import './LoginPage.css';
 
 export default function LoginPage() {
@@ -136,7 +138,9 @@ export default function LoginPage() {
                   required
                   placeholder={t('mfa.enterCode')}
                   autoFocus
-                  maxLength={6}
+                  inputMode="numeric"
+                  maxLength={LIMITS.MFA_CODE_LENGTH}
+                  pattern={VALIDATION_PATTERNS.numericCode6.source}
                 />
                 {attemptsRemaining !== undefined && attemptsRemaining > 0 && (
                   <p className="attempts-warning">

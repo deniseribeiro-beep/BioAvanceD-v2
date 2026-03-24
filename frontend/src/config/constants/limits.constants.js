@@ -1,0 +1,31 @@
+export const LIMITS = {
+  PASSWORD_MIN_LENGTH: 12,
+  PASSWORD_MAX_LENGTH: 128,
+  USERNAME_MIN_LENGTH: 3,
+  USERNAME_MAX_LENGTH: 30,
+  EMAIL_MAX_LENGTH: 255,
+  FULL_NAME_MAX_LENGTH: 120,
+  PHONE_MIN_LENGTH: 10,
+  PHONE_MAX_LENGTH: 15,
+  CPF_LENGTH: 11,
+  PATIENT_ID_LENGTH: 8,
+  MFA_CODE_LENGTH: 6,
+  BIRTH_DATE_MAX_LENGTH: 10,
+  QUANTITY_MIN: 0.01,
+  QUANTITY_MAX: 999999999,
+  PERCENT_MIN: 0,
+  PERCENT_MAX: 100,
+  SECURITY_MIN_DAYS: 0,
+  SECURITY_MAX_DAYS: 3650,
+  TELEMETRY_MIN_ALERT: -196,
+  TELEMETRY_MAX_ALERT: -80,
+  RETENTION_MIN_DAYS: 30,
+  RETENTION_MAX_DAYS: 3650,
+  GENERIC_TEXT_MAX_LENGTH: 1000,
+};
+
+export function clampToLimit(value, min, max) {
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) return min;
+  return Math.min(Math.max(numericValue, min), max);
+}

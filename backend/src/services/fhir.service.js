@@ -1,4 +1,5 @@
 const logger = require('../utils/logger');
+const { SPECIMEN_TYPES } = require('../config/constants/specimen.constants');
 
 /**
  * Serviço de Transformação HL7 FHIR R4
@@ -122,7 +123,7 @@ class FHIRService {
             {
               system: 'http://snomed.info/sct',
               code: this.mapSampleTypeToSNOMED(sample.sampleType),
-              display: sample.sampleType,
+              display: this.getSampleTypeDisplay(sample.sampleType),
             },
           ],
         },
@@ -530,24 +531,37 @@ class FHIRService {
   }
 
   mapSampleTypeToSNOMED(sampleType) {
-    // Mapeamento básico - pode ser expandido
     const mapping = {
-      Sangue: '119297000',
-      Urina: '122575003',
-      Saliva: '119361006',
-      DNA: '118234003',
-      RNA: '118234003',
+      PLASMA: '119361006',
+      SERUM: '119297000',
+      ERYTHROCYTES: '119297000',
+      URINE: '122575003',
+      DBS: '119297000',
+      TISSUE_FRESH: '119376003',
+      TISSUE_FFPE: '119376003',
+      PBMC: '119297000',
+      SALIVA: '119361006',
+      FECES: '119297000',
+      CSF: '430864002',
     };
-    return mapping[sampleType] || '118234003'; // Default: Specimen
+    return mapping[sampleType] || '118234003';
+  }
+
+  getSampleTypeDisplay(sampleType) {
+    const specimenType = SPECIMEN_TYPES.find((item) => item.id === sampleType);
+    return specimenType?.label || sampleType;
   }
 
   mapQualityToFHIR(quality) {
     const mapping = {
+      GOOD: 'suitable',
+      COMPROMISED: 'not-suitable',
+      UNKNOWN: 'not-assessed',
       0: 'not-assessed',
       1: 'suitable',
       2: 'not-suitable',
     };
-    return mapping[quality] || 'not-assessed';
+    return mapping[String(quality)] || mapping[quality] || 'not-assessed';
   }
 
   mapSensorStatusToFHIR(status) {

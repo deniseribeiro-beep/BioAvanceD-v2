@@ -20,6 +20,10 @@ router.get('/:patientId/consent', authenticate, consentController.getPatientCons
 // Reenviar notificações de consentimento
 router.post('/:id/consent/resend', authenticate, requirePermission('createPatient'), patientController.resendConsentNotification.bind(patientController));
 
+// Observações biomarcadoras do paciente
+router.get('/:id/observations', authenticate, patientController.listBiomarkerObservations.bind(patientController));
+router.post('/:id/observations', authenticate, requirePermission('createPatient'), patientController.createBiomarkerObservation.bind(patientController));
+
 // Buscar paciente por ID
 router.get('/:id', authenticate, patientController.buscar.bind(patientController));
 

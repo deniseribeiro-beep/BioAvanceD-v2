@@ -1,4 +1,5 @@
 const patientService = require('../services/patient.service');
+const biomarkerObservationService = require('../services/biomarker-observation.service');
 const logService = require('../services/log.service');
 const logger = require('../utils/logger');
 const { getCollection } = require('../utils/collectionResolver');
@@ -33,11 +34,12 @@ class PacienteController {
     if (!isDeceased) return;
 
     const representativeName = typeof payload.representativeName === 'string' ? payload.representativeName.trim() : '';
+    const representativeEmail = typeof payload.representativeEmail === 'string' ? payload.representativeEmail.trim() : '';
     const representativeCpf = String(payload.representativeCpf || '').replace(/\D/g, '').trim();
     const representativePhone = String(payload.representativePhone || '').replace(/\D/g, '').trim();
 
-    if (!representativeName || !representativeCpf || !representativePhone) {
-      const error = new Error('Para paciente falecido, nome, CPF e telefone do representante legal são obrigatórios');
+    if (!representativeName || !representativeEmail || !representativeCpf || !representativePhone) {
+      const error = new Error('Para paciente falecido, nome, e-mail, CPF e telefone do representante legal são obrigatórios');
       error.statusCode = 400;
       throw error;
     }
@@ -714,6 +716,127 @@ class PacienteController {
       return res.status(500).json({
         success: false,
         error: 'Erro interno do servidor',
+        message: error.message
+      });
+    }
+  }
+
+  async listBiomarkerObservations(req, res) {
+    try {
+      const db = req.app.locals.db;
+      if (!db) {
+        return res.status(503).json({
+          success: false,
+          error: 'Banco de dados não disponível'
+        });
+      }
+
+      const patientID = String(req.params.id || '').trim();
+      if (!/^\d{8}$/.test(patientID)) {
+        return res.status(400).json({
+          success: false,
+          error: 'patientID inválido. Deve ter 8 dígitos numéricos'
+        });
+      }
+
+      const filters = {
+        biomarkerType: req.query.biomarkerType,
+        status: req.query.status,
+        from: req.query.from,
+        to: req.query.to,
+        limit: req.query.limit,
+        skip: req.query.skip
+      };
+
+      const result = await biomarkerObservationService.listPatientObservations(db, patientID, filters);
+
+      const { permissions } = require('../infrastructure/middleware/rbac');
+      const userRole = req.user?.accessType || 1;
+      const hasCreatePatientPermission = permissions.createPatient?.includes(userRole) || false;
+
+      const observations = hasCreatePatientPermission
+        ? result.observations
+        : result.observations.map((item) => ({
+          _id: item._id,
+          patientID: item.patientID,
+          biomarkerType: item.biomarkerType,
+          collectedAt: item.collectedAt,
+          status: item.status,
+          unit: item.unit
+        }));
+
+      return res.status(200).json({
+        success: true,
+        data: {
+          observations,
+          total: result.total,
+          limit: result.limit,
+          skip: result.skip
+        }
+      });
+    } catch (error) {
+      logger.error('Erro ao listar observações biomarcadoras:', error.message);
+      return res.status(500).json({
+        success: false,
+        error: 'Erro interno do servidor',
+        message: error.message
+      });
+    }
+  }
+
+  async createBiomarkerObservation(req, res) {
+    try {
+      const db = req.app.locals.db;
+      if (!db) {
+        return res.status(503).json({
+          success: false,
+          error: 'Banco de dados não disponível'
+        });
+      }
+
+      const patientID = String(req.params.id || '').trim();
+      if (!/^\d{8}$/.test(patientID)) {
+        return res.status(400).json({
+          success: false,
+          error: 'patientID inválido. Deve ter 8 dígitos numéricos'
+        });
+      }
+
+      const payload = {
+        patientID,
+        biomarkerType: req.body?.biomarkerType,
+        value: req.body?.value,
+        unit: req.body?.unit,
+        collectedAt: req.body?.collectedAt,
+        status: req.body?.status,
+        source: req.body?.source || 'manual',
+        eventType: req.body?.eventType || 'manual',
+        notes: req.body?.notes,
+        sampleID: req.body?.sampleID || req.body?.sampleId || req.body?.specimenID || req.body?.specimenId || null,
+        sampleId: req.body?.sampleId || req.body?.sampleID || req.body?.specimenId || req.body?.specimenID || null,
+        specimenID: req.body?.specimenID || req.body?.sampleID || req.body?.sampleId || null,
+        specimenId: req.body?.specimenId || req.body?.sampleID || req.body?.sampleId || null,
+        resourceType: req.body?.resourceType || 'Observation',
+        subject: req.body?.subject || { reference: `Patient/${patientID}` },
+        specimen: req.body?.specimen || (req.body?.sampleID || req.body?.specimenID ? { reference: `Specimen/${String(req.body?.sampleID || req.body?.specimenID || '').trim()}` } : null),
+        effectiveDateTime: req.body?.effectiveDateTime || req.body?.collectedAt,
+        linkedResourceType: 'Patient',
+        linkedResourceId: patientID
+      };
+
+      const created = await biomarkerObservationService.createObservation(db, payload);
+
+      return res.status(201).json({
+        success: true,
+        message: 'Observação biomarcadora registrada com sucesso',
+        data: created
+      });
+    } catch (error) {
+      logger.error('Erro ao criar observação biomarcadora:', error.message);
+      const statusCode = Number(error?.statusCode || error?.status || 400);
+      return res.status(statusCode).json({
+        success: false,
+        error: 'Falha ao criar observação biomarcadora',
         message: error.message
       });
     }

@@ -1,18 +1,31 @@
 import { useId } from 'react';
 import { ArrowLeft } from 'lucide-react';
+import Card from '../UI/Card';
 import { Location, Patient, Sample } from '@/types/models';
 import Button from '../UI/Button';
 import Input from '../UI/Input';
 import PatientSearchInput from '../UI/PatientSearchInput';
+import {
+  SPECIMEN_TYPES,
+  SAMPLE_ORIGINS,
+  EXTRACTION_PROTOCOLS,
+  MIABIS_QUALITY,
+} from '@/config/constants/specimen.constants';
 
 type TranslatorFn = (key: string) => string;
 type NewSampleFormData = Partial<Sample> & { registerDate?: string; quality?: number };
+type XaiAlert = {
+  ruleVersion: string;
+  severity: 'medium' | 'high';
+  justification: string;
+} | null;
 
 interface NewSamplePageViewProps {
   t: TranslatorFn;
   formData: NewSampleFormData;
   selectedUnit: string;
   selectedPatient: Patient | null;
+  xaiAlert: XaiAlert;
   patientFetchLoading: boolean;
   resendingConsent: boolean;
   strictModeActivated: boolean;
@@ -43,6 +56,7 @@ export default function NewSamplePageView({
   formData,
   selectedUnit,
   selectedPatient,
+  xaiAlert,
   patientFetchLoading,
   resendingConsent,
   strictModeActivated,
@@ -65,33 +79,25 @@ export default function NewSamplePageView({
   const statusId = useId();
   const rareDiseaseId = useId();
 
-  const sampleTypeOptions = [
-    { value: 'Sangue', label: t('samples.sampleTypeOptions.Sangue') || 'Sangue' },
-    { value: 'Urina', label: t('samples.sampleTypeOptions.Urina') || 'Urina' },
-    { value: 'Saliva', label: t('samples.sampleTypeOptions.Saliva') || 'Saliva' },
-    { value: 'Tecido', label: t('samples.sampleTypeOptions.Tecido') || 'Tecido' },
-    { value: 'DNA', label: t('samples.sampleTypeOptions.DNA') || 'DNA' },
-    { value: 'RNA', label: t('samples.sampleTypeOptions.RNA') || 'RNA' },
-    { value: 'Plasma', label: t('samples.sampleTypeOptions.Plasma') || 'Plasma' },
-    { value: 'Soro', label: t('samples.sampleTypeOptions.Soro') || 'Soro' },
-    { value: 'Líquido Cefalorraquidiano', label: t('samples.sampleTypeOptions.LiquidoCefalorraquidiano') || 'Líquido Cefalorraquidiano' },
-  ];
+  const sampleTypeOptions = SPECIMEN_TYPES.map(({ id, label }) => ({
+    value: id,
+    label: t(`samples.sampleTypeOptions.${id}`) || label,
+  }));
 
-  const sampleOriginOptions = [
-    { value: 'Coleta', label: t('samples.sampleOriginOptions.Coleta') || 'Coleta' },
-    { value: 'Transferência', label: t('samples.sampleOriginOptions.Transferencia') || 'Transferência' },
-    { value: 'Doação', label: t('samples.sampleOriginOptions.Doacao') || 'Doação' },
-    { value: 'Pesquisa', label: t('samples.sampleOriginOptions.Pesquisa') || 'Pesquisa' },
-  ];
+  const sampleOriginOptions = SAMPLE_ORIGINS.map(({ id, label }) => ({
+    value: id,
+    label: t(`samples.sampleOriginOptions.${id}`) || label,
+  }));
 
-  const extractionProtocolOptions = [
-    { value: 'Protocolo A', label: t('samples.extractionProtocolOptions.ProtocoloA') || 'Protocolo A' },
-    { value: 'Protocolo B', label: t('samples.extractionProtocolOptions.ProtocoloB') || 'Protocolo B' },
-    { value: 'Protocolo C', label: t('samples.extractionProtocolOptions.ProtocoloC') || 'Protocolo C' },
-    { value: 'QIAGEN', label: t('samples.extractionProtocolOptions.QIAGEN') || 'QIAGEN' },
-    { value: 'Phenol-Chloroform', label: t('samples.extractionProtocolOptions.PhenolChloroform') || 'Phenol-Chloroform' },
-    { value: 'Automated', label: t('samples.extractionProtocolOptions.Automated') || 'Automated' },
-  ];
+  const extractionProtocolOptions = EXTRACTION_PROTOCOLS.map(({ id, label }) => ({
+    value: id,
+    label: t(`samples.extractionProtocolOptions.${id}`) || label,
+  }));
+
+  const miabisQualityOptions = MIABIS_QUALITY.map(({ id, label }) => ({
+    value: id,
+    label: t(`samples.qualityMIABIS.${id}`) || label,
+  }));
 
   const statusOptions = [
     { value: 'Available', label: t('samples.statusOptions.Available') || 'Disponível' },
@@ -132,6 +138,82 @@ export default function NewSamplePageView({
           </p>
         </div>
       </div>
+
+      {xaiAlert && (
+        <Card
+          className="xai-alert-card"
+          style={{
+            marginBottom: '1.5rem',
+            border: '1px solid rgba(220, 38, 38, 0.18)',
+            background: 'linear-gradient(135deg, rgba(255, 251, 251, 1) 0%, rgba(254, 242, 242, 0.92) 100%)',
+            boxShadow: '0 14px 36px rgba(220, 38, 38, 0.08)',
+            overflow: 'hidden',
+          }}
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.9rem', padding: '1.25rem' }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem' }}>
+              <div>
+                <div style={{ fontSize: '0.72rem', fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#b91c1c' }}>
+                  Alerta XAI
+                </div>
+                <h3 style={{ margin: '0.35rem 0 0', fontSize: '1rem', fontWeight: 700, color: '#7f1d1d' }}>
+                  Regra clínica violada
+                </h3>
+              </div>
+
+              <span
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  padding: '0.35rem 0.75rem',
+                  borderRadius: '999px',
+                  backgroundColor: xaiAlert.severity === 'high' ? 'rgba(185, 28, 28, 0.12)' : 'rgba(217, 119, 6, 0.12)',
+                  color: xaiAlert.severity === 'high' ? '#991b1b' : '#b45309',
+                  fontSize: '0.78rem',
+                  fontWeight: 700,
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.04em',
+                }}
+              >
+                {xaiAlert.severity}
+              </span>
+            </div>
+
+            <div
+              style={{
+                padding: '0.9rem 1rem',
+                borderRadius: '10px',
+                backgroundColor: 'rgba(255, 255, 255, 0.78)',
+                border: '1px solid rgba(220, 38, 38, 0.12)',
+                color: '#7f1d1d',
+                fontSize: '0.92rem',
+                lineHeight: 1.55,
+              }}
+            >
+              {xaiAlert.justification}
+            </div>
+
+            <div
+              style={{
+                display: 'flex',
+                flexWrap: 'wrap',
+                gap: '0.75rem',
+                paddingTop: '0.25rem',
+                borderTop: '1px solid rgba(220, 38, 38, 0.1)',
+                fontSize: '0.85rem',
+                color: '#991b1b',
+              }}
+            >
+              <span>
+                Versão da regra: <strong>{xaiAlert.ruleVersion}</strong>
+              </span>
+              <span>
+                Severidade: <strong>{xaiAlert.severity}</strong>
+              </span>
+            </div>
+          </div>
+        </Card>
+      )}
 
       <form
         onSubmit={onSubmit}
@@ -318,18 +400,18 @@ export default function NewSamplePageView({
               <label htmlFor={qualityId} style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', fontWeight: 500, color: 'var(--text)' }}>
                 {t('samples.quality') || 'Qualidade (MIABIS)'} *
               </label>
-              <select id={qualityId} value={formData.quality !== undefined && formData.quality !== null ? formData.quality : ''} onChange={(e) => {
-                const value = e.target.value === '' ? undefined : parseInt(e.target.value, 10);
-                if (value !== undefined && (value === 0 || value === 1 || value === 2)) {
+              <select id={qualityId} value={formData.quality !== undefined && formData.quality !== null ? String(formData.quality) : ''} onChange={(e) => {
+                const value = e.target.value === '' ? undefined : e.target.value;
+                if (value !== undefined && MIABIS_QUALITY.some((item) => item.id === value)) {
                   onFormDataChange((prev) => ({ ...prev, quality: value }));
                 } else if (value === undefined) {
                   onFormDataChange((prev) => ({ ...prev, quality: undefined }));
                 }
               }} required style={{ width: '100%', padding: '0.5rem', border: '1px solid var(--border)', borderRadius: '6px', fontSize: '0.875rem', backgroundColor: 'var(--surface)', color: 'var(--text)' }}>
                 <option value="">{t('samples.selectQuality') || 'Selecione a qualidade (MIABIS)'}</option>
-                <option value="0">{t('samples.qualityMIABIS.0') || '0 - Não avaliada (Not assessed)'}</option>
-                <option value="1">{t('samples.qualityMIABIS.1') || '1 - Adequada (Suitable)'}</option>
-                <option value="2">{t('samples.qualityMIABIS.2') || '2 - Inadequada (Not suitable)'}</option>
+                {miabisQualityOptions.map((opt) => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
               </select>
             </div>
           </div>
@@ -337,15 +419,15 @@ export default function NewSamplePageView({
 
         <div style={{ marginBottom: '2rem' }}>
           <h2 style={{ fontSize: '1.125rem', fontWeight: 600, marginBottom: '1rem', color: 'var(--text)' }}>
-            {t('common.location') || 'Localização e Projeto'}
+            {t('common.location') || 'Armazenagem e Projeto'}
           </h2>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '1rem' }}>
             <div>
               <label htmlFor={locationId} style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', fontWeight: 500, color: 'var(--text)' }}>
-                {t('samples.locationID') || 'Localização'} *
+                {t('samples.locationID') || 'Localização'}
               </label>
-              <select id={locationId} value={formData.locationID || ''} onChange={(e) => onFormDataChange((prev) => ({ ...prev, locationID: parseInt(e.target.value) || undefined }))} required style={{ width: '100%', padding: '0.5rem', border: '1px solid var(--border)', borderRadius: '6px', fontSize: '0.875rem', backgroundColor: 'var(--surface)', color: 'var(--text)' }}>
-                <option value="">{t('common.select') || 'Selecione'}</option>
+              <select id={locationId} value={formData.locationID || ''} onChange={(e) => onFormDataChange((prev) => ({ ...prev, locationID: e.target.value ? parseInt(e.target.value, 10) : undefined }))} style={{ width: '100%', padding: '0.5rem', border: '1px solid var(--border)', borderRadius: '6px', fontSize: '0.875rem', backgroundColor: 'var(--surface)', color: 'var(--text)' }}>
+                <option value="">Aguardando Armazenagem</option>
                 {locationsLoading ? (
                   <option value="" disabled>Carregando localizações...</option>
                 ) : locations.length > 0 ? (
@@ -377,9 +459,12 @@ export default function NewSamplePageView({
                     );
                   })
                 ) : (
-                  <option value="" disabled>Nenhuma localização disponível. Cadastre localizações em Gerenciamento de Instalações.</option>
+                  <option value="" disabled>Nenhuma localização disponível. A amostra pode ser salva sem armazenagem inicial.</option>
                 )}
               </select>
+              <div style={{ marginTop: '0.35rem', fontSize: '0.75rem', color: 'var(--text-light)' }}>
+                Opcional. A localização física pode ser definida depois da recepção.
+              </div>
             </div>
 
             <Input

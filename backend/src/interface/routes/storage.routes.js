@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { createAllocateSampleController } = require('../controllers/allocate-sample.controller');
+const { createAutoAssignSampleController } = require('../controllers/auto-assign-sample.controller');
 const { createReleaseSampleController } = require('../controllers/release-sample.controller');
 const { createMoveSampleController } = require('../controllers/move-sample.controller');
 const {
@@ -119,6 +120,51 @@ router.get('/samples/search', createSearchSamplesController());
  * }
  */
 router.post('/allocate', createAllocateSampleController());
+
+/**
+ * POST /api/storage/allocate/auto
+ * Alocar amostra automaticamente na próxima posição vazia da caixa
+ *
+ * Body:
+ * {
+ *   "sampleId": "507f1f77bcf86cd799439011",
+ *   "boxId": "507f1f77bcf86cd799439012"
+ * }
+ *
+ * Response 201:
+ * {
+ *   "success": true,
+ *   "data": {
+ *     "specimenId": "507f1f77bcf86cd799439011",
+ *     "boxId": "507f1f77bcf86cd799439012",
+ *     "position": "A1"
+ *   },
+ *   "message": "Amostra alocada automaticamente na Posição A1",
+ *   "graphPersisted": true
+ * }
+ *
+ * Response 400:
+ * {
+ *   "success": false,
+ *   "error": "INVALID_INPUT",
+ *   "message": "sampleId e boxId são obrigatórios"
+ * }
+ *
+ * Response 404:
+ * {
+ *   "success": false,
+ *   "error": "SAMPLE_NOT_FOUND" | "BOX_NOT_FOUND",
+ *   "message": "..."
+ * }
+ *
+ * Response 409:
+ * {
+ *   "success": false,
+ *   "error": "ALREADY_ALLOCATED" | "BOX_FULL",
+ *   "message": "..."
+ * }
+ */
+router.post('/allocate/auto', createAutoAssignSampleController());
 
 /**
  * POST /api/storage/move

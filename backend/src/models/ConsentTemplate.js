@@ -14,12 +14,12 @@ class ConsentTemplateModel {
       errors.push('content é obrigatório e deve ser um texto válido');
     }
 
-    if (!data.version || typeof data.version !== 'string' || data.version.trim().length === 0) {
-      errors.push('version é obrigatório e deve ser um texto válido');
+    if (data.version !== undefined && (typeof data.version !== 'string' || data.version.trim().length === 0)) {
+      errors.push('version deve ser um texto válido');
     }
 
-    if (!data.caae || typeof data.caae !== 'string' || data.caae.trim().length === 0) {
-      errors.push('caae é obrigatório e deve ser um texto válido');
+    if (data.caae !== undefined && (typeof data.caae !== 'string' || data.caae.trim().length === 0)) {
+      errors.push('caae deve ser um texto válido');
     }
 
     if (data.active !== undefined && typeof data.active !== 'boolean') {
@@ -59,8 +59,8 @@ class ConsentTemplateModel {
       title: data.title.trim(),
       content: (data.content || data.htmlContent).trim(),
       htmlContent: data.htmlContent ? data.htmlContent.trim() : (data.content || '').trim(),
-      version: data.version.trim(),
-      caae: data.caae.trim(),
+      version: typeof data.version === 'string' && data.version.trim().length > 0 ? data.version.trim() : 'v1',
+      caae: typeof data.caae === 'string' ? data.caae.trim() : '',
       active: data.active === undefined ? true : data.active,
       permissions: Array.isArray(data.permissions) ? data.permissions : [],
       createdAt: new Date()

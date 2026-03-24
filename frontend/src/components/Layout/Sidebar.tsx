@@ -7,19 +7,27 @@ import {
   Menu, 
   X, 
   LayoutDashboard, 
-  Users, 
+  Stethoscope,
   FlaskConical, 
+  Workflow,
   FileText, 
   Box, 
   MessageCircle, 
   Shield, 
-  ShieldCheck,
   BarChart3, 
   FileSearch, 
   Database, 
   UserCog 
 } from 'lucide-react';
 import './Sidebar.css';
+
+type MenuItem = {
+  path: string;
+  icon: typeof LayoutDashboard;
+  label: string;
+  roles: string[];
+  featured?: boolean;
+};
 
 export default function Sidebar() {
   const { user } = useAuth();
@@ -72,20 +80,20 @@ export default function Sidebar() {
     roleName = roleNameMap[user.accessType] as any;
   }
 
-  const allMenuItems = [
+  const allMenuItems: MenuItem[] = [
     { path: '/dashboard', icon: LayoutDashboard, label: t('navigation.dashboard'), roles: ['Administrador', 'Coordenador', 'Técnico', 'Usuário Externo'] },
-    { path: '/patients', icon: Users, label: t('navigation.patients'), roles: ['Administrador', 'Coordenador', 'Técnico'] },
-    { path: '/samples', icon: FlaskConical, label: t('navigation.samples'), roles: ['Administrador', 'Coordenador', 'Técnico'] },
-    { path: '/samples/withdrawal-return', icon: FlaskConical, label: t('navigation.withdrawalReturn') || 'Retirada/Devolução', roles: ['Administrador', 'Coordenador', 'Técnico'] },
-    { path: '/samples/custody-reports', icon: FileSearch, label: t('navigation.custodyReports') || 'Relatórios de Custódia', roles: ['Administrador', 'Coordenador', 'Técnico'] },
+    { path: '/next/intake', icon: Workflow, label: t('navigation.newIntake') || 'Novo Atendimento', roles: ['Administrador', 'Coordenador', 'Técnico'], featured: true },
+    { path: '/patients', icon: Stethoscope, label: t('navigation.patients') || 'Diretório de Pacientes', roles: ['Administrador', 'Coordenador', 'Técnico'] },
+    { path: '/samples', icon: FlaskConical, label: t('navigation.samples') || 'Inventário de Amostras', roles: ['Administrador', 'Coordenador', 'Técnico'] },
     { path: '/results', icon: FileText, label: t('navigation.results'), roles: ['Administrador', 'Coordenador', 'Técnico'] },
     { path: '/facility-management', icon: Box, label: t('navigation.facilityManagement'), roles: ['Administrador', 'Coordenador', 'Técnico'] },
     { path: '/assistant', icon: MessageCircle, label: t('navigation.assistant'), roles: ['Administrador', 'Coordenador', 'Técnico', 'Usuário Externo'] },
-    { path: '/consent-manager', icon: ShieldCheck, label: t('navigation.ethicsConsent') || 'Ética e Consentimento', roles: ['Administrador', 'Coordenador'] },
+    { path: '/admin/tcle/novo', icon: FileText, label: 'Construtor de TCLE', roles: ['Administrador', 'Coordenador'] },
     { path: '/user/security', icon: Shield, label: t('navigation.userSecurity'), roles: ['Administrador', 'Coordenador', 'Técnico', 'Usuário Externo'] },
     { path: '/reports', icon: BarChart3, label: t('navigation.reports'), roles: ['Administrador', 'Coordenador', 'Usuário Externo'] },
     { path: '/logs', icon: FileSearch, label: t('navigation.logs'), roles: ['Administrador', 'Coordenador'] },
     { path: '/system-management', icon: UserCog, label: t('navigation.systemManagement') || 'Gerenciamento do Sistema', roles: ['Administrador'] },
+    { path: '/admin/dicionario', icon: Database, label: 'Dicionário de Dados', roles: ['Administrador'] },
     { path: '/backup', icon: Database, label: t('navigation.backup'), roles: ['Administrador'] },
   ];
 
@@ -107,7 +115,6 @@ export default function Sidebar() {
         className="sidebar-toggle"
         onClick={() => setIsOpen(!isOpen)}
         aria-label="Toggle menu"
-        aria-expanded={isOpen}
         aria-controls="app-sidebar"
       >
         {isOpen ? <X size={24} /> : <Menu size={24} />}
@@ -134,12 +141,15 @@ export default function Sidebar() {
                 key={item.path}
                 to={item.path}
                 className={({ isActive }) =>
-                  `sidebar-link ${isActive ? 'active' : ''}`
+                  `sidebar-link ${item.featured ? 'sidebar-link--featured' : ''} ${isActive ? 'active' : ''}`
                 }
                 onClick={() => setIsOpen(false)}
+                aria-label={item.label}
               >
-                <Icon size={20} />
-                <span>{item.label}</span>
+                <span className="sidebar-link__icon" aria-hidden="true">
+                  <Icon size={18} />
+                </span>
+                <span className="sidebar-link__label">{item.label}</span>
               </NavLink>
             );
           })}

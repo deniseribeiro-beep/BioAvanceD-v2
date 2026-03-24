@@ -11,6 +11,7 @@ const resultWorker = require('./workers/result-worker');
 const temperatureWorker = require('./workers/temperature-worker');
 const locationWorker = require('./workers/location-worker');
 const importAsyncService = require('../services/import-async.service');
+const batchValidationEngine = require('../services/batch-validation-engine.service');
 const { connectDB } = require('../database/mongo');
 
 // Lazy getter para evitar TDZ/ciclos de require
@@ -59,6 +60,23 @@ async function initWorker() {
         const { jobID, userID, dataType, filePath, fileName, options } = job.data;
         const dataTypeNormalized = (dataType || '').toString().trim().toLowerCase();
         const allowedTypes = new Set(['patients', 'samples', 'results', 'temperature', 'temperature-iot', 'locations']);
+
+        if (job.name === 'batch-import') {
+          const stagingImportId = job.data?.stagingImportId || job.data?.jobId || job.id;
+
+          logger.info(`📦 Iniciando batch import: ${stagingImportId}`);
+
+          const batchResult = await batchValidationEngine.processBatchImport(db, stagingImportId, job);
+
+          await batchValidationEngine.updateProgress(stagingImportId, {
+            status: batchResult.invalidRows > 0 && batchResult.validRows === 0 && batchResult.partialRows === 0
+              ? 'failed'
+              : 'completed',
+            processedRows: batchResult.processedRows,
+          });
+
+          return batchResult;
+        }
 
         if (!dataTypeNormalized) {
           throw new Error(`dataType ausente no job ${job.id || jobID || '(sem id)'}`);
@@ -188,6 +206,16 @@ async function initWorker() {
 
           return result;
         } catch (error) {
+          if (job.name === 'batch-import') {
+            const stagingImportId = job.data?.stagingImportId || job.data?.jobId || job.id;
+            await batchValidationEngine.updateProgress(stagingImportId, {
+              status: 'failed',
+            });
+
+            logger.error(`❌ Erro ao processar batch-import ${stagingImportId}:`, error);
+            throw error;
+          }
+
           logger.error(`❌ Erro ao processar job ${jobID}:`, error);
 
           // Atualiza status para failed

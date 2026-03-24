@@ -6,6 +6,7 @@ import Button from '../components/UI/Button';
 import Input from '../components/UI/Input';
 import Select from '../components/UI/Select';
 import Card from '../components/UI/Card';
+import { MIABIS_QUALITY } from '../config/constants/specimen.constants';
 import './SampleWithdrawalReturnPage.css';
 
 // Tipos locais para formulários
@@ -38,6 +39,15 @@ export default function SampleWithdrawalReturnPage() {
   const [loading, setLoading] = useState(false);
   const [searchLoading, setSearchLoading] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  const getQualityLabel = (quality?: string | number) => {
+    if (quality === undefined || quality === null || quality === '') {
+      return '-';
+    }
+
+    const match = MIABIS_QUALITY.find((item) => item.id === String(quality));
+    return match?.label || String(quality);
+  };
   const [activeTab, setActiveTab] = useState<'withdraw' | 'return'>('withdraw');
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [pendingAction, setPendingAction] = useState<'withdraw' | 'return' | null>(null);
@@ -432,8 +442,10 @@ export default function SampleWithdrawalReturnPage() {
                   <span className="info-value pending-qty">{getPendingReturnQuantity()} {sample.unit || 'µL'}</span>
                 </div>
                 <div className="info-row">
-                  <span className="info-label">Localização:</span>
-                  <span className="info-value">{sample.locationID ? `ID: ${sample.locationID}` : '-'}</span>
+                  <span className="info-label">Armazenagem:</span>
+                  <span className="info-value">
+                    {sample.locationID ? `ID: ${sample.locationID}` : 'Aguardando Armazenagem'}
+                  </span>
                 </div>
               </div>
 
@@ -451,7 +463,7 @@ export default function SampleWithdrawalReturnPage() {
                 </div>
                 <div className="info-row">
                   <span className="info-label">Qualidade:</span>
-                  <span className="info-value">{sample.quality !== undefined ? `MIABIS ${sample.quality}` : '-'}</span>
+                  <span className="info-value">{getQualityLabel(sample.quality)}</span>
                 </div>
                 {sample.withdrawalDate && (
                   <div className="info-row">

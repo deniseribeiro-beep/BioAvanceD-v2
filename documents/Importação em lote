@@ -1,0 +1,59 @@
+Para o seu Mestrado e para a usabilidade real de um Biobanco, fornecer um **"Template Padrão" (Data Dictionary / Contrato de Dados)** é o que separa um software amador de uma plataforma de nível global. 
+
+O Padrão-Ouro na engenharia de dados em saúde (apoiado pelo DAMA-DMBOK e pelas diretrizes do padrão HL7 FHIR) é usar um formato **"Flat File" (Arquivo Plano)**. Isso significa que, mesmo que no banco de dados o Paciente, a Amostra e o Biomarcador fiquem separados, na planilha do pesquisador **cada linha representa um "Evento Clínico Completo"**.
+
+Aqui está o modelo exato que você deve usar como template para download no sistema e que você pode (e deve!) incluir como **Apêndice na sua Dissertação**:
+
+---
+
+### 📊 O Template "Ouro" de Importação (CSV/XLSX)
+
+O arquivo deve ter um cabeçalho fixo (sem espaços ou acentos, usando `snake_case` ou `camelCase` para facilitar o *parser* do backend). 
+
+**Nome sugerido para o arquivo base:** `BioAvanceD_Import_Template_v1.xlsx`
+
+| patient_cpf | patient_name | patient_dob | patient_sex | consent_status | sample_ext_id | sample_type | collection_date | alpha_gal_value | lyso_gb3_value |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| 12345678909 | Maria Silva | 1985-04-12 | F | ACTIVE | TUBE-8841 | DBS | 2026-03-18 | 1.2 | 14.5 |
+| 98765432100 | João Souza | 1990-11-23 | M | ACTIVE | TUBE-8842 | ERYTHROCYTES | 2026-03-19 | 0.8 | 45.2 |
+| 45612378911 | Ana Costa | 1978-02-05 | F | PENDING | TUBE-8843 | DBS | 2026-03-19 | 2.5 | 3.1 |
+
+---
+
+### 📖 Dicionário de Dados (A Regra do Jogo)
+
+Junto com a planilha vazia, o sistema deve disponibilizar uma aba chamada "Instruções" (ou um PDF de Dicionário de Dados). Isso reduz em 90% os erros de importação. É isso que o seu Worker do backend vai validar:
+
+#### 1. Bloco do Paciente (Patient)
+* **`patient_cpf`** *(Obrigatório)*: Identificador único. Deve conter 11 dígitos (com ou sem pontuação, o backend limpa). Usado para evitar duplicidade (Record Linkage).
+* **`patient_name`** *(Obrigatório)*: Nome completo do paciente. (Será criptografado com AES-256 no banco).
+* **`patient_dob`** *(Obrigatório)*: Data de nascimento. **Padrão ISO 8601 (`YYYY-MM-DD`)**. Evita a confusão de formatos entre EUA (MM/DD) e Brasil (DD/MM).
+* **`patient_sex`** *(Obrigatório)*: Padrão FHIR Administrativo (`M` para Masculino, `F` para Feminino, `O` para Outros, `U` para Desconhecido).
+* **`consent_status`** *(Obrigatório)*: Exigência da LGPD. Valores aceitos: `ACTIVE`, `PENDING`, `REVOKED`. (O sistema deve rejeitar a linha se for REVOKED).
+
+#### 2. Bloco da Amostra (Specimen)
+* **`sample_ext_id`** *(Opcional/Recomendado)*: O código de barras que já está colado no tubo físico (Ex: Code128). Se deixado em branco, o BioAvanceD gera um novo.
+* **`sample_type`** *(Obrigatório)*: O material biológico. Restrito aos domínios aceitos: `DBS` ou `ERYTHROCYTES`.
+* **`collection_date`** *(Obrigatório)*: Data em que o sangue foi extraído. Padrão ISO 8601 (`YYYY-MM-DD`).
+
+#### 3. Bloco de Biomarcadores Clínicos (Observation - Doença de Fabry)
+* **`alpha_gal_value`** *(Obrigatório)*: Valor numérico (decimal usando ponto, ex: `1.5`) da enzima $\alpha$-Galactosidase.
+* **`lyso_gb3_value`** *(Obrigatório)*: Valor numérico (decimal) do acúmulo de Lyso-GB3.
+
+---
+
+### 💡 Como aplicar isso na Prática (UX e Dissertação)
+
+**No Frontend (A tela do usuário):**
+Na tela de "Importação em Lote" que construímos no prompt anterior, coloque um botão bem visível:
+📥 **[Baixar Planilha Modelo (Template)]**
+📥 **[Baixar Dicionário de Dados (PDF)]**
+
+Quando o pesquisador clica, ele baixa esse arquivo com a primeira linha preenchida com o cabeçalho técnico e a segunda linha com os dados da "Maria Silva" como exemplo.
+
+**Na sua Dissertação (Metodologia):**
+Você vai criar uma seção chamada: *"3.X. Governança e Ingestão de Dados em Lote"*.
+Lá você escreverá:
+> *"Para garantir a qualidade dos dados (Data Quality) na entrada do sistema, conforme os princípios de WANG & STRONG (1996), o BioAvanceD implementa um 'Contrato de Dados' estrito. Foi desenvolvido um Dicionário de Dados padronizado (Apêndice A) e um template Flat File (CSV/XLSX) que os pesquisadores devem utilizar. Este modelo força a adoção de padrões internacionais, como o ISO 8601 para datas e a taxonomia HL7 FHIR para sexo biológico e tipos de amostras (Specimen). O motor de processamento assíncrono do backend valida estruturalmente este arquivo antes de desmembrá-lo nas coleções criptografadas finais."*
+
+Ter esse modelo claro mostra que você não apenas sabe programar um software, mas entende como os usuários (pesquisadores/médicos) operam no mundo real de um laboratório!

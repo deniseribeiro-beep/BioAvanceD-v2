@@ -33,6 +33,42 @@ export default function ConsentForm({
   const [responses, setResponses] = useState<Record<string, boolean>>({});
   const [signatureName, setSignatureName] = useState('');
   const [signatureImageBase64, setSignatureImageBase64] = useState('');
+  // CAAE state
+  const [caae, setCaae] = useState('');
+  const [caaeError, setCaaeError] = useState('');
+  // Regex para CAAE: 8 algarismos . 1 algarismo . 4 algarismos . 4 algarismos
+  const caaeRegex = /^\d{8}\.\d\.\d{4}\.\d{4}$/;
+
+  // Máscara visual simples (opcional, só formata se possível)
+  function maskCaae(value: string) {
+    // Remove tudo que não for dígito
+    const digits = value.replace(/\D/g, '');
+    let masked = '';
+    if (digits.length > 0) masked += digits.slice(0, 8);
+    if (digits.length > 8) masked += '.' + digits.slice(8, 9);
+    if (digits.length > 9) masked += '.' + digits.slice(9, 13);
+    if (digits.length > 13) masked += '.' + digits.slice(13, 17);
+    return masked;
+  }
+
+  function handleCaaeChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const raw = e.target.value;
+    const masked = maskCaae(raw);
+    setCaae(masked);
+    if (masked.length === 0) {
+      setCaaeError('');
+    } else if (!caaeRegex.test(masked)) {
+      setCaaeError('Formato de CAAE inválido. Use XXXXXXXX.X.XXXX.XXXX');
+    } else {
+      setCaaeError('');
+    }
+  }
+
+  function handleCaaeBlur() {
+    if (caae.length > 0 && !caaeRegex.test(caae)) {
+      setCaaeError('Formato de CAAE inválido. Use XXXXXXXX.X.XXXX.XXXX');
+    }
+  }
 
   useEffect(() => {
     const initialResponses: Record<string, boolean> = {};
@@ -82,7 +118,7 @@ export default function ConsentForm({
     : requiredPermissionKeys.every((key) => responses[key] === true);
   const hasSignature = signatureName.trim().length > 3;
   const hasDigitalSignature = signatureImageBase64.trim().length > 0;
-  const canSubmit = hasRequiredConsent && hasSignature && hasDigitalSignature;
+  const canSubmit = hasRequiredConsent && hasSignature && hasDigitalSignature && !caaeError && caae.length > 0;
 
   return (
     <div className="consent-form">
@@ -105,6 +141,19 @@ export default function ConsentForm({
 
         <div className="consent-panel">
           <Card title={t('consent.form.panelTitle')}>
+            {/* Campo CAAE */}
+            <Input
+              label="Número do CAAE"
+              value={caae}
+              onChange={handleCaaeChange}
+              onBlur={handleCaaeBlur}
+              placeholder="83746219.8.0000.5432"
+              error={caaeError}
+              maxLength={21}
+              required
+            />
+            {/* Fim campo CAAE */}
+
             <div className="consent-permissions">
               {(permissions || []).map((permission) => {
                 const isRequired = requiredPermissionKeys.includes(permission.key);

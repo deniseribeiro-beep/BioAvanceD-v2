@@ -39,11 +39,21 @@ module.exports = {
   MQTT_USERNAME: process.env.MQTT_USERNAME,
   MQTT_PASSWORD: process.env.MQTT_PASSWORD,
   MQTT_CLIENT_ID: process.env.MQTT_CLIENT_ID,
+  MQTT_TLS_ENABLED: process.env.MQTT_TLS_ENABLED === 'true' || process.env.MQTT_TLS_ENABLED === '1',
+  MQTT_TLS_REJECT_UNAUTHORIZED: process.env.MQTT_TLS_REJECT_UNAUTHORIZED,
+  MQTT_CA_PATH: process.env.MQTT_CA_PATH,
+  MQTT_CERT_PATH: process.env.MQTT_CERT_PATH,
+  MQTT_KEY_PATH: process.env.MQTT_KEY_PATH,
+  MQTT_SIGNATURE_REQUIRED: process.env.MQTT_SIGNATURE_REQUIRED === 'true' || process.env.MQTT_SIGNATURE_REQUIRED === '1',
+  MQTT_SIGNING_SECRET: process.env.MQTT_SIGNING_SECRET,
 
   // Auth
   JWT_SECRET: process.env.JWT_SECRET,
   JWT_REFRESH_SECRET: process.env.JWT_REFRESH_SECRET,
   ENCRYPTION_KEY: process.env.ENCRYPTION_KEY,
+  ENCRYPTION_KEY_ID: process.env.ENCRYPTION_KEY_ID,
+  // ENCRYPTION_KEY_LEGACY removido
+  // ENCRYPTION_KEY_LEGACY_ID removido
   USER_ANON_SALT: process.env.USER_ANON_SALT,
 
   // Biomarker XAI governance
@@ -95,6 +105,7 @@ module.exports = {
   COLL_CONSENTS: process.env.COLL_CONSENTS || 'patientConsents',
   COLL_CONSENT_TEMPLATES: process.env.COLL_CONSENT_TEMPLATES || 'consent_templates',
   COLL_SAMPLE_MOVEMENTS: process.env.COLL_SAMPLE_MOVEMENTS || 'sample_movements',
+  COLL_BIOMARKER_OBSERVATIONS: process.env.COLL_BIOMARKER_OBSERVATIONS || 'biomarker_observations',
 
   // Neo4j lineage behavior
   LINEAGE_MODE: process.env.LINEAGE_MODE || 'fail-open',

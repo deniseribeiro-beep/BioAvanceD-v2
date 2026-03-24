@@ -6,6 +6,8 @@ const consentController = require('../../controllers/consent.controller');
 
 router.post('/consent-templates', authenticate, requireRole(4), consentController.createTemplate.bind(consentController));
 router.get('/consent-templates/active', authenticate, consentController.getActiveTemplate.bind(consentController));
+router.get('/consent-templates/:id', authenticate, requireRole(4), consentController.getTemplateById.bind(consentController));
+router.put('/consent-templates/:id', authenticate, requireRole(4), consentController.updateTemplate.bind(consentController));
 
 router.post('/consent-policies', authenticate, requireRole(3, 4), consentController.createPolicy.bind(consentController));
 router.put('/consent-policies/:id', authenticate, requireRole(3, 4), consentController.updatePolicy.bind(consentController));

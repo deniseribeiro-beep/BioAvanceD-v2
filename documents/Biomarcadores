@@ -1,0 +1,28 @@
+# Arquitetura de Validação de Amostras
+
+## 1. Arquitetura Desacoplada de Nós
+A coleção **Amostra** permanece separada do documento **Paciente** para preservar coesão de domínio e permitir escalabilidade independente. Na prática, o paciente concentra atributos clínicos e de consentimento, enquanto a amostra funciona como entidade operacional e rastreável, com vínculo por `patientID`.  
+Essa separação reduz acoplamento de escrita, evita documentos monolíticos com crescimento descontrolado e facilita:
+- paginação e consulta por lote;
+- evolução de schema sem impacto direto no nó do paciente;
+- auditoria por evento no ciclo de vida da amostra;
+- replicação e indexação específicas para leitura clínica e operacional.
+
+## 2. Validação Primária (Frontend)
+A primeira barreira de integridade ocorre na interface, antes do envio ao backend. A sanitização do formulário bloqueia entradas incompatíveis com o domínio biomédico, garantindo que o payload já siga tipos e domínios esperados.  
+Os controles principais são:
+- conversão explícita de campos numéricos para `float`;
+- rejeição de valores negativos para quantidades e biomarcadores;
+- restrição de unidades aceitas para a medição;
+- validação de presença e formato de campos obrigatórios.
+
+Esse passo reduz ruído operacional, melhora a experiência do usuário e diminui a probabilidade de persistência de dados biológicos anômalos ou semanticamente inválidos.
+
+## 3. Disjuntor Semântico (Backend/XAI)
+No backend, o motor XAI atua como disjuntor semântico: ele avalia o valor recebido contra a regra ativa e, quando há violação, embute um `xaiAlert` diretamente no documento da amostra antes da persistência.  
+Esse `xaiAlert` carrega:
+- `ruleVersion`;
+- `severity`;
+- `justification`.
+
+Com isso, a própria amostra passa a conter o contexto explicável da decisão clínica, preservando trilha de auditoria, versionamento da regra e rastreabilidade do racional. O resultado é um registro clínico-operacional mais robusto, com evidência embutida no nó persistido e menor dependência de reconstrução posterior da decisão.

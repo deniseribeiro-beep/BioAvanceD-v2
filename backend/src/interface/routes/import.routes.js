@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const importController = require('../../controllers/import.controller');
 const importAsyncController = require('../../controllers/import-async.controller');
+const importBatchController = require('../../controllers/import-batch.controller');
 const { authenticate } = require('../../infrastructure/middleware/auth');
 const { requirePermission } = require('../../infrastructure/middleware/rbac');
 
@@ -11,6 +12,26 @@ const { requirePermission } = require('../../infrastructure/middleware/rbac');
 // ============================================
 // ENDPOINTS ASSÍNCRONOS (NOVOS - CONFORME AUDITORIA)
 // ============================================
+
+// Batch import staging (nova camada ETL)
+router.post('/batch',
+  authenticate,
+  requirePermission('uploadFiles'),
+  importBatchController.uploadMiddleware(),
+  importBatchController.createBatchImport.bind(importBatchController)
+);
+
+router.get('/batch/:jobId',
+  authenticate,
+  requirePermission('uploadFiles'),
+  importBatchController.getBatchImportStatus.bind(importBatchController)
+);
+
+router.get('/status/:jobId',
+  authenticate,
+  requirePermission('uploadFiles'),
+  importBatchController.getBatchImportStatus.bind(importBatchController)
+);
 
 // Validação separada (endpoint de validação)
 router.post('/validate',
@@ -60,6 +81,11 @@ router.post('/upload',
   importController.uploadMiddleware(),
   importController.import.bind(importController)
 );
+
+
+// Importação FHIR direta (JSON) - pode adicionar autenticação depois se necessário
+const { importFhirBundle } = require('../../controllers/import.controller');
+router.post('/fhir', importFhirBundle);
 
 module.exports = router;
 

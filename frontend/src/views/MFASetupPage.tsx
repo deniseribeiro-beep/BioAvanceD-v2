@@ -4,6 +4,7 @@ import Button from '../components/UI/Button';
 import Input from '../components/UI/Input';
 import { ArrowLeft, QrCode, CheckCircle, AlertCircle, Shield, Key } from 'lucide-react';
 import { authService } from '../services/api';
+import { LIMITS } from '../config/constants/limits.constants';
 import './MFASetupPage.css';
 
 export default function MFASetupPage() {
@@ -351,7 +352,9 @@ export default function MFASetupPage() {
                 value={verificationCode}
                 onChange={(e) => setVerificationCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
                 placeholder="000000"
-                maxLength={6}
+                inputMode="numeric"
+                maxLength={LIMITS.MFA_CODE_LENGTH}
+                pattern="\d{6}"
                 autoFocus
                 style={{ marginBottom: '1rem' }}
               />

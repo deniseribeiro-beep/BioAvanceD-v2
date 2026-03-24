@@ -215,6 +215,7 @@ app.use("/api/clinical-units", require("./src/interface/routes/clinical-unit.rou
 app.use("/api/storage", require("./src/interface/routes/storage.routes"));
 app.use("/api/policies", require("./src/interface/routes/policy.routes"));
 app.use("/api/sensors", require("./src/interface/routes/sensor.routes"));
+app.use("/api/iot", require("./src/interface/routes/iot.routes"));
 app.use("/api/temperature", require("./src/interface/routes/temperature.routes"));
 app.use("/api", require("./src/interface/routes/consent.routes"));
 app.use("/api/users", require("./src/interface/routes/user.routes"));

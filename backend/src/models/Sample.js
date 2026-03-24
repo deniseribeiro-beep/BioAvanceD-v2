@@ -2,6 +2,11 @@
  * Modelo de validação e estrutura para Sample
  */
 const { validateQualityMIABIS, validateQualityMIABISOrThrow } = require('../utils/qualityMIABISValidator');
+const {
+  SPECIMEN_TYPE_IDS,
+  SAMPLE_ORIGIN_IDS,
+  EXTRACTION_PROTOCOL_IDS,
+} = require('../config/constants/specimen.constants');
 
 class SampleModel {
   static STATUS = {
@@ -85,10 +90,8 @@ class SampleModel {
 
     if (data.quality === undefined || data.quality === null) {
       errors.push('quality é obrigatório');
-    } else if (typeof data.quality !== 'number' || !Number.isInteger(data.quality)) {
-      errors.push('quality deve ser um número inteiro');
     } else if (!validateQualityMIABIS(data.quality)) {
-      errors.push('quality deve estar na escala MIABIS: 0 (Não avaliada), 1 (Adequada) ou 2 (Inadequada)');
+      errors.push('quality deve estar na escala MIABIS: GOOD, COMPROMISED ou UNKNOWN');
     }
 
     if (!data.linkedProject || typeof data.linkedProject !== 'string' || data.linkedProject.trim() === '') {
@@ -184,17 +187,20 @@ class SampleModel {
 
     return {
       patientID: data.patientID,
+      patientObjectId: data.patientObjectId || null,
       sampleID: data.sampleID || null,
       sampleType: data.sampleType,
       sampleOrigin: data.sampleOrigin,
       extractionProtocol: data.extractionProtocol || null,
       barcode: data.barcode || null, // Código de barras gerado automaticamente se não fornecido
+      barcodeSymbologies: data.barcodeSymbologies || null,
+      barcodeIndustrial: data.barcodeIndustrial || null,
       registrationDate: registerDate,
       registerDate: registerDate, // Mantém compatibilidade com ambos os campos
       withdrawalDate: data.withdrawalDate ? (data.withdrawalDate instanceof Date ? data.withdrawalDate : new Date(data.withdrawalDate)) : null,
       quantity: data.quantity || null, // Float (pode ser em diferentes unidades)
       unit: data.unit || 'µL', // Unidade de medida (µL, mL, L, mg, g, kg, unidades, etc.)
-      quality: data.quality !== undefined && data.quality !== null ? data.quality : (data.qualityID !== undefined && data.qualityID !== null ? data.qualityID : null), // Int conforme escala MIABIS (0, 1, 2)
+      quality: data.quality !== undefined && data.quality !== null ? String(data.quality) : (data.qualityID !== undefined && data.qualityID !== null ? String(data.qualityID) : null), // Id MIABIS canônico
       locationID: data.locationID || null,
       location: data.location || null,
       linkedProject: data.linkedProject || null,
@@ -243,30 +249,21 @@ class SampleModel {
     if (!sampleType || typeof sampleType !== 'string') {
       return false;
     }
-    const validTypes = [
-      'Sangue', 'Urina', 'Saliva', 'Tecido', 'DNA', 'RNA',
-      'Plasma', 'Soro', 'Eritrócitos', 'DBS', 'Líquido Cefalorraquidiano'
-    ];
-    return validTypes.includes(sampleType);
+    return SPECIMEN_TYPE_IDS.includes(sampleType);
   }
 
   static validateSampleOrigin(sampleOrigin) {
     if (!sampleOrigin || typeof sampleOrigin !== 'string') {
       return false;
     }
-    const validOrigins = ['Coleta', 'Transferência', 'Doação', 'Pesquisa'];
-    return validOrigins.includes(sampleOrigin) || (sampleOrigin && sampleOrigin.trim().length >= 3);
+    return SAMPLE_ORIGIN_IDS.includes(sampleOrigin);
   }
 
   static validateExtractionType(extractionProtocol) {
     if (!extractionProtocol || typeof extractionProtocol !== 'string') {
       return false;
     }
-    const validProtocols = [
-      'Protocolo A', 'Protocolo B', 'Protocolo C',
-      'QIAGEN', 'Phenol-Chloroform', 'Automated'
-    ];
-    return validProtocols.includes(extractionProtocol) || (extractionProtocol && extractionProtocol.trim().length >= 3);
+    return EXTRACTION_PROTOCOL_IDS.includes(extractionProtocol);
   }
 
   static validateWithdrawalType(withdrawalType) {

@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Card from '../components/UI/Card';
-import { Users, FlaskConical, FileText, Thermometer, Box, Radio, Shield, FileSearch } from 'lucide-react';
+import { AlertTriangle, Users, FlaskConical, FileText, Thermometer, Box, Radio, Shield, FileSearch } from 'lucide-react';
 import { usePatients } from '../hooks/usePatients';
 import { useSamples } from '../hooks/useSamples';
 import { useResults } from '../hooks/useResults';
@@ -27,9 +27,86 @@ export default function Dashboard() {
   const { sensors, loading: loadingSensors } = useSensors();
   const [consentQueueStats, setConsentQueueStats] = useState<{ waiting: number; delayed: number; active: number; failed: number; totalQueued: number; available: boolean } | null>(null);
   const [loadingConsentQueue, setLoadingConsentQueue] = useState(false);
+  const [telemetryData, setTelemetryData] = useState<Array<{ time: string; sensor1: number; sensor2: number; sensor3: number }>>([
+    { time: '10:01:00', sensor1: -80.4, sensor2: -79.3, sensor3: -81.1 },
+    { time: '10:03:00', sensor1: -80.8, sensor2: -78.9, sensor3: -80.6 },
+    { time: '10:05:00', sensor1: -79.7, sensor2: -80.1, sensor3: -81.4 },
+    { time: '10:07:00', sensor1: -80.9, sensor2: -79.8, sensor3: -80.3 },
+    { time: '10:09:00', sensor1: -80.1, sensor2: -79.5, sensor3: -81.0 },
+  ]);
+  const [activeAlerts, setActiveAlerts] = useState<Array<{ id: string; sensorName: string; time: string; temperature: number }>>([]);
 
   // TEMPORARIAMENTE DESATIVADO: Não há sensores cadastrados ainda
   const TEMPERATURE_READING_DISABLED = true;
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setTelemetryData((current) => {
+        const sensor1 = Number((-82 + Math.random() * 4).toFixed(1));
+        const sensor2 = Number((-82 + Math.random() * 4).toFixed(1));
+        const sensor3 = Number((-82 + Math.random() * 4).toFixed(1));
+        const nextIndex = current.length + 1;
+        const forceAnomaly = nextIndex % 10 === 0;
+        const anomalySensor = forceAnomaly ? Math.floor(Math.random() * 3) : -1;
+        const anomalyTriggered = forceAnomaly || Math.random() < 0.08;
+        const time = new Date().toLocaleTimeString('pt-BR', { hour12: false });
+
+        const nextEntry = {
+          time,
+          sensor1: anomalyTriggered && anomalySensor === 0 ? -60 : sensor1,
+          sensor2: anomalyTriggered && anomalySensor === 1 ? -60 : sensor2,
+          sensor3: anomalyTriggered && anomalySensor === 2 ? -60 : sensor3,
+        };
+
+        const updated = [...current, nextEntry];
+        return updated.slice(-20);
+      });
+    }, 2000);
+
+    return () => clearInterval(interval);
+    // telemetryData is intentionally excluded to keep a stable interval.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const latest = telemetryData[telemetryData.length - 1];
+    if (!latest) {
+      return;
+    }
+
+    const sensorEntries = [
+      { key: 'sensor1', label: 'Sensor 1', temperature: latest.sensor1 },
+      { key: 'sensor2', label: 'Sensor 2', temperature: latest.sensor2 },
+      { key: 'sensor3', label: 'Sensor 3', temperature: latest.sensor3 },
+    ];
+
+    const criticalAlerts = sensorEntries
+      .filter((entry) => entry.temperature > -70)
+      .map((entry) => ({
+        id: `${latest.time}-${entry.key}`,
+        sensorName: entry.label,
+        time: latest.time,
+        temperature: entry.temperature,
+      }));
+
+    if (criticalAlerts.length === 0) {
+      return;
+    }
+
+    setActiveAlerts((current) => {
+      const existingIds = new Set(current.map((item) => item.id));
+      const merged = [...current];
+
+      criticalAlerts.forEach((alert) => {
+        if (!existingIds.has(alert.id)) {
+          merged.unshift(alert);
+          existingIds.add(alert.id);
+        }
+      });
+
+      return merged.slice(0, 10);
+    });
+  }, [telemetryData]);
 
   // Carrega controle de temperatura (não bloqueia o carregamento da dashboard)
   useEffect(() => {
@@ -84,6 +161,60 @@ export default function Dashboard() {
 
   const loading = loadingPatients || loadingSamples || loadingResults || loadingTemperatures || 
                   loadingPolicies || loadingEquipment || loadingSensors;
+
+  const chartHeight = 280;
+  const chartWidth = 860;
+  const chartPadding = { top: 20, right: 24, bottom: 36, left: 56 };
+  const chartDomain = { min: -90, max: -50 };
+  const chartRange = chartDomain.max - chartDomain.min;
+  const chartData = telemetryData.map((entry, index) => ({
+    ...entry,
+    index,
+  }));
+
+  const chartPoints = useMemo(() => {
+    if (chartData.length === 0) {
+      return { sensor1: '', sensor2: '', sensor3: '' };
+    }
+
+    const innerWidth = chartWidth - chartPadding.left - chartPadding.right;
+    const innerHeight = chartHeight - chartPadding.top - chartPadding.bottom;
+    const stepX = chartData.length > 1 ? innerWidth / (chartData.length - 1) : innerWidth;
+
+    const buildPath = (key: 'sensor1' | 'sensor2' | 'sensor3') => {
+      return chartData
+        .map((point, index) => {
+          const value = point[key];
+          const normalized = Math.max(chartDomain.min, Math.min(chartDomain.max, value));
+          const x = chartPadding.left + (index * stepX);
+          const y = chartPadding.top + ((chartDomain.max - normalized) / chartRange) * innerHeight;
+          return `${x},${y}`;
+        })
+        .join(' ');
+    };
+
+    return {
+      sensor1: buildPath('sensor1'),
+      sensor2: buildPath('sensor2'),
+      sensor3: buildPath('sensor3'),
+    };
+  }, [chartData]);
+
+  const chartTicks = useMemo(() => {
+    const tickCount = 5;
+    const innerHeight = chartHeight - chartPadding.top - chartPadding.bottom;
+    return Array.from({ length: tickCount }, (_, index) => {
+      const value = chartDomain.max - ((chartRange / (tickCount - 1)) * index);
+      const y = chartPadding.top + ((chartDomain.max - value) / chartRange) * innerHeight;
+      return { value, y };
+    });
+  }, []);
+
+  const chartLegend = [
+    { label: 'Sensor 1', color: '#2563eb' },
+    { label: 'Sensor 2', color: '#16a34a' },
+    { label: 'Sensor 3', color: '#dc2626' },
+  ];
 
   const isAdmin = user?.roleName === 'Administrador' || user?.accessType === 4;
 
@@ -277,7 +408,77 @@ export default function Dashboard() {
             <p className="temperature-card-subtitle">Monitoramento térmico contínuo</p>
           </div>
           <div className="temperature-chart-slot">
-            {/* Mantenha o componente atual do gráfico aqui, se existir */}
+            <div className="temperature-chart-svg-wrap">
+              <svg viewBox={`0 0 ${chartWidth} ${chartHeight}`} role="img" aria-label="Gráfico de temperatura em tempo real">
+                <defs>
+                  <linearGradient id="chartAreaGradient" x1="0" x2="0" y1="0" y2="1">
+                    <stop offset="0%" stopColor="rgba(255,255,255,0.95)" />
+                    <stop offset="100%" stopColor="rgba(236,253,245,0.8)" />
+                  </linearGradient>
+                </defs>
+
+                <rect x="0" y="0" width={chartWidth} height={chartHeight} rx="18" fill="url(#chartAreaGradient)" />
+
+                {chartTicks.map((tick) => (
+                  <g key={tick.value}>
+                    <line
+                      x1={chartPadding.left}
+                      y1={tick.y}
+                      x2={chartWidth - chartPadding.right}
+                      y2={tick.y}
+                      stroke="rgba(15, 23, 42, 0.08)"
+                      strokeDasharray="4 6"
+                    />
+                    <text
+                      x={chartPadding.left - 10}
+                      y={tick.y + 4}
+                      textAnchor="end"
+                      fontSize="12"
+                      fill="rgba(15, 23, 42, 0.72)"
+                    >
+                      {`${tick.value}°C`}
+                    </text>
+                  </g>
+                ))}
+
+                {telemetryData.map((entry, index) => {
+                  const innerWidth = chartWidth - chartPadding.left - chartPadding.right;
+                  const stepX = telemetryData.length > 1 ? innerWidth / (telemetryData.length - 1) : innerWidth;
+                  const x = chartPadding.left + (index * stepX);
+                  return (
+                    <text
+                      key={`${entry.time}-${index}`}
+                      x={x}
+                      y={chartHeight - 14}
+                      textAnchor="middle"
+                      fontSize="11"
+                      fill="rgba(15, 23, 42, 0.6)"
+                    >
+                      {entry.time.slice(0, 5)}
+                    </text>
+                  );
+                })}
+
+                <polyline points={chartPoints.sensor1} fill="none" stroke="#2563eb" strokeWidth="3" strokeLinejoin="round" strokeLinecap="round" />
+                <polyline points={chartPoints.sensor2} fill="none" stroke="#16a34a" strokeWidth="3" strokeLinejoin="round" strokeLinecap="round" />
+                <polyline points={chartPoints.sensor3} fill="none" stroke="#dc2626" strokeWidth="3" strokeLinejoin="round" strokeLinecap="round" />
+
+                {chartLegend.map((item) => (
+                  <g key={item.label} transform="translate(0, 0)">
+                    <circle cx="22" cy="20" r="5" fill={item.color} />
+                  </g>
+                ))}
+              </svg>
+
+              <div className="temperature-chart-legend">
+                {chartLegend.map((item) => (
+                  <div key={item.label} className="temperature-chart-legend__item">
+                    <span className="temperature-chart-legend__swatch" style={{ backgroundColor: item.color }} />
+                    <span>{item.label}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
         </Card>
 
@@ -285,12 +486,21 @@ export default function Dashboard() {
           <Card
             className="side-card"
           >
-            <h3 className="side-card-title">{t('dashboard.temperatureAlertsActive')}</h3>
-            <p className="side-card-text">
-              {stats.temperatureAlerts > 0
-                ? t('dashboard.temperatureAlertsMessage').replace('{count}', stats.temperatureAlerts.toString())
-                : 'Nenhum alerta ativo no momento.'}
-            </p>
+            <h3 className="side-card-title">Alertas de Temperatura Ativos</h3>
+            {activeAlerts.length > 0 ? (
+              <div className="alert-list">
+                {activeAlerts.map((alert) => (
+                  <div key={alert.id} className="alert-item alert-item--critical">
+                    <AlertTriangle size={18} className="alert-item-icon" />
+                    <p className="alert-item-text">
+                      <strong>{alert.sensorName}</strong> atingiu <strong>{alert.temperature}°C</strong> às <strong>{alert.time}</strong>
+                    </p>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="side-card-text">Nenhum alerta ativo.</p>
+            )}
           </Card>
 
           {isAdmin && (

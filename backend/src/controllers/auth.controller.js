@@ -88,15 +88,13 @@ class AuthController {
         data: result
       });
     } catch (error) {
-      logger.error('Erro no login:', error.message);
-      
+      logger.error('Erro no login:', error && error.stack ? error.stack : error.message);
       // Log de tentativa de login falhada (assíncrono para não bloquear resposta)
       setImmediate(() => {
         auditLogger.logLogin(req, false, error).catch((logError) => {
           logger.error('Erro ao registrar auditoria de login:', logError.message);
         });
       });
-
       return res.status(401).json({
         success: false,
         error: (req.t && req.t('auth.loginError')) || 'Erro ao fazer login. Verifique suas credenciais.',

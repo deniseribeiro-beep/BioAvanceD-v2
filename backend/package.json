@@ -14,7 +14,7 @@
     "sync-collections": "node scripts/sync-collections.js",
     "sync:consent:neo4j": "node scripts/sync-consent-neo4j.js",
     "seed:full": "node scripts/full-seed.js",
-    "seed:cid": "node src/scripts/seedCid.js",
+    "seed:cid": "node src/scripts/seedOrphanetCid.js",
     "migrate:mongo:online-local": "node scripts/migrate-mongo-online-to-local.js",
     "remediate:fhir:barcode": "node scripts/remediate-fhir-missing-barcodes.js",
     "validate:fhir:barcode": "node scripts/check-fhir-barcode-coverage.js",
@@ -30,6 +30,7 @@
     "user:check": "node scripts/check-users.js",
     "user:create-admin": "node scripts/create-admin-simple.js",
     "lab:test": "node scripts/lab-test-notifications.js",
+    "iot:simulate": "node scripts/iot-simulator.js",
     "cleanup": "node ../scripts/cleanup-complete.js",
     "clean": "node ../scripts/cleanup-complete.js",
     "test:redis": "node scripts/test-redis-connection.js",
@@ -37,7 +38,7 @@
     "test:security": "node test/unit/security.test.js",
     "test:consent": "node test/unit/authConsent.test.js",
     "test:unit": "node test/unit/run-tests.js && node test/unit/authConsent.test.js",
-    "test:ci": "node test/run-tests.js && node test/integrityCheckService.mock.test.js && node test/integration/auditRoot.service.mock.test.js && npx vitest run test/integration/sample.api.test.js test/integration/sample.mode.contract.api.test.js test/integration/users.register-sample.api.test.js && node test/unit/run-tests.js && node test/unit/authConsent.test.js"
+    "test:ci": "node test/run-tests.js && node test/integrityCheckService.mock.test.js && node test/integration/auditRoot.service.mock.test.js && npx vitest run test/integration/sample.api.test.js test/integration/sample.mode.contract.api.test.js test/integration/users.register-sample.api.test.js test/integration/compliance.verify-biomarker.api.test.js tests/compliance/compliance.contract.test.js && node test/unit/run-tests.js && node test/unit/authConsent.test.js && node tests/compliance/generate-compliance-evidence.js"
   },
   "dependencies": {
     "@influxdata/influxdb-client": "^1.35.0",
@@ -46,6 +47,7 @@
     "argon2": "^0.31.2",
     "bcryptjs": "^2.4.3",
     "bullmq": "^3.16.2",
+    "bwip-js": "^4.8.0",
     "cors": "^2.8.5",
     "crypto-js": "^4.2.0",
     "csv-parser": "^3.2.0",
@@ -55,6 +57,7 @@
     "express": "^4.18.2",
     "express-rate-limit": "^7.5.1",
     "express-validator": "^7.3.1",
+    "fast-xml-parser": "^5.5.8",
     "fhir-kit-client": "^1.3.0",
     "helmet": "^7.2.0",
     "ioredis": "^5.3.2",

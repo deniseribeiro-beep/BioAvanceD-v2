@@ -11,6 +11,12 @@ const { enforceCommercialConsent } = require('../../infrastructure/middleware/co
 const { authenticate } = require('../../infrastructure/middleware/auth');
 const { requirePermission } = require('../../infrastructure/middleware/rbac');
 const logger = require('../../utils/logger');
+const {
+  SPECIMEN_TYPE_IDS,
+  SAMPLE_ORIGIN_IDS,
+  EXTRACTION_PROTOCOL_IDS,
+  MIABIS_QUALITY_IDS,
+} = require('../../config/constants/specimen.constants');
 
 function validateCreateSamplePayload(req, res, next) {
   const payload = req.body || {};
@@ -22,22 +28,30 @@ function validateCreateSamplePayload(req, res, next) {
 
   if (!payload.sampleType || typeof payload.sampleType !== 'string') {
     errors.push('sampleType é obrigatório e deve ser string');
+  } else if (!SPECIMEN_TYPE_IDS.includes(payload.sampleType)) {
+    errors.push('sampleType inválido conforme MIABIS');
   }
 
   if (!payload.sampleOrigin || typeof payload.sampleOrigin !== 'string') {
     errors.push('sampleOrigin é obrigatório e deve ser string');
+  } else if (!SAMPLE_ORIGIN_IDS.includes(payload.sampleOrigin)) {
+    errors.push('sampleOrigin inválido conforme MIABIS');
   }
 
   if (!payload.extractionProtocol || typeof payload.extractionProtocol !== 'string') {
     errors.push('extractionProtocol é obrigatório e deve ser string');
+  } else if (!EXTRACTION_PROTOCOL_IDS.includes(payload.extractionProtocol)) {
+    errors.push('extractionProtocol inválido conforme MIABIS');
   }
 
   if (payload.quantity === undefined || payload.quantity === null || typeof payload.quantity !== 'number' || payload.quantity <= 0) {
     errors.push('quantity deve ser um número maior que zero');
   }
 
-  if (payload.quality === undefined || payload.quality === null || typeof payload.quality !== 'number' || !Number.isInteger(payload.quality)) {
-    errors.push('quality é obrigatório e deve ser inteiro');
+  if (payload.quality === undefined || payload.quality === null || typeof payload.quality !== 'string' || payload.quality.trim() === '') {
+    errors.push('quality é obrigatório e deve ser string');
+  } else if (!MIABIS_QUALITY_IDS.includes(payload.quality.trim())) {
+    errors.push('quality inválido conforme MIABIS');
   }
 
   if (!payload.linkedProject || typeof payload.linkedProject !== 'string' || payload.linkedProject.trim() === '') {
@@ -48,8 +62,14 @@ function validateCreateSamplePayload(req, res, next) {
     errors.push('isRareDisease deve ser boolean');
   }
 
-  if (payload.locationID === undefined || payload.locationID === null || (typeof payload.locationID !== 'number' && typeof payload.locationID !== 'string')) {
-    errors.push('locationID é obrigatório');
+  if (payload.locationID !== undefined && payload.locationID !== null && payload.locationID !== '') {
+    const locationValue = typeof payload.locationID === 'string' ? payload.locationID.trim() : payload.locationID;
+    const locationIsValidNumber = typeof locationValue === 'number' && Number.isFinite(locationValue);
+    const locationIsNumericString = typeof locationValue === 'string' && /^\d+$/.test(locationValue);
+
+    if (!locationIsValidNumber && !locationIsNumericString) {
+      errors.push('locationID, quando informado, deve ser numérico');
+    }
   }
 
   if (!payload.registerDate && !payload.registrationDate) {
@@ -130,7 +150,7 @@ router.post('/',
             patientID: sample.patientID, // Apenas ID anonimizado
             sampleType: sample.sampleType,
             barcode: sample.barcode,
-            quality: sample.quality !== undefined && sample.quality !== null ? sample.quality : null // Apenas valor numérico MIABIS (0, 1, 2)
+            quality: sample.quality !== undefined && sample.quality !== null ? sample.quality : null // Id MIABIS canônico
           },
           req: req,
           module: 'Samples'
@@ -675,6 +695,48 @@ router.get('/by-barcode/:barcode', authenticate, async (req, res) => {
     return res.status(500).json({
       success: false,
       error: 'Erro ao buscar amostra',
+      message: error.message
+    });
+  }
+});
+
+router.get('/by-barcode/:barcode/symbology-assets', authenticate, async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    if (!db) {
+      return res.status(503).json({
+        success: false,
+        error: 'Banco de dados não disponível'
+      });
+    }
+
+    const barcode = decodeURIComponent(req.params.barcode);
+    const lookup = await sampleService.getSampleByBarcode(db, barcode);
+    if (!lookup.sample) {
+      return res.status(404).json({
+        success: false,
+        error: `Amostra não encontrada com código de barras: ${barcode}`
+      });
+    }
+
+    const includePayload = String(req.query.includePayload || 'false').toLowerCase() === 'true';
+    const assets = await sampleService.getBarcodeIndustrialAssets(barcode, { includePayload });
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        barcode: assets.canonicalValue,
+        generatedAt: assets.generatedAt,
+        includePayload,
+        code128: assets.code128,
+        dataMatrix: assets.dataMatrix
+      }
+    });
+  } catch (error) {
+    logger.error('Erro ao gerar artefatos industriais de barcode:', error.message);
+    return res.status(500).json({
+      success: false,
+      error: 'Erro ao gerar artefatos de barcode',
       message: error.message
     });
   }

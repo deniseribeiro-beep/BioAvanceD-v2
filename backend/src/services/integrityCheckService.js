@@ -1,6 +1,8 @@
 const crypto = require('crypto');
 const logger = require('../utils/logger');
 const merkleTree = require('../utils/merkleTree');
+const biomarkerIntegrityService = require('./biomarker-integrity.service');
+const mqttIngestionAuditService = require('./mqtt-ingestion-audit.service');
 
 function sha256Hex(input) {
   return crypto.createHash('sha256').update(String(input)).digest('hex');
@@ -121,13 +123,39 @@ class IntegrityCheckService {
       }
     }
 
-    const tree = merkleTree.buildMerkleTree(leaves);
+    let biomarkerDocs = [];
+    try {
+      biomarkerDocs = await biomarkerIntegrityService.getBiomarkerHashesForDate(db, date);
+    } catch (error) {
+      logger.warn('Falha ao carregar hashes de biomarcadores para Merkle diária:', error.message || error);
+      biomarkerDocs = [];
+    }
+
+    const biomarkerLeaves = biomarkerDocs
+      .map((doc) => doc.integrityHash)
+      .filter((hash) => typeof hash === 'string' && hash.length > 0);
+
+    let mqttLeaves = [];
+    try {
+      mqttLeaves = await mqttIngestionAuditService.getHashesForDate(db, date);
+    } catch (error) {
+      logger.warn('Falha ao carregar hashes de ingestão MQTT para Merkle diária:', error.message || error);
+      mqttLeaves = [];
+    }
+
+    const allLeaves = leaves.concat(biomarkerLeaves, mqttLeaves);
+    const tree = merkleTree.buildMerkleTree(allLeaves);
+
     return {
       date,
       root: tree.root,
-      leaves,
+      leaves: allLeaves,
+      logsLeafCount: leaves.length,
+      biomarkersLeafCount: biomarkerLeaves.length,
+      mqttLeafCount: mqttLeaves.length,
       docs,
-      getProofForHash: (hash) => merkleTree.getProofForHash(leaves, tree.layers, hash)
+      biomarkerDocs,
+      getProofForHash: (hash) => merkleTree.getProofForHash(allLeaves, tree.layers, hash)
     };
   }
 }

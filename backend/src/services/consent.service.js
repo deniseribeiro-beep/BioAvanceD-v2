@@ -42,12 +42,12 @@ const consentTemplateSchema = {
 
 const consentPolicySchema = {
   type: 'object',
-  required: ['title', 'htmlContent', 'version', 'caae', 'validFrom', 'validTo', 'granularPermissions'],
+  required: ['title', 'htmlContent', 'version', 'validFrom', 'validTo', 'granularPermissions'],
   properties: {
     title: { type: 'string', minLength: 1 },
     htmlContent: { type: 'string', minLength: 1 },
     version: { type: 'string', minLength: 1 },
-    caae: { type: 'string', minLength: 1 },
+    caae: { type: 'string' },
     validFrom: { type: 'string', format: 'date-time' },
     validTo: { type: 'string', format: 'date-time' },
     active: { type: 'boolean' },
@@ -220,11 +220,6 @@ class ConsentService {
     try {
       this.validateTemplatePayload(payload);
 
-      const validation = ConsentTemplateModel.validate(payload);
-      if (!validation.isValid) {
-        throw new Error(validation.errors.join(', '));
-      }
-
       const permissions = Array.isArray(payload.permissions)
         ? payload.permissions.map(permission => ({
             key: permission.key.trim(),
@@ -235,15 +230,35 @@ class ConsentService {
       this.ensureUniquePermissionKeys(permissions);
 
       const templatesCollection = await getCollection(db, 'consentTemplates');
+      const version = typeof payload.version === 'string' && payload.version.trim()
+        ? payload.version.trim()
+        : await this.generateNextPolicyVersion(db);
+      const htmlContent = typeof payload.htmlContent === 'string' && payload.htmlContent.trim()
+        ? payload.htmlContent.trim()
+        : typeof payload.content === 'string'
+          ? payload.content.trim()
+          : '';
+      const normalizedPayload = {
+        ...payload,
+        title: typeof payload.title === 'string' ? payload.title.trim() : payload.title,
+        htmlContent,
+        content: htmlContent,
+        version,
+        caae: typeof payload.caae === 'string' ? payload.caae.trim() : '',
+        active: payload.active === undefined ? true : Boolean(payload.active),
+        permissions
+      };
 
-      if (payload.active === undefined || payload.active === true) {
+      const validation = ConsentTemplateModel.validate(normalizedPayload);
+      if (!validation.isValid) {
+        throw new Error(validation.errors.join(', '));
+      }
+
+      if (normalizedPayload.active === true) {
         await templatesCollection.updateMany({ active: true }, { $set: { active: false, updatedAt: new Date() } });
       }
 
-      const template = ConsentTemplateModel.create({
-        ...payload,
-        permissions
-      });
+      const template = ConsentTemplateModel.create(normalizedPayload);
 
       const result = await templatesCollection.insertOne(template);
       return {
@@ -256,15 +271,127 @@ class ConsentService {
     }
   }
 
+  async getTemplateById(db, templateId) {
+    const templatesCollection = await getCollection(db, 'consentTemplates');
+
+    let objectId;
+    try {
+      objectId = new ObjectId(String(templateId || '').trim());
+    } catch {
+      throw new Error('ID do template de consentimento inválido');
+    }
+
+    const template = await templatesCollection.findOne({ _id: objectId });
+    return template || null;
+  }
+
+  async updateTemplate(db, templateId, payload) {
+    try {
+      const templatesCollection = await getCollection(db, 'consentTemplates');
+
+      let objectId;
+      try {
+        objectId = new ObjectId(String(templateId || '').trim());
+      } catch {
+        throw new Error('ID do template de consentimento inválido');
+      }
+
+      const existingTemplate = await templatesCollection.findOne({ _id: objectId });
+      if (!existingTemplate) {
+        throw new Error('Template de consentimento não encontrado');
+      }
+
+      this.validateTemplatePayload({
+        ...existingTemplate,
+        ...payload,
+        version: existingTemplate.version,
+        caae: existingTemplate.caae,
+      });
+
+      const permissions = Array.isArray(payload.permissions)
+        ? payload.permissions.map(permission => ({
+            key: permission.key.trim(),
+            label: permission.label.trim(),
+            required: Boolean(permission.required)
+          }))
+        : Array.isArray(existingTemplate.permissions)
+          ? existingTemplate.permissions.map(permission => ({
+              key: String(permission.key || '').trim(),
+              label: String(permission.label || '').trim(),
+              required: Boolean(permission.required)
+            }))
+          : [];
+      this.ensureUniquePermissionKeys(permissions);
+
+      const htmlContent = typeof payload.htmlContent === 'string' && payload.htmlContent.trim()
+        ? payload.htmlContent.trim()
+        : typeof payload.content === 'string' && payload.content.trim()
+          ? payload.content.trim()
+          : String(existingTemplate.htmlContent || existingTemplate.content || '').trim();
+
+      const active = payload.active === undefined ? Boolean(existingTemplate.active) : Boolean(payload.active);
+      const template = ConsentTemplateModel.create({
+        ...existingTemplate,
+        ...payload,
+        title: typeof payload.title === 'string' ? payload.title.trim() : String(existingTemplate.title || '').trim(),
+        htmlContent,
+        content: htmlContent,
+        version: String(existingTemplate.version || 'v1').trim(),
+        caae: typeof existingTemplate.caae === 'string' ? existingTemplate.caae.trim() : '',
+        active,
+        permissions
+      });
+
+      if (template.active) {
+        await templatesCollection.updateMany(
+          { _id: { $ne: objectId }, active: true },
+          { $set: { active: false, updatedAt: new Date() } }
+        );
+      }
+
+      const updatedDocument = {
+        ...existingTemplate,
+        ...template,
+        updatedAt: new Date()
+      };
+
+      await templatesCollection.updateOne(
+        { _id: objectId },
+        {
+          $set: {
+            title: updatedDocument.title,
+            content: updatedDocument.content,
+            htmlContent: updatedDocument.htmlContent,
+            version: updatedDocument.version,
+            caae: updatedDocument.caae,
+            active: updatedDocument.active,
+            permissions: updatedDocument.permissions,
+            updatedAt: updatedDocument.updatedAt
+          }
+        }
+      );
+
+      return {
+        ...updatedDocument,
+        _id: objectId
+      };
+    } catch (error) {
+      logger.error('Erro ao atualizar template de consentimento:', error.message);
+      throw error;
+    }
+  }
+
   async createPolicy(db, payload, options = {}) {
     try {
       const previousPolicyId = options?.previousPolicyId ? String(options.previousPolicyId).trim() : '';
+      const explicitVersionGroupId = options?.versionGroupId ? String(options.versionGroupId).trim() : '';
+      let versionGroupId = explicitVersionGroupId || '';
       const nextVersion = await this.generateNextPolicyVersion(db);
 
       const normalizedPayload = {
         ...payload,
         htmlContent: payload.htmlContent || payload.content,
-        caae: typeof payload.caae === 'string' ? payload.caae.trim() : payload.caae,
+        caae: typeof payload.caae === 'string' ? payload.caae.trim() : '',
         validFrom: payload.validFrom || new Date().toISOString(),
         validTo: payload.validTo,
         version: nextVersion,
@@ -297,6 +424,7 @@ class ConsentService {
       this.ensureUniquePermissionKeys(permissions);
 
       const templatesCollection = await getCollection(db, 'consentTemplates');
+      let previousPolicy = null;
 
       if (previousPolicyId) {
         let previousObjectId;
@@ -306,10 +434,18 @@ class ConsentService {
           throw new Error('ID do TCLE para atualização é inválido');
         }
 
-        const previousPolicy = await templatesCollection.findOne({ _id: previousObjectId });
+        previousPolicy = await templatesCollection.findOne({ _id: previousObjectId });
         if (!previousPolicy) {
           throw new Error('TCLE anterior não encontrado para atualização');
         }
+
+        if (!versionGroupId) {
+          versionGroupId = String(previousPolicy.versionGroupId || previousPolicy._id || previousPolicyId).trim();
+        }
+      }
+
+      if (!versionGroupId) {
+        versionGroupId = crypto.randomUUID();
       }
 
       if (normalizedPayload.active === undefined || normalizedPayload.active === true) {
@@ -324,6 +460,7 @@ class ConsentService {
       const document = {
         ...policy,
         previousPolicyId: previousPolicyId || null,
+        versionGroupId,
         content: policy.htmlContent,
         permissions: permissions,
         htmlContent: policy.htmlContent,
@@ -380,9 +517,12 @@ class ConsentService {
     const limit = Math.max(1, Math.min(100, Number(options.limit) || 10));
     const skip = (page - 1) * limit;
     const search = String(options.search || '').trim();
+    const versionGroupId = String(options.groupId || options.versionGroupId || '').trim();
 
     const filter = {};
-    if (search) {
+    if (versionGroupId) {
+      filter.versionGroupId = versionGroupId;
+    } else if (search) {
       const escaped = search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const regex = new RegExp(escaped, 'i');
       const normalized = search.toLowerCase();

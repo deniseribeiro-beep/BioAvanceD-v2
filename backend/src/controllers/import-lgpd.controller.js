@@ -9,6 +9,12 @@ const logService = require('../services/log.service');
 const logger = require('../utils/logger');
 const { sanitizePatientForLogs } = require('../utils/patientAnonymization');
 const { getCollection } = require('../utils/collectionResolver');
+const {
+  SPECIMEN_TYPES,
+  SAMPLE_ORIGINS,
+  EXTRACTION_PROTOCOLS,
+  MIABIS_QUALITY,
+} = require('../config/constants/specimen.constants');
 
 // Configuração do multer para upload
 const storage = multer.diskStorage({
@@ -777,7 +783,7 @@ class ImportLGPDController {
       }
       
       // Headers do template (incluindo patientID obrigatório)
-      // quality usa legenda MIABIS: 0=Não avaliada, 1=Adequada, 2=Inadequada
+      // quality usa ids MIABIS canônicos
       // locationID e barcode são opcionais - barcode será gerado automaticamente se não fornecido
       const headers = [
         'patientID',
@@ -787,7 +793,7 @@ class ImportLGPDController {
         'barcode', // opcional - gerado automaticamente se vazio
         'registrationDate',
         'quantity',
-        'quality', // MIABIS: 0=Não avaliada, 1=Adequada, 2=Inadequada
+        'quality', // MIABIS: GOOD, COMPROMISED ou UNKNOWN
         'locationID', // opcional - pode ser selecionado após upload
         'linkedProject',
         'currentStatus'
@@ -796,9 +802,9 @@ class ImportLGPDController {
       // Linha de exemplo com valores do banco ou padrão
       const exampleRow = [
         '12345678',
-        sampleTypes.length > 0 ? sampleTypes[0].description : 'Sangue',
-        sampleOrigins.length > 0 ? sampleOrigins[0].description : 'Coleta',
-        extractionProtocols.length > 0 ? extractionProtocols[0].description : 'QIAGEN',
+        sampleTypes.length > 0 ? sampleTypes[0].description : SPECIMEN_TYPES[0].id,
+        sampleOrigins.length > 0 ? sampleOrigins[0].id || sampleOrigins[0].description : SAMPLE_ORIGINS[0].id,
+        extractionProtocols.length > 0 ? extractionProtocols[0].id || extractionProtocols[0].description : EXTRACTION_PROTOCOLS[0].id,
         '', // barcode deixado vazio (opcional - será gerado automaticamente)
         new Date().toISOString().slice(0, 10), // ISO YYYY-MM-DD
         '500.5',
@@ -810,15 +816,15 @@ class ImportLGPDController {
 
       // Adiciona comentários com valores válidos
       const comments = [];
-      comments.push('# Instruções: patientID obrigatório (8 dígitos); barcode e locationID são opcionais; quality usa MIABIS 0,1,2; registrationDate no formato YYYY-MM-DD');
+      comments.push('# Instruções: patientID obrigatório (8 dígitos); barcode e locationID são opcionais; quality usa GOOD, COMPROMISED ou UNKNOWN; registrationDate no formato YYYY-MM-DD');
       if (sampleTypes.length > 0) {
-        comments.push(`# Valores válidos para sampleType: ${sampleTypes.map(t => t.description).join(', ')}`);
+        comments.push(`# Valores válidos para sampleType: ${sampleTypes.map(t => t.id || t.description).join(', ')}`);
       }
       if (sampleOrigins.length > 0) {
-        comments.push(`# Valores válidos para sampleOrigin: ${sampleOrigins.map(o => o.description).join(', ')}`);
+        comments.push(`# Valores válidos para sampleOrigin: ${sampleOrigins.map(o => o.id || o.description).join(', ')}`);
       }
       if (extractionProtocols.length > 0) {
-        comments.push(`# Valores válidos para extractionProtocol: ${extractionProtocols.map(p => p.description).join(', ')}`);
+        comments.push(`# Valores válidos para extractionProtocol: ${extractionProtocols.map(p => p.id || p.description).join(', ')}`);
       }
 
       // CSV deve começar em linha 1 com cabeçalhos (sem comentários antes)
@@ -900,12 +906,12 @@ class ImportLGPDController {
         [],
         ['CAMPOS OBRIGATÓRIOS:'],
         ['• patientID: ID anonimizado de 8 dígitos do paciente (Texto) - Ex: 12345678'],
-        ['• sampleType: Tipo de amostra conforme MIABIS (Texto)'],
-        ['• sampleOrigin: Origem da amostra conforme MIABIS (Texto)'],
-        ['• extractionProtocol: Protocolo de extração conforme MIABIS (Texto)'],
+        ['• sampleType: Tipo de amostra conforme MIABIS (id canônico)'],
+        ['• sampleOrigin: Origem da amostra conforme MIABIS (id canônico)'],
+        ['• extractionProtocol: Protocolo de extração conforme MIABIS (id canônico)'],
         ['• registrationDate: Data de registro no formato DD/MM/YYYY ou YYYY-MM-DD (Data)'],
         ['• quantity: Quantidade em microlitros (µL) - Número decimal maior que zero'],
-        ['• quality: Qualidade conforme escala MIABIS (Número inteiro: 0=Não avaliada, 1=Adequada, 2=Inadequada)'],
+        ['• quality: Qualidade conforme MIABIS (GOOD, COMPROMISED ou UNKNOWN)'],
         ['• linkedProject: Nome do projeto vinculado (Texto)'],
         ['• currentStatus: Status atual - Available, Withdrawn, Expired ou Destroyed'],
         [],
@@ -925,26 +931,22 @@ class ImportLGPDController {
         ['• Líquido Cefalorraquidiano'],
         [],
         ['VALORES ACEITOS PARA sampleOrigin (MIABIS):'],
-        ['• Coleta'],
-        ['• Transferência'],
-        ['• Doação'],
-        ['• Pesquisa'],
+        ['• VENOUS_BLOOD'],
+        ['• CAPILLARY_BLOOD'],
+        ['• ORAL_MUCOSA'],
+        ['• URINE_MIDSTREAM'],
         [],
         ['VALORES ACEITOS PARA extractionProtocol (MIABIS):'],
-        ['• Protocolo A'],
-        ['• Protocolo B'],
-        ['• Protocolo C'],
-        ['• QIAGEN'],
-        ['• Phenol-Chloroform'],
-        ['• Automated'],
-        ['• Ou qualquer protocolo com pelo menos 3 caracteres'],
+        ['• TUBE_EDTA'],
+        ['• TUBE_HEPARIN'],
+        ['• TUBE_SERUM'],
+        ['• FILTER_PAPER'],
         [],
-        ['VALORES ACEITOS PARA quality (ESCALA MIABIS):'],
-        ['• 0 - Não avaliada (Not assessed)'],
-        ['• 1 - Adequada (Suitable)'],
-        ['• 2 - Inadequada (Not suitable)'],
-        ['• IMPORTANTE: Apenas valores 0, 1 ou 2 são aceitos'],
-        ['• Não são aceitos textos como "Alta", "Boa", "Ruim", etc.'],
+        ['VALORES ACEITOS PARA quality (MIABIS):'],
+        ['• GOOD - Adequada / Boa Qualidade'],
+        ['• COMPROMISED - Comprometida (Hemólise/Lipemia)'],
+        ['• UNKNOWN - Desconhecida / Não Avaliada'],
+        ['• IMPORTANTE: Apenas os ids canônicos são aceitos'],
         [],
         ['VALORES ACEITOS PARA currentStatus:'],
         ['• Available (Disponível)'],
@@ -954,13 +956,13 @@ class ImportLGPDController {
         [],
         ['EXEMPLO DE PREENCHIMENTO:'],
         ['patientID: 12345678'],
-        ['sampleType: Sangue'],
-        ['sampleOrigin: Coleta'],
-        ['extractionProtocol: QIAGEN'],
+        ['sampleType: PLASMA'],
+        ['sampleOrigin: VENOUS_BLOOD'],
+        ['extractionProtocol: TUBE_EDTA'],
         ['barcode: BR-2024-001'],
         ['registrationDate: 15/03/2024'],
         ['quantity: 500.5'],
-        ['quality: 1'],
+        ['quality: GOOD'],
         ['locationID: (deixe vazio para selecionar após upload)'],
         ['linkedProject: Projeto Genoma'],
         ['currentStatus: Available'],
@@ -985,7 +987,7 @@ class ImportLGPDController {
       
       // ========== ABA DE DADOS (TEMPLATE) ==========
       // Headers conforme RF004
-      // quality usa legenda MIABIS: 0=Não avaliada, 1=Adequada, 2=Inadequada
+      // quality usa ids MIABIS canônicos
       // barcode é opcional - será gerado automaticamente se não fornecido
       const headers = [
         'patientID',
@@ -995,7 +997,7 @@ class ImportLGPDController {
         'barcode (opcional - será gerado automaticamente se não fornecido)',
         'registrationDate',
         'quantity',
-        'quality (MIABIS 0=Não avaliada, 1=Adequada, 2=Inadequada)',
+        'quality (MIABIS GOOD, COMPROMISED ou UNKNOWN)',
         'locationID (opcional - pode ser selecionado após upload)',
         'linkedProject',
         'currentStatus'
@@ -1004,13 +1006,13 @@ class ImportLGPDController {
       // Linha de exemplo (primeira linha de dados) - usa valores do banco
       const exampleRow = [
         '12345678',              // patientID (8 dígitos)
-        (sampleTypes.length > 0 && sampleTypes[0]?.description) ? sampleTypes[0].description : 'Sangue',                // sampleType
-        (sampleOrigins.length > 0 && sampleOrigins[0]?.description) ? sampleOrigins[0].description : 'Coleta',                // sampleOrigin
-        (extractionProtocols.length > 0 && extractionProtocols[0]?.description) ? extractionProtocols[0].description : 'QIAGEN',                // extractionProtocol
+        (sampleTypes.length > 0 && (sampleTypes[0]?.id || sampleTypes[0]?.description)) ? (sampleTypes[0].id || sampleTypes[0].description) : SPECIMEN_TYPES[0].id,                // sampleType
+        (sampleOrigins.length > 0 && (sampleOrigins[0]?.id || sampleOrigins[0]?.description)) ? (sampleOrigins[0].id || sampleOrigins[0].description) : SAMPLE_ORIGINS[0].id,                // sampleOrigin
+        (extractionProtocols.length > 0 && (extractionProtocols[0]?.id || extractionProtocols[0]?.description)) ? (extractionProtocols[0].id || extractionProtocols[0].description) : EXTRACTION_PROTOCOLS[0].id,                // extractionProtocol
         '',                      // barcode (opcional - deixado vazio para demonstrar geração automática)
         new Date().toLocaleDateString('pt-BR'),            // registrationDate
         '500.5',                 // quantity (µL)
-        '1',                     // quality (ID)
+        MIABIS_QUALITY[0].id,                     // quality (ID)
         '',                      // locationID (opcional - deixado vazio no exemplo)
         'Projeto Genoma',        // linkedProject
         'Available'              // currentStatus
@@ -1029,27 +1031,27 @@ class ImportLGPDController {
         
         if (sampleTypes.length > 0) {
           referenceData.push(['Tipo de Amostra (sampleType):']);
-          referenceData.push(['Descrição']);
+          referenceData.push(['Id']);
           sampleTypes.forEach(type => {
-            referenceData.push([type?.description || type?.name || 'N/A']);
+            referenceData.push([type?.id || type?.description || type?.name || 'N/A']);
           });
           referenceData.push([]);
         }
         
         if (sampleOrigins.length > 0) {
           referenceData.push(['Origem (sampleOrigin):']);
-          referenceData.push(['Descrição']);
+          referenceData.push(['Id']);
           sampleOrigins.forEach(origin => {
-            referenceData.push([origin?.description || origin?.name || 'N/A']);
+            referenceData.push([origin?.id || origin?.description || origin?.name || 'N/A']);
           });
           referenceData.push([]);
         }
         
         if (extractionProtocols.length > 0) {
           referenceData.push(['Protocolo de Extração (extractionProtocol):']);
-          referenceData.push(['Descrição']);
+          referenceData.push(['Id']);
           extractionProtocols.forEach(protocol => {
-            referenceData.push([protocol?.description || protocol?.name || 'N/A']);
+            referenceData.push([protocol?.id || protocol?.description || protocol?.name || 'N/A']);
           });
         }
         

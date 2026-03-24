@@ -116,6 +116,25 @@ class StorageApiService {
   }
 
   /**
+   * Alocar amostra automaticamente na próxima posição disponível da caixa
+   */
+  async autoAssignSampleToBox(sampleId: string, boxId: string): Promise<AllocateResponse> {
+    try {
+      const response = await api.post(
+        `${API_STORAGE_BASE}/allocate/auto`,
+        { sampleId, boxId }
+      );
+      return response.data;
+    } catch (error: any) {
+      return {
+        success: false,
+        error: error.response?.data?.error || 'AUTO_ALLOCATION_ERROR',
+        message: error.response?.data?.message || error.message,
+      };
+    }
+  }
+
+  /**
    * Liberar amostra de uma posição
    */
   async releaseSample(sampleId: string): Promise<ReleaseResponse> {

@@ -7,6 +7,7 @@ const notificationService = require('./notification.service');
 const fhirSyncService = require('./fhir-sync.service');
 const patientBiomarkerTimeseriesService = require('./patientBiomarkerTimeseries.service');
 const biomarkerXaiService = require('./biomarker-xai.service');
+const biomarkerObservationService = require('./biomarker-observation.service');
 const { getCollection } = require('../utils/collectionResolver');
 
 const indexedPatientCollections = new Set();
@@ -16,6 +17,47 @@ const indexedPatientCollections = new Set();
  * RF005 - Cadastro de Paciente com Anonimização LGPD
  */
 class PatientService {
+  async createBiomarkerObservationsFromPatient(db, patient, eventType = 'manual') {
+    if (!db || !patient) return;
+
+    const patientID = String(patient.patientID || '').trim();
+    if (!/^\d{8}$/.test(patientID)) return;
+
+    const collectedAt = patient.updatedAt || patient.createdAt || new Date();
+
+    const observationInputs = [
+      {
+        biomarkerType: 'alphaGal',
+        value: patient.alphaGal,
+        unit: 'U/mL'
+      },
+      {
+        biomarkerType: 'lysoGb3',
+        value: patient.lysoGb3,
+        unit: 'ng/mL'
+      }
+    ];
+
+    for (const input of observationInputs) {
+      if (input.value === undefined || input.value === null || input.value === '') continue;
+      const numericValue = Number(input.value);
+      if (!Number.isFinite(numericValue) || numericValue < 0) continue;
+
+      await biomarkerObservationService.createObservation(db, {
+        patientID,
+        biomarkerType: input.biomarkerType,
+        value: numericValue,
+        unit: input.unit,
+        collectedAt,
+        status: 'final',
+        source: 'patient',
+        eventType,
+        linkedResourceType: 'Patient',
+        linkedResourceId: patientID
+      });
+    }
+  }
+
   getEncryptedFieldMap() {
     return {
       alphaGal: 'alphaGalEncrypted',
@@ -244,17 +286,23 @@ class PatientService {
 
     if (!isDeceased) {
       payload.representativeName = null;
+      payload.representativeEmail = null;
       payload.representativeCpf = null;
       payload.representativePhone = null;
       return;
     }
 
     const representativeName = typeof payload.representativeName === 'string' ? payload.representativeName.trim() : '';
+    const representativeEmail = this.normalizeEmail(payload.representativeEmail);
     const representativeCpf = this.normalizeRepresentativeCpf(payload.representativeCpf);
     const representativePhone = this.normalizeRepresentativePhone(payload.representativePhone);
 
-    if (!representativeName || !representativeCpf || !representativePhone) {
-      throw new Error('Para paciente falecido, nome, CPF e telefone do representante legal são obrigatórios');
+    if (!representativeName || !representativeEmail || !representativeCpf || !representativePhone) {
+      throw new Error('Para paciente falecido, nome, e-mail, CPF e telefone do representante legal são obrigatórios');
+    }
+
+    if (!PatientModel.isValidEmail(representativeEmail)) {
+      throw new Error('Email do representante legal inválido');
     }
 
     if (representativeCpf.length !== 11) {
@@ -266,6 +314,7 @@ class PatientService {
     }
 
     payload.representativeName = representativeName;
+    payload.representativeEmail = representativeEmail;
     payload.representativeCpf = representativeCpf;
     payload.representativePhone = representativePhone;
   }
@@ -502,15 +551,17 @@ class PatientService {
 
       const result = await patientsCollection.insertOne(persistedPatient);
 
-      try {
-        const consentLink = notificationService.buildConsentLink(patient, consentMetadata.token);
-        await notificationService.enqueueConsentNotification(patientData, consentLink);
-        await patientsCollection.updateOne(
-          { _id: result.insertedId },
-          { $set: { consentNotifiedAt: new Date() } }
-        );
-      } catch (notifyError) {
-        logger.error('Erro ao enfileirar notificações de consentimento:', notifyError.message);
+      if (options.skipConsentNotification !== true) {
+        try {
+          const consentLink = notificationService.buildConsentLink(patient, consentMetadata.token);
+          await notificationService.enqueueConsentNotification(patientData, consentLink);
+          await patientsCollection.updateOne(
+            { _id: result.insertedId },
+            { $set: { consentNotifiedAt: new Date() } }
+          );
+        } catch (notifyError) {
+          logger.error('Erro ao enfileirar notificações de consentimento:', notifyError.message);
+        }
       }
 
       // Log sanitizado (sem dados sensíveis)
@@ -523,13 +574,22 @@ class PatientService {
       });
 
       await this.syncPatientPhoneToGraph(options?.neo4jDriver, patient.patientID, patient.phone);
-      await patientBiomarkerTimeseriesService.writePatientBiomarkers({
-        patient: {
+
+      if (options.skipBiomarkerArtifacts !== true) {
+        await patientBiomarkerTimeseriesService.writePatientBiomarkers({
+          db,
+          patient: {
+            ...patient,
+            _id: result.insertedId
+          },
+          eventType: 'create'
+        });
+
+        await this.createBiomarkerObservationsFromPatient(db, {
           ...patient,
           _id: result.insertedId
-        },
-        eventType: 'create'
-      });
+        }, 'create');
+      }
 
       // Retorna paciente com ID gerado
       return {
@@ -853,9 +913,12 @@ class PatientService {
       }
 
       await patientBiomarkerTimeseriesService.writePatientBiomarkers({
+        db,
         patient: decryptedUpdatedPatient,
         eventType: 'update'
       });
+
+      await this.createBiomarkerObservationsFromPatient(db, decryptedUpdatedPatient, 'update');
 
       return { success: true };
     } catch (error) {

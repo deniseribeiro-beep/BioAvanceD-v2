@@ -1,6 +1,11 @@
 // Implementação dos métodos de validação do diagrama UML
 
 import { Patient, Sample, Temperature, Policy, Log, SpecificUser } from '../types/models';
+import {
+  SPECIMEN_TYPE_IDS,
+  SAMPLE_ORIGIN_IDS,
+  EXTRACTION_PROTOCOL_IDS,
+} from '../config/constants/specimen.constants';
 
 // ========== PATIENT VALIDATIONS ==========
 
@@ -56,18 +61,7 @@ export function validateGeneticVariant(geneticVariant: string): boolean {
  * Implementa: Sample.validateSampleType(sampleType): Boolean
  */
 export function validateSampleType(sampleType: string): boolean {
-  const validTypes = [
-    'Sangue',
-    'Urina',
-    'Saliva',
-    'Tecido',
-    'DNA',
-    'RNA',
-    'Plasma',
-    'Soro',
-    'Líquido Cefalorraquidiano',
-  ];
-  return validTypes.includes(sampleType);
+  return SPECIMEN_TYPE_IDS.includes(sampleType);
 }
 
 /**
@@ -94,15 +88,7 @@ export function validateResponsibleName(withdrawalResponsible: string): boolean 
  * Implementa: Sample.validateExtractionType(extractionProtocol): Boolean
  */
 export function validateExtractionType(extractionProtocol: string): boolean {
-  const validProtocols = [
-    'Protocolo A',
-    'Protocolo B',
-    'Protocolo C',
-    'QIAGEN',
-    'Phenol-Chloroform',
-    'Automated',
-  ];
-  return validProtocols.includes(extractionProtocol) || extractionProtocol.length >= 3;
+  return EXTRACTION_PROTOCOL_IDS.includes(extractionProtocol);
 }
 
 /**
@@ -125,8 +111,7 @@ export function validateSampleDestination(sampleDestination: string): boolean {
  * Implementa: Sample.validateSampleOrigin(sampleOrigin): Boolean
  */
 export function validateSampleOrigin(sampleOrigin: string): boolean {
-  const validOrigins = ['Coleta', 'Transferência', 'Doação', 'Pesquisa'];
-  return validOrigins.includes(sampleOrigin) || sampleOrigin.length >= 3;
+  return SAMPLE_ORIGIN_IDS.includes(sampleOrigin);
 }
 
 /**

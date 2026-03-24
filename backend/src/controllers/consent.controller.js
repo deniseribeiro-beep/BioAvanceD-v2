@@ -121,7 +121,8 @@ class ConsentController {
       const page = Number(req.query.page) || 1;
       const limit = Number(req.query.limit) || 10;
       const search = String(req.query.search || '');
-      const result = await consentService.getPoliciesHistory(db, { page, limit, search });
+      const groupId = String(req.query.groupId || req.query.versionGroupId || '');
+      const result = await consentService.getPoliciesHistory(db, { page, limit, search, groupId });
 
       return res.status(200).json({
         success: true,
@@ -254,6 +255,85 @@ class ConsentController {
       return res.status(400).json({
         success: false,
         error: 'Erro ao criar template de consentimento',
+        message: error.message
+      });
+    }
+  }
+
+  async getTemplateById(req, res) {
+    try {
+      const db = req.app.locals.db;
+      if (!db) {
+        return res.status(503).json({
+          success: false,
+          error: 'Banco de dados não disponível'
+        });
+      }
+
+      const template = await consentService.getTemplateById(db, req.params.id);
+      if (!template) {
+        return res.status(404).json({
+          success: false,
+          error: 'Template de consentimento não encontrado'
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        data: template
+      });
+    } catch (error) {
+      logger.error('Erro ao buscar template de consentimento:', error.message);
+      return res.status(400).json({
+        success: false,
+        error: 'Erro ao buscar template de consentimento',
+        message: error.message
+      });
+    }
+  }
+
+  async updateTemplate(req, res) {
+    try {
+      const db = req.app.locals.db;
+      if (!db) {
+        return res.status(503).json({
+          success: false,
+          error: 'Banco de dados não disponível'
+        });
+      }
+
+      const template = await consentService.updateTemplate(db, req.params.id, req.body || {});
+
+      if (req.user) {
+        const auditLogger = require('../utils/auditLogger');
+        auditLogger.init(db);
+        await auditLogger.log({
+          action: 'UPDATE',
+          entity: 'ConsentTemplate',
+          entityID: template._id.toString(),
+          result: 'success',
+          severity: 'info',
+          message: `Template de consentimento atualizado (${template.version})`,
+          payload: {
+            title: template.title,
+            version: template.version,
+            active: template.active
+          },
+          req: req,
+          module: 'Consentimento'
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: 'Template de consentimento atualizado com sucesso',
+        data: template
+      });
+    } catch (error) {
+      logger.error('Erro ao atualizar template de consentimento:', error.message);
+      return res.status(400).json({
+        success: false,
+        error: 'Erro ao atualizar template de consentimento',
         message: error.message
       });
     }

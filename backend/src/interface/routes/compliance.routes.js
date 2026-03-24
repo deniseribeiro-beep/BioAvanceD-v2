@@ -10,6 +10,7 @@ const { authenticate } = require('../../infrastructure/middleware/auth');
 const { requireRole } = require('../../infrastructure/middleware/rbac');
 const complianceReportService = require('../../services/complianceReport.service');
 const securityAlertsService = require('../../services/securityAlerts.service');
+const biomarkerIntegrityService = require('../../services/biomarker-integrity.service');
 const logger = require('../../utils/logger');
 
 /**
@@ -244,6 +245,38 @@ router.get('/scopes', authenticate, async (req, res) => {
     return res.status(500).json({
       success: false,
       error: 'Erro ao buscar escopos',
+      message: error.message
+    });
+  }
+});
+
+/**
+ * GET /api/compliance/verify-biomarker/:id
+ * Verifica prova criptográfica (hash + Merkle) de biomarcador persistido
+ */
+router.get('/verify-biomarker/:id', authenticate, requireRole(4), async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    if (!db) {
+      return res.status(503).json({
+        success: false,
+        error: 'Banco de dados não disponível'
+      });
+    }
+
+    const verification = await biomarkerIntegrityService.verifyBiomarkerById(db, req.params.id);
+
+    return res.status(200).json({
+      success: true,
+      data: verification
+    });
+  } catch (error) {
+    logger.error('[COMPLIANCE] Erro ao verificar integridade de biomarcador:', error.message || error);
+
+    const statusCode = error?.statusCode || 500;
+    return res.status(statusCode).json({
+      success: false,
+      error: 'Erro ao verificar integridade de biomarcador',
       message: error.message
     });
   }

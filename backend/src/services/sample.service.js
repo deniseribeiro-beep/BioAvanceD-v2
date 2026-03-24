@@ -3,7 +3,11 @@ const SampleMovementModel = require('../models/SampleMovement');
 const logger = require('../utils/logger');
 const { validatePatientID } = require('../utils/patientAnonymization');
 const { generateUniqueBarcode } = require('../utils/barcodeGenerator');
-const { generateBarcodeSymbologies, parseScannedBarcode } = require('../utils/barcodeSymbology');
+const {
+  generateBarcodeSymbologies,
+  generateIndustrialBarcodeArtifacts,
+  parseScannedBarcode
+} = require('../utils/barcodeSymbology');
 const { generateUniqueSampleID } = require('../utils/sampleIDGenerator');
 const { appendMovementWithHashChain } = require('../utils/sampleMovementLedger');
 const fhirSyncService = require('./fhir-sync.service');
@@ -26,8 +30,6 @@ class SampleService {
         throw validationError;
       }
       
-      // Se for import, permite locationID null (será atribuído depois)
-      const isImport = options.isImport === true;
       const samplesCollection = await getCollection(db, 'samples');
 
       // VALIDAÇÃO DE ID DE PACIENTE (LGPD)
@@ -71,13 +73,18 @@ class SampleService {
         throw new Error('Quantidade deve ser um número maior que zero (µL)');
       }
 
-      // Valida locationID: obrigatório para criação manual, opcional para import
-      if (!isImport && (!sampleData.locationID || sampleData.locationID === null)) {
-        throw new Error('locationID é obrigatório. A amostra deve estar vinculada a uma localização.');
-      }
-      
-      // Se locationID foi fornecido, valida se existe
-      if (sampleData.locationID !== undefined && sampleData.locationID !== null) {
+      // Se locationID foi fornecido, valida se existe e normaliza para número
+      if (sampleData.locationID !== undefined && sampleData.locationID !== null && sampleData.locationID !== '') {
+        const normalizedLocationID = typeof sampleData.locationID === 'string'
+          ? Number(sampleData.locationID.trim())
+          : Number(sampleData.locationID);
+
+        if (!Number.isFinite(normalizedLocationID)) {
+          throw new Error('locationID inválido. Informe um número válido ou omita o campo para criar a amostra sem armazenagem.');
+        }
+
+        sampleData.locationID = normalizedLocationID;
+
         const locationsCollection = db.collection('locations');
         const location = await locationsCollection.findOne({ locationID: sampleData.locationID });
         if (!location) {
@@ -141,6 +148,9 @@ class SampleService {
       }
 
       sampleData.barcodeSymbologies = generateBarcodeSymbologies(sampleData.barcode);
+      sampleData.barcodeIndustrial = await generateIndustrialBarcodeArtifacts(sampleData.barcode, {
+        includePayload: false
+      });
 
       const sample = SampleModel.create(sampleData);
 
@@ -519,6 +529,17 @@ class SampleService {
       logger.error('Erro ao buscar arquivos de analise da amostra:', error.message);
       throw error;
     }
+  }
+
+  async getBarcodeIndustrialAssets(barcodeValue, options = {}) {
+    const parsedBarcode = parseScannedBarcode(barcodeValue);
+    if (!parsedBarcode.isValid) {
+      throw new Error('Código de barras inválido para renderização industrial');
+    }
+
+    return generateIndustrialBarcodeArtifacts(parsedBarcode.normalizedValue, {
+      includePayload: options.includePayload !== false
+    });
   }
 
   async returnSample(db, sampleID, returnData, auditInfo = {}) {

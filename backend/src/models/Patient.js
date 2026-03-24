@@ -52,10 +52,22 @@ class PatientModel {
       errors.push('Template de consentimento (consentTemplateId) é obrigatório');
     }
 
+    const isDeceased = data.isDeceased === true;
+
     if (!data.email || typeof data.email !== 'string' || data.email.trim().length === 0) {
-      errors.push('Email (email) é obrigatório');
+      if (!isDeceased) {
+        errors.push('Email (email) é obrigatório');
+      }
     } else if (!PatientModel.isValidEmail(data.email)) {
       errors.push('Email (email) inválido');
+    }
+
+    if (isDeceased) {
+      if (!data.representativeEmail || typeof data.representativeEmail !== 'string' || data.representativeEmail.trim().length === 0) {
+        errors.push('Email do representante legal (representativeEmail) é obrigatório');
+      } else if (!PatientModel.isValidEmail(data.representativeEmail)) {
+        errors.push('Email do representante legal (representativeEmail) inválido');
+      }
     }
 
     if (data.phone !== undefined && data.phone !== null) {
@@ -177,11 +189,19 @@ class PatientModel {
       errors.push(`Código CID (icdCode) deve ser um texto. Valor recebido: "${data.icdCode}" (tipo: ${typeof data.icdCode})`);
     }
 
+    if (data.orphaCode !== undefined && data.orphaCode !== null && typeof data.orphaCode !== 'string') {
+      errors.push(`Código ORPHA (orphaCode) deve ser um texto. Valor recebido: "${data.orphaCode}" (tipo: ${typeof data.orphaCode})`);
+    }
+
+    if (data.omimCode !== undefined && data.omimCode !== null && typeof data.omimCode !== 'string') {
+      errors.push(`Código OMIM (omimCode) deve ser um texto. Valor recebido: "${data.omimCode}" (tipo: ${typeof data.omimCode})`);
+    }
+
     if (data.icdReference !== undefined && data.icdReference !== null) {
       if (typeof data.icdReference !== 'object' || Array.isArray(data.icdReference)) {
         errors.push('icdReference deve ser um objeto válido');
       } else {
-        const referenceFields = ['cidId', 'Codigo_Tabulacao', 'Codigos_CID10', 'Descricao'];
+        const referenceFields = ['cidId', 'Codigo_Tabulacao', 'Codigos_CID10', 'Descricao', 'ORPHA', 'OMIM'];
         referenceFields.forEach((field) => {
           if (data.icdReference[field] !== undefined && data.icdReference[field] !== null && typeof data.icdReference[field] !== 'string') {
             errors.push(`icdReference.${field} deve ser string`);
@@ -266,10 +286,13 @@ class PatientModel {
       unitAcronym: patientData.unitAcronym || null,
       isDeceased: Boolean(patientData.isDeceased),
       representativeName: patientData.representativeName || null,
+      representativeEmail: patientData.representativeEmail || null,
       representativeCpf: patientData.representativeCpf || null,
       representativePhone: PatientModel.normalizePhone(patientData.representativePhone),
       diagnosticHypothesis: patientData.diagnosticHypothesis || null,
       icdCode: patientData.icdCode || null, // String conforme dicionário
+      orphaCode: patientData.orphaCode || patientData.orpha_code || null,
+      omimCode: patientData.omimCode || patientData.omim_code || null,
       icdReference: patientData.icdReference || null,
       hypertension: patientData.hypertension || false,
       obesity: patientData.obesity || false,

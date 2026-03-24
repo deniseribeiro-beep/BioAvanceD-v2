@@ -62,25 +62,33 @@ export function hasRoleAccess(roleName: RoleName | undefined, requiredRole?: Rol
  */
 export function canRoleAccessRoute(roleName: RoleName | undefined, route: string): boolean {
   if (!roleName) return false;
-  
-  // Rotas que requerem Administrador (mas não /user/security ou /security/mfa-setup)
-  const adminRoutes = ['/users', '/access', '/backup'];
-  // Verifica se é /security mas não /user/security nem /security/mfa-setup
-  // /security/mfa-setup é permitido para todos (configuração pessoal de MFA)
+
+  if (route === '/next/intake' || route === '/pacientes/novo-atendimento') {
+    return roleName === 'Administrador' || roleName === 'Coordenador' || roleName === 'Técnico';
+  }
+
   if (route === '/security' || (route.includes('/security') && !route.includes('/user/security') && !route.includes('/security/mfa-setup'))) {
     return roleName === 'Administrador';
   }
-  if (adminRoutes.some(r => route.includes(r))) {
+
+  const adminRoutes = ['/users', '/access', '/backup', '/system-management', '/admin'];
+  if (adminRoutes.some((restrictedRoute) => route === restrictedRoute || route.startsWith(`${restrictedRoute}/`))) {
     return roleName === 'Administrador';
   }
-  
-  // Rotas que requerem Coordenador ou Administrador
+
   const coordinatorRoutes = ['/reports', '/logs'];
-  if (coordinatorRoutes.some(r => route.includes(r))) {
+  if (coordinatorRoutes.some((restrictedRoute) => route === restrictedRoute || route.startsWith(`${restrictedRoute}/`))) {
     return roleName === 'Coordenador' || roleName === 'Administrador';
   }
-  
-  // Rotas básicas (todas as roles) - incluindo /user/security
+
+  if (['/facility-management', '/quality-descriptions', '/import', '/samples/withdrawal-return', '/assistant', '/patients', '/samples', '/results', '/dashboard'].includes(route)) {
+    return true;
+  }
+
+  if (route === '/user/security' || route === '/security/mfa-setup') {
+    return true;
+  }
+
   return true;
 }
 
@@ -113,6 +121,11 @@ export function getAllowedRoutes(roleName: RoleName | undefined): string[] {
     '/quality-descriptions',
     '/import',
     '/assistant',
+    '/next/intake',
+    '/pacientes/novo-atendimento',
+    '/samples/withdrawal-return',
+    '/user/security',
+    '/security/mfa-setup',
   ];
   
   if (roleName === 'Administrador' || roleName === 'Coordenador') {
@@ -120,11 +133,8 @@ export function getAllowedRoutes(roleName: RoleName | undefined): string[] {
   }
   
   if (roleName === 'Administrador') {
-    allRoutes.push('/users', '/access', '/security', '/backup');
+    allRoutes.push('/system-management', '/users', '/access', '/security', '/backup', '/admin/dicionario');
   }
-  
-  // Todos os usuários podem acessar sua própria página de segurança e configurar MFA
-  allRoutes.push('/user/security', '/security/mfa-setup');
   
   if (roleName === 'Usuário Externo') {
     return ['/dashboard', '/reports', '/assistant', '/user/security', '/security/mfa-setup'];

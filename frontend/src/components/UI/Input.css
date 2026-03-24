@@ -7,41 +7,42 @@
 .input-label {
   font-size: 0.875rem;
   font-weight: 500;
-  color: var(--text);
+  color: #334155;
 }
 
 .input {
   padding: 0.625rem 0.75rem;
-  border: 1px solid var(--border);
+  border: 1px solid #cbd5e1;
   border-radius: 0.5rem;
   font-size: 0.875rem;
-  color: var(--text);
-  background-color: var(--surface);
-  transition: border-color 0.2s;
+  color: #0f172a;
+  background-color: #ffffff;
+  transition: border-color 0.2s, box-shadow 0.2s, background-color 0.2s;
   outline: none;
 }
 
 .input:focus {
-  border-color: var(--primary);
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
 }
 
 .input-error {
-  border-color: var(--danger);
+  border-color: #dc2626;
 }
 
 /* Validação HTML5 nativa - campos inválidos */
 .input:invalid:not(:focus):not(:placeholder-shown) {
-  border-color: var(--danger);
+  border-color: #dc2626;
 }
 
 .input:invalid:focus {
-  border-color: var(--danger);
+  border-color: #dc2626;
   box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.1);
 }
 
 /* Validação HTML5 nativa - campos válidos */
 .input:valid:not(:placeholder-shown) {
-  border-color: var(--success);
+  border-color: #059669;
 }
 
 /* Remove a validação visual padrão do navegador para campos type="email" */
@@ -55,12 +56,12 @@
 
 .input-error-message {
   font-size: 0.75rem;
-  color: var(--danger);
+  color: #b91c1c;
 }
 
 .input-helper-text {
   font-size: 0.75rem;
-  color: var(--text-light);
+  color: #64748b;
   margin-top: 0.25rem;
 }
 

@@ -212,8 +212,8 @@ export const patientService = {
 };
 
 export const cidService = {
-  search: (term: string, limit = 10) => api.get<{ success: boolean; data: CidEntry[] }>('/cids/search', {
-    params: { q: term, limit }
+  search: (term: string, limit = 10, page = 1) => api.get<{ success: boolean; data: CidEntry[]; pagination?: { page: number; limit: number; total: number; totalPages: number; hasNext: boolean; hasPrev: boolean; query?: string } }>('/cids/search', {
+    params: { q: term, limit, page }
   })
 };
 
@@ -618,6 +618,18 @@ export const authService = {
 
 // ========== IMPORT SERVICES ==========
 export const importService = {
+  batchImport: (file: File) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    return api.post('/import/batch', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    });
+  },
+
+  getBatchImportStatus: (jobId: string) => api.get(`/import/batch/${jobId}`),
+
   // Método síncrono (mantido para compatibilidade)
   uploadFile: (file: File, dataType: string) => {
     const formData = new FormData();
@@ -696,11 +708,13 @@ export const assistantService = {
 export const consentService = {
   createTemplate: (data: Partial<ConsentTemplate>) => api.post<ConsentTemplate>('/consent-templates', data),
   getActiveTemplate: () => api.get<{ success: boolean; data: ConsentTemplate }>('/consent-templates/active'),
+  getTemplateById: (id: string) => api.get<{ success: boolean; data: ConsentTemplate }>(`/consent-templates/${id}`),
+  updateTemplate: (id: string, data: Partial<ConsentTemplate>) => api.put<{ success: boolean; data: ConsentTemplate }>(`/consent-templates/${id}`, data),
   createPolicy: (data: Partial<ConsentPolicy>) => api.post<ConsentPolicy>('/consent-policies', data),
   updatePolicy: (id: string, data: Partial<ConsentPolicy>) => api.put<{ success: boolean; data: ConsentPolicy }>(`/consent-policies/${id}`, data),
   getActivePolicy: () => api.get<{ success: boolean; data: ConsentPolicy }>('/consent-policies/active'),
   getActivePoliciesWithCaae: () => api.get<{ success: boolean; data: ConsentPolicy[] }>('/consent-policies/active-with-caae'),
-  getPoliciesHistory: (params?: { page?: number; limit?: number; search?: string }) => api.get<{ success: boolean; data: ConsentPolicy[]; pagination?: { page: number; limit: number; total: number; totalPages: number } }>('/consent-policies/history', { params }),
+  getPoliciesHistory: (params?: { page?: number; limit?: number; search?: string; groupId?: string }) => api.get<{ success: boolean; data: ConsentPolicy[]; pagination?: { page: number; limit: number; total: number; totalPages: number } }>('/consent-policies/history', { params }),
   getAllPolicies: () => api.get<{ success: boolean; data: ConsentPolicy[] }>('/consent-policies'),
   createPatientConsent: (data: {
     patientId: string;

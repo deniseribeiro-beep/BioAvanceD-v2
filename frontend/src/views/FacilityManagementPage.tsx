@@ -1,32 +1,62 @@
 import { useState, useEffect, useMemo } from 'react';
+import { useLanguage } from '../contexts/LanguageContext';
 import { useSearchParams } from 'react-router-dom';
 import Card from '../components/UI/Card';
 import Table from '../components/UI/Table';
 import Button from '../components/UI/Button';
 import Modal from '../components/UI/Modal';
 import Input from '../components/UI/Input';
-import { Plus, Edit, Trash2, Radio, AlertCircle, CheckCircle, Box, MapPin, Thermometer, Radio as RadioIcon, Shield, Package } from 'lucide-react';
+import { Plus, Edit, Trash2, Radio, AlertCircle, CheckCircle, Box, Thermometer, Radio as RadioIcon, Shield, Download, Filter, X } from 'lucide-react';
+import { TrendingUp, TrendingDown, Minus } from 'lucide-react';
 import { Equipment, Location, Temperature, Sensor, Policy } from '../types/models';
 import { useEquipment } from '../hooks/useEquipment';
 import { useLocations } from '../hooks/useLocations';
 import { useTemperature } from '../hooks/useTemperature';
 import { useSensors } from '../hooks/useSensors';
 import { usePolicies } from '../hooks/usePolicies';
-import { useSamples } from '../hooks/useSamples';
 import { validateReading, validateTemperatureUnit, generateAlert, validateThresholds } from '../utils/validations';
 import { CryoBoxGrid } from '../components/CryoBoxGrid';
-import { StorageTree } from '../components/StorageTree';
-import { SampleLocator } from '../components/SampleLocator';
 import './FacilityManagementPage.css';
 
-type TabType = 'equipment' | 'locations' | 'temperature' | 'sensors' | 'policies' | 'storage';
+type TabType = 'equipment' | 'temperature' | 'history' | 'sensors' | 'policies';
+
+type HistoryLogEntry = {
+  id: string;
+  timestamp: string;
+  sensorName: string;
+  temperature: number;
+  status: string;
+  validationHash: string;
+};
+
+async function buildValidationHash(payload: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const digest = await globalThis.crypto.subtle.digest('SHA-256', encoder.encode(payload));
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
+}
 
 export default function FacilityManagementPage() {
+  const { t } = useLanguage();
   const [searchParams, setSearchParams] = useSearchParams();
   const tabParam = searchParams.get('tab') as TabType | null;
-  const validTabs: TabType[] = ['equipment', 'locations', 'temperature', 'sensors', 'policies', 'storage'];
+  const validTabs: TabType[] = ['equipment', 'temperature', 'history', 'sensors', 'policies'];
   const initialTab = (tabParam && validTabs.includes(tabParam)) ? tabParam : 'equipment';
   const [activeTab, setActiveTab] = useState<TabType>(initialTab);
+  const [sensorSnapshot, setSensorSnapshot] = useState({
+    sensor1: -80.2,
+    sensor2: -79.6,
+    sensor3: -81.1,
+  });
+  const [telemetryData, setTelemetryData] = useState([
+    { time: '10:00', temp: -80.1 },
+    { time: '10:05', temp: -79.5 },
+    { time: '10:10', temp: -80.4 },
+    { time: '10:15', temp: -79.8 },
+    { time: '10:20', temp: -80.7 },
+  ]);
+  const [historyLog, setHistoryLog] = useState<HistoryLogEntry[]>([]);
 
   useEffect(() => {
     if (tabParam && validTabs.includes(tabParam)) {
@@ -34,21 +64,65 @@ export default function FacilityManagementPage() {
     }
   }, [tabParam]);
 
+  useEffect(() => {
+    const interval = setInterval(() => {
+      void (async () => {
+        const nextSensor1 = Number((-80 + (Math.random() * 4 - 2)).toFixed(1));
+        const nextSensor2 = Number((-80 + (Math.random() * 4 - 2)).toFixed(1));
+        const nextSensor3 = Number((-80 + (Math.random() * 4 - 2)).toFixed(1));
+        const nextAverage = Number(((nextSensor1 + nextSensor2 + nextSensor3) / 3).toFixed(1));
+        const chartTime = new Date().toLocaleTimeString('pt-BR', { hour12: false, hour: '2-digit', minute: '2-digit' });
+        const timestamp = new Date().toISOString();
+
+        const logs = await Promise.all([
+          { sensorName: 'Sensor 1', temperature: nextSensor1 },
+          { sensorName: 'Sensor 2', temperature: nextSensor2 },
+          { sensorName: 'Sensor 3', temperature: nextSensor3 },
+        ].map(async (entry) => {
+          const validationHash = await buildValidationHash(
+            `${entry.sensorName}|${timestamp}|${entry.temperature.toFixed(1)}|${entry.temperature > -70 ? 'Alerta' : 'Normal'}`
+          );
+
+          return {
+            id: globalThis.crypto?.randomUUID?.() || `${entry.sensorName}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+            timestamp,
+            sensorName: entry.sensorName,
+            temperature: entry.temperature,
+            status: entry.temperature > -70 ? 'Alerta' : 'Normal',
+            validationHash,
+          };
+        }));
+
+        setSensorSnapshot({
+          sensor1: nextSensor1,
+          sensor2: nextSensor2,
+          sensor3: nextSensor3,
+        });
+
+        setTelemetryData((current) => [...current.slice(-19), { time: chartTime, temp: nextAverage }]);
+        setHistoryLog((prev) => [...logs, ...prev].slice(0, 100));
+      })().catch((error) => {
+        console.error('Falha ao gerar hash de validação da leitura:', error);
+      });
+    }, 2000);
+
+    return () => clearInterval(interval);
+  }, []);
+
   const tabs = [
-    { id: 'equipment' as TabType, label: 'Equipamentos', icon: Box },
-    { id: 'locations' as TabType, label: 'Localizações', icon: MapPin },
-    { id: 'temperature' as TabType, label: 'Controle de Temperatura', icon: Thermometer },
-    { id: 'sensors' as TabType, label: 'Sensores', icon: RadioIcon },
-    { id: 'policies' as TabType, label: 'Políticas de Temperatura', icon: Shield },
-    { id: 'storage' as TabType, label: 'Armazenagem Física', icon: Package },
+    { id: 'equipment' as TabType, label: t('facility.tabs.equipment', 'Equipamentos'), icon: Box },
+    { id: 'temperature' as TabType, label: t('facility.tabs.temperature', 'Controle de Temperatura'), icon: Thermometer },
+    { id: 'history' as TabType, label: t('facility.tabs.history', 'Histórico de Leituras'), icon: AlertCircle },
+    { id: 'sensors' as TabType, label: t('facility.tabs.sensors', 'Sensores'), icon: RadioIcon },
+    { id: 'policies' as TabType, label: t('facility.tabs.policies', 'Políticas de Temperatura'), icon: Shield },
   ];
 
   return (
-    <div className="page facility-management-page">
+    <div className="page facility-management-page flex flex-col md:flex-row w-full min-w-0">
       <div className="page-header">
         <div>
-          <h1 className="page-title">Gerenciamento de Instalações</h1>
-          <p className="page-subtitle">Gerenciamento integrado de equipamentos, localizações, temperatura, sensores e políticas</p>
+          <h1 className="page-title">{t('facility.title', 'Gerenciamento de Instalações')}</h1>
+          <p className="page-subtitle">{t('facility.subtitle', 'Gerenciamento integrado de equipamentos, temperatura, sensores e políticas')}</p>
         </div>
       </div>
 
@@ -71,13 +145,19 @@ export default function FacilityManagementPage() {
         })}
       </div>
 
-      <div className="facility-tab-content">
+      <div className="facility-tab-content flex-1 min-w-0 overflow-hidden">
         {activeTab === 'equipment' && <EquipmentSection />}
-        {activeTab === 'locations' && <LocationsSection />}
-        {activeTab === 'temperature' && <TemperatureSection />}
+        {activeTab === 'temperature' && (
+          <TemperatureSection
+            sensorSnapshot={sensorSnapshot}
+            telemetryData={telemetryData}
+          />
+        )}
+        {activeTab === 'history' && (
+          <HistorySection historyLog={historyLog} />
+        )}
         {activeTab === 'sensors' && <SensorsSection />}
         {activeTab === 'policies' && <PoliciesSection />}
-        {activeTab === 'storage' && <StorageSection />}
       </div>
     </div>
   );
@@ -85,108 +165,223 @@ export default function FacilityManagementPage() {
 
 // Seção de Equipamentos
 function EquipmentSection() {
-  const { equipment, loading, error, createEquipment, updateEquipment, deleteEquipment, loadEquipment } = useEquipment();
-  const [isModalOpen, setIsModalOpen] = useState(false);
+  const { loading, error, createEquipment, updateEquipment, deleteEquipment, loadEquipment } = useEquipment();
+  const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingEquipment, setEditingEquipment] = useState<Equipment | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+
+  const mockEquipments = [
+    {
+      equipmentID: 1,
+      equipmentDescription: 'Freezer Ultra Baixo',
+      model: 'Thermo Scientific TSX',
+      serialNumber: 'TSX-9921',
+      purchaseDate: '2023-05-15',
+    },
+    {
+      equipmentID: 2,
+      equipmentDescription: 'Tanque de Nitrogênio',
+      model: 'CryoPlus 4',
+      serialNumber: 'CP4-102',
+      purchaseDate: '2024-01-10',
+    },
+    {
+      equipmentID: 3,
+      equipmentDescription: 'Refrigerador Clínico',
+      model: 'B Medical Systems',
+      serialNumber: 'BMS-55',
+      purchaseDate: '2023-08-22',
+    },
+  ];
+
+  const totalPages = Math.max(1, Math.ceil(mockEquipments.length / pageSize));
+  const paginatedEquipment = useMemo(() => {
+    const startIndex = (currentPage - 1) * pageSize;
+    return mockEquipments.slice(startIndex, startIndex + pageSize);
+  }, [currentPage, pageSize]);
+  const equipmentHeaders = ['ID', 'Descrição', 'Modelo', 'Número de Série', 'Data da Compra', 'Ações'];
+
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
+
+  const openNewEquipmentForm = () => {
+    setEditingEquipment(null);
+    setIsFormOpen(true);
+  };
+
+  const openEditEquipmentForm = (equipmentItem: Equipment) => {
+    const equipmentToEdit = { ...equipmentItem, _id: (equipmentItem as any)._id || undefined };
+    setEditingEquipment(equipmentToEdit);
+    setIsFormOpen(true);
+  };
+
+  const closeEquipmentForm = () => {
+    setIsFormOpen(false);
+    setEditingEquipment(null);
+  };
 
   return (
     <>
       <div className="section-header">
-        <Button onClick={() => setIsModalOpen(true)}>
+        <Button onClick={openNewEquipmentForm}>
           <Plus size={18} />
-          Novo Equipamento
+          {t('facility.equipment.new', 'Novo Equipamento')}
         </Button>
       </div>
+
+      {isFormOpen && (
+        <Card className="equipment-form-panel equipment-form-panel--open">
+          <div className="equipment-form-panel__header">
+            <div>
+              <p className="equipment-form-panel__eyebrow">
+                {editingEquipment ? t('facility.equipment.quickEdit', 'Edição rápida') : t('facility.equipment.quickCreate', 'Criação rápida')}
+              </p>
+              <h2 className="equipment-form-panel__title">
+                {editingEquipment ? 'Editar Equipamento' : 'Novo Equipamento'}
+              </h2>
+              <p className="equipment-form-panel__subtitle">
+                Formulário inline para reduzir atrito e manter a navegação na mesma tela.
+              </p>
+            </div>
+            <Button variant="secondary" onClick={closeEquipmentForm}>
+              Fechar
+            </Button>
+          </div>
+
+          <EquipmentForm
+            equipment={editingEquipment}
+            onSave={async (data) => {
+              try {
+                if (editingEquipment) {
+                  const equipmentId = (editingEquipment as any)._id
+                    ? String((editingEquipment as any)._id)
+                    : String(editingEquipment.equipmentID);
+                  await updateEquipment(equipmentId, data);
+                } else {
+                  await createEquipment(data);
+                }
+                closeEquipmentForm();
+                await loadEquipment();
+              } catch (err: any) {
+                const errorMessage = err.response?.data?.message || err.response?.data?.error || err.message || 'Erro ao salvar equipamento';
+                alert(errorMessage);
+                console.error('Erro ao salvar equipamento:', err);
+              }
+            }}
+            onCancel={closeEquipmentForm}
+          />
+        </Card>
+      )}
 
       {loading && <p>Carregando...</p>}
       {error && <p style={{ color: 'var(--danger)' }}>Erro: {error}</p>}
 
       <Card>
-        <Table headers={['ID', 'Descrição', 'Modelo', 'Número de Série', 'Data da Compra', 'Ações']}>
-          {equipment.map((eq) => (
-            <tr key={eq.equipmentID}>
-              <td>{eq.equipmentID}</td>
-              <td>{eq.equipmentDescription}</td>
-              <td>{eq.model || '-'}</td>
-              <td>{eq.serialNumber || '-'}</td>
-              <td>{eq.purchaseDate ? new Date(eq.purchaseDate).toLocaleDateString('pt-BR') : '-'}</td>
-              <td>
-                <div className="table-actions">
-                  <button
-                    className="action-button"
-                    onClick={() => {
-                      // Garante que o objeto tenha _id para edição
-                      const equipmentToEdit = { ...eq, _id: (eq as any)._id || undefined };
-                      setEditingEquipment(equipmentToEdit);
-                      setIsModalOpen(true);
-                    }}
-                    title="Editar"
-                  >
-                    <Edit size={16} />
-                  </button>
-                  <button
-                    className="action-button danger"
-                    onClick={async () => {
-                      if (confirm('Tem certeza que deseja excluir este equipamento?')) {
-                        try {
-                          // Usa _id se disponível, senão usa equipmentID
-                          const equipmentId = (eq as any)._id || eq.equipmentID;
-                          await deleteEquipment(equipmentId);
-                        } catch (err: any) {
-                          alert(err.message || 'Erro ao excluir equipamento');
-                        }
-                      }
-                    }}
-                    title="Excluir"
-                  >
-                    <Trash2 size={16} />
-                  </button>
+        <Table headers={equipmentHeaders}>
+          {paginatedEquipment.length === 0 ? (
+            <tr>
+              <td colSpan={equipmentHeaders.length} className="table-empty-state-cell">
+                <div className="table-empty-state">
+                  <span className="table-empty-state__icon">
+                    <Box size={34} />
+                  </span>
+                  <h3 className="table-empty-state__title">Nenhum equipamento encontrado</h3>
+                  <p className="table-empty-state__text">Clique no botão acima para adicionar o seu primeiro equipamento.</p>
                 </div>
               </td>
             </tr>
-          ))}
+          ) : (
+            paginatedEquipment.map((eq) => (
+              <tr key={eq.equipmentID}>
+                <td className="break-words whitespace-normal overflow-x-auto max-w-xs">{eq.equipmentID}</td>
+                <td className="break-words whitespace-normal overflow-x-auto max-w-xs">{eq.equipmentDescription}</td>
+                <td className="break-words whitespace-normal overflow-x-auto max-w-xs">{eq.model || '-'}</td>
+                <td className="break-all whitespace-normal overflow-x-auto max-w-xs">{eq.serialNumber || '-'}</td>
+                <td className="break-words whitespace-normal overflow-x-auto max-w-xs">{eq.purchaseDate ? new Date(eq.purchaseDate).toLocaleDateString('pt-BR') : '-'}</td>
+                <td>
+                  <div className="table-actions">
+                    <button
+                      className="action-button"
+                      onClick={() => {
+                        openEditEquipmentForm(eq);
+                      }}
+                      title="Editar"
+                    >
+                      <Edit size={16} />
+                    </button>
+                    <button
+                      className="action-button danger"
+                      onClick={async () => {
+                        if (confirm('Tem certeza que deseja excluir este equipamento?')) {
+                          try {
+                            // Usa _id se disponível, senão usa equipmentID
+                            const equipmentId = (eq as any)._id || eq.equipmentID;
+                            await deleteEquipment(equipmentId);
+                          } catch (err: any) {
+                            alert(err.message || 'Erro ao excluir equipamento');
+                          }
+                        }
+                      }}
+                      title="Excluir"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))
+          )}
         </Table>
-      </Card>
+        <div className="equipment-pagination">
+          <div className="equipment-pagination__summary">
+            {mockEquipments.length === 0
+              ? 'Nenhum equipamento cadastrado'
+              : `Mostrando ${Math.min((currentPage - 1) * pageSize + 1, mockEquipments.length)}-${Math.min(currentPage * pageSize, mockEquipments.length)} de ${mockEquipments.length}`}
+          </div>
 
-      <Modal
-        isOpen={isModalOpen}
-        onClose={() => {
-          setIsModalOpen(false);
-          setEditingEquipment(null);
-        }}
-        title={editingEquipment ? 'Editar Equipamento' : 'Novo Equipamento'}
-      >
-        <EquipmentForm
-          equipment={editingEquipment}
-          onSave={async (data) => {
-            try {
-              if (editingEquipment) {
-                // Prioriza _id (MongoDB ObjectId), senão usa equipmentID
-                const equipmentId = (editingEquipment as any)._id 
-                  ? String((editingEquipment as any)._id)
-                  : String(editingEquipment.equipmentID);
-                
-                console.log('Atualizando equipamento:', { equipmentId, editingEquipment, data });
-                await updateEquipment(equipmentId, data);
-              } else {
-                await createEquipment(data);
-              }
-              setIsModalOpen(false);
-              setEditingEquipment(null);
-              // Recarrega a lista para garantir que está atualizada
-              await loadEquipment();
-            } catch (err: any) {
-              const errorMessage = err.response?.data?.message || err.response?.data?.error || err.message || 'Erro ao salvar equipamento';
-              alert(errorMessage);
-              console.error('Erro ao salvar equipamento:', err);
-            }
-          }}
-          onCancel={() => {
-            setIsModalOpen(false);
-            setEditingEquipment(null);
-          }}
-        />
-      </Modal>
+          <div className="equipment-pagination__controls">
+            <Button
+              variant="secondary"
+              onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
+              disabled={currentPage === 1}
+            >
+              {t('common.previous', 'Anterior')}
+            </Button>
+            <span className="equipment-pagination__page">
+              {t('common.page', 'Página')} {currentPage} {t('common.of', 'de')} {totalPages}
+            </span>
+            <Button
+              variant="secondary"
+              onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
+              disabled={currentPage === totalPages}
+            >
+              {t('common.next', 'Próxima')}
+            </Button>
+          </div>
+
+          <div className="equipment-pagination__size">
+            <label htmlFor="equipment-page-size">Itens por página</label>
+            <select
+              id="equipment-page-size"
+              className="input"
+              value={pageSize}
+              onChange={(event) => {
+                setPageSize(Number(event.target.value));
+                setCurrentPage(1);
+              }}
+            >
+              <option value={5}>5</option>
+              <option value={10}>10</option>
+              <option value={20}>20</option>
+              <option value={50}>50</option>
+            </select>
+          </div>
+        </div>
+      </Card>
     </>
   );
 }
@@ -286,9 +481,9 @@ function EquipmentForm({
       </div>
       <div className="form-actions">
         <Button type="button" variant="secondary" onClick={onCancel}>
-          Cancelar
+          {t('common.cancel', 'Cancelar')}
         </Button>
-        <Button type="submit">Salvar</Button>
+        <Button type="submit">{t('common.save', 'Salvar')}</Button>
       </div>
     </form>
   );
@@ -307,741 +502,379 @@ function getEquipmentTypeDescription(equipmentType: number | undefined): string 
   return types[equipmentType] || `Tipo ${equipmentType}`;
 }
 
-// Seção de Localizações
-function LocationsSection() {
-  const { equipment, loadEquipment } = useEquipment();
-  const { locations, loading, error, createLocation, updateLocation, deleteLocation, loadLocations } = useLocations();
-  const { samples } = useSamples();
-  const [selectedBox, setSelectedBox] = useState<number | null>(null);
-  const [currentPageSamples, setCurrentPageSamples] = useState(0);
-  const [currentPageLocations, setCurrentPageLocations] = useState(0);
-  const PAGE_SIZE_SAMPLES = 81;
-  const PAGE_SIZE_LOCATIONS = 10;
-
-  // Carregar dados quando o componente montar
-  useEffect(() => {
-    console.log('🔄 LocationsSection montado - carregando dados...');
-    loadLocations();
-    loadEquipment();
-  }, []);
-
-  const getSampleBox = (sample: any): number | null => {
-    const value = sample?.box ?? sample?.boxNumber ?? sample?.locationBox;
-    return typeof value === 'number' ? value : value ? Number(value) : null;
-  };
-
-  const getSampleWell = (sample: any): string | null => {
-    return sample?.wellPosition ?? sample?.eppendorfWell ?? sample?.well ?? sample?.position ?? null;
-  };
-
-  const getSampleLabel = (sample: any): string => {
-    const code = sample?.barcode ?? sample?.sampleID ?? sample?.patientID ?? 'Amostra';
-    const type = sample?.sampleType ? ` - ${sample.sampleType}` : '';
-    const status = sample?.currentStatus ?? sample?.status;
-    return `${code}${type}${status ? ` (${status})` : ''}`;
-  };
-
-  // Filtra amostras da caixa selecionada
-  const boxSamples = useMemo(() => {
-    if (selectedBox == null) return [];
-    const filtered = samples.filter((s: any) => getSampleBox(s) === selectedBox);
-    console.log(`📦 Box ${selectedBox} - ${filtered.length} amostras encontradas:`, filtered.map(s => ({
-      barcode: s.barcode,
-      box: getSampleBox(s),
-      well: getSampleWell(s),
-      status: s.currentStatus
-    })));
-    return filtered;
-  }, [samples, selectedBox]);
-
-  // Paginação das amostras
-  const paginatedSamples = useMemo(() => {
-    const start = currentPageSamples * PAGE_SIZE_SAMPLES;
-    return boxSamples.slice(start, start + PAGE_SIZE_SAMPLES);
-  }, [boxSamples, currentPageSamples]);
-
-  // Posições ocupadas (wellPosition ou eppendorfWell)
-  const occupiedPositions = useMemo(() => {
-    const positions = paginatedSamples.map((s: any) => getSampleWell(s)).filter(Boolean) as string[];
-    console.log(`📍 Ocupadas: ${positions.join(', ') || 'Nenhuma'}`);
-    return positions;
-  }, [paginatedSamples]);
-
-  // Paginação da tabela de localizações
-  const paginatedLocations = useMemo(() => {
-    const start = currentPageLocations * PAGE_SIZE_LOCATIONS;
-    return locations.slice(start, start + PAGE_SIZE_LOCATIONS);
-  }, [locations, currentPageLocations]);
-
-  useEffect(() => {
-    setCurrentPageSamples(0);
-  }, [selectedBox]);
-
-  // Debug: log quando locations são carregadas
-  useEffect(() => {
-    if (locations.length > 0) {
-      console.log(`📍 ${locations.length} localizações carregadas:`);
-      locations.forEach((loc, idx) => {
-        console.log(`   [${idx}] Box: ${loc.box}, Bloco: ${loc.block}, Rack: ${loc.rack}, Gaveta: ${loc.drawer}`);
-      });
-    }
-  }, [locations]);
-
-  // Debug: log quando selectedBox muda
-  useEffect(() => {
-    console.log(`📦 selectedBox mudou para: ${selectedBox}`);
-    console.log(`   occupiedPositions: ${occupiedPositions.join(', ') || 'nenhuma'}`);
-    console.log(`   boxSamples: ${boxSamples.length}`);
-  }, [selectedBox, boxSamples, occupiedPositions]);
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [editingLocation, setEditingLocation] = useState<Location | null>(null);
-
-  // Importação de localizações
-  const [importFile, setImportFile] = useState<File | null>(null);
-  const [importing, setImporting] = useState(false);
-  const [importProgress, setImportProgress] = useState('');
-  const [showImportModal, setShowImportModal] = useState(false);
-
-  const handleImportLocations = async (file?: File) => {
-    const fileToImport = file || importFile;
-    if (!fileToImport) {
-      alert('Selecione um arquivo para importar.');
-      return;
-    }
-    setImporting(true);
-    setImportProgress(`Arquivo: ${fileToImport.name}`);
-    // Aqui você pode implementar a chamada real para o backend
-    setTimeout(() => {
-      setImporting(false);
-      setImportProgress('Importação concluída (simulação)');
-      setImportFile(null);
-    }, 2000);
-  };
-
-  return (
-    <>
-      {/* Botão para abrir modal de importação */}
-      <div className="section-header" style={{ display: 'flex', gap: 12 }}>
-        <Button onClick={() => setIsModalOpen(true)}>
-          <Plus size={18} />
-          Nova Localização
-        </Button>
-        <Button variant="secondary" onClick={() => setShowImportModal(true)}>
-          Importar Localizações
-        </Button>
-      </div>
-
-      {/* Modal de importação de localizações */}
-      <Modal isOpen={showImportModal} onClose={() => setShowImportModal(false)} title="Importação de Localizações">
-        <div className="import-card-header">
-          <h2 style={{ marginTop: 0 }}>Importação de Localizações</h2>
-          <p>Importe localizações em lote via CSV ou Excel. Siga o template para garantir o formato correto.</p>
-        </div>
-        <div className="import-actions" style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-          <Button variant="secondary" onClick={() => {
-            const url = '/import-templates/locations-template.csv';
-            const link = document.createElement('a');
-            link.href = url;
-            link.setAttribute('download', 'locations-template.csv');
-            document.body.appendChild(link);
-            link.click();
-            link.remove();
-          }}>Baixar Template CSV</Button>
-        </div>
-        <div className="import-upload" style={{ border: '1px dashed #ccc', padding: 16, borderRadius: 8, marginBottom: 16 }}>
-          <input type="file" accept=".csv, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={e => {
-            const file = e.target.files?.[0];
-            if (file) {
-              setImportFile(file);
-              setImportProgress('');
-              setTimeout(() => handleImportLocations(file), 100);
-            }
-          }} />
-          <p style={{ fontSize: 12, color: '#666' }}>Selecione um arquivo CSV ou Excel conforme o template.</p>
-        </div>
-        {importing && <p>Importando localizações...</p>}
-        {importProgress && <p style={{ color: '#166534' }}>{importProgress}</p>}
-      </Modal>
-
-
-      {loading && <p>Carregando...</p>}
-      {error && <p style={{ color: 'var(--danger)' }}>Erro: {error}</p>}
-
-      <Card>
-        <Table
-          headers={[
-            'Tipo Equipamento',
-            'Equipamento',
-            'Bloco',
-            'Prateleira',
-            'Gaveta',
-            'Caixa',
-            'Poço Eppendorf',
-            'Descrição Detalhada',
-            'Ações',
-          ]}
-        >
-          {paginatedLocations.map((location, index) => (
-            <tr key={(location as any)._id || index}>
-              <td>{getEquipmentTypeDescription(location.equipmentType)}</td>
-              <td>
-                {location.equipmentID
-                  ? (() => {
-                      const eq = equipment.find((e) => e.equipmentID === location.equipmentID);
-                      if (eq) {
-                        return (
-                          <div>
-                            <strong>ID {eq.equipmentID}</strong> - {eq.equipmentDescription}
-                            {eq.model && <div style={{ fontSize: '0.875rem', color: 'var(--text-light)' }}>Modelo: {eq.model}</div>}
-                          </div>
-                        );
-                      }
-                      return 'N/A';
-                    })()
-                  : <span style={{ color: 'var(--text-light)', fontStyle: 'italic' }}>Não vinculado</span>}
-              </td>
-              <td>{location.block}</td>
-              <td>{location.rack}</td>
-              <td>{location.drawer}</td>
-              <td>
-                <button 
-                  type="button"
-                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#166534', textDecoration: 'underline', fontWeight: 'bold', padding: '4px 8px' }}
-                  onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    console.log('🖱️ Clique detectado! Box:', location.box);
-                    if (location.box !== null && location.box !== undefined) {
-                      const boxValue = Number(location.box);
-                      console.log(`   Convertendo ${location.box} para número: ${boxValue}`);
-                      if (!Number.isNaN(boxValue)) {
-                        console.log(`   ✅ Selecionando box ${boxValue}`);
-                        setSelectedBox(boxValue);
-                      } else {
-                        console.warn('❌ Conversão para número falhou');
-                      }
-                    } else {
-                      console.warn('❌ Box é null/undefined');
-                    }
-                  }}
-                  title="Clique para visualizar caixa 9x9"
-                >
-                  {location.box || 'N/A'}
-                </button>
-              </td>
-              <td>{location.wellPosition || location.eppendorfWell || '-'}</td>
-              <td>
-                {/* Descrição detalhada: lista de amostras na caixa */}
-                {samples
-                  .filter((s: any) => getSampleBox(s) === location.box)
-                  .map((s: any) => (
-                    <div key={String(s?._id ?? s?.sampleID ?? s?.barcode ?? s?.patientID)} style={{ fontSize: 12, color: '#444', marginBottom: 2 }}>
-                      <strong>{getSampleLabel(s)}</strong>
-                    </div>
-                  ))}
-              </td>
-              <td>
-                <div className="table-actions">
-                  <button
-                    className="action-button"
-                    onClick={() => {
-                      setEditingLocation(location);
-                      setIsModalOpen(true);
-                    }}
-                    title="Editar"
-                  >
-                    <Edit size={16} />
-                  </button>
-                  <button
-                    className="action-button danger"
-                    onClick={async () => {
-                      if (confirm('Tem certeza que deseja excluir esta localização?')) {
-                        try {
-                          const locationId = (location as any)._id || index.toString();
-                          await deleteLocation(locationId);
-                        } catch (err: any) {
-                          alert(err.message);
-                        }
-                      }
-                    }}
-                    title="Excluir"
-                  >
-                    <Trash2 size={16} />
-                  </button>
-                </div>
-              </td>
-            </tr>
-          ))}
-        </Table>
-      </Card>
-
-      {/* Paginação da tabela de localizações */}
-      {locations.length > PAGE_SIZE_LOCATIONS && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 12, marginBottom: 16 }}>
-          <button onClick={() => setCurrentPageLocations(p => Math.max(p - 1, 0))} disabled={currentPageLocations === 0}
-            style={{
-              padding: '6px 12px',
-              cursor: currentPageLocations === 0 ? 'not-allowed' : 'pointer',
-              opacity: currentPageLocations === 0 ? 0.5 : 1,
-              background: '#166534',
-              color: 'white',
-              border: 'none',
-              borderRadius: '4px',
-              fontSize: '12px'
-            }}>
-            ← Anterior
-          </button>
-          <span style={{ fontSize: '14px' }}>
-            Página {currentPageLocations + 1} de {Math.ceil(locations.length / PAGE_SIZE_LOCATIONS)} ({locations.length} localizações)
-          </span>
-          <button onClick={() => setCurrentPageLocations(p => p + 1)} disabled={currentPageLocations >= Math.ceil(locations.length / PAGE_SIZE_LOCATIONS) - 1}
-            style={{
-              padding: '6px 12px',
-              cursor: currentPageLocations >= Math.ceil(locations.length / PAGE_SIZE_LOCATIONS) - 1 ? 'not-allowed' : 'pointer',
-              opacity: currentPageLocations >= Math.ceil(locations.length / PAGE_SIZE_LOCATIONS) - 1 ? 0.5 : 1,
-              background: '#166534',
-              color: 'white',
-              border: 'none',
-              borderRadius: '4px',
-              fontSize: '12px'
-            }}>
-            Próxima →
-          </button>
-        </div>
-      )}
-
-      {/* Visualizador de Caixa 9x9 com amostras e paginação */}
-      <Card title="Visualizador de Caixa (9x9)">
-        {selectedBox == null ? (
-          <div style={{ color: '#666', padding: 16 }}>Selecione uma caixa na tabela para visualizar as amostras alocadas.</div>
-        ) : (
-          <>
-            <div style={{ marginBottom: 12 }}>
-              <strong>Caixa #{selectedBox}</strong> - {boxSamples.length} amostras no total
-            </div>
-            <CryoBoxGrid occupiedPositions={occupiedPositions} selectedPosition={null} onSelect={() => {}} />
-            {/* Paginação das amostras da caixa */}
-            {boxSamples.length > PAGE_SIZE_SAMPLES && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 12 }}>
-                <button onClick={() => setCurrentPageSamples(p => Math.max(p - 1, 0))} disabled={currentPageSamples === 0}
-                  style={{
-                    padding: '6px 12px',
-                    cursor: currentPageSamples === 0 ? 'not-allowed' : 'pointer',
-                    opacity: currentPageSamples === 0 ? 0.5 : 1,
-                    background: '#166534',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: '4px',
-                    fontSize: '12px'
-                  }}>
-                  ← Anterior
-                </button>
-                <span style={{ fontSize: '14px' }}>Página {currentPageSamples + 1} de {Math.ceil(boxSamples.length / PAGE_SIZE_SAMPLES)}</span>
-                <button onClick={() => setCurrentPageSamples(p => p + 1)} disabled={currentPageSamples >= Math.ceil(boxSamples.length / PAGE_SIZE_SAMPLES) - 1}
-                  style={{
-                    padding: '6px 12px',
-                    cursor: currentPageSamples >= Math.ceil(boxSamples.length / PAGE_SIZE_SAMPLES) - 1 ? 'not-allowed' : 'pointer',
-                    opacity: currentPageSamples >= Math.ceil(boxSamples.length / PAGE_SIZE_SAMPLES) - 1 ? 0.5 : 1,
-                    background: '#166534',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: '4px',
-                    fontSize: '12px'
-                  }}>
-                  Próxima →
-                </button>
-              </div>
-            )}
-            <div style={{ marginTop: 8, fontSize: 13, color: '#444' }}>
-              <strong>{boxSamples.length}</strong> amostras alocadas nesta caixa.
-            </div>
-          </>
-        )}
-      </Card>
-
-      <Modal
-        isOpen={isModalOpen}
-        onClose={() => {
-          setIsModalOpen(false);
-          setEditingLocation(null);
-        }}
-        title={editingLocation ? 'Editar Localização' : 'Nova Localização'}
-      >
-        <LocationForm
-          location={editingLocation}
-          equipment={equipment}
-          onSave={async (data) => {
-            try {
-              if (editingLocation) {
-                const locationId = (editingLocation as any)._id || '';
-                await updateLocation(locationId, data);
-              } else {
-                await createLocation(data);
-              }
-              setIsModalOpen(false);
-              setEditingLocation(null);
-              await loadLocations();
-            } catch (err: any) {
-              alert(err.message);
-            }
-          }}
-          onCancel={() => {
-            setIsModalOpen(false);
-            setEditingLocation(null);
-          }}
-        />
-      </Modal>
-    </>
-  );
-}
-
-function LocationForm({
-  location,
-  equipment,
-  onSave,
-  onCancel,
+// Seção de Controle de Temperatura
+function TemperatureSection({
+  sensorSnapshot,
+  telemetryData,
 }: {
-  location: Location | null;
-  equipment: Equipment[];
-  onSave: (data: Partial<Location>) => void;
-  onCancel: () => void;
+  sensorSnapshot: {
+    sensor1: number;
+    sensor2: number;
+    sensor3: number;
+  };
+  telemetryData: Array<{ time: string; temp: number }>;
 }) {
-  const [formData, setFormData] = useState<Partial<Location>>(() => {
-    if (location) {
+
+  const getTemperatureTone = (temperature: number) => {
+    if (temperature <= -78 && temperature >= -82) {
       return {
-        equipmentType: location.equipmentType || 1,
-        equipmentID: location.equipmentID,
-        block: location.block || 1,
-        rack: location.rack || 1,
-        drawer: location.drawer || 1,
-        box: location.box || 1,
-        eppendorfWell: location.wellPosition || location.eppendorfWell || '',
+        label: 'Estável',
+        border: '#16a34a',
+        icon: '#16a34a',
+        trend: Minus,
+        background: 'linear-gradient(180deg, rgba(240, 253, 244, 0.98), rgba(255, 255, 255, 1))',
+        badgeBackground: 'rgba(240, 253, 244, 1)',
       };
     }
+
+    if (temperature > -78 && temperature <= -70) {
+      return {
+        label: 'Atenção',
+        border: '#f59e0b',
+        icon: '#f59e0b',
+        trend: TrendingUp,
+        background: 'linear-gradient(180deg, rgba(255, 251, 235, 0.98), rgba(255, 255, 255, 1))',
+        badgeBackground: 'rgba(255, 251, 235, 1)',
+      };
+    }
+
     return {
-      equipmentType: 1,
-      equipmentID: undefined,
-      block: 1,
-      rack: 1,
-      drawer: 1,
-      box: 1,
-      eppendorfWell: 'A1',
+      label: 'Crítico',
+      border: '#dc2626',
+      icon: '#dc2626',
+      trend: TrendingDown,
+      background: 'linear-gradient(180deg, rgba(254, 242, 242, 0.98), rgba(255, 255, 255, 1))',
+      badgeBackground: 'rgba(254, 242, 242, 1)',
     };
+  };
+
+  const sensorCards = [
+    { id: 'sensor1', label: 'Sensor 1', temperature: sensorSnapshot.sensor1 },
+    { id: 'sensor2', label: 'Sensor 2', temperature: sensorSnapshot.sensor2 },
+    { id: 'sensor3', label: 'Sensor 3', temperature: sensorSnapshot.sensor3 },
+  ];
+
+  const chartWidth = 920;
+  const chartHeight = 300;
+  const chartPadding = 28;
+  const chartMin = -90;
+  const chartMax = -60;
+  const chartRange = chartMax - chartMin;
+  const chartPoints = telemetryData.map((point, index) => {
+    const x = telemetryData.length > 1
+      ? chartPadding + ((chartWidth - chartPadding * 2) * index) / (telemetryData.length - 1)
+      : chartWidth / 2;
+    const normalized = (point.temp - chartMin) / chartRange;
+    const y = chartHeight - chartPadding - normalized * (chartHeight - chartPadding * 2);
+    return { ...point, x, y };
   });
-
-  // Atualiza o formData quando location muda (para edição)
-  useEffect(() => {
-    if (location) {
-      setFormData({
-        equipmentType: location.equipmentType || 1,
-        equipmentID: location.equipmentID,
-        block: location.block || 1,
-        rack: location.rack || 1,
-        drawer: location.drawer || 1,
-        box: location.box || 1,
-        eppendorfWell: location.wellPosition || location.eppendorfWell || '',
-      });
-    } else {
-      setFormData({
-        equipmentType: 1,
-        equipmentID: undefined,
-        block: 1,
-        rack: 1,
-        drawer: 1,
-        box: 1,
-        eppendorfWell: 'A1',
-      });
-    }
-  }, [location]);
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    
-    // Prepara os dados para envio, convertendo tipos e campos
-    const dataToSave: any = {
-      equipmentType: formData.equipmentType ? Number(formData.equipmentType) : null,
-      equipmentID: formData.equipmentID ? Number(formData.equipmentID) : undefined,
-      block: formData.block ? Number(formData.block) : null,
-      rack: formData.rack ? Number(formData.rack) : null,
-      drawer: formData.drawer ? Number(formData.drawer) : null,
-      box: formData.box ? Number(formData.box) : null,
-    };
-    
-    // Converte eppendorfWell (string) para wellPosition (string)
-    if (formData.eppendorfWell) {
-      dataToSave.wellPosition = String(formData.eppendorfWell);
-      // Remove eppendorfWell para evitar conflito
-      delete dataToSave.eppendorfWell;
-    }
-    
-    onSave(dataToSave);
-  };
-
-  return (
-    <form onSubmit={handleSubmit} className="form">
-      <div className="form-grid">
-        <div className="form-grid-full">
-          <label className="input-label" htmlFor="equipmentTypeSelect">Tipo de Equipamento *</label>
-          <select
-            id="equipmentTypeSelect"
-            className="input"
-            value={formData.equipmentType || ''}
-            onChange={(e) =>
-              setFormData({ ...formData, equipmentType: parseInt(e.target.value) })
-            }
-            required
-          >
-            <option value="">Selecione um tipo de equipamento</option>
-            <option value="1">1 - Freezer -80°C #1</option>
-            <option value="2">2 - Freezer -80°C #2</option>
-            <option value="3">3 - Freezer -20°C</option>
-            <option value="4">4 - Refrigerador 4°C</option>
-            <option value="5">5 - Nitrogênio Líquido</option>
-          </select>
-        </div>
-        <div className="form-grid-full">
-          <label className="input-label" htmlFor="equipmentSelect">Equipamento Cadastrado no Sistema *</label>
-          <select
-            id="equipmentSelect"
-            className="input"
-            value={formData.equipmentID || ''}
-            onChange={(e) =>
-              setFormData({
-                ...formData,
-                equipmentID: e.target.value ? parseInt(e.target.value) : undefined,
-              })
-            }
-            required
-          >
-            <option value="">Selecione um equipamento cadastrado</option>
-            {equipment.map((eq) => (
-              <option key={eq.equipmentID} value={eq.equipmentID}>
-                ID {eq.equipmentID} - {eq.equipmentDescription}
-                {eq.model ? ` | Modelo: ${eq.model}` : ''}
-                {eq.serialNumber ? ` | S/N: ${eq.serialNumber}` : ''}
-              </option>
-            ))}
-          </select>
-          <p className="form-help-text" style={{ marginTop: '0.5rem', fontSize: '0.875rem', color: 'var(--text-light)' }}>
-            Selecione o equipamento físico cadastrado no sistema que será associado a esta localização
-          </p>
-        </div>
-        <Input
-          label="Bloco"
-          type="number"
-          value={formData.block || ''}
-          onChange={(e) =>
-            setFormData({ ...formData, block: parseInt(e.target.value) })
-          }
-          required
-        />
-        <Input
-          label="Prateleira"
-          type="number"
-          value={formData.rack || ''}
-          onChange={(e) =>
-            setFormData({ ...formData, rack: parseInt(e.target.value) })
-          }
-          required
-        />
-        <Input
-          label="Gaveta"
-          type="number"
-          value={formData.drawer || ''}
-          onChange={(e) =>
-            setFormData({ ...formData, drawer: parseInt(e.target.value) })
-          }
-          required
-        />
-        <Input
-          label="Caixa"
-          type="number"
-          value={formData.box || ''}
-          onChange={(e) =>
-            setFormData({ ...formData, box: parseInt(e.target.value) })
-          }
-          required
-        />
-        <Input
-          label="Poço Eppendorf (ex: A1)"
-          value={formData.eppendorfWell || ''}
-          onChange={(e) =>
-            setFormData({ ...formData, eppendorfWell: e.target.value })
-          }
-          required
-        />
-      </div>
-      <div className="form-actions">
-        <Button type="button" variant="secondary" onClick={onCancel}>
-          Cancelar
-        </Button>
-        <Button type="submit">Salvar</Button>
-      </div>
-    </form>
-  );
-}
-
-// Seção de Controle de Temperatura
-function TemperatureSection() {
-  // TEMPORARIAMENTE DESATIVADO: Não há sensores cadastrados ainda
-  const TEMPERATURE_READING_DISABLED = true;
-  
-  const { temperatures, loading, error, viewControl } = useTemperature();
-  const { policies } = usePolicies();
-
-  useEffect(() => {
-    if (!TEMPERATURE_READING_DISABLED) {
-      viewControl().catch(console.error);
-
-      temperatures.forEach((temp) => {
-        if (!validateReading(temp)) {
-          console.warn(`Leitura inválida: ${temp.logID}`);
-        }
-        if (temp.temperatureUnit && !validateTemperatureUnit(temp.temperatureUnit)) {
-          console.warn(`Unidade inválida: ${temp.temperatureUnit}`);
-        }
-        if (temp.policyID) {
-          const policy = policies.find((p) => {
-            const policyIDStr = String(p.policyID);
-            const tempPolicyIDStr = String(temp.policyID);
-            return policyIDStr === tempPolicyIDStr;
-          });
-          if (policy) {
-            generateAlert(temp, policy);
-          }
-        }
-      });
-    }
-  }, [temperatures, policies, viewControl]);
-
-  const getStatusIcon = (temp: Temperature) => {
-    if (temp.readingStatus === 'valid' && temp.dataQualityScore && temp.dataQualityScore > 0.9) {
-      return <CheckCircle size={18} className="status-icon valid" />;
-    }
-    return <AlertCircle size={18} className="status-icon alert" />;
-  };
-
-  if (TEMPERATURE_READING_DISABLED) {
-    return (
-      <>
-        <Card>
-          <div style={{ 
-            padding: '2rem', 
-            textAlign: 'center',
-            backgroundColor: '#fff3cd',
-            border: '1px solid #ffc107',
-            borderRadius: '8px'
-          }}>
-            <AlertCircle size={48} style={{ color: '#856404', marginBottom: '1rem' }} />
-            <h3 style={{ color: '#856404', marginBottom: '0.5rem' }}>Funcionalidade Temporariamente Desativada</h3>
-            <p style={{ color: '#856404', fontSize: '0.875rem', marginBottom: '0.5rem' }}>
-              A leitura de temperatura está desativada temporariamente porque não há sensores cadastrados no sistema.
-            </p>
-            <p style={{ color: '#856404', fontSize: '0.75rem' }}>
-              Para ativar esta funcionalidade, cadastre sensores na aba <strong>"Sensores"</strong> acima.
-            </p>
-          </div>
-        </Card>
-      </>
-    );
-  }
+  const chartLinePath = chartPoints.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ');
 
   return (
     <>
-      {loading && <p>Carregando...</p>}
-      {error && <p style={{ color: 'var(--danger)' }}>Erro: {error}</p>}
+      <div className="temperature-monitor-grid">
+        <div className="temperature-status-grid">
+          {sensorCards.map((sensor) => {
+            const tone = getTemperatureTone(sensor.temperature);
+            const TrendIcon = tone.trend;
 
-      <div className="temperature-grid">
-        <Card title="Últimas Leituras">
-          <Table
-            headers={[
-              'Timestamp',
-              'Sensor',
-              'Temperatura',
-              'Status',
-              'Qualidade',
-            ]}
-          >
-            {temperatures.map((temp) => {
-              let sensorDisplay = 'N/A';
-              if (temp.sensorID) {
-                if (typeof temp.sensorID === 'object' && temp.sensorID !== null) {
-                  const sensorObj = temp.sensorID as any;
-                  sensorDisplay = sensorObj.sensorID || sensorObj.sensorType || 'N/A';
-                } else {
-                  sensorDisplay = String(temp.sensorID);
-                }
-              }
-              
-              return (
-                <tr key={temp.logID}>
-                  <td>{new Date(temp.timestamp || '').toLocaleString('pt-BR')}</td>
-                  <td>{sensorDisplay}</td>
-                  <td>
-                    <span className="temperature-value">
-                      {temp.temperatureValue} {temp.temperatureUnit}
-                    </span>
-                  </td>
-                  <td>
-                    <div className="status-cell">
-                      {getStatusIcon(temp)}
-                      <span>{temp.readingStatus}</span>
-                    </div>
-                  </td>
-                  <td>
-                    <div className="quality-score">
-                      {temp.dataQualityScore ? (temp.dataQualityScore * 100).toFixed(0) : 'N/A'}%
-                    </div>
-                  </td>
-                </tr>
-              );
-            })}
-          </Table>
-        </Card>
+            return (
+              <Card
+                key={sensor.id}
+                className="temperature-status-card"
+                style={{
+                  border: `1px solid ${tone.border}33`,
+                  background: tone.background,
+                  boxShadow: '0 18px 36px rgba(15, 23, 42, 0.06)',
+                }}
+              >
+                <div className="temperature-status-card__header" style={{ color: '#64748b' }}>
+                  <span className="temperature-status-card__label">{sensor.label}</span>
+                  <span
+                    className="temperature-status-card__icon"
+                    style={{ backgroundColor: `${tone.icon}14`, color: tone.icon }}
+                  >
+                    <Thermometer size={16} />
+                  </span>
+                </div>
+                <div className="temperature-status-card__value" style={{ color: tone.border }}>
+                  {sensor.temperature.toFixed(1)}°C
+                </div>
+                <div className="temperature-status-card__footer">
+                  <span
+                    className="temperature-status-card__tone"
+                    style={{ color: tone.border, backgroundColor: tone.badgeBackground }}
+                  >
+                    <TrendIcon size={14} />
+                    <span>{tone.label}</span>
+                  </span>
+                </div>
+              </Card>
+            );
+          })}
+        </div>
 
-        <Card title="Alertas">
-          <div className="alerts-list">
-            {temperatures.filter((t) => t.readingStatus !== 'valid').length === 0 ? (
-              <p className="empty-state">Nenhum alerta no momento</p>
-            ) : (
-              temperatures
-                .filter((t) => t.readingStatus !== 'valid')
-                .map((temp) => {
-                  let sensorDisplay = 'N/A';
-                  if (temp.sensorID) {
-                    if (typeof temp.sensorID === 'object' && temp.sensorID !== null) {
-                      const sensorObj = temp.sensorID as any;
-                      sensorDisplay = sensorObj.sensorID || sensorObj.sensorType || 'N/A';
-                    } else {
-                      sensorDisplay = String(temp.sensorID);
-                    }
-                  }
-                  
-                  return (
-                    <div key={temp.logID} className="alert-item">
-                      <AlertCircle size={20} className="alert-icon" />
-                      <div>
-                        <p className="alert-message">
-                          {temp.errorMessage || 'Temperatura fora do limite'}
-                        </p>
-                        <p className="alert-sensor">Sensor: {sensorDisplay}</p>
-                      </div>
-                    </div>
-                  );
-                })
-            )}
+        <Card className="temperature-monitor-chart-card">
+          <div className="temperature-monitor-chart-card__header">
+            <div>
+              <p className="temperature-monitor-chart-card__eyebrow">Monitoramento em tempo real</p>
+              <h3 className="temperature-monitor-chart-card__title">Histórico recente de temperatura</h3>
+            </div>
+            <span className="temperature-monitor-chart-card__badge">Atualiza a cada 2s</span>
+          </div>
+
+          <div className="temperature-monitor-chart-card__chart">
+            <svg viewBox={`0 0 ${chartWidth} ${chartHeight}`} className="temperature-monitor-chart-card__svg" role="img" aria-label="Histórico recente de temperatura">
+              <defs>
+                <linearGradient id="temperatureLineGradient" x1="0" x2="0" y1="0" y2="1">
+                  <stop offset="0%" stopColor="#2563eb" stopOpacity="0.95" />
+                  <stop offset="100%" stopColor="#0f766e" stopOpacity="0.95" />
+                </linearGradient>
+              </defs>
+
+              {Array.from({ length: 5 }).map((_, index) => {
+                const y = chartPadding + ((chartHeight - chartPadding * 2) * index) / 4;
+                return <line key={`grid-y-${index}`} x1={chartPadding} y1={y} x2={chartWidth - chartPadding} y2={y} className="temperature-monitor-chart-card__grid-line" />;
+              })}
+
+              {Array.from({ length: 6 }).map((_, index) => {
+                const x = chartPadding + ((chartWidth - chartPadding * 2) * index) / 5;
+                return <line key={`grid-x-${index}`} x1={x} y1={chartPadding} x2={x} y2={chartHeight - chartPadding} className="temperature-monitor-chart-card__grid-line temperature-monitor-chart-card__grid-line--vertical" />;
+              })}
+
+              <path d={chartLinePath} className="temperature-monitor-chart-card__line" stroke="url(#temperatureLineGradient)" />
+
+              {chartPoints.map((point) => (
+                <circle key={`${point.time}-${point.x}`} cx={point.x} cy={point.y} r="4.5" className="temperature-monitor-chart-card__point" />
+              ))}
+            </svg>
           </div>
         </Card>
+
       </div>
     </>
+  );
+}
+
+function HistorySection({ historyLog }: { historyLog: HistoryLogEntry[] }) {
+  const [currentPage, setCurrentPage] = useState(1);
+  const [sensorFilter, setSensorFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const pageSize = 12;
+
+  const sensorOptions = useMemo(() => Array.from(new Set(historyLog.map((entry) => entry.sensorName))), [historyLog]);
+
+  const filteredHistory = useMemo(() => {
+    return historyLog.filter((entry) => {
+      const matchesSensor = sensorFilter === 'all' || entry.sensorName === sensorFilter;
+      const matchesStatus = statusFilter === 'all' || entry.status.toLowerCase() === statusFilter;
+      return matchesSensor && matchesStatus;
+    });
+  }, [historyLog, sensorFilter, statusFilter]);
+
+  useEffect(() => {
+    const totalPages = Math.max(1, Math.ceil(filteredHistory.length / pageSize));
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, filteredHistory.length]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [sensorFilter, statusFilter]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredHistory.length / pageSize));
+  const paginatedHistory = useMemo(() => {
+    const startIndex = (currentPage - 1) * pageSize;
+    return filteredHistory.slice(startIndex, startIndex + pageSize);
+  }, [currentPage, filteredHistory]);
+
+  const handleExportCsv = () => {
+    const rows = filteredHistory.map((entry) => [
+      entry.timestamp,
+      entry.sensorName,
+      `${entry.temperature.toFixed(1)}°C`,
+      entry.status,
+      entry.validationHash,
+    ]);
+
+    const csvLines = [
+      ['Timestamp', 'Sensor', 'Temperatura', 'Status', 'Validation Hash'],
+      ...rows,
+    ].map((row) => row.map((value) => `"${String(value).replace(/"/g, '""')}"`).join(';'));
+
+    const csvContent = `\uFEFF${csvLines.join('\n')}`;
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `historico-leituras-${new Date().toISOString().slice(0, 10)}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const clearFilters = () => {
+    setSensorFilter('all');
+    setStatusFilter('all');
+  };
+
+  return (
+    <Card className="temperature-history-card">
+      <div className="temperature-history-card__header">
+        <div>
+          <p className="temperature-history-card__eyebrow">Leituras em tempo real</p>
+          <h3 className="temperature-history-card__title">Histórico de Leituras</h3>
+        </div>
+        <div className="temperature-history-card__actions">
+          <span className="temperature-history-card__badge">Últimos 100 registros</span>
+          <Button variant="secondary" onClick={handleExportCsv} disabled={filteredHistory.length === 0}>
+            <Download size={16} />
+            Exportar CSV
+          </Button>
+        </div>
+      </div>
+
+      <div className="history-filters" aria-label="Filtros de histórico">
+        <div className="history-filters__group">
+          <span className="history-filters__label">
+            <Filter size={14} />
+            Sensor
+          </span>
+          <select aria-label="Filtrar por sensor" className="input history-filters__select" value={sensorFilter} onChange={(e) => setSensorFilter(e.target.value)}>
+            <option value="all">Todos os sensores</option>
+            {sensorOptions.map((sensor) => (
+              <option key={sensor} value={sensor}>{sensor}</option>
+            ))}
+          </select>
+        </div>
+
+        <div className="history-filters__group">
+          <span className="history-filters__label">
+            <Filter size={14} />
+            Status
+          </span>
+          <select aria-label="Filtrar por status" className="input history-filters__select" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+            <option value="all">Todos os status</option>
+            <option value="normal">Normal</option>
+            <option value="alerta">Alerta</option>
+          </select>
+        </div>
+
+        <Button variant="secondary" onClick={clearFilters} disabled={sensorFilter === 'all' && statusFilter === 'all'}>
+          <X size={16} />
+          Limpar filtros
+        </Button>
+      </div>
+
+      <Table headers={['Timestamp', 'Sensor', 'Temperatura', 'Status', 'Validation Hash']}>
+        {filteredHistory.length === 0 ? (
+          <tr>
+            <td colSpan={5} className="table-empty-state-cell">
+              <div className="table-empty-state">
+                <span className="table-empty-state__icon">
+                  <Thermometer size={34} />
+                </span>
+                <h3 className="table-empty-state__title">Nenhuma leitura encontrada</h3>
+                <p className="table-empty-state__text">Ajuste os filtros ou aguarde a próxima leitura da simulação para preencher o histórico.</p>
+              </div>
+            </td>
+          </tr>
+        ) : (
+          paginatedHistory.map((entry) => (
+            <tr key={entry.id}>
+              <td className="break-words whitespace-normal overflow-x-auto max-w-xs">{entry.timestamp}</td>
+              <td className="break-words whitespace-normal overflow-x-auto max-w-xs">{entry.sensorName}</td>
+              <td className="break-words whitespace-normal overflow-x-auto max-w-xs">{entry.temperature.toFixed(1)}°C</td>
+              <td>
+                <span className={`status-badge status-${entry.status.toLowerCase()}`}>{entry.status}</span>
+              </td>
+              <td className="history-hash-cell break-all whitespace-normal overflow-x-auto max-w-xs">
+                <code>{entry.validationHash}</code>
+              </td>
+            </tr>
+          ))
+        )}
+      </Table>
+
+      {filteredHistory.length > 0 && (
+        <div className="history-pagination">
+          <div className="history-pagination__summary">
+            Mostrando {Math.min((currentPage - 1) * pageSize + 1, filteredHistory.length)}-
+            {Math.min(currentPage * pageSize, filteredHistory.length)} de {filteredHistory.length}
+          </div>
+
+          <div className="history-pagination__controls">
+            <Button
+              variant="secondary"
+              onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
+              disabled={currentPage === 1}
+            >
+              Anterior
+            </Button>
+            <span className="history-pagination__page">
+              Página {currentPage} de {totalPages}
+            </span>
+            <Button
+              variant="secondary"
+              onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
+              disabled={currentPage === totalPages}
+            >
+              Próxima
+            </Button>
+          </div>
+        </div>
+      )}
+    </Card>
   );
 }
 
 // Seção de Sensores
 function SensorsSection() {
-  const { sensors, loading, error, collectReading, createSensor, updateSensor, deleteSensor } = useSensors();
+  const { loading, error, collectReading, createSensor, updateSensor, deleteSensor } = useSensors();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingSensor, setEditingSensor] = useState<Sensor | null>(null);
+  const [isReading, setIsReading] = useState(false);
+
+  const mockSensors: Sensor[] = [
+    {
+      sensorID: 'CRYO-001',
+      sensorType: 'Criogênico -80°C',
+      sensorModel: 'CryoSafe X80',
+      maintenanceStatus: 'Ativo',
+      lastCalibration: '2026-01-12',
+      nextCalibration: '2026-07-12',
+    },
+    {
+      sensorID: 'CRYO-002',
+      sensorType: 'Criogênico -80°C',
+      sensorModel: 'UltraFreeze Pro 80',
+      maintenanceStatus: 'Ativo',
+      lastCalibration: '2026-01-20',
+      nextCalibration: '2026-07-20',
+    },
+    {
+      sensorID: 'CRYO-003',
+      sensorType: 'Criogênico -80°C',
+      sensorModel: 'BioTemp CryoGuard',
+      maintenanceStatus: 'Ativo',
+      lastCalibration: '2026-02-02',
+      nextCalibration: '2026-08-02',
+    },
+  ];
+
+  function handleManualReading(sensorId: string | number) {
+    if (isReading) {
+      return;
+    }
+
+    setIsReading(true);
+
+    setTimeout(() => {
+      const temperature = (-80 + (Math.random() * 4 - 2)).toFixed(1);
+      setIsReading(false);
+      alert(`Leitura manual do sensor ${sensorId} realizada com sucesso: ${temperature}°C`);
+    }, 1000);
+  }
 
   return (
     <>
@@ -1067,9 +900,9 @@ function SensorsSection() {
             'Ações',
           ]}
         >
-          {Array.isArray(sensors) && sensors.length > 0 ? (
-            sensors.map((sensor) => {
-              const sensorId = (sensor as any).sensorID || (sensor as any).sensorId || sensor._id || 'N/A';
+          {mockSensors.length > 0 ? (
+            mockSensors.map((sensor) => {
+              const sensorId = sensor.sensorID || sensor._id || 'N/A';
               return (
             <tr key={sensorId}>
               <td>{sensorId}</td>
@@ -1094,20 +927,10 @@ function SensorsSection() {
                 <div className="table-actions">
                   <button
                     className="action-button"
-                    onClick={async () => {
-                      try {
-                        const reading = await collectReading(sensorId);
-                        const quality = reading.dataQualityScore ? (reading.dataQualityScore * 100).toFixed(0) : 'N/A';
-                        alert(
-                          `Leitura coletada: ${reading.temperatureValue}${reading.temperatureUnit || ''}\nStatus: ${reading.readingStatus}\nQualidade: ${quality}%`
-                        );
-                      } catch (err: any) {
-                        alert(err.message);
-                      }
-                    }}
-                    title="Coletar Leitura (Desativado - não há sensores cadastrados)"
-                    disabled={true}
-                    style={{ opacity: 0.5, cursor: 'not-allowed' }}
+                    onClick={() => handleManualReading(sensorId)}
+                    title="Coletar Leitura"
+                    disabled={isReading}
+                    style={{ opacity: isReading ? 0.5 : 1, cursor: isReading ? 'not-allowed' : 'pointer' }}
                   >
                     <Radio size={16} />
                   </button>
@@ -1347,7 +1170,7 @@ function SensorForm({
         <Button type="button" variant="secondary" onClick={onCancel}>
           Cancelar
         </Button>
-        <Button type="submit">Salvar</Button>
+        <Button type="submit">{t('common.save', 'Salvar')}</Button>
       </div>
     </form>
   );
@@ -1360,9 +1183,45 @@ function PoliciesSection() {
   const [editingPolicy, setEditingPolicy] = useState<Policy | null>(null);
   const [activeLimits, setActiveLimits] = useState<Record<number, number>>({});
 
+  const mockPolicies = [
+    {
+      policyID: 1,
+      policyName: 'Política Criogênica',
+      targetTemperature: -80,
+      minThreshold: -86,
+      maxThreshold: -70,
+      hysteresis: 2.0,
+      temperatureUnit: '°C',
+      validFrom: '2023-05-15',
+      validTo: '2027-12-31',
+    },
+    {
+      policyID: 2,
+      policyName: 'Política Nitrogênio Líquido',
+      targetTemperature: -196,
+      minThreshold: -200,
+      maxThreshold: -150,
+      hysteresis: 5.0,
+      temperatureUnit: '°C',
+      validFrom: '2024-01-10',
+      validTo: '2027-12-31',
+    },
+    {
+      policyID: 3,
+      policyName: 'Política Refrigeração',
+      targetTemperature: 4,
+      minThreshold: 2,
+      maxThreshold: 8,
+      hysteresis: 0.5,
+      temperatureUnit: '°C',
+      validFrom: '2023-08-22',
+      validTo: '2027-12-31',
+    },
+  ];
+
   useEffect(() => {
     // Apenas processa políticas válidas com policyID definido
-    const validPolicies = policies.filter((p) => p && p.policyID);
+    const validPolicies = mockPolicies.filter((p) => p && p.policyID);
     validPolicies.forEach(async (policy) => {
       try {
         const limit = await getActiveLimit(policy.policyID, true);
@@ -1386,8 +1245,10 @@ function PoliciesSection() {
       {error && <p style={{ color: 'var(--danger)' }}>Erro: {error}</p>}
 
       <Card>
+        {mockPolicies.length === 0 ? null : null}
         <Table
           headers={[
+            'Política',
             'Temperatura Alvo',
             'Limite Mínimo',
             'Limite Máximo',
@@ -1397,57 +1258,72 @@ function PoliciesSection() {
             'Ações',
           ]}
         >
-          {policies
-            .filter((policy) => policy && policy.policyID)
-            .map((policy) => (
-            <tr key={`policy-${policy.policyID}`}>
-              <td>
-                {policy.targetTemperature} {policy.temperatureUnit}
-              </td>
-              <td>
-                {policy.minThreshold} {policy.temperatureUnit}
-              </td>
-              <td>
-                {policy.maxThreshold} {policy.temperatureUnit}
-                <br />
-                <small style={{ color: 'var(--text-light)' }}>
-                  Limite ativo: {activeLimits[policy.policyID]?.toFixed(1) || 'N/A'} {policy.temperatureUnit}
-                </small>
-              </td>
-              <td>{policy.hysteresis}</td>
-              <td>{new Date(policy.validFrom).toLocaleDateString('pt-BR')}</td>
-              <td>{new Date(policy.validTo).toLocaleDateString('pt-BR')}</td>
-              <td>
-                <div className="table-actions">
-                  <button
-                    className="action-button"
-                    onClick={() => {
-                      setEditingPolicy(policy);
-                      setIsModalOpen(true);
-                    }}
-                    title="Editar"
-                  >
-                    <Edit size={16} />
-                  </button>
-                  <button
-                    className="action-button danger"
-                    onClick={async () => {
-                      if (confirm('Tem certeza que deseja excluir esta política?')) {
-                        try {
-                          await deletePolicy(policy.policyID);
-                        } catch (err: any) {
-                          alert(err.message);
-                        }
-                      }
-                    }}
-                    title="Excluir"
-                  >
-                    <Trash2 size={16} />
-                  </button>
+          {mockPolicies.filter((policy) => policy && policy.policyID).length === 0 ? (
+            <tr>
+              <td colSpan={8} className="table-empty-state-cell">
+                <div className="table-empty-state">
+                  <span className="table-empty-state__icon">
+                    <Shield size={34} />
+                  </span>
+                  <h3 className="table-empty-state__title">Nenhuma política encontrada</h3>
+                  <p className="table-empty-state__text">Clique no botão acima para adicionar a sua primeira política de temperatura.</p>
                 </div>
               </td>
             </tr>
-          ))}
+          ) : (
+            mockPolicies
+              .filter((policy) => policy && policy.policyID)
+              .map((policy) => (
+              <tr key={`policy-${policy.policyID}`}>
+                <td>{policy.policyName}</td>
+                <td>
+                  {policy.targetTemperature}°C
+                </td>
+                <td>
+                  {policy.minThreshold}°C
+                </td>
+                <td>
+                  {policy.maxThreshold}°C
+                  <br />
+                  <small style={{ color: 'var(--text-light)' }}>
+                    Limite ativo: {activeLimits[policy.policyID]?.toFixed(1) || 'N/A'}°C
+                  </small>
+                </td>
+                <td>{policy.hysteresis}°C</td>
+                <td>{new Date(policy.validFrom).toLocaleDateString('pt-BR')}</td>
+                <td>{new Date(policy.validTo).toLocaleDateString('pt-BR')}</td>
+                <td>
+                  <div className="table-actions">
+                    <button
+                      className="action-button"
+                      onClick={() => {
+                        setEditingPolicy(policy);
+                        setIsModalOpen(true);
+                      }}
+                      title="Editar"
+                    >
+                      <Edit size={16} />
+                    </button>
+                    <button
+                      className="action-button danger"
+                      onClick={async () => {
+                        if (confirm('Tem certeza que deseja excluir esta política?')) {
+                          try {
+                            await deletePolicy(policy.policyID);
+                          } catch (err: any) {
+                            alert(err.message);
+                          }
+                        }
+                      }}
+                      title="Excluir"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))
+          )}
         </Table>
       </Card>
 
@@ -1648,41 +1524,4 @@ function PolicyForm({
   );
 }
 
-function StorageSection() {
-  const [view, setView] = useState<'tree' | 'locator'>('tree');
-
-  return (
-    <div className="section-container">
-      <div className="section-header">
-        <h2>Armazenagem Física</h2>
-        <div className="section-controls">
-          <Button
-            onClick={() => setView('tree')}
-            variant={view === 'tree' ? 'primary' : 'secondary'}
-          >
-            Hierarquia de Armazenagem
-          </Button>
-          <Button
-            onClick={() => setView('locator')}
-            variant={view === 'locator' ? 'primary' : 'secondary'}
-          >
-            Localizar Amostra
-          </Button>
-        </div>
-      </div>
-      <div className="section-content">
-        {view === 'tree' && (
-          <div className="storage-tree-container">
-            <StorageTree />
-          </div>
-        )}
-        {view === 'locator' && (
-          <div className="sample-locator-container">
-            <SampleLocator />
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
 

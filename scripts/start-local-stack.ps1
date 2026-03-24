@@ -1,6 +1,7 @@
 param(
   [string]$EnvFile = ".env.docker",
   [string]$ComposeFile = "docker-compose.yml",
+  [string[]]$ComposeFiles,
   [switch]$SkipBuild,
   [switch]$SkipMigration,
   [switch]$DropTarget,
@@ -104,14 +105,28 @@ Ensure-Command -Name 'docker'
 Ensure-Command -Name 'npm'
 
 if (-not (Test-Path -LiteralPath $ComposeFile)) {
-  throw "Compose file não encontrado: $ComposeFile"
+  if (-not $ComposeFiles -or $ComposeFiles.Count -eq 0) {
+    throw "Compose file não encontrado: $ComposeFile"
+  }
+}
+
+$resolvedComposeFiles = if ($ComposeFiles -and $ComposeFiles.Count -gt 0) { $ComposeFiles } else { @($ComposeFile) }
+
+foreach ($composePath in $resolvedComposeFiles) {
+  if (-not (Test-Path -LiteralPath $composePath)) {
+    throw "Compose file não encontrado: $composePath"
+  }
 }
 
 Write-Step "Carregando variáveis de ambiente de $EnvFile"
 Import-EnvFile -Path $EnvFile
 
 Write-Step "Subindo stack Docker"
-$composeArgs = @('compose', '--env-file', $EnvFile, '-f', $ComposeFile, 'up', '-d')
+$composeArgs = @('compose', '--env-file', $EnvFile)
+foreach ($composePath in $resolvedComposeFiles) {
+  $composeArgs += @('-f', $composePath)
+}
+$composeArgs += @('up', '-d')
 if (-not $SkipBuild) {
   $composeArgs += '--build'
 }

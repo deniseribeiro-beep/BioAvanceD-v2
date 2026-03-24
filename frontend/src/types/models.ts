@@ -30,6 +30,7 @@ export interface Patient {
 
   isDeceased?: boolean;
   representativeName?: string;
+  representativeEmail?: string;
   representativeCpf?: string;
   representativePhone?: string;
   
@@ -41,11 +42,15 @@ export interface Patient {
   
   // 10. CID - Caractere - Classificação Internacional de Doenças (CID-11)
   icdCode?: string; // Alterado para string conforme especificação
+  orphaCode?: string;
+  omimCode?: string;
   icdReference?: {
     cidId?: string;
     Codigo_Tabulacao?: string;
     Codigos_CID10?: string;
     Descricao?: string;
+    ORPHA?: string;
+    OMIM?: string;
   } | null;
   
   // 11. PESO - Numérico - Peso do paciente em quilos
@@ -88,10 +93,42 @@ export interface Patient {
   consentTokenExpiresAt?: Date | string | null;
   consentNotifiedAt?: Date | string | null;
   consentAcceptedAt?: Date | string | null;
+  biomarkerXai?: BiomarkerXai | null;
   sampleList?: Sample[] | string[];
   linkedProject?: string;
   createdAt?: Date | string;
   updatedAt?: Date | string;
+}
+
+export interface BiomarkerXaiEvidence {
+  feature: string;
+  value: number | null;
+  unit: string;
+  direction: string;
+  ruleApplied: string;
+  severity: 'low' | 'medium' | 'high';
+  rationale: string;
+}
+
+export interface BiomarkerXai {
+  version: string;
+  generatedAt: Date | string;
+  confidence: number;
+  modelType: string;
+  isClinicalDiagnosis: boolean;
+  disclaimer: string;
+  summary: string;
+  recommendation: string;
+  evidence: BiomarkerXaiEvidence[];
+  governance?: {
+    owner?: string;
+    clinicalApprover?: string;
+    reviewCadenceDays?: number;
+    lastApprovedAt?: Date | string | null;
+    nextReviewDueAt?: Date | string | null;
+    thresholds?: Record<string, unknown>;
+    source?: string;
+  };
 }
 
 export interface CidEntry {
@@ -100,6 +137,18 @@ export interface CidEntry {
   Codigo_Tabulacao: string;
   Descricao: string;
   Codigos_CID10: string;
+  ORPHA?: string;
+  OMIM?: string;
+  icd_code?: string;
+  icdCode?: string;
+  aliases?: string[];
+  synonyms?: string[];
+  alternativeNames?: string[];
+  namePt?: string;
+  nameEn?: string;
+  nameEs?: string;
+  names?: Record<string, string> | null;
+  translations?: Record<string, string> | null;
 }
 
 export interface PhoneCodeEntry {
@@ -120,8 +169,8 @@ export interface Sample {
   barcode?: string; // Código de barras no formato BR-YYYY-NNN (gerado automaticamente)
   registrationDate?: Date | string;
   quantity?: number;
-  quality?: number; // Escala MIABIS: 0 (Não avaliada), 1 (Adequada), 2 (Inadequada)
-  qualityID?: number; // Mantido para compatibilidade, mas quality é o campo principal
+  quality?: string | number; // Id MIABIS canônico ou legado persistido
+  qualityID?: string | number; // Mantido para compatibilidade
   unit?: string; // Unidade de medida (µL, mL, etc.)
   unitID?: number; // Relacionamento Sample → SampleWithMeasurementUnit
   locationID?: number;
@@ -148,6 +197,18 @@ export interface Sample {
   withdrawalType?: 'Parcial' | 'Total';
   withdrawalResponsible?: string;
   sampleDestination?: string;
+  storageLocation?: {
+    freezerId?: string | null;
+    freezerName?: string | null;
+    shelfId?: string | null;
+    shelfName?: string | null;
+    rackId?: string | null;
+    rackName?: string | null;
+    boxId?: string | null;
+    boxName?: string | null;
+    position?: string | null;
+    path?: string | null;
+  } | null;
   // Soft delete fields
   deleted?: boolean;
   deletedAt?: Date | string;
@@ -239,6 +300,7 @@ export interface ConsentPolicy {
   granularPermissions: ConsentPolicyPermission[];
   revisionType?: 'create' | 'update';
   previousPolicyId?: string | null;
+  versionGroupId?: string;
   createdAt?: Date | string;
   updatedAt?: Date | string;
 }

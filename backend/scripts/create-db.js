@@ -120,6 +120,17 @@ async function createDatabase() {
         description: 'Resultados de análise'
       },
       {
+        name: 'biomarker_observations',
+        indexes: [
+          { patientID: 1, biomarkerType: 1, collectedAt: -1 },
+          { patientID: 1, collectedAt: -1 },
+          { biomarkerType: 1, collectedAt: -1 },
+          { status: 1, collectedAt: -1 },
+          { idempotencyKey: 1 }
+        ],
+        description: 'Observações de biomarcadores por paciente (histórico clínico)'
+      },
+      {
         name: 'equipment',
         indexes: [
           { equipmentID: 1 },

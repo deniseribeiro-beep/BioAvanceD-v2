@@ -1,5 +1,6 @@
 const logger = require('../utils/logger');
 const { ObjectId } = require('mongodb');
+const { SPECIMEN_TYPES } = require('../config/constants/specimen.constants');
 
 /**
  * Service de Geração HL7
@@ -346,7 +347,7 @@ class HL7Service {
           coding: [{
             system: 'http://snomed.info/sct',
             code: this.mapSampleTypeToSNOMED(sample.sampleType),
-            display: sample.sampleType
+            display: this.getSampleTypeDisplay(sample.sampleType)
           }]
         },
         subject: {
@@ -565,18 +566,26 @@ class HL7Service {
    * Mapeia tipo de amostra para código SNOMED CT (simplificado)
    */
   mapSampleTypeToSNOMED(sampleType) {
-    if (!sampleType) return '119297000'; // Body substance (default)
+    if (!sampleType) return '119297000';
     const map = {
-      'Sangue': '420135007', // Blood specimen
-      'Urina': '122575003', // Urine specimen
-      'Saliva': '258467004', // Saliva specimen
-      'Tecido': '119361006', // Tissue specimen
-      'DNA': '119297000', // Body substance
-      'RNA': '119297000', // Body substance
-      'Plasma': '119361006', // Tissue specimen
-      'Soro': '119297000' // Body substance
+      PLASMA: '119361006',
+      SERUM: '119297000',
+      ERYTHROCYTES: '119297000',
+      URINE: '122575003',
+      DBS: '119297000',
+      TISSUE_FRESH: '119361006',
+      TISSUE_FFPE: '119361006',
+      PBMC: '119297000',
+      SALIVA: '258467004',
+      FECES: '119297000',
+      CSF: '430864002'
     };
     return map[sampleType] || '119297000';
+  }
+
+  getSampleTypeDisplay(sampleType) {
+    const specimenType = SPECIMEN_TYPES.find((item) => item.id === sampleType);
+    return specimenType?.label || sampleType;
   }
 
   /**

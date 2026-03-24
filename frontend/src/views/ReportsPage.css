@@ -1,56 +1,99 @@
 .reports-page {
 	display: grid;
 	gap: 1rem;
+	background:
+		radial-gradient(circle at top right, rgba(37, 99, 235, 0.08), transparent 26%),
+		radial-gradient(circle at bottom left, rgba(15, 118, 110, 0.08), transparent 24%);
+}
+
+.reports-page .page-header {
+	padding: 1rem 1.1rem;
+	border-radius: 1.3rem;
+	border: 1px solid rgba(15, 23, 42, 0.08);
+	background: linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(240, 253, 250, 0.86));
+	box-shadow: 0 18px 40px rgba(15, 23, 42, 0.06);
+}
+
+.reports-page .page-title {
+	font-size: clamp(1.8rem, 2.6vw, 2.4rem);
+	letter-spacing: -0.04em;
+	margin: 0;
+	color: #0f172a;
+}
+
+.reports-page .page-subtitle {
+	margin: 0.35rem 0 0;
+	max-width: 72ch;
+	color: rgba(15, 23, 42, 0.72);
+	line-height: 1.6;
 }
 
 .report-state-card {
-	border: 1px solid var(--border);
+	border: 1px solid rgba(15, 23, 42, 0.08);
+	border-radius: 1rem;
+	background: rgba(255, 255, 255, 0.92);
+	box-shadow: 0 14px 30px rgba(15, 23, 42, 0.05);
 }
 
 .report-state-card--error {
-	border-color: #f6c7bd;
-	background: #fff4f1;
+	border-color: rgba(239, 68, 68, 0.16);
+	background: linear-gradient(180deg, rgba(255, 247, 247, 0.96), rgba(255, 255, 255, 0.98));
 }
 
 .report-state-message {
 	margin: 0;
 	padding: 0.25rem 0;
-	color: var(--text);
+	color: #0f172a;
 }
 
 .reports-grid {
 	display: grid;
-	grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-	gap: 0.875rem;
+	grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+	gap: 0.95rem;
 }
 
 .report-card,
 .report-item,
 .no-reports-card {
-	border: 1px solid var(--border);
-}
-
-.report-card-content {
-	display: grid;
-	gap: 0.625rem;
+	border: 1px solid rgba(15, 23, 42, 0.08);
+	border-radius: 1rem;
+	background: rgba(255, 255, 255, 0.92);
+	box-shadow: 0 16px 32px rgba(15, 23, 42, 0.05);
 }
 
 .report-card {
 	height: 100%;
+	overflow: hidden;
+}
+
+.report-card-content {
+	display: grid;
+	gap: 0.8rem;
+	align-content: start;
 }
 
 .report-icon-large {
-	font-size: 1.75rem;
+	width: 3rem;
+	height: 3rem;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	border-radius: 0.95rem;
+	background: linear-gradient(135deg, rgba(15, 118, 110, 0.14), rgba(37, 99, 235, 0.12));
+	font-size: 1.5rem;
 }
 
 .report-title {
 	margin: 0;
-	font-size: 1.2rem;
+	font-size: 1.1rem;
+	letter-spacing: -0.02em;
+	color: #0f172a;
 }
 
 .report-description {
 	margin: 0;
-	color: var(--text-secondary);
+	color: rgba(15, 23, 42, 0.68);
+	line-height: 1.55;
 }
 
 .report-button {
@@ -59,54 +102,63 @@
 
 .empty-state {
 	text-align: center;
-	padding: 2rem;
+	padding: 2.25rem 1.5rem;
 	display: grid;
 	justify-items: center;
 	gap: 0.5rem;
 }
 
 .empty-state-icon {
-	color: var(--text-secondary);
+	color: rgba(15, 23, 42, 0.38);
 	margin-bottom: 0.25rem;
 }
 
 .empty-state-title {
 	margin: 0;
-	color: var(--text);
+	color: #0f172a;
 }
 
 .empty-state-text {
 	margin: 0;
-	color: var(--text-secondary);
+	color: rgba(15, 23, 42, 0.68);
 }
 
 .reports-history {
-	margin-top: 1rem;
+	margin-top: 0.25rem;
+	padding-top: 0.25rem;
 }
 
 .reports-history h2 {
-	margin-bottom: 0.75rem;
+	margin: 0 0 0.75rem;
+	font-size: 1.05rem;
+	letter-spacing: -0.02em;
+	color: #0f172a;
 }
 
 .reports-list {
 	display: grid;
-	gap: 0.75rem;
+	gap: 0.85rem;
 }
 
 .report-item-content {
 	display: grid;
 	grid-template-columns: auto 1fr auto;
 	align-items: center;
-	gap: 0.875rem;
+	gap: 0.95rem;
+}
+
+.report-item-content > svg {
+	color: #0f766e;
 }
 
 .report-item-info h4 {
 	margin: 0 0 0.25rem;
+	color: #0f172a;
 }
 
 .report-item-info p {
 	margin: 0;
-	color: var(--text-secondary);
+	color: rgba(15, 23, 42, 0.68);
 }
 
 .report-item-actions {
@@ -114,6 +166,11 @@
 	flex-wrap: wrap;
 	justify-content: flex-end;
 	gap: 0.5rem;
+}
+
+.report-item-actions .btn,
+.report-button {
+	box-shadow: none;
 }
 
 .report-viewer {
@@ -129,16 +186,26 @@
 }
 
 @media (max-width: 768px) {
-	.report-item-content {
+	.reports-grid {
 		grid-template-columns: 1fr;
 	}
 
-	.report-item-actions {
+	.report-item-content {
+		grid-template-columns: 1fr;
+		justify-items: start;
+	}
+
+	.report-item-actions,
+	.report-actions {
 		justify-content: stretch;
 	}
 
 	.report-item-actions button,
 	.report-actions button {
 		flex: 1 1 auto;
+	}
+
+	.reports-page .page-header {
+		padding: 0.95rem;
 	}
 }

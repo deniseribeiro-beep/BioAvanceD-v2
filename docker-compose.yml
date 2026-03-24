@@ -108,6 +108,7 @@ services:
       context: ./backend
     container_name: bioavanced-backend
     restart: unless-stopped
+    command: node server.js
     depends_on:
       mongodb:
         condition: service_healthy

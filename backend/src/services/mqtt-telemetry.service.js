@@ -1,6 +1,9 @@
 const mqtt = require('mqtt');
+const fs = require('fs');
 const logger = require('../utils/logger');
 const iotStreamingService = require('./iot-streaming.service');
+const mqttSignatureService = require('./mqtt-signature.service');
+const mqttIngestionAuditService = require('./mqtt-ingestion-audit.service');
 
 class MqttTelemetryService {
   constructor() {
@@ -17,12 +20,28 @@ class MqttTelemetryService {
     const url = process.env.MQTT_URL || '';
     const topic = process.env.MQTT_TOPIC || 'bioavanced/telemetry/temperature/#';
 
+    const readOptionalFile = (filePath) => {
+      if (!filePath) return undefined;
+      try {
+        return fs.readFileSync(filePath);
+      } catch (error) {
+        logger.warn(`[ISO20387][MQTT] Não foi possível ler arquivo TLS: ${filePath}`);
+        return undefined;
+      }
+    };
+
     return {
       url,
       topic,
       username: process.env.MQTT_USERNAME || undefined,
       password: process.env.MQTT_PASSWORD || undefined,
-      clientId: process.env.MQTT_CLIENT_ID || `bioavanced-backend-${Date.now()}`
+      clientId: process.env.MQTT_CLIENT_ID || `bioavanced-backend-${Date.now()}`,
+      tlsEnabled: String(process.env.MQTT_TLS_ENABLED || '').trim().toLowerCase() === 'true',
+      rejectUnauthorized: String(process.env.MQTT_TLS_REJECT_UNAUTHORIZED || 'true').trim().toLowerCase() !== 'false',
+      ca: readOptionalFile(process.env.MQTT_CA_PATH),
+      cert: readOptionalFile(process.env.MQTT_CERT_PATH),
+      key: readOptionalFile(process.env.MQTT_KEY_PATH),
+      signatureRequired: String(process.env.MQTT_SIGNATURE_REQUIRED || '').trim().toLowerCase() === 'true'
     };
   }
 
@@ -42,13 +61,22 @@ class MqttTelemetryService {
       return;
     }
 
-    this.client = mqtt.connect(config.url, {
+    const connectionOptions = {
       username: config.username,
       password: config.password,
       clientId: config.clientId,
       reconnectPeriod: 5000,
       clean: true
-    });
+    };
+
+    if (config.tlsEnabled) {
+      connectionOptions.rejectUnauthorized = config.rejectUnauthorized;
+      if (config.ca) connectionOptions.ca = config.ca;
+      if (config.cert) connectionOptions.cert = config.cert;
+      if (config.key) connectionOptions.key = config.key;
+    }
+
+    this.client = mqtt.connect(config.url, connectionOptions);
 
     this.client.on('connect', () => {
       this.client.subscribe(config.topic, (error) => {
@@ -65,15 +93,15 @@ class MqttTelemetryService {
       logger.error('[ISO20387][MQTT] Erro no cliente MQTT:', error.message || error);
     });
 
-    this.client.on('message', async (_topic, payloadBuffer) => {
-      await this.handleMessage(db, payloadBuffer);
+    this.client.on('message', async (topic, payloadBuffer) => {
+      await this.handleMessage(db, topic, payloadBuffer, config.signatureRequired);
     });
 
     this.started = true;
     logger.info('[ISO20387][MQTT] Serviço de ingestão MQTT inicializado');
   }
 
-  async handleMessage(db, payloadBuffer) {
+  async handleMessage(db, topic, payloadBuffer, signatureRequired = false) {
     try {
       const raw = payloadBuffer?.toString?.('utf8') || '';
       if (!raw) {
@@ -81,6 +109,37 @@ class MqttTelemetryService {
       }
 
       const payload = JSON.parse(raw);
+      const payloadHash = mqttSignatureService.hashPayload(raw);
+      const payloadSignature = payload.signature || payload.hmac || payload.payloadSignature || null;
+      const signatureVerified = payloadSignature ? mqttSignatureService.verifyHmac(raw, payloadSignature) : false;
+
+      if (signatureRequired && !payloadSignature) {
+        await mqttIngestionAuditService.append(db, {
+          topic,
+          payloadHash,
+          payloadSignature: null,
+          signatureRequired,
+          signatureVerified: false,
+          status: 'rejected',
+          reason: 'missing_signature'
+        });
+        logger.warn('[ISO20387][MQTT] Payload rejeitado: assinatura obrigatória ausente');
+        return;
+      }
+
+      if (payloadSignature && !signatureVerified) {
+        await mqttIngestionAuditService.append(db, {
+          topic,
+          payloadHash,
+          payloadSignature,
+          signatureRequired,
+          signatureVerified: false,
+          status: 'rejected',
+          reason: 'invalid_signature'
+        });
+        logger.warn('[ISO20387][MQTT] Payload rejeitado: assinatura inválida');
+        return;
+      }
 
       const temperatureData = {
         sensorId: payload.sensorId || payload.sensorID || payload.deviceId || null,
@@ -102,11 +161,34 @@ class MqttTelemetryService {
       };
 
       if (!temperatureData.sensorId || !Number.isFinite(temperatureData.temperatureValue)) {
+        await mqttIngestionAuditService.append(db, {
+          topic,
+          payloadHash,
+          payloadSignature,
+          signatureRequired,
+          signatureVerified: payloadSignature ? signatureVerified : !signatureRequired,
+          status: 'rejected',
+          reason: 'invalid_payload'
+        });
         logger.warn('[ISO20387][MQTT] Payload inválido de telemetria descartado');
         return;
       }
 
-      await iotStreamingService.processTemperatureData(db, temperatureData);
+      const insertedId = await iotStreamingService.processTemperatureData(db, temperatureData);
+
+      await mqttIngestionAuditService.append(db, {
+        topic,
+        payloadHash,
+        payloadSignature,
+        signatureRequired,
+        signatureVerified: payloadSignature ? signatureVerified : !signatureRequired,
+        status: 'processed',
+        reason: null,
+        sensorId: temperatureData.sensorId,
+        temperatureValue: temperatureData.temperatureValue,
+        readingTimestamp: temperatureData.timestamp,
+        temperatureDataId: insertedId || null
+      });
     } catch (error) {
       logger.error('[ISO20387][MQTT] Falha ao processar payload MQTT:', error.message || error);
     }

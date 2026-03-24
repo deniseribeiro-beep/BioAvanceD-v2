@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Search, MapPin, AlertCircle, Loader } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { Search, MapPin, AlertCircle, Loader, QrCode } from 'lucide-react';
 import { storageApi } from '../services/storageApi';
 import './SampleLocator.css';
 
@@ -25,6 +25,14 @@ export const SampleLocator: React.FC<SampleLocatorProps> = () => {
   const [result, setResult] = useState<SampleLocation | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [releasing, setReleasing] = useState(false);
+  const [scanMode, setScanMode] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (scanMode) {
+      inputRef.current?.focus();
+    }
+  }, [scanMode]);
 
   const handleSearch = async () => {
     if (!searchInput.trim()) {
@@ -56,6 +64,12 @@ export const SampleLocator: React.FC<SampleLocatorProps> = () => {
     }
   };
 
+  const handleToggleScanMode = () => {
+    setScanMode((current) => !current);
+    setError(null);
+    inputRef.current?.focus();
+  };
+
   const handleRelease = async () => {
     if (!result) return;
 
@@ -77,7 +91,7 @@ export const SampleLocator: React.FC<SampleLocatorProps> = () => {
     }
   };
 
-  const handleKeyPress = (e: React.KeyboardEvent) => {
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter' && !loading) {
       handleSearch();
     }
@@ -99,33 +113,48 @@ export const SampleLocator: React.FC<SampleLocatorProps> = () => {
         <div className="search-input-group">
           <Search size={18} />
           <input
+            ref={inputRef}
             type="text"
-            placeholder="Digite o ID ou código de barras da amostra..."
+            placeholder={scanMode ? 'Escaneie barcode/QR code e pressione Enter...' : 'Digite o ID, barcode ou QR code da amostra...'}
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
-            onKeyPress={handleKeyPress}
+            onKeyDown={handleKeyDown}
             disabled={loading}
             className="search-input"
           />
         </div>
-        <button
-          onClick={handleSearch}
-          disabled={loading}
-          className="btn-search"
-        >
-          {loading ? (
-            <>
-              <Loader size={16} className="spinner" />
-              Procurando...
-            </>
-          ) : (
-            <>
-              <Search size={16} />
-              Procurar
-            </>
-          )}
-        </button>
+        <div className="sample-locator-actions">
+          <button onClick={handleSearch} disabled={loading} className="btn-search">
+            {loading ? (
+              <>
+                <Loader size={16} className="spinner" />
+                Buscando
+              </>
+            ) : (
+              <>
+                <Search size={16} />
+                Pesquisar
+              </>
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={handleToggleScanMode}
+            disabled={loading}
+            className={`btn-scan ${scanMode ? 'active' : ''}`}
+            title="Ativar leitura por barcode/QR code"
+          >
+            <QrCode size={16} />
+            {scanMode ? 'Leitura ativa' : 'Barcode/QR'}
+          </button>
+        </div>
       </div>
+
+      <p className={`sample-locator-mode ${scanMode ? 'active' : ''}`}>
+        {scanMode
+          ? 'Modo de leitura ativo: mantenha o cursor no campo e escaneie o barcode ou QR code.'
+          : 'Use a pesquisa manual ou ative a leitura para receber o código direto do leitor.'}
+      </p>
 
       {error && (
         <div className="error-box">

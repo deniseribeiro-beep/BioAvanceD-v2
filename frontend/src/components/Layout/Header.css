@@ -1,8 +1,8 @@
 .header {
-  background-color: var(--surface);
-  border-bottom: 1px solid var(--border);
+  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+  border-bottom: 1px solid #e2e8f0;
   padding: 1rem 2rem;
-  box-shadow: var(--shadow-sm);
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.04);
   width: 100%;
   min-width: 0;
   overflow-x: hidden;
@@ -22,15 +22,16 @@
   display: flex;
   align-items: center;
   gap: 0.75rem;
-  background-color: var(--background);
+  background-color: #f8fafc;
   padding: 0.5rem 1rem;
   border-radius: 0.5rem;
   flex: 1;
   max-width: 500px;
+  border: 1px solid #e2e8f0;
 }
 
 .header-search svg {
-  color: var(--text-light);
+  color: #64748b;
 }
 
 .header-search-input {
@@ -39,11 +40,11 @@
   outline: none;
   flex: 1;
   font-size: 0.875rem;
-  color: var(--text);
+  color: #334155;
 }
 
 .header-search-input::placeholder {
-  color: var(--text-light);
+  color: #94a3b8;
 }
 
 .header-actions {
@@ -65,7 +66,7 @@
 }
 
 .header-icon-button:hover {
-  background-color: var(--background);
+  background-color: #f1f5f9;
 }
 
 .header-user {
@@ -90,7 +91,7 @@
 .header-title {
   font-size: 1.25rem;
   font-weight: 600;
-  color: var(--text);
+  color: #0f172a;
   margin: 0;
 }
 
@@ -105,8 +106,9 @@
   align-items: center;
   gap: 0.75rem;
   padding: 0.5rem 1rem;
-  background-color: var(--bg-secondary);
+  background-color: #f8fafc;
   border-radius: 0.5rem;
+  border: 1px solid #e2e8f0;
 }
 
 .user-details {
@@ -118,15 +120,21 @@
 .user-name {
   font-weight: 600;
   font-size: 0.9rem;
-  color: var(--text);
+  color: #0f172a;
 }
 
 .user-access {
   font-size: 0.75rem;
-  color: var(--text-light);
+  color: #64748b;
 }
 
 .logout-button {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.intake-button {
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -197,6 +205,7 @@
   }
   
   .logout-button,
+  .intake-button,
   .security-button {
     font-size: 0.8125rem;
     padding: 0.4375rem 0.625rem;
@@ -204,6 +213,7 @@
   }
   
   .logout-button span,
+  .intake-button span,
   .security-button span {
     display: none;
   }

@@ -6,7 +6,7 @@ const logger = require('../../utils/logger');
 const auditLogger = require('../../utils/auditLogger');
 
 // RF001 - Login (compatível com frontend)
-router.post('/login', (req, res) => {
+router.post('/login', async (req, res, next) => {
   // Frontend envia: { username, password, twoFactorCode }
   // Backend espera: { email, password, mfaCode }
   const { username, email, password, twoFactorCode, mfaCode } = req.body;
@@ -15,7 +15,21 @@ router.post('/login', (req, res) => {
   req.body.email = loginIdentifier; // Compatibilidade - permite login com username ou email
   req.body.mfaCode = twoFactorCode || mfaCode; // Compatibilidade
   logger.info(`Dados convertidos - email: "${req.body.email}", mfaCode: ${req.body.mfaCode ? 'fornecido' : 'não fornecido'}`);
-  authController.login(req, res);
+  try {
+    await authController.login(req, res);
+  } catch (error) {
+    logger.error('Erro não tratado na rota de login:', error.message);
+
+    if (!res.headersSent) {
+      return res.status(500).json({
+        success: false,
+        error: 'Erro interno ao processar login',
+        message: error.message
+      });
+    }
+
+    return next(error);
+  }
 });
 
 // RF003 - Cadastro de usuário (pode ser público ou protegido dependendo da regra)

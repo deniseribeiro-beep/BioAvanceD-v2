@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Card from '../components/UI/Card';
 import Button from '../components/UI/Button';
@@ -8,6 +8,7 @@ import { Reports } from '../types/models';
 import { useReports } from '../hooks/useReports';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
+import { getAllowedReportDefinitions, getReportTypeDefinition } from '../config/constants/report.constants';
 import './ReportsPage.css';
 
 // REPORT_TYPES será definido dentro do componente para ter acesso ao t()
@@ -17,29 +18,20 @@ export default function ReportsPage() {
   const { t } = useLanguage();
   const { reports, loading, error, deleteReport } = useReports();
   const { hasReportAccess } = useAuth();
-  
-  const REPORT_TYPES = [
-    { key: 'patients', type: t('reports.types.patients'), icon: '👥', description: t('reports.types.patientsDescription') },
-    { key: 'samplesByPatient', type: t('reports.types.samplesByPatient'), icon: '🔗', description: t('reports.types.samplesByPatientDescription') },
-    { key: 'samples', type: t('reports.types.samples'), icon: '🧪', description: t('reports.types.samplesDescription') },
-    { key: 'temperature', type: t('reports.types.temperature'), icon: '🌡️', description: t('reports.types.temperatureDescription') },
-    { key: 'temperatureControl', type: t('reports.types.temperatureControl'), icon: '🌡️', description: t('reports.types.temperatureControlDescription') },
-    { key: 'sensors', type: t('reports.types.sensors'), icon: '📡', description: t('reports.types.sensorsDescription') },
-    { key: 'equipment', type: t('reports.types.equipment'), icon: '🔧', description: t('reports.types.equipmentDescription') },
-    { key: 'results', type: t('reports.types.results'), icon: '📊', description: t('reports.types.resultsDescription') },
-    { key: 'audit', type: t('reports.types.audit'), icon: '📝', description: t('reports.types.auditDescription') },
-    { key: 'tissueOriginHistory', type: t('reports.types.tissueOriginHistory'), icon: '🧬', description: t('reports.types.tissueOriginHistoryDescription') },
-    { key: 'extracellularNetwork', type: t('reports.types.extracellularNetwork'), icon: '🔬', description: t('reports.types.extracellularNetworkDescription') },
-    { key: 'withdrawalHistory', type: t('reports.types.withdrawalHistory'), icon: '📤', description: t('reports.types.withdrawalHistoryDescription') },
-    { key: 'accessLogs', type: t('reports.types.accessLogs'), icon: '🔐', description: t('reports.types.accessLogsDescription') },
-    { key: 'sampleAnalysis', type: t('reports.types.sampleAnalysis'), icon: '🔍', description: t('reports.types.sampleAnalysisDescription') }
-  ];
+
+  const reportCatalog = useMemo(() => {
+    return getAllowedReportDefinitions(hasReportAccess).map((reportType) => ({
+      ...reportType,
+      typeLabel: t(reportType.type, reportType.fallbackType),
+      descriptionLabel: t(reportType.description, reportType.fallbackDescription),
+    }));
+  }, [hasReportAccess, t]);
   const [deletingReportId, setDeletingReportId] = useState<number | null>(null);
   const [viewingReport, setViewingReport] = useState<Reports | null>(null);
   const [reportData, setReportData] = useState<any>(null);
   
   // Filtra tipos de relatórios baseado nas permissões do usuário
-  const allowedReportTypes = REPORT_TYPES.filter(report => hasReportAccess(report.type) || hasReportAccess(report.key));
+  const allowedReportTypes = reportCatalog;
 
   const handleGenerateReport = async (reportType: { key: string; type: string }) => {
     // Verifica permissão antes de gerar
@@ -199,8 +191,8 @@ export default function ReportsPage() {
             <Card key={reportType.type} className="report-card">
               <div className="report-card-content">
                 <div className="report-icon-large">{reportType.icon}</div>
-                <h3 className="report-title">{reportType.type}</h3>
-                <p className="report-description">{reportType.description}</p>
+                <h3 className="report-title">{reportType.typeLabel}</h3>
+                <p className="report-description">{reportType.descriptionLabel}</p>
                 <Button
                   onClick={() => handleGenerateReport(reportType)}
                   className="report-button"

@@ -180,12 +180,24 @@ class AuthService {
   async processLogin(db, user, password, mfaCode, usersCollection, req) {
     try {
 
+
       if (!user) {
         throw new Error('Credenciais inválidas');
       }
 
-      // Verifica senha
-      const passwordMatch = await bcrypt.compare(password, user.password);
+      // Validação extra: senha precisa existir e ser string
+      if (!user.password || typeof user.password !== 'string' || user.password.length < 20) {
+        logger.error(`Usuário encontrado, mas campo de senha ausente ou inválido. user.email: ${user.email}, user.username: ${user.username}`);
+        throw new Error('Credenciais inválidas');
+      }
+
+      let passwordMatch = false;
+      try {
+        passwordMatch = await bcrypt.compare(password, user.password);
+      } catch (bcryptErr) {
+        logger.error(`Erro ao comparar senha com bcrypt: ${bcryptErr.message}`);
+        throw new Error('Credenciais inválidas');
+      }
       if (!passwordMatch) {
         // Registra tentativa de login falha (usando auditLogger que já anonimiza)
         const auditLogger = require('../utils/auditLogger');
@@ -198,7 +210,6 @@ class AuthService {
           req: req,
           module: 'Autenticação'
         });
-
         throw new Error('Credenciais inválidas');
       }
 

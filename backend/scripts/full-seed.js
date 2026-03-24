@@ -12,6 +12,7 @@ const { connectNeo4j, closeNeo4jConnection } = require('../src/infrastructure/da
 const redisModule = require('../src/config/redis');
 const fhirSyncService = require('../src/services/fhir-sync.service');
 const logger = require('../src/utils/logger');
+const { SPECIMEN_TYPES } = require('../src/config/constants/specimen.constants');
 
 function parseArgs(argv) {
   const args = {
@@ -183,7 +184,7 @@ async function main() {
     durationMs: null
   };
 
-  const sampleTypesCatalog = ['Sangue', 'Urina', 'Saliva', 'Tecido', 'DNA', 'RNA', 'Plasma', 'Soro', 'Líquido Cefalorraquidiano'];
+  const sampleTypesCatalog = SPECIMEN_TYPES;
   const sampleOriginsCatalog = ['Coleta', 'Transferência', 'Doação', 'Pesquisa'];
   const extractionProtocolsCatalog = ['Protocolo A', 'Protocolo B', 'Protocolo C', 'QIAGEN', 'Phenol-Chloroform', 'Automated'];
   const projectsCatalog = ['Projeto Genoma Raro', 'Projeto OncoMap', 'Projeto Metabólico', 'Projeto NeuroTrace'];
@@ -242,10 +243,10 @@ async function main() {
       { qualityID: 2, description: 'Inadequada', qualityLevel: 'C', createdAt: new Date(), updatedAt: new Date() }
     ];
 
-    const sampleTypes = sampleTypesCatalog.map((description, index) => ({
+    const sampleTypes = sampleTypesCatalog.map((specimenType, index) => ({
       sampleTypeID: index + 1,
-      description,
-      code: `ST-${index + 1}`,
+      description: specimenType.label,
+      code: specimenType.id,
       createdAt: new Date(),
       updatedAt: new Date()
     }));

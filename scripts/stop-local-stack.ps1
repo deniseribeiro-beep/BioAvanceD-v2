@@ -1,6 +1,7 @@
 param(
   [string]$EnvFile = ".env.docker",
   [string]$ComposeFile = "docker-compose.yml",
+  [string[]]$ComposeFiles,
   [switch]$RemoveVolumes,
   [switch]$RemoveImages,
   [switch]$RemoveOrphans
@@ -25,7 +26,17 @@ Write-Step "Validando pré-requisitos"
 Ensure-Command -Name 'docker'
 
 if (-not (Test-Path -LiteralPath $ComposeFile)) {
-  throw "Compose file não encontrado: $ComposeFile"
+  if (-not $ComposeFiles -or $ComposeFiles.Count -eq 0) {
+    throw "Compose file não encontrado: $ComposeFile"
+  }
+}
+
+$resolvedComposeFiles = if ($ComposeFiles -and $ComposeFiles.Count -gt 0) { $ComposeFiles } else { @($ComposeFile) }
+
+foreach ($composePath in $resolvedComposeFiles) {
+  if (-not (Test-Path -LiteralPath $composePath)) {
+    throw "Compose file não encontrado: $composePath"
+  }
 }
 
 if (-not (Test-Path -LiteralPath $EnvFile)) {
@@ -37,7 +48,10 @@ $composeArgs = @('compose')
 if (Test-Path -LiteralPath $EnvFile) {
   $composeArgs += @('--env-file', $EnvFile)
 }
-$composeArgs += @('-f', $ComposeFile, 'down')
+foreach ($composePath in $resolvedComposeFiles) {
+  $composeArgs += @('-f', $composePath)
+}
+$composeArgs += 'down'
 
 if ($RemoveVolumes) {
   $composeArgs += '--volumes'

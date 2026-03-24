@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const { ObjectId } = require('mongodb'); // Native MongoDB driver para evitar conflitos BSON
+const env = require('../config/env');
 const logger = require('../utils/logger');
 const SampleMovementModel = require('../models/SampleMovement');
 const { appendMovementWithHashChain, enforceAppendOnlyCollection, ensureSampleMovementIndexes } = require('../utils/sampleMovementLedger');
@@ -17,8 +18,47 @@ const { getCollection } = require('../utils/collectionResolver');
  * RFC: ISO 20387 compliance
  */
 class StorageService {
-  constructor(db) {
+  constructor(db, neo4jDriver = null) {
     this.db = db;
+    this.neo4jDriver = neo4jDriver || db?.neo4jDriver || null;
+  }
+
+  _normalizeObjectId(value) {
+    if (value instanceof ObjectId) {
+      return value;
+    }
+
+    if (typeof value === 'string' && ObjectId.isValid(value)) {
+      return new ObjectId(value);
+    }
+
+    return value;
+  }
+
+  _isPositionOccupied(occupancyGrid, position) {
+    if (!occupancyGrid) {
+      return false;
+    }
+
+    if (typeof occupancyGrid.has === 'function' && typeof occupancyGrid.get === 'function') {
+      return Boolean(occupancyGrid.has(position) && occupancyGrid.get(position));
+    }
+
+    return Boolean(occupancyGrid[position]);
+  }
+
+  _findFirstAvailablePosition(box) {
+    const capacityRows = Number(box?.dimension?.rows || 0);
+    const capacityCols = Number(box?.dimension?.cols || 0);
+
+    if (capacityRows < 1 || capacityCols < 1) {
+      return null;
+    }
+
+    const allPositions = this._getAllValidPositions({ rows: capacityRows, cols: capacityCols });
+    const occupancyGrid = box?.occupancyGrid || {};
+
+    return allPositions.find((position) => !this._isPositionOccupied(occupancyGrid, position)) || null;
   }
 
   /**
@@ -285,6 +325,259 @@ class StorageService {
       return {
         success: false,
         ...errorObj
+      };
+    } finally {
+      await session.endSession();
+    }
+  }
+
+  /**
+   * Alocação dinâmica baseada em capacidade e disponibilidade.
+   *
+   * Localiza automaticamente a próxima posição vazia da box em leitura row-major
+   * (ex: A1, A2, A3...) e cria de forma idempotente o nó de Location no grafo,
+   * vinculando a amostra por STORED_IN e a posição por PART_OF.
+   *
+   * Fluxo:
+   * - consulta a caixa e a amostra no MongoDB;
+   * - identifica a primeira coordenada vazia compatível com o grid da box;
+   * - grava a posição em storageBoxes.currentOccupancy/occupancyGrid e storageLocation;
+   * - sincroniza o grafo Neo4j com (Specimen)-[:STORED_IN]->(Location)-[:PART_OF]->(Box).
+   *
+   * @param {ObjectId|string} specimenId - ID da amostra (specimen) a ser alocada.
+   * @param {ObjectId|string} boxId - ID da box de destino.
+   * @returns {Promise<{ success: boolean, sampleLocation?: { specimenId: string, boxId: string, position: string }, graphPersisted?: boolean, error?: string, message?: string }>}
+   */
+  async autoAssignSampleToBox(specimenId, boxId) {
+    const samplesCollection = await getCollection(this.db, 'samples');
+    const storageBoxesCollection = this.db.collection('storageBoxes');
+    const sampleObjId = this._normalizeObjectId(specimenId);
+    const boxObjId = this._normalizeObjectId(boxId);
+    const session = this.db.getMongo().startSession();
+    let assignedPosition = null;
+    let boxSnapshot = null;
+    let sampleSnapshot = null;
+
+    try {
+      boxSnapshot = await storageBoxesCollection.findOne({ _id: boxObjId });
+      if (!boxSnapshot) {
+        return {
+          success: false,
+          error: 'BOX_NOT_FOUND',
+          message: `StorageBox ${boxId} não encontrada`
+        };
+      }
+
+      sampleSnapshot = await samplesCollection.findOne({ _id: sampleObjId });
+      if (!sampleSnapshot) {
+        return {
+          success: false,
+          error: 'SAMPLE_NOT_FOUND',
+          message: `Amostra ${specimenId} não encontrada`
+        };
+      }
+
+      if (sampleSnapshot.storageLocation?.boxId && sampleSnapshot.storageLocation?.position) {
+        return {
+          success: false,
+          error: 'ALREADY_ALLOCATED',
+          message: `Amostra já está alocada em ${sampleSnapshot.storageLocation.boxId}/${sampleSnapshot.storageLocation.position}`
+        };
+      }
+
+      const nextPosition = this._findFirstAvailablePosition(boxSnapshot);
+      if (!nextPosition) {
+        return {
+          success: false,
+          error: 'BOX_FULL',
+          message: 'Nenhuma posição disponível nesta box'
+        };
+      }
+
+      const positionMatch = nextPosition.match(/^([A-Z])(\d+)$/);
+      const rowLetter = positionMatch?.[1] || 'A';
+      const column = Number(positionMatch?.[2] || 1);
+
+      await session.withTransaction(async () => {
+        const freshBox = await storageBoxesCollection.findOne({ _id: boxObjId }, { session });
+        if (!freshBox) {
+          throw new Error('BOX_NOT_FOUND');
+        }
+
+        const freshSample = await samplesCollection.findOne({ _id: sampleObjId }, { session });
+        if (!freshSample) {
+          throw new Error('SAMPLE_NOT_FOUND');
+        }
+
+        if (freshSample.storageLocation?.boxId && freshSample.storageLocation?.position) {
+          throw new Error('ALREADY_ALLOCATED');
+        }
+
+        const lockedPosition = this._findFirstAvailablePosition(freshBox);
+        if (!lockedPosition) {
+          throw new Error('BOX_FULL');
+        }
+
+        const updateBoxResult = await storageBoxesCollection.updateOne(
+          {
+            _id: boxObjId,
+            [`occupancyGrid.${lockedPosition}`]: { $exists: false }
+          },
+          {
+            $set: {
+              [`occupancyGrid.${lockedPosition}`]: sampleObjId,
+              currentOccupancy: Number(freshBox.currentOccupancy || 0) + 1,
+              updatedAt: new Date(),
+              lastModified: new Date()
+            }
+          },
+          { session }
+        );
+
+        if (updateBoxResult.matchedCount === 0) {
+          throw new Error('STORAGE_COLLISION: Colisão detectada durante alocação automática');
+        }
+
+        const updateSampleResult = await samplesCollection.updateOne(
+          { _id: sampleObjId },
+          {
+            $set: {
+              'storageLocation.boxId': boxObjId,
+              'storageLocation.position': lockedPosition,
+              status: 'AVAILABLE',
+              updatedAt: new Date()
+            }
+          },
+          { session }
+        );
+
+        if (updateSampleResult.matchedCount === 0) {
+          throw new Error('Falha ao atualizar a amostra após alocação automática');
+        }
+
+        assignedPosition = lockedPosition;
+      });
+
+      const canPersistGraph = this.neo4jDriver && typeof this.neo4jDriver.session === 'function';
+      if (canPersistGraph && assignedPosition) {
+        const neo4jSession = this.neo4jDriver.session({ database: env.NEO4J_DATABASE || 'neo4j' });
+
+        try {
+          await neo4jSession.run(
+            `
+              MERGE (specimen:Sample:Specimen {mongoSampleId: $specimenId})
+              ON CREATE SET specimen.createdAt = datetime(), specimen.source = 'BioAvanceD'
+              SET specimen.updatedAt = datetime(),
+                  specimen.barcode = coalesce($barcode, specimen.barcode)
+
+              MERGE (box:StorageBox:Box {mongoBoxId: $boxId})
+              ON CREATE SET box.createdAt = datetime(), box.source = 'BioAvanceD'
+              SET box.updatedAt = datetime(),
+                  box.name = coalesce($boxName, box.name)
+
+              MERGE (location:Location:StoragePosition {boxId: $boxId, coordinate: $coordinate})
+              ON CREATE SET location.createdAt = datetime()
+              SET location.updatedAt = datetime(),
+                  location.coordinate = $coordinate,
+                  location.row = $rowLetter,
+                  location.column = $column,
+                  location.capacity = $capacity
+
+              MERGE (specimen)-[:STORED_IN]->(location)
+              MERGE (location)-[:PART_OF]->(box)
+
+              RETURN specimen.mongoSampleId AS specimenId,
+                     location.coordinate AS coordinate,
+                     box.mongoBoxId AS boxId
+            `,
+            {
+              specimenId: String(sampleObjId),
+              boxId: String(boxObjId),
+              barcode: sampleSnapshot?.barcode || null,
+              boxName: boxSnapshot?.name || null,
+              coordinate: assignedPosition,
+              rowLetter,
+              column,
+              capacity: Number(boxSnapshot?.dimension?.rows || 0) * Number(boxSnapshot?.dimension?.cols || 0)
+            }
+          );
+        } catch (neo4jError) {
+          const rollbackSession = this.db.getMongo().startSession();
+          try {
+            await rollbackSession.withTransaction(async () => {
+              await storageBoxesCollection.updateOne(
+                {
+                  _id: boxObjId,
+                  [`occupancyGrid.${assignedPosition}`]: sampleObjId
+                },
+                {
+                  $unset: {
+                    [`occupancyGrid.${assignedPosition}`]: ''
+                  },
+                  $inc: {
+                    currentOccupancy: -1
+                  },
+                  $set: {
+                    updatedAt: new Date(),
+                    lastModified: new Date()
+                  }
+                },
+                { session: rollbackSession }
+              );
+
+              await samplesCollection.updateOne(
+                {
+                  _id: sampleObjId,
+                  'storageLocation.boxId': boxObjId,
+                  'storageLocation.position': assignedPosition
+                },
+                {
+                  $unset: {
+                    storageLocation: ''
+                  },
+                  $set: {
+                    updatedAt: new Date()
+                  }
+                },
+                { session: rollbackSession }
+              );
+            });
+          } finally {
+            await rollbackSession.endSession();
+          }
+
+          throw neo4jError;
+        } finally {
+          await neo4jSession.close();
+        }
+      }
+
+      logger.info(`✅ Alocação inteligente realizada para amostra ${specimenId} em ${boxId}/${nextPosition}`);
+
+      return {
+        success: true,
+        graphPersisted: Boolean(this.neo4jDriver && typeof this.neo4jDriver.session === 'function'),
+        sampleLocation: {
+          specimenId: String(sampleObjId),
+          boxId: String(boxObjId),
+          position: nextPosition
+        }
+      };
+    } catch (error) {
+      logger.error('[Storage] Erro na alocação inteligente:', error);
+
+      return {
+        success: false,
+        error: error.message === 'BOX_NOT_FOUND'
+          ? 'BOX_NOT_FOUND'
+          : error.message === 'SAMPLE_NOT_FOUND'
+            ? 'SAMPLE_NOT_FOUND'
+            : error.message === 'ALREADY_ALLOCATED'
+              ? 'ALREADY_ALLOCATED'
+              : error.message === 'BOX_FULL'
+                ? 'BOX_FULL'
+                : 'AUTO_ASSIGNMENT_ERROR',
+        message: error.message || 'Erro ao realizar alocação inteligente'
       };
     } finally {
       await session.endSession();

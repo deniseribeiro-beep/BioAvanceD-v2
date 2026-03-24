@@ -1,7 +1,7 @@
-# Template de Importação de Pacientes
-# Instruções: Preencha cada linha com os dados de um paciente. Não altere o cabeçalho.
-# IDs de 8 dígitos serão gerados automaticamente se não preenchidos.
-# Campos obrigatórios: nome, dataNascimento, sexo, documento
-nome,dataNascimento,sexo,documento
-João da Silva,1980-05-10,M,12345678900
-Maria Souza,1975-12-22,F,98765432100
+# Batch Patient Import Template
+# One row per patient.
+# Use the same column names as the Clinical Intake Wizard.
+# Required fields: patientName,birthDate,email,phone,cpf,sampleType,sampleOrigin,extractionProtocol,quantity,quality
+# Optional fields: isDeceased,representativeName,representativeEmail,representativeCpf,representativePhone,linkedProject,collectionInstitution,collectionInstitutionAcronym,consentTemplateId
+patientName,birthDate,email,phone,cpf,isDeceased,representativeName,representativeEmail,representativeCpf,representativePhone,sampleType,sampleOrigin,extractionProtocol,quantity,quality,linkedProject,collectionInstitution,collectionInstitutionAcronym,consentTemplateId
+John Doe,10/05/1980,john.doe@example.com,+55 11 91234-5678,12345678901,false,,,,,PLASMA,VENOUS_BLOOD,TUBE_EDTA,500,GOOD,Genomics Project,Central Lab,CL,

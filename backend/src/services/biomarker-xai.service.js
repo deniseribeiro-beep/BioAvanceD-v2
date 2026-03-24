@@ -29,6 +29,101 @@ class BiomarkerXaiService {
     }
   }
 
+  verifyXaiThreshold(biomarker, value) {
+    const xaiRuleHistory = [
+      {
+        biomarker: 'alphaGal',
+        status: 'ACTIVE',
+        version: this.governance.ruleVersion,
+        direction: 'low',
+        threshold: this.governance.thresholds.alphaGal.highMax,
+        unit: 'U/mL',
+        severity: 'high',
+        justification: 'α-Galactosidase abaixo do limite ativo sugere forte sinal de deficiência enzimática e requer correlação clínica.'
+      },
+      {
+        biomarker: 'alphaGal',
+        status: 'ACTIVE',
+        version: this.governance.ruleVersion,
+        direction: 'range',
+        threshold: {
+          min: this.governance.thresholds.alphaGal.highMax,
+          max: this.governance.thresholds.alphaGal.mediumMax
+        },
+        unit: 'U/mL',
+        severity: 'medium',
+        justification: 'α-Galactosidase em faixa limítrofe baixa; recomenda-se acompanhamento seriado e análise contextual.'
+      },
+      {
+        biomarker: 'lysoGb3',
+        status: 'ACTIVE',
+        version: this.governance.ruleVersion,
+        direction: 'high',
+        threshold: this.governance.thresholds.lysoGb3.highMin,
+        unit: 'ng/mL',
+        severity: 'high',
+        justification: 'Lyso-GB3 acima do limite ativo sugere maior probabilidade de alteração metabólica relevante.'
+      }
+      ,
+      {
+        biomarker: 'lysoGb3',
+        status: 'ACTIVE',
+        version: this.governance.ruleVersion,
+        direction: 'range',
+        threshold: {
+          min: this.governance.thresholds.lysoGb3.mediumMin,
+          max: this.governance.thresholds.lysoGb3.highMin
+        },
+        unit: 'ng/mL',
+        severity: 'medium',
+        justification: 'Lyso-GB3 em faixa limítrofe alta; acompanhar tendência temporal e sintomas associados.'
+      }
+    ];
+
+    const normalizedBiomarker = String(biomarker || '').trim();
+    const numericValue = Number(value);
+
+    if (!normalizedBiomarker || !Number.isFinite(numericValue)) {
+      return null;
+    }
+
+    const activeRules = xaiRuleHistory.filter(
+      (rule) => rule.biomarker === normalizedBiomarker && rule.status === 'ACTIVE'
+    );
+
+    if (activeRules.length === 0) {
+      return null;
+    }
+
+    const matchedRule = activeRules.find((rule) => {
+      if (rule.direction === 'low') {
+        return numericValue < rule.threshold;
+      }
+
+      if (rule.direction === 'high') {
+        return numericValue > rule.threshold;
+      }
+
+      if (rule.direction === 'range') {
+        return numericValue >= rule.threshold.min && numericValue < rule.threshold.max;
+      }
+
+      return false;
+    });
+
+    if (!matchedRule) {
+      return null;
+    }
+
+    return {
+      ruleVersion: matchedRule.version,
+      severity: matchedRule.severity,
+      justification: `${matchedRule.justification} Valor informado: ${numericValue} ${matchedRule.unit}. ${matchedRule.direction === 'range'
+        ? `Faixa ativa: ${matchedRule.threshold.min} a ${matchedRule.threshold.max} ${matchedRule.unit}.`
+        : `Limite ativo: ${matchedRule.direction === 'low' ? 'menor que' : 'maior que'} ${matchedRule.threshold} ${matchedRule.unit}.`}`
+    };
+  }
+
   toNumberOrDefault(value, fallback) {
     const parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : fallback;
@@ -55,30 +150,20 @@ class BiomarkerXaiService {
   evaluateAlphaGal(alphaGal) {
     if (alphaGal === null) return null;
 
-    const alphaGalHighMax = this.governance.thresholds.alphaGal.highMax;
-    const alphaGalMediumMax = this.governance.thresholds.alphaGal.mediumMax;
-
-    if (alphaGal < alphaGalHighMax) {
+    const xaiAlert = this.verifyXaiThreshold('alphaGal', alphaGal);
+    if (xaiAlert) {
+      const isMedium = xaiAlert.severity === 'medium';
       return {
         feature: 'alphaGal',
         value: alphaGal,
         unit: 'U/mL',
-        direction: 'below_reference',
-        ruleApplied: `alphaGal_lt_${alphaGalHighMax}`,
-        severity: 'high',
-        rationale: 'α-Galactosidase abaixo de 1.0 U/mL sugere forte sinal de deficiência enzimática e requer correlação clínica.'
-      };
-    }
-
-    if (alphaGal < alphaGalMediumMax) {
-      return {
-        feature: 'alphaGal',
-        value: alphaGal,
-        unit: 'U/mL',
-        direction: 'borderline_low',
-        ruleApplied: `alphaGal_between_${alphaGalHighMax}_${alphaGalMediumMax}`,
-        severity: 'medium',
-        rationale: 'α-Galactosidase em faixa limítrofe baixa; recomenda-se acompanhamento seriado e análise contextual.'
+        direction: isMedium ? 'borderline_low' : 'below_reference',
+        ruleApplied: isMedium
+          ? `alphaGal_between_${this.governance.thresholds.alphaGal.highMax}_${this.governance.thresholds.alphaGal.mediumMax}`
+          : `alphaGal_lt_${this.governance.thresholds.alphaGal.highMax}`,
+        severity: xaiAlert.severity,
+        rationale: xaiAlert.justification,
+        xaiAlert
       };
     }
 
@@ -96,30 +181,20 @@ class BiomarkerXaiService {
   evaluateLysoGb3(lysoGb3) {
     if (lysoGb3 === null) return null;
 
-    const lysoGb3MediumMin = this.governance.thresholds.lysoGb3.mediumMin;
-    const lysoGb3HighMin = this.governance.thresholds.lysoGb3.highMin;
-
-    if (lysoGb3 > lysoGb3HighMin) {
+    const xaiAlert = this.verifyXaiThreshold('lysoGb3', lysoGb3);
+    if (xaiAlert) {
+      const isMedium = xaiAlert.severity === 'medium';
       return {
         feature: 'lysoGb3',
         value: lysoGb3,
         unit: 'ng/mL',
-        direction: 'above_reference',
-        ruleApplied: `lysoGb3_gt_${lysoGb3HighMin}`,
-        severity: 'high',
-        rationale: 'Lyso-GB3 elevado acima de 1.8 ng/mL é compatível com maior probabilidade de alteração metabólica relevante.'
-      };
-    }
-
-    if (lysoGb3 >= lysoGb3MediumMin) {
-      return {
-        feature: 'lysoGb3',
-        value: lysoGb3,
-        unit: 'ng/mL',
-        direction: 'borderline_high',
-        ruleApplied: `lysoGb3_between_${lysoGb3MediumMin}_${lysoGb3HighMin}`,
-        severity: 'medium',
-        rationale: 'Lyso-GB3 em faixa limítrofe alta; acompanhar tendência temporal e sintomas associados.'
+        direction: isMedium ? 'borderline_high' : 'above_reference',
+        ruleApplied: isMedium
+          ? `lysoGb3_between_${this.governance.thresholds.lysoGb3.mediumMin}_${this.governance.thresholds.lysoGb3.highMin}`
+          : `lysoGb3_gt_${this.governance.thresholds.lysoGb3.highMin}`,
+        severity: xaiAlert.severity,
+        rationale: xaiAlert.justification,
+        xaiAlert
       };
     }
 

@@ -9,6 +9,7 @@ import { FileText, Download, FileDown, Printer, ArrowLeft, Filter } from 'lucide
 import { reportsService } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 import { getPatientDisplayName, formatPatientDisplay } from '../utils/patientAnonymization';
+import { getReportTypeDefinition } from '../config/constants/report.constants';
 import './ReportQueryPage.css';
 
 interface ReportFilter {
@@ -22,6 +23,7 @@ export default function ReportQueryPage() {
   const { type } = useParams<{ type: string }>();
   const navigate = useNavigate();
   const { user } = useAuth();
+  const reportDefinition = getReportTypeDefinition(type);
   const [filters, setFilters] = useState<ReportFilter[]>([]);
   const [filterValues, setFilterValues] = useState<Record<string, any>>({});
   const [previewData, setPreviewData] = useState<any>(null);
@@ -146,6 +148,8 @@ export default function ReportQueryPage() {
             className="input"
             value={filterValues[filter.name] || ''}
             onChange={(e) => handleFilterChange(filter.name, e.target.value)}
+            title={filter.label}
+            aria-label={filter.label}
           >
             <option value="">Todos</option>
             {filter.options.map(opt => (
@@ -656,8 +660,13 @@ export default function ReportQueryPage() {
             <ArrowLeft size={18} />
             Voltar
           </Button>
-          <h1 className="page-title">{type || 'Relatório'}</h1>
-          <p className="page-subtitle">Configure os filtros e visualize o relatório</p>
+          <div className="report-query-hero-copy">
+            <p className="report-query-eyebrow">Consulta guiada</p>
+            <h1 className="page-title">{reportDefinition ? reportDefinition.type : 'Relatório'}</h1>
+            <p className="page-subtitle">
+              {reportDefinition ? reportDefinition.description : 'Configure os filtros e visualize o relatório'}
+            </p>
+          </div>
         </div>
       </div>
 

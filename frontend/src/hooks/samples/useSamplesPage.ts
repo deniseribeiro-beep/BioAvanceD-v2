@@ -1,8 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { samplesApi, TemplateFormat } from '@/services/samples/samplesApi';
 import { Sample } from '@/types/models';
 import { useSamples } from '../useSamples';
-import { useImportJob } from '../useImportJob';
 
 export type SampleWithId = Sample & {
   id: string;
@@ -17,30 +15,10 @@ function getSampleId(sample: Sample): string {
 
 export function useSamplesPage() {
   const { samples, loading, error, loadSamples, deleteSample } = useSamples();
+  const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
   const [selectedSampleIds, setSelectedSampleIds] = useState<string[]>([]);
   const [printModalOpen, setPrintModalOpen] = useState(false);
-  const [activeImportJobId] = useState<string | null>(() =>
-    localStorage.getItem('lastImportJobId') || localStorage.getItem('currentImportJobId')
-  );
-
-  const {
-    job: importJob,
-    loading: importLoading,
-    error: importError,
-    fetchJobStatus,
-  } = useImportJob(activeImportJobId, {
-    onCompleted: () => {
-      loadSamples();
-      setSelectedSampleIds([]);
-    },
-  });
-
-  useEffect(() => {
-    if (activeImportJobId && fetchJobStatus) {
-      fetchJobStatus();
-    }
-  }, [activeImportJobId, fetchJobStatus]);
 
   useEffect(() => {
     const preselected = samples.filter((s) => (s as any).checked).map((s) => getSampleId(s));
@@ -57,8 +35,18 @@ export function useSamplesPage() {
     const term = search.trim().toLowerCase();
     return samples
       .filter((sample) => {
-        const barcode = sample.barcode || '';
-        const type = sample.sampleType || '';
+        const barcode = String(sample.barcode || '');
+        const sampleId = String(sample.sampleID || '');
+        const patientId = String(sample.patientID || (sample as any).patient?.patientID || '');
+        const patientName =
+          String(
+            (sample as any).patient?.name ||
+            (sample as any).patient?.patientName ||
+            (sample as any).patientName ||
+            ''
+          );
+        const recordNumber = String((sample as any).recordNumber || (sample as any).patient?.recordNumber || '');
+        const type = String(sample.sampleType || '');
         const patient =
           (sample as any).patient?.name ||
           (sample as any).patient?.patientName ||
@@ -66,7 +54,11 @@ export function useSamplesPage() {
           'N/A';
 
         return (
+          sampleId.toLowerCase().includes(term) ||
           barcode.toLowerCase().includes(term) ||
+          patientId.toLowerCase().includes(term) ||
+          patientName.toLowerCase().includes(term) ||
+          recordNumber.toLowerCase().includes(term) ||
           type.toLowerCase().includes(term) ||
           patient.toLowerCase().includes(term)
         );
@@ -103,23 +95,19 @@ export function useSamplesPage() {
   };
 
   const selectedSamples = filteredSamples.filter((sample) => selectedSampleIds.includes(sample.id));
-  const isImporting = importLoading || importJob?.status === 'pending' || importJob?.status === 'processing';
 
-  const downloadTemplate = (format: TemplateFormat) => {
-    const { fileName, url } = samplesApi.getTemplateInfo(format);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = fileName;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
+  const submitSearch = () => {
+    setSearch(searchInput.trim());
   };
 
   return {
     loading,
     error,
+    refreshSamples: loadSamples,
     search,
-    setSearch,
+    searchInput,
+    setSearchInput,
+    submitSearch,
     filteredSamples,
     selectedSampleIds,
     selectedSamples,
@@ -130,9 +118,5 @@ export function useSamplesPage() {
     printModalOpen,
     openPrintModal: () => setPrintModalOpen(true),
     closePrintModal: () => setPrintModalOpen(false),
-    importJob,
-    importError,
-    isImporting,
-    downloadTemplate,
   };
 }

@@ -127,7 +127,10 @@ export default function SampleDetailsPage() {
 
   const getLocationInfo = (locationID?: number): { summary: string; details: string } => {
     if (locationID === undefined || locationID === null) {
-      return { summary: 'N/A', details: 'Localização não definida' };
+      return {
+        summary: 'Aguardando Armazenagem',
+        details: 'A amostra já foi recebida e aguarda atribuição de localização física.',
+      };
     }
     
     if (!locations || !Array.isArray(locations) || locations.length === 0) {
@@ -177,10 +180,10 @@ export default function SampleDetailsPage() {
 
   const locationOptions = useMemo(() => {
     if (!locations || locations.length === 0) {
-      return [{ value: '', label: t('samples.noLocations', 'Sem localizações disponíveis') }];
+      return [{ value: '', label: 'Aguardando Armazenagem' }];
     }
     return [
-      { value: '', label: t('common.select') || 'Selecione' },
+      { value: '', label: 'Sem armazenagem atribuída' },
       ...locations.map(loc => ({
         value: loc.locationID,
         label: `${loc.locationID} - Bloco ${loc.block} / Prat. ${loc.rack} / Gav. ${loc.drawer} / Caixa ${loc.box}`,
@@ -529,15 +532,20 @@ export default function SampleDetailsPage() {
           </div>
         </Card>
 
-        {/* Localização e Projeto */}
+        {/* Armazenagem e Projeto */}
         <Card>
           <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '0.75rem', color: 'var(--text)' }}>
-            Localização e Projeto
+            Armazenagem e Projeto
           </h3>
+          {sample?.locationID == null && (
+            <div style={{ marginBottom: '0.75rem', padding: '0.75rem 1rem', borderRadius: '8px', backgroundColor: 'rgba(37, 99, 235, 0.08)', color: 'var(--text)' }}>
+              <strong>Aguardando Armazenagem.</strong> A amostra está registrada, mas ainda não foi atribuída a uma posição física.
+            </div>
+          )}
           <div style={{ display: 'grid', gap: '0.75rem' }}>
             <div style={{ padding: '0.75rem', backgroundColor: 'var(--surface)', borderRadius: '4px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-                <span style={{ fontWeight: 500, color: 'var(--text-light)' }}>Localização:</span>
+                <span style={{ fontWeight: 500, color: 'var(--text-light)' }}>Armazenagem:</span>
                 {isEditing ? (
                   <div style={{ minWidth: '260px' }}>
                     <Select
@@ -545,11 +553,18 @@ export default function SampleDetailsPage() {
                       onChange={(e) => handleChange('locationID', e.target.value)}
                       options={locationOptions}
                     />
+                    <div style={{ marginTop: '0.35rem', fontSize: '0.75rem', color: 'var(--text-light)' }}>
+                      Opcional. A amostra pode permanecer sem localização até ser armazenada.
+                    </div>
                   </div>
                 ) : (
-                  <span style={{ 
-                    fontFamily: 'monospace', 
-                    color: 'var(--primary)', 
+                  <span style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    padding: '0.35rem 0.75rem',
+                    borderRadius: '999px',
+                    backgroundColor: effectiveSample?.locationID == null ? 'rgba(37, 99, 235, 0.10)' : 'rgba(16, 185, 129, 0.10)',
+                    color: effectiveSample?.locationID == null ? 'var(--primary)' : 'var(--text)',
                     fontWeight: 600,
                     fontSize: '0.875rem'
                   }}>

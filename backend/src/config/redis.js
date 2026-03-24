@@ -49,6 +49,7 @@ function createRedisConnection() {
   const effectiveHost = hostFromUrl || normalizedHost;
   const isLocalHost = ['127.0.0.1', 'localhost', '::1'].includes(effectiveHost);
   const shouldUseTls = redisTlsEnabled && !isLocalEnv;
+  const shouldGracefullyDisableLocalRedis = isLocalEnv && isLocalHost;
 
   // Validação básica
   if (!redisUrl && !REDIS_HOST) {
@@ -139,6 +140,14 @@ function createRedisConnection() {
   });
 
   redis.on('error', (err) => {
+    if (shouldGracefullyDisableLocalRedis && err?.code === 'ECONNREFUSED') {
+      logger.warn('[WARN] Redis local indisponível; fila desabilitada neste ambiente');
+      try {
+        redis.disconnect();
+      } catch (_) {}
+      return;
+    }
+
     logger.error('[ERROR] Erro na conexão Redis:', err.message);
   });
 
@@ -216,6 +225,27 @@ async function testRedisConnection() {
       return false;
     }
   } catch (error) {
+    const nodeEnv = String(process.env.NODE_ENV || 'development').toLowerCase();
+    const isLocalEnv = nodeEnv === 'development' || nodeEnv === 'test';
+    const redisUrl = String(REDIS_URL || process.env.REDIS_URL || '').trim();
+    const normalizedHost = String(REDIS_HOST || '').trim().toLowerCase();
+    const parsedRedisUrl = (() => {
+      if (!redisUrl) return null;
+      try {
+        return new URL(redisUrl);
+      } catch (_) {
+        return null;
+      }
+    })();
+    const hostFromUrl = parsedRedisUrl?.hostname ? parsedRedisUrl.hostname.toLowerCase() : '';
+    const effectiveHost = hostFromUrl || normalizedHost;
+    const isLocalHost = ['127.0.0.1', 'localhost', '::1'].includes(effectiveHost);
+
+    if (isLocalEnv && isLocalHost && error.code === 'ECONNREFUSED') {
+      logger.warn('[WARN] Redis não está disponível no ambiente local; seguindo sem fila');
+      return false;
+    }
+
     logger.error('[ERROR] Teste de conexão Redis falhou:', error.message);
     if (error.code) {
       logger.error(`[ERROR] Código do erro: ${error.code}`);

@@ -1,5 +1,6 @@
-import { createContext, useContext, useState, useCallback, ReactNode } from 'react';
+import { createContext, useContext, useState, useCallback, useEffect, ReactNode } from 'react';
 import Toast, { ToastType } from './Toast';
+import { API_TOAST_EVENT, ApiToastEventDetail } from '../../api/client';
 import './ToastContainer.css';
 
 interface ToastMessage {
@@ -34,6 +35,20 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   const removeToast = useCallback((id: string) => {
     setToasts((prev) => prev.filter((toast) => toast.id !== id));
   }, []);
+
+  useEffect(() => {
+    const handleGlobalToast = (event: Event) => {
+      const customEvent = event as CustomEvent<ApiToastEventDetail>;
+      const detail = customEvent.detail;
+
+      if (!detail?.message) return;
+
+      showToast(detail.message, detail.type || 'info', detail.duration);
+    };
+
+    window.addEventListener(API_TOAST_EVENT, handleGlobalToast as EventListener);
+    return () => window.removeEventListener(API_TOAST_EVENT, handleGlobalToast as EventListener);
+  }, [showToast]);
 
   return (
     <ToastContext.Provider value={{ showToast }}>

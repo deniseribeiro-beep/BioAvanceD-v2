@@ -9,6 +9,7 @@ const RegisterSampleUseCase = require('../../core/use-cases/RegisterSampleUseCas
 const LineageRepository = require('../../infrastructure/database/neo4j/LineageRepository');
 const { getCollection } = require('../../utils/collectionResolver');
 const { ObjectId } = require('mongodb');
+const biomarkerXaiService = require('../../services/biomarker-xai.service');
 
 function buildUserFilterById(id) {
   const rawId = String(id || '').trim();
@@ -509,8 +510,52 @@ router.post('/register-sample', authenticate, requirePermission('createSample'),
     }
 
     const sampleService = require('../../services/sample.service');
+    const patientsCollection = await getCollection(db, 'patients');
+
+    const resolveXaiAlert = (sampleData = {}) => {
+      if (sampleData.alphaGal !== undefined && sampleData.alphaGal !== null) {
+        return biomarkerXaiService.verifyXaiThreshold('alphaGal', sampleData.alphaGal);
+      }
+
+      if (sampleData.lysoGb3 !== undefined && sampleData.lysoGb3 !== null) {
+        return biomarkerXaiService.verifyXaiThreshold('lysoGb3', sampleData.lysoGb3);
+      }
+
+      return null;
+    };
+
     const sampleRepository = {
-      create: async (sampleData) => sampleService.createSample(db, sampleData),
+      create: async (sampleData) => {
+        const xaiAlert = resolveXaiAlert(sampleData);
+        const sampleToPersist = xaiAlert ? { ...sampleData, xaiAlert } : { ...sampleData };
+
+        const createdSample = await sampleService.createSample(db, sampleToPersist);
+        const savedSample = xaiAlert ? { ...createdSample, xaiAlert } : createdSample;
+
+        if (xaiAlert) {
+          await db.collection('samples').updateOne(
+            { _id: createdSample._id },
+            { $set: { xaiAlert } }
+          );
+        }
+
+        const patientID = String(savedSample.patientID || '').trim();
+        if (patientID) {
+          const patientUpdateResult = await patientsCollection.updateOne(
+            { patientID },
+            {
+              $push: { sampleList: savedSample },
+              $set: { updatedAt: new Date() }
+            }
+          );
+
+          if (patientUpdateResult.matchedCount === 0) {
+            throw new Error('Paciente não encontrado para vincular a amostra');
+          }
+        }
+
+        return savedSample;
+      },
       deleteById: async (sampleId) => {
         const samplesCollection = await getCollection(db, 'samples');
         const filter = ObjectId.isValid(sampleId)
@@ -540,15 +585,15 @@ router.post('/register-sample', authenticate, requirePermission('createSample'),
     const operationMode = result.strictMode ? 'STRICT' : 'PERMISSIVE';
     const hasPartialSuccess = Boolean(result?.topology && !result.topology.synced && result.topology.fallbackQueued);
 
-    return res.status(hasPartialSuccess ? 202 : 201).json({
+    return res.status(hasPartialSuccess ? 200 : 201).json({
       success: true,
       partialSuccess: hasPartialSuccess,
       message: hasPartialSuccess
         ? (req.t('users.registerSampleSuccess') || 'Amostra registrada com sucesso') + ' (integração topológica em quarentena)'
         : req.t('users.registerSampleSuccess') || 'Amostra registrada com sucesso',
       data: {
+        ...sample,
         sampleID: sample._id?.toString ? sample._id.toString() : String(sample._id || sample.id || ''),
-        patientID: sample.patientID,
         operationMode,
         topology: {
           synced: Boolean(result?.topology?.synced),

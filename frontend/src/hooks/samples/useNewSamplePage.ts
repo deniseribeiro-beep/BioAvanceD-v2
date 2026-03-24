@@ -1,11 +1,44 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { patientService } from '@/services/api';
-import { Patient, Sample } from '@/types/models';
+import { BiomarkerXai, Patient, Sample } from '@/types/models';
+import { MIABIS_QUALITY_IDS } from '@/config/constants/specimen.constants';
 import { useSamples } from '../useSamples';
 import { useLocations } from '../useLocations';
 
-type NewSampleFormData = Partial<Sample> & { registerDate?: string; quality?: number };
+type NewSampleFormData = Partial<Sample> & { registerDate?: string; quality?: string };
+type XaiAlert = {
+  ruleVersion: string;
+  severity: 'medium' | 'high';
+  justification: string;
+} | null;
+
+function buildXaiAlert(biomarkerXai: BiomarkerXai | null | undefined): XaiAlert {
+  if (!biomarkerXai || !Array.isArray(biomarkerXai.evidence) || biomarkerXai.evidence.length === 0) {
+    return null;
+  }
+
+  const priority = { high: 2, medium: 1, low: 0 } as const;
+  const relevantEvidence = biomarkerXai.evidence
+    .filter((item) => item && (item.severity === 'medium' || item.severity === 'high'))
+    .sort((a, b) => priority[b.severity] - priority[a.severity]);
+
+  if (relevantEvidence.length === 0) {
+    return null;
+  }
+
+  const topEvidence = relevantEvidence[0];
+  const justificationParts = [biomarkerXai.summary, topEvidence.rationale, biomarkerXai.recommendation]
+    .filter(Boolean)
+    .map((part) => String(part).trim())
+    .filter((part) => part.length > 0);
+
+  return {
+    ruleVersion: biomarkerXai.version,
+    severity: topEvidence.severity,
+    justification: justificationParts.join(' '),
+  };
+}
 
 export function useNewSamplePage(onCreated?: () => void) {
   const { t } = useLanguage();
@@ -35,6 +68,7 @@ export function useNewSamplePage(onCreated?: () => void) {
   const [patientFetchLoading, setPatientFetchLoading] = useState(false);
   const [resendingConsent, setResendingConsent] = useState(false);
   const [strictModeActivated, setStrictModeActivated] = useState(false);
+  const [xaiAlert, setXaiAlert] = useState<XaiAlert>(null);
 
   useEffect(() => {
     if (loadLocations && locations.length === 0) {
@@ -69,11 +103,16 @@ export function useNewSamplePage(onCreated?: () => void) {
     const patientIDStr = String(formData.patientID || '').trim();
     if (!patientIDValid || patientIDStr.length !== 8 || !/^\d{8}$/.test(patientIDStr)) {
       setSelectedPatient(null);
+      setXaiAlert(null);
       return;
     }
 
     fetchPatientConsentStatus(patientIDStr);
   }, [formData.patientID, patientIDValid, fetchPatientConsentStatus]);
+
+  useEffect(() => {
+    setXaiAlert(buildXaiAlert(selectedPatient?.biomarkerXai));
+  }, [selectedPatient]);
 
   const resendConsentNotifications = async () => {
     const patientIDStr = String(formData.patientID || '').trim();
@@ -147,8 +186,8 @@ export function useNewSamplePage(onCreated?: () => void) {
       return;
     }
 
-    if (!Number.isInteger(qualityValue) || (qualityValue !== 0 && qualityValue !== 1 && qualityValue !== 2)) {
-      alert(t('samples.invalidQuality') || 'Qualidade deve estar na escala MIABIS: 0 (Não avaliada), 1 (Adequada) ou 2 (Inadequada)');
+    if (typeof qualityValue !== 'string' || !MIABIS_QUALITY_IDS.includes(qualityValue)) {
+      alert(t('samples.invalidQuality') || 'Qualidade deve estar na escala MIABIS: GOOD, COMPROMISED ou UNKNOWN');
       return;
     }
 
@@ -230,6 +269,7 @@ export function useNewSamplePage(onCreated?: () => void) {
     setSelectedUnit,
     patientIDValid,
     selectedPatient,
+    xaiAlert,
     patientFetchLoading,
     resendingConsent,
     strictModeActivated,

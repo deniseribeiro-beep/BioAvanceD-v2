@@ -9,6 +9,11 @@ const patientService = require('./patient.service');
 const notificationService = require('./notification.service');
 const { generateUniquePatientID, validatePatientID, sanitizePatientForLogs } = require('../utils/patientAnonymization');
 const { getCollection } = require('../utils/collectionResolver');
+const {
+  SPECIMEN_TYPES,
+  SAMPLE_ORIGINS,
+  EXTRACTION_PROTOCOLS,
+} = require('../config/constants/specimen.constants');
 
 /**
  * Service de Importação LGPD
@@ -16,6 +21,25 @@ const { getCollection } = require('../utils/collectionResolver');
  * com total conformidade com anonimização LGPD
  */
 class ImportLGPDService {
+  normalizeCatalogValue(value, catalog) {
+    if (value === undefined || value === null) {
+      return null;
+    }
+
+    const normalized = String(value).trim();
+    if (!normalized) {
+      return null;
+    }
+
+    const directMatch = catalog.find((item) => item.id === normalized);
+    if (directMatch) {
+      return directMatch.id;
+    }
+
+    const labelMatch = catalog.find((item) => String(item.label).trim().toLowerCase() === normalized.toLowerCase());
+    return labelMatch ? labelMatch.id : normalized;
+  }
+
   getPatientsSmartImportMetadata() {
     return {
       acceptedExtensions: ['csv', 'xlsx', 'txt'],
@@ -742,7 +766,7 @@ class ImportLGPDService {
             if (!validateQualityMIABIS(sampleData.quality)) {
               results.errors.push({
                 row: rowNumber,
-                errors: [`quality deve estar na escala MIABIS: 0 (Não avaliada), 1 (Adequada) ou 2 (Inadequada). Valor recebido: ${sampleData.quality}`],
+                errors: [`quality deve estar no conjunto MIABIS canônico: GOOD, COMPROMISED ou UNKNOWN. Valor recebido: ${sampleData.quality}`],
                 data: { patientID: patientIDStr } // Apenas ID, sem dados sensíveis
               });
               continue;
@@ -1018,6 +1042,7 @@ class ImportLGPDService {
     }
     
     return {
+      patientID: row.patientID?.trim() || row.patientId?.trim() || row.patient_id?.trim() || null,
       patientName: row.patientName?.trim() || null,
       email: row.email ? String(row.email).trim().toLowerCase() : null,
       phone: row.phone ? String(row.phone).trim() : null,
@@ -1067,15 +1092,15 @@ class ImportLGPDService {
     }
 
     return {
-      patientID: row.patientID?.trim() || row.patientId?.trim() || null, // Aceita patientID ou patientId
+      patientID: row.patientID?.trim() || row.patientId?.trim() || row.patient_id?.trim() || null, // Aceita patientID, patientId ou patient_id
       sampleType: row.sampleType?.trim() || null,
-      sampleOrigin: row.sampleOrigin?.trim() || null,
-      extractionProtocol: row.extractionProtocol?.trim() || null,
+      sampleOrigin: this.normalizeCatalogValue(row.sampleOrigin, SAMPLE_ORIGINS),
+      extractionProtocol: this.normalizeCatalogValue(row.extractionProtocol, EXTRACTION_PROTOCOLS),
       barcode: row.barcode ? String(row.barcode).trim() : null, // RF004 - barcode como string
       registerDate: registerDate,
       registrationDate: registerDate,
       quantity: row.quantity ? parseFloat(row.quantity) : null,
-      quality: parseQualityMIABIS(row.quality), // Valida e converte para escala MIABIS (0, 1, 2)
+      quality: parseQualityMIABIS(row.quality), // Valida e converte para id MIABIS canônico
       locationID: row.locationID || row.locationId ? parseInt(row.locationID || row.locationId) : null,
       linkedProject: row.linkedProject?.trim() || null,
       currentStatus: row.currentStatus?.trim() || 'Available'
@@ -1132,6 +1157,7 @@ class ImportLGPDService {
 
     const knownPatientFields = new Set([
       'patientName',
+      'patientID',
       'email',
       'cpf',
       'birthDate',
@@ -1172,6 +1198,8 @@ class ImportLGPDService {
       patientname: 'patientName',
       nomepaciente: 'patientName',
       name: 'patientName',
+      patientid: 'patientID',
+      patient_id: 'patientID',
       email: 'email',
       cpf: 'cpf',
       birthdate: 'birthDate',

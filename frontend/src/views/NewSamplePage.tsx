@@ -13,6 +13,7 @@ export default function NewSamplePage() {
     selectedUnit,
     setSelectedUnit,
     selectedPatient,
+    xaiAlert,
     patientFetchLoading,
     resendingConsent,
     strictModeActivated,
@@ -30,6 +31,7 @@ export default function NewSamplePage() {
       formData={formData}
       selectedUnit={selectedUnit}
       selectedPatient={selectedPatient}
+      xaiAlert={xaiAlert}
       patientFetchLoading={patientFetchLoading}
       resendingConsent={resendingConsent}
       strictModeActivated={strictModeActivated}

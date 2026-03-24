@@ -1,27 +1,24 @@
 /**
  * Validador de qualidade MIABIS
  * Escala oficial adotada pelos biobancos internacionais:
- * 0 - Não avaliada (Not assessed)
- * 1 - Adequada (Suitable)
- * 2 - Inadequada (Not suitable)
+ * GOOD - Adequada / Boa Qualidade
+ * COMPROMISED - Comprometida (Hemólise/Lipemia)
+ * UNKNOWN - Desconhecida / Não Avaliada
  */
+const { MIABIS_QUALITY, MIABIS_QUALITY_IDS } = require('../config/constants/specimen.constants');
 
 /**
- * Valida se o valor está na escala MIABIS (0, 1 ou 2)
+ * Valida se o valor está na escala MIABIS por id canônico
  * @param {number|string} value - Valor a ser validado
  * @returns {boolean} - true se válido, false caso contrário
  */
 function validateQualityMIABIS(value) {
-  // Converte para número se for string
-  const numValue = typeof value === 'string' ? parseInt(value, 10) : value;
-  
-  // Verifica se é um número inteiro válido
-  if (typeof numValue !== 'number' || !Number.isInteger(numValue)) {
+  if (typeof value !== 'string') {
     return false;
   }
-  
-  // Verifica se está na escala MIABIS (0, 1 ou 2)
-  return numValue === 0 || numValue === 1 || numValue === 2;
+
+  const normalized = value.trim();
+  return MIABIS_QUALITY_IDS.includes(normalized);
 }
 
 /**
@@ -31,33 +28,43 @@ function validateQualityMIABIS(value) {
  */
 function validateQualityMIABISOrThrow(value) {
   if (!validateQualityMIABIS(value)) {
-    throw new Error(`Valor de qualidade inválido. A escala MIABIS aceita apenas: 0 (Não avaliada), 1 (Adequada) ou 2 (Inadequada). Valor recebido: ${value}`);
+    throw new Error(`Valor de qualidade inválido. A escala MIABIS aceita apenas: ${MIABIS_QUALITY.map((quality) => `${quality.id} (${quality.label})`).join(', ')}. Valor recebido: ${value}`);
   }
 }
 
 /**
- * Converte string para número MIABIS válido
- * Aceita strings "0", "1", "2" e converte para inteiro
+ * Converte valor para id MIABIS válido.
  * @param {string|number} value - Valor a converter
- * @returns {number|null} - Número MIABIS válido ou null se inválido
+ * @returns {string|null} - Id MIABIS válido ou null se inválido
  */
 function parseQualityMIABIS(value) {
   if (value === undefined || value === null || value === '') {
     return null;
   }
   
-  // Se já for número, valida diretamente
-  if (typeof value === 'number') {
-    return validateQualityMIABIS(value) ? value : null;
-  }
-  
-  // Se for string, tenta converter
   if (typeof value === 'string') {
     const trimmed = value.trim();
-    // Aceita apenas "0", "1" ou "2" (não aceita textos como "Alta", "Boa", etc)
-    if (trimmed === '0' || trimmed === '1' || trimmed === '2') {
-      return parseInt(trimmed, 10);
+    if (MIABIS_QUALITY_IDS.includes(trimmed)) {
+      return trimmed;
     }
+
+    const legacyMap = {
+      '0': 'UNKNOWN',
+      '1': 'GOOD',
+      '2': 'COMPROMISED',
+    };
+
+    return legacyMap[trimmed] || null;
+  }
+
+  if (typeof value === 'number') {
+    const legacyMap = {
+      0: 'UNKNOWN',
+      1: 'GOOD',
+      2: 'COMPROMISED',
+    };
+
+    return legacyMap[value] || null;
   }
   
   return null;
@@ -65,35 +72,27 @@ function parseQualityMIABIS(value) {
 
 /**
  * Retorna a descrição do valor MIABIS em português
- * @param {number} value - Valor MIABIS (0, 1 ou 2)
+ * @param {string} value - Id MIABIS
  * @returns {string} - Descrição em português
  */
 function getQualityMIABISDescriptionPT(value) {
-  switch (value) {
-    case 0:
-      return 'Não avaliada';
-    case 1:
-      return 'Adequada';
-    case 2:
-      return 'Inadequada';
-    default:
-      return 'Inválido';
-  }
+  const quality = MIABIS_QUALITY.find((item) => item.id === String(value));
+  return quality ? quality.label : 'Inválido';
 }
 
 /**
  * Retorna a descrição do valor MIABIS em inglês
- * @param {number} value - Valor MIABIS (0, 1 ou 2)
+ * @param {string} value - Id MIABIS
  * @returns {string} - Descrição em inglês
  */
 function getQualityMIABISDescriptionEN(value) {
-  switch (value) {
-    case 0:
-      return 'Not assessed';
-    case 1:
+  switch (String(value)) {
+    case 'GOOD':
       return 'Suitable';
-    case 2:
-      return 'Not suitable';
+    case 'COMPROMISED':
+      return 'Compromised';
+    case 'UNKNOWN':
+      return 'Not assessed';
     default:
       return 'Invalid';
   }

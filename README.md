@@ -143,68 +143,21 @@ Para integrar com um backend:
 4. Adicione autenticação e autorização
 5. Implemente validações de formulário mais robustas
 
-## 🐳 Subir serviços localmente para testes (Docker)
+## 🐳 Ambientes Docker
 
-Este repositório usa `docker-compose.yml` + `.env.docker` para ambiente local.
+Este repositório usa três fluxos separados:
 
-1. Crie o arquivo de ambiente local a partir do exemplo:
-```powershell
-Copy-Item .env.docker.example .env.docker
-```
+- desenvolvimento com hot-reload via `docker-compose.override.yml`
+- testes via `docker-compose.test.yml`
+- produção local via `docker-compose.yml`
 
-2. Ajuste ao menos os segredos no `.env.docker`:
-- `MONGO_ROOT_PASSWORD`
-- `REDIS_PASSWORD`
-- `NEO4J_PASSWORD`
-- `JWT_SECRET`
-- `JWT_REFRESH_SECRET`
-
-3. Suba a stack local completa (frontend + backend + worker + bancos) **sem migração online**:
-```powershell
-npm run docker:local:up
-```
-
-4. Verifique os serviços:
-```powershell
-npm run docker:local:ps
-```
-
-5. Acompanhe logs:
-```powershell
-npm run docker:local:logs
-```
-
-6. Derrube o ambiente local:
-```powershell
-npm run docker:local:down
-```
-
-### Migração opcional (online -> local)
-
-Se quiser copiar dados do Mongo online para o local, preencha `MONGO_SOURCE_URI` e `MONGO_SOURCE_DB` no `.env.docker` e rode:
+### Desenvolvimento local com HMR
 
 ```powershell
-npm run docker:local:up:migrate
+docker compose --env-file .env.docker -f docker-compose.yml -f docker-compose.override.yml up -d backend frontend
 ```
 
-### URLs locais após subir
-
-- Frontend: `http://localhost:8080`
-- Backend API: `http://localhost:3000`
-- Neo4j Browser: `http://localhost:7474`
-- InfluxDB UI: `http://localhost:8086`
-
-### 🔥 Frontend em tempo real no container (HMR)
-
-Para desenvolver o frontend com atualização em tempo real dentro do Docker, use também o arquivo `docker-compose.override.yml`:
-
-```powershell
-docker compose --env-file .env.docker -f docker-compose.yml -f docker-compose.override.yml up -d frontend backend
-```
-
-Depois acesse:
-
-- Frontend HMR: `http://localhost:5173`
+Frontend: <http://localhost:5173>
 
 Para parar:
 
@@ -212,30 +165,30 @@ Para parar:
 docker compose --env-file .env.docker -f docker-compose.yml -f docker-compose.override.yml down
 ```
 
-### 🔐 Perfil TLS por ambiente (Nginx)
-
-No ambiente de desenvolvimento, o perfil TLS permanece compatível (`TLSv1.2 + TLSv1.3`) e o hardening estrito fica preparado para produção.
-
-- Arquivo dev (ativo por padrão): `infra/nginx/npm/custom/http_top.conf`
-- Arquivo prod (pré-configurado): `infra/nginx/npm/custom/http_top.prod.conf`
-
-Para ativar o perfil **de produção** (TLS 1.3 only) no momento da migração:
+### Testes em Docker
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\activate-prod-tls.ps1
+npm run docker:test:backend
+npm run docker:test:frontend
 ```
 
-Para voltar ao perfil **de desenvolvimento**:
+### Produção local
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\activate-dev-tls.ps1
+npm run docker:local:up
+npm run docker:local:ps
+npm run docker:local:logs
+npm run docker:local:down
 ```
 
-Após alternar o perfil, reinicie o serviço `nginx` (Nginx Proxy Manager).
+### URLs locais após subir
+
+- Frontend: <http://localhost:8080>
+- Backend API: <http://localhost:3000>
+- Nginx Proxy: <http://localhost:80>
+- Neo4j Browser: <http://localhost:7474>
+- InfluxDB UI: <http://localhost:8086>
 
 ## 📝 Licença
 
 Este projeto foi desenvolvido para fins educacionais e de demonstração.
-
-
-"# BioAvanced" 

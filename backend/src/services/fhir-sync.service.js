@@ -425,12 +425,21 @@ class FhirSyncService {
       collection: 'samples_fhir'
     });
 
+    const patientMongoId = sample?.patientObjectId || sample?.patientID;
     const patientPointer = buildNeo4jSemanticPointer({
-      mongoId: String(sample.patientID),
+      mongoId: String(patientMongoId),
       collection: 'patients_fhir'
     });
 
-    const normalizedQuality = Number.isFinite(Number(sample?.quality)) ? Number(sample.quality) : 0;
+    const qualityMapping = {
+      GOOD: 1,
+      COMPROMISED: 2,
+      UNKNOWN: 0,
+      0: 0,
+      1: 1,
+      2: 2,
+    };
+    const normalizedQuality = qualityMapping[String(sample?.quality)] ?? qualityMapping[sample?.quality] ?? 0;
     const normalizedQuantity = Number.isFinite(Number(sample?.quantity)) ? Number(sample.quantity) : 0;
 
     return {

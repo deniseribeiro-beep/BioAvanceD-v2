@@ -264,3 +264,122 @@ function mapDataTypeToEntity(dataType) {
 
 module.exports = new ImportController();
 
+/**
+ * Importação inteligente de Bundle FHIR via JSON (POST /api/import/fhir)
+ */
+async function importFhirBundle(req, res) {
+  try {
+    const db = req.app.locals.db;
+    if (!db) {
+      return res.status(503).json({ message: 'Banco de dados não disponível' });
+    }
+
+    const bundle = req.body;
+    if (!bundle || !Array.isArray(bundle.entry)) {
+      return res.status(400).json({ message: 'Bundle FHIR inválido ou ausente' });
+    }
+
+    // Coleções (ajuste nomes conforme necessário)
+    const patientsCol = db.collection('patients');
+    const samplesCol = db.collection('samples');
+    const consentsCol = db.collection('consents');
+    const observationsCol = db.collection('observations');
+    const conditionsCol = db.collection('conditions');
+
+    let patientMap = {}; // resource.id -> _id
+    let patientCount = 0, sampleCount = 0, consentCount = 0;
+
+    // 1ª Passagem: Pacientes
+    for (const entry of bundle.entry) {
+      const { resource } = entry;
+      if (resource.resourceType === 'Patient') {
+        const name = resource.name?.[0]?.text || resource.name?.[0]?.given?.join(' ') || '';
+        const cpf = resource.identifier?.find(id => id.system?.includes('cpf'))?.value || null;
+        const birthDate = resource.birthDate || null;
+        const patientDoc = {
+          name, cpf, birthDate,
+          fhir: resource // subdocumento original
+        };
+        // Salvar no MongoDB (descomente para produção)
+        // const result = await patientsCol.insertOne(patientDoc);
+        // patientMap[resource.id] = result.insertedId;
+        // Simulação:
+        const fakeId = `patient_${++patientCount}`;
+        patientMap[resource.id] = fakeId;
+        console.log('Paciente:', patientDoc);
+      }
+    }
+
+    // 2ª Passagem: Demais recursos
+    for (const entry of bundle.entry) {
+      const { resource } = entry;
+      switch (resource.resourceType) {
+        case 'Specimen': {
+          const patientRef = resource.subject?.reference?.replace('Patient/', '');
+          const patientId = patientMap[patientRef];
+          const sampleDoc = {
+            patientId,
+            specimenType: resource.type?.text || '',
+            fhir: resource
+          };
+          // await samplesCol.insertOne(sampleDoc);
+          sampleCount++;
+          console.log('Amostra:', sampleDoc);
+          break;
+        }
+        case 'Consent': {
+          const patientRef = resource.patient?.reference?.replace('Patient/', '');
+          const patientId = patientMap[patientRef];
+          const consentDoc = {
+            patientId,
+            status: resource.status,
+            fhir: resource
+          };
+          // await consentsCol.insertOne(consentDoc);
+          consentCount++;
+          console.log('Consentimento:', consentDoc);
+          break;
+        }
+        case 'Observation': {
+          const patientRef = resource.subject?.reference?.replace('Patient/', '');
+          const patientId = patientMap[patientRef];
+          const obsDoc = {
+            patientId,
+            code: resource.code?.text || '',
+            value: resource.valueQuantity?.value,
+            fhir: resource
+          };
+          // await observationsCol.insertOne(obsDoc);
+          console.log('Exame:', obsDoc);
+          break;
+        }
+        case 'Condition': {
+          const patientRef = resource.subject?.reference?.replace('Patient/', '');
+          const patientId = patientMap[patientRef];
+          const condDoc = {
+            patientId,
+            code: resource.code?.text || '',
+            fhir: resource
+          };
+          // await conditionsCol.insertOne(condDoc);
+          console.log('Diagnóstico:', condDoc);
+          break;
+        }
+        // outros tipos...
+      }
+    }
+
+    return res.status(200).json({
+      message: 'Importação concluída',
+      patients: patientCount,
+      samples: sampleCount,
+      consents: consentCount
+    });
+  } catch (err) {
+    console.error('Erro na importação FHIR:', err);
+    return res.status(500).json({ message: 'Erro ao importar FHIR', error: err.message });
+  }
+}
+
+module.exports.importFhirBundle = importFhirBundle;
+

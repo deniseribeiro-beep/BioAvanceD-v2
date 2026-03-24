@@ -15,10 +15,13 @@ const search = async (req, res) => {
 
     const requestedLimit = Number(req.query.limit);
     const limit = Number.isFinite(requestedLimit) ? requestedLimit : 10;
-    const results = await cidService.search(db, term, limit);
+    const requestedPage = Number(req.query.page);
+    const page = Number.isFinite(requestedPage) && requestedPage > 0 ? requestedPage : 1;
+    const result = await cidService.searchPaginated(db, term, page, limit);
     return res.status(200).json({
       success: true,
-      data: results
+      data: result.items,
+      pagination: result.pagination
     });
   } catch (error) {
     logger.error('Erro ao buscar CIDs:', error.message);

@@ -7,7 +7,6 @@ import './App.css';
 const LoginPage = lazy(() => import('./views/LoginPage'));
 const Dashboard = lazy(() => import('./views/Dashboard'));
 const PatientsPage = lazy(() => import('./views/PatientsPage'));
-const NewPatientPage = lazy(() => import('./views/NewPatientPage'));
 const ConsentPage = lazy(() => import('./views/ConsentPage'));
 const SamplesPage = lazy(() => import('./views/SamplesPage'));
 const SampleDetailsPage = lazy(() => import('./views/SampleDetailsPage'));
@@ -28,14 +27,17 @@ const ReportsPage = lazy(() => import('./views/ReportsPage'));
 const ReportViewPage = lazy(() => import('./views/ReportViewPage'));
 const ReportQueryPage = lazy(() => import('./views/ReportQueryPage'));
 const QualityDescriptionPage = lazy(() => import('./views/QualityDescriptionPage'));
-const ImportPage = lazy(() => import('./views/ImportPage'));
+const ImportForm = lazy(() => import('./components/v2/ImportForm'));
 const AssistantPage = lazy(() => import('./views/AssistantPage'));
 const BackupPage = lazy(() => import('./views/BackupPage'));
 const UserSecurityPage = lazy(() => import('./views/UserSecurityPage'));
 const MFASetupPage = lazy(() => import('./views/MFASetupPage'));
 const ResetPasswordPage = lazy(() => import('./views/ResetPasswordPage'));
 const SettingsParametersPage = lazy(() => import('./views/SettingsParametersPage'));
-const ConsentManager = lazy(() => import('./views/ConsentManager'));
+const DataDictionaryPage = lazy(() => import('./views/DataDictionaryPage'));
+const TcleBuilderPage = lazy(() => import('./views/TcleBuilderPage'));
+const FoundationApp = lazy(() => import('./foundation/FoundationApp'));
+const IntakeWizardPage = lazy(() => import('./pages/v2/intake/IntakeWizardPage'));
 
 function App() {
   return (
@@ -47,6 +49,18 @@ function App() {
     >
       <Suspense fallback={<div>Carregando...</div>}>
         <Routes>
+          <Route
+            path="/next/intake"
+            element={
+              <Layout>
+                <ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}>
+                  <IntakeWizardPage />
+                </ProtectedRoute>
+              </Layout>
+            }
+          />
+          <Route path="/pacientes/novo-atendimento" element={<Navigate to="/next/intake" replace />} />
+          <Route path="/next/*" element={<FoundationApp />} />
           <Route path="/login" element={<LoginPage />} />
           <Route path="/mfa-setup" element={<MFASetupPage />} />
           <Route path="/reset-password" element={<ResetPasswordPage />} />
@@ -58,7 +72,6 @@ function App() {
                   <Route path="/" element={<Navigate to="/dashboard" replace />} />
                   <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
                   <Route path="/patients" element={<ProtectedRoute><PatientsPage /></ProtectedRoute>} />
-                  <Route path="/patients/new" element={<ProtectedRoute><NewPatientPage /></ProtectedRoute>} />
                   <Route path="/patients/:id/consent" element={<ProtectedRoute><ConsentPage /></ProtectedRoute>} />
                   <Route path="/samples" element={<ProtectedRoute><SamplesPage /></ProtectedRoute>} />
                   <Route path="/samples/:id" element={<ProtectedRoute><SampleDetailsPage /></ProtectedRoute>} />
@@ -70,14 +83,12 @@ function App() {
                   <Route path="/samples/withdrawal-return" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}><SampleWithdrawalReturnPage /></ProtectedRoute>} />
                   <Route path="/results" element={<ProtectedRoute><ResultsPage /></ProtectedRoute>} />
                   <Route path="/system-management" element={<ProtectedRoute requiredRole="Administrador"><SystemManagementPage /></ProtectedRoute>} />
-                  {/* Rotas antigas redirecionam para a nova página consolidada */}
                   <Route path="/users" element={<Navigate to="/system-management?tab=users" replace />} />
                   <Route path="/access" element={<Navigate to="/system-management?tab=access" replace />} />
                   <Route path="/security" element={<Navigate to="/system-management?tab=security" replace />} />
                   <Route path="/users/new" element={<ProtectedRoute requiredRole="Administrador"><NewUserPage /></ProtectedRoute>} />
                   <Route path="/users/new/success" element={<ProtectedRoute requiredRole="Administrador"><NewUserSuccessPage /></ProtectedRoute>} />
                   <Route path="/facility-management" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}><FacilityManagementPage /></ProtectedRoute>} />
-                  {/* Rotas antigas redirecionam para a nova página consolidada */}
                   <Route path="/equipment" element={<Navigate to="/facility-management?tab=equipment" replace />} />
                   <Route path="/locations" element={<Navigate to="/facility-management?tab=locations" replace />} />
                   <Route path="/temperature" element={<Navigate to="/facility-management?tab=temperature" replace />} />
@@ -89,11 +100,15 @@ function App() {
                   <Route path="/reports/query/:type" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Usuário Externo']}><ReportQueryPage /></ProtectedRoute>} />
                   <Route path="/reports/:id" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Usuário Externo']}><ReportViewPage /></ProtectedRoute>} />
                   <Route path="/quality-descriptions" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}><QualityDescriptionPage /></ProtectedRoute>} />
-                  <Route path="/import" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}><ImportPage /></ProtectedRoute>} />
+                  <Route path="/import" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}><ImportForm /></ProtectedRoute>} />
                   <Route path="/assistant" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico', 'Usuário Externo']}><AssistantPage /></ProtectedRoute>} />
-                  <Route path="/consent-manager" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador']}><ConsentManager /></ProtectedRoute>} />
+                  <Route path="/admin/tcle/novo" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador']}><TcleBuilderPage /></ProtectedRoute>} />
+                  <Route path="/admin/tcle/editar/:templateId" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador']}><TcleBuilderPage /></ProtectedRoute>} />
                   <Route path="/backup" element={<ProtectedRoute requiredRole="Administrador"><BackupPage /></ProtectedRoute>} />
                   <Route path="/settings/parameters" element={<ProtectedRoute requiredRole="Administrador"><SettingsParametersPage /></ProtectedRoute>} />
+                  <Route path="/admin/dicionario" element={<ProtectedRoute requiredRole="Administrador"><DataDictionaryPage /></ProtectedRoute>} />
+                  <Route path="/admin/dictionary" element={<Navigate to="/admin/dicionario" replace />} />
+                  <Route path="/admin/master-data" element={<Navigate to="/admin/dicionario" replace />} />
                   <Route path="/user/security" element={<ProtectedRoute><UserSecurityPage /></ProtectedRoute>} />
                   <Route path="/security/mfa-setup" element={<ProtectedRoute><MFASetupPage /></ProtectedRoute>} />
                 </Routes>

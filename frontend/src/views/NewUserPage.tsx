@@ -395,6 +395,7 @@ export default function NewUserPage() {
                 });
               }}
               className="form-select"
+              title={t('users.role')}
               required
             >
               <option value="Técnico">{t('users.roleTechnician')}</option>
@@ -415,6 +416,7 @@ export default function NewUserPage() {
               value={formData.status || 'Ativo'}
               onChange={(e) => setFormData({ ...formData, status: e.target.value })}
               className="form-select"
+              title={t('users.status')}
               required
             >
               <option value="Ativo">{t('users.statusActive')}</option>

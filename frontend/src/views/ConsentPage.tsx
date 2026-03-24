@@ -67,7 +67,7 @@ export default function ConsentPage() {
               version: selectedPolicy.version,
               caae: selectedPolicy.caae,
               active: selectedPolicy.active,
-              permissions: Array.isArray(selectedPolicy.granularPermissions)
+              permissions: Array.isArray(selectedPolicy.granularPermissions) && selectedPolicy.granularPermissions.length > 0
                 ? selectedPolicy.granularPermissions.map((permission: any) => ({
                     key: permission.key,
                     label: permission.label,
@@ -78,6 +78,21 @@ export default function ConsentPage() {
           }
         } else {
           resolvedTemplate = (templateResponse as any)?.data?.data || null;
+        }
+
+        if (resolvedTemplate && (!Array.isArray(resolvedTemplate.permissions) || resolvedTemplate.permissions.length === 0)) {
+          const granularPermissions = Array.isArray((resolvedTemplate as ConsentPolicy).granularPermissions)
+            ? (resolvedTemplate as ConsentPolicy).granularPermissions
+            : [];
+
+          resolvedTemplate = {
+            ...resolvedTemplate,
+            permissions: granularPermissions.map((permission: any) => ({
+              key: permission.key,
+              label: permission.label,
+              required: Boolean(permission.required)
+            }))
+          };
         }
 
         if (isMounted) {

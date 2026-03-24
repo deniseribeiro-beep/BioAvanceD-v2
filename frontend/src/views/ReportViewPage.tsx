@@ -7,6 +7,7 @@ import { Reports } from '../types/models';
 import { reportsService } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 import { getPatientDisplayName } from '../utils/patientAnonymization';
+import { getReportTypeDefinition } from '../config/constants/report.constants';
 import './ReportViewPage.css';
 
 export default function ReportViewPage() {
@@ -17,6 +18,7 @@ export default function ReportViewPage() {
   const [reportData, setReportData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const reportDefinition = getReportTypeDefinition(report?.reportType || '');
 
   useEffect(() => {
     loadReport();
@@ -487,7 +489,8 @@ export default function ReportViewPage() {
           <div className="page-title-section">
             <FileText size={32} className="report-icon-header" />
             <div>
-              <h1 className="page-title">{report.reportType}</h1>
+              <p className="report-view-eyebrow">{reportDefinition ? reportDefinition.fallbackType : 'Relatório'}</p>
+              <h1 className="page-title">{reportDefinition ? reportDefinition.fallbackType : report.reportType}</h1>
               <p className="page-subtitle">
                 <Calendar size={16} style={{ marginRight: '0.5rem', verticalAlign: 'middle' }} />
                 Gerado em: {formatDate(report.generatedAt || report.createdAt)}

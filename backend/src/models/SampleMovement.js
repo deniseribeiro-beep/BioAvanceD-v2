@@ -19,10 +19,26 @@ class SampleMovementModel {
   };
 
   static RETURN_CONDITIONS = {
-    INTACT: 'Íntegra',
-    PARTIALLY_COMPROMISED: 'Parcialmente comprometida',
-    UNUSABLE: 'Inutilizada'
+    INTACT: 'intact',
+    PARTIALLY_COMPROMISED: 'partially_compromised',
+    UNUSABLE: 'unusable'
   };
+
+  static RETURN_CONDITION_ALIASES = {
+    íntegra: 'intact',
+    integra: 'intact',
+    intact: 'intact',
+    'parcialmente comprometida': 'partially_compromised',
+    partially_compromised: 'partially_compromised',
+    'partially compromised': 'partially_compromised',
+    inutilizada: 'unusable',
+    unusable: 'unusable'
+  };
+
+  static normalizeReturnCondition(condition) {
+    const normalized = String(condition || '').trim().toLowerCase();
+    return this.RETURN_CONDITION_ALIASES[normalized] || normalized;
+  }
 
   static validate(data) {
     const errors = [];
@@ -55,12 +71,13 @@ class SampleMovementModel {
     }
 
     if (data.type === 'return') {
-      if (!data.condition || !Object.values(this.RETURN_CONDITIONS).includes(data.condition)) {
-        errors.push('condition deve ser: Íntegra, Parcialmente comprometida ou Inutilizada');
+      const normalizedCondition = this.normalizeReturnCondition(data.condition);
+      if (!normalizedCondition || !Object.values(this.RETURN_CONDITIONS).includes(normalizedCondition)) {
+        errors.push('condition deve ser: intact, partially_compromised ou unusable');
       }
-      // Observações obrigatórias se condição não for íntegra
-      if (data.condition !== 'Íntegra' && (!data.observations || data.observations.trim() === '')) {
-        errors.push('observations é obrigatório quando a condição não é Íntegra');
+      // Observações obrigatórias se condição não for intact
+      if (normalizedCondition !== this.RETURN_CONDITIONS.INTACT && (!data.observations || data.observations.trim() === '')) {
+        errors.push('observations é obrigatório quando a condição não é intact');
       }
     }
 
@@ -93,7 +110,7 @@ class SampleMovementModel {
       linkedProject: data.linkedProject || null,
       
       // Dados específicos de devolução
-      condition: data.condition || null,   // Condição da amostra
+      condition: data.condition ? this.normalizeReturnCondition(data.condition) : null,   // Condição da amostra
       relatedWithdrawalID: data.relatedWithdrawalID || null, // Referência à retirada original
       
       // Observações e justificativas

@@ -6,6 +6,7 @@ const CANONICAL_COLLECTIONS = {
   consents: env.COLL_CONSENTS || 'patientConsents',
   consentTemplates: env.COLL_CONSENT_TEMPLATES || 'consent_templates',
   sampleMovements: env.COLL_SAMPLE_MOVEMENTS || 'sample_movements',
+  biomarkerObservations: env.COLL_BIOMARKER_OBSERVATIONS || 'biomarker_observations',
   cids: env.COLL_CIDS || 'cids',
   clinicalUnits: env.COLL_CLINICAL_UNITS || 'clinical_units'
 };
@@ -16,6 +17,7 @@ const COLLECTION_ALIASES = {
   consents: ['patient_consents'],
   consentTemplates: [],
   sampleMovements: [],
+  biomarkerObservations: ['observations', 'observation_biomarkers'],
   cids: ['diseases', 'cid', 'cid10', 'icd10', 'icdCodes', 'icd_codes'],
   clinicalUnits: ['clinicalUnits']
 };
