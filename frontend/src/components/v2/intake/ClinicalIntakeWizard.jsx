@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import React from 'react';
 import { useLanguage } from '../../../contexts/LanguageContext';
 import { z } from 'zod';
 import { ArrowLeft, ArrowRight, CheckCircle2, FlaskConical, Pill, PlusCircle, Send, ShieldCheck, Stethoscope } from 'lucide-react';
@@ -49,20 +50,7 @@ const patientStepSchema = z.object({
   representativeEmail: z.string().trim().optional().or(z.literal('')),
   representativeCpf: z.string().trim().optional().or(z.literal('')),
   representativePhone: z.string().trim().optional().or(z.literal('')),
-  phone: z
-    .string()
-    .trim()
-    .refine((value) => {
-      const digits = value.replace(/\D/g, '');
-      return digits.length >= 10 && digits.length <= 15;
-    }, VALIDATION_MESSAGES.phoneDigits),
-  cpf: z
-    .string()
-    .trim()
-    .refine((value) => {
-      const digits = value.replace(/\D/g, '');
-      return digits.length === 11;
-    }, VALIDATION_MESSAGES.cpf),
+  documento: z.string().trim().min(5, 'Informe um documento válido (CPF, Passaporte ou Prontuário)'),
 }).superRefine((data, ctx) => {
   const patientEmail = String(data.email || '').trim();
   const representativeName = String(data.representativeName || '').trim();
@@ -84,6 +72,14 @@ const patientStepSchema = z.object({
         message: VALIDATION_MESSAGES.email,
       });
     }
+    // Documento obrigatório para vivos
+    if (!data.documento) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['documento'],
+        message: 'Informe um documento válido (CPF, Passaporte ou Prontuário)',
+      });
+    }
   } else if (patientEmail && !emailPattern.test(patientEmail)) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
@@ -100,7 +96,6 @@ const patientStepSchema = z.object({
         message: VALIDATION_MESSAGES.required,
       });
     }
-
     if (!representativeEmail) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -114,7 +109,6 @@ const patientStepSchema = z.object({
         message: VALIDATION_MESSAGES.email,
       });
     }
-
     if (!representativeCpf || representativeCpf.replace(/\D/g, '').length !== 11) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -122,7 +116,6 @@ const patientStepSchema = z.object({
         message: VALIDATION_MESSAGES.cpf,
       });
     }
-
     const representativePhoneDigits = representativePhone.replace(/\D/g, '');
     if (!representativePhone || representativePhoneDigits.length < 10 || representativePhoneDigits.length > 15) {
       ctx.addIssue({
@@ -204,8 +197,7 @@ const initialState = {
   antiviralUse: false,
   bloodPressure: '',
   clinicalObservations: '',
-  phone: '',
-  cpf: '',
+  documento: '',
   sampleType: '',
   sampleOrigin: '',
   extractionProtocol: '',
@@ -577,16 +569,17 @@ function buildSubmissionPayload(formData, clinicalComorbidityItems = [], biomark
   };
 }
 
-export default function ClinicalIntakeWizard({
-    const { t } = useLanguage();
-  onStepChange,
-  onValidityChange,
-  submitLabel = t('intake.finalizeRegistration', 'Finalizar Cadastro Integrado'),
-  className = '',
-  dictionaries = {},
-  dictionariesLoading = true,
-  dictionariesError = '',
-}) {
+export default function ClinicalIntakeWizard(props) {
+  const { t } = useLanguage();
+  const {
+    onStepChange,
+    onValidityChange,
+    submitLabel = t('intake.finalizeRegistration', 'Finalizar Cadastro Integrado'),
+    className = '',
+    dictionaries = {},
+    dictionariesLoading = true,
+    dictionariesError = '',
+  } = props;
   const [activeStep, setActiveStep] = useState(0);
   const [formData, setFormData] = useState(initialState);
   const [touched, setTouched] = useState(false);
@@ -1124,7 +1117,11 @@ export default function ClinicalIntakeWizard({
 
       resetWizard();
     } catch (error) {
-      const message = error?.message || 'Não foi possível concluir o cadastro integrado.';
+      let message = error?.message || 'Não foi possível concluir o cadastro integrado.';
+      // Se erro de campo imutável
+      if (typeof message === 'string' && message.toLowerCase().includes('data de nascimento não pode ser alterada')) {
+        message = 'Erro: Não é permitido alterar a data de nascimento de um paciente já existente. Para corrigir, revise o identificador (CPF/Prontuário) ou entre em contato com o suporte.';
+      }
       setSubmitError(message);
       notifyApiToast({
         message,
@@ -1143,6 +1140,30 @@ export default function ClinicalIntakeWizard({
     ...biomarker,
     value: formData[biomarker.value],
   }));
+
+  // --- Ação Prevista (Novo Cadastro/Merge) ---
+  // Simula consulta ao backend para saber se o paciente já existe (mock, pois não há API direta)
+  // No real, o backend pode expor um endpoint /patients/exists?cpf=... ou similar
+  const [predictedAction, setPredictedAction] = useState(null);
+  useEffect(() => {
+    // Simulação: se CPF termina em número par, é merge; ímpar, novo cadastro
+    if (formData.cpf && formData.cpf.length === 11) {
+      const lastDigit = Number(formData.cpf[10]);
+      setPredictedAction(lastDigit % 2 === 0 ? 'merge' : 'new');
+    } else {
+      setPredictedAction(null);
+    }
+  }, [formData.cpf]);
+
+  function renderActionBadge() {
+    if (predictedAction === 'new') {
+      return <span style={{background:'#22c55e',color:'#fff',padding:'2px 8px',borderRadius:8,marginLeft:8,fontWeight:600,fontSize:12,display:'inline-flex',alignItems:'center'}} title="Novo Cadastro">🟢 Novo Cadastro</span>;
+    }
+    if (predictedAction === 'merge') {
+      return <span style={{background:'#2563eb',color:'#fff',padding:'2px 8px',borderRadius:8,marginLeft:8,fontWeight:600,fontSize:12,display:'inline-flex',alignItems:'center'}} title="Atualização (Merge)">🔵 Atualização (Merge)</span>;
+    }
+    return null;
+  }
 
   const consentOptions = [
     { value: '', label: consentTemplatesLoading ? 'Carregando TCLEs...' : 'Selecione a versão do TCLE' },
@@ -1274,24 +1295,12 @@ export default function ClinicalIntakeWizard({
               error={showPatientErrors ? getFieldError(patientValidation, 'email') : ''}
             />
             <Input
-              label="Contato"
-              value={formData.phone}
-              onChange={updateMaskedField('phone', formatPhoneInput)}
-              placeholder="(11) 99999-9999"
-              inputMode="numeric"
-              maxLength={15}
+              label="Documento (CPF, Passaporte ou Prontuário)"
+              value={formData.documento}
+              onChange={updateField('documento')}
+              placeholder="Digite o documento do paciente"
               required
-              error={showPatientErrors ? getFieldError(patientValidation, 'phone') : ''}
-            />
-            <Input
-              label="CPF"
-              value={formData.cpf}
-              onChange={updateMaskedField('cpf', formatCpfInput)}
-              placeholder="000.000.000-00"
-              inputMode="numeric"
-              maxLength={14}
-              required
-              error={showPatientErrors ? getFieldError(patientValidation, 'cpf') : ''}
+              error={showPatientErrors ? getFieldError(patientValidation, 'documento') : ''}
             />
 
             {formData.isDeceased && (
@@ -1648,29 +1657,15 @@ export default function ClinicalIntakeWizard({
                   <PlusCircle size={16} />
                   <span>+ Solicitar inclusão de novo biomarcador</span>
                 </Button>
-              </div>
-            </section>
-
-            <div className="clinical-intake-wizard__summary-card">
-              <strong>Resumo da jornada</strong>
-              <ul>
-                <li>{formData.patientName || 'Paciente sem nome informado'}</li>
-                <li>{formData.sampleType || 'Amostra não definida'}</li>
-                <li>{formData.isHealthyControl ? 'Amostra de controle saudável' : (formData.diagnosisCidDescription || formData.diagnosisCidCode || 'Diagnóstico não definido')}</li>
-                {biomarkerSummary.map((biomarker) => (
-                  <li key={biomarker.id}>
-                    {biomarker.value || `${biomarker.label} pendente`}
-                  </li>
-                ))}
-              </ul>
             </div>
+          </section>
 
             <section className="clinical-intake-wizard__consent-section">
               <div className="clinical-intake-wizard__consent-header">
                 <div>
                   <p className="clinical-intake-wizard__subsection-eyebrow">TCLE</p>
-                  <h5>Termo de Consentimento (TCLE) - Obrigatório</h5>
-                  <p>Selecione a versão que será aplicada no aceite final e enviada ao email cadastrado.</p>
+                  <h5>Termo de Consentimento (TCLE) {formData.sampleType || formData.selectedConsentTemplateId ? '' : '- Opcional'}</h5>
+                  <p>Selecione a versão que será aplicada no aceite final e enviada ao email cadastrado. Se estiver importando apenas dados demográficos, o TCLE pode ser adicionado depois.</p>
                 </div>
                 <Button type="button" variant="secondary" onClick={() => setIsConsentPreviewOpen(true)} disabled={!selectedConsentTemplate}>
                   Visualizar TCLE
@@ -1685,6 +1680,7 @@ export default function ClinicalIntakeWizard({
                   options={consentOptions}
                   error={showConsentErrors ? getFieldError(consentValidation, 'selectedConsentTemplateId') : ''}
                   disabled={consentTemplatesLoading || consentTemplates.length === 0}
+                  required={Boolean(formData.sampleType)}
                 />
 
                 <div className="clinical-intake-wizard__consent-summary">
@@ -1706,24 +1702,24 @@ export default function ClinicalIntakeWizard({
                 </div>
               )}
             </section>
-
-            {submitError && (
-              <div className="clinical-intake-wizard__error" role="alert">
-                {submitError}
-              </div>
-            )}
           </div>
         )}
 
-        <div className="clinical-intake-wizard__actions">
-
-          <Button variant="secondary" type="button" onClick={goBack} disabled={activeStep === 0}>
-            <ArrowLeft size={16} />
-            {t('common.back', 'Voltar')}
-          </Button>
+        <div className="clinical-intake-wizard__actions" style={{ display: 'flex', justifyContent: 'flex-end', gap: '1rem' }}>
+          {activeStep > 0 && (
+            <Button variant="secondary" type="button" onClick={goBack}>
+              <ArrowLeft size={16} />
+              {t('common.back', 'Voltar')}
+            </Button>
+          )}
 
           {activeStep < 2 ? (
-            <Button type="button" onClick={goNext} disabled={isSubmitting || (activeStep === 0 ? !isStep1Valid : !isStep2Valid)}>
+            <Button
+              type="button"
+              onClick={goNext}
+              disabled={isSubmitting || (activeStep === 0 ? !isStep1Valid : !isStep2Valid)}
+              style={{ minWidth: 120 }}
+            >
               {t('common.next', 'Próximo')}
               <ArrowRight size={16} />
             </Button>

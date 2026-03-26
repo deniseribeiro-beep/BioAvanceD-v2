@@ -706,6 +706,16 @@ class SampleService {
       throw error;
     }
   }
+
+  /**
+   * Garante que amostras com status QUARANTINED não sejam retornadas para pesquisadores.
+   */
+  async findAvailableSamplesForResearch(db, query = {}) {
+    const samplesCollection = await getCollection(db, 'samples');
+    // Garante que só retorna amostras AVAILABLE
+    const finalQuery = { ...query, currentStatus: 'AVAILABLE' };
+    return samplesCollection.find(finalQuery).toArray();
+  }
 }
 
 module.exports = new SampleService();

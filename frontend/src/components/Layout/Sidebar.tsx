@@ -88,7 +88,7 @@ export default function Sidebar() {
     { path: '/results', icon: FileText, label: t('navigation.results'), roles: ['Administrador', 'Coordenador', 'Técnico'] },
     { path: '/facility-management', icon: Box, label: t('navigation.facilityManagement'), roles: ['Administrador', 'Coordenador', 'Técnico'] },
     { path: '/assistant', icon: MessageCircle, label: t('navigation.assistant'), roles: ['Administrador', 'Coordenador', 'Técnico', 'Usuário Externo'] },
-    { path: '/admin/tcle/novo', icon: FileText, label: 'Construtor de TCLE', roles: ['Administrador', 'Coordenador'] },
+    { path: '/admin/tcle/new', icon: FileText, label: 'Construtor de TCLE', roles: ['Administrador', 'Coordenador'] },
     { path: '/user/security', icon: Shield, label: t('navigation.userSecurity'), roles: ['Administrador', 'Coordenador', 'Técnico', 'Usuário Externo'] },
     { path: '/reports', icon: BarChart3, label: t('navigation.reports'), roles: ['Administrador', 'Coordenador', 'Usuário Externo'] },
     { path: '/logs', icon: FileSearch, label: t('navigation.logs'), roles: ['Administrador', 'Coordenador'] },

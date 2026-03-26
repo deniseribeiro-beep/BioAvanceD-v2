@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
+
 import { useLanguage } from '../contexts/LanguageContext';
 import { useSearchParams } from 'react-router-dom';
 import Card from '../components/UI/Card';
@@ -18,7 +19,7 @@ import { validateReading, validateTemperatureUnit, generateAlert, validateThresh
 import { CryoBoxGrid } from '../components/CryoBoxGrid';
 import './FacilityManagementPage.css';
 
-type TabType = 'equipment' | 'temperature' | 'history' | 'sensors' | 'policies';
+type TabType = 'equipment' | 'temperature' | 'history' | 'sensors' | 'policies' | 'clinical-linker';
 
 type HistoryLogEntry = {
   id: string;
@@ -41,7 +42,7 @@ export default function FacilityManagementPage() {
   const { t } = useLanguage();
   const [searchParams, setSearchParams] = useSearchParams();
   const tabParam = searchParams.get('tab') as TabType | null;
-  const validTabs: TabType[] = ['equipment', 'temperature', 'history', 'sensors', 'policies'];
+  const validTabs: TabType[] = ['equipment', 'temperature', 'history', 'sensors', 'policies', 'clinical-linker'];
   const initialTab = (tabParam && validTabs.includes(tabParam)) ? tabParam : 'equipment';
   const [activeTab, setActiveTab] = useState<TabType>(initialTab);
   const [sensorSnapshot, setSensorSnapshot] = useState({
@@ -158,6 +159,7 @@ export default function FacilityManagementPage() {
         )}
         {activeTab === 'sensors' && <SensorsSection />}
         {activeTab === 'policies' && <PoliciesSection />}
+
       </div>
     </div>
   );
@@ -165,6 +167,7 @@ export default function FacilityManagementPage() {
 
 // Seção de Equipamentos
 function EquipmentSection() {
+  const { t } = useLanguage();
   const { loading, error, createEquipment, updateEquipment, deleteEquipment, loadEquipment } = useEquipment();
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingEquipment, setEditingEquipment] = useState<Equipment | null>(null);
@@ -281,10 +284,10 @@ function EquipmentSection() {
       {error && <p style={{ color: 'var(--danger)' }}>Erro: {error}</p>}
 
       <Card>
-        <Table headers={equipmentHeaders}>
+        <Table headers={["DESCRIÇÃO", "MODELO", "NÚMERO DE SÉRIE", "DATA DA COMPRA", "AÇÕES"]}>
           {paginatedEquipment.length === 0 ? (
             <tr>
-              <td colSpan={equipmentHeaders.length} className="table-empty-state-cell">
+              <td colSpan={5} className="table-empty-state-cell">
                 <div className="table-empty-state">
                   <span className="table-empty-state__icon">
                     <Box size={34} />
@@ -295,9 +298,8 @@ function EquipmentSection() {
               </td>
             </tr>
           ) : (
-            paginatedEquipment.map((eq) => (
-              <tr key={eq.equipmentID}>
-                <td className="break-words whitespace-normal overflow-x-auto max-w-xs">{eq.equipmentID}</td>
+            paginatedEquipment.map((eq, index) => (
+              <tr key={`equipment-row-${eq.equipmentID || index}`}> {/* Garantir unicidade */}
                 <td className="break-words whitespace-normal overflow-x-auto max-w-xs">{eq.equipmentDescription}</td>
                 <td className="break-words whitespace-normal overflow-x-auto max-w-xs">{eq.model || '-'}</td>
                 <td className="break-all whitespace-normal overflow-x-auto max-w-xs">{eq.serialNumber || '-'}</td>
@@ -480,10 +482,8 @@ function EquipmentForm({
         />
       </div>
       <div className="form-actions">
-        <Button type="button" variant="secondary" onClick={onCancel}>
-          {t('common.cancel', 'Cancelar')}
-        </Button>
-        <Button type="submit">{t('common.save', 'Salvar')}</Button>
+        <Button type="button" variant="secondary" onClick={onCancel}>Cancelar</Button>
+        <Button type="submit">Salvar</Button>
       </div>
     </form>
   );
@@ -1170,7 +1170,7 @@ function SensorForm({
         <Button type="button" variant="secondary" onClick={onCancel}>
           Cancelar
         </Button>
-        <Button type="submit">{t('common.save', 'Salvar')}</Button>
+        <Button type="submit">Salvar</Button>
       </div>
     </form>
   );
@@ -1515,9 +1515,7 @@ function PolicyForm({
         />
       </div>
       <div className="form-actions">
-        <Button type="button" variant="secondary" onClick={onCancel}>
-          Cancelar
-        </Button>
+        <Button type="button" variant="secondary" onClick={onCancel}>Cancelar</Button>
         <Button type="submit">Salvar</Button>
       </div>
     </form>

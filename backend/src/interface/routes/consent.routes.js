@@ -1,9 +1,12 @@
+
 const express = require('express');
-const router = express.Router();
 const { authenticate } = require('../../infrastructure/middleware/auth');
 const { requireRole } = require('../../infrastructure/middleware/rbac');
 const consentController = require('../../controllers/consent.controller');
+const router = express.Router();
 
+// List all patients with PENDING_CONSENT for a given TCLE (policy/template ID)
+router.get('/consent-policies/:id/pending-patients', authenticate, requireRole(3, 4), consentController.getPendingPatientsForPolicy.bind(consentController));
 router.post('/consent-templates', authenticate, requireRole(4), consentController.createTemplate.bind(consentController));
 router.get('/consent-templates/active', authenticate, consentController.getActiveTemplate.bind(consentController));
 router.get('/consent-templates/:id', authenticate, requireRole(4), consentController.getTemplateById.bind(consentController));

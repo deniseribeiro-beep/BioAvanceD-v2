@@ -142,6 +142,77 @@ class ImportService {
       const patientsCollection = await getCollection(db, 'patients');
       const results = { success: 0, errors: [], total: 0 };
 
+      // Função de merge inteligente
+      function mergePatientData(existing, incoming) {
+        const merged = { ...existing };
+        for (const key of Object.keys(incoming)) {
+          // Nunca sobrescrever campos existentes com nulo/vazio
+          if (
+            incoming[key] !== undefined &&
+            incoming[key] !== null &&
+            !(typeof incoming[key] === 'string' && incoming[key].trim() === '')
+          ) {
+            // Não permite mudar birthDate
+            if (key === 'birthDate' && existing.birthDate && incoming.birthDate && String(existing.birthDate) !== String(incoming.birthDate)) {
+              throw new Error('Data de nascimento não pode ser alterada para paciente já existente.');
+            }
+            // Para arrays (ex: samples), faz append
+            if (Array.isArray(existing[key]) && Array.isArray(incoming[key])) {
+              merged[key] = [...existing[key], ...incoming[key]];
+            } else if (typeof incoming[key] === 'object' && typeof existing[key] === 'object' && incoming[key] && existing[key]) {
+              merged[key] = { ...existing[key], ...incoming[key] };
+            } else {
+              merged[key] = incoming[key];
+            }
+          }
+        }
+        return merged;
+      }
+
+      async function upsertPatient(patientData) {
+        // Identificador único: CPF OU recordNumber
+        const query = {};
+        if (patientData.cpf) query.cpf = patientData.cpf;
+        else if (patientData.recordNumber) query.recordNumber = patientData.recordNumber;
+        else return { action: 'skip', reason: 'Sem identificador único (CPF ou Prontuário)' };
+
+        const existing = await patientsCollection.findOne(query);
+        if (!existing) {
+          // Novo cadastro
+          const consentMetadata = notificationService.buildConsentMetadata();
+          patientData.status = 'PENDING_CONSENT';
+          patientData.consentToken = consentMetadata.token;
+          patientData.consentTokenCreatedAt = consentMetadata.createdAt;
+          patientData.consentTokenExpiresAt = consentMetadata.expiresAt;
+          const patient = PatientModel.create(patientData);
+          const insertResult = await patientsCollection.insertOne(patient);
+          if (patient.patientID) {
+            try {
+              const consentLink = notificationService.buildConsentLink(patient, consentMetadata.token);
+              await notificationService.enqueueConsentNotification(patientData, consentLink);
+              await patientsCollection.updateOne(
+                { _id: insertResult.insertedId },
+                { $set: { consentNotifiedAt: new Date() } }
+              );
+            } catch (notifyError) {
+              logger.error('Erro ao enfileirar notificações de consentimento (importação):', notifyError.message);
+            }
+          }
+          return { action: 'new' };
+        } else {
+          // Merge inteligente
+          let merged;
+          try {
+            merged = mergePatientData(existing, patientData);
+          } catch (mergeError) {
+            return { action: 'error', error: mergeError.message };
+          }
+          merged.updatedAt = new Date();
+          await patientsCollection.updateOne({ _id: existing._id }, { $set: merged });
+          return { action: 'merge' };
+        }
+      }
+
       if (ext === '.json') {
         const data = JSON.parse(fs.readFileSync(file.path, 'utf8'));
         const patients = Array.isArray(data) ? data : [data];
@@ -156,31 +227,20 @@ class ImportService {
               });
               continue;
             }
-
-            const consentMetadata = notificationService.buildConsentMetadata();
-            patientData.status = 'PENDING_CONSENT';
-            patientData.consentToken = consentMetadata.token;
-            patientData.consentTokenCreatedAt = consentMetadata.createdAt;
-            patientData.consentTokenExpiresAt = consentMetadata.expiresAt;
-
-            const patient = PatientModel.create(patientData);
-            const insertResult = await patientsCollection.insertOne(patient);
-
-            if (patient.patientID) {
-              try {
-                const consentLink = notificationService.buildConsentLink(patient, consentMetadata.token);
-                await notificationService.enqueueConsentNotification(patientData, consentLink);
-                await patientsCollection.updateOne(
-                  { _id: insertResult.insertedId },
-                  { $set: { consentNotifiedAt: new Date() } }
-                );
-              } catch (notifyError) {
-                logger.error('Erro ao enfileirar notificações de consentimento (importação):', notifyError.message);
-              }
+            const upsertResult = await upsertPatient(patientData);
+            if (upsertResult.action === 'error') {
+              results.errors.push({
+                row: results.total + 1,
+                error: upsertResult.error
+              });
+            } else if (upsertResult.action === 'skip') {
+              results.errors.push({
+                row: results.total + 1,
+                error: upsertResult.reason
+              });
             } else {
-              logger.warn('Paciente importado sem patientID. Notificação de consentimento ignorada.');
+              results.success++;
             }
-            results.success++;
           } catch (error) {
             results.errors.push({
               row: results.total + 1,
@@ -201,10 +261,8 @@ class ImportService {
 
         for (const row of rows) {
           try {
-            // Converte tipos do CSV
             const patientData = this.parsePatientCSV(row);
             const validation = PatientModel.validate(patientData);
-            
             if (!validation.isValid) {
               results.errors.push({
                 row: results.total + 1,
@@ -212,31 +270,20 @@ class ImportService {
               });
               continue;
             }
-
-            const consentMetadata = notificationService.buildConsentMetadata();
-            patientData.status = 'PENDING_CONSENT';
-            patientData.consentToken = consentMetadata.token;
-            patientData.consentTokenCreatedAt = consentMetadata.createdAt;
-            patientData.consentTokenExpiresAt = consentMetadata.expiresAt;
-
-            const patient = PatientModel.create(patientData);
-            const insertResult = await patientsCollection.insertOne(patient);
-
-            if (patient.patientID) {
-              try {
-                const consentLink = notificationService.buildConsentLink(patient, consentMetadata.token);
-                await notificationService.enqueueConsentNotification(patientData, consentLink);
-                await patientsCollection.updateOne(
-                  { _id: insertResult.insertedId },
-                  { $set: { consentNotifiedAt: new Date() } }
-                );
-              } catch (notifyError) {
-                logger.error('Erro ao enfileirar notificações de consentimento (importação):', notifyError.message);
-              }
+            const upsertResult = await upsertPatient(patientData);
+            if (upsertResult.action === 'error') {
+              results.errors.push({
+                row: results.total + 1,
+                error: upsertResult.error
+              });
+            } else if (upsertResult.action === 'skip') {
+              results.errors.push({
+                row: results.total + 1,
+                error: upsertResult.reason
+              });
             } else {
-              logger.warn('Paciente importado sem patientID. Notificação de consentimento ignorada.');
+              results.success++;
             }
-            results.success++;
           } catch (error) {
             results.errors.push({
               row: results.total + 1,

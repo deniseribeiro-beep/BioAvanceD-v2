@@ -471,6 +471,37 @@ class ConsentService {
       };
 
       const result = await templatesCollection.insertOne(document);
+      // --- Notify all patients with PENDING_CONSENT for this TCLE ---
+      try {
+        const patientsCollection = await getCollection(db, 'patients');
+        // Find all patients with PENDING_CONSENT and consentTemplateId matching this policy _id
+        const pendingPatients = await patientsCollection.find({
+          status: 'PENDING_CONSENT',
+          consentTemplateId: result.insertedId.toString()
+        }).toArray();
+        const notificationService = require('./notification.service');
+        for (const patient of pendingPatients) {
+          // Generate new consent token for each patient
+          const consentMetadata = notificationService.buildConsentMetadata();
+          const consentLink = notificationService.buildConsentLink(patient, consentMetadata.token);
+          await notificationService.enqueueConsentNotification(patient, consentLink);
+          await patientsCollection.updateOne(
+            { _id: patient._id },
+            {
+              $set: {
+                consentToken: consentMetadata.token,
+                consentTokenCreatedAt: consentMetadata.createdAt,
+                consentTokenExpiresAt: consentMetadata.expiresAt,
+                consentNotifiedAt: new Date(),
+                updatedAt: new Date()
+              }
+            }
+          );
+        }
+      } catch (notifyError) {
+        logger.error('Erro ao notificar pacientes do novo TCLE:', notifyError.message);
+      }
+      // --- End notification logic ---
       return {
         _id: result.insertedId,
         ...document
@@ -582,9 +613,15 @@ class ConsentService {
 
   async createPatientConsent(db, payload) {
     try {
-      const normalizedSignature = this.normalizeSignaturePayload(payload);
+      // Suporte ao campo signatureBase64 vindo do frontend
+      let patchedPayload = { ...payload };
+      if (payload.signatureBase64 && !payload.signatureImageBase64) {
+        patchedPayload.signatureImageBase64 = payload.signatureBase64;
+      }
+
+      const normalizedSignature = this.normalizeSignaturePayload(patchedPayload);
       const normalizedPayload = {
-        ...payload,
+        ...patchedPayload,
         ...normalizedSignature,
       };
 
@@ -637,6 +674,13 @@ class ConsentService {
         { patientId, status: 'ACTIVE' },
         { $set: { status: 'REVOKED', revokedAt: new Date(), updatedAt: new Date() } }
       );
+
+      // Logar apenas o tamanho da assinatura, se existir
+      if (normalizedPayload.signatureImageBase64) {
+        logger.info(
+          `Assinatura recebida para paciente ${patientId}: tamanho ${normalizedPayload.signatureImageBase64.length} caracteres.`
+        );
+      }
 
       const consent = PatientConsentModel.create({
         ...normalizedPayload,

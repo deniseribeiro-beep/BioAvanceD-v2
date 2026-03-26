@@ -60,27 +60,34 @@ async function ensureInitialAdmin(db) {
     return;
   }
 
+
   const passwordHash = await bcrypt.hash(adminPassword, 10);
   const now = new Date();
-
-  const insertResult = await usersCollection.insertOne({
+  const adminUser = {
+    name: adminName,
     email: adminEmail,
     username: adminUsername,
     password: passwordHash,
-    fullName: adminName,
-    clinicalUnit: 'BioAvanceD',
     accessType: 4,
     roleName: 'Administrador',
-    status: 'ativo',
+    status: 'active',
     mfaEnabled: false,
     mfaSecret: null,
     mfaActivationDate: null,
+    mfaFailedAttempts: 0,
+    mfaLocked: false,
     forceReset: false,
     passwordHistory: [],
     failedLoginAttempts: 0,
     createdAt: now,
-    updatedAt: now
-  });
+    updatedAt: now,
+    lastLogin: null,
+    phone: null,
+    institution: null,
+    anonId: null,
+    lastPasswordChange: now
+  };
+  const insertResult = await usersCollection.insertOne(adminUser);
 
   const anonId = generateAnonId(insertResult.insertedId.toString());
   await usersCollection.updateOne(

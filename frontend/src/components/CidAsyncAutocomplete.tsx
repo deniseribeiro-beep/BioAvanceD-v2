@@ -33,7 +33,7 @@ const CidAsyncAutocomplete: React.FC<CidAsyncAutocompleteProps> = ({ value, onCh
     setNoResults(false);
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
-      fetch(`/api/cid/search?q=${encodeURIComponent(inputValue)}`)
+      fetch(`/api/cids/search?q=${encodeURIComponent(inputValue)}`)
         .then((res) => res.json())
         .then((data) => {
           setOptions(data || []);

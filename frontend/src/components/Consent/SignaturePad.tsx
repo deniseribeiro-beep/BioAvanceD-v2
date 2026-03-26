@@ -1,110 +1,45 @@
-import { CSSProperties, useMemo, useRef, useState } from 'react';
+import { useMemo, useRef } from 'react';
 import SignatureCanvas from 'react-signature-canvas';
-import Button from '../UI/Button';
 
-type SignaturePadProps = {
+interface SignaturePadProps {
   onConfirm: (dataUrl: string) => void;
   onCancel: () => void;
-  confirmDisabled?: boolean;
-  confirmLabel?: string;
-};
+}
 
-const styles: Record<string, CSSProperties> = {
-  container: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '1rem'
-  },
-  canvasWrapper: {
-    border: '2px dashed #c7d2fe',
-    borderRadius: '12px',
-    backgroundColor: '#ffffff',
-    padding: '0.5rem',
-    minHeight: '220px'
-  },
-  canvas: {
-    width: '100%',
-    height: '220px'
-  },
-  actions: {
-    display: 'flex',
-    gap: '0.75rem',
-    justifyContent: 'flex-end',
-    flexWrap: 'wrap'
-  },
-  helperText: {
-    fontSize: '0.85rem',
-    color: '#b00020'
-  },
-  hint: {
-    fontSize: '0.85rem',
-    color: '#6b7280'
-  }
-};
+export default function SignaturePad({ onConfirm, onCancel }: SignaturePadProps) {
+  const sigRef = useRef<SignatureCanvas>(null);
 
-export default function SignaturePad({
-  onConfirm,
-  onCancel,
-  confirmDisabled,
-  confirmLabel
-}: SignaturePadProps) {
-  const signatureRef = useRef<SignatureCanvas | null>(null);
-  const [hasSignature, setHasSignature] = useState(false);
-  const [errorMessage, setErrorMessage] = useState('');
-
-  const handleEnd = () => {
-    const isEmpty = signatureRef.current?.isEmpty() ?? true;
-    setHasSignature(!isEmpty);
-    if (!isEmpty) {
-      setErrorMessage('');
-    }
-  };
-
-  const handleClear = () => {
-    signatureRef.current?.clear();
-    setHasSignature(false);
-    setErrorMessage('');
-  };
-
+  const handleClear = () => sigRef.current?.clear();
   const handleConfirm = () => {
-    const isEmpty = signatureRef.current?.isEmpty() ?? true;
-    if (isEmpty) {
-      setErrorMessage('Por favor, assine antes de confirmar.');
-      return;
-    }
-    const dataUrl = signatureRef.current?.toDataURL('image/png');
-    if (dataUrl) {
-      onConfirm(dataUrl);
-      handleClear();
+    if (sigRef.current && !sigRef.current.isEmpty()) {
+      onConfirm(sigRef.current.toDataURL('image/png'));
     }
   };
 
-  const isConfirmDisabled = useMemo(() => (confirmDisabled ?? false) || !hasSignature, [confirmDisabled, hasSignature]);
+  const hasSignature = sigRef.current ? !sigRef.current.isEmpty() : false;
+  const isConfirmDisabled = !hasSignature;
 
   return (
-    <div style={styles.container}>
-      <div style={styles.canvasWrapper} aria-label="Area de assinatura">
-        <SignatureCanvas
-          ref={signatureRef}
-          penColor="#1f2937"
-          onEnd={handleEnd}
-          canvasProps={{ style: styles.canvas }}
-        />
-      </div>
-
-      <span style={styles.hint}>Use o dedo ou caneta para assinar.</span>
-      {errorMessage && <span style={styles.helperText}>{errorMessage}</span>}
-
-      <div style={styles.actions}>
-        <Button variant="danger" onClick={handleClear} type="button">
+    <div style={{ textAlign: 'center' }}>
+      <SignatureCanvas
+        ref={sigRef}
+        penColor="black"
+        canvasProps={{
+          width: 350,
+          height: 120,
+          style: { border: '2px solid #ccc', borderRadius: 8, background: '#fff' }
+        }}
+      />
+      <div style={{ marginTop: 12, display: 'flex', justifyContent: 'center', gap: 12 }}>
+        <button type="button" onClick={handleClear}>
           Limpar
-        </Button>
-        <Button variant="secondary" onClick={onCancel} type="button">
+        </button>
+        <button type="button" onClick={handleConfirm} style={{ background: '#22c55e', color: '#fff', border: 'none', borderRadius: 4, padding: '6px 18px' }}>
+          Confirmar
+        </button>
+        <button type="button" onClick={onCancel} style={{ marginLeft: 8 }}>
           Cancelar
-        </Button>
-        <Button variant="primary" onClick={handleConfirm} disabled={isConfirmDisabled} type="button">
-          {confirmLabel || 'Confirmar Assinatura'}
-        </Button>
+        </button>
       </div>
     </div>
   );

@@ -122,19 +122,16 @@ function encodeMongoURI(uri, debug = false) {
  * @returns {Promise<Object>} Objeto do banco de dados
  */
 async function connectDB() {
+  // Garante escopo global para uso em qualquer bloco
+  let mongoUri = env.MONGO_URI || process.env.MONGO_URI;
+  let mongoDb = env.MONGO_DB || process.env.MONGO_DB;
   try {
-    // Verifica variáveis de ambiente com fallback para process.env
-    const mongoUri = env.MONGO_URI || process.env.MONGO_URI;
-    const mongoDb = env.MONGO_DB || process.env.MONGO_DB;
-    
     if (!mongoUri) {
       throw new Error('MONGO_URI não está definida no arquivo .env. Verifique se a variável está configurada.');
     }
-
     if (!mongoDb) {
       throw new Error('MONGO_DB não está definida no arquivo .env. Verifique se a variável está configurada.');
     }
-    
     // Atualiza env para usar os valores corretos (para compatibilidade)
     if (!env.MONGO_URI) env.MONGO_URI = mongoUri;
     if (!env.MONGO_DB) env.MONGO_DB = mongoDb;
@@ -184,21 +181,17 @@ async function connectDB() {
     return db;
   } catch (error) {
     // Se o erro for de autenticação, tenta com a URI original (sem codificação)
-    if (error.message && error.message.includes('Authentication failed') || error.message.includes('bad auth')) {
+    if (error.message && (error.message.includes('Authentication failed') || error.message.includes('bad auth'))) {
       console.warn('⚠️ Tentando conexão com URI original (sem codificação)...');
-      
       try {
         // Limpa a conexão anterior
         if (client) {
           try {
             await client.close();
-          } catch (e) {
-            // Ignora erros ao fechar
-          }
+          } catch (e) {}
           client = null;
           db = null;
         }
-
         // Tenta com a URI original
         const normalizedRetryUri = ensureMongoUri(mongoUri, mongoDb);
         client = new MongoClient(normalizedRetryUri, {
@@ -211,34 +204,18 @@ async function connectDB() {
           retryWrites: true,
           w: 'majority',
         });
-
         await client.connect();
         db = client.db(mongoDb);
-
         console.log(`✅ MongoDB Connected (URI original): ${client.options.srvHost || 'localhost'}`);
         console.log(`📊 Database: ${mongoDb}`);
-
         return db;
       } catch (retryError) {
         console.error('❌ Erro ao conectar ao MongoDB (tentativa com URI original):', retryError.message);
-        console.error('\n💡 Dicas para resolver o problema de autenticação:');
-        console.error('   1. Verifique se o usuário e senha estão corretos no arquivo .env');
-        console.error('   2. Se a senha contém caracteres especiais, certifique-se de que estão codificados na URI');
-        console.error('   3. Verifique se o usuário tem permissões no MongoDB Atlas');
-        console.error('   4. Verifique se o IP está na whitelist do MongoDB Atlas');
+        console.error('💡 Dica: Verifique se o MongoDB local está rodando e sem autenticação.');
         throw retryError;
       }
     }
-
     console.error('❌ Erro ao conectar ao MongoDB:', error.message);
-    if (error.message && error.message.includes('Authentication failed') || error.message.includes('bad auth')) {
-      console.error('\n💡 Dicas para resolver o problema de autenticação:');
-      console.error('   1. Verifique se o usuário e senha estão corretos no arquivo .env');
-      console.error('   2. Se a senha contém caracteres especiais (@, #, %, etc), você precisa codificá-los manualmente');
-      console.error('   3. Exemplo: se a senha é "senha@123", use "senha%40123" na URI');
-      console.error('   4. Verifique se o usuário tem permissões no MongoDB Atlas');
-      console.error('   5. Verifique se o IP está na whitelist do MongoDB Atlas');
-    }
     throw error;
   }
 }

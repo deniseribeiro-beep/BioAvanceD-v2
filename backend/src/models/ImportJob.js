@@ -16,7 +16,7 @@ class ImportJob {
     this.totalRecords = data.totalRecords || 0;
     this.successCount = data.successCount || 0;
     this.errorCount = data.errorCount || 0;
-    this.errors = data.errors || [];
+    this.importErrors = data.importErrors || [];
     this.metadata = data.metadata || {};
     this.createdAt = data.createdAt || new Date();
     this.updatedAt = data.updatedAt || new Date();
@@ -60,7 +60,7 @@ class ImportJob {
       totalRecords: this.totalRecords,
       successCount: this.successCount,
       errorCount: this.errorCount,
-      errors: this.errors,
+      importErrors: this.importErrors,
       metadata: this.metadata,
       createdAt: this.createdAt,
       updatedAt: this.updatedAt,

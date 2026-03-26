@@ -1,6 +1,7 @@
 const cidService = require('../services/cid.service');
 const logger = require('../utils/logger');
 
+
 const search = async (req, res) => {
   try {
     const db = req.app.locals.db;
@@ -12,20 +13,15 @@ const search = async (req, res) => {
     }
 
     const q = String(req.query.q || '').trim();
+    const page = parseInt(req.query.page, 10) || 1;
+    const limit = parseInt(req.query.limit, 10) || 10;
+
     if (q.length < 2) {
-      return res.json([]);
+      return res.json({ items: [], pagination: { page, limit, total: 0, totalPages: 0, hasNext: false, hasPrev: false, query: q } });
     }
 
-    // Busca otimizada: código ou descrição, regex, case-insensitive, limit 20
-    const regex = new RegExp(q, 'i');
-    const collection = db.collection('cids');
-    const results = await collection.find({
-      $or: [
-        { Codigo_Tabulacao: { $regex: regex } },
-        { Descricao: { $regex: regex } }
-      ]
-    }).limit(20).toArray();
-    return res.json(results);
+    const result = await cidService.searchPaginated(db, q, page, limit);
+    return res.json(result);
   } catch (error) {
     logger.error('Erro ao buscar CIDs:', error.message);
     return res.status(500).json({

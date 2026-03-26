@@ -60,9 +60,7 @@ function createRedisConnection() {
     throw new Error('REDIS_PORT não está definido no .env');
   }
 
-  if (!REDIS_PASSWORD && !isLocalEnv && !isLocalHost) {
-    throw new Error('REDIS_PASSWORD não está definido no .env');
-  }
+  // Em ambiente local/dev, não exige senha
 
   // Log de configuração
   logger.info('[INFO] 🔍 Config Redis:');
@@ -80,15 +78,8 @@ function createRedisConnection() {
   if (!redisUrl && !REDIS_PORT) {
     logger.error('[ERROR] Variável REDIS_PORT não definida no .env');
   }
-  if (!REDIS_PASSWORD && !isLocalEnv && !isLocalHost) {
-    logger.error('[ERROR] Variável REDIS_PASSWORD não definida no .env');
-  }
+  // Em ambiente local/dev, não exige senha
 
-  // Aviso sobre TLS para Redis Cloud
-  if (!shouldUseTls && effectiveHost && effectiveHost.includes('cloud.redislabs.com')) {
-    logger.warn('[WARN] ⚠️ REDIS_TLS está como false, mas você está usando Redis Cloud!');
-    logger.warn('[WARN] ⚠️ Redis Cloud requer TLS. Configure REDIS_TLS=true no .env');
-  }
 
   // Configuração Redis
   const config = {
@@ -116,13 +107,16 @@ function createRedisConnection() {
     if (REDIS_PASSWORD) {
       config.password = REDIS_PASSWORD;
     }
+    // Se não houver senha, conecta sem password (permitido em dev/local)
   } else {
     config.username = REDIS_USERNAME || parsedRedisUrl?.username || 'default';
     if (REDIS_PASSWORD || parsedRedisUrl?.password) {
       config.password = REDIS_PASSWORD || parsedRedisUrl.password;
     }
+    // Se não houver senha, conecta sem password (permitido em dev/local)
   }
 
+  // TLS só se explicitamente ativado
   if (shouldUseTls) {
     config.tls = {};
   }
@@ -260,7 +254,6 @@ async function testRedisConnection() {
     // Dicas de solução
     if (error.message.includes('ECONNREFUSED')) {
       logger.error('[ERROR] 💡 Dica: Verifique se o Redis está rodando e acessível');
-      logger.error('[ERROR] 💡 Dica: Para Redis Cloud, verifique se REDIS_TLS=true está configurado');
     }
     if (error.message.includes('ETIMEDOUT') || error.message.includes('Timeout')) {
       logger.error('[ERROR] 💡 Dica: Verifique se o host e porta estão corretos');

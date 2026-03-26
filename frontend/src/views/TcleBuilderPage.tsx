@@ -23,7 +23,7 @@ import Input from '../components/UI/Input';
 import Spinner from '../components/UI/Spinner';
 import { useToast } from '../components/UI/ToastContainer';
 import { consentService } from '../services/api';
-import { ConsentPolicy } from '../types/models';
+import type { ConsentTemplate, ConsentPolicy } from '../types/models';
 import './TcleBuilderPage.css';
 
 type PreviewValueMap = Record<string, string>;
@@ -177,6 +177,15 @@ function normalizeDraftItems(items: Array<Partial<ConsentItemDraft> | null | und
 function normalizeGranularPermissions(items: ConsentItemDraft[]) {
   const usedKeys = new Set<string>();
 
+  function hashKey(str: string) {
+    // Simple hash: djb2
+    let hash = 5381;
+    for (let i = 0; i < str.length; i++) {
+      hash = ((hash << 5) + hash) + str.charCodeAt(i);
+    }
+    return Math.abs(hash).toString(36).slice(0, 8); // 8 chars max
+  }
+
   return items
     .map((item, index) => {
       const label = String(item.label || '').trim();
@@ -184,12 +193,12 @@ function normalizeGranularPermissions(items: ConsentItemDraft[]) {
         return null;
       }
 
-      const baseKey = slugify(label) || `consent_item_${index + 1}`;
-      let key = baseKey;
+      const hash = hashKey(label);
+      let key = `consent_${hash}`;
       let suffix = 2;
 
       while (usedKeys.has(key)) {
-        key = `${baseKey}_${suffix}`;
+        key = `consent_${hash}_${suffix}`;
         suffix += 1;
       }
 
@@ -289,14 +298,27 @@ function buildPrintablePolicyHtml(policy: ConsentPolicy) {
         .body h2, .body h3 { margin: 20px 0 10px 0; }
         .consent-list {
           margin-top: 20px;
-          padding: 16px;
+          padding: 18px 20px;
           border: 1px solid #e2e8f0;
           border-radius: 14px;
           background: #f8fafc;
+          page-break-inside: avoid;
         }
-        .consent-list h4 { margin: 0 0 12px 0; font-size: 14px; }
-        .consent-list ul { margin: 0; padding-left: 18px; }
-        .consent-list li { margin-bottom: 8px; }
+        .consent-list h4 {
+          margin: 0 0 12px 0;
+          font-size: 15px;
+          font-weight: 700;
+        }
+        .consent-list ul {
+          margin: 0;
+          padding-left: 22px;
+        }
+        .consent-list li {
+          margin-bottom: 10px;
+          font-size: 14px;
+          line-height: 1.7;
+          word-break: break-word;
+        }
         .acceptance-note {
           margin: 0;
           line-height: 1.75;
@@ -441,7 +463,7 @@ export default function TcleBuilderPage() {
   const [consentItems, setConsentItems] = useState<ConsentItemDraft[]>(() => defaultConsentItems());
   const [loadingTemplate, setLoadingTemplate] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [loadedPolicy, setLoadedPolicy] = useState<ConsentPolicy | null>(null);
+  const [loadedTemplate, setLoadedTemplate] = useState<ConsentTemplate | null>(null);
   const [historyAnchorTitle, setHistoryAnchorTitle] = useState('');
   const [historyGroupId, setHistoryGroupId] = useState('');
   const [historyItems, setHistoryItems] = useState<ConsentPolicy[]>([]);
@@ -469,6 +491,8 @@ export default function TcleBuilderPage() {
     if (editor.innerHTML !== nextHtml) {
       editor.innerHTML = nextHtml;
     }
+    // Set default text alignment to justified
+    editor.style.textAlign = 'justify';
   }, [bodyHtml, editorReady]);
 
   useEffect(() => {
@@ -480,7 +504,7 @@ export default function TcleBuilderPage() {
           return;
         }
 
-        setLoadedPolicy(null);
+        setLoadedTemplate(null);
         setTitle('');
           setCaae('');
           setValidFrom('');
@@ -495,34 +519,33 @@ export default function TcleBuilderPage() {
 
       setLoadingTemplate(true);
       try {
-        const response = await consentService.getAllPolicies();
-        const policies = unwrapListResponse(response) as ConsentPolicy[];
-        const nextPolicy = policies.find((policy) => String(policy?._id || '') === templateId) || null;
+        const response = await consentService.getTemplateById(templateId);
+        const template = unwrapSingleResponse(response) as ConsentTemplate | null;
 
         if (!active) {
           return;
         }
 
-        if (!nextPolicy) {
+        if (!template) {
           throw new Error('TCLE não encontrado para edição.');
         }
 
-        setLoadedPolicy(nextPolicy);
-        setTitle(String(nextPolicy.title || ''));
-        setCaae(String(nextPolicy.caae || ''));
-        setValidFrom(toDateInputValue(nextPolicy.validFrom || null));
-        setValidTo(toDateInputValue(nextPolicy.validTo || null));
-        setBodyHtml(getHtmlContent(nextPolicy));
-        setConsentItems(normalizeDraftItems(nextPolicy.granularPermissions || []));
-        setHistoryAnchorTitle(String(nextPolicy.title || ''));
-        setHistoryGroupId(String(nextPolicy.versionGroupId || ''));
+        setLoadedTemplate(template);
+        setTitle(String(template.title || ''));
+        setCaae(String(template.caae || ''));
+        setValidFrom(toDateInputValue(template.validFrom || null));
+        setValidTo(toDateInputValue(template.validTo || null));
+        setBodyHtml(String(template.htmlContent || template.content || DEFAULT_BODY_HTML.trim()));
+        setConsentItems(normalizeDraftItems(template.granularPermissions || template.permissions || []));
+        setHistoryAnchorTitle(String(template.title || ''));
+        setHistoryGroupId(''); // ConsentTemplate may not have versionGroupId
       } catch (error: any) {
         if (!active) {
           return;
         }
 
         showToast(getErrorMessage(error, 'Não foi possível carregar o TCLE selecionado.'), 'error');
-        navigate('/admin/tcle/novo', { replace: true });
+        navigate('/admin/tcle/new', { replace: true });
       } finally {
         if (active) {
           setLoadingTemplate(false);
@@ -556,30 +579,13 @@ export default function TcleBuilderPage() {
         setHistoryLoading(true);
         setHistoryError('');
         try {
-          const response = await consentService.getPoliciesHistory({ page: 1, limit: 100, search: groupId ? '' : query, groupId: groupId || undefined });
-          const items = unwrapListResponse(response) as ConsentPolicy[];
+          // For templates, just fetch all and filter by title
+          const response = await consentService.getActiveTemplate();
+          const template = unwrapSingleResponse(response) as ConsentTemplate | null;
           const normalizedQuery = normalizeTitle(query);
-          const filtered = (Array.isArray(items) ? items : [])
-            .filter((item) => {
-              if (groupId) {
-                return String(item?.versionGroupId || '').trim() === groupId;
-              }
-
-              return normalizeTitle(String(item?.title || '')) === normalizedQuery;
-            })
-            .sort((left, right) => {
-              const versionDiff = parseVersionNumber(String(right.version || '')) - parseVersionNumber(String(left.version || ''));
-              if (versionDiff !== 0) {
-                return versionDiff;
-              }
-
-              const leftDate = new Date(left.createdAt || 0).getTime();
-              const rightDate = new Date(right.createdAt || 0).getTime();
-              return rightDate - leftDate;
-            });
-
+          const filtered = template && normalizeTitle(template.title) === normalizedQuery ? [template] : [];
           if (active) {
-            setHistoryItems(filtered);
+            setHistoryItems(filtered as any);
           }
         } catch (error: any) {
           if (active) {
@@ -635,31 +641,6 @@ export default function TcleBuilderPage() {
     });
   };
 
-  const resetDraft = () => {
-    if (loadedPolicy) {
-      const nextBody = getHtmlContent(loadedPolicy);
-      setTitle(String(loadedPolicy.title || ''));
-      setCaae(String(loadedPolicy.caae || ''));
-      setValidFrom(toDateInputValue(loadedPolicy.validFrom || null));
-      setValidTo(toDateInputValue(loadedPolicy.validTo || null));
-      setBodyHtml(nextBody);
-      setConsentItems(normalizeDraftItems(loadedPolicy.granularPermissions || []));
-      if (editorRef.current) {
-        editorRef.current.innerHTML = nextBody;
-      }
-      return;
-    }
-
-    setTitle('');
-    setCaae('');
-    setValidFrom('');
-    setValidTo('');
-    setBodyHtml(DEFAULT_BODY_HTML.trim());
-    setConsentItems(defaultConsentItems());
-    if (editorRef.current) {
-      editorRef.current.innerHTML = DEFAULT_BODY_HTML.trim();
-    }
-  };
 
   const openPrintableView = (policy: ConsentPolicy) => {
     if (!policy?._id) {
@@ -699,10 +680,11 @@ export default function TcleBuilderPage() {
       title: trimmedTitle,
       caae: caae.trim(),
       htmlContent: bodyHtml.trim(),
+      content: bodyHtml.trim(), // Ensure 'content' is sent for backend validation
       validFrom: toIsoDateString(validFrom),
       validTo: toIsoDateString(validTo, true),
       active: true,
-      granularPermissions: normalizedPermissions,
+      permissions: normalizedPermissions,
     };
 
     if (!payload.validFrom || !payload.validTo) {
@@ -713,26 +695,26 @@ export default function TcleBuilderPage() {
     setSaving(true);
     try {
       const response = isEditing && templateId
-        ? await consentService.updatePolicy(templateId, payload)
-        : await consentService.createPolicy(payload);
+        ? await consentService.updateTemplate(templateId, payload)
+        : await consentService.createTemplate(payload);
 
-      const savedPolicy = unwrapSingleResponse(response) as ConsentPolicy | null;
-      if (!savedPolicy || !savedPolicy._id) {
+      const savedTemplate = unwrapSingleResponse(response) as ConsentTemplate | null;
+      if (!savedTemplate || !savedTemplate._id) {
         throw new Error('O servidor não retornou a nova versão do TCLE.');
       }
 
-      setLoadedPolicy(savedPolicy);
-      setTitle(String(savedPolicy.title || trimmedTitle));
-      setCaae(String(savedPolicy.caae || caae));
-      setValidFrom(toDateInputValue(savedPolicy.validFrom || null));
-      setValidTo(toDateInputValue(savedPolicy.validTo || null));
-      setBodyHtml(getHtmlContent(savedPolicy));
-      setConsentItems(normalizeDraftItems(savedPolicy.granularPermissions || []));
-      setHistoryAnchorTitle(String(savedPolicy.title || trimmedTitle));
-      setHistoryGroupId(String(savedPolicy.versionGroupId || ''));
+      setLoadedTemplate(savedTemplate);
+      setTitle(String(savedTemplate.title || trimmedTitle));
+      setCaae(String(savedTemplate.caae || caae));
+      setValidFrom(toDateInputValue(savedTemplate.validFrom || null));
+      setValidTo(toDateInputValue(savedTemplate.validTo || null));
+      setBodyHtml(String(savedTemplate.htmlContent || savedTemplate.content || DEFAULT_BODY_HTML.trim()));
+      setConsentItems(normalizeDraftItems(savedTemplate.granularPermissions || savedTemplate.permissions || []));
+      setHistoryAnchorTitle(String(savedTemplate.title || trimmedTitle));
+      setHistoryGroupId('');
 
       if (editorRef.current) {
-        editorRef.current.innerHTML = getHtmlContent(savedPolicy);
+        editorRef.current.innerHTML = String(savedTemplate.htmlContent || savedTemplate.content || DEFAULT_BODY_HTML.trim());
       }
 
       showToast(
@@ -740,7 +722,7 @@ export default function TcleBuilderPage() {
         'success'
       );
 
-      navigate(`/admin/tcle/editar/${savedPolicy._id}`, { replace: true });
+      navigate(`/admin/tcle/edit/${savedTemplate._id}`, { replace: true });
     } catch (error: any) {
       showToast(getErrorMessage(error, 'Não foi possível salvar o TCLE.'), 'error');
     } finally {
@@ -758,9 +740,9 @@ export default function TcleBuilderPage() {
             <Sparkles size={15} />
             <span>Health Tech TCLE Builder</span>
           </div>
-          <h1 className="page-title">Criação e Edição de TCLE</h1>
+          <h1 className="page-title">Create and Edit ICF</h1>
           <p className="page-subtitle">
-            Estruture o termo em uma coluna única, com cabeçalho e aceite fixos, corpo editável e datas de vigência preenchidas manualmente.
+            Structure the consent form in a single column, with fixed header and acceptance, editable body, and manually filled validity dates.
           </p>
           <div className="tcle-builder-page__status-row">
             <span className="tcle-builder-page__status-pill">
@@ -790,7 +772,7 @@ export default function TcleBuilderPage() {
             onClick={() => setActiveTab('editor')}
           >
             <FileText size={16} />
-            Edição do Termo
+            Edit Form
           </button>
         ) : (
           <button
@@ -813,7 +795,7 @@ export default function TcleBuilderPage() {
             onClick={() => setActiveTab('history')}
           >
             <History size={16} />
-            Histórico de Versões
+            Version History
           </button>
         ) : (
           <button
@@ -945,6 +927,7 @@ export default function TcleBuilderPage() {
                   onInput={updateEditorState}
                   onBlur={updateEditorState}
                   onFocus={() => setEditorReady(true)}
+                  style={{ textAlign: 'justify' }}
                 />
               </section>
 
@@ -962,7 +945,14 @@ export default function TcleBuilderPage() {
 
                 <div className="tcle-builder-consent-list">
                   {consentItems.map((item, index) => {
-                    const generatedKey = slugify(item.label) || `consent_item_${index + 1}`;
+                    const hashKey = (str: string) => {
+                      let hash = 5381;
+                      for (let i = 0; i < str.length; i++) {
+                        hash = ((hash << 5) + hash) + str.charCodeAt(i);
+                      }
+                      return Math.abs(hash).toString(36).slice(0, 8);
+                    };
+                    const generatedKey = item.label ? `consent_${hashKey(item.label)}` : `consent_item_${index + 1}`;
 
                     return (
                       <div key={item.id} className="tcle-builder-consent-item">
@@ -1023,9 +1013,6 @@ export default function TcleBuilderPage() {
             ) : null}
 
             <div className="tcle-builder-document-actions">
-              <Button variant="secondary" onClick={resetDraft} disabled={saving || loadingTemplate}>
-                Restaurar rascunho
-              </Button>
               <Button
                 variant="primary"
                 type="submit"
@@ -1042,8 +1029,8 @@ export default function TcleBuilderPage() {
           <Card className="tcle-builder-card tcle-builder-card--history">
             <div className="tcle-builder-section-header tcle-builder-section-header--stacked">
               <div>
-                <h2>Histórico de Versões</h2>
-                <p>Exibe apenas as versões do mesmo modelo. Cada nova edição cria um novo registro e desativa a anterior.</p>
+                <h2>Version History</h2>
+                <p>Only versions of the same model are shown. Each new edition creates a new record and deactivates the previous one.</p>
               </div>
               <div className="tcle-builder-history-summary">
                 <span>
@@ -1052,11 +1039,11 @@ export default function TcleBuilderPage() {
                 </span>
                 <span>
                   <strong>{versionSummary.active}</strong>
-                  ativas
+                  active
                 </span>
                 <span>
                   <strong>{versionSummary.obsolete}</strong>
-                  obsoletas
+                  obsolete
                 </span>
               </div>
             </div>
@@ -1083,11 +1070,11 @@ export default function TcleBuilderPage() {
                 <table className="tcle-builder-table">
                   <thead>
                     <tr>
-                      <th>Versão</th>
+                      <th>Version</th>
                       <th>CAAE</th>
-                      <th>Data de Vigência</th>
+                      <th>Validity Date</th>
                       <th>Status</th>
-                      <th>Ação</th>
+                      <th>Action</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1100,7 +1087,7 @@ export default function TcleBuilderPage() {
                         <td>{formatDate(item.validFrom)}</td>
                         <td>
                           <span className={`tcle-builder-status-badge tcle-builder-status-badge--${item.active ? 'active' : 'obsolete'}`}>
-                            {item.active ? 'Ativo' : 'Obsoleto'}
+                            {item.active ? 'Active' : 'Obsolete'}
                           </span>
                         </td>
                         <td>

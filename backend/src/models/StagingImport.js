@@ -32,7 +32,7 @@ const stagingImportSchema = new Schema(
       default: 0,
       min: 0,
     },
-    errors: {
+    importErrors: {
       type: [Schema.Types.Mixed],
       default: [],
     },

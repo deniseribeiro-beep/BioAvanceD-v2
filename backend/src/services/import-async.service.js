@@ -542,7 +542,7 @@ class ImportAsyncService {
         totalRecords: job.totalRecords,
         successCount: job.successCount,
         errorCount: job.errorCount,
-        errors: job.errors,
+        errors: job.importErrors,
         progress: job.progress,
         createdAt: job.createdAt,
         startedAt: job.startedAt,

@@ -32,10 +32,7 @@ async function startWorker() {
     if (!redisTest) {
       logger.error('[ERROR] Teste de conexão Redis falhou. Worker não será iniciado.');
       logger.error('[ERROR] Verifique:');
-      logger.error('[ERROR]   1. Se REDIS_HOST, REDIS_PORT, REDIS_PASSWORD estão configurados no .env');
-      logger.error('[ERROR]   2. Se REDIS_TLS=true está configurado (obrigatório para Redis Cloud)');
-      logger.error('[ERROR]   3. Se as credenciais estão corretas');
-      logger.error('[ERROR]   4. Se o IP está na whitelist (Redis Cloud)');
+      logger.error('[ERROR]   1. Verifique se REDIS_HOST e REDIS_PORT estão configurados corretamente no .env para ambiente local/dev.');
       process.exit(1);
     }
 

@@ -1,0 +1,20 @@
+# Usa a versão 20 (LTS) que já possui o crypto.hash nativo
+FROM node:22-alpine
+
+# Define a pasta de trabalho dentro do container
+WORKDIR /app
+
+# Copia apenas os arquivos de dependência primeiro (Cache inteligente)
+COPY package*.json ./
+
+# Instala as dependências de forma limpa
+RUN npm install
+
+# Copia o resto do código
+COPY . .
+
+# Expõe a porta do Vite
+EXPOSE 5173
+
+# O comando para rodar (O host 0.0.0.0 já configuramos no compose, mas não faz mal garantir aqui)
+CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]

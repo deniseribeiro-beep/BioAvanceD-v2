@@ -1,3 +1,4 @@
+
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
@@ -7,6 +8,8 @@ const logger = require("./src/utils/logger");
 const env = require("./src/config/env");
 
 const app = express();
+
+
 
 function parseTrustProxy(value) {
   if (typeof value === "boolean") return value;
@@ -199,6 +202,7 @@ app.use(globalLimiter);
 app.use("/api/auth", authLimiter);
 
 app.use("/api/auth", require("./src/interface/routes/auth.routes"));
+app.use("/api/orphanet", require("./src/interface/routes/orphanet.routes"));
 app.use("/api/patients", require("./src/interface/routes/patient.routes"));
 app.use("/api/v1/patients", require("./src/interface/routes/patient.routes"));
 app.use("/api/samples", require("./src/interface/routes/sample.routes"));

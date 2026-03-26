@@ -426,10 +426,24 @@
 }
 
 .tcle-builder-consent-item__main {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  display: flex;
+  flex-wrap: wrap;
   gap: 0.75rem;
-  align-items: start;
+  align-items: flex-start;
+  width: 100%;
+}
+
+.tcle-builder-consent-item__field {
+  flex: 1 1 320px;
+  min-width: 220px;
+  max-width: 100%;
+}
+
+.tcle-builder-consent-item__toggle {
+  flex: 0 0 auto;
+  min-width: 180px;
+  word-break: break-word;
+  white-space: normal;
 }
 
 .tcle-builder-consent-item__field {

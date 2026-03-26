@@ -414,8 +414,12 @@ async function run() {
   await cidsCollection.createIndex({ aliases: 1 }, { name: 'aliases_idx' });
   await cidsCollection.createIndex({ synonyms: 1 }, { name: 'synonyms_idx' });
   await cidsCollection.createIndex({ alternativeNames: 1 }, { name: 'alternative_names_idx' });
+  // Remover ambos os índices antigos para evitar conflito
   try {
     await cidsCollection.dropIndex('cid_text_search');
+  } catch (_) {}
+  try {
+    await cidsCollection.dropIndex('cid_text_search_v3');
   } catch (_) {}
   await cidsCollection.createIndex(
     {

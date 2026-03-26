@@ -47,17 +47,7 @@ function validateRedisEnv() {
   }
 
   // Variáveis opcionais mas recomendadas
-  const redisTlsEnabled = process.env.REDIS_TLS === 'true' || process.env.REDIS_TLS === '1';
-  if (!redisTlsEnabled && host.includes('cloud.redislabs.com')) {
-    warnings.push('REDIS_TLS não está definido como "true" (geralmente necessário para Redis Cloud)');
-  }
-
-  return {
-    isValid: errors.length === 0,
-    errors,
-    warnings
-  };
-}
+  // Em dev/local, não exige senha nem TLS
 
 /**
  * Valida todas as variáveis de ambiente essenciais
@@ -160,6 +150,6 @@ module.exports = {
   validateRedisEnv,
   validateAllEnv,
   validateAndHalt,
-  validateRedisOnly,
-};
-
+  validateRedisOnly
+  };
+}

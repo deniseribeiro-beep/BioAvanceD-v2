@@ -1,18 +1,119 @@
-/* eslint-disable no-inline-styles */
-import { Fragment } from 'react';
-import { useState } from 'react';
-import { Edit3, Package, Printer, QrCode, Search, Trash2 } from 'lucide-react';
-import Barcode from 'react-barcode';
-import { SampleWithId } from '@/hooks/samples/useSamplesPage';
-import { Sample } from '@/types/models';
-import Card from '../UI/Card';
-import Button from '../UI/Button';
-import Input from '../UI/Input';
+import React, { useState } from 'react';
 import Modal from '../UI/Modal';
-import Table from '../UI/Table';
-import SampleStatusBadge from '../SampleStatusBadge';
-import InlineStorageMovementPanel from './InlineStorageMovementPanel';
-import '../../views/SamplesPage.css';
+
+// Anonymization function for samples
+function anonymizeSample(obj: any) {
+  const { sampleID, patientCpf, patientRecordNumber, type, origin, ...rest } = obj;
+  return {
+    sampleID,
+    patientCpf,
+    patientRecordNumber,
+    type,
+    origin,
+    // outros campos permitidos podem ser adicionados aqui
+  };
+}
+  // State for Import Samples modal
+  const [isSampleImportModalOpen, setIsSampleImportModalOpen] = useState(false);
+  const [importedSampleFile, setImportedSampleFile] = useState<File | null>(null);
+  const [importedSampleJson, setImportedSampleJson] = useState<any>(null);
+  const [sampleImportLoading, setSampleImportLoading] = useState(false);
+  const [sampleImportResult, setSampleImportResult] = useState<{ success?: boolean; message?: string; samples?: number; error?: string } | null>(null);
+
+  // Handler for reading sample file
+  const handleSampleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file && file.type === 'application/json') {
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        try {
+          const json = JSON.parse(ev.target?.result as string);
+          setImportedSampleFile(file);
+          setImportedSampleJson(json);
+        } catch (err) {
+          alert('Arquivo JSON inválido');
+          setImportedSampleFile(null);
+          setImportedSampleJson(null);
+        }
+      };
+      reader.readAsText(file);
+    } else {
+      alert('Selecione um arquivo .json válido');
+      setImportedSampleFile(null);
+      setImportedSampleJson(null);
+    }
+  };
+
+  // Handler for submitting sample import
+  const handleSampleImportSubmit = async () => {
+    if (!importedSampleJson) return;
+    setSampleImportLoading(true);
+    setSampleImportResult(null);
+    try {
+      // Basic anonymization: remove extra sensitive fields
+      const anonymized = Array.isArray(importedSampleJson)
+        ? importedSampleJson.map(obj => anonymizeSample(obj))
+        : anonymizeSample(importedSampleJson);
+      const response = await fetch('http://localhost:3000/api/import/samples', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(anonymized)
+      });
+      const data = await response.json();
+      setSampleImportResult(data);
+      if (data.success !== false && data.samples) {
+        alert('Importação de amostras concluída!');
+        setIsSampleImportModalOpen(false);
+        setImportedSampleFile(null);
+        setImportedSampleJson(null);
+        // Optionally: refresh samples list here if needed
+      } else {
+        alert(data.message || data.error || 'Erro ao importar amostras');
+      }
+    } catch (err: any) {
+      setSampleImportResult({ success: false, error: err.message });
+      alert('Erro ao importar amostras: ' + err.message);
+    } finally {
+      setSampleImportLoading(false);
+    }
+  };
+      {/* Import Samples Button (only on inventory page) */}
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16 }}>
+        <Button variant="secondary" onClick={() => setIsSampleImportModalOpen(true)}>
+          Importar Amostras
+        </Button>
+      </div>
+      {/* Modal de Importação de Amostras */}
+      <Modal isOpen={isSampleImportModalOpen} onClose={() => { setIsSampleImportModalOpen(false); setImportedSampleFile(null); setImportedSampleJson(null); setSampleImportResult(null); }} title="Importação de Amostras (Vinculadas a Pacientes)">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', minWidth: 320 }}>
+          <label style={{ fontWeight: 500 }}>Selecione um arquivo de amostras (.json):</label>
+          <input type="file" accept="application/json" onChange={handleSampleFileChange} disabled={sampleImportLoading} title="Selecione um arquivo .json de amostras" />
+          {importedSampleJson && (
+            <div style={{ maxHeight: 180, overflow: 'auto', background: '#f8fafc', border: '1px solid #e5e7eb', borderRadius: 6, padding: 8, fontSize: 13 }}>
+              <pre style={{ margin: 0 }}>{JSON.stringify(importedSampleJson, null, 2).slice(0, 2000)}{JSON.stringify(importedSampleJson, null, 2).length > 2000 ? '... (truncado)' : ''}</pre>
+            </div>
+          )}
+          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+            <Button onClick={handleSampleImportSubmit} disabled={!importedSampleJson || sampleImportLoading}>
+              {sampleImportLoading ? 'Processando...' : 'Processar Importação'}
+            </Button>
+            <Button variant="secondary" onClick={() => { setIsSampleImportModalOpen(false); setImportedSampleFile(null); setImportedSampleJson(null); setSampleImportResult(null); }} disabled={sampleImportLoading}>
+              Cancelar
+            </Button>
+          </div>
+          {sampleImportResult && (
+            <div style={{ color: sampleImportResult.success === false ? '#dc2626' : '#16a34a', fontSize: 14, marginTop: 8 }}>
+              {sampleImportResult.message || sampleImportResult.error}
+              {sampleImportResult.samples !== undefined && (
+                <div>
+                  Amostras: {sampleImportResult.samples}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </Modal>
+
 
 type TranslatorFn = (key: string) => string;
 

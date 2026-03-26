@@ -24,7 +24,7 @@ import Button from '../components/UI/Button';
 import Modal from '../components/UI/Modal';
 import Input from '../components/UI/Input';
 import Textarea from '../components/UI/Textarea';
-import CidAsyncAutocomplete from '../components/CidAsyncAutocomplete';
+// import CidAsyncAutocomplete from '../components/CidAsyncAutocomplete';
 import { apiClient, notifyApiToast } from '../api/client';
 import { cidService } from '../services/api';
 import {
@@ -32,7 +32,7 @@ import {
   createIntakeDictionaryItem,
   BIOMARKER_DICTIONARY,
 } from '../config/constants/intake-dictionaries.constants';
-import { EXTRACTION_PROTOCOLS, MIABIS_QUALITY, SAMPLE_ORIGINS, SPECIMEN_TYPES } from '../config/constants/specimen.constants';
+import { EXTRACTION_PROTOCOLS, SAMPLE_ORIGINS, SPECIMEN_TYPES } from '../config/constants/specimen.constants';
 import './DataDictionaryPage.css';
 
 // Exemplo de uso do componente CidAsyncAutocomplete:
@@ -276,15 +276,13 @@ async function loadCidItems(term: string, page: number, limit = CID_PAGE_SIZE): 
   const normalizedTerm = String(term || '').trim();
 
   if (normalizedTerm.length < 2) {
-    const items = await fetchDictionaryItems('/cids');
-
     return {
-      items,
+      items: [],
       pagination: {
         page: 1,
-        limit: items.length || limit,
-        total: items.length,
-        totalPages: items.length > 0 ? 1 : 0,
+        limit,
+        total: 0,
+        totalPages: 0,
         hasNext: false,
         hasPrev: false,
         query: '',
@@ -293,7 +291,8 @@ async function loadCidItems(term: string, page: number, limit = CID_PAGE_SIZE): 
   }
 
   const response = await cidService.search(normalizedTerm, limit, page);
-  const payload = response?.data?.data ?? response?.data ?? [];
+  // Corrigir: o retorno correto é response?.data?.data (array de CidEntry)
+  const payload = response?.data?.data ?? [];
   const pagination = (response?.data?.pagination || {}) as Partial<PaginationState>;
 
   return {
@@ -466,10 +465,11 @@ export default function DataDictionaryPage() {
     const page = cidPagination.page;
     const timer = window.setTimeout(() => {
       const loadCidRecords = async () => {
-        if (term.length === 1) {
+
+        if (term.length < 2) {
           setItems([]);
           setLoading(false);
-          setPageError('');
+          setPageError('Digite pelo menos 2 caracteres para buscar CIDs.');
           setCidPagination(EMPTY_CID_PAGINATION);
           return;
         }
@@ -961,32 +961,33 @@ export default function DataDictionaryPage() {
                   const itemCid10 = String(item.Codigos_CID10 || '-').trim();
                   const itemChapter = String(item.Capitulo || '-').trim();
 
+                  // Garantir unicidade
                   return (
-                    <tr key={String(itemId || itemSlug || itemName)}>
-                        {isCidCategory ? (
-                          <>
-                            <td>{itemSlug || '-'}</td>
-                            <td>{itemCid10 || '-'}</td>
-                            <td>{itemName || '-'}</td>
-                            <td>{itemChapter || '-'}</td>
-                            <td>
-                              <span className={`data-dictionary-status ${isActive ? 'is-active' : 'is-inactive'}`}>
-                                {isActive ? 'Ativo' : 'Inativo'}
-                              </span>
-                            </td>
-                          </>
-                        ) : (
-                          <>
-                            <td>{itemName}</td>
-                            <td>{itemSlug}</td>
-                            <td>
-                              <span className={`data-dictionary-status ${isActive ? 'is-active' : 'is-inactive'}`}>
-                                {isActive ? 'Ativo' : 'Inativo'}
-                              </span>
-                            </td>
-                            {activeCategory.includeUnit && <td>{itemUnit || '-'}</td>}
-                          </>
-                        )}
+                    <tr key={`row-${itemId || itemSlug || itemName}`}>
+                      {isCidCategory ? (
+                        <>
+                          <td>{itemSlug || '-'}</td>
+                          <td>{itemCid10 || '-'}</td>
+                          <td>{itemName || '-'}</td>
+                          <td>{itemChapter || '-'}</td>
+                          <td>
+                            <span className={`data-dictionary-status ${isActive ? 'is-active' : 'is-inactive'}`}>
+                              {isActive ? 'Ativo' : 'Inativo'}
+                            </span>
+                          </td>
+                        </>
+                      ) : (
+                        <>
+                          <td>{itemName}</td>
+                          <td>{itemSlug}</td>
+                          <td>
+                            <span className={`data-dictionary-status ${isActive ? 'is-active' : 'is-inactive'}`}>
+                              {isActive ? 'Ativo' : 'Inativo'}
+                            </span>
+                          </td>
+                          {activeCategory.includeUnit && <td>{itemUnit || '-'}</td>}
+                        </>
+                      )}
                       <td>
                         <div className="data-dictionary-actions">
                           {activeCategory.editable ? (

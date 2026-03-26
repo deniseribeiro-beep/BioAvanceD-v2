@@ -226,6 +226,13 @@ export default function PatientsPage() {
   const [importLoading, setImportLoading] = useState(false);
   const [importResult, setImportResult] = useState<{ success?: boolean; message?: string; patients?: number; samples?: number; consents?: number; error?: string } | null>(null);
 
+  // Estado para importação de amostras
+  const [isSampleImportModalOpen, setIsSampleImportModalOpen] = useState(false);
+  const [importedSampleFile, setImportedSampleFile] = useState<File | null>(null);
+  const [importedSampleJson, setImportedSampleJson] = useState<any>(null);
+  const [sampleImportLoading, setSampleImportLoading] = useState(false);
+  const [sampleImportResult, setSampleImportResult] = useState<{ success?: boolean; message?: string; samples?: number; error?: string } | null>(null);
+
   // Handler para leitura do arquivo
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -250,16 +257,20 @@ export default function PatientsPage() {
     }
   };
 
-  // Handler para envio do JSON
+  // Handler para envio do JSON (pacientes)
   const handleImportSubmit = async () => {
     if (!importedJson) return;
     setImportLoading(true);
     setImportResult(null);
     try {
+      // Anonimização básica: remove campos sensíveis extras
+      const anonymized = Array.isArray(importedJson)
+        ? importedJson.map(obj => anonymizePatient(obj))
+        : anonymizePatient(importedJson);
       const response = await fetch('http://localhost:3000/api/import/fhir', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(importedJson)
+        body: JSON.stringify(anonymized)
       });
       const data = await response.json();
       setImportResult(data);
@@ -268,7 +279,6 @@ export default function PatientsPage() {
         setIsImportModalOpen(false);
         setImportedFile(null);
         setImportedJson(null);
-        // Opcional: recarregar pacientes
         loadPatients();
       } else {
         alert(data.message || data.error || 'Erro ao importar');
@@ -280,6 +290,90 @@ export default function PatientsPage() {
       setImportLoading(false);
     }
   };
+
+  // Handler para leitura do arquivo de amostras
+  const handleSampleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file && file.type === 'application/json') {
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        try {
+          const json = JSON.parse(ev.target?.result as string);
+          setImportedSampleFile(file);
+          setImportedSampleJson(json);
+        } catch (err) {
+          alert('Arquivo JSON inválido');
+          setImportedSampleFile(null);
+          setImportedSampleJson(null);
+        }
+      };
+      reader.readAsText(file);
+    } else {
+      alert('Selecione um arquivo .json válido');
+      setImportedSampleFile(null);
+      setImportedSampleJson(null);
+    }
+  };
+
+  // Handler para envio do JSON de amostras
+  const handleSampleImportSubmit = async () => {
+    if (!importedSampleJson) return;
+    setSampleImportLoading(true);
+    setSampleImportResult(null);
+    try {
+      // Anonimização básica: remove campos sensíveis extras
+      const anonymized = Array.isArray(importedSampleJson)
+        ? importedSampleJson.map(obj => anonymizeSample(obj))
+        : anonymizeSample(importedSampleJson);
+      const response = await fetch('http://localhost:3000/api/import/samples', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(anonymized)
+      });
+      const data = await response.json();
+      setSampleImportResult(data);
+      if (data.success !== false && data.samples) {
+        alert('Importação de amostras concluída!');
+        setIsSampleImportModalOpen(false);
+        setImportedSampleFile(null);
+        setImportedSampleJson(null);
+        // Opcional: recarregar pacientes/amostras
+        loadPatients();
+      } else {
+        alert(data.message || data.error || 'Erro ao importar amostras');
+      }
+    } catch (err: any) {
+      setSampleImportResult({ success: false, error: err.message });
+      alert('Erro ao importar amostras: ' + err.message);
+    } finally {
+      setSampleImportLoading(false);
+    }
+  };
+
+  // Funções de anonimização básica
+  function anonymizePatient(obj: any) {
+    const { name, birthDate, gender, cpf, recordNumber, samples, ...rest } = obj;
+    return {
+      name,
+      birthDate,
+      gender,
+      cpf,
+      recordNumber,
+      samples: Array.isArray(samples) ? samples.map(anonymizeSample) : [],
+      // outros campos permitidos podem ser adicionados aqui
+    };
+  }
+  function anonymizeSample(obj: any) {
+    const { sampleID, patientCpf, patientRecordNumber, type, origin, ...rest } = obj;
+    return {
+      sampleID,
+      patientCpf,
+      patientRecordNumber,
+      type,
+      origin,
+      // outros campos permitidos podem ser adicionados aqui
+    };
+  }
 
   return (
     <div className="page patients-page">
@@ -303,7 +397,7 @@ export default function PatientsPage() {
                 <Modal isOpen={isImportModalOpen} onClose={() => { setIsImportModalOpen(false); setImportedFile(null); setImportedJson(null); setImportResult(null); }} title="Importação Inteligente de Dados FHIR">
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', minWidth: 320 }}>
                     <label style={{ fontWeight: 500 }}>Selecione um arquivo FHIR (.json):</label>
-                    <input type="file" accept="application/json" onChange={handleFileChange} disabled={importLoading} />
+                    <input type="file" accept="application/json" onChange={handleFileChange} disabled={importLoading} title="Selecione um arquivo .json FHIR" />
                     {importedJson && (
                       <div style={{ maxHeight: 180, overflow: 'auto', background: '#f8fafc', border: '1px solid #e5e7eb', borderRadius: 6, padding: 8, fontSize: 13 }}>
                         <pre style={{ margin: 0 }}>{JSON.stringify(importedJson, null, 2).slice(0, 2000)}{JSON.stringify(importedJson, null, 2).length > 2000 ? '... (truncado)' : ''}</pre>

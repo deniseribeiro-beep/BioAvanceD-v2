@@ -24,7 +24,6 @@ export default function Select({ label, error, className = '', id, name, options
         name={selectName}
         className={`select ${error ? 'select-error' : ''} ${className}`}
         aria-label={label || 'Campo de seleção'}
-        aria-invalid={Boolean(error)}
         aria-describedby={error ? `${selectId}-error` : undefined}
         {...props}
       >

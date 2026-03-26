@@ -37,8 +37,7 @@ if (redisLines.length === 0) {
 console.log('\n🔍 Variáveis carregadas pelo dotenv:');
 console.log('  REDIS_HOST:', process.env.REDIS_HOST || '❌ NÃO DEFINIDO');
 console.log('  REDIS_PORT:', process.env.REDIS_PORT || '❌ NÃO DEFINIDO');
-console.log('  REDIS_PASSWORD:', process.env.REDIS_PASSWORD ? '✅ DEFINIDO' : '❌ NÃO DEFINIDO');
-console.log('  REDIS_TLS:', process.env.REDIS_TLS || '❌ NÃO DEFINIDO');
+// Em dev/local, senha e TLS não são obrigatórios
 console.log('  REDIS_URL:', process.env.REDIS_URL || '❌ NÃO DEFINIDO');
 
 // Verifica problemas
@@ -55,9 +54,6 @@ if (process.env.REDIS_URL && !process.env.REDIS_HOST) {
   const url = process.env.REDIS_URL;
   const match = url.match(/^redis[s]?:\/\/(?:.*@)?([^:]+):(\d+)/);
   if (match) {
-    console.log('\n💡 Sugestão: Extrair do REDIS_URL:');
-    console.log(`   REDIS_HOST=${match[1]}`);
-    console.log(`   REDIS_PORT=${match[2]}`);
   }
 }
 
@@ -65,13 +61,9 @@ if (!process.env.REDIS_PORT && !process.env.REDIS_URL) {
   problems.push('❌ REDIS_PORT não está definido');
 }
 
-if (!process.env.REDIS_PASSWORD) {
-  problems.push('⚠️ REDIS_PASSWORD não está definido (pode ser necessário para Redis Cloud)');
-}
 
-if (!process.env.REDIS_TLS || (process.env.REDIS_TLS !== 'true' && process.env.REDIS_TLS !== '1')) {
-  problems.push('⚠️ REDIS_TLS não está definido como "true" (geralmente necessário para Redis Cloud)');
-}
+// Em dev/local, senha e TLS não são obrigatórios
+
 
 if (problems.length === 0) {
   console.log('✅ Configuração parece correta!');
@@ -80,9 +72,4 @@ if (problems.length === 0) {
   problems.forEach(p => console.log(`  ${p}`));
 }
 
-console.log('\n📝 Formato esperado no .env:');
-console.log('   REDIS_HOST=redis-11616.c9.us-east-1-4.ec2.cloud.redislabs.com');
-console.log('   REDIS_PORT=11616');
-console.log('   REDIS_PASSWORD=sua-senha-aqui');
-console.log('   REDIS_TLS=true');
 

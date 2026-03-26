@@ -3,6 +3,41 @@ const patientService = require('../services/patient.service');
 const logger = require('../utils/logger');
 
 class ConsentController {
+    // List all patients with PENDING_CONSENT for a given TCLE (policy/template ID)
+    async getPendingPatientsForPolicy(req, res) {
+      try {
+        const db = req.app.locals.db;
+        if (!db) {
+          return res.status(503).json({
+            success: false,
+            error: 'Banco de dados não disponível'
+          });
+        }
+        const policyId = String(req.params.id || req.query.policyId || '').trim();
+        if (!policyId) {
+          return res.status(400).json({
+            success: false,
+            error: 'policyId é obrigatório'
+          });
+        }
+        const patientsCollection = db.collection('patients');
+        const pendingPatients = await patientsCollection.find({
+          status: 'PENDING_CONSENT',
+          consentTemplateId: policyId
+        }).project({ patientID: 1, patientName: 1, email: 1, clinicalUnit: 1, consentNotifiedAt: 1 }).toArray();
+        return res.status(200).json({
+          success: true,
+          data: pendingPatients
+        });
+      } catch (error) {
+        logger.error('Erro ao listar pacientes aguardando aprovação do TCLE:', error.message);
+        return res.status(500).json({
+          success: false,
+          error: 'Erro ao listar pacientes aguardando aprovação do TCLE',
+          message: error.message
+        });
+      }
+    }
   async createPolicy(req, res) {
     try {
       const db = req.app.locals.db;

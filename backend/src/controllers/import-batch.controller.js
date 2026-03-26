@@ -142,7 +142,7 @@ class ImportBatchController {
           totalRows,
           processedRows,
           progress,
-          errors: stagingImport.errors || [],
+          errors: stagingImport.importErrors || [],
           rawData: stagingImport.rawData || {},
           createdAt: stagingImport.createdAt,
           updatedAt: stagingImport.updatedAt,

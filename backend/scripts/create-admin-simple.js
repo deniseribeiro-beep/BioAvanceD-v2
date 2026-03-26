@@ -4,18 +4,14 @@ const dotenv = require('dotenv');
 const bcrypt = require('bcryptjs');
 const { MongoClient } = require('mongodb');
 
-dotenv.config({ path: path.resolve(__dirname, '../../.env.docker') });
+
 dotenv.config();
 
 const dbName = process.env.MONGO_DB || 'bioavanced';
 
-if (!process.env.MONGO_URI && process.env.MONGO_ROOT_USERNAME && process.env.MONGO_ROOT_PASSWORD) {
-  const mongoHost = process.env.MONGO_HOST || 'localhost';
-  const mongoPort = process.env.MONGO_PORT || '27017';
-  const mongoUser = encodeURIComponent(process.env.MONGO_ROOT_USERNAME);
-  const mongoPassword = encodeURIComponent(process.env.MONGO_ROOT_PASSWORD);
-  process.env.MONGO_URI = `mongodb://${mongoUser}:${mongoPassword}@${mongoHost}:${mongoPort}/${dbName}?authSource=admin`;
-}
+
+// Força uso da URI local sem autenticação
+process.env.MONGO_URI = process.env.MONGO_URI || `mongodb://localhost:27017/${dbName}?retryWrites=true&w=majority&tls=false`;
 
 const uri = process.env.MONGO_URI;
 
@@ -49,17 +45,26 @@ if (!uri) {
     const hashedPassword = await bcrypt.hash('Admin@123', salt);
     
     await usersCollection.insertOne({
+      name: 'Administrador',
       email: 'admin@bioavanced.com.br',
       username: 'admin',
       password: hashedPassword,
-      fullName: 'Administrador',
       clinicalUnit: 'BioAvanceD',
-      accessType: 3,
+      accessType: 4,
       roleName: 'Administrador',
-      status: 'ativo',
-      mfa: { enabled: false, secret: null },
+      status: 'active',
+      mfaEnabled: false,
+      mfaSecret: null,
+      mfaActivationDate: null,
+      mfaFailedAttempts: 0,
+      mfaLocked: false,
       createdAt: new Date(),
-      updatedAt: new Date()
+      updatedAt: new Date(),
+      lastLogin: null,
+      passwordHistory: [],
+      lastPasswordChange: new Date(),
+      forceReset: false,
+      failedLoginAttempts: 0
     });
     
     console.log('✅ Usuário admin criado!');
