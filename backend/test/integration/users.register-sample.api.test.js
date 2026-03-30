@@ -1,3 +1,5 @@
+
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 const request = require('supertest');
 const jwt = require('jsonwebtoken');
 
@@ -53,24 +55,37 @@ describe('POST /api/users/register-sample - paridade de contrato com /api/sample
           return {
             deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }),
             insertOne: vi.fn().mockResolvedValue({ insertedId: 'sample-inserted' }),
+            updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
+            findOne: vi.fn().mockResolvedValue(null),
+            find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }),
           };
         }
 
         if (name === 'users') {
           return {
             findOne: vi.fn().mockResolvedValue({ anonId: 'anon-user-qa' }),
+            updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
+            insertOne: vi.fn().mockResolvedValue({ insertedId: 'user-1' }),
+            find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }),
+            deleteOne: vi.fn().mockResolvedValue({ deletedCount: 0 }),
           };
         }
 
         if (name === 'logs') {
           return {
             insertOne: vi.fn().mockResolvedValue({ insertedId: 'log-qa' }),
+            updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
+            findOne: vi.fn().mockResolvedValue(null),
+            find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }),
+            deleteOne: vi.fn().mockResolvedValue({ deletedCount: 0 }),
           };
         }
 
         return {
           findOne: vi.fn().mockResolvedValue(null),
           insertOne: vi.fn().mockResolvedValue({ insertedId: 'generic' }),
+          updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
+          find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }),
           deleteOne: vi.fn().mockResolvedValue({ deletedCount: 0 }),
         };
       },

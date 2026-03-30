@@ -1,6 +1,7 @@
+
 const { test, expect } = require('@playwright/test');
 
-test('cadastro de paciente como Coordenador exibe sucesso e fluxo pós-salvamento', async ({ page }) => {
+test('cadastro integrado via intake wizard (paciente + amostra + clínica)', async ({ page }) => {
   await page.addInitScript(() => {
     const jwtLikeToken = 'eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJ1c2VySUQiOiJxYS1jb29yZC0xIiwiYWNjZXNzVHlwZSI6Mywicm9sZU5hbWUiOiJDb29yZGVuYWRvciJ9.';
     localStorage.setItem('token', jwtLikeToken);
@@ -11,8 +12,7 @@ test('cadastro de paciente como Coordenador exibe sucesso e fluxo pós-salvament
     await dialog.accept();
   });
 
-  let createPatientCalled = false;
-
+  // Mock rotas essenciais para intake
   await page.route('**/api/auth/verify', async (route) => {
     await route.fulfill({
       status: 200,
@@ -33,43 +33,7 @@ test('cadastro de paciente como Coordenador exibe sucesso e fluxo pós-salvament
     });
   });
 
-  await page.route('**/api/patients', async (route) => {
-    const method = route.request().method();
-
-    if (method === 'GET') {
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({ success: true, data: { patients: [], total: 0 } }),
-      });
-      return;
-    }
-
-    if (method === 'POST') {
-      createPatientCalled = true;
-      await route.fulfill({
-        status: 201,
-        contentType: 'application/json',
-        body: JSON.stringify({
-          success: true,
-          message: 'Paciente cadastrado com sucesso',
-          data: { patientID: '12345678' },
-        }),
-      });
-      return;
-    }
-
-    await route.fallback();
-  });
-
-  await page.route('**/api/patients/*/consent/resend', async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ success: true, message: 'TCLE enviado' }),
-    });
-  });
-
+  // Mock consent template
   await page.route('**/api/consent-templates/active', async (route) => {
     await route.fulfill({
       status: 200,
@@ -88,17 +52,57 @@ test('cadastro de paciente como Coordenador exibe sucesso e fluxo pós-salvament
     });
   });
 
-  await page.goto('/patients/new');
+  // Mock intake submit
+  await page.route('**/api/intake', async (route) => {
+    await route.fulfill({
+      status: 201,
+      contentType: 'application/json',
+      body: JSON.stringify({ success: true, message: 'Cadastro integrado realizado com sucesso!' }),
+    });
+  });
 
-  await page.getByLabel(/Nome do Paciente|Patient Name/i).fill('Paciente QA E2E');
+
+  await page.goto('/next/intake');
+
+  // Passo 1: Dados do paciente
+  await page.waitForSelector('input[name="patientName"]', { state: 'visible', timeout: 15000 });
+  await expect(page.getByLabel(/Nome completo|Full Name/i)).toBeVisible();
+  await page.getByLabel(/Nome completo|Full Name/i).fill('Paciente QA E2E');
   await page.getByLabel(/Data de Nascimento|Birth Date/i).fill('01/01/1990');
-  await page.getByLabel(/Prontuário|Record Number/i).fill('PRONT-E2E-001');
-  await page.getByLabel(/Variante Genética|Genetic Variant/i).fill('GLA-c.123A>G');
+  await page.getByLabel(/Sexo|Gender/i).selectOption({ label: /Masculino|Male/i });
+  await page.getByLabel(/E-mail/i).fill('paciente.qa@e2e.com');
+  await page.getByLabel(/CPF|Passaporte|Prontuário|Documento/i).fill('12345678900');
 
-  await page.getByRole('button', { name: /Cadastrar Paciente|Register Patient|Salvar/i }).click();
+  // Avançar para o passo da amostra
+  await page.getByRole('button', { name: /Próximo|Next/i }).click();
 
-  await expect(page.getByText(/TCLE pronto para envio e assinatura/i)).toBeVisible();
-  expect(createPatientCalled).toBe(true);
+  // Passo 2: Dados da amostra
+  await expect(page.getByLabel(/Tipo de Amostra|Sample Type/i)).toBeVisible();
+  await page.getByLabel(/Tipo de Amostra|Sample Type/i).selectOption({ index: 1 });
+  await page.getByLabel(/Origem da Amostra|Sample Origin/i).selectOption({ index: 1 });
+  await page.getByLabel(/Protocolo de Extração|Extraction Protocol/i).selectOption({ index: 1 });
+  await page.getByLabel(/Unidade de Medida|Measurement Unit|Unit of Measure/i).selectOption({ index: 1 });
+  await page.getByLabel(/Quantidade|Quantity/i).fill('1');
+  await page.getByLabel(/Qualidade|Quality/i).selectOption({ index: 1 });
+  await page.getByLabel(/Projeto Vinculado|Linked Project/i).fill('Projeto QA E2E');
 
-  await expect(page).toHaveURL(/\/patients\/new$/);
+  // Avançar para o passo de clínica
+  await page.getByRole('button', { name: /Próximo|Next/i }).click();
+
+  // Passo 3: Dados clínicos (preencher apenas o mínimo obrigatório)
+  await page.getByLabel(/Pressão Arterial|Blood Pressure/i).fill('120/80');
+  await page.getByLabel(/Observações Clínicas|Clinical Observations/i).fill('Paciente saudável para E2E.');
+
+  // Avançar para consentimento
+  await page.getByRole('button', { name: /Próximo|Next/i }).click();
+
+  // Selecionar TCLE e aceitar termos
+  await expect(page.getByText(/TCLE QA/)).toBeVisible();
+  await page.getByLabel(/Aceito os termos gerais/i).check();
+
+  // Finalizar cadastro
+  await page.getByRole('button', { name: /Finalizar|Concluir|Submit/i }).click();
+
+  // Validar mensagem de sucesso
+  await expect(page.getByText(/Cadastro integrado realizado com sucesso|sucesso/i)).toBeVisible();
 });

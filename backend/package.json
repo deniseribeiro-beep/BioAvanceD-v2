@@ -42,6 +42,7 @@
   },
   "dependencies": {
     "@influxdata/influxdb-client": "latest",
+    "@vitest/browser": "^4.0.7",
     "ajv": "latest",
     "ajv-formats": "latest",
     "argon2": "latest",

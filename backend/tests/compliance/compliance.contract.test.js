@@ -8,6 +8,17 @@ const { generateIndustrialBarcodeArtifacts, parseScannedBarcode } = require('../
 const AllocateSampleUseCase = require('../../src/core/use-cases/AllocateSampleUseCase');
 const ReleaseSampleUseCase = require('../../src/core/use-cases/ReleaseSampleUseCase');
 
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import fhirSyncService from '../../src/services/fhir-sync.service';
+import PatientFHIR from '../../src/models/fhir/Patient.fhir.model';
+import SampleFHIR from '../../src/models/fhir/Sample.fhir.model';
+import patientService from '../../src/services/patient.service';
+import { encryptValue, decryptValue } from '../../src/utils/fieldEncryption';
+import mqttSignatureService from '../../src/services/mqtt-signature.service';
+import { generateIndustrialBarcodeArtifacts, parseScannedBarcode } from '../../src/utils/barcodeSymbology';
+import AllocateSampleUseCase from '../../src/core/use-cases/AllocateSampleUseCase';
+import ReleaseSampleUseCase from '../../src/core/use-cases/ReleaseSampleUseCase';
+
 describe('Compliance Gate - HL7 FHIR R4', () => {
   it('valida contrato FHIR R4 para payload de Patient', () => {
     const payload = fhirSyncService.buildPatientFhirPayload({

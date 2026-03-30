@@ -1,3 +1,5 @@
+
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 const request = require('supertest');
 const jwt = require('jsonwebtoken');
 
@@ -29,6 +31,10 @@ describe('POST /api/samples - Smart Blocking e Topological Quarantine', () => {
     app.locals.db = {
       collection: () => ({
         deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }),
+        updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
+        insertOne: vi.fn().mockResolvedValue({ insertedId: 'sample-1' }),
+        findOne: vi.fn().mockResolvedValue(null),
+        find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }),
       }),
     };
     app.locals.neo4jDriver = null;
@@ -63,11 +69,11 @@ describe('POST /api/samples - Smart Blocking e Topological Quarantine', () => {
       .set('Authorization', `Bearer ${createAuthToken()}`)
       .send({
         patientID: '12345678',
-        sampleType: 'Sangue',
-        sampleOrigin: 'Coleta',
-        extractionProtocol: 'Protocolo A',
+        sampleType: 'PLASMA', // valid MIABIS ID
+        sampleOrigin: 'VENOUS_BLOOD', // valid MIABIS ID
+        extractionProtocol: 'TUBE_EDTA', // valid MIABIS ID
         quantity: 1,
-        quality: 1,
+        quality: 'GOOD', // valid MIABIS ID
         registerDate: new Date().toISOString(),
         locationID: 101,
         linkedProject: 'Projeto QA',
@@ -92,11 +98,11 @@ describe('POST /api/samples - Smart Blocking e Topological Quarantine', () => {
       .set('Authorization', `Bearer ${createAuthToken()}`)
       .send({
         patientID: '12345678',
-        sampleType: 'Sangue',
-        sampleOrigin: 'Coleta',
-        extractionProtocol: 'Protocolo A',
+        sampleType: 'PLASMA', // valid MIABIS ID
+        sampleOrigin: 'VENOUS_BLOOD', // valid MIABIS ID
+        extractionProtocol: 'TUBE_EDTA', // valid MIABIS ID
         quantity: 1,
-        quality: 1,
+        quality: 'GOOD', // valid MIABIS ID
         registerDate: new Date().toISOString(),
         locationID: 101,
         linkedProject: 'Projeto QA',
@@ -122,11 +128,11 @@ describe('POST /api/samples - Smart Blocking e Topological Quarantine', () => {
       .set('Authorization', `Bearer ${createAuthToken()}`)
       .send({
         patientID: '12345678',
-        sampleType: 'Sangue',
-        sampleOrigin: 'Coleta',
-        extractionProtocol: 'Protocolo A',
+        sampleType: 'PLASMA', // valid MIABIS ID
+        sampleOrigin: 'VENOUS_BLOOD', // valid MIABIS ID
+        extractionProtocol: 'TUBE_EDTA', // valid MIABIS ID
         quantity: 1,
-        quality: 1,
+        quality: 'GOOD', // valid MIABIS ID
         registerDate: new Date().toISOString(),
         locationID: 101,
         linkedProject: 'Projeto QA',

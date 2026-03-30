@@ -1,16 +1,20 @@
+
 import React, { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
+import ConsentForm from '../components/ConsentForm';
+import { ConsentTemplate, ConsentPermission } from '../types/models';
+import { useLanguage } from '../contexts/LanguageContext';
 
 const API_BASE = process.env.REACT_APP_API_BASE || '';
 
 const ConsentPage = () => {
+  const { t } = useLanguage();
   const { token } = useParams();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [consent, setConsent] = useState(null);
-  const [granular, setGranular] = useState({});
-  const [tcleVisible, setTcleVisible] = useState(false);
-  const [saving, setSaving] = useState(false);
+  const [template, setTemplate] = useState<ConsentTemplate | null>(null);
+  const [patientName, setPatientName] = useState('');
+  const [patientId, setPatientId] = useState('');
   const [success, setSuccess] = useState(false);
 
   useEffect(() => {
@@ -19,97 +23,63 @@ const ConsentPage = () => {
       setError('');
       try {
         const res = await fetch(`${API_BASE}/api/patient/consent-by-token/${token}`);
-        if (!res.ok) throw new Error('Token inválido ou expirado.');
+        if (!res.ok) throw new Error(t('consent.page.loadError'));
         const data = await res.json();
-        setConsent(data.data);
-        setGranular(data.data.granularPermissions || {});
-      } catch (err) {
-        setError(err.message || 'Erro ao buscar consentimento.');
+        setTemplate(data.data.template || null);
+        setPatientName(data.data.patientName || t('consent.page.defaultPatientName'));
+        setPatientId(data.data.patientId || '');
+      } catch (err: any) {
+        setError(err.message || t('consent.page.loadError'));
       } finally {
         setLoading(false);
       }
     };
     if (token) fetchConsent();
-  }, [token]);
+  }, [token, t]);
 
-  const handleToggle = (key) => {
-    setGranular((prev) => ({ ...prev, [key]: !prev[key] }));
-  };
-
-  const handleSave = async () => {
-    setSaving(true);
+  const handleSubmit = async (payload: {
+    responses: Record<string, boolean>;
+    signatureName: string;
+    signatureImageBase64?: string;
+    signatureMimeType?: string;
+  }) => {
+    setLoading(true);
     setError('');
     setSuccess(false);
     try {
       const res = await fetch(`${API_BASE}/api/patient/consent-by-token/${token}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ granularPermissions: granular }),
+        body: JSON.stringify(payload),
       });
-      if (!res.ok) throw new Error('Erro ao salvar preferências.');
+      if (!res.ok) throw new Error(t('consent.page.submitError'));
       setSuccess(true);
-      // Optionally, refetch consent status
-    } catch (err) {
-      setError(err.message || 'Erro ao salvar preferências.');
+    } catch (err: any) {
+      setError(err.message || t('consent.page.submitError'));
     } finally {
-      setSaving(false);
+      setLoading(false);
     }
   };
 
-  if (loading) return <div className="consent-page__loading">Carregando...</div>;
+  if (loading) return <div className="consent-page__loading">{t('common.loading')}</div>;
   if (error) return <div className="consent-page__error">{error}</div>;
-  if (!consent) return null;
-
-  const isPending = consent.status === 'PENDING';
-  const granularKeys = consent.permissions || [];
+  if (!template) return <div className="consent-page__error">{t('consent.page.noActiveTemplate')}</div>;
 
   return (
     <div className="consent-page__container">
       <div className="consent-page__header">
         <h1>Portal de Privacidade</h1>
-        <p>Gerencie seu consentimento de forma segura e transparente.</p>
+        <p>{t('consent.form.header')}</p>
       </div>
-      {isPending ? (
-        <div className="consent-page__tcle">
-          <h2>Termo de Consentimento Livre e Esclarecido</h2>
-          <div className="consent-page__tcle-content">{consent.tcleText}</div>
-        </div>
-      ) : (
-        <div className="consent-page__tcle-collapsed">
-          <button className="consent-page__tcle-toggle" onClick={() => setTcleVisible((v) => !v)}>
-            {tcleVisible ? 'Ocultar texto do documento' : 'Ver texto do documento'}
-          </button>
-          {tcleVisible && (
-            <div className="consent-page__tcle-content">{consent.tcleText}</div>
-          )}
-        </div>
-      )}
-      <div className="consent-page__granular">
-        <h3>Preferências de Privacidade</h3>
-        <div className="consent-page__granular-list">
-          {granularKeys.map((perm) => (
-            <label key={perm.key} className="consent-page__granular-item">
-              <input
-                type="checkbox"
-                checked={!!granular[perm.key]}
-                disabled={!isPending && perm.locked}
-                onChange={() => handleToggle(perm.key)}
-              />
-              {perm.label}
-            </label>
-          ))}
-        </div>
-      </div>
-      <button
-        className="consent-page__save-btn"
-        onClick={handleSave}
-        disabled={saving}
-        style={{ background: '#1976d2', color: '#fff', borderRadius: 6, padding: '12px 24px', marginTop: 24 }}
-      >
-        {isPending ? 'Confirmar e Assinar' : 'Salvar Novas Preferências'}
-      </button>
-      {success && <div className="consent-page__success">Preferências salvas com sucesso!</div>}
-      {saving && <div className="consent-page__saving">Salvando...</div>}
+      <ConsentForm
+        patientName={patientName}
+        patientId={patientId}
+        templateText={template.htmlContent || template.content}
+        permissions={template.permissions as ConsentPermission[]}
+        onSubmit={handleSubmit}
+        onCancel={() => window.history.back()}
+      />
+      {success && <div className="consent-page__success">{t('consent.page.submitSuccess')}</div>}
     </div>
   );
 };

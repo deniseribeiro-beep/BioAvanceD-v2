@@ -1,0 +1,654 @@
+{
+  "config": {
+    "configFile": "C:\\Projeto\\BioAvanceD\\frontend\\playwright.config.js",
+    "rootDir": "C:/Projeto/BioAvanceD/frontend/playwright/tests",
+    "forbidOnly": false,
+    "fullyParallel": false,
+    "globalSetup": null,
+    "globalTeardown": null,
+    "globalTimeout": 0,
+    "grep": {},
+    "grepInvert": null,
+    "maxFailures": 0,
+    "metadata": {
+      "actualWorkers": 3
+    },
+    "preserveOutput": "always",
+    "projects": [
+      {
+        "outputDir": "C:/Projeto/BioAvanceD/reports/system-audit/playwright/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 3
+        },
+        "id": "",
+        "name": "",
+        "testDir": "C:/Projeto/BioAvanceD/frontend/playwright/tests",
+        "testIgnore": [],
+        "testMatch": [
+          "**/*.@(spec|test).?(c|m)[jt]s?(x)"
+        ],
+        "timeout": 60000
+      }
+    ],
+    "quiet": false,
+    "reporter": [
+      [
+        "list",
+        null
+      ],
+      [
+        "json",
+        {
+          "outputFile": "C:\\Projeto\\BioAvanceD\\reports\\system-audit\\playwright\\results.json"
+        }
+      ],
+      [
+        "html",
+        {
+          "outputFolder": "C:\\Projeto\\BioAvanceD\\reports\\system-audit\\playwright\\html",
+          "open": "never"
+        }
+      ]
+    ],
+    "reportSlowTests": {
+      "max": 5,
+      "threshold": 300000
+    },
+    "runAgents": "none",
+    "shard": null,
+    "tags": [],
+    "updateSnapshots": "missing",
+    "updateSourceMethod": "patch",
+    "version": "1.58.2",
+    "workers": 4,
+    "webServer": {
+      "command": "npm run dev -- --host 127.0.0.1 --port 4173",
+      "url": "http://127.0.0.1:4173",
+      "reuseExistingServer": true,
+      "timeout": 120000,
+      "cwd": "C:\\Projeto\\BioAvanceD\\frontend"
+    }
+  },
+  "suites": [
+    {
+      "title": "cadastro-amostra.spec.js",
+      "file": "cadastro-amostra.spec.js",
+      "column": 0,
+      "line": 0,
+      "specs": [
+        {
+          "title": "cadastro de amostra pelo inventário",
+          "ok": false,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 60000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "",
+              "projectName": "",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "failed",
+                  "duration": 13734,
+                  "error": {
+                    "message": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mlocator\u001b[39m\u001b[2m).\u001b[22mtoBeVisible\u001b[2m(\u001b[22m\u001b[2m)\u001b[22m failed\n\nLocator: getByRole('button', { name: /Criar Amostra|Create Sample/i })\nExpected: visible\nTimeout: 10000ms\nError: element(s) not found\n\nCall log:\n\u001b[2m  - Expect \"toBeVisible\" with timeout 10000ms\u001b[22m\n\u001b[2m  - waiting for getByRole('button', { name: /Criar Amostra|Create Sample/i })\u001b[22m\n",
+                    "stack": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mlocator\u001b[39m\u001b[2m).\u001b[22mtoBeVisible\u001b[2m(\u001b[22m\u001b[2m)\u001b[22m failed\n\nLocator: getByRole('button', { name: /Criar Amostra|Create Sample/i })\nExpected: visible\nTimeout: 10000ms\nError: element(s) not found\n\nCall log:\n\u001b[2m  - Expect \"toBeVisible\" with timeout 10000ms\u001b[22m\n\u001b[2m  - waiting for getByRole('button', { name: /Criar Amostra|Create Sample/i })\u001b[22m\n\n    at C:\\Projeto\\BioAvanceD\\frontend\\playwright\\tests\\cadastro-amostra.spec.js:84:33",
+                    "location": {
+                      "file": "C:\\Projeto\\BioAvanceD\\frontend\\playwright\\tests\\cadastro-amostra.spec.js",
+                      "column": 33,
+                      "line": 84
+                    },
+                    "snippet": "\u001b[0m \u001b[90m 82 |\u001b[39m   \u001b[90m// Clica no botão de \"Criar Amostra\" (submit do formulário)\u001b[39m\n \u001b[90m 83 |\u001b[39m   \u001b[36mconst\u001b[39m criarAmostraBtn \u001b[33m=\u001b[39m \u001b[36mawait\u001b[39m page\u001b[33m.\u001b[39mgetByRole(\u001b[32m'button'\u001b[39m\u001b[33m,\u001b[39m { name\u001b[33m:\u001b[39m \u001b[35m/Criar Amostra|Create Sample/i\u001b[39m })\u001b[33m;\u001b[39m\n\u001b[31m\u001b[1m>\u001b[22m\u001b[39m\u001b[90m 84 |\u001b[39m   \u001b[36mawait\u001b[39m expect(criarAmostraBtn)\u001b[33m.\u001b[39mtoBeVisible()\u001b[33m;\u001b[39m\n \u001b[90m    |\u001b[39m                                 \u001b[31m\u001b[1m^\u001b[22m\u001b[39m\n \u001b[90m 85 |\u001b[39m   \u001b[36mawait\u001b[39m criarAmostraBtn\u001b[33m.\u001b[39mclick()\u001b[33m;\u001b[39m\n \u001b[90m 86 |\u001b[39m\n \u001b[90m 87 |\u001b[39m   \u001b[90m// Preenche o formulário conforme renderizado\u001b[39m\u001b[0m"
+                  },
+                  "errors": [
+                    {
+                      "location": {
+                        "file": "C:\\Projeto\\BioAvanceD\\frontend\\playwright\\tests\\cadastro-amostra.spec.js",
+                        "column": 33,
+                        "line": 84
+                      },
+                      "message": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mlocator\u001b[39m\u001b[2m).\u001b[22mtoBeVisible\u001b[2m(\u001b[22m\u001b[2m)\u001b[22m failed\n\nLocator: getByRole('button', { name: /Criar Amostra|Create Sample/i })\nExpected: visible\nTimeout: 10000ms\nError: element(s) not found\n\nCall log:\n\u001b[2m  - Expect \"toBeVisible\" with timeout 10000ms\u001b[22m\n\u001b[2m  - waiting for getByRole('button', { name: /Criar Amostra|Create Sample/i })\u001b[22m\n\n\n\u001b[0m \u001b[90m 82 |\u001b[39m   \u001b[90m// Clica no botão de \"Criar Amostra\" (submit do formulário)\u001b[39m\n \u001b[90m 83 |\u001b[39m   \u001b[36mconst\u001b[39m criarAmostraBtn \u001b[33m=\u001b[39m \u001b[36mawait\u001b[39m page\u001b[33m.\u001b[39mgetByRole(\u001b[32m'button'\u001b[39m\u001b[33m,\u001b[39m { name\u001b[33m:\u001b[39m \u001b[35m/Criar Amostra|Create Sample/i\u001b[39m })\u001b[33m;\u001b[39m\n\u001b[31m\u001b[1m>\u001b[22m\u001b[39m\u001b[90m 84 |\u001b[39m   \u001b[36mawait\u001b[39m expect(criarAmostraBtn)\u001b[33m.\u001b[39mtoBeVisible()\u001b[33m;\u001b[39m\n \u001b[90m    |\u001b[39m                                 \u001b[31m\u001b[1m^\u001b[22m\u001b[39m\n \u001b[90m 85 |\u001b[39m   \u001b[36mawait\u001b[39m criarAmostraBtn\u001b[33m.\u001b[39mclick()\u001b[33m;\u001b[39m\n \u001b[90m 86 |\u001b[39m\n \u001b[90m 87 |\u001b[39m   \u001b[90m// Preenche o formulário conforme renderizado\u001b[39m\u001b[0m\n\u001b[2m    at C:\\Projeto\\BioAvanceD\\frontend\\playwright\\tests\\cadastro-amostra.spec.js:84:33\u001b[22m"
+                    }
+                  ],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-03-30T18:41:47.521Z",
+                  "annotations": [],
+                  "attachments": [
+                    {
+                      "name": "screenshot",
+                      "contentType": "image/png",
+                      "path": "C:\\Projeto\\BioAvanceD\\reports\\system-audit\\playwright\\test-results\\cadastro-amostra-cadastro-de-amostra-pelo-inventário\\test-failed-1.png"
+                    },
+                    {
+                      "name": "video",
+                      "contentType": "video/webm",
+                      "path": "C:\\Projeto\\BioAvanceD\\reports\\system-audit\\playwright\\test-results\\cadastro-amostra-cadastro-de-amostra-pelo-inventário\\video.webm"
+                    },
+                    {
+                      "name": "error-context",
+                      "contentType": "text/markdown",
+                      "path": "C:\\Projeto\\BioAvanceD\\reports\\system-audit\\playwright\\test-results\\cadastro-amostra-cadastro-de-amostra-pelo-inventário\\error-context.md"
+                    },
+                    {
+                      "name": "trace",
+                      "contentType": "application/zip",
+                      "path": "C:\\Projeto\\BioAvanceD\\reports\\system-audit\\playwright\\test-results\\cadastro-amostra-cadastro-de-amostra-pelo-inventário\\trace.zip"
+                    }
+                  ],
+                  "errorLocation": {
+                    "file": "C:\\Projeto\\BioAvanceD\\frontend\\playwright\\tests\\cadastro-amostra.spec.js",
+                    "column": 33,
+                    "line": 84
+                  }
+                }
+              ],
+              "status": "unexpected"
+            }
+          ],
+          "id": "d37242db6062817cdcc9-40b229ffe22b52e62cfd",
+          "file": "cadastro-amostra.spec.js",
+          "line": 4,
+          "column": 1
+        }
+      ]
+    },
+    {
+      "title": "cadastro-paciente.spec.js",
+      "file": "cadastro-paciente.spec.js",
+      "column": 0,
+      "line": 0,
+      "specs": [
+        {
+          "title": "cadastro integrado via intake wizard (paciente + amostra + clínica)",
+          "ok": false,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 60000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "",
+              "projectName": "",
+              "results": [
+                {
+                  "workerIndex": 1,
+                  "parallelIndex": 1,
+                  "status": "failed",
+                  "duration": 14059,
+                  "error": {
+                    "message": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mlocator\u001b[39m\u001b[2m).\u001b[22mtoBeVisible\u001b[2m(\u001b[22m\u001b[2m)\u001b[22m failed\n\nLocator: getByLabel(/Nome completo|Full Name/i)\nExpected: visible\nTimeout: 10000ms\nError: element(s) not found\n\nCall log:\n\u001b[2m  - Expect \"toBeVisible\" with timeout 10000ms\u001b[22m\n\u001b[2m  - waiting for getByLabel(/Nome completo|Full Name/i)\u001b[22m\n",
+                    "stack": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mlocator\u001b[39m\u001b[2m).\u001b[22mtoBeVisible\u001b[2m(\u001b[22m\u001b[2m)\u001b[22m failed\n\nLocator: getByLabel(/Nome completo|Full Name/i)\nExpected: visible\nTimeout: 10000ms\nError: element(s) not found\n\nCall log:\n\u001b[2m  - Expect \"toBeVisible\" with timeout 10000ms\u001b[22m\n\u001b[2m  - waiting for getByLabel(/Nome completo|Full Name/i)\u001b[22m\n\n    at C:\\Projeto\\BioAvanceD\\frontend\\playwright\\tests\\cadastro-paciente.spec.js:67:61",
+                    "location": {
+                      "file": "C:\\Projeto\\BioAvanceD\\frontend\\playwright\\tests\\cadastro-paciente.spec.js",
+                      "column": 61,
+                      "line": 67
+                    },
+                    "snippet": "\u001b[0m \u001b[90m 65 |\u001b[39m\n \u001b[90m 66 |\u001b[39m   \u001b[90m// Passo 1: Dados do paciente\u001b[39m\n\u001b[31m\u001b[1m>\u001b[22m\u001b[39m\u001b[90m 67 |\u001b[39m   \u001b[36mawait\u001b[39m expect(page\u001b[33m.\u001b[39mgetByLabel(\u001b[35m/Nome completo|Full Name/i\u001b[39m))\u001b[33m.\u001b[39mtoBeVisible()\u001b[33m;\u001b[39m\n \u001b[90m    |\u001b[39m                                                             \u001b[31m\u001b[1m^\u001b[22m\u001b[39m\n \u001b[90m 68 |\u001b[39m   \u001b[36mawait\u001b[39m page\u001b[33m.\u001b[39mgetByLabel(\u001b[35m/Nome completo|Full Name/i\u001b[39m)\u001b[33m.\u001b[39mfill(\u001b[32m'Paciente QA E2E'\u001b[39m)\u001b[33m;\u001b[39m\n \u001b[90m 69 |\u001b[39m   \u001b[36mawait\u001b[39m page\u001b[33m.\u001b[39mgetByLabel(\u001b[35m/Data de Nascimento|Birth Date/i\u001b[39m)\u001b[33m.\u001b[39mfill(\u001b[32m'01/01/1990'\u001b[39m)\u001b[33m;\u001b[39m\n \u001b[90m 70 |\u001b[39m   \u001b[36mawait\u001b[39m page\u001b[33m.\u001b[39mgetByLabel(\u001b[35m/Sexo|Gender/i\u001b[39m)\u001b[33m.\u001b[39mselectOption({ label\u001b[33m:\u001b[39m \u001b[35m/Masculino|Male/i\u001b[39m })\u001b[33m;\u001b[39m\u001b[0m"
+                  },
+                  "errors": [
+                    {
+                      "location": {
+                        "file": "C:\\Projeto\\BioAvanceD\\frontend\\playwright\\tests\\cadastro-paciente.spec.js",
+                        "column": 61,
+                        "line": 67
+                      },
+                      "message": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mlocator\u001b[39m\u001b[2m).\u001b[22mtoBeVisible\u001b[2m(\u001b[22m\u001b[2m)\u001b[22m failed\n\nLocator: getByLabel(/Nome completo|Full Name/i)\nExpected: visible\nTimeout: 10000ms\nError: element(s) not found\n\nCall log:\n\u001b[2m  - Expect \"toBeVisible\" with timeout 10000ms\u001b[22m\n\u001b[2m  - waiting for getByLabel(/Nome completo|Full Name/i)\u001b[22m\n\n\n\u001b[0m \u001b[90m 65 |\u001b[39m\n \u001b[90m 66 |\u001b[39m   \u001b[90m// Passo 1: Dados do paciente\u001b[39m\n\u001b[31m\u001b[1m>\u001b[22m\u001b[39m\u001b[90m 67 |\u001b[39m   \u001b[36mawait\u001b[39m expect(page\u001b[33m.\u001b[39mgetByLabel(\u001b[35m/Nome completo|Full Name/i\u001b[39m))\u001b[33m.\u001b[39mtoBeVisible()\u001b[33m;\u001b[39m\n \u001b[90m    |\u001b[39m                                                             \u001b[31m\u001b[1m^\u001b[22m\u001b[39m\n \u001b[90m 68 |\u001b[39m   \u001b[36mawait\u001b[39m page\u001b[33m.\u001b[39mgetByLabel(\u001b[35m/Nome completo|Full Name/i\u001b[39m)\u001b[33m.\u001b[39mfill(\u001b[32m'Paciente QA E2E'\u001b[39m)\u001b[33m;\u001b[39m\n \u001b[90m 69 |\u001b[39m   \u001b[36mawait\u001b[39m page\u001b[33m.\u001b[39mgetByLabel(\u001b[35m/Data de Nascimento|Birth Date/i\u001b[39m)\u001b[33m.\u001b[39mfill(\u001b[32m'01/01/1990'\u001b[39m)\u001b[33m;\u001b[39m\n \u001b[90m 70 |\u001b[39m   \u001b[36mawait\u001b[39m page\u001b[33m.\u001b[39mgetByLabel(\u001b[35m/Sexo|Gender/i\u001b[39m)\u001b[33m.\u001b[39mselectOption({ label\u001b[33m:\u001b[39m \u001b[35m/Masculino|Male/i\u001b[39m })\u001b[33m;\u001b[39m\u001b[0m\n\u001b[2m    at C:\\Projeto\\BioAvanceD\\frontend\\playwright\\tests\\cadastro-paciente.spec.js:67:61\u001b[22m"
+                    }
+                  ],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-03-30T18:41:47.672Z",
+                  "annotations": [],
+                  "attachments": [
+                    {
+                      "name": "screenshot",
+                      "contentType": "image/png",
+                      "path": "C:\\Projeto\\BioAvanceD\\reports\\system-audit\\playwright\\test-results\\cadastro-paciente-cadastro-41161-d-paciente-amostra-clínica-\\test-failed-1.png"
+                    },
+                    {
+                      "name": "video",
+                      "contentType": "video/webm",
+                      "path": "C:\\Projeto\\BioAvanceD\\reports\\system-audit\\playwright\\test-results\\cadastro-paciente-cadastro-41161-d-paciente-amostra-clínica-\\video.webm"
+                    },
+                    {
+                      "name": "error-context",
+                      "contentType": "text/markdown",
+                      "path": "C:\\Projeto\\BioAvanceD\\reports\\system-audit\\playwright\\test-results\\cadastro-paciente-cadastro-41161-d-paciente-amostra-clínica-\\error-context.md"
+                    },
+                    {
+                      "name": "trace",
+                      "contentType": "application/zip",
+                      "path": "C:\\Projeto\\BioAvanceD\\reports\\system-audit\\playwright\\test-results\\cadastro-paciente-cadastro-41161-d-paciente-amostra-clínica-\\trace.zip"
+                    }
+                  ],
+                  "errorLocation": {
+                    "file": "C:\\Projeto\\BioAvanceD\\frontend\\playwright\\tests\\cadastro-paciente.spec.js",
+                    "column": 61,
+                    "line": 67
+                  }
+                }
+              ],
+              "status": "unexpected"
+            }
+          ],
+          "id": "fe76120f67dbcd6d32e8-2d59c5b779644ed8d7dc",
+          "file": "cadastro-paciente.spec.js",
+          "line": 4,
+          "column": 1
+        }
+      ]
+    },
+    {
+      "title": "login.spec.js",
+      "file": "login.spec.js",
+      "column": 0,
+      "line": 0,
+      "specs": [],
+      "suites": [
+        {
+          "title": "RF001 - Fluxo de autenticação",
+          "file": "login.spec.js",
+          "line": 3,
+          "column": 6,
+          "specs": [
+            {
+              "title": "exibe erro com credenciais inválidas",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 60000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "",
+                  "projectName": "",
+                  "results": [
+                    {
+                      "workerIndex": 2,
+                      "parallelIndex": 2,
+                      "status": "passed",
+                      "duration": 2973,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-03-30T18:41:47.663Z",
+                      "annotations": [],
+                      "attachments": [
+                        {
+                          "name": "trace",
+                          "contentType": "application/zip",
+                          "path": "C:\\Projeto\\BioAvanceD\\reports\\system-audit\\playwright\\test-results\\login-RF001---Fluxo-de-aut-41db7-o-com-credenciais-inválidas\\trace.zip"
+                        }
+                      ]
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "badc1754af1944f68b2b-9962163ea65e5bf86051",
+              "file": "login.spec.js",
+              "line": 47,
+              "column": 3
+            }
+          ],
+          "suites": [
+            {
+              "title": "credenciais válidas redirecionam conforme role",
+              "file": "login.spec.js",
+              "line": 69,
+              "column": 8,
+              "specs": [
+                {
+                  "title": "login sem MFA (Administrador) redireciona para /system-management",
+                  "ok": true,
+                  "tags": [],
+                  "tests": [
+                    {
+                      "timeout": 60000,
+                      "annotations": [],
+                      "expectedStatus": "passed",
+                      "projectId": "",
+                      "projectName": "",
+                      "results": [
+                        {
+                          "workerIndex": 2,
+                          "parallelIndex": 2,
+                          "status": "passed",
+                          "duration": 1507,
+                          "errors": [],
+                          "stdout": [],
+                          "stderr": [],
+                          "retry": 0,
+                          "startTime": "2026-03-30T18:41:51.210Z",
+                          "annotations": [],
+                          "attachments": [
+                            {
+                              "name": "trace",
+                              "contentType": "application/zip",
+                              "path": "C:\\Projeto\\BioAvanceD\\reports\\system-audit\\playwright\\test-results\\login-RF001---Fluxo-de-aut-32ae7-iona-para-system-management\\trace.zip"
+                            }
+                          ]
+                        }
+                      ],
+                      "status": "expected"
+                    }
+                  ],
+                  "id": "badc1754af1944f68b2b-cf42e4e7ea02307d61d6",
+                  "file": "login.spec.js",
+                  "line": 71,
+                  "column": 7
+                },
+                {
+                  "title": "login sem MFA (Coordenador) redireciona para /reports",
+                  "ok": true,
+                  "tags": [],
+                  "tests": [
+                    {
+                      "timeout": 60000,
+                      "annotations": [],
+                      "expectedStatus": "passed",
+                      "projectId": "",
+                      "projectName": "",
+                      "results": [
+                        {
+                          "workerIndex": 2,
+                          "parallelIndex": 2,
+                          "status": "passed",
+                          "duration": 1555,
+                          "errors": [],
+                          "stdout": [],
+                          "stderr": [],
+                          "retry": 0,
+                          "startTime": "2026-03-30T18:41:52.805Z",
+                          "annotations": [],
+                          "attachments": [
+                            {
+                              "name": "trace",
+                              "contentType": "application/zip",
+                              "path": "C:\\Projeto\\BioAvanceD\\reports\\system-audit\\playwright\\test-results\\login-RF001---Fluxo-de-aut-081a6-or-redireciona-para-reports\\trace.zip"
+                            }
+                          ]
+                        }
+                      ],
+                      "status": "expected"
+                    }
+                  ],
+                  "id": "badc1754af1944f68b2b-2e89a3edce4de76577ec",
+                  "file": "login.spec.js",
+                  "line": 71,
+                  "column": 7
+                },
+                {
+                  "title": "login sem MFA (Técnico) redireciona para /dashboard",
+                  "ok": true,
+                  "tags": [],
+                  "tests": [
+                    {
+                      "timeout": 60000,
+                      "annotations": [],
+                      "expectedStatus": "passed",
+                      "projectId": "",
+                      "projectName": "",
+                      "results": [
+                        {
+                          "workerIndex": 2,
+                          "parallelIndex": 2,
+                          "status": "passed",
+                          "duration": 1639,
+                          "errors": [],
+                          "stdout": [],
+                          "stderr": [],
+                          "retry": 0,
+                          "startTime": "2026-03-30T18:41:54.447Z",
+                          "annotations": [],
+                          "attachments": [
+                            {
+                              "name": "trace",
+                              "contentType": "application/zip",
+                              "path": "C:\\Projeto\\BioAvanceD\\reports\\system-audit\\playwright\\test-results\\login-RF001---Fluxo-de-aut-600ef--redireciona-para-dashboard\\trace.zip"
+                            }
+                          ]
+                        }
+                      ],
+                      "status": "expected"
+                    }
+                  ],
+                  "id": "badc1754af1944f68b2b-166631e301e159d6d301",
+                  "file": "login.spec.js",
+                  "line": 71,
+                  "column": 7
+                },
+                {
+                  "title": "login sem MFA (Usuário Externo) redireciona para /assistant",
+                  "ok": true,
+                  "tags": [],
+                  "tests": [
+                    {
+                      "timeout": 60000,
+                      "annotations": [],
+                      "expectedStatus": "passed",
+                      "projectId": "",
+                      "projectName": "",
+                      "results": [
+                        {
+                          "workerIndex": 2,
+                          "parallelIndex": 2,
+                          "status": "passed",
+                          "duration": 1229,
+                          "errors": [],
+                          "stdout": [],
+                          "stderr": [],
+                          "retry": 0,
+                          "startTime": "2026-03-30T18:41:56.182Z",
+                          "annotations": [],
+                          "attachments": [
+                            {
+                              "name": "trace",
+                              "contentType": "application/zip",
+                              "path": "C:\\Projeto\\BioAvanceD\\reports\\system-audit\\playwright\\test-results\\login-RF001---Fluxo-de-aut-81180--redireciona-para-assistant\\trace.zip"
+                            }
+                          ]
+                        }
+                      ],
+                      "status": "expected"
+                    }
+                  ],
+                  "id": "badc1754af1944f68b2b-1f0c1251c984fdbd5aab",
+                  "file": "login.spec.js",
+                  "line": 71,
+                  "column": 7
+                }
+              ]
+            },
+            {
+              "title": "MFA mockado redireciona conforme role",
+              "file": "login.spec.js",
+              "line": 109,
+              "column": 8,
+              "specs": [
+                {
+                  "title": "login com MFA (Administrador) redireciona para /system-management",
+                  "ok": true,
+                  "tags": [],
+                  "tests": [
+                    {
+                      "timeout": 60000,
+                      "annotations": [],
+                      "expectedStatus": "passed",
+                      "projectId": "",
+                      "projectName": "",
+                      "results": [
+                        {
+                          "workerIndex": 2,
+                          "parallelIndex": 2,
+                          "status": "passed",
+                          "duration": 1468,
+                          "errors": [],
+                          "stdout": [],
+                          "stderr": [],
+                          "retry": 0,
+                          "startTime": "2026-03-30T18:41:57.482Z",
+                          "annotations": [],
+                          "attachments": [
+                            {
+                              "name": "trace",
+                              "contentType": "application/zip",
+                              "path": "C:\\Projeto\\BioAvanceD\\reports\\system-audit\\playwright\\test-results\\login-RF001---Fluxo-de-aut-6e592-iona-para-system-management\\trace.zip"
+                            }
+                          ]
+                        }
+                      ],
+                      "status": "expected"
+                    }
+                  ],
+                  "id": "badc1754af1944f68b2b-0bfdadfe398ebcf64fc5",
+                  "file": "login.spec.js",
+                  "line": 111,
+                  "column": 7
+                },
+                {
+                  "title": "login com MFA (Coordenador) redireciona para /reports",
+                  "ok": true,
+                  "tags": [],
+                  "tests": [
+                    {
+                      "timeout": 60000,
+                      "annotations": [],
+                      "expectedStatus": "passed",
+                      "projectId": "",
+                      "projectName": "",
+                      "results": [
+                        {
+                          "workerIndex": 2,
+                          "parallelIndex": 2,
+                          "status": "passed",
+                          "duration": 1849,
+                          "errors": [],
+                          "stdout": [],
+                          "stderr": [],
+                          "retry": 0,
+                          "startTime": "2026-03-30T18:41:59.052Z",
+                          "annotations": [],
+                          "attachments": [
+                            {
+                              "name": "trace",
+                              "contentType": "application/zip",
+                              "path": "C:\\Projeto\\BioAvanceD\\reports\\system-audit\\playwright\\test-results\\login-RF001---Fluxo-de-aut-9c0c4-or-redireciona-para-reports\\trace.zip"
+                            }
+                          ]
+                        }
+                      ],
+                      "status": "expected"
+                    }
+                  ],
+                  "id": "badc1754af1944f68b2b-8716aeb17bed0e1cae65",
+                  "file": "login.spec.js",
+                  "line": 111,
+                  "column": 7
+                },
+                {
+                  "title": "login com MFA (Técnico) redireciona para /dashboard",
+                  "ok": true,
+                  "tags": [],
+                  "tests": [
+                    {
+                      "timeout": 60000,
+                      "annotations": [],
+                      "expectedStatus": "passed",
+                      "projectId": "",
+                      "projectName": "",
+                      "results": [
+                        {
+                          "workerIndex": 2,
+                          "parallelIndex": 2,
+                          "status": "passed",
+                          "duration": 1825,
+                          "errors": [],
+                          "stdout": [],
+                          "stderr": [],
+                          "retry": 0,
+                          "startTime": "2026-03-30T18:42:01.029Z",
+                          "annotations": [],
+                          "attachments": [
+                            {
+                              "name": "trace",
+                              "contentType": "application/zip",
+                              "path": "C:\\Projeto\\BioAvanceD\\reports\\system-audit\\playwright\\test-results\\login-RF001---Fluxo-de-aut-1847a--redireciona-para-dashboard\\trace.zip"
+                            }
+                          ]
+                        }
+                      ],
+                      "status": "expected"
+                    }
+                  ],
+                  "id": "badc1754af1944f68b2b-7e9bac79536dfbbdb944",
+                  "file": "login.spec.js",
+                  "line": 111,
+                  "column": 7
+                },
+                {
+                  "title": "login com MFA (Usuário Externo) redireciona para /assistant",
+                  "ok": true,
+                  "tags": [],
+                  "tests": [
+                    {
+                      "timeout": 60000,
+                      "annotations": [],
+                      "expectedStatus": "passed",
+                      "projectId": "",
+                      "projectName": "",
+                      "results": [
+                        {
+                          "workerIndex": 2,
+                          "parallelIndex": 2,
+                          "status": "passed",
+                          "duration": 1426,
+                          "errors": [],
+                          "stdout": [],
+                          "stderr": [],
+                          "retry": 0,
+                          "startTime": "2026-03-30T18:42:02.948Z",
+                          "annotations": [],
+                          "attachments": [
+                            {
+                              "name": "trace",
+                              "contentType": "application/zip",
+                              "path": "C:\\Projeto\\BioAvanceD\\reports\\system-audit\\playwright\\test-results\\login-RF001---Fluxo-de-aut-95b64--redireciona-para-assistant\\trace.zip"
+                            }
+                          ]
+                        }
+                      ],
+                      "status": "expected"
+                    }
+                  ],
+                  "id": "badc1754af1944f68b2b-ab839e2a9c6e3bd71c67",
+                  "file": "login.spec.js",
+                  "line": 111,
+                  "column": 7
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "errors": [],
+  "stats": {
+    "startTime": "2026-03-30T18:41:41.314Z",
+    "duration": 23614.212,
+    "expected": 9,
+    "skipped": 0,
+    "unexpected": 2,
+    "flaky": 0
+  }
+}

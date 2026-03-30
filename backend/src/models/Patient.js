@@ -239,10 +239,12 @@ class PatientModel {
    * Estrutura padrão de um documento Patient
    */
   static create(data) {
-    // Converte birthDate para Date se for string
+    // Modularização: separa dados fixos (anamneseGeral) e dados específicos (dadosEspecificos)
+    // Mantém retrocompatibilidade: se vier no formato antigo, converte para o novo
+
+    // Conversão de datas e normalização
     let birthDate = data.birthDate;
     if (typeof birthDate === 'string') {
-      // Tenta parsear formato DD/MM/YYYY
       const parts = birthDate.split('/');
       if (parts.length === 3) {
         birthDate = new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
@@ -250,50 +252,27 @@ class PatientModel {
         birthDate = new Date(birthDate);
       }
     }
-    
-    // Converte height (metros) para heightCm (centímetros) se fornecido
-    // IMPORTANTE: Remove o campo height antes de salvar (não deve ser persistido)
+
     let heightCm = data.heightCm || null;
     if (data.height !== undefined && data.height !== null && !heightCm) {
-      // Se height foi fornecido e heightCm não, converte metros para centímetros
       const heightValue = parseFloat(data.height);
       if (!isNaN(heightValue) && heightValue > 0) {
-        // Se o valor for menor que 3, assume que está em metros
         heightCm = heightValue < 3 ? heightValue * 100 : heightValue;
       }
     }
-    
-    // Remove o campo height se existir (não deve ser salvo no banco)
     const patientData = { ...data };
     delete patientData.height;
-
     const normalizedEmail = typeof patientData.email === 'string' ? patientData.email.trim().toLowerCase() : null;
     const normalizedPhone = PatientModel.normalizePhone(patientData.phone);
-    
-    return {
-      patientID: patientData.patientID || null,
-      patientName: patientData.patientName,
-      email: normalizedEmail,
-      phone: normalizedPhone,
-      birthDate: birthDate instanceof Date ? birthDate : new Date(birthDate),
-      sex: patientData.sex,
+
+    // --- NOVO MODELO MODULAR ---
+    // Anamnese Geral: dados fixos do paciente
+    const anamneseGeral = {
+      tipoSanguineo: patientData.tipoSanguineo || null,
+      comorbidades: patientData.comorbidades || [], // array de strings
+      historicoFamiliar: patientData.historicoFamiliar || null,
       weight: patientData.weight || null,
       heightCm: heightCm,
-      recordNumber: patientData.recordNumber || null,
-      cpf: patientData.cpf || null,
-      clinicalUnitId: patientData.clinicalUnitId || null,
-      clinicalUnit: patientData.clinicalUnit || null,
-      unitAcronym: patientData.unitAcronym || null,
-      isDeceased: Boolean(patientData.isDeceased),
-      representativeName: patientData.representativeName || null,
-      representativeEmail: patientData.representativeEmail || null,
-      representativeCpf: patientData.representativeCpf || null,
-      representativePhone: PatientModel.normalizePhone(patientData.representativePhone),
-      diagnosticHypothesis: patientData.diagnosticHypothesis || null,
-      icdCode: patientData.icdCode || null, // String conforme dicionário
-      orphaCode: patientData.orphaCode || patientData.orpha_code || null,
-      omimCode: patientData.omimCode || patientData.omim_code || null,
-      icdReference: patientData.icdReference || null,
       hypertension: patientData.hypertension || false,
       obesity: patientData.obesity || false,
       diabetesType1: patientData.diabetesType1 || false,
@@ -305,11 +284,44 @@ class PatientModel {
       asthma: patientData.asthma || false,
       antibioticUse: patientData.antibioticUse || false,
       insulinUse: patientData.insulinUse || false,
-      antiviralUse: patientData.antiviralUse || false,
-      geneticVariant: patientData.geneticVariant || null, // String - código da variante genética
-      alphaGal: patientData.alphaGal || null, // Float U/mL - Resultado de α-Galactosidase
-      lysoGb3: patientData.lysoGb3 || null, // Float ng/mL - Resultado de Lyso-Gb3
-      notes: patientData.notes || null,
+      antiviralUse: patientData.antiviralUse || false
+    };
+
+    // Dados Específicos: array de doenças/fenótipos
+    let dadosEspecificos = patientData.dadosEspecificos || [];
+
+    // Retrocompatibilidade: se vier campos específicos "soltos", converte para objeto Fabry
+    const fabryFields = [
+      'geneticVariant', 'alphaGal', 'lysoGb3', 'diagnosticHypothesis',
+      'icdCode', 'orphaCode', 'omimCode', 'icdReference', 'notes'
+    ];
+    const hasFabry = fabryFields.some(f => patientData[f] !== undefined);
+    if (hasFabry && dadosEspecificos.length === 0) {
+      const fabryData = {};
+      fabryFields.forEach(f => {
+        if (patientData[f] !== undefined) fabryData[f] = patientData[f];
+      });
+      dadosEspecificos.push({ tipo: 'Fabry', dados: fabryData });
+    }
+
+    // Estrutura final
+    return {
+      patientID: patientData.patientID || null,
+      patientName: patientData.patientName,
+      email: normalizedEmail,
+      phone: normalizedPhone,
+      birthDate: birthDate instanceof Date ? birthDate : new Date(birthDate),
+      sex: patientData.sex,
+      recordNumber: patientData.recordNumber || null,
+      cpf: patientData.cpf || null,
+      clinicalUnitId: patientData.clinicalUnitId || null,
+      clinicalUnit: patientData.clinicalUnit || null,
+      unitAcronym: patientData.unitAcronym || null,
+      isDeceased: Boolean(patientData.isDeceased),
+      representativeName: patientData.representativeName || null,
+      representativeEmail: patientData.representativeEmail || null,
+      representativeCpf: patientData.representativeCpf || null,
+      representativePhone: PatientModel.normalizePhone(patientData.representativePhone),
       consentTemplateId: patientData.consentTemplateId || null,
       status: patientData.status || 'PENDING_CONSENT',
       consentToken: patientData.consentToken || null,
@@ -318,7 +330,9 @@ class PatientModel {
       consentNotifiedAt: patientData.consentNotifiedAt ? new Date(patientData.consentNotifiedAt) : null,
       consentAcceptedAt: patientData.consentAcceptedAt ? new Date(patientData.consentAcceptedAt) : null,
       createdAt: new Date(),
-      updatedAt: new Date()
+      updatedAt: new Date(),
+      anamneseGeral,
+      dadosEspecificos
     };
   }
 

@@ -117,13 +117,12 @@ export function useSamples() {
   };
 
   return {
+  return {
     samples,
     loading,
     error,
     loadSamples,
-    getSampleResults,
-    createSample,
-    updateSample,
+  };
     deleteSample,
   };
 }

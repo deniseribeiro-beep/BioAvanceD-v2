@@ -585,7 +585,7 @@ router.post('/register-sample', authenticate, requirePermission('createSample'),
     const operationMode = result.strictMode ? 'STRICT' : 'PERMISSIVE';
     const hasPartialSuccess = Boolean(result?.topology && !result.topology.synced && result.topology.fallbackQueued);
 
-    return res.status(hasPartialSuccess ? 200 : 201).json({
+    return res.status(hasPartialSuccess ? 202 : 201).json({
       success: true,
       partialSuccess: hasPartialSuccess,
       message: hasPartialSuccess

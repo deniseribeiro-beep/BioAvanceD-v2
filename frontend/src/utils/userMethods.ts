@@ -1,14 +1,5 @@
 // Implementação dos métodos da classe User conforme diagrama UML
-
-import { User, Patient, Sample, Withdrawal, Reports, Temperature, Sensor, Log } from '../types/models';
-
-/**
- * Registra um novo usuário
- * Implementa: User.registerUser(): User
- */
-export function registerUser(userData: Partial<User>): User {
-  // Validações básicas
-  if (!userData.username || !userData.email || !userData.password) {
+// Função de criação de amostra avulsa removida. Cadastro agora é feito apenas via ClinicalIntakeWizard.
     throw new Error('Dados obrigatórios faltando');
   }
   

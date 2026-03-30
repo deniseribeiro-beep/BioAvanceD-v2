@@ -1,3 +1,4 @@
+
 import { lazy, Suspense } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import Layout from './components/Layout/Layout';
@@ -10,7 +11,6 @@ const PatientsPage = lazy(() => import('./views/PatientsPage'));
 const ConsentPage = lazy(() => import('./views/ConsentPage'));
 const SamplesPage = lazy(() => import('./views/SamplesPage'));
 const SampleDetailsPage = lazy(() => import('./views/SampleDetailsPage'));
-const NewSamplePage = lazy(() => import('./views/NewSamplePage'));
 const ResultsPage = lazy(() => import('./views/ResultsPage'));
 const NewUserPage = lazy(() => import('./views/NewUserPage'));
 const NewUserSuccessPage = lazy(() => import('./views/NewUserSuccessPage'));
@@ -75,7 +75,7 @@ function App() {
                   <Route path="/patients/:id/consent" element={<ProtectedRoute><ConsentPage /></ProtectedRoute>} />
                   <Route path="/samples" element={<ProtectedRoute><SamplesPage /></ProtectedRoute>} />
                   <Route path="/samples/:id" element={<ProtectedRoute><SampleDetailsPage /></ProtectedRoute>} />
-                  <Route path="/samples/new" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}><NewSamplePage /></ProtectedRoute>} />
+                  {/* Rota de Nova Amostra removida. Cadastro de amostras agora é feito apenas via Intake Wizard. */}
                   <Route path="/samples/:id/label" element={<ProtectedRoute><SampleLabelPage /></ProtectedRoute>} />
                   <Route path="/samples/:id/chain" element={<ProtectedRoute><SampleChainPage /></ProtectedRoute>} />
                   <Route path="/samples/:id/movements" element={<ProtectedRoute><SampleMovementsPage /></ProtectedRoute>} />
