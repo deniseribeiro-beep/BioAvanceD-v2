@@ -1,0 +1,8 @@
+# Windows agendamento via Task Scheduler (exemplo)
+# Comando para agendar execução diária às 2h:
+# schtasks /Create /SC DAILY /TN "ImportHPO" /TR "node c:\Projeto\BioAvanceD\backend\scripts\import-hpo.js" /ST 02:00
+
+# Linux (cron) exemplo:
+# 0 2 * * * /usr/bin/node /caminho/para/backend/scripts/import-hpo.js
+
+# Alternativamente, pode-se usar node-cron dentro do projeto para agendamento programático.

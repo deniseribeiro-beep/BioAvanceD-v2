@@ -1,0 +1,22 @@
+{
+  "extends": "@istanbuljs/nyc-config-babel",
+  "all": true,
+  "reporter": ["html", "text-summary"],
+  "include": ["src/**/*.js", "src/**/*.jsx", "src/**/*.ts", "src/**/*.tsx"],
+  "exclude": [
+    "**/*.test.js",
+    "**/*.test.jsx",
+    "**/*.spec.js",
+    "**/*.spec.jsx",
+    "**/test/**",
+    "**/tests/**",
+    "**/playwright/**",
+    "**/node_modules/**",
+    "vite.config.js",
+    "playwright.config.js"
+  ],
+  "extension": [".js", ".jsx", ".ts", ".tsx"],
+  "temp-dir": ".nyc_output",
+  "sourceMap": false,
+  "instrument": false
+}

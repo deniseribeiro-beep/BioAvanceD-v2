@@ -1,4 +1,3 @@
-
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
@@ -8,6 +7,9 @@ const logger = require("./src/utils/logger");
 const env = require("./src/config/env");
 
 const app = express();
+
+app.use("/api/e-consent", require("./src/routes/eConsent.js"));
+app.use("/api/intake-wizard", require("./src/interface/routes/intakeWizard.routes"));
 
 
 
@@ -203,10 +205,12 @@ app.use("/api/auth", authLimiter);
 
 app.use("/api/auth", require("./src/interface/routes/auth.routes"));
 app.use("/api/orphanet", require("./src/interface/routes/orphanet.routes"));
+app.use("/api/hpo", require("./src/interface/routes/hpo.routes"));
 app.use("/api/patients", require("./src/interface/routes/patient.routes"));
 app.use("/api/v1/patients", require("./src/interface/routes/patient.routes"));
 app.use("/api/samples", require("./src/interface/routes/sample.routes"));
 app.use("/api/import", require("./src/interface/routes/import.routes"));
+app.use("/api/import", require("./src/routes/importFhirIntelligent.js"));
 app.use("/api/results", require("./src/interface/routes/result.routes"));
 app.use("/api/reports", require("./src/interface/routes/reports.routes"));
 app.use("/api/logs", require("./src/interface/routes/logs.routes"));
@@ -232,8 +236,10 @@ app.use("/api/import-lgpd", require("./src/interface/routes/import-lgpd.routes")
 app.use("/api/compliance", require("./src/interface/routes/compliance.routes"));
 app.use("/api/cids", require("./src/interface/routes/cid.routes"));
 
+
 app.use("/api/biomarker-requests", require("./src/routes/biomarkerRequest.routes"));
 app.use("/api/phone-codes", require("./src/interface/routes/phone-codes.routes"));
+app.use("/api/dictionary", require("./src/interface/routes/dictionary.routes"));
 
 app.get("/api/health", (req, res) => {
   res.json({ status: "OK", db: !!req.app.locals.db });

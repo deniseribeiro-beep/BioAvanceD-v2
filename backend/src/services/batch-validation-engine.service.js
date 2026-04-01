@@ -73,6 +73,83 @@ class BatchValidationEngine {
     return Number.isNaN(parsed.getTime()) ? null : parsed;
   }
 
+  normalizeCoding(raw, fallbackSystem, fallbackDisplay) {
+    const code = this.normalizeText(raw?.code || raw?.codigo || raw?.id || raw);
+    const display = this.normalizeText(raw?.display || raw?.nome || raw?.name || fallbackDisplay);
+    const system = this.normalizeText(raw?.system || fallbackSystem);
+
+    if (!code || !system) {
+      return null;
+    }
+
+    return {
+      system,
+      code,
+      display: display || code,
+    };
+  }
+
+  extractSemanticCascadeFromRow(rawRow = {}) {
+    const normalizedRow = {};
+    Object.keys(rawRow || {}).forEach((key) => {
+      normalizedRow[this.normalizeHeader(key)] = rawRow[key];
+    });
+
+    const diseaseCode = this.normalizeText(
+      normalizedRow.orpha
+      || normalizedRow.orphacode
+      || normalizedRow.diagnosisorphacode
+      || normalizedRow.doencaorpha
+    );
+    const diseaseDisplay = this.normalizeText(
+      normalizedRow.orphaname
+      || normalizedRow.disease
+      || normalizedRow.doenca
+    );
+    const disease = diseaseCode
+      ? this.normalizeCoding({ code: diseaseCode, display: diseaseDisplay }, 'http://www.orpha.net')
+      : null;
+
+    const phenotypeSource = this.normalizeText(
+      normalizedRow.hpo
+      || normalizedRow.hpocode
+      || normalizedRow.phenotype
+      || normalizedRow.fenotipo
+    );
+    const phenotypes = phenotypeSource
+      ? phenotypeSource
+        .split(/[;,|]/)
+        .map((token) => this.normalizeCoding({ code: token }, 'http://purl.obolibrary.org/obo/hp.owl'))
+        .filter(Boolean)
+      : [];
+
+    const biomarkerSource = this.normalizeText(
+      normalizedRow.biomarkers
+      || normalizedRow.biomarcadores
+      || normalizedRow.biomarker
+      || normalizedRow.biomarcador
+    );
+    const biomarkers = biomarkerSource
+      ? biomarkerSource
+        .split(/[;,|]/)
+        .map((token) => this.normalizeCoding({ code: token }, 'http://loinc.org'))
+        .filter(Boolean)
+      : [];
+
+    const warnings = [];
+
+    if (!disease && (phenotypes.length > 0 || biomarkers.length > 0)) {
+      warnings.push('Linha possui fenotipos/biomarcadores sem ORPHA. A cascata semantica pode ficar inconsistente.');
+    }
+
+    return {
+      disease,
+      phenotypes,
+      biomarkers,
+      warnings,
+    };
+  }
+
   async readJsonRows(filePath) {
     const raw = fs.readFileSync(filePath, 'utf8');
     const payload = JSON.parse(raw);
@@ -605,8 +682,10 @@ class BatchValidationEngine {
     sampleData.quantity = sampleData.quantity === null || sampleData.quantity === undefined ? null : Number(sampleData.quantity);
     sampleData.quality = sampleData.quality === null || sampleData.quality === undefined ? sampleData.quality : Number(sampleData.quality);
 
+    const semanticCascade = this.extractSemanticCascadeFromRow(rawRow);
+
     const validationErrors = [];
-    const warnings = this.classifySampleRow(rawRow, sampleData);
+    const warnings = [...this.classifySampleRow(rawRow, sampleData), ...semanticCascade.warnings];
 
     if (!sampleData.sampleType) {
       validationErrors.push('sampleType é obrigatório');
@@ -616,6 +695,12 @@ class BatchValidationEngine {
     }
     if (sampleData.quantity === null || sampleData.quantity === undefined || Number.isNaN(Number(sampleData.quantity)) || Number(sampleData.quantity) <= 0) {
       validationErrors.push('quantity deve ser um número maior que zero');
+    }
+    if (!semanticCascade.disease) {
+      const hasLooseDiseaseText = this.normalizeText(rawRow?.disease || rawRow?.doenca || rawRow?.orphaName || rawRow?.diagnosis);
+      if (hasLooseDiseaseText) {
+        validationErrors.push('Doenca informada sem codigo ORPHA estruturado (campo orpha/orphaCode).');
+      }
     }
 
     if (validationErrors.length > 0) {
@@ -659,6 +744,11 @@ class BatchValidationEngine {
 
       sampleData.patientID = String(patient.patientID || sampleData.patientID || '').trim();
       sampleData.patientObjectId = String(patient._id || '').trim();
+      sampleData.semanticCascade = {
+        disease: semanticCascade.disease,
+        phenotypes: semanticCascade.phenotypes,
+        biomarkers: semanticCascade.biomarkers,
+      };
 
       const createdSample = await sampleService.createSample(db, sampleData, {
         isImport: true,

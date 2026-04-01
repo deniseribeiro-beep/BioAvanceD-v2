@@ -21,6 +21,3 @@
 - Implementar ledger de movimentações (SampleMovementLedger) para rastreabilidade.
 - Garantir que toda ação relevante (movimentação, retirada, devolução, destruição) seja registrada e auditável.
 
----
-
-> "No Biobanco, a localização é atributo da amostra, não do prédio. O freezer é parte do tubo, não do imóvel."

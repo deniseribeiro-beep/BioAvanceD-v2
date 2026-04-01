@@ -1,4 +1,22 @@
 import { useEffect, useMemo, useState } from 'react';
+import { Ban, Database, Edit2, Plus, FlaskConical, Dna, FileText, Layers3, CheckCircle2 } from 'lucide-react';
+import Card from '../components/UI/Card';
+import Table from '../components/UI/Table';
+import Button from '../components/UI/Button';
+import Modal from '../components/UI/Modal';
+import Input from '../components/UI/Input';
+import Textarea from '../components/UI/Textarea';
+import { apiClient, notifyApiToast } from '../api/client';
+import { cidService } from '../services/api';
+import CascadingSuggestion from '../components/CascadingSuggestion';
+import {
+  CLINICAL_COMORBIDITIES,
+  createIntakeDictionaryItem,
+  BIOMARKER_DICTIONARY,
+} from '../config/constants/intake-dictionaries.constants';
+import { EXTRACTION_PROTOCOLS, SAMPLE_ORIGINS, SPECIMEN_TYPES } from '../config/constants/specimen.constants';
+import './DataDictionaryPage.css';
+
 type BiomarkerRequest = {
   _id?: string;
   biomarkerName: string;
@@ -8,6 +26,7 @@ type BiomarkerRequest = {
   requestedAt?: string;
   status?: string;
 };
+
 async function fetchPendingBiomarkerRequests(): Promise<BiomarkerRequest[]> {
   try {
     const response = await apiClient.get('/biomarker-requests/pending', { suppressErrorToast: true } as any);
@@ -17,30 +36,6 @@ async function fetchPendingBiomarkerRequests(): Promise<BiomarkerRequest[]> {
     return [];
   }
 }
-import { Ban, Database, Edit2, Plus, FlaskConical, Dna, FileText, Layers3, CheckCircle2 } from 'lucide-react';
-import Card from '../components/UI/Card';
-import Table from '../components/UI/Table';
-import Button from '../components/UI/Button';
-import Modal from '../components/UI/Modal';
-import Input from '../components/UI/Input';
-import Textarea from '../components/UI/Textarea';
-// import CidAsyncAutocomplete from '../components/CidAsyncAutocomplete';
-import { apiClient, notifyApiToast } from '../api/client';
-import { cidService } from '../services/api';
-import {
-  CLINICAL_COMORBIDITIES,
-  createIntakeDictionaryItem,
-  BIOMARKER_DICTIONARY,
-} from '../config/constants/intake-dictionaries.constants';
-import { EXTRACTION_PROTOCOLS, SAMPLE_ORIGINS, SPECIMEN_TYPES } from '../config/constants/specimen.constants';
-import './DataDictionaryPage.css';
-
-// Exemplo de uso do componente CidAsyncAutocomplete:
-// <CidAsyncAutocomplete
-//   value={selectedCid}
-//   onChange={cid => setSelectedCid(cid)}
-//   placeholder="Buscar CID por código ou descrição..."
-// />
 
 type DictionaryCategoryKey =
   | 'sample-types'
@@ -796,6 +791,12 @@ export default function DataDictionaryPage() {
 
         <main className="data-dictionary-main">
           <Card className="data-dictionary-panel">
+            {activeCategoryKey === 'cids' && (
+              <div className="data-dictionary-biomarker-requests" style={{ marginBottom: 16 }}>
+                <h3>Busca Semantica ORPHA/HPO</h3>
+                <CascadingSuggestion />
+              </div>
+            )}
             {/* Exibir solicitações pendentes de biomarcadores */}
             {activeCategoryKey === 'biomarkers' && (
               <div className="data-dictionary-biomarker-requests">

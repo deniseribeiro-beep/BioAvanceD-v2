@@ -1,3 +1,5 @@
+const EConsentPage = lazy(() => import('./pages/patient/EConsentPage'));
+const EConsentLinkPanel = lazy(() => import('./pages/patient/EConsentLinkPanel'));
 
 import { lazy, Suspense } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
@@ -49,6 +51,8 @@ function App() {
     >
       <Suspense fallback={<div>Carregando...</div>}>
         <Routes>
+          <Route path="/patient/e-consent" element={<EConsentLinkPanel />} />
+          <Route path="/patient/e-consent/:token" element={<EConsentPage />} />
           <Route
             path="/next/intake"
             element={

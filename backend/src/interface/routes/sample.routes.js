@@ -1,5 +1,23 @@
 const express = require('express');
 const router = express.Router();
+// MIABIS Compliance Validator
+const { validateMiabisCompliance } = require('../../services/miabisValidator.service');
+const { authenticate } = require('../../infrastructure/middleware/auth');
+// const { authenticate } = require('../../infrastructure/middleware/auth');
+// GET /api/samples/:id/miabis-compliance - MIABIS compliance check for a sample
+router.get('/:id/miabis-compliance', authenticate, async (req, res) => {
+  try {
+    const sampleId = req.params.id;
+    const result = await validateMiabisCompliance(sampleId);
+    return res.status(200).json(result);
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      error: 'Erro ao validar compliance MIABIS',
+      message: error.message
+    });
+  }
+});
 const sampleService = require('../../services/sample.service');
 const RegisterSampleUseCase = require('../../core/use-cases/RegisterSampleUseCase');
 const LineageRepository = require('../../infrastructure/database/neo4j/LineageRepository');
@@ -8,7 +26,6 @@ const { ObjectId } = require('mongodb');
 const logService = require('../../services/log.service');
 const consentValidator = require('../../services/consent.validator');
 const { enforceCommercialConsent } = require('../../infrastructure/middleware/consent.enforcement');
-const { authenticate } = require('../../infrastructure/middleware/auth');
 const { requirePermission } = require('../../infrastructure/middleware/rbac');
 const logger = require('../../utils/logger');
 const {

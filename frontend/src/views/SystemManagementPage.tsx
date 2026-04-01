@@ -277,91 +277,26 @@ function UsersSection() {
 
 // Seção de Acessos
 function AccessSection() {
-  const { accesses, loading, error, createAccess, updateAccess, deleteAccess } = useAccess();
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [editingAccess, setEditingAccess] = useState<Access | null>(null);
-
+  const { accesses, loading, error } = useAccess();
   return (
     <>
       <div className="section-header">
-        <Button onClick={() => setIsModalOpen(true)}>
-          <Plus size={18} />
-          Novo Tipo de Acesso
-        </Button>
+        <p className="form-help-text">
+          A gestão dos tipos de acesso (RBAC) agora é feita exclusivamente pelo admin via dicionário de dados. Para alterar, acesse o menu "Dicionário de Dados".
+        </p>
       </div>
-
       {loading && <p>Carregando...</p>}
       {error && <p style={{ color: 'var(--danger)' }}>Erro: {error}</p>}
-
       <Card>
-        <Table headers={['ID', 'Tipo de Relatório', 'Ações']}>
+        <Table headers={['ID', 'Tipo de Relatório']}>
           {accesses.map((access) => (
             <tr key={access.reportID}>
               <td>{access.reportID}</td>
               <td>{access.reportType}</td>
-              <td>
-                <div className="table-actions">
-                  <button
-                    className="action-button"
-                    onClick={() => {
-                      setEditingAccess(access);
-                      setIsModalOpen(true);
-                    }}
-                    title="Editar"
-                  >
-                    <Edit size={16} />
-                  </button>
-                  <button
-                    className="action-button danger"
-                    onClick={async () => {
-                      if (confirm('Tem certeza que deseja excluir este tipo de acesso?')) {
-                        try {
-                          await deleteAccess(access.reportID);
-                        } catch (err: any) {
-                          alert(err.message);
-                        }
-                      }
-                    }}
-                    title="Excluir"
-                  >
-                    <Trash2 size={16} />
-                  </button>
-                </div>
-              </td>
             </tr>
           ))}
         </Table>
       </Card>
-
-      <Modal
-        isOpen={isModalOpen}
-        onClose={() => {
-          setIsModalOpen(false);
-          setEditingAccess(null);
-        }}
-        title={editingAccess ? 'Editar Acesso' : 'Novo Tipo de Acesso'}
-      >
-        <AccessForm
-          access={editingAccess}
-          onSave={async (data) => {
-            try {
-              if (editingAccess) {
-                await updateAccess(editingAccess.reportID, data);
-              } else {
-                await createAccess(data);
-              }
-              setIsModalOpen(false);
-              setEditingAccess(null);
-            } catch (err: any) {
-              alert(err.message);
-            }
-          }}
-          onCancel={() => {
-            setIsModalOpen(false);
-            setEditingAccess(null);
-          }}
-        />
-      </Modal>
     </>
   );
 }

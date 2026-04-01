@@ -1,12 +1,42 @@
+
 /**
  * Modelo de validação e estrutura para Sample
  */
+const mongoose = require('mongoose');
+const { Schema } = mongoose;
 const { validateQualityMIABIS, validateQualityMIABISOrThrow } = require('../utils/qualityMIABISValidator');
 const {
   SPECIMEN_TYPE_IDS,
   SAMPLE_ORIGIN_IDS,
   EXTRACTION_PROTOCOL_IDS,
 } = require('../config/constants/specimen.constants');
+
+// Definição básica do schema para Sample (ajuste conforme necessário)
+const SampleSchema = new Schema({
+  patientID: { type: String, required: true },
+  sampleType: { type: String, required: true },
+  sampleOrigin: { type: String, required: true },
+  extractionProtocol: { type: String, required: true },
+  barcode: { type: String },
+  registrationDate: { type: Date },
+  registerDate: { type: Date },
+  withdrawalDate: { type: Date },
+  quantity: { type: Number, required: true },
+  unit: { type: String },
+  quality: { type: String },
+  locationID: { type: Number },
+  location: { type: Object },
+  linkedProject: { type: String, required: true },
+  status: { type: String },
+  currentStatus: { type: String },
+  availableQuantity: { type: Number },
+  originalQuantity: { type: Number },
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now }
+}, { collection: 'samples' });
+
+// Registra o modelo apenas se ainda não estiver registrado (evita erro em hot reload)
+const Sample = mongoose.models.Sample || mongoose.model('Sample', SampleSchema);
 
 class SampleModel {
   static STATUS = {
@@ -290,5 +320,6 @@ class SampleModel {
   }
 }
 
-module.exports = SampleModel;
+module.exports = Sample;
+module.exports.SampleModel = SampleModel;
 

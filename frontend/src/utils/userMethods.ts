@@ -1,5 +1,11 @@
 // Implementação dos métodos da classe User conforme diagrama UML
-// Função de criação de amostra avulsa removida. Cadastro agora é feito apenas via ClinicalIntakeWizard.
+
+/**
+ * Cria novo usuário
+ * Implementa: User.createUser(userData): User
+ */
+export function createUser(userData: Partial<User>): User {
+  if (!userData.email || !userData.username || !userData.password) {
     throw new Error('Dados obrigatórios faltando');
   }
   
