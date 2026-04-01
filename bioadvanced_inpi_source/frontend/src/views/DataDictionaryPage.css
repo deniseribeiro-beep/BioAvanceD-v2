@@ -1,0 +1,397 @@
+.data-dictionary-layout {
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+.data-dictionary-sidebar {
+  position: sticky;
+  top: 1rem;
+}
+
+.data-dictionary-sidebar-card,
+.data-dictionary-panel {
+  padding: 1rem;
+}
+
+.data-dictionary-sidebar__header {
+  display: grid;
+  gap: 0.35rem;
+  margin-bottom: 0.9rem;
+}
+
+.data-dictionary-sidebar__eyebrow {
+  font-size: 0.76rem;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--primary);
+}
+
+.data-dictionary-sidebar__header p,
+.data-dictionary-toolbar p,
+.data-dictionary-empty p,
+.data-dictionary-modal__meta p {
+  margin: 0;
+  color: var(--text-secondary);
+  line-height: 1.55;
+}
+
+.data-dictionary-sidebar__list {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.data-dictionary-category {
+  display: flex;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 0.85rem 0.9rem;
+  border-radius: 0.95rem;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  text-align: left;
+}
+
+.data-dictionary-category.is-active {
+  border-color: var(--primary);
+  background: rgba(0, 114, 178, 0.08);
+}
+
+.data-dictionary-category__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 0.75rem;
+  background: rgba(0, 114, 178, 0.12);
+  color: var(--primary);
+  flex: 0 0 auto;
+}
+
+.data-dictionary-category__content {
+  display: grid;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.data-dictionary-category__content strong {
+  font-size: 0.92rem;
+  color: var(--text);
+}
+
+.data-dictionary-category__content small {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+.data-dictionary-main {
+  min-width: 0;
+}
+
+.data-dictionary-toolbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+}
+
+.data-dictionary-search-area {
+  display: grid;
+  gap: 0.85rem;
+  margin-bottom: 1rem;
+}
+
+.data-dictionary-search {
+  display: grid;
+  gap: 0.4rem;
+  padding: 0.95rem 1rem;
+  border-radius: 1rem;
+  border: 1px solid rgba(0, 114, 178, 0.14);
+  background: linear-gradient(180deg, rgba(239, 246, 255, 0.72), rgba(255, 255, 255, 0.96));
+}
+
+.data-dictionary-search .input-group {
+  margin-bottom: 0;
+}
+
+.data-dictionary-search .input-helper-text {
+  margin-top: 0;
+}
+
+.data-dictionary-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  padding: 0.85rem 1rem;
+  border-radius: 1rem;
+  border: 1px solid rgba(0, 114, 178, 0.12);
+  background: rgba(248, 250, 252, 0.88);
+}
+
+.data-dictionary-pagination__summary {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.data-dictionary-pagination__summary strong {
+  color: var(--text);
+  font-size: 0.92rem;
+}
+
+.data-dictionary-pagination__summary span {
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+}
+
+.data-dictionary-pagination__actions {
+  display: inline-flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.data-dictionary-toolbar__eyebrow {
+  margin: 0 0 0.3rem;
+  font-size: 0.76rem;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--primary);
+}
+
+.data-dictionary-toolbar h2 {
+  margin: 0;
+  font-size: 1.5rem;
+  color: var(--text);
+}
+
+.data-dictionary-toolbar__actions {
+  display: grid;
+  gap: 0.75rem;
+  justify-items: start;
+}
+
+.data-dictionary-metrics {
+  display: inline-flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.data-dictionary-metrics span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.6rem;
+  border-radius: 999px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.data-dictionary-metrics strong {
+  color: var(--text);
+}
+
+.data-dictionary-alert,
+.data-dictionary-empty {
+  padding: 1rem;
+  border-radius: 1rem;
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+}
+
+.data-dictionary-alert {
+  margin-bottom: 1rem;
+  color: var(--danger);
+}
+
+.data-dictionary-empty {
+  display: grid;
+  gap: 0.35rem;
+  color: var(--text-secondary);
+}
+
+.data-dictionary-empty strong {
+  color: var(--text);
+}
+
+.data-dictionary-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 0.22rem 0.6rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.data-dictionary-status.is-active {
+  background: rgba(0, 158, 115, 0.14);
+  color: var(--success);
+}
+
+.data-dictionary-status.is-inactive {
+  background: rgba(213, 94, 0, 0.14);
+  color: var(--danger);
+}
+
+.data-dictionary-actions {
+  display: inline-flex;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.data-dictionary-action-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border: 1px solid var(--border);
+  border-radius: 0.55rem;
+  padding: 0.4rem 0.55rem;
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.data-dictionary-action-button--danger {
+  color: var(--danger);
+}
+
+.data-dictionary-action-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.data-dictionary-modal {
+  display: grid;
+  gap: 1rem;
+}
+
+.data-dictionary-modal__meta {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.data-dictionary-modal__meta strong {
+  color: var(--text);
+}
+
+.data-dictionary-modal__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.85rem;
+}
+
+.data-dictionary-modal__textarea-field {
+  grid-column: 1 / -1;
+}
+
+.data-dictionary-modal__textarea-field .textarea-group,
+.data-dictionary-modal__textarea-field .textarea {
+  width: 100%;
+}
+
+.data-dictionary-modal__switch {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.95rem 1rem;
+  border-radius: 1rem;
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+}
+
+.data-dictionary-modal__switch input {
+  width: 1.05rem;
+  height: 1.05rem;
+  margin-top: 0.15rem;
+  accent-color: var(--primary);
+  flex: 0 0 auto;
+}
+
+.data-dictionary-modal__switch span {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.data-dictionary-modal__switch strong {
+  color: var(--text);
+}
+
+.data-dictionary-modal__switch small {
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+.data-dictionary-modal__error {
+  padding: 0.9rem 1rem;
+  border-radius: 1rem;
+  border: 1px solid rgba(239, 68, 68, 0.16);
+  background: rgba(254, 242, 242, 0.95);
+  color: #991b1b;
+  font-weight: 600;
+}
+
+.data-dictionary-modal__actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+@media (max-width: 1100px) {
+  .data-dictionary-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .data-dictionary-sidebar {
+    position: static;
+  }
+}
+
+@media (max-width: 768px) {
+  .data-dictionary-toolbar__actions,
+  .data-dictionary-modal__grid {
+    grid-template-columns: 1fr;
+  }
+
+  .data-dictionary-toolbar__actions {
+    justify-items: stretch;
+  }
+
+  .data-dictionary-metrics {
+    justify-content: flex-start;
+  }
+
+  .data-dictionary-search {
+    padding: 0.85rem;
+  }
+
+  .data-dictionary-pagination {
+    padding: 0.8rem;
+  }
+
+  .data-dictionary-pagination__actions .btn {
+    flex: 1 1 0;
+    justify-content: center;
+  }
+
+  .data-dictionary-modal__actions {
+    flex-direction: column-reverse;
+  }
+
+  .data-dictionary-modal__actions .btn {
+    width: 100%;
+  }
+}

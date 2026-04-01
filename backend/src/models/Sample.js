@@ -40,9 +40,15 @@ const Sample = mongoose.models.Sample || mongoose.model('Sample', SampleSchema);
 
 class SampleModel {
   static STATUS = {
+    // Amostra pronta para uso em pesquisa/clínica
     AVAILABLE: 'AVAILABLE',
+    // Amostra eticamente bloqueada - aguardando consentimento (TCLE)
+    QUARANTINED: 'QUARANTINED',
+    // Amostra parcialmente utilizada (volume retirado)
     PARTIAL: 'PARTIAL',
+    // Amostra consumida totalmente
     DEPLETED: 'DEPLETED',
+    // Amostra danificada/inutilizável
     UNAVAILABLE: 'UNAVAILABLE'
   };
 

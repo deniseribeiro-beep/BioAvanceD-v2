@@ -61,6 +61,23 @@ router.post('/update', async (req, res) => {
       const io = req.app.get('io');
       if (io) io.to(`patient-${patientId}`).emit('sample-quarantined', { patientId });
     }
+    // Se todos os consentimentos necessários foram aceitos, libera amostras de quarentena
+    else if (consents.every(c => c.status === 'ACTIVE' || c.status === 'GRANTED')) {
+      // Atualiza status das amostras no Neo4j: QUARANTINED → AVAILABLE
+      await session.run(
+        'MATCH (p:Patient {patientID: $patientId})-[:HAS_SAMPLE]->(s:Sample) WHERE s.status = "QUARANTINED" SET s.status = "AVAILABLE", s.updatedAt = datetime()',
+        { patientId }
+      );
+      // Atualiza status das amostras no MongoDB para manter sincronização
+      const Sample = require('../models/Sample');
+      await Sample.updateMany(
+        { patientID: patientId, status: 'QUARANTINED' },
+        { $set: { status: 'AVAILABLE', updatedAt: new Date() } }
+      );
+      // Emite evento de liberação
+      const io = req.app.get('io');
+      if (io) io.to(`patient-${patientId}`).emit('sample-released', { patientId });
+    }
     await session.close();
     res.json({ success: true });
   } catch (err) {
