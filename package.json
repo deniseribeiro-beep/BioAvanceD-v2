@@ -1,6 +1,7 @@
 {
   "scripts": {
     "audit:full": "node scripts/audit-complete-system.js",
+    "seed": "node scripts/seed.js",
     "backend:user:check": "npm --prefix backend run user:check",
     "backend:user:create-admin": "npm --prefix backend run user:create-admin",
     "dev:up": "docker compose --env-file .env.docker -f docker-compose.yml -f docker-compose.override.yml up -d backend frontend",

@@ -1,0 +1,20 @@
+[
+  {
+    "codigo": "BIO-0001",
+    "tipoAmostra": "Sangue Total",
+    "temperaturaIdeal": -20,
+    "origem": "Hospital Universitario"
+  },
+  {
+    "codigo": "BIO-0002",
+    "tipoAmostra": "Plasma",
+    "temperaturaIdeal": -80,
+    "origem": "Clinica de Pesquisa Genomica"
+  },
+  {
+    "codigo": "BIO-0003",
+    "tipoAmostra": "DNA",
+    "temperaturaIdeal": -80,
+    "origem": "Centro de Biobanco Regional"
+  }
+]
