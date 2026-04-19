@@ -1,5 +1,6 @@
 import { apiClient, notifyApiToast } from './client';
 import { BIOMARKER_DICTIONARY } from '../config/constants/biomarkers.constants';
+import { notifyDashboardDataChanged } from '../utils/dashboardRefresh';
 
 function extractResponseData(response) {
   return response?.data?.data ?? response?.data ?? null;
@@ -44,11 +45,11 @@ function normalizeCreatedEntity(entity, fallback = {}) {
   return entity && typeof entity === 'object' ? { ...fallback, ...entity } : { ...fallback };
 }
 
-function normalizePatientId(value) {
+function normalizePatientID(value) {
   return normalizeText(value);
 }
 
-function buildObservationPayload(observation, patientId, specimenId) {
+function buildObservationPayload(observation, patientID, specimenId) {
   const collectedAt = toIsoTimestamp(observation?.collectedAt);
   const biomarkerType = String(observation?.biomarkerType || observation?.type || '').trim();
   const biomarkerDefinition = BIOMARKER_DICTIONARY.find((item) => item.id === biomarkerType);
@@ -56,7 +57,7 @@ function buildObservationPayload(observation, patientId, specimenId) {
 
   return {
     ...observation,
-    patientID: patientId,
+    patientID,
     sampleID: specimenId || observation?.sampleID || observation?.sampleId || null,
     sampleId: specimenId || observation?.sampleId || observation?.sampleID || null,
     specimenID: specimenId || observation?.specimenID || null,
@@ -74,7 +75,7 @@ function buildObservationPayload(observation, patientId, specimenId) {
       ],
     },
     subject: {
-      reference: `Patient/${patientId}`,
+      reference: `Patient/${patientID}`,
     },
     specimen: specimenId
       ? {
@@ -110,19 +111,21 @@ async function createPatient(patientPayload) {
   const response = await apiClient.post('/patients', patientPayload);
   const data = extractResponseData(response);
   const patient = normalizeCreatedEntity(data, patientPayload);
-  const patientId = normalizePatientId(patient.patientID || patient.patientId || patient.id || patient._id || patientPayload.patientID);
+  const patientID = normalizePatientID(patient.patientID || patient.patientId || patient.id || patient._id || patientPayload.patientID);
 
-  if (!patientId) {
+  if (!patientID) {
     throw new Error('O backend não retornou um identificador de paciente válido');
   }
+
+  notifyDashboardDataChanged();
 
   return {
     response,
     patient: {
       ...patient,
-      patientID: patientId,
+      patientID,
     },
-    patientId,
+    patientID,
   };
 }
 
@@ -163,10 +166,10 @@ function normalizeConsentPayload(consentPayload = {}, fallback = {}) {
   };
 }
 
-async function createSpecimen(samplePayload, patientId) {
+async function createSpecimen(samplePayload, patientID) {
   const response = await apiClient.post('/samples', {
     ...samplePayload,
-    patientID: patientId,
+    patientID,
   });
   const data = extractResponseData(response);
   const sample = normalizeCreatedEntity(data, samplePayload);
@@ -176,11 +179,13 @@ async function createSpecimen(samplePayload, patientId) {
     throw new Error('O backend não retornou um identificador de amostra válido');
   }
 
+  notifyDashboardDataChanged();
+
   return {
     response,
     sample: {
       ...sample,
-      patientID: patientId,
+      patientID,
       sampleID: sample.sampleID || sampleId,
       sampleId,
     },
@@ -188,9 +193,10 @@ async function createSpecimen(samplePayload, patientId) {
   };
 }
 
-async function createObservation(observationPayload, patientId) {
-  const response = await apiClient.post(`/patients/${encodeURIComponent(patientId)}/observations`, observationPayload);
+async function createObservation(observationPayload, patientID) {
+  const response = await apiClient.post(`/patients/${encodeURIComponent(patientID)}/observations`, observationPayload);
   const data = extractResponseData(response);
+  notifyDashboardDataChanged();
   return normalizeCreatedEntity(data, observationPayload);
 }
 
@@ -205,7 +211,6 @@ export async function registerClinicalIntake(payload = {}, options = {}) {
     representativeName: normalizeText(representativePayload?.name || demographicPayload?.representativeName),
     representativeEmail: normalizeText(representativePayload?.email || demographicPayload?.representativeEmail).toLowerCase(),
     representativeCpf: digitsOnly(representativePayload?.cpf || demographicPayload?.representativeCpf),
-    representativePhone: digitsOnly(representativePayload?.phone || demographicPayload?.representativePhone),
     consentTemplateId: normalizedConsent.consentTemplateId,
     consentAcceptedAt: normalizedConsent.consentAcceptedAt,
   };
@@ -233,7 +238,6 @@ export async function registerClinicalIntake(payload = {}, options = {}) {
     representativeName: normalizeText(patientPayload.representativeName),
     representativeEmail: normalizeText(patientPayload.representativeEmail).toLowerCase(),
     representativeCpf: digitsOnly(patientPayload.representativeCpf),
-    representativePhone: digitsOnly(patientPayload.representativePhone),
     consentTemplateId: normalizeText(patientPayload.consentTemplateId),
     consentAcceptedAt: normalizeText(patientPayload.consentAcceptedAt),
   }, clinicalPayload);
@@ -255,15 +259,15 @@ export async function registerClinicalIntake(payload = {}, options = {}) {
     result.patient = patientOutcome.patient;
     result.stage = 'patient';
 
-    const specimenOutcome = await createSpecimen(specimenData, patientOutcome.patientId);
+    const specimenOutcome = await createSpecimen(specimenData, patientOutcome.patientID);
     result.sample = specimenOutcome.sample;
     result.specimen = specimenOutcome.sample;
     result.stage = 'specimen';
 
     for (const biomarker of biomarkerList) {
       try {
-        const observationPayload = buildObservationPayload(biomarker, patientOutcome.patientId, specimenOutcome.sampleId);
-        const observation = await createObservation(observationPayload, patientOutcome.patientId);
+        const observationPayload = buildObservationPayload(biomarker, patientOutcome.patientID, specimenOutcome.sampleId);
+        const observation = await createObservation(observationPayload, patientOutcome.patientID);
         result.biomarkers.push(observation);
       } catch (error) {
         const normalizedError = normalizeApiError(error, 'Falha ao registrar um biomarcador');

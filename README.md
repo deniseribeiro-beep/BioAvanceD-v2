@@ -36,6 +36,7 @@ Sistema React desenvolvido com base no diagrama UML de classes para gerenciament
 **Documentação**:
 - 📄 [AUDIT_REPORT_FINAL.md](./AUDIT_REPORT_FINAL.md) - Relatório detalhado de auditoria
 - 📄 [Arquitetura de Software v2.0](./Documents/# Arquitetura de Software.md) - Documentação técnica atualizada
+- 📄 [Contexto SPREC/MIABIS](./docs/CONTEXTO_SPREC_MIABIS.md) - Base conceitual, algoritmo de pontuação e referências ISBER/MIABIS
 
 ---
 
@@ -275,6 +276,39 @@ npm run docker:local:down
 - Nginx Proxy: <http://localhost:80>
 - Neo4j Browser: <http://localhost:7474>
 - InfluxDB UI: <http://localhost:8086>
+
+## 📁 Política de versionamento para GitHub
+
+Os arquivos `.gitignore` da raiz, backend e frontend foram ajustados para manter no repositório apenas o necessário para desenvolvimento colaborativo e CI/CD.
+
+### O que não deve subir para o GitHub
+
+- dependências locais (`node_modules`)
+- variáveis de ambiente e segredos (`.env*`, chaves e certificados)
+- artefatos de build e cache (`dist`, `build`, `coverage`, `.vite`, `.cache`)
+- logs e saídas temporárias de testes
+- dados locais de execução/volumes Docker (`data/mongodb`, `data/neo4j`, `data/redis`, `data/influxdb`)
+- backups e temporários gerados durante operação
+
+### O que deve subir para o GitHub
+
+- código-fonte (`backend/src`, `frontend/src`, scripts)
+- configurações versionáveis (`package.json`, `docker-compose.yml`, configs)
+- documentação (`README.md`, `docs`)
+- exemplos de ambiente (`.env.example`, quando existir)
+
+### Se arquivos já estavam versionados antes
+
+Após atualizar `.gitignore`, remova do índice do Git os artefatos já rastreados:
+
+```bash
+git rm -r --cached node_modules backend/node_modules frontend/node_modules
+git rm -r --cached data/mongodb data/neo4j data/redis data/influxdb data/_sprec_tmp
+git rm -r --cached frontend/playwright-report frontend/test-results test-results
+git rm -r --cached backend/backups backend/test-output.txt
+git add .
+git commit -m "chore: ajusta gitignore e limpeza de artefatos locais"
+```
 
 ## 📝 Licença
 

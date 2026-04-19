@@ -19,10 +19,8 @@ class UserSecurityService {
       score += 40;
     }
     
-    // Métodos alternativos: +10 pontos cada (máx 20)
-    const alternativeCount = (mfaMethods.phoneEnabled ? 1 : 0) + 
-                           (mfaMethods.passkeys?.length || 0) + 
-                           ((mfaMethods.recoveryCodes?.remaining || 0) > 0 ? 1 : 0);
+    // Códigos de recuperação disponíveis: +10 pontos
+    const alternativeCount = (mfaMethods.recoveryCodes?.remaining || 0) > 0 ? 1 : 0;
     score += Math.min(alternativeCount * 10, 20);
     
     // Senha forte: +20 pontos
@@ -77,10 +75,7 @@ class UserSecurityService {
       
       const overallLevel = securityScore >= 80 ? 'strong' : securityScore >= 50 ? 'medium' : 'weak';
       
-      const alternativeMethodsCount = 
-        (mfaMethods.phoneEnabled ? 1 : 0) + 
-        (mfaMethods.passkeys?.length || 0) + 
-        ((mfaMethods.recoveryCodes?.remaining || 0) > 0 ? 1 : 0);
+      const alternativeMethodsCount = (mfaMethods.recoveryCodes?.remaining || 0) > 0 ? 1 : 0;
       
       return {
         securityScore,
@@ -109,25 +104,9 @@ class UserSecurityService {
       const recoveryCodesCollection = db.collection('recovery_codes');
       const recoveryCodes = await recoveryCodesCollection.findOne({ userID: new ObjectId(userID) });
       
-      // Busca passkeys
-      const passkeysCollection = db.collection('passkeys');
-      const passkeys = await passkeysCollection.find({ userID: new ObjectId(userID), active: true }).toArray();
-      
-      // Busca telefone MFA
-      const phoneMFA = user.phoneMFAEnabled || false;
-      // Garante que o telefone seja tratado como string
-      const phoneRaw = user.phone ? user.phone.toString() : null;
-      const phoneNumber = phoneRaw ? this.maskPhone(phoneRaw) : null;
-      
       return {
         primaryEnabled: user.mfaEnabled || false,
         primarySetupDate: user.mfaSetupDate || null,
-        phoneEnabled: phoneMFA,
-        phoneNumber: phoneNumber,
-        passkeys: passkeys.map(pk => ({
-          id: pk._id.toString(),
-          name: pk.deviceName || null
-        })),
         recoveryCodes: {
           remaining: recoveryCodes?.remaining || 0,
           codes: null // Nunca retorna códigos em listagem
@@ -440,41 +419,6 @@ class UserSecurityService {
   }
 
   /**
-   * Atualiza MFA (telefone ou passkey)
-   */
-  async updateMFA(db, userID, method, enabled) {
-    try {
-      const usersCollection = db.collection('users');
-      
-      if (method === 'phone') {
-        if (enabled) {
-          // Ao habilitar, verifica se tem telefone cadastrado
-          const user = await usersCollection.findOne({ _id: new ObjectId(userID) });
-          if (!user || !user.phone) {
-            throw new Error('É necessário cadastrar um telefone antes de habilitar MFA por telefone');
-          }
-          await usersCollection.updateOne(
-            { _id: new ObjectId(userID) },
-            { $set: { phoneMFAEnabled: true, updatedAt: new Date() } }
-          );
-        } else {
-          // Ao desabilitar, apenas desativa o MFA por telefone (não remove o telefone)
-          await usersCollection.updateOne(
-            { _id: new ObjectId(userID) },
-            { $set: { phoneMFAEnabled: false, updatedAt: new Date() } }
-          );
-        }
-      } else if (method === 'passkey') {
-        // Passkeys são gerenciadas individualmente
-        throw new Error('Use endpoints específicos de passkey para gerenciar passkeys');
-      }
-    } catch (error) {
-      logger.error('Erro ao atualizar MFA:', error.message);
-      throw error;
-    }
-  }
-
-  /**
    * Atualiza senha do usuário
    */
   async updatePassword(db, userID, currentPassword, newPassword) {
@@ -525,145 +469,6 @@ class UserSecurityService {
       );
     } catch (error) {
       logger.error('Erro ao atualizar senha:', error.message);
-      throw error;
-    }
-  }
-
-  /**
-   * Atualiza telefone do usuário
-   */
-  async updatePhone(db, userID, phone) {
-    try {
-      // Valida formato do telefone
-      const cleaned = phone.toString().replace(/\D/g, '');
-      
-      if (!cleaned || cleaned.length < 10 || cleaned.length > 11) {
-        throw new Error('Telefone inválido. Use o formato: (XX) XXXXX-XXXX ou (XX) XXXX-XXXX');
-      }
-      
-      const usersCollection = db.collection('users');
-      
-      // Verifica se o usuário existe
-      const user = await usersCollection.findOne({ _id: new ObjectId(userID) });
-      if (!user) {
-        throw new Error('Usuário não encontrado');
-      }
-      
-      // Atualiza telefone (sem habilitar MFA automaticamente)
-      // MFA deve ser habilitado separadamente pelo usuário
-      const updateResult = await usersCollection.updateOne(
-        { _id: new ObjectId(userID) },
-        { 
-          $set: { 
-            phone: cleaned,
-            updatedAt: new Date() 
-          } 
-        }
-      );
-      
-      if (updateResult.matchedCount === 0) {
-        throw new Error('Usuário não encontrado para atualização');
-      }
-      
-      if (updateResult.modifiedCount === 0) {
-        logger.warn('Telefone não foi modificado (pode ser o mesmo valor)');
-      }
-      
-      logger.info(`Telefone atualizado para usuário ${userID}: ${this.maskPhone(cleaned)}`);
-      
-      // Busca o estado atual do usuário para retornar o status correto do MFA
-      const updatedUser = await usersCollection.findOne({ _id: new ObjectId(userID) });
-      
-      return {
-        phone: cleaned,
-        phoneMasked: this.maskPhone(cleaned),
-        phoneMFAEnabled: updatedUser?.phoneMFAEnabled || false
-      };
-    } catch (error) {
-      logger.error('Erro ao atualizar telefone:', error.message);
-      throw error;
-    }
-  }
-
-  /**
-   * Adiciona passkey (FIDO2/WebAuthn)
-   */
-  async addPasskey(db, userID, passkeyData) {
-    try {
-      const passkeysCollection = db.collection('passkeys');
-      
-      // Verifica se já existe uma passkey com o mesmo credentialId
-      const existing = await passkeysCollection.findOne({
-        userID: new ObjectId(userID),
-        credentialId: passkeyData.credentialId
-      });
-      
-      if (existing) {
-        throw new Error('Esta passkey já está cadastrada');
-      }
-      
-      // Extrai nome do dispositivo do userAgent se não fornecido
-      let deviceName = passkeyData.deviceName || 'Dispositivo Desconhecido';
-      if (deviceName && (deviceName.includes('user-agent') || deviceName.length > 100)) {
-        // Tenta extrair informações do userAgent
-        const ua = deviceName.toLowerCase();
-        if (ua.includes('windows')) deviceName = 'Windows';
-        else if (ua.includes('mac')) deviceName = 'macOS';
-        else if (ua.includes('linux')) deviceName = 'Linux';
-        else if (ua.includes('android')) deviceName = 'Android';
-        else if (ua.includes('iphone') || ua.includes('ipad')) deviceName = 'iOS';
-        else deviceName = 'Dispositivo';
-      }
-      
-      const passkey = {
-        userID: new ObjectId(userID),
-        credentialId: passkeyData.credentialId,
-        publicKey: passkeyData.publicKey || null, // Pode ser null se extraído do attestationObject
-        attestationObject: passkeyData.attestationObject || null,
-        deviceName: deviceName,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-        lastUsed: null,
-        active: true
-      };
-      
-      const result = await passkeysCollection.insertOne(passkey);
-      
-      return {
-        _id: result.insertedId,
-        ...passkey
-      };
-    } catch (error) {
-      logger.error('Erro ao adicionar passkey:', error.message);
-      throw error;
-    }
-  }
-
-  /**
-   * Remove passkey
-   */
-  async removePasskey(db, userID, passkeyId) {
-    try {
-      const passkeysCollection = db.collection('passkeys');
-      
-      const result = await passkeysCollection.updateOne(
-        { 
-          _id: new ObjectId(passkeyId),
-          userID: new ObjectId(userID)
-        },
-        { 
-          $set: { 
-            active: false,
-            removedAt: new Date()
-          } 
-        }
-      );
-      
-      if (result.matchedCount === 0) {
-        throw new Error('Passkey não encontrada');
-      }
-    } catch (error) {
-      logger.error('Erro ao remover passkey:', error.message);
       throw error;
     }
   }

@@ -1,0 +1,3274 @@
+﻿import { useEffect, useMemo, useState } from 'react';
+import React from 'react';
+import { useLanguage } from '../../../contexts/LanguageContext';
+import { z } from 'zod';
+import { AlertTriangle, ArrowLeft, ArrowRight, CheckCircle2, FlaskConical, Lock, Microscope, Pill, PlusCircle, Send, ShieldCheck, Stethoscope } from 'lucide-react';
+import Button from '../../../components/UI/Button';
+import Card from '../../../components/UI/Card';
+import Input from '../../../components/UI/Input';
+import Select from '../../../components/UI/Select';
+import Modal from '../../../components/UI/Modal';
+import Textarea from '../../../components/UI/Textarea';
+// CidAsyncAutocomplete não está disponível nesta árvore; o wizard usa busca manual de CID.
+import { apiClient, notifyApiToast } from '../../../api/client';
+import { useSemanticCascade } from '../../../hooks/useSemanticCascade';
+import Barcode from 'react-barcode';
+
+// Exemplo de uso do componente CidAsyncAutocomplete:
+// <CidAsyncAutocomplete
+//   value={formData.diagnosisCid}
+//   onChange={cid => setFormData(prev => ({ ...prev, diagnosisCid: cid }))}
+//   placeholder="Buscar CID por código ou descrição..."
+// />
+import intakeService from '../../../api/intake.service';
+import { consentService } from '../../../services/api';
+import { LIMITS } from '../../../config/constants/limits.constants';
+import { VALIDATION_MESSAGES, VALIDATION_RULES } from '../../../config/constants/validation.constants';
+import { SPREC_FLUID_DICTIONARY, SPREC_SOLID_DICTIONARY } from '../../../constants/sprecDictionary';
+import { buildSampleMerkleRoot, verifySampleIntegrity } from '../../../utils/sampleMerkleIntegrity';
+import './ClinicalIntakeWizard.css';
+
+const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function normalizeDocumentValue(value) {
+  return String(value || '').trim();
+}
+
+function isValidCpfDocument(value) {
+  const cleanCpf = normalizeDocumentValue(value).replace(/\D/g, '');
+
+  if (!/^\d{11}$/.test(cleanCpf)) {
+    return false;
+  }
+
+  if (/^(\d)\1{10}$/.test(cleanCpf)) {
+    return false;
+  }
+
+  let sum = 0;
+  for (let index = 0; index < 9; index += 1) {
+    sum += Number(cleanCpf.charAt(index)) * (10 - index);
+  }
+
+  let remainder = sum % 11;
+  const firstDigit = remainder < 2 ? 0 : 11 - remainder;
+  if (Number(cleanCpf.charAt(9)) !== firstDigit) {
+    return false;
+  }
+
+  sum = 0;
+  for (let index = 0; index < 10; index += 1) {
+    sum += Number(cleanCpf.charAt(index)) * (11 - index);
+  }
+
+  remainder = sum % 11;
+  const secondDigit = remainder < 2 ? 0 : 11 - remainder;
+  return Number(cleanCpf.charAt(10)) === secondDigit;
+}
+
+function isValidPassportDocument(value) {
+  const normalized = normalizeDocumentValue(value);
+  return /^[A-Z0-9][A-Z0-9\s\-.]{4,19}$/i.test(normalized);
+}
+
+function isValidProntuarioDocument(value) {
+  const normalized = normalizeDocumentValue(value);
+  return /^[A-Z0-9][A-Z0-9\s\-_.\/]{4,29}$/i.test(normalized);
+}
+
+function isValidCpfOrPassportDocument(value) {
+  const normalized = normalizeDocumentValue(value);
+
+  if (!normalized) {
+    return false;
+  }
+
+  return isValidCpfDocument(normalized) || isValidPassportDocument(normalized);
+}
+
+function generateAcronym(name) {
+  const stopWords = new Set(['de', 'da', 'do', 'das', 'dos']);
+
+  return String(name || '')
+    .trim()
+    .split(/[\s-]+/)
+    .filter((word) => word && !stopWords.has(word.toLowerCase()))
+    .map((word) => word[0].toUpperCase())
+    .join('');
+}
+
+function getSampleQuantityUnit(sampleTypeValue, sampleTypeOptions = []) {
+  const selected = (Array.isArray(sampleTypeOptions) ? sampleTypeOptions : []).find((option) => option.value === sampleTypeValue);
+  const sourceText = String(selected?.label || sampleTypeValue || '').toLowerCase();
+
+  const fluidKeywords = ['sangue', 'soro', 'plasma', 'liquido', 'líquido', 'urina', 'saliva', 'swab'];
+  const solidKeywords = ['tecido', 'biópsia', 'biopsia', 'fragmento', 'tumor', 'osso'];
+
+  if (solidKeywords.some((keyword) => sourceText.includes(keyword))) {
+    return 'mg';
+  }
+
+  if (fluidKeywords.some((keyword) => sourceText.includes(keyword))) {
+    return 'mL';
+  }
+
+  return 'mL';
+}
+
+function calculateQualityScore({
+  matrixType,
+  sampleType,
+  primaryContainer,
+  preCentrifugation,
+  centrifugation,
+  secondCentrifugation,
+  postCentrifugationDelay,
+  longTermStorage,
+  preAnalyticalUnknown,
+}) {
+  const SCORE_BASE = 100;
+  const normalizeCode = (value) => String(value || '').trim().toUpperCase();
+  const isUnknownCode = (value) => ['X', 'XXX'].includes(normalizeCode(value));
+
+  const mandatoryCodes = [
+    sampleType,
+    primaryContainer,
+    preCentrifugation,
+    centrifugation,
+    secondCentrifugation,
+    postCentrifugationDelay,
+    longTermStorage,
+  ];
+
+  const missingMandatoryMetadata = mandatoryCodes.some((value) => normalizeCode(value).length === 0);
+  const unknownMandatoryMetadata = mandatoryCodes.some((value) => isUnknownCode(value));
+  const criticalMetadataFailure = Boolean(preAnalyticalUnknown) || missingMandatoryMetadata || unknownMandatoryMetadata;
+
+  if (criticalMetadataFailure) {
+    return {
+      score: 0,
+      category: 'C',
+      penaltyIschemia: 0,
+      penaltyTemperature: 0,
+      penaltyCriticalFailure: 100,
+      penaltyProtocolAlert: 0,
+      forcedQuarantine: true,
+    };
+  }
+
+  const normalizedMatrixType = String(matrixType || 'fluid').trim().toLowerCase();
+  let penaltyIschemia = 0;
+
+  const preCode = String(preCentrifugation || '').trim().toUpperCase();
+  if (normalizedMatrixType === 'solid') {
+    if (preCode === 'X') {
+      penaltyIschemia = 100;
+    } else if (['C', 'D'].includes(preCode)) {
+      penaltyIschemia = 10;
+    } else if (['E', 'F'].includes(preCode)) {
+      penaltyIschemia = 20;
+    }
+
+    const coldCode = String(centrifugation || '').trim().toUpperCase();
+    if (coldCode === 'X') {
+      penaltyIschemia = Math.min(100, penaltyIschemia + 100);
+    } else if (['D', 'E'].includes(coldCode)) {
+      penaltyIschemia += 10;
+    } else if (['F'].includes(coldCode)) {
+      penaltyIschemia += 20;
+    }
+  } else {
+    if (preCode === 'X') {
+      penaltyIschemia = 100;
+    } else if (['C', 'D', 'E', 'F'].includes(preCode)) {
+      penaltyIschemia = 15;
+    } else if (['G', 'H', 'I', 'J', 'K', 'L', 'M', 'N'].includes(preCode)) {
+      penaltyIschemia = 30;
+    }
+  }
+
+  let penaltyTemperature = 0;
+  const centrifCode = String(centrifugation || '').trim().toUpperCase();
+  const secondCentrifCode = String(secondCentrifugation || '').trim().toUpperCase();
+  const protocolAlertCodes = new Set(['I', 'J']);
+  const penaltyProtocolAlert = protocolAlertCodes.has(centrifCode) ? 10 : 0;
+  if (normalizedMatrixType === 'solid') {
+    if (secondCentrifCode === 'X') {
+      penaltyTemperature = 50;
+    } else if (['F', 'G'].includes(secondCentrifCode)) {
+      penaltyTemperature = 20;
+    } else if (['E'].includes(secondCentrifCode)) {
+      penaltyTemperature = 10;
+    }
+  } else {
+    const ambientNoBrakeCodes = new Set(['A', 'M']);
+    const unknownTemperatureCodes = new Set(['X']);
+
+    if (unknownTemperatureCodes.has(centrifCode) || unknownTemperatureCodes.has(secondCentrifCode)) {
+      penaltyTemperature = 50;
+    } else if (ambientNoBrakeCodes.has(centrifCode) || ambientNoBrakeCodes.has(secondCentrifCode)) {
+      penaltyTemperature = 20;
+    }
+  }
+
+  const totalPenalty = Math.min(100, penaltyIschemia + penaltyTemperature + penaltyProtocolAlert);
+  const score = Math.max(0, SCORE_BASE - totalPenalty);
+
+  if (score >= 85) {
+    return {
+      score,
+      category: 'A',
+      penaltyIschemia,
+      penaltyTemperature,
+      penaltyProtocolAlert,
+      penaltyCriticalFailure: 0,
+      forcedQuarantine: false,
+    };
+  }
+
+  if (score >= 65) {
+    return {
+      score,
+      category: 'B',
+      penaltyIschemia,
+      penaltyTemperature,
+      penaltyProtocolAlert,
+      penaltyCriticalFailure: 0,
+      forcedQuarantine: false,
+    };
+  }
+
+  return {
+    score,
+    category: 'C',
+    penaltyIschemia,
+    penaltyTemperature,
+    penaltyProtocolAlert,
+    penaltyCriticalFailure: 0,
+    forcedQuarantine: false,
+  };
+}
+
+function buildSprecCode(formData) {
+  const parts = [
+    formData.sprecSampleType,
+    formData.sprecPrimaryContainer,
+    formData.sprecPreCentrifugation,
+    formData.sprecCentrifugation,
+    formData.sprecSecondCentrifugation,
+    formData.sprecPostCentrifugationDelay,
+    formData.sprecLongTermStorage,
+  ].map((part) => String(part || '').trim().toUpperCase());
+
+  if (parts.some((part) => !part)) {
+    return '';
+  }
+
+  return parts.join('-');
+}
+
+function resolveUnknownAxisCode(options = []) {
+  const normalizedValues = new Set((Array.isArray(options) ? options : []).map((option) => String(option.value || '').trim().toUpperCase()));
+  if (normalizedValues.has('X')) {
+    return 'X';
+  }
+  if (normalizedValues.has('XXX')) {
+    return 'XXX';
+  }
+  return 'X';
+}
+
+function createPatientStepSchema(t) {
+  return z.object({
+    patientName: z.string().trim().min(2, t('wizard.validation.required', VALIDATION_MESSAGES.required)).max(LIMITS.FULL_NAME_MAX_LENGTH, t('wizard.validation.nameTooLong', 'Nome muito longo')),
+    birthDate: z
+      .string()
+      .trim()
+      .regex(VALIDATION_RULES.birthDate.pattern, t('wizard.validation.birthDateFormat', 'Informe a data no formato DD/MM/AAAA')),
+    gender: z.string().trim().min(1, t('wizard.validation.selectGender', 'Selecione o sexo')),
+    email: z.string().trim().optional().or(z.literal('')),
+    isDeceased: z.boolean(),
+    representativeName: z.string().trim().optional().or(z.literal('')),
+    representativeEmail: z.string().trim().optional().or(z.literal('')),
+    representativeCpf: z.string().trim().optional().or(z.literal('')),
+    documento: z.string().trim().min(5, t('wizard.validation.validDocument', 'Informe um documento válido (CPF ou passaporte)')),
+    prontuario: z.string().trim().max(80, t('wizard.validation.genericTooLong', 'Texto muito longo')).optional().or(z.literal('')),
+  }).superRefine((data, ctx) => {
+  const patientEmail = String(data.email || '').trim();
+  const representativeName = String(data.representativeName || '').trim();
+  const representativeEmail = String(data.representativeEmail || '').trim();
+  const representativeCpf = String(data.representativeCpf || '').trim();
+  const documentValue = normalizeDocumentValue(data.documento);
+
+  if (!data.isDeceased) {
+    if (!patientEmail) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['email'],
+        message: t('wizard.validation.invalidEmail', VALIDATION_MESSAGES.email),
+      });
+    } else if (!emailPattern.test(patientEmail)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['email'],
+        message: t('wizard.validation.invalidEmail', VALIDATION_MESSAGES.email),
+      });
+    }
+    // Documento obrigatório para vivos
+    if (!documentValue || !isValidCpfOrPassportDocument(documentValue)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['documento'],
+        message: t('wizard.validation.validDocument', 'Informe um documento válido (CPF ou passaporte)'),
+      });
+    }
+  } else if (patientEmail && !emailPattern.test(patientEmail)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['email'],
+      message: t('wizard.validation.invalidEmail', VALIDATION_MESSAGES.email),
+    });
+  }
+
+  if (data.isDeceased) {
+    if (!representativeName) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['representativeName'],
+        message: t('wizard.validation.required', VALIDATION_MESSAGES.required),
+      });
+    }
+    if (!representativeEmail) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['representativeEmail'],
+        message: t('wizard.validation.invalidEmail', VALIDATION_MESSAGES.email),
+      });
+    } else if (!emailPattern.test(representativeEmail)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['representativeEmail'],
+        message: t('wizard.validation.invalidEmail', VALIDATION_MESSAGES.email),
+      });
+    }
+    if (!representativeCpf || !isValidCpfOrPassportDocument(representativeCpf)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['representativeCpf'],
+        message: t('wizard.validation.validDocument', 'Informe um documento válido (CPF ou passaporte)'),
+      });
+    }
+  }
+  });
+}
+
+const clinicalStepSchema = z.object({
+  bloodPressure: z.string().trim().max(30, 'Blood pressure is too long').optional().or(z.literal('')),
+  clinicalObservations: z.string().trim().max(LIMITS.GENERIC_TEXT_MAX_LENGTH, 'Clinical notes are too long').optional().or(z.literal('')),
+});
+
+function createConsentStepSchema(t) {
+  return z.object({
+    selectedConsentTemplateId: z.string().trim().min(1, t('wizard.validation.selectTcle', 'Selecione um TCLE antes de finalizar o cadastro')),
+  });
+}
+
+function createBiomarkerRequestSchema(t) {
+  return z.object({
+    biomarkerName: z.string().trim().min(2, t('wizard.validation.biomarkerName', 'Informe o nome do biomarcador')),
+    measurementUnit: z.string().trim().min(1, t('wizard.validation.measurementUnit', 'Informe a unidade de medida')),
+    justification: z.string().trim().min(10, t('wizard.validation.justification', 'Informe a justificativa científica')),
+  });
+}
+
+const STEP_META_BASE = [
+  {
+    key: 'patient',
+    icon: Stethoscope,
+  },
+  {
+    key: 'sample',
+    icon: FlaskConical,
+  },
+  {
+    key: 'biomarkers',
+    icon: ShieldCheck,
+  },
+];
+
+const CHARLSON_DEFINITIONS = [
+  { key: 'mi', label: 'Infarto do miocárdio', weight: 1 },
+  { key: 'chf', label: 'Insuficiência cardíaca congestiva', weight: 1 },
+  { key: 'pvd', label: 'Doença vascular periférica', weight: 1 },
+  { key: 'cva', label: 'AVC / doença cerebrovascular', weight: 1 },
+  { key: 'dementia', label: 'Demência', weight: 1 },
+  { key: 'copd', label: 'Doença pulmonar crônica', weight: 1 },
+  { key: 'rheumatic', label: 'Doença do tecido conjuntivo', weight: 1 },
+  { key: 'peptic', label: 'Úlcera péptica', weight: 1 },
+  { key: 'mild_liver', label: 'Doença hepática leve', weight: 1 },
+  { key: 'diabetes', label: 'Diabetes sem complicação', weight: 1 },
+  { key: 'diabetes_complications', label: 'Diabetes com complicações', weight: 2 },
+  { key: 'hemiplegia', label: 'Hemiplegia / paraplegia', weight: 2 },
+  { key: 'ckd', label: 'Doença renal moderada ou grave', weight: 2 },
+  { key: 'malignancy', label: 'Neoplasia sólida', weight: 2 },
+  { key: 'leukemia', label: 'Leucemia', weight: 2 },
+  { key: 'lymphoma', label: 'Linfoma', weight: 2 },
+  { key: 'severe_liver', label: 'Doença hepática grave', weight: 3 },
+  { key: 'metastatic', label: 'Neoplasia metastática', weight: 6 },
+  { key: 'aids', label: 'AIDS / HIV avançado', weight: 6 },
+];
+
+const FABRY_MOCK_PHENOTYPES = [
+  { hpoId: 'HP:0001066', label: 'Angioqueratoma' },
+  { hpoId: 'HP:0012471', label: 'Acroparestesia' },
+  { hpoId: 'HP:0001131', label: 'Cornea verticilata' },
+  { hpoId: 'HP:0000093', label: 'Proteinuria' },
+];
+
+const FABRY_MOCK_BIOMARKERS = [
+  { code: 'ALPHA_GALACTOSIDASE_A', label: 'Atividade de Alfa-galactosidase A', unit: 'µmol/hr/L', value: '' },
+  { code: 'LYSO_GB3', label: 'Lyso-Gb3', unit: 'ng/mL', value: '' },
+];
+
+function calculateCharlsonScore(selectedConditions = []) {
+  const selected = new Set((Array.isArray(selectedConditions) ? selectedConditions : []).map((item) => String(item || '').trim()));
+  return CHARLSON_DEFINITIONS.reduce((total, item) => (selected.has(item.key) ? total + item.weight : total), 0);
+}
+
+function getCharlsonRiskLevel(score) {
+  if (score >= 6) {
+    return 'veryHigh';
+  }
+  if (score >= 3) {
+    return 'moderate';
+  }
+  if (score > 0) {
+    return 'low';
+  }
+  return 'none';
+}
+
+// CORREÇÃO: Removidas as declarações de função daqui. 
+// initialState deve ser apenas um objeto com os valores iniciais.
+const initialState = {
+  patientName: '',
+  birthDate: '',
+  email: '',
+  gender: '',
+  isDeceased: false,
+  isHealthyControl: false,
+  diagnosisCidId: '',
+  diagnosisCidCode: '',
+  diagnosisOrphaCode: '',
+  diagnosisOmimCode: '',
+  diagnosisDefinition: '',
+  diagnosisCodesManualMode: false,
+  diagnosisCidDescription: '',
+  representativeName: '',
+  representativeEmail: '',
+  representativeCpf: '',
+  hypertension: false,
+  diabetesType1: false,
+  diabetesType2: false,
+  obesity: false,
+  copd: false,
+  ckd: false,
+  asthma: false,
+  smoking: false,
+  alcoholUse: false,
+  antibioticUse: false,
+  insulinUse: false,
+  antiviralUse: false,
+  bloodPressure: '',
+  clinicalObservations: '',
+  documento: '',
+  prontuario: '',
+  sampleType: '',
+  sprecMatrixType: 'fluid',
+  sampleOrigin: '',
+  extractionProtocol: '',
+  sprecSampleType: '',
+  sprecPrimaryContainer: '',
+  sprecPreCentrifugation: '',
+  sprecCentrifugation: '',
+  sprecSecondCentrifugation: '',
+  sprecPostCentrifugationDelay: '',
+  sprecLongTermStorage: '',
+  sprecCode: '',
+  quantity: '',
+  quality: '',
+  qualityScore: '',
+  qualityCategory: '',
+  collectionDateTime: '',
+  processingDateTime: '',
+  transportTemperature: '',
+  ischemiaTimeMinutes: '',
+  preAnalyticalUnknown: false,
+  linkedProject: '',
+  collectionInstitution: '',
+  collectionInstitutionAcronym: '',
+  selectedConsentTemplateId: '',
+  charlsonConditions: [],
+  diseasePhenotypes: [],
+  diseaseBiomarkers: [],
+  biomarkers_values: {},
+  phenotypes: [], // [{ hpoId, label }]
+  treatmentStatus: '',
+  medicationName: '',
+  medicationCode: '',
+  medicationDrugClass: '',
+  lastDoseDate: '',
+  washoutStartDate: '',
+  washoutEndDate: '',
+  medicationSearchQuery: '',
+};
+
+const CONSENT_PLACEHOLDERS = {
+  '{{NOME_PACIENTE}}': (formData, fallbackValues) => String(formData.patientName || '').trim() || fallbackValues.patientNameMissing,
+  '{{DOC_PACIENTE}}': (formData, fallbackValues) => String(formData.patientID || formData.patientId || formData.sampleID || formData.sampleId || '').trim() || fallbackValues.patientDocMissing,
+  '{{ID_PACIENTE_SISTEMA}}': (formData, fallbackValues) => String(formData.patientID || formData.patientId || '').trim() || fallbackValues.patientSystemIdMissing,
+  '{{ID_AMOSTRA}}': (formData, fallbackValues) => String(formData.sampleID || formData.sampleId || '').trim() || fallbackValues.sampleIdMissing,
+  '{{NOME_REPRESENTANTE}}': (formData, fallbackValues) => (formData.isDeceased ? String(formData.representativeName || '').trim() : fallbackValues.notApplicable) || fallbackValues.notApplicable,
+};
+
+function getConsentTemplateBody(template) {
+  if (!template) {
+    return '';
+  }
+
+  return String(template.content || template.htmlContent || '').trim();
+}
+
+function buildConsentPreview(template, formData, t) {
+  const baseText = getConsentTemplateBody(template);
+
+  if (!baseText) {
+    return t('wizard.labels.noConsentPreview', 'No informed consent content is available for preview.');
+  }
+
+  const fallbackValues = {
+    patientNameMissing: t('wizard.labels.patientNameMissing', 'Name not provided'),
+    patientDocMissing: t('wizard.labels.patientDocMissing', 'Patient/sample ID will be generated on submit'),
+    patientSystemIdMissing: t('wizard.labels.patientSystemIdMissing', 'Will be generated on submit'),
+    sampleIdMissing: t('wizard.labels.sampleIdMissing', 'Will be generated on submit'),
+    notApplicable: t('common.notApplicable', 'Not applicable'),
+  };
+
+  return Object.entries(CONSENT_PLACEHOLDERS).reduce((currentText, [placeholder, resolver]) => {
+    return currentText.split(placeholder).join(resolver(formData, fallbackValues));
+  }, baseText);
+}
+
+function getFirstSchemaError(error) {
+  return error?.issues?.[0]?.message || '';
+}
+
+function getDictionarySlug(item) {
+  return String(item?.slug || item?.value || item?.code || '').trim();
+}
+
+function getDictionaryLabel(item) {
+  return String(item?.label || item?.name || '').trim();
+}
+
+function mapDictionaryOptions(items) {
+  return (Array.isArray(items) ? items : [])
+    .map((item) => ({
+      value: getDictionarySlug(item),
+      label: getDictionaryLabel(item),
+    }))
+    .filter((option) => option.value && option.label);
+}
+
+const DIAGNOSIS_PRIMARY_LANGUAGE = 'pt';
+const DIAGNOSIS_SUPPORTED_LANGUAGES = ['pt', 'en', 'es'];
+const DIAGNOSIS_EN_MARKER = '[EN]';
+
+function getFirstText(values = []) {
+  return values
+    .map((value) => String(value || '').trim())
+    .find((value) => value) || '';
+}
+
+function getDiagnosisLocalizedLabel(item) {
+  const preferredPortuguese = getFirstText([
+    item?.namePt,
+    item?.nomePt,
+    item?.translations?.pt,
+    item?.names?.pt,
+    item?.Descricao,
+    item?.descricao,
+  ]);
+  const englishFallback = getFirstText([
+    item?.nameEn,
+    item?.nomeEn,
+    item?.translations?.en,
+    item?.names?.en,
+    item?.description,
+    item?.label,
+    item?.name,
+  ]);
+  const existingLabel = getFirstText([
+    item?.label,
+    item?.displayName,
+    item?.description,
+    item?.Descricao,
+    item?.descricao,
+    item?.name,
+  ]);
+  const language = String(item?.lang || item?.language || '').trim().toLowerCase();
+
+  if (preferredPortuguese) {
+    return {
+      label: preferredPortuguese,
+      language: DIAGNOSIS_PRIMARY_LANGUAGE,
+      isEnglishFallback: false,
+    };
+  }
+
+  const fallbackLabel = englishFallback || existingLabel;
+  if (!fallbackLabel) {
+    return {
+      label: '',
+      language: language || '',
+      isEnglishFallback: false,
+    };
+  }
+
+  return {
+    label: language === DIAGNOSIS_PRIMARY_LANGUAGE ? fallbackLabel : `${DIAGNOSIS_EN_MARKER} ${fallbackLabel}`,
+    language: language || 'en',
+    isEnglishFallback: language !== DIAGNOSIS_PRIMARY_LANGUAGE,
+  };
+}
+
+function getCidDisplayLabel(item) {
+  const code = String(item?.Codigo_Tabulacao || item?.Codigos_CID10 || item?.codigo || item?.code || '').trim();
+  const description = getDiagnosisLocalizedLabel(item).label || String(item?.Descricao || item?.descricao || item?.description || item?.label || '').trim();
+
+  if (code && description) {
+    return `${code} - ${description}`;
+  }
+
+  return description || code || 'Doença sem descrição';
+}
+
+function getCidLocalizedNames(item) {
+  const translationNames = item?.translations && typeof item.translations === 'object'
+    ? [item.translations.pt, item.translations.en, item.translations.es]
+    : [];
+  const objectNames = item?.names && typeof item.names === 'object'
+    ? [item.names.pt, item.names.en, item.names.es]
+    : [];
+
+  return [
+    item?.namePt,
+    item?.nameEn,
+    item?.nameEs,
+    item?.nomePt,
+    item?.nomeEn,
+    item?.nomeEs,
+    item?.Descricao,
+    item?.descricao,
+    item?.description,
+    item?.name,
+    item?.label,
+    ...translationNames,
+    ...objectNames,
+  ]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean);
+}
+
+function getCidAliases(item) {
+  return [
+    ...(Array.isArray(item?.aliases) ? item.aliases : []),
+    ...(Array.isArray(item?.synonyms) ? item.synonyms : []),
+    ...(Array.isArray(item?.alternativeNames) ? item.alternativeNames : []),
+  ]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean);
+}
+
+function getCidDisplayTitle(item) {
+  const localizedLabel = getDiagnosisLocalizedLabel(item).label;
+  const localizedNames = Array.from(new Set([
+    localizedLabel,
+    ...getCidLocalizedNames(item),
+  ].filter(Boolean)));
+  if (localizedNames.length > 0) {
+    return localizedNames.slice(0, 3).join(' / ');
+  }
+
+  return getCidDisplayLabel(item);
+}
+
+function getCidDisplayMeta(item) {
+  const code = normalizeCidCode(
+    item?.Codigos_CID10 || item?.icd_code || item?.icdCode || item?.Codigo_Tabulacao || item?.cidCode || item?.relacoes?.cid10 || item?.relacoes?.cid || ''
+  );
+  const orphaCode = normalizeOrphaCode(item?.ORPHA || item?.orpha || item?.orphaCode || item?.orpha_code || item?.ORPHAcode || item?.relacoes?.orpha || '');
+  const omimCode = normalizeOmimCode(item?.OMIM || item?.omim || item?.omimCode || item?.omim_code || item?.relacoes?.omim || '');
+
+  return [
+    code ? `CID: ${code}` : 'CID: -',
+    orphaCode ? `ORPHA: ${orphaCode}` : 'ORPHA: -',
+    omimCode ? `OMIM: ${omimCode}` : 'OMIM: -',
+  ].join(' | ');
+}
+
+function getCidAliasPreview(item) {
+  const aliases = getCidAliases(item);
+  if (aliases.length === 0) {
+    return '';
+  }
+
+  return `Aliases: ${aliases.slice(0, 3).join(' • ')}`;
+}
+
+function normalizeCidOption(item) {
+  const baseCode = String(item?.codigo || item?.code || item?.ORPHAcode || item?.orphaCode || item?.ORPHA || item?.orpha || item?.Codigo_Tabulacao || item?.Codigos_CID10 || '').trim();
+  const id = String(item?.id || item?._id || baseCode || '').trim();
+  const cidCode = normalizeCidCode(item?.relacoes?.cid10 || item?.relacoes?.cid || item?.cid || item?.Codigos_CID10 || item?.cid10 || item?.icdCode || item?.Codigo_Tabulacao || item?.code || '');
+  const code = String(baseCode || cidCode).trim();
+  const localizedLabel = getDiagnosisLocalizedLabel(item);
+  const description = String(localizedLabel.label || item?.descricao || item?.Descricao || item?.description || item?.label || '').trim();
+  const system = String(item?.sistema || item?.system || item?.source || '').trim().toUpperCase();
+  const orphaCode = normalizeOrphaCode(item?.relacoes?.orpha || item?.ORPHA || item?.orpha || item?.orphaCode || item?.orpha_code || item?.ORPHAcode || (system === 'ORPHA' ? code : '') || '');
+  const omimCode = normalizeOmimCode(item?.relacoes?.omim || item?.OMIM || item?.omim || item?.omimCode || item?.omim_code || '');
+  const definition = [
+    item?.definition,
+    item?.definicao,
+    item?.descricaoDetalhada,
+    item?.summary,
+    item?.descricao,
+    item?.Descricao,
+    description,
+  ]
+    .map((value) => String(value || '').trim())
+    .find((value) => value && !/^\d+$/.test(value)) || '';
+  const localizedNames = getCidLocalizedNames(item);
+  const aliases = getCidAliases(item);
+  const displayName = getCidDisplayTitle(item);
+
+  return {
+    id,
+    code,
+    cidCode,
+    description,
+    label: displayName,
+    displayName,
+    metaLabel: getCidDisplayMeta(item),
+    aliasLabel: getCidAliasPreview(item),
+    chapter: String(item?.Capitulo || item?.chapter || '').trim(),
+    orphaCode,
+    omimCode,
+    definition,
+    aliases,
+    localizedNames,
+    language: String(item?.lang || item?.language || localizedLabel.language || '').trim().toLowerCase(),
+    isEnglishFallback: localizedLabel.isEnglishFallback,
+    raw: item,
+  };
+}
+
+function normalizeDiseaseBiomarker(item) {
+  return {
+    code: String(item?.code || item?.biomarkerType || item?.hpoId || '').trim(),
+    label: String(item?.display || item?.label || item?.name || '').trim(),
+    unit: String(item?.unit || '').trim(),
+    value: String(item?.value ?? '').trim(),
+  };
+}
+
+function normalizeDiseasePhenotype(item) {
+  return {
+    hpoId: String(item?.hpoId || item?.code || '').trim(),
+    label: String(item?.label || item?.display || '').trim(),
+  };
+}
+
+function getDiseaseBiomarkerKey(item) {
+  return String(item?.code || item?.label || '').trim();
+}
+
+function mergeDiseasePhenotypesWithFabry(phenotypes = []) {
+  const normalized = (Array.isArray(phenotypes) ? phenotypes : []).map(normalizeDiseasePhenotype);
+  const map = new Map();
+  normalized.forEach((item) => {
+    const key = String(item.hpoId || item.label || '').trim();
+    if (key) {
+      map.set(key, item);
+    }
+  });
+  FABRY_MOCK_PHENOTYPES.forEach((item) => {
+    const key = String(item.hpoId || item.label || '').trim();
+    if (key) {
+      map.set(key, item);
+    }
+  });
+  return Array.from(map.values());
+}
+
+function mergeDiseaseBiomarkersWithFabry(biomarkers = []) {
+  const normalized = (Array.isArray(biomarkers) ? biomarkers : []).map(normalizeDiseaseBiomarker);
+  const map = new Map();
+  normalized.forEach((item) => {
+    const key = getDiseaseBiomarkerKey(item);
+    if (key) {
+      map.set(key, item);
+    }
+  });
+  FABRY_MOCK_BIOMARKERS.forEach((item) => {
+    const key = getDiseaseBiomarkerKey(item);
+    if (key) {
+      map.set(key, item);
+    }
+  });
+  return Array.from(map.values());
+}
+
+function buildBiomarkerValuesMap(biomarkers = [], currentValues = {}) {
+  const nextValues = { ...(currentValues && typeof currentValues === 'object' ? currentValues : {}) };
+  (Array.isArray(biomarkers) ? biomarkers : []).forEach((item) => {
+    const key = getDiseaseBiomarkerKey(item);
+    if (!key) {
+      return;
+    }
+    if (nextValues[key] === undefined) {
+      nextValues[key] = String(item?.value ?? '').trim();
+    }
+  });
+  return nextValues;
+}
+
+function normalizeOrphaCode(value) {
+  const raw = String(value || '').trim();
+  if (!raw) {
+    return '';
+  }
+  return /^ORPHA:/i.test(raw) ? raw.replace(/^orpha:/i, 'ORPHA:') : `ORPHA:${raw}`;
+}
+
+function getOrphaNumeric(value) {
+  return String(normalizeOrphaCode(value) || '').replace(/^ORPHA:/i, '');
+}
+
+function normalizeOmimCode(value) {
+  const raw = String(value || '').trim();
+  if (!raw || raw === '-') {
+    return '';
+  }
+  return /^OMIM:/i.test(raw) ? raw.replace(/^omim:/i, 'OMIM:') : `OMIM:${raw}`;
+}
+
+function normalizeCidCode(value) {
+  const raw = String(value || '').trim();
+  if (!raw) {
+    return '';
+  }
+
+  const candidates = raw
+    .split(/[;,|]/)
+    .map((item) => String(item || '').trim())
+    .filter(Boolean);
+
+  const firstValid = candidates.find((candidate) => {
+    if (!candidate || /^ORPHA:/i.test(candidate) || /^OMIM:/i.test(candidate)) {
+      return false;
+    }
+
+    // CID-10 típico (letra + 2 dígitos com sufixo opcional) e variações já existentes no legado.
+    if (/^[A-TV-Z][0-9]{2}(\.[0-9A-Z]{1,4})?$/i.test(candidate)) {
+      return true;
+    }
+
+    // Evita gravar código ORPHA numérico puro como CID.
+    if (/^\d+$/.test(candidate)) {
+      return false;
+    }
+
+    return /^[A-Z0-9][A-Z0-9.\-]{1,12}$/i.test(candidate);
+  });
+
+  return firstValid || '';
+}
+
+function pickBestOrphaCandidate(candidates = [], orphaNumeric = '') {
+  const normalizedOrpha = String(orphaNumeric || '').trim();
+  if (!normalizedOrpha || !Array.isArray(candidates) || candidates.length === 0) {
+    return null;
+  }
+
+  const scoped = candidates.filter((candidate) => getOrphaNumeric(candidate?.orphaCode) === normalizedOrpha);
+  const pool = scoped.length > 0 ? scoped : candidates;
+
+  const score = (candidate) => {
+    let points = 0;
+    if (normalizeCidCode(candidate?.cidCode || candidate?.raw?.relacoes?.cid10 || candidate?.raw?.relacoes?.cid || '')) points += 2;
+    if (normalizeOmimCode(candidate?.omimCode || candidate?.raw?.relacoes?.omim || candidate?.raw?.OMIM || '')) points += 2;
+    if (String(candidate?.definition || '').trim()) points += 1;
+    if (String(candidate?.displayName || '').trim()) points += 1;
+    return points;
+  };
+
+  return pool
+    .map((candidate) => ({ candidate, score: score(candidate) }))
+    .sort((a, b) => b.score - a.score)
+    .map((entry) => entry.candidate)[0] || null;
+}
+
+function tokenizeSearch(value) {
+  return String(value || '')
+    .toLowerCase()
+    .trim()
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter(Boolean);
+}
+
+function buildDiagnosisSearchIndex(item) {
+  return [
+    item?.displayName,
+    item?.label,
+    item?.description,
+    item?.definition,
+    item?.cidCode,
+    item?.orphaCode,
+    item?.omimCode,
+    item?.code,
+    item?.language,
+    ...(Array.isArray(item?.aliases) ? item.aliases : []),
+    ...(Array.isArray(item?.localizedNames) ? item.localizedNames : []),
+  ]
+    .map((value) => String(value || '').toLowerCase().trim())
+    .filter(Boolean)
+    .join(' | ');
+}
+
+function filterAndRankDiagnosisResults(items = [], term = '', max = 6) {
+  const query = String(term || '').toLowerCase().trim();
+  const tokens = tokenizeSearch(query);
+  if (!query || tokens.length === 0) {
+    return [];
+  }
+
+  const normalized = (Array.isArray(items) ? items : []).map((item) => ({
+    ...item,
+    _searchIndex: buildDiagnosisSearchIndex(item),
+  }));
+
+  const filtered = normalized.filter((item) => item._searchIndex && tokens.every((token) => item._searchIndex.includes(token)));
+
+  const scored = filtered.map((item) => {
+    let score = 0;
+    const title = String(item.displayName || '').toLowerCase();
+    const cid = String(item.cidCode || '').toLowerCase();
+    const orpha = String(item.orphaCode || '').toLowerCase();
+    const omim = String(item.omimCode || '').toLowerCase();
+    const code = String(item.code || '').toLowerCase();
+
+    if (title === query) score += 100;
+    if (cid === query || orpha === query || omim === query || code === query) score += 80;
+    if (title.startsWith(query)) score += 30;
+    if (code.startsWith(query) || cid.startsWith(query) || orpha.startsWith(query) || omim.startsWith(query)) score += 25;
+    if (title.includes(query)) score += 15;
+    if (item.cidCode) score += 3;
+    if (item.omimCode) score += 3;
+
+    return { item, score };
+  });
+
+  return scored
+    .sort((a, b) => b.score - a.score)
+    .slice(0, Math.max(1, Number(max) || 6))
+    .map((entry) => {
+      const next = { ...entry.item };
+      delete next._searchIndex;
+      return next;
+    });
+}
+
+function consolidateDiagnosisCandidates(items = []) {
+  const grouped = new Map();
+
+  (Array.isArray(items) ? items : []).forEach((item) => {
+    const key = getOrphaNumeric(item?.orphaCode)
+      || normalizeCidCode(item?.cidCode)
+      || String(item?.displayName || item?.code || item?.id || '').toLowerCase().trim();
+    if (!key) {
+      return;
+    }
+
+    const previous = grouped.get(key);
+    const score = (candidate) => {
+      let points = 0;
+      if (normalizeCidCode(candidate?.cidCode)) points += 2;
+      if (normalizeOmimCode(candidate?.omimCode)) points += 2;
+      if (String(candidate?.displayName || '').trim()) points += 1;
+      if (String(candidate?.definition || '').trim()) points += 1;
+      return points;
+    };
+
+    if (!previous || score(item) > score(previous)) {
+      grouped.set(key, item);
+    }
+  });
+
+  return Array.from(grouped.values());
+}
+
+function formatBloodPressureInput(value) {
+  const digits = String(value || '').replace(/\D/g, '').slice(0, 6);
+  if (!digits) {
+    return '';
+  }
+  if (digits.length <= 3) {
+    return digits;
+  }
+  return `${digits.slice(0, 3)}/${digits.slice(3)}`;
+}
+
+function getQualityTheme(category, t) {
+  if (category === 'A') {
+    return {
+      cardClass: 'governance-card governance-card--a',
+      textClass: 'governance-score governance-score--a',
+      progressClass: 'governance-progress governance-progress--a',
+      label: t('wizard.labels.qualityHigh', 'High quality'),
+    };
+  }
+
+  if (category === 'B') {
+    return {
+      cardClass: 'governance-card governance-card--b',
+      textClass: 'governance-score governance-score--b',
+      progressClass: 'governance-progress governance-progress--b',
+      label: t('wizard.labels.qualityAcceptable', 'Acceptable quality'),
+    };
+  }
+
+  return {
+    cardClass: 'governance-card governance-card--c',
+    textClass: 'governance-score governance-score--c',
+    progressClass: 'governance-progress governance-progress--c',
+    label: t('wizard.labels.qualityCompromised', 'Compromised sample'),
+  };
+}
+
+function createSampleStepSchema(t) {
+  return z.object({
+    sprecSampleType: z.string().trim().min(1, t('wizard.validation.sprecSampleType', 'Select the SPREC sample type')),
+    sprecPrimaryContainer: z.string().trim().min(1, t('wizard.validation.sprecPrimaryContainer', 'Select the SPREC primary container')),
+    sprecPreCentrifugation: z.string().trim().min(1, t('wizard.validation.sprecPreCentrifugation', 'Select SPREC pre-centrifugation')),
+    sprecCentrifugation: z.string().trim().min(1, t('wizard.validation.sprecCentrifugation', 'Select SPREC centrifugation')),
+    sprecSecondCentrifugation: z.string().trim().min(1, t('wizard.validation.sprecSecondCentrifugation', 'Select SPREC second centrifugation')),
+    sprecPostCentrifugationDelay: z.string().trim().min(1, t('wizard.validation.sprecPostCentrifugationDelay', 'Select SPREC post-centrifugation delay')),
+    sprecLongTermStorage: z.string().trim().min(1, t('wizard.validation.sprecLongTermStorage', 'Select SPREC long-term storage')),
+    collectionInstitution: z
+      .string()
+      .trim()
+      .min(2, t('wizard.validation.collectionInstitution', 'Enter the source clinic / hospital'))
+      .max(LIMITS.GENERIC_TEXT_MAX_LENGTH, t('wizard.validation.collectionInstitutionTooLong', 'Source clinic / hospital is too long')),
+    collectionInstitutionAcronym: z.string().trim().optional().or(z.literal('')),
+    extractionProtocol: z
+      .string()
+      .optional()
+      .or(z.literal('')),
+    quantity: z
+      .string()
+      .trim()
+      .refine((value) => Number(value) > 0, t('wizard.validation.quantityGreaterThanZero', 'Enter a quantity greater than zero')),
+    collectionDateTime: z.string().optional().or(z.literal('')),
+    processingDateTime: z.string().optional().or(z.literal('')),
+    transportTemperature: z.string().optional().or(z.literal('')),
+    ischemiaTimeMinutes: z.string().optional().or(z.literal('')),
+    preAnalyticalUnknown: z.boolean(),
+    linkedProject: z
+      .string()
+      .trim()
+      .min(2, t('wizard.validation.linkedProject', 'Enter the linked project'))
+      .max(LIMITS.GENERIC_TEXT_MAX_LENGTH, t('wizard.validation.linkedProjectTooLong', 'Project name is too long')),
+  }).superRefine((data, ctx) => {
+    if (!data.preAnalyticalUnknown) {
+      const requiredSprecFields = [
+        'sprecPreCentrifugation',
+        'sprecCentrifugation',
+        'sprecSecondCentrifugation',
+        'sprecPostCentrifugationDelay',
+      ];
+
+      requiredSprecFields.forEach((fieldName) => {
+        if (!String(data[fieldName] || '').trim()) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [fieldName],
+            message: t('wizard.validation.selectValidSprec', 'Select a valid SPREC value'),
+          });
+        }
+      });
+    }
+  });
+}
+
+function createClinicalStepSchema(t, clinicalItems = []) {
+  return z.object({
+    isHealthyControl: z.boolean(),
+    diagnosisCidId: z.string().trim().optional().or(z.literal('')),
+    diagnosisCidCode: z.string().trim().optional().or(z.literal('')),
+    diagnosisOrphaCode: z.string().trim().optional().or(z.literal('')),
+    diagnosisOmimCode: z.string().trim().optional().or(z.literal('')),
+    diagnosisCidDescription: z.string().trim().optional().or(z.literal('')),
+    diagnosisDefinition: z.string().trim().optional().or(z.literal('')),
+    bloodPressure: z.string().trim().max(30, t('wizard.validation.bloodPressureTooLong', 'Blood pressure is too long')).optional().or(z.literal('')),
+    clinicalObservations: z.string().trim().max(LIMITS.GENERIC_TEXT_MAX_LENGTH, t('wizard.validation.clinicalNotesTooLong', 'Clinical notes are too long')).optional().or(z.literal('')),
+    selectedConsentTemplateId: z.string().trim().optional().or(z.literal('')),
+    charlsonConditions: z.array(z.string()).optional(),
+    diseasePhenotypes: z.array(z.any()).optional(),
+    diseaseBiomarkers: z.array(z.any()).optional(),
+    biomarkers_values: z.record(z.string()).optional(),
+    treatmentStatus: z.string().trim().optional().or(z.literal('')),
+    medicationName: z.string().trim().max(180, t('wizard.validation.medicationNameTooLong', 'Medication name is too long')).optional().or(z.literal('')),
+    medicationCode: z.string().trim().max(80, t('wizard.validation.medicationCodeTooLong', 'Medication code is too long')).optional().or(z.literal('')),
+    medicationDrugClass: z.string().trim().max(120, t('wizard.validation.medicationClassTooLong', 'Drug class is too long')).optional().or(z.literal('')),
+    medicationSearchQuery: z.string().trim().max(180, t('wizard.validation.medicationSearchTooLong', 'Medication search term is too long')).optional().or(z.literal('')),
+    lastDoseDate: z.string().trim().optional().or(z.literal('')),
+    washoutStartDate: z.string().trim().optional().or(z.literal('')),
+    washoutEndDate: z.string().trim().optional().or(z.literal('')),
+    ...Object.fromEntries((Array.isArray(clinicalItems) ? clinicalItems : []).map((item) => [getDictionarySlug(item), z.boolean()])),
+  }).superRefine((data, ctx) => {
+    if (!data.isHealthyControl && !String(data.diagnosisCidId || '').trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['diagnosisCidId'],
+        message: t('wizard.validation.selectDiagnosis', 'Select the disease / sample diagnosis'),
+      });
+    }
+
+    if (!data.isHealthyControl) {
+      const hasDiagnosisCode = [data.diagnosisCidId, data.diagnosisCidCode, data.diagnosisOrphaCode].some((value) => String(value || '').trim().length > 0);
+      if (!hasDiagnosisCode) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['diagnosisCidId'],
+          message: t('wizard.validation.requireCidOrOrpha', 'Disease search must fill ICD-10 or ORPHA'),
+        });
+      }
+
+      if (!String(data.treatmentStatus || '').trim()) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['treatmentStatus'],
+          message: t('wizard.validation.treatmentStatusRequired', 'Treatment status is required for clinical samples (MIABIS).'),
+        });
+      }
+
+      if (['TREATED', 'ON_TREATMENT'].includes(String(data.treatmentStatus || '').trim().toUpperCase())) {
+        if (!String(data.medicationName || data.medicationSearchQuery || '').trim()) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['medicationName'],
+            message: t('wizard.validation.medicationRequiredWhenTreated', 'Provide medication when status is On treatment.'),
+          });
+        }
+        if (!String(data.lastDoseDate || '').trim()) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['lastDoseDate'],
+            message: t('wizard.validation.lastDoseRequiredWhenTreated', 'Provide last dose date when status is On treatment.'),
+          });
+        }
+      }
+    }
+  });
+}
+
+function createBiomarkerStepSchema(biomarkerItems = []) {
+  return z.object(
+    Object.fromEntries((Array.isArray(biomarkerItems) ? biomarkerItems : []).map((item) => [
+      getDictionarySlug(item),
+      z
+        .string()
+        .trim()
+        .refine((value) => value === '' || !Number.isNaN(Number(value.replace(',', '.'))), 'Informe um valor numérico'),
+    ]))
+  );
+}
+
+function getStepError(error) {
+  return error?.issues?.[0]?.message || '';
+}
+
+function getFieldError(validation, fieldName) {
+  return validation?.error?.issues?.find((issue) => issue.path?.[0] === fieldName)?.message || '';
+}
+
+function digitsOnly(value) {
+  return String(value || '').replace(/\D/g, '');
+}
+
+function formatBirthDateInput(value) {
+  const digits = digitsOnly(value).slice(0, 8);
+  if (digits.length <= 2) return digits;
+  if (digits.length <= 4) return `${digits.slice(0, 2)}/${digits.slice(2)}`;
+  return `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`;
+}
+
+function formatCpfInput(value) {
+  const digits = digitsOnly(value).slice(0, 11);
+  if (digits.length <= 3) return digits;
+  if (digits.length <= 6) return `${digits.slice(0, 3)}.${digits.slice(3)}`;
+  if (digits.length <= 9) return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6)}`;
+  return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6, 9)}-${digits.slice(9)}`;
+}
+
+function normalizeEmailInput(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function normalizeBirthDateForPayload(value) {
+  const digits = digitsOnly(value);
+  if (digits.length !== 8) {
+    return String(value || '').trim();
+  }
+
+  const day = digits.slice(0, 2);
+  const month = digits.slice(2, 4);
+  const year = digits.slice(4, 8);
+  return `${year}-${month}-${day}T00:00:00.000Z`;
+}
+
+function buildPenaltyLog(qualityAssessment) {
+  const log = [];
+  if (Number(qualityAssessment?.penaltyCriticalFailure || 0) > 0) {
+    log.push(`metadata_critica_ausente:+${qualityAssessment.penaltyCriticalFailure}`);
+  }
+  if (Number(qualityAssessment?.penaltyIschemia || 0) > 0) {
+    log.push(`isquemia:+${qualityAssessment.penaltyIschemia}`);
+  }
+  if (Number(qualityAssessment?.penaltyTemperature || 0) > 0) {
+    log.push(`temperatura:+${qualityAssessment.penaltyTemperature}`);
+  }
+  if (Number(qualityAssessment?.penaltyProtocolAlert || 0) > 0) {
+    log.push(`protocolo_alta_rotacao:+${qualityAssessment.penaltyProtocolAlert}`);
+  }
+  if (qualityAssessment?.forcedQuarantine) {
+    log.push('quarentena_forcada:true');
+  }
+  return log;
+}
+
+function buildSampleIntegrityInput(formData, qualityAssessment, penaltyLog) {
+  return {
+    patient_identity: {
+      patient_id: String(formData.patientID || '').trim(),
+      patient_name: String(formData.patientName || '').trim(),
+    },
+    clinical_data: {
+      orphaCode: String(formData.diagnosisOrphaCode || '').trim(),
+      omimCode: String(formData.diagnosisOmimCode || '').trim(),
+      cid: String(formData.diagnosisCidCode || '').trim(),
+      phenotypes: Array.isArray(formData.diseasePhenotypes) ? formData.diseasePhenotypes : [],
+      charlsonComorbidities: Array.isArray(formData.charlsonConditions) ? formData.charlsonConditions : [],
+      biomarkers_values: formData.biomarkers_values && typeof formData.biomarkers_values === 'object' ? formData.biomarkers_values : {},
+    },
+    sprec: {
+      matrixType: String(formData.sprecMatrixType || '').trim(),
+      sampleType: String(formData.sprecSampleType || '').trim(),
+      primaryContainer: String(formData.sprecPrimaryContainer || '').trim(),
+      preCentrifugation: String(formData.sprecPreCentrifugation || '').trim(),
+      centrifugation: String(formData.sprecCentrifugation || '').trim(),
+      secondCentrifugation: String(formData.sprecSecondCentrifugation || '').trim(),
+      postCentrifugationDelay: String(formData.sprecPostCentrifugationDelay || '').trim(),
+      longTermStorage: String(formData.sprecLongTermStorage || '').trim(),
+      quality_score: String(qualityAssessment?.score ?? ''),
+      quality_category: String(qualityAssessment?.category || '').trim(),
+      penalty_log: penaltyLog,
+    },
+    pharmacology_data: {
+      treatment_status: String(formData.treatmentStatus || '').trim(),
+      drug_name: String(formData.medicationName || formData.medicationSearchQuery || '').trim(),
+      atc_code: String(formData.medicationCode || '').trim().replace(/^ATC:/i, '').toUpperCase(),
+      atc_level_1: String(formData.medicationDrugClass || '').trim().toUpperCase(),
+      // Legacy aliases for backward compatibility.
+      medication_name: String(formData.medicationName || formData.medicationSearchQuery || '').trim(),
+      medication_code: String(formData.medicationCode || '').trim().replace(/^ATC:/i, '').toUpperCase(),
+      medication_drug_class: String(formData.medicationDrugClass || '').trim().toUpperCase(),
+      last_dose_date: String(formData.lastDoseDate || '').trim(),
+      washout_start_date: String(formData.washoutStartDate || '').trim(),
+      washout_end_date: String(formData.washoutEndDate || '').trim(),
+    },
+  };
+}
+
+function formatHashPreview(hash) {
+  const value = String(hash || '').trim();
+  if (!value) {
+    return 'Aguardando composição dos campos para gerar a assinatura';
+  }
+  if (value.length <= 18) {
+    return `0x${value}`;
+  }
+  return `0x${value.slice(0, 10)}...${value.slice(-8)}`;
+}
+
+function buildSampleLabelCode({ date = new Date(), patientID = '', sampleType = '' }) {
+  const normalizedDate = `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, '0')}${String(date.getDate()).padStart(2, '0')}`;
+  const normalizedPatient = String(patientID || '').trim() || 'NOID';
+  const normalizedSampleType = String(sampleType || '').trim().replace(/\s+/g, '_').toUpperCase() || 'SAMPLE';
+  return `${normalizedDate}-${normalizedPatient}-${normalizedSampleType}`;
+}
+
+function buildSubmissionPayload(formData, clinicalComorbidityItems = [], biomarkerItems = [], sampleMerkleRoot = null, penaltyLog = []) {
+  const now = new Date().toISOString();
+  const sprecMatrixType = String(formData.sprecMatrixType || 'fluid').trim().toLowerCase() === 'solid' ? 'solid' : 'fluid';
+  const sampleUnit = getSampleQuantityUnit(formData.sprecSampleType, SPREC_FLUID_DICTIONARY.sampleType.options);
+  const qualityAssessment = calculateQualityScore({
+    matrixType: sprecMatrixType,
+    sampleType: formData.sprecSampleType,
+    primaryContainer: formData.sprecPrimaryContainer,
+    preCentrifugation: formData.sprecPreCentrifugation,
+    centrifugation: formData.sprecCentrifugation,
+    secondCentrifugation: formData.sprecSecondCentrifugation,
+    postCentrifugationDelay: formData.sprecPostCentrifugationDelay,
+    longTermStorage: formData.sprecLongTermStorage,
+    preAnalyticalUnknown: formData.preAnalyticalUnknown,
+  });
+  const sprecCode = buildSprecCode(formData);
+  const diagnosis = formData.isHealthyControl ? null : {
+    diagnosis_name: String(formData.diagnosisCidDescription || formData.diagnosisDefinition || '').trim() || null,
+    icd_code: String(formData.diagnosisCidCode || '').trim() || null,
+    orpha_code: String(formData.diagnosisOrphaCode || '').trim() || null,
+    omim_code: String(formData.diagnosisOmimCode || '').trim() || null,
+    definition: String(formData.diagnosisDefinition || '').trim() || null,
+    icdCode: String(formData.diagnosisCidCode || '').trim() || null,
+    orphaCode: String(formData.diagnosisOrphaCode || '').trim() || null,
+    omimCode: String(formData.diagnosisOmimCode || '').trim() || null,
+  };
+  const biomarkers = (Array.isArray(biomarkerItems) ? biomarkerItems : []).flatMap((biomarker) => {
+    const biomarkerSlug = getDictionarySlug(biomarker);
+    const rawValue = String(formData[biomarkerSlug] || '').trim();
+
+    if (rawValue === '') {
+      return [];
+    }
+
+    const value = Number(rawValue.replace(',', '.'));
+    if (Number.isNaN(value)) {
+      return [];
+    }
+
+    return [{
+      biomarkerType: biomarkerSlug,
+      value,
+      unit: biomarker.unit || biomarker.measurementUnit || '',
+      collectedAt: now,
+      source: 'patient',
+      status: 'final',
+      eventType: 'manual',
+    }];
+  });
+
+  const diseaseBiomarkers = (Array.isArray(formData.diseaseBiomarkers) ? formData.diseaseBiomarkers : []).flatMap((biomarker) => {
+    const biomarkerCode = String(biomarker?.code || '').trim();
+    const rawValue = String(
+      formData?.biomarkers_values?.[biomarkerCode]
+      || formData?.biomarkers_values?.[String(biomarker?.label || '').trim()]
+      || biomarker?.value
+      || ''
+    ).trim();
+
+    if (!biomarkerCode || !rawValue) {
+      return [];
+    }
+
+    const value = Number(rawValue.replace(',', '.'));
+    if (Number.isNaN(value)) {
+      return [];
+    }
+
+    return [{
+      biomarkerType: biomarkerCode,
+      biomarkerLabel: String(biomarker?.label || '').trim() || biomarkerCode,
+      value,
+      unit: String(biomarker?.unit || '').trim(),
+      collectedAt: now,
+      source: 'disease_cascade',
+      status: 'final',
+      eventType: 'semantic',
+    }];
+  });
+
+  const clinical = {
+    comorbidities: (Array.isArray(clinicalComorbidityItems) ? clinicalComorbidityItems : []).reduce((accumulator, option) => {
+      const field = getDictionarySlug(option);
+      accumulator[field] = Boolean(formData[field]);
+      return accumulator;
+    }, {}),
+    charlsonConditions: Array.isArray(formData.charlsonConditions) ? formData.charlsonConditions : [],
+    charlsonScore: calculateCharlsonScore(formData.charlsonConditions),
+    bloodPressure: String(formData.bloodPressure || '').trim(),
+    clinicalObservations: String(formData.clinicalObservations || '').trim(),
+    diseasePhenotypes: Array.isArray(formData.diseasePhenotypes) ? formData.diseasePhenotypes : [],
+    diseaseBiomarkers: Array.isArray(formData.diseaseBiomarkers) ? formData.diseaseBiomarkers : [],
+    biomarkersValues: formData.biomarkers_values && typeof formData.biomarkers_values === 'object' ? formData.biomarkers_values : {},
+    diagnosisDefinition: String(formData.diagnosisDefinition || '').trim(),
+    pharmacologyData: {
+      treatment_status: String(formData.treatmentStatus || '').trim(),
+      drug_name: String(formData.medicationName || formData.medicationSearchQuery || '').trim(),
+      atc_code: String(formData.medicationCode || '').trim().replace(/^ATC:/i, '').toUpperCase(),
+      atc_level_1: String(formData.medicationDrugClass || '').trim().toUpperCase(),
+      medication_name: String(formData.medicationName || formData.medicationSearchQuery || '').trim(),
+      medication_code: String(formData.medicationCode || '').trim().replace(/^ATC:/i, '').toUpperCase(),
+      medication_drug_class: String(formData.medicationDrugClass || '').trim().toUpperCase(),
+      last_dose_date: String(formData.lastDoseDate || '').trim(),
+      washout_start_date: String(formData.washoutStartDate || '').trim(),
+      washout_end_date: String(formData.washoutEndDate || '').trim(),
+    },
+  };
+
+  return {
+    demographic: {
+      patientName: formData.patientName.trim(),
+      birthDate: normalizeBirthDateForPayload(formData.birthDate),
+      email: normalizeEmailInput(formData.email),
+      isDeceased: Boolean(formData.isDeceased),
+      isHealthyControl: Boolean(formData.isHealthyControl),
+      is_healthy_control: Boolean(formData.isHealthyControl),
+      phone: digitsOnly(formData.phone),
+      cpf: digitsOnly(formData.cpf),
+      prontuario: String(formData.prontuario || '').trim(),
+    },
+    diagnosis,
+    representativeLegal: formData.isDeceased ? {
+      name: String(formData.representativeName || '').trim(),
+      email: normalizeEmailInput(formData.representativeEmail),
+      cpf: normalizeDocumentValue(formData.representativeCpf),
+    } : null,
+    sample: {
+      sampleType: formData.sprecSampleType || formData.sampleType,
+      sampleOrigin: String(formData.sampleOrigin || formData.sprecSampleType || '').trim(),
+      collectionInstitution: formData.collectionInstitution.trim(),
+      collectionInstitutionAcronym: formData.collectionInstitutionAcronym.trim() || generateAcronym(formData.collectionInstitution),
+      extractionProtocol: String(formData.extractionProtocol || formData.sprecPrimaryContainer || '').trim(),
+      barcode: undefined,
+      quantity: Number(formData.quantity),
+      unit: sampleUnit,
+      quality: qualityAssessment.category,
+      quality_score: qualityAssessment.score,
+      quality_category: qualityAssessment.category,
+      penalty_log: penaltyLog,
+      sprec_code: sprecCode || null,
+      sprec_matrix_type: sprecMatrixType,
+      selected_tcle: String(formData.selectedConsentTemplateId || '').trim(),
+      sprec: {
+        matrixType: sprecMatrixType,
+        sampleType: formData.sprecSampleType || null,
+        primaryContainer: formData.sprecPrimaryContainer || null,
+        preCentrifugation: formData.sprecPreCentrifugation || null,
+        centrifugation: formData.sprecCentrifugation || null,
+        secondCentrifugation: formData.sprecSecondCentrifugation || null,
+        postCentrifugationDelay: formData.sprecPostCentrifugationDelay || null,
+        longTermStorage: formData.sprecLongTermStorage || null,
+      },
+      preAnalytical: {
+        collectionDateTime: formData.preAnalyticalUnknown ? null : String(formData.collectionDateTime || '').trim() || null,
+        processingDateTime: formData.preAnalyticalUnknown ? null : String(formData.processingDateTime || '').trim() || null,
+        transportTemperature: formData.preAnalyticalUnknown ? null : String(formData.transportTemperature || '').trim() || null,
+        ischemiaTimeMinutes: formData.preAnalyticalUnknown
+          ? null
+          : (Number.isNaN(Number(formData.ischemiaTimeMinutes)) ? null : Number(formData.ischemiaTimeMinutes)),
+        unknown: Boolean(formData.preAnalyticalUnknown),
+      },
+      linkedProject: formData.linkedProject.trim(),
+      specimenCollection: {
+        institution: formData.collectionInstitution.trim(),
+        acronym: formData.collectionInstitutionAcronym.trim() || generateAcronym(formData.collectionInstitution),
+      },
+      registerDate: now,
+      registrationDate: now,
+      currentStatus: 'Available',
+      isRareDisease: false,
+      merkle_root: sampleMerkleRoot,
+    },
+    clinical,
+    consent: {
+      tcle_template_id: formData.selectedConsentTemplateId,
+      consent_granted: true,
+      consent_accepted_at: now,
+    },
+    integrity: {
+      merkle_root: sampleMerkleRoot,
+      penalty_log: penaltyLog,
+      selected_tcle: String(formData.selectedConsentTemplateId || '').trim(),
+      diagnosis_orpha_code: String(formData.diagnosisOrphaCode || '').trim(),
+      diagnosis_omim_code: String(formData.diagnosisOmimCode || '').trim(),
+      diagnosis_definition: String(formData.diagnosisDefinition || '').trim(),
+      charlson_conditions: Array.isArray(formData.charlsonConditions) ? formData.charlsonConditions : [],
+      charlson_score: calculateCharlsonScore(formData.charlsonConditions),
+      disease_phenotypes: Array.isArray(formData.diseasePhenotypes) ? formData.diseasePhenotypes : [],
+      disease_biomarkers: Array.isArray(formData.diseaseBiomarkers) ? formData.diseaseBiomarkers : [],
+      biomarkers_values: formData.biomarkers_values && typeof formData.biomarkers_values === 'object' ? formData.biomarkers_values : {},
+      pharmacology_data: {
+        treatment_status: String(formData.treatmentStatus || '').trim(),
+        drug_name: String(formData.medicationName || formData.medicationSearchQuery || '').trim(),
+        atc_code: String(formData.medicationCode || '').trim().replace(/^ATC:/i, '').toUpperCase(),
+        atc_level_1: String(formData.medicationDrugClass || '').trim().toUpperCase(),
+        medication_name: String(formData.medicationName || formData.medicationSearchQuery || '').trim(),
+        medication_code: String(formData.medicationCode || '').trim().replace(/^ATC:/i, '').toUpperCase(),
+        medication_drug_class: String(formData.medicationDrugClass || '').trim().toUpperCase(),
+        last_dose_date: String(formData.lastDoseDate || '').trim(),
+        washout_start_date: String(formData.washoutStartDate || '').trim(),
+        washout_end_date: String(formData.washoutEndDate || '').trim(),
+      },
+    },
+    biomarkers,
+    diseaseBiomarkers,
+  };
+}
+
+export default function ClinicalIntakeWizard(props) {
+  const { t } = useLanguage();
+  const {
+    onStepChange,
+    onValidityChange,
+    submitLabel = t('intake.finalizeRegistration', 'Finalizar Cadastro Integrado'),
+    className = '',
+    dictionaries = {},
+    dictionariesLoading = true,
+    dictionariesError = '',
+  } = props;
+  const { loadCascadeByDisease } = useSemanticCascade();
+  const [activeStep, setActiveStep] = useState(0);
+  const [formData, setFormData] = useState(initialState);
+  const [touched, setTouched] = useState(false);
+  const [step1Attempted, setStep1Attempted] = useState(false);
+  const [submitError, setSubmitError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [consentTemplates, setConsentTemplates] = useState([]);
+  const [consentTemplatesLoading, setConsentTemplatesLoading] = useState(false);
+  const [consentTemplatesError, setConsentTemplatesError] = useState('');
+  const [diagnosisQuery, setDiagnosisQuery] = useState('');
+  const [diagnosisResults, setDiagnosisResults] = useState([]);
+  const [diagnosisLoading, setDiagnosisLoading] = useState(false);
+  const [diagnosisError, setDiagnosisError] = useState('');
+  const [diagnosisOpen, setDiagnosisOpen] = useState(false);
+  const [patientMatchInfo, setPatientMatchInfo] = useState(null);
+  const [patientMatchLoading, setPatientMatchLoading] = useState(false);
+  const [diseaseProfile, setDiseaseProfile] = useState(null);
+  const [medicationResults, setMedicationResults] = useState([]);
+  const [medicationLoading, setMedicationLoading] = useState(false);
+  const [medicationError, setMedicationError] = useState('');
+  const [isConsentPreviewOpen, setIsConsentPreviewOpen] = useState(false);
+  const [isBiomarkerRequestOpen, setIsBiomarkerRequestOpen] = useState(false);
+  const [isBiomarkerRequestSubmitting, setIsBiomarkerRequestSubmitting] = useState(false);
+  const [biomarkerRequestForm, setBiomarkerRequestForm] = useState({
+    biomarkerName: '',
+    measurementUnit: '',
+    justification: '',
+  });
+  const [biomarkerRequestError, setBiomarkerRequestError] = useState('');
+  const [sampleMerkleRoot, setSampleMerkleRoot] = useState('');
+  const [sampleIntegrityValid, setSampleIntegrityValid] = useState(true);
+  const [isSignatureChecking, setIsSignatureChecking] = useState(false);
+  const [signatureFeedback, setSignatureFeedback] = useState('');
+  const [sampleLabel, setSampleLabel] = useState(null);
+
+  const stepMeta = useMemo(() => ([
+    {
+      ...STEP_META_BASE[0],
+      label: t('wizard.steps.step1', 'Passo 1'),
+      title: t('wizard.sections.demographic', 'Dados Demográficos'),
+      helper: t('wizard.steps.step1Helper', 'Valide o paciente antes de seguir para a amostra.'),
+    },
+    {
+      ...STEP_META_BASE[1],
+      label: t('wizard.steps.step2', 'Passo 2'),
+      title: t('wizard.sections.preAnalyticalSample', 'Amostra Pré-analítica'),
+      helper: t('wizard.steps.step2Helper', 'Selecione os ids canônicos de origem, extração e qualidade.'),
+    },
+    {
+      ...STEP_META_BASE[2],
+      label: t('wizard.steps.step3', 'Passo 3'),
+      title: t('wizard.steps.step3Title', 'Biomarcadores & Clínica'),
+      helper: t('wizard.steps.step3Helper', 'Inclua os biomarcadores para concluir o cadastro integrado.'),
+    },
+  ]), [t]);
+
+  const sampleTypeDefinitions = useMemo(() => (Array.isArray(dictionaries.sampleTypes) ? dictionaries.sampleTypes : []), [dictionaries.sampleTypes]);
+  const anatomicalOriginDefinitions = useMemo(() => (Array.isArray(dictionaries.anatomicalOrigins) ? dictionaries.anatomicalOrigins : []), [dictionaries.anatomicalOrigins]);
+  const extractionProtocolDefinitions = useMemo(() => (Array.isArray(dictionaries.extractionProtocols) ? dictionaries.extractionProtocols : []), [dictionaries.extractionProtocols]);
+  const clinicalComorbidityDefinitions = useMemo(() => (Array.isArray(dictionaries.clinicalComorbidities) ? dictionaries.clinicalComorbidities : []), [dictionaries.clinicalComorbidities]);
+  const biomarkerDefinitions = useMemo(() => (Array.isArray(dictionaries.biomarkers) ? dictionaries.biomarkers : []), [dictionaries.biomarkers]);
+
+  const sampleTypeOptions = useMemo(() => mapDictionaryOptions(sampleTypeDefinitions), [sampleTypeDefinitions]);
+  const sampleOriginOptions = useMemo(() => mapDictionaryOptions(anatomicalOriginDefinitions), [anatomicalOriginDefinitions]);
+  const extractionProtocolOptions = useMemo(() => mapDictionaryOptions(extractionProtocolDefinitions), [extractionProtocolDefinitions]);
+  const clinicalComorbidityOptions = useMemo(() => mapDictionaryOptions(clinicalComorbidityDefinitions), [clinicalComorbidityDefinitions]);
+  const sprecMatrixType = useMemo(
+    () => (String(formData.sprecMatrixType || 'fluid').trim().toLowerCase() === 'solid' ? 'solid' : 'fluid'),
+    [formData.sprecMatrixType]
+  );
+  const activeSprecDictionary = useMemo(
+    () => (sprecMatrixType === 'solid' ? SPREC_SOLID_DICTIONARY : SPREC_FLUID_DICTIONARY),
+    [sprecMatrixType]
+  );
+  const sprecSampleTypeOptions = useMemo(() => activeSprecDictionary.sampleType.options, [activeSprecDictionary]);
+  const sprecPrimaryContainerOptions = useMemo(() => activeSprecDictionary.primaryContainer.options, [activeSprecDictionary]);
+  const sprecPreCentrifugationOptions = useMemo(() => activeSprecDictionary.preCentrifugation.options, [activeSprecDictionary]);
+  const sprecCentrifugationOptions = useMemo(() => activeSprecDictionary.centrifugation.options, [activeSprecDictionary]);
+  const sprecSecondCentrifugationOptions = useMemo(() => activeSprecDictionary.secondCentrifugation.options, [activeSprecDictionary]);
+  const sprecPostCentrifugationDelayOptions = useMemo(() => activeSprecDictionary.postCentrifugationDelay.options, [activeSprecDictionary]);
+  const sprecLongTermStorageOptions = useMemo(() => activeSprecDictionary.longTermStorage.options, [activeSprecDictionary]);
+  const sprecAxis1Label = useMemo(() => `${t('wizard.labels.axis', 'Axis')} 1 - ${activeSprecDictionary.sampleType.label}`, [activeSprecDictionary, t]);
+  const sprecAxis2Label = useMemo(() => `${t('wizard.labels.axis', 'Axis')} 2 - ${activeSprecDictionary.primaryContainer.label}`, [activeSprecDictionary, t]);
+  const sprecAxis3Label = useMemo(() => `${t('wizard.labels.axis', 'Axis')} 3 - ${activeSprecDictionary.preCentrifugation.label}`, [activeSprecDictionary, t]);
+  const sprecAxis4Label = useMemo(() => `${t('wizard.labels.axis', 'Axis')} 4 - ${activeSprecDictionary.centrifugation.label}`, [activeSprecDictionary, t]);
+  const sprecAxis5Label = useMemo(() => `${t('wizard.labels.axis', 'Axis')} 5 - ${activeSprecDictionary.secondCentrifugation.label}`, [activeSprecDictionary, t]);
+  const sprecAxis6Label = useMemo(() => `${t('wizard.labels.axis', 'Axis')} 6 - ${activeSprecDictionary.postCentrifugationDelay.label}`, [activeSprecDictionary, t]);
+  const sprecAxis7Label = useMemo(() => `${t('wizard.labels.axis', 'Axis')} 7 - ${activeSprecDictionary.longTermStorage.label}`, [activeSprecDictionary, t]);
+  const quantityUnit = useMemo(() => getSampleQuantityUnit(formData.sprecSampleType, sprecSampleTypeOptions), [formData.sprecSampleType, sprecSampleTypeOptions]);
+  const sprecCode = useMemo(() => buildSprecCode(formData), [formData]);
+  const qualityAssessment = useMemo(
+    () => calculateQualityScore({
+      matrixType: sprecMatrixType,
+      sampleType: formData.sprecSampleType,
+      primaryContainer: formData.sprecPrimaryContainer,
+      preCentrifugation: formData.sprecPreCentrifugation,
+      centrifugation: formData.sprecCentrifugation,
+      secondCentrifugation: formData.sprecSecondCentrifugation,
+      postCentrifugationDelay: formData.sprecPostCentrifugationDelay,
+      longTermStorage: formData.sprecLongTermStorage,
+      preAnalyticalUnknown: formData.preAnalyticalUnknown,
+    }),
+    [
+      sprecMatrixType,
+      formData.sprecSampleType,
+      formData.sprecPrimaryContainer,
+      formData.sprecPreCentrifugation,
+      formData.sprecCentrifugation,
+      formData.sprecSecondCentrifugation,
+      formData.sprecPostCentrifugationDelay,
+      formData.sprecLongTermStorage,
+      formData.preAnalyticalUnknown,
+    ]
+  );
+  const shouldShowProtocolAlert = useMemo(() => {
+    const code = String(formData.sprecCentrifugation || '').trim().toUpperCase();
+    return code === 'I' || code === 'J';
+  }, [formData.sprecCentrifugation]);
+  const penaltyLog = useMemo(() => buildPenaltyLog(qualityAssessment), [qualityAssessment]);
+  const charlsonScore = useMemo(() => calculateCharlsonScore(formData.charlsonConditions), [formData.charlsonConditions]);
+  const diseasePhenotypeSuggestions = useMemo(
+    () => (Array.isArray(formData.diseasePhenotypes) ? formData.diseasePhenotypes : []).map(normalizeDiseasePhenotype),
+    [formData.diseasePhenotypes]
+  );
+  const diseaseBiomarkerSuggestions = useMemo(
+    () => (Array.isArray(formData.diseaseBiomarkers) ? formData.diseaseBiomarkers : []).map(normalizeDiseaseBiomarker),
+    [formData.diseaseBiomarkers]
+  );
+  const hasSelectedDisease = useMemo(() => {
+    return [
+      formData.diagnosisCidId,
+      formData.diagnosisCidCode,
+      formData.diagnosisOrphaCode,
+      diagnosisQuery,
+    ].some((value) => String(value || '').trim().length > 0);
+  }, [formData.diagnosisCidId, formData.diagnosisCidCode, formData.diagnosisOrphaCode, diagnosisQuery]);
+  const qualityTheme = useMemo(() => getQualityTheme(qualityAssessment.category, t), [qualityAssessment.category, t]);
+  const qualityProgress = useMemo(() => Math.max(0, Math.min(100, Number(qualityAssessment.score || 0))), [qualityAssessment.score]);
+  const isFabryCase = useMemo(() => String(formData.diagnosisOrphaCode || '').replace(/\D/g, '') === '324', [formData.diagnosisOrphaCode]);
+
+  const patientStepSchemaDynamic = useMemo(() => createPatientStepSchema(t), [t]);
+  const sampleStepSchemaDynamic = useMemo(() => createSampleStepSchema(t), [t]);
+
+  const clinicalStepSchemaDynamic = useMemo(
+    () => createClinicalStepSchema(t, clinicalComorbidityDefinitions),
+    [clinicalComorbidityDefinitions, t]
+  );
+
+  const biomarkerStepSchemaDynamic = useMemo(
+    () => createBiomarkerStepSchema(biomarkerDefinitions),
+    [biomarkerDefinitions]
+  );
+
+  const patientValidation = useMemo(() => patientStepSchemaDynamic.safeParse(formData), [formData, patientStepSchemaDynamic]);
+  const sampleValidation = useMemo(() => sampleStepSchemaDynamic.safeParse(formData), [formData, sampleStepSchemaDynamic]);
+  const clinicalValidation = useMemo(() => clinicalStepSchemaDynamic.safeParse(formData), [formData, clinicalStepSchemaDynamic]);
+  const biomarkerValidation = useMemo(() => biomarkerStepSchemaDynamic.safeParse(formData), [formData, biomarkerStepSchemaDynamic]);
+  const consentStepSchemaDynamic = useMemo(() => createConsentStepSchema(t), [t]);
+  const consentValidation = useMemo(() => consentStepSchemaDynamic.safeParse(formData), [formData, consentStepSchemaDynamic]);
+
+  const showPatientErrors = step1Attempted || touched;
+  const showSampleErrors = touched;
+  const showBiomarkerErrors = touched;
+  const showConsentErrors = touched;
+
+  const isStep1Valid = patientValidation.success;
+  const dictionariesReady = !dictionariesLoading && !dictionariesError && clinicalComorbidityDefinitions.length > 0 && biomarkerDefinitions.length > 0;
+
+  const isStep2Valid = dictionariesReady && sampleValidation.success;
+  const isStep3Valid = dictionariesReady && clinicalValidation.success && biomarkerValidation.success && consentValidation.success && consentTemplates.length > 0;
+
+  const selectedConsentTemplate = useMemo(() => {
+    return consentTemplates.find((template) => template._id === formData.selectedConsentTemplateId) || null;
+  }, [consentTemplates, formData.selectedConsentTemplateId]);
+
+  const consentPreview = useMemo(() => buildConsentPreview(selectedConsentTemplate, formData, t), [selectedConsentTemplate, formData, t]);
+  const biomarkerRequestSchemaDynamic = useMemo(() => createBiomarkerRequestSchema(t), [t]);
+  const biomarkerRequestValidation = useMemo(
+    () => biomarkerRequestSchemaDynamic.safeParse(biomarkerRequestForm),
+    [biomarkerRequestForm, biomarkerRequestSchemaDynamic]
+  );
+
+  const biomarkerRequestValidationError = biomarkerRequestValidation.success ? '' : getFirstSchemaError(biomarkerRequestValidation.error);
+  const selectedDiagnosis = useMemo(
+    () => ({
+      id: String(formData.diagnosisCidId || '').trim(),
+      code: String(formData.diagnosisCidCode || '').trim(),
+      orphaCode: String(formData.diagnosisOrphaCode || '').trim(),
+      omimCode: String(formData.diagnosisOmimCode || '').trim(),
+      definition: String(formData.diagnosisDefinition || '').trim(),
+      displayName: String(formData.diagnosisCidDescription || '').trim(),
+    }),
+    [formData.diagnosisCidId, formData.diagnosisCidCode, formData.diagnosisOrphaCode, formData.diagnosisOmimCode, formData.diagnosisDefinition, formData.diagnosisCidDescription]
+  );
+
+  useEffect(() => {
+    const patientName = String(formData.patientName || '').trim();
+    const birthDate = String(formData.birthDate || '').trim();
+
+    if (patientName.length < 3 || digitsOnly(birthDate).length !== 8) {
+      setPatientMatchInfo(null);
+      setPatientMatchLoading(false);
+      return;
+    }
+
+    let active = true;
+    const timer = setTimeout(async () => {
+      try {
+        setPatientMatchLoading(true);
+        const response = await apiClient.get('/intake-wizard/patient-match', {
+          params: {
+            patientName,
+            birthDate: normalizeBirthDateForPayload(birthDate),
+          },
+          suppressErrorToast: true,
+        });
+
+        if (!active) {
+          return;
+        }
+
+        setPatientMatchInfo(response?.data?.matched ? response?.data : null);
+      } catch (_) {
+        if (active) {
+          setPatientMatchInfo(null);
+        }
+      } finally {
+        if (active) {
+          setPatientMatchLoading(false);
+        }
+      }
+    }, 350);
+
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [formData.patientName, formData.birthDate]);
+
+  useEffect(() => {
+    let active = true;
+
+    const loadDiagnoses = async () => {
+      if (formData.isHealthyControl) {
+        setDiagnosisResults([]);
+        setDiagnosisLoading(false);
+        setDiagnosisError('');
+        return;
+      }
+
+      const term = String(diagnosisQuery || '').trim();
+      if (term.length < 2) {
+        setDiagnosisResults([]);
+        setDiagnosisLoading(false);
+        setDiagnosisError('');
+        return;
+      }
+
+      setDiagnosisLoading(true);
+      setDiagnosisError('');
+
+      try {
+        const requestParams = {
+          q: term,
+          limit: 40,
+        };
+        const terminologyRequest = apiClient.get('/terminologies', {
+          params: requestParams,
+          suppressErrorToast: true,
+        });
+
+        const orphanetRequests = DIAGNOSIS_SUPPORTED_LANGUAGES.map((lang) => apiClient.get('/orphanet/search', {
+          params: {
+            q: term,
+            lang,
+          },
+          suppressErrorToast: true,
+        }));
+
+        const [terminologyResponse, ...orphanetResponses] = await Promise.allSettled([terminologyRequest, ...orphanetRequests]);
+        const terminologyPayload = terminologyResponse.status === 'fulfilled'
+          ? (terminologyResponse.value?.data?.data ?? terminologyResponse.value?.data ?? [])
+          : [];
+        const orphanetPayload = orphanetResponses.flatMap((response) => {
+          if (response.status !== 'fulfilled') {
+            return [];
+          }
+          return response.value?.data?.data ?? response.value?.data ?? [];
+        });
+
+        const normalized = [
+          ...(Array.isArray(orphanetPayload) ? orphanetPayload : []),
+          ...(Array.isArray(terminologyPayload) ? terminologyPayload : []),
+        ]
+          .map((item) => normalizeCidOption(item))
+          .filter((item) => item.id || item.code || item.description || item.orphaCode);
+        const consolidated = consolidateDiagnosisCandidates(normalized);
+        const nextResults = filterAndRankDiagnosisResults(consolidated, term, 6);
+
+        if (!active) {
+          return;
+        }
+
+        setDiagnosisResults(nextResults);
+      } catch (error) {
+        if (!active) {
+          return;
+        }
+
+        setDiagnosisResults([]);
+        setDiagnosisError(error?.response?.data?.message || error?.response?.data?.error || error?.message || t('wizard.errors.loadDiseases', 'Não foi possível carregar as doenças.'));
+      } finally {
+        if (active) {
+          setDiagnosisLoading(false);
+        }
+      }
+    };
+
+    const timer = setTimeout(() => {
+      void loadDiagnoses();
+    }, 250);
+
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [diagnosisQuery, formData.isHealthyControl]);
+
+  useEffect(() => {
+    setFormData((current) => {
+      const next = { ...current };
+
+      clinicalComorbidityDefinitions.forEach((item) => {
+        const field = getDictionarySlug(item);
+        if (field && next[field] === undefined) {
+          next[field] = false;
+        }
+      });
+
+      biomarkerDefinitions.forEach((item) => {
+        const field = getDictionarySlug(item);
+        if (field && next[field] === undefined) {
+          next[field] = '';
+        }
+      });
+
+      if (next.isHealthyControl) {
+        next.diagnosisCidId = '';
+        next.diagnosisCidCode = '';
+        next.diagnosisOrphaCode = '';
+        next.diagnosisOmimCode = '';
+        next.diagnosisDefinition = '';
+        next.diagnosisCodesManualMode = false;
+        next.diagnosisCidDescription = '';
+        next.diseasePhenotypes = [];
+        next.diseaseBiomarkers = [];
+        next.biomarkers_values = {};
+      }
+
+      return next;
+    });
+  }, [clinicalComorbidityDefinitions, biomarkerDefinitions]);
+
+  useEffect(() => {
+    setFormData((previous) => {
+      const nextAcronym = generateAcronym(previous.collectionInstitution);
+      if (previous.collectionInstitutionAcronym === nextAcronym) {
+        return previous;
+      }
+
+      return {
+        ...previous,
+        collectionInstitutionAcronym: nextAcronym,
+      };
+    });
+  }, [formData.collectionInstitution]);
+
+  useEffect(() => {
+    setFormData((previous) => {
+      const next = { ...previous };
+      let hasChanges = false;
+
+      if (previous.preAnalyticalUnknown) {
+        const unknownValuesByField = {
+          sprecPreCentrifugation: resolveUnknownAxisCode(sprecPreCentrifugationOptions),
+          sprecCentrifugation: resolveUnknownAxisCode(sprecCentrifugationOptions),
+          sprecSecondCentrifugation: resolveUnknownAxisCode(sprecSecondCentrifugationOptions),
+          sprecPostCentrifugationDelay: resolveUnknownAxisCode(sprecPostCentrifugationDelayOptions),
+        };
+
+        Object.entries(unknownValuesByField).forEach(([fieldName, unknownValue]) => {
+          if (String(next[fieldName] || '').trim().toUpperCase() !== String(unknownValue || '').trim().toUpperCase()) {
+            next[fieldName] = unknownValue;
+            hasChanges = true;
+          }
+        });
+      }
+
+      const syncedSampleType = String(previous.sprecSampleType || '').trim();
+      if (previous.sampleType !== syncedSampleType) {
+        next.sampleType = syncedSampleType;
+        hasChanges = true;
+      }
+
+      if (previous.sprecCode !== sprecCode) {
+        next.sprecCode = sprecCode;
+        hasChanges = true;
+      }
+
+      const nextQualityScore = String(qualityAssessment.score);
+      if (String(previous.qualityScore || '') !== nextQualityScore) {
+        next.qualityScore = nextQualityScore;
+        hasChanges = true;
+      }
+
+      if (String(previous.qualityCategory || '') !== qualityAssessment.category) {
+        next.qualityCategory = qualityAssessment.category;
+        hasChanges = true;
+      }
+
+      if (String(previous.quality || '') !== qualityAssessment.category) {
+        next.quality = qualityAssessment.category;
+        hasChanges = true;
+      }
+
+      if (!hasChanges) {
+        return previous;
+      }
+
+      return next;
+    });
+  }, [formData.preAnalyticalUnknown, formData.sprecSampleType, sprecCode, qualityAssessment, sprecPreCentrifugationOptions, sprecCentrifugationOptions, sprecSecondCentrifugationOptions, sprecPostCentrifugationDelayOptions]);
+
+  useEffect(() => {
+    setFormData((previous) => {
+      if (!previous.preAnalyticalUnknown) {
+        if (previous.ischemiaTimeMinutes === '') {
+          return previous;
+        }
+
+        return {
+          ...previous,
+          ischemiaTimeMinutes: '',
+        };
+      }
+
+      if (previous.ischemiaTimeMinutes === 'Indeterminado') {
+        return previous;
+      }
+
+      return {
+        ...previous,
+        ischemiaTimeMinutes: 'Indeterminado',
+      };
+    });
+  }, [formData.preAnalyticalUnknown]);
+
+  useEffect(() => {
+    let active = true;
+
+    const recalculateMerkle = async () => {
+      try {
+        const integrityInput = buildSampleIntegrityInput(formData, qualityAssessment, penaltyLog);
+        const result = await buildSampleMerkleRoot(integrityInput);
+        if (!active) {
+          return;
+        }
+
+        setSampleMerkleRoot(result?.rootHash || '');
+        const isValid = await verifySampleIntegrity(integrityInput, result?.rootHash || '');
+        if (active) {
+          setSampleIntegrityValid(Boolean(isValid));
+        }
+      } catch (_) {
+        if (active) {
+          setSampleMerkleRoot('');
+          setSampleIntegrityValid(false);
+        }
+      }
+    };
+
+    void recalculateMerkle();
+
+    return () => {
+      active = false;
+    };
+  }, [
+    formData,
+    qualityAssessment,
+    penaltyLog,
+  ]);
+
+  useEffect(() => {
+    let active = true;
+
+    const loadConsentTemplate = async () => {
+      setConsentTemplatesLoading(true);
+      setConsentTemplatesError('');
+
+      try {
+        const response = await consentService.getTemplates();
+        const payload = response?.data?.data ?? response?.data ?? [];
+        const nextTemplates = Array.isArray(payload) ? payload : [];
+
+        if (!active) {
+          return;
+        }
+
+        setConsentTemplates(nextTemplates);
+        if (nextTemplates.length > 0) {
+          setFormData((current) => {
+            if (current.selectedConsentTemplateId) {
+              return current;
+            }
+
+            const activeTemplate = nextTemplates.find((template) => Boolean(template.active)) || nextTemplates[0];
+            return {
+              ...current,
+              selectedConsentTemplateId: String(activeTemplate?._id || '').trim(),
+            };
+          });
+        } else {
+          setConsentTemplatesError('');
+        }
+      } catch (error) {
+        if (!active) {
+          return;
+        }
+
+        setConsentTemplates([]);
+        setConsentTemplatesError(error?.message || t('wizard.errors.consentServer', 'Erro ao comunicar com o servidor de consentimentos.'));
+      } finally {
+        if (active) {
+          setConsentTemplatesLoading(false);
+        }
+      }
+    };
+
+    void loadConsentTemplate();
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof onValidityChange === 'function') {
+      onValidityChange(Boolean(isStep1Valid && isStep2Valid && isStep3Valid && !consentTemplatesLoading));
+    }
+  }, [isStep1Valid, isStep2Valid, isStep3Valid, consentTemplatesLoading, onValidityChange]);
+
+  useEffect(() => {
+    const status = String(formData.treatmentStatus || '').trim().toUpperCase();
+    if (!status) {
+      return;
+    }
+
+    if (!['TREATED', 'ON_TREATMENT'].includes(status)) {
+      setFormData((previous) => ({
+        ...previous,
+        medicationName: '',
+        medicationCode: '',
+        medicationDrugClass: '',
+        medicationSearchQuery: '',
+        ...(status !== 'WASHOUT'
+          ? {
+            washoutStartDate: '',
+            washoutEndDate: '',
+          }
+          : {}),
+      }));
+    }
+  }, [formData.treatmentStatus]);
+
+  const handleFieldChange = (field) => (event) => {
+    const rawValue = event.target.type === 'checkbox' ? event.target.checked : event.target.value;
+    const value = field === 'bloodPressure' ? formatBloodPressureInput(rawValue) : rawValue;
+    setTouched(true);
+    setFormData((previous) => ({
+      ...previous,
+      [field]: value,
+    }));
+  };
+
+  const handleDiagnosisChange = (event) => {
+    const value = event.target.value;
+    setTouched(true);
+    setDiagnosisQuery(value);
+    setDiagnosisOpen(String(value || '').trim().length >= 2);
+    setDiseaseProfile(null);
+    setMedicationResults([]);
+    setMedicationError('');
+    setMedicationLoading(false);
+
+    if (!String(value || '').trim()) {
+      setFormData((previous) => ({
+        ...previous,
+        diagnosisCidId: '',
+        diagnosisCidCode: '',
+        diagnosisOrphaCode: '',
+        diagnosisOmimCode: '',
+        diagnosisDefinition: '',
+        diagnosisCidDescription: '',
+        diseasePhenotypes: [],
+        diseaseBiomarkers: [],
+        biomarkers_values: {},
+        treatmentStatus: '',
+        medicationName: '',
+        medicationCode: '',
+        medicationDrugClass: '',
+        lastDoseDate: '',
+        washoutStartDate: '',
+        washoutEndDate: '',
+        medicationSearchQuery: '',
+      }));
+      return;
+    }
+
+    setFormData((previous) => ({
+      ...previous,
+      diagnosisCidId: '',
+      diagnosisCidCode: '',
+      diagnosisOrphaCode: '',
+      diagnosisOmimCode: '',
+      diagnosisDefinition: '',
+      diagnosisCidDescription: '',
+      diseasePhenotypes: [],
+      diseaseBiomarkers: [],
+      biomarkers_values: {},
+      treatmentStatus: '',
+      medicationName: '',
+      medicationCode: '',
+      medicationDrugClass: '',
+      lastDoseDate: '',
+      washoutStartDate: '',
+      washoutEndDate: '',
+      medicationSearchQuery: '',
+    }));
+  };
+
+  const handleDiagnosisSelect = async (item) => {
+    setTouched(true);
+    const displayValue = item.displayName || item.description || item.definition || item.orphaCode || item.code || '';
+    setDiagnosisQuery(displayValue);
+    setDiagnosisOpen(false);
+    const normalizedOrphaCode = normalizeOrphaCode(item.orphaCode || item.code || item.raw?.ORPHA || '');
+    const orphaNumeric = getOrphaNumeric(normalizedOrphaCode);
+    let normalizedCidCode = normalizeCidCode(item.cidCode || item.raw?.relacoes?.cid10 || item.raw?.relacoes?.cid || item.raw?.Codigos_CID10 || '');
+    let normalizedOmimCode = normalizeOmimCode(item.omimCode || item.raw?.relacoes?.omim || item.raw?.OMIM || '');
+    const normalizedDefinition = [item.definition, item.description]
+      .map((value) => String(value || '').trim())
+      .find((value) => value && !/^\d+$/.test(value)) || '';
+    const normalizedDescription = [item.description, item.displayName]
+      .map((value) => String(value || '').trim())
+      .find((value) => value && !/^\d+$/.test(value)) || '';
+    const fallbackId = String(item.id || normalizedOrphaCode || normalizedCidCode || item.code || '').trim();
+    const shouldInjectFabryMock = String(orphaNumeric || '').trim() === '324'
+      || /fabry/i.test([
+        item.displayName,
+        item.description,
+        item.definition,
+        normalizedDefinition,
+        normalizedDescription,
+      ].join(' '));
+
+    setFormData((previous) => ({
+      ...previous,
+      diagnosisCidId: fallbackId,
+      diagnosisCidCode: normalizedCidCode,
+      diagnosisOrphaCode: normalizedOrphaCode,
+      diagnosisOmimCode: normalizedOmimCode,
+      diagnosisDefinition: normalizedDefinition,
+      diagnosisCidDescription: normalizedDescription,
+      diagnosisCodesManualMode: false,
+      diseasePhenotypes: [],
+      diseaseBiomarkers: [],
+      biomarkers_values: {},
+      treatmentStatus: '',
+      medicationName: '',
+      medicationCode: '',
+      medicationDrugClass: '',
+      lastDoseDate: '',
+      washoutStartDate: '',
+      washoutEndDate: '',
+      medicationSearchQuery: '',
+    }));
+
+    if (orphaNumeric) {
+      try {
+        const diseaseProfileResponse = await apiClient.get('/dictionary/disease-profile', {
+          params: { orphaCode: orphaNumeric },
+          suppressErrorToast: true,
+        });
+        setDiseaseProfile(diseaseProfileResponse?.data?.disease || null);
+      } catch (_) {
+        setDiseaseProfile(null);
+      }
+    } else {
+      setDiseaseProfile(null);
+    }
+
+    if (orphaNumeric && (!normalizedCidCode || !normalizedOmimCode)) {
+      const localBest = pickBestOrphaCandidate(diagnosisResults, orphaNumeric);
+      if (localBest) {
+        normalizedCidCode = normalizedCidCode || normalizeCidCode(localBest.cidCode || localBest.raw?.relacoes?.cid10 || localBest.raw?.relacoes?.cid || localBest.raw?.Codigos_CID10 || '');
+        normalizedOmimCode = normalizedOmimCode || normalizeOmimCode(localBest.omimCode || localBest.raw?.relacoes?.omim || localBest.raw?.OMIM || '');
+      }
+
+      try {
+        const relationResponse = await apiClient.get('/terminologies', {
+          params: {
+            q: `ORPHA:${orphaNumeric}`,
+            limit: 30,
+          },
+          suppressErrorToast: true,
+        });
+
+        const relationPayload = relationResponse?.data?.data ?? relationResponse?.data ?? [];
+        const normalizedCandidates = Array.isArray(relationPayload) ? relationPayload.map((entry) => normalizeCidOption(entry)) : [];
+        const matched = pickBestOrphaCandidate(normalizedCandidates, orphaNumeric)
+          || normalizedCandidates.find((candidate) => String(candidate.code || '').includes(orphaNumeric))
+          || normalizedCandidates[0]
+          || null;
+
+        if (matched) {
+          normalizedCidCode = normalizedCidCode || normalizeCidCode(matched.cidCode || matched.raw?.relacoes?.cid10 || matched.raw?.relacoes?.cid || matched.raw?.Codigos_CID10 || '');
+          normalizedOmimCode = normalizedOmimCode || normalizeOmimCode(matched.omimCode || matched.raw?.relacoes?.omim || matched.raw?.OMIM || '');
+
+          setFormData((previous) => ({
+            ...previous,
+            diagnosisCidCode: normalizedCidCode,
+            diagnosisOmimCode: normalizedOmimCode,
+          }));
+        }
+      } catch (_) {
+        // Sem bloquear o fluxo clínico caso não haja relação completa no backend.
+      }
+    }
+
+    if (orphaNumeric) {
+      try {
+        let cascade = await loadCascadeByDisease({
+          system: 'http://www.orpha.net',
+          code: orphaNumeric,
+          display: normalizedDefinition || displayValue,
+        }, { suppressErrorToast: true });
+
+        if ((!Array.isArray(cascade?.phenotypes) || cascade.phenotypes.length === 0) && (!Array.isArray(cascade?.biomarkers) || cascade.biomarkers.length === 0)) {
+          cascade = await loadCascadeByDisease({
+            system: 'http://www.orpha.net',
+            code: normalizedOrphaCode,
+            display: normalizedDefinition || displayValue,
+          }, { suppressErrorToast: true });
+        }
+
+        const cascadePhenotypes = Array.isArray(cascade?.phenotypes) ? cascade.phenotypes.map(normalizeDiseasePhenotype) : [];
+        const cascadeBiomarkers = Array.isArray(cascade?.biomarkers) ? cascade.biomarkers.map(normalizeDiseaseBiomarker) : [];
+        const nextPhenotypes = shouldInjectFabryMock ? mergeDiseasePhenotypesWithFabry(cascadePhenotypes) : cascadePhenotypes;
+        const nextBiomarkers = shouldInjectFabryMock ? mergeDiseaseBiomarkersWithFabry(cascadeBiomarkers) : cascadeBiomarkers;
+
+        setFormData((previous) => ({
+          ...previous,
+          diseasePhenotypes: nextPhenotypes,
+          diseaseBiomarkers: nextBiomarkers,
+          biomarkers_values: buildBiomarkerValuesMap(nextBiomarkers, previous.biomarkers_values),
+        }));
+      } catch (_) {
+        setFormData((previous) => ({
+          ...previous,
+          diseasePhenotypes: shouldInjectFabryMock ? mergeDiseasePhenotypesWithFabry([]) : [],
+          diseaseBiomarkers: shouldInjectFabryMock ? mergeDiseaseBiomarkersWithFabry([]) : [],
+          biomarkers_values: shouldInjectFabryMock
+            ? buildBiomarkerValuesMap(mergeDiseaseBiomarkersWithFabry([]), previous.biomarkers_values)
+            : {},
+        }));
+      }
+    } else if (shouldInjectFabryMock) {
+      const fabryPhenotypes = mergeDiseasePhenotypesWithFabry([]);
+      const fabryBiomarkers = mergeDiseaseBiomarkersWithFabry([]);
+      setFormData((previous) => ({
+        ...previous,
+        diagnosisOrphaCode: previous.diagnosisOrphaCode || 'ORPHA:324',
+        diseasePhenotypes: fabryPhenotypes,
+        diseaseBiomarkers: fabryBiomarkers,
+        biomarkers_values: buildBiomarkerValuesMap(fabryBiomarkers, previous.biomarkers_values),
+      }));
+    }
+  };
+
+  const handleCharlsonToggle = (conditionKey) => {
+    setTouched(true);
+    setFormData((previous) => {
+      const current = new Set(Array.isArray(previous.charlsonConditions) ? previous.charlsonConditions : []);
+      if (current.has(conditionKey)) {
+        current.delete(conditionKey);
+      } else {
+        current.add(conditionKey);
+      }
+
+      return {
+        ...previous,
+        charlsonConditions: Array.from(current),
+      };
+    });
+  };
+
+  const handleDiseasePhenotypeToggle = (phenotype) => {
+    setTouched(true);
+    setFormData((previous) => ({
+      ...previous,
+      diseasePhenotypes: (() => {
+        const current = (Array.isArray(previous.diseasePhenotypes) ? previous.diseasePhenotypes : []).map(normalizeDiseasePhenotype);
+        const phenotypeId = String(phenotype?.hpoId || '').trim();
+        const alreadySelected = current.some((item) => String(item.hpoId || '').trim() === phenotypeId);
+        if (alreadySelected) {
+          return current.filter((item) => String(item.hpoId || '').trim() !== phenotypeId);
+        }
+        return [...current, normalizeDiseasePhenotype(phenotype)];
+      })(),
+    }));
+  };
+
+  const handleDiseaseBiomarkerValueChange = (biomarker, rawValue) => {
+    const key = getDiseaseBiomarkerKey(biomarker);
+    if (!key) {
+      return;
+    }
+
+    const nextValue = String(rawValue || '').trim();
+    setTouched(true);
+    setFormData((previous) => {
+      const nextBiomarkerValues = { ...(previous.biomarkers_values && typeof previous.biomarkers_values === 'object' ? previous.biomarkers_values : {}) };
+      if (nextValue) {
+        nextBiomarkerValues[key] = nextValue;
+      } else {
+        delete nextBiomarkerValues[key];
+      }
+
+      const nextDiseaseBiomarkers = (Array.isArray(previous.diseaseBiomarkers) ? previous.diseaseBiomarkers : []).map((item) => {
+        const normalized = normalizeDiseaseBiomarker(item);
+        if (getDiseaseBiomarkerKey(normalized) !== key) {
+          return normalized;
+        }
+        return {
+          ...normalized,
+          value: nextValue,
+        };
+      });
+
+      return {
+        ...previous,
+        biomarkers_values: nextBiomarkerValues,
+        diseaseBiomarkers: nextDiseaseBiomarkers,
+      };
+    });
+  };
+
+  const handleMedicationSelect = (medication) => {
+    setTouched(true);
+    const atcCode = String(medication?.atc_code || medication?.code || '').replace(/^ATC:/i, '').trim().toUpperCase();
+    setFormData((previous) => ({
+      ...previous,
+      medicationName: String(medication?.name || '').trim(),
+      medicationCode: atcCode,
+      medicationDrugClass: String(medication?.atc_level_1 || '').trim().toUpperCase(),
+      medicationSearchQuery: String(medication?.name || '').trim(),
+    }));
+    setMedicationResults([]);
+  };
+
+  useEffect(() => {
+    if (!['TREATED', 'ON_TREATMENT'].includes(String(formData.treatmentStatus || '').trim().toUpperCase())) {
+      setMedicationResults([]);
+      setMedicationError('');
+      setMedicationLoading(false);
+      return;
+    }
+
+    const query = String(formData.medicationSearchQuery || '').trim();
+    if (query.length < 2) {
+      setMedicationResults([]);
+      setMedicationError('');
+      setMedicationLoading(false);
+      return;
+    }
+
+    let active = true;
+
+    const loadMedications = async () => {
+      try {
+        setMedicationLoading(true);
+        setMedicationError('');
+
+        const response = await apiClient.get('/dictionary/atc/search', {
+          params: {
+            query,
+            limit: 20,
+          },
+          suppressErrorToast: true,
+        });
+
+        if (!active) {
+          return;
+        }
+
+        const payload = Array.isArray(response?.data?.medications) ? response.data.medications : [];
+        setMedicationResults(payload);
+      } catch (_) {
+        if (active) {
+          setMedicationResults([]);
+          setMedicationError(t('wizard.errors.medicationSearch', 'Não foi possível consultar medicamentos neste momento.'));
+        }
+      } finally {
+        if (active) {
+          setMedicationLoading(false);
+        }
+      }
+    };
+
+    void loadMedications();
+
+    return () => {
+      active = false;
+    };
+  }, [formData.treatmentStatus, formData.medicationSearchQuery, diseaseProfile]);
+
+  const handleVerifySignature = async () => {
+    setIsSignatureChecking(true);
+    setSignatureFeedback('');
+    try {
+      const integrityInput = buildSampleIntegrityInput(formData, qualityAssessment, penaltyLog);
+      const isValid = await verifySampleIntegrity(integrityInput, sampleMerkleRoot);
+      setSampleIntegrityValid(Boolean(isValid));
+      setSignatureFeedback(isValid ? t('wizard.signature.valid', 'Assinatura íntegra e consistente.') : t('wizard.signature.invalid', 'Assinatura inválida para o conteúdo atual.'));
+    } catch (_) {
+      setSampleIntegrityValid(false);
+      setSignatureFeedback(t('wizard.signature.unavailable', 'Não foi possível validar a assinatura no momento.'));
+    } finally {
+      setIsSignatureChecking(false);
+    }
+  };
+
+  const handleNext = () => {
+    setTouched(true);
+    if (activeStep === 0 && !isStep1Valid) return;
+    if (activeStep === 1 && !isStep2Valid) return;
+    setActiveStep((current) => Math.min(current + 1, stepMeta.length - 1));
+    if (typeof onStepChange === 'function') {
+      onStepChange(Math.min(activeStep + 1, stepMeta.length - 1));
+    }
+  };
+
+  const handleBack = () => {
+    setActiveStep((current) => Math.max(current - 1, 0));
+    if (typeof onStepChange === 'function') {
+      onStepChange(Math.max(activeStep - 1, 0));
+    }
+  };
+
+  const handleSubmit = async (event) => {
+    event.preventDefault();
+    console.log('[DEBUG] Botão clicado');
+    setTouched(true);
+    setStep1Attempted(true);
+    setSubmitError('');
+
+    if (!isStep1Valid || !isStep2Valid || !isStep3Valid) {
+      const errors = {
+        step1Valid: isStep1Valid,
+        step2Valid: isStep2Valid,
+        step3Valid: isStep3Valid,
+        patientValidationIssues: patientValidation?.error?.issues || [],
+        sampleValidationIssues: sampleValidation?.error?.issues || [],
+        clinicalValidationIssues: clinicalValidation?.error?.issues || [],
+        biomarkerValidationIssues: biomarkerValidation?.error?.issues || [],
+        consentValidationIssues: consentValidation?.error?.issues || [],
+        dictionariesReady,
+        consentTemplatesCount: Array.isArray(consentTemplates) ? consentTemplates.length : 0,
+      };
+      console.log(errors);
+      setActiveStep(!isStep1Valid ? 0 : !isStep2Valid ? 1 : 2);
+      return;
+    }
+
+    setIsSubmitting(true);
+
+    try {
+      const payload = buildSubmissionPayload(formData, clinicalComorbidityDefinitions, biomarkerDefinitions, sampleMerkleRoot || null, penaltyLog);
+      if (patientMatchInfo?.patient?.patientID) {
+        payload.demographic.patientID = String(patientMatchInfo.patient.patientID).trim();
+      }
+      console.log('[DEBUG] Payload pronto:', payload);
+
+      let response;
+      try {
+        response = await apiClient.post('/intake-wizard', payload);
+      } catch (apiError) {
+        console.error('[DEBUG] Falha imediata na chamada POST /intake-wizard:', apiError);
+        throw apiError;
+      }
+
+      const consentEmailSent = Boolean(response?.data?.consentEmail?.success);
+
+      if (!consentEmailSent) {
+        throw new Error(t('wizard.errors.consentEmailRequired', 'Cadastro não finalizado: envio de TCLE por e-mail não foi confirmado.'));
+      }
+
+      const message = response?.data?.message || t('wizard.success.completed', 'Cadastro integrado concluído com sucesso.');
+      const createdSample = response?.data?.sample || {};
+      const samplePatientID = String(createdSample?.patientID || createdSample?.patientId || payload?.demographic?.patientID || payload?.demographic?.patientId || '').trim();
+      const sampleTypeForLabel = String(createdSample?.sampleType || payload?.sample?.sampleType || formData?.sprecSampleType || '').trim();
+      const labelCode = buildSampleLabelCode({
+        date: new Date(),
+        patientID: samplePatientID,
+        sampleType: sampleTypeForLabel,
+      });
+
+      setSampleLabel({
+        code: labelCode,
+        sprecCode: String(formData.sprecCode || payload?.sample?.sprec_code || '').trim(),
+        sampleType: sampleTypeForLabel,
+        patientID: samplePatientID,
+      });
+
+      notifyApiToast({
+        message,
+        type: 'success',
+        duration: 4500,
+      });
+
+      setFormData({
+        ...initialState,
+        selectedConsentTemplateId: String(selectedConsentTemplate?._id || formData.selectedConsentTemplateId || '').trim(),
+      });
+      setPatientMatchInfo(null);
+      setActiveStep(0);
+      setTouched(false);
+      setStep1Attempted(false);
+    } catch (error) {
+      const message = error?.response?.data?.message || error?.response?.data?.error || error?.message || t('wizard.errors.submit', 'Erro ao finalizar o cadastro integrado.');
+      setSubmitError(message);
+      notifyApiToast({
+        message,
+        type: 'error',
+        duration: 5500,
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const renderStepContent = () => {
+    if (activeStep === 0) {
+      return (
+        <Card className="bg-white rounded-2xl shadow-lg border border-gray-100">
+          <div className="border-b border-gray-200 pb-3 mb-5">
+            <h3 className="text-xl font-bold text-gray-800">{t('wizard.sections.demographic', 'Dados Demográficos')}</h3>
+          </div>
+          <div className="wizard-grid grid grid-cols-1 md:grid-cols-2 gap-6">
+            <Input id="fullName" name="fullName" data-testid="wizard-full-name" className="w-full rounded-lg px-3 py-2" label={t('wizard.fields.fullName', 'Nome completo')} value={formData.patientName} onChange={handleFieldChange('patientName')} required />
+            <Input
+              id="birthDate"
+              name="birthDate"
+              data-testid="wizard-birth-date"
+              className="w-full rounded-lg px-3 py-2"
+              label={t('wizard.fields.birthDate', 'Data de nascimento')}
+              helperText={t('wizard.helpers.birthDateFormat', 'Formato esperado: DD/MM/AAAA')}
+              value={formatBirthDateInput(formData.birthDate)}
+              onChange={handleFieldChange('birthDate')}
+              required
+            />
+            {patientMatchLoading && (
+              <div className="wizard-span-2 md:col-span-2 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+                {t('wizard.status.checkingPatient', 'Verificando identificação positiva do paciente...')}
+              </div>
+            )}
+            {!patientMatchLoading && patientMatchInfo?.matched && (
+              <div className="wizard-span-2 md:col-span-2 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-900" data-testid="wizard-patient-match-alert">
+                {t('wizard.status.patientMatched', 'Paciente identificado. Novos dados serão vinculados ao perfil histórico.')}
+              </div>
+            )}
+            <Select
+              id="gender"
+              name="gender"
+              data-testid="wizard-gender"
+              className="w-full rounded-lg px-3 py-2"
+              label={t('wizard.fields.gender', 'Sexo')}
+              value={formData.gender}
+              onChange={handleFieldChange('gender')}
+              required
+              options={[
+                { value: '', label: t('common.select', 'Selecione') },
+                { value: 'M', label: t('patients.sexMale', 'Masculino') },
+                { value: 'F', label: t('patients.sexFemale', 'Feminino') },
+                { value: 'O', label: t('patients.sexOther', 'Outro') },
+              ]}
+            />
+            <Input
+              id="email"
+              name="email"
+              data-testid="wizard-email"
+              className="w-full rounded-lg px-3 py-2"
+              label={t('wizard.fields.email', 'Email')}
+              helperText={t('wizard.helpers.emailFormat', 'Formato esperado: nome@dominio.com')}
+              type="email"
+              value={formData.email}
+              onChange={handleFieldChange('email')}
+              required={!formData.isDeceased}
+            />
+            <Input id="document" name="document" data-testid="wizard-document" className="w-full rounded-lg px-3 py-2" label={t('wizard.fields.document', 'Documento')} helperText={t('wizard.helpers.documentCpfPassport', 'Aceita CPF válido ou passaporte.')} value={formData.documento} onChange={handleFieldChange('documento')} required />
+            <Input id="recordNumber" name="recordNumber" data-testid="wizard-record-number" className="w-full rounded-lg px-3 py-2" label={t('wizard.fields.recordNumber', 'Prontuário')} helperText={t('wizard.helpers.recordNumberOptional', 'Campo opcional de texto livre.')} value={formData.prontuario} onChange={handleFieldChange('prontuario')} required={false} />
+            <label className="wizard-span-2 md:col-span-2 flex items-center gap-2 text-sm font-semibold text-gray-700 mb-1.5">
+              <input type="checkbox" checked={formData.isDeceased} onChange={handleFieldChange('isDeceased')} />
+              {t('wizard.fields.deceasedPatient', 'Paciente falecido')}
+            </label>
+            {formData.isDeceased && (
+              <div className="wizard-grid wizard-span-2 md:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-6 rounded-xl border border-slate-200 bg-slate-50 p-4">
+                <div className="wizard-span-2 md:col-span-2 border-b border-gray-200 pb-3 mb-1">
+                  <h4 className="text-xl font-bold text-gray-800">{t('wizard.sections.legalRepresentative', 'Dados do Representante Legal')}</h4>
+                </div>
+                <Input className="w-full rounded-lg px-3 py-2" label={t('wizard.fields.legalName', 'Nome do representante legal')} value={formData.representativeName} onChange={handleFieldChange('representativeName')} required />
+                <Input className="w-full rounded-lg px-3 py-2" label={t('wizard.fields.legalEmail', 'Email do representante legal')} type="email" value={formData.representativeEmail} onChange={handleFieldChange('representativeEmail')} required />
+                <Input
+                  className="w-full rounded-lg px-3 py-2"
+                  label={t('wizard.fields.legalDocument', 'Documento do representante legal')}
+                  helperText={t('wizard.helpers.documentCpfPassport', 'Aceita CPF válido ou passaporte.')}
+                  value={formData.representativeCpf}
+                  onChange={handleFieldChange('representativeCpf')}
+                  required
+                />
+              </div>
+            )}
+          </div>
+        </Card>
+      );
+    }
+
+    if (activeStep === 1) {
+      return (
+        <Card className="bg-white rounded-2xl shadow-lg border border-gray-100">
+          <div className="border-b border-gray-200 pb-3 mb-5">
+            <h3 className="text-xl font-bold text-gray-800">{t('wizard.sections.preAnalyticalSample', 'Amostra Pré-analítica')}</h3>
+          </div>
+          <div className="wizard-grid grid grid-cols-1 md:grid-cols-2 gap-6">
+            <Select
+              id="sprecMatrix"
+              name="sprecMatrix"
+              data-testid="wizard-sprec-matrix"
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 focus:ring-2 focus:ring-blue-500"
+              label={t('wizard.fields.sprecMatrix', 'Matriz SPREC')}
+              value={formData.sprecMatrixType}
+              onChange={handleFieldChange('sprecMatrixType')}
+              required
+              options={[
+                { value: 'fluid', label: t('wizard.matrix.fluid', 'Fluidos (SPREC 2.0)') },
+                { value: 'solid', label: t('wizard.matrix.solid', 'Sólidos (SPREC 2.0)') },
+              ]}
+            />
+            <Select
+              id="sprecAxis1"
+              name="sprecAxis1"
+              data-testid="wizard-sprec-axis-1"
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 focus:ring-2 focus:ring-blue-500"
+              label={sprecAxis1Label}
+              value={formData.sprecSampleType}
+              onChange={handleFieldChange('sprecSampleType')}
+              required
+              options={[{ value: '', label: t('wizard.placeholders.selectSprecSampleType', 'Select SPREC sample type') }, ...sprecSampleTypeOptions]}
+            />
+            <Select
+              id="sprecAxis2"
+              name="sprecAxis2"
+              data-testid="wizard-sprec-axis-2"
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 focus:ring-2 focus:ring-blue-500"
+              label={sprecAxis2Label}
+              value={formData.sprecPrimaryContainer}
+              onChange={handleFieldChange('sprecPrimaryContainer')}
+              required
+              options={[{ value: '', label: t('wizard.placeholders.selectSprecPrimaryContainer', 'Select SPREC primary container') }, ...sprecPrimaryContainerOptions]}
+            />
+            <Select
+              id="sprecAxis3"
+              name="sprecAxis3"
+              data-testid="wizard-sprec-axis-3"
+              className={`w-full rounded-lg border border-gray-300 px-3 py-2 focus:ring-2 focus:ring-blue-500 ${formData.preAnalyticalUnknown ? 'bg-gray-100' : ''}`}
+              label={sprecAxis3Label}
+              value={formData.sprecPreCentrifugation}
+              onChange={handleFieldChange('sprecPreCentrifugation')}
+              disabled={formData.preAnalyticalUnknown}
+              required
+              options={[{ value: '', label: t('wizard.placeholders.selectSprecPreCentrifugation', 'Select pre-centrifugation') }, ...sprecPreCentrifugationOptions]}
+            />
+            <div className="w-full">
+              <div className="mb-1.5 flex items-center gap-2">
+                <label className="block text-sm font-semibold text-gray-700">{sprecAxis4Label}</label>
+                {shouldShowProtocolAlert && (
+                  <span
+                    title={t('wizard.alert.protocolRisk', 'Atenção: Forças acima de 10.000g podem causar lise celular e impactar a qualidade de analitos sensíveis')}
+                    aria-label={t('wizard.alert.protocolRisk', 'Atenção: Forças acima de 10.000g podem causar lise celular e impactar a qualidade de analitos sensíveis')}
+                    className="inline-flex items-center text-amber-600"
+                  >
+                    <AlertTriangle size={16} />
+                  </span>
+                )}
+              </div>
+              <Select
+                id="sprecAxis4"
+                name="sprecAxis4"
+                data-testid="wizard-sprec-axis-4"
+                className={`w-full rounded-lg border border-gray-300 px-3 py-2 focus:ring-2 focus:ring-blue-500 ${formData.preAnalyticalUnknown ? 'bg-gray-100' : ''}`}
+                label=""
+                value={formData.sprecCentrifugation}
+                onChange={handleFieldChange('sprecCentrifugation')}
+                disabled={formData.preAnalyticalUnknown}
+                required
+                options={[{ value: '', label: t('wizard.placeholders.selectSprecCentrifugation', 'Select centrifugation') }, ...sprecCentrifugationOptions]}
+              />
+            </div>
+            <Select
+              id="sprecAxis5"
+              name="sprecAxis5"
+              data-testid="wizard-sprec-axis-5"
+              className={`w-full rounded-lg border border-gray-300 px-3 py-2 focus:ring-2 focus:ring-blue-500 ${formData.preAnalyticalUnknown ? 'bg-gray-100' : ''}`}
+              label={sprecAxis5Label}
+              value={formData.sprecSecondCentrifugation}
+              onChange={handleFieldChange('sprecSecondCentrifugation')}
+              disabled={formData.preAnalyticalUnknown}
+              required
+              options={[{ value: '', label: t('wizard.placeholders.selectSprecSecondCentrifugation', 'Select second centrifugation') }, ...sprecSecondCentrifugationOptions]}
+            />
+            <Select
+              id="sprecAxis6"
+              name="sprecAxis6"
+              data-testid="wizard-sprec-axis-6"
+              className={`w-full rounded-lg border border-gray-300 px-3 py-2 focus:ring-2 focus:ring-blue-500 ${formData.preAnalyticalUnknown ? 'bg-gray-100' : ''}`}
+              label={sprecAxis6Label}
+              value={formData.sprecPostCentrifugationDelay}
+              onChange={handleFieldChange('sprecPostCentrifugationDelay')}
+              disabled={formData.preAnalyticalUnknown}
+              required
+              options={[{ value: '', label: t('wizard.placeholders.selectSprecPostCentrifugationDelay', 'Select post-centrifugation delay') }, ...sprecPostCentrifugationDelayOptions]}
+            />
+            <Select
+              id="sprecAxis7"
+              name="sprecAxis7"
+              data-testid="wizard-sprec-axis-7"
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 focus:ring-2 focus:ring-blue-500"
+              label={sprecAxis7Label}
+              value={formData.sprecLongTermStorage}
+              onChange={handleFieldChange('sprecLongTermStorage')}
+              required
+              options={[{ value: '', label: t('wizard.placeholders.selectSprecLongTermStorage', 'Select long-term storage') }, ...sprecLongTermStorageOptions]}
+            />
+            <div className="wizard-span-2 md:col-span-2 flex items-center gap-2 text-sm font-semibold text-gray-700 mb-1.5">
+              <input type="checkbox" checked={Boolean(formData.preAnalyticalUnknown)} onChange={handleFieldChange('preAnalyticalUnknown')} />
+              {t('wizard.labels.processingUnknown', 'Processing information unknown')}
+            </div>
+            {formData.preAnalyticalUnknown && (
+              <div className="wizard-span-2 md:col-span-2 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                {t('wizard.labels.processingUnknownHelp', 'In unknown-processing safety mode, SPREC axes 3, 4, 5 and 6 are automatically forced to code X.')}
+              </div>
+            )}
+            <div className="wizard-span-2 md:col-span-2 governance-grid">
+              <div className="governance-card">
+                <p className="governance-label">{t('wizard.labels.sprec', 'SPREC 2.0')}</p>
+                <p className="governance-sprec-code">{sprecCode || 'PENDENTE'}</p>
+                <p className="governance-subtext">{sprecMatrixType === 'solid' ? t('wizard.matrix.solidShort', 'Matriz sólida') : t('wizard.matrix.fluidShort', 'Matriz fluida')}</p>
+              </div>
+              <div className={qualityTheme.cardClass}>
+                <p className="governance-label">{t('wizard.labels.qualityScore', 'Quality Score')}</p>
+                <p className={qualityTheme.textClass}>{t('wizard.labels.category', 'Categoria')} {qualityAssessment.category} • {qualityAssessment.score}</p>
+                <div className="governance-progress-track">
+                  <div className={qualityTheme.progressClass} style={{ width: `${qualityProgress}%` }} />
+                </div>
+                <p className="governance-subtext">{qualityTheme.label}</p>
+              </div>
+            </div>
+            <div className="w-full">
+              <label htmlFor="wizard-quantity" className="mb-1.5 block text-sm font-semibold text-gray-700">{t('common.quantity', 'Quantidade')}</label>
+              <div className="flex items-center gap-2">
+                <Input id="wizard-quantity" data-testid="wizard-quantity" className="w-full rounded-lg px-3 py-2" type="number" value={formData.quantity} onChange={handleFieldChange('quantity')} required />
+                <span className="inline-flex h-10 items-center rounded-lg border border-gray-300 bg-gray-100 px-3 text-sm font-semibold text-gray-700">{quantityUnit}</span>
+              </div>
+            </div>
+            <Input id="linkedProject" name="linkedProject" data-testid="wizard-linked-project" className="w-full rounded-lg px-3 py-2" label={t('wizard.fields.linkedProject', 'Projeto vinculado')} value={formData.linkedProject} onChange={handleFieldChange('linkedProject')} required />
+            <Input id="institutionName" name="institutionName" data-testid="wizard-institution-name" className="w-full rounded-lg px-3 py-2" label={t('wizard.fields.institutionName', 'Nome da Instituição')} value={formData.collectionInstitution} onChange={handleFieldChange('collectionInstitution')} required />
+            <Input className="w-full rounded-lg px-3 py-2 uppercase bg-gray-100" label={t('wizard.fields.institutionAcronym', 'Sigla da Instituição')} value={String(formData.collectionInstitutionAcronym || '').toUpperCase()} readOnly />
+          </div>
+        </Card>
+      );
+    }
+
+    return (
+      <div className="grid gap-4 step3-layout">
+        <div className="governance-grid governance-grid--three">
+          <div className="governance-card">
+            <p className="governance-label">{t('wizard.labels.sprec', 'SPREC 2.0')}</p>
+            <p className="governance-sprec-code">{sprecCode || 'PENDENTE'}</p>
+            <p className="governance-subtext">{t('wizard.labels.auditableCode', 'Código auditável pré-analítico')}</p>
+          </div>
+          <div className={qualityTheme.cardClass}>
+            <p className="governance-label">{t('wizard.labels.qualityScore', 'Quality Score')}</p>
+            <p className={qualityTheme.textClass}>{t('wizard.labels.category', 'Categoria')} {qualityAssessment.category} • {qualityAssessment.score}</p>
+            <div className="governance-progress-track">
+              <div className={qualityTheme.progressClass} style={{ width: `${qualityProgress}%` }} />
+            </div>
+            <p className="governance-subtext">{qualityTheme.label}</p>
+          </div>
+          <div className="governance-card">
+            <p className="governance-label">{t('wizard.labels.clinicalIdentifiers', 'Identificadores Clínicos')}</p>
+            <div className="identifier-list">
+              <div><span>ORPHA</span><strong>{formData.diagnosisOrphaCode || '-'}</strong></div>
+              <div><span>OMIM</span><strong>{formData.diagnosisOmimCode || '-'}</strong></div>
+              <div><span>CID-10</span><strong>{formData.diagnosisCidCode || '-'}</strong></div>
+            </div>
+          </div>
+        </div>
+
+        <Card className="bg-white rounded-2xl shadow-lg border border-gray-100">
+          <div className="grid gap-4">
+            <div className="border-b border-gray-200 pb-3 mb-1 section-title-block">
+              <h3 className="text-xl font-bold text-gray-800">{t('wizard.sections.consentGovernance', 'TCLE e governança clínica')}</h3>
+            </div>
+            <Select
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 focus:ring-2 focus:ring-blue-500"
+              label={t('wizard.fields.linkedConsent', 'TCLE vinculado')}
+              value={formData.selectedConsentTemplateId}
+              onChange={handleFieldChange('selectedConsentTemplateId')}
+              required
+              options={[
+                { value: '', label: t('wizard.placeholders.selectTcle', 'Select an informed consent form') },
+                ...consentTemplates.map((template) => ({
+                  value: String(template._id || '').trim(),
+                  label: `${template.active ? `[${t('wizard.status.active', 'Ativo')}] ` : ''}${template.version || 'v?'} - ${template.title || 'TCLE'}`,
+                })),
+              ]}
+            />
+            {selectedConsentTemplate && (
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 panel-soft">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h4 className="text-lg font-bold text-slate-800">{selectedConsentTemplate.title}</h4>
+                  {selectedConsentTemplate.active && (
+                    <span className="inline-flex rounded-full border border-emerald-300 bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-800">{t('wizard.status.active', 'Ativo')}</span>
+                  )}
+                </div>
+                <p className="mt-2 text-sm text-slate-600">{buildConsentPreview(selectedConsentTemplate, formData, t).slice(0, 420)}</p>
+              </div>
+            )}
+          </div>
+        </Card>
+
+        <Card className="bg-white rounded-2xl shadow-lg border border-gray-100">
+          <div className="border-b border-gray-200 pb-3 mb-5 section-title-block">
+            <h3 className="text-xl font-bold text-gray-800">{t('wizard.sections.clinicalOrpha', 'Informações Clínicas e ORPHA')}</h3>
+          </div>
+          <div className="grid grid-cols-1 gap-6 clinical-section-stack">
+            <div className="wizard-grid grid grid-cols-1 md:grid-cols-2 gap-6 step3-diagnosis-grid">
+              <div className="wizard-span-2 md:col-span-2 relative diagnosis-search-block">
+                <label className="mb-1.5 block text-sm font-semibold text-gray-700 diagnosis-search-label">{t('wizard.labels.searchDiseaseOrpha', 'Buscar doença em Orphadata')}</label>
+                <input
+                  data-testid="wizard-diagnosis-search"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 transition-all duration-200 focus:ring-2 focus:ring-blue-500 focus:border-transparent focus:outline-none diagnosis-search-input"
+                  value={diagnosisQuery}
+                  onChange={handleDiagnosisChange}
+                  onFocus={() => setDiagnosisOpen(String(diagnosisQuery || '').trim().length >= 2)}
+                  onBlur={() => setTimeout(() => setDiagnosisOpen(false), 120)}
+                      placeholder={t('wizard.placeholders.searchDisease', 'Digite ORPHA, CID-10, código ou descrição da doença')}
+                  disabled={formData.isHealthyControl}
+                />
+                {!formData.isHealthyControl && String(diagnosisQuery || '').trim() && !String(formData.diagnosisCidId || '').trim() && (
+                  <p className="diagnosis-selection-hint">{t('wizard.labels.selectDiseaseResult', 'Selecione um resultado da lista para preencher ORPHA, OMIM e CID-10 automaticamente.')}</p>
+                )}
+                {diagnosisLoading && <p className="mt-2 text-sm text-slate-500">{t('wizard.status.loadingDiseases', 'Buscando doenças ORPHA...')}</p>}
+                {diagnosisError && <p className="mt-2 text-sm text-red-600">{diagnosisError}</p>}
+                {diagnosisOpen && !formData.isHealthyControl && !diagnosisLoading && diagnosisResults.length > 0 && (
+                  <div className="absolute z-20 mt-2 max-h-64 w-full overflow-auto rounded-lg border border-slate-200 bg-white p-2 shadow-lg diagnosis-search-results" data-testid="wizard-diagnosis-results">
+                    {diagnosisResults.map((item, index) => (
+                      <button
+                        key={`${item.id || item.code}-${item.displayName}`}
+                        type="button"
+                        data-testid={`wizard-diagnosis-option-${index}`}
+                        className="mb-1 block w-full rounded-md px-3 py-2 text-left diagnosis-search-result-item"
+                        onMouseDown={(event) => {
+                          event.preventDefault();
+                          handleDiagnosisSelect(item);
+                        }}
+                      >
+                        <span className="block text-sm font-semibold text-slate-800 diagnosis-result-title">{item.displayName}</span>
+                        <span className="block diagnosis-result-meta-text">
+                          CID-10: {item.cidCode || '-'} | ORPHA: {item.orphaCode || '-'} | OMIM: {item.omimCode || '-'}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <Input className="w-full rounded-lg px-3 py-2" label={t('wizard.fields.icd10Editable', 'CID-10')} value={formData.diagnosisCidCode} onChange={handleFieldChange('diagnosisCidCode')} placeholder="CID-10" readOnly />
+              <Input className="w-full rounded-lg px-3 py-2 bg-gray-100" label={t('wizard.fields.orpha', 'ORPHA')} value={formData.diagnosisOrphaCode} readOnly placeholder="ORPHA" />
+              <Input className="w-full rounded-lg px-3 py-2 bg-gray-100" label={t('wizard.fields.omim', 'OMIM')} value={formData.diagnosisOmimCode} readOnly placeholder="OMIM" />
+              <div className="wizard-span-2 md:col-span-2">
+                <Textarea className="w-full rounded-lg px-3 py-2 bg-gray-100" label={t('wizard.fields.diagnosisDescription', 'Definição / descrição diagnóstica')} value={formData.diagnosisDefinition || formData.diagnosisCidDescription} onChange={handleFieldChange('diagnosisDefinition')} rows={3} readOnly placeholder={t('wizard.placeholders.selectDiseaseFill', 'Selecionar doença em Orphadata para preencher.')} />
+              </div>
+              <div className="wizard-span-2 md:col-span-2 rounded-xl border border-slate-200 bg-slate-50 p-4 panel-soft">
+                <div className="flex flex-wrap items-center gap-2 clinical-badges">
+                  {formData.isHealthyControl && (
+                    <span className="inline-flex rounded-full border border-emerald-300 bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-800 badge-pill badge-pill--success">{t('wizard.labels.healthyControl', 'Controle saudável')}</span>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="clinical-subsection">
+              <div className="border-b border-gray-200 pb-3 mb-1 section-title-block">
+                <h4 className="text-xl font-bold text-gray-800">{t('wizard.sections.treatmentPharmacology', 'Status de Tratamento e Farmacologia')}</h4>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <Select
+                  id="treatmentStatus"
+                  name="treatmentStatus"
+                  data-testid="wizard-treatment-status"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2"
+                  label={t('wizard.fields.treatmentStatus', 'Status de Tratamento (MIABIS)')}
+                  value={formData.treatmentStatus}
+                  onChange={handleFieldChange('treatmentStatus')}
+                  required
+                  options={[
+                    { value: '', label: t('wizard.fields.selectStatus', 'Selecione o status') },
+                    { value: 'NAIVE', label: t('wizard.fields.naiveStatus', 'Virgem de Tratamento (Naive)') },
+                    { value: 'TREATED', label: t('wizard.fields.treatedStatus', 'Em Tratamento') },
+                    { value: 'WASHOUT', label: t('wizard.fields.washoutStatus', 'Janela de Lavagem (Washout)') },
+                  ]}
+                />
+                <Input
+                  className="w-full rounded-lg px-3 py-2 bg-gray-100"
+                  label={t('wizard.fields.diseaseCategory', 'Categoria da Doença')}
+                  value={String(diseaseProfile?.disease_category || '').trim() || 'Categoria não mapeada'}
+                  readOnly
+                />
+              </div>
+
+              {['TREATED', 'ON_TREATMENT'].includes(String(formData.treatmentStatus || '').trim().toUpperCase()) && (
+                <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="md:col-span-2 relative">
+                    <Input
+                      id="medicationSearch"
+                      name="medicationSearch"
+                      data-testid="wizard-medication-search"
+                      className="w-full rounded-lg px-3 py-2"
+                      label={t('wizard.fields.medication', 'Medicamento')}
+                      value={formData.medicationSearchQuery}
+                      onChange={handleFieldChange('medicationSearchQuery')}
+                      placeholder={t('wizard.placeholders.medicationSearch', 'Busca semântica por nome, código ou sinônimo')}
+                      required
+                    />
+                    {medicationLoading && <p className="mt-1 text-sm text-slate-500">{t('wizard.status.loadingMedications', 'Buscando medicamentos...')}</p>}
+                    {medicationError && <p className="mt-1 text-sm text-red-600">{medicationError}</p>}
+                    {!medicationLoading && medicationResults.length > 0 && (
+                      <div className="absolute z-20 mt-2 max-h-56 w-full overflow-auto rounded-lg border border-slate-200 bg-white p-2 shadow-lg" data-testid="wizard-medication-results">
+                        {medicationResults.map((item, index) => (
+                          <button
+                            key={`${item.code}-${item.name}`}
+                            type="button"
+                            data-testid={`wizard-medication-option-${index}`}
+                            className="mb-1 block w-full rounded-md px-3 py-2 text-left hover:bg-slate-100"
+                            onMouseDown={(event) => {
+                              event.preventDefault();
+                              handleMedicationSelect(item);
+                            }}
+                          >
+                            <span className="block text-sm font-semibold text-slate-800">{item.name}</span>
+                            <span className="block text-xs text-slate-500">ATC: {item.atc_code || '-'} • Nível 1: {item.atc_level_1 || '-'}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <Input
+                    id="atcClass"
+                    name="atcClass"
+                    data-testid="wizard-atc-level1"
+                    className="w-full rounded-lg px-3 py-2 bg-gray-100"
+                    label={t('wizard.fields.atcClass', 'Classe Terapêutica (ATC Nível 1)')}
+                    value={formData.medicationDrugClass}
+                    readOnly
+                  />
+                  <Input
+                    id="atcCode"
+                    name="atcCode"
+                    data-testid="wizard-atc-code"
+                    className="w-full rounded-lg px-3 py-2 bg-gray-100"
+                    label={t('wizard.fields.atcCode', 'Código ATC')}
+                    value={formData.medicationCode}
+                    readOnly
+                  />
+                  <Input
+                    className="w-full rounded-lg px-3 py-2"
+                    type="date"
+                    label={t('wizard.fields.lastDoseDate', 'Data da Última Dose')}
+                    value={formData.lastDoseDate}
+                    onChange={handleFieldChange('lastDoseDate')}
+                    required
+                  />
+                </div>
+              )}
+
+              {String(formData.treatmentStatus || '').trim().toUpperCase() === 'WASHOUT' && (
+                <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <Input
+                    className="w-full rounded-lg px-3 py-2"
+                    type="date"
+                    label={t('wizard.fields.washoutStartDate', 'Início da Janela de Lavagem')}
+                    value={formData.washoutStartDate}
+                    onChange={handleFieldChange('washoutStartDate')}
+                  />
+                  <Input
+                    className="w-full rounded-lg px-3 py-2"
+                    type="date"
+                    label={t('wizard.fields.washoutEndDate', 'Fim da Janela de Lavagem')}
+                    value={formData.washoutEndDate}
+                    onChange={handleFieldChange('washoutEndDate')}
+                  />
+                </div>
+              )}
+            </div>
+
+            <div className="wizard-grid grid grid-cols-1 md:grid-cols-2 gap-6">
+              <Input className="w-full rounded-lg px-3 py-2" label={t('wizard.fields.bloodPressure', 'Pressão arterial')} value={formData.bloodPressure} onChange={handleFieldChange('bloodPressure')} placeholder={t('wizard.placeholders.bloodPressure', 'Ex.: 120/80')} maxLength={7} />
+              <div className="wizard-span-2 md:col-span-2">
+                <Textarea className="w-full rounded-lg px-3 py-2" label={t('wizard.fields.clinicalNotes', 'Observações clínicas')} value={formData.clinicalObservations} onChange={handleFieldChange('clinicalObservations')} rows={4} />
+              </div>
+            </div>
+
+            <div className="clinical-subsection" data-testid="wizard-suggested-biomarkers-section">
+              <div className="border-b border-gray-200 pb-3 mb-1 section-title-block">
+                <h4 className="text-xl font-bold text-gray-800">{t('wizard.sections.hpoPhenotypes', 'Fenótipos HPO sugeridos pela doença')}</h4>
+              </div>
+              {!hasSelectedDisease ? (
+                <div className="text-sm text-slate-500 suggestion-empty">{t('wizard.labels.selectDiseaseForPhenotypes', 'Selecione uma doença para carregar fenótipos HPO sugeridos.')}</div>
+              ) : diseasePhenotypeSuggestions.length === 0 ? (
+                <div className="text-sm text-slate-500 suggestion-empty">{t('wizard.labels.noPhenotypes', 'Nenhum fenótipo sugerido para esta doença.')}</div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                  {diseasePhenotypeSuggestions.map((item) => (
+                    <label
+                      key={item.hpoId || item.label}
+                      className="phenotype-card"
+                    >
+                      <input
+                        type="checkbox"
+                        checked
+                        onChange={() => handleDiseasePhenotypeToggle(item)}
+                      />
+                      <span className="phenotype-card__content">
+                        <span className="phenotype-card__label">{item.label}</span>
+                        {item.hpoId && <span className="phenotype-card__code">{item.hpoId}</span>}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="clinical-subsection">
+              <div className="border-b border-gray-200 pb-3 mb-1 section-title-block">
+                <h4 className="text-xl font-bold text-gray-800">{t('wizard.sections.suggestedBiomarkers', 'Biomarcadores sugeridos pela doença')}</h4>
+              </div>
+              {!hasSelectedDisease ? (
+                <div className="text-sm text-slate-500 suggestion-empty">{t('wizard.labels.selectDiseaseForBiomarkers', 'Selecione uma doença para carregar biomarcadores sugeridos.')}</div>
+              ) : diseaseBiomarkerSuggestions.length === 0 ? (
+                <div className="text-sm text-slate-500 suggestion-empty">{t('wizard.labels.noBiomarkers', 'Nenhum biomarcador sugerido para esta doença.')}</div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 biomarker-card-grid">
+                  {diseaseBiomarkerSuggestions.map((item, index) => {
+                    const biomarkerKey = getDiseaseBiomarkerKey(item);
+                    const highlightFabry = isFabryCase && /alpha|alfa|galactosidase|lyso|gb3/i.test(`${item.code} ${item.label}`);
+                    const biomarkerValue = String(formData.biomarkers_values?.[biomarkerKey] ?? item.value ?? '').trim();
+                    return (
+                    <div key={`${item.code || item.label || index}`} className={`rounded-xl border p-4 biomarker-card ${highlightFabry ? 'border-cyan-300 bg-cyan-50 biomarker-card--fabry' : 'border-slate-200 bg-slate-50'}`}>
+                      <div className="mb-3 flex items-center justify-between gap-2">
+                        <div>
+                          <div className="text-sm font-semibold text-slate-800">{item.label || item.code || t('wizard.labels.biomarker', 'Biomarcador')}</div>
+                          <div className="text-xs text-slate-500">{item.code || t('wizard.labels.noCode', 'sem código')} {item.unit ? `• ${item.unit}` : ''}</div>
+                        </div>
+                        {highlightFabry && <Microscope size={16} className="text-cyan-700" />}
+                      </div>
+                      <div className="space-y-2">
+                        <Input
+                          data-testid={`wizard-biomarker-value-${index}`}
+                          className="w-full rounded-lg px-3 py-2"
+                          type="number"
+                          step="any"
+                          label={t('wizard.fields.value', 'Valor')}
+                          value={biomarkerValue}
+                          onChange={(event) => handleDiseaseBiomarkerValueChange(item, event.target.value)}
+                          placeholder={t('wizard.placeholders.informValue', 'Informe o valor')}
+                        />
+                        <p className="text-xs text-slate-600">{t('wizard.labels.autoDerivedFromDisease', 'Derivado automaticamente da doença selecionada em Orphadata.')}</p>
+                      </div>
+                    </div>
+                  );})}
+                </div>
+              )}
+            </div>
+
+            <div className="clinical-subsection">
+              <div className="border-b border-gray-200 pb-3 mb-1 section-title-block">
+                <h4 className="text-xl font-bold text-gray-800">{t('wizard.sections.charlson', 'Charlson Comorbidity Index')}</h4>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 charlson-grid">
+                {CHARLSON_DEFINITIONS.map((option) => (
+                  <label key={option.key} className="flex items-start gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 charlson-item">
+                    <input
+                      type="checkbox"
+                      className="mt-1"
+                      checked={Array.isArray(formData.charlsonConditions) && formData.charlsonConditions.includes(option.key)}
+                      onChange={() => handleCharlsonToggle(option.key)}
+                    />
+                    <span>
+                      <span className="font-semibold">{t(`wizard.charlson.${option.key}`, option.label)}</span>
+                      <span className="ml-2 text-xs text-slate-500 charlson-weight">+{option.weight}</span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+              <div className="charlson-summary-card">
+                <p className="charlson-summary-label">{t('wizard.labels.charlsonResult', 'Resultado ICC (Charlson)')}</p>
+                <div className="charlson-summary-main">
+                  <span className="charlson-summary-score">{charlsonScore}</span>
+                  <span className="charlson-summary-risk">{t(`wizard.charlsonRisk.${getCharlsonRiskLevel(charlsonScore)}`, 'None')}</span>
+                </div>
+                <p className="charlson-summary-note">{t('wizard.labels.charlsonAutoUpdate', 'Score atualizado automaticamente conforme as variáveis selecionadas no índice.')}</p>
+              </div>
+            </div>
+
+            <input type="hidden" value={formData.selectedConsentTemplateId} readOnly />
+          </div>
+        </Card>
+      </div>
+    );
+  };
+
+  return (
+    <div className={`clinical-intake-wizard bg-gray-50 rounded-2xl p-4 md:p-6 ${className}`.trim()}>
+      <form onSubmit={handleSubmit}>
+        <Card className="bg-white rounded-2xl shadow-lg border border-gray-100">
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
+            <div>
+              <h2 className="text-2xl font-bold text-gray-800" style={{ margin: 0 }} data-testid="wizard-title">{t('wizard.title', 'Cadastro Integrado')}</h2>
+              <p className="text-sm font-semibold text-gray-700" style={{ margin: '0.35rem 0 0' }}>{stepMeta[activeStep]?.title || ''}</p>
+            </div>
+            <div className="text-sm font-semibold text-gray-700">{t('wizard.stepProgress', 'Passo')} {activeStep + 1} {t('wizard.stepOf', 'de')} {stepMeta.length}</div>
+          </div>
+        </Card>
+
+        {dictionariesLoading && <Card className="bg-white rounded-2xl shadow-lg border border-gray-100"><div className="text-sm font-semibold text-gray-700">{t('wizard.status.loadingTerminologies', 'Carregando terminologias internas...')}</div></Card>}
+        {consentTemplatesLoading && <Card className="bg-white rounded-2xl shadow-lg border border-gray-100"><div className="text-sm font-semibold text-gray-700">{t('wizard.status.loadingConsent', 'Carregando TCLE ativo...')}</div></Card>}
+        {consentTemplatesError && !/Nenhum TCLE ativo/i.test(String(consentTemplatesError || '')) && <Card className="bg-white rounded-2xl shadow-lg border border-red-100"><div className="text-sm font-semibold text-red-600">{consentTemplatesError}</div></Card>}
+        {submitError && <Card className="bg-white rounded-2xl shadow-lg border border-red-100"><div className="text-sm font-semibold text-red-600">{submitError}</div></Card>}
+        {sampleLabel && (
+          <Card className="sample-label-card bg-white rounded-2xl shadow-lg border border-emerald-200" data-testid="sample-label">
+            <div className="sample-label-header">
+              <h3 className="sample-label-title">{t('wizard.sampleLabel.title', 'Etiqueta de Amostra')}</h3>
+              <span className="sample-label-chip">SPREC {sampleLabel.sprecCode || 'N/A'}</span>
+            </div>
+            <div className="sample-label-body">
+              <div className="sample-label-code" data-testid="sample-label-code">{sampleLabel.code}</div>
+              <Barcode
+                value={sampleLabel.code}
+                displayValue={false}
+                height={56}
+                width={1.5}
+                margin={0}
+                background="#ffffff"
+              />
+              <div className="sample-label-meta">
+                <span>{t('wizard.sampleLabel.patient', 'Paciente')}: {sampleLabel.patientID || 'N/A'}</span>
+                <span>{t('wizard.sampleLabel.type', 'Tipo')}: {sampleLabel.sampleType || 'N/A'}</span>
+              </div>
+            </div>
+          </Card>
+        )}
+        {formData.preAnalyticalUnknown && (
+          <Card className="rounded-2xl border border-amber-200 bg-amber-50">
+            <div className="text-sm font-semibold text-amber-900">
+              Segurança de governança ativa: com processamento desconhecido, os eixos SPREC 3, 4, 5 e 6 permanecem em código X para manter rastreabilidade e auditoria.
+            </div>
+          </Card>
+        )}
+
+        {renderStepContent()}
+
+        <Card className="integrity-footer-card">
+          <div className="integrity-footer-header">
+            <div>
+              <p className="integrity-footer-eyebrow">{t('wizard.integrity.eyebrow', 'Integridade Criptográfica')}</p>
+              <h4 className="integrity-footer-title">{t('wizard.integrity.title', 'Merkle Root da Amostra')}</h4>
+            </div>
+            <span className={`integrity-footer-badge ${sampleIntegrityValid ? 'is-valid' : 'is-invalid'}`}>
+              <Lock size={14} />
+              {sampleIntegrityValid ? t('wizard.integrity.valid', 'Íntegra') : t('wizard.integrity.pending', 'Pendente')}
+            </span>
+          </div>
+          <code className="integrity-footer-hash">{sampleMerkleRoot || t('wizard.integrity.hashUnavailable', 'hash não disponível')}</code>
+          <div className="integrity-footer-actions">
+            <Button className="integrity-footer-verify-btn" type="button" variant="secondary" onClick={handleVerifySignature} disabled={isSignatureChecking || !sampleMerkleRoot}>
+              {isSignatureChecking ? t('wizard.integrity.validating', 'Validando...') : t('wizard.integrity.verify', 'Validar Assinatura')}
+            </Button>
+            {signatureFeedback && <span className="integrity-footer-feedback">{signatureFeedback}</span>}
+          </div>
+        </Card>
+
+        <Card className="bg-white rounded-2xl shadow-lg border border-gray-100">
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap' }}>
+            <Button data-testid="wizard-back-button" className="rounded-lg px-6 py-2.5 font-medium transition-transform duration-200 active:scale-95 hover:shadow-md" type="button" variant="secondary" onClick={handleBack} disabled={activeStep === 0 || isSubmitting}>{t('common.back', 'Voltar')}</Button>
+            {activeStep < stepMeta.length - 1 ? (
+              <Button data-testid="wizard-next-button" className="rounded-lg px-6 py-2.5 font-medium transition-transform duration-200 active:scale-95 hover:shadow-md" type="button" onClick={handleNext} disabled={isSubmitting}>{t('common.next', 'Próximo')}</Button>
+            ) : (
+              <Button
+                data-testid="wizard-submit-button"
+                className="rounded-lg px-6 py-2.5 font-medium transition-transform duration-200 active:scale-95 hover:shadow-md"
+                type="submit"
+                onClick={() => console.log('[DEBUG] Botão clicado')}
+                disabled={isSubmitting || consentTemplatesLoading || !selectedConsentTemplate}
+              >
+                {isSubmitting ? t('wizard.status.sending', 'Enviando...') : submitLabel}
+              </Button>
+            )}
+          </div>
+        </Card>
+      </form>
+    </div>
+  );
+}

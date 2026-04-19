@@ -1,0 +1,81 @@
+# Page snapshot
+
+```yaml
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - heading "BioAvanceD" [level=1] [ref=e6]
+      - paragraph [ref=e7]: Sistema de Gerenciamento de Amostras Biológicas
+    - navigation [ref=e8]:
+      - link "Dashboard" [ref=e9] [cursor=pointer]:
+        - /url: /dashboard
+        - img [ref=e11]
+        - generic [ref=e16]: Dashboard
+      - link "Novo Atendimento (Paciente + Amostra)" [ref=e17] [cursor=pointer]:
+        - /url: /next/intake
+        - img [ref=e19]
+        - generic [ref=e23]: Novo Atendimento (Paciente + Amostra)
+      - link "Diretório de Pacientes" [ref=e24] [cursor=pointer]:
+        - /url: /patients
+        - img [ref=e26]
+        - generic [ref=e30]: Diretório de Pacientes
+      - link "Inventário de Amostras" [ref=e31] [cursor=pointer]:
+        - /url: /samples
+        - img [ref=e33]
+        - generic [ref=e35]: Inventário de Amostras
+      - link "Arquivos de Análise" [ref=e36] [cursor=pointer]:
+        - /url: /results
+        - img [ref=e38]
+        - generic [ref=e41]: Arquivos de Análise
+      - link "Gerenciamento de Instalações" [ref=e42] [cursor=pointer]:
+        - /url: /facility-management
+        - img [ref=e44]
+        - generic [ref=e47]: Gerenciamento de Instalações
+      - link "Assistente" [ref=e48] [cursor=pointer]:
+        - /url: /assistant
+        - img [ref=e50]
+        - generic [ref=e52]: Assistente
+      - link "Construtor de TCLE" [ref=e53] [cursor=pointer]:
+        - /url: /admin/tcle/new
+        - img [ref=e55]
+        - generic [ref=e58]: Construtor de TCLE
+      - link "Minha Segurança" [ref=e59] [cursor=pointer]:
+        - /url: /user/security
+        - img [ref=e61]
+        - generic [ref=e63]: Minha Segurança
+      - link "Relatórios" [ref=e64] [cursor=pointer]:
+        - /url: /reports
+        - img [ref=e66]
+        - generic [ref=e68]: Relatórios
+      - link "Logs" [ref=e69] [cursor=pointer]:
+        - /url: /logs
+        - img [ref=e71]
+        - generic [ref=e76]: Logs
+  - generic [ref=e77]:
+    - banner [ref=e78]:
+      - generic [ref=e79]:
+        - heading "BioAvanceD" [level=2] [ref=e80]
+        - generic [ref=e81]:
+          - generic [ref=e82]:
+            - img [ref=e83]
+            - generic [ref=e86]: Idioma
+            - combobox "Idioma" [ref=e87] [cursor=pointer]:
+              - option "Português (Brasil)"
+              - option "English (US)" [selected]
+              - option "Espanhol (ES)"
+          - generic [ref=e88]:
+            - img [ref=e89]
+            - generic [ref=e92]:
+              - generic [ref=e93]: Usuário
+              - generic [ref=e94]: "Acesso: Coordenador"
+          - button "Novo Atendimento (Paciente + Amostra)" [ref=e95] [cursor=pointer]:
+            - img [ref=e96]
+            - text: Novo Atendimento (Paciente + Amostra)
+          - button "Logout" [ref=e100] [cursor=pointer]:
+            - img [ref=e101]
+            - text: Logout
+    - main [ref=e104]:
+      - generic [ref=e107]:
+        - text: Nome completo
+        - textbox "Campo de entrada" [ref=e109]
+```

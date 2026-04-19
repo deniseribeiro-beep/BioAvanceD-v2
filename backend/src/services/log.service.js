@@ -124,6 +124,21 @@ class LogService {
         }
       }
 
+      // Filtro por tipo de recurso (canônico)
+      if (filters.resourceType) {
+        const resourceTypeFilter = Array.isArray(filters.resourceType)
+          ? { $in: filters.resourceType }
+          : filters.resourceType;
+
+        query.$and = query.$and || [];
+        query.$and.push({
+          $or: [
+            { resourceType: resourceTypeFilter },
+            { entity: resourceTypeFilter }
+          ]
+        });
+      }
+
       // Filtro por severidade
       if (filters.severity) {
         if (Array.isArray(filters.severity)) {
@@ -140,6 +155,21 @@ class LogService {
         } else {
           query.result = filters.result;
         }
+      }
+
+      // Filtro por status (canônico)
+      if (filters.status) {
+        const statusFilter = Array.isArray(filters.status)
+          ? { $in: filters.status }
+          : filters.status;
+
+        query.$and = query.$and || [];
+        query.$and.push({
+          $or: [
+            { status: statusFilter },
+            { result: statusFilter }
+          ]
+        });
       }
 
       // Filtro por IP
@@ -162,12 +192,16 @@ class LogService {
         const searchConditions = [
           { message: { $regex: filters.search, $options: 'i' } },
           { action: { $regex: filters.search, $options: 'i' } },
-          { userName: { $regex: filters.search, $options: 'i' } } // Busca por identificador anonimizado
+          { userName: { $regex: filters.search, $options: 'i' } }, // Busca por identificador anonimizado
+          { entity: { $regex: filters.search, $options: 'i' } },
+          { resourceType: { $regex: filters.search, $options: 'i' } }
         ];
 
         if (query.$or) {
+          const existingAnd = Array.isArray(query.$and) ? query.$and : [];
           // Se já existe $or, combina com busca
           query.$and = [
+            ...existingAnd,
             { $or: query.$or },
             { $or: searchConditions }
           ];
@@ -199,7 +233,9 @@ class LogService {
         if (query.$and) {
           query.$and.push({ $or: dateConditions });
         } else if (query.$or) {
+          const existingAnd = Array.isArray(query.$and) ? query.$and : [];
           query.$and = [
+            ...existingAnd,
             { $or: query.$or },
             { $or: dateConditions }
           ];
@@ -291,7 +327,12 @@ class LogService {
   async getEntityLogs(db, entity, entityID, limit = 50) {
     try {
       const logsCollection = db.collection('logs');
-      const query = { entity, entityID };
+      const query = {
+        $and: [
+          { $or: [{ entity }, { resourceType: entity }] },
+          { $or: [{ entityID }, { resourceId: entityID }] }
+        ]
+      };
 
       const logs = await logsCollection
         .find(query)

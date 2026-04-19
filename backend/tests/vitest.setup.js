@@ -1,0 +1,1 @@
+process.env.CONSENT_SECRET = process.env.CONSENT_SECRET || 'test-consent-secret';

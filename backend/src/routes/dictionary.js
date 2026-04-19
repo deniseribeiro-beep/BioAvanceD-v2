@@ -3,6 +3,64 @@ const express = require('express');
 const router = express.Router();
 const redis = require('redis');
 const { getNeo4jDriver } = require('../database/neo4j');
+const DrugService = require('../services/DrugService');
+
+const DEFAULT_MEDICATIONS = [
+  {
+    code: 'ATC:A16AB04',
+    atc_code: 'A16AB04',
+    atc_level_1: 'A',
+    name: 'Agalsidase beta',
+    synonyms: ['Fabrazyme', 'Agalsidase-Beta'],
+    drug_class: 'enzyme_replacement_therapy',
+    disease_categories: ['Erros Inatos do Metabolismo'],
+  },
+  {
+    code: 'ATC:A16AB03',
+    atc_code: 'A16AB03',
+    atc_level_1: 'A',
+    name: 'Agalsidase alfa',
+    synonyms: ['Replagal', 'Agalsidase-Alfa'],
+    drug_class: 'enzyme_replacement_therapy',
+    disease_categories: ['Erros Inatos do Metabolismo'],
+  },
+  {
+    code: 'ATC:A16AX14',
+    atc_code: 'A16AX14',
+    atc_level_1: 'A',
+    name: 'Migalastat',
+    synonyms: ['Galafold'],
+    drug_class: 'pharmacological_chaperone',
+    disease_categories: ['Erros Inatos do Metabolismo'],
+  },
+  {
+    code: 'ATC:H02AB02',
+    atc_code: 'H02AB02',
+    atc_level_1: 'H',
+    name: 'Deflazacorte',
+    synonyms: ['Deflazacort'],
+    drug_class: 'corticosteroid',
+    disease_categories: ['Doencas Neurologicas'],
+  },
+  {
+    code: 'ATC:M09AX03',
+    atc_code: 'M09AX03',
+    atc_level_1: 'M',
+    name: 'Atalureno',
+    synonyms: ['Translarna'],
+    drug_class: 'exon_skipping_therapy',
+    disease_categories: ['Doencas Neurologicas'],
+  },
+  {
+    code: 'ATC:N03AX26',
+    atc_code: 'N03AX26',
+    atc_level_1: 'N',
+    name: 'Cannabidiol',
+    synonyms: ['Epidiolex'],
+    drug_class: 'anticonvulsant',
+    disease_categories: ['Doencas Neurologicas'],
+  },
+];
 
 // Redis client (assume redis running on default port)
 const redisClient = redis.createClient({ url: process.env.REDIS_URL || 'redis://localhost:6379' });
@@ -19,6 +77,112 @@ function normalizeCoding(raw = {}, fallbackSystem) {
 
   return { system, code, display };
 }
+
+function normalizeOrphaCode(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  return raw.replace(/^ORPHA:/i, '');
+}
+
+function normalizeDiseaseProfile(record = {}) {
+  const requirements = record?.validation_requirements && typeof record.validation_requirements === 'object'
+    ? record.validation_requirements
+    : {};
+
+  return {
+    orpha_code: normalizeOrphaCode(record.orpha_code),
+    name: String(record.name || '').trim(),
+    disease_category: String(record.disease_category || '').trim(),
+    validation_requirements: requirements,
+    drug_classes: Array.isArray(record.drug_classes) ? record.drug_classes : [],
+  };
+}
+
+function normalizeMedicationRecord(raw = {}) {
+  const atcCode = String(raw.atc_code || raw.code || '').replace(/^ATC:/i, '').trim().toUpperCase();
+  return {
+    code: String(raw.code || '').trim() || (atcCode ? `ATC:${atcCode}` : ''),
+    name: String(raw.name || raw.generic_name || raw.display || '').trim(),
+    generic_name: String(raw.generic_name || raw.name || raw.display || '').trim(),
+    atc_code: atcCode,
+    atc_level_1: String(raw.atc_level_1 || '').trim().toUpperCase() || (atcCode ? atcCode.charAt(0) : ''),
+    atc_classifications: Array.isArray(raw.atc_classifications)
+      ? raw.atc_classifications.map((item) => String(item || '').trim().toUpperCase()).filter(Boolean)
+      : (atcCode ? [atcCode] : []),
+    synonyms: Array.isArray(raw.synonyms)
+      ? raw.synonyms.map((item) => String(item || '').trim()).filter(Boolean)
+      : [],
+    drug_class: String(raw.drug_class || '').trim(),
+    disease_categories: Array.isArray(raw.disease_categories)
+      ? raw.disease_categories.map((item) => String(item || '').trim()).filter(Boolean)
+      : [],
+    active: raw.active !== false,
+  };
+}
+
+async function ensureMedicationDictionarySeeded(db) {
+  const collection = db.collection('medication_dictionary');
+  const count = await collection.estimatedDocumentCount();
+  if (count > 0) {
+    return;
+  }
+
+  const now = new Date();
+  const operations = DEFAULT_MEDICATIONS.map((item) => ({
+    updateOne: {
+      filter: { code: item.code },
+      upsert: true,
+      update: {
+        $set: {
+          ...item,
+          generic_name: item.name,
+          active: true,
+          updatedAt: now,
+        },
+        $setOnInsert: {
+          createdAt: now,
+        },
+      },
+    },
+  }));
+  await collection.bulkWrite(operations, { ordered: false });
+}
+
+async function ensureMedicationDictionaryIndexes(db) {
+  const collection = db.collection('medication_dictionary');
+  await collection.createIndex({ generic_name: 1 }, { name: 'generic_name_idx' });
+  await collection.createIndex({ atc_code: 1 }, { name: 'atc_code_idx' });
+  await collection.createIndex({ name: 'text', generic_name: 'text', synonyms: 'text', code: 'text', atc_code: 'text' }, { name: 'medication_text_idx' });
+  await collection.createIndex({ drug_class: 1 }, { name: 'drug_class_idx' });
+  await collection.createIndex({ disease_categories: 1 }, { name: 'disease_categories_idx' });
+}
+
+router.get('/atc/search', async (req, res) => {
+  const db = req.app.locals.db;
+  if (!db) return res.status(503).json({ error: 'Database unavailable' });
+
+  const query = String(req.query?.query || req.query?.q || '').trim();
+  if (!query) {
+    return res.status(400).json({ error: 'Missing query' });
+  }
+
+  try {
+    await ensureMedicationDictionaryIndexes(db);
+    await ensureMedicationDictionarySeeded(db);
+    const drugService = new DrugService(db);
+    const medications = await drugService.searchAndCacheDrug(query, {
+      limit: Math.min(Math.max(Number(req.query?.limit || 10), 1), 50),
+      auditContext: {
+        req,
+        userID: req.user?.userID || req.user?.id || req.user?._id || null,
+      },
+    });
+
+    return res.json({ medications: medications.map((item) => normalizeMedicationRecord(item)) });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
 
 // Busca ORPHA/HPO com cache
 router.get('/search', async (req, res) => {
@@ -114,6 +278,83 @@ router.get('/suggest', async (req, res) => {
     res.json(response);
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/disease-profile', async (req, res) => {
+  const db = req.app.locals.db;
+  if (!db) return res.status(503).json({ error: 'Database unavailable' });
+
+  const orphaCode = normalizeOrphaCode(req.query?.orphaCode);
+  if (!orphaCode) {
+    return res.status(400).json({ error: 'Missing orphaCode' });
+  }
+
+  try {
+    const collection = db.collection('disease_dictionary');
+    const disease = await collection.findOne({ orpha_code: orphaCode, active: { $ne: false } });
+    if (!disease) {
+      return res.status(404).json({ error: 'Disease profile not found' });
+    }
+
+    return res.json({
+      disease: normalizeDiseaseProfile(disease),
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/medications/search', async (req, res) => {
+  const db = req.app.locals.db;
+  if (!db) return res.status(503).json({ error: 'Database unavailable' });
+
+  const query = String(req.query?.query || req.query?.q || '').trim();
+  const diseaseCategory = String(req.query?.diseaseCategory || '').trim();
+  const drugClasses = String(req.query?.drugClasses || '')
+    .split(',')
+    .map((value) => String(value || '').trim())
+    .filter(Boolean);
+  const limit = Math.min(Math.max(Number(req.query?.limit || 20), 1), 50);
+
+  try {
+    await ensureMedicationDictionaryIndexes(db);
+    await ensureMedicationDictionarySeeded(db);
+    const collection = db.collection('medication_dictionary');
+
+    const filters = [{ active: { $ne: false } }];
+    if (query) {
+      const regex = new RegExp(query, 'i');
+      filters.push({
+        $or: [
+          { name: regex },
+          { generic_name: regex },
+          { synonyms: regex },
+          { code: regex },
+          { atc_code: regex },
+        ],
+      });
+    }
+
+    if (diseaseCategory) {
+      filters.push({ disease_categories: diseaseCategory });
+    }
+
+    if (drugClasses.length > 0) {
+      filters.push({ drug_class: { $in: drugClasses } });
+    }
+
+    const mongoFilter = filters.length === 1 ? filters[0] : { $and: filters };
+    const rows = await collection
+      .find(mongoFilter)
+      .sort({ name: 1 })
+      .limit(limit)
+      .toArray();
+
+    const medications = rows.map((row) => normalizeMedicationRecord(row));
+    return res.json({ medications });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
   }
 });
 

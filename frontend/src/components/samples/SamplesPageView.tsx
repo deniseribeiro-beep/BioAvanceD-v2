@@ -1,119 +1,15 @@
-import React, { useState } from 'react';
+import { Fragment, useState } from 'react';
+import { Edit3, Package, Printer, QrCode, Search } from 'lucide-react';
+import Barcode from 'react-barcode';
+import Button from '../UI/Button';
+import Card from '../UI/Card';
+import Input from '../UI/Input';
 import Modal from '../UI/Modal';
-
-// Anonymization function for samples
-function anonymizeSample(obj: any) {
-  const { sampleID, patientCpf, patientRecordNumber, type, origin, ...rest } = obj;
-  return {
-    sampleID,
-    patientCpf,
-    patientRecordNumber,
-    type,
-    origin,
-    // outros campos permitidos podem ser adicionados aqui
-  };
-}
-  // State for Import Samples modal
-  const [isSampleImportModalOpen, setIsSampleImportModalOpen] = useState(false);
-  const [importedSampleFile, setImportedSampleFile] = useState<File | null>(null);
-  const [importedSampleJson, setImportedSampleJson] = useState<any>(null);
-  const [sampleImportLoading, setSampleImportLoading] = useState(false);
-  const [sampleImportResult, setSampleImportResult] = useState<{ success?: boolean; message?: string; samples?: number; error?: string } | null>(null);
-
-  // Handler for reading sample file
-  const handleSampleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file && file.type === 'application/json') {
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        try {
-          const json = JSON.parse(ev.target?.result as string);
-          setImportedSampleFile(file);
-          setImportedSampleJson(json);
-        } catch (err) {
-          alert('Arquivo JSON inválido');
-          setImportedSampleFile(null);
-          setImportedSampleJson(null);
-        }
-      };
-      reader.readAsText(file);
-    } else {
-      alert('Selecione um arquivo .json válido');
-      setImportedSampleFile(null);
-      setImportedSampleJson(null);
-    }
-  };
-
-  // Handler for submitting sample import
-  const handleSampleImportSubmit = async () => {
-    if (!importedSampleJson) return;
-    setSampleImportLoading(true);
-    setSampleImportResult(null);
-    try {
-      // Basic anonymization: remove extra sensitive fields
-      const anonymized = Array.isArray(importedSampleJson)
-        ? importedSampleJson.map(obj => anonymizeSample(obj))
-        : anonymizeSample(importedSampleJson);
-      const response = await fetch('http://localhost:3000/api/import/samples', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(anonymized)
-      });
-      const data = await response.json();
-      setSampleImportResult(data);
-      if (data.success !== false && data.samples) {
-        alert('Importação de amostras concluída!');
-        setIsSampleImportModalOpen(false);
-        setImportedSampleFile(null);
-        setImportedSampleJson(null);
-        // Optionally: refresh samples list here if needed
-      } else {
-        alert(data.message || data.error || 'Erro ao importar amostras');
-      }
-    } catch (err: any) {
-      setSampleImportResult({ success: false, error: err.message });
-      alert('Erro ao importar amostras: ' + err.message);
-    } finally {
-      setSampleImportLoading(false);
-    }
-  };
-      {/* Import Samples Button (only on inventory page) */}
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16 }}>
-        <Button variant="secondary" onClick={() => setIsSampleImportModalOpen(true)}>
-          Importar Amostras
-        </Button>
-      </div>
-      {/* Modal de Importação de Amostras */}
-      <Modal isOpen={isSampleImportModalOpen} onClose={() => { setIsSampleImportModalOpen(false); setImportedSampleFile(null); setImportedSampleJson(null); setSampleImportResult(null); }} title="Importação de Amostras (Vinculadas a Pacientes)">
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', minWidth: 320 }}>
-          <label style={{ fontWeight: 500 }}>Selecione um arquivo de amostras (.json):</label>
-          <input type="file" accept="application/json" onChange={handleSampleFileChange} disabled={sampleImportLoading} title="Selecione um arquivo .json de amostras" />
-          {importedSampleJson && (
-            <div style={{ maxHeight: 180, overflow: 'auto', background: '#f8fafc', border: '1px solid #e5e7eb', borderRadius: 6, padding: 8, fontSize: 13 }}>
-              <pre style={{ margin: 0 }}>{JSON.stringify(importedSampleJson, null, 2).slice(0, 2000)}{JSON.stringify(importedSampleJson, null, 2).length > 2000 ? '... (truncado)' : ''}</pre>
-            </div>
-          )}
-          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-            <Button onClick={handleSampleImportSubmit} disabled={!importedSampleJson || sampleImportLoading}>
-              {sampleImportLoading ? 'Processando...' : 'Processar Importação'}
-            </Button>
-            <Button variant="secondary" onClick={() => { setIsSampleImportModalOpen(false); setImportedSampleFile(null); setImportedSampleJson(null); setSampleImportResult(null); }} disabled={sampleImportLoading}>
-              Cancelar
-            </Button>
-          </div>
-          {sampleImportResult && (
-            <div style={{ color: sampleImportResult.success === false ? '#dc2626' : '#16a34a', fontSize: 14, marginTop: 8 }}>
-              {sampleImportResult.message || sampleImportResult.error}
-              {sampleImportResult.samples !== undefined && (
-                <div>
-                  Amostras: {sampleImportResult.samples}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      </Modal>
-
+import Table from '../UI/Table';
+import SampleStatusBadge from '../SampleStatusBadge';
+import InlineStorageMovementPanel from './InlineStorageMovementPanel';
+import type { Sample } from '../../types/models';
+import type { SampleWithId } from '../../hooks/samples/useSamplesPage';
 
 type TranslatorFn = (key: string) => string;
 
@@ -220,7 +116,7 @@ export default function SamplesPageView({
   return (
     <div className="page samples-page">
       <div className="page-header">
-        <h1>{t('samples.title')}</h1>
+        <h1 data-testid="samples-page-title">{t('samples.title')}</h1>
       </div>
 
       <Card style={{ marginBottom: '1rem' }}>
@@ -231,6 +127,7 @@ export default function SamplesPageView({
               placeholder={scanMode ? 'Escaneie barcode/QR code e pressione pesquisar' : t('samples.searchPlaceholder')}
               value={search}
               onChange={(e) => onSearchChange(e.target.value)}
+              data-testid="samples-search-input"
             />
             <p className="samples-search-hint">
               {scanMode
@@ -238,7 +135,7 @@ export default function SamplesPageView({
                 : t('samples.searchHint')}
             </p>
             <div className="samples-search-actions">
-              <button type="button" className="samples-search-button" onClick={onSearchSubmit}>
+              <button type="button" className="samples-search-button" onClick={onSearchSubmit} data-testid="samples-search-button">
                 <Search size={15} />
                 Pesquisar
               </button>
@@ -246,6 +143,7 @@ export default function SamplesPageView({
                 type="button"
                 className={`samples-search-button samples-search-button--scan ${scanMode ? 'active' : ''}`}
                 onClick={() => setScanMode((current) => !current)}
+                data-testid="samples-scan-button"
               >
                 <QrCode size={15} />
                 {scanMode ? 'Leitura ativa' : 'Barcode/QR'}
@@ -254,23 +152,15 @@ export default function SamplesPageView({
           </div>
           {selectedSampleIds.length > 0 && (
             <div className="toolbar batch">
-              <span>{selectedSampleIds.length} {t('samples.selectedItems')}</span>
-              <Button variant="danger" onClick={onBatchDelete}>
-                <Trash2 size={16} />
+              <span>
+                {selectedSampleIds.length} {t('samples.selectedItems')}
+              </span>
+              <Button variant="danger" onClick={onBatchDelete} data-testid="samples-batch-delete">
                 {t('samples.delete')}
-              </Button>
-              <Button onClick={onOpenPrintModal}>
-                <Printer size={16} />
-                {t('samples.printLabels')}
               </Button>
             </div>
           )}
-        </div>
-      </Card>
-
-      <Card>
-        <div className="samples-results-summary">
-          <div>
+          <div className="toolbar info">
             <strong>
               {filteredSamples.length} {filteredSamples.length === 1 ? 'amostra exibida' : 'amostras exibidas'}
             </strong>
@@ -281,6 +171,7 @@ export default function SamplesPageView({
             </p>
           </div>
         </div>
+
         <Table>
           <thead>
             <tr>
@@ -290,6 +181,7 @@ export default function SamplesPageView({
                   checked={allSelected}
                   onChange={onToggleSelectAll}
                   aria-label={t('samples.selectAllAria')}
+                  data-testid="samples-select-all-checkbox"
                 />
               </th>
               <th>{t('samples.tableHeaders.type')}</th>
@@ -303,7 +195,7 @@ export default function SamplesPageView({
               <th>{t('samples.tableHeaders.actions')}</th>
             </tr>
           </thead>
-          <tbody>
+          <tbody data-testid="samples-table">
             {loading ? (
               <tr>
                 <td colSpan={10} style={{ textAlign: 'center', padding: '1.5rem' }}>
@@ -335,90 +227,94 @@ export default function SamplesPageView({
                 const { initial, current } = computeVolume(sample);
                 const patientId = sample.patientID ?? (sample as any).patient?.patientID;
                 const isExpanded = expandedStorageSample?.id === sample.id;
+
                 return (
                   <Fragment key={sample.id}>
-                    <tr className={isExpanded ? 'samples-row--expanded' : ''} key={sample.id}>
-                    <td className="center">
-                      <input
-                        type="checkbox"
-                        checked={selectedSampleIds.includes(sample.id)}
-                        onChange={() => onToggleSelect(sample)}
-                        aria-label={t('samples.selectOneAria')}
-                      />
-                    </td>
-                    <td>{sample.sampleType || 'N/A'}</td>
-                    <td>{sample.sampleOrigin || 'N/A'}</td>
-                    <td style={{ fontFamily: 'monospace' }}>{sample.barcode || sample.sampleID || 'N/A'}</td>
-                    <td>
-                      <SampleStatusBadge status={mapStatus(sample) as any} />
-                    </td>
-                    <td>
-                      {sample.canUse === false ? (
-                        <span className="consent-badge pending" title={sample.consentMessage || t('samples.consent.pendingTitle')}>
-                          ⚠️ {t('samples.consent.pending')}
-                        </span>
-                      ) : sample.consentValid ? (
-                        <span className="consent-badge approved" title={sample.consentMessage || t('samples.consent.signedTitle')}>
-                          ✓ {t('samples.consent.signed')}
-                        </span>
-                      ) : (
-                        <span className="consent-badge unknown" title={t('samples.consent.unknownStatus')}>
-                          ? {t('samples.consent.check')}
-                        </span>
-                      )}
-                    </td>
-                    <td>
-                      <strong>
-                        {current.toLocaleString(language, { minimumFractionDigits: 1, maximumFractionDigits: 1 })} /{' '}
-                        {initial.toLocaleString(language, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}
-                      </strong>
-                    </td>
-                    <td>{patientId ?? 'N/A'}</td>
-                    <td style={{ fontSize: '0.92rem' }}>{getStorageLabel(sample)}</td>
-                    <td>
-                      <div className="samples-row-actions">
-                        <Button
-                          variant="secondary"
-                          className="samples-row-action samples-row-action--storage"
-                          disabled={sample.canUse === false}
-                          onClick={() => onOpenStorage(sample)}
-                          title={sample.canUse === false ? t('samples.editTooltip.consentPending') : t('samples.physicalStorageAction')}
-                        >
-                          <Package size={15} />
-                          {isExpanded ? t('common.close') : t('samples.storageInline.action')}
-                        </Button>
-                        <Button
-                          variant="secondary"
-                          disabled={!canEdit || sample.canUse === false}
-                          onClick={() => onEditSample(sample.id)}
-                          title={
-                            !canEdit
-                              ? t('samples.editTooltip.noPermission')
-                              : sample.canUse === false
-                                ? t('samples.editTooltip.consentPending')
-                                : t('samples.editTooltip.edit')
-                          }
-                          style={{ padding: '0.35rem 0.65rem' }}
-                        >
-                          <Edit3 size={15} />
-                        </Button>
-                      </div>
-                    </td>
-                  </tr>
-                  {isExpanded && (
-                    <tr className="samples-inline-row">
-                      <td colSpan={10}>
-                        <div className="samples-inline-row__body">
-                          <InlineStorageMovementPanel
-                            sample={sample}
-                            t={t}
-                            onCancel={onCloseExpandedStorage}
-                            onCompleted={onStorageCompleted}
-                          />
+                    <tr className={isExpanded ? 'samples-row--expanded' : ''} data-testid={`sample-row-${sample.id}`}>
+                      <td className="center">
+                        <input
+                          type="checkbox"
+                          checked={selectedSampleIds.includes(sample.id)}
+                          onChange={() => onToggleSelect(sample)}
+                          aria-label={t('samples.selectOneAria')}
+                          data-testid={`sample-checkbox-${sample.id}`}
+                        />
+                      </td>
+                      <td>{sample.sampleType || 'N/A'}</td>
+                      <td>{sample.sampleOrigin || 'N/A'}</td>
+                      <td style={{ fontFamily: 'monospace' }}>{sample.barcode || sample.sampleID || 'N/A'}</td>
+                      <td>
+                        <SampleStatusBadge status={mapStatus(sample) as any} />
+                      </td>
+                      <td>
+                        {sample.canUse === false ? (
+                          <span className="consent-badge pending" title={sample.consentMessage || t('samples.consent.pendingTitle')}>
+                            ⚠️ {t('samples.consent.pending')}
+                          </span>
+                        ) : sample.consentValid ? (
+                          <span className="consent-badge approved" title={sample.consentMessage || t('samples.consent.signedTitle')}>
+                            ✓ {t('samples.consent.signed')}
+                          </span>
+                        ) : (
+                          <span className="consent-badge unknown" title={t('samples.consent.unknownStatus')}>
+                            ? {t('samples.consent.check')}
+                          </span>
+                        )}
+                      </td>
+                      <td>
+                        <strong>
+                          {current.toLocaleString(language, { minimumFractionDigits: 1, maximumFractionDigits: 1 })} /{' '}
+                          {initial.toLocaleString(language, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}
+                        </strong>
+                      </td>
+                      <td>{patientId ?? 'N/A'}</td>
+                      <td style={{ fontSize: '0.92rem' }}>{getStorageLabel(sample)}</td>
+                      <td>
+                        <div className="samples-row-actions">
+                          <Button
+                            variant="secondary"
+                            className="samples-row-action samples-row-action--storage"
+                            disabled={sample.canUse === false}
+                            onClick={() => onOpenStorage(sample)}
+                            data-testid={`sample-storage-button-${sample.id}`}
+                            title={sample.canUse === false ? t('samples.editTooltip.consentPending') : t('samples.physicalStorageAction')}
+                          >
+                            <Package size={15} />
+                            {isExpanded ? t('common.close') : t('samples.storageInline.action')}
+                          </Button>
+                          <Button
+                            variant="secondary"
+                            disabled={!canEdit || sample.canUse === false}
+                            onClick={() => onEditSample(sample.id)}
+                            data-testid={`sample-edit-button-${sample.id}`}
+                            title={
+                              !canEdit
+                                ? t('samples.editTooltip.noPermission')
+                                : sample.canUse === false
+                                  ? t('samples.editTooltip.consentPending')
+                                  : t('samples.editTooltip.edit')
+                            }
+                            style={{ padding: '0.35rem 0.65rem' }}
+                          >
+                            <Edit3 size={15} />
+                          </Button>
                         </div>
                       </td>
                     </tr>
-                  )}
+                    {isExpanded && (
+                      <tr className="samples-inline-row">
+                        <td colSpan={10}>
+                          <div className="samples-inline-row__body">
+                            <InlineStorageMovementPanel
+                              sample={sample}
+                              t={t}
+                              onCancel={onCloseExpandedStorage}
+                              onCompleted={onStorageCompleted}
+                            />
+                          </div>
+                        </td>
+                      </tr>
+                    )}
                   </Fragment>
                 );
               })
@@ -433,6 +329,7 @@ export default function SamplesPageView({
             {selectedSamples.map((sample) => {
               const barcodeValue = sample.barcode || sample.sampleID || sample.id;
               const patientId = sample.patientID ?? (sample as any).patient?.patientID;
+
               return (
                 <div key={sample.id} className="qr-label">
                   <div className="qr-label__title">{sample.sampleType || t('samples.sampleFallback')}</div>
@@ -458,40 +355,6 @@ export default function SamplesPageView({
           </div>
         </Modal>
       )}
-
-      <style>
-        {`
-          #printable-area {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-            gap: 12px;
-            padding: 4px;
-          }
-          .qr-label {
-            border: 1px dashed #d1d5db;
-            border-radius: 8px;
-            padding: 10px;
-            background: #fff;
-          }
-          .qr-label__title { font-weight: 700; margin-bottom: 6px; }
-          .qr-label__code { font-family: monospace; color: #0f172a; margin-bottom: 4px; }
-          .qr-label__patient { font-size: 0.85rem; color: #475569; }
-          .toolbar { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
-          .toolbar.batch { background: #f8fafc; padding: 0.5rem 0.75rem; border-radius: 8px; }
-          .center { text-align: center; }
-          .import-banner { display: inline-flex; gap: 0.75rem; align-items: center; background: #e0f2fe; padding: 0.5rem 0.75rem; border-radius: 8px; }
-          .import-banner.success { background: #e7f6ed; color: #166534; }
-          .import-error { margin-top: 0.5rem; color: #b91c1c; font-size: 0.9rem; }
-          .spinner { width: 12px; height: 12px; border: 2px solid #0284c7; border-top-color: transparent; border-radius: 50%; animation: spin 1s linear infinite; }
-          @keyframes spin { to { transform: rotate(360deg); } }
-          @media print {
-            body * { visibility: hidden; }
-            #printable-area, #printable-area * { visibility: visible; }
-            #printable-area { position: absolute; left: 0; top: 0; width: 100%; padding: 0; }
-            .modal-overlay, .modal-content, .modal-body, .modal-header, .modal-title, .modal-close { all: unset; }
-          }
-        `}
-      </style>
     </div>
   );
 }

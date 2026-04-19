@@ -168,9 +168,9 @@ export default function ConsentPage() {
 
   if (loading) {
     return (
-      <div className="page consent-page">
+      <div className="page consent-page" data-testid="consent-page-loading">
         <Card>
-          <div className="consent-page-status">
+          <div className="consent-page-status" data-testid="consent-page-status">
             <Spinner size="sm" label={t('consent.page.loading')} />
             <span>{t('consent.page.loading')}</span>
           </div>
@@ -181,12 +181,12 @@ export default function ConsentPage() {
 
   if (error || !template) {
     return (
-      <div className="page consent-page">
+      <div className="page consent-page" data-testid="consent-page-error-state">
         <Card title={t('consent.page.cardTitle')}>
-          <div className="consent-page-error">
+          <div className="consent-page-error" data-testid="consent-page-error-message">
             {error || t('consent.page.noActiveTemplate')}
           </div>
-          <Button variant="secondary" onClick={handleCancel}>
+          <Button variant="secondary" onClick={handleCancel} data-testid="consent-page-back-button">
             {t('common.back')}
           </Button>
         </Card>
@@ -195,21 +195,21 @@ export default function ConsentPage() {
   }
 
   return (
-    <div className="page consent-page">
+    <div className="page consent-page" data-testid="consent-page">
       <Card>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
-          <div>
+        <div data-testid="consent-page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+          <div data-testid="consent-page-patient-summary">
             <strong>{t('patients.consentReadyTitle')}</strong>
-            <p style={{ margin: '0.35rem 0 0 0', color: 'var(--text-light)' }}>
+            <p data-testid="consent-page-patient-id" style={{ margin: '0.35rem 0 0 0', color: 'var(--text-light)' }}>
               {t('patients.tableId')}: {patientId}
             </p>
             {routeState.linkedProject && (
-              <p style={{ margin: '0.35rem 0 0 0', color: 'var(--text-light)' }}>
+              <p data-testid="consent-page-linked-project" style={{ margin: '0.35rem 0 0 0', color: 'var(--text-light)' }}>
                 {t('patients.selectedProjectLabel')}: {routeState.linkedProject}
               </p>
             )}
           </div>
-          <Button variant="secondary" onClick={handleResendByEmail} disabled={resendingConsent}>
+          <Button variant="secondary" onClick={handleResendByEmail} disabled={resendingConsent} data-testid="consent-page-resend-button">
             {resendingConsent ? t('patients.sendingConsent') : t('patients.resendConsent')}
           </Button>
         </div>

@@ -93,7 +93,7 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="login-page">
+    <div className="login-page" data-testid="login-page">
       <div className="login-container">
         <Card className="login-card">
           <div className="login-header">
@@ -101,14 +101,15 @@ export default function LoginPage() {
             <p className="login-subtitle">{t('app.subtitle')}</p>
           </div>
 
-          <form onSubmit={handleSubmit} className="login-form">
+          <form onSubmit={handleSubmit} className="login-form" data-testid="login-form">
             {error && (
-              <div className="error-message">
+              <div className="error-message" data-testid="login-error">
                 {error}
               </div>
             )}
 
             <Input
+              data-testid="login-username-input"
               label={t('auth.username')}
               type="text"
               value={username}
@@ -119,6 +120,7 @@ export default function LoginPage() {
             />
 
             <Input
+              data-testid="login-password-input"
               label={t('auth.password')}
               type="password"
               value={password}
@@ -129,8 +131,9 @@ export default function LoginPage() {
             />
 
             {requiresTwoFactor && (
-              <div className="two-factor-section">
+              <div className="two-factor-section" data-testid="two-factor-section">
                 <Input
+                  data-testid="login-mfa-code-input"
                   label={t('auth.twoFactorCode')}
                   type="text"
                   value={twoFactorCode}
@@ -156,6 +159,7 @@ export default function LoginPage() {
             <Button 
               type="submit" 
               className="login-button"
+              data-testid="login-submit-button"
               disabled={loading}
             >
               {loading ? t('common.loading') : requiresTwoFactor ? t('mfa.verify') : t('auth.login')}
@@ -166,6 +170,7 @@ export default function LoginPage() {
                 type="button"
                 onClick={() => setShowForgotPassword(true)}
                 className="link-button"
+                data-testid="login-forgot-password-button"
               >
                 {t('auth.forgotPassword')}
               </button>
@@ -181,6 +186,7 @@ export default function LoginPage() {
 
       {/* Modal de recuperação de senha */}
       <Modal
+        data-testid="forgot-password-modal"
         isOpen={showForgotPassword}
         onClose={() => {
           setShowForgotPassword(false);
@@ -191,7 +197,7 @@ export default function LoginPage() {
         }}
         title={t('auth.resetPassword')}
       >
-        <div className="forgot-password-modal">
+        <div className="forgot-password-modal" data-testid="forgot-password-modal-content">
           {forgotPasswordError && (
             <div className="error-message" style={{ marginBottom: '1rem' }}>
               <AlertCircle size={16} />
@@ -201,22 +207,24 @@ export default function LoginPage() {
           {!forgotPasswordSuccess ? (
             <>
               <p style={{ marginBottom: '1.5rem', color: 'var(--text-secondary)' }}>
-                Digite seu email cadastrado. Enviaremos um link para redefinir sua senha.
+                {t('auth.resetPasswordInstructions', 'Digite seu email cadastrado. Enviaremos um link para redefinir sua senha.')}
               </p>
               <Input
-                label="Email"
+                data-testid="forgot-password-email-input"
+                label={t('auth.email', 'Email')}
                 type="email"
                 value={forgotPasswordEmail}
                 onChange={(e) => setForgotPasswordEmail(e.target.value)}
-                placeholder="seu@email.com"
+                placeholder={t('auth.emailPlaceholder', 'seu@email.com')}
                 required
                 autoFocus
               />
               <div style={{ display: 'flex', gap: '1rem', marginTop: '1.5rem' }}>
                 <Button
+                  data-testid="forgot-password-send-button"
                   onClick={async () => {
                     if (!forgotPasswordEmail) {
-                      setForgotPasswordError('Digite seu email');
+                      setForgotPasswordError(t('auth.enterEmail', 'Digite seu email'));
                       return;
                     }
                     setForgotPasswordLoading(true);
@@ -232,7 +240,7 @@ export default function LoginPage() {
                         setResetLink(`${window.location.origin}/reset-password?token=${response.data.token}`);
                       }
                     } catch (err: any) {
-                      setForgotPasswordError(err.response?.data?.error || 'Erro ao solicitar recuperação de senha');
+                      setForgotPasswordError(err.response?.data?.error || t('auth.passwordResetError', 'Erro ao solicitar recuperação de senha'));
                     } finally {
                       setForgotPasswordLoading(false);
                     }
@@ -243,6 +251,7 @@ export default function LoginPage() {
                   {t('auth.sendResetLink')}
                 </Button>
                 <Button
+                  data-testid="forgot-password-cancel-button"
                   variant="secondary"
                   onClick={() => {
                     setShowForgotPassword(false);
@@ -256,25 +265,26 @@ export default function LoginPage() {
           ) : (
             <div className="forgot-password-success">
               <CheckCircle size={48} style={{ color: '#28a745', marginBottom: '1rem' }} />
-              <h3 style={{ margin: '0 0 1rem 0' }}>Link de Recuperação Enviado!</h3>
+              <h3 style={{ margin: '0 0 1rem 0' }}>{t('auth.resetLinkSentTitle', 'Link de Recuperação Enviado!')}</h3>
               <p style={{ marginBottom: '1rem', color: 'var(--text-secondary)' }}>
                 {resetLink ? (
                   <>
-                    Em desenvolvimento, o link de recuperação é:
+                    {t('auth.devResetLinkLabel', 'Em desenvolvimento, o link de recuperação é:')}
                     <div style={{ marginTop: '1rem', padding: '1rem', backgroundColor: '#f8f9fa', borderRadius: '6px' }}>
                       <Link to={resetLink.replace(window.location.origin, '')} style={{ wordBreak: 'break-all', color: 'var(--primary)' }}>
                         {resetLink}
                       </Link>
                     </div>
                     <p style={{ marginTop: '1rem', fontSize: '0.9rem', color: 'var(--text-light)' }}>
-                      Em produção, este link seria enviado por email.
+                      {t('auth.prodResetLinkNote', 'Em produção, este link seria enviado por email.')}
                     </p>
                   </>
                 ) : (
-                  'Se o email existir em nosso sistema, um link de recuperação foi enviado. Verifique sua caixa de entrada.'
+                  t('auth.resetLinkGenericSuccess', 'Se o email existir em nosso sistema, um link de recuperação foi enviado. Verifique sua caixa de entrada.')
                 )}
               </p>
               <Button
+                data-testid="forgot-password-close-button"
                 onClick={() => {
                   setShowForgotPassword(false);
                   setForgotPasswordEmail('');
@@ -282,7 +292,7 @@ export default function LoginPage() {
                   setResetLink('');
                 }}
               >
-                Fechar
+                {t('common.close', 'Fechar')}
               </Button>
             </div>
           )}

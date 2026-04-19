@@ -49,6 +49,13 @@ router.post('/import',
   importAsyncController.createImportJob.bind(importAsyncController)
 );
 
+router.post('/import/samples',
+  authenticate,
+  requirePermission('uploadFiles'),
+  importAsyncController.uploadMiddleware(),
+  importAsyncController.createSampleImportJob.bind(importAsyncController)
+);
+
 // Endpoints de jobs de importação
 router.get('/jobs',
   authenticate,
@@ -83,9 +90,13 @@ router.post('/upload',
 );
 
 
-// Importação FHIR direta (JSON) - pode adicionar autenticação depois se necessário
+// Importação FHIR direta (JSON) com autenticação e autorização
 const { importFhirBundle } = require('../../controllers/import.controller');
-router.post('/fhir', importFhirBundle);
+router.post('/fhir',
+  authenticate,
+  requirePermission('uploadFiles'),
+  importFhirBundle
+);
 
 module.exports = router;
 

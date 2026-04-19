@@ -14,7 +14,10 @@
     "sync-collections": "node scripts/sync-collections.js",
     "sync:consent:neo4j": "node scripts/sync-consent-neo4j.js",
     "seed:full": "node scripts/full-seed.js",
+    "seed": "node src/seeders/index.js",
     "seed:cid": "node src/scripts/seedOrphanetCid.js",
+    "seed:disease-rules": "node src/scripts/seedDiseaseValidationRules.js",
+    "seed:atc-bootstrap": "node src/scripts/seeder.js",
     "migrate:mongo:online-local": "node scripts/migrate-mongo-online-to-local.js",
     "remediate:fhir:barcode": "node scripts/remediate-fhir-missing-barcodes.js",
     "validate:fhir:barcode": "node scripts/check-fhir-barcode-coverage.js",
@@ -34,11 +37,11 @@
     "cleanup": "node ../scripts/cleanup-complete.js",
     "clean": "node ../scripts/cleanup-complete.js",
     "test:redis": "node scripts/test-redis-connection.js",
-    "test": "node test/run-tests.js",
-    "test:security": "node test/unit/security.test.js",
-    "test:consent": "node test/unit/authConsent.test.js",
-    "test:unit": "node test/unit/run-tests.js && node test/unit/authConsent.test.js",
-    "test:ci": "node test/run-tests.js && node test/integrityCheckService.mock.test.js && node test/integration/auditRoot.service.mock.test.js && npx vitest run test/integration/sample.api.test.js test/integration/sample.mode.contract.api.test.js test/integration/users.register-sample.api.test.js test/integration/compliance.verify-biomarker.api.test.js tests/compliance/compliance.contract.test.js && node test/unit/run-tests.js && node test/unit/authConsent.test.js && node tests/compliance/generate-compliance-evidence.js"
+    "test": "node tests/run-tests.js",
+    "test:security": "node tests/unit/security.test.js",
+    "test:consent": "node tests/unit/authConsent.test.js",
+    "test:unit": "node tests/unit/run-tests.js && node tests/unit/authConsent.test.js",
+    "test:ci": "node tests/run-tests.js && node tests/integration/auditRoot.service.mock.test.js && npx vitest run tests/integration/sample.api.test.js tests/integration/sample.mode.contract.api.test.js tests/integration/users.register-sample.api.test.js tests/integration/compliance.verify-biomarker.api.test.js tests/compliance/compliance.contract.test.js && node tests/unit/run-tests.js && node tests/unit/authConsent.test.js && node tests/compliance/generate-compliance-evidence.js"
   },
   "dependencies": {
     "@influxdata/influxdb-client": "latest",

@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   Bold,
-  Clock3,
   FileDown,
   FileText,
   History,
@@ -11,7 +10,6 @@ import {
   ListOrdered,
   Plus,
   Save,
-  ShieldCheck,
   Sparkles,
   Type,
   Underline,
@@ -52,10 +50,7 @@ const FIXED_CONSENT_DECLARATION = 'Eu, {{nome_participante}}, declaro que fui de
 const FIXED_SIGNATURE_PARTICIPANT = 'Assinatura de {{nome_participante}}';
 const FIXED_SIGNATURE_RESEARCHER = 'Assinatura de {{nome_pesquisador}}';
 
-const DEFAULT_BODY_HTML = `
-  <p>Este termo descreve os objetivos do estudo, os riscos, os benefícios esperados e as condições de tratamento das informações coletadas.</p>
-  <p>Use este corpo para detalhar riscos, benefícios e metodologia. O cabeçalho e as assinaturas abaixo são renderizados pelo sistema como elementos fixos do documento.</p>
-`;
+const DEFAULT_BODY_HTML = '';
 
 function createId() {
   return globalThis.crypto?.randomUUID?.() || `tcle-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -473,6 +468,7 @@ export default function TcleBuilderPage() {
 
   const normalizedBody = useMemo(() => stripHtml(bodyHtml), [bodyHtml]);
   const currentModelTitle = useMemo(() => normalizeTitle(historyAnchorTitle || title), [historyAnchorTitle, title]);
+  const hasHistoryAnchor = useMemo(() => Boolean(historyGroupId.trim() || currentModelTitle), [historyGroupId, currentModelTitle]);
   const granularPermissionsPreview = useMemo(() => normalizeGranularPermissions(consentItems), [consentItems]);
   const activeHistoryEntry = useMemo(() => historyItems.find((item) => item.active) || historyItems[0] || null, [historyItems]);
   const versionSummary = useMemo(() => ({
@@ -538,7 +534,7 @@ export default function TcleBuilderPage() {
         setBodyHtml(String(template.htmlContent || template.content || DEFAULT_BODY_HTML.trim()));
         setConsentItems(normalizeDraftItems(template.granularPermissions || template.permissions || []));
         setHistoryAnchorTitle(String(template.title || ''));
-        setHistoryGroupId(''); // ConsentTemplate may not have versionGroupId
+        setHistoryGroupId(String(template.versionGroupId || '').trim());
       } catch (error: any) {
         if (!active) {
           return;
@@ -565,25 +561,29 @@ export default function TcleBuilderPage() {
     const query = currentModelTitle;
     const groupId = historyGroupId.trim();
 
-    if (!query && !groupId) {
-      setHistoryItems([]);
-      setHistoryError('');
-      setHistoryLoading(false);
-      return () => {
-        active = false;
-      };
-    }
-
     const timer = window.setTimeout(() => {
       void (async () => {
         setHistoryLoading(true);
         setHistoryError('');
         try {
-          // For templates, just fetch all and filter by title
-          const response = await consentService.getActiveTemplate();
-          const template = unwrapSingleResponse(response) as ConsentTemplate | null;
+          const response = await consentService.getTemplates();
+          const templates = unwrapListResponse(response) as ConsentTemplate[];
           const normalizedQuery = normalizeTitle(query);
-          const filtered = template && normalizeTitle(template.title) === normalizedQuery ? [template] : [];
+          const filtered = templates
+            .filter((template) => {
+              if (groupId) {
+                return String(template?.versionGroupId || '').trim() === groupId;
+              }
+
+              if (normalizedQuery) {
+                return normalizeTitle(template?.title || '') === normalizedQuery;
+              }
+
+              // Without an anchor model, show the full persisted history list.
+              return true;
+            })
+            .sort((a, b) => new Date(String(b?.createdAt || 0)).getTime() - new Date(String(a?.createdAt || 0)).getTime());
+
           if (active) {
             setHistoryItems(filtered as any);
           }
@@ -604,7 +604,7 @@ export default function TcleBuilderPage() {
       active = false;
       window.clearTimeout(timer);
     };
-  }, [currentModelTitle]);
+  }, [currentModelTitle, historyGroupId]);
 
   const updateEditorState = () => {
     const editor = editorRef.current;
@@ -678,9 +678,10 @@ export default function TcleBuilderPage() {
 
     const payload = {
       title: trimmedTitle,
-      caae: caae.trim(),
+      ...(caae.trim() ? { caae: caae.trim() } : {}),
       htmlContent: bodyHtml.trim(),
       content: bodyHtml.trim(), // Ensure 'content' is sent for backend validation
+      ...(activeHistoryEntry?.version ? { version: String(activeHistoryEntry.version).trim() } : {}),
       validFrom: toIsoDateString(validFrom),
       validTo: toIsoDateString(validTo, true),
       active: true,
@@ -711,7 +712,7 @@ export default function TcleBuilderPage() {
       setBodyHtml(String(savedTemplate.htmlContent || savedTemplate.content || DEFAULT_BODY_HTML.trim()));
       setConsentItems(normalizeDraftItems(savedTemplate.granularPermissions || savedTemplate.permissions || []));
       setHistoryAnchorTitle(String(savedTemplate.title || trimmedTitle));
-      setHistoryGroupId('');
+      setHistoryGroupId(String(savedTemplate.versionGroupId || '').trim());
 
       if (editorRef.current) {
         editorRef.current.innerHTML = String(savedTemplate.htmlContent || savedTemplate.content || DEFAULT_BODY_HTML.trim());
@@ -730,34 +731,18 @@ export default function TcleBuilderPage() {
     }
   };
 
-  const activeStatusLabel = activeHistoryEntry?.active ? 'Ativo' : 'Obsoleto';
-
   return (
     <div className="page tcle-builder-page">
       <div className="page-header tcle-builder-page__header">
         <div className="tcle-builder-page__heading">
           <div className="tcle-builder-page__eyebrow">
             <Sparkles size={15} />
-            <span>Health Tech TCLE Builder</span>
+            <span>Gestão de Consentimento</span>
           </div>
-          <h1 className="page-title">Create and Edit ICF</h1>
+          <h1 className="page-title">Construtor de TCLE</h1>
           <p className="page-subtitle">
-            Structure the consent form in a single column, with fixed header and acceptance, editable body, and manually filled validity dates.
+            Estruture o TCLE no padrão do wizard: cabeçalho e aceite fixos, corpo e itens granulares editáveis e vigência preenchida manualmente.
           </p>
-          <div className="tcle-builder-page__status-row">
-            <span className="tcle-builder-page__status-pill">
-              <History size={14} />
-              {versionSummary.total > 0 ? `${versionSummary.total} versão(ões)` : 'Sem histórico ainda'}
-            </span>
-            <span className="tcle-builder-page__status-pill">
-              <Clock3 size={14} />
-              Vigência inicial {validFrom ? formatDate(validFrom) : '--'}
-            </span>
-            <span className="tcle-builder-page__status-pill">
-              <ShieldCheck size={14} />
-              {activeStatusLabel}
-            </span>
-          </div>
         </div>
 
       </div>
@@ -772,7 +757,7 @@ export default function TcleBuilderPage() {
             onClick={() => setActiveTab('editor')}
           >
             <FileText size={16} />
-            Edit Form
+            Edição do TCLE
           </button>
         ) : (
           <button
@@ -795,7 +780,7 @@ export default function TcleBuilderPage() {
             onClick={() => setActiveTab('history')}
           >
             <History size={16} />
-            Version History
+            Histórico de versões
           </button>
         ) : (
           <button
@@ -886,7 +871,7 @@ export default function TcleBuilderPage() {
                     <div className="tcle-builder-document-block__eyebrow">Bloco 2 - Corpo explicativo</div>
                     <h2>Corpo do Termo</h2>
                   </div>
-                  <span className="tcle-builder-status-badge tcle-builder-status-badge--interactive">Rich Text</span>
+                  <span className="tcle-builder-status-badge tcle-builder-status-badge--interactive">Editor rico</span>
                 </div>
 
                 <div className="tcle-builder-toolbar" role="toolbar" aria-label="Ferramentas do editor de TCLE">
@@ -1029,8 +1014,12 @@ export default function TcleBuilderPage() {
           <Card className="tcle-builder-card tcle-builder-card--history">
             <div className="tcle-builder-section-header tcle-builder-section-header--stacked">
               <div>
-                <h2>Version History</h2>
-                <p>Only versions of the same model are shown. Each new edition creates a new record and deactivates the previous one.</p>
+                <h2>Histórico de versões</h2>
+                <p>
+                  {hasHistoryAnchor
+                    ? 'Versões do mesmo modelo são exibidas. Cada nova edição cria um novo registro e desativa a versão anterior.'
+                    : 'Exibindo todas as versões persistidas. Selecione um TCLE para visualizar somente a família versionada.'}
+                </p>
               </div>
               <div className="tcle-builder-history-summary">
                 <span>
@@ -1039,11 +1028,11 @@ export default function TcleBuilderPage() {
                 </span>
                 <span>
                   <strong>{versionSummary.active}</strong>
-                  active
+                  ativas
                 </span>
                 <span>
                   <strong>{versionSummary.obsolete}</strong>
-                  obsolete
+                  obsoletas
                 </span>
               </div>
             </div>
@@ -1060,8 +1049,12 @@ export default function TcleBuilderPage() {
             {!historyLoading && !historyError && historyItems.length === 0 ? (
               <div className="tcle-builder-history-empty">
                 <History size={22} />
-                <strong>Nenhuma versão encontrada para este modelo.</strong>
-                <span>Salve a primeira versão ou selecione um TCLE já versionado para ver o histórico.</span>
+                <strong>{hasHistoryAnchor ? 'Nenhuma versão encontrada para este modelo.' : 'Nenhuma versão de TCLE encontrada.'}</strong>
+                <span>
+                  {hasHistoryAnchor
+                    ? 'Salve a primeira versão ou selecione um TCLE já versionado para ver o histórico.'
+                    : 'Crie a primeira versão do TCLE para iniciar o histórico.'}
+                </span>
               </div>
             ) : null}
 
@@ -1087,7 +1080,7 @@ export default function TcleBuilderPage() {
                         <td>{formatDate(item.validFrom)}</td>
                         <td>
                           <span className={`tcle-builder-status-badge tcle-builder-status-badge--${item.active ? 'active' : 'obsolete'}`}>
-                            {item.active ? 'Active' : 'Obsolete'}
+                            {item.active ? 'Ativo' : 'Obsoleto'}
                           </span>
                         </td>
                         <td>

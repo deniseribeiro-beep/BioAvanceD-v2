@@ -46,8 +46,10 @@ export default function LogsPage() {
     userName: '',
     action: '',
     entity: '',
+    resourceType: '',
     severity: '',
     result: '',
+    status: '',
     ip: '',
     module: '',
     startDate: '',
@@ -132,6 +134,10 @@ export default function LogsPage() {
       const entityFilter = normalize(filters.entity);
       filtered = filtered.filter(log => normalize(log.entity) === entityFilter);
     }
+    if (filters.resourceType) {
+      const resourceTypeFilter = normalize(filters.resourceType);
+      filtered = filtered.filter(log => normalize(log.resourceType || log.entity) === resourceTypeFilter);
+    }
     if (filters.severity) {
       const severityFilter = normalize(filters.severity);
       filtered = filtered.filter(log => normalize(log.severity) === severityFilter);
@@ -139,6 +145,10 @@ export default function LogsPage() {
     if (filters.result) {
       const resultFilter = normalize(filters.result);
       filtered = filtered.filter(log => normalize(log.result) === resultFilter);
+    }
+    if (filters.status) {
+      const statusFilter = normalize(filters.status);
+      filtered = filtered.filter(log => normalize(log.status || log.result) === statusFilter);
     }
     if (filters.ip) {
       const ip = normalize(filters.ip);
@@ -536,11 +546,9 @@ export default function LogsPage() {
 
   const formatTimestamp = (log: Log) => {
     try {
-      if (log.timestampFormatted) return log.timestampFormatted;
-      
       let date: Date | null = null;
-      
-      // Tenta usar timestampISO primeiro
+
+      // Tenta usar timestampISO primeiro e sempre renderiza em timezone local do cliente.
       if (log.timestampISO) {
         date = new Date(log.timestampISO);
       }
@@ -571,15 +579,15 @@ export default function LogsPage() {
       }
       
       if (!date || isNaN(date.getTime())) return 'N/A';
-      
-      return date.toLocaleString('pt-BR', {
+
+      return new Intl.DateTimeFormat(undefined, {
         year: 'numeric',
         month: '2-digit',
         day: '2-digit',
         hour: '2-digit',
         minute: '2-digit',
-        second: '2-digit'
-      });
+        second: '2-digit',
+      }).format(date);
     } catch (error) {
       console.error('Erro ao formatar timestamp:', error);
       return 'N/A';
@@ -622,8 +630,10 @@ export default function LogsPage() {
       userName: '',
       action: '',
       entity: '',
+      resourceType: '',
       severity: '',
       result: '',
+      status: '',
       ip: '',
       module: '',
       startDate: '',
@@ -749,6 +759,24 @@ export default function LogsPage() {
     });
     
     return sorted;
+  }, [logs]);
+
+  const resourceTypeOptions = useMemo(() => {
+    const resourceTypes = new Set<string>();
+    logs.forEach((log) => {
+      const value = String(log.resourceType || log.entity || '').trim();
+      if (value) resourceTypes.add(value);
+    });
+    return Array.from(resourceTypes).sort((a, b) => a.localeCompare(b));
+  }, [logs]);
+
+  const statusOptions = useMemo(() => {
+    const statuses = new Set<string>();
+    logs.forEach((log) => {
+      const value = String(log.status || log.result || '').trim().toLowerCase();
+      if (value) statuses.add(value);
+    });
+    return Array.from(statuses).sort();
   }, [logs]);
 
   const moduleOptions = useMemo(() => {
@@ -906,6 +934,20 @@ export default function LogsPage() {
                   </div>
 
                   <div className="filter-group">
+                    <label>Resource Type</label>
+                    <select
+                      aria-label="Resource Type"
+                      value={filters.resourceType}
+                      onChange={(e) => setFilters({ ...filters, resourceType: e.target.value })}
+                    >
+                      <option value="">All Resource Types</option>
+                      {resourceTypeOptions.map(resourceType => (
+                        <option key={resourceType} value={resourceType}>{resourceType}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="filter-group">
                     <label>{t('logs.filters.severity')}</label>
                     <select
                       aria-label={t('logs.filters.severity')}
@@ -931,6 +973,20 @@ export default function LogsPage() {
                       <option value="success">{t('logs.result.success')}</option>
                       <option value="error">{t('logs.result.error')}</option>
                       <option value="warning">{t('logs.result.warning')}</option>
+                    </select>
+                  </div>
+
+                  <div className="filter-group">
+                    <label>Status</label>
+                    <select
+                      aria-label="Status"
+                      value={filters.status}
+                      onChange={(e) => setFilters({ ...filters, status: e.target.value })}
+                    >
+                      <option value="">All Status</option>
+                      {statusOptions.map(status => (
+                        <option key={status} value={status}>{status}</option>
+                      ))}
                     </select>
                   </div>
 
@@ -1106,6 +1162,7 @@ export default function LogsPage() {
                     const isMessageExpanded = expandedMessages.has(logId);
                     const isRowExpanded = expandedRows.has(logId);
                     const message = log.message || 'N/A';
+                    const resolvedStatus = String(log.status || log.result || 'N/A').toLowerCase();
                     const shouldTruncate = typeof message === 'string' && message.length > 120;
                     const displayMessage = isMessageExpanded || !shouldTruncate ? message : (typeof message === 'string' ? truncateMessage(message, 120) : String(message));
                     const entity = log.entity || 'N/A';
@@ -1184,14 +1241,14 @@ export default function LogsPage() {
                             <span
                               className="result-badge"
                               style={{ 
-                                color: getResultColor(log.result || ''),
-                                borderColor: getResultColor(log.result || '')
+                                color: getResultColor(resolvedStatus),
+                                borderColor: getResultColor(resolvedStatus)
                               }}
                             >
-                              {log.result === 'success' ? <CheckCircle size={12} /> : 
-                               log.result === 'error' || log.result === 'failure' ? <XCircle size={12} /> :
+                              {resolvedStatus === 'success' ? <CheckCircle size={12} /> : 
+                               resolvedStatus === 'error' || resolvedStatus === 'failure' ? <XCircle size={12} /> :
                                <AlertCircle size={12} />}
-                              <span>{log.result || 'N/A'}</span>
+                              <span>{resolvedStatus || 'N/A'}</span>
                             </span>
                           </td>
                           <td className="log-expand-col">
@@ -1243,6 +1300,24 @@ export default function LogsPage() {
                                 </div>
                                 <div className="log-detail-item">
                                   <span className="log-detail-label">
+                                    <Database size={14} />
+                                    Resource Type
+                                  </span>
+                                  <span className="log-detail-value entity-text">
+                                    {log.resourceType || log.entity || 'N/A'}
+                                  </span>
+                                </div>
+                                <div className="log-detail-item">
+                                  <span className="log-detail-label">
+                                    <CheckCircle size={14} />
+                                    Status
+                                  </span>
+                                  <span className="log-detail-value" style={{ textTransform: 'lowercase' }}>
+                                    {String(log.status || log.result || 'N/A')}
+                                  </span>
+                                </div>
+                                <div className="log-detail-item">
+                                  <span className="log-detail-label">
                                     <Shield size={14} />
                                     {t('logs.details.ip')}
                                   </span>
@@ -1277,6 +1352,16 @@ export default function LogsPage() {
                                     </span>
                                     <span className="log-detail-value" style={{ fontFamily: 'monospace' }}>
                                       {formatEntityID(log.entityID)}
+                                    </span>
+                                  </div>
+                                )}
+                                {log.resourceId && (
+                                  <div className="log-detail-item">
+                                    <span className="log-detail-label">
+                                      Resource ID
+                                    </span>
+                                    <span className="log-detail-value" style={{ fontFamily: 'monospace' }}>
+                                      {String(log.resourceId)}
                                     </span>
                                   </div>
                                 )}
@@ -1327,6 +1412,24 @@ export default function LogsPage() {
                                           return t('logs.details.payloadError');
                                         }
                                       })()}
+                                    </div>
+                                  </div>
+                                )}
+                                {log.metadata && (
+                                  <div className="log-detail-item" style={{ gridColumn: '1 / -1' }}>
+                                    <span className="log-detail-label">Technical metadata:</span>
+                                    <div className="log-detail-value" style={{
+                                      fontFamily: 'monospace',
+                                      fontSize: '0.8125rem',
+                                      backgroundColor: 'var(--bg-secondary)',
+                                      padding: '0.5rem',
+                                      borderRadius: '4px',
+                                      overflow: 'auto',
+                                      maxHeight: '240px',
+                                      whiteSpace: 'pre-wrap',
+                                      wordBreak: 'break-word'
+                                    }}>
+                                      {JSON.stringify(log.metadata, null, 2)}
                                     </div>
                                   </div>
                                 )}

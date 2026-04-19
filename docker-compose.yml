@@ -107,6 +107,10 @@ services:
       - /app/node_modules
     env_file:
       - .env # O FRONTEND TAMBÉM VAI LER O SEU .ENV AUTOMATICAMENTE
+    environment:
+      CHOKIDAR_USEPOLLING: "true"
+      CHOKIDAR_INTERVAL: "300"
+      WATCHPACK_POLLING: "true"
     depends_on:
       - backend
 

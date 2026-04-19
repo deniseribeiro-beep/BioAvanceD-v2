@@ -30,7 +30,9 @@ class LogModel {
   static validate(data) {
     const errors = [];
 
-    if (!data.userID) {
+    const normalizedResourceType = String(data.resourceType || data.entity || '').trim();
+
+    if (!data.userID && !data.userId) {
       errors.push('userID é obrigatório');
     }
 
@@ -38,11 +40,11 @@ class LogModel {
       errors.push('action é obrigatório e deve ser string');
     }
 
-    if (!data.entity || typeof data.entity !== 'string') {
-      errors.push('entity é obrigatório e deve ser string');
+    if (!normalizedResourceType) {
+      errors.push('resourceType/entity é obrigatório e deve ser string');
     } else {
       // Valida se a entidade é válida (não é um ID)
-      const entity = String(data.entity).trim();
+      const entity = normalizedResourceType;
       
       // Verifica se é um ObjectId (24 caracteres hexadecimais)
       const isObjectId = /^[0-9a-fA-F]{24}$/.test(entity);
@@ -69,9 +71,12 @@ class LogModel {
 
   static create(data, req = null) {
     const timestamp = data.dateTime || data.timestamp || new Date();
+    const normalizedResourceType = String(data.resourceType || data.entity || 'Sistema').trim() || 'Sistema';
+    const normalizedResourceId = data.resourceId || data.entityID || null;
+    const normalizedStatus = data.status || data.result || 'success';
     
     // Normaliza e valida a entidade
-    let entity = data.entity || 'Sistema';
+    let entity = normalizedResourceType;
     if (typeof entity === 'string') {
       entity = entity.trim();
       
@@ -105,9 +110,12 @@ class LogModel {
       userId: data.userId || data.userID || data.userID || 'system', // String conforme dicionário
       userName: data.userName || null,
       action: data.action, // CREATE, READ, UPDATE, DELETE, LOGIN, LOGOUT, IMPORT, EXPORT, etc
+      resourceType: entity,
+      resourceId: normalizedResourceId,
+      status: normalizedStatus,
       entity: entity, // Patient, Sample, User, Sistema, etc (garantidamente válido)
-      entityID: data.entityID || null,
-      result: data.result || 'success', // success, error, warning
+      entityID: normalizedResourceId,
+      result: normalizedStatus, // success, error, warning
       severity: data.severity || 'info', // info, warning, error, critical
       source: data.source || data.origin || 'api', // String - Origem do evento
       ipSource: data.ipSource || data.sourceIP || (req ? (req.ip || req.headers['x-forwarded-for'] || req.headers['x-real-ip'] || req.connection?.remoteAddress) : null), // String - IP de origem

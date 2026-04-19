@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Sample, Result } from '../types/models';
 import { samplesApi } from '../services/samples/samplesApi';
+import { notifyDashboardDataChanged } from '../utils/dashboardRefresh';
 import { onClientLogout } from '../utils/sessionCleanup';
 
 interface ApiLikeError {
@@ -91,6 +92,7 @@ export function useSamples() {
     try {
       const response = await samplesApi.create(data);
       await loadSamples(); // Recarrega a lista completa
+      notifyDashboardDataChanged();
       return unwrapData(response.data);
     } catch (err: unknown) {
       throw new Error(extractErrorMessage(err, 'Erro ao criar amostra'));
@@ -101,6 +103,7 @@ export function useSamples() {
     try {
       const response = await samplesApi.update(id, data);
       await loadSamples(); // Recarrega a lista completa
+      notifyDashboardDataChanged();
       return unwrapData(response.data);
     } catch (err: unknown) {
       throw new Error(extractErrorMessage(err, 'Erro ao atualizar amostra'));
@@ -111,6 +114,7 @@ export function useSamples() {
     try {
       await samplesApi.remove(id);
       await loadSamples(); // Recarrega a lista completa
+      notifyDashboardDataChanged();
     } catch (err: unknown) {
       throw new Error(extractErrorMessage(err, 'Erro ao deletar amostra'));
     }

@@ -72,9 +72,6 @@ interface SecurityStatus {
 interface MFAStatus {
   primaryEnabled: boolean;
   primarySetupDate?: string | Date;
-  phoneEnabled: boolean;
-  phoneNumber?: string;
-  passkeys?: Array<{ id: string; name?: string }>;
   recoveryCodes?: {
     remaining: number;
     codes?: string[];
@@ -120,7 +117,18 @@ export function useUserSecurity() {
       setSecurityStatus(extractResponseData<SecurityStatus | null>(statusRes, null));
       setMfaStatus(extractResponseData<MFAStatus | null>(mfaRes, null));
       setPasswordStatus(extractResponseData<PasswordStatus | null>(passwordRes, null));
-      setSessions(extractResponseData<Session[]>(sessionsRes, []));
+      const rawSessions = extractResponseData<any[]>(sessionsRes, []);
+      setSessions(
+        rawSessions.map((session) => ({
+          id: session.id,
+          deviceName: session.deviceName,
+          browser: session.browser,
+          os: session.os,
+          location: session.location || session.ipAddress,
+          lastAccess: session.lastAccess,
+          isCurrent: Boolean(session.isCurrent)
+        }))
+      );
     } catch (err: unknown) {
       setError(extractErrorMessage(err, 'Erro ao carregar dados de segurança'));
       console.error('Erro ao carregar dados de segurança:', err);
@@ -129,201 +137,12 @@ export function useUserSecurity() {
     }
   }, []);
 
-  const updateMFA = useCallback(async (method: 'phone' | 'passkey', enabled: boolean) => {
-    try {
-      await userSecurityService.updateMFA(method, enabled);
-      await refreshData();
-    } catch (err: unknown) {
-      throw new Error(extractErrorMessage(err, 'Erro ao atualizar MFA'));
-    }
-  }, [refreshData]);
-
   const updatePassword = useCallback(async (currentPassword: string, newPassword: string) => {
     try {
       await userSecurityService.updatePassword(currentPassword, newPassword);
       await refreshData();
     } catch (err: unknown) {
       throw new Error(extractErrorMessage(err, 'Erro ao atualizar senha'));
-    }
-  }, [refreshData]);
-
-  const updatePhone = useCallback(async (phone: string) => {
-    try {
-      const response = await userSecurityService.updatePhone(phone);
-      
-      // Aguarda um pouco para garantir que o banco foi atualizado
-      await new Promise(resolve => setTimeout(resolve, 300));
-      
-      // Atualiza os dados
-      await refreshData();
-      
-      return response;
-    } catch (err: unknown) {
-      const errorMessage = extractErrorMessage(err, 'Erro ao atualizar telefone');
-      throw new Error(errorMessage);
-    }
-  }, [refreshData]);
-
-  const addPasskey = useCallback(async () => {
-    try {
-      // Verifica se WebAuthn está disponível
-      if (!window.PublicKeyCredential) {
-        throw new Error('WebAuthn não é suportado neste navegador. Use um navegador moderno (Chrome, Firefox, Edge, Safari).');
-      }
-
-      // Verifica se está em contexto seguro (HTTPS ou localhost)
-      // WebAuthn requer HTTPS ou localhost/127.0.0.1
-      const hostname = window.location.hostname;
-      const protocol = window.location.protocol;
-      const isLocalhost = hostname === 'localhost' || hostname === '127.0.0.1';
-      const isHTTPS = protocol === 'https:';
-      const isSecureContext = window.isSecureContext || isHTTPS || isLocalhost;
-      
-      if (!isSecureContext) {
-        const isIP = hostname.match(/^\d+\.\d+\.\d+\.\d+$/);
-        if (isIP) {
-          throw new Error('WebAuthn requer HTTPS para endereços IP. Acesse via HTTPS (https://) ou use localhost.');
-        } else {
-          throw new Error('WebAuthn requer HTTPS ou localhost. Acesse via HTTPS (https://) ou localhost.');
-        }
-      }
-      
-      // Aviso para IPs em HTTP (pode não funcionar)
-      const isIP = hostname.match(/^\d+\.\d+\.\d+\.\d+$/);
-      if (isIP && !isHTTPS) {
-        console.warn('WebAuthn pode não funcionar com endereços IP em HTTP. Use HTTPS ou localhost para melhor compatibilidade.');
-      }
-
-      // Primeiro, solicita ao backend para iniciar o registro
-      const challengeResponse = await userSecurityService.startPasskeyRegistration();
-      const responseData = challengeResponse.data?.data || challengeResponse.data;
-      const challenge = responseData?.challenge;
-      const userId = responseData?.userId;
-      const userEmail = responseData?.userEmail;
-      const userName = responseData?.userName;
-
-      if (!challenge) {
-        throw new Error('Erro ao obter desafio do servidor');
-      }
-
-      if (!userId) {
-        throw new Error('Erro ao obter ID do usuário');
-      }
-
-      // Converte challenge de base64 para ArrayBuffer
-      const challengeBuffer = Uint8Array.from(atob(challenge), c => c.charCodeAt(0));
-
-      // Prepara dados do usuário - userId deve ser um ArrayBuffer
-      // Converte o userId (string) para ArrayBuffer usando TextEncoder
-      const encoder = new TextEncoder();
-      const userIdBuffer = encoder.encode(userId);
-
-      // Determina o rp.id baseado no hostname
-      // WebAuthn requer um domínio válido ou localhost
-      let rpId = window.location.hostname;
-      if (rpId === 'localhost' || rpId === '127.0.0.1') {
-        rpId = 'localhost';
-      } else if (rpId.match(/^\d+\.\d+\.\d+\.\d+$/)) {
-        // WebAuthn não funciona bem com IPs - precisa de um domínio válido
-        // Tenta usar o IP, mas pode falhar
-        console.warn('WebAuthn pode não funcionar com endereços IP. Use um domínio válido ou localhost.');
-        rpId = window.location.hostname;
-      }
-
-      // Cria credencial usando WebAuthn API
-      const credential = await navigator.credentials.create({
-        publicKey: {
-          challenge: challengeBuffer,
-          rp: {
-            name: 'BioAvanceD',
-            id: rpId
-          },
-          user: {
-            id: userIdBuffer,
-            name: userEmail || 'user@bioavanced.com',
-            displayName: userName || 'Usuário BioAvanceD'
-          },
-          pubKeyCredParams: [
-            { alg: -7, type: 'public-key' }, // ES256
-            { alg: -257, type: 'public-key' } // RS256
-          ],
-          authenticatorSelection: {
-            authenticatorAttachment: 'cross-platform', // Permite tanto platform quanto cross-platform
-            userVerification: 'preferred',
-            requireResidentKey: false
-          },
-          timeout: 60000,
-          attestation: 'none'
-        }
-      }) as PublicKeyCredential;
-
-      if (!credential || !credential.response) {
-        throw new Error('Erro ao criar credencial. Tente novamente.');
-      }
-
-      const response = credential.response as AuthenticatorAttestationResponse;
-
-      // Converte os dados para base64
-      const credentialIdArray = new Uint8Array(credential.rawId);
-      const credentialIdBase64 = btoa(String.fromCharCode(...credentialIdArray));
-
-      const attestationObjectArray = new Uint8Array(response.attestationObject);
-      const attestationObjectBase64 = btoa(String.fromCharCode(...attestationObjectArray));
-
-      // PublicKey pode não estar disponível em todos os casos
-      let publicKeyBase64 = '';
-      if (response.getPublicKey) {
-        const publicKey = response.getPublicKey();
-        if (publicKey) {
-          const publicKeyArray = new Uint8Array(publicKey);
-          publicKeyBase64 = btoa(String.fromCharCode(...publicKeyArray));
-        }
-      }
-
-      // Obtém nome do dispositivo
-      const deviceName = getUserAgentData()?.platform ||
-                        navigator.platform ||
-                        'Dispositivo Desconhecido';
-
-      await userSecurityService.completePasskeyRegistration({
-        credentialId: credentialIdBase64,
-        publicKey: publicKeyBase64,
-        attestationObject: attestationObjectBase64,
-        deviceName: deviceName
-      });
-
-      await refreshData();
-    } catch (err: unknown) {
-      const errorName = extractErrorName(err);
-      const errorMessage = extractErrorMessage(err, 'Erro ao adicionar passkey');
-      // Trata erros específicos do WebAuthn
-      if (errorName === 'NotAllowedError') {
-        throw new Error('Operação cancelada pelo usuário ou timeout. Tente novamente.');
-      } else if (errorName === 'InvalidStateError') {
-        throw new Error('Esta passkey já está cadastrada ou há um erro no estado da autenticação.');
-      } else if (errorName === 'NotSupportedError') {
-        throw new Error('Seu dispositivo ou navegador não suporta passkeys. Use um navegador moderno com suporte a WebAuthn.');
-      } else if (errorName === 'SecurityError') {
-        throw new Error('Erro de segurança. WebAuthn requer HTTPS ou localhost. Certifique-se de que está usando um contexto seguro.');
-      } else if (errorName === 'TypeError' && errorMessage.includes('credentials')) {
-        throw new Error('Erro ao acessar a API de credenciais. Verifique se o navegador suporta WebAuthn.');
-      } else if (errorName === 'AbortError') {
-        throw new Error('Operação cancelada.');
-      }
-      
-      // Log do erro completo para debug
-      console.error('Erro ao adicionar passkey:', err);
-      
-      throw new Error(errorMessage);
-    }
-  }, [refreshData]);
-
-  const removePasskey = useCallback(async (passkeyId: string) => {
-    try {
-      await userSecurityService.removePasskey(passkeyId);
-      await refreshData();
-    } catch (err: unknown) {
-      throw new Error(extractErrorMessage(err, 'Erro ao remover passkey'));
     }
   }, [refreshData]);
 
@@ -386,11 +205,7 @@ export function useUserSecurity() {
     loading,
     error,
     refreshData,
-    updateMFA,
     updatePassword,
-    updatePhone,
-    addPasskey,
-    removePasskey,
     generateRecoveryCodes,
     revokeSession,
     revokeAllSessions

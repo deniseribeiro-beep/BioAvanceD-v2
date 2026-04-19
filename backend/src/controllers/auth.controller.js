@@ -4,6 +4,34 @@ const auditLogger = require('../utils/auditLogger');
 const bcrypt = require('bcryptjs');
 const passwordService = require('../services/password.service');
 
+const REFRESH_COOKIE_NAME = 'refresh_token';
+
+function getRefreshCookieOptions() {
+  const isProd = process.env.NODE_ENV === 'production';
+  return {
+    httpOnly: true,
+    secure: isProd,
+    sameSite: isProd ? 'strict' : 'lax',
+    path: '/api/auth',
+    maxAge: 7 * 24 * 60 * 60 * 1000
+  };
+}
+
+function attachRefreshCookieIfPresent(res, result) {
+  if (result?.refreshToken) {
+    res.cookie(REFRESH_COOKIE_NAME, result.refreshToken, getRefreshCookieOptions());
+  }
+}
+
+function sanitizeAuthPayload(result) {
+  if (!result || typeof result !== 'object') {
+    return result;
+  }
+
+  const { refreshToken, sessionID, ...safeResult } = result;
+  return safeResult;
+}
+
 /**
  * Controller de Autenticação
  * RF001 - Login com MFA
@@ -82,10 +110,13 @@ class AuthController {
         });
       }
 
+      attachRefreshCookieIfPresent(res, result);
+      const safeResult = sanitizeAuthPayload(result);
+
       return res.status(200).json({
         success: true,
         message: (req.t && req.t('auth.loginSuccess')) || 'Login realizado com sucesso',
-        data: result
+        data: safeResult
       });
     } catch (error) {
       logger.error('Erro no login:', error && error.stack ? error.stack : error.message);
@@ -151,6 +182,9 @@ class AuthController {
 
       const result = await authService.enableMFA(db, req.user.userID, codeToUse);
 
+      attachRefreshCookieIfPresent(res, result);
+      const safeResult = sanitizeAuthPayload(result);
+
       // Se for primeiro login, retorna token completo
       if (result.token) {
         return res.status(200).json({
@@ -166,7 +200,7 @@ class AuthController {
       return res.status(200).json({
         success: true,
         message: (req.t && req.t('mfa.enableSuccess')) || 'MFA ativado com sucesso',
-        data: result
+        data: safeResult
       });
     } catch (error) {
       logger.error('Erro ao ativar MFA:', error.message);
@@ -397,10 +431,13 @@ class AuthController {
 
       const result = await authService.enableMFAFirstLogin(db, { username, password }, code, req);
 
+      attachRefreshCookieIfPresent(res, result);
+      const safeResult = sanitizeAuthPayload(result);
+
       return res.status(200).json({
         success: true,
         message: (req.t && req.t('mfa.enableFirstLoginSuccess')) || 'MFA ativado com sucesso. Primeiro acesso concluído.',
-        data: result
+        data: safeResult
       });
     } catch (error) {
       logger.error('Erro ao ativar MFA no primeiro login:', error.message);

@@ -190,6 +190,9 @@ class AuditLogger {
       action,           // Tipo de ação (LOGIN, CREATE, UPDATE, etc.)
       entity,           // Entidade afetada (Patient, Sample, User, etc.)
       entityID,         // ID da entidade (sem dados sensíveis)
+      resourceType,     // Tipo canônico de recurso
+      resourceId,       // Identificador canônico de recurso
+      status,           // Status canônico (success, warning, failure, started)
       result,           // 'success', 'error', 'warning'
       severity,         // 'info', 'warning', 'error', 'critical'
       message,          // Mensagem detalhada
@@ -214,9 +217,12 @@ class AuditLogger {
         userID: userInfo.userID || 'USR-SYSTEM',
         userName: userInfo.userName || 'USR-SYSTEM', // Já anonimizado pelo extractUserInfo
         action: (action || 'LOG').toString().toUpperCase(),
+        resourceType: resourceType || formatEntity(entity),
+        resourceId: resourceId || entityID || null,
+        status: status || result || 'success',
         entity: formatEntity(entity),
         entityID: entityID || null,
-        result: result || 'success',
+        result: status || result || 'success',
         severity: severity || 'info',
         sourceIP: requestInfo.ip, // IP principal para compatibilidade
         ipSource: requestInfo.ip, // Alias para compatibilidade

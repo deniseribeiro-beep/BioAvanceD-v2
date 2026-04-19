@@ -82,18 +82,18 @@ export default function Sidebar() {
 
   const allMenuItems: MenuItem[] = [
     { path: '/dashboard', icon: LayoutDashboard, label: t('navigation.dashboard'), roles: ['Administrador', 'Coordenador', 'Técnico', 'Usuário Externo'] },
-    { path: '/next/intake', icon: Workflow, label: t('navigation.newIntake') || 'Novo Atendimento', roles: ['Administrador', 'Coordenador', 'Técnico'], featured: true },
+    { path: '/next/intake', icon: Workflow, label: t('navigation.newIntake', 'New Registration'), roles: ['Administrador', 'Coordenador', 'Técnico'], featured: true },
     { path: '/patients', icon: Stethoscope, label: t('navigation.patients') || 'Diretório de Pacientes', roles: ['Administrador', 'Coordenador', 'Técnico'] },
     { path: '/samples', icon: FlaskConical, label: t('navigation.samples') || 'Inventário de Amostras', roles: ['Administrador', 'Coordenador', 'Técnico'] },
     { path: '/results', icon: FileText, label: t('navigation.results'), roles: ['Administrador', 'Coordenador', 'Técnico'] },
     { path: '/facility-management', icon: Box, label: t('navigation.facilityManagement'), roles: ['Administrador', 'Coordenador', 'Técnico'] },
     { path: '/assistant', icon: MessageCircle, label: t('navigation.assistant'), roles: ['Administrador', 'Coordenador', 'Técnico', 'Usuário Externo'] },
-    { path: '/admin/tcle/new', icon: FileText, label: 'Construtor de TCLE', roles: ['Administrador', 'Coordenador'] },
+    { path: '/admin/tcle/new', icon: FileText, label: t('navigation.tcleBuilder', 'Construtor de TCLE'), roles: ['Administrador', 'Coordenador'] },
     { path: '/user/security', icon: Shield, label: t('navigation.userSecurity'), roles: ['Administrador', 'Coordenador', 'Técnico', 'Usuário Externo'] },
     { path: '/reports', icon: BarChart3, label: t('navigation.reports'), roles: ['Administrador', 'Coordenador', 'Usuário Externo'] },
     { path: '/logs', icon: FileSearch, label: t('navigation.logs'), roles: ['Administrador', 'Coordenador'] },
     { path: '/system-management', icon: UserCog, label: t('navigation.systemManagement') || 'Gerenciamento do Sistema', roles: ['Administrador'] },
-    { path: '/admin/dicionario', icon: Database, label: 'Dicionário de Dados', roles: ['Administrador'] },
+    { path: '/admin/dicionario', icon: Database, label: t('navigation.dataDictionary', 'Dicionário de Dados'), roles: ['Administrador'] },
     { path: '/backup', icon: Database, label: t('navigation.backup'), roles: ['Administrador'] },
   ];
 
@@ -114,7 +114,7 @@ export default function Sidebar() {
       <button 
         className="sidebar-toggle"
         onClick={() => setIsOpen(!isOpen)}
-        aria-label="Toggle menu"
+        aria-label={t('layout.toggleMenu', 'Alternar menu')}
         aria-controls="app-sidebar"
       >
         {isOpen ? <X size={24} /> : <Menu size={24} />}

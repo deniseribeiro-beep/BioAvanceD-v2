@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Result } from '../types/models';
 import { resultService } from '../services/api';
+import { notifyDashboardDataChanged } from '../utils/dashboardRefresh';
 import { onClientLogout } from '../utils/sessionCleanup';
 
 export function useResults(importJobID?: string) {
@@ -54,6 +55,7 @@ export function useResults(importJobID?: string) {
     try {
       const response = await resultService.create(data);
       setResults([...results, response.data]);
+      notifyDashboardDataChanged();
       return response.data;
     } catch (err: any) {
       throw new Error(err.message || 'Erro ao criar resultado');
@@ -64,6 +66,7 @@ export function useResults(importJobID?: string) {
     try {
       const response = await resultService.update(id, data);
       setResults(results.map((r) => (r.resultID === id ? response.data : r)));
+      notifyDashboardDataChanged();
       return response.data;
     } catch (err: any) {
       throw new Error(err.message || 'Erro ao atualizar resultado');
@@ -74,6 +77,7 @@ export function useResults(importJobID?: string) {
     try {
       await resultService.delete(id);
       setResults(results.filter((r) => r.resultID !== id));
+      notifyDashboardDataChanged();
     } catch (err: any) {
       throw new Error(err.message || 'Erro ao deletar resultado');
     }

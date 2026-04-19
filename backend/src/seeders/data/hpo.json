@@ -1,0 +1,24 @@
+{
+  "sistema": "HPO",
+  "fonte": "seed-hpo-v1",
+  "terms": [
+    {
+      "codigo": "HP:0000118",
+      "descricao": "Phenotypic abnormality",
+      "label": "Anormalidade fenotipica",
+      "sinonimos": ["Anormalidade clinica"]
+    },
+    {
+      "codigo": "HP:0001250",
+      "descricao": "Seizure",
+      "label": "Crise convulsiva",
+      "sinonimos": ["Convulsao"]
+    },
+    {
+      "codigo": "HP:0004322",
+      "descricao": "Short stature",
+      "label": "Baixa estatura",
+      "sinonimos": ["Estatura baixa"]
+    }
+  ]
+}

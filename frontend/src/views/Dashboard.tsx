@@ -1,30 +1,47 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Card from '../components/UI/Card';
-import { AlertTriangle, Users, FlaskConical, FileText, Thermometer, Box, Radio, Shield, FileSearch } from 'lucide-react';
+import { AlertTriangle, Users, FlaskConical, FileText, Thermometer, FileSearch } from 'lucide-react';
 import { usePatients } from '../hooks/usePatients';
 import { useSamples } from '../hooks/useSamples';
 import { useResults } from '../hooks/useResults';
 import { useTemperature } from '../hooks/useTemperature';
-import { usePolicies } from '../hooks/usePolicies';
-import { useEquipment } from '../hooks/useEquipment';
-import { useSensors } from '../hooks/useSensors';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import { securityService } from '../services/api';
+import { onDashboardDataChanged } from '../utils/dashboardRefresh';
 import './Dashboard.css';
+
+const ALERT_DEDUP_WINDOW_MS = 10000;
+const ALERT_TTL_MS = 30000;
+const ALERT_CLEANUP_INTERVAL_MS = 5000;
+const ALERT_LIST_LIMIT = 10;
+
+function createAlertId() {
+  if (typeof globalThis !== 'undefined' && globalThis.crypto?.randomUUID) {
+    return globalThis.crypto.randomUUID();
+  }
+
+  return `alert-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+type ActiveTemperatureAlert = {
+  id: string;
+  sensorKey: string;
+  sensorName: string;
+  time: string;
+  temperature: number;
+  timestamp: number;
+};
 
 export default function Dashboard() {
   const navigate = useNavigate();
   const { user } = useAuth();
   const { t } = useLanguage();
-  const { patients, loading: loadingPatients } = usePatients();
-  const { samples, loading: loadingSamples } = useSamples();
-  const { results, loading: loadingResults } = useResults();
+  const { patients, loading: loadingPatients, loadPatients } = usePatients();
+  const { samples, loading: loadingSamples, loadSamples } = useSamples();
+  const { results, loading: loadingResults, loadResults } = useResults();
   const { temperatures, loading: loadingTemperatures, viewControl } = useTemperature();
-  const { policies, loading: loadingPolicies } = usePolicies();
-  const { equipment, loading: loadingEquipment } = useEquipment();
-  const { sensors, loading: loadingSensors } = useSensors();
   const [consentQueueStats, setConsentQueueStats] = useState<{ waiting: number; delayed: number; active: number; failed: number; totalQueued: number; available: boolean } | null>(null);
   const [loadingConsentQueue, setLoadingConsentQueue] = useState(false);
   const [telemetryData, setTelemetryData] = useState<Array<{ time: string; sensor1: number; sensor2: number; sensor3: number }>>([
@@ -34,7 +51,7 @@ export default function Dashboard() {
     { time: '10:07:00', sensor1: -80.9, sensor2: -79.8, sensor3: -80.3 },
     { time: '10:09:00', sensor1: -80.1, sensor2: -79.5, sensor3: -81.0 },
   ]);
-  const [activeAlerts, setActiveAlerts] = useState<Array<{ id: string; sensorName: string; time: string; temperature: number }>>([]);
+  const [activeAlerts, setActiveAlerts] = useState<ActiveTemperatureAlert[]>([]);
 
   // TEMPORARIAMENTE DESATIVADO: Não há sensores cadastrados ainda
   const TEMPERATURE_READING_DISABLED = true;
@@ -74,6 +91,8 @@ export default function Dashboard() {
       return;
     }
 
+    const now = Date.now();
+
     const sensorEntries = [
       { key: 'sensor1', label: 'Sensor 1', temperature: latest.sensor1 },
       { key: 'sensor2', label: 'Sensor 2', temperature: latest.sensor2 },
@@ -83,10 +102,12 @@ export default function Dashboard() {
     const criticalAlerts = sensorEntries
       .filter((entry) => entry.temperature > -70)
       .map((entry) => ({
-        id: `${latest.time}-${entry.key}`,
+        id: createAlertId(),
+        sensorKey: entry.key,
         sensorName: entry.label,
         time: latest.time,
         temperature: entry.temperature,
+        timestamp: now,
       }));
 
     if (criticalAlerts.length === 0) {
@@ -94,19 +115,43 @@ export default function Dashboard() {
     }
 
     setActiveAlerts((current) => {
-      const existingIds = new Set(current.map((item) => item.id));
       const merged = [...current];
 
-      criticalAlerts.forEach((alert) => {
-        if (!existingIds.has(alert.id)) {
-          merged.unshift(alert);
-          existingIds.add(alert.id);
+      criticalAlerts.forEach((incomingAlert) => {
+        const existingIndex = merged.findIndex((existingAlert) => {
+          if (existingAlert.sensorKey !== incomingAlert.sensorKey) {
+            return false;
+          }
+
+          return incomingAlert.timestamp - existingAlert.timestamp < ALERT_DEDUP_WINDOW_MS;
+        });
+
+        if (existingIndex >= 0) {
+          merged[existingIndex] = {
+            ...merged[existingIndex],
+            temperature: incomingAlert.temperature,
+            time: incomingAlert.time,
+            timestamp: incomingAlert.timestamp,
+          };
+        } else {
+          merged.unshift(incomingAlert);
         }
       });
 
-      return merged.slice(0, 10);
+      merged.sort((a, b) => b.timestamp - a.timestamp);
+
+      return merged.slice(0, ALERT_LIST_LIMIT);
     });
   }, [telemetryData]);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const cutoff = Date.now() - ALERT_TTL_MS;
+      setActiveAlerts((current) => current.filter((alert) => alert.timestamp >= cutoff));
+    }, ALERT_CLEANUP_INTERVAL_MS);
+
+    return () => clearInterval(interval);
+  }, []);
 
   // Carrega controle de temperatura (não bloqueia o carregamento da dashboard)
   useEffect(() => {
@@ -120,47 +165,36 @@ export default function Dashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Executa apenas uma vez ao montar
 
+  useEffect(() => {
+    return onDashboardDataChanged(() => {
+      void Promise.allSettled([
+        loadPatients(),
+        loadSamples(),
+        loadResults(),
+      ]);
+    });
+  }, [loadPatients, loadResults, loadSamples]);
+
   // Calcula estatísticas reais
   const stats = useMemo(() => {
     // Garante que todos os dados sejam arrays
     const temperaturesArray = Array.isArray(temperatures) ? temperatures : [];
-    const policiesArray = Array.isArray(policies) ? policies : [];
     // Para pacientes, se não houver dados e não estiver carregando, usa contagem mínima de 0
     // (os mockados são apenas para exibição na página, não para contagem na dashboard)
     const patientsArray = Array.isArray(patients) ? patients : [];
     const samplesArray = Array.isArray(samples) ? samples : [];
     const resultsArray = Array.isArray(results) ? results : [];
-    const equipmentArray = Array.isArray(equipment) ? equipment : [];
-    const sensorsArray = Array.isArray(sensors) ? sensors : [];
-
-    // Calcula alertas de temperatura
-    let temperatureAlerts = 0;
-    temperaturesArray.forEach((temp) => {
-      const policy = policiesArray.find((p) => p.policyID?.toString() === temp.policyID?.toString());
-      if (policy) {
-        if (
-          temp.temperatureValue < policy.minThreshold ||
-          temp.temperatureValue > policy.maxThreshold ||
-          temp.readingStatus !== 'valid'
-        ) {
-          temperatureAlerts++;
-        }
-      }
-    });
+    const temperatureAlerts = temperaturesArray.length;
 
     return {
       patients: patientsArray.length,
       samples: samplesArray.length,
       results: resultsArray.length,
       temperatureAlerts,
-      equipment: equipmentArray.length,
-      sensors: sensorsArray.length,
-      policies: policiesArray.length,
     };
-  }, [patients, samples, results, temperatures, policies, equipment, sensors]);
+  }, [patients, samples, results, temperatures]);
 
-  const loading = loadingPatients || loadingSamples || loadingResults || loadingTemperatures || 
-                  loadingPolicies || loadingEquipment || loadingSensors;
+  const loading = loadingPatients || loadingSamples || loadingResults || loadingTemperatures;
 
   const chartHeight = 280;
   const chartWidth = 860;
@@ -217,6 +251,7 @@ export default function Dashboard() {
   ];
 
   const isAdmin = user?.roleName === 'Administrador' || user?.accessType === 4;
+  const activeTemperatureAlertsCount = activeAlerts.length;
 
   useEffect(() => {
     if (!isAdmin) return;
@@ -291,37 +326,10 @@ export default function Dashboard() {
       },
       {
         title: t('dashboard.temperatureAlerts'),
-        value: stats.temperatureAlerts,
+        value: activeTemperatureAlertsCount,
         icon: Thermometer,
         color: 'var(--danger)',
         link: '/temperature',
-        allowedRoles: ['Administrador', 'Coordenador', 'Técnico'],
-        allowedAccessTypes: [2, 3, 4], // Administrador (4) também tem acesso
-      },
-      {
-        title: t('dashboard.equipment'),
-        value: stats.equipment,
-        icon: Box,
-        color: 'var(--secondary)',
-        link: '/equipment',
-        allowedRoles: ['Administrador', 'Coordenador', 'Técnico'],
-        allowedAccessTypes: [2, 3, 4], // Administrador (4) também tem acesso
-      },
-      {
-        title: t('dashboard.sensors'),
-        value: stats.sensors,
-        icon: Radio,
-        color: '#8b5cf6',
-        link: '/sensors',
-        allowedRoles: ['Administrador', 'Coordenador', 'Técnico'],
-        allowedAccessTypes: [2, 3, 4], // Administrador (4) também tem acesso
-      },
-      {
-        title: t('dashboard.policies'),
-        value: stats.policies,
-        icon: Shield,
-        color: '#06b6d4',
-        link: '/policies',
         allowedRoles: ['Administrador', 'Coordenador', 'Técnico'],
         allowedAccessTypes: [2, 3, 4], // Administrador (4) também tem acesso
       },
@@ -350,7 +358,7 @@ export default function Dashboard() {
       // Usuário Externo (1) tem acesso apenas aos seus itens
       return card.allowedAccessTypes.includes(user.accessType || 0);
     });
-  }, [user, stats, t]);
+  }, [user, stats, t, activeTemperatureAlertsCount]);
 
   return (
     <div className="dashboard-bento">

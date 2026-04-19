@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 
 import { useLanguage } from '../contexts/LanguageContext';
 import { useSearchParams } from 'react-router-dom';
@@ -17,9 +17,10 @@ import { useSensors } from '../hooks/useSensors';
 import { usePolicies } from '../hooks/usePolicies';
 import { validateReading, validateTemperatureUnit, generateAlert, validateThresholds } from '../utils/validations';
 import { CryoBoxGrid } from '../components/CryoBoxGrid';
+import IncidentManagementPage from './IncidentManagementPage';
 import './FacilityManagementPage.css';
 
-type TabType = 'equipment' | 'temperature' | 'history' | 'sensors' | 'policies' | 'clinical-linker';
+type TabType = 'equipment' | 'temperature' | 'history' | 'sensors' | 'policies' | 'incidents';
 
 type HistoryLogEntry = {
   id: string;
@@ -29,6 +30,12 @@ type HistoryLogEntry = {
   status: string;
   validationHash: string;
 };
+
+const ALERT_TRIGGER_THRESHOLD = -70;
+
+function createIncidentId() {
+  return globalThis.crypto?.randomUUID?.() || `incident-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
 
 async function buildValidationHash(payload: string): Promise<string> {
   const encoder = new TextEncoder();
@@ -42,7 +49,7 @@ export default function FacilityManagementPage() {
   const { t } = useLanguage();
   const [searchParams, setSearchParams] = useSearchParams();
   const tabParam = searchParams.get('tab') as TabType | null;
-  const validTabs: TabType[] = ['equipment', 'temperature', 'history', 'sensors', 'policies', 'clinical-linker'];
+  const validTabs: TabType[] = ['equipment', 'temperature', 'history', 'sensors', 'policies', 'incidents'];
   const initialTab = (tabParam && validTabs.includes(tabParam)) ? tabParam : 'equipment';
   const [activeTab, setActiveTab] = useState<TabType>(initialTab);
   const [sensorSnapshot, setSensorSnapshot] = useState({
@@ -74,14 +81,17 @@ export default function FacilityManagementPage() {
         const nextAverage = Number(((nextSensor1 + nextSensor2 + nextSensor3) / 3).toFixed(1));
         const chartTime = new Date().toLocaleTimeString('pt-BR', { hour12: false, hour: '2-digit', minute: '2-digit' });
         const timestamp = new Date().toISOString();
+        const timestampMs = Date.now();
 
-        const logs = await Promise.all([
-          { sensorName: 'Sensor 1', temperature: nextSensor1 },
-          { sensorName: 'Sensor 2', temperature: nextSensor2 },
-          { sensorName: 'Sensor 3', temperature: nextSensor3 },
-        ].map(async (entry) => {
+        const sensorReadings = [
+          { sensorKey: 'sensor1', sensorName: 'Sensor 1', temperature: nextSensor1 },
+          { sensorKey: 'sensor2', sensorName: 'Sensor 2', temperature: nextSensor2 },
+          { sensorKey: 'sensor3', sensorName: 'Sensor 3', temperature: nextSensor3 },
+        ];
+
+        const logs = await Promise.all(sensorReadings.map(async (entry) => {
           const validationHash = await buildValidationHash(
-            `${entry.sensorName}|${timestamp}|${entry.temperature.toFixed(1)}|${entry.temperature > -70 ? 'Alerta' : 'Normal'}`
+            `${entry.sensorName}|${timestamp}|${entry.temperature.toFixed(1)}|${entry.temperature > ALERT_TRIGGER_THRESHOLD ? 'Alerta' : 'Normal'}`
           );
 
           return {
@@ -89,7 +99,7 @@ export default function FacilityManagementPage() {
             timestamp,
             sensorName: entry.sensorName,
             temperature: entry.temperature,
-            status: entry.temperature > -70 ? 'Alerta' : 'Normal',
+            status: entry.temperature > ALERT_TRIGGER_THRESHOLD ? 'Alerta' : 'Normal',
             validationHash,
           };
         }));
@@ -114,6 +124,7 @@ export default function FacilityManagementPage() {
     { id: 'equipment' as TabType, label: t('facility.tabs.equipment', 'Equipamentos'), icon: Box },
     { id: 'temperature' as TabType, label: t('facility.tabs.temperature', 'Controle de Temperatura'), icon: Thermometer },
     { id: 'history' as TabType, label: t('facility.tabs.history', 'Histórico de Leituras'), icon: AlertCircle },
+    { id: 'incidents' as TabType, label: t('facility.tabs.incidents', 'Gerenciamento de Incidentes'), icon: AlertCircle },
     { id: 'sensors' as TabType, label: t('facility.tabs.sensors', 'Sensores'), icon: RadioIcon },
     { id: 'policies' as TabType, label: t('facility.tabs.policies', 'Políticas de Temperatura'), icon: Shield },
   ];
@@ -133,6 +144,7 @@ export default function FacilityManagementPage() {
           return (
             <button
               key={tab.id}
+              data-testid={`facility-tab-${tab.id}`}
               className={`facility-tab ${activeTab === tab.id ? 'active' : ''}`}
               onClick={() => {
                 setActiveTab(tab.id);
@@ -157,6 +169,7 @@ export default function FacilityManagementPage() {
         {activeTab === 'history' && (
           <HistorySection historyLog={historyLog} />
         )}
+        {activeTab === 'incidents' && <IncidentManagementPage />}
         {activeTab === 'sensors' && <SensorsSection />}
         {activeTab === 'policies' && <PoliciesSection />}
 
@@ -230,13 +243,14 @@ function EquipmentSection() {
   return (
     <>
       <div className="section-header">
-        <Button onClick={openNewEquipmentForm}>
+        <Button data-testid="equipment-new-button" onClick={openNewEquipmentForm}>
           <Plus size={18} />
           {t('facility.equipment.new', 'Novo Equipamento')}
         </Button>
       </div>
 
       {isFormOpen && (
+        <div data-testid="equipment-form-panel">
         <Card className="equipment-form-panel equipment-form-panel--open">
           <div className="equipment-form-panel__header">
             <div>
@@ -250,7 +264,7 @@ function EquipmentSection() {
                 Formulário inline para reduzir atrito e manter a navegação na mesma tela.
               </p>
             </div>
-            <Button variant="secondary" onClick={closeEquipmentForm}>
+            <Button data-testid="equipment-form-close-button" variant="secondary" onClick={closeEquipmentForm}>
               Fechar
             </Button>
           </div>
@@ -278,6 +292,7 @@ function EquipmentSection() {
             onCancel={closeEquipmentForm}
           />
         </Card>
+        </div>
       )}
 
       {loading && <p>Carregando...</p>}
@@ -307,6 +322,7 @@ function EquipmentSection() {
                 <td>
                   <div className="table-actions">
                     <button
+                      data-testid={`equipment-edit-button-${eq.equipmentID || index}`}
                       className="action-button"
                       onClick={() => {
                         openEditEquipmentForm(eq);
@@ -316,6 +332,7 @@ function EquipmentSection() {
                       <Edit size={16} />
                     </button>
                     <button
+                      data-testid={`equipment-delete-button-${eq.equipmentID || index}`}
                       className="action-button danger"
                       onClick={async () => {
                         if (confirm('Tem certeza que deseja excluir este equipamento?')) {
@@ -439,9 +456,10 @@ function EquipmentForm({
   };
 
   return (
-    <form onSubmit={handleSubmit} className="form">
+    <form onSubmit={handleSubmit} className="form" data-testid="equipment-form">
       <div className="form-grid">
         <Input
+          data-testid="equipment-description-input"
           label="Descrição do Equipamento"
           value={formData.equipmentDescription || ''}
           onChange={(e) =>
@@ -450,6 +468,7 @@ function EquipmentForm({
           required
         />
         <Input
+          data-testid="equipment-model-input"
           label="Modelo"
           value={formData.model || ''}
           onChange={(e) =>
@@ -458,6 +477,7 @@ function EquipmentForm({
           placeholder="Ex: Freezer -80°C, Refrigerador 4°C"
         />
         <Input
+          data-testid="equipment-serial-input"
           label="Número de Série"
           value={formData.serialNumber || ''}
           onChange={(e) =>
@@ -466,6 +486,7 @@ function EquipmentForm({
           placeholder="Ex: SN123456789"
         />
         <Input
+          data-testid="equipment-purchase-date-input"
           label="Data da Compra"
           type="date"
           value={
@@ -482,8 +503,8 @@ function EquipmentForm({
         />
       </div>
       <div className="form-actions">
-        <Button type="button" variant="secondary" onClick={onCancel}>Cancelar</Button>
-        <Button type="submit">Salvar</Button>
+        <Button data-testid="equipment-cancel-button" type="button" variant="secondary" onClick={onCancel}>Cancelar</Button>
+        <Button data-testid="equipment-save-button" type="submit">Salvar</Button>
       </div>
     </form>
   );
@@ -656,7 +677,11 @@ function TemperatureSection({
   );
 }
 
-function HistorySection({ historyLog }: { historyLog: HistoryLogEntry[] }) {
+function HistorySection({
+  historyLog,
+}: {
+  historyLog: HistoryLogEntry[];
+}) {
   const [currentPage, setCurrentPage] = useState(1);
   const [sensorFilter, setSensorFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');

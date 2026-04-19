@@ -4,6 +4,36 @@ const authController = require('../../controllers/auth.controller');
 const { authenticate } = require('../../infrastructure/middleware/auth');
 const logger = require('../../utils/logger');
 const auditLogger = require('../../utils/auditLogger');
+const jwt = require('jsonwebtoken');
+const env = require('../../config/env');
+
+const REFRESH_COOKIE_NAME = 'refresh_token';
+
+function getRefreshCookieOptions() {
+  const isProd = process.env.NODE_ENV === 'production';
+  return {
+    httpOnly: true,
+    secure: isProd,
+    sameSite: isProd ? 'strict' : 'lax',
+    path: '/api/auth',
+    maxAge: 7 * 24 * 60 * 60 * 1000
+  };
+}
+
+function setRefreshCookie(res, refreshToken) {
+  res.cookie(REFRESH_COOKIE_NAME, refreshToken, getRefreshCookieOptions());
+}
+
+function clearRefreshCookie(res) {
+  res.clearCookie(REFRESH_COOKIE_NAME, getRefreshCookieOptions());
+}
+
+function getCookieValue(req, cookieName) {
+  const cookieHeader = req.headers.cookie || '';
+  const segments = cookieHeader.split(';').map((segment) => segment.trim());
+  const match = segments.find((segment) => segment.startsWith(`${cookieName}=`));
+  return match ? decodeURIComponent(match.substring(cookieName.length + 1)) : null;
+}
 
 // RF001 - Login (compatível com frontend)
 router.post('/login', async (req, res, next) => {
@@ -45,7 +75,6 @@ router.post('/two-factor/enable', authenticate, (req, res) => {
   authController.enableMFA(req, res);
 });
 router.post('/two-factor/disable', authenticate, (req, res) => {
-  // TODO: Implementar desabilitar MFA
   res.status(501).json({
     success: false,
     error: (req.t && req.t('common.notImplemented')) || 'Funcionalidade não implementada'
@@ -176,17 +205,14 @@ router.post('/logout', authenticate, async (req, res) => {
     
     if (db && token) {
       const sessionService = require('../../services/session.service');
-      // Busca sessão pelo token
-      const sessionsCollection = db.collection('sessions');
-      const session = await sessionsCollection.findOne({ token });
+      const sessionCheck = await sessionService.verifySession(db, token);
       
-      if (session) {
-        await sessionService.invalidateSession(db, session.sessionID);
+      if (sessionCheck.valid && sessionCheck.session?.sessionID) {
+        await sessionService.invalidateSession(db, sessionCheck.session.sessionID);
       }
-      
-      // Invalida todas as sessões do usuário
-      await sessionService.invalidateUserSessions(db, req.user.userID);
     }
+
+    clearRefreshCookie(res);
     
     // Log de logout
     await auditLogger.logLogout(req);
@@ -279,6 +305,208 @@ router.get('/verify', authenticate, async (req, res) => {
     return res.status(500).json({
       success: false,
       error: (req.t && req.t('auth.verifyTokenError')) || 'Erro ao verificar token',
+      message: error.message
+    });
+  }
+});
+
+// Lista sessões ativas do usuário autenticado
+router.get('/sessions', authenticate, async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    if (!db) {
+      return res.status(503).json({
+        success: false,
+        error: (req.t && req.t('errors.databaseUnavailable')) || 'Banco de dados não disponível'
+      });
+    }
+
+    const token = req.headers.authorization?.substring(7);
+    const sessionService = require('../../services/session.service');
+    const sessions = await sessionService.listUserSessions(db, req.user.userID, token);
+
+    return res.status(200).json({
+      success: true,
+      data: sessions
+    });
+  } catch (error) {
+    logger.error('Erro ao listar sessões:', error.message);
+    return res.status(500).json({
+      success: false,
+      error: 'Erro ao listar sessões',
+      message: error.message
+    });
+  }
+});
+
+// Revoga todas as sessões exceto a atual
+router.delete('/sessions/all-others', authenticate, async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    if (!db) {
+      return res.status(503).json({
+        success: false,
+        error: (req.t && req.t('errors.databaseUnavailable')) || 'Banco de dados não disponível'
+      });
+    }
+
+    const token = req.headers.authorization?.substring(7);
+    const sessionService = require('../../services/session.service');
+    await sessionService.revokeAllOtherSessions(db, req.user.userID, token);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Todas as outras sessões foram encerradas'
+    });
+  } catch (error) {
+    logger.error('Erro ao revogar outras sessões:', error.message);
+    return res.status(500).json({
+      success: false,
+      error: 'Erro ao encerrar outras sessões',
+      message: error.message
+    });
+  }
+});
+
+// Revoga uma sessão específica
+router.delete('/sessions/:sessionId', authenticate, async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    if (!db) {
+      return res.status(503).json({
+        success: false,
+        error: (req.t && req.t('errors.databaseUnavailable')) || 'Banco de dados não disponível'
+      });
+    }
+
+    const { sessionId } = req.params;
+    const sessionService = require('../../services/session.service');
+    const token = req.headers.authorization?.substring(7);
+    const sessionCheck = await sessionService.verifySession(db, token);
+
+    if (sessionCheck.valid && sessionCheck.session?.sessionID === sessionId) {
+      clearRefreshCookie(res);
+    }
+
+    const revoked = await sessionService.revokeSessionById(db, req.user.userID, sessionId);
+
+    if (!revoked) {
+      return res.status(404).json({
+        success: false,
+        error: 'Sessão não encontrada'
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Sessão encerrada com sucesso'
+    });
+  } catch (error) {
+    logger.error('Erro ao revogar sessão específica:', error.message);
+    return res.status(500).json({
+      success: false,
+      error: 'Erro ao encerrar sessão',
+      message: error.message
+    });
+  }
+});
+
+// Atualiza token de acesso com refresh token HttpOnly
+router.post('/refresh', async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    if (!db) {
+      return res.status(503).json({
+        success: false,
+        error: (req.t && req.t('errors.databaseUnavailable')) || 'Banco de dados não disponível'
+      });
+    }
+
+    const refreshToken = getCookieValue(req, REFRESH_COOKIE_NAME);
+    if (!refreshToken) {
+      return res.status(401).json({
+        success: false,
+        error: 'Refresh token não fornecido'
+      });
+    }
+
+    let decoded;
+    try {
+      decoded = jwt.verify(refreshToken, env.JWT_REFRESH_SECRET || env.JWT_SECRET);
+    } catch (tokenError) {
+      clearRefreshCookie(res);
+      return res.status(401).json({
+        success: false,
+        error: 'Refresh token inválido'
+      });
+    }
+
+    if (!decoded?.userID || decoded?.type !== 'refresh') {
+      clearRefreshCookie(res);
+      return res.status(401).json({
+        success: false,
+        error: 'Refresh token inválido'
+      });
+    }
+
+    const sessionService = require('../../services/session.service');
+    const session = await sessionService.getSessionByRefreshToken(db, refreshToken);
+    if (!session || session.userID !== String(decoded.userID)) {
+      clearRefreshCookie(res);
+      return res.status(401).json({
+        success: false,
+        error: 'Sessão de refresh inválida ou revogada'
+      });
+    }
+
+    const usersCollection = db.collection('users');
+    const { ObjectId } = require('mongodb');
+    const user = await usersCollection.findOne({ _id: new ObjectId(decoded.userID) });
+    if (!user) {
+      clearRefreshCookie(res);
+      return res.status(401).json({
+        success: false,
+        error: 'Usuário não encontrado para refresh'
+      });
+    }
+
+    const accessToken = jwt.sign(
+      {
+        userID: user._id.toString(),
+        email: user.email,
+        username: user.username,
+        accessType: user.accessType,
+        name: user.name,
+        mfaVerified: true
+      },
+      env.JWT_SECRET,
+      { expiresIn: '15m' }
+    );
+
+    const newRefreshToken = jwt.sign(
+      {
+        userID: user._id.toString(),
+        sessionID: session.sessionID,
+        type: 'refresh'
+      },
+      env.JWT_REFRESH_SECRET || env.JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
+    await sessionService.rotateSessionTokens(db, session.sessionID, accessToken, newRefreshToken);
+    setRefreshCookie(res, newRefreshToken);
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        token: accessToken
+      }
+    });
+  } catch (error) {
+    logger.error('Erro ao renovar token:', error.message);
+    return res.status(500).json({
+      success: false,
+      error: 'Erro ao renovar token',
       message: error.message
     });
   }

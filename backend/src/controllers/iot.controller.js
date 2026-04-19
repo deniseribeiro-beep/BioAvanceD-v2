@@ -3,6 +3,7 @@ const { connectMongoDB } = require('../infrastructure/database/mongodb/connectio
 const SensorMetadata = require('../models/SensorMetadata.schema');
 const { saveTelemetryPoint } = require('../services/saveTelemetryPoint');
 const { sendCriticalAlertEmail } = require('../services/sendCriticalAlertEmail');
+const TemperatureIncidentModel = require('../models/TemperatureIncident');
 
 const sensorPolicyCache = new Map();
 const SENSOR_POLICY_CACHE_TTL_MS = 60 * 1000;
@@ -90,6 +91,74 @@ async function ingestTelemetry(req, res) {
             timestamp: normalizedTimestamp.toISOString()
           })
         );
+
+        // Registrar incidente no MongoDB
+        void Promise.resolve()
+          .then(async () => {
+            const db = await connectMongoDB();
+            const TemperatureIncidentCollection = db.collection('temperatureIncidents');
+            
+            // Obter nome do sensor do metadata
+            const sensorName = policyData?.sensorMetadata?.sensorName || normalizedSensorId;
+            
+            // Procurar por incidente aberto para este sensor
+            const existingIncident = await TemperatureIncidentCollection.findOne({
+              sensorKey: normalizedSensorId,
+              status: { $in: ['open', 'acknowledged', 'escalated'] }
+            });
+
+            if (existingIncident) {
+              // Atualizar incidente existente
+              await TemperatureIncidentCollection.updateOne(
+                { _id: existingIncident._id },
+                {
+                  $set: {
+                    currentTemperature: normalizedTemperature,
+                    maxTemperature: Math.max(existingIncident.maxTemperature, normalizedTemperature),
+                    minTemperature: Math.min(existingIncident.minTemperature, normalizedTemperature),
+                    samplesOutOfRange: existingIncident.samplesOutOfRange + 1,
+                    updatedAt: new Date()
+                  }
+                }
+              );
+            } else {
+              // Criar novo incidente
+              const newIncident = TemperatureIncidentModel.create({
+                sensorKey: normalizedSensorId,
+                sensorName: sensorName,
+                openedAt: normalizedTimestamp,
+                currentTemperature: normalizedTemperature,
+                maxTemperature: normalizedTemperature,
+                minTemperature: normalizedTemperature,
+                samplesOutOfRange: 1
+              });
+
+              const result = await TemperatureIncidentCollection.insertOne(newIncident);
+              
+              // Enviar email de alerta para novos incidentes
+              const UserCollection = db.collection('users');
+              const recipients = await UserCollection
+                .find({ 
+                  accessType: { $in: [2, 3, 4] },
+                  status: 'active'
+                })
+                .project({ email: 1 })
+                .toArray();
+
+              const recipientEmails = recipients.map(u => u.email).filter(e => e);
+              
+              if (recipientEmails.length > 0) {
+                const { sendIncidentAlertEmail } = require('../services/sendIncidentAlertEmail');
+                void sendIncidentAlertEmail({ ...newIncident, _id: result.insertedId }, recipientEmails, 0)
+                  .catch(err => {
+                    logger.error('[IOT_INCIDENT] Erro ao enviar alerta de incidente:', err.message);
+                  });
+              }
+            }
+          })
+          .catch((error) => {
+            logger.error('[IOT_INCIDENT] Falha ao registrar incidente:', error.message || error);
+          });
 
         if (recipientEmail) {
           void sendCriticalAlertEmail(

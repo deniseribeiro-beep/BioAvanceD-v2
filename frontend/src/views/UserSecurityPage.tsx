@@ -15,27 +15,24 @@ import {
   Eye,
   EyeOff,
   Download,
-  Trash2,
-  Edit,
   Plus,
   LogOut,
-  Smartphone as PhoneIcon,
-  Fingerprint,
   FileText,
   ChevronRight,
   Settings
 } from 'lucide-react';
 import { useUserSecurity } from '../hooks/useUserSecurity';
 import { useToast } from '../components/UI/ToastContainer';
-import { userSecurityService } from '../services/api';
 import { validatePasswordAndGetError } from '../utils/passwordValidator';
 import { getPasswordIssues } from '../utils/passwordRules';
+import { useAuth } from '../contexts/AuthContext';
 import './UserSecurityPage.css';
 
 export default function UserSecurityPage() {
   const { t } = useLanguage();
   const navigate = useNavigate();
   const { showToast } = useToast();
+  const { logout } = useAuth();
   const {
     securityStatus,
     mfaStatus,
@@ -43,28 +40,20 @@ export default function UserSecurityPage() {
     sessions,
     loading,
     refreshData,
-    updateMFA,
     updatePassword,
-    updatePhone,
-    addPasskey,
-    removePasskey,
     generateRecoveryCodes,
     revokeSession,
     revokeAllSessions
   } = useUserSecurity();
 
   const [showChangePasswordModal, setShowChangePasswordModal] = useState(false);
-  const [showAddPhoneModal, setShowAddPhoneModal] = useState(false);
   const [showRecoveryCodesModal, setShowRecoveryCodesModal] = useState(false);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [confirmAction, setConfirmAction] = useState<(() => void) | null>(null);
   const [confirmMessage, setConfirmMessage] = useState('');
   const [newPassword, setNewPassword] = useState({ current: '', new: '', confirm: '' });
-  const [newPhone, setNewPhone] = useState('');
   const [showPasswords, setShowPasswords] = useState({ current: false, new: false, confirm: false });
   const [passwordError, setPasswordError] = useState('');
-  const [phoneError, setPhoneError] = useState('');
-  const [addingPasskey, setAddingPasskey] = useState(false);
 
   useEffect(() => {
     refreshData();
@@ -165,7 +154,7 @@ export default function UserSecurityPage() {
             <Shield size={36} />
           </div>
           <div className="header-text">
-            <h1>{t('userSecurity.title')}</h1>
+            <h1 data-testid="security-page-title">{t('userSecurity.title')}</h1>
             <p>{t('userSecurity.subtitle')}</p>
           </div>
         </div>
@@ -316,243 +305,90 @@ export default function UserSecurityPage() {
           </div>
         </Card>
 
-        {/* Métodos Alternativos */}
-        <div className="alternative-methods">
-          <h3 className="subsection-title">{t('userSecurity.mfa.alternatives.title')}</h3>
-
-          {/* Telefone/SMS */}
-          <Card className="mfa-card">
-            <div className="mfa-header">
-              <div className="mfa-info">
-                <div className="mfa-icon">
-                  <PhoneIcon size={24} />
-                </div>
-                <div>
-                  <h3>{t('userSecurity.mfa.alternatives.phone.title')}</h3>
-                  <p className="mfa-description">{t('userSecurity.mfa.alternatives.phone.description')}</p>
-                  {mfaStatus?.phoneNumber && (
-                    <p className="mfa-value" style={{ fontSize: '0.875rem', color: 'var(--text)', marginTop: '0.25rem', fontWeight: 500 }}>
-                      {mfaStatus.phoneNumber}
-                    </p>
-                  )}
-                  {mfaStatus?.phoneEnabled && !mfaStatus?.phoneNumber && (
-                    <p className="mfa-value" style={{ fontSize: '0.875rem', color: 'var(--text-light)', marginTop: '0.25rem', fontStyle: 'italic' }}>
-                      {t('userSecurity.mfa.alternatives.phone.numberNotDisplayed') || 'Telefone cadastrado'}
-                    </p>
-                  )}
-                </div>
+        <Card className="mfa-card">
+          <div className="mfa-header">
+            <div className="mfa-info">
+              <div className="mfa-icon">
+                <FileText size={24} />
               </div>
-              <div className={`mfa-status ${mfaStatus?.phoneEnabled ? 'active' : 'inactive'}`}>
-                {mfaStatus?.phoneEnabled ? (
-                  <>
-                    <CheckCircle size={18} />
-                    <span>{t('userSecurity.status.active')}</span>
-                  </>
-                ) : (
-                  <>
-                    <XCircle size={18} />
-                    <span>{t('userSecurity.status.notConfigured')}</span>
-                  </>
+              <div>
+                <h3>{t('userSecurity.mfa.alternatives.recovery.title')}</h3>
+                <p className="mfa-description">{t('userSecurity.mfa.alternatives.recovery.description')}</p>
+                {mfaStatus?.recoveryCodes && (
+                  <p className="mfa-value">
+                    {t('userSecurity.mfa.alternatives.recovery.remaining').replace('{count}', String(mfaStatus.recoveryCodes.remaining ?? 0))}
+                  </p>
                 )}
               </div>
             </div>
-            <div className="mfa-actions">
-              {mfaStatus?.phoneEnabled ? (
+            <div className={`mfa-status ${
+              (mfaStatus?.recoveryCodes?.remaining ?? 0) >= 5 ? 'active' : 
+              (mfaStatus?.recoveryCodes?.remaining ?? 0) > 0 ? 'warning' : 'danger'
+            }`}>
+              {(mfaStatus?.recoveryCodes?.remaining ?? 0) >= 5 ? (
                 <>
-                  <Button variant="secondary" onClick={() => setShowAddPhoneModal(true)}>
-                    <Edit size={18} />
-                    {t('userSecurity.mfa.alternatives.phone.change')}
-                  </Button>
-                  <Button 
-                    variant="danger" 
-                    onClick={() => handleConfirmAction(
-                      async () => {
-                        try {
-                          await updateMFA('phone', false);
-                          showToast(t('userSecurity.mfa.alternatives.phone.removeSuccess') || 'Telefone removido com sucesso', 'success');
-                          refreshData();
-                        } catch (err: any) {
-                          showToast(err.message || t('userSecurity.mfa.alternatives.phone.removeError') || 'Erro ao remover telefone', 'error');
-                        }
-                      },
-                      t('userSecurity.mfa.alternatives.phone.removeConfirm')
-                    )}
-                  >
-                    <Trash2 size={18} />
-                    {t('userSecurity.mfa.alternatives.phone.remove')}
-                  </Button>
+                  <CheckCircle size={18} />
+                  <span>{t('userSecurity.status.secure')}</span>
+                </>
+              ) : (mfaStatus?.recoveryCodes?.remaining ?? 0) > 0 ? (
+                <>
+                  <AlertTriangle size={18} />
+                  <span>{t('userSecurity.status.needsRenewal')}</span>
                 </>
               ) : (
-                <Button variant="primary" onClick={() => setShowAddPhoneModal(true)}>
-                  <Plus size={18} />
-                  {t('userSecurity.mfa.alternatives.phone.add')}
-                </Button>
+                <>
+                  <XCircle size={18} />
+                  <span>{t('userSecurity.status.none')}</span>
+                </>
               )}
             </div>
-          </Card>
-
-          {/* Passkey */}
-          <Card className="mfa-card">
-            <div className="mfa-header">
-              <div className="mfa-info">
-                <div className="mfa-icon">
-                  <Fingerprint size={24} />
-                </div>
-                <div>
-                  <h3>{t('userSecurity.mfa.alternatives.passkey.title')}</h3>
-                  <p className="mfa-description">{t('userSecurity.mfa.alternatives.passkey.description')}</p>
-                  {mfaStatus?.passkeys && mfaStatus.passkeys.length > 0 && (
-                    <div className="passkey-list">
-                      {mfaStatus.passkeys.map((pk: any, idx: number) => (
-                        <div key={idx} className="passkey-item">
-                          <span>{pk.name || pk.deviceName || `${t('userSecurity.mfa.alternatives.passkey.device')} ${idx + 1}`}</span>
-                          <Button 
-                            variant="danger" 
-                            className="btn-small"
-                            onClick={() => handleConfirmAction(
-                              async () => {
-                                try {
-                                  await removePasskey(pk.id);
-                                  showToast(t('userSecurity.mfa.alternatives.passkey.removeSuccess') || 'Passkey removida com sucesso', 'success');
-                                  refreshData();
-                                } catch (err: any) {
-                                  showToast(err.message || t('userSecurity.mfa.alternatives.passkey.removeError') || 'Erro ao remover passkey', 'error');
-                                }
-                              },
-                              t('userSecurity.mfa.alternatives.passkey.removeConfirm')
-                            )}
-                          >
-                            <Trash2 size={14} />
-                          </Button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-              <div className={`mfa-status ${(mfaStatus?.passkeys?.length ?? 0) > 0 ? 'active' : 'inactive'}`}>
-                {(mfaStatus?.passkeys?.length ?? 0) > 0 ? (
-                  <>
-                    <CheckCircle size={18} />
-                    <span>{mfaStatus?.passkeys?.length ?? 0} {t('userSecurity.mfa.alternatives.passkey.configured')}</span>
-                  </>
-                ) : (
-                  <>
-                    <XCircle size={18} />
-                    <span>{t('userSecurity.status.notConfigured')}</span>
-                  </>
-                )}
-              </div>
-            </div>
-            <div className="mfa-actions">
+          </div>
+          <div className="mfa-actions">
+            <Button 
+              variant="primary" 
+              data-testid="generate-recovery-codes-button"
+              onClick={async () => {
+                try {
+                  const codes = await generateRecoveryCodes();
+                  if (codes && codes.length > 0) {
+                    setShowRecoveryCodesModal(true);
+                  } else {
+                    showToast(t('userSecurity.mfa.alternatives.recovery.generateError') || 'Erro ao gerar códigos', 'error');
+                  }
+                } catch (err: any) {
+                  showToast(err.message || t('userSecurity.mfa.alternatives.recovery.generateError') || 'Erro ao gerar códigos', 'error');
+                }
+              }}
+            >
+              <Plus size={18} />
+              {t('userSecurity.mfa.alternatives.recovery.generate')}
+            </Button>
+            {mfaStatus?.recoveryCodes?.codes && mfaStatus.recoveryCodes.codes.length > 0 && (
               <Button 
-                variant="primary" 
-                disabled={addingPasskey}
-                onClick={async () => {
-                  setAddingPasskey(true);
-                  try {
-                    await addPasskey();
-                    showToast(t('userSecurity.mfa.alternatives.passkey.addSuccess') || 'Passkey adicionada com sucesso', 'success');
-                  } catch (err: any) {
-                    console.error('Erro ao adicionar passkey:', err);
-                    const errorMessage = err.message || t('userSecurity.mfa.alternatives.passkey.addError') || 'Erro ao adicionar passkey';
-                    showToast(errorMessage, 'error');
-                  } finally {
-                    setAddingPasskey(false);
+                variant="secondary" 
+                data-testid="download-recovery-codes-button"
+                onClick={() => {
+                  if (mfaStatus?.recoveryCodes?.codes) {
+                    const blob = new Blob([mfaStatus.recoveryCodes.codes.join('\n')], { type: 'text/plain' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'recovery-codes.txt';
+                    a.click();
+                    URL.revokeObjectURL(url);
                   }
                 }}
               >
-                <Plus size={18} />
-                {addingPasskey ? t('common.loading') || 'Adicionando...' : t('userSecurity.mfa.alternatives.passkey.add')}
+                <Download size={18} />
+                {t('userSecurity.mfa.alternatives.recovery.download')}
               </Button>
-            </div>
-          </Card>
-
-          {/* Recovery Codes */}
-          <Card className="mfa-card">
-            <div className="mfa-header">
-              <div className="mfa-info">
-                <div className="mfa-icon">
-                  <FileText size={24} />
-                </div>
-                <div>
-                  <h3>{t('userSecurity.mfa.alternatives.recovery.title')}</h3>
-                  <p className="mfa-description">{t('userSecurity.mfa.alternatives.recovery.description')}</p>
-                  {mfaStatus?.recoveryCodes && (
-                    <p className="mfa-value">
-                      {t('userSecurity.mfa.alternatives.recovery.remaining').replace('{count}', String(mfaStatus.recoveryCodes.remaining ?? 0))}
-                    </p>
-                  )}
-                </div>
-              </div>
-              <div className={`mfa-status ${
-                (mfaStatus?.recoveryCodes?.remaining ?? 0) >= 5 ? 'active' : 
-                (mfaStatus?.recoveryCodes?.remaining ?? 0) > 0 ? 'warning' : 'danger'
-              }`}>
-                {(mfaStatus?.recoveryCodes?.remaining ?? 0) >= 5 ? (
-                  <>
-                    <CheckCircle size={18} />
-                    <span>{t('userSecurity.status.secure')}</span>
-                  </>
-                ) : (mfaStatus?.recoveryCodes?.remaining ?? 0) > 0 ? (
-                  <>
-                    <AlertTriangle size={18} />
-                    <span>{t('userSecurity.status.needsRenewal')}</span>
-                  </>
-                ) : (
-                  <>
-                    <XCircle size={18} />
-                    <span>{t('userSecurity.status.none')}</span>
-                  </>
-                )}
-              </div>
-            </div>
-            <div className="mfa-actions">
-              <Button 
-                variant="primary" 
-                onClick={async () => {
-                  try {
-                    const codes = await generateRecoveryCodes();
-                    // Garante que os códigos estão no estado antes de abrir o modal
-                    if (codes && codes.length > 0) {
-                      setShowRecoveryCodesModal(true);
-                    } else {
-                      showToast(t('userSecurity.mfa.alternatives.recovery.generateError') || 'Erro ao gerar códigos', 'error');
-                    }
-                  } catch (err: any) {
-                    showToast(err.message || t('userSecurity.mfa.alternatives.recovery.generateError') || 'Erro ao gerar códigos', 'error');
-                  }
-                }}
-              >
-                <Plus size={18} />
-                {t('userSecurity.mfa.alternatives.recovery.generate')}
-              </Button>
-              {mfaStatus?.recoveryCodes?.codes && mfaStatus.recoveryCodes.codes.length > 0 && (
-                <Button 
-                  variant="secondary" 
-                  onClick={() => {
-                    if (mfaStatus?.recoveryCodes?.codes) {
-                      const blob = new Blob([mfaStatus.recoveryCodes.codes.join('\n')], { type: 'text/plain' });
-                      const url = URL.createObjectURL(blob);
-                      const a = document.createElement('a');
-                      a.href = url;
-                      a.download = 'recovery-codes.txt';
-                      a.click();
-                      URL.revokeObjectURL(url);
-                    }
-                  }}
-                >
-                  <Download size={18} />
-                  {t('userSecurity.mfa.alternatives.recovery.download')}
-                </Button>
-              )}
-            </div>
-          </Card>
-        </div>
+            )}
+          </div>
+        </Card>
       </div>
 
       {/* Senha e Credenciais */}
-      <Card className="security-section-card">
+      <Card className="security-section-card" data-testid="sessions-card">
         <div className="section-header">
           <h2>
             <Lock size={24} />
@@ -597,12 +433,13 @@ export default function UserSecurityPage() {
             </div>
           )}
           <div className="password-actions">
-            <Button variant="primary" onClick={() => setShowChangePasswordModal(true)}>
+            <Button variant="primary" data-testid="change-password-button" onClick={() => setShowChangePasswordModal(true)}>
               <Lock size={18} />
               {t('userSecurity.password.change')}
             </Button>
             <Button 
               variant="secondary" 
+              data-testid="request-password-reset-button"
               onClick={() => handleConfirmAction(
                 async () => {
                   try {
@@ -628,13 +465,14 @@ export default function UserSecurityPage() {
       {/* Sessões e Dispositivos */}
       <Card className="security-section-card">
         <div className="section-header">
-          <h2>
+            <h2 data-testid="sessions-title">
             <Smartphone size={24} />
             {t('userSecurity.sessions.title')}
           </h2>
           {sessions && sessions.length > 1 && (
             <Button 
               variant="danger" 
+              data-testid="revoke-all-sessions-button"
               onClick={() => handleConfirmAction(
                 () => revokeAllSessions(),
                 t('userSecurity.sessions.revokeAllConfirm')
@@ -645,24 +483,31 @@ export default function UserSecurityPage() {
             </Button>
           )}
         </div>
-        <div className="sessions-list">
+        <div className="sessions-list" data-testid="sessions-list">
           {sessions && sessions.length > 0 ? (
-            sessions.map((session: any, idx: number) => (
-              <div key={idx} className="session-item">
+            sessions.map((session: any, index: number) => (
+              <div
+                key={session.id}
+                className="session-item"
+                data-testid="session-item"
+                data-session-id={String(session.id || session.sessionID || '')}
+                data-session-current={session.isCurrent ? 'true' : 'false'}
+              >
                 <div className="session-info">
                   <div className="session-device">
                     <Smartphone size={20} />
                     <div>
-                      <span className="session-name">{session.deviceName || t('userSecurity.sessions.unknownDevice')}</span>
-                      <span className="session-details">
+                      <span className="session-name" data-testid={`session-device-name-${index}`}>{session.deviceName || t('userSecurity.sessions.unknownDevice')}</span>
+                      <span className="session-details" data-testid={`session-device-details-${index}`}>
                         {session.browser} • {session.os} • {session.location || t('userSecurity.sessions.unknownLocation')}
                       </span>
+                      <span className="sr-only" data-testid={`session-ip-${index}`}>{session.ipAddress || ''}</span>
                     </div>
                   </div>
                   <div className="session-meta">
                     <span className="session-time">{formatDate(session.lastAccess)}</span>
                     {session.isCurrent && (
-                      <span className="session-badge current">{t('userSecurity.sessions.current')}</span>
+                      <span className="session-badge current" data-testid="session-current-badge">{t('userSecurity.sessions.current')}</span>
                     )}
                   </div>
                 </div>
@@ -670,6 +515,7 @@ export default function UserSecurityPage() {
                   <Button 
                     variant="danger" 
                     className="btn-small"
+                    data-testid={`revoke-session-button-${index}`}
                     onClick={() => handleConfirmAction(
                       () => revokeSession(session.id),
                       t('userSecurity.sessions.revokeConfirm')
@@ -677,6 +523,22 @@ export default function UserSecurityPage() {
                   >
                     <LogOut size={16} />
                     {t('userSecurity.sessions.revoke')}
+                  </Button>
+                )}
+                {session.isCurrent && (
+                  <Button
+                    variant="secondary"
+                    className="btn-small"
+                    data-testid={`logout-current-session-button-${index}`}
+                    onClick={() => handleConfirmAction(
+                      async () => {
+                        await logout();
+                      },
+                      t('userSecurity.sessions.revokeConfirm')
+                    )}
+                  >
+                    <LogOut size={16} />
+                    {t('common.logout') || 'Encerrar Sessão Atual'}
                   </Button>
                 )}
               </div>
@@ -706,42 +568,47 @@ export default function UserSecurityPage() {
             <label>{t('userSecurity.password.current')}</label>
             <div className="input-with-icon">
               <input
+                data-testid="current-password-input"
                 type={showPasswords.current ? 'text' : 'password'}
                 value={newPassword.current}
                 onChange={(e) => setNewPassword({ ...newPassword, current: e.target.value })}
                 placeholder={t('userSecurity.password.currentPlaceholder')}
               />
-              <button
-                type="button"
+              <Button 
+                variant="primary" 
+                data-testid="current-password-visibility-toggle"
                 className="password-toggle"
                 onClick={() => setShowPasswords({ ...showPasswords, current: !showPasswords.current })}
               >
                 {showPasswords.current ? <EyeOff size={18} /> : <Eye size={18} />}
-              </button>
+              </Button>
             </div>
           </div>
           <div className="form-group">
             <label>{t('userSecurity.password.new')}</label>
             <div className="input-with-icon">
               <input
+                data-testid="new-password-input"
                 type={showPasswords.new ? 'text' : 'password'}
                 value={newPassword.new}
                 onChange={(e) => setNewPassword({ ...newPassword, new: e.target.value })}
                 placeholder={t('userSecurity.password.newPlaceholder')}
               />
-              <button
-                type="button"
+              <Button 
+                variant="secondary" 
+                data-testid="new-password-visibility-toggle"
                 className="password-toggle"
                 onClick={() => setShowPasswords({ ...showPasswords, new: !showPasswords.new })}
               >
                 {showPasswords.new ? <EyeOff size={18} /> : <Eye size={18} />}
-              </button>
+              </Button>
             </div>
           </div>
           <div className="form-group">
             <label>{t('userSecurity.password.confirm')}</label>
             <div className="input-with-icon">
               <input
+                data-testid="confirm-password-input"
                 type={showPasswords.confirm ? 'text' : 'password'}
                 value={newPassword.confirm}
                 onChange={(e) => setNewPassword({ ...newPassword, confirm: e.target.value })}
@@ -798,101 +665,15 @@ export default function UserSecurityPage() {
             </div>
           )}
           <div className="modal-actions">
-            <Button variant="secondary" onClick={() => {
+            <Button variant="secondary" data-testid="change-password-cancel-button" onClick={() => {
               setShowChangePasswordModal(false);
               setNewPassword({ current: '', new: '', confirm: '' });
               setPasswordError('');
             }}>
               {t('common.cancel')}
             </Button>
-            <Button variant="primary" onClick={handleChangePassword}>
+            <Button variant="primary" data-testid="change-password-submit-button" onClick={handleChangePassword}>
               {t('userSecurity.password.change')}
-            </Button>
-          </div>
-        </div>
-      </Modal>
-
-      {/* Add Phone Modal */}
-      <Modal 
-        isOpen={showAddPhoneModal} 
-        onClose={() => {
-          setShowAddPhoneModal(false);
-          setNewPhone('');
-          setPhoneError('');
-        }}
-        title={mfaStatus?.phoneEnabled ? t('userSecurity.mfa.alternatives.phone.change') : t('userSecurity.mfa.alternatives.phone.add')}
-      >
-        <div className="modal-content">
-          <div className="form-group">
-            <label>{t('userSecurity.mfa.alternatives.phone.number')}</label>
-            <input
-              type="tel"
-              value={newPhone}
-              onChange={(e) => {
-                // Aplica máscara de telefone brasileiro
-                let value = e.target.value.replace(/\D/g, '');
-                if (value.length <= 11) {
-                  if (value.length <= 2) {
-                    value = value;
-                  } else if (value.length <= 7) {
-                    value = `(${value.slice(0, 2)}) ${value.slice(2)}`;
-                  } else if (value.length <= 10) {
-                    value = `(${value.slice(0, 2)}) ${value.slice(2, 6)}-${value.slice(6)}`;
-                  } else {
-                    value = `(${value.slice(0, 2)}) ${value.slice(2, 7)}-${value.slice(7, 11)}`;
-                  }
-                  setNewPhone(value);
-                }
-              }}
-              placeholder="(11) 99999-9999"
-              maxLength={15}
-            />
-            <p style={{ fontSize: '0.75rem', color: 'var(--text-light)', marginTop: '0.25rem' }}>
-              Formato: (XX) XXXXX-XXXX ou (XX) XXXX-XXXX
-            </p>
-          </div>
-          {phoneError && (
-            <div className="form-error" style={{ marginBottom: '1rem' }}>
-              <AlertTriangle size={18} />
-              <span>{phoneError}</span>
-            </div>
-          )}
-          <div className="modal-actions">
-            <Button variant="secondary" onClick={() => {
-              setShowAddPhoneModal(false);
-              setNewPhone('');
-              setPhoneError('');
-            }}>
-              {t('common.cancel')}
-            </Button>
-            <Button variant="primary" onClick={async () => {
-              setPhoneError('');
-              
-              // Valida telefone
-              const cleaned = newPhone.replace(/\D/g, '');
-              if (cleaned.length < 10 || cleaned.length > 11) {
-                setPhoneError('Telefone inválido. Use o formato: (XX) XXXXX-XXXX ou (XX) XXXX-XXXX');
-                return;
-              }
-              
-              try {
-                await updatePhone(newPhone);
-                showToast(t('userSecurity.mfa.alternatives.phone.updateSuccess') || 'Telefone atualizado com sucesso', 'success');
-                setShowAddPhoneModal(false);
-                setNewPhone('');
-                setPhoneError('');
-                // Aguarda um pouco antes de atualizar para garantir que o backend processou
-                setTimeout(() => {
-                  refreshData();
-                }, 500);
-              } catch (err: any) {
-                console.error('Erro ao atualizar telefone:', err);
-                const errorMsg = err.message || t('userSecurity.mfa.alternatives.phone.updateError') || 'Erro ao atualizar telefone';
-                setPhoneError(errorMsg);
-                showToast(errorMsg, 'error');
-              }
-            }}>
-              {mfaStatus?.phoneEnabled ? t('common.save') : t('userSecurity.mfa.alternatives.phone.add')}
             </Button>
           </div>
         </div>
@@ -930,7 +711,7 @@ export default function UserSecurityPage() {
             </div>
           )}
           <div className="modal-actions">
-            <Button variant="primary" onClick={() => setShowRecoveryCodesModal(false)}>
+            <Button variant="primary" data-testid="close-recovery-codes-button" onClick={() => setShowRecoveryCodesModal(false)}>
               {t('common.close')}
             </Button>
           </div>
@@ -946,10 +727,10 @@ export default function UserSecurityPage() {
         <div className="modal-content">
           <p>{confirmMessage}</p>
           <div className="modal-actions">
-            <Button variant="secondary" onClick={() => setShowConfirmModal(false)}>
+            <Button variant="secondary" data-testid="security-confirm-cancel-button" onClick={() => setShowConfirmModal(false)}>
               {t('common.cancel')}
             </Button>
-            <Button variant="danger" onClick={executeConfirmAction}>
+            <Button variant="danger" onClick={executeConfirmAction} data-testid="security-confirm-proceed-button">
               {t('userSecurity.confirm.proceed')}
             </Button>
           </div>

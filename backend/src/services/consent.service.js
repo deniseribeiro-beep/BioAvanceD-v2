@@ -15,7 +15,7 @@ addFormats(ajv);
 
 const consentTemplateSchema = {
   type: 'object',
-  required: ['title', 'content', 'version', 'caae'],
+  required: ['title', 'content'],
   properties: {
     title: { type: 'string', minLength: 1 },
     content: { type: 'string', minLength: 1 },
@@ -244,6 +244,9 @@ class ConsentService {
         htmlContent,
         content: htmlContent,
         version,
+        versionGroupId: typeof payload.versionGroupId === 'string' && payload.versionGroupId.trim().length > 0
+          ? payload.versionGroupId.trim()
+          : crypto.randomUUID(),
         caae: typeof payload.caae === 'string' ? payload.caae.trim() : '',
         active: payload.active === undefined ? true : Boolean(payload.active),
         permissions
@@ -329,14 +332,18 @@ class ConsentService {
           ? payload.content.trim()
           : String(existingTemplate.htmlContent || existingTemplate.content || '').trim();
 
-      const active = payload.active === undefined ? Boolean(existingTemplate.active) : Boolean(payload.active);
+      const active = payload.active === undefined ? true : Boolean(payload.active);
+      const versionGroupId = String(existingTemplate.versionGroupId || existingTemplate._id || objectId).trim();
+      const nextVersionNumber = Math.max(1, this.parseVersionNumber(existingTemplate.version) + 1);
       const template = ConsentTemplateModel.create({
         ...existingTemplate,
         ...payload,
         title: typeof payload.title === 'string' ? payload.title.trim() : String(existingTemplate.title || '').trim(),
         htmlContent,
         content: htmlContent,
-        version: String(existingTemplate.version || 'v1').trim(),
+        version: `v${nextVersionNumber}`,
+        versionGroupId,
+        previousTemplateId: String(objectId),
         caae: typeof existingTemplate.caae === 'string' ? existingTemplate.caae.trim() : '',
         active,
         permissions
@@ -344,36 +351,31 @@ class ConsentService {
 
       if (template.active) {
         await templatesCollection.updateMany(
-          { _id: { $ne: objectId }, active: true },
+          { versionGroupId, active: true },
           { $set: { active: false, updatedAt: new Date() } }
         );
       }
-
-      const updatedDocument = {
-        ...existingTemplate,
-        ...template,
-        updatedAt: new Date()
-      };
 
       await templatesCollection.updateOne(
         { _id: objectId },
         {
           $set: {
-            title: updatedDocument.title,
-            content: updatedDocument.content,
-            htmlContent: updatedDocument.htmlContent,
-            version: updatedDocument.version,
-            caae: updatedDocument.caae,
-            active: updatedDocument.active,
-            permissions: updatedDocument.permissions,
-            updatedAt: updatedDocument.updatedAt
+            active: false,
+            updatedAt: new Date(),
+            versionGroupId,
           }
         }
       );
 
+      const result = await templatesCollection.insertOne({
+        ...template,
+        updatedAt: new Date(),
+      });
+
       return {
-        ...updatedDocument,
-        _id: objectId
+        _id: result.insertedId,
+        ...template,
+        updatedAt: new Date(),
       };
     } catch (error) {
       logger.error('Erro ao atualizar template de consentimento:', error.message);
@@ -517,6 +519,25 @@ class ConsentService {
     const template = await templatesCollection
       .find({ active: true })
       .sort({ createdAt: -1 })
+      .limit(1)
+      .toArray();
+
+    return template[0] || null;
+  }
+
+  async getAllTemplates(db) {
+    const templatesCollection = await getCollection(db, 'consentTemplates');
+    return templatesCollection
+      .find({})
+      .sort({ active: -1, createdAt: -1, _id: -1 })
+      .toArray();
+  }
+
+  async getLatestTemplate(db) {
+    const templatesCollection = await getCollection(db, 'consentTemplates');
+    const template = await templatesCollection
+      .find({})
+      .sort({ createdAt: -1, _id: -1 })
       .limit(1)
       .toArray();
 

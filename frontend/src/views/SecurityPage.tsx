@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react';
+﻿import { useState, useEffect } from 'react';
 import Card from '../components/UI/Card';
 import Button from '../components/UI/Button';
-import { Shield, Save, Download, AlertCircle, CheckCircle, Filter } from 'lucide-react';
+import { Shield, Save, Download, AlertCircle, CheckCircle } from 'lucide-react';
 import { useSecurity, SecurityConfig, ProfilePermissions } from '../hooks/useSecurity';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
@@ -36,6 +36,28 @@ export default function SecurityPage() {
     }
   }, [permissions]);
 
+  const hasRoleAdmin = hasRole('Administrador');
+  const isAdmin = hasRoleAdmin || user?.accessType === 4;
+
+  useEffect(() => {
+    if (import.meta.env.DEV) {
+      console.log('[SecurityPage] Verificação de admin:', {
+        user,
+        roleName: user?.roleName,
+        accessType: user?.accessType,
+        hasRoleAdmin,
+        isAdmin,
+      });
+    }
+  }, [user, hasRoleAdmin, isAdmin]);
+
+  const getErrorMessage = (err: unknown, fallback: string) => {
+    if (err instanceof Error && err.message) {
+      return err.message;
+    }
+    return fallback;
+  };
+
   // Aguarda carregamento do usuário antes de verificar
   if (authLoading) {
     return (
@@ -45,27 +67,10 @@ export default function SecurityPage() {
     );
   }
 
-  // Verifica se o usuário é Administrador usando a função hasRole do AuthContext
-  // que já faz o mapeamento correto de accessType para roleName
-  const isAdmin = hasRole('Administrador') || user?.accessType === 4;
-  
-  // Log de debug em desenvolvimento
-  useEffect(() => {
-    if (process.env.NODE_ENV === 'development') {
-      console.log('[SecurityPage] Verificação de admin:', {
-        user,
-        roleName: user?.roleName,
-        accessType: user?.accessType,
-        hasRoleAdmin: hasRole('Administrador'),
-        isAdmin
-      });
-    }
-  }, [user, hasRole, isAdmin]);
-
   if (!isAdmin) {
     return (
-      <div className="security-page">
-        <div className="access-denied">
+      <div className="security-page" data-testid="security-page">
+        <div className="access-denied" data-testid="security-access-denied">
           <AlertCircle size={48} />
           <h2>{t('security.accessDenied')}</h2>
           <p>{t('security.accessDeniedMessage')}</p>
@@ -111,9 +116,9 @@ export default function SecurityPage() {
       setSaveStatus('success');
       showToast(t('security.saveSuccess'), 'success');
       setTimeout(() => setSaveStatus('idle'), 3000);
-    } catch (err: any) {
+    } catch (err: unknown) {
       setSaveStatus('error');
-      showToast(err.message || t('security.saveError'), 'error');
+      showToast(getErrorMessage(err, t('security.saveError')), 'error');
       setTimeout(() => setSaveStatus('idle'), 3000);
     }
   };
@@ -126,9 +131,9 @@ export default function SecurityPage() {
       setSaveStatus('success');
       showToast(t('security.permissions.saveSuccess'), 'success');
       setTimeout(() => setSaveStatus('idle'), 3000);
-    } catch (err: any) {
+    } catch (err: unknown) {
       setSaveStatus('error');
-      showToast(err.message || t('security.permissions.saveError'), 'error');
+      showToast(getErrorMessage(err, t('security.permissions.saveError')), 'error');
       setTimeout(() => setSaveStatus('idle'), 3000);
     }
   };
@@ -156,8 +161,8 @@ export default function SecurityPage() {
       document.body.removeChild(link);
       window.URL.revokeObjectURL(url);
       showToast(t('security.logging.exportSuccess'), 'success');
-    } catch (err: any) {
-      showToast(err.message || t('security.exportError'), 'error');
+    } catch (err: unknown) {
+      showToast(getErrorMessage(err, t('security.exportError')), 'error');
     }
   };
 
@@ -185,7 +190,7 @@ export default function SecurityPage() {
   };
 
   return (
-    <div className="security-page">
+    <div className="security-page" data-testid="security-page">
       <div className="security-header">
         <h1 className="security-title">
           <Shield size={32} /> {t('security.title')}
@@ -212,60 +217,70 @@ export default function SecurityPage() {
         <div className="security-sidebar">
           <nav className="security-nav">
             <button
+              data-testid="security-nav-authentication"
               className={activeSection === 'authentication' ? 'active' : ''}
               onClick={() => setActiveSection('authentication')}
             >
               {t('security.sections.authentication')}
             </button>
             <button
+              data-testid="security-nav-password"
               className={activeSection === 'password' ? 'active' : ''}
               onClick={() => setActiveSection('password')}
             >
               {t('security.sections.password')}
             </button>
             <button
+              data-testid="security-nav-session"
               className={activeSection === 'session' ? 'active' : ''}
               onClick={() => setActiveSection('session')}
             >
               {t('security.sections.session')}
             </button>
             <button
+              data-testid="security-nav-login"
               className={activeSection === 'login' ? 'active' : ''}
               onClick={() => setActiveSection('login')}
             >
               {t('security.sections.login')}
             </button>
             <button
+              data-testid="security-nav-logging"
               className={activeSection === 'logging' ? 'active' : ''}
               onClick={() => setActiveSection('logging')}
             >
               {t('security.sections.logging')}
             </button>
             <button
+              data-testid="security-nav-permissions"
               className={activeSection === 'permissions' ? 'active' : ''}
               onClick={() => setActiveSection('permissions')}
             >
               {t('security.sections.permissions')}
             </button>
             <button
+              data-testid="security-nav-privacy"
               className={activeSection === 'privacy' ? 'active' : ''}
               onClick={() => setActiveSection('privacy')}
             >
               {t('security.sections.privacy')}
             </button>
             <button
+              data-testid="security-nav-enhanced"
               className={activeSection === 'enhanced' ? 'active' : ''}
               onClick={() => setActiveSection('enhanced')}
             >
               {t('security.sections.enhanced')}
             </button>
             <button
+              data-testid="security-nav-lgpd"
               className={activeSection === 'lgpd' ? 'active' : ''}
               onClick={() => setActiveSection('lgpd')}
             >
               {t('security.sections.lgpd')}
             </button>
             <button
+              data-testid="security-nav-policies"
               className={activeSection === 'policies' ? 'active' : ''}
               onClick={() => setActiveSection('policies')}
             >
@@ -282,7 +297,8 @@ export default function SecurityPage() {
               <h2>{t('security.sections.authentication')}</h2>
               <div className="config-group">
                 <label className="config-switch">
-                  <input
+                  <input title="security-input"
+                    data-testid="security-require-mfa-toggle"
                     type="checkbox"
                     checked={localConfig.authentication.requireMFA}
                     onChange={(e) => handleConfigChange('authentication.requireMFA', e.target.checked)}
@@ -291,7 +307,7 @@ export default function SecurityPage() {
                 </label>
                 <div className="config-field">
                   <label>{t('security.authentication.mfaMethod')}</label>
-                  <select
+                  <select title="security-select"
                     value={localConfig.authentication.mfaMethod}
                     onChange={(e) => handleConfigChange('authentication.mfaMethod', e.target.value)}
                   >
@@ -301,7 +317,7 @@ export default function SecurityPage() {
                   </select>
                 </div>
                 <label className="config-switch">
-                  <input
+                  <input title="security-input"
                     type="checkbox"
                     checked={localConfig.authentication.requireStrongPassword}
                     onChange={(e) => handleConfigChange('authentication.requireStrongPassword', e.target.checked)}
@@ -309,7 +325,7 @@ export default function SecurityPage() {
                   <span>{t('security.authentication.requireStrongPassword')}</span>
                 </label>
                 <label className="config-switch">
-                  <input
+                  <input title="security-input"
                     type="checkbox"
                     checked={localConfig.authentication.allowPasswordReset}
                     onChange={(e) => handleConfigChange('authentication.allowPasswordReset', e.target.checked)}
@@ -318,7 +334,7 @@ export default function SecurityPage() {
                 </label>
                 <div className="config-field">
                   <label>{t('security.authentication.maxLoginAttempts')}</label>
-                  <input
+                  <input title="security-input"
                     type="number"
                     min="1"
                     max="10"
@@ -328,7 +344,7 @@ export default function SecurityPage() {
                 </div>
                 <div className="config-field">
                   <label>{t('security.authentication.lockoutDuration')}</label>
-                  <input
+                  <input title="security-input"
                     type="number"
                     min="1"
                     max="1440"
@@ -338,7 +354,7 @@ export default function SecurityPage() {
                   <span className="config-help">{t('security.authentication.lockoutDurationHelp')}</span>
                 </div>
                 <label className="config-switch">
-                  <input
+                  <input title="security-input"
                     type="checkbox"
                     checked={localConfig.loginAttempts.trackIP}
                     onChange={(e) => handleConfigChange('loginAttempts.trackIP', e.target.checked)}
@@ -348,7 +364,7 @@ export default function SecurityPage() {
                 {localConfig.loginAttempts.trackIP && (
                   <div className="config-field">
                     <label>{t('security.login.blockIPAfterAttempts')}</label>
-                    <input
+                    <input title="security-input"
                       type="number"
                       min="5"
                       max="100"
@@ -359,7 +375,7 @@ export default function SecurityPage() {
                 )}
               </div>
               <div className="config-actions">
-                <Button onClick={handleSaveConfig} disabled={saving}>
+                <Button data-testid="security-save-config-button" onClick={handleSaveConfig} disabled={saving}>
                   <Save size={18} />
                   {saving ? t('users.saving') : t('common.save')}
                 </Button>
@@ -374,7 +390,7 @@ export default function SecurityPage() {
               <div className="config-group">
                 <div className="config-field">
                   <label>{t('security.password.minLength')}</label>
-                  <input
+                  <input title="security-input"
                     type="number"
                     min="6"
                     max="128"
@@ -383,7 +399,7 @@ export default function SecurityPage() {
                   />
                 </div>
                 <label className="config-switch">
-                  <input
+                  <input title="security-input"
                     type="checkbox"
                     checked={localConfig.passwordRules.requireUppercase}
                     onChange={(e) => handleConfigChange('passwordRules.requireUppercase', e.target.checked)}
@@ -391,7 +407,7 @@ export default function SecurityPage() {
                   <span>{t('security.password.requireUppercase')}</span>
                 </label>
                 <label className="config-switch">
-                  <input
+                  <input title="security-input"
                     type="checkbox"
                     checked={localConfig.passwordRules.requireLowercase}
                     onChange={(e) => handleConfigChange('passwordRules.requireLowercase', e.target.checked)}
@@ -399,7 +415,7 @@ export default function SecurityPage() {
                   <span>{t('security.password.requireLowercase')}</span>
                 </label>
                 <label className="config-switch">
-                  <input
+                  <input title="security-input"
                     type="checkbox"
                     checked={localConfig.passwordRules.requireNumbers}
                     onChange={(e) => handleConfigChange('passwordRules.requireNumbers', e.target.checked)}
@@ -407,7 +423,7 @@ export default function SecurityPage() {
                   <span>{t('security.password.requireNumbers')}</span>
                 </label>
                 <label className="config-switch">
-                  <input
+                  <input title="security-input"
                     type="checkbox"
                     checked={localConfig.passwordRules.requireSpecialChars}
                     onChange={(e) => handleConfigChange('passwordRules.requireSpecialChars', e.target.checked)}
@@ -416,7 +432,7 @@ export default function SecurityPage() {
                 </label>
                 <div className="config-field">
                   <label>{t('security.password.expirationDays')}</label>
-                  <input
+                  <input title="security-input"
                     type="number"
                     min="0"
                     max="365"
@@ -425,7 +441,7 @@ export default function SecurityPage() {
                   />
                 </div>
                 <label className="config-switch">
-                  <input
+                  <input title="security-input"
                     type="checkbox"
                     checked={localConfig.passwordRules.preventReuse}
                     onChange={(e) => handleConfigChange('passwordRules.preventReuse', e.target.checked)}
@@ -435,7 +451,7 @@ export default function SecurityPage() {
                 {localConfig.passwordRules.preventReuse && (
                   <div className="config-field">
                     <label>{t('security.password.maxReuseHistory')}</label>
-                    <input
+                    <input title="security-input"
                       type="number"
                       min="1"
                       max="20"
@@ -461,7 +477,7 @@ export default function SecurityPage() {
               <div className="config-group">
                 <div className="config-field">
                   <label>{t('security.session.timeoutMinutes')}</label>
-                  <input
+                  <input title="security-input"
                     type="number"
                     min="5"
                     max="480"
@@ -472,7 +488,7 @@ export default function SecurityPage() {
                 </div>
                 <div className="config-field">
                   <label>{t('security.session.maxDuration')}</label>
-                  <input
+                  <input title="security-input"
                     type="number"
                     min="1"
                     max="24"
@@ -482,7 +498,7 @@ export default function SecurityPage() {
                   <span className="config-help">{t('security.session.maxDurationHelp')}</span>
                 </div>
                 <label className="config-switch">
-                  <input
+                  <input title="security-input"
                     type="checkbox"
                     checked={localConfig.session.allowMultipleSessions}
                     onChange={(e) => handleConfigChange('session.allowMultipleSessions', e.target.checked)}
@@ -490,7 +506,7 @@ export default function SecurityPage() {
                   <span>{t('security.session.allowMultipleSessions')}</span>
                 </label>
                 <label className="config-switch">
-                  <input
+                  <input title="security-input"
                     type="checkbox"
                     checked={localConfig.session.autoRenewal ?? true}
                     onChange={(e) => handleConfigChange('session.autoRenewal', e.target.checked)}
@@ -498,7 +514,7 @@ export default function SecurityPage() {
                   <span>{t('security.session.autoRenewal')}</span>
                 </label>
                 <label className="config-switch">
-                  <input
+                  <input title="security-input"
                     type="checkbox"
                     checked={localConfig.session.logExpiration ?? true}
                     onChange={(e) => handleConfigChange('session.logExpiration', e.target.checked)}
@@ -522,7 +538,7 @@ export default function SecurityPage() {
               <div className="config-group">
                 <div className="config-field">
                   <label>{t('security.login.maxAttempts')}</label>
-                  <input
+                  <input title="security-input"
                     type="number"
                     min="1"
                     max="10"
@@ -532,7 +548,7 @@ export default function SecurityPage() {
                 </div>
                 <div className="config-field">
                   <label>{t('security.login.lockoutDuration')}</label>
-                  <input
+                  <input title="security-input"
                     type="number"
                     min="1"
                     max="1440"
@@ -541,7 +557,7 @@ export default function SecurityPage() {
                   />
                 </div>
                 <label className="config-switch">
-                  <input
+                  <input title="security-input"
                     type="checkbox"
                     checked={localConfig.loginAttempts.trackIP}
                     onChange={(e) => handleConfigChange('loginAttempts.trackIP', e.target.checked)}
@@ -551,7 +567,7 @@ export default function SecurityPage() {
                 {localConfig.loginAttempts.trackIP && (
                   <div className="config-field">
                     <label>{t('security.login.blockIPAfterAttempts')}</label>
-                    <input
+                    <input title="security-input"
                       type="number"
                       min="5"
                       max="100"
@@ -577,7 +593,7 @@ export default function SecurityPage() {
               <div className="config-group">
                 <div className="config-field">
                   <label>{t('security.logging.minLevel')}</label>
-                  <select
+                  <select title="security-select"
                     value={localConfig.logging.level}
                     onChange={(e) => handleConfigChange('logging.level', e.target.value)}
                   >
@@ -588,7 +604,7 @@ export default function SecurityPage() {
                   </select>
                 </div>
                 <label className="config-switch">
-                  <input
+                  <input title="security-input"
                     type="checkbox"
                     checked={localConfig.logging.logLoginAttempts}
                     onChange={(e) => handleConfigChange('logging.logLoginAttempts', e.target.checked)}
@@ -596,7 +612,7 @@ export default function SecurityPage() {
                   <span>{t('security.logging.logLoginAttempts')}</span>
                 </label>
                 <label className="config-switch">
-                  <input
+                  <input title="security-input"
                     type="checkbox"
                     checked={localConfig.logging.logAllActions}
                     onChange={(e) => handleConfigChange('logging.logAllActions', e.target.checked)}
@@ -605,7 +621,7 @@ export default function SecurityPage() {
                 </label>
                 <div className="config-field">
                   <label>{t('security.logging.retentionDays')}</label>
-                  <input
+                  <input title="security-input"
                     type="number"
                     min="30"
                     max="3650"
@@ -620,7 +636,8 @@ export default function SecurityPage() {
                 <h3 className="config-subtitle">{t('security.logging.exportFilters')}</h3>
                 <div className="config-field">
                   <label>{t('security.logging.filterSeverity')}</label>
-                  <select
+                  <select title="security-select"
+                    data-testid="security-log-filter-severity"
                     value={logFilters.severity}
                     onChange={(e) => setLogFilters({ ...logFilters, severity: e.target.value })}
                   >
@@ -633,7 +650,8 @@ export default function SecurityPage() {
                 </div>
                 <div className="config-field">
                   <label>{t('security.logging.filterModule')}</label>
-                  <input
+                  <input title="security-input"
+                    data-testid="security-log-filter-module"
                     type="text"
                     value={logFilters.module}
                     onChange={(e) => setLogFilters({ ...logFilters, module: e.target.value })}
@@ -642,7 +660,8 @@ export default function SecurityPage() {
                 </div>
                 <div className="config-field">
                   <label>{t('security.logging.filterStartDate')}</label>
-                  <input
+                  <input title="security-input"
+                    data-testid="security-log-filter-start-date"
                     type="date"
                     value={logFilters.startDate}
                     onChange={(e) => setLogFilters({ ...logFilters, startDate: e.target.value })}
@@ -650,7 +669,8 @@ export default function SecurityPage() {
                 </div>
                 <div className="config-field">
                   <label>{t('security.logging.filterEndDate')}</label>
-                  <input
+                  <input title="security-input"
+                    data-testid="security-log-filter-end-date"
                     type="date"
                     value={logFilters.endDate}
                     onChange={(e) => setLogFilters({ ...logFilters, endDate: e.target.value })}
@@ -659,15 +679,15 @@ export default function SecurityPage() {
               </div>
               
               <div className="config-actions">
-                <Button onClick={handleSaveConfig} disabled={saving}>
+                <Button data-testid="security-save-logging-config-button" onClick={handleSaveConfig} disabled={saving}>
                   <Save size={18} />
                   {saving ? t('users.saving') : t('common.save')}
                 </Button>
-                <Button variant="secondary" onClick={() => handleExportLogs('csv')}>
+                <Button data-testid="security-export-logs-csv-button" variant="secondary" onClick={() => handleExportLogs('csv')}>
                   <Download size={18} />
                   {t('security.logging.exportCsv')}
                 </Button>
-                <Button variant="secondary" onClick={() => handleExportLogs('json')}>
+                <Button data-testid="security-export-logs-json-button" variant="secondary" onClick={() => handleExportLogs('json')}>
                   <Download size={18} />
                   {t('security.logging.exportJson')}
                 </Button>
@@ -685,7 +705,8 @@ export default function SecurityPage() {
                     <h3>{profileNames[profile] || t('security.permissions.profile').replace('{id}', profile)}</h3>
                     {Object.keys(localPermissions[profile]).map((permission) => (
                       <label key={permission} className="config-switch">
-                        <input
+                        <input title="security-input"
+                          data-testid={`security-permission-toggle-${profile}-${permission}`}
                           type="checkbox"
                           checked={localPermissions[profile][permission] || false}
                           onChange={(e) => handlePermissionChange(profile, permission, e.target.checked)}
@@ -697,7 +718,7 @@ export default function SecurityPage() {
                 ))}
               </div>
               <div className="config-actions">
-                <Button onClick={handleSavePermissions} disabled={saving}>
+                <Button data-testid="security-save-permissions-button" onClick={handleSavePermissions} disabled={saving}>
                   <Save size={18} />
                   {saving ? t('users.saving') : t('security.permissions.savePermissions')}
                 </Button>
@@ -711,7 +732,7 @@ export default function SecurityPage() {
               <h2>{t('security.privacy.title')}</h2>
               <div className="config-group">
                 <label className="config-switch">
-                  <input
+                  <input title="security-input"
                     type="checkbox"
                     checked={localConfig.privacy.anonymizeLogs}
                     onChange={(e) => handleConfigChange('privacy.anonymizeLogs', e.target.checked)}
@@ -720,7 +741,7 @@ export default function SecurityPage() {
                 </label>
                 <div className="config-field">
                   <label>{t('security.privacy.dataRetentionDays')}</label>
-                  <input
+                  <input title="security-input"
                     type="number"
                     min="30"
                     max="3650"
@@ -729,7 +750,7 @@ export default function SecurityPage() {
                   />
                 </div>
                 <label className="config-switch">
-                  <input
+                  <input title="security-input"
                     type="checkbox"
                     checked={localConfig.privacy.autoPurge}
                     onChange={(e) => handleConfigChange('privacy.autoPurge', e.target.checked)}
@@ -740,7 +761,7 @@ export default function SecurityPage() {
                   <>
                     <div className="config-field">
                       <label>{t('security.privacy.purgeAfterDays')}</label>
-                      <input
+                      <input title="security-input"
                         type="number"
                         min="90"
                         max="3650"
@@ -750,7 +771,7 @@ export default function SecurityPage() {
                     </div>
                     <div className="config-field">
                       <label>{t('security.privacy.anonymizeAfterDays')}</label>
-                      <input
+                      <input title="security-input"
                         type="number"
                         min="30"
                         max="365"
@@ -776,7 +797,7 @@ export default function SecurityPage() {
               <h2>{t('security.enhanced.title')}</h2>
               <div className="config-group">
                 <label className="config-switch">
-                  <input
+                  <input title="security-input"
                     type="checkbox"
                     checked={localConfig.enhancedSecurity.enabled}
                     onChange={(e) => handleConfigChange('enhancedSecurity.enabled', e.target.checked)}
@@ -786,7 +807,7 @@ export default function SecurityPage() {
                 {localConfig.enhancedSecurity.enabled && (
                   <>
                     <label className="config-switch">
-                      <input
+                      <input title="security-input"
                         type="checkbox"
                         checked={localConfig.enhancedSecurity.requireMFAForAll}
                         onChange={(e) => handleConfigChange('enhancedSecurity.requireMFAForAll', e.target.checked)}
@@ -794,7 +815,7 @@ export default function SecurityPage() {
                       <span>{t('security.enhanced.requireMFAForAll')}</span>
                     </label>
                     <label className="config-switch">
-                      <input
+                      <input title="security-input"
                         type="checkbox"
                         checked={localConfig.enhancedSecurity.strictPasswordPolicy}
                         onChange={(e) => handleConfigChange('enhancedSecurity.strictPasswordPolicy', e.target.checked)}
@@ -803,7 +824,7 @@ export default function SecurityPage() {
                     </label>
                     <div className="config-field">
                       <label>{t('security.enhanced.sessionTimeoutMinutes')}</label>
-                      <input
+                      <input title="security-input"
                         type="number"
                         min="5"
                         max="60"
@@ -812,7 +833,7 @@ export default function SecurityPage() {
                       />
                     </div>
                     <label className="config-switch">
-                      <input
+                      <input title="security-input"
                         type="checkbox"
                         checked={localConfig.enhancedSecurity.logAllActions}
                         onChange={(e) => handleConfigChange('enhancedSecurity.logAllActions', e.target.checked)}
@@ -820,7 +841,7 @@ export default function SecurityPage() {
                       <span>{t('security.enhanced.logAllActions')}</span>
                     </label>
                     <label className="config-switch">
-                      <input
+                      <input title="security-input"
                         type="checkbox"
                         checked={localConfig.enhancedSecurity.blockUnusualActivity}
                         onChange={(e) => handleConfigChange('enhancedSecurity.blockUnusualActivity', e.target.checked)}
@@ -845,7 +866,7 @@ export default function SecurityPage() {
               <h2>{t('security.lgpd.title')}</h2>
               <div className="config-group">
                 <label className="config-switch">
-                  <input
+                  <input title="security-input"
                     type="checkbox"
                     checked={localConfig.lgpd.allowDataExport}
                     onChange={(e) => handleConfigChange('lgpd.allowDataExport', e.target.checked)}
@@ -853,7 +874,7 @@ export default function SecurityPage() {
                   <span>{t('security.lgpd.allowDataExport')}</span>
                 </label>
                 <label className="config-switch">
-                  <input
+                  <input title="security-input"
                     type="checkbox"
                     checked={localConfig.lgpd.allowDataDeletion}
                     onChange={(e) => handleConfigChange('lgpd.allowDataDeletion', e.target.checked)}
@@ -861,7 +882,7 @@ export default function SecurityPage() {
                   <span>{t('security.lgpd.allowDataDeletion')}</span>
                 </label>
                 <label className="config-switch">
-                  <input
+                  <input title="security-input"
                     type="checkbox"
                     checked={localConfig.lgpd.anonymizeOnExport}
                     onChange={(e) => handleConfigChange('lgpd.anonymizeOnExport', e.target.checked)}
@@ -869,7 +890,7 @@ export default function SecurityPage() {
                   <span>{t('security.lgpd.anonymizeOnExport')}</span>
                 </label>
                 <label className="config-switch">
-                  <input
+                  <input title="security-input"
                     type="checkbox"
                     checked={localConfig.lgpd.requireConsent}
                     onChange={(e) => handleConfigChange('lgpd.requireConsent', e.target.checked)}
@@ -879,7 +900,7 @@ export default function SecurityPage() {
                 {localConfig.lgpd.requireConsent && (
                   <div className="config-field">
                     <label>{t('security.lgpd.consentExpirationDays')}</label>
-                    <input
+                    <input title="security-input"
                       type="number"
                       min="30"
                       max="3650"
@@ -1233,4 +1254,5 @@ export default function SecurityPage() {
     </div>
   );
 }
+
 

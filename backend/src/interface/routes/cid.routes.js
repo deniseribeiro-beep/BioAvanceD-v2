@@ -5,6 +5,14 @@ const { requireRole } = require('../../infrastructure/middleware/rbac');
 const cidController = require('../../controllers/cid.controller');
 const logger = require('../../utils/logger');
 
+function methodNotAllowed(res) {
+	return res.status(405).json({
+		success: false,
+		error: 'Método não permitido',
+		message: 'As rotas de CID estão em modo somente leitura nesta versão.'
+	});
+}
+
 function normalizeBoolean(value, fallback = true) {
 	if (typeof value === 'boolean') return value;
 	if (typeof value === 'number') return value === 1;
@@ -87,178 +95,10 @@ router.get('/', authenticate, requireRole(4), async (req, res) => {
 
 router.get('/search', authenticate, cidController.search);
 
-router.post('/', authenticate, requireRole(4), async (req, res) => {
-	try {
-		const db = req.app.locals.db;
-		if (!db) {
-			return res.status(503).json({ success: false, error: 'Banco de dados não disponível' });
-		}
+router.post('/', authenticate, requireRole(4), async (_req, res) => methodNotAllowed(res));
 
-		const collection = db.collection('cids');
-		const payload = buildCidPayload(req.body);
-		const validationErrors = validateCidPayload(payload);
+router.put('/:id', authenticate, requireRole(4), async (_req, res) => methodNotAllowed(res));
 
-		if (validationErrors.length > 0) {
-			return res.status(400).json({
-				success: false,
-				error: 'Dados inválidos',
-				message: validationErrors.join(', ')
-			});
-		}
-
-		const existing = await collection.findOne({ Codigo_Tabulacao: payload.Codigo_Tabulacao });
-		if (existing) {
-			return res.status(409).json({
-				success: false,
-				error: 'Código de tabulação já cadastrado',
-				message: `Já existe um CID com o código ${payload.Codigo_Tabulacao}.`
-			});
-		}
-
-		const now = new Date();
-		const result = await collection.insertOne({
-			...payload,
-			active: true,
-			is_active: true,
-			createdAt: now,
-			updatedAt: now
-		});
-
-		return res.status(201).json({
-			success: true,
-			message: 'CID criado com sucesso',
-			data: normalizeCidDocument({ _id: result.insertedId, ...payload, active: true, is_active: true, createdAt: now, updatedAt: now })
-		});
-	} catch (error) {
-		logger.error('Erro ao criar CID:', error.message);
-		return res.status(500).json({
-			success: false,
-			error: 'Erro ao criar CID',
-			message: error.message
-		});
-	}
-});
-
-router.put('/:id', authenticate, requireRole(4), async (req, res) => {
-	try {
-		const db = req.app.locals.db;
-		if (!db) {
-			return res.status(503).json({ success: false, error: 'Banco de dados não disponível' });
-		}
-
-		const collection = db.collection('cids');
-		const { ObjectId } = require('mongodb');
-		const cidId = req.params.id;
-		const objectId = ObjectId.isValid(cidId) ? new ObjectId(cidId) : null;
-
-		if (!objectId) {
-			return res.status(400).json({ success: false, error: 'CID inválido' });
-		}
-
-		const payload = buildCidPayload(req.body);
-		const validationErrors = validateCidPayload(payload);
-		if (validationErrors.length > 0) {
-			return res.status(400).json({
-				success: false,
-				error: 'Dados inválidos',
-				message: validationErrors.join(', ')
-			});
-		}
-
-		const current = await collection.findOne({ _id: objectId });
-		if (!current) {
-			return res.status(404).json({ success: false, error: 'CID não encontrado' });
-		}
-
-		const duplicate = await collection.findOne({
-			Codigo_Tabulacao: payload.Codigo_Tabulacao,
-			_id: { $ne: objectId }
-		});
-		if (duplicate) {
-			return res.status(409).json({
-				success: false,
-				error: 'Código de tabulação já cadastrado',
-				message: `Já existe um CID com o código ${payload.Codigo_Tabulacao}.`
-			});
-		}
-
-		const now = new Date();
-		await collection.updateOne(
-			{ _id: objectId },
-			{
-				$set: {
-					...payload,
-					active: normalizeBoolean(req.body.active ?? req.body.is_active, true),
-					is_active: normalizeBoolean(req.body.active ?? req.body.is_active, true),
-					updatedAt: now
-				}
-			}
-		);
-
-		const updated = await collection.findOne({ _id: objectId });
-		return res.status(200).json({
-			success: true,
-			message: 'CID atualizado com sucesso',
-			data: normalizeCidDocument(updated)
-		});
-	} catch (error) {
-		logger.error('Erro ao atualizar CID:', error.message);
-		return res.status(500).json({
-			success: false,
-			error: 'Erro ao atualizar CID',
-			message: error.message
-		});
-	}
-});
-
-router.patch('/:id', authenticate, requireRole(4), async (req, res) => {
-	try {
-		const db = req.app.locals.db;
-		if (!db) {
-			return res.status(503).json({ success: false, error: 'Banco de dados não disponível' });
-		}
-
-		const collection = db.collection('cids');
-		const { ObjectId } = require('mongodb');
-		const cidId = req.params.id;
-		const objectId = ObjectId.isValid(cidId) ? new ObjectId(cidId) : null;
-
-		if (!objectId) {
-			return res.status(400).json({ success: false, error: 'CID inválido' });
-		}
-
-		const current = await collection.findOne({ _id: objectId });
-		if (!current) {
-			return res.status(404).json({ success: false, error: 'CID não encontrado' });
-		}
-
-		const active = normalizeBoolean(req.body.active ?? req.body.is_active, false);
-		const now = new Date();
-		await collection.updateOne(
-			{ _id: objectId },
-			{
-				$set: {
-					active,
-					is_active: active,
-					updatedAt: now
-				}
-			}
-		);
-
-		const updated = await collection.findOne({ _id: objectId });
-		return res.status(200).json({
-			success: true,
-			message: active ? 'CID reativado com sucesso' : 'CID desativado com sucesso',
-			data: normalizeCidDocument(updated)
-		});
-	} catch (error) {
-		logger.error('Erro ao atualizar status do CID:', error.message);
-		return res.status(500).json({
-			success: false,
-			error: 'Erro ao atualizar status do CID',
-			message: error.message
-		});
-	}
-});
+router.patch('/:id', authenticate, requireRole(4), async (_req, res) => methodNotAllowed(res));
 
 module.exports = router;

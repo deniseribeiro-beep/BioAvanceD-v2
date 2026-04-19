@@ -12,7 +12,7 @@ export default function LanguageSelector() {
   };
 
   return (
-    <div className="language-selector">
+    <div className="language-selector" data-testid="language-selector-container">
       <Globe size={18} />
       <label htmlFor={selectId} className="sr-only">
         {t('app.language')}
@@ -20,14 +20,15 @@ export default function LanguageSelector() {
       <select
         id={selectId}
         name="language"
+        data-testid="language-selector"
         value={language}
         onChange={handleLanguageChange}
         className="language-select"
         aria-label={t('app.language')}
       >
-        <option value="pt-BR">{t('app.portuguese')}</option>
-        <option value="en-US">{t('app.english')}</option>
-        <option value="es-ES">{t('app.spanish')}</option>
+        <option value="pt-BR" data-testid="language-option-pt-BR">{t('app.portuguese')}</option>
+        <option value="en-US" data-testid="language-option-en-US">{t('app.english')}</option>
+        <option value="es-ES" data-testid="language-option-es-ES">{t('app.spanish')}</option>
       </select>
     </div>
   );

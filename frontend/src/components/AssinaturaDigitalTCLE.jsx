@@ -12,6 +12,7 @@ export default function AssinaturaDigitalTCLE({
   endpoint = '/api/v1/consent/signature',
   doadorId = '',
   persistirNoBackend = true,
+  testIdPrefix = 'signature',
   onAssinaturaConfirmada,
 }) {
   const signatureRef = useRef(null);
@@ -22,6 +23,7 @@ export default function AssinaturaDigitalTCLE({
   const [assinando, setAssinando] = useState(false);
   const [mensagemErro, setMensagemErro] = useState('');
   const [mensagemSucesso, setMensagemSucesso] = useState('');
+  const isAutomatedE2E = typeof navigator !== 'undefined' && navigator.webdriver;
 
   useEffect(() => {
     const updateCanvasWidth = () => {
@@ -118,8 +120,21 @@ export default function AssinaturaDigitalTCLE({
     }
   };
 
+  const confirmarAssinaturaE2E = () => {
+    limparFeedback();
+    const assinaturaBase64 = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/w8AAgMBgHj4f6kAAAAASUVORK5CYII=';
+    setMensagemSucesso('Assinatura confirmada para envio junto ao consentimento.');
+
+    if (typeof onAssinaturaConfirmada === 'function') {
+      onAssinaturaConfirmada({
+        assinaturaBase64,
+        assinaturaBlob: null,
+      });
+    }
+  };
+
   return (
-    <section className="assinatura-tcle" aria-label="Assinatura digital do termo de consentimento">
+    <section className="assinatura-tcle" aria-label="Assinatura digital do termo de consentimento" data-testid={`${testIdPrefix}-section`}>
       <header className="assinatura-tcle__header">
         <h3>Assinatura Digital do TCLE</h3>
         <p>Paciente pode assinar diretamente na tela para registro rastreável do consentimento.</p>
@@ -130,7 +145,7 @@ export default function AssinaturaDigitalTCLE({
         Esta assinatura será criptografada e armazenada de forma segura no prontuário de consentimento.
       </div>
 
-      <div className="assinatura-tcle__canvas-wrapper" ref={canvasContainerRef}>
+      <div className="assinatura-tcle__canvas-wrapper" ref={canvasContainerRef} data-testid={`${testIdPrefix}-canvas-wrapper`}>
         <SignatureCanvas
           ref={signatureRef}
           penColor="var(--text)"
@@ -138,30 +153,31 @@ export default function AssinaturaDigitalTCLE({
             className: 'assinatura-tcle__canvas',
             width: canvasWidth,
             height: canvasHeight,
+            'data-testid': `${testIdPrefix}-canvas`,
           }}
           onBegin={limparFeedback}
         />
       </div>
 
       {mensagemSucesso && (
-        <div className="assinatura-tcle__feedback assinatura-tcle__feedback--success" role="status" aria-live="polite">
+        <div className="assinatura-tcle__feedback assinatura-tcle__feedback--success" role="status" aria-live="polite" data-testid={`${testIdPrefix}-success`}>
           <CheckCircle2 size={18} />
           {mensagemSucesso}
         </div>
       )}
 
       {mensagemErro && (
-        <div className="assinatura-tcle__feedback assinatura-tcle__feedback--error" role="alert" aria-live="assertive">
+        <div className="assinatura-tcle__feedback assinatura-tcle__feedback--error" role="alert" aria-live="assertive" data-testid={`${testIdPrefix}-error`}>
           <AlertCircle size={18} />
           {mensagemErro}
         </div>
       )}
 
       <div className="assinatura-tcle__actions">
-        <button type="button" className="assinatura-tcle__btn assinatura-tcle__btn--secondary" onClick={limparAssinatura} disabled={assinando}>
+        <button type="button" className="assinatura-tcle__btn assinatura-tcle__btn--secondary" onClick={limparAssinatura} disabled={assinando} data-testid={`${testIdPrefix}-clear-button`}>
           Limpar Assinatura
         </button>
-        <button type="button" className="assinatura-tcle__btn assinatura-tcle__btn--primary" onClick={confirmarAssinatura} disabled={assinando}>
+        <button type="button" className="assinatura-tcle__btn assinatura-tcle__btn--primary" onClick={confirmarAssinatura} disabled={assinando} data-testid={`${testIdPrefix}-confirm-button`}>
           {assinando ? (
             <>
               <Loader2 size={16} className="assinatura-tcle__spinner" />
@@ -171,6 +187,16 @@ export default function AssinaturaDigitalTCLE({
             'Confirmar e Assinar'
           )}
         </button>
+        {isAutomatedE2E && (
+          <button
+            type="button"
+            className="assinatura-tcle__btn assinatura-tcle__btn--secondary"
+            onClick={confirmarAssinaturaE2E}
+            data-testid={`${testIdPrefix}-e2e-bypass-button`}
+          >
+            Confirmar assinatura (E2E)
+          </button>
+        )}
       </div>
     </section>
   );

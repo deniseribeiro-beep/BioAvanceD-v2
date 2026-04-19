@@ -386,9 +386,10 @@ class ConsentController {
 
       const template = await consentService.getActiveTemplate(db);
       if (!template) {
-        return res.status(404).json({
-          success: false,
-          error: 'Nenhum template ativo encontrado'
+        return res.status(200).json({
+          success: true,
+          data: null,
+          message: 'Nenhum template ativo encontrado'
         });
       }
 
@@ -401,6 +402,69 @@ class ConsentController {
       return res.status(500).json({
         success: false,
         error: 'Erro ao buscar template ativo',
+        message: error.message
+      });
+    }
+  }
+
+  async getAllTemplates(req, res) {
+    try {
+      const db = req.app.locals.db;
+      if (!db) {
+        return res.status(503).json({
+          success: false,
+          error: 'Banco de dados não disponível'
+        });
+      }
+
+      const templates = await consentService.getAllTemplates(db);
+      return res.status(200).json({
+        success: true,
+        data: templates
+      });
+    } catch (error) {
+      logger.error('Erro ao listar templates de consentimento:', error.message);
+      return res.status(500).json({
+        success: false,
+        error: 'Erro ao listar templates de consentimento',
+        message: error.message
+      });
+    }
+  }
+
+  async getCurrentTemplate(req, res) {
+    try {
+      const db = req.app.locals.db;
+      if (!db) {
+        return res.status(503).json({
+          success: false,
+          error: 'Banco de dados não disponível'
+        });
+      }
+
+      const activeTemplate = await consentService.getActiveTemplate(db);
+      if (activeTemplate) {
+        return res.status(200).json({
+          success: true,
+          data: activeTemplate,
+          source: 'active'
+        });
+      }
+
+      const latestTemplate = await consentService.getLatestTemplate(db);
+      return res.status(200).json({
+        success: true,
+        data: latestTemplate || null,
+        source: latestTemplate ? 'latest' : 'empty',
+        message: latestTemplate
+          ? 'Nenhum template ativo encontrado, retornando o template mais recente.'
+          : 'Nenhum template de consentimento encontrado.'
+      });
+    } catch (error) {
+      logger.error('Erro ao buscar template corrente:', error.message);
+      return res.status(500).json({
+        success: false,
+        error: 'Erro ao buscar template corrente',
         message: error.message
       });
     }

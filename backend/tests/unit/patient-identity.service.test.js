@@ -1,0 +1,216 @@
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+
+const patientIdentityService = require('../../src/services/PatientIdentityService');
+const { getCollection } = require('../../src/utils/collectionResolver');
+
+vi.mock('../../src/utils/collectionResolver');
+
+describe('PatientIdentityService - Heuristic Patient Matching', () => {
+  let db;
+  let patientsCollection;
+
+  beforeEach(() => {
+    patientsCollection = {
+      findOne: vi.fn(),
+      updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
+      insertOne: vi.fn().mockResolvedValue({ insertedId: '507f1f77bcf86cd799439011' }),
+    };
+
+    vi.mocked(getCollection).mockResolvedValue(patientsCollection);
+
+    db = {
+      collection: () => patientsCollection,
+    };
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  describe('Scenario 1: Patient with patientID - should find by ID', () => {
+    it('deve encontrar paciente existente pelo patientID', async () => {
+      const existingPatient = {
+        _id: '507f1f77bcf86cd799439011',
+        patientID: '12345678',
+        patientName: 'Paciente Existente',
+        birthDate: new Date('1990-01-20'),
+      };
+
+      patientsCollection.findOne.mockResolvedValueOnce(existingPatient);
+      patientsCollection.updateOne.mockResolvedValueOnce({ matchedCount: 1, modifiedCount: 1 });
+
+      const result = await patientIdentityService.matchOrUpsertPatient(db, {
+        patientID: '12345678',
+        patientName: 'Paciente Existente Updated',
+        email: 'updated@test.com',
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.data.patientID).toBe('12345678');
+      expect(patientsCollection.findOne).toHaveBeenCalledWith(
+        expect.objectContaining({
+          $or: expect.arrayContaining([
+            { patientID: '12345678' },
+          ]),
+        })
+      );
+      expect(patientsCollection.updateOne).toHaveBeenCalled();
+    });
+  });
+
+  describe('Scenario 2: Patient without patientID but with Name + BirthDate - should find or create', () => {
+    it('deve deduplicar pacientes com o mesmo nome normalizado e data de nascimento', async () => {
+      const existingPatient = {
+        _id: '507f1f77bcf86cd799439011',
+        patientID: '87654321',
+        patientName: 'João Silva Santos',
+        patientNameNormalized: 'joao silva santos',
+        birthDate: new Date('1990-05-15'),
+        birthDateKey: '1990-05-15',
+      };
+
+      // First call returns existing patient (matched by name + birthDate)
+      patientsCollection.findOne.mockResolvedValueOnce(existingPatient);
+      patientsCollection.updateOne.mockResolvedValueOnce({ matchedCount: 1, modifiedCount: 1 });
+
+      const result = await patientIdentityService.matchOrUpsertPatient(db, {
+        patientName: 'Joao Silva Santos', // Sem acento
+        birthDate: '15/05/1990', // Formato diferente
+        sex: 'M',
+        cpf: '12345678900',
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.data.patientID).toBe('87654321');
+      expect(patientsCollection.updateOne).toHaveBeenCalled();
+    });
+
+    it('deve criar novo paciente se nome + data de nascimento não encontrados', async () => {
+      patientsCollection.findOne.mockResolvedValueOnce(null);
+      patientsCollection.insertOne.mockResolvedValueOnce({ insertedId: '999f1f77bcf86cd799439999' });
+
+      const result = await patientIdentityService.matchOrUpsertPatient(db, {
+        patientName: 'Novo Paciente',
+        birthDate: '20/01/2000',
+        sex: 'F',
+        cpf: '98765432100',
+      });
+
+      expect(result.success).toBe(true);
+      expect(patientsCollection.insertOne).toHaveBeenCalled();
+    });
+  });
+
+  describe('Scenario 3: Duplicate patient detection across samples', () => {
+    it('Cenário: Tentar cadastrar dois pacientes com mesmo nome e data, IDs diferentes - deve retornar existente', async () => {
+      const existingPatient = {
+        _id: '507f1f77bcf86cd799439011',
+        patientID: '11111111',
+        patientName: 'Maria Silva',
+        patientNameNormalized: 'maria silva',
+        birthDate: new Date('1985-03-10'),
+        birthDateKey: '1985-03-10',
+        email: 'maria.silva@test.com',
+      };
+
+      // Mock: primeiro encontra o paciente existente
+      patientsCollection.findOne.mockResolvedValueOnce(existingPatient);
+      patientsCollection.updateOne.mockResolvedValueOnce({ matchedCount: 1, modifiedCount: 1 });
+
+      // Tentativa 1 com novo patientID (diferente, simulando tentativa de criar novo)
+      const result1 = await patientIdentityService.matchOrUpsertPatient(db, {
+        patientName: 'Maria Silva',
+        birthDate: '10/03/1985',
+        sex: 'F',
+        cpf: '55555555555',
+      });
+
+      expect(result1.success).toBe(true);
+      expect(result1.data.patientID).toBe('11111111'); // Deve retornar ID existente, não criar novo
+
+      // Reset mocks
+      patientsCollection.findOne.mockClear();
+      patientsCollection.updateOne.mockClear();
+
+      // Mock: segunda vez, encontra o mesmo paciente
+      patientsCollection.findOne.mockResolvedValueOnce(existingPatient);
+      patientsCollection.updateOne.mockResolvedValueOnce({ matchedCount: 1, modifiedCount: 1 });
+
+      // Tentativa 2 mesmo paciente, mesmo resultado
+      const result2 = await patientIdentityService.matchOrUpsertPatient(db, {
+        patientName: 'Maria Silva',
+        birthDate: '10/03/1985',
+        sex: 'F',
+        phone: '+5511999999999',
+      });
+
+      expect(result2.success).toBe(true);
+      expect(result2.data.patientID).toBe('11111111'); // Mesmo ID
+      expect(patientsCollection.insertOne).not.toHaveBeenCalled(); // Não deve inserir novo
+    });
+  });
+
+  describe('Scenario 4: Name normalization (remove accents, case-insensitive)', () => {
+    it('deve normalizar nomes com acentuação', async () => {
+      const patterns = [
+        { input: 'José Peña', expected: 'jose pena' },
+        { input: 'ANDRÉ MÜLLER', expected: 'andre muller' },
+        { input: 'Francçois Côté', expected: 'francois cote' },
+      ];
+
+      for (const pattern of patterns) {
+        patientsCollection.findOne.mockResolvedValueOnce(null);
+        patientsCollection.insertOne.mockResolvedValueOnce({ insertedId: '999f1f77bcf86cd799439999' });
+
+        await patientIdentityService.matchOrUpsertPatient(db, {
+          patientName: pattern.input,
+          birthDate: '01/01/1990',
+        });
+
+        // Verify that normalized name is used in query
+        const callArgs = patientsCollection.findOne.mock.calls[0][0];
+        expect(callArgs.patientNameNormalized).toBe(pattern.expected);
+      }
+    });
+  });
+
+  describe('Error handling', () => {
+    it('deve lançar erro se não houver patientID e nem (patientName + birthDate)', async () => {
+      expect(
+        patientIdentityService.matchOrUpsertPatient(db, {
+          sex: 'M',
+          cpf: '12345678900',
+          // Sem patientID, patientName ou birthDate
+        })
+      ).rejects.toThrow('Identificação insuficiente');
+    });
+  });
+
+  describe('Field updates', () => {
+    it('deve atualizar campos demográficos permitidos no upsert', async () => {
+      const existingPatient = {
+        _id: '507f1f77bcf86cd799439011',
+        patientID: '22222222',
+        patientName: 'John Doe',
+      };
+
+      patientsCollection.findOne.mockResolvedValueOnce(existingPatient);
+
+      await patientIdentityService.matchOrUpsertPatient(db, {
+        patientID: '22222222',
+        email: 'john@test.com',
+        phone: '+5511987654321',
+        sex: 'M',
+        cpf: '12345678900',
+      });
+
+      const updateCall = patientsCollection.updateOne.mock.calls[0][1];
+      expect(updateCall.$set).toMatchObject({
+        email: 'john@test.com',
+        phone: '+5511987654321',
+        sex: 'M',
+        cpf: '12345678900',
+      });
+    });
+  });
+});

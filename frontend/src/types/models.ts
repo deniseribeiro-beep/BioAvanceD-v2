@@ -170,6 +170,28 @@ export interface Sample {
   registrationDate?: Date | string;
   quantity?: number;
   quality?: string | number; // Id MIABIS canônico ou legado persistido
+  quality_score?: number | null;
+  quality_category?: 'A' | 'B' | 'C' | '' | string;
+  merkle_root?: string | null;
+  release_status?: 'AVAILABLE' | 'BLOCKED' | 'QUARANTINE' | string;
+  clinical_data?: {
+    orphaCode?: string | null;
+    omimCode?: string | null;
+    cid?: string | null;
+    phenotypes?: any[];
+    charlsonComorbidities?: string[];
+    biomarkers_values?: Record<string, string | number>;
+  } | null;
+  complianceGraph?: {
+    isReleasable?: boolean;
+    graphPath?: {
+      ethics?: { valid?: boolean; reason?: string };
+      quality?: { valid?: boolean; reason?: string };
+      clinical?: { valid?: boolean; reason?: string };
+      integrity?: { valid?: boolean; reason?: string };
+    };
+    suggestedStatus?: 'AVAILABLE' | 'BLOCKED' | 'QUARANTINE' | string;
+  } | null;
   qualityID?: string | number; // Mantido para compatibilidade
   unit?: string; // Unidade de medida (µL, mL, etc.)
   unitID?: number; // Relacionamento Sample → SampleWithMeasurementUnit
@@ -279,6 +301,7 @@ export interface ConsentTemplate {
   content: string;
   htmlContent?: string;
   version: string;
+  versionGroupId?: string;
   caae: string;
   active: boolean;
   permissions: ConsentPermission[];
@@ -476,6 +499,9 @@ export interface Log {
   userName?: string;
   user?: string;
   action: string;
+  resourceType?: string;
+  resourceId?: string | number;
+  status?: string;
   entity: string;
   entityID?: string | number;
   result: string;

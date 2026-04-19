@@ -67,6 +67,142 @@ function buildDateQuery(filters = {}) {
   return range;
 }
 
+function normalizeFilterText(value) {
+  return String(value || '').trim();
+}
+
+function escapeRegex(value) {
+  return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function toRegex(value) {
+  return new RegExp(escapeRegex(value), 'i');
+}
+
+function isTruthyFilter(value) {
+  return ['true', '1', 'yes', 'sim'].includes(String(value || '').trim().toLowerCase());
+}
+
+function normalizeReleaseStatus(value) {
+  const normalized = normalizeFilterText(value).toUpperCase().replace(/\s+/g, '_');
+  if (!normalized) return '';
+  if (['ATIVA', 'AVAILABLE', 'DISPONIVEL', 'DISPONÍVEL'].includes(normalized)) return 'AVAILABLE';
+  if (['QUARENTINE', 'QUARANTINE', 'EM_QUARENTENA', 'QUARENTENA'].includes(normalized)) return 'QUARANTINE';
+  if (['ESGOTADA', 'DEPLETED', 'BLOCKED', 'BLOQUEADA'].includes(normalized)) return 'BLOCKED';
+  return normalized;
+}
+
+function normalizeTreatmentStatus(value) {
+  const normalized = normalizeFilterText(value).toUpperCase().replace(/\s+/g, '_');
+  if (!normalized) return '';
+  if (['NAIVE', 'INICIAL'].includes(normalized)) return 'NAIVE';
+  if (['ON_TREATMENT', 'EM_TRATAMENTO', 'EMTRATAMENTO', 'TREATED'].includes(normalized)) return 'ON_TREATMENT';
+  if (['WASHOUT', 'LAVAGEM'].includes(normalized)) return 'WASHOUT';
+  return normalized;
+}
+
+function normalizeSprecCode(value) {
+  return normalizeFilterText(value).toUpperCase();
+}
+
+function buildSampleQuery(filters = {}) {
+  const conditions = [];
+
+  const orphaCode = normalizeFilterText(filters.orphaCode || filters.orpha || filters.disease);
+  if (orphaCode) {
+    const cleanedOrpha = orphaCode.replace(/^ORPHA:/i, '');
+    conditions.push({
+      $or: [
+        { 'clinical_data.orphaCode': cleanedOrpha },
+        { 'clinical_data.orphaCode': toRegex(cleanedOrpha) },
+        { orphaCode: toRegex(cleanedOrpha) },
+      ],
+    });
+  }
+
+  const drugQuery = normalizeFilterText(filters.atcCode || filters.genericName || filters.drug);
+  if (drugQuery) {
+    const cleanedDrug = drugQuery.replace(/^ATC:/i, '');
+    const drugRegex = toRegex(cleanedDrug);
+    conditions.push({
+      $or: [
+        { 'pharmacology_data.atc_code': drugRegex },
+        { 'pharmacology_data.medication_code': drugRegex },
+        { 'pharmacology_data.drug_name': drugRegex },
+        { 'pharmacology_data.medication_name': drugRegex },
+      ],
+    });
+  }
+
+  const treatmentStatus = normalizeTreatmentStatus(filters.treatmentStatus);
+  if (treatmentStatus) {
+    conditions.push({ 'pharmacology_data.treatment_status': treatmentStatus });
+  }
+
+  const sprecMatrix = normalizeFilterText(filters.sprecMatrixType || filters.sprecMatrix || filters.matrixType).toLowerCase();
+  if (sprecMatrix) {
+    conditions.push({ 'sprec.matrixType': sprecMatrix });
+  }
+
+  const sprecSampleType = normalizeSprecCode(filters.sprecSampleType);
+  if (sprecSampleType) {
+    conditions.push({ 'sprec.sampleType': sprecSampleType });
+  }
+
+  const sprecPrimaryContainer = normalizeSprecCode(filters.sprecPrimaryContainer);
+  if (sprecPrimaryContainer) {
+    conditions.push({ 'sprec.primaryContainer': sprecPrimaryContainer });
+  }
+
+  const sprecPreCentrifugation = normalizeSprecCode(filters.sprecPreCentrifugation);
+  if (sprecPreCentrifugation) {
+    conditions.push({ 'sprec.preCentrifugation': sprecPreCentrifugation });
+  }
+
+  const sprecCentrifugation = normalizeSprecCode(filters.sprecCentrifugation);
+  if (sprecCentrifugation) {
+    conditions.push({ 'sprec.centrifugation': sprecCentrifugation });
+  }
+
+  const sprecSecondCentrifugation = normalizeSprecCode(filters.sprecSecondCentrifugation);
+  if (sprecSecondCentrifugation) {
+    conditions.push({ 'sprec.secondCentrifugation': sprecSecondCentrifugation });
+  }
+
+  const sprecPostCentrifugationDelay = normalizeSprecCode(filters.sprecPostCentrifugationDelay);
+  if (sprecPostCentrifugationDelay) {
+    conditions.push({ 'sprec.postCentrifugationDelay': sprecPostCentrifugationDelay });
+  }
+
+  const sprecLongTermStorage = normalizeSprecCode(filters.sprecLongTermStorage);
+  if (sprecLongTermStorage) {
+    conditions.push({ 'sprec.longTermStorage': sprecLongTermStorage });
+  }
+
+  const qualityCategory = normalizeFilterText(filters.sprecCategory || filters.qualityCategory).toUpperCase();
+  if (qualityCategory) {
+    conditions.push({ quality_category: qualityCategory });
+  }
+
+  const releaseStatus = normalizeReleaseStatus(filters.status || filters.releaseStatus || filters.graphStatus);
+  if (releaseStatus) {
+    conditions.push({ release_status: releaseStatus });
+  }
+
+  return conditions.length > 0 ? { $and: conditions } : {};
+}
+
+async function getMatchingPatientIds(samplesCollection, sampleQuery) {
+  if (!sampleQuery || Object.keys(sampleQuery).length === 0) {
+    return [];
+  }
+
+  const patientIds = await samplesCollection.distinct('patientID', sampleQuery);
+  return Array.isArray(patientIds)
+    ? patientIds.map((patientID) => String(patientID || '').trim()).filter(Boolean)
+    : [];
+}
+
 async function buildPreviewData(db, rawType, filters = {}) {
   const type = decodeURIComponent(rawType || '').toLowerCase();
   const normalizedType = normalizeTypeValue(rawType);
@@ -101,19 +237,47 @@ async function buildPreviewData(db, rawType, filters = {}) {
   if (isSamplesByPatient) {
     const patientsCollection = resolveCollection(db, ['patients', 'pacientes']);
     const samplesCollection = resolveCollection(db, ['samples', 'amostras']);
+    const sampleQuery = buildSampleQuery(filters);
+    const matchingPatientIds = await getMatchingPatientIds(samplesCollection, sampleQuery);
 
-    const patientQuery = {};
+    const patientQueryParts = [];
     if (filters.keyword) {
-      patientQuery.$or = [
+      patientQueryParts.push({
+        $or: [
         { patientName: { $regex: String(filters.keyword), $options: 'i' } },
         { patientID: { $regex: String(filters.keyword), $options: 'i' } },
-      ];
+        ],
+      });
     }
 
+    const orphaCode = normalizeFilterText(filters.orphaCode || filters.orpha || filters.disease);
+    if (orphaCode) {
+      const cleanedOrpha = orphaCode.replace(/^ORPHA:/i, '');
+      patientQueryParts.push({
+        $or: [
+          { orphaCode: cleanedOrpha },
+          { orphaCode: toRegex(cleanedOrpha) },
+          { 'icdReference.ORPHA': toRegex(cleanedOrpha) },
+          { diagnosticHypothesis: toRegex(cleanedOrpha) },
+        ],
+      });
+    }
+
+    if (matchingPatientIds.length > 0) {
+      patientQueryParts.push({ patientID: { $in: matchingPatientIds } });
+    }
+
+    const patientQuery = patientQueryParts.length > 0 ? { $and: patientQueryParts } : {};
     const patients = await patientsCollection.find(patientQuery).limit(20).toArray();
     const patientIds = patients.map((patient) => patient.patientID).filter(Boolean);
+    const sampleFilter = { ...(Object.keys(sampleQuery).length > 0 ? sampleQuery : {}) };
     const samples = patientIds.length
-      ? await samplesCollection.find({ patientID: { $in: patientIds } }).toArray()
+      ? await samplesCollection.find({
+          $and: [
+            { patientID: { $in: patientIds } },
+            ...(Object.keys(sampleFilter).length > 0 ? [sampleFilter] : []),
+          ],
+        }).toArray()
       : [];
 
     const groupedSamples = samples.reduce((acc, sample) => {
@@ -149,26 +313,73 @@ async function buildPreviewData(db, rawType, filters = {}) {
 
   if (typeIncludes(type, ['paciente', 'patient'])) {
     const collection = resolveCollection(db, ['patients', 'pacientes']);
-    const patients = await collection.find({}).limit(50).toArray();
+    const samplesCollection = resolveCollection(db, ['samples', 'amostras']);
+    const sampleQuery = buildSampleQuery(filters);
+    const matchingPatientIds = await getMatchingPatientIds(samplesCollection, sampleQuery);
+
+    const patientQueryParts = [];
+    if (filters.keyword) {
+      patientQueryParts.push({
+        $or: [
+          { patientName: { $regex: String(filters.keyword), $options: 'i' } },
+          { patientID: { $regex: String(filters.keyword), $options: 'i' } },
+        ],
+      });
+    }
+
+    const orphaCode = normalizeFilterText(filters.orphaCode || filters.orpha || filters.disease);
+    if (orphaCode) {
+      const cleanedOrpha = orphaCode.replace(/^ORPHA:/i, '');
+      patientQueryParts.push({
+        $or: [
+          { orphaCode: cleanedOrpha },
+          { orphaCode: toRegex(cleanedOrpha) },
+          { 'icdReference.ORPHA': toRegex(cleanedOrpha) },
+          { diagnosticHypothesis: toRegex(cleanedOrpha) },
+        ],
+      });
+    }
+
+    if (matchingPatientIds.length > 0) {
+      patientQueryParts.push({ patientID: { $in: matchingPatientIds } });
+    }
+
+    const query = patientQueryParts.length > 0 ? { $and: patientQueryParts } : {};
+    const patients = await collection.find(query).limit(50).toArray();
     const total = await collection.countDocuments(query);
     return { total, patients, previewLimited: total > 50 };
   }
 
   if (typeIncludes(type, ['amostra', 'sample'])) {
     const collection = resolveCollection(db, ['samples', 'amostras']);
-    const samples = await collection.find({}).limit(100).toArray();
-    const total = await collection.countDocuments({});
+    const sampleQuery = buildSampleQuery(filters);
+    const samples = await collection.find(sampleQuery).limit(100).toArray();
+    const total = await collection.countDocuments(sampleQuery);
     return { total, samples, previewLimited: total > 100 };
   }
 
   if (typeIncludes(type, ['temperatura', 'temperature'])) {
     const collection = resolveCollection(db, ['temperature', 'temperatures']);
     const dateRange = buildDateQuery(filters);
-    const query = dateRange
-      ? { $or: [{ timestamp: dateRange }, { dateTime: dateRange }] }
-      : {};
+    const queryParts = [];
+    if (dateRange) {
+      queryParts.push({ $or: [{ timestamp: dateRange }, { dateTime: dateRange }] });
+    }
+
+    if (isTruthyFilter(filters.criticalAlertsOnly)) {
+      queryParts.push({
+        $or: [
+          { readingStatus: { $regex: 'critical|alert', $options: 'i' } },
+          { severity: { $regex: 'critical|alert', $options: 'i' } },
+          { alertType: { $regex: 'critical', $options: 'i' } },
+          { sensorStatus: { $regex: 'faulty|maintenance', $options: 'i' } },
+        ],
+      });
+    }
+
+    const query = queryParts.length > 0 ? { $and: queryParts } : {};
     const temperatures = await collection.find(query).sort({ timestamp: -1, dateTime: -1 }).limit(100).toArray();
-    const total = await collection.countDocuments({});
+    const total = await collection.countDocuments(query);
 
     const values = temperatures
       .map((entry) => Number(entry.temperatureValue))

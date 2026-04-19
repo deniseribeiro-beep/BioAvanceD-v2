@@ -24,16 +24,15 @@ test('Smoke Test - Rotas principais carregam sem erro', async ({ page, context }
   ];
 
   for (const route of routes) {
-    console.log(`Testing route: ${route.path}`);
-    await page.goto(route.path);
+    const response = await page.goto(route.path, { waitUntil: 'domcontentloaded' });
     
     // Valida que página carregou (sem erro 404 ou 500)
     expect(page.url()).toContain(route.path);
     
-    // Valida que não há erro visível
-    await expect(page.locator('text=404|500|Error|Erro')).not.toBeVisible({ timeout: 5000 }).catch(() => {});
-    
-    console.log(`✓ ${route.name} carregou com sucesso`);
+    // Valida que resposta principal não falhou no carregamento
+    if (response) {
+      expect(response.status()).toBeLessThan(400);
+    }
   }
 });
 
@@ -50,21 +49,9 @@ test('Validação de Zod no Intake Wizard', async ({ page, context }) => {
     },
   ]);
 
-  await page.goto('/next/intake');
-  
-  // Aguarda componente carregar
-  await page.waitForTimeout(2000);
-  
-  // Valida que componente renderizou (procura por elementos comuns do formulário)
-  const componentExists = await page.evaluate(() => {
-    return document.body.textContent.toLowerCase().includes('paciente') ||
-           document.body.textContent.toLowerCase().includes('amostra') ||
-           document.body.querySelector('form') !== null ||
-           document.querySelector('input') !== null;
-  });
-  
-  expect(componentExists).toBe(true);
-  console.log('✓ Intake Wizard renderizou corretamente');
+  await page.goto('/next/intake', { waitUntil: 'networkidle' });
+  await expect(page.getByTestId('wizard-title')).toBeVisible({ timeout: 10000 });
+  await expect(page.getByTestId('wizard-full-name')).toBeVisible();
 });
 
 test('E-Consent Page Carrega', async ({ page, context }) => {
@@ -74,5 +61,4 @@ test('E-Consent Page Carrega', async ({ page, context }) => {
   // Valida que página existe ou oferece redirecionamento apropriado
   const status = page.url();
   expect(status).toBeDefined();
-  console.log('✓ E-Consent page accessible');
 });

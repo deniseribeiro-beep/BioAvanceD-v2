@@ -6,6 +6,7 @@ import { useSamplesPage } from '../hooks/samples/useSamplesPage';
 import type { SampleWithId } from '../hooks/samples/useSamplesPage';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useAuth } from '../contexts/AuthContext';
+import './SamplesPage.css';
 
 export default function SamplesPage() {
   const navigate = useNavigate();
@@ -37,11 +38,12 @@ export default function SamplesPage() {
 
   return (
     <>
-      <div className="samples-view-switch">
+      <div className="samples-view-switch" data-testid="samples-view-switch">
         <button
           type="button"
           className={`samples-view-switch__button ${activeSection === 'inventory' ? 'active' : ''}`}
           onClick={() => setActiveSection('inventory')}
+          data-testid="samples-view-inventory-button"
         >
           Inventário de Amostras
         </button>
@@ -49,6 +51,7 @@ export default function SamplesPage() {
           type="button"
           className={`samples-view-switch__button ${activeSection === 'storage' ? 'active' : ''}`}
           onClick={() => setActiveSection('storage')}
+          data-testid="samples-view-storage-button"
         >
           Armazenagem Física
         </button>

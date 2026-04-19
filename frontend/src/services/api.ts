@@ -34,6 +34,7 @@ const TOKEN_OPTIONAL_ROUTES = [
 ];
 
 let isRedirectingToLogin = false;
+let refreshPromise: Promise<string | null> | null = null;
 
 function isTokenOptionalRoute(url = ''): boolean {
   return TOKEN_OPTIONAL_ROUTES.some((route) => url.includes(route));
@@ -94,6 +95,7 @@ if (import.meta.env.DEV) {
 
 const api = axios.create({
   baseURL: API_BASE_URL,
+  withCredentials: true,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -180,13 +182,44 @@ api.interceptors.response.use(
       return Promise.reject(new Error(`Servidor backend não está disponível. Verifique se está rodando na porta ${currentPort}.`));
     }
     
-    // Se erro 401 (não autorizado), encerra sessão imediatamente para rotas protegidas
+    // Se erro 401 (não autorizado), tenta refresh do access token antes de encerrar sessão
     if (error.response?.status === 401) {
       const requestUrl = error.config?.url || '';
+      const isRefreshEndpoint = requestUrl.includes('/auth/refresh');
+      const isRetry = Boolean(error.config?._retry);
       
       // Rotas públicas de autenticação não devem forçar limpeza de sessão
-      if (isTokenOptionalRoute(requestUrl)) {
+      if (isTokenOptionalRoute(requestUrl) || isRefreshEndpoint) {
         return Promise.reject(error);
+      }
+
+      if (!isRetry) {
+        try {
+          if (!refreshPromise) {
+            refreshPromise = api.post('/auth/refresh')
+              .then((response) => {
+                const newToken = response?.data?.data?.token;
+                if (newToken) {
+                  localStorage.setItem('token', newToken);
+                  return newToken;
+                }
+                return null;
+              })
+              .finally(() => {
+                refreshPromise = null;
+              });
+          }
+
+          const refreshedToken = await refreshPromise;
+          if (refreshedToken) {
+            error.config._retry = true;
+            error.config.headers = error.config.headers || {};
+            error.config.headers.Authorization = `Bearer ${refreshedToken}`;
+            return api.request(error.config);
+          }
+        } catch (refreshError) {
+          // segue para limpeza de sessão abaixo
+        }
       }
 
       terminateSessionAndRedirect();
@@ -226,6 +259,7 @@ export const phoneCodeService = {
 export const sampleService = {
   getAll: () => api.get<Sample[]>('/samples'),
   getById: (id: number) => api.get<Sample>(`/samples/${id}`),
+  getComplianceGraph: (id: number | string) => api.get(`/samples/${id}/compliance-graph`),
   getByBarcode: (barcode: string) => api.get<{ sample: Sample; patient: { patientID: number; patientName: string; recordNumber: number } | null }>(`/samples/by-barcode/${encodeURIComponent(barcode)}`),
   getResults: (id: number) => api.get<Result[]>(`/samples/${id}/results`), // Implementa Sample.getResults()
   getMovements: (id: string) => api.get<{ success: boolean; data: any[] }>(`/samples/${id}/movements`), // Histórico de movimentações
@@ -260,6 +294,10 @@ export const sampleService = {
     api.get(`/samples/${sampleID}/files/${fileID}/export/cda`, {
       responseType: 'text'
     }),
+};
+
+export const dataImportService = {
+  importFhir: (payload: unknown) => api.post('/import/fhir', payload),
 };
 
 // ========== RESULT SERVICES ==========
@@ -578,6 +616,9 @@ export const authService = {
   login: (username: string, password: string, twoFactorCode?: string) =>
     api.post('/auth/login', { username, password, twoFactorCode }),
   logout: () => api.post('/auth/logout'),
+  getSessions: () => api.get('/auth/sessions'),
+  revokeSession: (sessionId: string) => api.delete(`/auth/sessions/${sessionId}`),
+  revokeAllOtherSessions: () => api.delete('/auth/sessions/all-others'),
   verifyToken: async () => {
     try {
       return await api.get('/auth/verify');
@@ -706,10 +747,11 @@ export const assistantService = {
 // ========== CONSENT SERVICES ==========
 // TCLE builder should use only ConsentTemplate endpoints for create/update/read
 export const consentService = {
-  createTemplate: (data: Partial<ConsentTemplate>) => api.post<ConsentTemplate>('/consent-templates', data),
-  getActiveTemplate: () => api.get<{ success: boolean; data: ConsentTemplate }>('/consent-templates/active'),
-  getTemplateById: (id: string) => api.get<{ success: boolean; data: ConsentTemplate }>(`/consent-templates/${id}`),
-  updateTemplate: (id: string, data: Partial<ConsentTemplate>) => api.put<{ success: boolean; data: ConsentTemplate }>(`/consent-templates/${id}`, data),
+  createTemplate: (data: Partial<ConsentTemplate>) => api.post<ConsentTemplate>('/e-consent/consent-templates', data),
+  getTemplates: () => api.get<{ success: boolean; data: ConsentTemplate[] }>('/e-consent/consent-templates'),
+  getActiveTemplate: () => api.get<{ success: boolean; data: ConsentTemplate | null; source?: string; message?: string }>('/e-consent/consent-templates/current'),
+  getTemplateById: (id: string) => api.get<{ success: boolean; data: ConsentTemplate }>(`/e-consent/consent-templates/${id}`),
+  updateTemplate: (id: string, data: Partial<ConsentTemplate>) => api.put<{ success: boolean; data: ConsentTemplate }>(`/e-consent/consent-templates/${id}`, data),
   // The following endpoints are for legacy or other flows, not for TCLE builder:
   // createPolicy: (data: Partial<ConsentPolicy>) => api.post<ConsentPolicy>('/consent-policies', data),
   // updatePolicy: (id: string, data: Partial<ConsentPolicy>) => api.put<{ success: boolean; data: ConsentPolicy }>(`/consent-policies/${id}`, data),
@@ -724,9 +766,9 @@ export const consentService = {
     signatureName?: string;
     signatureImageBase64?: string;
     signatureMimeType?: string;
-  }) => api.post<PatientConsent>('/consents', data),
-  revokeConsent: (consentId: string) => api.post(`/consents/${consentId}/revoke`),
-  getPatientConsent: (patientId: string) => api.get<{ success: boolean; data: PatientConsent }>(`/patients/${patientId}/consent`)
+  }) => api.post<PatientConsent>('/e-consent/consents', data),
+  revokeConsent: (consentId: string) => api.post(`/e-consent/consents/${consentId}/revoke`),
+  getPatientConsent: (patientId: string) => api.get<{ success: boolean; data: PatientConsent }>(`/e-consent/patients/${patientId}/consent`)
 };
 
 // ========== IMPORT LGPD SERVICES ==========
@@ -777,11 +819,12 @@ export const securityService = {
   updateConfig: (data: any) => api.put('/security/config', data),
   getPermissions: () => api.get('/security/permissions'),
   updatePermissions: (data: any) => api.put('/security/permissions', data),
+  getSessions: () => api.get('/auth/sessions'),
   getConsentQueueStatus: () => api.get('/security/consent-queue'),
   exportLogs: (filters?: any, format: 'csv' | 'json' = 'csv') => {
     const params = new URLSearchParams();
     if (filters) {
-      Object.keys(filters).forEach(key => {
+      Object.keys(filters).forEach((key) => {
         if (filters[key] !== undefined && filters[key] !== null && filters[key] !== '') {
           params.append(key, filters[key]);
         }
@@ -799,21 +842,13 @@ export const userSecurityService = {
   getStatus: () => api.get('/user/security/status'),
   getMFAStatus: () => api.get('/user/security/mfa'),
   getPasswordStatus: () => api.get('/user/security/password'),
-  getSessions: () => api.get('/user/security/sessions'),
+  getSessions: () => api.get('/auth/sessions'),
   getActivities: () => api.get('/user/security/activities'),
-  updateMFA: (method: 'phone' | 'passkey', enabled: boolean) => 
-    api.put('/user/security/mfa', { method, enabled }),
   updatePassword: (currentPassword: string, newPassword: string) => 
     api.put('/user/security/password', { currentPassword, newPassword }),
-  updatePhone: (phone: string) => 
-    api.put('/user/security/phone', { phone }),
-  startPasskeyRegistration: () => api.post('/user/security/passkey/start'),
-  completePasskeyRegistration: (data: { credentialId: string; publicKey: string; attestationObject: string; deviceName?: string }) => 
-    api.post('/user/security/passkey', data),
-  removePasskey: (passkeyId: string) => api.delete(`/user/security/passkey/${passkeyId}`),
   generateRecoveryCodes: () => api.post('/user/security/recovery-codes'),
-  revokeSession: (sessionId: string) => api.delete(`/user/security/sessions/${sessionId}`),
-  revokeAllSessions: () => api.delete('/user/security/sessions'),
+  revokeSession: (sessionId: string) => api.delete(`/auth/sessions/${sessionId}`),
+  revokeAllSessions: () => api.delete('/auth/sessions/all-others'),
   requestPasswordReset: () => api.post('/user/security/password-reset/request'),
 };
 

@@ -6,12 +6,67 @@ const env = require('../config/env');
 const UserModel = require('../models/User');
 const LogModel = require('../models/Log');
 const logger = require('../utils/logger');
+const sessionService = require('./session.service');
+
+const ACCESS_TOKEN_TTL = '15m';
+const REFRESH_TOKEN_TTL = '7d';
 
 /**
  * Service de Autenticação
  * RF001 - Login com MFA
  */
 class AuthService {
+  issueAccessToken(user) {
+    return jwt.sign(
+      {
+        userID: user._id.toString(),
+        email: user.email,
+        username: user.username,
+        accessType: user.accessType,
+        name: user.name,
+        mfaVerified: true
+      },
+      env.JWT_SECRET,
+      { expiresIn: ACCESS_TOKEN_TTL }
+    );
+  }
+
+  issueRefreshToken(user, sessionID = null) {
+    const payload = {
+      userID: user._id.toString(),
+      type: 'refresh'
+    };
+
+    if (sessionID) {
+      payload.sessionID = sessionID;
+    }
+
+    return jwt.sign(
+      payload,
+      env.JWT_REFRESH_SECRET || env.JWT_SECRET,
+      { expiresIn: REFRESH_TOKEN_TTL }
+    );
+  }
+
+  async issueSessionTokens(db, user, req) {
+    const refreshToken = this.issueRefreshToken(user);
+    const accessToken = this.issueAccessToken(user);
+
+    const session = await sessionService.createSession(
+      db,
+      user._id.toString(),
+      accessToken,
+      refreshToken,
+      req
+    );
+
+    return {
+      token: accessToken,
+      refreshToken,
+      sessionID: session.sessionID
+    };
+  }
+
   /**
    * Mapeia accessType para roleName
    */
@@ -315,24 +370,7 @@ class AuthService {
         { $set: { lastLogin: new Date() } }
       );
 
-      // Gera token JWT completo (apenas após MFA configurado ou verificado)
-      // Token com expiração de 12 horas (renovado por atividade)
-      const token = jwt.sign(
-        {
-          userID: user._id.toString(),
-          email: user.email,
-          username: user.username,
-          accessType: user.accessType,
-          name: user.name,
-          mfaVerified: true // Indica que MFA foi verificado
-        },
-        env.JWT_SECRET,
-        { expiresIn: '12h' } // 12 horas - renovado por atividade
-      );
-
-      // Cria sessão para controle de atividade
-      const sessionService = require('./session.service');
-      await sessionService.createSession(db, user._id.toString(), token, '12h');
+      const tokenBundle = await this.issueSessionTokens(db, user, req);
 
       // Registra login bem-sucedido (anonimizado via auditLogger)
       const auditLogger = require('../utils/auditLogger');
@@ -340,7 +378,9 @@ class AuthService {
       await auditLogger.logLogin(req, true);
 
       return {
-        token,
+        token: tokenBundle.token,
+        refreshToken: tokenBundle.refreshToken,
+        sessionID: tokenBundle.sessionID,
         user: {
           _id: user._id,
           name: user.name,
@@ -504,23 +544,7 @@ class AuthService {
         }
       );
 
-      // Gera token completo após MFA configurado (12h - renovado por atividade)
-      const token = jwt.sign(
-        {
-          userID: user._id.toString(),
-          email: user.email,
-          username: user.username,
-          accessType: user.accessType,
-          name: user.name,
-          mfaVerified: true
-        },
-        env.JWT_SECRET,
-        { expiresIn: '12h' } // 12 horas - renovado por atividade
-      );
-
-      // Cria sessão para controle de atividade
-      const sessionService = require('./session.service');
-      await sessionService.createSession(db, user._id.toString(), token, '12h');
+      const tokenBundle = await this.issueSessionTokens(db, user, req);
 
       // Registra log (anonimizado via auditLogger)
       const auditLogger = require('../utils/auditLogger');
@@ -537,7 +561,9 @@ class AuthService {
 
       return {
         success: true,
-        token: token,
+        token: tokenBundle.token,
+        refreshToken: tokenBundle.refreshToken,
+        sessionID: tokenBundle.sessionID,
         user: {
           _id: user._id,
           name: user.name,
@@ -634,28 +660,15 @@ class AuthService {
         { $set: updateData }
       );
 
-      // Se for primeiro login, gera token completo (12h - renovado por atividade)
+        // Se for primeiro login, gera tokens de sessão completos
       if (user.lastLogin === null) {
-        const token = jwt.sign(
-          {
-            userID: user._id.toString(),
-            email: user.email,
-            username: user.username,
-            accessType: user.accessType,
-            name: user.name,
-            mfaVerified: true
-          },
-          env.JWT_SECRET,
-          { expiresIn: '12h' } // 12 horas - renovado por atividade
-        );
-
-        // Cria sessão para controle de atividade
-        const sessionService = require('./session.service');
-        await sessionService.createSession(db, user._id.toString(), token, '12h');
+        const tokenBundle = await this.issueSessionTokens(db, user, null);
 
         return { 
           success: true,
-          token: token, // Token completo após MFA configurado
+          token: tokenBundle.token,
+          refreshToken: tokenBundle.refreshToken,
+          sessionID: tokenBundle.sessionID,
           user: {
             _id: user._id,
             name: user.name,

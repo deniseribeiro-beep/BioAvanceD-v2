@@ -5,13 +5,21 @@ class SessionModel {
   static create(data) {
     return {
       sessionID: data.sessionID || null,
-      userID: data.userID,
-      token: data.token,
+      userID: String(data.userID),
+      tokenHash: data.tokenHash,
+      refreshTokenHash: data.refreshTokenHash,
+      userAgent: data.userAgent || null,
+      ipAddress: data.ipAddress || null,
+      deviceInfo: data.deviceInfo || null,
       lastActivity: new Date(),
       createdAt: new Date(),
       expiresAt: data.expiresAt || new Date(Date.now() + 12 * 60 * 60 * 1000), // 12 horas
+      refreshExpiresAt: data.refreshExpiresAt || new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
       inactiveTimeout: data.inactiveTimeout || 30 * 60 * 1000, // 30 minutos em ms
-      isActive: true
+      isActive: true,
+      isRevoked: false,
+      revokedAt: null,
+      updatedAt: new Date()
     };
   }
 
@@ -22,8 +30,12 @@ class SessionModel {
       errors.push('userID é obrigatório');
     }
 
-    if (!data.token) {
-      errors.push('token é obrigatório');
+    if (!data.tokenHash) {
+      errors.push('tokenHash é obrigatório');
+    }
+
+    if (!data.refreshTokenHash) {
+      errors.push('refreshTokenHash é obrigatório');
     }
 
     return {
@@ -36,7 +48,7 @@ class SessionModel {
    * Verifica se a sessão está ativa (não expirou e não está inativa)
    */
   static isSessionActive(session) {
-    if (!session || !session.isActive) {
+    if (!session || !session.isActive || session.isRevoked) {
       return false;
     }
 
@@ -44,6 +56,10 @@ class SessionModel {
     
     // Verifica expiração por tempo total
     if (session.expiresAt && new Date(session.expiresAt) < now) {
+      return false;
+    }
+
+    if (session.refreshExpiresAt && new Date(session.refreshExpiresAt) < now) {
       return false;
     }
 

@@ -1,0 +1,24 @@
+{
+  "roles": [
+    {
+      "accessType": 1,
+      "roleName": "UsuarioExterno",
+      "permissions": ["viewReports", "useAssistant"]
+    },
+    {
+      "accessType": 2,
+      "roleName": "Tecnico",
+      "permissions": ["createSample", "withdrawSample", "viewTemperature", "uploadFiles", "viewReports", "useAssistant"]
+    },
+    {
+      "accessType": 3,
+      "roleName": "Coordenador",
+      "permissions": ["createUser", "createSample", "editSample", "createPatient", "withdrawSample", "uploadFiles", "uploadSampleFiles", "deleteSampleFiles", "viewTemperature", "viewReports", "useAssistant"]
+    },
+    {
+      "accessType": 4,
+      "roleName": "Administrador",
+      "permissions": ["createUser", "createSample", "editSample", "deleteSample", "createPatient", "withdrawSample", "uploadFiles", "uploadSampleFiles", "deleteSampleFiles", "viewTemperature", "viewReports", "useAssistant", "manageBackup", "manageSystem", "resetMFA"]
+    }
+  ]
+}

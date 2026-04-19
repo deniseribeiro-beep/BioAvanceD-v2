@@ -11,22 +11,39 @@ const COLLECTION = 'orphanet_diseases';
 router.get('/search', async (req, res) => {
   const { q, lang = 'pt' } = req.query;
   if (!q) return res.status(400).json({ error: 'Missing query' });
+
   const client = new MongoClient(MONGO_URI);
-  await client.connect();
-  const db = client.db(DB_NAME);
-  const col = db.collection(COLLECTION);
-  // Busca por nome ou código (case-insensitive)
-  const regex = new RegExp(q, 'i');
-  const results = await col.find({
-    lang,
-    $or: [
-      { name: regex },
-      { code: regex },
-      { synonyms: regex }
-    ]
-  }).limit(20).toArray();
-  await client.close();
-  res.json(results);
+  try {
+    await client.connect();
+    const db = client.db(DB_NAME);
+    const col = db.collection(COLLECTION);
+    // Busca por nome, código ou sinônimo (case-insensitive).
+    const regex = new RegExp(q, 'i');
+    const baseFilter = {
+      $or: [
+        { name: regex },
+        { code: regex },
+        { synonyms: regex },
+      ],
+    };
+
+    const requestedLang = String(lang || '').trim().toLowerCase();
+    let results = [];
+
+    if (requestedLang) {
+      results = await col.find({ ...baseFilter, lang: requestedLang }).limit(20).toArray();
+    }
+
+    if (!Array.isArray(results) || results.length === 0) {
+      results = await col.find(baseFilter).limit(20).toArray();
+    }
+
+    res.json(results);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to search orphanet diseases' });
+  } finally {
+    await client.close();
+  }
 });
 
 module.exports = router;

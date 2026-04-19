@@ -3,6 +3,7 @@ const logger = require('../utils/logger');
 const merkleTree = require('../utils/merkleTree');
 const biomarkerIntegrityService = require('./biomarker-integrity.service');
 const mqttIngestionAuditService = require('./mqtt-ingestion-audit.service');
+const logService = require('./log.service');
 
 function sha256Hex(input) {
   return crypto.createHash('sha256').update(String(input)).digest('hex');
@@ -145,6 +146,33 @@ class IntegrityCheckService {
 
     const allLeaves = leaves.concat(biomarkerLeaves, mqttLeaves);
     const tree = merkleTree.buildMerkleTree(allLeaves);
+
+    try {
+      await logService.createLog(db, {
+        userID: 'USR-SYSTEM',
+        action: 'MERKLE_HASH_GENERATED',
+        resourceType: 'AuditRoot',
+        resourceId: date,
+        entity: 'Report',
+        entityID: date,
+        status: 'success',
+        result: 'success',
+        severity: 'info',
+        module: 'Sistema',
+        message: `Merkle Root gerada/recalculada para ${date}`,
+        payload: {
+          date,
+          merkleRoot: tree.root,
+          logsLeafCount: leaves.length,
+          biomarkersLeafCount: biomarkerLeaves.length,
+          mqttLeafCount: mqttLeaves.length,
+          totalLeaves: allLeaves.length,
+          persistMissing: Boolean(persistMissing),
+        },
+      });
+    } catch (logError) {
+      logger.warn('Falha ao registrar evento MERKLE_HASH_GENERATED:', logError.message || logError);
+    }
 
     return {
       date,

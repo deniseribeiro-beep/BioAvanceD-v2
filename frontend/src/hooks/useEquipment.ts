@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Equipment } from '../types/models';
 import { equipmentService } from '../services/api';
+import { notifyDashboardDataChanged } from '../utils/dashboardRefresh';
 import { onClientLogout } from '../utils/sessionCleanup';
 
 export function useEquipment() {
@@ -47,10 +48,12 @@ export function useEquipment() {
       const newEquipment = responseData?.data || responseData;
       if (newEquipment) {
         setEquipment((prev) => [...prev, newEquipment]);
+        notifyDashboardDataChanged();
         return newEquipment;
       }
       // Se não houver dados na resposta, recarrega a lista
       await loadEquipment();
+      notifyDashboardDataChanged();
       return newEquipment;
     } catch (err: any) {
       const errorMessage = err.response?.data?.message || err.response?.data?.error || err.message || 'Erro ao criar equipamento';
@@ -70,9 +73,11 @@ export function useEquipment() {
           const eqId = (e as any)._id || e.equipmentID;
           return String(eqId) === String(id) ? updatedEquipment : e;
         }));
+        notifyDashboardDataChanged();
         return updatedEquipment;
       }
       await loadEquipment(); // Recarrega se não houver dados na resposta
+      notifyDashboardDataChanged();
       return updatedEquipment;
     } catch (err: any) {
       const errorMessage = err.response?.data?.message || err.response?.data?.error || err.message || 'Erro ao atualizar equipamento';
@@ -90,6 +95,7 @@ export function useEquipment() {
         return String(eqId) !== String(id);
       }));
       await loadEquipment(); // Recarrega para garantir sincronização
+      notifyDashboardDataChanged();
     } catch (err: any) {
       const errorMessage = err.response?.data?.message || err.response?.data?.error || err.message || 'Erro ao deletar equipamento';
       throw new Error(errorMessage);

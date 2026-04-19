@@ -1,11 +1,11 @@
-const EConsentPage = lazy(() => import('./pages/patient/EConsentPage'));
-const EConsentLinkPanel = lazy(() => import('./pages/patient/EConsentLinkPanel'));
-
 import { lazy, Suspense } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import Layout from './components/Layout/Layout';
 import ProtectedRoute from './components/ProtectedRoute';
 import './App.css';
+
+const EConsentPage = lazy(() => import('./pages/patient/EConsentPage'));
+const EConsentLinkPanel = lazy(() => import('./pages/patient/EConsentLinkPanel'));
 
 const LoginPage = lazy(() => import('./views/LoginPage'));
 const Dashboard = lazy(() => import('./views/Dashboard'));
@@ -88,7 +88,7 @@ function App() {
                   <Route path="/results" element={<ProtectedRoute><ResultsPage /></ProtectedRoute>} />
                   <Route path="/system-management" element={<ProtectedRoute requiredRole="Administrador"><SystemManagementPage /></ProtectedRoute>} />
                   <Route path="/users" element={<Navigate to="/system-management?tab=users" replace />} />
-                  <Route path="/access" element={<Navigate to="/system-management?tab=access" replace />} />
+                  <Route path="/access" element={<Navigate to="/system-management?tab=users" replace />} />
                   <Route path="/security" element={<Navigate to="/system-management?tab=security" replace />} />
                   <Route path="/users/new" element={<ProtectedRoute requiredRole="Administrador"><NewUserPage /></ProtectedRoute>} />
                   <Route path="/users/new/success" element={<ProtectedRoute requiredRole="Administrador"><NewUserSuccessPage /></ProtectedRoute>} />
@@ -104,7 +104,14 @@ function App() {
                   <Route path="/reports/query/:type" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Usuário Externo']}><ReportQueryPage /></ProtectedRoute>} />
                   <Route path="/reports/:id" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Usuário Externo']}><ReportViewPage /></ProtectedRoute>} />
                   <Route path="/quality-descriptions" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}><QualityDescriptionPage /></ProtectedRoute>} />
-                  <Route path="/import" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}><ImportForm /></ProtectedRoute>} />
+                  <Route
+                    path="/import"
+                    element={
+                      <ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}>
+                        <ImportForm onSuccess={() => {}} onError={() => {}} />
+                      </ProtectedRoute>
+                    }
+                  />
                   <Route path="/assistant" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico', 'Usuário Externo']}><AssistantPage /></ProtectedRoute>} />
                   <Route path="/admin/tcle/new" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador']}><TcleBuilderPage /></ProtectedRoute>} />
                   <Route path="/admin/tcle/edit/:templateId" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador']}><TcleBuilderPage /></ProtectedRoute>} />

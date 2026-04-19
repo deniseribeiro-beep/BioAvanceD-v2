@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Patient } from '../types/models';
 import { patientService } from '../services/api';
+import { notifyDashboardDataChanged } from '../utils/dashboardRefresh';
 import { onClientLogout } from '../utils/sessionCleanup';
 
 interface ApiLikeError {
@@ -107,6 +108,7 @@ export function usePatients() {
       const response = await patientService.create(data);
       // Recarrega a lista completa para garantir dados atualizados
       await loadPatients();
+      notifyDashboardDataChanged();
       return response.data;
     } catch (err: unknown) {
       const typedError = err as ApiLikeError;
@@ -122,6 +124,7 @@ export function usePatients() {
       const response = await patientService.update(id, data);
       // Recarrega a lista completa para garantir dados atualizados
       await loadPatients();
+      notifyDashboardDataChanged();
       return response.data;
     } catch (err: unknown) {
       const typedError = err as ApiLikeError;
@@ -138,6 +141,7 @@ export function usePatients() {
       await patientService.delete(id);
       // Recarrega a lista completa para garantir dados atualizados
       await loadPatients();
+      notifyDashboardDataChanged();
     } catch (err: unknown) {
       const typedError = err as ApiLikeError;
       if (typedError?.response) {

@@ -24,9 +24,47 @@ const SampleSchema = new Schema({
   quantity: { type: Number, required: true },
   unit: { type: String },
   quality: { type: String },
+  quality_score: { type: Number },
+  quality_category: { type: String, enum: ['A', 'B', 'C', ''], default: '' },
   locationID: { type: Number },
   location: { type: Object },
   linkedProject: { type: String, required: true },
+  sprec: {
+    matrixType: { type: String },
+    sampleType: { type: String },
+    primaryContainer: { type: String },
+    preCentrifugation: { type: String },
+    centrifugation: { type: String },
+    secondCentrifugation: { type: String },
+    postCentrifugationDelay: { type: String },
+    longTermStorage: { type: String },
+  },
+  merkle_root: { type: String },
+  penalty_log: { type: [Schema.Types.Mixed], default: undefined },
+  tcle_id: { type: String },
+  consentTemplateId: { type: String },
+  clinical_data: {
+    orphaCode: { type: String },
+    omimCode: { type: String },
+    cid: { type: String },
+    phenotypes: { type: [Schema.Types.Mixed], default: undefined },
+    charlsonComorbidities: { type: [String], default: undefined },
+    biomarkers_values: { type: Schema.Types.Mixed, default: undefined },
+  },
+  pharmacology_data: {
+    treatment_status: { type: String, enum: ['NAIVE', 'TREATED', 'ON_TREATMENT', 'WASHOUT', ''], default: '' },
+    drug_name: { type: String, default: null },
+    atc_code: { type: String, default: null },
+    atc_level_1: { type: String, default: null },
+    last_dose_date: { type: Date },
+    // Legacy aliases kept for backward compatibility.
+    medication_name: { type: String },
+    medication_code: { type: String },
+    medication_drug_class: { type: String },
+    washout_start_date: { type: Date },
+    washout_end_date: { type: Date },
+  },
+  release_status: { type: String, enum: ['QUARANTINE', 'AVAILABLE', 'BLOCKED'], default: 'QUARANTINE' },
   status: { type: String },
   currentStatus: { type: String },
   availableQuantity: { type: Number },
@@ -83,11 +121,12 @@ class SampleModel {
 
   static validate(data) {
     const errors = [];
+    const resolvedPatientID = data.patientID || data.patientId;
 
     // RF004 - Campos obrigatórios
-    if (!data.patientID) {
+    if (!resolvedPatientID) {
       errors.push('patientID é obrigatório');
-    } else if (typeof data.patientID !== 'string' || data.patientID.length !== 8 || !/^\d{8}$/.test(data.patientID)) {
+    } else if (typeof resolvedPatientID !== 'string' || resolvedPatientID.length !== 8 || !/^\d{8}$/.test(resolvedPatientID)) {
       errors.push('patientID deve ser um ID anonimizado de 8 dígitos numéricos');
     }
 
@@ -201,6 +240,8 @@ class SampleModel {
   }
 
   static create(data) {
+    const resolvedPatientID = String(data.patientID || data.patientId || '').trim();
+
     // RF004 - Garante que registerDate seja definido
     let registerDate;
     if (data.registerDate) {
@@ -222,7 +263,8 @@ class SampleModel {
     const legacyStatus = data.currentStatus || this.mapLifecycleToLegacy(lifecycleStatus);
 
     return {
-      patientID: data.patientID,
+      patientID: resolvedPatientID || null,
+      patientId: undefined,
       patientObjectId: data.patientObjectId || null,
       sampleID: data.sampleID || null,
       sampleType: data.sampleType,
@@ -237,9 +279,48 @@ class SampleModel {
       quantity: data.quantity || null, // Float (pode ser em diferentes unidades)
       unit: data.unit || 'µL', // Unidade de medida (µL, mL, L, mg, g, kg, unidades, etc.)
       quality: data.quality !== undefined && data.quality !== null ? String(data.quality) : (data.qualityID !== undefined && data.qualityID !== null ? String(data.qualityID) : null), // Id MIABIS canônico
+      quality_score: Number.isFinite(Number(data.quality_score)) ? Number(data.quality_score) : null,
+      quality_category: data.quality_category !== undefined && data.quality_category !== null ? String(data.quality_category) : '',
       locationID: data.locationID || null,
       location: data.location || null,
       linkedProject: data.linkedProject || null,
+      sprec: data.sprec && typeof data.sprec === 'object' ? {
+        matrixType: data.sprec.matrixType || null,
+        sampleType: data.sprec.sampleType || null,
+        primaryContainer: data.sprec.primaryContainer || null,
+        preCentrifugation: data.sprec.preCentrifugation || null,
+        centrifugation: data.sprec.centrifugation || null,
+        secondCentrifugation: data.sprec.secondCentrifugation || null,
+        postCentrifugationDelay: data.sprec.postCentrifugationDelay || null,
+        longTermStorage: data.sprec.longTermStorage || null,
+      } : null,
+      merkle_root: data.merkle_root || null,
+      penalty_log: Array.isArray(data.penalty_log) ? data.penalty_log : [],
+      tcle_id: data.tcle_id || data.consentTemplateId || null,
+      consentTemplateId: data.consentTemplateId || data.tcle_id || null,
+      clinical_data: data.clinical_data && typeof data.clinical_data === 'object' ? {
+        orphaCode: data.clinical_data.orphaCode || null,
+        omimCode: data.clinical_data.omimCode || null,
+        cid: data.clinical_data.cid || null,
+        phenotypes: Array.isArray(data.clinical_data.phenotypes) ? data.clinical_data.phenotypes : [],
+        charlsonComorbidities: Array.isArray(data.clinical_data.charlsonComorbidities) ? data.clinical_data.charlsonComorbidities : [],
+        biomarkers_values: data.clinical_data.biomarkers_values && typeof data.clinical_data.biomarkers_values === 'object'
+          ? data.clinical_data.biomarkers_values
+          : {},
+      } : null,
+      pharmacology_data: data.pharmacology_data && typeof data.pharmacology_data === 'object' ? {
+        treatment_status: data.pharmacology_data.treatment_status || '',
+        drug_name: data.pharmacology_data.drug_name || data.pharmacology_data.medication_name || null,
+        atc_code: data.pharmacology_data.atc_code || data.pharmacology_data.medication_code || null,
+        atc_level_1: data.pharmacology_data.atc_level_1 || data.pharmacology_data.medication_drug_class || null,
+        medication_name: data.pharmacology_data.medication_name || data.pharmacology_data.drug_name || null,
+        medication_code: data.pharmacology_data.medication_code || data.pharmacology_data.atc_code || null,
+        medication_drug_class: data.pharmacology_data.medication_drug_class || data.pharmacology_data.atc_level_1 || null,
+        last_dose_date: data.pharmacology_data.last_dose_date ? new Date(data.pharmacology_data.last_dose_date) : null,
+        washout_start_date: data.pharmacology_data.washout_start_date ? new Date(data.pharmacology_data.washout_start_date) : null,
+        washout_end_date: data.pharmacology_data.washout_end_date ? new Date(data.pharmacology_data.washout_end_date) : null,
+      } : null,
+      release_status: data.release_status || 'QUARANTINE',
       withdrawalType: data.withdrawalType || null,
       withdrawalResponsible: data.withdrawalResponsible || null,
       sampleDestination: data.sampleDestination || null,

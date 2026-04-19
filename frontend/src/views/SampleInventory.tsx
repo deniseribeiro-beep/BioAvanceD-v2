@@ -1,38 +1,90 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import PrintQueueDashboard from '../components/PrintQueueDashboard';
-import CryoLabelPrinter from '../components/CryoLabelPrinter';
 import { SampleLabelData } from '../types/labels';
 import { Tabs, Tab } from '@radix-ui/react-tabs';
 import { DataGrid } from '@mui/x-data-grid';
-import { Box, Button, Menu, MenuItem, Modal } from '@mui/material';
+import { Box, TextField, MenuItem } from '@mui/material';
 import { useSamplesInventory } from '../hooks/samples/useSamplesInventory';
 import FreezerMapView from '../components/samples/StorageHierarchy';
+import { ShieldCheck, ShieldX } from 'lucide-react';
 
 export const SampleInventory: React.FC = () => {
-  const { printQueue, quarantined, available, allSamples, moveSample, aliquotSample, withdrawSample, checkinSample } = useSamplesInventory();
+  const { printQueue, quarantined, available, allSamples, loading, error } = useSamplesInventory();
   const [tab, setTab] = useState('print');
-  const [actionModal, setActionModal] = useState<{ type: string; sample: SampleLabelData | null }>({ type: '', sample: null });
+  const [orphaFilter, setOrphaFilter] = useState('');
+  const [qualityCategoryFilter, setQualityCategoryFilter] = useState('');
 
-  const handleAction = (type: string, sample: SampleLabelData) => {
-    setActionModal({ type, sample });
-  };
+  const filteredRows = useMemo(() => {
+    const sourceRows = tab === 'quarantine' ? quarantined : tab === 'available' ? available : allSamples;
+    return sourceRows.filter((row: any) => {
+      const orpha = String(row?.clinical_data?.orphaCode || '').toLowerCase();
+      const qualityCategory = String(row?.quality_category || '').toUpperCase();
 
-  const closeModal = () => setActionModal({ type: '', sample: null });
+      if (orphaFilter && !orpha.includes(orphaFilter.toLowerCase())) {
+        return false;
+      }
+      if (qualityCategoryFilter && qualityCategory !== qualityCategoryFilter.toUpperCase()) {
+        return false;
+      }
+      return true;
+    });
+  }, [tab, quarantined, available, allSamples, orphaFilter, qualityCategoryFilter]);
 
-  const renderActionsMenu = (sample: SampleLabelData) => (
-    <Menu>
-      <MenuItem onClick={() => handleAction('move', sample)}>Movimentar</MenuItem>
-      <MenuItem onClick={() => handleAction('aliquot', sample)}>Retirada Parcial</MenuItem>
-      <MenuItem onClick={() => handleAction('withdraw', sample)}>Retirada Integral</MenuItem>
-      <MenuItem onClick={() => handleAction('checkin', sample)}>Devolução</MenuItem>
-    </Menu>
-  );
+  const printSamples = useMemo(() => {
+    return (printQueue || []).map((item: any) => ({
+      sampleId: String(item.sampleID || item._id || ''),
+      equipmentId: String(item.locationID || ''),
+      boxId: String(item.locationID || ''),
+      coordinate: String(item.locationID || ''),
+      equipmentLabel: String(item.sampleType || ''),
+      boxLabel: String(item.release_status || ''),
+    })) as SampleLabelData[];
+  }, [printQueue]);
 
   const columns = [
-    { field: 'sampleId', headerName: 'ID', width: 120 },
-    { field: 'status', headerName: 'Status', width: 110 },
-    { field: 'location', headerName: 'Localização Atual', width: 200, valueGetter: (params: any) => `${params.row.equipmentLabel || params.row.equipmentId} / ${params.row.boxLabel || params.row.boxId} / ${params.row.coordinate}` },
-    { field: 'actions', headerName: 'Ações', width: 160, renderCell: (params: any) => renderActionsMenu(params.row) },
+    { field: 'sampleID', headerName: 'ID', width: 170, valueGetter: (params: any) => params.row.sampleID || params.row._id || '-' },
+    {
+      field: 'quality',
+      headerName: 'Qualidade',
+      width: 220,
+      valueGetter: (params: any) => `${params.row.quality_category || '-'} | Score: ${params.row.quality_score ?? '-'}`
+    },
+    {
+      field: 'integrity',
+      headerName: 'Integridade',
+      width: 140,
+      renderCell: (params: any) => {
+        const ok = Boolean(params.row.integrityOk);
+        return ok ? <ShieldCheck size={18} color="#16a34a" /> : <ShieldX size={18} color="#dc2626" />;
+      }
+    },
+    {
+      field: 'release_status',
+      headerName: 'Status de Liberação',
+      width: 220,
+      renderCell: (params: any) => {
+        const value = String(params.row.release_status || 'QUARANTINE').toUpperCase();
+        const color = value === 'AVAILABLE' ? '#16a34a' : value === 'BLOCKED' ? '#dc2626' : '#d97706';
+        return (
+          <span style={{
+            padding: '0.2rem 0.6rem',
+            borderRadius: 999,
+            backgroundColor: `${color}22`,
+            color,
+            fontWeight: 700,
+            fontSize: '0.75rem'
+          }}>
+            {value}
+          </span>
+        );
+      }
+    },
+    {
+      field: 'orphaCode',
+      headerName: 'ORPHA',
+      width: 140,
+      valueGetter: (params: any) => params.row?.clinical_data?.orphaCode || '-'
+    },
   ];
 
   return (
@@ -42,9 +94,39 @@ export const SampleInventory: React.FC = () => {
       <Tab value="available">🟢 Disponível</Tab>
       <Tab value="map">📍 Mapa de Freezers</Tab>
 
-      {tab === 'print' && <PrintQueueDashboard samples={printQueue} onPrint={() => {}} />}
-      {tab === 'quarantine' && <DataGrid rows={quarantined} columns={columns} autoHeight />}
-      {tab === 'available' && <DataGrid rows={available} columns={columns} autoHeight />}
+      {tab === 'print' && <PrintQueueDashboard samples={printSamples} onPrint={() => {}} />}
+
+      {(tab === 'quarantine' || tab === 'available') && (
+        <Box sx={{ display: 'grid', gap: 2, mb: 2 }}>
+          <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+            <TextField
+              size="small"
+              label="Filtrar por ORPHA"
+              value={orphaFilter}
+              onChange={(event) => setOrphaFilter(event.target.value)}
+            />
+            <TextField
+              size="small"
+              select
+              label="Filtrar por categoria de qualidade"
+              value={qualityCategoryFilter}
+              onChange={(event) => setQualityCategoryFilter(event.target.value)}
+              sx={{ minWidth: 220 }}
+            >
+              <MenuItem value="">Todas</MenuItem>
+              <MenuItem value="A">A</MenuItem>
+              <MenuItem value="B">B</MenuItem>
+              <MenuItem value="C">C</MenuItem>
+            </TextField>
+          </Box>
+
+          {loading ? <div>Carregando inventário...</div> : null}
+          {error ? <div style={{ color: '#dc2626' }}>{error}</div> : null}
+
+          <DataGrid rows={filteredRows} columns={columns} autoHeight getRowId={(row) => row.id || row._id || row.sampleID} />
+        </Box>
+      )}
+
       {tab === 'map' && (
         <FreezerMapView
           isOpen={true}
@@ -55,15 +137,6 @@ export const SampleInventory: React.FC = () => {
         />
       )}
 
-      <Modal open={!!actionModal.type} onClose={closeModal}>
-        <Box>
-          {/* Render modais específicos para cada ação aqui */}
-          {actionModal.type === 'move' && <div>Modal de Movimentação</div>}
-          {actionModal.type === 'aliquot' && <div>Modal de Retirada Parcial</div>}
-          {actionModal.type === 'withdraw' && <div>Modal de Retirada Integral</div>}
-          {actionModal.type === 'checkin' && <div>Modal de Devolução</div>}
-        </Box>
-      </Modal>
     </Tabs>
   );
 };

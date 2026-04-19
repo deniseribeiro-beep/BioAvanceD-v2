@@ -1,0 +1,67 @@
+# Page snapshot
+
+```yaml
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - heading "BioAvanceD" [level=1] [ref=e6]
+      - paragraph [ref=e7]: Sistema de Gerenciamento de Amostras Biológicas
+    - navigation [ref=e8]:
+      - link "Dashboard" [ref=e9] [cursor=pointer]:
+        - /url: /dashboard
+        - img [ref=e11]
+        - generic [ref=e16]: Dashboard
+      - link "Novo Atendimento (Paciente + Amostra)" [ref=e17] [cursor=pointer]:
+        - /url: /next/intake
+        - img [ref=e19]
+        - generic [ref=e23]: Novo Atendimento (Paciente + Amostra)
+      - link "Diretório de Pacientes" [ref=e24] [cursor=pointer]:
+        - /url: /patients
+        - img [ref=e26]
+        - generic [ref=e30]: Diretório de Pacientes
+      - link "Inventário de Amostras" [ref=e31] [cursor=pointer]:
+        - /url: /samples
+        - img [ref=e33]
+        - generic [ref=e35]: Inventário de Amostras
+      - link "Arquivos de Análise" [ref=e36] [cursor=pointer]:
+        - /url: /results
+        - img [ref=e38]
+        - generic [ref=e41]: Arquivos de Análise
+      - link "Gerenciamento de Instalações" [ref=e42] [cursor=pointer]:
+        - /url: /facility-management
+        - img [ref=e44]
+        - generic [ref=e47]: Gerenciamento de Instalações
+      - link "Assistente" [ref=e48] [cursor=pointer]:
+        - /url: /assistant
+        - img [ref=e50]
+        - generic [ref=e52]: Assistente
+      - link "Minha Segurança" [ref=e53] [cursor=pointer]:
+        - /url: /user/security
+        - img [ref=e55]
+        - generic [ref=e57]: Minha Segurança
+  - generic [ref=e58]:
+    - banner [ref=e59]:
+      - generic [ref=e60]:
+        - heading "BioAvanceD" [level=2] [ref=e61]
+        - generic [ref=e62]:
+          - generic [ref=e63]:
+            - img [ref=e64]
+            - generic [ref=e67]: Idioma
+            - combobox "Idioma" [ref=e68] [cursor=pointer]:
+              - option "Português (Brasil)"
+              - option "English (US)" [selected]
+              - option "Espanhol (ES)"
+          - generic [ref=e69]:
+            - img [ref=e70]
+            - generic [ref=e73]:
+              - generic [ref=e74]: qa-user
+              - generic [ref=e75]: "Acesso: Técnico"
+          - button "Novo Atendimento (Paciente + Amostra)" [ref=e76] [cursor=pointer]:
+            - img [ref=e77]
+            - text: Novo Atendimento (Paciente + Amostra)
+          - button "Logout" [ref=e81] [cursor=pointer]:
+            - img [ref=e82]
+            - text: Logout
+    - main [ref=e85]:
+      - paragraph [ref=e87]: Carregando...
+```

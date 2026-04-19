@@ -272,7 +272,7 @@ export default function SampleFilesSection({ sampleID }: SampleFilesSectionProps
             </p>
             
             <div>
-              <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 500 }}>
+              <label htmlFor="file-upload-input" style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 500 }}>
                 {t('sampleFiles.selectFile') || 'Selecionar Arquivo'} *
               </label>
               <input
@@ -280,6 +280,8 @@ export default function SampleFilesSection({ sampleID }: SampleFilesSectionProps
                 type="file"
                 onChange={handleFileSelect}
                 accept=".raw,.zip,.csv,.xls,.xlsx,.pdf,.txt"
+                aria-label={t('sampleFiles.selectFile') || 'Selecionar Arquivo'}
+                title={t('sampleFiles.selectFile') || 'Selecionar Arquivo'}
                 style={{
                   width: '100%',
                   padding: '0.5rem',

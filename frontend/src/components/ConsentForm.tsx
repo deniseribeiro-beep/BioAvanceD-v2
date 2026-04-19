@@ -7,6 +7,32 @@ import { ConsentPermission } from '../types/models';
 import { useLanguage } from '../contexts/LanguageContext';
 import './ConsentForm.css';
 
+function sanitizeTemplateHtml(rawHtml: string) {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(String(rawHtml || ''), 'text/html');
+
+  doc.querySelectorAll('script, iframe, object, embed').forEach((node) => node.remove());
+
+  doc.querySelectorAll('*').forEach((element) => {
+    const attrs = Array.from(element.attributes);
+    attrs.forEach((attr) => {
+      const attrName = String(attr.name || '').toLowerCase();
+      const attrValue = String(attr.value || '');
+
+      if (attrName.startsWith('on')) {
+        element.removeAttribute(attr.name);
+        return;
+      }
+
+      if ((attrName === 'href' || attrName === 'src') && /^\s*javascript:/i.test(attrValue)) {
+        element.removeAttribute(attr.name);
+      }
+    });
+  });
+
+  return doc.body.innerHTML;
+}
+
 interface ConsentFormProps {
   patientName: string;
   patientId: string;
@@ -113,6 +139,11 @@ export default function ConsentForm({
     return /<\/?[a-z][\s\S]*>/i.test(templateText);
   }, [templateText]);
 
+  const safeTemplateHtml = useMemo(() => {
+    if (!isHtmlContent) return '';
+    return sanitizeTemplateHtml(templateText);
+  }, [isHtmlContent, templateText]);
+
   const hasRequiredConsent = requiredPermissionKeys.length === 0
     ? false
     : requiredPermissionKeys.every((key) => responses[key] === true);
@@ -120,19 +151,22 @@ export default function ConsentForm({
   const hasDigitalSignature = signatureImageBase64.trim().length > 0;
   const canSubmit = hasRequiredConsent && hasSignature && hasDigitalSignature && !caaeError && caae.length > 0;
 
+  const getPermissionTestId = (permissionKey: string) =>
+    `consent-permission-${String(permissionKey || '').replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+
   return (
-    <div className="consent-form">
-      <div className="consent-form-header">
+    <div className="consent-form" data-testid="consent-form">
+      <div className="consent-form-header" data-testid="consent-form-header">
         <h2>{t('consent.form.header')}</h2>
-        <p>{t('consent.form.patientLabel')} <strong>{patientName}</strong></p>
-        <p>{t('patients.tableId')} <strong>{patientId}</strong></p>
+        <p data-testid="consent-form-patient-name">{t('consent.form.patientLabel')} <strong>{patientName}</strong></p>
+        <p data-testid="consent-form-patient-id">{t('patients.tableId')} <strong>{patientId}</strong></p>
       </div>
 
-      <div className="consent-form-grid">
+      <div className="consent-form-grid" data-testid="consent-form-grid">
         <Card className="consent-document">
-          <div className="consent-content" role="region" aria-label={t('consent.form.contentLabel')}>
+          <div className="consent-content" role="region" aria-label={t('consent.form.contentLabel')} data-testid="consent-form-content">
             {isHtmlContent ? (
-              <div dangerouslySetInnerHTML={{ __html: templateText }} />
+              <div dangerouslySetInnerHTML={{ __html: safeTemplateHtml }} />
             ) : (
               <pre>{templateText}</pre>
             )}
@@ -144,6 +178,7 @@ export default function ConsentForm({
             {/* Campo CAAE */}
             <Input
               label="Número do CAAE"
+              data-testid="consent-caae-input"
               value={caae}
               onChange={handleCaaeChange}
               onBlur={handleCaaeBlur}
@@ -160,6 +195,7 @@ export default function ConsentForm({
                 return (
                   <label key={permission.key} className="consent-switch">
                     <input
+                      data-testid={getPermissionTestId(permission.key)}
                       type="checkbox"
                       checked={!!responses[permission.key]}
                       onChange={() => handleToggle(permission.key)}
@@ -175,15 +211,17 @@ export default function ConsentForm({
 
             <Input
               label={t('consent.form.signatureLabel')}
+              data-testid="consent-signature-name-input"
               value={signatureName}
               onChange={(event) => setSignatureName(event.target.value)}
               placeholder={t('consent.form.signaturePlaceholder')}
             />
 
-            <div className="consent-signature-canvas">
+            <div className="consent-signature-canvas" data-testid="consent-signature-wrapper">
               <AssinaturaDigitalTCLE
                 doadorId={patientId}
                 persistirNoBackend={false}
+                testIdPrefix="consent-signature"
                 onAssinaturaConfirmada={({ assinaturaBase64 }) => {
                   setSignatureImageBase64(assinaturaBase64);
                   if (signatureName.trim().length === 0) {
@@ -194,11 +232,12 @@ export default function ConsentForm({
             </div>
 
             <div className="consent-actions">
-              <Button variant="secondary" onClick={onCancel}>
+              <Button variant="secondary" onClick={onCancel} data-testid="consent-cancel-button">
                 {t('common.cancel')}
               </Button>
               <Button
                 variant="primary"
+                data-testid="consent-submit-button"
                 onClick={() =>
                   onSubmit({
                     responses,
@@ -213,10 +252,10 @@ export default function ConsentForm({
               </Button>
             </div>
             {!hasRequiredConsent && (
-              <span className="consent-hint">{t('consent.form.hint')}</span>
+              <span className="consent-hint" data-testid="consent-required-hint">{t('consent.form.hint')}</span>
             )}
             {!hasDigitalSignature && (
-              <span className="consent-hint">Confirme a assinatura digital antes de finalizar.</span>
+              <span className="consent-hint" data-testid="consent-signature-hint">Confirme a assinatura digital antes de finalizar.</span>
             )}
           </Card>
         </div>

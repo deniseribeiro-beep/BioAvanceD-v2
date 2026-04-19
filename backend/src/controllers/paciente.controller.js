@@ -2,6 +2,7 @@ const patientService = require('../services/patient.service');
 const biomarkerObservationService = require('../services/biomarker-observation.service');
 const logService = require('../services/log.service');
 const logger = require('../utils/logger');
+const { revalidateSamplesByPatientID } = require('../services/sampleComplianceSync.service');
 const { getCollection } = require('../utils/collectionResolver');
 
 /**
@@ -353,6 +354,7 @@ class PacienteController {
       }
 
       const result = await patientService.resendConsentNotification(db, patientID);
+      await revalidateSamplesByPatientID(db, patientID);
 
       return res.status(200).json({
         success: true,
@@ -370,8 +372,8 @@ class PacienteController {
   }
 
   async atualizar(req, res) {
+    const db = req.app?.locals?.db;
     try {
-      const db = req.app.locals.db;
       if (!db) {
         return res.status(503).json({
           success: false,
@@ -397,6 +399,7 @@ class PacienteController {
       const result = await patientService.updatePatient(db, id, updatePayload, {
         neo4jDriver: req.app.locals.neo4jDriver || null
       });
+      await revalidateSamplesByPatientID(db, id);
 
       // Registra log (sanitizado)
       if (req.user) {
@@ -444,8 +447,8 @@ class PacienteController {
   }
 
   async deletar(req, res) {
+    const db = req.app?.locals?.db;
     try {
-      const db = req.app.locals.db;
       if (!db) {
         return res.status(503).json({
           success: false,

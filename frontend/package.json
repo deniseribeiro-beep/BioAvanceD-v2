@@ -34,7 +34,7 @@
     "vite": "^7.3.1"
   },
   "scripts": {
-    "dev": "vite --force",
+    "dev": "vite",
     "build": "vite build",
     "typecheck": "npm run typecheck:core",
     "typecheck:core": "tsc --noEmit -p tsconfig.typecheck-core.json",

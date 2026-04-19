@@ -11,13 +11,7 @@ router.get('/password', userSecurityController.getPasswordStatus.bind(userSecuri
 router.get('/sessions', userSecurityController.getSessions.bind(userSecurityController));
 router.get('/activities', userSecurityController.getActivities.bind(userSecurityController));
 
-router.put('/mfa', userSecurityController.updateMFA.bind(userSecurityController));
 router.put('/password', userSecurityController.updatePassword.bind(userSecurityController));
-router.put('/phone', userSecurityController.updatePhone.bind(userSecurityController));
-
-router.post('/passkey/start', userSecurityController.startPasskeyRegistration.bind(userSecurityController));
-router.post('/passkey', userSecurityController.completePasskeyRegistration.bind(userSecurityController));
-router.delete('/passkey/:id', userSecurityController.removePasskey.bind(userSecurityController));
 
 router.post('/recovery-codes', userSecurityController.generateRecoveryCodes.bind(userSecurityController));
 router.delete('/sessions/:id', userSecurityController.revokeSession.bind(userSecurityController));

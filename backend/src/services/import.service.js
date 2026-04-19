@@ -1,14 +1,17 @@
 const csv = require('csv-parser');
 const fs = require('fs');
 const path = require('path');
+const ExcelJS = require('exceljs');
 const logger = require('../utils/logger');
 const PatientModel = require('../models/Patient');
-const SampleModel = require('../models/Sample');
+const SampleModule = require('../models/Sample');
+const SampleModel = SampleModule.SampleModel || SampleModule;
 const TemperatureModel = require('../models/Temperature');
 const LocationModel = require('../models/Location');
 const fhirValidator = require('./fhir-validator.service');
 const notificationService = require('./notification.service');
 const { getCollection } = require('../utils/collectionResolver');
+const SampleGraphValidator = require('./SampleGraphValidator');
 
 /**
  * Service de Importação de Dados
@@ -16,6 +19,70 @@ const { getCollection } = require('../utils/collectionResolver');
  * Suporta: Pacientes (CSV/JSON), Amostras (CSV/JSON), Arquivos de Analise (ZIP/RAW/CSV), Temperatura (CSV/Streaming)
  */
 class ImportService {
+  normalizeImportKey(value) {
+    return String(value || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, '');
+  }
+
+  getRowValue(row = {}, aliases = []) {
+    const aliasSet = new Set((Array.isArray(aliases) ? aliases : []).map((key) => this.normalizeImportKey(key)));
+    for (const [rawKey, rawValue] of Object.entries(row || {})) {
+      const normalized = this.normalizeImportKey(rawKey);
+      if (aliasSet.has(normalized)) {
+        return rawValue;
+      }
+    }
+    return undefined;
+  }
+
+  async readSpreadsheetRows(filePath) {
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.readFile(filePath);
+    const worksheet = workbook.worksheets[0];
+    if (!worksheet) {
+      return [];
+    }
+
+    let headers = [];
+    const rows = [];
+
+    worksheet.eachRow((row, rowNumber) => {
+      const values = row.values.slice(1).map((value) => {
+        if (value === undefined || value === null) {
+          return '';
+        }
+        if (typeof value === 'object' && value.text !== undefined) {
+          return String(value.text);
+        }
+        if (value instanceof Date) {
+          return value.toISOString();
+        }
+        return String(value);
+      });
+
+      if (rowNumber === 1) {
+        headers = values;
+        return;
+      }
+
+      const rowObj = {};
+      headers.forEach((header, index) => {
+        if (String(header || '').trim()) {
+          rowObj[String(header).trim()] = values[index];
+        }
+      });
+
+      if (Object.values(rowObj).some((item) => String(item || '').trim() !== '')) {
+        rows.push(rowObj);
+      }
+    });
+
+    return rows;
+  }
+
   /**
    * Valida formato do arquivo
    */
@@ -308,6 +375,7 @@ class ImportService {
     try {
       const ext = path.extname(file.originalname).toLowerCase();
       const samplesCollection = await getCollection(db, 'samples');
+      const validator = new SampleGraphValidator(db);
       const results = { success: 0, errors: [], total: 0 };
 
       if (ext === '.json') {
@@ -326,7 +394,29 @@ class ImportService {
             }
 
             const sample = SampleModel.create(sampleData);
-            await samplesCollection.insertOne(sample);
+            const insertResult = await samplesCollection.insertOne(sample);
+            try {
+              const report = await validator.validateSampleCompliance(String(insertResult.insertedId));
+              const missingEthicsOrSprec = !sampleData.tcle_id
+                || !sampleData.sprec
+                || !sampleData.sprec.sampleType
+                || !sampleData.sprec.primaryContainer;
+              if (missingEthicsOrSprec && report?.suggestedStatus !== 'QUARANTINE') {
+                await samplesCollection.updateOne(
+                  { _id: insertResult.insertedId },
+                  { $set: { release_status: 'QUARANTINE', updatedAt: new Date() } }
+                );
+              }
+            } catch (validationError) {
+              logger.warn('[IMPORT_SERVICE] Falha ao validar compliance após importação JSON, mantendo em quarentena', {
+                sampleId: String(insertResult.insertedId),
+                error: validationError?.message || String(validationError),
+              });
+              await samplesCollection.updateOne(
+                { _id: insertResult.insertedId },
+                { $set: { release_status: 'QUARANTINE', updatedAt: new Date() } }
+              );
+            }
             results.success++;
           } catch (error) {
             results.errors.push({
@@ -336,23 +426,27 @@ class ImportService {
           }
           results.total++;
         }
-      } else if (ext === '.csv') {
+      } else if (ext === '.csv' || ext === '.xlsx') {
         // Valida cabecalhos antes de processar o arquivo inteiro
-        try {
-          await this.validateCSVStructure(file, 'samples');
-        } catch (structError) {
-          results.errors.push({ row: 0, error: structError.message });
-          return results;
+        if (ext === '.csv') {
+          try {
+            await this.validateCSVStructure(file, 'samples');
+          } catch (structError) {
+            results.errors.push({ row: 0, error: structError.message });
+            return results;
+          }
         }
 
-        const rows = [];
-        await new Promise((resolve, reject) => {
-          fs.createReadStream(file.path)
-            .pipe(csv())
-            .on('data', (row) => rows.push(row))
-            .on('end', resolve)
-            .on('error', reject);
-        });
+        const rows = ext === '.xlsx'
+          ? await this.readSpreadsheetRows(file.path)
+          : await new Promise((resolve, reject) => {
+            const dataRows = [];
+            fs.createReadStream(file.path)
+              .pipe(csv())
+              .on('data', (row) => dataRows.push(row))
+              .on('end', () => resolve(dataRows))
+              .on('error', reject);
+          });
 
         for (const row of rows) {
           try {
@@ -379,7 +473,29 @@ class ImportService {
             }
 
             const sample = SampleModel.create(sampleData);
-            await samplesCollection.insertOne(sample);
+            const insertResult = await samplesCollection.insertOne(sample);
+            try {
+              const report = await validator.validateSampleCompliance(String(insertResult.insertedId));
+              const missingEthicsOrSprec = !sampleData.tcle_id
+                || !sampleData.sprec
+                || !sampleData.sprec.sampleType
+                || !sampleData.sprec.primaryContainer;
+              if (missingEthicsOrSprec && report?.suggestedStatus !== 'QUARANTINE') {
+                await samplesCollection.updateOne(
+                  { _id: insertResult.insertedId },
+                  { $set: { release_status: 'QUARANTINE', updatedAt: new Date() } }
+                );
+              }
+            } catch (validationError) {
+              logger.warn('[IMPORT_SERVICE] Falha ao validar compliance após importação tabular, mantendo em quarentena', {
+                sampleId: String(insertResult.insertedId),
+                error: validationError?.message || String(validationError),
+              });
+              await samplesCollection.updateOne(
+                { _id: insertResult.insertedId },
+                { $set: { release_status: 'QUARANTINE', updatedAt: new Date() } }
+              );
+            }
             results.success++;
           } catch (error) {
             results.errors.push({
@@ -659,18 +775,59 @@ class ImportService {
       return parsed;
     };
 
+    const patientIDRaw = this.getRowValue(row, ['patientID', 'patientId', 'patient_id', 'idPaciente']);
+    const sampleTypeRaw = this.getRowValue(row, ['sampleType', 'tipoAmostra']);
+    const sampleOriginRaw = this.getRowValue(row, ['sampleOrigin', 'origemAmostra']);
+    const extractionRaw = this.getRowValue(row, ['extractionProtocol', 'protocoloExtracao']);
+    const barcodeRaw = this.getRowValue(row, ['barcode', 'codigoBarras']);
+    const qualityRaw = this.getRowValue(row, ['quality', 'qualidade']);
+    const qualityScoreRaw = this.getRowValue(row, ['quality_score', 'qualityScore', 'scoreQualidade']);
+    const qualityCategoryRaw = this.getRowValue(row, ['quality_category', 'qualityCategory', 'categoriaQualidade']);
+    const registrationRaw = this.getRowValue(row, ['registerDate', 'registrationDate', 'dataRegistro']);
+    const locationRaw = this.getRowValue(row, ['locationID', 'locationId']);
+    const linkedProjectRaw = this.getRowValue(row, ['linkedProject', 'projeto']);
+    const tcleRaw = this.getRowValue(row, ['tcle_id', 'consentTemplateId', 'selected_tcle']);
+    const merkleRaw = this.getRowValue(row, ['merkle_root', 'merkleRoot']);
+
+    const sprec = {
+      matrixType: normalizeString(this.getRowValue(row, ['sprec_matrix_type', 'sprecMatrixType'])),
+      sampleType: normalizeString(this.getRowValue(row, ['sprec_sample_type', 'sprecSampleType'])),
+      primaryContainer: normalizeString(this.getRowValue(row, ['sprec_primary_container', 'sprecPrimaryContainer'])),
+      preCentrifugation: normalizeString(this.getRowValue(row, ['sprec_pre_centrifugation', 'sprecPreCentrifugation'])),
+      centrifugation: normalizeString(this.getRowValue(row, ['sprec_centrifugation', 'sprecCentrifugation'])),
+      secondCentrifugation: normalizeString(this.getRowValue(row, ['sprec_second_centrifugation', 'sprecSecondCentrifugation'])),
+      postCentrifugationDelay: normalizeString(this.getRowValue(row, ['sprec_post_centrifugation_delay', 'sprecPostCentrifugationDelay'])),
+      longTermStorage: normalizeString(this.getRowValue(row, ['sprec_long_term_storage', 'sprecLongTermStorage'])),
+    };
+
+    const clinical_data = {
+      orphaCode: normalizeString(this.getRowValue(row, ['orphaCode', 'orpha', 'orpha_code'])),
+      omimCode: normalizeString(this.getRowValue(row, ['omimCode', 'omim', 'omim_code'])),
+      cid: normalizeString(this.getRowValue(row, ['cid', 'cidCode', 'diagnosisCidCode'])),
+      phenotypes: [],
+      charlsonComorbidities: [],
+      biomarkers_values: {},
+    };
+
     const sampleData = {
-      patientID: toInt(row.patientID, 'patientID'),
-      sampleType: normalizeString(row.sampleType),
-      sampleOrigin: normalizeString(row.sampleOrigin),
-      extractionProtocol: normalizeString(row.extractionProtocol),
-      barcode: toInt(row.barcode, 'barcode'),
-      registrationDate: toDate(row.registerDate, 'registerDate') || new Date(),
-      quantity: toFloat(row.quantity, 'quantity'),
-      quality: toInt(row.quality, 'quality'),
-      locationID: toInt(row.locationID, 'locationID'),
-      linkedProject: normalizeString(row.linkedProject),
-      currentStatus: normalizeString(row.currentStatus) || 'Available'
+      patientID: normalizeString(patientIDRaw),
+      sampleType: normalizeString(sampleTypeRaw),
+      sampleOrigin: normalizeString(sampleOriginRaw),
+      extractionProtocol: normalizeString(extractionRaw),
+      barcode: normalizeString(barcodeRaw),
+      registrationDate: toDate(registrationRaw, 'registerDate') || new Date(),
+      quantity: toFloat(this.getRowValue(row, ['quantity', 'volume']), 'quantity'),
+      quality: normalizeString(qualityRaw),
+      quality_score: toFloat(qualityScoreRaw, 'quality_score'),
+      quality_category: normalizeString(qualityCategoryRaw),
+      locationID: toInt(locationRaw, 'locationID'),
+      linkedProject: normalizeString(linkedProjectRaw),
+      currentStatus: normalizeString(this.getRowValue(row, ['currentStatus', 'statusAtual'])) || 'Available',
+      sprec,
+      clinical_data,
+      tcle_id: normalizeString(tcleRaw),
+      consentTemplateId: normalizeString(tcleRaw),
+      merkle_root: normalizeString(merkleRaw),
     };
 
     return { data: sampleData, parseErrors };

@@ -98,33 +98,32 @@ export const SampleLocator: React.FC<SampleLocatorProps> = () => {
   };
 
   return (
-    <div className="sample-locator">
-      <div className="sample-locator-header">
-        <div className="sample-locator-title">
+    <div className="sample-locator" data-testid="sample-locator">
+      <div className="sample-locator-header" data-testid="sample-locator-header">
+        <div className="sample-locator-title" data-testid="sample-locator-title">
           <MapPin size={24} />
-          <h3>Localizar Amostra</h3>
+          <h3>Buscar amostra</h3>
         </div>
-        <p className="sample-locator-description">
-          Encontre a localização exata de qualquer amostra no sistema de armazenagem
-        </p>
+        <p className="sample-locator-description">Busque por ID, barcode ou QR code.</p>
       </div>
 
-      <div className="sample-locator-search">
+      <div className="sample-locator-search" data-testid="sample-locator-search">
         <div className="search-input-group">
           <Search size={18} />
           <input
             ref={inputRef}
             type="text"
-            placeholder={scanMode ? 'Escaneie barcode/QR code e pressione Enter...' : 'Digite o ID, barcode ou QR code da amostra...'}
+            placeholder={scanMode ? 'Escaneie e pressione Enter...' : 'Digite ID, barcode ou QR code...'}
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
             onKeyDown={handleKeyDown}
             disabled={loading}
             className="search-input"
+            data-testid="sample-locator-input"
           />
         </div>
-        <div className="sample-locator-actions">
-          <button onClick={handleSearch} disabled={loading} className="btn-search">
+        <div className="sample-locator-actions" data-testid="sample-locator-actions">
+          <button onClick={handleSearch} disabled={loading} className="btn-search" data-testid="sample-locator-search-button">
             {loading ? (
               <>
                 <Loader size={16} className="spinner" />
@@ -143,6 +142,7 @@ export const SampleLocator: React.FC<SampleLocatorProps> = () => {
             disabled={loading}
             className={`btn-scan ${scanMode ? 'active' : ''}`}
             title="Ativar leitura por barcode/QR code"
+            data-testid="sample-locator-scan-button"
           >
             <QrCode size={16} />
             {scanMode ? 'Leitura ativa' : 'Barcode/QR'}
@@ -152,12 +152,12 @@ export const SampleLocator: React.FC<SampleLocatorProps> = () => {
 
       <p className={`sample-locator-mode ${scanMode ? 'active' : ''}`}>
         {scanMode
-          ? 'Modo de leitura ativo: mantenha o cursor no campo e escaneie o barcode ou QR code.'
-          : 'Use a pesquisa manual ou ative a leitura para receber o código direto do leitor.'}
+          ? 'Leitura ativa: escaneie no campo e pressione Enter.'
+          : 'Use busca manual ou ative a leitura.'}
       </p>
 
       {error && (
-        <div className="error-box">
+        <div className="error-box" data-testid="sample-locator-error-box">
           <AlertCircle size={20} />
           <div>
             <strong>Erro</strong>
@@ -167,23 +167,23 @@ export const SampleLocator: React.FC<SampleLocatorProps> = () => {
       )}
 
       {result && (
-        <div className="result-box">
-          <div className="result-header">
-            <h4>📍 Localização Encontrada</h4>
+        <div className="result-box" data-testid="sample-locator-result-box">
+          <div className="result-header" data-testid="sample-locator-result-header">
+            <h4>Localização encontrada</h4>
           </div>
 
-          <div className="result-content">
+          <div className="result-content" data-testid="sample-locator-result-content">
             <div className="info-row">
-              <span className="label">Amostra ID:</span>
+              <span className="label">ID</span>
               <code>{result.sampleID}</code>
             </div>
             <div className="info-row">
-              <span className="label">Código de Barras:</span>
+              <span className="label">Barcode</span>
               <code>{result.barcode}</code>
             </div>
 
             <div className="hierarchy-section">
-              <h5>Hierarquia de Armazenagem:</h5>
+              <h5>Hierarquia</h5>
               <div className="hierarchy-badges">
                 <span className="badge freezer-badge">{result.storageLocation.freezerName}</span>
                 <span className="hierarchy-arrow">→</span>
@@ -196,26 +196,27 @@ export const SampleLocator: React.FC<SampleLocatorProps> = () => {
             </div>
 
             <div className="info-row">
-              <span className="label">Caixa ID:</span>
+              <span className="label">Caixa</span>
               <code>#{result.storageLocation.boxID}</code>
             </div>
             <div className="info-row">
-              <span className="label">Dimensões:</span>
+              <span className="label">Grade</span>
               <code>
                 {result.storageLocation.dimension.rows}x{result.storageLocation.dimension.cols}
               </code>
             </div>
             <div className="info-row highlight">
-              <span className="label">Posição:</span>
+              <span className="label">Posição</span>
               <span className="position-badge">{result.storageLocation.position}</span>
             </div>
           </div>
 
-          <div className="result-actions">
+          <div className="result-actions" data-testid="sample-locator-result-actions">
             <button
               onClick={handleSearch}
               className="btn-secondary"
               disabled={releasing}
+              data-testid="sample-locator-new-search-button"
             >
               Nova Busca
             </button>
@@ -223,6 +224,7 @@ export const SampleLocator: React.FC<SampleLocatorProps> = () => {
               onClick={handleRelease}
               disabled={releasing}
               className="btn-danger"
+              data-testid="sample-locator-release-button"
             >
               {releasing ? (
                 <>

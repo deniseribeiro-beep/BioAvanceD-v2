@@ -8,9 +8,6 @@ const env = require("./src/config/env");
 
 const app = express();
 
-app.use("/api/e-consent", require("./src/routes/eConsent.js"));
-app.use("/api/intake-wizard", require("./src/interface/routes/intakeWizard.routes"));
-
 
 
 function parseTrustProxy(value) {
@@ -181,6 +178,8 @@ app.use((req, _res, next) => {
 app.use(require("./src/i18n").languageMiddleware);
 app.use(require("./src/infrastructure/middleware/audit.middleware").auditRequest);
 
+const isTest = env.NODE_ENV === "test";
+
 const globalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 1000,
@@ -200,8 +199,10 @@ const authLimiter = rateLimit({
   skipSuccessfulRequests: false,
 });
 
-app.use(globalLimiter);
-app.use("/api/auth", authLimiter);
+if (!isTest) {
+  app.use(globalLimiter);
+  app.use("/api/auth", authLimiter);
+}
 
 app.use("/api/auth", require("./src/interface/routes/auth.routes"));
 app.use("/api/orphanet", require("./src/interface/routes/orphanet.routes"));
@@ -225,7 +226,10 @@ app.use("/api/policies", require("./src/interface/routes/policy.routes"));
 app.use("/api/sensors", require("./src/interface/routes/sensor.routes"));
 app.use("/api/iot", require("./src/interface/routes/iot.routes"));
 app.use("/api/temperature", require("./src/interface/routes/temperature.routes"));
-app.use("/api", require("./src/interface/routes/consent.routes"));
+app.use("/api/incidents", require("./src/interface/routes/incident.routes"));
+app.use("/api/e-consent", require("./src/routes/eConsent.js"));
+app.use("/api/intake-wizard", require("./src/interface/routes/intakeWizard.routes"));
+app.use("/api/terminologies", require("./src/interface/routes/terminologies.routes"));
 app.use("/api/users", require("./src/interface/routes/user.routes"));
 app.use("/api/access", require("./src/interface/routes/access.routes"));
 app.use("/api/security", require("./src/interface/routes/security.routes"));
@@ -236,8 +240,6 @@ app.use("/api/import-lgpd", require("./src/interface/routes/import-lgpd.routes")
 app.use("/api/compliance", require("./src/interface/routes/compliance.routes"));
 app.use("/api/cids", require("./src/interface/routes/cid.routes"));
 
-
-app.use("/api/biomarker-requests", require("./src/routes/biomarkerRequest.routes"));
 app.use("/api/phone-codes", require("./src/interface/routes/phone-codes.routes"));
 app.use("/api/dictionary", require("./src/interface/routes/dictionary.routes"));
 

@@ -2,6 +2,8 @@ const importLGPDService = require('../../services/import-lgpd.service');
 const fhirService = require('../../services/fhir.service');
 const logger = require('../../utils/logger');
 const fs = require('fs');
+const { ObjectId } = require('mongodb');
+const { getCollection, resolveCollectionName } = require('../../utils/collectionResolver');
 
 /**
  * Worker de Importação de Amostras
@@ -35,19 +37,24 @@ class SampleWorker {
       });
 
       // Converte para FHIR e atualiza/insere
-      const samplesCollection = db.collection('amostras');
-      const recentSamples = await samplesCollection
-        .find({
-          createdAt: { $gte: new Date(startTime - 60000) }, // Último minuto
-        })
-        .sort({ createdAt: -1 })
-        .limit(results.success)
-        .toArray();
+      const samplesCollection = await getCollection(db, 'samples');
+      const samplesCollectionName = await resolveCollectionName(db, 'samples');
+      const patientsCollection = await getCollection(db, 'patients');
+      const recentSamples = Array.isArray(results.importedSampleIds) && results.importedSampleIds.length > 0
+        ? await samplesCollection
+          .find({ _id: { $in: results.importedSampleIds.map((id) => (ObjectId.isValid(id) ? new ObjectId(id) : id)) } })
+          .toArray()
+        : await samplesCollection
+          .find({
+            createdAt: { $gte: new Date(startTime - 60000) }, // fallback para legado
+          })
+          .sort({ createdAt: -1 })
+          .limit(results.success)
+          .toArray();
 
       for (const sample of recentSamples) {
         try {
           // Busca referência do paciente
-          const patientsCollection = db.collection('pacientes');
           const patient = await patientsCollection.findOne({
             patientID: sample.patientID,
           });
@@ -65,7 +72,7 @@ class SampleWorker {
           // Verifica se já existe por identifier
           const existing = await fhirService.findResourceByIdentifier(
             db,
-            'amostras',
+            samplesCollectionName,
             'http://bioavanced.local/sample-id',
             sample.sampleID || sample._id
           );

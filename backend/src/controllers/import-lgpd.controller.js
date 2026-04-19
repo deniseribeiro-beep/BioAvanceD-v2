@@ -393,6 +393,30 @@ class ImportLGPDController {
       const fileBuffer = fs.readFileSync(file.path);
       const fileHashSHA256 = crypto.createHash('sha256').update(fileBuffer).digest('hex');
 
+      if (req.user) {
+        const auditLogger = require('../utils/auditLogger');
+        auditLogger.init(db);
+        await auditLogger.log({
+          action: 'SMART_IMPORT_EXECUTION',
+          entity: 'Import',
+          resourceType: 'Import',
+          resourceId: file.originalname || null,
+          status: 'started',
+          result: 'success',
+          severity: 'info',
+          module: 'Importação',
+          message: 'Execução de importação inteligente iniciada.',
+          payload: {
+            stage: 'start',
+            fileName: file.originalname,
+            fileHashSHA256,
+            hasCustomMapping: Object.keys(mapping || {}).length > 0,
+            hasGroupFields: Object.keys(groupFields || {}).length > 0,
+          },
+          req,
+        });
+      }
+
       const results = await importLGPDService.importPatientsSmart(db, file, { mapping, groupFields });
 
       const summaryReport = {
@@ -415,6 +439,29 @@ class ImportLGPDController {
       if (req.user) {
         const auditLogger = require('../utils/auditLogger');
         auditLogger.init(db);
+        await auditLogger.log({
+          action: 'SMART_IMPORT_EXECUTION',
+          entity: 'Import',
+          resourceType: 'Import',
+          resourceId: file.originalname || null,
+          status: results.errors.length === 0 ? 'success' : 'warning',
+          result: results.errors.length === 0 ? 'success' : 'warning',
+          severity: results.errors.length === 0 ? 'info' : 'warning',
+          module: 'Importação',
+          message: results.errors.length === 0
+            ? 'Execução de importação inteligente concluída com sucesso.'
+            : 'Execução de importação inteligente concluída com inconsistências.',
+          payload: {
+            stage: 'finish',
+            fileName: file.originalname,
+            fileHashSHA256,
+            total: results.total,
+            success: results.success,
+            failures: results.errors.length,
+            summaryReportId: String(persistedSummaryReport._id),
+          },
+          req,
+        });
         await auditLogger.logImport(
           req,
           'Patient',
@@ -441,6 +488,34 @@ class ImportLGPDController {
       });
     } catch (error) {
       logger.error('Erro ao executar importação inteligente de pacientes:', error);
+
+      if (db && req.user) {
+        try {
+          const auditLogger = require('../utils/auditLogger');
+          auditLogger.init(db);
+          await auditLogger.log({
+            action: 'SMART_IMPORT_EXECUTION',
+            entity: 'Import',
+            resourceType: 'Import',
+            resourceId: req.file?.originalname || null,
+            status: 'failure',
+            result: 'error',
+            severity: 'error',
+            module: 'Importação',
+            message: 'Falha na execução de importação inteligente.',
+            payload: {
+              stage: 'failure',
+              fileName: req.file?.originalname || null,
+              error: error.message || 'Erro desconhecido',
+            },
+            error,
+            req,
+          });
+        } catch (_) {
+          // Não interrompe resposta da API se auditoria falhar.
+        }
+      }
+
       if (req.file) {
         importLGPDService.cleanupFile(req.file.path);
       }

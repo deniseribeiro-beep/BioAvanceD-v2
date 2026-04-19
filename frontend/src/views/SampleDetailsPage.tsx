@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Download } from 'lucide-react';
+import { ArrowLeft, Download, CheckCircle2, XCircle } from 'lucide-react';
 import Button from '../components/UI/Button';
 import Card from '../components/UI/Card';
 import Input from '../components/UI/Input';
@@ -14,8 +14,25 @@ import { useLanguage } from '../contexts/LanguageContext';
 import { useAuth } from '../contexts/AuthContext';
 import AnalysisUploadModal from '../components/AnalysisUploadModal';
 import { Sample } from '../types/models';
-import { resultService } from '../services/api';
+import { resultService, sampleService } from '../services/api';
 import './SamplesPage.css';
+
+type ComplianceNode = {
+  valid: boolean;
+  reason?: string;
+};
+
+type ComplianceReport = {
+  sampleId: string;
+  isReleasable: boolean;
+  graphPath: {
+    ethics: ComplianceNode;
+    quality: ComplianceNode;
+    clinical: ComplianceNode;
+    integrity: ComplianceNode;
+  };
+  suggestedStatus: 'AVAILABLE' | 'BLOCKED' | 'QUARANTINE';
+};
 
 export default function SampleDetailsPage() {
   const navigate = useNavigate();
@@ -30,6 +47,9 @@ export default function SampleDetailsPage() {
   const [isEditing, setIsEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [complianceReport, setComplianceReport] = useState<ComplianceReport | null>(null);
+  const [complianceLoading, setComplianceLoading] = useState(false);
+  const [complianceError, setComplianceError] = useState<string | null>(null);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [form, setForm] = useState({
     locationID: '',
@@ -125,6 +145,42 @@ export default function SampleDetailsPage() {
     }
   }, [samples, id, loading]);
 
+  useEffect(() => {
+    const targetId = sample?._id || sample?.sampleID || id;
+    if (!targetId) {
+      setComplianceReport(null);
+      return;
+    }
+
+    let active = true;
+    const loadComplianceGraph = async () => {
+      setComplianceLoading(true);
+      setComplianceError(null);
+      try {
+        const response = await sampleService.getComplianceGraph(String(targetId));
+        const nextData = response?.data?.data || response?.data || null;
+        if (active) {
+          setComplianceReport(nextData);
+        }
+      } catch (error: any) {
+        if (active) {
+          setComplianceReport(null);
+          setComplianceError(error?.response?.data?.message || error?.message || 'Erro ao carregar grafo de conformidade');
+        }
+      } finally {
+        if (active) {
+          setComplianceLoading(false);
+        }
+      }
+    };
+
+    void loadComplianceGraph();
+
+    return () => {
+      active = false;
+    };
+  }, [sample?._id, sample?.sampleID, id]);
+
   const getLocationInfo = (locationID?: number): { summary: string; details: string } => {
     if (locationID === undefined || locationID === null) {
       return {
@@ -184,10 +240,12 @@ export default function SampleDetailsPage() {
     }
     return [
       { value: '', label: 'Sem armazenagem atribuída' },
-      ...locations.map(loc => ({
-        value: loc.locationID,
-        label: `${loc.locationID} - Bloco ${loc.block} / Prat. ${loc.rack} / Gav. ${loc.drawer} / Caixa ${loc.box}`,
-      })),
+      ...locations
+        .filter(loc => loc.locationID != null)
+        .map(loc => ({
+          value: String(loc.locationID),
+          label: `${loc.locationID} - Bloco ${loc.block} / Prat. ${loc.rack} / Gav. ${loc.drawer} / Caixa ${loc.box}`,
+        })),
     ];
   }, [locations, t]);
 
@@ -328,9 +386,10 @@ export default function SampleDetailsPage() {
       return;
     }
 
+    const locationIdNum = form.locationID && form.locationID !== '' ? Number(form.locationID) : undefined;
     const payload: Partial<Sample> = {
       linkedProject: form.linkedProject?.trim() || undefined,
-      locationID: form.locationID ? Number(form.locationID) : undefined,
+      locationID: Number.isFinite(locationIdNum) ? locationIdNum : undefined,
       currentStatus: (form.currentStatus as Sample['currentStatus']) || undefined,
       sampleOrigin: form.sampleOrigin?.trim() || undefined,
       extractionProtocol: form.extractionProtocol?.trim() || undefined,
@@ -373,7 +432,7 @@ export default function SampleDetailsPage() {
     <div className="page">
       <div className="page-header">
         <div>
-          <h1 className="page-title">
+          <h1 className="page-title" data-testid="sample-detail-page-title">
             Detalhes da Amostra - {sample.barcode || sample.sampleID || 'N/A'}
           </h1>
 
@@ -384,15 +443,16 @@ export default function SampleDetailsPage() {
                   <Button
                     variant="primary"
                     onClick={() => setIsEditing(true)}
+                    data-testid="sample-detail-edit-button"
                     style={{ padding: '0.25rem 0.5rem', fontSize: '0.85rem' }}
                   >
                     {t('common.edit') || 'Editar'}
                   </Button>
                 )}
-                <Button variant="secondary" onClick={() => navigate(`/samples/${id}/chain`)} style={{ padding: '0.25rem 0.5rem', fontSize: '0.85rem' }}>
+                <Button variant="secondary" onClick={() => navigate(`/samples/${id}/chain`)} style={{ padding: '0.25rem 0.5rem', fontSize: '0.85rem' }} data-testid="sample-detail-chain-button">
                   {t('samples.chain') || 'Cadeia de Custódia'}
                 </Button>
-                <Button variant="secondary" onClick={() => navigate('/samples')} style={{ padding: '0.25rem 0.5rem', fontSize: '0.85rem' }}>
+                <Button variant="secondary" onClick={() => navigate('/samples')} style={{ padding: '0.25rem 0.5rem', fontSize: '0.85rem' }} data-testid="sample-detail-back-button-2">
                   <ArrowLeft size={18} style={{ marginRight: '0.5rem' }} />
                   {t('common.back') || 'Voltar'}
                 </Button>
@@ -402,6 +462,7 @@ export default function SampleDetailsPage() {
                 <Button
                   variant="primary"
                   onClick={handleUpdate}
+                  data-testid="sample-detail-save-button"
                   disabled={saving}
                   style={{ padding: '0.25rem 0.5rem', fontSize: '0.85rem' }}
                 >
@@ -410,6 +471,7 @@ export default function SampleDetailsPage() {
               <Button
                   variant="secondary"
                   onClick={handleCancel}
+                  data-testid="sample-detail-cancel-button"
                   disabled={saving}
                   style={{ padding: '0.25rem 0.5rem', fontSize: '0.85rem' }}
                 >
@@ -427,6 +489,74 @@ export default function SampleDetailsPage() {
       </div>
 
       <div style={{ display: 'grid', gap: '1.5rem' }}>
+        <Card>
+          <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '0.75rem', color: 'var(--text)' }}>
+            Grafo de Governança
+          </h3>
+
+          {complianceLoading ? (
+            <p style={{ color: 'var(--text-light)' }}>Validando conformidade da amostra...</p>
+          ) : complianceError ? (
+            <p style={{ color: 'var(--danger)' }}>{complianceError}</p>
+          ) : complianceReport ? (
+            <>
+              <div style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.5rem',
+                marginBottom: '0.75rem',
+                padding: '0.4rem 0.75rem',
+                borderRadius: '999px',
+                backgroundColor: complianceReport.isReleasable ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.12)',
+                color: complianceReport.isReleasable ? '#047857' : '#b91c1c',
+                fontWeight: 700,
+                fontSize: '0.85rem'
+              }}>
+                {complianceReport.isReleasable ? <CheckCircle2 size={16} /> : <XCircle size={16} />}
+                {complianceReport.isReleasable ? 'Amostra liberável' : 'Amostra bloqueada para liberação'}
+              </div>
+
+              <div style={{ display: 'grid', gap: '0.6rem' }}>
+                {[
+                  { key: 'ethics', label: 'Ética', data: complianceReport.graphPath.ethics },
+                  { key: 'quality', label: 'Qualidade', data: complianceReport.graphPath.quality },
+                  { key: 'clinical', label: 'Clínica', data: complianceReport.graphPath.clinical },
+                  { key: 'integrity', label: 'Integridade', data: complianceReport.graphPath.integrity },
+                ].map((node) => (
+                  <div
+                    key={node.key}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      justifyContent: 'space-between',
+                      gap: '0.75rem',
+                      padding: '0.65rem 0.75rem',
+                      borderRadius: '8px',
+                      backgroundColor: node.data?.valid ? 'rgba(16, 185, 129, 0.08)' : 'rgba(239, 68, 68, 0.08)',
+                    }}
+                  >
+                    <div>
+                      <div style={{ fontWeight: 700, color: 'var(--text)' }}>{node.label}</div>
+                      <div style={{ fontSize: '0.85rem', color: 'var(--text-light)' }}>
+                        {node.data?.reason || 'Sem detalhes'}
+                      </div>
+                    </div>
+                    <div style={{ color: node.data?.valid ? '#16a34a' : '#dc2626', marginTop: '0.1rem' }}>
+                      {node.data?.valid ? <CheckCircle2 size={18} /> : <XCircle size={18} />}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div style={{ marginTop: '0.75rem', fontSize: '0.85rem', color: 'var(--text-light)' }}>
+                release_status sugerido: <strong style={{ color: 'var(--text)' }}>{complianceReport.suggestedStatus}</strong>
+              </div>
+            </>
+          ) : (
+            <p style={{ color: 'var(--text-light)' }}>Sem relatório de conformidade disponível.</p>
+          )}
+        </Card>
+
         {/* Informações Básicas */}
         <Card>
           <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '0.75rem', color: 'var(--text)' }}>

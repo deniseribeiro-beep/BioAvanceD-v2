@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Policy } from '../types/models';
 import { policyService } from '../services/api';
+import { notifyDashboardDataChanged } from '../utils/dashboardRefresh';
 import { onClientLogout } from '../utils/sessionCleanup';
 
 export function usePolicies() {
@@ -52,6 +53,7 @@ export function usePolicies() {
     try {
       const response = await policyService.create(data);
       setPolicies([...policies, response.data]);
+      notifyDashboardDataChanged();
       return response.data;
     } catch (err: any) {
       throw new Error(err.message || 'Erro ao criar política');
@@ -62,6 +64,7 @@ export function usePolicies() {
     try {
       const response = await policyService.update(id, data);
       setPolicies(policies.map((p) => (p.policyID === id ? response.data : p)));
+      notifyDashboardDataChanged();
       return response.data;
     } catch (err: any) {
       throw new Error(err.message || 'Erro ao atualizar política');
@@ -72,6 +75,7 @@ export function usePolicies() {
     try {
       await policyService.delete(id);
       setPolicies(policies.filter((p) => p.policyID !== id));
+      notifyDashboardDataChanged();
     } catch (err: any) {
       throw new Error(err.message || 'Erro ao deletar política');
     }

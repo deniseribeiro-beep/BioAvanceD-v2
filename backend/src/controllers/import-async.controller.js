@@ -231,6 +231,14 @@ class ImportAsyncController {
     }
   }
 
+  async createSampleImportJob(req, res) {
+    req.body = {
+      ...(req.body || {}),
+      dataType: 'samples'
+    };
+    return this.createImportJob(req, res);
+  }
+
   /**
    * Obtém status do job
    */

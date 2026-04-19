@@ -1,0 +1,30 @@
+{
+  "sistema": "SPREC",
+  "fonte": "seed-sprec-v1",
+  "axes": [
+    {
+      "axis": "SAMPLE_TYPE",
+      "code": "BLD",
+      "label": "Sangue total",
+      "descricao": "Amostra de sangue total"
+    },
+    {
+      "axis": "PRIMARY_CONTAINER",
+      "code": "EDT",
+      "label": "Tubo EDTA",
+      "descricao": "Coleta em tubo com anticoagulante EDTA"
+    },
+    {
+      "axis": "PRE_CENTRIFUGATION",
+      "code": "A",
+      "label": "Ambiente ate 2h",
+      "descricao": "Processamento em temperatura ambiente com atraso maximo de 2 horas"
+    },
+    {
+      "axis": "LONG_TERM_STORAGE",
+      "code": "LN2",
+      "label": "Nitrogenio liquido",
+      "descricao": "Armazenamento de longo prazo em nitrogenio liquido"
+    }
+  ]
+}

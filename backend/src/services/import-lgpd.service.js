@@ -7,13 +7,17 @@ const PatientModel = require('../models/Patient');
 const SampleModel = require('../models/Sample');
 const patientService = require('./patient.service');
 const notificationService = require('./notification.service');
-const { generateUniquePatientID, validatePatientID, sanitizePatientForLogs } = require('../utils/patientAnonymization');
+const { generateUniquePatientID } = require('../utils/patientAnonymization');
 const { getCollection } = require('../utils/collectionResolver');
 const {
   SPECIMEN_TYPES,
   SAMPLE_ORIGINS,
   EXTRACTION_PROTOCOLS,
 } = require('../config/constants/specimen.constants');
+const SampleGraphValidator = require('./SampleGraphValidator');
+const DrugService = require('./DrugService');
+const patientIdentityService = require('./PatientIdentityService');
+const { generateSampleHash } = require('./MerkleService');
 
 /**
  * Service de Importação LGPD
@@ -691,32 +695,43 @@ class ImportLGPDService {
     const results = {
       total: 0,
       success: 0,
-      errors: []
+      errors: [],
+      importedSampleIds: []
     };
 
     try {
       const rows = await this.readFile(file.path, file.originalname, 'samples');
       const samplesCollection = await getCollection(db, 'samples');
+      const patientsCollection = await getCollection(db, 'patients');
+      const validator = new SampleGraphValidator(db);
+      const drugService = new DrugService(db);
 
-      // Campos obrigatórios para amostras (incluindo patientID)
-      const requiredFields = ['patientID', 'sampleType', 'sampleOrigin'];
-      
+      // Campos obrigatórios para amostras.
+      const requiredFields = ['sampleType', 'sampleOrigin'];
+
       // Valida headers
       if (rows.length > 0) {
         const headers = Object.keys(rows[0]);
         const missingFields = requiredFields.filter(field => !headers.includes(field));
+        const hasPatientIdHeader = headers.includes('patientID') || headers.includes('patientId') || headers.includes('patient_id');
+        const hasPatientNameHeader = headers.includes('patientName') || headers.includes('nomePaciente') || headers.includes('nome');
+        const hasBirthDateHeader = headers.includes('birthDate') || headers.includes('dataNascimento') || headers.includes('patientBirthDate');
         if (missingFields.length > 0) {
           throw new Error(`Campos obrigatórios ausentes: ${missingFields.join(', ')}`);
+        }
+        if (!hasPatientIdHeader && !(hasPatientNameHeader && hasBirthDateHeader)) {
+          throw new Error('Identificação do paciente ausente: informe patientID ou as colunas patientName + birthDate.');
         }
       }
 
       for (let i = 0; i < rows.length; i++) {
         const row = rows[i];
         const rowNumber = i + 2; // +2 porque linha 1 é header e arrays começam em 0
+        let sampleData = null;
 
         try {
           // Parse dos dados do CSV/Excel
-          const sampleData = this.parseSampleRow(row);
+          sampleData = this.parseSampleRow(row);
 
           if (!sampleData.sampleType && groupFields?.sampleType) {
             sampleData.sampleType = String(groupFields.sampleType).trim();
@@ -728,11 +743,28 @@ class ImportLGPDService {
             sampleData.extractionProtocol = String(groupFields.extractionProtocol).trim();
           }
 
-          // VALIDA ID DE PACIENTE (LGPD)
+          const matchedPatient = await patientIdentityService.matchOrUpsertPatient(db, {
+            patientID: sampleData.patientID,
+            patientName: sampleData.patientName,
+            birthDate: sampleData.patientBirthDate,
+            email: sampleData.patientEmail,
+            sex: sampleData.patientSex,
+            cpf: sampleData.patientCpf,
+            isDeceased: sampleData.patientIsDeceased,
+            representativeName: sampleData.representativeName,
+            representativeEmail: sampleData.representativeEmail,
+            representativeCpf: sampleData.representativeCpf,
+            status: 'ACTIVE',
+          });
+
+          sampleData.patientID = String(matchedPatient?.patient?.patientID || '').trim();
+          sampleData.patientObjectId = matchedPatient?.patient?._id || null;
+          sampleData.patientName = sampleData.patientName || matchedPatient?.patient?.patientName || null;
+
           if (!sampleData.patientID) {
             results.errors.push({
               row: rowNumber,
-              errors: ['ID de paciente é obrigatório'],
+              errors: ['Nao foi possivel resolver a identidade do paciente para a amostra'],
               data: { patientID: null }
             });
             continue;
@@ -749,15 +781,39 @@ class ImportLGPDService {
             continue;
           }
 
-          // Valida se o ID existe (sem expor dados sensíveis)
-          const patientExists = await validatePatientID(db, patientIDStr);
-          if (!patientExists) {
+          // Resolve/valida ATC por código ou nome do fármaco.
+          const pharmacology = sampleData.pharmacology_data && typeof sampleData.pharmacology_data === 'object'
+            ? sampleData.pharmacology_data
+            : {};
+          const treatmentStatus = String(pharmacology.treatment_status || '').trim().toUpperCase();
+          const isTreated = treatmentStatus === 'TREATED' || treatmentStatus === 'ON_TREATMENT';
+          const currentAtcCode = String(pharmacology.atc_code || '').trim().replace(/^ATC:/i, '').toUpperCase();
+          const currentDrugName = String(pharmacology.drug_name || '').trim();
+
+          if (currentAtcCode && !/^[A-Z]\d{2}[A-Z]{0,2}\d{0,2}$/.test(currentAtcCode)) {
             results.errors.push({
               row: rowNumber,
-              errors: [`ID de paciente ${patientIDStr} não encontrado no sistema`],
+              errors: [`atc_code inválido: ${currentAtcCode}`],
               data: { patientID: patientIDStr }
             });
             continue;
+          }
+
+          if (isTreated && !currentAtcCode && currentDrugName) {
+            const drugCandidates = await drugService.searchAndCacheDrug(currentDrugName, { limit: 5 });
+            const selectedDrug = Array.isArray(drugCandidates) && drugCandidates.length > 0 ? drugCandidates[0] : null;
+            if (selectedDrug) {
+              sampleData.pharmacology_data = {
+                ...pharmacology,
+                drug_name: String(selectedDrug.generic_name || selectedDrug.name || currentDrugName).trim(),
+                atc_code: String(selectedDrug.atc_code || '').trim().replace(/^ATC:/i, '').toUpperCase(),
+                atc_level_1: String(selectedDrug.atc_level_1 || '').trim().toUpperCase(),
+                medication_name: String(selectedDrug.generic_name || selectedDrug.name || currentDrugName).trim(),
+                medication_code: String(selectedDrug.atc_code || '').trim().replace(/^ATC:/i, '').toUpperCase(),
+                medication_drug_class: String(selectedDrug.drug_class || selectedDrug.atc_level_1 || '').trim(),
+                drug_class: String(selectedDrug.drug_class || '').trim(),
+              };
+            }
           }
 
           // Valida quality MIABIS antes da validação geral
@@ -871,9 +927,50 @@ class ImportLGPDService {
 
           // Cria amostra
           const sample = SampleModel.create(sampleData);
+          sample.patientName = sampleData.patientName || matchedPatient?.patient?.patientName || null;
+          sample.patient_name_confirmed = sample.patientName;
+          sample.patientObjectId = sampleData.patientObjectId || null;
+          sample.merkle_root = generateSampleHash(sample);
           
           // Insere no banco
-          await samplesCollection.insertOne(sample);
+          const insertResult = await samplesCollection.insertOne(sample);
+          results.importedSampleIds.push(insertResult.insertedId);
+
+          const hasMissingEthicsOrSprec = !sampleData.tcle_id
+            || !sampleData.sprec
+            || !sampleData.sprec.sampleType
+            || !sampleData.sprec.primaryContainer;
+
+          try {
+            await validator.validateSampleCompliance(String(insertResult.insertedId));
+          } catch (validationError) {
+            logger.warn('[IMPORT_LGPD] Falha no SampleGraphValidator durante importação', {
+              sampleId: String(insertResult.insertedId),
+              row: rowNumber,
+              error: validationError?.message || String(validationError),
+            });
+          }
+
+          if (hasMissingEthicsOrSprec) {
+            await samplesCollection.updateOne(
+              { _id: insertResult.insertedId },
+              { $set: { release_status: 'QUARANTINE', updatedAt: new Date() } }
+            );
+          }
+
+          await patientsCollection.updateOne(
+            { _id: matchedPatient.patient._id },
+            {
+              $set: {
+                patientName: sample.patientName || matchedPatient.patient.patientName,
+                updatedAt: new Date(),
+                lastClinicalData: sample.clinical_data || {},
+              },
+              $addToSet: {
+                linkedSampleIds: String(insertResult.insertedId),
+              },
+            }
+          );
           
           results.success++;
           
@@ -894,7 +991,8 @@ class ImportLGPDService {
       return {
         total: results.total,
         success: results.success,
-        errors: results.errors
+        errors: results.errors,
+        importedSampleIds: results.importedSampleIds
       };
 
     } catch (error) {
@@ -1091,8 +1189,56 @@ class ImportLGPDService {
       registerDate = new Date(); // Padrão: hoje
     }
 
+    const tcleId = row.tcle_id || row.consentTemplateId || row.selected_tcle || null;
+    const sprec = {
+      matrixType: row.sprec_matrix_type || row.sprecMatrixType || null,
+      sampleType: row.sprec_sample_type || row.sprecSampleType || row.sprecSampleTypeCode || null,
+      primaryContainer: row.sprec_primary_container || row.sprecPrimaryContainer || null,
+      preCentrifugation: row.sprec_pre_centrifugation || row.sprecPreCentrifugation || null,
+      centrifugation: row.sprec_centrifugation || row.sprecCentrifugation || null,
+      secondCentrifugation: row.sprec_second_centrifugation || row.sprecSecondCentrifugation || null,
+      postCentrifugationDelay: row.sprec_post_centrifugation_delay || row.sprecPostCentrifugationDelay || null,
+      longTermStorage: row.sprec_long_term_storage || row.sprecLongTermStorage || null,
+    };
+
+    const clinicalData = {
+      orphaCode: row.orphaCode || row.orpha || row.orpha_code || null,
+      omimCode: row.omimCode || row.omim || row.omim_code || null,
+      cid: row.cid || row.cidCode || row.diagnosisCidCode || null,
+      phenotypes: [],
+      charlsonComorbidities: [],
+      biomarkers_values: {},
+    };
+
+    const treatmentStatus = String(row.treatment_status || row.treatmentStatus || '').trim().toUpperCase();
+    const atcCode = String(row.atc_code || row.medication_code || row.medicationCode || '').trim().replace(/^ATC:/i, '').toUpperCase();
+    const medicationName = String(row.drug_name || row.medication_name || row.medicationName || '').trim();
+    const atcLevel1 = String(row.atc_level_1 || row.medication_drug_class || row.medicationDrugClass || '').trim().toUpperCase() || (atcCode ? atcCode.charAt(0) : '');
+
+    const pharmacologyData = {
+      treatment_status: ['NAIVE', 'TREATED', 'ON_TREATMENT', 'WASHOUT'].includes(treatmentStatus) ? treatmentStatus : '',
+      drug_name: medicationName || null,
+      atc_code: atcCode || null,
+      atc_level_1: atcLevel1 || null,
+      medication_name: medicationName || null,
+      medication_code: atcCode || null,
+      medication_drug_class: atcLevel1 || null,
+      last_dose_date: row.last_dose_date || row.lastDoseDate || null,
+      washout_start_date: row.washout_start_date || row.washoutStartDate || null,
+      washout_end_date: row.washout_end_date || row.washoutEndDate || null,
+    };
+
     return {
       patientID: row.patientID?.trim() || row.patientId?.trim() || row.patient_id?.trim() || null, // Aceita patientID, patientId ou patient_id
+      patientName: row.patientName?.trim() || row.nomePaciente?.trim() || row.nome?.trim() || null,
+      patientBirthDate: this.parseBirthDate(row.birthDate || row.dataNascimento || row.patientBirthDate),
+      patientEmail: row.email ? String(row.email).trim().toLowerCase() : null,
+      patientSex: this.parseSex(row.sex || row.gender || row.sexo),
+      patientCpf: row.cpf ? String(row.cpf).trim() : null,
+      patientIsDeceased: this.parseBoolean(row.isDeceased),
+      representativeName: row.representativeName?.trim() || row.responsavelNome?.trim() || null,
+      representativeEmail: row.representativeEmail ? String(row.representativeEmail).trim().toLowerCase() : null,
+      representativeCpf: row.representativeCpf ? String(row.representativeCpf).trim() : null,
       sampleType: row.sampleType?.trim() || null,
       sampleOrigin: this.normalizeCatalogValue(row.sampleOrigin, SAMPLE_ORIGINS),
       extractionProtocol: this.normalizeCatalogValue(row.extractionProtocol, EXTRACTION_PROTOCOLS),
@@ -1101,9 +1247,17 @@ class ImportLGPDService {
       registrationDate: registerDate,
       quantity: row.quantity ? parseFloat(row.quantity) : null,
       quality: parseQualityMIABIS(row.quality), // Valida e converte para id MIABIS canônico
+      quality_score: row.quality_score !== undefined && row.quality_score !== null && row.quality_score !== '' ? parseFloat(row.quality_score) : null,
+      quality_category: row.quality_category ? String(row.quality_category).trim().toUpperCase() : '',
       locationID: row.locationID || row.locationId ? parseInt(row.locationID || row.locationId) : null,
       linkedProject: row.linkedProject?.trim() || null,
-      currentStatus: row.currentStatus?.trim() || 'Available'
+      currentStatus: row.currentStatus?.trim() || 'Available',
+      tcle_id: tcleId ? String(tcleId).trim() : null,
+      consentTemplateId: tcleId ? String(tcleId).trim() : null,
+      merkle_root: row.merkle_root ? String(row.merkle_root).trim() : null,
+      sprec,
+      clinical_data: clinicalData,
+      pharmacology_data: pharmacologyData,
     };
   }
 

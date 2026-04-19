@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 // MIABIS Compliance Validator
 const { validateMiabisCompliance } = require('../../services/miabisValidator.service');
+const SampleGraphValidator = require('../../services/SampleGraphValidator');
 const { authenticate } = require('../../infrastructure/middleware/auth');
 // const { authenticate } = require('../../infrastructure/middleware/auth');
 // GET /api/samples/:id/miabis-compliance - MIABIS compliance check for a sample
@@ -15,6 +16,33 @@ router.get('/:id/miabis-compliance', authenticate, async (req, res) => {
       success: false,
       error: 'Erro ao validar compliance MIABIS',
       message: error.message
+    });
+  }
+});
+
+router.get('/:id/compliance-graph', authenticate, async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    if (!db) {
+      return res.status(503).json({
+        success: false,
+        error: 'Banco de dados não disponível'
+      });
+    }
+
+    const validator = new SampleGraphValidator(db);
+    const report = await validator.validateSampleCompliance(req.params.id);
+
+    return res.status(200).json({
+      success: true,
+      data: report,
+    });
+  } catch (error) {
+    logger.error('[SAMPLE_GRAPH_VALIDATOR] Falha ao validar amostra:', error.message);
+    return res.status(400).json({
+      success: false,
+      error: 'Erro ao validar grafo de conformidade da amostra',
+      message: error.message,
     });
   }
 });
@@ -121,7 +149,7 @@ router.post('/',
       }
 
       const sampleRepository = {
-        create: async (sampleData) => sampleService.createSample(db, sampleData),
+        create: async (sampleData, options = {}) => sampleService.createSample(db, sampleData, options),
         deleteById: async (sampleId) => {
           const samplesCollection = await getCollection(db, 'samples');
           const filter = ObjectId.isValid(sampleId)

@@ -6,8 +6,8 @@
   padding: 1.15rem;
   border-radius: 1.15rem;
   background:
-    radial-gradient(circle at top right, rgba(59, 130, 246, 0.08), transparent 26%),
-    linear-gradient(180deg, #ffffff, #f8fafc);
+    radial-gradient(circle at top right, rgba(15, 118, 110, 0.03), transparent 26%),
+    linear-gradient(180deg, #ffffff, #fbfcfd);
   border: 1px solid rgba(148, 163, 184, 0.18);
   box-shadow: 0 18px 40px rgba(15, 23, 42, 0.08);
 }
@@ -27,7 +27,7 @@
 
 .sample-locator-title svg {
   flex-shrink: 0;
-  color: #2563eb;
+  color: #334155;
 }
 
 .sample-locator-title h3 {
@@ -39,7 +39,7 @@
 
 .sample-locator-description {
   margin: 0;
-  color: rgba(51, 65, 85, 0.8);
+  color: rgba(51, 65, 85, 0.68);
   line-height: 1.55;
 }
 
@@ -64,13 +64,13 @@
   padding: 0.82rem 0.95rem;
   border-radius: 0.9rem;
   background: #ffffff;
-  border: 1px solid rgba(148, 163, 184, 0.22);
+  border: 1px solid rgba(148, 163, 184, 0.16);
   transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
 }
 
 .search-input-group:focus-within {
-  border-color: rgba(37, 99, 235, 0.55);
-  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.1);
+  border-color: rgba(15, 23, 42, 0.18);
+  box-shadow: 0 0 0 4px rgba(15, 23, 42, 0.05);
 }
 
 .search-input-group svg {
@@ -115,15 +115,15 @@
 
 .btn-search {
   min-width: 7.5rem;
-  background: rgba(255, 255, 255, 0.96);
-  color: #1d4ed8;
-  border: 1px solid rgba(37, 99, 235, 0.22);
+  background: rgba(255, 255, 255, 0.98);
+  color: #0f172a;
+  border: 1px solid rgba(15, 23, 42, 0.1);
   box-shadow: none;
 }
 
 .btn-scan {
   min-width: 9rem;
-  background: rgba(248, 250, 252, 0.96);
+  background: rgba(248, 250, 252, 0.98);
   color: #0f172a;
   border: 1px solid rgba(148, 163, 184, 0.24);
   box-shadow: none;
@@ -136,19 +136,19 @@
 }
 
 .btn-search:hover:not(:disabled) {
-  background: rgba(239, 246, 255, 0.98);
-  border-color: rgba(37, 99, 235, 0.32);
+  background: rgba(241, 245, 249, 0.98);
+  border-color: rgba(15, 23, 42, 0.14);
 }
 
 .btn-scan:hover:not(:disabled) {
   background: rgba(241, 245, 249, 0.98);
-  border-color: rgba(37, 99, 235, 0.22);
+  border-color: rgba(15, 23, 42, 0.14);
 }
 
 .btn-scan.active {
-  background: rgba(239, 246, 255, 0.98);
-  border-color: rgba(37, 99, 235, 0.32);
-  color: #1d4ed8;
+  background: rgba(241, 245, 249, 0.98);
+  border-color: rgba(15, 23, 42, 0.2);
+  color: #0f172a;
 }
 
 .btn-secondary {
@@ -176,17 +176,17 @@
   margin: 0;
   padding: 0.7rem 0.9rem;
   border-radius: 0.9rem;
-  background: rgba(248, 250, 252, 0.92);
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  color: rgba(51, 65, 85, 0.8);
+  background: rgba(250, 250, 249, 0.96);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  color: rgba(51, 65, 85, 0.72);
   font-size: 0.88rem;
   line-height: 1.45;
 }
 
 .sample-locator-mode.active {
-  background: rgba(239, 246, 255, 0.96);
-  border-color: rgba(37, 99, 235, 0.16);
-  color: #1d4ed8;
+  background: rgba(241, 245, 249, 0.96);
+  border-color: rgba(15, 23, 42, 0.14);
+  color: #0f172a;
 }
 
 .spinner {
@@ -231,14 +231,14 @@
   gap: 0;
   overflow: hidden;
   border-radius: 1rem;
-  border: 1px solid rgba(148, 163, 184, 0.18);
+  border: 1px solid rgba(148, 163, 184, 0.14);
   background: #ffffff;
   box-shadow: 0 18px 36px rgba(15, 23, 42, 0.08);
 }
 
 .result-header {
   padding: 1rem 1.1rem;
-  background: linear-gradient(135deg, rgba(37, 99, 235, 0.96), rgba(15, 23, 42, 0.96));
+  background: linear-gradient(135deg, rgba(15, 23, 42, 0.94), rgba(15, 118, 110, 0.78));
   color: #ffffff;
 }
 
@@ -270,8 +270,8 @@
 .info-row.highlight {
   padding: 1rem;
   border-radius: 0.9rem;
-  border: 1px solid rgba(37, 99, 235, 0.18);
-  background: linear-gradient(135deg, rgba(239, 246, 255, 0.95), rgba(255, 255, 255, 0.98));
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  background: linear-gradient(135deg, rgba(250, 250, 249, 0.98), rgba(255, 255, 255, 0.99));
 }
 
 .info-row .label {
@@ -283,8 +283,8 @@
 .info-row code,
 .info-row .position-badge {
   font-family: Consolas, 'Courier New', monospace;
-  background: rgba(241, 245, 249, 0.95);
-  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: rgba(248, 250, 252, 0.98);
+  border: 1px solid rgba(148, 163, 184, 0.12);
   padding: 0.45rem 0.7rem;
   border-radius: 0.7rem;
   color: #0f172a;
@@ -292,9 +292,9 @@
 }
 
 .position-badge {
-  background: linear-gradient(135deg, #fde68a, #fbbf24);
-  border-color: rgba(245, 158, 11, 0.24);
-  color: #111827;
+  background: linear-gradient(135deg, #ffffff, #edf2f7);
+  border-color: rgba(148, 163, 184, 0.18);
+  color: #0f172a;
   font-weight: 800;
 }
 
@@ -304,8 +304,8 @@
   margin: 0.35rem 0;
   padding: 1rem;
   border-radius: 0.95rem;
-  background: rgba(248, 250, 252, 0.98);
-  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: rgba(252, 252, 251, 0.98);
+  border: 1px solid rgba(148, 163, 184, 0.12);
 }
 
 .hierarchy-section h5 {
@@ -338,23 +338,23 @@
 }
 
 .freezer-badge {
-  background: rgba(219, 234, 254, 0.95);
-  color: #1d4ed8;
+  background: rgba(248, 250, 252, 0.98);
+  color: #0f172a;
 }
 
 .shelf-badge {
-  background: rgba(243, 232, 255, 0.95);
-  color: #7c3aed;
+  background: rgba(241, 245, 249, 0.95);
+  color: #0f172a;
 }
 
 .rack-badge {
-  background: rgba(220, 252, 231, 0.95);
-  color: #15803d;
+  background: rgba(241, 245, 249, 0.95);
+  color: #0f172a;
 }
 
 .box-badge {
-  background: rgba(254, 249, 195, 0.95);
-  color: #b45309;
+  background: rgba(241, 245, 249, 0.95);
+  color: #0f172a;
 }
 
 .result-actions {
@@ -371,14 +371,14 @@
   place-items: center;
   padding: 2rem 1.25rem;
   border-radius: 1rem;
-  border: 1px dashed rgba(148, 163, 184, 0.26);
-  background: rgba(248, 250, 252, 0.9);
+  border: 1px dashed rgba(148, 163, 184, 0.18);
+  background: rgba(250, 250, 249, 0.96);
   color: rgba(51, 65, 85, 0.84);
   text-align: center;
 }
 
 .empty-state svg {
-  color: #2563eb;
+  color: #0f766e;
 }
 
 .empty-state p {

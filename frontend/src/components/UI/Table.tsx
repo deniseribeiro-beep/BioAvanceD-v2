@@ -1,4 +1,4 @@
-import { ReactNode } from 'react';
+import { ReactNode, TableHTMLAttributes } from 'react';
 import { ChevronUp, ChevronDown } from 'lucide-react';
 import './Table.css';
 
@@ -9,7 +9,7 @@ export type TableHeader = string | {
   className?: string;
 };
 
-interface TableProps {
+interface TableProps extends TableHTMLAttributes<HTMLTableElement> {
   headers?: TableHeader[];
   children: ReactNode;
   onSort?: (field: string) => void;
@@ -17,7 +17,7 @@ interface TableProps {
   sortOrder?: 'asc' | 'desc';
 }
 
-export default function Table({ headers, children, onSort, sortField, sortOrder }: TableProps) {
+export default function Table({ headers, children, onSort, sortField, sortOrder, ...props }: TableProps) {
   const handleHeaderClick = (header: TableHeader) => {
     if (typeof header === 'object' && header.sortable && header.field && onSort) {
       onSort(header.field);
@@ -39,7 +39,7 @@ export default function Table({ headers, children, onSort, sortField, sortOrder 
   if (!headers) {
     return (
       <div className="table-container">
-        <table className="table">
+        <table className="table" {...props}>
           {children}
         </table>
       </div>
@@ -49,7 +49,7 @@ export default function Table({ headers, children, onSort, sortField, sortOrder 
   // New API: render headers from prop
   return (
     <div className="table-container">
-      <table className="table">
+      <table className="table" {...props}>
         <thead>
           <tr>
             {headers.map((header, index) => {

@@ -156,6 +156,36 @@ class SampleService {
 
       const result = await samplesCollection.insertOne(sample);
 
+      const movementsCollection = await getCollection(db, 'sampleMovements');
+      const createdQuantity = Number(sample.availableQuantity ?? sample.quantity ?? 0);
+      const createMovementID = await SampleMovementModel.generateMovementID(db);
+
+      try {
+        await appendMovementWithHashChain(movementsCollection, SampleMovementModel.create({
+          movementID: createMovementID,
+          sampleID: result.insertedId.toString(),
+          barcode: sample.barcode,
+          type: 'create',
+          quantity: createdQuantity,
+          unit: sample.unit || 'µL',
+          responsible: options?.auditInfo?.userName || options?.auditInfo?.actorName || 'SYSTEM',
+          destination: sample.locationID ? `location:${sample.locationID}` : null,
+          purpose: 'sample_birth',
+          linkedProject: sample.linkedProject || null,
+          observations: options?.auditInfo?.notes || null,
+          userId: options?.auditInfo?.userId || null,
+          userName: options?.auditInfo?.userName || null,
+          userRole: options?.auditInfo?.userRole || null,
+          ipAddress: options?.auditInfo?.ipAddress || null,
+          userAgent: options?.auditInfo?.userAgent || null,
+          previousQuantity: 0,
+          newQuantity: createdQuantity
+        }));
+      } catch (ledgerError) {
+        await samplesCollection.deleteOne({ _id: result.insertedId });
+        throw new Error(`Falha ao registrar cadeia de custódia no nascimento da amostra: ${ledgerError.message || ledgerError}`);
+      }
+
       // Log sanitizado (apenas ID, sem dados sensíveis)
       logger.info('Amostra criada:', { 
         sampleID: result.insertedId,

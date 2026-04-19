@@ -291,7 +291,7 @@ export default function NewUserPage() {
       </div>
 
       {/* Formulário */}
-      <form onSubmit={handleSubmit} className="new-user-form" style={{ 
+      <form onSubmit={handleSubmit} className="new-user-form" data-testid="new-user-form" style={{ 
         backgroundColor: '#ffffff',
         borderRadius: '8px',
         padding: '2rem',
@@ -299,12 +299,14 @@ export default function NewUserPage() {
       }} noValidate={false}>
         <div className="form-grid">
           <Input
+            data-testid="new-user-name-input"
             label={t('users.name')}
             value={formData.name || ''}
             onChange={(e) => setFormData({ ...formData, name: e.target.value })}
             required
           />
           <Input
+            data-testid="new-user-email-input"
             label={t('users.email')}
             type="email"
             value={formData.email || ''}
@@ -315,6 +317,7 @@ export default function NewUserPage() {
             title="Por favor, insira um endereço de email válido (exemplo: usuario@exemplo.com)"
           />
           <Input
+            data-testid="new-user-phone-input"
             label={t('users.phone')}
             type="tel"
             value={formData.phone || ''}
@@ -323,6 +326,7 @@ export default function NewUserPage() {
             maxLength={15}
           />
           <Input
+            data-testid="new-user-institution-input"
             label={t('users.institution')}
             value={formData.institution || ''}
             onChange={(e) =>
@@ -330,6 +334,7 @@ export default function NewUserPage() {
             }
           />
           <Input
+            data-testid="new-user-username-input"
             label={t('users.username')}
             value={formData.username || ''}
             onChange={(e) =>
@@ -338,6 +343,7 @@ export default function NewUserPage() {
             required
           />
           <Input
+            data-testid="new-user-password-input"
             label={t('users.password')}
             type="password"
             value={formData.password || ''}
@@ -378,6 +384,7 @@ export default function NewUserPage() {
           <div className="form-grid-full">
             <label htmlFor={roleSelectId} className="form-label">{t('users.roleLabel')} *</label>
             <select
+              data-testid="new-user-role-select"
               id={roleSelectId}
               name="roleName"
               value={formData.roleName || 'Técnico'}
@@ -413,6 +420,7 @@ export default function NewUserPage() {
           <div className="form-grid-full">
             <label className="form-label">{t('users.status')} *</label>
             <select
+              data-testid="new-user-status-select"
               value={formData.status || 'Ativo'}
               onChange={(e) => setFormData({ ...formData, status: e.target.value })}
               className="form-select"
@@ -438,6 +446,7 @@ export default function NewUserPage() {
           </Button>
           <Button 
             type="submit"
+            data-testid="new-user-submit-button"
             disabled={isSubmitting}
           >
             {isSubmitting ? t('users.saving') : t('common.save')}

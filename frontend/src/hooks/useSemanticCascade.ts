@@ -19,6 +19,10 @@ type SuggestResponse = {
   biomarkers?: SemanticCoding[];
 };
 
+type LoadCascadeOptions = {
+  suppressErrorToast?: boolean;
+};
+
 function normalizeCoding(raw: any, fallbackSystem: string): SemanticCoding | null {
   const system = String(raw?.system || fallbackSystem || '').trim();
   const code = String(raw?.code || '').trim();
@@ -70,7 +74,7 @@ export function useSemanticCascade() {
     }
   }, []);
 
-  const loadCascadeByDisease = useCallback(async (diseaseCoding: SemanticCoding | null): Promise<SemanticCascadeState> => {
+  const loadCascadeByDisease = useCallback(async (diseaseCoding: SemanticCoding | null, options: LoadCascadeOptions = {}): Promise<SemanticCascadeState> => {
     setLastDisease(diseaseCoding || null);
     if (!diseaseCoding?.code) {
       const cleared = { disease: null, phenotypes: [], biomarkers: [] };
@@ -107,11 +111,13 @@ export function useSemanticCascade() {
     } catch {
       const errorMessage = 'Falha ao carregar sugestoes semanticas. Voce pode tentar novamente.';
       setSuggestError(errorMessage);
-      notifyApiToast({
-        message: errorMessage,
-        type: 'warning',
-        duration: 4500,
-      });
+      if (!options.suppressErrorToast) {
+        notifyApiToast({
+          message: errorMessage,
+          type: 'warning',
+          duration: 4500,
+        });
+      }
       const fallback: SemanticCascadeState = {
         disease: diseaseCoding,
         phenotypes: [],

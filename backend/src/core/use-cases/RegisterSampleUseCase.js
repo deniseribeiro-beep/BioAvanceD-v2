@@ -23,7 +23,18 @@ class RegisterSampleUseCase {
     let topologySynced = false;
     let fallbackQueued = false;
     try {
-      createdSample = await this.sampleRepository.create(sampleData);
+      const createOptions = {
+        ...(command?.options || {}),
+        auditInfo: {
+          userId: command?.actor?.userId || null,
+          userName: command?.actor?.userName || null,
+          userRole: command?.actor?.userRole || null,
+          ipAddress: command?.actor?.ipAddress || null,
+          userAgent: command?.actor?.userAgent || null
+        }
+      };
+
+      createdSample = await this.sampleRepository.create(sampleData, createOptions);
 
       const strictMode = this.resolveStrictMode(sampleData);
       const lineagePayload = this.buildLineagePayload(createdSample, sampleData, command);

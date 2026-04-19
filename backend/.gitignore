@@ -1,8 +1,36 @@
+# Dependencies
 node_modules/
+
+# Environment and secrets
 .env
+.env.*
+!.env.example
+!.env.*.example
+
+# Logs
 *.log
+logs/
+npm-debug.log*
+
+# Coverage and test output
+coverage/
+test-output.txt
+
+# Runtime uploads and temporary files
+uploads/temp/*
+!uploads/temp/.gitkeep
+
+# Generated backups / dumps
+backups/
+
+# Build/cache
+dist/
+build/
+.cache/
+
+# OS/IDE
 .DS_Store
-data/
-data-synthea/
+Thumbs.db
+
 
 

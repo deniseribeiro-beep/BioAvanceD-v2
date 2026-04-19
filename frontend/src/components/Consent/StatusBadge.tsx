@@ -8,7 +8,7 @@ interface StatusBadgeProps {
 
 const statusMap: Record<ConsentStatus, { label: string; color: string }> = {
   GRANTED: { label: 'Assinado', color: '#22c55e' },
-  REVOKED: { label: 'Revogado', color: '#ef4444' },
+  REVOKED: { label: 'Recusado', color: '#ef4444' },
   PENDING: { label: 'Pendente', color: '#f59e42' },
   EXPIRED: { label: 'Expirado', color: '#6b7280' }
 };

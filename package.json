@@ -15,7 +15,9 @@
     "docker:test:backend": "docker compose --env-file .env.docker -f docker-compose.yml -f docker-compose.test.yml run --rm backend-test",
     "docker:test:frontend": "docker compose --env-file .env.docker -f docker-compose.yml -f docker-compose.test.yml run --rm frontend-test",
     "lab:test": "npm --prefix backend run lab:test",
-    "test:browser": "vitest"
+    "test:browser": "vitest",
+    "test:browser:watch": "vitest --watch",
+    "test:browser:run": "vitest run"
   },
   "devDependencies": {
     "@istanbuljs/nyc-config-babel": "^3.0.0",

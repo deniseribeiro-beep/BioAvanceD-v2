@@ -61,54 +61,64 @@ const authenticate = async (req, res, next) => {
                                       req.path.includes('/two-factor/enable'));
       
       if (!isKeepAliveRoute && !isMFASetupRoute && !isUserSecurityMFASetup) {
-        try {
-          // Usa o banco de dados disponível em app.locals.db (conectado no server.js)
-          const db = req.app.locals.db;
-          if (db) {
-            const sessionCheck = await sessionService.verifySession(db, token);
-            
-            if (!sessionCheck.valid) {
-              // Registra sessão inválida/expirada
-              setImmediate(async () => {
-                try {
-                  const auditLogger = require('../../utils/auditLogger');
-                  auditLogger.init(db);
-                  await auditLogger.log({
-                    action: 'SESSION_EXPIRED',
-                    entity: 'Authentication',
-                    result: 'error',
-                    severity: 'warning',
-                    message: `Sessão ${sessionCheck.reason === 'session_expired' ? 'expirada' : 'inválida'}: ${req.method} ${req.path}`,
-                    req: req,
-                    module: 'Segurança'
-                  });
-                } catch (error) {
-                  // Não bloqueia se houver erro no log
-                }
-              });
-              
-              if (sessionCheck.reason === 'session_expired') {
-                return res.status(401).json({
-                  success: false,
-                  error: 'Sessão expirada por inatividade',
-                  message: 'Sua sessão expirou devido à inatividade. Faça login novamente.',
-                  sessionExpired: true
-                });
-              }
-              return res.status(401).json({
-                success: false,
-                error: 'Sessão inválida',
-                message: 'Sessão não encontrada ou inválida'
-              });
-            }
-            
-            // Atualiza última atividade
-            await sessionService.updateActivity(db, token);
-          }
-        } catch (sessionError) {
-          logger.warn('Erro ao verificar sessão (continuando com JWT):', sessionError.message);
-          // Continua mesmo se houver erro na verificação de sessão (fallback para JWT)
+        // Usa o banco de dados disponível em app.locals.db (conectado no server.js)
+        const db = req.app.locals.db;
+        if (!db) {
+          return res.status(503).json({
+            success: false,
+            error: 'Banco de dados não disponível para validar sessão',
+            message: 'Não foi possível validar a sessão no momento'
+          });
         }
+
+        const sessionCheck = await sessionService.verifySession(db, token);
+
+        if (!sessionCheck.valid) {
+          // Registra sessão inválida/expirada/revogada
+          setImmediate(async () => {
+            try {
+              const auditLogger = require('../../utils/auditLogger');
+              auditLogger.init(db);
+              await auditLogger.log({
+                action: 'SESSION_EXPIRED',
+                entity: 'Authentication',
+                result: 'error',
+                severity: 'warning',
+                message: `Sessão ${sessionCheck.reason === 'session_expired' ? 'expirada' : 'inválida'}: ${req.method} ${req.path}`,
+                req: req,
+                module: 'Segurança'
+              });
+            } catch (error) {
+              // Não bloqueia se houver erro no log
+            }
+          });
+
+          if (sessionCheck.reason === 'session_expired') {
+            return res.status(401).json({
+              success: false,
+              error: 'Sessão expirada por inatividade',
+              message: 'Sua sessão expirou devido à inatividade. Faça login novamente.',
+              sessionExpired: true
+            });
+          }
+
+          if (sessionCheck.reason === 'session_revoked') {
+            return res.status(401).json({
+              success: false,
+              error: 'Sessão revogada',
+              message: 'Esta sessão foi encerrada. Faça login novamente.'
+            });
+          }
+
+          return res.status(401).json({
+            success: false,
+            error: 'Sessão inválida',
+            message: 'Sessão não encontrada ou inválida'
+          });
+        }
+
+        // Atualiza última atividade
+        await sessionService.updateActivity(db, token);
       }
       
       // Verifica se é rota de setup MFA (permite token temporário)

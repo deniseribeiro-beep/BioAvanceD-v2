@@ -3,24 +3,20 @@ import { useSearchParams, useNavigate } from 'react-router-dom';
 import Card from '../components/UI/Card';
 import Table from '../components/UI/Table';
 import Button from '../components/UI/Button';
-import Modal from '../components/UI/Modal';
-import Input from '../components/UI/Input';
-import { Plus, Edit, Trash2, UserCog, Key, Shield, Shield as ShieldIcon, RotateCcw, XCircle } from 'lucide-react';
-import { Access } from '../types/models';
+import { Plus, Edit, Trash2, UserCog, Shield, Shield as ShieldIcon, RotateCcw, XCircle } from 'lucide-react';
 import { useUsers } from '../hooks/useUsers';
-import { useAccess } from '../hooks/useAccess';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import { userService } from '../services/api';
 import SecurityPage from './SecurityPage';
 import './SystemManagementPage.css';
 
-type TabType = 'users' | 'access' | 'security';
+type TabType = 'users' | 'security';
 
 export default function SystemManagementPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const tabParam = searchParams.get('tab') as TabType | null;
-  const validTabs: TabType[] = ['users', 'access', 'security'];
+  const validTabs: TabType[] = ['users', 'security'];
   const initialTab = (tabParam && validTabs.includes(tabParam)) ? tabParam : 'users';
   const [activeTab, setActiveTab] = useState<TabType>(initialTab);
 
@@ -32,16 +28,15 @@ export default function SystemManagementPage() {
 
   const tabs = [
     { id: 'users' as TabType, label: 'Usuários', icon: UserCog },
-    { id: 'access' as TabType, label: 'Acessos', icon: Key },
     { id: 'security' as TabType, label: 'Segurança', icon: ShieldIcon },
   ];
 
   return (
-    <div className="page">
+    <div className="page" data-testid="system-management-page">
       <div className="page-header">
         <div>
           <h1 className="page-title">Gerenciamento do Sistema</h1>
-          <p className="page-subtitle">Gerenciamento integrado de usuários, acessos e configurações de segurança</p>
+          <p className="page-subtitle">Gerenciamento integrado de usuários e configurações de segurança</p>
         </div>
       </div>
 
@@ -51,6 +46,7 @@ export default function SystemManagementPage() {
           return (
             <button
               key={tab.id}
+              data-testid={`system-tab-${tab.id}`}
               className={`system-tab ${activeTab === tab.id ? 'active' : ''}`}
               onClick={() => {
                 setActiveTab(tab.id);
@@ -66,7 +62,6 @@ export default function SystemManagementPage() {
 
       <div className="system-tab-content">
         {activeTab === 'users' && <UsersSection />}
-        {activeTab === 'access' && <AccessSection />}
         {activeTab === 'security' && <SecuritySection />}
       </div>
     </div>
@@ -115,7 +110,7 @@ function UsersSection() {
   return (
     <>
       <div className="section-header">
-        <Button onClick={() => navigate('/users/new')}>
+        <Button data-testid="new-user-button" onClick={() => navigate('/users/new')}>
           <Plus size={18} />
           {t('users.new')}
         </Button>
@@ -126,6 +121,7 @@ function UsersSection() {
 
       <Card>
         <Table
+          data-testid="users-table"
           headers={[
             t('users.name'),
             t('users.email'),
@@ -175,6 +171,7 @@ function UsersSection() {
                     {showResetButton && (
                       <button
                         type="button"
+                        data-testid={`reset-mfa-button-${userId || user.id}`}
                         onClick={async (e) => {
                           e.preventDefault();
                           e.stopPropagation();
@@ -205,6 +202,7 @@ function UsersSection() {
                     {isAdmin && userIsAdmin && user.mfaEnabled && (
                       <button
                         type="button"
+                        data-testid={`disable-mfa-button-${userId || user.id}`}
                         onClick={async (e) => {
                           e.preventDefault();
                           e.stopPropagation();
@@ -235,6 +233,7 @@ function UsersSection() {
                 <td>
                   <div className="table-actions">
                     <button
+                      data-testid={`edit-user-button-${userId || user.id}`}
                       className="action-button"
                       onClick={(e) => {
                         e.preventDefault();
@@ -246,6 +245,7 @@ function UsersSection() {
                       <Edit size={16} />
                     </button>
                     <button
+                      data-testid={`delete-user-button-${userId || user.id}`}
                       className="action-button danger"
                       onClick={async (e) => {
                         e.preventDefault();
@@ -272,119 +272,6 @@ function UsersSection() {
         </Table>
       </Card>
     </>
-  );
-}
-
-// Seção de Acessos
-function AccessSection() {
-  const { accesses, loading, error } = useAccess();
-  return (
-    <>
-      <div className="section-header">
-        <p className="form-help-text">
-          A gestão dos tipos de acesso (RBAC) agora é feita exclusivamente pelo admin via dicionário de dados. Para alterar, acesse o menu "Dicionário de Dados".
-        </p>
-      </div>
-      {loading && <p>Carregando...</p>}
-      {error && <p style={{ color: 'var(--danger)' }}>Erro: {error}</p>}
-      <Card>
-        <Table headers={['ID', 'Tipo de Relatório']}>
-          {accesses.map((access) => (
-            <tr key={access.reportID}>
-              <td>{access.reportID}</td>
-              <td>{access.reportType}</td>
-            </tr>
-          ))}
-        </Table>
-      </Card>
-    </>
-  );
-}
-
-function AccessForm({
-  access,
-  onSave,
-  onCancel,
-}: {
-  access: Access | null;
-  onSave: (data: Partial<Access>) => void;
-  onCancel: () => void;
-}) {
-  const editingAccess = access !== null;
-  
-  const [formData, setFormData] = useState<Partial<Access>>(
-    access || {
-      reportType: '',
-    }
-  );
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    
-    if (!formData.reportType || formData.reportType.trim() === '') {
-      alert('Por favor, selecione um tipo de relatório');
-      return;
-    }
-    
-    if (!validateAccessType(formData.reportType)) {
-      alert('Tipo de acesso inválido');
-      return;
-    }
-    
-    const dataToSave = editingAccess 
-      ? formData 
-      : { reportType: formData.reportType.trim() };
-    
-    onSave(dataToSave);
-  };
-
-  const validateAccessType = (description: string): boolean => {
-    const validTypes = [
-      'Relatório de Pacientes',
-      'Relatório de Amostras',
-      'Relatório de Temperatura',
-      'Relatório de Sensores',
-      'Acesso Completo',
-    ];
-    return validTypes.includes(description) || description.length > 0;
-  };
-
-  return (
-    <form onSubmit={handleSubmit} className="form">
-      <div className="form-grid">
-        <div className="form-grid-full">
-          <label className="form-label">Tipo de Relatório *</label>
-          <select
-            value={formData.reportType || ''}
-            onChange={(e) =>
-              setFormData({ ...formData, reportType: e.target.value })
-            }
-            required
-            className="form-select"
-          >
-            <option value="">Selecione um tipo...</option>
-            <option value="Relatório de Pacientes">Relatório de Pacientes</option>
-            <option value="Relatório de Amostras">Relatório de Amostras</option>
-            <option value="Relatório de Temperatura">Relatório de Temperatura</option>
-            <option value="Relatório de Sensores">Relatório de Sensores</option>
-            <option value="Acesso Completo">Acesso Completo</option>
-          </select>
-        </div>
-        {!editingAccess && (
-          <div className="form-grid-full">
-            <p className="form-help-text">
-              ℹ️ O ID será gerado automaticamente pelo sistema
-            </p>
-          </div>
-        )}
-      </div>
-      <div className="form-actions">
-        <Button type="button" variant="secondary" onClick={onCancel}>
-          Cancelar
-        </Button>
-        <Button type="submit">Salvar</Button>
-      </div>
-    </form>
   );
 }
 

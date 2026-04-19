@@ -27,13 +27,9 @@ dist-ssr
 .env
 .env.local
 .env.*.local
-
-# Backups
-backend/backups/*.json
-
-# Database
-*.db
-*.sqlite
+.env.*
+!.env.example
+!.env.*.example
 
 # OS
 Thumbs.db
@@ -41,18 +37,14 @@ Thumbs.db
 
 # Build outputs
 build
-*.exe
-*.pdf
-*.png
-!docs/**/*.pdf
-!docs/**/*.png
-
-# Uploads temporários
-backend/uploads/temp/*
-!backend/uploads/temp/.gitkeep
+coverage
 
 # Cache
 .cache
 .vite
 *.cache
+
+# Test artifacts
+playwright-report/
+test-results/
 

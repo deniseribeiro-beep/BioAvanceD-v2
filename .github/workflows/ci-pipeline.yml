@@ -1,0 +1,60 @@
+name: BioAvanceD CI/CD Pipeline
+
+# Dispara os testes sempre que houver um push ou pull request na branch 'main'
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  testes-automatizados:
+    # Levanta uma máquina virtual Linux novinha na nuvem do GitHub
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Copia o seu código do repositório para a máquina virtual
+      - name: 📥 Baixar o código (Checkout)
+        uses: actions/checkout@v4
+
+      # 2. Instala o Node.js
+      - name: ⚙️ Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20' # Substitua pela versão do Node que você usa
+
+      # 3. Testa o Backend (Isolado)
+      - name: 📦 Instalar dependências do Backend
+        run: |
+          cd backend
+          npm ci # ou yarn install / pnpm install
+
+      - name: 🧪 Rodar Testes de Backend (Vitest)
+        run: |
+          cd backend
+          npx vitest run
+
+      # 4. Testa o Frontend (Isolado)
+      - name: 📦 Instalar dependências do Frontend
+        run: |
+          cd frontend
+          npm ci # ou yarn install / pnpm install
+
+      - name: 🌐 Instalar Navegadores do Playwright
+        run: |
+          cd frontend
+          npx playwright install --with-deps
+
+      - name: 🎭 Rodar Testes E2E (Playwright)
+        run: |
+          cd frontend
+          npx playwright test
+
+      # 5. Salva o relatório do Playwright caso o teste falhe
+      - name: 📊 Salvar Relatório de Erros do Playwright
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: frontend/playwright-report/
+          retention-days: 7

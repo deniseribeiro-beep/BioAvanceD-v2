@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef, Fragment, CSSProperties } from 'react';
+import { useState, useMemo, Fragment, CSSProperties } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Card from '../components/UI/Card';
 import Table from '../components/UI/Table';
@@ -10,8 +10,9 @@ import SignaturePad from '../components/Consent/SignaturePad';
 import { Patient } from '../types/models';
 import { usePatients } from '../hooks/usePatients';
 import { useAuth } from '../contexts/AuthContext';
-import { patientService } from '../services/api';
+import { dataImportService, patientService } from '../services/api';
 import { useLanguage } from '../contexts/LanguageContext';
+import ImportResultSummary, { type ImportResultSummaryData } from '../components/ImportResultSummary';
 import './PatientsPage.css';
 
 const styles: Record<string, CSSProperties> = {
@@ -80,7 +81,7 @@ export default function PatientsPage() {
     setActivePatientId(null);
   };
 
-  const handleConfirmSignature = (dataUrl: string) => {
+  const handleConfirmSignature = (_dataUrl: string) => {
     if (!activePatientId) return;
     setConsentOverrides((prev) => ({
       ...prev,
@@ -207,6 +208,26 @@ export default function PatientsPage() {
     }
   };
 
+  const handleSendTcleLink = async (patientID: string) => {
+    const normalizedPatientID = String(patientID || '').trim();
+    if (!normalizedPatientID) {
+      alert('Paciente sem ID válido para envio de link TCLE.');
+      return;
+    }
+
+    setResendingConsentFor(normalizedPatientID);
+    try {
+      await patientService.resendConsentNotification(normalizedPatientID);
+      await loadPatients();
+      alert(t('patients.notificationsResent'));
+    } catch (err: any) {
+      const errorMsg = err.response?.data?.message || err.message || t('patients.notificationsResendError');
+      alert(errorMsg);
+    } finally {
+      setResendingConsentFor(null);
+    }
+  };
+
   const getButtonLabel = (key: string, en: string, es: string) => {
     if (language === 'en-US') return en;
     if (language === 'es-ES') return es;
@@ -224,7 +245,7 @@ export default function PatientsPage() {
   const [importedFile, setImportedFile] = useState<File | null>(null);
   const [importedJson, setImportedJson] = useState<any>(null);
   const [importLoading, setImportLoading] = useState(false);
-  const [importResult, setImportResult] = useState<{ success?: boolean; message?: string; patients?: number; samples?: number; consents?: number; error?: string } | null>(null);
+  const [importResult, setImportResult] = useState<ImportResultSummaryData | null>(null);
 
   // Estado para importação de amostras
   const [isSampleImportModalOpen, setIsSampleImportModalOpen] = useState(false);
@@ -257,24 +278,33 @@ export default function PatientsPage() {
     }
   };
 
+  function normalizeFhirImportPayload(payload: any) {
+    if (payload && typeof payload === 'object' && Array.isArray(payload.entry)) {
+      return payload;
+    }
+
+    if (Array.isArray(payload)) {
+      return payload;
+    }
+
+    if (payload && typeof payload === 'object' && payload.resourceType) {
+      return payload;
+    }
+
+    return payload;
+  }
+
   // Handler para envio do JSON (pacientes)
   const handleImportSubmit = async () => {
     if (!importedJson) return;
     setImportLoading(true);
     setImportResult(null);
     try {
-      // Anonimização básica: remove campos sensíveis extras
-      const anonymized = Array.isArray(importedJson)
-        ? importedJson.map(obj => anonymizePatient(obj))
-        : anonymizePatient(importedJson);
-      const response = await fetch('http://localhost:3000/api/import/fhir', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(anonymized)
-      });
-      const data = await response.json();
+      const payload = normalizeFhirImportPayload(importedJson);
+      const response = await dataImportService.importFhir(payload);
+      const data = response?.data || {};
       setImportResult(data);
-      if (data.success !== false && data.patients) {
+      if (data.success !== false && (data.patients !== undefined || data.samples !== undefined)) {
         alert('Importação concluída!');
         setIsImportModalOpen(false);
         setImportedFile(null);
@@ -284,8 +314,9 @@ export default function PatientsPage() {
         alert(data.message || data.error || 'Erro ao importar');
       }
     } catch (err: any) {
-      setImportResult({ success: false, error: err.message });
-      alert('Erro ao importar: ' + err.message);
+      const errorMessage = err?.response?.data?.error || err?.response?.data?.message || err?.message;
+      setImportResult({ success: false, error: errorMessage || 'Erro ao importar FHIR' });
+      alert('Erro ao importar: ' + (errorMessage || 'Erro desconhecido'));
     } finally {
       setImportLoading(false);
     }
@@ -351,18 +382,6 @@ export default function PatientsPage() {
   };
 
   // Funções de anonimização básica
-  function anonymizePatient(obj: any) {
-    const { name, birthDate, gender, cpf, recordNumber, samples, ...rest } = obj;
-    return {
-      name,
-      birthDate,
-      gender,
-      cpf,
-      recordNumber,
-      samples: Array.isArray(samples) ? samples.map(anonymizeSample) : [],
-      // outros campos permitidos podem ser adicionados aqui
-    };
-  }
   function anonymizeSample(obj: any) {
     const { sampleID, patientCpf, patientRecordNumber, type, origin, ...rest } = obj;
     return {
@@ -376,10 +395,10 @@ export default function PatientsPage() {
   }
 
   return (
-    <div className="page patients-page">
+    <div className="page patients-page" data-testid="patients-page">
       <div className="page-header">
         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-          <Button onClick={() => navigate('/dashboard')} variant="secondary" style={{ minWidth: 'auto' }}>
+          <Button data-testid="patients-back-button" onClick={() => navigate('/dashboard')} variant="secondary" style={{ minWidth: 'auto' }}>
             <ArrowLeft size={18} />
           </Button>
           <div>
@@ -389,7 +408,7 @@ export default function PatientsPage() {
         </div>
         <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center' }}>
           {canImportPatients && (
-            <Button variant="primary" onClick={() => setIsImportModalOpen(true)}>
+            <Button data-testid="patients-import-fhir-button" variant="primary" onClick={() => setIsImportModalOpen(true)}>
               Importar FHIR
             </Button>
           )}
@@ -411,16 +430,7 @@ export default function PatientsPage() {
                         Cancelar
                       </Button>
                     </div>
-                    {importResult && (
-                      <div style={{ color: importResult.success === false ? '#dc2626' : '#16a34a', fontSize: 14, marginTop: 8 }}>
-                        {importResult.message || importResult.error}
-                        {importResult.patients !== undefined && (
-                          <div>
-                            Pacientes: {importResult.patients} | Amostras: {importResult.samples} | Consents: {importResult.consents}
-                          </div>
-                        )}
-                      </div>
-                    )}
+                    <ImportResultSummary result={importResult} style={{ marginTop: 8, fontSize: 14 }} />
                   </div>
                 </Modal>
           <div style={{ 
@@ -434,6 +444,7 @@ export default function PatientsPage() {
           }}>
             <Search size={18} style={{ color: 'var(--text-light)', flexShrink: 0 }} />
             <input
+              data-testid="patients-search-input"
               type="text"
               placeholder={t('patients.searchPlaceholder')}
               value={searchTerm}
@@ -470,6 +481,7 @@ export default function PatientsPage() {
             />
             {searchTerm && (
               <button
+                data-testid="patients-clear-search-button"
                 onClick={handleClearSearch}
                 style={{
                   background: 'none',
@@ -540,6 +552,7 @@ export default function PatientsPage() {
       {!loading && displayPatients && Array.isArray(displayPatients) && displayPatients.length > 0 && (
       <Card>
         <Table
+          data-testid="patients-table"
           headers={[
             t('patients.tableId'),
             t('patients.tableConsent'),
@@ -558,7 +571,7 @@ export default function PatientsPage() {
             
             return (
               <Fragment key={`patient-fragment-${patientID}`}>
-                <tr key={`patient-row-${index}-${patientID}`}>
+                <tr key={`patient-row-${index}-${patientID}`} data-testid={`patient-row-${patientID}`}>
                   <td>{patientID}</td>
                   <td>
                     <div style={styles.consentStatusCell}>
@@ -570,6 +583,7 @@ export default function PatientsPage() {
                       <div style={styles.consentActions} className="consent-actions">
                         {canCollectSignature ? (
                           <Button
+                            data-testid={`collect-signature-button-${patientID}`}
                             variant="primary"
                             onClick={() => handleOpenSignatureModal(patientID)}
                             style={styles.consentActionButton}
@@ -580,8 +594,21 @@ export default function PatientsPage() {
                         ) : (
                           <span style={styles.consentHint}>{t('patients.signed')}</span>
                         )}
+                        <Button
+                          data-testid={`send-tcle-link-button-${patientID}`}
+                          variant="secondary"
+                          onClick={() => handleSendTcleLink(patientID)}
+                          disabled={resendingConsentFor === patientID}
+                          style={styles.consentActionButton}
+                          className="consent-action-button"
+                        >
+                          {resendingConsentFor === patientID
+                            ? getPatientsActionLabel('patients.resending', 'Resending...', 'Reenviando...')
+                            : 'Enviar Link TCLE'}
+                        </Button>
                         {isConsentPending && (
                           <Button
+                            data-testid={`resend-consent-button-${patientID}`}
                             variant="secondary"
                             onClick={async () => {
                               setResendingConsentFor(patientID);
@@ -607,13 +634,15 @@ export default function PatientsPage() {
                         )}
                         <div className="table-actions">
                           <button
+                            data-testid={`edit-patient-button-${patientID}`}
                             className="action-button"
                             onClick={() => handleEdit(patient)}
-                            title={t('common.edit')}
+                            title="Editar dados demográficos"
                           >
                             <Edit size={16} />
                           </button>
                           <button
+                            data-testid={`delete-patient-button-${patientID}`}
                             className="action-button danger"
                             onClick={() => handleDelete(patientID)}
                             title={t('common.delete')}

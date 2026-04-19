@@ -25,10 +25,9 @@ function validateRedisEnv() {
     }
   }
 
-  const host = (hostFromUrl || process.env.REDIS_HOST || '').toLowerCase();
+  const host = String(hostFromUrl || process.env.REDIS_HOST || '').toLowerCase();
   const isLocalHost = ['127.0.0.1', 'localhost', '::1'].includes(host);
 
-  // Variáveis obrigatórias
   if (!redisUrl && !process.env.REDIS_HOST) {
     errors.push('REDIS_HOST não está definido no .env');
   }
@@ -37,7 +36,7 @@ function validateRedisEnv() {
     errors.push('REDIS_PORT não está definido no .env');
   } else if (!redisUrl) {
     const port = Number(process.env.REDIS_PORT);
-    if (isNaN(port) || port <= 0 || port > 65535) {
+    if (Number.isNaN(port) || port <= 0 || port > 65535) {
       errors.push('REDIS_PORT deve ser um número válido entre 1 e 65535');
     }
   }
@@ -46,8 +45,12 @@ function validateRedisEnv() {
     errors.push('REDIS_PASSWORD não está definido no .env');
   }
 
-  // Variáveis opcionais mas recomendadas
-  // Em dev/local, não exige senha nem TLS
+  if (!redisUrl && !isLocalEnv) {
+    warnings.push('REDIS_URL não está definido; usando host/porta separados');
+  }
+
+  return { errors, warnings };
+}
 
 /**
  * Valida todas as variáveis de ambiente essenciais
@@ -56,12 +59,10 @@ function validateAllEnv() {
   const errors = [];
   const warnings = [];
 
-  // Redis
   const redisValidation = validateRedisEnv();
   errors.push(...redisValidation.errors);
   warnings.push(...redisValidation.warnings);
 
-  // MongoDB (opcional - não bloqueia se não estiver)
   if (!process.env.MONGO_URI) {
     warnings.push('MONGO_URI não está definido (algumas funcionalidades podem não funcionar)');
   }
@@ -80,29 +81,25 @@ function validateAllEnv() {
 function validateAndHalt(allowDevelopment = true) {
   const validation = validateAllEnv();
 
-  // Log de erros
   if (validation.errors.length > 0) {
     logger.error('[ERROR] Variáveis de ambiente obrigatórias não configuradas:');
-    validation.errors.forEach(error => {
+    validation.errors.forEach((error) => {
       logger.error(`  - ${error}`);
     });
 
-    // Em desenvolvimento, apenas avisa
     if (allowDevelopment && process.env.NODE_ENV === 'development') {
       logger.warn('[WARN] Modo desenvolvimento: continuando apesar dos erros');
       logger.warn('[WARN] Configure as variáveis no arquivo .env para evitar problemas');
-      return false; // Não interrompe, mas retorna false
-    } else {
-      // Em produção, interrompe
-      logger.error('[ERROR] Interrompendo inicialização devido a variáveis faltantes');
-      throw new Error(`Variáveis de ambiente obrigatórias não configuradas: ${validation.errors.join(', ')}`);
+      return false;
     }
+
+    logger.error('[ERROR] Interrompendo inicialização devido a variáveis faltantes');
+    throw new Error(`Variáveis de ambiente obrigatórias não configuradas: ${validation.errors.join(', ')}`);
   }
 
-  // Log de avisos
   if (validation.warnings.length > 0) {
     logger.warn('[WARN] Avisos de configuração:');
-    validation.warnings.forEach(warning => {
+    validation.warnings.forEach((warning) => {
       logger.warn(`  - ${warning}`);
     });
   }
@@ -121,7 +118,7 @@ function validateRedisOnly(allowDevelopment = true, silent = false) {
   if (validation.errors.length > 0) {
     if (!silent) {
       logger.error('[ERROR] Configuração Redis incorreta:');
-      validation.errors.forEach(error => {
+      validation.errors.forEach((error) => {
         logger.error(`  - ${error}`);
       });
     }
@@ -131,14 +128,14 @@ function validateRedisOnly(allowDevelopment = true, silent = false) {
         logger.warn('[WARN] Modo desenvolvimento: Redis não será inicializado');
       }
       return false;
-    } else {
-      throw new Error(`Redis configurado incorretamente: ${validation.errors.join(', ')}`);
     }
+
+    throw new Error(`Redis configurado incorretamente: ${validation.errors.join(', ')}`);
   }
 
   if (validation.warnings.length > 0 && !silent) {
     logger.warn('[WARN] Avisos de configuração Redis:');
-    validation.warnings.forEach(warning => {
+    validation.warnings.forEach((warning) => {
       logger.warn(`  - ${warning}`);
     });
   }
@@ -150,6 +147,5 @@ module.exports = {
   validateRedisEnv,
   validateAllEnv,
   validateAndHalt,
-  validateRedisOnly
-  };
-}
+  validateRedisOnly,
+};

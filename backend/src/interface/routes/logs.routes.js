@@ -5,6 +5,31 @@ const { authenticate } = require('../../infrastructure/middleware/auth');
 const logService = require('../../services/log.service');
 const logger = require('../../utils/logger');
 
+function normalizeRoleName(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase();
+}
+
+function requireAuditReader(req, res, next) {
+  const accessType = Number(req.user?.accessType || req.user?.role || 0);
+  const normalizedRoleName = normalizeRoleName(req.user?.roleName || req.user?.role);
+  const isAdmin = accessType === 4 || normalizedRoleName === 'admin' || normalizedRoleName === 'administrador';
+  const isAuditor = normalizedRoleName.includes('auditor');
+
+  if (!isAdmin && !isAuditor) {
+    return res.status(403).json({
+      success: false,
+      error: 'Acesso negado',
+      message: 'Apenas perfis Admin ou Auditor podem acessar trilhas de auditoria.'
+    });
+  }
+
+  return next();
+}
+
 function buildCsv(logs = []) {
   const headers = ['timestamp', 'userName', 'action', 'entity', 'result', 'severity', 'module', 'ipSource', 'message'];
   const escape = (value) => {
@@ -16,7 +41,7 @@ function buildCsv(logs = []) {
   return [headers.join(','), ...rows].join('\n');
 }
 
-router.get('/', authenticate, async (req, res) => {
+router.get('/', authenticate, requireAuditReader, async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
@@ -31,7 +56,7 @@ router.get('/', authenticate, async (req, res) => {
   }
 });
 
-router.get('/all', authenticate, async (req, res) => {
+router.get('/all', authenticate, requireAuditReader, async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
@@ -46,7 +71,7 @@ router.get('/all', authenticate, async (req, res) => {
   }
 });
 
-router.post('/query', authenticate, async (req, res) => {
+router.post('/query', authenticate, requireAuditReader, async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
@@ -77,7 +102,7 @@ router.post('/register', authenticate, async (req, res) => {
   }
 });
 
-router.get('/export/csv', authenticate, async (req, res) => {
+router.get('/export/csv', authenticate, requireAuditReader, async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
@@ -96,7 +121,7 @@ router.get('/export/csv', authenticate, async (req, res) => {
   }
 });
 
-router.get('/export/xlsx', authenticate, async (req, res) => {
+router.get('/export/xlsx', authenticate, requireAuditReader, async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
@@ -115,7 +140,7 @@ router.get('/export/xlsx', authenticate, async (req, res) => {
   }
 });
 
-router.get('/:id', authenticate, async (req, res) => {
+router.get('/:id', authenticate, requireAuditReader, async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {

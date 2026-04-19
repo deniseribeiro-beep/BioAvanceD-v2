@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Sensor, Temperature } from '../types/models';
 import { sensorService } from '../services/api';
+import { notifyDashboardDataChanged } from '../utils/dashboardRefresh';
 import { onClientLogout } from '../utils/sessionCleanup';
 
 export function useSensors() {
@@ -65,6 +66,7 @@ export function useSensors() {
       const responseData: any = response.data;
       const newSensor = responseData?.data || responseData;
       await loadSensors(); // Recarrega a lista completa
+      notifyDashboardDataChanged();
       return newSensor;
     } catch (err: any) {
       throw new Error(err.message || 'Erro ao criar sensor');
@@ -76,6 +78,7 @@ export function useSensors() {
       const response = await sensorService.update(id, data);
       const responseData: any = response.data;
       await loadSensors(); // Recarrega a lista completa
+      notifyDashboardDataChanged();
       return responseData?.data || responseData;
     } catch (err: any) {
       throw new Error(err.message || 'Erro ao atualizar sensor');
@@ -86,6 +89,7 @@ export function useSensors() {
     try {
       await sensorService.delete(id);
       await loadSensors(); // Recarrega a lista completa
+      notifyDashboardDataChanged();
     } catch (err: any) {
       throw new Error(err.message || 'Erro ao deletar sensor');
     }

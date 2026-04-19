@@ -60,6 +60,8 @@ class ConsentTemplateModel {
       content: (data.content || data.htmlContent).trim(),
       htmlContent: data.htmlContent ? data.htmlContent.trim() : (data.content || '').trim(),
       version: typeof data.version === 'string' && data.version.trim().length > 0 ? data.version.trim() : 'v1',
+      versionGroupId: typeof data.versionGroupId === 'string' && data.versionGroupId.trim().length > 0 ? data.versionGroupId.trim() : undefined,
+      previousTemplateId: typeof data.previousTemplateId === 'string' && data.previousTemplateId.trim().length > 0 ? data.previousTemplateId.trim() : undefined,
       caae: typeof data.caae === 'string' ? data.caae.trim() : '',
       active: data.active === undefined ? true : data.active,
       permissions: Array.isArray(data.permissions) ? data.permissions : [],
