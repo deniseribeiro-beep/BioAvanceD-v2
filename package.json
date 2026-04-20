@@ -2,12 +2,15 @@
   "scripts": {
     "audit:full": "node scripts/audit-complete-system.js",
     "seed": "node scripts/seed.js",
+    
+    "build": "vite build",
     "backend:user:check": "npm --prefix backend run user:check",
     "backend:user:create-admin": "npm --prefix backend run user:create-admin",
     "dev:up": "docker compose --env-file .env.docker -f docker-compose.yml -f docker-compose.override.yml up -d backend frontend",
     "dev:down": "docker compose --env-file .env.docker -f docker-compose.yml -f docker-compose.override.yml down",
     "dev:logs": "docker compose --env-file .env.docker -f docker-compose.yml -f docker-compose.override.yml logs -f backend frontend",
     "dev:ps": "docker compose --env-file .env.docker -f docker-compose.yml -f docker-compose.override.yml ps",
+    "dev": "vite",
     "docker:local:up": "powershell -ExecutionPolicy Bypass -File ./scripts/start-local-stack.ps1 -EnvFile .env.docker -ComposeFile docker-compose.yml -SkipMigration",
     "docker:local:up:migrate": "powershell -ExecutionPolicy Bypass -File ./scripts/start-local-stack.ps1 -EnvFile .env.docker -ComposeFile docker-compose.yml",
     "docker:local:down": "powershell -ExecutionPolicy Bypass -File ./scripts/stop-local-stack.ps1 -EnvFile .env.docker -ComposeFile docker-compose.yml",
@@ -16,6 +19,7 @@
     "docker:test:backend": "docker compose --env-file .env.docker -f docker-compose.yml -f docker-compose.test.yml run --rm backend-test",
     "docker:test:frontend": "docker compose --env-file .env.docker -f docker-compose.yml -f docker-compose.test.yml run --rm frontend-test",
     "lab:test": "npm --prefix backend run lab:test",
+    "preview": "vite preview",
     "test:browser": "vitest",
     "test:browser:watch": "vitest --watch",
     "test:browser:run": "vitest run"
