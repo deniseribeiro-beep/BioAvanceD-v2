@@ -1,11 +1,20 @@
 const SensorModel = require('../models/Sensor');
 const logger = require('../utils/logger');
+const defaultQuarantineService = require('./equipment-sensor-quarantine.service');
 
 /**
  * Service de Sensores
  * RF009 - Gerenciamento de Sensores
  */
 class SensorService {
+  constructor() {
+    this.quarantineService = defaultQuarantineService;
+  }
+
+  setQuarantineService(service) {
+    this.quarantineService = service || defaultQuarantineService;
+  }
+
   async createSensor(db, sensorData) {
     try {
       const validation = SensorModel.validate(sensorData);
@@ -84,19 +93,94 @@ class SensorService {
   async updateSensor(db, sensorId, updateData) {
     try {
       const sensorsCollection = db.collection('sensors');
-      
+      const query = { $or: [{ sensorId }, { sensorID: sensorId }, { _id: sensorId }] };
+
+      const existingSensor = await sensorsCollection.findOne(query);
+      if (!existingSensor) {
+        throw new Error('Sensor não encontrado');
+      }
+
       updateData.updatedAt = new Date();
 
-      const result = await sensorsCollection.updateOne(
-        { $or: [{ sensorId }, { sensorID: sensorId }, { _id: sensorId }] },
-        { $set: updateData }
-      );
+      const mergedStatus =
+        updateData.maintenanceStatus ??
+        updateData.status ??
+        updateData.sensorStatus ??
+        existingSensor.maintenanceStatus ??
+        existingSensor.status ??
+        existingSensor.sensorStatus;
+
+      const shouldTriggerQuarantine = this.quarantineService.isQuarantineTriggerStatus(mergedStatus);
+      const mongoClient = db?.client;
+      const canUseTransaction = shouldTriggerQuarantine && typeof mongoClient?.startSession === 'function';
+      let result;
+      let quarantineResult = null;
+
+      if (canUseTransaction) {
+        const session = mongoClient.startSession();
+
+        try {
+          await session.withTransaction(async () => {
+            result = await sensorsCollection.updateOne(
+              query,
+              { $set: updateData },
+              { session }
+            );
+
+            quarantineResult = await this.quarantineService.quarantineBySensorStatus(
+              db,
+              { ...existingSensor, ...updateData },
+              mergedStatus,
+              {
+                session,
+                updateData
+              }
+            );
+          });
+        } finally {
+          await session.endSession();
+        }
+      } else {
+        result = await sensorsCollection.updateOne(query, { $set: updateData });
+
+        if (shouldTriggerQuarantine) {
+          quarantineResult = await this.quarantineService.quarantineBySensorStatus(
+            db,
+            { ...existingSensor, ...updateData },
+            mergedStatus,
+            {
+              updateData
+            }
+          );
+        }
+      }
 
       if (result.matchedCount === 0) {
         throw new Error('Sensor não encontrado');
       }
 
-      return { success: true };
+      if (quarantineResult && quarantineResult.triggered) {
+        logger.warn('Quarentena automática aplicada após atualização de sensor', {
+          sensorId: existingSensor.sensorId || existingSensor.sensorID || sensorId,
+          mergedStatus,
+          matched: quarantineResult.matched,
+          quarantined: quarantineResult.quarantined,
+          movements: quarantineResult.movements
+        });
+      }
+
+      return {
+        success: true,
+        quarantine: quarantineResult && quarantineResult.triggered
+          ? {
+            triggered: true,
+            matched: quarantineResult.matched,
+            quarantined: quarantineResult.quarantined,
+            movements: quarantineResult.movements,
+            reason: quarantineResult.reason
+          }
+          : { triggered: false }
+      };
     } catch (error) {
       logger.error('Erro ao atualizar sensor:', error.message);
       throw error;

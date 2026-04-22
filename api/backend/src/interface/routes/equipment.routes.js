@@ -5,6 +5,7 @@ const { requirePermission } = require('../../infrastructure/middleware/rbac');
 const logger = require('../../utils/logger');
 const EquipmentModel = require('../../models/Equipment');
 const { generateUniqueEquipmentID } = require('../../utils/equipmentIDGenerator');
+const defaultQuarantineService = require('../../services/equipment-sensor-quarantine.service');
 
 // CRUD de Equipamentos
 router.get('/', authenticate, async (req, res) => {
@@ -242,6 +243,7 @@ router.post('/', authenticate, requirePermission('createPatient'), async (req, r
 
 router.put('/:id', authenticate, requirePermission('createPatient'), async (req, res) => {
   try {
+    const quarantineService = req.app?.locals?.quarantineService || defaultQuarantineService;
     const db = req.app.locals.db;
     if (!db) {
       return res.status(503).json({
@@ -264,6 +266,7 @@ router.put('/:id', authenticate, requirePermission('createPatient'), async (req,
     let result = null;
     let query = {};
     let foundEquipment = null;
+    let quarantineResult = null;
     
     logger.info(`Tentando atualizar equipamento com ID: ${req.params.id}`);
     
@@ -274,7 +277,6 @@ router.put('/:id', authenticate, requirePermission('createPatient'), async (req,
       if (foundEquipment) {
         logger.info(`Equipamento encontrado por _id: ${req.params.id}`);
         query = { _id: objectId };
-        result = await equipmentCollection.updateOne(query, { $set: updateData });
       } else {
         logger.warn(`Equipamento não encontrado por _id: ${req.params.id}`);
       }
@@ -287,7 +289,6 @@ router.put('/:id', authenticate, requirePermission('createPatient'), async (req,
         if (foundEquipment) {
           logger.info(`Equipamento encontrado por equipmentID: ${equipmentID}`);
           query = { equipmentID: equipmentID };
-          result = await equipmentCollection.updateOne(query, { $set: updateData });
         } else {
           logger.warn(`Equipamento não encontrado por equipmentID: ${equipmentID}`);
         }
@@ -309,6 +310,72 @@ router.put('/:id', authenticate, requirePermission('createPatient'), async (req,
         error: 'Equipamento não encontrado',
         message: `Nenhum equipamento encontrado com o ID: ${req.params.id}`
       });
+    }
+
+    const finalStatus = updateData.status !== undefined ? updateData.status : foundEquipment.status;
+    const shouldTriggerQuarantine = quarantineService.isQuarantineTriggerStatus(finalStatus);
+    const mongoClient = db?.client;
+    const canUseTransaction = shouldTriggerQuarantine && typeof mongoClient?.startSession === 'function';
+
+    if (canUseTransaction) {
+      const session = mongoClient.startSession();
+
+      try {
+        await session.withTransaction(async () => {
+          result = await equipmentCollection.updateOne(
+            query,
+            { $set: updateData },
+            { session }
+          );
+
+          quarantineResult = await quarantineService.quarantineByEquipmentStatus(
+            db,
+            {
+              ...foundEquipment,
+              ...updateData,
+              _id: foundEquipment._id,
+              equipmentID: foundEquipment.equipmentID
+            },
+            finalStatus,
+            {
+              session,
+              auditInfo: {
+                userId: req.user?.userID || null,
+                userName: req.user?.name || req.user?.userName || 'SYSTEM',
+                userRole: req.user?.role || null,
+                ipAddress: req.ip || null,
+                userAgent: req.get('user-agent') || null
+              }
+            }
+          );
+        });
+      } finally {
+        await session.endSession();
+      }
+    } else {
+      result = await equipmentCollection.updateOne(query, { $set: updateData });
+
+      if (shouldTriggerQuarantine) {
+        quarantineResult = await quarantineService.quarantineByEquipmentStatus(
+          db,
+          {
+            ...foundEquipment,
+            ...updateData,
+            _id: foundEquipment._id,
+            equipmentID: foundEquipment.equipmentID
+          },
+          finalStatus,
+          {
+            auditInfo: {
+              userId: req.user?.userID || null,
+              userName: req.user?.name || req.user?.userName || 'SYSTEM',
+              userRole: req.user?.role || null,
+              ipAddress: req.ip || null,
+              userAgent: req.get('user-agent') || null
+            }
+          }
+        );
+      }
     }
 
     if (!result || result.matchedCount === 0) {
@@ -333,6 +400,15 @@ router.put('/:id', authenticate, requirePermission('createPatient'), async (req,
         result: 'success',
         severity: 'info',
         message: 'Equipamento atualizado',
+        payload: quarantineResult && quarantineResult.triggered
+          ? {
+            quarantineTriggered: true,
+            samplesMatched: quarantineResult.matched,
+            samplesQuarantined: quarantineResult.quarantined,
+            movementsCreated: quarantineResult.movements,
+            reason: quarantineResult.reason
+          }
+          : { quarantineTriggered: false },
         req: req,
         module: 'Equipamentos'
       });
@@ -340,7 +416,16 @@ router.put('/:id', authenticate, requirePermission('createPatient'), async (req,
 
     return res.status(200).json({
       success: true,
-      message: 'Equipamento atualizado com sucesso'
+      message: 'Equipamento atualizado com sucesso',
+      quarantine: quarantineResult && quarantineResult.triggered
+        ? {
+          triggered: true,
+          matched: quarantineResult.matched,
+          quarantined: quarantineResult.quarantined,
+          movements: quarantineResult.movements,
+          reason: quarantineResult.reason
+        }
+        : { triggered: false }
     });
   } catch (error) {
     logger.error('Erro ao atualizar equipamento:', error.message);
