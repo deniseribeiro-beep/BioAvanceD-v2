@@ -29,6 +29,12 @@ import { buildSampleMerkleRoot, verifySampleIntegrity } from '../../../utils/sam
 import './ClinicalIntakeWizard.css';
 
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const CANONICAL_PREVIEW_UNAVAILABLE = Object.freeze({
+  score: null,
+  category: '',
+  forcedQuarantine: false,
+  previewUnavailable: true,
+});
 
 function normalizeDocumentValue(value) {
   return String(value || '').trim();
@@ -113,140 +119,6 @@ function getSampleQuantityUnit(sampleTypeValue, sampleTypeOptions = []) {
   }
 
   return 'mL';
-}
-
-function calculateQualityScore({
-  matrixType,
-  sampleType,
-  primaryContainer,
-  preCentrifugation,
-  centrifugation,
-  secondCentrifugation,
-  postCentrifugationDelay,
-  longTermStorage,
-  preAnalyticalUnknown,
-}) {
-  const SCORE_BASE = 100;
-  const normalizeCode = (value) => String(value || '').trim().toUpperCase();
-  const isUnknownCode = (value) => ['X', 'XXX'].includes(normalizeCode(value));
-
-  const mandatoryCodes = [
-    sampleType,
-    primaryContainer,
-    preCentrifugation,
-    centrifugation,
-    secondCentrifugation,
-    postCentrifugationDelay,
-    longTermStorage,
-  ];
-
-  const missingMandatoryMetadata = mandatoryCodes.some((value) => normalizeCode(value).length === 0);
-  const unknownMandatoryMetadata = mandatoryCodes.some((value) => isUnknownCode(value));
-  const criticalMetadataFailure = Boolean(preAnalyticalUnknown) || missingMandatoryMetadata || unknownMandatoryMetadata;
-
-  if (criticalMetadataFailure) {
-    return {
-      score: 0,
-      category: 'C',
-      penaltyIschemia: 0,
-      penaltyTemperature: 0,
-      penaltyCriticalFailure: 100,
-      penaltyProtocolAlert: 0,
-      forcedQuarantine: true,
-    };
-  }
-
-  const normalizedMatrixType = String(matrixType || 'fluid').trim().toLowerCase();
-  let penaltyIschemia = 0;
-
-  const preCode = String(preCentrifugation || '').trim().toUpperCase();
-  if (normalizedMatrixType === 'solid') {
-    if (preCode === 'X') {
-      penaltyIschemia = 100;
-    } else if (['C', 'D'].includes(preCode)) {
-      penaltyIschemia = 10;
-    } else if (['E', 'F'].includes(preCode)) {
-      penaltyIschemia = 20;
-    }
-
-    const coldCode = String(centrifugation || '').trim().toUpperCase();
-    if (coldCode === 'X') {
-      penaltyIschemia = Math.min(100, penaltyIschemia + 100);
-    } else if (['D', 'E'].includes(coldCode)) {
-      penaltyIschemia += 10;
-    } else if (['F'].includes(coldCode)) {
-      penaltyIschemia += 20;
-    }
-  } else {
-    if (preCode === 'X') {
-      penaltyIschemia = 100;
-    } else if (['C', 'D', 'E', 'F'].includes(preCode)) {
-      penaltyIschemia = 15;
-    } else if (['G', 'H', 'I', 'J', 'K', 'L', 'M', 'N'].includes(preCode)) {
-      penaltyIschemia = 30;
-    }
-  }
-
-  let penaltyTemperature = 0;
-  const centrifCode = String(centrifugation || '').trim().toUpperCase();
-  const secondCentrifCode = String(secondCentrifugation || '').trim().toUpperCase();
-  const protocolAlertCodes = new Set(['I', 'J']);
-  const penaltyProtocolAlert = protocolAlertCodes.has(centrifCode) ? 10 : 0;
-  if (normalizedMatrixType === 'solid') {
-    if (secondCentrifCode === 'X') {
-      penaltyTemperature = 50;
-    } else if (['F', 'G'].includes(secondCentrifCode)) {
-      penaltyTemperature = 20;
-    } else if (['E'].includes(secondCentrifCode)) {
-      penaltyTemperature = 10;
-    }
-  } else {
-    const ambientNoBrakeCodes = new Set(['A', 'M']);
-    const unknownTemperatureCodes = new Set(['X']);
-
-    if (unknownTemperatureCodes.has(centrifCode) || unknownTemperatureCodes.has(secondCentrifCode)) {
-      penaltyTemperature = 50;
-    } else if (ambientNoBrakeCodes.has(centrifCode) || ambientNoBrakeCodes.has(secondCentrifCode)) {
-      penaltyTemperature = 20;
-    }
-  }
-
-  const totalPenalty = Math.min(100, penaltyIschemia + penaltyTemperature + penaltyProtocolAlert);
-  const score = Math.max(0, SCORE_BASE - totalPenalty);
-
-  if (score >= 85) {
-    return {
-      score,
-      category: 'A',
-      penaltyIschemia,
-      penaltyTemperature,
-      penaltyProtocolAlert,
-      penaltyCriticalFailure: 0,
-      forcedQuarantine: false,
-    };
-  }
-
-  if (score >= 65) {
-    return {
-      score,
-      category: 'B',
-      penaltyIschemia,
-      penaltyTemperature,
-      penaltyProtocolAlert,
-      penaltyCriticalFailure: 0,
-      forcedQuarantine: false,
-    };
-  }
-
-  return {
-    score,
-    category: 'C',
-    penaltyIschemia,
-    penaltyTemperature,
-    penaltyProtocolAlert,
-    penaltyCriticalFailure: 0,
-    forcedQuarantine: false,
-  };
 }
 
 function buildSprecCode(formData) {
@@ -1030,6 +902,15 @@ function formatBloodPressureInput(value) {
 }
 
 function getQualityTheme(category, t) {
+  if (!category) {
+    return {
+      cardClass: 'governance-card',
+      textClass: 'governance-score',
+      progressClass: 'governance-progress',
+      label: t('wizard.status.waitingCanonicalPreview', 'Aguardando preview canônico'),
+    };
+  }
+
   if (category === 'A') {
     return {
       cardClass: 'governance-card governance-card--a',
@@ -1239,26 +1120,88 @@ function normalizeBirthDateForPayload(value) {
 }
 
 function buildPenaltyLog(qualityAssessment) {
-  const log = [];
-  if (Number(qualityAssessment?.penaltyCriticalFailure || 0) > 0) {
-    log.push(`metadata_critica_ausente:+${qualityAssessment.penaltyCriticalFailure}`);
+  if (Array.isArray(qualityAssessment?.penaltyLog)) {
+    return qualityAssessment.penaltyLog;
   }
-  if (Number(qualityAssessment?.penaltyIschemia || 0) > 0) {
-    log.push(`isquemia:+${qualityAssessment.penaltyIschemia}`);
+  return [];
+}
+
+function findOption(options = [], value = '') {
+  const normalizedValue = String(value || '').trim();
+  return (Array.isArray(options) ? options : []).find((option) => String(option.value || '').trim() === normalizedValue) || null;
+}
+
+function buildSprecField(value, options = [], extra = {}) {
+  const code = String(value || '').trim();
+  const option = findOption(options, code);
+  return {
+    code: code || null,
+    label: option?.label || '',
+    ...extra,
+  };
+}
+
+function buildCanonicalSprecPayload(formData, matrixType, dictionary) {
+  const sampleType = buildSprecField(formData.sprecSampleType, dictionary.sampleType?.options);
+  const axis2 = buildSprecField(formData.sprecPrimaryContainer, dictionary.primaryContainer?.options);
+  const axis3 = buildSprecField(formData.sprecPreCentrifugation, dictionary.preCentrifugation?.options);
+  const axis4 = buildSprecField(formData.sprecCentrifugation, dictionary.centrifugation?.options, {
+    applicable: String(formData.sprecCentrifugation || '').trim().toUpperCase() !== 'N',
+  });
+  const axis5 = buildSprecField(formData.sprecSecondCentrifugation, dictionary.secondCentrifugation?.options, {
+    required: String(formData.sprecSecondCentrifugation || '').trim().toUpperCase() !== 'N',
+    applicable: String(formData.sprecSecondCentrifugation || '').trim().toUpperCase() !== 'N',
+  });
+  const axis6 = buildSprecField(formData.sprecPostCentrifugationDelay, dictionary.postCentrifugationDelay?.options);
+  const longTermStorage = buildSprecField(formData.sprecLongTermStorage, dictionary.longTermStorage?.options);
+
+  if (matrixType === 'solid') {
+    return {
+      matrixType,
+      sampleType,
+      collectionType: axis2,
+      primaryContainer: axis2,
+      warmIschemia: axis3,
+      coldIschemia: axis4,
+      fixationType: axis5,
+      fixationTime: axis6,
+      longTermStorage,
+      preAnalyticalUnknown: Boolean(formData.preAnalyticalUnknown),
+    };
   }
-  if (Number(qualityAssessment?.penaltyTemperature || 0) > 0) {
-    log.push(`temperatura:+${qualityAssessment.penaltyTemperature}`);
-  }
-  if (Number(qualityAssessment?.penaltyProtocolAlert || 0) > 0) {
-    log.push(`protocolo_alta_rotacao:+${qualityAssessment.penaltyProtocolAlert}`);
-  }
-  if (qualityAssessment?.forcedQuarantine) {
-    log.push('quarentena_forcada:true');
-  }
-  return log;
+
+  return {
+    matrixType,
+    sampleType,
+    primaryContainer: axis2,
+    preCentrifugation: axis3,
+    centrifugation1: axis4,
+    centrifugation: axis4,
+    primaryCentrifugationApplicable: axis4.applicable,
+    centrifugationApplicable: axis4.applicable,
+    centrifugation2: axis5,
+    secondCentrifugation: axis5,
+    secondCentrifugationRequired: axis5.required,
+    secondCentrifugationApplicable: axis5.applicable,
+    postCentrifugation: axis6,
+    postCentrifugationDelay: axis6,
+    longTermStorage,
+    preAnalyticalUnknown: Boolean(formData.preAnalyticalUnknown),
+  };
+}
+
+function buildQualityPreviewPayload(formData, matrixType) {
+  const dictionary = matrixType === 'solid' ? SPREC_SOLID_DICTIONARY : SPREC_FLUID_DICTIONARY;
+  return {
+    source: 'frontend-intake-preview',
+    matrixType,
+    sprec: buildCanonicalSprecPayload(formData, matrixType, dictionary),
+  };
 }
 
 function buildSampleIntegrityInput(formData, qualityAssessment, penaltyLog) {
+  const matrixType = String(formData.sprecMatrixType || 'fluid').trim().toLowerCase() === 'solid' ? 'solid' : 'fluid';
+  const dictionary = matrixType === 'solid' ? SPREC_SOLID_DICTIONARY : SPREC_FLUID_DICTIONARY;
   return {
     patient_identity: {
       patient_id: String(formData.patientID || '').trim(),
@@ -1273,14 +1216,7 @@ function buildSampleIntegrityInput(formData, qualityAssessment, penaltyLog) {
       biomarkers_values: formData.biomarkers_values && typeof formData.biomarkers_values === 'object' ? formData.biomarkers_values : {},
     },
     sprec: {
-      matrixType: String(formData.sprecMatrixType || '').trim(),
-      sampleType: String(formData.sprecSampleType || '').trim(),
-      primaryContainer: String(formData.sprecPrimaryContainer || '').trim(),
-      preCentrifugation: String(formData.sprecPreCentrifugation || '').trim(),
-      centrifugation: String(formData.sprecCentrifugation || '').trim(),
-      secondCentrifugation: String(formData.sprecSecondCentrifugation || '').trim(),
-      postCentrifugationDelay: String(formData.sprecPostCentrifugationDelay || '').trim(),
-      longTermStorage: String(formData.sprecLongTermStorage || '').trim(),
+      ...buildCanonicalSprecPayload(formData, matrixType, dictionary),
       quality_score: String(qualityAssessment?.score ?? ''),
       quality_category: String(qualityAssessment?.category || '').trim(),
       penalty_log: penaltyLog,
@@ -1319,21 +1255,13 @@ function buildSampleLabelCode({ date = new Date(), patientID = '', sampleType = 
   return `${normalizedDate}-${normalizedPatient}-${normalizedSampleType}`;
 }
 
-function buildSubmissionPayload(formData, clinicalComorbidityItems = [], biomarkerItems = [], sampleMerkleRoot = null, penaltyLog = []) {
+function buildSubmissionPayload(formData, clinicalComorbidityItems = [], biomarkerItems = [], sampleMerkleRoot = null, penaltyLog = [], canonicalQualityAssessment = null) {
   const now = new Date().toISOString();
   const sprecMatrixType = String(formData.sprecMatrixType || 'fluid').trim().toLowerCase() === 'solid' ? 'solid' : 'fluid';
+  const sprecDictionary = sprecMatrixType === 'solid' ? SPREC_SOLID_DICTIONARY : SPREC_FLUID_DICTIONARY;
+  const canonicalSprec = buildCanonicalSprecPayload(formData, sprecMatrixType, sprecDictionary);
   const sampleUnit = getSampleQuantityUnit(formData.sprecSampleType, SPREC_FLUID_DICTIONARY.sampleType.options);
-  const qualityAssessment = calculateQualityScore({
-    matrixType: sprecMatrixType,
-    sampleType: formData.sprecSampleType,
-    primaryContainer: formData.sprecPrimaryContainer,
-    preCentrifugation: formData.sprecPreCentrifugation,
-    centrifugation: formData.sprecCentrifugation,
-    secondCentrifugation: formData.sprecSecondCentrifugation,
-    postCentrifugationDelay: formData.sprecPostCentrifugationDelay,
-    longTermStorage: formData.sprecLongTermStorage,
-    preAnalyticalUnknown: formData.preAnalyticalUnknown,
-  });
+  const qualityAssessment = canonicalQualityAssessment || CANONICAL_PREVIEW_UNAVAILABLE;
   const sprecCode = buildSprecCode(formData);
   const diagnosis = formData.isHealthyControl ? null : {
     diagnosis_name: String(formData.diagnosisCidDescription || formData.diagnosisDefinition || '').trim() || null,
@@ -1461,16 +1389,7 @@ function buildSubmissionPayload(formData, clinicalComorbidityItems = [], biomark
       sprec_code: sprecCode || null,
       sprec_matrix_type: sprecMatrixType,
       selected_tcle: String(formData.selectedConsentTemplateId || '').trim(),
-      sprec: {
-        matrixType: sprecMatrixType,
-        sampleType: formData.sprecSampleType || null,
-        primaryContainer: formData.sprecPrimaryContainer || null,
-        preCentrifugation: formData.sprecPreCentrifugation || null,
-        centrifugation: formData.sprecCentrifugation || null,
-        secondCentrifugation: formData.sprecSecondCentrifugation || null,
-        postCentrifugationDelay: formData.sprecPostCentrifugationDelay || null,
-        longTermStorage: formData.sprecLongTermStorage || null,
-      },
+      sprec: canonicalSprec,
       preAnalytical: {
         collectionDateTime: formData.preAnalyticalUnknown ? null : String(formData.collectionDateTime || '').trim() || null,
         processingDateTime: formData.preAnalyticalUnknown ? null : String(formData.processingDateTime || '').trim() || null,
@@ -1573,6 +1492,7 @@ export default function ClinicalIntakeWizard(props) {
   const [isSignatureChecking, setIsSignatureChecking] = useState(false);
   const [signatureFeedback, setSignatureFeedback] = useState('');
   const [sampleLabel, setSampleLabel] = useState(null);
+  const [canonicalQualityPreview, setCanonicalQualityPreview] = useState(null);
 
   const stepMeta = useMemo(() => ([
     {
@@ -1629,30 +1549,41 @@ export default function ClinicalIntakeWizard(props) {
   const sprecAxis7Label = useMemo(() => `${t('wizard.labels.axis', 'Axis')} 7 - ${activeSprecDictionary.longTermStorage.label}`, [activeSprecDictionary, t]);
   const quantityUnit = useMemo(() => getSampleQuantityUnit(formData.sprecSampleType, sprecSampleTypeOptions), [formData.sprecSampleType, sprecSampleTypeOptions]);
   const sprecCode = useMemo(() => buildSprecCode(formData), [formData]);
-  const qualityAssessment = useMemo(
-    () => calculateQualityScore({
-      matrixType: sprecMatrixType,
-      sampleType: formData.sprecSampleType,
-      primaryContainer: formData.sprecPrimaryContainer,
-      preCentrifugation: formData.sprecPreCentrifugation,
-      centrifugation: formData.sprecCentrifugation,
-      secondCentrifugation: formData.sprecSecondCentrifugation,
-      postCentrifugationDelay: formData.sprecPostCentrifugationDelay,
-      longTermStorage: formData.sprecLongTermStorage,
-      preAnalyticalUnknown: formData.preAnalyticalUnknown,
-    }),
-    [
-      sprecMatrixType,
-      formData.sprecSampleType,
-      formData.sprecPrimaryContainer,
-      formData.sprecPreCentrifugation,
-      formData.sprecCentrifugation,
-      formData.sprecSecondCentrifugation,
-      formData.sprecPostCentrifugationDelay,
-      formData.sprecLongTermStorage,
-      formData.preAnalyticalUnknown,
-    ]
-  );
+  useEffect(() => {
+    let active = true;
+    const previewPayload = buildQualityPreviewPayload(formData, sprecMatrixType);
+
+    const loadQualityPreview = async () => {
+      try {
+        const response = await apiClient.post('/quality/preview', previewPayload, { suppressErrorToast: true });
+        const preview = response?.data?.data || null;
+        if (active) {
+          setCanonicalQualityPreview(preview);
+        }
+      } catch (_) {
+        if (active) {
+          setCanonicalQualityPreview(null);
+        }
+      }
+    };
+
+    void loadQualityPreview();
+
+    return () => {
+      active = false;
+    };
+  }, [
+    sprecMatrixType,
+    formData.sprecSampleType,
+    formData.sprecPrimaryContainer,
+    formData.sprecPreCentrifugation,
+    formData.sprecCentrifugation,
+    formData.sprecSecondCentrifugation,
+    formData.sprecPostCentrifugationDelay,
+    formData.sprecLongTermStorage,
+    formData.preAnalyticalUnknown,
+  ]);
+  const qualityAssessment = canonicalQualityPreview || CANONICAL_PREVIEW_UNAVAILABLE;
   const shouldShowProtocolAlert = useMemo(() => {
     const code = String(formData.sprecCentrifugation || '').trim().toUpperCase();
     return code === 'I' || code === 'J';
@@ -1677,6 +1608,9 @@ export default function ClinicalIntakeWizard(props) {
   }, [formData.diagnosisCidId, formData.diagnosisCidCode, formData.diagnosisOrphaCode, diagnosisQuery]);
   const qualityTheme = useMemo(() => getQualityTheme(qualityAssessment.category, t), [qualityAssessment.category, t]);
   const qualityProgress = useMemo(() => Math.max(0, Math.min(100, Number(qualityAssessment.score || 0))), [qualityAssessment.score]);
+  const qualityPreviewLabel = qualityAssessment.previewUnavailable
+    ? t('wizard.status.canonicalPreviewUnavailable', 'Preview canônico indisponível')
+    : `${t('wizard.labels.category', 'Categoria')} ${qualityAssessment.category} • ${qualityAssessment.score}`;
   const isFabryCase = useMemo(() => String(formData.diagnosisOrphaCode || '').replace(/\D/g, '') === '324', [formData.diagnosisOrphaCode]);
 
   const patientStepSchemaDynamic = useMemo(() => createPatientStepSchema(t), [t]);
@@ -2526,7 +2460,7 @@ export default function ClinicalIntakeWizard(props) {
     setIsSubmitting(true);
 
     try {
-      const payload = buildSubmissionPayload(formData, clinicalComorbidityDefinitions, biomarkerDefinitions, sampleMerkleRoot || null, penaltyLog);
+      const payload = buildSubmissionPayload(formData, clinicalComorbidityDefinitions, biomarkerDefinitions, sampleMerkleRoot || null, penaltyLog, canonicalQualityPreview);
       if (patientMatchInfo?.patient?.patientID) {
         payload.demographic.patientID = String(patientMatchInfo.patient.patientID).trim();
       }
@@ -2809,7 +2743,7 @@ export default function ClinicalIntakeWizard(props) {
               </div>
               <div className={qualityTheme.cardClass}>
                 <p className="governance-label">{t('wizard.labels.qualityScore', 'Quality Score')}</p>
-                <p className={qualityTheme.textClass}>{t('wizard.labels.category', 'Categoria')} {qualityAssessment.category} • {qualityAssessment.score}</p>
+                <p className={qualityTheme.textClass}>{qualityPreviewLabel}</p>
                 <div className="governance-progress-track">
                   <div className={qualityTheme.progressClass} style={{ width: `${qualityProgress}%` }} />
                 </div>
@@ -2841,7 +2775,7 @@ export default function ClinicalIntakeWizard(props) {
           </div>
           <div className={qualityTheme.cardClass}>
             <p className="governance-label">{t('wizard.labels.qualityScore', 'Quality Score')}</p>
-            <p className={qualityTheme.textClass}>{t('wizard.labels.category', 'Categoria')} {qualityAssessment.category} • {qualityAssessment.score}</p>
+            <p className={qualityTheme.textClass}>{qualityPreviewLabel}</p>
             <div className="governance-progress-track">
               <div className={qualityTheme.progressClass} style={{ width: `${qualityProgress}%` }} />
             </div>

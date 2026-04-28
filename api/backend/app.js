@@ -209,7 +209,9 @@ app.use("/api/orphanet", require("./src/interface/routes/orphanet.routes"));
 app.use("/api/hpo", require("./src/interface/routes/hpo.routes"));
 app.use("/api/patients", require("./src/interface/routes/patient.routes"));
 app.use("/api/v1/patients", require("./src/interface/routes/patient.routes"));
+app.use("/api/patient", require("./src/interface/routes/patient-consent-legacy.routes"));
 app.use("/api/samples", require("./src/interface/routes/sample.routes"));
+app.use("/api/quality", require("./src/interface/routes/quality.routes"));
 app.use("/api/import", require("./src/interface/routes/import.routes"));
 app.use("/api/import", require("./src/routes/importFhirIntelligent.js"));
 app.use("/api/results", require("./src/interface/routes/result.routes"));
@@ -218,6 +220,32 @@ app.use("/api/logs", require("./src/interface/routes/logs.routes"));
 app.use("/api/audit", require("./src/interface/routes/audit.routes"));
 app.use("/api/analysis-files", require("./src/interface/routes/analysis-file.routes"));
 app.use("/api/analysis-types", require("./src/interface/routes/analysis-type.routes"));
+const createMasterDataRouter = require("./src/interface/routes/master-data.routes");
+app.use("/api/measurement-units", createMasterDataRouter({
+  collectionName: "measurementUnits",
+  idField: "unitID",
+  model: require("./src/models/MeasurementUnit")
+}));
+app.use("/api/quality-descriptions", createMasterDataRouter({
+  collectionName: "qualityDescriptions",
+  idField: "qualityID",
+  model: require("./src/models/QualityDescription")
+}));
+app.use("/api/sample-types", createMasterDataRouter({
+  collectionName: "sampleTypes",
+  idField: "sampleTypeID",
+  model: require("./src/models/SampleType")
+}));
+app.use("/api/sample-origins", createMasterDataRouter({
+  collectionName: "sampleOrigins",
+  idField: "originID",
+  model: require("./src/models/SampleOrigin")
+}));
+app.use("/api/extraction-protocols", createMasterDataRouter({
+  collectionName: "extractionProtocols",
+  idField: "protocolID",
+  model: require("./src/models/ExtractionProtocol")
+}));
 app.use("/api/equipment", require("./src/interface/routes/equipment.routes"));
 app.use("/api/locations", require("./src/interface/routes/location.routes"));
 app.use("/api/clinical-units", require("./src/interface/routes/clinical-unit.routes"));

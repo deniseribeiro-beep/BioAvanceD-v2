@@ -110,6 +110,7 @@ router.get('/consent-policies', authenticate, requireRole(3, 4), consentControll
 
 router.post('/consents', authenticate, consentController.createPatientConsent.bind(consentController));
 router.post('/consents/:id/revoke', authenticate, consentController.revokeConsent.bind(consentController));
+router.get('/patients/:patientId/consent', authenticate, consentController.getPatientConsent.bind(consentController));
 
 // Consent token validation/acceptance (public)
 router.post('/consent-tokens/validate', consentController.validateConsentToken.bind(consentController));

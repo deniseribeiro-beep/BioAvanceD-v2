@@ -6,6 +6,7 @@ const patientIdentityService = require('../services/PatientIdentityService');
 const { generateSampleHash } = require('../services/MerkleService');
 const { getCollection } = require('../utils/collectionResolver');
 const auditLogger = require('../utils/auditLogger');
+const qualityDomain = require('../services/quality-domain.service');
 
 function normalizeString(value) {
   return String(value || '').trim();
@@ -244,41 +245,16 @@ async function ensureConsentEmailSent(payload) {
   };
 }
 
-// Metodologia heurística: usa score/categoria quando enviados pelo intake,
-// com fallback para regras mínimas de quarentena por metadado crítico desconhecido.
-function resolverQualidadeMetodologica(samplePayload = {}) {
-  const qualityCategory = normalizeString(samplePayload.quality_category || samplePayload.qualityCategory).toUpperCase();
-  const qualityScore = normalizeNumber(samplePayload.quality_score, null);
-  const penaltyLog = normalizeArray(samplePayload.penalty_log);
-
-  if (['A', 'B', 'C'].includes(qualityCategory)) {
-    return {
-      score: qualityScore,
-      category: qualityCategory,
-      label: `Categoria ${qualityCategory}`,
-    };
+const resolverQualidadeMetodologica = qualityDomain.resolveMethodologicalQuality;
+function calcularQualidade(samplePayloadOrTempo, temperatura) {
+  if (typeof samplePayloadOrTempo === 'number') {
+    const tempo = samplePayloadOrTempo;
+    if (tempo <= 30 && temperatura <= 8) return 'Ótima';
+    if (tempo <= 60 && temperatura <= 15) return 'Subótima';
+    return 'Ruim';
   }
 
-  if (qualityScore !== null) {
-    if (qualityScore >= 85) {
-      return { score: qualityScore, category: 'A', label: 'Categoria A' };
-    }
-    if (qualityScore >= 65) {
-      return { score: qualityScore, category: 'B', label: 'Categoria B' };
-    }
-    return { score: qualityScore, category: 'C', label: 'Categoria C' };
-  }
-
-  const hasCriticalMetadataFailure = penaltyLog.some((entry) =>
-    String(entry || '').toLowerCase().includes('metadata_critica_ausente')
-    || String(entry || '').toLowerCase().includes('quarentena_forcada:true')
-  );
-
-  if (hasCriticalMetadataFailure) {
-    return { score: 0, category: 'C', label: 'Categoria C' };
-  }
-
-  return { score: null, category: null, label: 'Indeterminada' };
+  return resolverQualidadeMetodologica(samplePayloadOrTempo);
 }
 
 async function handleIntakeWizard(req, res) {
@@ -335,6 +311,13 @@ async function handleIntakeWizard(req, res) {
 
     const samplesCollection = await getCollection(db, 'samples');
     const sampleToPersist = buildSampleDocumentFromIntake(data, matchOutcome.patient);
+    sampleToPersist.quality_score = qualidade.score;
+    sampleToPersist.quality_category = qualidade.category || sampleToPersist.quality_category;
+    sampleToPersist.penalty_log = qualidade.penaltyLog;
+    sampleToPersist.release_status = qualidade.forcedQuarantine ? 'QUARANTINE' : sampleToPersist.release_status;
+    if (qualidade.sprec && Object.keys(qualidade.sprec).length > 0) {
+      sampleToPersist.sprec = qualidade.sprec;
+    }
     sampleToPersist.merkle_root = generateSampleHash(sampleToPersist);
     const insertResult = await samplesCollection.insertOne(sampleToPersist);
     const createdSample = await samplesCollection.findOne({ _id: insertResult.insertedId });
@@ -360,6 +343,14 @@ async function handleIntakeWizard(req, res) {
       qualityAssessment: {
         score: qualidade.score,
         category: qualidade.category,
+        label: qualidade.label,
+        forcedQuarantine: qualidade.forcedQuarantine,
+        penaltyLog: qualidade.penaltyLog,
+        reasons: qualidade.reasons,
+        matrixType: qualidade.matrixType,
+        source: qualidade.source,
+        version: qualidade.version,
+        quarantineReason: qualidade.quarantineReason,
       },
       patientMatch: {
         matched: !matchOutcome.created,
@@ -491,6 +482,7 @@ router._test = {
   resolveMatchedPatient,
   ensureConsentEmailSent,
   calcularQualidade,
+  resolverQualidadeMetodologica,
 };
 
 module.exports = router;

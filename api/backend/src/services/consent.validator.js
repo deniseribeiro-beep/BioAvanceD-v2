@@ -1,5 +1,6 @@
 const { ObjectId } = require('mongodb');
 const logger = require('../utils/logger');
+const { getCollection } = require('../utils/collectionResolver');
 
 class ConsentValidator {
   constructor() {
@@ -19,16 +20,30 @@ class ConsentValidator {
       throw new Error('sampleId é obrigatório para validar consentimento');
     }
 
-    const samplesCollection = this.db.collection('amostras');
+    const samplesCollection = await getCollection(this.db, 'samples');
     let sample = null;
 
-    try {
+    if (ObjectId.isValid(String(sampleId))) {
       sample = await samplesCollection.findOne({ _id: new ObjectId(sampleId) });
-    } catch (error) {
+    }
+
+    if (!sample) {
       const parsedSampleId = Number(sampleId);
       if (!Number.isNaN(parsedSampleId)) {
-        sample = await samplesCollection.findOne({ sampleID: parsedSampleId });
+        sample = await samplesCollection.findOne({
+          $or: [{ sampleID: parsedSampleId }, { sampleID: String(sampleId) }],
+        });
       }
+    }
+
+    if (!sample) {
+      sample = await samplesCollection.findOne({
+        $or: [
+          { sampleID: String(sampleId) },
+          { sampleId: String(sampleId) },
+          { barcode: String(sampleId) },
+        ],
+      });
     }
 
     if (!sample) {
@@ -40,9 +55,16 @@ class ConsentValidator {
       throw new Error('Amostra sem patientID para validação de consentimento');
     }
 
-    const consentsCollection = this.db.collection('patient_consents');
+    const consentsCollection = await getCollection(this.db, 'consents');
     const consent = await consentsCollection
-      .find({ patientId, status: 'ACTIVE' })
+      .find({
+        status: 'ACTIVE',
+        $or: [
+          { patientId: String(patientId) },
+          { patientID: String(patientId) },
+          { patientObjectId: String(patientId) },
+        ],
+      })
       .sort({ signedAt: -1, createdAt: -1 })
       .limit(1)
       .toArray();

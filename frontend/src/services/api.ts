@@ -325,7 +325,7 @@ export const resultService = {
       });
       
       // Verifica se a resposta é realmente um blob ou se é JSON de erro
-      const contentType = response.headers['content-type'] || '';
+      const contentType = String(response.headers['content-type'] || '');
       
       // Se for JSON, pode ser uma resposta de erro ou redirecionamento
       if (contentType.includes('application/json')) {
@@ -360,7 +360,7 @@ export const resultService = {
       link.href = blobUrl;
       
       // Tenta obter o nome do arquivo do header Content-Disposition
-      const contentDisposition = response.headers['content-disposition'];
+      const contentDisposition = String(response.headers['content-disposition'] || '');
       let filename = `resultado_${id}.pdf`;
       
       if (contentDisposition) {
@@ -768,7 +768,7 @@ export const consentService = {
     signatureMimeType?: string;
   }) => api.post<PatientConsent>('/e-consent/consents', data),
   revokeConsent: (consentId: string) => api.post(`/e-consent/consents/${consentId}/revoke`),
-  getPatientConsent: (patientId: string) => api.get<{ success: boolean; data: PatientConsent }>(`/e-consent/patients/${patientId}/consent`)
+  getPatientConsent: (patientId: string) => api.get<{ success: boolean; data: PatientConsent }>(`/patients/${patientId}/consent`)
 };
 
 // ========== IMPORT LGPD SERVICES ==========

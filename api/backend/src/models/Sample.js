@@ -279,8 +279,11 @@ class SampleModel {
       quantity: data.quantity || null, // Float (pode ser em diferentes unidades)
       unit: data.unit || 'µL', // Unidade de medida (µL, mL, L, mg, g, kg, unidades, etc.)
       quality: data.quality !== undefined && data.quality !== null ? String(data.quality) : (data.qualityID !== undefined && data.qualityID !== null ? String(data.qualityID) : null), // Id MIABIS canônico
-      quality_score: Number.isFinite(Number(data.quality_score)) ? Number(data.quality_score) : null,
+      quality_score: data.quality_score !== undefined && data.quality_score !== null && data.quality_score !== '' && Number.isFinite(Number(data.quality_score)) ? Number(data.quality_score) : null,
       quality_category: data.quality_category !== undefined && data.quality_category !== null ? String(data.quality_category) : '',
+      external_quality_assessment: data.external_quality_assessment && typeof data.external_quality_assessment === 'object'
+        ? data.external_quality_assessment
+        : null,
       locationID: data.locationID || null,
       location: data.location || null,
       linkedProject: data.linkedProject || null,

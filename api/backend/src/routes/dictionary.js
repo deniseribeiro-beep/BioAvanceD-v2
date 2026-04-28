@@ -62,9 +62,42 @@ const DEFAULT_MEDICATIONS = [
   },
 ];
 
-// Redis client (assume redis running on default port)
-const redisClient = redis.createClient({ url: process.env.REDIS_URL || 'redis://localhost:6379' });
-redisClient.connect();
+let redisClient = null;
+let redisConnectPromise = null;
+let redisAvailable = true;
+
+async function getRedisClient() {
+  if (!redisAvailable) return null;
+  if (!redisClient) {
+    redisClient = redis.createClient({ url: process.env.REDIS_URL || 'redis://localhost:6379' });
+    redisClient.on('error', () => {
+      redisAvailable = false;
+    });
+  }
+
+  if (!redisClient.isOpen) {
+    redisConnectPromise = redisConnectPromise || redisClient.connect().catch(() => {
+      redisAvailable = false;
+      return null;
+    });
+    await redisConnectPromise;
+    redisConnectPromise = null;
+  }
+
+  return redisClient.isOpen ? redisClient : null;
+}
+
+async function getCacheValue(cacheKey) {
+  const client = await getRedisClient();
+  return client ? client.get(cacheKey) : null;
+}
+
+async function setCacheValue(cacheKey, ttlSeconds, value) {
+  const client = await getRedisClient();
+  if (client) {
+    await client.setEx(cacheKey, ttlSeconds, value);
+  }
+}
 
 function normalizeCoding(raw = {}, fallbackSystem) {
   const system = String(raw.system || fallbackSystem || '').trim();
@@ -191,7 +224,7 @@ router.get('/search', async (req, res) => {
   const cacheKey = `orpha:search:${String(query).toLowerCase()}`;
   try {
     // 1. Tenta cache
-    const cached = await redisClient.get(cacheKey);
+    const cached = await getCacheValue(cacheKey);
     if (cached) return res.json(JSON.parse(cached));
 
     const driver = getNeo4jDriver();
@@ -221,7 +254,7 @@ router.get('/search', async (req, res) => {
         .filter(Boolean),
     };
 
-    await redisClient.setEx(cacheKey, 3600, JSON.stringify(payload));
+    await setCacheValue(cacheKey, 3600, JSON.stringify(payload));
     res.json(payload);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -234,7 +267,7 @@ router.get('/suggest', async (req, res) => {
   if (!orphaCode) return res.status(400).json({ error: 'Missing orphaCode' });
   const cacheKey = `orpha:suggest:${orphaCode}`;
   try {
-    const cached = await redisClient.get(cacheKey);
+    const cached = await getCacheValue(cacheKey);
     if (cached) return res.json(JSON.parse(cached));
     const driver = getNeo4jDriver();
     const session = driver.session();
@@ -274,7 +307,7 @@ router.get('/suggest', async (req, res) => {
       biomarkers,
     };
 
-    await redisClient.setEx(cacheKey, 3600, JSON.stringify(response));
+    await setCacheValue(cacheKey, 3600, JSON.stringify(response));
     res.json(response);
   } catch (err) {
     res.status(500).json({ error: err.message });

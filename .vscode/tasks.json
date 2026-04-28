@@ -27,6 +27,18 @@
 			"isBackground": false,
 			"problemMatcher": [],
 			"group": "test"
+		},
+		{
+			"label": "Run api/backend tests",
+			"type": "shell",
+			"command": "npm",
+			"args": [
+				"--prefix",
+				"api/backend",
+				"test"
+			],
+			"isBackground": false,
+			"group": "test"
 		}
 	]
 }

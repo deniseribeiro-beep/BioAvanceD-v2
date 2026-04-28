@@ -12,6 +12,7 @@ const fhirValidator = require('./fhir-validator.service');
 const notificationService = require('./notification.service');
 const { getCollection } = require('../utils/collectionResolver');
 const SampleGraphValidator = require('./SampleGraphValidator');
+const qualityDomain = require('./quality-domain.service');
 
 /**
  * Service de Importação de Dados
@@ -809,6 +810,14 @@ class ImportService {
       biomarkers_values: {},
     };
 
+    const externalQualityAssessment = {
+      score: toFloat(qualityScoreRaw, 'quality_score'),
+      category: normalizeString(qualityCategoryRaw),
+      source: 'external-import',
+      canonical: false,
+    };
+    const canonicalQualityAssessment = qualityDomain.resolveMethodologicalQuality({ sprec });
+
     const sampleData = {
       patientID: normalizeString(patientIDRaw),
       sampleType: normalizeString(sampleTypeRaw),
@@ -818,8 +827,11 @@ class ImportService {
       registrationDate: toDate(registrationRaw, 'registerDate') || new Date(),
       quantity: toFloat(this.getRowValue(row, ['quantity', 'volume']), 'quantity'),
       quality: normalizeString(qualityRaw),
-      quality_score: toFloat(qualityScoreRaw, 'quality_score'),
-      quality_category: normalizeString(qualityCategoryRaw),
+      quality_score: canonicalQualityAssessment.score,
+      quality_category: canonicalQualityAssessment.category || '',
+      penalty_log: canonicalQualityAssessment.penaltyLog,
+      release_status: canonicalQualityAssessment.forcedQuarantine ? 'QUARANTINE' : 'AVAILABLE',
+      external_quality_assessment: externalQualityAssessment,
       locationID: toInt(locationRaw, 'locationID'),
       linkedProject: normalizeString(linkedProjectRaw),
       currentStatus: normalizeString(this.getRowValue(row, ['currentStatus', 'statusAtual'])) || 'Available',

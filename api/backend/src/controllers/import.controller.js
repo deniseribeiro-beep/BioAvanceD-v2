@@ -4,6 +4,7 @@ const fs = require('fs');
 const importService = require('../services/import.service');
 const logService = require('../services/log.service');
 const logger = require('../utils/logger');
+const qualityDomain = require('../services/quality-domain.service');
 
 // Configuração do multer para upload
 const storage = multer.diskStorage({
@@ -301,123 +302,13 @@ function resolveSprecAxisFromSpecimen(specimen = {}) {
 }
 
 function calculateMethodologyQualityFromSprec(sprec = {}) {
-  const SCORE_BASE = 100;
-  const isUnknownCode = (value) => ['X', 'XXX'].includes(normalizeCode(value));
-
-  const mandatoryCodes = [
-    sprec.sampleType,
-    sprec.primaryContainer,
-    sprec.preCentrifugation,
-    sprec.centrifugation,
-    sprec.secondCentrifugation,
-    sprec.postCentrifugationDelay,
-    sprec.longTermStorage,
-  ];
-
-  const missingMandatoryMetadata = mandatoryCodes.some((value) => normalizeCode(value).length === 0);
-  const unknownMandatoryMetadata = mandatoryCodes.some((value) => isUnknownCode(value));
-  const criticalMetadataFailure = Boolean(sprec.preAnalyticalUnknown) || missingMandatoryMetadata || unknownMandatoryMetadata;
-
-  if (criticalMetadataFailure) {
-    return {
-      score: 0,
-      category: 'C',
-      penaltyIschemia: 0,
-      penaltyTemperature: 0,
-      penaltyProtocolAlert: 0,
-      penaltyCriticalFailure: 100,
-      forcedQuarantine: true,
-    };
-  }
-
-  const matrixType = String(sprec.matrixType || 'fluid').trim().toLowerCase();
-  const preCode = normalizeCode(sprec.preCentrifugation);
-  const centrifCode = normalizeCode(sprec.centrifugation);
-  const secondCentrifCode = normalizeCode(sprec.secondCentrifugation);
-
-  let penaltyIschemia = 0;
-  if (matrixType === 'solid') {
-    if (preCode === 'X') {
-      penaltyIschemia = 100;
-    } else if (['C', 'D'].includes(preCode)) {
-      penaltyIschemia = 10;
-    } else if (['E', 'F'].includes(preCode)) {
-      penaltyIschemia = 20;
-    }
-
-    if (centrifCode === 'X') {
-      penaltyIschemia = Math.min(100, penaltyIschemia + 100);
-    } else if (['D', 'E'].includes(centrifCode)) {
-      penaltyIschemia += 10;
-    } else if (['F'].includes(centrifCode)) {
-      penaltyIschemia += 20;
-    }
-  } else {
-    if (preCode === 'X') {
-      penaltyIschemia = 100;
-    } else if (['C', 'D', 'E', 'F'].includes(preCode)) {
-      penaltyIschemia = 15;
-    } else if (['G', 'H', 'I', 'J', 'K', 'L', 'M', 'N'].includes(preCode)) {
-      penaltyIschemia = 30;
-    }
-  }
-
-  let penaltyTemperature = 0;
-  let penaltyProtocolAlert = 0;
-
-  if (matrixType === 'solid') {
-    if (secondCentrifCode === 'X') {
-      penaltyTemperature = 50;
-    } else if (['F', 'G'].includes(secondCentrifCode)) {
-      penaltyTemperature = 20;
-    } else if (['E'].includes(secondCentrifCode)) {
-      penaltyTemperature = 10;
-    }
-  } else {
-    const ambientNoBrakeCodes = new Set(['A', 'M']);
-    if (['X'].includes(centrifCode) || ['X'].includes(secondCentrifCode)) {
-      penaltyTemperature = 50;
-    } else if (ambientNoBrakeCodes.has(centrifCode) || ambientNoBrakeCodes.has(secondCentrifCode)) {
-      penaltyTemperature = 20;
-    }
-    if (new Set(['I', 'J']).has(centrifCode)) {
-      penaltyProtocolAlert = 10;
-    }
-  }
-
-  const totalPenalty = Math.min(100, penaltyIschemia + penaltyTemperature + penaltyProtocolAlert);
-  const score = Math.max(0, SCORE_BASE - totalPenalty);
-  const category = score >= 85 ? 'A' : score >= 65 ? 'B' : 'C';
-
-  return {
-    score,
-    category,
-    penaltyIschemia,
-    penaltyTemperature,
-    penaltyProtocolAlert,
-    penaltyCriticalFailure: 0,
-    forcedQuarantine: false,
-  };
+  // Legacy wrapper: quality decisions now live in quality-domain.service.js.
+  return qualityDomain.calculateMethodologyQualityFromSprec(sprec);
 }
 
 function buildPenaltyLog(qualityAssessment = {}) {
-  const log = [];
-  if (Number(qualityAssessment.penaltyCriticalFailure || 0) > 0) {
-    log.push(`metadata_critica_ausente:+${qualityAssessment.penaltyCriticalFailure}`);
-  }
-  if (Number(qualityAssessment.penaltyIschemia || 0) > 0) {
-    log.push(`isquemia:+${qualityAssessment.penaltyIschemia}`);
-  }
-  if (Number(qualityAssessment.penaltyTemperature || 0) > 0) {
-    log.push(`temperatura:+${qualityAssessment.penaltyTemperature}`);
-  }
-  if (Number(qualityAssessment.penaltyProtocolAlert || 0) > 0) {
-    log.push(`protocolo_alta_rotacao:+${qualityAssessment.penaltyProtocolAlert}`);
-  }
-  if (qualityAssessment.forcedQuarantine) {
-    log.push('quarentena_forcada:true');
-  }
-  return log;
+  // Legacy wrapper: penalty breakdown now comes from quality-domain.service.js.
+  return qualityDomain.buildPenaltyLog(qualityAssessment);
 }
 
 function normalizeFhirEntries(payload) {

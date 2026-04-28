@@ -18,6 +18,7 @@ const SampleGraphValidator = require('./SampleGraphValidator');
 const DrugService = require('./DrugService');
 const patientIdentityService = require('./PatientIdentityService');
 const { generateSampleHash } = require('./MerkleService');
+const qualityDomain = require('./quality-domain.service');
 
 /**
  * Service de Importação LGPD
@@ -1227,6 +1228,13 @@ class ImportLGPDService {
       washout_start_date: row.washout_start_date || row.washoutStartDate || null,
       washout_end_date: row.washout_end_date || row.washoutEndDate || null,
     };
+    const externalQualityAssessment = {
+      score: row.quality_score !== undefined && row.quality_score !== null && row.quality_score !== '' ? parseFloat(row.quality_score) : null,
+      category: row.quality_category ? String(row.quality_category).trim().toUpperCase() : '',
+      source: 'external-lgpd-import',
+      canonical: false,
+    };
+    const canonicalQualityAssessment = qualityDomain.resolveMethodologicalQuality({ sprec });
 
     return {
       patientID: row.patientID?.trim() || row.patientId?.trim() || row.patient_id?.trim() || null, // Aceita patientID, patientId ou patient_id
@@ -1247,8 +1255,11 @@ class ImportLGPDService {
       registrationDate: registerDate,
       quantity: row.quantity ? parseFloat(row.quantity) : null,
       quality: parseQualityMIABIS(row.quality), // Valida e converte para id MIABIS canônico
-      quality_score: row.quality_score !== undefined && row.quality_score !== null && row.quality_score !== '' ? parseFloat(row.quality_score) : null,
-      quality_category: row.quality_category ? String(row.quality_category).trim().toUpperCase() : '',
+      quality_score: canonicalQualityAssessment.score,
+      quality_category: canonicalQualityAssessment.category || '',
+      penalty_log: canonicalQualityAssessment.penaltyLog,
+      release_status: canonicalQualityAssessment.forcedQuarantine ? 'QUARANTINE' : 'AVAILABLE',
+      external_quality_assessment: externalQualityAssessment,
       locationID: row.locationID || row.locationId ? parseInt(row.locationID || row.locationId) : null,
       linkedProject: row.linkedProject?.trim() || null,
       currentStatus: row.currentStatus?.trim() || 'Available',

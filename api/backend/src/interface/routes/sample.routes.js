@@ -133,6 +133,15 @@ function validateCreateSamplePayload(req, res, next) {
   return next();
 }
 
+function escapeXml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
 // RF004 - Cadastro de Amostra
 router.post('/',
   authenticate,
@@ -383,6 +392,58 @@ router.get('/', authenticate, async (req, res) => {
     return res.status(500).json({
       success: false,
       error: 'Erro ao listar amostras',
+      message: error.message
+    });
+  }
+});
+
+router.get('/:id/label', authenticate, async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    if (!db) {
+      return res.status(503).json({
+        success: false,
+        error: 'Banco de dados não disponível'
+      });
+    }
+
+    const samplesCollection = await getCollection(db, 'samples');
+    const rawId = String(req.params.id);
+    const numericId = Number(rawId);
+    const sample = await samplesCollection.findOne({
+      $or: [
+        ...(ObjectId.isValid(rawId) ? [{ _id: new ObjectId(rawId) }] : []),
+        ...(Number.isFinite(numericId) ? [{ sampleID: numericId }] : []),
+        { sampleID: rawId },
+        { sampleId: rawId },
+        { barcode: rawId },
+      ],
+    });
+    if (!sample) {
+      return res.status(404).json({
+        success: false,
+        error: 'Amostra não encontrada'
+      });
+    }
+
+    const sampleIdentifier = escapeXml(String(sample.sampleID || sample._id || req.params.id));
+    const barcode = escapeXml(String(sample.barcode || sampleIdentifier));
+    const title = escapeXml(String(sample.sampleType || 'AMOSTRA').slice(0, 32));
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="378" height="189" viewBox="0 0 378 189">
+  <rect width="378" height="189" fill="#fff" stroke="#111" stroke-width="2"/>
+  <text x="189" y="34" font-family="Arial, sans-serif" font-size="20" font-weight="700" text-anchor="middle">${title}</text>
+  <text x="189" y="92" font-family="Arial, sans-serif" font-size="24" font-weight="700" text-anchor="middle">${barcode}</text>
+  <text x="189" y="150" font-family="Arial, sans-serif" font-size="18" text-anchor="middle">${sampleIdentifier}</text>
+</svg>`;
+
+    res.setHeader('Content-Type', 'image/svg+xml; charset=utf-8');
+    res.setHeader('Content-Disposition', `inline; filename="sample-label-${sampleIdentifier}.svg"`);
+    return res.status(200).send(svg);
+  } catch (error) {
+    logger.error('Erro ao gerar etiqueta da amostra:', error.message);
+    return res.status(500).json({
+      success: false,
+      error: 'Erro ao gerar etiqueta da amostra',
       message: error.message
     });
   }

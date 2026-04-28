@@ -160,6 +160,34 @@ describe('ImportService SPREC import', () => {
       longTermStorage: 'E',
     });
     expect(inserted.tcle_id).toBe('tcle-ontology-1');
+    expect(inserted.release_status).toBe('AVAILABLE');
+  });
+
+  it('preserva quality_score/category externos como sugestão não canônica', async () => {
+    const csvPath = path.join(tempDir, 'samples-external-quality.csv');
+    const csvContent = [
+      'patientID,sampleType,sampleOrigin,extractionProtocol,quantity,quality,quality_score,quality_category,registerDate,linkedProject,sprec_matrix_type,sprec_sample_type,sprec_primary_container,sprec_pre_centrifugation,sprec_centrifugation,sprec_second_centrifugation,sprec_post_centrifugation_delay,sprec_long_term_storage',
+      '12345678,PLASMA,VENOUS_BLOOD,TUBE_EDTA,1.5,GOOD,100,A,2026-01-01,Projeto QA,fluid,BLD,EDTA,X,A,A,A,cryogenic_or_ultralow_workflow_appropriate',
+    ].join('\n');
+
+    fs.writeFileSync(csvPath, csvContent, 'utf8');
+
+    const result = await importService.importSamples(db, {
+      originalname: 'samples-external-quality.csv',
+      mimetype: 'text/csv',
+      path: csvPath,
+    });
+
+    expect(result.success).toBe(1);
+    const inserted = samplesCollection.insertOne.mock.calls[0][0];
+    expect(inserted.quality_score).toBeNull();
+    expect(inserted.quality_category).toBe('C');
     expect(inserted.release_status).toBe('QUARANTINE');
+    expect(inserted.external_quality_assessment).toMatchObject({
+      score: 100,
+      category: 'A',
+      source: 'external-import',
+      canonical: false,
+    });
   });
 });

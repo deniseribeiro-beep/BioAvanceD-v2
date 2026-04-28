@@ -5,6 +5,7 @@ const { getCollection } = require('../utils/collectionResolver');
 const { generateSampleHash } = require('./MerkleService');
 const SampleMovementModel = require('../models/SampleMovement');
 const { appendMovementWithHashChain } = require('../utils/sampleMovementLedger');
+const qualityDomain = require('./quality-domain.service');
 
 function normalizeString(value) {
   return String(value || '').trim();
@@ -180,71 +181,7 @@ class SampleGraphValidator {
   }
 
   _validateQuality(sample) {
-    const qualityCategory = normalizeString(sample?.quality_category).toUpperCase();
-    const qualityScore = normalizeNumber(sample?.quality_score);
-    const penaltyLog = Array.isArray(sample?.penalty_log) ? sample.penalty_log : [];
-    const sprec = sample?.sprec && typeof sample.sprec === 'object' ? sample.sprec : {};
-
-    const mandatorySprecFields = [
-      sprec.sampleType,
-      sprec.primaryContainer,
-      sprec.preCentrifugation,
-      sprec.centrifugation,
-      sprec.secondCentrifugation,
-      sprec.postCentrifugationDelay,
-      sprec.longTermStorage,
-    ];
-
-    const hasMissingMandatorySprec = mandatorySprecFields.some((field) => normalizeString(field).length === 0);
-    const hasUnknownCriticalSprec = mandatorySprecFields.some((field) => {
-      const code = normalizeString(field).toUpperCase();
-      return code === 'X' || code === 'XXX';
-    });
-
-    const hasCriticalPenalty = penaltyLog.some((entry) => {
-      const value = normalizeString(entry).toLowerCase();
-      return value.includes('metadata_critica_ausente') || value.includes('quarentena_forcada:true');
-    });
-
-    if (hasMissingMandatorySprec || hasUnknownCriticalSprec || hasCriticalPenalty) {
-      return {
-        valid: false,
-        reason: 'Falha crítica de metadado pré-analítico/SPREC (quarentena técnica obrigatória)',
-      };
-    }
-
-    if (qualityScore !== null) {
-      const expectedCategory = qualityScore >= 85 ? 'A' : qualityScore >= 65 ? 'B' : 'C';
-      if (qualityCategory && qualityCategory !== expectedCategory) {
-        return {
-          valid: false,
-          reason: `Inconsistência score/categoria (${qualityScore} => ${expectedCategory}, recebido ${qualityCategory})`,
-        };
-      }
-      if (expectedCategory === 'A' || expectedCategory === 'B') {
-        return {
-          valid: true,
-          reason: `Qualidade ${expectedCategory} aprovada (score ${qualityScore})`,
-        };
-      }
-
-      return {
-        valid: false,
-        reason: `Qualidade insuficiente (score ${qualityScore}, quarentena técnica)`,
-      };
-    }
-
-    if (qualityCategory === 'A' || qualityCategory === 'B') {
-      return {
-        valid: true,
-        reason: `Qualidade ${qualityCategory} aprovada`,
-      };
-    }
-
-    return {
-      valid: false,
-      reason: 'Qualidade Insuficiente (Quarentena Técnica)',
-    };
+    return qualityDomain.validateQualityForRelease(sample);
   }
 
   _validateClinical(sample, requirements = defaultRequirements(), disease = null) {

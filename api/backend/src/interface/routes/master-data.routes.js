@@ -1,0 +1,143 @@
+const express = require('express');
+const { ObjectId } = require('mongodb');
+const { authenticate } = require('../../infrastructure/middleware/auth');
+const { requireRole } = require('../../infrastructure/middleware/rbac');
+
+function createMasterDataRouter({ collectionName, idField, model }) {
+  const router = express.Router();
+
+  router.use(authenticate);
+
+  router.get('/', async (req, res) => {
+    try {
+      const db = req.app.locals.db;
+      if (!db) {
+        return res.status(503).json({ success: false, error: 'Banco de dados não disponível' });
+      }
+
+      const items = await db.collection(collectionName).find({}).sort({ createdAt: -1, _id: -1 }).toArray();
+      return res.status(200).json({ success: true, data: items });
+    } catch (error) {
+      return res.status(500).json({ success: false, error: 'Erro ao listar dados mestre', message: error.message });
+    }
+  });
+
+  router.get('/:id', async (req, res) => {
+    try {
+      const db = req.app.locals.db;
+      if (!db) {
+        return res.status(503).json({ success: false, error: 'Banco de dados não disponível' });
+      }
+
+      const rawId = String(req.params.id);
+      const numericId = Number(rawId);
+      const query = {
+        $or: [
+          ...(ObjectId.isValid(rawId) ? [{ _id: new ObjectId(rawId) }] : []),
+          ...(Number.isFinite(numericId) ? [{ [idField]: numericId }] : []),
+          { [idField]: rawId },
+        ],
+      };
+
+      const item = await db.collection(collectionName).findOne(query);
+      if (!item) {
+        return res.status(404).json({ success: false, error: 'Registro não encontrado' });
+      }
+
+      return res.status(200).json({ success: true, data: item });
+    } catch (error) {
+      return res.status(500).json({ success: false, error: 'Erro ao buscar dado mestre', message: error.message });
+    }
+  });
+
+  router.post('/', requireRole(3, 4), async (req, res) => {
+    try {
+      const db = req.app.locals.db;
+      if (!db) {
+        return res.status(503).json({ success: false, error: 'Banco de dados não disponível' });
+      }
+
+      const payload = {
+        ...req.body,
+        [idField]: req.body?.[idField] ?? Date.now(),
+      };
+      const validation = model.validate(payload);
+      if (!validation.isValid) {
+        return res.status(422).json({ success: false, error: 'Payload inválido', details: validation.errors });
+      }
+
+      const document = model.create(payload);
+      const result = await db.collection(collectionName).insertOne(document);
+      return res.status(201).json({ success: true, data: { _id: result.insertedId, ...document } });
+    } catch (error) {
+      return res.status(500).json({ success: false, error: 'Erro ao criar dado mestre', message: error.message });
+    }
+  });
+
+  router.put('/:id', requireRole(3, 4), async (req, res) => {
+    try {
+      const db = req.app.locals.db;
+      if (!db) {
+        return res.status(503).json({ success: false, error: 'Banco de dados não disponível' });
+      }
+
+      const rawId = String(req.params.id);
+      const numericId = Number(rawId);
+      const query = {
+        $or: [
+          ...(ObjectId.isValid(rawId) ? [{ _id: new ObjectId(rawId) }] : []),
+          ...(Number.isFinite(numericId) ? [{ [idField]: numericId }] : []),
+          { [idField]: rawId },
+        ],
+      };
+      const update = { ...req.body, updatedAt: new Date() };
+      delete update._id;
+
+      const result = await db.collection(collectionName).findOneAndUpdate(
+        query,
+        { $set: update },
+        { returnDocument: 'after' }
+      );
+
+      if (!result) {
+        return res.status(404).json({ success: false, error: 'Registro não encontrado' });
+      }
+
+      return res.status(200).json({ success: true, data: result });
+    } catch (error) {
+      return res.status(500).json({ success: false, error: 'Erro ao atualizar dado mestre', message: error.message });
+    }
+  });
+
+  router.delete('/:id', requireRole(3, 4), async (req, res) => {
+    try {
+      const db = req.app.locals.db;
+      if (!db) {
+        return res.status(503).json({ success: false, error: 'Banco de dados não disponível' });
+      }
+
+      const rawId = String(req.params.id);
+      const numericId = Number(rawId);
+      const query = {
+        $or: [
+          ...(ObjectId.isValid(rawId) ? [{ _id: new ObjectId(rawId) }] : []),
+          ...(Number.isFinite(numericId) ? [{ [idField]: numericId }] : []),
+          { [idField]: rawId },
+        ],
+      };
+
+      const result = await db.collection(collectionName).deleteOne(query);
+      if (result.deletedCount === 0) {
+        return res.status(404).json({ success: false, error: 'Registro não encontrado' });
+      }
+
+      return res.status(200).json({ success: true, message: 'Registro removido' });
+    } catch (error) {
+      return res.status(500).json({ success: false, error: 'Erro ao remover dado mestre', message: error.message });
+    }
+  });
+
+  return router;
+}
+
+module.exports = createMasterDataRouter;
