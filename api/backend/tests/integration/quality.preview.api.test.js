@@ -14,7 +14,7 @@ function createAuthToken() {
       id: 'quality-user-1',
       userID: 'quality-user-1',
       accessType: 2,
-      roleName: 'Técnico',
+      roleName: 'Tecnico',
       mfaVerified: true,
     },
     process.env.JWT_SECRET,
@@ -22,7 +22,7 @@ function createAuthToken() {
   );
 }
 
-describe('POST /api/quality/preview', () => {
+describe('POST /api/quality/preview RCS-GOV 1.0', () => {
   beforeEach(() => {
     app.locals.db = {
       collection: () => ({
@@ -40,7 +40,7 @@ describe('POST /api/quality/preview', () => {
     app.locals.db = null;
   });
 
-  it('retorna preview canônico versionado para o wizard', async () => {
+  it('mantem a rota existente e retorna decisao exclusivamente RCS-GOV A-E', async () => {
     const response = await request(app)
       .post('/api/quality/preview')
       .set('Authorization', `Bearer ${createAuthToken()}`)
@@ -48,59 +48,42 @@ describe('POST /api/quality/preview', () => {
         sprec: {
           matrixType: 'fluid',
           sampleType: 'BLD',
-          primaryContainer: 'A',
-          preCentrifugation: 'A',
+          primaryContainer: 'SST',
+          preCentrifugation: 'C',
           centrifugation: 'A',
           secondCentrifugation: 'A',
           postCentrifugationDelay: 'A',
-          longTermStorage: 'A',
+          longTermStorage: 'C',
         },
       });
 
     expect(response.status).toBe(200);
     expect(response.body.success).toBe(true);
     expect(response.body.data).toMatchObject({
-      version: 'quality-domain-governance-aware-v2',
-      ruleTableVersion: 'quality-rule-table-article-v1',
-      category: 'A',
-      forcedQuarantine: false,
-      matrixType: 'fluid',
+      model_version: 'RCS-GOV-1.0',
+      matrix_type: 'fluid',
+      governance_status: 1,
+      p_bio: 6,
+      rcs_score: 94,
+      score_based_grade: 'A',
+      final_grade: 'A',
+      grade_route: 'Score-based certification',
     });
+    expect(response.body.data).not.toHaveProperty('ruleTableVersion');
+    expect(response.body.data).not.toHaveProperty('quality_score');
+    expect(response.body.data).not.toHaveProperty('quality_category');
+    expect(response.body.data).not.toHaveProperty('penalty_log');
+    expect(response.body.data.axis_penalties.length).toBe(5);
+    expect(response.body.data.axis_penalties[0]).toEqual(expect.objectContaining({
+      axis_code: expect.any(String),
+      sprec_code: expect.any(String),
+      weight: expect.any(Number),
+      severity: expect.any(Number),
+      penalty: expect.any(Number),
+    }));
   });
 
-  it('aceita payload SPREC fluid estruturado com código bruto e label', async () => {
-    const response = await request(app)
-      .post('/api/quality/preview')
-      .set('Authorization', `Bearer ${createAuthToken()}`)
-      .send({
-        matrixType: 'fluid',
-        sprec: {
-          matrixType: 'fluid',
-          sampleType: { code: 'SER', label: 'Serum' },
-          primaryContainer: { code: 'SST', label: 'Serum separator tube with clot activator' },
-          preCentrifugation: { code: 'C', label: 'RT; 2 to 4 h' },
-          centrifugation1: { code: 'E', label: 'RT; 10 to 15 min; 3000 g to 6000 g; with braking', applicable: true },
-          centrifugation2: { code: 'N', label: 'No centrifugation', required: false },
-          postCentrifugation: { code: 'C', label: '1 to 2 h; 2 to 10°C' },
-          longTermStorage: { code: 'A', label: 'PP tube 0.5 to 2 mL; (-85) to (-60)°C' },
-        },
-      });
-
-    expect(response.status).toBe(200);
-    expect(response.body.data).toMatchObject({
-      score: 65,
-      category: 'B',
-      forcedQuarantine: false,
-      matrixType: 'fluid',
-      ruleTableVersion: 'quality-rule-table-article-v1',
-    });
-    expect(response.body.data.breakdown.P_store).toMatchObject({
-      code: 'cryogenic_or_ultralow_workflow_appropriate',
-      penalty: 0,
-    });
-  });
-
-  it('aceita payload SPREC solid estruturado com tipo de coleta e storage bruto', async () => {
+  it('retorna Grade E por falha de governanca sem calcular score', async () => {
     const response = await request(app)
       .post('/api/quality/preview')
       .set('Authorization', `Bearer ${createAuthToken()}`)
@@ -108,51 +91,30 @@ describe('POST /api/quality/preview', () => {
         matrixType: 'solid',
         sprec: {
           matrixType: 'solid',
-          sampleType: { code: 'TIS', label: 'Solid tissue' },
-          collectionType: { code: 'SRG', label: 'Surgical excision' },
-          warmIschemia: { code: 'B', label: '2-10 min' },
-          coldIschemia: { code: 'B', label: '2-10 min' },
-          fixationType: { code: 'OCT', label: 'Optimum cutting temperature medium' },
-          fixationTime: { code: 'C', label: '1-4 h' },
-          longTermStorage: { code: 'A', label: 'PP tube 0.5 to 2 mL; (-85) to (-60) °C' },
+          sampleType: 'TIS',
+          collectionType: 'SRG',
+          warmIschemia: 'X',
+          coldIschemia: 'A',
+          fixationType: 'SNP',
+          fixationTime: 'B',
+          longTermStorage: 'C',
         },
       });
 
     expect(response.status).toBe(200);
     expect(response.body.data).toMatchObject({
-      score: 65,
-      category: 'B',
-      forcedQuarantine: false,
-      matrixType: 'solid',
+      model_version: 'RCS-GOV-1.0',
+      matrix_type: 'solid',
+      governance_status: 0,
+      p_bio: null,
+      rcs_score: null,
+      score_based_grade: null,
+      final_grade: 'E',
+      grade_route: 'Governance failure',
+      axis_penalties: [],
     });
-  });
-
-  it('preserva storage X como governance failure vindo do backend', async () => {
-    const response = await request(app)
-      .post('/api/quality/preview')
-      .set('Authorization', `Bearer ${createAuthToken()}`)
-      .send({
-        matrixType: 'fluid',
-        sprec: {
-          matrixType: 'fluid',
-          sampleType: { code: 'SER', label: 'Serum' },
-          primaryContainer: { code: 'SST', label: 'Serum separator tube with clot activator' },
-          preCentrifugation: { code: 'A', label: 'RT; <2 h' },
-          centrifugation1: { code: 'A', label: 'RT; 10 to 15 min; <3000 g; no braking', applicable: true },
-          centrifugation2: { code: 'N', label: 'No centrifugation', required: false },
-          postCentrifugation: { code: 'A', label: '<1 h; 2 to 10°C' },
-          longTermStorage: { code: 'X', label: 'Unknown' },
-        },
-      });
-
-    expect(response.status).toBe(200);
-    expect(response.body.data).toMatchObject({
-      score: null,
-      category: 'C',
-      forcedQuarantine: true,
-      decisionStatus: 'quarantine',
-    });
-    expect(response.body.data.governance.Ggov).toBe(0);
-    expect(response.body.data.governanceFailures.length).toBeGreaterThan(0);
+    expect(response.body.data.governance_failure_reasons.length).toBeGreaterThan(0);
+    expect(response.body.data.axis_penalties).toEqual([]);
+    expect(response.body.data).not.toHaveProperty('quality_category');
   });
 });

@@ -48,6 +48,22 @@ export default function SampleWithdrawalReturnPage() {
     const match = MIABIS_QUALITY.find((item) => item.id === String(quality));
     return match?.label || String(quality);
   };
+
+  const getRcsQualityLabel = (currentSample: Sample | null) => {
+    if (!currentSample) return '-';
+    const rcs = currentSample.rcs_evaluation || currentSample;
+    const grade = String(rcs.final_grade || '').trim();
+    const score = rcs.rcs_score ?? null;
+    if (grade) {
+      const route = String(rcs.grade_route || '').trim();
+      const reasons = Array.isArray(rcs.governance_failure_reasons)
+        ? rcs.governance_failure_reasons.map((reason) => String(reason || '').trim()).filter(Boolean)
+        : [];
+      const failureDetail = rcs.governance_status === 0 && reasons.length ? `: ${reasons.join('; ')}` : '';
+      return `Grade ${grade}${score !== null && score !== undefined ? ` | RCS ${score}` : ''}${route ? ` | ${route}${failureDetail}` : ''}`;
+    }
+    return getQualityLabel(currentSample.quality);
+  };
   const [activeTab, setActiveTab] = useState<'withdraw' | 'return'>('withdraw');
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [pendingAction, setPendingAction] = useState<'withdraw' | 'return' | null>(null);
@@ -463,7 +479,7 @@ export default function SampleWithdrawalReturnPage() {
                 </div>
                 <div className="info-row">
                   <span className="info-label">Qualidade:</span>
-                  <span className="info-value">{getQualityLabel(sample.quality)}</span>
+                  <span className="info-value">{getRcsQualityLabel(sample)}</span>
                 </div>
                 {sample.withdrawalDate && (
                   <div className="info-row">

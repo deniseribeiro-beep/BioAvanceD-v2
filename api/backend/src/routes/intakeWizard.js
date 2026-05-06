@@ -143,7 +143,7 @@ function buildSampleDocumentFromIntake(data = {}, matchedPatient = null) {
   const consent = normalizeObject(data?.consent);
   const integrity = normalizeObject(data?.integrity);
   const qualityCategoryRaw = normalizeString(sample.quality_category || sample.qualityCategory).toUpperCase();
-  const qualityCategory = ['A', 'B', 'C'].includes(qualityCategoryRaw) ? qualityCategoryRaw : '';
+  const qualityCategory = ['A', 'B', 'C', 'D', 'E'].includes(qualityCategoryRaw) ? qualityCategoryRaw : '';
   const releaseStatusRaw = normalizeString(sample.release_status || sample.releaseStatus).toUpperCase();
   const releaseStatus = ['QUARANTINE', 'AVAILABLE', 'BLOCKED'].includes(releaseStatusRaw) ? releaseStatusRaw : 'QUARANTINE';
   const registrationDate = sample.registrationDate || sample.registerDate || new Date().toISOString();
@@ -248,10 +248,15 @@ async function ensureConsentEmailSent(payload) {
 const resolverQualidadeMetodologica = qualityDomain.resolveMethodologicalQuality;
 function calcularQualidade(samplePayloadOrTempo, temperatura) {
   if (typeof samplePayloadOrTempo === 'number') {
-    const tempo = samplePayloadOrTempo;
-    if (tempo <= 30 && temperatura <= 8) return 'Ótima';
-    if (tempo <= 60 && temperatura <= 15) return 'Subótima';
-    return 'Ruim';
+    return resolverQualidadeMetodologica({
+      matrixType: 'fluid',
+      sprec: {
+        matrixType: 'fluid',
+        preCentrifugation: '',
+      },
+      documentation_insufficient: true,
+      legacy_numeric_quality_input: { tempo: samplePayloadOrTempo, temperatura },
+    });
   }
 
   return resolverQualidadeMetodologica(samplePayloadOrTempo);
@@ -314,7 +319,7 @@ async function handleIntakeWizard(req, res) {
     sampleToPersist.quality_score = qualidade.score;
     sampleToPersist.quality_category = qualidade.category || sampleToPersist.quality_category;
     sampleToPersist.penalty_log = qualidade.penaltyLog;
-    sampleToPersist.release_status = qualidade.forcedQuarantine ? 'QUARANTINE' : sampleToPersist.release_status;
+    sampleToPersist.release_status = qualidade.final_grade === 'E' ? 'QUARANTINE' : sampleToPersist.release_status;
     if (qualidade.sprec && Object.keys(qualidade.sprec).length > 0) {
       sampleToPersist.sprec = qualidade.sprec;
     }

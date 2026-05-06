@@ -13,6 +13,7 @@ const notificationService = require('./notification.service');
 const { getCollection } = require('../utils/collectionResolver');
 const SampleGraphValidator = require('./SampleGraphValidator');
 const qualityDomain = require('./quality-domain.service');
+const qualityCompatibility = require('./quality-compatibility.service');
 
 /**
  * Service de Importação de Dados
@@ -383,8 +384,10 @@ class ImportService {
         const data = JSON.parse(fs.readFileSync(file.path, 'utf8'));
         const samples = Array.isArray(data) ? data : [data];
 
-        for (const sampleData of samples) {
+        for (const sampleDataRaw of samples) {
           try {
+            // Normalize legacy quality fields to canonical names (non-destructive)
+            const sampleData = qualityCompatibility.normalizeSample(sampleDataRaw || {});
             const validation = SampleModel.validate(sampleData);
             if (!validation.isValid) {
               results.errors.push({
@@ -451,7 +454,8 @@ class ImportService {
 
         for (const row of rows) {
           try {
-            const { data: sampleData, parseErrors } = this.parseSampleCSV(row);
+            const { data: sampleDataRaw, parseErrors } = this.parseSampleCSV(row);
+            const sampleData = qualityCompatibility.normalizeSample(sampleDataRaw || {});
 
             if (parseErrors.length > 0) {
               results.errors.push({
@@ -830,7 +834,7 @@ class ImportService {
       quality_score: canonicalQualityAssessment.score,
       quality_category: canonicalQualityAssessment.category || '',
       penalty_log: canonicalQualityAssessment.penaltyLog,
-      release_status: canonicalQualityAssessment.forcedQuarantine ? 'QUARANTINE' : 'AVAILABLE',
+      release_status: canonicalQualityAssessment.final_grade === 'E' ? 'QUARANTINE' : 'AVAILABLE',
       external_quality_assessment: externalQualityAssessment,
       locationID: toInt(locationRaw, 'locationID'),
       linkedProject: normalizeString(linkedProjectRaw),

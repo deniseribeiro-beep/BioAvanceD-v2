@@ -91,10 +91,12 @@ describe('intakeWizard helpers', () => {
     expect(document.status).toBe('AVAILABLE');
   });
 
-  it('calcularQualidade retorna categoria esperada', () => {
-    expect(helpers.calcularQualidade(15, 5)).toBe('Ótima');
-    expect(helpers.calcularQualidade(45, 10)).toBe('Subótima');
-    expect(helpers.calcularQualidade(120, 25)).toBe('Ruim');
+  it('calcularQualidade nao usa mais heuristica legada numerica', () => {
+    const result = helpers.calcularQualidade(15, 5);
+
+    expect(result.model_version).toBe('RCS-GOV-1.0');
+    expect(result.final_grade).toBe('E');
+    expect(result.grade_route).toBe('Governance failure');
   });
 
   it('resolveRecipientAndTemplate prioriza email do paciente e seleciona template do consentimento', () => {

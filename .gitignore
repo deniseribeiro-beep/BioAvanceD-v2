@@ -81,3 +81,14 @@ Thumbs.db
 .vercel
 .env*.local
 data/
+!api/backend/src/seeders/data/
+api/backend/src/seeders/data/*
+!api/backend/src/seeders/data/rcs-*.json
+# Local Python virtualenv - should not be committed
+.venv/
+
+# Frontend build artifacts
+frontend/dist/
+
+# Playwright traces that may contain sensitive test data
+reports/system-audit/playwright/html/trace/

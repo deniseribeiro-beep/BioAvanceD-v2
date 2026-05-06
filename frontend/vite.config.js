@@ -10,6 +10,9 @@ const __dirname = path.dirname(__filename);
 
 export default defineConfig(async () => {
   const enableCoverage = process.env.VITE_COVERAGE === 'true';
+  const hmrHost = process.env.VITE_HMR_HOST || 'localhost';
+  const hmrProtocol = process.env.VITE_HMR_PROTOCOL || 'ws';
+  const hmrClientPort = Number(process.env.VITE_HMR_CLIENT_PORT || 5173);
   let istanbulPlugin = null;
   if (enableCoverage) {
     const mod = await import('vite-plugin-istanbul');
@@ -30,8 +33,9 @@ export default defineConfig(async () => {
       port: 5173,
       strictPort: true,
       hmr: {
-        host: 'localhost',
-        port: 5173,
+        host: hmrHost,
+        protocol: hmrProtocol,
+        clientPort: hmrClientPort,
       },
       watch: {
         usePolling: true,

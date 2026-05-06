@@ -1,11 +1,15 @@
 // backend/src/services/hpoService.js
 const { MongoClient } = require('mongodb');
-const fetch = require('node-fetch');
 
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/bioavanced?retryWrites=true&w=majority&tls=false';
 const DB_NAME = process.env.MONGO_DB || process.env.DB_NAME || 'bioavanced';
 const COLLECTION = 'hpo_terms';
-const HPO_API_URL = 'https://ontology.jax.org/api/hp/search?q=';
+const HPO_API_URL = process.env.HPO_API_URL || '';
+
+function isExternalHpoLookupEnabled() {
+  const raw = String(process.env.ALLOW_EXTERNAL_HPO_LOOKUP || process.env.ALLOW_CLOUD_INTEGRATIONS || '').trim().toLowerCase();
+  return raw === 'true' || raw === '1';
+}
 
 async function searchHpoLocal(query) {
   const client = new MongoClient(MONGO_URI);
@@ -26,6 +30,13 @@ async function searchHpoLocal(query) {
 }
 
 async function searchHpoExternal(query) {
+  if (!isExternalHpoLookupEnabled()) {
+    return [];
+  }
+  if (!HPO_API_URL) {
+    return [];
+  }
+
   const url = `${HPO_API_URL}${encodeURIComponent(query)}&rows=20`;
   const res = await fetch(url);
   if (!res.ok) throw new Error('Erro ao buscar na API HPO');
@@ -39,4 +50,4 @@ async function searchHpoExternal(query) {
   }));
 }
 
-module.exports = { searchHpoLocal, searchHpoExternal };
+module.exports = { searchHpoLocal, searchHpoExternal, isExternalHpoLookupEnabled };

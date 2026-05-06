@@ -13,6 +13,11 @@ async function globalSetup(config: FullConfig) {
 
   fs.mkdirSync(path.dirname(authFile), { recursive: true });
 
+  if (process.env.PLAYWRIGHT_SKIP_GLOBAL_SETUP === '1') {
+    fs.writeFileSync(authFile, JSON.stringify({ cookies: [], origins: [] }, null, 2));
+    return;
+  }
+
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
 

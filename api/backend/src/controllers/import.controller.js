@@ -302,12 +302,10 @@ function resolveSprecAxisFromSpecimen(specimen = {}) {
 }
 
 function calculateMethodologyQualityFromSprec(sprec = {}) {
-  // Legacy wrapper: quality decisions now live in quality-domain.service.js.
   return qualityDomain.calculateMethodologyQualityFromSprec(sprec);
 }
 
 function buildPenaltyLog(qualityAssessment = {}) {
-  // Legacy wrapper: penalty breakdown now comes from quality-domain.service.js.
   return qualityDomain.buildPenaltyLog(qualityAssessment);
 }
 
@@ -354,9 +352,11 @@ async function importFhirBundle(req, res) {
     let sampleCount = 0;
     let consentCount = 0;
     const qualitySummary = {
-      categoryA: 0,
-      categoryB: 0,
-      categoryC: 0,
+      gradeA: 0,
+      gradeB: 0,
+      gradeC: 0,
+      gradeD: 0,
+      gradeE: 0,
       quarantinedTechnical: 0,
       averageScore: null,
     };
@@ -400,10 +400,12 @@ async function importFhirBundle(req, res) {
           const qualityAssessment = calculateMethodologyQualityFromSprec(sprec);
           const penaltyLog = buildPenaltyLog(qualityAssessment);
 
-          if (qualityAssessment.category === 'A') qualitySummary.categoryA += 1;
-          if (qualityAssessment.category === 'B') qualitySummary.categoryB += 1;
-          if (qualityAssessment.category === 'C') qualitySummary.categoryC += 1;
-          if (qualityAssessment.forcedQuarantine) qualitySummary.quarantinedTechnical += 1;
+          if (qualityAssessment.final_grade === 'A') qualitySummary.gradeA += 1;
+          if (qualityAssessment.final_grade === 'B') qualitySummary.gradeB += 1;
+          if (qualityAssessment.final_grade === 'C') qualitySummary.gradeC += 1;
+          if (qualityAssessment.final_grade === 'D') qualitySummary.gradeD += 1;
+          if (qualityAssessment.final_grade === 'E') qualitySummary.gradeE += 1;
+          if (qualityAssessment.governance_status === 0 || qualityAssessment.final_grade === 'E') qualitySummary.quarantinedTechnical += 1;
 
           if (typeof qualityAssessment.score === 'number') {
             scoreAccumulator += qualityAssessment.score;
@@ -416,7 +418,7 @@ async function importFhirBundle(req, res) {
             quality_score: parseNumberSafe(qualityAssessment.score, 0),
             quality_category: qualityAssessment.category,
             penalty_log: penaltyLog,
-            release_status: qualityAssessment.forcedQuarantine ? 'QUARANTINE' : 'AVAILABLE',
+            release_status: qualityAssessment.final_grade === 'E' ? 'QUARANTINE' : 'AVAILABLE',
             sprec,
             fhir: resource
           };

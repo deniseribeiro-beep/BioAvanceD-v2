@@ -11,6 +11,17 @@ function mockWizardApis(page: Page, options = { withActiveTcle: true }) {
   })();
 }
 
+async function mockQualityPreview(page: Page, previewResponse: Record<string, unknown>, capturedPayloads: unknown[] = []) {
+  await page.route('**/api/quality/preview', async (route) => {
+    capturedPayloads.push(route.request().postDataJSON?.() || {});
+    return route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ success: true, data: previewResponse }),
+    });
+  });
+}
+
 async function completeStep1(page: Page) {
   await expect(page.getByTestId('wizard-title')).toBeVisible({ timeout: 10000 });
   await page.getByTestId('wizard-full-name').fill('Paciente QA Wizard');
@@ -52,7 +63,68 @@ test('Cenário de sucesso (Fabry): ORPHA 324 mostra biomarcadores e permite fina
   await page.getByTestId('wizard-biomarker-value-0').fill('4.2');
   await page.getByTestId('wizard-biomarker-value-1').fill('2.1');
 
-await expect(page.locator('body')).toContainText(/Categor(?:ia|y)\s+[AB]/i, { timeout: 10000 });});
+  await expect(page.locator('body')).toContainText(/Grade\s+[AB]\s+.*RCS/i, { timeout: 10000 });
+});
+
+test('RCS-GOV: wizard chama endpoint de qualidade e renderiza final_grade A-E sem categoria legada', async ({ page }) => {
+  const previewPayloads: unknown[] = [];
+
+  await mockWizardApis(page, { withActiveTcle: true });
+  await mockQualityPreview(page, {
+    model_version: 'RCS-GOV-1.0',
+    matrix_type: 'fluid',
+    governance_status: 1,
+    governance_failure_reasons: [],
+    p_bio: 6,
+    rcs_score: 94,
+    score_based_grade: 'A',
+    final_grade: 'A',
+    grade_route: 'Score-based certification',
+    axis_penalties: [
+      { axis_code: 'Ppre', sprec_code: 'A', weight: 30, severity: 0, penalty: 0 },
+    ],
+    calculation_trace: { source: 'e2e' },
+  }, previewPayloads);
+
+  await page.goto('/next/intake', { waitUntil: 'networkidle' });
+  await completeStep1(page);
+  await completeStep2(page);
+
+  await expect.poll(() => previewPayloads.length).toBeGreaterThan(0);
+  expect(previewPayloads[0]).toMatchObject({ sprec: expect.any(Object) });
+  await expect(page.locator('body')).toContainText(/Grade\s+A\s+.*RCS\s+94/i);
+  await expect(page.locator('body')).toContainText('Score-based certification');
+  await expect(page.locator('body')).not.toContainText(/Categoria\s+A\s+.*94/i);
+});
+
+test('RCS-GOV: governance failure com score nulo e eixos vazios nao quebra o wizard', async ({ page }) => {
+  const pageErrors: Error[] = [];
+  page.on('pageerror', (error) => pageErrors.push(error));
+
+  await mockWizardApis(page, { withActiveTcle: true });
+  await mockQualityPreview(page, {
+    model_version: 'RCS-GOV-1.0',
+    matrix_type: 'fluid',
+    governance_status: 0,
+    governance_failure_reasons: ['Unknown SPREC code', 'Missing critical metadata'],
+    p_bio: null,
+    rcs_score: null,
+    score_based_grade: null,
+    final_grade: 'E',
+    grade_route: 'Governance failure',
+    axis_penalties: [],
+    calculation_trace: {},
+  });
+
+  await page.goto('/next/intake', { waitUntil: 'networkidle' });
+  await completeStep1(page);
+  await completeStep2(page);
+
+  await expect(page.locator('body')).toContainText(/Grade\s+E\s+.*RCS\s+-/i);
+  await expect(page.locator('body')).toContainText('Governance failure');
+  await expect(page.locator('body')).toContainText('Unknown SPREC code');
+  expect(pageErrors).toEqual([]);
+});
 
 test('Cenário de bloqueio: sem TCLE ativo o envio final fica impedido', async ({ page }) => {
 

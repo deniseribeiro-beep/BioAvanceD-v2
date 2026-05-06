@@ -19,6 +19,7 @@
     "seed:disease-rules": "node src/scripts/seedDiseaseValidationRules.js",
     "seed:atc-bootstrap": "node src/scripts/seeder.js",
     "migrate:mongo:online-local": "node scripts/migrate-mongo-online-to-local.js",
+    "migrate:rcs": "node src/scripts/migrate-rcs-governance-indexes.js",
     "remediate:fhir:barcode": "node scripts/remediate-fhir-missing-barcodes.js",
     "validate:fhir:barcode": "node scripts/check-fhir-barcode-coverage.js",
     "audit": "node scripts/audit-database.js",

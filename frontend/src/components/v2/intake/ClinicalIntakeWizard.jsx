@@ -30,9 +30,17 @@ import './ClinicalIntakeWizard.css';
 
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const CANONICAL_PREVIEW_UNAVAILABLE = Object.freeze({
-  score: null,
-  category: '',
-  forcedQuarantine: false,
+  model_version: 'RCS-GOV-1.0',
+  matrix_type: '',
+  governance_status: null,
+  governance_failure_reasons: [],
+  p_bio: null,
+  rcs_score: null,
+  score_based_grade: null,
+  final_grade: '',
+  grade_route: '',
+  axis_penalties: [],
+  calculation_trace: {},
   previewUnavailable: true,
 });
 
@@ -369,8 +377,10 @@ const initialState = {
   sprecCode: '',
   quantity: '',
   quality: '',
-  qualityScore: '',
-  qualityCategory: '',
+  rcs_score: '',
+  final_grade: '',
+  p_bio: null,
+  calculation_trace: {},
   collectionDateTime: '',
   processingDateTime: '',
   transportTemperature: '',
@@ -901,8 +911,73 @@ function formatBloodPressureInput(value) {
   return `${digits.slice(0, 3)}/${digits.slice(3)}`;
 }
 
-function getQualityTheme(category, t) {
-  if (!category) {
+function normalizeRcsPreview(rawPreview, matrixType = '') {
+  const source = rawPreview && typeof rawPreview === 'object' ? rawPreview : {};
+  return {
+    model_version: source.model_version || source.modelVersion || 'RCS-GOV-1.0',
+    matrix_type: source.matrix_type || source.matrixType || matrixType || '',
+    governance_status: source.governance_status ?? source.governanceStatus ?? null,
+    governance_failure_reasons: Array.isArray(source.governance_failure_reasons)
+      ? source.governance_failure_reasons
+      : (Array.isArray(source.governanceFailureReasons) ? source.governanceFailureReasons : []),
+    p_bio: source.p_bio ?? source.pBio ?? null,
+    rcs_score: source.rcs_score ?? source.rcsScore ?? null,
+    score_based_grade: source.score_based_grade || source.scoreBasedGrade || null,
+    final_grade: source.final_grade || source.finalGrade || '',
+    grade_route: source.grade_route || source.gradeRoute || '',
+    axis_penalties: Array.isArray(source.axis_penalties)
+      ? source.axis_penalties
+      : (Array.isArray(source.axisPenalties) ? source.axisPenalties : []),
+    calculation_trace: source.calculation_trace && typeof source.calculation_trace === 'object'
+      ? source.calculation_trace
+      : (source.calculationTrace && typeof source.calculationTrace === 'object' ? source.calculationTrace : {}),
+    previewUnavailable: Boolean(source.previewUnavailable),
+  };
+}
+
+function formatRcsScore(value) {
+  if (value === null || value === undefined || value === '') {
+    return '-';
+  }
+
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) {
+    return String(value);
+  }
+
+  return String(Math.round(numericValue * 100) / 100);
+}
+
+function getGovernanceFailureText(qualityAssessment) {
+  const reasons = Array.isArray(qualityAssessment?.governance_failure_reasons)
+    ? qualityAssessment.governance_failure_reasons
+    : [];
+  return reasons.map((reason) => String(reason || '').trim()).filter(Boolean).join('; ');
+}
+
+function buildRcsPreviewLabel(qualityAssessment, t) {
+  if (qualityAssessment.previewUnavailable) {
+    return t('wizard.status.canonicalPreviewUnavailable', 'Preview canônico indisponível');
+  }
+
+  const grade = String(qualityAssessment.final_grade || '').trim() || '-';
+  const score = formatRcsScore(qualityAssessment.rcs_score);
+  return `Grade ${grade} • RCS ${score}`;
+}
+
+function buildRcsStatusLabel(qualityAssessment, fallbackLabel) {
+  const route = String(qualityAssessment?.grade_route || '').trim();
+  const failureText = getGovernanceFailureText(qualityAssessment);
+
+  if (qualityAssessment?.governance_status === 0) {
+    return failureText ? `${route || 'Governance failure'}: ${failureText}` : (route || 'Governance failure');
+  }
+
+  return route || fallbackLabel;
+}
+
+function getQualityTheme(finalGrade, t) {
+  if (!finalGrade) {
     return {
       cardClass: 'governance-card',
       textClass: 'governance-score',
@@ -911,7 +986,7 @@ function getQualityTheme(category, t) {
     };
   }
 
-  if (category === 'A') {
+  if (finalGrade === 'A') {
     return {
       cardClass: 'governance-card governance-card--a',
       textClass: 'governance-score governance-score--a',
@@ -920,7 +995,7 @@ function getQualityTheme(category, t) {
     };
   }
 
-  if (category === 'B') {
+  if (finalGrade === 'B') {
     return {
       cardClass: 'governance-card governance-card--b',
       textClass: 'governance-score governance-score--b',
@@ -1120,10 +1195,7 @@ function normalizeBirthDateForPayload(value) {
 }
 
 function buildPenaltyLog(qualityAssessment) {
-  if (Array.isArray(qualityAssessment?.penaltyLog)) {
-    return qualityAssessment.penaltyLog;
-  }
-  return [];
+  return Array.isArray(qualityAssessment?.axis_penalties) ? qualityAssessment.axis_penalties : [];
 }
 
 function findOption(options = [], value = '') {
@@ -1217,9 +1289,18 @@ function buildSampleIntegrityInput(formData, qualityAssessment, penaltyLog) {
     },
     sprec: {
       ...buildCanonicalSprecPayload(formData, matrixType, dictionary),
-      quality_score: String(qualityAssessment?.score ?? ''),
-      quality_category: String(qualityAssessment?.category || '').trim(),
-      penalty_log: penaltyLog,
+      rcs_evaluation: qualityAssessment,
+      model_version: String(qualityAssessment?.model_version || 'RCS-GOV-1.0'),
+      matrix_type: String(qualityAssessment?.matrix_type || matrixType),
+      governance_status: qualityAssessment?.governance_status ?? null,
+      governance_failure_reasons: Array.isArray(qualityAssessment?.governance_failure_reasons) ? qualityAssessment.governance_failure_reasons : [],
+      p_bio: qualityAssessment?.p_bio ?? null,
+      rcs_score: qualityAssessment?.rcs_score ?? null,
+      score_based_grade: qualityAssessment?.score_based_grade || null,
+      final_grade: String(qualityAssessment?.final_grade || '').trim(),
+      grade_route: String(qualityAssessment?.grade_route || '').trim(),
+      axis_penalties: penaltyLog,
+      calculation_trace: qualityAssessment?.calculation_trace || {},
     },
     pharmacology_data: {
       treatment_status: String(formData.treatmentStatus || '').trim(),
@@ -1382,10 +1463,24 @@ function buildSubmissionPayload(formData, clinicalComorbidityItems = [], biomark
       barcode: undefined,
       quantity: Number(formData.quantity),
       unit: sampleUnit,
-      quality: qualityAssessment.category,
-      quality_score: qualityAssessment.score,
-      quality_category: qualityAssessment.category,
-      penalty_log: penaltyLog,
+      quality: qualityAssessment.final_grade,
+      rcs_evaluation: qualityAssessment,
+      model_version: qualityAssessment.model_version,
+      matrix_type: qualityAssessment.matrix_type || sprecMatrixType,
+      governance_status: qualityAssessment.governance_status,
+      governance_failure_reasons: qualityAssessment.governance_failure_reasons,
+      p_bio: qualityAssessment.p_bio,
+      rcs_score: qualityAssessment.rcs_score,
+      score_based_grade: qualityAssessment.score_based_grade,
+      final_grade: qualityAssessment.final_grade,
+      grade_route: qualityAssessment.grade_route,
+      axis_penalties: penaltyLog,
+      calculation_trace: qualityAssessment.calculation_trace,
+      deprecated_quality_fields: {
+        quality_score: null,
+        quality_category: null,
+        penalty_log: null,
+      },
       sprec_code: sprecCode || null,
       sprec_matrix_type: sprecMatrixType,
       selected_tcle: String(formData.selectedConsentTemplateId || '').trim(),
@@ -1418,7 +1513,8 @@ function buildSubmissionPayload(formData, clinicalComorbidityItems = [], biomark
     },
     integrity: {
       merkle_root: sampleMerkleRoot,
-      penalty_log: penaltyLog,
+      rcs_evaluation: qualityAssessment,
+      axis_penalties: penaltyLog,
       selected_tcle: String(formData.selectedConsentTemplateId || '').trim(),
       diagnosis_orpha_code: String(formData.diagnosisOrphaCode || '').trim(),
       diagnosis_omim_code: String(formData.diagnosisOmimCode || '').trim(),
@@ -1558,7 +1654,7 @@ export default function ClinicalIntakeWizard(props) {
         const response = await apiClient.post('/quality/preview', previewPayload, { suppressErrorToast: true });
         const preview = response?.data?.data || null;
         if (active) {
-          setCanonicalQualityPreview(preview);
+          setCanonicalQualityPreview(normalizeRcsPreview(preview, sprecMatrixType));
         }
       } catch (_) {
         if (active) {
@@ -1606,11 +1702,10 @@ export default function ClinicalIntakeWizard(props) {
       diagnosisQuery,
     ].some((value) => String(value || '').trim().length > 0);
   }, [formData.diagnosisCidId, formData.diagnosisCidCode, formData.diagnosisOrphaCode, diagnosisQuery]);
-  const qualityTheme = useMemo(() => getQualityTheme(qualityAssessment.category, t), [qualityAssessment.category, t]);
-  const qualityProgress = useMemo(() => Math.max(0, Math.min(100, Number(qualityAssessment.score || 0))), [qualityAssessment.score]);
-  const qualityPreviewLabel = qualityAssessment.previewUnavailable
-    ? t('wizard.status.canonicalPreviewUnavailable', 'Preview canônico indisponível')
-    : `${t('wizard.labels.category', 'Categoria')} ${qualityAssessment.category} • ${qualityAssessment.score}`;
+  const qualityTheme = useMemo(() => getQualityTheme(qualityAssessment.final_grade, t), [qualityAssessment.final_grade, t]);
+  const qualityProgress = useMemo(() => Math.max(0, Math.min(100, Number(qualityAssessment.rcs_score || 0))), [qualityAssessment.rcs_score]);
+  const qualityPreviewLabel = buildRcsPreviewLabel(qualityAssessment, t);
+  const qualityStatusLabel = buildRcsStatusLabel(qualityAssessment, qualityTheme.label);
   const isFabryCase = useMemo(() => String(formData.diagnosisOrphaCode || '').replace(/\D/g, '') === '324', [formData.diagnosisOrphaCode]);
 
   const patientStepSchemaDynamic = useMemo(() => createPatientStepSchema(t), [t]);
@@ -1882,19 +1977,19 @@ export default function ClinicalIntakeWizard(props) {
         hasChanges = true;
       }
 
-      const nextQualityScore = String(qualityAssessment.score);
+      const nextQualityScore = String(qualityAssessment.rcs_score ?? '');
       if (String(previous.qualityScore || '') !== nextQualityScore) {
         next.qualityScore = nextQualityScore;
         hasChanges = true;
       }
 
-      if (String(previous.qualityCategory || '') !== qualityAssessment.category) {
-        next.qualityCategory = qualityAssessment.category;
+      if (String(previous.qualityCategory || '') !== qualityAssessment.final_grade) {
+        next.qualityCategory = qualityAssessment.final_grade;
         hasChanges = true;
       }
 
-      if (String(previous.quality || '') !== qualityAssessment.category) {
-        next.quality = qualityAssessment.category;
+      if (String(previous.quality || '') !== qualityAssessment.final_grade) {
+        next.quality = qualityAssessment.final_grade;
         hasChanges = true;
       }
 
@@ -2742,12 +2837,12 @@ export default function ClinicalIntakeWizard(props) {
                 <p className="governance-subtext">{sprecMatrixType === 'solid' ? t('wizard.matrix.solidShort', 'Matriz sólida') : t('wizard.matrix.fluidShort', 'Matriz fluida')}</p>
               </div>
               <div className={qualityTheme.cardClass}>
-                <p className="governance-label">{t('wizard.labels.qualityScore', 'Quality Score')}</p>
+                <p className="governance-label">{t('wizard.labels.rcsScore', 'RCS-GOV')}</p>
                 <p className={qualityTheme.textClass}>{qualityPreviewLabel}</p>
                 <div className="governance-progress-track">
                   <div className={qualityTheme.progressClass} style={{ width: `${qualityProgress}%` }} />
                 </div>
-                <p className="governance-subtext">{qualityTheme.label}</p>
+                <p className="governance-subtext">{qualityStatusLabel}</p>
               </div>
             </div>
             <div className="w-full">
@@ -2774,12 +2869,12 @@ export default function ClinicalIntakeWizard(props) {
             <p className="governance-subtext">{t('wizard.labels.auditableCode', 'Código auditável pré-analítico')}</p>
           </div>
           <div className={qualityTheme.cardClass}>
-            <p className="governance-label">{t('wizard.labels.qualityScore', 'Quality Score')}</p>
+            <p className="governance-label">{t('wizard.labels.rcsScore', 'RCS-GOV')}</p>
             <p className={qualityTheme.textClass}>{qualityPreviewLabel}</p>
             <div className="governance-progress-track">
               <div className={qualityTheme.progressClass} style={{ width: `${qualityProgress}%` }} />
             </div>
-            <p className="governance-subtext">{qualityTheme.label}</p>
+            <p className="governance-subtext">{qualityStatusLabel}</p>
           </div>
           <div className="governance-card">
             <p className="governance-label">{t('wizard.labels.clinicalIdentifiers', 'Identificadores Clínicos')}</p>

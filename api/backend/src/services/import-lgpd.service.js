@@ -1258,7 +1258,7 @@ class ImportLGPDService {
       quality_score: canonicalQualityAssessment.score,
       quality_category: canonicalQualityAssessment.category || '',
       penalty_log: canonicalQualityAssessment.penaltyLog,
-      release_status: canonicalQualityAssessment.forcedQuarantine ? 'QUARANTINE' : 'AVAILABLE',
+      release_status: canonicalQualityAssessment.final_grade === 'E' ? 'QUARANTINE' : 'AVAILABLE',
       external_quality_assessment: externalQualityAssessment,
       locationID: row.locationID || row.locationId ? parseInt(row.locationID || row.locationId) : null,
       linkedProject: row.linkedProject?.trim() || null,

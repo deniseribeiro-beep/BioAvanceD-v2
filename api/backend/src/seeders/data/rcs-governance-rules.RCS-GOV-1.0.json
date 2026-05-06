@@ -1,0 +1,17 @@
+{
+  "model_code": "RCS-GOV-1.0",
+  "sprec_version": "SPREC-2.0",
+  "rules": [
+    { "rule_code": "MISSING_CRITICAL_METADATA", "description": "Critical SPREC or contextual metadata is missing.", "governance_action": "governance_failure" },
+    { "rule_code": "UNKNOWN_SPREC_CODE", "description": "SPREC code is unknown, including X or XXX.", "governance_action": "governance_failure" },
+    { "rule_code": "INVALID_SPREC_CODE", "description": "SPREC code is syntactically invalid or not recognized in the seeded catalog.", "governance_action": "governance_failure" },
+    { "rule_code": "MATRIX_INCOMPATIBLE_CODE", "description": "SPREC code belongs to a different matrix or incompatible SPREC axis.", "governance_action": "governance_failure" },
+    { "rule_code": "OTHER_WITHOUT_LOCAL_INTERPRETATION", "description": "Other or non-standard value lacks validated local interpretation.", "governance_action": "governance_failure" },
+    { "rule_code": "INSUFFICIENT_DOCUMENTATION", "description": "Documentation is insufficient for certification.", "governance_action": "governance_failure" },
+    { "rule_code": "INSUFFICIENT_TRACEABILITY", "description": "Traceability is insufficient for certification.", "governance_action": "governance_failure" },
+    { "rule_code": "MISSING_REQUIRED_MONITORING", "description": "Monitoring is absent when required by the specimen context.", "governance_action": "governance_failure" },
+    { "rule_code": "SEMANTIC_INCOMPATIBILITY", "description": "Matrix, SPREC axis, event, or context are semantically incompatible.", "governance_action": "governance_failure" },
+    { "rule_code": "MISSING_ANALYTICAL_WORKFLOW", "description": "Analytical workflow context is absent for a conditional severity.", "governance_action": "governance_failure" },
+    { "rule_code": "NOT_SCORED", "description": "Not scored conditions are routed through governance and never as zero severity.", "governance_action": "governance_failure" }
+  ]
+}

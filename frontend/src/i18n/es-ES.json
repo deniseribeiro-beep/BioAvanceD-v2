@@ -1733,7 +1733,7 @@
       "qualityAcceptable": "Qualidade aceitável",
       "qualityCompromised": "Amostra comprometida",
       "qualityHigh": "Alta qualidade",
-      "qualityScore": "Quality Score",
+      "qualityScore": "RCS-GOV",
       "sampleIdMissing": "Será gerado no submit",
       "searchDiseaseOrpha": "Buscar doença em Orphadata",
       "selectDiseaseForBiomarkers": "Selecione uma doença para carregar biomarcadores sugeridos.",

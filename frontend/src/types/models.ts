@@ -159,6 +159,29 @@ export interface PhoneCodeEntry {
   searchLabel?: string;
 }
 
+export interface RcsAxisPenalty {
+  axis_code: string;
+  sprec_code?: string | null;
+  weight?: number | null;
+  severity?: number | null;
+  penalty?: number | null;
+  [key: string]: any;
+}
+
+export interface RcsEvaluation {
+  model_version: string;
+  matrix_type: 'fluid' | 'solid' | string;
+  governance_status: 0 | 1 | number | null;
+  governance_failure_reasons: string[];
+  p_bio: number | null;
+  rcs_score: number | null;
+  score_based_grade: 'A' | 'B' | 'C' | 'D' | 'E' | string | null;
+  final_grade: 'A' | 'B' | 'C' | 'D' | 'E' | string;
+  grade_route: string;
+  axis_penalties: RcsAxisPenalty[];
+  calculation_trace: Record<string, any>;
+}
+
 export interface Sample {
   _id?: string; // MongoDB ID
   patientID: number | string; // ID de paciente de 8 dígitos (string) - chave única de ligação
@@ -170,8 +193,21 @@ export interface Sample {
   registrationDate?: Date | string;
   quantity?: number;
   quality?: string | number; // Id MIABIS canônico ou legado persistido
+  rcs_evaluation?: RcsEvaluation | null;
+  model_version?: string;
+  matrix_type?: 'fluid' | 'solid' | string;
+  governance_status?: 0 | 1 | number | null;
+  governance_failure_reasons?: string[];
+  p_bio?: number | null;
+  rcs_score?: number | null;
+  score_based_grade?: 'A' | 'B' | 'C' | 'D' | 'E' | string | null;
+  final_grade?: 'A' | 'B' | 'C' | 'D' | 'E' | string;
+  grade_route?: string;
+  axis_penalties?: RcsAxisPenalty[];
+  calculation_trace?: Record<string, any>;
+  // Deprecated: não usar como fonte de decisão; mantido somente para payloads legados.
   quality_score?: number | null;
-  quality_category?: 'A' | 'B' | 'C' | '' | string;
+  quality_category?: 'A' | 'B' | 'C' | 'D' | 'E' | '' | string;
   merkle_root?: string | null;
   release_status?: 'AVAILABLE' | 'BLOCKED' | 'QUARANTINE' | string;
   clinical_data?: {

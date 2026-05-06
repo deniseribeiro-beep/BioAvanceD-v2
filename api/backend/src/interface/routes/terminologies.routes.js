@@ -1,10 +1,10 @@
 const express = require('express');
 const Terminology = require('../../models/Terminology');
-const { syncFromOrphadata } = require('../../services/terminologySync.service');
+const { syncFromOrphadata, isExternalTerminologySyncEnabled } = require('../../services/terminologySync.service');
 const logger = require('../../utils/logger');
 
 const router = express.Router();
-const ORPHADATA_BASE_URL = (process.env.ORPHADATA_BASE_URL || 'https://api.orphadata.com').replace(/\/$/, '');
+const ORPHADATA_BASE_URL = (process.env.ORPHADATA_BASE_URL || '').replace(/\/$/, '');
 
 function normalizeText(value) {
   return String(value || '').trim();
@@ -255,6 +255,13 @@ function normalizeOrphaApiResult(item = {}) {
 }
 
 async function hydrateFromOrphadata(search, limit) {
+  if (!isExternalTerminologySyncEnabled()) {
+    return [];
+  }
+  if (!ORPHADATA_BASE_URL) {
+    return [];
+  }
+
   const term = normalizeText(search);
   if (!term) {
     return [];
