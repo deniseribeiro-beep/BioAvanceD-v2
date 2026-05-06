@@ -92,3 +92,8 @@ frontend/dist/
 
 # Playwright traces that may contain sensitive test data
 reports/system-audit/playwright/html/trace/
+*.sqlite3
+test-output.txt
+.env.docker
+.env.local
+.vercel/

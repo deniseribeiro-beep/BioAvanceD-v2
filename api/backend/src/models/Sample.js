@@ -283,8 +283,8 @@ class SampleModel {
       quality_score: data.quality_score !== undefined && data.quality_score !== null && data.quality_score !== '' && Number.isFinite(Number(data.quality_score)) ? Number(data.quality_score) : null,
       quality_category: data.quality_category !== undefined && data.quality_category !== null ? String(data.quality_category) : '',
       // Canonical evaluation fields (recommended): keep in sync with quality compatibility layer
-      rcs_score: data.rcs_score !== undefined && data.rcs_score !== null && Number.isFinite(Number(data.rcs_score)) ? Number(data.rcs_score) : (data.quality_score !== undefined ? (Number.isFinite(Number(data.quality_score)) ? Number(data.quality_score) : null) : null),
-      final_grade: data.final_grade !== undefined && data.final_grade !== null ? String(data.final_grade) : (data.quality_category !== undefined ? String(data.quality_category) : ''),
+      rcs_score: data.rcs_score !== undefined && data.rcs_score !== null && Number.isFinite(Number(data.rcs_score)) ? Number(data.rcs_score) : null,
+      final_grade: data.final_grade !== undefined && data.final_grade !== null ? String(data.final_grade) : '',
       p_bio: data.p_bio !== undefined ? (Number.isFinite(Number(data.p_bio)) ? Number(data.p_bio) : null) : null,
       grade_route: data.grade_route !== undefined ? data.grade_route : null,
       calculation_trace: data.calculation_trace !== undefined ? data.calculation_trace : {},

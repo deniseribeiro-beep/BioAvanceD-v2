@@ -19,6 +19,12 @@ async function validateMiabisCompliance(sampleId) {
   if (!sample.storageTemperature) missingFields.push('storageTemperature');
   if (!sample.diagnosisCode) missingFields.push('diagnosisCode');
 
+  // Fast fail: if required MIABIS fields are already missing,
+  // there is no need to query Neo4j consent graph.
+  if (missingFields.length > 0) {
+    return { isCompliant: false, missingFields, consentStatus: 'not_evaluated', canBeShared: false };
+  }
+
   // 2. Neo4j: Check consent
   const cypher = `
     MATCH (p:Patient)-[r:AGREED_TO]->(t:TCLE)-[:COVERS]->(s:Sample {id: $sampleId})

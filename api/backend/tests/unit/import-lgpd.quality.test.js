@@ -22,9 +22,13 @@ describe('ImportLGPDService quality import hardening', () => {
       sprec_long_term_storage: 'C',
     });
 
-    expect(parsed.quality_score).toBeNull();
-    expect(parsed.quality_category).toBe('E');
+    expect(parsed.quality_score).toBeUndefined();
+    expect(parsed.quality_category).toBeUndefined();
     expect(parsed.release_status).toBe('QUARANTINE');
+    expect(parsed.legacy_compat).toMatchObject({
+      quality_score: 100,
+      quality_category: 'A',
+    });
     expect(parsed.external_quality_assessment).toMatchObject({
       score: 100,
       category: 'A',

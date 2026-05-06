@@ -415,9 +415,14 @@ async function importFhirBundle(req, res) {
           const sampleDoc = {
             patientId,
             specimenType: resource.type?.text || '',
-            quality_score: parseNumberSafe(qualityAssessment.score, 0),
-            quality_category: qualityAssessment.category,
-            penalty_log: penaltyLog,
+            // Canonical RCS-GOV fields
+            rcs_score: parseNumberSafe(qualityAssessment.score, 0),
+            final_grade: qualityAssessment.category || qualityAssessment.final_grade || '',
+            legacy_compat: {
+              quality_score: parseNumberSafe(qualityAssessment.score, 0),
+              quality_category: qualityAssessment.category,
+              penalty_log: penaltyLog,
+            },
             release_status: qualityAssessment.final_grade === 'E' ? 'QUARANTINE' : 'AVAILABLE',
             sprec,
             fhir: resource

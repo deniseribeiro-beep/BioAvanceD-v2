@@ -181,7 +181,7 @@ describe('ImportService SPREC import', () => {
     expect(result.success).toBe(1);
     const inserted = samplesCollection.insertOne.mock.calls[0][0];
     expect(inserted.quality_score).toBeNull();
-    expect(inserted.quality_category).toBe('E');
+    expect(inserted.quality_category).toBe('');
     expect(inserted.release_status).toBe('QUARANTINE');
     expect(inserted.external_quality_assessment).toMatchObject({
       score: 100,

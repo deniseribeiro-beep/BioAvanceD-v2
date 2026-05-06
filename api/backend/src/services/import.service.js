@@ -405,10 +405,13 @@ class ImportService {
                 || !sampleData.sprec
                 || !sampleData.sprec.sampleType
                 || !sampleData.sprec.primaryContainer;
-              if (missingEthicsOrSprec && report?.suggestedStatus !== 'QUARANTINE') {
+              const resolvedStatus = missingEthicsOrSprec
+                ? 'QUARANTINE'
+                : String(report?.suggestedStatus || sample.release_status || 'QUARANTINE').toUpperCase();
+              if (resolvedStatus !== String(sample.release_status || 'QUARANTINE').toUpperCase()) {
                 await samplesCollection.updateOne(
                   { _id: insertResult.insertedId },
-                  { $set: { release_status: 'QUARANTINE', updatedAt: new Date() } }
+                  { $set: { release_status: resolvedStatus, updatedAt: new Date() } }
                 );
               }
             } catch (validationError) {
@@ -485,10 +488,13 @@ class ImportService {
                 || !sampleData.sprec
                 || !sampleData.sprec.sampleType
                 || !sampleData.sprec.primaryContainer;
-              if (missingEthicsOrSprec && report?.suggestedStatus !== 'QUARANTINE') {
+              const resolvedStatus = missingEthicsOrSprec
+                ? 'QUARANTINE'
+                : String(report?.suggestedStatus || sample.release_status || 'QUARANTINE').toUpperCase();
+              if (resolvedStatus !== String(sample.release_status || 'QUARANTINE').toUpperCase()) {
                 await samplesCollection.updateOne(
                   { _id: insertResult.insertedId },
-                  { $set: { release_status: 'QUARANTINE', updatedAt: new Date() } }
+                  { $set: { release_status: resolvedStatus, updatedAt: new Date() } }
                 );
               }
             } catch (validationError) {
@@ -821,6 +827,10 @@ class ImportService {
       canonical: false,
     };
     const canonicalQualityAssessment = qualityDomain.resolveMethodologicalQuality({ sprec });
+    const releaseStatus = canonicalQualityAssessment?.governance_status === 1
+      && ['A', 'B', 'C', 'D'].includes(String(canonicalQualityAssessment?.final_grade || canonicalQualityAssessment?.category || '').toUpperCase())
+      ? 'AVAILABLE'
+      : 'QUARANTINE';
 
     const sampleData = {
       patientID: normalizeString(patientIDRaw),
@@ -831,14 +841,20 @@ class ImportService {
       registrationDate: toDate(registrationRaw, 'registerDate') || new Date(),
       quantity: toFloat(this.getRowValue(row, ['quantity', 'volume']), 'quantity'),
       quality: normalizeString(qualityRaw),
-      quality_score: canonicalQualityAssessment.score,
-      quality_category: canonicalQualityAssessment.category || '',
-      penalty_log: canonicalQualityAssessment.penaltyLog,
-      release_status: canonicalQualityAssessment.final_grade === 'E' ? 'QUARANTINE' : 'AVAILABLE',
+      // Canonical RCS-GOV fields (do not rely on legacy `quality_*` for decisioning)
+      rcs_score: canonicalQualityAssessment.score,
+      final_grade: canonicalQualityAssessment.category || canonicalQualityAssessment.final_grade || '',
+      // Legacy compatibility bucket (non-decisional)
+      legacy_compat: {
+        quality_score: externalQualityAssessment.score,
+        quality_category: externalQualityAssessment.category || '',
+        penalty_log: [],
+      },
       external_quality_assessment: externalQualityAssessment,
       locationID: toInt(locationRaw, 'locationID'),
       linkedProject: normalizeString(linkedProjectRaw),
       currentStatus: normalizeString(this.getRowValue(row, ['currentStatus', 'statusAtual'])) || 'Available',
+      release_status: releaseStatus,
       sprec,
       clinical_data,
       tcle_id: normalizeString(tcleRaw),

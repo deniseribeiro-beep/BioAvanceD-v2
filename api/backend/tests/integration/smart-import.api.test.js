@@ -1,17 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
-const ImportLGPDService = require('../../src/services/import-lgpd.service');
 const PatientIdentityService = require('../../src/services/PatientIdentityService');
 const { generateSampleHash } = require('../../src/services/MerkleService');
-const { getCollection } = require('../../src/utils/collectionResolver');
-
-vi.mock('../../src/utils/collectionResolver');
 
 describe('Smart Import - Patient Deduplication & ATC Validation', () => {
   let db;
   let patientsCollection;
   let samplesCollection;
-  let importService;
 
   beforeEach(() => {
     patientsCollection = {
@@ -28,23 +23,21 @@ describe('Smart Import - Patient Deduplication & ATC Validation', () => {
       find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }),
     };
 
-    vi.mocked(getCollection).mockImplementation(async (db, name) => {
-      if (name === 'patients' || name === 'pacientes') {
-        return patientsCollection;
-      }
-      if (name === 'samples') {
-        return samplesCollection;
-      }
-      return {
-        findOne: vi.fn(),
-        insertOne: vi.fn(),
-        updateOne: vi.fn(),
-        find: vi.fn(),
-      };
-    });
-
-    db = { collection: (name) => patientsCollection };
-    importService = new ImportLGPDService();
+    db = {
+      listCollections: () => ({
+        toArray: async () => ([{ name: 'patients' }, { name: 'samples' }]),
+      }),
+      collection: (name) => {
+        if (name === 'patients' || name === 'pacientes') return patientsCollection;
+        if (name === 'samples') return samplesCollection;
+        return {
+          findOne: vi.fn(),
+          insertOne: vi.fn(),
+          updateOne: vi.fn(),
+          find: vi.fn(),
+        };
+      },
+    };
   });
 
   afterEach(() => {
@@ -121,7 +114,7 @@ João Silva,01/05/1990,M,98745612303,PLASMA,TREATED,Ataluren,A16AX27,ORPHA:324,L
         cpf: row1.cpf,
       });
 
-      expect(result1.success).toBe(true);
+      expect(result1.created).toBe(true);
       expect(patientsCollection.insertOne).toHaveBeenCalledTimes(1);
 
       // Reset for row 2
@@ -148,8 +141,8 @@ João Silva,01/05/1990,M,98745612303,PLASMA,TREATED,Ataluren,A16AX27,ORPHA:324,L
         cpf: row2.cpf,
       });
 
-      expect(result2.success).toBe(true);
-      expect(result2.data.patientID).toBe('11111111');
+      expect(result2.created).toBe(false);
+      expect(result2.patient.patientID).toBe('11111111');
       expect(patientsCollection.insertOne).not.toHaveBeenCalled(); // Não deve inserir novo
       expect(patientsCollection.updateOne).toHaveBeenCalled(); // Deve atualizar
 
@@ -227,7 +220,7 @@ João Silva,01/05/1990,M,98745612303,PLASMA,TREATED,Ataluren,A16AX27,ORPHA:324,L
       let patientsCreated = 0;
       for (const item of importQueue) {
         const result = await PatientIdentityService.matchOrUpsertPatient(db, item);
-        if (result.success) patientsCreated++;
+        if (result.created) patientsCreated++;
       }
 
       expect(patientsCreated).toBe(2);

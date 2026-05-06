@@ -120,7 +120,7 @@ describe('Dictionary Service - ATC/ChEMBL Fallback and Caching', () => {
     expect(response.body.medications.length).toBeGreaterThan(0);
   });
 
-  it('aciona fallback remoto e retorna dados normalizados quando cache local esta vazio', async () => {
+  it('em modo offline padrao, nao aciona fallback remoto quando cache local esta vazio', async () => {
     const technicianToken = createTechnicianToken();
     const { db, medicationDictionary } = createMockDb({ localRows: [] });
 
@@ -133,13 +133,9 @@ describe('Dictionary Service - ATC/ChEMBL Fallback and Caching', () => {
 
     expect(response.status).toBe(200);
     expect(medicationDictionary.find).toHaveBeenCalled();
-    expect(global.fetch).toHaveBeenCalledTimes(1);
-    expect(medicationDictionary.bulkWrite).toHaveBeenCalled();
-    expect(response.body.medications[0]).toMatchObject({
-      generic_name: 'Migalastat',
-      atc_code: 'A16AX14',
-      atc_level_1: 'A',
-    });
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(medicationDictionary.bulkWrite).not.toHaveBeenCalled();
+    expect(Array.isArray(response.body.medications)).toBe(true);
   });
 
   it('retorna 400 quando query esta ausente', async () => {

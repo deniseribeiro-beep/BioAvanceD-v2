@@ -1235,6 +1235,10 @@ class ImportLGPDService {
       canonical: false,
     };
     const canonicalQualityAssessment = qualityDomain.resolveMethodologicalQuality({ sprec });
+    const releaseStatus = canonicalQualityAssessment?.governance_status === 1
+      && ['A', 'B', 'C', 'D'].includes(String(canonicalQualityAssessment?.final_grade || canonicalQualityAssessment?.category || '').toUpperCase())
+      ? 'AVAILABLE'
+      : 'QUARANTINE';
 
     return {
       patientID: row.patientID?.trim() || row.patientId?.trim() || row.patient_id?.trim() || null, // Aceita patientID, patientId ou patient_id
@@ -1255,11 +1259,15 @@ class ImportLGPDService {
       registrationDate: registerDate,
       quantity: row.quantity ? parseFloat(row.quantity) : null,
       quality: parseQualityMIABIS(row.quality), // Valida e converte para id MIABIS canônico
-      quality_score: canonicalQualityAssessment.score,
-      quality_category: canonicalQualityAssessment.category || '',
-      penalty_log: canonicalQualityAssessment.penaltyLog,
-      release_status: canonicalQualityAssessment.final_grade === 'E' ? 'QUARANTINE' : 'AVAILABLE',
+      rcs_score: canonicalQualityAssessment.score,
+      final_grade: canonicalQualityAssessment.category || canonicalQualityAssessment.final_grade || '',
+      legacy_compat: {
+        quality_score: externalQualityAssessment.score,
+        quality_category: externalQualityAssessment.category || '',
+        penalty_log: [],
+      },
       external_quality_assessment: externalQualityAssessment,
+      release_status: releaseStatus,
       locationID: row.locationID || row.locationId ? parseInt(row.locationID || row.locationId) : null,
       linkedProject: row.linkedProject?.trim() || null,
       currentStatus: row.currentStatus?.trim() || 'Available',

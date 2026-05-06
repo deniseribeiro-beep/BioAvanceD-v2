@@ -3,6 +3,7 @@ import { vi } from 'vitest';
 process.env.CONSENT_SECRET = process.env.CONSENT_SECRET || 'test-consent-secret';
 process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-jwt-secret';
 process.env.JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || 'test-refresh-jwt-secret';
+process.env.RESEND_API_KEY = process.env.RESEND_API_KEY || 're_test_dummy_key';
 
 function createMockSession() {
 	return {

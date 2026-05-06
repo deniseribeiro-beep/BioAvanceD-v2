@@ -15,7 +15,7 @@ function evaluateQuality(payload = {}) {
     ...result,
     ...rcsCertificationService.buildDeprecatedCompatibility ? rcsCertificationService.buildDeprecatedCompatibility(result) : {},
     // Keep legacy fields for backwards compatibility, but mark them as deprecated.
-    deprecated_legacy_fields: ['quality_score', 'quality_category', 'penalty_log', 'forcedQuarantine'],
+    deprecated_legacy_fields: ['quality_score', 'quality_category', 'penalty_log', 'forcedQuarantine', 'category'],
   };
 }
 

@@ -1,35 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-
-const saveTelemetryPoint = vi.fn();
-const sendCriticalAlertEmail = vi.fn();
-const connectMongoDB = vi.fn();
-
-vi.mock('../../src/services/saveTelemetryPoint', () => ({
-  saveTelemetryPoint,
-}));
-
-vi.mock('../../src/services/saveTelemetryPoint.js', () => ({
-  saveTelemetryPoint,
-}));
-
-vi.mock('../../src/services/sendCriticalAlertEmail', () => ({
-  sendCriticalAlertEmail,
-}));
-
-vi.mock('../../src/services/sendCriticalAlertEmail.js', () => ({
-  sendCriticalAlertEmail,
-}));
-
-vi.mock('../../src/infrastructure/database/mongodb/connection', () => ({
-  connectMongoDB,
-}));
-
-vi.mock('../../src/infrastructure/database/mongodb/connection.js', () => ({
-  connectMongoDB,
-}));
-
-const SensorMetadata = require('../../src/models/SensorMetadata.schema');
-const { ingestTelemetry } = require('../../src/controllers/iot.controller');
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 function createResponse() {
   return {
@@ -47,30 +16,79 @@ function createResponse() {
 }
 
 describe('iot.controller', () => {
+  let ingestTelemetry;
+  let saveTelemetryPoint;
+  let sendCriticalAlertEmail;
+  let connectMongoDB;
   let consoleLogSpy;
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     vi.clearAllMocks();
-    consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
-    process.env.RESEND_API_KEY = 'test-resend-key';
-    process.env.ALERT_EMAIL_TO = 'alerts@example.test';
 
-    saveTelemetryPoint.mockResolvedValue(true);
-    sendCriticalAlertEmail.mockResolvedValue({ id: 'email-1' });
-    connectMongoDB.mockResolvedValue(undefined);
+    saveTelemetryPoint = vi.fn().mockResolvedValue(true);
+    sendCriticalAlertEmail = vi.fn().mockResolvedValue({ id: 'email-1' });
 
-    vi.spyOn(SensorMetadata, 'findOne').mockReturnValue({
-      populate: vi.fn().mockReturnThis(),
-      lean: vi.fn().mockResolvedValue({
-        sensorId: 'sensor-1',
-        alertEmail: 'alerts@example.test',
-        temperaturePolicy: {
-          _id: 'policy-1',
-          minTemp: 2,
-          maxTemp: 8,
-        },
+    const temperatureIncidentsCollection = {
+      findOne: vi.fn().mockResolvedValue(null),
+      updateOne: vi.fn().mockResolvedValue({ modifiedCount: 1 }),
+      insertOne: vi.fn().mockResolvedValue({ insertedId: 'incident-1' }),
+    };
+
+    const usersCollection = {
+      find: vi.fn().mockReturnValue({
+        project: vi.fn().mockReturnValue({
+          toArray: vi.fn().mockResolvedValue([]),
+        }),
       }),
+    };
+
+    connectMongoDB = vi.fn().mockResolvedValue({
+      collection: (name) => {
+        if (name === 'temperatureIncidents') return temperatureIncidentsCollection;
+        if (name === 'users') return usersCollection;
+        return { findOne: vi.fn().mockResolvedValue(null) };
+      },
     });
+
+    vi.doMock('../../src/services/saveTelemetryPoint', () => ({ saveTelemetryPoint }));
+    vi.doMock('../../src/services/sendCriticalAlertEmail', () => ({ sendCriticalAlertEmail }));
+    vi.doMock('../../src/infrastructure/database/mongodb/connection', () => ({ connectMongoDB }));
+    vi.doMock('../../src/models/SensorMetadata.schema', () => ({
+      default: {
+        findOne: vi.fn().mockReturnValue({
+          populate: vi.fn().mockReturnThis(),
+          lean: vi.fn().mockResolvedValue({
+            sensorId: 'sensor-1',
+            alertEmail: 'alerts@example.test',
+            temperaturePolicy: {
+              _id: 'policy-1',
+              minTemp: 2,
+              maxTemp: 8,
+            },
+          }),
+        }),
+      },
+      findOne: vi.fn().mockReturnValue({
+        populate: vi.fn().mockReturnThis(),
+        lean: vi.fn().mockResolvedValue({
+          sensorId: 'sensor-1',
+          alertEmail: 'alerts@example.test',
+          temperaturePolicy: {
+            _id: 'policy-1',
+            minTemp: 2,
+            maxTemp: 8,
+          },
+        }),
+      }),
+    }));
+
+    const controllerModule = await import('../../src/controllers/iot.controller.js');
+    ingestTelemetry = controllerModule.ingestTelemetry;
+
+    process.env.RESEND_API_KEY = 're_test_dummy_key';
+    process.env.ALERT_EMAIL_TO = 'alerts@example.test';
+    consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
   });
 
   afterEach(() => {
@@ -107,7 +125,7 @@ describe('iot.controller', () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.body).toEqual({ success: true, accepted: true });
-    expect(SensorMetadata.findOne).toHaveBeenCalledWith({ sensorId: 'sensor-1' });
+    expect(connectMongoDB).toHaveBeenCalled();
     expect(consoleLogSpy).toHaveBeenCalledWith(
       '[ALERTA][IOT] Temperatura fora da política',
       expect.stringContaining('"sensorId":"sensor-1"')

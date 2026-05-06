@@ -164,14 +164,20 @@ function buildSampleDocumentFromIntake(data = {}, matchedPatient = null) {
     quantity: normalizeNumber(sample.quantity, 0),
     unit: normalizeString(sample.unit) || null,
     quality: normalizeString(sample.quality) || null,
-    quality_score: normalizeNumber(sample.quality_score, null),
-    quality_category: qualityCategory,
+    // Prefer canonical RCS-GOV fields; keep legacy values in `legacy_compat`.
+    rcs_score: normalizeNumber(sample.rcs_score !== undefined ? sample.rcs_score : sample.quality_score, null),
+    final_grade: (sample.final_grade || qualityCategory) || '',
     linkedProject: normalizeString(sample.linkedProject || sample.linked_project) || 'INTAKE_WIZARD',
     currentStatus: normalizeString(sample.currentStatus) || 'Available',
     status: normalizeString(sample.status) || 'AVAILABLE',
     sprec: normalizeObject(sample.sprec),
     merkle_root: normalizeString(sample.merkle_root || integrity.merkle_root) || null,
-    penalty_log: normalizeArray(sample.penalty_log || integrity.penalty_log),
+    // legacy penalty_log preserved for compatibility under legacy_compat
+    legacy_compat: {
+      penalty_log: normalizeArray(sample.penalty_log || integrity.penalty_log),
+      quality_score: normalizeNumber(sample.quality_score, null),
+      quality_category: qualityCategory,
+    },
     tcle_id: normalizeString(consent.tcle_template_id || sample.selected_tcle || integrity.selected_tcle) || null,
     consentTemplateId: normalizeString(consent.tcle_template_id || sample.selected_tcle || integrity.selected_tcle) || null,
     clinical_data: buildClinicalData(data),
@@ -316,10 +322,15 @@ async function handleIntakeWizard(req, res) {
 
     const samplesCollection = await getCollection(db, 'samples');
     const sampleToPersist = buildSampleDocumentFromIntake(data, matchOutcome.patient);
-    sampleToPersist.quality_score = qualidade.score;
-    sampleToPersist.quality_category = qualidade.category || sampleToPersist.quality_category;
-    sampleToPersist.penalty_log = qualidade.penaltyLog;
-    sampleToPersist.release_status = qualidade.final_grade === 'E' ? 'QUARANTINE' : sampleToPersist.release_status;
+    // Store canonical RCS-GOV results
+    sampleToPersist.rcs_score = qualidade.score;
+    sampleToPersist.final_grade = qualidade.category || sampleToPersist.final_grade;
+    // Preserve legacy artifacts under a compatibility namespace (non-decisional)
+    sampleToPersist.legacy_compat = sampleToPersist.legacy_compat || {};
+    sampleToPersist.legacy_compat.quality_score = qualidade.score;
+    sampleToPersist.legacy_compat.quality_category = qualidade.category || sampleToPersist.legacy_compat.quality_category || sampleToPersist.quality_category || '';
+    sampleToPersist.legacy_compat.penalty_log = qualidade.penaltyLog || sampleToPersist.legacy_compat.penalty_log || sampleToPersist.penalty_log || [];
+    sampleToPersist.legacy_compat.quarantineReason = qualidade.quarantineReason || null;
     if (qualidade.sprec && Object.keys(qualidade.sprec).length > 0) {
       sampleToPersist.sprec = qualidade.sprec;
     }
