@@ -1,4 +1,7 @@
-import { vi } from 'vitest';
+import { beforeEach, vi } from 'vitest';
+import { createRequire } from 'module';
+
+const require = createRequire(import.meta.url);
 
 process.env.CONSENT_SECRET = process.env.CONSENT_SECRET || 'test-consent-secret';
 process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-jwt-secret';
@@ -10,6 +13,66 @@ function createMockSession() {
 	return {
 		run: vi.fn(async () => ({ records: [] })),
 		close: vi.fn(async () => undefined)
+	};
+}
+
+function createCursor(docs = []) {
+	let current = Array.isArray(docs) ? [...docs] : [];
+	const cursor = {
+		sort: vi.fn((criteria = {}) => {
+			const [[field, direction = 1] = []] = Object.entries(criteria);
+			if (field) {
+				current.sort((a, b) => {
+					const left = a?.[field] ?? 0;
+					const right = b?.[field] ?? 0;
+					if (left === right) return 0;
+					return direction >= 0 ? (left > right ? 1 : -1) : (left > right ? -1 : 1);
+				});
+			}
+			return cursor;
+		}),
+		skip: vi.fn((n = 0) => {
+			current = current.slice(Math.max(0, Number(n) || 0));
+			return cursor;
+		}),
+		limit: vi.fn((n) => {
+			if (Number.isFinite(Number(n)) && Number(n) >= 0) {
+				current = current.slice(0, Number(n));
+			}
+			return cursor;
+		}),
+		project: vi.fn(() => cursor),
+		populate: vi.fn(() => cursor),
+		lean: vi.fn(async () => current[0] || null),
+		toArray: vi.fn(async () => current),
+	};
+	return cursor;
+}
+
+function createCollection(docs = []) {
+	return {
+		collectionName: 'test_collection',
+		createIndex: vi.fn(async () => 'idx'),
+		insertOne: vi.fn(async () => ({ insertedId: 'mock-id' })),
+		updateOne: vi.fn(async () => ({ matchedCount: 1, modifiedCount: 1, upsertedId: null })),
+		updateMany: vi.fn(async () => ({ matchedCount: 1, modifiedCount: 1 })),
+		deleteOne: vi.fn(async () => ({ deletedCount: 1 })),
+		findOne: vi.fn(async () => null),
+		find: vi.fn(() => createCursor(docs)),
+		countDocuments: vi.fn(async () => Array.isArray(docs) ? docs.length : 0),
+		estimatedDocumentCount: vi.fn(async () => Array.isArray(docs) ? docs.length : 0),
+		bulkWrite: vi.fn(async () => ({ modifiedCount: 0, insertedCount: 0 })),
+	};
+}
+
+function createDefaultDb() {
+	const collections = new Map();
+	return {
+		collection(name) {
+			if (!collections.has(name)) collections.set(name, createCollection());
+			return collections.get(name);
+		},
+		listCollections: vi.fn(() => createCursor([])),
 	};
 }
 
@@ -42,3 +105,14 @@ vi.mock('../src/services/session.service', () => ({
 	rotateSessionTokens: vi.fn(async () => true),
 	sessions: new Map()
 }));
+
+beforeEach(() => {
+	try {
+		const app = require('../app');
+		if (!app.locals.db) {
+			app.locals.db = createDefaultDb();
+		}
+	} catch (_) {
+		// Some isolated unit tests do not load the Express app.
+	}
+});
