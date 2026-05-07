@@ -96,6 +96,11 @@ async function setupSamplesMocks(page: Page) {
       return;
     }
 
+    if (/\/api\/analysis-types(?:\?.*)?$/.test(url) && method === 'GET') {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ success: true, data: [] }) });
+      return;
+    }
+
     if (/\/api\/locations(?:\?.*)?$/.test(url) && method === 'GET') {
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ success: true, data: [] }) });
       return;
@@ -168,16 +173,23 @@ test.describe('Samples Legacy - End to End', () => {
 
   test('detalhe permite entrar em modo de edição', async ({ page }) => {
     await setupSamplesMocks(page);
-    await page.goto('/samples/sample-001');
+    await page.goto('/samples/sample-001', { waitUntil: 'networkidle' });
 
     await expect(page.getByTestId('sample-detail-page-title')).toBeVisible({ timeout: 10000 });
     await expect(page.getByTestId('sample-detail-edit-button')).toBeVisible();
+    await page.getByTestId('sample-detail-edit-button').click({ force: true });
+    await expect(page.getByTestId('sample-detail-save-button')).toBeVisible();
+    await expect(page.getByTestId('sample-detail-cancel-button')).toBeVisible();
   });
 
   test('detalhe permite retornar para listagem', async ({ page }) => {
     await setupSamplesMocks(page);
-    await page.goto('/samples/sample-001');
+    await page.goto('/samples/sample-001', { waitUntil: 'networkidle' });
 
-    await expect(page.getByTestId('sample-detail-back-button-2')).toBeVisible({ timeout: 10000 });
+    await expect(page.getByTestId('sample-detail-page-title')).toBeVisible({ timeout: 10000 });
+    await expect(page.getByTestId('sample-detail-back-button')).toBeVisible();
+    await page.getByTestId('sample-detail-back-button').click({ force: true });
+    await expect(page).toHaveURL(/\/samples$/);
+    await expect(page.getByTestId('sample-list-root')).toBeVisible();
   });
 });

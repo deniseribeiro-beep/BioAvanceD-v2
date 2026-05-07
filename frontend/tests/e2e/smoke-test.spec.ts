@@ -1,4 +1,13 @@
 import { test, expect } from '@playwright/test';
+import { createAdminAuthContext, injectSessionToken, mockAuthVerifyKeepalive } from './support/auth';
+import { mockWizardDomainApis } from './support/api-mocks';
+
+async function mockAuthenticatedWizard(page) {
+  const auth = createAdminAuthContext();
+  await injectSessionToken(page, auth.token);
+  await mockAuthVerifyKeepalive(page, auth.user);
+  await mockWizardDomainApis(page, { withActiveTcle: true });
+}
 
 test('Smoke Test - Rotas principais carregam sem erro', async ({ page, context }) => {
   // Mock session cookie
@@ -49,7 +58,9 @@ test('Validação de Zod no Intake Wizard', async ({ page, context }) => {
     },
   ]);
 
+  await mockAuthenticatedWizard(page);
   await page.goto('/next/intake', { waitUntil: 'networkidle' });
+  await expect(page.getByTestId('intake-wizard-root')).toBeVisible({ timeout: 10000 });
   await expect(page.getByTestId('wizard-title')).toBeVisible({ timeout: 10000 });
   await expect(page.getByTestId('wizard-full-name')).toBeVisible();
 });

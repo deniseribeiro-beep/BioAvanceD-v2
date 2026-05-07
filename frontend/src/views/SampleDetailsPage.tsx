@@ -429,7 +429,7 @@ export default function SampleDetailsPage() {
   };
 
   return (
-    <div className="page">
+    <div className="page" data-testid="sample-detail-root">
       <div className="page-header">
         <div>
           <h1 className="page-title" data-testid="sample-detail-page-title">
@@ -452,7 +452,13 @@ export default function SampleDetailsPage() {
                 <Button variant="secondary" onClick={() => navigate(`/samples/${id}/chain`)} style={{ padding: '0.25rem 0.5rem', fontSize: '0.85rem' }} data-testid="sample-detail-chain-button">
                   {t('samples.chain') || 'Cadeia de Custódia'}
                 </Button>
-                <Button variant="secondary" onClick={() => navigate('/samples')} style={{ padding: '0.25rem 0.5rem', fontSize: '0.85rem' }} data-testid="sample-detail-back-button-2">
+                <Button
+                  variant="secondary"
+                  onClick={() => navigate('/samples')}
+                  style={{ padding: '0.25rem 0.5rem', fontSize: '0.85rem' }}
+                  data-testid="sample-detail-back-button"
+                  data-legacy-testid="sample-detail-back-button-2"
+                >
                   <ArrowLeft size={18} style={{ marginRight: '0.5rem' }} />
                   {t('common.back') || 'Voltar'}
                 </Button>

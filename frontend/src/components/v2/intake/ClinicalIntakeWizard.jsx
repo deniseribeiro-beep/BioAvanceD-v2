@@ -3210,7 +3210,7 @@ export default function ClinicalIntakeWizard(props) {
   };
 
   return (
-    <div className={`clinical-intake-wizard bg-gray-50 rounded-2xl p-4 md:p-6 ${className}`.trim()}>
+    <div className={`clinical-intake-wizard bg-gray-50 rounded-2xl p-4 md:p-6 ${className}`.trim()} data-testid="intake-wizard-root">
       <form onSubmit={handleSubmit}>
         <Card className="bg-white rounded-2xl shadow-lg border border-gray-100">
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
