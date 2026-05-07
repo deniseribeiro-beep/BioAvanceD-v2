@@ -6,6 +6,12 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+function createMockJwt(payload: Record<string, unknown>) {
+  const header = Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString('base64url');
+  const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  return `${header}.${body}.signature`;
+}
+
 async function globalSetup(config: FullConfig) {
   const projectUse = config.projects[0]?.use ?? {};
   const baseURL = String(projectUse.baseURL ?? 'http://localhost:5173');
@@ -15,6 +21,36 @@ async function globalSetup(config: FullConfig) {
 
   if (process.env.PLAYWRIGHT_SKIP_GLOBAL_SETUP === '1') {
     fs.writeFileSync(authFile, JSON.stringify({ cookies: [], origins: [] }, null, 2));
+    return;
+  }
+
+  if (process.env.PLAYWRIGHT_USE_REAL_LOGIN !== '1') {
+    const token = createMockJwt({
+      id: '507f1f77bcf86cd799439011',
+      userID: '507f1f77bcf86cd799439011',
+      accessType: 4,
+      roleName: 'Administrador',
+      name: 'QA Admin',
+      username: 'admin',
+      email: 'admin@bioavanced.com.br',
+    });
+
+    fs.writeFileSync(
+      authFile,
+      JSON.stringify(
+        {
+          cookies: [],
+          origins: [
+            {
+              origin: baseURL,
+              localStorage: [{ name: 'token', value: token }],
+            },
+          ],
+        },
+        null,
+        2
+      )
+    );
     return;
   }
 

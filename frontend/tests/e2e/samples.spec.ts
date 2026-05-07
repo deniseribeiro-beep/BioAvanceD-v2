@@ -146,7 +146,7 @@ async function openSamples(page: Page) {
   await expect(page.getByTestId('samples-page-title')).toBeVisible({ timeout: 10000 });
 }
 
-test.describe('Samples Legacy - End to End', () => {
+test.describe('Samples - End to End', () => {
   test('listagem apresenta tabela, busca e seleção', async ({ page }) => {
     await openSamples(page);
 
