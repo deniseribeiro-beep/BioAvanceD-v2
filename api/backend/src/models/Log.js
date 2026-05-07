@@ -74,6 +74,7 @@ class LogModel {
     const normalizedResourceType = String(data.resourceType || data.entity || 'Sistema').trim() || 'Sistema';
     const normalizedResourceId = data.resourceId || data.entityID || null;
     const normalizedStatus = data.status || data.result || 'success';
+    const reqHeaders = req?.headers || {};
     
     // Normaliza e valida a entidade
     let entity = normalizedResourceType;
@@ -118,7 +119,7 @@ class LogModel {
       result: normalizedStatus, // success, error, warning
       severity: data.severity || 'info', // info, warning, error, critical
       source: data.source || data.origin || 'api', // String - Origem do evento
-      ipSource: data.ipSource || data.sourceIP || (req ? (req.ip || req.headers['x-forwarded-for'] || req.headers['x-real-ip'] || req.connection?.remoteAddress) : null), // String - IP de origem
+      ipSource: data.ipSource || data.sourceIP || (req ? (req.ip || reqHeaders['x-forwarded-for'] || reqHeaders['x-real-ip'] || req.connection?.remoteAddress) : null), // String - IP de origem
       module: data.module || 'Sistema', // Módulo de origem (Autenticação, Cadastro, Amostras, etc)
       message: data.message || null,
       payload: data.payload || null, // Payload relevante (sanitizado)

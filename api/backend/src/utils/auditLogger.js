@@ -26,16 +26,18 @@ class AuditLogger {
   extractRequestInfo(req) {
     if (!req) return {};
 
+    const headers = req.headers || {};
+
     // Captura IP real considerando proxies e load balancers
     let ip = 'N/A';
     if (req.ip) {
       ip = req.ip;
-    } else if (req.headers['x-forwarded-for']) {
+    } else if (headers['x-forwarded-for']) {
       // X-Forwarded-For pode conter múltiplos IPs (cliente, proxy1, proxy2)
-      const forwardedIps = req.headers['x-forwarded-for'].split(',');
+      const forwardedIps = headers['x-forwarded-for'].split(',');
       ip = forwardedIps[0].trim(); // Primeiro IP é o cliente real
-    } else if (req.headers['x-real-ip']) {
-      ip = req.headers['x-real-ip'];
+    } else if (headers['x-real-ip']) {
+      ip = headers['x-real-ip'];
     } else if (req.connection?.remoteAddress) {
       ip = req.connection.remoteAddress;
     } else if (req.socket?.remoteAddress) {
@@ -57,21 +59,21 @@ class AuditLogger {
     return {
       ip: ip,
       ipOriginal: req.ip || req.connection?.remoteAddress || 'N/A',
-      forwardedFor: req.headers['x-forwarded-for'] || null,
-      realIp: req.headers['x-real-ip'] || null,
-      userAgent: req.headers['user-agent'] || 'N/A',
+      forwardedFor: headers['x-forwarded-for'] || null,
+      realIp: headers['x-real-ip'] || null,
+      userAgent: headers['user-agent'] || 'N/A',
       method: req.method || 'N/A',
       path: req.path || req.url || 'N/A',
-      origin: req.headers.origin || 'N/A',
-      referer: req.headers.referer || req.headers.referrer || null,
-      host: req.headers.host || 'N/A',
+      origin: headers.origin || 'N/A',
+      referer: headers.referer || headers.referrer || null,
+      host: headers.host || 'N/A',
       protocol: req.protocol || 'http',
       secure: req.secure || false,
       headers: {
-        'accept': req.headers.accept || null,
-        'accept-language': req.headers['accept-language'] || null,
-        'accept-encoding': req.headers['accept-encoding'] || null,
-        'content-type': req.headers['content-type'] || null
+        'accept': headers.accept || null,
+        'accept-language': headers['accept-language'] || null,
+        'accept-encoding': headers['accept-encoding'] || null,
+        'content-type': headers['content-type'] || null
       }
     };
   }

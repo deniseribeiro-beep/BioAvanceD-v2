@@ -1,9 +1,16 @@
+const path = require('path');
 const { defineConfig } = require('vitest/config');
 
 module.exports = defineConfig({
+  resolve: {
+    alias: {
+      basic: path.resolve(__dirname, 'tests/reporters/basic.js'),
+    },
+  },
   test: {
     environment: 'node',
     globals: true,
+    reporters: ['default'],
     setupFiles: ['./tests/vitest.setup.js'],
     fileParallelism: false,
     isolate: true,
@@ -11,7 +18,6 @@ module.exports = defineConfig({
     exclude: [
       '**/node_modules/**',
       'tests/setup.test.js',
-      'tests/merkleTree.test.js',
       'tests/unit/authConsent.test.js',
       'tests/unit/security.test.js',
       'tests/integration/auth-login.node.test.js',

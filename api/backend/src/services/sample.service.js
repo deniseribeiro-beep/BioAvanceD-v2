@@ -25,7 +25,14 @@ class SampleService {
       // RF004 - Validação completa
       const validation = SampleModel.validate(sampleData);
       if (!validation.isValid) {
-        const validationError = new Error(validation.errors.join(', '));
+        let validationMessage = 'Dados da amostra inválidos conforme modelo MIABIS/BioAvanceD';
+        if (Array.isArray(validation.errors) && validation.errors.length > 0) {
+          validationMessage = validation.errors.join(', ');
+        } else if (typeof validation.errors === 'string' && validation.errors.trim()) {
+          validationMessage = validation.errors.trim();
+        }
+
+        const validationError = new Error(validationMessage);
         validationError.statusCode = 422;
         throw validationError;
       }
@@ -35,12 +42,16 @@ class SampleService {
       // VALIDAÇÃO DE ID DE PACIENTE (LGPD)
       // O ID de paciente é obrigatório e deve existir no banco
       if (!sampleData.patientID) {
-        throw new Error('ID de paciente é obrigatório para cadastrar amostra');
+        const patientIdError = new Error('ID de paciente é obrigatório para cadastrar amostra');
+        patientIdError.statusCode = 400;
+        throw patientIdError;
       }
 
       // Valida formato do patientID (8 dígitos)
       if (typeof sampleData.patientID !== 'string' || sampleData.patientID.length !== 8 || !/^\d{8}$/.test(sampleData.patientID)) {
-        throw new Error('ID de paciente deve ser um ID anonimizado de 8 dígitos numéricos');
+        const patientIdFormatError = new Error('ID de paciente deve ser um ID anonimizado de 8 dígitos numéricos');
+        patientIdFormatError.statusCode = 400;
+        throw patientIdFormatError;
       }
 
       // Valida se o ID de paciente existe (sem expor dados sensíveis)

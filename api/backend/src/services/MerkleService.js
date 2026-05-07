@@ -65,6 +65,11 @@ function generateSampleHash(sample = {}) {
     sprec: sample?.sprec && typeof sample.sprec === 'object' ? sample.sprec : {},
     // Keep insertion order explicit for drug_name and atc_code before stable sorting.
     pharmacology_data: normalizePharmacologyData(sample?.pharmacology_data && typeof sample.pharmacology_data === 'object' ? sample.pharmacology_data : {}),
+    // Include RCS/integrity fields so they affect the sample hash
+    rcs_score: sample?.rcs_score ?? null,
+    final_grade: sample?.final_grade ?? null,
+    calculation_trace: sample?.calculation_trace ?? null,
+    axis_penalties: sample?.axis_penalties ?? null,
   };
 
   return crypto
