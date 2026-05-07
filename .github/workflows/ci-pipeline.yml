@@ -26,12 +26,12 @@ jobs:
       # 3. Testa o Backend (Isolado)
       - name: 📦 Instalar dependências do Backend
         run: |
-          cd backend
+          cd api/backend
           npm ci # ou yarn install / pnpm install
 
       - name: 🧪 Rodar Testes de Backend (Vitest)
         run: |
-          cd backend
+          cd api/backend
           npx vitest run
 
       # 4. Testa o Frontend (Isolado)
