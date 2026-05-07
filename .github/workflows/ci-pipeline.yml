@@ -124,6 +124,8 @@ jobs:
           npx playwright install --with-deps
 
       - name: 🎭 Rodar Testes E2E (Playwright)
+        env:
+          PLAYWRIGHT_SKIP_GLOBAL_SETUP: "1"
         run: |
           cd frontend
           npx playwright test
