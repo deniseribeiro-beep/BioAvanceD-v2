@@ -1,8 +1,9 @@
 import { test, expect, type Page } from '@playwright/test';
-import { mockAuthVerifyKeepalive } from './support/auth';
+import { createAdminAuthContext, injectSessionToken, mockAuthVerifyKeepalive } from './support/auth';
+import { mockWizardDomainApis } from './support/api-mocks';
 
 async function mockAuth(page: Page) {
-  await mockAuthVerifyKeepalive(page, {
+  const auth = createAdminAuthContext({
     id: '1',
     userID: '1',
     username: 'qa-admin',
@@ -11,11 +12,17 @@ async function mockAuth(page: Page) {
     roleName: 'Administrador',
     email: 'qa-admin@bioavanced.test',
   });
+  await injectSessionToken(page, auth.token);
+  await mockAuthVerifyKeepalive(page, auth.user);
 }
 
 test.describe('Internationalization (i18n) - Language Switching', () => {
   test.beforeEach(async ({ page }) => {
+    await page.addInitScript(() => {
+      window.localStorage.setItem('app_language', 'pt-BR');
+    });
     await mockAuth(page);
+    await mockWizardDomainApis(page, { withActiveTcle: true });
   });
 
   test('deve renderizar o wizard e seletor de idioma com seletores estáveis', async ({ page }) => {
@@ -40,7 +47,7 @@ test.describe('Internationalization (i18n) - Language Switching', () => {
     await page.goto('/next/intake', { waitUntil: 'networkidle' });
 
     await page.getByTestId('language-selector').selectOption('es-ES');
-    await expect(page.getByTestId('wizard-title')).toContainText(/Registro Integrado|Cadastro Integrado|Intake/i);
+    await expect(page.getByTestId('wizard-title')).toContainText(/Cadastro Integrado|Integrated Intake/i);
     await expect(page.getByTestId('wizard-next-button')).toBeVisible();
   });
 

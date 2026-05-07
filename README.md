@@ -193,51 +193,170 @@ npm --prefix backend run test:ci && npm --prefix frontend run test:e2e
 
 **Documentação Completa**: Ver [AUDIT_REPORT_FINAL.md](./AUDIT_REPORT_FINAL.md) para detalhes completos. 
 
-## 🐳 Ambientes Docker
+## Docker Dev com Hot Reload
 
-Este repositório usa três fluxos separados:
+Esta seção descreve o modo mínimo recomendado para auditoria técnica do BioAvanceD-v2 em Docker. O fluxo sobe backend com `nodemon`, frontend com Vite HMR e bancos locais em containers. Não inclua segredos reais no repositório.
 
-- desenvolvimento com hot-reload via `docker-compose.override.yml`
-- testes via `docker-compose.test.yml`
-- produção local via `docker-compose.yml`
+### Pré-Requisitos
 
-### Desenvolvimento local com HMR
+- Docker Engine e Docker Compose v2.
+- Node.js somente para usar os scripts `npm` da raiz; o runtime da aplicação roda nos containers.
+- Portas livres no host: `3000`, `5173`, `27017`, `6379`, `7474`, `7687`, `8086` e `9229`.
+- Em servidor Linux na nuvem, liberar no firewall apenas as portas necessárias para auditoria. Evite expor MongoDB, Redis, Neo4j, InfluxDB e inspector Node publicamente.
 
-```powershell
-docker compose --env-file .env.docker -f docker-compose.yml -f docker-compose.override.yml up -d backend frontend
+### Variáveis Obrigatórias
+
+Crie o arquivo local a partir do exemplo:
+
+```bash
+cp .env.docker.example .env.docker
 ```
 
-Frontend: <http://localhost:5173>
+Preencha, no mínimo:
 
-Para parar:
+- `MONGO_ROOT_USERNAME`, `MONGO_ROOT_PASSWORD`, `MONGO_URI`, `MONGO_DB`
+- `JWT_SECRET`, `JWT_REFRESH_SECRET`, `ENCRYPTION_KEY`, `USER_ANON_SALT`
+- `NEO4J_USERNAME`, `NEO4J_PASSWORD`, `NEO4J_URI`
+- `REDIS_URL`
+- `INFLUXDB_INIT_USERNAME`, `INFLUXDB_INIT_PASSWORD`, `INFLUXDB_TOKEN`, `INFLUXDB_URL`
+- `FRONTEND_URL`, `API_URL`, `ALLOWED_ORIGINS`
+- `VITE_API_BASE_URL`, `VITE_HMR_HOST`, `VITE_HMR_PROTOCOL`, `VITE_HMR_CLIENT_PORT`
+- `RESEND_API_KEY` e `EMAIL_FROM` somente se envio real de e-mail for auditado
 
-```powershell
-docker compose --env-file .env.docker -f docker-compose.yml -f docker-compose.override.yml down
+Para auditoria local sem cloud externa, mantenha:
+
+```env
+ALLOW_CLOUD_INTEGRATIONS=false
+ALLOW_EXTERNAL_TERMINOLOGY_SYNC=false
+ALLOW_EXTERNAL_HPO_LOOKUP=false
+ALLOW_EXTERNAL_DRUG_LOOKUP=false
+MQTT_ENABLED=false
 ```
 
-### Testes em Docker
+### Serviços Docker
 
-```powershell
-npm run docker:test:backend
-npm run docker:test:frontend
+- `mongodb`: banco principal local/container.
+- `backend`: API Node/Express em `http://localhost:3000`, com `nodemon` e inspector em `9229`.
+- `frontend`: Vite em `http://localhost:5173`, com hot reload.
+- `redis`: fila/cache local quando usado pelo backend.
+- `neo4j`: linhagem/grafo local quando usado pelo backend.
+- `influxdb`: telemetria local quando usada pelo backend.
+
+### Subir Ambiente
+
+Com script da raiz:
+
+```bash
+npm run dev:up
 ```
 
-### Produção local
+Com Docker Compose direto:
 
-```powershell
-npm run docker:local:up
-npm run docker:local:ps
-npm run docker:local:logs
-npm run docker:local:down
+```bash
+docker compose --env-file .env.docker -f docker-compose.yml up --build backend frontend
 ```
 
-### URLs locais após subir
+### Seeds e Índices RCS-GOV
 
-- Frontend: <http://localhost:8080>
+Após os containers estarem saudáveis:
+
+```bash
+docker compose --env-file .env.docker -f docker-compose.yml exec backend npm run migrate:rcs
+docker compose --env-file .env.docker -f docker-compose.yml exec backend npm run seed
+```
+
+O seed do backend inclui o modelo `RCS-GOV-1.0`, catálogos SPREC, severidades, pesos, thresholds e regras de governança.
+
+### Criar Usuário Admin
+
+```bash
+docker compose --env-file .env.docker -f docker-compose.yml exec backend npm run user:create-admin
+```
+
+Depois de criar o usuário, altere a senha inicial pelo fluxo da aplicação ou por procedimento administrativo seguro. Não versionar credenciais.
+
+### Logs, Status e Parada
+
+Logs de backend e frontend:
+
+```bash
+npm run dev:logs
+```
+
+Todos os serviços:
+
+```bash
+docker compose --env-file .env.docker -f docker-compose.yml logs -f
+```
+
+Status:
+
+```bash
+npm run dev:ps
+```
+
+Parar:
+
+```bash
+npm run dev:down
+```
+
+Ou direto:
+
+```bash
+docker compose --env-file .env.docker -f docker-compose.yml down
+```
+
+### Confirmar Online
+
+Frontend:
+
+```bash
+curl -I http://localhost:5173
+```
+
+Backend:
+
+```bash
+curl -I http://localhost:3000
+```
+
+Se o backend não tiver rota raiz em alguma versão, confirme pelos logs:
+
+```bash
+docker compose --env-file .env.docker -f docker-compose.yml logs backend
+```
+
+Também é possível validar pelo navegador:
+
+- Frontend: <http://localhost:5173>
 - Backend API: <http://localhost:3000>
-- Nginx Proxy: <http://localhost:80>
-- Neo4j Browser: <http://localhost:7474>
-- InfluxDB UI: <http://localhost:8086>
+- Neo4j Browser local: <http://localhost:7474>
+- InfluxDB local: <http://localhost:8086>
+
+### Integrações Cloud
+
+Para o ambiente Docker de auditoria, integrações cloud externas foram removidas, desabilitadas ou colocadas atrás de flags locais. O MongoDB deve usar container/local; URIs `mongodb+srv://` ficam bloqueadas quando `ALLOW_CLOUD_INTEGRATIONS=false`.
+
+Desabilitado por padrão:
+
+- Supabase, Firebase, AWS/S3, Cloudinary, Google Cloud, Azure, Vercel, Render, Railway e storage externo.
+- Sincronização externa de terminologias.
+- Lookup externo HPO.
+- Lookup externo de drogas.
+- MQTT externo.
+
+Permitido:
+
+- Resend é a única integração externa permitida. Sem `RESEND_API_KEY`, fluxos de desenvolvimento usam comportamento local/mockado quando suportado.
+
+### Servidor Linux na Nuvem
+
+- Use `.env.docker` criado a partir de `.env.docker.example`, nunca comitado.
+- Ajuste `FRONTEND_URL`, `API_URL`, `ALLOWED_ORIGINS` e `VITE_HMR_HOST` para o domínio ou IP público usado na auditoria.
+- Se houver proxy reverso/HTTPS, configure `VITE_HMR_PROTOCOL=wss` e `VITE_HMR_CLIENT_PORT=443` conforme o proxy.
+- Mantenha `TRUST_PROXY=1` quando o backend estiver atrás de proxy.
+- Proteja as portas internas dos bancos com firewall/security group; para auditoria pública, exponha preferencialmente apenas `5173` e/ou a porta do proxy.
 
 ## 📁 Política de versionamento para GitHub
 

@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-04-13T17:28:42.446Z",
+  "generatedAt": "2026-05-06T19:36:56.109Z",
   "source": "backend/tests/compliance/compliance.contract.test.js",
   "framework": "vitest",
   "status": "PASSED",

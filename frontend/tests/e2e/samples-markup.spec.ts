@@ -97,7 +97,7 @@ async function openSamples(page: Page) {
   }
 }
 
-test.describe('Samples Legacy - Markup', () => {
+test.describe('Samples - Markup', () => {
   for (const testid of requiredTestids) {
     test(`elemento ${testid} existe na tela`, async ({ page }) => {
       await openSamples(page);

@@ -18,6 +18,11 @@ const ATC_LEVEL_1_CLASSES = {
   V: 'Various',
 };
 
+function isExternalDrugLookupEnabled() {
+  const raw = String(process.env.ALLOW_EXTERNAL_DRUG_LOOKUP || process.env.ALLOW_CLOUD_INTEGRATIONS || '').trim().toLowerCase();
+  return raw === 'true' || raw === '1';
+}
+
 function normalizeString(value) {
   return String(value || '').trim();
 }
@@ -63,6 +68,18 @@ class DrugService {
 
     if (localRows.length > 0) {
       return localRows.map((row) => this._normalizeDrugRecord(row));
+    }
+
+    if (!isExternalDrugLookupEnabled()) {
+      await this._logAtcDictionarySync({
+        query: normalizedQuery,
+        cacheMiss: true,
+        upsertedCount: 0,
+        status: 'warning',
+        message: 'Cache miss de ATC resolvido sem fallback externo: lookup ChEMBL desabilitado em ambiente local.',
+        auditContext: options.auditContext || null,
+      });
+      return [];
     }
 
     const remoteRows = await this._searchChembl(normalizedQuery, limit);
@@ -120,7 +137,12 @@ class DrugService {
   }
 
   async _searchChembl(query, limit) {
-    const endpoint = `https://www.ebi.ac.uk/chembl/api/data/molecule?molecule_properties__mw_free__lte=500&format=json&limit=${encodeURIComponent(String(limit))}&pref_name__icontains=${encodeURIComponent(query)}`;
+    const baseUrl = String(process.env.CHEMBL_API_URL || '').trim();
+    if (!baseUrl) {
+      return [];
+    }
+
+    const endpoint = `${baseUrl.replace(/\/$/, '')}/molecule?molecule_properties__mw_free__lte=500&format=json&limit=${encodeURIComponent(String(limit))}&pref_name__icontains=${encodeURIComponent(query)}`;
     const response = await fetch(endpoint);
 
     if (!response.ok) {
@@ -223,3 +245,4 @@ class DrugService {
 }
 
 module.exports = DrugService;
+module.exports.isExternalDrugLookupEnabled = isExternalDrugLookupEnabled;

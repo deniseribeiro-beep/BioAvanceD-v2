@@ -14,17 +14,21 @@ describe('ImportLGPDService quality import hardening', () => {
       quality_category: 'A',
       sprec_matrix_type: 'fluid',
       sprec_sample_type: 'BLD',
-      sprec_primary_container: 'A',
+      sprec_primary_container: 'PED',
       sprec_pre_centrifugation: 'X',
       sprec_centrifugation: 'A',
       sprec_second_centrifugation: 'A',
       sprec_post_centrifugation_delay: 'A',
-      sprec_long_term_storage: 'cryogenic_or_ultralow_workflow_appropriate',
+      sprec_long_term_storage: 'C',
     });
 
-    expect(parsed.quality_score).toBeNull();
-    expect(parsed.quality_category).toBe('C');
+    expect(parsed.quality_score).toBeUndefined();
+    expect(parsed.quality_category).toBeUndefined();
     expect(parsed.release_status).toBe('QUARANTINE');
+    expect(parsed.legacy_compat).toMatchObject({
+      quality_score: 100,
+      quality_category: 'A',
+    });
     expect(parsed.external_quality_assessment).toMatchObject({
       score: 100,
       category: 'A',

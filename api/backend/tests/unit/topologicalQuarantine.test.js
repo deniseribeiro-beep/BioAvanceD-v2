@@ -1,3 +1,5 @@
+import { describe, expect, it, vi } from 'vitest';
+
 const TopologicalQuarantine = require('../../src/infrastructure/queue/TopologicalQuarantine');
 
 describe('TopologicalQuarantine - recuperação da fila', () => {

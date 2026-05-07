@@ -79,6 +79,17 @@ function buildHpoTerminologies(hpoData) {
   );
 }
 
+function buildRcsCatalogDocuments(seed) {
+  return (seed.catalog || []).map((item) => ({
+    model_code: seed.model_code,
+    sprec_version: seed.sprec_version,
+    matrix_type: seed.matrix_type,
+    axis_code: item.axis_code,
+    sprec_code: item.sprec_code,
+    description: item.description,
+  }));
+}
+
 async function upsertCollection(collection, uniqueKeys, docs) {
   const now = new Date();
   const validDocs = (Array.isArray(docs) ? docs : []).filter((doc) => {
@@ -179,6 +190,56 @@ async function seedRoles(db) {
   log(`Roles e permissoes populados com sucesso. Registros processados: ${processed}`);
 }
 
+async function seedRcsGovernanceModel(db) {
+  const fluidCatalog = readJsonFile('rcs-sprec-fluid-catalog.RCS-GOV-1.0.json');
+  const solidCatalog = readJsonFile('rcs-sprec-solid-catalog.RCS-GOV-1.0.json');
+  const severity = readJsonFile('rcs-severity-mapping.RCS-GOV-1.0.json');
+  const weights = readJsonFile('rcs-axis-weights.RCS-GOV-1.0.json');
+  const thresholds = readJsonFile('rcs-grade-thresholds.RCS-GOV-1.0.json');
+  const governance = readJsonFile('rcs-governance-rules.RCS-GOV-1.0.json');
+
+  const versionDocs = [{
+    model_code: 'RCS-GOV-1.0',
+    sprec_version: 'SPREC-2.0',
+    active: true,
+    description: 'Governance-aware Ribeiro Classification Score certification model',
+  }];
+
+  const versionCount = await upsertCollection(db.collection('rcs_model_versions'), ['model_code'], versionDocs);
+  const catalogCount = await upsertCollection(
+    db.collection('rcs_sprec_catalog'),
+    ['model_code', 'sprec_version', 'matrix_type', 'axis_code', 'sprec_code'],
+    [...buildRcsCatalogDocuments(fluidCatalog), ...buildRcsCatalogDocuments(solidCatalog)]
+  );
+  const severityCount = await upsertCollection(
+    db.collection('rcs_severity_mappings'),
+    ['model_code', 'sprec_version', 'matrix_type', 'axis_code', 'sprec_codes', 'condition_description'],
+    (severity.mappings || []).map((item) => ({ model_code: severity.model_code, sprec_version: severity.sprec_version, ...item }))
+  );
+  const weightCount = await upsertCollection(
+    db.collection('rcs_axis_weights'),
+    ['model_code', 'sprec_version', 'matrix_type', 'axis_code'],
+    (weights.weights || []).map((item) => ({ model_code: weights.model_code, sprec_version: weights.sprec_version, ...item }))
+  );
+  const thresholdCount = await upsertCollection(
+    db.collection('rcs_grade_thresholds'),
+    ['model_code', 'sprec_version', 'grade'],
+    (thresholds.thresholds || []).map((item) => ({ model_code: thresholds.model_code, sprec_version: thresholds.sprec_version, ...item }))
+  );
+  const governanceCount = await upsertCollection(
+    db.collection('rcs_governance_rules'),
+    ['model_code', 'sprec_version', 'rule_code'],
+    (governance.rules || []).map((item) => ({ model_code: governance.model_code, sprec_version: governance.sprec_version, ...item }))
+  );
+
+  log(`RCS model_versions sincronizado. Registros processados: ${versionCount}`);
+  log(`RCS SPREC catalog sincronizado. Registros processados: ${catalogCount}`);
+  log(`RCS severity mappings sincronizado. Registros processados: ${severityCount}`);
+  log(`RCS axis weights sincronizado. Registros processados: ${weightCount}`);
+  log(`RCS grade thresholds sincronizado. Registros processados: ${thresholdCount}`);
+  log(`RCS governance rules sincronizado. Registros processados: ${governanceCount}`);
+}
+
 async function runSeed() {
   log('Iniciando processo de seeding de reference data...');
   const db = await connectDB();
@@ -187,6 +248,7 @@ async function runSeed() {
     await seedTerminologies(db);
     await seedMiabis(db);
     await seedRoles(db);
+    await seedRcsGovernanceModel(db);
 
     log('Seeding concluido com sucesso.');
   } finally {
@@ -195,9 +257,18 @@ async function runSeed() {
   }
 }
 
-runSeed()
-  .then(() => process.exit(0))
-  .catch((error) => {
-    console.error('[SEED] Erro durante o seeding:', error?.message || error);
-    process.exit(1);
-  });
+if (require.main === module) {
+  runSeed()
+    .then(() => process.exit(0))
+    .catch((error) => {
+      console.error('[SEED] Erro durante o seeding:', error?.message || error);
+      process.exit(1);
+    });
+}
+
+module.exports = {
+  upsertCollection,
+  seedRcsGovernanceModel,
+  buildRcsCatalogDocuments,
+  runSeed,
+};

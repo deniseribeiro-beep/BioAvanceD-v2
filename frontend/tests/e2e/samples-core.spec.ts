@@ -138,7 +138,7 @@ async function setupSamplesPage(page: Page) {
   await expect(page.getByTestId('samples-page-title')).toBeVisible({ timeout: 10000 });
 }
 
-test.describe('Samples Legacy - Core', () => {
+test.describe('Samples - Core', () => {
   test('lista renderiza elementos principais com testid', async ({ page }) => {
     await setupSamplesPage(page);
 

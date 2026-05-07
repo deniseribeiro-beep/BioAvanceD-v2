@@ -1,4 +1,4 @@
-# Usa a versão 20 (LTS) que já possui o crypto.hash nativo
+# Usa Node 22 para compatibilidade com a toolchain atual do Vite
 FROM node:22-alpine
 
 # Define a pasta de trabalho dentro do container

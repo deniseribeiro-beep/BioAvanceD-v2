@@ -1,4 +1,5 @@
 import { test, expect, type Page, type Route } from '@playwright/test';
+import { createAdminAuthContext, injectSessionToken } from './support/auth';
 
 function sessionPayload() {
   return [
@@ -27,6 +28,8 @@ function sessionPayload() {
 
 async function mockSecurityApis(page: Page) {
   let sessions = sessionPayload();
+  const auth = createAdminAuthContext();
+  await injectSessionToken(page, auth.token);
 
   await page.route('**/api/**', async (route: Route) => {
     const url = route.request().url();
@@ -41,12 +44,7 @@ async function mockSecurityApis(page: Page) {
           data: {
             valid: true,
             user: {
-              id: 1,
-              userID: '1',
-              username: 'qa-admin',
-              name: 'QA Admin',
-              accessType: 4,
-              roleName: 'Administrador',
+              ...auth.user,
             },
           },
         }),

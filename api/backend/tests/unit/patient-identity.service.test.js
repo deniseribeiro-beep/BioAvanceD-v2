@@ -1,9 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 const patientIdentityService = require('../../src/services/PatientIdentityService');
-const { getCollection } = require('../../src/utils/collectionResolver');
-
-vi.mock('../../src/utils/collectionResolver');
 
 describe('PatientIdentityService - Heuristic Patient Matching', () => {
   let db;
@@ -16,9 +13,10 @@ describe('PatientIdentityService - Heuristic Patient Matching', () => {
       insertOne: vi.fn().mockResolvedValue({ insertedId: '507f1f77bcf86cd799439011' }),
     };
 
-    vi.mocked(getCollection).mockResolvedValue(patientsCollection);
-
     db = {
+      listCollections: () => ({
+        toArray: async () => ([{ name: 'patients' }]),
+      }),
       collection: () => patientsCollection,
     };
   });
@@ -45,8 +43,8 @@ describe('PatientIdentityService - Heuristic Patient Matching', () => {
         email: 'updated@test.com',
       });
 
-      expect(result.success).toBe(true);
-      expect(result.data.patientID).toBe('12345678');
+      expect(result.created).toBe(false);
+      expect(result.patient.patientID).toBe('12345678');
       expect(patientsCollection.findOne).toHaveBeenCalledWith(
         expect.objectContaining({
           $or: expect.arrayContaining([
@@ -80,8 +78,8 @@ describe('PatientIdentityService - Heuristic Patient Matching', () => {
         cpf: '12345678900',
       });
 
-      expect(result.success).toBe(true);
-      expect(result.data.patientID).toBe('87654321');
+      expect(result.created).toBe(false);
+      expect(result.patient.patientID).toBe('87654321');
       expect(patientsCollection.updateOne).toHaveBeenCalled();
     });
 
@@ -96,7 +94,7 @@ describe('PatientIdentityService - Heuristic Patient Matching', () => {
         cpf: '98765432100',
       });
 
-      expect(result.success).toBe(true);
+      expect(result.created).toBe(true);
       expect(patientsCollection.insertOne).toHaveBeenCalled();
     });
   });
@@ -125,8 +123,8 @@ describe('PatientIdentityService - Heuristic Patient Matching', () => {
         cpf: '55555555555',
       });
 
-      expect(result1.success).toBe(true);
-      expect(result1.data.patientID).toBe('11111111'); // Deve retornar ID existente, não criar novo
+      expect(result1.created).toBe(false);
+      expect(result1.patient.patientID).toBe('11111111'); // Deve retornar ID existente, não criar novo
 
       // Reset mocks
       patientsCollection.findOne.mockClear();
@@ -144,8 +142,8 @@ describe('PatientIdentityService - Heuristic Patient Matching', () => {
         phone: '+5511999999999',
       });
 
-      expect(result2.success).toBe(true);
-      expect(result2.data.patientID).toBe('11111111'); // Mesmo ID
+      expect(result2.created).toBe(false);
+      expect(result2.patient.patientID).toBe('11111111'); // Mesmo ID
       expect(patientsCollection.insertOne).not.toHaveBeenCalled(); // Não deve inserir novo
     });
   });
@@ -155,28 +153,26 @@ describe('PatientIdentityService - Heuristic Patient Matching', () => {
       const patterns = [
         { input: 'José Peña', expected: 'jose pena' },
         { input: 'ANDRÉ MÜLLER', expected: 'andre muller' },
-        { input: 'Francçois Côté', expected: 'francois cote' },
+        { input: 'Francçois Côté', expected: 'franccois cote' },
       ];
 
       for (const pattern of patterns) {
         patientsCollection.findOne.mockResolvedValueOnce(null);
         patientsCollection.insertOne.mockResolvedValueOnce({ insertedId: '999f1f77bcf86cd799439999' });
 
-        await patientIdentityService.matchOrUpsertPatient(db, {
+        const result = await patientIdentityService.matchOrUpsertPatient(db, {
           patientName: pattern.input,
           birthDate: '01/01/1990',
         });
 
-        // Verify that normalized name is used in query
-        const callArgs = patientsCollection.findOne.mock.calls[0][0];
-        expect(callArgs.patientNameNormalized).toBe(pattern.expected);
+        expect(result.patient.patientNameNormalized).toBe(pattern.expected);
       }
     });
   });
 
   describe('Error handling', () => {
     it('deve lançar erro se não houver patientID e nem (patientName + birthDate)', async () => {
-      expect(
+      await expect(
         patientIdentityService.matchOrUpsertPatient(db, {
           sex: 'M',
           cpf: '12345678900',

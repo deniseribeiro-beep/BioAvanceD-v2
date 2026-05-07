@@ -25,7 +25,7 @@ const SampleSchema = new Schema({
   unit: { type: String },
   quality: { type: String },
   quality_score: { type: Number },
-  quality_category: { type: String, enum: ['A', 'B', 'C', ''], default: '' },
+  quality_category: { type: String, enum: ['A', 'B', 'C', 'D', 'E', ''], default: '' },
   locationID: { type: Number },
   location: { type: Object },
   linkedProject: { type: String, required: true },
@@ -279,8 +279,15 @@ class SampleModel {
       quantity: data.quantity || null, // Float (pode ser em diferentes unidades)
       unit: data.unit || 'µL', // Unidade de medida (µL, mL, L, mg, g, kg, unidades, etc.)
       quality: data.quality !== undefined && data.quality !== null ? String(data.quality) : (data.qualityID !== undefined && data.qualityID !== null ? String(data.qualityID) : null), // Id MIABIS canônico
+      // Legacy fields (mantidos somente para compatibilidade). Não usar como fonte de decisão.
       quality_score: data.quality_score !== undefined && data.quality_score !== null && data.quality_score !== '' && Number.isFinite(Number(data.quality_score)) ? Number(data.quality_score) : null,
       quality_category: data.quality_category !== undefined && data.quality_category !== null ? String(data.quality_category) : '',
+      // Canonical evaluation fields (recommended): keep in sync with quality compatibility layer
+      rcs_score: data.rcs_score !== undefined && data.rcs_score !== null && Number.isFinite(Number(data.rcs_score)) ? Number(data.rcs_score) : null,
+      final_grade: data.final_grade !== undefined && data.final_grade !== null ? String(data.final_grade) : '',
+      p_bio: data.p_bio !== undefined ? (Number.isFinite(Number(data.p_bio)) ? Number(data.p_bio) : null) : null,
+      grade_route: data.grade_route !== undefined ? data.grade_route : null,
+      calculation_trace: data.calculation_trace !== undefined ? data.calculation_trace : {},
       external_quality_assessment: data.external_quality_assessment && typeof data.external_quality_assessment === 'object'
         ? data.external_quality_assessment
         : null,

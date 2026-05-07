@@ -30,20 +30,21 @@ function normalizeString(value) {
 }
 
 function normalizePharmacologyData(raw = {}) {
+  const source = raw && typeof raw === 'object' ? { ...raw } : {};
   const treatmentStatus = normalizeString(raw.treatment_status || raw.treatmentStatus).toUpperCase();
   const drugName = normalizeString(raw.drug_name || raw.medication_name || raw.medicationName);
   const atcCode = normalizeString(raw.atc_code || raw.medication_code || raw.medicationCode).toUpperCase().replace(/^ATC:/i, '');
   const atcLevel1 = normalizeString(raw.atc_level_1 || raw.medication_drug_class || raw.medicationDrugClass).toUpperCase() || (atcCode ? atcCode.charAt(0) : '');
 
-  return {
-    treatment_status: treatmentStatus,
-    drug_name: drugName,
-    atc_code: atcCode,
-    atc_level_1: atcLevel1,
-    last_dose_date: raw.last_dose_date || raw.lastDoseDate || null,
-    washout_start_date: raw.washout_start_date || raw.washoutStartDate || null,
-    washout_end_date: raw.washout_end_date || raw.washoutEndDate || null,
-  };
+  source.treatment_status = treatmentStatus;
+  source.drug_name = drugName;
+  source.atc_code = atcCode;
+  source.atc_level_1 = atcLevel1;
+  source.last_dose_date = raw.last_dose_date || raw.lastDoseDate || null;
+  source.washout_start_date = raw.washout_start_date || raw.washoutStartDate || null;
+  source.washout_end_date = raw.washout_end_date || raw.washoutEndDate || null;
+
+  return source;
 }
 
 function normalizePatientIdentity(sample = {}) {
@@ -64,6 +65,11 @@ function generateSampleHash(sample = {}) {
     sprec: sample?.sprec && typeof sample.sprec === 'object' ? sample.sprec : {},
     // Keep insertion order explicit for drug_name and atc_code before stable sorting.
     pharmacology_data: normalizePharmacologyData(sample?.pharmacology_data && typeof sample.pharmacology_data === 'object' ? sample.pharmacology_data : {}),
+    // Include RCS/integrity fields so they affect the sample hash
+    rcs_score: sample?.rcs_score ?? null,
+    final_grade: sample?.final_grade ?? null,
+    calculation_trace: sample?.calculation_trace ?? null,
+    axis_penalties: sample?.axis_penalties ?? null,
   };
 
   return crypto

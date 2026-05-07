@@ -4,12 +4,12 @@ const jwt = require('jsonwebtoken');
 
 process.env.NODE_ENV = 'test';
 process.env.JWT_SECRET = process.env.JWT_SECRET || 'vitest-secret-key';
+process.env.RESEND_API_KEY = process.env.RESEND_API_KEY || 'vitest-resend-key';
 
 const app = require('../../app');
 const sessionService = require('../../src/services/session.service');
 const logService = require('../../src/services/log.service');
 const auditLogger = require('../../src/utils/auditLogger');
-const { createCollectionMock, createDbMock } = require('../factories/db.factory');
 const { buildUser } = require('../factories/user.factory');
 
 function createToken(payload) {
@@ -32,6 +32,32 @@ function createCoordinatorToken() {
     roleName: 'Coordenador',
     mfaVerified: true,
   });
+}
+
+function createCursorMock(docs = []) {
+  return {
+    sort: vi.fn().mockReturnThis(),
+    limit: vi.fn().mockReturnThis(),
+    skip: vi.fn().mockReturnThis(),
+    toArray: vi.fn().mockResolvedValue(Array.isArray(docs) ? docs : []),
+  };
+}
+
+function createCollectionMock(overrides = {}) {
+  return {
+    insertOne: vi.fn().mockResolvedValue({ insertedId: 'mock-id' }),
+    findOne: vi.fn().mockResolvedValue(null),
+    find: vi.fn().mockReturnValue(createCursorMock([])),
+    countDocuments: vi.fn().mockResolvedValue(0),
+    updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
+    ...overrides,
+  };
+}
+
+function createDbMock(collections = {}) {
+  return {
+    collection: (name) => collections[name] || createCollectionMock(),
+  };
 }
 
 describe('Audit Logging - PATIENT_MATCH_UPSERT', () => {
@@ -126,6 +152,7 @@ describe('Audit Logging - PATIENT_MATCH_UPSERT', () => {
     expect(insertedLog.action).toBe('PATIENT_MATCH_UPSERT');
     expect(insertedLog.entity).toBe('Patient');
     expect(insertedLog.entityID).toBe('12345678');
+    expect(insertedLog.auditHash).toBeDefined();
   });
 
   it('deve persistir log com userId correto no banco de dados', async () => {
@@ -335,7 +362,7 @@ describe('Audit Logging - PATIENT_MATCH_UPSERT', () => {
 
   it('deve suportar filtro de logs por userId', async () => {
     const logsFind = vi.fn().mockReturnValue({
-      toArray: vi.fn().mockResolvedValue([
+      ...createCursorMock([
         {
           _id: 'log-1',
           userID: 'qa-test-user-1',
@@ -352,6 +379,7 @@ describe('Audit Logging - PATIENT_MATCH_UPSERT', () => {
         if (name === 'logs') {
           return {
             find: logsFind,
+            countDocuments: vi.fn().mockResolvedValue(1),
             insertOne: vi.fn().mockResolvedValue({ insertedId: 'test' })
           };
         }
@@ -366,6 +394,7 @@ describe('Audit Logging - PATIENT_MATCH_UPSERT', () => {
     const logs = await logService.getLogs(app.locals.db, { userId: 'qa-test-user-1' });
 
     expect(logsFind).toHaveBeenCalled();
+    expect(logs.logs).toBeDefined();
   });
 });
 
@@ -408,6 +437,7 @@ describe('Audit Log Integrity', () => {
     });
 
     expect(logsInsert).toHaveBeenCalled();
-    // O serviço de integridade deve gerar o hash se não for fornecido
+    const logData = logsInsert.mock.calls[0][0];
+    expect(logData.auditHash).toBeDefined();
   });
 });

@@ -1,0 +1,11 @@
+{
+  "model_code": "RCS-GOV-1.0",
+  "sprec_version": "SPREC-2.0",
+  "thresholds": [
+    { "grade": "A", "min_inclusive": 90, "max_exclusive": null, "description": "RCS >= 90" },
+    { "grade": "B", "min_inclusive": 80, "max_exclusive": 90, "description": "80 <= RCS < 90" },
+    { "grade": "C", "min_inclusive": 65, "max_exclusive": 80, "description": "65 <= RCS < 80" },
+    { "grade": "D", "min_inclusive": 50, "max_exclusive": 65, "description": "50 <= RCS < 65" },
+    { "grade": "E", "min_inclusive": null, "max_exclusive": 50, "description": "RCS < 50" }
+  ]
+}

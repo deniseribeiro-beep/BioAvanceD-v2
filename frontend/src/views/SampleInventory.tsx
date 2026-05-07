@@ -8,6 +8,37 @@ import { useSamplesInventory } from '../hooks/samples/useSamplesInventory';
 import FreezerMapView from '../components/samples/StorageHierarchy';
 import { ShieldCheck, ShieldX } from 'lucide-react';
 
+function getRcsEvaluation(row: any) {
+  return row?.rcs_evaluation && typeof row.rcs_evaluation === 'object' ? row.rcs_evaluation : row;
+}
+
+function getRcsFinalGrade(row: any) {
+  const rcs = getRcsEvaluation(row);
+  return String(rcs?.final_grade || '').toUpperCase();
+}
+
+function getRcsScore(row: any) {
+  const rcs = getRcsEvaluation(row);
+  return rcs?.rcs_score ?? null;
+}
+
+function getRcsQualityLabel(row: any) {
+  const rcs = getRcsEvaluation(row);
+  const grade = getRcsFinalGrade(row) || '-';
+  const score = getRcsScore(row) ?? '-';
+  const route = String(rcs?.grade_route || '').trim();
+  const reasons = Array.isArray(rcs?.governance_failure_reasons)
+    ? rcs.governance_failure_reasons.map((reason: any) => String(reason || '').trim()).filter(Boolean)
+    : [];
+
+  if (rcs?.governance_status === 0) {
+    const failureDetail = reasons.length ? `: ${reasons.join('; ')}` : '';
+    return `Grade ${grade} | RCS ${score} | ${route || 'Governance failure'}${failureDetail}`;
+  }
+
+  return `Grade ${grade} | RCS ${score}${route ? ` | ${route}` : ''}`;
+}
+
 export const SampleInventory: React.FC = () => {
   const { printQueue, quarantined, available, allSamples, loading, error } = useSamplesInventory();
   const [tab, setTab] = useState('print');
@@ -18,12 +49,12 @@ export const SampleInventory: React.FC = () => {
     const sourceRows = tab === 'quarantine' ? quarantined : tab === 'available' ? available : allSamples;
     return sourceRows.filter((row: any) => {
       const orpha = String(row?.clinical_data?.orphaCode || '').toLowerCase();
-      const qualityCategory = String(row?.quality_category || '').toUpperCase();
+      const finalGrade = getRcsFinalGrade(row);
 
       if (orphaFilter && !orpha.includes(orphaFilter.toLowerCase())) {
         return false;
       }
-      if (qualityCategoryFilter && qualityCategory !== qualityCategoryFilter.toUpperCase()) {
+      if (qualityCategoryFilter && finalGrade !== qualityCategoryFilter.toUpperCase()) {
         return false;
       }
       return true;
@@ -47,7 +78,7 @@ export const SampleInventory: React.FC = () => {
       field: 'quality',
       headerName: 'Qualidade',
       width: 220,
-      valueGetter: (params: any) => `${params.row.quality_category || '-'} | Score: ${params.row.quality_score ?? '-'}`
+      valueGetter: (params: any) => getRcsQualityLabel(params.row)
     },
     {
       field: 'integrity',
@@ -108,7 +139,7 @@ export const SampleInventory: React.FC = () => {
             <TextField
               size="small"
               select
-              label="Filtrar por categoria de qualidade"
+              label="Filtrar por grade RCS"
               value={qualityCategoryFilter}
               onChange={(event) => setQualityCategoryFilter(event.target.value)}
               sx={{ minWidth: 220 }}
@@ -117,6 +148,8 @@ export const SampleInventory: React.FC = () => {
               <MenuItem value="A">A</MenuItem>
               <MenuItem value="B">B</MenuItem>
               <MenuItem value="C">C</MenuItem>
+              <MenuItem value="D">D</MenuItem>
+              <MenuItem value="E">E</MenuItem>
             </TextField>
           </Box>
 

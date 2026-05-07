@@ -40,6 +40,13 @@ function ensureMongoUri(uri, dbName) {
   return paramString ? `${base}?${paramString}` : base;
 }
 
+function assertLocalMongoUri(uri) {
+  const allowsCloud = env.ALLOW_CLOUD_INTEGRATIONS || process.env.ALLOW_CLOUD_INTEGRATIONS === 'true' || process.env.ALLOW_CLOUD_INTEGRATIONS === '1';
+  if (!allowsCloud && String(uri || '').trim().toLowerCase().startsWith('mongodb+srv://')) {
+    throw new Error('MONGO_URI cloud mongodb+srv:// desabilitada neste ambiente. Use MongoDB local/container ou ALLOW_CLOUD_INTEGRATIONS=true explicitamente.');
+  }
+}
+
 /**
  * Codifica a senha na URI do MongoDB para evitar erros com caracteres especiais
  * @param {string} uri - URI do MongoDB
@@ -132,6 +139,7 @@ async function connectDB() {
     if (!mongoDb) {
       throw new Error('MONGO_DB não está definida no arquivo .env. Verifique se a variável está configurada.');
     }
+    assertLocalMongoUri(mongoUri);
     // Atualiza env para usar os valores corretos (para compatibilidade)
     if (!env.MONGO_URI) env.MONGO_URI = mongoUri;
     if (!env.MONGO_DB) env.MONGO_DB = mongoDb;
@@ -233,6 +241,7 @@ async function connectNewDB() {
     if (!env.MONGO_DB_NOVO) {
       throw new Error('MONGO_DB_NOVO não está definida no arquivo .env');
     }
+    assertLocalMongoUri(env.MONGO_URI);
 
     // Se já existe uma conexão ativa para o banco novo, retorna
     if (client && newDb) {

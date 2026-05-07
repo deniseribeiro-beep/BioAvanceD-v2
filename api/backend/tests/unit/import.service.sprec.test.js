@@ -49,7 +49,7 @@ describe('ImportService SPREC import', () => {
     const csvPath = path.join(tempDir, 'samples.csv');
     const csvContent = [
       'patientID,sampleType,sampleOrigin,extractionProtocol,quantity,quality,registerDate,linkedProject,sprec_matrix_type,sprec_sample_type,sprec_primary_container,sprec_pre_centrifugation,sprec_centrifugation,sprec_second_centrifugation,sprec_post_centrifugation_delay,sprec_long_term_storage',
-      '12345678,PLASMA,VENOUS_BLOOD,TUBE_EDTA,1.5,GOOD,2026-01-01,Projeto QA,fluid,BLD,EDTA,C,A,D,E,F',
+      '12345678,PLASMA,VENOUS_BLOOD,TUBE_EDTA,1.5,GOOD,2026-01-01,Projeto QA,fluid,BLD,PED,C,A,D,E,F',
     ].join('\n');
 
     fs.writeFileSync(csvPath, csvContent, 'utf8');
@@ -67,7 +67,7 @@ describe('ImportService SPREC import', () => {
     const inserted = samplesCollection.insertOne.mock.calls[0][0];
     expect(inserted.patientID).toBe('12345678');
     expect(inserted.sprec.sampleType).toBe('BLD');
-    expect(inserted.sprec.primaryContainer).toBe('EDTA');
+    expect(inserted.sprec.primaryContainer).toBe('PED');
   });
 
   it('importa XLSX fake com colunas SPREC', async () => {
@@ -134,7 +134,7 @@ describe('ImportService SPREC import', () => {
     const csvPath = path.join(tempDir, 'samples-sprec-complete.csv');
     const csvContent = [
       'patientID,sampleType,sampleOrigin,extractionProtocol,quantity,quality,registerDate,linkedProject,tcle_id,sprec_matrix_type,sprec_sample_type,sprec_primary_container,sprec_pre_centrifugation,sprec_centrifugation,sprec_second_centrifugation,sprec_post_centrifugation_delay,sprec_long_term_storage',
-      '11223344,PLASMA,VENOUS_BLOOD,TUBE_EDTA,2.5,GOOD,2026-03-03,Projeto Ontologia,tcle-ontology-1,fluid,BLD,EDTA,A,B,C,D,E',
+      '11223344,PLASMA,VENOUS_BLOOD,TUBE_EDTA,2.5,GOOD,2026-03-03,Projeto Ontologia,tcle-ontology-1,fluid,BLD,PED,A,B,C,D,E',
     ].join('\n');
 
     fs.writeFileSync(csvPath, csvContent, 'utf8');
@@ -152,7 +152,7 @@ describe('ImportService SPREC import', () => {
     expect(inserted.sprec).toMatchObject({
       matrixType: 'fluid',
       sampleType: 'BLD',
-      primaryContainer: 'EDTA',
+      primaryContainer: 'PED',
       preCentrifugation: 'A',
       centrifugation: 'B',
       secondCentrifugation: 'C',
@@ -167,7 +167,7 @@ describe('ImportService SPREC import', () => {
     const csvPath = path.join(tempDir, 'samples-external-quality.csv');
     const csvContent = [
       'patientID,sampleType,sampleOrigin,extractionProtocol,quantity,quality,quality_score,quality_category,registerDate,linkedProject,sprec_matrix_type,sprec_sample_type,sprec_primary_container,sprec_pre_centrifugation,sprec_centrifugation,sprec_second_centrifugation,sprec_post_centrifugation_delay,sprec_long_term_storage',
-      '12345678,PLASMA,VENOUS_BLOOD,TUBE_EDTA,1.5,GOOD,100,A,2026-01-01,Projeto QA,fluid,BLD,EDTA,X,A,A,A,cryogenic_or_ultralow_workflow_appropriate',
+      '12345678,PLASMA,VENOUS_BLOOD,TUBE_EDTA,1.5,GOOD,100,A,2026-01-01,Projeto QA,fluid,BLD,PED,X,A,A,A,C',
     ].join('\n');
 
     fs.writeFileSync(csvPath, csvContent, 'utf8');
@@ -181,7 +181,7 @@ describe('ImportService SPREC import', () => {
     expect(result.success).toBe(1);
     const inserted = samplesCollection.insertOne.mock.calls[0][0];
     expect(inserted.quality_score).toBeNull();
-    expect(inserted.quality_category).toBe('C');
+    expect(inserted.quality_category).toBe('');
     expect(inserted.release_status).toBe('QUARANTINE');
     expect(inserted.external_quality_assessment).toMatchObject({
       score: 100,

@@ -1,3 +1,5 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
 const batchValidationEngine = require('../../src/services/batch-validation-engine.service');
 const patientService = require('../../src/services/patient.service');
 const sampleService = require('../../src/services/sample.service');
@@ -80,6 +82,7 @@ describe('batch-validation-engine.service', () => {
         sampleType: 'Sangue',
         sampleOrigin: 'Coleta',
         extractionProtocol: 'Protocolo A',
+        locationID: 'freezer-a1',
         quantity: '1',
         quality: '1',
         alphaGal: '12.5',
@@ -146,6 +149,7 @@ describe('batch-validation-engine.service', () => {
         sampleType: 'Sangue',
         sampleOrigin: 'Coleta',
         extractionProtocol: 'Protocolo B',
+        locationID: 'freezer-b1',
         quantity: '1',
         quality: '1',
         lysoGb3: '4.2',

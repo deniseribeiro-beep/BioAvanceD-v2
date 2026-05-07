@@ -135,6 +135,31 @@ export async function mockWizardDomainApis(page: Page, options = { withActiveTcl
       });
     }
 
+    if (method === 'POST' && url.includes('/quality/preview')) {
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          success: true,
+          data: {
+            model_version: 'RCS-GOV-1.0',
+            matrix_type: 'fluid',
+            governance_status: 1,
+            governance_failure_reasons: [],
+            p_bio: 6,
+            rcs_score: 94,
+            score_based_grade: 'A',
+            final_grade: 'A',
+            grade_route: 'Score-based certification',
+            axis_penalties: [
+              { axis_code: 'Ppre', sprec_code: 'A', weight: 30, severity: 0, penalty: 0 },
+            ],
+            calculation_trace: { source: 'playwright-default-mock' },
+          },
+        }),
+      });
+    }
+
     if (url.includes('/dictionary/atc/search') || url.includes('/drugs/search') || url.includes('/chembl/search')) {
       return route.fulfill({
         status: 200,

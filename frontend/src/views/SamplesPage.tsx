@@ -1,7 +1,8 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import SamplesPageView from '../components/samples/SamplesPageView';
 import SamplesStorageSection from '../components/samples/SamplesStorageSection';
+import SampleDetailsPage from './SampleDetailsPage';
 import { useSamplesPage } from '../hooks/samples/useSamplesPage';
 import type { SampleWithId } from '../hooks/samples/useSamplesPage';
 import { useLanguage } from '../contexts/LanguageContext';
@@ -10,6 +11,7 @@ import './SamplesPage.css';
 
 export default function SamplesPage() {
   const navigate = useNavigate();
+  const { pathname } = useLocation();
   const { t, language } = useLanguage();
   const { user } = useAuth();
   const [activeSection, setActiveSection] = useState<'inventory' | 'storage'>('inventory');
@@ -35,6 +37,10 @@ export default function SamplesPage() {
   } = useSamplesPage();
 
   const canEdit = user?.roleName === 'Administrador' || user?.roleName === 'Coordenador';
+
+  if (/^\/samples\/[^/]+$/.test(pathname)) {
+    return <SampleDetailsPage />;
+  }
 
   return (
     <>

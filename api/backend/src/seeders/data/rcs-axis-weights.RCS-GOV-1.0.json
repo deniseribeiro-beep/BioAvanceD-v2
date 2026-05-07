@@ -1,0 +1,16 @@
+{
+  "model_code": "RCS-GOV-1.0",
+  "sprec_version": "SPREC-2.0",
+  "weights": [
+    { "matrix_type": "fluid", "axis_code": "Ppre", "axis_label": "Pre-centrifugation delay", "weight": 30 },
+    { "matrix_type": "fluid", "axis_code": "Pcent1", "axis_label": "Primary centrifugation", "weight": 15 },
+    { "matrix_type": "fluid", "axis_code": "Pcent2", "axis_label": "Second centrifugation", "weight": 10 },
+    { "matrix_type": "fluid", "axis_code": "Ppost", "axis_label": "Post-centrifugation delay", "weight": 20 },
+    { "matrix_type": "fluid", "axis_code": "Pstore", "axis_label": "Long-term storage", "weight": 25 },
+    { "matrix_type": "solid", "axis_code": "Pwarm", "axis_label": "Warm ischemia time", "weight": 25 },
+    { "matrix_type": "solid", "axis_code": "Pcold", "axis_label": "Cold ischemia time", "weight": 25 },
+    { "matrix_type": "solid", "axis_code": "Pfix", "axis_label": "Fixation or stabilization type", "weight": 15 },
+    { "matrix_type": "solid", "axis_code": "PfixTime", "axis_label": "Fixation time", "weight": 20 },
+    { "matrix_type": "solid", "axis_code": "Pstore", "axis_label": "Long-term storage", "weight": 15 }
+  ]
+}

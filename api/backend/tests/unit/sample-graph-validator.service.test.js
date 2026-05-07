@@ -9,6 +9,16 @@ function buildSample(overrides = {}) {
     patientID: '12345678',
     tcle_id: 'tcle-001',
     quality_category: 'A',
+    sprec: {
+      matrixType: 'fluid',
+      sampleType: 'BLD',
+      primaryContainer: 'SST',
+      preCentrifugation: 'A',
+      centrifugation: 'A',
+      secondCentrifugation: 'A',
+      postCentrifugationDelay: 'A',
+      longTermStorage: 'C',
+    },
     clinical_data: {
       orphaCode: 'ORPHA:324',
       cid: 'E75.2',
@@ -148,7 +158,18 @@ describe('SampleGraphValidator', () => {
     const successReport = await validator.validateSampleCompliance(goodSample._id);
     expect(successReport.graphPath.quality.valid).toBe(true);
 
-    const badSample = buildSample({ quality_category: 'C' });
+    const badSample = buildSample({
+      sprec: {
+        matrixType: 'fluid',
+        sampleType: 'BLD',
+        primaryContainer: 'SST',
+        preCentrifugation: 'X',
+        centrifugation: 'A',
+        secondCentrifugation: 'A',
+        postCentrifugationDelay: 'A',
+        longTermStorage: 'C',
+      },
+    });
     samplesCollection.findOne.mockResolvedValue(badSample);
     const failReport = await validator.validateSampleCompliance(badSample._id);
     expect(failReport.graphPath.quality.valid).toBe(false);

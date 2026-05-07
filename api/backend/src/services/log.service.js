@@ -68,9 +68,16 @@ class LogService {
       }
 
       const result = await logsCollection.insertOne(log);
+      const insertedId = result && Object.prototype.hasOwnProperty.call(result, 'insertedId')
+        ? result.insertedId
+        : null;
+
+      if (!insertedId) {
+        logger.warn('insertOne de logs retornou sem insertedId; mantendo fluxo sem falha.');
+      }
 
       const createdLog = {
-        _id: result.insertedId,
+        _id: insertedId,
         ...log
       };
 

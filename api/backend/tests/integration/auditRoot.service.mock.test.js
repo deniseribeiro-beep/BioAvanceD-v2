@@ -59,9 +59,10 @@ async function runAuditRootMockTest() {
 }
 
 if (typeof process !== 'undefined' && process.env && process.env.VITEST) {
-  const { it, expect } = require('vitest');
-  it('auditRoot.service mock flow', async () => {
-    await expect(runAuditRootMockTest()).resolves.toBeUndefined();
+  describe('auditRoot.service mock flow', () => {
+    it('executa fluxo de cadeia de raízes sem erro', async () => {
+      await expect(runAuditRootMockTest()).resolves.toBeUndefined();
+    });
   });
 } else {
   runAuditRootMockTest()

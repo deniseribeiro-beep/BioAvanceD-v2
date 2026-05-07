@@ -9,14 +9,14 @@ const COLLECTION = 'hpo_terms';
 
 
 // GET /api/hpo/search?q=termo
-const { searchHpoLocal, searchHpoExternal } = require('../services/hpoService');
+const { searchHpoLocal, searchHpoExternal, isExternalHpoLookupEnabled } = require('../services/hpoService');
 const logger = require('../utils/logger');
 router.get('/search', async (req, res) => {
   const { q = '' } = req.query;
   if (!q.trim()) return res.status(400).json({ error: 'Missing query' });
   try {
     let results = await searchHpoLocal(q);
-    if (!results || results.length === 0) {
+    if ((!results || results.length === 0) && isExternalHpoLookupEnabled()) {
       logger.warn(`[HPO] Fallback para API externa para query: ${q}`);
       results = await searchHpoExternal(q);
     }
@@ -25,6 +25,9 @@ router.get('/search', async (req, res) => {
   } catch (err) {
     logger.error(`[HPO] Erro na busca local por "${q}": ${err.message}`);
     try {
+      if (!isExternalHpoLookupEnabled()) {
+        return res.json([]);
+      }
       const results = await searchHpoExternal(q);
       logger.warn(`[HPO] Fallback por erro local para API externa para query: ${q}`);
       res.json(results);

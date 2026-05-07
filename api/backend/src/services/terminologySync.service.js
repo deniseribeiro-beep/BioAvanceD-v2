@@ -3,7 +3,12 @@ const Terminology = require('../models/Terminology');
 const logger = require('../utils/logger');
 
 const DEFAULT_TIMEOUT_MS = 15000;
-const ORPHADATA_BASE_URL = process.env.ORPHADATA_BASE_URL || 'https://api.orphadata.com';
+const ORPHADATA_BASE_URL = process.env.ORPHADATA_BASE_URL || '';
+
+function isExternalTerminologySyncEnabled() {
+  const raw = String(process.env.ALLOW_EXTERNAL_TERMINOLOGY_SYNC || process.env.ALLOW_CLOUD_INTEGRATIONS || '').trim().toLowerCase();
+  return raw === 'true' || raw === '1';
+}
 
 function normalizeText(value) {
   return String(value || '').trim();
@@ -235,6 +240,22 @@ async function fetchJsonWithTimeout(url, timeoutMs) {
 }
 
 async function syncFromOrphadata(db = null) {
+  if (!isExternalTerminologySyncEnabled()) {
+    logger.info('Sincronização externa Orphadata desabilitada neste ambiente');
+    return {
+      success: true,
+      disabled: true,
+      attempted: [],
+      upserted: 0,
+      skipped: 0,
+      source: 'local-only',
+    };
+  }
+
+  if (!ORPHADATA_BASE_URL) {
+    return { success: true, disabled: true, attempted: [], upserted: 0, skipped: 0, source: 'local-only' };
+  }
+
   // Endpoints públicos válidos conforme OpenAPI da Orphadata.
   const endpoints = [
     '/rd-cross-referencing/orphacodes?limit=1000',
@@ -308,4 +329,5 @@ module.exports = {
   seedTerminologies,
   upsertTerminology,
   normalizeRecord,
+  isExternalTerminologySyncEnabled,
 };

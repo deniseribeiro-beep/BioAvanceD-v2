@@ -12,6 +12,17 @@ export default function HPOAutocomplete({ onSelect, placeholder = 'Buscar fenót
   const [error, setError] = useState('');
   const [debounceTimer, setDebounceTimer] = useState(null);
 
+  const getApiBaseUrl = () => {
+    const configured = import.meta.env.VITE_API_BASE_URL;
+    if (configured) {
+      return String(configured).replace(/\/$/, '').replace(/\/api$/, '');
+    }
+
+    const hostname = window.location.hostname;
+    const protocol = window.location.protocol;
+    return `${protocol}//${hostname}:3000`;
+  };
+
   // Debounce para evitar requisições excessivas
   const handleInputChange = (e) => {
     const value = e.target.value;
@@ -27,14 +38,15 @@ export default function HPOAutocomplete({ onSelect, placeholder = 'Buscar fenót
     setLoading(true);
     setError('');
     try {
-      const res = await fetch(`https://ontology.jax.org/api/hp/search?q=${encodeURIComponent(query)}&rows=10`);
-      if (!res.ok) throw new Error('Erro ao buscar na API HPO');
+      const res = await fetch(`${getApiBaseUrl()}/api/hpo/search?q=${encodeURIComponent(query)}`);
+      if (!res.ok) throw new Error('Erro ao buscar termos HPO');
       const data = await res.json();
       setResults(
-        (data?.response?.docs || []).map((doc) => ({
-          hpoId: doc.id,
+        (Array.isArray(data) ? data : []).slice(0, 10).map((doc) => ({
+          hpoId: doc.hpoId || doc.id,
           label: doc.label,
         }))
+        .filter((doc) => doc.hpoId && doc.label)
       );
     } catch (err) {
       setError('Erro ao buscar termos HPO');

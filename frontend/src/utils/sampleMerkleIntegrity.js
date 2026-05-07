@@ -26,9 +26,12 @@ function stableStringify(value) {
 function normalizeIntegrityInput(data = {}) {
   const clinicalSource = data.clinical_data && typeof data.clinical_data === 'object' ? data.clinical_data : null;
   const sprecSource = data.sprec && typeof data.sprec === 'object' ? data.sprec : null;
-  const penaltyLog = Array.isArray(data.penalty_log)
-    ? data.penalty_log
-    : (typeof data.penalty_log === 'string' && data.penalty_log.trim() ? [data.penalty_log.trim()] : []);
+  const rcsSource = data.rcs_evaluation && typeof data.rcs_evaluation === 'object'
+    ? data.rcs_evaluation
+    : (sprecSource?.rcs_evaluation && typeof sprecSource.rcs_evaluation === 'object' ? sprecSource.rcs_evaluation : null);
+  const axisPenalties = Array.isArray(data.axis_penalties)
+    ? data.axis_penalties
+    : (Array.isArray(sprecSource?.axis_penalties) ? sprecSource.axis_penalties : []);
 
   const charlsonConditions = Array.isArray(data.charlson_conditions)
     ? data.charlson_conditions.map((item) => String(item || '').trim()).filter(Boolean).sort((left, right) => left.localeCompare(right))
@@ -86,9 +89,21 @@ function normalizeIntegrityInput(data = {}) {
         ischemia_time_minutes: String(data.ischemia_time_minutes || '').trim(),
         selected_tcle: String(data.selected_tcle || '').trim(),
         sprec_code: String(data.sprec_code || '').trim(),
-        quality_score: String(data.quality_score || '').trim(),
-        quality_category: String(data.quality_category || '').trim(),
-        penalty_log: penaltyLog,
+        rcs_evaluation: rcsSource
+          ? {
+            model_version: String(rcsSource.model_version || 'RCS-GOV-1.0'),
+            matrix_type: String(rcsSource.matrix_type || '').trim(),
+            governance_status: rcsSource.governance_status ?? null,
+            governance_failure_reasons: Array.isArray(rcsSource.governance_failure_reasons) ? rcsSource.governance_failure_reasons : [],
+            p_bio: rcsSource.p_bio ?? null,
+            rcs_score: rcsSource.rcs_score ?? null,
+            score_based_grade: rcsSource.score_based_grade || null,
+            final_grade: String(rcsSource.final_grade || '').trim(),
+            grade_route: String(rcsSource.grade_route || '').trim(),
+            axis_penalties: Array.isArray(rcsSource.axis_penalties) ? rcsSource.axis_penalties : axisPenalties,
+            calculation_trace: rcsSource.calculation_trace && typeof rcsSource.calculation_trace === 'object' ? rcsSource.calculation_trace : {},
+          }
+          : null,
         charlson_conditions: charlsonConditions,
         charlson_score: String(data.charlson_score || '').trim(),
         disease_phenotypes: diseasePhenotypes,
@@ -105,6 +120,7 @@ function normalizeIntegrityInput(data = {}) {
         secondCentrifugation: String(sprecSource.secondCentrifugation || '').trim(),
         postCentrifugationDelay: String(sprecSource.postCentrifugationDelay || '').trim(),
         longTermStorage: String(sprecSource.longTermStorage || '').trim(),
+        rcs_evaluation: rcsSource,
       }
       : {},
     pharmacology_data: data.pharmacology_data && typeof data.pharmacology_data === 'object'

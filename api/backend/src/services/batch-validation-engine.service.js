@@ -362,10 +362,6 @@ class BatchValidationEngine {
   classifySampleRow(rawRow, sampleData) {
     const warnings = [];
 
-    if (!sampleData.locationID) {
-      warnings.push('locationID ausente; a amostra será persistida como aguardando armazenagem');
-    }
-
     if (!sampleData.extractionProtocol) {
       warnings.push('extractionProtocol ausente; será mantido como nulo');
     }

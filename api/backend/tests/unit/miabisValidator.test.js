@@ -1,33 +1,37 @@
-// backend/test/unit/miabisValidator.test.js
-const mongoose = require('mongoose');
+import { describe, expect, it, vi } from 'vitest';
+
+vi.mock('../../src/infrastructure/database/neo4j/connection', () => ({
+  connectNeo4j: vi.fn(async () => ({
+    session: () => ({
+      run: vi.fn(async () => ({
+        records: [{ toObject: () => ({ status: 'valid', isPublic: true }) }],
+      })),
+      close: vi.fn(async () => undefined),
+    }),
+  })),
+}));
+
+const Sample = require('../../src/models/Sample');
 const { validateMiabisCompliance } = require('../../src/services/miabisValidator.service');
-
-jest.mock('mongoose', () => ({
-  model: jest.fn(() => ({
-    findById: jest.fn(() => ({ lean: jest.fn() }))
-  }))
-}));
-
-jest.mock('../../src/infrastructure/database/neo4j', () => ({
-  run: jest.fn()
-}));
-
-const Sample = mongoose.model('Sample');
-const neo4j = require('../../src/infrastructure/database/neo4j');
 
 describe('MIABIS Validator', () => {
   it('should return isCompliant false if diagnosisCode is missing', async () => {
-    Sample.findById.mockReturnValueOnce({
+    const originalFindById = Sample.findById;
+
+    Sample.findById = vi.fn(() => ({
       lean: () => Promise.resolve({
         sampleType: 'Blood',
         anatomicalSite: 'Arm',
         storageTemperature: '-80',
-        // diagnosisCode missing
-      })
-    });
-    neo4j.run.mockResolvedValueOnce({ records: [{ toObject: () => ({ status: 'valid', isPublic: true }) }] });
-    const result = await validateMiabisCompliance('sample123');
-    expect(result.isCompliant).toBe(false);
-    expect(result.missingFields).toContain('diagnosisCode');
+      }),
+    }));
+
+    try {
+      const result = await validateMiabisCompliance('507f1f77bcf86cd799439011');
+      expect(result.isCompliant).toBe(false);
+      expect(result.missingFields).toContain('diagnosisCode');
+    } finally {
+      Sample.findById = originalFindById;
+    }
   });
 });

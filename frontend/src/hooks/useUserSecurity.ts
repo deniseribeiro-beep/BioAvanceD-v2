@@ -91,6 +91,7 @@ interface Session {
   browser?: string;
   os?: string;
   location?: string;
+  ipAddress?: string;
   lastAccess: string | Date;
   isCurrent: boolean;
 }
@@ -120,13 +121,14 @@ export function useUserSecurity() {
       const rawSessions = extractResponseData<any[]>(sessionsRes, []);
       setSessions(
         rawSessions.map((session) => ({
-          id: session.id,
-          deviceName: session.deviceName,
-          browser: session.browser,
-          os: session.os,
-          location: session.location || session.ipAddress,
-          lastAccess: session.lastAccess,
-          isCurrent: Boolean(session.isCurrent)
+          id: session.id || session.sessionID,
+          deviceName: session.deviceName || session.deviceInfo?.deviceName || session.deviceInfo?.type,
+          browser: session.browser || session.deviceInfo?.browser,
+          os: session.os || session.deviceInfo?.os,
+          location: session.location || session.geoLocation || session.ipLocation || session.ipAddress,
+          ipAddress: session.ipAddress,
+          lastAccess: session.lastAccess || session.lastActivity || session.createdAt,
+          isCurrent: Boolean(session.isCurrent ?? session.currentSession ?? session.current)
         }))
       );
     } catch (err: unknown) {

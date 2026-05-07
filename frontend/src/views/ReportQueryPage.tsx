@@ -8,7 +8,6 @@ import { reportsService } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import { getReportTypeDefinition } from '../config/constants/report.constants';
-import { MIABIS_QUALITY } from '../config/constants/specimen.constants.js';
 import { SPREC_FLUID_DICTIONARY, SPREC_SOLID_DICTIONARY } from '../constants/sprecDictionary';
 import { ArrowLeft, Download, Filter, Search, X } from 'lucide-react';
 import './ReportQueryPage.css';
@@ -74,10 +73,7 @@ const RELEASE_STATUS_OPTIONS = [
   { label: 'Esgotada', value: 'BLOCKED' },
 ];
 
-const QUALITY_CATEGORY_OPTIONS = MIABIS_QUALITY.map((item) => ({
-  label: item.label,
-  value: item.id,
-}));
+const RCS_GRADE_OPTIONS = ['A', 'B', 'C', 'D', 'E'].map((grade) => ({ label: grade, value: grade }));
 
 const SPREC_MATRIX_OPTIONS = [
   { label: 'Fluidos (SPREC 2.0)', value: 'fluid' },
@@ -568,11 +564,11 @@ export default function ReportQueryPage() {
       },
       ...axisFields,
       {
-        name: 'sprecCategory',
-        label: 'Filtro SPREC - Categoria de Qualidade',
+        name: 'final_grade',
+        label: 'Filtro RCS-GOV - Grade final',
         kind: 'select',
-        options: QUALITY_CATEGORY_OPTIONS,
-        helperText: 'Categorias MIABIS/SPREC padronizadas.',
+        options: RCS_GRADE_OPTIONS,
+        helperText: 'Grades RCS-GOV A-E.',
       },
       {
         name: 'status',

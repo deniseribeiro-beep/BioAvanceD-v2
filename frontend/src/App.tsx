@@ -69,6 +69,16 @@ function App() {
           <Route path="/mfa-setup" element={<MFASetupPage />} />
           <Route path="/reset-password" element={<ResetPasswordPage />} />
           <Route
+            path="/samples/:id"
+            element={
+              <Layout>
+                <ProtectedRoute>
+                  <SampleDetailsPage />
+                </ProtectedRoute>
+              </Layout>
+            }
+          />
+          <Route
             path="/*"
             element={
               <Layout>
@@ -77,14 +87,14 @@ function App() {
                   <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
                   <Route path="/patients" element={<ProtectedRoute><PatientsPage /></ProtectedRoute>} />
                   <Route path="/patients/:id/consent" element={<ProtectedRoute><ConsentPage /></ProtectedRoute>} />
-                  <Route path="/samples" element={<ProtectedRoute><SamplesPage /></ProtectedRoute>} />
-                  <Route path="/samples/:id" element={<ProtectedRoute><SampleDetailsPage /></ProtectedRoute>} />
+                  <Route path="samples/custody-reports" element={<ProtectedRoute><SampleCustodyReportsPage /></ProtectedRoute>} />
+                  <Route path="samples/withdrawal-return" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}><SampleWithdrawalReturnPage /></ProtectedRoute>} />
+                  <Route path="samples/:id/label" element={<ProtectedRoute><SampleLabelPage /></ProtectedRoute>} />
+                  <Route path="samples/:id/chain" element={<ProtectedRoute><SampleChainPage /></ProtectedRoute>} />
+                  <Route path="samples/:id/movements" element={<ProtectedRoute><SampleMovementsPage /></ProtectedRoute>} />
+                  <Route path="samples/:id" element={<ProtectedRoute><SampleDetailsPage /></ProtectedRoute>} />
                   {/* Rota de Nova Amostra removida. Cadastro de amostras agora é feito apenas via Intake Wizard. */}
-                  <Route path="/samples/:id/label" element={<ProtectedRoute><SampleLabelPage /></ProtectedRoute>} />
-                  <Route path="/samples/:id/chain" element={<ProtectedRoute><SampleChainPage /></ProtectedRoute>} />
-                  <Route path="/samples/:id/movements" element={<ProtectedRoute><SampleMovementsPage /></ProtectedRoute>} />
-                  <Route path="/samples/custody-reports" element={<ProtectedRoute><SampleCustodyReportsPage /></ProtectedRoute>} />
-                  <Route path="/samples/withdrawal-return" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}><SampleWithdrawalReturnPage /></ProtectedRoute>} />
+                  <Route path="samples" element={<ProtectedRoute><SamplesPage /></ProtectedRoute>} />
                   <Route path="/results" element={<ProtectedRoute><ResultsPage /></ProtectedRoute>} />
                   <Route path="/system-management" element={<ProtectedRoute requiredRole="Administrador"><SystemManagementPage /></ProtectedRoute>} />
                   <Route path="/users" element={<Navigate to="/system-management?tab=users" replace />} />
