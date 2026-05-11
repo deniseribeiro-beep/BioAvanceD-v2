@@ -100,6 +100,7 @@ test-output.txt
 node_modules/
 dist/
 frontend/dist/
+
 .venv/
 data/
 logs/
