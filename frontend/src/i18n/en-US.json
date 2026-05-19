@@ -1698,7 +1698,7 @@
     },
     "helpers": {
       "birthDateFormat": "Expected format: DD/MM/YYYY",
-      "documentCpfPassport": "Accepts valid CPF or passport.",
+      "documentCpfPassport": "Digite somente números para CPF ou informe passaporte.",
       "emailFormat": "Expected format: name@domain.com",
       "recordNumberOptional": "Optional free-text field."
     },

@@ -3,20 +3,20 @@ import { useState } from 'react';
 import Card from '../components/UI/Card';
 import ImportAdapter, { ImportDTO } from '../components/ImportAdapter';
 import ImportResultSummary, { type ImportResultSummaryData } from '../components/ImportResultSummary';
-import { dataImportService } from '../services/api';
 
 export default function ImportPage() {
   const [uploading, setUploading] = useState(false);
   const [result, setResult] = useState<ImportResultSummaryData | null>(null);
 
-  // Função para enviar o array de ImportDTO ao backend
+  // Fluxo legado descontinuado: importação FHIR deve usar staging/TCLE/commit.
   const handleImportSubmit = async (importData: ImportDTO[]) => {
     setUploading(true);
     setResult(null);
     try {
-      const response = await dataImportService.importFhir(importData);
-      const data = response?.data || {};
-      setResult(data);
+      setResult({
+        success: false,
+        error: `Fluxo legado descontinuado. ${importData.length} registro(s) não foram enviados. Use a Importação Inteligente FHIR com Validar lote.`,
+      });
     } catch (err: any) {
       const errorMessage = err?.response?.data?.error || err?.response?.data?.message || err?.message;
       setResult({ success: false, error: errorMessage || 'Erro ao importar FHIR' });

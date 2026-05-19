@@ -1,0 +1,102 @@
+const multer = require('multer');
+const fhirImportStagingService = require('../services/fhir-import-staging.service');
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 20 * 1024 * 1024,
+  },
+});
+
+function parseJsonFile(file) {
+  if (!file?.buffer) return null;
+  try {
+    return JSON.parse(file.buffer.toString('utf8'));
+  } catch (_) {
+    const error = new Error('Arquivo JSON FHIR inválido.');
+    error.statusCode = 400;
+    throw error;
+  }
+}
+
+function sendError(res, error) {
+  const statusCode = error?.statusCode || 500;
+  return res.status(statusCode).json({
+    success: false,
+    message: error?.message || 'Erro no staging FHIR',
+  });
+}
+
+class FhirImportStagingController {
+  uploadMiddleware() {
+    return upload.single('file');
+  }
+
+  async stage(req, res) {
+    try {
+      const db = req.app.locals.db;
+      const payload = parseJsonFile(req.file) || req.body;
+      const result = await fhirImportStagingService.stageBundle(db, payload, {
+        fileName: req.file?.originalname,
+        userID: req.user?.userID || req.user?.id || null,
+      });
+
+      return res.status(201).json({
+        success: true,
+        batch: result.batch,
+        records: result.records,
+      });
+    } catch (error) {
+      return sendError(res, error);
+    }
+  }
+
+  async getBatch(req, res) {
+    try {
+      const result = await fhirImportStagingService.getBatch(req.app.locals.db, req.params.id);
+      return res.status(200).json({ success: true, ...result });
+    } catch (error) {
+      return sendError(res, error);
+    }
+  }
+
+  async validate(req, res) {
+    try {
+      const result = await fhirImportStagingService.validateBatch(req.app.locals.db, req.params.id);
+      return res.status(200).json({ success: true, ...result });
+    } catch (error) {
+      return sendError(res, error);
+    }
+  }
+
+  async sendConsents(req, res) {
+    try {
+      const result = await fhirImportStagingService.sendConsents(req.app.locals.db, req.params.id, {
+        userID: req.user?.userID || req.user?.id || null,
+      });
+      return res.status(200).json({ success: true, ...result });
+    } catch (error) {
+      return sendError(res, error);
+    }
+  }
+
+  async consentStatus(req, res) {
+    try {
+      const result = await fhirImportStagingService.getConsentStatus(req.app.locals.db, req.params.id);
+      return res.status(200).json({ success: true, ...result });
+    } catch (error) {
+      return sendError(res, error);
+    }
+  }
+
+  async commit(req, res) {
+    try {
+      const result = await fhirImportStagingService.commitBatch(req.app.locals.db, req.params.id);
+      return res.status(200).json({ success: true, ...result });
+    } catch (error) {
+      return sendError(res, error);
+    }
+  }
+}
+
+module.exports = new FhirImportStagingController();

@@ -828,7 +828,7 @@ class ImportService {
     };
     const canonicalQualityAssessment = qualityDomain.resolveMethodologicalQuality({ sprec });
     const releaseStatus = canonicalQualityAssessment?.governance_status === 1
-      && ['A', 'B', 'C', 'D'].includes(String(canonicalQualityAssessment?.final_grade || canonicalQualityAssessment?.category || '').toUpperCase())
+      && ['A', 'B', 'C', 'D'].includes(String(canonicalQualityAssessment?.final_grade || '').toUpperCase())
       ? 'AVAILABLE'
       : 'QUARANTINE';
 
@@ -843,7 +843,7 @@ class ImportService {
       quality: normalizeString(qualityRaw),
       // Canonical RCS-GOV fields (do not rely on legacy `quality_*` for decisioning)
       rcs_score: canonicalQualityAssessment.score,
-      final_grade: canonicalQualityAssessment.category || canonicalQualityAssessment.final_grade || '',
+      final_grade: canonicalQualityAssessment.final_grade || '',
       // Legacy compatibility bucket (non-decisional)
       legacy_compat: {
         quality_score: externalQualityAssessment.score,

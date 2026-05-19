@@ -34,30 +34,6 @@ function parseTrustProxy(value) {
 
 app.set("trust proxy", parseTrustProxy(env.TRUST_PROXY));
 
-const allowedOrigins = (env.ALLOWED_ORIGINS || env.FRONTEND_URL || "")
-  .split(",")
-  .map((origin) => origin.trim())
-  .filter(Boolean);
-if (allowedOrigins.length === 0) {
-  allowedOrigins.push("http://localhost:3000");
-}
-
-const isDev = env.NODE_ENV !== "production";
-if (isDev) {
-  [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "http://localhost:4173",
-    "http://127.0.0.1:4173",
-  ].forEach((origin) => {
-    if (!allowedOrigins.includes(origin)) {
-      allowedOrigins.push(origin);
-    }
-  });
-}
-
-const allowAllCors = Boolean(env.CORS_ALLOW_ALL);
-
 const normalizeOrigin = (origin) => {
   if (!origin) return "";
 
@@ -68,6 +44,46 @@ const normalizeOrigin = (origin) => {
     return origin.replace(/\/$/, "").toLowerCase();
   }
 };
+
+function addAllowedOrigin(origins, seenOrigins, origin) {
+  const trimmedOrigin = String(origin || "").trim();
+  if (!trimmedOrigin) return;
+
+  const normalizedOrigin = normalizeOrigin(trimmedOrigin);
+  if (!normalizedOrigin || seenOrigins.has(normalizedOrigin)) return;
+
+  origins.push(trimmedOrigin.replace(/\/$/, ""));
+  seenOrigins.add(normalizedOrigin);
+}
+
+function addAllowedOrigins(origins, seenOrigins, value) {
+  String(value || "")
+    .split(",")
+    .forEach((origin) => addAllowedOrigin(origins, seenOrigins, origin));
+}
+
+const allowedOrigins = [];
+const seenAllowedOrigins = new Set();
+addAllowedOrigins(allowedOrigins, seenAllowedOrigins, env.ALLOWED_ORIGINS);
+addAllowedOrigin(allowedOrigins, seenAllowedOrigins, env.FRONTEND_URL);
+addAllowedOrigin(allowedOrigins, seenAllowedOrigins, "http://34.60.170.17:5173");
+if (allowedOrigins.length === 0) {
+  addAllowedOrigin(allowedOrigins, seenAllowedOrigins, "http://localhost:5173");
+}
+
+const isDev = env.NODE_ENV !== "production";
+if (isDev) {
+  [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:4173",
+    "http://127.0.0.1:4173",
+  ].forEach((origin) => {
+    addAllowedOrigin(allowedOrigins, seenAllowedOrigins, origin);
+  });
+}
+
+const allowAllCors = Boolean(env.CORS_ALLOW_ALL);
 
 const normalizedAllowed = new Set(allowedOrigins.map(normalizeOrigin));
 
@@ -209,7 +225,6 @@ app.use("/api/orphanet", require("./src/interface/routes/orphanet.routes"));
 app.use("/api/hpo", require("./src/interface/routes/hpo.routes"));
 app.use("/api/patients", require("./src/interface/routes/patient.routes"));
 app.use("/api/v1/patients", require("./src/interface/routes/patient.routes"));
-app.use("/api/patient", require("./src/interface/routes/patient-consent-legacy.routes"));
 app.use("/api/samples", require("./src/interface/routes/sample.routes"));
 app.use("/api/quality", require("./src/interface/routes/quality.routes"));
 app.use("/api/import", require("./src/interface/routes/import.routes"));

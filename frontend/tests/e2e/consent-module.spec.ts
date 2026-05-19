@@ -233,4 +233,172 @@ test.describe('E2E - Consentimento/TCLE', () => {
     expect(consentPayload.responses.consent_terms).toBe(true);
     expect(typeof consentPayload.signatureImageBase64).toBe('string');
   });
+
+  test('TCLE Builder PDF de teste usa placeholders genericos sem dados de paciente', async ({ page }) => {
+    await page.addInitScript(() => {
+      window.print = () => {};
+    });
+
+    await page.route('http://localhost:3000/api/**', async (route) => {
+      const url = new URL(route.request().url());
+      const path = url.pathname;
+      const method = route.request().method();
+
+      if (path.endsWith('/api/auth/verify') && method === 'GET') {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            success: true,
+            data: {
+              user: {
+                id: 'e2e-user-1',
+                userID: 'e2e-user-1',
+                name: 'E2E Admin',
+                username: 'e2e-admin',
+                email: 'e2e@example.com',
+                accessType: 4,
+                roleName: 'Administrador',
+              },
+              valid: true,
+            },
+          }),
+        });
+        return;
+      }
+
+      if (path.endsWith('/api/e-consent/consent-templates') && method === 'GET') {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            success: true,
+            data: [
+              {
+                _id: 'tmpl-preview-001',
+                title: 'TCLE Preview',
+                version: 'v1',
+                caae: '11111111.1.1111.1111',
+                active: true,
+                validFrom: '2026-01-01T12:00:00.000Z',
+                createdAt: '2026-01-01T12:00:00.000Z',
+                htmlContent: '<p>Texto configurado no builder para impressão.</p>',
+                granularPermissions: [
+                  { key: 'consent_research', label: 'Aceito uso em pesquisa', required: true },
+                ],
+              },
+            ],
+          }),
+        });
+        return;
+      }
+
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ success: true, data: {} }),
+      });
+    });
+
+    await page.goto('/admin/tcle/new');
+    await page.getByRole('tab', { name: /Histórico/i }).click();
+    await page.getByRole('button', { name: /^PDF$/ }).click();
+
+    let pdfFrame = page.frames().find((frame) => frame.url().startsWith('blob:')) || null;
+    await expect.poll(() => {
+      pdfFrame = page.frames().find((frame) => frame.url().startsWith('blob:')) || null;
+      return Boolean(pdfFrame);
+    }).toBe(true);
+    const pdfText = await pdfFrame!.locator('body').innerText();
+
+    expect(pdfText).toContain('Texto configurado no builder para impressão.');
+    expect(pdfText).toContain('Nome do participante: ______________________');
+    expect(pdfText).toContain('CPF/Documento: ______________________');
+    expect(pdfText).toContain('Data: ____/____/______');
+    expect(pdfText).toContain('Assinatura do participante: ______________________');
+    expect(pdfText).toContain('Assinatura do pesquisador/responsável: ______________________');
+    expect(pdfText).not.toContain('João Carlos da Silva');
+    expect(pdfText).not.toContain('PAC-00012345');
+    expect(pdfText).not.toContain('SAM-00067890');
+  });
+
+  test('Histórico TCLE exibe validade ou texto claro quando ausente', async ({ page }) => {
+    await page.route('http://localhost:3000/api/**', async (route) => {
+      const url = new URL(route.request().url());
+      const path = url.pathname;
+      const method = route.request().method();
+
+      if (path.endsWith('/api/auth/verify') && method === 'GET') {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            success: true,
+            data: {
+              user: {
+                id: 'e2e-user-1',
+                userID: 'e2e-user-1',
+                name: 'E2E Admin',
+                username: 'e2e-admin',
+                email: 'e2e@example.com',
+                accessType: 4,
+                roleName: 'Administrador',
+              },
+              valid: true,
+            },
+          }),
+        });
+        return;
+      }
+
+      if (path.endsWith('/api/e-consent/consent-templates') && method === 'GET') {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            success: true,
+            data: [
+              {
+                _id: 'tmpl-valid-until',
+                title: 'TCLE com validade',
+                version: 'v2',
+                caae: '11111111.1.1111.1111',
+                active: true,
+                validFrom: '2026-01-01T12:00:00.000Z',
+                validUntil: '2026-12-31T23:59:59.999Z',
+                createdAt: '2026-01-02T12:00:00.000Z',
+                htmlContent: '<p>Texto do TCLE com validade.</p>',
+                granularPermissions: [],
+              },
+              {
+                _id: 'tmpl-no-validity',
+                title: 'TCLE sem validade',
+                version: 'v1',
+                caae: '22222222.2.2222.2222',
+                active: false,
+                validFrom: '2026-01-01T12:00:00.000Z',
+                createdAt: '2026-01-01T12:00:00.000Z',
+                htmlContent: '<p>Texto do TCLE sem validade.</p>',
+                granularPermissions: [],
+              },
+            ],
+          }),
+        });
+        return;
+      }
+
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ success: true, data: {} }),
+      });
+    });
+
+    await page.goto('/admin/tcle/new');
+    await page.getByRole('tab', { name: /Histórico/i }).click();
+
+    await expect(page.getByRole('columnheader', { name: 'Validity Date' })).toBeVisible();
+    await expect(page.getByRole('row', { name: /TCLE com validade|v2/i })).toContainText('31/12/2026');
+    await expect(page.getByRole('row', { name: /TCLE sem validade|v1/i })).toContainText('Sem validade definida');
+  });
 });

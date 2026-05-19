@@ -120,6 +120,24 @@ export async function mockWizardDomainApis(page: Page, options = { withActiveTcl
       });
     }
 
+    if (url.includes('/dictionary/suggest')) {
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          disease: { system: 'http://www.orpha.net', code: '324', display: 'Doenca de Fabry' },
+          phenotypes: [
+            { system: 'http://purl.obolibrary.org/obo/hp.owl', code: 'HP:0001066', display: 'Angioqueratoma' },
+            { system: 'http://purl.obolibrary.org/obo/hp.owl', code: 'HP:0012471', display: 'Acroparestesia' },
+          ],
+          biomarkers: [
+            { system: 'http://loinc.org', code: 'alphaGal', display: 'Alpha-galactosidase A' },
+            { system: 'http://loinc.org', code: 'lysoGb3', display: 'Lyso-Gb3' },
+          ],
+        }),
+      });
+    }
+
     if (url.includes('/intake-wizard/patient-match')) {
       return route.fulfill({
         status: 200,
@@ -206,8 +224,10 @@ export async function mockWizardDomainApis(page: Page, options = { withActiveTcl
           consentEmail: { success: true },
           sample: {
             sampleID: 'S-1001',
+            barcode: 'BC-S-1001',
             patientID: '12345678',
             sampleType: 'PLASMA',
+            registrationDate: '2026-05-18T12:00:00.000Z',
           },
         }),
       });

@@ -181,5 +181,6 @@ function stopScheduler() {
 module.exports = {
   initScheduler,
   stopScheduler,
+  startConsentSyncSchedule,
   checkStaleTemperatureReadings
 };

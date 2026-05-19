@@ -6,6 +6,10 @@ test.use({ storageState: { cookies: [], origins: [] } });
 test.describe('E2E - Patients and Biomarker Observations', () => {
   let resendConsentCalls = 0;
   let findForEditCalls = 0;
+  let fhirStageCalls = 0;
+  let fhirCommitCalls = 0;
+  let definitivePatientCreateCalls = 0;
+  let definitiveSampleCreateCalls = 0;
 
   async function setupAuthenticatedPatientsPage(page: Page) {
     const auth = createAdminAuthContext();
@@ -130,6 +134,97 @@ test.describe('E2E - Patients and Biomarker Observations', () => {
         return;
       }
 
+      if (url.match(/\/api\/patients(?:\?.*)?$/) && method === 'POST') {
+        definitivePatientCreateCalls += 1;
+        await route.fulfill({
+          status: 500,
+          contentType: 'application/json',
+          body: JSON.stringify({ success: false, error: 'POST definitivo não deve ser chamado no staging FHIR' }),
+        });
+        return;
+      }
+
+      if (url.match(/\/api\/samples(?:\?.*)?$/) && method === 'POST') {
+        definitiveSampleCreateCalls += 1;
+        await route.fulfill({
+          status: 500,
+          contentType: 'application/json',
+          body: JSON.stringify({ success: false, error: 'POST definitivo não deve ser chamado no staging FHIR' }),
+        });
+        return;
+      }
+
+      if (url.includes('/api/import/fhir/stage') && method === 'POST') {
+        fhirStageCalls += 1;
+        await route.fulfill({
+          status: 201,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            success: true,
+            batch: { _id: 'batch-fhir-ui', counts: { valid: 1, errors: 1, pendingConsent: 0, readyToCommit: 0 } },
+            records: [
+              {
+                _id: 'record-valid',
+                rowNumber: 1,
+                status: 'VALID',
+                normalized: { patientName: 'Paciente FHIR', patientID: 'P-001', patientEmail: 'fhir@example.org', sampleID: 'S-001' },
+                warnings: [{ field: 'consent', message: 'TCLE ainda não enviado para assinatura.' }],
+              },
+              {
+                _id: 'record-email',
+                rowNumber: 2,
+                status: 'NEEDS_EMAIL',
+                normalized: { patientName: 'Paciente Sem Email', patientID: 'P-002', sampleID: 'S-002' },
+                validationErrors: [{ field: 'patientEmail', message: 'E-mail válido é obrigatório para envio do TCLE.' }],
+              },
+            ],
+          }),
+        });
+        return;
+      }
+
+      if (url.includes('/api/import/fhir/batches/batch-fhir-ui/send-consents') && method === 'POST') {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            success: true,
+            batch: { _id: 'batch-fhir-ui', counts: { valid: 0, errors: 1, pendingConsent: 1, readyToCommit: 0 } },
+            consentResults: [
+              { recordId: 'record-valid', sent: true, status: 'PENDING_CONSENT' },
+              { recordId: 'record-email', sent: false, status: 'NEEDS_EMAIL' },
+            ],
+            records: [
+              {
+                _id: 'record-valid',
+                rowNumber: 1,
+                status: 'PENDING_CONSENT',
+                normalized: { patientName: 'Paciente FHIR', patientID: 'P-001', patientEmail: 'fhir@example.org', sampleID: 'S-001' },
+                warnings: [{ field: 'consent', message: 'TCLE enviado e aguardando assinatura.' }],
+              },
+              {
+                _id: 'record-email',
+                rowNumber: 2,
+                status: 'NEEDS_EMAIL',
+                normalized: { patientName: 'Paciente Sem Email', patientID: 'P-002', sampleID: 'S-002' },
+                validationErrors: [{ field: 'patientEmail', message: 'E-mail válido é obrigatório para envio do TCLE.' }],
+              },
+            ],
+          }),
+        });
+        return;
+      }
+
+      if (url.includes('/api/import/fhir/batches/batch-fhir-ui/commit') && method === 'POST') {
+        fhirCommitCalls += 1;
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ success: true, committed: 0, records: [] }),
+        });
+        return;
+      }
+
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -153,6 +248,10 @@ test.describe('E2E - Patients and Biomarker Observations', () => {
   test.beforeEach(() => {
     resendConsentCalls = 0;
     findForEditCalls = 0;
+    fhirStageCalls = 0;
+    fhirCommitCalls = 0;
+    definitivePatientCreateCalls = 0;
+    definitiveSampleCreateCalls = 0;
   });
 
   test('deve listar pacientes e buscar por termo sem quebrar i18n', async ({ page }) => {
@@ -179,5 +278,59 @@ test.describe('E2E - Patients and Biomarker Observations', () => {
     await page.locator('[data-testid="edit-patient-button-12345678"]').click();
     await expect.poll(() => findForEditCalls).toBe(1);
     await expect(page).toHaveURL(/\/next\/intake/);
+  });
+
+  test('FHIR Import exibe fluxo guiado com staging, TCLE e commit bloqueado sem assinatura', async ({ page }) => {
+    await setupAuthenticatedPatientsPage(page);
+
+    const bundle = {
+      resourceType: 'Bundle',
+      entry: [
+        { resource: { resourceType: 'Patient', id: 'P-001', name: [{ text: 'Paciente FHIR' }], telecom: [{ system: 'email', value: 'fhir@example.org' }] } },
+        { resource: { resourceType: 'Specimen', id: 'S-001', subject: { reference: 'Patient/P-001' }, type: { text: 'SANGUE' } } },
+      ],
+    };
+
+    await page.locator('[data-testid="patients-import-fhir-button"]').click();
+    await expect(page.getByText('Etapa 1 — Preparar arquivo')).toBeVisible();
+    await expect(page.getByText('Processar Importação')).toHaveCount(0);
+    await expect(page.getByText('Baixar modelo Excel')).toBeVisible();
+    await expect(page.getByText('Converter Excel para JSON FHIR')).toBeVisible();
+    await expect(page.getByText('Selecionar JSON FHIR')).toBeVisible();
+    await expect(page.getByTestId('patients-fhir-validate-batch')).toContainText('Validar lote');
+    await expect(page.getByTestId('patients-fhir-send-consents')).toContainText('Enviar TCLEs');
+    await expect(page.getByTestId('patients-fhir-commit-signed')).toContainText('Salvar registros assinados');
+
+    await page.getByTestId('patients-fhir-json-input').setInputFiles({
+      name: 'bundle.json',
+      mimeType: 'application/json',
+      buffer: Buffer.from(JSON.stringify(bundle)),
+    });
+    await expect(page.getByText('Pacientes detectados:')).toBeVisible();
+    await expect(page.getByText('Pacientes detectados:')).toContainText('1');
+    await expect(page.getByText('Amostras detectadas:')).toBeVisible();
+    await expect(page.getByText('Amostras detectadas:')).toContainText('1');
+
+    await page.getByTestId('patients-fhir-validate-batch').click();
+    await expect.poll(() => fhirStageCalls).toBe(1);
+    await expect.poll(() => definitivePatientCreateCalls).toBe(0);
+    await expect.poll(() => definitiveSampleCreateCalls).toBe(0);
+    await expect(page.getByTestId('patients-fhir-staging-table')).toContainText('VALID');
+    await expect(page.getByTestId('patients-fhir-staging-table')).toContainText('NEEDS_EMAIL');
+    await expect(page.getByTestId('patients-fhir-staging-table')).toContainText('patientEmail');
+    await expect(page.getByTestId('patients-fhir-validation-summary')).toContainText('Total: 2');
+    await expect(page.getByTestId('patients-fhir-validation-summary')).toContainText('Válidos: 1');
+    await expect(page.getByTestId('patients-fhir-validation-summary')).toContainText('Prontos para commit: 0');
+    await expect(page.getByTestId('patients-fhir-validation-summary')).toContainText('Erros: 1');
+    await expect(page.getByTestId('patients-fhir-send-consents')).toBeVisible();
+    await expect(page.getByTestId('patients-fhir-send-consents')).toBeEnabled();
+
+    await page.getByTestId('patients-fhir-send-consents').click();
+    await expect(page.getByText(/Enviados:\s*1/)).toBeVisible();
+    await expect(page.getByText(/Falhas:\s*1/)).toBeVisible();
+    await expect(page.getByTestId('patients-fhir-staging-table')).toContainText('PENDING_CONSENT');
+
+    await expect(page.getByTestId('patients-fhir-commit-signed')).toBeDisabled();
+    await expect.poll(() => fhirCommitCalls).toBe(0);
   });
 });

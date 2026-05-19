@@ -297,7 +297,12 @@ export const sampleService = {
 };
 
 export const dataImportService = {
-  importFhir: (payload: unknown) => api.post('/import/fhir', payload),
+  stageFhirBundle: (payload: unknown) => api.post('/import/fhir/stage', payload),
+  getFhirBatch: (batchId: string) => api.get(`/import/fhir/batches/${encodeURIComponent(batchId)}`),
+  validateFhirBatch: (batchId: string) => api.post(`/import/fhir/batches/${encodeURIComponent(batchId)}/validate`),
+  sendFhirBatchConsents: (batchId: string) => api.post(`/import/fhir/batches/${encodeURIComponent(batchId)}/send-consents`),
+  getFhirBatchConsentStatus: (batchId: string) => api.get(`/import/fhir/batches/${encodeURIComponent(batchId)}/consent-status`),
+  commitFhirBatch: (batchId: string) => api.post(`/import/fhir/batches/${encodeURIComponent(batchId)}/commit`),
 };
 
 // ========== RESULT SERVICES ==========

@@ -1236,7 +1236,7 @@ class ImportLGPDService {
     };
     const canonicalQualityAssessment = qualityDomain.resolveMethodologicalQuality({ sprec });
     const releaseStatus = canonicalQualityAssessment?.governance_status === 1
-      && ['A', 'B', 'C', 'D'].includes(String(canonicalQualityAssessment?.final_grade || canonicalQualityAssessment?.category || '').toUpperCase())
+      && ['A', 'B', 'C', 'D'].includes(String(canonicalQualityAssessment?.final_grade || '').toUpperCase())
       ? 'AVAILABLE'
       : 'QUARANTINE';
 
@@ -1260,7 +1260,7 @@ class ImportLGPDService {
       quantity: row.quantity ? parseFloat(row.quantity) : null,
       quality: parseQualityMIABIS(row.quality), // Valida e converte para id MIABIS canônico
       rcs_score: canonicalQualityAssessment.score,
-      final_grade: canonicalQualityAssessment.category || canonicalQualityAssessment.final_grade || '',
+      final_grade: canonicalQualityAssessment.final_grade || '',
       legacy_compat: {
         quality_score: externalQualityAssessment.score,
         quality_category: externalQualityAssessment.category || '',

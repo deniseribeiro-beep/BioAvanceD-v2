@@ -13,6 +13,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { dataImportService, patientService } from '../services/api';
 import { useLanguage } from '../contexts/LanguageContext';
 import ImportResultSummary, { type ImportResultSummaryData } from '../components/ImportResultSummary';
+import { convertExcelFileToFhirBundle, downloadFhirExcelTemplate } from '../utils/fhirExcelImport';
 import './PatientsPage.css';
 
 const styles: Record<string, CSSProperties> = {
@@ -244,15 +245,86 @@ export default function PatientsPage() {
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [importedFile, setImportedFile] = useState<File | null>(null);
   const [importedJson, setImportedJson] = useState<any>(null);
+  const [importExcelFile, setImportExcelFile] = useState<File | null>(null);
+  const [fhirImportStep, setFhirImportStep] = useState(1);
+  const [fhirBatchId, setFhirBatchId] = useState('');
+  const [fhirBatch, setFhirBatch] = useState<any>(null);
+  const [fhirStagingRows, setFhirStagingRows] = useState<any[]>([]);
+  const [fhirConsentSummary, setFhirConsentSummary] = useState<any>(null);
   const [importLoading, setImportLoading] = useState(false);
   const [importResult, setImportResult] = useState<ImportResultSummaryData | null>(null);
 
-  // Estado para importação de amostras
-  const [isSampleImportModalOpen, setIsSampleImportModalOpen] = useState(false);
-  const [importedSampleFile, setImportedSampleFile] = useState<File | null>(null);
-  const [importedSampleJson, setImportedSampleJson] = useState<any>(null);
-  const [sampleImportLoading, setSampleImportLoading] = useState(false);
-  const [sampleImportResult, setSampleImportResult] = useState<{ success?: boolean; message?: string; samples?: number; error?: string } | null>(null);
+  const resetFhirImportState = () => {
+    setIsImportModalOpen(false);
+    setImportedFile(null);
+    setImportedJson(null);
+    setImportExcelFile(null);
+    setFhirImportStep(1);
+    setFhirBatchId('');
+    setFhirBatch(null);
+    setFhirStagingRows([]);
+    setFhirConsentSummary(null);
+    setImportResult(null);
+  };
+
+  const getFhirResourceCount = (resourceType: string) => {
+    if (!importedJson?.entry || !Array.isArray(importedJson.entry)) return 0;
+    return importedJson.entry.filter((entry: any) => entry?.resource?.resourceType === resourceType).length;
+  };
+
+  const getReadyToCommitCount = () => fhirStagingRows.filter((row) => row.status === 'READY_TO_COMMIT').length;
+  const getValidWithEmailCount = () => fhirStagingRows.filter((row) => row.status === 'VALID' && row.normalized?.patientEmail).length;
+  const getFhirValidationSummary = () => {
+    const counts = fhirBatch?.counts || {};
+    return {
+      total: counts.total ?? fhirStagingRows.length,
+      valid: counts.valid ?? fhirStagingRows.filter((row) => row.status === 'VALID').length,
+      pendingConsent: counts.pendingConsent ?? fhirStagingRows.filter((row) => row.status === 'PENDING_CONSENT').length,
+      errors: counts.errors ?? fhirStagingRows.filter((row) => row.status === 'ERROR' || row.status === 'NEEDS_EMAIL' || row.status === 'CONSENT_SEND_FAILED').length,
+      readyToCommit: counts.readyToCommit ?? fhirStagingRows.filter((row) => row.status === 'READY_TO_COMMIT').length,
+    };
+  };
+
+  const refreshFhirBatchState = (data: any) => {
+    const batch = data?.batch || data?.data?.batch || null;
+    const records = data?.records || data?.data?.records || [];
+    setFhirBatch(batch);
+    setFhirStagingRows(Array.isArray(records) ? records : []);
+    const nextBatchId = String(batch?._id || batch?.id || data?.batchId || data?.data?.batchId || fhirBatchId || '');
+    if (nextBatchId) setFhirBatchId(nextBatchId);
+  };
+
+  const handleExcelFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setImportExcelFile(e.target.files?.[0] || null);
+  };
+
+  const handleConvertExcelToFhir = async () => {
+    if (!importExcelFile) {
+      alert('Selecione um arquivo Excel preenchido com o modelo.');
+      return;
+    }
+
+    setImportLoading(true);
+    try {
+      const bundle = await convertExcelFileToFhirBundle(importExcelFile);
+      const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/fhir+json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'importacao-fhir-bundle.json';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      setImportedJson(bundle);
+      setImportedFile(new File([blob], 'importacao-fhir-bundle.json', { type: 'application/fhir+json' }));
+      setFhirImportStep(2);
+    } catch (err: any) {
+      alert(err?.message || 'Não foi possível converter o Excel para JSON FHIR.');
+    } finally {
+      setImportLoading(false);
+    }
+  };
 
   // Handler para leitura do arquivo
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -264,6 +336,11 @@ export default function PatientsPage() {
           const json = JSON.parse(ev.target?.result as string);
           setImportedFile(file);
           setImportedJson(json);
+          setFhirImportStep(2);
+          setFhirBatchId('');
+          setFhirBatch(null);
+          setFhirStagingRows([]);
+          setFhirConsentSummary(null);
         } catch (err) {
           alert('Arquivo JSON inválido');
           setImportedFile(null);
@@ -278,121 +355,64 @@ export default function PatientsPage() {
     }
   };
 
-  function normalizeFhirImportPayload(payload: any) {
-    if (payload && typeof payload === 'object' && Array.isArray(payload.entry)) {
-      return payload;
-    }
-
-    if (Array.isArray(payload)) {
-      return payload;
-    }
-
-    if (payload && typeof payload === 'object' && payload.resourceType) {
-      return payload;
-    }
-
-    return payload;
-  }
-
-  // Handler para envio do JSON (pacientes)
-  const handleImportSubmit = async () => {
+  const handleValidateFhirBatch = async () => {
     if (!importedJson) return;
     setImportLoading(true);
     setImportResult(null);
     try {
-      const payload = normalizeFhirImportPayload(importedJson);
-      const response = await dataImportService.importFhir(payload);
-      const data = response?.data || {};
-      setImportResult(data);
-      if (data.success !== false && (data.patients !== undefined || data.samples !== undefined)) {
-        alert('Importação concluída!');
-        setIsImportModalOpen(false);
-        setImportedFile(null);
-        setImportedJson(null);
-        loadPatients();
-      } else {
-        alert(data.message || data.error || 'Erro ao importar');
-      }
+      const stagedResponse = fhirBatchId
+        ? await dataImportService.validateFhirBatch(fhirBatchId)
+        : await dataImportService.stageFhirBundle(importedJson);
+      const data = stagedResponse?.data || {};
+      refreshFhirBatchState(data);
+      setFhirImportStep(3);
     } catch (err: any) {
       const errorMessage = err?.response?.data?.error || err?.response?.data?.message || err?.message;
-      setImportResult({ success: false, error: errorMessage || 'Erro ao importar FHIR' });
-      alert('Erro ao importar: ' + (errorMessage || 'Erro desconhecido'));
+      setImportResult({ success: false, error: errorMessage || 'A importação em lote exige um FHIR R4 Bundle JSON.' });
+      alert('Erro ao validar lote: ' + (errorMessage || 'A importação em lote exige um FHIR R4 Bundle JSON.'));
     } finally {
       setImportLoading(false);
     }
   };
 
-  // Handler para leitura do arquivo de amostras
-  const handleSampleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file && file.type === 'application/json') {
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        try {
-          const json = JSON.parse(ev.target?.result as string);
-          setImportedSampleFile(file);
-          setImportedSampleJson(json);
-        } catch (err) {
-          alert('Arquivo JSON inválido');
-          setImportedSampleFile(null);
-          setImportedSampleJson(null);
-        }
-      };
-      reader.readAsText(file);
-    } else {
-      alert('Selecione um arquivo .json válido');
-      setImportedSampleFile(null);
-      setImportedSampleJson(null);
-    }
-  };
-
-  // Handler para envio do JSON de amostras
-  const handleSampleImportSubmit = async () => {
-    if (!importedSampleJson) return;
-    setSampleImportLoading(true);
-    setSampleImportResult(null);
+  const handleSendFhirConsents = async () => {
+    if (!fhirBatchId) return;
+    setImportLoading(true);
     try {
-      // Anonimização básica: remove campos sensíveis extras
-      const anonymized = Array.isArray(importedSampleJson)
-        ? importedSampleJson.map(obj => anonymizeSample(obj))
-        : anonymizeSample(importedSampleJson);
-      const response = await fetch('http://localhost:3000/api/import/samples', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(anonymized)
+      const response = await dataImportService.sendFhirBatchConsents(fhirBatchId);
+      const data = response?.data || {};
+      refreshFhirBatchState(data);
+      const results = data.consentResults || [];
+      setFhirConsentSummary({
+        sent: results.filter((item: any) => item.sent).length,
+        failed: results.filter((item: any) => item.sent === false).length,
+        pending: (data.records || []).filter((row: any) => row.status === 'PENDING_CONSENT').length,
       });
-      const data = await response.json();
-      setSampleImportResult(data);
-      if (data.success !== false && data.samples) {
-        alert('Importação de amostras concluída!');
-        setIsSampleImportModalOpen(false);
-        setImportedSampleFile(null);
-        setImportedSampleJson(null);
-        // Opcional: recarregar pacientes/amostras
-        loadPatients();
-      } else {
-        alert(data.message || data.error || 'Erro ao importar amostras');
-      }
+      setFhirImportStep(5);
     } catch (err: any) {
-      setSampleImportResult({ success: false, error: err.message });
-      alert('Erro ao importar amostras: ' + err.message);
+      const errorMessage = err?.response?.data?.error || err?.response?.data?.message || err?.message;
+      setImportResult({ success: false, error: errorMessage || 'Erro ao enviar TCLEs' });
+      alert('Erro ao enviar TCLEs: ' + (errorMessage || 'Erro desconhecido'));
     } finally {
-      setSampleImportLoading(false);
+      setImportLoading(false);
     }
   };
 
-  // Funções de anonimização básica
-  function anonymizeSample(obj: any) {
-    const { sampleID, patientCpf, patientRecordNumber, type, origin, ...rest } = obj;
-    return {
-      sampleID,
-      patientCpf,
-      patientRecordNumber,
-      type,
-      origin,
-      // outros campos permitidos podem ser adicionados aqui
-    };
-  }
+  const handleCommitFhirBatch = async () => {
+    if (!fhirBatchId || getReadyToCommitCount() === 0) return;
+    setImportLoading(true);
+    try {
+      const response = await dataImportService.commitFhirBatch(fhirBatchId);
+      refreshFhirBatchState(response?.data || {});
+      setImportResult({ success: true, message: 'Registros assinados salvos com sucesso.' });
+      await loadPatients();
+    } catch (err: any) {
+      const errorMessage = err?.response?.data?.error || err?.response?.data?.message || err?.message;
+      setImportResult({ success: false, error: errorMessage || 'Erro ao salvar registros assinados' });
+    } finally {
+      setImportLoading(false);
+    }
+  };
 
   return (
     <div className="page patients-page" data-testid="patients-page">
@@ -413,23 +433,127 @@ export default function PatientsPage() {
             </Button>
           )}
                 {/* Modal de Importação FHIR */}
-                <Modal isOpen={isImportModalOpen} onClose={() => { setIsImportModalOpen(false); setImportedFile(null); setImportedJson(null); setImportResult(null); }} title="Importação Inteligente de Dados FHIR">
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', minWidth: 320 }}>
-                    <label style={{ fontWeight: 500 }}>Selecione um arquivo FHIR (.json):</label>
-                    <input type="file" accept="application/json" onChange={handleFileChange} disabled={importLoading} title="Selecione um arquivo .json FHIR" />
-                    {importedJson && (
-                      <div style={{ maxHeight: 180, overflow: 'auto', background: '#f8fafc', border: '1px solid #e5e7eb', borderRadius: 6, padding: 8, fontSize: 13 }}>
-                        <pre style={{ margin: 0 }}>{JSON.stringify(importedJson, null, 2).slice(0, 2000)}{JSON.stringify(importedJson, null, 2).length > 2000 ? '... (truncado)' : ''}</pre>
-                      </div>
-                    )}
-                    <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-                      <Button onClick={handleImportSubmit} disabled={!importedJson || importLoading}>
-                        {importLoading ? 'Processando...' : 'Processar Importação'}
-                      </Button>
-                      <Button variant="secondary" onClick={() => { setIsImportModalOpen(false); setImportedFile(null); setImportedJson(null); setImportResult(null); }} disabled={importLoading}>
-                        Cancelar
-                      </Button>
+                <Modal isOpen={isImportModalOpen} onClose={resetFhirImportState} title="Importação Inteligente de Dados FHIR">
+                  <div style={{ display: 'grid', gap: '1rem', minWidth: 640, maxWidth: 920 }}>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', fontSize: 13 }}>
+                      {['1 Preparar arquivo', '2 Validar lote', '3 Revisar inconsistências', '4 Enviar TCLE', '5 Consolidar'].map((label, index) => (
+                        <span
+                          key={label}
+                          style={{
+                            padding: '0.35rem 0.55rem',
+                            borderRadius: 6,
+                            border: '1px solid var(--border)',
+                            background: fhirImportStep === index + 1 ? 'var(--primary)' : 'var(--surface)',
+                            color: fhirImportStep === index + 1 ? '#fff' : 'var(--text)',
+                            fontWeight: 600,
+                          }}
+                        >
+                          {label}
+                        </span>
+                      ))}
                     </div>
+
+                    <section style={styles.importInfoPanel}>
+                      <h3 style={{ marginTop: 0 }}>Etapa 1 — Preparar arquivo</h3>
+                      <p style={{ marginTop: 0, color: 'var(--text-light)' }}>
+                        JSON FHIR R4 Bundle é o padrão principal. Excel é apenas apoio: ele precisa ser convertido para JSON FHIR antes do staging.
+                      </p>
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                        <Button type="button" onClick={downloadFhirExcelTemplate} disabled={importLoading} data-testid="patients-fhir-excel-template">
+                          Baixar modelo Excel
+                        </Button>
+                        <input type="file" accept=".xlsx,.xls" onChange={handleExcelFileChange} disabled={importLoading} data-testid="patients-fhir-excel-input" />
+                        <Button type="button" onClick={handleConvertExcelToFhir} disabled={!importExcelFile || importLoading} data-testid="patients-fhir-convert-excel">
+                          Converter Excel para JSON FHIR
+                        </Button>
+                        <label style={{ fontWeight: 600 }}>Selecionar JSON FHIR</label>
+                        <input type="file" accept="application/json,.json,application/fhir+json" onChange={handleFileChange} disabled={importLoading} title="Selecionar JSON FHIR" data-testid="patients-fhir-json-input" />
+                      </div>
+                    </section>
+
+                    <section style={styles.importInfoPanel}>
+                      <h3 style={{ marginTop: 0 }}>Etapa 2 — Validar lote</h3>
+                      <div style={{ display: 'grid', gap: 4, fontSize: 14 }}>
+                        <span>Arquivo: <strong>{importedFile?.name || 'Nenhum JSON FHIR selecionado'}</strong></span>
+                        <span>Pacientes detectados: <strong>{getFhirResourceCount('Patient')}</strong></span>
+                        <span>Amostras detectadas: <strong>{getFhirResourceCount('Specimen')}</strong></span>
+                      </div>
+                      <div style={{ marginTop: 10 }}>
+                        <Button type="button" onClick={handleValidateFhirBatch} disabled={!importedJson || importLoading} data-testid="patients-fhir-validate-batch">
+                          {importLoading && fhirImportStep <= 2 ? 'Validando...' : 'Validar lote'}
+                        </Button>
+                      </div>
+                    </section>
+
+                    <section style={styles.importInfoPanel}>
+                      <h3 style={{ marginTop: 0 }}>Etapa 3 — Revisar inconsistências</h3>
+                      {fhirStagingRows.length > 0 && (
+                        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 10, fontSize: 14 }} data-testid="patients-fhir-validation-summary">
+                          <span>Total: <strong>{getFhirValidationSummary().total}</strong></span>
+                          <span>Válidos: <strong>{getFhirValidationSummary().valid}</strong></span>
+                          <span>Pendentes de TCLE: <strong>{getFhirValidationSummary().pendingConsent}</strong></span>
+                          <span>Prontos para commit: <strong>{getFhirValidationSummary().readyToCommit}</strong></span>
+                          <span>Erros: <strong>{getFhirValidationSummary().errors}</strong></span>
+                        </div>
+                      )}
+                      <div style={{ maxHeight: 240, overflow: 'auto', border: '1px solid var(--border)', borderRadius: 8 }}>
+                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }} data-testid="patients-fhir-staging-table">
+                          <thead>
+                            <tr style={{ background: 'var(--surface)' }}>
+                              <th style={{ textAlign: 'left', padding: 8 }}>Linha</th>
+                              <th style={{ textAlign: 'left', padding: 8 }}>Paciente</th>
+                              <th style={{ textAlign: 'left', padding: 8 }}>Amostra</th>
+                              <th style={{ textAlign: 'left', padding: 8 }}>Status</th>
+                              <th style={{ textAlign: 'left', padding: 8 }}>Mensagens</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {fhirStagingRows.length === 0 ? (
+                              <tr><td colSpan={5} style={{ padding: 10, color: 'var(--text-light)' }}>Valide o lote para visualizar as linhas staging.</td></tr>
+                            ) : fhirStagingRows.map((row) => {
+                              const messages = [...(row.validationErrors || row.errors || []), ...(row.warnings || [])]
+                                .map((item: any) => `${item.field}: ${item.message}`)
+                                .join(' | ');
+                              return (
+                                <tr key={row._id || row.rowNumber}>
+                                  <td style={{ padding: 8, borderTop: '1px solid var(--border)' }}>{row.rowNumber}</td>
+                                  <td style={{ padding: 8, borderTop: '1px solid var(--border)' }}>{row.normalized?.patientName || row.normalized?.patientID || '-'}</td>
+                                  <td style={{ padding: 8, borderTop: '1px solid var(--border)' }}>{row.normalized?.sampleID || '-'}</td>
+                                  <td style={{ padding: 8, borderTop: '1px solid var(--border)', fontWeight: 700 }}>{row.status}</td>
+                                  <td style={{ padding: 8, borderTop: '1px solid var(--border)' }}>{messages || 'Sem inconsistências'}</td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </section>
+
+                    <section style={styles.importInfoPanel}>
+                      <h3 style={{ marginTop: 0 }}>Etapa 4 — Enviar TCLE</h3>
+                      <Button type="button" onClick={handleSendFhirConsents} disabled={!fhirBatchId || getValidWithEmailCount() === 0 || importLoading} data-testid="patients-fhir-send-consents">
+                        Enviar TCLEs
+                      </Button>
+                      <div style={{ marginTop: 8, fontSize: 14 }}>
+                        Enviados: <strong>{fhirConsentSummary?.sent ?? 0}</strong> · Falhas: <strong>{fhirConsentSummary?.failed ?? 0}</strong> · Pendentes: <strong>{fhirConsentSummary?.pending ?? fhirStagingRows.filter((row) => row.status === 'PENDING_CONSENT').length}</strong>
+                      </div>
+                    </section>
+
+                    <section style={styles.importInfoPanel}>
+                      <h3 style={{ marginTop: 0 }}>Etapa 5 — Consolidar</h3>
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                        <Button type="button" onClick={handleCommitFhirBatch} disabled={!fhirBatchId || getReadyToCommitCount() === 0 || importLoading} data-testid="patients-fhir-commit-signed">
+                          Salvar registros assinados
+                        </Button>
+                        <span style={{ color: 'var(--text-light)', fontSize: 14 }}>
+                          READY_TO_COMMIT: {getReadyToCommitCount()}
+                        </span>
+                        <Button variant="secondary" onClick={resetFhirImportState} disabled={importLoading}>
+                          Fechar
+                        </Button>
+                      </div>
+                    </section>
+
                     <ImportResultSummary result={importResult} style={{ marginTop: 8, fontSize: 14 }} />
                   </div>
                 </Modal>

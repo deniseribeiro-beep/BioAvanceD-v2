@@ -108,7 +108,13 @@ vi.mock('../src/services/session.service', () => ({
 
 beforeEach(() => {
 	try {
-		const app = require('../app');
+		const appPath = require.resolve('../app');
+		const appModule = require.cache[appPath];
+		if (!appModule?.exports) {
+			return;
+		}
+
+		const app = appModule.exports;
 		if (!app.locals.db) {
 			app.locals.db = createDefaultDb();
 		}

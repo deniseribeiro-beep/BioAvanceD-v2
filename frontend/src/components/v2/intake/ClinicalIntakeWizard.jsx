@@ -2,7 +2,7 @@
 import React from 'react';
 import { useLanguage } from '../../../contexts/LanguageContext';
 import { z } from 'zod';
-import { AlertTriangle, ArrowLeft, ArrowRight, CheckCircle2, FlaskConical, Lock, Microscope, Pill, PlusCircle, Send, ShieldCheck, Stethoscope } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, ArrowRight, CheckCircle2, FlaskConical, Microscope, Pill, PlusCircle, Printer, Send, ShieldCheck, Stethoscope } from 'lucide-react';
 import Button from '../../../components/UI/Button';
 import Card from '../../../components/UI/Card';
 import Input from '../../../components/UI/Input';
@@ -25,7 +25,7 @@ import { consentService } from '../../../services/api';
 import { LIMITS } from '../../../config/constants/limits.constants';
 import { VALIDATION_MESSAGES, VALIDATION_RULES } from '../../../config/constants/validation.constants';
 import { SPREC_FLUID_DICTIONARY, SPREC_SOLID_DICTIONARY } from '../../../constants/sprecDictionary';
-import { buildSampleMerkleRoot, verifySampleIntegrity } from '../../../utils/sampleMerkleIntegrity';
+import { buildSampleMerkleRoot } from '../../../utils/sampleMerkleIntegrity';
 import './ClinicalIntakeWizard.css';
 
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -46,6 +46,11 @@ const CANONICAL_PREVIEW_UNAVAILABLE = Object.freeze({
 
 function normalizeDocumentValue(value) {
   return String(value || '').trim();
+}
+
+function isCpfLikeDocument(value) {
+  const normalized = normalizeDocumentValue(value);
+  return Boolean(normalized) && /^[\d.\-\s]+$/.test(normalized);
 }
 
 function isValidCpfDocument(value) {
@@ -97,7 +102,11 @@ function isValidCpfOrPassportDocument(value) {
     return false;
   }
 
-  return isValidCpfDocument(normalized) || isValidPassportDocument(normalized);
+  if (isCpfLikeDocument(normalized)) {
+    return isValidCpfDocument(normalized);
+  }
+
+  return isValidPassportDocument(normalized);
 }
 
 function generateAcronym(name) {
@@ -1178,6 +1187,28 @@ function formatCpfInput(value) {
   return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6, 9)}-${digits.slice(9)}`;
 }
 
+function formatDocumentInput(value) {
+  const rawValue = String(value || '');
+  if (!isCpfLikeDocument(rawValue)) {
+    return rawValue;
+  }
+
+  return formatCpfInput(rawValue);
+}
+
+function normalizeDocumentForPayload(value) {
+  const normalized = normalizeDocumentValue(value);
+  if (!normalized) {
+    return '';
+  }
+
+  if (isCpfLikeDocument(normalized)) {
+    return digitsOnly(normalized);
+  }
+
+  return normalized;
+}
+
 function normalizeEmailInput(value) {
   return String(value || '').trim().toLowerCase();
 }
@@ -1318,22 +1349,68 @@ function buildSampleIntegrityInput(formData, qualityAssessment, penaltyLog) {
   };
 }
 
-function formatHashPreview(hash) {
-  const value = String(hash || '').trim();
-  if (!value) {
-    return 'Aguardando composição dos campos para gerar a assinatura';
-  }
-  if (value.length <= 18) {
-    return `0x${value}`;
-  }
-  return `0x${value.slice(0, 10)}...${value.slice(-8)}`;
-}
-
 function buildSampleLabelCode({ date = new Date(), patientID = '', sampleType = '' }) {
   const normalizedDate = `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, '0')}${String(date.getDate()).padStart(2, '0')}`;
   const normalizedPatient = String(patientID || '').trim() || 'NOID';
   const normalizedSampleType = String(sampleType || '').trim().replace(/\s+/g, '_').toUpperCase() || 'SAMPLE';
   return `${normalizedDate}-${normalizedPatient}-${normalizedSampleType}`;
+}
+
+function formatSampleLabelDate(value, fallbackDate = new Date()) {
+  const date = value ? new Date(value) : fallbackDate;
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) {
+    return fallbackDate.toLocaleDateString('pt-BR');
+  }
+
+  return date.toLocaleDateString('pt-BR');
+}
+
+function buildSampleLabelData(createdSample = {}, payload = {}, formData = {}, date = new Date()) {
+  const labelData = createdSample?.labelData && typeof createdSample.labelData === 'object' ? createdSample.labelData : {};
+  const sampleType = String(
+    labelData.sampleType
+    || createdSample.sampleType
+    || payload?.sample?.sampleType
+    || formData?.sprecSampleType
+    || ''
+  ).trim();
+  const patientID = String(
+    labelData.patientID
+    || labelData.patientCode
+    || createdSample.patientID
+    || createdSample.patientId
+    || payload?.demographic?.patientID
+    || payload?.demographic?.patientId
+    || ''
+  ).trim();
+  const fallbackCode = buildSampleLabelCode({ date, patientID, sampleType });
+  const sampleID = String(
+    labelData.sampleID
+    || labelData.sampleId
+    || createdSample.sampleID
+    || createdSample.sampleId
+    || createdSample._id
+    || ''
+  ).trim();
+  const barcode = String(labelData.barcode || createdSample.barcode || createdSample.qrCode || sampleID || fallbackCode).trim();
+  const collectionDate = labelData.collectionDate
+    || labelData.registrationDate
+    || createdSample.collectionDate
+    || createdSample.registrationDate
+    || createdSample.registerDate
+    || createdSample.createdAt
+    || payload?.sample?.registrationDate
+    || date.toISOString();
+
+  return {
+    code: barcode || sampleID || fallbackCode,
+    sampleID: sampleID || barcode || fallbackCode,
+    barcode: barcode || sampleID || fallbackCode,
+    sprecCode: String(formData.sprecCode || payload?.sample?.sprec_code || '').trim(),
+    sampleType,
+    patientID,
+    collectionDate: formatSampleLabelDate(collectionDate, date),
+  };
 }
 
 function buildSubmissionPayload(formData, clinicalComorbidityItems = [], biomarkerItems = [], sampleMerkleRoot = null, penaltyLog = [], canonicalQualityAssessment = null) {
@@ -1344,6 +1421,7 @@ function buildSubmissionPayload(formData, clinicalComorbidityItems = [], biomark
   const sampleUnit = getSampleQuantityUnit(formData.sprecSampleType, SPREC_FLUID_DICTIONARY.sampleType.options);
   const qualityAssessment = canonicalQualityAssessment || CANONICAL_PREVIEW_UNAVAILABLE;
   const sprecCode = buildSprecCode(formData);
+  const patientDocument = normalizeDocumentForPayload(formData.documento);
   const diagnosis = formData.isHealthyControl ? null : {
     diagnosis_name: String(formData.diagnosisCidDescription || formData.diagnosisDefinition || '').trim() || null,
     icd_code: String(formData.diagnosisCidCode || '').trim() || null,
@@ -1445,7 +1523,8 @@ function buildSubmissionPayload(formData, clinicalComorbidityItems = [], biomark
       isHealthyControl: Boolean(formData.isHealthyControl),
       is_healthy_control: Boolean(formData.isHealthyControl),
       phone: digitsOnly(formData.phone),
-      cpf: digitsOnly(formData.cpf),
+      cpf: patientDocument,
+      documento: patientDocument,
       prontuario: String(formData.prontuario || '').trim(),
     },
     diagnosis,
@@ -1553,7 +1632,7 @@ export default function ClinicalIntakeWizard(props) {
     dictionariesLoading = true,
     dictionariesError = '',
   } = props;
-  const { loadCascadeByDisease } = useSemanticCascade();
+  const { loadCascadeByDisease, loadingSuggest } = useSemanticCascade();
   const [activeStep, setActiveStep] = useState(0);
   const [formData, setFormData] = useState(initialState);
   const [touched, setTouched] = useState(false);
@@ -1584,11 +1663,9 @@ export default function ClinicalIntakeWizard(props) {
   });
   const [biomarkerRequestError, setBiomarkerRequestError] = useState('');
   const [sampleMerkleRoot, setSampleMerkleRoot] = useState('');
-  const [sampleIntegrityValid, setSampleIntegrityValid] = useState(true);
-  const [isSignatureChecking, setIsSignatureChecking] = useState(false);
-  const [signatureFeedback, setSignatureFeedback] = useState('');
   const [sampleLabel, setSampleLabel] = useState(null);
   const [canonicalQualityPreview, setCanonicalQualityPreview] = useState(null);
+  const preAnalyticalUnknownBackupRef = React.useRef(null);
 
   const stepMeta = useMemo(() => ([
     {
@@ -2037,14 +2114,9 @@ export default function ClinicalIntakeWizard(props) {
         }
 
         setSampleMerkleRoot(result?.rootHash || '');
-        const isValid = await verifySampleIntegrity(integrityInput, result?.rootHash || '');
-        if (active) {
-          setSampleIntegrityValid(Boolean(isValid));
-        }
       } catch (_) {
         if (active) {
           setSampleMerkleRoot('');
-          setSampleIntegrityValid(false);
         }
       }
     };
@@ -2144,8 +2216,50 @@ export default function ClinicalIntakeWizard(props) {
 
   const handleFieldChange = (field) => (event) => {
     const rawValue = event.target.type === 'checkbox' ? event.target.checked : event.target.value;
-    const value = field === 'bloodPressure' ? formatBloodPressureInput(rawValue) : rawValue;
+    const value = field === 'bloodPressure'
+      ? formatBloodPressureInput(rawValue)
+      : field === 'documento'
+        ? formatDocumentInput(rawValue)
+        : rawValue;
     setTouched(true);
+
+    if (field === 'preAnalyticalUnknown') {
+      setCanonicalQualityPreview(null);
+      setFormData((previous) => {
+        const isUnknown = Boolean(value);
+
+        if (isUnknown) {
+          preAnalyticalUnknownBackupRef.current = {
+            sprecPreCentrifugation: previous.sprecPreCentrifugation,
+            sprecCentrifugation: previous.sprecCentrifugation,
+            sprecSecondCentrifugation: previous.sprecSecondCentrifugation,
+            sprecPostCentrifugationDelay: previous.sprecPostCentrifugationDelay,
+            ischemiaTimeMinutes: previous.ischemiaTimeMinutes,
+          };
+          return {
+            ...previous,
+            preAnalyticalUnknown: true,
+          };
+        }
+
+        const restoredValues = preAnalyticalUnknownBackupRef.current || {};
+        preAnalyticalUnknownBackupRef.current = null;
+        return {
+          ...previous,
+          preAnalyticalUnknown: false,
+          sprecPreCentrifugation: restoredValues.sprecPreCentrifugation || '',
+          sprecCentrifugation: restoredValues.sprecCentrifugation || '',
+          sprecSecondCentrifugation: restoredValues.sprecSecondCentrifugation || '',
+          sprecPostCentrifugationDelay: restoredValues.sprecPostCentrifugationDelay || '',
+          ischemiaTimeMinutes: restoredValues.ischemiaTimeMinutes || '',
+          qualityScore: '',
+          qualityCategory: '',
+          quality: '',
+        };
+      });
+      return;
+    }
+
     setFormData((previous) => ({
       ...previous,
       [field]: value,
@@ -2494,22 +2608,6 @@ export default function ClinicalIntakeWizard(props) {
     };
   }, [formData.treatmentStatus, formData.medicationSearchQuery, diseaseProfile]);
 
-  const handleVerifySignature = async () => {
-    setIsSignatureChecking(true);
-    setSignatureFeedback('');
-    try {
-      const integrityInput = buildSampleIntegrityInput(formData, qualityAssessment, penaltyLog);
-      const isValid = await verifySampleIntegrity(integrityInput, sampleMerkleRoot);
-      setSampleIntegrityValid(Boolean(isValid));
-      setSignatureFeedback(isValid ? t('wizard.signature.valid', 'Assinatura íntegra e consistente.') : t('wizard.signature.invalid', 'Assinatura inválida para o conteúdo atual.'));
-    } catch (_) {
-      setSampleIntegrityValid(false);
-      setSignatureFeedback(t('wizard.signature.unavailable', 'Não foi possível validar a assinatura no momento.'));
-    } finally {
-      setIsSignatureChecking(false);
-    }
-  };
-
   const handleNext = () => {
     setTouched(true);
     if (activeStep === 0 && !isStep1Valid) return;
@@ -2577,20 +2675,7 @@ export default function ClinicalIntakeWizard(props) {
 
       const message = response?.data?.message || t('wizard.success.completed', 'Cadastro integrado concluído com sucesso.');
       const createdSample = response?.data?.sample || {};
-      const samplePatientID = String(createdSample?.patientID || createdSample?.patientId || payload?.demographic?.patientID || payload?.demographic?.patientId || '').trim();
-      const sampleTypeForLabel = String(createdSample?.sampleType || payload?.sample?.sampleType || formData?.sprecSampleType || '').trim();
-      const labelCode = buildSampleLabelCode({
-        date: new Date(),
-        patientID: samplePatientID,
-        sampleType: sampleTypeForLabel,
-      });
-
-      setSampleLabel({
-        code: labelCode,
-        sprecCode: String(formData.sprecCode || payload?.sample?.sprec_code || '').trim(),
-        sampleType: sampleTypeForLabel,
-        patientID: samplePatientID,
-      });
+      setSampleLabel(buildSampleLabelData(createdSample, payload, formData, new Date()));
 
       notifyApiToast({
         message,
@@ -2616,6 +2701,12 @@ export default function ClinicalIntakeWizard(props) {
       });
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const handlePrintSampleLabel = () => {
+    if (typeof window !== 'undefined') {
+      window.print();
     }
   };
 
@@ -2677,7 +2768,18 @@ export default function ClinicalIntakeWizard(props) {
               onChange={handleFieldChange('email')}
               required={!formData.isDeceased}
             />
-            <Input id="document" name="document" data-testid="wizard-document" className="w-full rounded-lg px-3 py-2" label={t('wizard.fields.document', 'Documento')} helperText={t('wizard.helpers.documentCpfPassport', 'Aceita CPF válido ou passaporte.')} value={formData.documento} onChange={handleFieldChange('documento')} required />
+            <Input
+              id="document"
+              name="document"
+              data-testid="wizard-document"
+              className="w-full rounded-lg px-3 py-2"
+              label={t('wizard.fields.document', 'Documento')}
+              helperText={t('wizard.helpers.documentCpfPassport', 'Digite somente números para CPF ou informe passaporte.')}
+              error={showPatientErrors ? getFieldError(patientValidation, 'documento') : ''}
+              value={formData.documento}
+              onChange={handleFieldChange('documento')}
+              required
+            />
             <Input id="recordNumber" name="recordNumber" data-testid="wizard-record-number" className="w-full rounded-lg px-3 py-2" label={t('wizard.fields.recordNumber', 'Prontuário')} helperText={t('wizard.helpers.recordNumberOptional', 'Campo opcional de texto livre.')} value={formData.prontuario} onChange={handleFieldChange('prontuario')} required={false} />
             <label className="wizard-span-2 md:col-span-2 flex items-center gap-2 text-sm font-semibold text-gray-700 mb-1.5">
               <input type="checkbox" checked={formData.isDeceased} onChange={handleFieldChange('isDeceased')} />
@@ -2822,7 +2924,7 @@ export default function ClinicalIntakeWizard(props) {
               options={[{ value: '', label: t('wizard.placeholders.selectSprecLongTermStorage', 'Select long-term storage') }, ...sprecLongTermStorageOptions]}
             />
             <div className="wizard-span-2 md:col-span-2 flex items-center gap-2 text-sm font-semibold text-gray-700 mb-1.5">
-              <input type="checkbox" checked={Boolean(formData.preAnalyticalUnknown)} onChange={handleFieldChange('preAnalyticalUnknown')} />
+              <input data-testid="wizard-processing-unknown" type="checkbox" checked={Boolean(formData.preAnalyticalUnknown)} onChange={handleFieldChange('preAnalyticalUnknown')} />
               {t('wizard.labels.processingUnknown', 'Processing information unknown')}
             </div>
             {formData.preAnalyticalUnknown && (
@@ -2923,8 +3025,8 @@ export default function ClinicalIntakeWizard(props) {
           <div className="border-b border-gray-200 pb-3 mb-5 section-title-block">
             <h3 className="text-xl font-bold text-gray-800">{t('wizard.sections.clinicalOrpha', 'Informações Clínicas e ORPHA')}</h3>
           </div>
-          <div className="grid grid-cols-1 gap-6 clinical-section-stack">
-            <div className="wizard-grid grid grid-cols-1 md:grid-cols-2 gap-6 step3-diagnosis-grid">
+          <div className="grid grid-cols-1 gap-8 clinical-section-stack">
+            <div className="wizard-grid grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-5 step3-diagnosis-grid">
               <div className="wizard-span-2 md:col-span-2 relative diagnosis-search-block">
                 <label className="mb-1.5 block text-sm font-semibold text-gray-700 diagnosis-search-label">{t('wizard.labels.searchDiseaseOrpha', 'Buscar doença em Orphadata')}</label>
                 <input
@@ -2970,7 +3072,7 @@ export default function ClinicalIntakeWizard(props) {
               <div className="wizard-span-2 md:col-span-2">
                 <Textarea className="w-full rounded-lg px-3 py-2 bg-gray-100" label={t('wizard.fields.diagnosisDescription', 'Definição / descrição diagnóstica')} value={formData.diagnosisDefinition || formData.diagnosisCidDescription} onChange={handleFieldChange('diagnosisDefinition')} rows={3} readOnly placeholder={t('wizard.placeholders.selectDiseaseFill', 'Selecionar doença em Orphadata para preencher.')} />
               </div>
-              <div className="wizard-span-2 md:col-span-2 rounded-xl border border-slate-200 bg-slate-50 p-4 panel-soft">
+              <div className="wizard-span-2 md:col-span-2 rounded-xl border border-slate-200 bg-slate-50 p-5 panel-soft">
                 <div className="flex flex-wrap items-center gap-2 clinical-badges">
                   {formData.isHealthyControl && (
                     <span className="inline-flex rounded-full border border-emerald-300 bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-800 badge-pill badge-pill--success">{t('wizard.labels.healthyControl', 'Controle saudável')}</span>
@@ -2979,7 +3081,7 @@ export default function ClinicalIntakeWizard(props) {
               </div>
             </div>
 
-            <div className="clinical-subsection">
+            <div className="clinical-subsection space-y-5">
               <div className="border-b border-gray-200 pb-3 mb-1 section-title-block">
                 <h4 className="text-xl font-bold text-gray-800">{t('wizard.sections.treatmentPharmacology', 'Status de Tratamento e Farmacologia')}</h4>
               </div>
@@ -3093,23 +3195,25 @@ export default function ClinicalIntakeWizard(props) {
               )}
             </div>
 
-            <div className="wizard-grid grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="wizard-grid grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-5">
               <Input className="w-full rounded-lg px-3 py-2" label={t('wizard.fields.bloodPressure', 'Pressão arterial')} value={formData.bloodPressure} onChange={handleFieldChange('bloodPressure')} placeholder={t('wizard.placeholders.bloodPressure', 'Ex.: 120/80')} maxLength={7} />
               <div className="wizard-span-2 md:col-span-2">
                 <Textarea className="w-full rounded-lg px-3 py-2" label={t('wizard.fields.clinicalNotes', 'Observações clínicas')} value={formData.clinicalObservations} onChange={handleFieldChange('clinicalObservations')} rows={4} />
               </div>
             </div>
 
-            <div className="clinical-subsection" data-testid="wizard-suggested-biomarkers-section">
-              <div className="border-b border-gray-200 pb-3 mb-1 section-title-block">
+            <div className="clinical-subsection space-y-4" data-testid="wizard-suggested-biomarkers-section">
+              <div className="border-b border-gray-200 pb-3 section-title-block">
                 <h4 className="text-xl font-bold text-gray-800">{t('wizard.sections.hpoPhenotypes', 'Fenótipos HPO sugeridos pela doença')}</h4>
               </div>
               {!hasSelectedDisease ? (
                 <div className="text-sm text-slate-500 suggestion-empty">{t('wizard.labels.selectDiseaseForPhenotypes', 'Selecione uma doença para carregar fenótipos HPO sugeridos.')}</div>
+              ) : loadingSuggest ? (
+                <div className="text-sm text-slate-500 suggestion-empty">{t('wizard.status.loadingPhenotypes', 'Buscando fenótipos...')}</div>
               ) : diseasePhenotypeSuggestions.length === 0 ? (
                 <div className="text-sm text-slate-500 suggestion-empty">{t('wizard.labels.noPhenotypes', 'Nenhum fenótipo sugerido para esta doença.')}</div>
               ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   {diseasePhenotypeSuggestions.map((item) => (
                     <label
                       key={item.hpoId || item.label}
@@ -3130,16 +3234,18 @@ export default function ClinicalIntakeWizard(props) {
               )}
             </div>
 
-            <div className="clinical-subsection">
-              <div className="border-b border-gray-200 pb-3 mb-1 section-title-block">
+            <div className="clinical-subsection space-y-4">
+              <div className="border-b border-gray-200 pb-3 section-title-block">
                 <h4 className="text-xl font-bold text-gray-800">{t('wizard.sections.suggestedBiomarkers', 'Biomarcadores sugeridos pela doença')}</h4>
               </div>
               {!hasSelectedDisease ? (
                 <div className="text-sm text-slate-500 suggestion-empty">{t('wizard.labels.selectDiseaseForBiomarkers', 'Selecione uma doença para carregar biomarcadores sugeridos.')}</div>
+              ) : loadingSuggest ? (
+                <div className="text-sm text-slate-500 suggestion-empty">{t('wizard.status.loadingBiomarkers', 'Buscando biomarcadores...')}</div>
               ) : diseaseBiomarkerSuggestions.length === 0 ? (
                 <div className="text-sm text-slate-500 suggestion-empty">{t('wizard.labels.noBiomarkers', 'Nenhum biomarcador sugerido para esta doença.')}</div>
               ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 biomarker-card-grid">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-5 biomarker-card-grid">
                   {diseaseBiomarkerSuggestions.map((item, index) => {
                     const biomarkerKey = getDiseaseBiomarkerKey(item);
                     const highlightFabry = isFabryCase && /alpha|alfa|galactosidase|lyso|gb3/i.test(`${item.code} ${item.label}`);
@@ -3227,24 +3333,38 @@ export default function ClinicalIntakeWizard(props) {
         {consentTemplatesError && !/Nenhum TCLE ativo/i.test(String(consentTemplatesError || '')) && <Card className="bg-white rounded-2xl shadow-lg border border-red-100"><div className="text-sm font-semibold text-red-600">{consentTemplatesError}</div></Card>}
         {submitError && <Card className="bg-white rounded-2xl shadow-lg border border-red-100"><div className="text-sm font-semibold text-red-600">{submitError}</div></Card>}
         {sampleLabel && (
-          <Card className="sample-label-card bg-white rounded-2xl shadow-lg border border-emerald-200" data-testid="sample-label">
-            <div className="sample-label-header">
-              <h3 className="sample-label-title">{t('wizard.sampleLabel.title', 'Etiqueta de Amostra')}</h3>
-              <span className="sample-label-chip">SPREC {sampleLabel.sprecCode || 'N/A'}</span>
-            </div>
-            <div className="sample-label-body">
-              <div className="sample-label-code" data-testid="sample-label-code">{sampleLabel.code}</div>
-              <Barcode
-                value={sampleLabel.code}
-                displayValue={false}
-                height={56}
-                width={1.5}
-                margin={0}
-                background="#ffffff"
-              />
-              <div className="sample-label-meta">
-                <span>{t('wizard.sampleLabel.patient', 'Paciente')}: {sampleLabel.patientID || 'N/A'}</span>
-                <span>{t('wizard.sampleLabel.type', 'Tipo')}: {sampleLabel.sampleType || 'N/A'}</span>
+          <Card className="sample-label-card bg-white rounded-2xl shadow-lg border border-emerald-200">
+            <div data-testid="sample-label">
+              <div className="sample-label-header">
+                <h3 className="sample-label-title">{t('wizard.sampleLabel.title', 'Etiqueta de Amostra')}</h3>
+                <span className="sample-label-chip">SPREC {sampleLabel.sprecCode || 'N/A'}</span>
+              </div>
+              <div className="sample-label-body">
+                <div className="sample-label-code" data-testid="sample-label-code">{sampleLabel.code}</div>
+                <Barcode
+                  value={sampleLabel.barcode || sampleLabel.code}
+                  displayValue={false}
+                  height={56}
+                  width={1.5}
+                  margin={0}
+                  background="#ffffff"
+                />
+                <div className="sample-label-meta">
+                  <span data-testid="sample-label-sample-id">{t('wizard.sampleLabel.sampleId', 'Amostra')}: {sampleLabel.sampleID || 'N/A'}</span>
+                  <span data-testid="sample-label-type">{t('wizard.sampleLabel.type', 'Tipo')}: {sampleLabel.sampleType || 'N/A'}</span>
+                  <span data-testid="sample-label-date">{t('wizard.sampleLabel.date', 'Data')}: {sampleLabel.collectionDate || 'N/A'}</span>
+                  <span data-testid="sample-label-patient">{t('wizard.sampleLabel.patient', 'Paciente')}: {sampleLabel.patientID || 'N/A'}</span>
+                </div>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="sample-label-print-button"
+                  data-testid="sample-label-print-button"
+                  onClick={handlePrintSampleLabel}
+                >
+                  <Printer size={16} />
+                  {t('wizard.sampleLabel.print', 'Imprimir etiqueta')}
+                </Button>
               </div>
             </div>
           </Card>
@@ -3258,26 +3378,6 @@ export default function ClinicalIntakeWizard(props) {
         )}
 
         {renderStepContent()}
-
-        <Card className="integrity-footer-card">
-          <div className="integrity-footer-header">
-            <div>
-              <p className="integrity-footer-eyebrow">{t('wizard.integrity.eyebrow', 'Integridade Criptográfica')}</p>
-              <h4 className="integrity-footer-title">{t('wizard.integrity.title', 'Merkle Root da Amostra')}</h4>
-            </div>
-            <span className={`integrity-footer-badge ${sampleIntegrityValid ? 'is-valid' : 'is-invalid'}`}>
-              <Lock size={14} />
-              {sampleIntegrityValid ? t('wizard.integrity.valid', 'Íntegra') : t('wizard.integrity.pending', 'Pendente')}
-            </span>
-          </div>
-          <code className="integrity-footer-hash">{sampleMerkleRoot || t('wizard.integrity.hashUnavailable', 'hash não disponível')}</code>
-          <div className="integrity-footer-actions">
-            <Button className="integrity-footer-verify-btn" type="button" variant="secondary" onClick={handleVerifySignature} disabled={isSignatureChecking || !sampleMerkleRoot}>
-              {isSignatureChecking ? t('wizard.integrity.validating', 'Validando...') : t('wizard.integrity.verify', 'Validar Assinatura')}
-            </Button>
-            {signatureFeedback && <span className="integrity-footer-feedback">{signatureFeedback}</span>}
-          </div>
-        </Card>
 
         <Card className="bg-white rounded-2xl shadow-lg border border-gray-100">
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap' }}>

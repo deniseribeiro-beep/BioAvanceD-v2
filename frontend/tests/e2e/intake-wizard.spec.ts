@@ -28,7 +28,7 @@ async function completeStep1(page: Page) {
   await page.getByTestId('wizard-birth-date').fill('10/10/1990');
   await page.getByTestId('wizard-gender').selectOption('F');
   await page.getByTestId('wizard-email').fill('qa@bioavanced.test');
-  await page.getByTestId('wizard-document').fill('12345678900');
+  await page.getByTestId('wizard-document').fill('13360378652');
   await page.getByTestId('wizard-next-button').click();
 }
 
@@ -59,11 +59,48 @@ test('Cenário de sucesso (Fabry): ORPHA 324 mostra biomarcadores e permite fina
   await page.getByTestId('wizard-diagnosis-option-0').click();
 
   await expect(page.getByTestId('wizard-suggested-biomarkers-section')).toBeVisible();
+  await expect(page.locator('body')).toContainText('Angioqueratoma');
+  await expect(page.locator('body')).toContainText('HP:0001066');
+  await expect(page.locator('body')).toContainText('Alpha-galactosidase A');
 
   await page.getByTestId('wizard-biomarker-value-0').fill('4.2');
   await page.getByTestId('wizard-biomarker-value-1').fill('2.1');
 
   await expect(page.locator('body')).toContainText(/Grade\s+[AB]\s+.*RCS/i, { timeout: 10000 });
+});
+
+test('CPF: campo Documento formata numeros e preserva passaporte', async ({ page }) => {
+  await mockWizardApis(page, { withActiveTcle: true });
+
+  await page.goto('/next/intake', { waitUntil: 'networkidle' });
+  await expect(page.getByTestId('wizard-title')).toBeVisible({ timeout: 10000 });
+
+  const documentInput = page.getByTestId('wizard-document');
+  await expect(page.getByText('Digite somente números para CPF ou informe passaporte.')).toBeVisible();
+
+  await documentInput.fill('13360378652');
+  await expect(documentInput).toHaveValue('133.603.786-52');
+
+  await documentInput.fill('AB123456');
+  await expect(documentInput).toHaveValue('AB123456');
+});
+
+test('Documento: CPF invalido exibe validacao clara', async ({ page }) => {
+  await mockWizardApis(page, { withActiveTcle: true });
+
+  await page.goto('/next/intake', { waitUntil: 'networkidle' });
+  await expect(page.getByTestId('wizard-title')).toBeVisible({ timeout: 10000 });
+
+  await page.getByTestId('wizard-full-name').fill('Paciente QA Wizard');
+  await page.getByTestId('wizard-birth-date').fill('10/10/1990');
+  await page.getByTestId('wizard-gender').selectOption('F');
+  await page.getByTestId('wizard-email').fill('qa@bioavanced.test');
+  await page.getByTestId('wizard-document').fill('12345678900');
+  await expect(page.getByTestId('wizard-document')).toHaveValue('123.456.789-00');
+
+  await page.getByTestId('wizard-next-button').click();
+
+  await expect(page.locator('body')).toContainText(/documento válido|valid document/i);
 });
 
 test('RCS-GOV: wizard chama endpoint de qualidade e renderiza final_grade A-E sem categoria legada', async ({ page }) => {
@@ -126,6 +163,88 @@ test('RCS-GOV: governance failure com score nulo e eixos vazios nao quebra o wiz
   expect(pageErrors).toEqual([]);
 });
 
+test('RCS-GOV: desmarcar processamento desconhecido restaura e recalcula preview', async ({ page }) => {
+  const previewPayloads: unknown[] = [];
+
+  await mockWizardApis(page, { withActiveTcle: true });
+  await page.route('**/api/quality/preview', async (route) => {
+    const payload = route.request().postDataJSON?.() || {};
+    previewPayloads.push(payload);
+    const sprec = (payload as { sprec?: Record<string, any> }).sprec || {};
+    const axisCodes = [
+      sprec.preCentrifugation?.code,
+      sprec.centrifugation1?.code,
+      sprec.centrifugation2?.code,
+      sprec.postCentrifugation?.code,
+    ].map((value) => String(value || '').trim().toUpperCase());
+    const hasUnknownFailure = Boolean(sprec.preAnalyticalUnknown) || axisCodes.includes('X');
+
+    return route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        success: true,
+        data: hasUnknownFailure
+          ? {
+            model_version: 'RCS-GOV-1.0',
+            matrix_type: 'fluid',
+            governance_status: 0,
+            governance_failure_reasons: ['Unknown SPREC code'],
+            p_bio: null,
+            rcs_score: null,
+            score_based_grade: null,
+            final_grade: 'E',
+            grade_route: 'Governance failure',
+            axis_penalties: [],
+            calculation_trace: { hasUnknownFailure },
+          }
+          : {
+            model_version: 'RCS-GOV-1.0',
+            matrix_type: 'fluid',
+            governance_status: 1,
+            governance_failure_reasons: [],
+            p_bio: 6,
+            rcs_score: 94,
+            score_based_grade: 'A',
+            final_grade: 'A',
+            grade_route: 'Score-based certification',
+            axis_penalties: [],
+            calculation_trace: { hasUnknownFailure },
+          },
+      }),
+    });
+  });
+
+  await page.goto('/next/intake', { waitUntil: 'networkidle' });
+  await completeStep1(page);
+
+  await page.getByTestId('wizard-sprec-matrix').selectOption('fluid');
+  await page.getByTestId('wizard-sprec-axis-1').selectOption({ index: 1 });
+  await page.getByTestId('wizard-sprec-axis-2').selectOption({ index: 1 });
+  await page.getByTestId('wizard-sprec-axis-3').selectOption({ index: 1 });
+  await page.getByTestId('wizard-sprec-axis-4').selectOption({ index: 1 });
+  await page.getByTestId('wizard-sprec-axis-5').selectOption({ index: 1 });
+  await page.getByTestId('wizard-sprec-axis-6').selectOption({ index: 1 });
+  await page.getByTestId('wizard-sprec-axis-7').selectOption({ index: 1 });
+
+  await expect(page.locator('body')).toContainText(/Grade\s+A\s+.*RCS\s+94/i);
+  await page.getByTestId('wizard-processing-unknown').check();
+  await expect(page.locator('body')).toContainText(/Grade\s+E\s+.*RCS\s+-/i);
+
+  await page.getByTestId('wizard-processing-unknown').uncheck();
+  await expect(page.locator('body')).toContainText(/Grade\s+A\s+.*RCS\s+94/i);
+  await expect(page.locator('body')).not.toContainText('Unknown SPREC code');
+
+  const latestPayload = previewPayloads[previewPayloads.length - 1] as { sprec?: Record<string, any> };
+  expect(latestPayload.sprec?.preAnalyticalUnknown).toBe(false);
+  expect([
+    latestPayload.sprec?.preCentrifugation?.code,
+    latestPayload.sprec?.centrifugation1?.code,
+    latestPayload.sprec?.centrifugation2?.code,
+    latestPayload.sprec?.postCentrifugation?.code,
+  ]).not.toContain('X');
+});
+
 test('Cenário de bloqueio: sem TCLE ativo o envio final fica impedido', async ({ page }) => {
 
   await mockWizardApis(page, { withActiveTcle: false });
@@ -136,6 +255,48 @@ test('Cenário de bloqueio: sem TCLE ativo o envio final fica impedido', async (
 
   const finalizeButton = page.getByTestId('wizard-submit-button');
   await expect(finalizeButton).toBeDisabled();
+});
+
+test('finalização: gera label de etiqueta e permite impressão', async ({ page }) => {
+  const pageErrors: Error[] = [];
+  page.on('pageerror', (error) => pageErrors.push(error));
+  await page.addInitScript(() => {
+    (window as any).__labelPrintCount = 0;
+    window.print = () => {
+      (window as any).__labelPrintCount += 1;
+    };
+  });
+
+  await mockWizardApis(page, { withActiveTcle: true });
+
+  await page.goto('/next/intake', { waitUntil: 'networkidle' });
+  await completeStep1(page);
+  await completeStep2(page);
+
+  await page.getByTestId('wizard-diagnosis-search').fill('ORPHA:324');
+  await page.getByTestId('wizard-diagnosis-option-0').click();
+  await page.getByTestId('wizard-treatment-status').selectOption('NAIVE');
+
+  await expect(page.getByTestId('wizard-submit-button')).toBeEnabled();
+  const finalResponsePromise = page.waitForResponse((response) => {
+    const request = response.request();
+    return request.method() === 'POST' && /\/api\/intake-wizard(?:\?.*)?$/.test(response.url());
+  });
+  await page.getByTestId('wizard-submit-button').click();
+  const finalResponse = await finalResponsePromise;
+
+  expect(pageErrors).toEqual([]);
+  expect(finalResponse.status()).toBe(200);
+  expect(await finalResponse.text()).toContain('consentEmail');
+  await expect(page.getByTestId('sample-label')).toBeVisible({ timeout: 10000 });
+  await expect(page.getByTestId('sample-label-code')).toContainText('BC-S-1001');
+  await expect(page.getByTestId('sample-label-sample-id')).toContainText('S-1001');
+  await expect(page.getByTestId('sample-label-type')).toContainText('PLASMA');
+  await expect(page.getByTestId('sample-label-date')).toContainText('18/05/2026');
+  await expect(page.getByTestId('sample-label-patient')).toContainText('12345678');
+
+  await page.getByTestId('sample-label-print-button').click();
+  await expect.poll(() => page.evaluate(() => (window as any).__labelPrintCount)).toBe(1);
 });
 
 test('Step 1 - Identificação de Paciente: deve exibir alerta quando paciente é identificado', async ({ page }) => {
@@ -159,7 +320,7 @@ test('Step 1 - Identificação de Paciente: deve exibir alerta quando paciente �
   // Completar o step 1
   await page.getByTestId('wizard-gender').selectOption('F');
   await page.getByTestId('wizard-email').fill('qa@bioavanced.test');
-  await page.getByTestId('wizard-document').fill('12345678900');
+  await page.getByTestId('wizard-document').fill('13360378652');
   await page.getByTestId('wizard-next-button').click();
   
   await completeStep2(page);

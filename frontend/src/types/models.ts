@@ -344,6 +344,17 @@ export interface ConsentTemplate {
   granularPermissions?: ConsentPolicyPermission[];
   validFrom?: Date | string;
   validTo?: Date | string;
+  validUntil?: Date | string;
+  validityDate?: Date | string;
+  expirationDate?: Date | string;
+  expiresAt?: Date | string;
+  validade?: Date | string;
+  vigencia?: {
+    validTo?: Date | string;
+    validUntil?: Date | string;
+    endDate?: Date | string;
+    fim?: Date | string;
+  };
   createdAt?: Date | string;
 }
 
@@ -355,7 +366,18 @@ export interface ConsentPolicy {
   active: boolean;
   htmlContent: string;
   validFrom: Date | string;
-  validTo: Date | string;
+  validTo?: Date | string;
+  validUntil?: Date | string;
+  validityDate?: Date | string;
+  expirationDate?: Date | string;
+  expiresAt?: Date | string;
+  validade?: Date | string;
+  vigencia?: {
+    validTo?: Date | string;
+    validUntil?: Date | string;
+    endDate?: Date | string;
+    fim?: Date | string;
+  };
   granularPermissions: ConsentPolicyPermission[];
   revisionType?: 'create' | 'update';
   previousPolicyId?: string | null;

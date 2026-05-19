@@ -3,6 +3,7 @@ const router = express.Router();
 const importController = require('../../controllers/import.controller');
 const importAsyncController = require('../../controllers/import-async.controller');
 const importBatchController = require('../../controllers/import-batch.controller');
+const fhirImportStagingController = require('../../controllers/fhir-import-staging.controller');
 const { authenticate } = require('../../infrastructure/middleware/auth');
 const { requirePermission } = require('../../infrastructure/middleware/rbac');
 
@@ -31,6 +32,43 @@ router.get('/status/:jobId',
   authenticate,
   requirePermission('uploadFiles'),
   importBatchController.getBatchImportStatus.bind(importBatchController)
+);
+
+router.post('/fhir/stage',
+  authenticate,
+  requirePermission('uploadFiles'),
+  fhirImportStagingController.uploadMiddleware(),
+  fhirImportStagingController.stage.bind(fhirImportStagingController)
+);
+
+router.get('/fhir/batches/:id',
+  authenticate,
+  requirePermission('uploadFiles'),
+  fhirImportStagingController.getBatch.bind(fhirImportStagingController)
+);
+
+router.post('/fhir/batches/:id/validate',
+  authenticate,
+  requirePermission('uploadFiles'),
+  fhirImportStagingController.validate.bind(fhirImportStagingController)
+);
+
+router.post('/fhir/batches/:id/send-consents',
+  authenticate,
+  requirePermission('uploadFiles'),
+  fhirImportStagingController.sendConsents.bind(fhirImportStagingController)
+);
+
+router.get('/fhir/batches/:id/consent-status',
+  authenticate,
+  requirePermission('uploadFiles'),
+  fhirImportStagingController.consentStatus.bind(fhirImportStagingController)
+);
+
+router.post('/fhir/batches/:id/commit',
+  authenticate,
+  requirePermission('uploadFiles'),
+  fhirImportStagingController.commit.bind(fhirImportStagingController)
 );
 
 // Validação separada (endpoint de validação)

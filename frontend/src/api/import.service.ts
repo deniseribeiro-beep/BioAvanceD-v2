@@ -16,3 +16,7 @@ export function getBatchImportStatus(jobId: string) {
     suppressErrorToast: true,
   } satisfies ApiRequestConfig);
 }
+
+export function stageFhirBundle(bundle: unknown) {
+  return apiClient.post('/import/fhir/stage', bundle);
+}

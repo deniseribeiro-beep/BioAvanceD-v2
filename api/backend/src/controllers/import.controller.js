@@ -375,12 +375,8 @@ async function importFhirBundle(req, res) {
           name, cpf, birthDate,
           fhir: resource // subdocumento original
         };
-        // Salvar no MongoDB (descomente para produção)
-        // const result = await patientsCol.insertOne(patientDoc);
-        // patientMap[resource.id] = result.insertedId;
-        // Simulação:
-        const fakeId = `patient_${++patientCount}`;
-        patientMap[resource.id] = fakeId;
+        patientCount += 1;
+        patientMap[resource.id] = resource.id || null;
         logger.info('[FHIR_IMPORT] Patient processado', {
           resourceId: resource.id || null,
           hasIdentifier: Array.isArray(resource.identifier) && resource.identifier.length > 0,
@@ -417,13 +413,13 @@ async function importFhirBundle(req, res) {
             specimenType: resource.type?.text || '',
             // Canonical RCS-GOV fields
             rcs_score: parseNumberSafe(qualityAssessment.score, 0),
-            final_grade: qualityAssessment.category || qualityAssessment.final_grade || '',
+            final_grade: qualityAssessment.final_grade || '',
             legacy_compat: {
               quality_score: parseNumberSafe(qualityAssessment.score, 0),
               quality_category: qualityAssessment.category,
               penalty_log: penaltyLog,
             },
-            release_status: qualityAssessment.final_grade === 'E' ? 'QUARANTINE' : 'AVAILABLE',
+            release_status: qualityAssessment.governance_status === 1 && qualityAssessment.final_grade !== 'E' ? 'AVAILABLE' : 'QUARANTINE',
             sprec,
             fhir: resource
           };

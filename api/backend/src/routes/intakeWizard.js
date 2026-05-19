@@ -165,8 +165,8 @@ function buildSampleDocumentFromIntake(data = {}, matchedPatient = null) {
     unit: normalizeString(sample.unit) || null,
     quality: normalizeString(sample.quality) || null,
     // Prefer canonical RCS-GOV fields; keep legacy values in `legacy_compat`.
-    rcs_score: normalizeNumber(sample.rcs_score !== undefined ? sample.rcs_score : sample.quality_score, null),
-    final_grade: (sample.final_grade || qualityCategory) || '',
+    rcs_score: normalizeNumber(sample.rcs_score, null),
+    final_grade: normalizeString(sample.final_grade) || '',
     linkedProject: normalizeString(sample.linkedProject || sample.linked_project) || 'INTAKE_WIZARD',
     currentStatus: normalizeString(sample.currentStatus) || 'Available',
     status: normalizeString(sample.status) || 'AVAILABLE',
@@ -324,7 +324,7 @@ async function handleIntakeWizard(req, res) {
     const sampleToPersist = buildSampleDocumentFromIntake(data, matchOutcome.patient);
     // Store canonical RCS-GOV results
     sampleToPersist.rcs_score = qualidade.score;
-    sampleToPersist.final_grade = qualidade.category || sampleToPersist.final_grade;
+    sampleToPersist.final_grade = qualidade.final_grade || '';
     // Preserve legacy artifacts under a compatibility namespace (non-decisional)
     sampleToPersist.legacy_compat = sampleToPersist.legacy_compat || {};
     sampleToPersist.legacy_compat.quality_score = qualidade.score;

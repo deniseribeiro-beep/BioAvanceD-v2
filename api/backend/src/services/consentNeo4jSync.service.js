@@ -54,11 +54,23 @@ class ConsentNeo4jSyncService {
 
   async sync({ db, neo4jDriver }) {
     if (!db) {
-      throw new Error('[ISO20387][SYNC] Banco MongoDB é obrigatório');
+      logger.warn('[ISO20387][SYNC] Sincronização ignorada: Banco MongoDB indisponível');
+      return {
+        processed: 0,
+        updated: 0,
+        skipped: true,
+        reason: 'missing_mongodb'
+      };
     }
 
     if (!neo4jDriver || typeof neo4jDriver.session !== 'function') {
-      throw new Error('[ISO20387][SYNC] Driver Neo4j é obrigatório');
+      logger.warn('[ISO20387][SYNC] Sincronização ignorada: Driver Neo4j indisponível');
+      return {
+        processed: 0,
+        updated: 0,
+        skipped: true,
+        reason: 'missing_neo4j'
+      };
     }
 
     const { consentMap, consentCollectionName } = await this.buildConsentMap(db);

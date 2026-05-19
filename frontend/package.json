@@ -24,6 +24,7 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.58.2",
+    "@types/node": "^25.7.0",
     "@types/react": "^18.2.43",
     "@types/react-dom": "^18.2.17",
     "@vitejs/plugin-react": "^5.1.4",
@@ -41,6 +42,7 @@
     "typecheck:full": "tsc --noEmit",
     "preview": "vite preview",
     "test:e2e": "playwright test",
+    "test:vm": "playwright test tests/deploy/vm-smoke.spec.ts --project=chromium",
     "cleanup": "node scripts/cleanup.js",
     "clean": "node scripts/cleanup.js",
     "clean:cache": "powershell -Command \"if (Test-Path node_modules\\.vite) { Remove-Item -Recurse -Force node_modules\\.vite; Write-Host 'Cache limpo' } else { Write-Host 'Cache nao existe' }\""
