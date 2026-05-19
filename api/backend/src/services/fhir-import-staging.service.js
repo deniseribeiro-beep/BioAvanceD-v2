@@ -8,6 +8,7 @@ const STATUS = Object.freeze({
   VALID: 'VALID',
   WARNING: 'WARNING',
   NEEDS_EMAIL: 'NEEDS_EMAIL',
+  NEEDS_REVIEW: 'NEEDS_REVIEW',
   CONSENT_SEND_FAILED: 'CONSENT_SEND_FAILED',
   ERROR: 'ERROR',
   PENDING_CONSENT: 'PENDING_CONSENT',
@@ -232,6 +233,68 @@ function isValidEmail(email = '') {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim());
 }
 
+function buildWorkflowSnapshot(record = {}) {
+  const normalized = record.normalized || {};
+  const patientEmail = String(normalized.patientEmail || '').trim();
+  const hasEmail = isValidEmail(patientEmail);
+  const consentSigned = Boolean(normalized.consentSigned || record.consentStatus === 'SIGNED');
+  const externalAttached = Boolean(record.externalDocument?.validatedAt || record.consentStatus === 'EXTERNAL_ATTACHED' || record.consentStatus === 'WAIVED_TRANSFER');
+  const consentSent = Boolean(record.consentTracking?.sentAt);
+  const committed = record.status === STATUS.COMMITTED;
+
+  let consentStatus = 'NOT_REQUIRED';
+  let quarantineStatus = 'QUARANTINED';
+  let quarantineReason = 'TRANSFER_REVIEW_REQUIRED';
+  let availabilityStatus = 'BLOCKED';
+  let displayStatus = 'NEEDS_REVIEW';
+
+  if (consentSigned) {
+    consentStatus = 'SIGNED';
+    quarantineStatus = 'RELEASED';
+    quarantineReason = null;
+    availabilityStatus = 'AVAILABLE';
+    displayStatus = 'SIGNED';
+  } else if (externalAttached) {
+    consentStatus = 'EXTERNAL_ATTACHED';
+    quarantineStatus = 'RELEASED';
+    quarantineReason = null;
+    availabilityStatus = 'AVAILABLE';
+    displayStatus = 'EXTERNAL_ATTACHED';
+  } else if (hasEmail) {
+    consentStatus = 'PENDING';
+    quarantineReason = 'CONSENT_PENDING';
+    displayStatus = consentSent ? 'TCLE_SENT' : 'PENDING_CONSENT';
+  } else {
+    consentStatus = 'NOT_REQUIRED';
+    quarantineReason = 'TRANSFER_REVIEW_REQUIRED';
+    displayStatus = 'NEEDS_REVIEW';
+  }
+
+  if (committed && quarantineStatus === 'RELEASED' && !consentSigned && !externalAttached) {
+    displayStatus = 'RELEASED';
+  }
+
+  return {
+    consentStatus,
+    quarantineStatus,
+    quarantineReason,
+    availabilityStatus,
+    displayStatus,
+  };
+}
+
+function decorateRecord(record = {}) {
+  const workflow = buildWorkflowSnapshot(record);
+  return {
+    ...record,
+    consentStatus: workflow.consentStatus,
+    quarantineStatus: workflow.quarantineStatus,
+    quarantineReason: workflow.quarantineReason,
+    availabilityStatus: workflow.availabilityStatus,
+    workflowStatus: workflow.displayStatus,
+  };
+}
+
 function createConsentToken() {
   return crypto.randomBytes(24).toString('hex');
 }
@@ -333,6 +396,7 @@ function normalizeSpecimen(specimen, index, bundleIndex) {
   const patientEmail = extractTelecom(patient || {}, 'email');
   const patientPhone = extractTelecom(patient || {}, 'phone');
   const consentSigned = (bundleIndex.consentsByPatient.get(patientRef) || []).some(consentIsSigned);
+  const hasEmail = isValidEmail(patientEmail);
   const conditions = normalizeConditions(bundleIndex.conditionsByPatient.get(patientRef) || []);
   const observations = [
     ...(bundleIndex.observationsByPatient.get(patientRef) || []),
@@ -355,7 +419,7 @@ function normalizeSpecimen(specimen, index, bundleIndex) {
 
   const missingEmailOnly = errors.length > 0 && errors.every((error) => error.code === 'NEEDS_EMAIL');
   const status = missingEmailOnly
-    ? STATUS.NEEDS_EMAIL
+    ? STATUS.NEEDS_REVIEW
     : errors.length > 0
       ? STATUS.ERROR
       : consentSigned
@@ -367,7 +431,7 @@ function normalizeSpecimen(specimen, index, bundleIndex) {
     status,
     errors,
     validationErrors: errors,
-    warnings: consentSigned || errors.length > 0 ? [] : [{ field: 'consent', message: 'TCLE ainda não enviado para assinatura.' }],
+    warnings: consentSigned || errors.length > 0 ? [] : [{ field: 'consent', message: hasEmail ? 'TCLE ainda não enviado para assinatura.' : 'Registro sem e-mail fica em revisão.' }],
     normalized: {
       patientID,
       patientName,
@@ -418,6 +482,7 @@ function summarize(records) {
     warnings: 0,
     errors: 0,
     pendingConsent: 0,
+    needsReview: 0,
     readyToCommit: 0,
     committed: 0,
   };
@@ -426,6 +491,7 @@ function summarize(records) {
     if (record.status === STATUS.VALID) counts.valid += 1;
     if (record.status === STATUS.WARNING) counts.warnings += 1;
     if (record.status === STATUS.NEEDS_EMAIL) counts.errors += 1;
+    if (record.status === STATUS.NEEDS_REVIEW) counts.needsReview += 1;
     if (record.status === STATUS.CONSENT_SEND_FAILED) counts.errors += 1;
     if (record.status === STATUS.ERROR) counts.errors += 1;
     if (record.status === STATUS.PENDING_CONSENT) counts.pendingConsent += 1;
@@ -529,7 +595,7 @@ async function validateBatch(db, batchIdRaw) {
     const missingEmailOnly = errors.length > 0 && errors.every((error) => error.code === 'NEEDS_EMAIL');
     const consentSent = Boolean(record.consentTracking?.sentAt);
     const nextStatus = missingEmailOnly
-      ? STATUS.NEEDS_EMAIL
+      ? STATUS.NEEDS_REVIEW
       : errors.length > 0
         ? STATUS.ERROR
         : consentSigned
@@ -539,6 +605,8 @@ async function validateBatch(db, batchIdRaw) {
             : STATUS.VALID;
     const warnings = nextStatus === STATUS.PENDING_CONSENT
       ? [{ field: 'consent', message: 'TCLE assinado não encontrado para este paciente.' }]
+      : nextStatus === STATUS.NEEDS_REVIEW
+        ? [{ field: 'consent', message: 'Registro sem e-mail permanece em revisão.' }]
       : nextStatus === STATUS.VALID
         ? [{ field: 'consent', message: 'TCLE ainda não enviado para assinatura.' }]
       : [];
@@ -576,9 +644,21 @@ async function sendConsents(db, batchIdRaw, options = {}) {
       const emailErrors = [{ field: 'patientEmail', code: 'NEEDS_EMAIL', message: 'E-mail válido é obrigatório para envio do TCLE.' }];
       await staging.updateOne(
         { _id: record._id },
-        { $set: { status: STATUS.NEEDS_EMAIL, errors: emailErrors, validationErrors: emailErrors, updatedAt: new Date() } }
+        {
+          $set: {
+            status: STATUS.NEEDS_REVIEW,
+            errors: emailErrors,
+            validationErrors: emailErrors,
+            warnings: [{ field: 'consent', message: 'Registro sem e-mail permanece em revisão.' }],
+            consentStatus: 'NOT_REQUIRED',
+            quarantineStatus: 'QUARANTINED',
+            quarantineReason: 'TRANSFER_REVIEW_REQUIRED',
+            availabilityStatus: 'BLOCKED',
+            updatedAt: new Date(),
+          },
+        }
       );
-      results.push({ recordId: record._id, status: STATUS.NEEDS_EMAIL, sent: false });
+      results.push({ recordId: record._id, status: STATUS.NEEDS_REVIEW, sent: false });
       continue;
     }
 
@@ -614,6 +694,10 @@ async function sendConsents(db, batchIdRaw, options = {}) {
         {
           $set: {
             status: STATUS.PENDING_CONSENT,
+            consentStatus: 'PENDING',
+            quarantineStatus: 'QUARANTINED',
+            quarantineReason: 'CONSENT_PENDING',
+            availabilityStatus: 'BLOCKED',
             warnings: [{ field: 'consent', message: 'TCLE enviado e aguardando assinatura.' }],
             consentTracking,
             updatedAt: new Date(),
@@ -633,6 +717,10 @@ async function sendConsents(db, batchIdRaw, options = {}) {
         {
           $set: {
             status: STATUS.CONSENT_SEND_FAILED,
+            consentStatus: 'PENDING',
+            quarantineStatus: 'QUARANTINED',
+            quarantineReason: 'CONSENT_PENDING',
+            availabilityStatus: 'BLOCKED',
             consentTracking: {
               failedAt: new Date(),
               email: normalized.patientEmail,
@@ -664,6 +752,11 @@ async function getConsentStatus(db, batchIdRaw) {
       status: record.status,
       consentTracking: record.consentTracking || null,
       consentSigned: Boolean(record.normalized?.consentSigned),
+      consentStatus: record.consentStatus || buildWorkflowSnapshot(record).consentStatus,
+      quarantineStatus: record.quarantineStatus || buildWorkflowSnapshot(record).quarantineStatus,
+      quarantineReason: record.quarantineReason || buildWorkflowSnapshot(record).quarantineReason,
+      availabilityStatus: record.availabilityStatus || buildWorkflowSnapshot(record).availabilityStatus,
+      workflowStatus: record.workflowStatus || buildWorkflowSnapshot(record).displayStatus,
     })),
   };
 }
@@ -671,14 +764,21 @@ async function getConsentStatus(db, batchIdRaw) {
 async function commitBatch(db, batchIdRaw) {
   const batchId = toObjectId(batchIdRaw);
   const { records } = await validateBatch(db, batchId);
-  const readyRecords = records.filter((record) => record.status === STATUS.READY_TO_COMMIT);
   const patients = collection(db, 'patients');
   const samples = collection(db, 'samples');
   const staging = collection(db, 'import_staging_records');
+  const batchInfo = await collection(db, 'import_batches').findOne({ _id: batchId });
 
   let committed = 0;
-  for (const record of readyRecords) {
+  for (const record of records) {
+    if (record.status === STATUS.ERROR) {
+      continue;
+    }
+
     const normalized = record.normalized || {};
+    const workflow = buildWorkflowSnapshot(record);
+    const importedAt = new Date();
+    const importedBy = String(batchInfo?.createdBy || record.createdBy || record.importedBy || '').trim() || null;
     await patients.updateOne(
       { patientID: normalized.patientID },
       {
@@ -713,9 +813,25 @@ async function commitBatch(db, batchIdRaw) {
           axis_penalties: normalized.rcsPreview?.axis_penalties || [],
           calculation_trace: normalized.rcsPreview?.calculation_trace || {},
           fhir: record.fhir?.specimen || null,
+          consentStatus: workflow.consentStatus,
+          quarantineStatus: workflow.quarantineStatus,
+          quarantineReason: workflow.quarantineReason,
+          availabilityStatus: workflow.availabilityStatus,
+          importBatchId: String(batchId),
+          importedAt,
+          importedBy,
+          release_status: workflow.quarantineStatus === 'RELEASED' ? 'AVAILABLE' : 'QUARANTINE',
           createdAt: new Date(),
         },
         $set: {
+          consentStatus: workflow.consentStatus,
+          quarantineStatus: workflow.quarantineStatus,
+          quarantineReason: workflow.quarantineReason,
+          availabilityStatus: workflow.availabilityStatus,
+          importBatchId: String(batchId),
+          importedAt,
+          importedBy,
+          release_status: workflow.quarantineStatus === 'RELEASED' ? 'AVAILABLE' : 'QUARANTINE',
           updatedAt: new Date(),
         },
       },
@@ -724,7 +840,17 @@ async function commitBatch(db, batchIdRaw) {
 
     await staging.updateOne(
       { _id: record._id },
-      { $set: { status: STATUS.COMMITTED, committedAt: new Date(), updatedAt: new Date() } }
+      {
+        $set: {
+          status: STATUS.COMMITTED,
+          consentStatus: workflow.consentStatus,
+          quarantineStatus: workflow.quarantineStatus,
+          quarantineReason: workflow.quarantineReason,
+          availabilityStatus: workflow.availabilityStatus,
+          committedAt: new Date(),
+          updatedAt: new Date(),
+        },
+      }
     );
     await audit(db, 'FHIR_IMPORT_RECORD_COMMITTED', { batchId, recordId: record._id, patientID: normalized.patientID, sampleID: normalized.sampleID });
     committed += 1;
@@ -732,6 +858,57 @@ async function commitBatch(db, batchIdRaw) {
 
   const refreshed = await refreshBatchCounts(db, batchId);
   return { ...refreshed, committed };
+}
+
+async function attachExternalDocument(db, batchIdRaw, recordIdRaw, options = {}) {
+  const batchId = toObjectId(batchIdRaw);
+  const recordId = toObjectId(recordIdRaw);
+  const staging = collection(db, 'import_staging_records');
+  const samples = collection(db, 'samples');
+
+  const record = await staging.findOne({ _id: recordId, batchId });
+  if (!record) {
+    const error = new Error('Registro FHIR não encontrado para anexar documentação externa.');
+    error.statusCode = 404;
+    throw error;
+  }
+
+  const normalized = record.normalized || {};
+  const now = new Date();
+  const updatedRecord = {
+    consentStatus: 'EXTERNAL_ATTACHED',
+    quarantineStatus: 'RELEASED',
+    quarantineReason: null,
+    availabilityStatus: 'AVAILABLE',
+    externalDocument: {
+      attachedAt: now,
+      attachedBy: options.userID || null,
+      validatedAt: now,
+      validatedBy: options.userID || null,
+      note: String(options.note || '').trim() || null,
+    },
+    status: STATUS.COMMITTED,
+    updatedAt: now,
+  };
+
+  await staging.updateOne({ _id: recordId, batchId }, { $set: updatedRecord });
+  await samples.updateOne(
+    { sampleID: normalized.sampleID },
+    {
+      $set: {
+        consentStatus: 'EXTERNAL_ATTACHED',
+        quarantineStatus: 'RELEASED',
+        quarantineReason: null,
+        availabilityStatus: 'AVAILABLE',
+        release_status: 'AVAILABLE',
+        updatedAt: now,
+      },
+    }
+  );
+
+  await audit(db, 'FHIR_IMPORT_EXTERNAL_DOCUMENT_ATTACHED', { batchId, recordId, patientID: normalized.patientID, sampleID: normalized.sampleID });
+
+  return getConsentStatus(db, batchId);
 }
 
 module.exports = {
@@ -742,5 +919,6 @@ module.exports = {
   sendConsents,
   getConsentStatus,
   commitBatch,
+  attachExternalDocument,
   normalizeEntries,
 };

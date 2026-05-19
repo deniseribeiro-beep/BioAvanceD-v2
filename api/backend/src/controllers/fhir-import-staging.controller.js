@@ -97,6 +97,18 @@ class FhirImportStagingController {
       return sendError(res, error);
     }
   }
+
+  async attachExternalDocument(req, res) {
+    try {
+      const result = await fhirImportStagingService.attachExternalDocument(req.app.locals.db, req.params.id, req.params.recordId, {
+        userID: req.user?.userID || req.user?.id || null,
+        note: req.body?.note,
+      });
+      return res.status(200).json({ success: true, ...result });
+    } catch (error) {
+      return sendError(res, error);
+    }
+  }
 }
 
 module.exports = new FhirImportStagingController();

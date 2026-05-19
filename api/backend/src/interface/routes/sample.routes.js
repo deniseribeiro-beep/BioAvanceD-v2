@@ -618,6 +618,29 @@ router.put('/:id', authenticate, requirePermission('editSample'), async (req, re
         message: 'Amostra atualizada',
         req: req
       });
+
+      const releaseRequested = String(req.body?.quarantineStatus || '').toUpperCase() === 'RELEASED'
+        || String(req.body?.availabilityStatus || '').toUpperCase() === 'AVAILABLE'
+        || String(req.body?.consentStatus || '').toUpperCase() === 'EXTERNAL_ATTACHED'
+        || String(req.body?.consentStatus || '').toUpperCase() === 'SIGNED';
+
+      if (releaseRequested) {
+        await auditLogger.log({
+          action: 'sample_release',
+          entity: 'Sample',
+          entityID: req.params.id,
+          result: 'success',
+          severity: 'info',
+          message: 'Amostra liberada após validação ética',
+          payload: {
+            consentStatus: req.body?.consentStatus || null,
+            quarantineStatus: req.body?.quarantineStatus || null,
+            availabilityStatus: req.body?.availabilityStatus || null,
+            quarantineReason: req.body?.quarantineReason || null,
+          },
+          req: req
+        });
+      }
     }
 
     return res.status(200).json({

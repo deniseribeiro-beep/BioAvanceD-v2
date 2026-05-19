@@ -71,6 +71,12 @@ router.post('/fhir/batches/:id/commit',
   fhirImportStagingController.commit.bind(fhirImportStagingController)
 );
 
+router.post('/fhir/batches/:id/records/:recordId/external-document',
+  authenticate,
+  requirePermission('uploadFiles'),
+  fhirImportStagingController.attachExternalDocument.bind(fhirImportStagingController)
+);
+
 // Validação separada (endpoint de validação)
 router.post('/validate',
   authenticate,

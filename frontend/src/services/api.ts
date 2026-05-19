@@ -303,6 +303,8 @@ export const dataImportService = {
   sendFhirBatchConsents: (batchId: string) => api.post(`/import/fhir/batches/${encodeURIComponent(batchId)}/send-consents`),
   getFhirBatchConsentStatus: (batchId: string) => api.get(`/import/fhir/batches/${encodeURIComponent(batchId)}/consent-status`),
   commitFhirBatch: (batchId: string) => api.post(`/import/fhir/batches/${encodeURIComponent(batchId)}/commit`),
+  attachFhirExternalDocument: (batchId: string, recordId: string, note?: string) =>
+    api.post(`/import/fhir/batches/${encodeURIComponent(batchId)}/records/${encodeURIComponent(recordId)}/external-document`, { note }),
 };
 
 // ========== RESULT SERVICES ==========

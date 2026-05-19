@@ -210,6 +210,13 @@ export interface Sample {
   quality_category?: 'A' | 'B' | 'C' | 'D' | 'E' | '' | string;
   merkle_root?: string | null;
   release_status?: 'AVAILABLE' | 'BLOCKED' | 'QUARANTINE' | string;
+  consentStatus?: 'PENDING' | 'SIGNED' | 'EXTERNAL_ATTACHED' | 'WAIVED_TRANSFER' | 'NOT_REQUIRED' | string;
+  quarantineStatus?: 'QUARANTINED' | 'RELEASED' | string;
+  quarantineReason?: 'CONSENT_PENDING' | 'EXTERNAL_DOCUMENT_REQUIRED' | 'TRANSFER_REVIEW_REQUIRED' | null | string;
+  availabilityStatus?: 'BLOCKED' | 'AVAILABLE' | string;
+  importBatchId?: string | null;
+  importedAt?: Date | string | null;
+  importedBy?: string | null;
   clinical_data?: {
     orphaCode?: string | null;
     omimCode?: string | null;
@@ -249,7 +256,7 @@ export interface Sample {
   // Status de disponibilidade
   availabilityStatus?: 'Disponível' | 'Parcialmente Disponível' | 'Indisponível';
   currentStatus?: 'Available' | 'PartiallyWithdrawn' | 'TotallyWithdrawn' | 'Withdrawn' | 'Expired' | 'Destroyed' | 'Unusable';
-  status?: 'AVAILABLE' | 'PARTIAL' | 'DEPLETED' | 'UNAVAILABLE';
+  status?: 'AVAILABLE' | 'QUARANTINED' | 'PARTIAL' | 'DEPLETED' | 'UNAVAILABLE';
   // Campos de retirada
   withdrawalDate?: Date | string;
   withdrawalType?: 'Parcial' | 'Total';

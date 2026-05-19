@@ -220,7 +220,33 @@ test.describe('E2E - Patients and Biomarker Observations', () => {
         await route.fulfill({
           status: 200,
           contentType: 'application/json',
-          body: JSON.stringify({ success: true, committed: 0, records: [] }),
+          body: JSON.stringify({
+            success: true,
+            committed: 2,
+            records: [
+              {
+                _id: 'record-valid',
+                rowNumber: 1,
+                status: 'COMMITTED',
+                consentStatus: 'PENDING',
+                quarantineStatus: 'QUARANTINED',
+                availabilityStatus: 'BLOCKED',
+                workflowStatus: 'QUARANTINED',
+                normalized: { patientName: 'Paciente FHIR', patientID: 'P-001', patientEmail: 'fhir@example.org', sampleID: 'S-001' },
+                consentTracking: { sentAt: new Date().toISOString() },
+              },
+              {
+                _id: 'record-email',
+                rowNumber: 2,
+                status: 'COMMITTED',
+                consentStatus: 'NOT_REQUIRED',
+                quarantineStatus: 'QUARANTINED',
+                availabilityStatus: 'BLOCKED',
+                workflowStatus: 'NEEDS_REVIEW',
+                normalized: { patientName: 'Paciente Sem Email', patientID: 'P-002', sampleID: 'S-002' },
+              },
+            ],
+          }),
         });
         return;
       }
@@ -292,45 +318,36 @@ test.describe('E2E - Patients and Biomarker Observations', () => {
     };
 
     await page.locator('[data-testid="patients-import-fhir-button"]').click();
+    await expect(page).toHaveURL(/\/patients\/import-fhir/);
+    await expect(page.getByTestId('fhir-import-page')).toBeVisible();
     await expect(page.getByText('Etapa 1 — Preparar arquivo')).toBeVisible();
-    await expect(page.getByText('Processar Importação')).toHaveCount(0);
     await expect(page.getByText('Baixar modelo Excel')).toBeVisible();
     await expect(page.getByText('Converter Excel para JSON FHIR')).toBeVisible();
-    await expect(page.getByText('Selecionar JSON FHIR')).toBeVisible();
-    await expect(page.getByTestId('patients-fhir-validate-batch')).toContainText('Validar lote');
-    await expect(page.getByTestId('patients-fhir-send-consents')).toContainText('Enviar TCLEs');
-    await expect(page.getByTestId('patients-fhir-commit-signed')).toContainText('Salvar registros assinados');
+    await expect(page.getByTestId('fhir-import-validate-button')).toContainText('Validar lote');
+    await expect(page.getByTestId('fhir-import-save-quarantine-button')).toContainText('Salvar em quarentena e enviar TCLEs');
 
-    await page.getByTestId('patients-fhir-json-input').setInputFiles({
+    await page.getByTestId('fhir-import-json-input').setInputFiles({
       name: 'bundle.json',
       mimeType: 'application/json',
       buffer: Buffer.from(JSON.stringify(bundle)),
     });
-    await expect(page.getByText('Pacientes detectados:')).toBeVisible();
-    await expect(page.getByText('Pacientes detectados:')).toContainText('1');
-    await expect(page.getByText('Amostras detectadas:')).toBeVisible();
-    await expect(page.getByText('Amostras detectadas:')).toContainText('1');
+    await expect(page.getByTestId('fhir-import-patient-count')).toContainText('1');
+    await expect(page.getByTestId('fhir-import-specimen-count')).toContainText('1');
 
-    await page.getByTestId('patients-fhir-validate-batch').click();
+    await page.getByTestId('fhir-import-validate-button').click();
     await expect.poll(() => fhirStageCalls).toBe(1);
     await expect.poll(() => definitivePatientCreateCalls).toBe(0);
     await expect.poll(() => definitiveSampleCreateCalls).toBe(0);
-    await expect(page.getByTestId('patients-fhir-staging-table')).toContainText('VALID');
-    await expect(page.getByTestId('patients-fhir-staging-table')).toContainText('NEEDS_EMAIL');
-    await expect(page.getByTestId('patients-fhir-staging-table')).toContainText('patientEmail');
-    await expect(page.getByTestId('patients-fhir-validation-summary')).toContainText('Total: 2');
-    await expect(page.getByTestId('patients-fhir-validation-summary')).toContainText('Válidos: 1');
-    await expect(page.getByTestId('patients-fhir-validation-summary')).toContainText('Prontos para commit: 0');
-    await expect(page.getByTestId('patients-fhir-validation-summary')).toContainText('Erros: 1');
-    await expect(page.getByTestId('patients-fhir-send-consents')).toBeVisible();
-    await expect(page.getByTestId('patients-fhir-send-consents')).toBeEnabled();
+    await expect(page.getByTestId('fhir-import-staging-table')).toContainText('PENDING_CONSENT');
+    await expect(page.getByTestId('fhir-import-staging-table')).toContainText('NEEDS_REVIEW');
+    await expect(page.getByTestId('fhir-import-validation-summary')).toContainText('Total');
+    await expect(page.getByTestId('fhir-import-validation-summary')).toContainText('Válidos');
+    await expect(page.getByTestId('fhir-import-save-quarantine-button')).toBeVisible();
+    await expect(page.getByTestId('fhir-import-save-quarantine-button')).toBeEnabled();
 
-    await page.getByTestId('patients-fhir-send-consents').click();
-    await expect(page.getByText(/Enviados:\s*1/)).toBeVisible();
-    await expect(page.getByText(/Falhas:\s*1/)).toBeVisible();
-    await expect(page.getByTestId('patients-fhir-staging-table')).toContainText('PENDING_CONSENT');
-
-    await expect(page.getByTestId('patients-fhir-commit-signed')).toBeDisabled();
-    await expect.poll(() => fhirCommitCalls).toBe(0);
+    await page.getByTestId('fhir-import-save-quarantine-button').click();
+    await expect.poll(() => fhirCommitCalls).toBe(1);
+    await expect(page.getByTestId('fhir-import-status-table')).toContainText('QUARANTINED');
+    await expect(page.getByTestId('fhir-import-status-table')).toContainText('PENDING_CONSENT');
   });
 });

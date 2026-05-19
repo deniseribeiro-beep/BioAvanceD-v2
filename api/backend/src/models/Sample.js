@@ -65,6 +65,13 @@ const SampleSchema = new Schema({
     washout_end_date: { type: Date },
   },
   release_status: { type: String, enum: ['QUARANTINE', 'AVAILABLE', 'BLOCKED'], default: 'QUARANTINE' },
+  consentStatus: { type: String },
+  quarantineStatus: { type: String, enum: ['QUARANTINED', 'RELEASED'], default: 'QUARANTINED' },
+  quarantineReason: { type: String, default: null },
+  availabilityStatus: { type: String, enum: ['BLOCKED', 'AVAILABLE'], default: 'BLOCKED' },
+  importBatchId: { type: String, default: null },
+  importedAt: { type: Date, default: null },
+  importedBy: { type: String, default: null },
   status: { type: String },
   currentStatus: { type: String },
   availableQuantity: { type: Number },
@@ -80,8 +87,10 @@ class SampleModel {
   static STATUS = {
     // Amostra pronta para uso em pesquisa/clínica
     AVAILABLE: 'AVAILABLE',
-    // Amostra eticamente bloqueada - aguardando consentimento (TCLE)
+    // Amostra em quarentena até regularização ética
     QUARANTINED: 'QUARANTINED',
+    // Amostra eticamente bloqueada - aguardando consentimento (TCLE)
+    
     // Amostra parcialmente utilizada (volume retirado)
     PARTIAL: 'PARTIAL',
     // Amostra consumida totalmente

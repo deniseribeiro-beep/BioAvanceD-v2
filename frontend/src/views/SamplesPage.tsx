@@ -7,6 +7,7 @@ import { useSamplesPage } from '../hooks/samples/useSamplesPage';
 import type { SampleWithId } from '../hooks/samples/useSamplesPage';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useAuth } from '../contexts/AuthContext';
+import { patientService, sampleService } from '../services/api';
 import './SamplesPage.css';
 
 export default function SamplesPage() {
@@ -37,6 +38,52 @@ export default function SamplesPage() {
   } = useSamplesPage();
 
   const canEdit = user?.roleName === 'Administrador' || user?.roleName === 'Coordenador';
+
+  const handleResendConsent = async (sample: SampleWithId) => {
+    const patientID = String(sample.patientID || (sample as any).patient?.patientID || '').trim();
+    if (!patientID) {
+      alert('Amostra sem paciente válido para envio de TCLE.');
+      return;
+    }
+
+    try {
+      await patientService.resendConsentNotification(patientID);
+      refreshSamples();
+      alert('TCLE enviado/reenviado com sucesso.');
+    } catch (error: any) {
+      alert(error?.response?.data?.message || error?.message || 'Falha ao enviar/reenviar TCLE.');
+    }
+  };
+
+  const handleAttachExternalDocument = async (sample: SampleWithId) => {
+    if (!canEdit) {
+      alert('Somente Coordenador ou Administrador pode anexar documento externo.');
+      return;
+    }
+
+    const note = window.prompt('Descreva o documento externo anexado (opcional):', '') || '';
+    try {
+      await sampleService.update(sample.id, {
+        consentStatus: 'EXTERNAL_ATTACHED',
+        quarantineStatus: 'RELEASED',
+        availabilityStatus: 'AVAILABLE',
+        quarantineReason: null,
+        release_status: 'AVAILABLE',
+        importedBy: user?.userID || user?.id || user?.username || null,
+      } as any);
+      refreshSamples();
+      alert(note ? `Documento externo anexado. ${note}` : 'Documento externo anexado e amostra liberada.');
+    } catch (error: any) {
+      alert(error?.response?.data?.message || error?.message || 'Falha ao anexar documento externo.');
+    }
+  };
+
+  const handleViewPending = (sample: SampleWithId) => {
+    const quarantineStatus = String((sample as any).quarantineStatus || '').toUpperCase() || 'N/A';
+    const quarantineReason = String((sample as any).quarantineReason || '').toUpperCase() || 'N/A';
+    const consentStatus = String((sample as any).consentStatus || '').toUpperCase() || 'N/A';
+    alert(`Pendência da amostra:\nStatus: ${quarantineStatus}\nConsentimento: ${consentStatus}\nMotivo: ${quarantineReason}`);
+  };
 
   if (/^\/samples\/[^/]+$/.test(pathname)) {
     return <SampleDetailsPage />;
@@ -96,6 +143,9 @@ export default function SamplesPage() {
           refreshSamples();
           setExpandedStorageSample(null);
         }}
+        onResendConsent={handleResendConsent}
+        onAttachExternalDocument={handleAttachExternalDocument}
+        onViewPending={handleViewPending}
       />
       )}
     </>

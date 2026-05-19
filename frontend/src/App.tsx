@@ -10,6 +10,7 @@ const EConsentLinkPanel = lazy(() => import('./pages/patient/EConsentLinkPanel')
 const LoginPage = lazy(() => import('./views/LoginPage'));
 const Dashboard = lazy(() => import('./views/Dashboard'));
 const PatientsPage = lazy(() => import('./views/PatientsPage'));
+const FhirImportPage = lazy(() => import('./views/FhirImportPage'));
 const ConsentPage = lazy(() => import('./views/ConsentPage'));
 const SamplesPage = lazy(() => import('./views/SamplesPage'));
 const SampleDetailsPage = lazy(() => import('./views/SampleDetailsPage'));
@@ -86,6 +87,8 @@ function App() {
                   <Route path="/" element={<Navigate to="/dashboard" replace />} />
                   <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
                   <Route path="/patients" element={<ProtectedRoute><PatientsPage /></ProtectedRoute>} />
+                  <Route path="/patients/import-fhir" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}><FhirImportPage /></ProtectedRoute>} />
+                  <Route path="/import/fhir" element={<Navigate to="/patients/import-fhir" replace />} />
                   <Route path="/patients/:id/consent" element={<ProtectedRoute><ConsentPage /></ProtectedRoute>} />
                   <Route path="samples/custody-reports" element={<ProtectedRoute><SampleCustodyReportsPage /></ProtectedRoute>} />
                   <Route path="samples/withdrawal-return" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}><SampleWithdrawalReturnPage /></ProtectedRoute>} />

@@ -38,10 +38,21 @@ interface SamplesPageViewProps {
   expandedStorageSample: SampleWithId | null;
   onCloseExpandedStorage: () => void;
   onStorageCompleted: () => void;
+  onResendConsent: (sample: SampleWithId) => void;
+  onAttachExternalDocument: (sample: SampleWithId) => void;
+  onViewPending: (sample: SampleWithId) => void;
 }
 
 function mapStatus(sample: Sample): Sample['status'] {
+  const releaseStatus = String((sample as any).release_status || '').toUpperCase();
+  const consentStatus = String((sample as any).consentStatus || '').toUpperCase();
   const status = sample.status || sample.currentStatus?.toString().toUpperCase();
+  if (releaseStatus === 'QUARANTINE' || releaseStatus === 'BLOCKED' || consentStatus === 'PENDING') {
+    return 'QUARANTINED' as Sample['status'];
+  }
+  if (releaseStatus === 'AVAILABLE' || consentStatus === 'SIGNED' || consentStatus === 'EXTERNAL_ATTACHED' || consentStatus === 'WAIVED_TRANSFER' || consentStatus === 'NOT_REQUIRED') {
+    return 'AVAILABLE';
+  }
   if (status === 'AVAILABLE' || status === 'PARTIAL' || status === 'DEPLETED' || status === 'UNAVAILABLE') {
     return status as Sample['status'];
   }
@@ -109,6 +120,9 @@ export default function SamplesPageView({
   expandedStorageSample,
   onCloseExpandedStorage,
   onStorageCompleted,
+  onResendConsent,
+  onAttachExternalDocument,
+  onViewPending,
 }: SamplesPageViewProps) {
   const [scanMode, setScanMode] = useState(false);
   const hasSearch = search.trim().length > 0;
@@ -247,19 +261,9 @@ export default function SamplesPageView({
                         <SampleStatusBadge status={mapStatus(sample) as any} />
                       </td>
                       <td>
-                        {sample.canUse === false ? (
-                          <span className="consent-badge pending" title={sample.consentMessage || t('samples.consent.pendingTitle')}>
-                            ⚠️ {t('samples.consent.pending')}
-                          </span>
-                        ) : sample.consentValid ? (
-                          <span className="consent-badge approved" title={sample.consentMessage || t('samples.consent.signedTitle')}>
-                            ✓ {t('samples.consent.signed')}
-                          </span>
-                        ) : (
-                          <span className="consent-badge unknown" title={t('samples.consent.unknownStatus')}>
-                            ? {t('samples.consent.check')}
-                          </span>
-                        )}
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                          {renderSampleBadges(sample, t)}
+                        </div>
                       </td>
                       <td>
                         <strong>
@@ -270,7 +274,38 @@ export default function SamplesPageView({
                       <td>{patientId ?? 'N/A'}</td>
                       <td style={{ fontSize: '0.92rem' }}>{getStorageLabel(sample)}</td>
                       <td>
-                        <div className="samples-row-actions">
+                        <div className="samples-row-actions" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '0.4rem' }}>
+                          {isQuarantined(sample) && (
+                            <div className="samples-row-actions" style={{ gap: '0.4rem', flexWrap: 'wrap' }}>
+                              <Button
+                                variant="secondary"
+                                className="samples-row-action"
+                                onClick={() => onResendConsent(sample)}
+                                data-testid={`sample-resend-consent-button-${sample.id}`}
+                                title={sample.consentMessage || t('samples.consent.pendingTitle')}
+                              >
+                                Enviar/Reenviar TCLE
+                              </Button>
+                              <Button
+                                variant="secondary"
+                                className="samples-row-action"
+                                disabled={!canEdit}
+                                onClick={() => onAttachExternalDocument(sample)}
+                                data-testid={`sample-attach-external-button-${sample.id}`}
+                                title={canEdit ? 'Anexar documentação externa e liberar amostra' : t('samples.editTooltip.noPermission')}
+                              >
+                                Anexar documento externo
+                              </Button>
+                              <Button
+                                variant="secondary"
+                                className="samples-row-action"
+                                onClick={() => onViewPending(sample)}
+                                data-testid={`sample-view-pending-button-${sample.id}`}
+                              >
+                                Visualizar pendência
+                              </Button>
+                            </div>
+                          )}
                           <Button
                             variant="secondary"
                             className="samples-row-action samples-row-action--storage"
@@ -357,4 +392,53 @@ export default function SamplesPageView({
       )}
     </div>
   );
+}
+
+function isQuarantined(sample: SampleWithId) {
+  const quarantineStatus = String((sample as any).quarantineStatus || '').toUpperCase();
+  const releaseStatus = String((sample as any).release_status || '').toUpperCase();
+  return quarantineStatus === 'QUARANTINED' || releaseStatus === 'QUARANTINE' || releaseStatus === 'BLOCKED' || sample.canUse === false;
+}
+
+function renderSampleBadges(sample: SampleWithId, t: TranslatorFn) {
+  const quarantineStatus = String((sample as any).quarantineStatus || '').toUpperCase();
+  const availabilityStatus = String((sample as any).availabilityStatus || '').toUpperCase();
+  const consentStatus = String((sample as any).consentStatus || '').toUpperCase();
+  const quarantineReason = String((sample as any).quarantineReason || '').toUpperCase();
+
+  const badges: Array<{ label: string; className: string; title: string }> = [];
+
+  if (quarantineStatus === 'QUARANTINED' || availabilityStatus === 'BLOCKED') {
+    badges.push({ label: 'Quarentena', className: 'pending', title: quarantineReason || 'Amostra bloqueada aguardando regularização ética' });
+  }
+
+  if (consentStatus === 'PENDING' || sample.canUse === false) {
+    badges.push({ label: 'TCLE pendente', className: 'pending', title: sample.consentMessage || t('samples.consent.pendingTitle') });
+  }
+
+  if (quarantineReason === 'EXTERNAL_DOCUMENT_REQUIRED' || quarantineReason === 'TRANSFER_REVIEW_REQUIRED') {
+    badges.push({ label: 'Documento externo pendente', className: 'unknown', title: 'Documento externo necessário para liberação' });
+  }
+
+  if (consentStatus === 'SIGNED') {
+    badges.push({ label: 'TCLE assinado', className: 'approved', title: 'TCLE assinado' });
+  }
+
+  if (consentStatus === 'EXTERNAL_ATTACHED' || consentStatus === 'WAIVED_TRANSFER') {
+    badges.push({ label: 'Documento anexado', className: 'approved', title: 'Documento externo anexado e validado' });
+  }
+
+  if (quarantineStatus === 'RELEASED' || availabilityStatus === 'AVAILABLE') {
+    badges.push({ label: 'Liberada', className: 'approved', title: 'Disponível para uso autorizado' });
+  }
+
+  if (badges.length === 0) {
+    badges.push({ label: 'Liberada', className: 'approved', title: 'Sem bloqueios de quarentena' });
+  }
+
+  return badges.map((badge) => (
+    <span key={`${badge.label}-${badge.title}`} className={`consent-badge ${badge.className}`} title={badge.title}>
+      {badge.label}
+    </span>
+  ));
 }
