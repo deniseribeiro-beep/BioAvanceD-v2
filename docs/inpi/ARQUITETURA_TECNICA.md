@@ -1,68 +1,41 @@
-# Arquitetura Tecnica - BioAvanceD
+# Arquitetura Tecnica - BioAvanceD v1.1.0
 
-## Visao Geral
+## Visao geral
 
-BioAvanceD e organizado em tres blocos principais:
+BioAvanceD v1.1.0 e organizado em frontend React/TypeScript, backend Node.js/Express e infraestrutura Docker Compose com persistencia documental, grafo, cache/fila e series temporais. O motor metodologico preservado e RCS-GOV 1.0.
 
-- backend JavaScript/Node.js;
-- frontend React/Vite;
-- infraestrutura Docker com bancos e servicos auxiliares em containers.
+## Componentes
 
-## Backend
+| Camada | Tecnologia/servico | Finalidade |
+|---|---|---|
+| Frontend | React, TypeScript, Vite | Interface operacional, Intake Wizard, pacientes, amostras, TCLE, FHIR, relatorios e administracao |
+| Backend | Node.js, Express | APIs REST, regras de dominio, autenticacao, RBAC, RCS-GOV, auditoria e integracoes |
+| Banco documental | MongoDB | Pacientes, amostras, consentimentos, staging, logs e configuracoes |
+| Grafo | Neo4j | Rastreabilidade, linhagem, relacoes e sincronizacao Mongo -> Neo4j |
+| Cache/fila | Redis | Filas, cache e tarefas auxiliares |
+| Series temporais | InfluxDB | Telemetria, sensores e temperatura quando habilitados |
+| Orquestracao | Docker Compose | Execucao local/VM dos servicos |
+| E-mail | Resend | Envio de TCLE/e-consent |
 
-O backend e responsavel por:
+## Modulos principais
 
-- APIs REST;
-- regras de dominio;
-- autenticacao e autorizacao;
-- persistencia;
+- autenticacao e RBAC;
+- pacientes e amostras;
+- Intake Wizard;
+- importacao FHIR em lote;
+- staging e validacao antes do commit;
+- TCLE/e-consent e Consent Builder;
+- quarentena etica/operacional;
 - RCS-GOV 1.0;
-- trilhas de auditoria;
-- integridade e Merkle;
-- comunicacao com bancos locais/containerizados.
+- Merkle/ledger e auditoria;
+- armazenamento, sensores, IoT, telemetria e temperatura;
+- incidentes, relatorios e backup;
+- terminologias, Orphadata e HPO.
 
-Principais tecnologias:
+## VM e deploy
 
-- Node.js;
-- Express;
-- MongoDB;
-- Redis;
-- Neo4j;
-- InfluxDB;
-- Resend para e-mails.
+A implantacao de referencia usa Docker Compose em VM, com frontend e backend expostos apenas conforme politica de rede. Os bancos e servicos auxiliares devem permanecer protegidos por rede privada ou firewall. O CORS deve aceitar apenas origens configuradas, mantendo `CORS_ALLOW_ALL=false` como recomendacao.
 
-## Frontend
+## Integracoes e seguranca
 
-O frontend e implementado com React, TypeScript e Vite. Ele consome os endpoints do backend e exibe dados operacionais de pacientes, amostras, consentimentos, qualidade RCS-GOV e rastreabilidade.
-
-## Dados e Persistencia
-
-- MongoDB: dados principais de pacientes, amostras, consentimentos, logs e referencias;
-- Redis: filas/cache quando habilitados pelo backend;
-- Neo4j: relacoes de linhagem e grafo quando aplicavel;
-- InfluxDB: series temporais/telemetria quando aplicavel.
-
-Todos esses servicos devem operar em containers no ambiente de auditoria.
-
-## Qualidade e Governanca
-
-A unica metodologia ativa de qualidade pre-analitica e RCS-GOV 1.0:
-
-```text
-RCS = 100 - Pbio
-penalty_axis = weight x severity
-```
-
-A decisao final e `final_grade` A-E. Falha de governanca e nao compensavel e gera `final_grade = E`.
-
-## Integridade
-
-O sistema usa estruturas de integridade por hash, trilhas auditaveis e Merkle para apoiar verificacao de consistencia. Os resultados RCS-GOV incluem `calculation_trace` para reproducao e auditoria.
-
-## Integracoes Externas
-
-No perfil de auditoria, integracoes cloud externas sao desabilitadas. Resend e a unica integracao externa permitida, exclusivamente para envio de e-mail quando configurado.
-
-## Sanitizacao
-
-A arquitetura documentada nao depende de dados reais. Variaveis sensiveis devem ficar fora do repositorio e serem representadas apenas por exemplos sem segredo real.
+Resend e a unica integracao externa permitida para e-mail. MQTT e opcional e deve permanecer desabilitado quando nao houver broker. Segredos, `.env` real, `.env.docker` real, tokens, chaves e dumps nao fazem parte do pacote de envio.

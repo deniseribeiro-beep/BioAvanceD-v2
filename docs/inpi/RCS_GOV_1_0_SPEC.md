@@ -1,5 +1,7 @@
 # Especificacao Tecnica - RCS-GOV 1.0
 
+> Este documento descreve o motor metodologico RCS-GOV 1.0, utilizado pela versao de software BioAvanceD v1.1.0 para o novo congelamento INPI.
+
 ## Identificacao
 
 Modelo metodologico: `RCS-GOV-1.0`
@@ -23,6 +25,22 @@ penalty_axis = axis_weight x severity
 ## Matrizes
 
 O modelo distingue matriz fluida e matriz solida. Cada matriz possui eixos proprios, catalogo SPREC proprio e pesos cuja soma deve ser 100.
+
+### Pesos fluidos
+
+- Ppre = 30;
+- Pcent1 = 15;
+- Pcent2 = 10;
+- Ppost = 20;
+- Pstore = 25.
+
+### Pesos solidos
+
+- Pwarm = 25;
+- Pcold = 25;
+- Pfix = 15;
+- PfixTime = 20;
+- Pstore = 15.
 
 ## Classificacao
 

@@ -1,26 +1,24 @@
-# Manifesto de Hash - Modelo para Registro
+# Manifesto de Hash - BioAvanceD v1.1.0
 
-## Aviso
+## Artefato pretendido
 
-Este documento e um manifesto de preenchimento. Nenhum hash foi gerado nesta etapa.
+- Nome do ZIP: `BioAvanceD_v1.1.0_INPI.zip`
+- Tag futura: `v1.1.0-inpi-rcs-gov`
+- Branch futura de congelamento: `release/inpi-v1.1.0-rcs-gov`
+- Algoritmo: SHA-512
+- Hash: PENDENTE - gerar apos ZIP oficial por `git archive`
 
-## Finalidade
+## Comando PowerShell
 
-Registrar, em etapa posterior, os hashes dos artefatos submetidos ao Registro de Programa de Computador INPI.
+```powershell
+Get-FileHash .\BioAvanceD_v1.1.0_INPI.zip -Algorithm SHA512
+```
 
-## Campos Sugeridos
+## Regras
 
-| Artefato | Algoritmo | Hash | Data de Geracao | Responsavel |
-| --- | --- | --- | --- | --- |
-| pacote-fonte | SHA-256 | A preencher | A preencher | A preencher |
-| memorial-descritivo | SHA-256 | A preencher | A preencher | A preencher |
-| especificacao-rcs-gov | SHA-256 | A preencher | A preencher | A preencher |
-| inventario-arquivos | SHA-256 | A preencher | A preencher | A preencher |
-
-## Regras de Preenchimento
-
-- gerar hash somente sobre pacote sanitizado;
-- nao incluir `.env`, tokens, senhas, chaves privadas ou dados pessoais reais;
-- preservar seeds S1, S2, S3, pesos, thresholds A-E e governance rules;
-- preservar documentacao RCS-GOV 1.0;
-- registrar algoritmo e data de geracao.
+- A geracao do ZIP oficial permanece pendente para etapa posterior.
+- O hash SHA-512 deve ser calculado apenas apos o ZIP oficial.
+- Nao editar o ZIP depois do hash.
+- Nao alterar a tag depois do hash.
+- Se qualquer arquivo mudar, gerar novo ZIP e novo hash em novo ciclo controlado.
+- Nao incluir `.env`, `.env.docker` real, segredos, tokens, chaves, logs, uploads, backups, dumps ou dependencias geradas.

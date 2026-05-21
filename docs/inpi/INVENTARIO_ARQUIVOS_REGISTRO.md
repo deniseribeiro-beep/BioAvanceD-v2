@@ -1,74 +1,73 @@
-# Inventario de Arquivos para Registro
+# Inventario de Arquivos para Registro - BioAvanceD v1.1.0
 
 ## Escopo
 
-Inventario minimo dos grupos de arquivos recomendados para o pacote de Registro de Programa de Computador INPI do BioAvanceD.
+Este inventario acompanha a versao BioAvanceD v1.1.0 para novo congelamento INPI, preservando o motor metodologico RCS-GOV 1.0.
 
-## Codigo-Fonte
+## Pastas incluidas
 
-- backend Node.js/JavaScript;
-- frontend React/TypeScript;
-- configuracoes Docker;
-- scripts de seed e migrations metodologicas;
-- testes automatizados pertinentes;
-- documentacao tecnica.
+- `api/backend`: backend Node.js/Express, rotas, controllers, services, models, middlewares, configuracoes, seeds e testes.
+- `frontend`: frontend React/TypeScript, views/pages, componentes, services/api, contexts, hooks, tipos e testes E2E.
+- `docs`: documentacao tecnica, INPI, deploy, importacao FHIR/Excel e inventario.
+- `scripts`: scripts versionados de deploy, validacao e smoke test.
+- raiz do repositorio: Docker Compose, arquivos de exemplo, configuracoes e metadados do projeto.
 
-## Backend
+## Documentacao incluida
 
-Incluir arquivos de:
+- `INPI_MEMORIAL_DESCRITIVO.md`;
+- `RESUMO_REGISTRO_INPI_V1_1_0.md`;
+- `RCS_GOV_1_0_SPEC.md`;
+- `ARQUITETURA_TECNICA.md`;
+- `DECLARACAO_SANITIZACAO.md`;
+- `MANIFESTO_HASH.md`;
+- `INVENTARIO_ARQUIVOS_REGISTRO.md`;
+- `CHANGELOG_INPI_V1_1_0.md`;
+- `PLANO_CONGELAMENTO_INPI_V1_1_0.md`.
 
-- controllers, routes e services;
-- models/entities;
-- middlewares;
-- utils;
-- seeders RCS-GOV;
-- scripts de migracao RCS-GOV;
-- testes automatizados sem dependencia obrigatoria de containers.
+## Modulos principais
 
-## Frontend
+- autenticacao/RBAC;
+- pacientes;
+- amostras;
+- Intake Wizard;
+- RCS-GOV 1.0;
+- importacao FHIR em lote;
+- staging;
+- TCLE/e-consent;
+- Consent Builder;
+- quarentena etica/operacional;
+- etiquetas;
+- auditoria/logs;
+- Merkle/integridade;
+- storage;
+- sensores/IoT;
+- telemetria/temperatura;
+- incidentes;
+- relatorios;
+- terminologias, Orphadata e HPO;
+- MongoDB, Neo4j, Redis, InfluxDB;
+- Docker/VM.
 
-Incluir arquivos de:
+## Pastas e arquivos excluidos
 
-- componentes React;
-- views/pages;
-- hooks;
-- services/api;
-- tipos TypeScript;
-- configuracoes Vite e TypeScript.
-
-## RCS-GOV 1.0
-
-Preservar:
-
-- S1: catalogo SPREC fluido;
-- S2: catalogo SPREC solido;
-- S3: severidades intraeixo;
-- pesos dos eixos;
-- thresholds A-E;
-- regras de governanca;
-- `calculation_trace`.
-
-## Integridade
-
-Preservar arquivos relacionados a:
-
-- Merkle;
-- hash de auditoria;
-- trilhas de movimentacao;
-- rastreabilidade de amostras;
-- logs sanitizados.
-
-## Exclusoes
-
-Nao incluir:
-
-- `.env` real;
-- tokens;
-- API keys;
-- JWT secrets reais;
-- senhas;
-- URIs reais de banco;
-- dumps de banco;
-- dados pessoais reais;
+- `.git`;
+- `.env`;
+- `.env.docker` real;
 - `node_modules`;
-- caches, builds temporarios e logs locais.
+- `dist`;
+- `build`;
+- `coverage`;
+- `playwright-report`;
+- `test-results`;
+- logs;
+- uploads;
+- backups;
+- dumps;
+- tokens;
+- chaves;
+- secrets;
+- dados reais.
+
+## Ausencia de segredos
+
+Este inventario nao inclui valores reais de ambiente, credenciais, tokens, senhas, URIs sensiveis ou hashes ficticios.

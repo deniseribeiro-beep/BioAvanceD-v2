@@ -1,50 +1,53 @@
-# Declaracao de Sanitizacao
+# Declaracao de Sanitizacao - BioAvanceD v1.1.0
 
 ## Declaracao
 
-O pacote documental e tecnico preparado para o Registro de Programa de Computador INPI do BioAvanceD deve ser sanitizado antes de submissao.
+O pacote oficial do BioAvanceD v1.1.0 para novo congelamento INPI deve ser sanitizado antes da geracao do ZIP por `git archive`. O motor metodologico preservado e RCS-GOV 1.0.
 
-## Itens Removidos ou Excluidos
+## Exclusoes obrigatorias
 
-Devem ser excluidos do pacote:
+Nao entram no pacote:
 
-- arquivos `.env` reais;
+- `.git`;
+- `node_modules`;
+- `dist`;
+- `build`;
+- `coverage`;
+- `playwright-report`;
+- `test-results`;
+- `.env`;
+- `.env.docker` real;
+- logs;
+- uploads;
+- backups;
+- dumps;
 - tokens;
-- API keys;
+- chaves;
+- secrets;
 - senhas;
-- JWT secrets reais;
-- chaves privadas;
+- API keys;
 - URIs reais de banco;
-- IPs sensiveis;
-- dumps de banco;
 - dados reais de pacientes;
 - dados reais de amostras;
 - dados reais de usuarios;
-- logs operacionais com dados sensiveis.
+- caches e arquivos temporarios locais.
 
-## Itens Preservados
+## Itens preservados
 
-Devem ser preservados:
+Devem permanecer:
 
-- codigo-fonte do BioAvanceD-v2;
+- codigo-fonte versionado;
+- frontend;
+- backend;
 - documentacao tecnica;
+- scripts versionados;
+- testes versionados;
+- Docker Compose e exemplos de ambiente sem segredos;
 - RCS-GOV 1.0;
-- seeds S1, S2 e S3;
-- pesos dos eixos;
-- thresholds A-E;
-- governance rules;
-- `calculation_trace`;
-- mecanismos de Merkle e integridade;
-- configuracoes Docker sem segredos reais.
-
-## Integracoes
-
-Integracoes cloud externas devem permanecer removidas, desabilitadas ou controladas por flags locais. Resend e a unica integracao externa permitida no escopo documentado, usada para e-mail quando configurada.
-
-## Qualidade Metodologica
-
-A metodologia ativa de qualidade e RCS-GOV 1.0. A classificacao final usa `final_grade` A-E, gate de governanca nao compensavel e calculo auditavel por eixo.
+- seeds S1/S2/S3;
+- pesos, thresholds e regras de governanca;
+- Merkle/integridade e auditoria.
 
 ## Confirmacao
 
-Este documento nao contem segredos reais, dados pessoais reais ou credenciais operacionais.
+O pacote oficial sera gerado por `git archive`, a partir da tag futura `v1.1.0-inpi-rcs-gov`. Nao ha dados reais de pacientes no pacote documental. Segredos e arquivos reais de ambiente devem permanecer fora do repositorio e fora do ZIP.
