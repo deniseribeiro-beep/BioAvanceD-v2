@@ -1,0 +1,15 @@
+docs/inpi/archive/** export-ignore
+.env export-ignore
+.env.docker export-ignore
+node_modules/** export-ignore
+dist/** export-ignore
+build/** export-ignore
+coverage/** export-ignore
+playwright-report/** export-ignore
+test-results/** export-ignore
+uploads/** export-ignore
+backups/** export-ignore
+logs/** export-ignore
+*.log export-ignore
+BioAvanceD*_INPI.zip export-ignore
+*SHA512*.txt export-ignore
