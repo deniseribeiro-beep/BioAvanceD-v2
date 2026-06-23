@@ -62,9 +62,16 @@ class SensorService {
       const query = {};
 
       if (filters.locationId || filters.locationID) {
+        const locationFilter = filters.locationId || filters.locationID;
+        const locationVariants = [...new Set([
+          locationFilter,
+          String(locationFilter),
+          Number.isFinite(Number(locationFilter)) ? Number(locationFilter) : null
+        ].filter((value) => value !== null && value !== undefined && value !== ''))];
+
         query.$or = [
-          { locationId: filters.locationId || filters.locationID },
-          { locationID: filters.locationId || filters.locationID }
+          { locationId: { $in: locationVariants } },
+          { locationID: { $in: locationVariants } }
         ];
       }
 

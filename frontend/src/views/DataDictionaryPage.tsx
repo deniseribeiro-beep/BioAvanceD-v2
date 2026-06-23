@@ -1,62 +1,60 @@
+import { useMemo } from 'react';
 import { FileDown, Printer } from 'lucide-react';
 import { useLanguage } from '../contexts/LanguageContext';
 import './DataDictionaryPage.css';
 
-const atcLevels = [
-  {
-    level: 'Nível 1',
-    code: 'A',
-    description: 'Grupo anatômico principal',
-    example: 'A - Trato alimentar e metabolismo',
-  },
-  {
-    level: 'Nível 2',
-    code: 'A16',
-    description: 'Subgrupo terapêutico',
-    example: 'A16 - Outros produtos para trato alimentar e metabolismo',
-  },
-  {
-    level: 'Nível 3',
-    code: 'A16A',
-    description: 'Subgrupo farmacológico',
-    example: 'A16A - Outros produtos para doenças metabólicas',
-  },
-  {
-    level: 'Nível 4',
-    code: 'A16AX',
-    description: 'Subgrupo químico',
-    example: 'A16AX - Outros produtos',
-  },
-  {
-    level: 'Nível 5',
-    code: 'A16AX14',
-    description: 'Substância química específica',
-    example: 'A16AX14 - Migalastat',
-  },
-];
-
-const sprecFluidAxes = [
-  { axis: 'Eixo 1', label: 'Tipo de amostra' },
-  { axis: 'Eixo 2', label: 'Recipiente primário' },
-  { axis: 'Eixo 3', label: 'Pré-centrifugação' },
-  { axis: 'Eixo 4', label: 'Centrifugação' },
-  { axis: 'Eixo 5', label: 'Segunda centrifugação' },
-  { axis: 'Eixo 6', label: 'Atraso pós-centrifugação' },
-  { axis: 'Eixo 7', label: 'Armazenamento de longo prazo' },
-];
-
-const sprecSolidAxes = [
-  { axis: 'Eixo 1', label: 'Tipo de tecido/espécime sólido' },
-  { axis: 'Eixo 2', label: 'Tipo de estabilização/fixação' },
-  { axis: 'Eixo 3', label: 'Atraso frio até preservação' },
-  { axis: 'Eixo 4', label: 'Tipo de processamento' },
-  { axis: 'Eixo 5', label: 'Condição de armazenamento' },
-  { axis: 'Eixo 6', label: 'Temperatura de armazenamento' },
-  { axis: 'Eixo 7', label: 'Formato final de preservação' },
-];
-
 export default function DataDictionaryPage() {
   const { t } = useLanguage();
+  const atcLevels = useMemo(() => ([
+    {
+      level: t('dictionary.atc.level1', 'Nível 1'),
+      code: 'A',
+      description: t('dictionary.atc.level1Description', 'Grupo anatômico principal'),
+      example: t('dictionary.atc.level1Example', 'A - Trato alimentar e metabolismo'),
+    },
+    {
+      level: t('dictionary.atc.level2', 'Nível 2'),
+      code: 'A16',
+      description: t('dictionary.atc.level2Description', 'Subgrupo terapêutico'),
+      example: t('dictionary.atc.level2Example', 'A16 - Outros produtos para trato alimentar e metabolismo'),
+    },
+    {
+      level: t('dictionary.atc.level3', 'Nível 3'),
+      code: 'A16A',
+      description: t('dictionary.atc.level3Description', 'Subgrupo farmacológico'),
+      example: t('dictionary.atc.level3Example', 'A16A - Outros produtos para doenças metabólicas'),
+    },
+    {
+      level: t('dictionary.atc.level4', 'Nível 4'),
+      code: 'A16AX',
+      description: t('dictionary.atc.level4Description', 'Subgrupo químico'),
+      example: t('dictionary.atc.level4Example', 'A16AX - Outros produtos'),
+    },
+    {
+      level: t('dictionary.atc.level5', 'Nível 5'),
+      code: 'A16AX14',
+      description: t('dictionary.atc.level5Description', 'Substância química específica'),
+      example: t('dictionary.atc.level5Example', 'A16AX14 - Migalastat'),
+    },
+  ]), [t]);
+  const sprecFluidAxes = useMemo(() => ([
+    { axis: t('dictionary.sprec.fluid.axis1', 'Eixo 1'), label: t('dictionary.sprec.fluid.label1', 'Tipo de amostra') },
+    { axis: t('dictionary.sprec.fluid.axis2', 'Eixo 2'), label: t('dictionary.sprec.fluid.label2', 'Recipiente primário') },
+    { axis: t('dictionary.sprec.fluid.axis3', 'Eixo 3'), label: t('dictionary.sprec.fluid.label3', 'Pré-centrifugação') },
+    { axis: t('dictionary.sprec.fluid.axis4', 'Eixo 4'), label: t('dictionary.sprec.fluid.label4', 'Centrifugação') },
+    { axis: t('dictionary.sprec.fluid.axis5', 'Eixo 5'), label: t('dictionary.sprec.fluid.label5', 'Segunda centrifugação') },
+    { axis: t('dictionary.sprec.fluid.axis6', 'Eixo 6'), label: t('dictionary.sprec.fluid.label6', 'Atraso pós-centrifugação') },
+    { axis: t('dictionary.sprec.fluid.axis7', 'Eixo 7'), label: t('dictionary.sprec.fluid.label7', 'Armazenamento de longo prazo') },
+  ]), [t]);
+  const sprecSolidAxes = useMemo(() => ([
+    { axis: t('dictionary.sprec.solid.axis1', 'Eixo 1'), label: t('dictionary.sprec.solid.label1', 'Tipo de tecido/espécime sólido') },
+    { axis: t('dictionary.sprec.solid.axis2', 'Eixo 2'), label: t('dictionary.sprec.solid.label2', 'Tipo de estabilização/fixação') },
+    { axis: t('dictionary.sprec.solid.axis3', 'Eixo 3'), label: t('dictionary.sprec.solid.label3', 'Atraso frio até preservação') },
+    { axis: t('dictionary.sprec.solid.axis4', 'Eixo 4'), label: t('dictionary.sprec.solid.label4', 'Tipo de processamento') },
+    { axis: t('dictionary.sprec.solid.axis5', 'Eixo 5'), label: t('dictionary.sprec.solid.label5', 'Condição de armazenamento') },
+    { axis: t('dictionary.sprec.solid.axis6', 'Eixo 6'), label: t('dictionary.sprec.solid.label6', 'Temperatura de armazenamento') },
+    { axis: t('dictionary.sprec.solid.axis7', 'Eixo 7'), label: t('dictionary.sprec.solid.label7', 'Formato final de preservação') },
+  ]), [t]);
 
   const handlePrint = () => {
     window.print();

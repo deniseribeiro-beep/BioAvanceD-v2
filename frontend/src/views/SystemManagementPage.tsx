@@ -14,6 +14,7 @@ import './SystemManagementPage.css';
 type TabType = 'users' | 'security';
 
 export default function SystemManagementPage() {
+  const { t } = useLanguage();
   const [searchParams, setSearchParams] = useSearchParams();
   const tabParam = searchParams.get('tab') as TabType | null;
   const validTabs: TabType[] = ['users', 'security'];
@@ -27,16 +28,16 @@ export default function SystemManagementPage() {
   }, [tabParam]);
 
   const tabs = [
-    { id: 'users' as TabType, label: 'Usuários', icon: UserCog },
-    { id: 'security' as TabType, label: 'Segurança', icon: ShieldIcon },
+    { id: 'users' as TabType, label: t('system.tabs.users', 'Usuários'), icon: UserCog },
+    { id: 'security' as TabType, label: t('system.tabs.security', 'Segurança'), icon: ShieldIcon },
   ];
 
   return (
     <div className="page" data-testid="system-management-page">
       <div className="page-header">
         <div>
-          <h1 className="page-title">Gerenciamento do Sistema</h1>
-          <p className="page-subtitle">Gerenciamento integrado de usuários e configurações de segurança</p>
+          <h1 className="page-title">{t('system.title', 'Gerenciamento do Sistema')}</h1>
+          <p className="page-subtitle">{t('system.subtitle', 'Gerenciamento integrado de usuários e configurações de segurança')}</p>
         </div>
       </div>
 
@@ -95,15 +96,15 @@ function UsersSection() {
   const getAccessTypeLabel = (accessType?: number) => {
     switch (accessType) {
       case 4:
-        return 'Administrador';
+        return t('roles.administrator', 'Administrador');
       case 3:
-        return 'Coordenador';
+        return t('roles.coordinator', 'Coordenador');
       case 2:
-        return 'Técnico';
+        return t('roles.technician', 'Técnico');
       case 1:
-        return 'Usuário Externo';
+        return t('roles.externalUser', 'Usuário Externo');
       default:
-        return 'Técnico';
+        return t('roles.technician', 'Técnico');
     }
   };
 

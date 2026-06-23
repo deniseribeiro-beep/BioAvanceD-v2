@@ -8,12 +8,15 @@ import { Download, X, Upload, CheckCircle, XCircle, Clock, AlertCircle, External
 import { ImportDataType, ImportJob, ImportJobStatus } from '../types/models';
 import { useResults } from '../hooks/useResults';
 import { useEquipment } from '../hooks/useEquipment';
+import { useLanguage } from '../contexts/LanguageContext';
 import { resultService, importService } from '../services/api';
 import AnalysisUploadModal from '../components/AnalysisUploadModal';
 import AnalysisUpload from '../components/AnalysisUpload.jsx';
 import './ResultsPage.css';
 
 export default function ResultsPage() {
+  const { t, language } = useLanguage();
+  const locale = language;
   const [searchParams, setSearchParams] = useSearchParams();
   const importJobID = searchParams.get('importJobID') || undefined;
   const sampleIdParam = searchParams.get('sampleId') || searchParams.get('sampleID') || '';
@@ -79,7 +82,7 @@ export default function ResultsPage() {
       setSelectedJob(response.data);
       setShowReportModal(true);
     } catch (err: any) {
-      setImportError('Erro ao carregar relatório');
+      setImportError(t('results.reportLoadError', 'Erro ao carregar relatório'));
     }
   };
 
@@ -100,11 +103,11 @@ export default function ResultsPage() {
   };
   const getStatusLabel = (status: ImportJobStatus) => {
     const labels = {
-      pending: 'Pendente',
-      processing: 'Processando',
-      completed: 'Concluído',
-      failed: 'Falhou',
-      cancelled: 'Cancelado'
+      pending: t('results.status.pending', 'Pendente'),
+      processing: t('results.status.processing', 'Processando'),
+      completed: t('results.status.completed', 'Concluído'),
+      failed: t('results.status.failed', 'Falhou'),
+      cancelled: t('results.status.cancelled', 'Cancelado')
     };
     return labels[status] || status;
   };
@@ -114,11 +117,11 @@ export default function ResultsPage() {
       <div className="page-header">
 
         <div>
-          <h1 className="page-title">Arquivos de Análise</h1>
+          <h1 className="page-title">{t('results.title', 'Arquivos de Análise')}</h1>
           <p className="page-subtitle">
             {importJobID 
-              ? `Arquivos de análise da importação ${importJobID}` 
-              : 'Arquivos de análises laboratoriais'}
+              ? t('results.subtitleImportJob', 'Arquivos de análise da importação {importJobID}').replace('{importJobID}', importJobID)
+              : t('results.subtitle', 'Arquivos de análises laboratoriais')}
           </p>
           {importJobID && (
             <div className="results-filter">
@@ -126,7 +129,7 @@ export default function ResultsPage() {
                 variant="secondary"
                 onClick={clearFilter}
               >
-                <X size={16} /> Limpar Filtro
+                <X size={16} /> {t('results.clearFilter', 'Limpar Filtro')}
               </Button>
             </div>
           )}
@@ -136,7 +139,7 @@ export default function ResultsPage() {
 
       {/* Seção de Importação */}
       <Card className="import-section">
-        <h2 className="import-title">Importar Arquivos de Análise</h2>
+        <h2 className="import-title">{t('results.import', 'Importar Arquivos de Análise')}</h2>
 
         <AnalysisUpload sampleId={sampleIdParam} />
 
@@ -147,9 +150,9 @@ export default function ResultsPage() {
         )}
 
         <div className="import-history">
-          <h3 className="import-history-title">Histórico de Importações</h3>
+        <h3 className="import-history-title">{t('results.historyTitle', 'Histórico de Importações')}</h3>
           {importJobs.length === 0 ? (
-            <p className="import-empty">Nenhuma importação realizada ainda</p>
+            <p className="import-empty">{t('results.noHistory', 'Nenhuma importação realizada ainda')}</p>
           ) : (
             <div className="jobs-list">
               {importJobs.map((job) => (
@@ -160,7 +163,7 @@ export default function ResultsPage() {
                       <div>
                         <h4 className="job-title">{job.fileName}</h4>
                         <p className="job-date">
-                          {new Date(job.createdAt || '').toLocaleString('pt-BR')}
+                          {new Date(job.createdAt || '').toLocaleString(locale)}
                         </p>
                       </div>
                     </div>
@@ -177,7 +180,7 @@ export default function ResultsPage() {
                             setSearchParams(newParams);
                           }}
                         >
-                          <ExternalLink size={16} /> Ver
+                          <ExternalLink size={16} /> {t('results.view', 'Ver')}
                         </Button>
                       )}
                       {(job.status === 'completed' || job.status === 'failed') && (
@@ -185,17 +188,17 @@ export default function ResultsPage() {
                           variant="secondary"
                           onClick={() => handleViewReport(job)}
                         >
-                          <Download size={16} /> Relatório
+                          <Download size={16} /> {t('results.report', 'Relatório')}
                         </Button>
                       )}
                     </div>
                   </div>
                   {job.metrics && (
                     <div className="job-metrics">
-                      <span>Total: {job.metrics.totalRecords}</span>
-                      <span className="metric-success">Sucesso: {job.metrics.successfulRecords}</span>
+                      <span>{t('results.metrics.total', 'Total')}: {job.metrics.totalRecords}</span>
+                      <span className="metric-success">{t('results.metrics.success', 'Sucesso')}: {job.metrics.successfulRecords}</span>
                       {job.metrics.failedRecords > 0 && (
-                        <span className="metric-failure">Falhas: {job.metrics.failedRecords}</span>
+                        <span className="metric-failure">{t('results.metrics.failures', 'Falhas')}: {job.metrics.failedRecords}</span>
                       )}
                     </div>
                   )}
@@ -206,20 +209,20 @@ export default function ResultsPage() {
         </div>
       </Card>
 
-      {loading && <p>Carregando...</p>}
-      {error && <p style={{ color: 'var(--danger)' }}>Erro: {error}</p>}
+      {loading && <p>{t('common.loading')}</p>}
+      {error && <p style={{ color: 'var(--danger)' }}>{t('common.error')}: {error}</p>}
 
       <Card className="results-table-card">
         <Table
           headers={[
-            'ID',
-            'Tipo de Arquivo',
-            'Descrição',
-            'Método',
-            'Pesquisador Responsável',
-            'Equipamento',
-            'Amostra',
-            'Ações',
+            t('results.tableHeaders.id', 'ID'),
+            t('results.tableHeaders.fileType', 'Tipo de Arquivo'),
+            t('results.tableHeaders.description', 'Descrição'),
+            t('results.tableHeaders.method', 'Método'),
+            t('results.tableHeaders.researcher', 'Pesquisador Responsável'),
+            t('results.tableHeaders.equipment', 'Equipamento'),
+            t('results.tableHeaders.sample', 'Amostra'),
+            t('results.tableHeaders.actions', 'Ações'),
           ]}
         >
           {results.map((result) => {
@@ -235,11 +238,11 @@ export default function ResultsPage() {
                 <td>
                   {result.equipmentID
                     ? equipment.find((e) => e.equipmentID === result.equipmentID)
-                        ?.equipmentDescription || `Equipamento #${result.equipmentID}`
-                    : result.equipmentName || 'Não vinculado'}
+                        ?.equipmentDescription || t('results.equipmentFallback', 'Equipamento #{id}').replace('{id}', String(result.equipmentID))
+                    : result.equipmentName || t('results.notLinked', 'Não vinculado')}
                 </td>
                 <td>
-                  <span className="sample-tag">Amostra #{result.sampleID}</span>
+                  <span className="sample-tag">{t('results.sampleFallback', 'Amostra #{id}').replace('{id}', String(result.sampleID))}</span>
                 </td>
                 <td>
                   <div className="table-actions">
@@ -249,12 +252,12 @@ export default function ResultsPage() {
                         try {
                           await resultService.download(result._id || result.resultID);
                         } catch (err: any) {
-                          alert(`Erro ao fazer download: ${err.message || 'Erro desconhecido'}`);
+                          alert(t('results.downloadError', 'Erro ao fazer download: {error}').replace('{error}', err.message || t('common.unknown', 'Erro desconhecido')));
                         }
                       }}
                     >
                       <Download size={16} />
-                      Download
+                      {t('results.download', 'Download')}
                     </Button>
                   </div>
                 </td>
@@ -269,7 +272,7 @@ export default function ResultsPage() {
         <Modal
           isOpen={showReportModal}
           onClose={() => setShowReportModal(false)}
-          title="Relatório de Importação"
+          title={t('results.reportModalTitle', 'Relatório de Importação')}
         >
           <div className="import-report">
             <div className="report-header">
@@ -281,27 +284,27 @@ export default function ResultsPage() {
 
             {selectedJob.metrics && (
               <div className="report-metrics">
-                <h4 className="report-subtitle">Métricas</h4>
+                <h4 className="report-subtitle">{t('results.metricsTitle', 'Métricas')}</h4>
                 <div className="metrics-grid">
                   <div className="metric-item">
-                    <label className="metric-label">Total de Registros</label>
+                    <label className="metric-label">{t('results.metrics.totalRecords', 'Total de Registros')}</label>
                     <span className="metric-value">{selectedJob.metrics.totalRecords}</span>
                   </div>
                   <div className="metric-item">
-                    <label className="metric-label">Sucesso</label>
+                    <label className="metric-label">{t('results.metrics.successLabel', 'Sucesso')}</label>
                     <span className="metric-value metric-success">{selectedJob.metrics.successfulRecords}</span>
                   </div>
                   <div className="metric-item">
-                    <label className="metric-label">Falhas</label>
+                    <label className="metric-label">{t('results.metrics.failureLabel', 'Falhas')}</label>
                     <span className="metric-value metric-failure">{selectedJob.metrics.failedRecords}</span>
                   </div>
                   <div className="metric-item">
-                    <label className="metric-label">Duplicados</label>
+                    <label className="metric-label">{t('results.metrics.duplicates', 'Duplicados')}</label>
                     <span className="metric-value">{selectedJob.metrics.duplicatesFound}</span>
                   </div>
                   {selectedJob.metrics.processingTime && (
                     <div className="metric-item">
-                      <label className="metric-label">Tempo de Processamento</label>
+                      <label className="metric-label">{t('results.metrics.processingTime', 'Tempo de Processamento')}</label>
                       <span className="metric-value">{selectedJob.metrics.processingTime.toFixed(2)}s</span>
                     </div>
                   )}
@@ -311,17 +314,17 @@ export default function ResultsPage() {
 
             {selectedJob.validationErrors && selectedJob.validationErrors.length > 0 && (
               <div className="report-errors">
-                <h4 className="report-subtitle">Erros de Validação</h4>
+                <h4 className="report-subtitle">{t('results.validationErrorsTitle', 'Erros de Validação')}</h4>
                 <div className="errors-list">
                   {selectedJob.validationErrors.slice(0, 10).map((error, index) => (
                     <div key={index} className="error-item">
-                      {error.row && <span>Linha {error.row}: </span>}
+                      {error.row && <span>{t('results.rowLabel', 'Linha')} {error.row}: </span>}
                       {error.field && <span>{error.field}: </span>}
                       {error.message}
                     </div>
                   ))}
                   {selectedJob.validationErrors.length > 10 && (
-                    <p className="errors-more">... e mais {selectedJob.validationErrors.length - 10} erros</p>
+                <p className="errors-more">{t('results.moreErrors', '... e mais {count} erros').replace('{count}', String(selectedJob.validationErrors.length - 10))}</p>
                   )}
                 </div>
               </div>
@@ -329,7 +332,7 @@ export default function ResultsPage() {
 
             {selectedJob.processingErrors && selectedJob.processingErrors.length > 0 && (
               <div className="report-errors">
-                <h4 className="report-subtitle">Erros de Processamento</h4>
+                <h4 className="report-subtitle">{t('results.processingErrorsTitle', 'Erros de Processamento')}</h4>
                 <div className="errors-list">
                   {selectedJob.processingErrors.map((error, index) => (
                     <div key={index} className="error-item">{error}</div>

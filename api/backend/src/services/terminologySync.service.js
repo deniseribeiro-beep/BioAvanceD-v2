@@ -26,6 +26,22 @@ function normalizeOmimCode(value) {
   return /^OMIM:/i.test(raw) ? raw.replace(/^omim:/i, 'OMIM:') : `OMIM:${raw}`;
 }
 
+function normalizeReferenceList(value) {
+  if (Array.isArray(value)) return value;
+  if (value && typeof value === 'object') return [value];
+  return [];
+}
+
+function findExternalReference(record = {}, source) {
+  const externalReferences = normalizeReferenceList(
+    record.ExternalReference
+    || record.externalReferences
+    || record.externalReference
+  );
+  const found = externalReferences.find((entry) => String(entry?.Source || entry?.source || '').toUpperCase() === source);
+  return normalizeText(found?.Reference || found?.reference || found?.code || found?.id || found?.value);
+}
+
 function getOrphaNumeric(value) {
   const normalized = normalizeOrphaCode(value);
   return normalized ? normalized.replace(/^ORPHA:/i, '') : '';
@@ -91,22 +107,22 @@ function normalizeRecord(record = {}, fallbackSystem = 'OUTRO') {
     : [];
 
   const relacoes = {
-    cid: normalizeText(record.cid || record.cid10 || record.Codigos_CID10),
+    cid: normalizeText(record.cid || record.cid10 || record.Codigos_CID10 || record.ICD10 || record.icdCode),
     hpo: normalizeText(record.hpo || record.hpoId),
     omim: normalizeOmimCode(record.omim || record.OMIM || record.omimCode),
     orpha: normalizeOrphaCode(record.orpha || record.ORPHA || record.orphaCode || record.ORPHAcode),
   };
 
-  const externalReferences = Array.isArray(record.ExternalReference) ? record.ExternalReference : [];
   if (!relacoes.cid) {
-    relacoes.cid = normalizeText(externalReferences.find((entry) => String(entry?.Source || '').toUpperCase() === 'ICD-10')?.Reference);
+    relacoes.cid = findExternalReference(record, 'ICD-10');
   }
   if (!relacoes.omim) {
-    relacoes.omim = normalizeText(externalReferences.find((entry) => String(entry?.Source || '').toUpperCase() === 'OMIM')?.Reference);
+    relacoes.omim = normalizeOmimCode(findExternalReference(record, 'OMIM'));
   }
   if (!relacoes.orpha) {
     relacoes.orpha = normalizeOrphaCode(record.ORPHAcode || record.orphaCode || record.ORPHA || record.orpha || normalizedCodigo || codigo);
   }
+  relacoes.cid10 = relacoes.cid;
 
   const normalized = {
     codigo: normalizedCodigo || codigo,
@@ -118,6 +134,7 @@ function normalizeRecord(record = {}, fallbackSystem = 'OUTRO') {
     relacoes,
     ativo: record.ativo !== undefined ? Boolean(record.ativo) : true,
     sincronizadoEm: new Date(),
+    updatedAt: new Date(),
     fonte: normalizeText(record.fonte || 'orphadata') || 'orphadata',
   };
 
@@ -133,13 +150,35 @@ async function upsertOrphanetRedundancy(db, payload) {
   const code = getOrphaNumeric(payload.codigo);
   if (!code) return;
 
+  const cid = normalizeText(payload.relacoes?.cid10 || payload.relacoes?.cid || payload.Codigos_CID10);
+  const omim = normalizeOmimCode(payload.relacoes?.omim || payload.OMIM);
+  const name = normalizeText(payload.descricao || payload.label || payload.codigo);
+  const aliases = Array.from(new Set([
+    ...(Array.isArray(payload.aliases) ? payload.aliases : []),
+    ...(Array.isArray(payload.sinonimos) ? payload.sinonimos : []),
+  ].map((item) => normalizeText(item)).filter(Boolean)));
+
   await db.collection('orphanet_diseases').updateOne(
     { code },
     {
       $set: {
         code,
-        name: payload.descricao,
-        synonyms: Array.isArray(payload.aliases) ? payload.aliases : [],
+        orphaCode: normalizeOrphaCode(code),
+        ORPHA: code,
+        ORPHAcode: code,
+        name,
+        label: name,
+        description: name,
+        Codigos_CID10: cid,
+        OMIM: omim,
+        synonyms: aliases,
+        aliases,
+        relacoes: {
+          cid,
+          cid10: cid,
+          omim,
+          orpha: normalizeOrphaCode(code),
+        },
         lang: 'pt',
         source: 'terminology-sync',
         updatedAt: new Date(),

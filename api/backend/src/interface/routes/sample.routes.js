@@ -107,13 +107,15 @@ function validateCreateSamplePayload(req, res, next) {
     errors.push('isRareDisease deve ser boolean');
   }
 
-  if (payload.locationID !== undefined && payload.locationID !== null && payload.locationID !== '') {
+  if (payload.locationID === undefined || payload.locationID === null || payload.locationID === '') {
+    errors.push('Localização física obrigatória para cadastro de amostra');
+  } else {
     const locationValue = typeof payload.locationID === 'string' ? payload.locationID.trim() : payload.locationID;
-    const locationIsValidNumber = typeof locationValue === 'number' && Number.isFinite(locationValue);
-    const locationIsNumericString = typeof locationValue === 'string' && /^\d+$/.test(locationValue);
+    const locationIsValidNumber = typeof locationValue === 'number' && Number.isFinite(locationValue) && locationValue > 0;
+    const locationIsNumericString = typeof locationValue === 'string' && /^\d+$/.test(locationValue) && Number(locationValue) > 0;
 
     if (!locationIsValidNumber && !locationIsNumericString) {
-      errors.push('locationID, quando informado, deve ser numérico');
+      errors.push('Localização física obrigatória para cadastro de amostra: locationID deve ser numérico válido');
     }
   }
 
@@ -131,6 +133,17 @@ function validateCreateSamplePayload(req, res, next) {
   }
 
   return next();
+}
+
+function buildActiveConsentQuery(patient) {
+  const patientIds = [patient?.patientID, patient?._id?.toString()]
+    .filter((value) => value !== undefined && value !== null && value !== '')
+    .map(String);
+
+  return {
+    patientId: { $in: [...new Set(patientIds)] },
+    status: 'ACTIVE'
+  };
 }
 
 function escapeXml(value) {
@@ -250,6 +263,14 @@ router.post('/',
         });
       }
 
+      if ([400, 422].includes(error.status || error.statusCode)) {
+        return res.status(error.status || error.statusCode).json({
+          success: false,
+          error: req.t?.('samples.createError') || 'Erro ao criar amostra',
+          message: errorMessage
+        });
+      }
+
       if (error.status === 404 || error.statusCode === 404 || errorMessage.includes('não encontrado')) {
         return res.status(404).json({
           success: false,
@@ -328,10 +349,7 @@ router.get('/', authenticate, async (req, res) => {
 
       if (patient) {
         // Verificar se há consentimento ativo
-        const consent = await patientConsentsCollection.findOne({
-          patientId: patient._id.toString(),
-          status: 'ACTIVE'
-        });
+        const consent = await patientConsentsCollection.findOne(buildActiveConsentQuery(patient));
 
         if (consent) {
           consentValid = true;

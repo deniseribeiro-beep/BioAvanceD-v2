@@ -33,7 +33,11 @@ class MongoPatientConsentReadRepository {
 
       if (patient) {
         const consent = await patientConsentsCollection.findOne({
-          patientId: patient._id.toString(),
+          patientId: {
+            $in: [patient.patientID, patient._id?.toString()]
+              .filter((value) => value !== undefined && value !== null && value !== '')
+              .map(String)
+          },
           status: 'ACTIVE'
         });
 

@@ -226,6 +226,7 @@ app.use("/api/hpo", require("./src/interface/routes/hpo.routes"));
 app.use("/api/patients", require("./src/interface/routes/patient.routes"));
 app.use("/api/v1/patients", require("./src/interface/routes/patient.routes"));
 app.use("/api/samples", require("./src/interface/routes/sample.routes"));
+app.use("/api/labels", require("./src/interface/routes/label.routes"));
 app.use("/api/quality", require("./src/interface/routes/quality.routes"));
 app.use("/api/import", require("./src/interface/routes/import.routes"));
 app.use("/api/import", require("./src/routes/importFhirIntelligent.js"));

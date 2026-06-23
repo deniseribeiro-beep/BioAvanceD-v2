@@ -65,7 +65,7 @@ function computeVolume(sample: Sample) {
   return { initial, current };
 }
 
-function getStorageLabel(sample: SampleWithId) {
+function getStorageLabel(sample: SampleWithId, t: TranslatorFn) {
   const storageLocation = (sample as any).storageLocation;
   const freezerName = storageLocation?.freezerName ? String(storageLocation.freezerName) : '';
   const shelfName = storageLocation?.shelfName ? String(storageLocation.shelfName) : '';
@@ -77,22 +77,36 @@ function getStorageLabel(sample: SampleWithId) {
   const hierarchy = [freezerName, shelfName, rackName, boxName].filter(Boolean).join(' > ');
 
   if (!hierarchy && !position) {
-    return 'Aguardando Armazenagem';
+    return t('samples.storage.awaiting', 'Aguardando Armazenagem');
   }
 
   if (path) {
-    return position ? `${path} / Posição ${position}` : path;
+    return position ? `${path} / ${t('samples.storage.position', 'Posição')} ${position}` : path;
   }
 
   if (hierarchy) {
-    return position ? `${hierarchy} / Posição ${position}` : hierarchy;
+    return position ? `${hierarchy} / ${t('samples.storage.position', 'Posição')} ${position}` : hierarchy;
   }
 
   if (position) {
-    return `Posição ${position}`;
+    return `${t('samples.storage.position', 'Posição')} ${position}`;
   }
 
-  return 'Caixa definida';
+  return t('samples.storage.definedBox', 'Caixa definida');
+}
+
+function buildSprecSummary(sample: SampleWithId, t: TranslatorFn) {
+  const sprec = (sample as any).sprec || {};
+  const matrixType = String((sample as any).matrix_type || sprec.matrixType || '').trim().toLowerCase();
+  const fields = matrixType === 'solid'
+    ? [sprec.sampleType, sprec.primaryContainer, sprec.warmIschemia, sprec.coldIschemia, sprec.fixationType, sprec.fixationTime, sprec.longTermStorage]
+    : [sprec.sampleType, sprec.primaryContainer, sprec.preCentrifugation, sprec.centrifugation, sprec.secondCentrifugation, sprec.postCentrifugationDelay, sprec.longTermStorage];
+  const code = String((sample as any).sprec_code || (sample as any).sprecCode || fields.map((part) => String(part || '').trim()).filter(Boolean).join('-')).trim();
+  if (!code) {
+    return t('samples.sprec.na', 'SPREC: N/A');
+  }
+
+  return `${t('samples.sprec.prefix', 'SPREC')} ${code}`;
 }
 
 export default function SamplesPageView({
@@ -138,20 +152,20 @@ export default function SamplesPageView({
           <div className="samples-search-panel">
             <Input
               label={t('samples.searchLabel')}
-              placeholder={scanMode ? 'Escaneie barcode/QR code e pressione pesquisar' : t('samples.searchPlaceholder')}
+              placeholder={scanMode ? t('samples.searchScanPlaceholder', 'Escaneie barcode/QR code e pressione pesquisar') : t('samples.searchPlaceholder')}
               value={search}
               onChange={(e) => onSearchChange(e.target.value)}
               data-testid="samples-search-input"
             />
             <p className="samples-search-hint">
               {scanMode
-                ? 'Modo leitura ativo: use o leitor de barcode ou QR code e depois pressione Pesquisar.'
+                ? t('samples.searchScanHint', 'Modo leitura ativo: use o leitor de barcode ou QR code e depois pressione Pesquisar.')
                 : t('samples.searchHint')}
             </p>
             <div className="samples-search-actions">
               <button type="button" className="samples-search-button" onClick={onSearchSubmit} data-testid="samples-search-button">
                 <Search size={15} />
-                Pesquisar
+                {t('samples.searchButton', 'Pesquisar')}
               </button>
               <button
                 type="button"
@@ -160,7 +174,7 @@ export default function SamplesPageView({
                 data-testid="samples-scan-button"
               >
                 <QrCode size={15} />
-                {scanMode ? 'Leitura ativa' : 'Barcode/QR'}
+                {scanMode ? t('samples.scanModeOn', 'Leitura ativa') : t('samples.scanModeOff', 'Barcode/QR')}
               </button>
             </div>
           </div>
@@ -176,12 +190,12 @@ export default function SamplesPageView({
           )}
           <div className="toolbar info">
             <strong>
-              {filteredSamples.length} {filteredSamples.length === 1 ? 'amostra exibida' : 'amostras exibidas'}
+              {filteredSamples.length} {filteredSamples.length === 1 ? t('samples.displayedOne', 'amostra exibida') : t('samples.displayedMany', 'amostras exibidas')}
             </strong>
             <p>
               {hasSearch
-                ? `Resultado da pesquisa para "${search.trim()}".`
-                : 'Lista completa de amostras carregadas no inventário.'}
+                ? t('samples.searchResultPrefix', 'Resultado da pesquisa para "{query}".').replace('{query}', search.trim())
+                : t('samples.inventoryDescription', 'Lista completa de amostras carregadas no inventário.')}
             </p>
           </div>
         </div>
@@ -202,10 +216,10 @@ export default function SamplesPageView({
               <th>{t('samples.tableHeaders.origin')}</th>
               <th>{t('samples.tableHeaders.barcode')}</th>
               <th>{t('samples.tableHeaders.status')}</th>
-              <th>TCLE</th>
+              <th>{t('samples.tableHeaders.consent', 'TCLE')}</th>
               <th>{t('samples.volume')}</th>
               <th>{t('samples.patientIdColumn')}</th>
-              <th>Armazenagem</th>
+              <th>{t('samples.tableHeaders.storage', 'Armazenagem')}</th>
               <th>{t('samples.tableHeaders.actions')}</th>
             </tr>
           </thead>
@@ -227,11 +241,11 @@ export default function SamplesPageView({
                 <td colSpan={10} style={{ textAlign: 'center', padding: '1.5rem' }}>
                   <div className="samples-empty-state">
                     <Search size={34} />
-                    <strong>{hasSearch ? 'Nenhuma amostra encontrada' : 'Nenhuma amostra carregada'}</strong>
+                    <strong>{hasSearch ? t('samples.empty.search', 'Nenhuma amostra encontrada') : t('samples.empty.loaded', 'Nenhuma amostra carregada')}</strong>
                     <p>
                       {hasSearch
-                        ? 'Tente outro código de barras, ID ou nome de paciente.'
-                        : 'Verifique a conexão com a API ou recarregue a listagem para exibir os registros.'}
+                        ? t('samples.empty.searchHint', 'Tente outro código de barras, ID ou nome de paciente.')
+                        : t('samples.empty.loadedHint', 'Verifique a conexão com a API ou recarregue a listagem para exibir os registros.')}
                     </p>
                   </div>
                 </td>
@@ -254,7 +268,12 @@ export default function SamplesPageView({
                           data-testid={`sample-checkbox-${sample.id}`}
                         />
                       </td>
-                      <td>{sample.sampleType || 'N/A'}</td>
+                      <td>
+                        <div>{sample.sampleType || 'N/A'}</div>
+                        <div style={{ fontSize: '0.78rem', color: 'var(--text-light)', marginTop: '0.2rem' }}>
+                          {buildSprecSummary(sample, t)}
+                        </div>
+                      </td>
                       <td>{sample.sampleOrigin || 'N/A'}</td>
                       <td style={{ fontFamily: 'monospace' }}>{sample.barcode || sample.sampleID || 'N/A'}</td>
                       <td>
@@ -272,7 +291,7 @@ export default function SamplesPageView({
                         </strong>
                       </td>
                       <td>{patientId ?? 'N/A'}</td>
-                      <td style={{ fontSize: '0.92rem' }}>{getStorageLabel(sample)}</td>
+                      <td style={{ fontSize: '0.92rem' }}>{getStorageLabel(sample, t)}</td>
                       <td>
                         <div className="samples-row-actions" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '0.4rem' }}>
                           {isQuarantined(sample) && (
@@ -284,7 +303,7 @@ export default function SamplesPageView({
                                 data-testid={`sample-resend-consent-button-${sample.id}`}
                                 title={sample.consentMessage || t('samples.consent.pendingTitle')}
                               >
-                                Enviar/Reenviar TCLE
+                                {t('samples.actions.resendConsent', 'Enviar/Reenviar TCLE')}
                               </Button>
                               <Button
                                 variant="secondary"
@@ -292,9 +311,9 @@ export default function SamplesPageView({
                                 disabled={!canEdit}
                                 onClick={() => onAttachExternalDocument(sample)}
                                 data-testid={`sample-attach-external-button-${sample.id}`}
-                                title={canEdit ? 'Anexar documentação externa e liberar amostra' : t('samples.editTooltip.noPermission')}
+                                title={canEdit ? t('samples.actions.attachExternalDocumentTitle', 'Anexar documentação externa e liberar amostra') : t('samples.editTooltip.noPermission')}
                               >
-                                Anexar documento externo
+                                {t('samples.actions.attachExternalDocument', 'Anexar documento externo')}
                               </Button>
                               <Button
                                 variant="secondary"
@@ -302,7 +321,7 @@ export default function SamplesPageView({
                                 onClick={() => onViewPending(sample)}
                                 data-testid={`sample-view-pending-button-${sample.id}`}
                               >
-                                Visualizar pendência
+                                {t('samples.actions.viewPending', 'Visualizar pendência')}
                               </Button>
                             </div>
                           )}
@@ -409,31 +428,31 @@ function renderSampleBadges(sample: SampleWithId, t: TranslatorFn) {
   const badges: Array<{ label: string; className: string; title: string }> = [];
 
   if (quarantineStatus === 'QUARANTINED' || availabilityStatus === 'BLOCKED') {
-    badges.push({ label: 'Quarentena', className: 'pending', title: quarantineReason || 'Amostra bloqueada aguardando regularização ética' });
+    badges.push({ label: t('samples.badges.quarantine', 'Quarentena'), className: 'pending', title: quarantineReason || t('samples.badges.quarantineTitle', 'Amostra bloqueada aguardando regularização ética') });
   }
 
   if (consentStatus === 'PENDING' || sample.canUse === false) {
-    badges.push({ label: 'TCLE pendente', className: 'pending', title: sample.consentMessage || t('samples.consent.pendingTitle') });
+    badges.push({ label: t('samples.badges.consentPending', 'TCLE pendente'), className: 'pending', title: sample.consentMessage || t('samples.consent.pendingTitle') });
   }
 
   if (quarantineReason === 'EXTERNAL_DOCUMENT_REQUIRED' || quarantineReason === 'TRANSFER_REVIEW_REQUIRED') {
-    badges.push({ label: 'Documento externo pendente', className: 'unknown', title: 'Documento externo necessário para liberação' });
+    badges.push({ label: t('samples.badges.externalDocPending', 'Documento externo pendente'), className: 'unknown', title: t('samples.badges.externalDocPendingTitle', 'Documento externo necessário para liberação') });
   }
 
   if (consentStatus === 'SIGNED') {
-    badges.push({ label: 'TCLE assinado', className: 'approved', title: 'TCLE assinado' });
+    badges.push({ label: t('samples.badges.consentSigned', 'TCLE assinado'), className: 'approved', title: t('samples.badges.consentSigned', 'TCLE assinado') });
   }
 
   if (consentStatus === 'EXTERNAL_ATTACHED' || consentStatus === 'WAIVED_TRANSFER') {
-    badges.push({ label: 'Documento anexado', className: 'approved', title: 'Documento externo anexado e validado' });
+    badges.push({ label: t('samples.badges.externalDocAttached', 'Documento anexado'), className: 'approved', title: t('samples.badges.externalDocAttachedTitle', 'Documento externo anexado e validado') });
   }
 
   if (quarantineStatus === 'RELEASED' || availabilityStatus === 'AVAILABLE') {
-    badges.push({ label: 'Liberada', className: 'approved', title: 'Disponível para uso autorizado' });
+    badges.push({ label: t('samples.badges.released', 'Liberada'), className: 'approved', title: t('samples.badges.releasedTitle', 'Disponível para uso autorizado') });
   }
 
   if (badges.length === 0) {
-    badges.push({ label: 'Liberada', className: 'approved', title: 'Sem bloqueios de quarentena' });
+    badges.push({ label: t('samples.badges.released', 'Liberada'), className: 'approved', title: t('samples.badges.noBlocks', 'Sem bloqueios de quarentena') });
   }
 
   return badges.map((badge) => (

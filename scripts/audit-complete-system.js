@@ -6,6 +6,8 @@ const { spawnSync } = require('child_process');
 
 const ROOT_DIR = path.resolve(__dirname, '..');
 const REPORTS_DIR = path.join(ROOT_DIR, 'reports', 'system-audit');
+const BACKEND_DIR = 'api/backend';
+const FRONTEND_DIR = 'frontend';
 
 function nowIso() {
   return new Date().toISOString();
@@ -101,13 +103,13 @@ function extractFunctionNames(content) {
 
 function auditFunctionCoverage() {
   const sourceRoots = [
-    path.join(ROOT_DIR, 'backend', 'src'),
-    path.join(ROOT_DIR, 'frontend', 'src')
+    path.join(ROOT_DIR, BACKEND_DIR, 'src'),
+    path.join(ROOT_DIR, FRONTEND_DIR, 'src')
   ];
 
   const testRoots = [
-    path.join(ROOT_DIR, 'backend', 'test'),
-    path.join(ROOT_DIR, 'frontend', 'src')
+    path.join(ROOT_DIR, BACKEND_DIR, 'tests'),
+    path.join(ROOT_DIR, FRONTEND_DIR, 'src')
   ];
 
   const sourceFiles = sourceRoots
@@ -214,7 +216,7 @@ function runAudit() {
   };
 
   registerCheck('Estrutura mínima do workspace', () => {
-    const requiredPaths = ['backend', 'frontend', 'scripts', 'README.md'];
+    const requiredPaths = [BACKEND_DIR, FRONTEND_DIR, 'scripts', 'README.md'];
     const missing = requiredPaths.filter((item) => !fs.existsSync(path.join(ROOT_DIR, item)));
     return {
       status: missing.length === 0 ? 'PASS' : 'FAIL',
@@ -225,9 +227,8 @@ function runAudit() {
 
   registerCheck('Scripts de auditoria existentes', () => {
     const requiredScripts = [
-      'backend/scripts/audit-database.js',
-      'backend/scripts/audit-frontend-backend.js',
-      'backend/scripts/check-fhir-barcode-coverage.js'
+      'scripts/audit-complete-system.js',
+      `${BACKEND_DIR}/scripts/audit-database.js`
     ];
 
     const missing = requiredScripts.filter((file) => !fs.existsSync(path.join(ROOT_DIR, file)));
@@ -239,15 +240,15 @@ function runAudit() {
   });
 
   registerCheck('Backend test:ci', () => {
-    return runCommand('npm', ['--prefix', 'backend', 'run', 'test:ci']);
+    return runCommand('npm', ['--prefix', BACKEND_DIR, 'run', 'test:ci']);
   });
 
   registerCheck('Frontend typecheck:core', () => {
-    return runCommand('npm', ['--prefix', 'frontend', 'run', 'typecheck:core']);
+    return runCommand('npm', ['--prefix', FRONTEND_DIR, 'run', 'typecheck:core']);
   }, { required: false });
 
   registerCheck('Frontend build', () => {
-    return runCommand('npm', ['--prefix', 'frontend', 'run', 'build']);
+    return runCommand('npm', ['--prefix', FRONTEND_DIR, 'run', 'build']);
   });
 
   registerCheck('Cobertura de funções por testes (análise estática)', () => {

@@ -14,6 +14,10 @@ function escapeRegex(value) {
   return normalizeText(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+function stripKnownCodePrefix(value) {
+  return normalizeText(value).replace(/^(ORPHA|OMIM):/i, '');
+}
+
 function normalizeOrphaCode(value) {
   const raw = normalizeText(value).replace(/^ORPHA:/i, '');
   return raw ? `ORPHA:${raw}` : '';
@@ -35,11 +39,22 @@ function splitCodes(value) {
     .filter(Boolean);
 }
 
+function normalizeReferenceList(value) {
+  if (Array.isArray(value)) return value;
+  if (value && typeof value === 'object') return [value];
+  return [];
+}
+
 function normalizeExternalReferences(item = {}) {
-  const refs = Array.isArray(item.ExternalReference) ? item.ExternalReference : [];
+  const refs = normalizeReferenceList(item.ExternalReference || item.externalReferences || item.externalReference);
+  const pickReference = (source) => {
+    const found = refs.find((ref) => String(ref?.Source || ref?.source || '').toUpperCase() === source);
+    return normalizeText(found?.Reference || found?.reference || found?.code || found?.id || found?.value);
+  };
+
   return {
-    cid: normalizeText(refs.find((ref) => String(ref?.Source || '').toUpperCase() === 'ICD-10')?.Reference),
-    omim: normalizeOmimCode(refs.find((ref) => String(ref?.Source || '').toUpperCase() === 'OMIM')?.Reference),
+    cid: normalizeText(item.Codigos_CID10 || item.cid10 || item.cid || item.icdCode || item.ICD10 || item.ICD_10 || pickReference('ICD-10')),
+    omim: normalizeOmimCode(item.OMIM || item.omim || item.omimCode || pickReference('OMIM')),
   };
 }
 
@@ -150,6 +165,10 @@ function dedupeRecords(records = [], limit = 20) {
 
 async function searchLocal(db, search, lang, limit) {
   const regex = new RegExp(escapeRegex(search), 'i');
+  const strippedSearch = stripKnownCodePrefix(search);
+  const codeRegex = strippedSearch && strippedSearch !== normalizeText(search)
+    ? new RegExp(escapeRegex(strippedSearch), 'i')
+    : null;
   const numericOrpha = getOrphaNumeric(search);
   const records = [];
 
@@ -159,12 +178,22 @@ async function searchLocal(db, search, lang, limit) {
       { OMIM: regex },
       { Codigos_CID10: regex },
       { Codigo_Tabulacao: regex },
+      { cid: regex },
+      { cid10: regex },
+      { icdCode: regex },
       { Descricao: regex },
+      { description: regex },
+      { label: regex },
       { namePt: regex },
       { nameEn: regex },
       { nameEs: regex },
       { aliases: regex },
       { synonyms: regex },
+      { alternativeNames: regex },
+      { 'relacoes.cid': regex },
+      { 'relacoes.cid10': regex },
+      { 'relacoes.omim': regex },
+      ...(codeRegex ? [{ ORPHA: codeRegex }, { OMIM: codeRegex }, { 'relacoes.omim': codeRegex }, { 'relacoes.orpha': codeRegex }] : []),
       ...(numericOrpha ? [{ ORPHA: new RegExp(`(^|[;,|])\\s*${escapeRegex(numericOrpha)}\\s*($|[;,|])`, 'i') }] : []),
     ],
   }).limit(limit).toArray();
@@ -181,14 +210,19 @@ async function searchLocal(db, search, lang, limit) {
       { code: regex },
       { orphaCode: regex },
       { ORPHA: regex },
+      { ORPHAcode: regex },
       { name: regex },
       { label: regex },
       { description: regex },
       { synonyms: regex },
       { aliases: regex },
+      { Codigos_CID10: regex },
+      { OMIM: regex },
       { 'relacoes.cid': regex },
       { 'relacoes.cid10': regex },
       { 'relacoes.omim': regex },
+      { 'relacoes.orpha': regex },
+      ...(codeRegex ? [{ code: codeRegex }, { ORPHA: codeRegex }, { ORPHAcode: codeRegex }, { OMIM: codeRegex }, { 'relacoes.omim': codeRegex }, { 'relacoes.orpha': codeRegex }] : []),
       ...(numericOrpha ? [{ code: numericOrpha }, { orphaCode: normalizeOrphaCode(numericOrpha) }] : []),
     ],
   };
@@ -335,16 +369,24 @@ router.get('/search', async (req, res) => {
   }
 
   try {
+    const localResults = await searchLocal(db, q, lang, limit);
+    if (localResults.length > 0) {
+      logger.info(`[ORPHANET] Busca concluida: queryLength=${q.length}, resultados=${localResults.length}, origem=local`);
+      return res.json(localResults);
+    }
+
     const remoteResults = await searchRemote(q, limit);
     if (remoteResults.length > 0) {
       const cacheResult = await upsertLocalCache(db, remoteResults);
       logger.info(`[ORPHANET] Busca externa cacheada: resultados=${remoteResults.length}, upserts=${cacheResult.cached}`);
+      const hydratedLocalResults = await searchLocal(db, q, lang, limit);
+      const results = dedupeRecords(hydratedLocalResults.length > 0 ? hydratedLocalResults : remoteResults, limit);
+      logger.info(`[ORPHANET] Busca concluida: queryLength=${q.length}, resultados=${results.length}, origem=remote+cache`);
+      return res.json(results);
     }
 
-    const localResults = await searchLocal(db, q, lang, limit);
-    const results = dedupeRecords([...remoteResults, ...localResults], limit);
-    logger.info(`[ORPHANET] Busca concluida: queryLength=${q.length}, resultados=${results.length}, origem=${remoteResults.length > 0 ? 'remote+local' : 'local'}`);
-    res.json(results);
+    logger.info(`[ORPHANET] Busca concluida: queryLength=${q.length}, resultados=0, origem=vazio`);
+    return res.json([]);
   } catch (error) {
     logger.warn(`[ORPHANET] Busca externa/local falhou; tentando fallback local: ${error.message}`);
     try {

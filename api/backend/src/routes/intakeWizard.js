@@ -7,6 +7,12 @@ const { generateSampleHash } = require('../services/MerkleService');
 const { getCollection } = require('../utils/collectionResolver');
 const auditLogger = require('../utils/auditLogger');
 const qualityDomain = require('../services/quality-domain.service');
+const sampleService = require('../services/sample.service');
+const StorageService = require('../services/storageService');
+
+const CRITICAL_SENSOR_STATUSES = ['maintenance', 'calibration', 'error', 'offline'];
+const BLOCKED_EQUIPMENT_STATUSES = ['maintenance', 'inactive', 'needs calibration', 'error', 'retired'];
+const BLOCKED_BOX_STATUSES = ['FULL', 'RETIRED', 'INACTIVE'];
 
 function normalizeString(value) {
   return String(value || '').trim();
@@ -23,6 +29,21 @@ function normalizeArray(value) {
 
 function normalizeObject(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+function buildIdVariants(...values) {
+  const variants = [];
+  values.forEach((value) => {
+    if (value === undefined || value === null || value === '') return;
+    const stringValue = String(value).trim();
+    if (!stringValue) return;
+    variants.push(stringValue);
+    const numericValue = Number(stringValue);
+    if (Number.isFinite(numericValue)) {
+      variants.push(numericValue);
+    }
+  });
+  return [...new Set(variants)];
 }
 
 function parseBirthDate(value) {
@@ -142,8 +163,6 @@ function buildSampleDocumentFromIntake(data = {}, matchedPatient = null) {
   const sample = normalizeObject(data?.sample);
   const consent = normalizeObject(data?.consent);
   const integrity = normalizeObject(data?.integrity);
-  const qualityCategoryRaw = normalizeString(sample.quality_category || sample.qualityCategory).toUpperCase();
-  const qualityCategory = ['A', 'B', 'C', 'D', 'E'].includes(qualityCategoryRaw) ? qualityCategoryRaw : '';
   const releaseStatusRaw = normalizeString(sample.release_status || sample.releaseStatus).toUpperCase();
   const releaseStatus = ['QUARANTINE', 'AVAILABLE', 'BLOCKED'].includes(releaseStatusRaw) ? releaseStatusRaw : 'QUARANTINE';
   const registrationDate = sample.registrationDate || sample.registerDate || new Date().toISOString();
@@ -163,31 +182,29 @@ function buildSampleDocumentFromIntake(data = {}, matchedPatient = null) {
     registerDate: new Date(registrationDate),
     quantity: normalizeNumber(sample.quantity, 0),
     unit: normalizeString(sample.unit) || null,
-    quality: normalizeString(sample.quality) || null,
-    // Prefer canonical RCS-GOV fields; keep legacy values in `legacy_compat`.
-    rcs_score: normalizeNumber(sample.rcs_score, null),
-    model_version: normalizeString(sample.model_version) || null,
-    matrix_type: normalizeString(sample.matrix_type || sample.sprec?.matrixType) || null,
-    governance_status: sample.governance_status === 0 || sample.governance_status === 1 ? sample.governance_status : null,
-    governance_failure_reasons: normalizeArray(sample.governance_failure_reasons),
-    governance_rule_codes: normalizeArray(sample.governance_rule_codes),
-    p_bio: normalizeNumber(sample.p_bio, null),
-    score_based_grade: normalizeString(sample.score_based_grade) || '',
-    final_grade: normalizeString(sample.final_grade) || '',
-    grade_route: normalizeString(sample.grade_route) || null,
-    axis_penalties: normalizeArray(sample.axis_penalties),
-    calculation_trace: normalizeObject(sample.calculation_trace),
-    rcs_evaluation: normalizeObject(sample.rcs_evaluation),
+    quality: 'UNKNOWN',
+    rcs_score: null,
+    model_version: null,
+    matrix_type: normalizeString(sample.matrix_type || sample.sprec_matrix_type || sample.sprec?.matrixType) || null,
+    governance_status: null,
+    governance_failure_reasons: [],
+    governance_rule_codes: [],
+    p_bio: null,
+    score_based_grade: '',
+    final_grade: '',
+    grade_route: null,
+    axis_penalties: [],
+    calculation_trace: {},
+    rcs_evaluation: {},
     linkedProject: normalizeString(sample.linkedProject || sample.linked_project) || 'INTAKE_WIZARD',
     currentStatus: normalizeString(sample.currentStatus) || 'Available',
     status: normalizeString(sample.status) || 'AVAILABLE',
     sprec: normalizeObject(sample.sprec),
     merkle_root: normalizeString(sample.merkle_root || integrity.merkle_root) || null,
-    // legacy penalty_log preserved for compatibility under legacy_compat
     legacy_compat: {
-      penalty_log: normalizeArray(sample.penalty_log || integrity.penalty_log),
-      quality_score: normalizeNumber(sample.quality_score, null),
-      quality_category: qualityCategory,
+      penalty_log: [],
+      quality_score: null,
+      quality_category: '',
     },
     tcle_id: normalizeString(consent.tcle_template_id || sample.selected_tcle || integrity.selected_tcle) || null,
     consentTemplateId: normalizeString(consent.tcle_template_id || sample.selected_tcle || integrity.selected_tcle) || null,
@@ -262,6 +279,197 @@ async function ensureConsentEmailSent(payload) {
   };
 }
 
+async function resolveConsentDecision(db, patient) {
+  const patientIDs = buildIdVariants(patient?.patientID, patient?._id?.toString()).map(String);
+  if (patientIDs.length === 0) {
+    const error = new Error('Paciente sem identificador para validar consentimento ativo.');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const consentsCollection = await getCollection(db, 'consents');
+  const activeConsent = await consentsCollection.findOne(
+    {
+      patientId: { $in: patientIDs },
+      status: 'ACTIVE',
+    },
+    {
+      sort: { signedAt: -1, updatedAt: -1, createdAt: -1 },
+    }
+  );
+
+  if (activeConsent) {
+    return {
+      active: true,
+      consentId: activeConsent._id || null,
+      patientId: activeConsent.patientId || null,
+      status: 'SIGNED',
+      releaseStatus: 'AVAILABLE',
+      quarantineStatus: 'RELEASED',
+      availabilityStatus: 'AVAILABLE',
+      quarantineReason: null,
+      governanceReason: null,
+    };
+  }
+
+  const revokedConsent = await consentsCollection.findOne(
+    {
+      patientId: { $in: patientIDs },
+      status: 'REVOKED',
+    },
+    {
+      sort: { revokedAt: -1, updatedAt: -1, createdAt: -1 },
+    }
+  );
+
+  if (revokedConsent) {
+    return {
+      active: false,
+      consentId: revokedConsent._id || null,
+      patientId: revokedConsent.patientId || null,
+      status: 'REVOKED',
+      releaseStatus: 'BLOCKED',
+      quarantineStatus: 'QUARANTINED',
+      availabilityStatus: 'BLOCKED',
+      quarantineReason: 'CONSENT_REVOKED',
+      governanceReason: 'Consentimento revogado.',
+    };
+  }
+
+  return {
+    active: false,
+    consentId: null,
+    patientId: null,
+    status: 'PENDING',
+    releaseStatus: 'BLOCKED',
+    quarantineStatus: 'QUARANTINED',
+    availabilityStatus: 'BLOCKED',
+    quarantineReason: 'CONSENT_PENDING',
+    governanceReason: 'Consentimento ainda não ativo/assinado.',
+  };
+}
+
+function isOperationalSensor(sensor) {
+  const status = normalizeString(sensor?.status || sensor?.maintenanceStatus || sensor?.operationalStatus).toLowerCase();
+  return !status || !CRITICAL_SENSOR_STATUSES.includes(status);
+}
+
+async function hasOperationalSensorForLocation(db, location) {
+  const sensorsCollection = db.collection('sensors');
+  const variants = buildIdVariants(location?.locationID, location?._id?.toString());
+  const sensors = await sensorsCollection.find({
+    $or: [
+      { locationId: { $in: variants } },
+      { locationID: { $in: variants } },
+    ],
+  }).limit(20).toArray();
+
+  return sensors.some(isOperationalSensor);
+}
+
+async function isEquipmentReadyForLocation(db, location) {
+  if (location?.equipmentID === undefined || location?.equipmentID === null || location?.equipmentID === '') {
+    return true;
+  }
+
+  const equipmentCollection = db.collection('equipment');
+  const equipment = await equipmentCollection.findOne({
+    equipmentID: { $in: buildIdVariants(location.equipmentID) },
+  });
+
+  if (!equipment) return false;
+  const status = normalizeString(equipment.status || equipment.maintenanceStatus || equipment.operationalStatus).toLowerCase();
+  return !status || !BLOCKED_EQUIPMENT_STATUSES.includes(status);
+}
+
+function findFirstAvailablePosition(box) {
+  const rows = Number(box?.dimension?.rows || 0);
+  const cols = Number(box?.dimension?.cols || 0);
+  if (rows < 1 || cols < 1) return null;
+
+  const occupancyGrid = box?.occupancyGrid || {};
+  for (let row = 0; row < rows; row += 1) {
+    for (let col = 1; col <= cols; col += 1) {
+      const position = `${String.fromCharCode(65 + row)}${col}`;
+      const occupied = typeof occupancyGrid.has === 'function'
+        ? occupancyGrid.has(position) && occupancyGrid.get(position)
+        : occupancyGrid[position];
+      if (!occupied) return position;
+    }
+  }
+
+  return null;
+}
+
+async function findAvailableStorageBox(db) {
+  const boxesCollection = db.collection('storageBoxes');
+  const boxes = await boxesCollection.find({}).sort({ name: 1, boxID: 1, _id: 1 }).limit(100).toArray();
+
+  return boxes.find((box) => {
+    const status = normalizeString(box?.status).toUpperCase();
+    if (status && BLOCKED_BOX_STATUSES.includes(status)) return false;
+    const capacity = Number(box?.dimension?.rows || 0) * Number(box?.dimension?.cols || 0);
+    if (capacity < 1) return false;
+    if (Number(box?.currentOccupancy || 0) >= capacity) return false;
+    return Boolean(findFirstAvailablePosition(box));
+  }) || null;
+}
+
+async function resolveAutomaticLocation(db) {
+  const locationsCollection = db.collection('locations');
+  const locations = await locationsCollection.find({}).sort({ locationID: 1, _id: 1 }).limit(200).toArray();
+
+  for (const location of locations) {
+    if (!Number.isFinite(Number(location?.locationID))) continue;
+    if (!(await isEquipmentReadyForLocation(db, location))) continue;
+    if (!(await hasOperationalSensorForLocation(db, location))) continue;
+
+    const box = await findAvailableStorageBox(db);
+    if (!box) {
+      const error = new Error('Não há localização física disponível com sensor operacional associado para esta amostra.');
+      error.statusCode = 409;
+      throw error;
+    }
+
+    return {
+      location,
+      box,
+      previewPosition: findFirstAvailablePosition(box),
+    };
+  }
+
+  const error = new Error('Não há localização física disponível com sensor operacional associado para esta amostra.');
+  error.statusCode = 422;
+  throw error;
+}
+
+function buildReadableStorageLocation(location, allocation, box) {
+  const storageLocation = allocation?.sampleLocation || {};
+  return [
+    location?.equipmentID ? `equipamento ${location.equipmentID}` : null,
+    location?.locationID ? `localização ${location.locationID}` : null,
+    box?.name || box?.boxID ? `box ${box.name || box.boxID}` : null,
+    storageLocation.position ? `posição ${storageLocation.position}` : null,
+  ].filter(Boolean).join(' / ');
+}
+
+async function assignSampleToBox(db, sampleId, boxId, neo4jDriver = null) {
+  const storageService = new StorageService(db, neo4jDriver);
+  return storageService.autoAssignSampleToBox(sampleId, boxId);
+}
+
+function buildLabelLinks(sample) {
+  const sampleId = normalizeString(sample?._id?.toString?.() || sample?._id || sample?.sampleID || sample?.barcode);
+  return {
+    sampleId,
+    jsonUrl: `/api/labels/samples/${encodeURIComponent(sampleId)}`,
+    zplUrl: `/api/labels/samples/${encodeURIComponent(sampleId)}?format=zpl`,
+    svgUrl: `/api/labels/samples/${encodeURIComponent(sampleId)}?format=svg`,
+    htmlUrl: `/api/labels/samples/${encodeURIComponent(sampleId)}?format=html`,
+    printJobUrl: `/api/labels/samples/${encodeURIComponent(sampleId)}/print-job`,
+  };
+}
+
 const resolverQualidadeMetodologica = qualityDomain.resolveMethodologicalQuality;
 function calcularQualidade(samplePayloadOrTempo, temperatura) {
   if (typeof samplePayloadOrTempo === 'number') {
@@ -295,18 +503,10 @@ async function handleIntakeWizard(req, res) {
       });
     }
 
-    const consentEmailOutcome = await ensureConsentEmailSent(data);
-    if (!consentEmailOutcome.ok) {
-      return res.status(consentEmailOutcome.status).json({
-        success: false,
-        error: consentEmailOutcome.message,
-        details: consentEmailOutcome.details || undefined,
-      });
-    }
-
-    const qualidade = resolverQualidadeMetodologica(data?.sample || {});
-
     const matchOutcome = await resolveMatchedPatient(db, data);
+    const consentDecision = await resolveConsentDecision(db, matchOutcome.patient);
+    const automaticLocation = await resolveAutomaticLocation(db);
+    const qualidade = resolverQualidadeMetodologica(data?.sample || {});
 
     auditLogger.init(db);
     await auditLogger.log({
@@ -331,8 +531,13 @@ async function handleIntakeWizard(req, res) {
       module: 'Cadastro'
     });
 
-    const samplesCollection = await getCollection(db, 'samples');
     const sampleToPersist = buildSampleDocumentFromIntake(data, matchOutcome.patient);
+    sampleToPersist.locationID = Number(automaticLocation.location.locationID);
+    const qualityAllowsRelease = qualidade.governance_status === 1 && qualidade.final_grade !== 'E';
+    const releaseStatus = consentDecision.active
+      ? (qualityAllowsRelease ? 'AVAILABLE' : 'QUARANTINE')
+      : consentDecision.releaseStatus;
+    const isReleased = releaseStatus === 'AVAILABLE';
     // Store canonical RCS-GOV results
     Object.assign(sampleToPersist, {
       model_version: qualidade.model_version,
@@ -348,7 +553,13 @@ async function handleIntakeWizard(req, res) {
       axis_penalties: qualidade.axis_penalties || [],
       calculation_trace: qualidade.calculation_trace || {},
       rcs_evaluation: qualidade,
-      release_status: qualidade.governance_status === 1 && qualidade.final_grade !== 'E' ? 'AVAILABLE' : 'QUARANTINE',
+      release_status: releaseStatus,
+      consentStatus: consentDecision.active ? 'SIGNED' : consentDecision.status,
+      quarantineStatus: isReleased ? 'RELEASED' : 'QUARANTINED',
+      quarantineReason: isReleased
+        ? null
+        : consentDecision.quarantineReason || (qualityAllowsRelease ? 'GOVERNANCE_BLOCKED' : 'QUALITY_GOVERNANCE_FAILURE'),
+      availabilityStatus: isReleased ? 'AVAILABLE' : 'BLOCKED',
     });
     // Preserve legacy artifacts under a compatibility namespace (non-decisional)
     sampleToPersist.legacy_compat = sampleToPersist.legacy_compat || {};
@@ -359,8 +570,33 @@ async function handleIntakeWizard(req, res) {
       sampleToPersist.sprec = qualidade.sprec;
     }
     sampleToPersist.merkle_root = generateSampleHash(sampleToPersist);
-    const insertResult = await samplesCollection.insertOne(sampleToPersist);
-    const createdSample = await samplesCollection.findOne({ _id: insertResult.insertedId });
+    const createdSample = await sampleService.createSample(db, sampleToPersist, {
+      auditInfo: {
+        userId: req.user?.id || req.user?._id || null,
+        userName: req.user?.name || req.user?.email || 'INTAKE_WIZARD',
+        userRole: req.user?.role || null,
+        ipAddress: req.ip || null,
+        userAgent: req.get('user-agent') || null,
+        notes: 'Cadastro integrado via Intake Wizard',
+      },
+    });
+
+    const allocation = await assignSampleToBox(
+      db,
+      createdSample._id,
+      automaticLocation.box._id,
+      req.app.locals.neo4jDriver || null
+    );
+
+    if (!allocation?.success) {
+      await sampleService.deleteSample(db, createdSample._id);
+      const error = new Error(allocation?.message || 'Falha ao alocar automaticamente a amostra em posição livre.');
+      error.statusCode = 409;
+      throw error;
+    }
+
+    const samplesCollection = await getCollection(db, 'samples');
+    const allocatedSample = await samplesCollection.findOne({ _id: createdSample._id }) || createdSample;
 
     const patientsCollection = await getCollection(db, 'patients');
     await patientsCollection.updateOne(
@@ -371,14 +607,27 @@ async function handleIntakeWizard(req, res) {
           updatedAt: new Date(),
         },
         $addToSet: {
-          linkedSampleIds: String(insertResult.insertedId),
+          linkedSampleIds: String(createdSample._id),
         },
       }
     );
 
+    const storageLocation = {
+      locationID: automaticLocation.location.locationID,
+      equipmentID: automaticLocation.location.equipmentID || null,
+      boxId: allocation.sampleLocation?.boxId || automaticLocation.box._id,
+      boxName: automaticLocation.box.name || automaticLocation.box.boxID || null,
+      position: allocation.sampleLocation?.position || automaticLocation.previewPosition || null,
+      readable: buildReadableStorageLocation(automaticLocation.location, allocation, automaticLocation.box),
+    };
+
+    const responseMessage = releaseStatus === 'AVAILABLE'
+      ? 'Cadastro integrado concluído com sucesso, amostra validada e localização automática atribuída.'
+      : `Cadastro integrado concluído com sucesso, mas a amostra permanece bloqueada: ${consentDecision.governanceReason || 'decisão de governança do backend'}`;
+
     return res.json({
       success: true,
-      message: 'Cadastro integrado concluído com sucesso e TCLE enviado por e-mail.',
+      message: responseMessage,
       qualidade: qualidade.final_grade ? `Grade ${qualidade.final_grade}` : 'Indeterminada',
       qualityAssessment: qualidade,
       patientMatch: {
@@ -387,15 +636,22 @@ async function handleIntakeWizard(req, res) {
         matchType: matchOutcome.matchType,
         patientID: matchOutcome.patient?.patientID || null,
       },
-      consentEmail: consentEmailOutcome.consentEmail,
+      consent: {
+        active: consentDecision.active,
+        status: consentDecision.status,
+        consentId: consentDecision.consentId || null,
+        patientId: consentDecision.patientId || null,
+        reason: consentDecision.governanceReason || null,
+      },
+      storageLocation,
+      label: buildLabelLinks(allocatedSample),
       data,
-      sample: createdSample || { _id: insertResult.insertedId, ...sampleToPersist },
+      sample: allocatedSample,
     });
   } catch (error) {
-    return res.status(502).json({
+    return res.status(error?.statusCode || error?.status || 500).json({
       success: false,
-      error: 'Falha ao enviar TCLE por e-mail. O cadastro não foi finalizado.',
-      details: error?.message || 'Erro desconhecido no envio de e-mail',
+      error: error?.message || 'Erro desconhecido ao finalizar o Intake Wizard.',
     });
   }
 }
