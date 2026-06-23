@@ -44,6 +44,7 @@ export default function Dashboard() {
   const { temperatures, loading: loadingTemperatures, viewControl } = useTemperature();
   const [consentQueueStats, setConsentQueueStats] = useState<{ waiting: number; delayed: number; active: number; failed: number; totalQueued: number; available: boolean } | null>(null);
   const [loadingConsentQueue, setLoadingConsentQueue] = useState(false);
+  // Telemetria demo mantida para visualizacao local enquanto sensores reais estao desativados.
   const [telemetryData, setTelemetryData] = useState<Array<{ time: string; sensor1: number; sensor2: number; sensor3: number }>>([
     { time: '10:01:00', sensor1: -80.4, sensor2: -79.3, sensor3: -81.1 },
     { time: '10:03:00', sensor1: -80.8, sensor2: -78.9, sensor3: -80.6 },

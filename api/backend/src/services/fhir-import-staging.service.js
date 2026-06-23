@@ -771,7 +771,7 @@ async function commitBatch(db, batchIdRaw) {
 
   let committed = 0;
   for (const record of records) {
-    if (record.status === STATUS.ERROR) {
+    if (record.status !== STATUS.READY_TO_COMMIT) {
       continue;
     }
 

@@ -54,7 +54,7 @@ type ReportFilterSection = {
   id: string;
   title: string;
   description: string;
-  fields: ReportFilterField[];
+  fields: readonly ReportFilterField[];
 };
 
 const CLINICAL_KEYS = new Set(['patients', 'samplesByPatient', 'results', 'sampleAnalysis']);

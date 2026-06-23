@@ -6,4 +6,5 @@ export interface SampleLabelData {
   equipmentLabel?: string;
   boxLabel?: string;
   date?: string | Date;
+  labelPrinted?: boolean;
 }

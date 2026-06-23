@@ -67,15 +67,15 @@
 	margin: 0;
 }
 
-.message {
+.assistant-page .message {
 	display: flex;
 }
 
-.message.user {
+.assistant-page .message.user {
 	justify-content: flex-end;
 }
 
-.message-content {
+.assistant-page .message-content {
 	max-width: min(780px, 95%);
 	border-radius: var(--radius-control);
 	border: 1px solid var(--border);
@@ -84,7 +84,7 @@
 	line-height: 1.45;
 }
 
-.message.user .message-content {
+.assistant-page .message.user .message-content {
 	background: var(--color-primary-soft);
 	color: var(--primary-dark);
 }
@@ -133,7 +133,7 @@
 	padding-left: 1.25rem;
 }
 
-.error-message {
+.assistant-page .error-message {
 	margin-top: 0.75rem;
 	border: 1px solid rgba(239, 68, 68, 0.22);
 	border-radius: var(--radius-control);

@@ -156,7 +156,12 @@ export const SampleInventory: React.FC = () => {
           {loading ? <div>Carregando inventário...</div> : null}
           {error ? <div style={{ color: '#dc2626' }}>{error}</div> : null}
 
-          <DataGrid rows={filteredRows} columns={columns} autoHeight getRowId={(row) => row.id || row._id || row.sampleID} />
+          <DataGrid
+            rows={filteredRows}
+            columns={columns}
+            autoHeight
+            getRowId={(row) => String(row.id || row._id || row.sampleID || '')}
+          />
         </Box>
       )}
 

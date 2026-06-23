@@ -166,7 +166,18 @@ function buildSampleDocumentFromIntake(data = {}, matchedPatient = null) {
     quality: normalizeString(sample.quality) || null,
     // Prefer canonical RCS-GOV fields; keep legacy values in `legacy_compat`.
     rcs_score: normalizeNumber(sample.rcs_score, null),
+    model_version: normalizeString(sample.model_version) || null,
+    matrix_type: normalizeString(sample.matrix_type || sample.sprec?.matrixType) || null,
+    governance_status: sample.governance_status === 0 || sample.governance_status === 1 ? sample.governance_status : null,
+    governance_failure_reasons: normalizeArray(sample.governance_failure_reasons),
+    governance_rule_codes: normalizeArray(sample.governance_rule_codes),
+    p_bio: normalizeNumber(sample.p_bio, null),
+    score_based_grade: normalizeString(sample.score_based_grade) || '',
     final_grade: normalizeString(sample.final_grade) || '',
+    grade_route: normalizeString(sample.grade_route) || null,
+    axis_penalties: normalizeArray(sample.axis_penalties),
+    calculation_trace: normalizeObject(sample.calculation_trace),
+    rcs_evaluation: normalizeObject(sample.rcs_evaluation),
     linkedProject: normalizeString(sample.linkedProject || sample.linked_project) || 'INTAKE_WIZARD',
     currentStatus: normalizeString(sample.currentStatus) || 'Available',
     status: normalizeString(sample.status) || 'AVAILABLE',
@@ -323,14 +334,27 @@ async function handleIntakeWizard(req, res) {
     const samplesCollection = await getCollection(db, 'samples');
     const sampleToPersist = buildSampleDocumentFromIntake(data, matchOutcome.patient);
     // Store canonical RCS-GOV results
-    sampleToPersist.rcs_score = qualidade.score;
-    sampleToPersist.final_grade = qualidade.final_grade || '';
+    Object.assign(sampleToPersist, {
+      model_version: qualidade.model_version,
+      matrix_type: qualidade.matrix_type,
+      governance_status: qualidade.governance_status,
+      governance_failure_reasons: qualidade.governance_failure_reasons,
+      governance_rule_codes: qualidade.governance_rule_codes || [],
+      p_bio: qualidade.p_bio,
+      rcs_score: qualidade.rcs_score,
+      score_based_grade: qualidade.score_based_grade,
+      final_grade: qualidade.final_grade || '',
+      grade_route: qualidade.grade_route,
+      axis_penalties: qualidade.axis_penalties || [],
+      calculation_trace: qualidade.calculation_trace || {},
+      rcs_evaluation: qualidade,
+      release_status: qualidade.governance_status === 1 && qualidade.final_grade !== 'E' ? 'AVAILABLE' : 'QUARANTINE',
+    });
     // Preserve legacy artifacts under a compatibility namespace (non-decisional)
     sampleToPersist.legacy_compat = sampleToPersist.legacy_compat || {};
-    sampleToPersist.legacy_compat.quality_score = qualidade.score;
-    sampleToPersist.legacy_compat.quality_category = qualidade.category || sampleToPersist.legacy_compat.quality_category || sampleToPersist.quality_category || '';
-    sampleToPersist.legacy_compat.penalty_log = qualidade.penaltyLog || sampleToPersist.legacy_compat.penalty_log || sampleToPersist.penalty_log || [];
-    sampleToPersist.legacy_compat.quarantineReason = qualidade.quarantineReason || null;
+    sampleToPersist.legacy_compat.quality_score = qualidade.rcs_score;
+    sampleToPersist.legacy_compat.quality_category = qualidade.final_grade || '';
+    sampleToPersist.legacy_compat.penalty_log = qualidade.axis_penalties || [];
     if (qualidade.sprec && Object.keys(qualidade.sprec).length > 0) {
       sampleToPersist.sprec = qualidade.sprec;
     }
@@ -355,19 +379,8 @@ async function handleIntakeWizard(req, res) {
     return res.json({
       success: true,
       message: 'Cadastro integrado concluído com sucesso e TCLE enviado por e-mail.',
-      qualidade: qualidade.label,
-      qualityAssessment: {
-        score: qualidade.score,
-        category: qualidade.category,
-        label: qualidade.label,
-        forcedQuarantine: qualidade.forcedQuarantine,
-        penaltyLog: qualidade.penaltyLog,
-        reasons: qualidade.reasons,
-        matrixType: qualidade.matrixType,
-        source: qualidade.source,
-        version: qualidade.version,
-        quarantineReason: qualidade.quarantineReason,
-      },
+      qualidade: qualidade.final_grade ? `Grade ${qualidade.final_grade}` : 'Indeterminada',
+      qualityAssessment: qualidade,
       patientMatch: {
         matched: !matchOutcome.created,
         created: matchOutcome.created,

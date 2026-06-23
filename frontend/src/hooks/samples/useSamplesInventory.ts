@@ -20,7 +20,7 @@ export function useSamplesInventory() {
       setError(null);
       try {
         const response = await sampleService.getAll();
-        const payload = response?.data?.data || response?.data || [];
+        const payload = response?.data || [];
         const items = Array.isArray(payload) ? payload : [];
         if (!active) return;
         setAllSamples(items.map((sample: Sample) => {

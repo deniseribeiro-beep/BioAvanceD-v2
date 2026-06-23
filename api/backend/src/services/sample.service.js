@@ -1,4 +1,4 @@
-const SampleModel = require('../models/Sample');
+const { SampleModel } = require('../models/Sample');
 const SampleMovementModel = require('../models/SampleMovement');
 const logger = require('../utils/logger');
 const { validatePatientID } = require('../utils/patientAnonymization');

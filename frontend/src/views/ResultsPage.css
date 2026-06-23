@@ -32,7 +32,7 @@
 }
 
 .import-empty,
-.empty-state {
+.results-table-card .empty-state {
 	border: 1px dashed var(--border);
 	border-radius: var(--radius-control);
 	background: #f8fafc;
@@ -75,9 +75,9 @@
 	color: var(--text-secondary);
 }
 
-.status-badge,
-.file-type-badge,
-.sample-tag {
+.results-table-card .status-badge,
+.results-table-card .file-type-badge,
+.results-table-card .sample-tag {
 	display: inline-flex;
 	align-items: center;
 	width: fit-content;
@@ -90,18 +90,18 @@
 	color: var(--text-secondary);
 }
 
-.status-badge.completed,
+.results-table-card .status-badge.completed,
 .metric-success {
 	color: var(--success);
 }
 
-.status-badge.failed,
+.results-table-card .status-badge.failed,
 .metric-failure {
 	color: var(--danger);
 }
 
-.status-badge.processing,
-.status-badge.pending {
+.results-table-card .status-badge.processing,
+.results-table-card .status-badge.pending {
 	color: var(--info);
 }
 
@@ -124,7 +124,7 @@
 }
 
 .import-error,
-.error-message {
+.results-table-card .error-message {
 	border: 1px solid rgba(239, 68, 68, 0.22);
 	border-radius: var(--radius-control);
 	background: #fff7f7;

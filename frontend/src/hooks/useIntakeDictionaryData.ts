@@ -93,10 +93,10 @@ export function useIntakeDictionaryData() {
         if (active) {
           setDictionaries(nextDictionaries);
         }
-      } catch (requestError) {
+      } catch (requestError: unknown) {
         if (active) {
           setDictionaries(createIntakeDictionarySet());
-          setError(requestError?.message || 'Não foi possível carregar as terminologias internas.');
+          setError(requestError instanceof Error ? requestError.message : 'Não foi possível carregar as terminologias internas.');
         }
       } finally {
         if (active) {

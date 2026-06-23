@@ -38,11 +38,11 @@
     "cleanup": "node ../scripts/cleanup-complete.js",
     "clean": "node ../scripts/cleanup-complete.js",
     "test:redis": "node scripts/test-redis-connection.js",
-    "test": "node tests/run-tests.js",
+    "test": "vitest run",
     "test:security": "node tests/unit/security.test.js",
     "test:consent": "node tests/unit/authConsent.test.js",
     "test:unit": "node tests/unit/run-tests.js && node tests/unit/authConsent.test.js",
-    "test:ci": "node tests/run-tests.js && node tests/integration/auditRoot.service.mock.test.js && npx vitest run tests/integration/sample.api.test.js tests/integration/sample.mode.contract.api.test.js tests/integration/users.register-sample.api.test.js tests/integration/compliance.verify-biomarker.api.test.js tests/compliance/compliance.contract.test.js && node tests/unit/run-tests.js && node tests/unit/authConsent.test.js && node tests/compliance/generate-compliance-evidence.js"
+    "test:ci": "vitest run && node tests/unit/security.test.js && node tests/unit/authConsent.test.js && node tests/compliance/generate-compliance-evidence.js"
   },
   "dependencies": {
     "@influxdata/influxdb-client": "latest",

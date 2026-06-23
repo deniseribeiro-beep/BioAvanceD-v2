@@ -348,6 +348,8 @@ test.describe('E2E - Patients and Biomarker Observations', () => {
     await page.getByTestId('fhir-import-save-quarantine-button').click();
     await expect.poll(() => fhirCommitCalls).toBe(1);
     await expect(page.getByTestId('fhir-import-status-table')).toContainText('QUARANTINED');
-    await expect(page.getByTestId('fhir-import-status-table')).toContainText('PENDING_CONSENT');
+    await expect(page.getByTestId('fhir-import-status-table')).toContainText('TCLE_SENT');
+    await expect(page.getByTestId('fhir-import-status-table')).toContainText('NEEDS_REVIEW');
+    await expect(page.getByTestId('fhir-import-status-table')).toContainText('BLOCKED');
   });
 });

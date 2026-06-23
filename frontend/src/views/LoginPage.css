@@ -43,7 +43,7 @@
 	gap: 0.9rem;
 }
 
-.error-message {
+.login-page .error-message {
 	background: #fff7f7;
 	border: 1px solid rgba(239, 68, 68, 0.22);
 	border-radius: var(--radius-control);
@@ -75,7 +75,7 @@
 	margin-top: 0.25rem;
 }
 
-.link-button {
+.login-page .link-button {
 	background: transparent !important;
 	border: none;
 	padding: 0;
@@ -86,7 +86,7 @@
 	box-shadow: none;
 }
 
-.link-button:hover {
+.login-page .link-button:hover {
 	color: var(--primary);
 }
 

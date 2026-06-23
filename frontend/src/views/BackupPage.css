@@ -64,9 +64,9 @@
 	margin: 0.85rem 0;
 }
 
-.status-message,
-.error-message,
-.warning-message {
+.backup-page .status-message,
+.backup-page .error-message,
+.backup-page .warning-message {
 	display: flex;
 	align-items: flex-start;
 	gap: 0.5rem;
@@ -75,20 +75,20 @@
 	font-weight: 600;
 }
 
-.status-message.creating {
+.backup-page .status-message.creating {
 	border: 1px solid rgba(37, 99, 235, 0.22);
 	background: rgba(37, 99, 235, 0.08);
 	color: var(--info);
 }
 
-.status-message.success {
+.backup-page .status-message.success {
 	border: 1px solid rgba(0, 158, 115, 0.22);
 	background: rgba(0, 158, 115, 0.1);
 	color: var(--success);
 }
 
-.status-message.error,
-.error-message {
+.backup-page .status-message.error,
+.backup-page .error-message {
 	border: 1px solid rgba(239, 68, 68, 0.22);
 	background: #fff7f7;
 	color: var(--danger);
@@ -202,13 +202,13 @@
 	word-break: break-word;
 }
 
-.warning-message {
+.backup-page .warning-message {
 	border: 1px solid rgba(245, 158, 11, 0.24);
 	background: #fffbeb;
 	color: #92400e;
 }
 
-.modal-actions {
+.backup-page .modal-actions {
 	display: flex;
 	justify-content: flex-end;
 	gap: 0.5rem;
@@ -232,7 +232,7 @@
 
 	.create-backup-button,
 	.refresh-button,
-	.modal-actions button {
+	.backup-page .modal-actions button {
 		width: 100%;
 		justify-content: center;
 	}

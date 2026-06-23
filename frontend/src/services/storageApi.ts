@@ -13,6 +13,7 @@ interface ValidatePositionResponse {
 interface AllocateResponse {
   success: boolean;
   data?: any;
+  sampleLocation?: { position?: string };
   error?: string;
   message?: string;
 }

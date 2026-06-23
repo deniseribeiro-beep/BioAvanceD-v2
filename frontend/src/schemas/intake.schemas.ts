@@ -56,10 +56,13 @@ export const intakeSchemaWithRules = intakeSchema.superRefine((data, ctx) => {
 });
 
 // Batch validation utility
-export function validateBatchIntake(dataArray) {
+type IntakeRecord = z.infer<typeof intakeSchema>;
+type BatchError = { index: string | number | undefined; message: string; path: PropertyKey[] };
+
+export function validateBatchIntake(dataArray: unknown[]) {
   const result = z.array(intakeSchemaWithRules).safeParse(dataArray);
-  const validRecords = [];
-  const errorReports = [];
+  const validRecords: IntakeRecord[] = [];
+  const errorReports: BatchError[] = [];
 
   if (result.success) {
     return { validRecords: result.data, errorReports };
@@ -76,9 +79,10 @@ export function validateBatchIntake(dataArray) {
   });
 
   // Filter out invalid records
-  dataArray.forEach((rec, i) => {
-    if (!errorReports.find(e => e.index === i)) {
-      validRecords.push(rec);
+  dataArray.forEach((record, index) => {
+    if (!errorReports.find((error) => error.index === index)) {
+      const parsed = intakeSchema.safeParse(record);
+      if (parsed.success) validRecords.push(parsed.data);
     }
   });
 

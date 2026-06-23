@@ -222,7 +222,7 @@ export default function ConsentForm({
                 doadorId={patientId}
                 persistirNoBackend={false}
                 testIdPrefix="consent-signature"
-                onAssinaturaConfirmada={({ assinaturaBase64 }) => {
+                onAssinaturaConfirmada={({ assinaturaBase64 }: { assinaturaBase64: string }) => {
                   setSignatureImageBase64(assinaturaBase64);
                   if (signatureName.trim().length === 0) {
                     setSignatureName(patientId);

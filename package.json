@@ -21,11 +21,17 @@
     "preview": "vite preview",
     "test:browser": "vitest",
     "test:browser:watch": "vitest --watch",
-    "test:browser:run": "vitest run"
+    "test:browser:run": "vitest run",
+    "test:unit": "vitest run --config vitest.config.ts --coverage tests/poc/unit",
+    "test:integration": "vitest run --config vitest.config.ts --coverage tests/poc/integration",
+    "test:e2e": "npm --prefix frontend run test:e2e -- --config ../playwright.config.ts",
+    "test:poc": "npm run test:unit && npm run test:integration && npm run test:e2e",
+    "test:poc:report": "npm run test:poc && node tests/poc/utils/generate-poc-report.js"
   },
   "devDependencies": {
     "@istanbuljs/nyc-config-babel": "^3.0.0",
     "@vitejs/plugin-react": "^5.1.4",
+    "@vitest/coverage-v8": "^4.1.2",
     "baseline-browser-mapping": "^2.9.16",
     "nyc": "^18.0.0",
     "supertest": "^7.2.2",

@@ -403,8 +403,8 @@ async function importFhirBundle(req, res) {
           if (qualityAssessment.final_grade === 'E') qualitySummary.gradeE += 1;
           if (qualityAssessment.governance_status === 0 || qualityAssessment.final_grade === 'E') qualitySummary.quarantinedTechnical += 1;
 
-          if (typeof qualityAssessment.score === 'number') {
-            scoreAccumulator += qualityAssessment.score;
+          if (typeof qualityAssessment.rcs_score === 'number') {
+            scoreAccumulator += qualityAssessment.rcs_score;
             scoreCount += 1;
           }
 
@@ -412,11 +412,22 @@ async function importFhirBundle(req, res) {
             patientId,
             specimenType: resource.type?.text || '',
             // Canonical RCS-GOV fields
-            rcs_score: parseNumberSafe(qualityAssessment.score, 0),
+            model_version: qualityAssessment.model_version,
+            matrix_type: qualityAssessment.matrix_type,
+            governance_status: qualityAssessment.governance_status,
+            governance_failure_reasons: qualityAssessment.governance_failure_reasons,
+            governance_rule_codes: qualityAssessment.governance_rule_codes || [],
+            p_bio: qualityAssessment.p_bio,
+            rcs_score: qualityAssessment.rcs_score,
+            score_based_grade: qualityAssessment.score_based_grade,
             final_grade: qualityAssessment.final_grade || '',
+            grade_route: qualityAssessment.grade_route,
+            axis_penalties: qualityAssessment.axis_penalties,
+            calculation_trace: qualityAssessment.calculation_trace,
+            rcs_evaluation: qualityAssessment,
             legacy_compat: {
-              quality_score: parseNumberSafe(qualityAssessment.score, 0),
-              quality_category: qualityAssessment.category,
+              quality_score: qualityAssessment.rcs_score,
+              quality_category: qualityAssessment.final_grade,
               penalty_log: penaltyLog,
             },
             release_status: qualityAssessment.governance_status === 1 && qualityAssessment.final_grade !== 'E' ? 'AVAILABLE' : 'QUARANTINE',
@@ -428,7 +439,7 @@ async function importFhirBundle(req, res) {
           logger.info('[FHIR_IMPORT] Specimen processado', {
             resourceId: resource.id || null,
             patientLinked: Boolean(patientId),
-            quality_category: sampleDoc.quality_category,
+            final_grade: sampleDoc.final_grade,
             release_status: sampleDoc.release_status,
           });
           break;

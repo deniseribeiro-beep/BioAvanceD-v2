@@ -21,6 +21,22 @@ const METADATA_AXES = Object.freeze(['sampleType', 'primaryContainer']);
 const UNKNOWN_CODES = new Set(['X', 'XXX', 'UNKNOWN', 'UNK']);
 const OTHER_CODES = new Set(['Z', 'ZZZ', 'OTHER']);
 
+const GOVERNANCE_RULE_BY_REASON = Object.freeze({
+  'Missing or invalid matrix type': 'MISSING_CRITICAL_METADATA',
+  'Missing critical metadata': 'MISSING_CRITICAL_METADATA',
+  'Unknown SPREC code': 'UNKNOWN_SPREC_CODE',
+  'Invalid SPREC code': 'INVALID_SPREC_CODE',
+  'SPREC code incompatible with matrix or axis': 'MATRIX_INCOMPATIBLE_CODE',
+  'Other SPREC code without validated local interpretation': 'OTHER_WITHOUT_LOCAL_INTERPRETATION',
+  'Insufficient documentation': 'INSUFFICIENT_DOCUMENTATION',
+  'Insufficient traceability': 'INSUFFICIENT_TRACEABILITY',
+  'Missing required monitoring': 'MISSING_REQUIRED_MONITORING',
+  'Semantic incompatibility between matrix, SPREC axis, event, or context': 'SEMANTIC_INCOMPATIBILITY',
+  'Missing analytical workflow context': 'MISSING_ANALYTICAL_WORKFLOW',
+  'Analytical workflow context does not match seeded severity mapping': 'SEMANTIC_INCOMPATIBILITY',
+  'Not scored SPREC condition': 'NOT_SCORED',
+});
+
 function normalizeString(value) {
   return String(value ?? '').trim();
 }
@@ -86,8 +102,8 @@ class RcsCertificationService {
 
     const axisPenalties = [];
     const calculationTrace = {
-      model_code: referenceData.model_code,
-      sprec_version: referenceData.sprec_version,
+      model_code: this.data.model_code,
+      sprec_version: this.data.sprec_version,
       formula: 'RCS = 100 - Pbio; Pbio = sum(axis_weight * severity)',
       axes: [],
       sources: {
@@ -104,11 +120,17 @@ class RcsCertificationService {
       const severity = this.resolveSeverity(samplePayload, matrixType, axis.axis_code, code);
 
       if (!severity || severity.is_scored !== true || severity.severity_value === null) {
+        const failureReason = severity?.failure_reason || 'Not scored SPREC condition';
         return this.governanceFailureResult(
           matrixType,
-          [severity?.failure_reason || 'Not scored SPREC condition'],
+          [failureReason],
           sprec,
-          [...governance.trace, { axis_code: axis.axis_code, sprec_code: code, severity }]
+          [...governance.trace, {
+            axis_code: axis.axis_code,
+            sprec_code: code,
+            rule_code: this.ruleCodeForReason(failureReason),
+            severity,
+          }]
         );
       }
 
@@ -134,10 +156,11 @@ class RcsCertificationService {
     const scoreBasedGrade = this.gradeFromScore(rcsScore);
 
     return {
-      model_version: referenceData.model_code,
+      model_version: this.data.model_code,
       matrix_type: matrixType,
       governance_status: 1,
       governance_failure_reasons: [],
+      governance_rule_codes: [],
       p_bio: pBio,
       rcs_score: rcsScore,
       score_based_grade: scoreBasedGrade,
@@ -188,6 +211,7 @@ class RcsCertificationService {
 
     if (!matrixType || !AXES[matrixType]) {
       reasons.push('Missing or invalid matrix type');
+      trace.push({ rule_code: 'MISSING_CRITICAL_METADATA', reason: 'Missing or invalid matrix type' });
     }
 
     if (matrixType && AXES[matrixType]) {
@@ -197,42 +221,46 @@ class RcsCertificationService {
         const code = sprec[field];
         if (!code) {
           reasons.push('Missing critical metadata');
-          trace.push({ field, axis_code: axisCode, reason: 'Missing critical metadata' });
+          trace.push({ field, axis_code: axisCode, rule_code: 'MISSING_CRITICAL_METADATA', reason: 'Missing critical metadata' });
           continue;
         }
         if (UNKNOWN_CODES.has(code)) {
           reasons.push('Unknown SPREC code');
-          trace.push({ field, axis_code: axisCode, sprec_code: code, reason: 'Unknown SPREC code' });
+          trace.push({ field, axis_code: axisCode, sprec_code: code, rule_code: 'UNKNOWN_SPREC_CODE', reason: 'Unknown SPREC code' });
           continue;
         }
         if (OTHER_CODES.has(code)) {
           reasons.push('Other SPREC code without validated local interpretation');
-          trace.push({ field, axis_code: axisCode, sprec_code: code, reason: 'Other SPREC code without validated local interpretation' });
+          trace.push({ field, axis_code: axisCode, sprec_code: code, rule_code: 'OTHER_WITHOUT_LOCAL_INTERPRETATION', reason: 'Other SPREC code without validated local interpretation' });
           continue;
         }
         if (!/^[A-Z0-9]{1,12}$/.test(code)) {
           reasons.push('Invalid SPREC code');
-          trace.push({ field, axis_code: axisCode, sprec_code: code, reason: 'Invalid SPREC code' });
+          trace.push({ field, axis_code: axisCode, sprec_code: code, rule_code: 'INVALID_SPREC_CODE', reason: 'Invalid SPREC code' });
           continue;
         }
         if (!this.catalogHas(matrixType, axisCode || field, code)) {
           reasons.push('SPREC code incompatible with matrix or axis');
-          trace.push({ field, axis_code: axisCode, sprec_code: code, reason: 'SPREC code incompatible with matrix or axis' });
+          trace.push({ field, axis_code: axisCode, sprec_code: code, rule_code: 'MATRIX_INCOMPATIBLE_CODE', reason: 'SPREC code incompatible with matrix or axis' });
         }
       }
     }
 
     if (payload.documentationSufficient === false || payload.documentation_insufficient === true) {
       reasons.push('Insufficient documentation');
+      trace.push({ rule_code: 'INSUFFICIENT_DOCUMENTATION', reason: 'Insufficient documentation' });
     }
     if (payload.traceabilitySufficient === false || payload.traceability_insufficient === true || payload.traceabilityBroken === true) {
       reasons.push('Insufficient traceability');
+      trace.push({ rule_code: 'INSUFFICIENT_TRACEABILITY', reason: 'Insufficient traceability' });
     }
     if ((payload.monitoringRequired === true || payload.monitoring_required === true) && !(payload.monitoringPresent === true || payload.monitoring_present === true)) {
       reasons.push('Missing required monitoring');
+      trace.push({ rule_code: 'MISSING_REQUIRED_MONITORING', reason: 'Missing required monitoring' });
     }
     if (payload.semanticIncompatibility === true || payload.semantic_incompatibility === true) {
       reasons.push('Semantic incompatibility between matrix, SPREC axis, event, or context');
+      trace.push({ rule_code: 'SEMANTIC_INCOMPATIBILITY', reason: 'Semantic incompatibility between matrix, SPREC axis, event, or context' });
     }
 
     return {
@@ -322,12 +350,25 @@ class RcsCertificationService {
     return threshold.grade;
   }
 
+  ruleCodeForReason(reason) {
+    const ruleCode = GOVERNANCE_RULE_BY_REASON[reason] || 'NOT_SCORED';
+    const seeded = this.data.governanceRules.some((rule) => rule.rule_code === ruleCode);
+    if (!seeded) throw new Error(`Missing seeded governance rule: ${ruleCode}`);
+    return ruleCode;
+  }
+
   governanceFailureResult(matrixType, reasons = [], sprec = {}, trace = []) {
+    const governanceRuleCodes = unique(reasons.map((reason) => this.ruleCodeForReason(reason)));
+    const normalizedTrace = trace.map((item) => ({
+      ...item,
+      rule_code: item.rule_code || this.ruleCodeForReason(item.reason || 'Not scored SPREC condition'),
+    }));
     return {
-      model_version: referenceData.model_code,
+      model_version: this.data.model_code,
       matrix_type: matrixType,
       governance_status: 0,
       governance_failure_reasons: unique(reasons),
+      governance_rule_codes: governanceRuleCodes,
       p_bio: null,
       rcs_score: null,
       score_based_grade: null,
@@ -335,34 +376,15 @@ class RcsCertificationService {
       grade_route: 'Governance failure',
       axis_penalties: [],
       calculation_trace: {
-        model_code: referenceData.model_code,
-        sprec_version: referenceData.sprec_version,
+        model_code: this.data.model_code,
+        sprec_version: this.data.sprec_version,
         formula: 'RCS = 100 - Pbio; governance failure is non-compensable',
         sprec,
-        governance_trace: trace,
+        governance_trace: normalizedTrace,
       },
     };
   }
 
-  buildDeprecatedCompatibility(result) {
-    return {
-      score: result.rcs_score,
-      category: result.final_grade,
-      label: result.final_grade ? `Grade ${result.final_grade}` : 'Indeterminada',
-      forcedQuarantine: result.governance_status === 0 || result.final_grade === 'E',
-      penaltyLog: result.axis_penalties.map((item) => `${item.axis_code}:${item.sprec_code}:+${item.penalty}`),
-      decisionStatus: result.governance_status === 0 || result.final_grade === 'E' ? 'quarantine' : 'available',
-      version: result.model_version,
-      source: 'rcs-gov-certification',
-      rcsCertification: result,
-      governance: {
-        gate: result.governance_status,
-        Ggov: result.governance_status,
-        passed: result.governance_status === 1,
-        reasons: result.governance_failure_reasons,
-      },
-    };
-  }
 }
 
 module.exports = new RcsCertificationService();

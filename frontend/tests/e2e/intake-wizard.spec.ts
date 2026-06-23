@@ -274,7 +274,10 @@ test('finalização: gera label de etiqueta e permite impressão', async ({ page
   await completeStep2(page);
 
   await page.getByTestId('wizard-diagnosis-search').fill('ORPHA:324');
-  await page.getByTestId('wizard-diagnosis-option-0').click();
+  await Promise.all([
+    page.waitForResponse((response) => response.url().includes('/dictionary/suggest') && response.ok()),
+    page.getByTestId('wizard-diagnosis-option-0').click(),
+  ]);
   await page.getByTestId('wizard-treatment-status').selectOption('NAIVE');
 
   await expect(page.getByTestId('wizard-submit-button')).toBeEnabled();

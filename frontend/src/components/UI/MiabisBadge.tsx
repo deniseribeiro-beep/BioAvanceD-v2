@@ -1,7 +1,13 @@
 import React from 'react';
 import { CheckCircle, AlertTriangle } from 'lucide-react';
 
-export default function MiabisBadge({ result }) {
+type MiabisResult = {
+  isCompliant: boolean;
+  missingFields?: string[];
+  consentStatus?: string;
+};
+
+export default function MiabisBadge({ result }: { result?: MiabisResult | null }) {
   if (!result) return null;
   const { isCompliant, missingFields = [], consentStatus } = result;
   if (isCompliant) {
@@ -19,7 +25,7 @@ export default function MiabisBadge({ result }) {
         <span>MIABIS: Correções necessárias para compartilhamento internacional</span>
       </div>
       <ul style={{ margin: 0, paddingLeft: 24, color: '#92400e', fontWeight: 400, fontSize: 14 }}>
-        {missingFields.map(f => <li key={f}>{f}</li>)}
+        {missingFields.map((field) => <li key={field}>{field}</li>)}
         {consentStatus !== 'valid' && <li>Consentimento inválido ou ausente</li>}
       </ul>
     </div>

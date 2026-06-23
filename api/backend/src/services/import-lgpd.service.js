@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const logger = require('../utils/logger');
 const PatientModel = require('../models/Patient');
-const SampleModel = require('../models/Sample');
+const { SampleModel } = require('../models/Sample');
 const patientService = require('./patient.service');
 const notificationService = require('./notification.service');
 const { generateUniquePatientID } = require('../utils/patientAnonymization');
@@ -1259,8 +1259,19 @@ class ImportLGPDService {
       registrationDate: registerDate,
       quantity: row.quantity ? parseFloat(row.quantity) : null,
       quality: parseQualityMIABIS(row.quality), // Valida e converte para id MIABIS canônico
-      rcs_score: canonicalQualityAssessment.score,
+      model_version: canonicalQualityAssessment.model_version,
+      matrix_type: canonicalQualityAssessment.matrix_type,
+      governance_status: canonicalQualityAssessment.governance_status,
+      governance_failure_reasons: canonicalQualityAssessment.governance_failure_reasons || [],
+      governance_rule_codes: canonicalQualityAssessment.governance_rule_codes || [],
+      p_bio: canonicalQualityAssessment.p_bio,
+      rcs_score: canonicalQualityAssessment.rcs_score,
+      score_based_grade: canonicalQualityAssessment.score_based_grade,
       final_grade: canonicalQualityAssessment.final_grade || '',
+      grade_route: canonicalQualityAssessment.grade_route,
+      axis_penalties: canonicalQualityAssessment.axis_penalties || [],
+      calculation_trace: canonicalQualityAssessment.calculation_trace || {},
+      rcs_evaluation: canonicalQualityAssessment,
       legacy_compat: {
         quality_score: externalQualityAssessment.score,
         quality_category: externalQualityAssessment.category || '',

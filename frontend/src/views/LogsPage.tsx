@@ -398,7 +398,7 @@ export default function LogsPage() {
         : await logService.exportCSV(queryFilters);
 
       // Verifica se a resposta é realmente um blob ou se é JSON de erro
-      const contentType = response.headers['content-type'] || '';
+      const contentType = String(response.headers['content-type'] || '');
       
       // Se for JSON, pode ser uma resposta de erro
       if (contentType.includes('application/json')) {
@@ -1135,7 +1135,7 @@ export default function LogsPage() {
                               {t('logs.filters.clearFilters')}
                             </Button>
                           )}
-                          <Button variant="secondary" onClick={loadLogs}>
+                          <Button variant="secondary" onClick={() => void loadLogs()}>
                             Recarregar
                           </Button>
                         </div>

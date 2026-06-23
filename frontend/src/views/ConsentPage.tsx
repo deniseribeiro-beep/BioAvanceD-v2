@@ -44,7 +44,7 @@ export default function ConsentPage() {
         const [patientResponse, templateResponse] = await Promise.all([
           patientService.getById(patientId),
           selectedTemplateId
-            ? consentService.getAllPolicies()
+            ? consentService.getTemplateById(selectedTemplateId)
             : consentService.getActiveTemplate()
         ]);
 
@@ -53,29 +53,7 @@ export default function ConsentPage() {
 
         let resolvedTemplate: ConsentTemplate | null = null;
         if (selectedTemplateId) {
-          const policies = (templateResponse as any)?.data?.data;
-          const selectedPolicy = (Array.isArray(policies) ? policies : []).find(
-            (policy: ConsentPolicy) => String(policy?._id || '') === selectedTemplateId
-          );
-
-          if (selectedPolicy) {
-            resolvedTemplate = {
-              _id: selectedPolicy._id,
-              title: selectedPolicy.title,
-              content: selectedPolicy.htmlContent,
-              htmlContent: selectedPolicy.htmlContent,
-              version: selectedPolicy.version,
-              caae: selectedPolicy.caae,
-              active: selectedPolicy.active,
-              permissions: Array.isArray(selectedPolicy.granularPermissions) && selectedPolicy.granularPermissions.length > 0
-                ? selectedPolicy.granularPermissions.map((permission: any) => ({
-                    key: permission.key,
-                    label: permission.label,
-                    required: Boolean(permission.required)
-                  }))
-                : []
-            } as ConsentTemplate;
-          }
+          resolvedTemplate = (templateResponse as any)?.data?.data || null;
         } else {
           resolvedTemplate = (templateResponse as any)?.data?.data || null;
         }

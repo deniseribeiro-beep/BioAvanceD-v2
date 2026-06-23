@@ -79,7 +79,7 @@
 	margin: 0;
 }
 
-.status-badge {
+.user-security-page .status-badge {
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
@@ -90,23 +90,23 @@
 	border: 1px solid transparent;
 }
 
-.status-ativo,
-.status-active,
-.status-success {
+.user-security-page .status-ativo,
+.user-security-page .status-active,
+.user-security-page .status-success {
 	background: rgba(0, 158, 115, 0.14);
 	color: var(--success);
 	border-color: rgba(0, 158, 115, 0.22);
 }
 
-.status-inativo,
-.status-inactive,
-.status-danger {
+.user-security-page .status-inativo,
+.user-security-page .status-inactive,
+.user-security-page .status-danger {
 	background: rgba(239, 68, 68, 0.12);
 	color: var(--danger);
 	border-color: rgba(239, 68, 68, 0.22);
 }
 
-.status-warning {
+.user-security-page .status-warning {
 	margin-top: 0.75rem;
 	display: inline-flex;
 	align-items: center;
@@ -264,7 +264,7 @@
 	box-shadow: var(--shadow-card);
 }
 
-.section-header {
+.user-security-page .section-header {
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
@@ -273,7 +273,7 @@
 	margin-bottom: 0.75rem;
 }
 
-.section-header h2 {
+.user-security-page .section-header h2 {
 	display: inline-flex;
 	align-items: center;
 	gap: 0.5rem;
@@ -394,7 +394,7 @@
 	min-height: 2.25rem;
 }
 
-.empty-state {
+.user-security-page .empty-state {
 	display: grid;
 	justify-items: center;
 	gap: 0.5rem;
@@ -403,17 +403,17 @@
 	text-align: center;
 }
 
-.modal-content {
+.user-security-page .modal-content {
 	display: grid;
 	gap: 0.9rem;
 }
 
-.form-group {
+.user-security-page .form-group {
 	display: grid;
 	gap: 0.4rem;
 }
 
-.form-group label {
+.user-security-page .form-group label {
 	color: var(--text);
 	font-weight: 700;
 }
@@ -452,7 +452,7 @@
 	text-align: center;
 }
 
-.modal-actions {
+.user-security-page .modal-actions {
 	display: flex;
 	justify-content: flex-end;
 	gap: 0.5rem;
@@ -506,7 +506,7 @@
 	.recovery-actions button,
 	.password-actions button,
 	.phone-actions button,
-	.modal-actions button {
+	.user-security-page .modal-actions button {
 		flex: 1 1 auto;
 	}
 }

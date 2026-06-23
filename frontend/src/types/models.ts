@@ -173,6 +173,7 @@ export interface RcsEvaluation {
   matrix_type: 'fluid' | 'solid' | string;
   governance_status: 0 | 1 | number | null;
   governance_failure_reasons: string[];
+  governance_rule_codes?: string[];
   p_bio: number | null;
   rcs_score: number | null;
   score_based_grade: 'A' | 'B' | 'C' | 'D' | 'E' | string | null;
@@ -198,6 +199,7 @@ export interface Sample {
   matrix_type?: 'fluid' | 'solid' | string;
   governance_status?: 0 | 1 | number | null;
   governance_failure_reasons?: string[];
+  governance_rule_codes?: string[];
   p_bio?: number | null;
   rcs_score?: number | null;
   score_based_grade?: 'A' | 'B' | 'C' | 'D' | 'E' | string | null;
@@ -213,7 +215,7 @@ export interface Sample {
   consentStatus?: 'PENDING' | 'SIGNED' | 'EXTERNAL_ATTACHED' | 'WAIVED_TRANSFER' | 'NOT_REQUIRED' | string;
   quarantineStatus?: 'QUARANTINED' | 'RELEASED' | string;
   quarantineReason?: 'CONSENT_PENDING' | 'EXTERNAL_DOCUMENT_REQUIRED' | 'TRANSFER_REVIEW_REQUIRED' | null | string;
-  availabilityStatus?: 'BLOCKED' | 'AVAILABLE' | string;
+  availabilityStatus?: 'BLOCKED' | 'AVAILABLE' | 'Disponível' | 'Parcialmente Disponível' | 'Indisponível' | string;
   importBatchId?: string | null;
   importedAt?: Date | string | null;
   importedBy?: string | null;
@@ -254,7 +256,6 @@ export interface Sample {
   volumeCurrent?: number; // Volume atual
   checked?: boolean; // Flag opcional para seleção em UI (fallback a arrays de IDs)
   // Status de disponibilidade
-  availabilityStatus?: 'Disponível' | 'Parcialmente Disponível' | 'Indisponível';
   currentStatus?: 'Available' | 'PartiallyWithdrawn' | 'TotallyWithdrawn' | 'Withdrawn' | 'Expired' | 'Destroyed' | 'Unusable';
   status?: 'AVAILABLE' | 'QUARANTINED' | 'PARTIAL' | 'DEPLETED' | 'UNAVAILABLE';
   // Campos de retirada
@@ -451,6 +452,7 @@ export interface ClinicalUnit {
 
 export interface User {
   _id?: string; // MongoDB ID
+  userID?: string;
   id: number;
   name: string;
   email: string;
@@ -603,6 +605,7 @@ export interface Sensor {
 export interface Policy {
   _id?: string; // MongoDB ID
   policyID: number;
+  policyName?: string;
   minThreshold: number;
   maxThreshold: number;
   targetTemperature: number;
