@@ -184,7 +184,7 @@ router.get('/samples/:sampleId', authenticate, requirePermission('createSample')
       },
     });
   } catch (error) {
-    return res.status(500).json({ success: false, error: error?.message || 'Falha ao gerar etiqueta.' });
+    return res.status(error?.statusCode || error?.status || 500).json({ success: false, error: error?.message || 'Falha ao gerar etiqueta.' });
   }
 });
 
@@ -212,7 +212,7 @@ router.get('/samples/:sampleId/print-job', authenticate, requirePermission('crea
       },
     });
   } catch (error) {
-    return res.status(500).json({ success: false, error: error?.message || 'Falha ao preparar job de impressão.' });
+    return res.status(error?.statusCode || error?.status || 500).json({ success: false, error: error?.message || 'Falha ao preparar job de impressão.' });
   }
 });
 
