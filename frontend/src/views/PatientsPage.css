@@ -1,40 +1,51 @@
 .patients-page {
 	display: grid;
 	gap: 1rem;
-	background:
-		radial-gradient(circle at top right, rgba(37, 99, 235, 0.08), transparent 24%),
-		radial-gradient(circle at bottom left, rgba(15, 118, 110, 0.08), transparent 22%);
+	background: transparent;
 }
 
 .patients-page .page-header {
-	padding: 1rem 1.1rem;
-	border-radius: 1.3rem;
-	border: 1px solid rgba(15, 23, 42, 0.08);
-	background: linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(240, 253, 250, 0.86));
-	box-shadow: 0 18px 40px rgba(15, 23, 42, 0.06);
+	padding: 1.25rem 1.5rem;
+	border-radius: var(--radius-card);
+	border: 1px solid var(--border);
+	background: var(--surface);
+	box-shadow: var(--shadow-card);
 }
 
 .patients-page .page-title {
-	font-size: clamp(1.8rem, 2.6vw, 2.4rem);
-	letter-spacing: -0.04em;
+	font-size: 1.75rem;
+	letter-spacing: 0;
 	margin: 0;
-	color: #0f172a;
+	color: var(--color-navy);
 }
 
 .patients-page .page-subtitle {
 	margin: 0.35rem 0 0;
 	max-width: 72ch;
-	color: rgba(15, 23, 42, 0.72);
+	color: var(--text-secondary);
 	line-height: 1.6;
 }
 
 .patients-page .card,
 .patients-page .table-card,
 .patients-page .section-card {
-	border: 1px solid rgba(15, 23, 42, 0.08);
-	border-radius: 1rem;
-	background: rgba(255, 255, 255, 0.94);
-	box-shadow: 0 14px 28px rgba(15, 23, 42, 0.05);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-card);
+	background: var(--surface);
+	box-shadow: var(--shadow-card);
+}
+
+.patients-page .table-container {
+	border-radius: var(--radius-card);
+}
+
+.patients-page .table {
+	min-width: 620px;
+}
+
+.patients-page .table th,
+.patients-page .table td {
+	vertical-align: middle;
 }
 
 .patients-page .filters-row,
@@ -56,15 +67,15 @@
 .patients-page .empty-state {
 	padding: 2rem 1.25rem;
 	text-align: center;
-	color: rgba(15, 23, 42, 0.68);
-	border-radius: 1rem;
-	background: rgba(255, 255, 255, 0.9);
-	border: 1px solid rgba(15, 23, 42, 0.08);
+	color: var(--text-secondary);
+	border-radius: var(--radius-card);
+	background: var(--surface);
+	border: 1px solid var(--border);
 }
 
 .patients-page .empty-state h3 {
 	margin: 0 0 0.35rem;
-	color: #0f172a;
+	color: var(--text);
 }
 
 .patients-page .empty-state p {
@@ -73,9 +84,9 @@
 }
 
 .patients-page .table-wrapper {
-	border-radius: 1rem;
+	border-radius: var(--radius-card);
 	overflow: hidden;
-	border: 1px solid rgba(15, 23, 42, 0.08);
+	border: 1px solid var(--border);
 }
 
 .patients-page .table-actions {
@@ -84,7 +95,23 @@
 	flex-wrap: wrap;
 }
 
+.patients-page .consent-actions {
+	align-items: center;
+}
+
+.patients-page .consent-action-button {
+	white-space: nowrap;
+}
+
 @media (max-width: 768px) {
+	.patients-page .page-header {
+		padding: 1rem;
+	}
+
+	.patients-page .page-title {
+		font-size: 1.5rem;
+	}
+
 	.patients-page .filters-row,
 	.patients-page .actions-row,
 	.patients-page .toolbar-row {
@@ -95,5 +122,13 @@
 	.patients-page .actions-row > *,
 	.patients-page .toolbar-row > * {
 		flex: 1 1 auto;
+	}
+
+	.patients-page .consent-actions {
+		gap: 0.5rem;
+	}
+
+	.patients-page .consent-action-button {
+		white-space: normal;
 	}
 }
