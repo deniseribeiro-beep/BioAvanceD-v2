@@ -1,0 +1,1768 @@
+diff --git a/README.md b/README.md
+index b469e06..9c28e6a 100644
+--- a/README.md
++++ b/README.md
+@@ -267,13 +267,47 @@ docker compose --env-file .env.docker -f docker-compose.yml exec backend npm run
+ 
+ O seed do backend inclui o modelo `RCS-GOV-1.0`, catálogos SPREC, severidades, pesos, thresholds e regras de governança.
+ 
+-### Criar Usuário Admin
++### Criar Primeiro Admin
++
++O sistema não cria administrador por padrão, e o seed essencial não cria usuário.
++O primeiro admin só pode ser criado quando a coleção `users` estiver vazia. A
++senha temporária vem de variável de ambiente, não é impressa no console, e o
++usuário é criado com `forceReset: true`. Após executar o bootstrap, remova as
++variáveis do ambiente.
++
++Windows PowerShell:
++
++```powershell
++$env:BOOTSTRAP_ADMIN_NAME="Nome do Administrador"
++$env:BOOTSTRAP_ADMIN_EMAIL="admin@example.org"
++$env:BOOTSTRAP_ADMIN_USERNAME="admin"
++$env:BOOTSTRAP_ADMIN_TEMP_PASSWORD="DefinaUmaSenhaTemporariaForte@123"
++$env:BOOTSTRAP_ADMIN_FORCE_RESET="true"
++npm.cmd --prefix api/backend run admin:create-first
++Remove-Item Env:\BOOTSTRAP_ADMIN_NAME
++Remove-Item Env:\BOOTSTRAP_ADMIN_EMAIL
++Remove-Item Env:\BOOTSTRAP_ADMIN_USERNAME
++Remove-Item Env:\BOOTSTRAP_ADMIN_TEMP_PASSWORD
++Remove-Item Env:\BOOTSTRAP_ADMIN_FORCE_RESET
++```
++
++Linux/CENAPAD:
+ 
+ ```bash
+-docker compose --env-file .env.docker -f docker-compose.yml exec backend npm run user:create-admin
++export BOOTSTRAP_ADMIN_NAME="Nome do Administrador"
++export BOOTSTRAP_ADMIN_EMAIL="admin@example.org"
++export BOOTSTRAP_ADMIN_USERNAME="admin"
++export BOOTSTRAP_ADMIN_TEMP_PASSWORD="DefinaUmaSenhaTemporariaForte@123"
++export BOOTSTRAP_ADMIN_FORCE_RESET="true"
++npm --prefix api/backend run admin:create-first
++unset BOOTSTRAP_ADMIN_NAME BOOTSTRAP_ADMIN_EMAIL BOOTSTRAP_ADMIN_USERNAME BOOTSTRAP_ADMIN_TEMP_PASSWORD BOOTSTRAP_ADMIN_FORCE_RESET
+ ```
+ 
+-Depois de criar o usuário, altere a senha inicial pelo fluxo da aplicação ou por procedimento administrativo seguro. Não versionar credenciais.
++Docker:
++
++```bash
++docker compose --env-file .env.docker -f docker-compose.yml exec backend npm run admin:create-first
++```
+ 
+ ### Logs, Status e Parada
+ 
+diff --git a/api/backend/.gitignore b/api/backend/.gitignore
+index b131bb0..a636537 100644
+--- a/api/backend/.gitignore
++++ b/api/backend/.gitignore
+@@ -37,6 +37,8 @@ dist/
+ frontend/dist/
+ .venv/
+ data/
++!src/seeders/data/
++!src/seeders/data/*.min.json
+ logs/
+ playwright-report/
+ test-results/
+diff --git a/api/backend/COMPLIANCE_EVIDENCE.json b/api/backend/COMPLIANCE_EVIDENCE.json
+index 95579fe..5634834 100644
+--- a/api/backend/COMPLIANCE_EVIDENCE.json
++++ b/api/backend/COMPLIANCE_EVIDENCE.json
+@@ -1,5 +1,5 @@
+ {
+-  "generatedAt": "2026-06-22T14:24:01.048Z",
++  "generatedAt": "2026-06-24T15:54:37.275Z",
+   "source": "backend/tests/compliance/compliance.contract.test.js",
+   "framework": "vitest",
+   "status": "PASSED",
+diff --git a/api/backend/package.json b/api/backend/package.json
+index 82e5012..e905823 100644
+--- a/api/backend/package.json
++++ b/api/backend/package.json
+@@ -10,11 +10,10 @@
+     "worker": "node ./src/workers/worker.js",
+     "worker:dev": "nodemon ./src/workers/worker.js",
+     "create-db": "node scripts/create-db.js",
+-    "fix-admin": "node scripts/fix-admin-role.js",
+     "sync-collections": "node scripts/sync-collections.js",
+     "sync:consent:neo4j": "node scripts/sync-consent-neo4j.js",
+-    "seed:full": "node scripts/full-seed.js",
+-    "seed": "node src/seeders/index.js",
++    "seed": "npm run seed:essential",
++    "seed:essential": "node src/scripts/seedEssential.js",
+     "seed:cid": "node src/scripts/seedOrphanetCid.js",
+     "seed:disease-rules": "node src/scripts/seedDiseaseValidationRules.js",
+     "seed:atc-bootstrap": "node src/scripts/seeder.js",
+@@ -27,12 +26,11 @@
+     "test:mongo": "node scripts/test-connection-mongo.js",
+     "test:connections": "node scripts/test-connections.js",
+     "setup": "node setup-env.js",
+-    "reset-admin": "node scripts/reset-admin-first-login.js",
+     "find-port": "node scripts/find-port.js",
+     "kill-port": "node scripts/kill-port.js",
+     "check-ports": "node scripts/check-ports.js",
+-    "user:check": "node scripts/check-users.js",
+-    "user:create-admin": "node scripts/create-admin-simple.js",
++    "admin:create-first": "node src/scripts/createFirstAdmin.js",
++    "user:create-admin": "npm run admin:create-first",
+     "lab:test": "node scripts/lab-test-notifications.js",
+     "iot:simulate": "node scripts/iot-simulator.js",
+     "cleanup": "node ../scripts/cleanup-complete.js",
+diff --git a/api/backend/scripts/create-admin-simple.js b/api/backend/scripts/create-admin-simple.js
+deleted file mode 100644
+index 246d94c..0000000
+--- a/api/backend/scripts/create-admin-simple.js
++++ /dev/null
+@@ -1,81 +0,0 @@
+-#!/usr/bin/env node
+-const path = require('path');
+-const dotenv = require('dotenv');
+-const bcrypt = require('bcryptjs');
+-const { MongoClient } = require('mongodb');
+-
+-
+-dotenv.config();
+-
+-const dbName = process.env.MONGO_DB || 'bioavanced';
+-
+-
+-// Força uso da URI local sem autenticação
+-process.env.MONGO_URI = process.env.MONGO_URI || `mongodb://localhost:27017/${dbName}?retryWrites=true&w=majority&tls=false`;
+-
+-const uri = process.env.MONGO_URI;
+-
+-if (!uri) {
+-  console.error('❌ MONGO_URI não definida e não foi possível montar URI com MONGO_ROOT_USERNAME/MONGO_ROOT_PASSWORD.');
+-  process.exit(1);
+-}
+-
+-(async () => {
+-  const client = new MongoClient(uri);
+-  try {
+-    console.log('Conectando ao MongoDB...');
+-    await client.connect();
+-    const db = client.db(dbName);
+-    const usersCollection = db.collection('users');
+-
+-    const existingAdmin = await usersCollection.findOne({
+-      $or: [
+-        { username: 'admin' },
+-        { email: 'admin@bioavanced.com.br' }
+-      ]
+-    });
+-
+-    if (existingAdmin) {
+-      console.log('ℹ️ Usuário admin já existe. Nenhuma alteração foi feita.');
+-      process.exit(0);
+-    }
+-    
+-    console.log('Criando usuário admin...');
+-    const salt = await bcrypt.genSalt(10);
+-    const hashedPassword = await bcrypt.hash('Admin@123', salt);
+-    
+-    await usersCollection.insertOne({
+-      name: 'Administrador',
+-      email: 'admin@bioavanced.com.br',
+-      username: 'admin',
+-      password: hashedPassword,
+-      clinicalUnit: 'BioAvanceD',
+-      accessType: 4,
+-      roleName: 'Administrador',
+-      status: 'active',
+-      mfaEnabled: false,
+-      mfaSecret: null,
+-      mfaActivationDate: null,
+-      mfaFailedAttempts: 0,
+-      mfaLocked: false,
+-      createdAt: new Date(),
+-      updatedAt: new Date(),
+-      lastLogin: null,
+-      passwordHistory: [],
+-      lastPasswordChange: new Date(),
+-      forceReset: false,
+-      failedLoginAttempts: 0
+-    });
+-    
+-    console.log('✅ Usuário admin criado!');
+-    console.log('Email: admin@bioavanced.com.br');
+-    console.log('Username: admin');
+-    console.log('Senha: Admin@123');
+-  } catch(e) {
+-    console.error('❌ Erro:', e.message);
+-    process.exit(1);
+-  } finally {
+-    await client.close();
+-    process.exit(0);
+-  }
+-})();
+diff --git a/api/backend/scripts/create-db.js b/api/backend/scripts/create-db.js
+index 7042c7b..b27b900 100644
+--- a/api/backend/scripts/create-db.js
++++ b/api/backend/scripts/create-db.js
+@@ -1,317 +1,117 @@
+ require('dotenv').config();
+ const { connectNewDB, closeConnection } = require('../src/database/mongo');
++const { CANONICAL_COLLECTIONS } = require('../src/config/collections');
+ const logger = require('../src/utils/logger');
+ 
+-/**
+- * Script para criar o banco de dados novo com TODAS as coleções necessárias
+- * Baseado nos models implementados
+- */
++const COLLECTIONS = [
++  {
++    name: 'users',
++    indexes: [{ email: 1 }, { username: 1 }, { accessType: 1 }, { status: 1 }],
++    description: 'Usuarios do sistema',
++  },
++  {
++    name: CANONICAL_COLLECTIONS.patients,
++    indexes: [{ patientID: 1 }, { patientNameNormalized: 1, birthDateKey: 1 }, { createdAt: 1 }],
++    description: 'Pacientes canonicos',
++  },
++  {
++    name: CANONICAL_COLLECTIONS.samples,
++    indexes: [{ sampleID: 1 }, { patientID: 1 }, { barcode: 1 }, { locationID: 1 }, { createdAt: 1 }],
++    description: 'Amostras canonicas',
++  },
++  {
++    name: CANONICAL_COLLECTIONS.consents,
++    indexes: [{ patientId: 1, status: 1 }, { templateId: 1 }, { createdAt: 1 }],
++    description: 'Consentimentos de pacientes',
++  },
++  {
++    name: CANONICAL_COLLECTIONS.consentTemplates,
++    indexes: [{ active: 1 }, { version: 1 }, { createdAt: 1 }],
++    description: 'Templates de TCLE',
++  },
++  {
++    name: CANONICAL_COLLECTIONS.sampleMovements,
++    indexes: [{ sampleID: 1, timestamp: -1 }, { barcode: 1, timestamp: -1 }, { movementID: 1 }],
++    description: 'Ledger de movimentacoes de amostras',
++  },
++  {
++    name: CANONICAL_COLLECTIONS.biomarkerObservations,
++    indexes: [{ patientID: 1, biomarkerType: 1, collectedAt: -1 }, { idempotencyKey: 1 }],
++    description: 'Observacoes de biomarcadores',
++  },
++  {
++    name: CANONICAL_COLLECTIONS.cids,
++    indexes: [{ code: 1 }, { codigo: 1 }, { descricao: 1 }],
++    description: 'CID/terminologias clinicas',
++  },
++  {
++    name: CANONICAL_COLLECTIONS.clinicalUnits,
++    indexes: [{ unitID: 1 }, { name: 1 }, { active: 1 }],
++    description: 'Unidades clinicas',
++  },
++  {
++    name: CANONICAL_COLLECTIONS.diseaseDictionary,
++    indexes: [{ orpha_code: 1 }, { disease_category: 1 }, { active: 1 }],
++    description: 'Regras essenciais de doencas',
++  },
++  {
++    name: CANONICAL_COLLECTIONS.medicationDictionary,
++    indexes: [{ atc_code: 1 }, { name: 1 }, { disease_categories: 1 }],
++    description: 'Dicionario essencial de medicamentos',
++  },
++  {
++    name: 'roles',
++    indexes: [{ accessType: 1 }],
++    description: 'Roles e permissoes',
++  },
++  {
++    name: 'terminologies',
++    indexes: [{ sistema: 1, codigo: 1 }, { label: 1 }],
++    description: 'Terminologias SPREC/HPO minimas',
++  },
++  {
++    name: 'sampleTypes',
++    indexes: [{ id: 1 }],
++    description: 'MIABIS sample types',
++  },
++  {
++    name: 'sampleOrigins',
++    indexes: [{ id: 1 }],
++    description: 'MIABIS sample origins',
++  },
++  {
++    name: 'extractionProtocols',
++    indexes: [{ id: 1 }],
++    description: 'MIABIS extraction protocols',
++  },
++  {
++    name: 'qualityDescriptions',
++    indexes: [{ id: 1 }],
++    description: 'MIABIS quality descriptions',
++  },
++];
++
+ async function createDatabase() {
+   try {
+-    logger.info('Iniciando criação do banco de dados novo...');
+-
+-    // Conecta ao banco novo
++    logger.info('Iniciando criacao/verificacao do banco canonico...');
+     const db = await connectNewDB();
+ 
+-    logger.info('Criando todas as coleções...');
+-
+-    // Lista de todas as coleções necessárias baseadas nos models
+-    const collections = [
+-      {
+-        name: 'users',
+-        indexes: [
+-          { email: 1 },
+-          { username: 1 },
+-          { createdAt: 1 }
+-        ],
+-        description: 'Usuários do sistema (com MFA)'
+-      },
+-      {
+-        name: 'pacientes',
+-        indexes: [
+-          { patientID: 1 },
+-          { patientName: 1 },
+-          { clinicalUnit: 1 },
+-          { createdAt: 1 }
+-        ],
+-        description: 'Pacientes do biobanco'
+-      },
+-      {
+-        name: 'amostras',
+-        indexes: [
+-          { sampleID: 1 },
+-          { patientID: 1 },
+-          { barcode: 1 },
+-          { currentStatus: 1 },
+-          { locationID: 1 },
+-          { 'storageLocation.boxId': 1 },
+-          { 'storageLocation.position': 1 },
+-          { createdAt: 1 }
+-        ],
+-        description: 'Amostras biológicas'
+-      },
+-      {
+-        name: 'logs',
+-        indexes: [
+-          { userId: 1 },
+-          { action: 1 },
+-          { entity: 1 },
+-          { dateTime: -1 },
+-          { timestamp: -1 },
+-          { severity: 1 },
+-          { createdAt: 1 }
+-        ],
+-        description: 'Logs de auditoria do sistema'
+-      },
+-      {
+-        name: 'temperatures',
+-        indexes: [
+-          { sensorId: 1 },
+-          { timestamp: -1 },
+-          { dateTime: -1 },
+-          { readingStatus: 1 },
+-          { locationId: 1 },
+-          { createdAt: 1 }
+-        ],
+-        description: 'Leituras de temperatura'
+-      },
+-      {
+-        name: 'sensors',
+-        indexes: [
+-          { sensorId: 1 },
+-          { locationId: 1 },
+-          { policyId: 1 },
+-          { maintenanceStatus: 1 },
+-          { createdAt: 1 }
+-        ],
+-        description: 'Sensores de temperatura'
+-      },
+-      {
+-        name: 'policies',
+-        indexes: [
+-          { policyId: 1 },
+-          { validFrom: 1 },
+-          { validTo: 1 },
+-          { createdAt: 1 }
+-        ],
+-        description: 'Políticas de temperatura'
+-      },
+-      {
+-        name: 'locations',
+-        indexes: [
+-          { equipmentType: 1 },
+-          { block: 1 },
+-          { rack: 1 },
+-          { drawer: 1 },
+-          { box: 1 },
+-          { createdAt: 1 }
+-        ],
+-        description: 'Localizações/Freezers'
+-      },
+-      {
+-        name: 'results',
+-        indexes: [
+-          { resultID: 1 },
+-          { sampleID: 1 },
+-          { fileType: 1 },
+-          { uploadedAt: -1 },
+-          { createdAt: 1 }
+-        ],
+-        description: 'Resultados de análise'
+-      },
+-      {
+-        name: 'biomarker_observations',
+-        indexes: [
+-          { patientID: 1, biomarkerType: 1, collectedAt: -1 },
+-          { patientID: 1, collectedAt: -1 },
+-          { biomarkerType: 1, collectedAt: -1 },
+-          { status: 1, collectedAt: -1 },
+-          { idempotencyKey: 1 }
+-        ],
+-        description: 'Observações de biomarcadores por paciente (histórico clínico)'
+-      },
+-      {
+-        name: 'equipment',
+-        indexes: [
+-          { equipmentID: 1 },
+-          { createdAt: 1 }
+-        ],
+-        description: 'Equipamentos'
+-      },
+-      {
+-        name: 'alerts',
+-        indexes: [
+-          { sensorId: 1 },
+-          { status: 1 },
+-          { timestamp: -1 },
+-          { severity: 1 },
+-          { createdAt: 1 }
+-        ],
+-        description: 'Alertas de temperatura'
+-      },
+-      {
+-        name: 'intelligentAssistant',
+-        indexes: [
+-          { assistantID: 1 },
+-          { contextScope: 1 },
+-          { lastInteraction: -1 },
+-          { createdAt: 1 }
+-        ],
+-        description: 'Interações do Assistente Inteligente'
+-      },
+-      {
+-        name: 'reports',
+-        indexes: [
+-          { reportID: 1 },
+-          { reportType: 1 },
+-          { generatedAt: -1 },
+-          { status: 1 },
+-          { createdAt: 1 }
+-        ],
+-        description: 'Relatórios do sistema'
+-      },
+-      {
+-        name: 'access',
+-        indexes: [
+-          { accessID: 1 },
+-          { reportID: 1 },
+-          { userId: 1 },
+-          { accessType: 1 },
+-          { createdAt: 1 }
+-        ],
+-        description: 'Controle de acesso a relatórios'
+-      },
+-      {
+-        name: 'measurementUnits',
+-        indexes: [
+-          { unitID: 1 },
+-          { createdAt: 1 }
+-        ],
+-        description: 'Unidades de medida para amostras'
+-      },
+-      {
+-        name: 'qualityDescriptions',
+-        indexes: [
+-          { qualityID: 1 },
+-          { createdAt: 1 }
+-        ],
+-        description: 'Descrições de qualidade para amostras'
+-      },
+-      {
+-        name: 'withdrawals',
+-        indexes: [
+-          { withdrawalID: 1 },
+-          { sampleID: 1 },
+-          { withdrawalDate: -1 },
+-          { withdrawalType: 1 },
+-          { createdAt: 1 }
+-        ],
+-        description: 'Registros de retirada de amostras'
+-      },
+-      {
+-        name: 'storageContainers',
+-        indexes: [
+-          { containerType: 1, status: 1 },
+-          { parent_id: 1, containerType: 1 },
+-          { name: 1 },
+-          { containerID: 1 },
+-          { createdAt: 1 }
+-        ],
+-        description: 'Containers de armazenagem (Freezer, Shelf, Rack) - ISO 20387'
+-      },
+-      {
+-        name: 'storageBoxes',
+-        indexes: [
+-          { parent_id: 1, status: 1 },
+-          { boxID: 1 },
+-          { name: 1 },
+-          { status: 1 },
+-          { createdAt: 1 }
+-        ],
+-        description: 'Caixas de armazenagem com grid de posições'
+-      },
+-      {
+-        name: 'storagePaths',
+-        indexes: [
+-          { freezerId: 1, shelfId: 1, rackId: 1 },
+-          { boxId: 1 },
+-          { path: 1 },
+-          { createdAt: 1 }
+-        ],
+-        description: 'Índice de caminhos para árvore de armazenagem'
+-      }
+-    ];
+-
+-    // Cria cada coleção com seus índices
+-    for (const collectionConfig of collections) {
+-      try {
+-        const collection = db.collection(collectionConfig.name);
+-        
+-        // Cria índices
+-        for (const index of collectionConfig.indexes) {
+-          try {
+-            await collection.createIndex(index);
+-          } catch (error) {
+-            // Índice pode já existir, continua
+-            if (!error.message.includes('already exists')) {
+-              logger.warn(`Erro ao criar índice em ${collectionConfig.name}:`, error.message);
+-            }
+-          }
+-        }
+-        
+-        logger.info(`✅ Coleção "${collectionConfig.name}" criada/verificada - ${collectionConfig.description}`);
+-      } catch (error) {
+-        logger.error(`❌ Erro ao criar coleção ${collectionConfig.name}:`, error.message);
++    for (const collectionConfig of COLLECTIONS) {
++      const collection = db.collection(collectionConfig.name);
++      for (const index of collectionConfig.indexes) {
++        await collection.createIndex(index);
+       }
++      logger.info(`Colecao canonica verificada: ${collectionConfig.name} - ${collectionConfig.description}`);
+     }
+ 
+-    // Insere documento inicial na coleção logs
+-    const logsCollection = db.collection('logs');
+-    const existingLog = await logsCollection.findOne({ 
+-      action: 'SYSTEM_INIT',
+-      entity: 'System'
+-    });
+-
+-    if (!existingLog) {
+-      const logInicial = {
+-        logId: null,
+-        dateTime: new Date(),
+-        timestamp: new Date(),
+-        userId: 'system',
+-        userName: 'Sistema',
+-        action: 'SYSTEM_INIT',
+-        entity: 'System',
+-        result: 'success',
+-        severity: 'info',
+-        source: 'system',
+-        ipSource: null,
+-        message: 'Banco de dados criado com sucesso - Todas as coleções inicializadas',
+-        createdAt: new Date()
+-      };
+-
+-      await logsCollection.insertOne(logInicial);
+-      logger.info('✅ Documento inicial inserido na coleção "logs"');
+-    }
+-
+-    logger.info('');
+-    logger.info('✅ Banco de dados criado com sucesso!');
+-    logger.info(`   - Total de coleções criadas: ${collections.length}`);
+-    logger.info('   - Coleções:');
+-    collections.forEach(col => {
+-      logger.info(`     • ${col.name} - ${col.description}`);
+-    });
+-    logger.info('   - Documento inicial inserido em logs');
+-
+-    // Fecha a conexão
++    logger.info(`Banco canonico verificado com sucesso. Colecoes: ${COLLECTIONS.length}`);
+     await closeConnection();
+-
+     process.exit(0);
+   } catch (error) {
+-    logger.error('Erro ao criar banco de dados:', error.message);
+-    console.error(error);
++    logger.error('Erro ao criar/verificar banco canonico:', error.message);
++    await closeConnection().catch(() => {});
+     process.exit(1);
+   }
+ }
+ 
+-// Executa o script
+ createDatabase();
+diff --git a/api/backend/scripts/create-neo4j-admin.js b/api/backend/scripts/create-neo4j-admin.js
+deleted file mode 100644
+index 363abeb..0000000
+--- a/api/backend/scripts/create-neo4j-admin.js
++++ /dev/null
+@@ -1,45 +0,0 @@
+-#!/usr/bin/env node
+-// Script para criar usuário admin no Neo4j em ambiente de desenvolvimento
+-const neo4j = require('neo4j-driver');
+-require('dotenv').config();
+-
+-const NEO4J_URI = process.env.NEO4J_URI || 'bolt://localhost:7687';
+-const NEO4J_USERNAME = process.env.NEO4J_USERNAME || 'neo4j';
+-const NEO4J_PASSWORD = process.env.NEO4J_PASSWORD || 'neo4j';
+-const ADMIN_USER = process.env.NEO4J_ADMIN_USER || 'admin';
+-const ADMIN_PASS = process.env.NEO4J_ADMIN_PASS || 'Admin@123';
+-
+-(async () => {
+-  const driver = neo4j.driver(
+-    NEO4J_URI,
+-    neo4j.auth.basic(NEO4J_USERNAME, NEO4J_PASSWORD)
+-  );
+-  const session = driver.session();
+-  try {
+-    // Verifica se o usuário admin já existe
+-    const checkResult = await session.run(
+-      "SHOW USERS YIELD user WHERE user = $adminUser RETURN user",
+-      { adminUser: ADMIN_USER }
+-    );
+-    if (checkResult.records.length > 0) {
+-      console.log(`ℹ️ Usuário admin '${ADMIN_USER}' já existe no Neo4j.`);
+-      process.exit(0);
+-    }
+-    // Cria o usuário admin
+-    await session.run(
+-      `CREATE USER ${ADMIN_USER} SET PASSWORD '${ADMIN_PASS}';`
+-    );
+-    await session.run(
+-      `GRANT ROLE admin TO ${ADMIN_USER};`
+-    );
+-    console.log(`✅ Usuário admin '${ADMIN_USER}' criado no Neo4j com senha padrão.`);
+-    console.log(`Usuário: ${ADMIN_USER}`);
+-    console.log(`Senha: ${ADMIN_PASS}`);
+-  } catch (e) {
+-    console.error('❌ Erro ao criar usuário admin no Neo4j:', e.message);
+-    process.exit(1);
+-  } finally {
+-    await session.close();
+-    await driver.close();
+-  }
+-})();
+diff --git a/api/backend/scripts/seed-synthea.js b/api/backend/scripts/seed-synthea.js
+deleted file mode 100644
+index 7d76290..0000000
+--- a/api/backend/scripts/seed-synthea.js
++++ /dev/null
+@@ -1,151 +0,0 @@
+-// Script para popular o banco de dados MongoDB com dados Synthea, respeitando a estrutura e regras do projeto
+-// Local: backend/scripts/seed-synthea.js
+-
+-const fs = require('fs/promises');
+-const path = require('path');
+-const mongoose = require('mongoose');
+-const PatientModel = require('../src/models/Patient');
+-const PatientConsentModel = require('../src/models/PatientConsent');
+-const SampleModel = require('../src/models/Sample');
+-
+-// Função para gerar CPF válido (mock simples)
+-function gerarCPF() {
+-  const n = () => Math.floor(Math.random() * 9);
+-  let cpf = Array.from({ length: 9 }, n);
+-  const calcDV = (cpfArr, factor) => {
+-    let sum = cpfArr.reduce((acc, num, idx) => acc + num * (factor - idx), 0);
+-    let dv = 11 - (sum % 11);
+-    return dv > 9 ? 0 : dv;
+-  };
+-  cpf.push(calcDV(cpf, 10));
+-  cpf.push(calcDV(cpf, 11));
+-  return cpf.join('');
+-}
+-
+-// Mock de doenças raras
+-const rareDiseases = [
+-  { icdCode: 'Q87.1', orphaCode: 'ORPHA:84', omimCode: 'OMIM:123456', diagnosticHypothesis: 'Síndrome de Marfan' },
+-  { icdCode: 'E75.2', orphaCode: 'ORPHA:792', omimCode: 'OMIM:607015', diagnosticHypothesis: 'Doença de Gaucher' },
+-  { icdCode: 'G12.2', orphaCode: 'ORPHA:79247', omimCode: 'OMIM:253300', diagnosticHypothesis: 'Atrofia muscular espinhal' },
+-];
+-
+-// Traduz gênero para sex do modelo
+-function traduzirGenero(gender) {
+-  if (gender === 'male') return 'M';
+-  if (gender === 'female') return 'F';
+-  return 'O';
+-}
+-
+-// Mock de consentimento granular
+-function consentimentoMock() {
+-  return {
+-    accepts_genetics: true,
+-    accepts_biobank: true,
+-    accepts_contact: Math.random() > 0.2,
+-    responses: {
+-      genetics: true,
+-      biobank: true,
+-      contact: Math.random() > 0.2
+-    },
+-    templateId: 'default-tcle-template',
+-    signedAt: new Date(),
+-    status: 'ACTIVE',
+-  };
+-}
+-
+-// Gera patientID anonimizado de 8 dígitos
+-function gerarPatientID() {
+-  return String(Math.floor(10000000 + Math.random() * 90000000));
+-}
+-
+-// Mock de amostras (apenas após consentimento)
+-function gerarAmostras(patientID) {
+-  const tipos = ['Sangue Total', 'Soro'];
+-  const n = Math.floor(Math.random() * 3) + 1;
+-  const amostras = [];
+-  for (let i = 0; i < n; i++) {
+-    amostras.push({
+-      patientID,
+-      sampleType: tipos[Math.floor(Math.random() * tipos.length)],
+-      sampleOrigin: 'VENOUS_BLOOD',
+-      extractionProtocol: 'PADRAO',
+-      registerDate: new Date(),
+-      quantity: 2000,
+-      unit: 'µL',
+-      quality: 'GOOD',
+-      linkedProject: 'synthea-import',
+-      status: 'AVAILABLE',
+-    });
+-  }
+-  return amostras;
+-}
+-
+-async function main() {
+-  await mongoose.connect('mongodb://localhost:27017/bioavanced', { useNewUrlParser: true, useUnifiedTopology: true });
+-  const fhirDir = path.join(__dirname, '../../data-synthea/output/fhir');
+-  const files = (await fs.readdir(fhirDir)).filter(f => f.endsWith('.json'));
+-  const chunkSize = 50;
+-  let totalPacientes = 0, totalAmostras = 0, totalTCLEs = 0;
+-
+-  for (let i = 0; i < files.length; i += chunkSize) {
+-    const chunk = files.slice(i, i + chunkSize);
+-    await Promise.all(chunk.map(async (file) => {
+-      try {
+-        const raw = await fs.readFile(path.join(fhirDir, file), 'utf-8');
+-        const fhir = JSON.parse(raw);
+-        // Demografia
+-        const patientName = fhir.name?.[0]?.given?.[0] + ' ' + (fhir.name?.[0]?.family || '');
+-        const birthDate = fhir.birthDate;
+-        const sex = traduzirGenero(fhir.gender);
+-        const recordNumber = fhir.id;
+-        // Geração aleatória de CPF e patientID a cada iteração
+-        const cpf = gerarCPF();
+-        const patientID = gerarPatientID();
+-        // Clínica: sempre sorteia uma doença rara se houver condição, senão saudável
+-        let clinica;
+-        if (fhir.condition && Array.isArray(fhir.condition) && fhir.condition.length > 0) {
+-          // Sorteia uma doença rara diferente para cada paciente
+-          clinica = { ...rareDiseases[Math.floor(Math.random() * rareDiseases.length)] };
+-        } else {
+-          clinica = { icdCode: '', orphaCode: '', omimCode: '', diagnosticHypothesis: 'Controlo Saudável' };
+-        }
+-        // Paciente
+-        const pacienteData = {
+-          patientID,
+-          patientName,
+-          birthDate,
+-          sex,
+-          cpf,
+-          recordNumber,
+-          ...clinica,
+-          consentTemplateId: 'default-tcle-template',
+-          email: `${patientID}@synthea.mock`,
+-        };
+-        const paciente = await PatientModel.create(pacienteData);
+-        await new PatientModel(paciente).save();
+-        totalPacientes++;
+-        // Consentimento: sempre novo mock a cada paciente
+-        const consentData = {
+-          patientId: patientID,
+-          ...consentimentoMock(),
+-        };
+-        const consent = await PatientConsentModel.create(consentData);
+-        await new PatientConsentModel(consent).save();
+-        totalTCLEs++;
+-        // Amostras: sempre novo mock a cada paciente
+-        const amostras = gerarAmostras(patientID);
+-        for (const amostraData of amostras) {
+-          const amostra = await SampleModel.create(amostraData);
+-          await new SampleModel(amostra).save();
+-          totalAmostras++;
+-        }
+-      } catch (err) {
+-        console.error(`Erro ao processar ${file}:`, err);
+-      }
+-    }));
+-  }
+-  console.log(`✅ Seed concluído: ${totalPacientes} pacientes, ${totalAmostras} amostras e ${totalTCLEs} TCLEs inseridos.`);
+-  await mongoose.disconnect();
+-}
+-
+-main();
+diff --git a/api/backend/src/seeders/index.js b/api/backend/src/seeders/index.js
+index ff397b5..968569f 100644
+--- a/api/backend/src/seeders/index.js
++++ b/api/backend/src/seeders/index.js
+@@ -1,274 +1,9 @@
+-const fs = require('fs');
+-const path = require('path');
+-
+-const { connectDB, closeConnection } = require('../database/mongo');
+-
+-const DATA_DIR = path.join(__dirname, 'data');
+-
+-function log(message) {
+-  console.log(`[SEED] ${message}`);
+-}
+-
+-function readJsonFile(fileName) {
+-  const filePath = path.join(DATA_DIR, fileName);
+-  const content = fs.readFileSync(filePath, 'utf-8');
+-  return JSON.parse(content);
+-}
+-
+-function normalizeTerminologyDocument(doc) {
+-  return {
+-    codigo: String(doc.codigo || '').trim(),
+-    sistema: String(doc.sistema || '').trim(),
+-    descricao: String(doc.descricao || '').trim(),
+-    label: String(doc.label || doc.descricao || '').trim(),
+-    sinonimos: Array.isArray(doc.sinonimos) ? doc.sinonimos.filter(Boolean) : [],
+-    aliases: Array.isArray(doc.aliases) ? doc.aliases.filter(Boolean) : [],
+-    relacoes: {
+-      cid: String(doc.relacoes?.cid || '').trim(),
+-      hpo: String(doc.relacoes?.hpo || '').trim(),
+-      omim: String(doc.relacoes?.omim || '').trim(),
+-      orpha: String(doc.relacoes?.orpha || '').trim(),
+-    },
+-    ativo: doc.ativo !== false,
+-    sincronizadoEm: new Date(),
+-    fonte: String(doc.fonte || 'seed-manual').trim(),
+-  };
+-}
+-
+-function buildSprecTerminologies(sprecData) {
+-  const sistema = 'OUTRO';
+-  const fonte = sprecData?.fonte || 'seed-sprec-v1';
+-  const axes = Array.isArray(sprecData?.axes) ? sprecData.axes : [];
+-
+-  return axes.map((axisEntry) => {
+-    const axis = String(axisEntry.axis || 'AXIS').trim().toUpperCase();
+-    const code = String(axisEntry.code || '').trim().toUpperCase();
+-    const label = String(axisEntry.label || '').trim();
+-    const descricao = String(axisEntry.descricao || label || `${axis} ${code}`).trim();
+-
+-    return normalizeTerminologyDocument({
+-      codigo: `SPREC:${axis}:${code}`,
+-      sistema,
+-      descricao,
+-      label,
+-      sinonimos: [],
+-      aliases: [axis],
+-      relacoes: {},
+-      ativo: true,
+-      fonte,
+-    });
+-  });
+-}
+-
+-function buildHpoTerminologies(hpoData) {
+-  const fonte = hpoData?.fonte || 'seed-hpo-v1';
+-  const terms = Array.isArray(hpoData?.terms) ? hpoData.terms : [];
+-
+-  return terms.map((term) =>
+-    normalizeTerminologyDocument({
+-      codigo: term.codigo,
+-      sistema: 'HPO',
+-      descricao: term.descricao || term.label,
+-      label: term.label || term.descricao,
+-      sinonimos: Array.isArray(term.sinonimos) ? term.sinonimos : [],
+-      aliases: Array.isArray(term.aliases) ? term.aliases : [],
+-      relacoes: term.relacoes || {},
+-      ativo: true,
+-      fonte,
+-    })
+-  );
+-}
+-
+-function buildRcsCatalogDocuments(seed) {
+-  return (seed.catalog || []).map((item) => ({
+-    model_code: seed.model_code,
+-    sprec_version: seed.sprec_version,
+-    matrix_type: seed.matrix_type,
+-    axis_code: item.axis_code,
+-    sprec_code: item.sprec_code,
+-    description: item.description,
+-  }));
+-}
+-
+-async function upsertCollection(collection, uniqueKeys, docs) {
+-  const now = new Date();
+-  const validDocs = (Array.isArray(docs) ? docs : []).filter((doc) => {
+-    return uniqueKeys.every((key) => doc[key] !== undefined && doc[key] !== null && String(doc[key]).trim() !== '');
+-  });
+-
+-  if (validDocs.length === 0) {
+-    return 0;
+-  }
+-
+-  const operations = validDocs.map((doc) => {
+-    const filter = {};
+-    uniqueKeys.forEach((key) => {
+-      filter[key] = doc[key];
+-    });
+-
+-    return {
+-      updateOne: {
+-        filter,
+-        update: {
+-          $set: {
+-            ...doc,
+-            updatedAt: now,
+-          },
+-          $setOnInsert: {
+-            createdAt: now,
+-          },
+-        },
+-        upsert: true,
+-      },
+-    };
+-  });
+-
+-  await collection.bulkWrite(operations, { ordered: false });
+-  return operations.length;
+-}
+-
+-async function seedTerminologies(db) {
+-  const sprecData = readJsonFile('sprec.json');
+-  const hpoData = readJsonFile('hpo.json');
+-
+-  const terminologiesCollection = db.collection('terminologies');
+-  const sprecDocs = buildSprecTerminologies(sprecData);
+-  const hpoDocs = buildHpoTerminologies(hpoData);
+-
+-  const total = await upsertCollection(terminologiesCollection, ['sistema', 'codigo'], [...sprecDocs, ...hpoDocs]);
+-  log(`Terminologias (SPREC/HPO) sincronizadas com sucesso. Registros processados: ${total}`);
+-}
+-
+-async function seedMiabis(db) {
+-  const miabisData = readJsonFile('miabis.json');
+-
+-  const sampleTypes = (miabisData.sampleTypes || []).map((item) => ({
+-    id: item.id,
+-    description: item.description,
+-    code: item.code || null,
+-  }));
+-
+-  const sampleOrigins = (miabisData.sampleOrigins || []).map((item) => ({
+-    id: item.id,
+-    description: item.description,
+-    code: item.code || null,
+-  }));
+-
+-  const extractionProtocols = (miabisData.extractionProtocols || []).map((item) => ({
+-    id: item.id,
+-    description: item.description,
+-    code: item.code || null,
+-  }));
+-
+-  const qualityDescriptions = (miabisData.qualityDescriptions || []).map((item) => ({
+-    id: item.id,
+-    description: item.description,
+-    qualityLevel: item.qualityLevel || null,
+-  }));
+-
+-  const countSampleTypes = await upsertCollection(db.collection('sampleTypes'), ['id'], sampleTypes);
+-  const countSampleOrigins = await upsertCollection(db.collection('sampleOrigins'), ['id'], sampleOrigins);
+-  const countExtractionProtocols = await upsertCollection(db.collection('extractionProtocols'), ['id'], extractionProtocols);
+-  const countQuality = await upsertCollection(db.collection('qualityDescriptions'), ['id'], qualityDescriptions);
+-
+-  log(`MIABIS sampleTypes populado com sucesso. Registros processados: ${countSampleTypes}`);
+-  log(`MIABIS sampleOrigins populado com sucesso. Registros processados: ${countSampleOrigins}`);
+-  log(`MIABIS extractionProtocols populado com sucesso. Registros processados: ${countExtractionProtocols}`);
+-  log(`MIABIS qualityDescriptions populado com sucesso. Registros processados: ${countQuality}`);
+-}
+-
+-async function seedRoles(db) {
+-  const rolesData = readJsonFile('roles.json');
+-  const roles = (rolesData.roles || []).map((role) => ({
+-    accessType: Number(role.accessType),
+-    roleName: role.roleName,
+-    permissions: Array.isArray(role.permissions) ? role.permissions : [],
+-    active: role.active !== false,
+-  }));
+-
+-  const processed = await upsertCollection(db.collection('roles'), ['accessType'], roles);
+-  log(`Roles e permissoes populados com sucesso. Registros processados: ${processed}`);
+-}
+-
+-async function seedRcsGovernanceModel(db) {
+-  const fluidCatalog = readJsonFile('rcs-sprec-fluid-catalog.RCS-GOV-1.0.json');
+-  const solidCatalog = readJsonFile('rcs-sprec-solid-catalog.RCS-GOV-1.0.json');
+-  const severity = readJsonFile('rcs-severity-mapping.RCS-GOV-1.0.json');
+-  const weights = readJsonFile('rcs-axis-weights.RCS-GOV-1.0.json');
+-  const thresholds = readJsonFile('rcs-grade-thresholds.RCS-GOV-1.0.json');
+-  const governance = readJsonFile('rcs-governance-rules.RCS-GOV-1.0.json');
+-
+-  const versionDocs = [{
+-    model_code: 'RCS-GOV-1.0',
+-    sprec_version: 'SPREC-2.0',
+-    active: true,
+-    description: 'Governance-aware Ribeiro Classification Score certification model',
+-  }];
+-
+-  const versionCount = await upsertCollection(db.collection('rcs_model_versions'), ['model_code'], versionDocs);
+-  const catalogCount = await upsertCollection(
+-    db.collection('rcs_sprec_catalog'),
+-    ['model_code', 'sprec_version', 'matrix_type', 'axis_code', 'sprec_code'],
+-    [...buildRcsCatalogDocuments(fluidCatalog), ...buildRcsCatalogDocuments(solidCatalog)]
+-  );
+-  const severityCount = await upsertCollection(
+-    db.collection('rcs_severity_mappings'),
+-    ['model_code', 'sprec_version', 'matrix_type', 'axis_code', 'sprec_codes', 'condition_description'],
+-    (severity.mappings || []).map((item) => ({ model_code: severity.model_code, sprec_version: severity.sprec_version, ...item }))
+-  );
+-  const weightCount = await upsertCollection(
+-    db.collection('rcs_axis_weights'),
+-    ['model_code', 'sprec_version', 'matrix_type', 'axis_code'],
+-    (weights.weights || []).map((item) => ({ model_code: weights.model_code, sprec_version: weights.sprec_version, ...item }))
+-  );
+-  const thresholdCount = await upsertCollection(
+-    db.collection('rcs_grade_thresholds'),
+-    ['model_code', 'sprec_version', 'grade'],
+-    (thresholds.thresholds || []).map((item) => ({ model_code: thresholds.model_code, sprec_version: thresholds.sprec_version, ...item }))
+-  );
+-  const governanceCount = await upsertCollection(
+-    db.collection('rcs_governance_rules'),
+-    ['model_code', 'sprec_version', 'rule_code'],
+-    (governance.rules || []).map((item) => ({ model_code: governance.model_code, sprec_version: governance.sprec_version, ...item }))
+-  );
+-
+-  log(`RCS model_versions sincronizado. Registros processados: ${versionCount}`);
+-  log(`RCS SPREC catalog sincronizado. Registros processados: ${catalogCount}`);
+-  log(`RCS severity mappings sincronizado. Registros processados: ${severityCount}`);
+-  log(`RCS axis weights sincronizado. Registros processados: ${weightCount}`);
+-  log(`RCS grade thresholds sincronizado. Registros processados: ${thresholdCount}`);
+-  log(`RCS governance rules sincronizado. Registros processados: ${governanceCount}`);
+-}
+-
+-async function runSeed() {
+-  log('Iniciando processo de seeding de reference data...');
+-  const db = await connectDB();
+-
+-  try {
+-    await seedTerminologies(db);
+-    await seedMiabis(db);
+-    await seedRoles(db);
+-    await seedRcsGovernanceModel(db);
+-
+-    log('Seeding concluido com sucesso.');
+-  } finally {
+-    await closeConnection();
+-    log('Conexao encerrada.');
+-  }
+-}
+-
+-if (require.main === module) {
+-  runSeed()
+-    .then(() => process.exit(0))
+-    .catch((error) => {
+-      console.error('[SEED] Erro durante o seeding:', error?.message || error);
+-      process.exit(1);
+-    });
+-}
++const {
++  upsertCollection,
++  buildRcsCatalogDocuments,
++} = require('../scripts/seedEssential');
+ 
+ module.exports = {
+   upsertCollection,
+-  seedRcsGovernanceModel,
+   buildRcsCatalogDocuments,
+-  runSeed,
+ };
+diff --git a/api/backend/src/services/bootstrap.service.js b/api/backend/src/services/bootstrap.service.js
+index d959daa..eaebd7e 100644
+--- a/api/backend/src/services/bootstrap.service.js
++++ b/api/backend/src/services/bootstrap.service.js
+@@ -1,113 +1,8 @@
+-const bcrypt = require('bcryptjs');
+ const logger = require('../utils/logger');
+-const { generateAnonId } = require('../utils/userAnonymization');
+-
+-const INITIAL_ADMIN_BOOTSTRAP_ID = 'initial_admin_seed_v1';
+ 
+ async function ensureInitialAdmin(db) {
+-  const bootstrapCollection = db.collection('systemBootstrap');
+-  const usersCollection = db.collection('users');
+-
+-  const existingBootstrap = await bootstrapCollection.findOne({ _id: INITIAL_ADMIN_BOOTSTRAP_ID });
+-  if (existingBootstrap) {
+-    logger.info('[BOOTSTRAP] Seed de admin inicial já concluído anteriormente.');
+-    return;
+-  }
+-
+-  const usersCount = await usersCollection.countDocuments();
+-  if (usersCount > 0) {
+-    await bootstrapCollection.updateOne(
+-      { _id: INITIAL_ADMIN_BOOTSTRAP_ID },
+-      {
+-        $set: {
+-          status: 'skipped',
+-          reason: 'users_exist',
+-          usersCount,
+-          completedAt: new Date()
+-        }
+-      },
+-      { upsert: true }
+-    );
+-    logger.info(`[BOOTSTRAP] Seed de admin inicial ignorado: já existem ${usersCount} usuário(s).`);
+-    return;
+-  }
+-
+-  const adminEmail = process.env.INITIAL_ADMIN_EMAIL || 'admin@bioavanced.com.br';
+-  const adminUsername = process.env.INITIAL_ADMIN_USERNAME || 'admin';
+-  const adminPassword = process.env.INITIAL_ADMIN_PASSWORD || 'Admin@123';
+-  const adminName = process.env.INITIAL_ADMIN_NAME || 'Administrador';
+-
+-  const existingAdmin = await usersCollection.findOne({
+-    $or: [
+-      { email: adminEmail },
+-      { username: adminUsername }
+-    ]
+-  });
+-
+-  if (existingAdmin) {
+-    await bootstrapCollection.updateOne(
+-      { _id: INITIAL_ADMIN_BOOTSTRAP_ID },
+-      {
+-        $set: {
+-          status: 'skipped',
+-          reason: 'admin_already_exists',
+-          completedAt: new Date()
+-        }
+-      },
+-      { upsert: true }
+-    );
+-    logger.info('[BOOTSTRAP] Seed de admin inicial ignorado: admin já existente.');
+-    return;
+-  }
+-
+-
+-  const passwordHash = await bcrypt.hash(adminPassword, 10);
+-  const now = new Date();
+-  const adminUser = {
+-    name: adminName,
+-    email: adminEmail,
+-    username: adminUsername,
+-    password: passwordHash,
+-    accessType: 4,
+-    roleName: 'Administrador',
+-    status: 'active',
+-    mfaEnabled: false,
+-    mfaSecret: null,
+-    mfaActivationDate: null,
+-    mfaFailedAttempts: 0,
+-    mfaLocked: false,
+-    forceReset: false,
+-    passwordHistory: [],
+-    failedLoginAttempts: 0,
+-    createdAt: now,
+-    updatedAt: now,
+-    lastLogin: null,
+-    phone: null,
+-    institution: null,
+-    anonId: null,
+-    lastPasswordChange: now
+-  };
+-  const insertResult = await usersCollection.insertOne(adminUser);
+-
+-  const anonId = generateAnonId(insertResult.insertedId.toString());
+-  await usersCollection.updateOne(
+-    { _id: insertResult.insertedId },
+-    { $set: { anonId } }
+-  );
+-
+-  await bootstrapCollection.updateOne(
+-    { _id: INITIAL_ADMIN_BOOTSTRAP_ID },
+-    {
+-      $set: {
+-        status: 'created',
+-        userId: insertResult.insertedId.toString(),
+-        completedAt: new Date()
+-      }
+-    },
+-    { upsert: true }
+-  );
+-
+-  logger.info('[BOOTSTRAP] Usuário admin inicial criado com sucesso (primeiro boot).');
++  void db;
++  logger.info('[BOOTSTRAP] Bootstrap automatico de admin desativado. Use npm run admin:create-first.');
+ }
+ 
+ module.exports = {
+diff --git a/api/backend/tests/integration/incidents.api.node.test.js b/api/backend/tests/integration/incidents.api.node.test.js
+index 0f491fe..741a8e9 100644
+--- a/api/backend/tests/integration/incidents.api.node.test.js
++++ b/api/backend/tests/integration/incidents.api.node.test.js
+@@ -6,6 +6,8 @@ const request = require('supertest');
+ const modulePaths = {
+   connection: require.resolve('../../src/infrastructure/database/mongodb/connection'),
+   sendIncidentAlertEmail: require.resolve('../../src/services/sendIncidentAlertEmail'),
++  auth: require.resolve('../../src/infrastructure/middleware/auth'),
++  rbac: require.resolve('../../src/infrastructure/middleware/rbac'),
+   controller: require.resolve('../../src/controllers/incident.controller'),
+   routes: require.resolve('../../src/interface/routes/incident.routes'),
+ };
+@@ -21,9 +23,24 @@ function setCachedModule(modulePath, exportsObject) {
+ 
+ function buildMongoCollections(seedIncidents = []) {
+   const incidents = [...seedIncidents];
++  const samples = [{
++    _id: '507f1f77bcf86cd799439088',
++    sampleID: 'BIO-INC-001',
++    barcode: 'BC-INC-001',
++    locationID: 321,
++    status: 'AVAILABLE',
++    currentStatus: 'Available',
++    release_status: 'AVAILABLE',
++    availabilityStatus: 'AVAILABLE',
++    quantity: 1,
++    unit: 'mL',
++  }];
+ 
+   const incidentsCollection = {
+     async findOne(filter) {
++      if (filter._id) {
++        return incidents.find((item) => String(item._id) === String(filter._id)) || null;
++      }
+       if (filter.sensorKey) {
+         const allowedStatus = filter.status?.$in || [];
+         return incidents.find((item) => item.sensorKey === filter.sensorKey && allowedStatus.includes(item.status)) || null;
+@@ -77,6 +94,63 @@ function buildMongoCollections(seedIncidents = []) {
+     },
+   };
+ 
++  const sensorsCollection = {
++    find: vi.fn().mockReturnValue({
++      toArray: vi.fn().mockResolvedValue([{ sensorId: 'sensor-a1', locationID: 321 }]),
++    }),
++  };
++
++  const sensorMetadataCollection = {
++    find: vi.fn().mockReturnValue({
++      toArray: vi.fn().mockResolvedValue([]),
++    }),
++  };
++
++  const locationsCollection = {
++    find: vi.fn().mockReturnValue({
++      toArray: vi.fn().mockResolvedValue([{ locationID: 321, equipmentID: 9001 }]),
++    }),
++  };
++
++  const samplesCollection = {
++    find: vi.fn().mockImplementation((filter = {}) => {
++      const coldChainIncidentId = filter?.coldChainIncidentId;
++      const releaseStatus = filter?.release_status;
++      const results = coldChainIncidentId
++        ? samples.filter((sample) => sample.coldChainIncidentId === String(coldChainIncidentId) && (!releaseStatus || sample.release_status === releaseStatus))
++        : samples.filter((sample) => sample.locationID === 321 && sample.release_status !== 'QUARANTINE');
++      return { toArray: vi.fn().mockResolvedValue(results) };
++    }),
++    updateOne: vi.fn().mockImplementation(async (filter, update) => {
++      const sample = samples.find((item) => String(item._id) === String(filter._id));
++      if (sample && update?.$set) Object.assign(sample, update.$set);
++      return { matchedCount: sample ? 1 : 0, modifiedCount: sample ? 1 : 0 };
++    }),
++    updateMany: vi.fn().mockImplementation(async (filter, update) => {
++      const matched = samples.filter((sample) => sample.coldChainIncidentId === String(filter.coldChainIncidentId));
++      matched.forEach((sample) => {
++        if (update?.$set) Object.assign(sample, update.$set);
++      });
++      return { matchedCount: matched.length, modifiedCount: matched.length };
++    }),
++    createIndex: vi.fn().mockResolvedValue('idx'),
++  };
++
++  const sampleMovementsCollection = {
++    collectionName: 'sampleMovements',
++    find: vi.fn().mockReturnValue({
++      sort: vi.fn().mockReturnThis(),
++      limit: vi.fn().mockReturnThis(),
++      next: vi.fn().mockResolvedValue(null),
++    }),
++    insertOne: vi.fn().mockResolvedValue({ insertedId: 'movement-1' }),
++    createIndex: vi.fn().mockResolvedValue('idx'),
++  };
++
++  const countersCollection = {
++    findOneAndUpdate: vi.fn().mockResolvedValue({ value: { seq: 1 } }),
++  };
++
+   const usersCollection = {
+     find() {
+       return {
+@@ -95,11 +169,18 @@ function buildMongoCollections(seedIncidents = []) {
+     collection(name) {
+       if (name === 'temperatureIncidents') return incidentsCollection;
+       if (name === 'users') return usersCollection;
++      if (name === 'sensors') return sensorsCollection;
++      if (name === 'sensorMetadata') return sensorMetadataCollection;
++      if (name === 'locations') return locationsCollection;
++      if (name === 'samples') return samplesCollection;
++      if (name === 'sampleMovements') return sampleMovementsCollection;
++      if (name === 'sample_movements') return sampleMovementsCollection;
++      if (name === 'counters') return countersCollection;
+       return { find: () => ({ toArray: async () => [] }) };
+     },
+   };
+ 
+-  return { db, incidents, incidentsCollection };
++  return { db, incidents, incidentsCollection, samples, samplesCollection, sampleMovementsCollection };
+ }
+ 
+ describe('Incidents API integration', () => {
+@@ -117,6 +198,8 @@ describe('Incidents API integration', () => {
+     incidentsState = buildMongoCollections([]);
+     setCachedModule(modulePaths.connection, { connectMongoDB: async () => incidentsState.db });
+     setCachedModule(modulePaths.sendIncidentAlertEmail, { sendIncidentAlertEmail });
++    setCachedModule(modulePaths.auth, { authenticate: (_req, _res, next) => next() });
++    setCachedModule(modulePaths.rbac, { requirePermission: () => (_req, _res, next) => next() });
+ 
+     delete require.cache[modulePaths.controller];
+     delete require.cache[modulePaths.routes];
+@@ -166,4 +249,77 @@ describe('Incidents API integration', () => {
+     expect(aggregateResponse.body.success).toBe(true);
+     expect(aggregateResponse.body.incident.samplesOutOfRange).toBe(4);
+   });
++
++  it('POST /api/incidents/create quarentena amostra vinculada ao sensor', async () => {
++    const response = await request(app).post('/api/incidents/create').send({
++      sensorKey: 'sensor-a1',
++      sensorName: 'Sensor A1',
++      currentTemperature: -3.1,
++      maxTemperature: -2.8,
++      minTemperature: -4.2,
++      samplesOutOfRange: 1,
++    });
++
++    expect(response.status).toBe(200);
++    expect(response.body.success).toBe(true);
++    expect(response.body.quarantine.triggered).toBe(true);
++    expect(response.body.quarantine.quarantined).toBe(1);
++    expect(incidentsState.samplesCollection.updateOne).toHaveBeenCalledTimes(1);
++    const update = incidentsState.samplesCollection.updateOne.mock.calls[0][1].$set;
++    expect(update).toMatchObject({
++      status: 'QUARANTINED',
++      currentStatus: 'QUARANTINED',
++      release_status: 'QUARANTINE',
++      availabilityStatus: 'BLOCKED',
++      quarantineReasonCode: 'COLD_CHAIN_INCIDENT',
++      coldChainSensorKey: 'sensor-a1',
++      coldChainStatus: 'INCIDENT_OPEN',
++    });
++  });
++
++  it('PUT /api/incidents/:incidentId/resolve mantém amostra em revisão pós-incidente', async () => {
++    const incidentId = '507f1f77bcf86cd799439077';
++    incidentsState = buildMongoCollections([{
++      _id: incidentId,
++      sensorKey: 'sensor-a1',
++      sensorName: 'Sensor A1',
++      currentTemperature: -3.1,
++      maxTemperature: -2.8,
++      minTemperature: -4.2,
++      samplesOutOfRange: 1,
++      status: 'open',
++    }]);
++    incidentsState.samples[0].coldChainIncidentId = incidentId;
++    incidentsState.samples[0].quarantineReasonCode = 'COLD_CHAIN_INCIDENT';
++    incidentsState.samples[0].release_status = 'QUARANTINE';
++    incidentsState.samples[0].status = 'QUARANTINED';
++    setCachedModule(modulePaths.connection, { connectMongoDB: async () => incidentsState.db });
++
++    delete require.cache[modulePaths.controller];
++    delete require.cache[modulePaths.routes];
++    const incidentsRouter = require(modulePaths.routes);
++    app = express();
++    app.use(express.json());
++    app.use('/api/incidents', incidentsRouter);
++
++    const response = await request(app)
++      .put(`/api/incidents/${incidentId}/resolve`)
++      .send({ userId: 'qa-user', notes: 'Temperatura normalizada' });
++
++    expect(response.status).toBe(200);
++    expect(response.body.success).toBe(true);
++    expect(response.body.message).toMatch(/revisão pós-incidente/i);
++    expect(response.body.postIncidentReview.reviewRequired).toBe(true);
++    expect(incidentsState.samplesCollection.updateMany).toHaveBeenCalledTimes(1);
++    const update = incidentsState.samplesCollection.updateMany.mock.calls[0][1].$set;
++    expect(update).toMatchObject({
++      availabilityStatus: 'PENDING_REVIEW',
++      quarantineStatus: 'PENDING_REVIEW',
++      coldChainStatus: 'INCIDENT_RESOLVED_REVIEW_REQUIRED',
++      coldChainReviewRequired: true,
++    });
++    expect(update.status).not.toBe('AVAILABLE');
++    expect(update.release_status).not.toBe('AVAILABLE');
++    expect(update.availabilityStatus).not.toBe('AVAILABLE');
++  });
+ });
+diff --git a/api/backend/tests/integration/iot.api.test.js b/api/backend/tests/integration/iot.api.test.js
+index b38e95b..ce9546f 100644
+--- a/api/backend/tests/integration/iot.api.test.js
++++ b/api/backend/tests/integration/iot.api.test.js
+@@ -30,6 +30,19 @@ function setCachedModule(modulePath, exportsObject) {
+ 
+ function buildDb() {
+   const incidents = [];
++  const samples = [{
++    _id: '507f1f77bcf86cd799439055',
++    sampleID: 'BIO-IOT-001',
++    barcode: 'BC-IOT-001',
++    locationID: 501,
++    status: 'AVAILABLE',
++    currentStatus: 'Available',
++    release_status: 'AVAILABLE',
++    availabilityStatus: 'AVAILABLE',
++    quantity: 1,
++    unit: 'mL',
++  }];
++
+   const incidentCollection = {
+     findOne: vi.fn().mockResolvedValue(null),
+     insertOne: vi.fn().mockImplementation(async (doc) => {
+@@ -39,6 +52,47 @@ function buildDb() {
+     updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
+   };
+ 
++  const sensorsCollection = {
++    find: vi.fn().mockReturnValue({
++      toArray: vi.fn().mockResolvedValue([{ sensorId: 'sensor-1', locationID: 501 }]),
++    }),
++  };
++
++  const sensorMetadataCollection = {
++    find: vi.fn().mockReturnValue({
++      toArray: vi.fn().mockResolvedValue([]),
++    }),
++  };
++
++  const locationsCollection = {
++    find: vi.fn().mockReturnValue({
++      toArray: vi.fn().mockResolvedValue([{ locationID: 501, equipmentID: 9001 }]),
++    }),
++  };
++
++  const samplesCollection = {
++    find: vi.fn().mockReturnValue({
++      toArray: vi.fn().mockResolvedValue(samples),
++    }),
++    updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
++    createIndex: vi.fn().mockResolvedValue('idx'),
++  };
++
++  const sampleMovementsCollection = {
++    collectionName: 'sampleMovements',
++    find: vi.fn().mockReturnValue({
++      sort: vi.fn().mockReturnThis(),
++      limit: vi.fn().mockReturnThis(),
++      next: vi.fn().mockResolvedValue(null),
++    }),
++    insertOne: vi.fn().mockResolvedValue({ insertedId: 'movement-1' }),
++    createIndex: vi.fn().mockResolvedValue('idx'),
++  };
++
++  const countersCollection = {
++    findOneAndUpdate: vi.fn().mockResolvedValue({ value: { seq: 1 } }),
++  };
++
+   const usersCollection = {
+     find: vi.fn().mockReturnValue({
+       project: vi.fn().mockReturnValue({
+@@ -54,11 +108,20 @@ function buildDb() {
+       collection: vi.fn().mockImplementation((name) => {
+         if (name === 'temperatureIncidents') return incidentCollection;
+         if (name === 'users') return usersCollection;
++        if (name === 'sensors') return sensorsCollection;
++        if (name === 'sensorMetadata') return sensorMetadataCollection;
++        if (name === 'locations') return locationsCollection;
++        if (name === 'samples') return samplesCollection;
++        if (name === 'sampleMovements') return sampleMovementsCollection;
++        if (name === 'sample_movements') return sampleMovementsCollection;
++        if (name === 'counters') return countersCollection;
+         return { find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }) };
+       }),
+     },
+     incidents,
+     incidentCollection,
++    samplesCollection,
++    sampleMovementsCollection,
+   };
+ }
+ 
+@@ -124,11 +187,29 @@ describe('IoT API integration', () => {
+     await vi.waitFor(() => {
+       expect(saveTelemetryPoint).toHaveBeenCalledTimes(1);
+       expect(mockDb.incidentCollection.insertOne).toHaveBeenCalledTimes(1);
++      expect(mockDb.samplesCollection.updateOne).toHaveBeenCalledTimes(1);
++      expect(mockDb.sampleMovementsCollection.insertOne).toHaveBeenCalledTimes(1);
+       expect(sendCriticalAlertEmail).toHaveBeenCalledTimes(1);
+     });
+ 
+     expect(mockDb.incidents).toHaveLength(1);
+     expect(mockDb.incidents[0].sensorKey).toBe('sensor-1');
+     expect(mockDb.incidents[0].status).toBe('open');
++    const update = mockDb.samplesCollection.updateOne.mock.calls[0][1].$set;
++    expect(update).toMatchObject({
++      status: 'QUARANTINED',
++      currentStatus: 'QUARANTINED',
++      release_status: 'QUARANTINE',
++      availabilityStatus: 'BLOCKED',
++      quarantineReasonCode: 'COLD_CHAIN_INCIDENT',
++      coldChainSensorKey: 'sensor-1',
++      coldChainStatus: 'INCIDENT_OPEN',
++    });
++    const movement = mockDb.sampleMovementsCollection.insertOne.mock.calls[0][0];
++    expect(movement).toMatchObject({
++      purpose: 'cold_chain_incident_quarantine',
++      destination: 'Quarentena',
++      responsible: 'SYSTEM',
++    });
+   });
+ });
+diff --git a/package.json b/package.json
+index 895dfe6..01bc6d7 100644
+--- a/package.json
++++ b/package.json
+@@ -1,10 +1,11 @@
+ {
+   "scripts": {
+     "audit:full": "node scripts/audit-complete-system.js",
+-    "seed": "node scripts/seed.js",
++    "seed": "npm --prefix api/backend run seed:essential",
++    "seed:legacy-demo": "node scripts/seed-legacy-demo.js",
+     "build": "vite build",
+-    "backend:user:check": "npm --prefix api/backend run user:check",
+-    "backend:user:create-admin": "npm --prefix api/backend run user:create-admin",
++    "backend:admin:create-first": "npm --prefix api/backend run admin:create-first",
++    "backend:user:create-admin": "npm --prefix api/backend run admin:create-first",
+     "dev:up": "docker compose --env-file .env.docker -f docker-compose.yml up --build backend frontend",
+     "dev:down": "docker compose --env-file .env.docker -f docker-compose.yml down",
+     "dev:logs": "docker compose --env-file .env.docker -f docker-compose.yml logs -f backend frontend",
+diff --git a/scripts/seed.js b/scripts/seed.js
+deleted file mode 100644
+index 7b03315..0000000
+--- a/scripts/seed.js
++++ /dev/null
+@@ -1,181 +0,0 @@
+-#!/usr/bin/env node
+-
+-const fs = require('fs');
+-const path = require('path');
+-const dotenv = require('dotenv');
+-const { MongoClient } = require('mongodb');
+-const neo4j = require('neo4j-driver');
+-
+-dotenv.config({ path: path.resolve(__dirname, '..', '.env') });
+-
+-const REQUIRED_ENV_VARS = ['MONGO_URI', 'NEO4J_URI', 'NEO4J_USERNAME', 'NEO4J_PASSWORD'];
+-
+-function logInfo(message, meta) {
+-  if (meta) {
+-    console.log(`[INFO] ${message}`, meta);
+-    return;
+-  }
+-  console.log(`[INFO] ${message}`);
+-}
+-
+-function logError(message, err) {
+-  if (err) {
+-    console.error(`[ERROR] ${message}`);
+-    console.error(err);
+-    return;
+-  }
+-  console.error(`[ERROR] ${message}`);
+-}
+-
+-function assertEnv() {
+-  const missing = REQUIRED_ENV_VARS.filter((name) => !process.env[name] || String(process.env[name]).trim() === '');
+-  if (missing.length > 0) {
+-    throw new Error(`Variaveis obrigatorias ausentes no .env: ${missing.join(', ')}`);
+-  }
+-}
+-
+-function readDumpFile() {
+-  const dumpPath = path.resolve(__dirname, '..', 'data-dump.json');
+-  logInfo(`Lendo arquivo de dados: ${dumpPath}`);
+-
+-  if (!fs.existsSync(dumpPath)) {
+-    throw new Error(`Arquivo nao encontrado: ${dumpPath}`);
+-  }
+-
+-  const raw = fs.readFileSync(dumpPath, 'utf8');
+-  let parsed;
+-  try {
+-    parsed = JSON.parse(raw);
+-  } catch (error) {
+-    throw new Error(`JSON invalido em data-dump.json: ${error.message}`);
+-  }
+-
+-  if (!Array.isArray(parsed)) {
+-    throw new Error('O arquivo data-dump.json deve conter um array de amostras');
+-  }
+-
+-  if (parsed.length === 0) {
+-    throw new Error('O arquivo data-dump.json esta vazio');
+-  }
+-
+-  const sanitized = parsed.map((item, index) => {
+-    const codigo = String(item.codigo || '').trim();
+-    const tipoAmostra = String(item.tipoAmostra || '').trim();
+-    const temperaturaIdeal = Number(item.temperaturaIdeal);
+-
+-    if (!codigo) {
+-      throw new Error(`Item ${index} sem campo obrigatorio: codigo`);
+-    }
+-    if (!tipoAmostra) {
+-      throw new Error(`Item ${index} sem campo obrigatorio: tipoAmostra`);
+-    }
+-    if (!Number.isFinite(temperaturaIdeal)) {
+-      throw new Error(`Item ${index} com temperaturaIdeal invalida`);
+-    }
+-
+-    return {
+-      codigo,
+-      tipoAmostra,
+-      temperaturaIdeal,
+-      origem: item.origem ? String(item.origem).trim() : null,
+-      updatedAt: new Date()
+-    };
+-  });
+-
+-  logInfo(`Arquivo carregado com sucesso. Total de amostras: ${sanitized.length}`);
+-  return sanitized;
+-}
+-
+-async function seedMongo(samples) {
+-  const mongoUri = process.env.MONGO_URI;
+-  const client = new MongoClient(mongoUri);
+-
+-  logInfo('Conectando ao MongoDB Atlas...');
+-  await client.connect();
+-  logInfo('Conexao com MongoDB Atlas estabelecida.');
+-
+-  try {
+-    const db = client.db();
+-    const collection = db.collection('amostras');
+-
+-    logInfo(`Limpando colecao MongoDB: ${db.databaseName}.amostras`);
+-    const deleteResult = await collection.deleteMany({});
+-    logInfo(`Documentos removidos da colecao amostras: ${deleteResult.deletedCount}`);
+-
+-    logInfo('Inserindo novos documentos no MongoDB...');
+-    const insertResult = await collection.insertMany(samples, { ordered: true });
+-    logInfo(`Insercao concluida no MongoDB. Documentos inseridos: ${insertResult.insertedCount}`);
+-  } finally {
+-    await client.close();
+-    logInfo('Conexao MongoDB encerrada.');
+-  }
+-}
+-
+-async function seedNeo4j(samples) {
+-  const driver = neo4j.driver(
+-    process.env.NEO4J_URI,
+-    neo4j.auth.basic(process.env.NEO4J_USERNAME, process.env.NEO4J_PASSWORD)
+-  );
+-
+-  logInfo('Conectando ao Neo4j Aura...');
+-  await driver.verifyConnectivity();
+-  logInfo('Conexao com Neo4j Aura estabelecida.');
+-
+-  const session = driver.session();
+-  try {
+-    logInfo('Criando/atualizando nos :Amostra no Neo4j com MERGE...');
+-
+-    for (let i = 0; i < samples.length; i += 1) {
+-      const sample = samples[i];
+-      logInfo(`Neo4j progresso ${i + 1}/${samples.length} - codigo=${sample.codigo}`);
+-
+-      await session.run(
+-        `
+-          MERGE (a:Amostra {codigo: $codigo})
+-          SET a.tipoAmostra = $tipoAmostra,
+-              a.temperaturaIdeal = $temperaturaIdeal,
+-              a.origem = $origem,
+-              a.updatedAt = datetime()
+-        `,
+-        {
+-          codigo: sample.codigo,
+-          tipoAmostra: sample.tipoAmostra,
+-          temperaturaIdeal: sample.temperaturaIdeal,
+-          origem: sample.origem
+-        }
+-      );
+-    }
+-
+-    logInfo(`Neo4j concluido. Total processado: ${samples.length}`);
+-  } finally {
+-    await session.close();
+-    await driver.close();
+-    logInfo('Conexao Neo4j encerrada.');
+-  }
+-}
+-
+-async function main() {
+-  const startedAt = new Date();
+-  console.log('------------------------------------------------------------');
+-  logInfo('Inicio do seeding BioAvanceD (MongoDB + Neo4j)');
+-  logInfo(`Timestamp de inicio: ${startedAt.toISOString()}`);
+-
+-  try {
+-    assertEnv();
+-    const samples = readDumpFile();
+-
+-    await seedMongo(samples);
+-    await seedNeo4j(samples);
+-
+-    const finishedAt = new Date();
+-    logInfo(`Seeding finalizado com sucesso em ${((finishedAt - startedAt) / 1000).toFixed(2)}s`);
+-    console.log('------------------------------------------------------------');
+-    process.exit(0);
+-  } catch (error) {
+-    logError('Falha durante o seeding.', error.message || error);
+-    console.log('------------------------------------------------------------');
+-    process.exit(1);
+-  }
+-}
+-
+-main();

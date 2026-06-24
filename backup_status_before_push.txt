@@ -1,0 +1,27 @@
+ M README.md
+ M api/backend/.gitignore
+ M api/backend/COMPLIANCE_EVIDENCE.json
+ M api/backend/package.json
+ D api/backend/scripts/create-admin-simple.js
+ M api/backend/scripts/create-db.js
+ D api/backend/scripts/create-neo4j-admin.js
+ D api/backend/scripts/seed-synthea.js
+ M api/backend/src/seeders/index.js
+ M api/backend/src/services/bootstrap.service.js
+ M api/backend/tests/integration/incidents.api.node.test.js
+ M api/backend/tests/integration/iot.api.test.js
+ M package.json
+ D scripts/seed.js
+?? api/backend/src/scripts/createFirstAdmin.js
+?? api/backend/src/scripts/seedEssential.js
+?? api/backend/src/seeders/data/hpo.min.json
+?? api/backend/src/seeders/data/miabis.min.json
+?? api/backend/src/seeders/data/roles.min.json
+?? api/backend/src/seeders/data/sprec.min.json
+?? api/backend/tests/unit/cold-chain-quarantine.service.test.js
+?? api/backend/tests/unit/createFirstAdmin.script.test.js
+?? backup_before_push.patch
+?? backup_status_before_push.txt
+?? reports/system-audit/audit-complete-20260623-202259.json
+?? reports/system-audit/audit-complete-20260623-202259.txt
+?? "titucional\357\200\276\357\200\242"
