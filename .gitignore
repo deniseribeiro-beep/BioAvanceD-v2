@@ -12,6 +12,8 @@ frontend/node_modules/
 .env.*
 !.env.example
 !.env.*.example
+.env*.local
+.env.docker
 *.pem
 *.key
 *.p12
@@ -38,36 +40,56 @@ coverage/
 .cache/
 .vite/
 *.tsbuildinfo
+frontend/dist/
 
 # =========================
-# Test artifacts
+# Test and audit artifacts
 # =========================
 test-results/
 frontend/test-results/
 frontend/playwright-report/
+playwright-report/
+traces/
+frontend/playwright/.auth/
 backend/test-output.txt
+test-output.txt
+reports/
+api/backend/COMPLIANCE_EVIDENCE.json
+COMPLIANCE_EVIDENCE.json
+backup_before_push.patch
+backup_status_before_push.txt
 
 # =========================
 # Runtime uploads and generated files
 # =========================
 backend/uploads/temp/*
 !backend/uploads/temp/.gitkeep
+api/backend/uploads/temp/*
+!api/backend/uploads/temp/.gitkeep
 
 # =========================
 # Local runtime data (Docker volumes / databases)
 # =========================
-data/influxdb/
-data/mongodb/
-data/neo4j/
-data/redis/
-data/_sprec_tmp/
+data/
+api/backend/data/
+*.sqlite3
+
+# Keep only sanitized backend seed reference data
+!api/backend/src/seeders/data/
+api/backend/src/seeders/data/*
+!api/backend/src/seeders/data/rcs-*.json
+!api/backend/src/seeders/data/*.min.json
 
 # =========================
 # Backups and temporary exports
 # =========================
 backend/backups/
+api/backend/backups/
 *.tmp
 *.bak
+
+# Accidental terminal/output artifacts
+titucional*
 
 # =========================
 # OS / IDE
@@ -77,39 +99,5 @@ Thumbs.db
 .vscode/*
 !.vscode/extensions.json
 .idea/
-  
 .vercel
-.env*.local
-data/
-!api/backend/src/seeders/data/
-api/backend/src/seeders/data/*
-!api/backend/src/seeders/data/rcs-*.json
-# Local Python virtualenv - should not be committed
 .venv/
-
-# Frontend build artifacts
-frontend/dist/
-
-# Playwright traces that may contain sensitive test data
-reports/system-audit/playwright/html/trace/
-*.sqlite3
-test-output.txt
-.env.docker
-.env.local
-
-node_modules/
-dist/
-frontend/dist/
-
-.venv/
-data/
-logs/
-playwright-report/
-test-results/
-traces/
-frontend/playwright/.auth/
-*.pem
-*.key
-*.crt
-*.p12
-*.pfx
