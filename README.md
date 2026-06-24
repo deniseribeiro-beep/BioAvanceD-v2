@@ -193,24 +193,6 @@ Regras:
 - o usuário é criado com `forceReset: true` para troca obrigatória no primeiro acesso;
 - as variáveis de ambiente devem ser removidas após a execução.
 
-### Windows PowerShell
-
-```powershell
-$env:BOOTSTRAP_ADMIN_NAME="Nome do Administrador"
-$env:BOOTSTRAP_ADMIN_EMAIL="<email-institucional>"
-$env:BOOTSTRAP_ADMIN_USERNAME="<usuario-admin-inicial>"
-$env:BOOTSTRAP_ADMIN_TEMP_PASSWORD="<credencial-temporaria-forte-unica>"
-$env:BOOTSTRAP_ADMIN_FORCE_RESET="true"
-
-npm.cmd --prefix api/backend run admin:create-first
-
-Remove-Item Env:\BOOTSTRAP_ADMIN_NAME
-Remove-Item Env:\BOOTSTRAP_ADMIN_EMAIL
-Remove-Item Env:\BOOTSTRAP_ADMIN_USERNAME
-Remove-Item Env:\BOOTSTRAP_ADMIN_TEMP_PASSWORD
-Remove-Item Env:\BOOTSTRAP_ADMIN_FORCE_RESET
-```
-
 ### Linux ou CENAPAD
 
 ```bash
@@ -229,18 +211,22 @@ unset BOOTSTRAP_ADMIN_TEMP_PASSWORD
 unset BOOTSTRAP_ADMIN_FORCE_RESET
 ```
 
-### Docker
+### Windows PowerShell
 
-Passe as variáveis para o container no momento da execução:
+```powershell
+$env:BOOTSTRAP_ADMIN_NAME="Nome do Administrador"
+$env:BOOTSTRAP_ADMIN_EMAIL="<email-institucional>"
+$env:BOOTSTRAP_ADMIN_USERNAME="<usuario-admin-inicial>"
+$env:BOOTSTRAP_ADMIN_TEMP_PASSWORD="<credencial-temporaria-forte-unica>"
+$env:BOOTSTRAP_ADMIN_FORCE_RESET="true"
 
-```bash
-docker compose --env-file .env.docker -f docker-compose.yml exec \
-  -e BOOTSTRAP_ADMIN_NAME="Nome do Administrador" \
-  -e BOOTSTRAP_ADMIN_EMAIL="<email-institucional>" \
-  -e BOOTSTRAP_ADMIN_USERNAME="<usuario-admin-inicial>" \
-  -e BOOTSTRAP_ADMIN_TEMP_PASSWORD="<credencial-temporaria-forte-unica>" \
-  -e BOOTSTRAP_ADMIN_FORCE_RESET="true" \
-  backend npm run admin:create-first
+npm.cmd --prefix api/backend run admin:create-first
+
+Remove-Item Env:\BOOTSTRAP_ADMIN_NAME
+Remove-Item Env:\BOOTSTRAP_ADMIN_EMAIL
+Remove-Item Env:\BOOTSTRAP_ADMIN_USERNAME
+Remove-Item Env:\BOOTSTRAP_ADMIN_TEMP_PASSWORD
+Remove-Item Env:\BOOTSTRAP_ADMIN_FORCE_RESET
 ```
 
 Fluxos antigos de criação de administrador com credencial fixa não devem ser usados.
@@ -256,10 +242,10 @@ npm run audit:full
 
 ## Deploy e validação no CENAPAD
 
-No CENAPAD, use a branch limpa `audit/intake-governance-i18n-orpha` e atualize o repositório antes de subir os serviços:
+No CENAPAD, use a branch limpa `audit/intake-governance-i18n-orpha` e atualize o repositório antes de subir os serviços. Ajuste o primeiro `cd` para a pasta real do clone.
 
 ```bash
-cd ~/BioAvanceD-v2
+cd /home/lovelace/proj/proj1091/deniser/bioavanced-validation/source/BioAvanceD-v2
 git fetch origin
 git checkout audit/intake-governance-i18n-orpha
 git pull --ff-only origin audit/intake-governance-i18n-orpha
@@ -267,23 +253,84 @@ git rev-parse --short HEAD
 git status --short --branch
 ```
 
-Antes de executar seed, backend, testes ou auditoria, configure as variáveis de segurança do ambiente. Elas podem estar no `api/backend/.env` ou exportadas no processo. Não versionar esses valores.
+Configure as variáveis de segurança do ambiente antes de executar seed, backend, testes ou auditoria. Elas podem estar no `api/backend/.env` ou exportadas no processo. Não versionar esses valores.
 
 ```bash
-export ENCRYPTION_KEY="<chave-forte-especifica-do-cenapad>"
+export ENCRYPTION_KEY="$(openssl rand -base64 48)"
 export ENCRYPTION_KEY_ID="cenapad-validation"
-export USER_ANON_SALT="<salt-forte-especifico-do-cenapad>"
+export USER_ANON_SALT="$(openssl rand -base64 32)"
 ```
 
 A ausência de `ENCRYPTION_KEY` faz o teste de compliance LGPD AES-256-GCM falhar com erros semelhantes a `expected 1.8 to be null` ou `expected null to be truthy`, pois os campos PII não são criptografados.
 
-Para conferir rapidamente se a chave está visível para o processo Node:
+Para conferir rapidamente se a chave está visível para o processo Node, use aspas simples no Bash. Não use aspas duplas com `!process.env`, pois o Bash pode interpretar `!` como expansão de histórico.
 
 ```bash
-node -e "require('dotenv').config({ path: 'api/backend/.env' }); if (!process.env.ENCRYPTION_KEY) { throw new Error('ENCRYPTION_KEY ausente'); } console.log('ENCRYPTION_KEY configurada');"
+node -e 'if (!process.env.ENCRYPTION_KEY) { throw new Error("ENCRYPTION_KEY ausente"); } console.log("ENCRYPTION_KEY configurada");'
 ```
 
-Após subir MongoDB, Redis, InfluxDB, Neo4j, backend e frontend, execute a sequência de validação:
+### Node.js no CENAPAD
+
+O Node do sistema em alguns nós do CENAPAD pode ser antigo, por exemplo `/usr/bin/node` com npm 6.x. Nesse caso, comandos como `vitest run` podem falhar com erro de módulo ESM, como `SyntaxError: Unexpected string` em `vitest.mjs`. Para validação técnica, use Node 22 via Podman.
+
+```bash
+node -v
+npm -v
+which node
+```
+
+Se o Node do host for antigo e não houver módulo `node/20+` disponível, rode a validação em container Node 22.
+
+### Podman rootless no CENAPAD
+
+No CENAPAD, não use `--userns=keep-id`, pois o usuário pode não ter faixas `/etc/subuid` e `/etc/subgid`. Esse modo pode falhar com `User namespaces enabled, but no user mapping found`.
+
+As mensagens abaixo são esperadas no ambiente rootless/NFS e não indicam falha por si só:
+
+```text
+Network file system detected as backing store. Enforcing overlay option force_mask="700".
+Additional gid=... is not present in the user namespace, skip setting it.
+```
+
+Se aparecerem erros de lock de volumes antigos, execute antes:
+
+```bash
+podman ps -a
+podman system renumber
+```
+
+### Validação com Node 22 via Podman
+
+Use este bloco a partir da raiz do repositório. Ele evita o Node antigo do host, não usa `--userns=keep-id` e não usa `:Z` no volume.
+
+```bash
+cd /home/lovelace/proj/proj1091/deniser/bioavanced-validation/source/BioAvanceD-v2
+
+export ENCRYPTION_KEY="$(openssl rand -base64 48)"
+export ENCRYPTION_KEY_ID="cenapad-validation"
+export USER_ANON_SALT="$(openssl rand -base64 32)"
+
+podman run --rm -it \
+  -v "$PWD":/app \
+  -w /app \
+  -e ENCRYPTION_KEY \
+  -e ENCRYPTION_KEY_ID \
+  -e USER_ANON_SALT \
+  docker.io/library/node:22-alpine \
+  sh -lc '
+    node -v &&
+    npm -v &&
+    npm --prefix api/backend install --no-audit --no-fund --package-lock=false &&
+    npm --prefix frontend install --no-audit --no-fund --package-lock=false &&
+    npm --prefix api/backend run test:ci &&
+    npm --prefix frontend run typecheck &&
+    npm run audit:full
+  '
+```
+
+Não use `npm ci` no CENAPAD se o lockfile estiver fora de sincronia com `package.json`, pois o npm pode interromper com erro como `Missing: @emnapi/runtime... from lock file`. Para validação do protótipo no CENAPAD, use `npm install --package-lock=false` dentro do container Node 22. A correção definitiva do lockfile deve ser feita em ambiente de desenvolvimento e commitada separadamente.
+
+Após subir MongoDB, Redis, InfluxDB, Neo4j, backend e frontend, a sequência funcional esperada é:
 
 ```bash
 npm --prefix api/backend run seed:essential
