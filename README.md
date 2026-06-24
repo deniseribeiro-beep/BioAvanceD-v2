@@ -1,32 +1,35 @@
 # BioAvanceD
 
-BioAvanceD é um sistema médico-informacional para gestão digital de biobancos, com foco em governança de biospecímenes, consentimento, rastreabilidade, qualidade pré-analítica, cadeia fria e interoperabilidade semântica.
+BioAvanceD é um protótipo de sistema médico-informacional para gestão digital de biobancos, projetado para governança de biospecímenes, rastreabilidade, consentimento, qualidade pré-analítica, cadeia fria e interoperabilidade semântica.
 
-O projeto combina frontend React/Vite, backend Node.js/Express e persistência poliglota com MongoDB, Redis, Neo4j e InfluxDB.
+O projeto adota uma arquitetura poliglota e orientada a eventos, combinando frontend React/Vite, backend Node.js/Express e persistência com MongoDB, Neo4j, InfluxDB e Redis.
 
-## Visão geral
+## Escopo atual do protótipo
 
-Principais módulos funcionais:
+O protótipo atual tem foco em validação técnica e sistêmica. Ele não deve subir com dados reais nem com dados operacionais pré-carregados.
 
-1. Pacientes/doadores.
-2. Consentimento e TCLE.
-3. Cadastro integrado de amostras.
-4. Governança RCS-GOV/SPREC.
-5. Armazenamento físico e etiquetas.
-6. Equipamentos, freezers, sensores e políticas de temperatura.
-7. Incidentes de cadeia fria e quarentena operacional.
-8. Terminologias clínicas, ORPHA, OMIM, CID-10, HPO e ATC.
-9. Auditoria, RBAC e rastreabilidade.
+Módulos centrais:
+
+1. Cadastro e governança de pacientes/doadores.
+2. Consentimento dinâmico e TCLE.
+3. Intake clínico e cadastro integrado de amostras.
+4. Governança pré-analítica RCS-GOV/SPREC/MIABIS.
+5. Rastreabilidade e cadeia de custódia append-only.
+6. Armazenamento físico, etiquetas e localização.
+7. Equipamentos, sensores, políticas de temperatura e cadeia fria.
+8. Quarentena lógica por consentimento, qualidade e incidente de cadeia fria.
+9. Terminologias clínicas e semânticas: ORPHA, OMIM, CID, HPO, ATC e FHIR.
+10. RBAC, auditoria, segurança e bootstrap controlado.
 
 ## Stack
 
 - Frontend: React, TypeScript, Vite.
 - Backend: Node.js, Express.
 - Banco documental: MongoDB.
-- Grafo de linhagem/consentimento: Neo4j.
-- Telemetria: InfluxDB.
-- Cache/eventos: Redis.
-- Testes: Vitest, Supertest e scripts de auditoria.
+- Grafo de linhagem e consentimento: Neo4j.
+- Telemetria e séries temporais: InfluxDB.
+- Cache, filas e eventos: Redis.
+- Testes: Vitest, Supertest, Playwright e scripts de auditoria.
 
 ## Princípio de bootstrap limpo
 
@@ -38,10 +41,11 @@ O bootstrap essencial não deve criar por padrão:
 - amostras;
 - consentimentos assinados;
 - resultados;
+- observações clínicas reais;
 - biomarcadores reais;
 - incidentes;
 - sensores, freezers ou localizações preenchidas;
-- usuários administrativos com credencial fixa;
+- usuário administrador com credencial fixa;
 - dumps ou dados demo.
 
 Dados operacionais devem ser criados pelo fluxo da aplicação ou por seeds sintéticos explicitamente marcados como `demo`.
@@ -51,7 +55,7 @@ Dados operacionais devem ser criados pelo fluxo da aplicação ou por seeds sint
 Após o seed essencial, o banco deve conter apenas:
 
 - coleções canônicas e índices mínimos;
-- roles e permissões;
+- roles e permissões mínimas;
 - dados de referência RCS-GOV;
 - SPREC mínimo;
 - MIABIS mínimo;
@@ -60,9 +64,17 @@ Após o seed essencial, o banco deve conter apenas:
 - bootstrap ATC mínimo;
 - log técnico de inicialização, quando aplicável.
 
-## Instalação local
+## Instalação local limpa
 
-Instale as dependências principais:
+Clone o repositório em uma pasta nova para garantir paridade com o ambiente CENAPAD:
+
+```bash
+git clone https://github.com/deniseribeiro-beep/BioAvanceD-v2.git
+cd BioAvanceD-v2
+git checkout audit/intake-governance-i18n-orpha
+```
+
+Instale dependências:
 
 ```bash
 npm install
@@ -70,11 +82,11 @@ npm --prefix api/backend install
 npm --prefix frontend install
 ```
 
-Configure variáveis de ambiente a partir dos exemplos disponíveis. Não versione arquivos `.env`, chaves, tokens ou certificados.
+Configure variáveis de ambiente a partir dos exemplos disponíveis. Não versionar `.env`, chaves, tokens, certificados ou dumps.
 
 ## Variáveis principais
 
-Preencha no ambiente local ou no `.env.docker`:
+Preencha no ambiente local, `.env` ou `.env.docker`, conforme o modo de execução:
 
 ```env
 MONGO_URI=
@@ -96,7 +108,7 @@ API_URL=
 ALLOWED_ORIGINS=
 ```
 
-Para auditoria local sem integrações externas, mantenha:
+Para auditoria local sem integrações externas:
 
 ```env
 ALLOW_CLOUD_INTEGRATIONS=false
@@ -113,66 +125,7 @@ cp .env.docker.example .env.docker
 docker compose --env-file .env.docker -f docker-compose.yml up --build backend frontend
 ```
 
-<<<<<<< HEAD
-Ou usando os scripts da raiz:
-=======
-### Seeds e Índices RCS-GOV
-
-Após os containers estarem saudáveis:
-
-```bash
-docker compose --env-file .env.docker -f docker-compose.yml exec backend npm run migrate:rcs
-docker compose --env-file .env.docker -f docker-compose.yml exec backend npm run seed
-```
-
-O seed do backend inclui o modelo `RCS-GOV-1.0`, catálogos SPREC, severidades, pesos, thresholds e regras de governança.
-
-### Criar Primeiro Admin
-
-O sistema não cria administrador por padrão, e o seed essencial não cria usuário.
-O primeiro admin só pode ser criado quando a coleção `users` estiver vazia. A
-senha temporária vem de variável de ambiente, não é impressa no console, e o
-usuário é criado com `forceReset: true`. Após executar o bootstrap, remova as
-variáveis do ambiente.
-
-Windows PowerShell:
-
-```powershell
-$env:BOOTSTRAP_ADMIN_NAME="Nome do Administrador"
-$env:BOOTSTRAP_ADMIN_EMAIL="admin@example.org"
-$env:BOOTSTRAP_ADMIN_USERNAME="admin"
-$env:BOOTSTRAP_ADMIN_TEMP_PASSWORD="DefinaUmaSenhaTemporariaForte@123"
-$env:BOOTSTRAP_ADMIN_FORCE_RESET="true"
-npm.cmd --prefix api/backend run admin:create-first
-Remove-Item Env:\BOOTSTRAP_ADMIN_NAME
-Remove-Item Env:\BOOTSTRAP_ADMIN_EMAIL
-Remove-Item Env:\BOOTSTRAP_ADMIN_USERNAME
-Remove-Item Env:\BOOTSTRAP_ADMIN_TEMP_PASSWORD
-Remove-Item Env:\BOOTSTRAP_ADMIN_FORCE_RESET
-```
-
-Linux/CENAPAD:
-
-```bash
-export BOOTSTRAP_ADMIN_NAME="Nome do Administrador"
-export BOOTSTRAP_ADMIN_EMAIL="admin@example.org"
-export BOOTSTRAP_ADMIN_USERNAME="admin"
-export BOOTSTRAP_ADMIN_TEMP_PASSWORD="DefinaUmaSenhaTemporariaForte@123"
-export BOOTSTRAP_ADMIN_FORCE_RESET="true"
-npm --prefix api/backend run admin:create-first
-unset BOOTSTRAP_ADMIN_NAME BOOTSTRAP_ADMIN_EMAIL BOOTSTRAP_ADMIN_USERNAME BOOTSTRAP_ADMIN_TEMP_PASSWORD BOOTSTRAP_ADMIN_FORCE_RESET
-```
-
-Docker:
-
-```bash
-docker compose --env-file .env.docker -f docker-compose.yml exec backend npm run admin:create-first
-```
-
-### Logs, Status e Parada
-
-Logs de backend e frontend:
->>>>>>> 2a96483 (chore: sanitize bootstrap seeds and secure first admin flow)
+Ou usando scripts da raiz:
 
 ```bash
 npm run dev:up
@@ -184,7 +137,7 @@ npm run dev:down
 Serviços esperados:
 
 - Frontend: http://localhost:5173
-- Backend: http://localhost:3000
+- Backend API: http://localhost:3000
 - MongoDB: localhost:27017
 - Redis: localhost:6379
 - Neo4j Browser: http://localhost:7474
@@ -204,29 +157,29 @@ Em Docker:
 docker compose --env-file .env.docker -f docker-compose.yml exec backend npm run seed:essential
 ```
 
-Esse seed deve ser idempotente e não deve executar `deleteMany` em coleções operacionais. Ele também não deve criar pacientes, amostras, consentimentos, resultados, sensores, freezers, incidentes ou usuário administrativo.
+Esse seed deve ser idempotente e não deve executar `deleteMany` em coleções operacionais. Ele também não deve criar pacientes, amostras, consentimentos, resultados, sensores, freezers, incidentes ou usuário administrador.
 
 ## Criar primeiro administrador com bootstrap seguro
 
 O sistema não cria administrador por padrão. O primeiro administrador deve ser criado explicitamente após o banco estar inicializado.
 
-Regras do bootstrap seguro:
+Regras:
 
 - só cria o primeiro administrador se a coleção `users` estiver vazia;
 - se já existir qualquer usuário, o script encerra sem alteração;
-- a credencial temporária deve vir de variável de ambiente;
-- a credencial temporária não deve ser impressa no console;
-- o usuário deve ser criado com `accessType: 4` e `roleName: "Administrador"`;
-- o usuário deve ser criado com `forceReset: true` para troca obrigatória no primeiro acesso;
+- a credencial temporária vem de variável de ambiente;
+- a credencial temporária não é impressa no console;
+- o usuário é criado com `accessType: 4` e `roleName: "Administrador"`;
+- o usuário é criado com `forceReset: true` para troca obrigatória no primeiro acesso;
 - as variáveis de ambiente devem ser removidas após a execução.
 
 ### Windows PowerShell
 
 ```powershell
 $env:BOOTSTRAP_ADMIN_NAME="Nome do Administrador"
-$env:BOOTSTRAP_ADMIN_EMAIL="email.institucional@exemplo.br"
-$env:BOOTSTRAP_ADMIN_USERNAME="admin.inicial"
-$env:BOOTSTRAP_ADMIN_TEMP_PASSWORD="defina-uma-credencial-temporaria-forte"
+$env:BOOTSTRAP_ADMIN_EMAIL="<email-institucional>"
+$env:BOOTSTRAP_ADMIN_USERNAME="<usuario-admin-inicial>"
+$env:BOOTSTRAP_ADMIN_TEMP_PASSWORD="<credencial-temporaria-forte-unica>"
 $env:BOOTSTRAP_ADMIN_FORCE_RESET="true"
 
 npm.cmd --prefix api/backend run admin:create-first
@@ -242,9 +195,9 @@ Remove-Item Env:\BOOTSTRAP_ADMIN_FORCE_RESET
 
 ```bash
 export BOOTSTRAP_ADMIN_NAME="Nome do Administrador"
-export BOOTSTRAP_ADMIN_EMAIL="email.institucional@exemplo.br"
-export BOOTSTRAP_ADMIN_USERNAME="admin.inicial"
-export BOOTSTRAP_ADMIN_TEMP_PASSWORD="defina-uma-credencial-temporaria-forte"
+export BOOTSTRAP_ADMIN_EMAIL="<email-institucional>"
+export BOOTSTRAP_ADMIN_USERNAME="<usuario-admin-inicial>"
+export BOOTSTRAP_ADMIN_TEMP_PASSWORD="<credencial-temporaria-forte-unica>"
 export BOOTSTRAP_ADMIN_FORCE_RESET="true"
 
 npm --prefix api/backend run admin:create-first
@@ -258,13 +211,19 @@ unset BOOTSTRAP_ADMIN_FORCE_RESET
 
 ### Docker
 
-Defina as variáveis no ambiente do container ou execute com variáveis exportadas no shell antes do comando:
+Passe as variáveis para o container no momento da execução:
 
 ```bash
-docker compose --env-file .env.docker -f docker-compose.yml exec backend npm run admin:create-first
+docker compose --env-file .env.docker -f docker-compose.yml exec \
+  -e BOOTSTRAP_ADMIN_NAME="Nome do Administrador" \
+  -e BOOTSTRAP_ADMIN_EMAIL="<email-institucional>" \
+  -e BOOTSTRAP_ADMIN_USERNAME="<usuario-admin-inicial>" \
+  -e BOOTSTRAP_ADMIN_TEMP_PASSWORD="<credencial-temporaria-forte-unica>" \
+  -e BOOTSTRAP_ADMIN_FORCE_RESET="true" \
+  backend npm run admin:create-first
 ```
 
-Fluxos antigos de criação de administrador com credencial fixa não devem ser usados como procedimento recomendado.
+Fluxos antigos de criação de administrador com credencial fixa não devem ser usados.
 
 ## Ordem recomendada para ambiente limpo
 
@@ -275,7 +234,7 @@ npm --prefix api/backend run test:ci
 npm run audit:full
 ```
 
-No CENAPAD, após subir MongoDB, Redis, InfluxDB, Neo4j, backend e frontend, use a mesma lógica:
+No CENAPAD, após subir MongoDB, Redis, InfluxDB, Neo4j, backend e frontend, use a mesma sequência:
 
 ```bash
 npm --prefix api/backend run seed:essential
@@ -332,16 +291,44 @@ Não versionar:
 - logs e relatórios temporários;
 - volumes locais de bancos (`data/mongodb`, `data/neo4j`, `data/redis`, `data/influxdb`);
 - CSV/XML grandes de terminologias externas;
-- pacientes, amostras, consentimentos ou resultados reais.
+- pacientes, amostras, consentimentos ou resultados reais;
+- evidências locais de execução geradas fora do fluxo de documentação aprovado.
 
 Versionar:
 
 - código-fonte;
+- testes automatizados;
 - scripts auditáveis;
 - configurações sem segredo;
 - documentação;
 - exemplos de ambiente;
-- dados mínimos de referência, como `rcs-*.json` e seeds mínimos explicitamente sanitizados.
+- dados mínimos de referência explicitamente sanitizados, como `rcs-*.json` e seeds `.min.json`.
+
+## Limpeza local para clone limpo
+
+Para ter no computador uma cópia igual ao repositório remoto limpo, prefira clonar em uma nova pasta.
+
+Se precisar limpar uma cópia existente, confira antes o que será removido:
+
+```bash
+git clean -fdxn
+```
+
+Depois de revisar a lista, remova arquivos não rastreados:
+
+```bash
+git clean -fdx
+```
+
+Para descartar alterações locais e voltar exatamente ao estado remoto da branch:
+
+```bash
+git fetch origin
+git reset --hard origin/audit/intake-governance-i18n-orpha
+git clean -fdx
+```
+
+Use esses comandos somente depois de salvar qualquer arquivo local que ainda precise manter.
 
 ## Integrações externas
 
@@ -356,6 +343,20 @@ Desabilitado por padrão:
 - MQTT externo.
 
 Integrações externas devem ser habilitadas apenas por flags explícitas e com variáveis de ambiente fora do repositório.
+
+## Alinhamento científico
+
+O protótipo atual está alinhado ao escopo de validação técnica de arquitetura para biobancos digitais, com ênfase em:
+
+- persistência poliglota;
+- interoperabilidade FHIR/MIABIS/SPREC;
+- governança de consentimento em tempo de execução;
+- RCS-GOV para qualificação pré-analítica;
+- cadeia de custódia verificável;
+- monitoramento de cadeia fria e quarentena pós-incidente;
+- uso exclusivo de dados fictícios/sintéticos nas fases de desenvolvimento e validação técnica.
+
+Módulos de inteligência artificial assistiva ou preditiva devem ser tratados como escopo futuro, salvo quando houver implementação e validação específicas.
 
 ## Licença
 
