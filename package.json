@@ -1,6 +1,6 @@
 {
   "scripts": {
-    "audit:full": "node scripts/audit-complete-system.js",
+    "audit:full": "node scripts/system-audit-full.js",
     "seed": "npm --prefix api/backend run seed:essential",
     "build": "vite build",
     "backend:admin:create-first": "npm --prefix api/backend run admin:create-first",

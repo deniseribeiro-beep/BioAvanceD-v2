@@ -33,6 +33,21 @@ Módulos de inteligência artificial assistiva ou preditiva devem ser tratados c
 - Cache, filas e eventos: Redis.
 - Testes: Vitest, Supertest, Playwright e scripts de auditoria.
 
+## Documentos acadêmicos e científicos
+
+Documentos científicos, submissões, materiais de pesquisa, CEP, figuras e pacotes de registro INPI ficam em `academico/`.
+
+Estrutura:
+
+- `academico/artigo-joms/`: manuscrito e arquivos suplementares do artigo.
+- `academico/rcs-submetido/`: materiais de submissão relacionados ao RCS.
+- `academico/inpi/`: pacote, hash e documentação de registro INPI.
+- `academico/projeto-pesquisa/`: documentos de projeto de pesquisa.
+- `academico/cep/`: documentos relacionados ao CEP.
+- `academico/figuras/`: figuras e materiais visuais acadêmicos.
+
+O diretório `docs/` deve permanecer reservado para documentação técnica de operação, importação, deploy e desenvolvimento.
+
 ## Princípio de bootstrap limpo
 
 O sistema deve subir em banco limpo com apenas dados estruturais e dados de referência essenciais.

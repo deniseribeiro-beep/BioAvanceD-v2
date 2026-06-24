@@ -227,7 +227,7 @@ function runAudit() {
 
   registerCheck('Scripts de auditoria existentes', () => {
     const requiredScripts = [
-      'scripts/audit-complete-system.js',
+      'scripts/system-audit-full.js',
       `${BACKEND_DIR}/scripts/audit-database.js`
     ];
 
