@@ -1,12 +1,12 @@
 # BioAvanceD
 
-BioAvanceD é um protótipo de sistema médico-informacional para gestão digital de biobancos, projetado para governança de biospecímenes, rastreabilidade, consentimento, qualidade pré-analítica, cadeia fria e interoperabilidade semântica.
+BioAvanceD é um protótipo de sistema médico-informacional para gestão digital de biobancos, desenvolvido para validar uma arquitetura poliglota, orientada a eventos e governada em tempo de execução para biospecímenes, consentimento, rastreabilidade, qualidade pré-analítica, cadeia fria e interoperabilidade semântica.
 
-O projeto adota uma arquitetura poliglota e orientada a eventos, combinando frontend React/Vite, backend Node.js/Express e persistência com MongoDB, Neo4j, InfluxDB e Redis.
+O projeto combina frontend React/Vite, backend Node.js/Express e persistência com MongoDB, Neo4j, InfluxDB e Redis.
 
 ## Escopo atual do protótipo
 
-O protótipo atual tem foco em validação técnica e sistêmica. Ele não deve subir com dados reais nem com dados operacionais pré-carregados.
+O protótipo atual tem foco em validação técnica e sistêmica com dados fictícios/sintéticos. Ele não deve subir com dados reais nem com dados operacionais pré-carregados.
 
 Módulos centrais:
 
@@ -20,6 +20,8 @@ Módulos centrais:
 8. Quarentena lógica por consentimento, qualidade e incidente de cadeia fria.
 9. Terminologias clínicas e semânticas: ORPHA, OMIM, CID, HPO, ATC e FHIR.
 10. RBAC, auditoria, segurança e bootstrap controlado.
+
+Módulos de inteligência artificial assistiva ou preditiva devem ser tratados como escopo futuro, exceto quando houver implementação e validação específicas.
 
 ## Stack
 
@@ -66,7 +68,7 @@ Após o seed essencial, o banco deve conter apenas:
 
 ## Instalação local limpa
 
-Clone o repositório em uma pasta nova para garantir paridade com o ambiente CENAPAD:
+Para ter uma cópia igual à versão usada no ambiente CENAPAD, prefira clonar em uma pasta nova:
 
 ```bash
 git clone https://github.com/deniseribeiro-beep/BioAvanceD-v2.git
@@ -300,7 +302,7 @@ Versionar:
 - testes automatizados;
 - scripts auditáveis;
 - configurações sem segredo;
-- documentação;
+- documentação técnica essencial;
 - exemplos de ambiente;
 - dados mínimos de referência explicitamente sanitizados, como `rcs-*.json` e seeds `.min.json`.
 
@@ -356,7 +358,7 @@ O protótipo atual está alinhado ao escopo de validação técnica de arquitetu
 - monitoramento de cadeia fria e quarentena pós-incidente;
 - uso exclusivo de dados fictícios/sintéticos nas fases de desenvolvimento e validação técnica.
 
-Módulos de inteligência artificial assistiva ou preditiva devem ser tratados como escopo futuro, salvo quando houver implementação e validação específicas.
+Esse escopo é compatível com validação de protótipo e com o parecer ético quando restrito a dados sintéticos/fictícios. Qualquer uso futuro de dados reais deve seguir nova apreciação ética quando exigido pelo CEP.
 
 ## Licença
 
