@@ -113,7 +113,66 @@ cp .env.docker.example .env.docker
 docker compose --env-file .env.docker -f docker-compose.yml up --build backend frontend
 ```
 
+<<<<<<< HEAD
 Ou usando os scripts da raiz:
+=======
+### Seeds e Índices RCS-GOV
+
+Após os containers estarem saudáveis:
+
+```bash
+docker compose --env-file .env.docker -f docker-compose.yml exec backend npm run migrate:rcs
+docker compose --env-file .env.docker -f docker-compose.yml exec backend npm run seed
+```
+
+O seed do backend inclui o modelo `RCS-GOV-1.0`, catálogos SPREC, severidades, pesos, thresholds e regras de governança.
+
+### Criar Primeiro Admin
+
+O sistema não cria administrador por padrão, e o seed essencial não cria usuário.
+O primeiro admin só pode ser criado quando a coleção `users` estiver vazia. A
+senha temporária vem de variável de ambiente, não é impressa no console, e o
+usuário é criado com `forceReset: true`. Após executar o bootstrap, remova as
+variáveis do ambiente.
+
+Windows PowerShell:
+
+```powershell
+$env:BOOTSTRAP_ADMIN_NAME="Nome do Administrador"
+$env:BOOTSTRAP_ADMIN_EMAIL="admin@example.org"
+$env:BOOTSTRAP_ADMIN_USERNAME="admin"
+$env:BOOTSTRAP_ADMIN_TEMP_PASSWORD="DefinaUmaSenhaTemporariaForte@123"
+$env:BOOTSTRAP_ADMIN_FORCE_RESET="true"
+npm.cmd --prefix api/backend run admin:create-first
+Remove-Item Env:\BOOTSTRAP_ADMIN_NAME
+Remove-Item Env:\BOOTSTRAP_ADMIN_EMAIL
+Remove-Item Env:\BOOTSTRAP_ADMIN_USERNAME
+Remove-Item Env:\BOOTSTRAP_ADMIN_TEMP_PASSWORD
+Remove-Item Env:\BOOTSTRAP_ADMIN_FORCE_RESET
+```
+
+Linux/CENAPAD:
+
+```bash
+export BOOTSTRAP_ADMIN_NAME="Nome do Administrador"
+export BOOTSTRAP_ADMIN_EMAIL="admin@example.org"
+export BOOTSTRAP_ADMIN_USERNAME="admin"
+export BOOTSTRAP_ADMIN_TEMP_PASSWORD="DefinaUmaSenhaTemporariaForte@123"
+export BOOTSTRAP_ADMIN_FORCE_RESET="true"
+npm --prefix api/backend run admin:create-first
+unset BOOTSTRAP_ADMIN_NAME BOOTSTRAP_ADMIN_EMAIL BOOTSTRAP_ADMIN_USERNAME BOOTSTRAP_ADMIN_TEMP_PASSWORD BOOTSTRAP_ADMIN_FORCE_RESET
+```
+
+Docker:
+
+```bash
+docker compose --env-file .env.docker -f docker-compose.yml exec backend npm run admin:create-first
+```
+
+### Logs, Status e Parada
+
+Logs de backend e frontend:
+>>>>>>> 2a96483 (chore: sanitize bootstrap seeds and secure first admin flow)
 
 ```bash
 npm run dev:up

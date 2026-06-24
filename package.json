@@ -1,10 +1,11 @@
 {
   "scripts": {
     "audit:full": "node scripts/audit-complete-system.js",
-    "seed": "node scripts/seed.js",
+    "seed": "npm --prefix api/backend run seed:essential",
+    "seed:legacy-demo": "node scripts/seed-legacy-demo.js",
     "build": "vite build",
-    "backend:user:check": "npm --prefix api/backend run user:check",
-    "backend:user:create-admin": "npm --prefix api/backend run user:create-admin",
+    "backend:admin:create-first": "npm --prefix api/backend run admin:create-first",
+    "backend:user:create-admin": "npm --prefix api/backend run admin:create-first",
     "dev:up": "docker compose --env-file .env.docker -f docker-compose.yml up --build backend frontend",
     "dev:down": "docker compose --env-file .env.docker -f docker-compose.yml down",
     "dev:logs": "docker compose --env-file .env.docker -f docker-compose.yml logs -f backend frontend",

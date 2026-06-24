@@ -1,317 +1,117 @@
 require('dotenv').config();
 const { connectNewDB, closeConnection } = require('../src/database/mongo');
+const { CANONICAL_COLLECTIONS } = require('../src/config/collections');
 const logger = require('../src/utils/logger');
 
-/**
- * Script para criar o banco de dados novo com TODAS as coleções necessárias
- * Baseado nos models implementados
- */
+const COLLECTIONS = [
+  {
+    name: 'users',
+    indexes: [{ email: 1 }, { username: 1 }, { accessType: 1 }, { status: 1 }],
+    description: 'Usuarios do sistema',
+  },
+  {
+    name: CANONICAL_COLLECTIONS.patients,
+    indexes: [{ patientID: 1 }, { patientNameNormalized: 1, birthDateKey: 1 }, { createdAt: 1 }],
+    description: 'Pacientes canonicos',
+  },
+  {
+    name: CANONICAL_COLLECTIONS.samples,
+    indexes: [{ sampleID: 1 }, { patientID: 1 }, { barcode: 1 }, { locationID: 1 }, { createdAt: 1 }],
+    description: 'Amostras canonicas',
+  },
+  {
+    name: CANONICAL_COLLECTIONS.consents,
+    indexes: [{ patientId: 1, status: 1 }, { templateId: 1 }, { createdAt: 1 }],
+    description: 'Consentimentos de pacientes',
+  },
+  {
+    name: CANONICAL_COLLECTIONS.consentTemplates,
+    indexes: [{ active: 1 }, { version: 1 }, { createdAt: 1 }],
+    description: 'Templates de TCLE',
+  },
+  {
+    name: CANONICAL_COLLECTIONS.sampleMovements,
+    indexes: [{ sampleID: 1, timestamp: -1 }, { barcode: 1, timestamp: -1 }, { movementID: 1 }],
+    description: 'Ledger de movimentacoes de amostras',
+  },
+  {
+    name: CANONICAL_COLLECTIONS.biomarkerObservations,
+    indexes: [{ patientID: 1, biomarkerType: 1, collectedAt: -1 }, { idempotencyKey: 1 }],
+    description: 'Observacoes de biomarcadores',
+  },
+  {
+    name: CANONICAL_COLLECTIONS.cids,
+    indexes: [{ code: 1 }, { codigo: 1 }, { descricao: 1 }],
+    description: 'CID/terminologias clinicas',
+  },
+  {
+    name: CANONICAL_COLLECTIONS.clinicalUnits,
+    indexes: [{ unitID: 1 }, { name: 1 }, { active: 1 }],
+    description: 'Unidades clinicas',
+  },
+  {
+    name: CANONICAL_COLLECTIONS.diseaseDictionary,
+    indexes: [{ orpha_code: 1 }, { disease_category: 1 }, { active: 1 }],
+    description: 'Regras essenciais de doencas',
+  },
+  {
+    name: CANONICAL_COLLECTIONS.medicationDictionary,
+    indexes: [{ atc_code: 1 }, { name: 1 }, { disease_categories: 1 }],
+    description: 'Dicionario essencial de medicamentos',
+  },
+  {
+    name: 'roles',
+    indexes: [{ accessType: 1 }],
+    description: 'Roles e permissoes',
+  },
+  {
+    name: 'terminologies',
+    indexes: [{ sistema: 1, codigo: 1 }, { label: 1 }],
+    description: 'Terminologias SPREC/HPO minimas',
+  },
+  {
+    name: 'sampleTypes',
+    indexes: [{ id: 1 }],
+    description: 'MIABIS sample types',
+  },
+  {
+    name: 'sampleOrigins',
+    indexes: [{ id: 1 }],
+    description: 'MIABIS sample origins',
+  },
+  {
+    name: 'extractionProtocols',
+    indexes: [{ id: 1 }],
+    description: 'MIABIS extraction protocols',
+  },
+  {
+    name: 'qualityDescriptions',
+    indexes: [{ id: 1 }],
+    description: 'MIABIS quality descriptions',
+  },
+];
+
 async function createDatabase() {
   try {
-    logger.info('Iniciando criação do banco de dados novo...');
-
-    // Conecta ao banco novo
+    logger.info('Iniciando criacao/verificacao do banco canonico...');
     const db = await connectNewDB();
 
-    logger.info('Criando todas as coleções...');
-
-    // Lista de todas as coleções necessárias baseadas nos models
-    const collections = [
-      {
-        name: 'users',
-        indexes: [
-          { email: 1 },
-          { username: 1 },
-          { createdAt: 1 }
-        ],
-        description: 'Usuários do sistema (com MFA)'
-      },
-      {
-        name: 'pacientes',
-        indexes: [
-          { patientID: 1 },
-          { patientName: 1 },
-          { clinicalUnit: 1 },
-          { createdAt: 1 }
-        ],
-        description: 'Pacientes do biobanco'
-      },
-      {
-        name: 'amostras',
-        indexes: [
-          { sampleID: 1 },
-          { patientID: 1 },
-          { barcode: 1 },
-          { currentStatus: 1 },
-          { locationID: 1 },
-          { 'storageLocation.boxId': 1 },
-          { 'storageLocation.position': 1 },
-          { createdAt: 1 }
-        ],
-        description: 'Amostras biológicas'
-      },
-      {
-        name: 'logs',
-        indexes: [
-          { userId: 1 },
-          { action: 1 },
-          { entity: 1 },
-          { dateTime: -1 },
-          { timestamp: -1 },
-          { severity: 1 },
-          { createdAt: 1 }
-        ],
-        description: 'Logs de auditoria do sistema'
-      },
-      {
-        name: 'temperatures',
-        indexes: [
-          { sensorId: 1 },
-          { timestamp: -1 },
-          { dateTime: -1 },
-          { readingStatus: 1 },
-          { locationId: 1 },
-          { createdAt: 1 }
-        ],
-        description: 'Leituras de temperatura'
-      },
-      {
-        name: 'sensors',
-        indexes: [
-          { sensorId: 1 },
-          { locationId: 1 },
-          { policyId: 1 },
-          { maintenanceStatus: 1 },
-          { createdAt: 1 }
-        ],
-        description: 'Sensores de temperatura'
-      },
-      {
-        name: 'policies',
-        indexes: [
-          { policyId: 1 },
-          { validFrom: 1 },
-          { validTo: 1 },
-          { createdAt: 1 }
-        ],
-        description: 'Políticas de temperatura'
-      },
-      {
-        name: 'locations',
-        indexes: [
-          { equipmentType: 1 },
-          { block: 1 },
-          { rack: 1 },
-          { drawer: 1 },
-          { box: 1 },
-          { createdAt: 1 }
-        ],
-        description: 'Localizações/Freezers'
-      },
-      {
-        name: 'results',
-        indexes: [
-          { resultID: 1 },
-          { sampleID: 1 },
-          { fileType: 1 },
-          { uploadedAt: -1 },
-          { createdAt: 1 }
-        ],
-        description: 'Resultados de análise'
-      },
-      {
-        name: 'biomarker_observations',
-        indexes: [
-          { patientID: 1, biomarkerType: 1, collectedAt: -1 },
-          { patientID: 1, collectedAt: -1 },
-          { biomarkerType: 1, collectedAt: -1 },
-          { status: 1, collectedAt: -1 },
-          { idempotencyKey: 1 }
-        ],
-        description: 'Observações de biomarcadores por paciente (histórico clínico)'
-      },
-      {
-        name: 'equipment',
-        indexes: [
-          { equipmentID: 1 },
-          { createdAt: 1 }
-        ],
-        description: 'Equipamentos'
-      },
-      {
-        name: 'alerts',
-        indexes: [
-          { sensorId: 1 },
-          { status: 1 },
-          { timestamp: -1 },
-          { severity: 1 },
-          { createdAt: 1 }
-        ],
-        description: 'Alertas de temperatura'
-      },
-      {
-        name: 'intelligentAssistant',
-        indexes: [
-          { assistantID: 1 },
-          { contextScope: 1 },
-          { lastInteraction: -1 },
-          { createdAt: 1 }
-        ],
-        description: 'Interações do Assistente Inteligente'
-      },
-      {
-        name: 'reports',
-        indexes: [
-          { reportID: 1 },
-          { reportType: 1 },
-          { generatedAt: -1 },
-          { status: 1 },
-          { createdAt: 1 }
-        ],
-        description: 'Relatórios do sistema'
-      },
-      {
-        name: 'access',
-        indexes: [
-          { accessID: 1 },
-          { reportID: 1 },
-          { userId: 1 },
-          { accessType: 1 },
-          { createdAt: 1 }
-        ],
-        description: 'Controle de acesso a relatórios'
-      },
-      {
-        name: 'measurementUnits',
-        indexes: [
-          { unitID: 1 },
-          { createdAt: 1 }
-        ],
-        description: 'Unidades de medida para amostras'
-      },
-      {
-        name: 'qualityDescriptions',
-        indexes: [
-          { qualityID: 1 },
-          { createdAt: 1 }
-        ],
-        description: 'Descrições de qualidade para amostras'
-      },
-      {
-        name: 'withdrawals',
-        indexes: [
-          { withdrawalID: 1 },
-          { sampleID: 1 },
-          { withdrawalDate: -1 },
-          { withdrawalType: 1 },
-          { createdAt: 1 }
-        ],
-        description: 'Registros de retirada de amostras'
-      },
-      {
-        name: 'storageContainers',
-        indexes: [
-          { containerType: 1, status: 1 },
-          { parent_id: 1, containerType: 1 },
-          { name: 1 },
-          { containerID: 1 },
-          { createdAt: 1 }
-        ],
-        description: 'Containers de armazenagem (Freezer, Shelf, Rack) - ISO 20387'
-      },
-      {
-        name: 'storageBoxes',
-        indexes: [
-          { parent_id: 1, status: 1 },
-          { boxID: 1 },
-          { name: 1 },
-          { status: 1 },
-          { createdAt: 1 }
-        ],
-        description: 'Caixas de armazenagem com grid de posições'
-      },
-      {
-        name: 'storagePaths',
-        indexes: [
-          { freezerId: 1, shelfId: 1, rackId: 1 },
-          { boxId: 1 },
-          { path: 1 },
-          { createdAt: 1 }
-        ],
-        description: 'Índice de caminhos para árvore de armazenagem'
+    for (const collectionConfig of COLLECTIONS) {
+      const collection = db.collection(collectionConfig.name);
+      for (const index of collectionConfig.indexes) {
+        await collection.createIndex(index);
       }
-    ];
-
-    // Cria cada coleção com seus índices
-    for (const collectionConfig of collections) {
-      try {
-        const collection = db.collection(collectionConfig.name);
-        
-        // Cria índices
-        for (const index of collectionConfig.indexes) {
-          try {
-            await collection.createIndex(index);
-          } catch (error) {
-            // Índice pode já existir, continua
-            if (!error.message.includes('already exists')) {
-              logger.warn(`Erro ao criar índice em ${collectionConfig.name}:`, error.message);
-            }
-          }
-        }
-        
-        logger.info(`✅ Coleção "${collectionConfig.name}" criada/verificada - ${collectionConfig.description}`);
-      } catch (error) {
-        logger.error(`❌ Erro ao criar coleção ${collectionConfig.name}:`, error.message);
-      }
+      logger.info(`Colecao canonica verificada: ${collectionConfig.name} - ${collectionConfig.description}`);
     }
 
-    // Insere documento inicial na coleção logs
-    const logsCollection = db.collection('logs');
-    const existingLog = await logsCollection.findOne({ 
-      action: 'SYSTEM_INIT',
-      entity: 'System'
-    });
-
-    if (!existingLog) {
-      const logInicial = {
-        logId: null,
-        dateTime: new Date(),
-        timestamp: new Date(),
-        userId: 'system',
-        userName: 'Sistema',
-        action: 'SYSTEM_INIT',
-        entity: 'System',
-        result: 'success',
-        severity: 'info',
-        source: 'system',
-        ipSource: null,
-        message: 'Banco de dados criado com sucesso - Todas as coleções inicializadas',
-        createdAt: new Date()
-      };
-
-      await logsCollection.insertOne(logInicial);
-      logger.info('✅ Documento inicial inserido na coleção "logs"');
-    }
-
-    logger.info('');
-    logger.info('✅ Banco de dados criado com sucesso!');
-    logger.info(`   - Total de coleções criadas: ${collections.length}`);
-    logger.info('   - Coleções:');
-    collections.forEach(col => {
-      logger.info(`     • ${col.name} - ${col.description}`);
-    });
-    logger.info('   - Documento inicial inserido em logs');
-
-    // Fecha a conexão
+    logger.info(`Banco canonico verificado com sucesso. Colecoes: ${COLLECTIONS.length}`);
     await closeConnection();
-
     process.exit(0);
   } catch (error) {
-    logger.error('Erro ao criar banco de dados:', error.message);
-    console.error(error);
+    logger.error('Erro ao criar/verificar banco canonico:', error.message);
+    await closeConnection().catch(() => {});
     process.exit(1);
   }
 }
 
-// Executa o script
 createDatabase();
