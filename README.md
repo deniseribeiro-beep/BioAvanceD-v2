@@ -1,229 +1,102 @@
-# Sistema de Gerenciamento de Amostras Biológicas – BioAvanceD
+# BioAvanceD
 
-Sistema React desenvolvido com base no diagrama UML de classes para gerenciamento de pacientes, amostras biológicas, resultados de laboratório, equipamentos, monitoramento de temperatura, sensores, políticas e logs do sistema.
+BioAvanceD é um sistema médico-informacional para gestão digital de biobancos, com foco em governança de biospecímenes, consentimento, rastreabilidade, qualidade pré-analítica, cadeia fria e interoperabilidade semântica.
 
-## 🚀 Tecnologias
+O projeto combina frontend React/Vite, backend Node.js/Express e persistência poliglota com MongoDB, Redis, Neo4j e InfluxDB.
 
-- **React 18** - Biblioteca JavaScript para construção de interfaces
-- **TypeScript** - Superset JavaScript com tipagem estática
-- **Vite** - Build tool moderna e rápida
-- **React Router** - Roteamento para aplicações React
+## Visão geral
 
-## 📋 Funcionalidades
+Principais módulos funcionais:
 
-### Módulos Principais
+1. Pacientes/doadores.
+2. Consentimento e TCLE.
+3. Cadastro integrado de amostras.
+4. Governança RCS-GOV/SPREC.
+5. Armazenamento físico e etiquetas.
+6. Equipamentos, freezers, sensores e políticas de temperatura.
+7. Incidentes de cadeia fria e quarentena operacional.
+8. Terminologias clínicas, ORPHA, OMIM, CID-10, HPO e ATC.
+9. Auditoria, RBAC e rastreabilidade.
 
-1. **Dashboard** - Visão geral do sistema com estatísticas
-2. **Pacientes** - Gerenciamento completo de pacientes com informações clínicas
-3. **Amostras** - Controle de amostras biológicas (tipo, origem, protocolo, localização)
-4. **Resultados** - Gerenciamento de resultados de análises laboratoriais
-5. **Equipamentos** - Cadastro e controle de equipamentos de armazenamento
-6. **Temperatura** - Monitoramento em tempo real de temperatura
-7. **Sensores** - Gerenciamento de sensores de temperatura
-8. **Políticas** - Configuração de políticas e limites de temperatura
-9. **Usuários** - Gerenciamento de usuários e permissões
-10. **Logs** - Registro de atividades e eventos do sistema
+## Stack
 
-## 🏗️ Estrutura do Projeto
+- Frontend: React, TypeScript, Vite.
+- Backend: Node.js, Express.
+- Banco documental: MongoDB.
+- Grafo de linhagem/consentimento: Neo4j.
+- Telemetria: InfluxDB.
+- Cache/eventos: Redis.
+- Testes: Vitest, Supertest e scripts de auditoria.
 
-```
-BIO/
-├── src/
-│   ├── components/
-│   │   ├── Layout/          # Componentes de layout (Sidebar, Header)
-│   │   └── UI/              # Componentes reutilizáveis (Button, Card, Table, Modal, Input)
-│   ├── pages/               # Páginas principais do sistema
-│   ├── types/
-│   │   └── models.ts        # Modelos TypeScript baseados no diagrama UML
-│   ├── App.tsx              # Componente principal com rotas
-│   ├── App.css              # Estilos globais
-│   └── main.tsx             # Ponto de entrada da aplicação
-├── index.html
-├── package.json
-├── tsconfig.json
-└── vite.config.ts
-```
+## Princípio de bootstrap limpo
 
-## 📦 Instalação
+O sistema deve subir em banco limpo com apenas dados estruturais e dados de referência essenciais.
 
-1. Instale as dependências:
+O bootstrap essencial não deve criar por padrão:
+
+- pacientes;
+- amostras;
+- consentimentos assinados;
+- resultados;
+- biomarcadores reais;
+- incidentes;
+- sensores, freezers ou localizações preenchidas;
+- usuários administrativos com credencial fixa;
+- dumps ou dados demo.
+
+Dados operacionais devem ser criados pelo fluxo da aplicação ou por seeds sintéticos explicitamente marcados como `demo`.
+
+## Dados essenciais esperados
+
+Após o seed essencial, o banco deve conter apenas:
+
+- coleções canônicas e índices mínimos;
+- roles e permissões;
+- dados de referência RCS-GOV;
+- SPREC mínimo;
+- MIABIS mínimo;
+- HPO mínimo necessário;
+- regras de validação clínica essenciais;
+- bootstrap ATC mínimo;
+- log técnico de inicialização, quando aplicável.
+
+## Instalação local
+
+Instale as dependências principais:
+
 ```bash
 npm install
+npm --prefix api/backend install
+npm --prefix frontend install
 ```
 
-2. Inicie o servidor de desenvolvimento:
-```bash
-npm run start
+Configure variáveis de ambiente a partir dos exemplos disponíveis. Não versione arquivos `.env`, chaves, tokens ou certificados.
+
+## Variáveis principais
+
+Preencha no ambiente local ou no `.env.docker`:
+
+```env
+MONGO_URI=
+MONGO_DB=
+JWT_SECRET=
+JWT_REFRESH_SECRET=
+ENCRYPTION_KEY=
+USER_ANON_SALT=
+NEO4J_URI=
+NEO4J_USERNAME=
+NEO4J_PASSWORD=
+REDIS_URL=
+INFLUXDB_URL=
+INFLUXDB_TOKEN=
+INFLUXDB_ORG=
+INFLUXDB_BUCKET=
+FRONTEND_URL=
+API_URL=
+ALLOWED_ORIGINS=
 ```
 
-3. Inicie o worker para gerenciamento de importação de arquivos
-   ```bash
-npm run worker
-```
-
-4. Inicie o Vite (Layout do Software)
-   ```bash
-npm run dev
-```
-
-5. Acesse a aplicação em `http://localhost:5173`
-
-## 🏃 Scripts Disponíveis
-
-- `npm run dev` - Inicia o servidor de desenvolvimento
-- `npm run build` - Cria a build de produção
-- `npm run preview` - Visualiza a build de produção
-- `npm run audit:full` - Executa auditoria completa do sistema (testes, build e análise estática)
-
-### Testes QA
-
-```bash
-# Backend - Suite completa de testes (41 testes)
-npm --prefix backend run test:ci
-
-# Backend - Testes unitários apenas
-npm --prefix backend run test:unit
-
-# Backend - Testes de consentimento (authConsent)
-npm --prefix backend run test:consent
-
-# Frontend - Smoke tests & E2E (Playwright)
-npm --prefix frontend run test:e2e
-
-# Frontend - Type checking
-npm --prefix frontend run typecheck
-```
-
-## 🛡️ Configuração recomendada de resiliência (backend)
-
-Para activar o perfil de resiliência e validação dinâmica já implementado:
-
-1. Copie o exemplo para o ambiente do backend:
-```bash
-Copy-Item backend/.env.resilience.example backend/.env
-```
-
-   Para baseline regulatório estrito (fail-closed):
-
-```bash
-Copy-Item backend/.env.resilience.strict.example backend/.env
-```
-
-2. Ajuste os segredos e endpoints reais (Mongo, Redis, Neo4j, Influx) no `backend/.env`.
-
-3. Confirme os pontos críticos:
-- `LINEAGE_MODE=fail-open` para permitir quarentena topológica quando Neo4j cair.
-- `TELEMETRY_CRITICAL_TEMP=-80` e `TELEMETRY_CRITICAL_DURATION_HOURS=2` para gatilho IoT de invalidação em cascata.
-- `NEO4J_RETRY_*` para controlar taxa/lote/tentativas do reprocessamento de quarentena.
-
-Atalhos por ambiente (backend):
-
-```bash
-# DEV/HOMOLOG permissivo
-Copy-Item backend/.env.resilience.example backend/.env
-
-# HOMOLOG/PROD estrito (fail-closed)
-Copy-Item backend/.env.resilience.strict.example backend/.env
-```
-
-## 🎨 Design
-
-O sistema utiliza um design moderno e limpo com:
-- Paleta de cores consistente
-- Interface responsiva
-- Componentes reutilizáveis
-- Navegação intuitiva com sidebar
-- Modais para formulários
-- Tabelas interativas
-
-## 📊 Modelos de Dados
-
-O sistema implementa os seguintes modelos baseados no diagrama UML:
-
-- **Patient** - Informações completas do paciente
-- **Sample** - Dados das amostras biológicas
-- **Result** - Resultados de análises
-- **Equipment** - Equipamentos de armazenamento
-- **Location** - Localização física das amostras
-- **User** - Usuários do sistema
-- **SpecificUser** - Usuários com MFA
-- **Temperature** - Leituras de temperatura
-- **Sensor** - Sensores de monitoramento
-- **Policy** - Políticas de temperatura
-- **Log** - Logs de auditoria
-
-## 🔄 Próximos Passos
-
-Para integrar com um backend:
-
-1. Configure as URLs da API em um arquivo de configuração
-2. Substitua os dados mockados por chamadas à API usando axios
-3. Implemente tratamento de erros e loading states
-4. Adicione autenticação e autorização
-5. Implemente validações de formulário mais robustas
-
-## ✅ Validação e Testes Completos
-
-### Executar Suite de QA Completa
-
-```bash
-# Backend - Todos os testes (41 total)
-npm --prefix backend run test:ci
-
-# Frontend - Smoke tests e E2E
-npm --prefix frontend run test:e2e
-
-# Ambos (backend + frontend)
-npm --prefix backend run test:ci && npm --prefix frontend run test:e2e
-```
-
-### Resultados Esperados
-
-✅ **Backend (41 testes)**:
-- 18 testes unitários (autenticação, validação, RBAC)
-- 6 testes authConsent (bloqueio ético, consentimento)
-- 3 testes de factories
-- 9 testes compliance (FHIR R4, LGPD, ISO 20387, MQTT, DataMatrix)
-- 5 testes de integração (Neo4j, Smart Blocking)
-
-✅ **Frontend (3+ testes)**:
-- Rotas principais carregam sem erro (6/6)
-- Intake Wizard renderiza corretamente
-- E-Consent page acessível
-
-**Documentação Completa**: Ver [AUDIT_REPORT_FINAL.md](./AUDIT_REPORT_FINAL.md) para detalhes completos. 
-
-## Docker Dev com Hot Reload
-
-Esta seção descreve o modo mínimo recomendado para auditoria técnica do BioAvanceD-v2 em Docker. O fluxo sobe backend com `nodemon`, frontend com Vite HMR e bancos locais em containers. Não inclua segredos reais no repositório.
-
-### Pré-Requisitos
-
-- Docker Engine e Docker Compose v2.
-- Node.js somente para usar os scripts `npm` da raiz; o runtime da aplicação roda nos containers.
-- Portas livres no host: `3000`, `5173`, `27017`, `6379`, `7474`, `7687`, `8086` e `9229`.
-- Em servidor Linux na nuvem, liberar no firewall apenas as portas necessárias para auditoria. Evite expor MongoDB, Redis, Neo4j, InfluxDB e inspector Node publicamente.
-
-### Variáveis Obrigatórias
-
-Crie o arquivo local a partir do exemplo:
-
-```bash
-cp .env.docker.example .env.docker
-```
-
-Preencha, no mínimo:
-
-- `MONGO_ROOT_USERNAME`, `MONGO_ROOT_PASSWORD`, `MONGO_URI`, `MONGO_DB`
-- `JWT_SECRET`, `JWT_REFRESH_SECRET`, `ENCRYPTION_KEY`, `USER_ANON_SALT`
-- `NEO4J_USERNAME`, `NEO4J_PASSWORD`, `NEO4J_URI`
-- `REDIS_URL`
-- `INFLUXDB_INIT_USERNAME`, `INFLUXDB_INIT_PASSWORD`, `INFLUXDB_TOKEN`, `INFLUXDB_URL`
-- `FRONTEND_URL`, `API_URL`, `ALLOWED_ORIGINS`
-- `VITE_API_BASE_URL`, `VITE_HMR_HOST`, `VITE_HMR_PROTOCOL`, `VITE_HMR_CLIENT_PORT`
-- `RESEND_API_KEY` e `EMAIL_FROM` somente se envio real de e-mail for auditado
-
-Para auditoria local sem cloud externa, mantenha:
+Para auditoria local sem integrações externas, mantenha:
 
 ```env
 ALLOW_CLOUD_INTEGRATIONS=false
@@ -233,164 +106,198 @@ ALLOW_EXTERNAL_DRUG_LOOKUP=false
 MQTT_ENABLED=false
 ```
 
-### Serviços Docker
-
-- `mongodb`: banco principal local/container.
-- `backend`: API Node/Express em `http://localhost:3000`, com `nodemon` e inspector em `9229`.
-- `frontend`: Vite em `http://localhost:5173`, com hot reload.
-- `redis`: fila/cache local quando usado pelo backend.
-- `neo4j`: linhagem/grafo local quando usado pelo backend.
-- `influxdb`: telemetria local quando usada pelo backend.
-
-### Subir Ambiente
-
-Com script da raiz:
+## Subir ambiente Docker local
 
 ```bash
-npm run dev:up
-```
-
-Com Docker Compose direto:
-
-```bash
+cp .env.docker.example .env.docker
 docker compose --env-file .env.docker -f docker-compose.yml up --build backend frontend
 ```
 
-### Seeds e Índices RCS-GOV
-
-Após os containers estarem saudáveis:
+Ou usando os scripts da raiz:
 
 ```bash
-docker compose --env-file .env.docker -f docker-compose.yml exec backend npm run migrate:rcs
-docker compose --env-file .env.docker -f docker-compose.yml exec backend npm run seed
-```
-
-O seed do backend inclui o modelo `RCS-GOV-1.0`, catálogos SPREC, severidades, pesos, thresholds e regras de governança.
-
-### Criar Usuário Admin
-
-```bash
-docker compose --env-file .env.docker -f docker-compose.yml exec backend npm run user:create-admin
-```
-
-Depois de criar o usuário, altere a senha inicial pelo fluxo da aplicação ou por procedimento administrativo seguro. Não versionar credenciais.
-
-### Logs, Status e Parada
-
-Logs de backend e frontend:
-
-```bash
+npm run dev:up
 npm run dev:logs
-```
-
-Todos os serviços:
-
-```bash
-docker compose --env-file .env.docker -f docker-compose.yml logs -f
-```
-
-Status:
-
-```bash
 npm run dev:ps
-```
-
-Parar:
-
-```bash
 npm run dev:down
 ```
 
-Ou direto:
+Serviços esperados:
+
+- Frontend: http://localhost:5173
+- Backend: http://localhost:3000
+- MongoDB: localhost:27017
+- Redis: localhost:6379
+- Neo4j Browser: http://localhost:7474
+- InfluxDB: http://localhost:8086
+
+## Inicialização limpa do banco
+
+Após os serviços estarem saudáveis, execute o seed essencial seguro:
 
 ```bash
-docker compose --env-file .env.docker -f docker-compose.yml down
+npm --prefix api/backend run seed:essential
 ```
 
-### Confirmar Online
-
-Frontend:
+Em Docker:
 
 ```bash
-curl -I http://localhost:5173
+docker compose --env-file .env.docker -f docker-compose.yml exec backend npm run seed:essential
 ```
+
+Esse seed deve ser idempotente e não deve executar `deleteMany` em coleções operacionais. Ele também não deve criar pacientes, amostras, consentimentos, resultados, sensores, freezers, incidentes ou usuário administrativo.
+
+## Criar primeiro administrador com bootstrap seguro
+
+O sistema não cria administrador por padrão. O primeiro administrador deve ser criado explicitamente após o banco estar inicializado.
+
+Regras do bootstrap seguro:
+
+- só cria o primeiro administrador se a coleção `users` estiver vazia;
+- se já existir qualquer usuário, o script encerra sem alteração;
+- a credencial temporária deve vir de variável de ambiente;
+- a credencial temporária não deve ser impressa no console;
+- o usuário deve ser criado com `accessType: 4` e `roleName: "Administrador"`;
+- o usuário deve ser criado com `forceReset: true` para troca obrigatória no primeiro acesso;
+- as variáveis de ambiente devem ser removidas após a execução.
+
+### Windows PowerShell
+
+```powershell
+$env:BOOTSTRAP_ADMIN_NAME="Nome do Administrador"
+$env:BOOTSTRAP_ADMIN_EMAIL="email.institucional@exemplo.br"
+$env:BOOTSTRAP_ADMIN_USERNAME="admin.inicial"
+$env:BOOTSTRAP_ADMIN_TEMP_PASSWORD="defina-uma-credencial-temporaria-forte"
+$env:BOOTSTRAP_ADMIN_FORCE_RESET="true"
+
+npm.cmd --prefix api/backend run admin:create-first
+
+Remove-Item Env:\BOOTSTRAP_ADMIN_NAME
+Remove-Item Env:\BOOTSTRAP_ADMIN_EMAIL
+Remove-Item Env:\BOOTSTRAP_ADMIN_USERNAME
+Remove-Item Env:\BOOTSTRAP_ADMIN_TEMP_PASSWORD
+Remove-Item Env:\BOOTSTRAP_ADMIN_FORCE_RESET
+```
+
+### Linux ou CENAPAD
+
+```bash
+export BOOTSTRAP_ADMIN_NAME="Nome do Administrador"
+export BOOTSTRAP_ADMIN_EMAIL="email.institucional@exemplo.br"
+export BOOTSTRAP_ADMIN_USERNAME="admin.inicial"
+export BOOTSTRAP_ADMIN_TEMP_PASSWORD="defina-uma-credencial-temporaria-forte"
+export BOOTSTRAP_ADMIN_FORCE_RESET="true"
+
+npm --prefix api/backend run admin:create-first
+
+unset BOOTSTRAP_ADMIN_NAME
+unset BOOTSTRAP_ADMIN_EMAIL
+unset BOOTSTRAP_ADMIN_USERNAME
+unset BOOTSTRAP_ADMIN_TEMP_PASSWORD
+unset BOOTSTRAP_ADMIN_FORCE_RESET
+```
+
+### Docker
+
+Defina as variáveis no ambiente do container ou execute com variáveis exportadas no shell antes do comando:
+
+```bash
+docker compose --env-file .env.docker -f docker-compose.yml exec backend npm run admin:create-first
+```
+
+Fluxos antigos de criação de administrador com credencial fixa não devem ser usados como procedimento recomendado.
+
+## Ordem recomendada para ambiente limpo
+
+```bash
+npm --prefix api/backend run seed:essential
+npm --prefix api/backend run admin:create-first
+npm --prefix api/backend run test:ci
+npm run audit:full
+```
+
+No CENAPAD, após subir MongoDB, Redis, InfluxDB, Neo4j, backend e frontend, use a mesma lógica:
+
+```bash
+npm --prefix api/backend run seed:essential
+npm --prefix api/backend run admin:create-first
+npm --prefix api/backend run test:ci
+```
+
+## Testes
 
 Backend:
 
 ```bash
-curl -I http://localhost:3000
+npm --prefix api/backend run test:unit
+npm --prefix api/backend run test:consent
+npm --prefix api/backend run test:ci
 ```
 
-Se o backend não tiver rota raiz em alguma versão, confirme pelos logs:
+Frontend:
 
 ```bash
-docker compose --env-file .env.docker -f docker-compose.yml logs backend
+npm --prefix frontend run typecheck
+npm --prefix frontend run build
 ```
 
-Também é possível validar pelo navegador:
+Auditoria completa:
 
-- Frontend: <http://localhost:5173>
-- Backend API: <http://localhost:3000>
-- Neo4j Browser local: <http://localhost:7474>
-- InfluxDB local: <http://localhost:8086>
+```bash
+npm run audit:full
+```
 
-### Integrações Cloud
+## Incidentes de cadeia fria
 
-Para o ambiente Docker de auditoria, integrações cloud externas foram removidas, desabilitadas ou colocadas atrás de flags locais. O MongoDB deve usar container/local; URIs `mongodb+srv://` ficam bloqueadas quando `ALLOW_CLOUD_INTEGRATIONS=false`.
+Incidentes ativos de cadeia fria devem bloquear operacionalmente as amostras afetadas.
+
+Fluxo esperado:
+
+```text
+telemetria fora da política
+→ incidente COLD_CHAIN aberto ou atualizado
+→ resolução do sensor/freezer/localização afetada
+→ amostras vinculadas entram em QUARANTINE/BLOCKED
+→ resolução do incidente não libera automaticamente as amostras
+→ amostras permanecem como PENDING_REVIEW até avaliação pós-incidente
+```
+
+## Política de versionamento
+
+Não versionar:
+
+- `.env`, `.env.local`, `.env.docker` com segredos reais;
+- chaves, certificados, tokens e dumps;
+- `node_modules`;
+- artefatos de build/cache;
+- logs e relatórios temporários;
+- volumes locais de bancos (`data/mongodb`, `data/neo4j`, `data/redis`, `data/influxdb`);
+- CSV/XML grandes de terminologias externas;
+- pacientes, amostras, consentimentos ou resultados reais.
+
+Versionar:
+
+- código-fonte;
+- scripts auditáveis;
+- configurações sem segredo;
+- documentação;
+- exemplos de ambiente;
+- dados mínimos de referência, como `rcs-*.json` e seeds mínimos explicitamente sanitizados.
+
+## Integrações externas
+
+Por padrão, o ambiente de auditoria deve permanecer local e sem cloud externa.
 
 Desabilitado por padrão:
 
-- Supabase, Firebase, AWS/S3, Cloudinary, Google Cloud, Azure, Vercel, Render, Railway e storage externo.
-- Sincronização externa de terminologias.
-- Lookup externo HPO.
-- Lookup externo de drogas.
+- storage externo;
+- sincronização externa de terminologias;
+- lookup externo HPO;
+- lookup externo de drogas;
 - MQTT externo.
 
-Permitido:
+Integrações externas devem ser habilitadas apenas por flags explícitas e com variáveis de ambiente fora do repositório.
 
-- Resend é a única integração externa permitida. Sem `RESEND_API_KEY`, fluxos de desenvolvimento usam comportamento local/mockado quando suportado.
+## Licença
 
-### Servidor Linux na Nuvem
-
-- Use `.env.docker` criado a partir de `.env.docker.example`, nunca comitado.
-- Ajuste `FRONTEND_URL`, `API_URL`, `ALLOWED_ORIGINS` e `VITE_HMR_HOST` para o domínio ou IP público usado na auditoria.
-- Se houver proxy reverso/HTTPS, configure `VITE_HMR_PROTOCOL=wss` e `VITE_HMR_CLIENT_PORT=443` conforme o proxy.
-- Mantenha `TRUST_PROXY=1` quando o backend estiver atrás de proxy.
-- Proteja as portas internas dos bancos com firewall/security group; para auditoria pública, exponha preferencialmente apenas `5173` e/ou a porta do proxy.
-
-## 📁 Política de versionamento para GitHub
-
-Os arquivos `.gitignore` da raiz, backend e frontend foram ajustados para manter no repositório apenas o necessário para desenvolvimento colaborativo e CI/CD.
-
-### O que não deve subir para o GitHub
-
-- dependências locais (`node_modules`)
-- variáveis de ambiente e segredos (`.env*`, chaves e certificados)
-- artefatos de build e cache (`dist`, `build`, `coverage`, `.vite`, `.cache`)
-- logs e saídas temporárias de testes
-- dados locais de execução/volumes Docker (`data/mongodb`, `data/neo4j`, `data/redis`, `data/influxdb`)
-- backups e temporários gerados durante operação
-
-### O que deve subir para o GitHub
-
-- código-fonte (`backend/src`, `frontend/src`, scripts)
-- configurações versionáveis (`package.json`, `docker-compose.yml`, configs)
-- documentação (`README.md`, `docs`)
-- exemplos de ambiente (`.env.example`, quando existir)
-
-### Se arquivos já estavam versionados antes
-
-Após atualizar `.gitignore`, remova do índice do Git os artefatos já rastreados:
-
-```bash
-git rm -r --cached node_modules backend/node_modules frontend/node_modules
-git rm -r --cached data/mongodb data/neo4j data/redis data/influxdb data/_sprec_tmp
-git rm -r --cached frontend/playwright-report frontend/test-results test-results
-git rm -r --cached backend/backups backend/test-output.txt
-git add .
-git commit -m "chore: ajusta gitignore e limpeza de artefatos locais"
-```
-
-## 📝 Licença
-
-Este projeto foi desenvolvido para fins educacionais e de demonstração.
+Projeto desenvolvido para fins acadêmicos, científicos e de demonstração técnica.
