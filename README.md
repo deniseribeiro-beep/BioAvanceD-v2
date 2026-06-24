@@ -111,6 +111,7 @@ MONGO_DB=
 JWT_SECRET=
 JWT_REFRESH_SECRET=
 ENCRYPTION_KEY=
+ENCRYPTION_KEY_ID=
 USER_ANON_SALT=
 NEO4J_URI=
 NEO4J_USERNAME=
@@ -124,6 +125,8 @@ FRONTEND_URL=
 API_URL=
 ALLOWED_ORIGINS=
 ```
+
+`ENCRYPTION_KEY` é obrigatória para os testes de conformidade LGPD AES-256-GCM. Sem essa variável, `encryptValue()` retorna `null`, os campos PII não são movidos para os campos criptografados e `npm run test:ci` falha no `Compliance Gate - LGPD AES-256-GCM`. Use uma chave forte e específica por ambiente; não versionar essa chave.
 
 Para auditoria local sem integrações externas:
 
@@ -251,12 +254,82 @@ npm --prefix api/backend run test:ci
 npm run audit:full
 ```
 
-No CENAPAD, após subir MongoDB, Redis, InfluxDB, Neo4j, backend e frontend, use a mesma sequência:
+## Deploy e validação no CENAPAD
+
+No CENAPAD, use a branch limpa `audit/intake-governance-i18n-orpha` e atualize o repositório antes de subir os serviços:
+
+```bash
+cd ~/BioAvanceD-v2
+git fetch origin
+git checkout audit/intake-governance-i18n-orpha
+git pull --ff-only origin audit/intake-governance-i18n-orpha
+git rev-parse --short HEAD
+git status --short --branch
+```
+
+Antes de executar seed, backend, testes ou auditoria, configure as variáveis de segurança do ambiente. Elas podem estar no `api/backend/.env` ou exportadas no processo. Não versionar esses valores.
+
+```bash
+export ENCRYPTION_KEY="<chave-forte-especifica-do-cenapad>"
+export ENCRYPTION_KEY_ID="cenapad-validation"
+export USER_ANON_SALT="<salt-forte-especifico-do-cenapad>"
+```
+
+A ausência de `ENCRYPTION_KEY` faz o teste de compliance LGPD AES-256-GCM falhar com erros semelhantes a `expected 1.8 to be null` ou `expected null to be truthy`, pois os campos PII não são criptografados.
+
+Para conferir rapidamente se a chave está visível para o processo Node:
+
+```bash
+node -e "require('dotenv').config({ path: 'api/backend/.env' }); if (!process.env.ENCRYPTION_KEY) { throw new Error('ENCRYPTION_KEY ausente'); } console.log('ENCRYPTION_KEY configurada');"
+```
+
+Após subir MongoDB, Redis, InfluxDB, Neo4j, backend e frontend, execute a sequência de validação:
 
 ```bash
 npm --prefix api/backend run seed:essential
 npm --prefix api/backend run admin:create-first
 npm --prefix api/backend run test:ci
+npm --prefix frontend run typecheck
+npm run audit:full
+```
+
+Se o primeiro administrador já existir, `admin:create-first` deve encerrar sem alteração. Para criar o primeiro admin em banco limpo, exporte temporariamente as variáveis abaixo antes do comando e remova-as em seguida:
+
+```bash
+export BOOTSTRAP_ADMIN_NAME="Nome do Administrador"
+export BOOTSTRAP_ADMIN_EMAIL="<email-institucional>"
+export BOOTSTRAP_ADMIN_USERNAME="<usuario-admin-inicial>"
+export BOOTSTRAP_ADMIN_TEMP_PASSWORD="<credencial-temporaria-forte-unica>"
+export BOOTSTRAP_ADMIN_FORCE_RESET="true"
+
+npm --prefix api/backend run admin:create-first
+
+unset BOOTSTRAP_ADMIN_NAME BOOTSTRAP_ADMIN_EMAIL BOOTSTRAP_ADMIN_USERNAME BOOTSTRAP_ADMIN_TEMP_PASSWORD BOOTSTRAP_ADMIN_FORCE_RESET
+```
+
+Ao final, salve evidências mínimas da execução:
+
+```bash
+mkdir -p ~/bioavanced-validation/evidence/$(date +%Y%m%d-%H%M%S)
+EVIDENCE_DIR=$(ls -td ~/bioavanced-validation/evidence/* | head -1)
+
+git rev-parse HEAD > "$EVIDENCE_DIR/git-commit.txt"
+git status --short --branch > "$EVIDENCE_DIR/git-status.txt"
+podman ps > "$EVIDENCE_DIR/podman-ps.txt" 2>/dev/null || true
+cp reports/system-audit/audit-complete-*.txt "$EVIDENCE_DIR/" 2>/dev/null || true
+cp reports/system-audit/audit-complete-*.json "$EVIDENCE_DIR/" 2>/dev/null || true
+
+echo "$EVIDENCE_DIR"
+```
+
+Resultado esperado para considerar a validação aprovada:
+
+```text
+Backend test:ci: PASS
+Frontend typecheck: PASS
+Audit full: PASS
+Seed essencial: executado sem dados operacionais
+Admin bootstrap: criado apenas se users estava vazia, ou skipped se já havia usuário
 ```
 
 ## Testes
