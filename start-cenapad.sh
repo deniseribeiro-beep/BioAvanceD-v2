@@ -1,419 +1,447 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
 
 PROJECT_DIR="/home/lovelace/proj/proj1091/deniser/bioavanced-validation/source/BioAvanceD-v2"
-BACKEND_IMAGE="localhost/bioavanced_deniser_backend:latest"
-FRONTEND_IMAGE="localhost/bioavanced_deniser_frontend:latest"
+BASE_DIR="/home/lovelace/proj/proj1091/deniser/bioavanced-validation"
+
+TS="$(date +%Y%m%d-%H%M%S)"
+EVIDENCE_DIR="$BASE_DIR/evidence/$TS"
+LOG_DIR="$BASE_DIR/logs/$TS"
 
 cd "$PROJECT_DIR"
 
-echo "=================================================="
-echo " BioAvanceD CENAPAD Startup"
-echo " Date: $(date)"
-echo " Project: $PROJECT_DIR"
-echo "=================================================="
+mkdir -p "$EVIDENCE_DIR" "$LOG_DIR"
 
-if [ ! -f ".env.docker" ]; then
-  echo "[ERROR] .env.docker não encontrado."
-  exit 1
-fi
+log() {
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
+}
 
-grep -q '^RESEND_API_KEY=' .env.docker \
-  && sed -i 's/^RESEND_API_KEY=.*/RESEND_API_KEY=re_cenapad_mock_key/' .env.docker \
-  || echo 'RESEND_API_KEY=re_cenapad_mock_key' >> .env.docker
+section() {
+  echo ""
+  echo "=================================================="
+  echo "$*"
+  echo "=================================================="
+}
 
-grep -q '^EMAIL_FROM=' .env.docker \
-  && sed -i 's/^EMAIL_FROM=.*/EMAIL_FROM=noreply@localhost/' .env.docker \
-  || echo 'EMAIL_FROM=noreply@localhost' >> .env.docker
+save_logs() {
+  log "Salvando logs dos containers..."
+  podman logs --tail 500 bioavanced-mongodb   > "$LOG_DIR/mongodb-cenapad.log"   2>&1 || true
+  podman logs --tail 500 bioavanced-redis     > "$LOG_DIR/redis-cenapad.log"     2>&1 || true
+  podman logs --tail 500 bioavanced-influxdb  > "$LOG_DIR/influxdb-cenapad.log"  2>&1 || true
+  podman logs --tail 500 bioavanced-neo4j     > "$LOG_DIR/neo4j-cenapad.log"     2>&1 || true
+  podman logs --tail 800 bioavanced-backend   > "$LOG_DIR/backend-cenapad.log"   2>&1 || true
+  podman logs --tail 500 bioavanced-frontend  > "$LOG_DIR/frontend-cenapad.log"  2>&1 || true
+}
 
-set -a
-source .env.docker
-set +a
+on_error() {
+  echo ""
+  echo "[ERROR] Falha na inicialização do BioAvanceD."
+  echo "[INFO] Salvando diagnóstico em: $EVIDENCE_DIR"
+  mkdir -p "$EVIDENCE_DIR" "$LOG_DIR"
 
-export MONGO_DB="${MONGO_DB:-bioavanced_dev}"
-export MONGO_URI="mongodb://127.0.0.1:27017/${MONGO_DB}"
-export REDIS_URL="redis://127.0.0.1:6379"
-export REDIS_HOST="127.0.0.1"
-export REDIS_PORT="6379"
-export INFLUXDB_URL="http://127.0.0.1:8086"
-export INFLUXDB_ORG="${INFLUXDB_ORG:-bioavanced}"
-export INFLUXDB_BUCKET="${INFLUXDB_BUCKET:-bioavanced_telemetry}"
-export NEO4J_URI="bolt://127.0.0.1:7687"
-export NEO4J_USERNAME="${NEO4J_USERNAME:-neo4j}"
-export NEO4J_PASSWORD="${NEO4J_PASSWORD:-cenapad-neo4j-placeholder}"
-export NEO4J_REQUIRED="${NEO4J_REQUIRED:-true}"
-export LINEAGE_MODE="${LINEAGE_MODE:-strict}"
-export ENABLE_CONSENT_SYNC="${ENABLE_CONSENT_SYNC:-true}"
-export FRONTEND_URL="${FRONTEND_URL:-http://127.0.0.1:5173}"
-export API_URL="${API_URL:-http://127.0.0.1:3000}"
-export ALLOWED_ORIGINS="${ALLOWED_ORIGINS:-http://127.0.0.1:5173,http://localhost:5173}"
+  {
+    echo "BioAvanceD CENAPAD startup failure"
+    echo "Date: $(date)"
+    echo "Host: $(hostname)"
+    echo ""
+    echo "Containers:"
+    podman ps -a --format "table {{.Names}}\t{{.Status}}\t{{.Image}}" | grep bioavanced || true
+    echo ""
+    echo "Open ports:"
+    ss -ltnp 2>/dev/null | grep -E ':27017|:6379|:8086|:7474|:7687|:3000|:5173|:9229' || true
+    echo ""
+    echo "Backend recent logs:"
+    podman logs --tail 250 bioavanced-backend 2>&1 || true
+    echo ""
+    echo "Frontend recent logs:"
+    podman logs --tail 250 bioavanced-frontend 2>&1 || true
+    echo ""
+    echo "Neo4j recent logs:"
+    podman logs --tail 250 bioavanced-neo4j 2>&1 || true
+  } > "$EVIDENCE_DIR/startup-failure-status.txt"
 
-if [ -z "${ENCRYPTION_KEY:-}" ]; then
-  echo "[ERROR] ENCRYPTION_KEY ausente em .env.docker."
-  exit 1
-fi
+  save_logs
+}
+trap on_error ERR
 
-if [ -z "${CONSENT_SECRET:-}" ]; then
-  echo "[ERROR] CONSENT_SECRET ausente em .env.docker."
-  exit 1
-fi
+set_env_file() {
+  local key="$1"
+  local value="$2"
 
-if [ -z "${INFLUXDB_INIT_PASSWORD:-}" ]; then
-  echo "[ERROR] INFLUXDB_INIT_PASSWORD ausente em .env.docker."
-  exit 1
-fi
+  if grep -q "^${key}=" .env.docker 2>/dev/null; then
+    sed -i "s|^${key}=.*|${key}=${value}|" .env.docker
+  else
+    printf '\n%s=%s\n' "$key" "$value" >> .env.docker
+  fi
+}
 
-if [ -z "${INFLUXDB_TOKEN:-}" ]; then
-  echo "[ERROR] INFLUXDB_TOKEN ausente em .env.docker."
-  exit 1
-fi
+ensure_env() {
+  section "[0/8] Conferindo variáveis obrigatórias"
+
+  if [ ! -f ".env.docker" ]; then
+    echo "[ERROR] .env.docker não encontrado em $PROJECT_DIR"
+    exit 1
+  fi
+
+  # Ajustes estáveis para o runtime CENAPAD.
+  set_env_file NODE_ENV development
+  set_env_file PORT 3000
+
+  set_env_file MONGO_URI "mongodb://127.0.0.1:27017/bioavanced_dev?retryWrites=true&w=majority&tls=false"
+  set_env_file MONGODB_URI "mongodb://127.0.0.1:27017/bioavanced_dev?retryWrites=true&w=majority&tls=false"
+  set_env_file DATABASE_URL "mongodb://127.0.0.1:27017/bioavanced_dev?retryWrites=true&w=majority&tls=false"
+  set_env_file MONGO_DB bioavanced_dev
+  set_env_file MONGO_DB_NOVO bioavanced_dev
+
+  set_env_file REDIS_HOST 127.0.0.1
+  set_env_file REDIS_PORT 6379
+  set_env_file REDIS_URL redis://127.0.0.1:6379
+  set_env_file REDIS_TLS false
+
+  set_env_file INFLUXDB_URL http://127.0.0.1:8086
+  set_env_file INFLUXDB_INIT_USERNAME "${INFLUXDB_INIT_USERNAME:-bioavanced}"
+  set_env_file INFLUXDB_ORG "${INFLUXDB_ORG:-bioavanced}"
+  set_env_file INFLUXDB_BUCKET "${INFLUXDB_BUCKET:-bioavanced_telemetry}"
+
+  set_env_file NEO4J_URI bolt://127.0.0.1:7687
+  set_env_file NEO4J_USERNAME neo4j
+  set_env_file NEO4J_PASSWORD "${NEO4J_PASSWORD:-cenapad-neo4j-placeholder}"
+  set_env_file NEO4J_DATABASE neo4j
+  set_env_file NEO4J_REQUIRED true
+  set_env_file LINEAGE_MODE strict
+  set_env_file ENABLE_CONSENT_SYNC true
+  set_env_file NEO4J_CONNECT_MAX_RETRIES 12
+  set_env_file NEO4J_CONNECT_INITIAL_DELAY_MS 1000
+  set_env_file NEO4J_CONNECT_MAX_DELAY_MS 10000
+
+  set_env_file MQTT_ENABLED false
+  set_env_file ALLOW_CLOUD_INTEGRATIONS false
+
+  set_env_file FRONTEND_URL http://127.0.0.1:5173
+  set_env_file API_URL http://127.0.0.1:3000
+  set_env_file VITE_API_URL http://127.0.0.1:3000
+  set_env_file VITE_BACKEND_URL http://127.0.0.1:3000
+  set_env_file EMAIL_FROM noreply@localhost
+
+  # Valores obrigatórios para validação local, sem envio real.
+  if ! grep -q '^RESEND_API_KEY=' .env.docker || grep -q '^RESEND_API_KEY=$' .env.docker; then
+    set_env_file RESEND_API_KEY re_cenapad_mock_key
+  fi
+
+  if ! grep -q '^CONSENT_SECRET=' .env.docker || grep -q '^CONSENT_SECRET=$' .env.docker; then
+    set_env_file CONSENT_SECRET "$(openssl rand -hex 32 2>/dev/null || date +%s%N | sha256sum | cut -d' ' -f1)"
+  fi
+
+  if ! grep -q '^USER_ANON_SALT=' .env.docker || grep -q '^USER_ANON_SALT=$' .env.docker; then
+    set_env_file USER_ANON_SALT "$(openssl rand -hex 32 2>/dev/null || date +%s%N | sha256sum | cut -d' ' -f1)"
+  fi
+
+  if ! grep -q '^ENCRYPTION_KEY=' .env.docker || grep -q '^ENCRYPTION_KEY=$' .env.docker; then
+    set_env_file ENCRYPTION_KEY "$(openssl rand -hex 32 2>/dev/null || date +%s%N | sha256sum | cut -d' ' -f1)"
+  fi
+
+  if ! grep -q '^INFLUXDB_INIT_PASSWORD=' .env.docker || grep -q '^INFLUXDB_INIT_PASSWORD=$' .env.docker; then
+    set_env_file INFLUXDB_INIT_PASSWORD "BioAvanceD_Influx_2026"
+  fi
+
+  if ! grep -q '^INFLUXDB_TOKEN=' .env.docker || grep -q '^INFLUXDB_TOKEN=$' .env.docker; then
+    set_env_file INFLUXDB_TOKEN "$(openssl rand -hex 32 2>/dev/null || date +%s%N | sha256sum | cut -d' ' -f1)"
+  fi
+
+  cp .env.docker .env
+
+  set -a
+  source .env.docker
+  set +a
+
+  log "[OK] Variáveis conferidas."
+}
 
 wait_port() {
   local port="$1"
   local name="$2"
+  local timeout="${3:-180}"
 
-  for i in $(seq 1 60); do
-    if (echo > "/dev/tcp/127.0.0.1/$port") >/dev/null 2>&1; then
-      echo "[OK] $name abriu porta $port"
+  log "Aguardando $name abrir porta $port por até ${timeout}s..."
+
+  for i in $(seq 1 "$timeout"); do
+    if ss -ltnp 2>/dev/null | grep -qE ":${port}[[:space:]]"; then
+      log "[OK] $name abriu porta $port após ${i}s."
       return 0
     fi
-    sleep 2
+    sleep 1
   done
 
-  echo "[ERROR] $name não abriu porta $port"
+  echo "[ERROR] $name não abriu porta $port dentro do timeout."
   return 1
 }
 
+wait_container_running() {
+  local container="$1"
+  local timeout="${2:-60}"
 
-# --- CENAPAD rootless Podman self-heal: begin ---
-echo ""
-echo "[0/7] Preparando Podman rootless no CENAPAD..."
-echo "[INFO] Corrigindo estado interno do Podman rootless quando necessário."
+  log "Aguardando container $container ficar Up..."
 
-# No CENAPAD/rootless, o processo pause do Podman pode ficar inconsistente
-# após SIGKILL, NFS/overlay ou recriações sucessivas de containers.
-# O próprio Podman recomenda `podman system migrate` para esse caso.
-podman system migrate >/tmp/bioavanced-podman-migrate.out 2>/tmp/bioavanced-podman-migrate.err || true
+  for i in $(seq 1 "$timeout"); do
+    if podman ps --format "{{.Names}}" | grep -qx "$container"; then
+      log "[OK] Container $container está Up."
+      return 0
+    fi
+    sleep 1
+  done
 
-# Em ambientes rootless/NFS, renumber também ajuda quando há metadados antigos
-# de UID/GID/volumes no armazenamento local do usuário.
-podman system renumber >/tmp/bioavanced-podman-renumber.out 2>/tmp/bioavanced-podman-renumber.err || true
+  echo "[ERROR] Container $container não ficou Up."
+  podman ps -a --format "table {{.Names}}\t{{.Status}}\t{{.Image}}" | grep "$container" || true
+  podman logs --tail 200 "$container" 2>&1 || true
+  return 1
+}
 
-if ! podman ps >/tmp/bioavanced-podman-ps.out 2>/tmp/bioavanced-podman-ps.err; then
-  echo "[ERROR] Podman rootless ainda está inconsistente após migrate/renumber."
-  echo "===== podman migrate stderr ====="
-  cat /tmp/bioavanced-podman-migrate.err || true
-  echo "===== podman renumber stderr ====="
-  cat /tmp/bioavanced-podman-renumber.err || true
-  echo "===== podman ps stderr ====="
-  cat /tmp/bioavanced-podman-ps.err || true
-  exit 1
-fi
+http_check_any_status() {
+  local url="$1"
+  local name="$2"
 
-echo "[OK] Podman rootless pronto."
-# --- CENAPAD rootless Podman self-heal: end ---
+  log "Testando HTTP $name em $url"
 
-echo ""
-echo "[1/7] Limpando containers antigos..."
+  local code
+  code="$(curl -s -o /dev/null -w '%{http_code}' "$url" || true)"
+
+  if [ -n "$code" ] && [ "$code" != "000" ]; then
+    log "[OK] $name respondeu HTTP $code."
+    return 0
+  fi
+
+  echo "[ERROR] $name não respondeu HTTP."
+  return 1
+}
+
+section "BioAvanceD CENAPAD Startup"
+log "Projeto: $PROJECT_DIR"
+log "Evidências: $EVIDENCE_DIR"
+log "Logs: $LOG_DIR"
+
+ensure_env
+
+section "[1/8] Auto-reparo leve do Podman rootless"
+podman system migrate 2>/dev/null || true
+podman system renumber 2>/dev/null || true
+
+section "[2/8] Limpando containers antigos"
 for c in bioavanced-frontend bioavanced-backend bioavanced-neo4j bioavanced-influxdb bioavanced-redis bioavanced-mongodb; do
   podman rm -f "$c" 2>/dev/null || true
 done
 
-podman system renumber 2>/dev/null || true
+section "[3/8] Subindo MongoDB, Redis e InfluxDB"
 
-echo ""
-echo "[2/7] Subindo MongoDB sem volume persistente..."
-mongo_args=(
-  run -d
-  --replace
-  --name bioavanced-mongodb
-  --network host
-  --entrypoint mongod
-  docker.io/library/mongo:7
-  --bind_ip 127.0.0.1
-  --port 27017
+log "Subindo MongoDB sem volume persistente..."
+podman run -d \
+  --replace \
+  --name bioavanced-mongodb \
+  --network host \
+  --entrypoint mongod \
+  docker.io/library/mongo:7 \
+  --bind_ip 127.0.0.1 \
+  --port 27017 \
   --dbpath /data/db
-)
-podman "${mongo_args[@]}"
-wait_port 27017 "MongoDB"
 
-echo ""
-echo "[3/7] Subindo Redis sem volume persistente..."
-redis_args=(
-  run -d
-  --replace
-  --name bioavanced-redis
-  --network host
-  --entrypoint redis-server
-  docker.io/library/redis:7-alpine
-  --bind 127.0.0.1
-  --port 6379
-  --save ""
+wait_container_running bioavanced-mongodb 60
+wait_port 27017 MongoDB 90
+
+log "Subindo Redis sem persistência..."
+podman run -d \
+  --replace \
+  --name bioavanced-redis \
+  --network host \
+  --entrypoint redis-server \
+  docker.io/library/redis:7-alpine \
+  --bind 127.0.0.1 \
+  --port 6379 \
+  --save "" \
   --appendonly no
-)
-podman "${redis_args[@]}"
-wait_port 6379 "Redis"
 
-echo ""
-echo "[4/7] Subindo InfluxDB sem volume persistente..."
-influx_args=(
-  run -d
-  --replace
-  --name bioavanced-influxdb
-  --network host
-  --entrypoint influxd
+wait_container_running bioavanced-redis 60
+wait_port 6379 Redis 60
+
+log "Subindo InfluxDB sem volume persistente..."
+podman run -d \
+  --replace \
+  --name bioavanced-influxdb \
+  --network host \
+  --entrypoint influxd \
   docker.io/library/influxdb:2.7
-)
-podman "${influx_args[@]}"
-wait_port 8086 "InfluxDB"
 
-echo ""
-echo "[INFO] Configurando InfluxDB..."
-if podman exec bioavanced-influxdb influx bucket list \
+wait_container_running bioavanced-influxdb 60
+wait_port 8086 InfluxDB 120
+
+log "Configurando InfluxDB..."
+podman exec bioavanced-influxdb influx setup \
   --host http://127.0.0.1:8086 \
-  --org "$INFLUXDB_ORG" \
-  --token "$INFLUXDB_TOKEN" >/dev/null 2>&1; then
-  echo "[OK] InfluxDB já configurado."
+  --username "${INFLUXDB_INIT_USERNAME:-bioavanced}" \
+  --password "${INFLUXDB_INIT_PASSWORD}" \
+  --org "${INFLUXDB_ORG:-bioavanced}" \
+  --bucket "${INFLUXDB_BUCKET:-bioavanced_telemetry}" \
+  --token "${INFLUXDB_TOKEN}" \
+  --force >/dev/null 2>&1 || true
+
+podman exec bioavanced-influxdb influx ping --host http://127.0.0.1:8086 >/dev/null 2>&1 || {
+  echo "[ERROR] InfluxDB não respondeu ao ping após setup."
+  podman logs --tail 200 bioavanced-influxdb || true
+  exit 1
+}
+log "[OK] InfluxDB validado."
+
+section "[4/8] Subindo Neo4j com workaround CENAPAD"
+
+podman run -d \
+  --replace \
+  --name bioavanced-neo4j \
+  --network host \
+  --entrypoint /bin/bash \
+  docker.io/library/neo4j:5-community \
+  -lc '
+    set -e
+    CONF="/var/lib/neo4j/conf/neo4j.conf"
+
+    sed -i "/server.default_listen_address=/d" "$CONF" 2>/dev/null || true
+    sed -i "/server.bolt.listen_address=/d" "$CONF" 2>/dev/null || true
+    sed -i "/server.http.listen_address=/d" "$CONF" 2>/dev/null || true
+    sed -i "/dbms.security.auth_enabled=/d" "$CONF" 2>/dev/null || true
+    sed -i "/dbms.security.auth__enabled=/d" "$CONF" 2>/dev/null || true
+
+    echo "server.default_listen_address=127.0.0.1" >> "$CONF"
+    echo "server.bolt.listen_address=127.0.0.1:7687" >> "$CONF"
+    echo "server.http.listen_address=127.0.0.1:7474" >> "$CONF"
+    echo "dbms.security.auth_enabled=false" >> "$CONF"
+
+    exec /var/lib/neo4j/bin/neo4j console
+  '
+
+wait_container_running bioavanced-neo4j 90
+wait_port 7687 "Neo4j Bolt" 180
+wait_port 7474 "Neo4j HTTP" 180
+
+log "Testando Cypher..."
+podman exec bioavanced-neo4j cypher-shell "RETURN 1 AS ok;" >/dev/null 2>&1 || {
+  echo "[ERROR] Neo4j abriu porta, mas cypher-shell falhou."
+  podman logs --tail 250 bioavanced-neo4j || true
+  exit 1
+}
+log "[OK] Neo4j validado."
+
+section "[5/8] Conferindo/buildando imagens backend e frontend"
+
+if [ "${REBUILD_IMAGES:-0}" = "1" ] || ! podman image exists localhost/bioavanced_deniser_backend:latest; then
+  log "Construindo imagem do backend..."
+  podman build \
+    -t localhost/bioavanced_deniser_backend:latest \
+    -f api/backend/Dockerfile.dev \
+    api/backend
 else
-  podman exec bioavanced-influxdb influx setup \
-    --host http://127.0.0.1:8086 \
-    --username "${INFLUXDB_INIT_USERNAME:-bioavanced}" \
-    --password "$INFLUXDB_INIT_PASSWORD" \
-    --org "$INFLUXDB_ORG" \
-    --bucket "$INFLUXDB_BUCKET" \
-    --token "$INFLUXDB_TOKEN" \
-    --force || true
+  log "[OK] Imagem do backend já existe."
 fi
 
-echo ""
-echo "[5/7] Subindo Neo4j..."
-echo "[INFO] CENAPAD workaround: bypass do entrypoint oficial para evitar chown em NFS/rootless."
+if [ "${REBUILD_IMAGES:-0}" = "1" ] || ! podman image exists localhost/bioavanced_deniser_frontend:latest; then
+  log "Construindo imagem do frontend..."
+  podman build \
+    -t localhost/bioavanced_deniser_frontend:latest \
+    -f frontend/Dockerfile.dev \
+    frontend
+else
+  log "[OK] Imagem do frontend já existe."
+fi
 
-# Mesmo com autenticação desativada no Neo4j, o backend exige NEO4J_PASSWORD não vazia.
-export NEO4J_URI="${NEO4J_URI:-bolt://127.0.0.1:7687}"
-export NEO4J_USERNAME="${NEO4J_USERNAME:-neo4j}"
-export NEO4J_PASSWORD="${NEO4J_PASSWORD:-cenapad-neo4j-placeholder}"
-export NEO4J_DATABASE="${NEO4J_DATABASE:-neo4j}"
-export NEO4J_REQUIRED="${NEO4J_REQUIRED:-true}"
-export LINEAGE_MODE="${LINEAGE_MODE:-strict}"
-export ENABLE_CONSENT_SYNC="${ENABLE_CONSENT_SYNC:-true}"
+section "[6/8] Subindo backend"
 
-neo4j_args=(
-  run -d
-  --replace
-  --name bioavanced-neo4j
-  --network host
-  --entrypoint /bin/bash
-  docker.io/library/neo4j:5-community
-  -lc
-  'CONF=/var/lib/neo4j/conf/neo4j.conf
+podman run -d \
+  --pull=never \
+  --replace \
+  --name bioavanced-backend \
+  --network host \
+  --env-file .env.docker \
+  localhost/bioavanced_deniser_backend:latest \
+  npx nodemon --legacy-watch --inspect=0.0.0.0:9229 server.js
 
-sed -i "/dbms.security.auth_enabled/d" "$CONF" 2>/dev/null || true
-sed -i "/server.default_listen_address/d" "$CONF" 2>/dev/null || true
-sed -i "/server.bolt.listen_address/d" "$CONF" 2>/dev/null || true
-sed -i "/server.http.listen_address/d" "$CONF" 2>/dev/null || true
+wait_container_running bioavanced-backend 90
+wait_port 9229 "Backend inspect" 120
+wait_port 3000 "Backend API" 240
+
+log "Validando resposta HTTP do backend. HTTP 404 na raiz é esperado."
+http_check_any_status http://127.0.0.1:3000 "Backend/API"
+
+section "[7/8] Subindo frontend"
+
+podman run -d \
+  --pull=never \
+  --replace \
+  --name bioavanced-frontend \
+  --network host \
+  --env-file .env.docker \
+  localhost/bioavanced_deniser_frontend:latest \
+  npm run dev -- --host 0.0.0.0
+
+wait_container_running bioavanced-frontend 90
+wait_port 5173 "Frontend/Vite" 180
+
+log "Validando resposta HTTP do frontend."
+http_check_any_status http://127.0.0.1:5173 "Frontend/Vite"
+
+section "[8/8] Salvando evidências finais"
 
 {
-  echo "server.default_listen_address=127.0.0.1"
-  echo "server.bolt.listen_address=127.0.0.1:7687"
-  echo "server.http.listen_address=127.0.0.1:7474"
-  echo "dbms.security.auth_enabled=false"
-} >> "$CONF"
+  echo "BioAvanceD CENAPAD startup status"
+  echo "Date: $(date)"
+  echo "Host: $(hostname)"
+  echo "Project: $PROJECT_DIR"
+  echo "Branch:"
+  git branch --show-current 2>/dev/null || true
+  echo ""
+  echo "Git commit:"
+  git rev-parse --short HEAD 2>/dev/null || true
+  echo ""
+  echo "Containers:"
+  podman ps -a --format "table {{.Names}}\t{{.Status}}\t{{.Image}}" | grep bioavanced || true
+  echo ""
+  echo "Open ports:"
+  ss -ltnp 2>/dev/null | grep -E ':27017|:6379|:8086|:7474|:7687|:3000|:5173|:9229' || true
+  echo ""
+  echo "Backend HTTP root:"
+  curl -I http://127.0.0.1:3000 2>&1 || true
+  echo ""
+  echo "Frontend HTTP root:"
+  curl -I http://127.0.0.1:5173 2>&1 || true
+  echo ""
+  echo "Neo4j nodes:"
+  podman exec bioavanced-neo4j cypher-shell "MATCH (n) RETURN labels(n) AS labels, count(n) AS total ORDER BY total DESC LIMIT 20;" 2>&1 || true
+  echo ""
+  echo "Neo4j relationships:"
+  podman exec bioavanced-neo4j cypher-shell "MATCH ()-[r]->() RETURN type(r) AS relationship, count(r) AS total ORDER BY total DESC LIMIT 20;" 2>&1 || true
+  echo ""
+  echo "Backend key markers:"
+  podman logs --tail 500 bioavanced-backend 2>&1 | grep -E "MongoDB Connected|NEO4J|API rodando|WS ativo|Redis conectado|InfluxDB|Consentimento Mongo" || true
+  echo ""
+  echo "Frontend key markers:"
+  podman logs --tail 300 bioavanced-frontend 2>&1 || true
+} > "$EVIDENCE_DIR/startup-cenapad-status.txt"
 
-echo "===== neo4j.conf CENAPAD override ====="
-grep -nE "auth_enabled|listen_address" "$CONF" || true
-echo "======================================"
+save_logs
 
-/var/lib/neo4j/bin/neo4j console'
-)
+section "BioAvanceD iniciado com sucesso"
 
-podman "${neo4j_args[@]}"
-wait_port 7687 "Neo4j Bolt"
-
-if (echo > /dev/tcp/127.0.0.1/7474) >/dev/null 2>&1; then
-  echo "[OK] Neo4j HTTP abriu porta 7474"
-else
-  echo "[WARN] Neo4j HTTP 7474 ainda não abriu; seguindo porque o backend usa Bolt 7687."
-fi
-
-echo "[INFO] Validando Neo4j sem autenticação..."
-if podman exec bioavanced-neo4j cypher-shell \
-    -a bolt://127.0.0.1:7687 \
-    --non-interactive \
-    "RETURN 1 AS ok;" >/tmp/bioavanced-neo4j-test.out 2>/tmp/bioavanced-neo4j-test.err; then
-  echo "[OK] Neo4j respondeu via Bolt sem autenticação."
-  cat /tmp/bioavanced-neo4j-test.out
-else
-  echo "[ERROR] Neo4j abriu a porta 7687, mas o cypher-shell não validou."
-  echo "===== stderr ====="
-  cat /tmp/bioavanced-neo4j-test.err || true
-  echo "===== logs Neo4j ====="
-  podman logs --tail 120 bioavanced-neo4j || true
-  exit 1
-fi
-
-echo ""
-echo "[6/7] Subindo backend..."
-backend_args=(
-  run -d
-  --pull=never
-  --replace
-  --name bioavanced-backend
-  --network host
-  --env-file .env.docker
-  -e "MONGO_URI=$MONGO_URI"
-  -e "MONGO_DB=$MONGO_DB"
-  -e "MONGO_DB_NOVO=${MONGO_DB_NOVO:-$MONGO_DB}"
-  -e "REDIS_URL=$REDIS_URL"
-  -e "REDIS_HOST=$REDIS_HOST"
-  -e "REDIS_PORT=$REDIS_PORT"
-  -e "INFLUXDB_URL=$INFLUXDB_URL"
-  -e "INFLUXDB_ORG=$INFLUXDB_ORG"
-  -e "INFLUXDB_BUCKET=$INFLUXDB_BUCKET"
-  -e "INFLUXDB_TOKEN=$INFLUXDB_TOKEN"
-  -e "NEO4J_URI=$NEO4J_URI"
-  -e "NEO4J_USERNAME=$NEO4J_USERNAME"
-  -e "NEO4J_PASSWORD=$NEO4J_PASSWORD"
-  -e "NEO4J_REQUIRED=$NEO4J_REQUIRED"
-  -e "LINEAGE_MODE=$LINEAGE_MODE"
-  -e "ENABLE_CONSENT_SYNC=$ENABLE_CONSENT_SYNC"
-  -e "FRONTEND_URL=$FRONTEND_URL"
-  -e "API_URL=$API_URL"
-  -e "ALLOWED_ORIGINS=$ALLOWED_ORIGINS"
-  -e "ENCRYPTION_KEY=$ENCRYPTION_KEY"
-  -e "ENCRYPTION_KEY_ID=${ENCRYPTION_KEY_ID:-cenapad-validation}"
-  -e "USER_ANON_SALT=$USER_ANON_SALT"
-  -e "CONSENT_SECRET=$CONSENT_SECRET"
-  -e "RESEND_API_KEY=${RESEND_API_KEY:-re_cenapad_mock_key}"
-  -e "EMAIL_FROM=noreply@localhost"
-  "$BACKEND_IMAGE"
-  npx nodemon --legacy-watch --inspect=0.0.0.0:9229 server.js
-)
-podman "${backend_args[@]}"
-wait_port 3000 "Backend API"
-
-echo ""
-echo "[7/7] Subindo frontend..."
-frontend_args=(
-  run -d
-  --pull=never
-  --replace
-  --name bioavanced-frontend
-  --network host
-  --env-file .env.docker
-  -e "VITE_API_BASE_URL=http://127.0.0.1:3000"
-  "$FRONTEND_IMAGE"
-  npm run dev -- --host 0.0.0.0
-)
-podman "${frontend_args[@]}"
-wait_port 5173 "Frontend"
-
-echo ""
-echo "=================================================="
-echo " STATUS FINAL"
-echo "=================================================="
-podman ps -a --format "table {{.Names}}\t{{.Status}}\t{{.Image}}"
+podman ps -a --format "table {{.Names}}\t{{.Status}}\t{{.Image}}" | grep bioavanced || true
 
 echo ""
 echo "Portas abertas:"
 ss -ltnp 2>/dev/null | grep -E ':27017|:6379|:8086|:7474|:7687|:3000|:5173|:9229' || true
 
 echo ""
-echo "Teste backend:"
-curl -I http://127.0.0.1:3000 2>/dev/null || true
-
+echo "Backend:  http://127.0.0.1:3000"
+echo "Frontend: http://127.0.0.1:5173"
+echo "Neo4j:    bolt://127.0.0.1:7687 | http://127.0.0.1:7474"
 echo ""
-echo "Teste frontend:"
-curl -I http://127.0.0.1:5173 2>/dev/null || true
-
+echo "Evidência:"
+echo "$EVIDENCE_DIR/startup-cenapad-status.txt"
 echo ""
+echo "Logs:"
+echo "$LOG_DIR"
 echo ""
-echo "=================================================="
-echo " Verificação final obrigatória"
-echo "=================================================="
-
-REQUIRED_CONTAINERS=(
-  bioavanced-mongodb
-  bioavanced-redis
-  bioavanced-influxdb
-  bioavanced-neo4j
-  bioavanced-backend
-  bioavanced-frontend
-)
-
-FAILED=0
-
-for c in "${REQUIRED_CONTAINERS[@]}"; do
-  status="$(podman inspect -f '{{.State.Status}}' "$c" 2>/dev/null || echo missing)"
-  if [ "$status" = "running" ]; then
-    echo "[OK] $c running"
-  else
-    echo "[ERROR] $c status=$status"
-    FAILED=1
-  fi
-done
-
-for port in 27017 6379 8086 7687 3000 5173; do
-  if (echo > "/dev/tcp/127.0.0.1/$port") >/dev/null 2>&1; then
-    echo "[OK] porta $port aberta"
-  else
-    echo "[ERROR] porta $port fechada"
-    FAILED=1
-  fi
-done
-
-# A porta 7474 é útil para inspeção, mas o backend usa Bolt 7687.
-if (echo > /dev/tcp/127.0.0.1/7474) >/dev/null 2>&1; then
-  echo "[OK] porta 7474 aberta"
-else
-  echo "[WARN] porta 7474 não respondeu; seguindo porque o backend usa Bolt 7687."
-fi
-
-BASE_DIR="${BIOAVANCED_BASE_DIR:-$HOME/bioavanced-validation}"
-RUN_ID="$(date +%Y%m%d-%H%M%S)"
-EVIDENCE_DIR="$BASE_DIR/evidence/$RUN_ID"
-LOG_DIR="$BASE_DIR/logs/$RUN_ID"
-
-mkdir -p "$EVIDENCE_DIR" "$LOG_DIR"
-
-{
-  echo "BioAvanceD CENAPAD startup evidence"
-  echo "Date: $(date)"
-  echo "Project: $PROJECT_DIR"
-  echo ""
-  echo "Containers:"
-  podman ps -a --format "table {{.Names}}\t{{.Status}}\t{{.Image}}"
-  echo ""
-  echo "Ports:"
-  ss -ltnp 2>/dev/null | grep -E ':27017|:6379|:8086|:7474|:7687|:3000|:5173|:9229' || true
-  echo ""
-  echo "Backend HTTP:"
-  curl -I http://127.0.0.1:3000 2>/dev/null || true
-  echo ""
-  echo "Frontend HTTP:"
-  curl -I http://127.0.0.1:5173 2>/dev/null || true
-} > "$EVIDENCE_DIR/startup-cenapad-status.txt" 2>&1
-
-for c in "${REQUIRED_CONTAINERS[@]}"; do
-  podman logs "$c" > "$LOG_DIR/${c}.log" 2>&1 || true
-done
-
-if [ "$FAILED" -ne 0 ]; then
-  echo ""
-  echo "[ERROR] Startup incompleto. Evidências salvas em: $EVIDENCE_DIR"
-  echo "[ERROR] Logs salvos em: $LOG_DIR"
-  exit 1
-fi
-
-echo ""
-echo "=================================================="
-echo " BioAvanceD iniciado com sucesso no CENAPAD."
-echo "=================================================="
-echo " Backend:   http://127.0.0.1:3000"
-echo " Frontend:  http://127.0.0.1:5173"
-echo " Neo4j:     bolt://127.0.0.1:7687 | http://127.0.0.1:7474"
-echo " MongoDB:   mongodb://127.0.0.1:27017/${MONGO_DB:-bioavanced_dev}"
-echo " Redis:     redis://127.0.0.1:6379"
-echo " InfluxDB:  http://127.0.0.1:8086"
-echo " Evidence:  $EVIDENCE_DIR/startup-cenapad-status.txt"
-echo " Logs:      $LOG_DIR"
+echo "Para túnel SSH no Windows:"
+echo "ssh -p 31459 -N -L 5173:lovelace:5173 -L 3000:lovelace:3000 deniser@cenapad.unicamp.br"
