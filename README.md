@@ -179,6 +179,28 @@ docker compose --env-file .env.docker -f docker-compose.yml exec backend npm run
 
 Esse seed deve ser idempotente e não deve executar `deleteMany` em coleções operacionais. Ele também não deve criar pacientes, amostras, consentimentos, resultados, sensores, freezers, incidentes ou usuário administrador.
 
+## Seed ORPHA inicial
+
+ORPHA, CID-10, CID-11, SNOMED-CT e OMIM entram como dados de referência semântica para terminologias clínicas. Eles não são dados operacionais reais e não criam pacientes, amostras, consentimentos, resultados ou eventos de biobanco.
+
+A documentação completa da pipeline está em `docs/orphanet-artifact-pipeline.md`. No CENAPAD, use o artefato validado e importe com checkpoint resumível:
+
+```bash
+MAX_SECONDS=240 ./with-mongo-window.sh node api/backend/scripts/orphanet-import-initial-seed.js \
+  --artifact /home/lovelace/proj/proj1091/deniser/bioavanced-validation/cache/orphanet-2025-07-initial-seed \
+  --batch 500 \
+  --maxSeconds 220 \
+  --checkpoint
+```
+
+Valide a importação ORPHA depois que a carga terminar:
+
+```bash
+MAX_SECONDS=180 ./with-mongo-window.sh node api/backend/scripts/orphanet-validate-imported-seed.js \
+  --release 2025-07 \
+  --artifact /home/lovelace/proj/proj1091/deniser/bioavanced-validation/cache/orphanet-2025-07-initial-seed
+```
+
 ## Criar primeiro administrador com bootstrap seguro
 
 O sistema não cria administrador por padrão. O primeiro administrador deve ser criado explicitamente após o banco estar inicializado.

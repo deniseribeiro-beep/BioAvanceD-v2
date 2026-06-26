@@ -124,15 +124,7 @@ Compress-Archive `
 
 ## API complementar
 
-O cliente ORPHAcodes API permanece disponivel com header `apiKey`, idiomas em uppercase e retry somente para 429, 5xx e timeout. `404` em endpoints complementares e tratado como ausencia de dado, sem retry. O script `orphanet-fetch-api-once.js` pode ser usado para validacao/enriquecimento pequeno, nunca para full load inicial:
-
-```powershell
-node api/backend/scripts/orphanet-fetch-api-once.js `
-  --release 2025-07 `
-  --langs pt,en `
-  --out ./artifacts/orphanet-2025-07-api-enrichment `
-  --limit 3
-```
+A API complementar atualmente disponivel nesta pipeline e o enriquecimento OMIM controlado descrito acima, via `orphanet-enrich-initial-seed-omim.js`. Um script futuro de enriquecimento incremental para outros endpoints pode ser criado separadamente se necessario, mas nao faz parte do fluxo versionado atual.
 
 ## Enviar para CENAPAD
 
