@@ -65,6 +65,10 @@ artifacts/
 # Orphanet raw seed sources are versioned to support reproducible CENAPAD builds.
 !orpha-data-raw/
 !orpha-data-raw/**
+!orpha-data-raw/*.zip
+!orpha-data-raw/*.xlsx
+!orpha-data-raw/**/*.zip
+!orpha-data-raw/**/*.xlsx
 
 # =========================
 # Runtime uploads and generated files
