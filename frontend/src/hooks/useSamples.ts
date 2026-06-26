@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Sample, Result } from '../types/models';
 import { samplesApi } from '../services/samples/samplesApi';
+import { extractResponseItems } from '../api/response.adapters';
 import { notifyDashboardDataChanged } from '../utils/dashboardRefresh';
 import { onClientLogout } from '../utils/sessionCleanup';
 
@@ -14,31 +15,17 @@ interface ApiLikeError {
   };
 }
 
-type SamplesPayload = {
-  data?: unknown;
-};
-
 function extractErrorMessage(error: unknown, fallback: string): string {
   const typedError = error as ApiLikeError | null;
   return typedError?.response?.data?.error || typedError?.response?.data?.message || typedError?.message || fallback;
 }
 
 function extractSamples(payload: unknown): Sample[] {
-  const typedPayload = payload as SamplesPayload | null;
-
-  if (Array.isArray(payload)) {
-    return payload as Sample[];
-  }
-
-  if (Array.isArray(typedPayload?.data)) {
-    return typedPayload.data as Sample[];
-  }
-
-  return [];
+  return extractResponseItems<Sample>(payload, ['samples']);
 }
 
 function extractResultItems(payload: unknown): Result[] {
-  return Array.isArray(payload) ? (payload as Result[]) : [];
+  return extractResponseItems<Result>(payload, ['results']);
 }
 
 function unwrapData<T>(payload: unknown): T | unknown {

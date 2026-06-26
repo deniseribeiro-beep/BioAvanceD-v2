@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect } from 'react';
 import { ClinicalUnit } from '../types/models';
 import { clinicalUnitService } from '../services/api';
+import { extractResponseEntity, extractResponseItems, normalizeMasterDataItem } from '../api/response.adapters';
 import { onClientLogout } from '../utils/sessionCleanup';
 
 export function useClinicalUnits() {
@@ -30,7 +31,7 @@ export function useClinicalUnits() {
       setLoading(true);
       setError(null);
       const response = await clinicalUnitService.search(term, limit);
-      const items = Array.isArray(response.data?.data) ? response.data.data : [];
+      const items = extractResponseItems<ClinicalUnit>(response).map((item) => normalizeMasterDataItem<ClinicalUnit>(item));
       setClinicalUnits(items);
       return items;
     } catch (err: any) {
@@ -57,7 +58,7 @@ export function useClinicalUnits() {
       setError(null);
       const payloadName = String(name || '').trim();
       const response = await clinicalUnitService.create({ name: payloadName });
-      const created = response.data?.data;
+      const created = extractResponseEntity<ClinicalUnit>(response, { name: payloadName });
 
       if (created && created._id) {
         setClinicalUnits((prev) => {

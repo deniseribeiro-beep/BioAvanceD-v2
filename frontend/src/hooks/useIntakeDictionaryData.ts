@@ -1,21 +1,32 @@
 import { useEffect, useMemo, useState } from 'react';
 import { apiClient } from '../api/client';
+import { extractResponseItems } from '../api/response.adapters';
 import { createIntakeDictionarySet, IntakeDictionaryItem, IntakeDictionarySet, normalizeIntakeDictionaryItem } from '../config/constants/intake-dictionaries.constants';
 
 type TerminologyApiItem = {
+  id?: string;
+  _id?: string;
+  code?: string;
   codigo?: string;
+  system?: string;
   sistema?: string;
+  description?: string;
   descricao?: string;
+  name?: string;
   label?: string;
+  title?: string;
   sinonimos?: string[];
+  synonyms?: string[];
   aliases?: string[];
+  active?: boolean;
   ativo?: boolean;
   relacoes?: Record<string, string>;
 };
 
 function mapTerminologyToDictionaryItem(item: TerminologyApiItem): IntakeDictionaryItem {
-  const codigo = String(item?.codigo || '').trim();
-  const descricao = String(item?.descricao || item?.label || '').trim();
+  const codigo = String(item?.codigo || item?.code || item?.id || item?._id || '').trim();
+  const descricao = String(item?.descricao || item?.description || item?.label || item?.name || item?.title || codigo).trim();
+  const active = item?.ativo !== undefined ? Boolean(item.ativo) : item?.active !== undefined ? Boolean(item.active) : true;
 
   return normalizeIntakeDictionaryItem({
     slug: codigo,
@@ -23,10 +34,10 @@ function mapTerminologyToDictionaryItem(item: TerminologyApiItem): IntakeDiction
     code: codigo,
     name: descricao,
     label: descricao,
-    active: item?.ativo !== undefined ? Boolean(item.ativo) : true,
-    is_active: item?.ativo !== undefined ? Boolean(item.ativo) : true,
+    active,
+    is_active: active,
     aliases: Array.isArray(item?.aliases) ? item.aliases : [],
-    synonyms: Array.isArray(item?.sinonimos) ? item.sinonimos : [],
+    synonyms: Array.isArray(item?.sinonimos) ? item.sinonimos : Array.isArray(item?.synonyms) ? item.synonyms : [],
   } as IntakeDictionaryItem);
 }
 
@@ -40,22 +51,45 @@ function buildDictionarySet(items: TerminologyApiItem[]): IntakeDictionarySet {
   const pushBySystem = (system: string, entry: TerminologyApiItem) => {
     const normalized = mapTerminologyToDictionaryItem(entry);
     switch (system) {
-      case 'CID10':
-      case 'CID11':
+      case 'SAMPLE_TYPE':
+      case 'SAMPLE_TYPES':
+      case 'SPECIMEN_TYPE':
+      case 'SPECIMEN_TYPES':
+      case 'MIABIS_SAMPLE_TYPE':
+        dictionaries.sampleTypes.push(normalized);
+        break;
+      case 'SAMPLE_ORIGIN':
+      case 'SAMPLE_ORIGINS':
+      case 'SPECIMEN_ORIGIN':
         dictionaries.anatomicalOrigins.push(normalized);
         break;
-      case 'HPO':
-        dictionaries.biomarkers.push(normalized);
+      case 'EXTRACTION_PROTOCOL':
+      case 'EXTRACTION_PROTOCOLS':
+        dictionaries.extractionProtocols.push(normalized);
         break;
-      case 'OMIM':
-      case 'ORPHA':
+      case 'QUALITY_DESCRIPTION':
+      case 'QUALITY_DESCRIPTIONS':
+      case 'PRE_ANALYTICAL_QUALITY':
+      case 'MIABIS_QUALITY':
+        dictionaries.preAnalyticalQualities.push(normalized);
+        break;
+      case 'CLINICAL_COMORBIDITY':
+      case 'CLINICAL_COMORBIDITIES':
+      case 'COMORBIDITY':
+      case 'COMORBIDITIES':
         dictionaries.clinicalComorbidities.push(normalized);
         break;
+      case 'BIOMARKER':
       case 'BIOMARCADOR':
         dictionaries.biomarkers.push(normalized);
         break;
-      default:
+      case 'CONSENT_TYPE':
+      case 'CONSENT_TYPES':
+      case 'TCLE':
+      case 'CONSENT':
         dictionaries.consentTypes.push(normalized);
+        break;
+      default:
         break;
     }
   };
@@ -87,8 +121,8 @@ export function useIntakeDictionaryData() {
           suppressErrorToast: true,
         } as any);
 
-        const payload = response?.data?.data ?? [];
-        const nextDictionaries = buildDictionarySet(Array.isArray(payload) ? payload : []);
+        const payload = extractResponseItems<TerminologyApiItem>(response);
+        const nextDictionaries = buildDictionarySet(payload);
 
         if (active) {
           setDictionaries(nextDictionaries);

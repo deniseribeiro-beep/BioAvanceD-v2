@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { extractionProtocolService } from '../services/api';
+import { extractResponseItems, normalizeMasterDataItem } from '../api/response.adapters';
 import { onClientLogout } from '../utils/sessionCleanup';
 
 export interface ExtractionProtocol {
@@ -32,12 +33,7 @@ export function useExtractionProtocols() {
     try {
       setLoading(true);
       const response = await extractionProtocolService.getAll();
-      const responseData = response.data as any;
-      const protocolsData = Array.isArray(responseData) 
-        ? responseData 
-        : (Array.isArray(responseData?.data) 
-          ? responseData.data 
-          : []);
+      const protocolsData = extractResponseItems<ExtractionProtocol>(response).map((item) => normalizeMasterDataItem<ExtractionProtocol>(item, ['protocolID']));
       setProtocols(protocolsData);
       setError(null);
     } catch (err: any) {

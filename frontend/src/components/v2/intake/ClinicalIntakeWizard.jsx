@@ -11,6 +11,7 @@ import Modal from '../../../components/UI/Modal';
 import Textarea from '../../../components/UI/Textarea';
 // CidAsyncAutocomplete não está disponível nesta árvore; o wizard usa busca manual de CID.
 import { apiClient, notifyApiToast } from '../../../api/client';
+import { extractResponseItems } from '../../../api/response.adapters';
 import { useSemanticCascade } from '../../../hooks/useSemanticCascade';
 
 // Exemplo de uso do componente CidAsyncAutocomplete:
@@ -1789,7 +1790,7 @@ export default function ClinicalIntakeWizard(props) {
           params: requestParams,
           suppressErrorToast: true,
         });
-        const terminologyPayload = terminologyResponse?.data?.data ?? terminologyResponse?.data ?? [];
+        const terminologyPayload = extractResponseItems(terminologyResponse);
 
         const normalized = [
           ...(Array.isArray(terminologyPayload) ? terminologyPayload : []),
@@ -1978,8 +1979,7 @@ export default function ClinicalIntakeWizard(props) {
 
       try {
         const response = await consentService.getTemplates();
-        const payload = response?.data?.data ?? response?.data ?? [];
-        const nextTemplates = Array.isArray(payload) ? payload : [];
+        const nextTemplates = extractResponseItems(response, ['templates']);
 
         if (!active) {
           return;
@@ -2228,7 +2228,7 @@ export default function ClinicalIntakeWizard(props) {
           suppressErrorToast: true,
         });
 
-        const relationPayload = relationResponse?.data?.data ?? relationResponse?.data ?? [];
+        const relationPayload = extractResponseItems(relationResponse);
         const normalizedCandidates = Array.isArray(relationPayload) ? relationPayload.map((entry) => normalizeCidOption(entry)) : [];
         const matched = pickBestOrphaCandidate(normalizedCandidates, orphaNumeric)
           || normalizedCandidates.find((candidate) => String(candidate.code || '').includes(orphaNumeric))
@@ -2399,7 +2399,7 @@ export default function ClinicalIntakeWizard(props) {
           return;
         }
 
-        const payload = Array.isArray(response?.data?.medications) ? response.data.medications : [];
+        const payload = extractResponseItems(response, ['medications']);
         setMedicationResults(payload);
       } catch (_) {
         if (active) {

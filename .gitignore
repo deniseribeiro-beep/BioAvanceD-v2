@@ -58,6 +58,10 @@ api/backend/COMPLIANCE_EVIDENCE.json
 COMPLIANCE_EVIDENCE.json
 backup_before_push.patch
 backup_status_before_push.txt
+artifacts/
+orpha-data-raw/
+*.zip
+*.xlsx
 
 # =========================
 # Runtime uploads and generated files
