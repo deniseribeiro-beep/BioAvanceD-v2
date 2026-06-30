@@ -1,0 +1,44 @@
+import { test, expect } from '@playwright/test';
+
+// Unlike the other specs in this folder, this one does NOT mock the backend.
+// It talks to the real API (mongodb-backed) so it only makes sense when run
+// against the docker-compose stack (`npm run test:e2e:docker`) or against a
+// locally running backend on http://localhost:3000. It is skipped unless an
+// API base URL is explicitly provided, since CI's plain `npm run test:e2e`
+// job still uses the mocked specs against a backend-less frontend dev server.
+const apiBaseURL = process.env.PLAYWRIGHT_API_BASE_URL;
+
+test.skip(!apiBaseURL, 'PLAYWRIGHT_API_BASE_URL not set — run via npm run test:e2e:docker');
+
+test.describe('Real backend integration', () => {
+  test('health endpoint reports a live database connection', async ({ request }) => {
+    const response = await request.get(`${apiBaseURL}/api/health`);
+    expect(response.ok()).toBeTruthy();
+
+    const body = await response.json();
+    expect(body.status).toBe('OK');
+    expect(body.db).toBe(true);
+  });
+
+  test('login with seeded admin user returns a usable session and lists samples', async ({ request }) => {
+    const testUser = process.env.TEST_USER || 'admin';
+    const testPass = process.env.TEST_PASS || 'Admin@123';
+
+    const loginResponse = await request.post(`${apiBaseURL}/api/auth/login`, {
+      data: { username: testUser, password: testPass },
+    });
+    expect(loginResponse.ok()).toBeTruthy();
+
+    const { token, accessToken } = await loginResponse.json();
+    const authToken = token ?? accessToken;
+    expect(authToken).toBeTruthy();
+
+    const samplesResponse = await request.get(`${apiBaseURL}/api/samples`, {
+      headers: { Authorization: `Bearer ${authToken}` },
+    });
+    expect(samplesResponse.ok()).toBeTruthy();
+
+    const samples = await samplesResponse.json();
+    expect(Array.isArray(samples) || Array.isArray(samples.results)).toBeTruthy();
+  });
+});
