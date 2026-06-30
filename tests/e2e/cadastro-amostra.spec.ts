@@ -38,7 +38,7 @@ test('Bloqueio CLSI e cadastro válido', async ({ page }) => {
     },
   ]);
   await mockOntologyApis(page);
-  await page.goto('http://localhost:3000/samples');
+  await page.goto('/samples');
   // Inicia cadastro de amostra
   await page.getByRole('button', { name: /Nova Amostra|Cadastrar Amostra/i }).click();
   // Preenche campos obrigatórios

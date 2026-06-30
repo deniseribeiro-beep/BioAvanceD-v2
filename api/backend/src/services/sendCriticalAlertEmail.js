@@ -1,6 +1,5 @@
 const { Resend } = require('resend');
 
-const resend = new Resend(process.env.RESEND_API_KEY);
 const from = process.env.EMAIL_FROM || 'onboarding@resend.dev';
 
 function escapeHtml(value) {
@@ -16,6 +15,8 @@ async function sendCriticalAlertEmail(sensorId, currentTemp, limitTemp, recipien
   if (!process.env.RESEND_API_KEY) {
     throw new Error('RESEND_API_KEY não configurada');
   }
+
+  const resend = new Resend(process.env.RESEND_API_KEY);
 
   const safeSensorId = escapeHtml(sensorId);
   const safeCurrentTemp = escapeHtml(currentTemp);

@@ -1,7 +1,6 @@
 const { Resend } = require('resend');
 const logger = require('../utils/logger');
 
-const resend = new Resend(process.env.RESEND_API_KEY);
 const from = process.env.EMAIL_FROM || 'onboarding@resend.dev';
 
 function escapeHtml(value) {
@@ -18,6 +17,8 @@ async function sendIncidentAlertEmail(incident, recipients, escalationLevel = 0)
     logger.warn('RESEND_API_KEY não configurada - alerta de incidente não enviado por email');
     return { success: false, reason: 'RESEND_API_KEY not configured' };
   }
+
+  const resend = new Resend(process.env.RESEND_API_KEY);
 
   if (!recipients || recipients.length === 0) {
     logger.warn('Nenhum destinatário fornecido para alerta de incidente');

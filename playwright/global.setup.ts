@@ -1,10 +1,12 @@
 import { chromium, type FullConfig } from '@playwright/test';
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+// Auth file lives at playwright/.auth/user.json relative to the repo root.
+// We resolve from process.cwd() (repo root when running `npx playwright test`)
+// instead of import.meta.url, which breaks when playwright compiles this file
+// as CommonJS in environments without a matching ESM tsconfig.
+const AUTH_FILE = path.resolve(process.cwd(), 'playwright', '.auth', 'user.json');
 
 function createMockJwt(payload: Record<string, unknown>) {
   const header = Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString('base64url');
@@ -15,14 +17,8 @@ function createMockJwt(payload: Record<string, unknown>) {
 async function globalSetup(config: FullConfig) {
   const projectUse = config.projects[0]?.use ?? {};
   const baseURL = String(projectUse.baseURL ?? 'http://localhost:5173');
-  const authFile = path.resolve(__dirname, '.auth', 'user.json');
 
-  fs.mkdirSync(path.dirname(authFile), { recursive: true });
-
-  if (process.env.PLAYWRIGHT_SKIP_GLOBAL_SETUP === '1') {
-    fs.writeFileSync(authFile, JSON.stringify({ cookies: [], origins: [] }, null, 2));
-    return;
-  }
+  fs.mkdirSync(path.dirname(AUTH_FILE), { recursive: true });
 
   if (process.env.PLAYWRIGHT_USE_REAL_LOGIN !== '1') {
     const token = createMockJwt({
@@ -36,7 +32,7 @@ async function globalSetup(config: FullConfig) {
     });
 
     fs.writeFileSync(
-      authFile,
+      AUTH_FILE,
       JSON.stringify(
         {
           cookies: [],
@@ -77,7 +73,7 @@ async function globalSetup(config: FullConfig) {
   await page.waitForURL((url) => !url.pathname.includes('/login'), { timeout: 30000 });
   await page.waitForLoadState('networkidle');
 
-  await page.context().storageState({ path: authFile });
+  await page.context().storageState({ path: AUTH_FILE });
   await browser.close();
 }
 

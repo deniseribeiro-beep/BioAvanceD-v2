@@ -175,6 +175,7 @@ jobs:
           MONGO_DB_NOVO=bioavanced_ci
           MONGO_URI=mongodb://ci:ci-password@mongodb:27017/bioavanced_ci?authSource=admin
           JWT_SECRET=ci-jwt-secret-key-for-docker-e2e
+          CONSENT_SECRET=ci-consent-secret-for-docker-e2e
           JWT_REFRESH_SECRET=ci-jwt-refresh-secret-for-docker-e2e
           ENCRYPTION_KEY=ci-encryption-key-32-characters!!
           ENCRYPTION_KEY_ID=ci-key-1
@@ -248,7 +249,10 @@ jobs:
           PLAYWRIGHT_USE_REAL_LOGIN: "1"
           TEST_USER: admin
           TEST_PASS: Admin@123
-        run: npm run test:e2e -- --project=chromium
+        # Only run specs designed for a real backend — UI-only mocked specs are
+        # covered by the e2e-mocked job and fail here because the real backend
+        # rejects the mock JWT on /api/auth/verify.
+        run: npm run test:e2e -- --project=chromium --grep "Real backend integration"
 
       - name: 📊 Upload Playwright report
         if: always()

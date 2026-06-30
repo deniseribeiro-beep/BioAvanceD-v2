@@ -44,7 +44,7 @@ test('Preenchimento e submissão do TCLE dinâmico', async ({ page }) => {
     },
   ]);
   await mockOntologyApis(page);
-  await page.goto('http://localhost:3000/admin/tcle/new');
+  await page.goto('/admin/tcle/new');
   await expect(page.getByLabel('Nome do Modelo')).toBeVisible();
   await page.getByLabel('Nome do Modelo').fill('TCLE Teste E2E');
   await page.getByLabel('CAAE').fill('12345678.9.0000.0000');

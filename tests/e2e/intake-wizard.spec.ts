@@ -38,7 +38,7 @@ test('Cadastro clínico do paciente com validação Zod', async ({ page }) => {
     },
   ]);
   await mockOntologyApis(page);
-  await page.goto('http://localhost:3000/v2/intake');
+  await page.goto('/v2/intake');
   // Passo 1: Dados Demográficos
   await page.getByLabel('Nome completo do paciente').fill('Paciente E2E Playwright');
   await page.getByLabel('Data de nascimento').fill('01/01/1990');
