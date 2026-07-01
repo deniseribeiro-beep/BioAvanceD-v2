@@ -8,6 +8,8 @@ process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-jwt-secret';
 process.env.JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || 'test-refresh-jwt-secret';
 process.env.RESEND_API_KEY = process.env.RESEND_API_KEY || 're_test_dummy_key';
 process.env.USER_ANON_SALT = process.env.USER_ANON_SALT || 'test-user-anon-salt';
+process.env.ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || 'test-encryption-key-for-vitest';
+process.env.ENCRYPTION_KEY_ID = process.env.ENCRYPTION_KEY_ID || 'test-key-1';
 
 function createMockSession() {
 	return {

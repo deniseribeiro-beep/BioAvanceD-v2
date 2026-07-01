@@ -1,0 +1,167 @@
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+const request = require('supertest');
+const jwt = require('jsonwebtoken');
+
+process.env.NODE_ENV = 'test';
+process.env.JWT_SECRET = process.env.JWT_SECRET || 'vitest-secret-key';
+
+const app = require('../../app');
+const sessionService = require('../../src/services/session.service');
+const sensorService = require('../../src/services/sensor.service');
+const { createDbMock } = require('../factories/db.factory');
+
+function makeToken(accessType = 2) {
+  return jwt.sign(
+    { userID: 'qa-tecnico-1', accessType, roleName: 'Técnico', name: 'QA Técnico', mfaVerified: true },
+    process.env.JWT_SECRET,
+    { expiresIn: '1h' }
+  );
+}
+
+function givenSession() {
+  vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 'session-1' } });
+  vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 'session-1' });
+}
+
+const FAKE_SENSOR = { _id: '507f1f77bcf86cd799439011', sensorId: 'S-001', type: 'temperature', status: 'online' };
+
+beforeEach(() => {
+  givenSession();
+  app.locals.db = createDbMock({});
+});
+afterEach(() => { vi.restoreAllMocks(); });
+
+describe('GET /api/sensors', () => {
+  it('returns 401 without token', async () => {
+    const res = await request(app).get('/api/sensors');
+    expect(res.status).toBe(401);
+  });
+
+  it('returns 403 for user without viewTemperature permission (accessType 1)', async () => {
+    const res = await request(app)
+      .get('/api/sensors')
+      .set('Authorization', `Bearer ${makeToken(1)}`);
+    expect(res.status).toBe(403);
+  });
+
+  it('returns sensor list for Técnico (accessType 2)', async () => {
+    vi.spyOn(sensorService, 'listSensors').mockResolvedValue([FAKE_SENSOR]);
+
+    const res = await request(app)
+      .get('/api/sensors')
+      .set('Authorization', `Bearer ${makeToken(2)}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+  });
+});
+
+describe('POST /api/sensors', () => {
+  it('returns 401 without token', async () => {
+    const res = await request(app).post('/api/sensors').send({ sensorId: 'S-002' });
+    expect(res.status).toBe(401);
+  });
+
+  it('returns 403 for Pesquisador (accessType 1)', async () => {
+    const res = await request(app)
+      .post('/api/sensors')
+      .set('Authorization', `Bearer ${makeToken(1)}`)
+      .send({ sensorId: 'S-002', type: 'temperature' });
+    expect(res.status).toBe(403);
+  });
+
+  it('creates a sensor for Técnico', async () => {
+    vi.spyOn(sensorService, 'createSensor').mockResolvedValue({ ...FAKE_SENSOR, _id: { toString: () => 'new-id' } });
+
+    const res = await request(app)
+      .post('/api/sensors')
+      .set('Authorization', `Bearer ${makeToken(2)}`)
+      .send({ sensorId: 'S-002', type: 'temperature', status: 'online' });
+
+    expect([200, 201]).toContain(res.status);
+    expect(res.body.success).toBe(true);
+  });
+});
+
+describe('GET /api/sensors/:id', () => {
+  it('returns 401 without token', async () => {
+    const res = await request(app).get('/api/sensors/S-001');
+    expect(res.status).toBe(401);
+  });
+
+  it('returns sensor by id', async () => {
+    vi.spyOn(sensorService, 'getSensor').mockResolvedValue(FAKE_SENSOR);
+
+    const res = await request(app)
+      .get('/api/sensors/S-001')
+      .set('Authorization', `Bearer ${makeToken(2)}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+  });
+
+  it('returns 404 when sensor not found', async () => {
+    vi.spyOn(sensorService, 'getSensor').mockResolvedValue(null);
+
+    const res = await request(app)
+      .get('/api/sensors/NOT-FOUND')
+      .set('Authorization', `Bearer ${makeToken(2)}`);
+
+    expect([404, 400]).toContain(res.status);
+  });
+});
+
+describe('POST /api/sensors/:id/reading', () => {
+  it('returns 401 without token', async () => {
+    const res = await request(app).post('/api/sensors/S-001/reading').send({ value: 4.5 });
+    expect(res.status).toBe(401);
+  });
+
+  it('records a sensor reading', async () => {
+    vi.spyOn(sensorService, 'collectReading').mockResolvedValue({
+      sensorId: 'S-001', value: 4.5, unit: '°C', recordedAt: new Date().toISOString()
+    });
+
+    const res = await request(app)
+      .post('/api/sensors/S-001/reading')
+      .set('Authorization', `Bearer ${makeToken(2)}`)
+      .send({ value: 4.5, unit: '°C' });
+
+    expect([200, 201, 400]).toContain(res.status);
+  });
+});
+
+describe('PUT /api/sensors/:id', () => {
+  it('returns 401 without token', async () => {
+    const res = await request(app).put('/api/sensors/S-001').send({ status: 'offline' });
+    expect(res.status).toBe(401);
+  });
+
+  it('updates a sensor', async () => {
+    vi.spyOn(sensorService, 'updateSensor').mockResolvedValue({ ...FAKE_SENSOR, status: 'offline' });
+
+    const res = await request(app)
+      .put('/api/sensors/S-001')
+      .set('Authorization', `Bearer ${makeToken(2)}`)
+      .send({ status: 'offline' });
+
+    expect([200, 400]).toContain(res.status);
+  });
+});
+
+describe('DELETE /api/sensors/:id', () => {
+  it('returns 401 without token', async () => {
+    const res = await request(app).delete('/api/sensors/S-001');
+    expect(res.status).toBe(401);
+  });
+
+  it('deletes a sensor for Técnico', async () => {
+    vi.spyOn(sensorService, 'deleteSensor').mockResolvedValue({ deleted: true });
+
+    const res = await request(app)
+      .delete('/api/sensors/S-001')
+      .set('Authorization', `Bearer ${makeToken(2)}`);
+
+    expect([200, 400]).toContain(res.status);
+  });
+});

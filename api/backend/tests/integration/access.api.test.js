@@ -1,0 +1,187 @@
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+const request = require('supertest');
+const jwt = require('jsonwebtoken');
+
+process.env.NODE_ENV = 'test';
+process.env.JWT_SECRET = process.env.JWT_SECRET || 'vitest-secret-key';
+
+const app = require('../../app');
+const sessionService = require('../../src/services/session.service');
+const { createCollectionMock, createDbMock } = require('../factories/db.factory');
+
+function makeToken(accessType = 4) {
+  return jwt.sign(
+    { userID: 'qa-1', accessType, roleName: accessType >= 3 ? 'Coordenador' : 'Técnico', name: 'QA', mfaVerified: true },
+    process.env.JWT_SECRET,
+    { expiresIn: '1h' }
+  );
+}
+
+function givenSession() {
+  vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 'sess-1' } });
+  vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 'sess-1' });
+}
+
+const FAKE_ACCESS = { _id: '507f1f77bcf86cd799439011', reportID: 1, reportType: 'SampleReport', accessType: 1 };
+const VALID_PAYLOAD = { reportID: 42, reportType: 'SampleReport', accessType: 1 };
+
+beforeEach(() => { givenSession(); });
+afterEach(() => { vi.restoreAllMocks(); });
+
+describe('GET /api/access', () => {
+  it('returns 401 without token', async () => {
+    const res = await request(app).get('/api/access');
+    expect(res.status).toBe(401);
+  });
+
+  it('returns access list for authenticated user', async () => {
+    const coll = createCollectionMock({ find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([FAKE_ACCESS]) }) });
+    app.locals.db = createDbMock({ access: coll });
+
+    const res = await request(app).get('/api/access').set('Authorization', `Bearer ${makeToken(2)}`);
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+  });
+});
+
+describe('GET /api/access/:id', () => {
+  it('returns 401 without token', async () => {
+    const res = await request(app).get('/api/access/507f1f77bcf86cd799439011');
+    expect(res.status).toBe(401);
+  });
+
+  it('returns 404 when not found', async () => {
+    const coll = createCollectionMock({ findOne: vi.fn().mockResolvedValue(null) });
+    app.locals.db = createDbMock({ access: coll });
+
+    const res = await request(app)
+      .get('/api/access/507f1f77bcf86cd799439011')
+      .set('Authorization', `Bearer ${makeToken(2)}`);
+    expect(res.status).toBe(404);
+  });
+
+  it('returns access by id', async () => {
+    const coll = createCollectionMock({ findOne: vi.fn().mockResolvedValue(FAKE_ACCESS) });
+    app.locals.db = createDbMock({ access: coll });
+
+    const res = await request(app)
+      .get('/api/access/507f1f77bcf86cd799439011')
+      .set('Authorization', `Bearer ${makeToken(2)}`);
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+  });
+});
+
+describe('POST /api/access', () => {
+  it('returns 401 without token', async () => {
+    const res = await request(app).post('/api/access').send(VALID_PAYLOAD);
+    expect(res.status).toBe(401);
+  });
+
+  it('returns 403 for Técnico (no createUser permission)', async () => {
+    app.locals.db = createDbMock({});
+    const res = await request(app)
+      .post('/api/access')
+      .set('Authorization', `Bearer ${makeToken(2)}`)
+      .send(VALID_PAYLOAD);
+    expect(res.status).toBe(403);
+  });
+
+  it('returns 400 for invalid payload (missing reportID)', async () => {
+    app.locals.db = createDbMock({});
+    const res = await request(app)
+      .post('/api/access')
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({ reportType: 'SampleReport' });
+    expect(res.status).toBe(400);
+  });
+
+  it('creates access for admin', async () => {
+    const coll = createCollectionMock({
+      insertOne: vi.fn().mockResolvedValue({ insertedId: '507f1f77bcf86cd799439011' }),
+    });
+    app.locals.db = createDbMock({ access: coll });
+
+    const res = await request(app)
+      .post('/api/access')
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send(VALID_PAYLOAD);
+    expect([200, 201]).toContain(res.status);
+    expect(res.body.success).toBe(true);
+  });
+});
+
+describe('PUT /api/access/:id', () => {
+  it('returns 401 without token', async () => {
+    const res = await request(app).put('/api/access/507f1f77bcf86cd799439011').send({});
+    expect(res.status).toBe(401);
+  });
+
+  it('returns 403 for Técnico', async () => {
+    app.locals.db = createDbMock({});
+    const res = await request(app)
+      .put('/api/access/507f1f77bcf86cd799439011')
+      .set('Authorization', `Bearer ${makeToken(2)}`)
+      .send({ reportType: 'Updated' });
+    expect(res.status).toBe(403);
+  });
+
+  it('returns 404 when not found', async () => {
+    const coll = createCollectionMock({ updateOne: vi.fn().mockResolvedValue({ matchedCount: 0 }) });
+    app.locals.db = createDbMock({ access: coll });
+
+    const res = await request(app)
+      .put('/api/access/507f1f77bcf86cd799439011')
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({ reportType: 'Updated' });
+    expect(res.status).toBe(404);
+  });
+
+  it('updates access for admin', async () => {
+    const coll = createCollectionMock({ updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }) });
+    app.locals.db = createDbMock({ access: coll });
+
+    const res = await request(app)
+      .put('/api/access/507f1f77bcf86cd799439011')
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({ reportType: 'Updated' });
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+  });
+});
+
+describe('DELETE /api/access/:id', () => {
+  it('returns 401 without token', async () => {
+    const res = await request(app).delete('/api/access/507f1f77bcf86cd799439011');
+    expect(res.status).toBe(401);
+  });
+
+  it('returns 403 for Técnico', async () => {
+    app.locals.db = createDbMock({});
+    const res = await request(app)
+      .delete('/api/access/507f1f77bcf86cd799439011')
+      .set('Authorization', `Bearer ${makeToken(2)}`);
+    expect(res.status).toBe(403);
+  });
+
+  it('returns 404 when not found', async () => {
+    const coll = createCollectionMock({ deleteOne: vi.fn().mockResolvedValue({ deletedCount: 0 }) });
+    app.locals.db = createDbMock({ access: coll });
+
+    const res = await request(app)
+      .delete('/api/access/507f1f77bcf86cd799439011')
+      .set('Authorization', `Bearer ${makeToken(4)}`);
+    expect(res.status).toBe(404);
+  });
+
+  it('deletes access for admin', async () => {
+    const coll = createCollectionMock({ deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }) });
+    app.locals.db = createDbMock({ access: coll });
+
+    const res = await request(app)
+      .delete('/api/access/507f1f77bcf86cd799439011')
+      .set('Authorization', `Bearer ${makeToken(4)}`);
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+  });
+});

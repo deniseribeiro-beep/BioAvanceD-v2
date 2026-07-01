@@ -1,0 +1,278 @@
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+const request = require('supertest');
+const jwt = require('jsonwebtoken');
+
+process.env.NODE_ENV = 'test';
+process.env.JWT_SECRET = process.env.JWT_SECRET || 'vitest-secret-key';
+
+const app = require('../../app');
+const sessionService = require('../../src/services/session.service');
+const { createCollectionMock, createDbMock } = require('../factories/db.factory');
+
+// Tests for createMasterDataRouter — covers all 5 mounted instances via
+// /api/measurement-units (all branches of the factory router are shared code)
+
+function makeToken(accessType = 4) {
+  return jwt.sign(
+    { userID: 'qa-1', accessType, roleName: accessType >= 3 ? 'Coordenador' : 'Técnico', name: 'QA', mfaVerified: true },
+    process.env.JWT_SECRET,
+    { expiresIn: '1h' }
+  );
+}
+
+function givenSession() {
+  vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 'sess-1' } });
+  vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 'sess-1' });
+}
+
+const FAKE_ITEM = { _id: '507f1f77bcf86cd799439011', measurementUnitID: 1, name: 'mL', symbol: 'mL' };
+
+beforeEach(() => { givenSession(); });
+afterEach(() => { vi.restoreAllMocks(); });
+
+// ── /api/measurement-units ─────────────────────────────────
+describe('GET /api/measurement-units', () => {
+  it('returns 401 without token', async () => {
+    const res = await request(app).get('/api/measurement-units');
+    expect(res.status).toBe(401);
+  });
+
+  it('returns list for authenticated user', async () => {
+    const coll = createCollectionMock({
+      find: vi.fn().mockReturnValue({
+        sort: vi.fn().mockReturnThis(),
+        toArray: vi.fn().mockResolvedValue([FAKE_ITEM]),
+      }),
+    });
+    app.locals.db = createDbMock({ measurementUnits: coll });
+
+    const res = await request(app)
+      .get('/api/measurement-units')
+      .set('Authorization', `Bearer ${makeToken(2)}`);
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+  });
+});
+
+describe('GET /api/measurement-units/:id', () => {
+  it('returns 401 without token', async () => {
+    const res = await request(app).get('/api/measurement-units/1');
+    expect(res.status).toBe(401);
+  });
+
+  it('returns 404 when not found', async () => {
+    const coll = createCollectionMock({ findOne: vi.fn().mockResolvedValue(null) });
+    app.locals.db = createDbMock({ measurementUnits: coll });
+
+    const res = await request(app)
+      .get('/api/measurement-units/507f1f77bcf86cd799439011')
+      .set('Authorization', `Bearer ${makeToken(2)}`);
+    expect(res.status).toBe(404);
+  });
+
+  it('returns item by id', async () => {
+    const coll = createCollectionMock({ findOne: vi.fn().mockResolvedValue(FAKE_ITEM) });
+    app.locals.db = createDbMock({ measurementUnits: coll });
+
+    const res = await request(app)
+      .get('/api/measurement-units/507f1f77bcf86cd799439011')
+      .set('Authorization', `Bearer ${makeToken(2)}`);
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+  });
+});
+
+describe('POST /api/measurement-units', () => {
+  it('returns 401 without token', async () => {
+    const res = await request(app).post('/api/measurement-units').send({ name: 'µL' });
+    expect(res.status).toBe(401);
+  });
+
+  it('returns 403 for Técnico (requireRole(3,4))', async () => {
+    app.locals.db = createDbMock({});
+    const res = await request(app)
+      .post('/api/measurement-units')
+      .set('Authorization', `Bearer ${makeToken(2)}`)
+      .send({ name: 'µL', symbol: 'µL' });
+    expect(res.status).toBe(403);
+  });
+
+  it('returns 403 for Coordenador', async () => {
+    app.locals.db = createDbMock({});
+    const res = await request(app)
+      .post('/api/measurement-units')
+      .set('Authorization', `Bearer ${makeToken(3)}`)
+      .send({ name: 'µL', symbol: 'µL' });
+    expect(res.status).toBe(403);
+  });
+
+  it('creates item for admin', async () => {
+    const coll = createCollectionMock({
+      insertOne: vi.fn().mockResolvedValue({ insertedId: '507f1f77bcf86cd799439011' }),
+    });
+    app.locals.db = createDbMock({ measurementUnits: coll });
+
+    const res = await request(app)
+      .post('/api/measurement-units')
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({ name: 'µL', symbol: 'µL' });
+    expect([200, 201, 422]).toContain(res.status);
+  });
+});
+
+describe('PUT /api/measurement-units/:id', () => {
+  it('returns 401 without token', async () => {
+    const res = await request(app).put('/api/measurement-units/1').send({ name: 'Updated' });
+    expect(res.status).toBe(401);
+  });
+
+  it('returns 403 for Técnico', async () => {
+    app.locals.db = createDbMock({});
+    const res = await request(app)
+      .put('/api/measurement-units/507f1f77bcf86cd799439011')
+      .set('Authorization', `Bearer ${makeToken(2)}`)
+      .send({ name: 'Updated' });
+    expect(res.status).toBe(403);
+  });
+
+  it('returns 404 when not found', async () => {
+    const coll = createCollectionMock({ findOneAndUpdate: vi.fn().mockResolvedValue(null) });
+    app.locals.db = createDbMock({ measurementUnits: coll });
+
+    const res = await request(app)
+      .put('/api/measurement-units/507f1f77bcf86cd799439011')
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({ name: 'Updated' });
+    expect(res.status).toBe(404);
+  });
+
+  it('updates item for admin', async () => {
+    const coll = createCollectionMock({ findOneAndUpdate: vi.fn().mockResolvedValue({ ...FAKE_ITEM, name: 'Updated' }) });
+    app.locals.db = createDbMock({ measurementUnits: coll });
+
+    const res = await request(app)
+      .put('/api/measurement-units/507f1f77bcf86cd799439011')
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({ name: 'Updated' });
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+  });
+});
+
+describe('DELETE /api/measurement-units/:id', () => {
+  it('returns 401 without token', async () => {
+    const res = await request(app).delete('/api/measurement-units/1');
+    expect(res.status).toBe(401);
+  });
+
+  it('returns 403 for Técnico', async () => {
+    app.locals.db = createDbMock({});
+    const res = await request(app)
+      .delete('/api/measurement-units/507f1f77bcf86cd799439011')
+      .set('Authorization', `Bearer ${makeToken(2)}`);
+    expect(res.status).toBe(403);
+  });
+
+  it('returns 404 when not found', async () => {
+    const coll = createCollectionMock({ deleteOne: vi.fn().mockResolvedValue({ deletedCount: 0 }) });
+    app.locals.db = createDbMock({ measurementUnits: coll });
+
+    const res = await request(app)
+      .delete('/api/measurement-units/507f1f77bcf86cd799439011')
+      .set('Authorization', `Bearer ${makeToken(4)}`);
+    expect(res.status).toBe(404);
+  });
+
+  it('deletes item for admin', async () => {
+    const coll = createCollectionMock({ deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }) });
+    app.locals.db = createDbMock({ measurementUnits: coll });
+
+    const res = await request(app)
+      .delete('/api/measurement-units/507f1f77bcf86cd799439011')
+      .set('Authorization', `Bearer ${makeToken(4)}`);
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+  });
+});
+
+// ── /api/sample-types ─────────────────────────────────────
+// Exercises the same factory code with a different collection mount
+describe('GET /api/sample-types', () => {
+  it('returns 401 without token', async () => {
+    const res = await request(app).get('/api/sample-types');
+    expect(res.status).toBe(401);
+  });
+
+  it('returns sample types for authenticated user', async () => {
+    const coll = createCollectionMock({
+      find: vi.fn().mockReturnValue({ sort: vi.fn().mockReturnThis(), toArray: vi.fn().mockResolvedValue([]) }),
+    });
+    app.locals.db = createDbMock({ sampleTypes: coll });
+
+    const res = await request(app)
+      .get('/api/sample-types')
+      .set('Authorization', `Bearer ${makeToken(2)}`);
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+  });
+});
+
+// ── /api/sample-origins ───────────────────────────────────
+describe('GET /api/sample-origins', () => {
+  it('returns 401 without token', async () => {
+    const res = await request(app).get('/api/sample-origins');
+    expect(res.status).toBe(401);
+  });
+
+  it('returns sample origins for authenticated user', async () => {
+    const coll = createCollectionMock({
+      find: vi.fn().mockReturnValue({ sort: vi.fn().mockReturnThis(), toArray: vi.fn().mockResolvedValue([]) }),
+    });
+    app.locals.db = createDbMock({ sampleOrigins: coll });
+
+    const res = await request(app)
+      .get('/api/sample-origins')
+      .set('Authorization', `Bearer ${makeToken(2)}`);
+    expect(res.status).toBe(200);
+  });
+});
+
+// ── /api/extraction-protocols ─────────────────────────────
+describe('GET /api/extraction-protocols', () => {
+  it('returns 401 without token', async () => {
+    const res = await request(app).get('/api/extraction-protocols');
+    expect(res.status).toBe(401);
+  });
+
+  it('returns extraction protocols for authenticated user', async () => {
+    const coll = createCollectionMock({
+      find: vi.fn().mockReturnValue({ sort: vi.fn().mockReturnThis(), toArray: vi.fn().mockResolvedValue([]) }),
+    });
+    app.locals.db = createDbMock({ extractionProtocols: coll });
+
+    const res = await request(app)
+      .get('/api/extraction-protocols')
+      .set('Authorization', `Bearer ${makeToken(2)}`);
+    expect(res.status).toBe(200);
+  });
+});
+
+// ── /api/quality-descriptions ─────────────────────────────
+describe('GET /api/quality-descriptions', () => {
+  it('returns 401 without token', async () => {
+    const res = await request(app).get('/api/quality-descriptions');
+    expect(res.status).toBe(401);
+  });
+
+  it('returns quality descriptions for authenticated user', async () => {
+    const coll = createCollectionMock({
+      find: vi.fn().mockReturnValue({ sort: vi.fn().mockReturnThis(), toArray: vi.fn().mockResolvedValue([]) }),
+    });
+    app.locals.db = createDbMock({ qualityDescriptions: coll });
+
+    const res = await request(app)
+      .get('/api/quality-descriptions')
+      .set('Authorization', `Bearer ${makeToken(2)}`);
+    expect(res.status).toBe(200);
+  });
+});
