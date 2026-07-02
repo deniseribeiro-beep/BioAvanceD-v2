@@ -46,6 +46,25 @@ only.
 - Frontend-touching changes: `npm --prefix frontend run typecheck` (no
   frontend test script exists yet — if one gets added, record it here).
 
+## `vi.mock()` does not intercept `require()`
+
+Confirmed independently twice (2026-07-02, `scheduler.service.test.js` and
+`sendConsentEmail.test.js`): in this repo's Vitest setup, `vi.mock('./x', ...)`
+only intercepts ES `import`/dynamic `import()` of `x`. Backend source files
+overwhelmingly use CommonJS `require(...)`, which `vi.mock` does not hook —
+the mock factory silently never runs and the real module executes underneath
+it (real logger, real timers, real network calls). Symptom: mocked functions
+report zero calls even though the code path clearly ran.
+
+Workaround, not a fix — Node's CJS module cache guarantees the test file and
+the source file under test share the same object instance, so: `require` the
+real singleton module and use `vi.spyOn(realModule, 'methodName')` /
+`.mockImplementation(...)` directly on it, restoring with
+`vi.restoreAllMocks()` in `afterEach`. This applies to the module's own
+dependencies too (e.g. a service's internal `require('node-cron')` or
+`require('../utils/logger')`) — spy on the dependency's exports the same way
+rather than trying to `vi.mock` the dependency's module path.
+
 ## The fixed-list runner trap
 
 `api/backend`'s `test:ci` and `tests/run-tests.js` are a **fixed list of
@@ -56,6 +75,16 @@ require'd files** — a new test file under `tests/integration/` or
 you add a backend test file, confirm it actually executed in the output
 — a green run that never loaded your file is the classic false positive
 here.
+
+## Dev machine is Windows, CI is Linux — watch OS-specific commands
+
+This repo is developed on Windows but `.github/workflows/ci-pipeline.yml` runs
+all jobs on `ubuntu-latest`. A test that shells out to Windows-only tools
+(`taskkill`, `findstr`, etc. — see issue #7 for `portManager.js`) will pass
+locally and fail on CI with no signal until the PR runs. When a new test
+exercises real OS processes/commands rather than mocking them, check whether
+the code under test is itself cross-platform before trusting a green local run
+as CI-green.
 
 ## Known pre-existing failures (don't chase, don't hide)
 
