@@ -52,6 +52,9 @@ frontend/playwright-report/
 playwright-report/
 traces/
 frontend/playwright/.auth/
+.last-run.json
+**/.last-run.json
+*.patch
 backend/test-output.txt
 test-output.txt
 reports/
