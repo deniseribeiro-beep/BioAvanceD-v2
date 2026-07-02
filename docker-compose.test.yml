@@ -1,0 +1,20 @@
+services:
+  backend-test:
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    env_file:
+      - .env.docker
+    command: npm run test:ci
+    profiles:
+      - test
+
+  frontend-test:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    env_file:
+      - .env.docker
+    command: npm run typecheck
+    profiles:
+      - test
