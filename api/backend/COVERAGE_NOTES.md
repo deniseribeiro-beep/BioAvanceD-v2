@@ -16,9 +16,11 @@ stale as slices land and as source files change. Keep it honest:
   re-derive buckets from `coverage/coverage-summary.json` (`lines.pct`
   per file). `coverage/` is gitignored — this file is the durable record.
 
-Last full reconcile: **2026-07-02**, snapshot from commit `bb6e9d69`.
-Baseline: Statements 37.46%, Branches 34.82%, Functions 40.93%, Lines
-37.71% (6536/17331).
+Last full reconcile: **2026-07-02**, snapshot from commit `d6c8ca23`
+(after the sendIncidentAlertEmail / sendCriticalAlertEmail /
+GetBoxAvailablePositionsUseCase slices landed).
+Baseline: Statements 44.01%, Branches 39.91%, Functions 49.97%, Lines
+44.36% (7689/17331).
 
 ## How to use this when picking a slice
 
@@ -30,7 +32,7 @@ Baseline: Statements 37.46%, Branches 34.82%, Functions 40.93%, Lines
 3. After landing a slice, delete the file's line from whichever bucket it
    was in (or move it, if now partial). Don't leave stale entries.
 
-## ZERO coverage (0% lines) — 26 files
+## ZERO coverage (0% lines) — 21 files
 
 Real logic, worth prioritizing:
 - `src/workers/import-worker.js`
@@ -57,7 +59,7 @@ Low priority (models/interfaces/one-off scripts — thin or non-request-path):
 - `src/scripts/seedOrphanetCid.js`
 - `src/scripts/seeder.js`
 
-## LOW coverage (1-49% lines) — 114 files
+## LOW coverage (1-49% lines) — 101 files
 
 Sorted ascending (worst first). This is the primary slice-picking pool:
 
@@ -125,6 +127,7 @@ src/interface/controllers/storage-query.controller.js              24.7%
 src/services/fhir-sync.service.js                                  25.11%
 src/services/consent.service.js                                    26.1%
 src/routes/dictionary.js                                           26.71%
+src/services/NotificationService.js                                28.33%
 src/interface/routes/auth.routes.js                                28.49%
 src/routes/hpo.js                                                  28.94%
 src/services/fhir-validator.service.js                             29.06%
@@ -164,19 +167,7 @@ src/services/DrugService.js                                         47.82%
 src/routes/eConsent.js                                               47.88%
 ```
 
-**Known stale entry:** `src/services/NotificationService.js` — 2026-07-02 added unit
-tests for its pure helpers only (`normalizePhoneE164`, `resolvePatientEmail`,
-`resolvePatientPhone`, `formatConsentMessage`, `resolveRecipient`,
-`generateConsentToken`, `buildConsentMetadata`, `buildConsentLink`,
-`generateJobEmailTemplate`, `generateJobErrorEmailTemplate`, and
-`sendCriticalTempAlert`'s threshold branch). `sendEmail`/Resend, BullMQ queue,
-Socket.IO, Mongo compliance-log, and Influx-backed methods are still
-untested — moved off the 11.66% line here since the real % is now unknown
-without a reconcile run; treat as a LOW-priority slice for a future
-iteration (real request-path email-sending logic, not legacy) rather than
-re-adding a guessed number.
-
-## MID coverage (50-84% lines) — 40 files, GOOD (>=85%) — 75 files
+## MID coverage (50-84% lines) — 42 files, GOOD (>=85%) — 94 files
 
 Not re-listed here (lower priority for slice-picking; a full reconcile
 regenerates these buckets if needed). Ask for a fresh
