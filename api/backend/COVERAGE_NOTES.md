@@ -122,7 +122,6 @@ src/services/biomarker-xai.service.js                              22.66%
 src/interface/routes/compliance.routes.js                          23%
 src/controllers/cid.controller.js                                  23.52%
 src/controllers/temperature.controller.js                          23.88%
-src/services/hpoService.js                                         24%
 src/workers/workers/result-worker.js                               24.21%
 src/interface/routes/result.routes.js                              24.33%
 src/interface/controllers/storage-query.controller.js              24.7%
