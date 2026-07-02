@@ -110,7 +110,6 @@ src/core/use-cases/SearchAllocatableSamplesUseCase.js              20%
 src/core/use-cases/ValidateStoragePositionUseCase.js               20%
 src/services/staging-import.service.js                             20%
 src/services/sensor.service.js                                     20.25%
-src/interface/controllers/auto-assign-sample.controller.js         21.05%
 src/services/saveTelemetryPoint.js                                 22.22%
 src/services/biomarker-xai.service.js                              22.66%
 src/interface/routes/compliance.routes.js                          23%
