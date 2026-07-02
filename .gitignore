@@ -61,7 +61,7 @@ backup_status_before_push.txt
 artifacts/
 *.zip
 
-# Orphanet raw seed sources are versioned to support reproducible CENAPAD builds.
+# Official Orphanet source archives are versioned for reproducible seed builds.
 !orpha-data-raw/
 !orpha-data-raw/**
 !orpha-data-raw/*.zip
