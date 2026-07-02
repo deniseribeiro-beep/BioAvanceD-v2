@@ -99,7 +99,6 @@ src/infrastructure/persistence/mongo/MongoAuditRepository.js       16.66%
 src/infrastructure/persistence/influxdb/InfluxTelemetryWriteRepository.js  17.24%
 src/config/validateEnv.js                                          17.64%
 src/config/queue.js                                                18.3%
-src/services/sendCriticalAlertEmail.js                             18.75%
 src/services/sample.service.js                                     18.81%
 src/interface/routes/security.routes.js                            18.91%
 src/interface/routes/reports.routes.js                             19.06%
