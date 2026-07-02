@@ -33,10 +33,7 @@ Baseline: Statements 37.46%, Branches 34.82%, Functions 40.93%, Lines
 ## ZERO coverage (0% lines) — 29 files
 
 Real logic, worth prioritizing:
-- `src/controllers/assistant.controller.js`
-- `src/infrastructure/middleware/integrationSecurityMiddleware.js`
 - `src/infrastructure/queue/Neo4jQuarantineService.js`
-- `src/infrastructure/services/TelemetryMonitor.js`
 - `src/routes/orphanet-count.js`
 - `src/services/bootstrap.service.js`
 - `src/workers/import-worker.js`
