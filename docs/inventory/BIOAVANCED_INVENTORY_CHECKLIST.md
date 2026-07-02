@@ -1,18 +1,14 @@
-- [ ] Código versionado na branch pós-INPI (`deploy/google-vm-post-inpi`)
-- [ ] Tag INPI preservada (`v1.0.0-inpi-rcs-gov`)
-- [ ] .env real não versionado
-- [ ] Docker Compose documentado (`docker-compose.yml`)
-- [ ] Backend listado (`api/backend`)
-- [ ] Frontend listado (`frontend`)
-- [ ] Testes listados (backend unit/integration, frontend e2e)
-- [ ] Variáveis de ambiente documentadas por nome (ver `BIOAVANCED_INVENTORY.md`)
-- [ ] Serviços de banco documentados (MongoDB, Neo4j, Redis, InfluxDB)
-- [ ] Módulos críticos documentados (RCS-GOV, TCLE, Import FHIR, Merkle)
-- [ ] RCS-GOV identificado como metodologia principal
-- [ ] Importação FHIR identificada
-- [ ] TCLE/e-consent identificado
-- [ ] Merkle/integridade identificado
-- [ ] Mongo→Neo4j identificado
-- [ ] MQTT identificado como opcional
-- [ ] Resend identificado como integração externa permitida
-- [ ] Nenhum segredo incluído (verificação manual necessária antes do commit)
+- [ ] Docker Compose is the canonical runtime definition
+- [ ] Runtime configuration is documented by example
+- [ ] Versioned scripts use relative paths
+- [ ] Deployment checks do not use fixed public endpoints
+- [ ] Persistent services use named volumes
+- [ ] Container builds use dependency lockfiles
+- [ ] Compose configuration validation passes
+- [ ] Compose smoke test passes
+- [ ] Backend tests pass in containers
+- [ ] Frontend checks pass in containers
+- [ ] ORPHA artifact validation passes
+- [ ] ORPHA post-import validation passes
+- [ ] HPO and biomarkers remain separate from ORPHA
+- [ ] Protected release artifacts remain unchanged
