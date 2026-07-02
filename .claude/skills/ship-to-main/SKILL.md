@@ -39,6 +39,13 @@ against what the branch actually delivers, and `git status` for
 uncommitted leftovers. If real slices remain, that's `test-loop`'s
 job — go back rather than shipping a partial batch.
 
+Also run `gh issue list --state open --label test-branch` — this is
+exactly the "revisit once this branch's PR merges" moment those issues
+were filed for (see the `legacy` skill). Don't silently open the PR
+around them: list them by number/title in the summary you hand Dennis
+in step 4, so he can decide per-issue whether it's already resolved,
+still open, or blocking.
+
 ## 2. Full native pre-flight
 
 1. `npx vitest run` from `api/backend/` — full backend suite (bare
@@ -76,8 +83,9 @@ actually reachable) and every known gotcha before running:
 
 Push the branch (`git push -u origin <branch>`). **Do not open a PR.**
 Present Dennis the summary: what the branch delivers, the native and
-Docker gate results, coverage numbers if measured, and anything
-`wrap-up` surfaced — then wait for his review.
+Docker gate results, coverage numbers if measured, the `test-branch`
+labeled issues from step 1 (so he can triage them before or alongside
+the PR), and anything `wrap-up` surfaced — then wait for his review.
 
 On his explicit go: open the PR to `main`, watch `gh pr checks`, fix
 forward on the branch if CI is red. The merge itself is his decision —

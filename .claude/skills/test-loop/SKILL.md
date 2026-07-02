@@ -28,6 +28,27 @@ covers the loop mechanics, not the conventions they already answer.
   (`bioavanced-conventions`' hard rules). Opening a *PR* still needs his
   explicit go — that rule is separate and unchanged.
 
+### Issue labels
+
+Labels are how findings get filtered without re-reading every issue's
+body. Check them, and set them correctly on anything you file:
+
+- `gh issue list --state open --label test-branch` surfaces findings
+  filed from prior test-loop sessions (per the `legacy` skill and any
+  other skill that tells you to use this label) — read these each
+  session alongside the umbrella issues, since one may already cover
+  the gap you're about to pick as a slice.
+- When filing a new issue yourself, apply whichever labels actually fit
+  from `gh label list` (`bug`, `documentation`, etc.) — don't leave a
+  real finding unlabeled by default. Apply `test-branch` specifically
+  when the finding follows the `legacy` skill's framing (found during
+  test-loop work on the current branch, meant to be revisited once that
+  branch's PR merges) — see that skill for the full framing and don't
+  apply the label to unrelated findings.
+- If you notice a labelless issue that clearly fits an existing label
+  (including one filed by a past session), add the label rather than
+  leaving it to drift — labels are only useful if they stay accurate.
+
 ## Before an iteration
 
 1. `git status` — confirm a clean tree and which branch you're on;
