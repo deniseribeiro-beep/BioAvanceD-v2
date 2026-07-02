@@ -90,6 +90,15 @@ destructured helper itself makes (e.g. `db.collection()` instead of
 module under test and re-require after setting the spy so the destructuring
 re-runs against the mocked export.
 
+**`vi.resetModules()` alone does not reliably clear the real Node `require.cache`
+entry** (confirmed 2026-07-02, `hpoService.test.js`). If a source file captures a
+`process.env` value into a module-level `const` at require time (e.g.
+`const HPO_API_URL = process.env.HPO_API_URL || ''`), a test that changes the env
+var and calls `vi.resetModules()` + `require(...)` again can still get back a stale
+module instance with the old value frozen in. Workaround: explicitly
+`delete require.cache[require.resolve(path)]` before every re-require that needs a
+fresh read of `process.env`, rather than relying on `vi.resetModules()`.
+
 ## The fixed-list runner trap
 
 `api/backend`'s `test:ci` and `tests/run-tests.js` are a **fixed list of
