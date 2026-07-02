@@ -1,352 +1,413 @@
 /**
- * test/unit/authConsent.test.js
- * Testes de integração para middleware de bloqueio ético
- * 
- * Execução: node test/unit/authConsent.test.js
+ * tests/unit/authConsent.test.js
+ * Unit tests for src/infrastructure/middleware/authConsent.js
  */
 
-const assert = require('assert');
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
 const { authConsent, createConsentMiddleware } = require('../../src/infrastructure/middleware/authConsent');
+const auditLogger = require('../../src/utils/auditLogger');
 
-/**
- * Mock de requisição e resposta
- */
-function createMockRequest(options = {}) {
+// Note: authConsent.js does `const { getCollection } = require('../../utils/collectionResolver')`
+// at module load time, so vi.spyOn(collectionResolver, 'getCollection') cannot intercept the
+// already-destructured reference. Instead we simulate getCollection's real behavior: since our
+// fake db has no listCollections, resolveCollectionName falls back to calling db.collection(name)
+// directly, so we stub db.collection() itself.
+
+function createReq(overrides = {}) {
   return {
-    body: options.body || {},
-    params: options.params || {},
-    query: options.query || {},
-    headers: options.headers || {},
-    user: options.user,
-    app: {
-      locals: options.db ? { db: options.db } : {}
-    },
-    path: options.path || '/test',
-    method: options.method || 'POST'
+    app: { locals: {} },
+    body: {},
+    params: {},
+    query: {},
+    method: 'POST',
+    path: '/x',
+    headers: {},
+    ...overrides
   };
 }
 
-function createMockResponse() {
-  const res = {
-    statusCode: 200,
-    jsonData: null,
-    status: function(code) {
-      this.statusCode = code;
-      return this;
-    },
-    json: function(data) {
-      this.jsonData = data;
-      return this;
-    }
+function createRes() {
+  return {
+    status: vi.fn().mockReturnThis(),
+    json: vi.fn()
   };
-  return res;
 }
 
-/**
- * Mock de banco de dados MongoDB
- */
-class MockDB {
-  constructor(options = {}) {
-    this.consents = options.consents || [];
-    this.auditLogs = [];
-  }
+describe('authConsent middleware', () => {
+  let fakeDb;
+  let fakeConsentsCollection;
+  let next;
 
-  collection(name) {
-    if (name === 'patient_consents') {
-      return {
-        findOne: async (query) => {
-          return this.consents.find(c =>
-            c.patientId === query.patientId && c.status === query.status
-          ) || null;
-        }
-      };
-    }
-    return {};
-  }
-}
+  beforeEach(() => {
+    fakeConsentsCollection = { findOne: vi.fn() };
+    fakeDb = { collection: vi.fn().mockReturnValue(fakeConsentsCollection) };
+    next = vi.fn();
 
-/**
- * TESTES PARA authConsent()
- */
-function testConsentBlockedWhenNotFound() {
-  console.log('  ✓ Teste A: Bloquear sem consentimento ativo (403)');
-  
-  return new Promise(async (resolve, reject) => {
-    try {
-      const mockDB = new MockDB({ consents: [] }); // Sem consentimentos
-      const req = createMockRequest({
-        body: { patientID: 'patient123' },
-        db: mockDB
-      });
-      const res = createMockResponse();
-      
-      const middleware = authConsent({ patientIdResolver: 'patientID' });
-      
-      await middleware(req, res, () => {
-        reject(new Error('next() não deveria ter sido chamado'));
-      });
-
-      assert.strictEqual(res.statusCode, 403, 'Expected 403 Forbidden');
-      assert.strictEqual(res.jsonData.code, 'CONSENT_REQUIRED');
-      resolve();
-    } catch (error) {
-      reject(error);
-    }
+    vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+    vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
   });
-}
 
-function testConsentRevokedBlocked() {
-  console.log('  ✓ Teste B: Bloquear consentimento revogado (403)');
-  
-  return new Promise(async (resolve, reject) => {
-    try {
-      const mockDB = new MockDB({
-        consents: [
-          {
-            _id: '123',
-            patientId: 'patient123',
-            status: 'ACTIVE', // Status ativo, mas marcado como revogado
-            revokedAt: new Date('2025-01-15'),
-            responses: { uso_pesquisa: true }
-          }
-        ]
-      });
-
-      const req = createMockRequest({
-        body: { patientID: 'patient123' },
-        db: mockDB
-      });
-      const res = createMockResponse();
-
-      const middleware = authConsent({ patientIdResolver: 'patientID' });
-
-      await middleware(req, res, () => {
-        reject(new Error('next() não deveria ter sido chamado'));
-      });
-
-      assert.strictEqual(res.statusCode, 403, 'Expected 403 Forbidden');
-      assert.strictEqual(res.jsonData.code, 'CONSENT_REVOKED');
-      resolve();
-    } catch (error) {
-      reject(error);
-    }
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
-}
 
-function testConsentScopeInsufficient() {
-  console.log('  ✓ Teste C: Bloquear escopo insuficiente (403)');
-  
-  return new Promise(async (resolve, reject) => {
-    try {
-      const mockDB = new MockDB({
-        consents: [
-          {
-            _id: '123',
-            patientId: 'patient123',
-            status: 'ACTIVE',
-            revokedAt: null,
-            responses: { 
-              uso_pesquisa: true  // Possui apenas este escopo
-            }
-          }
-        ]
-      });
+  it('returns 503 DB_UNAVAILABLE and does not call next when db is missing', async () => {
+    const req = createReq({ body: { patientID: 'p1' } });
+    // no db set on app.locals
+    const res = createRes();
 
-      const req = createMockRequest({
-        body: { patientID: 'patient123' },
-        db: mockDB
-      });
-      const res = createMockResponse();
+    const middleware = authConsent();
+    await middleware(req, res, next);
 
-      // Exige escopo comercial que não foi consentido
-      const middleware = authConsent({
-        patientIdResolver: 'patientID',
-        allowedScopes: ['uso_comercial'] // Não consentiu
-      });
-
-      await middleware(req, res, () => {
-        reject(new Error('next() não deveria ter sido chamado'));
-      });
-
-      assert.strictEqual(res.statusCode, 403, 'Expected 403 Forbidden');
-      assert.strictEqual(res.jsonData.code, 'INSUFFICIENT_SCOPE');
-      resolve();
-    } catch (error) {
-      reject(error);
-    }
+    expect(res.status).toHaveBeenCalledWith(503);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ code: 'DB_UNAVAILABLE' }));
+    expect(next).not.toHaveBeenCalled();
   });
-}
 
-function testConsentValidPassed() {
-  console.log('  ✓ Teste D: Permitir consentimento válido (next)');
-  
-  return new Promise(async (resolve, reject) => {
-    try {
-      const mockDB = new MockDB({
-        consents: [
-          {
-            _id: { toString: () => 'consent-id' },
-            patientId: 'patient123',
-            status: 'ACTIVE',
-            revokedAt: null,
-            responses: { 
-              uso_pesquisa: true,
-              uso_comercial: true
-            },
-            signedAt: new Date()
-          }
-        ]
-      });
+  it('resolves patientID from req.body when patientIdResolver is a string', async () => {
+    const req = createReq({ app: { locals: { db: fakeDb } }, body: { patientID: 'bodyPatient' } });
+    const res = createRes();
+    fakeConsentsCollection.findOne.mockResolvedValue({
+      _id: { toString: () => 'c1' },
+      status: 'ACTIVE',
+      responses: { uso_pesquisa: true },
+      signedAt: new Date()
+    });
 
-      const req = createMockRequest({
-        body: { patientID: 'patient123' },
-        db: mockDB
-      });
-      const res = createMockResponse();
+    const middleware = authConsent();
+    await middleware(req, res, next);
 
-      const middleware = authConsent({
-        patientIdResolver: 'patientID',
-        allowedScopes: ['uso_pesquisa', 'uso_comercial']
-      });
-
-      let nextCalled = false;
-      await middleware(req, res, () => {
-        nextCalled = true;
-      });
-
-      assert.strictEqual(nextCalled, true, 'next() deveria ter sido chamado');
-      assert.ok(req.consent, 'Dados de consentimento devem estar anexados');
-      assert.strictEqual(req.consent.validated, true);
-      resolve();
-    } catch (error) {
-      reject(error);
-    }
+    expect(fakeConsentsCollection.findOne).toHaveBeenCalledWith(
+      expect.objectContaining({ patientId: 'bodyPatient' }),
+      expect.anything()
+    );
+    expect(next).toHaveBeenCalled();
   });
-}
 
-function testPatientIDMissing() {
-  console.log('  ✓ Teste E: Bloquear quando PatientID ausente (400)');
-  
-  return new Promise(async (resolve, reject) => {
-    try {
-      const mockDB = new MockDB();
-      const req = createMockRequest({
-        body: {}, // Sem patientID
-        db: mockDB
-      });
-      const res = createMockResponse();
+  it('resolves patientID from req.params when not present in body', async () => {
+    const req = createReq({ app: { locals: { db: fakeDb } }, params: { patientID: 'paramsPatient' } });
+    const res = createRes();
+    fakeConsentsCollection.findOne.mockResolvedValue({
+      _id: { toString: () => 'c1' },
+      status: 'ACTIVE',
+      responses: { uso_pesquisa: true },
+      signedAt: new Date()
+    });
 
-      const middleware = authConsent({ patientIdResolver: 'patientID' });
+    const middleware = authConsent();
+    await middleware(req, res, next);
 
-      await middleware(req, res, () => {
-        reject(new Error('next() não deveria ter sido chamado'));
-      });
-
-      assert.strictEqual(res.statusCode, 400, 'Expected 400 Bad Request');
-      assert.strictEqual(res.jsonData.code, 'PATIENT_ID_MISSING');
-      resolve();
-    } catch (error) {
-      reject(error);
-    }
+    expect(fakeConsentsCollection.findOne).toHaveBeenCalledWith(
+      expect.objectContaining({ patientId: 'paramsPatient' }),
+      expect.anything()
+    );
+    expect(next).toHaveBeenCalled();
   });
-}
 
-function testDatabaseUnavailable() {
-  console.log('  ✓ Teste F: Bloquear banco indisponível (503)');
-  
-  return new Promise(async (resolve, reject) => {
-    try {
-      const req = createMockRequest({
-        body: { patientID: 'patient123' },
-        db: null // Sem DB
-      });
-      const res = createMockResponse();
+  it('resolves patientID from req.query when not present in body/params', async () => {
+    const req = createReq({ app: { locals: { db: fakeDb } }, query: { patientID: 'queryPatient' } });
+    const res = createRes();
+    fakeConsentsCollection.findOne.mockResolvedValue({
+      _id: { toString: () => 'c1' },
+      status: 'ACTIVE',
+      responses: { uso_pesquisa: true },
+      signedAt: new Date()
+    });
 
-      const middleware = authConsent({ patientIdResolver: 'patientID' });
+    const middleware = authConsent();
+    await middleware(req, res, next);
 
-      await middleware(req, res, () => {
-        reject(new Error('next() não deveria ter sido chamado'));
-      });
-
-      assert.strictEqual(res.statusCode, 503, 'Expected 503 Service Unavailable');
-      assert.strictEqual(res.jsonData.code, 'DB_UNAVAILABLE');
-      resolve();
-    } catch (error) {
-      reject(error);
-    }
+    expect(fakeConsentsCollection.findOne).toHaveBeenCalledWith(
+      expect.objectContaining({ patientId: 'queryPatient' }),
+      expect.anything()
+    );
+    expect(next).toHaveBeenCalled();
   });
-}
 
-/**
- * TESTES PARA createConsentMiddleware factories
- */
-function testCreateConsentMiddlewareResearch() {
-  console.log('  ✓ Teste A: Factory research() cria middleware correto');
-  
-  const middleware = createConsentMiddleware.research();
-  assert.ok(typeof middleware === 'function', 'Deveria retornar função');
-}
+  it('resolves patientID from req.locals when not present in body/params/query', async () => {
+    const req = createReq({ app: { locals: { db: fakeDb } }, locals: { patientID: 'localsPatient' } });
+    const res = createRes();
+    fakeConsentsCollection.findOne.mockResolvedValue({
+      _id: { toString: () => 'c1' },
+      status: 'ACTIVE',
+      responses: { uso_pesquisa: true },
+      signedAt: new Date()
+    });
 
-function testCreateConsentMiddlewareCommercial() {
-  console.log('  ✓ Teste B: Factory commercial() cria middleware correto');
-  
-  const middleware = createConsentMiddleware.commercial();
-  assert.ok(typeof middleware === 'function', 'Deveria retornar função');
-}
+    const middleware = authConsent();
+    await middleware(req, res, next);
 
-function testCreateConsentMiddlewareGeneric() {
-  console.log('  ✓ Teste C: Factory generic() cria middleware correto');
-  
-  const middleware = createConsentMiddleware.generic(['custom_scope']);
-  assert.ok(typeof middleware === 'function', 'Deveria retornar função');
-}
+    expect(fakeConsentsCollection.findOne).toHaveBeenCalledWith(
+      expect.objectContaining({ patientId: 'localsPatient' }),
+      expect.anything()
+    );
+    expect(next).toHaveBeenCalled();
+  });
 
-// ===================================================================
-// RUNNER
-// ===================================================================
+  it('honors precedence body > params > query > locals', async () => {
+    const req = createReq({
+      app: { locals: { db: fakeDb } },
+      body: { patientID: 'fromBody' },
+      params: { patientID: 'fromParams' },
+      query: { patientID: 'fromQuery' },
+      locals: { patientID: 'fromLocals' }
+    });
+    const res = createRes();
+    fakeConsentsCollection.findOne.mockResolvedValue({
+      _id: { toString: () => 'c1' },
+      status: 'ACTIVE',
+      responses: { uso_pesquisa: true },
+      signedAt: new Date()
+    });
 
-async function runTests() {
-  console.log('\n📋 SUITE DE TESTES: Auth Consent Middleware');
-  console.log('==========================================\n');
+    const middleware = authConsent();
+    await middleware(req, res, next);
 
-  try {
-    console.log('🔐 authConsent() - Middleware Principal:');
-    await testConsentBlockedWhenNotFound();
-    await testConsentRevokedBlocked();
-    await testConsentScopeInsufficient();
-    await testConsentValidPassed();
-    await testPatientIDMissing();
-    await testDatabaseUnavailable();
-    console.log('  ✅ 6/6 testes passaram\n');
+    expect(fakeConsentsCollection.findOne).toHaveBeenCalledWith(
+      expect.objectContaining({ patientId: 'fromBody' }),
+      expect.anything()
+    );
+  });
 
-    console.log('🏭 createConsentMiddleware - Factories:');
-    testCreateConsentMiddlewareResearch();
-    testCreateConsentMiddlewareCommercial();
-    testCreateConsentMiddlewareGeneric();
-    console.log('  ✅ 3/3 testes passaram\n');
+  it('uses patientIdResolver as a function, calling it with req', async () => {
+    const resolverFn = vi.fn().mockReturnValue('fnPatient');
+    const req = createReq({ app: { locals: { db: fakeDb } } });
+    const res = createRes();
+    fakeConsentsCollection.findOne.mockResolvedValue({
+      _id: { toString: () => 'c1' },
+      status: 'ACTIVE',
+      responses: { uso_pesquisa: true },
+      signedAt: new Date()
+    });
 
-    console.log('✅ TODOS OS TESTES PASSARAM!');
-    console.log('==========================================\n');
+    const middleware = authConsent({ patientIdResolver: resolverFn });
+    await middleware(req, res, next);
 
-  } catch (error) {
-    console.error('\n❌ TESTE FALHOU:');
-    console.error(error.message);
-    console.error(error.stack);
-    process.exit(1);
-  }
-}
+    expect(resolverFn).toHaveBeenCalledWith(req);
+    expect(fakeConsentsCollection.findOne).toHaveBeenCalledWith(
+      expect.objectContaining({ patientId: 'fnPatient' }),
+      expect.anything()
+    );
+    expect(next).toHaveBeenCalled();
+  });
 
-// Executar se for o arquivo principal
-if (require.main === module) {
-  runTests();
-}
+  it('returns 400 PATIENT_ID_MISSING when no patientID can be resolved', async () => {
+    const req = createReq({ app: { locals: { db: fakeDb } } });
+    const res = createRes();
 
-module.exports = {
-  testConsentBlockedWhenNotFound,
-  testConsentRevokedBlocked,
-  testConsentScopeInsufficient,
-  testConsentValidPassed,
-  createMockRequest,
-  createMockResponse,
-  MockDB
-};
+    const middleware = authConsent();
+    await middleware(req, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ code: 'PATIENT_ID_MISSING' }));
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it('returns 403 CONSENT_REQUIRED when no active consent found and strictMode is true', async () => {
+    const req = createReq({ app: { locals: { db: fakeDb } }, body: { patientID: 'p1' } });
+    const res = createRes();
+    fakeConsentsCollection.findOne.mockResolvedValue(null);
+
+    const middleware = authConsent({ strictMode: true });
+    await middleware(req, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ code: 'CONSENT_REQUIRED' }));
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it('falls through to next() when no active consent found and strictMode is false', async () => {
+    const req = createReq({ app: { locals: { db: fakeDb } }, body: { patientID: 'p1' } });
+    const res = createRes();
+    fakeConsentsCollection.findOne.mockResolvedValue(null);
+
+    const middleware = authConsent({ strictMode: false });
+    await middleware(req, res, next);
+
+    expect(res.status).not.toHaveBeenCalled();
+    expect(next).toHaveBeenCalled();
+  });
+
+  it('returns 403 INSUFFICIENT_SCOPE when active consent lacks required scope and strictMode is true', async () => {
+    const req = createReq({ app: { locals: { db: fakeDb } }, body: { patientID: 'p1' } });
+    const res = createRes();
+    fakeConsentsCollection.findOne.mockResolvedValue({
+      _id: { toString: () => 'c1' },
+      status: 'ACTIVE',
+      responses: { uso_comercial: true },
+      signedAt: new Date()
+    });
+
+    const middleware = authConsent({ allowedScopes: ['uso_pesquisa'], strictMode: true });
+    await middleware(req, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ code: 'INSUFFICIENT_SCOPE' }));
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it('falls through to next() when scope insufficient but strictMode is false', async () => {
+    const req = createReq({ app: { locals: { db: fakeDb } }, body: { patientID: 'p1' } });
+    const res = createRes();
+    fakeConsentsCollection.findOne.mockResolvedValue({
+      _id: { toString: () => 'c1' },
+      status: 'ACTIVE',
+      responses: { uso_comercial: true },
+      signedAt: new Date()
+    });
+
+    const middleware = authConsent({ allowedScopes: ['uso_pesquisa'], strictMode: false });
+    await middleware(req, res, next);
+
+    expect(res.status).not.toHaveBeenCalled();
+    expect(next).toHaveBeenCalled();
+  });
+
+  it('returns 403 CONSENT_REVOKED when consent status is REVOKED, regardless of strictMode', async () => {
+    const req = createReq({ app: { locals: { db: fakeDb } }, body: { patientID: 'p1' } });
+    const res = createRes();
+    fakeConsentsCollection.findOne.mockResolvedValue({
+      _id: { toString: () => 'c1' },
+      status: 'REVOKED',
+      responses: { uso_pesquisa: true },
+      signedAt: new Date()
+    });
+
+    const middleware = authConsent({ strictMode: false });
+    await middleware(req, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ code: 'CONSENT_REVOKED' }));
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it('returns 403 CONSENT_REVOKED when revokedAt is truthy, regardless of strictMode', async () => {
+    const req = createReq({ app: { locals: { db: fakeDb } }, body: { patientID: 'p1' } });
+    const res = createRes();
+    fakeConsentsCollection.findOne.mockResolvedValue({
+      _id: { toString: () => 'c1' },
+      status: 'ACTIVE',
+      revokedAt: new Date('2025-01-01'),
+      responses: { uso_pesquisa: true },
+      signedAt: new Date()
+    });
+
+    const middleware = authConsent({ strictMode: false });
+    await middleware(req, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ code: 'CONSENT_REVOKED' }));
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it('calls next() and populates req.consent for a fully valid consent', async () => {
+    const signedAt = new Date('2025-05-01');
+    const req = createReq({ app: { locals: { db: fakeDb } }, body: { patientID: 'p1' } });
+    const res = createRes();
+    fakeConsentsCollection.findOne.mockResolvedValue({
+      _id: { toString: () => 'consent-id-1' },
+      status: 'ACTIVE',
+      signedAt,
+      responses: { uso_pesquisa: true }
+    });
+
+    const middleware = authConsent({ allowedScopes: ['uso_pesquisa'] });
+    await middleware(req, res, next);
+
+    expect(next).toHaveBeenCalled();
+    expect(req.consent).toEqual(expect.objectContaining({
+      patientID: 'p1',
+      consentID: 'consent-id-1',
+      status: 'ACTIVE',
+      signedAt,
+      scopes: { uso_pesquisa: true },
+      validated: true
+    }));
+    expect(req.consent.validatedAt).toBeInstanceOf(Date);
+  });
+
+  it('returns 500 CONSENT_VALIDATION_ERROR when an unexpected error is thrown', async () => {
+    const req = createReq({ app: { locals: { db: fakeDb } }, body: { patientID: 'p1' } });
+    const res = createRes();
+    fakeDb.collection.mockImplementation(() => {
+      throw new Error('boom');
+    });
+
+    const middleware = authConsent();
+    await middleware(req, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(500);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ code: 'CONSENT_VALIDATION_ERROR' }));
+    expect(next).not.toHaveBeenCalled();
+  });
+});
+
+describe('createConsentMiddleware factories', () => {
+  let fakeDb;
+  let fakeConsentsCollection;
+  let next;
+
+  beforeEach(() => {
+    fakeConsentsCollection = { findOne: vi.fn() };
+    fakeDb = { collection: vi.fn().mockReturnValue(fakeConsentsCollection) };
+    next = vi.fn();
+
+    vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+    vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('research() merges uso_pesquisa into allowedScopes and allows next() when granted', async () => {
+    const req = createReq({ app: { locals: { db: fakeDb } }, body: { patientID: 'p1' } });
+    const res = createRes();
+    fakeConsentsCollection.findOne.mockResolvedValue({
+      _id: { toString: () => 'c1' },
+      status: 'ACTIVE',
+      responses: { uso_pesquisa: true },
+      signedAt: new Date()
+    });
+
+    const middleware = createConsentMiddleware.research();
+    await middleware(req, res, next);
+
+    expect(next).toHaveBeenCalled();
+  });
+
+  it('commercial() merges uso_comercial into allowedScopes and blocks with INSUFFICIENT_SCOPE when missing', async () => {
+    const req = createReq({ app: { locals: { db: fakeDb } }, body: { patientID: 'p1' } });
+    const res = createRes();
+    fakeConsentsCollection.findOne.mockResolvedValue({
+      _id: { toString: () => 'c1' },
+      status: 'ACTIVE',
+      responses: { uso_pesquisa: true },
+      signedAt: new Date()
+    });
+
+    const middleware = createConsentMiddleware.commercial();
+    await middleware(req, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ code: 'INSUFFICIENT_SCOPE' }));
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it('generic() uses exactly the provided allowedScopes', async () => {
+    const req = createReq({ app: { locals: { db: fakeDb } }, body: { patientID: 'p1' } });
+    const res = createRes();
+    fakeConsentsCollection.findOne.mockResolvedValue({
+      _id: { toString: () => 'c1' },
+      status: 'ACTIVE',
+      responses: { custom_scope: true },
+      signedAt: new Date()
+    });
+
+    const middleware = createConsentMiddleware.generic(['custom_scope']);
+    await middleware(req, res, next);
+
+    expect(next).toHaveBeenCalled();
+  });
+});

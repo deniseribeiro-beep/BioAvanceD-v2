@@ -32,7 +32,6 @@ module.exports = defineConfig({
     exclude: [
       '**/node_modules/**',
       'tests/setup.test.js',
-      'tests/unit/authConsent.test.js',
       'tests/unit/security.test.js',
       'tests/integration/auth-login.node.test.js',
       'tests/integration/auth-session.node.test.js',
