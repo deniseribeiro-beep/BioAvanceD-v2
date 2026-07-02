@@ -70,7 +70,6 @@ src/core/use-cases/MoveSampleUseCase.js                             3.89%
 src/models/ImportMetrics.js                                        4.54%
 src/controllers/import-lgpd.controller.js                          5.03%
 src/database/mongo.js                                               5.19%
-src/services/backup.service.js                                     5.36%
 src/controllers/sample-file.controller.js                          5.39%
 src/controllers/import.controller.js                               6.77%
 src/services/import-async.service.js                               6.87%
