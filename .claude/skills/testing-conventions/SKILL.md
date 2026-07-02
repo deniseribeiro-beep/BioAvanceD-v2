@@ -65,6 +65,21 @@ dependencies too (e.g. a service's internal `require('node-cron')` or
 `require('../utils/logger')`) — spy on the dependency's exports the same way
 rather than trying to `vi.mock` the dependency's module path.
 
+**`vi.spyOn` also silently fails if the source file destructures the import**
+(confirmed independently 3x, 2026-07-02: `RegisterSample.js`, `authConsent.js`,
+`iot-streaming.service.js` — all do `const { getCollection } = require(...)` /
+`const { getQueue } = require(...)` at module scope). Spying on the exporting
+module's method after that destructuring has already run has no effect — the
+local binding still points at the original function, so the spy is silently
+never called and the real implementation runs underneath it. Symptom looks
+identical to the `vi.mock`/`require` gap above (zero calls recorded on a mock
+that should have fired) but the root cause is different and the module-object
+spy trick above does not fix it. Workaround: stub the *lower-level* call the
+destructured helper itself makes (e.g. `db.collection()` instead of
+`getCollection()`), or clear `require.cache` for both the dependency and the
+module under test and re-require after setting the spy so the destructuring
+re-runs against the mocked export.
+
 ## The fixed-list runner trap
 
 `api/backend`'s `test:ci` and `tests/run-tests.js` are a **fixed list of
