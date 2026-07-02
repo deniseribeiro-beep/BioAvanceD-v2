@@ -48,6 +48,11 @@ One slice = one module/route/spec, sized to finish in the iteration:
   logic over scripts/interfaces per its own guidance.
 - Prefer untested code with real logic (validators, services, route
   handlers, state transitions) over padding thin wrappers.
+- Weigh whether a candidate file is legacy (superseded, dead paths,
+  mid-migration code) — lower priority than equally-thin live code, per
+  `testing-conventions`' "Legacy code" section. If a slice on legacy
+  code turns out too expensive to test honestly, don't force it —
+  follow that section's guidance (log it as a known gap, move on).
 - For e2e: one spec (or one user flow within a spec) at a time.
 - For CI: one job/step change at a time — and remember CI changes can't
   be exercised until the PR to `main` (triggers are main-only), so pair
