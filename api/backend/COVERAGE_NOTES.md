@@ -90,11 +90,9 @@ src/models/QualityDescription.js                                   11.11%
 src/models/SampleOrigin.js                                         11.11%
 src/models/SampleType.js                                           11.11%
 src/infrastructure/database/neo4j/connection.js                    11.53%
-src/services/NotificationService.js                                11.66%
 src/services/biomarker-integrity.service.js                        12.12%
 src/core/use-cases/GetBoxAvailablePositionsUseCase.js               12.5%
 src/services/sendIncidentAlertEmail.js                             12.9%
-src/services/consent.validator.js                                  14.28%
 src/services/mqtt-ingestion-audit.service.js                       14.28%
 src/services/import-lgpd.service.js                                14.5%
 src/core/use-cases/ReleaseSampleUseCase.js                         14.58%
@@ -133,7 +131,6 @@ src/interface/controllers/storage-query.controller.js              24.7%
 src/services/fhir-sync.service.js                                  25.11%
 src/services/consent.service.js                                    26.1%
 src/routes/dictionary.js                                           26.71%
-src/services/securityAlerts.service.js                             27.02%
 src/interface/routes/auth.routes.js                                28.49%
 src/routes/hpo.js                                                  28.94%
 src/services/fhir-validator.service.js                             29.06%
@@ -172,6 +169,18 @@ src/controllers/audit.controller.js                                 47.56%
 src/services/DrugService.js                                         47.82%
 src/routes/eConsent.js                                               47.88%
 ```
+
+**Known stale entry:** `src/services/NotificationService.js` — 2026-07-02 added unit
+tests for its pure helpers only (`normalizePhoneE164`, `resolvePatientEmail`,
+`resolvePatientPhone`, `formatConsentMessage`, `resolveRecipient`,
+`generateConsentToken`, `buildConsentMetadata`, `buildConsentLink`,
+`generateJobEmailTemplate`, `generateJobErrorEmailTemplate`, and
+`sendCriticalTempAlert`'s threshold branch). `sendEmail`/Resend, BullMQ queue,
+Socket.IO, Mongo compliance-log, and Influx-backed methods are still
+untested — moved off the 11.66% line here since the real % is now unknown
+without a reconcile run; treat as a LOW-priority slice for a future
+iteration (real request-path email-sending logic, not legacy) rather than
+re-adding a guessed number.
 
 ## MID coverage (50-84% lines) — 40 files, GOOD (>=85%) — 75 files
 
