@@ -45,14 +45,18 @@ see the file's own header for the regenerate command and cadence.
 
 ## What to run per iteration (native only — no Docker)
 
-- Backend slice: `npx vitest run <path/to/new.test.js>` from
-  `api/backend/` — targeted first, then the full backend
-  `npx vitest run` before committing the slice.
+- Backend slice: `npx vitest run <path/to/new.test.js>` (or all the
+  slice's new files together) from `api/backend/` — targeted only, no
+  full-suite run before committing. The backend suite is now in the
+  thousands of tests and a full run per iteration is too slow to pay on
+  every slice; committing on a green targeted run is enough signal for
+  one iteration. The full native suite runs once, at the coverage-phase
+  gate (see `test-loop`'s "Ending an iteration" / the reconcile step in
+  `COVERAGE_NOTES.md`), not per iteration.
 - New/changed e2e spec: run it alone first —
-  `npx playwright test tests/e2e/<spec>.spec.ts --reporter=list` — and
-  only run the full suite after the individual spec passes. A full run
-  per iteration wastes minutes and blurs whether a failure is the new
-  spec or shared-state interaction.
+  `npx playwright test tests/e2e/<spec>.spec.ts --reporter=list`. Don't
+  run the full e2e suite per iteration either — same reasoning as
+  backend above.
 - Frontend-touching changes: `npm --prefix frontend run typecheck` (no
   frontend test script exists yet — if one gets added, record it here).
 

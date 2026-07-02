@@ -90,8 +90,13 @@ One slice = one module/route/spec, sized to finish in the iteration:
   `test:e2e:docker`, no CI during the loop — the Docker gate runs once
   at the end (`ship-to-main`), same end-loaded order that worked for
   helion-v2's rewrite.
-- Commit the slice when its targeted tests pass and the relevant full
-  native suite is still green.
+- Commit the slice when its own targeted tests pass — don't run the
+  full native suite per iteration. The backend suite is in the
+  thousands of tests now, so a full run per slice is too slow to pay
+  every iteration; targeted-green is enough signal to commit. The full
+  native suite runs once, at the coverage-reconcile phase (before the
+  Docker gate — see below and `ship-to-main`), which is where
+  cross-slice interaction actually gets caught.
 - **Update `api/backend/COVERAGE_NOTES.md` in the same commit** — move
   the file(s) you just covered out of the ZERO/LOW bucket (or into a
   truer one). Don't let the tracker drift from the code.
