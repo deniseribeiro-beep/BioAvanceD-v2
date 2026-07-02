@@ -75,6 +75,17 @@ Every finding falls into one of two buckets — "I mentioned it in the wrap-up t
   discoverable next session; a GitHub issue is. This applies even when you already patched it
   inline — "I fixed it" and "the next session can find out this was a gap" are different things.
 
+**Don't self-triage severity as a reason to skip filing.** Confirmed 2026-07-02: three
+test-writing subagents each surfaced a real behavioral observation (inconsistent input
+escaping, an ambiguous failure-mode). The orchestrator read all three, reasoned "probably not
+exploitable" / "arguably fine," and filed none — mentioning them only in the chat summary,
+which is exactly the failure mode this section exists to prevent. It took the user asking
+"weren't you a bit dismissive?" to get two of the three filed. The blanket OK to file exists
+so an agent's own risk assessment doesn't become the filter — closing a non-issue costs Dennis
+seconds; a silently-dropped real gap costs a rediscovery later. If a subagent or your own read
+flags something as worth a second look, that alone clears the bar to file — it does not need
+to survive your own exploitability analysis first.
+
 ## How to report it
 
 State findings plainly in the final response to the user — don't bury them in a footnote or
