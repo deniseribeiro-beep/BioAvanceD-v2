@@ -30,16 +30,13 @@ Baseline: Statements 37.46%, Branches 34.82%, Functions 40.93%, Lines
 3. After landing a slice, delete the file's line from whichever bucket it
    was in (or move it, if now partial). Don't leave stale entries.
 
-## ZERO coverage (0% lines) — 29 files
+## ZERO coverage (0% lines) — 26 files
 
 Real logic, worth prioritizing:
 - `src/infrastructure/queue/Neo4jQuarantineService.js`
-- `src/routes/orphanet-count.js`
-- `src/services/bootstrap.service.js`
 - `src/workers/import-worker.js`
 - `src/workers/worker.js`
 - `src/workers/jobs/daily-merkle.job.js`
-- `src/config/consentScopes.js`
 
 Low priority (models/interfaces/one-off scripts — thin or non-request-path):
 - `src/core/application/ports/IAuditRepository.js`
