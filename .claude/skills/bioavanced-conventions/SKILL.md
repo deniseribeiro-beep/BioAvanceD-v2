@@ -7,7 +7,9 @@ description: Repo-wide conventions for BioAvanceD-v2 (Node/Express backend + Rea
 
 BioAvanceD-v2 is a biobank/lab management system: Node/Express backend
 (`api/backend/`), React+Vite frontend (`frontend/`), Playwright e2e at the
-repo root, MongoDB/Neo4j/Redis/InfluxDB via docker-compose. This skill
+repo root, MongoDB/Neo4j/Redis/InfluxDB via docker-compose. For whether a
+given file/flow is legacy and how that should shape your approach, see the
+`legacy` skill. This skill
 captures conventions that apply to *any* work here. For what to run and
 when, see `testing-conventions`; for anything Docker, see
 `e2e-docker-workflow`; for the test-building loop itself, see `test-loop`.

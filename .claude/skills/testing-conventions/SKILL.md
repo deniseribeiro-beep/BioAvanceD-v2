@@ -131,41 +131,15 @@ is confirmed to exist for them (as of 2026-07-02 only #3/#5 are open) —
 if you touch this area, remind Dennis rather than filing one yourself.
 If they get fixed, remove this entry.
 
-## Legacy code — some slices are worth less, some don't test cleanly
+## Legacy code — see the `legacy` skill
 
-Dennis flagged (2026-07-02) that a fair amount of code in this repo is
-legacy — old patterns, half-replaced flows, code on its way out — and
-that this should shape both slice-picking and how failures against it
-get treated. There's no fixed marker for "legacy" (no directory
-convention, no tag) — it's a judgment call you make per file when
-picking or working a slice, same as the scripts/interfaces judgment
-call `COVERAGE_NOTES.md` already documents. Signs worth weighing:
-superseded by a newer module doing the same job, dead code paths no
-route/service actually calls anymore, or logic clearly mid-migration
-(old and new implementations both present).
-
-- **Picking a slice**: a ZERO/LOW file that's legacy in this sense is
-  lower priority than one of equal coverage % that's live request-path
-  logic — the same "real logic over scripts/interfaces" preference in
-  `COVERAGE_NOTES.md` extends to "real logic over legacy". Don't skip
-  it outright by default (it may still be load-bearing), just don't
-  reach for it first.
-- **When a slice on legacy code won't test cleanly** — the code's own
-  structure (tangled dependencies, no seams to inject fakes, behavior
-  that depends on state nothing modern sets up) makes an honest test
-  disproportionately expensive for what it proves: treat this the same
-  as the AES-256-GCM entry above. Don't weaken the test or skip/delete
-  it to force green. Instead, note the file and why in this section
-  (own subsection or a line here) as a **known pre-existing gap**, and
-  move to a different slice. If the difficulty itself looks like a bug
-  (not just old code), that's still a normal `gh issue create` per
-  `test-loop`'s "when a test finds a real bug" — the legacy label
-  doesn't excuse a real defect, it just explains why coverage there is
-  cheaper to defer than to force.
-- This entry itself should stay current — if a specific legacy file
-  gets flagged as a known gap, add it as its own bullet under "Known
-  pre-existing failures" (above) so it's discoverable the same way the
-  compliance failures are, rather than left only in this general note.
+Whether a candidate file/slice is legacy (superseded, dead path,
+mid-migration) shapes both slice-picking and how a hard-to-test failure
+against it gets treated — see the `legacy` skill for the judgment call,
+the known list of already-flagged legacy areas, and where to record a
+new one. Don't duplicate that content here; if you flag something as
+legacy while doing testing work, record it in the `legacy` skill's file,
+not this one.
 
 ## Mocked vs. real-backend e2e
 
