@@ -88,7 +88,6 @@ src/models/QualityDescription.js                                   11.11%
 src/models/SampleOrigin.js                                         11.11%
 src/models/SampleType.js                                           11.11%
 src/infrastructure/database/neo4j/connection.js                    11.53%
-src/services/mqtt-ingestion-audit.service.js                       14.28%
 src/services/import-lgpd.service.js                                14.5%
 src/controllers/import-batch.controller.js                         15.25%
 src/routes/importFhirIntelligent.js                                15.58%
