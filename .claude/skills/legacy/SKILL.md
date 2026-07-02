@@ -86,6 +86,22 @@ it only in chat or in another skill's file:
 - **A tooling quirk unique to working with legacy code** → add under
   "Known legacy gotchas".
 
+**Also raise a GitHub issue** for any legacy finding that's a real gap,
+defect, or ambiguity (not just "this file is old") — it may already be
+known or being resolved elsewhere, so the issue exists to surface that
+rather than assume it's new work. Per `bioavanced-conventions`, file it
+directly with `gh issue create` (blanket OK, no sign-off needed):
+
+- Frame the body as: found while doing test-loop work on the current
+  test branch (name it), what the legacy signal was (superseded/dead
+  path/mid-migration/didn't test cleanly), and an explicit line asking
+  to revisit once the test branch's PR merges to `main` — since it may
+  turn out already handled by other in-flight work, this is a "please
+  reconcile," not a fresh assignment.
+- Apply the `test-branch` label (`gh issue create --label test-branch
+  ...`) so these are filterable as test-branch-originated findings
+  separate from issues filed for other reasons.
+
 ## Maintaining this skill
 
 If a legacy finding turns out to be wrong (the file was actually live,
