@@ -1,6 +1,9 @@
 const crypto = require('crypto');
 const { connectDB, closeConnection } = require('../database/mongo');
 const logger = require('../utils/logger');
+const merkleEnvelopeService = require('./merkle-envelope.service');
+const rfc3161AdapterService = require('./rfc3161-adapter.service');
+const logService = require('./log.service');
 
 /**
  * Service: auditRoot.service
@@ -20,12 +23,14 @@ class AuditRootService {
       await coll.createIndex({ date: 1 }, { unique: true });
       await coll.createIndex({ chainIndex: 1 });
       await coll.createIndex({ previousRootHash: 1 });
+      await coll.createIndex({ 'timestamp.token': 1 }, { unique: true, sparse: true });
+      await coll.createIndex({ 'timestamp.status': 1, date: 1 });
     } catch (err) {
       logger.warn('Não foi possível criar índices para audit_roots:', err.message);
     }
   }
 
-  async saveDailyRoot({ date, root, db: externalDb = null }) {
+  async saveDailyRoot({ date, root, treeSize = 0, db: externalDb = null }) {
     let localDb = null;
     const db = externalDb || (localDb = await connectDB());
     try {
@@ -33,16 +38,59 @@ class AuditRootService {
 
       const coll = db.collection(this.COLLECTION);
 
+      const existing = await coll.findOne({ date });
+      if (existing) return existing;
+
       // Find last chain element
       const last = await coll.find({}).sort({ chainIndex: -1 }).limit(1).toArray();
       const previous = last && last.length ? last[0] : null;
 
       const previousRootHash = previous ? previous.root : null;
       const chainIndex = previous ? previous.chainIndex + 1 : 0;
+      const envelope = merkleEnvelopeService.buildCanonicalEnvelope({
+        date,
+        root,
+        treeSize,
+        previousAnchorHash: previousRootHash,
+      });
+
+      const signaturePayload = merkleEnvelopeService.signEnvelope(envelope);
+      const timestampDraft = await rfc3161AdapterService.anchorEnvelopeDigest({
+        envelopeDigestSha256: signaturePayload.envelopeDigestSha256,
+        envelopeDigestBase64: signaturePayload.envelopeDigestBase64,
+      });
+      const timestampVerification = rfc3161AdapterService.verifyTimestamp({
+        envelopeDigestSha256: signaturePayload.envelopeDigestSha256,
+        timestamp: timestampDraft,
+      });
+
+      const timestamp = {
+        mode: timestampDraft.mode,
+        status: timestampVerification.ok ? timestampVerification.status : timestampDraft.status,
+        token: timestampDraft.token,
+        tsa: timestampDraft.tsa,
+        messageImprint: timestampDraft.messageImprint,
+        anchoredAt: timestampDraft.anchoredAt || null,
+        verifiedAt: timestampVerification.verifiedAt || timestampDraft.verifiedAt || null,
+        retries: 0,
+        lastAttemptAt: new Date(),
+        error: timestampVerification.ok ? null : (timestampVerification.reason || timestampDraft.error || null),
+      };
 
       const doc = {
         date,
         root,
+        schemaVersion: 2,
+        envelope,
+        signature: signaturePayload.signature,
+        signatureAlgorithm: signaturePayload.signatureAlgorithm,
+        keyId: signaturePayload.keyId,
+        publicKeyFingerprint: signaturePayload.publicKeyFingerprint,
+        hashAlgorithm: envelope.hashAlgorithm,
+        merkleAlgorithm: envelope.merkleAlgorithm,
+        treeSize,
+        previousAnchorHash: envelope.previousAnchorHash,
+        timestamp,
         previousRootHash,
         chainIndex,
         createdAt: new Date()
@@ -50,6 +98,30 @@ class AuditRootService {
 
       // Upsert to avoid duplicates if run twice
       await coll.updateOne({ date }, { $setOnInsert: doc }, { upsert: true });
+
+      try {
+        await logService.createLog(db, {
+          userID: 'USR-SYSTEM',
+          action: 'MERKLE_ENVELOPE_GENERATED',
+          resourceType: 'AuditRoot',
+          resourceId: date,
+          entity: 'Report',
+          entityID: date,
+          status: 'success',
+          result: 'success',
+          severity: 'info',
+          module: 'Sistema',
+          message: `Envelope assinado da root diária gerado para ${date}`,
+          payload: {
+            date,
+            keyId: signaturePayload.keyId,
+            schemaVersion: 2,
+            timestampStatus: timestamp.status,
+          },
+        });
+      } catch (logError) {
+        logger.warn('Falha ao registrar evento MERKLE_ENVELOPE_GENERATED:', logError.message || logError);
+      }
 
       return await coll.findOne({ date });
     } catch (error) {
@@ -69,6 +141,15 @@ class AuditRootService {
     } finally {
       if (localDb) await closeConnection();
     }
+  }
+
+  async getOfficialRootRecord(date, externalDb = null) {
+    const rootDoc = await this.getRootByDate(date, externalDb);
+    if (!rootDoc) return null;
+    return {
+      rootDoc,
+      envelopeRecord: merkleEnvelopeService.fromPersistedRoot(rootDoc),
+    };
   }
 
   async getChain(externalDb = null) {
@@ -116,6 +197,151 @@ class AuditRootService {
       }
 
       return { ok: anomalies.length === 0, anomalies };
+    } finally {
+      if (localDb) await closeConnection();
+    }
+  }
+
+  async updateTimestampStatus({ date, status, error = null, externalDb = null }) {
+    let localDb = null;
+    const db = externalDb || (localDb = await connectDB());
+    try {
+      const coll = db.collection(this.COLLECTION);
+      await coll.updateOne(
+        { date },
+        {
+          $set: {
+            'timestamp.status': status,
+            'timestamp.error': error,
+            'timestamp.lastAttemptAt': new Date(),
+            ...(status === 'VERIFIED' ? { 'timestamp.verifiedAt': new Date() } : {}),
+          },
+          $inc: { 'timestamp.retries': status === 'RETRYING' ? 1 : 0 },
+        }
+      );
+    } finally {
+      if (localDb) await closeConnection();
+    }
+  }
+
+  async processTimestampBacklog({ externalDb = null, limit = 50, maxRetries = 5 } = {}) {
+    let localDb = null;
+    const db = externalDb || (localDb = await connectDB());
+    try {
+      await this._ensureIndexes(db);
+      const coll = db.collection(this.COLLECTION);
+      const pending = await coll.find({
+        schemaVersion: 2,
+        'timestamp.status': { $in: ['PENDING', 'RETRYING', 'FAILED', 'ANCHORED'] },
+        $or: [
+          { 'timestamp.retries': { $lt: maxRetries } },
+          { 'timestamp.retries': { $exists: false } },
+        ],
+      }).sort({ date: 1 }).limit(limit).toArray();
+
+      for (const doc of pending) {
+        const verification = merkleEnvelopeService.verifyEnvelopeSignature({
+          envelope: doc.envelope,
+          signature: doc.signature,
+          signatureAlgorithm: doc.signatureAlgorithm,
+          keyId: doc.keyId,
+          publicKeyFingerprint: doc.publicKeyFingerprint,
+        });
+        if (!verification.ok) {
+          await this.updateTimestampStatus({ date: doc.date, status: 'FAILED', error: `signature_${verification.reason}`, externalDb: db });
+          continue;
+        }
+
+        let timestamp = doc.timestamp || null;
+        if (!timestamp || !timestamp.token) {
+          await this.updateTimestampStatus({ date: doc.date, status: 'RETRYING', error: null, externalDb: db });
+          const anchored = await rfc3161AdapterService.anchorEnvelopeDigest({
+            envelopeDigestSha256: verification.envelopeDigestSha256,
+            envelopeDigestBase64: verification.envelopeDigestBase64,
+          });
+          timestamp = {
+            mode: anchored.mode,
+            status: anchored.status,
+            token: anchored.token,
+            tsa: anchored.tsa,
+            messageImprint: anchored.messageImprint,
+            anchoredAt: anchored.anchoredAt || null,
+            verifiedAt: null,
+            retries: (doc.timestamp?.retries || 0) + 1,
+            lastAttemptAt: new Date(),
+            error: anchored.error || null,
+          };
+          await coll.updateOne({ _id: doc._id }, { $set: { timestamp } });
+        }
+
+        const replay = timestamp.token
+          ? await coll.countDocuments({
+            _id: { $ne: doc._id },
+            'timestamp.token': timestamp.token,
+          }) > 0
+          : false;
+        const timestampCheck = rfc3161AdapterService.verifyTimestamp({
+          envelopeDigestSha256: verification.envelopeDigestSha256,
+          timestamp,
+          replayDetected: replay,
+        });
+
+        if (!timestampCheck.ok) {
+          await this.updateTimestampStatus({ date: doc.date, status: 'FAILED', error: timestampCheck.reason, externalDb: db });
+          try {
+            await logService.createLog(db, {
+              userID: 'USR-SYSTEM',
+              action: 'MERKLE_ANCHOR_FAILED',
+              resourceType: 'AuditRoot',
+              resourceId: doc.date,
+              entity: 'Report',
+              entityID: doc.date,
+              status: 'failure',
+              result: 'failure',
+              severity: 'warning',
+              module: 'Sistema',
+              message: `Falha na ancoragem/validação RFC3161 para ${doc.date}`,
+              payload: { date: doc.date, reason: timestampCheck.reason },
+            });
+          } catch (logError) {
+            logger.warn('Falha ao registrar evento MERKLE_ANCHOR_FAILED:', logError.message || logError);
+          }
+          continue;
+        }
+
+        await coll.updateOne(
+          { _id: doc._id },
+          {
+            $set: {
+              'timestamp.status': 'VERIFIED',
+              'timestamp.error': null,
+              'timestamp.verifiedAt': new Date(),
+              'timestamp.lastAttemptAt': new Date(),
+            },
+          }
+        );
+
+        try {
+          await logService.createLog(db, {
+            userID: 'USR-SYSTEM',
+            action: 'MERKLE_ANCHORED',
+            resourceType: 'AuditRoot',
+            resourceId: doc.date,
+            entity: 'Report',
+            entityID: doc.date,
+            status: 'success',
+            result: 'success',
+            severity: 'info',
+            module: 'Sistema',
+            message: `Root diária ancorada e validada para ${doc.date}`,
+            payload: { date: doc.date, status: 'VERIFIED' },
+          });
+        } catch (logError) {
+          logger.warn('Falha ao registrar evento MERKLE_ANCHORED:', logError.message || logError);
+        }
+      }
+
+      return { processed: pending.length };
     } finally {
       if (localDb) await closeConnection();
     }

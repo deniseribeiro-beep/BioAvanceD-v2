@@ -22,6 +22,19 @@ async function readJson(filePath) {
   return JSON.parse(await fs.promises.readFile(filePath, 'utf8'));
 }
 
+async function maybeReadJson(filePath) {
+  if (!fs.existsSync(filePath)) return null;
+  return readJson(filePath);
+}
+
+async function updateBaselineReport(artifactDir, updateFn) {
+  const baselinePath = path.join(artifactDir, 'validation', 'baseline_report.json');
+  const baseline = await maybeReadJson(baselinePath);
+  if (!baseline) return;
+  const updated = updateFn(baseline) || baseline;
+  await fs.promises.writeFile(baselinePath, `${JSON.stringify(updated, null, 2)}\n`, 'utf8');
+}
+
 async function readFirstJsonl(filePath) {
   const text = await fs.promises.readFile(filePath, 'utf8');
   const line = text.split(/\r?\n/).find(Boolean);
@@ -40,6 +53,7 @@ async function count(db, collectionName, filter) {
 }
 
 async function main() {
+  const startedAt = Date.now();
   const args = parseArgs(process.argv);
   const artifactDir = path.resolve(args.artifact || '');
   if (!artifactDir) throw new Error('Use --artifact <dir>');
@@ -141,6 +155,13 @@ async function main() {
       errors,
       warnings,
     };
+
+    await updateBaselineReport(artifactDir, (baseline) => {
+      baseline.postImportValidation = report.status;
+      baseline.durationsMs = baseline.durationsMs || {};
+      baseline.durationsMs.postImportValidation = Date.now() - startedAt;
+      return baseline;
+    });
 
     if (errors.length) {
       console.error(JSON.stringify(report, null, 2));

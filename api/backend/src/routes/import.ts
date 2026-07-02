@@ -1,9 +1,9 @@
 import express from 'express';
 import { FhirImportService } from '../services/FhirImportService';
-import { getNeo4jDriver, getInfluxDB } from '../db/connection';
+import { getInfluxDB } from '../db/connection';
 const router = express.Router();
 
-const importService = new FhirImportService(getNeo4jDriver(), getInfluxDB());
+const importService = new FhirImportService(getInfluxDB());
 
 router.post('/import-fhir', async (req, res) => {
   const payload = req.body; // Array de ImportDTO

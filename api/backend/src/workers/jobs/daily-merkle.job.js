@@ -13,6 +13,31 @@ const logger = require('../../utils/logger');
 
 const RUN_HOUR_UTC = 2; // 02:30 UTC
 const RUN_MINUTE_UTC = 30;
+const BACKFILL_DAYS = 7;
+
+function toUtcDateString(date) {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate())).toISOString().slice(0, 10);
+}
+
+async function recoverMissingDates(db, upToDateInclusive) {
+  const limitDate = new Date(`${upToDateInclusive}T00:00:00.000Z`);
+  const dateList = [];
+  for (let i = BACKFILL_DAYS; i >= 1; i -= 1) {
+    const d = new Date(limitDate);
+    d.setUTCDate(limitDate.getUTCDate() - i);
+    dateList.push(toUtcDateString(d));
+  }
+
+  for (const date of dateList) {
+    const existing = await auditRootService.getRootByDate(date, db);
+    if (existing) continue;
+    logger.info(`[daily-merkle] Recuperando data sem root: ${date}`);
+    const result = await integrityService.buildMerkleForDate(date, db, { persistMissing: true });
+    if (result && result.root) {
+      await auditRootService.saveDailyRoot({ date, root: result.root, treeSize: result.leaves.length, db });
+    }
+  }
+}
 
 function msUntilNextRun() {
   const now = new Date();
@@ -34,7 +59,9 @@ async function runOnce() {
       logger.warn(`[daily-merkle] Nenhuma root gerada para ${targetDate}`);
     }
 
-    await auditRootService.saveDailyRoot({ date: targetDate, root: result.root, db });
+    await auditRootService.saveDailyRoot({ date: targetDate, root: result.root, treeSize: result.leaves.length, db });
+    await recoverMissingDates(db, targetDate);
+    await auditRootService.processTimestampBacklog({ externalDb: db });
     logger.info(`[daily-merkle] Root salva para ${targetDate} -> ${result.root}`);
   } catch (error) {
     logger.error('[daily-merkle] Erro ao executar job diário de Merkle:', error.message || error);

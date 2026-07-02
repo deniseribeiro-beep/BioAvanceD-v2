@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const childProcess = require('child_process');
 const yauzl = require('yauzl');
 const ExcelJS = require('exceljs');
 const { XMLParser, XMLValidator } = require('fast-xml-parser');
@@ -140,8 +141,34 @@ function resolveSources(args) {
   return {
     pt: path.resolve(args.pt || findOneFile(input, (name) => /Nomenclature_Pack_PT\.zip$/i.test(name), 'PT nomenclature ZIP')),
     en: path.resolve(args.en || findOneFile(input, (name) => /Nomenclature_Pack_EN\.zip$/i.test(name), 'EN nomenclature ZIP')),
+    es: path.resolve(args.es || findOneFile(input, (name) => /Nomenclature_Pack_ES\.zip$/i.test(name), 'ES nomenclature ZIP')),
     snomed: path.resolve(args.snomed || findOneFile(input, (name) => /SNOMED.*\.xlsx$/i.test(name), 'SNOMED XLSX')),
   };
+}
+
+function loadBackendDependencyVersions() {
+  try {
+    const pkgPath = path.join(__dirname, '..', 'package.json');
+    const lockPath = path.join(__dirname, '..', 'package-lock.json');
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+    const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+    const names = Object.keys(pkg.dependencies || {}).sort();
+    const versions = {};
+    for (const name of names) {
+      versions[name] = lock.packages?.[`node_modules/${name}`]?.version || pkg.dependencies[name] || null;
+    }
+    return versions;
+  } catch (error) {
+    return {};
+  }
+}
+
+function getGitCommit() {
+  try {
+    return childProcess.execSync('git rev-parse HEAD', { cwd: path.join(__dirname, '..', '..'), stdio: ['ignore', 'pipe', 'ignore'] }).toString('utf8').trim();
+  } catch (error) {
+    return process.env.GIT_COMMIT || null;
+  }
 }
 
 function decodeXmlBuffer(buffer, entryName) {
@@ -489,11 +516,15 @@ async function parseSnomedXlsx(xlsxPath, release) {
   };
 }
 
-function chooseLangValue(record, field, preferred = ['pt', 'en']) {
+function chooseLangValue(record, field, preferred = ['pt', 'en', 'es']) {
   for (const language of preferred) {
     if (record[field]?.[language]) return record[field][language];
   }
   return Object.values(record[field] || {}).find(Boolean) || '';
+}
+
+function fallbackLabel(record) {
+  return record.labels.pt || record.labels.en || record.labels.es || record.code;
 }
 
 function finalizeEntities(entitiesByCode, release) {
@@ -507,14 +538,17 @@ function finalizeEntities(entitiesByCode, release) {
       labels: {
         pt: record.labels.pt || '',
         en: record.labels.en || '',
+        es: record.labels.es || '',
       },
       synonyms: {
         pt: record.synonyms.pt || [],
         en: record.synonyms.en || [],
+        es: record.synonyms.es || [],
       },
       definitions: {
         pt: record.definitions.pt || '',
         en: record.definitions.en || '',
+        es: record.definitions.es || '',
       },
       typology: chooseLangValue(record, 'typologyByLang'),
       status: chooseLangValue(record, 'statusByLang'),
@@ -556,7 +590,7 @@ function buildOutputs({ entities, mappings, classifications, release }) {
         orphaCode: entity.canonicalCode,
         code: entity.code,
         system: 'ORPHA',
-        label: entity.labels.pt || entity.labels.en || entity.code,
+        label: fallbackLabel(entity),
         labels: entity.labels,
         icd10Codes: unique(rows.filter((row) => row.targetSystem === 'ICD10').map((row) => row.targetCode)),
         icd11Codes: unique(rows.filter((row) => row.targetSystem === 'ICD11').map((row) => row.targetCode)),
@@ -580,7 +614,7 @@ function buildOutputs({ entities, mappings, classifications, release }) {
       system: 'ORPHA',
       code: entity.code,
       canonicalCode: entity.canonicalCode,
-      label: entity.labels.pt || entity.labels.en || entity.code,
+      label: fallbackLabel(entity),
       labels: entity.labels,
       domain: 'rare_disease',
       source: SOURCE_PACK,
@@ -590,7 +624,7 @@ function buildOutputs({ entities, mappings, classifications, release }) {
   };
 }
 
-async function writeArtifact({ outDir, normalized, sourceCounts, release, sourceChecksums }) {
+async function writeArtifact({ outDir, normalized, sourceCounts, release, sourceChecksums, buildDurationMs }) {
   await ensureDir(outDir);
   const normalizedDir = path.join(outDir, 'normalized');
   const validationDir = path.join(outDir, 'validation');
@@ -610,6 +644,43 @@ async function writeArtifact({ outDir, normalized, sourceCounts, release, source
     sources: sourceChecksums,
     artifacts: artifactChecksums,
   });
+
+  const baselineReport = {
+    generatedAt: new Date().toISOString(),
+    commit: getGitCommit(),
+    release,
+    imageVersions: {
+      backend: process.env.BIOAVANCED_BACKEND_IMAGE || null,
+      frontend: process.env.BIOAVANCED_FRONTEND_IMAGE || null,
+      worker: process.env.BIOAVANCED_WORKER_IMAGE || null,
+      mongodb: process.env.BIOAVANCED_MONGODB_IMAGE || 'mongo:7',
+      neo4j: process.env.BIOAVANCED_NEO4J_IMAGE || 'neo4j:5-community',
+      redis: process.env.BIOAVANCED_REDIS_IMAGE || 'redis:7-alpine',
+      influxdb: process.env.BIOAVANCED_INFLUXDB_IMAGE || 'influxdb:2.7',
+    },
+    dependencyVersions: loadBackendDependencyVersions(),
+    sourceChecksums: sourceChecksums,
+    sourceCounts: {
+      pt: sourceCounts.packs?.pt?.distinctOrphaCodes || 0,
+      en: sourceCounts.packs?.en?.distinctOrphaCodes || 0,
+      es: sourceCounts.packs?.es?.distinctOrphaCodes || 0,
+      union: sourceCounts.unionDistinctOrphaCodes || 0,
+    },
+    normalizedCounts,
+    jsonlChecksums: Object.fromEntries(
+      Object.entries(artifactChecksums).filter(([relative]) => relative.startsWith('normalized/'))
+    ),
+    preImportValidation: null,
+    postImportValidation: null,
+    durationsMs: {
+      build: buildDurationMs,
+      import: null,
+      preImportValidation: null,
+      postImportValidation: null,
+    },
+  };
+  await writeJson(path.join(validationDir, 'baseline_report.json'), baselineReport);
+
   await writeJson(path.join(validationDir, 'validation_report.json'), {
     status: 'BUILT',
     generatedAt: new Date().toISOString(),
@@ -629,6 +700,7 @@ async function writeArtifact({ outDir, normalized, sourceCounts, release, source
       'validation/source_counts.json',
       'validation/normalized_counts.json',
       'validation/checksums.json',
+      'validation/baseline_report.json',
       'validation/validation_report.json',
     ],
     normalizedCounts,
@@ -642,6 +714,7 @@ async function writeArtifact({ outDir, normalized, sourceCounts, release, source
 }
 
 async function main() {
+  const startedAt = Date.now();
   const args = parseArgs(process.argv);
   const release = args.release || DEFAULT_RELEASE;
   const outDir = path.resolve(args.out || './artifacts/orphanet-2025-07-initial-seed');
@@ -654,17 +727,19 @@ async function main() {
   const sourceChecksums = {
     ptZip: { path: sources.pt, sha256: await checksumFile(sources.pt) },
     enZip: { path: sources.en, sha256: await checksumFile(sources.en) },
+    esZip: { path: sources.es, sha256: await checksumFile(sources.es) },
     snomedXlsx: { path: sources.snomed, sha256: await checksumFile(sources.snomed) },
   };
 
   const entitiesByCode = new Map();
   const pt = await parsePack(sources.pt, 'pt', release, entitiesByCode);
   const en = await parsePack(sources.en, 'en', release, entitiesByCode);
+  const es = await parsePack(sources.es, 'es', release, entitiesByCode);
   const snomed = await parseSnomedXlsx(sources.snomed, release);
 
   const entities = finalizeEntities(entitiesByCode, release);
-  const allMappings = [...pt.mappings, ...en.mappings, ...snomed.rows];
-  const allClassifications = [...pt.classifications, ...en.classifications];
+  const allMappings = [...pt.mappings, ...en.mappings, ...es.mappings, ...snomed.rows];
+  const allClassifications = [...pt.classifications, ...en.classifications, ...es.classifications];
   const normalized = buildOutputs({
     entities,
     mappings: allMappings,
@@ -678,11 +753,13 @@ async function main() {
     sources: {
       ptZip: { path: sources.pt, fileName: path.basename(sources.pt), sha256: sourceChecksums.ptZip.sha256 },
       enZip: { path: sources.en, fileName: path.basename(sources.en), sha256: sourceChecksums.enZip.sha256 },
+      esZip: { path: sources.es, fileName: path.basename(sources.es), sha256: sourceChecksums.esZip.sha256 },
       snomedXlsx: { path: sources.snomed, fileName: path.basename(sources.snomed), sha256: sourceChecksums.snomedXlsx.sha256 },
     },
     packs: {
       pt: pt.counts,
       en: en.counts,
+      es: es.counts,
     },
     snomed: {
       xlsxPath: sources.snomed,
@@ -700,11 +777,13 @@ async function main() {
     sourceCounts,
     release,
     sourceChecksums,
+    buildDurationMs: Date.now() - startedAt,
   });
 
   const counts = {
     orphaPt: sourceCounts.packs.pt.distinctOrphaCodes,
     orphaEn: sourceCounts.packs.en.distinctOrphaCodes,
+    orphaEs: sourceCounts.packs.es.distinctOrphaCodes,
     orphaUnion: sourceCounts.unionDistinctOrphaCodes,
     icd10Mappings: normalized.terminology_mappings.filter((row) => row.targetSystem === 'ICD10').length,
     icd11Mappings: normalized.terminology_mappings.filter((row) => row.targetSystem === 'ICD11').length,

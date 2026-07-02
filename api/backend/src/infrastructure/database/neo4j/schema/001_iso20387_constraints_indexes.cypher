@@ -1,43 +1,71 @@
 // =============================================
-// BioAvanceD - Neo4j Schema (ISO 20387 + FHIR)
+// BioAvanceD - Neo4j Schema Canônico
 // =============================================
 
-CREATE CONSTRAINT donor_mongo_patient_id_unique IF NOT EXISTS
+CREATE CONSTRAINT donor_id_unique IF NOT EXISTS
 FOR (d:Donor)
-REQUIRE d.mongoPatientId IS UNIQUE;
+REQUIRE d.id IS UNIQUE;
 
-CREATE CONSTRAINT sample_mongo_sample_id_unique IF NOT EXISTS
+CREATE CONSTRAINT sample_id_unique IF NOT EXISTS
 FOR (s:Sample)
-REQUIRE s.mongoSampleId IS UNIQUE;
+REQUIRE s.id IS UNIQUE;
 
-CREATE CONSTRAINT aliquot_mongo_sample_id_unique IF NOT EXISTS
-FOR (a:Aliquot)
-REQUIRE a.mongoSampleId IS UNIQUE;
-
-CREATE CONSTRAINT consent_mongo_consent_id_unique IF NOT EXISTS
-FOR (c:EthicalConsent)
-REQUIRE c.mongoConsentId IS UNIQUE;
-
-CREATE CONSTRAINT consent_pointer_id_unique IF NOT EXISTS
+CREATE CONSTRAINT ethical_consent_id_unique IF NOT EXISTS
 FOR (c:EthicalConsent)
 REQUIRE c.id IS UNIQUE;
 
-CREATE INDEX donor_patient_id_idx IF NOT EXISTS
-FOR (d:Donor)
-ON (d.patientId);
+CREATE CONSTRAINT rare_disease_code_unique IF NOT EXISTS
+FOR (d:RareDisease)
+REQUIRE d.code IS UNIQUE;
 
-CREATE INDEX sample_barcode_idx IF NOT EXISTS
+CREATE CONSTRAINT phenotype_code_unique IF NOT EXISTS
+FOR (p:Phenotype)
+REQUIRE p.code IS UNIQUE;
+
+CREATE CONSTRAINT biomarker_code_unique IF NOT EXISTS
+FOR (b:Biomarker)
+REQUIRE b.code IS UNIQUE;
+
+CREATE CONSTRAINT biomarker_observation_id_unique IF NOT EXISTS
+FOR (o:BiomarkerObservation)
+REQUIRE o.id IS UNIQUE;
+
+CREATE CONSTRAINT quality_assessment_id_unique IF NOT EXISTS
+FOR (q:QualityAssessment)
+REQUIRE q.id IS UNIQUE;
+
+CREATE CONSTRAINT custody_event_id_unique IF NOT EXISTS
+FOR (e:CustodyEvent)
+REQUIRE e.id IS UNIQUE;
+
+CREATE CONSTRAINT storage_position_id_unique IF NOT EXISTS
+FOR (s:StoragePosition)
+REQUIRE (s.boxId, s.position) IS UNIQUE;
+
+CREATE CONSTRAINT telemetry_incident_id_unique IF NOT EXISTS
+FOR (t:TelemetryIncident)
+REQUIRE t.id IS UNIQUE;
+
+CREATE CONSTRAINT research_project_id_unique IF NOT EXISTS
+FOR (r:ResearchProject)
+REQUIRE r.id IS UNIQUE;
+
+CREATE INDEX sample_mongo_sample_id_idx IF NOT EXISTS
 FOR (s:Sample)
-ON (s.barcode);
+ON (s.mongoSampleId);
 
-CREATE INDEX aliquot_barcode_idx IF NOT EXISTS
-FOR (a:Aliquot)
-ON (a.barcode);
+CREATE INDEX donor_last_projection_at_idx IF NOT EXISTS
+FOR (d:Donor)
+ON (d.lastProjectionAt);
 
 CREATE INDEX consent_status_idx IF NOT EXISTS
 FOR (c:EthicalConsent)
 ON (c.status);
 
-CREATE INDEX custody_event_happened_at_idx IF NOT EXISTS
-FOR (e:CustodyEvent)
-ON (e.happenedAt);
+CREATE INDEX quality_assessment_status_idx IF NOT EXISTS
+FOR (q:QualityAssessment)
+ON (q.status);
+
+CREATE INDEX telemetry_incident_status_idx IF NOT EXISTS
+FOR (t:TelemetryIncident)
+ON (t.status);

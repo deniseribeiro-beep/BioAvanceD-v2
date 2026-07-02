@@ -1,6 +1,6 @@
 // backend/src/services/miabisValidator.service.js
-const { connectNeo4j } = require('../infrastructure/database/neo4j/connection');
 const Sample = require('../models/Sample');
+const PatientConsent = require('../models/PatientConsent');
 
 /**
  * MIABIS Compliance Validator
@@ -25,26 +25,15 @@ async function validateMiabisCompliance(sampleId) {
     return { isCompliant: false, missingFields, consentStatus: 'not_evaluated', canBeShared: false };
   }
 
-  // 2. Neo4j: Check consent
-  const cypher = `
-    MATCH (p:Patient)-[r:AGREED_TO]->(t:TCLE)-[:COVERS]->(s:Sample {id: $sampleId})
-    RETURN r.status AS status, r.isPublic AS isPublic
-    LIMIT 1
-  `;
   let consentStatus = 'not_found';
   let canBeShared = false;
   try {
-    const neo4jDriver = await connectNeo4j();
-    const session = neo4jDriver.session();
-    const neoResult = await session.run(cypher, { sampleId });
-    if (neoResult.records.length > 0) {
-      const record = neoResult.records[0].toObject();
-      consentStatus = record.status || 'unknown';
-      canBeShared = !!record.isPublic;
+    const consent = await PatientConsent.findOne({ patientId: sample.patientID }).sort({ signedAt: -1, createdAt: -1 }).lean();
+    if (consent) {
+      consentStatus = String(consent.status || 'unknown').toLowerCase();
+      canBeShared = consentStatus === 'active';
     }
-    await session.close();
   } catch (err) {
-    // Log error or handle as needed
     consentStatus = 'error';
     canBeShared = false;
   }

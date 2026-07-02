@@ -44,6 +44,11 @@ async function readJson(filePath) {
   return JSON.parse(await fs.promises.readFile(filePath, 'utf8'));
 }
 
+async function maybeReadJson(filePath) {
+  if (!fs.existsSync(filePath)) return null;
+  return readJson(filePath);
+}
+
 async function readJsonl(filePath, errors, label) {
   const rows = [];
   const text = await fs.promises.readFile(filePath, 'utf8');
@@ -149,7 +154,16 @@ async function writeValidationReport(artifact, report) {
   await fs.promises.writeFile(filePath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
 }
 
+async function updateBaselineReport(artifact, updateFn) {
+  const filePath = artifactFile(artifact, 'validation/baseline_report.json');
+  const baseline = await maybeReadJson(filePath);
+  if (!baseline) return;
+  const updated = updateFn(baseline) || baseline;
+  await fs.promises.writeFile(filePath, `${JSON.stringify(updated, null, 2)}\n`, 'utf8');
+}
+
 async function main() {
+  const startedAt = Date.now();
   const args = parseArgs(process.argv);
   const artifact = path.resolve(args.artifact || './artifacts/orphanet-2025-07-initial-seed');
   const errors = [];
@@ -179,6 +193,7 @@ async function main() {
   const requiredSources = [
     ['ptZip', 'ZIP PT'],
     ['enZip', 'ZIP EN'],
+    ['esZip', 'ZIP ES'],
     ['snomedXlsx', 'XLSX SNOMED'],
   ];
   for (const [key, label] of requiredSources) {
@@ -242,11 +257,28 @@ async function main() {
 
   const ptCount = Number(sourceCounts?.packs?.pt?.distinctOrphaCodes || 0);
   const enCount = Number(sourceCounts?.packs?.en?.distinctOrphaCodes || 0);
+  const esCount = Number(sourceCounts?.packs?.es?.distinctOrphaCodes || 0);
   const unionCount = Number(sourceCounts?.unionDistinctOrphaCodes || 0);
   if (!ptCount) errors.push('ORPHA PT count is zero');
   if (!enCount) errors.push('ORPHA EN count is zero');
-  if (!unionCount) errors.push('ORPHA PT+EN union count is zero');
+  if (!esCount) errors.push('ORPHA ES count is zero');
+  if (!unionCount) errors.push('ORPHA PT+EN+ES union count is zero');
   if (unionCount !== entityUniverse.size) errors.push(`ORPHA union mismatch: source=${unionCount}, entities=${entityUniverse.size}`);
+  if (unionCount < ptCount || unionCount < enCount || unionCount < esCount) {
+    errors.push(`ORPHA union must be >= each language count: pt=${ptCount}, en=${enCount}, es=${esCount}, union=${unionCount}`);
+  }
+
+  entities.forEach((entity, index) => {
+    const label = `orphanet_entities row ${index + 1}`;
+    const fallbackLabel = entity.labels?.pt || entity.labels?.en || entity.labels?.es || entity.code;
+    if (!fallbackLabel) {
+      errors.push(`${label} deterministic fallback pt->en->es->code failed`);
+    }
+    const code = canonicalCode(entity);
+    if (!code || !entityUniverse.has(code)) {
+      errors.push(`${label} invalid canonical code in multilingual union`);
+    }
+  });
 
   const mappingCounts = {
     icd10Mappings: mappings.filter((row) => row.targetSystem === 'ICD10').length,
@@ -289,6 +321,7 @@ async function main() {
     counts: {
       orphaPt: ptCount,
       orphaEn: enCount,
+      orphaEs: esCount,
       orphaUnion: unionCount,
       ...mappingCounts,
       orphanetEntities: entities.length,
@@ -302,8 +335,21 @@ async function main() {
 
   if (errors.length) {
     console.error(JSON.stringify(report, null, 2));
+    await updateBaselineReport(artifact, (baseline) => {
+      baseline.preImportValidation = report.status;
+      baseline.durationsMs = baseline.durationsMs || {};
+      baseline.durationsMs.preImportValidation = Date.now() - startedAt;
+      return baseline;
+    });
     process.exit(1);
   }
+
+  await updateBaselineReport(artifact, (baseline) => {
+    baseline.preImportValidation = report.status;
+    baseline.durationsMs = baseline.durationsMs || {};
+    baseline.durationsMs.preImportValidation = Date.now() - startedAt;
+    return baseline;
+  });
 
   console.log('[orphanet-validate-initial-seed] PASS');
   console.log(JSON.stringify(report.counts, null, 2));

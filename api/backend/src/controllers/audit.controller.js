@@ -1,7 +1,22 @@
 const integrityService = require('../services/integrityCheckService');
 const auditRootService = require('../services/auditRoot.service');
 const hl7AuditService = require('../services/hl7Audit.service');
+const merkleEnvelopeService = require('../services/merkle-envelope.service');
+const rfc3161AdapterService = require('../services/rfc3161-adapter.service');
 const logger = require('../utils/logger');
+
+function isIsoDate(date) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(String(date || ''));
+}
+
+function isHexHash(hash) {
+  return /^[a-f0-9]{64}$/i.test(String(hash || ''));
+}
+
+function isProofValid(proof) {
+  if (!Array.isArray(proof)) return false;
+  return proof.every((step) => step && (step.position === 'left' || step.position === 'right') && isHexHash(step.hash));
+}
 
 class AuditController {
   async getMerkleRoot(req, res) {
@@ -20,10 +35,65 @@ class AuditController {
 
   async verifyAudit(req, res) {
     try {
-      const { hash, proof, root } = req.body;
+      const { date, hash, proof, root } = req.body || {};
+      if (root !== undefined) {
+        return res.status(400).json({ success: false, error: 'Campo root no payload está deprecated e não é aceito.' });
+      }
+      if (!isIsoDate(date)) {
+        return res.status(400).json({ success: false, error: 'date inválida. Esperado YYYY-MM-DD.' });
+      }
+      if (!isHexHash(hash)) {
+        return res.status(400).json({ success: false, error: 'hash inválido. Esperado SHA-256 em hexadecimal.' });
+      }
+      if (!isProofValid(proof)) {
+        return res.status(400).json({ success: false, error: 'proof inválido.' });
+      }
+
+      const db = req.app.locals.db;
+      if (!db) return res.status(503).json({ success: false, error: 'Banco de dados não disponível' });
+
+      const official = await auditRootService.getOfficialRootRecord(date, db);
+      if (!official || !official.rootDoc) {
+        return res.status(404).json({ success: false, error: 'Raiz oficial não encontrada para a data informada.' });
+      }
+
+      const { rootDoc, envelopeRecord } = official;
+      const officialRoot = String(rootDoc.root || envelopeRecord?.envelope?.root || '');
+      if (!isHexHash(officialRoot)) {
+        return res.status(500).json({ success: false, error: 'Raiz oficial inválida no servidor.' });
+      }
+
+      if (!envelopeRecord?.legacyV1) {
+        const signatureCheck = merkleEnvelopeService.verifyEnvelopeSignature({
+          envelope: envelopeRecord.envelope,
+          signature: envelopeRecord.signature,
+          signatureAlgorithm: envelopeRecord.signatureAlgorithm,
+          keyId: envelopeRecord.keyId,
+          publicKeyFingerprint: envelopeRecord.publicKeyFingerprint,
+        });
+        if (!signatureCheck.ok) {
+          return res.status(400).json({ success: false, error: `Envelope inválido: ${signatureCheck.reason}` });
+        }
+
+        const replayDetected = rootDoc.timestamp?.token
+          ? (await db.collection('audit_roots').countDocuments({
+            date: { $ne: date },
+            'timestamp.token': rootDoc.timestamp.token,
+          })) > 0
+          : false;
+        const timestampCheck = rfc3161AdapterService.verifyTimestamp({
+          envelopeDigestSha256: signatureCheck.envelopeDigestSha256,
+          timestamp: rootDoc.timestamp,
+          replayDetected,
+        });
+        if (!timestampCheck.ok) {
+          return res.status(400).json({ success: false, error: `Timestamp inválido: ${timestampCheck.reason}` });
+        }
+      }
+
       const audit = require('../utils/merkleTree');
-      const ok = audit.verifyProof(hash, proof, root);
-      return res.status(200).json({ success: true, verified: !!ok });
+      const ok = audit.verifyProof(hash, proof, officialRoot);
+      return res.status(200).json({ success: true, verified: !!ok, date });
     } catch (error) {
       return res.status(400).json({ success: false, error: error.message || 'Erro ao verificar prova' });
     }

@@ -15,7 +15,7 @@ The repository stores the source files in `orpha-data-raw/`:
 - `Orphanet_Nomenclature_Pack_ES.zip`
 - `ORPHA-SNOMEDCT_Mapping_File_production.xlsx`
 
-The current remote builder must still be extended to consume the ES pack before the scientific baseline is frozen. The existence of the ES archive alone does not prove that it is represented in the normalized artifact.
+The builder consumes PT, EN and ES nomenclature packs plus SNOMED CT mapping, with deterministic fallback `pt -> en -> es -> code`.
 
 ## Semantic separation
 
@@ -42,6 +42,7 @@ artifacts/orphanet-2025-07-initial-seed/
     source_counts.json
     normalized_counts.json
     checksums.json
+    baseline_report.json
     validation_report.json
 ```
 
@@ -70,7 +71,7 @@ docker compose --env-file .env.docker -f docker-compose.yml run --rm --no-deps b
   --artifact /workspace/artifacts/orphanet-2025-07-initial-seed
 ```
 
-The validation contract must cover source attribution, SHA-256 checksums, source and normalized counts, duplicate detection, required fields, terminology mappings, and semantic separation from HPO and biomarkers.
+The validation contract covers source attribution, SHA-256 checksums, PT/EN/ES/union counts, normalized counts, duplicate detection, required fields, terminology mappings, deterministic fallback, and semantic separation from HPO and biomarkers.
 
 ## Controlled OMIM enrichment
 
@@ -118,12 +119,12 @@ The post-import validator compares artifact counts with ORPHA records in `orphan
 
 ## Reproducibility evidence
 
-Each scientific execution should retain:
+Each scientific execution should retain in `validation/baseline_report.json`:
 
 - source release and checksums;
 - code commit;
 - container image and dependency versions;
-- source and normalized counts;
+- source and normalized counts (PT, EN, ES and union);
 - normalized output checksums;
 - pre-import validation report;
 - post-import validation report.
