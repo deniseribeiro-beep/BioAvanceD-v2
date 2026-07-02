@@ -23,22 +23,23 @@ with push access. Having credentials does not mean using them freely:
   `gh pr ready --undo <number>`.
 - **Never push to `main`.** All work lands via a PR that Dennis approves
   and merges — the merge is his decision every time.
-- **Don't file GitHub issues without Dennis's explicit OK.** `gh issue
-  create` is a visible write to Denise's repo. Use `.claude/issues/`
-  instead (see below) for anything that needs tracking — that's a local
-  git-tracked file, not a write to her repo, so it needs no separate
-  sign-off. Only promote a local issue to GitHub when Dennis says to.
+- **GitHub issues are the tracker (as of 2026-07-02).** Dennis gave
+  explicit blanket OK to use `gh issue create` directly for anything
+  found during the test-building push — no more local-only staging file
+  and no per-issue sign-off needed. Still never open a *PR* without his
+  explicit go (that rule is unchanged); issues and PRs are different
+  levels of visibility.
 
-## Local issue tracking — `.claude/issues/`
+## Issue tracking — GitHub Issues
 
-This repo's findings/backlog live in `.claude/issues/` (see its own
-`README.md` for the full format), not on Denise's GitHub Issues by
-default. Two GitHub issues (#3, #5) are mirrored there as
-`0003-*.md`/`0005-*.md` for continuity with work already tracked
-upstream; everything discovered during the test-building push should be
-filed there first. `test-loop`, `ship-to-main`, and `testing-conventions`
-all point here for "where do I file/read a finding" — read the README
-once per session rather than re-deriving the convention.
+Findings/backlog for this repo live directly on
+`deniseribeiro-beep/BioAvanceD-v2` GitHub Issues. File with `gh issue
+create` as soon as something is found — don't stage it anywhere else
+first. `test-loop`, `ship-to-main`, and `testing-conventions` all point
+here for "where do I file/read a finding." (Earlier in the test-building
+push, findings were staged locally in `.claude/issues/` before this
+switch; that folder was removed 2026-07-02 once its contents were
+migrated to GitHub Issues #6/#7 — #3/#5 already existed upstream.)
 
 ## Repo layout — three npm roots
 

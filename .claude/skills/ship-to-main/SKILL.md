@@ -32,12 +32,12 @@ or touch `main` yourself.
 ## 1. Confirm the loop is actually done
 
 Don't start this on a half-finished test push. Check the tracking
-issues in `.claude/issues/` (`0003-docker-e2e-wiring.md`,
-`0005-e2e-real-backend-specs.md` as of this writing — read their
-checklists, not just their titles) against what the branch actually
-delivers, and `git status` for uncommitted leftovers. If real slices
-remain, that's `test-loop`'s job — go back rather than shipping a
-partial batch.
+issues on GitHub (`gh issue list --state open` on
+`deniseribeiro-beep/BioAvanceD-v2` — #3 and #5 are the umbrella issues
+as of this writing, read their checklists, not just their titles)
+against what the branch actually delivers, and `git status` for
+uncommitted leftovers. If real slices remain, that's `test-loop`'s
+job — go back rather than shipping a partial batch.
 
 ## 2. Full native pre-flight
 

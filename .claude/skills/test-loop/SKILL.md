@@ -13,20 +13,20 @@ covers the loop mechanics, not the conventions they already answer.
 
 ## Where the work is tracked
 
-- `.claude/issues/` is the primary tracker — `ls .claude/issues/` and
-  read `status: open` files, starting with `0003-docker-e2e-wiring.md`
-  (the umbrella issue) and `0005-e2e-real-backend-specs.md`. Check fresh
-  each session — checklists get updated as slices land, don't trust
-  memory of a prior session's state.
+- GitHub Issues on `deniseribeiro-beep/BioAvanceD-v2` are the primary
+  tracker — `gh issue list --state open` and read the umbrella issues
+  (#3 `docker-e2e-wiring`, #5 `e2e-real-backend-specs` as of this
+  writing). Check fresh each session — checklists get updated as slices
+  land, don't trust memory of a prior session's state.
 - The coverage push so far lives on
   `feature/docker-e2e-backend-integration` (unit+integration tests to
   ~35% lines in a732d820, e2e spec rewrites in 5a4a49d0). Continue on
   the existing branch unless the slice is genuinely unrelated to its
   scope.
-- **File new findings in `.claude/issues/` freely — no need to ask
-  first**, it's a local git-tracked file, not a write to Denise's repo.
-  Only `gh issue create` needs Dennis's explicit OK
-  (`bioavanced-conventions`' hard rules).
+- **File new findings with `gh issue create` freely** — Dennis gave
+  blanket OK for this (2026-07-02), no per-issue sign-off needed
+  (`bioavanced-conventions`' hard rules). Opening a *PR* still needs his
+  explicit go — that rule is separate and unchanged.
 
 ## Before an iteration
 
@@ -71,9 +71,7 @@ problem to make disappear:
   test exists to prove), fix it inline on the same branch and call it
   out explicitly in the commit message and report.
 - If it's unrelated to the slice, don't fix it inline and don't skip
-  past it — file it in `.claude/issues/` (`github: none`) and keep
-  going. Promoting it to GitHub is Dennis's call, not a blocker to
-  filing it locally.
+  past it — file it with `gh issue create` and keep going.
 - Never resolve the tension by weakening the test.
 
 ## When a slice turns out too big mid-iteration
