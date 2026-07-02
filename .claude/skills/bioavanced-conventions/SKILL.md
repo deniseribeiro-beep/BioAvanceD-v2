@@ -43,20 +43,20 @@ push, findings were staged locally in `.claude/issues/` before this
 switch; that folder was removed 2026-07-02 once its contents were
 migrated to GitHub Issues #6/#7 — #3/#5 already existed upstream.)
 
-**Default to filing, not to judging severity yourself.** Confirmed
-2026-07-02: three parallel test-writing subagents each surfaced a real
-behavioral observation in the file they were testing (inconsistent
-input escaping, an ambiguous failure-mode in an aggregate return
-shape). The orchestrating session read all three, reasoned about
-exploitability/severity itself, and filed none of them — then had to
-be prompted ("don't you think you were a bit dismissive?") before
-filing two as issues #16/#17. The blanket OK to file exists precisely
-so this self-filtering doesn't happen: it is cheaper for Dennis to
-close an issue that turns out to be a non-issue than for a real gap to
-go unrecorded because an agent decided on its own it "probably wasn't
-exploitable." If a subagent (or your own read of the code) flags
-something as worth a second look, file it — don't downgrade it to "a
-sentence in the final report" based on your own risk assessment.
+**Found a problem → file it, full stop.** Confirmed 2026-07-02: three
+parallel test-writing subagents each surfaced a real behavioral
+observation in the file they were testing (inconsistent input
+escaping, an ambiguous failure-mode in an aggregate return shape). The
+orchestrating session treated "is this worth an issue" as a question
+to decide, decided no for all three, and only mentioned them in the
+chat summary — then had to be prompted ("don't you think you were a
+bit dismissive?") before filing two as issues #16/#17. The blanket OK
+to file exists so there is no question to decide: notice something
+wrong with the product (yourself, or reported back by a subagent) →
+`gh issue create` it right then, don't wait to collect findings,
+don't weigh how likely it is to matter first. It costs Dennis seconds
+to close a non-issue; it costs a rediscovery later if a real one only
+lives in a chat transcript.
 
 ## Repo layout — three npm roots
 

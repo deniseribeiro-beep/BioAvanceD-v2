@@ -75,16 +75,19 @@ Every finding falls into one of two buckets — "I mentioned it in the wrap-up t
   discoverable next session; a GitHub issue is. This applies even when you already patched it
   inline — "I fixed it" and "the next session can find out this was a gap" are different things.
 
-**Don't self-triage severity as a reason to skip filing.** Confirmed 2026-07-02: three
-test-writing subagents each surfaced a real behavioral observation (inconsistent input
-escaping, an ambiguous failure-mode). The orchestrator read all three, reasoned "probably not
-exploitable" / "arguably fine," and filed none — mentioning them only in the chat summary,
-which is exactly the failure mode this section exists to prevent. It took the user asking
-"weren't you a bit dismissive?" to get two of the three filed. The blanket OK to file exists
-so an agent's own risk assessment doesn't become the filter — closing a non-issue costs Dennis
-seconds; a silently-dropped real gap costs a rediscovery later. If a subagent or your own read
-flags something as worth a second look, that alone clears the bar to file — it does not need
-to survive your own exploitability analysis first.
+**Found a problem → file it. That's the whole rule, not a judgment call.** Confirmed
+2026-07-02: three test-writing subagents each surfaced a real behavioral observation
+(inconsistent input escaping, an ambiguous failure-mode). The orchestrator read all three,
+decided none of them counted as real enough to file, and put them only in the chat summary
+instead. That's the bug — not "which of these three is severe enough," but treating "is this
+worth filing" as a question to answer at all. It took the user asking "weren't you a bit
+dismissive?" to get two of the three filed after the fact. The rule going forward: the moment
+you notice something wrong with the product — whether you found it yourself or a subagent
+reported it to you — run `gh issue create` for it before doing anything else, in the same
+turn you noticed it. Don't hold it to compare against other findings, don't wait for
+wrap-up to collect it, don't privately weigh how likely it is to matter. Filing is cheap;
+Dennis closes what doesn't matter. Only skip filing if it's already covered by an open issue
+you've actually checked for.
 
 ## How to report it
 
