@@ -69,11 +69,14 @@ Every finding falls into one of two buckets — "I mentioned it in the wrap-up t
 
 - **The skill's own text is wrong or missing something** → fix the skill file directly.
 - **The finding is about the codebase/product** — a real bug, a missing capability, a startup
-  crash that will bite the next developer — **file a GitHub issue for it** (and check with
-  Dennis before pushing/raising, per [[feedback_pr_workflow]] and [[feedback_dont_auto_raise_issues]]).
-  A sentence in the chat transcript is not discoverable next session; an issue on the board is.
-  This applies even when you already patched it inline — "I fixed it" and "the next session can
-  find out this was a gap" are different things.
+  crash that will bite the next developer — **file it in `.claude/issues/`** (see that folder's
+  `README.md` for the format; `bioavanced-conventions` explains why local-first). This needs no
+  sign-off — it's a local git-tracked file, not a write to Denise's repo. Only promote it to an
+  actual GitHub issue (`gh issue create`) when Dennis explicitly says to, per
+  [[feedback_pr_workflow]] and [[feedback_dont_auto_raise_issues]]. A sentence in the chat
+  transcript is not discoverable next session; a file in `.claude/issues/` is. This applies even
+  when you already patched it inline — "I fixed it" and "the next session can find out this was
+  a gap" are different things.
 
 ## How to report it
 
