@@ -1,0 +1,211 @@
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
+
+// IMPORTANT: daily-merkle.job.js calls scheduleNextRun() at module top-level on require(),
+// which calls setTimeout(...). We must use fake timers BEFORE the first require of the
+// module anywhere in this file, or a real timer callback gets scheduled in the test process.
+vi.useFakeTimers();
+vi.setSystemTime(new Date('2026-07-02T10:00:00.000Z'));
+
+// Load the real singleton modules that daily-merkle.job.js requires (CommonJS `require`,
+// not ESM import) — vi.mock() does not reliably intercept require() in this repo's setup
+// (confirmed: mock factories never run against CJS require() call sites).
+//
+// Note: vi.resetModules() + re-require per test was tried first (per the task brief's
+// suggestion) but proved unreliable in this environment — after a second resetModules()+
+// require() cycle, daily-merkle.job.js's internally destructured `connectDB` reference
+// silently diverged from the freshly-required module object returned to the test (the
+// mock's resolved value was demonstrably used by runOnce(), yet `mock.calls.length` read 0
+// on the object the test held). So instead we follow the pattern already used in this repo
+// at tests/unit/workers.unit.test.js: require the real singletons ONCE, spy on their
+// methods BEFORE requiring daily-merkle.job.js (so its own destructuring captures the
+// already-patched functions), and reset call state with mockClear()/mockReset() between
+// tests rather than resetting the whole module registry.
+const mongo = require('../../src/database/mongo');
+const integrityService = require('../../src/services/integrityCheckService');
+const auditRootService = require('../../src/services/auditRoot.service');
+const logger = require('../../src/utils/logger');
+
+vi.spyOn(mongo, 'connectDB').mockResolvedValue({ __fakeDb: true });
+vi.spyOn(mongo, 'closeConnection').mockResolvedValue(undefined);
+vi.spyOn(integrityService, 'buildMerkleForDate').mockResolvedValue({ root: 'deadbeef' });
+vi.spyOn(auditRootService, 'saveDailyRoot').mockResolvedValue({ ok: true });
+vi.spyOn(logger, 'info').mockImplementation(() => {});
+vi.spyOn(logger, 'warn').mockImplementation(() => {});
+vi.spyOn(logger, 'error').mockImplementation(() => {});
+
+// Single require: this is where the module's top-level auto scheduleNextRun() fires,
+// captured harmlessly by fake timers (see the dedicated test below for that assertion).
+const job = require('../../src/workers/jobs/daily-merkle.job');
+
+function resetAllMocks() {
+  mongo.connectDB.mockClear().mockResolvedValue({ __fakeDb: true });
+  mongo.closeConnection.mockClear().mockResolvedValue(undefined);
+  integrityService.buildMerkleForDate.mockClear().mockResolvedValue({ root: 'deadbeef' });
+  auditRootService.saveDailyRoot.mockClear().mockResolvedValue({ ok: true });
+  logger.info.mockClear();
+  logger.warn.mockClear();
+  logger.error.mockClear();
+}
+
+describe('daily-merkle.job', () => {
+  beforeEach(() => {
+    vi.setSystemTime(new Date('2026-07-02T10:00:00.000Z'));
+    resetAllMocks();
+  });
+
+  afterEach(() => {
+    vi.clearAllTimers();
+  });
+
+  afterAll(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it('module load side effect: the top-level auto scheduleNextRun() call is captured by fake timers, not a real setTimeout', () => {
+    // If fake timers were NOT active at require() time, this would have scheduled a real
+    // callback in the live process. Since we called vi.useFakeTimers() before the very
+    // first require above, vi.getTimerCount() must report at least one pending fake timer
+    // (the one registered by the module's own top-level scheduleNextRun() call).
+    expect(vi.getTimerCount()).toBeGreaterThanOrEqual(1);
+  });
+
+  describe('runOnce', () => {
+    it('happy path: generates root, saves it with correct args, and closes the connection', async () => {
+      await job.runOnce();
+
+      expect(mongo.connectDB).toHaveBeenCalledTimes(1);
+      // targetDate should be yesterday (UTC) relative to system time 2026-07-02T10:00:00Z -> 2026-07-01
+      expect(integrityService.buildMerkleForDate).toHaveBeenCalledWith(
+        '2026-07-01',
+        { __fakeDb: true },
+        { persistMissing: true }
+      );
+      expect(auditRootService.saveDailyRoot).toHaveBeenCalledWith({
+        date: '2026-07-01',
+        root: 'deadbeef',
+        db: { __fakeDb: true },
+      });
+      expect(mongo.closeConnection).toHaveBeenCalledTimes(1);
+      expect(logger.warn).not.toHaveBeenCalled();
+    });
+
+    it('warns when buildMerkleForDate resolves without a root, but still saves and closes', async () => {
+      integrityService.buildMerkleForDate.mockResolvedValue({ root: null });
+
+      await job.runOnce();
+
+      expect(logger.warn).toHaveBeenCalledTimes(1);
+      expect(auditRootService.saveDailyRoot).toHaveBeenCalledWith({
+        date: '2026-07-01',
+        root: null,
+        db: { __fakeDb: true },
+      });
+      expect(mongo.closeConnection).toHaveBeenCalledTimes(1);
+    });
+
+    it('when connectDB throws: error is caught and logged, promise resolves (never rejects), closeConnection is not called since db stayed null', async () => {
+      mongo.connectDB.mockRejectedValue(new Error('mongo down'));
+
+      await expect(job.runOnce()).resolves.toBeUndefined();
+
+      expect(logger.error).toHaveBeenCalledTimes(1);
+      expect(mongo.closeConnection).not.toHaveBeenCalled();
+      expect(integrityService.buildMerkleForDate).not.toHaveBeenCalled();
+      expect(auditRootService.saveDailyRoot).not.toHaveBeenCalled();
+    });
+
+    it('when buildMerkleForDate throws: error is caught and logged, closeConnection is still called via finally since db was set', async () => {
+      integrityService.buildMerkleForDate.mockRejectedValue(new Error('merkle build failed'));
+
+      await expect(job.runOnce()).resolves.toBeUndefined();
+
+      expect(logger.error).toHaveBeenCalledTimes(1);
+      expect(mongo.closeConnection).toHaveBeenCalledTimes(1);
+      expect(auditRootService.saveDailyRoot).not.toHaveBeenCalled();
+    });
+
+    it('when saveDailyRoot throws: error is caught and logged, closeConnection is still called via finally', async () => {
+      auditRootService.saveDailyRoot.mockRejectedValue(new Error('save failed'));
+
+      await expect(job.runOnce()).resolves.toBeUndefined();
+
+      expect(logger.error).toHaveBeenCalledTimes(1);
+      expect(mongo.closeConnection).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('scheduleNextRun', () => {
+    it('schedules a setTimeout with a positive delay (msUntilNextRun() + 1000ms buffer)', () => {
+      const setTimeoutSpy = vi.spyOn(global, 'setTimeout');
+
+      job.scheduleNextRun();
+
+      expect(setTimeoutSpy).toHaveBeenCalled();
+      const lastCall = setTimeoutSpy.mock.calls[setTimeoutSpy.mock.calls.length - 1];
+      const delay = lastCall[1];
+      expect(delay).toBeGreaterThan(1000); // must include the +1000ms buffer at minimum
+      expect(delay).toBeLessThanOrEqual(24 * 60 * 60 * 1000 + 1000); // never more than a day + buffer
+
+      setTimeoutSpy.mockRestore();
+    });
+
+    it('computes a delay that lands at 02:30 UTC later today when current time is before 02:30 UTC', () => {
+      vi.setSystemTime(new Date('2026-07-02T01:00:00.000Z')); // before 02:30 UTC
+      const setTimeoutSpy = vi.spyOn(global, 'setTimeout');
+
+      job.scheduleNextRun();
+
+      const lastCall = setTimeoutSpy.mock.calls[setTimeoutSpy.mock.calls.length - 1];
+      const delay = lastCall[1];
+      // From 01:00 UTC to 02:30 UTC today = 90 minutes = 5,400,000 ms, plus 1000ms buffer
+      expect(delay).toBe(90 * 60 * 1000 + 1000);
+
+      setTimeoutSpy.mockRestore();
+    });
+
+    it('computes a delay that rolls over to 02:30 UTC tomorrow when current time is after 02:30 UTC', () => {
+      vi.setSystemTime(new Date('2026-07-02T10:00:00.000Z')); // after 02:30 UTC
+      const setTimeoutSpy = vi.spyOn(global, 'setTimeout');
+
+      job.scheduleNextRun();
+
+      const lastCall = setTimeoutSpy.mock.calls[setTimeoutSpy.mock.calls.length - 1];
+      const delay = lastCall[1];
+      // From 10:00 UTC today to 02:30 UTC tomorrow = 16h30m = 59,400,000 ms, plus 1000ms buffer
+      expect(delay).toBe((16 * 60 + 30) * 60 * 1000 + 1000);
+
+      setTimeoutSpy.mockRestore();
+    });
+
+    it('computes a delay of a full day + buffer when current time is precisely 02:30:00.000 UTC (next <= now rolls to tomorrow)', () => {
+      vi.setSystemTime(new Date('2026-07-02T02:30:00.000Z')); // exactly 02:30 UTC
+      const setTimeoutSpy = vi.spyOn(global, 'setTimeout');
+
+      job.scheduleNextRun();
+
+      const lastCall = setTimeoutSpy.mock.calls[setTimeoutSpy.mock.calls.length - 1];
+      const delay = lastCall[1];
+      expect(delay).toBe(24 * 60 * 60 * 1000 + 1000);
+
+      setTimeoutSpy.mockRestore();
+    });
+
+    it('the scheduled timer callback runs runOnce and then reschedules again', async () => {
+      const setTimeoutSpy = vi.spyOn(global, 'setTimeout');
+
+      job.scheduleNextRun();
+      const callCountBeforeFire = setTimeoutSpy.mock.calls.length;
+
+      await vi.runOnlyPendingTimersAsync();
+
+      // runOnce should have executed (connectDB called) and a new setTimeout should
+      // have been scheduled again (reschedule-always behavior), even though runOnce's
+      // own internal try/catch already swallows errors and never rejects.
+      expect(mongo.connectDB).toHaveBeenCalled();
+      expect(setTimeoutSpy.mock.calls.length).toBeGreaterThan(callCountBeforeFire);
+
+      setTimeoutSpy.mockRestore();
+    });
+  });
+});
