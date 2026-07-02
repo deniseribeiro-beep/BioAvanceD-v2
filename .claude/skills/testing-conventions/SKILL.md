@@ -33,6 +33,16 @@ the scripts (surfaced to Dennis; fits issue #3's "fix broken test
 plumbing" scope). Until fixed, backend tests run from `api/backend/`
 only.
 
+## Finding gaps without a full coverage run
+
+`api/backend/COVERAGE_NOTES.md` is a committed snapshot of per-file line
+coverage (buckets: ZERO/LOW/MID/GOOD), meant to replace running
+`npx vitest run --coverage` at the start of every session just to find
+the next gap. Read it to pick a slice; update the file in the same
+commit as the slice that closes a gap it lists. Only regenerate it with
+a real coverage run at the `ship-to-main` gate or when it looks stale —
+see the file's own header for the regenerate command and cadence.
+
 ## What to run per iteration (native only — no Docker)
 
 - Backend slice: `npx vitest run <path/to/new.test.js>` from

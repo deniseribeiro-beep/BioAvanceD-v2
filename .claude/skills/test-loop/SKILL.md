@@ -41,6 +41,11 @@ covers the loop mechanics, not the conventions they already answer.
 
 One slice = one module/route/spec, sized to finish in the iteration:
 
+- **Read `api/backend/COVERAGE_NOTES.md` first** to find the next backend
+  gap — it's a committed snapshot of per-file coverage so you don't need
+  to run `npx vitest run --coverage` (~2-3 min over 258 files) at the
+  start of every session. Pick from its ZERO/LOW buckets, favoring real
+  logic over scripts/interfaces per its own guidance.
 - Prefer untested code with real logic (validators, services, route
   handlers, state transitions) over padding thin wrappers.
 - For e2e: one spec (or one user flow within a spec) at a time.
@@ -61,6 +66,9 @@ One slice = one module/route/spec, sized to finish in the iteration:
   helion-v2's rewrite.
 - Commit the slice when its targeted tests pass and the relevant full
   native suite is still green.
+- **Update `api/backend/COVERAGE_NOTES.md` in the same commit** — move
+  the file(s) you just covered out of the ZERO/LOW bucket (or into a
+  truer one). Don't let the tracker drift from the code.
 
 ## When a test finds a real bug
 
