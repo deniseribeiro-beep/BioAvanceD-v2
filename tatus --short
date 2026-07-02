@@ -1,0 +1,21 @@
+warning: in the working copy of '.github/workflows/ci-pipeline.yml', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '.gitignore', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'frontend/playwright.config.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'frontend/src/components/v2/intake/ClinicalIntakeWizard.jsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'frontend/src/hooks/useSemanticCascade.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'frontend/tests/e2e/intake-wizard.spec.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'frontend/tests/e2e/support/api-mocks.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'package.json', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'scripts/system-audit-full.js', LF will be replaced by CRLF the next time Git touches it
+ .github/workflows/ci-pipeline.yml                  |   6 [32m+[m[31m-[m
+ .gitignore                                         |   1 [32m+[m
+ api/backend/app.js                                 |   1 [31m-[m
+ frontend/playwright.config.ts                      |   4 [32m+[m[31m-[m
+ .../components/v2/intake/ClinicalIntakeWizard.jsx  | 167 [32m++[m[31m------[m
+ frontend/src/hooks/useSemanticCascade.ts           |   3 [32m+[m[31m-[m
+ frontend/tests/e2e/intake-wizard.spec.ts           | 437 [32m+++++[m[31m----------------[m
+ frontend/tests/e2e/support/api-mocks.ts            |  48 [32m+[m[31m--[m
+ package.json                                       |   2 [32m+[m[31m-[m
+ playwright.config.ts                               |  33 [31m--[m
+ scripts/system-audit-full.js                       |  32 [32m++[m
+ 11 files changed, 202 insertions(+), 532 deletions(-)
