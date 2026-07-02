@@ -271,8 +271,12 @@ function runAudit() {
     };
   });
 
-  registerCheck('Backend test:ci', () => {
-    return runCommand('npm', ['--prefix', BACKEND_DIR, 'run', 'test:ci']);
+  registerCheck('Política de zero mocks', () => {
+    return runCommand('node', ['scripts/audit-zero-mocks.js']);
+  });
+
+  registerCheck('Backend real-services test:ci', () => {
+    return runCommand('npm', ['run', 'test:stack:backend']);
   });
 
   registerCheck('Frontend typecheck:core', () => {

@@ -1,142 +1,76 @@
-name: BioAvanceD CI/CD Pipeline
+name: BioAvanceD real-services validation
 
-# Dispara os testes sempre que houver um push ou pull request na branch 'main'
 on:
   push:
-    branches: [ "main" ]
+    branches: [main]
   pull_request:
-    branches: [ "main" ]
+    branches: [main]
 
 jobs:
-  testes-automatizados:
-    # Levanta uma máquina virtual Linux novinha na nuvem do GitHub
+  real-services:
     runs-on: ubuntu-latest
-    services:
-      mongodb:
-        image: mongo:7
-        ports:
-          - 27017:27017
-        options: >-
-          --health-cmd "mongosh --eval 'db.adminCommand(\"ping\")'"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-      neo4j:
-        image: neo4j:5-community
-        ports:
-          - 7474:7474
-          - 7687:7687
-        env:
-          NEO4J_AUTH: neo4j/testpassword
-        options: >-
-          --health-cmd "cypher-shell -u neo4j -p testpassword 'RETURN 1'"
-          --health-interval 10s
-          --health-timeout 10s
-          --health-retries 10
-      influxdb:
-        image: influxdb:2.7
-        ports:
-          - 8086:8086
-        env:
-          DOCKER_INFLUXDB_INIT_MODE: setup
-          DOCKER_INFLUXDB_INIT_USERNAME: bioavanced
-          DOCKER_INFLUXDB_INIT_PASSWORD: bioavanced-test-password
-          DOCKER_INFLUXDB_INIT_ORG: bioavanced-test
-          DOCKER_INFLUXDB_INIT_BUCKET: bioavanced-test-bucket
-          DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: bioavanced-test-token
-        options: >-
-          --health-cmd "influx ping --host http://localhost:8086"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 10
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
+    timeout-minutes: 45
     env:
-      NODE_ENV: test
-      MONGO_URI: mongodb://127.0.0.1:27017/bioavanced_test
-      MONGO_DB: bioavanced_test
-      MONGO_DB_NOVO: bioavanced_test
-      JWT_SECRET: vitest-secret-key
-      JWT_REFRESH_SECRET: vitest-refresh-secret-key
-      ENCRYPTION_KEY: vitest-encryption-key-32-characters
-      ENCRYPTION_KEY_ID: test-key-1
-      USER_ANON_SALT: vitest-user-anon-salt
-      NEO4J_URI: bolt://127.0.0.1:7687
-      NEO4J_USERNAME: neo4j
-      NEO4J_PASSWORD: testpassword
-      NEO4J_DATABASE: neo4j
-      NEO4J_REQUIRED: "false"
-      LINEAGE_MODE: fail-open
-      REDIS_URL: redis://127.0.0.1:6379
-      REDIS_HOST: 127.0.0.1
-      REDIS_PORT: "6379"
-      INFLUXDB_URL: http://127.0.0.1:8086
-      INFLUXDB_TOKEN: bioavanced-test-token
-      INFLUXDB_ORG: bioavanced-test
-      INFLUXDB_BUCKET: bioavanced-test-bucket
-      ALLOW_CLOUD_INTEGRATIONS: "false"
-      ALLOW_EXTERNAL_TERMINOLOGY_SYNC: "false"
-      ALLOW_EXTERNAL_HPO_LOOKUP: "false"
-      ALLOW_EXTERNAL_DRUG_LOOKUP: "false"
-      MQTT_ENABLED: "false"
-      RESEND_API_KEY: re_test_dummy_key
-      EMAIL_FROM: BioAvanceD Test <noreply@example.test>
-      ALERT_EMAIL_TO: alerts@example.test
-
+      COMPOSE_FILE: docker-compose.test.yml
     steps:
-      # 1. Copia o seu código do repositório para a máquina virtual
-      - name: 📥 Baixar o código (Checkout)
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      # 2. Instala o Node.js
-      - name: ⚙️ Configurar Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
-          node-version: '20' # Substitua pela versão do Node que você usa
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            api/backend/package-lock.json
+            frontend/package-lock.json
 
-      # 3. Testa o Backend (Isolado)
-      - name: 📦 Instalar dependências do Backend
+      - name: Prepare isolated test environment
+        run: cp .env.test.example .env.test
+
+      - name: Enforce zero-mock policy
+        run: npm run audit:zero-mocks
+
+      - name: Validate and build real-service stack
         run: |
-          cd api/backend
-          npm ci # ou yarn install / pnpm install
+          npm run test:stack:config
+          npm run test:stack:build
 
-      - name: 🧪 Rodar Testes de Backend (Vitest)
+      - name: Start stack and wait for health checks
+        run: npm run test:stack:up
+
+      - name: Reset databases and load deterministic seeds
         run: |
-          cd api/backend
-          npx vitest run
+          npm run test:stack:reset
+          npm run test:stack:seed
 
-      # 4. Testa o Frontend (Isolado)
-      - name: 📦 Instalar dependências do Frontend
-        run: |
-          cd frontend
-          npm ci # ou yarn install / pnpm install
+      - name: Run backend integration suite
+        run: npm run test:stack:backend
 
-      - name: 🌐 Instalar Navegadores do Playwright
-        run: |
-          cd frontend
-          npx playwright install --with-deps
+      - name: Run Playwright against real services
+        run: npm run test:stack:e2e
 
-      - name: 🎭 Rodar Testes E2E (Playwright)
-        env:
-          PLAYWRIGHT_SKIP_GLOBAL_SETUP: "1"
-          PLAYWRIGHT_SKIP_WEBSERVER: "1"
-        run: |
-          cp .env.docker.example .env.docker
-          docker compose --env-file .env.docker -f docker-compose.yml up -d --build --wait
-          npm --prefix frontend run test:e2e
+      - name: Run full system audit
+        run: npm run audit:full
 
-      # 5. Salva o relatório do Playwright caso o teste falhe
-      - name: 📊 Salvar Relatório de Erros do Playwright
-        if: always()
+      - name: Collect failure evidence
+        if: failure()
+        run: docker compose --env-file .env.test -f docker-compose.test.yml logs --no-color > test-stack.log
+
+      - name: Upload failure evidence
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-report
-          path: frontend/playwright-report/
+          name: real-services-failure-evidence
+          path: |
+            test-stack.log
+            frontend/playwright-report/
+            frontend/test-results/
+          if-no-files-found: ignore
           retention-days: 7
+
+      - name: Remove synthetic data
+        if: always()
+        run: npm run test:stack:cleanup
+
+      - name: Remove containers and isolated volumes
+        if: always()
+        run: npm run test:stack:down
