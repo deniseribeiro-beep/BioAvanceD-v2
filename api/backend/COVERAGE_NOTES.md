@@ -73,7 +73,6 @@ src/database/mongo.js                                               5.19%
 src/controllers/sample-file.controller.js                          5.39%
 src/controllers/import.controller.js                               6.77%
 src/services/import-async.service.js                               6.87%
-src/controllers/auth.controller.js                                 6.94%
 src/models/IntelligentAssistant.js                                 7.14%
 src/controllers/import-async.controller.js                         7.43%
 src/services/assistant.service.js                                  7.54%
