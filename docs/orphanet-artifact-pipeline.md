@@ -1,33 +1,33 @@
 # Orphanet Initial Seed Pipeline
 
-## Decisao
+## Objective
 
-A populacao inicial ORPHA do BioAvanceD usa a estrategia `pack-first + api-enrichment`.
+The initial ORPHA load follows a `pack-first + api-enrichment` strategy. Official local source files are normalized into a versioned artifact, validated before import, imported through idempotent upserts, and validated again against MongoDB.
 
-- `pack-first`: gera o seed inicial completo a partir dos arquivos oficiais locais do Orphanet Nomenclature Pack e do XLSX complementar ORPHA-SNOMEDCT.
-- `api-enrichment`: mantem a ORPHAcodes API apenas para validacao pontual, redundancia, enriquecimento incremental, atualizacao diferencial e OMIM.
+The workflow is executed through Docker Compose and does not depend on host-specific paths, users, schedulers, or runtime workarounds.
 
-Nao usamos a ORPHAcodes API endpoint-a-endpoint para full load inicial porque isso cria coleta longa, dependente de rede, dificil de encaixar em janelas curtas de MongoDB no CENAPAD. O CENAPAD deve receber um artefato pronto, validado e resumivel por upsert.
+## Versioned sources
 
-## Fontes da carga inicial
+The repository stores the source files in `orpha-data-raw/`:
 
-- Orphanet Nomenclature Pack PT July 2025: `Orphanet_Nomenclature_Pack_PT.zip`
-- Orphanet Nomenclature Pack EN July 2025: `Orphanet_Nomenclature_Pack_EN.zip`
-- ORPHA-SNOMEDCT Mapping File July 2025: `ORPHA-SNOMEDCT_Mapping_File_production.xlsx`
+- `Orphanet_Nomenclature_Pack_PT.zip`
+- `Orphanet_Nomenclature_Pack_EN.zip`
+- `Orphanet_Nomenclature_Pack_ES.zip`
+- `ORPHA-SNOMEDCT_Mapping_File_production.xlsx`
 
-O seed inicial final deve conter ORPHA canonico, CID-10 / ICD-10, CID-11 / ICD-11, SNOMED-CT e OMIM. OMIM nao esta confirmado nos packs PT/EN nem no XLSX SNOMED, entao entra por enriquecimento controlado da ORPHAcodes API ou por arquivo local `*OMIM*` se houver.
+The current remote builder must still be extended to consume the ES pack before the scientific baseline is frozen. The existence of the ES archive alone does not prove that it is represented in the normalized artifact.
 
-## Contrato semantico
+## Semantic separation
 
-- ORPHA representa doencas raras: `system: "ORPHA"`, `code: "ORPHA:<codigo>"`, `canonicalCode: "<codigo>"`, `domain: "rare_disease"`.
-- CID-10 / ICD-10 e CID-11 / ICD-11 vem do Orphanet Nomenclature Pack PT/EN July 2025 e sao mapeamentos externos em `terminology_mappings`.
-- SNOMED-CT vem do XLSX complementar e usa `targetSystem: "SNOMED_CT"`.
-- OMIM vem de `api-enrichment` controlado da ORPHAcodes API e usa `targetSystem: "OMIM"`.
-- HPO nao faz parte desta carga ORPHA e deve permanecer em `hpo_terms`.
-- Biomarcadores nao fazem parte desta carga ORPHA e devem permanecer em suas colecoes proprias.
-- `terminologies` e multi-sistema. Para esta carga, sempre filtre `system="ORPHA"`; nao compare a contagem total da colecao com a contagem ORPHA.
+- ORPHA represents rare diseases.
+- ICD-10 and ICD-11 are external mappings.
+- SNOMED CT comes from the complementary mapping file.
+- OMIM is a controlled enrichment source.
+- HPO terms belong to a separate phenotype pipeline.
+- Biomarkers belong to a separate biomarker pipeline.
+- Counts in `terminologies` must be filtered by semantic system.
 
-## Layout do artefato
+## Artifact layout
 
 ```text
 artifacts/orphanet-2025-07-initial-seed/
@@ -45,175 +45,85 @@ artifacts/orphanet-2025-07-initial-seed/
     validation_report.json
 ```
 
-## Gerar no Windows
-
-Auto-deteccao a partir de `orpha-data-raw/`:
-
-```powershell
-node api/backend/scripts/orphanet-build-initial-seed-from-raw.js `
-  --input ./orpha-data-raw `
-  --release 2025-07 `
-  --out ./artifacts/orphanet-2025-07-initial-seed
-```
-
-Com paths explicitos:
-
-```powershell
-node api/backend/scripts/orphanet-build-initial-seed-from-raw.js `
-  --pt ./orpha-data-raw/Orphanet_Nomenclature_Pack_PT.zip `
-  --en ./orpha-data-raw/Orphanet_Nomenclature_Pack_EN.zip `
-  --snomed ./orpha-data-raw/ORPHA-SNOMEDCT_Mapping_File_production.xlsx `
-  --release 2025-07 `
-  --out ./artifacts/orphanet-2025-07-initial-seed
-```
-
-## Validar no Windows
-
-```powershell
-node api/backend/scripts/orphanet-validate-initial-seed.js `
-  --artifact ./artifacts/orphanet-2025-07-initial-seed
-```
-
-## Enriquecer OMIM
-
-Se existir um arquivo local OMIM em `orpha-data-raw/`, o enriquecedor prefere o arquivo local antes da API. Nomes aceitos:
-
-- `*OMIM*.xlsx`
-- `*OMIM*.csv`
-- `*OMIM*.tsv`
-- `*OMIM*.json`
-- `*OMIM*.jsonl`
-
-Sem arquivo local, ele consulta somente o endpoint OMIM da ORPHAcodes API:
+## Docker Compose mounts
 
 ```text
-/EN/ClinicalEntity/orphacode/<codigo>/OMIM
+orpha-data-raw/  -> /workspace/orpha-data-raw (read-only)
+artifacts/       -> /workspace/artifacts
 ```
 
-Nao consulta Name, Synonym, ICD10, ICD11, SNOMED, Classification ou outros endpoints, e nao faz full load endpoint-a-endpoint.
-
-```powershell
-$env:ORPHACODE_API_KEY="denise-ribeiro-bioavanced"
-
-node api/backend/scripts/orphanet-enrich-initial-seed-omim.js `
-  --artifact ./artifacts/orphanet-2025-07-initial-seed `
-  --release 2025-07 `
-  --lang EN `
-  --concurrency 3 `
-  --delayMs 150 `
-  --checkpoint
-```
-
-Depois do enriquecimento, valide o seed:
-
-```powershell
-node api/backend/scripts/orphanet-validate-initial-seed.js `
-  --artifact ./artifacts/orphanet-2025-07-initial-seed
-```
-
-O validador confere presenca das fontes, SHA256, contagens PT/EN/uniao, duplicados, JSONL, campos obrigatorios, mapeamentos ICD-10/ICD-11/SNOMED_CT/OMIM e ausencia de HPO/biomarcadores tratados como ORPHA.
-
-## Compactar artefato
-
-```powershell
-Compress-Archive `
-  -Path ".\artifacts\orphanet-2025-07-initial-seed\*" `
-  -DestinationPath ".\artifacts\orphanet-2025-07-initial-seed.zip" `
-  -Force
-```
-
-## API complementar
-
-A API complementar atualmente disponivel nesta pipeline e o enriquecimento OMIM controlado descrito acima, via `orphanet-enrich-initial-seed-omim.js`. Um script futuro de enriquecimento incremental para outros endpoints pode ser criado separadamente se necessario, mas nao faz parte do fluxo versionado atual.
-
-## Enviar para CENAPAD
-
-Envie o ZIP ou o diretorio do artefato validado para a area de cache do projeto. Exemplo:
-
-```powershell
-scp .\artifacts\orphanet-2025-07-initial-seed.zip usuario@cenapad:/home/lovelace/proj/proj1091/deniser/bioavanced-validation/cache/
-```
-
-No CENAPAD, descompacte para:
+## Build
 
 ```bash
-/home/lovelace/proj/proj1091/deniser/bioavanced-validation/cache/orphanet-2025-07-initial-seed
-```
-
-## Importar no CENAPAD
-
-O importador faz upsert idempotente, nao apaga colecoes inteiras por padrao, respeita `--maxSeconds` e pode ser retomado por checkpoint de arquivo/lote. Use `--checkpoint` nas janelas curtas do CENAPAD; por padrao o checkpoint fica em:
-
-```text
-<artifact>/validation/import_checkpoint.json
-```
-
-O checkpoint registra quantas linhas de cada JSONL ja tiveram `bulkWrite` concluido com sucesso. Em uma queda durante um lote, a proxima execucao pode reprocessar no maximo o ultimo lote incompleto; isso e seguro porque os writes sao upserts idempotentes.
-
-```bash
-MAX_SECONDS=240 ./with-mongo-window.sh node api/backend/scripts/orphanet-import-initial-seed.js \
-  --artifact /home/lovelace/proj/proj1091/deniser/bioavanced-validation/cache/orphanet-2025-07-initial-seed \
-  --batch 500 \
-  --maxSeconds 220 \
-  --checkpoint
-```
-
-Se a janela estiver perto de expirar, o importador termina o lote atual, salva checkpoint, fecha a conexao Mongo e sai com exit code `2`. Isso significa parada segura por tempo: basta repetir o mesmo comando para continuar do checkpoint.
-
-Para usar um checkpoint fora do artefato:
-
-```bash
-MAX_SECONDS=240 ./with-mongo-window.sh node api/backend/scripts/orphanet-import-initial-seed.js \
-  --artifact /home/lovelace/proj/proj1091/deniser/bioavanced-validation/cache/orphanet-2025-07-initial-seed \
-  --batch 500 \
-  --maxSeconds 220 \
-  --checkpointFile /home/lovelace/proj/proj1091/deniser/bioavanced-validation/cache/orphanet-import-checkpoint.json
-```
-
-Para resetar somente o checkpoint de importacao, sem tocar no Mongo:
-
-```bash
-node api/backend/scripts/orphanet-import-initial-seed.js \
-  --artifact /home/lovelace/proj/proj1091/deniser/bioavanced-validation/cache/orphanet-2025-07-initial-seed \
-  --checkpoint \
-  --resetImportCheckpoint
-```
-
-`--replaceRelease` nao e o fluxo padrao para janelas curtas. Se for realmente necessario substituir uma release ORPHA ja importada, use explicitamente `--replaceRelease --confirmReplaceRelease`. Esse modo remove apenas documentos ORPHA daquela release nas colecoes da carga, reseta o checkpoint de importacao e entao reimporta por upsert:
-
-```bash
-MAX_SECONDS=240 ./with-mongo-window.sh node api/backend/scripts/orphanet-import-initial-seed.js \
-  --artifact /home/lovelace/proj/proj1091/deniser/bioavanced-validation/cache/orphanet-2025-07-initial-seed \
-  --batch 500 \
-  --maxSeconds 220 \
-  --checkpoint \
-  --replaceRelease \
-  --confirmReplaceRelease
-```
-
-## Validar pos-importacao no CENAPAD
-
-```bash
-MAX_SECONDS=180 ./with-mongo-window.sh node api/backend/scripts/orphanet-validate-imported-seed.js \
+docker compose --env-file .env.docker -f docker-compose.yml run --rm --no-deps backend \
+  npm run orphanet:build-initial-seed -- \
+  --input /workspace/orpha-data-raw \
   --release 2025-07 \
-  --artifact /home/lovelace/proj/proj1091/deniser/bioavanced-validation/cache/orphanet-2025-07-initial-seed
+  --out /workspace/artifacts/orphanet-2025-07-initial-seed
 ```
 
-Essa validacao compara contagens ORPHA em `orphanet_diseases`, `cids`, `terminologies`, `terminology_mappings`, faz uma amostra de busca por ORPHA e checa ausencia de HPO/biomarcador tratado como ORPHA.
-
-## Scripts npm
-
-Dentro de `api/backend`:
-
-```powershell
-npm run orphanet:build-initial-seed -- --input ../../orpha-data-raw --release 2025-07 --out ../../artifacts/orphanet-2025-07-initial-seed
-npm run orphanet:enrich-omim -- --artifact ../../artifacts/orphanet-2025-07-initial-seed --release 2025-07 --lang EN --concurrency 3 --delayMs 150 --checkpoint
-npm run orphanet:validate-initial-seed -- --artifact ../../artifacts/orphanet-2025-07-initial-seed
-```
-
-No CENAPAD:
+## Validate the artifact
 
 ```bash
-npm run orphanet:import-initial-seed -- --artifact /home/lovelace/proj/proj1091/deniser/bioavanced-validation/cache/orphanet-2025-07-initial-seed --batch 500 --maxSeconds 220 --checkpoint
-npm run orphanet:validate-imported-seed -- --release 2025-07 --artifact /home/lovelace/proj/proj1091/deniser/bioavanced-validation/cache/orphanet-2025-07-initial-seed
+docker compose --env-file .env.docker -f docker-compose.yml run --rm --no-deps backend \
+  npm run orphanet:validate-initial-seed -- \
+  --artifact /workspace/artifacts/orphanet-2025-07-initial-seed
 ```
+
+The validation contract must cover source attribution, SHA-256 checksums, source and normalized counts, duplicate detection, required fields, terminology mappings, and semantic separation from HPO and biomarkers.
+
+## Controlled OMIM enrichment
+
+Provide the API key only through the runtime environment.
+
+```bash
+docker compose --env-file .env.docker -f docker-compose.yml run --rm --no-deps backend \
+  npm run orphanet:enrich-omim -- \
+  --artifact /workspace/artifacts/orphanet-2025-07-initial-seed \
+  --release 2025-07 \
+  --lang EN \
+  --concurrency 3 \
+  --delayMs 150 \
+  --checkpoint
+```
+
+Run artifact validation again after enrichment.
+
+## Import
+
+Start the Compose stack and import through the backend service:
+
+```bash
+npm run compose:up
+
+docker compose --env-file .env.docker -f docker-compose.yml exec backend \
+  npm run orphanet:import-initial-seed -- \
+  --artifact /workspace/artifacts/orphanet-2025-07-initial-seed \
+  --batch 500 \
+  --checkpoint
+```
+
+The importer uses idempotent upserts and records progress in the artifact validation directory.
+
+## Validate the imported release
+
+```bash
+docker compose --env-file .env.docker -f docker-compose.yml exec backend \
+  npm run orphanet:validate-imported-seed -- \
+  --release 2025-07 \
+  --artifact /workspace/artifacts/orphanet-2025-07-initial-seed
+```
+
+The post-import validator compares artifact counts with ORPHA records in `orphanet_diseases`, `cids`, `terminologies`, and `terminology_mappings`.
+
+## Reproducibility evidence
+
+Each scientific execution should retain:
+
+- source release and checksums;
+- code commit;
+- container image and dependency versions;
+- source and normalized counts;
+- normalized output checksums;
+- pre-import validation report;
+- post-import validation report.
