@@ -113,5 +113,3 @@ frontend/playwright/.auth/
 *.p12
 *.pfx
 
-# local-only Claude Code skill, not part of the shared repo
-.claude/skills/e2e-docker-workflow/
