@@ -3,9 +3,6 @@ set -Eeuo pipefail
 
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yml}"
 ENV_FILE="${ENV_FILE:-.env.docker}"
-BACKEND_URL="${BACKEND_URL:-http://127.0.0.1:${BACKEND_PORT:-3000}}"
-FRONTEND_URL="${FRONTEND_URL:-http://127.0.0.1:${FRONTEND_PORT:-5173}}"
-
 failures=0
 
 compose() {
@@ -54,6 +51,14 @@ fi
 if [ "$failures" -gt 0 ]; then
   exit 1
 fi
+
+set -a
+# shellcheck disable=SC1090
+. "$ENV_FILE"
+set +a
+
+BACKEND_URL="${BACKEND_URL:-http://127.0.0.1:${BACKEND_PORT:-3000}}"
+FRONTEND_URL="${FRONTEND_URL:-http://127.0.0.1:${FRONTEND_PORT:-5173}}"
 
 printf '\n== Docker Compose ==\n'
 if compose config --quiet; then
