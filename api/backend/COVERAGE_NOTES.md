@@ -68,7 +68,6 @@ src/infrastructure/persistence/mongo/MongoStorageRepository.js      2.23%
 src/infrastructure/persistence/mongo/MongoStorageTopologyReadRepository.js  2.98%
 src/services/storageService.js                                     2.99%
 src/models/SampleFile.js                                           3.44%
-src/core/use-cases/MoveSampleUseCase.js                             3.89%
 src/models/ImportMetrics.js                                        4.54%
 src/controllers/import-lgpd.controller.js                          5.03%
 src/database/mongo.js                                               5.19%
@@ -84,7 +83,6 @@ src/services/consentNeo4jSync.service.js                           9.25%
 src/services/analysisValidation.service.js                         9.3%
 src/config/redis.js                                                 9.43%
 src/infrastructure/database/neo4j/LineageRepository.js              9.52%
-src/services/hl7Audit.service.js                                   10.2%
 src/models/ExtractionProtocol.js                                   11.11%
 src/models/QualityDescription.js                                   11.11%
 src/models/SampleOrigin.js                                         11.11%
@@ -93,7 +91,6 @@ src/infrastructure/database/neo4j/connection.js                    11.53%
 src/services/biomarker-integrity.service.js                        12.12%
 src/services/mqtt-ingestion-audit.service.js                       14.28%
 src/services/import-lgpd.service.js                                14.5%
-src/core/use-cases/ReleaseSampleUseCase.js                         14.58%
 src/controllers/import-batch.controller.js                         15.25%
 src/routes/importFhirIntelligent.js                                15.58%
 src/infrastructure/database/influxdb/connection.js                 16.12%
