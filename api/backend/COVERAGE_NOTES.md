@@ -89,7 +89,6 @@ src/models/SampleOrigin.js                                         11.11%
 src/models/SampleType.js                                           11.11%
 src/infrastructure/database/neo4j/connection.js                    11.53%
 src/services/biomarker-integrity.service.js                        12.12%
-src/core/use-cases/GetBoxAvailablePositionsUseCase.js               12.5%
 src/services/sendIncidentAlertEmail.js                             12.9%
 src/services/mqtt-ingestion-audit.service.js                       14.28%
 src/services/import-lgpd.service.js                                14.5%
