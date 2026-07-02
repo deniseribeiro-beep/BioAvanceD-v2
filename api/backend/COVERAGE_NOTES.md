@@ -33,10 +33,8 @@ Baseline: Statements 37.46%, Branches 34.82%, Functions 40.93%, Lines
 ## ZERO coverage (0% lines) — 26 files
 
 Real logic, worth prioritizing:
-- `src/infrastructure/queue/Neo4jQuarantineService.js`
 - `src/workers/import-worker.js`
 - `src/workers/worker.js`
-- `src/workers/jobs/daily-merkle.job.js`
 
 Low priority (models/interfaces/one-off scripts — thin or non-request-path):
 - `src/core/application/ports/IAuditRepository.js`
@@ -82,7 +80,6 @@ src/controllers/import.controller.js                               6.77%
 src/services/import-async.service.js                               6.87%
 src/controllers/auth.controller.js                                 6.94%
 src/models/IntelligentAssistant.js                                 7.14%
-src/utils/barcodeGenerator.js                                      7.14%
 src/controllers/import-async.controller.js                         7.43%
 src/services/assistant.service.js                                  7.54%
 src/infrastructure/persistence/mongo/MongoPatientConsentReadRepository.js  8.33%
