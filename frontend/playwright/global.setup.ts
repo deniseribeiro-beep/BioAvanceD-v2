@@ -6,12 +6,6 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-function createMockJwt(payload: Record<string, unknown>) {
-  const header = Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString('base64url');
-  const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
-  return `${header}.${body}.signature`;
-}
-
 async function globalSetup(config: FullConfig) {
   const projectUse = config.projects[0]?.use ?? {};
   const baseURL = String(projectUse.baseURL ?? 'http://localhost:5173');
@@ -19,55 +13,20 @@ async function globalSetup(config: FullConfig) {
 
   fs.mkdirSync(path.dirname(authFile), { recursive: true });
 
-  if (process.env.PLAYWRIGHT_SKIP_GLOBAL_SETUP === '1') {
-    fs.writeFileSync(authFile, JSON.stringify({ cookies: [], origins: [] }, null, 2));
-    return;
-  }
-
-  if (process.env.PLAYWRIGHT_USE_REAL_LOGIN !== '1') {
-    const token = createMockJwt({
-      id: '507f1f77bcf86cd799439011',
-      userID: '507f1f77bcf86cd799439011',
-      accessType: 4,
-      roleName: 'Administrador',
-      name: 'QA Admin',
-      username: 'admin',
-      email: 'admin@bioavanced.com.br',
-    });
-
-    fs.writeFileSync(
-      authFile,
-      JSON.stringify(
-        {
-          cookies: [],
-          origins: [
-            {
-              origin: baseURL,
-              localStorage: [{ name: 'token', value: token }],
-            },
-          ],
-        },
-        null,
-        2
-      )
-    );
-    return;
-  }
-
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
 
-  const testUser = process.env.TEST_USER || 'admin';
-  const testPass = process.env.TEST_PASS || 'Admin@123';
+  const testUser = process.env.TEST_USER;
+  const testPass = process.env.TEST_PASS;
+  if (!testUser || !testPass) {
+    await browser.close();
+    throw new Error('TEST_USER and TEST_PASS are required for real Playwright authentication');
+  }
 
   await page.goto(`${baseURL}/login`, { waitUntil: 'networkidle' });
 
-  const usernameInput = page
-    .locator('input[name="username"], input[name="email"], input[type="email"], input[aria-label*="Username" i], input[aria-label*="Email" i]')
-    .first();
-  const passwordInput = page
-    .locator('input[type="password"], input[name="password"], input[aria-label*="Password" i], input[aria-label*="Senha" i]')
-    .first();
+  const usernameInput = page.getByTestId('login-username-input');
+  const passwordInput = page.getByTestId('login-password-input');
   const loginButton = page.getByRole('button', { name: /entrar|login|sign in/i }).first();
 
   await usernameInput.fill(testUser);

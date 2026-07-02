@@ -1,7 +1,7 @@
 const { Resend } = require('resend');
+const nodemailer = require('nodemailer');
 const logger = require('../utils/logger');
 
-const resend = new Resend(process.env.RESEND_API_KEY);
 const from = process.env.EMAIL_FROM || 'onboarding@resend.dev';
 
 function escapeHtml(value) {
@@ -14,9 +14,9 @@ function escapeHtml(value) {
 }
 
 async function sendIncidentAlertEmail(incident, recipients, escalationLevel = 0) {
-  if (!process.env.RESEND_API_KEY) {
-    logger.warn('RESEND_API_KEY não configurada - alerta de incidente não enviado por email');
-    return { success: false, reason: 'RESEND_API_KEY not configured' };
+  if (!process.env.SMTP_HOST && !process.env.RESEND_API_KEY) {
+    logger.warn('SMTP_HOST e RESEND_API_KEY não configurados - alerta de incidente não enviado por email');
+    return { success: false, reason: 'Email transport not configured' };
   }
 
   if (!recipients || recipients.length === 0) {
@@ -85,11 +85,22 @@ async function sendIncidentAlertEmail(incident, recipients, escalationLevel = 0)
     </div>
   `;
 
+  const smtpTransport = process.env.SMTP_HOST
+    ? nodemailer.createTransport({
+        host: process.env.SMTP_HOST,
+        port: Number(process.env.SMTP_PORT || 25),
+        secure: false,
+      })
+    : null;
+  const sendEmail = smtpTransport
+    ? (message) => smtpTransport.sendMail(message)
+    : (message) => new Resend(process.env.RESEND_API_KEY).emails.send(message);
+
   const results = await Promise.allSettled(
     recipients.map(email => {
       const safeEmail = String(email || '').trim();
       if (!safeEmail) return Promise.reject(new Error('Invalid email'));
-      return resend.emails.send({
+      return sendEmail({
         from,
         to: safeEmail,
         subject,

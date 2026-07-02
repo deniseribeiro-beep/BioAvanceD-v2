@@ -30,6 +30,7 @@ export default defineConfig(async () => {
     ],
     server: {
       host: '0.0.0.0',
+      allowedHosts: ['frontend-test'],
       port: 5173,
       strictPort: true,
       hmr: {

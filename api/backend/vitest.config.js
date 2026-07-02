@@ -11,7 +11,9 @@ module.exports = defineConfig({
     environment: 'node',
     globals: true,
     reporters: ['default'],
-    setupFiles: ['./tests/vitest.setup.js'],
+    env: {
+      NODE_ENV: 'test',
+    },
     fileParallelism: false,
     isolate: true,
     pool: 'forks',

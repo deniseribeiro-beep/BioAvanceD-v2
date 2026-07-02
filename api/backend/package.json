@@ -42,10 +42,14 @@
     "clean": "node ../scripts/cleanup-complete.js",
     "test:redis": "node scripts/test-redis-connection.js",
     "test": "vitest run",
+    "test:integration": "vitest run tests/integration",
+    "test:env:reset": "node src/scripts/testEnvironment.js reset",
+    "test:env:seed": "node src/scripts/testEnvironment.js seed",
+    "test:env:cleanup": "node src/scripts/testEnvironment.js cleanup",
     "test:security": "node tests/unit/security.test.js",
     "test:consent": "node tests/unit/authConsent.test.js",
     "test:unit": "node tests/unit/run-tests.js && node tests/unit/authConsent.test.js",
-    "test:ci": "vitest run && node tests/unit/security.test.js && node tests/unit/authConsent.test.js && node tests/compliance/generate-compliance-evidence.js"
+    "test:ci": "npm run test:integration && node tests/unit/security.test.js && node tests/unit/authConsent.test.js && node tests/compliance/generate-compliance-evidence.js"
   },
   "dependencies": {
     "@influxdata/influxdb-client": "latest",
@@ -75,6 +79,7 @@
     "multer": "latest",
     "neo4j-driver": "latest",
     "node-cron": "latest",
+    "nodemailer": "^7.0.11",
     "qrcode": "latest",
     "redis": "latest",
     "resend": "latest",

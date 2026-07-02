@@ -17,18 +17,18 @@ export default defineConfig({
   },
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
-  retries: process.env.CI ? 2 : 0,
+  retries: 0,
   workers: process.env.CI ? 1 : undefined,
   reporter: [['list'], ['html', { outputFolder: 'playwright-report' }]],
-  webServer: process.env.PLAYWRIGHT_SKIP_WEBSERVER ? undefined : {
+  webServer: process.env.CI || process.env.PLAYWRIGHT_EXTERNAL_STACK === '1' ? undefined : {
     command: 'npm run dev',
     url: 'http://localhost:5173',
     reuseExistingServer: !process.env.CI,
     timeout: 120 * 1000,
   },
   use: {
-    baseURL: 'http://localhost:5173',
-    trace: 'on-first-retry',
+    baseURL: process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:5173',
+    trace: 'retain-on-failure',
     storageState: 'playwright/.auth/user.json',
   },
   projects: [

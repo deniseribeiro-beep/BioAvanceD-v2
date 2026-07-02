@@ -1,6 +1,6 @@
 const { Resend } = require('resend');
+const nodemailer = require('nodemailer');
 
-const resend = new Resend(process.env.RESEND_API_KEY);
 const from = process.env.EMAIL_FROM || 'onboarding@resend.dev';
 
 function escapeHtml(value) {
@@ -13,10 +13,6 @@ function escapeHtml(value) {
 }
 
 async function sendCriticalAlertEmail(sensorId, currentTemp, limitTemp, recipientEmail) {
-  if (!process.env.RESEND_API_KEY) {
-    throw new Error('RESEND_API_KEY não configurada');
-  }
-
   const safeSensorId = escapeHtml(sensorId);
   const safeCurrentTemp = escapeHtml(currentTemp);
   const safeLimitTemp = escapeHtml(limitTemp);
@@ -56,12 +52,27 @@ async function sendCriticalAlertEmail(sensorId, currentTemp, limitTemp, recipien
     </div>
   `;
 
-  return resend.emails.send({
+  const message = {
     from,
     to: safeRecipientEmail,
     subject,
     html
-  });
+  };
+
+  if (process.env.SMTP_HOST) {
+    const transporter = nodemailer.createTransport({
+      host: process.env.SMTP_HOST,
+      port: Number(process.env.SMTP_PORT || 25),
+      secure: false,
+    });
+    return transporter.sendMail(message);
+  }
+
+  if (!process.env.RESEND_API_KEY) {
+    throw new Error('SMTP_HOST ou RESEND_API_KEY deve ser configurado');
+  }
+
+  return new Resend(process.env.RESEND_API_KEY).emails.send(message);
 }
 
 module.exports = {
