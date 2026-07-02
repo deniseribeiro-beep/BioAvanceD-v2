@@ -106,6 +106,29 @@ services:
       retries: 20
       start_period: 30s
 
+  worker:
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    restart: unless-stopped
+    init: true
+    command: npm run worker
+    volumes:
+      - ./api/backend:/app
+      - backend_node_modules:/app/node_modules
+      - ./artifacts:/workspace/artifacts
+    env_file:
+      - .env.docker
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+      influxdb:
+        condition: service_healthy
+
   frontend:
     build:
       context: ./frontend
