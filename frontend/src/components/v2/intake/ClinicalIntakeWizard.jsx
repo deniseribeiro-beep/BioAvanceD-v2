@@ -29,21 +29,6 @@ import { buildSampleMerkleRoot } from '../../../utils/sampleMerkleIntegrity';
 import './ClinicalIntakeWizard.css';
 
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const CANONICAL_PREVIEW_UNAVAILABLE = Object.freeze({
-  model_version: 'RCS-GOV-1.0',
-  matrix_type: '',
-  governance_status: null,
-  governance_failure_reasons: [],
-  p_bio: null,
-  rcs_score: null,
-  score_based_grade: null,
-  final_grade: '',
-  grade_route: '',
-  axis_penalties: [],
-  calculation_trace: {},
-  previewUnavailable: true,
-});
-
 function normalizeDocumentValue(value) {
   return String(value || '').trim();
 }
@@ -86,8 +71,8 @@ function isValidCpfDocument(value) {
 }
 
 function isValidPassportDocument(value) {
-  const normalized = normalizeDocumentValue(value);
-  return /^\d{5,20}$/.test(normalized);
+  const normalized = normalizeDocumentValue(value).toUpperCase();
+  return /^(?=.*[A-Z])[A-Z0-9][A-Z0-9\-_.\/]{4,19}$/.test(normalized);
 }
 
 function isValidProntuarioDocument(value) {
@@ -285,20 +270,6 @@ const STEP_META_BASE = [
   },
 ];
 
-const FABRY_MOCK_PHENOTYPES = [
-  { hpoId: 'HP:0001066', label: 'Angioqueratoma' },
-  { hpoId: 'HP:0012471', label: 'Acroparestesia' },
-  { hpoId: 'HP:0001131', label: 'Cornea verticilata' },
-  { hpoId: 'HP:0000093', label: 'Proteinuria' },
-];
-
-const FABRY_MOCK_BIOMARKERS = [
-  { code: 'ALPHA_GALACTOSIDASE_A', label: 'Atividade de Alfa-galactosidase A', unit: 'µmol/hr/L', value: '' },
-  { code: 'LYSO_GB3', label: 'Lyso-Gb3', unit: 'ng/mL', value: '' },
-];
-
-// CORREÇÃO: Removidas as declarações de função daqui. 
-// initialState deve ser apenas um objeto com os valores iniciais.
 const initialState = {
   patientName: '',
   birthDate: '',
@@ -648,42 +619,6 @@ function getDiseaseBiomarkerKey(item) {
   return String(item?.code || item?.label || '').trim();
 }
 
-function mergeDiseasePhenotypesWithFabry(phenotypes = []) {
-  const normalized = (Array.isArray(phenotypes) ? phenotypes : []).map(normalizeDiseasePhenotype);
-  const map = new Map();
-  normalized.forEach((item) => {
-    const key = String(item.hpoId || item.label || '').trim();
-    if (key) {
-      map.set(key, item);
-    }
-  });
-  FABRY_MOCK_PHENOTYPES.forEach((item) => {
-    const key = String(item.hpoId || item.label || '').trim();
-    if (key) {
-      map.set(key, item);
-    }
-  });
-  return Array.from(map.values());
-}
-
-function mergeDiseaseBiomarkersWithFabry(biomarkers = []) {
-  const normalized = (Array.isArray(biomarkers) ? biomarkers : []).map(normalizeDiseaseBiomarker);
-  const map = new Map();
-  normalized.forEach((item) => {
-    const key = getDiseaseBiomarkerKey(item);
-    if (key) {
-      map.set(key, item);
-    }
-  });
-  FABRY_MOCK_BIOMARKERS.forEach((item) => {
-    const key = getDiseaseBiomarkerKey(item);
-    if (key) {
-      map.set(key, item);
-    }
-  });
-  return Array.from(map.values());
-}
-
 function buildBiomarkerValuesMap(biomarkers = [], currentValues = {}) {
   const nextValues = { ...(currentValues && typeof currentValues === 'object' ? currentValues : {}) };
   (Array.isArray(biomarkers) ? biomarkers : []).forEach((item) => {
@@ -888,11 +823,11 @@ function formatBloodPressureInput(value) {
   return `${digits.slice(0, 3)}/${digits.slice(3)}`;
 }
 
-function normalizeRcsPreview(rawPreview, matrixType = '') {
-  const source = rawPreview && typeof rawPreview === 'object' ? rawPreview : {};
+function normalizeQualityAssessment(rawAssessment) {
+  const source = rawAssessment && typeof rawAssessment === 'object' ? rawAssessment : {};
   return {
     model_version: source.model_version || source.modelVersion || 'RCS-GOV-1.0',
-    matrix_type: source.matrix_type || source.matrixType || matrixType || '',
+    matrix_type: source.matrix_type || source.matrixType || '',
     governance_status: source.governance_status ?? source.governanceStatus ?? null,
     governance_failure_reasons: Array.isArray(source.governance_failure_reasons)
       ? source.governance_failure_reasons
@@ -908,7 +843,6 @@ function normalizeRcsPreview(rawPreview, matrixType = '') {
     calculation_trace: source.calculation_trace && typeof source.calculation_trace === 'object'
       ? source.calculation_trace
       : (source.calculationTrace && typeof source.calculationTrace === 'object' ? source.calculationTrace : {}),
-    previewUnavailable: Boolean(source.previewUnavailable),
   };
 }
 
@@ -932,11 +866,7 @@ function getGovernanceFailureText(qualityAssessment) {
   return reasons.map((reason) => String(reason || '').trim()).filter(Boolean).join('; ');
 }
 
-function buildRcsPreviewLabel(qualityAssessment, t) {
-  if (qualityAssessment.previewUnavailable) {
-    return t('wizard.status.canonicalPreviewUnavailable', 'Preview canônico indisponível');
-  }
-
+function buildRcsResultLabel(qualityAssessment) {
   const grade = String(qualityAssessment.final_grade || '').trim() || '-';
   const score = formatRcsScore(qualityAssessment.rcs_score);
   return `Grade ${grade} • RCS ${score}`;
@@ -959,7 +889,7 @@ function getQualityTheme(finalGrade, t) {
       cardClass: 'governance-card',
       textClass: 'governance-score',
       progressClass: 'governance-progress',
-      label: t('wizard.status.waitingCanonicalPreview', 'Aguardando preview canônico'),
+      label: t('wizard.status.waitingPersistedAssessment', 'Avaliação disponível após persistência'),
     };
   }
 
@@ -1155,11 +1085,16 @@ function formatCpfInput(value) {
 }
 
 function formatDocumentInput(value) {
-  return digitsOnly(value).slice(0, 20);
+  const normalized = String(value || '').trim().toUpperCase();
+  if (/[A-Z]/.test(normalized)) {
+    return normalized.replace(/[^A-Z0-9\-_.\/]/g, '').slice(0, 20);
+  }
+  return formatCpfInput(normalized);
 }
 
 function normalizeDocumentForPayload(value) {
-  return digitsOnly(value);
+  const normalized = normalizeDocumentValue(value).toUpperCase();
+  return /[A-Z]/.test(normalized) ? normalized : digitsOnly(normalized);
 }
 
 function normalizeEmailInput(value) {
@@ -1290,11 +1225,10 @@ function buildSampleIntegrityInput(formData) {
   };
 }
 
-function buildSampleLabelCode({ date = new Date(), patientID = '', sampleType = '' }) {
+function buildSampleLabelCode({ date = new Date(), sampleType = '' }) {
   const normalizedDate = `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, '0')}${String(date.getDate()).padStart(2, '0')}`;
-  const normalizedPatient = String(patientID || '').trim() || 'NOID';
   const normalizedSampleType = String(sampleType || '').trim().replace(/\s+/g, '_').toUpperCase() || 'SAMPLE';
-  return `${normalizedDate}-${normalizedPatient}-${normalizedSampleType}`;
+  return `${normalizedDate}-${normalizedSampleType}`;
 }
 
 function formatSampleLabelDate(value, fallbackDate = new Date()) {
@@ -1315,16 +1249,7 @@ function buildSampleLabelData(createdSample = {}, payload = {}, formData = {}, d
     || formData?.sprecSampleType
     || ''
   ).trim();
-  const patientID = String(
-    labelData.patientID
-    || labelData.patientCode
-    || createdSample.patientID
-    || createdSample.patientId
-    || payload?.demographic?.patientID
-    || payload?.demographic?.patientId
-    || ''
-  ).trim();
-  const fallbackCode = buildSampleLabelCode({ date, patientID, sampleType });
+  const fallbackCode = buildSampleLabelCode({ date, sampleType });
   const sampleID = String(
     labelData.sampleID
     || labelData.sampleId
@@ -1349,7 +1274,6 @@ function buildSampleLabelData(createdSample = {}, payload = {}, formData = {}, d
     barcode: barcode || sampleID || fallbackCode,
     sprecCode: String(formData.sprecCode || payload?.sample?.sprec_code || '').trim(),
     sampleType,
-    patientID,
     collectionDate: formatSampleLabelDate(collectionDate, date),
   };
 }
@@ -1581,6 +1505,7 @@ export default function ClinicalIntakeWizard(props) {
   const [biomarkerRequestError, setBiomarkerRequestError] = useState('');
   const [sampleMerkleRoot, setSampleMerkleRoot] = useState('');
   const [sampleLabel, setSampleLabel] = useState(null);
+  const [persistedQualityAssessment, setPersistedQualityAssessment] = useState(null);
   const preAnalyticalUnknownBackupRef = React.useRef(null);
 
   const stepMeta = useMemo(() => ([
@@ -2174,8 +2099,6 @@ export default function ClinicalIntakeWizard(props) {
       .map((value) => String(value || '').trim())
       .find((value) => value && !/^\d+$/.test(value)) || '';
     const fallbackId = String(item.id || normalizedOrphaCode || normalizedCidCode || item.code || '').trim();
-    const shouldInjectFabryMock = false;
-
     setFormData((previous) => ({
       ...previous,
       diagnosisCidId: fallbackId,
@@ -2268,8 +2191,8 @@ export default function ClinicalIntakeWizard(props) {
 
         const cascadePhenotypes = Array.isArray(cascade?.phenotypes) ? cascade.phenotypes.map(normalizeDiseasePhenotype) : [];
         const cascadeBiomarkers = Array.isArray(cascade?.biomarkers) ? cascade.biomarkers.map(normalizeDiseaseBiomarker) : [];
-        const nextPhenotypes = shouldInjectFabryMock ? mergeDiseasePhenotypesWithFabry(cascadePhenotypes) : cascadePhenotypes;
-        const nextBiomarkers = shouldInjectFabryMock ? mergeDiseaseBiomarkersWithFabry(cascadeBiomarkers) : cascadeBiomarkers;
+        const nextPhenotypes = cascadePhenotypes;
+        const nextBiomarkers = cascadeBiomarkers;
 
         setFormData((previous) => ({
           ...previous,
@@ -2280,23 +2203,11 @@ export default function ClinicalIntakeWizard(props) {
       } catch (_) {
         setFormData((previous) => ({
           ...previous,
-          diseasePhenotypes: shouldInjectFabryMock ? mergeDiseasePhenotypesWithFabry([]) : [],
-          diseaseBiomarkers: shouldInjectFabryMock ? mergeDiseaseBiomarkersWithFabry([]) : [],
-          biomarkers_values: shouldInjectFabryMock
-            ? buildBiomarkerValuesMap(mergeDiseaseBiomarkersWithFabry([]), previous.biomarkers_values)
-            : {},
+          diseasePhenotypes: [],
+          diseaseBiomarkers: [],
+          biomarkers_values: {},
         }));
       }
-    } else if (shouldInjectFabryMock) {
-      const fabryPhenotypes = mergeDiseasePhenotypesWithFabry([]);
-      const fabryBiomarkers = mergeDiseaseBiomarkersWithFabry([]);
-      setFormData((previous) => ({
-        ...previous,
-        diagnosisOrphaCode: previous.diagnosisOrphaCode || 'ORPHA:324',
-        diseasePhenotypes: fabryPhenotypes,
-        diseaseBiomarkers: fabryBiomarkers,
-        biomarkers_values: buildBiomarkerValuesMap(fabryBiomarkers, previous.biomarkers_values),
-      }));
     }
   };
 
@@ -2439,7 +2350,6 @@ export default function ClinicalIntakeWizard(props) {
 
   const handleSubmit = async (event) => {
     event.preventDefault();
-    console.log('[DEBUG] Botão clicado');
     setTouched(true);
     setStep1Attempted(true);
     setSubmitError('');
@@ -2457,7 +2367,6 @@ export default function ClinicalIntakeWizard(props) {
         dictionariesReady,
         consentTemplatesCount: Array.isArray(consentTemplates) ? consentTemplates.length : 0,
       };
-      console.log(errors);
       setActiveStep(!isStep1Valid ? 0 : !isStep2Valid ? 1 : 2);
       return;
     }
@@ -2469,18 +2378,11 @@ export default function ClinicalIntakeWizard(props) {
       if (patientMatchInfo?.patient?.patientID) {
         payload.demographic.patientID = String(patientMatchInfo.patient.patientID).trim();
       }
-      console.log('[DEBUG] Payload pronto:', payload);
-
-      let response;
-      try {
-        response = await apiClient.post('/intake-wizard', payload);
-      } catch (apiError) {
-        console.error('[DEBUG] Falha imediata na chamada POST /intake-wizard:', apiError);
-        throw apiError;
-      }
+      const response = await apiClient.post('/intake-wizard', payload);
 
       const message = response?.data?.message || t('wizard.success.completed', 'Cadastro integrado concluído com sucesso.');
       const createdSample = response?.data?.sample || {};
+      setPersistedQualityAssessment(normalizeQualityAssessment(response?.data?.qualityAssessment));
       setSampleLabel({
         ...buildSampleLabelData(createdSample, payload, formData, new Date()),
         ...(response?.data?.label || {}),
@@ -2585,12 +2487,10 @@ export default function ClinicalIntakeWizard(props) {
               data-testid="wizard-document"
               className="w-full rounded-lg px-3 py-2"
               label={t('wizard.fields.document', 'Documento')}
-              helperText={t('wizard.helpers.documentCpfPassport', 'Aceita CPF ou passaporte válido (somente números).')}
+              helperText={t('wizard.helpers.documentCpfPassport', 'Digite somente números para CPF ou informe passaporte.')}
               error={showPatientErrors ? getFieldError(patientValidation, 'documento') : ''}
               value={formData.documento}
               onChange={handleFieldChange('documento')}
-              inputMode="numeric"
-              pattern="[0-9]*"
               required
             />
             <Input id="recordNumber" name="recordNumber" data-testid="wizard-record-number" className="w-full rounded-lg px-3 py-2" label={t('wizard.fields.recordNumber', 'Prontuário')} helperText={t('wizard.helpers.recordNumberOptional', 'Campo opcional de texto livre.')} value={formData.prontuario} onChange={handleFieldChange('prontuario')} required={false} />
@@ -2608,11 +2508,9 @@ export default function ClinicalIntakeWizard(props) {
                 <Input
                   className="w-full rounded-lg px-3 py-2"
                   label={t('wizard.fields.legalDocument', 'Documento do representante legal')}
-                  helperText={t('wizard.helpers.documentCpfPassport', 'Aceita CPF ou passaporte válido (somente números).')}
+                  helperText={t('wizard.helpers.documentCpfPassport', 'Digite somente números para CPF ou informe passaporte.')}
                   value={formData.representativeCpf}
                   onChange={handleFieldChange('representativeCpf')}
-                  inputMode="numeric"
-                  pattern="[0-9]*"
                   required
                 />
               </div>
@@ -3051,7 +2949,7 @@ export default function ClinicalIntakeWizard(props) {
               )}
             </div>
 
-            <div className="clinical-subsection space-y-4">
+            <div className="clinical-subsection space-y-4" data-testid="wizard-disease-biomarkers-section">
               <div className="border-b border-gray-200 pb-3 section-title-block">
                 <h4 className="text-xl font-bold text-gray-800">{t('wizard.sections.suggestedBiomarkers', 'Biomarcadores sugeridos pela doença')}</h4>
               </div>
@@ -3146,6 +3044,14 @@ export default function ClinicalIntakeWizard(props) {
             </div>
           </Card>
         )}
+        {persistedQualityAssessment && (
+          <Card className="governance-card bg-white rounded-2xl shadow-lg border border-emerald-200">
+            <div data-testid="persisted-quality-assessment">
+              <div data-testid="persisted-quality-grade">{buildRcsResultLabel(persistedQualityAssessment)}</div>
+              <div data-testid="persisted-quality-route">{buildRcsStatusLabel(persistedQualityAssessment, 'Avaliação persistida')}</div>
+            </div>
+          </Card>
+        )}
         {formData.preAnalyticalUnknown && (
           <Card className="rounded-2xl border border-amber-200 bg-amber-50">
             <div className="text-sm font-semibold text-amber-900">
@@ -3166,7 +3072,6 @@ export default function ClinicalIntakeWizard(props) {
                 data-testid="wizard-submit-button"
                 className="rounded-lg px-6 py-2.5 font-medium transition-transform duration-200 active:scale-95 hover:shadow-md"
                 type="submit"
-                onClick={() => console.log('[DEBUG] Botão clicado')}
                 disabled={isSubmitting || consentTemplatesLoading || !selectedConsentTemplate}
               >
                 {isSubmitting ? t('wizard.status.sending', 'Enviando...') : submitLabel}

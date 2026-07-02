@@ -10,7 +10,7 @@ export default defineConfig({
     '**/*.test.ts',
     '**/*.test.js',
   ],
-  outputDir: 'playwright-report',
+  outputDir: 'test-results',
   timeout: 30 * 1000,
   expect: {
     timeout: 5000
@@ -20,7 +20,7 @@ export default defineConfig({
   retries: process.env.CI ? 2 : 0,
   workers: process.env.CI ? 1 : undefined,
   reporter: [['list'], ['html', { outputFolder: 'playwright-report' }]],
-  webServer: {
+  webServer: process.env.PLAYWRIGHT_SKIP_WEBSERVER ? undefined : {
     command: 'npm run dev',
     url: 'http://localhost:5173',
     reuseExistingServer: !process.env.CI,

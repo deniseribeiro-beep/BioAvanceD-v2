@@ -31,7 +31,7 @@
     "test:browser:run": "vitest run",
     "test:unit": "vitest run --config vitest.config.ts --coverage tests/poc/unit",
     "test:integration": "vitest run --config vitest.config.ts --coverage tests/poc/integration",
-    "test:e2e": "npm --prefix frontend run test:e2e -- --config ../playwright.config.ts",
+    "test:e2e": "npm --prefix frontend run test:e2e",
     "test:poc": "npm run test:unit && npm run test:integration && npm run test:e2e",
     "test:poc:report": "npm run test:poc && node tests/poc/utils/generate-poc-report.js"
   },

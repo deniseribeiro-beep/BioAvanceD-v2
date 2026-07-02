@@ -80,7 +80,26 @@ export async function mockPatientsApi(page: Page, initialPatients: PatientRecord
   });
 }
 
-export async function mockWizardDomainApis(page: Page, options = { withActiveTcle: true }) {
+type WizardMockOptions = {
+  withActiveTcle?: boolean;
+  qualityAssessment?: Record<string, unknown>;
+};
+
+const DEFAULT_QUALITY_ASSESSMENT = {
+  model_version: 'RCS-GOV-1.0',
+  matrix_type: 'fluid',
+  governance_status: 1,
+  governance_failure_reasons: [],
+  p_bio: 6,
+  rcs_score: 94,
+  score_based_grade: 'A',
+  final_grade: 'A',
+  grade_route: 'Score-based certification',
+  axis_penalties: [{ axis_code: 'Ppre', sprec_code: 'A', weight: 30, severity: 0, penalty: 0 }],
+  calculation_trace: { source: 'playwright-persisted-response' },
+};
+
+export async function mockWizardDomainApis(page: Page, options: WizardMockOptions = { withActiveTcle: true }) {
   await page.route('**/api/**', async (route: Route) => {
     const request = route.request();
     const url = request.url();
@@ -153,31 +172,6 @@ export async function mockWizardDomainApis(page: Page, options = { withActiveTcl
       });
     }
 
-    if (method === 'POST' && url.includes('/quality/preview')) {
-      return route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({
-          success: true,
-          data: {
-            model_version: 'RCS-GOV-1.0',
-            matrix_type: 'fluid',
-            governance_status: 1,
-            governance_failure_reasons: [],
-            p_bio: 6,
-            rcs_score: 94,
-            score_based_grade: 'A',
-            final_grade: 'A',
-            grade_route: 'Score-based certification',
-            axis_penalties: [
-              { axis_code: 'Ppre', sprec_code: 'A', weight: 30, severity: 0, penalty: 0 },
-            ],
-            calculation_trace: { source: 'playwright-default-mock' },
-          },
-        }),
-      });
-    }
-
     if (url.includes('/dictionary/atc/search') || url.includes('/drugs/search') || url.includes('/chembl/search')) {
       return route.fulfill({
         status: 200,
@@ -222,10 +216,10 @@ export async function mockWizardDomainApis(page: Page, options = { withActiveTcl
           success: true,
           message: 'Cadastro integrado concluído com sucesso e TCLE enviado por e-mail.',
           consentEmail: { success: true },
+          qualityAssessment: options.qualityAssessment || DEFAULT_QUALITY_ASSESSMENT,
           sample: {
             sampleID: 'S-1001',
             barcode: 'BC-S-1001',
-            patientID: '12345678',
             sampleType: 'PLASMA',
             registrationDate: '2026-05-18T12:00:00.000Z',
           },

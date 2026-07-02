@@ -46,6 +46,7 @@ frontend/dist/
 # Test and audit artifacts
 # =========================
 test-results/
+validation-evidence/
 frontend/test-results/
 frontend/playwright-report/
 playwright-report/

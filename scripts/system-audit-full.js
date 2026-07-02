@@ -239,6 +239,38 @@ function runAudit() {
     };
   });
 
+  registerCheck('Sanitização permanente do repositório', () => {
+    const tracked = runCommand('git', ['ls-files']);
+    const trackedFiles = tracked.stdout.split(/\r?\n/).filter(Boolean);
+    const forbiddenTracked = trackedFiles.filter((file) =>
+      /(^|\/)(playwright-report|test-results|validation-evidence)(\/|$)|\.(patch|bak|backup)$/i.test(file)
+    );
+    const productionFiles = walkFiles(path.join(ROOT_DIR, FRONTEND_DIR, 'src'))
+      .concat(walkFiles(path.join(ROOT_DIR, BACKEND_DIR, 'src')))
+      .filter((file) => /\.(js|jsx|ts|tsx)$/.test(file));
+    const forbiddenPatterns = [
+      /FABRY_MOCK_|mergeDisease(?:Phenotypes|Biomarkers)WithFabry|shouldInjectFabryMock/,
+      /34\.60\.170\.17/,
+    ];
+    const forbiddenReferences = [];
+    for (const file of productionFiles) {
+      const content = fs.readFileSync(file, 'utf8');
+      forbiddenPatterns.forEach((pattern) => {
+        if (pattern.test(content)) forbiddenReferences.push({ file: toRelative(file), pattern: String(pattern) });
+      });
+    }
+    const changedProduction = runCommand('git', ['diff', '--unified=0', 'HEAD', '--', `${FRONTEND_DIR}/src`, `${BACKEND_DIR}/src`]);
+    const introducedDebug = changedProduction.stdout
+      .split(/\r?\n/)
+      .filter((line) => /^\+(?!\+\+)/.test(line) && /\[DEBUG\]/.test(line));
+    return {
+      status: tracked.status === 'PASS' && forbiddenTracked.length === 0 && forbiddenReferences.length === 0 && introducedDebug.length === 0 ? 'PASS' : 'FAIL',
+      forbiddenTracked,
+      forbiddenReferences,
+      introducedDebug,
+    };
+  });
+
   registerCheck('Backend test:ci', () => {
     return runCommand('npm', ['--prefix', BACKEND_DIR, 'run', 'test:ci']);
   });

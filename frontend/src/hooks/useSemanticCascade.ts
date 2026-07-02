@@ -112,7 +112,8 @@ export function useSemanticCascade() {
         suppressErrorToast: true,
       } as any);
 
-      const data = (response?.data || {}) as SuggestResponse;
+      const envelope = response?.data || {};
+      const data = (envelope?.data || envelope) as SuggestResponse;
       const normalizedDisease = normalizeCoding(data.disease || diseaseCoding, 'http://www.orpha.net');
       const normalizedPhenotypes = (Array.isArray(data.phenotypes) ? data.phenotypes : [])
         .map((item) => normalizeCoding(item, 'http://purl.obolibrary.org/obo/hp.owl'))
