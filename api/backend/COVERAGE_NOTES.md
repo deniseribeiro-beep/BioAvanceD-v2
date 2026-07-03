@@ -121,6 +121,28 @@ left in the LOW bucket rather than moved off; the other branches (notably
 candidate for a follow-up slice. Exact new percentages not yet re-measured,
 will land at the next full reconcile. No bugs surfaced this slice.
 
+Since baseline (12th slice): `importFhirIntelligent.js` moved off the LOW
+bucket by a test-writer slice (9 new integration tests, all green) covering
+the Bundle-validation 400 path, the full Patient/Specimen/Observation happy
+path with exact filter/update assertions, non-strict-mode semantic-contract
+warnings (missing ORPHA coding, invalid HPO coding), strict-mode 422
+rejection with no model writes, skip-on-no-resource and
+skip-on-unrecognized-resourceType, and a 500 error path confirming the
+`finally`-block Neo4j session close still runs. In the same iteration, the
+six tiny `src/core/use-cases/*UseCase.js` files (`CheckStorageBoxIntegrityUseCase`,
+`GetFreezerOccupancyStatsUseCase`, `GetFreezerTreeUseCase`,
+`GetSampleStorageLocationUseCase`, `SearchAllocatableSamplesUseCase`,
+`ValidateStoragePositionUseCase`) moved off the LOW bucket by a second,
+independent test-writer slice (19 new targeted tests, all green — each is a
+thin constructor-injected delegate to a repository method, following the
+existing `GetBoxAvailablePositionsUseCase.test.js` pattern). Exact new
+percentages not yet re-measured, will land at the next full reconcile. No
+bugs surfaced this slice; one minor response-shape inconsistency noted (not
+filed) — `importFhirIntelligent.js`'s strict-mode 422 body returns
+`semanticContract: { strictMode, violations }` while non-strict 200 returns
+`semanticContract: { strictMode, warnings }`, a differently-keyed shape for
+the same concept depending on status code.
+
 ## How to use this when picking a slice
 
 1. Prefer a **ZERO** file with real logic (not a script/model/port
@@ -164,14 +186,7 @@ Low priority (models/interfaces/one-off scripts — thin or non-request-path):
 Sorted ascending (worst first). This is the primary slice-picking pool:
 
 ```
-src/routes/importFhirIntelligent.js                                 15.58%
 src/interface/routes/reports.routes.js                    19.06% (partially extended, see 11th slice note above)
-src/core/use-cases/CheckStorageBoxIntegrityUseCase.js               20%
-src/core/use-cases/GetFreezerOccupancyStatsUseCase.js               20%
-src/core/use-cases/GetFreezerTreeUseCase.js                         20%
-src/core/use-cases/GetSampleStorageLocationUseCase.js               20%
-src/core/use-cases/SearchAllocatableSamplesUseCase.js               20%
-src/core/use-cases/ValidateStoragePositionUseCase.js                20%
 src/interface/routes/compliance.routes.js                           23%
 src/controllers/cid.controller.js                                   23.52%
 src/controllers/temperature.controller.js                           23.88%
