@@ -67,10 +67,8 @@ Low priority (models/interfaces/one-off scripts — thin or non-request-path):
 Sorted ascending (worst first). This is the primary slice-picking pool:
 
 ```
-src/infrastructure/persistence/mongo/MongoStorageRepository.js      2.23%
 src/infrastructure/persistence/mongo/MongoStorageTopologyReadRepository.js  2.98%
 src/models/SampleFile.js                                            3.44%
-src/services/storageService.js                                      3.74%
 src/models/ImportMetrics.js                                         4.54%
 src/controllers/import-lgpd.controller.js                           5.03%
 src/database/mongo.js                                                5.19%
