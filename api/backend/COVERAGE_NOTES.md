@@ -96,7 +96,6 @@ src/config/queue.js                                                18.3%
 src/services/sample.service.js                                     18.81%
 src/interface/routes/security.routes.js                            18.91%
 src/interface/routes/reports.routes.js                             19.06%
-src/core/use-cases/AllocateSampleUseCase.js                        19.14%
 src/infrastructure/database/mongodb/connection.js                  19.23%
 src/controllers/upload.controller.js                               19.51%
 src/core/use-cases/CheckStorageBoxIntegrityUseCase.js              20%
