@@ -91,7 +91,6 @@ src/infrastructure/database/neo4j/connection.js                    11.53%
 src/services/import-lgpd.service.js                                14.5%
 src/routes/importFhirIntelligent.js                                15.58%
 src/infrastructure/database/influxdb/connection.js                 16.12%
-src/infrastructure/persistence/mongo/MongoAuditRepository.js       16.66%
 src/infrastructure/persistence/influxdb/InfluxTelemetryWriteRepository.js  17.24%
 src/config/validateEnv.js                                          17.64%
 src/config/queue.js                                                18.3%
