@@ -55,6 +55,14 @@ and `config/redis.js` moved off the LOW bucket by a parallel-test-agents slice
 will land at the next full reconcile. This slice surfaced a minor real bug
 (#31 — REDIS_URL-embedded username always ignored) — see below.
 
+Since baseline (6th slice): `LineageRepository.js`, `neo4j/connection.js`, and
+`import-lgpd.service.js` moved off the ZERO/LOW buckets by a parallel-test-agents
+slice (87 new targeted tests, all green) — exact new percentages not yet
+re-measured, will land at the next full reconcile. This slice surfaced one
+confirmed bug (#35 — missing eventType validation in recordCustodyEvent) and two
+lower-confidence findings (#36, #37 — sanitizeRowForError over-stripping,
+lenient birth-date parsing) — see below.
+
 ## How to use this when picking a slice
 
 1. Prefer a **ZERO** file with real logic (not a script/model/port
@@ -97,13 +105,10 @@ Low priority (models/interfaces/one-off scripts — thin or non-request-path):
 Sorted ascending (worst first). This is the primary slice-picking pool:
 
 ```
-src/infrastructure/database/neo4j/LineageRepository.js               9.52%
 src/models/ExtractionProtocol.js                                    11.11%
 src/models/QualityDescription.js                                    11.11%
 src/models/SampleOrigin.js                                          11.11%
 src/models/SampleType.js                                            11.11%
-src/infrastructure/database/neo4j/connection.js                     11.53%
-src/services/import-lgpd.service.js                                 14.5%
 src/routes/importFhirIntelligent.js                                 15.58%
 src/infrastructure/database/influxdb/connection.js                  16.12%
 src/services/sample.service.js                                      18.81%
