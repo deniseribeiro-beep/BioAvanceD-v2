@@ -49,6 +49,12 @@ percentages not yet re-measured, will land at the next full reconcile. This
 slice surfaced a consent-bypass compliance risk (#28) and two terminology-sync
 bugs (#29, #30) — see below.
 
+Since baseline (5th slice): `consentNeo4jSync.service.js`, `analysisValidation.service.js`,
+and `config/redis.js` moved off the LOW bucket by a parallel-test-agents slice
+(67 new targeted tests, all green) — exact new percentages not yet re-measured,
+will land at the next full reconcile. This slice surfaced a minor real bug
+(#31 — REDIS_URL-embedded username always ignored) — see below.
+
 ## How to use this when picking a slice
 
 1. Prefer a **ZERO** file with real logic (not a script/model/port
@@ -91,9 +97,6 @@ Low priority (models/interfaces/one-off scripts — thin or non-request-path):
 Sorted ascending (worst first). This is the primary slice-picking pool:
 
 ```
-src/services/consentNeo4jSync.service.js                            9.25%
-src/services/analysisValidation.service.js                          9.3%
-src/config/redis.js                                                  9.43%
 src/infrastructure/database/neo4j/LineageRepository.js               9.52%
 src/models/ExtractionProtocol.js                                    11.11%
 src/models/QualityDescription.js                                    11.11%
