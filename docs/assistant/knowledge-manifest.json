@@ -1,0 +1,361 @@
+{
+  "manifestVersion": "1.0.0",
+  "corpusId": "bioavanced-assistant-corpus",
+  "corpusVersion": "1.0.0",
+  "generatedAt": "2026-07-03T00:00:00Z",
+  "owner": "Denise Ribeiro",
+  "purpose": "Fundamentação do Assistente Inteligente Contextual do BioAvanceD",
+  "approval": {
+    "status": "APPROVED_FOR_PROJECT_CORPUS",
+    "approvedBy": "Denise Ribeiro",
+    "approvedAt": "2026-07-03T00:00:00Z",
+    "basis": "Solicitação explícita da autora para geração do corpus com os documentos e referenciais do projeto.",
+    "scope": "Uso técnico interno no Assistente Inteligente Contextual; não representa aprovação regulatória, clínica ou institucional.",
+    "becomesVerifiableWhen": "Este pacote for adicionado e commitado no repositório, preservando o hash do approval-record.json."
+  },
+  "exclusions": [
+    "Dados reais ou identificáveis de participantes",
+    "Segredos, tokens, chaves e variáveis de ambiente",
+    "Logs operacionais com dados sensíveis",
+    "Código-fonte integral como fonte conversacional",
+    "Documentos do INPI como conteúdo de resposta",
+    "Alegações de machine learning, diagnóstico por IA ou XAI na versão atual",
+    "Conteúdo bibliográfico sem verificação como autoridade operacional"
+  ],
+  "documents": [
+    {
+      "documentId": "BIO-KNOW-001",
+      "path": "docs/assistant/knowledge/01_bioavanced_overview.md",
+      "title": "BioAvanceD — visão geral",
+      "version": "1.0.0",
+      "language": "pt-BR",
+      "topics": [
+        "overview",
+        "biobank",
+        "research-scope"
+      ],
+      "requiredRoles": [
+        "UsuarioExterno",
+        "Tecnico",
+        "Coordenador",
+        "Administrador"
+      ],
+      "active": true,
+      "approvedAt": "2026-07-03T00:00:00Z",
+      "approvedBy": "Denise Ribeiro",
+      "approvalType": "project-owner-corpus-approval",
+      "approvalEvidence": "Instrução explícita da autora no projeto para gerar o corpus do Assistente Inteligente Contextual em 2026-07-03.",
+      "regulatoryApproval": false,
+      "sha256": "f6ac7892884b1a59277f89537266b0155e457144ee9127502a07d7d9cbd17359",
+      "ingestionMode": "full",
+      "containsPersonalData": false
+    },
+    {
+      "documentId": "BIO-KNOW-002",
+      "path": "docs/assistant/knowledge/02_architecture_and_persistence.md",
+      "title": "Arquitetura e persistência",
+      "version": "1.0.0",
+      "language": "pt-BR",
+      "topics": [
+        "architecture",
+        "polyglot-persistence",
+        "events"
+      ],
+      "requiredRoles": [
+        "UsuarioExterno",
+        "Tecnico",
+        "Coordenador",
+        "Administrador"
+      ],
+      "active": true,
+      "approvedAt": "2026-07-03T00:00:00Z",
+      "approvedBy": "Denise Ribeiro",
+      "approvalType": "project-owner-corpus-approval",
+      "approvalEvidence": "Instrução explícita da autora no projeto para gerar o corpus do Assistente Inteligente Contextual em 2026-07-03.",
+      "regulatoryApproval": false,
+      "sha256": "1f23966d947b9b164f93eb410b1a28537c3695d304ac4a9952eb8b2ef9c97a18",
+      "ingestionMode": "full",
+      "containsPersonalData": false
+    },
+    {
+      "documentId": "BIO-KNOW-003",
+      "path": "docs/assistant/knowledge/03_participants_samples_storage.md",
+      "title": "Participantes, amostras e armazenamento",
+      "version": "1.0.0",
+      "language": "pt-BR",
+      "topics": [
+        "participants",
+        "samples",
+        "storage",
+        "custody",
+        "lineage"
+      ],
+      "requiredRoles": [
+        "UsuarioExterno",
+        "Tecnico",
+        "Coordenador",
+        "Administrador"
+      ],
+      "active": true,
+      "approvedAt": "2026-07-03T00:00:00Z",
+      "approvedBy": "Denise Ribeiro",
+      "approvalType": "project-owner-corpus-approval",
+      "approvalEvidence": "Instrução explícita da autora no projeto para gerar o corpus do Assistente Inteligente Contextual em 2026-07-03.",
+      "regulatoryApproval": false,
+      "sha256": "8b94e7fd290bf9017ce51b57cef473280ad4487fb0ec298f429f713479e3b25f",
+      "ingestionMode": "full",
+      "containsPersonalData": false
+    },
+    {
+      "documentId": "BIO-KNOW-004",
+      "path": "docs/assistant/knowledge/04_consent_and_econsent.md",
+      "title": "Consentimento e eConsent",
+      "version": "1.0.0",
+      "language": "pt-BR",
+      "topics": [
+        "consent",
+        "econsent",
+        "permissions",
+        "revocation"
+      ],
+      "requiredRoles": [
+        "UsuarioExterno",
+        "Tecnico",
+        "Coordenador",
+        "Administrador"
+      ],
+      "active": true,
+      "approvedAt": "2026-07-03T00:00:00Z",
+      "approvedBy": "Denise Ribeiro",
+      "approvalType": "project-owner-corpus-approval",
+      "approvalEvidence": "Instrução explícita da autora no projeto para gerar o corpus do Assistente Inteligente Contextual em 2026-07-03.",
+      "regulatoryApproval": false,
+      "sha256": "a17c3ccae122af7e0431d66a88b191f67c24d8f2db28d637cb94a7aa6974d5fa",
+      "ingestionMode": "full",
+      "containsPersonalData": false
+    },
+    {
+      "documentId": "BIO-KNOW-005",
+      "path": "docs/assistant/knowledge/05_quality_sprec_rcs_gov.md",
+      "title": "Qualidade pré-analítica, SPREC e RCS-GOV",
+      "version": "1.0.0",
+      "language": "pt-BR",
+      "topics": [
+        "quality",
+        "SPREC",
+        "RCS-GOV"
+      ],
+      "requiredRoles": [
+        "UsuarioExterno",
+        "Tecnico",
+        "Coordenador",
+        "Administrador"
+      ],
+      "active": true,
+      "approvedAt": "2026-07-03T00:00:00Z",
+      "approvedBy": "Denise Ribeiro",
+      "approvalType": "project-owner-corpus-approval",
+      "approvalEvidence": "Instrução explícita da autora no projeto para gerar o corpus do Assistente Inteligente Contextual em 2026-07-03.",
+      "regulatoryApproval": false,
+      "sha256": "47809fe354190d5590146d99b0e53712c6b0ef8fa81da64fea5a126c45641cd9",
+      "ingestionMode": "full",
+      "containsPersonalData": false
+    },
+    {
+      "documentId": "BIO-KNOW-006",
+      "path": "docs/assistant/knowledge/06_interoperability_fhir_miabis.md",
+      "title": "Interoperabilidade: HL7 FHIR e MIABIS",
+      "version": "1.0.0",
+      "language": "pt-BR",
+      "topics": [
+        "FHIR",
+        "MIABIS",
+        "FAIR",
+        "interoperability"
+      ],
+      "requiredRoles": [
+        "UsuarioExterno",
+        "Tecnico",
+        "Coordenador",
+        "Administrador"
+      ],
+      "active": true,
+      "approvedAt": "2026-07-03T00:00:00Z",
+      "approvedBy": "Denise Ribeiro",
+      "approvalType": "project-owner-corpus-approval",
+      "approvalEvidence": "Instrução explícita da autora no projeto para gerar o corpus do Assistente Inteligente Contextual em 2026-07-03.",
+      "regulatoryApproval": false,
+      "sha256": "4515a36fb174cbe6ab692223d790a8e8efc7c07148d36295c14097b611bed534",
+      "ingestionMode": "full",
+      "containsPersonalData": false
+    },
+    {
+      "documentId": "BIO-KNOW-007",
+      "path": "docs/assistant/knowledge/07_terminologies_orpha_hpo_snomed.md",
+      "title": "Terminologias: ORPHA, HPO, SNOMED CT e outros códigos",
+      "version": "1.0.0",
+      "language": "pt-BR",
+      "topics": [
+        "ORPHA",
+        "HPO",
+        "SNOMED CT",
+        "OMIM",
+        "terminologies"
+      ],
+      "requiredRoles": [
+        "UsuarioExterno",
+        "Tecnico",
+        "Coordenador",
+        "Administrador"
+      ],
+      "active": true,
+      "approvedAt": "2026-07-03T00:00:00Z",
+      "approvedBy": "Denise Ribeiro",
+      "approvalType": "project-owner-corpus-approval",
+      "approvalEvidence": "Instrução explícita da autora no projeto para gerar o corpus do Assistente Inteligente Contextual em 2026-07-03.",
+      "regulatoryApproval": false,
+      "sha256": "fe9c29b42ed8826caccfe608efa90649563139a0bde915af7ed6b0fc338fb3e8",
+      "ingestionMode": "full",
+      "containsPersonalData": false
+    },
+    {
+      "documentId": "BIO-KNOW-008",
+      "path": "docs/assistant/knowledge/08_cold_chain_iot_quarantine.md",
+      "title": "Cadeia fria, IoT e quarentena lógica",
+      "version": "1.0.0",
+      "language": "pt-BR",
+      "topics": [
+        "IoT",
+        "telemetry",
+        "cold-chain",
+        "quarantine"
+      ],
+      "requiredRoles": [
+        "UsuarioExterno",
+        "Tecnico",
+        "Coordenador",
+        "Administrador"
+      ],
+      "active": true,
+      "approvedAt": "2026-07-03T00:00:00Z",
+      "approvedBy": "Denise Ribeiro",
+      "approvalType": "project-owner-corpus-approval",
+      "approvalEvidence": "Instrução explícita da autora no projeto para gerar o corpus do Assistente Inteligente Contextual em 2026-07-03.",
+      "regulatoryApproval": false,
+      "sha256": "36f714225b8948d7fc1058caee1193c30a85e03e76bf238f4430c625e81dd724",
+      "ingestionMode": "full",
+      "containsPersonalData": false
+    },
+    {
+      "documentId": "BIO-KNOW-009",
+      "path": "docs/assistant/knowledge/09_security_privacy_rbac.md",
+      "title": "Segurança, privacidade e RBAC",
+      "version": "1.0.0",
+      "language": "pt-BR",
+      "topics": [
+        "security",
+        "privacy",
+        "LGPD",
+        "RBAC"
+      ],
+      "requiredRoles": [
+        "UsuarioExterno",
+        "Tecnico",
+        "Coordenador",
+        "Administrador"
+      ],
+      "active": true,
+      "approvedAt": "2026-07-03T00:00:00Z",
+      "approvedBy": "Denise Ribeiro",
+      "approvalType": "project-owner-corpus-approval",
+      "approvalEvidence": "Instrução explícita da autora no projeto para gerar o corpus do Assistente Inteligente Contextual em 2026-07-03.",
+      "regulatoryApproval": false,
+      "sha256": "65365b9b9c7636c3d7f617b73092432d44c499f0402d7aa341573cde7b0766b9",
+      "ingestionMode": "full",
+      "containsPersonalData": false
+    },
+    {
+      "documentId": "BIO-KNOW-010",
+      "path": "docs/assistant/knowledge/10_audit_integrity_merkle.md",
+      "title": "Auditoria e integridade",
+      "version": "1.0.0",
+      "language": "pt-BR",
+      "topics": [
+        "audit",
+        "Merkle",
+        "integrity",
+        "tamper-evident"
+      ],
+      "requiredRoles": [
+        "UsuarioExterno",
+        "Tecnico",
+        "Coordenador",
+        "Administrador"
+      ],
+      "active": true,
+      "approvedAt": "2026-07-03T00:00:00Z",
+      "approvedBy": "Denise Ribeiro",
+      "approvalType": "project-owner-corpus-approval",
+      "approvalEvidence": "Instrução explícita da autora no projeto para gerar o corpus do Assistente Inteligente Contextual em 2026-07-03.",
+      "regulatoryApproval": false,
+      "sha256": "11c7f51e1855bedc024ead1630e75227fe0dc89725e4a6b12ee80ab3444bfefc",
+      "ingestionMode": "full",
+      "containsPersonalData": false
+    },
+    {
+      "documentId": "BIO-KNOW-011",
+      "path": "docs/assistant/knowledge/11_assistant_contextual_usage.md",
+      "title": "Assistente Inteligente Contextual",
+      "version": "1.0.0",
+      "language": "pt-BR",
+      "topics": [
+        "assistant",
+        "usage",
+        "safety"
+      ],
+      "requiredRoles": [
+        "UsuarioExterno",
+        "Tecnico",
+        "Coordenador",
+        "Administrador"
+      ],
+      "active": true,
+      "approvedAt": "2026-07-03T00:00:00Z",
+      "approvedBy": "Denise Ribeiro",
+      "approvalType": "project-owner-corpus-approval",
+      "approvalEvidence": "Instrução explícita da autora no projeto para gerar o corpus do Assistente Inteligente Contextual em 2026-07-03.",
+      "regulatoryApproval": false,
+      "sha256": "1a3ee1ac37e2e526f2208ebacb55f74c0caca8617abfd370572b1d4dd8e55a60",
+      "ingestionMode": "full",
+      "containsPersonalData": false
+    },
+    {
+      "documentId": "BIO-KNOW-012",
+      "path": "docs/assistant/knowledge/12_research_scope_limitations.md",
+      "title": "Escopo da pesquisa e limitações",
+      "version": "1.0.0",
+      "language": "pt-BR",
+      "topics": [
+        "research",
+        "ethics",
+        "synthetic-data",
+        "limitations"
+      ],
+      "requiredRoles": [
+        "UsuarioExterno",
+        "Tecnico",
+        "Coordenador",
+        "Administrador"
+      ],
+      "active": true,
+      "approvedAt": "2026-07-03T00:00:00Z",
+      "approvedBy": "Denise Ribeiro",
+      "approvalType": "project-owner-corpus-approval",
+      "approvalEvidence": "Instrução explícita da autora no projeto para gerar o corpus do Assistente Inteligente Contextual em 2026-07-03.",
+      "regulatoryApproval": false,
+      "sha256": "dda1a62aa06a9034ad72492bab098acac692322c1101dfe1a5334f2e75155aa7",
+      "ingestionMode": "full",
+      "containsPersonalData": false
+    }
+  ]
+}

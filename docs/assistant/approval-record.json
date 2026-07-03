@@ -1,0 +1,18 @@
+{
+  "recordVersion": "1.0.0",
+  "corpusId": "bioavanced-assistant-corpus",
+  "corpusVersion": "1.0.0",
+  "decision": "APPROVED_FOR_PROJECT_CORPUS",
+  "approvedBy": "Denise Ribeiro",
+  "role": "Autora e responsável pelo projeto BioAvanceD",
+  "approvedAt": "2026-07-03T00:00:00Z",
+  "approvalBasis": "Instrução explícita da autora no projeto para geração do corpus do Assistente Inteligente Contextual.",
+  "limitations": [
+    "Não constitui aprovação do CEP.",
+    "Não constitui validação clínica.",
+    "Não autoriza dados reais.",
+    "Não autoriza diagnóstico, tratamento, machine learning ou XAI.",
+    "Documentos-fonte com alegações antigas de IA devem ser usados somente como origem histórica, nunca como resposta operacional."
+  ],
+  "sha256": "130be78bcf55d442847fc430abdd12983913838df7b2cdd3cc94cd594a4677be"
+}
