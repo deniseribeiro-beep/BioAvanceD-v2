@@ -1,0 +1,398 @@
+import { describe, it, expect } from 'vitest';
+import { createRequire } from 'module';
+
+const require2 = createRequire(import.meta.url);
+const importLgpdService = require2('../../src/services/import-lgpd.service');
+
+describe('ImportLGPDService', () => {
+  describe('normalizeCatalogValue', () => {
+    const catalog = [
+      { id: 'VENOUS_BLOOD', label: 'Sangue Venoso Periférico' },
+      { id: 'ORAL_MUCOSA', label: 'Mucosa Oral (Swab)' },
+    ];
+
+    it('returns null for undefined/null input', () => {
+      expect(importLgpdService.normalizeCatalogValue(undefined, catalog)).toBeNull();
+      expect(importLgpdService.normalizeCatalogValue(null, catalog)).toBeNull();
+    });
+
+    it('returns null for blank/whitespace-only input', () => {
+      expect(importLgpdService.normalizeCatalogValue('   ', catalog)).toBeNull();
+    });
+
+    it('matches directly by catalog id', () => {
+      expect(importLgpdService.normalizeCatalogValue('VENOUS_BLOOD', catalog)).toBe('VENOUS_BLOOD');
+    });
+
+    it('matches case-insensitively by label', () => {
+      expect(importLgpdService.normalizeCatalogValue('sangue venoso periférico', catalog)).toBe('VENOUS_BLOOD');
+    });
+
+    it('falls back to the trimmed raw value when nothing matches', () => {
+      expect(importLgpdService.normalizeCatalogValue('  Unknown Thing  ', catalog)).toBe('Unknown Thing');
+    });
+  });
+
+  describe('validateFileFormat', () => {
+    it('accepts a valid CSV for patients by extension', () => {
+      const file = { originalname: 'patients.csv', mimetype: 'text/csv' };
+      expect(importLgpdService.validateFileFormat(file, 'patients')).toBe(true);
+    });
+
+    it('accepts a valid file purely by mimetype even with a mismatched extension', () => {
+      const file = { originalname: 'patients.dat', mimetype: 'text/csv' };
+      expect(importLgpdService.validateFileFormat(file, 'patients')).toBe(true);
+    });
+
+    it('rejects .txt files for samples (only allowed for patients)', () => {
+      const file = { originalname: 'samples.txt', mimetype: 'text/plain' };
+      expect(importLgpdService.validateFileFormat(file, 'samples')).toBe(false);
+    });
+
+    it('rejects an unknown category outright', () => {
+      const file = { originalname: 'x.csv', mimetype: 'text/csv' };
+      expect(importLgpdService.validateFileFormat(file, 'nonsense')).toBe(false);
+    });
+  });
+
+  describe('parseBirthDate', () => {
+    it('parses DD/MM/YYYY format', () => {
+      const d = importLgpdService.parseBirthDate('25/12/1990');
+      expect(d).toBeInstanceOf(Date);
+      expect(d.getFullYear()).toBe(1990);
+      expect(d.getMonth()).toBe(11);
+      expect(d.getDate()).toBe(25);
+    });
+
+    it('parses YYYY-MM-DD format', () => {
+      const d = importLgpdService.parseBirthDate('1990-12-25');
+      expect(d.getFullYear()).toBe(1990);
+      expect(d.getMonth()).toBe(11);
+      expect(d.getDate()).toBe(25);
+    });
+
+    it('rejects invalid calendar dates like 31/02/1990', () => {
+      // Feb 31 doesn't exist; none of the regex branches nor the fallback should accept it validly
+      expect(importLgpdService.parseBirthDate('31/02/1990')).toBeNull();
+    });
+
+    it('returns null for empty/undefined input', () => {
+      expect(importLgpdService.parseBirthDate(null)).toBeNull();
+      expect(importLgpdService.parseBirthDate('')).toBeNull();
+    });
+
+    it('passes through a valid Date instance unchanged', () => {
+      const input = new Date(2000, 0, 1);
+      expect(importLgpdService.parseBirthDate(input)).toBe(input);
+    });
+
+    it('returns null for an invalid Date instance', () => {
+      const invalid = new Date('not-a-date');
+      expect(importLgpdService.parseBirthDate(invalid)).toBeNull();
+    });
+  });
+
+  describe('parseSex', () => {
+    it('accepts M, F, O directly', () => {
+      expect(importLgpdService.parseSex('M')).toBe('M');
+      expect(importLgpdService.parseSex('F')).toBe('F');
+      expect(importLgpdService.parseSex('O')).toBe('O');
+    });
+
+    it('translates Portuguese words to canonical codes', () => {
+      expect(importLgpdService.parseSex('Masculino')).toBe('M');
+      expect(importLgpdService.parseSex('Feminino')).toBe('F');
+      expect(importLgpdService.parseSex('Outro')).toBe('O');
+    });
+
+    it('returns null for unrecognized values', () => {
+      expect(importLgpdService.parseSex('xyz-unrecognized-123')).toBeNull();
+    });
+
+    it('returns null for empty input', () => {
+      expect(importLgpdService.parseSex('')).toBeNull();
+      expect(importLgpdService.parseSex(null)).toBeNull();
+    });
+  });
+
+  describe('parseBoolean', () => {
+    it('recognizes truthy string variants', () => {
+      expect(importLgpdService.parseBoolean('true')).toBe(true);
+      expect(importLgpdService.parseBoolean('1')).toBe(true);
+      expect(importLgpdService.parseBoolean('sim')).toBe(true);
+      expect(importLgpdService.parseBoolean('YES')).toBe(true);
+      expect(importLgpdService.parseBoolean('S')).toBe(true);
+    });
+
+    it('treats unrecognized strings as false', () => {
+      expect(importLgpdService.parseBoolean('no')).toBe(false);
+      expect(importLgpdService.parseBoolean('false')).toBe(false);
+      expect(importLgpdService.parseBoolean('0')).toBe(false);
+    });
+
+    it('treats missing values as false', () => {
+      expect(importLgpdService.parseBoolean(undefined)).toBe(false);
+      expect(importLgpdService.parseBoolean(null)).toBe(false);
+      expect(importLgpdService.parseBoolean('')).toBe(false);
+    });
+  });
+
+  describe('parseFloatField', () => {
+    it('parses a numeric string', () => {
+      expect(importLgpdService.parseFloatField('12.5')).toBe(12.5);
+    });
+
+    it('returns null for empty/placeholder sentinel strings', () => {
+      expect(importLgpdService.parseFloatField('')).toBeNull();
+      expect(importLgpdService.parseFloatField('null')).toBeNull();
+      expect(importLgpdService.parseFloatField('N/A')).toBeNull();
+      expect(importLgpdService.parseFloatField('-')).toBeNull();
+    });
+
+    it('returns null for non-numeric garbage', () => {
+      expect(importLgpdService.parseFloatField('abc')).toBeNull();
+    });
+  });
+
+  describe('normalizeText', () => {
+    it('trims and optionally uppercases', () => {
+      expect(importLgpdService.normalizeText('  hello  ')).toBe('hello');
+      expect(importLgpdService.normalizeText('  hello  ', { uppercase: true })).toBe('HELLO');
+    });
+
+    it('returns null for blank or missing input', () => {
+      expect(importLgpdService.normalizeText('   ')).toBeNull();
+      expect(importLgpdService.normalizeText(undefined)).toBeNull();
+      expect(importLgpdService.normalizeText(null)).toBeNull();
+    });
+  });
+
+  describe('normalizeCpf', () => {
+    it('strips non-digit characters', () => {
+      expect(importLgpdService.normalizeCpf('123.456.789-09')).toBe('12345678909');
+    });
+
+    it('returns null for missing input or an all-non-digit string', () => {
+      expect(importLgpdService.normalizeCpf(null)).toBeNull();
+      expect(importLgpdService.normalizeCpf('abc')).toBeNull();
+    });
+  });
+
+  describe('isValidCpf', () => {
+    it('accepts a known-valid CPF (check digits correct)', () => {
+      // 111.444.777-35 is a commonly used valid-format CPF for testing
+      expect(importLgpdService.isValidCpf('111.444.777-35')).toBe(true);
+    });
+
+    it('rejects a CPF with wrong length', () => {
+      expect(importLgpdService.isValidCpf('123456')).toBe(false);
+    });
+
+    it('rejects a CPF made of a single repeated digit', () => {
+      expect(importLgpdService.isValidCpf('111.111.111-11')).toBe(false);
+    });
+
+    it('rejects a CPF with tampered check digits', () => {
+      expect(importLgpdService.isValidCpf('111.444.777-99')).toBe(false);
+    });
+  });
+
+  describe('isFutureDate', () => {
+    it('returns true for a date after today', () => {
+      const future = new Date();
+      future.setFullYear(future.getFullYear() + 1);
+      expect(importLgpdService.isFutureDate(future)).toBe(true);
+    });
+
+    it('returns false for today and for past dates', () => {
+      expect(importLgpdService.isFutureDate(new Date())).toBe(false);
+      const past = new Date(2000, 0, 1);
+      expect(importLgpdService.isFutureDate(past)).toBe(false);
+    });
+
+    it('returns false for a non-Date or invalid Date input', () => {
+      expect(importLgpdService.isFutureDate('2099-01-01')).toBe(false);
+      expect(importLgpdService.isFutureDate(new Date('garbage'))).toBe(false);
+    });
+  });
+
+  describe('sanitizeRowForError', () => {
+    it('always strips row content regardless of input, to avoid leaking sensitive data in error logs', () => {
+      const sensitiveRow = { patientName: 'John Doe', cpf: '11144477735', birthDate: '01/01/1990' };
+      const sanitized = importLgpdService.sanitizeRowForError(sensitiveRow);
+      expect(sanitized).toEqual({});
+      expect(sanitized.patientName).toBeUndefined();
+      expect(sanitized.cpf).toBeUndefined();
+    });
+  });
+
+  describe('parsePatientRow', () => {
+    it('parses a well-formed row into normalized patient data', () => {
+      const row = {
+        patientName: '  Maria Silva  ',
+        email: '  MARIA@Example.com ',
+        birthDate: '15/06/1985',
+        sex: 'Feminino',
+        recordNumber: '00123',
+        heightCm: '1.70',
+        clinicalUnit: ' UTI ',
+        consentTemplateId: ' 64d0f0f0f0f0f0f0f0f0f0f0 ',
+      };
+      const result = importLgpdService.parsePatientRow(row);
+
+      expect(result.patientName).toBe('Maria Silva');
+      expect(result.email).toBe('maria@example.com');
+      expect(result.sex).toBe('F');
+      expect(result.birthDate.getFullYear()).toBe(1985);
+      expect(result.recordNumber).toBe(123);
+      // 1.70 is < 3 so it's treated as meters and converted to cm
+      expect(result.heightCm).toBe(170);
+      expect(result.clinicalUnit).toBe('UTI');
+      expect(result.consentTemplateId).toBe('64d0f0f0f0f0f0f0f0f0f0f0');
+    });
+
+    it('defaults optional fields to null when absent', () => {
+      const result = importLgpdService.parsePatientRow({});
+      expect(result.patientName).toBeNull();
+      expect(result.email).toBeNull();
+      expect(result.birthDate).toBeNull();
+      expect(result.sex).toBeNull();
+      expect(result.consentTemplateId).toBeNull();
+      expect(result.recordNumber).toBeNull();
+    });
+
+    it('keeps a non-numeric recordNumber as a trimmed string', () => {
+      const result = importLgpdService.parsePatientRow({ recordNumber: 'AB-123' });
+      expect(result.recordNumber).toBe('AB-123');
+    });
+  });
+
+  describe('parseSampleRow', () => {
+    it('parses core identity and specimen fields', () => {
+      const row = {
+        patientID: ' 12345678 ',
+        patientName: ' João  ',
+        birthDate: '01/01/1990',
+        email: 'joao@example.com',
+        sex: 'M',
+        sampleType: ' Plasma ',
+        sampleOrigin: 'Sangue Venoso Periférico',
+        extractionProtocol: 'Tubo EDTA (Tampa Roxa)',
+        barcode: ' BC-001 ',
+        quantity: '5.5',
+      };
+      const result = importLgpdService.parseSampleRow(row);
+
+      expect(result.patientID).toBe('12345678');
+      expect(result.patientName).toBe('João');
+      expect(result.patientBirthDate.getFullYear()).toBe(1990);
+      expect(result.sampleType).toBe('Plasma');
+      expect(result.sampleOrigin).toBe('VENOUS_BLOOD');
+      expect(result.extractionProtocol).toBe('TUBE_EDTA');
+      expect(result.barcode).toBe('BC-001');
+      expect(result.quantity).toBe(5.5);
+    });
+
+    it('defaults registerDate to now when no date columns are supplied', () => {
+      const before = Date.now();
+      const result = importLgpdService.parseSampleRow({});
+      const after = Date.now();
+      expect(result.registerDate.getTime()).toBeGreaterThanOrEqual(before);
+      expect(result.registerDate.getTime()).toBeLessThanOrEqual(after);
+    });
+
+    it('only accepts a whitelisted set of pharmacology treatment_status values', () => {
+      const valid = importLgpdService.parseSampleRow({ treatment_status: 'TREATED' });
+      expect(valid.pharmacology_data.treatment_status).toBe('TREATED');
+
+      const invalid = importLgpdService.parseSampleRow({ treatment_status: 'BOGUS_STATUS' });
+      expect(invalid.pharmacology_data.treatment_status).toBe('');
+    });
+
+    it('strips an ATC: prefix and uppercases the atc_code', () => {
+      const result = importLgpdService.parseSampleRow({ atc_code: 'atc:a10bx02' });
+      expect(result.pharmacology_data.atc_code).toBe('A10BX02');
+    });
+  });
+
+  describe('buildMappedPatientRow', () => {
+    it('applies explicit mapping over the raw row', () => {
+      const rawRow = { Coluna1: 'Fulano de Tal', ColunaEmail: 'fulano@example.com' };
+      const mapping = { Coluna1: 'patientName', ColunaEmail: 'email' };
+      const result = importLgpdService.buildMappedPatientRow(rawRow, mapping);
+      expect(result.patientName).toBe('Fulano de Tal');
+      expect(result.email).toBe('fulano@example.com');
+    });
+
+    it('falls back to canonical header inference (accent/case-insensitive) when no explicit mapping matches', () => {
+      const rawRow = { 'Nome Paciente': 'Ciclana', 'Data Nascimento': '01/01/2000' };
+      // canonicalHeaderMap keys are fully normalized (no spaces/accents), so
+      // "Nome Paciente" normalizes to "nomepaciente" which maps to patientName.
+      const result = importLgpdService.buildMappedPatientRow(rawRow, {});
+      expect(result.patientName).toBe('Ciclana');
+    });
+
+    it('does not let an empty/whitespace-only raw value override an already-mapped field', () => {
+      const rawRow = { patientName: 'Real Name', extra: '   ' };
+      const result = importLgpdService.buildMappedPatientRow(rawRow, {});
+      expect(result.patientName).toBe('Real Name');
+      expect(result.extra).toBeUndefined();
+    });
+
+    it('promotes responsavelNome/responsavelEmail aliases to representativeName/Email', () => {
+      const rawRow = { responsavelNome: 'Responsavel X' };
+      const result = importLgpdService.buildMappedPatientRow(rawRow, {});
+      expect(result.representativeName).toBe('Responsavel X');
+    });
+  });
+
+  describe('getPatientsSmartImportMetadata', () => {
+    it('lists consentTemplateId among the required fields (LGPD consent gate)', () => {
+      const metadata = importLgpdService.getPatientsSmartImportMetadata();
+      const fieldNames = metadata.requiredFields.map((f) => f.field);
+      expect(fieldNames).toContain('consentTemplateId');
+      expect(fieldNames).toContain('email');
+    });
+
+    it('declares SKIP_INVALID_ROWS as the invalid-row policy', () => {
+      const metadata = importLgpdService.getPatientsSmartImportMetadata();
+      expect(metadata.invalidRowPolicy.code).toBe('SKIP_INVALID_ROWS');
+    });
+  });
+
+  describe('readFile', () => {
+    it('rejects unsupported file extensions', async () => {
+      await expect(
+        importLgpdService.readFile('/tmp/whatever.pdf', 'whatever.pdf', 'patients')
+      ).rejects.toThrow('Formato de arquivo não suportado');
+    });
+
+    it('rejects when the CSV file does not exist on disk', async () => {
+      await expect(
+        importLgpdService.readFile('/definitely/does/not/exist.csv', 'exist.csv', 'patients')
+      ).rejects.toThrow('Arquivo não encontrado');
+    });
+
+    it('rejects when the Excel file does not exist on disk', async () => {
+      await expect(
+        importLgpdService.readFile('/definitely/does/not/exist.xlsx', 'exist.xlsx', 'patients')
+      ).rejects.toThrow(/Erro ao processar arquivo Excel/);
+    });
+  });
+
+  describe('importPatientsSmart', () => {
+    it('rejects when no mapping is provided (mapping is mandatory for smart import)', async () => {
+      const fakeDb = {};
+      const fakeFile = { path: '/does/not/matter.csv', originalname: 'x.csv' };
+      await expect(
+        importLgpdService.importPatientsSmart(fakeDb, fakeFile, { mapping: {} })
+      ).rejects.toThrow('Mapeamento inteligente é obrigatório');
+    });
+  });
+
+  describe('cleanupFile', () => {
+    it('does not throw when the file does not exist', () => {
+      expect(() => importLgpdService.cleanupFile('/definitely/does/not/exist-cleanup.tmp')).not.toThrow();
+    });
+  });
+});
