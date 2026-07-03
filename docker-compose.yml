@@ -70,6 +70,51 @@ services:
       retries: 10
       start_period: 5s
 
+  tsa:
+    build:
+      context: ./infra/tsa
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    init: true
+    ports:
+      - "${TSA_HOST_PORT:-8095}:8095"
+    volumes:
+      - ./infra/tsa/openssl-ts.cnf:/etc/tsa/openssl-ts.cnf:ro
+      - ./infra/tsa/data:/var/lib/tsa
+      - ./infra/tsa/certs:/etc/tsa/certs
+      - ./infra/tsa/secrets:/run/secrets
+    environment:
+      PORT: "8095"
+      TSA_CONFIG: /etc/tsa/openssl-ts.cnf
+      TSA_SECTION: tsa_config
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8095/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  witness:
+    build:
+      context: ./infra/witness
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    init: true
+    ports:
+      - "${WITNESS_HOST_PORT:-8096}:8096"
+    environment:
+      PORT: "8096"
+      WITNESS_ID: bioavanced-local-witness
+      WITNESS_PRIVATE_KEY_PEM_FILE: /run/secrets/witness_key.pem
+    volumes:
+      - ./infra/witness/secrets:/run/secrets
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8096/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
   backend:
     build:
       context: ./api/backend
@@ -98,6 +143,10 @@ services:
       neo4j:
         condition: service_healthy
       influxdb:
+        condition: service_healthy
+      tsa:
+        condition: service_healthy
+      witness:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]

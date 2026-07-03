@@ -4,6 +4,7 @@ const { sanitizePatientForLogs } = require('../utils/patientAnonymization');
 const { anonymizeLogs, anonymizeLogUser } = require('../utils/userAnonymization');
 const { serializeLogs, serializeLogSimple } = require('../utils/logSerializer');
 const ExcelJS = require('exceljs');
+const auditV2Service = require('./audit-v2.service');
 
 /**
  * Service de Logs/Auditoria
@@ -80,6 +81,12 @@ class LogService {
         _id: insertedId,
         ...log
       };
+
+      try {
+        await auditV2Service.ingestLogRecord(createdLog, db);
+      } catch (auditError) {
+        logger.warn('Falha ao espelhar log em audit_events:', auditError.message || auditError);
+      }
 
       // Serializa o log criado para converter tipos especiais
       return serializeLogSimple(createdLog);

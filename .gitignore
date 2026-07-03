@@ -16,10 +16,14 @@ frontend/node_modules/
 .env.docker
 *.pem
 *.key
+*.tsq
+*.tsr
 *.p12
 *.pfx
 *.crt
+*.srl
 secrets/
+.dev-secrets/
 .env.docker
 .env.docker.*
 !*.example
@@ -64,6 +68,8 @@ backup_before_push.patch
 backup_status_before_push.txt
 artifacts/
 *.zip
+data-dump.json
+letsencrypt/accounts/
 
 # Official Orphanet source archives are versioned for reproducible seed builds.
 !orpha-data-raw/

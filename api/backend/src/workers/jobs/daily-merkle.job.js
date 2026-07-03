@@ -1,6 +1,7 @@
 const { connectDB, closeConnection } = require('../../database/mongo');
 const integrityService = require('../../services/integrityCheckService');
 const auditRootService = require('../../services/auditRoot.service');
+const auditV2Service = require('../../services/audit-v2.service');
 const logger = require('../../utils/logger');
 
 /**
@@ -35,6 +36,7 @@ async function recoverMissingDates(db, upToDateInclusive) {
     const result = await integrityService.buildMerkleForDate(date, db, { persistMissing: true });
     if (result && result.root) {
       await auditRootService.saveDailyRoot({ date, root: result.root, treeSize: result.leaves.length, db });
+      await anchorV2ForDate(db, date, result);
     }
   }
 }
@@ -60,6 +62,7 @@ async function runOnce() {
     }
 
     await auditRootService.saveDailyRoot({ date: targetDate, root: result.root, treeSize: result.leaves.length, db });
+    await anchorV2ForDate(db, targetDate, result);
     await recoverMissingDates(db, targetDate);
     await auditRootService.processTimestampBacklog({ externalDb: db });
     logger.info(`[daily-merkle] Root salva para ${targetDate} -> ${result.root}`);
@@ -68,6 +71,23 @@ async function runOnce() {
   } finally {
     if (db) await closeConnection();
   }
+}
+
+async function anchorV2ForDate(db, date, result) {
+  const logId = `audit-${date}`;
+  const previous = await db.collection('audit_tree_heads').find({ logId }).sort({ treeSize: -1 }).limit(1).toArray();
+  const previousTreeHeadHash = previous[0]?.rootHash || null;
+  const treeHead = await auditV2Service.createTreeHead({
+    logId,
+    treeSize: result.leaves.length,
+    rootHash: result.root,
+    previousTreeHeadHash,
+    periodStart: `${date}T00:00:00.000Z`,
+    periodEnd: `${date}T23:59:59.999Z`,
+    createdAt: new Date().toISOString(),
+  }, db);
+  logger.info(`[daily-merkle] Tree head v2 gerado para ${date} com status=${treeHead.status}`);
+  return treeHead;
 }
 
 function scheduleNextRun() {
