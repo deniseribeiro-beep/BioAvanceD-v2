@@ -42,6 +42,13 @@ parallel-test-agents slice (107 new targeted tests, all green) — exact new
 percentages not yet re-measured, will land at the next full reconcile. This
 slice surfaced a real crash-risk bug, filed as issue #27 (see below).
 
+Since baseline (4th slice): `assistant.service.js`, `MongoPatientConsentReadRepository.js`,
+and `terminologySync.service.js` moved off the LOW bucket by a
+parallel-test-agents slice (58 new targeted tests, all green) — exact new
+percentages not yet re-measured, will land at the next full reconcile. This
+slice surfaced a consent-bypass compliance risk (#28) and two terminology-sync
+bugs (#29, #30) — see below.
+
 ## How to use this when picking a slice
 
 1. Prefer a **ZERO** file with real logic (not a script/model/port
@@ -84,9 +91,6 @@ Low priority (models/interfaces/one-off scripts — thin or non-request-path):
 Sorted ascending (worst first). This is the primary slice-picking pool:
 
 ```
-src/services/assistant.service.js                                   7.54%
-src/infrastructure/persistence/mongo/MongoPatientConsentReadRepository.js  8.33%
-src/services/terminologySync.service.js                             9.16%
 src/services/consentNeo4jSync.service.js                            9.25%
 src/services/analysisValidation.service.js                          9.3%
 src/config/redis.js                                                  9.43%
