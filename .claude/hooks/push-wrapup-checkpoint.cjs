@@ -14,7 +14,13 @@ process.stdin.on('end', () => {
     process.exit(0);
   }
 
-  if (/\bgit\s+push\b/.test(command)) {
+  // Anchored to command positions (start of command or after a separator) so a
+  // `git push` merely mentioned inside a string/commit-message doesn't false-fire
+  // (observed 2026-07-03: fired on a printf whose payload contained "git push").
+  // Known residual: a string payload containing a literal `&& git push` still
+  // matches — inherent to text-matching without a shell parser. Acceptable: a
+  // false fire costs one self-explaining reminder paragraph, nothing blocks.
+  if (/(^|\n|&&|\|\||;|\|)\s*git\s+(-\S+\s+)*push\b/.test(command)) {
     console.log(
       JSON.stringify({
         decision: 'block',
