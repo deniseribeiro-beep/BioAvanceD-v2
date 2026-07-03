@@ -25,6 +25,11 @@ MoveSampleUseCase from the prior session).
 Baseline: Statements 46.72%, Branches 42.34%, Functions 53.06%, Lines
 47.11% (8165/17331). Full suite green (exit 0) on this run.
 
+Since baseline: `MongoStorageTopologyReadRepository.js`, `database/mongo.js`,
+and `sample-file.controller.js` moved off the LOW bucket by a
+parallel-test-agents slice (63 new targeted tests, all green) — exact new
+percentages not yet re-measured, will land at the next full reconcile.
+
 ## How to use this when picking a slice
 
 1. Prefer a **ZERO** file with real logic (not a script/model/port
@@ -67,11 +72,8 @@ Low priority (models/interfaces/one-off scripts — thin or non-request-path):
 Sorted ascending (worst first). This is the primary slice-picking pool:
 
 ```
-src/infrastructure/persistence/mongo/MongoStorageTopologyReadRepository.js  2.98%
 src/models/SampleFile.js                                            3.44%
 src/models/ImportMetrics.js                                         4.54%
-src/database/mongo.js                                                5.19%
-src/controllers/sample-file.controller.js                           5.39%
 src/controllers/import.controller.js                                 6.77%
 src/services/import-async.service.js                                6.87%
 src/models/IntelligentAssistant.js                                  7.14%
