@@ -91,6 +91,20 @@ dependencies too (e.g. a service's internal `require('node-cron')` or
 `require('../utils/logger')`) — spy on the dependency's exports the same way
 rather than trying to `vi.mock` the dependency's module path.
 
+**Loading the module under test via `await import(...)` has the same failure mode as
+`vi.mock` on CJS** (confirmed 2026-07-03, `security.routes.test.js`): a test file that
+does `const foo = (await import('../../src/foo')).default || (await import(...))` gets
+a *different module instance* than the one the source's own internal `require(...)`
+calls resolve to (Vite's ESM interop wraps a fresh instance around the CJS module
+rather than returning the same `require.cache` entry). `vi.spyOn` on that imported
+instance then silently no-ops for the same reason as above — the real dependency runs
+underneath the "mock." This is easy to miss because the test can still pass if its
+assertions are loose enough to also be satisfied by the real implementation's output
+(that's exactly how it went undetected in `security.routes.test.js` until stricter
+assertions surfaced it — see issue #41). Always load CJS sources under test —
+including the router/service file itself, not just its dependencies — via
+`createRequire(import.meta.url)`, never `await import(...)`.
+
 **`vi.spyOn` also silently fails if the source file destructures the import**
 (confirmed independently 3x, 2026-07-02: `RegisterSample.js`, `authConsent.js`,
 `iot-streaming.service.js` — all do `const { getCollection } = require(...)` /

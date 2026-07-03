@@ -63,6 +63,19 @@ confirmed bug (#35 — missing eventType validation in recordCustodyEvent) and t
 lower-confidence findings (#36, #37 — sanitizeRowForError over-stripping,
 lenient birth-date parsing) — see below.
 
+Since baseline (7th slice): `sample.service.js` and
+`infrastructure/database/influxdb/connection.js` moved off the LOW bucket, and
+`security.routes.js` got integration coverage extended (pre-existing test file),
+by a parallel-test-agents slice (77 new targeted tests, all green) — exact new
+percentages not yet re-measured, will land at the next full reconcile. This
+slice surfaced two confirmed bugs (#38 — SampleModel export shadowing breaks
+sample creation/withdrawal/return validation in production, #39 — returnSample's
+PT-BR condition literals never match the real English RETURN_CONDITIONS values),
+one lower-confidence route inconsistency (#40 — /consent-queue missing the db
+availability check its siblings have), and one test-tooling finding affecting
+other files too (#41 — `await import()` on CJS sources defeats `vi.spyOn` the
+same way `vi.mock()` does) — see below.
+
 ## How to use this when picking a slice
 
 1. Prefer a **ZERO** file with real logic (not a script/model/port
@@ -110,9 +123,6 @@ src/models/QualityDescription.js                                    11.11%
 src/models/SampleOrigin.js                                          11.11%
 src/models/SampleType.js                                            11.11%
 src/routes/importFhirIntelligent.js                                 15.58%
-src/infrastructure/database/influxdb/connection.js                  16.12%
-src/services/sample.service.js                                      18.81%
-src/interface/routes/security.routes.js                             18.91%
 src/interface/routes/reports.routes.js                              19.06%
 src/infrastructure/database/mongodb/connection.js                   19.23%
 src/controllers/upload.controller.js                                19.51%
