@@ -106,6 +106,21 @@ block that marks batch progress as `'failed'` is dead code; a rejected
 batch-import job just propagates the error with no progress update) — see
 below.
 
+Since baseline (11th slice): `ExtractionProtocol.js`, `QualityDescription.js`,
+`SampleOrigin.js`, and `SampleType.js` moved off the LOW bucket by a
+parallel-test-agents slice (32 new targeted tests, all green — these four
+models are byte-for-byte identical in shape, so one `describe.each`-driven test
+file covered all four with no bugs found). In the same iteration,
+`reports.routes.js` got 10 new integration tests added to its existing test
+file (13 total now green), covering the `:id`/`:type` route family
+(get-by-id/delete dual reportID-then-ObjectId resolution, preview/export/
+export-pdf, a 503-without-db case) — but only exercises the trivial
+`audit`/logs branch of `buildPreviewData`'s ~10-branch type dispatch, so it's
+left in the LOW bucket rather than moved off; the other branches (notably
+`samplesByPatient`'s cross-collection `distinct`/grouping logic) are a good
+candidate for a follow-up slice. Exact new percentages not yet re-measured,
+will land at the next full reconcile. No bugs surfaced this slice.
+
 ## How to use this when picking a slice
 
 1. Prefer a **ZERO** file with real logic (not a script/model/port
@@ -149,12 +164,8 @@ Low priority (models/interfaces/one-off scripts — thin or non-request-path):
 Sorted ascending (worst first). This is the primary slice-picking pool:
 
 ```
-src/models/ExtractionProtocol.js                                    11.11%
-src/models/QualityDescription.js                                    11.11%
-src/models/SampleOrigin.js                                          11.11%
-src/models/SampleType.js                                            11.11%
 src/routes/importFhirIntelligent.js                                 15.58%
-src/interface/routes/reports.routes.js                              19.06%
+src/interface/routes/reports.routes.js                    19.06% (partially extended, see 11th slice note above)
 src/core/use-cases/CheckStorageBoxIntegrityUseCase.js               20%
 src/core/use-cases/GetFreezerOccupancyStatsUseCase.js               20%
 src/core/use-cases/GetFreezerTreeUseCase.js                         20%

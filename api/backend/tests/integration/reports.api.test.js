@@ -41,6 +41,9 @@ function buildDb(seedReports = []) {
       if (Object.prototype.hasOwnProperty.call(filter, 'reportID')) {
         return reports.find((report) => Number(report.reportID) === Number(filter.reportID)) || null;
       }
+      if (Object.prototype.hasOwnProperty.call(filter, '_id')) {
+        return reports.find((report) => String(report._id) === String(filter._id)) || null;
+      }
       return null;
     },
     async insertOne(doc) {
@@ -115,6 +118,13 @@ describe('Reports API integration', () => {
         generatedAt: new Date('2026-04-01T10:00:00.000Z'),
         createdAt: new Date('2026-04-01T09:59:00.000Z'),
       },
+      {
+        _id: '5f8d0d55b54764421b7156c3',
+        reportID: 7,
+        reportType: 'temperature',
+        generatedAt: new Date('2026-04-02T10:00:00.000Z'),
+        createdAt: new Date('2026-04-02T09:59:00.000Z'),
+      },
     ]);
 
     setCachedModule(modulePaths.auth, { authenticate });
@@ -142,8 +152,8 @@ describe('Reports API integration', () => {
     const response = await request(app).get('/api/reports');
 
     expect(response.status).toBe(200);
-    expect(response.body).toHaveLength(1);
-    expect(response.body[0].reportID).toBe(2);
+    expect(response.body).toHaveLength(2);
+    expect(response.body.map((report) => report.reportID).sort()).toEqual([2, 7]);
   });
 
   it('POST /api/reports/generate cria relatório com próximo ID sequencial', async () => {
@@ -153,10 +163,10 @@ describe('Reports API integration', () => {
     });
 
     expect(response.status).toBe(201);
-    expect(response.body.reportID).toBe(3);
+    expect(response.body.reportID).toBe(8);
     expect(response.body.reportType).toBe('audit');
-    expect(mockDb.reports).toHaveLength(2);
-    expect(mockDb.reports[1].generatedBy).toBe('user-1');
+    expect(mockDb.reports).toHaveLength(3);
+    expect(mockDb.reports[2].generatedBy).toBe('user-1');
   });
 
   it('GET /api/reports/:type/filters retorna opções padrão', async () => {
@@ -169,5 +179,100 @@ describe('Reports API integration', () => {
       { name: 'status', label: 'Status', type: 'select', options: ['Ativo', 'Inativo'] },
       { name: 'keyword', label: 'Palavra-chave', type: 'text' },
     ]);
+  });
+
+  it('GET /api/reports/:id resolve por reportID numérico', async () => {
+    const response = await request(app).get('/api/reports/2');
+
+    expect(response.status).toBe(200);
+    expect(response.body.reportID).toBe(2);
+    expect(response.body.reportType).toBe('patients');
+  });
+
+  it('GET /api/reports/:id cai para busca por _id (ObjectId) quando não numérico', async () => {
+    const response = await request(app).get('/api/reports/5f8d0d55b54764421b7156c3');
+
+    expect(response.status).toBe(200);
+    expect(response.body.reportID).toBe(7);
+    expect(response.body.reportType).toBe('temperature');
+  });
+
+  it('GET /api/reports/:id retorna 404 quando não resolve por reportID nem por _id', async () => {
+    const response = await request(app).get('/api/reports/000000000000000000000000');
+
+    expect(response.status).toBe(404);
+    expect(response.body.error).toBe('Relatório não encontrado');
+  });
+
+  it('DELETE /api/reports/:id remove por reportID numérico', async () => {
+    const response = await request(app).delete('/api/reports/2');
+
+    expect(response.status).toBe(200);
+    expect(response.body.success).toBe(true);
+    expect(mockDb.reports.some((report) => report.reportID === 2)).toBe(false);
+  });
+
+  it('DELETE /api/reports/:id cai para remoção por _id (ObjectId) quando não numérico', async () => {
+    const response = await request(app).delete('/api/reports/5f8d0d55b54764421b7156c3');
+
+    expect(response.status).toBe(200);
+    expect(response.body.success).toBe(true);
+    expect(mockDb.reports.some((report) => report._id === '5f8d0d55b54764421b7156c3')).toBe(false);
+  });
+
+  it('DELETE /api/reports/:id retorna 404 quando deletedCount é 0 em ambas as tentativas', async () => {
+    const response = await request(app).delete('/api/reports/999');
+
+    expect(response.status).toBe(404);
+    expect(response.body.error).toBe('Relatório não encontrado');
+  });
+
+  it('POST /api/reports/:type/preview retorna envelope de sucesso com dados', async () => {
+    const response = await request(app).post('/api/reports/audit/preview').send({ filters: {} });
+
+    expect(response.status).toBe(200);
+    expect(response.body.success).toBe(true);
+    expect(response.body.reportType).toBe('audit');
+    expect(typeof response.body.generatedAt).toBe('string');
+    expect(response.body.data).toEqual({ total: 0, logs: [], previewLimited: false });
+  });
+
+  it('GET /api/reports/:type/export retorna CSV com cabeçalho', async () => {
+    const response = await request(app).get('/api/reports/audit/export');
+
+    expect(response.status).toBe(200);
+    expect(response.headers['content-type']).toMatch(/^text\/csv/);
+    expect(response.text.split('\n')[0]).toBe('total,message');
+  });
+
+  it('GET /api/reports/:type/export/pdf retorna envelope PDF', async () => {
+    const response = await request(app).get('/api/reports/audit/export/pdf');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      success: true,
+      format: 'pdf',
+      data: { total: 0, logs: [], previewLimited: false },
+    });
+  });
+
+  describe('quando o banco de dados não está disponível', () => {
+    beforeEach(() => {
+      app = express();
+      app.use(express.json());
+      app.use((req, _res, next) => {
+        req.app.locals.db = null;
+        next();
+      });
+      const reportsRouter = require(modulePaths.controller);
+      app.use('/api/reports', reportsRouter);
+    });
+
+    it('GET /api/reports retorna 503 quando o db não está disponível', async () => {
+      const response = await request(app).get('/api/reports');
+
+      expect(response.status).toBe(503);
+      expect(response.body.error).toBe('Banco de dados não disponível');
+    });
   });
 });
