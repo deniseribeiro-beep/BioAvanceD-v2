@@ -87,6 +87,16 @@ staging-import.service.js writes failure records to a schema field key (`errors`
 doesn't exist on the `StagingImport` model, which only declares `importErrors`, so
 Mongoose's strict mode silently drops them) — see below.
 
+Since baseline (9th slice): `sensor.service.js` (non-quarantine paths),
+`saveTelemetryPoint.js`, and `biomarker-xai.service.js` moved off the LOW
+bucket by a parallel-test-agents slice (63 new targeted tests, all green) —
+exact new percentages not yet re-measured, will land at the next full
+reconcile. This slice surfaced two findings for domain/design review (#44 —
+sensor.service.js's `updateSensor` mutates the caller's `updateData` object
+plus its `quarantineService` singleton state has no reset guard;
+#45 — biomarker-xai.service.js's alphaGal rule table has no elevated-value
+zone, unlike lysoGb3's full three-zone scheme) — see below.
+
 ## How to use this when picking a slice
 
 1. Prefer a **ZERO** file with real logic (not a script/model/port
@@ -141,9 +151,6 @@ src/core/use-cases/GetFreezerTreeUseCase.js                         20%
 src/core/use-cases/GetSampleStorageLocationUseCase.js               20%
 src/core/use-cases/SearchAllocatableSamplesUseCase.js               20%
 src/core/use-cases/ValidateStoragePositionUseCase.js                20%
-src/services/sensor.service.js                                      20.25%
-src/services/saveTelemetryPoint.js                                  22.22%
-src/services/biomarker-xai.service.js                               22.66%
 src/interface/routes/compliance.routes.js                           23%
 src/controllers/cid.controller.js                                   23.52%
 src/controllers/temperature.controller.js                           23.88%
