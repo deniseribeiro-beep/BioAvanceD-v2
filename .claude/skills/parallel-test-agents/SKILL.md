@@ -39,6 +39,14 @@ instead — coordination overhead isn't worth it for a single slice.
 3. Decide how many agents (usually 2-4 — more than that gets hard to
    review honestly). Pick a number you can actually verify afterward;
    the bottleneck is your review capacity, not agent capacity.
+4. **Check whether each slice's target test file already exists**
+   (`git log --oneline -1 -- <path>` or just look) before telling the
+   agent to "write a new file at X." Confirmed 2026-07-03
+   (BioAvanceD-v2, `security.routes.test.js`): a brief assumed a fresh
+   file when a thinner, already-committed test file was sitting at that
+   exact path — the agent had to notice the mismatch and extend it
+   instead. It handled it fine, but the brief was wrong going in; a
+   30-second check catches this before the agent has to improvise.
 
 ## Launching and briefing each agent
 
