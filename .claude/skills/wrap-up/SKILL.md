@@ -27,6 +27,27 @@ Two confirmed recurrence patterns, both of which count as their own trigger:
   session was cut, finish it before starting anything new (2026-07-03: an interrupted
   audit was abandoned post-compact and only surfaced when the user asked about it).
 
+## Invocation means a Skill tool call — not recalling this text
+
+"Running wrap-up" means invoking this skill via the Skill tool, fresh, at each trigger.
+Two things that do NOT count (both observed 2026-07-03, when several consecutive
+iterations "ran" the audit as prose reconstructed from memory and no Skill call ever
+happened):
+
+- **Having this file's text in context** — from an earlier invocation, or carried
+  forward in a compact summary — is not an invocation. The post-compact reminder that
+  says "do not re-execute skills listed above" does not apply here: that reminder
+  guards one-time setup actions, and this skill has none. A completed wrap-up is not
+  "still running"; re-invoking it for a new trigger is always correct.
+- **Writing out the checklist from memory** — however faithful — is not an invocation.
+  The tool call is the verifiable part; reconstruction silently degrades and can't be
+  audited afterward.
+
+A committed PostToolUse hook (`.claude/hooks/push-wrapup-checkpoint.cjs`) reinforces
+this mechanically: every `git push` injects a reminder to make the Skill call before
+any summary. If you see that reminder at an end-of-task push, the next action is the
+Skill tool call, not the summary.
+
 ## What to do
 
 This is an audit for friction, not a status checklist. Go in assuming something rubbed wrong

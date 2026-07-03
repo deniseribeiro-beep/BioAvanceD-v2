@@ -132,13 +132,15 @@ iteration's slice.
 1. Commit; push the branch if the slice is verified
    (`bioavanced-conventions`: pushing the branch is cheap and runs no
    CI; opening a PR is Dennis's call, never yours).
-2. **Run `wrap-up` and work its audit through to completion before a
-   single word of the final summary is drafted.** The moment you catch
-   yourself drafting "here's what I did" is the trigger. This step
-   blocks step 3 — a summary written before the wrap-up call returned
-   is the recurring failure this ordering exists to prevent, and it
-   applies to *every* iteration of a multi-iteration loop, not just
-   the first.
+2. **Invoke `wrap-up` via the Skill tool — a fresh call, every
+   iteration — and work its audit through to completion before a
+   single word of the final summary is drafted.** The push in step 1
+   triggers a hook reminder for exactly this. Having the wrap-up text
+   in context (from earlier, or from a compact summary) is not an
+   invocation, and writing its checklist from memory is not an
+   invocation — the Skill call itself is the verifiable step
+   (confirmed miss 2026-07-03: several iterations faked the audit as
+   remembered prose). This step blocks step 3.
 3. Report: which slice, what tests were added (file paths), what they
    found, coverage movement if measured, what the next slice should be,
    plus whatever `wrap-up` surfaced.
