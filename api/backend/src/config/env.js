@@ -2,6 +2,7 @@ require('dotenv').config();
 
 module.exports = {
   NODE_ENV: process.env.NODE_ENV || 'development',
+  TEST_ENVIRONMENT: process.env.TEST_ENVIRONMENT === 'true' || process.env.TEST_ENVIRONMENT === '1',
   PORT: process.env.PORT || 3000,
 
   // Mongo
