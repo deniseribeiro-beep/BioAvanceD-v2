@@ -16,11 +16,14 @@ stale as slices land and as source files change. Keep it honest:
   re-derive buckets from `coverage/coverage-summary.json` (`lines.pct`
   per file). `coverage/` is gitignored — this file is the durable record.
 
-Last full reconcile: **2026-07-02**, snapshot from commit `d6c8ca23`
-(after the sendIncidentAlertEmail / sendCriticalAlertEmail /
-GetBoxAvailablePositionsUseCase slices landed).
-Baseline: Statements 44.01%, Branches 39.91%, Functions 49.97%, Lines
-44.36% (7689/17331).
+Last full reconcile: **2026-07-02**, snapshot from commit `301dc9a9`
+(end-of-loop reconcile after the biomarker-integrity / mqtt-ingestion-audit
+/ auto-assign-sample.controller / import-batch.controller / MongoAuditRepository
+/ validateEnv / AllocateSampleUseCase / config-queue / InfluxTelemetryWriteRepository
+parallel-test-agents slices landed, plus hl7Audit.service / ReleaseSampleUseCase /
+MoveSampleUseCase from the prior session).
+Baseline: Statements 46.72%, Branches 42.34%, Functions 53.06%, Lines
+47.11% (8165/17331). Full suite green (exit 0) on this run.
 
 ## How to use this when picking a slice
 
@@ -59,87 +62,87 @@ Low priority (models/interfaces/one-off scripts — thin or non-request-path):
 - `src/scripts/seedOrphanetCid.js`
 - `src/scripts/seeder.js`
 
-## LOW coverage (1-49% lines) — 101 files
+## LOW coverage (1-49% lines) — 89 files
 
 Sorted ascending (worst first). This is the primary slice-picking pool:
 
 ```
 src/infrastructure/persistence/mongo/MongoStorageRepository.js      2.23%
 src/infrastructure/persistence/mongo/MongoStorageTopologyReadRepository.js  2.98%
-src/services/storageService.js                                     2.99%
-src/models/SampleFile.js                                           3.44%
-src/models/ImportMetrics.js                                        4.54%
-src/controllers/import-lgpd.controller.js                          5.03%
-src/database/mongo.js                                               5.19%
-src/controllers/sample-file.controller.js                          5.39%
-src/controllers/import.controller.js                               6.77%
-src/services/import-async.service.js                               6.87%
-src/models/IntelligentAssistant.js                                 7.14%
-src/controllers/import-async.controller.js                         7.43%
-src/services/assistant.service.js                                  7.54%
+src/models/SampleFile.js                                            3.44%
+src/services/storageService.js                                      3.74%
+src/models/ImportMetrics.js                                         4.54%
+src/controllers/import-lgpd.controller.js                           5.03%
+src/database/mongo.js                                                5.19%
+src/controllers/sample-file.controller.js                           5.39%
+src/controllers/import.controller.js                                 6.77%
+src/services/import-async.service.js                                6.87%
+src/models/IntelligentAssistant.js                                  7.14%
+src/controllers/import-async.controller.js                          7.43%
+src/services/assistant.service.js                                   7.54%
 src/infrastructure/persistence/mongo/MongoPatientConsentReadRepository.js  8.33%
-src/services/terminologySync.service.js                            9.16%
-src/services/consentNeo4jSync.service.js                           9.25%
-src/services/analysisValidation.service.js                         9.3%
-src/config/redis.js                                                 9.43%
-src/infrastructure/database/neo4j/LineageRepository.js              9.52%
-src/models/ExtractionProtocol.js                                   11.11%
-src/models/QualityDescription.js                                   11.11%
-src/models/SampleOrigin.js                                         11.11%
-src/models/SampleType.js                                           11.11%
-src/infrastructure/database/neo4j/connection.js                    11.53%
-src/services/import-lgpd.service.js                                14.5%
-src/routes/importFhirIntelligent.js                                15.58%
-src/infrastructure/database/influxdb/connection.js                 16.12%
-src/services/sample.service.js                                     18.81%
-src/interface/routes/security.routes.js                            18.91%
-src/interface/routes/reports.routes.js                             19.06%
-src/infrastructure/database/mongodb/connection.js                  19.23%
-src/controllers/upload.controller.js                               19.51%
-src/core/use-cases/CheckStorageBoxIntegrityUseCase.js              20%
-src/core/use-cases/GetFreezerOccupancyStatsUseCase.js              20%
-src/core/use-cases/GetFreezerTreeUseCase.js                        20%
-src/core/use-cases/GetSampleStorageLocationUseCase.js              20%
-src/core/use-cases/SearchAllocatableSamplesUseCase.js              20%
-src/core/use-cases/ValidateStoragePositionUseCase.js               20%
-src/services/staging-import.service.js                             20%
-src/services/sensor.service.js                                     20.25%
-src/services/saveTelemetryPoint.js                                 22.22%
-src/services/biomarker-xai.service.js                              22.66%
-src/interface/routes/compliance.routes.js                          23%
-src/controllers/cid.controller.js                                  23.52%
-src/controllers/temperature.controller.js                          23.88%
-src/workers/workers/result-worker.js                               24.21%
-src/interface/routes/result.routes.js                              24.33%
-src/interface/controllers/storage-query.controller.js              24.7%
-src/services/fhir-sync.service.js                                  25.11%
-src/services/consent.service.js                                    26.1%
-src/routes/dictionary.js                                           26.71%
-src/services/NotificationService.js                                28.33%
-src/interface/routes/auth.routes.js                                28.49%
-src/routes/hpo.js                                                  28.94%
-src/services/fhir-validator.service.js                             29.06%
-src/interface/controllers/move-sample.controller.js                29.16%
+src/services/terminologySync.service.js                             9.16%
+src/services/consentNeo4jSync.service.js                            9.25%
+src/services/analysisValidation.service.js                          9.3%
+src/config/redis.js                                                  9.43%
+src/infrastructure/database/neo4j/LineageRepository.js               9.52%
+src/models/ExtractionProtocol.js                                    11.11%
+src/models/QualityDescription.js                                    11.11%
+src/models/SampleOrigin.js                                          11.11%
+src/models/SampleType.js                                            11.11%
+src/infrastructure/database/neo4j/connection.js                     11.53%
+src/services/import-lgpd.service.js                                 14.5%
+src/routes/importFhirIntelligent.js                                 15.58%
+src/infrastructure/database/influxdb/connection.js                  16.12%
+src/services/sample.service.js                                      18.81%
+src/interface/routes/security.routes.js                             18.91%
+src/interface/routes/reports.routes.js                              19.06%
+src/infrastructure/database/mongodb/connection.js                   19.23%
+src/controllers/upload.controller.js                                19.51%
+src/core/use-cases/CheckStorageBoxIntegrityUseCase.js               20%
+src/core/use-cases/GetFreezerOccupancyStatsUseCase.js               20%
+src/core/use-cases/GetFreezerTreeUseCase.js                         20%
+src/core/use-cases/GetSampleStorageLocationUseCase.js               20%
+src/core/use-cases/SearchAllocatableSamplesUseCase.js               20%
+src/core/use-cases/ValidateStoragePositionUseCase.js                20%
+src/services/staging-import.service.js                              20%
+src/services/sensor.service.js                                      20.25%
+src/services/saveTelemetryPoint.js                                  22.22%
+src/services/biomarker-xai.service.js                               22.66%
+src/interface/routes/compliance.routes.js                           23%
+src/controllers/cid.controller.js                                   23.52%
+src/controllers/temperature.controller.js                           23.88%
+src/workers/workers/result-worker.js                                24.21%
+src/interface/routes/result.routes.js                               24.33%
+src/interface/controllers/storage-query.controller.js               24.7%
+src/services/fhir-sync.service.js                                   25.11%
+src/services/consent.service.js                                     26.1%
+src/routes/dictionary.js                                            26.71%
+src/services/NotificationService.js                                 28.33%
+src/interface/routes/auth.routes.js                                 28.49%
+src/routes/hpo.js                                                   28.94%
+src/services/fhir-validator.service.js                              29.06%
+src/interface/controllers/move-sample.controller.js                 29.16%
 src/models/Result.js                                                30.76%
 src/routes/orphanet.js                                              30.76%
-src/controllers/incident.controller.js                             31.73%
-src/interface/routes/location.routes.js                            32.25%
-src/models/StorageContainer.js                                     32.69%
-src/interface/routes/terminologies.routes.js                       32.9%
+src/controllers/incident.controller.js                              31.73%
+src/interface/routes/location.routes.js                             32.25%
+src/models/StorageContainer.js                                      32.69%
+src/interface/routes/terminologies.routes.js                        32.9%
 src/core/use-cases/ListOperationalFreezersUseCase.js                33.33%
-src/infrastructure/integration/semantic-pointer.js                 33.33%
+src/infrastructure/integration/semantic-pointer.js                  33.33%
 src/infrastructure/middleware/consent.enforcement.js                33.33%
 src/interface/routes/sample.routes.js                               33.33%
-src/services/log.service.js                                        33.86%
-src/services/import.service.js                                     34.19%
-src/services/auth.service.js                                       34.88%
+src/services/log.service.js                                         33.86%
+src/services/import.service.js                                      34.19%
+src/services/auth.service.js                                        34.88%
 src/config/uploadConfig.js                                          35.89%
-src/interface/controllers/allocate-sample.controller.js            36.84%
-src/interface/controllers/release-sample.controller.js             36.84%
+src/interface/controllers/allocate-sample.controller.js             36.84%
+src/interface/controllers/release-sample.controller.js              36.84%
 src/services/integrityCheckService.js                               36.84%
 src/services/fhir.service.js                                        36.92%
 src/services/hl7.service.js                                         38.05%
-src/services/temperature.service.js                                38.96%
+src/services/temperature.service.js                                 38.96%
 src/services/patientBiomarkerTimeseries.service.js                  39.02%
 src/database/neo4j.js                                               40%
 src/models/StorageBox.js                                            41.74%
@@ -155,7 +158,7 @@ src/services/DrugService.js                                         47.82%
 src/routes/eConsent.js                                               47.88%
 ```
 
-## MID coverage (50-84% lines) — 42 files, GOOD (>=85%) — 94 files
+## MID coverage (50-84% lines) — 44 files, GOOD (>=85%) — 104 files
 
 Not re-listed here (lower priority for slice-picking; a full reconcile
 regenerates these buckets if needed). Ask for a fresh
