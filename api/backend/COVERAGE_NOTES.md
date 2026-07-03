@@ -76,6 +76,17 @@ availability check its siblings have), and one test-tooling finding affecting
 other files too (#41 — `await import()` on CJS sources defeats `vi.spyOn` the
 same way `vi.mock()` does) — see below.
 
+Since baseline (8th slice): `infrastructure/database/mongodb/connection.js`,
+`controllers/upload.controller.js`, and `services/staging-import.service.js` moved off
+the LOW bucket by a parallel-test-agents slice (38 new targeted tests, all green) —
+exact new percentages not yet re-measured, will land at the next full reconcile. This
+slice surfaced two confirmed bugs (#42 — upload.controller.js's consent-pending branch
+never actually returns 409/CONSENT_PENDING correctly since `patientStatus` is never the
+literal string `'PENDING_CONSENT'`, always falls through to 400; #43 —
+staging-import.service.js writes failure records to a schema field key (`errors`) that
+doesn't exist on the `StagingImport` model, which only declares `importErrors`, so
+Mongoose's strict mode silently drops them) — see below.
+
 ## How to use this when picking a slice
 
 1. Prefer a **ZERO** file with real logic (not a script/model/port
@@ -124,15 +135,12 @@ src/models/SampleOrigin.js                                          11.11%
 src/models/SampleType.js                                            11.11%
 src/routes/importFhirIntelligent.js                                 15.58%
 src/interface/routes/reports.routes.js                              19.06%
-src/infrastructure/database/mongodb/connection.js                   19.23%
-src/controllers/upload.controller.js                                19.51%
 src/core/use-cases/CheckStorageBoxIntegrityUseCase.js               20%
 src/core/use-cases/GetFreezerOccupancyStatsUseCase.js               20%
 src/core/use-cases/GetFreezerTreeUseCase.js                         20%
 src/core/use-cases/GetSampleStorageLocationUseCase.js               20%
 src/core/use-cases/SearchAllocatableSamplesUseCase.js               20%
 src/core/use-cases/ValidateStoragePositionUseCase.js                20%
-src/services/staging-import.service.js                              20%
 src/services/sensor.service.js                                      20.25%
 src/services/saveTelemetryPoint.js                                  22.22%
 src/services/biomarker-xai.service.js                               22.66%
