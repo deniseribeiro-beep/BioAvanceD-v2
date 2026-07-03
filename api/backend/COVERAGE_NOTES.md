@@ -30,6 +30,12 @@ and `sample-file.controller.js` moved off the LOW bucket by a
 parallel-test-agents slice (63 new targeted tests, all green) — exact new
 percentages not yet re-measured, will land at the next full reconcile.
 
+Since baseline (2nd slice): `SampleFile.js`, `ImportMetrics.js`, and
+`import.controller.js` moved off the LOW bucket by a parallel-test-agents
+slice (90 new targeted tests, all green) — exact new percentages not yet
+re-measured, will land at the next full reconcile. This slice also
+surfaced two real product bugs, filed as issues #25 and #26 (see below).
+
 ## How to use this when picking a slice
 
 1. Prefer a **ZERO** file with real logic (not a script/model/port
@@ -72,9 +78,6 @@ Low priority (models/interfaces/one-off scripts — thin or non-request-path):
 Sorted ascending (worst first). This is the primary slice-picking pool:
 
 ```
-src/models/SampleFile.js                                            3.44%
-src/models/ImportMetrics.js                                         4.54%
-src/controllers/import.controller.js                                 6.77%
 src/services/import-async.service.js                                6.87%
 src/models/IntelligentAssistant.js                                  7.14%
 src/controllers/import-async.controller.js                          7.43%
