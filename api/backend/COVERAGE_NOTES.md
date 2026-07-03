@@ -97,6 +97,15 @@ plus its `quarantineService` singleton state has no reset guard;
 #45 — biomarker-xai.service.js's alphaGal rule table has no elevated-value
 zone, unlike lysoGb3's full three-zone scheme) — see below.
 
+Since baseline (10th slice): `import-worker.js` moved off the ZERO bucket by a
+test-writer slice (19 new targeted tests, all green) — exact new percentage
+not yet re-measured, will land at the next full reconcile. This slice
+surfaced one confirmed bug (#46 — the batch-import branch runs before the
+processor's surrounding try/catch, so its dedicated failure-handling catch
+block that marks batch progress as `'failed'` is dead code; a rejected
+batch-import job just propagates the error with no progress update) — see
+below.
+
 ## How to use this when picking a slice
 
 1. Prefer a **ZERO** file with real logic (not a script/model/port
@@ -110,8 +119,9 @@ zone, unlike lysoGb3's full three-zone scheme) — see below.
 ## ZERO coverage (0% lines) — 21 files
 
 Real logic, worth prioritizing:
-- `src/workers/import-worker.js`
-- `src/workers/worker.js`
+- `src/workers/worker.js` (self-executing bootstrap entrypoint — calls
+  `startWorker()`/`process.exit` at module load; disproportionately
+  expensive to test honestly, lower priority than it looks)
 
 Low priority (models/interfaces/one-off scripts — thin or non-request-path):
 - `src/core/application/ports/IAuditRepository.js`
