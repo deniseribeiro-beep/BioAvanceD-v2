@@ -113,3 +113,7 @@ frontend/playwright/.auth/
 *.p12
 *.pfx
 
+
+# Claude Code local-only files (machine-specific, not repo conventions)
+.claude/skills/local-env/
+.claude/settings.local.json

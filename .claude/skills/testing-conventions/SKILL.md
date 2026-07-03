@@ -60,6 +60,18 @@ see the file's own header for the regenerate command and cadence.
 - Frontend-touching changes: `npm --prefix frontend run typecheck` (no
   frontend test script exists yet — if one gets added, record it here).
 
+## Test files are ESM-only, sources are CJS
+
+Vitest cannot be `require()`d — a test file written in CommonJS
+(`const { describe } = require('vitest')`) fails outright with "Vitest
+cannot be imported in a CommonJS module using require()". Test files
+must use `import { describe, it, expect, vi } from 'vitest'`, and load
+the CJS sources under test via
+`createRequire(import.meta.url)` (see existing tests, e.g.
+`tests/unit/import-lgpd.controller.test.js`, for the pattern). A
+subagent hit this cold on 2026-07-03 — include it in any test-writing
+brief for this repo.
+
 ## `vi.mock()` does not intercept `require()`
 
 Confirmed independently twice (2026-07-02, `scheduler.service.test.js` and

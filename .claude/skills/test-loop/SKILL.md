@@ -51,11 +51,17 @@ body. Check them, and set them correctly on anything you file:
 
 ## Before an iteration
 
-1. `git status` — confirm a clean tree and which branch you're on;
+1. If this session resumed from a compact or interruption, check
+   whether the previous iteration actually finished — specifically
+   whether its `wrap-up` audit ran to completion (confirmed miss
+   2026-07-03: an interrupted wrap-up was abandoned after a compact
+   and a new slice started instead). A compact is not a clean slate:
+   finish the interrupted iteration's close-out first.
+2. `git status` — confirm a clean tree and which branch you're on;
    commit or flag any leftovers before starting.
-2. `gh issue list --state open` — re-read the tracking issue(s) for
+3. `gh issue list --state open` — re-read the tracking issue(s) for
    scope that's already been delivered vs. still open.
-3. Check `git log --oneline -5` vs `origin/<branch>` — the newest local
+4. Check `git log --oneline -5` vs `origin/<branch>` — the newest local
    commit is not necessarily pushed; know where the branch stands.
 
 ## Picking a slice
@@ -126,9 +132,13 @@ iteration's slice.
 1. Commit; push the branch if the slice is verified
    (`bioavanced-conventions`: pushing the branch is cheap and runs no
    CI; opening a PR is Dennis's call, never yours).
-2. **Run `wrap-up` before composing the final summary** — the moment
-   you catch yourself drafting "here's what I did" is the trigger, not
-   an afterthought.
+2. **Run `wrap-up` and work its audit through to completion before a
+   single word of the final summary is drafted.** The moment you catch
+   yourself drafting "here's what I did" is the trigger. This step
+   blocks step 3 — a summary written before the wrap-up call returned
+   is the recurring failure this ordering exists to prevent, and it
+   applies to *every* iteration of a multi-iteration loop, not just
+   the first.
 3. Report: which slice, what tests were added (file paths), what they
    found, coverage movement if measured, what the next slice should be,
    plus whatever `wrap-up` surfaced.

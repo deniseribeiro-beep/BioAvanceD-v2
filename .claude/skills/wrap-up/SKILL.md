@@ -19,6 +19,14 @@ to ask "how did that go?" — run this unprompted. Every task gets this audit, i
 the answer turns out to be "nothing to report" (but treat that as the rare outcome, not the
 default reach-for phrase to skip it).
 
+Two confirmed recurrence patterns, both of which count as their own trigger:
+- **Each iteration of a multi-iteration loop** gets its own wrap-up before its own
+  summary (2026-07-02: ran correctly after iteration 1, skipped after iteration 2 until
+  the user asked). Having run it earlier in the session does not cover later iterations.
+- **Resuming after a compact/interruption**: if a wrap-up audit was in progress when the
+  session was cut, finish it before starting anything new (2026-07-03: an interrupted
+  audit was abandoned post-compact and only surfaced when the user asked about it).
+
 ## What to do
 
 This is an audit for friction, not a status checklist. Go in assuming something rubbed wrong
