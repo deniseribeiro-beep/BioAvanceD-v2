@@ -103,6 +103,12 @@ One slice = one module/route/spec, sized to finish in the iteration:
   native suite runs once, at the coverage-reconcile phase (before the
   Docker gate — see below and `ship-to-main`), which is where
   cross-slice interaction actually gets caught.
+  **Confirmed miss 2026-07-03:** ran a bare `npx vitest run
+  --reporter=basic` (whole suite, no path) mid-iteration despite this
+  rule being in context at the time — the instruction being present
+  isn't enough on its own, treat "am I about to run vitest with no
+  file path argument" as a question to ask before every `Bash` vitest
+  call during a loop iteration, not just a rule to have read.
 - **Update `api/backend/COVERAGE_NOTES.md` in the same commit** — move
   the file(s) you just covered out of the ZERO/LOW bucket (or into a
   truer one). Don't let the tracker drift from the code.
