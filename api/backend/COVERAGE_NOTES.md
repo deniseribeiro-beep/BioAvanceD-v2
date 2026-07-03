@@ -70,7 +70,6 @@ Sorted ascending (worst first). This is the primary slice-picking pool:
 src/infrastructure/persistence/mongo/MongoStorageTopologyReadRepository.js  2.98%
 src/models/SampleFile.js                                            3.44%
 src/models/ImportMetrics.js                                         4.54%
-src/controllers/import-lgpd.controller.js                           5.03%
 src/database/mongo.js                                                5.19%
 src/controllers/sample-file.controller.js                           5.39%
 src/controllers/import.controller.js                                 6.77%
