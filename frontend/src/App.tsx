@@ -31,7 +31,6 @@ const ReportViewPage = lazy(() => import('./views/ReportViewPage'));
 const ReportQueryPage = lazy(() => import('./views/ReportQueryPage'));
 const QualityDescriptionPage = lazy(() => import('./views/QualityDescriptionPage'));
 const ImportForm = lazy(() => import('./components/v2/ImportForm'));
-const AssistantPage = lazy(() => import('./views/AssistantPage'));
 const BackupPage = lazy(() => import('./views/BackupPage'));
 const UserSecurityPage = lazy(() => import('./views/UserSecurityPage'));
 const MFASetupPage = lazy(() => import('./views/MFASetupPage'));
@@ -125,7 +124,6 @@ function App() {
                       </ProtectedRoute>
                     }
                   />
-                  <Route path="/assistant" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico', 'Usuário Externo']}><AssistantPage /></ProtectedRoute>} />
                   <Route path="/admin/tcle/new" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador']}><TcleBuilderPage /></ProtectedRoute>} />
                   <Route path="/admin/tcle/edit/:templateId" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador']}><TcleBuilderPage /></ProtectedRoute>} />
                   <Route path="/backup" element={<ProtectedRoute requiredRole="Administrador"><BackupPage /></ProtectedRoute>} />

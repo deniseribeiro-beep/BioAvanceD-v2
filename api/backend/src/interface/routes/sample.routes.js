@@ -356,24 +356,14 @@ router.get('/', authenticate, async (req, res) => {
           consentMessage = 'TCLE Assinado';
           canUse = true;
         } else {
-          // Verificar se o sistema de consentimento está implementado
-          const consentCount = await patientConsentsCollection.countDocuments();
-          if (consentCount === 0) {
-            // Sistema não implementado
-            consentValid = true;
-            consentMessage = 'Sistema TCLE em implementação';
-            canUse = true;
-          } else {
-            consentValid = false;
-            consentMessage = 'TCLE Pendente';
-            canUse = false;
-          }
+          consentValid = false;
+          consentMessage = 'TCLE Pendente';
+          canUse = false;
         }
       } else {
-        // Paciente não encontrado - em desenvolvimento permitir
-        consentValid = true;
+        consentValid = false;
         consentMessage = 'Paciente não encontrado';
-        canUse = true;
+        canUse = false;
       }
 
       return {
@@ -381,8 +371,8 @@ router.get('/', authenticate, async (req, res) => {
         consentValid,
         consentMessage,
         canUse,
-        // Compatibilidade com campo consentStatus existente
-        consentStatus: consentValid ? 'approved' : 'pending'
+        consentReasonCode: patient ? (consentValid ? null : 'NO_ACTIVE_CONSENT') : 'PATIENT_NOT_FOUND',
+        consentStatus: consentValid ? 'CONSENT_ACTIVE' : 'CONSENT_PENDING'
       };
     }));
 

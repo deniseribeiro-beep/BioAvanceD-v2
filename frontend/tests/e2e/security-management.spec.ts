@@ -20,10 +20,10 @@ test.describe('E2E - Security Management', () => {
   };
 
   const basePermissions = {
-    '1': { viewReports: true, useAssistant: true },
-    '2': { createSample: true, withdrawSample: true, viewTemperature: true, uploadFiles: true, viewReports: true, useAssistant: true },
-    '3': { createUser: true, createPatient: true, createSample: true, withdrawSample: true, viewTemperature: true, uploadFiles: true, viewReports: true, useAssistant: true },
-    '4': { createUser: true, createPatient: true, createSample: true, withdrawSample: true, viewTemperature: true, uploadFiles: true, viewReports: true, useAssistant: true, manageSystem: true, manageBackup: true, manageSecurity: true, resetMFA: true },
+    '1': { viewReports: true },
+    '2': { createSample: true, withdrawSample: true, viewTemperature: true, uploadFiles: true, viewReports: true },
+    '3': { createUser: true, createPatient: true, createSample: true, withdrawSample: true, viewTemperature: true, uploadFiles: true, viewReports: true },
+    '4': { createUser: true, createPatient: true, createSample: true, withdrawSample: true, viewTemperature: true, uploadFiles: true, viewReports: true, manageSystem: true, manageBackup: true, manageSecurity: true, resetMFA: true },
   };
 
   async function setupAuthenticatedPage(page: Page) {

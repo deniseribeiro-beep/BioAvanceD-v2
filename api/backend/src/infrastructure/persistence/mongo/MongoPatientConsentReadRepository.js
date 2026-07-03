@@ -18,8 +18,6 @@ class MongoPatientConsentReadRepository {
     const patientsCollection = await getCollection(this.db, 'patients');
     const patientConsentsCollection = await getCollection(this.db, 'consents');
 
-    const consentCount = await patientConsentsCollection.countDocuments();
-
     const enriched = await Promise.all((samples || []).map(async (sample) => {
       let consentValid = false;
       let consentMessage = '';
@@ -44,16 +42,13 @@ class MongoPatientConsentReadRepository {
         if (consent) {
           consentValid = true;
           consentMessage = 'Consentimento ativo';
-        } else if (consentCount === 0) {
-          consentValid = true;
-          consentMessage = 'Sistema de consentimento em implementação';
         } else {
           consentValid = false;
           consentMessage = 'Sem consentimento ativo';
         }
       } else {
-        consentValid = true;
-        consentMessage = 'Paciente não encontrado (dev mode)';
+        consentValid = false;
+        consentMessage = 'Paciente não encontrado';
       }
 
       return {
@@ -67,6 +62,9 @@ class MongoPatientConsentReadRepository {
         registrationDate: sample.registrationDate,
         consentValid,
         consentMessage,
+        consentReasonCode: patient ? (consentValid ? null : 'NO_ACTIVE_CONSENT') : 'PATIENT_NOT_FOUND',
+        consentStatus: consentValid ? 'CONSENT_ACTIVE' : 'CONSENT_PENDING',
+        canUse: consentValid,
         canAllocate: consentValid
       };
     }));

@@ -93,42 +93,10 @@ export interface Patient {
   consentTokenExpiresAt?: Date | string | null;
   consentNotifiedAt?: Date | string | null;
   consentAcceptedAt?: Date | string | null;
-  biomarkerXai?: BiomarkerXai | null;
   sampleList?: Sample[] | string[];
   linkedProject?: string;
   createdAt?: Date | string;
   updatedAt?: Date | string;
-}
-
-export interface BiomarkerXaiEvidence {
-  feature: string;
-  value: number | null;
-  unit: string;
-  direction: string;
-  ruleApplied: string;
-  severity: 'low' | 'medium' | 'high';
-  rationale: string;
-}
-
-export interface BiomarkerXai {
-  version: string;
-  generatedAt: Date | string;
-  confidence: number;
-  modelType: string;
-  isClinicalDiagnosis: boolean;
-  disclaimer: string;
-  summary: string;
-  recommendation: string;
-  evidence: BiomarkerXaiEvidence[];
-  governance?: {
-    owner?: string;
-    clinicalApprover?: string;
-    reviewCadenceDays?: number;
-    lastApprovedAt?: Date | string | null;
-    nextReviewDueAt?: Date | string | null;
-    thresholds?: Record<string, unknown>;
-    source?: string;
-  };
 }
 
 export interface CidEntry {

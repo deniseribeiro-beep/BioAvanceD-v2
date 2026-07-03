@@ -369,16 +369,14 @@ class SecurityService {
       // Permissões padrão baseadas em accessType
       const defaultPermissions = {
         '1': { // Usuário Externo
-          viewReports: true,
-          useAssistant: true
+          viewReports: true
         },
         '2': { // Técnico
           createSample: true,
           withdrawSample: true,
           viewTemperature: true,
           uploadFiles: true,
-          viewReports: true,
-          useAssistant: true
+          viewReports: true
         },
         '3': { // Coordenador
           createUser: true,
@@ -387,8 +385,7 @@ class SecurityService {
           withdrawSample: true,
           viewTemperature: true,
           uploadFiles: true,
-          viewReports: true,
-          useAssistant: true
+          viewReports: true
         },
         '4': { // Administrador
           createUser: true,
@@ -398,7 +395,6 @@ class SecurityService {
           viewTemperature: true,
           uploadFiles: true,
           viewReports: true,
-          useAssistant: true,
           manageSystem: true,
           manageBackup: true,
           manageSecurity: true,
@@ -534,7 +530,7 @@ class SecurityService {
     const validProfiles = ['1', '2', '3', '4'];
     const validPermissionKeys = [
       'createUser', 'createPatient', 'createSample', 'withdrawSample',
-      'viewTemperature', 'uploadFiles', 'viewReports', 'useAssistant',
+      'viewTemperature', 'uploadFiles', 'viewReports',
       'manageSystem', 'manageBackup', 'manageSecurity', 'resetMFA'
     ];
 

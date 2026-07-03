@@ -742,15 +742,6 @@ export const backupService = {
   restoreBackup: (fileName: string) => api.post(`/backup/restore/${fileName}`),
 };
 
-// ========== ASSISTANT SERVICES ==========
-export const assistantService = {
-  consult: (question: string) => api.post('/assistant/consult', { question }),
-  answer: (question: string) => api.post('/assistant/answer', { question }),
-  getContextualHelp: (context: string) => api.post('/assistant/contextual-help', { context }),
-  requestTutorial: (topic: string) => api.post('/assistant/tutorial', { topic }),
-  getSuggestions: (context: string) => api.post('/assistant/suggestions', { context }),
-};
-
 // ========== CONSENT SERVICES ==========
 // TCLE builder should use only ConsentTemplate endpoints for create/update/read
 export const consentService = {
@@ -794,13 +785,6 @@ export const importLGPDService = {
       : `/import-lgpd/amostras/template/${format}`;
     return api.get(endpoint, {
       responseType: 'blob',
-    });
-  },
-  predictPatientsMapping: (formData: FormData) => {
-    return api.post('/import-lgpd/pacientes/predict-mapping', formData, {
-      headers: {
-        'Content-Type': 'multipart/form-data',
-      },
     });
   },
   smartImportPatients: (formData: FormData) => {

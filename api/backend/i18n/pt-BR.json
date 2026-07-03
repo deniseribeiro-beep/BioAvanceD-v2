@@ -1,23 +1,4 @@
 {
-  "assistant": {
-    "accessDenied": "Acesso negado - operação requer dados sensíveis",
-    "errorProcessing": "Erro ao processar pergunta",
-    "flowIDRequired": "flowID é obrigatório",
-    "invalidContextScope": "ContextScope inválido",
-    "questionRequired": "Pergunta é obrigatória",
-    "responses": {
-      "default": "Como {role}, você pode navegar pelo sistema usando o menu lateral. Se precisar de ajuda específica, me pergunte sobre funcionalidades, procedimentos ou tutoriais passo a passo.",
-      "register": "Para cadastrar dados no sistema, você precisa ter permissões de {role}. Acesse o menu correspondente e preencha os campos obrigatórios.",
-      "report": "Os relatórios estão disponíveis no menu \"Relatórios\". Você pode filtrar por tipo, data e outros critérios conforme suas permissões.",
-      "sample": "As amostras podem ser cadastradas através do menu \"Amostras\". Você precisa informar o paciente associado, tipo de amostra e localização de armazenamento.",
-      "temperature": "O sistema monitora automaticamente a temperatura através de sensores. Você pode visualizar o histórico e alertas no menu \"Temperatura\"."
-    },
-    "screenIDRequired": "screenID é obrigatório",
-    "startTutorialError": "Erro ao iniciar tutorial",
-    "subtitle": "Faça perguntas sobre o sistema",
-    "suggestActionsError": "Erro ao sugerir ações",
-    "title": "Assistente Inteligente"
-  },
   "auth": {
     "attemptsRemaining": "Tentativas restantes",
     "confirmPassword": "Confirmar Senha",

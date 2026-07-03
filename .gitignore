@@ -20,6 +20,10 @@ frontend/node_modules/
 *.pfx
 *.crt
 secrets/
+.env.docker
+.env.docker.*
+!*.example
+audit-ed25519-private.pem
 
 # =========================
 # Logs

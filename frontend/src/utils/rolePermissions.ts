@@ -81,7 +81,7 @@ export function canRoleAccessRoute(roleName: RoleName | undefined, route: string
     return roleName === 'Coordenador' || roleName === 'Administrador';
   }
 
-  if (['/facility-management', '/quality-descriptions', '/import', '/samples/withdrawal-return', '/assistant', '/patients', '/samples', '/results', '/dashboard'].includes(route)) {
+  if (['/facility-management', '/quality-descriptions', '/import', '/samples/withdrawal-return', '/patients', '/samples', '/results', '/dashboard'].includes(route)) {
     return true;
   }
 
@@ -120,7 +120,6 @@ export function getAllowedRoutes(roleName: RoleName | undefined): string[] {
     '/facility-management',
     '/quality-descriptions',
     '/import',
-    '/assistant',
     '/next/intake',
     '/pacientes/novo-atendimento',
     '/samples/withdrawal-return',
@@ -137,7 +136,7 @@ export function getAllowedRoutes(roleName: RoleName | undefined): string[] {
   }
   
   if (roleName === 'Usuário Externo') {
-    return ['/dashboard', '/reports', '/assistant', '/user/security', '/security/mfa-setup'];
+    return ['/dashboard', '/reports', '/user/security', '/security/mfa-setup'];
   }
   
   return allRoutes;
@@ -155,7 +154,7 @@ export function getPostLoginRoute(roleName?: RoleName, accessType?: number): str
     case 'Coordenador':
       return '/reports';
     case 'Usuário Externo':
-      return '/assistant';
+      return '/dashboard';
     case 'Técnico':
     default:
       return '/dashboard';

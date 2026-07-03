@@ -152,7 +152,6 @@ function determineEntity(path) {
     'sensor': 'Sensor',
     'reports': 'Report',
     'report': 'Report',
-    'assistant': 'Assistant',
     'import': 'Import',
     'import-lgpd': 'Import',
     'export': 'Export',
@@ -232,7 +231,6 @@ function determineModule(path) {
   if (path.includes('/sample') || path.includes('/amostra')) return 'Amostras';
   if (path.includes('/temperature') || path.includes('/sensor')) return 'Monitoramento';
   if (path.includes('/report')) return 'Relatórios';
-  if (path.includes('/assistant')) return 'IA Assistente';
   if (path.includes('/import')) return 'Importação';
   if (path.includes('/export') || path.includes('/log')) return 'Exportação';
   if (path.includes('/equipment') || path.includes('/location')) return 'Configuração';

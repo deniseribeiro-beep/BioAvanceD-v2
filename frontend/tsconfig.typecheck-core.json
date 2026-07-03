@@ -3,7 +3,6 @@
   "include": [
     "src/vite-env.d.ts",
     "src/services/api.ts",
-    "src/hooks/useAssistant.ts",
     "src/hooks/useBackup.ts",
     "src/views/ResetPasswordPage.tsx"
   ]

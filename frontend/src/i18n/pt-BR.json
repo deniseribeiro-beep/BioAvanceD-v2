@@ -9,27 +9,6 @@
     "title": "BioAvanceD",
     "welcome": "Bem-vindo"
   },
-  "assistant": {
-    "clear": "Limpiar",
-    "contextualHelp": "Ajuda Contextual",
-    "error": "Error al procesar la pregunta",
-    "estimatedTime": "Tempo estimado",
-    "noQuestion": "La pregunta es obligatoria",
-    "patientSuggestions": "Sugestões sobre Pacientes",
-    "placeholder": "Digite sua pergunta...",
-    "quickActions": "Ações Rápidas",
-    "sampleSuggestions": "Sugestões sobre Amostras",
-    "send": "Enviar",
-    "subtitle": "Faça perguntas e receba ajuda contextual sobre o sistema",
-    "suggestions": "Sugestões",
-    "suggestionsFor": "Aqui estão algumas sugestões para \"{action}\":",
-    "thinking": "Pensando...",
-    "title": "Assistente Inteligente",
-    "tutorial": "Tutorial Passo a Passo",
-    "tutorialTitle": "Tutorial",
-    "welcome": "Olá! Como posso ajudá-lo?",
-    "welcomeHint": "Faça uma pergunta ou use uma das ações rápidas abaixo"
-  },
   "auth": {
     "access": "Access",
     "attemptsRemaining": "Tentativas restantes",
@@ -226,39 +205,11 @@
       "fluidTitle": "4.1 SPREC - Fluidos (7 eixos)",
       "p1": "O código SPREC consolida os metadados pré-analíticos críticos da amostra. O BioAvanceD-v2 registra sete eixos para fluidos e sete eixos para sólidos, garantindo reprodutibilidade laboratorial e auditoria de cadeia pré-analítica.",
       "solidTitle": "4.2 SPREC - Sólidos (7 eixos)",
-      "title": "4. Qualidade de Amostra (SPREC)",
-      "fluid": {
-        "axis1": "Eixo 1",
-        "axis2": "Eixo 2",
-        "axis3": "Eixo 3",
-        "axis4": "Eixo 4",
-        "axis5": "Eixo 5",
-        "axis6": "Eixo 6",
-        "axis7": "Eixo 7",
-        "label1": "Tipo de amostra",
-        "label2": "Recipiente primário",
-        "label3": "Pré-centrifugação",
-        "label4": "Centrifugação",
-        "label5": "Segunda centrifugação",
-        "label6": "Atraso pós-centrifugação",
-        "label7": "Armazenamento de longo prazo"
+      "table": {
+        "axis": "Eixo",
+        "description": "Descrição"
       },
-      "solid": {
-        "axis1": "Eixo 1",
-        "axis2": "Eixo 2",
-        "axis3": "Eixo 3",
-        "axis4": "Eixo 4",
-        "axis5": "Eixo 5",
-        "axis6": "Eixo 6",
-        "axis7": "Eixo 7",
-        "label1": "Tipo de tecido/espécime sólido",
-        "label2": "Tipo de estabilização/fixação",
-        "label3": "Atraso frio até preservação",
-        "label4": "Tipo de processamento",
-        "label5": "Condição de armazenamento",
-        "label6": "Temperatura de armazenamento",
-        "label7": "Formato final de preservação"
-      }
+      "title": "4. Qualidade de Amostra (SPREC)"
     },
     "brand": "BioAvanceD-v2",
     "exportPdf": "Exportar para PDF / Imprimir",
@@ -302,16 +253,6 @@
       "p1": "O domínio clínico usa ontologias da Orphanet para mapear diagnóstico raro, códigos correlatos e contexto semântico para análise. A camada de validação clínica utiliza um grafo de regras para condicionar o estado operacional da amostra ao preenchimento clínico mínimo exigido.",
       "p2": "Na prática, amostras com diagnóstico raro sem biomarcadores obrigatórios permanecem com restrição de completude até que os dados clínicos sejam fornecidos, preservando qualidade e rastreabilidade regulatória.",
       "title": "2. Orphadata e Validação Clínica"
-    },
-    "sprec": {
-      "fluidTitle": "4.1 SPREC - Fluidos (7 eixos)",
-      "p1": "O código SPREC consolida os metadados pré-analíticos críticos da amostra. O BioAvanceD-v2 registra sete eixos para fluidos e sete eixos para sólidos, garantindo reprodutibilidade laboratorial e auditoria de cadeia pré-analítica.",
-      "solidTitle": "4.2 SPREC - Sólidos (7 eixos)",
-      "table": {
-        "axis": "Eixo",
-        "description": "Descrição"
-      },
-      "title": "4. Qualidade de Amostra (SPREC)"
     },
     "subtitle": "Documento técnico de referência para pesquisa, auditoria e conformidade do biobanco.",
     "title": "Dicionário de Dados Integrado"
@@ -689,7 +630,6 @@
   },
   "navigation": {
     "access": "Acessos",
-    "assistant": "Assistente",
     "backup": "Backup",
     "custodyReports": "Relatórios de Custódia",
     "dashboard": "Dashboard",
@@ -1196,15 +1136,15 @@
     "inventoryDescription": "Lista completa de amostras carregadas no inventário.",
     "inventoryTab": "Inventário de Amostras",
     "searchButton": "Pesquisar",
-    "searchHint": "Digite um código, ID ou nome de paciente para localizar a amostra.",
-    "searchLabel": "Busca de Amostras",
-    "searchPlaceholder": "Buscar por barcode, ID da amostra ou paciente",
+    "searchHint": "Use o ID da amostra, o código de barras ou o paciente para localizar rapidamente antes de fazer uma movimentação.",
+    "searchLabel": "Localizar amostra",
+    "searchPlaceholder": "Busque por ID, código de barras ou paciente",
     "searchResultPrefix": "Resultado da pesquisa para \"{query}\".",
     "searchScanHint": "Modo leitura ativo: use o leitor de barcode ou QR code e depois pressione Pesquisar.",
     "searchScanPlaceholder": "Escaneie barcode/QR code e pressione pesquisar",
     "scanModeOff": "Barcode/QR",
     "scanModeOn": "Leitura ativa",
-    "selectedItems": "amostra(s) selecionada(s)",
+    "selectedItems": "itens selecionados",
     "sprec": {
       "na": "SPREC: N/A",
       "prefix": "SPREC"
@@ -1217,11 +1157,13 @@
     "storageTab": "Armazenagem Física",
     "tableHeaders": {
       "actions": "Ações",
+      "available": "Disponível",
       "barcode": "Código de Barras",
-      "consent": "TCLE",
+      "id": "ID",
       "origin": "Origem",
+      "quantity": "Quantidade",
+      "registrationDate": "Data de Registro",
       "status": "Status",
-      "storage": "Armazenagem",
       "type": "Tipo"
     },
     "detail": {
@@ -1423,11 +1365,7 @@
       "Tecido": "Tecido",
       "Urina": "Urina"
     },
-    "searchHint": "Use o ID da amostra, o código de barras ou o paciente para localizar rapidamente antes de fazer uma movimentação.",
-    "searchLabel": "Localizar amostra",
-    "searchPlaceholder": "Busque por ID, código de barras ou paciente",
     "selectAllAria": "Selecionar todas as amostras",
-    "selectedItems": "itens selecionados",
     "selectFile": "Selecionar Arquivo",
     "selectOneAria": "Selecionar amostra",
     "selectOrigin": "Selecione a origem",
@@ -1479,17 +1417,6 @@
       "treeLoadError": "Erro ao carregar árvore de armazenagem"
     },
     "subtitle": "Gestão, rastreabilidade e armazenamento físico",
-    "tableHeaders": {
-      "actions": "Ações",
-      "available": "Disponível",
-      "barcode": "Código de Barras",
-      "id": "ID",
-      "origin": "Origem",
-      "quantity": "Quantidade",
-      "registrationDate": "Data de Registro",
-      "status": "Status",
-      "type": "Tipo"
-    },
     "title": "Inventário de Amostras",
     "totalWithdrawn": "Total Retirado",
     "traceability": {
