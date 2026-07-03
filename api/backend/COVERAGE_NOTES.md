@@ -36,6 +36,12 @@ slice (90 new targeted tests, all green) — exact new percentages not yet
 re-measured, will land at the next full reconcile. This slice also
 surfaced two real product bugs, filed as issues #25 and #26 (see below).
 
+Since baseline (3rd slice): `IntelligentAssistant.js`, `import-async.service.js`,
+and `import-async.controller.js` moved off the LOW bucket by a
+parallel-test-agents slice (107 new targeted tests, all green) — exact new
+percentages not yet re-measured, will land at the next full reconcile. This
+slice surfaced a real crash-risk bug, filed as issue #27 (see below).
+
 ## How to use this when picking a slice
 
 1. Prefer a **ZERO** file with real logic (not a script/model/port
@@ -78,9 +84,6 @@ Low priority (models/interfaces/one-off scripts — thin or non-request-path):
 Sorted ascending (worst first). This is the primary slice-picking pool:
 
 ```
-src/services/import-async.service.js                                6.87%
-src/models/IntelligentAssistant.js                                  7.14%
-src/controllers/import-async.controller.js                          7.43%
 src/services/assistant.service.js                                   7.54%
 src/infrastructure/persistence/mongo/MongoPatientConsentReadRepository.js  8.33%
 src/services/terminologySync.service.js                             9.16%
