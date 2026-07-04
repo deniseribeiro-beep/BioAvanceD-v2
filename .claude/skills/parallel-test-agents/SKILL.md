@@ -119,8 +119,15 @@ not a result:
    actually discovered by the runner (watch for fixed-list/allowlist
    runners that silently skip new files — a green run that never loaded
    the file is a false positive).
-2. Run the full relevant suite once, after all slices are in, to catch
-   cross-slice interaction the parallel authoring couldn't see.
+2. Run all the slices' new/touched test files together in one command
+   (not the full backend suite) to catch cross-slice interaction the
+   parallel authoring couldn't see — e.g. `npx vitest run <file1>
+   <file2> <file3>`. Confirmed 2026-07-04: a bare full-suite `npx
+   vitest run` with no path is hard-blocked mid-loop by
+   `test-loop`'s own guard (full suite is reserved for the
+   `ship-to-main` coverage-reconcile phase); this repo's "run the full
+   relevant suite" step means the slices together, not literally
+   everything.
 3. Triage any real bug a test surfaced per the project's rule for
    in-scope-fix vs. file-as-finding — do this yourself, don't ask the
    agent that found it to also fix it blind.
