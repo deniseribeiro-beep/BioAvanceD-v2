@@ -90,14 +90,13 @@ bucket just below for a smaller, incremental gain.
 
 ## MID-LOW coverage (50-69% lines) — re-measured 2026-07-04, commit `7826467c`
 
-Sorted ascending (worst first), 31 files — the next tier up once the
+Sorted ascending (worst first), 30 files — the next tier up once the
 ZERO bucket's real-logic file (`worker.js`) is done. Re-derived from
 `coverage/coverage-summary.json`, not hand-maintained. (Original list
-had 32; `equipment-sensor-quarantine.service.js` moved to GOOD (96.25%
-lines) — see `COVERAGE_HISTORY.md`.)
+had 32; `equipment-sensor-quarantine.service.js` and
+`sample.routes.js` moved to GOOD — see `COVERAGE_HISTORY.md`.)
 
 ```
-src/interface/routes/sample.routes.js                                50.6%
 src/infrastructure/persistence/mongo/MongoStorageRepository.js       50.74%
 src/interface/routes/cid.routes.js                                   51.16%
 src/controllers/sample-file.controller.js                            51.86%

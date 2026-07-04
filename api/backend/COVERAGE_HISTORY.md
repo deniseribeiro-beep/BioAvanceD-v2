@@ -809,3 +809,22 @@ which don't interop cleanly with this codebase's plain
 No new product bugs found; remaining 3.75% is the two-branch
 `normalizeStatus`/`buildStatusChangeReason` default-string fallbacks
 and one Number.isFinite edge, not worth chasing further.
+
+`src/interface/routes/sample.routes.js` moved from 45.15% to 90% lines
+(2026-07-04), extending the existing
+`tests/unit/sample.routes.test.js` (19 → 53 tests) with the routes it
+hadn't touched yet: `GET /:id/miabis-compliance`,
+`GET /:id/compliance-graph`, `GET /` (including all three consent-
+enrichment branches: active consent, pending consent, patient not
+found), `GET /:id`, `PUT /:id`, `DELETE /:id`, `POST /:id/withdraw`,
+`POST /:id/return`, `GET /:id/results`, and
+`GET /by-barcode/:barcode/symbology-assets`. Reused the file's own
+require.cache-injection harness (`loadRoute`/`clearCache`), extended
+with two new fakes (`miabisValidator.service`'s destructured
+`validateMiabisCompliance`, and a `FakeSampleGraphValidator` class
+swapped into `require.cache` the same way `RegisterSampleUseCase`/
+`LineageRepository` already were). No new product bugs found.
+Remaining ~10%/34% branch gap is mostly the file-upload/export routes
+at the bottom (`sampleFileController`-delegated, already exercised at
+the controller level per earlier slices) and a couple of defensive
+`req.t`/optional-chaining fallbacks not worth a dedicated test.
