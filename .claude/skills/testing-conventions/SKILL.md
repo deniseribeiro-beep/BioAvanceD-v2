@@ -24,14 +24,12 @@ Docker-specific, see `e2e-docker-workflow`.
 
 **Do NOT run the root `test:browser:*` scripts as they stand.** There is
 no vitest config at the repo root, so root `npx vitest run` sweeps up
-`api/backend/tests/**` (143 files) but without backend's
-`vitest.setup.js` env — verified 2026-07-02: 23 spurious failures
-(`secretOrPrivateKey must have a value` etc.) that pass when run from
-`api/backend/` properly. Broken plumbing, not real failures — it needs
-either a root vitest config scoping what it should test or removal of
-the scripts (surfaced to Dennis; fits issue #3's "fix broken test
-plumbing" scope). Until fixed, backend tests run from `api/backend/`
-only.
+backend tests without backend's `vitest.setup.js` env and fails
+spuriously — broken plumbing, not real failures (verified 2026-07-02,
+23 spurious failures; surfaced to Dennis, fits issue #3's scope —
+incident `root-vitest-spurious-failures`,
+`bioavanced-conventions/references/incidents.md`). Until fixed,
+backend tests run from `api/backend/` only.
 
 ## Finding gaps without a full coverage run
 

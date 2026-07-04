@@ -19,20 +19,22 @@ to ask "how did that go?" — run this unprompted. Every task gets this audit, i
 the answer turns out to be "nothing to report" (but treat that as the rare outcome, not the
 default reach-for phrase to skip it).
 
-Two confirmed recurrence patterns, both of which count as their own trigger:
+Two confirmed recurrence patterns, both of which count as their own trigger (stories:
+incidents `wrapup-skipped-iteration-2` and `wrapup-abandoned-post-compact` in
+`bioavanced-conventions/references/incidents.md`):
 - **Each iteration of a multi-iteration loop** gets its own wrap-up before its own
-  summary (2026-07-02: ran correctly after iteration 1, skipped after iteration 2 until
-  the user asked). Having run it earlier in the session does not cover later iterations.
+  summary (skipped after iteration 2 once, 2026-07-02). Having run it earlier in the
+  session does not cover later iterations.
 - **Resuming after a compact/interruption**: if a wrap-up audit was in progress when the
-  session was cut, finish it before starting anything new (2026-07-03: an interrupted
-  audit was abandoned post-compact and only surfaced when the user asked about it).
+  session was cut, finish it before starting anything new (abandoned post-compact once,
+  2026-07-03).
 
 ## Invocation means a Skill tool call — not recalling this text
 
 "Running wrap-up" means invoking this skill via the Skill tool, fresh, at each trigger.
-Two things that do NOT count (both observed 2026-07-03, when several consecutive
-iterations "ran" the audit as prose reconstructed from memory and no Skill call ever
-happened):
+Two things that do NOT count (both observed across several consecutive iterations on
+2026-07-03 — incident `wrapup-faked-from-memory`,
+`bioavanced-conventions/references/incidents.md`):
 
 - **Having this file's text in context** — from an earlier invocation, or carried
   forward in a compact summary — is not an invocation. The post-compact reminder that
@@ -104,19 +106,16 @@ Every finding falls into one of two buckets — "I mentioned it in the wrap-up t
   discoverable next session; a GitHub issue is. This applies even when you already patched it
   inline — "I fixed it" and "the next session can find out this was a gap" are different things.
 
-**Found a problem → file it. That's the whole rule, not a judgment call.** Confirmed
-2026-07-02: three test-writing subagents each surfaced a real behavioral observation
-(inconsistent input escaping, an ambiguous failure-mode). The orchestrator read all three,
-decided none of them counted as real enough to file, and put them only in the chat summary
-instead. That's the bug — not "which of these three is severe enough," but treating "is this
-worth filing" as a question to answer at all. It took the user asking "weren't you a bit
-dismissive?" to get two of the three filed after the fact. The rule going forward: the moment
+**Found a problem → file it. That's the whole rule, not a judgment call.** The moment
 you notice something wrong with the product — whether you found it yourself or a subagent
 reported it to you — run `gh issue create` for it before doing anything else, in the same
 turn you noticed it. Don't hold it to compare against other findings, don't wait for
-wrap-up to collect it, don't privately weigh how likely it is to matter. Filing is cheap;
-Dennis closes what doesn't matter. Only skip filing if it's already covered by an open issue
-you've actually checked for.
+wrap-up to collect it, don't privately weigh how likely it is to matter — "is this worth
+filing" is not a question to answer at all. Filing is cheap; Dennis closes what doesn't
+matter. Only skip filing if it's already covered by an open issue you've actually checked
+for. (Confirmed 2026-07-02, three subagent findings dismissed until the user pushed back —
+incident `dismissed-subagent-findings`,
+`bioavanced-conventions/references/incidents.md`.)
 
 ## How to report it
 

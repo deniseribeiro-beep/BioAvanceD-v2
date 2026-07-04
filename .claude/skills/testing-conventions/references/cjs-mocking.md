@@ -4,7 +4,8 @@ Read this file in full before writing or briefing any test that mocks,
 spies, or stubs backend code. Every entry below was confirmed the hard
 way in this repo — trust it over instinct. When briefing a test-writer
 subagent, give it this file's path to Read; don't paraphrase from
-memory (`parallel-test-agents` has the incident history on why).
+memory (incident `vi-mock-briefed-from-memory`,
+`bioavanced-conventions/references/incidents.md`).
 
 ## Test files are ESM-only, sources are CJS
 
@@ -72,8 +73,9 @@ re-runs against the mocked export.
 
 Before writing any claim about a file's require/destructuring shape into a
 brief, re-check the exact lines (`grep -n "require(" <file>`) — asserting it
-from earlier general reading has been wrong before (`parallel-test-agents`,
-`incident.controller.js`, 2026-07-03).
+from earlier general reading has been wrong before (incident
+`brief-wrong-destructure-claim`,
+`bioavanced-conventions/references/incidents.md`).
 
 ## `vi.resetModules()` does not clear Node's real `require.cache`
 

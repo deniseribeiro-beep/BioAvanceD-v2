@@ -53,10 +53,11 @@ body. Check them, and set them correctly on anything you file:
 
 1. If this session resumed from a compact or interruption, check
    whether the previous iteration actually finished — specifically
-   whether its `wrap-up` audit ran to completion (confirmed miss
-   2026-07-03: an interrupted wrap-up was abandoned after a compact
-   and a new slice started instead). A compact is not a clean slate:
-   finish the interrupted iteration's close-out first.
+   whether its `wrap-up` audit ran to completion. A compact is not a
+   clean slate: finish the interrupted iteration's close-out first.
+   (Confirmed miss 2026-07-03 — incident
+   `wrapup-abandoned-post-compact`,
+   `bioavanced-conventions/references/incidents.md`.)
 2. `git status` — confirm a clean tree and which branch you're on;
    commit or flag any leftovers before starting.
 3. `gh issue list --state open` — re-read the tracking issue(s) for
@@ -107,12 +108,11 @@ One slice = one module/route/spec, sized to finish in the iteration:
   native suite runs once, at the coverage-reconcile phase (before the
   Docker gate — see below and `ship-to-main`), which is where
   cross-slice interaction actually gets caught.
-  **Confirmed miss 2026-07-03:** ran a bare `npx vitest run
-  --reporter=basic` (whole suite, no path) mid-iteration despite this
-  rule being in context at the time — the instruction being present
-  isn't enough on its own, treat "am I about to run vitest with no
-  file path argument" as a question to ask before every `Bash` vitest
-  call during a loop iteration, not just a rule to have read.
+  Treat "am I about to run vitest with no file path argument" as a
+  question to ask before every `Bash` vitest call during a loop
+  iteration — the rule merely being in context has failed before
+  (confirmed miss 2026-07-03 — incident `bare-vitest-mid-loop`,
+  `bioavanced-conventions/references/incidents.md`).
 - **Update `api/backend/COVERAGE_NOTES.md` in the same commit** — move
   the file(s) you just covered out of the ZERO/LOW bucket (or into a
   truer one). Don't let the tracker drift from the code. Put the
@@ -152,8 +152,9 @@ iteration's slice.
    in context (from earlier, or from a compact summary) is not an
    invocation, and writing its checklist from memory is not an
    invocation — the Skill call itself is the verifiable step
-   (confirmed miss 2026-07-03: several iterations faked the audit as
-   remembered prose). This step blocks step 3.
+   (confirmed miss 2026-07-03 — incident `wrapup-faked-from-memory`,
+   `bioavanced-conventions/references/incidents.md`). This step
+   blocks step 3.
 3. Report: which slice, what tests were added (file paths), what they
    found, coverage movement if measured, what the next slice should be,
    plus whatever `wrap-up` surfaced.

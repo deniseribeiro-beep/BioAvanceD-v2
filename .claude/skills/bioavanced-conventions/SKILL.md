@@ -38,25 +38,18 @@ Findings/backlog for this repo live directly on
 `deniseribeiro-beep/BioAvanceD-v2` GitHub Issues. File with `gh issue
 create` as soon as something is found — don't stage it anywhere else
 first. `test-loop`, `ship-to-main`, and `testing-conventions` all point
-here for "where do I file/read a finding." (Earlier in the test-building
-push, findings were staged locally in `.claude/issues/` before this
-switch; that folder was removed 2026-07-02 once its contents were
-migrated to GitHub Issues #6/#7 — #3/#5 already existed upstream.)
+here for "where do I file/read a finding." (Migration history:
+incident `issues-migration` in `references/incidents.md`.)
 
-**Found a problem → file it, full stop.** Confirmed 2026-07-02: three
-parallel test-writing subagents each surfaced a real behavioral
-observation in the file they were testing (inconsistent input
-escaping, an ambiguous failure-mode in an aggregate return shape). The
-orchestrating session treated "is this worth an issue" as a question
-to decide, decided no for all three, and only mentioned them in the
-chat summary — then had to be prompted ("don't you think you were a
-bit dismissive?") before filing two as issues #16/#17. The blanket OK
-to file exists so there is no question to decide: notice something
-wrong with the product (yourself, or reported back by a subagent) →
-`gh issue create` it right then, don't wait to collect findings,
-don't weigh how likely it is to matter first. It costs Dennis seconds
-to close a non-issue; it costs a rediscovery later if a real one only
-lives in a chat transcript.
+**Found a problem → file it, full stop.** Notice something wrong with
+the product (yourself, or reported back by a subagent) →
+`gh issue create` it right then, in the same turn. Don't wait to
+collect findings, don't weigh how likely it is to matter first —
+"is this worth an issue" is not a question to decide. It costs Dennis
+seconds to close a non-issue; it costs a rediscovery later if a real
+one only lives in a chat transcript. (Confirmed the hard way
+2026-07-02, three findings dismissed until the user pushed back:
+incident `dismissed-subagent-findings` in `references/incidents.md`.)
 
 ## Repo layout — three npm roots
 
@@ -148,3 +141,12 @@ If you repeatedly fumble something about this repo beyond what's written
 here, update this file rather than working around the gap — that's the
 point of it existing. Testing-process lessons go in
 `testing-conventions`; Docker lessons in `e2e-docker-workflow`.
+
+**Incident stories live in `references/incidents.md`** (in this skill's
+directory) — the repo-wide archive behind every skill's
+`(incident: <slug>)` markers. When a new lesson lands: the rule plus a
+one-line marker goes in the relevant skill, the full narrative goes in
+the archive under a stable slug. Don't inline multi-sentence war
+stories into skill files; don't strip a rule's marker either — the
+date/slug is what tells a future session the rule was earned, not
+guessed.

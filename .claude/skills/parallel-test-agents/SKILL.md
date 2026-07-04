@@ -40,35 +40,23 @@ instead — coordination overhead isn't worth it for a single slice.
    review honestly). Pick a number you can actually verify afterward;
    the bottleneck is your review capacity, not agent capacity.
 4. **Check whether each slice's target test file already exists**
-   (`git log --oneline -1 -- <path>` or just look) before telling the
-   agent to "write a new file at X." Confirmed 2026-07-03
-   (BioAvanceD-v2, `security.routes.test.js`): a brief assumed a fresh
-   file when a thinner, already-committed test file was sitting at that
-   exact path — the agent had to notice the mismatch and extend it
-   instead. It handled it fine, but the brief was wrong going in; a
-   30-second check catches this before the agent has to improvise.
-   **Check by the actual test-file naming convention, not the source
-   file's basename** — confirmed again 2026-07-04 (`logs.routes.js`):
-   the orchestrator's pre-check grepped `tests/integration` for
-   `logs.routes` and found nothing, but the existing file was named
-   `logs.api.test.js` (route files consistently get `<name>.api.test.js`
-   for integration tests, not `<name>.routes.test.js`) — the brief again
-   claimed "confirmed no existing file," and the agent again had to
-   notice and extend the real one. Grep the `tests/integration/`
-   directory listing itself (`ls tests/integration` or a broad
-   glob) rather than constructing a filename to grep for.
+   before telling the agent to "write a new file at X" — and check by
+   listing the target `tests/` directory itself (`ls` or a broad glob),
+   not by constructing a filename to grep for: route files consistently
+   get `<name>.api.test.js` for integration tests, not
+   `<name>.routes.test.js`, so a grep built from the source basename
+   misses them. Briefs have wrongly claimed "confirmed no existing
+   file" twice (2026-07-03 and 2026-07-04 — incidents
+   `brief-assumed-fresh-file` and `test-filename-convention-miss`,
+   `bioavanced-conventions/references/incidents.md`).
 5. **Don't assert a file's specific structural details (which imports it
    destructures, whether a value is module-scope-cached) from earlier
-   general reading — re-check the exact lines before writing them into
-   a brief as fact.** Confirmed 2026-07-03 (BioAvanceD-v2,
-   `incident.controller.js`): a brief stated as fact that the file did
-   "NOT destructure `connectMongoDB` at module scope," which was wrong —
-   it does, on line 2. The agent's first draft (written to the brief's
-   claim) made real network/DB calls and failed before it noticed the
-   mismatch and applied the correct require-cache-clear workaround
-   instead. No lasting harm since the agent self-corrected, but it's a
-   free check: `grep -n "require(" <file>` before writing any claim
-   about a file's require/destructuring shape into a brief.
+   general reading — re-check the exact lines
+   (`grep -n "require(" <file>`) before writing them into a brief as
+   fact.** A confidently wrong destructuring claim sent an agent's
+   first draft against real network/DB (confirmed 2026-07-03 — incident
+   `brief-wrong-destructure-claim`,
+   `bioavanced-conventions/references/incidents.md`).
 
 ## Launching and briefing each agent
 
@@ -96,12 +84,12 @@ agent owns and delivers, not a litany of prohibitions), and include:
   find the project's conventions unprompted.
 - Project-specific tooling quirks (mocking gotchas, runner traps,
   framework behavior) must reach the agent as the project's own
-  documented wording, never your paraphrase from memory. Confirmed
-  2026-07-02 (BioAvanceD-v2): briefing three agents from memory that
-  "`vi.mock()` reliably intercepts `require()`" directly contradicted
-  the project's own documented finding (the opposite was true and
-  already written down), and all three agents burned time independently
-  rediscovering the correct answer. **The context-cheap way to do this:
+  documented wording, never your paraphrase from memory — a from-memory
+  claim that contradicted the project's own documented finding cost
+  three agents independent rediscovery time (confirmed 2026-07-02 —
+  incident `vi-mock-briefed-from-memory`,
+  `bioavanced-conventions/references/incidents.md`). **The
+  context-cheap way to do this:
   when the quirks live in a standalone reference file, put that file's
   path in the brief with an instruction to Read it in full before
   writing the relevant code** (test-writer has the Read tool) — in this
@@ -139,12 +127,12 @@ not a result:
    parallel authoring couldn't see — e.g. `npx vitest run <file1>
    <file2> <file3> --reporter=dot` (per-test detail was already seen on
    the individual runs; see `testing-conventions`' context-economy
-   section). Confirmed 2026-07-04: a bare full-suite `npx
-   vitest run` with no path is hard-blocked mid-loop by
-   `test-loop`'s own guard (full suite is reserved for the
-   `ship-to-main` coverage-reconcile phase); this repo's "run the full
-   relevant suite" step means the slices together, not literally
-   everything.
+   section). This repo's "run the full relevant suite" step means the
+   slices together, not literally everything — a bare `npx vitest run`
+   with no path is hard-blocked mid-loop (incident
+   `bare-vitest-mid-loop`,
+   `bioavanced-conventions/references/incidents.md`); the full suite is
+   reserved for `ship-to-main`'s coverage-reconcile phase.
 3. Triage any real bug a test surfaced per the project's rule for
    in-scope-fix vs. file-as-finding — do this yourself, don't ask the
    agent that found it to also fix it blind.
