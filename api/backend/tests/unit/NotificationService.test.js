@@ -1,0 +1,773 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { createRequire } from 'module';
+
+const require = createRequire(import.meta.url);
+const notificationService = require('../../src/services/NotificationService');
+const logger = require('../../src/utils/logger');
+
+describe('NotificationService', () => {
+  let originalEnv;
+  let originalIsDevelopment;
+  let originalAdminEmail;
+  let originalResendClient;
+
+  beforeEach(() => {
+    originalEnv = { ...process.env };
+    originalIsDevelopment = notificationService.isDevelopment;
+    originalAdminEmail = notificationService.adminEmail;
+    originalResendClient = notificationService.resendClient;
+  });
+
+  afterEach(() => {
+    process.env = originalEnv;
+    notificationService.isDevelopment = originalIsDevelopment;
+    notificationService.adminEmail = originalAdminEmail;
+    notificationService.resendClient = originalResendClient;
+    notificationService.io = null;
+    vi.restoreAllMocks();
+  });
+
+  describe('getFrontendUrl', () => {
+    it('returns the default frontend URL when FRONTEND_URL is not set', () => {
+      delete process.env.FRONTEND_URL;
+      expect(notificationService.getFrontendUrl()).toBe('http://localhost:5173');
+    });
+
+    it('returns the configured FRONTEND_URL when set', () => {
+      process.env.FRONTEND_URL = 'https://app.example.com';
+      expect(notificationService.getFrontendUrl()).toBe('https://app.example.com');
+    });
+  });
+
+  describe('normalizePhoneE164 (via resolvePatientPhone)', () => {
+    it('returns null when no phone-like field is present', () => {
+      expect(notificationService.resolvePatientPhone({})).toBeNull();
+    });
+
+    it('preserves an already-E164 formatted phone number', () => {
+      expect(notificationService.resolvePatientPhone({ phone: '+15551234567' })).toBe('+15551234567');
+    });
+
+    it('strips a leading 00 international prefix', () => {
+      delete process.env.CONSENT_DEFAULT_COUNTRY_CODE;
+      delete process.env.DEFAULT_COUNTRY_CODE;
+      // 0055 11 91234-5678 -> +5511912345678
+      expect(notificationService.resolvePatientPhone({ mobile: '0055 11 91234-5678' })).toBe('+5511912345678');
+    });
+
+    it('prepends the default country code when digits do not already start with it', () => {
+      delete process.env.CONSENT_DEFAULT_COUNTRY_CODE;
+      delete process.env.DEFAULT_COUNTRY_CODE;
+      expect(notificationService.resolvePatientPhone({ whatsapp: '11912345678' })).toBe('+5511912345678');
+    });
+
+    it('does not duplicate the default country code when digits already start with it', () => {
+      delete process.env.CONSENT_DEFAULT_COUNTRY_CODE;
+      delete process.env.DEFAULT_COUNTRY_CODE;
+      expect(notificationService.resolvePatientPhone({ phoneNumber: '5511912345678' })).toBe('+5511912345678');
+    });
+
+    it('honors CONSENT_DEFAULT_COUNTRY_CODE override', () => {
+      process.env.CONSENT_DEFAULT_COUNTRY_CODE = '1';
+      expect(notificationService.resolvePatientPhone({ phone: '5551234567' })).toBe('+15551234567');
+    });
+  });
+
+  describe('resolvePatientEmail', () => {
+    it('prefers email over emailAddress/contactEmail', () => {
+      expect(
+        notificationService.resolvePatientEmail({
+          email: 'a@x.com',
+          emailAddress: 'b@x.com',
+          contactEmail: 'c@x.com'
+        })
+      ).toBe('a@x.com');
+    });
+
+    it('falls back to contactEmail when email and emailAddress are absent', () => {
+      expect(notificationService.resolvePatientEmail({ contactEmail: 'c@x.com' })).toBe('c@x.com');
+    });
+
+    it('returns null when no email-like field is present', () => {
+      expect(notificationService.resolvePatientEmail({})).toBeNull();
+    });
+  });
+
+  describe('formatConsentMessage', () => {
+    it('includes the patient name and link when name is provided', () => {
+      const msg = notificationService.formatConsentMessage('Maria', 'http://link');
+      expect(msg).toContain('Maria');
+      expect(msg).toContain('http://link');
+    });
+
+    it('falls back to "Paciente" when name is missing', () => {
+      const msg = notificationService.formatConsentMessage(null, 'http://link');
+      expect(msg).toContain('Paciente');
+    });
+  });
+
+  describe('getResendClient', () => {
+    it('returns null in development mode when RESEND_API_KEY is absent', () => {
+      notificationService.isDevelopment = true;
+      notificationService.resendClient = null;
+      delete process.env.RESEND_API_KEY;
+      expect(notificationService.getResendClient()).toBeNull();
+    });
+
+    it('throws in non-development mode when RESEND_API_KEY is absent', () => {
+      notificationService.isDevelopment = false;
+      notificationService.resendClient = null;
+      delete process.env.RESEND_API_KEY;
+      expect(() => notificationService.getResendClient()).toThrow('RESEND_API_KEY');
+    });
+
+    it('caches the client instance across calls once created', () => {
+      const fakeClient = { emails: { send: vi.fn() } };
+      notificationService.resendClient = fakeClient;
+      expect(notificationService.getResendClient()).toBe(fakeClient);
+    });
+  });
+
+  describe('resolveRecipient', () => {
+    it('throws when no recipient is provided', () => {
+      expect(() => notificationService.resolveRecipient('   ')).toThrow('Destinatário é obrigatório');
+    });
+
+    it('returns the original recipient unchanged when not in development mode', () => {
+      notificationService.isDevelopment = false;
+      const result = notificationService.resolveRecipient('patient@example.com');
+      expect(result).toEqual({
+        to: 'patient@example.com',
+        redirected: false,
+        originalTo: 'patient@example.com'
+      });
+    });
+
+    it('throws in development mode when ADMIN_EMAIL is not configured', () => {
+      notificationService.isDevelopment = true;
+      notificationService.adminEmail = '';
+      expect(() => notificationService.resolveRecipient('patient@example.com')).toThrow('ADMIN_EMAIL');
+    });
+
+    it('redirects to ADMIN_EMAIL in development mode and flags redirected=true', () => {
+      notificationService.isDevelopment = true;
+      notificationService.adminEmail = 'admin@example.com';
+      const result = notificationService.resolveRecipient('patient@example.com');
+      expect(result).toEqual({
+        to: 'admin@example.com',
+        redirected: true,
+        originalTo: 'patient@example.com'
+      });
+    });
+
+    it('does not flag redirected when the recipient already equals ADMIN_EMAIL', () => {
+      notificationService.isDevelopment = true;
+      notificationService.adminEmail = 'admin@example.com';
+      const result = notificationService.resolveRecipient('admin@example.com');
+      expect(result.redirected).toBe(false);
+    });
+  });
+
+  describe('persistComplianceLog', () => {
+    it('swallows persistence errors and logs them instead of throwing (no MONGO_URI configured in tests)', async () => {
+      const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
+      await expect(
+        notificationService.persistComplianceLog({ messageId: 'm1', notificationType: 'x' })
+      ).resolves.toBeUndefined();
+      expect(errorSpy).toHaveBeenCalled();
+    });
+  });
+
+  describe('sendEmail', () => {
+    it('throws when subject is missing', async () => {
+      await expect(notificationService.sendEmail({ to: 'a@x.com', html: '<p>x</p>' })).rejects.toThrow(
+        'subject e html/text são obrigatórios'
+      );
+    });
+
+    it('throws when neither html nor text is provided', async () => {
+      await expect(notificationService.sendEmail({ to: 'a@x.com', subject: 'Hi' })).rejects.toThrow(
+        'subject e html/text são obrigatórios'
+      );
+    });
+
+    it('sends via the mocked dev path when in development with no resend client available', async () => {
+      notificationService.isDevelopment = true;
+      notificationService.adminEmail = 'admin@example.com';
+      vi.spyOn(notificationService, 'getResendClient').mockReturnValue(null);
+      vi.spyOn(notificationService, 'persistComplianceLog').mockResolvedValue(undefined);
+      const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+
+      const result = await notificationService.sendEmail({
+        to: 'patient@example.com',
+        subject: 'Hello',
+        text: 'body',
+        notificationType: 'TEST'
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.mocked).toBe(true);
+      expect(result.provider).toBe('resend-mock');
+      expect(result.to).toBe('admin@example.com');
+      expect(result.redirectedByEnvironment).toBe(true);
+      expect(warnSpy).toHaveBeenCalled();
+    });
+
+    it('sends via the real resend client and returns the messageId when a client is available', async () => {
+      notificationService.isDevelopment = false;
+      const sendMock = vi.fn().mockResolvedValue({ data: { id: 'msg-123' }, error: null });
+      vi.spyOn(notificationService, 'getResendClient').mockReturnValue({ emails: { send: sendMock } });
+      vi.spyOn(notificationService, 'persistComplianceLog').mockResolvedValue(undefined);
+
+      const result = await notificationService.sendEmail({
+        to: 'patient@example.com',
+        subject: 'Hello',
+        html: '<p>body</p>',
+        notificationType: 'TEST'
+      });
+
+      expect(sendMock).toHaveBeenCalledWith(
+        expect.objectContaining({ to: 'patient@example.com', subject: 'Hello', html: '<p>body</p>' })
+      );
+      expect(result.success).toBe(true);
+      expect(result.mocked).toBe(false);
+      expect(result.messageId).toBe('msg-123');
+    });
+
+    it('throws when the resend client responds with an error', async () => {
+      notificationService.isDevelopment = false;
+      const sendMock = vi.fn().mockResolvedValue({ error: { message: 'invalid domain' } });
+      vi.spyOn(notificationService, 'getResendClient').mockReturnValue({ emails: { send: sendMock } });
+      vi.spyOn(notificationService, 'persistComplianceLog').mockResolvedValue(undefined);
+
+      await expect(
+        notificationService.sendEmail({ to: 'patient@example.com', subject: 'Hello', html: '<p>x</p>' })
+      ).rejects.toThrow('invalid domain');
+    });
+  });
+
+  describe('getConsentQueueStats', () => {
+    it('reports unavailable when no notification queue can be initialized', async () => {
+      vi.spyOn(notificationService, 'getNotificationQueue').mockReturnValue(null);
+      const stats = await notificationService.getConsentQueueStats();
+      expect(stats).toEqual({
+        available: false,
+        counts: { waiting: 0, delayed: 0, active: 0, failed: 0 },
+        totalQueued: 0
+      });
+    });
+
+    it('aggregates job counts when a queue is available', async () => {
+      const fakeQueue = {
+        getJobCounts: vi.fn().mockResolvedValue({ waiting: 2, delayed: 1, active: 3, failed: 0 })
+      };
+      vi.spyOn(notificationService, 'getNotificationQueue').mockReturnValue(fakeQueue);
+
+      const stats = await notificationService.getConsentQueueStats();
+      expect(stats).toEqual({
+        available: true,
+        counts: { waiting: 2, delayed: 1, active: 3, failed: 0 },
+        totalQueued: 3,
+        active: 3
+      });
+    });
+  });
+
+  describe('generateConsentToken / buildConsentMetadata / buildConsentLink', () => {
+    it('generates a 64-char hex token', () => {
+      const token = notificationService.generateConsentToken();
+      expect(token).toMatch(/^[0-9a-f]{64}$/);
+    });
+
+    it('builds consent metadata with token, createdAt and expiresAt roughly 7 days apart', () => {
+      const metadata = notificationService.buildConsentMetadata();
+      expect(metadata.token).toMatch(/^[0-9a-f]{64}$/);
+      const diffDays = (metadata.expiresAt.getTime() - metadata.createdAt.getTime()) / (24 * 60 * 60 * 1000);
+      expect(diffDays).toBeCloseTo(7, 5);
+    });
+
+    it('builds a consent link using patientID and the frontend URL, trimming trailing slash', () => {
+      process.env.FRONTEND_URL = 'https://app.example.com/';
+      const link = notificationService.buildConsentLink({ patientID: 'P-1' }, 'tok en');
+      expect(link).toBe('https://app.example.com/patients/P-1/consent?token=tok%20en');
+    });
+
+    it('falls back to patientId then id when patientID is absent', () => {
+      const link = notificationService.buildConsentLink({ id: 'P-9' }, 'tok');
+      expect(link).toContain('/patients/P-9/consent');
+    });
+  });
+
+  describe('sendConsentEmail', () => {
+    it('returns missing_email failure when the patient has no resolvable email', async () => {
+      const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+      const result = await notificationService.sendConsentEmail({ patientID: 'P-1' }, 'http://link');
+      expect(result).toEqual({ channel: 'email', success: false, reason: 'missing_email' });
+      expect(warnSpy).toHaveBeenCalled();
+    });
+
+    it('sends the consent email through sendEmail and returns success', async () => {
+      const sendEmailSpy = vi.spyOn(notificationService, 'sendEmail').mockResolvedValue({ success: true });
+      const result = await notificationService.sendConsentEmail(
+        { patientID: 'P-1', patientName: 'Maria', email: 'maria@example.com' },
+        'http://link'
+      );
+      expect(sendEmailSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          to: 'maria@example.com',
+          notificationType: 'RF_CONSENT_NOTIFICATION',
+          metadata: { patientID: 'P-1' }
+        })
+      );
+      expect(result).toEqual({ channel: 'email', success: true, provider: 'resend' });
+    });
+  });
+
+  describe('sendConsentSmsFallback', () => {
+    it('returns missing_phone failure when phone cannot be resolved', async () => {
+      vi.spyOn(logger, 'warn').mockImplementation(() => {});
+      const result = await notificationService.sendConsentSmsFallback({ patientID: 'P-1' }, 'http://link');
+      expect(result).toEqual({ channel: 'sms', success: false, reason: 'missing_phone' });
+    });
+
+    it('returns missing_sms_fallback_email failure when no admin/alert email is configured', async () => {
+      notificationService.adminEmail = '';
+      delete process.env.ALERT_EMAIL_TO;
+      vi.spyOn(logger, 'warn').mockImplementation(() => {});
+      const result = await notificationService.sendConsentSmsFallback(
+        { patientID: 'P-1', phone: '11912345678' },
+        'http://link'
+      );
+      expect(result).toEqual({ channel: 'sms', success: false, reason: 'missing_sms_fallback_email' });
+    });
+
+    it('routes the SMS content through email fallback when a fallback address is configured', async () => {
+      notificationService.adminEmail = 'admin@example.com';
+      const sendEmailSpy = vi.spyOn(notificationService, 'sendEmail').mockResolvedValue({ success: true });
+      const result = await notificationService.sendConsentSmsFallback(
+        { patientID: 'P-1', phone: '11912345678' },
+        'http://link'
+      );
+      expect(sendEmailSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ to: 'admin@example.com', notificationType: 'RF_CONSENT_SMS_FALLBACK' })
+      );
+      expect(result).toEqual({ channel: 'sms', success: true, mocked: true, provider: 'resend-email-fallback' });
+    });
+  });
+
+  describe('sendConsentWhatsappFallback', () => {
+    it('returns missing_phone failure when phone cannot be resolved', async () => {
+      vi.spyOn(logger, 'warn').mockImplementation(() => {});
+      const result = await notificationService.sendConsentWhatsappFallback({ patientID: 'P-1' }, 'http://link');
+      expect(result).toEqual({ channel: 'whatsapp', success: false, reason: 'missing_phone' });
+    });
+
+    it('reports a consolidated mocked success when a phone is resolvable (no real WhatsApp send)', async () => {
+      const result = await notificationService.sendConsentWhatsappFallback(
+        { patientID: 'P-1', phone: '11912345678' },
+        'http://link'
+      );
+      expect(result).toEqual({
+        channel: 'whatsapp',
+        success: true,
+        mocked: true,
+        provider: 'resend-email-fallback',
+        reason: 'Canal WhatsApp consolidado para envio por e-mail rastreável'
+      });
+    });
+  });
+
+  describe('notifyPatientConsent', () => {
+    it('aggregates results from email and whatsapp fallback channels', async () => {
+      vi.spyOn(notificationService, 'sendConsentEmail').mockResolvedValue({ channel: 'email', success: true });
+      vi.spyOn(notificationService, 'sendConsentWhatsappFallback').mockResolvedValue({
+        channel: 'whatsapp',
+        success: true
+      });
+
+      const results = await notificationService.notifyPatientConsent({ patientID: 'P-1' }, 'http://link');
+      expect(results).toEqual([
+        { channel: 'email', success: true },
+        { channel: 'whatsapp', success: true }
+      ]);
+    });
+
+    it('converts a rejected channel promise into a failed result entry instead of throwing', async () => {
+      vi.spyOn(notificationService, 'sendConsentEmail').mockRejectedValue(new Error('boom'));
+      vi.spyOn(notificationService, 'sendConsentWhatsappFallback').mockResolvedValue({
+        channel: 'whatsapp',
+        success: true
+      });
+
+      const results = await notificationService.notifyPatientConsent({ patientID: 'P-1' }, 'http://link');
+      expect(results[0]).toEqual({ channel: 'unknown', success: false, reason: 'boom' });
+      expect(results[1]).toEqual({ channel: 'whatsapp', success: true });
+    });
+  });
+
+  describe('enqueueConsentNotification', () => {
+    it('falls back to direct notifyPatientConsent when no queue is available', async () => {
+      vi.spyOn(notificationService, 'getNotificationQueue').mockReturnValue(null);
+      const notifySpy = vi
+        .spyOn(notificationService, 'notifyPatientConsent')
+        .mockResolvedValue([{ channel: 'email', success: true }]);
+
+      const result = await notificationService.enqueueConsentNotification({ patientID: 'P-1' }, 'http://link');
+      expect(notifySpy).toHaveBeenCalledWith({ patientID: 'P-1' }, 'http://link');
+      expect(result).toEqual([{ channel: 'email', success: true }]);
+    });
+
+    it('enqueues a job on the notification queue when available instead of sending directly', async () => {
+      const addMock = vi.fn().mockResolvedValue({ id: 'job-1' });
+      vi.spyOn(notificationService, 'getNotificationQueue').mockReturnValue({ add: addMock });
+      const notifySpy = vi.spyOn(notificationService, 'notifyPatientConsent');
+
+      const result = await notificationService.enqueueConsentNotification({ patientID: 'P-1' }, 'http://link');
+      expect(addMock).toHaveBeenCalledWith('consent-notification', {
+        patientData: { patientID: 'P-1' },
+        consentLink: 'http://link'
+      });
+      expect(notifySpy).not.toHaveBeenCalled();
+      expect(result).toEqual([{ channel: 'queue', success: true, provider: 'bullmq' }]);
+    });
+  });
+
+  describe('processConsentNotificationJob', () => {
+    it('delegates to notifyPatientConsent with the job payload fields', async () => {
+      const notifySpy = vi
+        .spyOn(notificationService, 'notifyPatientConsent')
+        .mockResolvedValue([{ channel: 'email', success: true }]);
+
+      const result = await notificationService.processConsentNotificationJob({
+        patientData: { patientID: 'P-9' },
+        consentLink: 'http://link/9'
+      });
+
+      expect(notifySpy).toHaveBeenCalledWith({ patientID: 'P-9' }, 'http://link/9');
+      expect(result).toEqual([{ channel: 'email', success: true }]);
+    });
+  });
+
+  describe('initSocketIO', () => {
+    it('reuses an already-provided io-like object instead of constructing a new socket.io Server', () => {
+      const fakeIo = { of: vi.fn(), emit: vi.fn(), on: vi.fn() };
+      const result = notificationService.initSocketIO(fakeIo);
+      expect(result).toBe(fakeIo);
+      expect(notificationService.io).toBe(fakeIo);
+      expect(fakeIo.on).toHaveBeenCalledWith('connection', expect.any(Function));
+    });
+
+    it('returns the cached io instance on subsequent calls without reprocessing the argument', () => {
+      const fakeIo = { of: vi.fn(), emit: vi.fn(), on: vi.fn() };
+      notificationService.initSocketIO(fakeIo);
+      const anotherFakeIo = { of: vi.fn(), emit: vi.fn(), on: vi.fn() };
+      const result = notificationService.initSocketIO(anotherFakeIo);
+      expect(result).toBe(fakeIo);
+    });
+
+    it('wires up subscribe:user, subscribe:job and disconnect handlers on new connections', () => {
+      const handlers = {};
+      const fakeSocket = { id: 'sock-1', on: vi.fn((event, cb) => { handlers[event] = cb; }), join: vi.fn() };
+      const fakeIo = {
+        of: vi.fn(),
+        emit: vi.fn(),
+        on: vi.fn((event, cb) => {
+          if (event === 'connection') cb(fakeSocket);
+        })
+      };
+
+      notificationService.initSocketIO(fakeIo);
+
+      expect(handlers['subscribe:user']).toBeInstanceOf(Function);
+      handlers['subscribe:user']('user-1');
+      expect(fakeSocket.join).toHaveBeenCalledWith('user-user-1');
+
+      handlers['subscribe:job']('job-1');
+      expect(fakeSocket.join).toHaveBeenCalledWith('job-1');
+
+      expect(handlers['disconnect']).toBeInstanceOf(Function);
+      expect(() => handlers['disconnect']()).not.toThrow();
+    });
+  });
+
+  describe('notifyJobQueued / notifyJobStarted / notifyJobProgress', () => {
+    it('does nothing when io has not been initialized', async () => {
+      notificationService.io = null;
+      await expect(notificationService.notifyJobQueued('u1', { a: 1 })).resolves.toBeUndefined();
+    });
+
+    it('emits import-queued to the user room', async () => {
+      const toMock = vi.fn().mockReturnValue({ emit: vi.fn() });
+      notificationService.io = { to: toMock };
+      await notificationService.notifyJobQueued('u1', { a: 1 });
+      expect(toMock).toHaveBeenCalledWith('user-u1');
+    });
+
+    it('emits import-started to both the user room and job room when jobID is present', async () => {
+      const emitMock = vi.fn();
+      const toMock = vi.fn().mockReturnValue({ emit: emitMock });
+      notificationService.io = { to: toMock };
+      await notificationService.notifyJobStarted('u1', { jobID: 'job-7' });
+      expect(toMock).toHaveBeenCalledWith('user-u1');
+      expect(toMock).toHaveBeenCalledWith('job-7');
+      expect(emitMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('emits import-progress only to the user room when jobID is absent', async () => {
+      const emitMock = vi.fn();
+      const toMock = vi.fn().mockReturnValue({ emit: emitMock });
+      notificationService.io = { to: toMock };
+      await notificationService.notifyJobProgress('u1', { percent: 50 });
+      expect(toMock).toHaveBeenCalledTimes(1);
+      expect(toMock).toHaveBeenCalledWith('user-u1');
+    });
+  });
+
+  describe('notifyJobCompleted', () => {
+    it('emits socket events and sends an email when userEmail is present', async () => {
+      const emitMock = vi.fn();
+      const toMock = vi.fn().mockReturnValue({ emit: emitMock });
+      notificationService.io = { to: toMock };
+      const sendEmailSpy = vi.spyOn(notificationService, 'sendEmail').mockResolvedValue({ success: true });
+
+      await notificationService.notifyJobCompleted('u1', {
+        jobID: 'job-1',
+        status: 'done',
+        dataType: 'samples',
+        successCount: 5,
+        errorCount: 0,
+        userEmail: 'user@example.com'
+      });
+
+      expect(toMock).toHaveBeenCalledWith('user-u1');
+      expect(toMock).toHaveBeenCalledWith('job-1');
+      expect(sendEmailSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ to: 'user@example.com', notificationType: 'RF_IMPORT_COMPLETED' })
+      );
+    });
+
+    it('does not send an email when userEmail is absent', async () => {
+      notificationService.io = null;
+      const sendEmailSpy = vi.spyOn(notificationService, 'sendEmail').mockResolvedValue({ success: true });
+      await notificationService.notifyJobCompleted('u1', { jobID: 'job-1', dataType: 'samples' });
+      expect(sendEmailSpy).not.toHaveBeenCalled();
+    });
+
+    it('swallows errors thrown while notifying instead of propagating them', async () => {
+      const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
+      notificationService.io = null;
+      vi.spyOn(notificationService, 'sendEmail').mockRejectedValue(new Error('smtp down'));
+      await expect(
+        notificationService.notifyJobCompleted('u1', { dataType: 'samples', userEmail: 'user@example.com' })
+      ).resolves.toBeUndefined();
+      expect(errorSpy).toHaveBeenCalled();
+    });
+  });
+
+  describe('notifyJobFailed', () => {
+    it('emits socket events and sends an error email when userEmail is present', async () => {
+      const emitMock = vi.fn();
+      const toMock = vi.fn().mockReturnValue({ emit: emitMock });
+      notificationService.io = { to: toMock };
+      const sendEmailSpy = vi.spyOn(notificationService, 'sendEmail').mockResolvedValue({ success: true });
+
+      await notificationService.notifyJobFailed('u1', {
+        jobID: 'job-2',
+        dataType: 'samples',
+        error: 'parse error',
+        userEmail: 'user@example.com'
+      });
+
+      expect(sendEmailSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ to: 'user@example.com', notificationType: 'RF_IMPORT_FAILED' })
+      );
+    });
+
+    it('swallows errors thrown while notifying instead of propagating them', async () => {
+      const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
+      notificationService.io = null;
+      vi.spyOn(notificationService, 'sendEmail').mockRejectedValue(new Error('smtp down'));
+      await expect(
+        notificationService.notifyJobFailed('u1', { dataType: 'samples', userEmail: 'user@example.com' })
+      ).resolves.toBeUndefined();
+      expect(errorSpy).toHaveBeenCalled();
+    });
+  });
+
+  describe('generateJobEmailTemplate / generateJobErrorEmailTemplate', () => {
+    it('includes dataType, successCount, errorCount and jobID in the success template', () => {
+      const html = notificationService.generateJobEmailTemplate({
+        dataType: 'samples',
+        successCount: 3,
+        errorCount: 1,
+        jobID: 'job-5'
+      });
+      expect(html).toContain('samples');
+      expect(html).toContain('3');
+      expect(html).toContain('job-5');
+    });
+
+    it('includes a default error message in the error template when error is absent', () => {
+      const html = notificationService.generateJobErrorEmailTemplate({ dataType: 'samples', jobID: 'job-5' });
+      expect(html).toContain('Erro desconhecido');
+    });
+
+    it('includes the specific error message in the error template when provided', () => {
+      const html = notificationService.generateJobErrorEmailTemplate({
+        dataType: 'samples',
+        jobID: 'job-5',
+        error: 'timeout'
+      });
+      expect(html).toContain('timeout');
+    });
+  });
+
+  describe('sendAuthCode', () => {
+    it('throws when email or code is missing', async () => {
+      await expect(notificationService.sendAuthCode(null, '123456')).rejects.toThrow('email e code');
+      await expect(notificationService.sendAuthCode('a@x.com', null)).rejects.toThrow('email e code');
+    });
+
+    it('sends the MFA code via sendEmail with the expected notification type', async () => {
+      const sendEmailSpy = vi.spyOn(notificationService, 'sendEmail').mockResolvedValue({ success: true });
+      await notificationService.sendAuthCode('a@x.com', '123456');
+      expect(sendEmailSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          to: 'a@x.com',
+          notificationType: 'RF001_MFA_AUTH_CODE',
+          metadata: { codeLength: 6 }
+        })
+      );
+      expect(sendEmailSpy.mock.calls[0][0].html).toContain('123456');
+    });
+  });
+
+  describe('sendPasswordReset', () => {
+    it('throws when email or link is missing', async () => {
+      await expect(notificationService.sendPasswordReset(null, 'http://link')).rejects.toThrow(
+        'email e link'
+      );
+      await expect(notificationService.sendPasswordReset('a@x.com', null)).rejects.toThrow('email e link');
+    });
+
+    it('sends the reset link via sendEmail with the expected notification type', async () => {
+      const sendEmailSpy = vi.spyOn(notificationService, 'sendEmail').mockResolvedValue({ success: true });
+      await notificationService.sendPasswordReset('a@x.com', 'https://app.example.com/reset?token=t1');
+      expect(sendEmailSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          to: 'a@x.com',
+          notificationType: 'RF003_PASSWORD_RESET',
+          metadata: { linkDomain: 'app.example.com' }
+        })
+      );
+    });
+  });
+
+  describe('sendTemperatureAlert', () => {
+    it('throws when no target email can be resolved', async () => {
+      notificationService.adminEmail = '';
+      delete process.env.ALERT_EMAIL_TO;
+      await expect(notificationService.sendTemperatureAlert('S-1', -50, {})).rejects.toThrow(
+        'ALERT_EMAIL_TO ou ADMIN_EMAIL'
+      );
+    });
+
+    it('sends the alert via sendEmail using the explicit options.email over env/admin defaults', async () => {
+      const sendEmailSpy = vi.spyOn(notificationService, 'sendEmail').mockResolvedValue({ success: true });
+      await notificationService.sendTemperatureAlert('S-1', -50, { email: 'oncall@example.com' });
+      expect(sendEmailSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          to: 'oncall@example.com',
+          notificationType: 'RF016_TEMPERATURE_ALERT',
+          metadata: { sampleId: 'S-1', currentTemp: -50 }
+        })
+      );
+    });
+  });
+
+  describe('sendOTPSMS', () => {
+    it('throws when no fallback email is configured', async () => {
+      notificationService.adminEmail = '';
+      delete process.env.ALERT_EMAIL_TO;
+      await expect(notificationService.sendOTPSMS('+5511999999999', '123456')).rejects.toThrow(
+        'ADMIN_EMAIL é obrigatório'
+      );
+    });
+
+    it('routes the OTP code through sendAuthCode to the admin fallback email', async () => {
+      notificationService.adminEmail = 'admin@example.com';
+      const authCodeSpy = vi
+        .spyOn(notificationService, 'sendAuthCode')
+        .mockResolvedValue({ success: true, messageId: 'm1' });
+
+      const result = await notificationService.sendOTPSMS('+5511999999999', '654321');
+      expect(authCodeSpy).toHaveBeenCalledWith('admin@example.com', '654321');
+      expect(result).toEqual({
+        success: true,
+        mocked: true,
+        channel: 'sms',
+        provider: 'resend-email-fallback',
+        note: 'Fluxo legado de SMS redirecionado para e-mail no provedor único Resend',
+        emailResult: { success: true, messageId: 'm1' }
+      });
+    });
+  });
+
+  describe('sendRecoveryEmail', () => {
+    it('builds a recovery link from APP_DOMAIN and delegates to sendPasswordReset', async () => {
+      process.env.APP_DOMAIN = 'https://app.example.com/';
+      const resetSpy = vi.spyOn(notificationService, 'sendPasswordReset').mockResolvedValue({ success: true });
+
+      await notificationService.sendRecoveryEmail('a@x.com', 'tok en');
+      expect(resetSpy).toHaveBeenCalledWith(
+        'a@x.com',
+        'https://app.example.com/recover-password?token=tok%20en'
+      );
+    });
+  });
+
+  describe('sendCriticalTempAlert', () => {
+    it('does not trigger when temperature is within the safe range', async () => {
+      const result = await notificationService.sendCriticalTempAlert('S-1', -150, {
+        minTemp: -196,
+        maxTemp: -80
+      });
+      expect(result).toEqual({
+        triggered: false,
+        reason: 'Temperatura -150°C dentro do range -196°C..-80°C'
+      });
+    });
+
+    it('triggers and sends the alert email when temperature is outside the safe range', async () => {
+      const tempAlertSpy = vi
+        .spyOn(notificationService, 'sendTemperatureAlert')
+        .mockResolvedValue({ success: true, messageId: 'm2' });
+
+      const result = await notificationService.sendCriticalTempAlert('S-1', -50, {
+        minTemp: -196,
+        maxTemp: -80
+      });
+
+      expect(tempAlertSpy).toHaveBeenCalledWith('S-1', -50, { minTemp: -196, maxTemp: -80 });
+      expect(result.triggered).toBe(true);
+      expect(result.sms).toEqual({
+        success: true,
+        mocked: true,
+        channel: 'sms',
+        provider: 'resend-email-fallback',
+        reason: 'Canal SMS consolidado em e-mail para operação local e rastreável'
+      });
+      expect(result.email).toEqual({ success: true, messageId: 'm2' });
+    });
+
+    it('falls back to env-configured min/max temp thresholds when options are not provided', async () => {
+      process.env.TELEMETRY_MIN_TEMP_ALERT = '-10';
+      process.env.TELEMETRY_MAX_TEMP_ALERT = '10';
+      const result = await notificationService.sendCriticalTempAlert('S-1', 0, {});
+      expect(result).toEqual({
+        triggered: false,
+        reason: 'Temperatura 0°C dentro do range -10°C..10°C'
+      });
+    });
+  });
+});

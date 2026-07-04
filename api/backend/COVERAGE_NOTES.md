@@ -116,6 +116,22 @@ rejected with 403 in production — confirmed production-breaking), and #52
 check swallows any status containing the literal word "unavailable", so it's
 mapped to 'available' instead) — see below.
 
+Since baseline (18th slice, parallel-test-agents): `NotificationService.js`,
+`fhir-validator.service.js`, and `move-sample.controller.js` moved off the LOW
+bucket by a 3-agent parallel-test-agents slice (72 + 26 + 9 = 107 new targeted
+tests, all green, independently re-verified together) — exact new percentages
+not yet re-measured, will land at the next full reconcile.
+`sendCriticalTempAlertFromInflux` in NotificationService.js was left
+untested (its InfluxDB dependencies are destructured at module scope, making
+them unspyable per this file's own `vi.spyOn` gotcha, and exercising it for
+real would hit a live InfluxDB connection) — noted as a known gap rather than
+forced. This slice surfaced one finding: #53 (fhir-validator.service.js's
+`friendlyMessageFromError` gates its localized messages on `instancePath`
+substring checks, but AJV's `required`-keyword errors always report an empty
+`instancePath`, so every "missing required field" case across every resource
+type falls through to the raw AJV message instead of the intended friendly
+Portuguese diagnostic — confirmed, not just theoretical) — see below.
+
 Since baseline (10th slice): `import-worker.js` moved off the ZERO bucket by a
 test-writer slice (19 new targeted tests, all green) — exact new percentage
 not yet re-measured, will land at the next full reconcile. This slice
@@ -273,11 +289,8 @@ Sorted ascending (worst first). This is the primary slice-picking pool:
 src/interface/routes/reports.routes.js                    19.06% (partially extended, see 11th slice note above)
 src/services/consent.service.js                                     26.1%
 src/routes/dictionary.js                                            26.71%
-src/services/NotificationService.js                                 28.33%
 src/interface/routes/auth.routes.js                                 28.49%
 src/routes/hpo.js                                                   28.94%
-src/services/fhir-validator.service.js                              29.06%
-src/interface/controllers/move-sample.controller.js                 29.16%
 src/models/Result.js                                                30.76%
 src/routes/orphanet.js                                              30.76%
 src/controllers/incident.controller.js                              31.73%
