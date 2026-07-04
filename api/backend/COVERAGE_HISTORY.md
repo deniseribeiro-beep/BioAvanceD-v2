@@ -58,6 +58,28 @@ Remaining gaps in this file: `GET /:id/miabis-compliance`,
 `sample-file.controller`, mocked out here) — good candidates for a
 follow-up slice.
 
+**Slice (2026-07-04):** `src/models/StorageBox.js` 41.74% → 98.05%
+lines. Added `tests/unit/StorageBox.model.test.js` covering the inline
+`pre('save')` hook (dimension.rows/cols required + range checks, rack
+parent-existence and containerType checks, currentOccupancy
+resynchronization from occupancyGrid, ACTIVE↔FULL status transitions,
+updatedAt/lastModified touch — same "locate the hook by source-text
+match, invoke directly against a plain unconnected document" pattern as
+`StorageContainer.model.test.js`), the `addSample`/`removeSample`/
+`getAvailablePositions`/`getStats` instance methods (existing
+`storage.models.test.js` only covered `getAllValidPositions`,
+`isValidPosition`, `checkPositionOccupancy`, `toJSON`), and the
+`validate` static. One gotcha: `occupancyGrid` is a
+`Map<string, ObjectId>` — seeding test fixtures with plain strings as
+values (e.g. `'sample-1'`) silently fails Mongoose's cast (not a valid
+ObjectId hex string) and the value comes back `undefined`, which made
+`addSample`/`removeSample`'s occupied-position checks pass when they
+should have blocked — always use `new mongoose.Types.ObjectId()` for
+occupancyGrid values in this schema, not string placeholders. No bugs
+found. Two uncovered lines remain (schema-level trivial branches) but
+not worth chasing given `>=98%` is deep in diminishing-returns
+territory.
+
 **Slice (2026-07-04, post-reconcile):** `reports.routes.js` 30.2% →
 71.84% lines. Extended `tests/integration/reports.api.test.js` with a
 generic collection-backed mock db (`buildCollectionDb`) to exercise
