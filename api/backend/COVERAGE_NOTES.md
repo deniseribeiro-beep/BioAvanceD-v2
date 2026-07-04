@@ -364,6 +364,51 @@ db update, error swallowing), `cleanupExpiredSessions`,
 and `rotateSessionTokens`. All green. No product bugs found. Exact new
 percentage not yet re-measured, will land at the next full reconcile.
 
+Since baseline (27th slice, parallel-test-agents): `src/routes/orphanet.js`,
+`src/interface/routes/location.routes.js`, and
+`src/interface/routes/terminologies.routes.js` moved off/further off the
+LOW bucket — a 3-agent parallel-test-agents slice (6 + 19 + 5 = 30 new
+targeted tests, all green, independently re-verified together) — exact new
+percentages not yet re-measured, will land at the next full reconcile.
+`orphanet.js` (the real handler mounted at `/api/orphanet` via the
+`orphanet.routes.js` re-export — previously untested; the pre-existing
+`orphanet-count.test.js` tests a different, unrelated file
+`orphanet-count.js`) got a new
+`tests/unit/routes/orphanet.test.js` covering its one `GET /search` route:
+the missing-`q` 400 guard, lang-scoped-vs-fallback query branching, the
+error 500 path, and `client.close()` running on both success and error.
+This surfaced that `vi.mock('mongodb', ...)` does not intercept a CJS
+`require('mongodb')` inside a `.js` source file any more than `vi.mock`
+does for the repo's own CJS sources — the workaround used instead was
+patching the `mongodb` module's `MongoClient` export via
+`Object.defineProperty` before `createRequire`-loading the router,
+documented in the test file. `location.routes.js` got 19 new tests added
+to the existing `tests/integration/location.api.test.js` (8 → 27 total)
+covering `GET/PUT/DELETE /:id` and `PATCH /fix-missing-locationids` (none
+had any coverage before), plus previously-untested `POST /` branches
+(numeric coercion, validation 400, duplicate-locationID 400,
+auto-generated locationID). `terminologies.routes.js` got 5 new tests
+added to `tests/integration/terminologies.api.test.js` (7 → 12 total)
+covering the live-Orphadata-fetch fallback path end to end (using a
+`require.cache`-reset + fresh env var to get a real per-test module
+instance, since `ORPHADATA_BASE_URL` is captured into a module-level
+`const` at require time), its disabled/unset-base-URL early return, its
+per-URL fetch-error swallowing, and ORPHA-code-normalization idempotency.
+No product bugs confirmed as failing-if-fixed this slice, but three
+findings worth a maintainer's attention were surfaced (not filed as
+issues — descriptive/design-review-shaped rather than clear regressions):
+`orphanet.js` constructs `new MongoClient(MONGO_URI)` outside its own
+`try` block, so a synchronous throw from the driver's URI parsing bypasses
+the route's 500 JSON error path entirely; its `finally`-block
+`client.close()` is itself unguarded against throwing; and
+`location.routes.js`'s per-route `if (!db) return 503` guards on
+`GET/PUT/DELETE /:id` and the `PATCH` route are dead code in normal
+operation since `authenticate` middleware already 503s first on a falsy
+`req.app.locals.db`, with a *different* error message/shape than the
+route's own guard — the route-level message is only reachable if `db`
+becomes falsy in the narrow window between the middleware's check and the
+handler running.
+
 Since baseline (26th slice): `import-lgpd.service.js`'s `importPatients` method
 got 11 new DB-backed unit tests in a new
 `tests/unit/import-lgpd.service.importPatients.unit.test.js` (all green),
