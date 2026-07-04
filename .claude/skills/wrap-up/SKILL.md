@@ -90,6 +90,20 @@ interrogate each of the following — don't settle for whatever surfaces in the 
    tracking issue?** Re-read your own write-ups for "out of scope," "future issue," "deferred
    to," "revisit when" — then check whether an issue actually exists for each one.
 
+9. **Did the session waste context it didn't need to spend?** Skill text is engineered
+   (rules inline, narratives and deep detail in `references/` files) but the *spending*
+   happens at runtime — audit it: a full test/coverage run streamed into the conversation
+   instead of redirected to a file and grepped (`testing-conventions`' context-economy
+   section); a file Read in full twice, or re-Read right after editing it; an archive or
+   reference file (`COVERAGE_HISTORY.md`, `references/incidents.md`) read front-to-back
+   when only one entry was needed; convention text copied verbatim into a subagent brief
+   when a file path to Read would have carried it. If the waste came from following a
+   skill as written, the skill's structure is the finding — split the heavy detail into a
+   reference the way `cjs-mocking.md` and `incidents.md` were, and leave a one-line
+   pointer inline. If a needed rule was *missed* because it sat unread in a reference
+   file, that's the same finding from the other side: the inline pointer wasn't
+   load-bearing enough — fix the pointer, don't re-inline the whole text.
+
 Only after exhausting the above: did anything work unusually smoothly enough that it's worth
 confirming as the right approach going forward? This is the exception slot, not a second
 checklist of equal weight — don't pad the report with routine successes to balance the negatives.
