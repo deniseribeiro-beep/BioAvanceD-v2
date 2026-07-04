@@ -7,6 +7,7 @@ process.env.JWT_SECRET = process.env.JWT_SECRET || 'vitest-secret-key';
 
 const app = require('../../app');
 const sessionService = require('../../src/services/session.service');
+const cidService = require('../../src/services/cid.service');
 const { createCollectionMock, createDbMock } = require('../factories/db.factory');
 
 function makeToken(accessType = 4) {
@@ -79,5 +80,64 @@ describe('PUT /api/cids/:id (method not allowed)', () => {
       .set('Authorization', `Bearer ${makeToken(4)}`)
       .send({ Descricao: 'Updated' });
     expect(res.status).toBe(405);
+  });
+});
+
+describe('GET /api/cids/search', () => {
+  it('returns 401 without token', async () => {
+    const res = await request(app).get('/api/cids/search').query({ q: 'colera' });
+    expect(res.status).toBe(401);
+  });
+
+  it('returns an empty paginated envelope for a query shorter than 2 chars, without calling the service', async () => {
+    app.locals.db = createDbMock({});
+    const spy = vi.spyOn(cidService, 'searchPaginated');
+
+    const res = await request(app)
+      .get('/api/cids/search')
+      .query({ q: 'a', page: 2, limit: 5 })
+      .set('Authorization', `Bearer ${makeToken(2)}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      items: [],
+      pagination: { page: 2, limit: 5, total: 0, totalPages: 0, hasNext: false, hasPrev: false, query: 'a' },
+    });
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('defaults page/limit and trims the query when delegating to the service', async () => {
+    app.locals.db = createDbMock({});
+    const fakeResult = {
+      items: [FAKE_CID],
+      pagination: { page: 1, limit: 10, total: 1, totalPages: 1, hasNext: false, hasPrev: false, query: 'colera' },
+    };
+    vi.spyOn(cidService, 'searchPaginated').mockResolvedValue(fakeResult);
+
+    const res = await request(app)
+      .get('/api/cids/search')
+      .query({ q: '  colera  ' })
+      .set('Authorization', `Bearer ${makeToken(2)}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(fakeResult);
+    expect(cidService.searchPaginated).toHaveBeenCalledWith(app.locals.db, 'colera', 1, 10);
+  });
+
+  it('returns 500 with the error message when the service throws', async () => {
+    app.locals.db = createDbMock({});
+    vi.spyOn(cidService, 'searchPaginated').mockRejectedValue(new Error('boom'));
+
+    const res = await request(app)
+      .get('/api/cids/search')
+      .query({ q: 'colera' })
+      .set('Authorization', `Bearer ${makeToken(2)}`);
+
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({
+      success: false,
+      error: 'Erro ao buscar CIDs',
+      message: 'boom',
+    });
   });
 });

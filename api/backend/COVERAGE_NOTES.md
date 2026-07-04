@@ -154,6 +154,23 @@ ObjectId falling through to the generic 500 path. Exact new percentage not
 yet re-measured, will land at the next full reconcile. No bugs surfaced
 this slice.
 
+Since baseline (14th slice): `cid.controller.js` moved off the LOW bucket —
+4 new integration tests added to
+`api/backend/tests/integration/cid.api.test.js` (the `GET /api/cids/search`
+route's short-query no-op, default page/limit delegation, and service-error
+500) plus a new `api/backend/tests/unit/cid.controller.test.js` (5 tests)
+calling the controller function directly to cover the `req.app.locals.db`
+falsy 503 branch, which is dead code when reached through the real
+`/api/cids/search` route — `authenticate` middleware already checks
+`req.app.locals.db` first and 503s with a different message
+(`"Banco de dados não disponível para validar sessão"`) before the
+controller ever runs, since both checks read the same `app.locals.db`
+reference. Not filed as a bug (harmless defensive duplication, not a
+behavioral defect), but noted here since it explains why that branch
+needed a direct unit test instead of an integration test. Exact new
+percentage not yet re-measured, will land at the next full reconcile. No
+bugs surfaced this slice.
+
 ## How to use this when picking a slice
 
 1. Prefer a **ZERO** file with real logic (not a script/model/port
@@ -198,7 +215,6 @@ Sorted ascending (worst first). This is the primary slice-picking pool:
 
 ```
 src/interface/routes/reports.routes.js                    19.06% (partially extended, see 11th slice note above)
-src/controllers/cid.controller.js                                   23.52%
 src/controllers/temperature.controller.js                           23.88%
 src/workers/workers/result-worker.js                                24.21%
 src/interface/routes/result.routes.js                               24.33%
