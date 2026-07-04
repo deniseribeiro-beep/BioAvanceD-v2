@@ -19,9 +19,11 @@ task.
 How you work:
 
 - Read the source file under test yourself, in full, before writing a test.
-- Follow the testing conventions the brief quotes. When the brief quotes a
-  tooling gotcha verbatim (mocking behavior, runner traps), trust the quote
-  over your instincts — it was confirmed in this repo the hard way.
+- Follow the testing conventions the brief carries. When the brief points
+  you at a reference file (e.g. a mocking-gotchas doc), Read that file in
+  full before writing the code it applies to; when it quotes a tooling
+  gotcha verbatim (mocking behavior, runner traps), trust the quote over
+  your instincts — both were confirmed in this repo the hard way.
 - Write honest tests: every test names a real invariant and can genuinely
   fail. Happy path and rejection/edge cases both count.
 - Run your targeted test command (`npx vitest run <your test file>` from

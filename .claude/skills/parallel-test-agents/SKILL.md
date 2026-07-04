@@ -94,17 +94,22 @@ agent owns and delivers, not a litany of prohibitions), and include:
   tautological assertions, name real invariants, don't weaken
   assertions to get green) — copy these in, don't assume the agent will
   find the project's conventions unprompted.
-- Any project-specific tooling quirk you assert (a mocking gotcha, a
-  runner trap, a framework behavior) must be quoted verbatim from that
-  project's own conventions skill, not stated from memory. Confirmed
+- Project-specific tooling quirks (mocking gotchas, runner traps,
+  framework behavior) must reach the agent as the project's own
+  documented wording, never your paraphrase from memory. Confirmed
   2026-07-02 (BioAvanceD-v2): briefing three agents from memory that
   "`vi.mock()` reliably intercepts `require()`" directly contradicted
   the project's own documented finding (the opposite was true and
   already written down), and all three agents burned time independently
-  rediscovering the correct answer before falling back to the
-  documented workaround. If you're not currently looking at the
-  project skill's exact wording, don't paraphrase it into a brief —
-  open the file and copy the relevant lines in.
+  rediscovering the correct answer. **The context-cheap way to do this:
+  when the quirks live in a standalone reference file, put that file's
+  path in the brief with an instruction to Read it in full before
+  writing the relevant code** (test-writer has the Read tool) — in this
+  repo that's `.claude/skills/testing-conventions/references/cjs-mocking.md`
+  for anything that mocks/spies/stubs. That's one path per brief instead
+  of ~90 quoted lines per agent, and the agent gets the canonical text
+  either way. Only quote verbatim inline when the quirk has no file to
+  point at — and then open the file and copy, don't paraphrase.
 - Instruction to run its own targeted test command and report the
   actual output, not a paraphrase — but make clear this is a sanity
   check, not the verification of record.
@@ -132,7 +137,9 @@ not a result:
 2. Run all the slices' new/touched test files together in one command
    (not the full backend suite) to catch cross-slice interaction the
    parallel authoring couldn't see — e.g. `npx vitest run <file1>
-   <file2> <file3>`. Confirmed 2026-07-04: a bare full-suite `npx
+   <file2> <file3> --reporter=dot` (per-test detail was already seen on
+   the individual runs; see `testing-conventions`' context-economy
+   section). Confirmed 2026-07-04: a bare full-suite `npx
    vitest run` with no path is hard-blocked mid-loop by
    `test-loop`'s own guard (full suite is reserved for the
    `ship-to-main` coverage-reconcile phase); this repo's "run the full

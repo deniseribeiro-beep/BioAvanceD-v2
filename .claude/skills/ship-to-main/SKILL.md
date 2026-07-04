@@ -50,6 +50,10 @@ still open, or blocking.
 
 1. `npx vitest run` from `api/backend/` — full backend suite (bare
    vitest, NOT `test:ci` — see `testing-conventions`' fixed-list trap).
+   Redirect the output to a scratchpad file and read back only the tail
+   summary / grep for failures — don't stream thousands of test lines
+   into the conversation (`testing-conventions`' context-economy
+   section; applies to every full-suite run in this phase).
    The 2 known pre-existing compliance failures are expected unless
    they've since been fixed; anything else red gets fixed first.
 2. `npm --prefix frontend run typecheck`.

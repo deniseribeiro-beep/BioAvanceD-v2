@@ -60,74 +60,54 @@ see the file's own header for the regenerate command and cadence.
 - Frontend-touching changes: `npm --prefix frontend run typecheck` (no
   frontend test script exists yet — if one gets added, record it here).
 
-## Test files are ESM-only, sources are CJS
+## Context economy — keep runner output out of the conversation
 
-Vitest cannot be `require()`d — a test file written in CommonJS
-(`const { describe } = require('vitest')`) fails outright with "Vitest
-cannot be imported in a CommonJS module using require()". Test files
-must use `import { describe, it, expect, vi } from 'vitest'`, and load
-the CJS sources under test via
-`createRequire(import.meta.url)` (see existing tests, e.g.
-`tests/unit/import-lgpd.controller.test.js`, for the pattern). A
-subagent hit this cold on 2026-07-03 — include it in any test-writing
-brief for this repo.
+The suite is in the thousands of tests; unmanaged runner output is the
+single biggest context sink in a loop session. Rules:
 
-## `vi.mock()` does not intercept `require()`
+- **Single new test file:** default reporter is fine — you want to see
+  every test name once to confirm the file was discovered (fixed-list
+  trap below) and the assertions are real.
+- **Multi-file runs** (fan-in verify of several slices together, re-runs
+  of already-seen files): `npx vitest run <files> --reporter=dot`. You
+  already reviewed the per-test detail on the individual runs; the
+  combined run only needs pass/fail.
+- **Full-suite runs** (coverage reconcile / ship-to-main gate only):
+  never stream the output into the conversation. Redirect to a file in
+  the scratchpad (or `api/backend/coverage/` — gitignored), then read
+  back only the tail summary and grep the file for `FAIL`/`✗` if the
+  summary shows failures. Same for full Playwright runs — and remember
+  failed-run detail is already on disk in `test-results/`.
+- **Reading sources under test:** read the file once, in full, when
+  writing its tests (you need the real branch structure); but don't
+  re-`Read` a test file you just wrote/edited, and don't cat large
+  source files a second time to "double-check" a detail — grep the
+  specific lines instead.
+- The `COVERAGE_NOTES.md` / `COVERAGE_HISTORY.md` split exists for the
+  same reason — read the notes, not the history, unless you need a
+  specific past slice's narrative.
 
-Confirmed independently twice (2026-07-02, `scheduler.service.test.js` and
-`sendConsentEmail.test.js`): in this repo's Vitest setup, `vi.mock('./x', ...)`
-only intercepts ES `import`/dynamic `import()` of `x`. Backend source files
-overwhelmingly use CommonJS `require(...)`, which `vi.mock` does not hook —
-the mock factory silently never runs and the real module executes underneath
-it (real logger, real timers, real network calls). Symptom: mocked functions
-report zero calls even though the code path clearly ran.
+## CJS mocking gotchas — read the reference before mocking anything
 
-Workaround, not a fix — Node's CJS module cache guarantees the test file and
-the source file under test share the same object instance, so: `require` the
-real singleton module and use `vi.spyOn(realModule, 'methodName')` /
-`.mockImplementation(...)` directly on it, restoring with
-`vi.restoreAllMocks()` in `afterEach`. This applies to the module's own
-dependencies too (e.g. a service's internal `require('node-cron')` or
-`require('../utils/logger')`) — spy on the dependency's exports the same way
-rather than trying to `vi.mock` the dependency's module path.
+The full, verbatim writeups (with incident history and workarounds) live
+in `references/cjs-mocking.md` next to this file — **Read that file
+before writing or briefing any test that mocks/spies/stubs**, and hand
+its *path* to test-writer subagents instead of paraphrasing it into
+briefs. Index of what it covers, so you know when it applies:
 
-**Loading the module under test via `await import(...)` has the same failure mode as
-`vi.mock` on CJS** (confirmed 2026-07-03, `security.routes.test.js`): a test file that
-does `const foo = (await import('../../src/foo')).default || (await import(...))` gets
-a *different module instance* than the one the source's own internal `require(...)`
-calls resolve to (Vite's ESM interop wraps a fresh instance around the CJS module
-rather than returning the same `require.cache` entry). `vi.spyOn` on that imported
-instance then silently no-ops for the same reason as above — the real dependency runs
-underneath the "mock." This is easy to miss because the test can still pass if its
-assertions are loose enough to also be satisfied by the real implementation's output
-(that's exactly how it went undetected in `security.routes.test.js` until stricter
-assertions surfaced it — see issue #41). Always load CJS sources under test —
-including the router/service file itself, not just its dependencies — via
-`createRequire(import.meta.url)`, never `await import(...)`.
+1. Test files are ESM-only (`import ... from 'vitest'`); CJS sources
+   load via `createRequire(import.meta.url)`, never `require` of vitest.
+2. `vi.mock()` does not intercept `require()` — spy on the real
+   singleton module instead.
+3. `await import(...)` of a CJS source yields a *different instance*
+   than internal `require()`s — spies no-op; use `createRequire`.
+4. `vi.spyOn` silently fails when the source destructured the import at
+   module scope — stub lower, or clear `require.cache` and re-require.
+5. `vi.resetModules()` doesn't clear Node's real `require.cache` —
+   `delete require.cache[require.resolve(path)]` explicitly.
 
-**`vi.spyOn` also silently fails if the source file destructures the import**
-(confirmed independently 3x, 2026-07-02: `RegisterSample.js`, `authConsent.js`,
-`iot-streaming.service.js` — all do `const { getCollection } = require(...)` /
-`const { getQueue } = require(...)` at module scope). Spying on the exporting
-module's method after that destructuring has already run has no effect — the
-local binding still points at the original function, so the spy is silently
-never called and the real implementation runs underneath it. Symptom looks
-identical to the `vi.mock`/`require` gap above (zero calls recorded on a mock
-that should have fired) but the root cause is different and the module-object
-spy trick above does not fix it. Workaround: stub the *lower-level* call the
-destructured helper itself makes (e.g. `db.collection()` instead of
-`getCollection()`), or clear `require.cache` for both the dependency and the
-module under test and re-require after setting the spy so the destructuring
-re-runs against the mocked export.
-
-**`vi.resetModules()` alone does not reliably clear the real Node `require.cache`
-entry** (confirmed 2026-07-02, `hpoService.test.js`). If a source file captures a
-`process.env` value into a module-level `const` at require time (e.g.
-`const HPO_API_URL = process.env.HPO_API_URL || ''`), a test that changes the env
-var and calls `vi.resetModules()` + `require(...)` again can still get back a stale
-module instance with the old value frozen in. Workaround: explicitly
-`delete require.cache[require.resolve(path)]` before every re-require that needs a
-fresh read of `process.env`, rather than relying on `vi.resetModules()`.
+If any test doing mocking is in the slice, points 1-5 above are not a
+substitute for the reference file — the workaround details matter.
 
 ## The fixed-list runner trap
 
