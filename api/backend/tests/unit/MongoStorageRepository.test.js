@@ -41,6 +41,44 @@ describe('MongoStorageRepository', () => {
     });
   });
 
+  describe('findSampleById', () => {
+    it('converts the id and queries the amostras collection with the session', async () => {
+      const findOne = vi.fn().mockResolvedValueOnce({ _id: 'sample-doc' });
+      const samples = makeCollection({ findOne });
+      const db = makeDb({ amostras: samples });
+      const repo = new MongoStorageRepository(db);
+      const idStr = new ObjectId().toString();
+      const session = { id: 'sess-1' };
+
+      const result = await repo.findSampleById(idStr, session);
+
+      expect(result).toEqual({ _id: 'sample-doc' });
+      expect(findOne).toHaveBeenCalledWith(
+        { _id: expect.any(ObjectId) },
+        { session }
+      );
+    });
+  });
+
+  describe('findBoxById', () => {
+    it('converts the id and queries the storageBoxes collection with the session', async () => {
+      const findOne = vi.fn().mockResolvedValueOnce({ _id: 'box-doc' });
+      const storageBoxes = makeCollection({ findOne });
+      const db = makeDb({ storageBoxes });
+      const repo = new MongoStorageRepository(db);
+      const idStr = new ObjectId().toString();
+      const session = { id: 'sess-2' };
+
+      const result = await repo.findBoxById(idStr, session);
+
+      expect(result).toEqual({ _id: 'box-doc' });
+      expect(findOne).toHaveBeenCalledWith(
+        { _id: expect.any(ObjectId) },
+        { session }
+      );
+    });
+  });
+
   describe('withTransaction', () => {
     it('happy path calls handler and returns its result, ends session', async () => {
       const endSession = vi.fn();

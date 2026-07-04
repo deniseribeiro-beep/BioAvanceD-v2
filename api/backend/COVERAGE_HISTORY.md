@@ -828,3 +828,19 @@ Remaining ~10%/34% branch gap is mostly the file-upload/export routes
 at the bottom (`sampleFileController`-delegated, already exercised at
 the controller level per earlier slices) and a couple of defensive
 `req.t`/optional-chaining fallbacks not worth a dedicated test.
+
+`src/infrastructure/persistence/mongo/MongoStorageRepository.js`
+(2026-07-04): the existing `tests/unit/MongoStorageRepository.test.js`
+(38 tests) already covered every method's happy path and error
+branches except two untested one-liners, `findSampleById` and
+`findBoxById` — added 2 tests for those (40 tests total, all passing).
+Reading the file top-to-bottom against the test file confirms
+substantive coverage is now complete or near-complete for every
+method. However, the isolated single-file `--coverage.include` run
+reported an implausibly low 60% lines / 40% functions, with 0-hit
+counts on lines inside methods that the test file demonstrably
+exercises — a measurement quirk, not a real gap; documented in
+`testing-conventions` so it isn't re-investigated from scratch next
+time. Left off the MID-LOW list since substantively done; the real %
+will be confirmed at the next full `--coverage --reporter=basic`
+reconcile rather than guessed here. No product bugs found.

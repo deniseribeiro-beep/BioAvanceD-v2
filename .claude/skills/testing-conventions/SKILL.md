@@ -58,6 +58,27 @@ see the file's own header for the regenerate command and cadence.
 - Frontend-touching changes: `npm --prefix frontend run typecheck` (no
   frontend test script exists yet — if one gets added, record it here).
 
+## Per-file `--coverage.include=<one file>` can under-report — sanity check before trusting it
+
+Observed on `MongoStorageRepository.js` (2026-07-04): running just its test
+file with `--coverage --coverage.include=src/.../MongoStorageRepository.js`
+reported only 60% lines / 40% functions, with several lines inside
+thoroughly-tested methods (e.g. `moveSamplePosition`'s unconditional
+top-of-function lines) showing 0 hits — while reading the test file showed
+happy-path and every error-branch already covered for those methods. Tried
+lcov and json reporters, ran with a sibling test file added, and got the
+same numbers both times, so it isn't a one-off flake. Root cause wasn't
+tracked down (isolating it further wasn't worth the session budget); one
+candidate not yet ruled out is CJS-via-ESM `import` interop (this file does
+`import X from '../.../Foo.js'` on a CJS module, unlike the
+require.cache-injection route/service tests elsewhere in this repo, where
+the same single-file `--coverage.include` measurement has been reliable
+release after release). If a file's isolated coverage number looks wrong
+given what the test file actually exercises, don't trust it blindly —
+either sanity-check against the next full `--coverage --reporter=basic`
+reconcile, or note the discrepancy in `COVERAGE_HISTORY.md` instead of
+recording a number you don't believe.
+
 ## Context economy — keep runner output out of the conversation
 
 The suite is in the thousands of tests; unmanaged runner output is the
