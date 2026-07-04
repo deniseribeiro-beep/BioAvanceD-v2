@@ -165,11 +165,29 @@ falsy 503 branch, which is dead code when reached through the real
 `req.app.locals.db` first and 503s with a different message
 (`"Banco de dados não disponível para validar sessão"`) before the
 controller ever runs, since both checks read the same `app.locals.db`
-reference. Not filed as a bug (harmless defensive duplication, not a
-behavioral defect), but noted here since it explains why that branch
-needed a direct unit test instead of an integration test. Exact new
+reference. Filed as issue #48 (labels: documentation, test-branch) per
+the wrap-up "found a problem → file it" rule, and noted here since it
+also explains why that branch needed a direct unit test instead of an
+integration test. Exact new
 percentage not yet re-measured, will land at the next full reconcile. No
 bugs surfaced this slice.
+
+Since baseline (15th slice): `temperature.controller.js` moved off the
+LOW bucket — 21 new unit tests added in a new
+`api/backend/tests/unit/temperature.controller.test.js`, covering all six
+handlers (`createReading`, `getHistory`, `getAlerts`, `getAll`, `getById`,
+`getControl`) via direct calls with a mocked `temperatureService`: each
+handler's `req.app.locals.db` falsy 503 branch, its success delegation
+(including param defaulting/mapping), and its own error-handling branch.
+Found a real routing bug while reading `temperature.routes.js`: `GET
+/control` is registered *after* `GET /:id`, so Express matches `/:id`
+first (`req.params.id === 'control'`) and `getControl` is unreachable via
+the real running app — filed as issue #49 (labels: documentation,
+test-branch). This is why `getControl` needed direct unit tests rather
+than an integration test through the real route (same shape as the
+`cid.controller.js` finding in the prior slice, different root cause).
+Exact new percentage not yet re-measured, will land at the next full
+reconcile.
 
 ## How to use this when picking a slice
 
@@ -215,7 +233,6 @@ Sorted ascending (worst first). This is the primary slice-picking pool:
 
 ```
 src/interface/routes/reports.routes.js                    19.06% (partially extended, see 11th slice note above)
-src/controllers/temperature.controller.js                           23.88%
 src/workers/workers/result-worker.js                                24.21%
 src/interface/routes/result.routes.js                               24.33%
 src/interface/controllers/storage-query.controller.js               24.7%
