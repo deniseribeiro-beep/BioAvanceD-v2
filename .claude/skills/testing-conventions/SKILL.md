@@ -103,6 +103,9 @@ briefs. Index of what it covers, so you know when it applies:
    module scope — stub lower, or clear `require.cache` and re-require.
 5. `vi.resetModules()` doesn't clear Node's real `require.cache` —
    `delete require.cache[require.resolve(path)]` explicitly.
+6. Testing a mongoose `pre('save')` hook without a DB connection —
+   locate it in `Model.schema.s.hooks._pres.get('save')` by source-text
+   match and invoke it directly against a plain document instance.
 
 If any test doing mocking is in the slice, points 1-5 above are not a
 substitute for the reference file — the workaround details matter.

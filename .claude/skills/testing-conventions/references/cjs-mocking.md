@@ -88,6 +88,23 @@ module instance with the old value frozen in. Workaround: explicitly
 `delete require.cache[require.resolve(path)]` before every re-require that needs a
 fresh read of `process.env`, rather than relying on `vi.resetModules()`.
 
+## Testing a mongoose `pre('save')` hook without a DB connection
+
+**Calling `.save()` to exercise an inline `schema.pre('save', ...)` validator needs a
+live DB connection** this repo's unit tests don't have. Confirmed working alternative
+(`StorageContainer.model.test.js`, 2026-07-04): the hook function is retrievable
+without a connection via `Model.schema.s.hooks._pres.get('save')` — an array that also
+contains mongoose's own internal save hooks (`validateBeforeSave`, subdoc saves,
+sharding, transactions), so find the target by matching a snippet of its own source
+text (`.find(h => h.fn.toString().includes('some string unique to the hook'))`) rather
+than trusting a fixed array index, which can shift if mongoose adds/reorders internal
+hooks. Call it directly against a plain `new Model(...)` instance:
+`await hook.call(doc, () => {})` — hooks that `throw` inside an `async function` reject
+the returned promise, so `await expect(hook.call(doc, next)).rejects.toThrow(...)`
+works with no `next(err)` plumbing needed. Any `Model.findById`/`Model.find` calls made
+*inside* the hook can be `vi.spyOn`'d directly on the required model object, same as any
+other CJS singleton spy in this file.
+
 ## Maintaining this file
 
 New mocking/module-cache gotchas confirmed in this repo go here (full
