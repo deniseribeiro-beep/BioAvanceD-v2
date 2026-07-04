@@ -130,7 +130,26 @@ forced. This slice surfaced one finding: #53 (fhir-validator.service.js's
 substring checks, but AJV's `required`-keyword errors always report an empty
 `instancePath`, so every "missing required field" case across every resource
 type falls through to the raw AJV message instead of the intended friendly
-Portuguese diagnostic — confirmed, not just theoretical) — see below.
+Portuguese diagnostic — confirmed, not just theoretical) — see below. Also
+filed #54 (move-sample.controller.js: no 500 path, fragile substring-based
+error-status routing).
+
+Since baseline (19th slice, parallel-test-agents): `Result.js` and
+`hpo.js` moved off the LOW bucket, and `dictionary.js` had its previously
+uncovered `/medications/search` and `/disease-profile` routes covered
+(its `/atc/search` route already had coverage from a prior slice) — a
+3-agent parallel-test-agents slice (17 + 10 + 20 = 47 new targeted tests,
+all green, independently re-verified together) — exact new percentages
+not yet re-measured, will land at the next full reconcile. This slice
+surfaced four findings, all filed: #55 (Result.js `create()` uses `||`
+instead of `??` for `fileSize` etc., coercing a legitimate `0` to `null`),
+#56 (hpoService.searchHpoLocal builds a RegExp directly from unescaped
+user input — SyntaxError/low-severity ReDoS risk), #57 (hpo.js opens a
+fresh raw MongoClient per request on `GET /:id`/local search, plus an
+inconsistent result-count log on the fallback path), #58
+(dictionary.js's `/medications/search` re-runs index-creation/seeding
+on every request; minor normalizer gaps in disease-profile/ATC-level
+fallback).
 
 Since baseline (10th slice): `import-worker.js` moved off the ZERO bucket by a
 test-writer slice (19 new targeted tests, all green) — exact new percentage
@@ -288,10 +307,8 @@ Sorted ascending (worst first). This is the primary slice-picking pool:
 ```
 src/interface/routes/reports.routes.js                    19.06% (partially extended, see 11th slice note above)
 src/services/consent.service.js                                     26.1%
-src/routes/dictionary.js                                            26.71%
+src/routes/dictionary.js                                            26.71% (atc/search, medications/search, disease-profile covered; /search + /suggest, Neo4j-backed, still uncovered — see 19th slice note above)
 src/interface/routes/auth.routes.js                                 28.49%
-src/routes/hpo.js                                                   28.94%
-src/models/Result.js                                                30.76%
 src/routes/orphanet.js                                              30.76%
 src/controllers/incident.controller.js                              31.73%
 src/interface/routes/location.routes.js                             32.25%
