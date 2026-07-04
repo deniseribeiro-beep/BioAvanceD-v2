@@ -314,6 +314,19 @@ production-impacting). Also noted for awareness, out of scope:
 `req.path.includes(...)` (substring match) rather than an exact route
 match, a possible accidental path-prefix bypass surface.
 
+Since baseline (22nd slice): `log.service.js` moved off the LOW bucket —
+23 new unit tests added in a new `tests/unit/log.service.test.js` (all
+green), covering `sanitizeLogData`'s Patient-message stripping/entityID
+normalization, `createLog`'s validation/audit-hash/insert-failure paths,
+`getLogs`'s filter-combination logic ($or/$and merging across
+resourceType/status/search/userId aliases) and pagination defaults,
+`getUserLogs`/`getEntityLogs` query shapes, and `exportLogsToCSV`/
+`exportLogsToExcel`'s success and failure paths. No product bugs found;
+one gnarly regex behavior confirmed by test (`sanitizeLogData`'s message
+regex consumes to end-of-string when no digit follows "Paciente ",
+rather than just stripping the name). Exact new percentage not yet
+re-measured, will land at the next full reconcile.
+
 ## How to use this when picking a slice
 
 1. Prefer a **ZERO** file with real logic (not a script/model/port
@@ -367,7 +380,6 @@ src/interface/routes/location.routes.js                             32.25%
 src/models/StorageContainer.js                                      32.69%
 src/interface/routes/terminologies.routes.js                        32.9%
 src/interface/routes/sample.routes.js                               33.33%
-src/services/log.service.js                                         33.86%
 src/services/import.service.js                                      34.19%
 src/services/auth.service.js                                        34.88%
 src/config/uploadConfig.js                                          35.89%
