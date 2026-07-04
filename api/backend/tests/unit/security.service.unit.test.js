@@ -1,5 +1,7 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 const securityService = require('../../src/services/security.service');
+const logger = require('../../src/utils/logger');
+const auditLogger = require('../../src/utils/auditLogger');
 
 describe('SecurityService.getDefaultConfig', () => {
   it('returns object with authentication section', () => {
@@ -153,5 +155,308 @@ describe('SecurityService.formatLogsAsCSV', () => {
   it('handles missing fields gracefully', () => {
     const log = {};
     expect(() => securityService.formatLogsAsCSV([log])).not.toThrow();
+  });
+});
+
+describe('SecurityService.getConfig', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('returns stripped config (no _id/createdAt) when a config exists in db', async () => {
+    const stored = { _id: 'main', createdAt: new Date(), updatedAt: new Date(), authentication: { requireMFA: true } };
+    const findOne = vi.fn().mockResolvedValue(stored);
+    const db = { collection: vi.fn(() => ({ findOne })) };
+
+    const result = await securityService.getConfig(db);
+
+    expect(result).not.toHaveProperty('_id');
+    expect(result).not.toHaveProperty('createdAt');
+    expect(result.authentication.requireMFA).toBe(true);
+  });
+
+  it('creates and returns default config when none exists in db', async () => {
+    const findOne = vi.fn().mockResolvedValue(null);
+    const insertOne = vi.fn().mockResolvedValue({});
+    const db = { collection: vi.fn(() => ({ findOne, insertOne })) };
+
+    const result = await securityService.getConfig(db);
+
+    expect(insertOne).toHaveBeenCalledTimes(1);
+    const insertedArg = insertOne.mock.calls[0][0];
+    expect(insertedArg._id).toBe('main');
+    expect(result).toHaveProperty('authentication');
+    expect(result).not.toHaveProperty('_id');
+  });
+
+  it('logs and rethrows when db access fails', async () => {
+    const error = new Error('db down');
+    const findOne = vi.fn().mockRejectedValue(error);
+    const db = { collection: vi.fn(() => ({ findOne })) };
+    const errSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
+
+    await expect(securityService.getConfig(db)).rejects.toThrow('db down');
+    expect(errSpy).toHaveBeenCalled();
+  });
+});
+
+describe('SecurityService.updateConfig', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('merges config, persists it and logs audit entries for each change', async () => {
+    const updateOne = vi.fn().mockResolvedValue({});
+    const db = { collection: vi.fn(() => ({ updateOne })) };
+    vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+    const logSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue({});
+
+    const currentConfig = { authentication: { requireMFA: false }, metadata: { version: 1 } };
+    const newConfig = { authentication: { requireMFA: true } };
+    const req = { user: { userID: 'u1' } };
+
+    const result = await securityService.updateConfig(db, newConfig, currentConfig, req);
+
+    expect(updateOne).toHaveBeenCalledTimes(1);
+    expect(result.authentication.requireMFA).toBe(true);
+    expect(result.metadata.version).toBe(2);
+    expect(result.metadata.lastUpdatedBy).toBe('u1');
+    expect(logSpy).toHaveBeenCalledTimes(1);
+    expect(logSpy.mock.calls[0][0].severity).toBe('critical');
+  });
+
+  it('uses SYSTEM as lastUpdatedBy when req has no user', async () => {
+    const updateOne = vi.fn().mockResolvedValue({});
+    const db = { collection: vi.fn(() => ({ updateOne })) };
+    vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+    vi.spyOn(auditLogger, 'log').mockResolvedValue({});
+
+    const result = await securityService.updateConfig(db, {}, { metadata: {} }, {});
+
+    expect(result.metadata.lastUpdatedBy).toBe('SYSTEM');
+  });
+
+  it('rejects and does not write to db when newConfig fails validation', async () => {
+    const updateOne = vi.fn().mockResolvedValue({});
+    const db = { collection: vi.fn(() => ({ updateOne })) };
+    const errSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
+
+    const currentConfig = { authentication: { maxLoginAttempts: 5 } };
+    const newConfig = { authentication: { maxLoginAttempts: 99 } };
+
+    await expect(securityService.updateConfig(db, newConfig, currentConfig, {})).rejects.toThrow('inválidas');
+    expect(updateOne).not.toHaveBeenCalled();
+    expect(errSpy).toHaveBeenCalled();
+  });
+});
+
+describe('SecurityService.exportLogs', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function makeDbWithLogs(logs) {
+    const toArray = vi.fn().mockResolvedValue(logs);
+    const limit = vi.fn(() => ({ toArray }));
+    const sort = vi.fn(() => ({ limit }));
+    const find = vi.fn(() => ({ sort }));
+    return { db: { collection: vi.fn(() => ({ find })) }, find };
+  }
+
+  it('returns raw logs array (not CSV) when format is not csv', async () => {
+    const logs = [{ action: 'CREATE', entity: 'Sample' }];
+    const { db } = makeDbWithLogs(logs);
+
+    const result = await securityService.exportLogs(db, {}, 'json');
+
+    expect(Array.isArray(result)).toBe(true);
+    expect(result).toEqual(logs);
+  });
+
+  it('returns CSV header-only string for empty result set', async () => {
+    const { db } = makeDbWithLogs([]);
+
+    const result = await securityService.exportLogs(db, {}, 'csv');
+
+    expect(result).toBe('timestamp,userID,action,entity,severity,module,message\n');
+  });
+
+  it('applies severity, module, action(uppercased) and entity filters to the query', async () => {
+    const { db, find } = makeDbWithLogs([]);
+
+    await securityService.exportLogs(db, { severity: 'critical', module: 'Segurança', action: 'update', entity: 'SecurityConfig' }, 'csv');
+
+    expect(find).toHaveBeenCalledWith({
+      severity: 'critical',
+      module: 'Segurança',
+      action: 'UPDATE',
+      entity: 'SecurityConfig'
+    });
+  });
+
+  it('builds a timestamp range query from startDate and endDate filters', async () => {
+    const { db, find } = makeDbWithLogs([]);
+
+    await securityService.exportLogs(db, { startDate: '2026-01-01', endDate: '2026-02-01' }, 'csv');
+
+    const queryArg = find.mock.calls[0][0];
+    expect(queryArg.timestamp.$gte).toEqual(new Date('2026-01-01'));
+    expect(queryArg.timestamp.$lte).toEqual(new Date('2026-02-01'));
+  });
+
+  it('logs and rethrows when the logs collection query fails', async () => {
+    const error = new Error('query failed');
+    const find = vi.fn(() => { throw error; });
+    const db = { collection: vi.fn(() => ({ find })) };
+    const errSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
+
+    await expect(securityService.exportLogs(db, {}, 'csv')).rejects.toThrow('query failed');
+    expect(errSpy).toHaveBeenCalled();
+  });
+});
+
+describe('SecurityService.getPermissions', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('returns default permissions when no custom permissions are stored', async () => {
+    const findOne = vi.fn().mockResolvedValue(null);
+    const db = { collection: vi.fn(() => ({ findOne })) };
+
+    const result = await securityService.getPermissions(db);
+
+    expect(result['4'].manageSystem).toBe(true);
+    expect(result['1'].createUser).toBeUndefined();
+  });
+
+  it('merges custom permissions over defaults for the matching profile only', async () => {
+    const findOne = vi.fn().mockResolvedValue({ permissions: { '1': { viewReports: false, createUser: true } } });
+    const db = { collection: vi.fn(() => ({ findOne })) };
+
+    const result = await securityService.getPermissions(db);
+
+    expect(result['1'].viewReports).toBe(false);
+    expect(result['1'].createUser).toBe(true);
+    expect(result['1'].useAssistant).toBe(true); // untouched default retained
+    expect(result['4'].manageSystem).toBe(true); // unrelated profile untouched
+  });
+
+  it('logs and rethrows when db access fails', async () => {
+    const error = new Error('db unreachable');
+    const findOne = vi.fn().mockRejectedValue(error);
+    const db = { collection: vi.fn(() => ({ findOne })) };
+    const errSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
+
+    await expect(securityService.getPermissions(db)).rejects.toThrow('db unreachable');
+    expect(errSpy).toHaveBeenCalled();
+  });
+});
+
+describe('SecurityService.updatePermissions', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('normalizes numeric profile keys to strings, persists and logs audit per changed permission', async () => {
+    const updateOne = vi.fn().mockResolvedValue({});
+    const db = { collection: vi.fn(() => ({ updateOne })) };
+    vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+    const logSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue({});
+
+    const newPermissions = { 2: { createSample: false } };
+    const currentPermissions = { '2': { createSample: true } };
+
+    const result = await securityService.updatePermissions(db, newPermissions, currentPermissions, { user: { userID: 'admin1' } });
+
+    expect(Object.keys(result)).toEqual(['2']);
+    expect(updateOne).toHaveBeenCalledTimes(1);
+    expect(logSpy).toHaveBeenCalledTimes(1);
+    expect(logSpy.mock.calls[0][0].severity).toBe('critical');
+  });
+
+  it('rejects with invalid profile and does not write to db', async () => {
+    const updateOne = vi.fn().mockResolvedValue({});
+    const db = { collection: vi.fn(() => ({ updateOne })) };
+    const errSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
+
+    await expect(securityService.updatePermissions(db, { '9': { viewReports: true } }, {}, {}))
+      .rejects.toThrow('Perfil inválido');
+    expect(updateOne).not.toHaveBeenCalled();
+    expect(errSpy).toHaveBeenCalled();
+  });
+
+  it('rejects with invalid permission key even though profile is valid', async () => {
+    const updateOne = vi.fn().mockResolvedValue({});
+    const db = { collection: vi.fn(() => ({ updateOne })) };
+    vi.spyOn(logger, 'error').mockImplementation(() => {});
+
+    await expect(securityService.updatePermissions(db, { '1': { notARealPermission: true } }, {}, {}))
+      .rejects.toThrow('Permissão inválida');
+    expect(updateOne).not.toHaveBeenCalled();
+  });
+
+  it('rejects with non-boolean permission value', async () => {
+    const updateOne = vi.fn().mockResolvedValue({});
+    const db = { collection: vi.fn(() => ({ updateOne })) };
+    vi.spyOn(logger, 'error').mockImplementation(() => {});
+
+    await expect(securityService.updatePermissions(db, { '1': { viewReports: 'yes' } }, {}, {}))
+      .rejects.toThrow('deve ser booleano');
+    expect(updateOne).not.toHaveBeenCalled();
+  });
+});
+
+describe('SecurityService.detectPermissionChanges', () => {
+  it('reports every permission as changed (oldValue=false) for a brand new profile', () => {
+    const changes = securityService.detectPermissionChanges({}, { '1': { viewReports: true, useAssistant: false } });
+
+    expect(changes).toHaveLength(2);
+    expect(changes.every(c => c.profile === '1')).toBe(true);
+    const viewReportsChange = changes.find(c => c.permission === 'viewReports');
+    expect(viewReportsChange.oldValue).toBe(false);
+    expect(viewReportsChange.newValue).toBe(true);
+  });
+
+  it('only reports permissions whose value actually changed for an existing profile', () => {
+    const oldPermissions = { '2': { createSample: true, viewReports: true } };
+    const newPermissions = { '2': { createSample: true, viewReports: false } };
+
+    const changes = securityService.detectPermissionChanges(oldPermissions, newPermissions);
+
+    expect(changes).toHaveLength(1);
+    expect(changes[0].permission).toBe('viewReports');
+    expect(changes[0].oldValue).toBe(true);
+    expect(changes[0].newValue).toBe(false);
+  });
+
+  it('treats a missing old permission as false when comparing', () => {
+    const changes = securityService.detectPermissionChanges({ '2': {} }, { '2': { createSample: true } });
+
+    expect(changes).toHaveLength(1);
+    expect(changes[0].oldValue).toBe(false);
+    expect(changes[0].newValue).toBe(true);
+  });
+});
+
+describe('SecurityService.validatePermissions', () => {
+  it('does not throw for valid profiles and boolean permission values', () => {
+    expect(() => securityService.validatePermissions({ '1': { viewReports: true }, '4': { manageSystem: false } })).not.toThrow();
+  });
+
+  it('throws for an invalid profile key', () => {
+    expect(() => securityService.validatePermissions({ '5': { viewReports: true } })).toThrow('Perfil inválido');
+  });
+
+  it('throws for an unknown permission key', () => {
+    expect(() => securityService.validatePermissions({ '1': { flyToTheMoon: true } })).toThrow('Permissão inválida');
+  });
+
+  it('throws when a permission value is not a boolean', () => {
+    expect(() => securityService.validatePermissions({ '1': { viewReports: 1 } })).toThrow('deve ser booleano');
+  });
+
+  it('does not throw for a profile with no permissions at all', () => {
+    expect(() => securityService.validatePermissions({ '1': {} })).not.toThrow();
   });
 });
