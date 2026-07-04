@@ -669,3 +669,22 @@ in `originalname`, extension preservation, default-name fallback), and
 missing, and the try/catch routing thrown `fs` errors to the callback
 instead of throwing). No new product bugs found — the module's error
 handling and filter logic behaved as written.
+
+`src/services/batch-validation-engine.service.js` moved from 45.76% to
+72.59% lines (2026-07-04) with 32 new targeted tests covering
+`buildSampleRow` (header mapping, unknown-column and empty-row cases),
+`classifyPatientRow`/`classifySampleRow` (each warning branch and the
+clean no-warning case), `buildPatientLinkageQuery` (criteria ordering
+across patientID/cpf/recordNumber/_id, and the empty/invalid-ObjectId
+cases), `buildBiomarkerObservationPayloads` (valid payload construction,
+negative-value rejection, no-biomarker-fields case),
+`detectDataType`'s filename-hint fallback and default-to-patients
+paths, `persistPatient`'s validation-error, success, warning (PARTIAL),
+and thrown-error branches (mocking only `patientService.createPatient`,
+exercising real `import-lgpd.service.parsePatientRow` validation), and
+`readJsonRows`/`detectCsvSeparator`/`readCsvRows`/`readRowsFromFile`
+against real temp-file fixtures (array/FHIR-bundle/single-object JSON,
+separator detection, extension dispatch). `persistSample`'s DB-linkage
+branches and `processBatchImport`'s chunking/progress loop remain
+untested — good next slice. No new product bugs found; existing
+behavior matched the tests written.

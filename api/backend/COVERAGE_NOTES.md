@@ -82,7 +82,6 @@ run, not hand-maintained):
 
 ```
 src/database/neo4j.js                                                40%
-src/services/batch-validation-engine.service.js                     45.76%
 src/controllers/audit.controller.js                                 47.56%
 src/routes/eConsent.js                                               47.88%
 src/controllers/import-lgpd.controller.js                            48.74%
@@ -118,6 +117,14 @@ session (`importLocations` JSON/CSV paths and `importTemperature` now
 covered; `importPatients`/`importSamples` still untested — see
 COVERAGE_HISTORY.md; a real counting bug found in `importTemperature`
 was filed as issue #79, not fixed inline).
+`src/services/batch-validation-engine.service.js` moved from 45.76% to
+72.59% lines this session (buildSampleRow, classifyPatientRow/
+classifySampleRow, buildPatientLinkageQuery, buildBiomarkerObservation
+Payloads, detectDataType filename fallback, persistPatient validation/
+success/error paths, and readJsonRows/detectCsvSeparator/readCsvRows/
+readRowsFromFile now covered; persistSample's DB-linkage branches and
+processBatchImport's chunking loop still untested — see
+COVERAGE_HISTORY.md).
 
 ## MID coverage (50-84% lines) — GOOD (>=85%)
 
