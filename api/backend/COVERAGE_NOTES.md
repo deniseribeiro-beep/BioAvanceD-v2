@@ -262,6 +262,20 @@ drops it as unavailable, in which case swap to a hand-built minimal zip.
 Exact new percentage not yet re-measured, will land at the next full
 reconcile.
 
+Since baseline (20th slice, parallel-test-agents): `incident.controller.js`,
+`semantic-pointer.js`, and `allocate-sample.controller.js` +
+`release-sample.controller.js` moved off the LOW bucket — a 3-agent
+parallel-test-agents slice (25 + 17 + 19 = 61 new targeted tests, all
+green, independently re-verified together) — exact new percentages not
+yet re-measured, will land at the next full reconcile. This slice
+surfaced two findings, both filed: #59 (`release-sample.controller.js`
+has no 409/`STORAGE_COLLISION` branch, unlike
+`allocate-sample.controller.js` — a real status-code asymmetry) and #60
+(`semantic-pointer.js`'s `buildNeo4jSemanticPointer` uses a truthiness
+check, so a legitimate numeric `mongoId` of `0` is incorrectly rejected
+while the string `'0'` passes — likely dormant today since Mongo `_id`s
+are never numeric `0`, but worth a presence-check fix).
+
 ## How to use this when picking a slice
 
 1. Prefer a **ZERO** file with real logic (not a script/model/port
@@ -310,20 +324,16 @@ src/services/consent.service.js                                     26.1%
 src/routes/dictionary.js                                            26.71% (atc/search, medications/search, disease-profile covered; /search + /suggest, Neo4j-backed, still uncovered — see 19th slice note above)
 src/interface/routes/auth.routes.js                                 28.49%
 src/routes/orphanet.js                                              30.76%
-src/controllers/incident.controller.js                              31.73%
 src/interface/routes/location.routes.js                             32.25%
 src/models/StorageContainer.js                                      32.69%
 src/interface/routes/terminologies.routes.js                        32.9%
 src/core/use-cases/ListOperationalFreezersUseCase.js                33.33%
-src/infrastructure/integration/semantic-pointer.js                  33.33%
 src/infrastructure/middleware/consent.enforcement.js                33.33%
 src/interface/routes/sample.routes.js                               33.33%
 src/services/log.service.js                                         33.86%
 src/services/import.service.js                                      34.19%
 src/services/auth.service.js                                        34.88%
 src/config/uploadConfig.js                                          35.89%
-src/interface/controllers/allocate-sample.controller.js             36.84%
-src/interface/controllers/release-sample.controller.js              36.84%
 src/services/integrityCheckService.js                               36.84%
 src/services/fhir.service.js                                        36.92%
 src/services/hl7.service.js                                         38.05%
