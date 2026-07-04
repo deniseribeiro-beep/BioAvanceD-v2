@@ -1,9 +1,36 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 process.env.ENCRYPTION_KEY = 'dGVzdGtleXRlc3RrZXl0ZXN0a2V5dGVzdGtleXQ=';
 process.env.ENCRYPTION_KEY_ID = 'test-key-1';
 
 const patientService = require('../../src/services/patient.service');
+const fhirSyncService = require('../../src/services/fhir-sync.service');
+const notificationService = require('../../src/services/notification.service');
+const biomarkerXaiService = require('../../src/services/biomarker-xai.service');
+const patientBiomarkerTimeseriesService = require('../../src/services/patientBiomarkerTimeseries.service');
+
+function makeFakeCollection(overrides = {}) {
+  return {
+    findOne: vi.fn().mockResolvedValue(null),
+    insertOne: vi.fn().mockResolvedValue({ insertedId: 'fake-id-1' }),
+    updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
+    deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }),
+    find: vi.fn().mockReturnValue({
+      limit: vi.fn().mockReturnThis(),
+      skip: vi.fn().mockReturnThis(),
+      toArray: vi.fn().mockResolvedValue([])
+    }),
+    countDocuments: vi.fn().mockResolvedValue(0),
+    createIndex: vi.fn().mockResolvedValue(undefined),
+    ...overrides
+  };
+}
+
+function makeFakeDb(collectionsByName = {}) {
+  return {
+    collection: vi.fn((name) => collectionsByName[name] || makeFakeCollection())
+  };
+}
 
 describe('PatientService.getEncryptedFieldMap', () => {
   it('returns map with expected fields', () => {
@@ -167,5 +194,266 @@ describe('PatientService.createBiomarkerObservationsFromPatient', () => {
     await patientService.createBiomarkerObservationsFromPatient(db, patient);
     expect(createSpy).not.toHaveBeenCalled();
     createSpy.mockRestore();
+  });
+});
+
+describe('PatientService.createPatient', () => {
+  let fhirGetSpy, fhirListSpy, fhirSearchSpy, fhirUpsertSpy;
+
+  beforeEach(() => {
+    fhirGetSpy = vi.spyOn(fhirSyncService, 'getPatientFhirFirst').mockResolvedValue(null);
+    fhirListSpy = vi.spyOn(fhirSyncService, 'listPatientsFhirFirst').mockResolvedValue(null);
+    fhirSearchSpy = vi.spyOn(fhirSyncService, 'searchPatientsFhirFirst').mockResolvedValue(null);
+    fhirUpsertSpy = vi.spyOn(fhirSyncService, 'upsertPatientFromLegacy').mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    fhirGetSpy.mockRestore();
+    fhirListSpy.mockRestore();
+    fhirSearchSpy.mockRestore();
+    fhirUpsertSpy.mockRestore();
+  });
+
+  function validPatientData(overrides = {}) {
+    return {
+      patientName: 'Maria Silva',
+      birthDate: '01/01/1990',
+      sex: 'F',
+      email: 'maria@example.com',
+      consentTemplateId: '507f1f77bcf86cd799439011',
+      ...overrides
+    };
+  }
+
+  it('creates a patient with a generated 8-digit patientID and PENDING_CONSENT status', async () => {
+    const patientsCollection = makeFakeCollection();
+    const consentTemplatesCollection = makeFakeCollection({
+      findOne: vi.fn().mockResolvedValue({ _id: '507f1f77bcf86cd799439011', name: 'Template' })
+    });
+    const db = makeFakeDb({ patients: patientsCollection, consent_templates: consentTemplatesCollection });
+
+    const encryptSpy = vi.spyOn(patientService, 'encryptSensitivePatientFields');
+
+    const result = await patientService.createPatient(db, validPatientData({
+      isDeceased: true,
+      representativeName: 'João Representante',
+      representativeEmail: 'joao@example.com',
+      representativeCpf: '529.982.247-25',
+      representativePhone: '11988887777'
+    }), {
+      skipConsentNotification: true,
+      skipBiomarkerArtifacts: true
+    });
+
+    expect(result.patientID).toMatch(/^\d{8}$/);
+    expect(result.status).toBe('PENDING_CONSENT');
+    expect(patientsCollection.insertOne).toHaveBeenCalledTimes(1);
+    expect(encryptSpy).toHaveBeenCalled();
+
+    const insertedDoc = patientsCollection.insertOne.mock.calls[0][0];
+    // Sensitive field must be encrypted (nulled out in plain form) before insert.
+    expect(insertedDoc.representativeCpf).toBeNull();
+    expect(insertedDoc.representativeCpfEncrypted).toBeDefined();
+
+    encryptSpy.mockRestore();
+  });
+
+  it('rejects creation when an identifier conflict (duplicate CPF) exists', async () => {
+    const patientsCollection = makeFakeCollection({
+      findOne: vi.fn().mockResolvedValue({ _id: 'x', cpf: '52998224725' })
+    });
+    const consentTemplatesCollection = makeFakeCollection({
+      findOne: vi.fn().mockResolvedValue({ _id: '507f1f77bcf86cd799439011' })
+    });
+    const db = makeFakeDb({ patients: patientsCollection, consent_templates: consentTemplatesCollection });
+
+    await expect(
+      patientService.createPatient(db, validPatientData({ cpf: '529.982.247-25' }), {
+        skipConsentNotification: true,
+        skipBiomarkerArtifacts: true
+      })
+    ).rejects.toMatchObject({ statusCode: 409, message: expect.stringContaining('CPF') });
+
+    expect(patientsCollection.insertOne).not.toHaveBeenCalled();
+  });
+});
+
+describe('PatientService.getPatient', () => {
+  let fhirGetSpy;
+
+  beforeEach(() => {
+    fhirGetSpy = vi.spyOn(fhirSyncService, 'getPatientFhirFirst').mockResolvedValue(null);
+  });
+
+  afterEach(() => {
+    fhirGetSpy.mockRestore();
+  });
+
+  it('returns a decrypted patient when found by 8-digit patientID', async () => {
+    const encrypted = patientService.encryptSensitivePatientFields({ patientID: '12345678', alphaGal: 4.2 });
+    const patientsCollection = makeFakeCollection({ findOne: vi.fn().mockResolvedValue(encrypted) });
+    const db = makeFakeDb({ patients: patientsCollection });
+
+    const result = await patientService.getPatient(db, '12345678');
+
+    expect(patientsCollection.findOne).toHaveBeenCalledWith({ patientID: '12345678' });
+    expect(result.alphaGal).toBe(4.2);
+  });
+
+  it('returns null when patient is not found', async () => {
+    const patientsCollection = makeFakeCollection({ findOne: vi.fn().mockResolvedValue(null) });
+    const db = makeFakeDb({ patients: patientsCollection });
+
+    const result = await patientService.getPatient(db, '99999999');
+
+    expect(result).toBeNull();
+  });
+});
+
+describe('PatientService.listPatients', () => {
+  let fhirListSpy;
+
+  beforeEach(() => {
+    fhirListSpy = vi.spyOn(fhirSyncService, 'listPatientsFhirFirst').mockResolvedValue(null);
+  });
+
+  afterEach(() => {
+    fhirListSpy.mockRestore();
+  });
+
+  it('passes patientName and clinicalUnit filters into the collection query and returns pagination shape', async () => {
+    const toArrayMock = vi.fn().mockResolvedValue([{ patientID: '12345678' }]);
+    const findMock = vi.fn().mockReturnValue({
+      limit: vi.fn().mockReturnThis(),
+      skip: vi.fn().mockReturnThis(),
+      toArray: toArrayMock
+    });
+    const patientsCollection = makeFakeCollection({
+      find: findMock,
+      countDocuments: vi.fn().mockResolvedValue(1)
+    });
+    const db = makeFakeDb({ patients: patientsCollection });
+
+    const result = await patientService.listPatients(db, { patientName: 'Maria', clinicalUnit: 'UTI-A', limit: 10, skip: 5 });
+
+    expect(findMock).toHaveBeenCalledWith({
+      patientName: { $regex: 'Maria', $options: 'i' },
+      clinicalUnit: 'UTI-A'
+    });
+    expect(result.total).toBe(1);
+    expect(result.limit).toBe(10);
+    expect(result.skip).toBe(5);
+    expect(result.patients).toHaveLength(1);
+  });
+
+  it('defaults limit/skip and query when no filters provided', async () => {
+    const findMock = vi.fn().mockReturnValue({
+      limit: vi.fn().mockReturnThis(),
+      skip: vi.fn().mockReturnThis(),
+      toArray: vi.fn().mockResolvedValue([])
+    });
+    const patientsCollection = makeFakeCollection({ find: findMock });
+    const db = makeFakeDb({ patients: patientsCollection });
+
+    const result = await patientService.listPatients(db);
+
+    expect(findMock).toHaveBeenCalledWith({});
+    expect(result.limit).toBe(50);
+    expect(result.skip).toBe(0);
+  });
+});
+
+describe('PatientService.searchPatients', () => {
+  let fhirSearchSpy;
+
+  beforeEach(() => {
+    fhirSearchSpy = vi.spyOn(fhirSyncService, 'searchPatientsFhirFirst').mockResolvedValue(null);
+  });
+
+  afterEach(() => {
+    fhirSearchSpy.mockRestore();
+  });
+
+  it('returns empty result for an empty search term without querying the collection', async () => {
+    const patientsCollection = makeFakeCollection();
+    const db = makeFakeDb({ patients: patientsCollection });
+
+    const result = await patientService.searchPatients(db, '   ');
+
+    expect(result).toEqual({ patients: [], total: 0 });
+    expect(patientsCollection.find).not.toHaveBeenCalled();
+  });
+
+  it('searches by recordNumber/clinicalUnit/etc for a normal term', async () => {
+    const findMock = vi.fn().mockReturnValue({ limit: vi.fn().mockReturnThis(), toArray: vi.fn().mockResolvedValue([{ patientID: '12345678' }]) });
+    const patientsCollection = makeFakeCollection({ find: findMock, countDocuments: vi.fn().mockResolvedValue(1) });
+    const db = makeFakeDb({ patients: patientsCollection });
+
+    const result = await patientService.searchPatients(db, 'UTI-A');
+
+    expect(findMock).toHaveBeenCalled();
+    const passedQuery = findMock.mock.calls[0][0];
+    expect(passedQuery.$or).toEqual(
+      expect.arrayContaining([{ clinicalUnit: { $regex: 'UTI-A', $options: 'i' } }])
+    );
+    expect(result.total).toBe(1);
+    expect(result.patients).toHaveLength(1);
+  });
+});
+
+describe('PatientService.updatePatient', () => {
+  it('encrypts sensitive fields in updateData before writing and returns success', async () => {
+    const patientsCollection = makeFakeCollection({
+      updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
+      findOne: vi.fn().mockResolvedValue({ patientID: '12345678', phone: '11999999999' })
+    });
+    const db = makeFakeDb({ patients: patientsCollection });
+    const xaiSpy = vi.spyOn(biomarkerXaiService, 'evaluate').mockReturnValue(null);
+    const tsSpy = vi.spyOn(patientBiomarkerTimeseriesService, 'writePatientBiomarkers').mockResolvedValue(undefined);
+
+    const result = await patientService.updatePatient(db, '12345678', { alphaGal: 2.2 });
+
+    expect(result).toEqual({ success: true });
+    // First updateOne call is the actual patient update; its $set must have alphaGal encrypted.
+    const firstUpdateCall = patientsCollection.updateOne.mock.calls[0];
+    expect(firstUpdateCall[1].$set.alphaGal).toBeNull();
+    expect(firstUpdateCall[1].$set.alphaGalEncrypted).toBeDefined();
+
+    xaiSpy.mockRestore();
+    tsSpy.mockRestore();
+  });
+
+  it('rejects update when patient is not found (matchedCount 0)', async () => {
+    const patientsCollection = makeFakeCollection({
+      updateOne: vi.fn().mockResolvedValue({ matchedCount: 0 })
+    });
+    const db = makeFakeDb({ patients: patientsCollection });
+
+    await expect(patientService.updatePatient(db, '12345678', { alphaGal: 1.0 })).rejects.toThrow('Paciente não encontrado');
+  });
+});
+
+describe('PatientService.deletePatient', () => {
+  it('returns true when a patient was deleted', async () => {
+    const patientsCollection = makeFakeCollection({
+      deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 })
+    });
+    const db = makeFakeDb({ patients: patientsCollection });
+
+    const result = await patientService.deletePatient(db, '12345678');
+
+    expect(patientsCollection.deleteOne).toHaveBeenCalledWith({ patientID: '12345678' });
+    expect(result).toBe(true);
+  });
+
+  it('returns false when no patient matched for deletion', async () => {
+    const patientsCollection = makeFakeCollection({
+      deleteOne: vi.fn().mockResolvedValue({ deletedCount: 0 })
+    });
+    const db = makeFakeDb({ patients: patientsCollection });
+
+    const result = await patientService.deletePatient(db, '99999999');
+
+    expect(result).toBe(false);
   });
 });
