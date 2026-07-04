@@ -24,15 +24,18 @@ stale as slices land and as source files change. Keep it honest:
 
 ## Last full reconcile
 
-**2026-07-04**, snapshot from commit `4a708d8c` (user-run
+**2026-07-04**, snapshot from commit `7826467c` (user-run
 `npx vitest run --coverage --reporter=basic`, full suite; only
 `coverage/coverage-summary.json` was read and re-derived from, exit
 status not independently captured this reconcile).
 
-Statements 74.14%, Branches 66.55%, Functions 79.31%, **Lines 74.62%**
-(12934/17331) — up from the prior reconcile's 65.73% lines (commit
-`1ac77354`, 2026-07-03). See `COVERAGE_HISTORY.md` for what happened
-between the two reconciles (slices 21-33) and the issues each one filed.
+Statements 78.92%, Branches 70.18%, Functions 84.09%, **Lines 79.3%**
+(13744/17331) — up from the prior reconcile's 74.62% lines (commit
+`4a708d8c`, 2026-07-04 earlier same day). The jump comes from the slices
+between the two reconciles: `batch-validation-engine.service.js`,
+`database/neo4j.js`, `audit.controller.js`, `eConsent.js`, and
+`import-lgpd.controller.js` — see `COVERAGE_HISTORY.md` for what each
+covered and any issues filed.
 
 ## How to use this when picking a slice
 
@@ -74,76 +77,15 @@ Low priority (models/interfaces/one-off scripts — thin or non-request-path):
 - `src/scripts/seedOrphanetCid.js`
 - `src/scripts/seeder.js`
 
-## LOW coverage (1-49% lines) — re-measured 2026-07-04, commit `4a708d8c`
+## LOW coverage (1-49% lines) — re-measured 2026-07-04, commit `7826467c`
 
-Sorted ascending (worst first), all 32 files under 50% lines this
-reconcile (list re-derived from a real `coverage/coverage-summary.json`
-run, not hand-maintained):
-
-```
-```
-
-The LOW bucket is currently empty — every previously-listed file is now
-above 50% lines. Next session should run a fresh
-`npx vitest run --coverage --reporter=basic` reconcile to regenerate
-this table from real numbers rather than continuing to pick from a
-stale/empty list.
-
-Note: this table only lists files still under 50% lines as of the
-2026-07-04 reconcile — many previously-listed files (storageService.js,
-hl7.service.js, patient.service.js, miabisValidator.service.js,
-sampleComplianceSync.service.js, DrugService.js, logs.routes.js,
-equipment.routes.js, location.routes.js, orphanet.js,
-terminologies.routes.js) moved above 49% since the last reconcile and
-have been dropped from this table — see `COVERAGE_HISTORY.md` for what
-covered them. `src/config/uploadConfig.js` also moved above 49% this
-session (fileFilter/storage.getFilename/storage.getDestination covered).
-`src/interface/routes/reports.routes.js` moved from 30.2% to 71.84%
-lines this session (buildPreviewData's report-type branches now
-covered; see COVERAGE_HISTORY.md). `src/models/StorageContainer.js`
-moved from 32.69% to 100% lines this session (pre-save hierarchy hook
-+ getFullPath/getChildren now covered; see COVERAGE_HISTORY.md).
-`src/interface/routes/sample.routes.js` moved from 33.33% to 45.15%
-lines this session (POST / payload validation + create error-mapping
-branches, GET /:id/label, GET /search/by-term, GET /by-barcode/:barcode,
-GET /:id/movements now covered; see COVERAGE_HISTORY.md).
-`src/models/StorageBox.js` moved from 41.74% to 98.05% lines this
-session (pre-save hook, addSample/removeSample/getAvailablePositions/
-getStats instance methods, and the `validate` static now covered; see
-COVERAGE_HISTORY.md). `src/services/import-lgpd.service.js` moved from
-43.05% to 55.55% lines this session (`readCSV`/`readExcel` now covered
-with real temp-file fixtures; `importSamples`/`importPatientsSmart`
-DB-backed paths still untested — see COVERAGE_HISTORY.md).
-`src/services/import.service.js` moved from 44.04% to 61.91% lines this
-session (`importLocations` JSON/CSV paths and `importTemperature` now
-covered; `importPatients`/`importSamples` still untested — see
-COVERAGE_HISTORY.md; a real counting bug found in `importTemperature`
-was filed as issue #79, not fixed inline).
-`src/services/batch-validation-engine.service.js` moved from 45.76% to
-88.7% lines this session (buildSampleRow, classifyPatientRow/
-classifySampleRow, buildPatientLinkageQuery, buildBiomarkerObservation
-Payloads, detectDataType filename fallback, persistPatient/persistSample
-validation/success/error branches, readJsonRows/detectCsvSeparator/
-readCsvRows/readRowsFromFile, and processBatchImport's end-to-end
-chunking/progress/status-transition loop now covered; only readXlsxRows
-and a couple of catch-branches remain — see COVERAGE_HISTORY.md).
-`src/database/neo4j.js` moved from 40% to 100% lines this session (the
-env-var-driven URI/username/password construction, default fallback,
-and singleton memoization all covered via the require.cache-injection
-mechanic from `neo4j-connection.test.js`; see COVERAGE_HISTORY.md).
-`src/controllers/audit.controller.js` moved from 47.56% to 100% lines
-this session (all 8 handlers' 503-db-unavailable/success/500-catch
-branches covered; see COVERAGE_HISTORY.md).
-`src/routes/eConsent.js` moved from 47.88% to 91.54% lines this session
-(the remaining uncovered lines are the module-load CONSENT_SECRET guard
-and two happy paths that are unreachable due to real bugs found and
-filed — issues #80 and #81 — see COVERAGE_HISTORY.md).
-`src/controllers/import-lgpd.controller.js` moved from 48.74% to 83.64%
-lines this session (all three template-download handlers —
-`downloadPatientTemplateExcel`/`downloadSampleTemplateCSV`/
-`downloadSampleTemplateExcel` — now covered, including their db-present/
-db-absent/db-throws branches and 500-catch paths; see
-COVERAGE_HISTORY.md).
+**Empty.** Every file that was in this bucket at the last reconcile
+(`neo4j.js`, `audit.controller.js`, `eConsent.js`,
+`import-lgpd.controller.js`, `batch-validation-engine.service.js`) moved
+above 50% lines this session — see `COVERAGE_HISTORY.md` for what each
+slice covered. Next slice should either work through the ZERO bucket
+above (real-logic file first: `worker.js`) or drop down into MID-bucket
+files below 85% for a smaller, incremental gain.
 
 ## MID coverage (50-84% lines) — GOOD (>=85%)
 
