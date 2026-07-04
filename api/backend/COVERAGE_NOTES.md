@@ -97,15 +97,24 @@ plus its `quarantineService` singleton state has no reset guard;
 #45 — biomarker-xai.service.js's alphaGal rule table has no elevated-value
 zone, unlike lysoGb3's full three-zone scheme) — see below.
 
-Since baseline (10th slice, unit test only so far): `result-worker.js` moved
-off the LOW bucket (24.21%) with 7 new targeted tests covering CSV/RAW/ZIP
-processing paths, all green — no bugs found, product behavior matched
-expectations across every path tested.
+Since baseline (16th slice): `result-worker.js` moved off the LOW bucket
+(24.21%) with 7 new targeted tests covering CSV/RAW/ZIP processing paths,
+all green — no bugs found, product behavior matched expectations across
+every path tested.
 
-Since baseline (11th slice, parallel-test-agents, in progress):
-`storage-query.controller.js` covered with 25 new targeted tests (all
-green) — all 8 handlers now have success/error/exception-path coverage.
-This slice surfaced one crash-risk finding, filed as #50 (see below).
+Since baseline (17th slice, parallel-test-agents): `storage-query.controller.js`,
+`result.routes.js`, and `fhir-sync.service.js` moved off the LOW bucket by a
+3-agent parallel-test-agents slice (25 + 38 + 45 = 108 new targeted tests, all
+green, independently re-verified) — exact new percentages not yet re-measured,
+will land at the next full reconcile. This slice surfaced three findings: #50
+(storage-query.controller.js's getAvailablePositions catch assumes
+error.message is always a string, crash risk on non-Error rejection), #51
+(result.routes.js: enforceCommercialConsent runs before multer parses the
+multipart body on POST /api/results/upload, so every upload is unconditionally
+rejected with 403 in production — confirmed production-breaking), and #52
+(fhir-sync.service.js: mapSampleStatusToFhir's substring `includes('available')`
+check swallows any status containing the literal word "unavailable", so it's
+mapped to 'available' instead) — see below.
 
 Since baseline (10th slice): `import-worker.js` moved off the ZERO bucket by a
 test-writer slice (19 new targeted tests, all green) — exact new percentage
@@ -262,8 +271,6 @@ Sorted ascending (worst first). This is the primary slice-picking pool:
 
 ```
 src/interface/routes/reports.routes.js                    19.06% (partially extended, see 11th slice note above)
-src/interface/routes/result.routes.js                               24.33%
-src/services/fhir-sync.service.js                                   25.11%
 src/services/consent.service.js                                     26.1%
 src/routes/dictionary.js                                            26.71%
 src/services/NotificationService.js                                 28.33%
