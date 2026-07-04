@@ -97,6 +97,16 @@ plus its `quarantineService` singleton state has no reset guard;
 #45 — biomarker-xai.service.js's alphaGal rule table has no elevated-value
 zone, unlike lysoGb3's full three-zone scheme) — see below.
 
+Since baseline (10th slice, unit test only so far): `result-worker.js` moved
+off the LOW bucket (24.21%) with 7 new targeted tests covering CSV/RAW/ZIP
+processing paths, all green — no bugs found, product behavior matched
+expectations across every path tested.
+
+Since baseline (11th slice, parallel-test-agents, in progress):
+`storage-query.controller.js` covered with 25 new targeted tests (all
+green) — all 8 handlers now have success/error/exception-path coverage.
+This slice surfaced one crash-risk finding, filed as #50 (see below).
+
 Since baseline (10th slice): `import-worker.js` moved off the ZERO bucket by a
 test-writer slice (19 new targeted tests, all green) — exact new percentage
 not yet re-measured, will land at the next full reconcile. This slice
@@ -253,7 +263,6 @@ Sorted ascending (worst first). This is the primary slice-picking pool:
 ```
 src/interface/routes/reports.routes.js                    19.06% (partially extended, see 11th slice note above)
 src/interface/routes/result.routes.js                               24.33%
-src/interface/controllers/storage-query.controller.js               24.7%
 src/services/fhir-sync.service.js                                   25.11%
 src/services/consent.service.js                                     26.1%
 src/routes/dictionary.js                                            26.71%
