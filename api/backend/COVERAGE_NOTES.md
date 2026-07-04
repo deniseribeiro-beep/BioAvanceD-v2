@@ -189,6 +189,25 @@ than an integration test through the real route (same shape as the
 Exact new percentage not yet re-measured, will land at the next full
 reconcile.
 
+Since baseline (16th slice): `src/workers/workers/result-worker.js` moved
+off the LOW bucket — 7 new unit tests added in a new
+`api/backend/tests/unit/result-worker.test.js`, covering paths the
+pre-existing `workers.unit.test.js` (missing-file + unsupported-extension
+guards only) left untouched: the CSV row pipeline
+(`processResultRow` success path with a mocked `fhirService.resultToFHIR`,
+the missing-identifier validation error, and the sample-not-found error),
+the RAW path (`processRawFile`'s not-yet-implemented stub), the ZIP path
+(`processZip` extracting and dispatching a real CSV entry via a fixture
+built with `archiver`, plus an unsupported-entry-type error through
+`processGenericFile`), and the top-level try/catch that logs and rethrows
+when `db.collection()` itself throws. No product bug found this slice.
+Note: `archiver` is used only as a transitive dependency (present in
+`package-lock.json` via other packages, not a direct `devDependency`) to
+build the zip fixture — flagging in case a future `npm` lockfile change
+drops it as unavailable, in which case swap to a hand-built minimal zip.
+Exact new percentage not yet re-measured, will land at the next full
+reconcile.
+
 ## How to use this when picking a slice
 
 1. Prefer a **ZERO** file with real logic (not a script/model/port
@@ -233,7 +252,6 @@ Sorted ascending (worst first). This is the primary slice-picking pool:
 
 ```
 src/interface/routes/reports.routes.js                    19.06% (partially extended, see 11th slice note above)
-src/workers/workers/result-worker.js                                24.21%
 src/interface/routes/result.routes.js                               24.33%
 src/interface/controllers/storage-query.controller.js               24.7%
 src/services/fhir-sync.service.js                                   25.11%
