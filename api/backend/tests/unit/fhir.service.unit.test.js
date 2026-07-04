@@ -177,3 +177,283 @@ describe('FHIRService.mapSampleTypeToSNOMED', () => {
     expect(fhirService.mapSampleTypeToSNOMED('UNKNOWN_TYPE')).toBe('118234003');
   });
 });
+
+describe('FHIRService.getSampleTypeDisplay', () => {
+  it('returns label for known type', () => {
+    expect(fhirService.getSampleTypeDisplay('PLASMA')).toBe('Plasma');
+  });
+
+  it('returns the raw sampleType as fallback for unknown type', () => {
+    expect(fhirService.getSampleTypeDisplay('UNKNOWN_TYPE')).toBe('UNKNOWN_TYPE');
+  });
+});
+
+describe('FHIRService.patientToFHIR', () => {
+  const fullPatient = {
+    patientID: 'P100',
+    patientName: 'Maria Silva Santos',
+    sex: 'F',
+    birthDate: '1990-05-20T00:00:00Z',
+    weight: 65,
+    heightCm: 170,
+    recordNumber: 'REC-9',
+    clinicalUnit: 'ICU',
+    hypertension: true,
+    diabetesType2: true,
+    icdCode: 'E11',
+  };
+
+  it('builds a full FHIR Patient resource with all optional fields', () => {
+    const result = fhirService.patientToFHIR(fullPatient);
+
+    expect(result.resourceType).toBe('Patient');
+    expect(result.id).toBe('P100');
+    expect(result.identifier).toEqual([
+      { system: 'http://bioavanced.local/patient-id', value: 'P100' },
+      { system: 'http://bioavanced.local/record-number', value: 'REC-9' },
+    ]);
+    expect(result.name[0]).toEqual({
+      use: 'official',
+      family: 'Santos',
+      given: ['Maria', 'Silva'],
+    });
+    expect(result.gender).toBe('female');
+    expect(result.birthDate).toBe('1990-05-20');
+
+    const extUrls = result.extension.map((e) => e.url);
+    expect(extUrls).toEqual(
+      expect.arrayContaining([
+        'http://bioavanced.local/StructureDefinition/patient-weight',
+        'http://bioavanced.local/StructureDefinition/patient-height',
+        'http://bioavanced.local/StructureDefinition/clinical-unit',
+        'http://bioavanced.local/StructureDefinition/conditions',
+        'http://bioavanced.local/StructureDefinition/icd-code',
+      ])
+    );
+
+    const conditionsExt = result.extension.find(
+      (e) => e.url === 'http://bioavanced.local/StructureDefinition/conditions'
+    );
+    expect(conditionsExt.valueString).toBe('Hypertension, Diabetes Type 2');
+  });
+
+  it('builds a minimal FHIR Patient resource without optional fields', () => {
+    const sparsePatient = {
+      _id: 'abc123',
+      patientName: 'Joao',
+      sex: 'M',
+      birthDate: null,
+    };
+
+    const result = fhirService.patientToFHIR(sparsePatient);
+
+    expect(result.id).toBe('abc123');
+    expect(result.identifier).toEqual([
+      { system: 'http://bioavanced.local/patient-id', value: 'abc123' },
+    ]);
+    expect(result.name[0].family).toBe('Joao');
+    expect(result.name[0].given).toEqual([]);
+    expect(result.gender).toBe('male');
+    expect(result.birthDate).toBeNull();
+    expect(result.extension).toEqual([]);
+  });
+});
+
+describe('FHIRService.sampleToFHIR', () => {
+  const baseSample = {
+    sampleID: 'S1',
+    currentStatus: 'Available',
+    sampleType: 'PLASMA',
+    patientID: 'P100',
+    registrationDate: '2026-01-01T00:00:00Z',
+  };
+
+  it('builds a Specimen resource with a default subject reference when no patientReference is given', () => {
+    const result = fhirService.sampleToFHIR(baseSample);
+
+    expect(result.resourceType).toBe('Specimen');
+    expect(result.id).toBe('S1');
+    expect(result.status).toBe('available');
+    expect(result.type.coding[0]).toEqual({
+      system: 'http://snomed.info/sct',
+      code: '119361006',
+      display: 'Plasma',
+    });
+    expect(result.subject).toEqual({ reference: 'Patient/P100' });
+    expect(result.receivedTime).toBe('2026-01-01T00:00:00.000Z');
+  });
+
+  it('uses the given patientReference when supplied', () => {
+    const ref = { reference: 'Patient/custom-ref' };
+    const result = fhirService.sampleToFHIR(baseSample, ref);
+    expect(result.subject).toBe(ref);
+  });
+
+  it('adds optional extensions/fields when present on the sample', () => {
+    const sample = {
+      ...baseSample,
+      barcode: 'BC-1',
+      sampleOrigin: 'Blood',
+      extractionProtocol: 'Protocol-X',
+      quantity: 500,
+      quality: 'GOOD',
+      locationID: 42,
+      linkedProject: 'ProjA',
+      accessionNumber: 'ACC-1',
+      orderNumber: 'ORD-1',
+      processingStatus: 'processed',
+      linkedFiles: ['file1', 'file2'],
+    };
+
+    const result = fhirService.sampleToFHIR(sample);
+
+    expect(result.identifier).toEqual(
+      expect.arrayContaining([
+        { system: 'http://bioavanced.local/barcode', value: 'BC-1' },
+        { system: 'http://bioavanced.local/accession-number', value: 'ACC-1' },
+      ])
+    );
+    expect(result.quantity).toEqual({
+      value: 500,
+      unit: 'µL',
+      system: 'http://unitsofmeasure.org',
+      code: 'uL',
+    });
+    expect(result.request).toEqual([{ reference: 'ServiceRequest/ORD-1' }]);
+
+    const linkedFilesExt = result.extension.find(
+      (e) => e.url === 'http://bioavanced.local/StructureDefinition/linked-files'
+    );
+    expect(linkedFilesExt.valueReference).toEqual([
+      { reference: 'DocumentReference/file1' },
+      { reference: 'DocumentReference/file2' },
+    ]);
+  });
+});
+
+describe('FHIRService.resultToFHIR', () => {
+  const baseResult = {
+    resultID: 'R1',
+    testCode: 'GLU',
+    testName: 'Glucose',
+    sampleID: 'S1',
+    testDate: '2026-02-01T00:00:00Z',
+    resultValue: '95 mg/dL',
+  };
+
+  it('builds Observation and DiagnosticReport with a default subject reference', () => {
+    const { observation, diagnosticReport } = fhirService.resultToFHIR(baseResult);
+
+    expect(observation.resourceType).toBe('Observation');
+    expect(observation.id).toBe('R1');
+    expect(observation.status).toBe('final');
+    expect(observation.code.coding[0]).toEqual({
+      system: 'http://loinc.org',
+      code: 'GLU',
+      display: 'Glucose',
+    });
+    expect(observation.subject).toEqual({ reference: 'Specimen/S1' });
+    expect(observation.valueString).toBe('95 mg/dL');
+
+    expect(diagnosticReport.resourceType).toBe('DiagnosticReport');
+    expect(diagnosticReport.id).toBe('dr-R1');
+    expect(diagnosticReport.subject).toEqual({ reference: 'Specimen/S1' });
+    expect(diagnosticReport.result).toEqual([{ reference: 'Observation/R1' }]);
+  });
+
+  it('uses the given sampleReference and falls back to defaults for missing testCode/testName', () => {
+    const ref = { reference: 'Specimen/custom-ref' };
+    const result = { resultID: 'R2', sampleID: 'S2' };
+
+    const { observation, diagnosticReport } = fhirService.resultToFHIR(result, ref);
+
+    expect(observation.subject).toBe(ref);
+    expect(diagnosticReport.subject).toBe(ref);
+    expect(observation.code.coding[0].code).toBe('UNKNOWN');
+    expect(observation.code.coding[0].display).toBe('Unknown Test');
+    expect(observation.valueString).toBeNull();
+  });
+
+  it('adds file extensions to observation when filePath/fileType are present', () => {
+    const result = { ...baseResult, filePath: '/files/r1.pdf', fileType: 'pdf' };
+    const { observation } = fhirService.resultToFHIR(result);
+
+    const extUrls = observation.extension.map((e) => e.url);
+    expect(extUrls).toEqual(
+      expect.arrayContaining([
+        'http://bioavanced.local/StructureDefinition/result-file',
+        'http://bioavanced.local/StructureDefinition/result-file-type',
+      ])
+    );
+  });
+});
+
+describe('FHIRService.temperatureToFHIR', () => {
+  it('builds Device and Observation resources from a temperature reading', () => {
+    const temperature = {
+      sensorId: 'SENSOR-1',
+      sensorStatus: 'normal',
+      locationId: 7,
+      facility: 'Lab A',
+      zone: 'Freezer-1',
+      _id: 'T1',
+      readingStatus: 'valid',
+      timestamp: '2026-03-01T10:00:00Z',
+      temperatureValue: -20,
+      temperatureUnit: '°C',
+      signalQuality: 'good',
+      batteryLevel: 80,
+    };
+
+    const { device, observation } = fhirService.temperatureToFHIR(temperature);
+
+    expect(device.resourceType).toBe('Device');
+    expect(device.id).toBe('device-SENSOR-1');
+    expect(device.status).toBe('active');
+    const deviceExtUrls = device.extension.map((e) => e.url);
+    expect(deviceExtUrls).toEqual(
+      expect.arrayContaining([
+        'http://bioavanced.local/StructureDefinition/location-id',
+        'http://bioavanced.local/StructureDefinition/facility',
+        'http://bioavanced.local/StructureDefinition/zone',
+      ])
+    );
+
+    expect(observation.resourceType).toBe('Observation');
+    expect(observation.status).toBe('final');
+    expect(observation.device).toEqual({ reference: 'Device/device-SENSOR-1' });
+    expect(observation.valueQuantity).toEqual({
+      value: -20,
+      unit: '°C',
+      system: 'http://unitsofmeasure.org',
+      code: '[degC]',
+    });
+    const obsExtUrls = observation.extension.map((e) => e.url);
+    expect(obsExtUrls).toEqual(
+      expect.arrayContaining([
+        'http://bioavanced.local/StructureDefinition/signal-quality',
+        'http://bioavanced.local/StructureDefinition/battery-level',
+      ])
+    );
+  });
+
+  it('uses [degF] code and inactive status for error sensors reporting Fahrenheit', () => {
+    const temperature = {
+      sensorId: 'SENSOR-2',
+      sensorStatus: 'error',
+      readingStatus: 'invalid',
+      timestamp: '2026-03-01T10:00:00Z',
+      temperatureValue: 32,
+      temperatureUnit: '°F',
+    };
+
+    const { device, observation } = fhirService.temperatureToFHIR(temperature);
+
+    expect(device.status).toBe('inactive');
+    expect(observation.status).toBe('cancelled');
+    expect(observation.valueQuantity.code).toBe('[degF]');
+    expect(observation.valueQuantity.unit).toBe('°F');
+    expect(device.extension).toEqual([]);
+    expect(observation.extension).toEqual([]);
+  });
+});

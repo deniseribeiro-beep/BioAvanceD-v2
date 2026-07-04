@@ -434,6 +434,37 @@ the file/Excel-parsing paths (`readCSV`/`readExcel`) remain untested — good
 candidates for a follow-up slice. Exact new file percentage not yet
 re-measured, will land at the next full reconcile.
 
+Since baseline (28th slice, parallel-test-agents): `src/services/fhir.service.js`,
+`src/services/patient.service.js`, and `src/services/storageService.js` moved
+further off the LOW bucket — a 3-agent parallel-test-agents slice
+(29 + 12 + 13 = 54 new targeted tests, all green, independently re-verified
+together) — exact new percentages not yet re-measured, will land at the next
+full reconcile. `fhir.service.js` got its four composite FHIR-resource
+builders (`patientToFHIR`, `sampleToFHIR`, `resultToFHIR`,
+`temperatureToFHIR`) plus `getSampleTypeDisplay` covered for the first time
+(previously only the small pure mapping/formatting helpers had tests); no
+bugs found, only minor shape-asymmetry observations (e.g. `resultToFHIR`'s
+Observation vs. DiagnosticReport `extension` field presence differs when
+`filePath`/`fileType` are absent). `patient.service.js` got its main
+DB-backed CRUD methods covered for the first time (`createPatient`,
+`getPatient`, `listPatients`, `searchPatients`, `updatePatient`,
+`deletePatient`) via hand-built fake `db`/collection objects plus
+`vi.spyOn` on already-required singleton collaborators
+(`fhirSyncService`, `biomarkerXaiService`, `patientBiomarkerTimeseriesService`)
+— surfaced a real compliance-relevant bug, filed as #70:
+`createPatient` never encrypts `alphaGal`/`lysoGb3` because
+`PatientModel.create()` folds them into a nested `dadosEspecificos` blob
+before `encryptSensitivePatientFields()` ever sees them at the top level,
+while `updatePatient`'s equivalent path does encrypt them correctly — an
+inconsistent create-vs-update gap. `storageService.js` got its write-path
+methods covered (`allocateSampleToPosition`, `autoAssignSampleToBox`,
+`releaseSampleFromPosition`) — surfaced a second real bug, filed as #69:
+`allocateSampleToPosition`'s in-transaction `STORAGE_COLLISION` guard reads
+`updateBoxResult.matchedDocuments` (always `undefined` on the real MongoDB
+driver) instead of `matchedCount`, so the guard can never fire and the
+method's only real protection against a same-position race is the
+non-atomic pre-write `validatePositionAvailability` check — a TOCTOU gap.
+
 ## How to use this when picking a slice
 
 1. Prefer a **ZERO** file with real logic (not a script/model/port
