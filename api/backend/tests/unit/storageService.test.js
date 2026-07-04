@@ -461,3 +461,301 @@ describe('StorageService.getSampleStorage', () => {
     expect(result.location.fullHierarchy.freezerId).toBe('F1');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Helpers shared by the DB-write-path tests below (allocate/autoAssign/release)
+// ---------------------------------------------------------------------------
+
+function makeMovementsCollection() {
+  const chain = {
+    sort: vi.fn(function sort() { return chain; }),
+    limit: vi.fn(function limit() { return chain; }),
+    next: vi.fn().mockResolvedValue(null),
+    toArray: vi.fn().mockResolvedValue([])
+  };
+  return {
+    find: vi.fn(() => chain),
+    insertOne: vi.fn().mockResolvedValue({ insertedId: new ObjectId() }),
+    createIndex: vi.fn().mockResolvedValue(true)
+  };
+}
+
+function makeSession() {
+  return {
+    withTransaction: vi.fn(async (fn) => { await fn(); }),
+    endSession: vi.fn().mockResolvedValue(undefined)
+  };
+}
+
+describe('StorageService.allocateSampleToPosition', () => {
+  let boxesFindOne;
+  let boxesUpdateOne;
+  let samplesFindOne;
+  let samplesUpdateOne;
+  let movements;
+  let db;
+  let service;
+
+  beforeEach(() => {
+    boxesFindOne = vi.fn();
+    boxesUpdateOne = vi.fn().mockResolvedValue({});
+    samplesFindOne = vi.fn();
+    samplesUpdateOne = vi.fn().mockResolvedValue({ modifiedCount: 1 });
+    movements = makeMovementsCollection();
+
+    db = makeDb({
+      collection: vi.fn((name) => {
+        if (name === 'storageBoxes') return { findOne: boxesFindOne, updateOne: boxesUpdateOne };
+        if (name === 'samples') return { findOne: samplesFindOne, updateOne: samplesUpdateOne };
+        if (name === 'sample_movements') return movements;
+        throw new Error(`unexpected collection: ${name}`);
+      }),
+      getMongo: vi.fn(() => ({ startSession: vi.fn(() => makeSession()) }))
+    });
+    service = new StorageService(db);
+  });
+
+  it('happy path: allocates the sample and writes storageLocation/status fields', async () => {
+    const boxId = new ObjectId().toString();
+    const sampleId = new ObjectId().toString();
+
+    boxesFindOne.mockResolvedValue({
+      _id: new ObjectId(boxId),
+      dimension: { rows: 2, cols: 2 },
+      occupancyGrid: new Map(),
+      currentOccupancy: 0
+    });
+    samplesFindOne.mockResolvedValue({
+      _id: new ObjectId(sampleId),
+      barcode: 'BC-1',
+      quantity: 5,
+      unit: 'mL',
+      storageLocation: null
+    });
+
+    const result = await service.allocateSampleToPosition(sampleId, boxId, 'A1');
+
+    expect(result.success).toBe(true);
+    expect(result.sampleLocation).toEqual({ sampleId, boxId, position: 'A1' });
+
+    // Box occupancyGrid gets the sample written at the position, sample gets storageLocation+status
+    const boxUpdateCall = boxesUpdateOne.mock.calls[0];
+    expect(boxUpdateCall[1].$set[`occupancyGrid.A1`]).toBeInstanceOf(ObjectId);
+
+    const sampleUpdateCall = samplesUpdateOne.mock.calls[0];
+    expect(sampleUpdateCall[1].$set['storageLocation.position']).toBe('A1');
+    expect(sampleUpdateCall[1].$set['status']).toBe('AVAILABLE');
+  });
+
+  it('rejects allocation to an already-occupied position with a STORAGE_COLLISION error', async () => {
+    const boxId = new ObjectId().toString();
+    const sampleId = new ObjectId().toString();
+    const occupyingSampleId = new ObjectId();
+
+    boxesFindOne.mockResolvedValue({
+      _id: new ObjectId(boxId),
+      dimension: { rows: 2, cols: 2 },
+      occupancyGrid: new Map([['A1', occupyingSampleId]]),
+      currentOccupancy: 1
+    });
+
+    const result = await service.allocateSampleToPosition(sampleId, boxId, 'A1');
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('STORAGE_COLLISION');
+    // The sample document is never even looked up because validation fails first.
+    expect(samplesFindOne).not.toHaveBeenCalled();
+  });
+
+  it('returns BOX_NOT_FOUND (surfaced via validation) when the box does not exist', async () => {
+    boxesFindOne.mockResolvedValue(null);
+    const result = await service.allocateSampleToPosition(
+      new ObjectId().toString(),
+      new ObjectId().toString(),
+      'A1'
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('BOX_NOT_FOUND');
+  });
+
+  it('returns a generic ALLOCATION_ERROR when the sample does not exist', async () => {
+    const boxId = new ObjectId().toString();
+    boxesFindOne.mockResolvedValue({
+      _id: new ObjectId(boxId),
+      dimension: { rows: 2, cols: 2 },
+      occupancyGrid: new Map(),
+      currentOccupancy: 0
+    });
+    samplesFindOne.mockResolvedValue(null);
+
+    const sampleId = new ObjectId().toString();
+    const result = await service.allocateSampleToPosition(sampleId, boxId, 'A1');
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('ALLOCATION_ERROR');
+    expect(result.message).toMatch(/não encontrada/);
+  });
+});
+
+describe('StorageService.autoAssignSampleToBox', () => {
+  let boxesFindOne;
+  let boxesUpdateOne;
+  let samplesFindOne;
+  let samplesUpdateOne;
+  let movements;
+  let db;
+  let service;
+
+  beforeEach(() => {
+    boxesFindOne = vi.fn();
+    boxesUpdateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
+    samplesFindOne = vi.fn();
+    samplesUpdateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
+    movements = makeMovementsCollection();
+
+    db = makeDb({
+      collection: vi.fn((name) => {
+        if (name === 'storageBoxes') return { findOne: boxesFindOne, updateOne: boxesUpdateOne };
+        if (name === 'samples') return { findOne: samplesFindOne, updateOne: samplesUpdateOne };
+        if (name === 'sample_movements') return movements;
+        throw new Error(`unexpected collection: ${name}`);
+      }),
+      getMongo: vi.fn(() => ({ startSession: vi.fn(() => makeSession()) }))
+    });
+    service = new StorageService(db);
+  });
+
+  it('happy path: finds the first free position and allocates the specimen there (no neo4j configured)', async () => {
+    const boxId = new ObjectId();
+    const specimenId = new ObjectId();
+
+    boxesFindOne.mockResolvedValue({
+      _id: boxId,
+      name: 'Box A',
+      dimension: { rows: 1, cols: 2 },
+      occupancyGrid: { A1: new ObjectId() }, // A1 occupied, A2 free
+      currentOccupancy: 1
+    });
+    samplesFindOne.mockResolvedValue({
+      _id: specimenId,
+      barcode: 'BC-9',
+      storageLocation: null
+    });
+
+    const result = await service.autoAssignSampleToBox(specimenId.toString(), boxId.toString());
+
+    expect(result.success).toBe(true);
+    expect(result.sampleLocation.position).toBe('A2');
+    expect(result.graphPersisted).toBe(false);
+
+    const boxUpdateCall = boxesUpdateOne.mock.calls[0];
+    expect(boxUpdateCall[0][`occupancyGrid.A2`]).toEqual({ $exists: false });
+
+    const sampleUpdateCall = samplesUpdateOne.mock.calls[0];
+    expect(sampleUpdateCall[1].$set['storageLocation.position']).toBe('A2');
+    expect(sampleUpdateCall[1].$set['status']).toBe('AVAILABLE');
+  });
+
+  it('returns BOX_FULL when the box has no available position', async () => {
+    const boxId = new ObjectId();
+    const specimenId = new ObjectId();
+
+    boxesFindOne.mockResolvedValue({
+      _id: boxId,
+      dimension: { rows: 1, cols: 1 },
+      occupancyGrid: { A1: new ObjectId() },
+      currentOccupancy: 1
+    });
+    samplesFindOne.mockResolvedValue({
+      _id: specimenId,
+      storageLocation: null
+    });
+
+    const result = await service.autoAssignSampleToBox(specimenId.toString(), boxId.toString());
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('BOX_FULL');
+    // Never reaches the write phase.
+    expect(boxesUpdateOne).not.toHaveBeenCalled();
+  });
+
+  it('returns BOX_NOT_FOUND when the target box does not exist', async () => {
+    boxesFindOne.mockResolvedValue(null);
+    const result = await service.autoAssignSampleToBox(
+      new ObjectId().toString(),
+      new ObjectId().toString()
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('BOX_NOT_FOUND');
+  });
+});
+
+describe('StorageService.releaseSampleFromPosition', () => {
+  let samplesFindOne;
+  let samplesUpdateOne;
+  let boxesUpdateOne;
+  let movements;
+  let db;
+  let service;
+
+  beforeEach(() => {
+    samplesFindOne = vi.fn();
+    samplesUpdateOne = vi.fn().mockResolvedValue({});
+    boxesUpdateOne = vi.fn().mockResolvedValue({});
+    movements = makeMovementsCollection();
+
+    db = makeDb({
+      collection: vi.fn((name) => {
+        if (name === 'samples') return { findOne: samplesFindOne, updateOne: samplesUpdateOne };
+        if (name === 'storageBoxes') return { updateOne: boxesUpdateOne };
+        if (name === 'sample_movements') return movements;
+        throw new Error(`unexpected collection: ${name}`);
+      })
+    });
+    service = new StorageService(db);
+  });
+
+  it('happy path: clears the box occupancy entry and the sample storageLocation', async () => {
+    const boxId = new ObjectId().toString();
+    const sampleId = new ObjectId().toString();
+
+    samplesFindOne.mockResolvedValue({
+      _id: new ObjectId(sampleId),
+      barcode: 'BC-5',
+      quantity: 2,
+      unit: 'mL',
+      storageLocation: { boxId, position: 'C3' }
+    });
+
+    const result = await service.releaseSampleFromPosition(sampleId);
+
+    expect(result.success).toBe(true);
+    expect(result.releasedFrom).toEqual({ sampleId, boxId, position: 'C3' });
+
+    const boxUpdateCall = boxesUpdateOne.mock.calls[0];
+    expect(boxUpdateCall[1].$unset[`occupancyGrid.C3`]).toBe('');
+
+    const sampleUpdateCall = samplesUpdateOne.mock.calls[0];
+    expect(sampleUpdateCall[1].$unset).toHaveProperty('storageLocation');
+  });
+
+  it('returns NO_STORAGE_LOCATION when the sample is not currently allocated anywhere', async () => {
+    samplesFindOne.mockResolvedValue({
+      _id: new ObjectId(),
+      storageLocation: null
+    });
+
+    const result = await service.releaseSampleFromPosition(new ObjectId().toString());
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('NO_STORAGE_LOCATION');
+    expect(boxesUpdateOne).not.toHaveBeenCalled();
+  });
+
+  it('returns SAMPLE_NOT_FOUND when the sample does not exist', async () => {
+    samplesFindOne.mockResolvedValue(null);
+    const result = await service.releaseSampleFromPosition(new ObjectId().toString());
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('SAMPLE_NOT_FOUND');
+  });
+});
