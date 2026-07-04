@@ -24,18 +24,20 @@ stale as slices land and as source files change. Keep it honest:
 
 ## Last full reconcile
 
-**2026-07-04**, snapshot from commit `7826467c` (user-run
+**2026-07-04**, snapshot from commit `393edf91` (user-run
 `npx vitest run --coverage --reporter=basic`, full suite; only
 `coverage/coverage-summary.json` was read and re-derived from, exit
 status not independently captured this reconcile).
 
-Statements 78.92%, Branches 70.18%, Functions 84.09%, **Lines 79.3%**
-(13744/17331) — up from the prior reconcile's 74.62% lines (commit
-`4a708d8c`, 2026-07-04 earlier same day). The jump comes from the slices
-between the two reconciles: `batch-validation-engine.service.js`,
-`database/neo4j.js`, `audit.controller.js`, `eConsent.js`, and
-`import-lgpd.controller.js` — see `COVERAGE_HISTORY.md` for what each
-covered and any issues filed.
+Statements 81.2%, Branches 72.43%, Functions 85.35%, **Lines 81.63%**
+(14148/17331) — up from the prior reconcile's 79.3% lines (commit
+`7826467c`). The jump comes from the slices between the two reconciles:
+`equipment-sensor-quarantine.service.js`, `sample.routes.js`,
+`MongoStorageRepository.js`, `cid.routes.js`,
+`sample-file.controller.js`, `intakeWizard.js`, `policy.routes.js`, and
+a partial slice on `patient.service.js` — see `COVERAGE_HISTORY.md` for
+what each covered and any issues filed. ZERO bucket is unchanged (20
+files, none touched this round) and LOW is still empty.
 
 ## How to use this when picking a slice
 
@@ -78,33 +80,23 @@ Low priority (models/interfaces/one-off scripts — thin or non-request-path):
 - `src/scripts/seedOrphanetCid.js`
 - `src/scripts/seeder.js`
 
-## LOW coverage (1-49% lines) — re-measured 2026-07-04, commit `7826467c`
+## LOW coverage (1-49% lines) — re-measured 2026-07-04, commit `393edf91`
 
-**Empty.** Every file that was in this bucket at the last reconcile
-(`neo4j.js`, `audit.controller.js`, `eConsent.js`,
-`import-lgpd.controller.js`, `batch-validation-engine.service.js`) moved
-above 50% lines this session — see `COVERAGE_HISTORY.md` for what each
-slice covered. Next slice should either work through the ZERO bucket
-above (real-logic file first: `worker.js`) or pick from the MID-LOW
-bucket just below for a smaller, incremental gain.
+**Empty**, confirmed again at this reconcile — no file dropped below
+50% lines. Next slice should either work through the ZERO bucket above
+(real-logic file first: `worker.js`) or pick from the MID-LOW bucket
+just below for a smaller, incremental gain.
 
-## MID-LOW coverage (50-69% lines) — re-measured 2026-07-04, commit `7826467c`
+## MID-LOW coverage (50-69% lines) — re-measured 2026-07-04, commit `393edf91`
 
-Sorted ascending (worst first), 25 files — the next tier up once the
+Sorted ascending (worst first), 26 files — the next tier up once the
 ZERO bucket's real-logic file (`worker.js`) is done. Re-derived from
-`coverage/coverage-summary.json`, not hand-maintained. (Original list
-had 32; `equipment-sensor-quarantine.service.js`, `sample.routes.js`,
-`MongoStorageRepository.js` (confirmed 100% lines after fixing a
-coverage-measurement bug, see `testing-conventions`),
-`cid.routes.js` (72% lines; remaining gap is dead code, issue #82),
-`sample-file.controller.js` (69% lines), `intakeWizard.js` (96%
-lines), and `policy.routes.js` (99% lines) all moved to
-GOOD — see `COVERAGE_HISTORY.md`.)
+`coverage/coverage-summary.json`, not hand-maintained.
 
 ```
-src/services/patient.service.js                                       55.5%* (partial slice landed 2026-07-04, see COVERAGE_HISTORY.md — consent-token methods now covered, createPatient/updatePatient branch gaps and resolveClinicalUnitSnapshot/checkIdentifierConflict/checkDuplicatePatient/syncPatientPhoneToGraph remain for a future slice)
 src/services/import-lgpd.service.js                                   56.01%
 src/routes/dictionary.js                                              56.16%
+src/services/patient.service.js                                       56.35%
 src/models/Session.js                                                 57.14%
 src/controllers/paciente.controller.js                                57.3%
 src/i18n/index.js                                                     57.37%
@@ -124,10 +116,19 @@ src/models/ConsentTemplate.js                                         67.85%
 src/infrastructure/queue/TopologicalQuarantine.js                     68.08%
 src/routes/orphanet-count.js                                          68.42%
 src/services/user-security.service.js                                 68.57%
+src/controllers/sample-file.controller.js                            68.87%
 src/utils/logSerializer.js                                            69.14%
 src/controllers/import-batch.controller.js                            69.49%
 src/services/log.service.js                                           69.84%
 ```
+
+`patient.service.js` confirmed at 56.35% by this reconcile (partial
+slice landed 2026-07-04 — consent-token methods now covered;
+`createPatient`/`updatePatient` branch gaps and
+`resolveClinicalUnitSnapshot`/`checkIdentifierConflict`/
+`checkDuplicatePatient`/`syncPatientPhoneToGraph` remain — see
+`COVERAGE_HISTORY.md`). `sample-file.controller.js` confirmed at
+68.87%, matching the isolated-run estimate from its own slice.
 
 Note: several of these (`import-lgpd.service.js`, `import.service.js`,
 `patient.service.js`, `Patient.js`, `Sample.js`) already have partial
