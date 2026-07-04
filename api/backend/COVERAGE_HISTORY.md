@@ -788,3 +788,24 @@ product bugs found. This closes out the LOW coverage bucket entirely —
 see `COVERAGE_NOTES.md` for the note that the next session should run
 a fresh `--coverage --reporter=basic` reconcile to regenerate real
 buckets rather than continue from an empty list.
+
+`src/services/equipment-sensor-quarantine.service.js` moved from 50%
+to 96.25% lines (2026-07-04) via new
+`tests/unit/equipment-sensor-quarantine.service.test.js` (8 tests).
+Covers `isQuarantineTriggerStatus` (case/whitespace normalization),
+`quarantineByEquipmentStatus` and `quarantineBySensorStatus`'s
+short-circuit (non-trigger status), no-resolvable-identifier, and
+full happy-path branches (location lookup, sample filter building,
+per-sample quarantine update incl. the object-vs-non-object `location`
+shape branch, and the append-only movement-ledger write). Mocking
+followed the CJS require.cache-injection pattern from
+`sampleComplianceSync.service.test.js` (`vi.spyOn` on the real
+`collectionResolver`/`sampleMovementLedger`/`SampleMovement` module
+objects, set before the service's first `require` so its module-scope
+destructuring captures the spied bindings, reloaded via
+`delete require.cache[...]` each test) rather than `vi.mock` factories,
+which don't interop cleanly with this codebase's plain
+`module.exports = { fn }` / `module.exports = ClassName` CJS shapes.
+No new product bugs found; remaining 3.75% is the two-branch
+`normalizeStatus`/`buildStatusChangeReason` default-string fallbacks
+and one Number.isFinite edge, not worth chasing further.
