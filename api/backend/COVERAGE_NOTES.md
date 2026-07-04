@@ -118,13 +118,14 @@ covered; `importPatients`/`importSamples` still untested — see
 COVERAGE_HISTORY.md; a real counting bug found in `importTemperature`
 was filed as issue #79, not fixed inline).
 `src/services/batch-validation-engine.service.js` moved from 45.76% to
-72.59% lines this session (buildSampleRow, classifyPatientRow/
+75.98% lines this session (buildSampleRow, classifyPatientRow/
 classifySampleRow, buildPatientLinkageQuery, buildBiomarkerObservation
 Payloads, detectDataType filename fallback, persistPatient validation/
-success/error paths, and readJsonRows/detectCsvSeparator/readCsvRows/
-readRowsFromFile now covered; persistSample's DB-linkage branches and
-processBatchImport's chunking loop still untested — see
-COVERAGE_HISTORY.md).
+success/error paths, readJsonRows/detectCsvSeparator/readCsvRows/
+readRowsFromFile, and persistSample's validation/no-linkage/create-
+error branches now covered; `processBatchImport`'s chunking/progress
+loop (the StagingImport-backed orchestrator) is the only large gap
+left — see COVERAGE_HISTORY.md).
 
 ## MID coverage (50-84% lines) — GOOD (>=85%)
 

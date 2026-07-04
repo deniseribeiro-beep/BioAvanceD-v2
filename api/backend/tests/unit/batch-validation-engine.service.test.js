@@ -164,4 +164,73 @@ describe('batch-validation-engine.service', () => {
     expect(result.persistedIds).toContain('patient-object-id-2');
     expect(result.persistedIds).toContain('sample-object-id-2');
   });
+
+  it('returns INVALID when required sample fields are missing', async () => {
+    const db = createDb();
+    const result = await batchValidationEngine.persistSample(db, {}, 4);
+
+    expect(result.classification).toBe('INVALID');
+    expect(result.errors).toContain('sampleType é obrigatório');
+    expect(result.errors).toContain('sampleOrigin é obrigatório');
+    expect(result.errors).toContain('quantity deve ser um número maior que zero');
+  });
+
+  it('returns INVALID when disease text is given without a structured ORPHA code', async () => {
+    const db = createDb();
+    const result = await batchValidationEngine.persistSample(
+      db,
+      {
+        sampleType: 'Sangue',
+        sampleOrigin: 'Coleta',
+        quantity: '1',
+        disease: 'Doença de Fabry',
+      },
+      6
+    );
+
+    expect(result.classification).toBe('INVALID');
+    expect(result.errors).toContain('Doenca informada sem codigo ORPHA estruturado (campo orpha/orphaCode).');
+  });
+
+  it('returns INVALID when no patient links and the row lacks enough data to create one', async () => {
+    const db = createDb();
+    const createPatientSpy = vi.spyOn(patientService, 'createPatient');
+
+    const result = await batchValidationEngine.persistSample(
+      db,
+      {
+        sampleType: 'Sangue',
+        sampleOrigin: 'Coleta',
+        quantity: '1',
+      },
+      7
+    );
+
+    expect(createPatientSpy).not.toHaveBeenCalled();
+    expect(result.classification).toBe('INVALID');
+    expect(result.errors[0]).toMatch(/Paciente não encontrado/);
+  });
+
+  it('returns INVALID with the thrown error message when createSample rejects', async () => {
+    const db = createDb({
+      patientID: '12345678',
+      patient: { _id: 'patient-object-id-3', patientID: '12345678' },
+    });
+
+    vi.spyOn(sampleService, 'createSample').mockRejectedValue(new Error('storage collision'));
+
+    const result = await batchValidationEngine.persistSample(
+      db,
+      {
+        patientID: '12345678',
+        sampleType: 'Sangue',
+        sampleOrigin: 'Coleta',
+        quantity: '1',
+      },
+      8
+    );
+
+    expect(result.classification).toBe('INVALID');
+    expect(result.errors).toEqual(['storage collision']);
+  });
 });

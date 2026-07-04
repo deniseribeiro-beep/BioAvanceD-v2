@@ -688,3 +688,12 @@ separator detection, extension dispatch). `persistSample`'s DB-linkage
 branches and `processBatchImport`'s chunking/progress loop remain
 untested — good next slice. No new product bugs found; existing
 behavior matched the tests written.
+
+Follow-up same file (2026-07-04): `src/services/batch-validation-engine.service.js`
+moved from 72.59% to 75.98% lines with 4 more tests on `persistSample`
+covering its remaining branches — missing-required-field INVALID,
+disease-text-without-ORPHA-code INVALID, no-patient-link-and-insufficient-
+data-to-create-one INVALID, and the thrown-error-from-`sampleService.
+createSample` INVALID path. `processBatchImport`'s chunking/progress
+loop (mocking `StagingImport.findOne`/`updateOne`) is the only
+remaining large gap in this file. No new product bugs found.
