@@ -327,6 +327,20 @@ regex consumes to end-of-string when no digit follows "Paciente ",
 rather than just stripping the name). Exact new percentage not yet
 re-measured, will land at the next full reconcile.
 
+Since baseline (23rd slice, parallel-test-agents): `integrityCheckService.js`,
+`patientBiomarkerTimeseries.service.js`, `miabisValidator.service.js`, and
+`sampleComplianceSync.service.js` moved off the ZERO/LOW bucket — a 4-agent
+parallel-test-agents slice (16 + 19 + 9 + 11 = 55 new targeted tests, all
+green, independently re-verified together) — exact new percentages not yet
+re-measured, will land at the next full reconcile. This slice surfaced one
+finding, filed as #64: `miabisValidator.service.js`'s `consentStatus:
+'not_found'` value is produced by two semantically different situations
+(sample missing from MongoDB vs. sample complete but no Neo4j consent
+record found) with no way to distinguish them except also checking
+`missingFields` for the `'sampleNotFound'` sentinel, and its Neo4j
+try/catch swallows errors into `consentStatus: 'error'` with no actual
+logging despite a comment saying `// Log error or handle as needed`.
+
 ## How to use this when picking a slice
 
 1. Prefer a **ZERO** file with real logic (not a script/model/port
