@@ -98,6 +98,34 @@ mapped-row/DB paths (1458-1596) — both need a mocked `db`/collection
 harness like `import-lgpd.service.importPatients.unit.test.js` used for
 `importPatients`, good candidate for a follow-up slice.
 
+**Slice (2026-07-04):** `src/services/import.service.js` 44.04% →
+61.91% lines. Added
+`tests/unit/import.service.importLocationsTemperature.test.js` covering
+`importLocations` (JSON single-object and array payloads, CSV rows,
+parse-error/model-validation-error/duplicate-locationID branches,
+locationID auto-generation via `generateUniqueLocationID`, and the CSV
+structural-validation short-circuit) and `importTemperature` (success,
+model-validation failure, invalid `temperatureUnit`, multi-row
+success+failure counting) — all against a hand-rolled fake `db`/
+collection (`findOne`/`insertOne`) and real temp CSV/JSON fixture files,
+no mocking framework needed since `import.service.js`'s
+`module.exports = new ImportService()` singleton is consumed directly
+(no destructuring-at-require gotcha here). **Found a real bug while
+writing the counting test, did not fix it inline:**
+`importTemperature`'s per-row loop does `continue` immediately after
+logging a validation failure, which skips the `results.total++` at the
+bottom of the loop body — so `total` under-counts any row that fails
+`TemperatureModel.validate()` (same shape as the already-known
+`import-lgpd.service.js` bug in issue #65). Filed as issue #79 instead
+of fixing inline, per explicit instruction that test-loop iterations
+should raise issues, not patch product code, when the bug isn't
+required to make the slice's own test pass — the two affected tests
+assert the current (buggy) `total` value with a comment pointing at
+#79 rather than the corrected value, so they won't spuriously fail
+once someone fixes it. Remaining gaps in this file: `importPatients`
+(208-375) and `importSamples` (376-530), both DB-backed and similar in
+shape to `import-lgpd.service.js`'s already-tested `importPatients`.
+
 **Slice (2026-07-04, post-reconcile):** `reports.routes.js` 30.2% →
 71.84% lines. Extended `tests/integration/reports.api.test.js` with a
 generic collection-backed mock db (`buildCollectionDb`) to exercise

@@ -82,7 +82,6 @@ run, not hand-maintained):
 
 ```
 src/database/neo4j.js                                                40%
-src/services/import.service.js                                      44.04% (parsers/validators covered, see COVERAGE_HISTORY.md 30th slice; DB-backed import* methods still untested)
 src/services/batch-validation-engine.service.js                     45.76%
 src/controllers/audit.controller.js                                 47.56%
 src/routes/eConsent.js                                               47.88%
@@ -114,6 +113,11 @@ COVERAGE_HISTORY.md). `src/services/import-lgpd.service.js` moved from
 43.05% to 55.55% lines this session (`readCSV`/`readExcel` now covered
 with real temp-file fixtures; `importSamples`/`importPatientsSmart`
 DB-backed paths still untested — see COVERAGE_HISTORY.md).
+`src/services/import.service.js` moved from 44.04% to 61.91% lines this
+session (`importLocations` JSON/CSV paths and `importTemperature` now
+covered; `importPatients`/`importSamples` still untested — see
+COVERAGE_HISTORY.md; a real counting bug found in `importTemperature`
+was filed as issue #79, not fixed inline).
 
 ## MID coverage (50-84% lines) — GOOD (>=85%)
 
