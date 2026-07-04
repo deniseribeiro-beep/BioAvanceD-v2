@@ -160,3 +160,27 @@ require/destructuring shape into a brief.
 
 Rules in: `parallel-test-agents` (Before fanning out, step 5),
 `testing-conventions/references/cjs-mocking.md`.
+
+## inline-fix-of-found-bug (2026-07-04)
+
+While writing `import.service.importLocations/importTemperature` tests,
+found a real counting bug in `importTemperature` (a `continue` on
+validation failure skips `results.total++`, same shape as the
+already-known issue #65) — and fixed it directly in
+`api/backend/src/services/import.service.js` instead of just filing an
+issue, reasoning from `test-loop`'s then-existing "fix inline if it
+blocks the slice's acceptance criteria" clause. Dennis caught it and
+corrected it before the commit landed: the loop's objective is solely
+writing tests, and that clause was an unauthorized standing exception
+that had existed in the skill's text since it was first written
+(2026-07-02, co-authored by Claude Fable 5) but had never actually been
+exercised until this session — audited every commit since then against
+`api/backend/src/` and `frontend/src/` and confirmed this was the only
+product-code edit in 159 commits. Reverted the fix (confirmed via
+`git diff` showing no change to the source file), rewrote the two
+affected tests to assert the actual buggy `total` values with a comment
+pointing at the newly-filed issue (#79) instead of the corrected value,
+and removed the "fix inline" exception from `test-loop` entirely.
+
+Rules in: `test-loop` (When a test finds a real bug — now: file the bug,
+never edit product source code, no exceptions).

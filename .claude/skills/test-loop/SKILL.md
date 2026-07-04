@@ -123,14 +123,24 @@ One slice = one module/route/spec, sized to finish in the iteration:
 ## When a test finds a real bug
 
 A new test failing against real product code is the loop working, not a
-problem to make disappear:
+problem to make disappear. **This loop's objective is solely writing
+tests — never edit product source code (anything under `api/backend/src`
+or `frontend/src`) for any reason, including to fix a bug your own test
+just found.** There is no "it blocks the slice" exception: an inline fix
+happened exactly once, unauthorized, 2026-07-04 (incident
+`inline-fix-of-found-bug`, `bioavanced-conventions/references/incidents.md`)
+and was reverted — don't repeat it.
 
-- If the bug blocks the slice's own acceptance criteria (the thing the
-  test exists to prove), fix it inline on the same branch and call it
-  out explicitly in the commit message and report.
-- If it's unrelated to the slice, don't fix it inline and don't skip
-  past it — file it with `gh issue create` and keep going.
-- Never resolve the tension by weakening the test.
+- File the bug with `gh issue create` and keep going, every time,
+  regardless of whether it's related to the slice.
+- Never resolve the tension by weakening the test to match the buggy
+  behavior as if it were correct — assert the actual (buggy) output,
+  and add a one-line code comment above the assertion naming the bug
+  and pointing at the filed issue number, so a future reader doesn't
+  mistake the assertion for an endorsement of that behavior, and so the
+  test doesn't spuriously fail once someone else fixes it.
+- If the bug is severe enough that testing around it feels wrong, stop
+  and ask Dennis rather than patching it yourself.
 
 ## When a slice turns out too big mid-iteration
 
