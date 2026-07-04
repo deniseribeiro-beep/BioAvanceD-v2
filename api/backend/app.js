@@ -66,7 +66,6 @@ const allowedOrigins = [];
 const seenAllowedOrigins = new Set();
 addAllowedOrigins(allowedOrigins, seenAllowedOrigins, env.ALLOWED_ORIGINS);
 addAllowedOrigin(allowedOrigins, seenAllowedOrigins, env.FRONTEND_URL);
-addAllowedOrigin(allowedOrigins, seenAllowedOrigins, "http://34.60.170.17:5173");
 if (allowedOrigins.length === 0) {
   addAllowedOrigin(allowedOrigins, seenAllowedOrigins, "http://localhost:5173");
 }

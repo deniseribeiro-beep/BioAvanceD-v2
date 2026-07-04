@@ -6,297 +6,47 @@ on:
     branches:
       - main
       - audit/intake-governance-i18n-orpha
-    paths-ignore:
-      - docs/inventory/BIOAVANCED_FULL_REPOSITORY_INVENTORY.md
   pull_request:
     branches:
       - main
 
-permissions:
-  contents: write
-
 jobs:
-  testes-automatizados:
+  validation-stack:
     runs-on: ubuntu-latest
-    services:
-      mongodb:
-        image: mongo:7
-        ports:
-          - 27017:27017
-        options: >-
-          --health-cmd "mongosh --eval 'db.adminCommand(\"ping\")'"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-      neo4j:
-        image: neo4j:5-community
-        ports:
-          - 7474:7474
-          - 7687:7687
-        env:
-          NEO4J_AUTH: neo4j/testpassword
-        options: >-
-          --health-cmd "cypher-shell -u neo4j -p testpassword 'RETURN 1'"
-          --health-interval 10s
-          --health-timeout 10s
-          --health-retries 10
-      influxdb:
-        image: influxdb:2.7
-        ports:
-          - 8086:8086
-        env:
-          DOCKER_INFLUXDB_INIT_MODE: setup
-          DOCKER_INFLUXDB_INIT_USERNAME: bioavanced
-          DOCKER_INFLUXDB_INIT_PASSWORD: bioavanced-test-password
-          DOCKER_INFLUXDB_INIT_ORG: bioavanced-test
-          DOCKER_INFLUXDB_INIT_BUCKET: bioavanced-test-bucket
-          DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: bioavanced-test-token
-        options: >-
-          --health-cmd "influx ping --host http://localhost:8086"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 10
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-    env:
-      NODE_ENV: test
-      MONGO_URI: mongodb://127.0.0.1:27017/bioavanced_test
-      MONGO_DB: bioavanced_test
-      MONGO_DB_NOVO: bioavanced_test
-      JWT_SECRET: vitest-secret-key
-      JWT_REFRESH_SECRET: vitest-refresh-secret-key
-      ENCRYPTION_KEY: vitest-encryption-key-32-characters
-      ENCRYPTION_KEY_ID: test-key-1
-      USER_ANON_SALT: vitest-user-anon-salt
-      NEO4J_URI: bolt://127.0.0.1:7687
-      NEO4J_USERNAME: neo4j
-      NEO4J_PASSWORD: testpassword
-      NEO4J_DATABASE: neo4j
-      NEO4J_REQUIRED: "false"
-      LINEAGE_MODE: fail-open
-      REDIS_URL: redis://127.0.0.1:6379
-      REDIS_HOST: 127.0.0.1
-      REDIS_PORT: "6379"
-      INFLUXDB_URL: http://127.0.0.1:8086
-      INFLUXDB_TOKEN: bioavanced-test-token
-      INFLUXDB_ORG: bioavanced-test
-      INFLUXDB_BUCKET: bioavanced-test-bucket
-      ALLOW_CLOUD_INTEGRATIONS: "false"
-      ALLOW_EXTERNAL_TERMINOLOGY_SYNC: "false"
-      ALLOW_EXTERNAL_HPO_LOOKUP: "false"
-      ALLOW_EXTERNAL_DRUG_LOOKUP: "false"
-      MQTT_ENABLED: "false"
-      RESEND_API_KEY: re_test_dummy_key
-      EMAIL_FROM: BioAvanceD Test <noreply@example.test>
-      ALERT_EMAIL_TO: alerts@example.test
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
       - name: Configure Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
-      - name: Install backend dependencies
-        run: npm ci
-        working-directory: api/backend
-      - name: Run backend tests
-        run: npx vitest run
-        working-directory: api/backend
-      - name: Install frontend dependencies
-        run: npm ci
-        working-directory: frontend
-      - name: Install Playwright browsers
-        run: npx playwright install --with-deps
-        working-directory: frontend
+          node-version: '22'
+
+      - name: Hygiene gates
+        run: |
+          git grep -nE '^(<<<<<<<|=======|>>>>>>>)' -- ':!academico/inpi/**'
+          node scripts/audit-zero-mocks.js
+
+      - name: Validate compose file
+        run: npm run test:stack:config
+
+      - name: Build validation stack
+        run: npm run test:stack:build
+
+      - name: Start validation stack
+        run: npm run test:stack:up
+
+      - name: Backend coverage
+        run: npm run docker:test:backend
+
+      - name: Frontend coverage
+        run: npm --prefix frontend run test:unit:coverage
+
       - name: Run Playwright E2E
         env:
-          PLAYWRIGHT_SKIP_GLOBAL_SETUP: "1"
-        run: npx playwright test
-        working-directory: frontend
-      - name: Upload Playwright report
+          PLAYWRIGHT_BASE_URL: http://127.0.0.1:5173
+        run: npm run docker:test:frontend
+
+      - name: Tear down validation stack
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: playwright-report
-          path: frontend/playwright-report/
-          retention-days: 7
-
-  inventario-integral:
-    if: github.ref == 'refs/heads/audit/intake-governance-i18n-orpha'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout full audited branch
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Install static symbol indexer
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq universal-ctags
-
-      - name: Generate exhaustive inventory
-        shell: bash
-        run: |
-          set -euo pipefail
-          out="docs/inventory/BIOAVANCED_FULL_REPOSITORY_INVENTORY.md"
-          tmp="$(mktemp)"
-          list="$(mktemp)"
-          mkdir -p docs/inventory
-          git ls-files -z > "$list"
-          if ! git ls-files --error-unmatch "$out" >/dev/null 2>&1; then
-            printf '%s\0' "$out" >> "$list"
-          fi
-          total="$(python3 - "$list" <<'PY'
-          import sys
-          data=open(sys.argv[1],'rb').read().split(b'\0')
-          print(len([x for x in data if x]))
-          PY
-          )"
-          commit="$(git rev-parse HEAD)"
-          {
-            echo '# BioAvanceD — Inventário integral do repositório'
-            echo
-            echo "- **Branch:** \`audit/intake-governance-i18n-orpha\`"
-            echo "- **Commit analisado:** \`$commit\`"
-            echo "- **Arquivos rastreados e auto-incluídos:** **$total**"
-            echo "- **Arquivos inventariados:** **$total**"
-            echo "- **Cobertura por arquivo:** **100.00%**"
-            echo
-            echo '## Critério de 100%'
-            echo 'A população é a saída NUL-safe de `git ls-files -z`, acrescida do próprio relatório final quando ainda não rastreado. Cada caminho aparece exatamente uma vez. Binários e artefatos legais são incluídos por metadados e hash; símbolos são extraídos estaticamente.'
-            echo
-            echo '## Catálogo de requisitos'
-            echo
-            echo '| ID | Requisito | Fonte |'
-            echo '|---|---|---|'
-            echo '| REPO-001 | Integridade e organização do repositório | Projeto |'
-            echo '| ARCH-001 | Arquitetura modular e persistência poliglota | Projeto/JOMS |'
-            echo '| FAIR-001 | FAIR, interoperabilidade e proveniência | JOMS |'
-            echo '| FHIR-001 | HL7 FHIR | Projeto/JOMS |'
-            echo '| ORPHA-001 | ORPHA/Orphanet multilíngue | Projeto/JOMS |'
-            echo '| HPO-001 | Fenótipos HPO | Projeto/JOMS |'
-            echo '| MIABIS-001 | MIABIS | Projeto/JOMS |'
-            echo '| CONSENT-001 | TCLE e consentimento dinâmico | Projeto/JOMS |'
-            echo '| PRIV-001 | LGPD, privacidade e pseudonimização | Projeto |'
-            echo '| AUDIT-001 | Auditoria, Merkle e integridade | JOMS |'
-            echo '| RCS-001 | SPREC e RCS-GOV | Artigo RCS |'
-            echo '| SAMPLE-001 | Amostras, armazenamento, linhagem e custódia | Projeto/JOMS |'
-            echo '| IOT-001 | Sensores, telemetria e cadeia fria | Projeto/JOMS |'
-            echo '| SEC-001 | Autenticação, RBAC e segurança | Projeto |'
-            echo '| OPS-001 | Workers, filas, backup e observabilidade | Projeto/JOMS |'
-            echo '| UI-001 | Frontend, i18n, formulários e relatórios | Projeto |'
-            echo '| TEST-001 | Testes e dados sintéticos | Validação |'
-            echo '| DOC-001 | Documentação científica e técnica | Pesquisa |'
-            echo '| DOC-003 | Preservação dos artefatos INPI | Registro |'
-            echo '| SRC-001 | Pacotes ORPHA data-raw | JOMS/Orphanet |'
-            echo
-            echo '## Inventário detalhado de todos os arquivos'
-          } > "$tmp"
-
-          while IFS= read -r -d '' file; do
-            lower="${file,,}"
-            req='REPO-001'
-            [[ "$lower" == *fhir* ]] && req+=', FHIR-001, FAIR-001'
-            [[ "$lower" == *orpha* || "$lower" == *orphanet* ]] && req+=', ORPHA-001, FAIR-001'
-            [[ "$lower" == *hpo* || "$lower" == *phenotype* ]] && req+=', HPO-001, FAIR-001'
-            [[ "$lower" == *miabis* ]] && req+=', MIABIS-001, FAIR-001'
-            [[ "$lower" == *consent* || "$lower" == *tcle* ]] && req+=', CONSENT-001, PRIV-001'
-            [[ "$lower" == *audit* || "$lower" == *merkle* || "$lower" == *integrity* ]] && req+=', AUDIT-001'
-            [[ "$lower" == *rcs* || "$lower" == *sprec* || "$lower" == *quality* ]] && req+=', RCS-001'
-            [[ "$lower" == *sample* || "$lower" == *specimen* || "$lower" == *storage* || "$lower" == *lineage* || "$lower" == *custody* ]] && req+=', SAMPLE-001'
-            [[ "$lower" == *sensor* || "$lower" == *telemetry* || "$lower" == *temperature* || "$lower" == *influx* || "$lower" == *mqtt* || "$lower" == *incident* ]] && req+=', IOT-001'
-            [[ "$lower" == *auth* || "$lower" == *rbac* || "$lower" == *security* || "$lower" == *session* ]] && req+=', SEC-001, PRIV-001'
-            [[ "$lower" == *worker* || "$lower" == *queue* || "$lower" == *backup* || "$lower" == *redis* || "$lower" == *log* ]] && req+=', OPS-001, ARCH-001'
-            [[ "$lower" == frontend/* || "$lower" == *i18n* || "$lower" == *report* ]] && req+=', UI-001'
-            [[ "$lower" == *test* || "$lower" == *spec.* || "$lower" == *seed* ]] && req+=', TEST-001'
-            [[ "$lower" == academico/* || "$lower" == docs/* || "$lower" == *.md ]] && req+=', DOC-001'
-            [[ "$lower" == academico/inpi/* ]] && req+=', DOC-003'
-            [[ "$lower" == orpha-data-raw/* ]] && req+=', SRC-001'
-            [[ "$lower" == api/backend/src/core/* || "$lower" == api/backend/src/infrastructure/* || "$lower" == api/backend/src/interface/* ]] && req+=', ARCH-001'
-
-            if [[ "$file" == "$out" ]]; then
-              sha='self-generated-report'
-              bytes='n/a'
-              mime='text/markdown'
-              lines='n/a'
-            else
-              sha="$(sha256sum "$file" | cut -d' ' -f1)"
-              bytes="$(stat -c%s "$file")"
-              mime="$(file --brief --mime-type "$file")"
-              lines='n/a'
-              if file --brief "$file" | grep -qiE 'text|json|xml|script|source|empty'; then
-                lines="$(wc -l < "$file" | tr -d ' ')"
-              fi
-            fi
-            {
-              echo
-              echo "### \`$file\`"
-              echo "- **SHA-256:** \`$sha\`"
-              echo "- **Tamanho:** $bytes"
-              echo "- **MIME:** \`$mime\`"
-              echo "- **Linhas:** $lines"
-              echo "- **Requisitos:** $req"
-              echo '- **Funções, classes, métodos e símbolos:**'
-            } >> "$tmp"
-
-            if [[ "$file" != "$out" ]]; then
-              case "$file" in
-                *.js|*.cjs|*.mjs|*.jsx|*.ts|*.tsx|*.sh|*.ps1|*.py|*.sql|*.cypher)
-                  symbols="$(ctags -x --kinds-all='*' "$file" 2>/dev/null | awk '{name=$1;kind=$2;line=$3; if(name!="") printf "  - L%s `%s` — `%s`\n",line,kind,name}' | head -300 || true)"
-                  if [[ -n "$symbols" ]]; then printf '%s\n' "$symbols" >> "$tmp"; else echo '  - Nenhum símbolo nomeado extraído.' >> "$tmp"; fi
-                  ;;
-                *) echo '  - Não aplicável: dados, configuração, documentação ou artefato binário.' >> "$tmp" ;;
-              esac
-            else
-              echo '  - Relatório gerado automaticamente; sem símbolos executáveis.' >> "$tmp"
-            fi
-          done < "$list"
-
-          actual="$(grep -c '^### `.*`$' "$tmp")"
-          test "$actual" -eq "$total"
-          {
-            echo
-            echo '## Achados estruturais iniciais'
-            if git grep -nE '^(<<<<<<<|=======|>>>>>>>)' -- ':!academico/inpi/**' > /tmp/conflicts.txt; then
-              echo '- Foram encontrados marcadores de conflito Git:'
-              sed 's/^/  - /' /tmp/conflicts.txt
-            else
-              echo '- Nenhum marcador de conflito Git encontrado.'
-            fi
-            echo
-            echo '## Declaração de completude'
-            echo
-            echo "O inventário contém **$actual registros para $total caminhos**, com cobertura por arquivo de **100.00%**. A associação requisito–arquivo é uma classificação estática inicial; conformidade funcional será comprovada por validação dinâmica posterior."
-          } >> "$tmp"
-          mv "$tmp" "$out"
-
-      - name: Verify complete inventory
-        run: |
-          grep -q 'cobertura por arquivo de **100.00%**' docs/inventory/BIOAVANCED_FULL_REPOSITORY_INVENTORY.md
-
-      - name: Upload inventory artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: bioavanced-full-repository-inventory
-          path: docs/inventory/BIOAVANCED_FULL_REPOSITORY_INVENTORY.md
-          retention-days: 30
-
-      - name: Commit final inventory
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs/inventory/BIOAVANCED_FULL_REPOSITORY_INVENTORY.md
-          if git diff --cached --quiet; then
-            echo "Inventory unchanged."
-          else
-            git commit -m "docs(inventory): generate exhaustive repository inventory [skip ci]"
-            git push
-          fi
+        run: npm run test:stack:down

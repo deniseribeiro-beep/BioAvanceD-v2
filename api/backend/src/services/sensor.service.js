@@ -101,18 +101,19 @@ class SensorService {
     try {
       const sensorsCollection = db.collection('sensors');
       const query = { $or: [{ sensorId }, { sensorID: sensorId }, { _id: sensorId }] };
+      const normalizedUpdateData = { ...(updateData || {}) };
 
       const existingSensor = await sensorsCollection.findOne(query);
       if (!existingSensor) {
         throw new Error('Sensor não encontrado');
       }
 
-      updateData.updatedAt = new Date();
+      normalizedUpdateData.updatedAt = new Date();
 
       const mergedStatus =
-        updateData.maintenanceStatus ??
-        updateData.status ??
-        updateData.sensorStatus ??
+        normalizedUpdateData.maintenanceStatus ??
+        normalizedUpdateData.status ??
+        normalizedUpdateData.sensorStatus ??
         existingSensor.maintenanceStatus ??
         existingSensor.status ??
         existingSensor.sensorStatus;
@@ -130,17 +131,17 @@ class SensorService {
           await session.withTransaction(async () => {
             result = await sensorsCollection.updateOne(
               query,
-              { $set: updateData },
+              { $set: normalizedUpdateData },
               { session }
             );
 
             quarantineResult = await this.quarantineService.quarantineBySensorStatus(
               db,
-              { ...existingSensor, ...updateData },
+              { ...existingSensor, ...normalizedUpdateData },
               mergedStatus,
               {
                 session,
-                updateData
+                updateData: normalizedUpdateData
               }
             );
           });
@@ -148,15 +149,15 @@ class SensorService {
           await session.endSession();
         }
       } else {
-        result = await sensorsCollection.updateOne(query, { $set: updateData });
+        result = await sensorsCollection.updateOne(query, { $set: normalizedUpdateData });
 
         if (shouldTriggerQuarantine) {
           quarantineResult = await this.quarantineService.quarantineBySensorStatus(
             db,
-            { ...existingSensor, ...updateData },
+            { ...existingSensor, ...normalizedUpdateData },
             mergedStatus,
             {
-              updateData
+              updateData: normalizedUpdateData
             }
           );
         }

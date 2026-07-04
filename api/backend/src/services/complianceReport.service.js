@@ -373,6 +373,20 @@ class ComplianceReportService {
    */
   async exportReportCSV(startDate, endDate) {
     const report = await this.generateComplianceReport(startDate, endDate);
+    if (!report) {
+      return [
+        'Relatório de Conformidade',
+        `Período: ${startDate} a ${endDate}`,
+        'Data de Geração: indisponível',
+        '',
+        'Resumo Executivo',
+        'Score de Conformidade: indisponível',
+        'Total de Alertas: indisponível',
+        'Alertas Críticos: indisponível',
+        'Consentimentos Ativos: indisponível',
+        'Tentativas Bloqueadas: indisponível'
+      ].join('\n');
+    }
 
     const csv = [
       'Relatório de Conformidade',
@@ -395,6 +409,27 @@ class ComplianceReportService {
    * Gera dashboard resumido
    */
   async getDashboardMetrics(daysBack = 30) {
+    if (!this.db) {
+      logger.error('[COMPLIANCE] Database não inicializado');
+      return {
+        complianceScore: 0,
+        metrics: {
+          totalAlerts: 0,
+          criticalAlerts: 0,
+          openAlerts: 0,
+          activeConsents: 0,
+          blockedAttempts: 0,
+          totalAuditLogs: 0
+        },
+        alerts: {
+          high: 0,
+          medium: 0,
+          low: 0
+        },
+        topIssues: []
+      };
+    }
+
     const endDate = new Date();
     const startDate = new Date(endDate.getTime() - daysBack * 24 * 60 * 60 * 1000);
 

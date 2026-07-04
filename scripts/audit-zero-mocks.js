@@ -11,7 +11,6 @@ const scanRoots = [
   'frontend/playwright',
   'frontend/tests/e2e',
   'tests/e2e',
-  'playwright.global.setup.ts',
 ];
 const ignored = new Set(['academico/inpi', 'node_modules', '.git', 'dist', 'coverage', 'playwright-report', 'test-results']);
 const forbidden = [

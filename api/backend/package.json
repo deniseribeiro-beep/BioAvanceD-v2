@@ -49,10 +49,8 @@
     "clean": "node ../scripts/cleanup-complete.js",
     "test:redis": "node scripts/test-redis-connection.js",
     "test": "vitest run",
-    "test:security": "node tests/unit/security.test.js",
-    "test:consent": "node tests/unit/authConsent.test.js",
-    "test:unit": "node tests/unit/run-tests.js && node tests/unit/authConsent.test.js",
-    "test:ci": "vitest run && node tests/unit/security.test.js && node tests/unit/authConsent.test.js && node tests/compliance/generate-compliance-evidence.js"
+    "test:unit": "vitest run",
+    "test:ci": "vitest run && node tests/compliance/generate-compliance-evidence.js"
   },
   "dependencies": {
     "@influxdata/influxdb-client": "1.35.0",

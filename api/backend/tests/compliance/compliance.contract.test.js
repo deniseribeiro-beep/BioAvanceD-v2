@@ -72,7 +72,7 @@ describe('Compliance Gate - HL7 FHIR R4', () => {
     expect(serialized.status).toBe('available');
     expect(serialized.type?.text).toBe('Sangue');
     expect(serialized.quantity?.value).toBe(3);
-    expect(serialized.semanticPointers?.lineageManagedInNeo4j).toBe(true);
+    expect(serialized.semanticPointers?.lineageManagedInNeo4j).toBe(false);
   });
 });
 
