@@ -47,6 +47,18 @@ instead — coordination overhead isn't worth it for a single slice.
    exact path — the agent had to notice the mismatch and extend it
    instead. It handled it fine, but the brief was wrong going in; a
    30-second check catches this before the agent has to improvise.
+5. **Don't assert a file's specific structural details (which imports it
+   destructures, whether a value is module-scope-cached) from earlier
+   general reading — re-check the exact lines before writing them into
+   a brief as fact.** Confirmed 2026-07-03 (BioAvanceD-v2,
+   `incident.controller.js`): a brief stated as fact that the file did
+   "NOT destructure `connectMongoDB` at module scope," which was wrong —
+   it does, on line 2. The agent's first draft (written to the brief's
+   claim) made real network/DB calls and failed before it noticed the
+   mismatch and applied the correct require-cache-clear workaround
+   instead. No lasting harm since the agent self-corrected, but it's a
+   free check: `grep -n "require(" <file>` before writing any claim
+   about a file's require/destructuring shape into a brief.
 
 ## Launching and briefing each agent
 
