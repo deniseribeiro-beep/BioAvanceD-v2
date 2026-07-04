@@ -1,5 +1,39 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 const consentService = require('../../src/services/consent.service');
+const fhirSyncService = require('../../src/services/fhir-sync.service');
+const notificationService = require('../../src/services/notification.service');
+const { ObjectId } = require('mongodb');
+
+// Fake, chainable Mongo cursor helper: supports .sort().skip().limit().toArray()
+function makeCursor(items) {
+  const cursor = {
+    sort: () => cursor,
+    skip: () => cursor,
+    limit: () => cursor,
+    toArray: async () => items,
+  };
+  return cursor;
+}
+
+function makeCollection(overrides = {}) {
+  return {
+    find: vi.fn(() => makeCursor([])),
+    findOne: vi.fn(async () => null),
+    insertOne: vi.fn(async () => ({ insertedId: new ObjectId() })),
+    updateOne: vi.fn(async () => ({ modifiedCount: 1 })),
+    updateMany: vi.fn(async () => ({ modifiedCount: 1 })),
+    countDocuments: vi.fn(async () => 0),
+    ...overrides,
+  };
+}
+
+// Fake db: getCollection(db, key) resolves to db.collection(canonicalName) since
+// db.listCollections is not a function (see src/utils/collectionResolver.js).
+function makeDb(collectionsByName = {}) {
+  return {
+    collection: vi.fn((name) => collectionsByName[name] || makeCollection()),
+  };
+}
 
 describe('ConsentService.parseVersionNumber', () => {
   it('parses integer string', () => {
@@ -202,5 +236,536 @@ describe('ConsentService.validateResponsesAgainstTemplate', () => {
     expect(() =>
       consentService.validateResponsesAgainstTemplate({ permissions: [] }, {})
     ).not.toThrow();
+  });
+});
+
+describe('ConsentService.generateNextPolicyVersion', () => {
+  it('returns v1 when there are no existing templates', async () => {
+    const templates = makeCollection({ find: vi.fn(() => makeCursor([])) });
+    const db = makeDb({ consent_templates: templates });
+
+    const version = await consentService.generateNextPolicyVersion(db);
+    expect(version).toBe('v1');
+  });
+
+  it('increments past the highest existing version', async () => {
+    const templates = makeCollection({
+      find: vi.fn(() => makeCursor([{ version: 'v3' }, { version: 'v7' }, { version: 'v2' }])),
+    });
+    const db = makeDb({ consent_templates: templates });
+
+    const version = await consentService.generateNextPolicyVersion(db);
+    expect(version).toBe('v8');
+  });
+});
+
+describe('ConsentService.createTemplate', () => {
+  it('creates a template, deactivating previously active ones', async () => {
+    const templates = makeCollection({
+      find: vi.fn(() => makeCursor([])),
+      insertOne: vi.fn(async (doc) => ({ insertedId: new ObjectId() })),
+    });
+    const db = makeDb({ consent_templates: templates });
+
+    const result = await consentService.createTemplate(db, {
+      title: 'My Template',
+      content: 'Body text',
+      caae: 'CAAE-001',
+      permissions: [{ key: 'analytics', label: 'Analytics' }],
+    });
+
+    expect(result._id).toBeDefined();
+    expect(result.title).toBe('My Template');
+    expect(result.active).toBe(true);
+    expect(templates.updateMany).toHaveBeenCalledWith(
+      { active: true },
+      expect.objectContaining({ $set: expect.objectContaining({ active: false }) })
+    );
+    expect(templates.insertOne).toHaveBeenCalled();
+  });
+
+  it('rejects duplicate permission keys without inserting', async () => {
+    const templates = makeCollection({ find: vi.fn(() => makeCursor([])) });
+    const db = makeDb({ consent_templates: templates });
+
+    await expect(
+      consentService.createTemplate(db, {
+        title: 'T',
+        content: 'C',
+        permissions: [{ key: 'a', label: 'A' }, { key: 'a', label: 'B' }],
+      })
+    ).rejects.toThrow('duplicada');
+
+    expect(templates.insertOne).not.toHaveBeenCalled();
+  });
+
+  it('rejects an invalid payload before touching the database', async () => {
+    const templates = makeCollection();
+    const db = makeDb({ consent_templates: templates });
+
+    await expect(consentService.createTemplate(db, { title: '' })).rejects.toThrow();
+    expect(templates.insertOne).not.toHaveBeenCalled();
+  });
+});
+
+describe('ConsentService.getTemplateById', () => {
+  it('returns the matching template', async () => {
+    const id = new ObjectId();
+    const templates = makeCollection({ findOne: vi.fn(async () => ({ _id: id, title: 'Found' })) });
+    const db = makeDb({ consent_templates: templates });
+
+    const result = await consentService.getTemplateById(db, id.toString());
+    expect(result.title).toBe('Found');
+  });
+
+  it('returns null when nothing matches', async () => {
+    const templates = makeCollection({ findOne: vi.fn(async () => null) });
+    const db = makeDb({ consent_templates: templates });
+
+    const result = await consentService.getTemplateById(db, new ObjectId().toString());
+    expect(result).toBeNull();
+  });
+
+  it('throws for a malformed id', async () => {
+    const db = makeDb({ consent_templates: makeCollection() });
+    await expect(consentService.getTemplateById(db, 'not-an-object-id')).rejects.toThrow('inválido');
+  });
+});
+
+describe('ConsentService.updateTemplate', () => {
+  it('throws when the template to update does not exist', async () => {
+    const templates = makeCollection({ findOne: vi.fn(async () => null) });
+    const db = makeDb({ consent_templates: templates });
+
+    await expect(
+      consentService.updateTemplate(db, new ObjectId().toString(), { title: 'New' })
+    ).rejects.toThrow('não encontrado');
+  });
+
+  it('creates a new version bumping the version number', async () => {
+    const existingId = new ObjectId();
+    const existing = {
+      _id: existingId,
+      title: 'Old title',
+      content: 'Old content',
+      htmlContent: 'Old content',
+      version: 'v2',
+      caae: 'CAAE-1',
+      active: true,
+      permissions: [{ key: 'analytics', label: 'Analytics', required: false }],
+    };
+    const templates = makeCollection({
+      findOne: vi.fn(async () => existing),
+    });
+    const db = makeDb({ consent_templates: templates });
+
+    const result = await consentService.updateTemplate(db, existingId.toString(), {
+      title: 'New title',
+    });
+
+    expect(result.version).toBe('v3');
+    expect(result.previousTemplateId).toBe(String(existingId));
+    expect(templates.updateOne).toHaveBeenCalledWith(
+      { _id: existingId },
+      expect.objectContaining({ $set: expect.objectContaining({ active: false }) })
+    );
+    expect(templates.insertOne).toHaveBeenCalled();
+  });
+});
+
+describe('ConsentService.createPolicy', () => {
+  it('creates a policy document and notifies pending patients', async () => {
+    const templates = makeCollection({
+      find: vi.fn(() => makeCursor([])), // no prior versions -> v1
+      insertOne: vi.fn(async () => ({ insertedId: new ObjectId() })),
+    });
+    const pendingPatient = { _id: new ObjectId(), status: 'PENDING_CONSENT' };
+    const patients = makeCollection({
+      find: vi.fn(() => makeCursor([pendingPatient])),
+      updateOne: vi.fn(async () => ({ modifiedCount: 1 })),
+    });
+    const db = makeDb({ consent_templates: templates, patients });
+
+    vi.spyOn(notificationService, 'buildConsentMetadata').mockReturnValue({
+      token: 'tok-123',
+      createdAt: new Date(),
+      expiresAt: new Date(),
+    });
+    vi.spyOn(notificationService, 'buildConsentLink').mockReturnValue('https://example.com/consent/tok-123');
+    vi.spyOn(notificationService, 'enqueueConsentNotification').mockResolvedValue(undefined);
+
+    const payload = {
+      title: 'Policy',
+      htmlContent: '<p>content</p>',
+      validFrom: '2026-01-01T00:00:00.000Z',
+      validTo: '2026-12-31T23:59:59.000Z',
+      granularPermissions: [{ key: 'analytics', label: 'Analytics' }],
+    };
+
+    const result = await consentService.createPolicy(db, payload);
+
+    expect(result._id).toBeDefined();
+    expect(result.version).toBe('v1');
+    expect(result.revisionType).toBe('create');
+    expect(templates.insertOne).toHaveBeenCalled();
+    expect(notificationService.enqueueConsentNotification).toHaveBeenCalledWith(
+      pendingPatient,
+      'https://example.com/consent/tok-123'
+    );
+    expect(patients.updateOne).toHaveBeenCalled();
+
+    vi.restoreAllMocks();
+  });
+
+  it('rejects when validTo is earlier than validFrom', async () => {
+    const templates = makeCollection({ find: vi.fn(() => makeCursor([])) });
+    const db = makeDb({ consent_templates: templates });
+
+    await expect(
+      consentService.createPolicy(db, {
+        title: 'Policy',
+        htmlContent: '<p>content</p>',
+        validFrom: '2026-06-01T00:00:00.000Z',
+        validTo: '2026-01-01T00:00:00.000Z',
+        granularPermissions: [{ key: 'analytics', label: 'Analytics' }],
+      })
+    ).rejects.toThrow('vigência');
+
+    expect(templates.insertOne).not.toHaveBeenCalled();
+  });
+
+  it('does not fail the whole operation when patient notification throws', async () => {
+    const templates = makeCollection({ find: vi.fn(() => makeCursor([])) });
+    const patients = makeCollection({ find: vi.fn(() => { throw new Error('boom'); }) });
+    const db = makeDb({ consent_templates: templates, patients });
+
+    const payload = {
+      title: 'Policy',
+      htmlContent: '<p>content</p>',
+      validFrom: '2026-01-01T00:00:00.000Z',
+      validTo: '2026-12-31T23:59:59.000Z',
+      granularPermissions: [{ key: 'analytics', label: 'Analytics' }],
+    };
+
+    const result = await consentService.createPolicy(db, payload);
+    expect(result._id).toBeDefined();
+  });
+});
+
+describe('ConsentService.getActiveTemplate / getAllTemplates / getLatestTemplate', () => {
+  it('getActiveTemplate returns the first active template found', async () => {
+    const item = { _id: new ObjectId(), active: true };
+    const templates = makeCollection({ find: vi.fn(() => makeCursor([item])) });
+    const db = makeDb({ consent_templates: templates });
+
+    const result = await consentService.getActiveTemplate(db);
+    expect(result).toBe(item);
+  });
+
+  it('getActiveTemplate returns null when none active', async () => {
+    const templates = makeCollection({ find: vi.fn(() => makeCursor([])) });
+    const db = makeDb({ consent_templates: templates });
+
+    const result = await consentService.getActiveTemplate(db);
+    expect(result).toBeNull();
+  });
+
+  it('getAllTemplates returns the full array from the collection', async () => {
+    const items = [{ _id: new ObjectId() }, { _id: new ObjectId() }];
+    const templates = makeCollection({ find: vi.fn(() => makeCursor(items)) });
+    const db = makeDb({ consent_templates: templates });
+
+    const result = await consentService.getAllTemplates(db);
+    expect(result).toEqual(items);
+  });
+
+  it('getLatestTemplate returns the first item in the cursor', async () => {
+    const items = [{ _id: new ObjectId(), version: 'v9' }];
+    const templates = makeCollection({ find: vi.fn(() => makeCursor(items)) });
+    const db = makeDb({ consent_templates: templates });
+
+    const result = await consentService.getLatestTemplate(db);
+    expect(result).toEqual(items[0]);
+  });
+});
+
+describe('ConsentService.getActivePolicy / getAllPolicies / getPoliciesHistory / getActivePoliciesWithCaae', () => {
+  it('getActivePolicy returns the first active item', async () => {
+    const item = { _id: new ObjectId(), active: true };
+    const templates = makeCollection({ find: vi.fn(() => makeCursor([item])) });
+    const db = makeDb({ consent_templates: templates });
+
+    const result = await consentService.getActivePolicy(db);
+    expect(result).toBe(item);
+  });
+
+  it('getAllPolicies returns everything from the collection', async () => {
+    const items = [{ _id: new ObjectId() }];
+    const templates = makeCollection({ find: vi.fn(() => makeCursor(items)) });
+    const db = makeDb({ consent_templates: templates });
+
+    const result = await consentService.getAllPolicies(db);
+    expect(result).toEqual(items);
+  });
+
+  it('getPoliciesHistory paginates and reports totals', async () => {
+    const items = [{ _id: new ObjectId() }];
+    const templates = makeCollection({
+      find: vi.fn(() => makeCursor(items)),
+      countDocuments: vi.fn(async () => 25),
+    });
+    const db = makeDb({ consent_templates: templates });
+
+    const result = await consentService.getPoliciesHistory(db, { page: 2, limit: 10 });
+    expect(result.items).toEqual(items);
+    expect(result.pagination).toEqual({ page: 2, limit: 10, total: 25, totalPages: 3 });
+  });
+
+  it('getPoliciesHistory filters by versionGroupId when provided', async () => {
+    const templates = makeCollection({ find: vi.fn(() => makeCursor([])) });
+    const db = makeDb({ consent_templates: templates });
+
+    await consentService.getPoliciesHistory(db, { groupId: 'group-1' });
+    expect(templates.find).toHaveBeenCalledWith({ versionGroupId: 'group-1' });
+  });
+
+  it('getActivePoliciesWithCaae only queries active items with a caae', async () => {
+    const items = [{ _id: new ObjectId(), caae: 'CAAE-1' }];
+    const templates = makeCollection({ find: vi.fn(() => makeCursor(items)) });
+    const db = makeDb({ consent_templates: templates });
+
+    const result = await consentService.getActivePoliciesWithCaae(db);
+    expect(result).toEqual(items);
+    expect(templates.find).toHaveBeenCalledWith({
+      active: true,
+      caae: { $exists: true, $nin: ['', null] },
+    });
+  });
+});
+
+describe('ConsentService.updatePolicy', () => {
+  it('delegates to createPolicy with previousPolicyId set', async () => {
+    const spy = vi.spyOn(consentService, 'createPolicy').mockResolvedValue({ _id: 'fake' });
+    const db = makeDb();
+    const policyId = new ObjectId().toString();
+
+    const result = await consentService.updatePolicy(db, policyId, { title: 'x' });
+
+    expect(spy).toHaveBeenCalledWith(db, { title: 'x' }, { previousPolicyId: policyId });
+    expect(result).toEqual({ _id: 'fake' });
+
+    spy.mockRestore();
+  });
+});
+
+describe('ConsentService.createPatientConsent', () => {
+  const templateId = new ObjectId();
+  const activeTemplate = {
+    _id: templateId,
+    active: true,
+    permissions: [{ key: 'analytics', required: false }],
+  };
+  // signatureImageBase64/signatureName are optional in the schema, but
+  // normalizeSignaturePayload always sets signatureHash: null and
+  // signatureName/signatureImageBase64: '' when no image is supplied, and the
+  // ajv schema enforces minLength:1 / type:string on those *optional*
+  // properties whenever they are present. So a consent with no signature at
+  // all currently fails schema validation unconditionally - see finding in
+  // report. Work around it here by always supplying a valid signature image.
+  const validSignature = { signatureImageBase64: Buffer.from('sig').toString('base64'), signatureName: 'Jane Doe' };
+
+  beforeEach(() => {
+    vi.spyOn(fhirSyncService, 'upsertConsentFromLegacy').mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('creates a consent when patient and template are valid', async () => {
+    // NOTE: validatePatientConsentPayload runs the payload through an ajv
+    // schema configured with `removeAdditional: 'all'`. Because
+    // patientConsentSchema.properties.responses declares only
+    // `additionalProperties: { type: 'boolean' }` and no nested `properties`,
+    // ajv treats every key inside `responses` as "additional" and strips all
+    // of them - so `responses` always comes out as `{}` regardless of what
+    // was submitted. See finding in report. We use a template with no
+    // required permissions here so the (always-empty) responses object still
+    // passes validateResponsesAgainstTemplate.
+    const noPermissionsTemplate = { ...activeTemplate, permissions: [] };
+    const patients = makeCollection({ findOne: vi.fn(async () => ({ patientID: '12345678' })) });
+    const templates = makeCollection({ findOne: vi.fn(async () => noPermissionsTemplate) });
+    const consents = makeCollection({ insertOne: vi.fn(async () => ({ insertedId: new ObjectId() })) });
+    const db = makeDb({ patients, consent_templates: templates, patientConsents: consents });
+
+    const result = await consentService.createPatientConsent(db, {
+      patientId: '12345678',
+      templateId: templateId.toString(),
+      responses: { analytics: true },
+      ...validSignature,
+    });
+
+    expect(result._id).toBeDefined();
+    expect(result.status).toBe('ACTIVE');
+    expect(consents.updateMany).toHaveBeenCalledWith(
+      { patientId: '12345678', status: 'ACTIVE' },
+      expect.objectContaining({ $set: expect.objectContaining({ status: 'REVOKED' }) })
+    );
+    expect(fhirSyncService.upsertConsentFromLegacy).toHaveBeenCalled();
+  });
+
+  it('rejects when the patient does not exist', async () => {
+    const patients = makeCollection({ findOne: vi.fn(async () => null) });
+    const db = makeDb({ patients, consent_templates: makeCollection(), patientConsents: makeCollection() });
+
+    await expect(
+      consentService.createPatientConsent(db, {
+        patientId: '12345678',
+        templateId: templateId.toString(),
+        responses: {},
+        ...validSignature,
+      })
+    ).rejects.toThrow('não encontrado');
+  });
+
+  it('rejects when the template is not active', async () => {
+    const patients = makeCollection({ findOne: vi.fn(async () => ({ patientID: '12345678' })) });
+    const inactiveTemplate = { ...activeTemplate, active: false };
+    const templates = makeCollection({ findOne: vi.fn(async () => inactiveTemplate) });
+    const db = makeDb({ patients, consent_templates: templates, patientConsents: makeCollection() });
+
+    await expect(
+      consentService.createPatientConsent(db, {
+        patientId: '12345678',
+        templateId: templateId.toString(),
+        responses: { analytics: true },
+        ...validSignature,
+      })
+    ).rejects.toThrow('não está ativo');
+  });
+
+  it('documents that ajv strips all keys from responses before template validation (bug)', async () => {
+    // Template has a required permission; since validatePatientConsentPayload
+    // wipes out `responses` to `{}` (see note above), the missing-required
+    // check on validateResponsesAgainstTemplate always fires - even though
+    // the caller supplied a truthy answer for the required permission.
+    const templateWithRequiredPermission = {
+      ...activeTemplate,
+      permissions: [{ key: 'analytics', required: true }],
+    };
+    const patients = makeCollection({ findOne: vi.fn(async () => ({ patientID: '12345678' })) });
+    const templates = makeCollection({ findOne: vi.fn(async () => templateWithRequiredPermission) });
+    const consents = makeCollection();
+    const db = makeDb({ patients, consent_templates: templates, patientConsents: consents });
+
+    await expect(
+      consentService.createPatientConsent(db, {
+        patientId: '12345678',
+        templateId: templateId.toString(),
+        responses: { analytics: true },
+        ...validSignature,
+      })
+    ).rejects.toThrow('inválidas');
+  });
+
+  it('rejects an invalid templateId format', async () => {
+    const patients = makeCollection({ findOne: vi.fn(async () => ({ patientID: '12345678' })) });
+    const db = makeDb({ patients, consent_templates: makeCollection(), patientConsents: makeCollection() });
+
+    await expect(
+      consentService.createPatientConsent(db, {
+        patientId: '12345678',
+        templateId: 'not-a-valid-object-id',
+        responses: {},
+        ...validSignature,
+      })
+    ).rejects.toThrow('templateId inválido');
+  });
+});
+
+describe('ConsentService.revokeConsent', () => {
+  beforeEach(() => {
+    vi.spyOn(fhirSyncService, 'upsertConsentFromLegacy').mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('revokes an active consent', async () => {
+    const consentId = new ObjectId();
+    const consent = { _id: consentId, status: 'ACTIVE', patientId: '12345678' };
+    const consents = makeCollection({ findOne: vi.fn(async () => consent) });
+    const db = makeDb({ patientConsents: consents });
+
+    const result = await consentService.revokeConsent(db, consentId.toString());
+
+    expect(result.status).toBe('REVOKED');
+    expect(consents.updateOne).toHaveBeenCalledWith(
+      { _id: consentId },
+      expect.objectContaining({ $set: expect.objectContaining({ status: 'REVOKED' }) })
+    );
+    expect(fhirSyncService.upsertConsentFromLegacy).toHaveBeenCalled();
+  });
+
+  it('returns the consent unchanged when it is already revoked', async () => {
+    const consentId = new ObjectId();
+    const consent = { _id: consentId, status: 'REVOKED' };
+    const consents = makeCollection({ findOne: vi.fn(async () => consent) });
+    const db = makeDb({ patientConsents: consents });
+
+    const result = await consentService.revokeConsent(db, consentId.toString());
+
+    expect(result).toBe(consent);
+    expect(consents.updateOne).not.toHaveBeenCalled();
+  });
+
+  it('returns null when the consent does not exist', async () => {
+    const consents = makeCollection({ findOne: vi.fn(async () => null) });
+    const db = makeDb({ patientConsents: consents });
+
+    const result = await consentService.revokeConsent(db, new ObjectId().toString());
+    expect(result).toBeNull();
+  });
+
+  it('throws for a malformed consent id', async () => {
+    const db = makeDb({ patientConsents: makeCollection() });
+    await expect(consentService.revokeConsent(db, 'not-an-object-id')).rejects.toThrow('inválido');
+  });
+});
+
+describe('ConsentService.getPatientConsent', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('returns the FHIR-first consent when available', async () => {
+    const fhirConsent = { _id: 'fhir-1', status: 'ACTIVE' };
+    vi.spyOn(fhirSyncService, 'getPatientConsentFhirFirst').mockResolvedValue(fhirConsent);
+    const consents = makeCollection();
+    const db = makeDb({ patientConsents: consents });
+
+    const result = await consentService.getPatientConsent(db, '12345678');
+    expect(result).toBe(fhirConsent);
+    expect(consents.find).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the raw collection when FHIR has nothing', async () => {
+    vi.spyOn(fhirSyncService, 'getPatientConsentFhirFirst').mockResolvedValue(null);
+    const legacyConsent = { _id: 'legacy-1', status: 'ACTIVE' };
+    const consents = makeCollection({ find: vi.fn(() => makeCursor([legacyConsent])) });
+    const db = makeDb({ patientConsents: consents });
+
+    const result = await consentService.getPatientConsent(db, '12345678');
+    expect(result).toBe(legacyConsent);
+  });
+
+  it('returns null when nothing is found anywhere', async () => {
+    vi.spyOn(fhirSyncService, 'getPatientConsentFhirFirst').mockResolvedValue(null);
+    const consents = makeCollection({ find: vi.fn(() => makeCursor([])) });
+    const db = makeDb({ patientConsents: consents });
+
+    const result = await consentService.getPatientConsent(db, '12345678');
+    expect(result).toBeNull();
   });
 });
