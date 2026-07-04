@@ -284,8 +284,8 @@ are never numeric `0`, but worth a presence-check fix).
 
 Since baseline (21st slice, parallel-test-agents): `consent.service.js`,
 `security.service.js`, and `auth.routes.js` moved off the LOW bucket — a
-3-agent parallel-test-agents slice (33 + 37 + 43 new/added tests
-respectively — consent.service.unit.test.js went from 35→68 tests,
+3-agent parallel-test-agents slice (34 + 37 + 43 new/added tests
+respectively — consent.service.unit.test.js went from 35→69 tests,
 security.service.unit.test.js from 13→50, and auth.routes.test.js's
 entire prior content was replaced, from 0 real tests to 43 — all green,
 independently re-verified together). `auth.routes.test.js` previously
@@ -296,16 +296,23 @@ with real supertest tests mounting the actual router via
 `createRequire`, which is almost certainly why the route file sat at
 28% coverage despite "having tests." Exact new percentages not yet
 re-measured, will land at the next full reconcile. This slice surfaced
-one plausible finding worth triage (not yet filed): `POST
-/two-factor/disable` is gated behind `authenticate`, but `disable` is
-missing from `authenticate`'s MFA-setup-route exemption list (unlike
-`/two-factor/qr`, `/two-factor/enable`, `/mfa/setup`, `/mfa/enable`),
-so a caller needs a fully live session just to reach a stub endpoint
-that always 501s — looks like an oversight in the exemption list, not
-intentional. Also noted for awareness, out of scope: `authenticate`'s
-`isSecurityMFASetupRoute` check uses `req.path.includes(...)` (substring
-match) rather than an exact route match, a possible accidental
-path-prefix bypass surface.
+three findings, all filed: #61 (`POST /two-factor/disable` is gated
+behind `authenticate`, but `disable` is missing from `authenticate`'s
+MFA-setup-route exemption list unlike `/two-factor/qr`/`enable`/
+`mfa/setup`/`enable`, so a caller needs a fully live session just to
+reach a stub endpoint that always 501s), #62 (`consent.service.js`'s
+`createTemplate` rejects any template without an explicit `caae` even
+though `validateTemplatePayload` treats it as optional — a normalize-
+vs-model-validate mismatch), and #63 (`consent.service.js`'s ajv
+`removeAdditional: 'all'` on the `patientConsentSchema` strips every
+key out of a submitted `responses` object before
+`validateResponsesAgainstTemplate` ever sees it, so
+`createPatientConsent` always operates on `{}` regardless of what the
+client submits — confirmed with a failing-if-fixed test, likely
+production-impacting). Also noted for awareness, out of scope: 
+`authenticate`'s `isSecurityMFASetupRoute` check uses
+`req.path.includes(...)` (substring match) rather than an exact route
+match, a possible accidental path-prefix bypass surface.
 
 ## How to use this when picking a slice
 
