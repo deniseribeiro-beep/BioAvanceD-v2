@@ -350,6 +350,20 @@ lockout/success branches plus the previously-untested
 found; exact new percentage not yet re-measured, will land at the next
 full reconcile.
 
+Since baseline (25th slice): `session.service.js` moved off the LOW
+bucket — 27 new unit tests added to the existing
+`tests/unit/session.service.unit.test.js` (20 → 47 total), covering all
+the db-backed methods the prior tests skipped: `createSession`
+(cache+persist, error propagation), `updateActivity` (cache hit, legacy
+plain-token fallback, expired-session invalidation, db-write-error
+swallowing), `verifySession` (not-found/revoked/expired/valid/error
+paths), `invalidateSession`/`invalidateUserSessions` (cache eviction +
+db update, error swallowing), `cleanupExpiredSessions`,
+`listUserSessions` (summary-shape mapping, current-session detection),
+`revokeSessionById`, `revokeAllOtherSessions`, `getSessionByRefreshToken`,
+and `rotateSessionTokens`. All green. No product bugs found. Exact new
+percentage not yet re-measured, will land at the next full reconcile.
+
 ## How to use this when picking a slice
 
 1. Prefer a **ZERO** file with real logic (not a script/model/port
@@ -413,7 +427,6 @@ src/services/patientBiomarkerTimeseries.service.js                  39.02%
 src/database/neo4j.js                                               40%
 src/models/StorageBox.js                                            41.74%
 src/services/patient.service.js                                     42.58%
-src/services/session.service.js                                     43.75%
 src/services/miabisValidator.service.js                             44.82%
 src/services/sampleComplianceSync.service.js                        45.45%
 src/services/batch-validation-engine.service.js                     45.76%
