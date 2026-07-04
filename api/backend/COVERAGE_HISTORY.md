@@ -895,3 +895,17 @@ destructured imports (`getCollection`, `generateSampleHash`) and
 direct reassignment for its whole-module imports
 (`notificationService`, `patientIdentityService`, `auditLogger`,
 `qualityDomain`). No product bugs found.
+
+`src/interface/routes/policy.routes.js` moved from 54.16% to 98.95%
+lines (2026-07-04) via new `tests/unit/policy.routes.test.js` (25
+tests, no prior test file existed). Covers all 6 CRUD routes: `GET /`,
+`GET /:id` (numeric-policyId lookup, ObjectId fallback, 404, 500),
+`GET /:id/active-limit` (max/min threshold selection, unit default,
+404, 500), `POST /` (validation failure, happy path, insert-throws),
+`PUT /:id` (404, happy path, throws), `DELETE /:id` (404, happy path,
+throws). `PolicyModel` is a plain static class referenced as
+`PolicyModel.validate`/`.create` (not destructured), so no
+require.cache trick was needed for it — only `authenticate`/
+`requirePermission` needed the route-testing pattern. No product bugs
+found; remaining gap is one branch in the `GET /:id` numeric-then-
+ObjectId fallback not worth a dedicated test.

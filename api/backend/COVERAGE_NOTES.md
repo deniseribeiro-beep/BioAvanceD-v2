@@ -90,19 +90,18 @@ bucket just below for a smaller, incremental gain.
 
 ## MID-LOW coverage (50-69% lines) — re-measured 2026-07-04, commit `7826467c`
 
-Sorted ascending (worst first), 26 files — the next tier up once the
+Sorted ascending (worst first), 25 files — the next tier up once the
 ZERO bucket's real-logic file (`worker.js`) is done. Re-derived from
 `coverage/coverage-summary.json`, not hand-maintained. (Original list
 had 32; `equipment-sensor-quarantine.service.js`, `sample.routes.js`,
 `MongoStorageRepository.js` (confirmed 100% lines after fixing a
 coverage-measurement bug, see `testing-conventions`),
 `cid.routes.js` (72% lines; remaining gap is dead code, issue #82),
-`sample-file.controller.js` (69% lines), and `intakeWizard.js` (96%
-lines) all moved to
+`sample-file.controller.js` (69% lines), `intakeWizard.js` (96%
+lines), and `policy.routes.js` (99% lines) all moved to
 GOOD — see `COVERAGE_HISTORY.md`.)
 
 ```
-src/interface/routes/policy.routes.js                                 54.16%
 src/services/patient.service.js                                       55.5%
 src/services/import-lgpd.service.js                                   56.01%
 src/routes/dictionary.js                                              56.16%
