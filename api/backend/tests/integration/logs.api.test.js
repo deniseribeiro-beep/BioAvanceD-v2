@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 const request = require('supertest');
 const jwt = require('jsonwebtoken');
+const { ObjectId } = require('mongodb');
 
 process.env.NODE_ENV = 'test';
 process.env.JWT_SECRET = process.env.JWT_SECRET || 'vitest-secret-key';
@@ -10,9 +11,9 @@ const sessionService = require('../../src/services/session.service');
 const logService = require('../../src/services/log.service');
 const { createCollectionMock, createDbMock } = require('../factories/db.factory');
 
-function makeToken(accessType = 4, roleName = 'Administrador') {
+function makeToken({ accessType = 4, roleName = 'Administrador' } = {}) {
   return jwt.sign(
-    { userID: 'qa-admin-1', accessType, roleName, name: 'QA Admin', mfaVerified: true },
+    { userID: 'qa-user-1', accessType, roleName, name: 'QA User', mfaVerified: true },
     process.env.JWT_SECRET,
     { expiresIn: '1h' }
   );
@@ -23,11 +24,21 @@ function givenSession() {
   vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 'session-1' });
 }
 
-const FAKE_LOGS = [
-  { logId: 'l1', action: 'CREATE', entity: 'Sample', result: 'success', severity: 'info', timestamp: new Date().toISOString() },
-];
+// Mirrors the documented pattern from location.api.test.js: `authenticate`
+// middleware short-circuits with its own 503 (different shape) before the
+// route handler's own `if (!db)` branch ever runs when app.locals.db is
+// falsy up front. To exercise the route's own guard we let auth pass with a
+// real db, then flip app.locals.db to null as a side effect inside the
+// mocked verifySession call.
+function givenSessionThenDbDisappears() {
+  vi.spyOn(sessionService, 'verifySession').mockImplementation(async () => {
+    app.locals.db = null;
+    return { valid: true, session: { sessionID: 'session-1' } };
+  });
+  vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 'session-1' });
+}
 
-describe('GET /api/logs', () => {
+describe('requireAuditReader (via GET /api/logs)', () => {
   beforeEach(() => { givenSession(); });
   afterEach(() => { vi.restoreAllMocks(); });
 
@@ -36,24 +47,123 @@ describe('GET /api/logs', () => {
     expect(res.status).toBe(401);
   });
 
-  it('returns 403 for non-admin/non-auditor user (accessType 2, Técnico)', async () => {
+  it('allows accessType 4 through', async () => {
+    vi.spyOn(logService, 'getLogs').mockResolvedValue({ logs: [], total: 0 });
     app.locals.db = createDbMock({});
     const res = await request(app)
       .get('/api/logs')
-      .set('Authorization', `Bearer ${makeToken(2, 'Técnico')}`);
-    expect(res.status).toBe(403);
+      .set('Authorization', `Bearer ${makeToken({ accessType: 4, roleName: 'Pesquisador' })}`);
+    expect(res.status).toBe(200);
   });
 
-  it('returns log list for admin user', async () => {
-    vi.spyOn(logService, 'getLogs').mockResolvedValue({ logs: FAKE_LOGS, total: 1, page: 1, totalPages: 1 });
+  it('allows roleName "Admin" through', async () => {
+    vi.spyOn(logService, 'getLogs').mockResolvedValue({ logs: [], total: 0 });
     app.locals.db = createDbMock({});
-
     const res = await request(app)
       .get('/api/logs')
-      .set('Authorization', `Bearer ${makeToken(4, 'Administrador')}`);
-
+      .set('Authorization', `Bearer ${makeToken({ accessType: 1, roleName: 'Admin' })}`);
     expect(res.status).toBe(200);
-    expect(res.body.success).toBe(true);
+  });
+
+  it('allows accented roleName "Administrador" through', async () => {
+    vi.spyOn(logService, 'getLogs').mockResolvedValue({ logs: [], total: 0 });
+    app.locals.db = createDbMock({});
+    const res = await request(app)
+      .get('/api/logs')
+      .set('Authorization', `Bearer ${makeToken({ accessType: 1, roleName: 'Administrador' })}`);
+    expect(res.status).toBe(200);
+  });
+
+  it('allows a roleName merely containing "auditor" as a substring', async () => {
+    vi.spyOn(logService, 'getLogs').mockResolvedValue({ logs: [], total: 0 });
+    app.locals.db = createDbMock({});
+    const res = await request(app)
+      .get('/api/logs')
+      .set('Authorization', `Bearer ${makeToken({ accessType: 1, roleName: 'Auditor Clínico' })}`);
+    expect(res.status).toBe(200);
+  });
+
+  it('rejects a plain user role with exact 403 error shape', async () => {
+    app.locals.db = createDbMock({});
+    const res = await request(app)
+      .get('/api/logs')
+      .set('Authorization', `Bearer ${makeToken({ accessType: 1, roleName: 'Pesquisador' })}`);
+    expect(res.status).toBe(403);
+    expect(res.body).toEqual({
+      success: false,
+      error: 'Acesso negado',
+      message: 'Apenas perfis Admin ou Auditor podem acessar trilhas de auditoria.',
+    });
+  });
+});
+
+describe('GET /api/logs', () => {
+  beforeEach(() => { givenSession(); });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it('returns 503 when db disappears after auth (route-level guard)', async () => {
+    givenSessionThenDbDisappears();
+    const res = await request(app)
+      .get('/api/logs')
+      .set('Authorization', `Bearer ${makeToken()}`);
+    expect(res.status).toBe(503);
+    expect(res.body).toEqual({ success: false, error: 'Banco de dados não disponível' });
+  });
+
+  it('wraps logService.getLogs result in {success, data}', async () => {
+    const fakeResult = { logs: [{ logId: 'l1' }], total: 1 };
+    vi.spyOn(logService, 'getLogs').mockResolvedValue(fakeResult);
+    app.locals.db = createDbMock({});
+    const res = await request(app)
+      .get('/api/logs?severity=high')
+      .set('Authorization', `Bearer ${makeToken()}`);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ success: true, data: fakeResult });
+    expect(logService.getLogs).toHaveBeenCalledWith(app.locals.db, expect.objectContaining({ severity: 'high' }));
+  });
+});
+
+describe('GET /api/logs/all', () => {
+  beforeEach(() => { givenSession(); });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it('forces limit:5000 and page:1 regardless of query params', async () => {
+    vi.spyOn(logService, 'getLogs').mockResolvedValue({ logs: [], total: 0 });
+    app.locals.db = createDbMock({});
+    const res = await request(app)
+      .get('/api/logs/all?limit=10&page=3&severity=low')
+      .set('Authorization', `Bearer ${makeToken()}`);
+    expect(res.status).toBe(200);
+    expect(logService.getLogs).toHaveBeenCalledWith(
+      app.locals.db,
+      expect.objectContaining({ limit: '10', page: 1, severity: 'low' })
+    );
+  });
+
+  it('defaults limit to 5000 when none supplied', async () => {
+    vi.spyOn(logService, 'getLogs').mockResolvedValue({ logs: [], total: 0 });
+    app.locals.db = createDbMock({});
+    const res = await request(app)
+      .get('/api/logs/all')
+      .set('Authorization', `Bearer ${makeToken()}`);
+    expect(res.status).toBe(200);
+    expect(logService.getLogs).toHaveBeenCalledWith(app.locals.db, expect.objectContaining({ limit: 5000, page: 1 }));
+  });
+});
+
+describe('POST /api/logs/query', () => {
+  beforeEach(() => { givenSession(); });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it('reads filters from req.body, not query', async () => {
+    vi.spyOn(logService, 'getLogs').mockResolvedValue({ logs: [], total: 0 });
+    app.locals.db = createDbMock({});
+    const res = await request(app)
+      .post('/api/logs/query?ignored=true')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({ module: 'samples', severity: 'critical' });
+    expect(res.status).toBe(200);
+    expect(logService.getLogs).toHaveBeenCalledWith(app.locals.db, { module: 'samples', severity: 'critical' });
   });
 });
 
@@ -66,17 +176,29 @@ describe('POST /api/logs/register', () => {
     expect(res.status).toBe(401);
   });
 
-  it('registers a log entry for any authenticated user', async () => {
-    vi.spyOn(logService, 'createLog').mockResolvedValue({ logId: 'new-log', action: 'TEST' });
+  it('allows any authenticated user (no requireAuditReader) and returns 201 on success', async () => {
+    const created = { _id: 'log-1', action: 'LOGIN' };
+    vi.spyOn(logService, 'createLog').mockResolvedValue(created);
     app.locals.db = createDbMock({});
-
     const res = await request(app)
       .post('/api/logs/register')
-      .set('Authorization', `Bearer ${makeToken(2, 'Técnico')}`)
-      .send({ action: 'TEST', entity: 'Sample', result: 'success' });
+      .set('Authorization', `Bearer ${makeToken({ accessType: 1, roleName: 'Pesquisador' })}`)
+      .send({ action: 'LOGIN' });
+    expect(res.status).toBe(201);
+    expect(res.body).toEqual({ success: true, data: created });
+  });
 
-    expect([200, 201]).toContain(res.status);
-    expect(res.body.success).toBe(true);
+  it('returns 400 (not 500) when logService.createLog rejects', async () => {
+    vi.spyOn(logService, 'createLog').mockRejectedValue(new Error('write failed'));
+    app.locals.db = createDbMock({});
+    const res = await request(app)
+      .post('/api/logs/register')
+      .set('Authorization', `Bearer ${makeToken({ accessType: 1, roleName: 'Pesquisador' })}`)
+      .send({ action: 'LOGIN' });
+    expect(res.status).toBe(400);
+    expect(res.body.success).toBe(false);
+    expect(res.body.error).toBe('Erro ao registrar log');
+    expect(res.body.message).toBe('write failed');
   });
 });
 
@@ -84,23 +206,122 @@ describe('GET /api/logs/export/csv', () => {
   beforeEach(() => { givenSession(); });
   afterEach(() => { vi.restoreAllMocks(); });
 
-  it('returns 403 for non-admin user', async () => {
+  it('rejects non-admin/non-auditor user', async () => {
     app.locals.db = createDbMock({});
     const res = await request(app)
       .get('/api/logs/export/csv')
-      .set('Authorization', `Bearer ${makeToken(2, 'Técnico')}`);
+      .set('Authorization', `Bearer ${makeToken({ accessType: 2, roleName: 'Técnico' })}`);
     expect(res.status).toBe(403);
   });
 
-  it('returns CSV content for admin', async () => {
-    vi.spyOn(logService, 'getLogs').mockResolvedValue({ logs: FAKE_LOGS, total: 1 });
+  it('sets headers and returns CSV body with quote-escaping', async () => {
+    const logs = [
+      {
+        timestamp: '2026-01-01T00:00:00Z',
+        userName: 'Alice "Al" Smith',
+        action: 'CREATE',
+        entity: 'sample',
+        result: 'success',
+        severity: 'low',
+        module: 'samples',
+        ipSource: '127.0.0.1',
+        message: 'ok',
+      },
+    ];
+    vi.spyOn(logService, 'getLogs').mockResolvedValue({ logs });
     app.locals.db = createDbMock({});
-
     const res = await request(app)
       .get('/api/logs/export/csv')
-      .set('Authorization', `Bearer ${makeToken(4, 'Administrador')}`);
+      .set('Authorization', `Bearer ${makeToken()}`);
 
     expect(res.status).toBe(200);
-    expect(res.headers['content-type']).toMatch(/text\/csv/);
+    expect(res.headers['content-type']).toBe('text/csv; charset=utf-8');
+    expect(res.headers['content-disposition']).toMatch(/^attachment; filename=logs_\d{4}-\d{2}-\d{2}\.csv$/);
+
+    const lines = res.text.split('\n');
+    expect(lines[0]).toBe('timestamp,userName,action,entity,result,severity,module,ipSource,message');
+    // embedded quote should be doubled per buildCsv escape logic
+    expect(lines[1]).toContain('"Alice ""Al"" Smith"');
+
+    expect(logService.getLogs).toHaveBeenCalledWith(app.locals.db, expect.objectContaining({ limit: 10000, page: 1 }));
+  });
+
+  it('returns just the header row when there are no logs', async () => {
+    vi.spyOn(logService, 'getLogs').mockResolvedValue({ logs: [] });
+    app.locals.db = createDbMock({});
+    const res = await request(app)
+      .get('/api/logs/export/csv')
+      .set('Authorization', `Bearer ${makeToken()}`);
+    expect(res.status).toBe(200);
+    expect(res.text).toBe('timestamp,userName,action,entity,result,severity,module,ipSource,message');
+  });
+});
+
+describe('GET /api/logs/export/xlsx', () => {
+  beforeEach(() => { givenSession(); });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it('returns the same CSV-shaped bytes as the csv endpoint, with xlsx headers', async () => {
+    const logs = [{ timestamp: 't1', userName: 'Bob', action: 'READ', entity: 'e', result: 'ok', severity: 'low', module: 'm', ipSource: '1.1.1.1', message: 'hi' }];
+    vi.spyOn(logService, 'getLogs').mockResolvedValue({ logs });
+    app.locals.db = createDbMock({});
+    const res = await request(app)
+      .get('/api/logs/export/xlsx')
+      .set('Authorization', `Bearer ${makeToken()}`);
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toBe('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    expect(res.headers['content-disposition']).toMatch(/^attachment; filename=logs_\d{4}-\d{2}-\d{2}\.xlsx$/);
+
+    // body is really CSV text encoded as bytes, not real xlsx binary
+    expect(res.text).toBe('timestamp,userName,action,entity,result,severity,module,ipSource,message\n"t1","Bob","READ","e","ok","low","m","1.1.1.1","hi"');
+  });
+});
+
+describe('GET /api/logs/:id', () => {
+  beforeEach(() => { givenSession(); });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it('finds a log by logId when id is not ObjectId-shaped', async () => {
+    const log = { logId: 'my-log-id', action: 'X' };
+    const findOne = vi.fn().mockResolvedValue(log);
+    const coll = createCollectionMock({ findOne });
+    app.locals.db = createDbMock({ logs: coll });
+
+    const res = await request(app)
+      .get('/api/logs/my-log-id')
+      .set('Authorization', `Bearer ${makeToken()}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ success: true, data: log });
+    expect(findOne).toHaveBeenCalledWith({ logId: 'my-log-id' });
+  });
+
+  it('finds a log by _id when id is a valid ObjectId string', async () => {
+    const objId = new ObjectId();
+    const log = { _id: objId, action: 'Y' };
+    const findOne = vi.fn().mockResolvedValue(log);
+    const coll = createCollectionMock({ findOne });
+    app.locals.db = createDbMock({ logs: coll });
+
+    const res = await request(app)
+      .get(`/api/logs/${objId.toString()}`)
+      .set('Authorization', `Bearer ${makeToken()}`);
+
+    expect(res.status).toBe(200);
+    expect(findOne).toHaveBeenCalledWith({ _id: expect.any(ObjectId) });
+    expect(findOne.mock.calls[0][0]._id.toString()).toBe(objId.toString());
+  });
+
+  it('returns 404 when no log is found', async () => {
+    const coll = createCollectionMock({ findOne: vi.fn().mockResolvedValue(null) });
+    app.locals.db = createDbMock({ logs: coll });
+
+    const res = await request(app)
+      .get('/api/logs/nonexistent-id')
+      .set('Authorization', `Bearer ${makeToken()}`);
+
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ success: false, error: 'Log não encontrado' });
   });
 });
