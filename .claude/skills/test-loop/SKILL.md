@@ -72,7 +72,11 @@ One slice = one module/route/spec, sized to finish in the iteration:
   gap — it's a committed snapshot of per-file coverage so you don't need
   to run `npx vitest run --coverage` (~2-3 min over 258 files) at the
   start of every session. Pick from its ZERO/LOW buckets, favoring real
-  logic over scripts/interfaces per its own guidance.
+  logic over scripts/interfaces per its own guidance. This file is kept
+  deliberately lean (current buckets + latest reconcile only, as of
+  2026-07-04) — don't read its sibling `COVERAGE_HISTORY.md` unless you
+  specifically need past-slice narrative (what a prior slice covered, why
+  an issue was filed); it's an archive, not part of normal slice-picking.
 - Prefer untested code with real logic (validators, services, route
   handlers, state transitions) over padding thin wrappers.
 - Weigh whether a candidate file is legacy (superseded, dead paths,
@@ -111,7 +115,10 @@ One slice = one module/route/spec, sized to finish in the iteration:
   call during a loop iteration, not just a rule to have read.
 - **Update `api/backend/COVERAGE_NOTES.md` in the same commit** — move
   the file(s) you just covered out of the ZERO/LOW bucket (or into a
-  truer one). Don't let the tracker drift from the code.
+  truer one). Don't let the tracker drift from the code. Put the
+  slice's narrative (what was covered, bugs found/filed) in
+  `api/backend/COVERAGE_HISTORY.md` instead — keep `COVERAGE_NOTES.md`
+  itself to buckets and reconcile numbers only.
 
 ## When a test finds a real bug
 
