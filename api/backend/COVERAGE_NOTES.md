@@ -364,6 +364,31 @@ db update, error swallowing), `cleanupExpiredSessions`,
 and `rotateSessionTokens`. All green. No product bugs found. Exact new
 percentage not yet re-measured, will land at the next full reconcile.
 
+Since baseline (26th slice): `import-lgpd.service.js`'s `importPatients` method
+got 11 new DB-backed unit tests in a new
+`tests/unit/import-lgpd.service.importPatients.unit.test.js` (all green),
+covering the empty-file/missing-headers throws, per-row rejection branches
+(invalid email, missing/invalid/not-found consentTemplateId, duplicate
+patient), the full success path (ID generation, PENDING_CONSENT status,
+insert, consent notification enqueue + `consentNotifiedAt` update), the
+notification-enqueue-failure-is-non-fatal path, and the `groupFields`
+consentTemplateId fallback. `getCollection`/`generateUniquePatientID` are
+destructured at module scope in the source, so per `testing-conventions`'
+`vi.spyOn`-on-destructured-import gotcha, these were driven for real against
+a fake `db.collection()` rather than mocked; `notificationService`/
+`patientService` are required as whole module objects (not destructured), so
+`vi.spyOn` on the real singletons worked normally. This slice surfaced one
+confirmed bug, filed as #65: `results.total++` sits after the row's `try`
+block, so the `continue` on every early per-field validation rejection (bad
+email, missing/invalid consentTemplateId, template-not-found, missing name/
+birthDate/sex, duplicate patient) skips it — `total` only counts rows that
+fully succeed or throw an uncaught exception, under-reporting the
+success/total progress ratio whenever rows are rejected by these specific
+checks. `importSamples` (the other large DB-backed method in this file) and
+the file/Excel-parsing paths (`readCSV`/`readExcel`) remain untested — good
+candidates for a follow-up slice. Exact new file percentage not yet
+re-measured, will land at the next full reconcile.
+
 ## How to use this when picking a slice
 
 1. Prefer a **ZERO** file with real logic (not a script/model/port
