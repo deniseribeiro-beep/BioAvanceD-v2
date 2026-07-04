@@ -84,7 +84,6 @@ run, not hand-maintained):
 src/interface/routes/reports.routes.js                              30.2%  (partially extended, see COVERAGE_HISTORY.md 11th slice)
 src/models/StorageContainer.js                                      32.69%
 src/interface/routes/sample.routes.js                               33.33%
-src/config/uploadConfig.js                                          35.89%
 src/database/neo4j.js                                                40%
 src/models/StorageBox.js                                            41.74%
 src/services/import-lgpd.service.js                                 43.05% (importPatients covered, see COVERAGE_HISTORY.md 26th slice; importSamples/readCSV/readExcel still untested)
@@ -102,7 +101,8 @@ sampleComplianceSync.service.js, DrugService.js, logs.routes.js,
 equipment.routes.js, location.routes.js, orphanet.js,
 terminologies.routes.js) moved above 49% since the last reconcile and
 have been dropped from this table — see `COVERAGE_HISTORY.md` for what
-covered them.
+covered them. `src/config/uploadConfig.js` also moved above 49% this
+session (fileFilter/storage.getFilename/storage.getDestination covered).
 
 ## MID coverage (50-84% lines) — GOOD (>=85%)
 

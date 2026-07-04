@@ -531,3 +531,15 @@ clauses in `findAvailablePosition`/`getSampleStorage`/`verifyBoxIntegrity`/
 guard is provably dead even under a `matchedCount: 0` result) with a test
 proving the silent pass-through — no new bugs found beyond the
 already-filed #69.
+
+Since baseline (34th slice): `src/config/uploadConfig.js` moved off the
+LOW bucket (35.89% -> covered) with 12 new targeted tests covering
+`fileFilter` (blocked extensions win over an allowed mimetype,
+case-insensitive extension match, either allowed-extension-or-allowed-mimetype
+acceptance, both-unrecognized rejection, missing-originalname fallback),
+`storage.getFilename` (sanitization of unsafe characters/path traversal
+in `originalname`, extension preservation, default-name fallback), and
+`storage.getDestination` (year/month directory creation only when
+missing, and the try/catch routing thrown `fs` errors to the callback
+instead of throwing). No new product bugs found — the module's error
+handling and filter logic behaved as written.
