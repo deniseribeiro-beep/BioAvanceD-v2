@@ -282,6 +282,31 @@ check, so a legitimate numeric `mongoId` of `0` is incorrectly rejected
 while the string `'0'` passes — likely dormant today since Mongo `_id`s
 are never numeric `0`, but worth a presence-check fix).
 
+Since baseline (21st slice, parallel-test-agents): `consent.service.js`,
+`security.service.js`, and `auth.routes.js` moved off the LOW bucket — a
+3-agent parallel-test-agents slice (33 + 37 + 43 new/added tests
+respectively — consent.service.unit.test.js went from 35→68 tests,
+security.service.unit.test.js from 13→50, and auth.routes.test.js's
+entire prior content was replaced, from 0 real tests to 43 — all green,
+independently re-verified together). `auth.routes.test.js` previously
+existed but was a fully fake placeholder file (every test body was
+`expect(true).toBe(true)` under comments describing what "should" be
+tested) despite being named an integration test — replaced entirely
+with real supertest tests mounting the actual router via
+`createRequire`, which is almost certainly why the route file sat at
+28% coverage despite "having tests." Exact new percentages not yet
+re-measured, will land at the next full reconcile. This slice surfaced
+one plausible finding worth triage (not yet filed): `POST
+/two-factor/disable` is gated behind `authenticate`, but `disable` is
+missing from `authenticate`'s MFA-setup-route exemption list (unlike
+`/two-factor/qr`, `/two-factor/enable`, `/mfa/setup`, `/mfa/enable`),
+so a caller needs a fully live session just to reach a stub endpoint
+that always 501s — looks like an oversight in the exemption list, not
+intentional. Also noted for awareness, out of scope: `authenticate`'s
+`isSecurityMFASetupRoute` check uses `req.path.includes(...)` (substring
+match) rather than an exact route match, a possible accidental
+path-prefix bypass surface.
+
 ## How to use this when picking a slice
 
 1. Prefer a **ZERO** file with real logic (not a script/model/port
@@ -328,9 +353,6 @@ hand-maintained — some entries below are new since the last reconcile,
 some previously-listed files have moved up past 49% and dropped off):
 
 ```
-src/services/consent.service.js                                     26.1%
-src/interface/routes/auth.routes.js                                 28.49%
-src/services/security.service.js                                    28.67%
 src/services/import-lgpd.service.js                                 29.78%
 src/interface/routes/reports.routes.js                              30.2% (partially extended, see 11th slice note above)
 src/routes/orphanet.js                                              30.76%
