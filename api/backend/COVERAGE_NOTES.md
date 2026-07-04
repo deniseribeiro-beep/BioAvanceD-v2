@@ -137,11 +137,22 @@ independent test-writer slice (19 new targeted tests, all green — each is a
 thin constructor-injected delegate to a repository method, following the
 existing `GetBoxAvailablePositionsUseCase.test.js` pattern). Exact new
 percentages not yet re-measured, will land at the next full reconcile. No
-bugs surfaced this slice; one minor response-shape inconsistency noted (not
-filed) — `importFhirIntelligent.js`'s strict-mode 422 body returns
-`semanticContract: { strictMode, violations }` while non-strict 200 returns
-`semanticContract: { strictMode, warnings }`, a differently-keyed shape for
-the same concept depending on status code.
+bugs surfaced this slice; one minor response-shape inconsistency noted and
+filed as issue #47 — `importFhirIntelligent.js`'s strict-mode 422 body
+returns `semanticContract: { strictMode, violations }` while non-strict 200
+returns `semanticContract: { strictMode, warnings }`, a differently-keyed
+shape for the same concept depending on status code.
+
+Since baseline (13th slice): `compliance.routes.js` moved off the LOW bucket
+(28 new integration tests, all green) in
+`api/backend/tests/integration/compliance.api.test.js`, covering all 8
+routes (`/dashboard`, `/report` including CSV export, `/alerts` list +
+acknowledge + resolve, `/scopes` including category/highRiskOnly filters,
+`/verify-biomarker/:id`) — happy paths, missing-db 503s, validation 400s,
+service-error 500s including custom-statusCode propagation, and an invalid
+ObjectId falling through to the generic 500 path. Exact new percentage not
+yet re-measured, will land at the next full reconcile. No bugs surfaced
+this slice.
 
 ## How to use this when picking a slice
 
@@ -187,7 +198,6 @@ Sorted ascending (worst first). This is the primary slice-picking pool:
 
 ```
 src/interface/routes/reports.routes.js                    19.06% (partially extended, see 11th slice note above)
-src/interface/routes/compliance.routes.js                           23%
 src/controllers/cid.controller.js                                   23.52%
 src/controllers/temperature.controller.js                           23.88%
 src/workers/workers/result-worker.js                                24.21%
