@@ -40,7 +40,8 @@ covered and any issues filed.
 ## How to use this when picking a slice
 
 1. Prefer a **ZERO** file with real logic (not a script/model/port
-   interface) over a **LOW** file — bigger jump per slice.
+   interface) over a **LOW** or **MID-LOW** file — bigger jump per slice.
+   With LOW currently empty, MID-LOW is the next-best fallback tier.
 2. Skip `src/scripts/*` (one-off migration/seed scripts, not exercised in
    prod request paths) and `src/core/application/ports/*` (interfaces,
    zero logic) unless a slice specifically needs them — low value.
@@ -84,10 +85,57 @@ Low priority (models/interfaces/one-off scripts — thin or non-request-path):
 `import-lgpd.controller.js`, `batch-validation-engine.service.js`) moved
 above 50% lines this session — see `COVERAGE_HISTORY.md` for what each
 slice covered. Next slice should either work through the ZERO bucket
-above (real-logic file first: `worker.js`) or drop down into MID-bucket
-files below 85% for a smaller, incremental gain.
+above (real-logic file first: `worker.js`) or pick from the MID-LOW
+bucket just below for a smaller, incremental gain.
 
-## MID coverage (50-84% lines) — GOOD (>=85%)
+## MID-LOW coverage (50-69% lines) — re-measured 2026-07-04, commit `7826467c`
+
+Sorted ascending (worst first), 32 files — the next tier up once the
+ZERO bucket's real-logic file (`worker.js`) is done. Re-derived from
+`coverage/coverage-summary.json`, not hand-maintained:
+
+```
+src/services/equipment-sensor-quarantine.service.js                 50%
+src/interface/routes/sample.routes.js                                50.6%
+src/infrastructure/persistence/mongo/MongoStorageRepository.js       50.74%
+src/interface/routes/cid.routes.js                                   51.16%
+src/controllers/sample-file.controller.js                            51.86%
+src/routes/intakeWizard.js                                           52.7%
+src/interface/routes/policy.routes.js                                 54.16%
+src/services/patient.service.js                                       55.5%
+src/services/import-lgpd.service.js                                   56.01%
+src/routes/dictionary.js                                              56.16%
+src/models/Session.js                                                 57.14%
+src/controllers/paciente.controller.js                                57.3%
+src/i18n/index.js                                                     57.37%
+src/interface/routes/backup.routes.js                                 57.69%
+src/services/fhir-sync.service.js                                     57.81%
+src/services/import.service.js                                        61.91%
+src/services/sensor.service.js                                        62.02%
+src/services/mqtt-signature.service.js                                62.5%
+src/utils/patientAnonymization.js                                     62.5%
+src/models/Patient.js                                                 63.33%
+src/services/biomarker-observation.service.js                         63.88%
+src/models/ConsentPolicy.js                                           64.86%
+src/core/use-cases/ListOperationalFreezersUseCase.js                  66.66%
+src/services/mqtt-telemetry.service.js                                67.08%
+src/models/Sample.js                                                  67.79%
+src/models/ConsentTemplate.js                                         67.85%
+src/infrastructure/queue/TopologicalQuarantine.js                     68.08%
+src/routes/orphanet-count.js                                          68.42%
+src/services/user-security.service.js                                 68.57%
+src/utils/logSerializer.js                                            69.14%
+src/controllers/import-batch.controller.js                            69.49%
+src/services/log.service.js                                           69.84%
+```
+
+Note: several of these (`import-lgpd.service.js`, `import.service.js`,
+`patient.service.js`, `Patient.js`, `Sample.js`) already have partial
+coverage from earlier slices — see `COVERAGE_HISTORY.md` for what's
+already covered before picking one, so a slice doesn't re-cover the
+same ground.
+
+## MID-HIGH coverage (70-84% lines) — GOOD (>=85%)
 
 Not listed here (lower priority for slice-picking; a full reconcile
 regenerates these buckets if needed). Ask for a fresh
