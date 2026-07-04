@@ -209,7 +209,7 @@ async function startServer() {
   }
 }
 
-if (process.env.NODE_ENV !== "test") {
+if (process.env.NODE_ENV !== "test" || process.env.RUN_SERVER_IN_TEST === "1") {
   startServer();
 }
 

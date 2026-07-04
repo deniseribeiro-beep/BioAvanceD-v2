@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-mkdir -p /etc/tsa/certs /etc/tsa/secrets /var/lib/tsa
+mkdir -p /etc/tsa/certs /etc/tsa/secrets /var/lib/tsa /run/secrets
 
 if [ ! -f /etc/tsa/certs/ca.crt.pem ] || [ ! -f /etc/tsa/certs/tsa.crt.pem ] || [ ! -f /run/secrets/tsa_key.pem ]; then
   if [ ! -f /run/secrets/tsa_key.pem ]; then
