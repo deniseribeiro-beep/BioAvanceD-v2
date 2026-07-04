@@ -15,6 +15,21 @@ that reconcile's real `coverage-summary.json` numbers (see
 non-sequential in places (multiple concurrent authoring passes) — trust
 the issue numbers and file names, not the slice ordinal.
 
+**Slice (2026-07-04, post-reconcile):** `reports.routes.js` 30.2% →
+71.84% lines. Extended `tests/integration/reports.api.test.js` with a
+generic collection-backed mock db (`buildCollectionDb`) to exercise
+`buildPreviewData`'s report-type branches: samplesbypatient grouping,
+`buildSampleQuery` filter combinations (drug/treatment/sprec/release
+status via `$and`), temperature statistics + critical-alerts filter,
+withdrawal-history date range, extracellular-network regex match,
+sensor/equipment/resultado generic collections, unknown-type default
+message, and a real-data CSV export row. Found and filed a real bug:
+issue #78 — the `isSampleAnalysis` branch is unreachable because the
+generic `amostra`/`sample` substring check (line 353) always matches
+first for any type string containing "sample"/"amostra", so the
+sample-analysis grouping logic never runs; a test documents this actual
+(broken) behavior rather than the intended one.
+
 Since baseline: `MongoStorageTopologyReadRepository.js`, `database/mongo.js`,
 and `sample-file.controller.js` moved off the LOW bucket by a
 parallel-test-agents slice (63 new targeted tests, all green) — exact new

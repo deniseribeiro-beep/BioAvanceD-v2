@@ -94,6 +94,41 @@ function buildDb(seedReports = []) {
   return { db, reports, reportsCollection };
 }
 
+function buildCollectionDb(collections = {}) {
+  const capturedQueries = {};
+
+  const db = {
+    collection(name) {
+      const docs = collections[name] || [];
+      return {
+        find(query = {}) {
+          capturedQueries[name] = query;
+          const chain = {
+            toArray: async () => docs,
+            sort() {
+              return chain;
+            },
+            limit() {
+              return chain;
+            },
+          };
+          return chain;
+        },
+        async countDocuments(query = {}) {
+          capturedQueries[`${name}.count`] = query;
+          return docs.length;
+        },
+        async distinct(field, query = {}) {
+          capturedQueries[`${name}.distinct`] = query;
+          return [...new Set(docs.map((doc) => doc[field]).filter((value) => value !== undefined))];
+        },
+      };
+    },
+  };
+
+  return { db, capturedQueries };
+}
+
 describe('Reports API integration', () => {
   let app;
   let mockDb;
@@ -273,6 +308,184 @@ describe('Reports API integration', () => {
 
       expect(response.status).toBe(503);
       expect(response.body.error).toBe('Banco de dados não disponível');
+    });
+  });
+
+  describe('buildPreviewData por tipo de relatório', () => {
+    function appWithDb(db) {
+      const testApp = express();
+      testApp.use(express.json());
+      testApp.use((req, _res, next) => {
+        req.app.locals.db = db;
+        next();
+      });
+      const reportsRouter = require(modulePaths.controller);
+      testApp.use('/api/reports', reportsRouter);
+      return testApp;
+    }
+
+    it('samplesbypatient: agrupa amostras por paciente e aplica filtro de keyword/orphaCode', async () => {
+      const { db } = buildCollectionDb({
+        patients: [
+          { patientID: 'P1', patientName: 'Ana' },
+          { patientID: 'P2', patientName: 'Bruno' },
+        ],
+        samples: [
+          { patientID: 'P1', sampleID: 'S1', clinical_data: { orphaCode: '558' } },
+          { patientID: 'P1', sampleID: 'S2', clinical_data: { orphaCode: '558' } },
+          { patientID: 'P2', sampleID: 'S3', clinical_data: { orphaCode: '558' } },
+        ],
+      });
+
+      const testApp = appWithDb(db);
+      const response = await request(testApp)
+        .post('/api/reports/samplesbypatient/preview')
+        .send({ filters: { orphaCode: 'ORPHA:558' } });
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.total).toBe(2);
+      const p1 = response.body.data.patients.find((p) => p.patientID === 'P1');
+      expect(p1.sampleCount).toBe(2);
+      expect(p1.samples).toHaveLength(2);
+    });
+
+    it('amostra: aplica buildSampleQuery com múltiplos filtros combinados via $and', async () => {
+      const { db, capturedQueries } = buildCollectionDb({
+        samples: [{ patientID: 'P1', sampleID: 'S1' }],
+      });
+
+      const testApp = appWithDb(db);
+      const response = await request(testApp).post('/api/reports/amostra/preview').send({
+        filters: {
+          atcCode: 'ATC:N02',
+          treatmentStatus: 'em tratamento',
+          sprecMatrixType: 'Plasma',
+          status: 'ativa',
+        },
+      });
+
+      expect(response.status).toBe(200);
+      const query = capturedQueries.samples;
+      expect(query.$and).toEqual(
+        expect.arrayContaining([
+          { 'pharmacology_data.treatment_status': 'ON_TREATMENT' },
+          { 'sprec.matrixType': 'plasma' },
+          { release_status: 'AVAILABLE' },
+        ])
+      );
+    });
+
+    it('temperatura: calcula estatísticas e filtra apenas alertas críticos quando solicitado', async () => {
+      const { db, capturedQueries } = buildCollectionDb({
+        temperature: [
+          { temperatureValue: '2.5', readingStatus: 'normal' },
+          { temperatureValue: '10', readingStatus: 'critical' },
+        ],
+      });
+
+      const testApp = appWithDb(db);
+      const response = await request(testApp)
+        .post('/api/reports/temperatura/preview')
+        .send({ filters: { criticalAlertsOnly: 'true', startDate: '2026-01-01', endDate: '2026-01-31' } });
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.statistics).toEqual({ average: 6.25, min: 2.5, max: 10, alerts: 1 });
+      expect(capturedQueries.temperature.$and[0].$or).toBeDefined();
+    });
+
+    it('historico de retirada: aplica intervalo de datas e ordena', async () => {
+      const { db, capturedQueries } = buildCollectionDb({ withdrawals: [{ withdrawalDate: new Date('2026-01-05') }] });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp)
+        .post('/api/reports/withdrawal%20history/preview')
+        .send({ filters: { startDate: '2026-01-01', endDate: '2026-01-31' } });
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.total).toBe(1);
+      expect(capturedQueries.withdrawals.$or[0].withdrawalDate.$gte).toEqual(new Date('2026-01-01'));
+    });
+
+    it('rede extracelular: filtra amostras por linkedProject/sampleOrigin com regex', async () => {
+      const { db } = buildCollectionDb({
+        samples: [{ sampleID: 'S1', linkedProject: 'Rede Extracelular X' }],
+      });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).post('/api/reports/extracellularnetwork/preview').send({ filters: {} });
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.total).toBe(1);
+    });
+
+    it('sampleanalysis: branch é inalcançável, cai sempre no branch genérico de amostras (issue #78)', async () => {
+      const { db } = buildCollectionDb({
+        samples: [
+          { sampleID: 'S1', barcode: 'B1' },
+          { sampleID: 'S2', barcode: 'B2' },
+        ],
+        results: [{ sampleID: 'S1' }],
+      });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).post('/api/reports/sampleanalysis/preview').send({ filters: {} });
+
+      expect(response.status).toBe(200);
+      // Documents the bug: 'sampleanalysis' contains 'sample', so the generic
+      // amostra/sample check (line 353) always wins over isSampleAnalysis —
+      // the dedicated analysis/grouping branch never runs.
+      expect(response.body.data.withResults).toBeUndefined();
+      expect(response.body.data.samples).toHaveLength(2);
+    });
+
+    it('sensor/equipamento/resultado: retornam coleções genéricas com total', async () => {
+      const { db } = buildCollectionDb({
+        sensors: [{ id: 1 }],
+        equipment: [{ id: 1 }, { id: 2 }],
+        results: [{ id: 1 }],
+      });
+      const testApp = appWithDb(db);
+
+      const sensorRes = await request(testApp).post('/api/reports/sensor/preview').send({ filters: {} });
+      expect(sensorRes.body.data.total).toBe(1);
+
+      const equipRes = await request(testApp).post('/api/reports/equipamento/preview').send({ filters: {} });
+      expect(equipRes.body.data.total).toBe(2);
+
+      const resultRes = await request(testApp).post('/api/reports/resultado/preview').send({ filters: {} });
+      expect(resultRes.body.data.total).toBe(1);
+    });
+
+    it('tipo desconhecido retorna mensagem padrão sem dados', async () => {
+      const { db } = buildCollectionDb({});
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).post('/api/reports/tipo-inexistente/preview').send({ filters: {} });
+
+      expect(response.status).toBe(200);
+      expect(response.body.data).toEqual({
+        total: 0,
+        message: 'Tipo de relatório disponível, mas sem pré-visualização específica para este formato.',
+        type: 'tipo-inexistente',
+      });
+    });
+
+    it('export CSV: gera linhas reais quando há dados em uma das coleções conhecidas', async () => {
+      const { db } = buildCollectionDb({
+        equipment: [
+          { id: '1', name: 'Freezer A' },
+          { id: '2', name: 'Freezer B' },
+        ],
+      });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).get('/api/reports/equipamento/export');
+
+      expect(response.status).toBe(200);
+      const lines = response.text.split('\n');
+      expect(lines[0]).toBe('id,name');
+      expect(lines).toHaveLength(3);
+      expect(lines[1]).toBe('"1","Freezer A"');
     });
   });
 });
