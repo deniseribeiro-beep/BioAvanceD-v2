@@ -878,3 +878,20 @@ controller's own methods the way this test file does, and exercising
 them would mean testing multer's internals rather than this
 controller's logic; left untested as disproportionate for the value,
 same call as `worker.js` in the ZERO bucket.
+
+`src/routes/intakeWizard.js` moved from 52.7% to 95.94% lines
+(2026-07-04) via new `tests/unit/intakeWizard.routes.test.js` (12
+tests), alongside the existing `intakeWizard.helpers.test.js` (which
+already covered the `router._test`-exposed pure helper functions).
+The new file covers the two Express handlers the helpers file
+couldn't reach: `POST /` (`handleIntakeWizard` — 400 invalid body,
+503 db-unavailable, 400 missing-TCLE-template, 502 email-provider-
+failure, full happy path persisting the sample and linking the
+patient, and 502-on-throw) and `GET /patient-match` (503, 400 missing
+query params, matched/unmatched by patientID, name+birthDate
+normalization matching, and 500-on-throw). Used the repo's
+require.cache-injection route-testing pattern for the route's two
+destructured imports (`getCollection`, `generateSampleHash`) and
+direct reassignment for its whole-module imports
+(`notificationService`, `patientIdentityService`, `auditLogger`,
+`qualityDomain`). No product bugs found.
