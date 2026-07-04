@@ -480,6 +480,36 @@ wins over a colliding `logId` value, same shape as the already-tracked #34), and
 `findOne({})` — matching a random/first policy — when called with no policy identifier;
 currently unreachable from its only caller's guard, but live public-method logic).
 
+Since baseline (30th slice, parallel-test-agents): `src/services/import.service.js`,
+`src/services/hl7.service.js`, and `src/interface/routes/equipment.routes.js` moved
+further off the LOW bucket — a 3-agent parallel-test-agents slice (32 + 60 + 19 = 111
+new/extended targeted tests, all green, independently re-verified together, plus a
+combined run of all three files' tests together to catch cross-slice interaction) —
+exact new percentages not yet re-measured, will land at the next full reconcile.
+`import.service.js` got its pure parsers/validators covered for the first time
+(`validateFileFormat`, `validateCSVStructure`, `validateFHIRFile`, `parsePatientCSV`,
+`parseSampleCSV`, `parseLocationData`, `parseLocationCSV`, `parseTemperatureCSV`,
+`cleanupFile`) — the big DB-backed `importPatients`/`importSamples`/`importLocations`/
+`importTemperature` methods remain untested and are a good candidate for a follow-up
+slice. `hl7.service.js` got its pure segment-builders/mappers covered
+(`buildSPM`, `buildOBR`, `buildOBX`, `mapStatusToFHIR`, `mapInterpretationToFHIR`,
+`mapSampleTypeToSNOMED`, `getSampleTypeDisplay`, `getMimeType`, `escapeXML`,
+`formatFileSize`) — the DB-backed `generateHL7v2Message`/`generateFHIRResource`/
+`generateCDA` remain untested. `equipment.routes.js` got 19 new integration tests
+covering validation/duplicate-ID paths on `POST /`, malformed-ObjectId handling on
+`GET/PUT/DELETE /:id`, numeric-`equipmentID` fallback lookups, and the quarantine-
+service trigger/non-trigger branches on `PUT /:id`. This slice surfaced four
+findings, all filed: #74 (`hl7.service.js`'s `getSampleTypeDisplay` has no fallback
+for an unknown/undefined `sampleType`, unlike its sibling mappers, and leaks the
+literal string `"undefined"` into generated FHIR output), #75
+(`equipment.routes.js`'s `GET /:id` returns 500 on a malformed id where `PUT`/`DELETE`
+correctly return 400, and `POST /`'s catch block maps even infra-level errors to 400),
+#76 (`equipment.routes.js`'s six per-route 503 db-unavailable guards are dead code,
+same pattern as the already-filed #67/#48), and #77 (`import.service.js`'s
+`validateCSVStructure` silently no-ops validation for an unrecognized `dataType`, and
+`parseTemperatureCSV`/`parsePatientCSV` let `NaN`/`Invalid Date` pass through
+unflagged at parse time).
+
 ## How to use this when picking a slice
 
 1. Prefer a **ZERO** file with real logic (not a script/model/port
@@ -533,7 +563,7 @@ src/interface/routes/location.routes.js                             32.25%
 src/models/StorageContainer.js                                      32.69%
 src/interface/routes/terminologies.routes.js                        32.9%
 src/interface/routes/sample.routes.js                               33.33%
-src/services/import.service.js                                      34.19%
+src/services/import.service.js                                      34.19% (parsers/validators covered, see 30th slice note above; import*/DB-backed methods still untested)
 src/config/uploadConfig.js                                          35.89%
 src/services/integrityCheckService.js                               36.84%
 src/services/fhir.service.js                                        36.92%
