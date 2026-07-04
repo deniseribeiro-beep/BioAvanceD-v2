@@ -47,6 +47,16 @@ instead — coordination overhead isn't worth it for a single slice.
    exact path — the agent had to notice the mismatch and extend it
    instead. It handled it fine, but the brief was wrong going in; a
    30-second check catches this before the agent has to improvise.
+   **Check by the actual test-file naming convention, not the source
+   file's basename** — confirmed again 2026-07-04 (`logs.routes.js`):
+   the orchestrator's pre-check grepped `tests/integration` for
+   `logs.routes` and found nothing, but the existing file was named
+   `logs.api.test.js` (route files consistently get `<name>.api.test.js`
+   for integration tests, not `<name>.routes.test.js`) — the brief again
+   claimed "confirmed no existing file," and the agent again had to
+   notice and extend the real one. Grep the `tests/integration/`
+   directory listing itself (`ls tests/integration` or a broad
+   glob) rather than constructing a filename to grep for.
 5. **Don't assert a file's specific structural details (which imports it
    destructures, whether a value is module-scope-cached) from earlier
    general reading — re-check the exact lines before writing them into
