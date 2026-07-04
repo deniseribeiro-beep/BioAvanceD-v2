@@ -848,3 +848,17 @@ CJS class files, not just for CJS-mocking cases) are now documented in
 `testing-conventions`. No product bugs found. Remaining 2.78% branch
 gap is 3 defensive `|| 0`/box-not-found fallbacks not worth a
 dedicated test.
+
+`src/interface/routes/cid.routes.js` moved from 51.16% to 72.09% lines
+(2026-07-04) via new `tests/unit/cid.routes.test.js` (8 tests, using
+the repo's require.cache-injection route-testing pattern). Covers
+`GET /` (db-unavailable 503, normalized-document happy path including
+the `Codigos_CID10` fallback-to-`Codigo_Tabulacao` branch and the
+`normalizeBoolean` string-to-false branch, and the 500-on-throw path),
+`GET /search`'s delegation to `cidController.search`, and the three
+read-only routes' 405 responses. Remaining gap is two dead functions,
+`buildCidPayload`/`validateCidPayload`, defined but never called now
+that the write routes are all hardcoded 405s — filed as issue #82
+(documentation, test-branch) rather than tested, since testing
+unreachable/unexported code isn't meaningful. No other product bugs
+found.
