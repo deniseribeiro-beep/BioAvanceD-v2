@@ -909,3 +909,26 @@ require.cache trick was needed for it — only `authenticate`/
 `requirePermission` needed the route-testing pattern. No product bugs
 found; remaining gap is one branch in the `GET /:id` numeric-then-
 ObjectId fallback not worth a dedicated test.
+
+`src/services/patient.service.js` (2026-07-04): this is a large
+1074-line/32-function service; `getPatient`/`listPatients`/
+`searchPatients`/`updatePatient`/`deletePatient`/`createPatient`
+already had partial coverage from earlier work. Added 11 tests to
+`tests/unit/patient.service.unit.test.js` (38 → 49) for the three
+consent-token methods that had zero coverage: `validateConsentToken`
+(missing-args, not-found, wrong-status, token-mismatch, expired,
+valid), `acceptConsentToken` (happy path + propagated validation
+failure), `resendConsentNotification` (missing-patientID, not-found,
+wrong-status, new-token-generation, existing-valid-token-reuse).
+Function coverage for the file moved 50% → 71.87% (16 → 23 of 32).
+Overall line % barely moved in an isolated 2-test-file run — the
+full-suite 55.5% baseline includes coverage from other test files/
+routes that call into this service, which an isolated run can't see —
+so the file stays listed in MID-LOW rather than claiming a number
+this slice can't confirm. **Remaining for a future slice**:
+`createPatient`/`updatePatient`'s many untested branches,
+`resolveClinicalUnitSnapshot`, `checkIdentifierConflict`,
+`checkDuplicatePatient`, `syncPatientPhoneToGraph`,
+`ensurePatientIndexes` — this file is too large for one iteration,
+treat it as an ongoing multi-slice target. No product bugs found this
+slice.

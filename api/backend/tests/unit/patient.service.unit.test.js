@@ -457,3 +457,176 @@ describe('PatientService.deletePatient', () => {
     expect(result).toBe(false);
   });
 });
+
+describe('PatientService.validateConsentToken', () => {
+  it('throws when patientID or token is missing', async () => {
+    const db = makeFakeDb({});
+    await expect(patientService.validateConsentToken(db, null, 'tok')).rejects.toThrow('obrigatórios');
+    await expect(patientService.validateConsentToken(db, '12345678', null)).rejects.toThrow('obrigatórios');
+  });
+
+  it('throws when the patient is not found', async () => {
+    const patientsCollection = makeFakeCollection({ findOne: vi.fn().mockResolvedValue(null) });
+    const db = makeFakeDb({ patients: patientsCollection });
+
+    await expect(patientService.validateConsentToken(db, '12345678', 'tok')).rejects.toThrow('não encontrado');
+  });
+
+  it('throws when the patient is not pending consent', async () => {
+    const patientsCollection = makeFakeCollection({
+      findOne: vi.fn().mockResolvedValue({ patientID: '12345678', status: 'ACTIVE' })
+    });
+    const db = makeFakeDb({ patients: patientsCollection });
+
+    await expect(patientService.validateConsentToken(db, '12345678', 'tok')).rejects.toThrow('não está pendente');
+  });
+
+  it('throws when the token does not match', async () => {
+    const patientsCollection = makeFakeCollection({
+      findOne: vi.fn().mockResolvedValue({ patientID: '12345678', status: 'PENDING_CONSENT', consentToken: 'real-token' })
+    });
+    const db = makeFakeDb({ patients: patientsCollection });
+
+    await expect(patientService.validateConsentToken(db, '12345678', 'wrong-token')).rejects.toThrow('Token inválido');
+  });
+
+  it('throws when the token has expired', async () => {
+    const patientsCollection = makeFakeCollection({
+      findOne: vi.fn().mockResolvedValue({
+        patientID: '12345678',
+        status: 'PENDING_CONSENT',
+        consentToken: 'tok',
+        consentTokenExpiresAt: new Date(Date.now() - 1000).toISOString(),
+      })
+    });
+    const db = makeFakeDb({ patients: patientsCollection });
+
+    await expect(patientService.validateConsentToken(db, '12345678', 'tok')).rejects.toThrow('Token expirado');
+  });
+
+  it('returns valid:true for a matching, unexpired token', async () => {
+    const patientsCollection = makeFakeCollection({
+      findOne: vi.fn().mockResolvedValue({
+        patientID: '12345678',
+        status: 'PENDING_CONSENT',
+        consentToken: 'tok',
+        consentTokenExpiresAt: new Date(Date.now() + 100000).toISOString(),
+      })
+    });
+    const db = makeFakeDb({ patients: patientsCollection });
+
+    const result = await patientService.validateConsentToken(db, '12345678', 'tok');
+
+    expect(result).toEqual({ valid: true, patientID: '12345678' });
+  });
+});
+
+describe('PatientService.acceptConsentToken', () => {
+  it('validates the token then activates the patient and clears the token', async () => {
+    const patientsCollection = makeFakeCollection({
+      findOne: vi.fn().mockResolvedValue({
+        patientID: '12345678',
+        status: 'PENDING_CONSENT',
+        consentToken: 'tok',
+      }),
+      updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 })
+    });
+    const db = makeFakeDb({ patients: patientsCollection });
+
+    const result = await patientService.acceptConsentToken(db, '12345678', 'tok');
+
+    expect(result).toEqual({ success: true, patientID: '12345678' });
+    expect(patientsCollection.updateOne).toHaveBeenCalledWith(
+      { patientID: '12345678' },
+      { $set: expect.objectContaining({ status: 'ACTIVE', consentToken: null, consentTokenExpiresAt: null }) }
+    );
+  });
+
+  it('propagates validation failure without updating', async () => {
+    const patientsCollection = makeFakeCollection({ findOne: vi.fn().mockResolvedValue(null) });
+    const db = makeFakeDb({ patients: patientsCollection });
+
+    await expect(patientService.acceptConsentToken(db, '12345678', 'tok')).rejects.toThrow('não encontrado');
+    expect(patientsCollection.updateOne).not.toHaveBeenCalled();
+  });
+});
+
+describe('PatientService.resendConsentNotification', () => {
+  let buildMetaSpy, buildLinkSpy, enqueueSpy;
+
+  beforeEach(() => {
+    buildMetaSpy = vi.spyOn(notificationService, 'buildConsentMetadata').mockReturnValue({
+      token: 'new-token',
+      createdAt: new Date('2026-01-01'),
+      expiresAt: new Date('2026-01-08'),
+    });
+    buildLinkSpy = vi.spyOn(notificationService, 'buildConsentLink').mockReturnValue('https://consent.link/new-token');
+    enqueueSpy = vi.spyOn(notificationService, 'enqueueConsentNotification').mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    buildMetaSpy.mockRestore();
+    buildLinkSpy.mockRestore();
+    enqueueSpy.mockRestore();
+  });
+
+  it('throws when patientID is missing', async () => {
+    const db = makeFakeDb({});
+    await expect(patientService.resendConsentNotification(db, null)).rejects.toThrow('obrigatório');
+  });
+
+  it('throws when the patient is not found', async () => {
+    const patientsCollection = makeFakeCollection({ findOne: vi.fn().mockResolvedValue(null) });
+    const db = makeFakeDb({ patients: patientsCollection });
+
+    await expect(patientService.resendConsentNotification(db, '12345678')).rejects.toThrow('não encontrado');
+  });
+
+  it('throws when the patient is not pending consent', async () => {
+    const patientsCollection = makeFakeCollection({
+      findOne: vi.fn().mockResolvedValue({ patientID: '12345678', status: 'ACTIVE' })
+    });
+    const db = makeFakeDb({ patients: patientsCollection });
+
+    await expect(patientService.resendConsentNotification(db, '12345678')).rejects.toThrow('não está pendente');
+  });
+
+  it('generates a new token when no valid token exists', async () => {
+    const patientsCollection = makeFakeCollection({
+      findOne: vi.fn().mockResolvedValue({ _id: 'p1', patientID: '12345678', status: 'PENDING_CONSENT' }),
+      updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 })
+    });
+    const db = makeFakeDb({ patients: patientsCollection });
+
+    const result = await patientService.resendConsentNotification(db, '12345678');
+
+    expect(buildMetaSpy).toHaveBeenCalled();
+    expect(result.reusedToken).toBe(false);
+    expect(patientsCollection.updateOne).toHaveBeenCalledWith(
+      { _id: 'p1' },
+      { $set: expect.objectContaining({ consentToken: 'new-token' }) }
+    );
+  });
+
+  it('reuses the existing token when it is still valid', async () => {
+    const patientsCollection = makeFakeCollection({
+      findOne: vi.fn().mockResolvedValue({
+        _id: 'p1',
+        patientID: '12345678',
+        status: 'PENDING_CONSENT',
+        consentToken: 'still-valid',
+        consentTokenExpiresAt: new Date(Date.now() + 100000).toISOString(),
+      }),
+      updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 })
+    });
+    const db = makeFakeDb({ patients: patientsCollection });
+
+    const result = await patientService.resendConsentNotification(db, '12345678');
+
+    expect(result.reusedToken).toBe(true);
+    expect(buildMetaSpy).not.toHaveBeenCalled();
+    expect(buildLinkSpy).toHaveBeenCalledWith(expect.objectContaining({ patientID: '12345678' }), 'still-valid');
+    const updatePayload = patientsCollection.updateOne.mock.calls[0][1].$set;
+    expect(updatePayload.consentToken).toBeUndefined();
+  });
+});

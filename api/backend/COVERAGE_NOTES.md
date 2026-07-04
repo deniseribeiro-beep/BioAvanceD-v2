@@ -102,7 +102,7 @@ lines), and `policy.routes.js` (99% lines) all moved to
 GOOD — see `COVERAGE_HISTORY.md`.)
 
 ```
-src/services/patient.service.js                                       55.5%
+src/services/patient.service.js                                       55.5%* (partial slice landed 2026-07-04, see COVERAGE_HISTORY.md — consent-token methods now covered, createPatient/updatePatient branch gaps and resolveClinicalUnitSnapshot/checkIdentifierConflict/checkDuplicatePatient/syncPatientPhoneToGraph remain for a future slice)
 src/services/import-lgpd.service.js                                   56.01%
 src/routes/dictionary.js                                              56.16%
 src/models/Session.js                                                 57.14%
