@@ -81,7 +81,6 @@ reconcile (list re-derived from a real `coverage/coverage-summary.json`
 run, not hand-maintained):
 
 ```
-src/routes/eConsent.js                                               47.88%
 src/controllers/import-lgpd.controller.js                            48.74%
 ```
 
@@ -130,6 +129,10 @@ mechanic from `neo4j-connection.test.js`; see COVERAGE_HISTORY.md).
 `src/controllers/audit.controller.js` moved from 47.56% to 100% lines
 this session (all 8 handlers' 503-db-unavailable/success/500-catch
 branches covered; see COVERAGE_HISTORY.md).
+`src/routes/eConsent.js` moved from 47.88% to 91.54% lines this session
+(the remaining uncovered lines are the module-load CONSENT_SECRET guard
+and two happy paths that are unreachable due to real bugs found and
+filed — issues #80 and #81 — see COVERAGE_HISTORY.md).
 
 ## MID coverage (50-84% lines) — GOOD (>=85%)
 

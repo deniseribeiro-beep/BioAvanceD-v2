@@ -739,3 +739,33 @@ to `false` — asserted as-is in the test, no product change needed.
 Branch coverage on this file settled at 81.25% (a few defensive
 `?:`-style fallbacks inside already-covered lines); line/statement/
 function coverage is 100%. No new product bugs found.
+
+`src/routes/eConsent.js` moved from 47.88% to 91.54% lines (2026-07-04)
+with 10 new tests in `tests/unit/eConsent.routes.test.js` (supertest +
+a real express app with the router mounted, following the
+`equipment.routes.quarantine.test.js` pattern). This slice found two
+real, unrelated bugs in the same file, both filed rather than fixed
+inline:
+- **Issue #80**: `POST /generate-link`'s `sendConsentLink` import from
+  `notification.service` resolves to `undefined` (that service only
+  exports `sendConsentEmail`/`sendConsentSmsFallback`/
+  `sendConsentWhatsappFallback`), so the happy path throws inside an
+  uncaught-by-try/catch async handler and hangs the request. Not
+  exercised via supertest (would hang the test run) — instead asserted
+  the `undefined` export directly with a comment pointing at #80, and
+  only tested the route's safe 400-validation branch.
+- **Issue #81**: `GET /validate/:token` calls `PatientModel.findOne`,
+  but `src/models/Patient.js` is a plain class with only static
+  utility helpers and no `findOne` — every call throws and is caught
+  by the route's blanket catch, so the endpoint always returns 401
+  regardless of token validity. Asserted this actual behavior (with a
+  comment pointing at #81) instead of the originally-intended
+  200/404 responses.
+
+`POST /update` (JWT verify, per-consent Neo4j MERGE, REVOKED→quarantine
+and ACTIVE/GRANTED→release branches, socket emit) works correctly and
+is fully covered with mocked `PatientModel`-adjacent dependencies
+(`connection.getNeo4jDriver`, `Sample.updateMany`). Remaining gap is
+the module-load `CONSENT_SECRET` guard (line 15, requires a fresh
+require with the env var unset — low value) and the two bug-blocked
+happy paths above.
