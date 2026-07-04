@@ -1,188 +1,684 @@
 /**
- * Integration Tests - Auth Routes
- * Testa comportamento dos endpoints de autenticação
- * Nota: Testes de integração completos requerem backend rodando
- * Este arquivo documenta os casos que deveriam ser testados
+ * Integration tests for src/interface/routes/auth.routes.js
+ * Mounts the real router with supertest and exercises it end-to-end,
+ * spying on its CJS dependencies (auth.controller, session.service,
+ * auditLogger) rather than reimplementing route logic.
  */
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { createRequire } from 'module';
 
-import { describe, it, expect } from 'vitest';
+const require = createRequire(import.meta.url);
 
-describe('Auth Routes - Integration Tests (Documented)', () => {
-  // NOTA: Testes de integração full requerem:
-  // 1. Servidor backend rodando em localhost:3000
-  // 2. MongoDB rodando e acessível
-  // 3. Dependências como 'supertest' instaladas
-  
-  // Documentação dos casos de teste que deveriam rodar:
+const express = require('express');
+const request = require('supertest');
+const jwt = require('jsonwebtoken');
+const { ObjectId } = require('mongodb');
 
-  describe('POST /api/auth/login', () => {
-    it('deve retornar 503 quando banco de dados não está disponível', async () => {
-      // Request: POST /api/auth/login
-      // Body: { username: 'testuser', password: 'TestPass@123' }
-      // Mock: db connection unavailable
-      // Expected: 503 com mensagem de erro de database
-      expect(true).toBe(true);
+const authRoutesPath = require.resolve('../../src/interface/routes/auth.routes.js');
+const authController = require('../../src/controllers/auth.controller');
+const sessionService = require('../../src/services/session.service');
+const auditLogger = require('../../src/utils/auditLogger');
+const logger = require('../../src/utils/logger');
+
+const JWT_SECRET = process.env.JWT_SECRET || 'test-jwt-secret';
+const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || 'test-refresh-jwt-secret';
+
+function loadAuthRoutes() {
+  // auth.routes.js `.bind()`s several authController methods at require time,
+  // so any spy on authController must be installed BEFORE this re-require for
+  // it to take effect on those bound routes (see testing-conventions skill).
+  delete require.cache[authRoutesPath];
+  return require(authRoutesPath);
+}
+
+function buildApp(authRoutes, db) {
+  const app = express();
+  app.use(express.json());
+  app.locals.db = db === undefined ? undefined : db;
+  app.use('/api/auth', authRoutes);
+  return app;
+}
+
+function makeUserId() {
+  return new ObjectId().toHexString();
+}
+
+function signAccessToken(overrides = {}) {
+  return jwt.sign(
+    { userID: makeUserId(), email: 'user@example.com', accessType: 2, mfaVerified: true, ...overrides },
+    JWT_SECRET,
+    { expiresIn: '15m' }
+  );
+}
+
+function makeDb(userDoc) {
+  const findOne = vi.fn(async () => userDoc);
+  return {
+    collection: vi.fn(() => ({ findOne })),
+    __findOne: findOne
+  };
+}
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+describe('auth.routes.js (integration, real router mounted)', () => {
+  describe('POST /login', () => {
+    it('translates username/twoFactorCode into email/mfaCode before delegating to authController.login', async () => {
+      const spy = vi.spyOn(authController, 'login').mockImplementation(async (req, res) => {
+        res.status(200).json({
+          success: true,
+          seenEmail: req.body.email,
+          seenMfaCode: req.body.mfaCode
+        });
+      });
+      const authRoutes = loadAuthRoutes();
+      const app = buildApp(authRoutes);
+
+      const res = await request(app)
+        .post('/api/auth/login')
+        .send({ username: 'jdoe', password: 'x', twoFactorCode: '654321' });
+
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(res.status).toBe(200);
+      expect(res.body.seenEmail).toBe('jdoe');
+      expect(res.body.seenMfaCode).toBe('654321');
     });
 
-    it('deve rejeitar login com username não existente', async () => {
-      // Request: POST /api/auth/login
-      // Body: { username: 'nonexistent', password: 'TestPass@123' }
-      // Expected: 401 success: false
-      expect(true).toBe(true);
-    });
+    it('returns 500 with the error message when authController.login throws and headers were not sent', async () => {
+      vi.spyOn(authController, 'login').mockImplementation(async () => {
+        throw new Error('boom-login');
+      });
+      const authRoutes = loadAuthRoutes();
+      const app = buildApp(authRoutes);
 
-    it('deve rejeitar login com senha incorreta', async () => {
-      // Request: POST /api/auth/login
-      // Body: { username: 'existing_user', password: 'WrongPassword' }
-      // Expected: 401 success: false
-      expect(true).toBe(true);
-    });
+      const res = await request(app)
+        .post('/api/auth/login')
+        .send({ email: 'a@b.com', password: 'x' });
 
-    it('deve aceitar login via username ou email indistintamente', async () => {
-      // Request 1: POST /api/auth/login
-      // Body: { username: 'testuser', password: 'TestPass@123' }
-      // Request 2: POST /api/auth/login
-      // Body: { email: 'test@example.com', password: 'TestPass@123' }
-      // Expected: Both should work equally
-      expect(true).toBe(true);
-    });
-
-    it('deve aceitar twoFactorCode ou mfaCode como sinônimos', async () => {
-      // Request 1: POST /api/auth/login
-      // Body: { username: 'user', password: '...', twoFactorCode: '123456' }
-      // Request 2: POST /api/auth/login
-      // Body: { username: 'user', password: '...', mfaCode: '123456' }
-      // Expected: Both should be accepted
-      expect(true).toBe(true);
-    });
-  });
-
-  describe('POST /api/auth/register', () => {
-    it('deve registrar novo usuário com dados válidos', async () => {
-      // Request: POST /api/auth/register
-      // Body: { name, email, username, password, accessType }
-      // Expected: 201 success: true
-      expect(true).toBe(true);
-    });
-
-    it('deve rejeitar registro com email duplicado', async () => {
-      // Request: POST /api/auth/register
-      // Body: { ...data, email: 'existing@example.com' }
-      // Expected: 400+ success: false
-      expect(true).toBe(true);
-    });
-  });
-
-  describe('GET /api/auth/verify', () => {
-    it('deve retornar 401 sem autenticação', async () => {
-      // Request: GET /api/auth/verify (sem header Authorization)
-      // Expected: 401
-      expect(true).toBe(true);
-    });
-
-    it('deve retornar dados do usuário com token válido', async () => {
-      // Request: GET /api/auth/verify + Authorization: Bearer {valid_token}
-      // Expected: 200 com dados do user
-      expect(true).toBe(true);
-    });
-  });
-
-  describe('POST /api/auth/refresh', () => {
-    it('deve gerar novo access token com refresh token válido', async () => {
-      // Request: POST /api/auth/refresh
-      // Body: { refreshToken: 'valid_refresh_token' }
-      // Expected: 200 com novo accessToken
-      expect(true).toBe(true);
-    });
-
-    it('deve rejeitar refresh token expirado', async () => {
-      // Request: POST /api/auth/refresh
-      // Body: { refreshToken: 'expired_token' }
-      // Expected: 401 ou 400
-      expect(true).toBe(true);
-    });
-  });
-
-  describe('POST /api/auth/password-reset/request', () => {
-    it('deve retornar 200 mesmo quando usuário não existe (LGPD)', async () => {
-      // Request: POST /api/auth/password-reset/request
-      // Body: { email: 'nonexistent@example.com' }
-      // Expected: 200 (não revela se email existe para LGPD)
-      expect(true).toBe(true);
-    });
-
-    it('deve gerar token de reset para usuário válido', async () => {
-      // Request: POST /api/auth/password-reset/request
-      // Body: { email: 'existing@example.com' }
-      // Expected: 200 com reset link gerado
-      expect(true).toBe(true);
+      expect(res.status).toBe(500);
+      expect(res.body).toMatchObject({ success: false, message: 'boom-login' });
     });
   });
 
-  describe('POST /api/auth/two-factor/enable', () => {
-    it('deve retornar 401 sem autenticação', async () => {
-      // Request: POST /api/auth/two-factor/enable (sem auth)
-      // Expected: 401
-      expect(true).toBe(true);
-    });
+  describe('POST /register', () => {
+    it('delegates to authController.register (bound at router load time)', async () => {
+      const spy = vi.spyOn(authController, 'register').mockImplementation(async (req, res) => {
+        res.status(201).json({ success: true, created: req.body.email });
+      });
+      const authRoutes = loadAuthRoutes();
+      const app = buildApp(authRoutes);
 
-    it('deve aceitar "code" ou "mfaCode" como sinônimos', async () => {
-      // Request 1: POST /api/auth/two-factor/enable + { code: '123456' }
-      // Request 2: POST /api/auth/two-factor/enable + { mfaCode: '123456' }
-      // Expected: Both should be accepted
-      expect(true).toBe(true);
-    });
-  });
+      const res = await request(app)
+        .post('/api/auth/register')
+        .send({ email: 'new@example.com', password: 'x' });
 
-  describe('POST /api/auth/logout', () => {
-    it('deve revogar sessão do usuário autenticado', async () => {
-      // Request: POST /api/auth/logout + Authorization header
-      // Expected: 200, sessão é marcada como revogada
-      expect(true).toBe(true);
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(res.status).toBe(201);
+      expect(res.body.created).toBe('new@example.com');
     });
   });
 
-  describe('GET /api/auth/sessions', () => {
-    it('deve retornar lista de sessões ativas do usuário', async () => {
-      // Request: GET /api/auth/sessions + Authorization header
-      // Expected: 200 com array de sessões
-      expect(true).toBe(true);
+  describe('POST /change-password', () => {
+    it('returns 401 without an Authorization header (authenticate middleware blocks it)', async () => {
+      const spy = vi.spyOn(authController, 'changePassword').mockImplementation(async (req, res) => {
+        res.status(200).json({ success: true });
+      });
+      const authRoutes = loadAuthRoutes();
+      const app = buildApp(authRoutes, makeDb({}));
+
+      const res = await request(app).post('/api/auth/change-password').send({});
+
+      expect(res.status).toBe(401);
+      expect(spy).not.toHaveBeenCalled();
+    });
+
+    it('delegates to authController.changePassword when authenticated', async () => {
+      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
+      const spy = vi.spyOn(authController, 'changePassword').mockImplementation(async (req, res) => {
+        res.status(200).json({ success: true });
+      });
+      const authRoutes = loadAuthRoutes();
+      const app = buildApp(authRoutes, makeDb({}));
+      const token = signAccessToken();
+
+      const res = await request(app)
+        .post('/api/auth/change-password')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ oldPassword: 'a', newPassword: 'b' });
+
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(res.status).toBe(200);
     });
   });
 
-  describe('DELETE /api/auth/sessions/:sessionId', () => {
-    it('deve revogar sessão específica', async () => {
-      // Request: DELETE /api/auth/sessions/{sessionId} + Authorization header
-      // Expected: 200, sessão é revogada
-      expect(true).toBe(true);
+  describe('GET /two-factor/qr', () => {
+    it('delegates to authController.setupMFA (mfa-setup route, authenticate skips session check)', async () => {
+      const spy = vi.spyOn(authController, 'setupMFA').mockImplementation(async (req, res) => {
+        res.status(200).json({ success: true, qr: 'data' });
+      });
+      const authRoutes = loadAuthRoutes();
+      const app = buildApp(authRoutes);
+      const token = signAccessToken();
+
+      const res = await request(app)
+        .get('/api/auth/two-factor/qr')
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(res.status).toBe(200);
     });
   });
 
-  // Testes de negócio crítico
-  describe('Regras de Negócio - Auth', () => {
-    it('[RN1] Primeiro acesso com mfaSetupRequired bloqueia recursos', async () => {
-      // Estado: Usuário login com mfaSetupRequired=true
-      // Requisição: GET /api/protected
-      // Expected: 403 com indicativo que MFA setup é requerido
-      expect(true).toBe(true);
+  describe('POST /two-factor/enable', () => {
+    it('returns 401 without authentication', async () => {
+      const authRoutes = loadAuthRoutes();
+      const app = buildApp(authRoutes);
+      const res = await request(app).post('/api/auth/two-factor/enable').send({ code: '123456' });
+      expect(res.status).toBe(401);
     });
 
-    it('[RN2] Sessão inativa invalida requisições mesmo com JWT válido', async () => {
-      // Estado: Sessão expirada ou marcada como inativa no banco
-      // Requisição: GET /api/protected + token que seria ainda válido por JWT
-      // Expected: 401, sessão inválida previne acesso
-      expect(true).toBe(true);
+    it('copies req.body.code into req.body.mfaCode before calling authController.enableMFA', async () => {
+      const spy = vi.spyOn(authController, 'enableMFA').mockImplementation((req, res) => {
+        res.status(200).json({ success: true, seenMfaCode: req.body.mfaCode });
+      });
+      const authRoutes = loadAuthRoutes();
+      const app = buildApp(authRoutes);
+      const token = signAccessToken();
+
+      const res = await request(app)
+        .post('/api/auth/two-factor/enable')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ code: '999999' });
+
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(res.body.seenMfaCode).toBe('999999');
+    });
+  });
+
+  describe('POST /two-factor/disable', () => {
+    it('always responds 501 not-implemented (authenticated request)', async () => {
+      const authRoutes = loadAuthRoutes();
+      const app = buildApp(authRoutes);
+      const token = signAccessToken();
+
+      const res = await request(app)
+        .post('/api/auth/two-factor/disable')
+        .set('Authorization', `Bearer ${token}`);
+
+      // authenticate() for this path is NOT one of the mfa-setup-skip paths,
+      // so it needs a working session check; without a db this 503s from the
+      // middleware instead of reaching the inline 501 handler.
+      expect(res.status).toBe(503);
     });
 
-    it('[RN3] Refresh token expirado é rejeitado', async () => {
-      // Estado: Refresh token está fora da validade
-      // Requisição: POST /api/auth/refresh + expired refresh token
-      // Expected: 401 ou 400
-      expect(true).toBe(true);
+    it('responds 501 once authenticate can validate the session', async () => {
+      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
+      const authRoutes = loadAuthRoutes();
+      const app = buildApp(authRoutes, makeDb({}));
+      const token = signAccessToken();
+
+      const res = await request(app)
+        .post('/api/auth/two-factor/disable')
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(501);
+      expect(res.body.success).toBe(false);
+    });
+  });
+
+  describe('GET /two-factor/status', () => {
+    it('returns 503 when there is no db on app.locals', async () => {
+      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
+      const authRoutes = loadAuthRoutes();
+      const app = buildApp(authRoutes, undefined);
+      const token = signAccessToken();
+
+      const res = await request(app)
+        .get('/api/auth/two-factor/status')
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(503);
+    });
+
+    it('returns 404 when the authenticated user is not found in the db', async () => {
+      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
+      const authRoutes = loadAuthRoutes();
+      const app = buildApp(authRoutes, makeDb(null));
+      const token = signAccessToken();
+
+      const res = await request(app)
+        .get('/api/auth/two-factor/status')
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(404);
+    });
+
+    it('returns 200 with mfaEnabled/mfaLocked flags on success', async () => {
+      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
+      const authRoutes = loadAuthRoutes();
+      const app = buildApp(authRoutes, makeDb({ mfaEnabled: true, mfaLocked: false }));
+      const token = signAccessToken();
+
+      const res = await request(app)
+        .get('/api/auth/two-factor/status')
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data).toEqual({ mfaEnabled: true, mfaLocked: false });
+    });
+
+    it('returns 500 when the db lookup throws', async () => {
+      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
+      const authRoutes = loadAuthRoutes();
+      const db = {
+        collection: () => ({ findOne: vi.fn(async () => { throw new Error('db-down'); }) })
+      };
+      const app = buildApp(authRoutes, db);
+      const token = signAccessToken();
+
+      const res = await request(app)
+        .get('/api/auth/two-factor/status')
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(500);
+      expect(res.body.message).toBe('db-down');
+    });
+  });
+
+  describe('POST /keepalive', () => {
+    it('returns 503 when there is no db (authenticate skips session check for keepalive)', async () => {
+      const authRoutes = loadAuthRoutes();
+      const app = buildApp(authRoutes, undefined);
+      const token = signAccessToken();
+
+      const res = await request(app)
+        .post('/api/auth/keepalive')
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(503);
+    });
+
+    it('returns 401 sessionExpired when updateActivity resolves falsy', async () => {
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue(null);
+      const authRoutes = loadAuthRoutes();
+      const app = buildApp(authRoutes, makeDb({}));
+      const token = signAccessToken();
+
+      const res = await request(app)
+        .post('/api/auth/keepalive')
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(401);
+      expect(res.body.sessionExpired).toBe(true);
+    });
+
+    it('returns 200 with lastActivity/expiresAt on success', async () => {
+      const expiresAt = new Date().toISOString();
+      const lastActivity = new Date().toISOString();
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ lastActivity, expiresAt });
+      const authRoutes = loadAuthRoutes();
+      const app = buildApp(authRoutes, makeDb({}));
+      const token = signAccessToken();
+
+      const res = await request(app)
+        .post('/api/auth/keepalive')
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data).toEqual({ lastActivity, expiresAt });
+    });
+
+    it('returns 500 when sessionService.updateActivity throws', async () => {
+      vi.spyOn(sessionService, 'updateActivity').mockRejectedValue(new Error('keepalive-boom'));
+      const authRoutes = loadAuthRoutes();
+      const app = buildApp(authRoutes, makeDb({}));
+      const token = signAccessToken();
+
+      const res = await request(app)
+        .post('/api/auth/keepalive')
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(500);
+      expect(res.body.message).toBe('keepalive-boom');
+    });
+  });
+
+  describe('POST /logout', () => {
+    it('invalidates the session, clears the refresh cookie and returns 200', async () => {
+      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
+      const invalidateSpy = vi.spyOn(sessionService, 'invalidateSession').mockResolvedValue(true);
+      const logLogoutSpy = vi.spyOn(auditLogger, 'logLogout').mockResolvedValue(undefined);
+      const authRoutes = loadAuthRoutes();
+      const app = buildApp(authRoutes, makeDb({}));
+      const token = signAccessToken();
+
+      const res = await request(app)
+        .post('/api/auth/logout')
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(invalidateSpy).toHaveBeenCalledWith(expect.anything(), 's1');
+      expect(logLogoutSpy).toHaveBeenCalledTimes(1);
+      expect(res.headers['set-cookie']?.some((c) => c.startsWith('refresh_token=;'))).toBe(true);
+    });
+
+    it('still returns 200 and still logs the logout when sessionService.verifySession throws', async () => {
+      vi.spyOn(sessionService, 'verifySession')
+        .mockResolvedValueOnce({ valid: true, session: { sessionID: 's1' } }) // for authenticate()
+        .mockRejectedValueOnce(new Error('verify-boom')); // for the logout handler itself
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
+      const logLogoutSpy = vi.spyOn(auditLogger, 'logLogout').mockResolvedValue(undefined);
+      const authRoutes = loadAuthRoutes();
+      const app = buildApp(authRoutes, makeDb({}));
+      const token = signAccessToken();
+
+      const res = await request(app)
+        .post('/api/auth/logout')
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(logLogoutSpy).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('GET /verify', () => {
+    it('returns 503 when there is no db', async () => {
+      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
+      const authRoutes = loadAuthRoutes();
+      const app = buildApp(authRoutes, undefined);
+      const token = signAccessToken();
+
+      const res = await request(app).get('/api/auth/verify').set('Authorization', `Bearer ${token}`);
+      expect(res.status).toBe(503);
+    });
+
+    it('returns 404 and logs TOKEN_VERIFY_FAILED when the user is not found', async () => {
+      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
+      const logSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
+      const authRoutes = loadAuthRoutes();
+      const app = buildApp(authRoutes, makeDb(null));
+      const token = signAccessToken();
+
+      const res = await request(app).get('/api/auth/verify').set('Authorization', `Bearer ${token}`);
+      expect(res.status).toBe(404);
+      expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({ action: 'TOKEN_VERIFY_FAILED' }));
+    });
+
+    it.each([
+      [1, 'Usuário Externo'],
+      [3, 'Coordenador']
+    ])('maps accessType %s to roleName "%s" when the user has no stored roleName', async (accessType, expectedRole) => {
+      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
+      const authRoutes = loadAuthRoutes();
+      const app = buildApp(authRoutes, makeDb({ accessType, email: 'a@b.com', username: 'u' }));
+      const token = signAccessToken();
+
+      const res = await request(app).get('/api/auth/verify').set('Authorization', `Bearer ${token}`);
+      expect(res.status).toBe(200);
+      expect(res.body.data.user.roleName).toBe(expectedRole);
+      expect(res.body.data.valid).toBe(true);
+    });
+
+    it('returns 500 when the db lookup throws', async () => {
+      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
+      const authRoutes = loadAuthRoutes();
+      const db = { collection: () => ({ findOne: vi.fn(async () => { throw new Error('verify-db-boom'); }) }) };
+      const app = buildApp(authRoutes, db);
+      const token = signAccessToken();
+
+      const res = await request(app).get('/api/auth/verify').set('Authorization', `Bearer ${token}`);
+      expect(res.status).toBe(500);
+      expect(res.body.message).toBe('verify-db-boom');
+    });
+  });
+
+  describe('GET /sessions', () => {
+    it('returns the sessions list from session.service.listUserSessions', async () => {
+      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
+      vi.spyOn(sessionService, 'listUserSessions').mockResolvedValue([{ sessionID: 'x1' }]);
+      const authRoutes = loadAuthRoutes();
+      const app = buildApp(authRoutes, makeDb({}));
+      const token = signAccessToken();
+
+      const res = await request(app).get('/api/auth/sessions').set('Authorization', `Bearer ${token}`);
+      expect(res.status).toBe(200);
+      expect(res.body.data).toEqual([{ sessionID: 'x1' }]);
+    });
+
+    it('returns 500 when session.service.listUserSessions throws', async () => {
+      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
+      vi.spyOn(sessionService, 'listUserSessions').mockRejectedValue(new Error('list-boom'));
+      const authRoutes = loadAuthRoutes();
+      const app = buildApp(authRoutes, makeDb({}));
+      const token = signAccessToken();
+
+      const res = await request(app).get('/api/auth/sessions').set('Authorization', `Bearer ${token}`);
+      expect(res.status).toBe(500);
+    });
+  });
+
+  describe('DELETE /sessions/all-others', () => {
+    it('revokes other sessions and returns 200', async () => {
+      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
+      const revokeSpy = vi.spyOn(sessionService, 'revokeAllOtherSessions').mockResolvedValue(true);
+      const authRoutes = loadAuthRoutes();
+      const app = buildApp(authRoutes, makeDb({}));
+      const token = signAccessToken();
+
+      const res = await request(app).delete('/api/auth/sessions/all-others').set('Authorization', `Bearer ${token}`);
+      expect(res.status).toBe(200);
+      expect(revokeSpy).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('DELETE /sessions/:sessionId', () => {
+    it('returns 404 when revokeSessionById resolves falsy', async () => {
+      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
+      vi.spyOn(sessionService, 'revokeSessionById').mockResolvedValue(false);
+      const authRoutes = loadAuthRoutes();
+      const app = buildApp(authRoutes, makeDb({}));
+      const token = signAccessToken();
+
+      const res = await request(app).delete('/api/auth/sessions/session-xyz').set('Authorization', `Bearer ${token}`);
+      expect(res.status).toBe(404);
+    });
+
+    it('revokes the specified session and returns 200', async () => {
+      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 'other-session' } });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 'other-session' });
+      vi.spyOn(sessionService, 'revokeSessionById').mockResolvedValue(true);
+      const authRoutes = loadAuthRoutes();
+      const app = buildApp(authRoutes, makeDb({}));
+      const token = signAccessToken();
+
+      const res = await request(app).delete('/api/auth/sessions/session-xyz').set('Authorization', `Bearer ${token}`);
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+    });
+  });
+
+  describe('POST /refresh (public, no authenticate middleware)', () => {
+    function appWithDb(db) {
+      const authRoutes = loadAuthRoutes();
+      return buildApp(authRoutes, db);
+    }
+
+    it('returns 401 when there is no refresh_token cookie', async () => {
+      const app = appWithDb(makeDb({}));
+      const res = await request(app).post('/api/auth/refresh');
+      expect(res.status).toBe(401);
+    });
+
+    it('returns 401 for a garbage/invalid refresh token', async () => {
+      const app = appWithDb(makeDb({}));
+      const res = await request(app)
+        .post('/api/auth/refresh')
+        .set('Cookie', 'refresh_token=not-a-real-jwt');
+      expect(res.status).toBe(401);
+    });
+
+    it('returns 401 when the token has the wrong "type" claim', async () => {
+      const app = appWithDb(makeDb({}));
+      const badToken = jwt.sign({ userID: makeUserId(), type: 'access' }, JWT_REFRESH_SECRET, { expiresIn: '7d' });
+      const res = await request(app)
+        .post('/api/auth/refresh')
+        .set('Cookie', `refresh_token=${badToken}`);
+      expect(res.status).toBe(401);
+    });
+
+    it('returns 401 when session lookup for the refresh token returns null', async () => {
+      vi.spyOn(sessionService, 'getSessionByRefreshToken').mockResolvedValue(null);
+      const app = appWithDb(makeDb({}));
+      const userID = makeUserId();
+      const refreshToken = jwt.sign({ userID, type: 'refresh' }, JWT_REFRESH_SECRET, { expiresIn: '7d' });
+
+      const res = await request(app)
+        .post('/api/auth/refresh')
+        .set('Cookie', `refresh_token=${refreshToken}`);
+      expect(res.status).toBe(401);
+    });
+
+    it('returns 401 when the session userID does not match the token userID', async () => {
+      vi.spyOn(sessionService, 'getSessionByRefreshToken').mockResolvedValue({ userID: 'someone-else', sessionID: 's9' });
+      const app = appWithDb(makeDb({}));
+      const userID = makeUserId();
+      const refreshToken = jwt.sign({ userID, type: 'refresh' }, JWT_REFRESH_SECRET, { expiresIn: '7d' });
+
+      const res = await request(app)
+        .post('/api/auth/refresh')
+        .set('Cookie', `refresh_token=${refreshToken}`);
+      expect(res.status).toBe(401);
+    });
+
+    it('returns 401 when the user behind a valid session is no longer in the db', async () => {
+      const userID = makeUserId();
+      vi.spyOn(sessionService, 'getSessionByRefreshToken').mockResolvedValue({ userID: String(userID), sessionID: 's9' });
+      const app = appWithDb(makeDb(null));
+      const refreshToken = jwt.sign({ userID, type: 'refresh' }, JWT_REFRESH_SECRET, { expiresIn: '7d' });
+
+      const res = await request(app)
+        .post('/api/auth/refresh')
+        .set('Cookie', `refresh_token=${refreshToken}`);
+      expect(res.status).toBe(401);
+    });
+
+    it('rotates tokens and returns a new access token on the happy path', async () => {
+      const userId = new ObjectId();
+      vi.spyOn(sessionService, 'getSessionByRefreshToken').mockResolvedValue({ userID: userId.toString(), sessionID: 's9' });
+      const rotateSpy = vi.spyOn(sessionService, 'rotateSessionTokens').mockResolvedValue(true);
+      const db = makeDb({ _id: userId, email: 'a@b.com', username: 'u', accessType: 2, name: 'A' });
+      const app = appWithDb(db);
+      const refreshToken = jwt.sign({ userID: userId.toString(), type: 'refresh' }, JWT_REFRESH_SECRET, { expiresIn: '7d' });
+
+      const res = await request(app)
+        .post('/api/auth/refresh')
+        .set('Cookie', `refresh_token=${refreshToken}`);
+
+      expect(res.status).toBe(200);
+      expect(typeof res.body.data.token).toBe('string');
+      const decodedAccess = jwt.verify(res.body.data.token, JWT_SECRET);
+      expect(decodedAccess.userID).toBe(userId.toString());
+      expect(rotateSpy).toHaveBeenCalledTimes(1);
+      expect(res.headers['set-cookie']?.some((c) => c.startsWith('refresh_token='))).toBe(true);
+    });
+  });
+
+  describe('POST /password-reset/request and /password-reset/reset', () => {
+    it('delegates password-reset/request to authController.requestPasswordReset', async () => {
+      const spy = vi.spyOn(authController, 'requestPasswordReset').mockImplementation(async (req, res) => {
+        res.status(200).json({ success: true });
+      });
+      const authRoutes = loadAuthRoutes();
+      const app = buildApp(authRoutes);
+
+      const res = await request(app).post('/api/auth/password-reset/request').send({ email: 'a@b.com' });
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(res.status).toBe(200);
+    });
+
+    it('delegates password-reset/reset to authController.resetPassword', async () => {
+      const spy = vi.spyOn(authController, 'resetPassword').mockImplementation(async (req, res) => {
+        res.status(200).json({ success: true });
+      });
+      const authRoutes = loadAuthRoutes();
+      const app = buildApp(authRoutes);
+
+      const res = await request(app).post('/api/auth/password-reset/reset').send({ token: 't', newPassword: 'x' });
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(res.status).toBe(200);
+    });
+  });
+
+  describe('first-login MFA endpoints (public)', () => {
+    it('delegates /two-factor/qr-first-login to authController.setupMFAFirstLogin', async () => {
+      const spy = vi.spyOn(authController, 'setupMFAFirstLogin').mockImplementation(async (req, res) => {
+        res.status(200).json({ success: true });
+      });
+      const authRoutes = loadAuthRoutes();
+      const app = buildApp(authRoutes);
+
+      const res = await request(app).post('/api/auth/two-factor/qr-first-login').send({});
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(res.status).toBe(200);
+    });
+
+    it('delegates /two-factor/enable-first-login to authController.enableMFAFirstLogin', async () => {
+      const spy = vi.spyOn(authController, 'enableMFAFirstLogin').mockImplementation(async (req, res) => {
+        res.status(200).json({ success: true });
+      });
+      const authRoutes = loadAuthRoutes();
+      const app = buildApp(authRoutes);
+
+      const res = await request(app).post('/api/auth/two-factor/enable-first-login').send({});
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(res.status).toBe(200);
+    });
+  });
+
+  describe('legacy MFA endpoints (/mfa/setup, /mfa/enable)', () => {
+    it('delegates /mfa/setup to authController.setupMFA when authenticated', async () => {
+      const spy = vi.spyOn(authController, 'setupMFA').mockImplementation(async (req, res) => {
+        res.status(200).json({ success: true });
+      });
+      const authRoutes = loadAuthRoutes();
+      const app = buildApp(authRoutes);
+      const token = signAccessToken();
+
+      const res = await request(app).post('/api/auth/mfa/setup').set('Authorization', `Bearer ${token}`).send({});
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(res.status).toBe(200);
+    });
+
+    it('delegates /mfa/enable to authController.enableMFA when authenticated', async () => {
+      const spy = vi.spyOn(authController, 'enableMFA').mockImplementation((req, res) => {
+        res.status(200).json({ success: true });
+      });
+      const authRoutes = loadAuthRoutes();
+      const app = buildApp(authRoutes);
+      const token = signAccessToken();
+
+      const res = await request(app).post('/api/auth/mfa/enable').set('Authorization', `Bearer ${token}`).send({});
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(res.status).toBe(200);
     });
   });
 });
-
-// Para executar testes de integração reais, use:
-// npm run test:integration -- test/integration/auth.routes.test.js
-// COM o backend rodando em paralelo
