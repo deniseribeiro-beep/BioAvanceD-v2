@@ -724,3 +724,18 @@ calls. No new product bugs found — this is a thin, still-used (routes
 `importFhirIntelligent.js` and `dictionary.js`) singleton wrapper
 distinct from the richer `infrastructure/database/neo4j/connection.js`
 module.
+
+`src/controllers/audit.controller.js` moved from 47.56% to 100% lines
+(2026-07-04) with 28 new tests in `tests/unit/audit.controller.test.js`,
+mocking `integrityService`/`auditRootService`/`hl7AuditService`/
+`merkleTree` via `vi.spyOn` (the `cid.controller.test.js` req/res-mock
+pattern). Covers every handler's 503-db-unavailable, success, and
+500-catch paths, plus `report`'s optional hash-query proof lookup and
+`compare`'s three-way diff array (`no_saved_root`/`root_mismatch`/
+`no_diff`). One real behavior surfaced (not a bug, just non-obvious):
+`compare`'s `tampered` field is `saved && recalculated && ...`, so when
+`saved` is `null` the field comes back as `null` rather than coercing
+to `false` — asserted as-is in the test, no product change needed.
+Branch coverage on this file settled at 81.25% (a few defensive
+`?:`-style fallbacks inside already-covered lines); line/statement/
+function coverage is 100%. No new product bugs found.
