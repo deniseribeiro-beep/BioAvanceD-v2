@@ -596,7 +596,6 @@ src/services/patient.service.js                                     42.58%
 src/services/miabisValidator.service.js                             44.82%
 src/services/sampleComplianceSync.service.js                        45.45%
 src/services/batch-validation-engine.service.js                     45.76%
-src/services/storageService.js                                      46.06%
 src/interface/routes/logs.routes.js                                 46.93%
 src/interface/routes/equipment.routes.js                            47.09%
 src/controllers/audit.controller.js                                 47.56%
@@ -604,6 +603,20 @@ src/services/DrugService.js                                         47.82%
 src/routes/eConsent.js                                              47.88%
 src/controllers/import-lgpd.controller.js                           48.74%
 ```
+
+`storageService.js` moved off this list (46.06% -> 93.01% statements /
+92.88% lines / 80.45% branches, 16 new targeted tests, all green) by
+directly covering `autoAssignSampleToBox`'s in-transaction race-retry
+paths (ALREADY_ALLOCATED/BOX_FULL re-checks, STORAGE_COLLISION) and its
+Neo4j persist + rollback-on-failure path, plus `allocateSampleToPosition`'s
+already-allocated/modifiedCount-0 branches and the remaining generic
+catch clauses in `findAvailablePosition`/`getSampleStorage`/
+`verifyBoxIntegrity`/`getFreezerOccupancyStats`. This slice reconfirmed
+#69 (`allocateSampleToPosition`'s STORAGE_COLLISION guard checks
+`matchedDocuments`, a field the real MongoDB driver never sets, so the
+guard is provably dead even under a `matchedCount: 0` result) with a
+test proving the silent pass-through — no new bugs found beyond the
+already-filed #69.
 
 `dictionary.js` moved out of this list's top ranks (its previously
 uncovered `/medications/search`/`/disease-profile` routes are now

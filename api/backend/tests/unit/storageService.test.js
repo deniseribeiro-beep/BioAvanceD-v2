@@ -595,6 +595,80 @@ describe('StorageService.allocateSampleToPosition', () => {
     expect(result.error).toBe('ALLOCATION_ERROR');
     expect(result.message).toMatch(/não encontrada/);
   });
+
+  it('rejects when the sample is already allocated elsewhere', async () => {
+    const boxId = new ObjectId().toString();
+    const sampleId = new ObjectId().toString();
+
+    boxesFindOne.mockResolvedValue({
+      _id: new ObjectId(boxId),
+      dimension: { rows: 2, cols: 2 },
+      occupancyGrid: new Map(),
+      currentOccupancy: 0
+    });
+    samplesFindOne.mockResolvedValue({
+      _id: new ObjectId(sampleId),
+      storageLocation: { boxId: new ObjectId().toString(), position: 'B2' }
+    });
+
+    const result = await service.allocateSampleToPosition(sampleId, boxId, 'A1');
+
+    expect(result.success).toBe(false);
+    expect(result.message).toMatch(/já está alocada/);
+    expect(boxesUpdateOne).not.toHaveBeenCalled();
+  });
+
+  it('BUG NOTE (#69): STORAGE_COLLISION guard checks matchedDocuments (always undefined), never actually fires on a real driver-shaped collision result', async () => {
+    const boxId = new ObjectId().toString();
+    const sampleId = new ObjectId().toString();
+
+    boxesFindOne.mockResolvedValue({
+      _id: new ObjectId(boxId),
+      dimension: { rows: 2, cols: 2 },
+      occupancyGrid: new Map(),
+      currentOccupancy: 0
+    });
+    samplesFindOne.mockResolvedValue({
+      _id: new ObjectId(sampleId),
+      barcode: 'BC-1',
+      quantity: 5,
+      unit: 'mL',
+      storageLocation: null
+    });
+    // Real MongoDB driver reports collisions via `matchedCount: 0`, not `matchedDocuments`.
+    boxesUpdateOne.mockResolvedValue({ matchedCount: 0 });
+
+    const result = await service.allocateSampleToPosition(sampleId, boxId, 'A1');
+
+    // Despite matchedCount signalling no document matched (a real collision), the guard
+    // silently passes because it reads the nonexistent `matchedDocuments` field instead.
+    expect(result.success).toBe(true);
+  });
+
+  it('returns ALLOCATION_ERROR when the sample update reports modifiedCount 0', async () => {
+    const boxId = new ObjectId().toString();
+    const sampleId = new ObjectId().toString();
+
+    boxesFindOne.mockResolvedValue({
+      _id: new ObjectId(boxId),
+      dimension: { rows: 2, cols: 2 },
+      occupancyGrid: new Map(),
+      currentOccupancy: 0
+    });
+    samplesFindOne.mockResolvedValue({
+      _id: new ObjectId(sampleId),
+      barcode: 'BC-1',
+      quantity: 5,
+      unit: 'mL',
+      storageLocation: null
+    });
+    samplesUpdateOne.mockResolvedValue({ modifiedCount: 0 });
+
+    const result = await service.allocateSampleToPosition(sampleId, boxId, 'A1');
+
+    expect(result.success).toBe(false);
+    expect(result.message).toMatch(/Falha ao atualizar amostra/);
+  });
 });
 
 describe('StorageService.autoAssignSampleToBox', () => {
@@ -688,6 +762,210 @@ describe('StorageService.autoAssignSampleToBox', () => {
     expect(result.success).toBe(false);
     expect(result.error).toBe('BOX_NOT_FOUND');
   });
+
+  it('returns SAMPLE_NOT_FOUND when the specimen does not exist', async () => {
+    boxesFindOne.mockResolvedValue({
+      _id: new ObjectId(),
+      dimension: { rows: 1, cols: 1 },
+      occupancyGrid: {},
+      currentOccupancy: 0
+    });
+    samplesFindOne.mockResolvedValue(null);
+
+    const result = await service.autoAssignSampleToBox(new ObjectId().toString(), new ObjectId().toString());
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('SAMPLE_NOT_FOUND');
+  });
+
+  it('returns ALREADY_ALLOCATED on the pre-transaction check when the sample already has a storageLocation', async () => {
+    boxesFindOne.mockResolvedValue({
+      _id: new ObjectId(),
+      dimension: { rows: 1, cols: 1 },
+      occupancyGrid: {},
+      currentOccupancy: 0
+    });
+    samplesFindOne.mockResolvedValue({
+      _id: new ObjectId(),
+      storageLocation: { boxId: new ObjectId().toString(), position: 'A1' }
+    });
+
+    const result = await service.autoAssignSampleToBox(new ObjectId().toString(), new ObjectId().toString());
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('ALREADY_ALLOCATED');
+    expect(boxesUpdateOne).not.toHaveBeenCalled();
+  });
+
+  it('re-checks inside the transaction and returns ALREADY_ALLOCATED if a concurrent write allocated the sample first', async () => {
+    const boxId = new ObjectId();
+    const specimenId = new ObjectId();
+
+    boxesFindOne.mockResolvedValue({
+      _id: boxId,
+      dimension: { rows: 1, cols: 2 },
+      occupancyGrid: {},
+      currentOccupancy: 0
+    });
+    // Pre-check: not yet allocated. In-transaction fresh read: now allocated (race).
+    samplesFindOne
+      .mockResolvedValueOnce({ _id: specimenId, storageLocation: null })
+      .mockResolvedValueOnce({
+        _id: specimenId,
+        storageLocation: { boxId: boxId.toString(), position: 'A1' }
+      });
+
+    const result = await service.autoAssignSampleToBox(specimenId.toString(), boxId.toString());
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('ALREADY_ALLOCATED');
+    expect(boxesUpdateOne).not.toHaveBeenCalled();
+  });
+
+  it('re-checks inside the transaction and returns BOX_FULL if a concurrent write filled the box first', async () => {
+    const boxId = new ObjectId();
+    const specimenId = new ObjectId();
+
+    // Pre-check snapshot: one free slot. In-transaction fresh read: now full (race).
+    boxesFindOne
+      .mockResolvedValueOnce({
+        _id: boxId,
+        dimension: { rows: 1, cols: 1 },
+        occupancyGrid: {},
+        currentOccupancy: 0
+      })
+      .mockResolvedValueOnce({
+        _id: boxId,
+        dimension: { rows: 1, cols: 1 },
+        occupancyGrid: { A1: new ObjectId() },
+        currentOccupancy: 1
+      });
+    samplesFindOne.mockResolvedValue({ _id: specimenId, storageLocation: null });
+
+    const result = await service.autoAssignSampleToBox(specimenId.toString(), boxId.toString());
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('BOX_FULL');
+    expect(boxesUpdateOne).not.toHaveBeenCalled();
+  });
+
+  it('returns STORAGE_COLLISION when the atomic box update reports no matched document (real collision)', async () => {
+    const boxId = new ObjectId();
+    const specimenId = new ObjectId();
+
+    boxesFindOne.mockResolvedValue({
+      _id: boxId,
+      dimension: { rows: 1, cols: 1 },
+      occupancyGrid: {},
+      currentOccupancy: 0
+    });
+    samplesFindOne.mockResolvedValue({ _id: specimenId, storageLocation: null });
+    boxesUpdateOne.mockResolvedValue({ matchedCount: 0 });
+
+    const result = await service.autoAssignSampleToBox(specimenId.toString(), boxId.toString());
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('AUTO_ASSIGNMENT_ERROR');
+    expect(result.message).toMatch(/Colisão detectada/);
+  });
+
+  it('returns AUTO_ASSIGNMENT_ERROR when the sample update fails to match after allocation', async () => {
+    const boxId = new ObjectId();
+    const specimenId = new ObjectId();
+
+    boxesFindOne.mockResolvedValue({
+      _id: boxId,
+      dimension: { rows: 1, cols: 1 },
+      occupancyGrid: {},
+      currentOccupancy: 0
+    });
+    samplesFindOne.mockResolvedValue({ _id: specimenId, storageLocation: null });
+    samplesUpdateOne.mockResolvedValue({ matchedCount: 0 });
+
+    const result = await service.autoAssignSampleToBox(specimenId.toString(), boxId.toString());
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('AUTO_ASSIGNMENT_ERROR');
+    expect(result.message).toMatch(/Falha ao atualizar/);
+  });
+
+  it('persists to Neo4j and reports graphPersisted:true when a driver is configured', async () => {
+    const boxId = new ObjectId();
+    const specimenId = new ObjectId();
+    const runMock = vi.fn().mockResolvedValue({});
+    const closeMock = vi.fn().mockResolvedValue(undefined);
+    const neo4jSessionMock = vi.fn(() => ({ run: runMock, close: closeMock }));
+    const neo4jDriver = { session: neo4jSessionMock };
+
+    service = new StorageService(db, neo4jDriver);
+
+    boxesFindOne.mockResolvedValue({
+      _id: boxId,
+      name: 'Box A',
+      dimension: { rows: 1, cols: 1 },
+      occupancyGrid: {},
+      currentOccupancy: 0
+    });
+    samplesFindOne.mockResolvedValue({ _id: specimenId, barcode: 'BC-9', storageLocation: null });
+
+    const result = await service.autoAssignSampleToBox(specimenId.toString(), boxId.toString());
+
+    expect(result.success).toBe(true);
+    expect(result.graphPersisted).toBe(true);
+    expect(neo4jSessionMock).toHaveBeenCalled();
+    expect(runMock).toHaveBeenCalledTimes(1);
+    expect(runMock.mock.calls[0][1]).toMatchObject({
+      specimenId: specimenId.toString(),
+      boxId: boxId.toString(),
+      coordinate: 'A1'
+    });
+    expect(closeMock).toHaveBeenCalled();
+  });
+
+  it('rolls back the Mongo allocation when the Neo4j sync fails, and surfaces the Neo4j error', async () => {
+    const boxId = new ObjectId();
+    const specimenId = new ObjectId();
+    const neo4jError = new Error('neo4j unreachable');
+    const runMock = vi.fn().mockRejectedValue(neo4jError);
+    const closeMock = vi.fn().mockResolvedValue(undefined);
+    const neo4jDriver = { session: vi.fn(() => ({ run: runMock, close: closeMock })) };
+
+    const rollbackBoxUpdate = vi.fn().mockResolvedValue({});
+    const rollbackSampleUpdate = vi.fn().mockResolvedValue({});
+    // Second startSession() call (rollback) needs its own session object.
+    const rollbackSession = makeSession();
+    let sessionCallCount = 0;
+    db.getMongo = vi.fn(() => ({
+      startSession: vi.fn(() => {
+        sessionCallCount += 1;
+        return sessionCallCount === 1 ? makeSession() : rollbackSession;
+      })
+    }));
+    // Route updateOne calls made during rollback to dedicated spies while keeping
+    // the original allocation-phase updateOne behavior for the first calls.
+    boxesUpdateOne.mockImplementation((...args) => {
+      if (args[1]?.$unset) return rollbackBoxUpdate(...args);
+      return Promise.resolve({ matchedCount: 1 });
+    });
+    samplesUpdateOne.mockImplementation((...args) => {
+      if (args[1]?.$unset) return rollbackSampleUpdate(...args);
+      return Promise.resolve({ matchedCount: 1 });
+    });
+
+    service = new StorageService(db, neo4jDriver);
+
+    boxesFindOne.mockResolvedValue({
+      _id: boxId,
+      name: 'Box A',
+      dimension: { rows: 1, cols: 1 },
+      occupancyGrid: {},
+      currentOccupancy: 0
+    });
+    samplesFindOne.mockResolvedValue({ _id: specimenId, barcode: 'BC-9', storageLocation: null });
+
+    const result = await service.autoAssignSampleToBox(specimenId.toString(), boxId.toString());
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('AUTO_ASSIGNMENT_ERROR');
+    expect(result.message).toBe('neo4j unreachable');
+    expect(rollbackBoxUpdate).toHaveBeenCalledTimes(1);
+    expect(rollbackSampleUpdate).toHaveBeenCalledTimes(1);
+    expect(closeMock).toHaveBeenCalled();
+  });
 });
 
 describe('StorageService.releaseSampleFromPosition', () => {
@@ -757,5 +1035,72 @@ describe('StorageService.releaseSampleFromPosition', () => {
     const result = await service.releaseSampleFromPosition(new ObjectId().toString());
     expect(result.success).toBe(false);
     expect(result.error).toBe('SAMPLE_NOT_FOUND');
+  });
+
+  it('returns RELEASE_ERROR when the box update rejects', async () => {
+    samplesFindOne.mockResolvedValue({
+      _id: new ObjectId(),
+      storageLocation: { boxId: new ObjectId().toString(), position: 'A1' }
+    });
+    boxesUpdateOne.mockRejectedValue(new Error('db down'));
+
+    const result = await service.releaseSampleFromPosition(new ObjectId().toString());
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('RELEASE_ERROR');
+    expect(result.message).toBe('db down');
+  });
+});
+
+describe('StorageService error-handling branches (generic catch clauses)', () => {
+  it('findAvailablePosition returns SEARCH_ERROR when the query throws', async () => {
+    const db = makeDb({
+      collection: vi.fn(() => ({ findOne: vi.fn().mockRejectedValue(new Error('boom')) }))
+    });
+    const service = new StorageService(db);
+    const result = await service.findAvailablePosition(new ObjectId().toString());
+    expect(result.found).toBe(false);
+    expect(result.error).toBe('SEARCH_ERROR');
+    expect(result.message).toBe('boom');
+  });
+
+  it('getSampleStorage returns QUERY_ERROR when the query throws', async () => {
+    const db = makeDb({
+      collection: vi.fn(() => ({ findOne: vi.fn().mockRejectedValue(new Error('boom')) }))
+    });
+    const service = new StorageService(db);
+    const result = await service.getSampleStorage(new ObjectId().toString());
+    expect(result.found).toBe(false);
+    expect(result.error).toBe('QUERY_ERROR');
+    expect(result.message).toBe('boom');
+  });
+
+  it('verifyBoxIntegrity returns INTEGRITY_CHECK_ERROR when the query throws', async () => {
+    const db = makeDb({
+      collection: vi.fn(() => ({ findOne: vi.fn().mockRejectedValue(new Error('boom')) }))
+    });
+    const service = new StorageService(db);
+    const result = await service.verifyBoxIntegrity(new ObjectId().toString());
+    expect(result.valid).toBe(false);
+    expect(result.error).toBe('INTEGRITY_CHECK_ERROR');
+    expect(result.message).toBe('boom');
+  });
+
+  it('getFreezerOccupancyStats returns STATS_ERROR when the aggregation throws', async () => {
+    const db = makeDb({
+      collection: vi.fn((name) => {
+        if (name === 'storageContainers') {
+          return { findOne: vi.fn().mockResolvedValue({ _id: new ObjectId(), containerType: 'FREEZER' }) };
+        }
+        if (name === 'storageBoxes') {
+          return { aggregate: () => ({ toArray: vi.fn().mockRejectedValue(new Error('boom')) }) };
+        }
+        throw new Error(`unexpected collection: ${name}`);
+      })
+    });
+    const service = new StorageService(db);
+    const result = await service.getFreezerOccupancyStats(new ObjectId().toString());
+    expect(result.stats).toBeNull();
+    expect(result.error).toBe('STATS_ERROR');
+    expect(result.message).toBe('boom');
   });
 });
