@@ -769,3 +769,22 @@ is fully covered with mocked `PatientModel`-adjacent dependencies
 the module-load `CONSENT_SECRET` guard (line 15, requires a fresh
 require with the env var unset — low value) and the two bug-blocked
 happy paths above.
+
+`src/controllers/import-lgpd.controller.js` moved from 48.74% to
+83.64% lines (2026-07-04) by adding 9 tests to the existing
+`tests/unit/import-lgpd.controller.test.js` (which already covered
+`listSmartImportReports`/`getPatientsSmartImportMetadata`/
+`importPatients`/`predictPatientsMapping`/`importSamples`/
+`importPatientsSmart`'s core paths) for the three previously entirely
+untested template-download handlers. Covers
+`downloadPatientTemplateExcel` and `downloadSampleTemplateExcel`'s
+success/500-catch paths (forcing the catch via
+`vi.spyOn(ExcelJS.Workbook.prototype, 'addWorksheet')`, since
+`workbook.xlsx.writeBuffer` isn't easily mockable per-instance), and
+`downloadSampleTemplateCSV`'s db-present/db-absent/db-collection-
+throws-and-warns/csv-stringify-throws-500 branches (forcing the last
+via `vi.spyOn(require('csv-stringify/sync'), 'stringify')`). No new
+product bugs found. This closes out the LOW coverage bucket entirely —
+see `COVERAGE_NOTES.md` for the note that the next session should run
+a fresh `--coverage --reporter=basic` reconcile to regenerate real
+buckets rather than continue from an empty list.

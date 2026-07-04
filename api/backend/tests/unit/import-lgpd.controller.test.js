@@ -706,4 +706,172 @@ describe('import-lgpd.controller', () => {
       expect(res.status).toHaveBeenCalledWith(400);
     });
   });
+
+  describe('downloadPatientTemplateExcel', () => {
+    it('builds a workbook and sends it with the correct headers', async () => {
+      const req = {};
+      const res = createRes();
+
+      await controller.downloadPatientTemplateExcel(req, res);
+
+      expect(res.setHeader).toHaveBeenCalledWith(
+        'Content-Type',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      );
+      expect(res.setHeader).toHaveBeenCalledWith(
+        'Content-Disposition',
+        'attachment; filename="pacientes_template.xlsx"'
+      );
+      expect(res.send).toHaveBeenCalledTimes(1);
+      expect(Buffer.isBuffer(res.send.mock.calls[0][0])).toBe(true);
+    });
+
+    it('returns 500 when workbook generation throws', async () => {
+      const ExcelJS = require('exceljs');
+      vi.spyOn(ExcelJS.Workbook.prototype, 'addWorksheet').mockImplementation(() => {
+        throw new Error('workbook error');
+      });
+      const req = {};
+      const res = createRes();
+
+      await controller.downloadPatientTemplateExcel(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(500);
+      expect(res.json).toHaveBeenCalledWith({
+        success: false,
+        error: 'Erro ao gerar template',
+        message: 'workbook error',
+      });
+    });
+  });
+
+  describe('downloadSampleTemplateCSV', () => {
+    it('sends a CSV with default values when no db is available', async () => {
+      const req = { app: { locals: {} } };
+      const res = createRes();
+
+      await controller.downloadSampleTemplateCSV(req, res);
+
+      expect(res.setHeader).toHaveBeenCalledWith('Content-Type', 'text/csv; charset=utf-8');
+      expect(res.setHeader).toHaveBeenCalledWith(
+        'Content-Disposition',
+        'attachment; filename="amostras_template.csv"'
+      );
+      expect(res.send).toHaveBeenCalledTimes(1);
+      expect(res.send.mock.calls[0][0]).toMatch(/^﻿/);
+    });
+
+    it('uses db-backed sampleTypes/sampleOrigins/extractionProtocols when present', async () => {
+      const collection = {
+        find: vi.fn().mockReturnThis(),
+        toArray: vi.fn().mockResolvedValue([{ id: 'CUSTOM_TYPE', description: 'Custom' }]),
+      };
+      const db = { collection: vi.fn().mockReturnValue(collection) };
+      const req = { app: { locals: { db } } };
+      const res = createRes();
+
+      await controller.downloadSampleTemplateCSV(req, res);
+
+      expect(db.collection).toHaveBeenCalledWith('sampleTypes');
+      expect(db.collection).toHaveBeenCalledWith('sampleOrigins');
+      expect(db.collection).toHaveBeenCalledWith('extractionProtocols');
+      const csvBody = res.send.mock.calls[0][0];
+      expect(csvBody).toContain('CUSTOM_TYPE');
+    });
+
+    it('falls back to defaults and logs a warning when db collections throw', async () => {
+      const collection = {
+        find: vi.fn().mockReturnThis(),
+        toArray: vi.fn().mockRejectedValue(new Error('db error')),
+      };
+      const db = { collection: vi.fn().mockReturnValue(collection) };
+      const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+      const req = { app: { locals: { db } } };
+      const res = createRes();
+
+      await controller.downloadSampleTemplateCSV(req, res);
+
+      expect(warnSpy).toHaveBeenCalled();
+      expect(res.send).toHaveBeenCalledTimes(1);
+    });
+
+    it('returns 500 when CSV generation throws', async () => {
+      const csvSync = require('csv-stringify/sync');
+      vi.spyOn(csvSync, 'stringify').mockImplementation(() => {
+        throw new Error('csv error');
+      });
+      const req = { app: { locals: {} } };
+      const res = createRes();
+
+      await controller.downloadSampleTemplateCSV(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(500);
+      expect(res.json).toHaveBeenCalledWith({
+        success: false,
+        error: 'Erro ao gerar template',
+        message: 'csv error',
+      });
+    });
+  });
+
+  describe('downloadSampleTemplateExcel', () => {
+    it('builds a workbook with default values when no db is available', async () => {
+      const req = { app: { locals: {} } };
+      const res = createRes();
+
+      await controller.downloadSampleTemplateExcel(req, res);
+
+      expect(res.setHeader).toHaveBeenCalledWith(
+        'Content-Type',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      );
+      expect(res.setHeader).toHaveBeenCalledWith(
+        'Content-Disposition',
+        'attachment; filename="amostras_template.xlsx"'
+      );
+      expect(res.send).toHaveBeenCalledTimes(1);
+      expect(Buffer.isBuffer(res.send.mock.calls[0][0])).toBe(true);
+    });
+
+    it('adds a reference sheet and per-collection warnings when some db lookups fail', async () => {
+      let call = 0;
+      const collection = {
+        find: vi.fn().mockReturnThis(),
+        toArray: vi.fn().mockImplementation(() => {
+          call += 1;
+          // sampleTypes succeeds, sampleOrigins and extractionProtocols fail.
+          return call === 1
+            ? Promise.resolve([{ id: 'PLASMA', description: 'Plasma' }])
+            : Promise.reject(new Error('db error'));
+        }),
+      };
+      const db = { collection: vi.fn().mockReturnValue(collection) };
+      const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+      const req = { app: { locals: { db } } };
+      const res = createRes();
+
+      await controller.downloadSampleTemplateExcel(req, res);
+
+      expect(warnSpy).toHaveBeenCalledTimes(2);
+      expect(res.send).toHaveBeenCalledTimes(1);
+    });
+
+    it('returns 500 when workbook generation throws', async () => {
+      const ExcelJS = require('exceljs');
+      vi.spyOn(ExcelJS.Workbook.prototype, 'addWorksheet').mockImplementation(() => {
+        throw new Error('workbook error');
+      });
+      const req = { app: { locals: {} } };
+      const res = createRes();
+
+      await controller.downloadSampleTemplateExcel(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(500);
+      expect(res.json).toHaveBeenCalledWith({
+        success: false,
+        error: 'Erro ao gerar template',
+        message: 'workbook error',
+      });
+    });
+  });
 });

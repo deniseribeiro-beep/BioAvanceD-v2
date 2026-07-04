@@ -81,8 +81,13 @@ reconcile (list re-derived from a real `coverage/coverage-summary.json`
 run, not hand-maintained):
 
 ```
-src/controllers/import-lgpd.controller.js                            48.74%
 ```
+
+The LOW bucket is currently empty — every previously-listed file is now
+above 50% lines. Next session should run a fresh
+`npx vitest run --coverage --reporter=basic` reconcile to regenerate
+this table from real numbers rather than continuing to pick from a
+stale/empty list.
 
 Note: this table only lists files still under 50% lines as of the
 2026-07-04 reconcile — many previously-listed files (storageService.js,
@@ -133,6 +138,12 @@ branches covered; see COVERAGE_HISTORY.md).
 (the remaining uncovered lines are the module-load CONSENT_SECRET guard
 and two happy paths that are unreachable due to real bugs found and
 filed — issues #80 and #81 — see COVERAGE_HISTORY.md).
+`src/controllers/import-lgpd.controller.js` moved from 48.74% to 83.64%
+lines this session (all three template-download handlers —
+`downloadPatientTemplateExcel`/`downloadSampleTemplateCSV`/
+`downloadSampleTemplateExcel` — now covered, including their db-present/
+db-absent/db-throws branches and 500-catch paths; see
+COVERAGE_HISTORY.md).
 
 ## MID coverage (50-84% lines) — GOOD (>=85%)
 
