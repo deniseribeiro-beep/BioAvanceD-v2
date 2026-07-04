@@ -412,5 +412,191 @@ describe('sample-file.controller', () => {
 
       expect(res.status).toHaveBeenCalledWith(400);
     });
+
+    it('returns 503 when db is unavailable', async () => {
+      const req = { app: { locals: { db: null } }, params: { sampleID: 's1', fileID: 'f1' } };
+      const res = createRes();
+
+      await controller.exportFHIR(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(503);
+    });
+
+    it('returns 404 when the file record is not found', async () => {
+      const db = createDb({ sample_files: { findOne: vi.fn().mockResolvedValue(null) } });
+      const req = { app: { locals: { db } }, params: { sampleID: 's1', fileID: new ObjectId().toString() } };
+      const res = createRes();
+
+      await controller.exportFHIR(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(404);
+    });
+
+    it('returns 404 when the sample is not found', async () => {
+      const fileID = new ObjectId().toString();
+      const sampleID = new ObjectId().toString();
+      const fileRecord = { _id: new ObjectId(fileID), sampleID, fileName: 'a.csv' };
+      const db = createDb({
+        sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord) },
+        samples: { findOne: vi.fn().mockResolvedValue(null) }
+      });
+      const req = { app: { locals: { db } }, params: { sampleID, fileID } };
+      const res = createRes();
+
+      await controller.exportFHIR(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(404);
+    });
+
+    it('logs the export when req.user is present', async () => {
+      const fileID = new ObjectId().toString();
+      const sampleID = new ObjectId().toString();
+      const fileRecord = { _id: new ObjectId(fileID), sampleID, fileName: 'a.csv', fileType: 'CSV' };
+      const sample = { _id: new ObjectId(sampleID), patientID: '12345678' };
+      const db = createDb({
+        sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord) },
+        samples: { findOne: vi.fn().mockResolvedValue(sample) }
+      });
+      const req = { app: { locals: { db } }, params: { sampleID, fileID }, user: { id: 'u1' } };
+      const res = createRes();
+      vi.spyOn(hl7Service, 'generateFHIRResource').mockResolvedValue({ resourceType: 'Bundle' });
+      const logSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
+      vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+
+      await controller.exportFHIR(req, res);
+
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'file_export_fhir', entityID: fileID })
+      );
+    });
+
+    it('returns 500 when the FHIR generator throws', async () => {
+      const fileID = new ObjectId().toString();
+      const sampleID = new ObjectId().toString();
+      const fileRecord = { _id: new ObjectId(fileID), sampleID, fileName: 'a.csv' };
+      const sample = { _id: new ObjectId(sampleID), patientID: '12345678' };
+      const db = createDb({
+        sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord) },
+        samples: { findOne: vi.fn().mockResolvedValue(sample) }
+      });
+      const req = { app: { locals: { db } }, params: { sampleID, fileID }, user: null };
+      const res = createRes();
+      vi.spyOn(hl7Service, 'generateFHIRResource').mockRejectedValue(new Error('boom'));
+
+      await controller.exportFHIR(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(500);
+    });
+  });
+
+  describe('exportCDA', () => {
+    it('returns 503 when db is unavailable', async () => {
+      const req = { app: { locals: { db: null } }, params: { sampleID: 's1', fileID: 'f1' } };
+      const res = createRes();
+
+      await controller.exportCDA(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(503);
+    });
+
+    it('returns 404 when the file record is not found', async () => {
+      const db = createDb({ sample_files: { findOne: vi.fn().mockResolvedValue(null) } });
+      const req = { app: { locals: { db } }, params: { sampleID: 's1', fileID: new ObjectId().toString() } };
+      const res = createRes();
+
+      await controller.exportCDA(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(404);
+    });
+
+    it('returns 400 when file is not linked to the given sample', async () => {
+      const fileID = new ObjectId().toString();
+      const fileRecord = { _id: new ObjectId(fileID), sampleID: 'other-sample', fileName: 'a.csv' };
+      const db = createDb({
+        sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord) }
+      });
+      const req = { app: { locals: { db } }, params: { sampleID: 'sample-1', fileID } };
+      const res = createRes();
+
+      await controller.exportCDA(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(400);
+    });
+
+    it('returns 404 when the sample is not found', async () => {
+      const fileID = new ObjectId().toString();
+      const sampleID = new ObjectId().toString();
+      const fileRecord = { _id: new ObjectId(fileID), sampleID, fileName: 'a.csv' };
+      const db = createDb({
+        sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord) },
+        samples: { findOne: vi.fn().mockResolvedValue(null) }
+      });
+      const req = { app: { locals: { db } }, params: { sampleID, fileID } };
+      const res = createRes();
+
+      await controller.exportCDA(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(404);
+    });
+
+    it('happy path: generates CDA document and sets headers', async () => {
+      const fileID = new ObjectId().toString();
+      const sampleID = new ObjectId().toString();
+      const fileRecord = { _id: new ObjectId(fileID), sampleID, fileName: 'a.csv', fileType: 'CSV' };
+      const sample = { _id: new ObjectId(sampleID), patientID: '12345678' };
+      const db = createDb({
+        sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord) },
+        samples: { findOne: vi.fn().mockResolvedValue(sample) }
+      });
+      const req = { app: { locals: { db } }, params: { sampleID, fileID }, user: null };
+      const res = createRes();
+      vi.spyOn(hl7Service, 'generateCDA').mockResolvedValue('<ClinicalDocument/>');
+
+      await controller.exportCDA(req, res);
+
+      expect(res.setHeader).toHaveBeenCalledWith('Content-Type', 'application/xml; charset=utf-8');
+      expect(res.setHeader).toHaveBeenCalledWith('Content-Disposition', `attachment; filename="cda_${fileID}.xml"`);
+      expect(res.send).toHaveBeenCalledWith('<ClinicalDocument/>');
+    });
+
+    it('logs the export when req.user is present', async () => {
+      const fileID = new ObjectId().toString();
+      const sampleID = new ObjectId().toString();
+      const fileRecord = { _id: new ObjectId(fileID), sampleID, fileName: 'a.csv', fileType: 'CSV' };
+      const sample = { _id: new ObjectId(sampleID), patientID: '12345678' };
+      const db = createDb({
+        sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord) },
+        samples: { findOne: vi.fn().mockResolvedValue(sample) }
+      });
+      const req = { app: { locals: { db } }, params: { sampleID, fileID }, user: { id: 'u1' } };
+      const res = createRes();
+      vi.spyOn(hl7Service, 'generateCDA').mockResolvedValue('<ClinicalDocument/>');
+      const logSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
+      vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+
+      await controller.exportCDA(req, res);
+
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'file_export_cda', entityID: fileID })
+      );
+    });
+
+    it('returns 500 when the CDA generator throws', async () => {
+      const fileID = new ObjectId().toString();
+      const sampleID = new ObjectId().toString();
+      const fileRecord = { _id: new ObjectId(fileID), sampleID, fileName: 'a.csv' };
+      const sample = { _id: new ObjectId(sampleID), patientID: '12345678' };
+      const db = createDb({
+        sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord) },
+        samples: { findOne: vi.fn().mockResolvedValue(sample) }
+      });
+      const req = { app: { locals: { db } }, params: { sampleID, fileID }, user: null };
+      const res = createRes();
+      vi.spyOn(hl7Service, 'generateCDA').mockRejectedValue(new Error('boom'));
+
+      await controller.exportCDA(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(500);
+    });
   });
 });

@@ -862,3 +862,19 @@ that the write routes are all hardcoded 405s — filed as issue #82
 (documentation, test-branch) rather than tested, since testing
 unreachable/unexported code isn't meaningful. No other product bugs
 found.
+
+`src/controllers/sample-file.controller.js` moved from 51.86% to 69%
+lines (2026-07-04), extending the existing
+`tests/unit/sample-file.controller.test.js` (21 → 33 tests). Added the
+`exportFHIR` branches the existing single happy-path test hadn't
+covered (503/404-file/404-sample/audit-log/500), plus a full
+`exportCDA` describe block (503/404-file/400-mismatch/404-sample/
+happy-path/audit-log/500) mirroring the `exportHL7v2`/`exportFHIR`
+pattern already in the file. No product bugs found. Remaining gap is
+the `multer.diskStorage`'s `destination`/`filename`/`fileFilter`
+callbacks defined in the constructor (lines ~24-66) — these are
+multer's internal disk-storage hooks, not reachable by calling the
+controller's own methods the way this test file does, and exercising
+them would mean testing multer's internals rather than this
+controller's logic; left untested as disproportionate for the value,
+same call as `worker.js` in the ZERO bucket.
