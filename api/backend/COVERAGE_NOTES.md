@@ -16,14 +16,20 @@ stale as slices land and as source files change. Keep it honest:
   re-derive buckets from `coverage/coverage-summary.json` (`lines.pct`
   per file). `coverage/` is gitignored — this file is the durable record.
 
-Last full reconcile: **2026-07-02**, snapshot from commit `301dc9a9`
-(end-of-loop reconcile after the biomarker-integrity / mqtt-ingestion-audit
-/ auto-assign-sample.controller / import-batch.controller / MongoAuditRepository
-/ validateEnv / AllocateSampleUseCase / config-queue / InfluxTelemetryWriteRepository
-parallel-test-agents slices landed, plus hl7Audit.service / ReleaseSampleUseCase /
-MoveSampleUseCase from the prior session).
-Baseline: Statements 46.72%, Branches 42.34%, Functions 53.06%, Lines
-47.11% (8165/17331). Full suite green (exit 0) on this run.
+Last full reconcile: **2026-07-03**, snapshot from commit `1ac77354`
+(end-of-loop reconcile after slices 14 through 20 landed: cid.controller.js,
+temperature.controller.js, result-worker.js, storage-query.controller.js,
+result.routes.js/fhir-sync.service.js, NotificationService.js/
+fhir-validator.service.js/move-sample.controller.js, Result.js/hpo.js/
+dictionary.js's medications+disease-profile routes, and
+incident.controller.js/semantic-pointer.js/allocate-sample.controller.js/
+release-sample.controller.js).
+Statements 65.34%, Branches 58.83%, Functions 72.45%, Lines 65.73%
+(11392/17331). Full suite run by the user (not re-verified by this
+session's coverage command since it's normally gated to ship-to-main —
+see `full-suite-guard.cjs`); exit status not independently confirmed
+this reconcile, only the `coverage/coverage-summary.json` numbers were
+read.
 
 Since baseline: `MongoStorageTopologyReadRepository.js`, `database/mongo.js`,
 and `sample-file.controller.js` moved off the LOW bucket by a
@@ -314,21 +320,23 @@ Low priority (models/interfaces/one-off scripts — thin or non-request-path):
 - `src/scripts/seedOrphanetCid.js`
 - `src/scripts/seeder.js`
 
-## LOW coverage (1-49% lines) — 89 files
+## LOW coverage (1-49% lines) — re-measured 2026-07-03, commit `1ac77354`
 
-Sorted ascending (worst first). This is the primary slice-picking pool:
+Sorted ascending (worst first). This is the primary slice-picking pool
+(list re-derived from a real `coverage/coverage-summary.json` run, not
+hand-maintained — some entries below are new since the last reconcile,
+some previously-listed files have moved up past 49% and dropped off):
 
 ```
-src/interface/routes/reports.routes.js                    19.06% (partially extended, see 11th slice note above)
 src/services/consent.service.js                                     26.1%
-src/routes/dictionary.js                                            26.71% (atc/search, medications/search, disease-profile covered; /search + /suggest, Neo4j-backed, still uncovered — see 19th slice note above)
 src/interface/routes/auth.routes.js                                 28.49%
+src/services/security.service.js                                    28.67%
+src/services/import-lgpd.service.js                                 29.78%
+src/interface/routes/reports.routes.js                              30.2% (partially extended, see 11th slice note above)
 src/routes/orphanet.js                                              30.76%
 src/interface/routes/location.routes.js                             32.25%
 src/models/StorageContainer.js                                      32.69%
 src/interface/routes/terminologies.routes.js                        32.9%
-src/core/use-cases/ListOperationalFreezersUseCase.js                33.33%
-src/infrastructure/middleware/consent.enforcement.js                33.33%
 src/interface/routes/sample.routes.js                               33.33%
 src/services/log.service.js                                         33.86%
 src/services/import.service.js                                      34.19%
@@ -346,12 +354,23 @@ src/services/session.service.js                                     43.75%
 src/services/miabisValidator.service.js                             44.82%
 src/services/sampleComplianceSync.service.js                        45.45%
 src/services/batch-validation-engine.service.js                     45.76%
+src/services/storageService.js                                      46.06%
 src/interface/routes/logs.routes.js                                 46.93%
 src/interface/routes/equipment.routes.js                            47.09%
 src/controllers/audit.controller.js                                 47.56%
 src/services/DrugService.js                                         47.82%
-src/routes/eConsent.js                                               47.88%
+src/routes/eConsent.js                                              47.88%
+src/controllers/import-lgpd.controller.js                           48.74%
 ```
+
+`dictionary.js` moved out of this list's top ranks (its previously
+uncovered `/medications/search`/`/disease-profile` routes are now
+covered, see 19th slice note above) — its exact new % wasn't in the
+top-40 slice of this re-measurement; re-check with a fresh coverage run
+if picking it as a slice. Same caveat for any other file mentioned
+elsewhere in this doc's slice notes but not appearing in the table
+above — this table is the top ~32 worst files only, not an exhaustive
+89-file list.
 
 ## MID coverage (50-84% lines) — 44 files, GOOD (>=85%) — 104 files
 
