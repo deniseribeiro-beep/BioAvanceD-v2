@@ -465,6 +465,21 @@ driver) instead of `matchedCount`, so the guard can never fire and the
 method's only real protection against a same-position race is the
 non-atomic pre-write `validatePositionAvailability` check — a TOCTOU gap.
 
+Since baseline (29th slice, parallel-test-agents): `src/services/temperature.service.js`,
+`src/services/DrugService.js`, and `src/interface/routes/logs.routes.js` moved off the
+LOW bucket — a 3-agent parallel-test-agents slice (18 + 30 + 21 = 69 new/extended
+targeted tests, all green, independently re-verified together) — exact new percentages
+not yet re-measured, will land at the next full reconcile. `logs.routes.js` already had
+a pre-existing partial `tests/integration/logs.api.test.js` (8 tests) which was extended
+to 21 covering all 7 routes plus `requireAuditReader`'s substring-match branch. This
+slice surfaced three findings, all filed: #71 (`DrugService.searchAndCacheDrug`'s
+`||`-based limit clamp silently coerces an explicit `limit: 0` to the default of 10
+instead of clamping to 1), #72 (`logs.routes.js` `GET /:id`'s ObjectId lookup always
+wins over a colliding `logId` value, same shape as the already-tracked #34), and #73
+(`temperature.service.js`'s `checkPolicyAndAlert` falls through to an unscoped
+`findOne({})` — matching a random/first policy — when called with no policy identifier;
+currently unreachable from its only caller's guard, but live public-method logic).
+
 ## How to use this when picking a slice
 
 1. Prefer a **ZERO** file with real logic (not a script/model/port
@@ -523,7 +538,6 @@ src/config/uploadConfig.js                                          35.89%
 src/services/integrityCheckService.js                               36.84%
 src/services/fhir.service.js                                        36.92%
 src/services/hl7.service.js                                         38.05%
-src/services/temperature.service.js                                 38.96%
 src/services/patientBiomarkerTimeseries.service.js                  39.02%
 src/database/neo4j.js                                               40%
 src/models/StorageBox.js                                            41.74%
