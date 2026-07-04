@@ -81,7 +81,6 @@ reconcile (list re-derived from a real `coverage/coverage-summary.json`
 run, not hand-maintained):
 
 ```
-src/database/neo4j.js                                                40%
 src/controllers/audit.controller.js                                 47.56%
 src/routes/eConsent.js                                               47.88%
 src/controllers/import-lgpd.controller.js                            48.74%
@@ -125,6 +124,10 @@ validation/success/error branches, readJsonRows/detectCsvSeparator/
 readCsvRows/readRowsFromFile, and processBatchImport's end-to-end
 chunking/progress/status-transition loop now covered; only readXlsxRows
 and a couple of catch-branches remain — see COVERAGE_HISTORY.md).
+`src/database/neo4j.js` moved from 40% to 100% lines this session (the
+env-var-driven URI/username/password construction, default fallback,
+and singleton memoization all covered via the require.cache-injection
+mechanic from `neo4j-connection.test.js`; see COVERAGE_HISTORY.md).
 
 ## MID coverage (50-84% lines) — GOOD (>=85%)
 

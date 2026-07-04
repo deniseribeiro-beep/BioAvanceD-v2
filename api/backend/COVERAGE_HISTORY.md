@@ -711,3 +711,16 @@ new product bugs found. Remaining gap in this file is `readXlsxRows`
 (not exercised — low priority, exceljs-specific) and a couple of
 defensive catch branches in `readRowsFromFile`'s extension-sniffing
 fallback.
+
+`src/database/neo4j.js` moved from 40% to 100% lines (2026-07-04) with
+3 new tests in `tests/unit/database-neo4j.test.js`, reusing the
+require.cache-injection mechanic from `tests/unit/neo4j-connection.test.js`
+(this module does `const neo4j = require('neo4j-driver')` without
+destructuring, so the cached module's `exports` can be swapped for a
+fake before re-requiring): env-var-driven URI/username/password
+construction, the bolt://localhost:7687 / neo4j / password default
+fallback, and singleton memoization across repeated `getNeo4jDriver()`
+calls. No new product bugs found — this is a thin, still-used (routes
+`importFhirIntelligent.js` and `dictionary.js`) singleton wrapper
+distinct from the richer `infrastructure/database/neo4j/connection.js`
+module.
