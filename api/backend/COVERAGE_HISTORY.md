@@ -15,6 +15,20 @@ that reconcile's real `coverage-summary.json` numbers (see
 non-sequential in places (multiple concurrent authoring passes) — trust
 the issue numbers and file names, not the slice ordinal.
 
+**Slice (2026-07-04, post-reconcile):** `src/models/StorageContainer.js`
+32.69% → 100% lines. Added `tests/unit/StorageContainer.model.test.js`
+covering the `pre('save')` hierarchy-validation hook (FREEZER/parent_id
+rejection, SHELF/RACK requiring parent_id, temperature restricted to
+FREEZER, missing/wrong-typed parent lookups for both RACK→SHELF and
+SHELF→FREEZER) plus the `getFullPath` and `getChildren` instance
+methods. The hook is defined inline in the schema and isn't exported,
+so the test locates it among mongoose's internal `save` hooks
+(validateBeforeSave, subdocs, sharding, ...) by matching its source text
+and invokes it directly against a plain (unconnected) document — calling
+`.save()` would need a live DB connection this unit test doesn't have.
+No bugs found; existing `tests/unit/storage.models.test.js` (statics
+`.validate()` coverage) left untouched.
+
 **Slice (2026-07-04, post-reconcile):** `reports.routes.js` 30.2% →
 71.84% lines. Extended `tests/integration/reports.api.test.js` with a
 generic collection-backed mock db (`buildCollectionDb`) to exercise

@@ -81,7 +81,6 @@ reconcile (list re-derived from a real `coverage/coverage-summary.json`
 run, not hand-maintained):
 
 ```
-src/models/StorageContainer.js                                      32.69%
 src/interface/routes/sample.routes.js                               33.33%
 src/database/neo4j.js                                                40%
 src/models/StorageBox.js                                            41.74%
@@ -104,7 +103,9 @@ covered them. `src/config/uploadConfig.js` also moved above 49% this
 session (fileFilter/storage.getFilename/storage.getDestination covered).
 `src/interface/routes/reports.routes.js` moved from 30.2% to 71.84%
 lines this session (buildPreviewData's report-type branches now
-covered; see COVERAGE_HISTORY.md).
+covered; see COVERAGE_HISTORY.md). `src/models/StorageContainer.js`
+moved from 32.69% to 100% lines this session (pre-save hierarchy hook
++ getFullPath/getChildren now covered; see COVERAGE_HISTORY.md).
 
 ## MID coverage (50-84% lines) — GOOD (>=85%)
 
