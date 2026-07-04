@@ -697,3 +697,17 @@ data-to-create-one INVALID, and the thrown-error-from-`sampleService.
 createSample` INVALID path. `processBatchImport`'s chunking/progress
 loop (mocking `StagingImport.findOne`/`updateOne`) is the only
 remaining large gap in this file. No new product bugs found.
+
+Second follow-up same file (2026-07-04): `src/services/batch-validation-engine.service.js`
+moved from 75.98% to 88.7% lines with 6 new tests on `processBatchImport`,
+using real temp-file JSON fixtures and `vi.spyOn(StagingImport, 'findOne'/
+'updateOne')` (the established pattern from `import-batch.controller.test.js`):
+missing-StagingImport throw, missing-file-on-disk throw, empty-rows
+throw, an end-to-end run mixing a PARTIAL and an INVALID row (confirms
+`completed` status fires whenever partialRows or validRows > 0), an
+all-INVALID run confirming the `failed` status branch, and
+`job.updateProgress` being called with 100 when a job is supplied. No
+new product bugs found. Remaining gap in this file is `readXlsxRows`
+(not exercised — low priority, exceljs-specific) and a couple of
+defensive catch branches in `readRowsFromFile`'s extension-sniffing
+fallback.
