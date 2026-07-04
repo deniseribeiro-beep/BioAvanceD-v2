@@ -521,6 +521,18 @@ dedicated branch (e.g. functions), and `getTimestampISO`'s explicit
 `timestampISO`/derived-date/invalid-date branches. Now at 100% statements/
 lines, 99% branches, all 25 tests green. Removed from the LOW bucket table.
 
+Since baseline (32nd slice): `src/services/fhir.service.js` was found stale
+in this file (listed at 36.92% LOW, but a full test file already existed at
+`tests/unit/fhir.service.unit.test.js`, actually measuring 90.76% lines
+before this slice) — 12 new targeted tests closed the remaining gaps: the
+four `catch`-block/error-rethrow branches in `patientToFHIR`/`sampleToFHIR`/
+`resultToFHIR`/`temperatureToFHIR`, the previously-untested
+`findResourceByIdentifier` (happy path + rejected-promise path), the
+`mapSensorStatusToFHIR('maintenance')` and `mapQualityToFHIR(0)`/`(2)`
+numeric branches, and `sampleToFHIR`'s `receivedTime`/`protocolApplied`/
+`specimenCollection` fields. Now at 100% lines/functions, 96.47% statements,
+85.18% branches, all 60 tests green. Removed from the LOW bucket table.
+
 ## How to use this when picking a slice
 
 1. Prefer a **ZERO** file with real logic (not a script/model/port
@@ -576,7 +588,6 @@ src/interface/routes/terminologies.routes.js                        32.9%
 src/interface/routes/sample.routes.js                               33.33%
 src/services/import.service.js                                      34.19% (parsers/validators covered, see 30th slice note above; import*/DB-backed methods still untested)
 src/config/uploadConfig.js                                          35.89%
-src/services/fhir.service.js                                        36.92%
 src/services/hl7.service.js                                         38.05%
 src/services/patientBiomarkerTimeseries.service.js                  39.02%
 src/database/neo4j.js                                               40%

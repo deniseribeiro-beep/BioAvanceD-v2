@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 const fhirService = require('../../src/services/fhir.service');
 
 describe('FHIRService.validateFHIRResource', () => {
@@ -97,6 +97,14 @@ describe('FHIRService.mapQualityToFHIR', () => {
     expect(fhirService.mapQualityToFHIR(1)).toBe('suitable');
   });
 
+  it('maps numeric 0 to not-assessed', () => {
+    expect(fhirService.mapQualityToFHIR(0)).toBe('not-assessed');
+  });
+
+  it('maps numeric 2 to not-suitable', () => {
+    expect(fhirService.mapQualityToFHIR(2)).toBe('not-suitable');
+  });
+
   it('maps null to not-assessed', () => {
     expect(fhirService.mapQualityToFHIR(null)).toBe('not-assessed');
   });
@@ -109,6 +117,10 @@ describe('FHIRService.mapSensorStatusToFHIR', () => {
 
   it('maps error to inactive', () => {
     expect(fhirService.mapSensorStatusToFHIR('error')).toBe('inactive');
+  });
+
+  it('maps maintenance to inactive', () => {
+    expect(fhirService.mapSensorStatusToFHIR('maintenance')).toBe('inactive');
   });
 
   it('returns unknown for unrecognized status', () => {
@@ -257,6 +269,10 @@ describe('FHIRService.patientToFHIR', () => {
     expect(result.birthDate).toBeNull();
     expect(result.extension).toEqual([]);
   });
+
+  it('throws and logs when given a non-object patient', () => {
+    expect(() => fhirService.patientToFHIR(null)).toThrow();
+  });
 });
 
 describe('FHIRService.sampleToFHIR', () => {
@@ -329,6 +345,30 @@ describe('FHIRService.sampleToFHIR', () => {
       { reference: 'DocumentReference/file2' },
     ]);
   });
+
+  it('overrides receivedTime and sets processing/collection when protocolApplied/specimenCollection/receivedTime are present', () => {
+    const sample = {
+      ...baseSample,
+      receivedTime: '2026-01-02T00:00:00Z',
+      protocolApplied: 'Protocol-Y',
+      specimenCollection: { method: { text: 'venipuncture' } },
+    };
+
+    const result = fhirService.sampleToFHIR(sample);
+
+    expect(result.receivedTime).toBe('2026-01-02T00:00:00.000Z');
+    expect(result.processing).toEqual([
+      {
+        description: 'Protocol-Y',
+        time: '2026-01-02T00:00:00.000Z',
+      },
+    ]);
+    expect(result.collection).toEqual(sample.specimenCollection);
+  });
+
+  it('throws and logs when given a non-object sample', () => {
+    expect(() => fhirService.sampleToFHIR(null)).toThrow();
+  });
 });
 
 describe('FHIRService.resultToFHIR', () => {
@@ -372,6 +412,10 @@ describe('FHIRService.resultToFHIR', () => {
     expect(observation.code.coding[0].code).toBe('UNKNOWN');
     expect(observation.code.coding[0].display).toBe('Unknown Test');
     expect(observation.valueString).toBeNull();
+  });
+
+  it('throws and logs when given a non-object result', () => {
+    expect(() => fhirService.resultToFHIR(null)).toThrow();
   });
 
   it('adds file extensions to observation when filePath/fileType are present', () => {
@@ -455,5 +499,39 @@ describe('FHIRService.temperatureToFHIR', () => {
     expect(observation.valueQuantity.unit).toBe('°F');
     expect(device.extension).toEqual([]);
     expect(observation.extension).toEqual([]);
+  });
+
+  it('throws and logs when given a non-object temperature', () => {
+    expect(() => fhirService.temperatureToFHIR(null)).toThrow();
+  });
+});
+
+describe('FHIRService.findResourceByIdentifier', () => {
+  it('queries the collection by fhir.identifier system/value and returns the match', async () => {
+    const found = { _id: 'x1', fhir: { identifier: [{ system: 'sys', value: '42' }] } };
+    const findOne = vi.fn().mockResolvedValue(found);
+    const db = { collection: vi.fn().mockReturnValue({ findOne }) };
+
+    const result = await fhirService.findResourceByIdentifier(db, 'patients', 'sys', 42);
+
+    expect(db.collection).toHaveBeenCalledWith('patients');
+    expect(findOne).toHaveBeenCalledWith({
+      'fhir.identifier': {
+        $elemMatch: { system: 'sys', value: '42' },
+      },
+    });
+    expect(result).toBe(found);
+  });
+
+  it('throws and logs when the db call rejects', async () => {
+    const db = {
+      collection: vi.fn().mockReturnValue({
+        findOne: vi.fn().mockRejectedValue(new Error('db down')),
+      }),
+    };
+
+    await expect(
+      fhirService.findResourceByIdentifier(db, 'patients', 'sys', '1')
+    ).rejects.toThrow('db down');
   });
 });
