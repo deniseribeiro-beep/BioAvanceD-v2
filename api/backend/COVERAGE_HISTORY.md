@@ -830,17 +830,21 @@ the controller level per earlier slices) and a couple of defensive
 `req.t`/optional-chaining fallbacks not worth a dedicated test.
 
 `src/infrastructure/persistence/mongo/MongoStorageRepository.js`
-(2026-07-04): the existing `tests/unit/MongoStorageRepository.test.js`
-(38 tests) already covered every method's happy path and error
-branches except two untested one-liners, `findSampleById` and
-`findBoxById` — added 2 tests for those (40 tests total, all passing).
-Reading the file top-to-bottom against the test file confirms
-substantive coverage is now complete or near-complete for every
-method. However, the isolated single-file `--coverage.include` run
-reported an implausibly low 60% lines / 40% functions, with 0-hit
-counts on lines inside methods that the test file demonstrably
-exercises — a measurement quirk, not a real gap; documented in
-`testing-conventions` so it isn't re-investigated from scratch next
-time. Left off the MID-LOW list since substantively done; the real %
-will be confirmed at the next full `--coverage --reporter=basic`
-reconcile rather than guessed here. No product bugs found.
+moved from 50.74% to **100% lines / 97.22% branches / 100% functions**
+(2026-07-04). The existing `tests/unit/MongoStorageRepository.test.js`
+(38 tests) already covered every method's happy path and error branches
+except two untested one-liners, `findSampleById` and `findBoxById` —
+added 2 tests for those (40 tests total). The file's isolated
+`--coverage.include` run initially reported an implausible 60%
+lines/40% functions despite the suite's real completeness; root-caused
+to the test file's plain ESM `import` of this CJS class file
+undercounting v8 coverage (confirmed via a minimal repro: identical
+test body counted 2 vs. 3 covered functions under `import` vs.
+`require()`). Fixed by switching the test file's import to
+`createRequire(import.meta.url)` + `require(...)`, which alone took the
+measured number from 60%/40% to 100%/100% with the same 40 tests,
+same assertions. Root cause and the general rule (use `require()` for
+CJS class files, not just for CJS-mocking cases) are now documented in
+`testing-conventions`. No product bugs found. Remaining 2.78% branch
+gap is 3 defensive `|| 0`/box-not-found fallbacks not worth a
+dedicated test.

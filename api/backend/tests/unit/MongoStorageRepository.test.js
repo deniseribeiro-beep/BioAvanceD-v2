@@ -1,6 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
 import { ObjectId } from 'mongodb';
-import MongoStorageRepository from '../../src/infrastructure/persistence/mongo/MongoStorageRepository.js';
+import { createRequire } from 'module';
+
+const require = createRequire(import.meta.url);
+const MongoStorageRepository = require('../../src/infrastructure/persistence/mongo/MongoStorageRepository.js');
 
 function makeCollection(overrides = {}) {
   return {

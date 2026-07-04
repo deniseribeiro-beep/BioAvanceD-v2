@@ -94,10 +94,9 @@ Sorted ascending (worst first), 29 files — the next tier up once the
 ZERO bucket's real-logic file (`worker.js`) is done. Re-derived from
 `coverage/coverage-summary.json`, not hand-maintained. (Original list
 had 32; `equipment-sensor-quarantine.service.js`, `sample.routes.js`,
-and `MongoStorageRepository.js` all had tests added — see
-`COVERAGE_HISTORY.md`. The last one's true post-slice % is unconfirmed
-due to a per-file coverage measurement quirk, see
-`testing-conventions` — needs the next full reconcile to settle.)
+and `MongoStorageRepository.js` (confirmed 100% lines after fixing a
+coverage-measurement bug, see `testing-conventions`) all moved to
+GOOD — see `COVERAGE_HISTORY.md`.)
 
 ```
 src/interface/routes/cid.routes.js                                   51.16%

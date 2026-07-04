@@ -58,26 +58,32 @@ see the file's own header for the regenerate command and cadence.
 - Frontend-touching changes: `npm --prefix frontend run typecheck` (no
   frontend test script exists yet — if one gets added, record it here).
 
-## Per-file `--coverage.include=<one file>` can under-report — sanity check before trusting it
+## `import` of a CJS class file under-reports V8 coverage — use `require()` instead
 
-Observed on `MongoStorageRepository.js` (2026-07-04): running just its test
-file with `--coverage --coverage.include=src/.../MongoStorageRepository.js`
-reported only 60% lines / 40% functions, with several lines inside
-thoroughly-tested methods (e.g. `moveSamplePosition`'s unconditional
-top-of-function lines) showing 0 hits — while reading the test file showed
-happy-path and every error-branch already covered for those methods. Tried
-lcov and json reporters, ran with a sibling test file added, and got the
-same numbers both times, so it isn't a one-off flake. Root cause wasn't
-tracked down (isolating it further wasn't worth the session budget); one
-candidate not yet ruled out is CJS-via-ESM `import` interop (this file does
-`import X from '../.../Foo.js'` on a CJS module, unlike the
-require.cache-injection route/service tests elsewhere in this repo, where
-the same single-file `--coverage.include` measurement has been reliable
-release after release). If a file's isolated coverage number looks wrong
-given what the test file actually exercises, don't trust it blindly —
-either sanity-check against the next full `--coverage --reporter=basic`
-reconcile, or note the discrepancy in `COVERAGE_HISTORY.md` instead of
-recording a number you don't believe.
+Confirmed root cause (2026-07-04, `MongoStorageRepository.js`): a plain
+ESM `import Foo from '../.../Foo.js'` against a CJS `class` file
+(`module.exports = Foo`) makes `@vitest/coverage-v8` undercount that
+file's method coverage, sometimes drastically — a minimal repro (one
+test, one method call) showed 2 functions/2.83% statements counted via
+`import` vs. 3 functions/8.51% via `require()` for the *identical* test
+body. At full scale this made a fully-covered 40-test file (every method's
+happy path and error branches exercised) report as only 60% lines / 40%
+functions — reading the test file against the source showed the gap was
+fake. Switching the test file's top import to the
+`createRequire(import.meta.url)` + `require(...)` pattern (already used
+elsewhere in this repo for CJS-mocking reasons, see the section below)
+fixed it outright: same 40 tests, same assertions, 100% lines / 100%
+functions / 97.22% branches.
+
+**Rule of thumb: when writing/extending a unit test for a CJS class
+file (`module.exports = SomeClass`), import it via
+`createRequire(import.meta.url)` + `require(...)`, not a plain ESM
+`import`** — not just for the CJS-mocking cases that already require it,
+but for every CJS class file, because a plain `import` can silently
+under-report that file's own coverage even when the tests are complete.
+If an isolated per-file coverage number looks implausibly low given what
+the test file demonstrably exercises, check the import style first
+before assuming the tests have a real gap.
 
 ## Context economy — keep runner output out of the conversation
 
