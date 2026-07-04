@@ -510,6 +510,17 @@ same pattern as the already-filed #67/#48), and #77 (`import.service.js`'s
 `parseTemperatureCSV`/`parsePatientCSV` let `NaN`/`Invalid Date` pass through
 unflagged at parse time).
 
+Since baseline (31st slice): `src/services/integrityCheckService.js` was found
+stale in this file (listed at 36.84% LOW, but a full test file already existed
+at `tests/unit/integrityCheckService.test.js` covering the bulk of
+`buildMerkleForDate`, actually measuring 92.1% lines before this slice) — 9 new
+targeted tests closed the remaining gaps: `stableStringify`'s ObjectId-like
+(`toHexString`/`_bsontype`) branches, array recursion, Date-instance
+serialization, the plain-`JSON.stringify` fallback for values with no
+dedicated branch (e.g. functions), and `getTimestampISO`'s explicit
+`timestampISO`/derived-date/invalid-date branches. Now at 100% statements/
+lines, 99% branches, all 25 tests green. Removed from the LOW bucket table.
+
 ## How to use this when picking a slice
 
 1. Prefer a **ZERO** file with real logic (not a script/model/port
@@ -565,7 +576,6 @@ src/interface/routes/terminologies.routes.js                        32.9%
 src/interface/routes/sample.routes.js                               33.33%
 src/services/import.service.js                                      34.19% (parsers/validators covered, see 30th slice note above; import*/DB-backed methods still untested)
 src/config/uploadConfig.js                                          35.89%
-src/services/integrityCheckService.js                               36.84%
 src/services/fhir.service.js                                        36.92%
 src/services/hl7.service.js                                         38.05%
 src/services/patientBiomarkerTimeseries.service.js                  39.02%

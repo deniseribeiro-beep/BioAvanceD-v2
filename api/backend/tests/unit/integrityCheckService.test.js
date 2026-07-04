@@ -37,6 +37,74 @@ describe('integrityCheckService.computeAuditHash', () => {
     const logB = { userID: 'U1', action: 'DELETE', entity: 'Sample' };
     expect(computeAuditHash(logA)).not.toBe(computeAuditHash(logB));
   });
+
+  it('stringifies a mongoose/bson ObjectId-like value via toHexString', () => {
+    const objectIdLike = { toHexString: () => 'abc123' };
+    const log = { userID: 'U1', action: 'CREATE', payload: { ref: objectIdLike } };
+    const hashWithIdLike = computeAuditHash(log);
+    const hashWithHexString = computeAuditHash({ userID: 'U1', action: 'CREATE', payload: { ref: 'abc123' } });
+    expect(hashWithIdLike).toBe(hashWithHexString);
+  });
+
+  it('stringifies a raw _bsontype ObjectID via String() when no toHexString is present', () => {
+    const bsonLike = { _bsontype: 'ObjectID', toString: () => 'deadbeef' };
+    const log = { userID: 'U1', action: 'CREATE', payload: { ref: bsonLike } };
+    const hashWithBson = computeAuditHash(log);
+    const hashWithString = computeAuditHash({ userID: 'U1', action: 'CREATE', payload: { ref: 'deadbeef' } });
+    expect(hashWithBson).toBe(hashWithString);
+  });
+
+  it('recurses into arrays nested in payload/metadata', () => {
+    const log = { userID: 'U1', action: 'CREATE', payload: { items: ['a', 'b', 3] } };
+    const hashArray = computeAuditHash(log);
+    const hashDifferentOrder = computeAuditHash({ userID: 'U1', action: 'CREATE', payload: { items: [3, 'b', 'a'] } });
+    expect(hashArray).not.toBe(hashDifferentOrder);
+    expect(hashArray).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('serializes a Date instance nested in payload via toISOString', () => {
+    const date = new Date('2026-01-01T00:00:00.000Z');
+    const log = { userID: 'U1', action: 'CREATE', payload: { at: date } };
+    const hashWithDate = computeAuditHash(log);
+    const hashWithIso = computeAuditHash({ userID: 'U1', action: 'CREATE', payload: { at: date.toISOString() } });
+    expect(hashWithDate).toBe(hashWithIso);
+    expect(hashWithDate).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('falls back to plain JSON.stringify for values with no dedicated branch (e.g. a function value)', () => {
+    const log = { userID: 'U1', action: 'CREATE', payload: { fn: () => {} } };
+    expect(() => computeAuditHash(log)).not.toThrow();
+    const hashWithFn = computeAuditHash(log);
+    const hashWithOtherFn = computeAuditHash({ userID: 'U1', action: 'CREATE', payload: { fn: function other() {} } });
+    // JSON.stringify(functionValue) === undefined regardless of which function, so both serialize identically
+    expect(hashWithFn).toBe(hashWithOtherFn);
+  });
+
+  it('derives timestampISO from dateTime/timestamp/createdAt when timestampISO is absent', () => {
+    const withDateTime = computeAuditHash({ userID: 'U1', action: 'CREATE', dateTime: new Date('2026-02-01T00:00:00.000Z') });
+    const withTimestamp = computeAuditHash({ userID: 'U1', action: 'CREATE', timestamp: '2026-02-02T00:00:00.000Z' });
+    const withCreatedAt = computeAuditHash({ userID: 'U1', action: 'CREATE', createdAt: '2026-02-03T00:00:00.000Z' });
+    expect(withDateTime).not.toBe(withTimestamp);
+    expect(withTimestamp).not.toBe(withCreatedAt);
+  });
+
+  it('uses an explicit timestampISO field directly, bypassing date derivation', () => {
+    const withExplicit = computeAuditHash({ userID: 'U1', action: 'CREATE', timestampISO: '2026-03-01T00:00:00.000Z', timestamp: '2099-01-01T00:00:00.000Z' });
+    const withDerivedOnly = computeAuditHash({ userID: 'U1', action: 'CREATE', timestamp: '2026-03-01T00:00:00.000Z' });
+    expect(withExplicit).toBe(withDerivedOnly);
+  });
+
+  it('includes userName in the hash payload when present', () => {
+    const withUserName = computeAuditHash({ userID: 'U1', action: 'CREATE', userName: 'Alice' });
+    const withoutUserName = computeAuditHash({ userID: 'U1', action: 'CREATE' });
+    expect(withUserName).not.toBe(withoutUserName);
+  });
+
+  it('treats an unparseable date value as null timestampISO instead of throwing', () => {
+    const withBadDate = computeAuditHash({ userID: 'U1', action: 'CREATE', timestamp: 'not-a-real-date' });
+    const withNoTimestamp = computeAuditHash({ userID: 'U1', action: 'CREATE' });
+    expect(withBadDate).toBe(withNoTimestamp);
+  });
 });
 
 describe('integrityCheckService.buildMerkleForDate', () => {
