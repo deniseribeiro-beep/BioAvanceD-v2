@@ -341,6 +341,15 @@ record found) with no way to distinguish them except also checking
 try/catch swallows errors into `consentStatus: 'error'` with no actual
 logging despite a comment saying `// Log error or handle as needed`.
 
+Since baseline (24th slice): `auth.service.js` moved off the LOW bucket —
+43 new targeted tests covering `processLogin`'s full MFA-setup/MFA-verify/
+lockout/success branches plus the previously-untested
+`setupMFAFirstLogin`, `enableMFAFirstLogin`, `setupMFA`, `enableMFA`,
+`requestPasswordReset`, and `resetPassword` methods, all green
+(`tests/unit/auth.service.processLogin.unit.test.js`). No product bugs
+found; exact new percentage not yet re-measured, will land at the next
+full reconcile.
+
 ## How to use this when picking a slice
 
 1. Prefer a **ZERO** file with real logic (not a script/model/port
@@ -395,7 +404,6 @@ src/models/StorageContainer.js                                      32.69%
 src/interface/routes/terminologies.routes.js                        32.9%
 src/interface/routes/sample.routes.js                               33.33%
 src/services/import.service.js                                      34.19%
-src/services/auth.service.js                                        34.88%
 src/config/uploadConfig.js                                          35.89%
 src/services/integrityCheckService.js                               36.84%
 src/services/fhir.service.js                                        36.92%
