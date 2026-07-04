@@ -82,7 +82,6 @@ run, not hand-maintained):
 
 ```
 src/database/neo4j.js                                                40%
-src/services/import-lgpd.service.js                                 43.05% (importPatients covered, see COVERAGE_HISTORY.md 26th slice; importSamples/readCSV/readExcel still untested)
 src/services/import.service.js                                      44.04% (parsers/validators covered, see COVERAGE_HISTORY.md 30th slice; DB-backed import* methods still untested)
 src/services/batch-validation-engine.service.js                     45.76%
 src/controllers/audit.controller.js                                 47.56%
@@ -111,7 +110,10 @@ GET /:id/movements now covered; see COVERAGE_HISTORY.md).
 `src/models/StorageBox.js` moved from 41.74% to 98.05% lines this
 session (pre-save hook, addSample/removeSample/getAvailablePositions/
 getStats instance methods, and the `validate` static now covered; see
-COVERAGE_HISTORY.md).
+COVERAGE_HISTORY.md). `src/services/import-lgpd.service.js` moved from
+43.05% to 55.55% lines this session (`readCSV`/`readExcel` now covered
+with real temp-file fixtures; `importSamples`/`importPatientsSmart`
+DB-backed paths still untested — see COVERAGE_HISTORY.md).
 
 ## MID coverage (50-84% lines) — GOOD (>=85%)
 

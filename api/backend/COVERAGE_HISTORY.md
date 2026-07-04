@@ -80,6 +80,24 @@ found. Two uncovered lines remain (schema-level trivial branches) but
 not worth chasing given `>=98%` is deep in diminishing-returns
 territory.
 
+**Slice (2026-07-04):** `src/services/import-lgpd.service.js` 43.05% →
+55.55% lines. Added `tests/unit/import-lgpd.service.readers.test.js`
+covering `readCSV` (missing file, comma/semicolon delimiter
+auto-detection from the header line, blank-row filtering, header-only
+file rejection) and `readExcel` (missing file, no-worksheets, "Pacientes"
+sheet-name preference for patients / "Amostras" for samples, fallback to
+the first non-"Instruções" sheet, header-row auto-location by matching
+`patientname`/`patientid`/`sampletype` tokens, `(*)`-suffix header
+cleanup, empty-row skipping, no-header/no-data rejections) — both
+against real temp CSV/xlsx fixtures written with Node's `fs` and the
+real `exceljs` package (via `os.tmpdir()`, cleaned up in `afterEach`),
+not mocks, since both methods are pure file-parsing with no DB
+dependency. No bugs found. Remaining gaps in this file:
+`importSamples` (694-1007, DB-backed) and `importPatientsSmart`'s
+mapped-row/DB paths (1458-1596) — both need a mocked `db`/collection
+harness like `import-lgpd.service.importPatients.unit.test.js` used for
+`importPatients`, good candidate for a follow-up slice.
+
 **Slice (2026-07-04, post-reconcile):** `reports.routes.js` 30.2% →
 71.84% lines. Extended `tests/integration/reports.api.test.js` with a
 generic collection-backed mock db (`buildCollectionDb`) to exercise
