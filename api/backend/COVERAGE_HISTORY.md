@@ -29,6 +29,35 @@ and invokes it directly against a plain (unconnected) document — calling
 No bugs found; existing `tests/unit/storage.models.test.js` (statics
 `.validate()` coverage) left untouched.
 
+**Slice (2026-07-04):** `src/interface/routes/sample.routes.js` 33.33%
+→ 45.15% lines. Added `tests/unit/sample.routes.test.js` covering
+`POST /` payload validation (`validateCreateSamplePayload`'s aggregated
+422 errors, patientID/registerDate-vs-registrationDate branches) and its
+success/error-mapping branches (201, 202 partial-success/quarantine
+fallback, 403 STRICT_MODE_BLOCKED, 409, 404 "não encontrado", 500), plus
+`GET /:id/label` (404 + XML-escaped SVG output), `GET /search/by-term`
+(400 short-term guard, WITHDRAWN exclusion), `GET /by-barcode/:barcode`
+(404 with audit-log warning, 200), and `GET /:id/movements` (503/200/500).
+`authenticate`/`requirePermission`/`enforceCommercialConsent` and the
+`RegisterSampleUseCase`/`LineageRepository` classes are all captured by
+reference at require-time in this route file, and `vi.mock()` did not
+reliably intercept this file's CJS `require()` graph (all requests came
+back 401 as if unmocked, confirmed by a scratch debug test) — worked
+around with the same require-cache-clear-and-replace technique as
+`hpo.routes.test.js` (see that file's comment) generalized to multiple
+dependencies, including injecting fake `require.cache` entries whose
+`exports` is a real `function`/`class` (a first mock using a `vi.fn()`
+arrow-function implementation failed `new` construction with
+"is not a constructor" — Vitest mocks need `function`/`class` syntax to
+be invocable via `new`, plain arrow functions can't be). No bugs found.
+Remaining gaps in this file: `GET /:id/miabis-compliance`,
+`GET /:id/compliance-graph`, `GET /`, `GET /:id`, `POST /:id/withdraw`,
+`PUT /:id`, `DELETE /:id`, `POST /:id/return`,
+`GET /by-barcode/:barcode/symbology-assets`, `GET /:id/results`, and the
+`files/*` sub-routes (already thin pass-throughs to
+`sample-file.controller`, mocked out here) — good candidates for a
+follow-up slice.
+
 **Slice (2026-07-04, post-reconcile):** `reports.routes.js` 30.2% →
 71.84% lines. Extended `tests/integration/reports.api.test.js` with a
 generic collection-backed mock db (`buildCollectionDb`) to exercise

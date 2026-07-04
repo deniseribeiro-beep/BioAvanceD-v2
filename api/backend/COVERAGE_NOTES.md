@@ -81,7 +81,6 @@ reconcile (list re-derived from a real `coverage/coverage-summary.json`
 run, not hand-maintained):
 
 ```
-src/interface/routes/sample.routes.js                               33.33%
 src/database/neo4j.js                                                40%
 src/models/StorageBox.js                                            41.74%
 src/services/import-lgpd.service.js                                 43.05% (importPatients covered, see COVERAGE_HISTORY.md 26th slice; importSamples/readCSV/readExcel still untested)
@@ -106,6 +105,10 @@ lines this session (buildPreviewData's report-type branches now
 covered; see COVERAGE_HISTORY.md). `src/models/StorageContainer.js`
 moved from 32.69% to 100% lines this session (pre-save hierarchy hook
 + getFullPath/getChildren now covered; see COVERAGE_HISTORY.md).
+`src/interface/routes/sample.routes.js` moved from 33.33% to 45.15%
+lines this session (POST / payload validation + create error-mapping
+branches, GET /:id/label, GET /search/by-term, GET /by-barcode/:barcode,
+GET /:id/movements now covered; see COVERAGE_HISTORY.md).
 
 ## MID coverage (50-84% lines) — GOOD (>=85%)
 
