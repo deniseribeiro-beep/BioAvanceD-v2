@@ -105,6 +105,23 @@ works with no `next(err)` plumbing needed. Any `Model.findById`/`Model.find` cal
 *inside* the hook can be `vi.spyOn`'d directly on the required model object, same as any
 other CJS singleton spy in this file.
 
+## Faking a whole dependency module via `require.cache` injection
+
+When a route/service captures a **class** by reference at require-time
+(`const Foo = require('./Foo')` used later as `new Foo(...)`), the
+destructuring workaround above doesn't apply directly — you need the
+whole module replaced before the file under test re-requires it.
+Confirmed working (`sample.routes.test.js`, 2026-07-04): assign a fake
+Module-like object straight into `require.cache[require.resolve(path)]`
+(`{ id, filename, loaded: true, exports: <fake> }`) for each dependency,
+then `delete require.cache[require.resolve(routeFile)]` and
+`require(routeFile)` fresh so its top-level `require(...)` calls resolve
+to the fakes. **The `exports` value must be a real `function`/`class`,
+not a `vi.fn()` arrow-function mock** — `new (() => {})()` throws "is not
+a constructor" (arrow functions can't be used with `new`; only
+`function`/`class` can). Use `function Fake() { this.method = vi.fn(); }`
+or a real `class`, not `vi.fn().mockImplementation(() => ({...}))`.
+
 ## Maintaining this file
 
 New mocking/module-cache gotchas confirmed in this repo go here (full
