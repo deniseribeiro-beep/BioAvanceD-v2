@@ -307,5 +307,17 @@ describe('hpoService', () => {
       const closeOrder = closeMock.mock.invocationCallOrder[0];
       expect(connectOrder).toBeLessThan(closeOrder);
     });
+
+    it('escapes regex metacharacters in the query instead of feeding them into RegExp raw (#56)', async () => {
+      const hpoService = require('../../../src/services/hpoService');
+
+      await hpoService.searchHpoLocal('a(b*c+');
+
+      const filter = findMock.mock.calls[0][0];
+      const [, regex] = Object.entries(filter.$or[0])[0];
+      expect(regex).toBeInstanceOf(RegExp);
+      expect(regex.test('a(b*c+')).toBe(true);
+      expect(regex.test('abc')).toBe(false);
+    });
   });
 });
