@@ -15,6 +15,23 @@ that reconcile's real `coverage-summary.json` numbers (see
 non-sequential in places (multiple concurrent authoring passes) — trust
 the issue numbers and file names, not the slice ordinal.
 
+**Slice (2026-07-05):** `src/infrastructure/queue/TopologicalQuarantine.js`
+68.08% → 100% lines/statements/functions, 93.67% branches. Added
+`tests/unit/topologicalQuarantine.lifecycle.test.js` (15 tests)
+covering gaps left by the existing `topologicalQuarantine.test.js` and
+`topologicalQuarantine.observability.test.js`: `enqueue()` (invalid
+payload short-circuit, successful enqueue with custom
+reason/neo4jError/attempts, redis.rpush rejection); `startWorker`/
+`stopWorker` (timer scheduling via fake timers, idempotent start when
+already running, timer cleared on stop); `processQueue` guard clauses
+(no-op when not running, no-op on reentrant `processing`, corrupted
+JSON item skipped, unexpected redis error caught and `processing`
+released); `reprocessItem` factory failures (missing
+`getLineageRepository` option, factory resolving to null,
+`requireEthicalConsent: false` propagated when explicitly set); and
+`getObservabilityMetrics` when `redis.llen` is absent or throws (queue
+depth reported as null). No bugs found.
+
 **Slice (2026-07-05):** `src/models/ConsentTemplate.js` 67.85% → 100%
 lines/branches/functions/statements. Added
 `tests/unit/ConsentTemplate.model.unit.test.js` (18 tests) covering the
