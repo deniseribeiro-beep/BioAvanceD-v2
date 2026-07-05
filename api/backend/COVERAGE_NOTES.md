@@ -96,7 +96,6 @@ ZERO bucket's real-logic file (`worker.js`) is done. Re-derived from
 ```
 src/services/patient.service.js                                       57.2%
 src/models/Patient.js                                                 63.33%
-src/services/biomarker-observation.service.js                         63.88%
 src/models/ConsentPolicy.js                                           64.86%
 src/core/use-cases/ListOperationalFreezersUseCase.js                  66.66%
 src/services/mqtt-telemetry.service.js                                67.08%
@@ -163,6 +162,9 @@ run: 100% lines/branches/functions/statements) — see `COVERAGE_HISTORY.md`.
 `patientAnonymization.js` moved out of this bucket 2026-07-05 (isolated
 run: 100% lines/statements/functions, 95% branches) — see
 `COVERAGE_HISTORY.md`.
+
+`biomarker-observation.service.js` moved out of this bucket 2026-07-05
+(isolated run: 98.61% lines, 93.33% branches) — see `COVERAGE_HISTORY.md`.
 
 ## MID-HIGH coverage (70-84% lines) — GOOD (>=85%)
 

@@ -15,6 +15,34 @@ that reconcile's real `coverage-summary.json` numbers (see
 non-sequential in places (multiple concurrent authoring passes) — trust
 the issue numbers and file names, not the slice ordinal.
 
+**Slice (2026-07-05):** `src/services/biomarker-observation.service.js`
+63.88% → 98.61% lines, 93.33% branches (isolated run), new file
+`tests/unit/biomarker-observation.service.test.js` (26 tests). Covered
+`ensureIndexes` (no-op on missing args, creates all 5 indexes once and
+memoizes per collection name, warns and continues on a rejected
+`createIndex`), `getObservationsCollection` (resolves via `db.collection`,
+falls back to the default name), `encryptObservationValue`/
+`decryptObservationValue` (encrypt/decrypt round trip, untouched when no
+value or no encrypted payload), `createObservation` (encrypts + inserts,
+validation-error throw, duplicate-key (11000) returns the existing doc,
+rethrows non-duplicate and no-match-found duplicate errors), and
+`listPatientObservations` (patientID format validation, filter building
+for biomarkerType/status/date-range including invalid-date omission,
+limit/skip clamping and defaults, per-doc decryption). Hit the same
+`vi.mock` identity issue as `patientAnonymization.js` above, but for
+CJS `require()`'d utils (`fieldEncryption`, `collectionResolver`) rather
+than a spied logger: mocking those two modules had no effect on what the
+service's internal `require()` resolved to (confirmed by mocking with a
+value that should throw/differ and watching the *real* implementation's
+behavior run instead) — so this suite drives the real `fieldEncryption`
+(actual AES-256-GCM round trip against the test `ENCRYPTION_KEY` from
+`vitest.setup.js`) and a fake `db` without `listCollections` (so the real
+`getCollection` resolves synchronously to the canonical name, no Mongo
+needed). One line (the `decryptObservationValue` catch body) stays
+uncovered — `decryptValue` swallows all its own errors internally and
+never actually throws, so the catch is defensive/unreachable without
+mocking. No bugs found.
+
 **Slice (2026-07-05):** `src/utils/patientAnonymization.js` 62.5% → 100%
 lines/statements/functions, 95% branches (isolated run), new file
 `tests/unit/patientAnonymization.test.js` (17 tests). Covered
