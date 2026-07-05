@@ -15,6 +15,22 @@ that reconcile's real `coverage-summary.json` numbers (see
 non-sequential in places (multiple concurrent authoring passes) — trust
 the issue numbers and file names, not the slice ordinal.
 
+**Slice (2026-07-05):** `src/models/ConsentTemplate.js` 67.85% → 100%
+lines/branches/functions/statements. Added
+`tests/unit/ConsentTemplate.model.unit.test.js` (18 tests) covering the
+`validate()` branches not exercised by the existing
+`tests/unit/consent.models.test.js` happy-path tests (title/content
+missing, non-string, and whitespace-only; optional version/caae
+present-but-invalid; active non-boolean; permissions non-array,
+empty-array, null-entry, and `required` non-boolean; multi-field error
+accumulation) and the `create()` field-mapping branches (all optional
+fields populated and trimmed; `htmlContent`-from-`content` and
+`content`-from-`htmlContent` fallback directions; defaults for
+version/versionGroupId/previousTemplateId/caae/permissions when absent
+or blank; non-array `permissions` falling back to `[]`). No bugs found
+— the model's validation/creation logic matched its own contract in
+every branch exercised. No product source touched.
+
 **Slice (2026-07-05):** `src/models/Patient.js` 63.33% → 98.66% lines
 (97.13% branches). Extended existing
 `tests/unit/patient.model.unit.test.js` (added ~85 tests, 97 total):

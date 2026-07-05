@@ -96,7 +96,6 @@ ZERO bucket's real-logic file (`worker.js`) is done. Re-derived from
 ```
 src/services/patient.service.js                                       57.2%
 src/services/import-lgpd.service.js                                   67.28%
-src/models/ConsentTemplate.js                                         67.85%
 src/infrastructure/queue/TopologicalQuarantine.js                     68.08%
 src/routes/orphanet-count.js                                          68.42%
 src/controllers/sample-file.controller.js                            68.87%
@@ -183,6 +182,9 @@ run: 91.02% lines, 76.85% branches, now MID-HIGH) — see
 
 `Patient.js` moved out of this bucket 2026-07-05 (isolated run: 98.66%
 lines, 97.13% branches) — see `COVERAGE_HISTORY.md`.
+
+`ConsentTemplate.js` moved out of this bucket 2026-07-05 (isolated run:
+100% lines/branches/functions/statements) — see `COVERAGE_HISTORY.md`.
 
 ## MID-HIGH coverage (70-84% lines) — GOOD (>=85%)
 
