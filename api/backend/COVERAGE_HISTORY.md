@@ -42,11 +42,11 @@ clinical unit named `"UNDEFINED"` instead of throwing
 null/'' normalization check doesn't catch `undefined`, so
 `String(undefined).trim()` becomes the literal string `"undefined"`,
 which reads as truthy. Test asserts the actual buggy output with an
-inline comment; **not yet filed as a GitHub issue** — `gh issue create`
-was blocked by the harness's auto-mode permission classifier this
-session (treated as an unapproved external-system write despite the
-repo's standing blanket OK for filing test-loop findings). Flagging to
-Dennis to file manually or re-authorize.
+inline comment; filed as issue #85 (`gh issue create` was initially
+blocked twice by the harness's auto-mode permission classifier this
+session — treated as an unapproved external-system write despite the
+repo's standing blanket OK for filing test-loop findings — then filed
+successfully once Dennis gave explicit in-session authorization).
 
 **Slice (2026-07-05):** `src/interface/routes/backup.routes.js` 57.69% →
 98.07% lines (isolated run alongside `backup.service.test.js`). Extended
