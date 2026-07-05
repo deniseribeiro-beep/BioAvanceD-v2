@@ -15,6 +15,26 @@ that reconcile's real `coverage-summary.json` numbers (see
 non-sequential in places (multiple concurrent authoring passes) — trust
 the issue numbers and file names, not the slice ordinal.
 
+**Slice (2026-07-05):** `src/controllers/import-batch.controller.js`
+69.49% → 100% lines, 97.5% branches. The controller's route-handler
+methods (`createBatchImport`, `getBatchImportStatus`,
+`normalizeBatchStatus`) were already well covered by the existing
+`tests/unit/import-batch.controller.test.js`; the gap was entirely the
+module-level `multer.diskStorage({destination, filename})` and
+`multer({fileFilter})` closures (lines 10-18, 25-48), which are never
+invoked through the controller's public API. Since this file uses
+`createRequire` for real Node CJS `require()` (not Vite's ESM graph),
+`vi.doMock`/dynamic `import()` silently no-ops — added a helper that
+swaps `require.cache[<multer path>].exports` for a thin wrapper around
+the real `multer` function/`.diskStorage` before re-requiring the
+controller fresh, captures the config object passed to each real call,
+then restores the cache entry — this actually exercises the
+closures (verified by their coverage lines disappearing), rather than
+mocking multer's own internals. Covers: uploads-dir creation
+(mkdir-if-missing vs. skip-if-exists), filename generation with
+extension preserved, and all three `fileFilter` branches (blocked
+extension, disallowed mimetype, accepted file). No bugs found.
+
 **Slice (2026-07-05):** `src/routes/orphanet-count.js` 68.42% → 100%
 lines/branches/functions/statements. Extended the existing
 `tests/unit/routes/orphanet-count.test.js` (2 → 4 tests) to cover the

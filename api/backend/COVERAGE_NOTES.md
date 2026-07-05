@@ -97,7 +97,6 @@ ZERO bucket's real-logic file (`worker.js`) is done. Re-derived from
 src/services/patient.service.js                                       57.2%
 src/services/import-lgpd.service.js                                   67.28%
 src/controllers/sample-file.controller.js                            68.87%
-src/controllers/import-batch.controller.js                            69.49%
 src/services/log.service.js                                           69.84%
 ```
 
@@ -190,6 +189,9 @@ run: 100% lines/statements/functions, 93.67% branches) — see
 
 `orphanet-count.js` moved out of this bucket 2026-07-05 (isolated run:
 100% lines/branches/functions/statements) — see `COVERAGE_HISTORY.md`.
+
+`import-batch.controller.js` moved out of this bucket 2026-07-05
+(isolated run: 100% lines, 97.5% branches) — see `COVERAGE_HISTORY.md`.
 
 ## MID-HIGH coverage (70-84% lines) — GOOD (>=85%)
 

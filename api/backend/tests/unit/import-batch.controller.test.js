@@ -20,6 +20,120 @@ describe('import-batch.controller', () => {
     vi.restoreAllMocks();
   });
 
+  describe('multer storage/fileFilter config (internal callbacks)', () => {
+    const multerPath = require.resolve('multer');
+    const controllerPath = require.resolve('../../src/controllers/import-batch.controller');
+
+    function loadControllerWithCapturedMulterConfig() {
+      let diskStorageConfig;
+      let uploadConfig;
+
+      const realMulterModule = require.cache[multerPath];
+      const realMulter = realMulterModule.exports;
+
+      const wrapper = (config) => {
+        uploadConfig = config;
+        return realMulter(config);
+      };
+      wrapper.diskStorage = (config) => {
+        diskStorageConfig = config;
+        return realMulter.diskStorage(config);
+      };
+      realMulterModule.exports = wrapper;
+
+      delete require.cache[controllerPath];
+      try {
+        require('../../src/controllers/import-batch.controller');
+      } finally {
+        realMulterModule.exports = realMulter;
+      }
+
+      return {
+        get destination() { return diskStorageConfig.destination; },
+        get filename() { return diskStorageConfig.filename; },
+        get fileFilter() { return uploadConfig.fileFilter; }
+      };
+    }
+
+    afterEach(() => {
+      delete require.cache[controllerPath];
+      require('../../src/controllers/import-batch.controller');
+    });
+
+    it('destination: creates uploads dir when missing and calls back with it', async () => {
+      const { destination } = await loadControllerWithCapturedMulterConfig();
+
+      vi.spyOn(fs, 'existsSync').mockReturnValue(false);
+      const mkdirSpy = vi.spyOn(fs, 'mkdirSync').mockImplementation(() => {});
+      const cb = vi.fn();
+
+      destination({}, {}, cb);
+
+      expect(mkdirSpy).toHaveBeenCalledWith(expect.stringContaining('uploads'), { recursive: true });
+      expect(cb).toHaveBeenCalledWith(null, expect.stringContaining('uploads'));
+    });
+
+    it('destination: skips mkdir when uploads dir already exists', async () => {
+      const { destination } = await loadControllerWithCapturedMulterConfig();
+
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      const mkdirSpy = vi.spyOn(fs, 'mkdirSync').mockImplementation(() => {});
+      const cb = vi.fn();
+
+      destination({}, {}, cb);
+
+      expect(mkdirSpy).not.toHaveBeenCalled();
+      expect(cb).toHaveBeenCalledWith(null, expect.stringContaining('uploads'));
+    });
+
+    it('filename: builds a unique suffixed name preserving the original extension', async () => {
+      const { filename } = await loadControllerWithCapturedMulterConfig();
+
+      const cb = vi.fn();
+      filename({}, { originalname: 'patients.csv' }, cb);
+
+      expect(cb).toHaveBeenCalledTimes(1);
+      const [err, generatedName] = cb.mock.calls[0];
+      expect(err).toBeNull();
+      expect(generatedName).toMatch(/^\d+-\d+\.csv$/);
+    });
+
+    it('fileFilter: rejects blocked extensions (.exe) with a 400 error', async () => {
+      const { fileFilter } = await loadControllerWithCapturedMulterConfig();
+
+      const cb = vi.fn();
+      fileFilter({}, { originalname: 'virus.exe', mimetype: 'application/octet-stream' }, cb);
+
+      expect(cb).toHaveBeenCalledTimes(1);
+      const [err, accepted] = cb.mock.calls[0];
+      expect(accepted).toBe(false);
+      expect(err.message).toBe('Formato de arquivo não seguro');
+      expect(err.status).toBe(400);
+    });
+
+    it('fileFilter: rejects disallowed mimetypes even with a safe extension', async () => {
+      const { fileFilter } = await loadControllerWithCapturedMulterConfig();
+
+      const cb = vi.fn();
+      fileFilter({}, { originalname: 'payload.csv', mimetype: 'application/x-msdownload' }, cb);
+
+      expect(cb).toHaveBeenCalledTimes(1);
+      const [err, accepted] = cb.mock.calls[0];
+      expect(accepted).toBe(false);
+      expect(err.message).toBe('Formato de arquivo não seguro');
+      expect(err.status).toBe(400);
+    });
+
+    it('fileFilter: accepts an allowed extension/mimetype combination', async () => {
+      const { fileFilter } = await loadControllerWithCapturedMulterConfig();
+
+      const cb = vi.fn();
+      fileFilter({}, { originalname: 'patients.csv', mimetype: 'text/csv' }, cb);
+
+      expect(cb).toHaveBeenCalledWith(null, true);
+    });
+  });
+
   describe('uploadMiddleware', () => {
     it('returns a middleware function', () => {
       const mw = controller.uploadMiddleware();
