@@ -149,5 +149,119 @@ describe('Consent models', () => {
       expect(policy.createdAt).toBeInstanceOf(Date);
       expect(policy.updatedAt).toBeInstanceOf(Date);
     });
+
+    it('rejeita payload vazio com todos os campos obrigatórios ausentes', () => {
+      const result = ConsentPolicyModel.validate({});
+
+      expect(result.isValid).toBe(false);
+      expect(result.errors).toEqual(expect.arrayContaining([
+        'title é obrigatório e deve ser um texto válido',
+        'htmlContent é obrigatório e deve ser um texto válido',
+        'version é obrigatório e deve ser um texto válido',
+        'validFrom é obrigatório e deve ser uma data válida',
+        'validTo é obrigatório e deve ser uma data válida',
+        'granularPermissions deve ser um array'
+      ]));
+    });
+
+    it('rejeita title/htmlContent/version em branco', () => {
+      const result = ConsentPolicyModel.validate({
+        title: '   ',
+        htmlContent: '   ',
+        version: '   ',
+        validFrom: '2026-04-01T00:00:00.000Z',
+        validTo: '2026-04-30T23:59:59.000Z',
+        granularPermissions: [],
+      });
+
+      expect(result.isValid).toBe(false);
+      expect(result.errors).toContain('title é obrigatório e deve ser um texto válido');
+      expect(result.errors).toContain('htmlContent é obrigatório e deve ser um texto válido');
+      expect(result.errors).toContain('version é obrigatório e deve ser um texto válido');
+    });
+
+    it('rejeita caae que não seja string', () => {
+      const result = ConsentPolicyModel.validate({
+        title: 'Política TCLE',
+        htmlContent: '<p>Política</p>',
+        version: 'v1',
+        caae: 12345,
+        validFrom: '2026-04-01T00:00:00.000Z',
+        validTo: '2026-04-30T23:59:59.000Z',
+        granularPermissions: [],
+      });
+
+      expect(result.isValid).toBe(false);
+      expect(result.errors).toContain('caae deve ser um texto válido quando informado');
+    });
+
+    it('rejeita validFrom/validTo com datas inválidas', () => {
+      const result = ConsentPolicyModel.validate({
+        title: 'Política TCLE',
+        htmlContent: '<p>Política</p>',
+        version: 'v1',
+        validFrom: 'not-a-date',
+        validTo: 'also-not-a-date',
+        granularPermissions: [],
+      });
+
+      expect(result.isValid).toBe(false);
+      expect(result.errors).toContain('validFrom é obrigatório e deve ser uma data válida');
+      expect(result.errors).toContain('validTo é obrigatório e deve ser uma data válida');
+    });
+
+    it('rejeita active que não seja booleano', () => {
+      const result = ConsentPolicyModel.validate({
+        title: 'Política TCLE',
+        htmlContent: '<p>Política</p>',
+        version: 'v1',
+        validFrom: '2026-04-01T00:00:00.000Z',
+        validTo: '2026-04-30T23:59:59.000Z',
+        active: 'yes',
+        granularPermissions: [],
+      });
+
+      expect(result.isValid).toBe(false);
+      expect(result.errors).toContain('active deve ser booleano');
+    });
+
+    it('rejeita granularPermissions com itens malformados', () => {
+      const result = ConsentPolicyModel.validate({
+        title: 'Política TCLE',
+        htmlContent: '<p>Política</p>',
+        version: 'v1',
+        validFrom: '2026-04-01T00:00:00.000Z',
+        validTo: '2026-04-30T23:59:59.000Z',
+        granularPermissions: [
+          null,
+          { key: '', label: 123, required: 'not-bool' },
+        ],
+      });
+
+      expect(result.isValid).toBe(false);
+      expect(result.errors).toContain('granularPermissions[0] deve ser um objeto');
+      expect(result.errors.some((error) => error.includes('granularPermissions[1].key'))).toBe(true);
+      expect(result.errors.some((error) => error.includes('granularPermissions[1].label'))).toBe(true);
+      expect(result.errors.some((error) => error.includes('granularPermissions[1].required'))).toBe(true);
+    });
+
+    it('cria política preservando caae e active explícitos, com defaults para granularPermissions ausente', () => {
+      const policy = ConsentPolicyModel.create({
+        title: '  Política TCLE  ',
+        htmlContent: '  <p>Política</p>  ',
+        version: '  v2  ',
+        caae: '  12345678.0.0000.0000  ',
+        validFrom: '2026-04-01T00:00:00.000Z',
+        validTo: '2026-04-30T23:59:59.000Z',
+        active: false,
+      });
+
+      expect(policy.title).toBe('Política TCLE');
+      expect(policy.htmlContent).toBe('<p>Política</p>');
+      expect(policy.version).toBe('v2');
+      expect(policy.caae).toBe('12345678.0.0000.0000');
+      expect(policy.active).toBe(false);
+      expect(policy.granularPermissions).toEqual([]);
+    });
   });
 });

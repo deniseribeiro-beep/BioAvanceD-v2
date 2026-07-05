@@ -96,7 +96,6 @@ ZERO bucket's real-logic file (`worker.js`) is done. Re-derived from
 ```
 src/services/patient.service.js                                       57.2%
 src/models/Patient.js                                                 63.33%
-src/models/ConsentPolicy.js                                           64.86%
 src/core/use-cases/ListOperationalFreezersUseCase.js                  66.66%
 src/services/import-lgpd.service.js                                   67.28%
 src/models/Sample.js                                                  67.79%
@@ -169,6 +168,9 @@ run: 100% lines/statements/functions, 95% branches) — see
 run: 75.94% lines, 79.61% branches, now MID-HIGH) — `stop()` now covered;
 the remaining gap (`start()`'s real `mqtt.connect(...)` call and its
 handlers) is not honestly mockable, see `COVERAGE_HISTORY.md`.
+
+`ConsentPolicy.js` moved out of this bucket 2026-07-05 (isolated run:
+100% lines/branches/functions/statements) — see `COVERAGE_HISTORY.md`.
 
 ## MID-HIGH coverage (70-84% lines) — GOOD (>=85%)
 

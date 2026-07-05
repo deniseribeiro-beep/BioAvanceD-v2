@@ -30,6 +30,18 @@ uncovered rather than force a fragile mock; a real fix would need the
 source to accept an injectable MQTT client factory, which is out of
 scope for a test-only slice. No bugs found this slice.
 
+**Slice (2026-07-05):** `src/models/ConsentPolicy.js` 64.86% → 100%
+lines/branches/functions/statements (isolated run), extending the
+existing `tests/unit/consent.models.test.js` (which already had 3
+`ConsentPolicyModel` cases) with 8 more (17 total in the file). Added
+coverage for: empty-payload validation (all required-field errors at
+once), blank/whitespace-only title/htmlContent/version, non-string
+`caae`, invalid `validFrom`/`validTo` date strings, non-boolean
+`active`, malformed `granularPermissions` entries (null item,
+missing/wrong-typed `key`/`label`/`required`), and `create()` with an
+explicit `caae`/`active: false` plus the `granularPermissions`-omitted
+default-to-`[]` path. No bugs found this slice.
+
 **Slice (2026-07-05):** `src/services/biomarker-observation.service.js`
 63.88% → 98.61% lines, 93.33% branches (isolated run), new file
 `tests/unit/biomarker-observation.service.test.js` (26 tests). Covered
