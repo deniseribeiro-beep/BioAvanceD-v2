@@ -15,6 +15,22 @@ that reconcile's real `coverage-summary.json` numbers (see
 non-sequential in places (multiple concurrent authoring passes) — trust
 the issue numbers and file names, not the slice ordinal.
 
+**Slice (2026-07-05):** `src/controllers/sample-file.controller.js`
+68.87% → 98.34% lines (69.66% branches), extended
+`tests/unit/sample-file.controller.test.js` (33 → 58 tests). Added
+coverage for the multer `diskStorage` `getDestination`/`getFilename`
+callbacks and `fileFilter` (previously entirely untested — real
+validation/sanitization logic, not boilerplate), `uploadMiddleware()`,
+the `uploadFile` catch-block cleanup path and its audit-log branch,
+`listFiles`'s audit-log and 500 branches, `downloadFile`'s
+audit-log/download-error-callback/`headersSent`/500 branches, all of
+`deleteFile`'s early-return and 500 branches plus the "unlink fails but
+deletion continues" branch, and `exportHL7v2`'s 503/404/log/500
+branches (previously only the 400-mismatch and happy paths were
+covered). No bugs found. Remaining gap (lines 51, 124, 225, 662) is
+defensive `error.message` fallback branches inside nested try/catch
+blocks not worth forcing.
+
 **Slice (2026-07-05):** `src/services/import-lgpd.service.js`
 67.43% → 79.01% lines (68.25% branches), new file
 `tests/unit/import-lgpd.service.importPatientsSmart.unit.test.js` (24

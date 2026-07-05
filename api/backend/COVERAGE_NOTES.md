@@ -95,7 +95,6 @@ ZERO bucket's real-logic file (`worker.js`) is done. Re-derived from
 
 ```
 src/services/patient.service.js                                       57.2%
-src/controllers/sample-file.controller.js                            68.87%
 ```
 
 `import-lgpd.service.js` moved up 2026-07-05 (isolated run: 85.18% lines,
@@ -121,9 +120,11 @@ branches now covered; the number barely moved from 56.35% because the
 remaining gap is concentrated in the large `createPatient`/
 `updatePatient` bodies (multi-branch, DB/notification/FHIR/neo4j/
 biomarker side effects) rather than the smaller helper methods just
-closed — see `COVERAGE_HISTORY.md`. `sample-file.controller.js`
-confirmed at 68.87%, matching the isolated-run estimate from its own
-slice.
+closed — see `COVERAGE_HISTORY.md`.
+
+`sample-file.controller.js` moved out of this bucket 2026-07-05
+(isolated run: 98.34% lines, 69.66% branches) — see
+`COVERAGE_HISTORY.md`.
 
 Note: several of these (`import-lgpd.service.js`, `import.service.js`,
 `patient.service.js`, `Patient.js`, `Sample.js`) already have partial
