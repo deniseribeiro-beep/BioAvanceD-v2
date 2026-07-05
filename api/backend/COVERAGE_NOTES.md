@@ -97,8 +97,10 @@ ZERO bucket's real-logic file (`worker.js`) is done. Re-derived from
 src/services/patient.service.js                                       57.2%
 src/services/import-lgpd.service.js                                   67.28%
 src/controllers/sample-file.controller.js                            68.87%
-src/services/log.service.js                                           69.84%
 ```
+
+`log.service.js` moved out of this bucket 2026-07-05 (isolated run: 99.47%
+lines, 91.58% branches) — see `COVERAGE_HISTORY.md`.
 
 `patient.service.js` at 57.2% lines (isolated run across its own +
 related test files, 2026-07-05) — `resolveClinicalUnitSnapshot`,

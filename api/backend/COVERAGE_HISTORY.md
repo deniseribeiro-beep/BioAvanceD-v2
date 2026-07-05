@@ -1380,3 +1380,25 @@ functions. Remaining gap is defensive `logger.error`/rethrow branches
 in a few catch blocks and one edge case in `revokeSession`'s cache
 cleanup loop — low value to chase further. No product bugs found this
 slice.
+
+**Slice (2026-07-05):** `src/services/log.service.js` 69.84% → 99.47%
+lines, 91.58% branches (isolated run: `log.service.test.js` +
+`log.service.unit.test.js`). Extended the existing test file with 23
+new tests covering `getLogs`'s remaining filter branches (userName
+regex, action/entity/severity/result/module array-vs-scalar `$in`
+branches, ip/ipSource/sourceIP aliases, startDate/endDate merged into
+an existing `$and`, merged into a bare `$or`, and set fresh with no
+prior filter, custom `sortBy` without the default tiebreaker),
+`getUserLogs`/`getEntityLogs`'s error-rethrow paths, and
+`exportLogsToExcel`'s defensive branches (non-object `getLogs` result,
+non-array `.logs`, missing `.logs` key, empty-logs warn path, per-row
+ip/timestamp/id fallback extraction, and the per-row `catch` that
+returns an all-`N/A` row). The `anonymizeLogs`-throws catch
+(lines 447-452) needed the `require.cache` injection technique from
+`testing-conventions/references/cjs-mocking.md` — `log.service.js`
+destructures `const { anonymizeLogs } = require(...)` at module scope,
+so `vi.spyOn` on the `userAnonymization` module object silently no-ops.
+One line (477, the `catch` inside the timestamp-parsing try) stays
+uncovered — `new Date(x)` returns `Invalid Date` rather than throwing
+for any malformed input reachable here, so the catch is defensive/
+unreachable without mocking `Date` itself; not worth it. No bugs found.

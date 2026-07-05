@@ -148,6 +148,137 @@ describe('LogService', () => {
   });
 
   describe('getLogs', () => {
+    it('builds an $in filter when action is an array, plain value otherwise', async () => {
+      const collection = makeCollection();
+      const db = makeDb(collection);
+
+      await logService.getLogs(db, { action: ['CREATE', 'UPDATE'] });
+      expect(collection.find.mock.calls[0][0].action).toEqual({ $in: ['CREATE', 'UPDATE'] });
+
+      await logService.getLogs(db, { action: 'CREATE' });
+      expect(collection.find.mock.calls[1][0].action).toBe('CREATE');
+    });
+
+    it('builds an $in filter when entity is an array, plain value otherwise', async () => {
+      const collection = makeCollection();
+      const db = makeDb(collection);
+
+      await logService.getLogs(db, { entity: ['Sample', 'Patient'] });
+      expect(collection.find.mock.calls[0][0].entity).toEqual({ $in: ['Sample', 'Patient'] });
+
+      await logService.getLogs(db, { entity: 'Sample' });
+      expect(collection.find.mock.calls[1][0].entity).toBe('Sample');
+    });
+
+    it('builds an $in filter when severity is an array, plain value otherwise', async () => {
+      const collection = makeCollection();
+      const db = makeDb(collection);
+
+      await logService.getLogs(db, { severity: ['info', 'error'] });
+      expect(collection.find.mock.calls[0][0].severity).toEqual({ $in: ['info', 'error'] });
+
+      await logService.getLogs(db, { severity: 'info' });
+      expect(collection.find.mock.calls[1][0].severity).toBe('info');
+    });
+
+    it('builds an $in filter when result is an array, plain value otherwise', async () => {
+      const collection = makeCollection();
+      const db = makeDb(collection);
+
+      await logService.getLogs(db, { result: ['success', 'failure'] });
+      expect(collection.find.mock.calls[0][0].result).toEqual({ $in: ['success', 'failure'] });
+
+      await logService.getLogs(db, { result: 'success' });
+      expect(collection.find.mock.calls[1][0].result).toBe('success');
+    });
+
+    it('builds an $in filter when module is an array, plain value otherwise', async () => {
+      const collection = makeCollection();
+      const db = makeDb(collection);
+
+      await logService.getLogs(db, { module: ['Sistema', 'Auth'] });
+      expect(collection.find.mock.calls[0][0].module).toEqual({ $in: ['Sistema', 'Auth'] });
+
+      await logService.getLogs(db, { module: 'Sistema' });
+      expect(collection.find.mock.calls[1][0].module).toBe('Sistema');
+    });
+
+    it('filters by ip using the ip/ipSource/sourceIP aliases', async () => {
+      const collection = makeCollection();
+      const db = makeDb(collection);
+
+      await logService.getLogs(db, { ip: '10.0.0.1' });
+      expect(collection.find.mock.calls[0][0].ipSource).toEqual({ $regex: '10.0.0.1', $options: 'i' });
+
+      await logService.getLogs(db, { ipSource: '10.0.0.2' });
+      expect(collection.find.mock.calls[1][0].ipSource).toEqual({ $regex: '10.0.0.2', $options: 'i' });
+
+      await logService.getLogs(db, { sourceIP: '10.0.0.3' });
+      expect(collection.find.mock.calls[2][0].ipSource).toEqual({ $regex: '10.0.0.3', $options: 'i' });
+    });
+
+    it('merges a startDate/endDate range with an existing $and (resourceType + search combo)', async () => {
+      const collection = makeCollection();
+      const db = makeDb(collection);
+
+      await logService.getLogs(db, {
+        resourceType: 'Sample',
+        search: 'foo',
+        startDate: '2026-01-01',
+        endDate: '2026-01-31'
+      });
+
+      const query = collection.find.mock.calls[0][0];
+      expect(query.$and.length).toBeGreaterThanOrEqual(2);
+      const dateClause = query.$and.find(c => c.$or && c.$or[0] && c.$or[0].timestamp);
+      expect(dateClause.$or[0].timestamp.$gte).toEqual(new Date('2026-01-01'));
+      expect(dateClause.$or[1].dateTime.$lte.getHours()).toBe(23);
+    });
+
+    it('merges a startDate/endDate range with an existing bare $or (no prior $and)', async () => {
+      const collection = makeCollection();
+      const db = makeDb(collection);
+
+      await logService.getLogs(db, { userId: 'u1', startDate: '2026-01-01' });
+
+      const query = collection.find.mock.calls[0][0];
+      expect(query.$or).toBeUndefined();
+      expect(query.$and).toHaveLength(2);
+      expect(query.$and[0].$or[0]).toEqual({ userId: 'u1' });
+      expect(query.$and[1].$or[0].timestamp.$gte).toEqual(new Date('2026-01-01'));
+    });
+
+    it('filters by userName using a case-insensitive regex', async () => {
+      const collection = makeCollection();
+      const db = makeDb(collection);
+
+      await logService.getLogs(db, { userName: 'USR-1' });
+
+      expect(collection.find.mock.calls[0][0].userName).toEqual({ $regex: 'USR-1', $options: 'i' });
+    });
+
+    it('sets a plain $or date range when no prior $or/$and filter exists', async () => {
+      const collection = makeCollection();
+      const db = makeDb(collection);
+
+      await logService.getLogs(db, { startDate: '2026-01-01' });
+
+      const query = collection.find.mock.calls[0][0];
+      expect(query.$or).toEqual([
+        { timestamp: { $gte: new Date('2026-01-01') } },
+        { dateTime: { $gte: new Date('2026-01-01') } }
+      ]);
+    });
+
+    it('applies a custom sortBy field without the default dateTime/timestamp tiebreaker', async () => {
+      const collection = makeCollection();
+      const db = makeDb(collection);
+
+      await logService.getLogs(db, { sortBy: 'action', sortOrder: 'asc' });
+
+      expect(collection.sort).toHaveBeenCalledWith({ action: 1 });
+    });
+
     it('builds a userId $or filter from userId/userID/user aliases', async () => {
       const collection = makeCollection();
       const db = makeDb(collection);
@@ -238,6 +369,15 @@ describe('LogService', () => {
       expect(collection.limit).toHaveBeenCalledWith(25);
       expect(result).toHaveLength(1);
     });
+
+    it('logs and rethrows when the query fails', async () => {
+      const collection = makeCollection({ find: vi.fn().mockImplementation(() => { throw new Error('user query failed'); }) });
+      const db = makeDb(collection);
+      const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
+
+      await expect(logService.getUserLogs(db, 'u1')).rejects.toThrow('user query failed');
+      expect(errorSpy).toHaveBeenCalled();
+    });
   });
 
   describe('getEntityLogs', () => {
@@ -253,6 +393,15 @@ describe('LogService', () => {
           { $or: [{ entityID: 'abc' }, { resourceId: 'abc' }] }
         ]
       });
+    });
+
+    it('logs and rethrows when the query fails', async () => {
+      const collection = makeCollection({ find: vi.fn().mockImplementation(() => { throw new Error('entity query failed'); }) });
+      const db = makeDb(collection);
+      const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
+
+      await expect(logService.getEntityLogs(db, 'Sample', 'abc')).rejects.toThrow('entity query failed');
+      expect(errorSpy).toHaveBeenCalled();
     });
   });
 
@@ -328,6 +477,119 @@ describe('LogService', () => {
 
       await expect(logService.exportLogsToExcel(db, {})).rejects.toThrow('Erro ao exportar logs: boom');
       expect(errorSpy).toHaveBeenCalled();
+    });
+
+    it('rejects when getLogs resolves to a non-object', async () => {
+      const collection = makeCollection();
+      const db = makeDb(collection);
+      vi.spyOn(logService, 'getLogs').mockResolvedValue(null);
+      const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
+
+      await expect(logService.exportLogsToExcel(db, {})).rejects.toThrow('Erro ao exportar logs: Resposta inválida do serviço de logs');
+      expect(errorSpy).toHaveBeenCalled();
+    });
+
+    it('defaults to an empty logs array when result.logs is missing', async () => {
+      const collection = makeCollection();
+      const db = makeDb(collection);
+      vi.spyOn(logService, 'getLogs').mockResolvedValue({});
+      const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+
+      const buffer = await logService.exportLogsToExcel(db, {});
+
+      expect(warnSpy).toHaveBeenCalledWith('Nenhum log encontrado para exportação');
+      expect(Buffer.isBuffer(buffer)).toBe(true);
+    });
+
+    it('rejects when result.logs is not an array', async () => {
+      const collection = makeCollection();
+      const db = makeDb(collection);
+      vi.spyOn(logService, 'getLogs').mockResolvedValue({ logs: 'not-an-array' });
+
+      await expect(logService.exportLogsToExcel(db, {})).rejects.toThrow('Erro ao exportar logs: Dados de logs em formato inválido');
+    });
+
+    it('warns and still builds an empty workbook when there are no logs', async () => {
+      const collection = makeCollection();
+      const db = makeDb(collection);
+      vi.spyOn(logService, 'getLogs').mockResolvedValue({ logs: [] });
+      const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+
+      const buffer = await logService.exportLogsToExcel(db, {});
+
+      expect(warnSpy).toHaveBeenCalledWith('Nenhum log encontrado para exportação');
+      expect(Buffer.isBuffer(buffer)).toBe(true);
+    });
+
+    it('falls back to the un-anonymized logs and warns when anonymizeLogs throws', async () => {
+      // log.service.js destructures `const { anonymizeLogs } = require(...)` at module
+      // scope, so spying on the userAnonymization module object has no effect (the
+      // destructured local binding already captured the original function) — fake the
+      // whole dependency module via require.cache injection instead (see
+      // testing-conventions/references/cjs-mocking.md).
+      const depPath = require2.resolve('../../src/utils/userAnonymization');
+      const servicePath = require2.resolve('../../src/services/log.service');
+      const realDepModule = require2.cache[depPath];
+      const realDepExports = realDepModule.exports;
+
+      realDepModule.exports = {
+        ...realDepExports,
+        anonymizeLogs: vi.fn().mockRejectedValue(new Error('anon failed'))
+      };
+      delete require2.cache[servicePath];
+
+      try {
+        const freshLogService = require2(servicePath);
+        const collection = makeCollection();
+        const db = makeDb(collection);
+        vi.spyOn(freshLogService, 'getLogs').mockResolvedValue({
+          logs: [{ _id: 'id1', userName: 'USR-1', action: 'CREATE' }]
+        });
+        const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+
+        const buffer = await freshLogService.exportLogsToExcel(db, {});
+
+        expect(warnSpy).toHaveBeenCalledWith('Erro ao anonimizar logs, usando logs originais:', 'anon failed');
+        expect(Buffer.isBuffer(buffer)).toBe(true);
+      } finally {
+        realDepModule.exports = realDepExports;
+        delete require2.cache[servicePath];
+        require2(servicePath);
+      }
+    });
+
+    it('extracts ip/timestamp/id via their fallback branches for each row', async () => {
+      const collection = makeCollection();
+      const db = makeDb(collection);
+      vi.spyOn(logService, 'getLogs').mockResolvedValue({
+        logs: [
+          // sourceIP alias, timestampISO alias, logID alias (no _id)
+          { logID: 'log-a', sourceIP: '10.0.0.9', timestampISO: '2026-01-01T00:00:00.000Z' },
+          // metadata.tracking.ip alias, real Date instance timestamp, string _id
+          { _id: 'log-b', metadata: { tracking: { ip: '10.0.0.5' } }, timestamp: new Date('2026-02-02') },
+          // invalid Date string timestamp -> 'N/A'
+          { _id: 'log-c', timestamp: 'not-a-date' }
+        ]
+      });
+
+      const buffer = await logService.exportLogsToExcel(db, {});
+
+      expect(Buffer.isBuffer(buffer)).toBe(true);
+    });
+
+    it('falls back to N/A for a row and warns when per-row processing throws', async () => {
+      const collection = makeCollection();
+      const db = makeDb(collection);
+      const badLog = {
+        get _id() { throw new Error('row boom'); }
+      };
+      vi.spyOn(logService, 'getLogs').mockResolvedValue({ logs: [badLog] });
+      const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+
+      const buffer = await logService.exportLogsToExcel(db, {});
+
+      expect(warnSpy).toHaveBeenCalledWith('Erro ao processar linha de log:', 'row boom');
+      expect(Buffer.isBuffer(buffer)).toBe(true);
     });
   });
 });
