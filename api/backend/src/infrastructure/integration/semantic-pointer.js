@@ -1,5 +1,5 @@
 function buildNeo4jSemanticPointer({ mongoId, collection }) {
-  if (!mongoId || !collection) {
+  if (mongoId === undefined || mongoId === null || mongoId === '' || !collection) {
     throw new Error('mongoId e collection são obrigatórios para ponteiro semântico');
   }
 

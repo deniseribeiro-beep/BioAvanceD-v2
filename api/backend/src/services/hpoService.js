@@ -11,12 +11,16 @@ function isExternalHpoLookupEnabled() {
   return raw === 'true' || raw === '1';
 }
 
+function escapeRegExp(str) {
+  return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 async function searchHpoLocal(query) {
   const client = new MongoClient(MONGO_URI);
   await client.connect();
   const db = client.db(DB_NAME);
   const col = db.collection(COLLECTION);
-  const regex = new RegExp(query, 'i');
+  const regex = new RegExp(escapeRegExp(query), 'i');
   const results = await col.find({
     $or: [
       { label: regex },

@@ -196,6 +196,23 @@ describe('ResultModel', () => {
       expect(created.fileSize).toBeNull();
     });
 
+    it('preserves falsy-but-valid values instead of coercing to null (#55)', () => {
+      const created = ResultModel.create({
+        resultID: 0,
+        sampleID: 'S1',
+        fileType: 'PDF',
+        resultFilePath: '/files/result.pdf',
+        equipmentID: 0,
+        equipmentName: '',
+        fileSize: 0
+      });
+
+      expect(created.resultID).toBe(0);
+      expect(created.equipmentID).toBe(0);
+      expect(created.equipmentName).toBe('');
+      expect(created.fileSize).toBe(0);
+    });
+
     it('defaults uploadedAt to a Date instance when not provided', () => {
       const created = ResultModel.create({
         sampleID: 'S1',
