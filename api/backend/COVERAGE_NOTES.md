@@ -97,7 +97,6 @@ ZERO bucket's real-logic file (`worker.js`) is done. Re-derived from
 src/services/patient.service.js                                       56.35%
 src/models/Session.js                                                 57.14%
 src/i18n/index.js                                                     57.37%
-src/interface/routes/backup.routes.js                                 57.69%
 src/services/fhir-sync.service.js                                     57.81%
 src/services/import.service.js                                        61.91%
 src/services/sensor.service.js                                        62.02%
@@ -139,6 +138,9 @@ run: 94.38% lines) — see `COVERAGE_HISTORY.md`.
 
 `dictionary.js` moved out of this bucket 2026-07-05 (isolated run:
 96.57% lines) — see `COVERAGE_HISTORY.md`.
+
+`backup.routes.js` moved out of this bucket 2026-07-05 (isolated run:
+98.07% lines) — see `COVERAGE_HISTORY.md`.
 
 ## MID-HIGH coverage (70-84% lines) — GOOD (>=85%)
 

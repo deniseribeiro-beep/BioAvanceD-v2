@@ -15,6 +15,19 @@ that reconcile's real `coverage-summary.json` numbers (see
 non-sequential in places (multiple concurrent authoring passes) — trust
 the issue numbers and file names, not the slice ordinal.
 
+**Slice (2026-07-05):** `src/interface/routes/backup.routes.js` 57.69% →
+98.07% lines (isolated run alongside `backup.service.test.js`). Extended
+`tests/integration/backup.api.test.js` with: `GET /list` against a real
+temp directory tree (exercises `getDirSizeSync`'s recursive size sum and
+the newest-first `createdAt` sort) and its 500 path; `POST /perform`'s
+500 path; and `POST /restore/:fileName`'s success, service-reported-failure
+(400), path-traversal-basename-sanitization (404), and 500 paths. No bugs
+found — the only remaining gap is the `fileName` falsy-guard branch,
+which isn't reachable through Express's `:fileName` route matching (a
+missing/empty segment doesn't match the route at all), so it's dead code
+in practice; not worth a bug filing for a defensive guard that can never
+fire from HTTP.
+
 **Slice (2026-07-05):** `src/services/import-lgpd.service.js` 56.01% →
 67.28% lines (isolated run across its six test files). Added
 `tests/unit/import-lgpd.service.importSamples.unit.test.js`, covering
