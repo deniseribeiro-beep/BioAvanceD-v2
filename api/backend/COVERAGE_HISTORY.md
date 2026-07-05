@@ -36,6 +36,26 @@ mocking approach as the existing `importPatients` test file (DB driven
 for real against a fake `db.collection()`, no bug found this slice —
 issues #65/#84 already cover this file's other known bugs).
 
+**Slice continued (2026-07-05):** `src/services/import-lgpd.service.js`
+79.01% -> 85.18% lines (74.11% branches). Extended
+`import-lgpd.service.importPatients.unit.test.js` (recordNumber
+normalization, clinicalUnit acronym generation, duplicate-message
+pt-BR date formatting, row-level exception handling, blank-row skip,
+ignored patientID column, empty-object-rows header check),
+`import-lgpd.service.readers.test.js` (readExcel's all-"Instruções"
+sheet fallback for both patients/samples, samples-sheet fallback,
+rich-text/hyperlink cell values and Date-to-ISO serialization), and
+`import-lgpd.service.test.js` (parseBirthDate's DD-MM-YYYY dash format,
+native-Date fallback, 1900-2100 year bound; parsePatientRow's `height`-
+in-meters fallback and >=3 heightCm-is-already-cm branch). Stopped here
+rather than chasing full 100%: the remaining gap is mostly
+`importSamples`' post-`SampleModel.validate` code (~845-982), which is
+dead in production because `SampleModel.validate` resolves to
+mongoose's own static (always rejects, see the BUG-tagged tests in
+`import-lgpd.service.importSamples.unit.test.js`) rather than the
+hand-written validator — reaching it honestly would mean mocking around
+a known bug rather than driving it through realistic inputs.
+
 **Slice (2026-07-05):** `src/controllers/import-batch.controller.js`
 69.49% → 100% lines, 97.5% branches. The controller's route-handler
 methods (`createBatchImport`, `getBatchImportStatus`,

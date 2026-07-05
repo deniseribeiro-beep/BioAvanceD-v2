@@ -98,9 +98,16 @@ src/services/patient.service.js                                       57.2%
 src/controllers/sample-file.controller.js                            68.87%
 ```
 
-`import-lgpd.service.js` moved up 2026-07-05 (isolated run: 79.01% lines,
-68.25% branches, now MID-HIGH) — `buildMappedPatientRow`,
-`importPatientsSmart`, and `cleanupFile` now covered; see
+`import-lgpd.service.js` moved up 2026-07-05 (isolated run: 85.18% lines,
+74.11% branches, now MID-HIGH) — `buildMappedPatientRow`,
+`importPatientsSmart`, `cleanupFile`, remaining `importPatients`
+branches, `readExcel` sheet-fallback/cell-parsing branches, and
+`parseBirthDate`/`parsePatientRow` edge formats now covered. Remaining
+gap is concentrated in `importSamples`' post-validation code (~lines
+845-982): unreachable in real usage because `SampleModel.validate` is
+the wrong export (mongoose static, always rejects — see issue tracking
+that bug), so exercising it requires forcing the bypass rather than
+driving it through real inputs — lower value for the time cost. See
 `COVERAGE_HISTORY.md`.
 
 `log.service.js` moved out of this bucket 2026-07-05 (isolated run: 99.47%

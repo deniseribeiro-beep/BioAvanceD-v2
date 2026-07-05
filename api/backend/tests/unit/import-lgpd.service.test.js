@@ -90,6 +90,22 @@ describe('ImportLGPDService', () => {
       const invalid = new Date('not-a-date');
       expect(importLgpdService.parseBirthDate(invalid)).toBeNull();
     });
+
+    it('parses DD-MM-YYYY (dash-separated) format', () => {
+      const d = importLgpdService.parseBirthDate('25-12-1990');
+      expect(d.getFullYear()).toBe(1990);
+      expect(d.getMonth()).toBe(11);
+      expect(d.getDate()).toBe(25);
+    });
+
+    it('falls back to native Date parsing for other recognizable formats, within the 1900-2100 bound', () => {
+      const d = importLgpdService.parseBirthDate('December 25, 1990');
+      expect(d.getFullYear()).toBe(1990);
+    });
+
+    it('rejects a native-parseable date whose year falls outside 1900-2100', () => {
+      expect(importLgpdService.parseBirthDate('January 1, 1850')).toBeNull();
+    });
   });
 
   describe('parseSex', () => {
@@ -264,6 +280,16 @@ describe('ImportLGPDService', () => {
     it('keeps a non-numeric recordNumber as a trimmed string', () => {
       const result = importLgpdService.parsePatientRow({ recordNumber: 'AB-123' });
       expect(result.recordNumber).toBe('AB-123');
+    });
+
+    it('falls back to the "height" column (in meters, converted to cm) when heightCm is absent', () => {
+      const result = importLgpdService.parsePatientRow({ height: '1.80' });
+      expect(result.heightCm).toBe(180);
+    });
+
+    it('treats a heightCm value >= 3 as already in centimeters', () => {
+      const result = importLgpdService.parsePatientRow({ heightCm: '175' });
+      expect(result.heightCm).toBe(175);
     });
   });
 

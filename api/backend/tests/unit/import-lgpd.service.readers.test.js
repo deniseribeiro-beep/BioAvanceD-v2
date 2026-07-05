@@ -162,4 +162,61 @@ describe('ImportLGPDService.readExcel', () => {
 
     expect(rows).toEqual([{ patientName: 'João Silva', birthDate: '25/12/1990' }]);
   });
+
+  it('falls back to the first sheet when every sheet is named "Instruções" (patients)', async () => {
+    const filePath = await writeTmpWorkbook('all-instrucoes.xlsx', [
+      { sheetName: 'Instruções', rows: [
+        ['patientName', 'birthDate'],
+        ['João Silva', '25/12/1990'],
+      ] },
+    ]);
+
+    const rows = await importLgpdService.readExcel(filePath, 'patients');
+
+    expect(rows).toEqual([{ patientName: 'João Silva', birthDate: '25/12/1990' }]);
+  });
+
+  it('falls back to the first non-"Instruções" sheet when there is no "Amostras" tab', async () => {
+    const filePath = await writeTmpWorkbook('samples-fallback.xlsx', [
+      { sheetName: 'Instruções', rows: [['leia isto antes']] },
+      { sheetName: 'Planilha1', rows: [
+        ['patientID', 'sampleType'],
+        ['12345678', 'PLASMA'],
+      ] },
+    ]);
+
+    const rows = await importLgpdService.readExcel(filePath, 'samples');
+
+    expect(rows).toEqual([{ patientID: '12345678', sampleType: 'PLASMA' }]);
+  });
+
+  it('falls back to the first sheet when every sheet is named "Instruções" (samples)', async () => {
+    const filePath = await writeTmpWorkbook('samples-all-instrucoes.xlsx', [
+      { sheetName: 'Instruções', rows: [
+        ['patientID', 'sampleType'],
+        ['12345678', 'PLASMA'],
+      ] },
+    ]);
+
+    const rows = await importLgpdService.readExcel(filePath, 'samples');
+
+    expect(rows).toEqual([{ patientID: '12345678', sampleType: 'PLASMA' }]);
+  });
+
+  it('reads rich-text cell values via their .text property and serializes Date cells to ISO strings', async () => {
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('Pacientes');
+    worksheet.addRow(['patientName', 'birthDate']);
+    const dataRow = worksheet.addRow([]);
+    dataRow.getCell(1).value = { text: 'João Silva', hyperlink: 'https://example.com' };
+    dataRow.getCell(2).value = new Date('1990-12-25T00:00:00.000Z');
+
+    const filePath = path.join(os.tmpdir(), `import-lgpd-readers-richtext-${Date.now()}.xlsx`);
+    await workbook.xlsx.writeFile(filePath);
+    tmpFiles.push(filePath);
+
+    const rows = await importLgpdService.readExcel(filePath, 'patients');
+
+    expect(rows).toEqual([{ patientName: 'João Silva', birthDate: '1990-12-25T00:00:00.000Z' }]);
+  });
 });

@@ -95,6 +95,13 @@ describe('ImportLGPDService.importPatients', () => {
     ).rejects.toThrow('Arquivo está vazio ou não contém dados válidos');
   });
 
+  it('throws when every row is an empty object (no usable headers)', async () => {
+    vi.spyOn(service, 'readFile').mockResolvedValue([{}]);
+    await expect(
+      service.importPatients(db, { path: '/x.csv', originalname: 'x.csv' })
+    ).rejects.toThrow('Arquivo não contém dados válidos');
+  });
+
   it('throws when required headers are missing', async () => {
     vi.spyOn(service, 'readFile').mockResolvedValue([{ patientName: 'Only Name' }]);
     await expect(
