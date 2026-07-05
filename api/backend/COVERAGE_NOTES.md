@@ -98,7 +98,6 @@ src/services/patient.service.js                                       56.35%
 src/models/Session.js                                                 57.14%
 src/i18n/index.js                                                     57.37%
 src/services/import.service.js                                        61.91%
-src/services/sensor.service.js                                        62.02%
 src/services/mqtt-signature.service.js                                62.5%
 src/utils/patientAnonymization.js                                     62.5%
 src/models/Patient.js                                                 63.33%
@@ -143,6 +142,9 @@ run: 94.38% lines) — see `COVERAGE_HISTORY.md`.
 
 `fhir-sync.service.js` moved out of this bucket 2026-07-05 (isolated run:
 99.52% lines) — see `COVERAGE_HISTORY.md`.
+
+`sensor.service.js` moved out of this bucket 2026-07-05 (isolated run:
+100% lines, 87.03% branches) — see `COVERAGE_HISTORY.md`.
 
 ## MID-HIGH coverage (70-84% lines) — GOOD (>=85%)
 

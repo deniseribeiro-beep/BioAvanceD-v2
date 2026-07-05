@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import sensorService from '../../src/services/sensor.service';
+import { createRequire } from 'module';
+
+const require = createRequire(import.meta.url);
+const sensorService = require('../../src/services/sensor.service');
 
 const isQuarantineTriggerStatusMock = vi.fn();
 const quarantineBySensorStatusMock = vi.fn();

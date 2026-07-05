@@ -28,6 +28,26 @@ missing/empty segment doesn't match the route at all), so it's dead code
 in practice; not worth a bug filing for a defensive guard that can never
 fire from HTTP.
 
+**Slice (2026-07-05):** `src/services/sensor.service.js` 62.02% → 100%
+lines, 87.03% branches (isolated run combining `sensor.service.test.js`
+and `sensor.service.quarantine.test.js`). Added catch-block/rethrow
+coverage for `createSensor`/`getSensor`/`listSensors`/`updateSensor`/
+`collectReading`/`deleteSensor`, plus the one previously-missing
+`updateSensor` branch: quarantine triggered but no session support
+(`db.client.startSession` unavailable), which must call
+`quarantineBySensorStatus` without a `session` in its options. No product
+bugs found. Along the way, found and fixed a **test-infra measurement
+bug** (not product code): `sensor.service.quarantine.test.js` imported
+the singleton via ESM `import`, while `sensor.service.test.js` used
+`createRequire`+`require` for the same file — v8/vitest coverage does
+not merge these two loader paths for the same source file, so running
+both together silently under-reported coverage (was showing 64.55%,
+masking real per-file coverage of 92.4% alone / 100% combined). Switched
+the quarantine test to `createRequire` to match, which fixed the
+merge. Worth checking other split test files for the same
+`import` vs `createRequire` mismatch if their combined coverage looks
+suspiciously low relative to per-file isolated runs.
+
 **Slice (2026-07-05):** `src/services/fhir-sync.service.js` 67.29% →
 99.52% lines (isolated run). The existing test file already covered the
 pure mapping helpers and the "-First" single-doc read paths

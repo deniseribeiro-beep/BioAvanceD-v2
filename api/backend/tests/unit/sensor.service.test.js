@@ -228,4 +228,98 @@ describe('sensor.service (non-quarantine paths)', () => {
       expect(result).toBe(false);
     });
   });
+
+  describe('error paths (catch blocks log and rethrow)', () => {
+    it('createSensor rethrows when insertOne rejects', async () => {
+      const { db, collection } = makeDb();
+      collection.insertOne.mockRejectedValue(new Error('insert failed'));
+
+      await expect(
+        sensorService.createSensor(db, { sensorId: 'S-1', sensorType: 'temperature' })
+      ).rejects.toThrow('insert failed');
+    });
+
+    it('getSensor rethrows when findOne rejects', async () => {
+      const { db, collection } = makeDb();
+      collection.findOne.mockRejectedValue(new Error('find failed'));
+
+      await expect(sensorService.getSensor(db, 'S-1')).rejects.toThrow('find failed');
+    });
+
+    it('listSensors rethrows when countDocuments rejects', async () => {
+      const { db, collection } = makeDb();
+      const toArray = vi.fn().mockResolvedValue([]);
+      const skip = vi.fn(() => ({ toArray }));
+      const limit = vi.fn(() => ({ skip }));
+      collection.find = vi.fn(() => ({ limit }));
+      collection.countDocuments.mockRejectedValue(new Error('count failed'));
+
+      await expect(sensorService.listSensors(db, {})).rejects.toThrow('count failed');
+    });
+
+    it('updateSensor rethrows when findOne rejects', async () => {
+      const { db, collection } = makeDb();
+      collection.findOne.mockRejectedValue(new Error('lookup failed'));
+
+      await expect(
+        sensorService.updateSensor(db, 'S-1', { status: 'maintenance' })
+      ).rejects.toThrow('lookup failed');
+    });
+
+    it('collectReading rethrows when getSensor lookup fails', async () => {
+      const { db, collection } = makeDb();
+      collection.findOne.mockRejectedValue(new Error('reading lookup failed'));
+
+      await expect(sensorService.collectReading(db, 'S-1')).rejects.toThrow('reading lookup failed');
+    });
+
+    it('deleteSensor rethrows when deleteOne rejects', async () => {
+      const { db, collection } = makeDb();
+      collection.deleteOne.mockRejectedValue(new Error('delete failed'));
+
+      await expect(sensorService.deleteSensor(db, 'S-1')).rejects.toThrow('delete failed');
+    });
+  });
+
+  describe('updateSensor quarantine trigger without transaction support', () => {
+    it('calls quarantineBySensorStatus without a session when db.client.startSession is unavailable', async () => {
+      const { db, collection } = makeDb();
+      const existing = { sensorId: 'S-1', maintenanceStatus: 'operational' };
+      collection.findOne.mockResolvedValue(existing);
+      collection.updateOne.mockResolvedValue({ matchedCount: 1 });
+
+      const quarantineBySensorStatus = vi.fn().mockResolvedValue({
+        triggered: true,
+        matched: 1,
+        quarantined: 1,
+        movements: 1,
+        reason: 'status:offline'
+      });
+      sensorService.setQuarantineService({
+        isQuarantineTriggerStatus: vi.fn(() => true),
+        quarantineBySensorStatus
+      });
+
+      const result = await sensorService.updateSensor(db, 'S-1', { maintenanceStatus: 'offline' });
+
+      expect(collection.updateOne).toHaveBeenCalledWith(
+        { $or: [{ sensorId: 'S-1' }, { sensorID: 'S-1' }, { _id: 'S-1' }] },
+        { $set: expect.objectContaining({ maintenanceStatus: 'offline' }) }
+      );
+      expect(quarantineBySensorStatus).toHaveBeenCalledWith(
+        db,
+        expect.objectContaining({ maintenanceStatus: 'offline' }),
+        'offline',
+        expect.objectContaining({ updateData: expect.objectContaining({ maintenanceStatus: 'offline' }) })
+      );
+      expect(quarantineBySensorStatus.mock.calls[0][3]).not.toHaveProperty('session');
+      expect(result.quarantine).toEqual({
+        triggered: true,
+        matched: 1,
+        quarantined: 1,
+        movements: 1,
+        reason: 'status:offline'
+      });
+    });
+  });
 });
