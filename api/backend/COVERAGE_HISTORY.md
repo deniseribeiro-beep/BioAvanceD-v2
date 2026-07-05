@@ -15,6 +15,38 @@ that reconcile's real `coverage-summary.json` numbers (see
 non-sequential in places (multiple concurrent authoring passes) — trust
 the issue numbers and file names, not the slice ordinal.
 
+**Slice (2026-07-05):** `src/services/import-lgpd.service.js` 56.01% →
+67.28% lines (isolated run across its six test files). Added
+`tests/unit/import-lgpd.service.importSamples.unit.test.js`, covering
+`importSamples` (previously exercised only via a fully-mocked
+`importLGPDService.importSamples` spy at the controller level, so the
+real method body had never run under test) and `getNextAvailableLocation`
+(start-location-not-found, N-steps-forward sorted by block/rack/drawer/box,
+offset-past-end, and the catch-and-return-null-on-query-failure path).
+
+Found a severe real bug while writing the happy-path test: `importSamples`
+calls `SampleModel.validate(sampleData)`, but `SampleModel` there is
+`require('../models/Sample')`, which exports the **mongoose Model**
+(the hand-written validator class is attached separately as
+`SampleModel.SampleModel`). Mongoose's own static `Model.validate()`
+returns a Promise, not `{isValid, errors}`, so `!validation.isValid` is
+always `true` — **every row is rejected regardless of actual validity**,
+`insertOne` is never reached, and the pushed error entry has
+`errors: undefined` (a Promise has no `.errors`), which will itself
+crash any caller iterating that array. As a corollary the duplicate-barcode
+check (which sits after the `SampleModel.validate` call) is now dead
+code. GitHub issue filing for this was auto-blocked by the permission
+classifier this session (see wrap-up) — flagged to Dennis directly
+instead of a filed issue number. The new tests assert the actual (buggy)
+"every row always rejected, errors array undefined" behavior, with inline
+comments pointing at this bug.
+
+Remaining gaps in this file after the slice: `importPatientsSmart` (only
+the mapping-required guard is tested; the full happy/error path mirrors
+`importPatients`' shape but isn't covered), and `readExcel`'s
+sheet-fallback edge cases beyond what `import-lgpd.service.readers.test.js`
+already covers.
+
 **Slice (2026-07-05):** `src/routes/dictionary.js` 56.16% → 96.57% lines
 (isolated run across its three test files). Added
 `tests/unit/dictionary-search-suggest.test.js` covering the two routes

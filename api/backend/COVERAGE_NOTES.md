@@ -94,7 +94,6 @@ ZERO bucket's real-logic file (`worker.js`) is done. Re-derived from
 `coverage/coverage-summary.json`, not hand-maintained.
 
 ```
-src/services/import-lgpd.service.js                                   56.01%
 src/services/patient.service.js                                       56.35%
 src/models/Session.js                                                 57.14%
 src/i18n/index.js                                                     57.37%
@@ -109,6 +108,7 @@ src/services/biomarker-observation.service.js                         63.88%
 src/models/ConsentPolicy.js                                           64.86%
 src/core/use-cases/ListOperationalFreezersUseCase.js                  66.66%
 src/services/mqtt-telemetry.service.js                                67.08%
+src/services/import-lgpd.service.js                                   67.28%
 src/models/Sample.js                                                  67.79%
 src/models/ConsentTemplate.js                                         67.85%
 src/infrastructure/queue/TopologicalQuarantine.js                     68.08%
