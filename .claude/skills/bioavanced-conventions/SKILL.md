@@ -74,7 +74,8 @@ share `node_modules`.
   call**, not just before the first commit. Never work directly on
   `main`. Existing naming: `feature/<slug>` (e.g.
   `feature/docker-e2e-backend-integration`); use `test/<slug>` for
-  test-loop slices if a new branch is needed. Exception: maintenance of
+  test-loop slices if a new branch is needed, `fix/<slug>` for
+  bug-fix work (see `fix-bugs`). Exception: maintenance of
   `.claude/skills/`, agent defs, and hooks (the workflow tooling itself)
   rides the currently-active work branch in its own commit — the loop
   reads skills from the branch it runs on, so parking them on a separate
