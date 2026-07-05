@@ -34,11 +34,10 @@ describe('buildNeo4jSemanticPointer', () => {
     expect(() => buildNeo4jSemanticPointer({ mongoId: '', collection: 'samples_fhir' })).toThrow();
   });
 
-  it('BUG-CANDIDATE: throws when mongoId is the number 0, even though 0 could be a legitimate id', () => {
-    // The guard `if (!mongoId || !collection)` treats numeric 0 as missing.
-    // If a legitimate mongoId could ever be 0 (e.g. a numeric sequence id starting at 0),
-    // this would incorrectly reject it. Documented here as a real behavior, not asserted as "correct".
-    expect(() => buildNeo4jSemanticPointer({ mongoId: 0, collection: 'samples_fhir' })).toThrow();
+  it('does NOT throw when mongoId is the number 0, a legitimate id (#60)', () => {
+    const result = buildNeo4jSemanticPointer({ mongoId: 0, collection: 'samples_fhir' });
+    expect(result.id).toBe('0');
+    expect(result.pointer).toBe('mongo://samples_fhir/0');
   });
 
   it('does NOT throw when mongoId is the string "0" since it is truthy', () => {
