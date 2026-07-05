@@ -15,6 +15,25 @@ that reconcile's real `coverage-summary.json` numbers (see
 non-sequential in places (multiple concurrent authoring passes) — trust
 the issue numbers and file names, not the slice ordinal.
 
+**Slice (2026-07-05):** `src/routes/dictionary.js` 56.16% → 96.57% lines
+(isolated run across its three test files). Added
+`tests/unit/dictionary-search-suggest.test.js` covering the two routes
+that had no coverage yet: `GET /search` (Neo4j ORPHA lookup with redis
+cache hit/miss/connect-failure paths, normalization filtering out
+records with no code or display) and `GET /suggest` (Neo4j disease +
+phenotype + biomarker lookup, 404 when not found, cache hit/miss,
+500 on session throw). `dictionary.js` destructures `getNeo4jDriver`
+from `../database/neo4j` at require-time, so the route file is loaded
+via `require.cache` clearing + a fake `getNeo4jDriver` swapped onto the
+dependency module (same pattern as `hpo.routes.test.js`); `redis` is
+referenced as `redis.createClient(...)` (not destructured), so a plain
+`vi.spyOn` on the shared module object was enough there. No new bugs
+found in this slice; remaining uncovered lines are the redis
+`on('error')` handler body, the `ensureMedicationDictionarySeeded`
+bulk-write body (covered indirectly, not through the "actually seeds"
+branch), and one `/atc/search` catch line — all thin enough not to
+chase further this slice.
+
 **Slice (2026-07-05):** `src/controllers/paciente.controller.js` 57.3% →
 94.38% lines (isolated run). Added
 `tests/unit/paciente.controller.test.js` covering all 11 methods:

@@ -95,7 +95,6 @@ ZERO bucket's real-logic file (`worker.js`) is done. Re-derived from
 
 ```
 src/services/import-lgpd.service.js                                   56.01%
-src/routes/dictionary.js                                              56.16%
 src/services/patient.service.js                                       56.35%
 src/models/Session.js                                                 57.14%
 src/i18n/index.js                                                     57.37%
@@ -137,6 +136,9 @@ same ground.
 
 `paciente.controller.js` moved out of this bucket 2026-07-05 (isolated
 run: 94.38% lines) — see `COVERAGE_HISTORY.md`.
+
+`dictionary.js` moved out of this bucket 2026-07-05 (isolated run:
+96.57% lines) — see `COVERAGE_HISTORY.md`.
 
 ## MID-HIGH coverage (70-84% lines) — GOOD (>=85%)
 
