@@ -15,6 +15,20 @@ that reconcile's real `coverage-summary.json` numbers (see
 non-sequential in places (multiple concurrent authoring passes) — trust
 the issue numbers and file names, not the slice ordinal.
 
+**Slice (2026-07-05):** `src/utils/logSerializer.js` 69.14% → 97.87%
+lines, 89.43% branches (isolated run). New
+`tests/unit/utils/logSerializer.test.js` (36 tests) covering
+`isObjectId` (constructor-name and duck-typed hex-string detection,
+non-24-char strings, throwing `toString`), `serializeValue` (ObjectId/
+Date/Buffer tagging, array/object recursion, `$`-prefixed and
+`__proto__` key skipping, circular-reference detection, max-depth
+guard, per-key error capture), and `serializeLogSimple`'s field-by-field
+normalization (`_id`, `timestamp`, `dateTime`/`createdAt`/`updatedAt`,
+`payload`/`metadata`, `entityID`, `userID`/`userId`). No bugs found —
+plain utility functions, no mocking required. Remaining gap is a v8
+coverage-tool quirk on the depth-guard's string return (line 21),
+confirmed hit via a standalone Node repro; not a real test gap.
+
 **Slice (2026-07-05):** `src/services/mqtt-telemetry.service.js` 67.08% →
 75.94% lines, 79.61% branches (isolated run), extended
 `tests/unit/mqtt-telemetry.service.test.js` (24 tests, up from 15). Added

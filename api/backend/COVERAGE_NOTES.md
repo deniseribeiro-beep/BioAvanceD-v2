@@ -103,7 +103,6 @@ src/models/ConsentTemplate.js                                         67.85%
 src/infrastructure/queue/TopologicalQuarantine.js                     68.08%
 src/routes/orphanet-count.js                                          68.42%
 src/controllers/sample-file.controller.js                            68.87%
-src/utils/logSerializer.js                                            69.14%
 src/controllers/import-batch.controller.js                            69.49%
 src/services/log.service.js                                           69.84%
 ```
@@ -174,6 +173,9 @@ handlers) is not honestly mockable, see `COVERAGE_HISTORY.md`.
 `user-security.service.js` moved out of this bucket 2026-07-05 (isolated
 run: 91.02% lines, 76.85% branches, now MID-HIGH) — see
 `COVERAGE_HISTORY.md`.
+
+`logSerializer.js` moved out of this bucket 2026-07-05 (isolated run:
+97.87% lines, 89.43% branches) — see `COVERAGE_HISTORY.md`.
 
 ## MID-HIGH coverage (70-84% lines) — GOOD (>=85%)
 
