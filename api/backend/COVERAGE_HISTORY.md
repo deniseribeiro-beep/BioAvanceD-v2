@@ -1238,3 +1238,23 @@ this slice can't confirm. **Remaining for a future slice**:
 `ensurePatientIndexes` — this file is too large for one iteration,
 treat it as an ongoing multi-slice target. No product bugs found this
 slice.
+
+## user-security.service.js (2026-07-05)
+
+Added `tests/unit/user-security.service.db.unit.test.js` (24 tests)
+covering the DB-dependent methods that had zero coverage:
+`getMFAStatus`, `getPasswordStatus`, `getSecurityStatus` (happy paths,
+weak/strong levels, not-found errors), `updatePassword` (wrong current
+password, weak new password, password reuse, success path rotating
+history), `generateRecoveryCodes`, `revokeSession`/`revokeAllSessions`
+(exercising the real `session.service` singleton's in-memory `sessions`
+Map directly rather than mocking the require), `requestPasswordReset`,
+`getUserAnonId`, `getActivities` (classification branches: login,
+mfa_change, password_change, suspicious, failed_attempt), and
+`getSessions` (DB-backed session with parsed device/browser/OS/location,
+and the synthetic-current-session fallback when nothing is stored).
+Isolated run: 91.02% lines (from 68.57%), 76.85% branches, 95.65%
+functions. Remaining gap is defensive `logger.error`/rethrow branches
+in a few catch blocks and one edge case in `revokeSession`'s cache
+cleanup loop — low value to chase further. No product bugs found this
+slice.
