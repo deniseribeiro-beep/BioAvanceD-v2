@@ -122,6 +122,21 @@ a constructor" (arrow functions can't be used with `new`; only
 `function`/`class` can). Use `function Fake() { this.method = vi.fn(); }`
 or a real `class`, not `vi.fn().mockImplementation(() => ({...}))`.
 
+## Mixing `import` and `createRequire` for the same source across split test files silently under-reports coverage
+
+**Confirmed 2026-07-05, `sensor.service.js`**: `sensor.service.test.js` loaded the
+singleton via `createRequire(import.meta.url)` while `sensor.service.quarantine.test.js`
+loaded the same file via plain ESM `import`. Both files' tests passed fine, but running
+them together for coverage reported only 64.55% lines — running `sensor.service.test.js`
+alone reported 92.4% (missing only the lines the quarantine file's tests exercised). v8/vitest
+does not merge coverage across the two loader paths for the same source file, so the
+combined number silently undercounts rather than erroring. Symptom: a file's isolated
+combined-coverage run looks stuck at a moderate percentage despite tests that clearly cover
+the missing lines when read. Fix: make every test file for a given CJS source use the same
+loading style — prefer `createRequire(import.meta.url)` everywhere per the ESM/CJS section
+above — and if a MID-LOW/LOW file has multiple test files, check they agree before trusting
+the combined isolated-run percentage.
+
 ## Maintaining this file
 
 New mocking/module-cache gotchas confirmed in this repo go here (full
