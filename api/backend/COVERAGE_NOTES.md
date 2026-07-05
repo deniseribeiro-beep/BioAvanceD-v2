@@ -94,15 +94,64 @@ Low priority (models/interfaces/one-off scripts — thin or non-request-path):
 **Empty.** `patient.service.js` was the last file in this bucket (see
 `COVERAGE_HISTORY.md` for its slice); the full-suite reconcile confirms
 no other file has since dropped into this range either. With LOW and
-MID-LOW both empty, the next slice-picking
-tier is ZERO's one real-logic file (`worker.js`) or a MID-HIGH
-(70-84%) file picked via a fresh isolated `--coverage` run — see "How to
-use this when picking a slice" above.
+MID-LOW both empty, the next slice-picking tier is ZERO's one
+real-logic file (`worker.js`) or a MID-HIGH file below.
 
-## MID-HIGH coverage (70-84% lines) — GOOD (>=85%)
+## MID-HIGH coverage (70-84% lines) — 36 files, full reconcile 2026-07-05, commit `aef22577`
 
-Not listed here (lower priority for slice-picking; a full reconcile
-regenerates these buckets if needed). Ask for a fresh
+Sorted ascending (worst first) — lines% / branches%. The next tier up
+once ZERO's `worker.js` is done; a lower branch% relative to lines%
+usually means untested error paths, a good tie-breaker when picking
+among these.
+
+```
+src/models/PatientConsent.js                                70.83 / 85.24
+src/interface/routes/equipment.routes.js                     70.93 / 61.05
+src/utils/fieldEncryption.js                                 71.42 / 69.56
+src/infrastructure/middleware/auth.js                         71.66 / 67.44
+src/interface/routes/reports.routes.js                       71.84 / 58.21
+src/interface/routes/cid.routes.js                            72.09 / 46.47
+src/services/auditRoot.service.js                             73.33 / 54.54
+src/services/hl7.service.js                                   73.45 / 46.85
+src/services/patient.service.js                                74.15 / 59.95
+src/models/MeasurementUnit.js                                  75.00 / 40.00
+src/controllers/sensor.controller.js                           75.29 / 68.18
+src/services/mqtt-telemetry.service.js                         75.94 / 79.61
+src/interface/routes/terminologies.routes.js                   76.12 / 51.09
+src/services/SampleGraphValidator.js                           76.25 / 66.04
+src/controllers/analysis-type.controller.js                    77.14 / 57.14
+src/core/use-cases/RegisterSampleUseCase.js                    77.33 / 69.31
+src/interface/routes/assistant.routes.js                       78.64 / 63.76
+src/database/mongo.js                                          79.22 / 76.00
+src/models/User.js                                             79.59 / 53.68
+src/interface/routes/clinical-unit.routes.js                   79.76 / 63.15
+src/models/AnalysisType.js                                     80.00 / 75.00
+src/controllers/iot.controller.js                              80.88 / 66.66
+src/interface/routes/analysis-file.routes.js                   80.95 / 87.50
+src/interface/routes/result.routes.js                          80.97 / 54.54
+src/interface/routes/master-data.routes.js                     81.42 / 68.75
+src/models/SampleMovement.js                                   81.57 / 82.71
+src/interface/routes/logs.routes.js                            81.63 / 61.53
+src/services/security.service.js                               82.51 / 72.26
+src/utils/collectionResolver.js                                82.69 / 78.94
+src/config/redis.js                                            83.01 / 72.72
+src/infrastructure/queue/Neo4jQuarantineService.js             83.33 / 82.75
+src/controllers/import-lgpd.controller.js                      83.64 / 57.26
+src/utils/auditLogger.js                                       83.67 / 70.87
+src/controllers/import.controller.js                           83.85 / 75.25
+src/controllers/import-async.controller.js                     84.29 / 79.66
+src/config/queue.js                                            84.50 / 50.00
+```
+
+Note: `patient.service.js` already has substantial partial coverage from
+the 2026-07-05 slice (see `COVERAGE_HISTORY.md`) — its remaining gap is
+`getPatient`/`listPatients`/`searchPatients`'s FHIR-first branches and
+`validateConsentToken`/`acceptConsentToken`/`resendConsentNotification`.
+
+## GOOD coverage (>=85% lines)
+
+Not listed here (lower priority for slice-picking by a wide margin; a
+full reconcile regenerates this if needed). Ask for a fresh
 `--coverage --reporter=basic` run if you need this detail.
 
 ## Maintaining this file
