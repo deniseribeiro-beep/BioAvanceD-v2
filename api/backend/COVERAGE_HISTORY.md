@@ -15,6 +15,25 @@ that reconcile's real `coverage-summary.json` numbers (see
 non-sequential in places (multiple concurrent authoring passes) — trust
 the issue numbers and file names, not the slice ordinal.
 
+**Slice (2026-07-05):** `src/utils/patientAnonymization.js` 62.5% → 100%
+lines/statements/functions, 95% branches (isolated run), new file
+`tests/unit/patientAnonymization.test.js` (17 tests). Covered
+`generateUniquePatientID` (unique first try, `collectionName` override,
+retry-on-collision loop, throws after exhausting `maxAttempts`),
+`validatePatientID` (null/non-string/wrong-length/non-digit rejection,
+found/not-found, and the try/catch error path), `getPatientByIDOnly`
+(found returns only `{ patientID, exists: true }`, not-found returns
+null, and the try/catch error path), and `sanitizePatientForLogs`
+(falsy patient, strips non-`patientID` fields, missing `patientID`
+field). No bugs found. Logger calls are spied via `vi.spyOn` on the
+real logger module (matching `NotificationService.test.js`'s
+convention) rather than `vi.mock`, since this repo's `vitest.config.js`
+runs with `isolate: true` and a `vi.mock` factory's object didn't
+stay identity-matched with the module the source captured across
+tests. Remaining uncovered branch is the `env.COLL_PATIENTS ||`
+module-load-time default fallback — not worth chasing (would need a
+separate isolated module registry per test just for that one line).
+
 **Slice (2026-07-05):** `src/services/mqtt-signature.service.js` 62.5% →
 100% lines/branches/functions/statements (isolated run), new file
 `tests/unit/mqtt-signature.service.test.js` (14 tests). Covered
