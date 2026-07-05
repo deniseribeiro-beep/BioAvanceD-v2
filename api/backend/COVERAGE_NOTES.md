@@ -94,8 +94,8 @@ ZERO bucket's real-logic file (`worker.js`) is done. Re-derived from
 `coverage/coverage-summary.json`, not hand-maintained.
 
 ```
-src/services/patient.service.js                                       56.35%
 src/models/Session.js                                                 57.14%
+src/services/patient.service.js                                       57.2%
 src/i18n/index.js                                                     57.37%
 src/services/import.service.js                                        61.91%
 src/services/mqtt-signature.service.js                                62.5%
@@ -117,13 +117,17 @@ src/controllers/import-batch.controller.js                            69.49%
 src/services/log.service.js                                           69.84%
 ```
 
-`patient.service.js` confirmed at 56.35% by this reconcile (partial
-slice landed 2026-07-04 — consent-token methods now covered;
-`createPatient`/`updatePatient` branch gaps and
-`resolveClinicalUnitSnapshot`/`checkIdentifierConflict`/
-`checkDuplicatePatient`/`syncPatientPhoneToGraph` remain — see
-`COVERAGE_HISTORY.md`). `sample-file.controller.js` confirmed at
-68.87%, matching the isolated-run estimate from its own slice.
+`patient.service.js` at 57.2% lines (isolated run across its own +
+related test files, 2026-07-05) — `resolveClinicalUnitSnapshot`,
+`checkIdentifierConflict`, `checkDuplicatePatient`,
+`syncPatientPhoneToGraph`, and `applyDeceasedRepresentativeRules`
+branches now covered; the number barely moved from 56.35% because the
+remaining gap is concentrated in the large `createPatient`/
+`updatePatient` bodies (multi-branch, DB/notification/FHIR/neo4j/
+biomarker side effects) rather than the smaller helper methods just
+closed — see `COVERAGE_HISTORY.md`. `sample-file.controller.js`
+confirmed at 68.87%, matching the isolated-run estimate from its own
+slice.
 
 Note: several of these (`import-lgpd.service.js`, `import.service.js`,
 `patient.service.js`, `Patient.js`, `Sample.js`) already have partial

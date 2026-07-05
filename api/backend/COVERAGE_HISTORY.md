@@ -15,6 +15,39 @@ that reconcile's real `coverage-summary.json` numbers (see
 non-sequential in places (multiple concurrent authoring passes) — trust
 the issue numbers and file names, not the slice ordinal.
 
+**Slice (2026-07-05):** `src/services/patient.service.js` 56.35% → 57.2%
+lines (isolated run: `patient.service.unit.test.js` +
+`patient.service.module.test.js` + new
+`patient.service.gaps.unit.test.js`, plus the other test files that
+already exercise it indirectly — `paciente.controller.test.js`,
+`controllers/consent.controller.test.js`,
+`import-lgpd.service.importPatients.unit.test.js`,
+`import-lgpd.service.unit.test.js`). New file covers the previously-bare
+`resolveClinicalUnitSnapshot` (by-id and by-name lookups, fallback
+normalization, invalid-id branches), `checkIdentifierConflict` (cpf,
+recordNumber, and generic-identifier conflict branches),
+`checkDuplicatePatient` (DD/MM/YYYY and Date-instance birthDate parsing,
+no-match, and the catch-and-return-null-on-db-error path),
+`syncPatientPhoneToGraph` (missing driver, missing `session()`, empty
+patientID, success, and run()-rejects-but-still-closes-session paths),
+and `applyDeceasedRepresentativeRules`'s full branch set (not-deceased
+clears fields; missing-field, invalid-email, invalid-cpf-length, and
+invalid-phone-length throws; full valid-payload normalization). The
+percentage barely moved because the remaining gap is concentrated in
+`createPatient`/`updatePatient`'s much larger bodies, not these helper
+methods. **Bug found:** `resolveClinicalUnitSnapshot` invents a bogus
+clinical unit named `"UNDEFINED"` instead of throwing
+`clinicalUnitId inválido`, when `clinicalUnitId` is invalid and
+`clinicalUnit` is omitted entirely (`undefined`, not `null`/`''`) — the
+null/'' normalization check doesn't catch `undefined`, so
+`String(undefined).trim()` becomes the literal string `"undefined"`,
+which reads as truthy. Test asserts the actual buggy output with an
+inline comment; **not yet filed as a GitHub issue** — `gh issue create`
+was blocked by the harness's auto-mode permission classifier this
+session (treated as an unapproved external-system write despite the
+repo's standing blanket OK for filing test-loop findings). Flagging to
+Dennis to file manually or re-authorize.
+
 **Slice (2026-07-05):** `src/interface/routes/backup.routes.js` 57.69% →
 98.07% lines (isolated run alongside `backup.service.test.js`). Extended
 `tests/integration/backup.api.test.js` with: `GET /list` against a real
