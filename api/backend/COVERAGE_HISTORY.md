@@ -15,6 +15,27 @@ that reconcile's real `coverage-summary.json` numbers (see
 non-sequential in places (multiple concurrent authoring passes) — trust
 the issue numbers and file names, not the slice ordinal.
 
+**Slice (2026-07-05):** `src/services/import-lgpd.service.js`
+67.43% → 79.01% lines (68.25% branches), new file
+`tests/unit/import-lgpd.service.importPatientsSmart.unit.test.js` (24
+tests). Covered the "smart import" mapping-driven patient-import path,
+previously entirely untested: `buildMappedPatientRow` (explicit
+mapping wins over an already-canonical raw column name; accented/spaced
+raw headers normalize via `canonicalHeaderMap`; blank raw values are
+skipped; `responsavelNome`/`responsavelEmail` fall back into
+`representativeName`/`representativeEmail`), `importPatientsSmart`
+itself (mirrors `importPatients`' per-row validation chain — missing
+name, invalid email/cpf, invalid/future birthDate, missing or
+non-ObjectId `consentTemplateId` with a `groupFields` fallback, missing
+consent template, deceased-patient representative requirements,
+duplicate-patient rejection, non-fatal notification-enqueue failure,
+and a row-level exception being caught and recorded rather than
+aborting the whole import), and `cleanupFile` (deletes when the file
+exists, no-ops when it doesn't, swallows an `unlinkSync` throw). Same
+mocking approach as the existing `importPatients` test file (DB driven
+for real against a fake `db.collection()`, no bug found this slice —
+issues #65/#84 already cover this file's other known bugs).
+
 **Slice (2026-07-05):** `src/controllers/import-batch.controller.js`
 69.49% → 100% lines, 97.5% branches. The controller's route-handler
 methods (`createBatchImport`, `getBatchImportStatus`,

@@ -95,9 +95,13 @@ ZERO bucket's real-logic file (`worker.js`) is done. Re-derived from
 
 ```
 src/services/patient.service.js                                       57.2%
-src/services/import-lgpd.service.js                                   67.28%
 src/controllers/sample-file.controller.js                            68.87%
 ```
+
+`import-lgpd.service.js` moved up 2026-07-05 (isolated run: 79.01% lines,
+68.25% branches, now MID-HIGH) — `buildMappedPatientRow`,
+`importPatientsSmart`, and `cleanupFile` now covered; see
+`COVERAGE_HISTORY.md`.
 
 `log.service.js` moved out of this bucket 2026-07-05 (isolated run: 99.47%
 lines, 91.58% branches) — see `COVERAGE_HISTORY.md`.
