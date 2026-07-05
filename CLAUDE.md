@@ -14,6 +14,8 @@ relying on memory:
   git hygiene, the hard rules for working in Denise's repo (never open a
   PR or touch `main` without Dennis's explicit go), and the end-loaded
   Docker/CI gate order.
+- Bug-fix work on filed issues → `fix-bugs` (one issue per iteration,
+  reproduce-first; the counterpart to `test-loop`).
 - Test work → `test-loop` (one iteration of the coverage push) with
   `testing-conventions` for mechanics; parallel fan-out →
   `parallel-test-agents` (leaf workers launch as the `test-writer` agent
