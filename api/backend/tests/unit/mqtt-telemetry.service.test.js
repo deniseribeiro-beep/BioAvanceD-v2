@@ -5,6 +5,16 @@ const mqttSignatureService = require('../../src/services/mqtt-signature.service'
 const mqttIngestionAuditService = require('../../src/services/mqtt-ingestion-audit.service');
 const mqttTelemetryService = require('../../src/services/mqtt-telemetry.service');
 
+function makeFakeClient() {
+  const handlers = {};
+  return {
+    handlers,
+    on: vi.fn((event, cb) => { handlers[event] = cb; }),
+    subscribe: vi.fn((topic, cb) => cb(null)),
+    end: vi.fn((force, cb) => cb())
+  };
+}
+
 describe('mqtt-telemetry.service', () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -123,6 +133,28 @@ describe('mqtt-telemetry.service', () => {
 
       expect(infoSpy).not.toHaveBeenCalled();
       mqttTelemetryService.started = false;
+    });
+
+  });
+
+  describe('stop', () => {
+    it('does nothing when there is no client', async () => {
+      mqttTelemetryService.client = null;
+      await expect(mqttTelemetryService.stop()).resolves.toBeUndefined();
+    });
+
+    it('ends the client and resets state', async () => {
+      const infoSpy = vi.spyOn(logger, 'info').mockImplementation(() => {});
+      const fakeClient = makeFakeClient();
+      mqttTelemetryService.client = fakeClient;
+      mqttTelemetryService.started = true;
+
+      await mqttTelemetryService.stop();
+
+      expect(fakeClient.end).toHaveBeenCalledWith(false, expect.any(Function));
+      expect(mqttTelemetryService.client).toBeNull();
+      expect(mqttTelemetryService.started).toBe(false);
+      expect(infoSpy).toHaveBeenCalled();
     });
   });
 

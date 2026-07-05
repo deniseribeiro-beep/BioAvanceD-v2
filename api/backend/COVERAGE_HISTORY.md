@@ -15,6 +15,21 @@ that reconcile's real `coverage-summary.json` numbers (see
 non-sequential in places (multiple concurrent authoring passes) — trust
 the issue numbers and file names, not the slice ordinal.
 
+**Slice (2026-07-05):** `src/services/mqtt-telemetry.service.js` 67.08% →
+75.94% lines, 79.61% branches (isolated run), extended
+`tests/unit/mqtt-telemetry.service.test.js` (24 tests, up from 15). Added
+coverage for `stop()` (client end + already-null-client no-op) and
+attempted to cover `start()`'s real `mqtt.connect(...)` call and its
+`connect`/`error`/`message` handler wiring, but the `mqtt` package's
+`connect` export is a non-configurable getter with no setter — neither
+`vi.spyOn(mqtt, 'connect')` nor direct reassignment can override it, and
+injecting a fake module via `require.cache` crashed the Vitest worker
+(V8 assertion in `CompileFunctionForCJSLoader`) rather than failing
+cleanly. Left lines 64-101 (the `mqtt.connect` block and its handlers)
+uncovered rather than force a fragile mock; a real fix would need the
+source to accept an injectable MQTT client factory, which is out of
+scope for a test-only slice. No bugs found this slice.
+
 **Slice (2026-07-05):** `src/services/biomarker-observation.service.js`
 63.88% → 98.61% lines, 93.33% branches (isolated run), new file
 `tests/unit/biomarker-observation.service.test.js` (26 tests). Covered
