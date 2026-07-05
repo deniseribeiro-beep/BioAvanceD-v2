@@ -15,6 +15,17 @@ that reconcile's real `coverage-summary.json` numbers (see
 non-sequential in places (multiple concurrent authoring passes) — trust
 the issue numbers and file names, not the slice ordinal.
 
+**Slice (2026-07-05):** `src/routes/orphanet-count.js` 68.42% → 100%
+lines/branches/functions/statements. Extended the existing
+`tests/unit/routes/orphanet-count.test.js` (2 → 4 tests) to cover the
+previously-untested fallback path (lines 17-22): when
+`app.locals.db` is absent, the route creates its own `MongoClient`,
+connects, queries, and closes the connection — done by
+`vi.spyOn`-mocking the `mongodb` module's `MongoClient` export. Added
+cases for the happy-path fallback query and for `connect()` rejecting
+(covers the `client` truthy branch inside the catch, since `close()`
+must still not be called when connect itself fails). No bugs found.
+
 **Slice (2026-07-05):** `src/infrastructure/queue/TopologicalQuarantine.js`
 68.08% → 100% lines/statements/functions, 93.67% branches. Added
 `tests/unit/topologicalQuarantine.lifecycle.test.js` (15 tests)
