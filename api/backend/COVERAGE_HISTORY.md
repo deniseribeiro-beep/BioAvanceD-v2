@@ -15,6 +15,24 @@ that reconcile's real `coverage-summary.json` numbers (see
 non-sequential in places (multiple concurrent authoring passes) — trust
 the issue numbers and file names, not the slice ordinal.
 
+**Slice (2026-07-05):** `src/models/Patient.js` 63.33% → 98.66% lines
+(97.13% branches). Extended existing
+`tests/unit/patient.model.unit.test.js` (added ~85 tests, 97 total):
+full `validate()` branch coverage (consentTemplateId, deceased/
+representative email rules, phone/cpf/representativeCpf digit checks,
+weight/heightCm/lysoGb3/alphaGal numeric+sign checks, all boolean
+comorbidity fields, icdReference shape checks, status enum,
+consentToken, consentAcceptedAt, invalid-Date birthDate); full
+`create()` coverage (DD/MM/YYYY vs ISO vs Date birthDate parsing,
+email/phone normalization, height-in-meters vs centimeters conversion,
+Fabry loose-field consolidation into `dadosEspecificos`, consent token
+date fields, defaults); `validateUnit()` and `fillAcronym()` (stop-word
+filtering, accent stripping, 6-char truncation) had zero prior coverage
+and are now fully covered. Remaining gap (lines 30, 40) is defensive
+`isValidEmail`/`normalizePhone` branches not reachable via `validate()`'s
+existing guards. No bugs found — the model matched its own inline
+Portuguese error-message contract in whatever branch was executed.
+
 **Slice (2026-07-05):** `src/core/use-cases/ListOperationalFreezersUseCase.js`
 66.66% → 100% lines/branches/functions/statements. New
 `tests/unit/ListOperationalFreezersUseCase.test.js` (2 tests): happy path
