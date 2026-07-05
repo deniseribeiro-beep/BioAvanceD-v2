@@ -98,7 +98,6 @@ src/services/patient.service.js                                       57.2%
 src/models/Patient.js                                                 63.33%
 src/core/use-cases/ListOperationalFreezersUseCase.js                  66.66%
 src/services/import-lgpd.service.js                                   67.28%
-src/models/Sample.js                                                  67.79%
 src/models/ConsentTemplate.js                                         67.85%
 src/infrastructure/queue/TopologicalQuarantine.js                     68.08%
 src/routes/orphanet-count.js                                          68.42%
@@ -169,6 +168,9 @@ handlers) is not honestly mockable, see `COVERAGE_HISTORY.md`.
 
 `ConsentPolicy.js` moved out of this bucket 2026-07-05 (isolated run:
 100% lines/branches/functions/statements) — see `COVERAGE_HISTORY.md`.
+
+`Sample.js` moved out of this bucket 2026-07-05 (isolated run: 98.3%
+lines, 93.65% branches) — see `COVERAGE_HISTORY.md`.
 
 `user-security.service.js` moved out of this bucket 2026-07-05 (isolated
 run: 91.02% lines, 76.85% branches, now MID-HIGH) — see

@@ -15,6 +15,25 @@ that reconcile's real `coverage-summary.json` numbers (see
 non-sequential in places (multiple concurrent authoring passes) — trust
 the issue numbers and file names, not the slice ordinal.
 
+**Slice (2026-07-05):** `src/models/Sample.js` 67.79% → 98.3% lines,
+93.65% branches (isolated run). New `tests/unit/sample.model.gaps.test.js`
+(39 tests) filling gaps left by the pre-existing `sample.model.unit.test.js`
+/ `sample.models.test.js` (which already covered the happy-path
+validate/computeStatus/mapLifecycleToLegacy/create): `validate`'s
+registrationDate/withdrawalDate Date-vs-string-vs-invalid branches,
+currentStatus/status branches, barcode/quantity/quality omission
+branches, storageLocation shape validation, sampleType/sampleOrigin/
+extractionProtocol non-string guards; `create`'s quality_score/
+rcs_score/final_grade/p_bio/grade_route/calculation_trace/
+external_quality_assessment normalization, clinical_data and
+pharmacology_data (incl. legacy aliases) normalization, storageLocation
+defaulting, receivedTime/processingStatus, tcle_id/consentTemplateId
+cross-fallback, penalty_log array coercion; and `getResults` success +
+error-wrapping paths. Remaining 2 uncovered lines: a `new Date()`
+default-arg branch and a duplicate (dead, shadowed) second definition
+of `validateWithdrawalType` — not worth chasing further. No bugs found
+in this file's logic.
+
 **Slice (2026-07-05):** `src/utils/logSerializer.js` 69.14% → 97.87%
 lines, 89.43% branches (isolated run). New
 `tests/unit/utils/logSerializer.test.js` (36 tests) covering
