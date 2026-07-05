@@ -15,6 +15,23 @@ that reconcile's real `coverage-summary.json` numbers (see
 non-sequential in places (multiple concurrent authoring passes) — trust
 the issue numbers and file names, not the slice ordinal.
 
+**Slice (2026-07-05):** `src/models/Session.js` 57.14% (stale, see below)
+→ 100% lines/branches/functions/statements (isolated run:
+`tests/unit/models/Session.test.js`). The pre-existing test file already
+had 19 thorough tests covering `create`/`validate`/`isSessionActive`, but
+loaded the CJS source via plain ESM `import` instead of
+`createRequire(import.meta.url)` — the exact known gotcha in
+`testing-conventions/references/cjs-mocking.md` ("Mixing import and
+createRequire... silently under-reports coverage"). Switching the loader
+alone (no new tests) jumped isolated coverage from 80.95% to 100% lines;
+one new test (`create()` defaults for missing userAgent/ipAddress/
+deviceInfo) closed the one remaining branch gap (91.42% → 100%
+branches). No bugs found; no issues filed. Confirms the cjs-mocking.md
+gotcha generalizes beyond the sensor.service.js case it was first found
+in — worth checking other MID-LOW files that look "already well-tested"
+but show a stubbornly stale percentage for the same root cause before
+assuming they need new tests at all.
+
 **Slice (2026-07-05):** `src/services/patient.service.js` 56.35% → 57.2%
 lines (isolated run: `patient.service.unit.test.js` +
 `patient.service.module.test.js` + new

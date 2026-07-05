@@ -4,7 +4,10 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import SessionModel from '../../../src/models/Session';
+import { createRequire } from 'module';
+
+const require = createRequire(import.meta.url);
+const SessionModel = require('../../../src/models/Session');
 
 describe('SessionModel - Unit Tests', () => {
   let validSessionData;
@@ -65,6 +68,18 @@ describe('SessionModel - Unit Tests', () => {
       const session = SessionModel.create(validSessionData);
 
       expect(session.inactiveTimeout).toBe(30 * 60 * 1000);
+    });
+
+    it('deve usar null como padrão quando userAgent/ipAddress/deviceInfo ausentes', () => {
+      delete validSessionData.userAgent;
+      delete validSessionData.ipAddress;
+      delete validSessionData.deviceInfo;
+
+      const session = SessionModel.create(validSessionData);
+
+      expect(session.userAgent).toBeNull();
+      expect(session.ipAddress).toBeNull();
+      expect(session.deviceInfo).toBeNull();
     });
 
     it('deve gerar sessionID único baseado em timestamp', () => {
