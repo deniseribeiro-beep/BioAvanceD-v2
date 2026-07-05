@@ -2,7 +2,6 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
 const router = express.Router();
-const PatientModel = require('../models/Patient');
 const { getNeo4jDriver } = require('../infrastructure/database/neo4j/connection');
 const { sendConsentLink } = require('../services/notification.service');
 const { authenticate } = require('../infrastructure/middleware/auth');
@@ -30,7 +29,8 @@ router.get('/validate/:token', async (req, res) => {
   try {
     const { token } = req.params;
     const payload = jwt.verify(token, CONSENT_SECRET);
-    const patient = await PatientModel.findOne({ patientID: payload.patientId });
+    const db = req.app.locals.db;
+    const patient = await db.collection('patients').findOne({ patientID: payload.patientId });
     if (!patient) return res.status(404).json({ error: 'Paciente não encontrado' });
     // Buscar consentimentos no Neo4j (mock)
     res.json({ patient, consents: patient.consents || [] });
