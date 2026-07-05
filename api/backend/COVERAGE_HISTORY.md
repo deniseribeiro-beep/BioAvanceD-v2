@@ -15,6 +15,18 @@ that reconcile's real `coverage-summary.json` numbers (see
 non-sequential in places (multiple concurrent authoring passes) — trust
 the issue numbers and file names, not the slice ordinal.
 
+**Slice (2026-07-05):** `src/services/mqtt-signature.service.js` 62.5% →
+100% lines/branches/functions/statements (isolated run), new file
+`tests/unit/mqtt-signature.service.test.js` (14 tests). Covered
+`getSigningSecret` (set/unset/whitespace-only env var), `hashPayload`
+(deterministic sha256, falsy-payload coercion to `''`), `computeHmac`
+(null when no secret, deterministic hmac-sha256 hex when a secret is
+set, falsy-payload coercion), and `verifyHmac` (no secret, no
+signature, length-mismatch short-circuit, matching signature,
+whitespace-tolerant signature, same-length-but-wrong signature via
+`timingSafeEqual`). No bugs found. `MQTT_SIGNING_SECRET` env var is
+saved/restored around each test.
+
 **Slice (2026-07-05):** `src/services/import.service.js` 61.91% → 80.05%
 lines (isolated run across all `import.service.*.test.js`, new file
 `tests/unit/import.service.importPatients.test.js`, 11 tests). Covered
