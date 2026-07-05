@@ -122,6 +122,25 @@ a constructor" (arrow functions can't be used with `new`; only
 `function`/`class` can). Use `function Fake() { this.method = vi.fn(); }`
 or a real `class`, not `vi.fn().mockImplementation(() => ({...}))`.
 
+## `require.cache` injection also works for third-party npm packages, not just app-local files
+
+**Confirmed 2026-07-05, `import-batch.controller.js`**: needed to exercise the closures
+passed to `multer.diskStorage({destination, filename})` and `multer({fileFilter})`,
+which the controller keeps at module scope and never exposes. `vi.doMock('multer', ...)`
+and dynamic `import()` both silently no-op for the same root cause as the sections above
+(this file's test loads the controller via `createRequire`, i.e. real Node CJS, which
+Vite's mock graph never touches) — wasted two full edit/run cycles confirming that before
+switching approaches. The same `require.cache` injection technique from "Faking a whole
+dependency module" above works unchanged for a real `node_modules` package, not just
+app-local files: grab the real `require.cache[require.resolve('multer')]` module record,
+temporarily overwrite its `.exports` with a thin wrapper that captures the config object
+and then calls straight through to the real original function (don't stub the behavior —
+the real `multer()`/`.diskStorage()` still need to run so the returned `upload` object is
+genuine), `delete require.cache[require.resolve(<controller path>)]` and re-require it so
+its top-level `require('multer')` picks up the wrapper, then restore the original
+`.exports` in a `finally`. This captures the exact closures without needing the module to
+export them.
+
 ## Mixing `import` and `createRequire` for the same source across split test files silently under-reports coverage
 
 **Confirmed 2026-07-05, `sensor.service.js`**: `sensor.service.test.js` loaded the
