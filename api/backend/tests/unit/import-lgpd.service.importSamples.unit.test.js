@@ -154,7 +154,7 @@ describe('ImportLGPDService.importSamples', () => {
     expect(result.errors[0].errors[0]).toMatch(/atc_code inválido/);
   });
 
-  // BUG (filed, not yet an issue number — see wrap-up): `SampleModel` here is
+  // BUG (issue #84): `SampleModel` here is
   // `require('../models/Sample')`, which exports the *mongoose Model*, not
   // the hand-written validator class (attached separately as
   // `SampleModel.SampleModel`). Calling `SampleModel.validate(sampleData)`
