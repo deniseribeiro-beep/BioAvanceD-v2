@@ -95,7 +95,6 @@ ZERO bucket's real-logic file (`worker.js`) is done. Re-derived from
 
 ```
 src/services/patient.service.js                                       57.2%
-src/i18n/index.js                                                     57.37%
 src/services/import.service.js                                        61.91%
 src/services/mqtt-signature.service.js                                62.5%
 src/utils/patientAnonymization.js                                     62.5%
@@ -151,6 +150,9 @@ run: 94.38% lines) — see `COVERAGE_HISTORY.md`.
 
 `Session.js` moved out of this bucket 2026-07-05 (isolated run: 100%
 lines/branches/functions/statements) — see `COVERAGE_HISTORY.md`.
+
+`i18n/index.js` moved out of this bucket 2026-07-05 (isolated run: 100%
+lines/statements/functions, 86.15% branches) — see `COVERAGE_HISTORY.md`.
 
 ## MID-HIGH coverage (70-84% lines) — GOOD (>=85%)
 

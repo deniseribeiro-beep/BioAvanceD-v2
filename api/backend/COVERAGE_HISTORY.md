@@ -15,6 +15,21 @@ that reconcile's real `coverage-summary.json` numbers (see
 non-sequential in places (multiple concurrent authoring passes) — trust
 the issue numbers and file names, not the slice ordinal.
 
+**Slice (2026-07-05):** `src/i18n/index.js` 57.37% → 100% lines/
+statements/functions, 86.15% branches (isolated run:
+`tests/unit/i18n.test.js`, new file, 26 tests). Covered `setLanguage`,
+`getDefaultLanguage`, `detectLanguage` (query/header/user/default
+precedence), `translate` (direct hit, miss with fallback, cross-language
+fallback to pt-BR including the real-key path via an unloaded `fr-FR`
+lang), `languageMiddleware` (header/req.language/req.t wiring, the
+try/catch swallow in `req.t`, and all three guard conditions gating the
+`setImmediate` audit-log branch plus the scheduled-callback body itself,
+including its own inner catch), and `loadTranslations`'s `fs.readFileSync`
+failure path (mocked to throw, verifying the empty-object fallback and
+`console.error`). No bugs found; no issues filed. Remaining branch gaps
+are unreachable-in-practice combinations (e.g. Accept-Language variants
+already covered by the precedence chain), not missing test cases.
+
 **Slice (2026-07-05):** `src/models/Session.js` 57.14% (stale, see below)
 → 100% lines/branches/functions/statements (isolated run:
 `tests/unit/models/Session.test.js`). The pre-existing test file already
