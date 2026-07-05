@@ -15,6 +15,23 @@ that reconcile's real `coverage-summary.json` numbers (see
 non-sequential in places (multiple concurrent authoring passes) — trust
 the issue numbers and file names, not the slice ordinal.
 
+**Slice (2026-07-05):** `src/controllers/paciente.controller.js` 57.3% →
+94.38% lines (isolated run). Added
+`tests/unit/paciente.controller.test.js` covering all 11 methods:
+`sanitizePatientPayload`/`validateDeceasedRepresentative` helpers,
+`cadastrar` (503/400/create/audit-log/error-status mapping),
+`listar`/`buscar` (operational vs. cadastro role LGPD field-stripping),
+`resendConsentNotification`/`atualizar` (sample-revalidation call,
+verified via require.cache-clearing since `revalidateSamplesByPatientID`
+is destructured at module scope in the controller — see
+`testing-conventions`' CJS mocking reference), `deletar`, `validateID`,
+`findForEdit`, `search`, and `listBiomarkerObservations`/
+`createBiomarkerObservation`. Filed issue #83:
+`search()`'s catch block references `db` from the try block's scope,
+which is out of scope in catch — throws `ReferenceError` instead of a
+clean 500 response when `req.user` is set and the service call fails;
+test asserts the actual (buggy) throw, not the intended behavior.
+
 **Slice (2026-07-04, post-reconcile):** `src/models/StorageContainer.js`
 32.69% → 100% lines. Added `tests/unit/StorageContainer.model.test.js`
 covering the `pre('save')` hierarchy-validation hook (FREEZER/parent_id

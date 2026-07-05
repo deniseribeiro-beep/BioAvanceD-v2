@@ -98,7 +98,6 @@ src/services/import-lgpd.service.js                                   56.01%
 src/routes/dictionary.js                                              56.16%
 src/services/patient.service.js                                       56.35%
 src/models/Session.js                                                 57.14%
-src/controllers/paciente.controller.js                                57.3%
 src/i18n/index.js                                                     57.37%
 src/interface/routes/backup.routes.js                                 57.69%
 src/services/fhir-sync.service.js                                     57.81%
@@ -135,6 +134,9 @@ Note: several of these (`import-lgpd.service.js`, `import.service.js`,
 coverage from earlier slices — see `COVERAGE_HISTORY.md` for what's
 already covered before picking one, so a slice doesn't re-cover the
 same ground.
+
+`paciente.controller.js` moved out of this bucket 2026-07-05 (isolated
+run: 94.38% lines) — see `COVERAGE_HISTORY.md`.
 
 ## MID-HIGH coverage (70-84% lines) — GOOD (>=85%)
 
