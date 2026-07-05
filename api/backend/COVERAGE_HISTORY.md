@@ -28,6 +28,18 @@ missing/empty segment doesn't match the route at all), so it's dead code
 in practice; not worth a bug filing for a defensive guard that can never
 fire from HTTP.
 
+**Slice (2026-07-05):** `src/services/fhir-sync.service.js` 67.29% →
+99.52% lines (isolated run). The existing test file already covered the
+pure mapping helpers and the "-First" single-doc read paths
+(`getPatientFhirFirst`, `upsertXFromLegacy`, `syncAllLegacyData`); the gap
+was the remaining FHIR-first list/search read paths (lines 181-334):
+`listPatientsFhirFirst`, `searchPatientsFhirFirst`, `getSampleFhirFirst`,
+`getSampleByBarcodeFhirFirst` (all three fallback query tiers: exact,
+uppercase-variant, case-insensitive regex), `listSamplesFhirFirst`, and
+`getPatientConsentFhirFirst`. Added 24 tests covering canReadCollection
+gating, default/overridden limit-skip, filter-to-query construction, and
+error-swallowing on each. No bugs found.
+
 **Slice (2026-07-05):** `src/services/import-lgpd.service.js` 56.01% →
 67.28% lines (isolated run across its six test files). Added
 `tests/unit/import-lgpd.service.importSamples.unit.test.js`, covering

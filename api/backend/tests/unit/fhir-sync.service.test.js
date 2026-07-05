@@ -342,6 +342,354 @@ describe('FhirSyncService.getPatientFhirFirst', () => {
   });
 });
 
+describe('FhirSyncService.listPatientsFhirFirst', () => {
+  const originalMode = env.FHIR_READ_MODE;
+  beforeEach(() => { env.FHIR_READ_MODE = 'fhir-first'; });
+  afterEach(() => { env.FHIR_READ_MODE = originalMode; });
+
+  it('returns null when canReadCollection is false', async () => {
+    env.FHIR_READ_MODE = 'legacy-first';
+    const db = { collection: vi.fn() };
+    const result = await fhirSyncService.listPatientsFhirFirst(db, {});
+    expect(result).toBeNull();
+  });
+
+  it('builds query from filters, applies default limit/skip, and maps results', async () => {
+    const docs = [{ _id: '1', patientID: '12345678', active: true }];
+    const find = vi.fn().mockReturnThis();
+    const limit = vi.fn().mockReturnThis();
+    const skip = vi.fn().mockReturnThis();
+    const toArray = vi.fn().mockResolvedValue(docs);
+    const countDocuments = vi.fn().mockResolvedValue(1);
+    const collection = { find, limit, skip, toArray, countDocuments, findOne: vi.fn() };
+    find.mockReturnValue(collection);
+    limit.mockReturnValue(collection);
+    skip.mockReturnValue(collection);
+    const db = { collection: vi.fn().mockReturnValue(collection) };
+
+    const result = await fhirSyncService.listPatientsFhirFirst(db, {
+      patientName: 'Maria',
+      clinicalUnit: 'Cardiology'
+    });
+
+    expect(find).toHaveBeenCalledWith({
+      'name.text': { $regex: 'Maria', $options: 'i' },
+      clinicalUnit: 'Cardiology'
+    });
+    expect(limit).toHaveBeenCalledWith(50);
+    expect(skip).toHaveBeenCalledWith(0);
+    expect(result.total).toBe(1);
+    expect(result.limit).toBe(50);
+    expect(result.skip).toBe(0);
+    expect(result.patients[0].patientID).toBe('12345678');
+  });
+
+  it('honors provided limit/skip filters', async () => {
+    const collection = {
+      find: vi.fn().mockReturnThis(),
+      limit: vi.fn().mockReturnThis(),
+      skip: vi.fn().mockReturnThis(),
+      toArray: vi.fn().mockResolvedValue([]),
+      countDocuments: vi.fn().mockResolvedValue(0),
+      findOne: vi.fn()
+    };
+    const db = { collection: vi.fn().mockReturnValue(collection) };
+
+    await fhirSyncService.listPatientsFhirFirst(db, { limit: 5, skip: 10 });
+
+    expect(collection.limit).toHaveBeenCalledWith(5);
+    expect(collection.skip).toHaveBeenCalledWith(10);
+  });
+});
+
+describe('FhirSyncService.searchPatientsFhirFirst', () => {
+  const originalMode = env.FHIR_READ_MODE;
+  beforeEach(() => { env.FHIR_READ_MODE = 'fhir-first'; });
+  afterEach(() => { env.FHIR_READ_MODE = originalMode; });
+
+  it('returns null when canReadCollection is false', async () => {
+    env.FHIR_READ_MODE = 'legacy-first';
+    const db = { collection: vi.fn() };
+    const result = await fhirSyncService.searchPatientsFhirFirst(db, 'term');
+    expect(result).toBeNull();
+  });
+
+  it('returns empty result for a blank/whitespace search term', async () => {
+    const db = { collection: vi.fn().mockReturnValue({ findOne: vi.fn() }) };
+    expect(await fhirSyncService.searchPatientsFhirFirst(db, '   ')).toEqual({ patients: [], total: 0 });
+    expect(await fhirSyncService.searchPatientsFhirFirst(db, undefined)).toEqual({ patients: [], total: 0 });
+  });
+
+  it('adds a patientID exact-match clause when the term is 8 digits', async () => {
+    const find = vi.fn().mockReturnThis();
+    const limit = vi.fn().mockReturnThis();
+    const toArray = vi.fn().mockResolvedValue([]);
+    const countDocuments = vi.fn().mockResolvedValue(0);
+    const collection = { find, limit, toArray, countDocuments, findOne: vi.fn() };
+    const db = { collection: vi.fn().mockReturnValue(collection) };
+
+    await fhirSyncService.searchPatientsFhirFirst(db, '12345678');
+
+    const query = find.mock.calls[0][0];
+    expect(query.$or[0]).toEqual({ patientID: '12345678' });
+  });
+
+  it('maps and returns matching patients for a non-numeric term', async () => {
+    const docs = [{ _id: '1', patientID: '12345678' }];
+    const collection = {
+      find: vi.fn().mockReturnThis(),
+      limit: vi.fn().mockReturnThis(),
+      toArray: vi.fn().mockResolvedValue(docs),
+      countDocuments: vi.fn().mockResolvedValue(1),
+      findOne: vi.fn()
+    };
+    const db = { collection: vi.fn().mockReturnValue(collection) };
+
+    const result = await fhirSyncService.searchPatientsFhirFirst(db, 'Cardiology');
+
+    expect(result.total).toBe(1);
+    expect(result.patients[0].patientID).toBe('12345678');
+    expect(collection.limit).toHaveBeenCalledWith(50);
+  });
+});
+
+describe('FhirSyncService.getSampleFhirFirst', () => {
+  const originalMode = env.FHIR_READ_MODE;
+  beforeEach(() => { env.FHIR_READ_MODE = 'fhir-first'; });
+  afterEach(() => { env.FHIR_READ_MODE = originalMode; });
+
+  it('returns null when canReadCollection is false', async () => {
+    env.FHIR_READ_MODE = 'legacy-first';
+    const db = { collection: vi.fn() };
+    const result = await fhirSyncService.getSampleFhirFirst(db, 'S001');
+    expect(result).toBeNull();
+  });
+
+  it('queries by mongoSampleId or sampleID string and maps the result', async () => {
+    const doc = { _id: '1', sampleID: 'S001', patientID: '12345678', type: {}, quantity: {} };
+    const findOne = vi.fn().mockResolvedValue(doc);
+    const db = { collection: vi.fn().mockReturnValue({ findOne }) };
+
+    const result = await fhirSyncService.getSampleFhirFirst(db, 'S001');
+
+    expect(findOne).toHaveBeenCalledWith({
+      $or: [
+        { 'semanticPointers.mongoSampleId': 'S001' },
+        { sampleID: 'S001' }
+      ]
+    });
+    expect(result.sampleID).toBe('S001');
+  });
+
+  it('coerces a non-string sampleID via toString()', async () => {
+    const findOne = vi.fn().mockResolvedValue(null);
+    const db = { collection: vi.fn().mockReturnValue({ findOne }) };
+    const sampleIdObj = { toString: () => 'coerced-id' };
+
+    await fhirSyncService.getSampleFhirFirst(db, sampleIdObj);
+
+    expect(findOne).toHaveBeenCalledWith({
+      $or: [
+        { 'semanticPointers.mongoSampleId': 'coerced-id' },
+        { sampleID: 'coerced-id' }
+      ]
+    });
+  });
+
+  it('returns null when findOne throws', async () => {
+    const findOne = vi.fn().mockRejectedValue(new Error('db down'));
+    const db = { collection: vi.fn().mockReturnValue({ findOne }) };
+    const result = await fhirSyncService.getSampleFhirFirst(db, 'S001');
+    expect(result).toBeNull();
+  });
+});
+
+describe('FhirSyncService.getSampleByBarcodeFhirFirst', () => {
+  const originalMode = env.FHIR_READ_MODE;
+  beforeEach(() => { env.FHIR_READ_MODE = 'fhir-first'; });
+  afterEach(() => { env.FHIR_READ_MODE = originalMode; });
+
+  it('returns null when canReadCollection is false', async () => {
+    env.FHIR_READ_MODE = 'legacy-first';
+    const db = { collection: vi.fn() };
+    const result = await fhirSyncService.getSampleByBarcodeFhirFirst(db, 'BC001');
+    expect(result).toBeNull();
+  });
+
+  it('returns null for a blank barcode without querying', async () => {
+    const findOne = vi.fn();
+    const db = { collection: vi.fn().mockReturnValue({ findOne }) };
+    const result = await fhirSyncService.getSampleByBarcodeFhirFirst(db, '   ');
+    expect(result).toBeNull();
+    expect(findOne).not.toHaveBeenCalled();
+  });
+
+  it('returns the sample found on the first exact-match query', async () => {
+    const doc = { _id: '1', patientID: '12345678', type: {}, quantity: {} };
+    const findOne = vi.fn().mockResolvedValue(doc);
+    const db = { collection: vi.fn().mockReturnValue({ findOne }) };
+
+    const result = await fhirSyncService.getSampleByBarcodeFhirFirst(db, 'BC001');
+
+    expect(findOne).toHaveBeenCalledTimes(1);
+    expect(result).not.toBeNull();
+  });
+
+  it('falls back to the uppercase-variant query when the exact match misses', async () => {
+    const doc = { _id: '2', patientID: '12345678', type: {}, quantity: {} };
+    const findOne = vi.fn()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(doc);
+    const db = { collection: vi.fn().mockReturnValue({ findOne }) };
+
+    const result = await fhirSyncService.getSampleByBarcodeFhirFirst(db, 'bc001');
+
+    expect(findOne).toHaveBeenCalledTimes(2);
+    expect(findOne.mock.calls[1][0]).toEqual({
+      $or: [
+        { barcode: 'BC001' },
+        { sampleID: 'BC001' },
+        { barcode: 'bc001' },
+        { sampleID: 'bc001' }
+      ]
+    });
+    expect(result).not.toBeNull();
+  });
+
+  it('falls back to a case-insensitive regex query when both prior queries miss', async () => {
+    const doc = { _id: '3', patientID: '12345678', type: {}, quantity: {} };
+    const findOne = vi.fn()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(doc);
+    const db = { collection: vi.fn().mockReturnValue({ findOne }) };
+
+    const result = await fhirSyncService.getSampleByBarcodeFhirFirst(db, 'bc.001');
+
+    expect(findOne).toHaveBeenCalledTimes(3);
+    const regexQuery = findOne.mock.calls[2][0];
+    expect(regexQuery.$or[0].barcode.$regex.source).toBe('^bc\\.001$');
+    expect(result).not.toBeNull();
+  });
+
+  it('returns null and swallows errors thrown while querying', async () => {
+    const findOne = vi.fn().mockRejectedValue(new Error('db down'));
+    const db = { collection: vi.fn().mockReturnValue({ findOne }) };
+    const result = await fhirSyncService.getSampleByBarcodeFhirFirst(db, 'BC001');
+    expect(result).toBeNull();
+  });
+});
+
+describe('FhirSyncService.listSamplesFhirFirst', () => {
+  const originalMode = env.FHIR_READ_MODE;
+  beforeEach(() => { env.FHIR_READ_MODE = 'fhir-first'; });
+  afterEach(() => { env.FHIR_READ_MODE = originalMode; });
+
+  it('returns null when canReadCollection is false', async () => {
+    env.FHIR_READ_MODE = 'legacy-first';
+    const db = { collection: vi.fn() };
+    const result = await fhirSyncService.listSamplesFhirFirst(db, {});
+    expect(result).toBeNull();
+  });
+
+  it('builds query from filters (mapping currentStatus to FHIR status) and maps results', async () => {
+    const docs = [{ _id: '1', patientID: '12345678', type: {}, quantity: {} }];
+    const find = vi.fn().mockReturnThis();
+    const limit = vi.fn().mockReturnThis();
+    const skip = vi.fn().mockReturnThis();
+    const toArray = vi.fn().mockResolvedValue(docs);
+    const countDocuments = vi.fn().mockResolvedValue(1);
+    const collection = { find, limit, skip, toArray, countDocuments, findOne: vi.fn() };
+    const db = { collection: vi.fn().mockReturnValue(collection) };
+
+    const result = await fhirSyncService.listSamplesFhirFirst(db, {
+      patientID: '12345678',
+      currentStatus: 'Available',
+      sampleType: 'Blood'
+    });
+
+    expect(find).toHaveBeenCalledWith({
+      patientID: '12345678',
+      status: 'available',
+      'type.text': 'Blood'
+    });
+    expect(limit).toHaveBeenCalledWith(50);
+    expect(skip).toHaveBeenCalledWith(0);
+    expect(result.total).toBe(1);
+    expect(result.samples).toHaveLength(1);
+  });
+
+  it('honors provided limit/skip filters', async () => {
+    const collection = {
+      find: vi.fn().mockReturnThis(),
+      limit: vi.fn().mockReturnThis(),
+      skip: vi.fn().mockReturnThis(),
+      toArray: vi.fn().mockResolvedValue([]),
+      countDocuments: vi.fn().mockResolvedValue(0),
+      findOne: vi.fn()
+    };
+    const db = { collection: vi.fn().mockReturnValue(collection) };
+
+    await fhirSyncService.listSamplesFhirFirst(db, { limit: 5, skip: 10 });
+
+    expect(collection.limit).toHaveBeenCalledWith(5);
+    expect(collection.skip).toHaveBeenCalledWith(10);
+  });
+});
+
+describe('FhirSyncService.getPatientConsentFhirFirst', () => {
+  const originalMode = env.FHIR_READ_MODE;
+  beforeEach(() => { env.FHIR_READ_MODE = 'fhir-first'; });
+  afterEach(() => { env.FHIR_READ_MODE = originalMode; });
+
+  it('returns null when canReadCollection is false', async () => {
+    env.FHIR_READ_MODE = 'legacy-first';
+    const db = { collection: vi.fn() };
+    const result = await fhirSyncService.getPatientConsentFhirFirst(db, '12345678');
+    expect(result).toBeNull();
+  });
+
+  it('queries the most recent consent by patientId, sorted, and maps it', async () => {
+    const doc = { _id: 'c1', patientId: '12345678', templateId: 't1', status: 'active' };
+    const sort = vi.fn().mockReturnThis();
+    const limit = vi.fn().mockReturnThis();
+    const toArray = vi.fn().mockResolvedValue([doc]);
+    const find = vi.fn().mockReturnValue({ sort, limit, toArray });
+    const db = { collection: vi.fn().mockReturnValue({ find, findOne: vi.fn() }) };
+
+    const result = await fhirSyncService.getPatientConsentFhirFirst(db, '12345678');
+
+    expect(find).toHaveBeenCalledWith({ patientId: '12345678' });
+    expect(sort).toHaveBeenCalledWith({ dateTime: -1, createdAt: -1 });
+    expect(limit).toHaveBeenCalledWith(1);
+    expect(result.status).toBe('ACTIVE');
+  });
+
+  it('returns null when no consent is found', async () => {
+    const find = vi.fn().mockReturnValue({
+      sort: vi.fn().mockReturnThis(),
+      limit: vi.fn().mockReturnThis(),
+      toArray: vi.fn().mockResolvedValue([])
+    });
+    const db = { collection: vi.fn().mockReturnValue({ find, findOne: vi.fn() }) };
+
+    const result = await fhirSyncService.getPatientConsentFhirFirst(db, '12345678');
+    expect(result).toBeNull();
+  });
+
+  it('returns null and swallows errors thrown while querying', async () => {
+    const find = vi.fn().mockReturnValue({
+      sort: vi.fn().mockReturnThis(),
+      limit: vi.fn().mockReturnThis(),
+      toArray: vi.fn().mockRejectedValue(new Error('db down'))
+    });
+    const db = { collection: vi.fn().mockReturnValue({ find, findOne: vi.fn() }) };
+
+    const result = await fhirSyncService.getPatientConsentFhirFirst(db, '12345678');
+    expect(result).toBeNull();
+  });
+});
+
 describe('FhirSyncService.buildPatientFhirPayload', () => {
   it('splits a multi-word name into given/family and builds telecom entries', () => {
     const payload = fhirSyncService.buildPatientFhirPayload({
