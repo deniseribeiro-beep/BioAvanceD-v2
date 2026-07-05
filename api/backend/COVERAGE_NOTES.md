@@ -154,8 +154,10 @@ lines/branches/functions/statements) — see `COVERAGE_HISTORY.md`.
 lines/statements/functions, 86.15% branches) — see `COVERAGE_HISTORY.md`.
 
 `import.service.js` moved out of this bucket 2026-07-05 (isolated run:
-80.05% lines, now MID-HIGH) — `importPatients` covered; `importSamples`
-still has gaps — see `COVERAGE_HISTORY.md`.
+88.86% lines, now MID-HIGH) — `importPatients` and `importSamples`
+covered; remaining gaps are `importLocations`/`importTemperature`
+require() dynamic-import lines and a few defensive branches — see
+`COVERAGE_HISTORY.md`.
 
 ## MID-HIGH coverage (70-84% lines) — GOOD (>=85%)
 

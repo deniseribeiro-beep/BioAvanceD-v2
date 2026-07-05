@@ -35,6 +35,28 @@ branches, lines 384-434 etc.) and `importLocations`/`importTemperature`
 edge cases already partially covered by other test files in this slice
 family — next slice should target `importSamples`.
 
+**Slice (2026-07-05):** `src/services/import.service.js` 80.05% → 88.86%
+lines (isolated run across all `import.service.*.test.js`, new file
+`tests/unit/import.service.importSamples.test.js`, 12 tests). Covered
+`importSamples` end to end: JSON insert with complete ethics/sprec data
+(release_status upgraded to AVAILABLE via the compliance validator),
+JSON insert with missing ethics/sprec (stays QUARANTINE, no update
+needed since it's already the default), the compliance-validator-throws
+catch path (stays QUARANTINE, logs a warning) for both the JSON and
+tabular branches, model-validation rejection, an insertOne rejection,
+a JSON array batch, the CSV structural-validation short-circuit, a CSV
+parse error (non-numeric quantity), a CSV model-validation rejection,
+and the unsupported-extension/file-not-found top-level paths. One more
+real bug found and filed as actual (buggy) behavior: issue #88 —
+`importSamples`'s **JSON** branch has the same `results.total`
+undercount pattern as #79/#65/#86 (continue before the bottom-of-loop
+`total++`), but the CSV/XLSX branch of this same method does not have
+the bug (it increments `total` explicitly before its own continues).
+Remaining gaps in `import.service.js` are `importLocations`'s dynamic
+`require('../utils/locationIDGenerator')` line and a few defensive/edge
+branches (getRowValue with a null-alias-list caller, readSpreadsheetRows
+edge cases) — lower value, not prioritized further this session.
+
 **Slice (2026-07-05):** `src/i18n/index.js` 57.37% → 100% lines/
 statements/functions, 86.15% branches (isolated run:
 `tests/unit/i18n.test.js`, new file, 26 tests). Covered `setLanguage`,
