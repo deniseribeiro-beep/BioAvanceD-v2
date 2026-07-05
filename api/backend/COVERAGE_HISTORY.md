@@ -15,6 +15,26 @@ that reconcile's real `coverage-summary.json` numbers (see
 non-sequential in places (multiple concurrent authoring passes) — trust
 the issue numbers and file names, not the slice ordinal.
 
+**Slice (2026-07-05):** `src/services/import.service.js` 61.91% → 80.05%
+lines (isolated run across all `import.service.*.test.js`, new file
+`tests/unit/import.service.importPatients.test.js`, 11 tests). Covered
+`importPatients` end to end, which previously had zero coverage: JSON
+new-patient insert (with/without `patientID`, gating the consent-notify
+branch), the notification-failure swallow, cpf-based merge into an
+existing record, the `birthDate`-changed merge-conflict rejection, the
+no-identifier skip path, model-validation rejection, a mixed-array batch,
+the CSV row path, and the top-level file-read rejection. Two real bugs
+found and filed, both asserted as actual (buggy) behavior with an
+inline comment: issue #86 (`results.total` under-counts rows that fail
+`PatientModel.validate`, same pattern as the already-known #79/#65
+undercounts) and issue #87 (`parsePatientCSV` never maps
+`email`/`consentTemplateId`/`cpf`/`recordNumber`, so every CSV-imported
+patient row fails model validation — CSV patient import is effectively
+dead code). Remaining gaps in this file are `importSamples` (JSON/CSV
+branches, lines 384-434 etc.) and `importLocations`/`importTemperature`
+edge cases already partially covered by other test files in this slice
+family — next slice should target `importSamples`.
+
 **Slice (2026-07-05):** `src/i18n/index.js` 57.37% → 100% lines/
 statements/functions, 86.15% branches (isolated run:
 `tests/unit/i18n.test.js`, new file, 26 tests). Covered `setLanguage`,
