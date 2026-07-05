@@ -23,6 +23,7 @@ vi.mock('../../src/services/quality-domain.service', () => ({}));
 const service = require('../../src/services/import-lgpd.service');
 const notificationService = require('../../src/services/notification.service');
 const patientService = require('../../src/services/patient.service');
+const PatientModel = require('../../src/models/Patient');
 
 const VALID_ROW = {
   patientName: 'Maria Silva',
@@ -211,5 +212,100 @@ describe('ImportLGPDService.importPatients', () => {
       service.importPatients(db, { path: '/missing.csv', originalname: 'missing.csv' })
     ).rejects.toThrow('Arquivo não encontrado');
     expect(db.collection).not.toHaveBeenCalled();
+  });
+
+  it('records a per-row error when patientName is blank', async () => {
+    vi.spyOn(service, 'readFile').mockResolvedValue([{ ...VALID_ROW, patientName: '   ' }]);
+    const result = await service.importPatients(db, { path: '/x.csv', originalname: 'x.csv' });
+    expect(result.errors[0].errors[0]).toMatch(/Nome do paciente .* obrigatório/);
+  });
+
+  it('records a per-row error when birthDate does not parse', async () => {
+    vi.spyOn(service, 'readFile').mockResolvedValue([{ ...VALID_ROW, birthDate: 'not-a-date' }]);
+    const result = await service.importPatients(db, { path: '/x.csv', originalname: 'x.csv' });
+    expect(result.errors[0].errors[0]).toMatch(/Data de nascimento .* obrigatória/);
+  });
+
+  it('records a per-row error when sex is missing/invalid', async () => {
+    vi.spyOn(service, 'readFile').mockResolvedValue([{ ...VALID_ROW, sex: 'X' }]);
+    const result = await service.importPatients(db, { path: '/x.csv', originalname: 'x.csv' });
+    expect(result.errors[0].errors[0]).toMatch(/Sexo .* obrigatório/);
+  });
+
+  it('normalizes a numeric-string recordNumber to a number, and blanks an empty/placeholder one to null', async () => {
+    vi.spyOn(service, 'readFile').mockResolvedValue([
+      { ...VALID_ROW, recordNumber: '123' },
+      { ...VALID_ROW, recordNumber: 'null' },
+    ]);
+    const result = await service.importPatients(db, { path: '/x.csv', originalname: 'x.csv' });
+
+    expect(result.success).toBe(2);
+    const [first, second] = patientsCollection.insertOne.mock.calls;
+    expect(first[0].recordNumber).toBe(123);
+    expect(second[0].recordNumber).toBeNull();
+  });
+
+  it('keeps a non-numeric recordNumber string as-is', async () => {
+    vi.spyOn(service, 'readFile').mockResolvedValue([{ ...VALID_ROW, recordNumber: 'ABC-1' }]);
+    const result = await service.importPatients(db, { path: '/x.csv', originalname: 'x.csv' });
+
+    expect(result.success).toBe(1);
+    expect(patientsCollection.insertOne.mock.calls[0][0].recordNumber).toBe('ABC-1');
+  });
+
+  it('generates a clinicalUnit acronym when clinicalUnit is provided without one', async () => {
+    vi.spyOn(service, 'readFile').mockResolvedValue([{ ...VALID_ROW, clinicalUnit: 'Hospital das Clinicas' }]);
+    const result = await service.importPatients(db, { path: '/x.csv', originalname: 'x.csv' });
+
+    expect(result.success).toBe(1);
+    expect(patientsCollection.insertOne.mock.calls[0][0].unitAcronym).toBeTruthy();
+  });
+
+  it('records a per-row error when clinicalUnit fails PatientModel.validateUnit (defensive branch: validateUnit currently always passes any truthy string, so this is only reachable by forcing it)', async () => {
+    vi.spyOn(PatientModel, 'validateUnit').mockReturnValue(false);
+    vi.spyOn(service, 'readFile').mockResolvedValue([{ ...VALID_ROW, clinicalUnit: 'Some Unit' }]);
+
+    const result = await service.importPatients(db, { path: '/x.csv', originalname: 'x.csv' });
+
+    expect(result.errors[0].errors[0]).toMatch(/Unidade clínica inválida/);
+    PatientModel.validateUnit.mockRestore();
+  });
+
+  it('formats a Date birthDate into pt-BR for the duplicate-patient error message', async () => {
+    patientService.checkDuplicatePatient.mockResolvedValue({ _id: 'existing' });
+    vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW]);
+
+    const result = await service.importPatients(db, { path: '/x.csv', originalname: 'x.csv' });
+
+    expect(result.errors[0].errors[0]).toMatch(/Paciente duplicado.*\d{2}\/\d{2}\/\d{4}/);
+  });
+
+  it('catches a row-level exception, logs it, and records it as a row error rather than aborting the whole import', async () => {
+    vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW, VALID_ROW]);
+    patientService.checkDuplicatePatient
+      .mockResolvedValueOnce(null)
+      .mockRejectedValueOnce(new Error('db exploded'));
+
+    const result = await service.importPatients(db, { path: '/x.csv', originalname: 'x.csv' });
+
+    expect(result.total).toBe(2);
+    expect(result.success).toBe(1);
+    expect(result.errors[0].errors[0]).toMatch(/db exploded/);
+  });
+
+  it('skips a row that parses to no data at all (all fields blank) without counting it', async () => {
+    vi.spyOn(service, 'readFile').mockResolvedValue([{}, VALID_ROW]);
+    const result = await service.importPatients(db, { path: '/x.csv', originalname: 'x.csv' });
+
+    expect(result.total).toBe(1);
+    expect(result.success).toBe(1);
+  });
+
+  it('warns but still imports when a patientID column is present in the file (it is ignored)', async () => {
+    vi.spyOn(service, 'readFile').mockResolvedValue([{ ...VALID_ROW, patientID: '99999999' }]);
+    const result = await service.importPatients(db, { path: '/x.csv', originalname: 'x.csv' });
+
+    expect(result.success).toBe(1);
+    expect(patientsCollection.insertOne.mock.calls[0][0].patientID).not.toBe('99999999');
   });
 });
