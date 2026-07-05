@@ -24,35 +24,40 @@ stale as slices land and as source files change. Keep it honest:
 
 ## Last full reconcile
 
-**2026-07-04**, snapshot from commit `393edf91` (user-run
+**2026-07-05**, snapshot from commit `aef22577` (user-run
 `npx vitest run --coverage --reporter=basic`, full suite; only
 `coverage/coverage-summary.json` was read and re-derived from, exit
 status not independently captured this reconcile).
 
-Statements 81.2%, Branches 72.43%, Functions 85.35%, **Lines 81.63%**
-(14148/17331) — up from the prior reconcile's 79.3% lines (commit
-`7826467c`). The jump comes from the slices between the two reconciles:
-`equipment-sensor-quarantine.service.js`, `sample.routes.js`,
-`MongoStorageRepository.js`, `cid.routes.js`,
-`sample-file.controller.js`, `intakeWizard.js`, `policy.routes.js`, and
-a partial slice on `patient.service.js` — see `COVERAGE_HISTORY.md` for
-what each covered and any issues filed. ZERO bucket is unchanged (20
-files, none touched this round) and LOW is still empty.
+Statements 87.61%, Branches 78.51%, Functions 88.83%, **Lines 88.13%**
+(15275/17331) — up from the prior reconcile's 81.63% lines (commit
+`393edf91`). The jump reflects the full run of slices landed between the
+two reconciles (see `COVERAGE_HISTORY.md` for the per-slice list,
+including the `patient.service.js` `createPatient`/`updatePatient` slice
+and issue #90). ZERO bucket is unchanged (20 files, none touched). LOW
+and MID-LOW are both now confirmed **empty** — every previously-tracked
+MID-LOW file has moved to MID-HIGH/GOOD or higher.
 
 ## How to use this when picking a slice
 
-1. Prefer a **ZERO** file with real logic (not a script/model/port
-   interface) over a **LOW** or **MID-LOW** file — bigger jump per slice.
-   With LOW currently empty, MID-LOW is the next-best fallback tier.
+1. With ZERO the only non-empty bucket now, prefer its one real-logic
+   file (`worker.js`) over the models/interfaces/scripts also listed
+   there — bigger jump per slice, and those low-priority entries are
+   thin/non-request-path by design (see note below).
 2. Skip `src/scripts/*` (one-off migration/seed scripts, not exercised in
    prod request paths) and `src/core/application/ports/*` (interfaces,
    zero logic) unless a slice specifically needs them — low value.
-3. After landing a slice, delete the file's line from whichever bucket it
+3. With LOW/MID-LOW empty, the next tier for a slice with a meaningful
+   jump is picking a MID-HIGH (70-84%) file via a fresh isolated run —
+   this file doesn't track individual MID-HIGH files (see that section
+   below), so ask for a quick `--coverage` run scoped to a candidate
+   file/directory if you want a specific number before committing to it.
+4. After landing a slice, delete the file's line from whichever bucket it
    was in (or move it, if now partial). Don't leave stale entries. Add a
    short entry to `COVERAGE_HISTORY.md` for what the slice covered/found
    — not here.
 
-## ZERO coverage (0% lines) — 20 files, re-measured 2026-07-04
+## ZERO coverage (0% lines) — 20 files, re-measured 2026-07-05
 
 Real logic, worth prioritizing:
 - `src/workers/worker.js` (self-executing bootstrap entrypoint — calls
@@ -80,131 +85,19 @@ Low priority (models/interfaces/one-off scripts — thin or non-request-path):
 - `src/scripts/seedOrphanetCid.js`
 - `src/scripts/seeder.js`
 
-## LOW coverage (1-49% lines) — re-measured 2026-07-04, commit `393edf91`
+## LOW coverage (1-49% lines) — confirmed empty, full reconcile 2026-07-05, commit `aef22577`
 
-**Empty**, confirmed again at this reconcile — no file dropped below
-50% lines. Next slice should either work through the ZERO bucket above
-(real-logic file first: `worker.js`) or pick from the MID-LOW bucket
-just below for a smaller, incremental gain.
+**Empty.** No file below 50% lines across the whole suite.
 
-## MID-LOW coverage (50-69% lines) — re-measured 2026-07-04, commit `393edf91`
+## MID-LOW coverage (50-69% lines) — confirmed empty, full reconcile 2026-07-05, commit `aef22577`
 
-Sorted ascending (worst first), 26 files — the next tier up once the
-ZERO bucket's real-logic file (`worker.js`) is done. Re-derived from
-`coverage/coverage-summary.json`, not hand-maintained.
-
-**Empty** — `patient.service.js` moved out 2026-07-05 (see below).
-
-`import-lgpd.service.js` moved up 2026-07-05 (isolated run: 85.18% lines,
-74.11% branches, now MID-HIGH) — `buildMappedPatientRow`,
-`importPatientsSmart`, `cleanupFile`, remaining `importPatients`
-branches, `readExcel` sheet-fallback/cell-parsing branches, and
-`parseBirthDate`/`parsePatientRow` edge formats now covered. Remaining
-gap is concentrated in `importSamples`' post-validation code (~lines
-845-982): unreachable in real usage because `SampleModel.validate` is
-the wrong export (mongoose static, always rejects — see issue tracking
-that bug), so exercising it requires forcing the bypass rather than
-driving it through real inputs — lower value for the time cost. See
-`COVERAGE_HISTORY.md`.
-
-`log.service.js` moved out of this bucket 2026-07-05 (isolated run: 99.47%
-lines, 91.58% branches) — see `COVERAGE_HISTORY.md`.
-
-`patient.service.js` moved out of this bucket 2026-07-05 (isolated run:
-74.78% lines, 57.79% branches, now MID-HIGH) — `createPatient`/
-`updatePatient` error and side-effect branches (consent template
-validation, duplicate/identifier conflicts, clinicalUnit resolution,
-notification enqueue success/failure, biomarker artifact writes,
-phone-duplicate-key 409 conversion, height conversion, biomarkerXai
-set/unset, ObjectId-vs-patientID query) now covered — see
-`COVERAGE_HISTORY.md`. A real bug was found and filed (issue #90): the
-deceased/representative merge in `updatePatient` drops
-`representativeEmail` from the existing patient record.
-
-`sample-file.controller.js` moved out of this bucket 2026-07-05
-(isolated run: 98.34% lines, 69.66% branches) — see
-`COVERAGE_HISTORY.md`.
-
-Note: several of these (`import-lgpd.service.js`, `import.service.js`,
-`patient.service.js`, `Patient.js`, `Sample.js`) already have partial
-coverage from earlier slices — see `COVERAGE_HISTORY.md` for what's
-already covered before picking one, so a slice doesn't re-cover the
-same ground.
-
-`paciente.controller.js` moved out of this bucket 2026-07-05 (isolated
-run: 94.38% lines) — see `COVERAGE_HISTORY.md`.
-
-`dictionary.js` moved out of this bucket 2026-07-05 (isolated run:
-96.57% lines) — see `COVERAGE_HISTORY.md`.
-
-`backup.routes.js` moved out of this bucket 2026-07-05 (isolated run:
-98.07% lines) — see `COVERAGE_HISTORY.md`.
-
-`fhir-sync.service.js` moved out of this bucket 2026-07-05 (isolated run:
-99.52% lines) — see `COVERAGE_HISTORY.md`.
-
-`sensor.service.js` moved out of this bucket 2026-07-05 (isolated run:
-100% lines, 87.03% branches) — see `COVERAGE_HISTORY.md`.
-
-`Session.js` moved out of this bucket 2026-07-05 (isolated run: 100%
-lines/branches/functions/statements) — see `COVERAGE_HISTORY.md`.
-
-`i18n/index.js` moved out of this bucket 2026-07-05 (isolated run: 100%
-lines/statements/functions, 86.15% branches) — see `COVERAGE_HISTORY.md`.
-
-`import.service.js` moved out of this bucket 2026-07-05 (isolated run:
-88.86% lines, now MID-HIGH) — `importPatients` and `importSamples`
-covered; remaining gaps are `importLocations`/`importTemperature`
-require() dynamic-import lines and a few defensive branches — see
-`COVERAGE_HISTORY.md`.
-
-`mqtt-signature.service.js` moved out of this bucket 2026-07-05 (isolated
-run: 100% lines/branches/functions/statements) — see `COVERAGE_HISTORY.md`.
-
-`patientAnonymization.js` moved out of this bucket 2026-07-05 (isolated
-run: 100% lines/statements/functions, 95% branches) — see
-`COVERAGE_HISTORY.md`.
-
-`biomarker-observation.service.js` moved out of this bucket 2026-07-05
-(isolated run: 98.61% lines, 93.33% branches) — see `COVERAGE_HISTORY.md`.
-
-`mqtt-telemetry.service.js` moved out of this bucket 2026-07-05 (isolated
-run: 75.94% lines, 79.61% branches, now MID-HIGH) — `stop()` now covered;
-the remaining gap (`start()`'s real `mqtt.connect(...)` call and its
-handlers) is not honestly mockable, see `COVERAGE_HISTORY.md`.
-
-`ConsentPolicy.js` moved out of this bucket 2026-07-05 (isolated run:
-100% lines/branches/functions/statements) — see `COVERAGE_HISTORY.md`.
-
-`Sample.js` moved out of this bucket 2026-07-05 (isolated run: 98.3%
-lines, 93.65% branches) — see `COVERAGE_HISTORY.md`.
-
-`user-security.service.js` moved out of this bucket 2026-07-05 (isolated
-run: 91.02% lines, 76.85% branches, now MID-HIGH) — see
-`COVERAGE_HISTORY.md`.
-
-`logSerializer.js` moved out of this bucket 2026-07-05 (isolated run:
-97.87% lines, 89.43% branches) — see `COVERAGE_HISTORY.md`.
-
-`ListOperationalFreezersUseCase.js` moved out of this bucket 2026-07-05
-(isolated run: 100% lines/branches/functions/statements) — see
-`COVERAGE_HISTORY.md`.
-
-`Patient.js` moved out of this bucket 2026-07-05 (isolated run: 98.66%
-lines, 97.13% branches) — see `COVERAGE_HISTORY.md`.
-
-`ConsentTemplate.js` moved out of this bucket 2026-07-05 (isolated run:
-100% lines/branches/functions/statements) — see `COVERAGE_HISTORY.md`.
-
-`TopologicalQuarantine.js` moved out of this bucket 2026-07-05 (isolated
-run: 100% lines/statements/functions, 93.67% branches) — see
-`COVERAGE_HISTORY.md`.
-
-`orphanet-count.js` moved out of this bucket 2026-07-05 (isolated run:
-100% lines/branches/functions/statements) — see `COVERAGE_HISTORY.md`.
-
-`import-batch.controller.js` moved out of this bucket 2026-07-05
-(isolated run: 100% lines, 97.5% branches) — see `COVERAGE_HISTORY.md`.
+**Empty.** `patient.service.js` was the last file in this bucket (see
+`COVERAGE_HISTORY.md` for its slice); the full-suite reconcile confirms
+no other file has since dropped into this range either. With LOW and
+MID-LOW both empty, the next slice-picking
+tier is ZERO's one real-logic file (`worker.js`) or a MID-HIGH
+(70-84%) file picked via a fresh isolated `--coverage` run — see "How to
+use this when picking a slice" above.
 
 ## MID-HIGH coverage (70-84% lines) — GOOD (>=85%)
 
