@@ -15,6 +15,13 @@ that reconcile's real `coverage-summary.json` numbers (see
 non-sequential in places (multiple concurrent authoring passes) — trust
 the issue numbers and file names, not the slice ordinal.
 
+**Slice (2026-07-05):** `src/core/use-cases/ListOperationalFreezersUseCase.js`
+66.66% → 100% lines/branches/functions/statements. New
+`tests/unit/ListOperationalFreezersUseCase.test.js` (2 tests): happy path
+delegating to `topologyReadRepository.listOperationalFreezers()`, and
+error propagation when the repository rejects. Thin pass-through class,
+no bugs found.
+
 **Slice (2026-07-05):** `src/models/Sample.js` 67.79% → 98.3% lines,
 93.65% branches (isolated run). New `tests/unit/sample.model.gaps.test.js`
 (39 tests) filling gaps left by the pre-existing `sample.model.unit.test.js`

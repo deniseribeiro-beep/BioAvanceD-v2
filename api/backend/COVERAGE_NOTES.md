@@ -96,7 +96,6 @@ ZERO bucket's real-logic file (`worker.js`) is done. Re-derived from
 ```
 src/services/patient.service.js                                       57.2%
 src/models/Patient.js                                                 63.33%
-src/core/use-cases/ListOperationalFreezersUseCase.js                  66.66%
 src/services/import-lgpd.service.js                                   67.28%
 src/models/ConsentTemplate.js                                         67.85%
 src/infrastructure/queue/TopologicalQuarantine.js                     68.08%
@@ -178,6 +177,10 @@ run: 91.02% lines, 76.85% branches, now MID-HIGH) — see
 
 `logSerializer.js` moved out of this bucket 2026-07-05 (isolated run:
 97.87% lines, 89.43% branches) — see `COVERAGE_HISTORY.md`.
+
+`ListOperationalFreezersUseCase.js` moved out of this bucket 2026-07-05
+(isolated run: 100% lines/branches/functions/statements) — see
+`COVERAGE_HISTORY.md`.
 
 ## MID-HIGH coverage (70-84% lines) — GOOD (>=85%)
 
