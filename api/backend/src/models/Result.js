@@ -45,19 +45,19 @@ class ResultModel {
 
   static create(data) {
     return {
-      resultID: data.resultID || null, // Int conforme dicionário
+      resultID: data.resultID ?? null, // Int conforme dicionário
       sampleID: data.sampleID, // Referência à amostra
       fileType: data.fileType,
       resultFilePath: data.resultFilePath,
-      filePath: data.filePath || data.resultFilePath,
-      description: data.description || null,
-      analysisType: data.analysisType || null,
-      method: data.method || null,
-      responsibleResearcher: data.responsibleResearcher || null,
-      equipmentID: data.equipmentID || null,
-      equipmentName: data.equipmentName || null,
-      fileSize: data.fileSize || null,
-      uploadedAt: data.uploadedAt || new Date(),
+      filePath: data.filePath ?? data.resultFilePath,
+      description: data.description ?? null,
+      analysisType: data.analysisType ?? null,
+      method: data.method ?? null,
+      responsibleResearcher: data.responsibleResearcher ?? null,
+      equipmentID: data.equipmentID ?? null,
+      equipmentName: data.equipmentName ?? null,
+      fileSize: data.fileSize ?? null,
+      uploadedAt: data.uploadedAt ?? new Date(),
       createdAt: new Date(),
       updatedAt: new Date()
     };
