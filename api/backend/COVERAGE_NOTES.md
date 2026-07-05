@@ -93,9 +93,7 @@ Sorted ascending (worst first), 26 files — the next tier up once the
 ZERO bucket's real-logic file (`worker.js`) is done. Re-derived from
 `coverage/coverage-summary.json`, not hand-maintained.
 
-```
-src/services/patient.service.js                                       57.2%
-```
+**Empty** — `patient.service.js` moved out 2026-07-05 (see below).
 
 `import-lgpd.service.js` moved up 2026-07-05 (isolated run: 85.18% lines,
 74.11% branches, now MID-HIGH) — `buildMappedPatientRow`,
@@ -112,15 +110,16 @@ driving it through real inputs — lower value for the time cost. See
 `log.service.js` moved out of this bucket 2026-07-05 (isolated run: 99.47%
 lines, 91.58% branches) — see `COVERAGE_HISTORY.md`.
 
-`patient.service.js` at 57.2% lines (isolated run across its own +
-related test files, 2026-07-05) — `resolveClinicalUnitSnapshot`,
-`checkIdentifierConflict`, `checkDuplicatePatient`,
-`syncPatientPhoneToGraph`, and `applyDeceasedRepresentativeRules`
-branches now covered; the number barely moved from 56.35% because the
-remaining gap is concentrated in the large `createPatient`/
-`updatePatient` bodies (multi-branch, DB/notification/FHIR/neo4j/
-biomarker side effects) rather than the smaller helper methods just
-closed — see `COVERAGE_HISTORY.md`.
+`patient.service.js` moved out of this bucket 2026-07-05 (isolated run:
+74.78% lines, 57.79% branches, now MID-HIGH) — `createPatient`/
+`updatePatient` error and side-effect branches (consent template
+validation, duplicate/identifier conflicts, clinicalUnit resolution,
+notification enqueue success/failure, biomarker artifact writes,
+phone-duplicate-key 409 conversion, height conversion, biomarkerXai
+set/unset, ObjectId-vs-patientID query) now covered — see
+`COVERAGE_HISTORY.md`. A real bug was found and filed (issue #90): the
+deceased/representative merge in `updatePatient` drops
+`representativeEmail` from the existing patient record.
 
 `sample-file.controller.js` moved out of this bucket 2026-07-05
 (isolated run: 98.34% lines, 69.66% branches) — see

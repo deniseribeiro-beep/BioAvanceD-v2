@@ -15,6 +15,30 @@ that reconcile's real `coverage-summary.json` numbers (see
 non-sequential in places (multiple concurrent authoring passes) — trust
 the issue numbers and file names, not the slice ordinal.
 
+**Slice (2026-07-05):** `src/services/patient.service.js` `createPatient`/
+`updatePatient` gap, 57.2% → 74.78% lines (57.79% branches), new file
+`tests/unit/patient.service.createUpdate.gaps.unit.test.js` (18 tests).
+Covered `createPatient`'s consentTemplateId invalid-ObjectId/not-found
+branches, duplicate-patient rejection, fallback unitAcronym generation,
+consent-notification enqueue success and swallowed-failure paths,
+biomarker timeseries/observation artifact writes, and the
+phone-duplicate-key (11000) → 409 conversion on insert; and
+`updatePatient`'s email/phone validation errors, clinicalUnit snapshot
+resolution/merge, height-to-heightCm conversion (meters vs. already-cm),
+biomarkerXai set vs. unset branches, ObjectId-vs-patientID query
+selection, and the same 11000 → 409 conversion on update. Found a real
+bug: `updatePatient`'s deceased/representative merge block only carries
+`representativeName`/`representativeCpf`/`representativePhone` forward
+from the existing patient record, omitting `representativeEmail` — so
+re-affirming/updating any deceased-patient field on an already-valid
+representative incorrectly throws the "obrigatório" validation error.
+Filed as issue #90; the corresponding test asserts the actual (buggy)
+throw with a comment pointing at the issue, per test-loop policy of not
+patching product code from this loop. Remaining gap in
+`patient.service.js` is concentrated in `getPatient`/`listPatients`/
+`searchPatients`'s FHIR-first branches and `validateConsentToken`/
+`acceptConsentToken`/`resendConsentNotification` (untouched this slice).
+
 **Slice (2026-07-05):** `src/controllers/sample-file.controller.js`
 68.87% → 98.34% lines (69.66% branches), extended
 `tests/unit/sample-file.controller.test.js` (33 → 58 tests). Added
