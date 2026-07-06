@@ -5,63 +5,6 @@ const redis = require('redis');
 const { getNeo4jDriver } = require('../database/neo4j');
 const DrugService = require('../services/DrugService');
 
-const DEFAULT_MEDICATIONS = [
-  {
-    code: 'ATC:A16AB04',
-    atc_code: 'A16AB04',
-    atc_level_1: 'A',
-    name: 'Agalsidase beta',
-    synonyms: ['Fabrazyme', 'Agalsidase-Beta'],
-    drug_class: 'enzyme_replacement_therapy',
-    disease_categories: ['Erros Inatos do Metabolismo'],
-  },
-  {
-    code: 'ATC:A16AB03',
-    atc_code: 'A16AB03',
-    atc_level_1: 'A',
-    name: 'Agalsidase alfa',
-    synonyms: ['Replagal', 'Agalsidase-Alfa'],
-    drug_class: 'enzyme_replacement_therapy',
-    disease_categories: ['Erros Inatos do Metabolismo'],
-  },
-  {
-    code: 'ATC:A16AX14',
-    atc_code: 'A16AX14',
-    atc_level_1: 'A',
-    name: 'Migalastat',
-    synonyms: ['Galafold'],
-    drug_class: 'pharmacological_chaperone',
-    disease_categories: ['Erros Inatos do Metabolismo'],
-  },
-  {
-    code: 'ATC:H02AB02',
-    atc_code: 'H02AB02',
-    atc_level_1: 'H',
-    name: 'Deflazacorte',
-    synonyms: ['Deflazacort'],
-    drug_class: 'corticosteroid',
-    disease_categories: ['Doencas Neurologicas'],
-  },
-  {
-    code: 'ATC:M09AX03',
-    atc_code: 'M09AX03',
-    atc_level_1: 'M',
-    name: 'Atalureno',
-    synonyms: ['Translarna'],
-    drug_class: 'exon_skipping_therapy',
-    disease_categories: ['Doencas Neurologicas'],
-  },
-  {
-    code: 'ATC:N03AX26',
-    atc_code: 'N03AX26',
-    atc_level_1: 'N',
-    name: 'Cannabidiol',
-    synonyms: ['Epidiolex'],
-    drug_class: 'anticonvulsant',
-    disease_categories: ['Doencas Neurologicas'],
-  },
-];
-
 let redisClient = null;
 let redisConnectPromise = null;
 let redisAvailable = true;
@@ -256,34 +199,6 @@ function normalizeMedicationRecord(raw = {}) {
   };
 }
 
-async function ensureMedicationDictionarySeeded(db) {
-  const collection = db.collection('medication_dictionary');
-  const count = await collection.estimatedDocumentCount();
-  if (count > 0) {
-    return;
-  }
-
-  const now = new Date();
-  const operations = DEFAULT_MEDICATIONS.map((item) => ({
-    updateOne: {
-      filter: { code: item.code },
-      upsert: true,
-      update: {
-        $set: {
-          ...item,
-          generic_name: item.name,
-          active: true,
-          updatedAt: now,
-        },
-        $setOnInsert: {
-          createdAt: now,
-        },
-      },
-    },
-  }));
-  await collection.bulkWrite(operations, { ordered: false });
-}
-
 async function ensureMedicationDictionaryIndexes(db) {
   const collection = db.collection('medication_dictionary');
   await collection.createIndex({ generic_name: 1 }, { name: 'generic_name_idx' });
@@ -304,7 +219,6 @@ router.get('/atc/search', async (req, res) => {
 
   try {
     await ensureMedicationDictionaryIndexes(db);
-    await ensureMedicationDictionarySeeded(db);
     const drugService = new DrugService(db);
     const medications = await drugService.searchAndCacheDrug(query, {
       limit: Math.min(Math.max(Number(req.query?.limit || 10), 1), 50),
@@ -466,7 +380,6 @@ router.get('/medications/search', async (req, res) => {
 
   try {
     await ensureMedicationDictionaryIndexes(db);
-    await ensureMedicationDictionarySeeded(db);
     const collection = db.collection('medication_dictionary');
 
     const filters = [{ active: { $ne: false } }];

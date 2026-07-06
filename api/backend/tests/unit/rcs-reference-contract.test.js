@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 const referenceData = require('../../src/services/rcs-reference-data');
-const { upsertCollection } = require('../../src/seeders');
+const { upsertCollection } = require('../../src/services/rcs-reference-data');
 
 const catalogCodes = {
   fluid: {

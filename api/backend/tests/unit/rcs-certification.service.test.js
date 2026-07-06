@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 const rcsService = require('../../src/services/rcs-certification.service');
 const qualityDomain = require('../../src/services/quality-domain.service');
 const referenceData = require('../../src/services/rcs-reference-data');
-const { buildRcsCatalogDocuments } = require('../../src/seeders');
+const { buildRcsCatalogDocuments } = require('../../src/services/rcs-reference-data');
 const { SampleModel } = require('../../src/models/Sample');
 
 function fluidSprec(overrides = {}) {

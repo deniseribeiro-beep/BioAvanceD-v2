@@ -15,6 +15,17 @@ module.exports = defineConfig({
     fileParallelism: false,
     isolate: true,
     pool: 'forks',
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'html', 'json', 'lcov'],
+      reportsDirectory: './coverage',
+      thresholds: {
+        lines: 100,
+        statements: 100,
+        functions: 100,
+        branches: 100,
+      },
+    },
     exclude: [
       '**/node_modules/**',
       'tests/setup.test.js',

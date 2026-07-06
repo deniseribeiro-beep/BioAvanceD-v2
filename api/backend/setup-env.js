@@ -2,10 +2,10 @@ const fs = require('fs');
 const path = require('path');
 
 const envContent = `PORT=3000
-MONGO_URI=mongodb+srv://deniser:iEXN05xgW3RMyiKi@cluster0.g3t9jaw.mongodb.net
+MONGO_URI=mongodb://localhost:27017/bioavanced_dev
 MONGO_DB=bioavanced
 MONGO_DB_NOVO=bioavanced_novo
-JWT_SECRET=bioavanced-secret-key
+JWT_SECRET=change-me
 NODE_ENV=development
 `;
 
@@ -26,10 +26,9 @@ try {
   }
   
   console.log('\n📌 Próximos passos:');
-  console.log('   1. Adicione seu IP na whitelist do MongoDB Atlas');
+  console.log('   1. Ajuste as variáveis locais conforme o ambiente');
   console.log('   2. Execute: npm install');
   console.log('   3. Execute: npm run dev');
-  console.log('\n🔗 MongoDB Atlas: https://cloud.mongodb.com');
 } catch (error) {
   console.error('❌ Erro ao criar arquivo .env:', error.message);
   console.log('\n📝 Crie manualmente o arquivo backend/.env com:');

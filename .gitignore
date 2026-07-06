@@ -61,7 +61,6 @@ traces/
 frontend/playwright/.auth/
 backend/test-output.txt
 test-output.txt
-reports/
 api/backend/COMPLIANCE_EVIDENCE.json
 COMPLIANCE_EVIDENCE.json
 backup_before_push.patch
@@ -70,6 +69,9 @@ artifacts/
 *.zip
 data-dump.json
 letsencrypt/accounts/
+reports/workspace/*.patch
+reports/workspace/classification.md
+reports/system-audit/
 
 # Official Orphanet source archives are versioned for reproducible seed builds.
 !orpha-data-raw/
@@ -91,12 +93,6 @@ api/backend/uploads/temp/*
 data/
 api/backend/data/
 *.sqlite3
-
-# Keep only sanitized backend seed reference data
-!api/backend/src/seeders/data/
-api/backend/src/seeders/data/*
-!api/backend/src/seeders/data/rcs-*.json
-!api/backend/src/seeders/data/*.min.json
 
 # =========================
 # Backups and temporary exports

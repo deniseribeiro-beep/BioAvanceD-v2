@@ -57,7 +57,7 @@ O bootstrap essencial não deve criar por padrão:
 - usuário administrador com credencial fixa;
 - dumps ou dados de demonstração.
 
-Dados operacionais devem ser criados pelo fluxo da aplicação ou por seeds sintéticos explicitamente marcados como `demo`.
+Dados operacionais devem ser criados pelo fluxo da aplicação ou por fixtures de teste e migrations explícitas, nunca por seed automático.
 
 ## Execução reproduzível com Docker Compose
 
@@ -105,75 +105,22 @@ Estado, logs e smoke test:
 ```bash
 npm run compose:ps
 npm run compose:logs
-npm run compose:smoke
 ```
 
 ## Inicialização limpa do banco
 
-Após os serviços estarem saudáveis:
+Após os serviços estarem saudáveis, a base deve ser inicializada apenas por migrations e bootstrap estrutural explícito, sem população automática de entidades de domínio.
 
-```bash
-docker compose --env-file .env.docker -f docker-compose.yml exec backend npm run seed:essential
-```
+## Histórico do pipeline Orphanet
 
-Esse seed deve ser idempotente e restrito a dados estruturais e de referência.
-
-## Seed ORPHA inicial
-
-ORPHA, CID-10, CID-11, SNOMED-CT e OMIM entram como dados de referência semântica. Eles não criam pacientes, amostras, consentimentos, resultados ou eventos operacionais.
-
-A documentação completa do pipeline está em `docs/orphanet-artifact-pipeline.md`.
-
-O Compose monta:
-
-```text
-orpha-data-raw/  -> /workspace/orpha-data-raw, somente leitura
-artifacts/       -> /workspace/artifacts
-```
-
-Gerar o artefato:
-
-```bash
-docker compose --env-file .env.docker -f docker-compose.yml run --rm --no-deps backend \
-  npm run orphanet:build-initial-seed -- \
-  --input /workspace/orpha-data-raw \
-  --release 2025-07 \
-  --out /workspace/artifacts/orphanet-2025-07-initial-seed
-```
-
-Validar o artefato:
-
-```bash
-docker compose --env-file .env.docker -f docker-compose.yml run --rm --no-deps backend \
-  npm run orphanet:validate-initial-seed -- \
-  --artifact /workspace/artifacts/orphanet-2025-07-initial-seed
-```
-
-Importar na pilha em execução:
-
-```bash
-docker compose --env-file .env.docker -f docker-compose.yml exec backend \
-  npm run orphanet:import-initial-seed -- \
-  --artifact /workspace/artifacts/orphanet-2025-07-initial-seed \
-  --batch 500 \
-  --checkpoint
-```
-
-Validar após a importação:
-
-```bash
-docker compose --env-file .env.docker -f docker-compose.yml exec backend \
-  npm run orphanet:validate-imported-seed -- \
-  --release 2025-07 \
-  --artifact /workspace/artifacts/orphanet-2025-07-initial-seed
-```
+O pipeline anterior foi descontinuado e não integra o runtime ou os procedimentos atuais. A documentação histórica está disponível em `docs/orphanet-artifact-pipeline.md`.
 
 ## Criar o primeiro administrador
 
 O sistema não cria administrador por padrão. A criação do primeiro administrador deve ser uma ação explícita, com dados temporários fornecidos por variáveis seguras do ambiente.
 
 ```bash
-docker compose --env-file .env.docker -f docker-compose.yml exec backend npm run admin:create-first
+docker compose --env-file .env.docker.example -f compose.yml -f compose.dev.yml exec backend npm run admin:create-first
 ```
 
 O script só deve criar o primeiro administrador quando a coleção de usuários estiver vazia e deve exigir troca da credencial temporária no primeiro acesso.
@@ -183,21 +130,21 @@ O script só deve criar o primeiro administrador quando a coleção de usuários
 Backend:
 
 ```bash
-docker compose --env-file .env.docker -f docker-compose.yml exec backend npm run test:ci
+docker compose --env-file .env.docker.example -f compose.yml -f compose.dev.yml exec backend npm run test:ci
 ```
 
 Frontend:
 
 ```bash
-docker compose --env-file .env.docker -f docker-compose.yml exec frontend npm run typecheck
-docker compose --env-file .env.docker -f docker-compose.yml exec frontend npm run build
+docker compose --env-file .env.docker.example -f compose.yml -f compose.dev.yml exec frontend npm run typecheck
+docker compose --env-file .env.docker.example -f compose.yml -f compose.dev.yml exec frontend npm run build
 ```
 
-Testes conteinerizados isolados:
+Testes da pilha:
 
 ```bash
-npm run docker:test:backend
-npm run docker:test:frontend
+npm run test:integration
+npm run test:e2e
 ```
 
 Auditoria completa:

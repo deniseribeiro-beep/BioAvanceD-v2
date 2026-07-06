@@ -1,7 +1,0 @@
-# Batch Patient Import Template
-# One row per patient.
-# Use the same column names as the Clinical Intake Wizard.
-# Required fields: patientName,birthDate,email,phone,cpf,sampleType,sampleOrigin,extractionProtocol,quantity,quality
-# Optional fields: isDeceased,representativeName,representativeEmail,representativeCpf,representativePhone,linkedProject,collectionInstitution,collectionInstitutionAcronym,consentTemplateId
-patientName,birthDate,email,phone,cpf,isDeceased,representativeName,representativeEmail,representativeCpf,representativePhone,sampleType,sampleOrigin,extractionProtocol,quantity,quality,linkedProject,collectionInstitution,collectionInstitutionAcronym,consentTemplateId
-John Doe,10/05/1980,john.doe@example.com,+55 11 91234-5678,12345678901,false,,,,,PLASMA,VENOUS_BLOOD,TUBE_EDTA,500,GOOD,Genomics Project,Central Lab,CL,

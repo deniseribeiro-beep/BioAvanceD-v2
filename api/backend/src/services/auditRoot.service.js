@@ -54,7 +54,7 @@ class AuditRootService {
         previousAnchorHash: previousRootHash,
       });
 
-      const signaturePayload = merkleEnvelopeService.signEnvelope(envelope);
+      const signaturePayload = await merkleEnvelopeService.signEnvelope(envelope);
       const timestampDraft = await rfc3161AdapterService.anchorEnvelopeDigest({
         envelopeDigestSha256: signaturePayload.envelopeDigestSha256,
         envelopeDigestBase64: signaturePayload.envelopeDigestBase64,

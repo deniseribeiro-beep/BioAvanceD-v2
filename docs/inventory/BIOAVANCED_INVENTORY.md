@@ -1,8 +1,18 @@
 # BioAvanceD Technical Inventory
 
+> Status: documentação operacional.
+> Este inventário descreve o branch atual e serve como referência canônica para rotas, serviços, Compose e validações.
+
 ## Scope
 
 This inventory describes the repository structure without binding the project to a named host, public IP address, institution-specific path, or deployment branch.
+
+## Freeze reference
+
+- Snapshot date: `2026-07-06T12:02:35.9260071-03:00`
+- Branch: `audit/intake-governance-i18n-orpha`
+- SHA: `d978f59dfa24a64349242eb4516f8d5be5b1b40e`
+- Historical copy: `docs/inventory/archive/freeze-2026-07-06-d978f59/`
 
 ## Architecture
 
@@ -12,8 +22,8 @@ This inventory describes the repository structure without binding the project to
 - Graph persistence: Neo4j.
 - Time-series persistence: InfluxDB.
 - Cache and queues: Redis.
-- Runtime definition: `docker-compose.yml`.
-- Runtime configuration example: `.env.docker.example`.
+- Runtime definition: `compose.yml` with `compose.dev.yml`, `compose.test.yml`, and `compose.prod.yml`.
+- Runtime configuration examples: `.env.docker.example`, `.env.test.example`, and `.env.production.example`.
 - Automated checks: backend tests, frontend type checking, Playwright, audit scripts, and Compose smoke test.
 
 ## Core domains
@@ -32,14 +42,22 @@ This inventory describes the repository structure without binding the project to
 
 ## Containerized services
 
-The canonical Compose stack defines:
+The canonical Compose topology is environment-specific rather than a single flat list.
 
-- `mongodb`;
-- `neo4j`;
-- `influxdb`;
-- `redis`;
-- `backend`;
-- `frontend`.
+| Serviço | Dev | Test | Prod | Função |
+|---|---|---|---|---|
+| MongoDB | sim | sim | conforme implantação | documentos |
+| Neo4j | sim | sim | conforme implantação | linhagem |
+| Redis | sim | sim | conforme implantação | cache/filas |
+| InfluxDB | sim | sim | conforme implantação | telemetria |
+| Backend | sim | sim | sim | API |
+| Frontend | sim | sim | sim | interface |
+| Worker | sim | sim | sim, se necessário | processamento assíncrono |
+| MQTT | opcional | sim | externo ou interno | telemetria |
+| Mailpit | não | sim | não | SMTP de teste |
+| TSA | conforme escopo | sim | sim | carimbo temporal |
+| Witness | conforme escopo | sim | sim | ancoragem/verificação |
+| Playwright runner | não | sim | não | E2E |
 
 Database state and Node dependency directories use named volumes. Host ports are configurable through environment variables. Application source directories are mounted for development, while semantic input and generated artifacts use explicit workspace mounts.
 
@@ -68,15 +86,16 @@ The environment-neutral workflow uses:
 npm run compose:config
 npm run compose:up
 npm run compose:ps
-npm run compose:smoke
 npm run compose:down
 ```
 
-The smoke test verifies frontend, backend, MongoDB, Neo4j, Redis, and InfluxDB without hardcoded public endpoints or host-specific paths.
+## ORPHA terminology status
 
-## Scientific data pipelines
+The previous executable ORPHA seed and initial-import pipeline was removed from the active repository workflow.
 
-The repository includes a versioned ORPHA artifact pipeline with source attribution, normalization, checksums, validation, batch import, checkpoints, and post-import validation. HPO and biomarker data remain separate semantic domains and require dedicated pipelines.
+Historical documentation is retained only for traceability in `docs/orphanet-artifact-pipeline.md`.
+
+A future terminology acquisition, validation, versioning, and import workflow will be redesigned separately. No ORPHA population process is currently executed during application startup, Compose initialization, testing, or deployment.
 
 ## Current critical technical work
 
@@ -86,6 +105,19 @@ The repository includes a versioned ORPHA artifact pipeline with source attribut
 - implement idempotent graph projection through an outbox;
 - validate cross-domain scenarios against real MongoDB and Neo4j containers;
 - generate reproducible evidence for the scientific manuscript.
+
+## Freeze-focused search terms
+
+The updated inventory pass for Fase 0 must explicitly cover:
+
+- `seed`
+- `seeder`
+- `bootstrap`
+- `fixtures`
+- `legacy`
+- `aliases`
+- `wrappers`
+- duplicated configuration files
 
 ## Protected materials
 

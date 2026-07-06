@@ -83,5 +83,5 @@ export function normalizeMasterDataItem<T extends ApiRecord = ApiRecord>(item: u
     ...(label && source.label === undefined ? { label } : {}),
     active,
     is_active: source.is_active !== undefined ? Boolean(source.is_active) : active,
-  } as T;
+  } as unknown as T;
 }

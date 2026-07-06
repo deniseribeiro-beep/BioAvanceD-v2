@@ -301,62 +301,6 @@ async function searchRemote(search, limit) {
   return dedupeRecords(records, limit);
 }
 
-async function upsertLocalCache(db, records = []) {
-  const valid = dedupeRecords(records, records.length || 1);
-  if (valid.length === 0) return { cached: 0 };
-
-  await db.collection(COLLECTION).bulkWrite(valid.map((record) => ({
-    updateOne: {
-      filter: { code: getOrphaNumeric(record.orphaCode) },
-      update: {
-        $set: {
-          code: getOrphaNumeric(record.orphaCode),
-          orphaCode: record.orphaCode,
-          ORPHA: record.ORPHA,
-          ORPHAcode: record.ORPHAcode,
-          name: record.name,
-          label: record.label,
-          description: record.description,
-          Codigos_CID10: record.Codigos_CID10,
-          OMIM: record.OMIM,
-          synonyms: record.synonyms,
-          aliases: record.aliases,
-          relacoes: record.relacoes,
-          lang: record.lang || 'pt',
-          source: record.source || 'orphanet-search',
-          updatedAt: new Date(),
-        },
-        $setOnInsert: { createdAt: new Date() },
-      },
-      upsert: true,
-    },
-  })), { ordered: false });
-
-  await db.collection('terminologies').bulkWrite(valid.map((record) => ({
-    updateOne: {
-      filter: { sistema: 'ORPHA', codigo: record.orphaCode },
-      update: {
-        $set: {
-          sistema: 'ORPHA',
-          codigo: record.orphaCode,
-          descricao: record.description || record.name || record.orphaCode,
-          label: record.label || record.description || record.orphaCode,
-          sinonimos: record.synonyms || [],
-          aliases: record.aliases || [],
-          relacoes: record.relacoes || {},
-          ativo: true,
-          lang: record.lang || 'pt',
-          fonte: record.source || 'orphanet-search-cache',
-          sincronizadoEm: new Date(),
-        },
-      },
-      upsert: true,
-    },
-  })), { ordered: false });
-
-  return { cached: valid.length };
-}
-
 router.get('/search', async (req, res) => {
   const q = normalizeText(req.query.q);
   const lang = normalizeText(req.query.lang || 'pt');
@@ -377,11 +321,8 @@ router.get('/search', async (req, res) => {
 
     const remoteResults = await searchRemote(q, limit);
     if (remoteResults.length > 0) {
-      const cacheResult = await upsertLocalCache(db, remoteResults);
-      logger.info(`[ORPHANET] Busca externa cacheada: resultados=${remoteResults.length}, upserts=${cacheResult.cached}`);
-      const hydratedLocalResults = await searchLocal(db, q, lang, limit);
-      const results = dedupeRecords(hydratedLocalResults.length > 0 ? hydratedLocalResults : remoteResults, limit);
-      logger.info(`[ORPHANET] Busca concluida: queryLength=${q.length}, resultados=${results.length}, origem=remote+cache`);
+      const results = dedupeRecords(remoteResults, limit);
+      logger.info(`[ORPHANET] Busca concluida: queryLength=${q.length}, resultados=${results.length}, origem=remote`);
       return res.json(results);
     }
 

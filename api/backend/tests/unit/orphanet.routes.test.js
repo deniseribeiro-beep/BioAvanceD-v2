@@ -86,7 +86,7 @@ describe('orphanet.routes', () => {
     });
   });
 
-  it('cacheia resultado externo em orphanet_diseases e terminologies', async () => {
+  it('não escreve no banco ao retornar resultado externo em orphanet', async () => {
     loadRouteWithEnv({
       ALLOW_EXTERNAL_TERMINOLOGY_SYNC: 'true',
       ORPHADATA_BASE_URL: 'https://orphadata.test',
@@ -142,13 +142,8 @@ describe('orphanet.routes', () => {
       Codigos_CID10: 'E75.2',
       OMIM: 'OMIM:301500',
     });
-    expect(orphanetBulkWrite).toHaveBeenCalledTimes(1);
-    expect(terminologiesBulkWrite).toHaveBeenCalledTimes(1);
-    expect(orphanetBulkWrite.mock.calls[0][0][0].updateOne.filter).toEqual({ code: '324' });
-    expect(terminologiesBulkWrite.mock.calls[0][0][0].updateOne.filter).toEqual({
-      sistema: 'ORPHA',
-      codigo: 'ORPHA:324',
-    });
+    expect(orphanetBulkWrite).not.toHaveBeenCalled();
+    expect(terminologiesBulkWrite).not.toHaveBeenCalled();
   });
 
   it('quando API externa falha, usa fallback local sem retornar erro', async () => {

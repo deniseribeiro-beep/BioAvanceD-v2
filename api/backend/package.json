@@ -12,11 +12,6 @@
     "create-db": "node scripts/create-db.js",
     "sync-collections": "node scripts/sync-collections.js",
     "sync:consent:neo4j": "node scripts/sync-consent-neo4j.js",
-    "seed": "npm run seed:essential",
-    "seed:essential": "node src/scripts/seedEssential.js",
-    "seed:cid": "node src/scripts/seedOrphanetCid.js",
-    "seed:disease-rules": "node src/scripts/seedDiseaseValidationRules.js",
-    "seed:atc-bootstrap": "node src/scripts/seeder.js",
     "migrate:mongo:online-local": "node scripts/migrate-mongo-online-to-local.js",
     "migrate:rcs": "node src/scripts/migrate-rcs-governance-indexes.js",
     "remediate:fhir:barcode": "node scripts/remediate-fhir-missing-barcodes.js",
@@ -27,11 +22,6 @@
     "audit:verify-witnesses": "node scripts/audit-verify-witnesses.js",
     "audit:migrate": "node scripts/audit-migrate-v2.js",
     "audit:e2e-real": "node scripts/audit-e2e-real.js",
-    "orphanet:build-initial-seed": "node scripts/orphanet-build-initial-seed-from-raw.js",
-    "orphanet:validate-initial-seed": "node scripts/orphanet-validate-initial-seed.js",
-    "orphanet:enrich-omim": "node scripts/orphanet-enrich-initial-seed-omim.js",
-    "orphanet:import-initial-seed": "node scripts/orphanet-import-initial-seed.js",
-    "orphanet:validate-imported-seed": "node scripts/orphanet-validate-imported-seed.js",
     "neo4j:canonical:rebuild": "node scripts/neo4j-canonical-rebuild.js",
     "neo4j:canonical:worker": "node src/workers/neo4jProjection.worker.js",
     "audit:frontend": "node scripts/audit-frontend-backend.js",
@@ -50,11 +40,13 @@
     "test:redis": "node scripts/test-redis-connection.js",
     "test": "vitest run",
     "test:unit": "vitest run",
-    "test:ci": "vitest run && node tests/compliance/generate-compliance-evidence.js"
+    "test:coverage": "vitest run --coverage",
+    "test:ci": "vitest run && node tests/compliance/generate-compliance-evidence.js",
+    "lint": "node scripts/lint.js",
+    "typecheck": "node scripts/lint.js"
   },
   "dependencies": {
     "@influxdata/influxdb-client": "1.35.0",
-    "@vitest/browser": "^4.0.7",
     "ajv": "8.18.0",
     "ajv-formats": "2.1.1",
     "argon2": "0.31.2",
@@ -81,7 +73,7 @@
     "neo4j-driver": "6.0.1",
     "node-cron": "^4.5.0",
     "qrcode": "1.5.4",
-    "redis": "4.7.1",
+    "redis": "^5.0.0",
     "resend": "^6.17.0",
     "socket.io": "^4.8.3",
     "socket.io-client": "4.8.1",
@@ -90,6 +82,7 @@
     "yauzl": "3.2.1"
   },
   "devDependencies": {
+    "@vitest/coverage-v8": "^4.1.10",
     "nodemon": "^3.0.2",
     "supertest": "^7.2.0",
     "vitest": "^4.0.7"

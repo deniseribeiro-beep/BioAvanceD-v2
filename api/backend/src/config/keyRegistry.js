@@ -1,5 +1,4 @@
 const crypto = require('crypto');
-const env = require('./env');
 
 const KEY_BYTES = 32;
 
@@ -11,13 +10,13 @@ function deriveKey(rawKey) {
 }
 
 function getActiveKeyId() {
-  return String(env.ENCRYPTION_KEY_ID || 'default').trim();
+  return String(process.env.ENCRYPTION_KEY_ID || 'default').trim();
 }
 
 function getKeyEntries() {
   const entries = [];
 
-  const activeKey = deriveKey(env.ENCRYPTION_KEY);
+  const activeKey = deriveKey(process.env.ENCRYPTION_KEY);
   const activeKeyId = getActiveKeyId();
   if (activeKey) {
     entries.push({ keyId: activeKeyId, key: activeKey, isActive: true });

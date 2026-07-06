@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const { readFile } = require('fs/promises');
 const env = require('../config/env');
 
 const SIGNATURE_ALGORITHM = 'ED25519';
@@ -49,7 +50,17 @@ class MerkleEnvelopeService {
   }
 
   getPrivateKeyPem() {
-    return String(env.AUDIT_MERKLE_SIGN_PRIVATE_KEY_PEM || '').trim();
+    const file = String(env.AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE || '').trim();
+    if (file) {
+      return readFile(file, 'utf8').then((content) => String(content || '').trim());
+    }
+
+    const fallbackPem = String(env.AUDIT_MERKLE_SIGN_PRIVATE_KEY_PEM || '').trim();
+    if (fallbackPem && env.NODE_ENV === 'test') {
+      return Promise.resolve(fallbackPem);
+    }
+
+    throw new Error('Audit signing key must be provided via AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE');
   }
 
   getPublicKeyPemById(keyId) {
@@ -75,8 +86,8 @@ class MerkleEnvelopeService {
     };
   }
 
-  signEnvelope(envelope) {
-    const privateKeyPem = this.getPrivateKeyPem();
+  async signEnvelope(envelope) {
+    const privateKeyPem = await this.getPrivateKeyPem();
     const keyId = this.getActiveKeyId();
     if (!privateKeyPem || !keyId) {
       throw new Error('Audit signing key is not configured');

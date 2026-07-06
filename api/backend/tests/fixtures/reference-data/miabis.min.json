@@ -1,0 +1,20 @@
+{
+  "sampleTypes": [
+    { "id": "PLASMA", "description": "Plasma", "code": "MIABIS:ST:PLASMA" },
+    { "id": "SERUM", "description": "Soro", "code": "MIABIS:ST:SERUM" },
+    { "id": "PBMC", "description": "PBMCs (Celulas Mononucleares)", "code": "MIABIS:ST:PBMC" }
+  ],
+  "sampleOrigins": [
+    { "id": "VENOUS_BLOOD", "description": "Sangue Venoso Periferico", "code": "MIABIS:SO:VENOUS_BLOOD" },
+    { "id": "CAPILLARY_BLOOD", "description": "Sangue Capilar", "code": "MIABIS:SO:CAPILLARY_BLOOD" }
+  ],
+  "extractionProtocols": [
+    { "id": "TUBE_EDTA", "description": "Tubo EDTA (Tampa Roxa)", "code": "MIABIS:EP:TUBE_EDTA" },
+    { "id": "TUBE_SERUM", "description": "Tubo Seco/Soro (Tampa Vermelha/Amarela)", "code": "MIABIS:EP:TUBE_SERUM" }
+  ],
+  "qualityDescriptions": [
+    { "id": "GOOD", "description": "Adequada / Boa Qualidade", "qualityLevel": "A" },
+    { "id": "COMPROMISED", "description": "Comprometida (Hemolise/Lipemia)", "qualityLevel": "C" },
+    { "id": "UNKNOWN", "description": "Desconhecida / Nao Avaliada", "qualityLevel": "B" }
+  ]
+}

@@ -14,7 +14,7 @@ describe('merkle-envelope.service', () => {
     env.AUDIT_MERKLE_SIGN_PUBLIC_KEYS_JSON = JSON.stringify({ 'test-key': publicPem });
   });
 
-  it('assina e valida envelope canonico v2', () => {
+  it('assina e valida envelope canonico v2', async () => {
     const envelope = merkleEnvelopeService.buildCanonicalEnvelope({
       date: '2026-07-01',
       root: 'a'.repeat(64),
@@ -22,35 +22,35 @@ describe('merkle-envelope.service', () => {
       previousAnchorHash: 'b'.repeat(64),
     });
 
-    const signed = merkleEnvelopeService.signEnvelope(envelope);
+    const signed = await merkleEnvelopeService.signEnvelope(envelope);
     const verification = merkleEnvelopeService.verifyEnvelopeSignature(signed);
 
     expect(verification.ok).toBe(true);
     expect(signed.signatureAlgorithm).toBe('ED25519');
   });
 
-  it('detecta envelope alterado', () => {
+  it('detecta envelope alterado', async () => {
     const envelope = merkleEnvelopeService.buildCanonicalEnvelope({
       date: '2026-07-01',
       root: 'c'.repeat(64),
       treeSize: 2,
       previousAnchorHash: null,
     });
-    const signed = merkleEnvelopeService.signEnvelope(envelope);
+    const signed = await merkleEnvelopeService.signEnvelope(envelope);
     signed.envelope.root = 'd'.repeat(64);
 
     const verification = merkleEnvelopeService.verifyEnvelopeSignature(signed);
     expect(verification.ok).toBe(false);
   });
 
-  it('falha para keyId desconhecido', () => {
+  it('falha para keyId desconhecido', async () => {
     const envelope = merkleEnvelopeService.buildCanonicalEnvelope({
       date: '2026-07-01',
       root: 'e'.repeat(64),
       treeSize: 1,
       previousAnchorHash: null,
     });
-    const signed = merkleEnvelopeService.signEnvelope(envelope);
+    const signed = await merkleEnvelopeService.signEnvelope(envelope);
     signed.keyId = 'missing-key';
 
     const verification = merkleEnvelopeService.verifyEnvelopeSignature(signed);

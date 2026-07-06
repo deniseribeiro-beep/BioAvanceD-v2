@@ -1,8 +1,6 @@
 const { connectDB, closeConnection } = require('../database/mongo');
 const { connectNeo4j, closeNeo4jConnection } = require('../infrastructure/database/neo4j/connection');
 const Redis = require('ioredis');
-const { runSeed } = require('./seedEssential');
-const { createFirstAdmin } = require('./createFirstAdmin');
 
 const MARKER = 'BIOAVANCED_SYNTHETIC_TEST_V1';
 
@@ -132,10 +130,6 @@ function ensureTestEnvironment(action) {
     'JWT_REFRESH_SECRET',
     'USER_ANON_SALT',
     'CONSENT_SECRET',
-    'TEST_ADMIN_NAME',
-    'TEST_ADMIN_EMAIL',
-    'TEST_ADMIN_USERNAME',
-    'TEST_ADMIN_PASSWORD',
   ];
 
   for (const key of requiredKeys) {
@@ -144,53 +138,6 @@ function ensureTestEnvironment(action) {
 
   if (errors.length > 0) {
     throw new Error(`[${action.toUpperCase()}] Unsafe test environment:\n- ${errors.join('\n- ')}`);
-  }
-}
-
-async function seedSyntheticData() {
-  ensureTestEnvironment('seed');
-  await runSeed();
-  await createFirstAdmin({
-    env: {
-      ...process.env,
-      BOOTSTRAP_ADMIN_NAME: required('TEST_ADMIN_NAME'),
-      BOOTSTRAP_ADMIN_EMAIL: required('TEST_ADMIN_EMAIL'),
-      BOOTSTRAP_ADMIN_USERNAME: required('TEST_ADMIN_USERNAME'),
-      BOOTSTRAP_ADMIN_TEMP_PASSWORD: required('TEST_ADMIN_PASSWORD'),
-    },
-  });
-
-  const db = await connectDB();
-  try {
-    const now = new Date();
-    const documents = {
-      consentTemplates: [{ syntheticKey: `${MARKER}:TCLE`, title: 'TCLE sintetico de validacao', version: 'TEST-1', content: 'Conteudo sintetico para validacao automatizada.', active: true, synthetic: true, source: MARKER, updatedAt: now }],
-      patients: [{ syntheticKey: `${MARKER}:PATIENT`, patientID: 'TEST-PATIENT-001', patientName: 'Paciente Sintetico', birthDate: '1990-01-01', documentType: 'PASSPORT', documentNumber: 'TESTPASS001', synthetic: true, source: MARKER, updatedAt: now }],
-      samples: [{ syntheticKey: `${MARKER}:SAMPLE`, sampleID: 'TEST-SAMPLE-001', barcode: 'TEST-BARCODE-001', patientID: 'TEST-PATIENT-001', sampleType: 'PLASMA', status: 'AVAILABLE', synthetic: true, source: MARKER, updatedAt: now }],
-      equipments: [{ syntheticKey: `${MARKER}:EQUIPMENT`, equipmentID: 'TEST-EQUIPMENT-001', name: 'Freezer sintetico', status: 'active', synthetic: true, source: MARKER, updatedAt: now }],
-      locations: [{ syntheticKey: `${MARKER}:LOCATION`, locationID: 'TEST-LOCATION-001', name: 'Local sintetico', synthetic: true, source: MARKER, updatedAt: now }],
-      sensors: [{ syntheticKey: `${MARKER}:SENSOR`, sensorID: 'TEST-SENSOR-001', equipmentID: 'TEST-EQUIPMENT-001', status: 'active', synthetic: true, source: MARKER, updatedAt: now }],
-      researchProjects: [{ syntheticKey: `${MARKER}:PROJECT`, projectID: 'TEST-PROJECT-001', title: 'Projeto sintetico', status: 'active', synthetic: true, source: MARKER, updatedAt: now }],
-    };
-    for (const [collectionName, entries] of Object.entries(documents)) {
-      for (const document of entries) {
-        await db.collection(collectionName).updateOne({ syntheticKey: document.syntheticKey }, { $set: document, $setOnInsert: { createdAt: now } }, { upsert: true });
-      }
-    }
-  } finally {
-    await closeConnection();
-  }
-
-  const driver = await connectNeo4j();
-  const session = driver.session({ database: process.env.NEO4J_DATABASE || 'neo4j' });
-  try {
-    await session.run(
-      'MERGE (d:Doenca_ORPHA {code: $code}) SET d.nome = $name, d.synthetic = true, d.source = $source',
-      { code: 'ORPHA:324', name: 'Doenca de Fabry', source: MARKER }
-    );
-  } finally {
-    await session.close();
-    await closeNeo4jConnection();
   }
 }
 
@@ -260,9 +207,8 @@ async function resetTestEnvironment() {
 async function main() {
   const action = process.argv[2];
   if (action === 'reset') return resetTestEnvironment();
-  if (action === 'seed') return seedSyntheticData();
   if (action === 'cleanup') return cleanupSyntheticData();
-  throw new Error('Use: testEnvironment.js reset|seed|cleanup');
+  throw new Error('Use: testEnvironment.js reset|cleanup');
 }
 
 if (require.main === module) {
@@ -272,4 +218,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { MARKER, resetTestEnvironment, seedSyntheticData, cleanupSyntheticData };
+module.exports = { MARKER, resetTestEnvironment, cleanupSyntheticData };

@@ -11,7 +11,7 @@ import InlineStorageMovementPanel from './InlineStorageMovementPanel';
 import type { Sample } from '../../types/models';
 import type { SampleWithId } from '../../hooks/samples/useSamplesPage';
 
-type TranslatorFn = (key: string) => string;
+type TranslatorFn = (key: string, fallback?: string) => string;
 
 interface SamplesPageViewProps {
   t: TranslatorFn;
