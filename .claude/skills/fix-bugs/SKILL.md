@@ -122,6 +122,16 @@ per-call basis (observed 2026-07-07) — "documented in this skill" isn't
 sufficient context for it. Don't try to route around a block; surface it
 and get an explicit go-ahead for that step, then continue.
 
+Also: a user "go ahead" authorizes only the specific blocked action named
+in the classifier's denial reason at that moment (e.g. the merge) — it
+does not carry forward to the *other* blocked steps in the same ending
+sequence (issue comment, remote branch deletion), even if they were all
+described together beforehand. Each will re-block and needs its own
+explicit go, one at a time, as it's attempted (observed 2026-07-07: "Go
+ahead" cleared the merge but the very next issue-comment attempt and the
+branch-deletion attempt both re-blocked). Don't assume a blanket
+authorization; ask again per action if the classifier denies it.
+
 Also: don't chain the plain integration-branch push together with the
 fix-branch deletion in one Bash call — a denial on the deletion half
 blocks the whole compound command, so the push doesn't happen either
