@@ -204,12 +204,12 @@ class PatientService {
     const rawClinicalUnitName = payload.clinicalUnit;
 
     const normalizedClinicalUnitId =
-      rawClinicalUnitId === null || rawClinicalUnitId === ''
+      rawClinicalUnitId === null || rawClinicalUnitId === undefined || rawClinicalUnitId === ''
         ? null
         : String(rawClinicalUnitId).trim();
 
     const normalizedClinicalUnitName =
-      rawClinicalUnitName === null || rawClinicalUnitName === ''
+      rawClinicalUnitName === null || rawClinicalUnitName === undefined || rawClinicalUnitName === ''
         ? null
         : String(rawClinicalUnitName).trim();
 
