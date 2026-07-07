@@ -1,140 +1,199 @@
-name: BioAvanceD CI/CD Pipeline
+name: BioAvanceD current-state validation
 
-# Dispara os testes sempre que houver um push ou pull request na branch 'main'
 on:
+  workflow_dispatch:
+
   push:
-    branches: [ "main" ]
+    branches:
+      - main
+
   pull_request:
-    branches: [ "main" ]
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bioavanced-validation-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  testes-automatizados:
-    # Levanta uma máquina virtual Linux novinha na nuvem do GitHub
+  current-state-validation:
+    name: Current-state validation
     runs-on: ubuntu-latest
-    services:
-      mongodb:
-        image: mongo:7
-        ports:
-          - 27017:27017
-        options: >-
-          --health-cmd "mongosh --eval 'db.adminCommand(\"ping\")'"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-      neo4j:
-        image: neo4j:5-community
-        ports:
-          - 7474:7474
-          - 7687:7687
-        env:
-          NEO4J_AUTH: neo4j/testpassword
-        options: >-
-          --health-cmd "cypher-shell -u neo4j -p testpassword 'RETURN 1'"
-          --health-interval 10s
-          --health-timeout 10s
-          --health-retries 10
-      influxdb:
-        image: influxdb:2.7
-        ports:
-          - 8086:8086
-        env:
-          DOCKER_INFLUXDB_INIT_MODE: setup
-          DOCKER_INFLUXDB_INIT_USERNAME: bioavanced
-          DOCKER_INFLUXDB_INIT_PASSWORD: bioavanced-test-password
-          DOCKER_INFLUXDB_INIT_ORG: bioavanced-test
-          DOCKER_INFLUXDB_INIT_BUCKET: bioavanced-test-bucket
-          DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: bioavanced-test-token
-        options: >-
-          --health-cmd "influx ping --host http://localhost:8086"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 10
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-    env:
-      NODE_ENV: test
-      MONGO_URI: mongodb://127.0.0.1:27017/bioavanced_test
-      MONGO_DB: bioavanced_test
-      MONGO_DB_NOVO: bioavanced_test
-      JWT_SECRET: vitest-secret-key
-      JWT_REFRESH_SECRET: vitest-refresh-secret-key
-      ENCRYPTION_KEY: vitest-encryption-key-32-characters
-      ENCRYPTION_KEY_ID: test-key-1
-      USER_ANON_SALT: vitest-user-anon-salt
-      NEO4J_URI: bolt://127.0.0.1:7687
-      NEO4J_USERNAME: neo4j
-      NEO4J_PASSWORD: testpassword
-      NEO4J_DATABASE: neo4j
-      NEO4J_REQUIRED: "false"
-      LINEAGE_MODE: fail-open
-      REDIS_URL: redis://127.0.0.1:6379
-      REDIS_HOST: 127.0.0.1
-      REDIS_PORT: "6379"
-      INFLUXDB_URL: http://127.0.0.1:8086
-      INFLUXDB_TOKEN: bioavanced-test-token
-      INFLUXDB_ORG: bioavanced-test
-      INFLUXDB_BUCKET: bioavanced-test-bucket
-      ALLOW_CLOUD_INTEGRATIONS: "false"
-      ALLOW_EXTERNAL_TERMINOLOGY_SYNC: "false"
-      ALLOW_EXTERNAL_HPO_LOOKUP: "false"
-      ALLOW_EXTERNAL_DRUG_LOOKUP: "false"
-      MQTT_ENABLED: "false"
-      RESEND_API_KEY: re_test_dummy_key
-      EMAIL_FROM: BioAvanceD Test <noreply@example.test>
-      ALERT_EMAIL_TO: alerts@example.test
+    timeout-minutes: 45
 
     steps:
-      # 1. Copia o seu código do repositório para a máquina virtual
-      - name: 📥 Baixar o código (Checkout)
+      - name: Checkout
         uses: actions/checkout@v4
 
-      # 2. Instala o Node.js
-      - name: ⚙️ Configurar Node.js
+      - name: Configure Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20' # Substitua pela versão do Node que você usa
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            api/backend/package-lock.json
+            frontend/package-lock.json
 
-      # 3. Testa o Backend (Isolado)
-      - name: 📦 Instalar dependências do Backend
+      - name: Install backend dependencies
+        run: npm --prefix api/backend ci
+
+      - name: Install frontend dependencies
+        run: npm --prefix frontend ci
+
+      - name: Validate Git diff
+        run: git diff --check
+
+      - name: Backend lint
+        run: npm --prefix api/backend run lint
+
+      - name: Backend typecheck
+        run: npm --prefix api/backend run typecheck
+
+      - name: Frontend lint
+        run: npm --prefix frontend run lint
+
+      - name: Frontend typecheck
+        run: npm --prefix frontend run typecheck
+
+      - name: Frontend build
+        run: npm --prefix frontend run build
+
+      - name: Validate Compose configuration
         run: |
-          cd api/backend
-          npm ci # ou yarn install / pnpm install
+          docker compose \
+            --env-file .env.test.example \
+            -f compose.test.yml \
+            config --quiet
 
-      - name: 🧪 Rodar Testes de Backend (Vitest)
+      - name: Remove previous validation stack
         run: |
-          cd api/backend
-          npx vitest run
+          docker compose \
+            --env-file .env.test.example \
+            -f compose.test.yml \
+            down --volumes --remove-orphans
 
-      # 4. Testa o Frontend (Isolado)
-      - name: 📦 Instalar dependências do Frontend
+      - name: Build validation stack
         run: |
-          cd frontend
-          npm ci # ou yarn install / pnpm install
+          docker compose \
+            --env-file .env.test.example \
+            -f compose.test.yml \
+            build --no-cache
 
-      - name: 🌐 Instalar Navegadores do Playwright
+      - name: Start application stack
         run: |
-          cd frontend
-          npx playwright install --with-deps
+          docker compose \
+            --env-file .env.test.example \
+            -f compose.test.yml \
+            up -d --wait \
+            mongodb-test \
+            neo4j-test \
+            redis-test \
+            mqtt-test \
+            influxdb-test \
+            smtp-test \
+            tsa-test \
+            witness-test \
+            backend-app-test \
+            worker-test \
+            frontend-app-test
 
-      - name: 🎭 Rodar Testes E2E (Playwright)
-        env:
-          PLAYWRIGHT_SKIP_GLOBAL_SETUP: "1"
+      - name: Display service status
         run: |
-          cd frontend
-          npx playwright test
+          docker compose \
+            --env-file .env.test.example \
+            -f compose.test.yml \
+            ps
 
-      # 5. Salva o relatório do Playwright caso o teste falhe
-      - name: 📊 Salvar Relatório de Erros do Playwright
-        if: always()
+      - name: Verify empty MongoDB application collections
+        run: |
+          docker compose \
+            --env-file .env.test.example \
+            -f compose.test.yml \
+            exec -T mongodb-test \
+            mongosh --quiet bioavanced_test --eval '
+              const collections = [
+                "users",
+                "patients",
+                "samples",
+                "consents",
+                "medication_dictionary",
+                "orphanet_diseases",
+                "terminologies",
+                "hpo_terms",
+                "biomarker_observations",
+                "sensors",
+                "equipment",
+                "locations",
+                "reports"
+              ];
+
+              let total = 0;
+
+              for (const name of collections) {
+                const count = db.getCollection(name).countDocuments({});
+                print(name + ": " + count);
+                total += count;
+              }
+
+              if (total !== 0) {
+                print("Application collections are not empty.");
+                quit(1);
+              }
+
+              print("All application collections are empty.");
+            '
+
+      - name: Verify empty Neo4j graph
+        run: |
+          NODE_COUNT="$(
+            docker compose \
+              --env-file .env.test.example \
+              -f compose.test.yml \
+              exec -T neo4j-test \
+              cypher-shell \
+                -u neo4j \
+                -p testpassword \
+                --format plain \
+                "MATCH (n) RETURN count(n) AS count;" \
+              | tail -n 1 \
+              | tr -d '\r'
+          )"
+
+          echo "Neo4j node count: ${NODE_COUNT}"
+          test "${NODE_COUNT}" = "0"
+
+      - name: Run backend test suite
+        run: |
+          docker compose \
+            --env-file .env.test.example \
+            -f compose.test.yml \
+            run --rm --no-deps backend-unit-runner
+
+      - name: Collect Compose logs on failure
+        if: failure()
+        continue-on-error: true
+        run: |
+          docker compose \
+            --env-file .env.test.example \
+            -f compose.test.yml \
+            logs --no-color > compose-test.log
+
+      - name: Upload failure evidence
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-report
-          path: frontend/playwright-report/
+          name: bioavanced-validation-failure
+          path: compose-test.log
+          if-no-files-found: ignore
           retention-days: 7
+
+      - name: Remove containers and isolated volumes
+        if: always()
+        run: |
+          docker compose \
+            --env-file .env.test.example \
+            -f compose.test.yml \
+            down --volumes --remove-orphans
