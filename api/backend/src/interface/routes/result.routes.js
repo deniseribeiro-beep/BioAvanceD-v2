@@ -110,7 +110,7 @@ router.get('/', authenticate, async (req, res) => {
   }
 });
 
-router.post('/upload', authenticate, requirePermission('uploadFiles'), enforceCommercialConsent({ resolveSampleId: (req) => req.body?.sampleID }), resultUpload.single('file'), async (req, res) => {
+router.post('/upload', authenticate, requirePermission('uploadFiles'), resultUpload.single('file'), enforceCommercialConsent({ resolveSampleId: (req) => req.body?.sampleID }), async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
