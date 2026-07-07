@@ -3,7 +3,6 @@ import { logger } from '../utils/logger';
 const PatientModel = require('../models/Patient');
 const SampleModel = require('../models/Sample');
 const PatientConsentModel = require('../models/PatientConsent');
-import { Driver } from 'neo4j-driver';
 import { InfluxDB, Point } from '@influxdata/influxdb-client';
 
 export interface ImportDTO {
@@ -26,7 +25,6 @@ export interface ImportResult {
 
 export class FhirImportService {
   constructor(
-    private neo4jDriver: Driver,
     private influx: InfluxDB,
     private storageAllocationService: StorageAllocationService
   ) {}
@@ -99,46 +97,7 @@ export class FhirImportService {
           );
         }
 
-        // =======================================
-        // 2. NEO4J (Grafo de Conhecimento)
-        // =======================================
-        const session = this.neo4jDriver.session();
-        try {
-          const cypher: string[] = ['MERGE (p:Patient {id: $identificador})'];
-          const params: any = { identificador: row.identificador };
-
-          if (row.nomePaciente) {
-            cypher.push('SET p.name = $nomePaciente');
-            params.nomePaciente = row.nomePaciente;
-          }
-
-          if (consentDoc) {
-            cypher.push('MERGE (c:Consent {id: $tcleId}) SET c.status = $tcleStatus, c.allowsGenetics = $aceitaGenetica, c.allowsSharing = $aceitaPartilha');
-            cypher.push('MERGE (p)-[:SIGNED]->(c)');
-            params.tcleId = consentDoc.consentId || consentDoc._id?.toString();
-            params.tcleStatus = consentDoc.status;
-            params.aceitaGenetica = consentDoc.allowsGenetics ?? false;
-            params.aceitaPartilha = consentDoc.allowsSharing ?? false;
-          }
-
-          if (sampleDoc) {
-            cypher.push('MERGE (s:Sample {id: $sampleId}) SET s.type = $tipoAmostra, s.status = $statusAmostra');
-            cypher.push('MERGE (p)-[:DONATED]->(s)');
-            
-            // Só liga a amostra ao TCLE no grafo se o consentDoc existir
-            if (consentDoc) {
-              cypher.push('MERGE (s)-[:GOVERNED_BY]->(c)');
-            }
-            
-            params.sampleId = sampleDoc._id?.toString();
-            params.tipoAmostra = row.tipoAmostra;
-            params.statusAmostra = statusAmostra;
-          }
-          
-          await session.run(cypher.join(' '), params);
-        } finally {
-          await session.close();
-        }
+        // Fluxo canônico do grafo é tratado pela outbox em serviços específicos.
 
         // =======================================
         // 3. INFLUXDB (Auditoria Ética)

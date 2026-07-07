@@ -69,10 +69,21 @@ class HL7AuditService {
     const logsCol = db.collection('logs');
     const inserted = [];
     for (const item of [...fhir, ...hl7]) {
-      const existing = await logsCol.findOne({ 'payload.sourceId': item.sampleId || item.fileId, 'action': this.LOG_TYPE });
+      const sourceId = item.sampleId != null
+        ? String(item.sampleId)
+        : item.fileId != null
+          ? String(item.fileId)
+          : null;
+
+      if (!sourceId) {
+        logger.warn('[HL7_AUDIT] Item sem sampleId/fileId ignorado para deduplicação');
+        continue;
+      }
+
+      const existing = await logsCol.findOne({ 'payload.sourceId': sourceId, action: this.LOG_TYPE });
       if (existing) continue;
 
-      const payload = { type: item.type, sourceId: item.sampleId || item.fileId };
+      const payload = { type: item.type, sourceId };
       const logDoc = {
         date: date,
         timestampISO: new Date().toISOString(),

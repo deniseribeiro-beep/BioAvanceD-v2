@@ -8,6 +8,7 @@ import {
   SAMPLE_LIFECYCLE_STATUSES,
   STORAGE_BOX_STATUSES,
   STORAGE_CONTAINER_TYPES,
+  LEGACY_SAMPLE_STATUS_LABELS,
   USER_STATUSES,
 } from './contracts';
 import './foundation.css';
@@ -212,7 +213,7 @@ function ContractsPage() {
               <div className="foundation-tags">
                 {SAMPLE_LIFECYCLE_STATUSES.map((status) => (
                   <span key={status.value} className="foundation-tag foundation-tag--soft">
-                    {status.label} / {status.legacyLabel}
+                    {status.label} / {LEGACY_SAMPLE_STATUS_LABELS[status.value]}
                   </span>
                 ))}
               </div>

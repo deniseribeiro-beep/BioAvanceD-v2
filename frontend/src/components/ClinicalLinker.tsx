@@ -15,26 +15,9 @@ const SelectComponent = SelectFallback || Select;
 const ButtonComponent = ButtonFallback || Button;
 const ToastComponent = ToastFallback || Toast;
 
-// Simulated data
-const patients = [
-  { id: '1', label: 'João da Silva - CPF: 111.***.***-11' },
-  { id: '2', label: 'Maria Oliveira - CPF: 222.***.***-22' },
-];
-
-const samplesByPatient = {
-  '1': [
-    { id: 's1', label: 'BIO-2024-001 - Sangue Periférico' },
-    { id: 's2', label: 'BIO-2024-002 - Plasma' },
-  ],
-  '2': [
-    { id: 's3', label: 'BIO-2024-003 - Soro' },
-  ],
-};
-
-const tcles = [
-  { id: 't1', label: 'TCLE Padrão Genética - v2.0' },
-  { id: 't2', label: 'TCLE Oncologia - v1.5' },
-];
+const patients: Array<{ id: string; label: string }> = [];
+const samplesByPatient: Record<string, Array<{ id: string; label: string }>> = {};
+const tcles: Array<{ id: string; label: string }> = [];
 
 const ClinicalLinker: React.FC = () => {
   const [patientId, setPatientId] = useState('');
@@ -57,13 +40,9 @@ const ClinicalLinker: React.FC = () => {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    // Simulate sending payload
     const payload = { patientId, sampleId, tcleId };
-    // Simulate API call
-    setTimeout(() => {
-      setShowToast(true);
-      setTimeout(() => setShowToast(false), 3000);
-    }, 500);
+    void payload;
+    setShowToast(false);
     // console.log('Payload enviado:', payload);
   };
 
@@ -81,6 +60,7 @@ const ClinicalLinker: React.FC = () => {
             ...patients.map((p) => ({ value: p.id, label: p.label })),
           ]}
         />
+        {patients.length === 0 && <p className="text-sm text-gray-500 mt-1">Nenhum paciente cadastrado.</p>}
       </div>
       <div className="mb-4">
         <label className="block mb-1 font-medium">Amostra</label>
@@ -96,6 +76,7 @@ const ClinicalLinker: React.FC = () => {
               : []),
           ]}
         />
+        {patientId && !samplesByPatient[patientId]?.length && <p className="text-sm text-gray-500 mt-1">Nenhuma amostra vinculada.</p>}
       </div>
       <div className="mb-4">
         <label className="block mb-1 font-medium">TCLE</label>
@@ -108,6 +89,7 @@ const ClinicalLinker: React.FC = () => {
             ...tcles.map((t) => ({ value: t.id, label: t.label })),
           ]}
         />
+        {tcles.length === 0 && <p className="text-sm text-gray-500 mt-1">Nenhum TCLE disponível.</p>}
       </div>
       <ButtonComponent type="submit" className="w-full" disabled={!patientId || !sampleId || !tcleId}
         >Gerar Vínculo e Solicitar Assinatura</ButtonComponent>

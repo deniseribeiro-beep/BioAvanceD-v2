@@ -2,7 +2,7 @@
 import React from 'react';
 import { useLanguage } from '../../../contexts/LanguageContext';
 import { z } from 'zod';
-import { AlertTriangle, ArrowLeft, ArrowRight, CheckCircle2, FlaskConical, Lock, Microscope, Pill, PlusCircle, Send, ShieldCheck, Stethoscope } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, ArrowRight, CheckCircle2, FlaskConical, Microscope, Pill, PlusCircle, Send, ShieldCheck, Stethoscope } from 'lucide-react';
 import Button from '../../../components/UI/Button';
 import Card from '../../../components/UI/Card';
 import Input from '../../../components/UI/Input';
@@ -11,8 +11,8 @@ import Modal from '../../../components/UI/Modal';
 import Textarea from '../../../components/UI/Textarea';
 // CidAsyncAutocomplete não está disponível nesta árvore; o wizard usa busca manual de CID.
 import { apiClient, notifyApiToast } from '../../../api/client';
+import { extractResponseItems } from '../../../api/response.adapters';
 import { useSemanticCascade } from '../../../hooks/useSemanticCascade';
-import Barcode from 'react-barcode';
 
 // Exemplo de uso do componente CidAsyncAutocomplete:
 // <CidAsyncAutocomplete
@@ -25,7 +25,7 @@ import { consentService } from '../../../services/api';
 import { LIMITS } from '../../../config/constants/limits.constants';
 import { VALIDATION_MESSAGES, VALIDATION_RULES } from '../../../config/constants/validation.constants';
 import { SPREC_FLUID_DICTIONARY, SPREC_SOLID_DICTIONARY } from '../../../constants/sprecDictionary';
-import { buildSampleMerkleRoot, verifySampleIntegrity } from '../../../utils/sampleMerkleIntegrity';
+import { buildSampleMerkleRoot } from '../../../utils/sampleMerkleIntegrity';
 import './ClinicalIntakeWizard.css';
 
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -46,6 +46,11 @@ const CANONICAL_PREVIEW_UNAVAILABLE = Object.freeze({
 
 function normalizeDocumentValue(value) {
   return String(value || '').trim();
+}
+
+function isCpfLikeDocument(value) {
+  const normalized = normalizeDocumentValue(value);
+  return Boolean(normalized) && /^[\d.\-\s]+$/.test(normalized);
 }
 
 function isValidCpfDocument(value) {
@@ -82,7 +87,7 @@ function isValidCpfDocument(value) {
 
 function isValidPassportDocument(value) {
   const normalized = normalizeDocumentValue(value);
-  return /^[A-Z0-9][A-Z0-9\s\-.]{4,19}$/i.test(normalized);
+  return /^\d{5,20}$/.test(normalized);
 }
 
 function isValidProntuarioDocument(value) {
@@ -97,7 +102,11 @@ function isValidCpfOrPassportDocument(value) {
     return false;
   }
 
-  return isValidCpfDocument(normalized) || isValidPassportDocument(normalized);
+  if (isCpfLikeDocument(normalized)) {
+    return isValidCpfDocument(normalized);
+  }
+
+  return isValidPassportDocument(normalized);
 }
 
 function generateAcronym(name) {
@@ -276,28 +285,6 @@ const STEP_META_BASE = [
   },
 ];
 
-const CHARLSON_DEFINITIONS = [
-  { key: 'mi', label: 'Infarto do miocárdio', weight: 1 },
-  { key: 'chf', label: 'Insuficiência cardíaca congestiva', weight: 1 },
-  { key: 'pvd', label: 'Doença vascular periférica', weight: 1 },
-  { key: 'cva', label: 'AVC / doença cerebrovascular', weight: 1 },
-  { key: 'dementia', label: 'Demência', weight: 1 },
-  { key: 'copd', label: 'Doença pulmonar crônica', weight: 1 },
-  { key: 'rheumatic', label: 'Doença do tecido conjuntivo', weight: 1 },
-  { key: 'peptic', label: 'Úlcera péptica', weight: 1 },
-  { key: 'mild_liver', label: 'Doença hepática leve', weight: 1 },
-  { key: 'diabetes', label: 'Diabetes sem complicação', weight: 1 },
-  { key: 'diabetes_complications', label: 'Diabetes com complicações', weight: 2 },
-  { key: 'hemiplegia', label: 'Hemiplegia / paraplegia', weight: 2 },
-  { key: 'ckd', label: 'Doença renal moderada ou grave', weight: 2 },
-  { key: 'malignancy', label: 'Neoplasia sólida', weight: 2 },
-  { key: 'leukemia', label: 'Leucemia', weight: 2 },
-  { key: 'lymphoma', label: 'Linfoma', weight: 2 },
-  { key: 'severe_liver', label: 'Doença hepática grave', weight: 3 },
-  { key: 'metastatic', label: 'Neoplasia metastática', weight: 6 },
-  { key: 'aids', label: 'AIDS / HIV avançado', weight: 6 },
-];
-
 const FABRY_MOCK_PHENOTYPES = [
   { hpoId: 'HP:0001066', label: 'Angioqueratoma' },
   { hpoId: 'HP:0012471', label: 'Acroparestesia' },
@@ -309,24 +296,6 @@ const FABRY_MOCK_BIOMARKERS = [
   { code: 'ALPHA_GALACTOSIDASE_A', label: 'Atividade de Alfa-galactosidase A', unit: 'µmol/hr/L', value: '' },
   { code: 'LYSO_GB3', label: 'Lyso-Gb3', unit: 'ng/mL', value: '' },
 ];
-
-function calculateCharlsonScore(selectedConditions = []) {
-  const selected = new Set((Array.isArray(selectedConditions) ? selectedConditions : []).map((item) => String(item || '').trim()));
-  return CHARLSON_DEFINITIONS.reduce((total, item) => (selected.has(item.key) ? total + item.weight : total), 0);
-}
-
-function getCharlsonRiskLevel(score) {
-  if (score >= 6) {
-    return 'veryHigh';
-  }
-  if (score >= 3) {
-    return 'moderate';
-  }
-  if (score > 0) {
-    return 'low';
-  }
-  return 'none';
-}
 
 // CORREÇÃO: Removidas as declarações de função daqui. 
 // initialState deve ser apenas um objeto com os valores iniciais.
@@ -390,7 +359,6 @@ const initialState = {
   collectionInstitution: '',
   collectionInstitutionAcronym: '',
   selectedConsentTemplateId: '',
-  charlsonConditions: [],
   diseasePhenotypes: [],
   diseaseBiomarkers: [],
   biomarkers_values: {},
@@ -463,7 +431,6 @@ function mapDictionaryOptions(items) {
 }
 
 const DIAGNOSIS_PRIMARY_LANGUAGE = 'pt';
-const DIAGNOSIS_SUPPORTED_LANGUAGES = ['pt', 'en', 'es'];
 const DIAGNOSIS_EN_MARKER = '[EN]';
 
 function getFirstText(values = []) {
@@ -631,6 +598,12 @@ function normalizeCidOption(item) {
     .find((value) => value && !/^\d+$/.test(value)) || '';
   const localizedNames = getCidLocalizedNames(item);
   const aliases = getCidAliases(item);
+  const synonyms = [
+    ...(Array.isArray(item?.sinonimos) ? item.sinonimos : []),
+    ...(Array.isArray(item?.synonyms) ? item.synonyms : []),
+  ]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean);
   const displayName = getCidDisplayTitle(item);
 
   return {
@@ -647,6 +620,7 @@ function normalizeCidOption(item) {
     omimCode,
     definition,
     aliases,
+    synonyms,
     localizedNames,
     language: String(item?.lang || item?.language || localizedLabel.language || '').trim().toLowerCase(),
     isEnglishFallback: localizedLabel.isEnglishFallback,
@@ -821,6 +795,8 @@ function buildDiagnosisSearchIndex(item) {
     item?.code,
     item?.language,
     ...(Array.isArray(item?.aliases) ? item.aliases : []),
+    ...(Array.isArray(item?.synonyms) ? item.synonyms : []),
+    ...(Array.isArray(item?.sinonimos) ? item.sinonimos : []),
     ...(Array.isArray(item?.localizedNames) ? item.localizedNames : []),
   ]
     .map((value) => String(value || '').toLowerCase().trim())
@@ -877,6 +853,7 @@ function consolidateDiagnosisCandidates(items = []) {
   (Array.isArray(items) ? items : []).forEach((item) => {
     const key = getOrphaNumeric(item?.orphaCode)
       || normalizeCidCode(item?.cidCode)
+      || normalizeOmimCode(item?.omimCode)
       || String(item?.displayName || item?.code || item?.id || '').toLowerCase().trim();
     if (!key) {
       return;
@@ -1079,7 +1056,6 @@ function createClinicalStepSchema(t, clinicalItems = []) {
     bloodPressure: z.string().trim().max(30, t('wizard.validation.bloodPressureTooLong', 'Blood pressure is too long')).optional().or(z.literal('')),
     clinicalObservations: z.string().trim().max(LIMITS.GENERIC_TEXT_MAX_LENGTH, t('wizard.validation.clinicalNotesTooLong', 'Clinical notes are too long')).optional().or(z.literal('')),
     selectedConsentTemplateId: z.string().trim().optional().or(z.literal('')),
-    charlsonConditions: z.array(z.string()).optional(),
     diseasePhenotypes: z.array(z.any()).optional(),
     diseaseBiomarkers: z.array(z.any()).optional(),
     biomarkers_values: z.record(z.string()).optional(),
@@ -1178,6 +1154,14 @@ function formatCpfInput(value) {
   return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6, 9)}-${digits.slice(9)}`;
 }
 
+function formatDocumentInput(value) {
+  return digitsOnly(value).slice(0, 20);
+}
+
+function normalizeDocumentForPayload(value) {
+  return digitsOnly(value);
+}
+
 function normalizeEmailInput(value) {
   return String(value || '').trim().toLowerCase();
 }
@@ -1271,7 +1255,7 @@ function buildQualityPreviewPayload(formData, matrixType) {
   };
 }
 
-function buildSampleIntegrityInput(formData, qualityAssessment, penaltyLog) {
+function buildSampleIntegrityInput(formData) {
   const matrixType = String(formData.sprecMatrixType || 'fluid').trim().toLowerCase() === 'solid' ? 'solid' : 'fluid';
   const dictionary = matrixType === 'solid' ? SPREC_SOLID_DICTIONARY : SPREC_FLUID_DICTIONARY;
   return {
@@ -1284,23 +1268,11 @@ function buildSampleIntegrityInput(formData, qualityAssessment, penaltyLog) {
       omimCode: String(formData.diagnosisOmimCode || '').trim(),
       cid: String(formData.diagnosisCidCode || '').trim(),
       phenotypes: Array.isArray(formData.diseasePhenotypes) ? formData.diseasePhenotypes : [],
-      charlsonComorbidities: Array.isArray(formData.charlsonConditions) ? formData.charlsonConditions : [],
       biomarkers_values: formData.biomarkers_values && typeof formData.biomarkers_values === 'object' ? formData.biomarkers_values : {},
     },
     sprec: {
       ...buildCanonicalSprecPayload(formData, matrixType, dictionary),
-      rcs_evaluation: qualityAssessment,
-      model_version: String(qualityAssessment?.model_version || 'RCS-GOV-1.0'),
-      matrix_type: String(qualityAssessment?.matrix_type || matrixType),
-      governance_status: qualityAssessment?.governance_status ?? null,
-      governance_failure_reasons: Array.isArray(qualityAssessment?.governance_failure_reasons) ? qualityAssessment.governance_failure_reasons : [],
-      p_bio: qualityAssessment?.p_bio ?? null,
-      rcs_score: qualityAssessment?.rcs_score ?? null,
-      score_based_grade: qualityAssessment?.score_based_grade || null,
-      final_grade: String(qualityAssessment?.final_grade || '').trim(),
-      grade_route: String(qualityAssessment?.grade_route || '').trim(),
-      axis_penalties: penaltyLog,
-      calculation_trace: qualityAssessment?.calculation_trace || {},
+      matrix_type: matrixType,
     },
     pharmacology_data: {
       treatment_status: String(formData.treatmentStatus || '').trim(),
@@ -1318,17 +1290,6 @@ function buildSampleIntegrityInput(formData, qualityAssessment, penaltyLog) {
   };
 }
 
-function formatHashPreview(hash) {
-  const value = String(hash || '').trim();
-  if (!value) {
-    return 'Aguardando composição dos campos para gerar a assinatura';
-  }
-  if (value.length <= 18) {
-    return `0x${value}`;
-  }
-  return `0x${value.slice(0, 10)}...${value.slice(-8)}`;
-}
-
 function buildSampleLabelCode({ date = new Date(), patientID = '', sampleType = '' }) {
   const normalizedDate = `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, '0')}${String(date.getDate()).padStart(2, '0')}`;
   const normalizedPatient = String(patientID || '').trim() || 'NOID';
@@ -1336,14 +1297,71 @@ function buildSampleLabelCode({ date = new Date(), patientID = '', sampleType = 
   return `${normalizedDate}-${normalizedPatient}-${normalizedSampleType}`;
 }
 
-function buildSubmissionPayload(formData, clinicalComorbidityItems = [], biomarkerItems = [], sampleMerkleRoot = null, penaltyLog = [], canonicalQualityAssessment = null) {
+function formatSampleLabelDate(value, fallbackDate = new Date()) {
+  const date = value ? new Date(value) : fallbackDate;
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) {
+    return fallbackDate.toLocaleDateString('pt-BR');
+  }
+
+  return date.toLocaleDateString('pt-BR');
+}
+
+function buildSampleLabelData(createdSample = {}, payload = {}, formData = {}, date = new Date()) {
+  const labelData = createdSample?.labelData && typeof createdSample.labelData === 'object' ? createdSample.labelData : {};
+  const sampleType = String(
+    labelData.sampleType
+    || createdSample.sampleType
+    || payload?.sample?.sampleType
+    || formData?.sprecSampleType
+    || ''
+  ).trim();
+  const patientID = String(
+    labelData.patientID
+    || labelData.patientCode
+    || createdSample.patientID
+    || createdSample.patientId
+    || payload?.demographic?.patientID
+    || payload?.demographic?.patientId
+    || ''
+  ).trim();
+  const fallbackCode = buildSampleLabelCode({ date, patientID, sampleType });
+  const sampleID = String(
+    labelData.sampleID
+    || labelData.sampleId
+    || createdSample.sampleID
+    || createdSample.sampleId
+    || createdSample._id
+    || ''
+  ).trim();
+  const barcode = String(labelData.barcode || createdSample.barcode || createdSample.qrCode || sampleID || fallbackCode).trim();
+  const collectionDate = labelData.collectionDate
+    || labelData.registrationDate
+    || createdSample.collectionDate
+    || createdSample.registrationDate
+    || createdSample.registerDate
+    || createdSample.createdAt
+    || payload?.sample?.registrationDate
+    || date.toISOString();
+
+  return {
+    code: barcode || sampleID || fallbackCode,
+    sampleID: sampleID || barcode || fallbackCode,
+    barcode: barcode || sampleID || fallbackCode,
+    sprecCode: String(formData.sprecCode || payload?.sample?.sprec_code || '').trim(),
+    sampleType,
+    patientID,
+    collectionDate: formatSampleLabelDate(collectionDate, date),
+  };
+}
+
+function buildSubmissionPayload(formData, clinicalComorbidityItems = [], biomarkerItems = [], sampleMerkleRoot = null) {
   const now = new Date().toISOString();
   const sprecMatrixType = String(formData.sprecMatrixType || 'fluid').trim().toLowerCase() === 'solid' ? 'solid' : 'fluid';
   const sprecDictionary = sprecMatrixType === 'solid' ? SPREC_SOLID_DICTIONARY : SPREC_FLUID_DICTIONARY;
   const canonicalSprec = buildCanonicalSprecPayload(formData, sprecMatrixType, sprecDictionary);
   const sampleUnit = getSampleQuantityUnit(formData.sprecSampleType, SPREC_FLUID_DICTIONARY.sampleType.options);
-  const qualityAssessment = canonicalQualityAssessment || CANONICAL_PREVIEW_UNAVAILABLE;
   const sprecCode = buildSprecCode(formData);
+  const patientDocument = normalizeDocumentForPayload(formData.documento);
   const diagnosis = formData.isHealthyControl ? null : {
     diagnosis_name: String(formData.diagnosisCidDescription || formData.diagnosisDefinition || '').trim() || null,
     icd_code: String(formData.diagnosisCidCode || '').trim() || null,
@@ -1414,8 +1432,6 @@ function buildSubmissionPayload(formData, clinicalComorbidityItems = [], biomark
       accumulator[field] = Boolean(formData[field]);
       return accumulator;
     }, {}),
-    charlsonConditions: Array.isArray(formData.charlsonConditions) ? formData.charlsonConditions : [],
-    charlsonScore: calculateCharlsonScore(formData.charlsonConditions),
     bloodPressure: String(formData.bloodPressure || '').trim(),
     clinicalObservations: String(formData.clinicalObservations || '').trim(),
     diseasePhenotypes: Array.isArray(formData.diseasePhenotypes) ? formData.diseasePhenotypes : [],
@@ -1445,7 +1461,8 @@ function buildSubmissionPayload(formData, clinicalComorbidityItems = [], biomark
       isHealthyControl: Boolean(formData.isHealthyControl),
       is_healthy_control: Boolean(formData.isHealthyControl),
       phone: digitsOnly(formData.phone),
-      cpf: digitsOnly(formData.cpf),
+      cpf: patientDocument,
+      documento: patientDocument,
       prontuario: String(formData.prontuario || '').trim(),
     },
     diagnosis,
@@ -1463,24 +1480,7 @@ function buildSubmissionPayload(formData, clinicalComorbidityItems = [], biomark
       barcode: undefined,
       quantity: Number(formData.quantity),
       unit: sampleUnit,
-      quality: qualityAssessment.final_grade,
-      rcs_evaluation: qualityAssessment,
-      model_version: qualityAssessment.model_version,
-      matrix_type: qualityAssessment.matrix_type || sprecMatrixType,
-      governance_status: qualityAssessment.governance_status,
-      governance_failure_reasons: qualityAssessment.governance_failure_reasons,
-      p_bio: qualityAssessment.p_bio,
-      rcs_score: qualityAssessment.rcs_score,
-      score_based_grade: qualityAssessment.score_based_grade,
-      final_grade: qualityAssessment.final_grade,
-      grade_route: qualityAssessment.grade_route,
-      axis_penalties: penaltyLog,
-      calculation_trace: qualityAssessment.calculation_trace,
-      deprecated_quality_fields: {
-        quality_score: null,
-        quality_category: null,
-        penalty_log: null,
-      },
+      matrix_type: sprecMatrixType,
       sprec_code: sprecCode || null,
       sprec_matrix_type: sprecMatrixType,
       selected_tcle: String(formData.selectedConsentTemplateId || '').trim(),
@@ -1513,14 +1513,10 @@ function buildSubmissionPayload(formData, clinicalComorbidityItems = [], biomark
     },
     integrity: {
       merkle_root: sampleMerkleRoot,
-      rcs_evaluation: qualityAssessment,
-      axis_penalties: penaltyLog,
       selected_tcle: String(formData.selectedConsentTemplateId || '').trim(),
       diagnosis_orpha_code: String(formData.diagnosisOrphaCode || '').trim(),
       diagnosis_omim_code: String(formData.diagnosisOmimCode || '').trim(),
       diagnosis_definition: String(formData.diagnosisDefinition || '').trim(),
-      charlson_conditions: Array.isArray(formData.charlsonConditions) ? formData.charlsonConditions : [],
-      charlson_score: calculateCharlsonScore(formData.charlsonConditions),
       disease_phenotypes: Array.isArray(formData.diseasePhenotypes) ? formData.diseasePhenotypes : [],
       disease_biomarkers: Array.isArray(formData.diseaseBiomarkers) ? formData.diseaseBiomarkers : [],
       biomarkers_values: formData.biomarkers_values && typeof formData.biomarkers_values === 'object' ? formData.biomarkers_values : {},
@@ -1553,7 +1549,7 @@ export default function ClinicalIntakeWizard(props) {
     dictionariesLoading = true,
     dictionariesError = '',
   } = props;
-  const { loadCascadeByDisease } = useSemanticCascade();
+  const { loadCascadeByDisease, loadingSuggest } = useSemanticCascade();
   const [activeStep, setActiveStep] = useState(0);
   const [formData, setFormData] = useState(initialState);
   const [touched, setTouched] = useState(false);
@@ -1584,11 +1580,8 @@ export default function ClinicalIntakeWizard(props) {
   });
   const [biomarkerRequestError, setBiomarkerRequestError] = useState('');
   const [sampleMerkleRoot, setSampleMerkleRoot] = useState('');
-  const [sampleIntegrityValid, setSampleIntegrityValid] = useState(true);
-  const [isSignatureChecking, setIsSignatureChecking] = useState(false);
-  const [signatureFeedback, setSignatureFeedback] = useState('');
   const [sampleLabel, setSampleLabel] = useState(null);
-  const [canonicalQualityPreview, setCanonicalQualityPreview] = useState(null);
+  const preAnalyticalUnknownBackupRef = React.useRef(null);
 
   const stepMeta = useMemo(() => ([
     {
@@ -1645,47 +1638,10 @@ export default function ClinicalIntakeWizard(props) {
   const sprecAxis7Label = useMemo(() => `${t('wizard.labels.axis', 'Axis')} 7 - ${activeSprecDictionary.longTermStorage.label}`, [activeSprecDictionary, t]);
   const quantityUnit = useMemo(() => getSampleQuantityUnit(formData.sprecSampleType, sprecSampleTypeOptions), [formData.sprecSampleType, sprecSampleTypeOptions]);
   const sprecCode = useMemo(() => buildSprecCode(formData), [formData]);
-  useEffect(() => {
-    let active = true;
-    const previewPayload = buildQualityPreviewPayload(formData, sprecMatrixType);
-
-    const loadQualityPreview = async () => {
-      try {
-        const response = await apiClient.post('/quality/preview', previewPayload, { suppressErrorToast: true });
-        const preview = response?.data?.data || null;
-        if (active) {
-          setCanonicalQualityPreview(normalizeRcsPreview(preview, sprecMatrixType));
-        }
-      } catch (_) {
-        if (active) {
-          setCanonicalQualityPreview(null);
-        }
-      }
-    };
-
-    void loadQualityPreview();
-
-    return () => {
-      active = false;
-    };
-  }, [
-    sprecMatrixType,
-    formData.sprecSampleType,
-    formData.sprecPrimaryContainer,
-    formData.sprecPreCentrifugation,
-    formData.sprecCentrifugation,
-    formData.sprecSecondCentrifugation,
-    formData.sprecPostCentrifugationDelay,
-    formData.sprecLongTermStorage,
-    formData.preAnalyticalUnknown,
-  ]);
-  const qualityAssessment = canonicalQualityPreview || CANONICAL_PREVIEW_UNAVAILABLE;
   const shouldShowProtocolAlert = useMemo(() => {
     const code = String(formData.sprecCentrifugation || '').trim().toUpperCase();
     return code === 'I' || code === 'J';
   }, [formData.sprecCentrifugation]);
-  const penaltyLog = useMemo(() => buildPenaltyLog(qualityAssessment), [qualityAssessment]);
-  const charlsonScore = useMemo(() => calculateCharlsonScore(formData.charlsonConditions), [formData.charlsonConditions]);
   const diseasePhenotypeSuggestions = useMemo(
     () => (Array.isArray(formData.diseasePhenotypes) ? formData.diseasePhenotypes : []).map(normalizeDiseasePhenotype),
     [formData.diseasePhenotypes]
@@ -1702,10 +1658,6 @@ export default function ClinicalIntakeWizard(props) {
       diagnosisQuery,
     ].some((value) => String(value || '').trim().length > 0);
   }, [formData.diagnosisCidId, formData.diagnosisCidCode, formData.diagnosisOrphaCode, diagnosisQuery]);
-  const qualityTheme = useMemo(() => getQualityTheme(qualityAssessment.final_grade, t), [qualityAssessment.final_grade, t]);
-  const qualityProgress = useMemo(() => Math.max(0, Math.min(100, Number(qualityAssessment.rcs_score || 0))), [qualityAssessment.rcs_score]);
-  const qualityPreviewLabel = buildRcsPreviewLabel(qualityAssessment, t);
-  const qualityStatusLabel = buildRcsStatusLabel(qualityAssessment, qualityTheme.label);
   const isFabryCase = useMemo(() => String(formData.diagnosisOrphaCode || '').replace(/\D/g, '') === '324', [formData.diagnosisOrphaCode]);
 
   const patientStepSchemaDynamic = useMemo(() => createPatientStepSchema(t), [t]);
@@ -1834,32 +1786,13 @@ export default function ClinicalIntakeWizard(props) {
           q: term,
           limit: 40,
         };
-        const terminologyRequest = apiClient.get('/terminologies', {
+        const terminologyResponse = await apiClient.get('/terminologies', {
           params: requestParams,
           suppressErrorToast: true,
         });
-
-        const orphanetRequests = DIAGNOSIS_SUPPORTED_LANGUAGES.map((lang) => apiClient.get('/orphanet/search', {
-          params: {
-            q: term,
-            lang,
-          },
-          suppressErrorToast: true,
-        }));
-
-        const [terminologyResponse, ...orphanetResponses] = await Promise.allSettled([terminologyRequest, ...orphanetRequests]);
-        const terminologyPayload = terminologyResponse.status === 'fulfilled'
-          ? (terminologyResponse.value?.data?.data ?? terminologyResponse.value?.data ?? [])
-          : [];
-        const orphanetPayload = orphanetResponses.flatMap((response) => {
-          if (response.status !== 'fulfilled') {
-            return [];
-          }
-          return response.value?.data?.data ?? response.value?.data ?? [];
-        });
+        const terminologyPayload = extractResponseItems(terminologyResponse);
 
         const normalized = [
-          ...(Array.isArray(orphanetPayload) ? orphanetPayload : []),
           ...(Array.isArray(terminologyPayload) ? terminologyPayload : []),
         ]
           .map((item) => normalizeCidOption(item))
@@ -1977,29 +1910,13 @@ export default function ClinicalIntakeWizard(props) {
         hasChanges = true;
       }
 
-      const nextQualityScore = String(qualityAssessment.rcs_score ?? '');
-      if (String(previous.qualityScore || '') !== nextQualityScore) {
-        next.qualityScore = nextQualityScore;
-        hasChanges = true;
-      }
-
-      if (String(previous.qualityCategory || '') !== qualityAssessment.final_grade) {
-        next.qualityCategory = qualityAssessment.final_grade;
-        hasChanges = true;
-      }
-
-      if (String(previous.quality || '') !== qualityAssessment.final_grade) {
-        next.quality = qualityAssessment.final_grade;
-        hasChanges = true;
-      }
-
       if (!hasChanges) {
         return previous;
       }
 
       return next;
     });
-  }, [formData.preAnalyticalUnknown, formData.sprecSampleType, sprecCode, qualityAssessment, sprecPreCentrifugationOptions, sprecCentrifugationOptions, sprecSecondCentrifugationOptions, sprecPostCentrifugationDelayOptions]);
+  }, [formData.preAnalyticalUnknown, formData.sprecSampleType, sprecCode, sprecPreCentrifugationOptions, sprecCentrifugationOptions, sprecSecondCentrifugationOptions, sprecPostCentrifugationDelayOptions]);
 
   useEffect(() => {
     setFormData((previous) => {
@@ -2030,21 +1947,16 @@ export default function ClinicalIntakeWizard(props) {
 
     const recalculateMerkle = async () => {
       try {
-        const integrityInput = buildSampleIntegrityInput(formData, qualityAssessment, penaltyLog);
+        const integrityInput = buildSampleIntegrityInput(formData);
         const result = await buildSampleMerkleRoot(integrityInput);
         if (!active) {
           return;
         }
 
         setSampleMerkleRoot(result?.rootHash || '');
-        const isValid = await verifySampleIntegrity(integrityInput, result?.rootHash || '');
-        if (active) {
-          setSampleIntegrityValid(Boolean(isValid));
-        }
       } catch (_) {
         if (active) {
           setSampleMerkleRoot('');
-          setSampleIntegrityValid(false);
         }
       }
     };
@@ -2056,8 +1968,6 @@ export default function ClinicalIntakeWizard(props) {
     };
   }, [
     formData,
-    qualityAssessment,
-    penaltyLog,
   ]);
 
   useEffect(() => {
@@ -2069,8 +1979,7 @@ export default function ClinicalIntakeWizard(props) {
 
       try {
         const response = await consentService.getTemplates();
-        const payload = response?.data?.data ?? response?.data ?? [];
-        const nextTemplates = Array.isArray(payload) ? payload : [];
+        const nextTemplates = extractResponseItems(response, ['templates']);
 
         if (!active) {
           return;
@@ -2144,8 +2053,49 @@ export default function ClinicalIntakeWizard(props) {
 
   const handleFieldChange = (field) => (event) => {
     const rawValue = event.target.type === 'checkbox' ? event.target.checked : event.target.value;
-    const value = field === 'bloodPressure' ? formatBloodPressureInput(rawValue) : rawValue;
+    const value = field === 'bloodPressure'
+      ? formatBloodPressureInput(rawValue)
+      : field === 'documento' || field === 'representativeCpf'
+        ? formatDocumentInput(rawValue)
+        : rawValue;
     setTouched(true);
+
+    if (field === 'preAnalyticalUnknown') {
+      setFormData((previous) => {
+        const isUnknown = Boolean(value);
+
+        if (isUnknown) {
+          preAnalyticalUnknownBackupRef.current = {
+            sprecPreCentrifugation: previous.sprecPreCentrifugation,
+            sprecCentrifugation: previous.sprecCentrifugation,
+            sprecSecondCentrifugation: previous.sprecSecondCentrifugation,
+            sprecPostCentrifugationDelay: previous.sprecPostCentrifugationDelay,
+            ischemiaTimeMinutes: previous.ischemiaTimeMinutes,
+          };
+          return {
+            ...previous,
+            preAnalyticalUnknown: true,
+          };
+        }
+
+        const restoredValues = preAnalyticalUnknownBackupRef.current || {};
+        preAnalyticalUnknownBackupRef.current = null;
+        return {
+          ...previous,
+          preAnalyticalUnknown: false,
+          sprecPreCentrifugation: restoredValues.sprecPreCentrifugation || '',
+          sprecCentrifugation: restoredValues.sprecCentrifugation || '',
+          sprecSecondCentrifugation: restoredValues.sprecSecondCentrifugation || '',
+          sprecPostCentrifugationDelay: restoredValues.sprecPostCentrifugationDelay || '',
+          ischemiaTimeMinutes: restoredValues.ischemiaTimeMinutes || '',
+          qualityScore: '',
+          qualityCategory: '',
+          quality: '',
+        };
+      });
+      return;
+    }
+
     setFormData((previous) => ({
       ...previous,
       [field]: value,
@@ -2224,14 +2174,7 @@ export default function ClinicalIntakeWizard(props) {
       .map((value) => String(value || '').trim())
       .find((value) => value && !/^\d+$/.test(value)) || '';
     const fallbackId = String(item.id || normalizedOrphaCode || normalizedCidCode || item.code || '').trim();
-    const shouldInjectFabryMock = String(orphaNumeric || '').trim() === '324'
-      || /fabry/i.test([
-        item.displayName,
-        item.description,
-        item.definition,
-        normalizedDefinition,
-        normalizedDescription,
-      ].join(' '));
+    const shouldInjectFabryMock = false;
 
     setFormData((previous) => ({
       ...previous,
@@ -2285,7 +2228,7 @@ export default function ClinicalIntakeWizard(props) {
           suppressErrorToast: true,
         });
 
-        const relationPayload = relationResponse?.data?.data ?? relationResponse?.data ?? [];
+        const relationPayload = extractResponseItems(relationResponse);
         const normalizedCandidates = Array.isArray(relationPayload) ? relationPayload.map((entry) => normalizeCidOption(entry)) : [];
         const matched = pickBestOrphaCandidate(normalizedCandidates, orphaNumeric)
           || normalizedCandidates.find((candidate) => String(candidate.code || '').includes(orphaNumeric))
@@ -2355,23 +2298,6 @@ export default function ClinicalIntakeWizard(props) {
         biomarkers_values: buildBiomarkerValuesMap(fabryBiomarkers, previous.biomarkers_values),
       }));
     }
-  };
-
-  const handleCharlsonToggle = (conditionKey) => {
-    setTouched(true);
-    setFormData((previous) => {
-      const current = new Set(Array.isArray(previous.charlsonConditions) ? previous.charlsonConditions : []);
-      if (current.has(conditionKey)) {
-        current.delete(conditionKey);
-      } else {
-        current.add(conditionKey);
-      }
-
-      return {
-        ...previous,
-        charlsonConditions: Array.from(current),
-      };
-    });
   };
 
   const handleDiseasePhenotypeToggle = (phenotype) => {
@@ -2473,7 +2399,7 @@ export default function ClinicalIntakeWizard(props) {
           return;
         }
 
-        const payload = Array.isArray(response?.data?.medications) ? response.data.medications : [];
+        const payload = extractResponseItems(response, ['medications']);
         setMedicationResults(payload);
       } catch (_) {
         if (active) {
@@ -2493,22 +2419,6 @@ export default function ClinicalIntakeWizard(props) {
       active = false;
     };
   }, [formData.treatmentStatus, formData.medicationSearchQuery, diseaseProfile]);
-
-  const handleVerifySignature = async () => {
-    setIsSignatureChecking(true);
-    setSignatureFeedback('');
-    try {
-      const integrityInput = buildSampleIntegrityInput(formData, qualityAssessment, penaltyLog);
-      const isValid = await verifySampleIntegrity(integrityInput, sampleMerkleRoot);
-      setSampleIntegrityValid(Boolean(isValid));
-      setSignatureFeedback(isValid ? t('wizard.signature.valid', 'Assinatura íntegra e consistente.') : t('wizard.signature.invalid', 'Assinatura inválida para o conteúdo atual.'));
-    } catch (_) {
-      setSampleIntegrityValid(false);
-      setSignatureFeedback(t('wizard.signature.unavailable', 'Não foi possível validar a assinatura no momento.'));
-    } finally {
-      setIsSignatureChecking(false);
-    }
-  };
 
   const handleNext = () => {
     setTouched(true);
@@ -2555,7 +2465,7 @@ export default function ClinicalIntakeWizard(props) {
     setIsSubmitting(true);
 
     try {
-      const payload = buildSubmissionPayload(formData, clinicalComorbidityDefinitions, biomarkerDefinitions, sampleMerkleRoot || null, penaltyLog, canonicalQualityPreview);
+      const payload = buildSubmissionPayload(formData, clinicalComorbidityDefinitions, biomarkerDefinitions, sampleMerkleRoot || null);
       if (patientMatchInfo?.patient?.patientID) {
         payload.demographic.patientID = String(patientMatchInfo.patient.patientID).trim();
       }
@@ -2569,27 +2479,12 @@ export default function ClinicalIntakeWizard(props) {
         throw apiError;
       }
 
-      const consentEmailSent = Boolean(response?.data?.consentEmail?.success);
-
-      if (!consentEmailSent) {
-        throw new Error(t('wizard.errors.consentEmailRequired', 'Cadastro não finalizado: envio de TCLE por e-mail não foi confirmado.'));
-      }
-
       const message = response?.data?.message || t('wizard.success.completed', 'Cadastro integrado concluído com sucesso.');
       const createdSample = response?.data?.sample || {};
-      const samplePatientID = String(createdSample?.patientID || createdSample?.patientId || payload?.demographic?.patientID || payload?.demographic?.patientId || '').trim();
-      const sampleTypeForLabel = String(createdSample?.sampleType || payload?.sample?.sampleType || formData?.sprecSampleType || '').trim();
-      const labelCode = buildSampleLabelCode({
-        date: new Date(),
-        patientID: samplePatientID,
-        sampleType: sampleTypeForLabel,
-      });
-
       setSampleLabel({
-        code: labelCode,
-        sprecCode: String(formData.sprecCode || payload?.sample?.sprec_code || '').trim(),
-        sampleType: sampleTypeForLabel,
-        patientID: samplePatientID,
+        ...buildSampleLabelData(createdSample, payload, formData, new Date()),
+        ...(response?.data?.label || {}),
+        storageLocation: response?.data?.storageLocation || createdSample?.storageLocation || null,
       });
 
       notifyApiToast({
@@ -2616,6 +2511,13 @@ export default function ClinicalIntakeWizard(props) {
       });
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const handlePrintSampleLabel = () => {
+    const sampleId = String(sampleLabel?.sampleID || sampleLabel?.code || '').trim();
+    if (typeof window !== 'undefined' && sampleId) {
+      window.open(`/samples/${encodeURIComponent(sampleId)}/label`, '_blank', 'noopener,noreferrer');
     }
   };
 
@@ -2677,7 +2579,20 @@ export default function ClinicalIntakeWizard(props) {
               onChange={handleFieldChange('email')}
               required={!formData.isDeceased}
             />
-            <Input id="document" name="document" data-testid="wizard-document" className="w-full rounded-lg px-3 py-2" label={t('wizard.fields.document', 'Documento')} helperText={t('wizard.helpers.documentCpfPassport', 'Aceita CPF válido ou passaporte.')} value={formData.documento} onChange={handleFieldChange('documento')} required />
+            <Input
+              id="document"
+              name="document"
+              data-testid="wizard-document"
+              className="w-full rounded-lg px-3 py-2"
+              label={t('wizard.fields.document', 'Documento')}
+              helperText={t('wizard.helpers.documentCpfPassport', 'Aceita CPF ou passaporte válido (somente números).')}
+              error={showPatientErrors ? getFieldError(patientValidation, 'documento') : ''}
+              value={formData.documento}
+              onChange={handleFieldChange('documento')}
+              inputMode="numeric"
+              pattern="[0-9]*"
+              required
+            />
             <Input id="recordNumber" name="recordNumber" data-testid="wizard-record-number" className="w-full rounded-lg px-3 py-2" label={t('wizard.fields.recordNumber', 'Prontuário')} helperText={t('wizard.helpers.recordNumberOptional', 'Campo opcional de texto livre.')} value={formData.prontuario} onChange={handleFieldChange('prontuario')} required={false} />
             <label className="wizard-span-2 md:col-span-2 flex items-center gap-2 text-sm font-semibold text-gray-700 mb-1.5">
               <input type="checkbox" checked={formData.isDeceased} onChange={handleFieldChange('isDeceased')} />
@@ -2693,9 +2608,11 @@ export default function ClinicalIntakeWizard(props) {
                 <Input
                   className="w-full rounded-lg px-3 py-2"
                   label={t('wizard.fields.legalDocument', 'Documento do representante legal')}
-                  helperText={t('wizard.helpers.documentCpfPassport', 'Aceita CPF válido ou passaporte.')}
+                  helperText={t('wizard.helpers.documentCpfPassport', 'Aceita CPF ou passaporte válido (somente números).')}
                   value={formData.representativeCpf}
                   onChange={handleFieldChange('representativeCpf')}
+                  inputMode="numeric"
+                  pattern="[0-9]*"
                   required
                 />
               </div>
@@ -2822,7 +2739,7 @@ export default function ClinicalIntakeWizard(props) {
               options={[{ value: '', label: t('wizard.placeholders.selectSprecLongTermStorage', 'Select long-term storage') }, ...sprecLongTermStorageOptions]}
             />
             <div className="wizard-span-2 md:col-span-2 flex items-center gap-2 text-sm font-semibold text-gray-700 mb-1.5">
-              <input type="checkbox" checked={Boolean(formData.preAnalyticalUnknown)} onChange={handleFieldChange('preAnalyticalUnknown')} />
+              <input data-testid="wizard-processing-unknown" type="checkbox" checked={Boolean(formData.preAnalyticalUnknown)} onChange={handleFieldChange('preAnalyticalUnknown')} />
               {t('wizard.labels.processingUnknown', 'Processing information unknown')}
             </div>
             {formData.preAnalyticalUnknown && (
@@ -2836,13 +2753,10 @@ export default function ClinicalIntakeWizard(props) {
                 <p className="governance-sprec-code">{sprecCode || 'PENDENTE'}</p>
                 <p className="governance-subtext">{sprecMatrixType === 'solid' ? t('wizard.matrix.solidShort', 'Matriz sólida') : t('wizard.matrix.fluidShort', 'Matriz fluida')}</p>
               </div>
-              <div className={qualityTheme.cardClass}>
-                <p className="governance-label">{t('wizard.labels.rcsScore', 'RCS-GOV')}</p>
-                <p className={qualityTheme.textClass}>{qualityPreviewLabel}</p>
-                <div className="governance-progress-track">
-                  <div className={qualityTheme.progressClass} style={{ width: `${qualityProgress}%` }} />
-                </div>
-                <p className="governance-subtext">{qualityStatusLabel}</p>
+              <div className="governance-card">
+                <p className="governance-label">{t('wizard.labels.backendGovernance', 'Governança do backend')}</p>
+                <p className="governance-sprec-code">{t('wizard.labels.afterSubmit', 'Após envio')}</p>
+                <p className="governance-subtext">{t('wizard.labels.noPreviewBeforeSubmit', 'Decisão final calculada somente depois da persistência')}</p>
               </div>
             </div>
             <div className="w-full">
@@ -2868,13 +2782,10 @@ export default function ClinicalIntakeWizard(props) {
             <p className="governance-sprec-code">{sprecCode || 'PENDENTE'}</p>
             <p className="governance-subtext">{t('wizard.labels.auditableCode', 'Código auditável pré-analítico')}</p>
           </div>
-          <div className={qualityTheme.cardClass}>
-            <p className="governance-label">{t('wizard.labels.rcsScore', 'RCS-GOV')}</p>
-            <p className={qualityTheme.textClass}>{qualityPreviewLabel}</p>
-            <div className="governance-progress-track">
-              <div className={qualityTheme.progressClass} style={{ width: `${qualityProgress}%` }} />
-            </div>
-            <p className="governance-subtext">{qualityStatusLabel}</p>
+          <div className="governance-card">
+            <p className="governance-label">{t('wizard.labels.backendGovernance', 'Governança do backend')}</p>
+            <p className="governance-sprec-code">{t('wizard.labels.afterSubmit', 'Após envio')}</p>
+            <p className="governance-subtext">{t('wizard.labels.noPreviewBeforeSubmit', 'Decisão final calculada somente depois da persistência')}</p>
           </div>
           <div className="governance-card">
             <p className="governance-label">{t('wizard.labels.clinicalIdentifiers', 'Identificadores Clínicos')}</p>
@@ -2905,6 +2816,14 @@ export default function ClinicalIntakeWizard(props) {
                 })),
               ]}
             />
+            {!consentTemplatesLoading && consentTemplates.length === 0 && (
+              <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                <p className="font-semibold">{t('wizard.status.noActiveTcle', 'Nenhum TCLE cadastrado.')}</p>
+                <a className="mt-2 inline-flex font-semibold text-emerald-700 underline" href="/admin/tcle/new?returnTo=/next/intake">
+                  {t('wizard.actions.createTcle', 'Cadastrar novo TCLE')}
+                </a>
+              </div>
+            )}
             {selectedConsentTemplate && (
               <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 panel-soft">
                 <div className="flex flex-wrap items-center gap-2">
@@ -2923,8 +2842,8 @@ export default function ClinicalIntakeWizard(props) {
           <div className="border-b border-gray-200 pb-3 mb-5 section-title-block">
             <h3 className="text-xl font-bold text-gray-800">{t('wizard.sections.clinicalOrpha', 'Informações Clínicas e ORPHA')}</h3>
           </div>
-          <div className="grid grid-cols-1 gap-6 clinical-section-stack">
-            <div className="wizard-grid grid grid-cols-1 md:grid-cols-2 gap-6 step3-diagnosis-grid">
+          <div className="grid grid-cols-1 gap-8 clinical-section-stack">
+            <div className="wizard-grid grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-5 step3-diagnosis-grid">
               <div className="wizard-span-2 md:col-span-2 relative diagnosis-search-block">
                 <label className="mb-1.5 block text-sm font-semibold text-gray-700 diagnosis-search-label">{t('wizard.labels.searchDiseaseOrpha', 'Buscar doença em Orphadata')}</label>
                 <input
@@ -2970,7 +2889,7 @@ export default function ClinicalIntakeWizard(props) {
               <div className="wizard-span-2 md:col-span-2">
                 <Textarea className="w-full rounded-lg px-3 py-2 bg-gray-100" label={t('wizard.fields.diagnosisDescription', 'Definição / descrição diagnóstica')} value={formData.diagnosisDefinition || formData.diagnosisCidDescription} onChange={handleFieldChange('diagnosisDefinition')} rows={3} readOnly placeholder={t('wizard.placeholders.selectDiseaseFill', 'Selecionar doença em Orphadata para preencher.')} />
               </div>
-              <div className="wizard-span-2 md:col-span-2 rounded-xl border border-slate-200 bg-slate-50 p-4 panel-soft">
+              <div className="wizard-span-2 md:col-span-2 rounded-xl border border-slate-200 bg-slate-50 p-5 panel-soft">
                 <div className="flex flex-wrap items-center gap-2 clinical-badges">
                   {formData.isHealthyControl && (
                     <span className="inline-flex rounded-full border border-emerald-300 bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-800 badge-pill badge-pill--success">{t('wizard.labels.healthyControl', 'Controle saudável')}</span>
@@ -2979,7 +2898,7 @@ export default function ClinicalIntakeWizard(props) {
               </div>
             </div>
 
-            <div className="clinical-subsection">
+            <div className="clinical-subsection space-y-5">
               <div className="border-b border-gray-200 pb-3 mb-1 section-title-block">
                 <h4 className="text-xl font-bold text-gray-800">{t('wizard.sections.treatmentPharmacology', 'Status de Tratamento e Farmacologia')}</h4>
               </div>
@@ -3093,23 +3012,25 @@ export default function ClinicalIntakeWizard(props) {
               )}
             </div>
 
-            <div className="wizard-grid grid grid-cols-1 md:grid-cols-2 gap-6">
-              <Input className="w-full rounded-lg px-3 py-2" label={t('wizard.fields.bloodPressure', 'Pressão arterial')} value={formData.bloodPressure} onChange={handleFieldChange('bloodPressure')} placeholder={t('wizard.placeholders.bloodPressure', 'Ex.: 120/80')} maxLength={7} />
+            <div className="wizard-grid grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-5">
+              <Input className="w-full rounded-lg px-3 py-2" label={t('wizard.fields.bloodPressure', 'Pressão arterial')} helperText={t('wizard.helpers.bloodPressureNumbersOnly', 'Aceita somente números; o campo formata como 120/80.')} value={formData.bloodPressure} onChange={handleFieldChange('bloodPressure')} placeholder={t('wizard.placeholders.bloodPressure', 'Digite apenas números, ex.: 12080')} inputMode="numeric" pattern="[0-9/]*" maxLength={7} />
               <div className="wizard-span-2 md:col-span-2">
-                <Textarea className="w-full rounded-lg px-3 py-2" label={t('wizard.fields.clinicalNotes', 'Observações clínicas')} value={formData.clinicalObservations} onChange={handleFieldChange('clinicalObservations')} rows={4} />
+                <Textarea className="w-full rounded-lg border border-slate-400 bg-white px-3 py-2 shadow-sm" label={t('wizard.fields.clinicalNotes', 'Observações clínicas')} value={formData.clinicalObservations} onChange={handleFieldChange('clinicalObservations')} rows={4} placeholder={t('wizard.placeholders.clinicalNotes', 'Registre observações clínicas relevantes para a amostra.')} />
               </div>
             </div>
 
-            <div className="clinical-subsection" data-testid="wizard-suggested-biomarkers-section">
-              <div className="border-b border-gray-200 pb-3 mb-1 section-title-block">
+            <div className="clinical-subsection space-y-4" data-testid="wizard-suggested-biomarkers-section">
+              <div className="border-b border-gray-200 pb-3 section-title-block">
                 <h4 className="text-xl font-bold text-gray-800">{t('wizard.sections.hpoPhenotypes', 'Fenótipos HPO sugeridos pela doença')}</h4>
               </div>
               {!hasSelectedDisease ? (
                 <div className="text-sm text-slate-500 suggestion-empty">{t('wizard.labels.selectDiseaseForPhenotypes', 'Selecione uma doença para carregar fenótipos HPO sugeridos.')}</div>
+              ) : loadingSuggest ? (
+                <div className="text-sm text-slate-500 suggestion-empty">{t('wizard.status.loadingPhenotypes', 'Buscando fenótipos...')}</div>
               ) : diseasePhenotypeSuggestions.length === 0 ? (
                 <div className="text-sm text-slate-500 suggestion-empty">{t('wizard.labels.noPhenotypes', 'Nenhum fenótipo sugerido para esta doença.')}</div>
               ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   {diseasePhenotypeSuggestions.map((item) => (
                     <label
                       key={item.hpoId || item.label}
@@ -3130,16 +3051,18 @@ export default function ClinicalIntakeWizard(props) {
               )}
             </div>
 
-            <div className="clinical-subsection">
-              <div className="border-b border-gray-200 pb-3 mb-1 section-title-block">
+            <div className="clinical-subsection space-y-4">
+              <div className="border-b border-gray-200 pb-3 section-title-block">
                 <h4 className="text-xl font-bold text-gray-800">{t('wizard.sections.suggestedBiomarkers', 'Biomarcadores sugeridos pela doença')}</h4>
               </div>
               {!hasSelectedDisease ? (
                 <div className="text-sm text-slate-500 suggestion-empty">{t('wizard.labels.selectDiseaseForBiomarkers', 'Selecione uma doença para carregar biomarcadores sugeridos.')}</div>
+              ) : loadingSuggest ? (
+                <div className="text-sm text-slate-500 suggestion-empty">{t('wizard.status.loadingBiomarkers', 'Buscando biomarcadores...')}</div>
               ) : diseaseBiomarkerSuggestions.length === 0 ? (
                 <div className="text-sm text-slate-500 suggestion-empty">{t('wizard.labels.noBiomarkers', 'Nenhum biomarcador sugerido para esta doença.')}</div>
               ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 biomarker-card-grid">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-5 biomarker-card-grid">
                   {diseaseBiomarkerSuggestions.map((item, index) => {
                     const biomarkerKey = getDiseaseBiomarkerKey(item);
                     const highlightFabry = isFabryCase && /alpha|alfa|galactosidase|lyso|gb3/i.test(`${item.code} ${item.label}`);
@@ -3172,36 +3095,6 @@ export default function ClinicalIntakeWizard(props) {
               )}
             </div>
 
-            <div className="clinical-subsection">
-              <div className="border-b border-gray-200 pb-3 mb-1 section-title-block">
-                <h4 className="text-xl font-bold text-gray-800">{t('wizard.sections.charlson', 'Charlson Comorbidity Index')}</h4>
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 charlson-grid">
-                {CHARLSON_DEFINITIONS.map((option) => (
-                  <label key={option.key} className="flex items-start gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 charlson-item">
-                    <input
-                      type="checkbox"
-                      className="mt-1"
-                      checked={Array.isArray(formData.charlsonConditions) && formData.charlsonConditions.includes(option.key)}
-                      onChange={() => handleCharlsonToggle(option.key)}
-                    />
-                    <span>
-                      <span className="font-semibold">{t(`wizard.charlson.${option.key}`, option.label)}</span>
-                      <span className="ml-2 text-xs text-slate-500 charlson-weight">+{option.weight}</span>
-                    </span>
-                  </label>
-                ))}
-              </div>
-              <div className="charlson-summary-card">
-                <p className="charlson-summary-label">{t('wizard.labels.charlsonResult', 'Resultado ICC (Charlson)')}</p>
-                <div className="charlson-summary-main">
-                  <span className="charlson-summary-score">{charlsonScore}</span>
-                  <span className="charlson-summary-risk">{t(`wizard.charlsonRisk.${getCharlsonRiskLevel(charlsonScore)}`, 'None')}</span>
-                </div>
-                <p className="charlson-summary-note">{t('wizard.labels.charlsonAutoUpdate', 'Score atualizado automaticamente conforme as variáveis selecionadas no índice.')}</p>
-              </div>
-            </div>
-
             <input type="hidden" value={formData.selectedConsentTemplateId} readOnly />
           </div>
         </Card>
@@ -3227,24 +3120,28 @@ export default function ClinicalIntakeWizard(props) {
         {consentTemplatesError && !/Nenhum TCLE ativo/i.test(String(consentTemplatesError || '')) && <Card className="bg-white rounded-2xl shadow-lg border border-red-100"><div className="text-sm font-semibold text-red-600">{consentTemplatesError}</div></Card>}
         {submitError && <Card className="bg-white rounded-2xl shadow-lg border border-red-100"><div className="text-sm font-semibold text-red-600">{submitError}</div></Card>}
         {sampleLabel && (
-          <Card className="sample-label-card bg-white rounded-2xl shadow-lg border border-emerald-200" data-testid="sample-label">
-            <div className="sample-label-header">
-              <h3 className="sample-label-title">{t('wizard.sampleLabel.title', 'Etiqueta de Amostra')}</h3>
-              <span className="sample-label-chip">SPREC {sampleLabel.sprecCode || 'N/A'}</span>
-            </div>
-            <div className="sample-label-body">
-              <div className="sample-label-code" data-testid="sample-label-code">{sampleLabel.code}</div>
-              <Barcode
-                value={sampleLabel.code}
-                displayValue={false}
-                height={56}
-                width={1.5}
-                margin={0}
-                background="#ffffff"
-              />
-              <div className="sample-label-meta">
-                <span>{t('wizard.sampleLabel.patient', 'Paciente')}: {sampleLabel.patientID || 'N/A'}</span>
-                <span>{t('wizard.sampleLabel.type', 'Tipo')}: {sampleLabel.sampleType || 'N/A'}</span>
+          <Card className="sample-label-card bg-white rounded-2xl shadow-lg border border-emerald-200">
+            <div data-testid="sample-label">
+              <div className="sample-label-header">
+                <h3 className="sample-label-title">{t('wizard.sampleLabel.title', 'Etiqueta de Amostra')}</h3>
+                <span className="sample-label-chip">SPREC {sampleLabel.sprecCode || 'N/A'}</span>
+              </div>
+              <div className="sample-label-body">
+                <div className="sample-label-code" data-testid="sample-label-code">{sampleLabel.code}</div>
+                <div className="sample-label-meta">
+                  <span data-testid="sample-label-sample-id">{t('wizard.sampleLabel.sampleId', 'Amostra')}: {sampleLabel.sampleID || 'N/A'}</span>
+                  <span data-testid="sample-label-type">{t('wizard.sampleLabel.type', 'Tipo')}: {sampleLabel.sampleType || 'N/A'}</span>
+                  <span data-testid="sample-label-date">{t('wizard.sampleLabel.date', 'Data')}: {sampleLabel.collectionDate || 'N/A'}</span>
+                  <span>{t('wizard.sampleLabel.location', 'Localização')}: {sampleLabel.storageLocation?.readable || sampleLabel.storageLocation?.position || 'N/A'}</span>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button type="button" variant="secondary" className="sample-label-print-button" data-testid="sample-label-print-button" onClick={handlePrintSampleLabel}>
+                    {t('wizard.sampleLabel.openApiLabel', 'Abrir página de etiqueta')}
+                  </Button>
+                  <a className="inline-flex items-center rounded-lg border border-emerald-300 px-3 py-2 text-sm font-semibold text-emerald-700" href={sampleLabel.sampleID ? `/samples/${encodeURIComponent(String(sampleLabel.sampleID))}/label` : '#'} target="_blank" rel="noreferrer">
+                    {t('wizard.sampleLabel.viewLabelPage', 'Abrir etiqueta autenticada')}
+                  </a>
+                </div>
               </div>
             </div>
           </Card>
@@ -3258,26 +3155,6 @@ export default function ClinicalIntakeWizard(props) {
         )}
 
         {renderStepContent()}
-
-        <Card className="integrity-footer-card">
-          <div className="integrity-footer-header">
-            <div>
-              <p className="integrity-footer-eyebrow">{t('wizard.integrity.eyebrow', 'Integridade Criptográfica')}</p>
-              <h4 className="integrity-footer-title">{t('wizard.integrity.title', 'Merkle Root da Amostra')}</h4>
-            </div>
-            <span className={`integrity-footer-badge ${sampleIntegrityValid ? 'is-valid' : 'is-invalid'}`}>
-              <Lock size={14} />
-              {sampleIntegrityValid ? t('wizard.integrity.valid', 'Íntegra') : t('wizard.integrity.pending', 'Pendente')}
-            </span>
-          </div>
-          <code className="integrity-footer-hash">{sampleMerkleRoot || t('wizard.integrity.hashUnavailable', 'hash não disponível')}</code>
-          <div className="integrity-footer-actions">
-            <Button className="integrity-footer-verify-btn" type="button" variant="secondary" onClick={handleVerifySignature} disabled={isSignatureChecking || !sampleMerkleRoot}>
-              {isSignatureChecking ? t('wizard.integrity.validating', 'Validando...') : t('wizard.integrity.verify', 'Validar Assinatura')}
-            </Button>
-            {signatureFeedback && <span className="integrity-footer-feedback">{signatureFeedback}</span>}
-          </div>
-        </Card>
 
         <Card className="bg-white rounded-2xl shadow-lg border border-gray-100">
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap' }}>

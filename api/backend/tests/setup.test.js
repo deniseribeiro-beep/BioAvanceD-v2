@@ -1,4 +1,4 @@
-import { beforeEach, afterEach, vi } from 'vitest';
+const { beforeEach, afterEach, vi } = require('vitest');
 
 // Export vi to globalThis so factories can access it
 globalThis.vi = vi;

@@ -1,14 +1,17 @@
+const { randomUUID } = require('crypto');
+
 function buildSamplePayload(overrides = {}) {
+  const uniqueToken = randomUUID().slice(0, 8);
   return {
-    patientID: '12345678',
-    sampleType: 'Sangue',
-    sampleOrigin: 'Coleta',
-    extractionProtocol: 'Protocolo A',
+    patientID: uniqueToken.padStart(8, '0'),
+    sampleType: `Sangue-${uniqueToken}`,
+    sampleOrigin: `Coleta-${uniqueToken}`,
+    extractionProtocol: `Protocolo-${uniqueToken}`,
     quantity: 1,
     quality: 1,
     registerDate: new Date().toISOString(),
     locationID: 101,
-    linkedProject: 'Projeto QA',
+    linkedProject: `Projeto-${uniqueToken}`,
     ...overrides,
   };
 }

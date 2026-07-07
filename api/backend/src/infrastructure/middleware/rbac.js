@@ -118,9 +118,6 @@ const permissions = {
   // RF010 - Backup
   manageBackup: [4], // Apenas Administrador (4)
 
-  // RF011 - Assistente IA
-  useAssistant: [1, 2, 3, 4], // Todos: Usuário Externo (1), Técnico (2), Coordenador (3), Administrador (4)
-
   // Gerenciar sistema
   manageSystem: [4], // Apenas Administrador (4)
   

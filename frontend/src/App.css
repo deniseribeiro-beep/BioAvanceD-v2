@@ -5,32 +5,43 @@
 }
 
 :root {
-  /* Paleta Okabe-Ito Acessível */
-  --color-primary: #0072B2;      /* Royal Blue - Menus/Cabeçalhos */
-  --color-action: #56B4E9;       /* Sky Blue - Botões de Ação */
+  /* Tokens visuais - dashboard clínico/biobanco */
+  --color-primary: #007A4D;
+  --color-primary-dark: #005C3A;
+  --color-primary-soft: #E8F6EF;
+  --color-navy: #0B1F3A;
+  --color-action: #2563EB;
   --color-success: #009E73;      /* Bluish Green - Status OK/Salvo */
-  --color-warning: #F0E442;      /* Yellow - Alertas leves */
-  --color-danger: #D55E00;       /* Vermilion - Erros/Crítico */
-  --color-text: #333333;         /* Dark Grey - Texto */
-  --color-bg: #F4F6F8;           /* Off-white Clínico - Fundo */
+  --color-warning: #F59E0B;
+  --color-danger: #EF4444;
+  --color-info: #2563EB;
+  --color-text: #0F172A;
+  --color-text-secondary: #64748B;
+  --color-bg: #F6F8FA;
   --color-surface: #FFFFFF;      /* Branco - Cards/Superfície */
-  --shadow-card: 0 2px 4px rgba(0,0,0,0.05);
+  --color-border: #E2E8F0;
+  --radius-card: 20px;
+  --radius-control: 12px;
+  --shadow-card: 0 10px 30px rgba(15, 23, 42, 0.06);
 
   /* Compatibilidade com variáveis existentes */
   --primary: var(--color-primary);
-  --secondary: #475569; /* Slate-like secundário para botões e ações neutras */
+  --primary-dark: var(--color-primary-dark);
+  --primary-soft: var(--color-primary-soft);
+  --secondary: var(--color-navy);
   --success: var(--color-success);
-  --warning: #b89c00; /* texto sobre amarelo com contraste AA */
+  --warning: var(--color-warning);
   --danger: var(--color-danger);
+  --info: var(--color-info);
   --background: var(--color-bg);
-  --bg-secondary: #E9EEF2; /* Fundo secundário sutil para ícones/ações */
+  --bg-secondary: #EEF2F6;
   --surface: var(--color-surface);
-  --border: #d8dde3;
+  --border: var(--color-border);
   --text: var(--color-text);
-  --text-secondary: #4f5964;
-  --text-light: #6b7380;
+  --text-secondary: var(--color-text-secondary);
+  --text-light: var(--color-text-secondary);
   --shadow: var(--shadow-card);
-  --shadow-md: 0 4px 6px rgba(0,0,0,0.1);
+  --shadow-md: 0 16px 38px rgba(15, 23, 42, 0.08);
 }
 
 html {
@@ -87,6 +98,7 @@ button,
 button.primary,
 .action-button.primary {
   background-color: var(--color-primary);
+  border-color: var(--color-primary);
   color: #fff;
 }
 
@@ -96,6 +108,7 @@ button.secondary,
 .header-button,
 .logout-button {
   background-color: var(--secondary);
+  border-color: var(--secondary);
   color: #fff;
 }
 
@@ -103,6 +116,7 @@ button.secondary,
 button.success,
 .action-button.success {
   background-color: var(--color-success);
+  border-color: var(--color-success);
   color: #fff;
 }
 
@@ -110,6 +124,7 @@ button.success,
 button.danger,
 .action-button.danger {
   background-color: var(--color-danger);
+  border-color: var(--color-danger);
   color: #fff;
 }
 
@@ -125,8 +140,6 @@ button:hover,
 .action-button.secondary:hover,
 .action-button.success:hover,
 .action-button.danger:hover {
-  background-color: inherit;
-  color: inherit;
   opacity: 1;
   filter: none;
 }
@@ -151,7 +164,7 @@ button:disabled,
 .btn-ghost,
 button.ghost,
 .action-button.ghost {
-  background-color: var(--bg-secondary);
+  background-color: var(--surface);
   color: var(--text);
   border: 1px solid var(--border);
 }
@@ -201,10 +214,15 @@ button.ghost,
   flex-wrap: wrap;
   width: 100%;
   min-width: 0;
+  padding: 1.25rem 1.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
 }
 
 .page-title {
-  font-size: 2rem;
+  font-size: 1.75rem;
   font-weight: 700;
   color: var(--text);
   margin: 0 0 0.5rem 0;
@@ -214,7 +232,7 @@ button.ghost,
 
 .page-subtitle {
   font-size: 1rem;
-  color: var(--text-light);
+  color: var(--text-secondary);
   margin: 0;
   word-wrap: break-word;
 }

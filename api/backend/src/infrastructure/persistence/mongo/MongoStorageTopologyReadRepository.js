@@ -1,4 +1,5 @@
 const { ObjectId } = require('mongodb');
+const { getCollection } = require('../../../utils/collectionResolver');
 
 class MongoStorageTopologyReadRepository {
   /**
@@ -191,7 +192,7 @@ class MongoStorageTopologyReadRepository {
    */
   async checkBoxIntegrity(input) {
     const storageBoxesCollection = this.db.collection('storageBoxes');
-    const samplesCollection = this.db.collection('amostras');
+    const samplesCollection = await getCollection(this.db, 'samples');
 
     const boxObjId = this.toObjectId(input.boxId);
     const box = await storageBoxesCollection.findOne({ _id: boxObjId });

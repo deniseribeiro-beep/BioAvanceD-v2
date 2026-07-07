@@ -10,11 +10,24 @@ function normalizeText(value) {
   return String(value || '').trim();
 }
 
+function escapeRegex(value) {
+  return normalizeText(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function stripKnownCodePrefix(value) {
+  return normalizeText(value).replace(/^(ORPHA|OMIM):/i, '');
+}
+
 function splitCodes(value) {
   return normalizeText(value)
     .split(/[;,|]/)
     .map((item) => normalizeText(item))
     .filter(Boolean);
+}
+
+function buildDelimitedCodeRegex(value) {
+  const normalized = normalizeText(value).replace(/^ORPHA:/i, '');
+  return normalized ? new RegExp(`(^|[;,|])\\s*${escapeRegex(normalized)}\\s*($|[;,|])`, 'i') : null;
 }
 
 function normalizeOrphaCode(value) {
@@ -33,16 +46,53 @@ function getOrphaNumeric(value) {
   return normalizeOrphaCode(value).replace(/^ORPHA:/i, '');
 }
 
+function normalizeReferenceList(value) {
+  if (Array.isArray(value)) return value;
+  if (value && typeof value === 'object') return [value];
+  return [];
+}
+
+function normalizeExternalReferences(item = {}) {
+  const refs = normalizeReferenceList(item.ExternalReference || item.externalReferences || item.externalReference);
+  const pickReference = (source) => {
+    const found = refs.find((ref) => String(ref?.Source || ref?.source || '').toUpperCase() === source);
+    return normalizeText(found?.Reference || found?.reference || found?.code || found?.id || found?.value);
+  };
+
+  return {
+    cid: normalizeText(item.Codigos_CID10 || item.cid10 || item.cid || item.icdCode || item.ICD10 || item.ICD_10 || pickReference('ICD-10')),
+    omim: normalizeOmimCode(item.OMIM || item.omim || item.omimCode || pickReference('OMIM')),
+  };
+}
+
 function buildTerminologyFromCid(doc = {}) {
-  const cidCode = normalizeText(doc.Codigos_CID10 || doc.cid10 || doc.Codigo_Tabulacao);
-  const description = normalizeText(doc.Descricao || doc.descricao || doc.namePt || doc.nameEn || doc.nameEs);
+  const cidCode = normalizeText(
+    doc.Codigos_CID10
+    || doc.cid10
+    || doc.cid
+    || doc.icdCode
+    || doc.Codigo_Tabulacao
+    || doc.relacoes?.cid10
+    || doc.relacoes?.cid
+  );
+  const description = normalizeText(
+    doc.Descricao
+    || doc.descricao
+    || doc.description
+    || doc.label
+    || doc.namePt
+    || doc.nameEn
+    || doc.nameEs
+  );
   const aliases = [
     ...(Array.isArray(doc.aliases) ? doc.aliases : []),
     ...(Array.isArray(doc.synonyms) ? doc.synonyms : []),
     ...(Array.isArray(doc.alternativeNames) ? doc.alternativeNames : []),
   ].map((item) => normalizeText(item)).filter(Boolean);
 
-  const orphaCodes = splitCodes(doc.ORPHA).map(normalizeOrphaCode).filter(Boolean);
+  const orphaCodes = splitCodes(doc.ORPHA || doc.orpha || doc.orphaCode || doc.ORPHAcode || doc.relacoes?.orpha)
+    .map(normalizeOrphaCode)
+    .filter(Boolean);
   const omimCodes = splitCodes(doc.OMIM).map(normalizeOmimCode).filter(Boolean);
 
   return orphaCodes.map((orphaCode) => ({
@@ -60,20 +110,26 @@ function buildTerminologyFromCid(doc = {}) {
     },
     ativo: doc.active !== false,
     sincronizadoEm: new Date(),
+    updatedAt: new Date(),
     lang: 'pt',
     fonte: 'local-cids-redundancy',
   }));
 }
 
 function buildTerminologyFromOrphanetDisease(doc = {}) {
-  const rawCode = normalizeText(doc.code || doc.orphaCode || doc.ORPHA);
+  const rawCode = normalizeText(doc.code || doc.orphaCode || doc.ORPHA || doc.ORPHAcode || doc.relacoes?.orpha);
   const codigo = normalizeOrphaCode(rawCode);
   if (!codigo) {
     return null;
   }
 
-  const description = normalizeText(doc.name || doc.label || doc.descricao);
-  const synonyms = Array.isArray(doc.synonyms) ? doc.synonyms.map((item) => normalizeText(item)).filter(Boolean) : [];
+  const description = normalizeText(doc.name || doc.label || doc.descricao || doc.description);
+  const synonyms = [
+    ...(Array.isArray(doc.synonyms) ? doc.synonyms : []),
+    ...(Array.isArray(doc.aliases) ? doc.aliases : []),
+  ].map((item) => normalizeText(item)).filter(Boolean);
+  const cid = normalizeText(doc.Codigos_CID10 || doc.cid10 || doc.cid || doc.icdCode || doc.relacoes?.cid10 || doc.relacoes?.cid);
+  const omim = normalizeOmimCode(doc.OMIM || doc.omim || doc.omimCode || doc.relacoes?.omim);
 
   return {
     sistema: 'ORPHA',
@@ -83,13 +139,15 @@ function buildTerminologyFromOrphanetDisease(doc = {}) {
     sinonimos: synonyms,
     aliases: synonyms,
     relacoes: {
-      cid: '',
-      omim: '',
+      cid,
+      cid10: cid,
+      omim,
       orpha: codigo,
       hpo: '',
     },
     ativo: true,
     sincronizadoEm: new Date(),
+    updatedAt: new Date(),
     lang: 'pt',
     fonte: 'local-orphanet-redundancy',
   };
@@ -104,7 +162,7 @@ async function bulkUpsertTerminologies(collection, records = []) {
   const operations = validRecords.map((item) => ({
     updateOne: {
       filter: { sistema: item.sistema, codigo: item.codigo },
-      update: { $set: item },
+      update: { $set: { ...item, updatedAt: item.updatedAt || new Date() } },
       upsert: true,
     },
   }));
@@ -118,10 +176,31 @@ async function bulkUpsertOrphanetRedundancy(db, records = []) {
     .filter((item) => String(item?.sistema || '').toUpperCase() === 'ORPHA')
     .map((item) => {
       const code = getOrphaNumeric(item.codigo || item.relacoes?.orpha || '');
+      const cid = normalizeText(item.relacoes?.cid10 || item.relacoes?.cid || item.Codigos_CID10);
+      const omim = normalizeOmimCode(item.relacoes?.omim || item.OMIM);
+      const description = normalizeText(item.descricao || item.label || item.codigo);
+      const aliases = Array.from(new Set([
+        ...(Array.isArray(item.aliases) ? item.aliases : []),
+        ...(Array.isArray(item.sinonimos) ? item.sinonimos : []),
+      ].map((alias) => normalizeText(alias)).filter(Boolean)));
       return code ? {
         code,
-        name: normalizeText(item.descricao || item.label || item.codigo),
-        synonyms: Array.isArray(item.aliases) ? item.aliases : [],
+        orphaCode: normalizeOrphaCode(code),
+        ORPHA: code,
+        ORPHAcode: code,
+        name: description,
+        label: description,
+        description,
+        Codigos_CID10: cid,
+        OMIM: omim,
+        synonyms: aliases,
+        aliases,
+        relacoes: {
+          cid,
+          cid10: cid,
+          omim,
+          orpha: normalizeOrphaCode(code),
+        },
         lang: 'pt',
         source: normalizeText(item.fonte || 'terminologies-route') || 'terminologies-route',
         updatedAt: new Date(),
@@ -146,7 +225,13 @@ async function bulkUpsertOrphanetRedundancy(db, records = []) {
 }
 
 async function hydrateFromLocalRedundancy(db, { search, sistema, limit }) {
-  const regex = new RegExp(search, 'i');
+  const regex = new RegExp(escapeRegex(search), 'i');
+  const strippedSearch = stripKnownCodePrefix(search);
+  const codeRegex = strippedSearch && strippedSearch !== normalizeText(search)
+    ? new RegExp(escapeRegex(strippedSearch), 'i')
+    : null;
+  const numericOrpha = getOrphaNumeric(search);
+  const delimitedOrphaRegex = buildDelimitedCodeRegex(search);
   const max = Math.min(Math.max(Number(limit) || 50, 1), 100);
   const records = [];
 
@@ -156,8 +241,22 @@ async function hydrateFromLocalRedundancy(db, { search, sistema, limit }) {
         { ORPHA: regex },
         { OMIM: regex },
         { Codigos_CID10: regex },
+        { Codigo_Tabulacao: regex },
+        { cid: regex },
+        { cid10: regex },
+        { icdCode: regex },
         { Descricao: regex },
+        { descricao: regex },
+        { description: regex },
+        { label: regex },
+        { namePt: regex },
+        { nameEn: regex },
+        { nameEs: regex },
         { aliases: regex },
+        { synonyms: regex },
+        { alternativeNames: regex },
+        ...(numericOrpha && delimitedOrphaRegex ? [{ ORPHA: delimitedOrphaRegex }] : []),
+        ...(codeRegex ? [{ ORPHA: codeRegex }, { OMIM: codeRegex }] : []),
       ],
     }).limit(max).toArray();
 
@@ -169,8 +268,22 @@ async function hydrateFromLocalRedundancy(db, { search, sistema, limit }) {
       const orphanetDocs = await db.collection('orphanet_diseases').find({
         $or: [
           { code: regex },
+          { orphaCode: regex },
+          { ORPHA: regex },
+          { ORPHAcode: regex },
           { name: regex },
+          { label: regex },
+          { description: regex },
           { synonyms: regex },
+          { aliases: regex },
+          { Codigos_CID10: regex },
+          { OMIM: regex },
+          { 'relacoes.cid': regex },
+          { 'relacoes.cid10': regex },
+          { 'relacoes.omim': regex },
+          { 'relacoes.orpha': regex },
+          ...(codeRegex ? [{ code: codeRegex }, { ORPHA: codeRegex }, { ORPHAcode: codeRegex }, { OMIM: codeRegex }, { 'relacoes.omim': codeRegex }, { 'relacoes.orpha': codeRegex }] : []),
+          ...(numericOrpha ? [{ code: numericOrpha }, { orphaCode: normalizeOrphaCode(numericOrpha) }] : []),
         ],
       }).limit(max).toArray();
 
@@ -227,9 +340,7 @@ function normalizeOrphaApiResult(item = {}) {
   }
 
   const preferredTerm = normalizeText(item['Preferred term'] || item.preferredTerm || item.label || item.descricao || item.name);
-  const extRefs = Array.isArray(item.ExternalReference) ? item.ExternalReference : [];
-  const icd10 = normalizeText(extRefs.find((ref) => String(ref?.Source || '').toUpperCase() === 'ICD-10')?.Reference);
-  const omim = normalizeText(extRefs.find((ref) => String(ref?.Source || '').toUpperCase() === 'OMIM')?.Reference);
+  const externalRefs = normalizeExternalReferences(item);
   const synonymValues = Array.isArray(item.Synonym)
     ? item.Synonym.map((entry) => normalizeText(entry?.label || entry?.Label || entry?._ || entry)).filter(Boolean)
     : [];
@@ -242,16 +353,25 @@ function normalizeOrphaApiResult(item = {}) {
     sinonimos: synonymValues,
     aliases: synonymValues,
     relacoes: {
-      cid: icd10,
+      cid: externalRefs.cid,
+      cid10: externalRefs.cid,
       hpo: '',
-      omim: normalizeOmimCode(omim),
+      omim: externalRefs.omim,
       orpha,
     },
     ativo: true,
     sincronizadoEm: new Date(),
     lang: 'en',
     fonte: 'orphadata-live',
+    updatedAt: new Date(),
   };
+}
+
+function extractOrphadataResults(payload) {
+  const data = payload?.data?.results ?? payload?.results ?? payload?.data ?? payload;
+  if (Array.isArray(data)) return data;
+  if (data && typeof data === 'object') return [data];
+  return [];
 }
 
 async function hydrateFromOrphadata(search, limit) {
@@ -280,12 +400,7 @@ async function hydrateFromOrphadata(search, limit) {
   for (const url of requests) {
     try {
       const payload = await fetchJsonWithTimeout(url);
-      const data = payload?.data?.results;
-      if (Array.isArray(data)) {
-        collected.push(...data);
-      } else if (data && typeof data === 'object') {
-        collected.push(data);
-      }
+      collected.push(...extractOrphadataResults(payload));
     } catch (error) {
       logger.warn(`Falha no fallback Orphadata (${url}): ${error.message}`);
     }
@@ -339,16 +454,26 @@ router.get('/', async (req, res) => {
     }
 
     if (search) {
+      const searchRegex = new RegExp(escapeRegex(search), 'i');
+      const strippedSearch = stripKnownCodePrefix(search);
+      const codeRegex = strippedSearch && strippedSearch !== search
+        ? new RegExp(escapeRegex(strippedSearch), 'i')
+        : null;
       filter.$or = [
-        { codigo: new RegExp(search, 'i') },
-        { descricao: new RegExp(search, 'i') },
-        { label: new RegExp(search, 'i') },
-        { sinonimos: new RegExp(search, 'i') },
-        { aliases: new RegExp(search, 'i') },
-        { 'relacoes.cid': new RegExp(search, 'i') },
-        { 'relacoes.cid10': new RegExp(search, 'i') },
-        { 'relacoes.orpha': new RegExp(search, 'i') },
-        { 'relacoes.omim': new RegExp(search, 'i') },
+        { codigo: searchRegex },
+        { descricao: searchRegex },
+        { label: searchRegex },
+        { sinonimos: searchRegex },
+        { aliases: searchRegex },
+        { 'relacoes.cid': searchRegex },
+        { 'relacoes.cid10': searchRegex },
+        { 'relacoes.orpha': searchRegex },
+        { 'relacoes.omim': searchRegex },
+        ...(codeRegex ? [
+          { codigo: codeRegex },
+          { 'relacoes.orpha': codeRegex },
+          { 'relacoes.omim': codeRegex },
+        ] : []),
       ];
     }
 

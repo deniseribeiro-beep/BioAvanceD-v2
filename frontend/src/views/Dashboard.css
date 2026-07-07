@@ -3,33 +3,30 @@
 	width: 100%;
 	max-width: 1360px;
 	margin: 0 auto;
-	padding: 1rem;
+	padding: 0;
 	display: grid;
 	gap: 1rem;
-	background:
-	  radial-gradient(circle at top left, rgba(15, 118, 110, 0.08), transparent 28%),
-	  radial-gradient(circle at top right, rgba(37, 99, 235, 0.06), transparent 24%);
 }
 
 .dashboard-bento .page-header {
-	padding: 1rem 1.15rem;
-	border-radius: 1.4rem;
-	border: 1px solid rgba(15, 23, 42, 0.08);
-	background: linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(242, 250, 248, 0.92));
-	box-shadow: 0 18px 42px rgba(15, 23, 42, 0.06);
+	padding: 1.25rem 1.5rem;
+	border-radius: var(--radius-card);
+	border: 1px solid var(--border);
+	background: var(--surface);
+	box-shadow: var(--shadow-card);
 }
 
 .dashboard-bento .page-title {
 	margin: 0;
-	font-size: clamp(1.8rem, 2.7vw, 2.6rem);
-	letter-spacing: -0.04em;
-	color: #0f172a;
+	font-size: 1.75rem;
+	letter-spacing: 0;
+	color: var(--color-navy);
 }
 
 .dashboard-bento .page-subtitle {
 	margin: 0.35rem 0 0;
 	max-width: 68ch;
-	color: rgba(15, 23, 42, 0.72);
+	color: var(--text-secondary);
 	line-height: 1.6;
 }
 
@@ -42,11 +39,11 @@
 .kpi-card {
 	position: relative;
 	overflow: hidden;
-	border: 1px solid rgba(15, 23, 42, 0.08);
-	border-radius: 1.1rem;
-	background: rgba(255, 255, 255, 0.9);
-	box-shadow: 0 18px 38px rgba(15, 23, 42, 0.06);
-	padding: 1rem;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-card);
+	background: var(--surface);
+	box-shadow: var(--shadow-card);
+	padding: 1.1rem;
 	display: flex;
 	align-items: center;
 	gap: 0.9rem;
@@ -54,22 +51,11 @@
 	transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
 }
 
-.kpi-card::after {
-	content: '';
-	position: absolute;
-	inset: auto -24px -24px auto;
-	width: 120px;
-	height: 120px;
-	border-radius: 50%;
-	background: radial-gradient(circle, rgba(15, 118, 110, 0.09), transparent 66%);
-	pointer-events: none;
-}
-
 .kpi-card:hover,
 .kpi-card.is-clickable:focus-visible {
 	transform: translateY(-2px);
-	border-color: rgba(15, 118, 110, 0.24);
-	box-shadow: 0 22px 50px rgba(15, 23, 42, 0.09);
+	border-color: rgba(0, 122, 77, 0.22);
+	box-shadow: 0 16px 38px rgba(15, 23, 42, 0.08);
 	outline: none;
 }
 
@@ -79,7 +65,7 @@
 
 .kpi-card.alert {
 	border-color: rgba(239, 68, 68, 0.28);
-	background: linear-gradient(180deg, rgba(255, 245, 245, 0.96), rgba(255, 255, 255, 0.96));
+	background: var(--surface);
 }
 
 .kpi-icon {
@@ -91,27 +77,27 @@
 	justify-content: center;
 	color: #fff;
 	flex-shrink: 0;
-	box-shadow: 0 14px 24px rgba(15, 23, 42, 0.12);
+	box-shadow: 0 12px 22px rgba(15, 23, 42, 0.10);
 }
 
 .kpi-icon--primary {
-	background: linear-gradient(135deg, #0f766e, #14b8a6);
+	background: var(--primary);
 }
 
 .kpi-icon--success {
-	background: linear-gradient(135deg, #16a34a, #22c55e);
+	background: var(--success);
 }
 
 .kpi-icon--secondary {
-	background: linear-gradient(135deg, #334155, #475569);
+	background: var(--color-navy);
 }
 
 .kpi-icon--action {
-	background: linear-gradient(135deg, #2563eb, #38bdf8);
+	background: var(--info);
 }
 
 .kpi-icon--danger {
-	background: linear-gradient(135deg, #dc2626, #f97316);
+	background: var(--danger);
 }
 
 .kpi-info {
@@ -124,17 +110,17 @@
 
 .kpi-title {
 	font-size: 0.82rem;
-	color: rgba(15, 23, 42, 0.65);
+	color: var(--text-secondary);
 	margin: 0;
 	text-transform: uppercase;
-	letter-spacing: 0.06em;
+	letter-spacing: 0.04em;
 }
 
 .kpi-value {
 	font-size: 1.65rem;
 	font-weight: 800;
 	line-height: 1.1;
-	color: #0f172a;
+	color: var(--text);
 	margin: 0.25rem 0 0;
 }
 
@@ -147,10 +133,10 @@
 
 .temperature-card,
 .side-card {
-	border: 1px solid rgba(15, 23, 42, 0.08);
-	border-radius: 1.1rem;
-	background: rgba(255, 255, 255, 0.92);
-	box-shadow: 0 18px 36px rgba(15, 23, 42, 0.06);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-card);
+	background: var(--surface);
+	box-shadow: var(--shadow-card);
 }
 
 .temperature-card {
@@ -164,19 +150,19 @@
 .temperature-card-title {
 	font-size: 1.35rem;
 	margin: 0;
-	color: #0f172a;
+	color: var(--color-navy);
 }
 
 .temperature-card-subtitle {
 	margin: 0.35rem 0 0;
-	color: rgba(15, 23, 42, 0.68);
+	color: var(--text-secondary);
 }
 
 .temperature-chart-slot {
 	min-height: 240px;
-	border: 1px dashed rgba(15, 118, 110, 0.22);
-	border-radius: 0.95rem;
-	background: linear-gradient(180deg, rgba(248, 250, 252, 0.96), rgba(236, 253, 245, 0.68));
+	border: 1px solid var(--border);
+	border-radius: 16px;
+	background: #f8fafc;
 	overflow: hidden;
 }
 
@@ -204,7 +190,7 @@
 	align-items: center;
 	gap: 0.45rem;
 	font-size: 0.82rem;
-	color: rgba(15, 23, 42, 0.72);
+	color: var(--text-secondary);
 }
 
 .temperature-chart-legend__swatch {
@@ -226,12 +212,12 @@
 .side-card-title {
 	margin: 0 0 0.35rem;
 	font-size: 1.02rem;
-	color: #0f172a;
+	color: var(--color-navy);
 }
 
 .side-card-text {
 	margin: 0;
-	color: rgba(15, 23, 42, 0.68);
+	color: var(--text-secondary);
 	line-height: 1.55;
 }
 
@@ -247,15 +233,15 @@
 	gap: 0.65rem;
 	padding: 0.8rem 0.85rem;
 	border-radius: 0.9rem;
-	border: 1px solid rgba(239, 68, 68, 0.15);
-	background: linear-gradient(180deg, rgba(255, 247, 247, 0.96), rgba(255, 255, 255, 0.96));
-	box-shadow: 0 10px 24px rgba(15, 23, 42, 0.04);
+	border: 1px solid rgba(239, 68, 68, 0.22);
+	background: #fff7f7;
+	box-shadow: none;
 }
 
 .alert-item-icon {
 	flex-shrink: 0;
 	margin-top: 0.15rem;
-	color: #dc2626;
+	color: var(--danger);
 }
 
 .alert-item-text {
@@ -275,9 +261,9 @@
 }
 
 .consent-queue-metrics > div {
-	background: linear-gradient(180deg, rgba(248, 250, 252, 0.96), rgba(255, 255, 255, 0.96));
+	background: #f8fafc;
 	border-radius: 0.9rem;
-	border: 1px solid rgba(15, 23, 42, 0.08);
+	border: 1px solid var(--border);
 	padding: 0.75rem;
 	display: flex;
 	flex-direction: column;
@@ -286,14 +272,14 @@
 
 .consent-queue-label {
 	font-size: 0.78rem;
-	color: rgba(15, 23, 42, 0.62);
+	color: var(--text-secondary);
 	text-transform: uppercase;
 	letter-spacing: 0.06em;
 }
 
 .consent-queue-metrics strong {
 	font-size: 1.2rem;
-	color: #0f172a;
+	color: var(--text);
 }
 
 @media (max-width: 1024px) {
@@ -308,7 +294,7 @@
 
 @media (max-width: 768px) {
 	.dashboard-bento {
-		padding: 0.75rem;
+		padding: 0;
 	}
 
 	.kpi-grid {

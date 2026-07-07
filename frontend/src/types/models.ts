@@ -93,42 +93,10 @@ export interface Patient {
   consentTokenExpiresAt?: Date | string | null;
   consentNotifiedAt?: Date | string | null;
   consentAcceptedAt?: Date | string | null;
-  biomarkerXai?: BiomarkerXai | null;
   sampleList?: Sample[] | string[];
   linkedProject?: string;
   createdAt?: Date | string;
   updatedAt?: Date | string;
-}
-
-export interface BiomarkerXaiEvidence {
-  feature: string;
-  value: number | null;
-  unit: string;
-  direction: string;
-  ruleApplied: string;
-  severity: 'low' | 'medium' | 'high';
-  rationale: string;
-}
-
-export interface BiomarkerXai {
-  version: string;
-  generatedAt: Date | string;
-  confidence: number;
-  modelType: string;
-  isClinicalDiagnosis: boolean;
-  disclaimer: string;
-  summary: string;
-  recommendation: string;
-  evidence: BiomarkerXaiEvidence[];
-  governance?: {
-    owner?: string;
-    clinicalApprover?: string;
-    reviewCadenceDays?: number;
-    lastApprovedAt?: Date | string | null;
-    nextReviewDueAt?: Date | string | null;
-    thresholds?: Record<string, unknown>;
-    source?: string;
-  };
 }
 
 export interface CidEntry {
@@ -173,6 +141,7 @@ export interface RcsEvaluation {
   matrix_type: 'fluid' | 'solid' | string;
   governance_status: 0 | 1 | number | null;
   governance_failure_reasons: string[];
+  governance_rule_codes?: string[];
   p_bio: number | null;
   rcs_score: number | null;
   score_based_grade: 'A' | 'B' | 'C' | 'D' | 'E' | string | null;
@@ -198,6 +167,7 @@ export interface Sample {
   matrix_type?: 'fluid' | 'solid' | string;
   governance_status?: 0 | 1 | number | null;
   governance_failure_reasons?: string[];
+  governance_rule_codes?: string[];
   p_bio?: number | null;
   rcs_score?: number | null;
   score_based_grade?: 'A' | 'B' | 'C' | 'D' | 'E' | string | null;
@@ -210,6 +180,13 @@ export interface Sample {
   quality_category?: 'A' | 'B' | 'C' | 'D' | 'E' | '' | string;
   merkle_root?: string | null;
   release_status?: 'AVAILABLE' | 'BLOCKED' | 'QUARANTINE' | string;
+  consentStatus?: 'PENDING' | 'SIGNED' | 'EXTERNAL_ATTACHED' | 'WAIVED_TRANSFER' | 'NOT_REQUIRED' | string;
+  quarantineStatus?: 'QUARANTINED' | 'RELEASED' | string;
+  quarantineReason?: 'CONSENT_PENDING' | 'EXTERNAL_DOCUMENT_REQUIRED' | 'TRANSFER_REVIEW_REQUIRED' | null | string;
+  availabilityStatus?: 'BLOCKED' | 'AVAILABLE' | 'Disponível' | 'Parcialmente Disponível' | 'Indisponível' | string;
+  importBatchId?: string | null;
+  importedAt?: Date | string | null;
+  importedBy?: string | null;
   clinical_data?: {
     orphaCode?: string | null;
     omimCode?: string | null;
@@ -247,9 +224,8 @@ export interface Sample {
   volumeCurrent?: number; // Volume atual
   checked?: boolean; // Flag opcional para seleção em UI (fallback a arrays de IDs)
   // Status de disponibilidade
-  availabilityStatus?: 'Disponível' | 'Parcialmente Disponível' | 'Indisponível';
   currentStatus?: 'Available' | 'PartiallyWithdrawn' | 'TotallyWithdrawn' | 'Withdrawn' | 'Expired' | 'Destroyed' | 'Unusable';
-  status?: 'AVAILABLE' | 'PARTIAL' | 'DEPLETED' | 'UNAVAILABLE';
+  status?: 'AVAILABLE' | 'QUARANTINED' | 'PARTIAL' | 'DEPLETED' | 'UNAVAILABLE';
   // Campos de retirada
   withdrawalDate?: Date | string;
   withdrawalType?: 'Parcial' | 'Total';
@@ -344,6 +320,17 @@ export interface ConsentTemplate {
   granularPermissions?: ConsentPolicyPermission[];
   validFrom?: Date | string;
   validTo?: Date | string;
+  validUntil?: Date | string;
+  validityDate?: Date | string;
+  expirationDate?: Date | string;
+  expiresAt?: Date | string;
+  validade?: Date | string;
+  vigencia?: {
+    validTo?: Date | string;
+    validUntil?: Date | string;
+    endDate?: Date | string;
+    fim?: Date | string;
+  };
   createdAt?: Date | string;
 }
 
@@ -355,7 +342,18 @@ export interface ConsentPolicy {
   active: boolean;
   htmlContent: string;
   validFrom: Date | string;
-  validTo: Date | string;
+  validTo?: Date | string;
+  validUntil?: Date | string;
+  validityDate?: Date | string;
+  expirationDate?: Date | string;
+  expiresAt?: Date | string;
+  validade?: Date | string;
+  vigencia?: {
+    validTo?: Date | string;
+    validUntil?: Date | string;
+    endDate?: Date | string;
+    fim?: Date | string;
+  };
   granularPermissions: ConsentPolicyPermission[];
   revisionType?: 'create' | 'update';
   previousPolicyId?: string | null;
@@ -422,6 +420,7 @@ export interface ClinicalUnit {
 
 export interface User {
   _id?: string; // MongoDB ID
+  userID?: string;
   id: number;
   name: string;
   email: string;
@@ -574,6 +573,7 @@ export interface Sensor {
 export interface Policy {
   _id?: string; // MongoDB ID
   policyID: number;
+  policyName?: string;
   minThreshold: number;
   maxThreshold: number;
   targetTemperature: number;

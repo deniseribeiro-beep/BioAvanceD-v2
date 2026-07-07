@@ -1,9 +1,9 @@
-const fluidCatalogSeed = require('../seeders/data/rcs-sprec-fluid-catalog.RCS-GOV-1.0.json');
-const solidCatalogSeed = require('../seeders/data/rcs-sprec-solid-catalog.RCS-GOV-1.0.json');
-const severitySeed = require('../seeders/data/rcs-severity-mapping.RCS-GOV-1.0.json');
-const weightsSeed = require('../seeders/data/rcs-axis-weights.RCS-GOV-1.0.json');
-const thresholdsSeed = require('../seeders/data/rcs-grade-thresholds.RCS-GOV-1.0.json');
-const governanceSeed = require('../seeders/data/rcs-governance-rules.RCS-GOV-1.0.json');
+const fluidCatalogSeed = require('../reference-data/rcs-sprec-fluid-catalog.RCS-GOV-1.0.json');
+const solidCatalogSeed = require('../reference-data/rcs-sprec-solid-catalog.RCS-GOV-1.0.json');
+const severitySeed = require('../reference-data/rcs-severity-mapping.RCS-GOV-1.0.json');
+const weightsSeed = require('../reference-data/rcs-axis-weights.RCS-GOV-1.0.json');
+const thresholdsSeed = require('../reference-data/rcs-grade-thresholds.RCS-GOV-1.0.json');
+const governanceSeed = require('../reference-data/rcs-governance-rules.RCS-GOV-1.0.json');
 
 const MODEL_CODE = 'RCS-GOV-1.0';
 const SPREC_VERSION = 'SPREC-2.0';
@@ -46,4 +46,28 @@ const referenceData = Object.freeze({
   }))),
 });
 
-module.exports = referenceData;
+function buildRcsCatalogDocuments({ model_code = MODEL_CODE, sprec_version = SPREC_VERSION, matrix_type, catalog = [] } = {}) {
+  return catalog.map((item) => ({
+    model_code,
+    sprec_version,
+    matrix_type,
+    ...item,
+  }));
+}
+
+async function upsertCollection(collection, keys, docs) {
+  const operations = (Array.isArray(docs) ? docs : []).map((doc) => ({
+    updateOne: {
+      filter: Object.fromEntries(keys.map((key) => [key, doc[key]])),
+      update: { $setOnInsert: { ...doc } },
+      upsert: true,
+    },
+  }));
+  if (operations.length === 0) return { modifiedCount: 0, upsertedCount: 0 };
+  return collection.bulkWrite(operations, { ordered: false });
+}
+
+module.exports = Object.assign({}, referenceData, {
+  buildRcsCatalogDocuments,
+  upsertCollection,
+});

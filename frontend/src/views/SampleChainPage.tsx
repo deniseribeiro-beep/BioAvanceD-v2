@@ -25,7 +25,7 @@ export default function SampleChainPage() {
           <Button variant="primary" onClick={() => navigate('/samples/custody-reports')}>
             {t('navigation.custodyReports', 'Relatórios de Custódia')}
           </Button>
-          <Button variant="dark" onClick={() => navigate('/samples/withdrawal-return')}>
+          <Button variant="secondary" onClick={() => navigate('/samples/withdrawal-return')}>
             {t('samples.withdrawalReturn', 'Ir para Retirada/Devolução')}
           </Button>
         </div>

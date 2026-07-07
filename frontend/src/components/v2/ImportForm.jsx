@@ -2,8 +2,9 @@ import { useMemo, useState } from 'react';
 import { z } from 'zod';
 import { Info } from 'lucide-react';
 import Button from '../UI/Button';
-import { uploadBatch } from '../../api/import.service';
+import { stageFhirBundle, uploadBatch } from '../../api/import.service';
 import { IMPORT_FILE_RULES, VALIDATION_MESSAGES } from '../../config/constants/validation.constants';
+import { convertExcelFileToFhirBundle, downloadFhirExcelTemplate } from '../../utils/fhirExcelImport';
 import BatchProgressViewer from './BatchProgressViewer';
 
 const fileSchema = z
@@ -28,6 +29,13 @@ export default function ImportForm({ onSuccess, onError, className = '' }) {
   const [touched, setTouched] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [activeJob, setActiveJob] = useState(null);
+  const [excelFile, setExcelFile] = useState(null);
+  const [jsonFile, setJsonFile] = useState(null);
+  const [convertedBundle, setConvertedBundle] = useState(null);
+  const [fhirPreview, setFhirPreview] = useState('');
+  const [fhirStatus, setFhirStatus] = useState('');
+  const [fhirError, setFhirError] = useState('');
+  const [fhirBusy, setFhirBusy] = useState(false);
 
   const validation = useMemo(() => formSchema.safeParse({ file }), [file]);
   const isValid = validation.success;
@@ -72,6 +80,76 @@ export default function ImportForm({ onSuccess, onError, className = '' }) {
     }
   };
 
+  const downloadJsonPreview = (bundle) => {
+    const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/fhir+json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'importacao-fhir-bundle.json';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleExcelConversion = async () => {
+    setFhirError('');
+    setFhirStatus('');
+
+    if (!excelFile) {
+      setFhirError('Selecione um arquivo Excel preenchido com o modelo antes de converter.');
+      return;
+    }
+
+    setFhirBusy(true);
+    try {
+      const bundle = await convertExcelFileToFhirBundle(excelFile);
+      setConvertedBundle(bundle);
+      setFhirPreview(JSON.stringify(bundle, null, 2));
+      setFhirStatus('Excel convertido para JSON FHIR. Revise o preview antes de importar.');
+      downloadJsonPreview(bundle);
+    } catch (error) {
+      setConvertedBundle(null);
+      setFhirPreview('');
+      setFhirError(error?.message || 'Não foi possível converter o Excel para JSON FHIR.');
+    } finally {
+      setFhirBusy(false);
+    }
+  };
+
+  const parseJsonFile = async () => {
+    if (!jsonFile) return null;
+    const text = await jsonFile.text();
+    return JSON.parse(text);
+  };
+
+  const handleFhirImport = async () => {
+    setFhirError('');
+    setFhirStatus('');
+    setFhirBusy(true);
+
+    try {
+      const bundle = convertedBundle || (await parseJsonFile());
+
+      if (!bundle) {
+        throw new Error('Converta um Excel ou selecione um JSON FHIR antes de importar.');
+      }
+
+      const response = await stageFhirBundle(bundle);
+      const payload = response?.data?.data || response?.data || {};
+      const batchId = payload.batchId || payload.batch?._id || payload.batch?.id;
+      const counters = payload.counters || payload.batch?.counters || {};
+      setFhirStatus(`JSON FHIR enviado para staging${batchId ? ` (lote ${batchId})` : ''}. Válidos: ${counters.valid ?? 0}. Erros: ${counters.error ?? 0}. Pendentes: ${counters.pendingConsent ?? 0}.`);
+      onSuccess?.(response.data);
+    } catch (error) {
+      const message = error?.response?.data?.message || error?.response?.data?.error || error?.message || 'Não foi possível importar o JSON FHIR.';
+      setFhirError(message);
+      onError?.(message);
+    } finally {
+      setFhirBusy(false);
+    }
+  };
+
   return (
     activeJob ? (
       <BatchProgressViewer
@@ -87,6 +165,111 @@ export default function ImportForm({ onSuccess, onError, className = '' }) {
       />
     ) : (
       <>
+        <section
+          className={className}
+          style={{
+            display: 'grid',
+            gap: '1rem',
+            marginBottom: '1rem',
+          }}
+          aria-label="Importação FHIR por Excel"
+        >
+          <div style={{ display: 'grid', gap: '0.75rem' }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', alignItems: 'center' }}>
+              <Button type="button" onClick={downloadFhirExcelTemplate} data-testid="fhir-excel-template-button">
+                Baixar modelo Excel
+              </Button>
+
+              <label htmlFor="fhir-excel-file" style={{ fontWeight: 600, color: 'var(--text)' }}>
+                Excel preenchido
+              </label>
+              <input
+                id="fhir-excel-file"
+                data-testid="fhir-excel-input"
+                type="file"
+                accept=".xlsx,.xls"
+                onChange={(event) => {
+                  setExcelFile(event.target.files?.[0] || null);
+                  setFhirError('');
+                  setFhirStatus('');
+                }}
+                style={{
+                  maxWidth: '18rem',
+                  padding: '0.65rem',
+                  borderRadius: '0.7rem',
+                  border: '1px solid var(--border)',
+                  background: 'var(--surface)',
+                  color: 'var(--text)',
+                }}
+              />
+
+              <Button type="button" onClick={handleExcelConversion} disabled={fhirBusy} data-testid="fhir-excel-convert-button">
+                Converter Excel para JSON FHIR
+              </Button>
+            </div>
+
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', alignItems: 'center' }}>
+              <label htmlFor="fhir-json-file" style={{ fontWeight: 600, color: 'var(--text)' }}>
+                JSON FHIR
+              </label>
+              <input
+                id="fhir-json-file"
+                data-testid="fhir-json-input"
+                type="file"
+                accept=".json,application/json,application/fhir+json"
+                onChange={(event) => {
+                  setJsonFile(event.target.files?.[0] || null);
+                  setFhirError('');
+                  setFhirStatus('');
+                }}
+                style={{
+                  maxWidth: '18rem',
+                  padding: '0.65rem',
+                  borderRadius: '0.7rem',
+                  border: '1px solid var(--border)',
+                  background: 'var(--surface)',
+                  color: 'var(--text)',
+                }}
+              />
+
+              <Button type="button" onClick={handleFhirImport} disabled={fhirBusy} data-testid="fhir-json-import-button">
+                Importar JSON FHIR
+              </Button>
+            </div>
+
+            {fhirError && (
+              <div role="alert" data-testid="fhir-excel-error" style={{ color: 'var(--danger)', fontSize: '0.88rem', fontWeight: 600 }}>
+                {fhirError}
+              </div>
+            )}
+
+            {fhirStatus && (
+              <div data-testid="fhir-staging-result" style={{ color: 'var(--success, #047857)', fontSize: '0.88rem', fontWeight: 600 }}>
+                {fhirStatus}
+              </div>
+            )}
+
+            {fhirPreview && (
+              <textarea
+                data-testid="fhir-json-preview"
+                readOnly
+                value={fhirPreview}
+                rows={8}
+                style={{
+                  width: '100%',
+                  fontFamily: 'monospace',
+                  fontSize: '0.78rem',
+                  borderRadius: '0.75rem',
+                  border: '1px solid var(--border)',
+                  padding: '0.8rem',
+                  background: 'var(--surface)',
+                  color: 'var(--text)',
+                }}
+              />
+            )}
+          </div>
+        </section>
+
         <form className={className} onSubmit={handleSubmit} noValidate>
           <div
             style={{

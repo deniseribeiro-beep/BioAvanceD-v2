@@ -42,13 +42,6 @@ vi.mock('../../src/services/patientBiomarkerTimeseries.service', () => ({
   writePatientBiomarkers: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock('../../src/services/biomarker-xai.service', () => ({
-  default: {
-    evaluate: vi.fn(() => ({ confidence: 'high' })),
-  },
-  evaluate: vi.fn(() => ({ confidence: 'high' })),
-}));
-
 vi.mock('../../src/services/biomarker-observation.service', () => ({
   default: {
     createObservation: vi.fn().mockResolvedValue(undefined),

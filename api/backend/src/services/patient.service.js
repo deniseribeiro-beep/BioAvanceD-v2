@@ -6,7 +6,6 @@ const { encryptValue, decryptValue } = require('../utils/fieldEncryption');
 const notificationService = require('./notification.service');
 const fhirSyncService = require('./fhir-sync.service');
 const patientBiomarkerTimeseriesService = require('./patientBiomarkerTimeseries.service');
-const biomarkerXaiService = require('./biomarker-xai.service');
 const biomarkerObservationService = require('./biomarker-observation.service');
 const { getCollection } = require('../utils/collectionResolver');
 
@@ -548,11 +547,7 @@ class PatientService {
 
       const patientsCollection = await this.getPatientsCollection(db);
       const patient = PatientModel.create(patientData);
-      const biomarkerXai = biomarkerXaiService.evaluate(patient);
-      const persistedPatient = this.encryptSensitivePatientFields({
-        ...patient,
-        biomarkerXai
-      });
+      const persistedPatient = this.encryptSensitivePatientFields(patient);
 
       const result = await patientsCollection.insertOne(persistedPatient);
 
@@ -600,7 +595,6 @@ class PatientService {
       return {
         _id: result.insertedId,
         ...patient,
-        biomarkerXai,
         patientID: patientID // ID gerado automaticamente
       };
     } catch (error) {
@@ -897,25 +891,6 @@ class PatientService {
       const updatedPatient = await patientsCollection.findOne(query);
       await this.syncPatientPhoneToGraph(options?.neo4jDriver, updatedPatient?.patientID || patientID, updatedPatient?.phone || null);
       const decryptedUpdatedPatient = this.decryptSensitivePatientFields(updatedPatient);
-
-      const biomarkerXai = biomarkerXaiService.evaluate(decryptedUpdatedPatient);
-      if (biomarkerXai) {
-        await patientsCollection.updateOne(query, {
-          $set: {
-            biomarkerXai,
-            biomarkerXaiUpdatedAt: new Date()
-          }
-        });
-        decryptedUpdatedPatient.biomarkerXai = biomarkerXai;
-      } else {
-        await patientsCollection.updateOne(query, {
-          $unset: {
-            biomarkerXai: '',
-            biomarkerXaiUpdatedAt: ''
-          }
-        });
-        delete decryptedUpdatedPatient.biomarkerXai;
-      }
 
       await patientBiomarkerTimeseriesService.writePatientBiomarkers({
         db,

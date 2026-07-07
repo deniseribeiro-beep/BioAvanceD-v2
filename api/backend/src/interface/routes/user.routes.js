@@ -9,7 +9,6 @@ const RegisterSampleUseCase = require('../../core/use-cases/RegisterSampleUseCas
 const LineageRepository = require('../../infrastructure/database/neo4j/LineageRepository');
 const { getCollection } = require('../../utils/collectionResolver');
 const { ObjectId } = require('mongodb');
-const biomarkerXaiService = require('../../services/biomarker-xai.service');
 
 function buildUserFilterById(id) {
   const rawId = String(id || '').trim();
@@ -512,32 +511,9 @@ router.post('/register-sample', authenticate, requirePermission('createSample'),
     const sampleService = require('../../services/sample.service');
     const patientsCollection = await getCollection(db, 'patients');
 
-    const resolveXaiAlert = (sampleData = {}) => {
-      if (sampleData.alphaGal !== undefined && sampleData.alphaGal !== null) {
-        return biomarkerXaiService.verifyXaiThreshold('alphaGal', sampleData.alphaGal);
-      }
-
-      if (sampleData.lysoGb3 !== undefined && sampleData.lysoGb3 !== null) {
-        return biomarkerXaiService.verifyXaiThreshold('lysoGb3', sampleData.lysoGb3);
-      }
-
-      return null;
-    };
-
     const sampleRepository = {
       create: async (sampleData) => {
-        const xaiAlert = resolveXaiAlert(sampleData);
-        const sampleToPersist = xaiAlert ? { ...sampleData, xaiAlert } : { ...sampleData };
-
-        const createdSample = await sampleService.createSample(db, sampleToPersist);
-        const savedSample = xaiAlert ? { ...createdSample, xaiAlert } : createdSample;
-
-        if (xaiAlert) {
-          await db.collection('samples').updateOne(
-            { _id: createdSample._id },
-            { $set: { xaiAlert } }
-          );
-        }
+        const savedSample = await sampleService.createSample(db, { ...sampleData });
 
         const patientID = String(savedSample.patientID || '').trim();
         if (patientID) {

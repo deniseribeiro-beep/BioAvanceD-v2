@@ -37,6 +37,8 @@ dist/
 frontend/dist/
 .venv/
 data/
+!src/seeders/data/
+!src/seeders/data/*.min.json
 logs/
 playwright-report/
 test-results/

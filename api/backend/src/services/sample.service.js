@@ -1,4 +1,4 @@
-const SampleModel = require('../models/Sample');
+const { SampleModel } = require('../models/Sample');
 const SampleMovementModel = require('../models/SampleMovement');
 const logger = require('../utils/logger');
 const { validatePatientID } = require('../utils/patientAnonymization');
@@ -13,6 +13,64 @@ const { appendMovementWithHashChain } = require('../utils/sampleMovementLedger')
 const fhirSyncService = require('./fhir-sync.service');
 const { getCollection } = require('../utils/collectionResolver');
 
+const LOCATION_REQUIRED_MESSAGE = 'Localização física obrigatória para cadastro de amostra';
+const CRITICAL_SENSOR_STATUSES = ['maintenance', 'calibration', 'error', 'offline'];
+
+function createSampleValidationError(message, statusCode = 422) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
+}
+
+function normalizeRequiredLocationID(rawLocationID) {
+  if (rawLocationID === undefined || rawLocationID === null) {
+    throw createSampleValidationError(LOCATION_REQUIRED_MESSAGE, 400);
+  }
+
+  const value = typeof rawLocationID === 'string' ? rawLocationID.trim() : rawLocationID;
+  if (value === '') {
+    throw createSampleValidationError(LOCATION_REQUIRED_MESSAGE, 400);
+  }
+
+  const normalizedLocationID = Number(value);
+  if (!Number.isFinite(normalizedLocationID) || normalizedLocationID <= 0) {
+    throw createSampleValidationError(`${LOCATION_REQUIRED_MESSAGE}: locationID deve ser numérico válido`);
+  }
+
+  return normalizedLocationID;
+}
+
+function buildIdVariants(...ids) {
+  const variants = [];
+  const seen = new Set();
+  const add = (value) => {
+    if (value === undefined || value === null || value === '') return;
+    const key = `${typeof value}:${String(value)}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      variants.push(value);
+    }
+  };
+
+  for (const id of ids) {
+    if (id === undefined || id === null || id === '') continue;
+    add(id);
+    add(String(id));
+
+    const numeric = Number(id);
+    if (Number.isFinite(numeric)) {
+      add(numeric);
+    }
+  }
+
+  return variants;
+}
+
+function isOperationalSensor(sensor) {
+  const status = String(sensor?.status || sensor?.maintenanceStatus || sensor?.operationalStatus || '').trim().toLowerCase();
+  return !status || !CRITICAL_SENSOR_STATUSES.includes(status);
+}
+
 /**
  * Service de Amostras
  * RF004 - Cadastro de Amostra
@@ -22,6 +80,9 @@ const { getCollection } = require('../utils/collectionResolver');
 class SampleService {
   async createSample(db, sampleData, options = {}) {
     try {
+      const normalizedLocationID = normalizeRequiredLocationID(sampleData.locationID);
+      sampleData.locationID = normalizedLocationID;
+
       // RF004 - Validação completa
       const validation = SampleModel.validate(sampleData);
       if (!validation.isValid) {
@@ -84,25 +145,41 @@ class SampleService {
         throw new Error('Quantidade deve ser um número maior que zero (µL)');
       }
 
-      // Se locationID foi fornecido, valida se existe e normaliza para número
-      if (sampleData.locationID !== undefined && sampleData.locationID !== null && sampleData.locationID !== '') {
-        const normalizedLocationID = typeof sampleData.locationID === 'string'
-          ? Number(sampleData.locationID.trim())
-          : Number(sampleData.locationID);
+      const locationsCollection = db.collection('locations');
+      const location = await locationsCollection.findOne({
+        locationID: { $in: buildIdVariants(sampleData.locationID) }
+      });
+      if (!location) {
+        throw createSampleValidationError(`${LOCATION_REQUIRED_MESSAGE}: locationID inválido ou não cadastrado`);
+      }
 
-        if (!Number.isFinite(normalizedLocationID)) {
-          throw new Error('locationID inválido. Informe um número válido ou omita o campo para criar a amostra sem armazenagem.');
+      if (location.equipmentID !== undefined && location.equipmentID !== null && location.equipmentID !== '') {
+        const equipmentCollection = db.collection('equipment');
+        const equipment = await equipmentCollection.findOne({
+          equipmentID: { $in: buildIdVariants(location.equipmentID) }
+        });
+
+        if (!equipment) {
+          throw createSampleValidationError('Equipamento vinculado à localização física não está cadastrado');
         }
+      }
 
-        sampleData.locationID = normalizedLocationID;
+      const locationVariants = buildIdVariants(location.locationID, sampleData.locationID, location._id?.toString());
+      const sensorLocationQuery = {
+        $or: [
+          { locationId: { $in: locationVariants } },
+          { locationID: { $in: locationVariants } }
+        ]
+      };
+      const sensorsCollection = db.collection('sensors');
+      const operationalSensor = await sensorsCollection.findOne(sensorLocationQuery);
 
-        const locationsCollection = db.collection('locations');
-        const location = await locationsCollection.findOne({ locationID: sampleData.locationID });
-        if (!location) {
-          const locationError = new Error(`Localização ${sampleData.locationID} não encontrada. Verifique se a localização está cadastrada.`);
-          locationError.statusCode = 404;
-          throw locationError;
-        }
+      if (!operationalSensor || !isOperationalSensor(operationalSensor)) {
+        const statusValue = String(operationalSensor?.status || operationalSensor?.maintenanceStatus || operationalSensor?.operationalStatus || '').trim();
+        const statusMessage = statusValue
+          ? ` Sensor atual está em status ${statusValue}.`
+          : '';
+        throw createSampleValidationError(`Localização física sem sensor operacional associado.${statusMessage}`);
       }
 
       // Valida conflito físico de localização (freezer/rack/box/position)

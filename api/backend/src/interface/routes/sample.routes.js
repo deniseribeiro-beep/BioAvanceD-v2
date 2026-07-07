@@ -107,13 +107,15 @@ function validateCreateSamplePayload(req, res, next) {
     errors.push('isRareDisease deve ser boolean');
   }
 
-  if (payload.locationID !== undefined && payload.locationID !== null && payload.locationID !== '') {
+  if (payload.locationID === undefined || payload.locationID === null || payload.locationID === '') {
+    errors.push('Localização física obrigatória para cadastro de amostra');
+  } else {
     const locationValue = typeof payload.locationID === 'string' ? payload.locationID.trim() : payload.locationID;
-    const locationIsValidNumber = typeof locationValue === 'number' && Number.isFinite(locationValue);
-    const locationIsNumericString = typeof locationValue === 'string' && /^\d+$/.test(locationValue);
+    const locationIsValidNumber = typeof locationValue === 'number' && Number.isFinite(locationValue) && locationValue > 0;
+    const locationIsNumericString = typeof locationValue === 'string' && /^\d+$/.test(locationValue) && Number(locationValue) > 0;
 
     if (!locationIsValidNumber && !locationIsNumericString) {
-      errors.push('locationID, quando informado, deve ser numérico');
+      errors.push('Localização física obrigatória para cadastro de amostra: locationID deve ser numérico válido');
     }
   }
 
@@ -131,6 +133,17 @@ function validateCreateSamplePayload(req, res, next) {
   }
 
   return next();
+}
+
+function buildActiveConsentQuery(patient) {
+  const patientIds = [patient?.patientID, patient?._id?.toString()]
+    .filter((value) => value !== undefined && value !== null && value !== '')
+    .map(String);
+
+  return {
+    patientId: { $in: [...new Set(patientIds)] },
+    status: 'ACTIVE'
+  };
 }
 
 function escapeXml(value) {
@@ -250,6 +263,14 @@ router.post('/',
         });
       }
 
+      if ([400, 422].includes(error.status || error.statusCode)) {
+        return res.status(error.status || error.statusCode).json({
+          success: false,
+          error: req.t?.('samples.createError') || 'Erro ao criar amostra',
+          message: errorMessage
+        });
+      }
+
       if (error.status === 404 || error.statusCode === 404 || errorMessage.includes('não encontrado')) {
         return res.status(404).json({
           success: false,
@@ -328,34 +349,21 @@ router.get('/', authenticate, async (req, res) => {
 
       if (patient) {
         // Verificar se há consentimento ativo
-        const consent = await patientConsentsCollection.findOne({
-          patientId: patient._id.toString(),
-          status: 'ACTIVE'
-        });
+        const consent = await patientConsentsCollection.findOne(buildActiveConsentQuery(patient));
 
         if (consent) {
           consentValid = true;
           consentMessage = 'TCLE Assinado';
           canUse = true;
         } else {
-          // Verificar se o sistema de consentimento está implementado
-          const consentCount = await patientConsentsCollection.countDocuments();
-          if (consentCount === 0) {
-            // Sistema não implementado
-            consentValid = true;
-            consentMessage = 'Sistema TCLE em implementação';
-            canUse = true;
-          } else {
-            consentValid = false;
-            consentMessage = 'TCLE Pendente';
-            canUse = false;
-          }
+          consentValid = false;
+          consentMessage = 'TCLE Pendente';
+          canUse = false;
         }
       } else {
-        // Paciente não encontrado - em desenvolvimento permitir
-        consentValid = true;
+        consentValid = false;
         consentMessage = 'Paciente não encontrado';
-        canUse = true;
+        canUse = false;
       }
 
       return {
@@ -363,8 +371,8 @@ router.get('/', authenticate, async (req, res) => {
         consentValid,
         consentMessage,
         canUse,
-        // Compatibilidade com campo consentStatus existente
-        consentStatus: consentValid ? 'approved' : 'pending'
+        consentReasonCode: patient ? (consentValid ? null : 'NO_ACTIVE_CONSENT') : 'PATIENT_NOT_FOUND',
+        consentStatus: consentValid ? 'CONSENT_ACTIVE' : 'CONSENT_PENDING'
       };
     }));
 
@@ -618,6 +626,29 @@ router.put('/:id', authenticate, requirePermission('editSample'), async (req, re
         message: 'Amostra atualizada',
         req: req
       });
+
+      const releaseRequested = String(req.body?.quarantineStatus || '').toUpperCase() === 'RELEASED'
+        || String(req.body?.availabilityStatus || '').toUpperCase() === 'AVAILABLE'
+        || String(req.body?.consentStatus || '').toUpperCase() === 'EXTERNAL_ATTACHED'
+        || String(req.body?.consentStatus || '').toUpperCase() === 'SIGNED';
+
+      if (releaseRequested) {
+        await auditLogger.log({
+          action: 'sample_release',
+          entity: 'Sample',
+          entityID: req.params.id,
+          result: 'success',
+          severity: 'info',
+          message: 'Amostra liberada após validação ética',
+          payload: {
+            consentStatus: req.body?.consentStatus || null,
+            quarantineStatus: req.body?.quarantineStatus || null,
+            availabilityStatus: req.body?.availabilityStatus || null,
+            quarantineReason: req.body?.quarantineReason || null,
+          },
+          req: req
+        });
+      }
     }
 
     return res.status(200).json({

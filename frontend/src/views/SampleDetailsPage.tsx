@@ -37,7 +37,8 @@ type ComplianceReport = {
 export default function SampleDetailsPage() {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
-  const { t } = useLanguage();
+  const { t, language } = useLanguage();
+  const locale = language;
   const { user, hasRole } = useAuth();
   const { samples, loading, error, updateSample } = useSamples();
   const { results, loadResults } = useResults();
@@ -69,7 +70,7 @@ export default function SampleDetailsPage() {
 
     if (current <= 0) {
       return {
-        label: 'Indisponível',
+        label: t('samples.detail.availability.unavailable', 'Indisponível'),
         className: 'availability-indisponível',
         current,
         initial,
@@ -78,7 +79,7 @@ export default function SampleDetailsPage() {
 
     if (current < initial) {
       return {
-        label: 'Parcialmente Disponível',
+        label: t('samples.detail.availability.partial', 'Parcialmente Disponível'),
         className: 'availability-parcialmente-disponível',
         current,
         initial,
@@ -86,7 +87,7 @@ export default function SampleDetailsPage() {
     }
 
     return {
-      label: 'Disponível',
+      label: t('samples.detail.availability.available', 'Disponível'),
       className: 'availability-disponível',
       current,
       initial,
@@ -184,36 +185,36 @@ export default function SampleDetailsPage() {
   const getLocationInfo = (locationID?: number): { summary: string; details: string } => {
     if (locationID === undefined || locationID === null) {
       return {
-        summary: 'Aguardando Armazenagem',
-        details: 'A amostra já foi recebida e aguarda atribuição de localização física.',
+        summary: t('samples.detail.storage.awaiting', 'Aguardando Armazenagem'),
+        details: t('samples.detail.storage.awaitingDescription', 'A amostra já foi recebida e aguarda atribuição de localização física.'),
       };
     }
-    
+
     if (!locations || !Array.isArray(locations) || locations.length === 0) {
-      return { summary: `ID: ${locationID}`, details: 'Informações de localização não disponíveis' };
+      return { summary: t('samples.detail.storage.idLabel', 'ID: {id}').replace('{id}', String(locationID)), details: t('samples.detail.storage.unavailable', 'Informações de localização não disponíveis') };
     }
 
     const location = locations.find(loc => loc.locationID === locationID);
     if (!location) {
-      return { summary: `ID: ${locationID}`, details: 'Localização não encontrada' };
+      return { summary: t('samples.detail.storage.idLabel', 'ID: {id}').replace('{id}', String(locationID)), details: t('samples.detail.storage.notFound', 'Localização não encontrada') };
     }
 
     const parts: string[] = [];
-    if (location.block) parts.push(`Bloco: ${location.block}`);
-    if (location.rack) parts.push(`Prateleira: ${location.rack}`);
-    if (location.drawer) parts.push(`Gaveta: ${location.drawer}`);
-    if (location.box) parts.push(`Caixa: ${location.box}`);
+    if (location.block) parts.push(`${t('samples.detail.storage.block', 'Bloco')}: ${location.block}`);
+    if (location.rack) parts.push(`${t('samples.detail.storage.rack', 'Prateleira')}: ${location.rack}`);
+    if (location.drawer) parts.push(`${t('samples.detail.storage.drawer', 'Gaveta')}: ${location.drawer}`);
+    if (location.box) parts.push(`${t('samples.detail.storage.box', 'Caixa')}: ${location.box}`);
     if (location.wellPosition || location.eppendorfWell) {
-      parts.push(`Poço: ${location.wellPosition || location.eppendorfWell}`);
+      parts.push(`${t('samples.detail.storage.well', 'Poço')}: ${location.wellPosition || location.eppendorfWell}`);
     }
 
     const summary = parts.length > 0 
       ? parts.slice(0, 2).join(' | ') 
-      : `ID: ${locationID}`;
-    
+      : t('samples.detail.storage.idLabel', 'ID: {id}').replace('{id}', String(locationID));
+
     const details = parts.length > 0 
       ? parts.join(' • ') 
-      : `Localização ID: ${locationID}`;
+      : t('samples.detail.storage.locationId', 'Localização ID: {id}').replace('{id}', String(locationID));
 
     return { summary, details };
   };
@@ -233,18 +234,50 @@ export default function SampleDetailsPage() {
   }, [isEditing, sample, form.availableQuantity, form.locationID, form.linkedProject, form.currentStatus]);
 
   const availabilityPreview = computeAvailability(effectiveSample);
+  const sprecSummary = useMemo(() => {
+    const sprec = (effectiveSample as any)?.sprec || {};
+    const matrixType = String((effectiveSample as any)?.matrix_type || sprec.matrixType || '').trim().toLowerCase();
+    const parts = matrixType === 'solid'
+      ? [sprec.sampleType, sprec.primaryContainer, sprec.warmIschemia, sprec.coldIschemia, sprec.fixationType, sprec.fixationTime, sprec.longTermStorage]
+      : [sprec.sampleType, sprec.primaryContainer, sprec.preCentrifugation, sprec.centrifugation, sprec.secondCentrifugation, sprec.postCentrifugationDelay, sprec.longTermStorage];
+    const code = String((effectiveSample as any)?.sprec_code || (effectiveSample as any)?.sprecCode || parts.map((part) => String(part || '').trim()).filter(Boolean).join('-')).trim();
+    return code ? `${t('samples.detail.sprec.prefix', 'SPREC')} ${code}` : t('samples.detail.sprec.na', 'SPREC: N/A');
+  }, [effectiveSample]);
+  const sprecAxisSummary = useMemo(() => {
+    const sprec = (effectiveSample as any)?.sprec || {};
+    const matrixType = String((effectiveSample as any)?.matrix_type || sprec.matrixType || '').trim().toLowerCase();
+    const axes = matrixType === 'solid'
+      ? [
+        [t('samples.detail.sprec.axes.Pwarm', 'Pwarm'), sprec.warmIschemia],
+        [t('samples.detail.sprec.axes.Pcold', 'Pcold'), sprec.coldIschemia],
+        [t('samples.detail.sprec.axes.Pfix', 'Pfix'), sprec.fixationType],
+        [t('samples.detail.sprec.axes.PfixTime', 'PfixTime'), sprec.fixationTime],
+        [t('samples.detail.sprec.axes.Pstore', 'Pstore'), sprec.longTermStorage],
+      ]
+      : [
+        [t('samples.detail.sprec.axes.Ppre', 'Ppre'), sprec.preCentrifugation],
+        [t('samples.detail.sprec.axes.Pcent1', 'Pcent1'), sprec.centrifugation],
+        [t('samples.detail.sprec.axes.Pcent2', 'Pcent2'), sprec.secondCentrifugation],
+        [t('samples.detail.sprec.axes.Ppost', 'Ppost'), sprec.postCentrifugationDelay],
+        [t('samples.detail.sprec.axes.Pstore', 'Pstore'), sprec.longTermStorage],
+      ];
+
+    return axes
+      .map(([label, value]) => `${label}:${String(value || '').trim() || t('common.notAvailable', 'N/A')}`)
+      .join(' | ');
+  }, [effectiveSample]);
 
   const locationOptions = useMemo(() => {
     if (!locations || locations.length === 0) {
-      return [{ value: '', label: 'Aguardando Armazenagem' }];
+      return [{ value: '', label: t('samples.detail.storage.awaiting', 'Aguardando Armazenagem') }];
     }
     return [
-      { value: '', label: 'Sem armazenagem atribuída' },
+      { value: '', label: t('samples.detail.storage.unassigned', 'Sem armazenagem atribuída') },
       ...locations
         .filter(loc => loc.locationID != null)
         .map(loc => ({
           value: String(loc.locationID),
-          label: `${loc.locationID} - Bloco ${loc.block} / Prat. ${loc.rack} / Gav. ${loc.drawer} / Caixa ${loc.box}`,
+          label: `${loc.locationID} - ${t('samples.detail.storage.block', 'Bloco')} ${loc.block} / ${t('samples.detail.storage.shelfAbbr', 'Prat.')} ${loc.rack} / ${t('samples.detail.storage.drawerAbbr', 'Gav.')} ${loc.drawer} / ${t('samples.detail.storage.box', 'Caixa')} ${loc.box}`,
         })),
     ];
   }, [locations, t]);
@@ -271,9 +304,9 @@ export default function SampleDetailsPage() {
   const getResultEquipmentLabel = (equipmentID?: number, equipmentName?: string) => {
     if (equipmentID) {
       const match = equipment.find((item) => item.equipmentID === equipmentID);
-      return match?.equipmentDescription || `Equipamento #${equipmentID}`;
+      return match?.equipmentDescription || t('samples.detail.equipmentFallback', 'Equipamento #{id}').replace('{id}', String(equipmentID));
     }
-    return equipmentName || 'Não informado';
+    return equipmentName || t('common.notAvailable', 'Não informado');
   };
 
   if (loading) {
@@ -324,11 +357,11 @@ export default function SampleDetailsPage() {
         <Card>
           <p>{t('samples.notFound') || 'Amostra não encontrada'}</p>
           <p style={{ fontSize: '0.875rem', color: 'var(--text-light)', marginTop: '0.5rem' }}>
-            ID buscado: {id}
+            {t('samples.detail.searchedId', 'ID buscado')}: {id}
           </p>
           {samples && samples.length > 0 && (
             <p style={{ fontSize: '0.75rem', color: 'var(--text-light)', marginTop: '0.5rem' }}>
-              Total de amostras carregadas: {samples.length}
+              {t('samples.detail.loadedSamples', 'Total de amostras carregadas')}: {samples.length}
             </p>
           )}
         </Card>
@@ -432,8 +465,8 @@ export default function SampleDetailsPage() {
     <div className="page" data-testid="sample-detail-root">
       <div className="page-header">
         <div>
-          <h1 className="page-title" data-testid="sample-detail-page-title">
-            Detalhes da Amostra - {sample.barcode || sample.sampleID || 'N/A'}
+            <h1 className="page-title" data-testid="sample-detail-page-title">
+            {t('samples.detail.title', 'Detalhes da Amostra')} - {sample.barcode || sample.sampleID || t('common.notAvailable', 'N/A')}
           </h1>
 
           <div style={{ marginBottom: '0.5rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
@@ -497,11 +530,11 @@ export default function SampleDetailsPage() {
       <div style={{ display: 'grid', gap: '1.5rem' }}>
         <Card>
           <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '0.75rem', color: 'var(--text)' }}>
-            Grafo de Governança
+            {t('samples.detail.governanceTitle', 'Grafo de Governança')}
           </h3>
 
           {complianceLoading ? (
-            <p style={{ color: 'var(--text-light)' }}>Validando conformidade da amostra...</p>
+            <p style={{ color: 'var(--text-light)' }}>{t('samples.detail.validatingCompliance', 'Validando conformidade da amostra...')}</p>
           ) : complianceError ? (
             <p style={{ color: 'var(--danger)' }}>{complianceError}</p>
           ) : complianceReport ? (
@@ -519,7 +552,7 @@ export default function SampleDetailsPage() {
                 fontSize: '0.85rem'
               }}>
                 {complianceReport.isReleasable ? <CheckCircle2 size={16} /> : <XCircle size={16} />}
-                {complianceReport.isReleasable ? 'Amostra liberável' : 'Amostra bloqueada para liberação'}
+                {complianceReport.isReleasable ? t('samples.detail.releasable', 'Amostra liberável') : t('samples.detail.blockedForRelease', 'Amostra bloqueada para liberação')}
               </div>
 
               <div style={{ display: 'grid', gap: '0.6rem' }}>
@@ -544,7 +577,7 @@ export default function SampleDetailsPage() {
                     <div>
                       <div style={{ fontWeight: 700, color: 'var(--text)' }}>{node.label}</div>
                       <div style={{ fontSize: '0.85rem', color: 'var(--text-light)' }}>
-                        {node.data?.reason || 'Sem detalhes'}
+                        {node.data?.reason || t('samples.detail.noDetails', 'Sem detalhes')}
                       </div>
                     </div>
                     <div style={{ color: node.data?.valid ? '#16a34a' : '#dc2626', marginTop: '0.1rem' }}>
@@ -555,34 +588,34 @@ export default function SampleDetailsPage() {
               </div>
 
               <div style={{ marginTop: '0.75rem', fontSize: '0.85rem', color: 'var(--text-light)' }}>
-                release_status sugerido: <strong style={{ color: 'var(--text)' }}>{complianceReport.suggestedStatus}</strong>
+                {t('samples.detail.suggestedReleaseStatus', 'release_status sugerido')}: <strong style={{ color: 'var(--text)' }}>{complianceReport.suggestedStatus}</strong>
               </div>
             </>
           ) : (
-            <p style={{ color: 'var(--text-light)' }}>Sem relatório de conformidade disponível.</p>
+            <p style={{ color: 'var(--text-light)' }}>{t('samples.detail.noComplianceReport', 'Sem relatório de conformidade disponível.')}</p>
           )}
         </Card>
 
         {/* Informações Básicas */}
         <Card>
           <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '0.75rem', color: 'var(--text)' }}>
-            Informações Básicas
+            {t('samples.detail.basicInfoTitle', 'Informações Básicas')}
           </h3>
           <div style={{ display: 'grid', gap: '0.75rem' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', backgroundColor: 'var(--surface)', borderRadius: '4px' }}>
-              <span style={{ fontWeight: 500, color: 'var(--text-light)' }}>ID da Amostra:</span>
-              <span style={{ color: 'var(--text)' }}>{sample.sampleID || sample._id || 'N/A'}</span>
+              <span style={{ fontWeight: 500, color: 'var(--text-light)' }}>{t('samples.detail.sampleId', 'ID da Amostra')}:</span>
+              <span style={{ color: 'var(--text)' }}>{sample.sampleID || sample._id || t('common.notAvailable', 'N/A')}</span>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', backgroundColor: 'var(--surface)', borderRadius: '4px' }}>
-              <span style={{ fontWeight: 500, color: 'var(--text-light)' }}>Código de Barras:</span>
-              <span style={{ fontFamily: 'monospace', color: 'var(--primary)', fontWeight: 600 }}>{sample.barcode || 'N/A'}</span>
+              <span style={{ fontWeight: 500, color: 'var(--text-light)' }}>{t('samples.detail.barcode', 'Código de Barras')}:</span>
+              <span style={{ fontFamily: 'monospace', color: 'var(--primary)', fontWeight: 600 }}>{sample.barcode || t('common.notAvailable', 'N/A')}</span>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', backgroundColor: 'var(--surface)', borderRadius: '4px' }}>
-              <span style={{ fontWeight: 500, color: 'var(--text-light)' }}>Tipo:</span>
-              <span style={{ color: 'var(--text)' }}>{sample.sampleType || 'N/A'}</span>
+              <span style={{ fontWeight: 500, color: 'var(--text-light)' }}>{t('samples.detail.type', 'Tipo')}:</span>
+              <span style={{ color: 'var(--text)' }}>{sample.sampleType || t('common.notAvailable', 'N/A')}</span>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', backgroundColor: 'var(--surface)', borderRadius: '4px' }}>
-              <span style={{ fontWeight: 500, color: 'var(--text-light)' }}>Origem:</span>
+              <span style={{ fontWeight: 500, color: 'var(--text-light)' }}>{t('samples.detail.origin', 'Origem')}:</span>
               {isEditing ? (
                 <div style={{ width: '280px' }}>
                   <Input
@@ -592,11 +625,11 @@ export default function SampleDetailsPage() {
                   />
                 </div>
               ) : (
-                <span style={{ color: 'var(--text)' }}>{sample.sampleOrigin || 'N/A'}</span>
+                <span style={{ color: 'var(--text)' }}>{sample.sampleOrigin || t('common.notAvailable', 'N/A')}</span>
               )}
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', backgroundColor: 'var(--surface)', borderRadius: '4px' }}>
-              <span style={{ fontWeight: 500, color: 'var(--text-light)' }}>Protocolo de Extração:</span>
+              <span style={{ fontWeight: 500, color: 'var(--text-light)' }}>{t('samples.detail.extractionProtocol', 'Protocolo de Extração')}:</span>
               {isEditing ? (
                 <div style={{ width: '280px' }}>
                   <Input
@@ -606,14 +639,30 @@ export default function SampleDetailsPage() {
                   />
                 </div>
               ) : (
-                <span style={{ color: 'var(--text)' }}>{sample.extractionProtocol || 'N/A'}</span>
+                <span style={{ color: 'var(--text)' }}>{sample.extractionProtocol || t('common.notAvailable', 'N/A')}</span>
               )}
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', backgroundColor: 'var(--surface)', borderRadius: '4px' }}>
-              <span style={{ fontWeight: 500, color: 'var(--text-light)' }}>Data de Registro:</span>
+              <span style={{ fontWeight: 500, color: 'var(--text-light)' }}>{t('samples.detail.registrationDate', 'Data de Registro')}:</span>
               <span style={{ color: 'var(--text)' }}>
-                {sample.registrationDate ? new Date(sample.registrationDate).toLocaleDateString('pt-BR') : 'N/A'}
+                {sample.registrationDate ? new Date(sample.registrationDate).toLocaleDateString(locale) : t('common.notAvailable', 'N/A')}
               </span>
+            </div>
+          </div>
+        </Card>
+
+        <Card>
+          <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '0.75rem', color: 'var(--text)' }}>
+            {t('samples.detail.sprecTitle', 'SPREC')}
+          </h3>
+          <div style={{ display: 'grid', gap: '0.75rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', backgroundColor: 'var(--surface)', borderRadius: '4px' }}>
+              <span style={{ fontWeight: 500, color: 'var(--text-light)' }}>{t('samples.detail.sprecCode', 'Código')}:</span>
+              <span style={{ color: 'var(--text)', fontFamily: 'monospace' }}>{sprecSummary}</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', backgroundColor: 'var(--surface)', borderRadius: '4px' }}>
+              <span style={{ fontWeight: 500, color: 'var(--text-light)' }}>{t('samples.detail.sprecAxes', 'Eixos')}:</span>
+              <span style={{ color: 'var(--text)' }}>{sprecAxisSummary}</span>
             </div>
           </div>
         </Card>
@@ -621,17 +670,17 @@ export default function SampleDetailsPage() {
         {/* Quantidade e Qualidade */}
         <Card>
           <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '0.75rem', color: 'var(--text)' }}>
-            Quantidade e Qualidade
+            {t('samples.detail.quantityQualityTitle', 'Quantidade e Qualidade')}
           </h3>
           <div style={{ display: 'grid', gap: '0.75rem' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', backgroundColor: 'var(--surface)', borderRadius: '4px' }}>
-              <span style={{ fontWeight: 500, color: 'var(--text-light)' }}>Quantidade Total:</span>
+              <span style={{ fontWeight: 500, color: 'var(--text-light)' }}>{t('samples.detail.totalQuantity', 'Quantidade Total')}:</span>
               <span style={{ color: 'var(--text)' }}>
-                {availabilityPreview.initial.toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} µL
+                {availabilityPreview.initial.toLocaleString(locale, { minimumFractionDigits: 1, maximumFractionDigits: 1 })} µL
               </span>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', backgroundColor: 'var(--surface)', borderRadius: '4px' }}>
-              <span style={{ fontWeight: 500, color: 'var(--text-light)' }}>Quantidade Disponível:</span>
+              <span style={{ fontWeight: 500, color: 'var(--text-light)' }}>{t('samples.detail.availableQuantity', 'Quantidade Disponível')}:</span>
               {isEditing ? (
                 <div style={{ width: '180px' }}>
                   <Input
@@ -645,12 +694,12 @@ export default function SampleDetailsPage() {
                 </div>
               ) : (
                 <span style={{ color: 'var(--text)' }}>
-                  {availabilityPreview.current.toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} µL
+                  {availabilityPreview.current.toLocaleString(locale, { minimumFractionDigits: 1, maximumFractionDigits: 1 })} µL
                 </span>
               )}
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', backgroundColor: 'var(--surface)', borderRadius: '4px' }}>
-              <span style={{ fontWeight: 500, color: 'var(--text-light)' }}>Status Atual:</span>
+              <span style={{ fontWeight: 500, color: 'var(--text-light)' }}>{t('samples.detail.currentStatus', 'Status Atual')}:</span>
               {isEditing ? (
                 <div style={{ minWidth: '220px' }}>
                   <Select
@@ -671,17 +720,17 @@ export default function SampleDetailsPage() {
         {/* Armazenagem e Projeto */}
         <Card>
           <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '0.75rem', color: 'var(--text)' }}>
-            Armazenagem e Projeto
+            {t('samples.detail.storage.storageProjectTitle', 'Armazenagem e Projeto')}
           </h3>
           {sample?.locationID == null && (
             <div style={{ marginBottom: '0.75rem', padding: '0.75rem 1rem', borderRadius: '8px', backgroundColor: 'rgba(37, 99, 235, 0.08)', color: 'var(--text)' }}>
-              <strong>Aguardando Armazenagem.</strong> A amostra está registrada, mas ainda não foi atribuída a uma posição física.
+              <strong>{t('samples.detail.storage.awaiting', 'Aguardando Armazenagem')}.</strong> {t('samples.detail.storage.storageAwaitingMessage', 'A amostra está registrada, mas ainda não foi atribuída a uma posição física.')}
             </div>
           )}
           <div style={{ display: 'grid', gap: '0.75rem' }}>
             <div style={{ padding: '0.75rem', backgroundColor: 'var(--surface)', borderRadius: '4px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-                <span style={{ fontWeight: 500, color: 'var(--text-light)' }}>Armazenagem:</span>
+                <span style={{ fontWeight: 500, color: 'var(--text-light)' }}>{t('samples.detail.storage.storageLabel', 'Armazenagem')}:</span>
                 {isEditing ? (
                   <div style={{ minWidth: '260px' }}>
                     <Select
@@ -690,7 +739,7 @@ export default function SampleDetailsPage() {
                       options={locationOptions}
                     />
                     <div style={{ marginTop: '0.35rem', fontSize: '0.75rem', color: 'var(--text-light)' }}>
-                      Opcional. A amostra pode permanecer sem localização até ser armazenada.
+                      {t('samples.detail.storage.storageOptional', 'Opcional. A amostra pode permanecer sem localização até ser armazenada.')}
                     </div>
                   </div>
                 ) : (
@@ -719,7 +768,7 @@ export default function SampleDetailsPage() {
               </div>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', backgroundColor: 'var(--surface)', borderRadius: '4px' }}>
-              <span style={{ fontWeight: 500, color: 'var(--text-light)' }}>Projeto Vinculado:</span>
+              <span style={{ fontWeight: 500, color: 'var(--text-light)' }}>{t('samples.detail.linkedProject', 'Projeto Vinculado')}:</span>
               {isEditing ? (
                 <div style={{ flex: 1, maxWidth: '420px', marginLeft: '1rem' }}>
                   <Input
@@ -729,7 +778,7 @@ export default function SampleDetailsPage() {
                   />
                 </div>
               ) : (
-                <span style={{ color: 'var(--text)' }}>{effectiveSample?.linkedProject || 'N/A'}</span>
+                <span style={{ color: 'var(--text)' }}>{effectiveSample?.linkedProject || t('common.notAvailable', 'N/A')}</span>
               )}
             </div>
           </div>
@@ -738,11 +787,11 @@ export default function SampleDetailsPage() {
         {/* Paciente */}
         <Card>
           <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '0.75rem', color: 'var(--text)' }}>
-            Paciente
+            {t('samples.detail.patientTitle', 'Paciente')}
           </h3>
           <div style={{ display: 'grid', gap: '0.75rem' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', backgroundColor: 'var(--surface)', borderRadius: '4px' }}>
-              <span style={{ fontWeight: 500, color: 'var(--text-light)' }}>ID do Paciente:</span>
+              <span style={{ fontWeight: 500, color: 'var(--text-light)' }}>{t('samples.detail.patientId', 'ID do Paciente')}:</span>
               {isEditing ? (
                 <div style={{ width: '220px' }}>
                   <Input
@@ -753,7 +802,7 @@ export default function SampleDetailsPage() {
                 </div>
               ) : (
                 <span style={{ fontFamily: 'monospace', color: 'var(--text)', fontWeight: 500 }}>
-                  {sample.patientID || 'N/A'}
+                  {sample.patientID || t('common.notAvailable', 'N/A')}
                 </span>
               )}
             </div>
@@ -765,11 +814,11 @@ export default function SampleDetailsPage() {
           <Card>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
               <h3 style={{ fontSize: '1rem', fontWeight: 600, margin: 0, color: 'var(--text)' }}>
-                Arquivos de Análise
+                {t('samples.detail.analysisFilesTitle', 'Arquivos de Análise')}
               </h3>
               {canEdit && (
                 <Button variant="primary" onClick={() => setShowUploadModal(true)}>
-                  Enviar Arquivo
+                  {t('samples.detail.sendFile', 'Enviar Arquivo')}
                 </Button>
               )}
             </div>
@@ -782,7 +831,7 @@ export default function SampleDetailsPage() {
                 borderRadius: '6px',
                 color: 'var(--text-light)'
               }}>
-                <p>Nenhum arquivo associado a esta amostra</p>
+                <p>{t('samples.detail.noAnalysisFiles', 'Nenhum arquivo associado a esta amostra')}</p>
               </div>
             ) : (
               <div style={{ overflowX: 'auto' }}>
@@ -790,21 +839,21 @@ export default function SampleDetailsPage() {
                   headers={[
                     'ID',
                     'Tipo',
-                    'Método',
-                    'Pesquisador',
-                    'Equipamento',
-                    'Descrição',
-                    'Ações',
+                    t('samples.detail.tableHeaders.method', 'Método'),
+                    t('samples.detail.tableHeaders.researcher', 'Pesquisador'),
+                    t('samples.detail.tableHeaders.equipment', 'Equipamento'),
+                    t('samples.detail.tableHeaders.description', 'Descrição'),
+                    t('samples.detail.tableHeaders.actions', 'Ações'),
                   ]}
                 >
                   {sampleResults.map((result) => (
                     <tr key={result._id || result.resultID}>
                       <td>{result.resultID || result._id}</td>
                       <td><span className="file-type-badge">{result.fileType}</span></td>
-                      <td>{result.method || 'N/A'}</td>
-                      <td>{result.responsibleResearcher || 'N/A'}</td>
+                      <td>{result.method || t('common.notAvailable', 'N/A')}</td>
+                      <td>{result.responsibleResearcher || t('common.notAvailable', 'N/A')}</td>
                       <td>{getResultEquipmentLabel(result.equipmentID, result.equipmentName)}</td>
-                      <td>{result.description || 'N/A'}</td>
+                      <td>{result.description || t('common.notAvailable', 'N/A')}</td>
                       <td>
                         <div className="table-actions">
                           <Button
@@ -818,7 +867,7 @@ export default function SampleDetailsPage() {
                             }}
                           >
                             <Download size={16} />
-                            Download
+                            {t('samples.detail.download', 'Download')}
                           </Button>
                         </div>
                       </td>

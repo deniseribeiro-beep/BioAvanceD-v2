@@ -13,24 +13,8 @@ const IMPORT_TEMPLATE_HEADERS = [
   'lyso_gb3_value',
 ];
 
-const IMPORT_TEMPLATE_SAMPLE_ROW = [
-  '12345678909',
-  'Maria Silva',
-  '1985-04-12',
-  'F',
-  'ACTIVE',
-  'TUBE-8841',
-  'DBS',
-  '2026-03-18',
-  '1.2',
-  '14.5',
-];
-
 export function downloadImportTemplate(): void {
-  const csvContent = [
-    IMPORT_TEMPLATE_HEADERS.join(','),
-    IMPORT_TEMPLATE_SAMPLE_ROW.join(','),
-  ].join('\n');
+  const csvContent = `${IMPORT_TEMPLATE_HEADERS.join(',')}\n`;
 
   const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
   const objectUrl = URL.createObjectURL(blob);

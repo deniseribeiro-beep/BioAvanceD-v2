@@ -17,7 +17,7 @@ export function collectReading(sensor: Sensor): Temperature {
     readingStatus: 'valid',
     dataQualityScore: 0.95,
     sensorID: sensor.sensorID,
-    policyID: sensor.policyID,
+    policyID: sensor.policyID ?? 0,
   };
   
   return reading;

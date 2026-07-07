@@ -6,7 +6,9 @@ const STATUS_MAP = {
   Compromised: { label: 'Comprometida / Inadequada', color: '#ef4444' },
 };
 
-export default function MiabisStatusLabel({ status = 'Optimal', i18n = {} }) {
+type MiabisStatus = keyof typeof STATUS_MAP;
+
+export default function MiabisStatusLabel({ status = 'Optimal', i18n = {} }: { status?: MiabisStatus; i18n?: Partial<Record<MiabisStatus, string>> }) {
   const { label, color } = STATUS_MAP[status] || STATUS_MAP.Optimal;
   const display = i18n[status] || label;
   return (

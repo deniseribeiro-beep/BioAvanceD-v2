@@ -1,7 +1,7 @@
 .btn {
   padding: 0.625rem 1.25rem;
   border: 1px solid transparent;
-  border-radius: 0.5rem;
+  border-radius: var(--radius-control);
   font-weight: 500;
   font-size: 0.875rem;
   transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
@@ -10,42 +10,43 @@
   align-items: center;
   justify-content: center;
   gap: 0.5rem;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.05);
 }
 
 .btn-primary {
-  background-color: #2563eb;
-  border-color: #2563eb;
+  background-color: var(--primary);
+  border-color: var(--primary);
   color: white;
 }
 
 .btn-primary:hover {
-  background-color: #1d4ed8;
-  border-color: #1d4ed8;
+  background-color: var(--primary-dark);
+  border-color: var(--primary-dark);
 }
 
 .btn-secondary {
-  background-color: #f8fafc;
-  border-color: #cbd5e1;
-  color: #334155;
+  background-color: var(--surface);
+  border-color: var(--border);
+  color: var(--color-navy);
 }
 
 .btn-secondary:hover {
-  background-color: #eef2ff;
-  border-color: #c7d2fe;
+  background-color: var(--color-primary-soft);
+  border-color: rgba(0, 122, 77, 0.2);
+  color: var(--primary-dark);
 }
 
 .btn-danger {
-  background-color: #dc2626;
-  border-color: #dc2626;
+  background-color: var(--danger);
+  border-color: var(--danger);
   color: white;
   /* Adiciona ícone visual para pessoas daltônicas */
   position: relative;
 }
 
 .btn-danger:hover {
-  background-color: #b91c1c;
-  border-color: #b91c1c;
+  background-color: #dc2626;
+  border-color: #dc2626;
 }
 
 .btn-danger::before {
@@ -55,16 +56,16 @@
 }
 
 .btn-success {
-  background-color: #059669;
-  border-color: #059669;
+  background-color: var(--success);
+  border-color: var(--success);
   color: white;
   /* Adiciona ícone visual para pessoas daltônicas */
   position: relative;
 }
 
 .btn-success:hover {
-  background-color: #047857;
-  border-color: #047857;
+  background-color: var(--primary-dark);
+  border-color: var(--primary-dark);
 }
 
 .btn-success::before {
@@ -90,7 +91,7 @@
 }
 
 .btn:focus-visible {
-  outline: 3px solid rgba(37, 99, 235, 0.22);
+  outline: 3px solid rgba(0, 122, 77, 0.22);
   outline-offset: 2px;
 }
 

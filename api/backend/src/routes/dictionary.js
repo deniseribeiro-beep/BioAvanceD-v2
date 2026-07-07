@@ -5,63 +5,6 @@ const redis = require('redis');
 const { getNeo4jDriver } = require('../database/neo4j');
 const DrugService = require('../services/DrugService');
 
-const DEFAULT_MEDICATIONS = [
-  {
-    code: 'ATC:A16AB04',
-    atc_code: 'A16AB04',
-    atc_level_1: 'A',
-    name: 'Agalsidase beta',
-    synonyms: ['Fabrazyme', 'Agalsidase-Beta'],
-    drug_class: 'enzyme_replacement_therapy',
-    disease_categories: ['Erros Inatos do Metabolismo'],
-  },
-  {
-    code: 'ATC:A16AB03',
-    atc_code: 'A16AB03',
-    atc_level_1: 'A',
-    name: 'Agalsidase alfa',
-    synonyms: ['Replagal', 'Agalsidase-Alfa'],
-    drug_class: 'enzyme_replacement_therapy',
-    disease_categories: ['Erros Inatos do Metabolismo'],
-  },
-  {
-    code: 'ATC:A16AX14',
-    atc_code: 'A16AX14',
-    atc_level_1: 'A',
-    name: 'Migalastat',
-    synonyms: ['Galafold'],
-    drug_class: 'pharmacological_chaperone',
-    disease_categories: ['Erros Inatos do Metabolismo'],
-  },
-  {
-    code: 'ATC:H02AB02',
-    atc_code: 'H02AB02',
-    atc_level_1: 'H',
-    name: 'Deflazacorte',
-    synonyms: ['Deflazacort'],
-    drug_class: 'corticosteroid',
-    disease_categories: ['Doencas Neurologicas'],
-  },
-  {
-    code: 'ATC:M09AX03',
-    atc_code: 'M09AX03',
-    atc_level_1: 'M',
-    name: 'Atalureno',
-    synonyms: ['Translarna'],
-    drug_class: 'exon_skipping_therapy',
-    disease_categories: ['Doencas Neurologicas'],
-  },
-  {
-    code: 'ATC:N03AX26',
-    atc_code: 'N03AX26',
-    atc_level_1: 'N',
-    name: 'Cannabidiol',
-    synonyms: ['Epidiolex'],
-    drug_class: 'anticonvulsant',
-    disease_categories: ['Doencas Neurologicas'],
-  },
-];
-
 let redisClient = null;
 let redisConnectPromise = null;
 let redisAvailable = true;
@@ -131,6 +74,109 @@ function normalizeDiseaseProfile(record = {}) {
   };
 }
 
+function normalizeHpoCode(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  return /^HP:/i.test(raw) ? raw.replace(/^hp:/i, 'HP:') : raw;
+}
+
+function normalizeBiomarkerCode(value) {
+  return String(value || '').trim();
+}
+
+function biomarkerDisplayName(code) {
+  const normalized = normalizeBiomarkerCode(code);
+  const known = {
+    alphaGal: 'Alpha-galactosidase A',
+    lysoGb3: 'Lyso-Gb3',
+  };
+  return known[normalized] || normalized;
+}
+
+function normalizeLocalPhenotype(raw = {}) {
+  const code = normalizeHpoCode(raw.hpoId || raw.code || raw.codigo || raw.relacoes?.hpo);
+  const display = String(raw.label || raw.display || raw.descricao || raw.name || raw.nome || code).trim();
+  return normalizeCoding({ system: 'http://purl.obolibrary.org/obo/hp.owl', code, display }, 'http://purl.obolibrary.org/obo/hp.owl');
+}
+
+function normalizeLocalBiomarker(raw) {
+  const code = normalizeBiomarkerCode(typeof raw === 'string' ? raw : raw?.code || raw?.biomarkerType || raw?.id || raw?.codigo);
+  const display = String((typeof raw === 'object' && (raw.display || raw.label || raw.name || raw.nome)) || biomarkerDisplayName(code)).trim();
+  return normalizeCoding({ system: 'http://loinc.org', code, display }, 'http://loinc.org');
+}
+
+function uniqueCodings(codings = []) {
+  const seen = new Set();
+  return codings.filter((item) => {
+    if (!item?.code) return false;
+    const key = `${item.system}::${item.code}`.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+async function buildLocalSemanticSuggestions(db, orphaCode) {
+  if (!db || typeof db.collection !== 'function') {
+    return null;
+  }
+
+  const normalizedOrpha = normalizeOrphaCode(orphaCode);
+  if (!normalizedOrpha) {
+    return null;
+  }
+
+  const disease = await db.collection('disease_dictionary').findOne({
+    orpha_code: normalizedOrpha,
+    active: { $ne: false },
+  });
+
+  const terminologyRows = await db.collection('terminologies').find({
+    $or: [
+      { 'relacoes.orpha': normalizedOrpha },
+      { 'relacoes.orpha': `ORPHA:${normalizedOrpha}` },
+      { codigo: `ORPHA:${normalizedOrpha}` },
+    ],
+    ativo: { $ne: false },
+  }).limit(100).toArray();
+
+  const hpoRows = terminologyRows.filter((item) => {
+    const system = String(item.sistema || item.system || '').trim().toUpperCase();
+    return system === 'HPO' || Boolean(item.relacoes?.hpo);
+  });
+
+  const phenotypes = uniqueCodings([
+    ...(Array.isArray(disease?.phenotypes) ? disease.phenotypes.map(normalizeLocalPhenotype) : []),
+    ...hpoRows.map((item) => normalizeLocalPhenotype({
+      ...item,
+      code: item.relacoes?.hpo || item.codigo,
+      label: item.label || item.descricao,
+    })),
+  ].filter(Boolean));
+
+  const requirements = disease?.validation_requirements || {};
+  const biomarkerRequirements = [
+    ...(Array.isArray(requirements?.biomarkers?.required) ? requirements.biomarkers.required : []),
+    ...(Array.isArray(requirements?.biomarkers?.recommended) ? requirements.biomarkers.recommended : []),
+    ...(Array.isArray(disease?.biomarkers) ? disease.biomarkers : []),
+  ];
+  const biomarkers = uniqueCodings(biomarkerRequirements.map(normalizeLocalBiomarker).filter(Boolean));
+
+  if (!disease && phenotypes.length === 0 && biomarkers.length === 0) {
+    return null;
+  }
+
+  return {
+    disease: normalizeCoding({
+      system: 'http://www.orpha.net',
+      code: normalizedOrpha,
+      display: disease?.name || `ORPHA ${normalizedOrpha}`,
+    }, 'http://www.orpha.net'),
+    phenotypes,
+    biomarkers,
+  };
+}
+
 function normalizeMedicationRecord(raw = {}) {
   const atcCode = String(raw.atc_code || raw.code || '').replace(/^ATC:/i, '').trim().toUpperCase();
   return {
@@ -153,34 +199,6 @@ function normalizeMedicationRecord(raw = {}) {
   };
 }
 
-async function ensureMedicationDictionarySeeded(db) {
-  const collection = db.collection('medication_dictionary');
-  const count = await collection.estimatedDocumentCount();
-  if (count > 0) {
-    return;
-  }
-
-  const now = new Date();
-  const operations = DEFAULT_MEDICATIONS.map((item) => ({
-    updateOne: {
-      filter: { code: item.code },
-      upsert: true,
-      update: {
-        $set: {
-          ...item,
-          generic_name: item.name,
-          active: true,
-          updatedAt: now,
-        },
-        $setOnInsert: {
-          createdAt: now,
-        },
-      },
-    },
-  }));
-  await collection.bulkWrite(operations, { ordered: false });
-}
-
 async function ensureMedicationDictionaryIndexes(db) {
   const collection = db.collection('medication_dictionary');
   await collection.createIndex({ generic_name: 1 }, { name: 'generic_name_idx' });
@@ -201,7 +219,6 @@ router.get('/atc/search', async (req, res) => {
 
   try {
     await ensureMedicationDictionaryIndexes(db);
-    await ensureMedicationDictionarySeeded(db);
     const drugService = new DrugService(db);
     const medications = await drugService.searchAndCacheDrug(query, {
       limit: Math.min(Math.max(Number(req.query?.limit || 10), 1), 50),
@@ -269,6 +286,7 @@ router.get('/suggest', async (req, res) => {
   try {
     const cached = await getCacheValue(cacheKey);
     if (cached) return res.json(JSON.parse(cached));
+
     const driver = getNeo4jDriver();
     const session = driver.session();
     // Cypher: busca HPOs e Biomarcadores relacionados
@@ -310,7 +328,17 @@ router.get('/suggest', async (req, res) => {
     await setCacheValue(cacheKey, 3600, JSON.stringify(response));
     res.json(response);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    try {
+      const fallback = await buildLocalSemanticSuggestions(req.app.locals.db, orphaCode);
+      if (fallback) {
+        await setCacheValue(cacheKey, 3600, JSON.stringify(fallback));
+        return res.json(fallback);
+      }
+
+      return res.status(404).json({ error: 'Not found' });
+    } catch (fallbackError) {
+      return res.status(500).json({ error: fallbackError.message || err.message });
+    }
   }
 });
 
@@ -352,7 +380,6 @@ router.get('/medications/search', async (req, res) => {
 
   try {
     await ensureMedicationDictionaryIndexes(db);
-    await ensureMedicationDictionarySeeded(db);
     const collection = db.collection('medication_dictionary');
 
     const filters = [{ active: { $ne: false } }];

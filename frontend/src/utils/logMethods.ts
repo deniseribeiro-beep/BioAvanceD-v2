@@ -30,7 +30,7 @@ export function queryLogs(
     }
     if (filters.userName) {
       filtered = filtered.filter((log) =>
-        log.userName.toLowerCase().includes(filters.userName!.toLowerCase())
+        String(log.userName || '').toLowerCase().includes(filters.userName!.toLowerCase())
       );
     }
     if (filters.action) {
@@ -50,19 +50,21 @@ export function queryLogs(
     }
     if (filters.startDate) {
       filtered = filtered.filter(
-        (log) => log.timestamp >= filters.startDate!
+        (log) => Boolean(log.timestamp) && new Date(log.timestamp!).getTime() >= filters.startDate!.getTime()
       );
     }
     if (filters.endDate) {
-      filtered = filtered.filter((log) => log.timestamp <= filters.endDate!);
+      filtered = filtered.filter(
+        (log) => Boolean(log.timestamp) && new Date(log.timestamp!).getTime() <= filters.endDate!.getTime()
+      );
     }
     if (filters.searchTerm) {
       const term = filters.searchTerm.toLowerCase();
       filtered = filtered.filter(
         (log) =>
-          log.message.toLowerCase().includes(term) ||
-          log.userName.toLowerCase().includes(term) ||
-          log.entity.toLowerCase().includes(term)
+          String(log.message || '').toLowerCase().includes(term) ||
+          String(log.userName || '').toLowerCase().includes(term) ||
+          String(log.entity || '').toLowerCase().includes(term)
       );
     }
   }

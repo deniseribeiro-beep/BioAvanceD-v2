@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useState } from 'react';
 import { apiClient, notifyApiToast } from '../api/client';
+import { extractResponseItems } from '../api/response.adapters';
 
 export type SemanticCoding = {
   system: string;
@@ -25,14 +26,34 @@ type LoadCascadeOptions = {
 
 function normalizeCoding(raw: any, fallbackSystem: string): SemanticCoding | null {
   const system = String(raw?.system || fallbackSystem || '').trim();
-  const code = String(raw?.code || '').trim();
-  const display = String(raw?.display || raw?.nome || raw?.name || '').trim();
+  const code = String(raw?.code || raw?.codigo || raw?.hpoId || raw?.id || '').trim();
+  const display = String(raw?.display || raw?.nome || raw?.name || raw?.label || raw?.descricao || raw?.description || '').trim();
 
   if (!system || !code || !display) {
     return null;
   }
 
   return { system, code, display };
+}
+
+function isOrphaCoding(coding: SemanticCoding | null): coding is SemanticCoding {
+  if (!coding) return false;
+  const system = coding.system.toLowerCase();
+  const code = coding.code.toUpperCase();
+  return system.includes('orpha') || code.startsWith('ORPHA:') || /^\d+$/.test(code);
+}
+
+function isHpoCoding(coding: SemanticCoding | null): coding is SemanticCoding {
+  if (!coding) return false;
+  const system = coding.system.toLowerCase();
+  return system.includes('hpo') || system.includes('hp.owl') || /^HP:\d+/i.test(coding.code);
+}
+
+function isBiomarkerCoding(coding: SemanticCoding | null): coding is SemanticCoding {
+  if (!coding) return false;
+  const system = coding.system.toLowerCase();
+  const code = coding.code.toUpperCase();
+  return !isHpoCoding(coding) && !system.includes('orpha') && !system.includes('omim') && !code.startsWith('ORPHA:') && !code.startsWith('OMIM:');
 }
 
 export function useSemanticCascade() {
@@ -62,10 +83,10 @@ export function useSemanticCascade() {
         suppressErrorToast: true,
       } as any);
 
-      const payload = Array.isArray(response?.data?.results) ? response.data.results : [];
+      const payload = extractResponseItems(response, ['results']);
       return payload
         .map((item: any) => normalizeCoding(item, 'http://www.orpha.net'))
-        .filter(Boolean) as SemanticCoding[];
+        .filter(isOrphaCoding);
     } catch {
       setSearchError('Nao foi possivel buscar doencas ORPHA agora.');
       return [];
@@ -95,10 +116,10 @@ export function useSemanticCascade() {
       const normalizedDisease = normalizeCoding(data.disease || diseaseCoding, 'http://www.orpha.net');
       const normalizedPhenotypes = (Array.isArray(data.phenotypes) ? data.phenotypes : [])
         .map((item) => normalizeCoding(item, 'http://purl.obolibrary.org/obo/hp.owl'))
-        .filter(Boolean) as SemanticCoding[];
+        .filter(isHpoCoding);
       const normalizedBiomarkers = (Array.isArray(data.biomarkers) ? data.biomarkers : [])
         .map((item) => normalizeCoding(item, 'http://loinc.org'))
-        .filter(Boolean) as SemanticCoding[];
+        .filter(isBiomarkerCoding);
 
       const nextState: SemanticCascadeState = {
         disease: normalizedDisease,

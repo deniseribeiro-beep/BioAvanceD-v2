@@ -51,7 +51,7 @@ class MqttTelemetryService {
     }
 
     if (!this.isEnabled()) {
-      logger.info('[ISO20387][MQTT] Ingestão MQTT desabilitada (MQTT_ENABLED=false)');
+      logger.info('ingestão MQTT desabilitada');
       return;
     }
 
@@ -76,7 +76,14 @@ class MqttTelemetryService {
       if (config.key) connectionOptions.key = config.key;
     }
 
-    this.client = mqtt.connect(config.url, connectionOptions);
+    try {
+      this.client = mqtt.connect(config.url, connectionOptions);
+    } catch (error) {
+      logger.error('[ISO20387][MQTT] Falha controlada ao conectar broker MQTT:', error.message || error);
+      this.client = null;
+      this.started = false;
+      return;
+    }
 
     this.client.on('connect', () => {
       this.client.subscribe(config.topic, (error) => {
@@ -127,7 +134,7 @@ class MqttTelemetryService {
         return;
       }
 
-      if (payloadSignature && !signatureVerified) {
+      if (payloadSignature && !signatureVerified && signatureRequired) {
         await mqttIngestionAuditService.append(db, {
           topic,
           payloadHash,
@@ -139,6 +146,10 @@ class MqttTelemetryService {
         });
         logger.warn('[ISO20387][MQTT] Payload rejeitado: assinatura inválida');
         return;
+      }
+
+      if (payloadSignature && !signatureVerified) {
+        logger.warn('[ISO20387][MQTT] Assinatura inválida recebida, mas assinatura não é obrigatória; seguindo processamento');
       }
 
       const temperatureData = {

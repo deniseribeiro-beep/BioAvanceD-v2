@@ -30,6 +30,19 @@ function setCachedModule(modulePath, exportsObject) {
 
 function buildDb() {
   const incidents = [];
+  const samples = [{
+    _id: '507f1f77bcf86cd799439055',
+    sampleID: 'BIO-IOT-001',
+    barcode: 'BC-IOT-001',
+    locationID: 501,
+    status: 'AVAILABLE',
+    currentStatus: 'Available',
+    release_status: 'AVAILABLE',
+    availabilityStatus: 'AVAILABLE',
+    quantity: 1,
+    unit: 'mL',
+  }];
+
   const incidentCollection = {
     findOne: vi.fn().mockResolvedValue(null),
     insertOne: vi.fn().mockImplementation(async (doc) => {
@@ -37,6 +50,47 @@ function buildDb() {
       return { insertedId: '507f1f77bcf86cd799439044' };
     }),
     updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
+  };
+
+  const sensorsCollection = {
+    find: vi.fn().mockReturnValue({
+      toArray: vi.fn().mockResolvedValue([{ sensorId: 'sensor-1', locationID: 501 }]),
+    }),
+  };
+
+  const sensorMetadataCollection = {
+    find: vi.fn().mockReturnValue({
+      toArray: vi.fn().mockResolvedValue([]),
+    }),
+  };
+
+  const locationsCollection = {
+    find: vi.fn().mockReturnValue({
+      toArray: vi.fn().mockResolvedValue([{ locationID: 501, equipmentID: 9001 }]),
+    }),
+  };
+
+  const samplesCollection = {
+    find: vi.fn().mockReturnValue({
+      toArray: vi.fn().mockResolvedValue(samples),
+    }),
+    updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
+    createIndex: vi.fn().mockResolvedValue('idx'),
+  };
+
+  const sampleMovementsCollection = {
+    collectionName: 'sampleMovements',
+    find: vi.fn().mockReturnValue({
+      sort: vi.fn().mockReturnThis(),
+      limit: vi.fn().mockReturnThis(),
+      next: vi.fn().mockResolvedValue(null),
+    }),
+    insertOne: vi.fn().mockResolvedValue({ insertedId: 'movement-1' }),
+    createIndex: vi.fn().mockResolvedValue('idx'),
+  };
+
+  const countersCollection = {
+    findOneAndUpdate: vi.fn().mockResolvedValue({ value: { seq: 1 } }),
   };
 
   const usersCollection = {
@@ -54,11 +108,20 @@ function buildDb() {
       collection: vi.fn().mockImplementation((name) => {
         if (name === 'temperatureIncidents') return incidentCollection;
         if (name === 'users') return usersCollection;
+        if (name === 'sensors') return sensorsCollection;
+        if (name === 'sensorMetadata') return sensorMetadataCollection;
+        if (name === 'locations') return locationsCollection;
+        if (name === 'samples') return samplesCollection;
+        if (name === 'sampleMovements') return sampleMovementsCollection;
+        if (name === 'sample_movements') return sampleMovementsCollection;
+        if (name === 'counters') return countersCollection;
         return { find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }) };
       }),
     },
     incidents,
     incidentCollection,
+    samplesCollection,
+    sampleMovementsCollection,
   };
 }
 
@@ -124,11 +187,29 @@ describe('IoT API integration', () => {
     await vi.waitFor(() => {
       expect(saveTelemetryPoint).toHaveBeenCalledTimes(1);
       expect(mockDb.incidentCollection.insertOne).toHaveBeenCalledTimes(1);
+      expect(mockDb.samplesCollection.updateOne).toHaveBeenCalledTimes(1);
+      expect(mockDb.sampleMovementsCollection.insertOne).toHaveBeenCalledTimes(1);
       expect(sendCriticalAlertEmail).toHaveBeenCalledTimes(1);
     });
 
     expect(mockDb.incidents).toHaveLength(1);
     expect(mockDb.incidents[0].sensorKey).toBe('sensor-1');
     expect(mockDb.incidents[0].status).toBe('open');
+    const update = mockDb.samplesCollection.updateOne.mock.calls[0][1].$set;
+    expect(update).toMatchObject({
+      status: 'QUARANTINED',
+      currentStatus: 'QUARANTINED',
+      release_status: 'QUARANTINE',
+      availabilityStatus: 'BLOCKED',
+      quarantineReasonCode: 'COLD_CHAIN_INCIDENT',
+      coldChainSensorKey: 'sensor-1',
+      coldChainStatus: 'INCIDENT_OPEN',
+    });
+    const movement = mockDb.sampleMovementsCollection.insertOne.mock.calls[0][0];
+    expect(movement).toMatchObject({
+      purpose: 'cold_chain_incident_quarantine',
+      destination: 'Quarentena',
+      responsible: 'SYSTEM',
+    });
   });
 });

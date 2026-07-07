@@ -2,6 +2,10 @@
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
   width: 100%;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
 }
 
 .table {
@@ -12,7 +16,7 @@
 }
 
 .table thead {
-  background-color: var(--background);
+  background-color: #f8fafc;
 }
 
 .table th {
@@ -20,12 +24,12 @@
   text-align: left;
   font-weight: 600;
   font-size: 0.8125rem;
-  color: var(--text);
-  border-bottom: 2px solid var(--border);
+  color: var(--color-navy);
+  border-bottom: 1px solid var(--border);
   white-space: nowrap;
   text-transform: uppercase;
   letter-spacing: 0.5px;
-  background-color: rgba(0, 0, 0, 0.02);
+  background-color: #f8fafc;
   position: sticky;
   top: 0;
   z-index: 1;
@@ -37,12 +41,12 @@
 }
 
 .table th.sortable:hover {
-  background-color: rgba(0, 102, 204, 0.05);
+  background-color: var(--color-primary-soft);
 }
 
 .table td {
   padding: 0.875rem 1rem;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  border-bottom: 1px solid var(--border);
   font-size: 0.875rem;
   color: var(--text);
   vertical-align: middle;
@@ -54,11 +58,11 @@
 }
 
 .table tbody tr:hover {
-  background-color: rgba(0, 0, 0, 0.02);
+  background-color: #f8fafc;
 }
 
 .table tbody tr:hover td {
-  background-color: rgba(0, 0, 0, 0.02);
+  background-color: #f8fafc;
 }
 
 .table tbody tr:last-child td {

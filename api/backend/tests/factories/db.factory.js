@@ -1,3 +1,5 @@
+const { randomUUID } = require('crypto');
+
 function createCollectionMock(overrides = {}) {
   const v = globalThis.vi;
   if (!v) {
@@ -41,7 +43,7 @@ function createCollectionMock(overrides = {}) {
 
   return {
     deleteOne: v.fn().mockResolvedValue({ deletedCount: 0 }),
-    insertOne: v.fn().mockResolvedValue({ insertedId: 'mock-id' }),
+    insertOne: v.fn().mockResolvedValue({ insertedId: randomUUID() }),
     updateOne: v.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
     findOne: v.fn().mockResolvedValue(null),
     find: v.fn().mockImplementation(() => createCursor([])),

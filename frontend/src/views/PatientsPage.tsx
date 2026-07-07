@@ -13,6 +13,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { dataImportService, patientService } from '../services/api';
 import { useLanguage } from '../contexts/LanguageContext';
 import ImportResultSummary, { type ImportResultSummaryData } from '../components/ImportResultSummary';
+import { convertExcelFileToFhirBundle, downloadFhirExcelTemplate } from '../utils/fhirExcelImport';
 import './PatientsPage.css';
 
 const styles: Record<string, CSSProperties> = {
@@ -244,15 +245,86 @@ export default function PatientsPage() {
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [importedFile, setImportedFile] = useState<File | null>(null);
   const [importedJson, setImportedJson] = useState<any>(null);
+  const [importExcelFile, setImportExcelFile] = useState<File | null>(null);
+  const [fhirImportStep, setFhirImportStep] = useState(1);
+  const [fhirBatchId, setFhirBatchId] = useState('');
+  const [fhirBatch, setFhirBatch] = useState<any>(null);
+  const [fhirStagingRows, setFhirStagingRows] = useState<any[]>([]);
+  const [fhirConsentSummary, setFhirConsentSummary] = useState<any>(null);
   const [importLoading, setImportLoading] = useState(false);
   const [importResult, setImportResult] = useState<ImportResultSummaryData | null>(null);
 
-  // Estado para importação de amostras
-  const [isSampleImportModalOpen, setIsSampleImportModalOpen] = useState(false);
-  const [importedSampleFile, setImportedSampleFile] = useState<File | null>(null);
-  const [importedSampleJson, setImportedSampleJson] = useState<any>(null);
-  const [sampleImportLoading, setSampleImportLoading] = useState(false);
-  const [sampleImportResult, setSampleImportResult] = useState<{ success?: boolean; message?: string; samples?: number; error?: string } | null>(null);
+  const resetFhirImportState = () => {
+    setIsImportModalOpen(false);
+    setImportedFile(null);
+    setImportedJson(null);
+    setImportExcelFile(null);
+    setFhirImportStep(1);
+    setFhirBatchId('');
+    setFhirBatch(null);
+    setFhirStagingRows([]);
+    setFhirConsentSummary(null);
+    setImportResult(null);
+  };
+
+  const getFhirResourceCount = (resourceType: string) => {
+    if (!importedJson?.entry || !Array.isArray(importedJson.entry)) return 0;
+    return importedJson.entry.filter((entry: any) => entry?.resource?.resourceType === resourceType).length;
+  };
+
+  const getReadyToCommitCount = () => fhirStagingRows.filter((row) => row.status === 'READY_TO_COMMIT').length;
+  const getValidWithEmailCount = () => fhirStagingRows.filter((row) => row.status === 'VALID' && row.normalized?.patientEmail).length;
+  const getFhirValidationSummary = () => {
+    const counts = fhirBatch?.counts || {};
+    return {
+      total: counts.total ?? fhirStagingRows.length,
+      valid: counts.valid ?? fhirStagingRows.filter((row) => row.status === 'VALID').length,
+      pendingConsent: counts.pendingConsent ?? fhirStagingRows.filter((row) => row.status === 'PENDING_CONSENT').length,
+      errors: counts.errors ?? fhirStagingRows.filter((row) => row.status === 'ERROR' || row.status === 'NEEDS_EMAIL' || row.status === 'CONSENT_SEND_FAILED').length,
+      readyToCommit: counts.readyToCommit ?? fhirStagingRows.filter((row) => row.status === 'READY_TO_COMMIT').length,
+    };
+  };
+
+  const refreshFhirBatchState = (data: any) => {
+    const batch = data?.batch || data?.data?.batch || null;
+    const records = data?.records || data?.data?.records || [];
+    setFhirBatch(batch);
+    setFhirStagingRows(Array.isArray(records) ? records : []);
+    const nextBatchId = String(batch?._id || batch?.id || data?.batchId || data?.data?.batchId || fhirBatchId || '');
+    if (nextBatchId) setFhirBatchId(nextBatchId);
+  };
+
+  const handleExcelFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setImportExcelFile(e.target.files?.[0] || null);
+  };
+
+  const handleConvertExcelToFhir = async () => {
+    if (!importExcelFile) {
+      alert('Selecione um arquivo Excel preenchido com o modelo.');
+      return;
+    }
+
+    setImportLoading(true);
+    try {
+      const bundle = await convertExcelFileToFhirBundle(importExcelFile);
+      const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/fhir+json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'importacao-fhir-bundle.json';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      setImportedJson(bundle);
+      setImportedFile(new File([blob], 'importacao-fhir-bundle.json', { type: 'application/fhir+json' }));
+      setFhirImportStep(2);
+    } catch (err: any) {
+      alert(err?.message || 'Não foi possível converter o Excel para JSON FHIR.');
+    } finally {
+      setImportLoading(false);
+    }
+  };
 
   // Handler para leitura do arquivo
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -264,6 +336,11 @@ export default function PatientsPage() {
           const json = JSON.parse(ev.target?.result as string);
           setImportedFile(file);
           setImportedJson(json);
+          setFhirImportStep(2);
+          setFhirBatchId('');
+          setFhirBatch(null);
+          setFhirStagingRows([]);
+          setFhirConsentSummary(null);
         } catch (err) {
           alert('Arquivo JSON inválido');
           setImportedFile(null);
@@ -278,121 +355,64 @@ export default function PatientsPage() {
     }
   };
 
-  function normalizeFhirImportPayload(payload: any) {
-    if (payload && typeof payload === 'object' && Array.isArray(payload.entry)) {
-      return payload;
-    }
-
-    if (Array.isArray(payload)) {
-      return payload;
-    }
-
-    if (payload && typeof payload === 'object' && payload.resourceType) {
-      return payload;
-    }
-
-    return payload;
-  }
-
-  // Handler para envio do JSON (pacientes)
-  const handleImportSubmit = async () => {
+  const handleValidateFhirBatch = async () => {
     if (!importedJson) return;
     setImportLoading(true);
     setImportResult(null);
     try {
-      const payload = normalizeFhirImportPayload(importedJson);
-      const response = await dataImportService.importFhir(payload);
-      const data = response?.data || {};
-      setImportResult(data);
-      if (data.success !== false && (data.patients !== undefined || data.samples !== undefined)) {
-        alert('Importação concluída!');
-        setIsImportModalOpen(false);
-        setImportedFile(null);
-        setImportedJson(null);
-        loadPatients();
-      } else {
-        alert(data.message || data.error || 'Erro ao importar');
-      }
+      const stagedResponse = fhirBatchId
+        ? await dataImportService.validateFhirBatch(fhirBatchId)
+        : await dataImportService.stageFhirBundle(importedJson);
+      const data = stagedResponse?.data || {};
+      refreshFhirBatchState(data);
+      setFhirImportStep(3);
     } catch (err: any) {
       const errorMessage = err?.response?.data?.error || err?.response?.data?.message || err?.message;
-      setImportResult({ success: false, error: errorMessage || 'Erro ao importar FHIR' });
-      alert('Erro ao importar: ' + (errorMessage || 'Erro desconhecido'));
+      setImportResult({ success: false, error: errorMessage || 'A importação em lote exige um FHIR R4 Bundle JSON.' });
+      alert('Erro ao validar lote: ' + (errorMessage || 'A importação em lote exige um FHIR R4 Bundle JSON.'));
     } finally {
       setImportLoading(false);
     }
   };
 
-  // Handler para leitura do arquivo de amostras
-  const handleSampleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file && file.type === 'application/json') {
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        try {
-          const json = JSON.parse(ev.target?.result as string);
-          setImportedSampleFile(file);
-          setImportedSampleJson(json);
-        } catch (err) {
-          alert('Arquivo JSON inválido');
-          setImportedSampleFile(null);
-          setImportedSampleJson(null);
-        }
-      };
-      reader.readAsText(file);
-    } else {
-      alert('Selecione um arquivo .json válido');
-      setImportedSampleFile(null);
-      setImportedSampleJson(null);
-    }
-  };
-
-  // Handler para envio do JSON de amostras
-  const handleSampleImportSubmit = async () => {
-    if (!importedSampleJson) return;
-    setSampleImportLoading(true);
-    setSampleImportResult(null);
+  const handleSendFhirConsents = async () => {
+    if (!fhirBatchId) return;
+    setImportLoading(true);
     try {
-      // Anonimização básica: remove campos sensíveis extras
-      const anonymized = Array.isArray(importedSampleJson)
-        ? importedSampleJson.map(obj => anonymizeSample(obj))
-        : anonymizeSample(importedSampleJson);
-      const response = await fetch('http://localhost:3000/api/import/samples', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(anonymized)
+      const response = await dataImportService.sendFhirBatchConsents(fhirBatchId);
+      const data = response?.data || {};
+      refreshFhirBatchState(data);
+      const results = data.consentResults || [];
+      setFhirConsentSummary({
+        sent: results.filter((item: any) => item.sent).length,
+        failed: results.filter((item: any) => item.sent === false).length,
+        pending: (data.records || []).filter((row: any) => row.status === 'PENDING_CONSENT').length,
       });
-      const data = await response.json();
-      setSampleImportResult(data);
-      if (data.success !== false && data.samples) {
-        alert('Importação de amostras concluída!');
-        setIsSampleImportModalOpen(false);
-        setImportedSampleFile(null);
-        setImportedSampleJson(null);
-        // Opcional: recarregar pacientes/amostras
-        loadPatients();
-      } else {
-        alert(data.message || data.error || 'Erro ao importar amostras');
-      }
+      setFhirImportStep(5);
     } catch (err: any) {
-      setSampleImportResult({ success: false, error: err.message });
-      alert('Erro ao importar amostras: ' + err.message);
+      const errorMessage = err?.response?.data?.error || err?.response?.data?.message || err?.message;
+      setImportResult({ success: false, error: errorMessage || 'Erro ao enviar TCLEs' });
+      alert('Erro ao enviar TCLEs: ' + (errorMessage || 'Erro desconhecido'));
     } finally {
-      setSampleImportLoading(false);
+      setImportLoading(false);
     }
   };
 
-  // Funções de anonimização básica
-  function anonymizeSample(obj: any) {
-    const { sampleID, patientCpf, patientRecordNumber, type, origin, ...rest } = obj;
-    return {
-      sampleID,
-      patientCpf,
-      patientRecordNumber,
-      type,
-      origin,
-      // outros campos permitidos podem ser adicionados aqui
-    };
-  }
+  const handleCommitFhirBatch = async () => {
+    if (!fhirBatchId || getReadyToCommitCount() === 0) return;
+    setImportLoading(true);
+    try {
+      const response = await dataImportService.commitFhirBatch(fhirBatchId);
+      refreshFhirBatchState(response?.data || {});
+      setImportResult({ success: true, message: 'Registros assinados salvos com sucesso.' });
+      await loadPatients();
+    } catch (err: any) {
+      const errorMessage = err?.response?.data?.error || err?.response?.data?.message || err?.message;
+      setImportResult({ success: false, error: errorMessage || 'Erro ao salvar registros assinados' });
+    } finally {
+      setImportLoading(false);
+    }
+  };
 
   return (
     <div className="page patients-page" data-testid="patients-page">
@@ -408,31 +428,10 @@ export default function PatientsPage() {
         </div>
         <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center' }}>
           {canImportPatients && (
-            <Button data-testid="patients-import-fhir-button" variant="primary" onClick={() => setIsImportModalOpen(true)}>
+            <Button data-testid="patients-import-fhir-button" variant="primary" onClick={() => navigate('/patients/import-fhir')}>
               Importar FHIR
             </Button>
           )}
-                {/* Modal de Importação FHIR */}
-                <Modal isOpen={isImportModalOpen} onClose={() => { setIsImportModalOpen(false); setImportedFile(null); setImportedJson(null); setImportResult(null); }} title="Importação Inteligente de Dados FHIR">
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', minWidth: 320 }}>
-                    <label style={{ fontWeight: 500 }}>Selecione um arquivo FHIR (.json):</label>
-                    <input type="file" accept="application/json" onChange={handleFileChange} disabled={importLoading} title="Selecione um arquivo .json FHIR" />
-                    {importedJson && (
-                      <div style={{ maxHeight: 180, overflow: 'auto', background: '#f8fafc', border: '1px solid #e5e7eb', borderRadius: 6, padding: 8, fontSize: 13 }}>
-                        <pre style={{ margin: 0 }}>{JSON.stringify(importedJson, null, 2).slice(0, 2000)}{JSON.stringify(importedJson, null, 2).length > 2000 ? '... (truncado)' : ''}</pre>
-                      </div>
-                    )}
-                    <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-                      <Button onClick={handleImportSubmit} disabled={!importedJson || importLoading}>
-                        {importLoading ? 'Processando...' : 'Processar Importação'}
-                      </Button>
-                      <Button variant="secondary" onClick={() => { setIsImportModalOpen(false); setImportedFile(null); setImportedJson(null); setImportResult(null); }} disabled={importLoading}>
-                        Cancelar
-                      </Button>
-                    </div>
-                    <ImportResultSummary result={importResult} style={{ marginTop: 8, fontSize: 14 }} />
-                  </div>
-                </Modal>
           <div style={{ 
             position: 'relative', 
             display: 'flex', 

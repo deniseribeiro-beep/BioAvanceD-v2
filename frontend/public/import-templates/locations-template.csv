@@ -1,6 +1,0 @@
-# Template de Importação de Localizações
-# Instruções: Preencha cada linha com os dados de uma localização. Não altere o cabeçalho.
-# Campos obrigatórios: locationID, nome, tipo, andar
-locationID,nome,tipo,andar
-LOC001,Laboratório Central,Lab,1
-LOC002,Estoque,Depósito,0

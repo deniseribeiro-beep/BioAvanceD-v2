@@ -1,4 +1,5 @@
 // Implementação dos métodos da classe User conforme diagrama UML
+import type { Log, Patient, Reports, Sample, Sensor, Temperature, User, Withdrawal } from '../types/models';
 
 /**
  * Cria novo usuário
@@ -30,7 +31,7 @@ export function createUser(userData: Partial<User>): User {
  */
 export function validateUserStatus(user: User): string {
   const validStatuses = ['Ativo', 'Inativo', 'Suspenso', 'Bloqueado'];
-  if (!validStatuses.includes(user.status)) {
+  if (!user.status || !validStatuses.includes(user.status)) {
     return 'Ativo'; // Status padrão
   }
   return user.status;
@@ -44,29 +45,29 @@ export function registerPatient(patientData: Partial<Patient>): Patient {
   const newPatient: Patient = {
     patientID: 0, // Será definido pelo backend
     patientName: patientData.patientName || '',
-    birthDate: patientData.birthDate || new Date(),
+    birthDate: patientData.birthDate || new Date().toISOString(),
     sex: patientData.sex || '',
     weight: patientData.weight || 0,
     heightCm: patientData.heightCm || 0,
-    recordNumber: patientData.recordNumber || 0,
+    recordNumber: patientData.recordNumber || '',
     clinicalUnit: patientData.clinicalUnit || '',
     unitAcronym: patientData.unitAcronym || '',
     diagnosticHypothesis: patientData.diagnosticHypothesis || '',
-    icdCode: patientData.icdCode || 0,
-    hypertension: patientData.hypertension || false,
-    obesity: patientData.obesity || false,
-    diabetesType1: patientData.diabetesType1 || false,
-    diabetesType2: patientData.diabetesType2 || false,
-    copd: patientData.copd || false,
-    ckd: patientData.ckd || false,
-    smoking: patientData.smoking || false,
-    alcoholUse: patientData.alcoholUse || false,
-    asthma: patientData.asthma || false,
-    antibioticUse: patientData.antibioticUse || false,
-    insulinUse: patientData.insulinUse || false,
-    antiviralUse: patientData.antiviralUse || false,
-    geneticVariant: patientData.geneticVariant || false,
-    alphaGal: patientData.alphaGal || false,
+    icdCode: patientData.icdCode || '',
+    hypertension: patientData.hypertension || 'Não',
+    obesity: patientData.obesity || 'Não',
+    diabetesType1: patientData.diabetesType1 || 'Não',
+    diabetesType2: patientData.diabetesType2 || 'Não',
+    copd: patientData.copd || 'Não',
+    ckd: patientData.ckd || 'Não',
+    smoking: patientData.smoking || 'Não',
+    alcoholUse: patientData.alcoholUse || 'Não',
+    asthma: patientData.asthma || 'Não',
+    antibioticUse: patientData.antibioticUse || 'Não',
+    insulinUse: patientData.insulinUse || 'Não',
+    antiviralUse: patientData.antiviralUse || 'Não',
+    geneticVariant: patientData.geneticVariant || '',
+    alphaGal: patientData.alphaGal || 0,
     lysoGb3: patientData.lysoGb3 || 0,
     sampleList: [],
     notes: patientData.notes || '',
@@ -86,14 +87,14 @@ export function registerSample(sampleData: Partial<Sample>): Sample {
     sampleType: sampleData.sampleType || '',
     sampleOrigin: sampleData.sampleOrigin || '',
     extractionProtocol: sampleData.extractionProtocol || '',
-    barcode: sampleData.barcode || 0,
+    barcode: sampleData.barcode || '',
     registrationDate: sampleData.registrationDate || new Date(),
     withdrawalDate: sampleData.withdrawalDate || new Date(),
     quantity: sampleData.quantity || 0,
     qualityID: sampleData.qualityID || 0,
     locationID: sampleData.locationID || 0,
     linkedProject: sampleData.linkedProject || '',
-    withdrawalType: sampleData.withdrawalType || '',
+    withdrawalType: sampleData.withdrawalType || 'Parcial',
     withdrawalResponsible: sampleData.withdrawalResponsible || '',
     sampleDestination: sampleData.sampleDestination || '',
     currentStatus: sampleData.currentStatus || 'Available',
@@ -114,9 +115,10 @@ export function recordSampleWithdrawal(
     withdrawalID: 0, // Será definido pelo backend
     sampleID,
     withdrawalDate: withdrawalData.withdrawalDate || new Date(),
-    withdrawalType: withdrawalData.withdrawalType || '',
+    withdrawalType: withdrawalData.withdrawalType || 'Parcial',
     withdrawalResponsible: withdrawalData.withdrawalResponsible || '',
-    quantity: withdrawalData.quantity || 0,
+    withdrawalQuantity: withdrawalData.withdrawalQuantity || 0,
+    linkedProject: withdrawalData.linkedProject || '',
     notes: withdrawalData.notes || '',
   };
   
@@ -163,8 +165,8 @@ export function registerSensor(sensorData: Partial<Sensor>): Sensor {
     lastCalibration: sensorData.lastCalibration || null,
     nextCalibration: sensorData.nextCalibration || null,
     calibrationCertificate: sensorData.calibrationCertificate || '',
-    locationID: sensorData.locationID || '',
-    policyID: sensorData.policyID || '',
+    locationID: sensorData.locationID,
+    policyID: sensorData.policyID,
   };
   
   return newSensor;

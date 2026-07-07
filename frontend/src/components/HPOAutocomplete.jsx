@@ -1,4 +1,6 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState } from 'react';
+import { apiClient } from '../api/client';
+import { extractResponseItems } from '../api/response.adapters';
 
 /**
  * HPOAutocomplete - Componente de busca/autocomplete para termos HPO
@@ -11,17 +13,6 @@ export default function HPOAutocomplete({ onSelect, placeholder = 'Buscar fenót
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [debounceTimer, setDebounceTimer] = useState(null);
-
-  const getApiBaseUrl = () => {
-    const configured = import.meta.env.VITE_API_BASE_URL;
-    if (configured) {
-      return String(configured).replace(/\/$/, '').replace(/\/api$/, '');
-    }
-
-    const hostname = window.location.hostname;
-    const protocol = window.location.protocol;
-    return `${protocol}//${hostname}:3000`;
-  };
 
   // Debounce para evitar requisições excessivas
   const handleInputChange = (e) => {
@@ -38,13 +29,15 @@ export default function HPOAutocomplete({ onSelect, placeholder = 'Buscar fenót
     setLoading(true);
     setError('');
     try {
-      const res = await fetch(`${getApiBaseUrl()}/api/hpo/search?q=${encodeURIComponent(query)}`);
-      if (!res.ok) throw new Error('Erro ao buscar termos HPO');
-      const data = await res.json();
+      const response = await apiClient.get('/hpo/search', {
+        params: { q: query },
+        suppressErrorToast: true,
+      });
+      const data = extractResponseItems(response);
       setResults(
-        (Array.isArray(data) ? data : []).slice(0, 10).map((doc) => ({
-          hpoId: doc.hpoId || doc.id,
-          label: doc.label,
+        data.slice(0, 10).map((doc) => ({
+          hpoId: String(doc.hpoId || doc.id || doc.code || doc.codigo || '').trim(),
+          label: String(doc.label || doc.display || doc.name || doc.descricao || doc.description || '').trim(),
         }))
         .filter((doc) => doc.hpoId && doc.label)
       );

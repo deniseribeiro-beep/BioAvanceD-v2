@@ -26,6 +26,7 @@ import { useToast } from '../components/UI/ToastContainer';
 import { validatePasswordAndGetError } from '../utils/passwordValidator';
 import { getPasswordIssues } from '../utils/passwordRules';
 import { useAuth } from '../contexts/AuthContext';
+import { userSecurityService } from '../services/api';
 import './UserSecurityPage.css';
 
 export default function UserSecurityPage() {

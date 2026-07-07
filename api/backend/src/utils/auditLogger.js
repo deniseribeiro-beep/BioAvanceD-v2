@@ -163,8 +163,8 @@ class AuditLogger {
     if (pathLower.includes('/config') || pathLower.includes('/settings')) {
       return 'Configurações';
     }
-    if (pathLower.includes('/assistant') || pathLower.includes('/ia')) {
-      return 'IA Assistente';
+    if (pathLower.includes('/ia')) {
+      return 'Sistema';
     }
     if (pathLower.includes('/security') || pathLower.includes('/mfa')) {
       return 'Segurança';
@@ -413,10 +413,10 @@ class AuditLogger {
       entity: 'Assistant',
       result: 'success',
       severity: 'info',
-      message: 'Consulta ao assistente IA',
+      message: 'Consulta ao sistema',
       payload: { questionLength: question?.length || 0, responseLength: response?.length || 0 },
       req: req,
-      module: 'IA Assistente'
+      module: 'Sistema'
     });
   }
 }

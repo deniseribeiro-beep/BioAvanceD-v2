@@ -5,12 +5,14 @@ import ProtectedRoute from './components/ProtectedRoute';
 import './App.css';
 
 const EConsentPage = lazy(() => import('./pages/patient/EConsentPage'));
+const EConsentImportPage = lazy(() => import('./pages/patient/EConsentImportPage'));
 const EConsentLinkPanel = lazy(() => import('./pages/patient/EConsentLinkPanel'));
 
 const LoginPage = lazy(() => import('./views/LoginPage'));
 const Dashboard = lazy(() => import('./views/Dashboard'));
 const PatientsPage = lazy(() => import('./views/PatientsPage'));
-const ConsentPage = lazy(() => import('./views/ConsentPage'));
+const FhirImportPage = lazy(() => import('./views/FhirImportPage'));
+const ConsentPage = lazy(() => import('./pages/patient/EConsentPage'));
 const SamplesPage = lazy(() => import('./views/SamplesPage'));
 const SampleDetailsPage = lazy(() => import('./views/SampleDetailsPage'));
 const ResultsPage = lazy(() => import('./views/ResultsPage'));
@@ -30,7 +32,6 @@ const ReportViewPage = lazy(() => import('./views/ReportViewPage'));
 const ReportQueryPage = lazy(() => import('./views/ReportQueryPage'));
 const QualityDescriptionPage = lazy(() => import('./views/QualityDescriptionPage'));
 const ImportForm = lazy(() => import('./components/v2/ImportForm'));
-const AssistantPage = lazy(() => import('./views/AssistantPage'));
 const BackupPage = lazy(() => import('./views/BackupPage'));
 const UserSecurityPage = lazy(() => import('./views/UserSecurityPage'));
 const MFASetupPage = lazy(() => import('./views/MFASetupPage'));
@@ -53,6 +54,7 @@ function App() {
         <Routes>
           <Route path="/patient/e-consent" element={<EConsentLinkPanel />} />
           <Route path="/patient/e-consent/:token" element={<EConsentPage />} />
+          <Route path="/patient/e-consent/import/:token" element={<EConsentImportPage />} />
           <Route
             path="/next/intake"
             element={
@@ -86,6 +88,8 @@ function App() {
                   <Route path="/" element={<Navigate to="/dashboard" replace />} />
                   <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
                   <Route path="/patients" element={<ProtectedRoute><PatientsPage /></ProtectedRoute>} />
+                  <Route path="/patients/import-fhir" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}><FhirImportPage /></ProtectedRoute>} />
+                  <Route path="/import/fhir" element={<Navigate to="/patients/import-fhir" replace />} />
                   <Route path="/patients/:id/consent" element={<ProtectedRoute><ConsentPage /></ProtectedRoute>} />
                   <Route path="samples/custody-reports" element={<ProtectedRoute><SampleCustodyReportsPage /></ProtectedRoute>} />
                   <Route path="samples/withdrawal-return" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}><SampleWithdrawalReturnPage /></ProtectedRoute>} />
@@ -122,7 +126,6 @@ function App() {
                       </ProtectedRoute>
                     }
                   />
-                  <Route path="/assistant" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico', 'Usuário Externo']}><AssistantPage /></ProtectedRoute>} />
                   <Route path="/admin/tcle/new" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador']}><TcleBuilderPage /></ProtectedRoute>} />
                   <Route path="/admin/tcle/edit/:templateId" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador']}><TcleBuilderPage /></ProtectedRoute>} />
                   <Route path="/backup" element={<ProtectedRoute requiredRole="Administrador"><BackupPage /></ProtectedRoute>} />
