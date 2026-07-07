@@ -122,6 +122,13 @@ per-call basis (observed 2026-07-07) — "documented in this skill" isn't
 sufficient context for it. Don't try to route around a block; surface it
 and get an explicit go-ahead for that step, then continue.
 
+Also: don't chain the plain integration-branch push together with the
+fix-branch deletion in one Bash call — a denial on the deletion half
+blocks the whole compound command, so the push doesn't happen either
+even though it alone would have been fine (observed 2026-07-07). Push
+the integration branch by itself first, confirm it landed, then do the
+branch deletion (local + remote) as its own call.
+
 1. Commit with `Fixes #N` (or `Refs #N` for partial work); push the
    `fix/<slug>` branch once verified. Comment the commit hash on the
    issue.
