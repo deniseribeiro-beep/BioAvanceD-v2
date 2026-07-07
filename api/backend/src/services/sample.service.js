@@ -617,11 +617,13 @@ class SampleService {
         throw new Error('Responsável pela devolução é obrigatório');
       }
 
-      // Validação da condição
+      // Validação da condição (normaliza aliases PT-BR antes de validar)
+      const normalizedCondition = SampleMovementModel.normalizeReturnCondition(returnData.condition);
       const validConditions = Object.values(SampleMovementModel.RETURN_CONDITIONS);
-      if (!returnData.condition || !validConditions.includes(returnData.condition)) {
+      if (!returnData.condition || !validConditions.includes(normalizedCondition)) {
         throw new Error('Condição da amostra é obrigatória (Íntegra, Parcialmente comprometida ou Inutilizada)');
       }
+      returnData.condition = normalizedCondition;
 
       // Observações obrigatórias se condição não for íntegra
       if (returnData.condition !== SampleMovementModel.RETURN_CONDITIONS.INTACT && (!returnData.observations || returnData.observations.trim() === '')) {
