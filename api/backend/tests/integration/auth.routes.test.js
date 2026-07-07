@@ -199,7 +199,10 @@ describe('auth.routes.js (integration, real router mounted)', () => {
   });
 
   describe('POST /two-factor/disable', () => {
-    it('always responds 501 not-implemented (authenticated request)', async () => {
+    it('responds 501 not-implemented without needing a live session (issue #61)', async () => {
+      // /two-factor/disable is an MFA-setup-exempt route like /two-factor/enable,
+      // so authenticate() must skip the session-liveness check and reach the
+      // inline 501 handler even with no db configured.
       const authRoutes = loadAuthRoutes();
       const app = buildApp(authRoutes);
       const token = signAccessToken();
@@ -208,10 +211,7 @@ describe('auth.routes.js (integration, real router mounted)', () => {
         .post('/api/auth/two-factor/disable')
         .set('Authorization', `Bearer ${token}`);
 
-      // authenticate() for this path is NOT one of the mfa-setup-skip paths,
-      // so it needs a working session check; without a db this 503s from the
-      // middleware instead of reaching the inline 501 handler.
-      expect(res.status).toBe(503);
+      expect(res.status).toBe(501);
     });
 
     it('responds 501 once authenticate can validate the session', async () => {

@@ -49,9 +49,10 @@ const authenticate = async (req, res, next) => {
       
       // Verifica sessão e atualiza atividade (exceto para rotas de keepalive e setup MFA)
       const isKeepAliveRoute = req.path.includes('/keepalive');
-      const isMFASetupRoute = req.path.includes('/mfa/setup') || 
+      const isMFASetupRoute = req.path.includes('/mfa/setup') ||
                               req.path.includes('/two-factor/qr') ||
                               req.path.includes('/two-factor/enable') ||
+                              req.path.includes('/two-factor/disable') ||
                               req.path.includes('/mfa/enable') ||
                               req.path.includes('/security/mfa-setup');
       // Apenas rotas específicas de setup MFA em /user/security devem pular verificação de sessão
