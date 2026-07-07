@@ -6,7 +6,6 @@ process.env.ENCRYPTION_KEY_ID = 'test-key-1';
 const patientService = require('../../src/services/patient.service');
 const fhirSyncService = require('../../src/services/fhir-sync.service');
 const notificationService = require('../../src/services/notification.service');
-const biomarkerXaiService = require('../../src/services/biomarker-xai.service');
 const patientBiomarkerTimeseriesService = require('../../src/services/patientBiomarkerTimeseries.service');
 
 function makeFakeCollection(overrides = {}) {
@@ -229,7 +228,6 @@ describe('PatientService.updatePatient additional branches', () => {
       findOne: vi.fn().mockResolvedValue({ patientID: '12345678' })
     });
     const db = makeFakeDb({ patients: patientsCollection, clinical_units: clinicalUnitsCollection });
-    const xaiSpy = vi.spyOn(biomarkerXaiService, 'evaluate').mockReturnValue(null);
     const tsSpy = vi.spyOn(patientBiomarkerTimeseriesService, 'writePatientBiomarkers').mockResolvedValue(undefined);
 
     await patientService.updatePatient(db, '12345678', { clinicalUnit: 'UTI Adulto' });
@@ -238,7 +236,6 @@ describe('PatientService.updatePatient additional branches', () => {
     expect(setPayload.clinicalUnit).toBe('UTI Adulto');
     expect(setPayload.unitAcronym).toBe('UTIA');
 
-    xaiSpy.mockRestore();
     tsSpy.mockRestore();
   });
 
@@ -255,7 +252,6 @@ describe('PatientService.updatePatient additional branches', () => {
       })
     });
     const db = makeFakeDb({ patients: patientsCollection });
-    const xaiSpy = vi.spyOn(biomarkerXaiService, 'evaluate').mockReturnValue(null);
     const tsSpy = vi.spyOn(patientBiomarkerTimeseriesService, 'writePatientBiomarkers').mockResolvedValue(undefined);
 
     await patientService.updatePatient(db, '12345678', { isDeceased: true });
@@ -263,7 +259,6 @@ describe('PatientService.updatePatient additional branches', () => {
     const setPayload = patientsCollection.updateOne.mock.calls[0][1].$set;
     expect(setPayload.representativeEmail).toBe('joao@example.com');
 
-    xaiSpy.mockRestore();
     tsSpy.mockRestore();
   });
 
@@ -273,7 +268,6 @@ describe('PatientService.updatePatient additional branches', () => {
       findOne: vi.fn().mockResolvedValue({ patientID: '12345678' })
     });
     const db = makeFakeDb({ patients: patientsCollection });
-    const xaiSpy = vi.spyOn(biomarkerXaiService, 'evaluate').mockReturnValue(null);
     const tsSpy = vi.spyOn(patientBiomarkerTimeseriesService, 'writePatientBiomarkers').mockResolvedValue(undefined);
 
     await patientService.updatePatient(db, '12345678', { height: 1.75 });
@@ -282,7 +276,6 @@ describe('PatientService.updatePatient additional branches', () => {
     expect(setPayload.heightCm).toBe(175);
     expect(setPayload.height).toBeUndefined();
 
-    xaiSpy.mockRestore();
     tsSpy.mockRestore();
   });
 
@@ -292,7 +285,6 @@ describe('PatientService.updatePatient additional branches', () => {
       findOne: vi.fn().mockResolvedValue({ patientID: '12345678' })
     });
     const db = makeFakeDb({ patients: patientsCollection });
-    const xaiSpy = vi.spyOn(biomarkerXaiService, 'evaluate').mockReturnValue(null);
     const tsSpy = vi.spyOn(patientBiomarkerTimeseriesService, 'writePatientBiomarkers').mockResolvedValue(undefined);
 
     await patientService.updatePatient(db, '12345678', { height: 175 });
@@ -300,46 +292,6 @@ describe('PatientService.updatePatient additional branches', () => {
     const setPayload = patientsCollection.updateOne.mock.calls[0][1].$set;
     expect(setPayload.heightCm).toBe(175);
 
-    xaiSpy.mockRestore();
-    tsSpy.mockRestore();
-  });
-
-  it('sets biomarkerXai fields on the record when evaluate returns a truthy result', async () => {
-    const patientsCollection = makeFakeCollection({
-      updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
-      findOne: vi.fn().mockResolvedValue({ patientID: '12345678', alphaGal: 2.0 })
-    });
-    const db = makeFakeDb({ patients: patientsCollection });
-    const xaiSpy = vi.spyOn(biomarkerXaiService, 'evaluate').mockReturnValue({ risk: 'high' });
-    const tsSpy = vi.spyOn(patientBiomarkerTimeseriesService, 'writePatientBiomarkers').mockResolvedValue(undefined);
-
-    const result = await patientService.updatePatient(db, '12345678', { alphaGal: 2.0 });
-
-    expect(result).toEqual({ success: true });
-    const xaiUpdateCall = patientsCollection.updateOne.mock.calls.find((call) => call[1]?.$set?.biomarkerXai);
-    expect(xaiUpdateCall).toBeDefined();
-    expect(xaiUpdateCall[1].$set.biomarkerXai).toEqual({ risk: 'high' });
-
-    xaiSpy.mockRestore();
-    tsSpy.mockRestore();
-  });
-
-  it('unsets biomarkerXai fields when evaluate returns a falsy result', async () => {
-    const patientsCollection = makeFakeCollection({
-      updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
-      findOne: vi.fn().mockResolvedValue({ patientID: '12345678' })
-    });
-    const db = makeFakeDb({ patients: patientsCollection });
-    const xaiSpy = vi.spyOn(biomarkerXaiService, 'evaluate').mockReturnValue(null);
-    const tsSpy = vi.spyOn(patientBiomarkerTimeseriesService, 'writePatientBiomarkers').mockResolvedValue(undefined);
-
-    await patientService.updatePatient(db, '12345678', { alphaGal: 2.0 });
-
-    const unsetCall = patientsCollection.updateOne.mock.calls.find((call) => call[1]?.$unset);
-    expect(unsetCall).toBeDefined();
-    expect(unsetCall[1].$unset).toHaveProperty('biomarkerXai');
-
-    xaiSpy.mockRestore();
     tsSpy.mockRestore();
   });
 
@@ -350,7 +302,6 @@ describe('PatientService.updatePatient additional branches', () => {
       findOne: vi.fn().mockResolvedValue({ patientID: '12345678' })
     });
     const db = makeFakeDb({ patients: patientsCollection });
-    const xaiSpy = vi.spyOn(biomarkerXaiService, 'evaluate').mockReturnValue(null);
     const tsSpy = vi.spyOn(patientBiomarkerTimeseriesService, 'writePatientBiomarkers').mockResolvedValue(undefined);
 
     await patientService.updatePatient(db, objectIdHex, { alphaGal: 2.0 });
@@ -358,7 +309,6 @@ describe('PatientService.updatePatient additional branches', () => {
     const updateQuery = patientsCollection.updateOne.mock.calls[0][0];
     expect(updateQuery).toHaveProperty('_id');
 
-    xaiSpy.mockRestore();
     tsSpy.mockRestore();
   });
 
