@@ -10,7 +10,7 @@ const logger = require('../utils/logger');
 const fhirSyncService = require('./fhir-sync.service');
 const { getCollection } = require('../utils/collectionResolver');
 
-const ajv = new Ajv({ allErrors: true, strict: false, removeAdditional: 'all' });
+const ajv = new Ajv({ allErrors: true, strict: false, removeAdditional: 'failing' });
 addFormats(ajv);
 
 const consentTemplateSchema = {
