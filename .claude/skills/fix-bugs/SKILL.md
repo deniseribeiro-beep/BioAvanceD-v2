@@ -112,6 +112,14 @@ Dennis decide the next step.
 
 ## Ending an iteration
 
+Note: even though this whole sequence is the confirmed workflow, the
+auto-mode permission classifier evaluates each action independently and
+has blocked the issue comment/close, the merge into
+`feature/docker-e2e-backend-integration`, and the branch deletion on a
+per-call basis (observed 2026-07-07) — "documented in this skill" isn't
+sufficient context for it. Don't try to route around a block; surface it
+and get an explicit go-ahead for that step, then continue.
+
 1. Commit with `Fixes #N` (or `Refs #N` for partial work); push the
    `fix/<slug>` branch once verified. Comment the commit hash on the
    issue.
