@@ -7,6 +7,10 @@
           {
             "type": "command",
             "command": "node .claude/hooks/full-suite-guard.cjs"
+          },
+          {
+            "type": "command",
+            "command": "node .claude/hooks/branch-guard.cjs"
           }
         ]
       }
