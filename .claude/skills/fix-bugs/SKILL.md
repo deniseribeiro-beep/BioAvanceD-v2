@@ -113,12 +113,22 @@ Dennis decide the next step.
 ## Ending an iteration
 
 1. Commit with `Fixes #N` (or `Refs #N` for partial work); push the
-   branch if verified. Comment the commit hash on the issue. Opening a
-   PR is Dennis's call, never yours.
-2. **Invoke `wrap-up` via the Skill tool — a fresh call, every
+   `fix/<slug>` branch once verified. Comment the commit hash on the
+   issue.
+2. **Merge the fix branch into `feature/docker-e2e-backend-integration`**
+   (confirmed workflow, 2026-07-07, while `main` stays frozen — see
+   `bioavanced-conventions`): `git checkout feature/docker-e2e-backend-integration`,
+   `git pull`, `git merge --no-ff fix/<slug> -m "..."`, re-run the
+   targeted tests against the merged tree, then
+   `git push origin feature/docker-e2e-backend-integration`. Then delete
+   the fix branch, local and remote (`git branch -d fix/<slug>` +
+   `git push origin --delete fix/<slug>`) — it's fully absorbed into the
+   integration branch at that point. This is distinct from opening a PR
+   to `main`, which stays Dennis's call, never yours.
+3. **Invoke `wrap-up` via the Skill tool — a fresh call, every
    iteration — and finish its audit before drafting the summary**
-   (incident `wrapup-faked-from-memory`). This blocks step 3.
-3. Report: which issue, root cause in a sentence, what changed (file
+   (incident `wrapup-faked-from-memory`). This blocks step 4.
+4. Report: which issue, root cause in a sentence, what changed (file
    paths), which tests prove it (including un-weakened ones), what the
    next bug pick should be, plus whatever `wrap-up` surfaced.
 
