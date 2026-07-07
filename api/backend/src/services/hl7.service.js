@@ -585,7 +585,7 @@ class HL7Service {
 
   getSampleTypeDisplay(sampleType) {
     const specimenType = SPECIMEN_TYPES.find((item) => item.id === sampleType);
-    return specimenType?.label || sampleType;
+    return specimenType?.label || sampleType || 'Desconhecido';
   }
 
   /**
