@@ -90,19 +90,14 @@ describe('FhirValidatorService.validateResource', () => {
     expect(result.issues.every((issue) => issue.severity === 'error' && issue.code === 'invalid')).toBe(true);
   });
 
-  it('rejects a Specimen missing subject, falling back to the raw ajv message', () => {
-    // NOTE: friendlyMessageFromError only inspects err.instancePath, but ajv's
-    // "required property missing" errors report an empty instancePath (the
-    // missing key lives in err.params.missingProperty instead), so the
-    // Portuguese friendly message for /subject never actually fires here -
-    // this asserts the real (buggy) current behavior rather than the intent.
+  it('rejects a Specimen missing subject with the friendly message', () => {
     const specimen = {
       resourceType: 'Specimen',
       type: { coding: [] }
     };
     const result = fhirValidator.validateResource(specimen);
     expect(result.valid).toBe(false);
-    expect(result.issues[0].diagnostics).toBe("must have required property 'subject'");
+    expect(result.issues[0].diagnostics).toBe("O campo 'Paciente (subject)' é obrigatório");
   });
 
   it('accepts a valid Specimen resource', () => {

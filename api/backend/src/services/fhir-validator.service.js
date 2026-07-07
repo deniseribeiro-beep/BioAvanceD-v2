@@ -103,7 +103,9 @@ class FhirValidatorService {
   }
 
   friendlyMessageFromError(resourceType, error) {
-    const path = error.instancePath || '';
+    const path = error.keyword === 'required'
+      ? `${error.instancePath || ''}/${error.params?.missingProperty}`
+      : error.instancePath || '';
     if (resourceType === 'Patient') {
       if (path.includes('/gender')) return "O campo 'Gênero' é inválido";
       if (path.includes('/birthDate')) return "O campo 'Data de Nascimento' é inválido";
