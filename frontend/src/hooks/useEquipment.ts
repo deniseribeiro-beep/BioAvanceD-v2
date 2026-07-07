@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Equipment } from '../types/models';
 import { equipmentService } from '../services/api';
+import { extractResponseEntity, extractResponseItems, normalizeMasterDataItem } from '../api/response.adapters';
 import { notifyDashboardDataChanged } from '../utils/dashboardRefresh';
 import { onClientLogout } from '../utils/sessionCleanup';
 
@@ -25,11 +26,7 @@ export function useEquipment() {
     try {
       setLoading(true);
       const response = await equipmentService.getAll();
-      const responseData: any = response.data;
-      // Garante que seja um array
-      const equipmentData = Array.isArray(responseData) 
-        ? responseData 
-        : (responseData?.data || []);
+      const equipmentData = extractResponseItems<Equipment>(response).map((item) => normalizeMasterDataItem<Equipment>(item, ['equipmentID']));
       setEquipment(equipmentData);
       setError(null);
     } catch (err: any) {
@@ -43,9 +40,7 @@ export function useEquipment() {
   const createEquipment = async (data: Partial<Equipment>) => {
     try {
       const response = await equipmentService.create(data);
-      const responseData: any = response.data;
-      // A resposta do backend está em response.data.data
-      const newEquipment = responseData?.data || responseData;
+      const newEquipment = extractResponseEntity<Equipment>(response, data as any);
       if (newEquipment) {
         setEquipment((prev) => [...prev, newEquipment]);
         notifyDashboardDataChanged();
@@ -65,9 +60,8 @@ export function useEquipment() {
     try {
       // Aceita tanto _id (string) quanto equipmentID (number)
       const response = await equipmentService.update(id, data);
-      const responseData: any = response.data;
       // Atualiza na lista usando _id ou equipmentID
-      const updatedEquipment = responseData?.data || responseData;
+      const updatedEquipment = extractResponseEntity<Equipment>(response, data as any);
       if (updatedEquipment) {
         setEquipment((prev) => prev.map((e) => {
           const eqId = (e as any)._id || e.equipmentID;

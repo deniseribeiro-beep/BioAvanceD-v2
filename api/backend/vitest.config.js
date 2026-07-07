@@ -18,7 +18,7 @@ module.exports = defineConfig({
     coverage: {
       provider: 'v8',
       reportOnFailure: true,
-      reporter: ['text', 'json-summary'],
+      reporter: ['text', 'html', 'json', 'json-summary', 'lcov'],
       reportsDirectory: './coverage',
       include: ['src/**/*.js'],
       exclude: ['**/node_modules/**', 'tests/**', 'src/seeders/**'],
@@ -32,9 +32,6 @@ module.exports = defineConfig({
     exclude: [
       '**/node_modules/**',
       'tests/setup.test.js',
-      'tests/unit/security.test.js',
-      'tests/integration/auth-login.node.test.js',
-      'tests/integration/auth-session.node.test.js',
       'tests/e2e/**',
       'e2e/**',
       'playwright-report/**',

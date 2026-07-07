@@ -1,6 +1,10 @@
-declare module '../config/constants/specimen.constants' {
-	export const EXTRACTION_PROTOCOLS: any;
-	export const MIABIS_QUALITY: any;
-	export const SAMPLE_ORIGINS: any;
-	export const SPECIMEN_TYPES: any;
-}
+export type SpecimenConstant = { id: string; label: string };
+
+export const EXTRACTION_PROTOCOLS: SpecimenConstant[];
+export const EXTRACTION_PROTOCOL_IDS: string[];
+export const MIABIS_QUALITY: SpecimenConstant[];
+export const MIABIS_QUALITY_IDS: string[];
+export const SAMPLE_ORIGINS: SpecimenConstant[];
+export const SAMPLE_ORIGIN_IDS: string[];
+export const SPECIMEN_TYPES: SpecimenConstant[];
+export const SPECIMEN_TYPE_IDS: string[];

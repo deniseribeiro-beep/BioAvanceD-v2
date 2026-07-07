@@ -181,7 +181,7 @@ function buildSampleQuery(filters = {}) {
 
   const qualityCategory = normalizeFilterText(filters.sprecCategory || filters.qualityCategory).toUpperCase();
   if (qualityCategory) {
-    conditions.push({ quality_category: qualityCategory });
+    conditions.push({ final_grade: qualityCategory });
   }
 
   const releaseStatus = normalizeReleaseStatus(filters.status || filters.releaseStatus || filters.graphStatus);

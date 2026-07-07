@@ -1,23 +1,4 @@
 {
-  "assistant": {
-    "accessDenied": "Access denied - operation requires sensitive data",
-    "errorProcessing": "Error processing question",
-    "flowIDRequired": "flowID is required",
-    "invalidContextScope": "Invalid contextScope",
-    "questionRequired": "Question is required",
-    "responses": {
-      "default": "As a {role}, you can navigate the system using the sidebar menu. If you need specific help, ask me about features, procedures, or step-by-step tutorials.",
-      "register": "To register data in the system, you need {role} permissions. Access the corresponding menu and fill in the required fields.",
-      "report": "Reports are available in the \"Reports\" menu. You can filter by type, date, and other criteria according to your permissions.",
-      "sample": "Samples can be registered through the \"Samples\" menu. You need to provide the associated patient, sample type, and storage location.",
-      "temperature": "The system automatically monitors temperature through sensors. You can view history and alerts in the \"Temperature\" menu."
-    },
-    "screenIDRequired": "screenID is required",
-    "startTutorialError": "Error starting tutorial",
-    "subtitle": "Ask questions about the system",
-    "suggestActionsError": "Error suggesting actions",
-    "title": "Intelligent Assistant"
-  },
   "auth": {
     "attemptsRemaining": "Attempts remaining",
     "confirmPassword": "Confirm Password",

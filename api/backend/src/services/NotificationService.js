@@ -11,13 +11,23 @@ const {
   getInfluxConfig
 } = require('../infrastructure/database/influxdb/connection');
 
-const DEFAULT_FRONTEND_URL = 'http://localhost:5173';
 const CONSENT_TOKEN_TTL_DAYS = 7;
+
+function consentTransportError(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+
+function isLoopbackHostname(hostname) {
+  const normalized = String(hostname || '').toLowerCase().replace(/^\[|\]$/g, '');
+  return normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '::1';
+}
 
 class NotificationService {
   constructor() {
     this.resendClient = null;
-    this.emailFrom = process.env.EMAIL_FROM || 'onboarding@resend.dev';
+    this.emailFrom = String(process.env.EMAIL_FROM || '').trim();
     this.adminEmail = process.env.ADMIN_EMAIL || '';
     this.isDevelopment = String(process.env.NODE_ENV || 'development').toLowerCase() === 'development';
     this.io = null;
@@ -25,7 +35,40 @@ class NotificationService {
   }
 
   getFrontendUrl() {
-    return process.env.FRONTEND_URL || DEFAULT_FRONTEND_URL;
+    const frontendUrl = String(process.env.FRONTEND_URL || '').trim();
+    if (!frontendUrl) {
+      throw new Error('FRONTEND_URL é obrigatório para gerar links de consentimento');
+    }
+    return frontendUrl;
+  }
+
+  validateFrontendUrl({ remote = false } = {}) {
+    let parsed;
+    try {
+      parsed = new URL(this.getFrontendUrl());
+    } catch (error) {
+      if (error?.code) throw error;
+      throw consentTransportError('CONSENT_FRONTEND_URL_INVALID', 'FRONTEND_URL deve ser uma URL absoluta válida');
+    }
+
+    const isHttps = parsed.protocol === 'https:';
+    const localDevelopment = this.isDevelopment && parsed.protocol === 'http:' && isLoopbackHostname(parsed.hostname);
+
+    if (remote && (!isHttps || isLoopbackHostname(parsed.hostname))) {
+      throw consentTransportError(
+        'CONSENT_REMOTE_HTTPS_REQUIRED',
+        'Convites remotos de consentimento exigem FRONTEND_URL HTTPS externamente acessível'
+      );
+    }
+
+    if (!isHttps && !localDevelopment) {
+      throw consentTransportError(
+        'CONSENT_FRONTEND_HTTPS_REQUIRED',
+        'FRONTEND_URL deve usar HTTPS; HTTP é permitido apenas em loopback durante desenvolvimento'
+      );
+    }
+
+    return parsed;
   }
 
   normalizePhoneE164(rawPhone) {
@@ -74,9 +117,6 @@ class NotificationService {
 
     const apiKey = process.env.RESEND_API_KEY;
     if (!apiKey) {
-      if (this.isDevelopment) {
-        return null;
-      }
       throw new Error('RESEND_API_KEY é obrigatório para envio de e-mails');
     }
 
@@ -153,6 +193,10 @@ class NotificationService {
       throw new Error('subject e html/text são obrigatórios para envio de e-mail');
     }
 
+    if (!this.emailFrom) {
+      throw new Error('EMAIL_FROM é obrigatório para envio de e-mails');
+    }
+
     const recipient = this.resolveRecipient(to);
     this.logDevelopmentPreview({
       subject,
@@ -164,34 +208,23 @@ class NotificationService {
     });
 
     const resend = this.getResendClient();
-    let messageId = null;
-    let provider = 'resend';
-    let mocked = false;
+    const response = await resend.emails.send({
+      from: this.emailFrom,
+      to: recipient.to,
+      subject,
+      html,
+      text
+    });
 
-    if (!resend && this.isDevelopment) {
-      mocked = true;
-      provider = 'resend-mock';
-      messageId = `mock-${Date.now()}`;
-      logger.warn('[NOTIFICATION][DEV_MOCK] RESEND_API_KEY ausente: envio simulado para validação local');
-    } else {
-      const response = await resend.emails.send({
-        from: this.emailFrom,
-        to: recipient.to,
-        subject,
-        html,
-        text
-      });
-
-      if (response.error) {
-        throw new Error(response.error.message || 'Falha ao enviar e-mail via Resend');
-      }
-
-      messageId = response.data?.id || null;
+    if (response.error) {
+      throw new Error(response.error.message || 'Falha ao enviar e-mail via Resend');
     }
+
+    const messageId = response.data?.id || null;
 
     await this.persistComplianceLog({
       messageId,
-      provider,
+      provider: 'resend',
       notificationType: notificationType || 'generic',
       subject,
       to: recipient.to,
@@ -204,8 +237,8 @@ class NotificationService {
     return {
       success: true,
       channel: 'email',
-      provider,
-      mocked,
+      provider: 'resend',
+      mocked: false,
       notificationType: notificationType || 'generic',
       messageId,
       to: recipient.to,
@@ -282,32 +315,55 @@ class NotificationService {
   }
 
   buildConsentLink(patientData, token) {
-    const baseUrl = this.getFrontendUrl().replace(/\/$/, '');
+    const baseUrl = this.validateFrontendUrl().toString().replace(/\/$/, '');
     const patientId = patientData.patientID || patientData.patientId || patientData.id;
     const encodedToken = encodeURIComponent(token);
     return `${baseUrl}/patients/${patientId}/consent?token=${encodedToken}`;
   }
 
   async sendConsentEmail(patientData, consentLink) {
-    const email = this.resolvePatientEmail(patientData);
-    if (!email) {
-      logger.warn('Consentimento: email ausente para paciente', { patientID: patientData.patientID });
-      return { channel: 'email', success: false, reason: 'missing_email' };
-    }
+    try {
+      this.validateFrontendUrl({ remote: true });
 
-    const message = this.formatConsentMessage(patientData.patientName, consentLink);
-    await this.sendEmail({
-      to: email,
-      subject: 'BioAvanceD - Termo de Consentimento',
-      text: message,
-      html: `<p>${message}</p>`,
-      notificationType: 'RF_CONSENT_NOTIFICATION',
-      metadata: {
-        patientID: patientData.patientID || null
+      const email = this.resolvePatientEmail(patientData);
+      if (!email) {
+        throw consentTransportError('CONSENT_RECIPIENT_REQUIRED', 'E-mail do participante é obrigatório para convite remoto');
       }
-    });
 
-    return { channel: 'email', success: true, provider: 'resend' };
+      const message = this.formatConsentMessage(patientData.patientName, consentLink);
+      const result = await this.sendEmail({
+        to: email,
+        subject: 'BioAvanceD - Termo de Consentimento',
+        text: message,
+        html: `<p>${message}</p>`,
+        notificationType: 'RF_CONSENT_NOTIFICATION',
+        metadata: {
+          patientID: patientData.patientID || null
+        }
+      });
+
+      return { ...result, success: true };
+    } catch (error) {
+      await this.persistConsentDeliveryFailure(patientData, error);
+      throw error;
+    }
+  }
+
+  async persistConsentDeliveryFailure(patientData, error) {
+    const patientId = patientData?.patientID || patientData?.patientId || patientData?.id;
+    if (!patientId) return;
+
+    const db = await connectDB();
+    await db.collection('patients').updateOne(
+      { $or: [{ patientID: String(patientId) }, { _id: patientId }] },
+      {
+        $set: {
+          consentDeliveryStatus: 'DELIVERY_FAILED',
+          consentDeliveryFailedAt: new Date(),
+          consentDeliveryErrorCode: error?.code || 'CONSENT_DELIVERY_FAILED'
+        }
+      }
+    );
   }
 
   async sendConsentSmsFallback(patientData, consentLink) {
@@ -748,4 +804,7 @@ class NotificationService {
   }
 }
 
-module.exports = new NotificationService();
+const notificationService = new NotificationService();
+module.exports = notificationService;
+module.exports.NotificationService = NotificationService;
+module.exports.isLoopbackHostname = isLoopbackHostname;

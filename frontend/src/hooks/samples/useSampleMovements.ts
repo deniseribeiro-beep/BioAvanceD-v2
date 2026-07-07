@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { sampleChainApi } from '@/services/sampleChainApi';
 import { normalizeMovementList, parseComplianceError, SampleMovementItem } from './sampleMovements.shared';
 
+export type { SampleMovementItem } from './sampleMovements.shared';
+
 
 export function useSampleMovements(sampleId?: string) {
   const [items, setItems] = useState<SampleMovementItem[]>([]);

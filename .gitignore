@@ -12,12 +12,22 @@ frontend/node_modules/
 .env.*
 !.env.example
 !.env.*.example
+.env*.local
+.env.docker
 *.pem
 *.key
+*.tsq
+*.tsr
 *.p12
 *.pfx
 *.crt
+*.srl
 secrets/
+.dev-secrets/
+.env.docker
+.env.docker.*
+!*.example
+audit-ed25519-private.pem
 
 # =========================
 # Logs
@@ -38,36 +48,62 @@ coverage/
 .cache/
 .vite/
 *.tsbuildinfo
+frontend/dist/
 
 # =========================
-# Test artifacts
+# Test and audit artifacts
 # =========================
 test-results/
 frontend/test-results/
 frontend/playwright-report/
+playwright-report/
+traces/
+frontend/playwright/.auth/
 backend/test-output.txt
+test-output.txt
+api/backend/COMPLIANCE_EVIDENCE.json
+COMPLIANCE_EVIDENCE.json
+backup_before_push.patch
+backup_status_before_push.txt
+artifacts/
+*.zip
+data-dump.json
+letsencrypt/accounts/
+reports/workspace/*.patch
+reports/workspace/classification.md
+reports/system-audit/
+
+# Official Orphanet source archives are versioned for reproducible seed builds.
+!orpha-data-raw/
+!orpha-data-raw/**
+!orpha-data-raw/*.zip
+!orpha-data-raw/**/*.zip
 
 # =========================
 # Runtime uploads and generated files
 # =========================
 backend/uploads/temp/*
 !backend/uploads/temp/.gitkeep
+api/backend/uploads/temp/*
+!api/backend/uploads/temp/.gitkeep
 
 # =========================
 # Local runtime data (Docker volumes / databases)
 # =========================
-data/influxdb/
-data/mongodb/
-data/neo4j/
-data/redis/
-data/_sprec_tmp/
+data/
+api/backend/data/
+*.sqlite3
 
 # =========================
 # Backups and temporary exports
 # =========================
 backend/backups/
+api/backend/backups/
 *.tmp
 *.bak
+
+# Accidental terminal/output artifacts
+titucional*
 
 # =========================
 # OS / IDE
@@ -77,16 +113,8 @@ Thumbs.db
 .vscode/*
 !.vscode/extensions.json
 .idea/
-  
 .vercel
-.env*.local
-data/
-!api/backend/src/seeders/data/
-api/backend/src/seeders/data/*
-!api/backend/src/seeders/data/rcs-*.json
-# Local Python virtualenv - should not be committed
 .venv/
-
 # Frontend build artifacts
 frontend/dist/
 
@@ -112,7 +140,6 @@ frontend/playwright/.auth/
 *.crt
 *.p12
 *.pfx
-
 
 # Claude Code local-only files (machine-specific, not repo conventions)
 .claude/skills/local-env/

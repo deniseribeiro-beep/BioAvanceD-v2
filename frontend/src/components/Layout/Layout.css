@@ -12,7 +12,8 @@ html, body {
 .layout {
   display: flex;
   min-height: 100vh;
-  background-color: var(--background);
+  background:
+    linear-gradient(180deg, #ffffff 0, var(--background) 220px);
   width: 100%;
   overflow-x: hidden;
 }
@@ -30,7 +31,7 @@ html, body {
 
 .layout-content {
   flex: 1;
-  padding: 2rem;
+  padding: 1.5rem 2rem 2rem;
   overflow-y: auto;
   overflow-x: hidden;
   width: 100%;

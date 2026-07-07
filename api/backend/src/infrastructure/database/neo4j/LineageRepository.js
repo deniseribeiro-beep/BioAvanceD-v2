@@ -43,7 +43,7 @@ class LineageRepository {
           SET sample.updatedAt = datetime(),
               sample.barcode = coalesce($barcode, sample.barcode)
 
-          OPTIONAL MATCH (sample)-[:HAS_CONSENT]->(consent:EthicalConsent)
+          OPTIONAL MATCH (sample)-[:GOVERNED_BY]->(consent:EthicalConsent)
 
           RETURN sample.id AS sampleId,
                  coalesce(sample.consentStatus, 'UNKNOWN') AS sampleConsentStatus,

@@ -2,30 +2,29 @@ const logger = require('../utils/logger');
 const { connectMongoDB } = require('../infrastructure/database/mongodb/connection');
 const TemperatureIncidentModel = require('../models/TemperatureIncident');
 const { sendIncidentAlertEmail } = require('../services/sendIncidentAlertEmail');
+const coldChainQuarantineService = require('../services/equipment-sensor-quarantine.service');
 
 let TemperatureIncidentCollection = null;
 let UserCollection = null;
+let CachedDb = null;
 
 async function getCollections() {
-  if (!TemperatureIncidentCollection || !UserCollection) {
+  if (!TemperatureIncidentCollection || !UserCollection || !CachedDb) {
     const db = await connectMongoDB();
+    CachedDb = db;
     TemperatureIncidentCollection = db.collection('temperatureIncidents');
     UserCollection = db.collection('users');
   }
-  return { TemperatureIncidentCollection, UserCollection };
+  return { db: CachedDb, TemperatureIncidentCollection, UserCollection };
 }
 
 async function getAlertRecipients() {
   try {
     const { UserCollection } = await getCollections();
     const recipients = await UserCollection
-      .find({ 
-        accessType: { $in: [2, 3, 4] },
-        status: 'active'
-      })
+      .find({ accessType: { $in: [2, 3, 4] }, status: 'active' })
       .project({ email: 1, username: 1, accessType: 1 })
       .toArray();
-    
     return recipients.map(u => u.email).filter(e => e);
   } catch (error) {
     logger.error('[INCIDENT] Erro ao buscar destinatários de alertas:', error.message);
@@ -33,87 +32,62 @@ async function getAlertRecipients() {
   }
 }
 
+async function applyColdChainQuarantine(db, incident) {
+  try {
+    return await coldChainQuarantineService.quarantineByColdChainIncident(db, incident);
+  } catch (error) {
+    logger.error('[INCIDENT] Falha ao aplicar quarentena de cadeia fria:', error.message || error);
+    return { triggered: false, error: error.message || String(error) };
+  }
+}
+
+async function markColdChainReview(db, incident) {
+  try {
+    return await coldChainQuarantineService.markColdChainIncidentSamplesForReview(db, incident);
+  } catch (error) {
+    logger.error('[INCIDENT] Falha ao marcar revisão pós-incidente:', error.message || error);
+    return { reviewRequired: false, error: error.message || String(error) };
+  }
+}
+
 async function createOrUpdateIncident(req, res) {
   try {
     const { sensorKey, sensorName, currentTemperature, maxTemperature, minTemperature, samplesOutOfRange } = req.body;
-
-    const validation = TemperatureIncidentModel.validate({
-      sensorKey,
-      sensorName,
-      openedAt: new Date(),
-      currentTemperature,
-      maxTemperature,
-      minTemperature,
-      samplesOutOfRange
-    });
+    const validation = TemperatureIncidentModel.validate({ sensorKey, sensorName, openedAt: new Date(), currentTemperature, maxTemperature, minTemperature, samplesOutOfRange });
 
     if (!validation.isValid) {
-      return res.status(400).json({
-        success: false,
-        error: 'Validação falhou',
-        details: validation.errors
-      });
+      return res.status(400).json({ success: false, error: 'Validação falhou', details: validation.errors });
     }
 
-    const { TemperatureIncidentCollection } = await getCollections();
-
-    const existingIncident = await TemperatureIncidentCollection.findOne({
-      sensorKey: sensorKey,
-      status: { $in: ['open', 'acknowledged', 'escalated'] }
-    });
-
+    const { db, TemperatureIncidentCollection } = await getCollections();
+    const existingIncident = await TemperatureIncidentCollection.findOne({ sensorKey, status: { $in: ['open', 'acknowledged', 'escalated'] } });
     let incident;
+
     if (existingIncident) {
-      const updateData = {
-        $set: {
-          currentTemperature,
-          maxTemperature: Math.max(existingIncident.maxTemperature, maxTemperature),
-          minTemperature: Math.min(existingIncident.minTemperature, minTemperature),
-          samplesOutOfRange: existingIncident.samplesOutOfRange + samplesOutOfRange,
-          updatedAt: new Date()
-        }
-      };
-
-      const result = await TemperatureIncidentCollection.updateOne(
-        { _id: existingIncident._id },
-        updateData
-      );
-
-      incident = { ...existingIncident, ...updateData.$set };
-    } else {
-      const newIncident = TemperatureIncidentModel.create({
-        sensorKey,
-        sensorName,
-        openedAt: new Date(),
+      const nextData = {
         currentTemperature,
-        maxTemperature,
-        minTemperature,
-        samplesOutOfRange
-      });
-
+        maxTemperature: Math.max(existingIncident.maxTemperature, maxTemperature),
+        minTemperature: Math.min(existingIncident.minTemperature, minTemperature),
+        samplesOutOfRange: existingIncident.samplesOutOfRange + samplesOutOfRange,
+        updatedAt: new Date()
+      };
+      await TemperatureIncidentCollection.updateOne({ _id: existingIncident._id }, { $set: nextData });
+      incident = { ...existingIncident, ...nextData };
+    } else {
+      const newIncident = TemperatureIncidentModel.create({ sensorKey, sensorName, openedAt: new Date(), currentTemperature, maxTemperature, minTemperature, samplesOutOfRange });
       const result = await TemperatureIncidentCollection.insertOne(newIncident);
       incident = { ...newIncident, _id: result.insertedId };
-
-      // Enviar alerta por email para novos incidentes
       const recipients = await getAlertRecipients();
       if (recipients.length > 0) {
-        void sendIncidentAlertEmail(incident, recipients, 0).catch(err => {
-          logger.error('[INCIDENT_EMAIL] Erro ao enviar alerta:', err.message);
-        });
+        void sendIncidentAlertEmail(incident, recipients, 0).catch(err => logger.error('[INCIDENT_EMAIL] Erro ao enviar alerta:', err.message));
       }
     }
 
-    return res.status(200).json({
-      success: true,
-      incident
-    });
+    const quarantine = await applyColdChainQuarantine(db, incident);
+    return res.status(200).json({ success: true, incident, quarantine });
   } catch (error) {
     logger.error('[INCIDENT] Erro ao criar/atualizar incidente:', error);
-    return res.status(500).json({
-      success: false,
-      error: 'Erro ao processar incidente',
-      details: error.message
-    });
+    return res.status(500).json({ success: false, error: 'Erro ao processar incidente', details: error.message });
   }
 }
 
@@ -121,38 +95,15 @@ async function getIncidents(req, res) {
   try {
     const { status, sensorKey, limit = 50, skip = 0 } = req.query;
     const { TemperatureIncidentCollection } = await getCollections();
-
     const filter = {};
-    if (status) {
-      filter.status = status;
-    }
-    if (sensorKey) {
-      filter.sensorKey = sensorKey;
-    }
-
-    const incidents = await TemperatureIncidentCollection
-      .find(filter)
-      .sort({ openedAt: -1 })
-      .skip(Number(skip))
-      .limit(Number(limit))
-      .toArray();
-
+    if (status) filter.status = status;
+    if (sensorKey) filter.sensorKey = sensorKey;
+    const incidents = await TemperatureIncidentCollection.find(filter).sort({ openedAt: -1 }).skip(Number(skip)).limit(Number(limit)).toArray();
     const total = await TemperatureIncidentCollection.countDocuments(filter);
-
-    return res.status(200).json({
-      success: true,
-      incidents,
-      total,
-      limit: Number(limit),
-      skip: Number(skip)
-    });
+    return res.status(200).json({ success: true, incidents, total, limit: Number(limit), skip: Number(skip) });
   } catch (error) {
     logger.error('[INCIDENT] Erro ao listar incidentes:', error);
-    return res.status(500).json({
-      success: false,
-      error: 'Erro ao listar incidentes',
-      details: error.message
-    });
+    return res.status(500).json({ success: false, error: 'Erro ao listar incidentes', details: error.message });
   }
 }
 
@@ -161,46 +112,16 @@ async function acknowledgeIncident(req, res) {
     const { incidentId } = req.params;
     const { userId, notes } = req.body;
     const { TemperatureIncidentCollection } = await getCollections();
-
     const { ObjectId } = require('mongodb');
     const result = await TemperatureIncidentCollection.updateOne(
       { _id: new ObjectId(incidentId) },
-      {
-        $set: {
-          status: 'acknowledged',
-          acknowledgedAt: new Date(),
-          acknowledgedBy: userId,
-          updatedAt: new Date()
-        },
-        $push: {
-          notes: {
-            timestamp: new Date(),
-            userId,
-            action: 'acknowledged',
-            message: notes || 'Incidente reconhecido'
-          }
-        }
-      }
+      { $set: { status: 'acknowledged', acknowledgedAt: new Date(), acknowledgedBy: userId, updatedAt: new Date() }, $push: { notes: { timestamp: new Date(), userId, action: 'acknowledged', message: notes || 'Incidente reconhecido' } } }
     );
-
-    if (result.matchedCount === 0) {
-      return res.status(404).json({
-        success: false,
-        error: 'Incidente não encontrado'
-      });
-    }
-
-    return res.status(200).json({
-      success: true,
-      message: 'Incidente reconhecido'
-    });
+    if (result.matchedCount === 0) return res.status(404).json({ success: false, error: 'Incidente não encontrado' });
+    return res.status(200).json({ success: true, message: 'Incidente reconhecido' });
   } catch (error) {
     logger.error('[INCIDENT] Erro ao reconhecer incidente:', error);
-    return res.status(500).json({
-      success: false,
-      error: 'Erro ao reconhecer incidente',
-      details: error.message
-    });
+    return res.status(500).json({ success: false, error: 'Erro ao reconhecer incidente', details: error.message });
   }
 }
 
@@ -208,46 +129,22 @@ async function resolveIncident(req, res) {
   try {
     const { incidentId } = req.params;
     const { userId, notes } = req.body;
-    const { TemperatureIncidentCollection } = await getCollections();
-
+    const { db, TemperatureIncidentCollection } = await getCollections();
     const { ObjectId } = require('mongodb');
+    const objectId = new ObjectId(incidentId);
+    const incident = await TemperatureIncidentCollection.findOne({ _id: objectId });
+    if (!incident) return res.status(404).json({ success: false, error: 'Incidente não encontrado' });
+    const closedAt = new Date();
     const result = await TemperatureIncidentCollection.updateOne(
-      { _id: new ObjectId(incidentId) },
-      {
-        $set: {
-          status: 'resolved',
-          closedAt: new Date(),
-          updatedAt: new Date()
-        },
-        $push: {
-          notes: {
-            timestamp: new Date(),
-            userId,
-            action: 'resolved',
-            message: notes || 'Incidente resolvido'
-          }
-        }
-      }
+      { _id: objectId },
+      { $set: { status: 'resolved', closedAt, updatedAt: closedAt }, $push: { notes: { timestamp: closedAt, userId, action: 'resolved', message: notes || 'Incidente resolvido' } } }
     );
-
-    if (result.matchedCount === 0) {
-      return res.status(404).json({
-        success: false,
-        error: 'Incidente não encontrado'
-      });
-    }
-
-    return res.status(200).json({
-      success: true,
-      message: 'Incidente resolvido'
-    });
+    if (result.matchedCount === 0) return res.status(404).json({ success: false, error: 'Incidente não encontrado' });
+    const postIncidentReview = await markColdChainReview(db, { ...incident, status: 'resolved', closedAt });
+    return res.status(200).json({ success: true, message: 'Incidente resolvido; amostras afetadas permanecem bloqueadas para revisão pós-incidente.', postIncidentReview });
   } catch (error) {
     logger.error('[INCIDENT] Erro ao resolver incidente:', error);
-    return res.status(500).json({
-      success: false,
-      error: 'Erro ao resolver incidente',
-      details: error.message
-    });
+    return res.status(500).json({ success: false, error: 'Erro ao resolver incidente', details: error.message });
   }
 }
 
@@ -256,62 +153,22 @@ async function escalateIncident(req, res) {
     const { incidentId } = req.params;
     const { userId, notes } = req.body;
     const { TemperatureIncidentCollection } = await getCollections();
-
     const { ObjectId } = require('mongodb');
-    const incident = await TemperatureIncidentCollection.findOne({
-      _id: new ObjectId(incidentId)
-    });
-
-    if (!incident) {
-      return res.status(404).json({
-        success: false,
-        error: 'Incidente não encontrado'
-      });
-    }
-
+    const incident = await TemperatureIncidentCollection.findOne({ _id: new ObjectId(incidentId) });
+    if (!incident) return res.status(404).json({ success: false, error: 'Incidente não encontrado' });
     const newEscalationLevel = Math.min(incident.escalationLevel + 1, 2);
-
-    const result = await TemperatureIncidentCollection.updateOne(
+    await TemperatureIncidentCollection.updateOne(
       { _id: new ObjectId(incidentId) },
-      {
-        $set: {
-          status: 'escalated',
-          escalationLevel: newEscalationLevel,
-          lastEscalatedAt: new Date(),
-          updatedAt: new Date()
-        },
-        $push: {
-          notes: {
-            timestamp: new Date(),
-            userId,
-            action: 'escalated',
-            escalationLevel: newEscalationLevel,
-            message: notes || `Escalado para nível ${newEscalationLevel}`
-          }
-        }
-      }
+      { $set: { status: 'escalated', escalationLevel: newEscalationLevel, lastEscalatedAt: new Date(), updatedAt: new Date() }, $push: { notes: { timestamp: new Date(), userId, action: 'escalated', escalationLevel: newEscalationLevel, message: notes || `Escalado para nível ${newEscalationLevel}` } } }
     );
-
-    // Enviar email de escalação
     const recipients = await getAlertRecipients();
     if (recipients.length > 0) {
-      void sendIncidentAlertEmail(incident, recipients, newEscalationLevel).catch(err => {
-        logger.error('[INCIDENT_EMAIL] Erro ao enviar alerta de escalação:', err.message);
-      });
+      void sendIncidentAlertEmail(incident, recipients, newEscalationLevel).catch(err => logger.error('[INCIDENT_EMAIL] Erro ao enviar alerta de escalação:', err.message));
     }
-
-    return res.status(200).json({
-      success: true,
-      message: `Incidente escalado para nível ${newEscalationLevel}`,
-      escalationLevel: newEscalationLevel
-    });
+    return res.status(200).json({ success: true, message: `Incidente escalado para nível ${newEscalationLevel}`, escalationLevel: newEscalationLevel });
   } catch (error) {
     logger.error('[INCIDENT] Erro ao escalar incidente:', error);
-    return res.status(500).json({
-      success: false,
-      error: 'Erro ao escalar incidente',
-      details: error.message
-    });
+    return res.status(500).json({ success: false, error: 'Erro ao escalar incidente', details: error.message });
   }
 }
 
@@ -320,59 +177,18 @@ async function addNoteToIncident(req, res) {
     const { incidentId } = req.params;
     const { userId, message } = req.body;
     const { TemperatureIncidentCollection } = await getCollections();
-
-    if (!message || typeof message !== 'string') {
-      return res.status(400).json({
-        success: false,
-        error: 'message é obrigatório'
-      });
-    }
-
+    if (!message || typeof message !== 'string') return res.status(400).json({ success: false, error: 'message é obrigatório' });
     const { ObjectId } = require('mongodb');
     const result = await TemperatureIncidentCollection.updateOne(
       { _id: new ObjectId(incidentId) },
-      {
-        $push: {
-          notes: {
-            timestamp: new Date(),
-            userId,
-            action: 'note',
-            message
-          }
-        },
-        $set: {
-          updatedAt: new Date()
-        }
-      }
+      { $push: { notes: { timestamp: new Date(), userId, action: 'note', message } }, $set: { updatedAt: new Date() } }
     );
-
-    if (result.matchedCount === 0) {
-      return res.status(404).json({
-        success: false,
-        error: 'Incidente não encontrado'
-      });
-    }
-
-    return res.status(200).json({
-      success: true,
-      message: 'Nota adicionada ao incidente'
-    });
+    if (result.matchedCount === 0) return res.status(404).json({ success: false, error: 'Incidente não encontrado' });
+    return res.status(200).json({ success: true, message: 'Nota adicionada ao incidente' });
   } catch (error) {
     logger.error('[INCIDENT] Erro ao adicionar nota:', error);
-    return res.status(500).json({
-      success: false,
-      error: 'Erro ao adicionar nota',
-      details: error.message
-    });
+    return res.status(500).json({ success: false, error: 'Erro ao adicionar nota', details: error.message });
   }
 }
 
-module.exports = {
-  createOrUpdateIncident,
-  getIncidents,
-  acknowledgeIncident,
-  resolveIncident,
-  escalateIncident,
-  addNoteToIncident,
-  getAlertRecipients
-};
+module.exports = { createOrUpdateIncident, getIncidents, acknowledgeIncident, resolveIncident, escalateIncident, addNoteToIncident, getAlertRecipients };

@@ -61,10 +61,7 @@ export default function AnalysisUploadModal({
     try {
       setLoadingAnalyticalEquipment(true);
       const response = await equipmentService.getAnalytical();
-      const data = Array.isArray(response.data)
-        ? response.data
-        : (response.data?.data || []);
-      setAnalyticalEquipment(data);
+      setAnalyticalEquipment(Array.isArray(response.data) ? response.data : []);
     } catch (err: any) {
       console.error('Erro ao carregar equipamentos analíticos:', err);
       setAnalyticalEquipment([]);
@@ -173,6 +170,10 @@ export default function AnalysisUploadModal({
     setShowValidation(false);
 
     try {
+      if (!file) {
+        setShowValidation(true);
+        return;
+      }
       const formData = new FormData();
       formData.append('file', file);
       formData.append('analysisType', analysisType);

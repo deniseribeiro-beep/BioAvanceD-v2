@@ -1,3 +1,4 @@
+const { ObjectId } = require('mongodb');
 const SampleMovementModel = require('../models/SampleMovement');
 const { appendMovementWithHashChain } = require('../utils/sampleMovementLedger');
 const { getCollection } = require('../utils/collectionResolver');
@@ -22,6 +23,10 @@ function normalizeStatus(value) {
     .toLowerCase();
 }
 
+function normalizeString(value) {
+  return String(value || '').trim();
+}
+
 function isQuarantineTriggerStatus(value) {
   return QUARANTINE_TRIGGER_STATUSES.has(normalizeStatus(value));
 }
@@ -29,6 +34,20 @@ function isQuarantineTriggerStatus(value) {
 function buildStatusChangeReason(source, sourceId, statusValue) {
   const normalizedSource = source === 'sensor' ? 'sensor' : 'equipamento';
   return `Quarentena automática por ${normalizedSource} ${sourceId || 'desconhecido'} com status ${statusValue}`;
+}
+
+function buildColdChainIncidentReason(incident = {}) {
+  const sensorKey = normalizeString(incident.sensorKey || incident.sensorId || incident.sensorID) || 'sensor desconhecido';
+  const temperature = incident.currentTemperature !== undefined ? ` temperatura=${incident.currentTemperature}` : '';
+  return `Quarentena automática por incidente de cadeia fria (${sensorKey})${temperature}`;
+}
+
+function toObjectIdIfValid(value) {
+  const raw = normalizeString(value);
+  if (raw && ObjectId.isValid(raw)) {
+    return new ObjectId(raw);
+  }
+  return value;
 }
 
 function collectEquipmentIdentifiers(equipmentContext = {}) {
@@ -47,6 +66,39 @@ function collectEquipmentIdentifiers(equipmentContext = {}) {
   }
 
   return [...identifiers];
+}
+
+function collectLocationIds(...values) {
+  const ids = [];
+  values.forEach((value) => {
+    if (Array.isArray(value)) {
+      ids.push(...collectLocationIds(...value));
+      return;
+    }
+    if (value === undefined || value === null || normalizeString(value) === '') {
+      return;
+    }
+    const numeric = Number(value);
+    ids.push(Number.isFinite(numeric) ? numeric : value);
+  });
+  return [...new Set(ids.map((value) => String(value)))].map((value) => {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : value;
+  });
+}
+
+function buildSensorLookup(sensorKey) {
+  const raw = normalizeString(sensorKey);
+  const variants = [raw];
+  if (ObjectId.isValid(raw)) variants.push(new ObjectId(raw));
+  return {
+    $or: [
+      { sensorId: { $in: variants } },
+      { sensorID: { $in: variants } },
+      { _id: { $in: variants } },
+      { macAddress: raw },
+    ]
+  };
 }
 
 async function findLocationIdsByEquipment(db, equipmentContext = {}, options = {}) {
@@ -79,12 +131,85 @@ async function findLocationIdsByEquipment(db, equipmentContext = {}, options = {
     .filter((locationID) => locationID !== undefined && locationID !== null);
 }
 
+async function findEquipmentByMetadata(db, metadata = {}, options = {}) {
+  const equipmentReference = metadata?.equipment || metadata?.equipmentId || metadata?.equipmentID;
+  if (!equipmentReference) return null;
+
+  const equipmentCollection = db.collection('equipment');
+  const sessionOptions = options.session ? { session: options.session } : undefined;
+  const variants = [equipmentReference, normalizeString(equipmentReference)];
+  if (ObjectId.isValid(normalizeString(equipmentReference))) {
+    variants.push(new ObjectId(normalizeString(equipmentReference)));
+  }
+  const numeric = Number(equipmentReference);
+  if (Number.isFinite(numeric)) variants.push(numeric);
+
+  return equipmentCollection.findOne({
+    $or: [
+      { _id: { $in: variants } },
+      { equipmentID: { $in: variants } },
+      { id: { $in: variants } },
+    ]
+  }, sessionOptions);
+}
+
+async function findLocationIdsBySensorKey(db, sensorKey, options = {}) {
+  const rawSensorKey = normalizeString(sensorKey);
+  if (!rawSensorKey) return [];
+
+  const sessionOptions = options.session ? { session: options.session } : undefined;
+  const locationIds = [];
+
+  try {
+    const sensorsCollection = db.collection('sensors');
+    const sensors = await sensorsCollection.find(buildSensorLookup(rawSensorKey), sessionOptions).toArray();
+    sensors.forEach((sensor) => {
+      locationIds.push(...collectLocationIds(sensor.locationId, sensor.locationID, sensor.storageLocation?.locationID));
+    });
+  } catch (error) {
+    logger.warn('[QUARANTINE][COLD_CHAIN] Não foi possível consultar sensors para incidente', { sensorKey: rawSensorKey, error: error.message });
+  }
+
+  try {
+    const sensorMetadataCollection = db.collection('sensorMetadata');
+    const metadataDocs = await sensorMetadataCollection.find(buildSensorLookup(rawSensorKey), sessionOptions).toArray();
+
+    for (const metadata of metadataDocs) {
+      locationIds.push(...collectLocationIds(metadata.locationId, metadata.locationID, metadata.storageLocation?.locationID));
+      const equipment = await findEquipmentByMetadata(db, metadata, options);
+      if (equipment) {
+        locationIds.push(...await findLocationIdsByEquipment(db, equipment, options));
+      }
+    }
+  } catch (error) {
+    logger.warn('[QUARANTINE][COLD_CHAIN] Não foi possível consultar sensorMetadata para incidente', { sensorKey: rawSensorKey, error: error.message });
+  }
+
+  try {
+    const locationsCollection = db.collection('locations');
+    const locations = await locationsCollection.find({
+      $or: [
+        { sensorId: rawSensorKey },
+        { sensorID: rawSensorKey },
+        { sensorKey: rawSensorKey },
+        { 'sensor.sensorId': rawSensorKey },
+        { 'sensor.sensorID': rawSensorKey },
+      ]
+    }, sessionOptions).toArray();
+    locationIds.push(...locations.map((location) => location.locationID));
+  } catch (error) {
+    logger.warn('[QUARANTINE][COLD_CHAIN] Não foi possível consultar locations por sensor', { sensorKey: rawSensorKey, error: error.message });
+  }
+
+  return collectLocationIds(locationIds);
+}
+
 function buildSampleFilterFromLocationIds(locationIds = []) {
   if (!Array.isArray(locationIds) || locationIds.length === 0) {
     return null;
   }
 
-  const normalizedIds = [...new Set(locationIds)];
+  const normalizedIds = collectLocationIds(locationIds);
 
   return {
     $or: [
@@ -135,6 +260,8 @@ async function quarantineSamplesByFilter(db, filter, context = {}) {
       status: 'QUARANTINED',
       currentStatus: 'QUARANTINED',
       release_status: 'QUARANTINE',
+      availabilityStatus: 'BLOCKED',
+      quarantineStatus: 'QUARANTINED',
       quarantineLocation: 'Quarentena',
       quarantineReason: context.reason || null,
       quarantineSource: context.source || null,
@@ -142,6 +269,15 @@ async function quarantineSamplesByFilter(db, filter, context = {}) {
       quarantinedAt: now,
       updatedAt: now
     };
+
+    if (context.coldChainIncidentId) {
+      updatePayload.quarantineReasonCode = 'COLD_CHAIN_INCIDENT';
+      updatePayload.coldChainIncidentId = String(context.coldChainIncidentId);
+      updatePayload.coldChainSensorKey = context.coldChainSensorKey || null;
+      updatePayload.coldChainQuarantinedAt = now;
+      updatePayload.coldChainStatus = 'INCIDENT_OPEN';
+      updatePayload.coldChainReviewRequired = true;
+    }
 
     if (sample.location && typeof sample.location === 'object' && !Array.isArray(sample.location)) {
       updatePayload.location = {
@@ -175,7 +311,7 @@ async function quarantineSamplesByFilter(db, filter, context = {}) {
         unit: sample.unit || 'µL',
         responsible: 'SYSTEM',
         destination: 'Quarentena',
-        purpose: 'sensor_equipment_quarantine',
+        purpose: context.coldChainIncidentId ? 'cold_chain_incident_quarantine' : 'sensor_equipment_quarantine',
         linkedProject: sample.linkedProject || null,
         observations: context.reason || 'Quarentena automática por falha de equipamento/sensor',
         userId: context.auditInfo?.userId || null,
@@ -237,17 +373,12 @@ async function quarantineBySensorStatus(db, sensorContext, newStatus, options = 
     return { triggered: false, matched: 0, quarantined: 0, movements: 0 };
   }
 
-  const locationCandidates = [
+  const locationCandidates = collectLocationIds(
     sensorContext?.locationId,
     sensorContext?.locationID,
     options?.updateData?.locationId,
     options?.updateData?.locationID
-  ]
-    .filter((value) => value !== undefined && value !== null && String(value).trim() !== '')
-    .map((value) => {
-      const numberValue = Number(value);
-      return Number.isFinite(numberValue) ? numberValue : value;
-    });
+  );
 
   const filter = buildSampleFilterFromLocationIds(locationCandidates);
   const sourceId = sensorContext?.sensorId || sensorContext?.sensorID || sensorContext?._id || null;
@@ -276,8 +407,97 @@ async function quarantineBySensorStatus(db, sensorContext, newStatus, options = 
   };
 }
 
+async function quarantineByColdChainIncident(db, incident = {}, options = {}) {
+  const sensorKey = normalizeString(incident.sensorKey || incident.sensorId || incident.sensorID);
+  if (!sensorKey) {
+    return { triggered: false, matched: 0, quarantined: 0, movements: 0, reason: 'missing-sensor-key' };
+  }
+
+  const status = normalizeStatus(incident.status || 'open');
+  if (!['open', 'acknowledged', 'escalated'].includes(status)) {
+    return { triggered: false, matched: 0, quarantined: 0, movements: 0, reason: 'incident-not-active' };
+  }
+
+  const locationIds = await findLocationIdsBySensorKey(db, sensorKey, options);
+  const filter = buildSampleFilterFromLocationIds(locationIds);
+  const incidentId = incident?._id ? String(incident._id) : sensorKey;
+  const reason = buildColdChainIncidentReason(incident);
+
+  const result = await quarantineSamplesByFilter(db, filter, {
+    ...options,
+    source: 'cold_chain_incident',
+    sourceId: incidentId,
+    reason,
+    coldChainIncidentId: incidentId,
+    coldChainSensorKey: sensorKey,
+  });
+
+  logger.warn('[QUARANTINE][COLD_CHAIN] Amostras quarentenadas por incidente de cadeia fria', {
+    incidentId,
+    sensorKey,
+    matched: result.matched,
+    quarantined: result.quarantined,
+    movements: result.movements,
+    locationIds
+  });
+
+  return {
+    triggered: true,
+    ...result,
+    reason,
+    locationIds,
+    incidentId,
+    sensorKey
+  };
+}
+
+async function markColdChainIncidentSamplesForReview(db, incident = {}, options = {}) {
+  const incidentId = incident?._id ? String(incident._id) : normalizeString(incident.sensorKey || incident.sensorId || incident.sensorID);
+  if (!incidentId) {
+    return { matched: 0, modified: 0, reviewRequired: false };
+  }
+
+  const samplesCollection = await getCollection(db, 'samples');
+  const now = new Date();
+  const queryOptions = options.session ? { session: options.session } : undefined;
+  const result = await samplesCollection.updateMany(
+    {
+      coldChainIncidentId: incidentId,
+      quarantineReasonCode: 'COLD_CHAIN_INCIDENT',
+      release_status: 'QUARANTINE'
+    },
+    {
+      $set: {
+        availabilityStatus: 'PENDING_REVIEW',
+        quarantineStatus: 'PENDING_REVIEW',
+        coldChainStatus: 'INCIDENT_RESOLVED_REVIEW_REQUIRED',
+        coldChainReviewRequired: true,
+        coldChainIncidentResolvedAt: now,
+        updatedAt: now
+      }
+    },
+    queryOptions
+  );
+
+  logger.warn('[QUARANTINE][COLD_CHAIN] Incidente resolvido; amostras mantidas para revisão pós-incidente', {
+    incidentId,
+    matched: result.matchedCount || 0,
+    modified: result.modifiedCount || 0
+  });
+
+  return {
+    matched: result.matchedCount || 0,
+    modified: result.modifiedCount || 0,
+    reviewRequired: true,
+    incidentId
+  };
+}
+
 module.exports = {
   isQuarantineTriggerStatus,
   quarantineByEquipmentStatus,
-  quarantineBySensorStatus
+  quarantineBySensorStatus,
+  quarantineByColdChainIncident,
+  markColdChainIncidentSamplesForReview,
+  findLocationIdsBySensorKey
 };

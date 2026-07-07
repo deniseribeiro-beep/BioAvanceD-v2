@@ -12,6 +12,10 @@ function escapeHtml(value) {
     .replace(/'/g, '&#39;');
 }
 
+function isValidEmail(email) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim());
+}
+
 async function sendIncidentAlertEmail(incident, recipients, escalationLevel = 0) {
   if (!process.env.RESEND_API_KEY) {
     logger.warn('RESEND_API_KEY não configurada - alerta de incidente não enviado por email');
@@ -86,21 +90,37 @@ async function sendIncidentAlertEmail(incident, recipients, escalationLevel = 0)
     </div>
   `;
 
+  const normalizedRecipients = recipients
+    .map((email) => String(email || '').trim())
+    .filter((email) => email.length > 0);
+
+  const invalidRecipients = normalizedRecipients.filter((email) => !isValidEmail(email));
+  const validRecipients = normalizedRecipients.filter((email) => isValidEmail(email));
+
+  if (validRecipients.length === 0) {
+    logger.warn('[INCIDENT_EMAIL] Nenhum destinatário válido para alerta de incidente');
+    return {
+      success: false,
+      sent: 0,
+      failed: invalidRecipients.length || normalizedRecipients.length,
+      results: invalidRecipients.map((email) => ({
+        status: 'rejected',
+        reason: new Error(`Invalid email: ${email}`)
+      }))
+    };
+  }
+
   const results = await Promise.allSettled(
-    recipients.map(email => {
-      const safeEmail = String(email || '').trim();
-      if (!safeEmail) return Promise.reject(new Error('Invalid email'));
-      return resend.emails.send({
-        from,
-        to: safeEmail,
-        subject,
-        html
-      });
-    })
+    validRecipients.map(email => resend.emails.send({
+      from,
+      to: email,
+      subject,
+      html
+    }))
   );
 
   const successful = results.filter(r => r.status === 'fulfilled').length;
-  const failed = results.filter(r => r.status === 'rejected').length;
+  const failed = results.filter(r => r.status === 'rejected').length + invalidRecipients.length;
 
   if (failed > 0) {
     logger.error(`[INCIDENT_EMAIL] ${successful} enviados, ${failed} falharam para incidente ${incident.sensorName}`);
@@ -110,7 +130,13 @@ async function sendIncidentAlertEmail(incident, recipients, escalationLevel = 0)
     success: successful > 0,
     sent: successful,
     failed: failed,
-    results
+    results: [
+      ...invalidRecipients.map((email) => ({
+        status: 'rejected',
+        reason: new Error(`Invalid email: ${email}`)
+      })),
+      ...results
+    ]
   };
 }
 

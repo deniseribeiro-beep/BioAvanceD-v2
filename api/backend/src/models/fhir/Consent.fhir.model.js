@@ -63,7 +63,6 @@ const ConsentFHIRSchema = new Schema(
 
     semanticPointers: {
       mongoConsentId: { type: String, required: true },
-      mongoPatientId: { type: String, required: true },
       neo4jConsentPointer: { type: String, default: null }
     }
   },

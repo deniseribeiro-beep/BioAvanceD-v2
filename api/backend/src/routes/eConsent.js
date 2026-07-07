@@ -2,7 +2,6 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
 const router = express.Router();
-const { getNeo4jDriver } = require('../infrastructure/database/neo4j/connection');
 const notificationService = require('../services/notification.service');
 const { authenticate } = require('../infrastructure/middleware/auth');
 const { requireRole } = require('../infrastructure/middleware/rbac');
@@ -45,22 +44,15 @@ router.post('/update', async (req, res) => {
   try {
     const payload = jwt.verify(token, CONSENT_SECRET);
     const patientId = payload.patientId;
-    const neo4jDriver = require('../infrastructure/database/neo4j/connection').getNeo4jDriver();
-    const session = neo4jDriver.session();
-    // Atualiza consentimento no Neo4j (exemplo simplificado)
-    for (const c of consents) {
-      await session.run(
-        'MERGE (p:Patient {patientID: $patientId})-[:HAS_CONSENT]->(c:Consent {key: $key}) SET c.status = $status, c.updatedAt = datetime()',
-        { patientId, key: c.key, status: c.status }
-      );
+    // Fluxo canônico: persistência Mongo é a origem; projeção Neo4j ocorre pela outbox.
+    const consentService = require('../services/consent.service');
+    const db = req.app.locals.mongoDb || req.app.locals.db;
+    if (db && typeof consentService?.recordConsentProjectionEvent === 'function') {
+      await consentService.recordConsentProjectionEvent(db, { patientId, consents });
     }
+
     // Se algum consentimento foi revogado, coloca amostras em quarentena
     if (consents.some(c => c.status === 'REVOKED')) {
-      // Atualiza status das amostras no Neo4j
-      await session.run(
-        'MATCH (p:Patient {patientID: $patientId})-[:HAS_SAMPLE]->(s:Sample) SET s.status = "QUARANTINED", s.updatedAt = datetime()',
-        { patientId }
-      );
       // Atualiza status das amostras no MongoDB
       const Sample = require('../models/Sample');
       await Sample.updateMany({ patientID: patientId }, { $set: { status: 'QUARANTINED' } });
@@ -70,11 +62,6 @@ router.post('/update', async (req, res) => {
     }
     // Se todos os consentimentos necessários foram aceitos, libera amostras de quarentena
     else if (consents.every(c => c.status === 'ACTIVE' || c.status === 'GRANTED')) {
-      // Atualiza status das amostras no Neo4j: QUARANTINED → AVAILABLE
-      await session.run(
-        'MATCH (p:Patient {patientID: $patientId})-[:HAS_SAMPLE]->(s:Sample) WHERE s.status = "QUARANTINED" SET s.status = "AVAILABLE", s.updatedAt = datetime()',
-        { patientId }
-      );
       // Atualiza status das amostras no MongoDB para manter sincronização
       const Sample = require('../models/Sample');
       await Sample.updateMany(
@@ -85,10 +72,47 @@ router.post('/update', async (req, res) => {
       const io = req.app.get('io');
       if (io) io.to(`patient-${patientId}`).emit('sample-released', { patientId });
     }
-    await session.close();
     res.json({ success: true });
   } catch (err) {
     res.status(401).json({ error: 'Token inválido ou expirado' });
+  }
+});
+
+router.get('/import/fhir/consent/:token', async (req, res) => {
+  try {
+    const result = await require('../services/fhir-import-staging.service').validateImportConsentToken(req.app.locals.db, req.params.token);
+    return res.json({
+      success: true,
+      batchId: String(result.record.batchId || ''),
+      recordId: String(result.record._id || ''),
+      patientId: String(result.record.normalized?.patientID || ''),
+      patientName: String(result.record.normalized?.patientName || ''),
+      patientEmail: String(result.record.normalized?.patientEmail || ''),
+      status: result.record.status,
+      consentSigned: Boolean(result.record.normalized?.consentSigned),
+      consentTracking: result.record.consentTracking || null,
+    });
+  } catch (err) {
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Erro ao validar consentimento de importação' });
+  }
+});
+
+router.post('/import/fhir/consent/:token/accept', async (req, res) => {
+  try {
+    const result = await require('../services/fhir-import-staging.service').acceptImportConsentToken(req.app.locals.db, req.params.token);
+    return res.json({
+      success: true,
+      batchId: String(result.record.batchId || ''),
+      recordId: String(result.record._id || ''),
+      status: result.record.status,
+      consentSigned: Boolean(result.record.normalized?.consentSigned),
+      consentTracking: result.record.consentTracking || null,
+      quarantineStatus: result.record.quarantineStatus || null,
+      quarantineReason: result.record.quarantineReason || null,
+      availabilityStatus: result.record.availabilityStatus || null,
+    });
+  } catch (err) {
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Erro ao aceitar consentimento de importação' });
   }
 });
 

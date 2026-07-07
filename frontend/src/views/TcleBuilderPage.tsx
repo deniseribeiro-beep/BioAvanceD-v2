@@ -33,12 +33,12 @@ type ConsentItemDraft = {
 };
 
 const PREVIEW_VALUES: PreviewValueMap = {
-  titulo_projeto: 'Projeto BioAvanceD - Biobanco Genômico',
-  nome_pesquisador: 'Dra. Marina Silva',
-  numero_caae: '12345678.9.0000.0000',
-  nome_participante: 'João Carlos da Silva',
-  id_paciente_sistema: 'PAC-00012345',
-  id_amostra: 'SAM-00067890',
+  titulo_projeto: '______________________',
+  nome_pesquisador: '______________________',
+  numero_caae: '______________________',
+  nome_participante: '______________________',
+  id_paciente_sistema: '______________________',
+  id_amostra: '______________________',
 };
 
 const FIXED_HEADER_TEMPLATE = `PROJETO: {{titulo_projeto}}
@@ -47,8 +47,17 @@ PARTICIPANTE: {{nome_participante}} | ID PACIENTE: {{id_paciente_sistema}} | ID 
 
 const FIXED_CONSENT_DECLARATION = 'Eu, {{nome_participante}}, declaro que fui devidamente esclarecido(a) e concordo voluntariamente em participar deste estudo, nos termos apresentados neste documento.';
 
-const FIXED_SIGNATURE_PARTICIPANT = 'Assinatura de {{nome_participante}}';
-const FIXED_SIGNATURE_RESEARCHER = 'Assinatura de {{nome_pesquisador}}';
+const FIXED_SIGNATURE_PARTICIPANT = 'Assinatura do participante';
+const FIXED_SIGNATURE_RESEARCHER = 'Assinatura do pesquisador/responsável';
+const TEST_PDF_GENERIC_FIELDS = [
+  'Nome do participante: ______________________',
+  'CPF/Documento: ______________________',
+  'Data: ____/____/______',
+];
+const TEST_PDF_SIGNATURE_FIELDS = [
+  'Assinatura do participante: ______________________',
+  'Assinatura do pesquisador/responsável: ______________________',
+];
 
 const DEFAULT_BODY_HTML = '';
 
@@ -216,10 +225,36 @@ function parseVersionNumber(version: string) {
 function formatDate(value?: Date | string | null) {
   const date = value ? new Date(value) : null;
   if (!date || Number.isNaN(date.getTime())) {
-    return '--';
+    return 'Sem validade definida';
   }
 
   return date.toLocaleDateString('pt-BR');
+}
+
+function getConsentValidityValue(item?: Partial<ConsentPolicy & ConsentTemplate> | null) {
+  if (!item) {
+    return null;
+  }
+
+  const aliases = [
+    item.validTo,
+    item.validUntil,
+    item.validityDate,
+    item.expirationDate,
+    item.expiresAt,
+    item.validade,
+  ];
+  const directValue = aliases.find((value) => String(value || '').trim());
+  if (directValue) {
+    return directValue;
+  }
+
+  const vigencia = item.vigencia;
+  if (vigencia && typeof vigencia === 'object') {
+    return vigencia.validTo || vigencia.validUntil || vigencia.endDate || vigencia.fim || null;
+  }
+
+  return null;
 }
 
 function getErrorMessage(error: any, fallback: string) {
@@ -229,8 +264,6 @@ function getErrorMessage(error: any, fallback: string) {
 function buildPrintablePolicyHtml(policy: ConsentPolicy) {
   const headerHtml = replaceProtectedTags(FIXED_HEADER_TEMPLATE, PREVIEW_VALUES);
   const acceptanceHtml = replaceProtectedTags(FIXED_CONSENT_DECLARATION, PREVIEW_VALUES);
-  const participantSignatureHtml = replaceProtectedTags(FIXED_SIGNATURE_PARTICIPANT, PREVIEW_VALUES);
-  const researcherSignatureHtml = replaceProtectedTags(FIXED_SIGNATURE_RESEARCHER, PREVIEW_VALUES);
   const bodyHtml = replaceProtectedTags(String(policy.htmlContent || '').trim() || DEFAULT_BODY_HTML.trim(), PREVIEW_VALUES);
   const granularPermissions = Array.isArray(policy.granularPermissions) ? policy.granularPermissions : [];
   const printableTitle = escapeHtml(`${policy.version || 'v?'} - ${policy.title || 'TCLE'}`);
@@ -319,6 +352,15 @@ function buildPrintablePolicyHtml(policy: ConsentPolicy) {
           line-height: 1.75;
           font-size: 15px;
         }
+        .generic-fields {
+          display: grid;
+          gap: 12px;
+          margin: 18px 0 0 0;
+          padding: 0;
+          list-style: none;
+          font-size: 14px;
+          color: #0f172a;
+        }
         .signature-grid {
           display: grid;
           gap: 18px;
@@ -366,9 +408,11 @@ function buildPrintablePolicyHtml(policy: ConsentPolicy) {
         <section class="block fixed">
           <div class="eyebrow">Aceite e assinaturas</div>
           <p class="acceptance-note">${acceptanceHtml}</p>
+          <ul class="generic-fields">
+            ${TEST_PDF_GENERIC_FIELDS.map((field) => `<li>${escapeHtml(field)}</li>`).join('')}
+          </ul>
           <div class="signature-grid">
-            <div class="signature-line"><span>${participantSignatureHtml}</span></div>
-            <div class="signature-line"><span>${researcherSignatureHtml}</span></div>
+            ${TEST_PDF_SIGNATURE_FIELDS.map((field) => `<div class="signature-line"><span>${escapeHtml(field)}</span></div>`).join('')}
           </div>
         </section>
       </article>
@@ -1077,7 +1121,7 @@ export default function TcleBuilderPage() {
                           <strong>{item.version || '--'}</strong>
                         </td>
                         <td>{String(item.caae || '--').trim() || '--'}</td>
-                        <td>{formatDate(item.validFrom)}</td>
+                        <td>{formatDate(getConsentValidityValue(item))}</td>
                         <td>
                           <span className={`tcle-builder-status-badge tcle-builder-status-badge--${item.active ? 'active' : 'obsolete'}`}>
                             {item.active ? 'Ativo' : 'Obsoleto'}

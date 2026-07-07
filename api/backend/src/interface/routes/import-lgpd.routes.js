@@ -18,13 +18,6 @@ router.post('/pacientes',
   importLGPDController.importPatients.bind(importLGPDController)
 );
 
-router.post('/pacientes/predict-mapping',
-  authenticate,
-  requirePermission('createPatient'),
-  importLGPDController.uploadMiddleware(),
-  importLGPDController.predictPatientsMapping.bind(importLGPDController)
-);
-
 router.post('/pacientes/smart-import',
   authenticate,
   requirePermission('createPatient'),

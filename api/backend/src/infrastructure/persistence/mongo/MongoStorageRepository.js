@@ -1,4 +1,5 @@
 const { ObjectId } = require('mongodb');
+const { getCollection } = require('../../../utils/collectionResolver');
 
 /**
  * Repositório Mongo para operações de armazenamento físico de amostras.
@@ -38,7 +39,7 @@ class MongoStorageRepository {
    * @param {import('mongodb').ClientSession} [session]
    */
   async findSampleById(sampleId, session) {
-    const samplesCollection = this.db.collection('amostras');
+    const samplesCollection = await getCollection(this.db, 'samples');
     const normalizedId = this.toObjectId(sampleId);
     return samplesCollection.findOne({ _id: normalizedId }, { session });
   }
@@ -58,7 +59,7 @@ class MongoStorageRepository {
    * @param {import('mongodb').ClientSession} session
    */
   async moveSamplePosition(input, session) {
-    const samplesCollection = this.db.collection('amostras');
+    const samplesCollection = await getCollection(this.db, 'samples');
     const storageBoxesCollection = this.db.collection('storageBoxes');
 
     const sampleObjId = this.toObjectId(input.sampleId);
@@ -131,7 +132,7 @@ class MongoStorageRepository {
    * @param {import('mongodb').ClientSession} session
    */
   async allocateSamplePosition(input, session) {
-    const samplesCollection = this.db.collection('amostras');
+    const samplesCollection = await getCollection(this.db, 'samples');
     const storageBoxesCollection = this.db.collection('storageBoxes');
 
     const sampleObjId = this.toObjectId(input.sampleId);
@@ -208,7 +209,7 @@ class MongoStorageRepository {
    * @param {import('mongodb').ClientSession} session
    */
   async releaseSamplePosition(input, session) {
-    const samplesCollection = this.db.collection('amostras');
+    const samplesCollection = await getCollection(this.db, 'samples');
     const storageBoxesCollection = this.db.collection('storageBoxes');
 
     const sampleObjId = this.toObjectId(input.sampleId);
@@ -387,7 +388,7 @@ class MongoStorageRepository {
    * @param {{ sampleId: string }} input
    */
   async getSampleStorageLocation(input) {
-    const samplesCollection = this.db.collection('amostras');
+    const samplesCollection = await getCollection(this.db, 'samples');
     const storagePathsCollection = this.db.collection('storagePaths');
     const sampleObjId = this.toObjectId(input.sampleId);
 
@@ -438,7 +439,7 @@ class MongoStorageRepository {
     const searchTerm = String(input.query || '').trim();
     if (searchTerm.length < 2) return [];
 
-    const samplesCollection = this.db.collection('amostras');
+    const samplesCollection = await getCollection(this.db, 'samples');
 
     const searchRegex = new RegExp(searchTerm, 'i');
     return samplesCollection.find({

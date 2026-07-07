@@ -5,7 +5,6 @@ const PatientFHIR = require('../models/fhir/Patient.fhir.model');
 const SampleFHIR = require('../models/fhir/Sample.fhir.model');
 const ConsentFHIR = require('../models/fhir/Consent.fhir.model');
 const { getCollection, resolveSourceCollectionName } = require('../utils/collectionResolver');
-const { buildNeo4jSemanticPointer } = require('../infrastructure/integration/semantic-pointer');
 
 class FhirSyncService {
   mapSexToFhirGender(sex) {
@@ -420,17 +419,6 @@ class FhirSyncService {
     const barcode = sample?.barcode || sampleId;
     const registerDate = sample?.registrationDate || sample?.registerDate || sample?.createdAt || new Date();
 
-    const samplePointer = buildNeo4jSemanticPointer({
-      mongoId: String(sample._id),
-      collection: 'samples_fhir'
-    });
-
-    const patientMongoId = sample?.patientObjectId || sample?.patientID;
-    const patientPointer = buildNeo4jSemanticPointer({
-      mongoId: String(patientMongoId),
-      collection: 'patients_fhir'
-    });
-
     const qualityMapping = {
       GOOD: 1,
       COMPROMISED: 2,
@@ -486,10 +474,8 @@ class FhirSyncService {
         code: String(sample.unit || 'uL')
       },
       semanticPointers: {
-        mongoSampleId: samplePointer.id,
-        mongoPatientId: patientPointer.id,
-        neo4jSamplePointer: samplePointer.pointer,
-        lineageManagedInNeo4j: true
+        mongoSampleId: String(sample._id),
+        lineageManagedInNeo4j: false
       },
       storageSnapshot: {
         boxId: sample?.storageLocation?.boxId ? String(sample.storageLocation.boxId) : null,
@@ -501,16 +487,6 @@ class FhirSyncService {
   buildConsentFhirPayload(consent) {
     const isActive = String(consent?.status || '').toUpperCase() === 'ACTIVE';
     const signedAt = consent?.signedAt || consent?.createdAt || new Date();
-
-    const consentPointer = buildNeo4jSemanticPointer({
-      mongoId: String(consent._id),
-      collection: 'consents_fhir'
-    });
-
-    const patientPointer = buildNeo4jSemanticPointer({
-      mongoId: String(consent.patientId),
-      collection: 'patients_fhir'
-    });
 
     return {
       resourceType: 'Consent',
@@ -572,9 +548,7 @@ class FhirSyncService {
       revokedAt: consent?.revokedAt ? new Date(consent.revokedAt) : null,
       responses: consent?.responses || {},
       semanticPointers: {
-        mongoConsentId: consentPointer.id,
-        mongoPatientId: patientPointer.id,
-        neo4jConsentPointer: consentPointer.pointer
+        mongoConsentId: String(consent._id)
       }
     };
   }

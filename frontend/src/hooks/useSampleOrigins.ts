@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { sampleOriginService } from '../services/api';
+import { extractResponseItems, normalizeMasterDataItem } from '../api/response.adapters';
 import { onClientLogout } from '../utils/sessionCleanup';
 
 export interface SampleOrigin {
@@ -32,12 +33,7 @@ export function useSampleOrigins() {
     try {
       setLoading(true);
       const response = await sampleOriginService.getAll();
-      const responseData = response.data as any;
-      const originsData = Array.isArray(responseData) 
-        ? responseData 
-        : (Array.isArray(responseData?.data) 
-          ? responseData.data 
-          : []);
+      const originsData = extractResponseItems<SampleOrigin>(response).map((item) => normalizeMasterDataItem<SampleOrigin>(item, ['originID']));
       setOrigins(originsData);
       setError(null);
     } catch (err: any) {

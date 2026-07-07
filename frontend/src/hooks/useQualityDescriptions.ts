@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { SampleWithQualityDescription } from '../types/models';
 import { qualityDescriptionService } from '../services/api';
+import { extractResponseEntity, extractResponseItems, normalizeMasterDataItem } from '../api/response.adapters';
 import { onClientLogout } from '../utils/sessionCleanup';
 
 export function useQualityDescriptions() {
@@ -24,13 +25,8 @@ export function useQualityDescriptions() {
     try {
       setLoading(true);
       const response = await qualityDescriptionService.getAll();
-      // Backend retorna { success: true, data: [...] }
-      const responseData = response.data as any;
-      const qualitiesData = Array.isArray(responseData)
-        ? responseData
-        : Array.isArray(responseData?.data)
-          ? responseData.data
-          : [];
+      const qualitiesData = extractResponseItems<SampleWithQualityDescription>(response)
+        .map((item) => normalizeMasterDataItem<SampleWithQualityDescription>(item, ['qualityID']));
       setQualities(qualitiesData);
       setError(null);
     } catch (err: any) {
@@ -44,8 +40,7 @@ export function useQualityDescriptions() {
   const createQuality = async (data: Partial<SampleWithQualityDescription>) => {
     try {
       const response = await qualityDescriptionService.create(data);
-      const responseData = response.data as any;
-      const newQuality = responseData?.data || responseData;
+      const newQuality = extractResponseEntity<SampleWithQualityDescription>(response, data as any);
       await loadQualities();
       return newQuality;
     } catch (err: any) {
@@ -56,9 +51,8 @@ export function useQualityDescriptions() {
   const updateQuality = async (id: number, data: Partial<SampleWithQualityDescription>) => {
     try {
       const response = await qualityDescriptionService.update(id, data);
-      const responseData = response.data as any;
       await loadQualities();
-      return responseData?.data || responseData;
+      return extractResponseEntity<SampleWithQualityDescription>(response, data as any);
     } catch (err: any) {
       throw new Error(err.message || 'Erro ao atualizar qualidade');
     }

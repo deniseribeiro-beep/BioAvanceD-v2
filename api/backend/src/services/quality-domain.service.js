@@ -13,8 +13,6 @@ function evaluateQuality(payload = {}) {
   const result = rcsCertificationService.certify(normalized);
   return {
     ...result,
-    ...rcsCertificationService.buildDeprecatedCompatibility ? rcsCertificationService.buildDeprecatedCompatibility(result) : {},
-    // Keep legacy fields for backwards compatibility, but mark them as deprecated.
     deprecated_legacy_fields: ['quality_score', 'quality_category', 'penalty_log', 'forcedQuarantine', 'category'],
   };
 }
@@ -53,7 +51,7 @@ function buildSprecCode(sprec = {}) {
 function validateQualityForRelease(sample = {}) {
   const assessment = resolveMethodologicalQuality(sample);
   // final_grade must be A..E and governance_status must be approved (1)
-  const valid = assessment.governance_status === 1 && ['A', 'B', 'C', 'D', 'E'].includes(String(assessment.final_grade));
+  const valid = assessment.governance_status === 1 && ['A', 'B', 'C', 'D'].includes(String(assessment.final_grade));
   return {
     valid,
     reason: valid

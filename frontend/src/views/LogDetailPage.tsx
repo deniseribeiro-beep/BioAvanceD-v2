@@ -44,10 +44,11 @@ export default function LogDetailPage() {
         const response = await logService.getById(cleanId);
         
         if (response && response.data) {
-          if (response.data.success && response.data.data) {
-            setLog(response.data.data);
-          } else if (response.data.error) {
-            setError(response.data.error);
+          const payload = response.data as { success: boolean; data?: Log; error?: string };
+          if (payload.success && payload.data) {
+            setLog(payload.data);
+          } else if (payload.error) {
+            setError(payload.error);
           } else {
             setError(t('logs.detailPage.notFound'));
           }
@@ -262,14 +263,14 @@ export default function LogDetailPage() {
                 <label>{t('logs.detailPage.labels.id')}</label>
                 <span style={{ fontFamily: 'monospace', fontSize: '0.8125rem' }}>
                   {(() => {
-                    const id = log._id || log.logID;
+                    const id: unknown = log._id || log.logID;
                     if (!id) return 'N/A';
                     // Se for objeto serializado (ObjectId), extrai o valor
-                    if (typeof id === 'object' && id._type === 'ObjectId') {
-                      return id._value || String(id);
+                    if (typeof id === 'object' && '_type' in id && id._type === 'ObjectId') {
+                      return ('_value' in id && id._value) ? String(id._value) : String(id);
                     }
                     // Se for objeto com toString
-                    if (typeof id === 'object' && id.toString) {
+                    if (typeof id === 'object' && 'toString' in id && typeof id.toString === 'function') {
                       return id.toString();
                     }
                     return String(id);

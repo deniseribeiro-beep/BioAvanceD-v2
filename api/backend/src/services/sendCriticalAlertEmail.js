@@ -11,6 +11,10 @@ function escapeHtml(value) {
     .replace(/'/g, '&#39;');
 }
 
+function isValidEmail(email) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim());
+}
+
 async function sendCriticalAlertEmail(sensorId, currentTemp, limitTemp, recipientEmail) {
   if (!process.env.RESEND_API_KEY) {
     throw new Error('RESEND_API_KEY não configurada');
@@ -25,6 +29,10 @@ async function sendCriticalAlertEmail(sensorId, currentTemp, limitTemp, recipien
 
   if (!safeRecipientEmail) {
     throw new Error('recipientEmail é obrigatório para envio do alerta crítico');
+  }
+
+  if (!isValidEmail(safeRecipientEmail)) {
+    throw new Error('recipientEmail inválido para envio do alerta crítico');
   }
 
   const subject = '🚨 ALERTA CRÍTICO: Violação de Temperatura';

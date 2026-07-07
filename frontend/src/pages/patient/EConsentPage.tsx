@@ -8,10 +8,14 @@ const consentLayers = [
   { key: 'sharing', label: 'Aceito compartilhamento anonimizado dos meus dados' },
 ];
 
+type ConsentState = Record<string, boolean>;
+type ConsentApiItem = { key: string; status: string };
+type ConsentPatient = { patientName?: string };
+
 export default function EConsentPage() {
   const { token } = useParams();
-  const [patient, setPatient] = useState(null);
-  const [consents, setConsents] = useState({});
+  const [patient, setPatient] = useState<ConsentPatient | null>(null);
+  const [consents, setConsents] = useState<ConsentState>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState(false);
@@ -21,7 +25,8 @@ export default function EConsentPage() {
       try {
         const resp = await axios.get(`/api/e-consent/validate/${token}`);
         setPatient(resp.data.patient);
-        setConsents(resp.data.consents.reduce((acc, c) => ({ ...acc, [c.key]: c.status === 'ACCEPTED' }), {}));
+        const consentItems: ConsentApiItem[] = Array.isArray(resp.data.consents) ? resp.data.consents : [];
+        setConsents(consentItems.reduce<ConsentState>((acc, item) => ({ ...acc, [item.key]: item.status === 'ACCEPTED' }), {}));
       } catch (err) {
         setError('Link inválido ou expirado. Solicite novo acesso.');
       } finally {
@@ -31,7 +36,7 @@ export default function EConsentPage() {
     fetchData();
   }, [token]);
 
-  async function handleConsentChange(key, value) {
+  async function handleConsentChange(key: string, value: boolean) {
     setConsents(c => ({ ...c, [key]: value }));
   }
 

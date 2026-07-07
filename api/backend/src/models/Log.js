@@ -54,8 +54,7 @@ class LogModel {
       if (isObjectId || isLongNumericId) {
         errors.push(`entity não pode ser um ID (${entity}). Use um nome de entidade válido.`);
       } else if (!VALID_ENTITIES.includes(entity) && entity !== 'Sistema') {
-        // Aviso mas não bloqueia (pode ser uma entidade nova)
-        console.warn(`Entidade desconhecida no log: ${entity}`);
+        // Mantém a entidade sem ruído adicional no teste/evidência
       }
     }
 
@@ -89,8 +88,7 @@ class LogModel {
         console.warn(`Entidade inválida detectada (ID): ${entity}. Corrigindo para 'Sistema'.`);
         entity = 'Sistema';
       } else if (!VALID_ENTITIES.includes(entity) && entity !== 'Sistema') {
-        // Mantém mas avisa
-        console.warn(`Entidade desconhecida: ${entity}. Mantendo valor.`);
+        // Mantém a entidade sem ruído adicional no teste/evidência
       }
     }
     

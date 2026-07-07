@@ -3,7 +3,8 @@ import { describe, expect, it } from 'vitest';
 const rcsService = require('../../src/services/rcs-certification.service');
 const qualityDomain = require('../../src/services/quality-domain.service');
 const referenceData = require('../../src/services/rcs-reference-data');
-const { buildRcsCatalogDocuments } = require('../../src/seeders');
+const { buildRcsCatalogDocuments } = require('../../src/services/rcs-reference-data');
+const { SampleModel } = require('../../src/models/Sample');
 
 function fluidSprec(overrides = {}) {
   return {
@@ -45,7 +46,9 @@ describe('RcsCertificationService RCS-GOV 1.0', () => {
     const result = qualityDomain.evaluateQuality({ sprec: fluidSprec() });
     expect(result.model_version).toBe('RCS-GOV-1.0');
     expect(result.final_grade).toBe('A');
-    expect(result.category).toBe('A');
+    expect(result).not.toHaveProperty('category');
+    expect(result).not.toHaveProperty('score');
+    expect(result).not.toHaveProperty('forcedQuarantine');
     expect(result.deprecated_legacy_fields).toContain('category');
   });
 
@@ -98,6 +101,35 @@ describe('RcsCertificationService RCS-GOV 1.0', () => {
       axis_penalties: [],
     });
     expect(result.governance_failure_reasons).toContain('Unknown SPREC code');
+    expect(result.governance_rule_codes).toContain('UNKNOWN_SPREC_CODE');
+    expect(result.calculation_trace.governance_trace).toEqual(expect.arrayContaining([
+      expect.objectContaining({ rule_code: 'UNKNOWN_SPREC_CODE' }),
+    ]));
+  });
+
+  it.each([
+    ['Pcent1 sem workflow', fluidSprec({ centrifugation: 'N' }), {}],
+    ['Pcent2 sem workflow', fluidSprec({ secondCentrifugation: 'N' }), {}],
+    ['Pstore Y sem temperatura documentada', fluidSprec({ longTermStorage: 'Y' }), {}],
+    ['Pstore P/R sem finalidade documentada', fluidSprec({ longTermStorage: 'P' }), {}],
+  ])('%s falha no gate em vez de assumir severidade zero', (_label, sprec, extra) => {
+    const result = certify(sprec, extra);
+    expect(result.governance_status).toBe(0);
+    expect(result.rcs_score).toBeNull();
+    expect(result.axis_penalties).toEqual([]);
+    expect(result.governance_rule_codes).toEqual(expect.arrayContaining([
+      expect.stringMatching(/MISSING_ANALYTICAL_WORKFLOW|NOT_SCORED/),
+    ]));
+  });
+
+  it('resolve severidades condicionais somente com workflow seedado', () => {
+    const result = certify(fluidSprec({ secondCentrifugation: 'N' }), {
+      workflow_context: { Pcent2: { workflow_rule: 'pcent2_required_low_cell' } },
+    });
+    expect(result.governance_status).toBe(1);
+    expect(result.axis_penalties).toEqual(expect.arrayContaining([
+      expect.objectContaining({ axis_code: 'Pcent2', severity: 1, penalty: 10 }),
+    ]));
   });
 
   it.each([
@@ -152,5 +184,30 @@ describe('RcsCertificationService RCS-GOV 1.0', () => {
       axis_code: 'Ppre',
       sprec_code: 'A',
     })]);
+  });
+
+  it('bloqueia release de Grade E mesmo com governanca aprovada', () => {
+    const approved = qualityDomain.validateQualityForRelease({ matrixType: 'fluid', sprec: fluidSprec() });
+    const critical = qualityDomain.validateQualityForRelease({
+      matrixType: 'fluid',
+      sprec: fluidSprec({ preCentrifugation: 'M', postCentrifugationDelay: 'I', longTermStorage: 'B' }),
+    });
+    expect(approved.valid).toBe(true);
+    expect(critical.assessment.governance_status).toBe(1);
+    expect(critical.assessment.final_grade).toBe('E');
+    expect(critical.valid).toBe(false);
+  });
+
+  it('persiste eixos solidos e avaliacao canonica completa no modelo de amostra', () => {
+    const evaluation = certify(solidSprec());
+    const sample = SampleModel.create({
+      patientID: '12345678', sampleType: 'TIS', sampleOrigin: 'TIS', extractionProtocol: 'SNP',
+      quantity: 1, linkedProject: 'RCS-CONTRACT', sprec: solidSprec(), ...evaluation,
+      rcs_evaluation: evaluation,
+    });
+    expect(sample.sprec).toMatchObject({ warmIschemia: 'A', coldIschemia: 'A', fixationType: 'SNP', fixationTime: 'B' });
+    expect(sample).toMatchObject({ model_version: 'RCS-GOV-1.0', governance_status: 1, final_grade: 'A' });
+    expect(sample.axis_penalties).toHaveLength(5);
+    expect(sample.calculation_trace.axes).toHaveLength(5);
   });
 });

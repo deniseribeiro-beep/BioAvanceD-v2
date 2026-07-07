@@ -4,30 +4,28 @@
 	padding: 1rem;
 	display: grid;
 	gap: 1rem;
-	background:
-		radial-gradient(circle at top right, rgba(37, 99, 235, 0.08), transparent 24%),
-		radial-gradient(circle at bottom left, rgba(15, 118, 110, 0.08), transparent 22%);
+	background: transparent;
 }
 
 .facility-management-page .page-header {
-	padding: 1rem 1.1rem;
-	border-radius: 1.3rem;
-	border: 1px solid rgba(15, 23, 42, 0.08);
-	background: linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(240, 253, 250, 0.86));
-	box-shadow: 0 18px 40px rgba(15, 23, 42, 0.06);
+	padding: 1.25rem 1.5rem;
+	border-radius: var(--radius-card);
+	border: 1px solid var(--border);
+	background: var(--surface);
+	box-shadow: var(--shadow-card);
 }
 
 .facility-management-page .page-title {
-	font-size: clamp(1.8rem, 2.6vw, 2.4rem);
-	letter-spacing: -0.04em;
+	font-size: 1.75rem;
+	letter-spacing: 0;
 	margin: 0;
-	color: #0f172a;
+	color: var(--color-navy);
 }
 
 .facility-management-page .page-subtitle {
 	max-width: 980px;
 	margin: 0.35rem 0 0;
-	color: rgba(15, 23, 42, 0.72);
+	color: var(--text-secondary);
 	line-height: 1.6;
 }
 
@@ -35,11 +33,11 @@
 	display: flex;
 	flex-wrap: wrap;
 	gap: 0.5rem;
-	background: rgba(255, 255, 255, 0.9);
-	border: 1px solid rgba(15, 23, 42, 0.08);
-	border-radius: 1rem;
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-card);
 	padding: 0.55rem;
-	box-shadow: 0 14px 28px rgba(15, 23, 42, 0.05);
+	box-shadow: var(--shadow-card);
 	margin-bottom: 1rem;
 }
 
@@ -50,18 +48,19 @@
 	gap: 0.45rem;
 	padding: 0.6rem 0.85rem;
 	border: 1px solid transparent;
-	border-radius: 0.8rem;
-	background: rgba(248, 250, 252, 0.92);
-	color: rgba(15, 23, 42, 0.68);
+	border-radius: var(--radius-control);
+	background: #f8fafc;
+	color: var(--text-secondary);
 	font-size: 0.875rem;
 	font-weight: 700;
 	min-height: 2.6rem;
 }
 
 .facility-management-page .facility-tab.active {
-	background: linear-gradient(135deg, #0f766e, #2563eb);
+	background: var(--primary);
 	color: #ffffff;
-	border-color: rgba(37, 99, 235, 0.28);
+	border-color: var(--primary);
+	box-shadow: 0 12px 24px rgba(0, 122, 77, 0.14);
 }
 
 .facility-management-page .facility-tab-content {
@@ -99,7 +98,7 @@
 	font-size: 0.82rem;
 	font-weight: 700;
 	letter-spacing: 0.02em;
-	color: rgba(100, 116, 139, 0.96);
+	color: var(--text-secondary);
 }
 
 .facility-management-page .temperature-status-card__value {
@@ -142,8 +141,8 @@
 	width: 100%;
 	height: auto;
 	display: block;
-	background: linear-gradient(180deg, rgba(248, 250, 252, 0.72), rgba(255, 255, 255, 1));
-	border-radius: 0.9rem;
+	background: #f8fafc;
+	border-radius: var(--radius-control);
 }
 
 .facility-management-page .temperature-monitor-chart-card__grid-line {
@@ -192,14 +191,14 @@
 	font-weight: 800;
 	letter-spacing: 0.12em;
 	text-transform: uppercase;
-	color: #0f766e;
+	color: var(--primary-dark);
 }
 
 .facility-management-page .temperature-history-card__title {
 	margin: 0;
 	font-size: 1.1rem;
-	letter-spacing: -0.03em;
-	color: #0f172a;
+	letter-spacing: 0;
+	color: var(--text);
 }
 
 .facility-management-page .temperature-history-card__badge {
@@ -209,9 +208,9 @@
 	border-radius: 999px;
 	font-size: 0.8rem;
 	font-weight: 800;
-	color: #0f766e;
-	background: rgba(240, 253, 250, 0.95);
-	box-shadow: inset 0 0 0 1px rgba(15, 118, 110, 0.12);
+	color: var(--primary-dark);
+	background: var(--color-primary-soft);
+	box-shadow: inset 0 0 0 1px rgba(0, 122, 77, 0.12);
 }
 
 .facility-management-page .temperature-history-card__actions {
@@ -227,9 +226,9 @@
 	gap: 0.85rem;
 	align-items: end;
 	padding: 0.95rem 1rem;
-	border: 1px solid rgba(15, 23, 42, 0.08);
-	border-radius: 1rem;
-	background: rgba(248, 250, 252, 0.82);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-card);
+	background: #f8fafc;
 }
 
 .facility-management-page .history-filters__group {
@@ -245,12 +244,12 @@
 	font-weight: 800;
 	letter-spacing: 0.08em;
 	text-transform: uppercase;
-	color: rgba(15, 23, 42, 0.65);
+	color: var(--text-secondary);
 }
 
 .facility-management-page .history-filters__select {
 	min-height: 2.7rem;
-	background: rgba(255, 255, 255, 0.98);
+	background: var(--surface);
 }
 
 .facility-management-page .history-pagination {
@@ -259,13 +258,13 @@
 	align-items: center;
 	gap: 0.9rem 1rem;
 	padding: 0.9rem 1.05rem 1rem;
-	border-top: 1px solid rgba(15, 23, 42, 0.08);
-	background: rgba(248, 250, 252, 0.82);
-	border-radius: 0 0 1rem 1rem;
+	border-top: 1px solid var(--border);
+	background: #f8fafc;
+	border-radius: 0 0 var(--radius-card) var(--radius-card);
 }
 
 .facility-management-page .history-pagination__summary {
-	color: rgba(15, 23, 42, 0.7);
+	color: var(--text-secondary);
 	font-size: 0.92rem;
 	font-weight: 600;
 }
@@ -279,7 +278,7 @@
 }
 
 .facility-management-page .history-pagination__page {
-	color: #0f172a;
+	color: var(--text);
 	font-size: 0.92rem;
 	font-weight: 700;
 	white-space: nowrap;
@@ -290,7 +289,7 @@
 	word-break: break-all;
 	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
 	font-size: 0.8rem;
-	color: rgba(15, 23, 42, 0.8);
+	color: var(--text-secondary);
 }
 
 .facility-management-page .facility-tab-content .section-header {
@@ -305,10 +304,23 @@
 .facility-management-page .facility-tab-content .card,
 .facility-management-page .storage-tree-container,
 .facility-management-page .sample-locator-container {
-	border: 1px solid rgba(15, 23, 42, 0.08);
-	border-radius: 1rem;
-	background: rgba(255, 255, 255, 0.94);
-	box-shadow: 0 14px 28px rgba(15, 23, 42, 0.05);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-card);
+	background: var(--surface);
+	box-shadow: var(--shadow-card);
+}
+
+.facility-management-page .table-container {
+	border-radius: var(--radius-card);
+}
+
+.facility-management-page .table {
+	min-width: 860px;
+}
+
+.facility-management-page .table th,
+.facility-management-page .table td {
+	vertical-align: middle;
 }
 
 .facility-management-page .table-actions {
@@ -328,7 +340,7 @@
 
 .facility-management-page .table-empty-state-cell {
 	padding: 0;
-	background: linear-gradient(180deg, rgba(248, 250, 252, 0.78), rgba(255, 255, 255, 1));
+	background: #f8fafc;
 }
 
 .facility-management-page .table-empty-state {
@@ -347,17 +359,17 @@
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	color: rgba(148, 163, 184, 0.95);
-	background: rgba(241, 245, 249, 0.95);
-	box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.15);
+	color: var(--text-secondary);
+	background: #f1f5f9;
+	box-shadow: inset 0 0 0 1px var(--border);
 }
 
 .facility-management-page .table-empty-state__title {
 	margin: 0.15rem 0 0;
 	font-size: 1.05rem;
 	font-weight: 800;
-	letter-spacing: -0.02em;
-	color: #0f172a;
+	letter-spacing: 0;
+	color: var(--text);
 }
 
 .facility-management-page .table-empty-state__text {
@@ -365,15 +377,15 @@
 	max-width: 32rem;
 	font-size: 0.92rem;
 	line-height: 1.6;
-	color: rgba(71, 85, 105, 0.9);
+	color: var(--text-secondary);
 }
 
 .facility-management-page .equipment-form-panel {
 	overflow: hidden;
-	border: 1px solid rgba(15, 23, 42, 0.08);
-	border-radius: 1rem;
-	background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(240, 253, 250, 0.9));
-	box-shadow: 0 18px 38px rgba(15, 23, 42, 0.08);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-card);
+	background: var(--surface);
+	box-shadow: var(--shadow-card);
 	transform-origin: top center;
 	animation: facility-panel-enter 180ms ease-out;
 }
@@ -393,19 +405,19 @@
 	letter-spacing: 0.12em;
 	font-size: 0.72rem;
 	font-weight: 800;
-	color: #0f766e;
+	color: var(--primary-dark);
 }
 
 .facility-management-page .equipment-form-panel__title {
 	margin: 0;
 	font-size: 1.35rem;
-	letter-spacing: -0.03em;
-	color: #0f172a;
+	letter-spacing: 0;
+	color: var(--text);
 }
 
 .facility-management-page .equipment-form-panel__subtitle {
 	margin: 0.35rem 0 0;
-	color: rgba(15, 23, 42, 0.68);
+	color: var(--text-secondary);
 	line-height: 1.5;
 }
 
@@ -419,15 +431,15 @@
 	align-items: center;
 	gap: 0.9rem 1rem;
 	padding: 0.9rem 1.1rem 1.05rem;
-	border-top: 1px solid rgba(15, 23, 42, 0.08);
-	background: rgba(248, 250, 252, 0.8);
-	border-radius: 0 0 1rem 1rem;
+	border-top: 1px solid var(--border);
+	background: #f8fafc;
+	border-radius: 0 0 var(--radius-card) var(--radius-card);
 
 
 }
 
 .facility-management-page .equipment-pagination__summary {
-	color: rgba(15, 23, 42, 0.7);
+	color: var(--text-secondary);
 	font-size: 0.92rem;
 	font-weight: 600;
 }
@@ -441,7 +453,7 @@
 }
 
 .facility-management-page .equipment-pagination__page {
-	color: #0f172a;
+	color: var(--text);
 	font-size: 0.92rem;
 	font-weight: 700;
 	white-space: nowrap;
@@ -456,7 +468,7 @@
 .facility-management-page .equipment-pagination__size label {
 	font-size: 0.8rem;
 	font-weight: 700;
-	color: rgba(15, 23, 42, 0.66);
+	color: var(--text-secondary);
 }
 
 .facility-management-page .equipment-pagination__size .input {
@@ -535,7 +547,7 @@
 	display: inline-block;
 	margin-bottom: 0.375rem;
 	font-size: 0.875rem;
-	color: rgba(15, 23, 42, 0.72);
+	color: var(--text-secondary);
 	font-weight: 700;
 }
 
@@ -545,15 +557,15 @@
 .facility-management-page textarea.input {
 	width: 100%;
 	min-height: 2.7rem;
-	border: 1px solid rgba(15, 23, 42, 0.12);
-	border-radius: 0.8rem;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-control);
 	padding: 0.55rem 0.75rem;
-	background: rgba(255, 255, 255, 0.96);
-	color: #0f172a;
+	background: var(--surface);
+	color: var(--text);
 }
 
 .facility-management-page .form-help-text {
-	color: rgba(15, 23, 42, 0.56);
+	color: var(--text-secondary);
 }
 
 .facility-management-page .form-actions {
@@ -565,12 +577,12 @@
 
 .facility-management-page .import-card-header h2 {
 	margin-bottom: 0.5rem;
-	color: #0f172a;
+	color: var(--text);
 }
 
 .facility-management-page .import-card-header p {
 	margin-bottom: 0.75rem;
-	color: rgba(15, 23, 42, 0.72);
+	color: var(--text-secondary);
 }
 
 .facility-management-page .import-actions {
@@ -580,9 +592,9 @@
 }
 
 .facility-management-page .import-upload {
-	border: 1px dashed rgba(15, 23, 42, 0.16);
-	border-radius: 0.9rem;
-	background: rgba(248, 250, 252, 0.92);
+	border: 1px dashed var(--border);
+	border-radius: var(--radius-control);
+	background: #f8fafc;
 }
 
 .facility-management-page .temperature-grid {
@@ -593,7 +605,7 @@
 
 .facility-management-page .temperature-value {
 	font-weight: 800;
-	color: #0f172a;
+	color: var(--text);
 }
 
 .facility-management-page .status-cell,
@@ -604,11 +616,11 @@
 }
 
 .facility-management-page .status-icon.valid {
-	color: #059669;
+	color: var(--success);
 }
 
 .facility-management-page .status-icon.alert {
-	color: #d97706;
+	color: var(--warning);
 }
 
 .facility-management-page .alerts-list {
@@ -621,25 +633,25 @@
 	align-items: flex-start;
 	gap: 0.625rem;
 	padding: 0.85rem;
-	border-radius: 0.9rem;
-	border: 1px solid rgba(15, 23, 42, 0.08);
-	background: rgba(255, 255, 255, 0.96);
+	border-radius: var(--radius-control);
+	border: 1px solid rgba(239, 68, 68, 0.22);
+	background: #fff7f7;
 }
 
 .facility-management-page .alert-icon {
-	color: #dc2626;
+	color: var(--danger);
 	flex-shrink: 0;
 	margin-top: 0.125rem;
 }
 
 .facility-management-page .alert-message {
-	color: #0f172a;
+	color: #7f1d1d;
 	margin-bottom: 0.25rem;
 }
 
 .facility-management-page .alert-sensor,
 .facility-management-page .empty-state {
-	color: rgba(15, 23, 42, 0.56);
+	color: var(--text-secondary);
 }
 
 .facility-management-page .section-container {

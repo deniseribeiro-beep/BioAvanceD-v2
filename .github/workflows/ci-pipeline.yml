@@ -1,269 +1,199 @@
-name: BioAvanceD CI/CD Pipeline
+name: BioAvanceD current-state validation
 
-# CI is intentionally scoped to main-only for now. Jobs 2 (mocked e2e) and 3
-# (docker e2e) depend on docker-compose.test.yml, start/stop scripts, and a
-# real-backend Playwright config that are not yet implemented (tracked in the
-# docker-e2e plan). Re-add feature/** here once those pieces land so CI doesn't
-# fail on every feature push in the meantime.
 on:
+  workflow_dispatch:
+
   push:
-    branches: [ "main" ]
+    branches:
+      - main
+
   pull_request:
-    branches: [ "main" ]
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bioavanced-validation-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  # ── Job 1: fast isolated backend unit + integration tests (no docker) ────────
-  backend-tests:
-    name: 🧪 Backend Tests (Vitest)
+  current-state-validation:
+    name: Current-state validation
     runs-on: ubuntu-latest
-    services:
-      mongodb:
-        image: mongo:7
-        ports:
-          - 27017:27017
-        options: >-
-          --health-cmd "mongosh --eval 'db.adminCommand(\"ping\")'"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-      neo4j:
-        image: neo4j:5-community
-        ports:
-          - 7474:7474
-          - 7687:7687
-        env:
-          NEO4J_AUTH: neo4j/testpassword
-        options: >-
-          --health-cmd "cypher-shell -u neo4j -p testpassword 'RETURN 1'"
-          --health-interval 10s
-          --health-timeout 10s
-          --health-retries 10
-      influxdb:
-        image: influxdb:2.7
-        ports:
-          - 8086:8086
-        env:
-          DOCKER_INFLUXDB_INIT_MODE: setup
-          DOCKER_INFLUXDB_INIT_USERNAME: bioavanced
-          DOCKER_INFLUXDB_INIT_PASSWORD: bioavanced-test-password
-          DOCKER_INFLUXDB_INIT_ORG: bioavanced-test
-          DOCKER_INFLUXDB_INIT_BUCKET: bioavanced-test-bucket
-          DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: bioavanced-test-token
-        options: >-
-          --health-cmd "influx ping --host http://localhost:8086"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 10
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-    env:
-      NODE_ENV: test
-      MONGO_URI: mongodb://127.0.0.1:27017/bioavanced_test
-      MONGO_DB: bioavanced_test
-      MONGO_DB_NOVO: bioavanced_test
-      JWT_SECRET: vitest-secret-key
-      JWT_REFRESH_SECRET: vitest-refresh-secret-key
-      ENCRYPTION_KEY: vitest-encryption-key-32-characters
-      ENCRYPTION_KEY_ID: test-key-1
-      USER_ANON_SALT: vitest-user-anon-salt
-      NEO4J_URI: bolt://127.0.0.1:7687
-      NEO4J_USERNAME: neo4j
-      NEO4J_PASSWORD: testpassword
-      NEO4J_DATABASE: neo4j
-      NEO4J_REQUIRED: "false"
-      LINEAGE_MODE: fail-open
-      REDIS_URL: redis://127.0.0.1:6379
-      REDIS_HOST: 127.0.0.1
-      REDIS_PORT: "6379"
-      INFLUXDB_URL: http://127.0.0.1:8086
-      INFLUXDB_TOKEN: bioavanced-test-token
-      INFLUXDB_ORG: bioavanced-test
-      INFLUXDB_BUCKET: bioavanced-test-bucket
-      ALLOW_CLOUD_INTEGRATIONS: "false"
-      ALLOW_EXTERNAL_TERMINOLOGY_SYNC: "false"
-      ALLOW_EXTERNAL_HPO_LOOKUP: "false"
-      ALLOW_EXTERNAL_DRUG_LOOKUP: "false"
-      MQTT_ENABLED: "false"
-      RESEND_API_KEY: re_test_dummy_key
-      EMAIL_FROM: BioAvanceD Test <noreply@example.test>
-      ALERT_EMAIL_TO: alerts@example.test
+    timeout-minutes: 45
+
     steps:
-      - name: 📥 Checkout
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: ⚙️ Setup Node.js
+      - name: Configure Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: api/backend/package-lock.json
-
-      - name: 📦 Install backend deps
-        run: npm ci --prefix api/backend
-
-      - name: 🧪 Run backend tests (Vitest)
-        run: npx vitest run --reporter=verbose
-        working-directory: api/backend
-
-  # ── Job 2: mocked-API e2e (frontend dev server only, fast) ──────────────────
-  e2e-mocked:
-    name: 🎭 E2E Tests (mocked backend)
-    runs-on: ubuntu-latest
-    steps:
-      - name: 📥 Checkout
-        uses: actions/checkout@v4
-
-      - name: ⚙️ Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
+          node-version: "22"
+          cache: npm
           cache-dependency-path: |
-            package-lock.json
+            api/backend/package-lock.json
             frontend/package-lock.json
 
-      - name: 📦 Install root deps (Playwright lives here)
-        run: npm ci
+      - name: Install backend dependencies
+        run: npm --prefix api/backend ci
 
-      - name: 📦 Install frontend deps
-        run: npm ci --prefix frontend
+      - name: Install frontend dependencies
+        run: npm --prefix frontend ci
 
-      - name: 🌐 Install Playwright browsers
-        run: npx playwright install --with-deps chromium
+      - name: Validate Git diff
+        run: git diff --check
 
-      - name: 🎭 Run mocked e2e suite
-        env:
-          PLAYWRIGHT_SKIP_GLOBAL_SETUP: "1"
-        run: npm run test:e2e -- --project=chromium
+      - name: Backend lint
+        run: npm --prefix api/backend run lint
 
-      - name: 📊 Upload Playwright report
-        if: always()
+      - name: Backend typecheck
+        run: npm --prefix api/backend run typecheck
+
+      - name: Frontend lint
+        run: npm --prefix frontend run lint
+
+      - name: Frontend typecheck
+        run: npm --prefix frontend run typecheck
+
+      - name: Frontend build
+        run: npm --prefix frontend run build
+
+      - name: Validate Compose configuration
+        run: |
+          docker compose \
+            --env-file .env.test.example \
+            -f compose.test.yml \
+            config --quiet
+
+      - name: Remove previous validation stack
+        run: |
+          docker compose \
+            --env-file .env.test.example \
+            -f compose.test.yml \
+            down --volumes --remove-orphans
+
+      - name: Build validation stack
+        run: |
+          docker compose \
+            --env-file .env.test.example \
+            -f compose.test.yml \
+            build --no-cache
+
+      - name: Start application stack
+        run: |
+          docker compose \
+            --env-file .env.test.example \
+            -f compose.test.yml \
+            up -d --wait \
+            mongodb-test \
+            neo4j-test \
+            redis-test \
+            mqtt-test \
+            influxdb-test \
+            smtp-test \
+            tsa-test \
+            witness-test \
+            backend-app-test \
+            worker-test \
+            frontend-app-test
+
+      - name: Display service status
+        run: |
+          docker compose \
+            --env-file .env.test.example \
+            -f compose.test.yml \
+            ps
+
+      - name: Verify empty MongoDB application collections
+        run: |
+          docker compose \
+            --env-file .env.test.example \
+            -f compose.test.yml \
+            exec -T mongodb-test \
+            mongosh --quiet bioavanced_test --eval '
+              const collections = [
+                "users",
+                "patients",
+                "samples",
+                "consents",
+                "medication_dictionary",
+                "orphanet_diseases",
+                "terminologies",
+                "hpo_terms",
+                "biomarker_observations",
+                "sensors",
+                "equipment",
+                "locations",
+                "reports"
+              ];
+
+              let total = 0;
+
+              for (const name of collections) {
+                const count = db.getCollection(name).countDocuments({});
+                print(name + ": " + count);
+                total += count;
+              }
+
+              if (total !== 0) {
+                print("Application collections are not empty.");
+                quit(1);
+              }
+
+              print("All application collections are empty.");
+            '
+
+      - name: Verify empty Neo4j graph
+        run: |
+          NODE_COUNT="$(
+            docker compose \
+              --env-file .env.test.example \
+              -f compose.test.yml \
+              exec -T neo4j-test \
+              cypher-shell \
+                -u neo4j \
+                -p testpassword \
+                --format plain \
+                "MATCH (n) RETURN count(n) AS count;" \
+              | tail -n 1 \
+              | tr -d '\r'
+          )"
+
+          echo "Neo4j node count: ${NODE_COUNT}"
+          test "${NODE_COUNT}" = "0"
+
+      - name: Run backend test suite
+        run: |
+          docker compose \
+            --env-file .env.test.example \
+            -f compose.test.yml \
+            run --rm --no-deps backend-unit-runner
+
+      - name: Collect Compose logs on failure
+        if: failure()
+        continue-on-error: true
+        run: |
+          docker compose \
+            --env-file .env.test.example \
+            -f compose.test.yml \
+            logs --no-color > compose-test.log
+
+      - name: Upload failure evidence
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-report-mocked
-          path: playwright-report/
+          name: bioavanced-validation-failure
+          path: compose-test.log
+          if-no-files-found: ignore
           retention-days: 7
 
-  # ── Job 3: full docker stack e2e (real backend + real DB) ───────────────────
-  e2e-docker:
-    name: 🐳 E2E Tests (real backend via Docker)
-    runs-on: ubuntu-latest
-    steps:
-      - name: 📥 Checkout
-        uses: actions/checkout@v4
-
-      - name: ⚙️ Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: package-lock.json
-
-      - name: 📦 Install root deps (Playwright lives here)
-        run: npm ci
-
-      - name: 🔑 Write .env.docker from CI secrets
-        run: |
-          cat > .env.docker <<'EOF'
-          NODE_ENV=development
-          PORT=3000
-          MONGO_ROOT_USERNAME=ci
-          MONGO_ROOT_PASSWORD=ci-password
-          MONGO_DB=bioavanced_ci
-          MONGO_DB_NOVO=bioavanced_ci
-          MONGO_URI=mongodb://ci:ci-password@mongodb:27017/bioavanced_ci?authSource=admin
-          JWT_SECRET=ci-jwt-secret-key-for-docker-e2e
-          CONSENT_SECRET=ci-consent-secret-for-docker-e2e
-          JWT_REFRESH_SECRET=ci-jwt-refresh-secret-for-docker-e2e
-          ENCRYPTION_KEY=ci-encryption-key-32-characters!!
-          ENCRYPTION_KEY_ID=ci-key-1
-          USER_ANON_SALT=ci-user-anon-salt
-          NEO4J_URI=bolt://neo4j:7687
-          NEO4J_USERNAME=neo4j
-          NEO4J_PASSWORD=ci-neo4j-password
-          NEO4J_DATABASE=neo4j
-          NEO4J_REQUIRED=false
-          LINEAGE_MODE=fail-open
-          NEO4J_CONNECT_MAX_RETRIES=12
-          NEO4J_CONNECT_INITIAL_DELAY_MS=1000
-          NEO4J_CONNECT_MAX_DELAY_MS=10000
-          REDIS_HOST=redis
-          REDIS_PORT=6379
-          REDIS_URL=redis://redis:6379
-          REDIS_TLS=false
-          INFLUXDB_INIT_USERNAME=ci
-          INFLUXDB_INIT_PASSWORD=ci-influx-password
-          INFLUXDB_ORG=bioavanced
-          INFLUXDB_BUCKET=bioavanced_telemetry
-          INFLUXDB_TOKEN=ci-influx-token
-          INFLUXDB_URL=http://influxdb:8086
-          MQTT_ENABLED=false
-          ALLOW_CLOUD_INTEGRATIONS=false
-          ALLOW_EXTERNAL_TERMINOLOGY_SYNC=false
-          ALLOW_EXTERNAL_HPO_LOOKUP=false
-          ALLOW_EXTERNAL_DRUG_LOOKUP=false
-          FRONTEND_URL=http://localhost:5173
-          API_URL=http://localhost:3000
-          ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
-          CORS_ALLOW_ALL=false
-          TRUST_PROXY=1
-          VITE_API_BASE_URL=http://localhost:3000
-          VITE_HMR_HOST=localhost
-          VITE_HMR_PROTOCOL=ws
-          VITE_HMR_CLIENT_PORT=5173
-          APP_DOMAIN=localhost
-          ALERT_EMAIL_TO=
-          RESEND_API_KEY=
-          EMAIL_FROM=BioAvanceD CI <noreply@localhost>
-          EOF
-
-      - name: 🐳 Start full docker-compose stack
-        run: docker compose --env-file .env.docker -f docker-compose.yml up -d --build
-
-      - name: ⏳ Wait for backend to be healthy
-        run: |
-          echo "Waiting for backend /api/health..."
-          for i in $(seq 1 30); do
-            status=$(curl -sf http://localhost:3000/api/health | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('status',''))" 2>/dev/null || echo "")
-            if [ "$status" = "OK" ]; then
-              echo "Backend is healthy."
-              exit 0
-            fi
-            echo "Attempt $i: not ready yet, retrying in 5s..."
-            sleep 5
-          done
-          echo "Backend did not become healthy in time."
-          docker compose --env-file .env.docker logs backend
-          exit 1
-
-      - name: 🌐 Install Playwright browsers
-        run: npx playwright install --with-deps chromium
-
-      - name: 🎭 Run real-backend e2e suite
-        env:
-          PLAYWRIGHT_BASE_URL: http://localhost:5173
-          PLAYWRIGHT_API_BASE_URL: http://localhost:3000
-          PLAYWRIGHT_SKIP_WEBSERVER: "1"
-          PLAYWRIGHT_USE_REAL_LOGIN: "1"
-          TEST_USER: admin
-          TEST_PASS: Admin@123
-        run: npm run test:e2e -- --project=chromium
-
-      - name: 📊 Upload Playwright report
+      - name: Remove containers and isolated volumes
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: playwright-report-docker
-          path: playwright-report/
-          retention-days: 7
-
-      - name: 🧹 Tear down docker stack
-        if: always()
-        run: docker compose --env-file .env.docker -f docker-compose.yml down -v
+        run: |
+          docker compose \
+            --env-file .env.test.example \
+            -f compose.test.yml \
+            down --volumes --remove-orphans

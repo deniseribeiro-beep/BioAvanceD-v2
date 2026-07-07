@@ -12,11 +12,8 @@ const portManager = require("./src/utils/portManager");
 const env = require("./src/config/env");
 const { initScheduler } = require("./src/services/scheduler.service");
 const { initializeSecuritySystem } = require("./src/infrastructure/middleware/integrationSecurityMiddleware");
-const { ensureInitialAdmin } = require("./src/services/bootstrap.service");
 
 let httpServerInstance = null;
-
-app.set('trust proxy', 1);
 
 // =======================
 // SERVER + SOCKET.IO
@@ -36,13 +33,6 @@ async function startServer() {
     // Conecta banco
     const db = await connectDB();
     app.locals.db = db;
-
-    // Bootstrap inicial (executa apenas no primeiro boot da base)
-    try {
-      await ensureInitialAdmin(db);
-    } catch (bootstrapError) {
-      logger.error('[BOOTSTRAP] Erro ao garantir admin inicial:', bootstrapError.message || bootstrapError);
-    }
 
     // Conecta Neo4j para validação e trilha de cadeia de custódia
     try {
@@ -64,35 +54,6 @@ async function startServer() {
     logger.info("🔐 Ativando sistema de segurança e conformidade LGPD...");
     await initializeSecuritySystem(app, db);
     logger.info("✅ Sistema de segurança ativado com sucesso");
-
-    // Seed inicial de tipos de análise
-    try {
-      const AnalysisTypeModel = require("./src/models/AnalysisType");
-      const analysisTypesCollection = db.collection('analysisTypes');
-      const existingCount = await analysisTypesCollection.countDocuments();
-
-      if (existingCount === 0) {
-        const defaults = [
-          'PCR Real Time',
-          'Sequenciamento (Sanger)',
-          'Sequenciamento (NGS)',
-          'Microscopia',
-          'Eletroforese'
-        ];
-
-        const seedDocs = defaults.map((name) => ({
-          name,
-          code: AnalysisTypeModel.slugify(name),
-          active: true,
-          createdAt: new Date()
-        }));
-
-        await analysisTypesCollection.insertMany(seedDocs);
-        logger.info('Tipos de análise padrão inseridos.');
-      }
-    } catch (seedError) {
-      logger.error('Erro ao realizar seed de tipos de análise:', seedError.message);
-    }
 
     // Iniciar scheduler (backup + monitoramento + sync de consentimento)
     try {
@@ -209,7 +170,7 @@ async function startServer() {
   }
 }
 
-if (process.env.NODE_ENV !== "test") {
+if (process.env.NODE_ENV !== "test" || process.env.RUN_SERVER_IN_TEST === "1") {
   startServer();
 }
 

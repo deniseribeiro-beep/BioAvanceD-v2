@@ -34,6 +34,13 @@ export interface ConsentScopeDefinition {
   requiredFor: string[];
 }
 
+export const LEGACY_SAMPLE_STATUS_LABELS: Record<SampleLifecycleStatus, LegacySampleStatus> = {
+  AVAILABLE: 'Available',
+  PARTIAL: 'PartiallyWithdrawn',
+  DEPLETED: 'TotallyWithdrawn',
+  UNAVAILABLE: 'Unusable',
+};
+
 export const ROLE_DEFINITIONS: Array<ContractOption<RoleName> & { accessType: number; description: string }> = [
   {
     value: 'Administrador',
@@ -68,11 +75,11 @@ export const USER_STATUSES: Array<ContractOption<UserStatus>> = [
   { value: 'suspended', label: 'Suspenso' },
 ];
 
-export const SAMPLE_LIFECYCLE_STATUSES: Array<ContractOption<SampleLifecycleStatus> & { legacyLabel: LegacySampleStatus }> = [
-  { value: 'AVAILABLE', label: 'Disponível', legacyLabel: 'Available' },
-  { value: 'PARTIAL', label: 'Parcialmente retirada', legacyLabel: 'PartiallyWithdrawn' },
-  { value: 'DEPLETED', label: 'Esgotada', legacyLabel: 'TotallyWithdrawn' },
-  { value: 'UNAVAILABLE', label: 'Indisponível', legacyLabel: 'Unusable' },
+export const SAMPLE_LIFECYCLE_STATUSES: Array<ContractOption<SampleLifecycleStatus>> = [
+  { value: 'AVAILABLE', label: 'Disponível' },
+  { value: 'PARTIAL', label: 'Parcialmente retirada' },
+  { value: 'DEPLETED', label: 'Esgotada' },
+  { value: 'UNAVAILABLE', label: 'Indisponível' },
 ];
 
 export const STORAGE_BOX_STATUSES: Array<ContractOption<StorageBoxStatus>> = [

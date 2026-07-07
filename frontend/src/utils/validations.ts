@@ -151,7 +151,7 @@ export function validateMIABIS(sample: Partial<Sample>): MIABISValidationResult 
     errors.push('registrationDate é obrigatório (MIABIS)');
   }
   
-  if (!sample.barcode || sample.barcode === 0) {
+  if (!sample.barcode) {
     errors.push('barcode é obrigatório (MIABIS)');
   }
   
@@ -211,7 +211,7 @@ export function validateMIABIS(sample: Partial<Sample>): MIABISValidationResult 
 export function validateReading(temperature: Temperature): boolean {
   return (
     temperature.readingStatus === 'valid' &&
-    temperature.dataQualityScore >= 0.8 &&
+    (temperature.dataQualityScore ?? 0) >= 0.8 &&
     !isNaN(temperature.temperatureValue) &&
     temperature.temperatureValue >= -200 &&
     temperature.temperatureValue <= 200
@@ -253,8 +253,8 @@ export function validateThresholds(policy: Policy): boolean {
     policy.minThreshold < policy.targetTemperature &&
     policy.targetTemperature < policy.maxThreshold &&
     policy.minThreshold < policy.maxThreshold &&
-    policy.hysteresis >= 0 &&
-    policy.alertDelayMin >= 0
+    (policy.hysteresis ?? 0) >= 0 &&
+    (policy.alertDelayMin ?? 0) >= 0
   );
 }
 
@@ -264,9 +264,9 @@ export function validateThresholds(policy: Policy): boolean {
  */
 export function getActiveLimit(policy: Policy, isMax: boolean = true): number {
   if (isMax) {
-    return policy.maxThreshold + policy.hysteresis;
+    return policy.maxThreshold + (policy.hysteresis ?? 0);
   }
-  return policy.minThreshold - policy.hysteresis;
+  return policy.minThreshold - (policy.hysteresis ?? 0);
 }
 
 // ========== LOG VALIDATIONS ==========

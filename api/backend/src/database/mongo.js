@@ -47,6 +47,65 @@ function assertLocalMongoUri(uri) {
   }
 }
 
+function redactSensitiveQueryParams(query = '') {
+  const params = new URLSearchParams(query);
+  for (const key of Array.from(params.keys())) {
+    if (/password|passwd|pwd|secret|token|key/i.test(key)) {
+      params.set(key, '***');
+    }
+  }
+  return params.toString();
+}
+
+function getMongoUriLogDetails(uri, dbName) {
+  const fallback = {
+    host: 'desconhecido',
+    database: dbName || 'desconhecido',
+    username: '',
+    passwordPresent: false,
+    sanitizedUri: 'mongodb://<invalid-or-unparsed>',
+  };
+
+  if (!uri) return fallback;
+
+  const protocolMatch = String(uri).match(/^(mongodb(?:\+srv)?:\/\/)(.*)$/);
+  if (!protocolMatch) return fallback;
+
+  const [, protocol, remainder] = protocolMatch;
+  const queryIndex = remainder.indexOf('?');
+  const authHostPath = queryIndex === -1 ? remainder : remainder.slice(0, queryIndex);
+  const query = queryIndex === -1 ? '' : remainder.slice(queryIndex + 1);
+  const credentialSeparatorIndex = authHostPath.lastIndexOf('@');
+  const credentials = credentialSeparatorIndex === -1 ? '' : authHostPath.slice(0, credentialSeparatorIndex);
+  const hostPath = credentialSeparatorIndex === -1 ? authHostPath : authHostPath.slice(credentialSeparatorIndex + 1);
+  const pathIndex = hostPath.indexOf('/');
+  const host = pathIndex === -1 ? hostPath : hostPath.slice(0, pathIndex);
+  const path = pathIndex === -1 ? '' : hostPath.slice(pathIndex);
+  const passwordSeparatorIndex = credentials.indexOf(':');
+  const username = passwordSeparatorIndex === -1 ? credentials : credentials.slice(0, passwordSeparatorIndex);
+  const passwordPresent = passwordSeparatorIndex !== -1 && credentials.slice(passwordSeparatorIndex + 1).length > 0;
+  const databaseFromPath = path && path !== '/' ? path.replace(/^\//, '') : '';
+  const safeQuery = redactSensitiveQueryParams(query);
+
+  return {
+    host,
+    database: databaseFromPath || dbName || 'desconhecido',
+    username,
+    passwordPresent,
+    sanitizedUri: `${protocol}${host}${path || ''}${safeQuery ? `?${safeQuery}` : ''}`,
+  };
+}
+
+function logMongoConnectionDetails(label, uri, dbName) {
+  const details = getMongoUriLogDetails(uri, dbName);
+  console.log(`✅ MongoDB Connected${label ? ` (${label})` : ''}`);
+  console.log(`🔒 MongoDB host: ${details.host}`);
+  console.log(`📊 Database: ${details.database}`);
+  console.log(`👤 MongoDB usuário: ${details.username || '<sem usuario>'}`);
+  console.log(`🔑 Senha presente: ${details.passwordPresent}`);
+  console.log(`🔗 URI sanitizada: ${details.sanitizedUri}`);
+}
+
 /**
  * Codifica a senha na URI do MongoDB para evitar erros com caracteres especiais
  * @param {string} uri - URI do MongoDB
@@ -69,9 +128,12 @@ function encodeMongoURI(uri, debug = false) {
       const [, protocol, username, password, rest] = match;
       
       if (debug) {
-        console.log('🔍 [DEBUG] URI original detectada');
+        const details = getMongoUriLogDetails(uri);
+        console.log('🔍 [DEBUG] URI MongoDB detectada');
+        console.log('🔍 [DEBUG] Host:', details.host);
         console.log('🔍 [DEBUG] Usuário:', username);
-        console.log('🔍 [DEBUG] Senha (primeiros 3 chars):', password.substring(0, 3) + '***');
+        console.log('🔍 [DEBUG] Senha presente:', details.passwordPresent);
+        console.log('🔍 [DEBUG] URI sanitizada:', details.sanitizedUri);
       }
       
       // Verifica se a senha já está codificada
@@ -87,9 +149,9 @@ function encodeMongoURI(uri, debug = false) {
       
       if (isEncoded) {
         if (debug) {
-          console.log('🔍 [DEBUG] Senha já está codificada, usando URI original');
+          console.log('🔍 [DEBUG] Senha ja esta codificada; mantendo URI normalizada');
         }
-        // Senha já está codificada, retorna a URI original
+        // Senha ja esta codificada, retorna a URI normalizada
         return uri;
       }
       
@@ -99,26 +161,27 @@ function encodeMongoURI(uri, debug = false) {
       const encodedPassword = encodeURIComponent(password);
       
       if (debug) {
-        console.log('🔍 [DEBUG] Senha codificada (primeiros 10 chars):', encodedPassword.substring(0, 10) + '***');
+        console.log('🔍 [DEBUG] Codificacao aplicada sem exibicao de valor sensivel');
       }
       
       // Reconstrói a URI com a senha codificada
       const encodedURI = `${protocol}${username}:${encodedPassword}@${rest}`;
       
       if (debug) {
-        console.log('🔍 [DEBUG] URI codificada (sem senha visível):', encodedURI.replace(/:([^@]+)@/, ':****@'));
+        const details = getMongoUriLogDetails(encodedURI);
+        console.log('🔍 [DEBUG] URI sanitizada apos codificacao:', details.sanitizedUri);
       }
       
       return encodedURI;
     }
 
-    // Se não corresponde ao padrão (pode ser URI sem autenticação), retorna a URI original
+    // Se nao corresponde ao padrao (pode ser URI sem autenticacao), retorna sem alteracao
     if (debug) {
       console.log('🔍 [DEBUG] URI não corresponde ao padrão esperado (sem autenticação?)');
     }
     return uri;
   } catch (error) {
-    // Em caso de erro, retorna a URI original
+    // Em caso de erro, retorna sem alteracao
     console.warn('⚠️ Aviso: Não foi possível codificar a URI do MongoDB:', error.message);
     return uri;
   }
@@ -163,7 +226,7 @@ async function connectDB() {
       }
     }
 
-    // Tenta conectar com URI codificada primeiro
+    // Tenta conectar com credenciais codificadas primeiro
     const isDevelopment = env.NODE_ENV === 'development';
     const normalizedUri = ensureMongoUri(mongoUri, mongoDb);
     const encodedURI = encodeMongoURI(normalizedUri, isDevelopment);
@@ -183,14 +246,13 @@ async function connectDB() {
     await client.connect();
     db = client.db(mongoDb);
 
-    console.log(`✅ MongoDB Connected: ${client.options.srvHost || 'localhost'}`);
-    console.log(`📊 Database: ${mongoDb}`);
+    logMongoConnectionDetails('', normalizedUri, mongoDb);
 
     return db;
   } catch (error) {
-    // Se o erro for de autenticação, tenta com a URI original (sem codificação)
+    // Se o erro for de autenticacao, tenta sem recodificar a senha.
     if (error.message && (error.message.includes('Authentication failed') || error.message.includes('bad auth'))) {
-      console.warn('⚠️ Tentando conexão com URI original (sem codificação)...');
+        console.warn('⚠️ Tentando conexão com URI normalizada sem recodificar senha...');
       try {
         // Limpa a conexão anterior
         if (client) {
@@ -200,7 +262,7 @@ async function connectDB() {
           client = null;
           db = null;
         }
-        // Tenta com a URI original
+        // Tenta com a URI normalizada.
         const normalizedRetryUri = ensureMongoUri(mongoUri, mongoDb);
         client = new MongoClient(normalizedRetryUri, {
           serverSelectionTimeoutMS: 30000,
@@ -214,11 +276,10 @@ async function connectDB() {
         });
         await client.connect();
         db = client.db(mongoDb);
-        console.log(`✅ MongoDB Connected (URI original): ${client.options.srvHost || 'localhost'}`);
-        console.log(`📊 Database: ${mongoDb}`);
+        logMongoConnectionDetails('retry', normalizedRetryUri, mongoDb);
         return db;
       } catch (retryError) {
-        console.error('❌ Erro ao conectar ao MongoDB (tentativa com URI original):', retryError.message);
+        console.error('❌ Erro ao conectar ao MongoDB (tentativa sem recodificacao):', retryError.message);
         console.error('💡 Dica: Verifique se o MongoDB local está rodando e sem autenticação.');
         throw retryError;
       }
@@ -270,14 +331,13 @@ async function connectNewDB() {
     // Sempre cria/atualiza a referência ao banco novo
     newDb = client.db(env.MONGO_DB_NOVO);
 
-    console.log(`✅ MongoDB Connected (Novo): ${client.options.srvHost || 'localhost'}`);
-    console.log(`📊 Database: ${env.MONGO_DB_NOVO}`);
+    logMongoConnectionDetails('Novo', env.MONGO_URI, env.MONGO_DB_NOVO);
 
     return newDb;
   } catch (error) {
-    // Se o erro for de autenticação, tenta com a URI original
+    // Se o erro for de autenticacao, tenta sem recodificar a senha.
     if (error.message && (error.message.includes('Authentication failed') || error.message.includes('bad auth'))) {
-      console.warn('⚠️ Tentando conexão com URI original (sem codificação)...');
+      console.warn('⚠️ Tentando conexão com URI normalizada sem recodificar senha...');
       
       try {
         if (client) {
@@ -305,8 +365,7 @@ async function connectNewDB() {
         await client.connect();
         newDb = client.db(env.MONGO_DB_NOVO);
 
-        console.log(`✅ MongoDB Connected (Novo, URI original): ${client.options.srvHost || 'localhost'}`);
-        console.log(`📊 Database: ${env.MONGO_DB_NOVO}`);
+        logMongoConnectionDetails('Novo retry', normalizedRetryUri, env.MONGO_DB_NOVO);
 
         return newDb;
       } catch (retryError) {

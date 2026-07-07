@@ -9,6 +9,7 @@ const { validatePatientID } = require('../utils/patientAnonymization');
 const logger = require('../utils/logger');
 const fhirSyncService = require('./fhir-sync.service');
 const { getCollection } = require('../utils/collectionResolver');
+const { GraphProjectionService } = require('./graphProjection.service');
 
 const ajv = new Ajv({ allErrors: true, strict: false, removeAdditional: 'failing' });
 addFormats(ajv);
@@ -95,6 +96,9 @@ const validatePolicySchema = ajv.compile(consentPolicySchema);
 const validatePatientConsentSchema = ajv.compile(patientConsentSchema);
 
 class ConsentService {
+  constructor() {
+    this.graphProjectionService = new GraphProjectionService();
+  }
   parseVersionNumber(version) {
     const value = String(version || '').trim().toLowerCase();
     const match = value.match(/^v?(\d+)$/);
@@ -710,6 +714,12 @@ class ConsentService {
       });
 
       const insertResult = await consentsCollection.insertOne(consent);
+      await this.recordConsentProjectionEvent(db, {
+        patientId,
+        consentId: insertResult.insertedId.toString(),
+        status: 'ACTIVE',
+        signedAt: consent.signedAt || new Date(),
+      });
 
       await fhirSyncService.upsertConsentFromLegacy(db, {
         _id: insertResult.insertedId,
@@ -750,6 +760,13 @@ class ConsentService {
       { $set: { status: 'REVOKED', revokedAt: new Date(), updatedAt: new Date() } }
     );
 
+    await this.recordConsentProjectionEvent(db, {
+      patientId: consent.patientId || consent.patientID || null,
+      consentId: objectId.toString(),
+      status: 'REVOKED',
+      signedAt: consent.signedAt || consent.createdAt || new Date(),
+    });
+
     const revokedConsent = {
       ...consent,
       status: 'REVOKED',
@@ -781,6 +798,18 @@ class ConsentService {
       .toArray();
 
     return consent[0] || null;
+  }
+
+  async recordConsentProjectionEvent(db, { patientId, consentId, status, signedAt }) {
+    if (!db) return null;
+    return this.graphProjectionService.appendConsentEvent(db, {
+      donorKey: patientId,
+      sampleId: null,
+      ethicalConsentId: consentId,
+      status,
+      signedAt,
+      sourceService: 'consent.service'
+    });
   }
 }
 

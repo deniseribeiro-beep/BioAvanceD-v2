@@ -6,7 +6,6 @@ const { ObjectId } = require('mongodb');
 
 const StagingImport = require('../models/StagingImport');
 const importLGPDService = require('./import-lgpd.service');
-const importPredictor = require('./ImportPredictor');
 const patientService = require('./patient.service');
 const sampleService = require('./sample.service');
 const biomarkerObservationService = require('./biomarker-observation.service');
@@ -830,9 +829,6 @@ class BatchValidationEngine {
     const dataType = this.detectDataType(rows, fileName);
     const fileExt = path.extname(fileName || '').toLowerCase();
     const rowBaseNumber = fileExt === '.json' ? 1 : 2;
-    const patientPrediction = dataType === 'patients'
-      ? importPredictor.predict(Object.keys(rows[0] || {}), rows[0] || {})
-      : null;
     const result = {
       jobId: stagingImportId,
       dataType,

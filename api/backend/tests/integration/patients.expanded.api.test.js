@@ -137,9 +137,10 @@ describe('📦 Pacientes e Observacoes de Biomarcadores - Testes de Integracao',
    * CENÁRIO 1: Criar Paciente
    */
   describe('POST /api/patients - Criar Paciente', () => {
-    beforeEach(() => {
-      setupMocks();
-    });
+  beforeEach(() => {
+    setupMocks();
+    process.env.FRONTEND_URL = 'https://localhost:5173';
+  });
 
     afterEach(() => {
       vi.restoreAllMocks();
@@ -540,8 +541,13 @@ describe('📦 Pacientes e Observacoes de Biomarcadores - Testes de Integracao',
         findOne: vi.fn().mockResolvedValue(patient),
         updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
       };
+      const samplesCollection = {
+        find: vi.fn().mockReturnValue({
+          toArray: vi.fn().mockResolvedValue([]),
+        }),
+      };
 
-      app.locals.db = createDbMock({ patients: patientsCollection });
+      app.locals.db = createDbMock({ patients: patientsCollection, samples: samplesCollection });
 
       const response = await request(app)
         .post('/api/patients/12345678/consent/resend')

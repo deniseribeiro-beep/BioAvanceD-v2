@@ -1,11 +1,15 @@
-import { Patient } from '../types/models';
-import { User } from '../types/models';
+import type { Patient, User } from '../types/models';
+
+type PatientIdentity = Pick<Patient, 'patientID'> & {
+  patientName?: string;
+  recordNumber?: string | number;
+};
 
 /**
  * Retorna sempre "Anônimo" para garantir privacidade total dos pacientes
  * O nome do paciente nunca é exibido no frontend após o cadastro
  */
-export function getPatientDisplayName(patient: Patient | { patientID: number; patientName?: string }, user: User | null): string {
+export function getPatientDisplayName(_patient: PatientIdentity, _user: User | null): string {
   // Sempre retorna anônimo - o nome nunca é exibido no frontend
   return 'Anônimo';
 }
@@ -15,12 +19,11 @@ export function getPatientDisplayName(patient: Patient | { patientID: number; pa
  * Sempre mostra apenas "Anônimo (ID: X)" - nome nunca é exibido
  */
 export function formatPatientDisplay(
-  patient: Patient | { patientID: number; patientName?: string; recordNumber?: number },
-  user: User | null
+  patient: PatientIdentity,
+  _user: User | null
 ): string {
-  const patientID = 'patientID' in patient ? patient.patientID : patient.patientID;
   // Sempre retorna anônimo - o nome nunca é exibido no frontend
-  return `Anônimo (ID: ${patientID})`;
+  return `Anônimo (ID: ${patient.patientID})`;
 }
 
 /**
@@ -28,11 +31,10 @@ export function formatPatientDisplay(
  * Sempre mostra apenas "Anônimo (ID: X)" - nome nunca é exibido
  */
 export function formatPatientOption(
-  patient: Patient | { patientID: number; patientName?: string; recordNumber?: number },
-  user: User | null
+  patient: PatientIdentity,
+  _user: User | null
 ): string {
-  const patientID = 'patientID' in patient ? patient.patientID : patient.patientID;
   // Sempre retorna anônimo - o nome nunca é exibido no frontend
-  return `Anônimo (ID: ${patientID})`;
+  return `Anônimo (ID: ${patient.patientID})`;
 }
 

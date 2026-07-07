@@ -78,7 +78,6 @@ const SampleFHIRSchema = new Schema(
 
     semanticPointers: {
       mongoSampleId: { type: String, required: true },
-      mongoPatientId: { type: String, required: true },
       neo4jSamplePointer: { type: String, default: null },
       lineageManagedInNeo4j: { type: Boolean, default: true }
     },

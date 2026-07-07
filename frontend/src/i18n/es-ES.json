@@ -9,27 +9,6 @@
     "title": "BioAvanceD",
     "welcome": "Bienvenido"
   },
-  "assistant": {
-    "clear": "Limpiar",
-    "contextualHelp": "Ayuda contextual",
-    "error": "Error al procesar la pregunta",
-    "estimatedTime": "Tiempo estimado",
-    "noQuestion": "La pregunta es obligatoria",
-    "patientSuggestions": "Sugerencias sobre pacientes",
-    "placeholder": "Escribe tu pregunta aquí...",
-    "quickActions": "Acciones rápidas",
-    "sampleSuggestions": "Sugerencias sobre muestras",
-    "send": "Enviar",
-    "subtitle": "Haz preguntas sobre el sistema",
-    "suggestions": "Sugerencias",
-    "suggestionsFor": "Aquí van algunas sugerencias para \"{action}\":",
-    "thinking": "Pensando...",
-    "title": "Asistente Inteligente",
-    "tutorial": "Tutorial paso a paso",
-    "tutorialTitle": "Tutorial",
-    "welcome": "¡Hola! ¿Cómo puedo ayudarte?",
-    "welcomeHint": "Haz una pregunta o usa una acción rápida"
-  },
   "auth": {
     "access": "Access",
     "attemptsRemaining": "Intentos restantes",
@@ -130,6 +109,7 @@
     "status": "Estado",
     "submit": "Enviar",
     "success": "Éxito",
+    "notAvailable": "N/A",
     "warning": "Advertencia",
     "yes": "Sí"
   },
@@ -156,19 +136,33 @@
     }
   },
   "dashboard": {
-    "custodyReports": "Relatórios de Custódia",
+    "activeTemperatureAlertsTitle": "Alertas de temperatura activas",
+    "custodyReports": "Informes de custodia",
     "equipment": "Equipos",
+    "consentQueueTitle": "Cola de consentimientos",
+    "noActiveAlerts": "No hay alertas activas.",
     "patients": "Pacientes",
     "policies": "Políticas",
-    "recentLogs": "Logs recientes",
+    "queueFailures": "Fallos",
+    "queueLoading": "Cargando...",
+    "queueSending": "En envío",
+    "queueUnavailable": "Cola no disponible (Redis no configurado).",
+    "queueWaiting": "En cola",
+    "recentLogs": "Registros recientes",
     "results": "Resultados",
+    "sensor1": "Sensor 1",
+    "sensor2": "Sensor 2",
+    "sensor3": "Sensor 3",
     "samples": "Muestras",
     "sensors": "Sensores",
-    "subtitle": "Visión general del sistema",
+    "temperatureChartAria": "Gráfico de temperatura en tiempo real",
+    "temperatureChartSubtitle": "Monitoreo térmico continuo",
+    "temperatureChartTitle": "Gráfico de temperatura",
+    "subtitle": "Resumen del sistema",
     "temperatureAlerts": "Alertas de temperatura",
     "temperatureAlertsActive": "Alertas de temperatura activas",
     "temperatureAlertsMessage": "Hay {count} alerta(s) de temperatura que requieren atención.",
-    "title": "Panel de Control",
+    "title": "Panel de control",
     "viewAll": "Ver todos"
   },
   "dictionary": {
@@ -184,6 +178,21 @@
       "cacheTitle": "3.2 Cache-Aside Local-First",
       "hierarchyTitle": "3.1 Hierarquia ATC",
       "p1": "O módulo farmacológico utiliza classificação ATC da OMS e consulta externa ChEMBL apenas como fallback, seguindo padrão de redundância local compatível com o dicionário Orpha.",
+      "level1": "Nivel 1",
+      "level1Description": "Grupo anatómico principal",
+      "level1Example": "A - Tracto alimentario y metabolismo",
+      "level2": "Nivel 2",
+      "level2Description": "Subgrupo terapéutico",
+      "level2Example": "A16 - Otros productos para el tracto alimentario y metabolismo",
+      "level3": "Nivel 3",
+      "level3Description": "Subgrupo farmacológico",
+      "level3Example": "A16A - Otros productos para trastornos del tracto alimentario y metabolismo",
+      "level4": "Nivel 4",
+      "level4Description": "Subgrupo químico",
+      "level4Example": "A16AX - Otros productos",
+      "level5": "Nivel 5",
+      "level5Description": "Sustancia química específica",
+      "level5Example": "A16AX14 - Migalastat",
       "table": {
         "example": "Exemplo",
         "format": "Formato",
@@ -191,6 +200,16 @@
         "meaning": "Significado"
       },
       "title": "3. Sistema Farmacológico ATC (OMS) e ChEMBL"
+    },
+    "sprec": {
+      "fluidTitle": "4.1 SPREC - Fluidos (7 eixos)",
+      "p1": "O código SPREC consolida os metadados pré-analíticos críticos da amostra. O BioAvanceD-v2 registra sete eixos para fluidos e sete eixos para sólidos, garantindo reprodutibilidade laboratorial e auditoria de cadeia pré-analítica.",
+      "solidTitle": "4.2 SPREC - Sólidos (7 eixos)",
+      "table": {
+        "axis": "Eixo",
+        "description": "Descrição"
+      },
+      "title": "4. Qualidade de Amostra (SPREC)"
     },
     "brand": "BioAvanceD-v2",
     "exportPdf": "Exportar para PDF / Imprimir",
@@ -234,16 +253,6 @@
       "p1": "O domínio clínico usa ontologias da Orphanet para mapear diagnóstico raro, códigos correlatos e contexto semântico para análise. A camada de validação clínica utiliza um grafo de regras para condicionar o estado operacional da amostra ao preenchimento clínico mínimo exigido.",
       "p2": "Na prática, amostras com diagnóstico raro sem biomarcadores obrigatórios permanecem com restrição de completude até que os dados clínicos sejam fornecidos, preservando qualidade e rastreabilidade regulatória.",
       "title": "2. Orphadata e Validação Clínica"
-    },
-    "sprec": {
-      "fluidTitle": "4.1 SPREC - Fluidos (7 eixos)",
-      "p1": "O código SPREC consolida os metadados pré-analíticos críticos da amostra. O BioAvanceD-v2 registra sete eixos para fluidos e sete eixos para sólidos, garantindo reprodutibilidade laboratorial e auditoria de cadeia pré-analítica.",
-      "solidTitle": "4.2 SPREC - Sólidos (7 eixos)",
-      "table": {
-        "axis": "Eixo",
-        "description": "Descrição"
-      },
-      "title": "4. Qualidade de Amostra (SPREC)"
     },
     "subtitle": "Documento técnico de referência para pesquisa, auditoria e conformidade do biobanco.",
     "title": "Dicionário de Dados Integrado"
@@ -621,7 +630,6 @@
   },
   "navigation": {
     "access": "Accesos",
-    "assistant": "Asistente",
     "backup": "Backup",
     "custodyReports": "Relatórios de Custódia",
     "dashboard": "Dashboard",
@@ -922,9 +930,42 @@
   },
   "results": {
     "clearFilter": "Limpiar filtro",
+    "download": "Descargar",
+    "downloadError": "Error al descargar: {error}",
+    "equipmentFallback": "Equipo #{id}",
+    "historyTitle": "Historial de importaciones",
     "hideImport": "Ocultar importación",
     "import": "Importar resultados",
     "importJobID": "ID del job de importación",
+    "metrics": {
+      "duplicates": "Duplicados",
+      "failures": "Fallos",
+      "processingTime": "Tiempo de procesamiento",
+      "success": "Éxito",
+      "successLabel": "Éxito",
+      "total": "Total",
+      "totalRecords": "Total de registros"
+    },
+    "metricsTitle": "Métricas",
+    "moreErrors": "... y {count} errores más",
+    "noHistory": "Aún no hay importaciones",
+    "notLinked": "No vinculado",
+    "report": "Informe",
+    "reportLoadError": "Error al cargar el informe",
+    "reportModalTitle": "Informe de importación",
+    "rowLabel": "Fila",
+    "sampleFallback": "Muestra #{id}",
+    "subtitleImportJob": "Archivos de análisis de la importación {importJobID}",
+    "tableHeaders": {
+      "actions": "Acciones",
+      "description": "Descripción",
+      "equipment": "Equipo",
+      "fileType": "Tipo de archivo",
+      "id": "ID",
+      "method": "Método",
+      "researcher": "Investigador responsable",
+      "sample": "Muestra"
+    },
     "status": {
       "cancelled": "Cancelado",
       "completed": "Completado",
@@ -933,7 +974,18 @@
       "processing": "Procesando"
     },
     "subtitle": "Resultados de análisis de laboratorio",
-    "title": "Resultados"
+    "title": "Resultados",
+    "validationErrorsTitle": "Errores de validación",
+    "processingErrorsTitle": "Errores de procesamiento",
+    "view": "Ver"
+  },
+  "system": {
+    "subtitle": "Gestión integrada de usuarios y configuración de seguridad",
+    "tabs": {
+      "security": "Seguridad",
+      "users": "Usuarios"
+    },
+    "title": "Gestión del sistema"
   },
   "roles": {
     "access": "Acceso",
@@ -1005,6 +1057,36 @@
     "viewOnly": "Puedes ver y descargar los archivos"
   },
   "samples": {
+    "actions": {
+      "attachExternalDocument": "Adjuntar documento externo",
+      "attachExternalDocumentTitle": "Adjuntar documentación externa y liberar muestra",
+      "resendConsent": "Enviar/Reenviar TCLE",
+      "viewPending": "Ver pendiente"
+    },
+    "alerts": {
+      "consentResentError": "No se pudo enviar/reenviar el TCLE.",
+      "consentResentSuccess": "TCLE enviado/reenviado con éxito.",
+      "externalDocumentAttachedSuccess": "Documento externo adjuntado y muestra liberada.",
+      "externalDocumentAttachedWithNote": "Documento externo adjuntado. {note}",
+      "externalDocumentAttachError": "No se pudo adjuntar el documento externo.",
+      "externalDocumentPrompt": "Describe el documento externo adjuntado (opcional):",
+      "noValidPatientForConsent": "La muestra no tiene un paciente válido para enviar el TCLE.",
+      "onlyCoordinatorAdminAttach": "Solo un Coordinador o Administrador puede adjuntar un documento externo.",
+      "pendingSummary": "Pendiente de la muestra:\nEstado: {status}\nConsentimiento: {consent}\nMotivo: {reason}"
+    },
+    "badges": {
+      "consentPending": "TCLE pendiente",
+      "consentSigned": "TCLE firmado",
+      "externalDocAttached": "Documento adjuntado",
+      "externalDocAttachedTitle": "Documento externo adjuntado y validado",
+      "externalDocPending": "Documento externo pendiente",
+      "externalDocPendingTitle": "Documento externo requerido para la liberación",
+      "noBlocks": "Sin bloqueos de cuarentena",
+      "quarantine": "Cuarentena",
+      "quarantineTitle": "La muestra está bloqueada mientras se completa la regularización ética",
+      "released": "Liberada",
+      "releasedTitle": "Disponible para uso autorizado"
+    },
     "availableQuantity": "Cantidad disponible",
     "barcode": "Código de barras",
     "barcodeAutoGenerated": "Deja vacío para generar automáticamente en formato BR-YYYY-NNN",
@@ -1021,9 +1103,9 @@
     "consent": {
       "check": "Verificar",
       "pending": "Pendente",
-      "pendingTitle": "TCLE Pendente",
+      "pendingTitle": "Consentimiento pendiente",
       "signed": "Assinado",
-      "signedTitle": "TCLE Assinado",
+      "signedTitle": "Consentimiento firmado",
       "unknownStatus": "Status desconhecido"
     },
     "create": "Crear muestra",
@@ -1039,9 +1121,128 @@
     "edit": "Editar muestra",
     "editTitle": "Editar muestra",
     "editTooltip": {
-      "consentPending": "Amostra bloqueada: TCLE pendente",
-      "edit": "Editar amostra",
-      "noPermission": "Apenas administradores e coordenadores podem editar"
+      "consentPending": "Muestra bloqueada: consentimiento pendiente",
+      "edit": "Editar muestra",
+      "noPermission": "Solo administradores y coordinadores pueden editar"
+    },
+    "displayedMany": "muestras mostradas",
+    "displayedOne": "muestra mostrada",
+    "empty": {
+      "loaded": "No hay muestras cargadas",
+      "loadedHint": "Verifica la conexión con la API o recarga el listado para mostrar registros.",
+      "search": "No se encontró ninguna muestra",
+      "searchHint": "Prueba otro código de barras, ID o nombre del paciente."
+    },
+    "inventoryDescription": "Lista completa de muestras cargadas en el inventario.",
+    "inventoryTab": "Inventario de muestras",
+    "searchButton": "Buscar",
+    "searchHint": "Usa el ID de la muestra, el código de barras o el paciente para ubicar el registro antes de moverlo.",
+    "searchLabel": "Localizar muestra",
+    "searchPlaceholder": "Buscar por ID, código de barras o paciente",
+    "searchResultPrefix": "Resultado de búsqueda para \"{query}\".",
+    "searchScanHint": "Modo lectura activo: usa el lector de código de barras o QR y luego pulsa Buscar.",
+    "searchScanPlaceholder": "Escanea código de barras/QR y pulsa buscar",
+    "scanModeOff": "Código de barras/QR",
+    "scanModeOn": "Lectura activa",
+    "selectedItems": "itens selecionados",
+    "sprec": {
+      "na": "SPREC: N/A",
+      "prefix": "SPREC"
+    },
+    "storage": {
+      "awaiting": "Esperando almacenamiento",
+      "definedBox": "Caja definida",
+      "position": "Posición"
+    },
+    "storageTab": "Almacenamiento físico",
+    "tableHeaders": {
+      "actions": "Acciones",
+      "available": "Disponible",
+      "barcode": "Código de barras",
+      "id": "ID",
+      "origin": "Origen",
+      "quantity": "Cantidad",
+      "registrationDate": "Fecha de registro",
+      "status": "Estado",
+      "type": "Tipo"
+    },
+    "detail": {
+      "analysisFilesTitle": "Archivos de análisis",
+      "availability": {
+        "available": "Disponible",
+        "partial": "Parcialmente disponible",
+        "unavailable": "No disponible"
+      },
+      "barcode": "Código de barras",
+      "basicInfoTitle": "Información básica",
+      "blockedForRelease": "Muestra bloqueada para liberación",
+      "currentStatus": "Estado actual",
+      "download": "Descargar",
+      "equipmentFallback": "Equipo #{id}",
+      "extractionProtocol": "Protocolo de extracción",
+      "governanceTitle": "Grafo de gobernanza",
+      "loadedSamples": "Total de muestras cargadas",
+      "noAnalysisFiles": "No hay archivos asociados a esta muestra",
+      "noComplianceReport": "No hay informe de conformidad disponible.",
+      "noDetails": "Sin detalles",
+      "origin": "Origen",
+      "patientId": "ID del paciente",
+      "patientTitle": "Paciente",
+      "quantityQualityTitle": "Cantidad y calidad",
+      "registrationDate": "Fecha de registro",
+      "releasable": "Muestra liberable",
+      "sampleId": "ID de la muestra",
+      "searchedId": "ID buscado",
+      "sendFile": "Subir archivo",
+      "sprec": {
+        "axes": {
+          "Pcent1": "Pcent1",
+          "Pcent2": "Pcent2",
+          "Pcold": "Pcold",
+          "Pfix": "Pfix",
+          "PfixTime": "PfixTime",
+          "Ppost": "Ppost",
+          "Ppre": "Ppre",
+          "Pstore": "Pstore",
+          "Pwarm": "Pwarm"
+        },
+        "na": "SPREC: N/A",
+        "prefix": "SPREC"
+      },
+      "sprecAxes": "Ejes",
+      "sprecCode": "Código",
+      "sprecTitle": "SPREC",
+      "storage": {
+        "awaiting": "Esperando almacenamiento",
+        "awaitingDescription": "La muestra ya fue recibida y espera asignación de ubicación física.",
+        "block": "Bloque",
+        "drawer": "Cajón",
+        "drawerAbbr": "Caj.",
+        "idLabel": "ID: {id}",
+        "locationId": "ID de ubicación: {id}",
+        "notFound": "Ubicación no encontrada",
+        "rack": "Estante",
+        "shelfAbbr": "Est.",
+        "storageOptional": "Opcional. La muestra puede permanecer sin ubicación hasta ser almacenada.",
+        "storageAwaitingMessage": "La muestra está registrada, pero aún no se le asignó una posición física.",
+        "storageLabel": "Almacenamiento",
+        "storageProjectTitle": "Almacenamiento y proyecto",
+        "unassigned": "Sin almacenamiento asignado",
+        "unavailable": "Información de ubicación no disponible",
+        "well": "Pozo"
+      },
+      "suggestedReleaseStatus": "release_status sugerido",
+      "tableHeaders": {
+        "actions": "Acciones",
+        "description": "Descripción",
+        "equipment": "Equipo",
+        "method": "Método",
+        "researcher": "Investigador"
+      },
+      "title": "Detalles de la muestra",
+      "totalQuantity": "Cantidad total",
+      "type": "Tipo",
+      "validatingCompliance": "Validando conformidad de la muestra..."
     },
     "extractionProtocol": "Protocolo de extracción",
     "extractionProtocolOptions": {
@@ -1103,7 +1304,7 @@
     "patientIDSearchPlaceholder": "Buscar por ID o prontuario...",
     "patientIDValid": "✓ ID válido",
     "pendingReturn": "Pendiente de devolución",
-    "physicalStorageAction": "Almacenamiento Físico",
+    "physicalStorageAction": "Almacenamiento físico",
     "printLabels": "Imprimir Etiquetas",
     "printQRCode": "Imprimir QR Code",
     "qrCodeError": "Error al generar QR Code",
@@ -1141,7 +1342,7 @@
     "returnSuccess": "Devolución registrada con éxito",
     "sampleData": "Datos de la muestra",
     "sampleDestinationRequired": "El destino de la muestra es obligatorio",
-    "sampleFallback": "Amostra",
+    "sampleFallback": "Muestra",
     "sampleID": "ID de la muestra",
     "sampleNotFound": "Muestra no encontrada con este código de barras",
     "sampleOrigin": "Origen de la muestra",
@@ -1164,11 +1365,7 @@
       "Tecido": "Tejido",
       "Urina": "Orina"
     },
-    "searchHint": "Usa el ID de la muestra, el código de barras o el paciente para ubicar el registro antes de moverlo.",
-    "searchLabel": "Localizar muestra",
-    "searchPlaceholder": "Buscar por ID, código de barras o paciente",
     "selectAllAria": "Selecionar todas as amostras",
-    "selectedItems": "itens selecionados",
     "selectFile": "Seleccionar archivo",
     "selectOneAria": "Selecionar amostra",
     "selectOrigin": "Selecciona el origen",
@@ -1220,17 +1417,6 @@
       "treeLoadError": "Error al cargar el árbol de almacenamiento"
     },
     "subtitle": "Gestión, trazabilidad y almacenamiento físico",
-    "tableHeaders": {
-      "actions": "Acciones",
-      "available": "Disponible",
-      "barcode": "Código de barras",
-      "id": "ID",
-      "origin": "Origen",
-      "quantity": "Cantidad",
-      "registrationDate": "Fecha de registro",
-      "status": "Estado",
-      "type": "Tipo"
-    },
     "title": "Inventario de Muestras",
     "totalWithdrawn": "Total retirado",
     "traceability": {
@@ -1290,7 +1476,7 @@
     "viewMovements": "Ver movimientos de la muestra",
     "viewResults": "Ver resultados",
     "viewSampleMovements": "Ver movimientos de la muestra",
-    "volume": "Volume",
+    "volume": "Volumen",
     "withdraw": "Retirar muestra",
     "withdrawalDateRequired": "Fecha de retiro obligatoria cuando el estado es Withdrawn",
     "withdrawalResponsibleRequired": "El responsable del retiro es obligatorio",
@@ -1698,7 +1884,7 @@
     },
     "helpers": {
       "birthDateFormat": "Formato esperado: DD/MM/AAAA",
-      "documentCpfPassport": "Acepta CPF válido o pasaporte.",
+      "documentCpfPassport": "Digite somente números para CPF ou informe passaporte.",
       "emailFormat": "Formato esperado: nombre@dominio.com",
       "recordNumberOptional": "Campo opcional de texto libre."
     },

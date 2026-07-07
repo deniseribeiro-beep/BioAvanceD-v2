@@ -828,7 +828,7 @@ class ImportService {
     };
     const canonicalQualityAssessment = qualityDomain.resolveMethodologicalQuality({ sprec });
     const releaseStatus = canonicalQualityAssessment?.governance_status === 1
-      && ['A', 'B', 'C', 'D'].includes(String(canonicalQualityAssessment?.final_grade || canonicalQualityAssessment?.category || '').toUpperCase())
+      && ['A', 'B', 'C', 'D'].includes(String(canonicalQualityAssessment?.final_grade || '').toUpperCase())
       ? 'AVAILABLE'
       : 'QUARANTINE';
 
@@ -842,8 +842,19 @@ class ImportService {
       quantity: toFloat(this.getRowValue(row, ['quantity', 'volume']), 'quantity'),
       quality: normalizeString(qualityRaw),
       // Canonical RCS-GOV fields (do not rely on legacy `quality_*` for decisioning)
-      rcs_score: canonicalQualityAssessment.score,
-      final_grade: canonicalQualityAssessment.category || canonicalQualityAssessment.final_grade || '',
+      model_version: canonicalQualityAssessment.model_version,
+      matrix_type: canonicalQualityAssessment.matrix_type,
+      governance_status: canonicalQualityAssessment.governance_status,
+      governance_failure_reasons: canonicalQualityAssessment.governance_failure_reasons || [],
+      governance_rule_codes: canonicalQualityAssessment.governance_rule_codes || [],
+      p_bio: canonicalQualityAssessment.p_bio,
+      rcs_score: canonicalQualityAssessment.rcs_score,
+      score_based_grade: canonicalQualityAssessment.score_based_grade,
+      final_grade: canonicalQualityAssessment.final_grade || '',
+      grade_route: canonicalQualityAssessment.grade_route,
+      axis_penalties: canonicalQualityAssessment.axis_penalties || [],
+      calculation_trace: canonicalQualityAssessment.calculation_trace || {},
+      rcs_evaluation: canonicalQualityAssessment,
       // Legacy compatibility bucket (non-decisional)
       legacy_compat: {
         quality_score: externalQualityAssessment.score,

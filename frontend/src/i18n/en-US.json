@@ -9,27 +9,6 @@
     "title": "BioAvanceD",
     "welcome": "Welcome"
   },
-  "assistant": {
-    "clear": "Limpiar",
-    "contextualHelp": "Contextual Help",
-    "error": "Error al procesar la pregunta",
-    "estimatedTime": "Estimated time",
-    "noQuestion": "La pregunta es obligatoria",
-    "patientSuggestions": "Patient Suggestions",
-    "placeholder": "Type your question...",
-    "quickActions": "Quick Actions",
-    "sampleSuggestions": "Sample Suggestions",
-    "send": "Enviar",
-    "subtitle": "Ask questions and receive contextual help about the system",
-    "suggestions": "Suggestions",
-    "suggestionsFor": "Here are some suggestions for \"{action}\":",
-    "thinking": "Thinking...",
-    "title": "Intelligent Assistant",
-    "tutorial": "Step-by-Step Tutorial",
-    "tutorialTitle": "Tutorial",
-    "welcome": "Hello! How can I help you?",
-    "welcomeHint": "Ask a question or use one of the quick actions below"
-  },
   "auth": {
     "access": "Access",
     "attemptsRemaining": "Attempts remaining",
@@ -130,6 +109,7 @@
     "status": "Status",
     "submit": "Enviar",
     "success": "Sucesso",
+    "notAvailable": "N/A",
     "warning": "Aviso",
     "yes": "Sim"
   },
@@ -156,20 +136,34 @@
     }
   },
   "dashboard": {
-    "custodyReports": "Relatórios de Custódia",
-    "equipment": "Equipamentos",
-    "patients": "Pacientes",
-    "policies": "Políticas",
-    "recentLogs": "Logs Recentes",
-    "results": "Arquivos de Análise",
-    "samples": "Amostras",
-    "sensors": "Sensores",
-    "subtitle": "Visão geral do sistema",
-    "temperatureAlerts": "Alertas de Temperatura",
-    "temperatureAlertsActive": "Alertas de Temperatura Ativos",
+    "activeTemperatureAlertsTitle": "Active Temperature Alerts",
+    "custodyReports": "Custody Reports",
+    "equipment": "Equipment",
+    "consentQueueTitle": "Consent Queue",
+    "noActiveAlerts": "No active alerts.",
+    "patients": "Patients",
+    "policies": "Policies",
+    "queueFailures": "Failures",
+    "queueLoading": "Loading...",
+    "queueSending": "Sending",
+    "queueUnavailable": "Queue unavailable (Redis not configured).",
+    "queueWaiting": "Waiting",
+    "recentLogs": "Recent Logs",
+    "results": "Analysis Files",
+    "sensor1": "Sensor 1",
+    "sensor2": "Sensor 2",
+    "sensor3": "Sensor 3",
+    "samples": "Samples",
+    "sensors": "Sensors",
+    "temperatureChartAria": "Real-time temperature chart",
+    "temperatureChartSubtitle": "Continuous thermal monitoring",
+    "temperatureChartTitle": "Temperature Chart",
+    "subtitle": "System overview",
+    "temperatureAlerts": "Temperature Alerts",
+    "temperatureAlertsActive": "Active Temperature Alerts",
     "temperatureAlertsMessage": "Existem {count} alerta(s) de temperatura que requerem atenção.",
-    "title": "Painel de Controle",
-    "viewAll": "Ver Todos"
+    "title": "Control Panel",
+    "viewAll": "View All"
   },
   "dictionary": {
     "atc": {
@@ -184,6 +178,21 @@
       "cacheTitle": "3.2 Local-First Cache-Aside",
       "hierarchyTitle": "3.1 ATC Hierarchy",
       "p1": "The pharmacological module uses WHO ATC classification and external ChEMBL queries only as fallback, following a local redundancy pattern aligned with the Orpha dictionary.",
+      "level1": "Level 1",
+      "level1Description": "Main anatomical group",
+      "level1Example": "A - Alimentary tract and metabolism",
+      "level2": "Level 2",
+      "level2Description": "Therapeutic subgroup",
+      "level2Example": "A16 - Other alimentary tract and metabolism products",
+      "level3": "Level 3",
+      "level3Description": "Pharmacological subgroup",
+      "level3Example": "A16A - Other products for alimentary tract and metabolism disorders",
+      "level4": "Level 4",
+      "level4Description": "Chemical subgroup",
+      "level4Example": "A16AX - Other products",
+      "level5": "Level 5",
+      "level5Description": "Specific chemical substance",
+      "level5Example": "A16AX14 - Migalastat",
       "table": {
         "example": "Example",
         "format": "Format",
@@ -191,6 +200,16 @@
         "meaning": "Meaning"
       },
       "title": "3. ATC Pharmacological System (WHO) and ChEMBL"
+    },
+    "sprec": {
+      "fluidTitle": "4.1 SPREC - Fluids (7 axes)",
+      "p1": "The SPREC code consolidates critical pre-analytical sample metadata. BioAvanceD-v2 records seven axes for fluids and seven axes for solids, ensuring laboratory reproducibility and pre-analytical chain auditing.",
+      "solidTitle": "4.2 SPREC - Solids (7 axes)",
+      "table": {
+        "axis": "Axis",
+        "description": "Description"
+      },
+      "title": "4. Sample Quality (SPREC)"
     },
     "brand": "BioAvanceD-v2",
     "exportPdf": "Export to PDF / Print",
@@ -234,16 +253,6 @@
       "p1": "The clinical domain uses Orphanet ontologies to map rare diagnosis, related codes and semantic context for analysis. The clinical validation layer applies a rules graph to condition sample operational state based on required minimum clinical completion.",
       "p2": "In practice, samples with rare diagnosis and missing mandatory biomarkers remain completion-restricted until clinical data is provided, preserving quality and regulatory traceability.",
       "title": "2. Orphadata and Clinical Validation"
-    },
-    "sprec": {
-      "fluidTitle": "4.1 SPREC - Fluids (7 axes)",
-      "p1": "The SPREC code consolidates critical pre-analytical sample metadata. BioAvanceD-v2 records seven axes for fluids and seven axes for solids, ensuring laboratory reproducibility and pre-analytical chain auditing.",
-      "solidTitle": "4.2 SPREC - Solids (7 axes)",
-      "table": {
-        "axis": "Axis",
-        "description": "Description"
-      },
-      "title": "4. Sample Quality (SPREC)"
     },
     "subtitle": "Technical reference document for biobank research, auditing and compliance.",
     "title": "Integrated Data Dictionary"
@@ -621,7 +630,6 @@
   },
   "navigation": {
     "access": "Access",
-    "assistant": "Assistant",
     "backup": "Backup",
     "custodyReports": "Custody Reports",
     "dashboard": "Dashboard",
@@ -922,9 +930,42 @@
   },
   "results": {
     "clearFilter": "Clear Filter",
+    "download": "Download",
+    "downloadError": "Error downloading: {error}",
+    "equipmentFallback": "Equipment #{id}",
+    "historyTitle": "Import History",
     "hideImport": "Hide Import",
     "import": "Import Results",
     "importJobID": "Import Job ID",
+    "metrics": {
+      "duplicates": "Duplicates",
+      "failures": "Failures",
+      "processingTime": "Processing Time",
+      "success": "Success",
+      "successLabel": "Success",
+      "total": "Total",
+      "totalRecords": "Total Records"
+    },
+    "metricsTitle": "Metrics",
+    "moreErrors": "... and {count} more errors",
+    "noHistory": "No imports yet",
+    "notLinked": "Not linked",
+    "report": "Report",
+    "reportLoadError": "Error loading report",
+    "reportModalTitle": "Import Report",
+    "rowLabel": "Row",
+    "sampleFallback": "Sample #{id}",
+    "subtitleImportJob": "Analysis files from import {importJobID}",
+    "tableHeaders": {
+      "actions": "Actions",
+      "description": "Description",
+      "equipment": "Equipment",
+      "fileType": "File Type",
+      "id": "ID",
+      "method": "Method",
+      "researcher": "Responsible Researcher",
+      "sample": "Sample"
+    },
     "status": {
       "cancelled": "Cancelled",
       "completed": "Completed",
@@ -933,18 +974,29 @@
       "processing": "Processing"
     },
     "subtitle": "Laboratory analysis results",
-    "title": "Results"
+    "title": "Results",
+    "validationErrorsTitle": "Validation Errors",
+    "processingErrorsTitle": "Processing Errors",
+    "view": "View"
+  },
+  "system": {
+    "subtitle": "Integrated user and security settings management",
+    "tabs": {
+      "security": "Security",
+      "users": "Users"
+    },
+    "title": "System Management"
   },
   "roles": {
-    "access": "Acesso",
-    "administrator": "Administrador",
-    "basic": "Básico",
-    "complete": "Completo",
-    "coordinator": "Coordenador",
-    "externalUser": "Usuário Externo",
-    "intermediate": "Intermediário",
-    "technician": "Técnico",
-    "unknown": "Desconhecido"
+    "access": "Access",
+    "administrator": "Administrator",
+    "basic": "Basic",
+    "complete": "Complete",
+    "coordinator": "Coordinator",
+    "externalUser": "External User",
+    "intermediate": "Intermediate",
+    "technician": "Technician",
+    "unknown": "Unknown"
   },
   "sampleFiles": {
     "actions": "Actions",
@@ -1005,6 +1057,36 @@
     "viewOnly": "You can view and download files"
   },
   "samples": {
+    "actions": {
+      "attachExternalDocument": "Attach external document",
+      "attachExternalDocumentTitle": "Attach external documentation and release sample",
+      "resendConsent": "Send/Resend Consent",
+      "viewPending": "View pending item"
+    },
+    "alerts": {
+      "consentResentError": "Failed to send/resend consent.",
+      "consentResentSuccess": "Consent sent/resend successfully.",
+      "externalDocumentAttachedSuccess": "External document attached and sample released.",
+      "externalDocumentAttachedWithNote": "External document attached. {note}",
+      "externalDocumentAttachError": "Failed to attach external document.",
+      "externalDocumentPrompt": "Describe the attached external document (optional):",
+      "noValidPatientForConsent": "Sample has no valid patient for consent sending.",
+      "onlyCoordinatorAdminAttach": "Only a Coordinator or Administrator can attach an external document.",
+      "pendingSummary": "Sample pending item:\nStatus: {status}\nConsent: {consent}\nReason: {reason}"
+    },
+    "badges": {
+      "consentPending": "Consent pending",
+      "consentSigned": "Consent signed",
+      "externalDocAttached": "Document attached",
+      "externalDocAttachedTitle": "External document attached and validated",
+      "externalDocPending": "External document pending",
+      "externalDocPendingTitle": "External document required for release",
+      "noBlocks": "No quarantine blocks",
+      "quarantine": "Quarantine",
+      "quarantineTitle": "Sample blocked while ethical regularization is pending",
+      "released": "Released",
+      "releasedTitle": "Available for authorized use"
+    },
     "availableQuantity": "Available Quantity",
     "barcode": "Barcode",
     "barcodeAutoGenerated": "Leave empty to auto-generate in format BR-YYYY-NNN",
@@ -1021,9 +1103,9 @@
     "consent": {
       "check": "Verificar",
       "pending": "Pendente",
-      "pendingTitle": "TCLE Pendente",
+      "pendingTitle": "Consent pending",
       "signed": "Assinado",
-      "signedTitle": "TCLE Assinado",
+      "signedTitle": "Consent signed",
       "unknownStatus": "Status desconhecido"
     },
     "create": "Create Sample",
@@ -1039,9 +1121,128 @@
     "edit": "Edit Sample",
     "editTitle": "Edit Sample",
     "editTooltip": {
-      "consentPending": "Amostra bloqueada: TCLE pendente",
-      "edit": "Editar amostra",
-      "noPermission": "Apenas administradores e coordenadores podem editar"
+      "consentPending": "Sample blocked: consent pending",
+      "edit": "Edit sample",
+      "noPermission": "Only administrators and coordinators can edit"
+    },
+    "displayedMany": "samples displayed",
+    "displayedOne": "sample displayed",
+    "empty": {
+      "loaded": "No samples loaded",
+      "loadedHint": "Check the API connection or reload the listing to display records.",
+      "search": "No sample found",
+      "searchHint": "Try another barcode, ID, or patient name."
+    },
+    "inventoryDescription": "Full list of samples loaded in inventory.",
+    "inventoryTab": "Sample Inventory",
+    "searchButton": "Search",
+    "searchHint": "Use o ID da amostra, o código de barras ou o paciente para localizar rapidamente antes de fazer uma movimentação.",
+    "searchLabel": "Localizar amostra",
+    "searchPlaceholder": "Busque por ID, código de barras ou paciente",
+    "searchResultPrefix": "Search result for \"{query}\".",
+    "searchScanHint": "Scan mode enabled: use the barcode or QR reader and then press Search.",
+    "searchScanPlaceholder": "Scan barcode/QR code and press search",
+    "scanModeOff": "Barcode/QR",
+    "scanModeOn": "Scan active",
+    "selectedItems": "itens selecionados",
+    "sprec": {
+      "na": "SPREC: N/A",
+      "prefix": "SPREC"
+    },
+    "storage": {
+      "awaiting": "Awaiting Storage",
+      "definedBox": "Box defined",
+      "position": "Position"
+    },
+    "storageTab": "Physical Storage",
+    "tableHeaders": {
+      "actions": "Actions",
+      "available": "Available",
+      "barcode": "Barcode",
+      "id": "ID",
+      "origin": "Origin",
+      "quantity": "Quantity",
+      "registrationDate": "Registration Date",
+      "status": "Status",
+      "type": "Type"
+    },
+    "detail": {
+      "analysisFilesTitle": "Analysis Files",
+      "availability": {
+        "available": "Available",
+        "partial": "Partially Available",
+        "unavailable": "Unavailable"
+      },
+      "barcode": "Barcode",
+      "basicInfoTitle": "Basic Information",
+      "blockedForRelease": "Sample blocked for release",
+      "currentStatus": "Current Status",
+      "download": "Download",
+      "equipmentFallback": "Equipment #{id}",
+      "extractionProtocol": "Extraction Protocol",
+      "governanceTitle": "Governance Graph",
+      "loadedSamples": "Loaded samples total",
+      "noAnalysisFiles": "No files associated with this sample",
+      "noComplianceReport": "No compliance report available.",
+      "noDetails": "No details",
+      "origin": "Origin",
+      "patientId": "Patient ID",
+      "patientTitle": "Patient",
+      "quantityQualityTitle": "Quantity and Quality",
+      "registrationDate": "Registration Date",
+      "releasable": "Sample releasable",
+      "sampleId": "Sample ID",
+      "searchedId": "Searched ID",
+      "sendFile": "Upload File",
+      "sprec": {
+        "axes": {
+          "Pcent1": "Pcent1",
+          "Pcent2": "Pcent2",
+          "Pcold": "Pcold",
+          "Pfix": "Pfix",
+          "PfixTime": "PfixTime",
+          "Ppost": "Ppost",
+          "Ppre": "Ppre",
+          "Pstore": "Pstore",
+          "Pwarm": "Pwarm"
+        },
+        "na": "SPREC: N/A",
+        "prefix": "SPREC"
+      },
+      "sprecAxes": "Axes",
+      "sprecCode": "Code",
+      "sprecTitle": "SPREC",
+      "storage": {
+        "awaiting": "Awaiting Storage",
+        "awaitingDescription": "The sample has already been received and awaits physical location assignment.",
+        "block": "Block",
+        "drawer": "Drawer",
+        "drawerAbbr": "Dr.",
+        "idLabel": "ID: {id}",
+        "locationId": "Location ID: {id}",
+        "notFound": "Location not found",
+        "rack": "Rack",
+        "shelfAbbr": "Sh.",
+        "storageOptional": "Optional. The sample may remain without location until stored.",
+        "storageAwaitingMessage": "The sample is registered but has not yet been assigned a physical position.",
+        "storageLabel": "Storage",
+        "storageProjectTitle": "Storage and Project",
+        "unassigned": "No storage assigned",
+        "unavailable": "Location information not available",
+        "well": "Well"
+      },
+      "suggestedReleaseStatus": "suggested release_status",
+      "tableHeaders": {
+        "actions": "Actions",
+        "description": "Description",
+        "equipment": "Equipment",
+        "method": "Method",
+        "researcher": "Researcher"
+      },
+      "title": "Sample Details",
+      "totalQuantity": "Total Quantity",
+      "type": "Type",
+      "validatingCompliance": "Validating sample compliance..."
     },
     "extractionProtocol": "Extraction Protocol",
     "extractionProtocolOptions": {
@@ -1095,7 +1296,7 @@
     "observationsRequiredForCondition": "Observations are required when condition is not Intact",
     "originalQuantity": "Original Quantity",
     "patientID": "Patient ID",
-    "patientIdColumn": "Paciente (ID)",
+    "patientIdColumn": "Patient (ID)",
     "patientIDError": "Error validating patient ID",
     "patientIDHint": "Enter the 8-digit patient ID generated in registration",
     "patientIDInvalid": "ID must have exactly 8 numeric digits",
@@ -1103,7 +1304,7 @@
     "patientIDSearchPlaceholder": "Search by ID or record number...",
     "patientIDValid": "✓ Valid ID",
     "pendingReturn": "Pending Return",
-    "physicalStorageAction": "Armazenagem Física",
+    "physicalStorageAction": "Physical Storage",
     "printLabels": "Imprimir Etiquetas",
     "printQRCode": "Print QR Code",
     "qrCodeError": "Error generating QR Code",
@@ -1141,7 +1342,7 @@
     "returnSuccess": "Return registered successfully",
     "sampleData": "Sample Data",
     "sampleDestinationRequired": "Sample destination is required",
-    "sampleFallback": "Amostra",
+    "sampleFallback": "Sample",
     "sampleID": "Sample ID",
     "sampleNotFound": "Sample not found with this barcode",
     "sampleOrigin": "Sample Origin",
@@ -1164,11 +1365,7 @@
       "Tecido": "Tissue",
       "Urina": "Urine"
     },
-    "searchHint": "Use o ID da amostra, o código de barras ou o paciente para localizar rapidamente antes de fazer uma movimentação.",
-    "searchLabel": "Localizar amostra",
-    "searchPlaceholder": "Busque por ID, código de barras ou paciente",
     "selectAllAria": "Selecionar todas as amostras",
-    "selectedItems": "itens selecionados",
     "selectFile": "Select File",
     "selectOneAria": "Selecionar amostra",
     "selectOrigin": "Select origin",
@@ -1220,17 +1417,6 @@
       "treeLoadError": "Erro ao carregar árvore de armazenagem"
     },
     "subtitle": "Gestão, rastreabilidade e armazenamento físico",
-    "tableHeaders": {
-      "actions": "Actions",
-      "available": "Available",
-      "barcode": "Barcode",
-      "id": "ID",
-      "origin": "Origin",
-      "quantity": "Quantity",
-      "registrationDate": "Registration Date",
-      "status": "Status",
-      "type": "Type"
-    },
     "title": "Inventário de Amostras",
     "totalWithdrawn": "Total Withdrawn",
     "traceability": {
@@ -1472,7 +1658,7 @@
     "roleAdministrator": "🛡️ Administrator - Full system access",
     "roleCoordinator": "👔 Coordinator - Management and reports",
     "roleDescription": "{role}: {description}",
-    "roleExternalUser": "👤 External User - Limited access to reports and assistant",
+    "roleExternalUser": "👤 External User - Limited access to reports",
     "roleLabel": "Role (Function)",
     "roleRequired": "Role (Function) is required",
     "roleTechnician": "🔬 Technician - Basic system operations",
@@ -1698,7 +1884,7 @@
     },
     "helpers": {
       "birthDateFormat": "Expected format: DD/MM/YYYY",
-      "documentCpfPassport": "Accepts valid CPF or passport.",
+      "documentCpfPassport": "Digite somente números para CPF ou informe passaporte.",
       "emailFormat": "Expected format: name@domain.com",
       "recordNumberOptional": "Optional free-text field."
     },

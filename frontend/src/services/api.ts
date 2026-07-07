@@ -297,7 +297,14 @@ export const sampleService = {
 };
 
 export const dataImportService = {
-  importFhir: (payload: unknown) => api.post('/import/fhir', payload),
+  stageFhirBundle: (payload: unknown) => api.post('/import/fhir/stage', payload),
+  getFhirBatch: (batchId: string) => api.get(`/import/fhir/batches/${encodeURIComponent(batchId)}`),
+  validateFhirBatch: (batchId: string) => api.post(`/import/fhir/batches/${encodeURIComponent(batchId)}/validate`),
+  sendFhirBatchConsents: (batchId: string) => api.post(`/import/fhir/batches/${encodeURIComponent(batchId)}/send-consents`),
+  getFhirBatchConsentStatus: (batchId: string) => api.get(`/import/fhir/batches/${encodeURIComponent(batchId)}/consent-status`),
+  commitFhirBatch: (batchId: string) => api.post(`/import/fhir/batches/${encodeURIComponent(batchId)}/commit`),
+  attachFhirExternalDocument: (batchId: string, recordId: string, note?: string) =>
+    api.post(`/import/fhir/batches/${encodeURIComponent(batchId)}/records/${encodeURIComponent(recordId)}/external-document`, { note }),
 };
 
 // ========== RESULT SERVICES ==========
@@ -735,15 +742,6 @@ export const backupService = {
   restoreBackup: (fileName: string) => api.post(`/backup/restore/${fileName}`),
 };
 
-// ========== ASSISTANT SERVICES ==========
-export const assistantService = {
-  consult: (question: string) => api.post('/assistant/consult', { question }),
-  answer: (question: string) => api.post('/assistant/answer', { question }),
-  getContextualHelp: (context: string) => api.post('/assistant/contextual-help', { context }),
-  requestTutorial: (topic: string) => api.post('/assistant/tutorial', { topic }),
-  getSuggestions: (context: string) => api.post('/assistant/suggestions', { context }),
-};
-
 // ========== CONSENT SERVICES ==========
 // TCLE builder should use only ConsentTemplate endpoints for create/update/read
 export const consentService = {
@@ -787,13 +785,6 @@ export const importLGPDService = {
       : `/import-lgpd/amostras/template/${format}`;
     return api.get(endpoint, {
       responseType: 'blob',
-    });
-  },
-  predictPatientsMapping: (formData: FormData) => {
-    return api.post('/import-lgpd/pacientes/predict-mapping', formData, {
-      headers: {
-        'Content-Type': 'multipart/form-data',
-      },
     });
   },
   smartImportPatients: (formData: FormData) => {

@@ -9,29 +9,16 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 export default defineConfig(async () => {
-  const enableCoverage = process.env.VITE_COVERAGE === 'true';
   const hmrHost = process.env.VITE_HMR_HOST || 'localhost';
   const hmrProtocol = process.env.VITE_HMR_PROTOCOL || 'ws';
   const hmrClientPort = Number(process.env.VITE_HMR_CLIENT_PORT || 5173);
-  let istanbulPlugin = null;
-  if (enableCoverage) {
-    const mod = await import('vite-plugin-istanbul');
-    istanbulPlugin = mod.default({
-      include: 'src/*',
-      extension: ['.js', '.jsx', '.ts', '.tsx'],
-      cypress: false,
-      requireEnv: false
-    });
-  }
   return {
-    plugins: [
-      react(),
-      ...(istanbulPlugin ? [istanbulPlugin] : [])
-    ],
+    plugins: [react()],
     server: {
       host: '0.0.0.0',
       port: 5173,
       strictPort: true,
+      allowedHosts: true,
       hmr: {
         host: hmrHost,
         protocol: hmrProtocol,

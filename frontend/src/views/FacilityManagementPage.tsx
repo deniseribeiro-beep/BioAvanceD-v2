@@ -181,41 +181,18 @@ export default function FacilityManagementPage() {
 // Seção de Equipamentos
 function EquipmentSection() {
   const { t } = useLanguage();
-  const { loading, error, createEquipment, updateEquipment, deleteEquipment, loadEquipment } = useEquipment();
+  const { equipment, loading, error, createEquipment, updateEquipment, deleteEquipment, loadEquipment } = useEquipment();
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingEquipment, setEditingEquipment] = useState<Equipment | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
 
-  const mockEquipments = [
-    {
-      equipmentID: 1,
-      equipmentDescription: 'Freezer Ultra Baixo',
-      model: 'Thermo Scientific TSX',
-      serialNumber: 'TSX-9921',
-      purchaseDate: '2023-05-15',
-    },
-    {
-      equipmentID: 2,
-      equipmentDescription: 'Tanque de Nitrogênio',
-      model: 'CryoPlus 4',
-      serialNumber: 'CP4-102',
-      purchaseDate: '2024-01-10',
-    },
-    {
-      equipmentID: 3,
-      equipmentDescription: 'Refrigerador Clínico',
-      model: 'B Medical Systems',
-      serialNumber: 'BMS-55',
-      purchaseDate: '2023-08-22',
-    },
-  ];
-
-  const totalPages = Math.max(1, Math.ceil(mockEquipments.length / pageSize));
+  const equipmentRows = useMemo(() => (Array.isArray(equipment) ? equipment : []), [equipment]);
+  const totalPages = Math.max(1, Math.ceil(equipmentRows.length / pageSize));
   const paginatedEquipment = useMemo(() => {
     const startIndex = (currentPage - 1) * pageSize;
-    return mockEquipments.slice(startIndex, startIndex + pageSize);
-  }, [currentPage, pageSize]);
+    return equipmentRows.slice(startIndex, startIndex + pageSize);
+  }, [equipmentRows, currentPage, pageSize]);
   const equipmentHeaders = ['ID', 'Descrição', 'Modelo', 'Número de Série', 'Data da Compra', 'Ações'];
 
   useEffect(() => {
@@ -357,9 +334,9 @@ function EquipmentSection() {
         </Table>
         <div className="equipment-pagination">
           <div className="equipment-pagination__summary">
-            {mockEquipments.length === 0
+            {equipmentRows.length === 0
               ? 'Nenhum equipamento cadastrado'
-              : `Mostrando ${Math.min((currentPage - 1) * pageSize + 1, mockEquipments.length)}-${Math.min(currentPage * pageSize, mockEquipments.length)} de ${mockEquipments.length}`}
+              : `Mostrando ${Math.min((currentPage - 1) * pageSize + 1, equipmentRows.length)}-${Math.min(currentPage * pageSize, equipmentRows.length)} de ${equipmentRows.length}`}
           </div>
 
           <div className="equipment-pagination__controls">
@@ -855,50 +832,29 @@ function HistorySection({
 
 // Seção de Sensores
 function SensorsSection() {
-  const { loading, error, collectReading, createSensor, updateSensor, deleteSensor } = useSensors();
+  const { sensors, loading, error, collectReading, createSensor, updateSensor, deleteSensor } = useSensors();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingSensor, setEditingSensor] = useState<Sensor | null>(null);
   const [isReading, setIsReading] = useState(false);
 
-  const mockSensors: Sensor[] = [
-    {
-      sensorID: 'CRYO-001',
-      sensorType: 'Criogênico -80°C',
-      sensorModel: 'CryoSafe X80',
-      maintenanceStatus: 'Ativo',
-      lastCalibration: '2026-01-12',
-      nextCalibration: '2026-07-12',
-    },
-    {
-      sensorID: 'CRYO-002',
-      sensorType: 'Criogênico -80°C',
-      sensorModel: 'UltraFreeze Pro 80',
-      maintenanceStatus: 'Ativo',
-      lastCalibration: '2026-01-20',
-      nextCalibration: '2026-07-20',
-    },
-    {
-      sensorID: 'CRYO-003',
-      sensorType: 'Criogênico -80°C',
-      sensorModel: 'BioTemp CryoGuard',
-      maintenanceStatus: 'Ativo',
-      lastCalibration: '2026-02-02',
-      nextCalibration: '2026-08-02',
-    },
-  ];
+  const sensorRows = useMemo(() => (Array.isArray(sensors) ? sensors : []), [sensors]);
 
-  function handleManualReading(sensorId: string | number) {
+  async function handleManualReading(sensorId: string | number) {
     if (isReading) {
       return;
     }
 
     setIsReading(true);
 
-    setTimeout(() => {
-      const temperature = (-80 + (Math.random() * 4 - 2)).toFixed(1);
-      setIsReading(false);
+    try {
+      const reading = await collectReading(String(sensorId));
+      const temperature = (reading as any)?.temperatureValue ?? (reading as any)?.temperature ?? 'N/A';
       alert(`Leitura manual do sensor ${sensorId} realizada com sucesso: ${temperature}°C`);
-    }, 1000);
+    } catch (err: any) {
+      alert(err.message || 'Erro ao coletar leitura do sensor');
+    } finally {
+      setIsReading(false);
+    }
   }
 
   return (
@@ -925,8 +881,8 @@ function SensorsSection() {
             'Ações',
           ]}
         >
-          {mockSensors.length > 0 ? (
-            mockSensors.map((sensor) => {
+          {sensorRows.length > 0 ? (
+            sensorRows.map((sensor) => {
               const sensorId = sensor.sensorID || sensor._id || 'N/A';
               return (
             <tr key={sensorId}>
@@ -1208,45 +1164,10 @@ function PoliciesSection() {
   const [editingPolicy, setEditingPolicy] = useState<Policy | null>(null);
   const [activeLimits, setActiveLimits] = useState<Record<number, number>>({});
 
-  const mockPolicies = [
-    {
-      policyID: 1,
-      policyName: 'Política Criogênica',
-      targetTemperature: -80,
-      minThreshold: -86,
-      maxThreshold: -70,
-      hysteresis: 2.0,
-      temperatureUnit: '°C',
-      validFrom: '2023-05-15',
-      validTo: '2027-12-31',
-    },
-    {
-      policyID: 2,
-      policyName: 'Política Nitrogênio Líquido',
-      targetTemperature: -196,
-      minThreshold: -200,
-      maxThreshold: -150,
-      hysteresis: 5.0,
-      temperatureUnit: '°C',
-      validFrom: '2024-01-10',
-      validTo: '2027-12-31',
-    },
-    {
-      policyID: 3,
-      policyName: 'Política Refrigeração',
-      targetTemperature: 4,
-      minThreshold: 2,
-      maxThreshold: 8,
-      hysteresis: 0.5,
-      temperatureUnit: '°C',
-      validFrom: '2023-08-22',
-      validTo: '2027-12-31',
-    },
-  ];
+  const policyRows = useMemo(() => (Array.isArray(policies) ? policies : []), [policies]);
 
   useEffect(() => {
-    // Apenas processa políticas válidas com policyID definido
-    const validPolicies = mockPolicies.filter((p) => p && p.policyID);
+    const validPolicies = policyRows.filter((p) => p && p.policyID);
     validPolicies.forEach(async (policy) => {
       try {
         const limit = await getActiveLimit(policy.policyID, true);
@@ -1255,7 +1176,7 @@ function PoliciesSection() {
         console.error(`Erro ao obter limite para política ${policy.policyID}:`, err);
       }
     });
-  }, [policies, getActiveLimit]);
+  }, [policyRows, getActiveLimit]);
 
   return (
     <>
@@ -1270,7 +1191,6 @@ function PoliciesSection() {
       {error && <p style={{ color: 'var(--danger)' }}>Erro: {error}</p>}
 
       <Card>
-        {mockPolicies.length === 0 ? null : null}
         <Table
           headers={[
             'Política',
@@ -1283,7 +1203,7 @@ function PoliciesSection() {
             'Ações',
           ]}
         >
-          {mockPolicies.filter((policy) => policy && policy.policyID).length === 0 ? (
+          {policyRows.filter((policy) => policy && policy.policyID).length === 0 ? (
             <tr>
               <td colSpan={8} className="table-empty-state-cell">
                 <div className="table-empty-state">
@@ -1296,7 +1216,7 @@ function PoliciesSection() {
               </td>
             </tr>
           ) : (
-            mockPolicies
+            policyRows
               .filter((policy) => policy && policy.policyID)
               .map((policy) => (
               <tr key={`policy-${policy.policyID}`}>

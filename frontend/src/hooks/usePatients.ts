@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Patient } from '../types/models';
 import { patientService } from '../services/api';
+import { extractResponseItems } from '../api/response.adapters';
 import { notifyDashboardDataChanged } from '../utils/dashboardRefresh';
 import { onClientLogout } from '../utils/sessionCleanup';
 
@@ -52,7 +53,10 @@ function extractPatients(payload: unknown): Patient[] {
 
   let patientsData: Patient[] = [];
 
-  if (typeof nestedData === 'object' && nestedData && Array.isArray((nestedData as PatientsPayload).patients)) {
+  const adapterItems = extractResponseItems<Patient>(payload, ['patients']);
+  if (adapterItems.length > 0) {
+    patientsData = adapterItems;
+  } else if (typeof nestedData === 'object' && nestedData && Array.isArray((nestedData as PatientsPayload).patients)) {
     patientsData = (nestedData as PatientsPayload).patients as Patient[];
   } else if (Array.isArray(typedPayload?.patients)) {
     patientsData = typedPayload.patients as Patient[];

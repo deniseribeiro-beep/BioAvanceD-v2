@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { sampleTypeService } from '../services/api';
+import { extractResponseItems, normalizeMasterDataItem } from '../api/response.adapters';
 import { onClientLogout } from '../utils/sessionCleanup';
 
 export interface SampleType {
@@ -32,12 +33,7 @@ export function useSampleTypes() {
     try {
       setLoading(true);
       const response = await sampleTypeService.getAll();
-      const responseData = response.data as any;
-      const typesData = Array.isArray(responseData) 
-        ? responseData 
-        : (Array.isArray(responseData?.data) 
-          ? responseData.data 
-          : []);
+      const typesData = extractResponseItems<SampleType>(response).map((item) => normalizeMasterDataItem<SampleType>(item, ['sampleTypeID']));
       setSampleTypes(typesData);
       setError(null);
     } catch (err: any) {

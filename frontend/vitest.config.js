@@ -2,20 +2,33 @@ import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   test: {
-    environment: 'node',
-    passWithNoTests: true,
+    environment: 'jsdom',
+    globals: true,
+    passWithNoTests: false,
+    setupFiles: ['./tests/unit/setup.ts'],
     include: [
       'src/**/*.{test,spec}.{js,jsx,ts,tsx}',
-      'tests/**/*.{test,spec}.{js,jsx,ts,tsx}',
+      'tests/unit/**/*.{test,spec}.{js,jsx,ts,tsx}',
     ],
     exclude: [
       'node_modules/**',
       'tests/e2e/**',
-      'e2e/**',
+      'tests/support/**',
       'playwright-report/**',
       'test-results/**',
       'traces/**',
       'dist/**',
     ],
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'html', 'json', 'lcov'],
+      reportsDirectory: 'coverage',
+      thresholds: {
+        lines: 90,
+        statements: 90,
+        functions: 90,
+        branches: 85,
+      },
+    },
   },
 });

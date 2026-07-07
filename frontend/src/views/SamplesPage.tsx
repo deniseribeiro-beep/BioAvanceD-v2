@@ -7,6 +7,7 @@ import { useSamplesPage } from '../hooks/samples/useSamplesPage';
 import type { SampleWithId } from '../hooks/samples/useSamplesPage';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useAuth } from '../contexts/AuthContext';
+import { patientService, sampleService } from '../services/api';
 import './SamplesPage.css';
 
 export default function SamplesPage() {
@@ -38,6 +39,57 @@ export default function SamplesPage() {
 
   const canEdit = user?.roleName === 'Administrador' || user?.roleName === 'Coordenador';
 
+  const handleResendConsent = async (sample: SampleWithId) => {
+    const patientID = String(sample.patientID || (sample as any).patient?.patientID || '').trim();
+    if (!patientID) {
+      alert(t('samples.alerts.noValidPatientForConsent', 'Amostra sem paciente válido para envio de TCLE.'));
+      return;
+    }
+
+    try {
+      await patientService.resendConsentNotification(patientID);
+      refreshSamples();
+      alert(t('samples.alerts.consentResentSuccess', 'TCLE enviado/reenviado com sucesso.'));
+    } catch (error: any) {
+      alert(error?.response?.data?.message || error?.message || t('samples.alerts.consentResentError', 'Falha ao enviar/reenviar TCLE.'));
+    }
+  };
+
+  const handleAttachExternalDocument = async (sample: SampleWithId) => {
+    if (!canEdit) {
+      alert(t('samples.alerts.onlyCoordinatorAdminAttach', 'Somente Coordenador ou Administrador pode anexar documento externo.'));
+      return;
+    }
+
+    const note = window.prompt(t('samples.alerts.externalDocumentPrompt', 'Descreva o documento externo anexado (opcional):'), '') || '';
+    try {
+      await sampleService.update(sample.id, {
+        consentStatus: 'EXTERNAL_ATTACHED',
+        quarantineStatus: 'RELEASED',
+        availabilityStatus: 'AVAILABLE',
+        quarantineReason: null,
+        release_status: 'AVAILABLE',
+        importedBy: user?.userID || user?.id || user?.username || null,
+      } as any);
+      refreshSamples();
+      alert(note ? t('samples.alerts.externalDocumentAttachedWithNote', 'Documento externo anexado. {note}').replace('{note}', note) : t('samples.alerts.externalDocumentAttachedSuccess', 'Documento externo anexado e amostra liberada.'));
+    } catch (error: any) {
+      alert(error?.response?.data?.message || error?.message || t('samples.alerts.externalDocumentAttachError', 'Falha ao anexar documento externo.'));
+    }
+  };
+
+  const handleViewPending = (sample: SampleWithId) => {
+    const quarantineStatus = String((sample as any).quarantineStatus || '').toUpperCase() || 'N/A';
+    const quarantineReason = String((sample as any).quarantineReason || '').toUpperCase() || 'N/A';
+    const consentStatus = String((sample as any).consentStatus || '').toUpperCase() || 'N/A';
+    alert(
+      t('samples.alerts.pendingSummary', 'Pendência da amostra:\nStatus: {status}\nConsentimento: {consent}\nMotivo: {reason}')
+        .replace('{status}', quarantineStatus)
+        .replace('{consent}', consentStatus)
+        .replace('{reason}', quarantineReason),
+    );
+  };
+
   if (/^\/samples\/[^/]+$/.test(pathname)) {
     return <SampleDetailsPage />;
   }
@@ -51,7 +103,7 @@ export default function SamplesPage() {
           onClick={() => setActiveSection('inventory')}
           data-testid="samples-view-inventory-button"
         >
-          Inventário de Amostras
+          {t('samples.inventoryTab', 'Inventário de Amostras')}
         </button>
         <button
           type="button"
@@ -59,7 +111,7 @@ export default function SamplesPage() {
           onClick={() => setActiveSection('storage')}
           data-testid="samples-view-storage-button"
         >
-          Armazenagem Física
+          {t('samples.storageTab', 'Armazenagem Física')}
         </button>
       </div>
 
@@ -96,6 +148,9 @@ export default function SamplesPage() {
           refreshSamples();
           setExpandedStorageSample(null);
         }}
+        onResendConsent={handleResendConsent}
+        onAttachExternalDocument={handleAttachExternalDocument}
+        onViewPending={handleViewPending}
       />
       )}
     </>

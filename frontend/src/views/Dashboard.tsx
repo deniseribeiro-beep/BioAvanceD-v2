@@ -37,13 +37,15 @@ type ActiveTemperatureAlert = {
 export default function Dashboard() {
   const navigate = useNavigate();
   const { user } = useAuth();
-  const { t } = useLanguage();
+  const { t, language } = useLanguage();
+  const locale = language;
   const { patients, loading: loadingPatients, loadPatients } = usePatients();
   const { samples, loading: loadingSamples, loadSamples } = useSamples();
   const { results, loading: loadingResults, loadResults } = useResults();
   const { temperatures, loading: loadingTemperatures, viewControl } = useTemperature();
   const [consentQueueStats, setConsentQueueStats] = useState<{ waiting: number; delayed: number; active: number; failed: number; totalQueued: number; available: boolean } | null>(null);
   const [loadingConsentQueue, setLoadingConsentQueue] = useState(false);
+  // Telemetria demo mantida para visualizacao local enquanto sensores reais estao desativados.
   const [telemetryData, setTelemetryData] = useState<Array<{ time: string; sensor1: number; sensor2: number; sensor3: number }>>([
     { time: '10:01:00', sensor1: -80.4, sensor2: -79.3, sensor3: -81.1 },
     { time: '10:03:00', sensor1: -80.8, sensor2: -78.9, sensor3: -80.6 },
@@ -66,7 +68,7 @@ export default function Dashboard() {
         const forceAnomaly = nextIndex % 10 === 0;
         const anomalySensor = forceAnomaly ? Math.floor(Math.random() * 3) : -1;
         const anomalyTriggered = forceAnomaly || Math.random() < 0.08;
-        const time = new Date().toLocaleTimeString('pt-BR', { hour12: false });
+        const time = new Date().toLocaleTimeString(locale, { hour12: false });
 
         const nextEntry = {
           time,
@@ -94,9 +96,9 @@ export default function Dashboard() {
     const now = Date.now();
 
     const sensorEntries = [
-      { key: 'sensor1', label: 'Sensor 1', temperature: latest.sensor1 },
-      { key: 'sensor2', label: 'Sensor 2', temperature: latest.sensor2 },
-      { key: 'sensor3', label: 'Sensor 3', temperature: latest.sensor3 },
+      { key: 'sensor1', label: t('dashboard.sensor1', 'Sensor 1'), temperature: latest.sensor1 },
+      { key: 'sensor2', label: t('dashboard.sensor2', 'Sensor 2'), temperature: latest.sensor2 },
+      { key: 'sensor3', label: t('dashboard.sensor3', 'Sensor 3'), temperature: latest.sensor3 },
     ];
 
     const criticalAlerts = sensorEntries
@@ -244,11 +246,11 @@ export default function Dashboard() {
     });
   }, []);
 
-  const chartLegend = [
-    { label: 'Sensor 1', color: '#2563eb' },
-    { label: 'Sensor 2', color: '#16a34a' },
-    { label: 'Sensor 3', color: '#dc2626' },
-  ];
+  const chartLegend = useMemo(() => ([
+    { label: t('dashboard.sensor1', 'Sensor 1'), color: '#2563eb' },
+    { label: t('dashboard.sensor2', 'Sensor 2'), color: '#16a34a' },
+    { label: t('dashboard.sensor3', 'Sensor 3'), color: '#dc2626' },
+  ]), [t]);
 
   const isAdmin = user?.roleName === 'Administrador' || user?.accessType === 4;
   const activeTemperatureAlertsCount = activeAlerts.length;
@@ -412,12 +414,12 @@ export default function Dashboard() {
           className="temperature-card"
         >
           <div className="temperature-card-header">
-            <h2 className="temperature-card-title">Gráfico de Temperatura</h2>
-            <p className="temperature-card-subtitle">Monitoramento térmico contínuo</p>
+            <h2 className="temperature-card-title">{t('dashboard.temperatureChartTitle', 'Gráfico de Temperatura')}</h2>
+            <p className="temperature-card-subtitle">{t('dashboard.temperatureChartSubtitle', 'Monitoramento térmico contínuo')}</p>
           </div>
           <div className="temperature-chart-slot">
             <div className="temperature-chart-svg-wrap">
-              <svg viewBox={`0 0 ${chartWidth} ${chartHeight}`} role="img" aria-label="Gráfico de temperatura em tempo real">
+              <svg viewBox={`0 0 ${chartWidth} ${chartHeight}`} role="img" aria-label={t('dashboard.temperatureChartAria', 'Gráfico de temperatura em tempo real')}>
                 <defs>
                   <linearGradient id="chartAreaGradient" x1="0" x2="0" y1="0" y2="1">
                     <stop offset="0%" stopColor="rgba(255,255,255,0.95)" />
@@ -494,7 +496,7 @@ export default function Dashboard() {
           <Card
             className="side-card"
           >
-            <h3 className="side-card-title">Alertas de Temperatura Ativos</h3>
+            <h3 className="side-card-title">{t('dashboard.activeTemperatureAlertsTitle', 'Alertas de Temperatura Ativos')}</h3>
             {activeAlerts.length > 0 ? (
               <div className="alert-list">
                 {activeAlerts.map((alert) => (
@@ -507,7 +509,7 @@ export default function Dashboard() {
                 ))}
               </div>
             ) : (
-              <p className="side-card-text">Nenhum alerta ativo.</p>
+              <p className="side-card-text">{t('dashboard.noActiveAlerts', 'Nenhum alerta ativo.')}</p>
             )}
           </Card>
 
@@ -515,26 +517,26 @@ export default function Dashboard() {
             <Card
               className="side-card consent-queue-card"
             >
-              <h3 className="side-card-title">Fila de Consentimentos</h3>
+              <h3 className="side-card-title">{t('dashboard.consentQueueTitle', 'Fila de Consentimentos')}</h3>
               {loadingConsentQueue ? (
-                <p className="side-card-text">Carregando...</p>
+                <p className="side-card-text">{t('dashboard.queueLoading', 'Carregando...')}</p>
               ) : consentQueueStats?.available ? (
                 <div className="consent-queue-metrics">
                   <div>
-                    <span className="consent-queue-label">Na fila</span>
+                    <span className="consent-queue-label">{t('dashboard.queueWaiting', 'Na fila')}</span>
                     <strong>{consentQueueStats.totalQueued ?? 0}</strong>
                   </div>
                   <div>
-                    <span className="consent-queue-label">Em envio</span>
+                    <span className="consent-queue-label">{t('dashboard.queueSending', 'Em envio')}</span>
                     <strong>{consentQueueStats.active ?? 0}</strong>
                   </div>
                   <div>
-                    <span className="consent-queue-label">Falhas</span>
+                    <span className="consent-queue-label">{t('dashboard.queueFailures', 'Falhas')}</span>
                     <strong>{consentQueueStats.failed ?? 0}</strong>
                   </div>
                 </div>
               ) : (
-                <p className="side-card-text">Fila indisponível (Redis não configurado).</p>
+                <p className="side-card-text">{t('dashboard.queueUnavailable', 'Fila indisponível (Redis não configurado).')}</p>
               )}
             </Card>
           )}

@@ -4,7 +4,6 @@ const fs = require('fs');
 const crypto = require('crypto');
 const ExcelJS = require('exceljs');
 const importLGPDService = require('../services/import-lgpd.service');
-const importPredictor = require('../services/ImportPredictor');
 const logService = require('../services/log.service');
 const logger = require('../utils/logger');
 const { sanitizePatientForLogs } = require('../utils/patientAnonymization');
@@ -314,47 +313,6 @@ class ImportLGPDController {
         success: false,
         error: 'Erro ao importar pacientes',
         message: errorMessage
-      });
-    }
-  }
-
-  async predictPatientsMapping(req, res) {
-    try {
-      const file = req.file;
-      if (!file) {
-        return res.status(400).json({ success: false, error: 'Arquivo não fornecido' });
-      }
-
-      if (!importLGPDService.validateFileFormat(file, 'patients')) {
-        importLGPDService.cleanupFile(file.path);
-        return res.status(400).json({
-          success: false,
-          error: 'Formato de arquivo inválido',
-          message: 'Apenas CSV, TXT ou Excel (.xlsx) são aceitos'
-        });
-      }
-
-      const rows = await importLGPDService.readFile(file.path, file.originalname, 'patients');
-      const firstRow = rows[0] || {};
-      const headers = Object.keys(firstRow || {});
-      const prediction = importPredictor.predict(headers, firstRow);
-
-      importLGPDService.cleanupFile(file.path);
-
-      return res.status(200).json({
-        success: true,
-        message: 'Mapeamento inteligente inferido com sucesso',
-        data: prediction
-      });
-    } catch (error) {
-      logger.error('Erro ao prever mapeamento inteligente:', error);
-      if (req.file) {
-        importLGPDService.cleanupFile(req.file.path);
-      }
-      return res.status(500).json({
-        success: false,
-        error: 'Erro ao prever mapeamento',
-        message: error.message || 'Erro desconhecido'
       });
     }
   }
