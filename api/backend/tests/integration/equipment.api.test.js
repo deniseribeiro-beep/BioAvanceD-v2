@@ -237,17 +237,15 @@ describe('POST /api/equipment validation and duplicate-ID paths', () => {
 });
 
 describe('GET /api/equipment/:id with an invalid ObjectId', () => {
-  it('returns 500 because new ObjectId() throws synchronously inside the try block', async () => {
-    // req.params.id = 'not-a-valid-id' cannot be cast to ObjectId; the thrown
-    // error is caught by the route's catch block and mapped to a 500 response
-    // (unlike PUT/DELETE which have their own try/catch around the ObjectId
-    // construction and fall back to numeric equipmentID lookup instead).
+  it('returns 400 "ID inválido" when id is neither a valid ObjectId nor parseable as a number', async () => {
+    // req.params.id = 'not-a-valid-id' cannot be cast to ObjectId and is not
+    // numeric either; GET falls back the same way PUT/DELETE already do.
     app.locals.db = createDbMock({ equipment: createCollectionMock() });
     const res = await request(app)
       .get('/api/equipment/not-a-valid-id')
       .set('Authorization', `Bearer ${makeToken(2)}`);
-    expect(res.status).toBe(500);
-    expect(res.body.success).toBe(false);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('ID inválido');
   });
 });
 

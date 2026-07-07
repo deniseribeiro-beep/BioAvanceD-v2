@@ -112,7 +112,22 @@ router.get('/:id', authenticate, async (req, res) => {
 
     const { ObjectId } = require('mongodb');
     const equipmentCollection = db.collection('equipment');
-    const equipment = await equipmentCollection.findOne({ _id: new ObjectId(req.params.id) });
+
+    let equipment = null;
+    try {
+      equipment = await equipmentCollection.findOne({ _id: new ObjectId(req.params.id) });
+    } catch (err) {
+      // Não é um ObjectId válido; tenta como equipmentID numérico
+      const equipmentID = parseInt(req.params.id, 10);
+      if (isNaN(equipmentID)) {
+        return res.status(400).json({
+          success: false,
+          error: 'ID inválido',
+          message: 'O ID fornecido não é válido'
+        });
+      }
+      equipment = await equipmentCollection.findOne({ equipmentID: equipmentID });
+    }
 
     if (!equipment) {
       // Registra tentativa de busca de equipamento inexistente
