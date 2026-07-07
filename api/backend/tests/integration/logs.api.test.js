@@ -313,6 +313,27 @@ describe('GET /api/logs/:id', () => {
     expect(findOne.mock.calls[0][0]._id.toString()).toBe(objId.toString());
   });
 
+  // Issue #72: an ObjectId-shaped id must fall back to a logId lookup when
+  // no document has that _id, otherwise a log whose logId happens to be a
+  // 24-hex-char string becomes permanently unreachable via GET /:id.
+  it('falls back to logId lookup when id is ObjectId-shaped but no _id matches', async () => {
+    const objIdLikeLogId = new ObjectId().toString();
+    const log = { logId: objIdLikeLogId, action: 'Z' };
+    const findOne = vi.fn()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(log);
+    const coll = createCollectionMock({ findOne });
+    app.locals.db = createDbMock({ logs: coll });
+
+    const res = await request(app)
+      .get(`/api/logs/${objIdLikeLogId}`)
+      .set('Authorization', `Bearer ${makeToken()}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ success: true, data: log });
+    expect(findOne).toHaveBeenCalledWith({ logId: objIdLikeLogId });
+  });
+
   it('returns 404 when no log is found', async () => {
     const coll = createCollectionMock({ findOne: vi.fn().mockResolvedValue(null) });
     app.locals.db = createDbMock({ logs: coll });

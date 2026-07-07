@@ -131,7 +131,7 @@ src/interface/routes/analysis-file.routes.js                   80.95 / 87.50
 src/interface/routes/result.routes.js                          80.97 / 54.54
 src/interface/routes/master-data.routes.js                     81.42 / 68.75
 src/models/SampleMovement.js                                   81.57 / 82.71
-src/interface/routes/logs.routes.js                            81.63 / 61.53
+src/interface/routes/logs.routes.js                            82.17 / 61.19
 src/services/security.service.js                               82.51 / 72.26
 src/utils/collectionResolver.js                                82.69 / 78.94
 src/config/redis.js                                            83.01 / 72.72
