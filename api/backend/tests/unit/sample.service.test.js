@@ -603,7 +603,7 @@ describe('sample.service', () => {
       await expect(
         sampleService.returnSample(db, 'sample-1', {
           returnResponsible: 'Jane Doe',
-          condition: 'Íntegra', // Portuguese value from the UI copy -- see bug note
+          condition: 'Íntegra', // Portuguese value from the UI copy; only English literals are valid
           returnType: 'Total'
         })
       ).rejects.toThrow(/Condição da amostra é obrigatória/);
@@ -613,13 +613,6 @@ describe('sample.service', () => {
       const db = makeDb();
       db.collections.samples.findOne.mockResolvedValue(withdrawnSample());
 
-      // NOTE (bug, see report): the service's "condition !== 'Íntegra'" check
-      // compares against the Portuguese literal 'Íntegra', but the only valid
-      // `condition` values accepted are the English ones from
-      // SampleMovementModel.RETURN_CONDITIONS ('intact', 'partially_compromised',
-      // 'unusable'). Because 'intact' !== 'Íntegra', observations end up being
-      // required unconditionally for every return, contrary to the documented
-      // intent ("Observações obrigatórias se condição não for íntegra").
       const result = await sampleService.returnSample(db, 'sample-1', {
         returnResponsible: 'Jane Doe',
         condition: 'intact',
@@ -632,29 +625,23 @@ describe('sample.service', () => {
       expect(result.newAvailableQuantity).toBe(10);
     });
 
-    it('requires observations even for the "intact" condition (condition-check/locale mismatch bug)', async () => {
+    it('does not require observations for the "intact" condition', async () => {
       const db = makeDb();
       db.collections.samples.findOne.mockResolvedValue(withdrawnSample());
 
-      await expect(
-        sampleService.returnSample(db, 'sample-1', {
-          returnResponsible: 'Jane Doe',
-          condition: 'intact',
-          returnType: 'Total'
-        })
-      ).rejects.toThrow(/Observações são obrigatórias/);
+      const result = await sampleService.returnSample(db, 'sample-1', {
+        returnResponsible: 'Jane Doe',
+        condition: 'intact',
+        returnType: 'Total'
+      });
+
+      expect(result.success).toBe(true);
     });
 
-    it('BUG: restocks the available quantity even when the condition is "unusable"', async () => {
+    it('does not restock the available quantity when the condition is "unusable"', async () => {
       const db = makeDb();
       db.collections.samples.findOne.mockResolvedValue(withdrawnSample());
 
-      // NOTE (bug, see report): the "don't restock if unusable" branch compares
-      // `returnData.condition !== 'Inutilizada'` (Portuguese), but the only
-      // valid English value is 'unusable'. Since 'unusable' !== 'Inutilizada',
-      // this branch is unreachable and quantity is restocked regardless of
-      // condition -- i.e. unusable/destroyed material re-enters available
-      // inventory.
       const result = await sampleService.returnSample(db, 'sample-1', {
         returnResponsible: 'Jane Doe',
         condition: 'unusable',
@@ -662,7 +649,7 @@ describe('sample.service', () => {
         returnType: 'Total'
       });
 
-      expect(result.newAvailableQuantity).toBe(10); // should be 4 if the guard worked
+      expect(result.newAvailableQuantity).toBe(4);
     });
 
     it('rejects a partial return quantity exceeding the pending amount', async () => {
