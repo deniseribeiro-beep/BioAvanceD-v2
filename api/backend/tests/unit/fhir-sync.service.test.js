@@ -20,12 +20,7 @@ describe('FhirSyncService mapping helpers (to FHIR)', () => {
     expect(fhirSyncService.mapSampleStatusToFhir('Expired')).toBe('unsatisfactory');
     expect(fhirSyncService.mapSampleStatusToFhir('Withdrawn')).toBe('unavailable');
     expect(fhirSyncService.mapSampleStatusToFhir('Depleted')).toBe('unavailable');
-    // NOTE: because the 'available' substring check runs first, any status whose
-    // lowercased form contains "available" (e.g. "unavailable" itself, since
-    // "available" is a substring of "unavailable") is matched by the *first*
-    // branch and never reaches the unavailable/unsatisfactory branches below.
-    // This documents the current (buggy) behavior rather than the intended one.
-    expect(fhirSyncService.mapSampleStatusToFhir('Unavailable')).toBe('available');
+    expect(fhirSyncService.mapSampleStatusToFhir('Unavailable')).toBe('unavailable');
     expect(fhirSyncService.mapSampleStatusToFhir('SomethingElse')).toBe('available');
     expect(fhirSyncService.mapSampleStatusToFhir(undefined)).toBe('available');
   });

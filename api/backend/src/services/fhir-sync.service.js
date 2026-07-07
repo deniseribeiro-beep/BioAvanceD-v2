@@ -16,9 +16,9 @@ class FhirSyncService {
 
   mapSampleStatusToFhir(status) {
     const normalized = String(status || '').toLowerCase();
-    if (normalized.includes('available')) return 'available';
     if (normalized.includes('unusable') || normalized.includes('destroyed') || normalized.includes('expired')) return 'unsatisfactory';
     if (normalized.includes('withdrawn') || normalized.includes('depleted') || normalized.includes('unavailable')) return 'unavailable';
+    if (normalized.includes('available')) return 'available';
     return 'available';
   }
 
