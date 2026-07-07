@@ -6,7 +6,6 @@ process.env.ENCRYPTION_KEY_ID = 'test-key-1';
 const patientService = require('../../src/services/patient.service');
 const fhirSyncService = require('../../src/services/fhir-sync.service');
 const notificationService = require('../../src/services/notification.service');
-const biomarkerXaiService = require('../../src/services/biomarker-xai.service');
 const patientBiomarkerTimeseriesService = require('../../src/services/patientBiomarkerTimeseries.service');
 
 function makeFakeCollection(overrides = {}) {
@@ -258,6 +257,34 @@ describe('PatientService.createPatient', () => {
     encryptSpy.mockRestore();
   });
 
+  it('encrypts alphaGal/lysoGb3 at rest even though PatientModel.create nests them under dadosEspecificos (#70)', async () => {
+    const patientsCollection = makeFakeCollection();
+    const consentTemplatesCollection = makeFakeCollection({
+      findOne: vi.fn().mockResolvedValue({ _id: '507f1f77bcf86cd799439011', name: 'Template' })
+    });
+    const db = makeFakeDb({ patients: patientsCollection, consent_templates: consentTemplatesCollection });
+
+    await patientService.createPatient(db, validPatientData({
+      alphaGal: 3.5,
+      lysoGb3: 1.2
+    }), {
+      skipConsentNotification: true,
+      skipBiomarkerArtifacts: true
+    });
+
+    const insertedDoc = patientsCollection.insertOne.mock.calls[0][0];
+
+    expect(insertedDoc.alphaGalEncrypted).toBeDefined();
+    expect(insertedDoc.lysoGb3Encrypted).toBeDefined();
+
+    const fabryEntry = (insertedDoc.dadosEspecificos || []).find((e) => e.tipo === 'Fabry');
+    // The plaintext values must not survive anywhere in the persisted document.
+    expect(fabryEntry?.dados?.alphaGal ?? null).toBeNull();
+    expect(fabryEntry?.dados?.lysoGb3 ?? null).toBeNull();
+    expect(insertedDoc.alphaGal ?? null).toBeNull();
+    expect(insertedDoc.lysoGb3 ?? null).toBeNull();
+  });
+
   it('rejects creation when an identifier conflict (duplicate CPF) exists', async () => {
     const patientsCollection = makeFakeCollection({
       findOne: vi.fn().mockResolvedValue({ _id: 'x', cpf: '52998224725' })
@@ -408,7 +435,6 @@ describe('PatientService.updatePatient', () => {
       findOne: vi.fn().mockResolvedValue({ patientID: '12345678', phone: '11999999999' })
     });
     const db = makeFakeDb({ patients: patientsCollection });
-    const xaiSpy = vi.spyOn(biomarkerXaiService, 'evaluate').mockReturnValue(null);
     const tsSpy = vi.spyOn(patientBiomarkerTimeseriesService, 'writePatientBiomarkers').mockResolvedValue(undefined);
 
     const result = await patientService.updatePatient(db, '12345678', { alphaGal: 2.2 });
@@ -419,7 +445,6 @@ describe('PatientService.updatePatient', () => {
     expect(firstUpdateCall[1].$set.alphaGal).toBeNull();
     expect(firstUpdateCall[1].$set.alphaGalEncrypted).toBeDefined();
 
-    xaiSpy.mockRestore();
     tsSpy.mockRestore();
   });
 

@@ -69,12 +69,40 @@ class PatientService {
     const doc = { ...patient };
     const encryptedFieldMap = this.getEncryptedFieldMap();
 
+    // PatientModel.create() folds alphaGal/lysoGb3 into dadosEspecificos[{tipo:'Fabry'}]
+    // instead of keeping them as top-level properties, so they must also be checked
+    // (and nulled out) there or they persist in plaintext (#70). Clone the array/entries
+    // being mutated so the caller's original patient object is left untouched.
+    if (Array.isArray(doc.dadosEspecificos)) {
+      doc.dadosEspecificos = doc.dadosEspecificos.map((entry) =>
+        entry && entry.dados ? { ...entry, dados: { ...entry.dados } } : entry
+      );
+    }
+    const fabryEntry = Array.isArray(doc.dadosEspecificos)
+      ? doc.dadosEspecificos.find((entry) => entry && entry.tipo === 'Fabry' && entry.dados)
+      : null;
+
     for (const [plainField, encryptedField] of Object.entries(encryptedFieldMap)) {
+      let plainValue;
+      let foundOnTop = false;
+
       if (Object.prototype.hasOwnProperty.call(doc, plainField)) {
-        const encryptedPayload = encryptValue(doc[plainField]);
-        if (encryptedPayload) {
-          doc[encryptedField] = encryptedPayload;
+        plainValue = doc[plainField];
+        foundOnTop = true;
+      } else if (fabryEntry && Object.prototype.hasOwnProperty.call(fabryEntry.dados, plainField)) {
+        plainValue = fabryEntry.dados[plainField];
+      } else {
+        continue;
+      }
+
+      const encryptedPayload = encryptValue(plainValue);
+      if (encryptedPayload) {
+        doc[encryptedField] = encryptedPayload;
+        if (foundOnTop) {
           doc[plainField] = null;
+        }
+        if (fabryEntry && Object.prototype.hasOwnProperty.call(fabryEntry.dados, plainField)) {
+          fabryEntry.dados[plainField] = null;
         }
       }
     }
