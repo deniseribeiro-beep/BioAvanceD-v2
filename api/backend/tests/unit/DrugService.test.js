@@ -264,14 +264,11 @@ describe('DrugService#searchAndCacheDrug', () => {
     expect(limit).toHaveBeenCalledWith(50);
   });
 
-  it('a limit of 0 falls back to the default (10) because of the "||" default, not clamped to 1', async () => {
-    // `Number(options.limit || DEFAULT_LIMIT)` treats 0 as falsy, so limit: 0
-    // silently becomes the default limit of 10 instead of being clamped to the
-    // documented floor of 1.
+  it('clamps a limit of 0 up to the documented floor of 1 (#71)', async () => {
     const { db, limit } = makeDb([]);
     const service = new DrugService(db);
     await service.searchAndCacheDrug('aspirin', { limit: 0 });
-    expect(limit).toHaveBeenCalledWith(10);
+    expect(limit).toHaveBeenCalledWith(1);
   });
 
   it('clamps a negative limit up to 1', async () => {
