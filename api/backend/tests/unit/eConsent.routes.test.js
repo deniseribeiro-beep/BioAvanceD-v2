@@ -10,10 +10,11 @@ const Sample = require('../../src/models/Sample');
 const connection = require('../../src/infrastructure/database/neo4j/connection');
 const router = require('../../src/routes/eConsent');
 
-function buildApp() {
+function buildApp(db) {
   const app = express();
   app.use(express.json());
   app.set('io', null);
+  app.locals.db = db;
   app.use('/e-consent', router);
   return app;
 }
@@ -60,19 +61,37 @@ describe('eConsent.routes GET /validate/:token', () => {
 
   // `PatientModel` (src/models/Patient.js) is a plain class with only static
   // utility helpers (isValidEmail, normalizePhone, validate, create, ...) — it
-  // has no `findOne`. The route's try/catch maps that thrown TypeError to a
-  // 401, so this endpoint returns "Token inválido ou expirado" for every
-  // request regardless of token validity. Filed as issue #81; asserting the
-  // actual (broken) behavior below rather than the intended one.
-  it('returns 401 even for a valid token, because PatientModel.findOne does not exist (issue #81)', async () => {
-    const app = buildApp();
+  // has no `findOne`. The route looks up the patient directly via
+  // req.app.locals.db instead (issue #81).
+  it('confirms PatientModel has no findOne (root cause of issue #81)', () => {
+    expect(PatientModel.findOne).toBeUndefined();
+  });
+
+  it('returns the patient and consents for a valid token', async () => {
+    const patient = { patientID: '12345678', name: 'Jane Doe', consents: [{ key: 'general', status: 'ACTIVE' }] };
+    const findOne = vi.fn().mockResolvedValue(patient);
+    const db = { collection: vi.fn().mockReturnValue({ findOne }) };
+    const app = buildApp(db);
     const token = signToken({ patientId: '12345678' });
 
     const res = await request(app).get(`/e-consent/validate/${token}`);
 
-    expect(PatientModel.findOne).toBeUndefined();
-    expect(res.status).toBe(401);
-    expect(res.body).toEqual({ error: 'Token inválido ou expirado' });
+    expect(db.collection).toHaveBeenCalledWith('patients');
+    expect(findOne).toHaveBeenCalledWith({ patientID: '12345678' });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ patient, consents: patient.consents });
+  });
+
+  it('returns 404 when the patient does not exist', async () => {
+    const findOne = vi.fn().mockResolvedValue(null);
+    const db = { collection: vi.fn().mockReturnValue({ findOne }) };
+    const app = buildApp(db);
+    const token = signToken({ patientId: 'no-such-patient' });
+
+    const res = await request(app).get(`/e-consent/validate/${token}`);
+
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: 'Paciente não encontrado' });
   });
 });
 
