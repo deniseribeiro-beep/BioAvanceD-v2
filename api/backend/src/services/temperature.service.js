@@ -49,11 +49,13 @@ class TemperatureService {
     try {
       const policiesCollection = db.collection('policies');
       const policyId = temperature.policyId || temperature.policyID;
-      
+
+      if (!policyId) {
+        return;
+      }
+
       // Busca por policyId (String) ou _id
-      const policy = await policiesCollection.findOne(
-        policyId ? { $or: [{ policyId }, { _id: policyId }] } : {}
-      );
+      const policy = await policiesCollection.findOne({ $or: [{ policyId }, { _id: policyId }] });
 
       if (!policy) {
         return;
