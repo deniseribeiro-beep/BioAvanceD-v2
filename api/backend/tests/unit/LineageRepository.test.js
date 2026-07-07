@@ -209,6 +209,15 @@ describe('LineageRepository', () => {
       await expect(repo.recordCustodyEvent({ eventType: 'MOVE' })).rejects.toThrow('sampleId obrigatório');
     });
 
+    it('throws when eventType is missing instead of writing a malformed eventId', async () => {
+      const session = makeSession();
+      const driver = makeDriver(session);
+      const repo = new LineageRepository(driver);
+
+      await expect(repo.recordCustodyEvent({ sampleId: 's1' })).rejects.toThrow('eventType obrigatório');
+      expect(session.run).not.toHaveBeenCalled();
+    });
+
     it('propagates errors from session.run and still closes session', async () => {
       const session = makeSession({ runImpl: vi.fn().mockRejectedValue(new Error('write failed')) });
       const driver = makeDriver(session);
