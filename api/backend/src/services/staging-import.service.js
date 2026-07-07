@@ -59,7 +59,7 @@ class StagingImportService {
       status: 'staged',
       totalRows: 0,
       processedRows: 0,
-      errors: [],
+      importErrors: [],
       rawData,
     });
 
@@ -124,7 +124,7 @@ class StagingImportService {
               updatedAt: new Date(),
             },
             $push: {
-              errors: {
+              importErrors: {
                 message: error.message,
                 occurredAt: new Date(),
               },

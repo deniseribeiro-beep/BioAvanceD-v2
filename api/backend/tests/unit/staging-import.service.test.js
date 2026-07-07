@@ -166,7 +166,7 @@ describe('staging-import.service', () => {
         status: 'staged',
         totalRows: 0,
         processedRows: 0,
-        errors: [],
+        importErrors: [],
       });
       expect(typeof createArg.jobId).toBe('string');
       expect(createArg.rawData).toMatchObject({
@@ -174,6 +174,21 @@ describe('staging-import.service', () => {
         originalName: 'data.csv',
       });
       expect(result).toBe(toObjectResult);
+    });
+
+    it('writes to a field that actually exists on the StagingImport schema (#43)', () => {
+      const doc = new StagingImport({
+        jobId: 'schema-check',
+        fileName: 'data.csv',
+        status: 'staged',
+        totalRows: 0,
+        processedRows: 0,
+        importErrors: [{ message: 'boom', occurredAt: new Date() }],
+        rawData: { storageType: 'filesystem' },
+      });
+
+      expect(doc.toObject().importErrors).toHaveLength(1);
+      expect(doc.toObject().importErrors[0].message).toBe('boom');
     });
   });
 
@@ -259,8 +274,8 @@ describe('staging-import.service', () => {
       expect(filterArg).toEqual({ jobId: 'job-fail' });
       expect(updateArg.$set.status).toBe('failed');
       expect(updateArg.$set.updatedAt).toBeInstanceOf(Date);
-      expect(updateArg.$push.errors.message).toBe('queue exploded');
-      expect(updateArg.$push.errors.occurredAt).toBeInstanceOf(Date);
+      expect(updateArg.$push.importErrors.message).toBe('queue exploded');
+      expect(updateArg.$push.importErrors.occurredAt).toBeInstanceOf(Date);
     });
 
     it('failure path: when createStagingImport itself throws, skips the failure-recording branch and rethrows', async () => {
