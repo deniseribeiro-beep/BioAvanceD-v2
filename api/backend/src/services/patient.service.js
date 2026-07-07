@@ -831,12 +831,14 @@ class PatientService {
 
       if (updateData.isDeceased !== undefined ||
         updateData.representativeName !== undefined ||
+        updateData.representativeEmail !== undefined ||
         updateData.representativeCpf !== undefined ||
         updateData.representativePhone !== undefined) {
         const existingPatient = await this.getPatient(db, patientID);
         const mergedPayload = {
           isDeceased: existingPatient?.isDeceased,
           representativeName: existingPatient?.representativeName,
+          representativeEmail: existingPatient?.representativeEmail,
           representativeCpf: existingPatient?.representativeCpf,
           representativePhone: existingPatient?.representativePhone,
           ...updateData
@@ -844,6 +846,7 @@ class PatientService {
         this.applyDeceasedRepresentativeRules(mergedPayload);
         updateData.isDeceased = mergedPayload.isDeceased;
         updateData.representativeName = mergedPayload.representativeName;
+        updateData.representativeEmail = mergedPayload.representativeEmail;
         updateData.representativeCpf = mergedPayload.representativeCpf;
         updateData.representativePhone = mergedPayload.representativePhone;
       }

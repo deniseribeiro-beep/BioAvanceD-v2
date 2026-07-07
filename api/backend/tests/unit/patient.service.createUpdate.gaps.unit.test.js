@@ -242,7 +242,7 @@ describe('PatientService.updatePatient additional branches', () => {
     tsSpy.mockRestore();
   });
 
-  it('rejects re-affirming isDeceased on an already-fully-populated representative because the merge drops representativeEmail (bug, issue #90)', async () => {
+  it('merges representativeEmail from the existing patient record when re-affirming isDeceased (issue #90)', async () => {
     const patientsCollection = makeFakeCollection({
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
       findOne: vi.fn().mockResolvedValue({
@@ -258,12 +258,10 @@ describe('PatientService.updatePatient additional branches', () => {
     const xaiSpy = vi.spyOn(biomarkerXaiService, 'evaluate').mockReturnValue(null);
     const tsSpy = vi.spyOn(patientBiomarkerTimeseriesService, 'writePatientBiomarkers').mockResolvedValue(undefined);
 
-    // Bug: updatePatient's deceased-merge only carries over representativeName/Cpf/Phone
-    // from the existing patient, not representativeEmail — so this throws even though
-    // the stored representative already has a valid email. See issue #90.
-    await expect(
-      patientService.updatePatient(db, '12345678', { isDeceased: true })
-    ).rejects.toThrow('Para paciente falecido, nome, e-mail, CPF e telefone do representante legal são obrigatórios');
+    await patientService.updatePatient(db, '12345678', { isDeceased: true });
+
+    const setPayload = patientsCollection.updateOne.mock.calls[0][1].$set;
+    expect(setPayload.representativeEmail).toBe('joao@example.com');
 
     xaiSpy.mockRestore();
     tsSpy.mockRestore();
