@@ -166,8 +166,10 @@ describe('POST /api/results/upload', () => {
     expect(res.status).toBe(403);
   });
 
-  it('BUG: enforceCommercialConsent runs before multer parses the multipart body, so sampleID is always undefined at consent-check time', async () => {
-    app.locals.db = createDbMock({});
+  it('resolves sampleID from the parsed multipart body when checking commercial consent', async () => {
+    const sampleDoc = { _id: new ObjectId(SAMPLE_OID) };
+    const amostrasColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(sampleDoc) });
+    app.locals.db = createDbMock({ amostras: amostrasColl, results: createCollectionMock() });
     const spy = vi.spyOn(consentValidator, 'validateAccess').mockResolvedValue(true);
 
     await request(app)
@@ -176,10 +178,13 @@ describe('POST /api/results/upload', () => {
       .field('sampleID', SAMPLE_OID)
       .attach('file', Buffer.from('%PDF-1.4 test'), 'test.pdf');
 
-    // Even though sampleID was sent in the multipart form, consent validation
-    // is invoked with `undefined` because it runs before resultUpload (multer)
-    // has had a chance to populate req.body from the multipart stream.
-    expect(spy).toHaveBeenCalledWith(undefined, 'uso_comercial');
+    // resultUpload (multer) now runs before enforceCommercialConsent, so
+    // req.body.sampleID is populated from the multipart stream by the time
+    // consent validation resolves it.
+    expect(spy).toHaveBeenCalledWith(SAMPLE_OID, 'uso_comercial');
+
+    const resultDir = path.join(__dirname, '../../src/storage/results', SAMPLE_OID);
+    if (fs.existsSync(resultDir)) fs.rmSync(resultDir, { recursive: true, force: true });
   });
 
   it('returns 403 when consent validation rejects the request', async () => {
