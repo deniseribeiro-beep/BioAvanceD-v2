@@ -596,17 +596,31 @@ describe('sample.service', () => {
       ).rejects.toThrow(/Responsável pela devolução é obrigatório/);
     });
 
-    it('rejects an invalid/unspecified condition', async () => {
+    it('rejects a genuinely invalid/unspecified condition', async () => {
       const db = makeDb();
       db.collections.samples.findOne.mockResolvedValue(withdrawnSample());
 
       await expect(
         sampleService.returnSample(db, 'sample-1', {
           returnResponsible: 'Jane Doe',
-          condition: 'Íntegra', // Portuguese value from the UI copy; only English literals are valid
+          condition: 'not-a-real-condition',
           returnType: 'Total'
         })
       ).rejects.toThrow(/Condição da amostra é obrigatória/);
+    });
+
+    it('accepts a PT-BR condition alias from the UI copy and normalizes it', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue(withdrawnSample());
+
+      const result = await sampleService.returnSample(db, 'sample-1', {
+        returnResponsible: 'Jane Doe',
+        condition: 'Íntegra',
+        returnType: 'Total'
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.condition).toBe('intact');
     });
 
     it('completes a total return with the "intact" condition (observations supplied)', async () => {
