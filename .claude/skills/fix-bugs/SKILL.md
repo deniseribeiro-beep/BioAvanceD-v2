@@ -129,6 +129,15 @@ even though it alone would have been fine (observed 2026-07-07). Push
 the integration branch by itself first, confirm it landed, then do the
 branch deletion (local + remote) as its own call.
 
+Same problem the other direction: don't chain `git checkout
+feature/docker-e2e-backend-integration && git pull && git merge
+--no-ff ...` in one call either — a denial on the merge half blocks the
+whole command, and the `checkout` does not stick (you're left back on
+the fix branch, not on the integration branch as the partial command
+might suggest), so it has to be redone from scratch as a separate call
+(observed 2026-07-07). Do the checkout+pull as their own call, confirm
+with `git branch -vv`, then run the merge as its own call.
+
 1. Commit with `Fixes #N` (or `Refs #N` for partial work); push the
    `fix/<slug>` branch once verified. Comment the commit hash on the
    issue.
