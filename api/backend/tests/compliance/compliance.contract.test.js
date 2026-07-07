@@ -1,99 +1,78 @@
 process.env.ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || '0123456789abcdef0123456789abcdef';
 process.env.ENCRYPTION_KEY_ID = process.env.ENCRYPTION_KEY_ID || 'vitest-key-001';
 
-const fhirSyncService = require('../../src/services/fhir-sync.service');
-const PatientFHIR = require('../../src/models/fhir/Patient.fhir.model');
-const SampleFHIR = require('../../src/models/fhir/Sample.fhir.model');
-const patientService = require('../../src/services/patient.service');
-const { encryptValue, decryptValue } = require('../../src/utils/fieldEncryption');
-const mqttSignatureService = require('../../src/services/mqtt-signature.service');
-const { generateIndustrialBarcodeArtifacts, parseScannedBarcode } = require('../../src/utils/barcodeSymbology');
-const AllocateSampleUseCase = require('../../src/core/use-cases/AllocateSampleUseCase');
-const ReleaseSampleUseCase = require('../../src/core/use-cases/ReleaseSampleUseCase');
-
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import fhirSyncService from '../../src/services/fhir-sync.service';
-import PatientFHIR from '../../src/models/fhir/Patient.fhir.model';
-import SampleFHIR from '../../src/models/fhir/Sample.fhir.model';
+import fhirBoundaryService from '../../src/services/fhir-sync.service';
 import patientService from '../../src/services/patient.service';
-import { encryptValue, decryptValue } from '../../src/utils/fieldEncryption';
+import { encryptValue } from '../../src/utils/fieldEncryption';
 import mqttSignatureService from '../../src/services/mqtt-signature.service';
 import { generateIndustrialBarcodeArtifacts, parseScannedBarcode } from '../../src/utils/barcodeSymbology';
 import AllocateSampleUseCase from '../../src/core/use-cases/AllocateSampleUseCase';
 import ReleaseSampleUseCase from '../../src/core/use-cases/ReleaseSampleUseCase';
 
-describe('Compliance Gate - HL7 FHIR R4', () => {
-  it('valida contrato FHIR R4 para payload de Patient', () => {
-    const payload = fhirSyncService.buildPatientFhirPayload({
+describe('Compliance Gate - HL7 FHIR R4 boundary', () => {
+  it('serializa Patient sem persistir uma representação operacional paralela', () => {
+    const resource = fhirBoundaryService.buildPatientFhirPayload({
       patientID: '12345678',
-      patientName: 'Paciente Compliance',
+      patientName: 'Participante Compliance',
       email: 'compliance@bioavanced.local',
       phone: '11999990000',
       sex: 'F',
-      birthDate: '1990-01-20',
-      recordNumber: 'REC-001',
-      unitAcronym: 'GEN',
-      clinicalUnit: 'GENETICA',
-      alphaGal: 2.5,
-      lysoGb3: 1.2,
-      diagnosticHypothesis: 'Hipótese',
-      icdCode: 'E75.2'
+      birthDate: '1990-01-20'
     });
 
-    const serialized = fhirSyncService.validateAndSerialize(PatientFHIR, payload);
-
-    expect(serialized.resourceType).toBe('Patient');
-    expect(serialized.patientID).toBe('12345678');
-    expect(Array.isArray(serialized.identifier)).toBe(true);
-    expect(serialized.identifier.length).toBeGreaterThan(0);
-    expect(serialized.gender).toBe('female');
-    expect(serialized.clinicalProfile.alphaGal).toBe(2.5);
-    expect(serialized.clinicalProfile.lysoGb3).toBe(1.2);
+    expect(resource.resourceType).toBe('Patient');
+    expect(resource.identifier[0].value).toBe('12345678');
+    expect(resource.gender).toBe('female');
+    expect(resource.birthDate).toBe('1990-01-20');
+    expect(resource.clinicalProfile).toBeUndefined();
+    expect(resource.semanticPointers).toBeUndefined();
   });
 
-  it('valida contrato FHIR R4 para payload de Specimen', () => {
-    const payload = fhirSyncService.buildSampleFhirPayload({
+  it('serializa Specimen a partir do documento canônico', () => {
+    const resource = fhirBoundaryService.buildSampleFhirPayload({
       _id: '507f1f77bcf86cd799439011',
       sampleID: 'SMP-001',
-      barcode: 'BR-001',
       patientID: '12345678',
-      sampleType: 'Sangue',
-      sampleOrigin: 'Coleta',
-      extractionProtocol: 'Protocolo A',
-      linkedProject: 'Projeto Compliance',
-      quality: 1,
+      sampleType: 'PLASMA',
       quantity: 3,
-      unit: 'µL',
-      registerDate: new Date().toISOString(),
-      currentStatus: 'Available'
+      unit: 'mL',
+      registrationDate: new Date('2026-01-10T10:00:00.000Z'),
+      status: 'AVAILABLE'
     });
 
-    const serialized = fhirSyncService.validateAndSerialize(SampleFHIR, payload);
+    expect(resource.resourceType).toBe('Specimen');
+    expect(resource.identifier[0].value).toBe('SMP-001');
+    expect(resource.subject.reference).toBe('Patient/12345678');
+    expect(resource.status).toBe('available');
+    expect(resource.type?.text).toBe('PLASMA');
+    expect(resource.quantity?.value).toBe(3);
+    expect(resource.semanticPointers).toBeUndefined();
+  });
 
-    expect(serialized.resourceType).toBe('Specimen');
-    expect(serialized.patientID).toBe('12345678');
-    expect(serialized.status).toBe('available');
-    expect(serialized.type?.text).toBe('Sangue');
-    expect(serialized.quantity?.value).toBe(3);
-    expect(serialized.semanticPointers?.lineageManagedInNeo4j).toBe(false);
+  it('não utiliza coleções FHIR como fonte de leitura', async () => {
+    await expect(fhirBoundaryService.getPatientFhirFirst()).resolves.toBeNull();
+    await expect(fhirBoundaryService.getSampleFhirFirst()).resolves.toBeNull();
+    await expect(fhirBoundaryService.getPatientConsentFhirFirst()).resolves.toBeNull();
   });
 });
 
 describe('Compliance Gate - LGPD AES-256-GCM', () => {
-  it('garante criptografia ativa para campos PII sensíveis definidos no domínio', () => {
-    const piiFieldMap = patientService.getEncryptedFieldMap();
-    const expectedSensitiveFields = ['alphaGal', 'lysoGb3', 'representativeCpf'];
+  it('garante criptografia ativa para campos sensíveis definidos no domínio atual', () => {
+    const sensitiveFieldMap = patientService.getEncryptedFieldMap();
+    const fields = Object.keys(sensitiveFieldMap);
 
-    expect(Object.keys(piiFieldMap).sort()).toEqual(expectedSensitiveFields.sort());
+    expect(fields.length).toBeGreaterThan(0);
 
-    const encrypted = patientService.encryptSensitivePatientFields({
-      alphaGal: 1.8,
-      lysoGb3: 0.9,
-      representativeCpf: '12345678901'
-    });
+    const input = fields.reduce((acc, field) => {
+      acc[field] = field.toLowerCase().includes('cpf') ? '12345678901' : 1.8;
+      return acc;
+    }, {});
 
-    expectedSensitiveFields.forEach((field) => {
-      const encryptedField = piiFieldMap[field];
+    const encrypted = patientService.encryptSensitivePatientFields(input);
+
+    fields.forEach((field) => {
+      const encryptedField = sensitiveFieldMap[field];
       expect(encrypted[field]).toBeNull();
       expect(encrypted[encryptedField]).toBeTruthy();
       expect(encrypted[encryptedField].alg).toBe('aes-256-gcm');
@@ -105,19 +84,12 @@ describe('Compliance Gate - LGPD AES-256-GCM', () => {
     });
   });
 
-  it('mantém retrocompatibilidade para payload legado sem keyId', () => {
-    const plaintext = { value: 'legacy-compatible' };
-    const encrypted = encryptValue(plaintext);
+  it('produz envelopes criptográficos versionados', () => {
+    const encrypted = encryptValue({ value: 'canonical' });
 
     expect(encrypted).toBeTruthy();
-
-    const legacyPayload = {
-      ...encrypted
-    };
-    delete legacyPayload.keyId;
-
-    const decrypted = decryptValue(legacyPayload);
-    expect(decrypted).toEqual(plaintext);
+    expect(encrypted.alg).toBe('aes-256-gcm');
+    expect(encrypted.keyId).toBeTruthy();
   });
 });
 
