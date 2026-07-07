@@ -51,7 +51,7 @@ class UploadController {
         if (fs.existsSync(file.path)) {
           fs.unlinkSync(file.path);
         }
-        return res.status(validationResult.patientStatus === 'PENDING_CONSENT' ? 409 : 400).json({
+        return res.status(validationResult.patientStatus ? 409 : 400).json({
           success: false,
           error: validationResult.error,
           code: validationResult.patientStatus ? 'CONSENT_PENDING' : 'SAMPLE_NOT_FOUND'

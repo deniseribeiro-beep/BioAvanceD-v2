@@ -94,12 +94,14 @@ describe('upload.controller - uploadAnalysisFile', () => {
   });
 
   it('returns 409 with CONSENT_PENDING when validation fails due to pending consent, and cleans up temp file', async () => {
+    // patientStatus holds the patient's real status value (e.g. 'PENDING'), never the
+    // literal string 'PENDING_CONSENT' - see analysisValidation.service.js#validatePatientConsent.
     vi.spyOn(fs, 'existsSync').mockReturnValue(true);
     const unlinkSpy = vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {});
     vi.spyOn(analysisValidationService, 'validateUploadEligibility').mockResolvedValue({
       success: false,
       error: 'Consentimento pendente',
-      patientStatus: 'PENDING_CONSENT'
+      patientStatus: 'PENDING'
     });
 
     const req = {
