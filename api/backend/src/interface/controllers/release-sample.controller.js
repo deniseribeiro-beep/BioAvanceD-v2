@@ -43,7 +43,7 @@ function createReleaseSampleController() {
     } catch (error) {
       logger.error('[ReleaseSampleController] Erro ao liberar amostra:', error.message || error);
       const message = error?.message || 'Erro ao liberar amostra';
-      const statusCode = message.includes('não encontrada') ? 404 : 400;
+      const statusCode = message.includes('STORAGE_COLLISION') ? 409 : message.includes('não encontrada') ? 404 : 400;
 
       return res.status(statusCode).json({
         success: false,

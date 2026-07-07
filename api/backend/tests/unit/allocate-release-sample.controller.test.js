@@ -334,14 +334,14 @@ describe('release-sample.controller', () => {
     });
   });
 
-  it('returns 400 for a STORAGE_COLLISION-style message too, since release has no 409 branch', async () => {
+  it('returns 409 when execute rejects with a STORAGE_COLLISION message, matching allocate-sample.controller', async () => {
     vi.spyOn(ReleaseSampleUseCase.prototype, 'execute').mockRejectedValue(new Error('STORAGE_COLLISION: slot occupied'));
     const req = { app: { locals: { db: {} } }, params: { sampleId: 's1' }, headers: {} };
     const res = buildRes();
 
     await controller(req, res);
 
-    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.status).toHaveBeenCalledWith(409);
     expect(res.json).toHaveBeenCalledWith({
       success: false,
       error: 'RELEASE_ERROR',
