@@ -218,7 +218,10 @@ describe('POST /api/equipment validation and duplicate-ID paths', () => {
     expect(typeof res.body.data.equipmentID).toBe('number');
   });
 
-  it('returns 400 when the collection throws during insertOne (error branch)', async () => {
+  it('returns 500 when the collection throws during insertOne (infra failure, not a validation error)', async () => {
+    // insertOne failing is a DB-layer/infra failure, not a client validation
+    // error; it must not be conflated with the 400s returned above for bad
+    // input. Mirrors GET/PUT/DELETE, which already map unexpected errors to 500.
     const coll = createCollectionMock({
       findOne: vi.fn().mockResolvedValue(null),
       insertOne: vi.fn().mockRejectedValue(new Error('insert failed')),
@@ -231,7 +234,7 @@ describe('POST /api/equipment validation and duplicate-ID paths', () => {
       .post('/api/equipment')
       .set('Authorization', `Bearer ${makeToken(3)}`)
       .send({ equipmentDescription: 'desc', equipmentID: 99 });
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(500);
     expect(res.body.message).toBe('insert failed');
   });
 });

@@ -248,7 +248,7 @@ router.post('/', authenticate, requirePermission('createPatient'), async (req, r
     });
   } catch (error) {
     logger.error('Erro ao criar equipamento:', error.message);
-    return res.status(400).json({
+    return res.status(500).json({
       success: false,
       error: 'Erro ao criar equipamento',
       message: error.message
