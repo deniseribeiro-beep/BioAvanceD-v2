@@ -72,8 +72,14 @@ share `node_modules`.
 
 - Create a branch per logical unit of work **before the first Edit/Write
   call**, not just before the first commit. Never work directly on
-  `main`. Existing naming: `feature/<slug>` (e.g.
-  `feature/docker-e2e-backend-integration`); use `test/<slug>` for
+  `main`. **`main` is currently frozen — do not branch off it, merge
+  into it, or push to it for any reason until Dennis lifts the freeze.**
+  Base new branches off `feature/docker-e2e-backend-integration` instead
+  (it's ahead of `main` and carries the in-flight test-loop/fix-bugs
+  work, e.g. the `patient.service.createUpdate.gaps` test file backing
+  issue #90 — confirmed 2026-07-07 after a fix branch was accidentally
+  cut from `main` and had to be redone). Existing naming: `feature/<slug>`
+  (e.g. `feature/docker-e2e-backend-integration`); use `test/<slug>` for
   test-loop slices if a new branch is needed, `fix/<slug>` for
   bug-fix work (see `fix-bugs`). Exception: maintenance of
   `.claude/skills/`, agent defs, and hooks (the workflow tooling itself)

@@ -68,10 +68,12 @@ One iteration = one issue, sized to finish in the iteration:
 Follow `bioavanced-conventions` git hygiene: branch before the first
 Edit/Write. Use `fix/<slug>` (e.g. `fix/patient-service-null-dob`) off
 the branch the bug lives on — usually the active feature branch if the
-bug was found there, otherwise `main`'s tip. Ask Dennis if unsure which
-base he wants; never work on `main` directly. Small related fixes may
-share one `fix/` branch as separate commits, but don't mix unrelated
-subsystems.
+bug was found there. **`main` is currently frozen** (see
+`bioavanced-conventions`) — do not base a fix branch off `main`'s tip;
+use `feature/docker-e2e-backend-integration` instead unless the bug's
+test lives on a different branch. Ask Dennis if unsure which base he
+wants; never work on `main` directly. Small related fixes may share one
+`fix/` branch as separate commits, but don't mix unrelated subsystems.
 
 ## Doing the fix — reproduce first
 
