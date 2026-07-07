@@ -5,6 +5,7 @@ import ProtectedRoute from './components/ProtectedRoute';
 import './App.css';
 
 const EConsentPage = lazy(() => import('./pages/patient/EConsentPage'));
+const EConsentImportPage = lazy(() => import('./pages/patient/EConsentImportPage'));
 const EConsentLinkPanel = lazy(() => import('./pages/patient/EConsentLinkPanel'));
 
 const LoginPage = lazy(() => import('./views/LoginPage'));
@@ -53,6 +54,7 @@ function App() {
         <Routes>
           <Route path="/patient/e-consent" element={<EConsentLinkPanel />} />
           <Route path="/patient/e-consent/:token" element={<EConsentPage />} />
+          <Route path="/patient/e-consent/import/:token" element={<EConsentImportPage />} />
           <Route
             path="/next/intake"
             element={

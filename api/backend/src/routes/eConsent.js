@@ -78,6 +78,44 @@ router.post('/update', async (req, res) => {
   }
 });
 
+router.get('/import/fhir/consent/:token', async (req, res) => {
+  try {
+    const result = await require('../services/fhir-import-staging.service').validateImportConsentToken(req.app.locals.db, req.params.token);
+    return res.json({
+      success: true,
+      batchId: String(result.record.batchId || ''),
+      recordId: String(result.record._id || ''),
+      patientId: String(result.record.normalized?.patientID || ''),
+      patientName: String(result.record.normalized?.patientName || ''),
+      patientEmail: String(result.record.normalized?.patientEmail || ''),
+      status: result.record.status,
+      consentSigned: Boolean(result.record.normalized?.consentSigned),
+      consentTracking: result.record.consentTracking || null,
+    });
+  } catch (err) {
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Erro ao validar consentimento de importação' });
+  }
+});
+
+router.post('/import/fhir/consent/:token/accept', async (req, res) => {
+  try {
+    const result = await require('../services/fhir-import-staging.service').acceptImportConsentToken(req.app.locals.db, req.params.token);
+    return res.json({
+      success: true,
+      batchId: String(result.record.batchId || ''),
+      recordId: String(result.record._id || ''),
+      status: result.record.status,
+      consentSigned: Boolean(result.record.normalized?.consentSigned),
+      consentTracking: result.record.consentTracking || null,
+      quarantineStatus: result.record.quarantineStatus || null,
+      quarantineReason: result.record.quarantineReason || null,
+      availabilityStatus: result.record.availabilityStatus || null,
+    });
+  } catch (err) {
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Erro ao aceitar consentimento de importação' });
+  }
+});
+
 // List all patients with PENDING_CONSENT for a given TCLE (policy/template ID)
 router.get('/consent-policies/:id/pending-patients', authenticate, requireRole(3, 4), consentController.getPendingPatientsForPolicy.bind(consentController));
 router.post('/consent-templates', authenticate, requireRole(4), consentController.createTemplate.bind(consentController));

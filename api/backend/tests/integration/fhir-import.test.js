@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
+const jwt = require('jsonwebtoken');
 const fhirImportStagingService = require('../../src/services/fhir-import-staging.service');
 const notificationService = require('../../src/services/NotificationService');
 const qualityDomain = require('../../src/services/quality-domain.service');
@@ -174,6 +175,7 @@ describe('FHIR import staging', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     db = createDb();
+    process.env.CONSENT_SECRET = 'test-consent-secret';
     vi.spyOn(notificationService, 'sendConsentEmail').mockResolvedValue({
       success: true,
       provider: 'resend',
@@ -445,6 +447,16 @@ describe('FHIR import staging', () => {
 
     const sent = await fhirImportStagingService.sendConsents(db, staged.batch._id, { userID: 'admin' });
     expect(notificationService.sendConsentEmail).toHaveBeenCalledTimes(1);
+    expect(notificationService.sendConsentEmail.mock.calls[0][1]).toContain('/patient/e-consent/import/');
+    const sentUrl = notificationService.sendConsentEmail.mock.calls[0][1];
+    const sentToken = sentUrl.split('/patient/e-consent/import/')[1];
+    const decoded = jwt.verify(decodeURIComponent(sentToken), process.env.CONSENT_SECRET);
+    expect(decoded).toMatchObject({
+      scope: 'fhir-import-consent',
+      batchId: String(staged.batch._id),
+      recordId: String(db.collections.import_staging_records.docs[0]._id),
+      patientId: 'P-EMAIL',
+    });
     expect(sent.records[0].status).toBe('PENDING_CONSENT');
     expect(sent.records[0].consentTracking.provider).toBe('resend');
     expect(db.collections.audit_logs.docs.some((doc) => doc.action === 'FHIR_IMPORT_CONSENT_SENT')).toBe(true);
@@ -453,6 +465,106 @@ describe('FHIR import staging', () => {
     expect(commitWhilePending.committed).toBe(0);
     expect(db.collections.patients.updateOne).not.toHaveBeenCalled();
     expect(db.collections.samples.updateOne).not.toHaveBeenCalled();
+  });
+
+  it('rejeita token inválido ou expirado e impede uso de token canônico no staging', async () => {
+    const bundle = {
+      resourceType: 'Bundle',
+      entry: [
+        {
+          resource: {
+            resourceType: 'Patient',
+            id: 'P-STAGING',
+            name: [{ text: 'Paciente Staging' }],
+            identifier: [{ value: 'DOC-STAGING' }],
+            telecom: [{ system: 'email', value: 'staging@example.org' }],
+          },
+        },
+        {
+          resource: {
+            resourceType: 'Specimen',
+            id: 'S-STAGING',
+            subject: { reference: 'Patient/P-STAGING' },
+            type: { text: 'SANGUE' },
+          },
+        },
+      ],
+    };
+
+    const staged = await fhirImportStagingService.stageBundle(db, bundle, { fileName: 'bundle.json' });
+    const consentResult = await fhirImportStagingService.sendConsents(db, staged.batch._id, { userID: 'admin' });
+    const goodToken = consentResult.records[0].consentTracking.token;
+
+    await expect(fhirImportStagingService.validateImportConsentToken(db, 'token-invalido')).rejects.toMatchObject({ statusCode: 401 });
+
+    const expiredToken = jwt.sign(
+      {
+        scope: 'fhir-import-consent',
+        batchId: String(staged.batch._id),
+        recordId: String(db.collections.import_staging_records.docs[0]._id),
+        patientId: 'P-STAGING',
+      },
+      process.env.CONSENT_SECRET,
+      { expiresIn: '-1s' }
+    );
+    await expect(fhirImportStagingService.validateImportConsentToken(db, expiredToken)).rejects.toMatchObject({ statusCode: 401 });
+
+    const canonicalToken = jwt.sign(
+      {
+        scope: 'fhir-consent',
+        batchId: String(staged.batch._id),
+        recordId: String(db.collections.import_staging_records.docs[0]._id),
+        patientId: 'P-STAGING',
+      },
+      process.env.CONSENT_SECRET,
+      { expiresIn: '2h' }
+    );
+    await expect(fhirImportStagingService.validateImportConsentToken(db, canonicalToken)).rejects.toMatchObject({ statusCode: 401 });
+    await expect(fhirImportStagingService.acceptImportConsentToken(db, goodToken)).resolves.toMatchObject({ updated: true });
+  });
+
+  it('aceita consentimento apenas no staging, não grava pacientes/amostras definitivos antes do commit e mantém idempotência', async () => {
+    const bundle = {
+      resourceType: 'Bundle',
+      entry: [
+        {
+          resource: {
+            resourceType: 'Patient',
+            id: 'P-READY',
+            name: [{ text: 'Paciente Ready' }],
+            identifier: [{ value: 'DOC-READY' }],
+            telecom: [{ system: 'email', value: 'ready@example.org' }],
+          },
+        },
+        {
+          resource: {
+            resourceType: 'Specimen',
+            id: 'S-READY',
+            subject: { reference: 'Patient/P-READY' },
+            type: { text: 'PLASMA' },
+          },
+        },
+      ],
+    };
+
+    const staged = await fhirImportStagingService.stageBundle(db, bundle, { fileName: 'bundle.json' });
+    const consentResult = await fhirImportStagingService.sendConsents(db, staged.batch._id, { userID: 'admin' });
+    const token = consentResult.records[0].consentTracking.token;
+
+    const accepted = await fhirImportStagingService.acceptImportConsentToken(db, token);
+    expect(accepted.record.status).toBe('READY_TO_COMMIT');
+    expect(accepted.record.normalized.consentSigned).toBe(true);
+    expect(accepted.record.consentTracking.signedAt).toBeTruthy();
+    expect(accepted.record.quarantineStatus).toBe('RELEASED');
+    expect(accepted.record.quarantineReason).toBeNull();
+    expect(accepted.record.availabilityStatus).toBe('AVAILABLE');
+    expect(accepted.record.warnings.some((warning) => warning.field === 'consent')).toBe(false);
+    expect(db.collections.patients.docs).toHaveLength(0);
+    expect(db.collections.samples.docs).toHaveLength(0);
+
+    const acceptedAgain = await fhirImportStagingService.acceptImportConsentToken(db, token);
+    expect(acceptedAgain.updated).toBe(false);
+    expect(db.collections.import_staging_records.docs[0].status).toBe('READY_TO_COMMIT');
   });
 
   it('libera commit somente após TCLE assinado no staging', async () => {

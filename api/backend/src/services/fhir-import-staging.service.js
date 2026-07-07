@@ -1,5 +1,6 @@
 const { ObjectId } = require('mongodb');
 const crypto = require('crypto');
+const jwt = require('jsonwebtoken');
 const notificationService = require('./NotificationService');
 const qualityDomain = require('./quality-domain.service');
 const logger = require('../utils/logger');
@@ -299,9 +300,53 @@ function createConsentToken() {
   return crypto.randomBytes(24).toString('hex');
 }
 
-function buildImportConsentLink(record, token) {
+function getConsentSecret() {
+  const secret = String(process.env.CONSENT_SECRET || '').trim();
+  if (!secret) {
+    throw new Error('CONSENT_SECRET é obrigatório para fluxos de consentimento.');
+  }
+  return secret;
+}
+
+function buildImportConsentToken(record, batchId) {
+  return jwt.sign(
+    {
+      scope: 'fhir-import-consent',
+      batchId: String(batchId || ''),
+      recordId: String(record._id || ''),
+      patientId: String(record.normalized?.patientID || ''),
+    },
+    getConsentSecret(),
+    { expiresIn: '2h' }
+  );
+}
+
+function buildImportConsentLink(record, batchId, token) {
   const baseUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
-  return `${baseUrl}/patient/e-consent?token=${encodeURIComponent(token)}&importRecord=${encodeURIComponent(String(record._id || ''))}`;
+  return `${baseUrl}/patient/e-consent/import/${encodeURIComponent(token)}`;
+}
+
+function parseConsentToken(token) {
+  try {
+    return jwt.verify(token, getConsentSecret());
+  } catch (error) {
+    const err = new Error('Token inválido ou expirado');
+    err.statusCode = 401;
+    throw err;
+  }
+}
+
+function ensureImportConsentPayload(payload = {}) {
+  if (payload.scope !== 'fhir-import-consent') {
+    const error = new Error('Token inválido para consentimento de importação.');
+    error.statusCode = 401;
+    throw error;
+  }
+  return {
+    batchId: String(payload.batchId || '').trim(),
+    recordId: String(payload.recordId || '').trim(),
+    patientId: String(payload.patientId || '').trim(),
+  };
 }
 
 async function audit(db, action, payload = {}) {
@@ -662,8 +707,8 @@ async function sendConsents(db, batchIdRaw, options = {}) {
       continue;
     }
 
-    const token = createConsentToken();
-    const consentLink = buildImportConsentLink(record, token);
+    const token = buildImportConsentToken(record, batchId);
+    const consentLink = buildImportConsentLink(record, batchId, token);
 
     try {
       const emailResult = await notificationService.sendConsentEmail(
@@ -681,6 +726,10 @@ async function sendConsents(db, batchIdRaw, options = {}) {
 
       const consentTracking = {
         token,
+        tokenScope: 'fhir-import-consent',
+        batchId: String(batchId),
+        recordId: String(record._id),
+        patientId: String(normalized.patientID || ''),
         sentAt: new Date(),
         sentBy: options.userID || null,
         email: normalized.patientEmail,
@@ -736,6 +785,81 @@ async function sendConsents(db, batchIdRaw, options = {}) {
 
   const refreshed = await refreshBatchCounts(db, batchId);
   return { ...refreshed, consentResults: results };
+}
+
+async function validateImportConsentToken(db, tokenRaw) {
+  const token = String(tokenRaw || '').trim();
+  const payload = parseConsentToken(token);
+  const { batchId, recordId, patientId } = ensureImportConsentPayload(payload);
+  const batch = await collection(db, 'import_batches').findOne({ _id: toObjectId(batchId) });
+  const record = await collection(db, 'import_staging_records').findOne({ _id: toObjectId(recordId), batchId: toObjectId(batchId) });
+
+  if (!batch || !record || String(record.normalized?.patientID || '') !== patientId) {
+    const error = new Error('Registro FHIR de importação não encontrado.');
+    error.statusCode = 404;
+    throw error;
+  }
+
+  return {
+    batch,
+    record,
+    tokenPayload: payload,
+  };
+}
+
+async function acceptImportConsentToken(db, tokenRaw) {
+  const token = String(tokenRaw || '').trim();
+  const { batch, record, tokenPayload } = await validateImportConsentToken(db, token);
+  const staging = collection(db, 'import_staging_records');
+  const now = new Date();
+
+  if (record.normalized?.consentSigned && record.status === STATUS.READY_TO_COMMIT) {
+    return { batch, record, tokenPayload, updated: false };
+  }
+
+  const updatedRecord = {
+    ...record,
+    normalized: {
+      ...record.normalized,
+      consentSigned: true,
+    },
+    consentTracking: {
+      ...(record.consentTracking || {}),
+      signedAt: now,
+    },
+    consentStatus: 'SIGNED',
+    quarantineStatus: 'RELEASED',
+    quarantineReason: null,
+    availabilityStatus: 'AVAILABLE',
+    warnings: (Array.isArray(record.warnings) ? record.warnings : []).filter((warning) => String(warning?.field || '') !== 'consent'),
+    status: STATUS.READY_TO_COMMIT,
+    updatedAt: now,
+  };
+
+  await staging.updateOne(
+    { _id: record._id, batchId: record.batchId },
+    {
+      $set: {
+        normalized: updatedRecord.normalized,
+        consentTracking: updatedRecord.consentTracking,
+        consentStatus: updatedRecord.consentStatus,
+        quarantineStatus: updatedRecord.quarantineStatus,
+        quarantineReason: updatedRecord.quarantineReason,
+        availabilityStatus: updatedRecord.availabilityStatus,
+        warnings: updatedRecord.warnings,
+        status: updatedRecord.status,
+        updatedAt: updatedRecord.updatedAt,
+      },
+    }
+  );
+  await audit(db, 'FHIR_IMPORT_CONSENT_SIGNED', {
+    batchId: record.batchId,
+    recordId: record._id,
+    patientID: record.normalized?.patientID || null,
+  });
+
+  const refreshedRecord = await staging.findOne({ _id: record._id, batchId: record.batchId });
+  return { batch, record: refreshedRecord || updatedRecord, tokenPayload, updated: true };
 }
 
 async function getConsentStatus(db, batchIdRaw) {
@@ -918,6 +1042,8 @@ module.exports = {
   validateBatch,
   sendConsents,
   getConsentStatus,
+  validateImportConsentToken,
+  acceptImportConsentToken,
   commitBatch,
   attachExternalDocument,
   normalizeEntries,
