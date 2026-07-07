@@ -168,22 +168,20 @@ describe('ImportService.importPatients (JSON)', () => {
 });
 
 describe('ImportService.importPatients (CSV)', () => {
-  // NOTE: documenting a real bug, not asserting desired behavior - parsePatientCSV
-  // never maps email/consentTemplateId/cpf/recordNumber (see parsePatientCSV tests
-  // and issue #87), so PatientModel.validate always rejects a CSV-parsed row even
-  // when the source CSV supplies those columns.
-  it('fails model validation for every CSV row because parsePatientCSV drops email/consentTemplateId/cpf (known bug, issue #87)', async () => {
+  it('successfully imports a CSV row with email/consentTemplateId/cpf mapped (fixed, issue #87)', async () => {
     const filePath = writeTmpFile('patients.csv', 'patientName,birthDate,sex,email,consentTemplateId,cpf\nJoão Souza,1990-01-01,M,joao@example.com,tcle-1,98765432100\n');
     const collection = makePatientsCollection();
 
     const result = await importService.importPatients({ collection: () => collection }, { path: filePath, originalname: 'patients.csv' });
 
-    expect(result.success).toBe(0);
-    expect(result.errors[0].errors).toEqual(expect.arrayContaining([
-      expect.stringContaining('consentTemplateId'),
-      expect.stringContaining('Email'),
-    ]));
-    expect(collection.inserted).toHaveLength(0);
+    expect(result.success).toBe(1);
+    expect(result.errors).toHaveLength(0);
+    expect(collection.inserted).toHaveLength(1);
+    expect(collection.inserted[0]).toMatchObject({
+      email: 'joao@example.com',
+      consentTemplateId: 'tcle-1',
+      cpf: '98765432100',
+    });
   });
 
   it('records an error for a CSV row that fails model validation', async () => {
