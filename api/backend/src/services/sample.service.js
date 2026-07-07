@@ -624,7 +624,7 @@ class SampleService {
       }
 
       // Observações obrigatórias se condição não for íntegra
-      if (returnData.condition !== 'Íntegra' && (!returnData.observations || returnData.observations.trim() === '')) {
+      if (returnData.condition !== SampleMovementModel.RETURN_CONDITIONS.INTACT && (!returnData.observations || returnData.observations.trim() === '')) {
         throw new Error('Observações são obrigatórias quando a condição não é Íntegra');
       }
 
@@ -647,7 +647,7 @@ class SampleService {
       let newTotalReturned = totalReturned + returnQty;
       
       // Se condição é inutilizada, a quantidade não retorna ao estoque
-      if (returnData.condition !== 'Inutilizada') {
+      if (returnData.condition !== SampleMovementModel.RETURN_CONDITIONS.UNUSABLE) {
         newAvailableQty += returnQty;
       }
 
