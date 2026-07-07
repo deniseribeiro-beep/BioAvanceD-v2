@@ -20,6 +20,8 @@ relying on memory:
   `testing-conventions` for mechanics; parallel fan-out →
   `parallel-test-agents` (leaf workers launch as the `test-writer` agent
   type). Legacy-code judgment calls → `legacy`. Shipping → `ship-to-main`.
+  Pulling Denise's `main`-branch updates into our feature branch →
+  `merge-from-main`.
 - Every non-trivial task ends with the `wrap-up` skill *before* the
   final summary is drafted — the workflow skills invoke it as a step;
   treat it as blocking, including once per iteration in loops and when
