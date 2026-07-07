@@ -32,15 +32,10 @@ describe('PatientService.resolveClinicalUnitSnapshot', () => {
     expect(result).toEqual({ clinicalUnitId: null, clinicalUnit: null, unitAcronym: null });
   });
 
-  // BUG (unfiled — gh issue create blocked by harness permissions this session, flagged to Dennis):
-  // when clinicalUnit is omitted entirely (undefined, not null/''), the code's
-  // null/'' normalization check doesn't catch it, so String(undefined) becomes the
-  // literal "undefined" and is treated as a truthy unit name — the invalid-id throw
-  // is skipped and a bogus "UNDEFINED" unit is invented instead.
-  it('invents a bogus "UNDEFINED" clinical unit instead of throwing when clinicalUnitId is invalid and clinicalUnit is omitted', async () => {
+  it('throws when clinicalUnitId is invalid and clinicalUnit is omitted (#85)', async () => {
     const db = makeFakeDb();
-    const result = await patientService.resolveClinicalUnitSnapshot(db, { clinicalUnitId: 'not-an-object-id' });
-    expect(result).toEqual({ clinicalUnitId: null, clinicalUnit: 'UNDEFINED', unitAcronym: 'U' });
+    await expect(patientService.resolveClinicalUnitSnapshot(db, { clinicalUnitId: 'not-an-object-id' }))
+      .rejects.toThrow('clinicalUnitId inválido');
   });
 
   it('throws when clinicalUnitId is invalid and clinicalUnit is explicitly empty', async () => {
