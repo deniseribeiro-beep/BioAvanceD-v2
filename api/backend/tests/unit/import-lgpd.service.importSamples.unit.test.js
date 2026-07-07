@@ -64,6 +64,7 @@ function makeDb({ sampleTypeFound = true, sampleOriginFound = true, protocolFoun
   const amostrasCollection = {
     // Backs generateUniqueBarcode's own lookup for the last barcode of the year.
     find: vi.fn(() => ({ sort: () => ({ limit: () => ({ toArray: async () => [] }) }) })),
+    findOne: vi.fn().mockResolvedValue(null),
   };
 
   const collections = {
@@ -154,45 +155,41 @@ describe('ImportLGPDService.importSamples', () => {
     expect(result.errors[0].errors[0]).toMatch(/atc_code inválido/);
   });
 
-  // BUG (issue #84): `SampleModel` here is
-  // `require('../models/Sample')`, which exports the *mongoose Model*, not
-  // the hand-written validator class (attached separately as
-  // `SampleModel.SampleModel`). Calling `SampleModel.validate(sampleData)`
-  // therefore invokes mongoose's own async static `Model.validate`, which
-  // returns a Promise — so `!validation.isValid` is always `true` and
-  // `validation.errors` is always `undefined`. Every row is rejected
-  // regardless of actual validity, insertOne is never reached, and the
-  // unawaited rejection (e.g. for a genuinely missing required field) surfaces
-  // as an unhandled promise rejection. These tests assert the actual (buggy)
-  // behavior, not the intended one.
-  it('BUG: an unrecognized quality value silently becomes null (parseQualityMIABIS), so the explicit MIABIS-scale check never fires, and the row is instead rejected downstream by the broken SampleModel.validate call', async () => {
+  // Regression coverage for issue #84: `SampleModel` here must resolve to the
+  // hand-written validator class (`require('../models/Sample').SampleModel`),
+  // not the mongoose Model (the default export of that same module). Before
+  // the fix, `SampleModel.validate(sampleData)` invoked mongoose's own async
+  // static `Model.validate`, which returns a Promise — so every row was
+  // rejected regardless of actual validity and `validation.errors` was
+  // always `undefined`.
+  it('rejects an unrecognized quality value: parseQualityMIABIS silently maps it to null, so the real validator reports the field as missing', async () => {
     vi.spyOn(service, 'readFile').mockResolvedValue([{ ...VALID_ROW, quality: 'BOGUS' }]);
 
     const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' });
 
     expect(result.success).toBe(0);
     expect(result.errors).toHaveLength(1);
-    expect(result.errors[0].errors).toBeUndefined();
+    expect(result.errors[0].errors).toEqual(['quality é obrigatório']);
   });
 
-  it('BUG: a row with otherwise-valid data is still rejected, with a corrupted (undefined) errors array, because SampleModel.validate never returns {isValid,errors} synchronously', async () => {
+  it('imports a row with otherwise-valid data, running it through the real validator', async () => {
     vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW]);
 
     const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' });
 
-    expect(result.success).toBe(0);
-    expect(result.errors).toHaveLength(1);
-    expect(result.errors[0].errors).toBeUndefined();
-    expect(samplesCollection.insertOne).not.toHaveBeenCalled();
+    expect(result.success).toBe(1);
+    expect(result.errors).toHaveLength(0);
+    expect(samplesCollection.insertOne).toHaveBeenCalledTimes(1);
   });
 
-  it('BUG: the duplicate-barcode check is dead code — it sits after SampleModel.validate, which rejects the row first regardless of the barcode', async () => {
+  it('rejects a row whose barcode already exists (the duplicate-barcode check now runs after real validation)', async () => {
     ({ db, samplesCollection } = makeDb({ existingBarcode: { barcode: 'BR-2026-001' } }));
     vi.spyOn(service, 'readFile').mockResolvedValue([{ ...VALID_ROW, barcode: 'BR-2026-001' }]);
 
     const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' });
 
-    expect(result.errors[0].errors).toBeUndefined();
+    expect(result.success).toBe(0);
+    expect(result.errors[0].errors).toEqual(['Já existe uma amostra com o código de barras BR-2026-001']);
     expect(samplesCollection.insertOne).not.toHaveBeenCalled();
   });
 
