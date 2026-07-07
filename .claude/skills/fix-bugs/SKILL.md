@@ -25,10 +25,12 @@ issue actually requires.
   2026-07-02). If fixing one bug uncovers another, file it and stay on
   the picked issue — don't chain fixes in one iteration.
 - Comment on the issue when the fix is committed (commit hash, one-line
-  summary, `Fixes #N` in the commit message so the merge auto-closes
-  it). **Don't close issues by hand** — they close when Dennis merges
-  the PR, which is his call, same as opening the PR itself
-  (`bioavanced-conventions` hard rules, unchanged here).
+  summary, `Fixes #N` in the commit message). Once the fix is merged
+  into `feature/docker-e2e-backend-integration` and verified there,
+  **close the issue by hand** with `gh issue close <N> --comment "..."`
+  (confirmed workflow, 2026-07-07 — closing on merge into the
+  integration branch is fine; this is separate from opening a PR to
+  `main`, which stays Dennis's call, never yours).
 
 ## Before an iteration
 
@@ -133,10 +135,13 @@ and get an explicit go-ahead for that step, then continue.
    `git push origin --delete fix/<slug>`) — it's fully absorbed into the
    integration branch at that point. This is distinct from opening a PR
    to `main`, which stays Dennis's call, never yours.
-3. **Invoke `wrap-up` via the Skill tool — a fresh call, every
+3. **Close the issue** with `gh issue close <N> --comment "..."` noting
+   the merge commit hash — don't just comment that it's fixed and leave
+   it open (confirmed workflow, 2026-07-07).
+4. **Invoke `wrap-up` via the Skill tool — a fresh call, every
    iteration — and finish its audit before drafting the summary**
-   (incident `wrapup-faked-from-memory`). This blocks step 4.
-4. Report: which issue, root cause in a sentence, what changed (file
+   (incident `wrapup-faked-from-memory`). This blocks step 5.
+5. Report: which issue, root cause in a sentence, what changed (file
    paths), which tests prove it (including un-weakened ones), what the
    next bug pick should be, plus whatever `wrap-up` surfaced.
 
