@@ -30,7 +30,7 @@ class SampleFileModel {
 
     // Valida tipos de arquivo permitidos
     const allowedTypes = ['RAW', 'ZIP', 'CSV', 'XLS', 'XLSX', 'PDF', 'TXT'];
-    if (data.fileType && !allowedTypes.includes(data.fileType.toUpperCase())) {
+    if (typeof data.fileType === 'string' && !allowedTypes.includes(data.fileType.toUpperCase())) {
       errors.push(`fileType deve ser um dos: ${allowedTypes.join(', ')}`);
     }
 

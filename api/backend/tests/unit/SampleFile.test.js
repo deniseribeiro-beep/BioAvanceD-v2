@@ -41,11 +41,10 @@ describe('SampleFileModel.validate', () => {
     expect(errors).toContain('fileType é obrigatório e deve ser string');
   });
 
-  it('BUG: throws instead of rejecting a truthy non-string fileType (e.g. a number)', () => {
-    // Line 17 only guards the falsy/typeof-string case; a truthy non-string like 42
-    // passes that check, then line 33 unconditionally calls data.fileType.toUpperCase(),
-    // which throws a TypeError instead of returning a validation error as documented.
-    expect(() => SampleFileModel.validate({ ...validData, fileType: 42 })).toThrow(TypeError);
+  it('rejects a truthy non-string fileType (e.g. a number) instead of throwing', () => {
+    const { isValid, errors } = SampleFileModel.validate({ ...validData, fileType: 42 });
+    expect(isValid).toBe(false);
+    expect(errors).toContain('fileType é obrigatório e deve ser string');
   });
 
   it('rejects missing storagePath', () => {
