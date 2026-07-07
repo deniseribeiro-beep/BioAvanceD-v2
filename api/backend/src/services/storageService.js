@@ -245,7 +245,7 @@ class StorageService {
           { session }
         );
 
-        if (updateBoxResult.matchedDocuments === 0) {
+        if (updateBoxResult.matchedCount === 0) {
           throw new Error('STORAGE_COLLISION: Colisão detectada durante alocação');
         }
 
