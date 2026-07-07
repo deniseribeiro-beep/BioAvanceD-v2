@@ -618,7 +618,7 @@ describe('StorageService.allocateSampleToPosition', () => {
     expect(boxesUpdateOne).not.toHaveBeenCalled();
   });
 
-  it('BUG NOTE (#69): STORAGE_COLLISION guard checks matchedDocuments (always undefined), never actually fires on a real driver-shaped collision result', async () => {
+  it('#69: STORAGE_COLLISION guard fires on a real driver-shaped collision result (matchedCount: 0)', async () => {
     const boxId = new ObjectId().toString();
     const sampleId = new ObjectId().toString();
 
@@ -635,14 +635,13 @@ describe('StorageService.allocateSampleToPosition', () => {
       unit: 'mL',
       storageLocation: null
     });
-    // Real MongoDB driver reports collisions via `matchedCount: 0`, not `matchedDocuments`.
+    // Real MongoDB driver reports collisions via `matchedCount: 0`.
     boxesUpdateOne.mockResolvedValue({ matchedCount: 0 });
 
     const result = await service.allocateSampleToPosition(sampleId, boxId, 'A1');
 
-    // Despite matchedCount signalling no document matched (a real collision), the guard
-    // silently passes because it reads the nonexistent `matchedDocuments` field instead.
-    expect(result.success).toBe(true);
+    expect(result.success).toBe(false);
+    expect(result.message).toMatch(/STORAGE_COLLISION/);
   });
 
   it('returns ALLOCATION_ERROR when the sample update reports modifiedCount 0', async () => {
