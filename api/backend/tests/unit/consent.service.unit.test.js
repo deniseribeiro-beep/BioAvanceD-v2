@@ -600,18 +600,8 @@ describe('ConsentService.createPatientConsent', () => {
   });
 
   it('creates a consent when patient and template are valid', async () => {
-    // NOTE: validatePatientConsentPayload runs the payload through an ajv
-    // schema configured with `removeAdditional: 'all'`. Because
-    // patientConsentSchema.properties.responses declares only
-    // `additionalProperties: { type: 'boolean' }` and no nested `properties`,
-    // ajv treats every key inside `responses` as "additional" and strips all
-    // of them - so `responses` always comes out as `{}` regardless of what
-    // was submitted. See finding in report. We use a template with no
-    // required permissions here so the (always-empty) responses object still
-    // passes validateResponsesAgainstTemplate.
-    const noPermissionsTemplate = { ...activeTemplate, permissions: [] };
     const patients = makeCollection({ findOne: vi.fn(async () => ({ patientID: '12345678' })) });
-    const templates = makeCollection({ findOne: vi.fn(async () => noPermissionsTemplate) });
+    const templates = makeCollection({ findOne: vi.fn(async () => activeTemplate) });
     const consents = makeCollection({ insertOne: vi.fn(async () => ({ insertedId: new ObjectId() })) });
     const db = makeDb({ patients, consent_templates: templates, patientConsents: consents });
 
@@ -661,11 +651,32 @@ describe('ConsentService.createPatientConsent', () => {
     ).rejects.toThrow('não está ativo');
   });
 
-  it('documents that ajv strips all keys from responses before template validation (bug)', async () => {
-    // Template has a required permission; since validatePatientConsentPayload
-    // wipes out `responses` to `{}` (see note above), the missing-required
-    // check on validateResponsesAgainstTemplate always fires - even though
-    // the caller supplied a truthy answer for the required permission.
+  it('accepts a submitted boolean response for a required permission (#63)', async () => {
+    // Regression test for #63: the shared ajv instance used to strip every
+    // key out of `responses` (removeAdditional: 'all' ignored the nested
+    // `additionalProperties: { type: 'boolean' }` schema), so a truthy
+    // answer for a required permission never reached
+    // validateResponsesAgainstTemplate and always failed as "missing".
+    const templateWithRequiredPermission = {
+      ...activeTemplate,
+      permissions: [{ key: 'analytics', required: true }],
+    };
+    const patients = makeCollection({ findOne: vi.fn(async () => ({ patientID: '12345678' })) });
+    const templates = makeCollection({ findOne: vi.fn(async () => templateWithRequiredPermission) });
+    const consents = makeCollection({ insertOne: vi.fn(async () => ({ insertedId: new ObjectId() })) });
+    const db = makeDb({ patients, consent_templates: templates, patientConsents: consents });
+
+    const result = await consentService.createPatientConsent(db, {
+      patientId: '12345678',
+      templateId: templateId.toString(),
+      responses: { analytics: true },
+      ...validSignature,
+    });
+
+    expect(result._id).toBeDefined();
+  });
+
+  it('rejects when a required permission response is missing (#63)', async () => {
     const templateWithRequiredPermission = {
       ...activeTemplate,
       permissions: [{ key: 'analytics', required: true }],
@@ -679,7 +690,7 @@ describe('ConsentService.createPatientConsent', () => {
       consentService.createPatientConsent(db, {
         patientId: '12345678',
         templateId: templateId.toString(),
-        responses: { analytics: true },
+        responses: {},
         ...validSignature,
       })
     ).rejects.toThrow('inválidas');
