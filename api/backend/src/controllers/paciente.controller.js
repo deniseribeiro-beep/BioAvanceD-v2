@@ -709,7 +709,7 @@ class PacienteController {
       // Log de erro
       if (req.user) {
         const auditLogger = require('../utils/auditLogger');
-        auditLogger.init(db);
+        auditLogger.init(req.app.locals.db);
         await auditLogger.logError(req, 'Patient', error, {
           action: 'SEARCH',
           searchTerm: req.query.q

@@ -596,15 +596,21 @@ describe('paciente.controller', () => {
       expect(res.status).toHaveBeenCalledWith(200);
     });
 
-    it('throws ReferenceError instead of logging when user is set and service fails (bug, see #83)', async () => {
-      // Bug #83: catch block references `db` from the try block's scope, which is
-      // out of scope in catch — throws ReferenceError instead of a clean 500.
+    it('returns 500 and logs error when user is set and service fails', async () => {
       vi.spyOn(patientService, 'searchPatients').mockRejectedValue(new Error('boom'));
+      vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+      vi.spyOn(auditLogger, 'logError').mockResolvedValue();
       const req = createReq({ query: { q: 'Foo' }, user: { id: 'u1' } });
       const res = createRes();
 
-      await expect(controller.search(req, res)).rejects.toThrow(ReferenceError);
-      expect(res.status).not.toHaveBeenCalled();
+      await controller.search(req, res);
+
+      expect(auditLogger.init).toHaveBeenCalledWith(req.app.locals.db);
+      expect(auditLogger.logError).toHaveBeenCalledWith(req, 'Patient', expect.any(Error), {
+        action: 'SEARCH',
+        searchTerm: 'Foo'
+      });
+      expect(res.status).toHaveBeenCalledWith(500);
     });
   });
 
