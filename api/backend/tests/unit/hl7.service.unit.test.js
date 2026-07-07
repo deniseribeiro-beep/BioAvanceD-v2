@@ -374,8 +374,8 @@ describe('HL7Service.getSampleTypeDisplay', () => {
     expect(hl7Service.getSampleTypeDisplay('MYSTERY')).toBe('MYSTERY');
   });
 
-  it('returns undefined when sampleType is undefined (no fallback string)', () => {
-    expect(hl7Service.getSampleTypeDisplay(undefined)).toBeUndefined();
+  it('returns a safe fallback string when sampleType is undefined', () => {
+    expect(hl7Service.getSampleTypeDisplay(undefined)).toBe('Desconhecido');
   });
 });
 
