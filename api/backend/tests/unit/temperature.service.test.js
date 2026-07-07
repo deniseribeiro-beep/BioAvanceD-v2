@@ -123,6 +123,19 @@ describe('temperatureService.createTemperatureReading', () => {
 });
 
 describe('temperatureService.checkPolicyAndAlert', () => {
+  it('does not query for or apply a policy when no policyId/policyID is present (#73)', async () => {
+    const findOne = vi.fn().mockResolvedValue({ minThreshold: 0, maxThreshold: 10 });
+    const insertOne = vi.fn();
+    const db = makeDb({ policies: { findOne }, alerts: { insertOne } });
+
+    await expect(
+      temperatureService.checkPolicyAndAlert(db, { temperatureValue: 999 })
+    ).resolves.toBeUndefined();
+
+    expect(findOne).not.toHaveBeenCalled();
+    expect(insertOne).not.toHaveBeenCalled();
+  });
+
   it('resolves without inserting an alert when no policy is found', async () => {
     const findOne = vi.fn().mockResolvedValue(null);
     const insertOne = vi.fn();
