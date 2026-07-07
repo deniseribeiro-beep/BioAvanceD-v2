@@ -33,15 +33,27 @@ describe('eConsent.routes POST /generate-link', () => {
     expect(res.body).toEqual({ error: 'patientId e email obrigatórios' });
   });
 
-  // notification.service does not export a `sendConsentLink` function (only
-  // sendConsentEmail/sendConsentSmsFallback/sendConsentWhatsappFallback), so the
-  // destructured import at the top of eConsent.js resolves to undefined and the
-  // happy path of this route throws unconditionally, hanging the request since
-  // the async handler has no try/catch. Filed as issue #80; not exercised here
-  // via supertest to avoid hanging the test run.
-  it('notification.service does not export sendConsentLink (root cause of issue #80)', () => {
+  it('sends a consent email and returns the generated link', async () => {
     const notificationService = require('../../src/services/notification.service');
-    expect(notificationService.sendConsentLink).toBeUndefined();
+    const sendConsentEmailSpy = vi
+      .spyOn(notificationService, 'sendConsentEmail')
+      .mockResolvedValue({ channel: 'email', success: true, provider: 'resend' });
+
+    const app = buildApp();
+
+    const res = await request(app)
+      .post('/e-consent/generate-link')
+      .send({ patientId: '12345678', email: 'a@b.com' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.link).toContain('/patient/e-consent/');
+    expect(sendConsentEmailSpy).toHaveBeenCalledWith(
+      { patientID: '12345678', email: 'a@b.com' },
+      res.body.link
+    );
+
+    sendConsentEmailSpy.mockRestore();
   });
 });
 

@@ -3,7 +3,7 @@ const express = require('express');
 const jwt = require('jsonwebtoken');
 const router = express.Router();
 const { getNeo4jDriver } = require('../infrastructure/database/neo4j/connection');
-const { sendConsentLink } = require('../services/notification.service');
+const notificationService = require('../services/notification.service');
 const { authenticate } = require('../infrastructure/middleware/auth');
 const { requireRole } = require('../infrastructure/middleware/rbac');
 const consentController = require('../controllers/consent.controller');
@@ -20,7 +20,7 @@ router.post('/generate-link', async (req, res) => {
   if (!patientId || !email) return res.status(400).json({ error: 'patientId e email obrigatórios' });
   const token = jwt.sign({ patientId }, CONSENT_SECRET, { expiresIn: CONSENT_EXPIRATION });
   const link = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/patient/e-consent/${token}`;
-  await sendConsentLink(email, link);
+  await notificationService.sendConsentEmail({ patientID: patientId, email }, link);
   res.json({ success: true, link });
 });
 
