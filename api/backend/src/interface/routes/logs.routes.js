@@ -150,12 +150,13 @@ router.get('/:id', authenticate, requireAuditReader, async (req, res) => {
     const logsCollection = db.collection('logs');
     const { id } = req.params;
 
-    let query = { logId: id };
+    let log = null;
     if (ObjectId.isValid(id)) {
-      query = { _id: new ObjectId(id) };
+      log = await logsCollection.findOne({ _id: new ObjectId(id) });
     }
-
-    const log = await logsCollection.findOne(query);
+    if (!log) {
+      log = await logsCollection.findOne({ logId: id });
+    }
     if (!log) {
       return res.status(404).json({ success: false, error: 'Log não encontrado' });
     }
