@@ -247,7 +247,7 @@ class ConsentService {
         versionGroupId: typeof payload.versionGroupId === 'string' && payload.versionGroupId.trim().length > 0
           ? payload.versionGroupId.trim()
           : crypto.randomUUID(),
-        caae: typeof payload.caae === 'string' ? payload.caae.trim() : '',
+        caae: typeof payload.caae === 'string' ? payload.caae.trim() : undefined,
         active: payload.active === undefined ? true : Boolean(payload.active),
         permissions
       };

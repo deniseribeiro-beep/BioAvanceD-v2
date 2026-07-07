@@ -284,6 +284,23 @@ describe('ConsentService.createTemplate', () => {
     expect(templates.insertOne).toHaveBeenCalled();
   });
 
+  it('creates a template without caae, which validateTemplatePayload treats as optional (#62)', async () => {
+    const templates = makeCollection({
+      find: vi.fn(() => makeCursor([])),
+      insertOne: vi.fn(async (doc) => ({ insertedId: new ObjectId() })),
+    });
+    const db = makeDb({ consent_templates: templates });
+
+    const result = await consentService.createTemplate(db, {
+      title: 'My Template',
+      content: 'Body text',
+      permissions: [{ key: 'analytics', label: 'Analytics' }],
+    });
+
+    expect(result._id).toBeDefined();
+    expect(templates.insertOne).toHaveBeenCalled();
+  });
+
   it('rejects duplicate permission keys without inserting', async () => {
     const templates = makeCollection({ find: vi.fn(() => makeCursor([])) });
     const db = makeDb({ consent_templates: templates });
