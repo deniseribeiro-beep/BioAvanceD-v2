@@ -598,9 +598,7 @@ describe('workers/import-worker', () => {
       });
     });
 
-    it('on batch-import failure: re-throws WITHOUT updating batch progress, updateJobStatus, logError, or notifyJobFailed ' +
-      '(the batch-import branch runs before the surrounding try/catch, so its own failure-handling catch block is unreachable ' +
-      '-- see report for details, this documents actual behavior, not the spec\'d behavior)', async () => {
+    it('on batch-import failure: marks batch progress as "failed" and re-throws (#46)', async () => {
       const processor = await getProcessor();
       const boom = new Error('batch exploded');
       fakeBatchValidationEngine.processBatchImport.mockRejectedValue(boom);
@@ -612,9 +610,9 @@ describe('workers/import-worker', () => {
 
       await expect(processor(job)).rejects.toThrow('batch exploded');
 
-      // Bug: this does NOT get called because the batch-import branch sits
-      // outside the try/catch that's supposed to handle it.
-      expect(fakeBatchValidationEngine.updateProgress).not.toHaveBeenCalled();
+      expect(fakeBatchValidationEngine.updateProgress).toHaveBeenCalledWith('stg-3', {
+        status: 'failed',
+      });
       expect(updateOneMock).not.toHaveBeenCalled();
       expect(fakeAuditLogger.logError).not.toHaveBeenCalled();
       expect(fakeNotificationService.notifyJobFailed).not.toHaveBeenCalled();
