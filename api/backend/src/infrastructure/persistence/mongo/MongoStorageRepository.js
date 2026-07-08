@@ -228,7 +228,7 @@ class MongoStorageRepository {
 
     const sourceBoxObjId = this.toObjectId(sourceBoxId);
 
-    await storageBoxesCollection.updateOne(
+    const boxUpdate = await storageBoxesCollection.updateOne(
       {
         _id: sourceBoxObjId,
         [`occupancyGrid.${sourcePosition}`]: sampleObjId
@@ -246,6 +246,10 @@ class MongoStorageRepository {
       },
       { session }
     );
+
+    if (boxUpdate.matchedCount === 0) {
+      throw new Error('Origem inconsistente: posição de origem não contém a amostra informada');
+    }
 
     await samplesCollection.updateOne(
       { _id: sampleObjId },

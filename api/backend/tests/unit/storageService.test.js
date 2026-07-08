@@ -199,20 +199,21 @@ describe('StorageService.validatePositionAvailability', () => {
     expect(result.boxData.availablePositions).toBe(5);
   });
 
-  it('BUG NOTE: plain-object occupancyGrid is NOT checked for collision (source uses .get() unconditionally)', async () => {
-    // The source calls `box.occupancyGrid?.get(position)` directly (line ~144), not
-    // through the polymorphic `_isPositionOccupied` helper used elsewhere in this file.
-    // A plain-object occupancyGrid has no `.get` method, so this line throws a TypeError,
-    // which is caught by the outer try/catch and reported as INTERNAL_ERROR instead of
-    // correctly detecting (or gracefully ignoring) the collision.
+  it('returns STORAGE_COLLISION when position is occupied (plain-object occupancyGrid)', async () => {
+    // Fixed in issue #23: the source used to call `box.occupancyGrid?.get(position)`
+    // directly (Map API only), instead of the polymorphic `_isPositionOccupied`
+    // helper used elsewhere in this file, so a plain-object occupancyGrid threw a
+    // TypeError that was swallowed as INTERNAL_ERROR instead of detecting the collision.
+    const occupyingSampleId = new ObjectId();
     findOne.mockResolvedValue({
       dimension: { rows: 9, cols: 9 },
-      occupancyGrid: { A1: new ObjectId() }, // plain object, not a Map
+      occupancyGrid: { A1: occupyingSampleId }, // plain object, not a Map
       currentOccupancy: 1
     });
     const result = await service.validatePositionAvailability(new ObjectId().toString(), 'A1');
     expect(result.available).toBe(false);
-    expect(result.error).toBe('INTERNAL_ERROR');
+    expect(result.error).toBe('STORAGE_COLLISION');
+    expect(result.occupiedBySampleId).toBe(occupyingSampleId);
   });
 });
 
@@ -545,6 +546,34 @@ describe('StorageService.allocateSampleToPosition', () => {
     const sampleUpdateCall = samplesUpdateOne.mock.calls[0];
     expect(sampleUpdateCall[1].$set['storageLocation.position']).toBe('A1');
     expect(sampleUpdateCall[1].$set['status']).toBe('AVAILABLE');
+  });
+
+  it('issue #23: increments currentOccupancy via a top-level $inc, not nested inside $set', async () => {
+    // The box update used to write `$set: { currentOccupancy: { $inc: 1 } }`, which
+    // is not a valid Mongo update shape ($inc must be a sibling top-level operator),
+    // so currentOccupancy was never actually incremented.
+    const boxId = new ObjectId().toString();
+    const sampleId = new ObjectId().toString();
+
+    boxesFindOne.mockResolvedValue({
+      _id: new ObjectId(boxId),
+      dimension: { rows: 2, cols: 2 },
+      occupancyGrid: new Map(),
+      currentOccupancy: 0
+    });
+    samplesFindOne.mockResolvedValue({
+      _id: new ObjectId(sampleId),
+      barcode: 'BC-1',
+      quantity: 5,
+      unit: 'mL',
+      storageLocation: null
+    });
+
+    await service.allocateSampleToPosition(sampleId, boxId, 'A1');
+
+    const boxUpdateCall = boxesUpdateOne.mock.calls[0];
+    expect(boxUpdateCall[1].$set.currentOccupancy).toBeUndefined();
+    expect(boxUpdateCall[1].$inc).toEqual({ currentOccupancy: 1 });
   });
 
   it('rejects allocation to an already-occupied position with a STORAGE_COLLISION error', async () => {

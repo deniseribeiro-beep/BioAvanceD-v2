@@ -141,7 +141,11 @@ class StorageService {
       }
 
       // 3️⃣ VALIDAÇÃO: Colisão (posição já ocupada)
-      const occupiedSampleId = box.occupancyGrid?.get(position);
+      const occupiedSampleId = this._isPositionOccupied(box.occupancyGrid, position)
+        ? (typeof box.occupancyGrid?.get === 'function'
+          ? box.occupancyGrid.get(position)
+          : box.occupancyGrid[position])
+        : null;
 
       if (occupiedSampleId) {
         return {
@@ -238,8 +242,10 @@ class StorageService {
           {
             $set: {
               [`occupancyGrid.${position}`]: sampleObjId,
-              'currentOccupancy': { $inc: 1 },
               'updatedAt': new Date()
+            },
+            $inc: {
+              currentOccupancy: 1
             }
           },
           { session }
