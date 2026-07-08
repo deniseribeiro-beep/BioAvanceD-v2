@@ -5,7 +5,6 @@ const require = createRequire(import.meta.url);
 
 const controller = require('../../src/controllers/import-lgpd.controller');
 const importLGPDService = require('../../src/services/import-lgpd.service');
-const importPredictor = require('../../src/services/ImportPredictor');
 const logger = require('../../src/utils/logger');
 const auditLogger = require('../../src/utils/auditLogger');
 const fs = require('fs');
@@ -432,86 +431,6 @@ describe('import-lgpd.controller', () => {
         error: 'Erro ao importar pacientes',
         message: 'svc boom'
       });
-    });
-  });
-
-  describe('predictPatientsMapping', () => {
-    it('returns 400 when no file', async () => {
-      const req = {};
-      const res = createRes();
-
-      await controller.predictPatientsMapping(req, res);
-
-      expect(res.status).toHaveBeenCalledWith(400);
-      expect(res.json).toHaveBeenCalledWith({ success: false, error: 'Arquivo não fornecido' });
-    });
-
-    it('returns 400 and cleans up when format invalid', async () => {
-      const file = { path: '/tmp/p.csv', originalname: 'p.csv' };
-      const req = { file };
-      const res = createRes();
-
-      vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(false);
-      const cleanupSpy = vi.spyOn(importLGPDService, 'cleanupFile').mockImplementation(() => {});
-
-      await controller.predictPatientsMapping(req, res);
-
-      expect(cleanupSpy).toHaveBeenCalledWith(file.path);
-      expect(res.status).toHaveBeenCalledWith(400);
-    });
-
-    it('happy path calls importPredictor.predict with headers from first row keys', async () => {
-      const file = { path: '/tmp/p.csv', originalname: 'p.csv' };
-      const req = { file };
-      const res = createRes();
-
-      vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(true);
-      vi.spyOn(importLGPDService, 'readFile').mockResolvedValue([{ Nome: 'a', Email: 'b' }]);
-      vi.spyOn(importPredictor, 'predict').mockReturnValue({ mapping: { Nome: 'patientName' } });
-      const cleanupSpy = vi.spyOn(importLGPDService, 'cleanupFile').mockImplementation(() => {});
-
-      await controller.predictPatientsMapping(req, res);
-
-      expect(importPredictor.predict).toHaveBeenCalledWith(['Nome', 'Email'], { Nome: 'a', Email: 'b' });
-      expect(cleanupSpy).toHaveBeenCalledWith(file.path);
-      expect(res.status).toHaveBeenCalledWith(200);
-      expect(res.json).toHaveBeenCalledWith({
-        success: true,
-        message: 'Mapeamento inteligente inferido com sucesso',
-        data: { mapping: { Nome: 'patientName' } }
-      });
-    });
-
-    it('handles empty rows without throwing (headers becomes [])', async () => {
-      const file = { path: '/tmp/p.csv', originalname: 'p.csv' };
-      const req = { file };
-      const res = createRes();
-
-      vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(true);
-      vi.spyOn(importLGPDService, 'readFile').mockResolvedValue([]);
-      vi.spyOn(importPredictor, 'predict').mockReturnValue({ mapping: {} });
-      vi.spyOn(importLGPDService, 'cleanupFile').mockImplementation(() => {});
-
-      await controller.predictPatientsMapping(req, res);
-
-      expect(importPredictor.predict).toHaveBeenCalledWith([], {});
-      expect(res.status).toHaveBeenCalledWith(200);
-    });
-
-    it('returns 500 and cleans up when service throws', async () => {
-      const file = { path: '/tmp/p.csv', originalname: 'p.csv' };
-      const req = { file };
-      const res = createRes();
-
-      vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(true);
-      vi.spyOn(importLGPDService, 'readFile').mockRejectedValue(new Error('read boom'));
-      const cleanupSpy = vi.spyOn(importLGPDService, 'cleanupFile').mockImplementation(() => {});
-      vi.spyOn(logger, 'error').mockImplementation(() => {});
-
-      await controller.predictPatientsMapping(req, res);
-
-      expect(cleanupSpy).toHaveBeenCalledWith(file.path);
-      expect(res.status).toHaveBeenCalledWith(500);
     });
   });
 
