@@ -565,7 +565,7 @@ class ImportLGPDController {
       importLGPDService.cleanupFile(file.path);
 
       return res.status(200).json({
-        success: true,
+        success: results.errors.length === 0,
         message: 'Importação concluída',
         data: {
           total: results.total,
