@@ -433,10 +433,6 @@ class SampleModel {
     return EXTRACTION_PROTOCOL_IDS.includes(extractionProtocol);
   }
 
-  static validateWithdrawalType(withdrawalType) {
-    return ['Parcial', 'Total'].includes(withdrawalType);
-  }
-
   static validateResponsibleName(withdrawalResponsible) {
     if (!withdrawalResponsible || typeof withdrawalResponsible !== 'string') {
       return false;
