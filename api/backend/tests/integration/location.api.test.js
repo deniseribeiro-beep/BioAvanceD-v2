@@ -22,20 +22,10 @@ function givenSession() {
   vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 'session-1' });
 }
 
-// The `authenticate` middleware itself short-circuits with a 503 (different
-// message) if `app.locals.db` is falsy *before* the route handler runs, so
-// setting `app.locals.db = null` up front never reaches the route's own
-// `if (!db)` branch. To exercise that route-level guard we let auth pass
-// with a real db, then flip `app.locals.db` to null as a side effect of the
-// mocked `verifySession` call (simulating the db becoming unavailable in the
-// brief window between the middleware's check and the handler running).
-function givenSessionThenDbDisappears() {
-  vi.spyOn(sessionService, 'verifySession').mockImplementation(async () => {
-    app.locals.db = null;
-    return { valid: true, session: { sessionID: 'session-1' } };
-  });
-  vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 'session-1' });
-}
+// The `authenticate` middleware itself short-circuits with a 503 if
+// `app.locals.db` is falsy *before* any route handler runs, so a
+// db-unavailable case for these routes is exercised by auth.js's own tests,
+// not here (see issue #67).
 
 describe('GET /api/locations', () => {
   beforeEach(() => { givenSession(); });
@@ -196,16 +186,6 @@ describe('GET /api/locations/:id', () => {
   beforeEach(() => { givenSession(); });
   afterEach(() => { vi.restoreAllMocks(); });
 
-  it('returns 503 when db is unavailable', async () => {
-    givenSessionThenDbDisappears();
-    const res = await request(app)
-      .get('/api/locations/507f1f77bcf86cd799439011')
-      .set('Authorization', `Bearer ${makeToken()}`);
-
-    expect(res.status).toBe(503);
-    expect(res.body).toEqual({ success: false, error: 'Banco de dados não disponível' });
-  });
-
   it('returns 404 when the location does not exist', async () => {
     const coll = createCollectionMock({ findOne: vi.fn().mockResolvedValue(null) });
     app.locals.db = createDbMock({ locations: coll });
@@ -250,17 +230,6 @@ describe('GET /api/locations/:id', () => {
 describe('PUT /api/locations/:id', () => {
   beforeEach(() => { givenSession(); });
   afterEach(() => { vi.restoreAllMocks(); });
-
-  it('returns 503 when db is unavailable', async () => {
-    givenSessionThenDbDisappears();
-    const res = await request(app)
-      .put('/api/locations/507f1f77bcf86cd799439011')
-      .set('Authorization', `Bearer ${makeToken(4)}`)
-      .send({ block: 1 });
-
-    expect(res.status).toBe(503);
-    expect(res.body).toEqual({ success: false, error: 'Banco de dados não disponível' });
-  });
 
   it('converts array-form eppendorfWell into a wellPosition string', async () => {
     let setPayload = null;
@@ -377,16 +346,6 @@ describe('DELETE /api/locations/:id', () => {
   beforeEach(() => { givenSession(); });
   afterEach(() => { vi.restoreAllMocks(); });
 
-  it('returns 503 when db is unavailable', async () => {
-    givenSessionThenDbDisappears();
-    const res = await request(app)
-      .delete('/api/locations/507f1f77bcf86cd799439011')
-      .set('Authorization', `Bearer ${makeToken(4)}`);
-
-    expect(res.status).toBe(503);
-    expect(res.body).toEqual({ success: false, error: 'Banco de dados não disponível' });
-  });
-
   it('returns 404 when nothing is deleted', async () => {
     const coll = createCollectionMock({ deleteOne: vi.fn().mockResolvedValue({ deletedCount: 0 }) });
     app.locals.db = createDbMock({ locations: coll });
@@ -429,16 +388,6 @@ describe('DELETE /api/locations/:id', () => {
 describe('PATCH /api/locations/fix-missing-locationids', () => {
   beforeEach(() => { givenSession(); });
   afterEach(() => { vi.restoreAllMocks(); });
-
-  it('returns 503 when db is unavailable', async () => {
-    givenSessionThenDbDisappears();
-    const res = await request(app)
-      .patch('/api/locations/fix-missing-locationids')
-      .set('Authorization', `Bearer ${makeToken(4)}`);
-
-    expect(res.status).toBe(503);
-    expect(res.body).toEqual({ success: false, error: 'Banco de dados não disponível' });
-  });
 
   it('returns updated: 0 when no locations need fixing', async () => {
     const coll = createCollectionMock({
