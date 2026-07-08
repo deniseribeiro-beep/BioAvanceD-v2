@@ -1055,12 +1055,8 @@ class ImportLGPDService {
       }
     }
     
-    // Tenta formato padrão do JavaScript (ISO, etc)
-    const date = new Date(str);
-    if (!isNaN(date.getTime()) && date.getFullYear() > 1900 && date.getFullYear() < 2100) {
-      return date;
-    }
-    
+    // Nenhum dos formatos documentados (DD/MM/YYYY, YYYY-MM-DD, DD-MM-YYYY) confere -
+    // rejeita em vez de aceitar via parsing nativo ambíguo (issue #37)
     return null;
   }
 
