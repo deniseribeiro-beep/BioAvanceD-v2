@@ -98,13 +98,11 @@ describe('ImportLGPDService', () => {
       expect(d.getDate()).toBe(25);
     });
 
-    it('falls back to native Date parsing for other recognizable formats, within the 1900-2100 bound', () => {
-      const d = importLgpdService.parseBirthDate('December 25, 1990');
-      expect(d.getFullYear()).toBe(1990);
-    });
-
-    it('rejects a native-parseable date whose year falls outside 1900-2100', () => {
-      expect(importLgpdService.parseBirthDate('January 1, 1850')).toBeNull();
+    it('rejects formats outside DD/MM/YYYY, YYYY-MM-DD and DD-MM-YYYY (issue #37)', () => {
+      // Bug: previously fell back to bare `new Date(str)`, silently accepting
+      // ambiguous/non-documented formats with different day/month semantics.
+      expect(importLgpdService.parseBirthDate('December 25, 1990')).toBeNull();
+      expect(importLgpdService.parseBirthDate('1990/12/25')).toBeNull();
     });
   });
 
