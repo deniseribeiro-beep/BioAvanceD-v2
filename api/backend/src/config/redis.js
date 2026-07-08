@@ -109,7 +109,11 @@ function createRedisConnection() {
     }
     // Se não houver senha, conecta sem password (permitido em dev/local)
   } else {
-    config.username = REDIS_USERNAME || parsedRedisUrl?.username || 'default';
+    // process.env.REDIS_USERNAME is checked directly (not the imported REDIS_USERNAME,
+    // which env.js always defaults to the truthy string 'default') so that a
+    // REDIS_URL-embedded username can actually be reached when no explicit
+    // REDIS_USERNAME env var is set.
+    config.username = process.env.REDIS_USERNAME || parsedRedisUrl?.username || 'default';
     if (REDIS_PASSWORD || parsedRedisUrl?.password) {
       config.password = REDIS_PASSWORD || parsedRedisUrl.password;
     }

@@ -172,11 +172,7 @@ describe('config/redis.js', () => {
       expect(args).toHaveLength(2);
       expect(args[0]).toBe('redis://urluser:urlpass@remotehost:6381');
       const config = args[1];
-      // NB: env.js defaults REDIS_USERNAME to the literal string 'default' when
-      // unset (`process.env.REDIS_USERNAME || 'default'`), so the
-      // `REDIS_USERNAME || parsedRedisUrl?.username || 'default'` fallback in
-      // redis.js can never actually reach the URL-embedded username in practice.
-      expect(config.username).toBe('default');
+      expect(config.username).toBe('urluser');
       expect(config.password).toBe('urlpass');
     });
 
