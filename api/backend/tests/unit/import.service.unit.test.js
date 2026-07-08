@@ -376,7 +376,7 @@ describe('ImportService.parseTemperatureCSV', () => {
     expect(result.timestamp.getTime()).toBeGreaterThanOrEqual(before);
   });
 
-  it('produces NaN for temperatureValue rather than an error when it is missing', () => {
+  it('produces NaN for temperatureValue when it is missing, caught later by TemperatureModel.validate (issue #77)', () => {
     const result = importService.parseTemperatureCSV({ sensorId: 'S1' });
     expect(Number.isNaN(result.temperatureValue)).toBe(true);
   });

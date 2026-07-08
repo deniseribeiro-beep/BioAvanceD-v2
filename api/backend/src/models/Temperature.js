@@ -11,7 +11,7 @@ class TemperatureModel {
       errors.push('sensorId é obrigatório');
     }
 
-    if (data.temperatureValue === undefined || typeof data.temperatureValue !== 'number') {
+    if (data.temperatureValue === undefined || typeof data.temperatureValue !== 'number' || Number.isNaN(data.temperatureValue)) {
       errors.push('temperatureValue é obrigatório e deve ser number');
     }
 
