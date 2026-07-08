@@ -189,11 +189,11 @@ async function upsertOrphanetRedundancy(db, payload) {
 }
 
 async function upsertTerminology(record, db = null) {
-  if (!record.codigo || !record.sistema || !record.descricao) {
+  const payload = normalizeRecord(record, record.sistema);
+
+  if (!payload.codigo || !payload.sistema || !payload.descricao) {
     return { skipped: true, reason: 'missing-required-fields' };
   }
-
-  const payload = normalizeRecord(record, record.sistema);
 
   let result;
   if (db && typeof db.collection === 'function') {
