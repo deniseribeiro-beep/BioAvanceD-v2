@@ -168,9 +168,9 @@ describe('move-sample.controller', () => {
     });
   });
 
-  it('returns 400 for a generic use-case error message', async () => {
-    vi.spyOn(MoveSampleUseCase.prototype, 'execute').mockRejectedValue(new Error('targetPosition is required'));
-    const req = buildReq({ body: { sampleId: 'S1', targetBoxId: 'B1' } });
+  it('returns 400 when the use case throws a known validation error', async () => {
+    vi.spyOn(MoveSampleUseCase.prototype, 'execute').mockRejectedValue(new Error('targetBoxId é obrigatório'));
+    const req = buildReq({ body: { sampleId: 'S1' } });
     const res = buildRes();
 
     await controller(req, res);
@@ -179,18 +179,33 @@ describe('move-sample.controller', () => {
     expect(res.json).toHaveBeenCalledWith({
       success: false,
       error: 'MOVE_SAMPLE_ERROR',
+      message: 'targetBoxId é obrigatório'
+    });
+  });
+
+  it('returns 500 for an unrecognized use-case error message instead of masking it as a 400 (issue #54)', async () => {
+    vi.spyOn(MoveSampleUseCase.prototype, 'execute').mockRejectedValue(new Error('targetPosition is required'));
+    const req = buildReq({ body: { sampleId: 'S1', targetBoxId: 'B1' } });
+    const res = buildRes();
+
+    await controller(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(500);
+    expect(res.json).toHaveBeenCalledWith({
+      success: false,
+      error: 'MOVE_SAMPLE_ERROR',
       message: 'targetPosition is required'
     });
   });
 
-  it('falls back to the default error message when the thrown error has no message', async () => {
+  it('falls back to the default error message with a 500 when the thrown error has no message (issue #54)', async () => {
     vi.spyOn(MoveSampleUseCase.prototype, 'execute').mockRejectedValue(new Error());
     const req = buildReq({ body: { sampleId: 'S1', targetBoxId: 'B1', targetPosition: 'A1' } });
     const res = buildRes();
 
     await controller(req, res);
 
-    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.status).toHaveBeenCalledWith(500);
     expect(res.json).toHaveBeenCalledWith({
       success: false,
       error: 'MOVE_SAMPLE_ERROR',
