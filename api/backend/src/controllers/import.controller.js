@@ -375,8 +375,9 @@ async function importFhirBundle(req, res) {
           name, cpf, birthDate,
           fhir: resource // subdocumento original
         };
+        const { insertedId } = await patientsCol.insertOne(patientDoc);
         patientCount += 1;
-        patientMap[resource.id] = resource.id || null;
+        patientMap[resource.id] = insertedId || null;
         logger.info('[FHIR_IMPORT] Patient processado', {
           resourceId: resource.id || null,
           hasIdentifier: Array.isArray(resource.identifier) && resource.identifier.length > 0,
@@ -434,7 +435,7 @@ async function importFhirBundle(req, res) {
             sprec,
             fhir: resource
           };
-          // await samplesCol.insertOne(sampleDoc);
+          await samplesCol.insertOne(sampleDoc);
           sampleCount++;
           logger.info('[FHIR_IMPORT] Specimen processado', {
             resourceId: resource.id || null,
@@ -452,7 +453,7 @@ async function importFhirBundle(req, res) {
             status: resource.status,
             fhir: resource
           };
-          // await consentsCol.insertOne(consentDoc);
+          await consentsCol.insertOne(consentDoc);
           consentCount++;
           logger.info('[FHIR_IMPORT] Consent processado', {
             resourceId: resource.id || null,
@@ -470,7 +471,7 @@ async function importFhirBundle(req, res) {
             value: resource.valueQuantity?.value,
             fhir: resource
           };
-          // await observationsCol.insertOne(obsDoc);
+          await observationsCol.insertOne(obsDoc);
           logger.info('[FHIR_IMPORT] Observation processada', {
             resourceId: resource.id || null,
             patientLinked: Boolean(patientId),
@@ -486,7 +487,7 @@ async function importFhirBundle(req, res) {
             code: resource.code?.text || '',
             fhir: resource
           };
-          // await conditionsCol.insertOne(condDoc);
+          await conditionsCol.insertOne(condDoc);
           logger.info('[FHIR_IMPORT] Condition processada', {
             resourceId: resource.id || null,
             patientLinked: Boolean(patientId),

@@ -307,7 +307,7 @@ describe('import.controller', () => {
     });
 
     it('accepts a bare array of resources (normalizeFhirEntries array form)', async () => {
-      const db = { collection: vi.fn().mockReturnValue({}) };
+      const db = { collection: vi.fn().mockReturnValue({ insertOne: vi.fn().mockResolvedValue({ insertedId: 'mock-id' }) }) };
       const req = { app: { locals: { db } }, body: [{ resourceType: 'Patient', id: 'p1', name: [{ text: 'Alice' }] }] };
       const res = createRes();
 
@@ -318,7 +318,7 @@ describe('import.controller', () => {
     });
 
     it('accepts a single bare resource (normalizeFhirEntries single-resource form)', async () => {
-      const db = { collection: vi.fn().mockReturnValue({}) };
+      const db = { collection: vi.fn().mockReturnValue({ insertOne: vi.fn().mockResolvedValue({ insertedId: 'mock-id' }) }) };
       const req = { app: { locals: { db } }, body: { resourceType: 'Patient', id: 'p1' } };
       const res = createRes();
 
@@ -329,7 +329,7 @@ describe('import.controller', () => {
     });
 
     it('processes a Bundle with Patient+Specimen+Consent, computing quality grade counts and averageScore', async () => {
-      const db = { collection: vi.fn().mockReturnValue({}) };
+      const db = { collection: vi.fn().mockReturnValue({ insertOne: vi.fn().mockResolvedValue({ insertedId: 'mock-id' }) }) };
       vi.spyOn(qualityDomain, 'calculateMethodologyQualityFromSprec').mockReturnValue({
         final_grade: 'A',
         category: 'A',
@@ -378,7 +378,7 @@ describe('import.controller', () => {
     });
 
     it('counts quarantinedTechnical for grade E specimens and averages multiple scores', async () => {
-      const db = { collection: vi.fn().mockReturnValue({}) };
+      const db = { collection: vi.fn().mockReturnValue({ insertOne: vi.fn().mockResolvedValue({ insertedId: 'mock-id' }) }) };
       const calcSpy = vi.spyOn(qualityDomain, 'calculateMethodologyQualityFromSprec');
       calcSpy.mockReturnValueOnce({ final_grade: 'E', category: 'E', rcs_score: 10, governance_status: 0 });
       calcSpy.mockReturnValueOnce({ final_grade: 'C', category: 'C', rcs_score: 50, governance_status: 1 });
@@ -405,8 +405,8 @@ describe('import.controller', () => {
       expect(payload.qualitySummary.averageScore).toBe(30);
     });
 
-    it('does not actually persist anything: collection() insert methods are never called', async () => {
-      const collectionStub = { insertOne: vi.fn() };
+    it('actually persists processed resources: collection().insertOne is called for each', async () => {
+      const collectionStub = { insertOne: vi.fn().mockResolvedValue({ insertedId: 'mock-id' }) };
       const db = { collection: vi.fn().mockReturnValue(collectionStub) };
       vi.spyOn(qualityDomain, 'calculateMethodologyQualityFromSprec').mockReturnValue({
         final_grade: 'A', category: 'A', rcs_score: 90, governance_status: 1
@@ -425,9 +425,8 @@ describe('import.controller', () => {
 
       await controller.importFhirBundle(req, res);
 
-      // Confirms the mid-migration state: DB writes are commented out in the source,
-      // so success responses do not correspond to any persisted data.
-      expect(collectionStub.insertOne).not.toHaveBeenCalled();
+      // A success response must correspond to actually persisted data.
+      expect(collectionStub.insertOne).toHaveBeenCalledTimes(2);
     });
 
     it('returns 500 when db.collection throws unexpectedly', async () => {
