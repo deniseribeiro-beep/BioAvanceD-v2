@@ -100,7 +100,7 @@ function createGetAvailablePositionsController() {
       });
     } catch (error) {
       logger.error('[StorageQueryController] Erro em getAvailablePositions:', error.message || error);
-      const statusCode = error.message.includes('não encontrada') ? 404 : 500;
+      const statusCode = typeof error?.message === 'string' && error.message.includes('não encontrada') ? 404 : 500;
       return res.status(statusCode).json({
         success: false,
         error: 'INTERNAL_ERROR',
