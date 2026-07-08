@@ -45,10 +45,10 @@ describe('MongoStorageRepository', () => {
   });
 
   describe('findSampleById', () => {
-    it('converts the id and queries the amostras collection with the session', async () => {
+    it('converts the id and queries the samples collection with the session', async () => {
       const findOne = vi.fn().mockResolvedValueOnce({ _id: 'sample-doc' });
       const samples = makeCollection({ findOne });
-      const db = makeDb({ amostras: samples });
+      const db = makeDb({ samples });
       const repo = new MongoStorageRepository(db);
       const idStr = new ObjectId().toString();
       const session = { id: 'sess-1' };
@@ -164,7 +164,7 @@ describe('MongoStorageRepository', () => {
       const samples = makeCollection({
         updateOne: vi.fn().mockResolvedValueOnce({ matchedCount: 1 })
       });
-      const db = makeDb({ storageBoxes, amostras: samples });
+      const db = makeDb({ storageBoxes, samples });
       const repo = new MongoStorageRepository(db);
 
       await expect(repo.moveSamplePosition(input, {})).resolves.toBeUndefined();
@@ -177,7 +177,7 @@ describe('MongoStorageRepository', () => {
         updateOne: vi.fn().mockResolvedValueOnce({ matchedCount: 0 })
       });
       const samples = makeCollection();
-      const db = makeDb({ storageBoxes, amostras: samples });
+      const db = makeDb({ storageBoxes, samples });
       const repo = new MongoStorageRepository(db);
 
       await expect(repo.moveSamplePosition(input, {})).rejects.toThrow(
@@ -194,7 +194,7 @@ describe('MongoStorageRepository', () => {
           .mockResolvedValueOnce({ matchedCount: 0 })
       });
       const samples = makeCollection();
-      const db = makeDb({ storageBoxes, amostras: samples });
+      const db = makeDb({ storageBoxes, samples });
       const repo = new MongoStorageRepository(db);
 
       await expect(repo.moveSamplePosition(input, {})).rejects.toThrow(
@@ -213,7 +213,7 @@ describe('MongoStorageRepository', () => {
       const samples = makeCollection({
         updateOne: vi.fn().mockResolvedValueOnce({ matchedCount: 0 })
       });
-      const db = makeDb({ storageBoxes, amostras: samples });
+      const db = makeDb({ storageBoxes, samples });
       const repo = new MongoStorageRepository(db);
 
       await expect(repo.moveSamplePosition(input, {})).rejects.toThrow(
@@ -237,7 +237,7 @@ describe('MongoStorageRepository', () => {
         findOne: vi.fn().mockResolvedValueOnce(boxDoc),
         updateOne: vi.fn().mockResolvedValueOnce({ matchedCount: 1 })
       });
-      const db = makeDb({ amostras: samples, storageBoxes });
+      const db = makeDb({ samples, storageBoxes });
       const repo = new MongoStorageRepository(db);
 
       await expect(repo.allocateSamplePosition(baseInput, {})).resolves.toBeUndefined();
@@ -251,7 +251,7 @@ describe('MongoStorageRepository', () => {
     it('throws when sample not found', async () => {
       const samples = makeCollection({ findOne: vi.fn().mockResolvedValueOnce(null) });
       const storageBoxes = makeCollection();
-      const db = makeDb({ amostras: samples, storageBoxes });
+      const db = makeDb({ samples, storageBoxes });
       const repo = new MongoStorageRepository(db);
 
       await expect(repo.allocateSamplePosition(baseInput, {})).rejects.toThrow(
@@ -267,7 +267,7 @@ describe('MongoStorageRepository', () => {
         })
       });
       const storageBoxes = makeCollection();
-      const db = makeDb({ amostras: samples, storageBoxes });
+      const db = makeDb({ samples, storageBoxes });
       const repo = new MongoStorageRepository(db);
 
       await expect(repo.allocateSamplePosition(baseInput, {})).rejects.toThrow(
@@ -278,7 +278,7 @@ describe('MongoStorageRepository', () => {
     it('throws when box not found', async () => {
       const samples = makeCollection({ findOne: vi.fn().mockResolvedValueOnce({ _id: sampleId }) });
       const storageBoxes = makeCollection({ findOne: vi.fn().mockResolvedValueOnce(null) });
-      const db = makeDb({ amostras: samples, storageBoxes });
+      const db = makeDb({ samples, storageBoxes });
       const repo = new MongoStorageRepository(db);
 
       await expect(repo.allocateSamplePosition(baseInput, {})).rejects.toThrow(
@@ -289,7 +289,7 @@ describe('MongoStorageRepository', () => {
     it('throws when position format is invalid', async () => {
       const samples = makeCollection({ findOne: vi.fn().mockResolvedValueOnce({ _id: sampleId }) });
       const storageBoxes = makeCollection({ findOne: vi.fn().mockResolvedValueOnce(boxDoc) });
-      const db = makeDb({ amostras: samples, storageBoxes });
+      const db = makeDb({ samples, storageBoxes });
       const repo = new MongoStorageRepository(db);
 
       await expect(
@@ -300,7 +300,7 @@ describe('MongoStorageRepository', () => {
     it('throws when position is out of bounds', async () => {
       const samples = makeCollection({ findOne: vi.fn().mockResolvedValueOnce({ _id: sampleId }) });
       const storageBoxes = makeCollection({ findOne: vi.fn().mockResolvedValueOnce(boxDoc) });
-      const db = makeDb({ amostras: samples, storageBoxes });
+      const db = makeDb({ samples, storageBoxes });
       const repo = new MongoStorageRepository(db);
 
       await expect(
@@ -314,7 +314,7 @@ describe('MongoStorageRepository', () => {
         findOne: vi.fn().mockResolvedValueOnce(boxDoc),
         updateOne: vi.fn().mockResolvedValueOnce({ matchedCount: 0 })
       });
-      const db = makeDb({ amostras: samples, storageBoxes });
+      const db = makeDb({ samples, storageBoxes });
       const repo = new MongoStorageRepository(db);
 
       await expect(repo.allocateSamplePosition(baseInput, {})).rejects.toThrow(
@@ -342,7 +342,7 @@ describe('MongoStorageRepository', () => {
       const storageBoxes = makeCollection({
         updateOne: vi.fn().mockResolvedValueOnce({ matchedCount: 1 })
       });
-      const db = makeDb({ amostras: samples, storageBoxes });
+      const db = makeDb({ samples, storageBoxes });
       const repo = new MongoStorageRepository(db);
 
       const result = await repo.releaseSamplePosition({ sampleId }, {});
@@ -369,7 +369,7 @@ describe('MongoStorageRepository', () => {
       const storageBoxes = makeCollection({
         updateOne: vi.fn().mockResolvedValueOnce({ matchedCount: 1 })
       });
-      const db = makeDb({ amostras: samples, storageBoxes });
+      const db = makeDb({ samples, storageBoxes });
       const repo = new MongoStorageRepository(db);
 
       const result = await repo.releaseSamplePosition({ sampleId }, {});
@@ -379,7 +379,7 @@ describe('MongoStorageRepository', () => {
     it('throws when sample not found', async () => {
       const samples = makeCollection({ findOne: vi.fn().mockResolvedValueOnce(null) });
       const storageBoxes = makeCollection();
-      const db = makeDb({ amostras: samples, storageBoxes });
+      const db = makeDb({ samples, storageBoxes });
       const repo = new MongoStorageRepository(db);
 
       await expect(repo.releaseSamplePosition({ sampleId }, {})).rejects.toThrow(
@@ -392,7 +392,7 @@ describe('MongoStorageRepository', () => {
         findOne: vi.fn().mockResolvedValueOnce({ _id: sampleId })
       });
       const storageBoxes = makeCollection();
-      const db = makeDb({ amostras: samples, storageBoxes });
+      const db = makeDb({ samples, storageBoxes });
       const repo = new MongoStorageRepository(db);
 
       await expect(repo.releaseSamplePosition({ sampleId }, {})).rejects.toThrow(
@@ -417,10 +417,6 @@ describe('MongoStorageRepository', () => {
       const storageBoxes = makeCollection({
         updateOne: vi.fn().mockResolvedValueOnce({ matchedCount: 0 })
       });
-      // NOTE: getCollection() resolves the canonical name 'samples' (no
-      // listCollections on this mock db), not the 'amostras' alias the other
-      // tests in this describe block use — those are broken independent of
-      // this issue (see issue filed for the whole-file mock mismatch).
       const db = makeDb({ samples, storageBoxes });
       const repo = new MongoStorageRepository(db);
 
@@ -610,7 +606,7 @@ describe('MongoStorageRepository', () => {
     it('returns found:false SAMPLE_NOT_FOUND when sample missing', async () => {
       const samples = makeCollection({ findOne: vi.fn().mockResolvedValueOnce(null) });
       const storagePaths = makeCollection();
-      const db = makeDb({ amostras: samples, storagePaths });
+      const db = makeDb({ samples, storagePaths });
       const repo = new MongoStorageRepository(db);
 
       const result = await repo.getSampleStorageLocation({ sampleId });
@@ -622,7 +618,7 @@ describe('MongoStorageRepository', () => {
         findOne: vi.fn().mockResolvedValueOnce({ _id: sampleId })
       });
       const storagePaths = makeCollection();
-      const db = makeDb({ amostras: samples, storagePaths });
+      const db = makeDb({ samples, storagePaths });
       const repo = new MongoStorageRepository(db);
 
       const result = await repo.getSampleStorageLocation({ sampleId });
@@ -648,7 +644,7 @@ describe('MongoStorageRepository', () => {
           boxId
         })
       });
-      const db = makeDb({ amostras: samples, storagePaths });
+      const db = makeDb({ samples, storagePaths });
       const repo = new MongoStorageRepository(db);
 
       const result = await repo.getSampleStorageLocation({ sampleId });
@@ -672,7 +668,7 @@ describe('MongoStorageRepository', () => {
         })
       });
       const storagePaths = makeCollection({ findOne: vi.fn().mockResolvedValueOnce(null) });
-      const db = makeDb({ amostras: samples, storagePaths });
+      const db = makeDb({ samples, storagePaths });
       const repo = new MongoStorageRepository(db);
 
       const result = await repo.getSampleStorageLocation({ sampleId });
@@ -685,7 +681,7 @@ describe('MongoStorageRepository', () => {
   describe('searchAllocatableSampleCandidates', () => {
     it('returns [] without hitting the db when query is shorter than 2 chars', async () => {
       const samples = makeCollection();
-      const db = makeDb({ amostras: samples });
+      const db = makeDb({ samples });
       const repo = new MongoStorageRepository(db);
 
       const result = await repo.searchAllocatableSampleCandidates({ query: 'a' });
@@ -695,7 +691,7 @@ describe('MongoStorageRepository', () => {
 
     it('returns [] for an empty/missing query', async () => {
       const samples = makeCollection();
-      const db = makeDb({ amostras: samples });
+      const db = makeDb({ samples });
       const repo = new MongoStorageRepository(db);
 
       const result = await repo.searchAllocatableSampleCandidates({ query: '' });
@@ -708,7 +704,7 @@ describe('MongoStorageRepository', () => {
       const limit = vi.fn(() => ({ toArray }));
       const find = vi.fn(() => ({ limit }));
       const samples = makeCollection({ find });
-      const db = makeDb({ amostras: samples });
+      const db = makeDb({ samples });
       const repo = new MongoStorageRepository(db);
 
       const result = await repo.searchAllocatableSampleCandidates({ query: 'BC-9' });
