@@ -175,12 +175,7 @@ describe('ImportService.importTemperature', () => {
     expect(inserted[0].temperatureValue).toBe(-20);
   });
 
-  // NOTE: `total` does NOT count this row (documenting a real bug, not asserting
-  // desired behavior) - the `continue` on a validation failure skips the
-  // `results.total++` at the bottom of the loop, so `total` undercounts whenever
-  // a row fails TemperatureModel.validate(). Same undercounting pattern already
-  // filed for import-lgpd.service.js (issue #65); filed separately as issue #79.
-  it('records a validation error for a row missing sensorId (total undercounts due to a known bug)', async () => {
+  it('records a validation error for a row missing sensorId and still counts it in total', async () => {
     const filePath = writeTmpFile('temps-missing-sensor.csv', 'sensorId,temperatureValue\n,-5\n');
     const inserted = [];
     const db = {
@@ -192,7 +187,7 @@ describe('ImportService.importTemperature', () => {
     const result = await importService.importTemperature(db, { path: filePath, originalname: 'temps-missing-sensor.csv' });
 
     expect(result.success).toBe(0);
-    expect(result.total).toBe(0);
+    expect(result.total).toBe(1);
     expect(result.errors).toEqual([
       expect.objectContaining({ errors: expect.arrayContaining(['sensorId é obrigatório']) }),
     ]);
@@ -209,9 +204,7 @@ describe('ImportService.importTemperature', () => {
     expect(result.errors[0].errors).toEqual(expect.arrayContaining(['temperatureUnit deve ser °C, °F ou K']));
   });
 
-  // NOTE: `total` ends at 1, not 2 - same known-bug undercounting as above; the
-  // second (invalid) row's `continue` skips `results.total++`.
-  it('counts a success and a validation failure, but total undercounts the failure (known bug)', async () => {
+  it('counts a success and a validation failure, both included in total', async () => {
     const filePath = writeTmpFile('temps-mixed.csv', 'sensorId,temperatureValue\nS1,10\n,20\n');
     const inserted = [];
     const db = {
@@ -222,7 +215,7 @@ describe('ImportService.importTemperature', () => {
 
     const result = await importService.importTemperature(db, { path: filePath, originalname: 'temps-mixed.csv' });
 
-    expect(result.total).toBe(1);
+    expect(result.total).toBe(2);
     expect(result.success).toBe(1);
     expect(result.errors).toHaveLength(1);
     expect(inserted).toHaveLength(1);
