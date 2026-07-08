@@ -39,7 +39,7 @@ describe('validateMiabisCompliance', () => {
     expect(result).toEqual({
       isCompliant: false,
       missingFields: ['sampleNotFound'],
-      consentStatus: 'not_found',
+      consentStatus: 'sample_not_found',
       canBeShared: false,
     });
     expect(getCollectionSpy).not.toHaveBeenCalled();
@@ -131,7 +131,7 @@ describe('validateMiabisCompliance', () => {
     expect(result.isCompliant).toBe(false);
   });
 
-  it('keeps consentStatus as not_found and canBeShared false when no consent record exists', async () => {
+  it('uses consentStatus no_consent (distinct from sample_not_found) when no consent record exists', async () => {
     vi.spyOn(Sample, 'findById').mockReturnValue({
       lean: vi.fn().mockResolvedValue(makeCompleteSample()),
     });
@@ -143,7 +143,7 @@ describe('validateMiabisCompliance', () => {
     expect(result).toEqual({
       isCompliant: false,
       missingFields: [],
-      consentStatus: 'not_found',
+      consentStatus: 'no_consent',
       canBeShared: false,
     });
   });
