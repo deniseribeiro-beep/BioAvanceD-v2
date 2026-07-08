@@ -56,6 +56,33 @@ describe('GET /api/temperature', () => {
   });
 });
 
+describe('GET /api/temperature/control', () => {
+  beforeEach(() => { givenSession(); });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  // Issue #49: '/control' was registered after '/:id', so Express matched
+  // '/:id' first (req.params.id === 'control') instead of reaching getControl.
+  it('reaches the control handler instead of being shadowed by GET /:id', async () => {
+    givenTemperatureCollection({
+      find: vi.fn().mockImplementation(() => ({
+        toArray: vi.fn().mockResolvedValue([]),
+        sort: vi.fn().mockReturnThis(),
+        skip: vi.fn().mockReturnThis(),
+        limit: vi.fn().mockReturnThis(),
+        project: vi.fn().mockReturnThis(),
+      })),
+    });
+
+    const response = await request(app)
+      .get('/api/temperature/control')
+      .set('Authorization', `Bearer ${makeToken(2)}`);
+
+    // GET /:id would try `new ObjectId('control')`, which throws and 500s.
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ success: true, data: [] });
+  });
+});
+
 describe('POST /api/temperature/system/reading', () => {
   afterEach(() => { vi.restoreAllMocks(); });
 
