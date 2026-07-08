@@ -287,11 +287,12 @@ class ImportService {
         const patients = Array.isArray(data) ? data : [data];
 
         for (const patientData of patients) {
+          results.total++;
           try {
             const validation = PatientModel.validate(patientData);
             if (!validation.isValid) {
               results.errors.push({
-                row: results.total + 1,
+                row: results.total,
                 errors: validation.errors
               });
               continue;
@@ -299,12 +300,12 @@ class ImportService {
             const upsertResult = await upsertPatient(patientData);
             if (upsertResult.action === 'error') {
               results.errors.push({
-                row: results.total + 1,
+                row: results.total,
                 error: upsertResult.error
               });
             } else if (upsertResult.action === 'skip') {
               results.errors.push({
-                row: results.total + 1,
+                row: results.total,
                 error: upsertResult.reason
               });
             } else {
@@ -312,11 +313,10 @@ class ImportService {
             }
           } catch (error) {
             results.errors.push({
-              row: results.total + 1,
+              row: results.total,
               error: error.message
             });
           }
-          results.total++;
         }
       } else if (ext === '.csv') {
         const rows = [];
@@ -329,12 +329,13 @@ class ImportService {
         });
 
         for (const row of rows) {
+          results.total++;
           try {
             const patientData = this.parsePatientCSV(row);
             const validation = PatientModel.validate(patientData);
             if (!validation.isValid) {
               results.errors.push({
-                row: results.total + 1,
+                row: results.total,
                 errors: validation.errors
               });
               continue;
@@ -342,12 +343,12 @@ class ImportService {
             const upsertResult = await upsertPatient(patientData);
             if (upsertResult.action === 'error') {
               results.errors.push({
-                row: results.total + 1,
+                row: results.total,
                 error: upsertResult.error
               });
             } else if (upsertResult.action === 'skip') {
               results.errors.push({
-                row: results.total + 1,
+                row: results.total,
                 error: upsertResult.reason
               });
             } else {
@@ -355,11 +356,10 @@ class ImportService {
             }
           } catch (error) {
             results.errors.push({
-              row: results.total + 1,
+              row: results.total,
               error: error.message
             });
           }
-          results.total++;
         }
       }
 

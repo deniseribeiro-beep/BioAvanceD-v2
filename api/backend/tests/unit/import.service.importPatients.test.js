@@ -134,25 +134,19 @@ describe('ImportService.importPatients (JSON)', () => {
     expect(collection.inserted).toHaveLength(0);
   });
 
-  // NOTE: `total` does NOT count this row (documenting a real bug, not asserting
-  // desired behavior) - the `continue` on a validation failure skips the
-  // `results.total++` at the bottom of the loop, same undercounting pattern
-  // already filed for importTemperature (issue #79) and import-lgpd.service.js
-  // (issue #65); filed separately for importPatients as issue #86.
-  it('records a model-validation error and does not insert when required fields are missing (total undercounts due to a known bug)', async () => {
+  it('records a model-validation error and does not insert when required fields are missing', async () => {
     const filePath = writeTmpFile('invalid.json', JSON.stringify({ patientName: '', sex: 'X' }));
     const collection = makePatientsCollection();
 
     const result = await importService.importPatients({ collection: () => collection }, { path: filePath, originalname: 'invalid.json' });
 
     expect(result.success).toBe(0);
-    expect(result.total).toBe(0);
+    expect(result.total).toBe(1);
     expect(result.errors[0].errors.length).toBeGreaterThan(0);
     expect(collection.inserted).toHaveLength(0);
   });
 
-  // NOTE: `total` ends at 1, not 2 - same known-bug undercounting as above (issue #86).
-  it('imports an array of JSON patients, counting successes but total undercounts the invalid row (known bug)', async () => {
+  it('imports an array of JSON patients, counting successes and the invalid row in total', async () => {
     const filePath = writeTmpFile('array.json', JSON.stringify([
       validPatient({ cpf: '11111111111' }),
       { patientName: '', sex: 'X' },
@@ -161,7 +155,7 @@ describe('ImportService.importPatients (JSON)', () => {
 
     const result = await importService.importPatients({ collection: () => collection }, { path: filePath, originalname: 'array.json' });
 
-    expect(result.total).toBe(1);
+    expect(result.total).toBe(2);
     expect(result.success).toBe(1);
     expect(result.errors).toHaveLength(1);
   });
