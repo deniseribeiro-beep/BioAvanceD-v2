@@ -1,32 +1,16 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
 
 const Sample = require('../../src/models/Sample');
-const connectionModule = require('../../src/infrastructure/database/neo4j/connection');
+const collectionResolver = require('../../src/utils/collectionResolver');
 
-// Set up the connectNeo4j spy BEFORE requiring the service module, so the
-// destructured `const { connectNeo4j } = require(...)` inside the service
-// picks up the spy (per this repo's documented gotcha).
-vi.spyOn(connectionModule, 'connectNeo4j');
-
-const servicePath = require.resolve('../../src/services/miabisValidator.service');
-let { validateMiabisCompliance } = require(servicePath);
-
-function makeFakeSession(runImpl) {
-  return {
-    run: vi.fn(runImpl),
-    close: vi.fn().mockResolvedValue(undefined),
-  };
-}
-
-function makeFakeDriver(session) {
-  return { session: vi.fn(() => session) };
-}
+const { validateMiabisCompliance } = require('../../src/services/miabisValidator.service');
 
 function makeCompleteSample(overrides = {}) {
   return {
+    patientID: 'patient-1',
     sampleType: 'blood',
     anatomicalSite: 'arm',
     storageTemperature: -20,
@@ -35,30 +19,22 @@ function makeCompleteSample(overrides = {}) {
   };
 }
 
+function makeFakeDb() {
+  return {};
+}
+
 describe('validateMiabisCompliance', () => {
   beforeEach(() => {
-    // IMPORTANT: the service module destructures `connectNeo4j` at require
-    // time, so it holds a reference to the exact mock function object that
-    // existed at that moment. `vi.restoreAllMocks()` would swap
-    // `connectionModule.connectNeo4j` back to the real implementation and
-    // any subsequent `vi.spyOn` call creates a *new* mock object that the
-    // service never sees. So for this one spy we only reset its state
-    // in-place (mockReset), never restore/re-spy its identity.
-    connectionModule.connectNeo4j.mockReset();
-
-    // Sample.findById is looked up fresh on every call (not destructured),
-    // so it's safe to fully restore/re-spy per test.
-    if (vi.isMockFunction(Sample.findById)) {
-      Sample.findById.mockRestore();
-    }
+    vi.restoreAllMocks();
   });
 
-  it('returns sampleNotFound result and never calls connectNeo4j when sample is missing', async () => {
+  it('returns sampleNotFound result and never queries consents when sample is missing', async () => {
     vi.spyOn(Sample, 'findById').mockReturnValue({
       lean: vi.fn().mockResolvedValue(null),
     });
+    const getCollectionSpy = vi.spyOn(collectionResolver, 'getCollection');
 
-    const result = await validateMiabisCompliance('missing-id');
+    const result = await validateMiabisCompliance('missing-id', makeFakeDb());
 
     expect(result).toEqual({
       isCompliant: false,
@@ -66,17 +42,17 @@ describe('validateMiabisCompliance', () => {
       consentStatus: 'not_found',
       canBeShared: false,
     });
-    expect(connectionModule.connectNeo4j).not.toHaveBeenCalled();
+    expect(getCollectionSpy).not.toHaveBeenCalled();
   });
 
   it('fast-fails with not_evaluated and preserves field order when only some fields are missing', async () => {
-    // Missing sampleType and diagnosisCode only
     const sample = makeCompleteSample({ sampleType: undefined, diagnosisCode: undefined });
     vi.spyOn(Sample, 'findById').mockReturnValue({
       lean: vi.fn().mockResolvedValue(sample),
     });
+    const getCollectionSpy = vi.spyOn(collectionResolver, 'getCollection');
 
-    const result = await validateMiabisCompliance('id-1');
+    const result = await validateMiabisCompliance('id-1', makeFakeDb());
 
     expect(result).toEqual({
       isCompliant: false,
@@ -84,7 +60,7 @@ describe('validateMiabisCompliance', () => {
       consentStatus: 'not_evaluated',
       canBeShared: false,
     });
-    expect(connectionModule.connectNeo4j).not.toHaveBeenCalled();
+    expect(getCollectionSpy).not.toHaveBeenCalled();
   });
 
   it('lists all four missing fields in fixed order when all are absent', async () => {
@@ -92,7 +68,7 @@ describe('validateMiabisCompliance', () => {
       lean: vi.fn().mockResolvedValue({}),
     });
 
-    const result = await validateMiabisCompliance('id-2');
+    const result = await validateMiabisCompliance('id-2', makeFakeDb());
 
     expect(result.missingFields).toEqual([
       'sampleType',
@@ -103,39 +79,35 @@ describe('validateMiabisCompliance', () => {
     expect(result.consentStatus).toBe('not_evaluated');
   });
 
-  it('is fully compliant when all fields present and Neo4j reports valid public consent', async () => {
+  it('is fully compliant when all fields present and an active consent record exists', async () => {
     vi.spyOn(Sample, 'findById').mockReturnValue({
       lean: vi.fn().mockResolvedValue(makeCompleteSample()),
     });
+    const findOne = vi.fn().mockResolvedValue({ status: 'ACTIVE' });
+    vi.spyOn(collectionResolver, 'getCollection').mockResolvedValue({ findOne });
 
-    const fakeRecord = { toObject: () => ({ status: 'valid', isPublic: true }) };
-    const fakeSession = makeFakeSession(async () => ({ records: [fakeRecord] }));
-    const fakeDriver = makeFakeDriver(fakeSession);
-    connectionModule.connectNeo4j.mockResolvedValue(fakeDriver);
+    const result = await validateMiabisCompliance('id-3', makeFakeDb());
 
-    const result = await validateMiabisCompliance('id-3');
-
-    expect(connectionModule.connectNeo4j).toHaveBeenCalledTimes(1);
-    expect(fakeSession.run).toHaveBeenCalledWith(expect.stringContaining('MATCH'), { sampleId: 'id-3' });
-    expect(fakeSession.close).toHaveBeenCalledTimes(1);
+    expect(findOne).toHaveBeenCalledWith(
+      { patientId: 'patient-1' },
+      { sort: { signedAt: -1, createdAt: -1 } }
+    );
     expect(result).toEqual({
       isCompliant: true,
       missingFields: [],
-      consentStatus: 'valid',
+      consentStatus: 'active',
       canBeShared: true,
     });
   });
 
-  it('is not compliant when consent record exists but status is not valid', async () => {
+  it('is not compliant when consent record exists but status is not active', async () => {
     vi.spyOn(Sample, 'findById').mockReturnValue({
       lean: vi.fn().mockResolvedValue(makeCompleteSample()),
     });
+    const findOne = vi.fn().mockResolvedValue({ status: 'REVOKED' });
+    vi.spyOn(collectionResolver, 'getCollection').mockResolvedValue({ findOne });
 
-    const fakeRecord = { toObject: () => ({ status: 'revoked', isPublic: false }) };
-    const fakeSession = makeFakeSession(async () => ({ records: [fakeRecord] }));
-    connectionModule.connectNeo4j.mockResolvedValue(makeFakeDriver(fakeSession));
-
-    const result = await validateMiabisCompliance('id-4');
+    const result = await validateMiabisCompliance('id-4', makeFakeDb());
 
     expect(result).toEqual({
       isCompliant: false,
@@ -149,27 +121,24 @@ describe('validateMiabisCompliance', () => {
     vi.spyOn(Sample, 'findById').mockReturnValue({
       lean: vi.fn().mockResolvedValue(makeCompleteSample()),
     });
+    const findOne = vi.fn().mockResolvedValue({ status: null });
+    vi.spyOn(collectionResolver, 'getCollection').mockResolvedValue({ findOne });
 
-    const fakeRecord = { toObject: () => ({ status: null, isPublic: 1 }) };
-    const fakeSession = makeFakeSession(async () => ({ records: [fakeRecord] }));
-    connectionModule.connectNeo4j.mockResolvedValue(makeFakeDriver(fakeSession));
-
-    const result = await validateMiabisCompliance('id-5');
+    const result = await validateMiabisCompliance('id-5', makeFakeDb());
 
     expect(result.consentStatus).toBe('unknown');
-    expect(result.canBeShared).toBe(true); // !!1 coercion
+    expect(result.canBeShared).toBe(false);
     expect(result.isCompliant).toBe(false);
   });
 
-  it('keeps consentStatus as not_found and canBeShared false when Neo4j returns no records', async () => {
+  it('keeps consentStatus as not_found and canBeShared false when no consent record exists', async () => {
     vi.spyOn(Sample, 'findById').mockReturnValue({
       lean: vi.fn().mockResolvedValue(makeCompleteSample()),
     });
+    const findOne = vi.fn().mockResolvedValue(null);
+    vi.spyOn(collectionResolver, 'getCollection').mockResolvedValue({ findOne });
 
-    const fakeSession = makeFakeSession(async () => ({ records: [] }));
-    connectionModule.connectNeo4j.mockResolvedValue(makeFakeDriver(fakeSession));
-
-    const result = await validateMiabisCompliance('id-6');
+    const result = await validateMiabisCompliance('id-6', makeFakeDb());
 
     expect(result).toEqual({
       isCompliant: false,
@@ -177,17 +146,15 @@ describe('validateMiabisCompliance', () => {
       consentStatus: 'not_found',
       canBeShared: false,
     });
-    expect(fakeSession.close).toHaveBeenCalledTimes(1);
   });
 
-  it('catches errors from connectNeo4j and falls back to consentStatus error without rethrowing', async () => {
+  it('catches errors from getCollection and falls back to consentStatus error without rethrowing', async () => {
     vi.spyOn(Sample, 'findById').mockReturnValue({
       lean: vi.fn().mockResolvedValue(makeCompleteSample()),
     });
+    vi.spyOn(collectionResolver, 'getCollection').mockRejectedValue(new Error('mongo down'));
 
-    connectionModule.connectNeo4j.mockRejectedValue(new Error('neo4j down'));
-
-    const result = await validateMiabisCompliance('id-7');
+    const result = await validateMiabisCompliance('id-7', makeFakeDb());
 
     expect(result).toEqual({
       isCompliant: false,
@@ -197,17 +164,14 @@ describe('validateMiabisCompliance', () => {
     });
   });
 
-  it('catches errors from session.run and falls back to consentStatus error', async () => {
+  it('catches errors from findOne and falls back to consentStatus error', async () => {
     vi.spyOn(Sample, 'findById').mockReturnValue({
       lean: vi.fn().mockResolvedValue(makeCompleteSample()),
     });
+    const findOne = vi.fn().mockRejectedValue(new Error('query failed'));
+    vi.spyOn(collectionResolver, 'getCollection').mockResolvedValue({ findOne });
 
-    const fakeSession = makeFakeSession(async () => {
-      throw new Error('cypher failed');
-    });
-    connectionModule.connectNeo4j.mockResolvedValue(makeFakeDriver(fakeSession));
-
-    const result = await validateMiabisCompliance('id-8');
+    const result = await validateMiabisCompliance('id-8', makeFakeDb());
 
     expect(result).toEqual({
       isCompliant: false,

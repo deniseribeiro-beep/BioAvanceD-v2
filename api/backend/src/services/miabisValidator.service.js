@@ -1,13 +1,15 @@
 // backend/src/services/miabisValidator.service.js
 const Sample = require('../models/Sample');
-const PatientConsent = require('../models/PatientConsent');
+const logger = require('../utils/logger');
+const collectionResolver = require('../utils/collectionResolver');
 
 /**
  * MIABIS Compliance Validator
  * @param {string} sampleId
+ * @param {import('mongodb').Db} db
  * @returns {Promise<{isCompliant: boolean, missingFields: string[], consentStatus: string, canBeShared: boolean}>}
  */
-async function validateMiabisCompliance(sampleId) {
+async function validateMiabisCompliance(sampleId, db) {
   // 1. MongoDB: Check required fields
   const sample = await Sample.findById(sampleId).lean();
   const missingFields = [];
@@ -28,17 +30,22 @@ async function validateMiabisCompliance(sampleId) {
   let consentStatus = 'not_found';
   let canBeShared = false;
   try {
-    const consent = await PatientConsent.findOne({ patientId: sample.patientID }).sort({ signedAt: -1, createdAt: -1 }).lean();
+    const consentsCollection = await collectionResolver.getCollection(db, 'consents');
+    const consent = await consentsCollection.findOne(
+      { patientId: sample.patientID },
+      { sort: { signedAt: -1, createdAt: -1 } }
+    );
     if (consent) {
       consentStatus = String(consent.status || 'unknown').toLowerCase();
       canBeShared = consentStatus === 'active';
     }
   } catch (err) {
+    logger.error(`[MIABIS] Falha ao consultar consentimento para amostra ${sampleId}: ${err.message}`);
     consentStatus = 'error';
     canBeShared = false;
   }
 
-  const isCompliant = missingFields.length === 0 && consentStatus === 'valid';
+  const isCompliant = missingFields.length === 0 && consentStatus === 'active';
   return { isCompliant, missingFields, consentStatus, canBeShared };
 }
 

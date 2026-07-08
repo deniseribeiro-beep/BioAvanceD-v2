@@ -9,7 +9,14 @@ const { authenticate } = require('../../infrastructure/middleware/auth');
 router.get('/:id/miabis-compliance', authenticate, async (req, res) => {
   try {
     const sampleId = req.params.id;
-    const result = await validateMiabisCompliance(sampleId);
+    const db = req.app.locals.db;
+    if (!db) {
+      return res.status(503).json({
+        success: false,
+        error: 'Banco de dados não disponível'
+      });
+    }
+    const result = await validateMiabisCompliance(sampleId, db);
     return res.status(200).json(result);
   } catch (error) {
     return res.status(500).json({
