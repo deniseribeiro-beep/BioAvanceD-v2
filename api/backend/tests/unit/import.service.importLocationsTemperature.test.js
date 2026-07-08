@@ -194,6 +194,24 @@ describe('ImportService.importTemperature', () => {
     expect(inserted).toHaveLength(0);
   });
 
+  it('rejects a garbage temperatureValue instead of silently inserting NaN (issue #77)', async () => {
+    const filePath = writeTmpFile('temps-garbage-value.csv', 'sensorId,temperatureValue\nS1,not-a-number\n');
+    const inserted = [];
+    const db = {
+      collection: () => ({
+        insertOne: async (doc) => { inserted.push(doc); return { insertedId: 't1' }; },
+      }),
+    };
+
+    const result = await importService.importTemperature(db, { path: filePath, originalname: 'temps-garbage-value.csv' });
+
+    expect(result.success).toBe(0);
+    expect(result.errors[0].errors).toEqual(
+      expect.arrayContaining(['temperatureValue é obrigatório e deve ser number'])
+    );
+    expect(inserted).toHaveLength(0);
+  });
+
   it('rejects an invalid temperatureUnit', async () => {
     const filePath = writeTmpFile('temps-bad-unit.csv', 'sensorId,temperatureValue,temperatureUnit\nS1,10,X\n');
     const db = { collection: () => ({ insertOne: async () => ({ insertedId: 't1' }) }) };
