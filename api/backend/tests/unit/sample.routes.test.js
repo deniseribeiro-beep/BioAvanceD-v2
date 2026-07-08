@@ -410,7 +410,7 @@ describe('sample.routes', () => {
 
       expect(res.status).toBe(200);
       expect(res.body).toEqual({ compliant: true, missing: [] });
-      expect(validateMiabisCompliance).toHaveBeenCalledWith('s1');
+      expect(validateMiabisCompliance).toHaveBeenCalledWith('s1', {});
     });
 
     it('returns 500 when the validator throws', async () => {
@@ -422,6 +422,17 @@ describe('sample.routes', () => {
 
       expect(res.status).toBe(500);
       expect(res.body.success).toBe(false);
+    });
+
+    it('returns 503 when db is unavailable', async () => {
+      const validateMiabisCompliance = vi.fn().mockResolvedValue({ compliant: true, missing: [] });
+      const { router } = loadRoute({ validateMiabisCompliance });
+      const app = buildApp(router, null);
+
+      const res = await request(app).get('/api/samples/s1/miabis-compliance');
+
+      expect(res.status).toBe(503);
+      expect(validateMiabisCompliance).not.toHaveBeenCalled();
     });
   });
 
