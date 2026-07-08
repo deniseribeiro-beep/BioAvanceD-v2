@@ -332,8 +332,13 @@ router.get('/suggest', async (req, res) => {
     await setCacheValue(cacheKey, 3600, JSON.stringify(response));
     res.json(response);
   } catch (err) {
+    const db = req.app.locals.db;
+    if (!db || typeof db.collection !== 'function') {
+      return res.status(500).json({ error: err.message });
+    }
+
     try {
-      const fallback = await buildLocalSemanticSuggestions(req.app.locals.db, orphaCode);
+      const fallback = await buildLocalSemanticSuggestions(db, orphaCode);
       if (fallback) {
         await setCacheValue(cacheKey, 3600, JSON.stringify(fallback));
         return res.json(fallback);
