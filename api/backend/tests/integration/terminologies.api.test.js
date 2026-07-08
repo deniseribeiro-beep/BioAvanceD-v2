@@ -5,6 +5,23 @@ const express = require('express');
 process.env.NODE_ENV = 'test';
 process.env.JWT_SECRET = process.env.JWT_SECRET || 'vitest-secret-key';
 
+// terminologies.routes.js destructures `syncFromOrphadata` from this module at
+// require time, so a post-hoc vi.spyOn on the module export never reaches the
+// route's local binding, and (per tests/unit/routes/orphanet.test.js's own
+// documented finding) vi.mock() on a plain-CJS module required via require()
+// doesn't reliably intercept that destructuring in this repo/vitest version
+// either. Instead, patch the exported property in place -- BEFORE app.js (and
+// therefore the routes file) is first required -- so the destructuring reads
+// off the already-mocked function.
+const terminologySyncService = require('../../src/services/terminologySync.service');
+const syncFromOrphadataMock = vi.fn();
+Object.defineProperty(terminologySyncService, 'syncFromOrphadata', {
+  value: syncFromOrphadataMock,
+  configurable: true,
+  writable: true,
+  enumerable: true,
+});
+
 const app = require('../../app');
 const { createCollectionMock, createDbMock } = require('../factories/db.factory');
 
@@ -316,8 +333,7 @@ describe('GET /api/terminologies - Orphadata live fallback (fresh module, base U
 
 describe('POST /api/terminologies/sync', () => {
   it('returns success when sync runs without error', async () => {
-    const terminologySync = require('../../src/services/terminologySync.service');
-    vi.spyOn(terminologySync, 'syncFromOrphadata').mockResolvedValue({ synced: 0, errors: 0 });
+    syncFromOrphadataMock.mockResolvedValue({ synced: 0, errors: 0 });
 
     const coll = createCollectionMock();
     app.locals.db = createDbMock({ terminologies: coll });
@@ -325,6 +341,7 @@ describe('POST /api/terminologies/sync', () => {
     const res = await request(app).post('/api/terminologies/sync');
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
+    expect(syncFromOrphadataMock).toHaveBeenCalledWith(app.locals.db);
   });
 
   it('returns 503 when db is unavailable', async () => {
@@ -336,8 +353,7 @@ describe('POST /api/terminologies/sync', () => {
   });
 
   it('returns 200 with sync result fields', async () => {
-    const terminologySync = require('../../src/services/terminologySync.service');
-    vi.spyOn(terminologySync, 'syncFromOrphadata').mockResolvedValue({ synced: 42, errors: 0 });
+    syncFromOrphadataMock.mockResolvedValue({ synced: 42, errors: 0 });
 
     const coll = createCollectionMock();
     app.locals.db = createDbMock({ terminologies: coll });
@@ -345,5 +361,8 @@ describe('POST /api/terminologies/sync', () => {
     const res = await request(app).post('/api/terminologies/sync');
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
+    expect(res.body.synced).toBe(42);
+    expect(res.body.errors).toBe(0);
+    expect(syncFromOrphadataMock).toHaveBeenCalledWith(app.locals.db);
   });
 });
