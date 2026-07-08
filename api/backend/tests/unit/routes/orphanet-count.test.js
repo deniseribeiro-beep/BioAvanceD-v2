@@ -102,5 +102,21 @@ describe('orphanet-count route GET /count', () => {
       expect(res.status).toBe(500);
       expect(res.body).toEqual({ error: 'connect boom' });
     });
+
+    // Issue #13: fallback branch leaked the MongoClient connection when
+    // aggregate().toArray() rejected, because close() was only called on
+    // the success path before the try/catch's catch block.
+    it('closes the fallback MongoClient even when aggregate() rejects', async () => {
+      toArray.mockImplementation(async () => {
+        throw new Error('aggregate boom');
+      });
+
+      const app = buildAppWithNoDb();
+      const res = await request(app).get('/api/orphanet-count/count');
+
+      expect(res.status).toBe(500);
+      expect(res.body).toEqual({ error: 'aggregate boom' });
+      expect(close).toHaveBeenCalledTimes(1);
+    });
   });
 });
