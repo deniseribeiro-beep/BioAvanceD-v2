@@ -1,44 +1,10 @@
-import { describe, it, expect, vi, beforeEach, beforeAll, afterAll, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
 
 const sampleService = require('../../src/services/sample.service');
-// Default export of models/Sample.js is the mongoose Model itself (see bug note
-// below); the *actual* hand-written validation/business-logic class is attached
-// as a property.
-const SampleModuleExport = require('../../src/models/Sample');
-const RealSampleModel = SampleModuleExport.SampleModel;
 const fhirSyncService = require('../../src/services/fhir-sync.service');
-
-// ---------------------------------------------------------------------------
-// PRODUCT BUG WORKAROUND (documented in the report, not fixed here):
-// sample.service.js does `const SampleModel = require('../models/Sample')`.
-// Because models/Sample.js does `module.exports = Sample` (the mongoose Model)
-// and only *afterwards* attaches `module.exports.SampleModel = SampleModel`,
-// the local `SampleModel` binding inside sample.service.js is actually the
-// mongoose Model, not the hand-written class with the intended static helpers.
-// `SampleModel.computeStatus`, `.validateWithdrawalType`, `.validateResponsibleName`,
-// `.mapLifecycleToLegacy`, `.validateSampleType/Origin/ExtractionType/Status`,
-// and `.validateLifecycleStatus` are all `undefined` on the mongoose Model, and
-// `.validate` / `.create` resolve to mongoose's own built-in static methods
-// (different signatures/semantics) instead of the intended ones. In particular
-// `SampleModel.validate(sampleData)` in createSample returns an un-awaited
-// Promise, so `!validation.isValid` is always `true` and createSample throws a
-// 422 "Dados da amostra inválidos" for literally every call in real usage.
-// We monkey-patch the shared singleton module here so the rest of
-// sample.service.js's own branch logic (which is this file's scope) is
-// actually reachable and testable.
-// ---------------------------------------------------------------------------
-beforeAll(() => {
-  const keys = Object.getOwnPropertyNames(RealSampleModel).filter(
-    (k) => typeof RealSampleModel[k] === 'function'
-  );
-  keys.forEach((k) => {
-    SampleModuleExport[k] = RealSampleModel[k].bind(RealSampleModel);
-  });
-  SampleModuleExport.STATUS = RealSampleModel.STATUS;
-});
 
 function makeCursor(docs = []) {
   const cursor = {
