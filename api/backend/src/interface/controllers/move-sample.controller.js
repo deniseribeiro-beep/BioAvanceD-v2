@@ -4,6 +4,18 @@ const MongoAuditRepository = require('../../infrastructure/persistence/mongo/Mon
 const LineageRepository = require('../../infrastructure/database/neo4j/LineageRepository');
 const logger = require('../../utils/logger');
 
+// Substrings of the client-input validation errors MoveSampleUseCase throws
+// (validateCommand + pre-transaction business rule checks). Anything not
+// matching one of these, or the 404/409 patterns above, is treated as an
+// unexpected/infra failure and mapped to 500 instead of masked as a 400.
+const VALIDATION_ERROR_PATTERNS = [
+  'inválido',
+  'obrigatório',
+  'deve seguir formato',
+  'não possui localização de origem',
+  'deve ser diferente da posição atual'
+];
+
 /**
  * Factory de controller HTTP para movimentação de amostras.
  * Mantém a rota desacoplada da implementação concreta do caso de uso.
@@ -56,9 +68,14 @@ function createMoveSampleController() {
       logger.error('[MoveSampleController] Erro ao mover amostra:', error.message || error);
       const message = error?.message || 'Erro ao mover amostra';
 
-      let statusCode = 400;
-      if (message.includes('não encontrada')) statusCode = 404;
-      if (message.includes('STORAGE_COLLISION')) statusCode = 409;
+      let statusCode = 500;
+      if (message.includes('não encontrada')) {
+        statusCode = 404;
+      } else if (message.includes('STORAGE_COLLISION')) {
+        statusCode = 409;
+      } else if (VALIDATION_ERROR_PATTERNS.some((pattern) => message.includes(pattern))) {
+        statusCode = 400;
+      }
 
       return res.status(statusCode).json({
         success: false,
