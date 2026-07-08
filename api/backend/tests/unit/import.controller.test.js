@@ -333,7 +333,7 @@ describe('import.controller', () => {
       vi.spyOn(qualityDomain, 'calculateMethodologyQualityFromSprec').mockReturnValue({
         final_grade: 'A',
         category: 'A',
-        score: 90,
+        rcs_score: 90,
         governance_status: 1
       });
       vi.spyOn(qualityDomain, 'buildPenaltyLog').mockReturnValue([]);
@@ -380,8 +380,8 @@ describe('import.controller', () => {
     it('counts quarantinedTechnical for grade E specimens and averages multiple scores', async () => {
       const db = { collection: vi.fn().mockReturnValue({}) };
       const calcSpy = vi.spyOn(qualityDomain, 'calculateMethodologyQualityFromSprec');
-      calcSpy.mockReturnValueOnce({ final_grade: 'E', category: 'E', score: 10, governance_status: 0 });
-      calcSpy.mockReturnValueOnce({ final_grade: 'C', category: 'C', score: 50, governance_status: 1 });
+      calcSpy.mockReturnValueOnce({ final_grade: 'E', category: 'E', rcs_score: 10, governance_status: 0 });
+      calcSpy.mockReturnValueOnce({ final_grade: 'C', category: 'C', rcs_score: 50, governance_status: 1 });
       vi.spyOn(qualityDomain, 'buildPenaltyLog').mockReturnValue([]);
 
       const bundle = {
@@ -409,7 +409,7 @@ describe('import.controller', () => {
       const collectionStub = { insertOne: vi.fn() };
       const db = { collection: vi.fn().mockReturnValue(collectionStub) };
       vi.spyOn(qualityDomain, 'calculateMethodologyQualityFromSprec').mockReturnValue({
-        final_grade: 'A', category: 'A', score: 90, governance_status: 1
+        final_grade: 'A', category: 'A', rcs_score: 90, governance_status: 1
       });
       vi.spyOn(qualityDomain, 'buildPenaltyLog').mockReturnValue([]);
 
