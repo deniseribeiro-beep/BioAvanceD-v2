@@ -18,7 +18,11 @@ changes, not just unrelated file edits.
 1. `git fetch origin`, then `git log --oneline
    feature/docker-e2e-backend-integration..origin/main` and the reverse
    direction — know the size of what's coming both ways before touching
-   anything.
+   anything. The reverse direction (`origin/main..<ours>`) is routinely
+   hundreds of commits on this branch (test-loop/fix-bugs history) and
+   is never itself interesting — pipe it to a scratchpad file and use
+   `wc -l` for the count; don't let the full list stream into the
+   conversation (confirmed 2026-07-08, wrap-up context-waste finding).
 2. **Dry-run first**: `git merge-tree $(git merge-base <ours> origin/main)
    <ours> origin/main > /tmp-or-scratchpad/mergetree.txt`, then `grep -c
    "^+<<<<<<< \.our"` for a conflict count and pull out the conflicting
