@@ -210,22 +210,13 @@ describe('hpoService', () => {
   });
 
   describe('searchHpoLocal', () => {
-    // hpoService.js does `const { MongoClient } = require('mongodb')` — a destructured
-    // CommonJS import captured at module-load time. Per this repo's testing-conventions
-    // gotchas, plain vi.mock('mongodb', ...) does not intercept require(), and vi.spyOn on
-    // the mongodb module's export after the fact has no effect because the local binding
-    // was already captured. Workaround: override require.cache for 'mongodb' with a fake
-    // module *before* hpoService is (re)required, so hpoService's destructuring captures
-    // the fake MongoClient.
+    // #57: searchHpoLocal now takes a shared `db` handle (req.app.locals.db) instead of
+    // opening/closing its own raw MongoClient per call, so tests mock a plain db/collection
+    // object rather than the mongodb module.
     let toArrayMock;
     let findMock;
     let collectionMock;
     let dbMock;
-    let connectMock;
-    let closeMock;
-    let constructorArgs;
-    let mongodbCachePath;
-    let hpoServiceCachePath;
 
     beforeEach(() => {
       vi.resetModules();
@@ -235,51 +226,14 @@ describe('hpoService', () => {
         limit: vi.fn().mockReturnValue({ toArray: toArrayMock })
       });
       collectionMock = vi.fn().mockReturnValue({ find: findMock });
-      dbMock = vi.fn().mockReturnValue({ collection: collectionMock });
-      connectMock = vi.fn().mockResolvedValue(undefined);
-      closeMock = vi.fn().mockResolvedValue(undefined);
-      constructorArgs = [];
-
-      class FakeMongoClient {
-        constructor(uri) {
-          constructorArgs.push(uri);
-        }
-        connect() {
-          return connectMock();
-        }
-        db(name) {
-          return dbMock(name);
-        }
-        close() {
-          return closeMock();
-        }
-      }
-
-      mongodbCachePath = require.resolve('mongodb');
-      require.cache[mongodbCachePath] = {
-        id: mongodbCachePath,
-        filename: mongodbCachePath,
-        loaded: true,
-        exports: { MongoClient: FakeMongoClient }
-      };
-
-      hpoServiceCachePath = path.resolve(__dirname, '../../../src/services/hpoService.js');
-      delete require.cache[hpoServiceCachePath];
+      dbMock = { collection: collectionMock };
     });
 
-    afterEach(() => {
-      if (mongodbCachePath) delete require.cache[mongodbCachePath];
-      if (hpoServiceCachePath) delete require.cache[hpoServiceCachePath];
-      vi.resetModules();
-    });
-
-    it('connects, queries with a case-insensitive regex OR across fields, and closes the client', async () => {
+    it('queries the shared db handle with a case-insensitive regex OR across fields, without opening its own connection', async () => {
       const hpoService = require('../../../src/services/hpoService');
 
-      const result = await hpoService.searchHpoLocal('seiz');
+      const result = await hpoService.searchHpoLocal('seiz', dbMock);
 
-      expect(connectMock).toHaveBeenCalledTimes(1);
-      expect(dbMock).toHaveBeenCalled();
       expect(collectionMock).toHaveBeenCalledWith('hpo_terms');
       expect(findMock).toHaveBeenCalledTimes(1);
 
@@ -294,24 +248,13 @@ describe('hpoService', () => {
         expect(regex.source).toBe('seiz');
       }
 
-      expect(closeMock).toHaveBeenCalledTimes(1);
       expect(result).toEqual([{ hpoId: 'HP:0001250', label: 'Seizure' }]);
-    });
-
-    it('closes the client even though results come from toArray()', async () => {
-      const hpoService = require('../../../src/services/hpoService');
-
-      await hpoService.searchHpoLocal('anything');
-
-      const connectOrder = connectMock.mock.invocationCallOrder[0];
-      const closeOrder = closeMock.mock.invocationCallOrder[0];
-      expect(connectOrder).toBeLessThan(closeOrder);
     });
 
     it('escapes regex metacharacters in the query instead of feeding them into RegExp raw (#56)', async () => {
       const hpoService = require('../../../src/services/hpoService');
 
-      await hpoService.searchHpoLocal('a(b*c+');
+      await hpoService.searchHpoLocal('a(b*c+', dbMock);
 
       const filter = findMock.mock.calls[0][0];
       const [, regex] = Object.entries(filter.$or[0])[0];

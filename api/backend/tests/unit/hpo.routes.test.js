@@ -2,7 +2,6 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createRequire } from 'module';
 import express from 'express';
 import request from 'supertest';
-import { MongoClient } from 'mongodb';
 
 const require = createRequire(import.meta.url);
 
@@ -18,7 +17,7 @@ const loggerPath = require.resolve('../../src/utils/logger');
 // clear the require cache for both hpoService and hpo.js, replace the
 // hpoService module's exports with mocks, then require hpo.js fresh so its
 // destructuring picks up the mocked functions.
-function loadRouteWithMocks({ searchHpoLocal, searchHpoExternal, isExternalHpoLookupEnabled }) {
+function loadRouteWithMocks({ searchHpoLocal, searchHpoExternal, isExternalHpoLookupEnabled, db }) {
   delete require.cache[hpoServicePath];
   delete require.cache[hpoRoutePath];
   delete require.cache[loggerPath];
@@ -35,6 +34,7 @@ function loadRouteWithMocks({ searchHpoLocal, searchHpoExternal, isExternalHpoLo
 
   const router = require(hpoRoutePath);
   const app = express();
+  app.locals.db = db || {};
   app.use('/api/hpo', router);
   return app;
 }
@@ -71,14 +71,15 @@ describe('hpo routes', () => {
       const searchHpoLocal = vi.fn().mockResolvedValue(localResults);
       const searchHpoExternal = vi.fn();
       const isExternalHpoLookupEnabled = vi.fn().mockReturnValue(true);
-      const app = loadRouteWithMocks({ searchHpoLocal, searchHpoExternal, isExternalHpoLookupEnabled });
+      const db = { collection: vi.fn() };
+      const app = loadRouteWithMocks({ searchHpoLocal, searchHpoExternal, isExternalHpoLookupEnabled, db });
 
       const res = await request(app).get('/api/hpo/search').query({ q: 'term' });
 
       expect(res.status).toBe(200);
       expect(res.body).toEqual(localResults);
       expect(searchHpoLocal).toHaveBeenCalledTimes(1);
-      expect(searchHpoLocal).toHaveBeenCalledWith('term');
+      expect(searchHpoLocal).toHaveBeenCalledWith('term', db);
       expect(searchHpoExternal).not.toHaveBeenCalled();
     });
 
@@ -141,6 +142,21 @@ describe('hpo routes', () => {
       expect(searchHpoExternal).toHaveBeenCalledTimes(1);
     });
 
+    it('logs the info-level result count even on the throw-then-external-succeeds fallback path (#57)', async () => {
+      const externalResults = [{ hpoId: 'HP:0000003', label: 'Recovered term' }];
+      const searchHpoLocal = vi.fn().mockRejectedValue(new Error('local db down'));
+      const searchHpoExternal = vi.fn().mockResolvedValue(externalResults);
+      const isExternalHpoLookupEnabled = vi.fn().mockReturnValue(true);
+      const app = loadRouteWithMocks({ searchHpoLocal, searchHpoExternal, isExternalHpoLookupEnabled });
+
+      await request(app).get('/api/hpo/search').query({ q: 'term' });
+
+      const loggerModule = require(loggerPath);
+      expect(loggerModule.info).toHaveBeenCalledWith(
+        expect.stringContaining(`retornou ${externalResults.length} resultados`)
+      );
+    });
+
     it('returns 500 with the Portuguese error message when both local search and the external retry throw', async () => {
       const searchHpoLocal = vi.fn().mockRejectedValue(new Error('local db down'));
       const searchHpoExternal = vi.fn().mockRejectedValue(new Error('external api down'));
@@ -157,45 +173,37 @@ describe('hpo routes', () => {
   });
 
   describe('GET /:id', () => {
-    it('returns the term with 200 when found', async () => {
+    // #57: GET /:id now reuses the shared req.app.locals.db handle instead of opening
+    // its own raw MongoClient connection per request.
+    it('returns the term with 200 when found, using the shared db handle (no per-request MongoClient)', async () => {
       const term = { hpoId: 'HP:0000118', label: 'Phenotypic abnormality' };
       const findOne = vi.fn().mockResolvedValue(term);
       const collection = vi.fn().mockReturnValue({ findOne });
-      const db = vi.fn().mockReturnValue({ collection });
+      const db = { collection };
 
-      vi.spyOn(MongoClient.prototype, 'connect').mockResolvedValue(undefined);
-      vi.spyOn(MongoClient.prototype, 'db').mockImplementation(db);
-      vi.spyOn(MongoClient.prototype, 'close').mockResolvedValue(undefined);
-
-      // no hpoService mocking needed for this route, load it fresh normally
       delete require.cache[hpoRoutePath];
       const router = require(hpoRoutePath);
       const app = express();
+      app.locals.db = db;
       app.use('/api/hpo', router);
 
       const res = await request(app).get('/api/hpo/HP:0000118');
 
       expect(res.status).toBe(200);
       expect(res.body).toEqual(term);
-      expect(MongoClient.prototype.connect).toHaveBeenCalledTimes(1);
-      expect(db).toHaveBeenCalledTimes(1);
       expect(collection).toHaveBeenCalledWith('hpo_terms');
       expect(findOne).toHaveBeenCalledWith({ hpoId: 'HP:0000118' });
-      expect(MongoClient.prototype.close).toHaveBeenCalledTimes(1);
     });
 
     it('returns 404 with Not found when the term does not exist', async () => {
       const findOne = vi.fn().mockResolvedValue(null);
       const collection = vi.fn().mockReturnValue({ findOne });
-      const db = vi.fn().mockReturnValue({ collection });
-
-      vi.spyOn(MongoClient.prototype, 'connect').mockResolvedValue(undefined);
-      vi.spyOn(MongoClient.prototype, 'db').mockImplementation(db);
-      vi.spyOn(MongoClient.prototype, 'close').mockResolvedValue(undefined);
+      const db = { collection };
 
       delete require.cache[hpoRoutePath];
       const router = require(hpoRoutePath);
       const app = express();
+      app.locals.db = db;
       app.use('/api/hpo', router);
 
       const res = await request(app).get('/api/hpo/HP:9999999');
@@ -203,7 +211,6 @@ describe('hpo routes', () => {
       expect(res.status).toBe(404);
       expect(res.body).toEqual({ error: 'Not found' });
       expect(findOne).toHaveBeenCalledWith({ hpoId: 'HP:9999999' });
-      expect(MongoClient.prototype.close).toHaveBeenCalledTimes(1);
     });
   });
 });
