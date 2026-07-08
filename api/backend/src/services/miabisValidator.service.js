@@ -14,7 +14,7 @@ async function validateMiabisCompliance(sampleId, db) {
   const sample = await Sample.findById(sampleId).lean();
   const missingFields = [];
   if (!sample) {
-    return { isCompliant: false, missingFields: ['sampleNotFound'], consentStatus: 'not_found', canBeShared: false };
+    return { isCompliant: false, missingFields: ['sampleNotFound'], consentStatus: 'sample_not_found', canBeShared: false };
   }
   if (!sample.sampleType) missingFields.push('sampleType');
   if (!sample.anatomicalSite) missingFields.push('anatomicalSite');
@@ -27,7 +27,7 @@ async function validateMiabisCompliance(sampleId, db) {
     return { isCompliant: false, missingFields, consentStatus: 'not_evaluated', canBeShared: false };
   }
 
-  let consentStatus = 'not_found';
+  let consentStatus = 'no_consent';
   let canBeShared = false;
   try {
     const consentsCollection = await collectionResolver.getCollection(db, 'consents');
