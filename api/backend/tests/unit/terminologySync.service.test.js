@@ -100,9 +100,7 @@ describe('terminologySync.service', () => {
         ],
       });
       expect(result.relacoes.cid).toBe('Q87.4');
-      // relacoes.omim fallback from ExternalReference uses raw normalizeText, not normalizeOmimCode
-      // (unlike the direct-field path), so it is NOT prefixed with "OMIM:" here.
-      expect(result.relacoes.omim).toBe('154700');
+      expect(result.relacoes.omim).toBe('OMIM:154700');
     });
 
     it('prefers direct cid/omim fields over the ExternalReference fallback', () => {
