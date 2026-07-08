@@ -399,6 +399,36 @@ describe('MongoStorageRepository', () => {
         'não possui localização'
       );
     });
+
+    // Issue #23: releaseSamplePosition never checked matchedCount on the box
+    // update, unlike moveSamplePosition's equivalent 'Origem inconsistente' check.
+    it('throws when box update matchedCount is 0 (stale/inconsistent occupancy)', async () => {
+      const sampleDoc = {
+        _id: sampleId,
+        barcode: 'BC-3',
+        quantity: 1,
+        unit: 'mL',
+        storageLocation: { boxId, position: 'A1' }
+      };
+      const samples = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce(sampleDoc),
+        updateOne: vi.fn().mockResolvedValueOnce({ matchedCount: 1 })
+      });
+      const storageBoxes = makeCollection({
+        updateOne: vi.fn().mockResolvedValueOnce({ matchedCount: 0 })
+      });
+      // NOTE: getCollection() resolves the canonical name 'samples' (no
+      // listCollections on this mock db), not the 'amostras' alias the other
+      // tests in this describe block use — those are broken independent of
+      // this issue (see issue filed for the whole-file mock mismatch).
+      const db = makeDb({ samples, storageBoxes });
+      const repo = new MongoStorageRepository(db);
+
+      await expect(repo.releaseSamplePosition({ sampleId }, {})).rejects.toThrow(
+        'Origem inconsistente'
+      );
+      expect(samples.updateOne).not.toHaveBeenCalled();
+    });
   });
 
   describe('validatePositionAvailability', () => {
