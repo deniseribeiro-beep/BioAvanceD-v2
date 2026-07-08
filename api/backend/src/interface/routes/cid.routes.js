@@ -39,33 +39,6 @@ function normalizeCidDocument(document = {}) {
 	};
 }
 
-function buildCidPayload(body = {}) {
-	const codigoTabulacao = String(body.Codigo_Tabulacao || body.code || '').trim();
-	const descricao = String(body.Descricao || body.description || '').trim();
-	const codigosCid10 = String(body.Codigos_CID10 || body.cid10 || '').trim();
-	const capitulo = String(body.Capitulo || body.chapter || '').trim();
-	const orpha = String(body.ORPHA || body.orpha || body.orphaCode || body.orpha_code || '').trim();
-	const omim = String(body.OMIM || body.omim || body.omimCode || body.omim_code || '').trim();
-
-	return {
-		Capitulo: capitulo,
-		Codigo_Tabulacao: codigoTabulacao,
-		Descricao: descricao,
-		Codigos_CID10: codigosCid10,
-		ORPHA: orpha,
-		OMIM: omim,
-		active: normalizeBoolean(body.active ?? body.is_active, true)
-	};
-}
-
-function validateCidPayload(payload) {
-	const errors = [];
-	if (!payload.Codigo_Tabulacao) errors.push('Informe o código de tabulação.');
-	if (!payload.Descricao) errors.push('Informe a descrição do CID.');
-	if (!payload.Codigos_CID10) errors.push('Informe o código CID10.');
-	return errors;
-}
-
 router.get('/', authenticate, requireRole(4), async (req, res) => {
 	try {
 		const db = req.app.locals.db;
