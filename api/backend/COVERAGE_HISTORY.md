@@ -1483,3 +1483,5 @@ One line (477, the `catch` inside the timestamp-parsing try) stays
 uncovered — `new Date(x)` returns `Invalid Date` rather than throwing
 for any malformed input reachable here, so the catch is defensive/
 unreachable without mocking `Date` itself; not worth it. No bugs found.
+
+**Fix (2026-07-08, issue #78):** `src/interface/routes/reports.routes.js` 71.84% -> 77.41% lines, 58.21% -> 66.43% branches. Fixed the `isSampleAnalysis` branch being unreachable (shadowed by the generic `amostra/sample` check that ran first and matched the substring in "sampleanalysis"); moved the dedicated analysis/grouping branch ahead of the generic one. Un-weakened the pinned test in reports.api.test.js to assert the correct grouped-analysis shape instead of documenting the bug.
