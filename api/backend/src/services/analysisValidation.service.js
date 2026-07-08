@@ -11,8 +11,8 @@ const { getCollection } = require('../utils/collectionResolver');
 class AnalysisValidationService {
   /**
    * Valida se a amostra existe
-   * Suporta: ObjectId, sampleID (ex: "00001"), barcode (ex: "BR-2025-001")
-   */
+ * Suporta: ObjectId, specimenId, barcode (ex: "BR-2025-001")
+  */
   async validateSampleExists(db, sampleIdentifier) {
     try {
       const samplesCollection = await getCollection(db, 'samples');
@@ -24,8 +24,8 @@ class AnalysisValidationService {
         if (sample) return { success: true, sample };
       }
 
-      // Tenta buscar por sampleID (ex: "00001")
-      sample = await samplesCollection.findOne({ sampleID: sampleIdentifier });
+      // Tenta buscar por specimenId
+      sample = await samplesCollection.findOne({ specimenId: sampleIdentifier });
       if (sample) return { success: true, sample };
 
       // Tenta buscar por barcode (ex: "BR-2025-001")
@@ -50,7 +50,7 @@ class AnalysisValidationService {
    */
   async validatePatientConsent(db, sample) {
     try {
-      if (!sample.patientID) {
+      if (!sample.participantId) {
         return {
           success: false,
           error: 'Amostra não possui ID de paciente associado'
@@ -61,13 +61,13 @@ class AnalysisValidationService {
       
       // Busca o paciente e verifica status de consentimento
       const patient = await patientsCollection.findOne({ 
-        patientID: sample.patientID 
+        participantId: sample.participantId 
       });
 
       if (!patient) {
         return {
           success: false,
-          error: `Paciente ${sample.patientID} não encontrado no sistema`
+          error: `Participante ${sample.participantId} não encontrado no sistema`
         };
       }
 
@@ -92,7 +92,7 @@ class AnalysisValidationService {
       return {
         success: true,
         patient: {
-          patientID: patient.patientID,
+          participantId: patient.participantId,
           consentStatus: patient.status,
           consentAcceptedAt: patient.consentAcceptedAt
         }
@@ -130,11 +130,11 @@ class AnalysisValidationService {
         eligible: true,
         sample: {
           _id: sample._id.toString(),
-          sampleID: sample.sampleID,
+          specimenId: sample.specimenId,
           barcode: sample.barcode,
-          patientID: sample.patientID,
+          participantId: sample.participantId,
           sampleType: sample.sampleType,
-          currentStatus: sample.currentStatus
+          lifecycleStatus: sample.lifecycleStatus
         },
         patient: consentValidation.patient
       };

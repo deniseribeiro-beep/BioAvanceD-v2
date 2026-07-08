@@ -35,12 +35,12 @@ class MongoStorageRepository {
   }
 
   /**
-   * @param {string} sampleId
+   * @param {string} specimenId
    * @param {import('mongodb').ClientSession} [session]
    */
-  async findSampleById(sampleId, session) {
+  async findSampleById(specimenId, session) {
     const samplesCollection = await getCollection(this.db, 'samples');
-    const normalizedId = this.toObjectId(sampleId);
+    const normalizedId = this.toObjectId(specimenId);
     return samplesCollection.findOne({ _id: normalizedId }, { session });
   }
 
@@ -55,14 +55,14 @@ class MongoStorageRepository {
   }
 
   /**
-   * @param {{ sampleId: string, fromBoxId: string, fromPosition: string, toBoxId: string, toPosition: string }} input
+   * @param {{ specimenId: string, fromBoxId: string, fromPosition: string, toBoxId: string, toPosition: string }} input
    * @param {import('mongodb').ClientSession} session
    */
   async moveSamplePosition(input, session) {
     const samplesCollection = await getCollection(this.db, 'samples');
     const storageBoxesCollection = this.db.collection('storageBoxes');
 
-    const sampleObjId = this.toObjectId(input.sampleId);
+    const sampleObjId = this.toObjectId(input.specimenId);
     const fromBoxObjId = this.toObjectId(input.fromBoxId);
     const toBoxObjId = this.toObjectId(input.toBoxId);
 
@@ -128,14 +128,14 @@ class MongoStorageRepository {
   }
 
   /**
-   * @param {{ sampleId: string, boxId: string, position: string }} input
+   * @param {{ specimenId: string, boxId: string, position: string }} input
    * @param {import('mongodb').ClientSession} session
    */
   async allocateSamplePosition(input, session) {
     const samplesCollection = await getCollection(this.db, 'samples');
     const storageBoxesCollection = this.db.collection('storageBoxes');
 
-    const sampleObjId = this.toObjectId(input.sampleId);
+    const sampleObjId = this.toObjectId(input.specimenId);
     const boxObjId = this.toObjectId(input.boxId);
     const normalizedPosition = String(input.position).trim().toUpperCase();
 
@@ -205,14 +205,14 @@ class MongoStorageRepository {
   }
 
   /**
-   * @param {{ sampleId: string }} input
+   * @param {{ specimenId: string }} input
    * @param {import('mongodb').ClientSession} session
    */
   async releaseSamplePosition(input, session) {
     const samplesCollection = await getCollection(this.db, 'samples');
     const storageBoxesCollection = this.db.collection('storageBoxes');
 
-    const sampleObjId = this.toObjectId(input.sampleId);
+    const sampleObjId = this.toObjectId(input.specimenId);
     const sample = await samplesCollection.findOne({ _id: sampleObjId }, { session });
 
     if (!sample) {
@@ -385,12 +385,12 @@ class MongoStorageRepository {
   }
 
   /**
-   * @param {{ sampleId: string }} input
+   * @param {{ specimenId: string }} input
    */
   async getSampleStorageLocation(input) {
     const samplesCollection = await getCollection(this.db, 'samples');
     const storagePathsCollection = this.db.collection('storagePaths');
-    const sampleObjId = this.toObjectId(input.sampleId);
+    const sampleObjId = this.toObjectId(input.specimenId);
 
     const sample = await samplesCollection.findOne({ _id: sampleObjId });
     if (!sample) {
@@ -413,7 +413,7 @@ class MongoStorageRepository {
     return {
       found: true,
       location: {
-        sampleId: sample._id,
+        specimenId: sample._id,
         barcode: sample.barcode,
         box: {
           boxId: sample.storageLocation.boxId,
@@ -447,11 +447,11 @@ class MongoStorageRepository {
         {
           $or: [
             { barcode: searchRegex },
-            { patientID: searchRegex },
-            { sampleID: searchRegex }
+            { participantId: searchRegex },
+            { specimenId: searchRegex }
           ]
         },
-        { currentStatus: { $in: ['Available', 'Registered', 'pending'] } },
+        { lifecycleStatus: { $in: ['Available', 'Registered', 'pending'] } },
         {
           $or: [
             { 'storageLocation.boxId': { $exists: false } },

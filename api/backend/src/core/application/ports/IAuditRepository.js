@@ -5,7 +5,7 @@ class IAuditRepository {
   /**
    * Registra evento imutável de movimentação.
    * @param {{
-   *  sampleId: string,
+   *  specimenId: string,
    *  barcode?: string|null,
    *  eventType: string,
    *  before: object,

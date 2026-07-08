@@ -116,12 +116,12 @@ export default function SampleDetailsPage() {
       const searchId = String(id || '').trim();
       const foundSample = samples.find(s => {
         const sampleId = String(s._id || '').trim();
-        const sampleIDStr = String(s.sampleID || '').trim();
+        const specimenIdStr = String((s as any).specimenId || s.sampleID || '').trim();
         
         return sampleId === searchId || 
-               sampleIDStr === searchId ||
+               specimenIdStr === searchId ||
                sampleId.toLowerCase() === searchId.toLowerCase() ||
-               sampleIDStr.toLowerCase() === searchId.toLowerCase();
+               specimenIdStr.toLowerCase() === searchId.toLowerCase();
       });
       
       if (foundSample) {
@@ -130,10 +130,10 @@ export default function SampleDetailsPage() {
           locationID: foundSample.locationID ? String(foundSample.locationID) : '',
           linkedProject: foundSample.linkedProject || '',
           availableQuantity: (foundSample.volumeCurrent ?? foundSample.availableQuantity ?? foundSample.quantity ?? '').toString(),
-          currentStatus: foundSample.currentStatus || 'Available',
+          currentStatus: (foundSample as any).lifecycleStatus || foundSample.currentStatus || 'Available',
           sampleOrigin: foundSample.sampleOrigin || '',
           extractionProtocol: foundSample.extractionProtocol || '',
-          participantId: foundSample.participantId ? String(foundSample.participantId) : '',
+          participantId: (foundSample as any).participantId ? String((foundSample as any).participantId) : String((foundSample as any).patientID || ''),
         });
       } else {
         // Se carregou mas não encontrou, define como null
@@ -147,7 +147,7 @@ export default function SampleDetailsPage() {
   }, [samples, id, loading]);
 
   useEffect(() => {
-    const targetId = sample?._id || sample?.sampleID || id;
+    const targetId = sample?._id || (sample as any)?.specimenId || id;
     if (!targetId) {
       setComplianceReport(null);
       return;
@@ -229,7 +229,7 @@ export default function SampleDetailsPage() {
       volumeCurrent: Number.isFinite(parsedAvailable) ? parsedAvailable : sample?.volumeCurrent,
       locationID: parsedLocation ?? sample?.locationID,
       linkedProject: form.linkedProject || sample?.linkedProject,
-      currentStatus: (form.currentStatus as Sample['currentStatus']) || sample?.currentStatus,
+      currentStatus: (form.currentStatus as Sample['currentStatus']) || (sample as any)?.lifecycleStatus || sample?.currentStatus,
     } as Sample;
   }, [isEditing, sample, form.availableQuantity, form.locationID, form.linkedProject, form.currentStatus]);
 
@@ -296,7 +296,7 @@ export default function SampleDetailsPage() {
     if (!sample) return [];
     const sampleKeys = new Set([
       String(sample._id || ''),
-      String(sample.sampleID || '')
+    String((sample as any).specimenId || sample.sampleID || '')
     ]);
     return results.filter(result => sampleKeys.has(String(result.sampleID)));
   }, [results, sample]);
@@ -397,7 +397,7 @@ export default function SampleDetailsPage() {
         locationID: sample.locationID ? String(sample.locationID) : '',
         linkedProject: sample.linkedProject || '',
         availableQuantity: (sample.volumeCurrent ?? sample.availableQuantity ?? sample.quantity ?? '').toString(),
-        currentStatus: sample.currentStatus || 'Available',
+      currentStatus: (sample as any).lifecycleStatus || sample.currentStatus || 'Available',
         sampleOrigin: sample.sampleOrigin || '',
         extractionProtocol: sample.extractionProtocol || '',
         participantId: sample.participantId ? String(sample.participantId) : '',
@@ -435,7 +435,7 @@ export default function SampleDetailsPage() {
     }
 
     try {
-      const targetId = sample._id || sample.sampleID || id || '';
+      const targetId = sample._id || (sample as any).specimenId || id || '';
       const updated = await updateSample(targetId, payload);
       // Atualiza estado local para refletir a edição imediatamente
       setSample(prev => ({
@@ -466,7 +466,7 @@ export default function SampleDetailsPage() {
       <div className="page-header">
         <div>
             <h1 className="page-title" data-testid="sample-detail-page-title">
-            {t('samples.detail.title', 'Detalhes da Amostra')} - {sample.barcode || sample.sampleID || t('common.notAvailable', 'N/A')}
+            {t('samples.detail.title', 'Detalhes da Amostra')} - {sample.barcode || (sample as any).specimenId || t('common.notAvailable', 'N/A')}
           </h1>
 
           <div style={{ marginBottom: '0.5rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
@@ -604,7 +604,7 @@ export default function SampleDetailsPage() {
           <div style={{ display: 'grid', gap: '0.75rem' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', backgroundColor: 'var(--surface)', borderRadius: '4px' }}>
               <span style={{ fontWeight: 500, color: 'var(--text-light)' }}>{t('samples.detail.sampleId', 'ID da Amostra')}:</span>
-              <span style={{ color: 'var(--text)' }}>{sample.sampleID || sample._id || t('common.notAvailable', 'N/A')}</span>
+              <span style={{ color: 'var(--text)' }}>{(sample as any).specimenId || sample._id || t('common.notAvailable', 'N/A')}</span>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', backgroundColor: 'var(--surface)', borderRadius: '4px' }}>
               <span style={{ fontWeight: 500, color: 'var(--text-light)' }}>{t('samples.detail.barcode', 'Código de Barras')}:</span>
@@ -645,7 +645,7 @@ export default function SampleDetailsPage() {
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', backgroundColor: 'var(--surface)', borderRadius: '4px' }}>
               <span style={{ fontWeight: 500, color: 'var(--text-light)' }}>{t('samples.detail.registrationDate', 'Data de Registro')}:</span>
               <span style={{ color: 'var(--text)' }}>
-                {sample.registrationDate ? new Date(sample.registrationDate).toLocaleDateString(locale) : t('common.notAvailable', 'N/A')}
+                {(sample as any).registeredAt ? new Date((sample as any).registeredAt).toLocaleDateString(locale) : sample.registrationDate ? new Date(sample.registrationDate).toLocaleDateString(locale) : t('common.notAvailable', 'N/A')}
               </span>
             </div>
           </div>
@@ -885,7 +885,7 @@ export default function SampleDetailsPage() {
           isOpen={showUploadModal}
           onClose={() => setShowUploadModal(false)}
           onSuccess={handleUploadSuccess}
-          sampleId={String(sample._id || sample.sampleID || '')}
+          sampleId={String(sample._id || (sample as any).specimenId || '')}
         />
       )}
     </div>

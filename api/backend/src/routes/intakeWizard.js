@@ -43,6 +43,22 @@ function collectNonCanonicalFields(payload, allowedKeys, path = '') {
   return fields;
 }
 
+function collectCanonicalViolations(payload, aliasMap = {}) {
+  const fields = [];
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return fields;
+
+  for (const [canonicalKey, aliases] of Object.entries(aliasMap)) {
+    const aliasList = Array.isArray(aliases) ? aliases : [];
+    for (const alias of aliasList) {
+      if (Object.prototype.hasOwnProperty.call(payload, alias)) {
+        fields.push(alias);
+      }
+    }
+  }
+
+  return [...new Set(fields)];
+}
+
 function buildIdVariants(...values) {
   const variants = [];
   values.forEach((value) => {
@@ -133,12 +149,12 @@ function buildClinicalData(data = {}) {
   const integrity = normalizeObject(data?.integrity);
 
   return {
-    orphaCode: normalizeString(diagnosis.orphaCode || diagnosis.orpha_code || integrity.diagnosis_orpha_code),
-    omimCode: normalizeString(diagnosis.omimCode || diagnosis.omim_code || integrity.diagnosis_omim_code),
-    cid: normalizeString(diagnosis.icdCode || diagnosis.icd_code || diagnosis.cid || integrity.diagnosis_cid_code),
-    phenotypes: normalizeArray(clinical.diseasePhenotypes || integrity.disease_phenotypes),
-    charlsonComorbidities: normalizeArray(clinical.charlsonConditions || integrity.charlson_conditions),
-    biomarkers_values: normalizeObject(clinical.biomarkersValues || integrity.biomarkers_values),
+    orphaCode: normalizeString(diagnosis.orphaCode),
+    omimCode: normalizeString(diagnosis.omimCode),
+    cid: normalizeString(diagnosis.icdCode),
+    phenotypes: normalizeArray(clinical.diseasePhenotypes),
+    charlsonComorbidities: normalizeArray(clinical.charlsonConditions),
+    biomarkerValues: normalizeObject(clinical.biomarkersValues || integrity.biomarkers_values),
   };
 }
 
@@ -147,27 +163,23 @@ function buildPharmacologyData(data = {}) {
   const integrity = normalizeObject(data?.integrity);
   const pharmacology = normalizeObject(clinical.pharmacologyData || integrity.pharmacology_data);
 
-  const treatmentStatusRaw = normalizeString(pharmacology.treatment_status || pharmacology.treatmentStatus).toUpperCase();
+  const treatmentStatusRaw = normalizeString(pharmacology.treatmentStatus).toUpperCase();
   const treatmentStatus = ['NAIVE', 'TREATED', 'ON_TREATMENT', 'WASHOUT'].includes(treatmentStatusRaw) ? treatmentStatusRaw : '';
-  const atcCode = normalizeString(pharmacology.atc_code || pharmacology.medication_code || pharmacology.medicationCode)
+  const atcCode = normalizeString(pharmacology.atcCode)
     .replace(/^ATC:/i, '')
     .toUpperCase();
-  const atcLevel1 = normalizeString(pharmacology.atc_level_1 || pharmacology.medication_drug_class || pharmacology.medicationDrugClass)
+  const atcLevel1 = normalizeString(pharmacology.atcClass)
     .toUpperCase() || (atcCode ? atcCode.charAt(0) : '');
-  const drugName = normalizeString(pharmacology.drug_name || pharmacology.medication_name || pharmacology.medicationName);
+  const drugName = normalizeString(pharmacology.medicationName);
 
   return {
-    treatment_status: treatmentStatus,
-    drug_name: drugName || null,
-    atc_code: atcCode || null,
-    atc_level_1: atcLevel1 || null,
-    // Legacy aliases kept for consumers not yet migrated.
-    medication_name: drugName || null,
-    medication_code: atcCode || null,
-    medication_drug_class: atcLevel1 || null,
-    last_dose_date: normalizeString(pharmacology.last_dose_date || pharmacology.lastDoseDate) || null,
-    washout_start_date: normalizeString(pharmacology.washout_start_date || pharmacology.washoutStartDate) || null,
-    washout_end_date: normalizeString(pharmacology.washout_end_date || pharmacology.washoutEndDate) || null,
+    treatmentStatus,
+    medicationName: drugName || null,
+    atcCode: atcCode || null,
+    atcClass: atcLevel1 || null,
+    lastDoseDate: normalizeString(pharmacology.lastDoseDate) || null,
+    washoutStartDate: normalizeString(pharmacology.washoutStartDate) || null,
+    washoutEndDate: normalizeString(pharmacology.washoutEndDate) || null,
   };
 }
 
@@ -175,54 +187,30 @@ function buildSampleDocumentFromIntake(data = {}, matchedPatient = null) {
   const sample = normalizeObject(data?.sample);
   const consent = normalizeObject(data?.consent);
   const integrity = normalizeObject(data?.integrity);
-  const releaseStatusRaw = normalizeString(sample.release_status || sample.releaseStatus).toUpperCase();
+  const releaseStatusRaw = normalizeString(sample.lifecycleStatus).toUpperCase();
   const releaseStatus = ['QUARANTINE', 'AVAILABLE', 'BLOCKED'].includes(releaseStatusRaw) ? releaseStatusRaw : 'QUARANTINE';
-  const registrationDate = sample.registrationDate || sample.registerDate || new Date().toISOString();
+  const registrationDate = sample.registeredAt || new Date().toISOString();
   const confirmedPatientID = normalizeString(matchedPatient?.patientID) || resolvePatientID(data);
   const confirmedPatientName = normalizeString(matchedPatient?.patientName || data?.demographic?.patientName);
 
   return {
-    patientID: confirmedPatientID,
-    patientName: confirmedPatientName || null,
-    patient_name_confirmed: confirmedPatientName || null,
+    participantId: confirmedPatientID,
+    participantName: confirmedPatientName || null,
     patientObjectId: matchedPatient?._id || null,
     sampleType: normalizeString(sample.sampleType || sample.sprec?.sampleType || 'UNKNOWN'),
     sampleOrigin: normalizeString(sample.sampleOrigin || sample.sampleType || 'UNKNOWN'),
     extractionProtocol: normalizeString(sample.extractionProtocol || sample.protocolApplied || 'UNKNOWN'),
     barcode: normalizeString(sample.barcode) || null,
-    registrationDate: new Date(registrationDate),
-    registerDate: new Date(registrationDate),
+    registeredAt: new Date(registrationDate),
     quantity: normalizeNumber(sample.quantity, 0),
     unit: normalizeString(sample.unit) || null,
-    quality: 'UNKNOWN',
-    rcs_score: null,
-    model_version: null,
-    matrix_type: normalizeString(sample.matrix_type || sample.sprec_matrix_type || sample.sprec?.matrixType) || null,
-    governance_status: null,
-    governance_failure_reasons: [],
-    governance_rule_codes: [],
-    p_bio: null,
-    score_based_grade: '',
-    final_grade: '',
-    grade_route: null,
-    axis_penalties: [],
-    calculation_trace: {},
-    rcs_evaluation: {},
+    lifecycleStatus: releaseStatus,
     linkedProject: normalizeString(sample.linkedProject || sample.linked_project) || 'INTAKE_WIZARD',
-    currentStatus: normalizeString(sample.currentStatus) || 'Available',
-    status: normalizeString(sample.status) || 'AVAILABLE',
     sprec: normalizeObject(sample.sprec),
-    merkle_root: normalizeString(sample.merkle_root || integrity.merkle_root) || null,
-    legacy_compat: {
-      penalty_log: [],
-      quality_score: null,
-      quality_category: '',
-    },
-    tcle_id: normalizeString(consent.tcle_template_id || sample.selected_tcle || integrity.selected_tcle) || null,
     consentTemplateId: normalizeString(consent.tcle_template_id || sample.selected_tcle || integrity.selected_tcle) || null,
-    clinical_data: buildClinicalData(data),
-    pharmacology_data: buildPharmacologyData(data),
-    release_status: releaseStatus,
+    clinicalData: buildClinicalData(data),
+    pharmacologyData: buildPharmacologyData(data),
+    merkleRoot: null,
     createdAt: new Date(),
     updatedAt: new Date(),
   };
@@ -507,6 +495,41 @@ async function handleIntakeWizard(req, res) {
   }
 
   try {
+    const canonicalViolations = [
+      ...collectCanonicalViolations(data?.demographic, {
+        participantId: ['patientID', 'patientId', 'pseudoId', 'mongoPatientId'],
+      }),
+      ...collectCanonicalViolations(data?.sample, {
+        specimenId: ['sampleID', 'sampleId', 'specimenID', 'mongoSampleId'],
+        parentSpecimenId: ['parentSampleId'],
+        registeredAt: ['registerDate', 'registrationDate'],
+        withdrawnAt: ['withdrawalDate'],
+        receivedAt: ['receivedTime'],
+        lifecycleStatus: ['currentStatus'],
+        consentTemplateId: ['tcle_id', 'tcle_template_id', 'selected_tcle'],
+        merkleRoot: ['merkle_root'],
+        legacyCompat: ['legacy_compat'],
+      }),
+      ...collectCanonicalViolations(data?.consent, {
+        consentTemplateId: ['tcle_id', 'tcle_template_id', 'selected_tcle'],
+      }),
+      ...collectCanonicalViolations(data?.clinical, {
+        clinicalData: ['clinical_data'],
+        pharmacologyData: ['pharmacology_data'],
+        biomarkerValues: ['biomarkers_values'],
+      }),
+      ...collectCanonicalViolations(data?.integrity, {
+        clinicalData: ['clinical_data'],
+        pharmacologyData: ['pharmacology_data'],
+        merkleRoot: ['merkle_root'],
+        consentTemplateId: ['selected_tcle'],
+      }),
+    ];
+
+    if (canonicalViolations.length > 0) {
+      return res.status(422).json({ error: 'NON_CANONICAL_FIELD', fields: canonicalViolations });
+    }
+
     const validation = validate('canonical.v1.intake', data);
     if (!validation.valid) {
       const fields = [];
@@ -560,38 +583,20 @@ async function handleIntakeWizard(req, res) {
       ? (qualityAllowsRelease ? 'AVAILABLE' : 'QUARANTINE')
       : consentDecision.releaseStatus;
     const isReleased = releaseStatus === 'AVAILABLE';
-    // Store canonical RCS-GOV results
     Object.assign(sampleToPersist, {
-      model_version: qualidade.model_version,
-      matrix_type: qualidade.matrix_type,
-      governance_status: qualidade.governance_status,
-      governance_failure_reasons: qualidade.governance_failure_reasons,
-      governance_rule_codes: qualidade.governance_rule_codes || [],
-      p_bio: qualidade.p_bio,
-      rcs_score: qualidade.rcs_score,
-      score_based_grade: qualidade.score_based_grade,
-      final_grade: qualidade.final_grade || '',
-      grade_route: qualidade.grade_route,
-      axis_penalties: qualidade.axis_penalties || [],
-      calculation_trace: qualidade.calculation_trace || {},
-      rcs_evaluation: qualidade,
-      release_status: releaseStatus,
+      qualityAssessment: qualidade,
       consentStatus: consentDecision.active ? 'SIGNED' : consentDecision.status,
       quarantineStatus: isReleased ? 'RELEASED' : 'QUARANTINED',
       quarantineReason: isReleased
         ? null
         : consentDecision.quarantineReason || (qualityAllowsRelease ? 'GOVERNANCE_BLOCKED' : 'QUALITY_GOVERNANCE_FAILURE'),
       availabilityStatus: isReleased ? 'AVAILABLE' : 'BLOCKED',
+      lifecycleStatus: releaseStatus,
     });
-    // Preserve legacy artifacts under a compatibility namespace (non-decisional)
-    sampleToPersist.legacy_compat = sampleToPersist.legacy_compat || {};
-    sampleToPersist.legacy_compat.quality_score = qualidade.rcs_score;
-    sampleToPersist.legacy_compat.quality_category = qualidade.final_grade || '';
-    sampleToPersist.legacy_compat.penalty_log = qualidade.axis_penalties || [];
     if (qualidade.sprec && Object.keys(qualidade.sprec).length > 0) {
       sampleToPersist.sprec = qualidade.sprec;
     }
-    sampleToPersist.merkle_root = generateSampleHash(sampleToPersist);
+    sampleToPersist.merkleRoot = generateSampleHash(sampleToPersist);
     const createdSample = await sampleService.createSample(db, sampleToPersist, {
       auditInfo: {
         userId: req.user?.id || req.user?._id || null,

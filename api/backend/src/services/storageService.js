@@ -178,12 +178,12 @@ class StorageService {
    * Alocar amostra a uma posição
    * Operação ATÔMICA: valida + insere em uma transação
    *
-   * @param {ObjectId} sampleId - ID da amostra
+   * @param {ObjectId} specimenId - ID da amostra
    * @param {ObjectId} boxId - ID da StorageBox
    * @param {string} position - Posição (ex: "A1")
    * @returns {Promise<{ success: boolean, error?: string, sampleLocation?: object }>}
    */
-  async allocateSampleToPosition(sampleId, boxId, position) {
+  async allocateSampleToPosition(specimenId, boxId, position) {
     const session = this.db.getMongo().startSession();
 
     try {
@@ -203,11 +203,11 @@ class StorageService {
         
         let sampleObjId, boxObjId;
         try {
-          sampleObjId = ObjectId.isValid(sampleId) ? new ObjectId(sampleId) : sampleId;
+          sampleObjId = ObjectId.isValid(specimenId) ? new ObjectId(specimenId) : specimenId;
           boxObjId = ObjectId.isValid(boxId) ? new ObjectId(boxId) : boxId;
         } catch (err) {
           console.error('[Storage] Erro ao converter ObjectIds:', err);
-          sampleObjId = sampleId;
+          sampleObjId = specimenId;
           boxObjId = boxId;
         }
 
@@ -220,7 +220,7 @@ class StorageService {
         );
 
         if (!existingSample) {
-          throw new Error(`Amostra ${sampleId} não encontrada`);
+          throw new Error(`Amostra ${specimenId} não encontrada`);
         }
 
         if (existingSample.storageLocation?.boxId && existingSample.storageLocation?.position) {
@@ -277,7 +277,7 @@ class StorageService {
           movementsCollection,
           {
             movementID,
-            sampleID: sampleObjId.toString(),
+            specimenId: sampleObjId.toString(),
             barcode: existingSample.barcode,
             type: 'allocate',
             quantity: existingSample.quantity,
@@ -296,12 +296,12 @@ class StorageService {
         );
       });
 
-      logger.info(`✅ Amostra ${sampleId} alocada em ${boxId}/${position}`);
+      logger.info(`✅ Amostra ${specimenId} alocada em ${boxId}/${position}`);
 
       return {
         success: true,
         sampleLocation: {
-          sampleId,
+          specimenId,
           boxId,
           position
         }
@@ -465,7 +465,7 @@ class StorageService {
         try {
           await neo4jSession.run(
             `
-              MERGE (specimen:Sample:Specimen {mongoSampleId: $specimenId})
+              MERGE (specimen:Sample:Specimen {specimenId: $specimenId})
               ON CREATE SET specimen.createdAt = datetime(), specimen.source = 'BioAvanceD'
               SET specimen.updatedAt = datetime(),
                   specimen.barcode = coalesce($barcode, specimen.barcode)
@@ -486,7 +486,7 @@ class StorageService {
               MERGE (specimen)-[:STORED_IN]->(location)
               MERGE (location)-[:PART_OF]->(box)
 
-              RETURN specimen.mongoSampleId AS specimenId,
+              RETURN specimen.specimenId AS specimenId,
                      location.coordinate AS coordinate,
                      box.mongoBoxId AS boxId
             `,
@@ -588,21 +588,21 @@ class StorageService {
    * Liberar amostra de uma posição
    * Remove de occupancyGrid e atualiza amostra
    *
-   * @param {ObjectId} sampleId - ID da amostra
+   * @param {ObjectId} specimenId - ID da amostra
    * @returns {Promise<{ success: boolean, error?: string, releasedFrom?: object }>}
    */
-  async releaseSampleFromPosition(sampleId) {
+  async releaseSampleFromPosition(specimenId) {
     try {
       const samplesCollection = await getCollection(this.db, 'samples');
       const storageBoxesCollection = this.db.collection('storageBoxes');
 
-      // Converter sampleId
+      // Converter specimenId
       let sampleObjId;
       try {
-        sampleObjId = ObjectId.isValid(sampleId) ? new ObjectId(sampleId) : sampleId;
+        sampleObjId = ObjectId.isValid(specimenId) ? new ObjectId(specimenId) : specimenId;
       } catch (err) {
-        console.error('[Storage] Erro ao converter sampleId:', err);
-        sampleObjId = sampleId;
+        console.error('[Storage] Erro ao converter specimenId:', err);
+        sampleObjId = specimenId;
       }
 
       // Buscar amostra e sua localização
@@ -612,7 +612,7 @@ class StorageService {
         return {
           success: false,
           error: 'SAMPLE_NOT_FOUND',
-          message: `Amostra ${sampleId} não encontrada`
+          message: `Amostra ${specimenId} não encontrada`
         };
       }
 
@@ -668,7 +668,7 @@ class StorageService {
       const movementID = await SampleMovementModel.generateMovementID(this.db);
       await appendMovementWithHashChain(movementsCollection, {
         movementID,
-        sampleID: sampleObjId.toString(),
+        specimenId: sampleObjId.toString(),
         barcode: sample.barcode,
         type: 'release',
         quantity: sample.quantity,
@@ -684,12 +684,12 @@ class StorageService {
         immutable: true
       });
 
-      logger.info(`✅ Amostra ${sampleId} liberada de ${boxId}/${position}`);
+      logger.info(`✅ Amostra ${specimenId} liberada de ${boxId}/${position}`);
 
       return {
         success: true,
         releasedFrom: {
-          sampleId,
+          specimenId,
           boxId,
           position
         }
@@ -777,17 +777,17 @@ class StorageService {
   /**
    * Obter localização de armazenagem de uma amostra
    *
-   * @param {ObjectId} sampleId - ID da amostra
+   * @param {ObjectId} specimenId - ID da amostra
    * @returns {Promise<{ found: boolean, location?: object }>}
    */
-  async getSampleStorage(sampleId) {
+  async getSampleStorage(specimenId) {
     try {
       const samplesCollection = await getCollection(this.db, 'samples');
       const storagePathsCollection = this.db.collection('storagePaths');
 
-      const sampleObjId = ObjectId.isValid(sampleId)
-        ? new ObjectId(sampleId)
-        : sampleId;
+      const sampleObjId = ObjectId.isValid(specimenId)
+        ? new ObjectId(specimenId)
+        : specimenId;
 
       const sample = await samplesCollection.findOne({ _id: sampleObjId });
 
@@ -821,7 +821,7 @@ class StorageService {
       return {
         found: true,
         location: {
-          sampleId: sample._id,
+          specimenId: sample._id,
           barcode: sample.barcode,
           box: {
             boxId: sample.storageLocation.boxId,
@@ -898,21 +898,21 @@ class StorageService {
       let actualCount = 0;
 
       // Verificar cada posição ocupada
-      for (const [position, sampleId] of (box.occupancyGrid || new Map())) {
-        if (sampleId) {
+      for (const [position, specimenId] of (box.occupancyGrid || new Map())) {
+        if (specimenId) {
           actualCount++;
 
           // Confirmar que amostra ainda existe e está apontando para essa posição
-          const sample = await samplesCollection.findOne({ _id: sampleId });
+          const sample = await samplesCollection.findOne({ _id: specimenId });
 
           if (!sample) {
-            errors.push(`Orfão: posição ${position} referencia amostra inexistente ${sampleId}`);
+            errors.push(`Orfão: posição ${position} referencia amostra inexistente ${specimenId}`);
           } else if (
             sample.storageLocation?.boxId?.toString() !== boxObjId.toString() ||
             sample.storageLocation?.position !== position
           ) {
             errors.push(
-              `Inconsistência: Box referencia ${sampleId} em ${position}, ` +
+              `Inconsistência: Box referencia ${specimenId} em ${position}, ` +
               `mas amostra aponta para ${sample.storageLocation?.boxId}/${sample.storageLocation?.position}`
             );
           }

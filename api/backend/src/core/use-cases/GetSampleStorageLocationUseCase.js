@@ -10,15 +10,15 @@ class GetSampleStorageLocationUseCase {
   }
 
   /**
-   * @param {{ sampleId: string }} query
+   * @param {{ specimenId: string }} query
    */
   async execute(query) {
-    if (!query?.sampleId) {
-      throw new Error('sampleId é obrigatório');
+    if (!query?.specimenId) {
+      throw new Error('specimenId é obrigatório');
     }
 
     return this.storageRepository.getSampleStorageLocation({
-      sampleId: query.sampleId
+      specimenId: query.specimenId
     });
   }
 }

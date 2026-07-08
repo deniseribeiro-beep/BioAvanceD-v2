@@ -24,15 +24,15 @@ class MongoPatientConsentReadRepository {
 
       const patient = await patientsCollection.findOne({
         $or: [
-          { patientID: sample.patientID },
-          { _id: sample.patientID }
+          { participantId: sample.participantId },
+          { _id: sample.participantId }
         ]
       });
 
       if (patient) {
         const consent = await patientConsentsCollection.findOne({
-          patientId: {
-            $in: [patient.patientID, patient._id?.toString()]
+          participantId: {
+            $in: [patient.participantId, patient._id?.toString()]
               .filter((value) => value !== undefined && value !== null && value !== '')
               .map(String)
           },
@@ -54,12 +54,12 @@ class MongoPatientConsentReadRepository {
       return {
         _id: sample._id,
         barcode: sample.barcode,
-        patientID: sample.patientID,
+        participantId: sample.participantId,
         sampleType: sample.sampleType,
         sampleOrigin: sample.sampleOrigin,
-        currentStatus: sample.currentStatus,
+        lifecycleStatus: sample.lifecycleStatus,
         quantity: sample.quantity,
-        registrationDate: sample.registrationDate,
+        registeredAt: sample.registeredAt,
         consentValid,
         consentMessage,
         consentReasonCode: patient ? (consentValid ? null : 'NO_ACTIVE_CONSENT') : 'PATIENT_NOT_FOUND',

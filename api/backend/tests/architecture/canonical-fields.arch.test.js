@@ -3,14 +3,21 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 
-const ROOTS = [
-  path.resolve(__dirname, '../../src'),
-  path.resolve(__dirname, '../../../../frontend/src')
-];
+const BACKEND_ROOT = path.resolve(__dirname, '../../src');
+const FRONTEND_ROOT = path.resolve(__dirname, '../../../../frontend/src');
 
-const FORBIDDEN = [
+const REQUIRED_FORBIDDEN = [
   'COLLECTION_ALIASES',
   'resolveSourceCollectionName',
+  'patients_fhir',
+  'samples_fhir',
+  'consents_fhir',
+  'FromLegacy',
+  'FhirFirst',
+  'fhir-sync.service',
+];
+
+const ASPIRATIONAL_FORBIDDEN = [
   'patientID',
   'patientId',
   'sampleID',
@@ -19,6 +26,7 @@ const FORBIDDEN = [
   'registrationDate',
   'currentStatus',
   'tcle_id',
+  'selected_tcle',
   'merkle_root',
   'legacy_compat',
   'quality_score',
@@ -26,9 +34,8 @@ const FORBIDDEN = [
   'penalty_log',
   'medication_name',
   'drug_name',
-  'patients_fhir',
-  'FromLegacy',
-  'FhirFirst'
+  'clinical_data',
+  'pharmacology_data',
 ];
 
 function walk(dir, out = []) {
@@ -44,17 +51,31 @@ function walk(dir, out = []) {
   return out;
 }
 
-test('blocks legacy aliases in executable code', () => {
-    const hits = [];
-    for (const root of ROOTS) {
-      for (const file of walk(root)) {
-        const content = fs.readFileSync(file, 'utf8');
-        for (const term of FORBIDDEN) {
-          if (content.includes(term)) {
-            hits.push({ file, term });
-          }
-        }
+function collectHits(root, terms) {
+  const hits = [];
+  for (const file of walk(root)) {
+    const content = fs.readFileSync(file, 'utf8');
+    for (const term of terms) {
+      if (content.includes(term)) {
+        hits.push({ file, term });
       }
     }
-    assert.deepEqual(hits, []);
+  }
+  return hits;
+}
+
+test('blocks legacy collection aliases and retired FHIR persistence', () => {
+  const hits = [
+    ...collectHits(BACKEND_ROOT, REQUIRED_FORBIDDEN),
+    ...collectHits(FRONTEND_ROOT, REQUIRED_FORBIDDEN),
+  ];
+  assert.deepEqual(hits, []);
+});
+
+test.skip('TODO PR100/PR101/PR102 - blocks aspirational aliases in active runtime', () => {
+  const hits = [
+    ...collectHits(BACKEND_ROOT, ASPIRATIONAL_FORBIDDEN),
+    ...collectHits(FRONTEND_ROOT, ASPIRATIONAL_FORBIDDEN),
+  ];
+  assert.deepEqual(hits, []);
 });

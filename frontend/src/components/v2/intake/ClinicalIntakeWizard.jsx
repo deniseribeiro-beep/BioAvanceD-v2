@@ -375,9 +375,9 @@ const initialState = {
 
 const CONSENT_PLACEHOLDERS = {
   '{{NOME_PACIENTE}}': (formData, fallbackValues) => String(formData.patientName || '').trim() || fallbackValues.patientNameMissing,
-  '{{DOC_PACIENTE}}': (formData, fallbackValues) => String(formData.patientID || formData.patientId || formData.sampleID || formData.sampleId || '').trim() || fallbackValues.patientDocMissing,
-  '{{ID_PACIENTE_SISTEMA}}': (formData, fallbackValues) => String(formData.patientID || formData.patientId || '').trim() || fallbackValues.patientSystemIdMissing,
-  '{{ID_AMOSTRA}}': (formData, fallbackValues) => String(formData.sampleID || formData.sampleId || '').trim() || fallbackValues.sampleIdMissing,
+  '{{DOC_PACIENTE}}': (formData, fallbackValues) => String(formData.participantId || '').trim() || fallbackValues.patientDocMissing,
+  '{{ID_PACIENTE_SISTEMA}}': (formData, fallbackValues) => String(formData.participantId || '').trim() || fallbackValues.patientSystemIdMissing,
+  '{{ID_AMOSTRA}}': (formData, fallbackValues) => String(formData.specimenId || '').trim() || fallbackValues.sampleIdMissing,
   '{{NOME_REPRESENTANTE}}': (formData, fallbackValues) => (formData.isDeceased ? String(formData.representativeName || '').trim() : fallbackValues.notApplicable) || fallbackValues.notApplicable,
 };
 
@@ -1311,45 +1311,43 @@ function buildSampleLabelData(createdSample = {}, payload = {}, formData = {}, d
   const sampleType = String(
     labelData.sampleType
     || createdSample.sampleType
-    || payload?.sample?.sampleType
+    || payload?.specimen?.sampleType
     || formData?.sprecSampleType
     || ''
   ).trim();
   const patientID = String(
-    labelData.patientID
+    labelData.participantId
     || labelData.patientCode
-    || createdSample.patientID
+    || createdSample.participantId
     || createdSample.patientId
-    || payload?.demographic?.patientID
-    || payload?.demographic?.patientId
+    || payload?.participant?.participantId
     || ''
   ).trim();
   const fallbackCode = buildSampleLabelCode({ date, patientID, sampleType });
   const sampleID = String(
-    labelData.sampleID
+    labelData.specimenId
     || labelData.sampleId
-    || createdSample.sampleID
+    || createdSample.specimenId
     || createdSample.sampleId
     || createdSample._id
     || ''
   ).trim();
   const barcode = String(labelData.barcode || createdSample.barcode || createdSample.qrCode || sampleID || fallbackCode).trim();
   const collectionDate = labelData.collectionDate
-    || labelData.registrationDate
+    || labelData.registeredAt
     || createdSample.collectionDate
-    || createdSample.registrationDate
-    || createdSample.registerDate
+    || createdSample.registeredAt
     || createdSample.createdAt
-    || payload?.sample?.registrationDate
+    || payload?.specimen?.registeredAt
     || date.toISOString();
 
   return {
     code: barcode || sampleID || fallbackCode,
-    sampleID: sampleID || barcode || fallbackCode,
+    specimenId: sampleID || barcode || fallbackCode,
     barcode: barcode || sampleID || fallbackCode,
-    sprecCode: String(formData.sprecCode || payload?.sample?.sprec_code || '').trim(),
+    sprecCode: String(formData.sprecCode || payload?.specimen?.sprecCode || '').trim(),
     sampleType,
-    patientID,
+    participantId: patientID,
     collectionDate: formatSampleLabelDate(collectionDate, date),
   };
 }
@@ -1360,7 +1358,6 @@ function buildSubmissionPayload(formData, clinicalComorbidityItems = [], biomark
   const sprecDictionary = sprecMatrixType === 'solid' ? SPREC_SOLID_DICTIONARY : SPREC_FLUID_DICTIONARY;
   const canonicalSprec = buildCanonicalSprecPayload(formData, sprecMatrixType, sprecDictionary);
   const sampleUnit = getSampleQuantityUnit(formData.sprecSampleType, SPREC_FLUID_DICTIONARY.sampleType.options);
-  const sprecCode = buildSprecCode(formData);
   const patientDocument = normalizeDocumentForPayload(formData.documento);
   const diagnosis = formData.isHealthyControl ? null : {
     diagnosis_name: String(formData.diagnosisCidDescription || formData.diagnosisDefinition || '').trim() || null,
@@ -1439,39 +1436,37 @@ function buildSubmissionPayload(formData, clinicalComorbidityItems = [], biomark
     biomarkersValues: formData.biomarkers_values && typeof formData.biomarkers_values === 'object' ? formData.biomarkers_values : {},
     diagnosisDefinition: String(formData.diagnosisDefinition || '').trim(),
     pharmacologyData: {
-      treatment_status: String(formData.treatmentStatus || '').trim(),
-      drug_name: String(formData.medicationName || formData.medicationSearchQuery || '').trim(),
-      atc_code: String(formData.medicationCode || '').trim().replace(/^ATC:/i, '').toUpperCase(),
-      atc_level_1: String(formData.medicationDrugClass || '').trim().toUpperCase(),
-      medication_name: String(formData.medicationName || formData.medicationSearchQuery || '').trim(),
-      medication_code: String(formData.medicationCode || '').trim().replace(/^ATC:/i, '').toUpperCase(),
-      medication_drug_class: String(formData.medicationDrugClass || '').trim().toUpperCase(),
-      last_dose_date: String(formData.lastDoseDate || '').trim(),
-      washout_start_date: String(formData.washoutStartDate || '').trim(),
-      washout_end_date: String(formData.washoutEndDate || '').trim(),
+      treatmentStatus: String(formData.treatmentStatus || '').trim(),
+      medicationName: String(formData.medicationName || formData.medicationSearchQuery || '').trim(),
+      atcCode: String(formData.medicationCode || '').trim().replace(/^ATC:/i, '').toUpperCase(),
+      atcClass: String(formData.medicationDrugClass || '').trim().toUpperCase(),
+      lastDoseDate: String(formData.lastDoseDate || '').trim(),
+      washoutStartDate: String(formData.washoutStartDate || '').trim(),
+      washoutEndDate: String(formData.washoutEndDate || '').trim(),
     },
   };
 
   return {
-    demographic: {
+    participant: {
+      participantId: String(formData.patientID || '').trim(),
       patientName: formData.patientName.trim(),
       birthDate: normalizeBirthDateForPayload(formData.birthDate),
       email: normalizeEmailInput(formData.email),
       isDeceased: Boolean(formData.isDeceased),
-      isHealthyControl: Boolean(formData.isHealthyControl),
-      is_healthy_control: Boolean(formData.isHealthyControl),
       phone: digitsOnly(formData.phone),
-      cpf: patientDocument,
-      documento: patientDocument,
+      identityDocument: patientDocument,
       prontuario: String(formData.prontuario || '').trim(),
     },
     diagnosis,
-    representativeLegal: formData.isDeceased ? {
+    legalRepresentative: formData.isDeceased ? {
       name: String(formData.representativeName || '').trim(),
       email: normalizeEmailInput(formData.representativeEmail),
-      cpf: normalizeDocumentValue(formData.representativeCpf),
+      identityDocument: normalizeDocumentValue(formData.representativeCpf),
+      phone: digitsOnly(formData.representativePhone || ''),
     } : null,
-    sample: {
+    specimen: {
+      specimenId: String(formData.specimenId || formData.sampleId || formData.sampleID || '').trim() || undefined,
+      participantId: String(formData.patientID || '').trim(),
       sampleType: formData.sprecSampleType || formData.sampleType,
       sampleOrigin: String(formData.sampleOrigin || formData.sprecSampleType || '').trim(),
       collectionInstitution: formData.collectionInstitution.trim(),
@@ -1480,61 +1475,19 @@ function buildSubmissionPayload(formData, clinicalComorbidityItems = [], biomark
       barcode: undefined,
       quantity: Number(formData.quantity),
       unit: sampleUnit,
-      matrix_type: sprecMatrixType,
-      sprec_code: sprecCode || null,
-      sprec_matrix_type: sprecMatrixType,
-      selected_tcle: String(formData.selectedConsentTemplateId || '').trim(),
-      sprec: canonicalSprec,
-      preAnalytical: {
-        collectionDateTime: formData.preAnalyticalUnknown ? null : String(formData.collectionDateTime || '').trim() || null,
-        processingDateTime: formData.preAnalyticalUnknown ? null : String(formData.processingDateTime || '').trim() || null,
-        transportTemperature: formData.preAnalyticalUnknown ? null : String(formData.transportTemperature || '').trim() || null,
-        ischemiaTimeMinutes: formData.preAnalyticalUnknown
-          ? null
-          : (Number.isNaN(Number(formData.ischemiaTimeMinutes)) ? null : Number(formData.ischemiaTimeMinutes)),
-        unknown: Boolean(formData.preAnalyticalUnknown),
-      },
+      registeredAt: now,
+      lifecycleStatus: 'AVAILABLE',
       linkedProject: formData.linkedProject.trim(),
-      specimenCollection: {
-        institution: formData.collectionInstitution.trim(),
-        acronym: formData.collectionInstitutionAcronym.trim() || generateAcronym(formData.collectionInstitution),
-      },
-      registerDate: now,
-      registrationDate: now,
-      currentStatus: 'Available',
-      isRareDisease: false,
-      merkle_root: sampleMerkleRoot,
+      sprec: canonicalSprec,
+      merkleRoot: sampleMerkleRoot,
     },
     clinical,
     consent: {
-      tcle_template_id: formData.selectedConsentTemplateId,
-      consent_granted: true,
-      consent_accepted_at: now,
+      consentTemplateId: formData.selectedConsentTemplateId,
+      consentGranted: true,
+      consentAcceptedAt: now,
     },
-    integrity: {
-      merkle_root: sampleMerkleRoot,
-      selected_tcle: String(formData.selectedConsentTemplateId || '').trim(),
-      diagnosis_orpha_code: String(formData.diagnosisOrphaCode || '').trim(),
-      diagnosis_omim_code: String(formData.diagnosisOmimCode || '').trim(),
-      diagnosis_definition: String(formData.diagnosisDefinition || '').trim(),
-      disease_phenotypes: Array.isArray(formData.diseasePhenotypes) ? formData.diseasePhenotypes : [],
-      disease_biomarkers: Array.isArray(formData.diseaseBiomarkers) ? formData.diseaseBiomarkers : [],
-      biomarkers_values: formData.biomarkers_values && typeof formData.biomarkers_values === 'object' ? formData.biomarkers_values : {},
-      pharmacology_data: {
-        treatment_status: String(formData.treatmentStatus || '').trim(),
-        drug_name: String(formData.medicationName || formData.medicationSearchQuery || '').trim(),
-        atc_code: String(formData.medicationCode || '').trim().replace(/^ATC:/i, '').toUpperCase(),
-        atc_level_1: String(formData.medicationDrugClass || '').trim().toUpperCase(),
-        medication_name: String(formData.medicationName || formData.medicationSearchQuery || '').trim(),
-        medication_code: String(formData.medicationCode || '').trim().replace(/^ATC:/i, '').toUpperCase(),
-        medication_drug_class: String(formData.medicationDrugClass || '').trim().toUpperCase(),
-        last_dose_date: String(formData.lastDoseDate || '').trim(),
-        washout_start_date: String(formData.washoutStartDate || '').trim(),
-        washout_end_date: String(formData.washoutEndDate || '').trim(),
-      },
-    },
-    biomarkers,
-    diseaseBiomarkers,
+    biomarkers: biomarkers.concat(diseaseBiomarkers),
   };
 }
 
@@ -2467,7 +2420,7 @@ export default function ClinicalIntakeWizard(props) {
     try {
       const payload = buildSubmissionPayload(formData, clinicalComorbidityDefinitions, biomarkerDefinitions, sampleMerkleRoot || null);
       if (patientMatchInfo?.patient?.patientID) {
-        payload.demographic.patientID = String(patientMatchInfo.patient.patientID).trim();
+        payload.participant.participantId = String(patientMatchInfo.patient.patientID).trim();
       }
       console.log('[DEBUG] Payload pronto:', payload);
 
@@ -2515,7 +2468,7 @@ export default function ClinicalIntakeWizard(props) {
   };
 
   const handlePrintSampleLabel = () => {
-    const sampleId = String(sampleLabel?.sampleID || sampleLabel?.code || '').trim();
+    const sampleId = String(sampleLabel?.specimenId || sampleLabel?.code || '').trim();
     if (typeof window !== 'undefined' && sampleId) {
       window.open(`/samples/${encodeURIComponent(sampleId)}/label`, '_blank', 'noopener,noreferrer');
     }
@@ -3129,7 +3082,7 @@ export default function ClinicalIntakeWizard(props) {
               <div className="sample-label-body">
                 <div className="sample-label-code" data-testid="sample-label-code">{sampleLabel.code}</div>
                 <div className="sample-label-meta">
-                  <span data-testid="sample-label-sample-id">{t('wizard.sampleLabel.sampleId', 'Amostra')}: {sampleLabel.sampleID || 'N/A'}</span>
+                  <span data-testid="sample-label-sample-id">{t('wizard.sampleLabel.sampleId', 'Amostra')}: {sampleLabel.specimenId || 'N/A'}</span>
                   <span data-testid="sample-label-type">{t('wizard.sampleLabel.type', 'Tipo')}: {sampleLabel.sampleType || 'N/A'}</span>
                   <span data-testid="sample-label-date">{t('wizard.sampleLabel.date', 'Data')}: {sampleLabel.collectionDate || 'N/A'}</span>
                   <span>{t('wizard.sampleLabel.location', 'Localização')}: {sampleLabel.storageLocation?.readable || sampleLabel.storageLocation?.position || 'N/A'}</span>
@@ -3138,7 +3091,7 @@ export default function ClinicalIntakeWizard(props) {
                   <Button type="button" variant="secondary" className="sample-label-print-button" data-testid="sample-label-print-button" onClick={handlePrintSampleLabel}>
                     {t('wizard.sampleLabel.openApiLabel', 'Abrir página de etiqueta')}
                   </Button>
-                  <a className="inline-flex items-center rounded-lg border border-emerald-300 px-3 py-2 text-sm font-semibold text-emerald-700" href={sampleLabel.sampleID ? `/samples/${encodeURIComponent(String(sampleLabel.sampleID))}/label` : '#'} target="_blank" rel="noreferrer">
+                  <a className="inline-flex items-center rounded-lg border border-emerald-300 px-3 py-2 text-sm font-semibold text-emerald-700" href={sampleLabel.specimenId ? `/samples/${encodeURIComponent(String(sampleLabel.specimenId))}/label` : '#'} target="_blank" rel="noreferrer">
                     {t('wizard.sampleLabel.viewLabelPage', 'Abrir etiqueta autenticada')}
                   </a>
                 </div>

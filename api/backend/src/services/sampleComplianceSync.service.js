@@ -2,15 +2,15 @@ const logger = require('../utils/logger');
 const { getCollection } = require('../utils/collectionResolver');
 const SampleGraphValidator = require('./SampleGraphValidator');
 
-async function revalidateSamplesByPatientID(db, patientID) {
-  const normalizedPatientID = String(patientID || '').trim();
+async function revalidateSamplesByPatientID(db, participantId) {
+  const normalizedPatientID = String(participantId || '').trim();
   if (!normalizedPatientID) {
     return { total: 0, validated: 0, failed: 0 };
   }
 
   const samplesCollection = await getCollection(db, 'samples');
   const samples = await samplesCollection
-    .find({ patientID: normalizedPatientID }, { projection: { _id: 1, sampleID: 1 } })
+    .find({ participantId: normalizedPatientID }, { projection: { _id: 1, specimenId: 1 } })
     .toArray();
 
   if (!samples.length) {
@@ -23,20 +23,20 @@ async function revalidateSamplesByPatientID(db, patientID) {
 
   for (const sample of samples) {
     try {
-      await validator.validateSampleCompliance(String(sample._id || sample.sampleID || ''));
+      await validator.validateSampleCompliance(String(sample._id || sample.specimenId || ''));
       validated += 1;
     } catch (error) {
       failed += 1;
       logger.warn('[SAMPLE_COMPLIANCE_SYNC] Falha ao revalidar amostra vinculada ao paciente', {
-        patientID: normalizedPatientID,
-        sampleId: String(sample._id || sample.sampleID || ''),
+        participantId: normalizedPatientID,
+        specimenId: String(sample._id || sample.specimenId || ''),
         error: error?.message || String(error),
       });
     }
   }
 
   logger.info('[SAMPLE_COMPLIANCE_SYNC] Revalidação ética concluída para paciente', {
-    patientID: normalizedPatientID,
+    participantId: normalizedPatientID,
     total: samples.length,
     validated,
     failed,

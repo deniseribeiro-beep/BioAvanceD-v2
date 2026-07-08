@@ -3,7 +3,7 @@ const consentValidator = require('../../services/consent.validator');
 function enforceCommercialConsent(options = {}) {
   const scope = options.scope || 'uso_comercial';
   const resolveSampleId = options.resolveSampleId || ((req) => {
-    return req.body?.sampleID || req.body?.sampleId || req.params?.sampleID || req.params?.id || null;
+    return req.body?.specimenId || req.body?.specimenId || req.params?.specimenId || req.params?.id || null;
   });
 
   return async (req, res, next) => {
@@ -16,9 +16,9 @@ function enforceCommercialConsent(options = {}) {
         });
       }
 
-      const sampleId = resolveSampleId(req);
+      const specimenId = resolveSampleId(req);
       consentValidator.init(db);
-      await consentValidator.validateAccess(sampleId, scope);
+      await consentValidator.validateAccess(specimenId, scope);
 
       return next();
     } catch (error) {
