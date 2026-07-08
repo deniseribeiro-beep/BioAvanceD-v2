@@ -199,13 +199,17 @@ function normalizeMedicationRecord(raw = {}) {
   };
 }
 
+const medicationDictionaryIndexedDbs = new WeakSet();
+
 async function ensureMedicationDictionaryIndexes(db) {
+  if (medicationDictionaryIndexedDbs.has(db)) return;
   const collection = db.collection('medication_dictionary');
   await collection.createIndex({ generic_name: 1 }, { name: 'generic_name_idx' });
   await collection.createIndex({ atc_code: 1 }, { name: 'atc_code_idx' });
   await collection.createIndex({ name: 'text', generic_name: 'text', synonyms: 'text', code: 'text', atc_code: 'text' }, { name: 'medication_text_idx' });
   await collection.createIndex({ drug_class: 1 }, { name: 'drug_class_idx' });
   await collection.createIndex({ disease_categories: 1 }, { name: 'disease_categories_idx' });
+  medicationDictionaryIndexedDbs.add(db);
 }
 
 router.get('/atc/search', async (req, res) => {

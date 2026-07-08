@@ -237,4 +237,12 @@ describe('GET /api/dictionary/medications/search', () => {
     expect(res.status).toBe(500);
     expect(res.body.error).toBe('query failed');
   });
+
+  it('only creates the medication_dictionary indexes once per db instance, not on every request (issue #58)', async () => {
+    await request(app).get('/api/dictionary/medications/search?query=fabry');
+    expect(collection.createIndex).toHaveBeenCalledTimes(5);
+
+    await request(app).get('/api/dictionary/medications/search?query=fabry');
+    expect(collection.createIndex).toHaveBeenCalledTimes(5);
+  });
 });
