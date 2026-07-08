@@ -117,12 +117,9 @@ describe('ImportLGPDService.importPatients', () => {
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0].errors[0]).toMatch(/Email/);
     expect(patientsCollection.insertOne).not.toHaveBeenCalled();
-    // Confirmed bug (see wrap-up/issue): `results.total++` sits after the row's
-    // try block, so the `continue` on an early per-field rejection skips it —
-    // `total` under-counts any row that fails field validation, unlike a row
-    // that throws (caught by the outer catch, which falls through to the
-    // increment) or one that succeeds.
-    expect(result.total).toBe(0);
+    // A row rejected by field validation still counts toward total (#65) —
+    // only the same shape as a row that throws or one that succeeds.
+    expect(result.total).toBe(1);
   });
 
   it('records a per-row error when consentTemplateId is missing', async () => {

@@ -439,6 +439,8 @@ class ImportLGPDService {
             continue;
           }
           
+          results.total++;
+
           // Parse dos dados do CSV/Excel
           const patientData = this.parsePatientRow(row);
 
@@ -624,8 +626,6 @@ class ImportLGPDService {
             data: this.sanitizeRowForError(row)
           });
         }
-
-        results.total++;
       }
 
       // Log sanitizado (sem dados sensíveis)
