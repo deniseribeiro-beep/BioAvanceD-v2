@@ -1,16 +1,48 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { createRequire } from 'module';
 import express from 'express';
 import request from 'supertest';
 import jwt from 'jsonwebtoken';
+
+const require = createRequire(import.meta.url);
 
 process.env.CONSENT_SECRET = process.env.CONSENT_SECRET || 'test-consent-secret';
 
 const PatientModel = require('../../src/models/Patient');
 const Sample = require('../../src/models/Sample');
 const connection = require('../../src/infrastructure/database/neo4j/connection');
-const router = require('../../src/routes/eConsent');
 
-function buildApp(db) {
+const authPath = require.resolve('../../src/infrastructure/middleware/auth');
+const rbacPath = require.resolve('../../src/infrastructure/middleware/rbac');
+const routePath = require.resolve('../../src/routes/eConsent');
+
+function clearRouteCache() {
+  delete require.cache[authPath];
+  delete require.cache[rbacPath];
+  delete require.cache[routePath];
+}
+
+// Loads the router with `authenticate`/`requirePermission` stubbed to allow
+// through (issue: /generate-link had neither, letting anyone mint a valid
+// consent link for any patientId + attacker-controlled email).
+function loadAuthenticatedRouter() {
+  clearRouteCache();
+  const authModule = require(authPath);
+  authModule.authenticate = (req, res, next) => {
+    req.user = { id: 'staff-1', roleName: 'Coordenador' };
+    next();
+  };
+  const rbacModule = require(rbacPath);
+  rbacModule.requirePermission = () => (req, res, next) => next();
+  return require(routePath);
+}
+
+function loadRealAuthRouter() {
+  clearRouteCache();
+  return require(routePath);
+}
+
+function buildApp(router, db) {
   const app = express();
   app.use(express.json());
   app.set('io', null);
@@ -24,8 +56,25 @@ function signToken(payload) {
 }
 
 describe('eConsent.routes POST /generate-link', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    clearRouteCache();
+  });
+
+  it('returns 401 when unauthenticated (no staff session)', async () => {
+    const router = loadRealAuthRouter();
+    const app = buildApp(router);
+
+    const res = await request(app)
+      .post('/e-consent/generate-link')
+      .send({ patientId: '12345678', email: 'a@b.com' });
+
+    expect(res.status).toBe(401);
+  });
+
   it('returns 400 when patientId or email is missing', async () => {
-    const app = buildApp();
+    const router = loadAuthenticatedRouter();
+    const app = buildApp(router);
 
     const res = await request(app).post('/e-consent/generate-link').send({ email: 'a@b.com' });
 
@@ -33,13 +82,44 @@ describe('eConsent.routes POST /generate-link', () => {
     expect(res.body).toEqual({ error: 'patientId e email obrigatórios' });
   });
 
+  it('returns 404 when the patient does not exist', async () => {
+    const router = loadAuthenticatedRouter();
+    const findOne = vi.fn().mockResolvedValue(null);
+    const db = { collection: vi.fn().mockReturnValue({ findOne }) };
+    const app = buildApp(router, db);
+
+    const res = await request(app)
+      .post('/e-consent/generate-link')
+      .send({ patientId: '12345678', email: 'a@b.com' });
+
+    expect(res.status).toBe(404);
+    expect(findOne).toHaveBeenCalledWith({ patientID: '12345678' });
+  });
+
+  it('returns 403 when email does not match the patient on file', async () => {
+    const router = loadAuthenticatedRouter();
+    const patient = { patientID: '12345678', email: 'real-owner@example.com' };
+    const findOne = vi.fn().mockResolvedValue(patient);
+    const db = { collection: vi.fn().mockReturnValue({ findOne }) };
+    const app = buildApp(router, db);
+
+    const res = await request(app)
+      .post('/e-consent/generate-link')
+      .send({ patientId: '12345678', email: 'attacker@evil.com' });
+
+    expect(res.status).toBe(403);
+  });
+
   it('sends a consent email and returns the generated link', async () => {
+    const router = loadAuthenticatedRouter();
     const notificationService = require('../../src/services/notification.service');
     const sendConsentEmailSpy = vi
       .spyOn(notificationService, 'sendConsentEmail')
       .mockResolvedValue({ channel: 'email', success: true, provider: 'resend' });
-
-    const app = buildApp();
+    const patient = { patientID: '12345678', email: 'a@b.com' };
+    const findOne = vi.fn().mockResolvedValue(patient);
+    const db = { collection: vi.fn().mockReturnValue({ findOne }) };
+    const app = buildApp(router, db);
 
     const res = await request(app)
       .post('/e-consent/generate-link')
@@ -60,10 +140,11 @@ describe('eConsent.routes POST /generate-link', () => {
 describe('eConsent.routes GET /validate/:token', () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    clearRouteCache();
   });
 
   it('returns 401 for an invalid/expired token', async () => {
-    const app = buildApp();
+    const app = buildApp(loadRealAuthRouter());
 
     const res = await request(app).get('/e-consent/validate/not-a-real-token');
 
@@ -83,7 +164,7 @@ describe('eConsent.routes GET /validate/:token', () => {
     const patient = { patientID: '12345678', name: 'Jane Doe', consents: [{ key: 'general', status: 'ACTIVE' }] };
     const findOne = vi.fn().mockResolvedValue(patient);
     const db = { collection: vi.fn().mockReturnValue({ findOne }) };
-    const app = buildApp(db);
+    const app = buildApp(loadRealAuthRouter(), db);
     const token = signToken({ patientId: '12345678' });
 
     const res = await request(app).get(`/e-consent/validate/${token}`);
@@ -97,7 +178,7 @@ describe('eConsent.routes GET /validate/:token', () => {
   it('returns 404 when the patient does not exist', async () => {
     const findOne = vi.fn().mockResolvedValue(null);
     const db = { collection: vi.fn().mockReturnValue({ findOne }) };
-    const app = buildApp(db);
+    const app = buildApp(loadRealAuthRouter(), db);
     const token = signToken({ patientId: 'no-such-patient' });
 
     const res = await request(app).get(`/e-consent/validate/${token}`);
@@ -118,10 +199,11 @@ describe('eConsent.routes POST /update', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    clearRouteCache();
   });
 
   it('returns 401 for an invalid/expired token', async () => {
-    const app = buildApp();
+    const app = buildApp(loadRealAuthRouter());
 
     const res = await request(app).post('/e-consent/update').send({ token: 'bad-token', consents: [] });
 
@@ -130,7 +212,7 @@ describe('eConsent.routes POST /update', () => {
   });
 
   it('merges each consent via a Neo4j MERGE statement and returns success', async () => {
-    const app = buildApp();
+    const app = buildApp(loadRealAuthRouter());
     const token = signToken({ patientId: '12345678' });
 
     const res = await request(app)
@@ -147,7 +229,7 @@ describe('eConsent.routes POST /update', () => {
   });
 
   it('quarantines samples in Neo4j and MongoDB when any consent is REVOKED', async () => {
-    const app = buildApp();
+    const app = buildApp(loadRealAuthRouter());
     const token = signToken({ patientId: '12345678' });
     const emit = vi.fn();
     const io = { to: vi.fn().mockReturnValue({ emit }) };
@@ -171,7 +253,7 @@ describe('eConsent.routes POST /update', () => {
   });
 
   it('releases quarantined samples when every consent is ACTIVE or GRANTED', async () => {
-    const app = buildApp();
+    const app = buildApp(loadRealAuthRouter());
     const token = signToken({ patientId: '12345678' });
     const emit = vi.fn();
     const io = { to: vi.fn().mockReturnValue({ emit }) };
@@ -201,7 +283,7 @@ describe('eConsent.routes POST /update', () => {
   });
 
   it('neither quarantines nor releases when consents are a mix of other statuses', async () => {
-    const app = buildApp();
+    const app = buildApp(loadRealAuthRouter());
     const token = signToken({ patientId: '12345678' });
 
     const res = await request(app)
@@ -221,7 +303,7 @@ describe('eConsent.routes POST /update', () => {
   });
 
   it('no-ops the socket emit when no io instance is registered on the app', async () => {
-    const app = buildApp();
+    const app = buildApp(loadRealAuthRouter());
     const token = signToken({ patientId: '12345678' });
 
     const res = await request(app)

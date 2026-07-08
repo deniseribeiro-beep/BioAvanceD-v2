@@ -4,7 +4,7 @@ const jwt = require('jsonwebtoken');
 const router = express.Router();
 const notificationService = require('../services/notification.service');
 const { authenticate } = require('../infrastructure/middleware/auth');
-const { requireRole } = require('../infrastructure/middleware/rbac');
+const { requireRole, requirePermission } = require('../infrastructure/middleware/rbac');
 const consentController = require('../controllers/consent.controller');
 const CONSENT_SECRET = String(process.env.CONSENT_SECRET || '').trim();
 const CONSENT_EXPIRATION = 60 * 60 * 2; // 2h
@@ -14,9 +14,17 @@ if (!CONSENT_SECRET) {
 }
 
 // Gera link seguro para o paciente
-router.post('/generate-link', async (req, res) => {
+router.post('/generate-link', authenticate, requirePermission('createPatient'), async (req, res) => {
   const { patientId, email } = req.body;
   if (!patientId || !email) return res.status(400).json({ error: 'patientId e email obrigatórios' });
+
+  const db = req.app.locals.db;
+  const patient = await db.collection('patients').findOne({ patientID: patientId });
+  if (!patient) return res.status(404).json({ error: 'Paciente não encontrado' });
+  if (patient.email !== email) {
+    return res.status(403).json({ error: 'Email não corresponde ao paciente' });
+  }
+
   const token = jwt.sign({ patientId }, CONSENT_SECRET, { expiresIn: CONSENT_EXPIRATION });
   const link = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/patient/e-consent/${token}`;
   await notificationService.sendConsentEmail({ patientID: patientId, email }, link);

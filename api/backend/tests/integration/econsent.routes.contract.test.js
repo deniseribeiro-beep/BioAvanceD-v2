@@ -8,11 +8,15 @@ const request = require('supertest');
 const routePath = require.resolve('../../src/routes/eConsent');
 const notificationPath = require.resolve('../../src/services/notification.service');
 const patientModelPath = require.resolve('../../src/models/Patient');
+const authPath = require.resolve('../../src/infrastructure/middleware/auth');
+const rbacPath = require.resolve('../../src/infrastructure/middleware/rbac');
 
 function loadRouter() {
   delete require.cache[routePath];
   delete require.cache[notificationPath];
   delete require.cache[patientModelPath];
+  delete require.cache[authPath];
+  delete require.cache[rbacPath];
 
   require.cache[notificationPath] = {
     id: notificationPath,
@@ -31,6 +35,14 @@ function loadRouter() {
       findOne: async () => null,
     },
   };
+
+  const authModule = require(authPath);
+  authModule.authenticate = (req, res, next) => {
+    req.user = { id: 'staff-1', roleName: 'Coordenador' };
+    next();
+  };
+  const rbacModule = require(rbacPath);
+  rbacModule.requirePermission = () => (req, res, next) => next();
 
   return require('../../src/routes/eConsent');
 }
