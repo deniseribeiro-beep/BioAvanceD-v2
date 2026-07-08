@@ -208,6 +208,16 @@ describe('storage-query.controller.getAvailablePositionsController', () => {
 
     expect(res.status).toHaveBeenCalledWith(500);
   });
+
+  it('returns 500 instead of crashing when the use case rejects with a non-Error value (#50)', async () => {
+    vi.spyOn(GetBoxAvailablePositionsUseCase.prototype, 'execute').mockRejectedValue('plain string rejection');
+    const req = buildReq({ params: { boxId: 'box-1' } });
+    const res = buildRes();
+
+    await controller(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(500);
+  });
 });
 
 describe('storage-query.controller.validatePositionController', () => {
