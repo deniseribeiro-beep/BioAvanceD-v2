@@ -1,6 +1,6 @@
 const env = require('./env');
 
-const CANONICAL_COLLECTIONS = {
+const CANONICAL_COLLECTIONS = Object.freeze({
   patients: env.COLL_PATIENTS || 'patients',
   samples: env.COLL_SAMPLES || 'samples',
   consents: env.COLL_CONSENTS || 'patientConsents',
@@ -11,20 +11,9 @@ const CANONICAL_COLLECTIONS = {
   clinicalUnits: env.COLL_CLINICAL_UNITS || 'clinical_units',
   diseaseDictionary: env.COLL_DISEASE_DICTIONARY || 'disease_dictionary',
   medicationDictionary: env.COLL_MEDICATION_DICTIONARY || 'medication_dictionary'
-};
+});
 
-const COLLECTION_ALIASES = {
-  patients: ['pacientes'],
-  samples: ['amostras'],
-  consents: ['patient_consents'],
-  consentTemplates: [],
-  sampleMovements: [],
-  biomarkerObservations: ['observations', 'observation_biomarkers'],
-  cids: ['diseases', 'cid', 'cid10', 'icd10', 'icdCodes', 'icd_codes'],
-  clinicalUnits: ['clinicalUnits'],
-  diseaseDictionary: ['diseaseDictionary', 'diseases_dictionary'],
-  medicationDictionary: ['medications', 'drug_dictionary', 'drugDictionary']
-};
+const COLLECTION_ALIASES = Object.freeze({});
 
 module.exports = {
   CANONICAL_COLLECTIONS,
