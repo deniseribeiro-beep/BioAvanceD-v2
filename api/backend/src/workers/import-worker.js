@@ -66,16 +66,25 @@ async function initWorker() {
 
           logger.info(`📦 Iniciando batch import: ${stagingImportId}`);
 
-          const batchResult = await batchValidationEngine.processBatchImport(db, stagingImportId, job);
+          try {
+            const batchResult = await batchValidationEngine.processBatchImport(db, stagingImportId, job);
 
-          await batchValidationEngine.updateProgress(stagingImportId, {
-            status: batchResult.invalidRows > 0 && batchResult.validRows === 0 && batchResult.partialRows === 0
-              ? 'failed'
-              : 'completed',
-            processedRows: batchResult.processedRows,
-          });
+            await batchValidationEngine.updateProgress(stagingImportId, {
+              status: batchResult.invalidRows > 0 && batchResult.validRows === 0 && batchResult.partialRows === 0
+                ? 'failed'
+                : 'completed',
+              processedRows: batchResult.processedRows,
+            });
 
-          return batchResult;
+            return batchResult;
+          } catch (error) {
+            await batchValidationEngine.updateProgress(stagingImportId, {
+              status: 'failed',
+            });
+
+            logger.error(`❌ Erro ao processar batch-import ${stagingImportId}:`, error);
+            throw error;
+          }
         }
 
         if (!dataTypeNormalized) {
@@ -206,16 +215,6 @@ async function initWorker() {
 
           return result;
         } catch (error) {
-          if (job.name === 'batch-import') {
-            const stagingImportId = job.data?.stagingImportId || job.data?.jobId || job.id;
-            await batchValidationEngine.updateProgress(stagingImportId, {
-              status: 'failed',
-            });
-
-            logger.error(`❌ Erro ao processar batch-import ${stagingImportId}:`, error);
-            throw error;
-          }
-
           logger.error(`❌ Erro ao processar job ${jobID}:`, error);
 
           // Atualiza status para failed
