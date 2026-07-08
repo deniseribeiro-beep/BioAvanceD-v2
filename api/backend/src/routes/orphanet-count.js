@@ -21,12 +21,15 @@ router.get('/count', async (req, res) => {
       await client.connect();
       database = client.db(DB_NAME);
     }
-    const col = (db || database).collection(COLLECTION);
-    const counts = await col.aggregate([
-      { $group: { _id: '$lang', count: { $sum: 1 } } }
-    ]).toArray();
-    if (client) await client.close();
-    res.json(counts);
+    try {
+      const col = (db || database).collection(COLLECTION);
+      const counts = await col.aggregate([
+        { $group: { _id: '$lang', count: { $sum: 1 } } }
+      ]).toArray();
+      res.json(counts);
+    } finally {
+      if (client) await client.close();
+    }
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
