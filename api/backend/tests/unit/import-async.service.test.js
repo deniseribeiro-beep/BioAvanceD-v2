@@ -286,6 +286,14 @@ describe('import-async.service', () => {
       }
     });
 
+    it('resolves [] instead of crashing when the source file does not exist (#27)', async () => {
+      const file = { originalname: 'missing.csv', path: path.join(tmpDir, 'does-not-exist.csv') };
+
+      const headers = await service.getHeadersFromFile(file, 'patients');
+
+      expect(headers).toEqual([]);
+    });
+
     it('resolves canonicalized headers from an xlsx header row', async () => {
       const filePath = await writeXlsx('h1.xlsx', [
         ['some', 'preamble'],
