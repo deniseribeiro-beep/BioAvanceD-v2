@@ -101,7 +101,7 @@ describe('mqtt-ingestion-audit.service', () => {
         topic: 'sensors/temp',
         payloadHash: 'def456',
         signatureVerified: false,
-        status: null,
+        status: 'processed',
         reason: null,
         sensorId: 'sensor-2',
         timestamp: new Date('2026-07-02T05:30:00.000Z').toISOString(),
