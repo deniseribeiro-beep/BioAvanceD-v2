@@ -107,6 +107,18 @@ One iteration = one issue, sized to finish in the iteration:
   comment already labeled something "needs maintainer input," don't
   take that at face value either — re-trace it yourself before closing
   the loop, the same way you would for a fresh pick.
+- The same reachability check can dissolve an entire issue, not just
+  one sub-point (confirmed 2026-07-08, issue #106: "mapSampleStatusToFhir
+  vocabulary doesn't match Sample.currentStatus enum" was filed as a
+  correctness bug with a concrete two-enum mismatch shown side by side —
+  looked unambiguous. Tracing the one real caller showed the object
+  passed in always carries the *other* status field, already in the
+  vocabulary the function expects; no reachable path ever passes the
+  mismatched enum. Close as not reproducible against current callers
+  rather than "fixing" a mismatch nothing exercises — but if tracing
+  turns up a *different* real problem along the way (as it did here:
+  the test file asserting the old, removed API), that's still worth its
+  own new issue.
 - Skim whether another in-flight fix touches the same files — cheap
   insurance against tangled diffs.
 
