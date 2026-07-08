@@ -92,12 +92,12 @@ describe('MongoPatientConsentReadRepository', () => {
       patientID: 'P1'
     });
     expect(db.__consentsCollection.findOne).toHaveBeenCalledWith({
-      patientId: 'patient-id-1',
+      patientId: { $in: ['P1', 'patient-id-1'] },
       status: 'ACTIVE'
     });
   });
 
-  it('bypasses consent as valid ("Sistema de consentimento em implementação") when patient found, no active consent, but total consent count is zero', async () => {
+  it('rejects (canAllocate=false, filtered out) when patient found, no active consent, and the consents collection is empty', async () => {
     const patientObjId = { toString: () => 'patient-id-2' };
     const db = createDb({
       patients: {
@@ -112,10 +112,9 @@ describe('MongoPatientConsentReadRepository', () => {
 
     const result = await repo.enrichSamplesWithConsent([makeSample({ patientID: 'P2' })]);
 
-    expect(result).toHaveLength(1);
-    expect(result[0].consentValid).toBe(true);
-    expect(result[0].consentMessage).toBe('Sistema de consentimento em implementação');
-    expect(result[0].canAllocate).toBe(true);
+    // An empty consents collection is no longer an escape hatch (fixed in 5e571099):
+    // the sample is rejected and filtered out like any other missing-consent case.
+    expect(result).toEqual([]);
   });
 
   it('rejects (canAllocate=false, filtered out) when patient found, no active consent, and other consents exist in the collection', async () => {
@@ -137,7 +136,7 @@ describe('MongoPatientConsentReadRepository', () => {
     expect(result).toEqual([]);
   });
 
-  it('bypasses consent as valid ("Paciente não encontrado (dev mode)") when the patient is not found', async () => {
+  it('rejects (canAllocate=false, filtered out) when the patient is not found', async () => {
     const db = createDb({
       patients: { findOne: vi.fn().mockResolvedValue(null) },
       consents: { countDocuments: vi.fn().mockResolvedValue(3) }
@@ -146,10 +145,9 @@ describe('MongoPatientConsentReadRepository', () => {
 
     const result = await repo.enrichSamplesWithConsent([makeSample({ patientID: 'unknown-patient' })]);
 
-    expect(result).toHaveLength(1);
-    expect(result[0].consentValid).toBe(true);
-    expect(result[0].consentMessage).toBe('Paciente não encontrado (dev mode)');
-    expect(result[0].canAllocate).toBe(true);
+    // A missing patient record no longer bypasses consent (fixed in 5e571099):
+    // it fails closed and is filtered out of the result.
+    expect(result).toEqual([]);
     // No consent lookup should be attempted for a patient that was never found.
     expect(db.__consentsCollection.findOne).not.toHaveBeenCalled();
   });
@@ -189,12 +187,12 @@ describe('MongoPatientConsentReadRepository', () => {
       },
       consents: {
         findOne: vi.fn((query) => {
-          if (query.patientId === 'accepted-id') {
+          if (query.patientId?.$in?.includes('accepted-id')) {
             return Promise.resolve({ patientId: 'accepted-id', status: 'ACTIVE' });
           }
           return Promise.resolve(null);
         }),
-        countDocuments: vi.fn().mockResolvedValue(10) // non-zero -> no escape hatch for the rejected one
+        countDocuments: vi.fn().mockResolvedValue(10)
       }
     });
     const repo = new MongoPatientConsentReadRepository(db);
@@ -227,12 +225,12 @@ describe('MongoPatientConsentReadRepository', () => {
       },
       consents: {
         findOne: vi.fn((query) => {
-          if (query.patientId === 'id-a') {
+          if (query.patientId?.$in?.includes('id-a')) {
             return Promise.resolve({ patientId: 'id-a', status: 'ACTIVE' });
           }
           return Promise.resolve(null); // B and C have no active consent
         }),
-        countDocuments: vi.fn().mockResolvedValue(7) // non-zero: B, C rejected (no escape hatch)
+        countDocuments: vi.fn().mockResolvedValue(7)
       }
     });
     const repo = new MongoPatientConsentReadRepository(db);
@@ -251,7 +249,7 @@ describe('MongoPatientConsentReadRepository', () => {
     expect(result[0].consentMessage).toBe('Consentimento ativo');
   });
 
-  it('calls countDocuments exactly once per enrichSamplesWithConsent call, regardless of sample count', async () => {
+  it('never calls countDocuments (per-patient consent check only, no collection-wide escape hatch)', async () => {
     const db = createDb({
       patients: { findOne: vi.fn().mockResolvedValue(null) }
     });
@@ -266,6 +264,6 @@ describe('MongoPatientConsentReadRepository', () => {
 
     await repo.enrichSamplesWithConsent(samples);
 
-    expect(db.__consentsCollection.countDocuments).toHaveBeenCalledTimes(1);
+    expect(db.__consentsCollection.countDocuments).not.toHaveBeenCalled();
   });
 });
