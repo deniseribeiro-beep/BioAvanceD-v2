@@ -19,7 +19,7 @@ type PatientsPayload = {
   success?: boolean;
   data?: unknown;
   patients?: unknown;
-  patientID?: string;
+  participantId?: string;
   id?: string;
 };
 
@@ -37,12 +37,12 @@ function isSilentAuthAbort(error: unknown): boolean {
   return typedError?.code === NO_TOKEN_PROTECTED_REQUEST;
 }
 
-function ensurePatientId(items: Patient[]): Patient[] {
+function ensureparticipantId(items: Patient[]): Patient[] {
   return items.map((patient) => {
     const typedPatient = patient as PatientWithOptionalId;
     return {
       ...patient,
-      patientID: patient.patientID || typedPatient.id || '',
+      participantId: patient.participantId || typedPatient.id || '',
     };
   });
 }
@@ -64,11 +64,11 @@ function extractPatients(payload: unknown): Patient[] {
     patientsData = payload as Patient[];
   } else if (Array.isArray(typedPayload?.data)) {
     patientsData = typedPayload.data as Patient[];
-  } else if (typeof payload === 'object' && payload && ((typedPayload?.patientID || typedPayload?.id))) {
+  } else if (typeof payload === 'object' && payload && ((typedPayload?.participantId || typedPayload?.id))) {
     patientsData = [payload as Patient];
   }
 
-  return ensurePatientId(patientsData);
+  return ensureparticipantId(patientsData);
 }
 
 export function usePatients() {
@@ -141,7 +141,7 @@ export function usePatients() {
 
   const deletePatient = async (id: number | string) => {
     try {
-      // Aceita tanto number quanto string (patientID de 8 dígitos)
+      // Aceita tanto number quanto string (participantId de 8 dígitos)
       await patientService.delete(id);
       // Recarrega a lista completa para garantir dados atualizados
       await loadPatients();
@@ -165,5 +165,6 @@ export function usePatients() {
     deletePatient,
   };
 }
+
 
 

@@ -26,7 +26,7 @@ class UploadController {
       }
 
       const file = req.file;
-      const sampleId = req.body.sampleId || req.body.sampleID || null;
+      const specimenId = req.body.specimenId || req.body.specimenId || null;
 
       if (!file) {
         return res.status(400).json({
@@ -35,18 +35,18 @@ class UploadController {
         });
       }
 
-      if (!sampleId) {
+      if (!specimenId) {
         if (fs.existsSync(file.path)) {
           fs.unlinkSync(file.path);
         }
         return res.status(400).json({
           success: false,
-          error: 'sampleId é obrigatório'
+          error: 'specimenId é obrigatório'
         });
       }
 
       // VALIDAÇÃO: Amostra existe + Paciente tem consentimento
-      const validationResult = await analysisValidationService.validateUploadEligibility(db, String(sampleId));
+      const validationResult = await analysisValidationService.validateUploadEligibility(db, String(specimenId));
       if (!validationResult.success) {
         if (fs.existsSync(file.path)) {
           fs.unlinkSync(file.path);
@@ -66,9 +66,9 @@ class UploadController {
         storedPath,
         mimeType: file.mimetype,
         size: file.size,
-        sampleId: validationResult.sample._id, // Usa o _id da amostra validada
-        sampleIdentifier: String(sampleId), // Mantém o identificador original para auditoria
-        patientID: validationResult.sample.patientID,
+        specimenId: validationResult.sample._id, // Usa o _id da amostra validada
+        specimenIdentifier: String(specimenId), // Mantém o identificador original para auditoria
+        participantId: validationResult.sample.participantId,
         uploadedBy,
         createdAt: new Date()
       };
@@ -76,14 +76,14 @@ class UploadController {
       const analysisCollection = db.collection('AnalysisFile');
       const insertResult = await analysisCollection.insertOne(payload);
 
-      logger.info(`Upload de análise registrado: Sample ${validationResult.sample.sampleID}, File: ${file.originalname}`);
+      logger.info(`Upload de análise registrado: Sample ${validationResult.sample.specimenId}, File: ${file.originalname}`);
 
       return res.status(201).json({
         success: true,
         message: 'Arquivo enviado com sucesso',
         data: { 
           _id: insertResult.insertedId,
-          sampleID: validationResult.sample.sampleID,
+          specimenId: validationResult.sample.specimenId,
           barcode: validationResult.sample.barcode,
           fileName: file.originalname,
           fileSize: file.size,

@@ -1,6 +1,6 @@
 import type { Patient, User } from '../types/models';
 
-type PatientIdentity = Pick<Patient, 'patientID'> & {
+type PatientIdentity = Pick<Patient, 'participantId'> & {
   patientName?: string;
   recordNumber?: string | number;
 };
@@ -23,7 +23,7 @@ export function formatPatientDisplay(
   _user: User | null
 ): string {
   // Sempre retorna anônimo - o nome nunca é exibido no frontend
-  return `Anônimo (ID: ${patient.patientID})`;
+  return `Anônimo (ID: ${patient.participantId})`;
 }
 
 /**
@@ -35,6 +35,6 @@ export function formatPatientOption(
   _user: User | null
 ): string {
   // Sempre retorna anônimo - o nome nunca é exibido no frontend
-  return `Anônimo (ID: ${patient.patientID})`;
+  return `Anônimo (ID: ${patient.participantId})`;
 }
 

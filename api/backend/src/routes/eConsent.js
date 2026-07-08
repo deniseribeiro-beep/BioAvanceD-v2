@@ -16,9 +16,9 @@ if (!CONSENT_SECRET) {
 
 // Gera link seguro para o paciente
 router.post('/generate-link', async (req, res) => {
-  const { patientId, email } = req.body;
-  if (!patientId || !email) return res.status(400).json({ error: 'patientId e email obrigatórios' });
-  const token = jwt.sign({ patientId }, CONSENT_SECRET, { expiresIn: CONSENT_EXPIRATION });
+  const { participantId, email } = req.body;
+  if (!participantId || !email) return res.status(400).json({ error: 'participantId e email obrigatórios' });
+  const token = jwt.sign({ participantId }, CONSENT_SECRET, { expiresIn: CONSENT_EXPIRATION });
   const link = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/patient/e-consent/${token}`;
   await sendConsentLink(email, link);
   res.json({ success: true, link });
@@ -29,7 +29,7 @@ router.get('/validate/:token', async (req, res) => {
   try {
     const { token } = req.params;
     const payload = jwt.verify(token, CONSENT_SECRET);
-    const patient = await PatientModel.findOne({ patientID: payload.patientId });
+    const patient = await PatientModel.findOne({ participantId: payload.participantId });
     if (!patient) return res.status(404).json({ error: 'Paciente não encontrado' });
     // Buscar consentimentos no Neo4j (mock)
     res.json({ patient, consents: patient.consents || [] });
@@ -43,34 +43,34 @@ router.post('/update', async (req, res) => {
   const { token, consents } = req.body;
   try {
     const payload = jwt.verify(token, CONSENT_SECRET);
-    const patientId = payload.patientId;
+    const participantId = payload.participantId;
     // Fluxo canônico: persistência Mongo é a origem; projeção Neo4j ocorre pela outbox.
     const consentService = require('../services/consent.service');
     const db = req.app.locals.mongoDb || req.app.locals.db;
     if (db && typeof consentService?.recordConsentProjectionEvent === 'function') {
-      await consentService.recordConsentProjectionEvent(db, { patientId, consents });
+      await consentService.recordConsentProjectionEvent(db, { participantId, consents });
     }
 
     // Se algum consentimento foi revogado, coloca amostras em quarentena
     if (consents.some(c => c.status === 'REVOKED')) {
       // Atualiza status das amostras no MongoDB
       const Sample = require('../models/Sample');
-      await Sample.updateMany({ patientID: patientId }, { $set: { status: 'QUARANTINED' } });
+      await Sample.updateMany({ participantId: participantId }, { $set: { status: 'QUARANTINED' } });
       // Emite evento BullMQ/Socket.IO (mock)
       const io = req.app.get('io');
-      if (io) io.to(`patient-${patientId}`).emit('sample-quarantined', { patientId });
+      if (io) io.to(`patient-${participantId}`).emit('sample-quarantined', { participantId });
     }
     // Se todos os consentimentos necessários foram aceitos, libera amostras de quarentena
     else if (consents.every(c => c.status === 'ACTIVE' || c.status === 'GRANTED')) {
       // Atualiza status das amostras no MongoDB para manter sincronização
       const Sample = require('../models/Sample');
       await Sample.updateMany(
-        { patientID: patientId, status: 'QUARANTINED' },
+        { participantId: participantId, status: 'QUARANTINED' },
         { $set: { status: 'AVAILABLE', updatedAt: new Date() } }
       );
       // Emite evento de liberação
       const io = req.app.get('io');
-      if (io) io.to(`patient-${patientId}`).emit('sample-released', { patientId });
+      if (io) io.to(`patient-${participantId}`).emit('sample-released', { participantId });
     }
     res.json({ success: true });
   } catch (err) {
@@ -85,7 +85,7 @@ router.get('/import/fhir/consent/:token', async (req, res) => {
       success: true,
       batchId: String(result.record.batchId || ''),
       recordId: String(result.record._id || ''),
-      patientId: String(result.record.normalized?.patientID || ''),
+      participantId: String(result.record.normalized?.participantId || ''),
       patientName: String(result.record.normalized?.patientName || ''),
       patientEmail: String(result.record.normalized?.patientEmail || ''),
       status: result.record.status,
@@ -134,10 +134,11 @@ router.get('/consent-policies', authenticate, requireRole(3, 4), consentControll
 
 router.post('/consents', authenticate, consentController.createPatientConsent.bind(consentController));
 router.post('/consents/:id/revoke', authenticate, consentController.revokeConsent.bind(consentController));
-router.get('/patients/:patientId/consent', authenticate, consentController.getPatientConsent.bind(consentController));
+router.get('/patients/:participantId/consent', authenticate, consentController.getPatientConsent.bind(consentController));
 
 // Consent token validation/acceptance (public)
 router.post('/consent-tokens/validate', consentController.validateConsentToken.bind(consentController));
 router.post('/consent-tokens/accept', consentController.acceptConsentToken.bind(consentController));
 
 module.exports = router;
+

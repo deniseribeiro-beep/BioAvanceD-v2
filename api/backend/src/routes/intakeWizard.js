@@ -9,6 +9,7 @@ const auditLogger = require('../utils/auditLogger');
 const qualityDomain = require('../services/quality-domain.service');
 const sampleService = require('../services/sample.service');
 const StorageService = require('../services/storageService');
+const { validate } = require('../contracts/canonical/v1');
 
 const CRITICAL_SENSOR_STATUSES = ['maintenance', 'calibration', 'error', 'offline'];
 const BLOCKED_EQUIPMENT_STATUSES = ['maintenance', 'inactive', 'needs calibration', 'error', 'retired'];
@@ -29,6 +30,17 @@ function normalizeArray(value) {
 
 function normalizeObject(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+function collectNonCanonicalFields(payload, allowedKeys, path = '') {
+  const fields = [];
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return fields;
+  for (const key of Object.keys(payload)) {
+    if (!allowedKeys.has(key)) {
+      fields.push(path ? `${path}.${key}` : key);
+    }
+  }
+  return fields;
 }
 
 function buildIdVariants(...values) {
@@ -495,6 +507,16 @@ async function handleIntakeWizard(req, res) {
   }
 
   try {
+    const validation = validate('canonical.v1.intake', data);
+    if (!validation.valid) {
+      const fields = [];
+      for (const issue of validation.errors || []) {
+        const field = issue.instancePath?.replace(/^\//, '').replace(/\//g, '.') || issue.params?.missingProperty || null;
+        if (field) fields.push(field);
+      }
+      return res.status(422).json({ error: 'NON_CANONICAL_FIELD', fields: [...new Set(fields)] });
+    }
+
     const db = req.app.locals.db;
     if (!db) {
       return res.status(503).json({

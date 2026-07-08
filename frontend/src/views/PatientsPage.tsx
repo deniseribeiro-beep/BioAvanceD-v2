@@ -55,7 +55,7 @@ export default function PatientsPage() {
   const [showSearchResults, setShowSearchResults] = useState(false);
   const [resendingConsentFor, setResendingConsentFor] = useState<string | null>(null);
   const [isSignatureModalOpen, setIsSignatureModalOpen] = useState(false);
-  const [activePatientId, setActivePatientId] = useState<string | null>(null);
+  const [activeparticipantId, setActiveparticipantId] = useState<string | null>(null);
   const [consentOverrides, setConsentOverrides] = useState<Record<string, ConsentStatus>>({});
   const canImportPatients = user?.roleName === 'Administrador' || user?.roleName === 'Coordenador' || user?.accessType === 3 || user?.accessType === 4;
 
@@ -72,24 +72,24 @@ export default function PatientsPage() {
     return 'EXPIRED';
   };
 
-  const handleOpenSignatureModal = (patientID: string) => {
-    setActivePatientId(patientID);
+  const handleOpenSignatureModal = (participantId: string) => {
+    setActiveparticipantId(participantId);
     setIsSignatureModalOpen(true);
   };
 
   const handleCloseSignatureModal = () => {
     setIsSignatureModalOpen(false);
-    setActivePatientId(null);
+    setActiveparticipantId(null);
   };
 
   const handleConfirmSignature = (_dataUrl: string) => {
-    if (!activePatientId) return;
+    if (!activeparticipantId) return;
     setConsentOverrides((prev) => ({
       ...prev,
-      [activePatientId]: 'GRANTED'
+      [activeparticipantId]: 'GRANTED'
     }));
     setIsSignatureModalOpen(false);
-    setActivePatientId(null);
+    setActiveparticipantId(null);
   };
   
   // Handler para busca de pacientes
@@ -135,13 +135,13 @@ export default function PatientsPage() {
   const displayPatients = useMemo(() => {
     // Se há busca ativa e resultados, mostra os resultados da busca
     if (showSearchResults && searchResults.length > 0) {
-      return searchResults.filter(p => p && (p.patientID || (p as any).id));
+      return searchResults.filter(p => p && (p.participantId || (p as any).id));
     }
     
     // Caso contrário, retorna pacientes normais
     if (patients && Array.isArray(patients) && patients.length > 0) {
-      // Verifica se os pacientes têm patientID válido
-      return patients.filter(p => p && (p.patientID || (p as any).id));
+      // Verifica se os pacientes têm participantId válido
+      return patients.filter(p => p && (p.participantId || (p as any).id));
     }
     // Retorna array vazio se não houver pacientes
     return [];
@@ -149,11 +149,11 @@ export default function PatientsPage() {
 
   const handleEdit = async (patient: Patient) => {
     try {
-      const patientIDStr = patient?.patientID ? String(patient.patientID) : '';
+      const participantIdStr = patient?.participantId ? String(patient.participantId) : '';
       const fallbackId = (patient as any)?._id || (patient as any)?.id || '';
 
-      const response = patientIDStr && /^\d{8}$/.test(patientIDStr)
-        ? await patientService.findForEdit(patientIDStr)
+      const response = participantIdStr && /^\d{8}$/.test(participantIdStr)
+        ? await patientService.findForEdit(participantIdStr)
         : fallbackId
           ? await patientService.getById(String(fallbackId))
           : null;
@@ -169,7 +169,7 @@ export default function PatientsPage() {
         const patientData = responseData.data || responseData;
         
         // Verifica se não é um erro
-        if (patientData && !patientData.error && patientData.patientID) {
+        if (patientData && !patientData.error && patientData.participantId) {
           navigate('/next/intake', { state: { patient: patientData } });
         } else {
           throw new Error(patientData?.error || responseData?.error || t('patients.patientNotFound'));
@@ -186,17 +186,17 @@ export default function PatientsPage() {
   const handleDelete = async (id: number | string) => {
     if (confirm(t('patients.deleteConfirm'))) {
       try {
-        // Converte para string e garante que seja um patientID válido
-        const patientIDStr = String(id);
+        // Converte para string e garante que seja um participantId válido
+        const participantIdStr = String(id);
         
         // Valida formato do ID (deve ser 8 dígitos)
-        if (patientIDStr.length !== 8 || !/^\d{8}$/.test(patientIDStr)) {
-          alert(t('patients.invalidPatientID'));
+        if (participantIdStr.length !== 8 || !/^\d{8}$/.test(participantIdStr)) {
+          alert(t('patients.invalidparticipantId'));
           return;
         }
         
-        // Usa patientID como string para deletar
-        await deletePatient(patientIDStr);
+        // Usa participantId como string para deletar
+        await deletePatient(participantIdStr);
         setShowSearchResults(false);
         setSearchResults([]);
         // Recarrega a lista após deletar
@@ -209,16 +209,16 @@ export default function PatientsPage() {
     }
   };
 
-  const handleSendTcleLink = async (patientID: string) => {
-    const normalizedPatientID = String(patientID || '').trim();
-    if (!normalizedPatientID) {
+  const handleSendTcleLink = async (participantId: string) => {
+    const normalizedparticipantId = String(participantId || '').trim();
+    if (!normalizedparticipantId) {
       alert('Paciente sem ID válido para envio de link TCLE.');
       return;
     }
 
-    setResendingConsentFor(normalizedPatientID);
+    setResendingConsentFor(normalizedparticipantId);
     try {
-      await patientService.resendConsentNotification(normalizedPatientID);
+      await patientService.resendConsentNotification(normalizedparticipantId);
       await loadPatients();
       alert(t('patients.notificationsResent'));
     } catch (err: any) {
@@ -560,18 +560,18 @@ export default function PatientsPage() {
         >
           {displayPatients.map((patient, index) => {
             const canViewFullData = user?.roleName === 'Administrador' || user?.roleName === 'Coordenador' || user?.accessType === 3 || user?.accessType === 4;
-            const patientID = patient.patientID 
-              ? String(patient.patientID) 
+            const participantId = patient.participantId 
+              ? String(patient.participantId) 
               : ((patient as any).id ? String((patient as any).id) : `patient-${index}`);
-            const rawConsentStatus = consentOverrides[patientID] || (patient as any).consentStatus || (patient as any).status;
+            const rawConsentStatus = consentOverrides[participantId] || (patient as any).consentStatus || (patient as any).status;
             const consentStatus = normalizeConsentStatus(String(rawConsentStatus || ''));
             const isConsentPending = consentStatus === 'PENDING';
             const canCollectSignature = consentStatus !== 'GRANTED';
             
             return (
-              <Fragment key={`patient-fragment-${patientID}`}>
-                <tr key={`patient-row-${index}-${patientID}`} data-testid={`patient-row-${patientID}`}>
-                  <td>{patientID}</td>
+              <Fragment key={`patient-fragment-${participantId}`}>
+                <tr key={`patient-row-${index}-${participantId}`} data-testid={`patient-row-${participantId}`}>
+                  <td>{participantId}</td>
                   <td>
                     <div style={styles.consentStatusCell}>
                       <StatusBadge status={consentStatus} />
@@ -582,9 +582,9 @@ export default function PatientsPage() {
                       <div style={styles.consentActions} className="consent-actions">
                         {canCollectSignature ? (
                           <Button
-                            data-testid={`collect-signature-button-${patientID}`}
+                            data-testid={`collect-signature-button-${participantId}`}
                             variant="primary"
-                            onClick={() => handleOpenSignatureModal(patientID)}
+                            onClick={() => handleOpenSignatureModal(participantId)}
                             style={styles.consentActionButton}
                             className="consent-action-button"
                           >
@@ -594,25 +594,25 @@ export default function PatientsPage() {
                           <span style={styles.consentHint}>{t('patients.signed')}</span>
                         )}
                         <Button
-                          data-testid={`send-tcle-link-button-${patientID}`}
+                          data-testid={`send-tcle-link-button-${participantId}`}
                           variant="secondary"
-                          onClick={() => handleSendTcleLink(patientID)}
-                          disabled={resendingConsentFor === patientID}
+                          onClick={() => handleSendTcleLink(participantId)}
+                          disabled={resendingConsentFor === participantId}
                           style={styles.consentActionButton}
                           className="consent-action-button"
                         >
-                          {resendingConsentFor === patientID
+                          {resendingConsentFor === participantId
                             ? getPatientsActionLabel('patients.resending', 'Resending...', 'Reenviando...')
                             : 'Enviar Link TCLE'}
                         </Button>
                         {isConsentPending && (
                           <Button
-                            data-testid={`resend-consent-button-${patientID}`}
+                            data-testid={`resend-consent-button-${participantId}`}
                             variant="secondary"
                             onClick={async () => {
-                              setResendingConsentFor(patientID);
+                              setResendingConsentFor(participantId);
                               try {
-                                await patientService.resendConsentNotification(patientID);
+                                await patientService.resendConsentNotification(participantId);
                                 await loadPatients();
                                 alert(t('patients.notificationsResent'));
                               } catch (err: any) {
@@ -622,18 +622,18 @@ export default function PatientsPage() {
                                 setResendingConsentFor(null);
                               }
                             }}
-                            disabled={resendingConsentFor === patientID}
+                            disabled={resendingConsentFor === participantId}
                             style={styles.consentActionButton}
                             className="consent-action-button"
                           >
-                            {resendingConsentFor === patientID
+                            {resendingConsentFor === participantId
                               ? getPatientsActionLabel('patients.resending', 'Resending...', 'Reenviando...')
                               : getPatientsActionLabel('patients.resendNotifications', 'Resend Notifications', 'Reenviar notificaciones')}
                           </Button>
                         )}
                         <div className="table-actions">
                           <button
-                            data-testid={`edit-patient-button-${patientID}`}
+                            data-testid={`edit-patient-button-${participantId}`}
                             className="action-button"
                             onClick={() => handleEdit(patient)}
                             title="Editar dados demográficos"
@@ -641,9 +641,9 @@ export default function PatientsPage() {
                             <Edit size={16} />
                           </button>
                           <button
-                            data-testid={`delete-patient-button-${patientID}`}
+                            data-testid={`delete-patient-button-${participantId}`}
                             className="action-button danger"
-                            onClick={() => handleDelete(patientID)}
+                            onClick={() => handleDelete(participantId)}
                             title={t('common.delete')}
                           >
                             <Trash2 size={16} />
@@ -719,3 +719,4 @@ export default function PatientsPage() {
     </div>
   );
 }
+

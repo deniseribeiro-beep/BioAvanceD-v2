@@ -40,14 +40,14 @@ export default function SamplesPage() {
   const canEdit = user?.roleName === 'Administrador' || user?.roleName === 'Coordenador';
 
   const handleResendConsent = async (sample: SampleWithId) => {
-    const patientID = String(sample.patientID || (sample as any).patient?.patientID || '').trim();
-    if (!patientID) {
+    const participantId = String(sample.participantId || (sample as any).patient?.participantId || '').trim();
+    if (!participantId) {
       alert(t('samples.alerts.noValidPatientForConsent', 'Amostra sem paciente válido para envio de TCLE.'));
       return;
     }
 
     try {
-      await patientService.resendConsentNotification(patientID);
+      await patientService.resendConsentNotification(participantId);
       refreshSamples();
       alert(t('samples.alerts.consentResentSuccess', 'TCLE enviado/reenviado com sucesso.'));
     } catch (error: any) {
@@ -156,3 +156,4 @@ export default function SamplesPage() {
     </>
   );
 }
+

@@ -11,17 +11,17 @@ const COLLECTIONS = [
   },
   {
     name: CANONICAL_COLLECTIONS.patients,
-    indexes: [{ patientID: 1 }, { patientNameNormalized: 1, birthDateKey: 1 }, { createdAt: 1 }],
+    indexes: [{ participantId: 1 }, { patientNameNormalized: 1, birthDateKey: 1 }, { createdAt: 1 }],
     description: 'Pacientes canonicos',
   },
   {
     name: CANONICAL_COLLECTIONS.samples,
-    indexes: [{ sampleID: 1 }, { patientID: 1 }, { barcode: 1 }, { locationID: 1 }, { createdAt: 1 }],
+    indexes: [{ specimenId: 1 }, { participantId: 1 }, { barcode: 1 }, { locationID: 1 }, { createdAt: 1 }],
     description: 'Amostras canonicas',
   },
   {
     name: CANONICAL_COLLECTIONS.consents,
-    indexes: [{ patientId: 1, status: 1 }, { templateId: 1 }, { createdAt: 1 }],
+    indexes: [{ participantId: 1, status: 1 }, { templateId: 1 }, { createdAt: 1 }],
     description: 'Consentimentos de pacientes',
   },
   {
@@ -31,12 +31,12 @@ const COLLECTIONS = [
   },
   {
     name: CANONICAL_COLLECTIONS.sampleMovements,
-    indexes: [{ sampleID: 1, timestamp: -1 }, { barcode: 1, timestamp: -1 }, { movementID: 1 }],
+    indexes: [{ specimenId: 1, timestamp: -1 }, { barcode: 1, timestamp: -1 }, { movementID: 1 }],
     description: 'Ledger de movimentacoes de amostras',
   },
   {
     name: CANONICAL_COLLECTIONS.biomarkerObservations,
-    indexes: [{ patientID: 1, biomarkerType: 1, collectedAt: -1 }, { idempotencyKey: 1 }],
+    indexes: [{ participantId: 1, biomarkerType: 1, collectedAt: -1 }, { idempotencyKey: 1 }],
     description: 'Observacoes de biomarcadores',
   },
   {

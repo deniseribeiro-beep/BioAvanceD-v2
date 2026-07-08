@@ -3,7 +3,7 @@
 export interface Patient {
   _id?: string; // MongoDB ID
   // 1. ID - Numérico - Identificador único (gerado automaticamente)
-  patientID: number | string; // ID de 8 dígitos (string)
+  participantId: string; // ID canônico do participante
   
   // 2. NOME - Caractere - Nome completo do paciente
   patientName: string;
@@ -31,7 +31,7 @@ export interface Patient {
   isDeceased?: boolean;
   representativeName?: string;
   representativeEmail?: string;
-  representativeCpf?: string;
+  representativeIdentityDocument?: string;
   representativePhone?: string;
   
   // 8. SEXO - Caractere - Sexo do paciente (Masculino/Feminino)
@@ -153,7 +153,7 @@ export interface RcsEvaluation {
 
 export interface Sample {
   _id?: string; // MongoDB ID
-  patientID: number | string; // ID de paciente de 8 dígitos (string) - chave única de ligação
+  participantId: string;
   sampleID?: number | null; // ID da amostra (pode ser null, usar _id como fallback)
   sampleType: string;
   sampleOrigin?: string;
@@ -364,8 +364,8 @@ export interface ConsentPolicy {
 
 export interface PatientConsent {
   _id?: string;
-  patientId: string;
-  templateId: string;
+  participantId: string;
+  consentTemplateId: string;
   signedAt?: Date | string;
   status: 'ACTIVE' | 'REVOKED';
   revokedAt?: Date | string | null;

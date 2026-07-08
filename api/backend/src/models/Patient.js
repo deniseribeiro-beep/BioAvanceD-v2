@@ -1,12 +1,7 @@
-/**
- * Modelo de validação e estrutura para Patient
- * Baseado no Diagrama de Classes
- */
-class PatientModel {
+class ParticipantModel {
   static isValidEmail(email) {
     if (!email || typeof email !== 'string') return false;
-    const normalized = email.trim().toLowerCase();
-    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized);
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim().toLowerCase());
   }
 
   static normalizePhone(phone) {
@@ -17,356 +12,61 @@ class PatientModel {
     return digits;
   }
 
-  /**
-   * Valida e estrutura os dados de um paciente
-   */
-  static validate(data) {
+  static validate(data = {}) {
     const errors = [];
-
-    // Campos obrigatórios
-    if (!data.patientName || typeof data.patientName !== 'string') {
-      errors.push('Nome do paciente (patientName) é obrigatório e deve ser um texto válido');
-    } else if (data.patientName.trim().length === 0) {
-      errors.push('Nome do paciente (patientName) não pode estar vazio');
-    }
-
-    // birthDate pode ser Date ou string (formato DD/MM/YYYY ou ISO)
-    if (!data.birthDate) {
-      errors.push('Data de nascimento (birthDate) é obrigatória');
-    } else {
-      const isValidDate = data.birthDate instanceof Date || 
-                         (typeof data.birthDate === 'string' && data.birthDate.length > 0);
-      if (!isValidDate) {
-        errors.push('Data de nascimento (birthDate) deve ser uma data válida no formato DD/MM/YYYY ou YYYY-MM-DD');
-      } else if (data.birthDate instanceof Date && isNaN(data.birthDate.getTime())) {
-        errors.push('Data de nascimento (birthDate) é inválida');
+    const requiredText = ['participantId', 'patientName', 'birthDate', 'sex', 'consentTemplateId'];
+    for (const field of requiredText) {
+      if (!data[field] || typeof data[field] !== 'string' || String(data[field]).trim() === '') {
+        errors.push(`${field} é obrigatório`);
       }
     }
-
-    if (!data.sex || !['M', 'F', 'O'].includes(data.sex)) {
-      const sexValue = data.sex ? `"${data.sex}"` : 'vazio';
-      errors.push(`Sexo (sex) é obrigatório e deve ser M (Masculino), F (Feminino) ou O (Outro). Valor recebido: ${sexValue}`);
+    const allowed = new Set([
+      'participantId','patientName','birthDate','sex','email','phone','identityDocument','recordNumber','clinicalUnitId','clinicalUnit','unitAcronym','isDeceased','representativeName','representativeEmail','representativeIdentityDocument','representativePhone','consentTemplateId','status','consentToken','consentTokenCreatedAt','consentTokenExpiresAt','consentNotifiedAt','consentAcceptedAt','createdAt','updatedAt','anamneseGeral','dadosEspecificos'
+    ]);
+    for (const key of Object.keys(data)) {
+      if (!allowed.has(key)) errors.push(`Campo não canônico: ${key}`);
     }
-
-    if (!data.consentTemplateId || typeof data.consentTemplateId !== 'string' || data.consentTemplateId.trim().length === 0) {
-      errors.push('Template de consentimento (consentTemplateId) é obrigatório');
-    }
-
-    const isDeceased = data.isDeceased === true;
-
-    if (!data.email || typeof data.email !== 'string' || data.email.trim().length === 0) {
-      if (!isDeceased) {
-        errors.push('Email (email) é obrigatório');
-      }
-    } else if (!PatientModel.isValidEmail(data.email)) {
-      errors.push('Email (email) inválido');
-    }
-
-    if (isDeceased) {
-      if (!data.representativeEmail || typeof data.representativeEmail !== 'string' || data.representativeEmail.trim().length === 0) {
-        errors.push('Email do representante legal (representativeEmail) é obrigatório');
-      } else if (!PatientModel.isValidEmail(data.representativeEmail)) {
-        errors.push('Email do representante legal (representativeEmail) inválido');
-      }
-    }
-
-    if (data.phone !== undefined && data.phone !== null) {
-      const normalizedPhone = PatientModel.normalizePhone(data.phone);
-      if (!normalizedPhone) {
-        errors.push('Telefone (phone) inválido. Informe de 10 a 15 dígitos');
-      }
-    }
-
-    // recordNumber pode ser number, string ou null
-    if (data.recordNumber !== undefined && data.recordNumber !== null && typeof data.recordNumber !== 'number' && typeof data.recordNumber !== 'string') {
-      errors.push(`Número do prontuário (recordNumber) deve ser um número ou texto. Tipo recebido: ${typeof data.recordNumber}`);
-    }
-
-    if (data.cpf !== undefined && data.cpf !== null) {
-      if (typeof data.cpf !== 'string' && typeof data.cpf !== 'number') {
-        errors.push('CPF (cpf) deve ser texto ou número');
-      } else {
-        const normalizedCpf = String(data.cpf).replace(/\D/g, '');
-        if (normalizedCpf.length > 0 && normalizedCpf.length !== 11) {
-          errors.push('CPF (cpf) deve conter 11 dígitos');
-        }
-      }
-    }
-
-    if (data.clinicalUnit && typeof data.clinicalUnit !== 'string') {
-      errors.push('clinicalUnit deve ser string');
-    }
-
-    if (data.clinicalUnitId !== undefined && data.clinicalUnitId !== null && typeof data.clinicalUnitId !== 'string') {
-      errors.push('clinicalUnitId deve ser string');
-    }
-
-    if (data.isDeceased !== undefined && data.isDeceased !== null && typeof data.isDeceased !== 'boolean') {
-      errors.push('isDeceased deve ser boolean');
-    }
-
-    if (data.representativeName !== undefined && data.representativeName !== null && typeof data.representativeName !== 'string') {
-      errors.push('representativeName deve ser string');
-    }
-
-    if (data.representativeCpf !== undefined && data.representativeCpf !== null) {
-      if (typeof data.representativeCpf !== 'string' && typeof data.representativeCpf !== 'number') {
-        errors.push('representativeCpf deve ser texto ou número');
-      } else {
-        const normalizedRepresentativeCpf = String(data.representativeCpf).replace(/\D/g, '');
-        if (normalizedRepresentativeCpf.length > 0 && normalizedRepresentativeCpf.length !== 11) {
-          errors.push('representativeCpf deve conter 11 dígitos');
-        }
-      }
-    }
-
-    if (data.representativePhone !== undefined && data.representativePhone !== null) {
-      const normalizedRepresentativePhone = PatientModel.normalizePhone(data.representativePhone);
-      if (!normalizedRepresentativePhone) {
-        errors.push('representativePhone inválido. Informe de 10 a 15 dígitos');
-      }
-    }
-
-    // Validações numéricas
-    if (data.weight !== undefined && data.weight !== null) {
-      if (typeof data.weight !== 'number') {
-        errors.push(`Peso (weight) deve ser um número. Valor recebido: "${data.weight}" (tipo: ${typeof data.weight})`);
-      } else if (data.weight < 0) {
-        errors.push(`Peso (weight) deve ser maior ou igual a zero. Valor recebido: ${data.weight}`);
-      }
-    }
-
-    if (data.heightCm !== undefined && data.heightCm !== null) {
-      if (typeof data.heightCm !== 'number') {
-        errors.push(`Altura (heightCm) deve ser um número em centímetros. Valor recebido: "${data.heightCm}" (tipo: ${typeof data.heightCm})`);
-      } else if (data.heightCm < 0) {
-        errors.push(`Altura (heightCm) deve ser maior ou igual a zero. Valor recebido: ${data.heightCm}`);
-      }
-    }
-
-    if (data.lysoGb3 !== undefined && data.lysoGb3 !== null && typeof data.lysoGb3 !== 'number') {
-      errors.push(`Lyso-Gb3 (lysoGb3) deve ser um número. Valor recebido: "${data.lysoGb3}" (tipo: ${typeof data.lysoGb3})`);
-    } else if (typeof data.lysoGb3 === 'number' && data.lysoGb3 < 0) {
-      errors.push('Lyso-Gb3 (lysoGb3) não pode ser negativo');
-    }
-
-    // Validações booleanas
-    const booleanFields = [
-      { field: 'hypertension', label: 'Hipertensão' },
-      { field: 'obesity', label: 'Obesidade' },
-      { field: 'diabetesType1', label: 'Diabetes Tipo 1' },
-      { field: 'diabetesType2', label: 'Diabetes Tipo 2' },
-      { field: 'copd', label: 'DPOC' },
-      { field: 'ckd', label: 'DRC' },
-      { field: 'smoking', label: 'Tabagismo' },
-      { field: 'alcoholUse', label: 'Uso de Álcool' },
-      { field: 'asthma', label: 'Asma' },
-      { field: 'antibioticUse', label: 'Uso de Antibióticos' },
-      { field: 'insulinUse', label: 'Uso de Insulina' },
-      { field: 'antiviralUse', label: 'Uso de Antivirais' }
-    ];
-
-    booleanFields.forEach(({ field, label }) => {
-      if (data[field] !== undefined && data[field] !== null && typeof data[field] !== 'boolean') {
-        errors.push(`${label} (${field}) deve ser true ou false. Valor recebido: "${data[field]}" (tipo: ${typeof data[field]})`);
-      }
-    });
-
-    // geneticVariant é String
-    if (data.geneticVariant !== undefined && data.geneticVariant !== null && typeof data.geneticVariant !== 'string') {
-      errors.push(`Variante genética (geneticVariant) deve ser um texto. Valor recebido: "${data.geneticVariant}" (tipo: ${typeof data.geneticVariant})`);
-    }
-
-    // alphaGal é Float (pode ser null)
-    if (data.alphaGal !== undefined && data.alphaGal !== null && typeof data.alphaGal !== 'number') {
-      errors.push(`α-Galactosidase (alphaGal) deve ser um número decimal (U/mL) ou vazio. Valor recebido: "${data.alphaGal}" (tipo: ${typeof data.alphaGal})`);
-    } else if (typeof data.alphaGal === 'number' && data.alphaGal < 0) {
-      errors.push('α-Galactosidase (alphaGal) não pode ser negativa');
-    }
-
-    // icdCode é String
-    if (data.icdCode !== undefined && data.icdCode !== null && typeof data.icdCode !== 'string') {
-      errors.push(`Código CID (icdCode) deve ser um texto. Valor recebido: "${data.icdCode}" (tipo: ${typeof data.icdCode})`);
-    }
-
-    if (data.orphaCode !== undefined && data.orphaCode !== null && typeof data.orphaCode !== 'string') {
-      errors.push(`Código ORPHA (orphaCode) deve ser um texto. Valor recebido: "${data.orphaCode}" (tipo: ${typeof data.orphaCode})`);
-    }
-
-    if (data.omimCode !== undefined && data.omimCode !== null && typeof data.omimCode !== 'string') {
-      errors.push(`Código OMIM (omimCode) deve ser um texto. Valor recebido: "${data.omimCode}" (tipo: ${typeof data.omimCode})`);
-    }
-
-    if (data.icdReference !== undefined && data.icdReference !== null) {
-      if (typeof data.icdReference !== 'object' || Array.isArray(data.icdReference)) {
-        errors.push('icdReference deve ser um objeto válido');
-      } else {
-        const referenceFields = ['cidId', 'Codigo_Tabulacao', 'Codigos_CID10', 'Descricao', 'ORPHA', 'OMIM'];
-        referenceFields.forEach((field) => {
-          if (data.icdReference[field] !== undefined && data.icdReference[field] !== null && typeof data.icdReference[field] !== 'string') {
-            errors.push(`icdReference.${field} deve ser string`);
-          }
-        });
-      }
-    }
-
-    // status de consentimento
-    if (data.status !== undefined && data.status !== null) {
-      const allowedStatuses = ['PENDING_CONSENT', 'ACTIVE', 'INACTIVE'];
-      if (!allowedStatuses.includes(data.status)) {
-        errors.push(`status inválido. Valores permitidos: ${allowedStatuses.join(', ')}`);
-      }
-    }
-
-    if (data.consentToken !== undefined && data.consentToken !== null && typeof data.consentToken !== 'string') {
-      errors.push('consentToken deve ser string');
-    }
-
-    if (data.consentAcceptedAt !== undefined && data.consentAcceptedAt !== null) {
-      const acceptedAt = new Date(data.consentAcceptedAt);
-      if (Number.isNaN(acceptedAt.getTime())) {
-        errors.push('consentAcceptedAt deve ser uma data válida');
-      }
-    }
-
-    return {
-      isValid: errors.length === 0,
-      errors
-    };
+    if (data.email && !this.isValidEmail(data.email)) errors.push('email inválido');
+    if (data.representativeEmail && !this.isValidEmail(data.representativeEmail)) errors.push('representativeEmail inválido');
+    return { isValid: errors.length === 0, errors };
   }
 
-  /**
-   * Estrutura padrão de um documento Patient
-   */
-  static create(data) {
-    // Modularização: separa dados fixos (anamneseGeral) e dados específicos (dadosEspecificos)
-    // Mantém retrocompatibilidade: se vier no formato antigo, converte para o novo
-
-    // Conversão de datas e normalização
-    let birthDate = data.birthDate;
-    if (typeof birthDate === 'string') {
-      const parts = birthDate.split('/');
-      if (parts.length === 3) {
-        birthDate = new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
-      } else {
-        birthDate = new Date(birthDate);
-      }
-    }
-
-    let heightCm = data.heightCm || null;
-    if (data.height !== undefined && data.height !== null && !heightCm) {
-      const heightValue = parseFloat(data.height);
-      if (!isNaN(heightValue) && heightValue > 0) {
-        heightCm = heightValue < 3 ? heightValue * 100 : heightValue;
-      }
-    }
-    const patientData = { ...data };
-    delete patientData.height;
-    const normalizedEmail = typeof patientData.email === 'string' ? patientData.email.trim().toLowerCase() : null;
-    const normalizedPhone = PatientModel.normalizePhone(patientData.phone);
-
-    // --- NOVO MODELO MODULAR ---
-    // Anamnese Geral: dados fixos do paciente
-    const anamneseGeral = {
-      tipoSanguineo: patientData.tipoSanguineo || null,
-      comorbidades: patientData.comorbidades || [], // array de strings
-      historicoFamiliar: patientData.historicoFamiliar || null,
-      weight: patientData.weight || null,
-      heightCm: heightCm,
-      hypertension: patientData.hypertension || false,
-      obesity: patientData.obesity || false,
-      diabetesType1: patientData.diabetesType1 || false,
-      diabetesType2: patientData.diabetesType2 || false,
-      copd: patientData.copd || false,
-      ckd: patientData.ckd || false,
-      smoking: patientData.smoking || false,
-      alcoholUse: patientData.alcoholUse || false,
-      asthma: patientData.asthma || false,
-      antibioticUse: patientData.antibioticUse || false,
-      insulinUse: patientData.insulinUse || false,
-      antiviralUse: patientData.antiviralUse || false
+  static create(data = {}) {
+    const normalized = {
+      participantId: String(data.participantId || '').trim(),
+      patientName: String(data.patientName || '').trim(),
+      birthDate: data.birthDate ? new Date(data.birthDate) : null,
+      sex: String(data.sex || '').trim(),
+      email: data.email ? String(data.email).trim().toLowerCase() : null,
+      phone: this.normalizePhone(data.phone),
+      identityDocument: data.identityDocument ? String(data.identityDocument).trim() : null,
+      recordNumber: data.recordNumber ? String(data.recordNumber).trim() : null,
+      clinicalUnitId: data.clinicalUnitId || null,
+      clinicalUnit: data.clinicalUnit || null,
+      unitAcronym: data.unitAcronym || null,
+      isDeceased: Boolean(data.isDeceased),
+      representativeName: data.representativeName || null,
+      representativeEmail: data.representativeEmail ? String(data.representativeEmail).trim().toLowerCase() : null,
+      representativeIdentityDocument: data.representativeIdentityDocument || null,
+      representativePhone: this.normalizePhone(data.representativePhone),
+      consentTemplateId: data.consentTemplateId || null,
+      status: data.status || 'PENDING_CONSENT',
+      consentToken: data.consentToken || null,
+      consentTokenCreatedAt: data.consentTokenCreatedAt ? new Date(data.consentTokenCreatedAt) : null,
+      consentTokenExpiresAt: data.consentTokenExpiresAt ? new Date(data.consentTokenExpiresAt) : null,
+      consentNotifiedAt: data.consentNotifiedAt ? new Date(data.consentNotifiedAt) : null,
+      consentAcceptedAt: data.consentAcceptedAt ? new Date(data.consentAcceptedAt) : null,
+      createdAt: data.createdAt ? new Date(data.createdAt) : new Date(),
+      updatedAt: data.updatedAt ? new Date(data.updatedAt) : new Date(),
+      anamneseGeral: data.anamneseGeral || null,
+      dadosEspecificos: data.dadosEspecificos || []
     };
-
-    // Dados Específicos: array de doenças/fenótipos
-    let dadosEspecificos = patientData.dadosEspecificos || [];
-
-    // Retrocompatibilidade: se vier campos específicos "soltos", converte para objeto Fabry
-    const fabryFields = [
-      'geneticVariant', 'alphaGal', 'lysoGb3', 'diagnosticHypothesis',
-      'icdCode', 'orphaCode', 'omimCode', 'icdReference', 'notes'
-    ];
-    const hasFabry = fabryFields.some(f => patientData[f] !== undefined);
-    if (hasFabry && dadosEspecificos.length === 0) {
-      const fabryData = {};
-      fabryFields.forEach(f => {
-        if (patientData[f] !== undefined) fabryData[f] = patientData[f];
-      });
-      dadosEspecificos.push({ tipo: 'Fabry', dados: fabryData });
+    const validation = this.validate(normalized);
+    if (!validation.isValid) {
+      throw new Error(validation.errors.join(', '));
     }
-
-    // Estrutura final
-    return {
-      patientID: patientData.patientID || null,
-      patientName: patientData.patientName,
-      email: normalizedEmail,
-      phone: normalizedPhone,
-      birthDate: birthDate instanceof Date ? birthDate : new Date(birthDate),
-      sex: patientData.sex,
-      recordNumber: patientData.recordNumber || null,
-      cpf: patientData.cpf || null,
-      clinicalUnitId: patientData.clinicalUnitId || null,
-      clinicalUnit: patientData.clinicalUnit || null,
-      unitAcronym: patientData.unitAcronym || null,
-      isDeceased: Boolean(patientData.isDeceased),
-      representativeName: patientData.representativeName || null,
-      representativeEmail: patientData.representativeEmail || null,
-      representativeCpf: patientData.representativeCpf || null,
-      representativePhone: PatientModel.normalizePhone(patientData.representativePhone),
-      consentTemplateId: patientData.consentTemplateId || null,
-      status: patientData.status || 'PENDING_CONSENT',
-      consentToken: patientData.consentToken || null,
-      consentTokenCreatedAt: patientData.consentTokenCreatedAt ? new Date(patientData.consentTokenCreatedAt) : null,
-      consentTokenExpiresAt: patientData.consentTokenExpiresAt ? new Date(patientData.consentTokenExpiresAt) : null,
-      consentNotifiedAt: patientData.consentNotifiedAt ? new Date(patientData.consentNotifiedAt) : null,
-      consentAcceptedAt: patientData.consentAcceptedAt ? new Date(patientData.consentAcceptedAt) : null,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-      anamneseGeral,
-      dadosEspecificos
-    };
-  }
-
-  /**
-   * Valida unidade clínica
-   */
-  static validateUnit(clinicalUnit) {
-    // Implementar validação conforme regras de negócio
-    return clinicalUnit && typeof clinicalUnit === 'string' && clinicalUnit.length > 0;
-  }
-
-  /**
-   * Gera sigla da unidade
-   */
-  static fillAcronym(clinicalUnit) {
-    if (!clinicalUnit) return null;
-
-    const stopWords = new Set(['DE', 'DA', 'DO', 'DAS', 'DOS', 'E', 'OF', 'THE', 'DEL', 'LA', 'EL', 'Y']);
-    const normalized = String(clinicalUnit)
-      .trim()
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .toUpperCase();
-
-    if (!normalized) return null;
-
-    const words = normalized.split(/\s+/).filter(Boolean);
-    const relevantWords = words.filter((word) => !stopWords.has(word));
-    const source = relevantWords.length > 0 ? relevantWords : words;
-
-    const initials = source.map((word) => word[0]).join('').slice(0, 6);
-    return initials || null;
+    return normalized;
   }
 }
 
-module.exports = PatientModel;
-
+module.exports = ParticipantModel;

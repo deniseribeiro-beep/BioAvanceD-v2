@@ -1,16 +1,15 @@
 # Canonical data cleanup
 
-This branch prepares the BioAvanceD data layer for a new aggregate matrix.
+This branch prepares the BioAvanceD data layer for a canonical contract consolidation.
 
 ## Non-negotiable rules
 
 1. One canonical representation per concept.
 2. No legacy field aliases or collection aliases.
 3. No duplicate operational FHIR collections; FHIR is an interoperability boundary.
-4. Clinical observations, quality assessments, consent, custody, storage and specimen state have independent responsibilities.
-5. The MongoDB outbox and the canonical Neo4j projection are preserved.
-6. No executable seed or automatic population is introduced.
-7. The databases are treated as empty; no compatibility migration is required.
+4. The MongoDB outbox and the canonical Neo4j projection are preserved.
+5. No executable seed or automatic population is introduced.
+6. The databases are treated as empty; no compatibility migration is required.
 
 ## Preserve
 
@@ -36,9 +35,8 @@ This branch prepares the BioAvanceD data layer for a new aggregate matrix.
 
 1. Freeze canonical names and block aliases.
 2. Remove duplicate persistence representations.
-3. Separate mixed responsibilities.
-4. Replace frontend forms and API payloads with one canonical contract.
-5. Run CI and inspect all broken dependencies.
-6. Build the new aggregate matrix from the cleaned repository and the consolidated data dictionary.
+3. Replace frontend forms and API payloads with one canonical contract.
+4. Run CI and inspect broken dependencies.
+5. Defer aggregate separation and mixed-domain decomposition to PR 100.
 
 This document is a destructive-refactor contract. Removed compatibility structures must not be reintroduced.

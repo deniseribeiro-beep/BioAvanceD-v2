@@ -17,8 +17,8 @@ class PatientBiomarkerTimeseriesService {
   async writePatientBiomarkers({ db, patient, eventType = 'update' } = {}) {
     if (!patient) return;
 
-    const patientID = String(patient.patientID || '').trim();
-    if (!patientID) return;
+    const participantId = String(patient.participantId || '').trim();
+    if (!participantId) return;
 
     const alphaGal = this.toNumeric(patient.alphaGal);
     const lysoGb3 = this.toNumeric(patient.lysoGb3);
@@ -34,7 +34,7 @@ class PatientBiomarkerTimeseriesService {
       const writeApi = getInfluxWriteApi();
 
       const point = new Point('patient_biomarkers')
-        .tag('patientId', patientID)
+        .tag('participantId', participantId)
         .tag('eventType', String(eventType || 'update'));
 
       if (patient.clinicalUnit) {
@@ -54,7 +54,7 @@ class PatientBiomarkerTimeseriesService {
       writeApi.writePoint(point);
       await writeApi.flush();
     } catch (error) {
-      logger.warn(`[ISO20387][INFLUXDB][PATIENT_BIOMARKERS] Falha ao persistir biomarcadores do paciente ${patientID}: ${error.message}`);
+      logger.warn(`[ISO20387][INFLUXDB][PATIENT_BIOMARKERS] Falha ao persistir biomarcadores do participante ${participantId}: ${error.message}`);
     }
 
     if (db) {
@@ -64,7 +64,7 @@ class PatientBiomarkerTimeseriesService {
         if (alphaGal !== null) {
           hashWrites.push(
             biomarkerIntegrityService.appendBiomarkerHash(db, {
-              patientId: patientID,
+              participantId: participantId,
               biomarkerType: 'alphaGal',
               value: alphaGal,
               timestamp: pointTimestamp,
@@ -77,7 +77,7 @@ class PatientBiomarkerTimeseriesService {
         if (lysoGb3 !== null) {
           hashWrites.push(
             biomarkerIntegrityService.appendBiomarkerHash(db, {
-              patientId: patientID,
+              participantId: participantId,
               biomarkerType: 'lysoGb3',
               value: lysoGb3,
               timestamp: pointTimestamp,
@@ -91,7 +91,7 @@ class PatientBiomarkerTimeseriesService {
           await Promise.all(hashWrites);
         }
       } catch (error) {
-        logger.warn(`[ISO20387][BIOMARKER_INTEGRITY] Falha ao registrar hash de integridade do paciente ${patientID}: ${error.message}`);
+        logger.warn(`[ISO20387][BIOMARKER_INTEGRITY] Falha ao registrar hash de integridade do participante ${participantId}: ${error.message}`);
       }
     }
   }

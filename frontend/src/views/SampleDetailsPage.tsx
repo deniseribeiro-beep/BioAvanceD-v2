@@ -59,7 +59,7 @@ export default function SampleDetailsPage() {
     currentStatus: '',
     sampleOrigin: '',
     extractionProtocol: '',
-    patientID: '',
+    participantId: '',
   });
 
   const canEdit = hasRole(['Administrador', 'Coordenador']) || user?.roleName === 'Administrador' || user?.roleName === 'Coordenador';
@@ -133,7 +133,7 @@ export default function SampleDetailsPage() {
           currentStatus: foundSample.currentStatus || 'Available',
           sampleOrigin: foundSample.sampleOrigin || '',
           extractionProtocol: foundSample.extractionProtocol || '',
-          patientID: foundSample.patientID ? String(foundSample.patientID) : '',
+          participantId: foundSample.participantId ? String(foundSample.participantId) : '',
         });
       } else {
         // Se carregou mas não encontrou, define como null
@@ -400,7 +400,7 @@ export default function SampleDetailsPage() {
         currentStatus: sample.currentStatus || 'Available',
         sampleOrigin: sample.sampleOrigin || '',
         extractionProtocol: sample.extractionProtocol || '',
-        patientID: sample.patientID ? String(sample.patientID) : '',
+        participantId: sample.participantId ? String(sample.participantId) : '',
       });
     }
     setSaveError(null);
@@ -426,7 +426,7 @@ export default function SampleDetailsPage() {
       currentStatus: (form.currentStatus as Sample['currentStatus']) || undefined,
       sampleOrigin: form.sampleOrigin?.trim() || undefined,
       extractionProtocol: form.extractionProtocol?.trim() || undefined,
-      patientID: form.patientID?.trim() || undefined,
+      participantId: form.participantId?.trim() || undefined,
     };
 
     if (parsedAvailable !== null) {
@@ -791,18 +791,18 @@ export default function SampleDetailsPage() {
           </h3>
           <div style={{ display: 'grid', gap: '0.75rem' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', backgroundColor: 'var(--surface)', borderRadius: '4px' }}>
-              <span style={{ fontWeight: 500, color: 'var(--text-light)' }}>{t('samples.detail.patientId', 'ID do Paciente')}:</span>
+              <span style={{ fontWeight: 500, color: 'var(--text-light)' }}>{t('samples.detail.participantId', 'ID do Paciente')}:</span>
               {isEditing ? (
                 <div style={{ width: '220px' }}>
                   <Input
-                    value={form.patientID}
-                    onChange={(e) => handleChange('patientID', e.target.value)}
+                    value={form.participantId}
+                    onChange={(e) => handleChange('participantId', e.target.value)}
                     placeholder={t('samples.patient', 'Paciente') || 'Paciente'}
                   />
                 </div>
               ) : (
                 <span style={{ fontFamily: 'monospace', color: 'var(--text)', fontWeight: 500 }}>
-                  {sample.patientID || t('common.notAvailable', 'N/A')}
+                  {sample.participantId || t('common.notAvailable', 'N/A')}
                 </span>
               )}
             </div>
@@ -891,3 +891,4 @@ export default function SampleDetailsPage() {
     </div>
   );
 }
+

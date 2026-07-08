@@ -69,9 +69,9 @@ class Neo4jCanonicalProjectionService {
 
   async applyConsentProjection(session, event) {
     const payload = event.payload || {};
-    const donorId = this.pseudonymizeDonorId(payload.donorKey || payload.patientId || payload.patientID || payload.mongoPatientId || event.aggregateId);
-    const sampleId = normalizeText(payload.sampleId || payload.mongoSampleId || event.aggregateId);
-    const consentId = normalizeText(payload.ethicalConsentId || payload.consentId || event.aggregateId);
+    const donorId = this.pseudonymizeDonorId(payload.participantId || event.aggregateId);
+    const specimenId = normalizeText(payload.specimenId || event.aggregateId);
+    const consentId = normalizeText(payload.consentId || event.aggregateId);
     const consentStatus = normalizeText(payload.status || 'ACTIVE').toUpperCase();
     const consentAt = normalizeIso(payload.signedAt || event.occurredAt);
 
@@ -93,11 +93,11 @@ class Neo4jCanonicalProjectionService {
       ON CREATE SET r1.createdAt = datetime(), r1.source = $sourceService
       SET r1.updatedAt = datetime(), r1.schemaVersion = $schemaVersion, r1.eventId = $eventId
 
-      FOREACH (_ IN CASE WHEN $sampleId = '' THEN [] ELSE [1] END |
-        MERGE (sample:Sample {id: $sampleId})
+      FOREACH (_ IN CASE WHEN $specimenId = '' THEN [] ELSE [1] END |
+        MERGE (sample:Sample {id: $specimenId})
         ON CREATE SET sample.createdAt = datetime(), sample.source = $sourceService
         SET sample.updatedAt = datetime(),
-            sample.mongoSampleId = $sampleId,
+            sample.specimenId = $specimenId,
             sample.lastProjectionEventId = $eventId,
             sample.lastProjectionAt = datetime()
         MERGE (donor)-[r2:DONATED]->(sample)
@@ -113,7 +113,7 @@ class Neo4jCanonicalProjectionService {
 
     await session.run(cypher, {
       donorId,
-      sampleId,
+      specimenId,
       consentId,
       consentStatus,
       schemaVersion: Number(event.schemaVersion || 1),
@@ -127,16 +127,16 @@ class Neo4jCanonicalProjectionService {
 
   async applyLineageProjection(session, event) {
     const payload = event.payload || {};
-    const parentSampleId = normalizeText(payload.parentSampleId);
-    const sampleId = normalizeText(payload.sampleId || event.aggregateId);
+    const parentSpecimenId = normalizeText(payload.parentSpecimenId);
+    const specimenId = normalizeText(payload.specimenId || event.aggregateId);
     const cypher = `
-      MERGE (child:Sample {id: $sampleId})
+        MERGE (child:Sample {id: $specimenId})
       ON CREATE SET child.createdAt = datetime(), child.source = $sourceService
       SET child.updatedAt = datetime(),
           child.lastProjectionEventId = $eventId,
           child.lastProjectionAt = datetime()
 
-      MERGE (parent:Sample {id: $parentSampleId})
+        MERGE (parent:Sample {id: $parentSpecimenId})
       ON CREATE SET parent.createdAt = datetime(), parent.source = $sourceService
       SET parent.updatedAt = datetime(),
           parent.lastProjectionEventId = $eventId,
@@ -146,26 +146,26 @@ class Neo4jCanonicalProjectionService {
       ON CREATE SET r.createdAt = datetime(), r.source = $sourceService
       SET r.updatedAt = datetime(), r.schemaVersion = $schemaVersion, r.eventId = $eventId
 
-      RETURN child.id AS sampleId, parent.id AS parentSampleId
+        RETURN child.id AS specimenId, parent.id AS parentSpecimenId
     `;
 
     await session.run(cypher, {
-      sampleId,
-      parentSampleId,
+        specimenId,
+        parentSpecimenId,
       schemaVersion: Number(event.schemaVersion || 1),
       sourceService: normalizeText(event.sourceService) || 'unknown',
       eventId: normalizeText(event.eventId),
     });
-    return { projected: true, eventType: event.eventType, sampleId };
+    return { projected: true, eventType: event.eventType, specimenId };
   }
 
   async applyQualityProjection(session, event) {
     const payload = event.payload || {};
-    const sampleId = normalizeText(payload.sampleId || event.aggregateId);
+    const specimenId = normalizeText(payload.specimenId || event.aggregateId);
     const assessmentId = normalizeText(payload.qualityAssessmentId || event.eventId);
 
     const cypher = `
-      MERGE (sample:Sample {id: $sampleId})
+        MERGE (sample:Sample {id: $specimenId})
       ON CREATE SET sample.createdAt = datetime(), sample.source = $sourceService
       SET sample.updatedAt = datetime(),
           sample.lastProjectionEventId = $eventId,
@@ -189,7 +189,7 @@ class Neo4jCanonicalProjectionService {
     `;
 
     await session.run(cypher, {
-      sampleId,
+        specimenId,
       assessmentId,
       schemaVersion: Number(event.schemaVersion || 1),
       sourceService: normalizeText(event.sourceService) || 'unknown',
@@ -198,16 +198,16 @@ class Neo4jCanonicalProjectionService {
       score: payload.score === undefined ? null : Number(payload.score),
       evaluatedAt: normalizeIso(payload.evaluatedAt || event.occurredAt) || new Date().toISOString(),
     });
-    return { projected: true, eventType: event.eventType, sampleId };
+    return { projected: true, eventType: event.eventType, specimenId };
   }
 
   async applyTelemetryProjection(session, event) {
     const payload = event.payload || {};
-    const sampleId = normalizeText(payload.sampleId || event.aggregateId);
+    const specimenId = normalizeText(payload.specimenId || event.aggregateId);
     const incidentId = normalizeText(payload.telemetryIncidentId || event.eventId);
 
     const cypher = `
-      MERGE (sample:Sample {id: $sampleId})
+        MERGE (sample:Sample {id: $specimenId})
       ON CREATE SET sample.createdAt = datetime(), sample.source = $sourceService
       SET sample.updatedAt = datetime(),
           sample.lastProjectionEventId = $eventId,
@@ -231,7 +231,7 @@ class Neo4jCanonicalProjectionService {
     `;
 
     await session.run(cypher, {
-      sampleId,
+        specimenId,
       incidentId,
       schemaVersion: Number(event.schemaVersion || 1),
       sourceService: normalizeText(event.sourceService) || 'unknown',
@@ -240,7 +240,7 @@ class Neo4jCanonicalProjectionService {
       status: normalizeText(payload.status || 'OPEN'),
       occurredAt: normalizeIso(payload.occurredAt || event.occurredAt) || new Date().toISOString(),
     });
-    return { projected: true, eventType: event.eventType, sampleId };
+    return { projected: true, eventType: event.eventType, specimenId };
   }
 }
 

@@ -1,5 +1,5 @@
 import React from 'react';
-import { SampleCustodyRow, SampleMovementState, resolvePatientId, resolveSampleId } from '@/hooks/samples/useSampleCustodyReports';
+import { SampleCustodyRow, SampleMovementState, resolveParticipantId, resolveSampleId } from '@/hooks/samples/useSampleCustodyReports';
 import Button from '../UI/Button';
 import Card from '../UI/Card';
 import { mapMovementTypeLabel, TranslatorFn } from './movementTypeLabel';
@@ -21,7 +21,7 @@ export default function SampleCustodyReportsView({
 }: SampleCustodyReportsViewProps) {
   const headers = [
     t('samples.id', 'ID'),
-    t('samples.patientId', 'ID do Paciente'),
+    t('samples.participantId', 'ID do Participante'),
     t('samples.type', 'Tipo'),
     t('samples.barcode', 'Código de Barras'),
     t('common.actions', 'Ações'),
@@ -59,7 +59,7 @@ export default function SampleCustodyReportsView({
                     <React.Fragment key={rowId}>
                       <tr>
                         <td>{rowId}</td>
-                        <td>{resolvePatientId(sample)}</td>
+                        <td>{resolveParticipantId(sample)}</td>
                         <td>{sample.sampleType || '—'}</td>
                         <td>{sample.barcode || sample.code || '—'}</td>
                         <td>
@@ -139,3 +139,4 @@ export default function SampleCustodyReportsView({
     </div>
   );
 }
+

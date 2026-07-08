@@ -5,12 +5,12 @@ class PatientConsentModel {
   static validate(data) {
     const errors = [];
 
-    if (!data.patientId || typeof data.patientId !== 'string') {
-      errors.push('patientId é obrigatório e deve ser string');
+    if (!data.participantId || typeof data.participantId !== 'string') {
+      errors.push('participantId é obrigatório e deve ser string');
     }
 
-    if (!data.templateId || typeof data.templateId !== 'string') {
-      errors.push('templateId é obrigatório e deve ser string');
+    if (!data.consentTemplateId || typeof data.consentTemplateId !== 'string') {
+      errors.push('consentTemplateId é obrigatório e deve ser string');
     }
 
     if (data.status && !['ACTIVE', 'REVOKED'].includes(data.status)) {
@@ -53,8 +53,8 @@ class PatientConsentModel {
 
   static create(data) {
     return {
-      patientId: data.patientId,
-      templateId: data.templateId,
+      participantId: data.participantId,
+      consentTemplateId: data.consentTemplateId,
       signedAt: data.signedAt ? new Date(data.signedAt) : new Date(),
       status: data.status || 'ACTIVE',
       revokedAt: data.revokedAt ? new Date(data.revokedAt) : null,

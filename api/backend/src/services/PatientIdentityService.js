@@ -1,151 +1,66 @@
 const { getCollection } = require('../utils/collectionResolver');
-const { generateUniquePatientID } = require('../utils/patientAnonymization');
+const { generateUniqueparticipantId } = require('../utils/patientAnonymization');
 
 function normalizeString(value) {
   return String(value || '').trim();
 }
 
 function normalizeName(value) {
-  return normalizeString(value)
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-    .replace(/\s+/g, ' ');
+  return normalizeString(value).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ');
 }
 
 function parseBirthDate(value) {
   if (!value) return null;
-  if (value instanceof Date && !Number.isNaN(value.getTime())) {
-    return new Date(value.getFullYear(), value.getMonth(), value.getDate());
-  }
-
-  const raw = normalizeString(value);
-  if (!raw) return null;
-
-  const ddmmyyyy = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(raw);
-  if (ddmmyyyy) {
-    const day = Number(ddmmyyyy[1]);
-    const month = Number(ddmmyyyy[2]) - 1;
-    const year = Number(ddmmyyyy[3]);
-    const date = new Date(year, month, day);
-    if (!Number.isNaN(date.getTime()) && date.getDate() === day && date.getMonth() === month && date.getFullYear() === year) {
-      return date;
-    }
-  }
-
-  const iso = new Date(raw);
-  if (Number.isNaN(iso.getTime())) return null;
-  return new Date(iso.getFullYear(), iso.getMonth(), iso.getDate());
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : new Date(date.getFullYear(), date.getMonth(), date.getDate());
 }
 
-function birthDateKey(date) {
-  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return '';
-  const year = String(date.getFullYear()).padStart(4, '0');
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
-
-class PatientIdentityService {
-  async matchOrUpsertPatient(db, payload = {}) {
-    const patientsCollection = await getCollection(db, 'patients');
-
-    const patientID = normalizeString(payload.patientID || payload.patientId);
-    const patientName = normalizeString(payload.patientName || payload.name);
-    const normalizedPatientName = normalizeName(patientName);
+class participantIdentityService {
+  async matchOrUpsertParticipant(db, payload = {}) {
+    const participants = await getCollection(db, 'patients');
+    const participantId = normalizeString(payload.participantId);
+    const patientName = normalizeString(payload.patientName);
     const birthDate = parseBirthDate(payload.birthDate);
-    const birthKey = birthDateKey(birthDate);
+    const normalizedName = normalizeName(patientName);
+    const identityDocument = normalizeString(payload.identityDocument);
 
-    if (!patientID && (!normalizedPatientName || !birthKey)) {
-      throw new Error('Identificação insuficiente: informe patientID ou (patientName + birthDate).');
+    if (!participantId && (!normalizedName || !birthDate)) {
+      throw new Error('Identificação insuficiente: informe participantId ou (patientName + birthDate).');
     }
 
-    const demographicsUpdate = {};
-    const updatableFields = [
-      'email',
-      'sex',
-      'phone',
-      'cpf',
-      'recordNumber',
-      'clinicalUnit',
-      'unitAcronym',
-      'status',
-      'isDeceased',
-      'representativeName',
-      'representativeEmail',
-      'representativeCpf',
-    ];
+    const matchFilter = participantId
+      ? { participantId }
+      : { patientNameNormalized: normalizedName, birthDateKey: birthDate.toISOString().slice(0, 10) };
 
-    if (patientName) demographicsUpdate.patientName = patientName;
-    if (normalizedPatientName) demographicsUpdate.patientNameNormalized = normalizedPatientName;
-    if (birthDate) {
-      demographicsUpdate.birthDate = birthDate;
-      demographicsUpdate.birthDateKey = birthKey;
-    }
-
-    updatableFields.forEach((field) => {
-      if (payload[field] !== undefined && payload[field] !== null && String(payload[field]).trim() !== '') {
-        demographicsUpdate[field] = payload[field];
-      }
-    });
-
-    const matchFilter = patientID
-      ? {
-        $or: [
-          { patientID },
-          ...(normalizedPatientName && birthKey ? [{ patientNameNormalized: normalizedPatientName, birthDateKey: birthKey }] : []),
-        ],
-      }
-      : { patientNameNormalized: normalizedPatientName, birthDateKey: birthKey };
-
-    const existing = await patientsCollection.findOne(matchFilter);
-
+    const existing = await participants.findOne(matchFilter);
     if (existing) {
-      await patientsCollection.updateOne(
-        { _id: existing._id },
-        {
-          $set: {
-            ...demographicsUpdate,
-            updatedAt: new Date(),
-          },
-        }
-      );
-
-      return {
-        created: false,
-        matchType: patientID && String(existing.patientID || '') === patientID ? 'patientID' : 'name+birthDate',
-        patient: {
-          ...existing,
-          ...demographicsUpdate,
-          patientID: String(existing.patientID || patientID || '').trim(),
-        },
+      const update = {
+        patientName: patientName || existing.patientName,
+        patientNameNormalized: normalizedName || existing.patientNameNormalized,
+        birthDate: birthDate || existing.birthDate,
+        birthDateKey: birthDate ? birthDate.toISOString().slice(0, 10) : existing.birthDateKey,
+        identityDocument: identityDocument || existing.identityDocument || null,
+        updatedAt: new Date()
       };
+      await participants.updateOne({ _id: existing._id }, { $set: update });
+      return { created: false, matchType: participantId ? 'participantId' : 'name+birthDate', patient: { ...existing, ...update, participantId: existing.participantId || participantId } };
     }
 
-    const generatedPatientID = patientID || await generateUniquePatientID(db, patientsCollection.collectionName || 'patients');
+    const generatedParticipantId = participantId || await generateUniqueparticipantId(db);
     const toInsert = {
-      patientID: generatedPatientID,
+      participantId: generatedParticipantId,
       patientName: patientName || 'PACIENTE SEM NOME',
-      patientNameNormalized: normalizedPatientName || normalizeName(patientName || 'PACIENTE SEM NOME'),
+      patientNameNormalized: normalizedName || normalizeName(patientName || 'PACIENTE SEM NOME'),
       birthDate: birthDate || null,
-      birthDateKey: birthKey || '',
-      status: 'ACTIVE',
+      birthDateKey: birthDate ? birthDate.toISOString().slice(0, 10) : '',
+      identityDocument: identityDocument || null,
       createdAt: new Date(),
-      updatedAt: new Date(),
-      ...demographicsUpdate,
+      updatedAt: new Date()
     };
-
-    const insertResult = await patientsCollection.insertOne(toInsert);
-
-    return {
-      created: true,
-      matchType: 'new',
-      patient: {
-        _id: insertResult.insertedId,
-        ...toInsert,
-      },
-    };
+    const result = await participants.insertOne(toInsert);
+    return { created: true, matchType: 'new', patient: { _id: result.insertedId, ...toInsert } };
   }
 }
 
-module.exports = new PatientIdentityService();
+module.exports = new participantIdentityService();
+

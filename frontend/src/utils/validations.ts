@@ -143,8 +143,8 @@ export function validateMIABIS(sample: Partial<Sample>): MIABISValidationResult 
     errors.push('sampleType é obrigatório (MIABIS)');
   }
   
-  if (!sample.patientID || sample.patientID === 0) {
-    errors.push('patientID é obrigatório (MIABIS)');
+  if (!sample.participantId) {
+    errors.push('participantId é obrigatório (MIABIS)');
   }
   
   if (!sample.registrationDate) {
@@ -328,5 +328,6 @@ export function validateAccessType(description: string): boolean {
   ];
   return validTypes.includes(description) || description.length > 0;
 }
+
 
 
