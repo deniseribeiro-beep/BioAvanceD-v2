@@ -690,12 +690,11 @@ class ImportService {
               row: results.total + 1,
               errors: validation.errors
             });
-            continue;
+          } else {
+            const temperature = TemperatureModel.create(tempData);
+            await temperaturesCollection.insertOne(temperature);
+            results.success++;
           }
-
-          const temperature = TemperatureModel.create(tempData);
-          await temperaturesCollection.insertOne(temperature);
-          results.success++;
         } catch (error) {
           results.errors.push({
             row: results.total + 1,
