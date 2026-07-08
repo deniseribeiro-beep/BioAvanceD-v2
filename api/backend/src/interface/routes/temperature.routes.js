@@ -38,18 +38,18 @@ router.get('/',
   temperatureController.getAll.bind(temperatureController)
 );
 
-// Buscar leitura por ID
-router.get('/:id',
-  authenticate,
-  requirePermission('viewTemperature'),
-  temperatureController.getById.bind(temperatureController)
-);
-
 // Visualizar controle de temperatura
 router.get('/control',
   authenticate,
   requirePermission('viewTemperature'),
   temperatureController.getControl.bind(temperatureController)
+);
+
+// Buscar leitura por ID
+router.get('/:id',
+  authenticate,
+  requirePermission('viewTemperature'),
+  temperatureController.getById.bind(temperatureController)
 );
 
 module.exports = router;
