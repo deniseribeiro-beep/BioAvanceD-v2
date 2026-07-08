@@ -243,14 +243,11 @@ async function fetchJsonWithTimeout(url, timeoutMs) {
 
     let data;
     if (responseText) {
-      if (contentType.includes('application/json')) {
+      try {
         data = JSON.parse(responseText);
-      } else {
-        try {
-          data = JSON.parse(responseText);
-        } catch (_error) {
-          data = responseText;
-        }
+      } catch (_error) {
+        logger.warn(`Resposta não é JSON válido (content-type: "${contentType || 'desconhecido'}") de ${url}`);
+        data = responseText;
       }
     } else {
       data = null;

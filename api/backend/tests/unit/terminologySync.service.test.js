@@ -339,6 +339,48 @@ describe('terminologySync.service', () => {
       });
     });
 
+    it('warns and falls through consistently on malformed JSON, regardless of the content-type header (issue #30)', async () => {
+      const freshSvc = freshRequireWithEnv(() => {
+        process.env.ALLOW_EXTERNAL_TERMINOLOGY_SYNC = 'true';
+        process.env.ORPHADATA_BASE_URL = 'https://orphadata.example.com';
+      });
+      const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+      vi.spyOn(Terminology, 'findOneAndUpdate').mockResolvedValue({});
+
+      const malformedResponse = (contentType) => ({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        headers: { get: () => contentType },
+        text: async () => '<html>not json</html>',
+      });
+
+      const fetchMock = vi.fn()
+        // endpoint 1: malformed body mislabeled as application/json
+        .mockResolvedValueOnce(malformedResponse('application/json'))
+        // endpoint 2: same malformed body with no/other content-type
+        .mockResolvedValueOnce(malformedResponse('text/html'))
+        // endpoint 3: succeeds so the loop terminates with a clear result
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          headers: { get: () => 'application/json' },
+          text: async () => JSON.stringify([{ ORPHAcode: '1', descricao: 'Disease One' }]),
+        });
+      vi.stubGlobal('fetch', fetchMock);
+
+      const result = await freshSvc.syncFromOrphadata();
+
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      // Both malformed responses should be warned about identically, not just the
+      // application/json-labeled one (which previously threw instead of warning).
+      const malformedWarnings = warnSpy.mock.calls.filter(([msg]) => msg.includes('não é JSON válido'));
+      expect(malformedWarnings).toHaveLength(2);
+      expect(result.success).toBe(true);
+      expect(result.attempted).toBe('/rd-classification/orphacodes?limit=1000');
+    });
+
     it('propagates a Timeout error message when fetch aborts (exercised through the endpoint-failure/warn path)', async () => {
       const freshSvc = freshRequireWithEnv(() => {
         process.env.ALLOW_EXTERNAL_TERMINOLOGY_SYNC = 'true';
