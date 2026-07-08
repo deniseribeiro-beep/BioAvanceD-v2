@@ -3,10 +3,8 @@ import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
 
-// Dedicated file: import-lgpd.controller.test.js can't be loaded right now
-// because it requires the missing '../../src/services/ImportPredictor'
-// module (see issue #101). This covers importSamples' success flag
-// (issue #24) without depending on that broken import.
+// Dedicated file, split out while import-lgpd.controller.test.js couldn't
+// load (issue #101, now fixed). Covers importSamples' success flag (issue #24).
 const controller = require('../../src/controllers/import-lgpd.controller');
 const importLGPDService = require('../../src/services/import-lgpd.service');
 
