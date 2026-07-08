@@ -59,6 +59,21 @@ One iteration = one issue, sized to finish in the iteration:
 - Weigh whether the buggy code is legacy per the `legacy` skill — a bug
   in a dead or superseded path may not be worth fixing; say so on the
   issue instead of fixing it, and let Dennis decide.
+- **Before treating "missing source file the test requires" as a
+  never-committed/abandoned feature, check whether the code used to
+  exist and was deliberately removed.** `git log --all --diff-filter=D
+  --oneline -- <path>` finds the deleting commit; check its message and
+  full diff (`git show --stat <hash>`) for a wider intentional removal
+  (confirmed pattern, 2026-07-08, issue #101: `ImportPredictor.js` +
+  its controller method + route existed, test-loop wrote tests for
+  them, then Denise deleted the whole feature bundle a day later in a
+  large merge — the tests were orphaned by an intentional cleanup, not
+  a dangling reference to work that was never finished). If a removal
+  commit exists and reads as deliberate, don't reimplement the feature
+  — delete the orphaned tests instead and close the issue explaining
+  it was removed by the project owner, referencing the deleting
+  commit. Only fall back to "reimplement" or "ask Dennis" if no such
+  removal commit exists.
 - If the issue is ambiguous (can't tell what correct behavior *should*
   be from the code, tests, or issue thread), ask on the issue / ask
   Dennis rather than guessing at intended behavior.
