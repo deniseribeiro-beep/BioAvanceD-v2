@@ -101,26 +101,19 @@ describe('ImportService.importSamples (JSON)', () => {
     expect(collection.updates[0].update.$set.release_status).toBe('QUARANTINE');
   });
 
-  // NOTE: `total` does NOT count this row (documenting a real bug, not asserting
-  // desired behavior) - the JSON branch's `continue` on a validation failure skips
-  // the `results.total++` at the bottom of the loop; the CSV/XLSX branch of this
-  // same method does not have this bug (it increments total explicitly before its
-  // own `continue`s). Same undercounting pattern as #79/#65/#86, filed for this
-  // JSON branch as issue #88.
-  it('records a model-validation error and does not insert when patientID is missing (total undercounts due to a known bug)', async () => {
+  it('records a model-validation error and does not insert when patientID is missing', async () => {
     const filePath = writeTmpFile('invalid.json', JSON.stringify({ sampleType: 'PLASMA' }));
     const collection = makeSamplesCollection();
 
     const result = await importService.importSamples(makeDb(collection), { path: filePath, originalname: 'invalid.json' });
 
     expect(result.success).toBe(0);
-    expect(result.total).toBe(0);
+    expect(result.total).toBe(1);
     expect(result.errors[0].errors.length).toBeGreaterThan(0);
     expect(collection.inserted).toHaveLength(0);
   });
 
-  // NOTE: `total` ends at 1, not 2 - same known-bug undercounting as above (issue #88).
-  it('imports an array of JSON samples, counting the success but total undercounts the invalid row (known bug)', async () => {
+  it('imports an array of JSON samples, counting both the success and the invalid row in total', async () => {
     vi.spyOn(SampleGraphValidator.prototype, 'validateSampleCompliance').mockResolvedValue({ suggestedStatus: 'QUARANTINE' });
     const filePath = writeTmpFile('array.json', JSON.stringify([
       validSample(),
@@ -130,7 +123,7 @@ describe('ImportService.importSamples (JSON)', () => {
 
     const result = await importService.importSamples(makeDb(collection), { path: filePath, originalname: 'array.json' });
 
-    expect(result.total).toBe(1);
+    expect(result.total).toBe(2);
     expect(result.success).toBe(1);
     expect(result.errors).toHaveLength(1);
   });

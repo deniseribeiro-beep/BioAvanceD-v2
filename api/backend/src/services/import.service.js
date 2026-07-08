@@ -394,6 +394,7 @@ class ImportService {
                 row: results.total + 1,
                 errors: validation.errors
               });
+              results.total++;
               continue;
             }
 
