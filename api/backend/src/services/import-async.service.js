@@ -170,15 +170,24 @@ class ImportAsyncService {
     if (ext === '.csv') {
       return await new Promise((resolve) => {
         let resolved = false;
-        fs.createReadStream(file.path)
-          .pipe(csv())
+        const source = fs.createReadStream(file.path);
+        source.on('error', () => {
+          if (resolved) return;
+          resolved = true;
+          resolve([]);
+        });
+        source.pipe(csv())
           .on('headers', (headers) => {
             if (resolved) return;
             const canonical = headers.map(h => this.canonicalizeHeader(h));
             resolved = true;
             resolve(canonical);
           })
-          .on('error', () => resolve([]))
+          .on('error', () => {
+            if (resolved) return;
+            resolved = true;
+            resolve([]);
+          })
           .on('end', () => {
             if (!resolved) resolve([]);
           });
