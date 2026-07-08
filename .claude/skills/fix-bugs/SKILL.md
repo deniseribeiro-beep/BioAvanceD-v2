@@ -189,6 +189,19 @@ ahead" cleared the merge but the very next issue-comment attempt and the
 branch-deletion attempt both re-blocked). Don't assume a blanket
 authorization; ask again per action if the classifier denies it.
 
+Also: a permission denial's stated reason can be stale — attached to an
+earlier attempted action in the same session rather than the command
+actually being blocked (observed 2026-07-08: a blocked `git reset --hard`
+used only to force a `--no-ff` merge bubble after a same-content
+fast-forward had already landed; the *next*, unrelated command — deleting
+the now-merged fix branch on the remote — was denied citing that same
+reset as its reason, even though the reset itself never ran). Don't
+assume the cited reason accurately describes the current command; if the
+action is otherwise safe and expected by this workflow (e.g. remote
+branch cleanup after a confirmed merge), surface it and ask for a fresh
+go-ahead rather than treating the stale reasoning as a real objection to
+investigate.
+
 Also: don't chain the plain integration-branch push together with the
 fix-branch deletion in one Bash call — a denial on the deletion half
 blocks the whole compound command, so the push doesn't happen either
