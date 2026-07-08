@@ -119,8 +119,12 @@ class ImportService {
    */
   async validateCSVStructure(file, dataType) {
     return new Promise((resolve, reject) => {
-      const errors = [];
       const requiredFields = this.getRequiredFields(dataType);
+      if (requiredFields.length === 0) {
+        return reject(new Error(`Tipo de dados desconhecido: ${dataType}`));
+      }
+
+      const errors = [];
       const rows = [];
       let headerRow = null;
 
