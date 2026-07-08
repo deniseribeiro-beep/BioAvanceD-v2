@@ -298,5 +298,39 @@ describe('RegisterSample', () => {
         expect.objectContaining({ _id: expect.any(ObjectId) })
       );
     });
+
+    // Issue #8: claimed that a non-lineage-matching error thrown from inside
+    // handleLineage's repository calls would be re-thrown raw in strict mode,
+    // after rollback, giving an inconsistent error shape. handleLineage's own
+    // strict-mode catch (RegisterSample.js ~line 155) wraps *any* error
+    // unconditionally, regardless of isLineageError -- so this should already
+    // surface as a consistent RegisterSampleForbiddenError (403).
+    it('normalizes a non-lineage-matching repository error to RegisterSampleForbiddenError in strict mode, after rollback', async () => {
+      env.LINEAGE_MODE = 'fail-closed';
+      const sampleId = new ObjectId();
+      const createdSample = { _id: sampleId, barcode: 'BC-9' };
+      vi.spyOn(sampleService, 'createSample').mockResolvedValue(createdSample);
+
+      const consentsCollection = makeConsentsCollection({ _id: 'c1', status: 'ACTIVE' });
+      const samplesCollection = makeSamplesCollection();
+      const rollbackDb = makeDb({ patientConsents: consentsCollection, samples: samplesCollection });
+
+      const lineageRepository = {
+        validateBeforePersistence: vi.fn().mockRejectedValue(new Error('unexpected repository failure')),
+        recordCustodyEvent: vi.fn()
+      };
+      const useCase = new RegisterSample({ db: rollbackDb, lineageRepository });
+
+      const command = {
+        sampleData: { barcode: 'BC-9', patientID: 'P1' },
+        options: {}
+      };
+
+      await expect(useCase.execute(command)).rejects.toThrow(RegisterSampleForbiddenError);
+
+      expect(samplesCollection.deleteOne).toHaveBeenCalledWith(
+        expect.objectContaining({ _id: expect.any(ObjectId) })
+      );
+    });
   });
 });
