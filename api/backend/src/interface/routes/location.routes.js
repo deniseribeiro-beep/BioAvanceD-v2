@@ -92,12 +92,6 @@ router.patch('/fix-missing-locationids', authenticate, requirePermission('create
 router.get('/', authenticate, async (req, res) => {
   try {
     const db = req.app.locals.db;
-    if (!db) {
-      return res.status(503).json({
-        success: false,
-        error: 'Banco de dados não disponível'
-      });
-    }
 
     const locationsCollection = db.collection('locations');
     const locations = await locationsCollection.find({}).toArray();
@@ -189,12 +183,6 @@ router.get('/:id', authenticate, async (req, res) => {
 router.post('/', authenticate, requirePermission('createSample'), async (req, res) => {
   try {
     const db = req.app.locals.db;
-    if (!db) {
-      return res.status(503).json({
-        success: false,
-        error: 'Banco de dados não disponível'
-      });
-    }
 
     // Prepara os dados, convertendo strings para números quando necessário
     const locationData = { ...req.body };
