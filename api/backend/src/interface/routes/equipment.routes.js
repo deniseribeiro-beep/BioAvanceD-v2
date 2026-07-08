@@ -11,12 +11,6 @@ const defaultQuarantineService = require('../../services/equipment-sensor-quaran
 router.get('/', authenticate, async (req, res) => {
   try {
     const db = req.app.locals.db;
-    if (!db) {
-      return res.status(503).json({
-        success: false,
-        error: 'Banco de dados não disponível'
-      });
-    }
 
     const equipmentCollection = db.collection('equipment');
     const equipment = await equipmentCollection.find({}).toArray();
@@ -57,15 +51,9 @@ router.get('/', authenticate, async (req, res) => {
 router.get('/analytical', authenticate, async (req, res) => {
   try {
     const db = req.app.locals.db;
-    if (!db) {
-      return res.status(503).json({
-        success: false,
-        error: 'Banco de dados não disponível'
-      });
-    }
 
     const equipmentCollection = db.collection('equipment');
-    
+
     // Filtra equipamentos analíticos que não estão em manutenção
     const analyticalEquipment = await equipmentCollection.find({
       type: 'Analytical',
@@ -103,12 +91,6 @@ router.get('/analytical', authenticate, async (req, res) => {
 router.get('/:id', authenticate, async (req, res) => {
   try {
     const db = req.app.locals.db;
-    if (!db) {
-      return res.status(503).json({
-        success: false,
-        error: 'Banco de dados não disponível'
-      });
-    }
 
     const { ObjectId } = require('mongodb');
     const equipmentCollection = db.collection('equipment');
@@ -180,12 +162,6 @@ router.get('/:id', authenticate, async (req, res) => {
 router.post('/', authenticate, requirePermission('createPatient'), async (req, res) => {
   try {
     const db = req.app.locals.db;
-    if (!db) {
-      return res.status(503).json({
-        success: false,
-        error: 'Banco de dados não disponível'
-      });
-    }
 
     const validation = EquipmentModel.validate(req.body);
     if (!validation.isValid) {
@@ -260,16 +236,10 @@ router.put('/:id', authenticate, requirePermission('createPatient'), async (req,
   try {
     const quarantineService = req.app?.locals?.quarantineService || defaultQuarantineService;
     const db = req.app.locals.db;
-    if (!db) {
-      return res.status(503).json({
-        success: false,
-        error: 'Banco de dados não disponível'
-      });
-    }
 
     const { ObjectId } = require('mongodb');
     const equipmentCollection = db.collection('equipment');
-    
+
     // Prepara os dados para atualização, convertendo purchaseDate se necessário
     const updateData = { ...req.body };
     updateData.updatedAt = new Date();
@@ -455,16 +425,10 @@ router.put('/:id', authenticate, requirePermission('createPatient'), async (req,
 router.delete('/:id', authenticate, requirePermission('createPatient'), async (req, res) => {
   try {
     const db = req.app.locals.db;
-    if (!db) {
-      return res.status(503).json({
-        success: false,
-        error: 'Banco de dados não disponível'
-      });
-    }
 
     const { ObjectId } = require('mongodb');
     const equipmentCollection = db.collection('equipment');
-    
+
     // Tenta deletar por _id primeiro, depois por equipmentID
     let result = null;
     let deletedEquipment = null;
