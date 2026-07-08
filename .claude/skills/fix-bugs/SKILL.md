@@ -24,6 +24,16 @@ issue actually requires.
 - **File new findings with `gh issue create` freely** (blanket OK,
   2026-07-02). If fixing one bug uncovers another, file it and stay on
   the picked issue — don't chain fixes in one iteration.
+- **If the picked issue bundles multiple sub-points and only some are
+  confirmed/fixed this iteration, split the unresolved ones into their
+  own new issue before closing the original** (confirmed 2026-07-08,
+  issue #77 → #105: #77 covered three related gaps in
+  `import.service.js`; only the NaN-temperature one was a confirmed bug
+  and got fixed, the "unknown dataType fail-open" point was left as a
+  maintainer-decision item and almost got buried in a comment on the
+  issue being closed). Closing an issue with an unresolved point
+  documented only in its comment thread makes that point undiscoverable
+  next session — it needs its own open issue to stay trackable.
 - Comment on the issue when the fix is committed (commit hash, one-line
   summary, `Fixes #N` in the commit message). Once the fix is merged
   into `feature/docker-e2e-backend-integration` and verified there,
@@ -77,6 +87,26 @@ One iteration = one issue, sized to finish in the iteration:
 - If the issue is ambiguous (can't tell what correct behavior *should*
   be from the code, tests, or issue thread), ask on the issue / ask
   Dennis rather than guessing at intended behavior.
+- **Before punting an "ambiguous, needs a design call" sub-point to the
+  project owner, trace its actual callers to check whether it's even
+  reachable.** A branch that *looks* like it requires a judgment call
+  about intended leniency (e.g. "should X be allowed to fail open?")
+  can turn out to be dead-guarded — every real caller already prevents
+  the condition from occurring, so no existing behavior depends on the
+  current leniency and a defensive fail-closed fix is safe and
+  unambiguous, no sign-off needed (confirmed 2026-07-08, issue #77 →
+  #105: "unknown dataType skips CSV structure validation" first read as
+  a design fork, but `import.controller.js`'s `validate` handler
+  already whitelists dataType before calling into the branch, and the
+  other two callers pass hardcoded literals — so nothing could be
+  relying on the fail-open behavior). Grep for all call sites of the
+  function/branch in question and check each one's inputs before
+  declaring something a genuine design fork like #28's consent
+  bypasses (those really do have live callers exercising the bypass,
+  which is what makes them a real judgment call). If a memory or prior
+  comment already labeled something "needs maintainer input," don't
+  take that at face value either — re-trace it yourself before closing
+  the loop, the same way you would for a fresh pick.
 - Skim whether another in-flight fix touches the same files — cheap
   insurance against tangled diffs.
 

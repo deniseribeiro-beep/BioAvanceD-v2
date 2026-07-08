@@ -86,6 +86,18 @@ interrogate each of the following — don't settle for whatever surfaces in the 
 5. **Did you have to guess or make a judgment call the workflow didn't cover?**
    If the gap is likely to recur, it belongs in the skill file or as a tracked issue.
 
+5a. **Did you label any sub-point "ambiguous / needs the project owner's call" and then close
+   the issue it lived on?** That combination is exactly how a real, trackable problem goes
+   quiet: the issue is gone from the open backlog and the only record of the leftover point is
+   a comment on a closed thread (near-miss, 2026-07-08, issue #77 → #105 — caught only because
+   the user asked about it directly, not because this audit surfaced it first). Before finishing
+   the wrap-up, re-list every sub-point of every issue touched this iteration and confirm each
+   one that wasn't fixed still has its own *open* issue, not just a mention in a closed one. And
+   don't take your own earlier "needs maintainer input" label at face value here either — a
+   design-fork label deserves the same reachability check as a fresh pick (see the corresponding
+   note in `fix-bugs`), since what looked ambiguous mid-iteration may turn out to be a safe,
+   unambiguous fix once you trace the actual callers.
+
 6. **Was any documented instruction stale** (referenced a file, branch, command, or state
    that's since changed)?
 
