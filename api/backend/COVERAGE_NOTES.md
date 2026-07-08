@@ -109,7 +109,7 @@ src/models/PatientConsent.js                                70.83 / 85.24
 src/interface/routes/equipment.routes.js                     70.93 / 61.05
 src/utils/fieldEncryption.js                                 71.42 / 69.56
 src/infrastructure/middleware/auth.js                         71.66 / 67.44
-src/interface/routes/reports.routes.js                       71.84 / 58.21
+src/interface/routes/reports.routes.js                       77.41 / 66.43
 src/interface/routes/cid.routes.js                            72.09 / 46.47
 src/services/auditRoot.service.js                             73.33 / 54.54
 src/services/hl7.service.js                                   73.45 / 46.85

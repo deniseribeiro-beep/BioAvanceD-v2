@@ -350,6 +350,53 @@ async function buildPreviewData(db, rawType, filters = {}) {
     return { total, patients, previewLimited: total > 50 };
   }
 
+  if (isSampleAnalysis) {
+    const samplesCollection = resolveCollection(db, ['samples', 'amostras']);
+    const resultsCollection = resolveCollection(db, ['results']);
+    const samples = await samplesCollection.find({}).limit(100).toArray();
+
+    const sampleIds = samples.map((sample) => sample.sampleID).filter((sampleID) => sampleID !== undefined && sampleID !== null);
+    const results = sampleIds.length
+      ? await resultsCollection.find({ sampleID: { $in: sampleIds } }).toArray()
+      : [];
+
+    const groupedResults = results.reduce((acc, result) => {
+      const key = String(result.sampleID || '');
+      if (!key) {
+        return acc;
+      }
+      if (!acc[key]) {
+        acc[key] = [];
+      }
+      acc[key].push(result);
+      return acc;
+    }, {});
+
+    const analysis = samples.map((sample) => {
+      const key = String(sample.sampleID || '');
+      const sampleResults = groupedResults[key] || [];
+      return {
+        sampleID: sample.sampleID || sample._id,
+        barcode: sample.barcode || null,
+        sampleType: sample.sampleType || null,
+        patientID: sample.patientID || null,
+        status: sample.currentStatus || sample.status || null,
+        resultCount: sampleResults.length,
+        hasResults: sampleResults.length > 0,
+      };
+    });
+
+    const withResults = analysis.filter((item) => item.hasResults).length;
+    const withoutResults = analysis.length - withResults;
+    return {
+      total: analysis.length,
+      analysis,
+      withResults,
+      withoutResults,
+      previewLimited: analysis.length >= 100,
+    };
+  }
+
   if (typeIncludes(type, ['amostra', 'sample'])) {
     const collection = resolveCollection(db, ['samples', 'amostras']);
     const sampleQuery = buildSampleQuery(filters);
@@ -457,53 +504,6 @@ async function buildPreviewData(db, rawType, filters = {}) {
     const samples = await collection.find(query).sort({ registrationDate: -1, createdAt: -1 }).limit(100).toArray();
     const total = await collection.countDocuments(query);
     return { total, samples, previewLimited: total > 100 };
-  }
-
-  if (isSampleAnalysis) {
-    const samplesCollection = resolveCollection(db, ['samples', 'amostras']);
-    const resultsCollection = resolveCollection(db, ['results']);
-    const samples = await samplesCollection.find({}).limit(100).toArray();
-
-    const sampleIds = samples.map((sample) => sample.sampleID).filter((sampleID) => sampleID !== undefined && sampleID !== null);
-    const results = sampleIds.length
-      ? await resultsCollection.find({ sampleID: { $in: sampleIds } }).toArray()
-      : [];
-
-    const groupedResults = results.reduce((acc, result) => {
-      const key = String(result.sampleID || '');
-      if (!key) {
-        return acc;
-      }
-      if (!acc[key]) {
-        acc[key] = [];
-      }
-      acc[key].push(result);
-      return acc;
-    }, {});
-
-    const analysis = samples.map((sample) => {
-      const key = String(sample.sampleID || '');
-      const sampleResults = groupedResults[key] || [];
-      return {
-        sampleID: sample.sampleID || sample._id,
-        barcode: sample.barcode || null,
-        sampleType: sample.sampleType || null,
-        patientID: sample.patientID || null,
-        status: sample.currentStatus || sample.status || null,
-        resultCount: sampleResults.length,
-        hasResults: sampleResults.length > 0,
-      };
-    });
-
-    const withResults = analysis.filter((item) => item.hasResults).length;
-    const withoutResults = analysis.length - withResults;
-    return {
-      total: analysis.length,
-      analysis,
-      withResults,
-      withoutResults,
-      previewLimited: analysis.length >= 100,
-    };
   }
 
   if (typeIncludes(type, ['log', 'audit', 'acesso', 'access']) || isAccessLogs) {

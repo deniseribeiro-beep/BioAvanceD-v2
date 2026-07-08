@@ -418,7 +418,7 @@ describe('Reports API integration', () => {
       expect(response.body.data.total).toBe(1);
     });
 
-    it('sampleanalysis: branch é inalcançável, cai sempre no branch genérico de amostras (issue #78)', async () => {
+    it('sampleanalysis: agrupa amostras com/sem resultados (issue #78)', async () => {
       const { db } = buildCollectionDb({
         samples: [
           { sampleID: 'S1', barcode: 'B1' },
@@ -431,11 +431,12 @@ describe('Reports API integration', () => {
       const response = await request(testApp).post('/api/reports/sampleanalysis/preview').send({ filters: {} });
 
       expect(response.status).toBe(200);
-      // Documents the bug: 'sampleanalysis' contains 'sample', so the generic
-      // amostra/sample check (line 353) always wins over isSampleAnalysis —
-      // the dedicated analysis/grouping branch never runs.
-      expect(response.body.data.withResults).toBeUndefined();
-      expect(response.body.data.samples).toHaveLength(2);
+      expect(response.body.data.total).toBe(2);
+      expect(response.body.data.withResults).toBe(1);
+      expect(response.body.data.withoutResults).toBe(1);
+      expect(response.body.data.analysis).toHaveLength(2);
+      expect(response.body.data.analysis.find((item) => item.sampleID === 'S1').hasResults).toBe(true);
+      expect(response.body.data.analysis.find((item) => item.sampleID === 'S2').hasResults).toBe(false);
     });
 
     it('sensor/equipamento/resultado: retornam coleções genéricas com total', async () => {
