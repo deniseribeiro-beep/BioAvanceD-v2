@@ -157,11 +157,12 @@ describe('ImportService.validateCSVStructure', () => {
     }
   });
 
-  it('rejects for an unknown dataType because it has no required fields to compare against columns, yet still trusts empty requirement list as satisfied', async () => {
+  it('rejects for an unknown dataType instead of silently skipping structure validation (fail-closed)', async () => {
     const filePath = writeTempFile('foo,bar\n1,2\n');
     try {
-      const result = await importService.validateCSVStructure({ path: filePath }, 'unknown-type');
-      expect(result.valid).toBe(true);
+      await expect(
+        importService.validateCSVStructure({ path: filePath }, 'unknown-type')
+      ).rejects.toThrow(/tipo de dados/i);
     } finally {
       fs.unlinkSync(filePath);
     }
