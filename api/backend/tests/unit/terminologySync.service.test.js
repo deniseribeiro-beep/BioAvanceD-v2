@@ -148,14 +148,11 @@ describe('terminologySync.service', () => {
       expect(result).toEqual({ skipped: true, reason: 'missing-required-fields' });
     });
 
-    it('skips even when only aliased raw field names (e.g. ORPHAcode) are present, since the required-field check runs on raw record before normalization', async () => {
-      // This documents an oddity: upsertTerminology checks record.codigo/.sistema/.descricao
-      // BEFORE calling normalizeRecord, so alias fields like ORPHAcode/Preferred term are not
-      // recognized at this stage even though normalizeRecord itself would resolve them.
-      const findSpy = vi.spyOn(Terminology, 'findOneAndUpdate');
+    it('resolves aliased raw field names (e.g. ORPHAcode) via normalizeRecord before the required-field check', async () => {
+      const findSpy = vi.spyOn(Terminology, 'findOneAndUpdate').mockResolvedValue({ codigo: 'ORPHA:558' });
       const result = await svc.upsertTerminology({ ORPHAcode: '558', descricao: 'Marfan' });
-      expect(result).toEqual({ skipped: true, reason: 'missing-required-fields' });
-      expect(findSpy).not.toHaveBeenCalled();
+      expect(result.skipped).toBe(false);
+      expect(findSpy).toHaveBeenCalled();
     });
 
     it('uses the Terminology mongoose model path when no db is provided and raw codigo/sistema/descricao fields are present', async () => {
