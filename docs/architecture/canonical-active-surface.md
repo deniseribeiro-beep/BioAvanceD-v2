@@ -88,6 +88,9 @@ Classification:
 - `api/backend/scripts/neo4j-canonical-rebuild.js` - operational script and active.
 - `api/backend/scripts/lint.js` - operational script and active.
 - `api/backend/scripts/audit-verify.js` and companion audit scripts - operational.
+- `api/backend/scripts/seed-essential-reference-data.js` - manual essential seed only, not startup-bound.
+- `api/backend/scripts/validate-essential-reference-data.js` - structural validation only.
+- `api/backend/scripts/reference-imports/import-large-reference-dataset.js` - scaffold only.
 
 ### Backend legacy / cleanup candidates
 
@@ -194,6 +197,9 @@ Classification:
 - `api/backend/scripts/neo4j-canonical-rebuild.js`
 - `api/backend/scripts/lint.js`
 - audit verification scripts under `api/backend/scripts`
+- `api/backend/scripts/seed-essential-reference-data.js`
+- `api/backend/scripts/validate-essential-reference-data.js`
+- `api/backend/scripts/reference-imports/import-large-reference-dataset.js`
 
 ### F - legacy scripts to remove or archive outside src
 
@@ -206,6 +212,7 @@ Classification:
 - The current intake route still contains alias-heavy payload assembly and legacy compatibility fields; that file is a semantic hotspot rather than a pure boundary.
 - `App.tsx` is the source of truth for active frontend views and route targets.
 - Runtime grep still reports residual aliases by design; this document classifies them rather than claiming zero.
+- Essential reference seed remains manual and idempotent; it is not mounted by application startup.
 
 ## Known Residual Legacy Surfaces
 
