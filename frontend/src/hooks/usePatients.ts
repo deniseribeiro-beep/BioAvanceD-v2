@@ -37,7 +37,7 @@ function isSilentAuthAbort(error: unknown): boolean {
   return typedError?.code === NO_TOKEN_PROTECTED_REQUEST;
 }
 
-function ensureparticipantId(items: Patient[]): Patient[] {
+function ensureParticipantId(items: Patient[]): Patient[] {
   return items.map((patient) => {
     const typedPatient = patient as PatientWithOptionalId;
     return {
@@ -68,7 +68,7 @@ function extractPatients(payload: unknown): Patient[] {
     patientsData = [payload as Patient];
   }
 
-  return ensureparticipantId(patientsData);
+  return ensureParticipantId(patientsData);
 }
 
 export function usePatients() {

@@ -9,8 +9,49 @@ const { getCollection } = require('../utils/collectionResolver');
  * Controller para operações relacionadas a pacientes
  */
 class PacienteController {
+  rejectCanonicalAliases(payload = {}) {
+    const allowed = new Set([
+      'participantId',
+      'patientName',
+      'birthDate',
+      'sex',
+      'email',
+      'phone',
+      'identityDocument',
+      'recordNumber',
+      'clinicalUnitId',
+      'clinicalUnit',
+      'unitAcronym',
+      'isDeceased',
+      'representativeName',
+      'representativeEmail',
+      'representativeIdentityDocument',
+      'representativePhone',
+      'consentTemplateId',
+      'status',
+      'consentToken',
+      'consentTokenCreatedAt',
+      'consentTokenExpiresAt',
+      'consentNotifiedAt',
+      'consentAcceptedAt',
+      'createdAt',
+      'updatedAt',
+      'anamneseGeral',
+      'dadosEspecificos'
+    ]);
+    const fields = Object.keys(payload).filter((field) => !allowed.has(field));
+    if (fields.length > 0) {
+      const error = new Error('Payload contém campos não canônicos');
+      error.statusCode = 422;
+      error.code = 'NON_CANONICAL_FIELD';
+      error.fields = fields;
+      throw error;
+    }
+  }
+
   sanitizePatientPayload(payload = {}) {
     const nextPayload = { ...payload };
+    this.rejectCanonicalAliases(nextPayload);
 
     if (nextPayload.clinicalUnit !== undefined && nextPayload.clinicalUnit !== null) {
       nextPayload.clinicalUnit = String(nextPayload.clinicalUnit).trim().toUpperCase();
@@ -345,7 +386,7 @@ class PacienteController {
         });
       }
 
-      const participantId = String(req.params.id || req.body.participantId || req.body.participantId || '').trim();
+      const participantId = String(req.params.id || req.body.participantId || '').trim();
       if (!participantId) {
         return res.status(400).json({
           success: false,
@@ -535,6 +576,8 @@ class PacienteController {
         });
       }
 
+      this.rejectCanonicalAliases(req.body || {});
+
       const participantId = String(req.body?.participantId || '').trim();
       if (!participantId) {
         return res.status(400).json({
@@ -596,6 +639,8 @@ class PacienteController {
           error: 'Banco de dados não disponível'
         });
       }
+
+      this.rejectCanonicalAliases(req.body || {});
 
       const { participantId } = req.body;
       if (!participantId) {

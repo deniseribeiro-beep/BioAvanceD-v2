@@ -237,10 +237,10 @@ export const patientService = {
   create: (data: Partial<Patient>) => api.post<Patient>('/patients', data),
   update: (id: number | string, data: Partial<Patient>) => api.put<Patient>(`/patients/${id}`, data),
   delete: (id: number | string) => api.delete(`/patients/${id}`),
-  validateID: (patientID: string) => api.post<{ valid: boolean; patientID: string }>('/patients/validate-id', { patientID }),
-  findForEdit: (patientID: string) => api.post<Patient>('/patients/find-for-edit', { patientID }),
+  validateID: (participantId: string) => api.post<{ valid: boolean; participantId: string }>('/patients/validate-id', { participantId }),
+  findForEdit: (participantId: string) => api.post<Patient>('/patients/find-for-edit', { participantId }),
   search: (searchTerm: string) => api.get<{ patients: Patient[]; total: number }>(`/patients/search?q=${encodeURIComponent(searchTerm)}`),
-  resendConsentNotification: (patientID: string) => api.post(`/patients/${patientID}/consent/resend`),
+  resendConsentNotification: (participantId: string) => api.post(`/patients/${participantId}/consent/resend`),
 };
 
 export const cidService = {
@@ -260,7 +260,7 @@ export const sampleService = {
   getAll: () => api.get<Sample[]>('/samples'),
   getById: (id: number) => api.get<Sample>(`/samples/${id}`),
   getComplianceGraph: (id: number | string) => api.get(`/samples/${id}/compliance-graph`),
-  getByBarcode: (barcode: string) => api.get<{ sample: Sample; patient: { patientID: number; patientName: string; recordNumber: number } | null }>(`/samples/by-barcode/${encodeURIComponent(barcode)}`),
+  getByBarcode: (barcode: string) => api.get<{ sample: Sample; patient: { participantId: number; patientName: string; recordNumber: number } | null }>(`/samples/by-barcode/${encodeURIComponent(barcode)}`),
   getResults: (id: number) => api.get<Result[]>(`/samples/${id}/results`), // Implementa Sample.getResults()
   getMovements: (id: string) => api.get<{ success: boolean; data: any[] }>(`/samples/${id}/movements`), // Histórico de movimentações
   create: (data: Partial<Sample>) => api.post<Sample>('/samples', data),
@@ -758,7 +758,7 @@ export const consentService = {
   // getPoliciesHistory: (params?: { page?: number; limit?: number; search?: string; groupId?: string }) => api.get<{ success: boolean; data: ConsentPolicy[]; pagination?: { page: number; limit: number; total: number; totalPages: number } }>('/consent-policies/history', { params }),
   // getAllPolicies: () => api.get<{ success: boolean; data: ConsentPolicy[] }>('/consent-policies'),
   createPatientConsent: (data: {
-    patientId: string;
+    participantId: string;
     templateId: string;
     responses: Record<string, boolean>;
     signatureName?: string;
@@ -766,7 +766,7 @@ export const consentService = {
     signatureMimeType?: string;
   }) => api.post<PatientConsent>('/e-consent/consents', data),
   revokeConsent: (consentId: string) => api.post(`/e-consent/consents/${consentId}/revoke`),
-  getPatientConsent: (patientId: string) => api.get<{ success: boolean; data: PatientConsent }>(`/patients/${patientId}/consent`)
+  getPatientConsent: (participantId: string) => api.get<{ success: boolean; data: PatientConsent }>(`/patients/${participantId}/consent`)
 };
 
 // ========== IMPORT LGPD SERVICES ==========

@@ -232,3 +232,12 @@ Classification:
 - PR 102 - Canonicalize frontend intake and active views
 - PR 103 - Remove inactive legacy runtime files
 - PR 104 - Build aggregate/domain matrix
+
+## PR 100 - Participant flow canonicalization
+
+- Files treated: `api/backend/src/models/Patient.js`, `api/backend/src/services/patient.service.js`, `api/backend/src/services/PatientIdentityService.js`, `api/backend/src/utils/patientAnonymization.js`, `api/backend/src/controllers/paciente.controller.js`, `frontend/src/hooks/usePatients.ts`, `frontend/src/views/PatientsPage.tsx`, `frontend/src/components/UI/PatientSearchInput.tsx`, `frontend/src/services/api.ts`.
+- Aliases removed from participant runtime: `patientID`, `patientId`, `pseudoId`, `cpf`, `representativeCpf`.
+- Aliases remaining outside scope: specimen/sample/report/intake and historical docs still contain legacy participant vocabulary.
+- Route decisions: patient routes keep historical names, but request payloads are canonical and alias payloads return 422 `NON_CANONICAL_FIELD`.
+- Tests added: participant architecture gate and canonical alias rejection unit tests.
+- Risks: sample-boundary adapters, consent boundary helpers, and legacy import paths still carry participant vocabulary outside the participant runtime slice.

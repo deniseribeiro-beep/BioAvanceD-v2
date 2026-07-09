@@ -32,6 +32,18 @@ class ParticipantModel {
   }
 
   static create(data = {}) {
+    const allowed = new Set([
+      'participantId','patientName','birthDate','sex','email','phone','identityDocument','recordNumber','clinicalUnitId','clinicalUnit','unitAcronym','isDeceased','representativeName','representativeEmail','representativeIdentityDocument','representativePhone','consentTemplateId','status','consentToken','consentTokenCreatedAt','consentTokenExpiresAt','consentNotifiedAt','consentAcceptedAt','createdAt','updatedAt','anamneseGeral','dadosEspecificos'
+    ]);
+    const unexpectedFields = Object.keys(data).filter((key) => !allowed.has(key));
+    if (unexpectedFields.length > 0) {
+      const error = new Error('Payload contém campos não canônicos');
+      error.statusCode = 422;
+      error.code = 'NON_CANONICAL_FIELD';
+      error.fields = unexpectedFields;
+      throw error;
+    }
+
     const normalized = {
       participantId: String(data.participantId || '').trim(),
       patientName: String(data.patientName || '').trim(),

@@ -59,6 +59,15 @@ This branch establishes the foundation of the canonical data contract and remove
 - PR 103 - Remove inactive legacy runtime files
 - PR 104 - Build aggregate/domain matrix
 
+## PR 100 - Participant flow canonicalization
+
+- Files treated: `api/backend/src/models/Patient.js`, `api/backend/src/services/patient.service.js`, `api/backend/src/services/PatientIdentityService.js`, `api/backend/src/utils/patientAnonymization.js`, `api/backend/src/controllers/paciente.controller.js`, `frontend/src/hooks/usePatients.ts`, `frontend/src/views/PatientsPage.tsx`, `frontend/src/components/UI/PatientSearchInput.tsx`, `frontend/src/services/api.ts`.
+- Aliases removed from participant runtime: `patientID`, `patientId`, `pseudoId`, `cpf`, `representativeCpf`.
+- Aliases that remain outside this PR: specimen/sample/intake/report legacy surfaces and documentation.
+- Routing decision: retain historical route names, but reject non-canonical participant payloads with 422 instead of converting them.
+- Tests added: participant architecture gate and negative canonical alias tests.
+- Risks: some active non-participant surfaces still carry legacy vocabulary and are intentionally deferred to PR 101-104.
+
 ## Execution order
 
 1. Freeze canonical names and block aliases at the intake boundary.
