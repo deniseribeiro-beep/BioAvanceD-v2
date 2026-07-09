@@ -4,7 +4,6 @@ import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 
 const sampleService = require('../../src/services/sample.service');
-const fhirSyncService = require('../../src/services/fhir-sync.service');
 
 function makeCursor(docs = []) {
   const cursor = {
@@ -51,7 +50,7 @@ function makeDb(overrides = {}) {
 
 function validSampleData(overrides = {}) {
   return {
-    patientID: '12345678',
+    participantId: '12345678',
     sampleType: 'PLASMA',
     sampleOrigin: 'VENOUS_BLOOD',
     extractionProtocol: 'TUBE_EDTA',
@@ -59,21 +58,25 @@ function validSampleData(overrides = {}) {
     quality: 'GOOD',
     linkedProject: 'ProjectX',
     barcode: 'BR-TEST-001',
-    sampleID: 555001,
-    registerDate: new Date('2024-01-01'),
+    specimenId: 555001,
+    locationID: 1,
+    registeredAt: new Date('2024-01-01'),
     ...overrides
   };
+}
+
+function mockOperationalLocation(db) {
+  db.collections.patients.findOne.mockResolvedValue({ participantId: '12345678' });
+  db.collections.locations.findOne.mockResolvedValue({ locationID: 1 });
+  db.collection.mockImplementation((name) => {
+    if (name === 'sensors') return { findOne: vi.fn().mockResolvedValue({ status: 'ok' }) };
+    return db.collections[name] || (db.collections[name] = makeCollection(name));
+  });
 }
 
 describe('sample.service', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
-    // Default fhir-sync spies: pretend FHIR-first paths are inactive unless a
-    // test opts in explicitly, so that legacy-collection logic is exercised.
-    vi.spyOn(fhirSyncService, 'getSampleFhirFirst').mockResolvedValue(null);
-    vi.spyOn(fhirSyncService, 'listSamplesFhirFirst').mockResolvedValue(null);
-    vi.spyOn(fhirSyncService, 'getSampleByBarcodeFhirFirst').mockResolvedValue(null);
-    vi.spyOn(fhirSyncService, 'upsertSampleFromLegacy').mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -84,12 +87,8 @@ describe('sample.service', () => {
   describe('createSample', () => {
     it('creates a sample and appends a birth movement to the ledger', async () => {
       const db = makeDb();
-      db.collections.patients.findOne.mockResolvedValue({ patientID: '12345678' });
+      mockOperationalLocation(db);
 
-      // NOTE: this test is currently blocked by #119 (validSampleData() predates
-      // the now-required locationID/location validation chain) and fails before
-      // reaching the assertions below regardless of this fix — tracked separately,
-      // not fixed here to stay scoped to #111.
       const result = await sampleService.createSample(db, validSampleData());
 
       expect(result._id).toBe('generated-id');
@@ -98,26 +97,6 @@ describe('sample.service', () => {
       expect(db.collections.sample_movements.insertOne).toHaveBeenCalledTimes(1);
       const [movementArg] = db.collections.sample_movements.insertOne.mock.calls[0];
       expect(movementArg.type).toBe('create');
-      // Issue #111: upsertSampleFromLegacy is a no-op boundary stub (fhir-sync.service.js)
-      // since main's canonical-cleanup rewrite; sample creation no longer calls it.
-      expect(fhirSyncService.upsertSampleFromLegacy).not.toHaveBeenCalled();
-    });
-
-    it('does not call the FHIR boundary stub on creation (#111)', async () => {
-      // Self-contained repro for #111 that doesn't depend on validSampleData()
-      // (blocked separately by #119) — mocks the full location/sensor chain so
-      // createSample actually reaches the code path the fix touches.
-      const db = makeDb();
-      db.collections.patients.findOne.mockResolvedValue({ patientID: '12345678' });
-      db.collections.locations.findOne.mockResolvedValue({ locationID: 1 });
-      db.collection.mockImplementation((name) => {
-        if (name === 'sensors') return { findOne: vi.fn().mockResolvedValue({ status: 'ok' }) };
-        return db.collections[name] || (db.collections[name] = makeCollection(name));
-      });
-
-      await sampleService.createSample(db, validSampleData({ locationID: 1 }));
-
-      expect(fhirSyncService.upsertSampleFromLegacy).not.toHaveBeenCalled();
     });
 
     it('rejects with 422 when required MIABIS fields are missing', async () => {
@@ -131,8 +110,9 @@ describe('sample.service', () => {
       expect(db.collections.samples.insertOne).not.toHaveBeenCalled();
     });
 
-    it('rejects with 404 when the patient does not exist', async () => {
+    it('rejects with 404 when the participant does not exist', async () => {
       const db = makeDb();
+      mockOperationalLocation(db);
       db.collections.patients.findOne.mockResolvedValue(null); // not found
 
       await expect(sampleService.createSample(db, validSampleData())).rejects.toMatchObject({
@@ -142,7 +122,7 @@ describe('sample.service', () => {
 
     it('rejects when the barcode is already taken', async () => {
       const db = makeDb();
-      db.collections.patients.findOne.mockResolvedValue({ patientID: '12345678' });
+      mockOperationalLocation(db);
       db.collections.samples.findOne.mockResolvedValueOnce({ barcode: 'BR-TEST-001' }); // barcode dup check
 
       await expect(sampleService.createSample(db, validSampleData())).rejects.toThrow(
@@ -150,34 +130,42 @@ describe('sample.service', () => {
       );
     });
 
-    it('rejects when the sampleID is already taken', async () => {
+    it('rejects when the specimenId is already taken', async () => {
       const db = makeDb();
-      db.collections.patients.findOne.mockResolvedValue({ patientID: '12345678' });
+      mockOperationalLocation(db);
       db.collections.samples.findOne
         .mockResolvedValueOnce(null) // barcode dup check passes
-        .mockResolvedValueOnce({ sampleID: 555001 }); // sampleID dup check
+        .mockResolvedValueOnce({ specimenId: 555001 }); // specimenId dup check
 
       await expect(sampleService.createSample(db, validSampleData())).rejects.toThrow(
-        /Já existe uma amostra com o ID/
+        /Já existe um espécime com o ID/
       );
     });
 
-    it('rejects with 404 when locationID is provided but does not exist', async () => {
+    it('rejects when locationID is missing', async () => {
       const db = makeDb();
-      db.collections.patients.findOne.mockResolvedValue({ patientID: '12345678' });
+
+      await expect(
+        sampleService.createSample(db, validSampleData({ locationID: undefined }))
+      ).rejects.toMatchObject({ statusCode: 400 });
+    });
+
+    it('rejects when locationID is provided but does not exist', async () => {
+      const db = makeDb();
+      db.collections.patients.findOne.mockResolvedValue({ participantId: '12345678' });
       db.collections.locations.findOne.mockResolvedValue(null);
 
       await expect(
         sampleService.createSample(db, validSampleData({ locationID: 42 }))
-      ).rejects.toMatchObject({ statusCode: 404 });
+      ).rejects.toMatchObject({ statusCode: 422 });
     });
 
     it('rejects with 409 when the physical storage position is already occupied', async () => {
       const db = makeDb();
-      db.collections.patients.findOne.mockResolvedValue({ patientID: '12345678' });
+      mockOperationalLocation(db);
       db.collections.samples.findOne.mockImplementation((query) => {
         if (query && query['location.status'] === 'Occupied') {
-          return Promise.resolve({ sampleID: 'other-sample' });
+          return Promise.resolve({ specimenId: 'other-sample' });
         }
         return Promise.resolve(null);
       });
@@ -192,7 +180,7 @@ describe('sample.service', () => {
 
     it('rolls back the inserted sample when the ledger append fails', async () => {
       const db = makeDb();
-      db.collections.patients.findOne.mockResolvedValue({ patientID: '12345678' });
+      mockOperationalLocation(db);
       db.collections.sample_movements.insertOne.mockRejectedValue(new Error('ledger down'));
 
       await expect(sampleService.createSample(db, validSampleData())).rejects.toThrow(
@@ -348,21 +336,13 @@ describe('sample.service', () => {
 
   // -------------------------------------------------------------------
   describe('getSample', () => {
-    it('returns the FHIR-first result when present', async () => {
+    it('returns the sample by specimenId', async () => {
       const db = makeDb();
-      fhirSyncService.getSampleFhirFirst.mockResolvedValue({ _id: 'fhir-1', barcode: 'X' });
+      db.collections.samples.findOne.mockResolvedValue({ _id: 'sample-1', specimenId: 'sample-1' });
 
-      const result = await sampleService.getSample(db, 'fhir-1');
-      expect(result._id).toBe('fhir-1');
-      expect(db.collections.samples.findOne).not.toHaveBeenCalled();
-    });
-
-    it('falls back to the legacy collection when FHIR-first returns nothing', async () => {
-      const db = makeDb();
-      db.collections.samples.findOne.mockResolvedValue({ _id: 'legacy-1' });
-
-      const result = await sampleService.getSample(db, 'legacy-1');
-      expect(result._id).toBe('legacy-1');
+      const result = await sampleService.getSample(db, 'sample-1');
+      expect(result._id).toBe('sample-1');
+      expect(db.collections.samples.findOne).toHaveBeenCalledWith({ specimenId: 'sample-1' });
     });
   });
 
@@ -370,26 +350,26 @@ describe('sample.service', () => {
   describe('listSamples', () => {
     it('builds a filtered query and returns paginated results', async () => {
       const db = makeDb();
-      const cursor = makeCursor([{ sampleID: 1 }]);
+      const cursor = makeCursor([{ specimenId: 1 }]);
       db.collections.samples.find.mockReturnValue(cursor);
       db.collections.samples.countDocuments.mockResolvedValue(1);
 
       const result = await sampleService.listSamples(db, {
-        patientID: '12345678',
-        currentStatus: 'Available',
+        participantId: '12345678',
+        lifecycleStatus: 'AVAILABLE',
         sampleType: 'PLASMA',
         limit: 5,
         skip: 1
       });
 
       expect(db.collections.samples.find).toHaveBeenCalledWith({
-        patientID: '12345678',
-        currentStatus: 'Available',
+        participantId: '12345678',
+        lifecycleStatus: 'AVAILABLE',
         sampleType: 'PLASMA'
       });
       expect(cursor.limit).toHaveBeenCalledWith(5);
       expect(cursor.skip).toHaveBeenCalledWith(1);
-      expect(result).toEqual({ samples: [{ sampleID: 1 }], total: 1, limit: 5, skip: 1 });
+      expect(result).toEqual({ samples: [{ specimenId: 1 }], total: 1, limit: 5, skip: 1 });
     });
 
     it('applies default limit/skip when not specified', async () => {
@@ -418,7 +398,7 @@ describe('sample.service', () => {
         quantity: 10,
         originalQuantity: 10,
         availableQuantity: 10,
-        status: 'AVAILABLE'
+        lifecycleStatus: 'AVAILABLE'
       };
       db.collections.samples.findOne
         .mockResolvedValueOnce(existing) // initial lookup
@@ -428,8 +408,7 @@ describe('sample.service', () => {
 
       expect(db.collections.samples.updateOne).toHaveBeenCalledTimes(1);
       const [, updateArg] = db.collections.samples.updateOne.mock.calls[0];
-      expect(updateArg.$set.status).toBe('PARTIAL');
-      expect(updateArg.$set.currentStatus).toBe('PartiallyWithdrawn');
+      expect(updateArg.$set.lifecycleStatus).toBe('PARTIAL');
       expect(result.availableQuantity).toBe(4);
     });
 
@@ -462,23 +441,23 @@ describe('sample.service', () => {
 
   // -------------------------------------------------------------------
   describe('getSampleByBarcode', () => {
-    it('returns the sample and an anonymized patient on exact match', async () => {
+    it('returns the sample and an anonymized participant on exact match', async () => {
       const db = makeDb();
       db.collections.samples.findOne.mockResolvedValueOnce({
         _id: 's1',
         barcode: 'BR-1',
-        patientID: '12345678'
+        participantId: '12345678'
       });
       db.collections.patients.findOne.mockResolvedValue({
-        patientID: '12345678',
+        participantId: '12345678',
         patientName: 'Maria Silva',
         recordNumber: 'RN1'
       });
 
-      const { sample, patient } = await sampleService.getSampleByBarcode(db, 'BR-1');
+      const { sample, participant } = await sampleService.getSampleByBarcode(db, 'BR-1');
       expect(sample._id).toBe('s1');
-      expect(patient.patientName).toBe('M. S.');
-      expect(patient.patientID).toBe('12345678');
+      expect(participant.patientName).toBe('M. S.');
+      expect(participant.participantId).toBe('12345678');
     });
 
     it('returns nulls when no sample matches any lookup strategy', async () => {
@@ -486,7 +465,7 @@ describe('sample.service', () => {
       // all findOne calls resolve null (default), find() for the debug-log
       // examples query resolves an empty cursor by default too
       const result = await sampleService.getSampleByBarcode(db, 'DOES-NOT-EXIST');
-      expect(result).toEqual({ sample: null, patient: null });
+      expect(result).toEqual({ sample: null, participant: null });
     });
   });
 
@@ -503,12 +482,12 @@ describe('sample.service', () => {
 
     it('returns the results linked to the sample', async () => {
       const db = makeDb();
-      db.collections.samples.findOne.mockResolvedValue({ _id: 's1', sampleID: 555001 });
+      db.collections.samples.findOne.mockResolvedValue({ _id: 's1', specimenId: 555001 });
       db.collections.results.find.mockReturnValue(makeCursor([{ resultID: 'r1' }]));
 
       const results = await sampleService.getSampleResults(db, 's1');
       expect(results).toEqual([{ resultID: 'r1' }]);
-      expect(db.collections.results.find).toHaveBeenCalledWith({ sampleID: 555001 });
+      expect(db.collections.results.find).toHaveBeenCalledWith({ specimenId: 555001 });
     });
   });
 
@@ -673,7 +652,7 @@ describe('sample.service', () => {
 
   // -------------------------------------------------------------------
   describe('getSampleMovements', () => {
-    it('queries movements by sampleID/barcode and sorts by newest first', async () => {
+    it('queries movements by specimenId/barcode and sorts by newest first', async () => {
       const db = makeDb();
       const cursor = makeCursor([{ movementID: 2 }, { movementID: 1 }]);
       db.collections.sample_movements.find.mockReturnValue(cursor);
@@ -681,7 +660,7 @@ describe('sample.service', () => {
       const movements = await sampleService.getSampleMovements(db, 'sample-1');
 
       expect(db.collections.sample_movements.find).toHaveBeenCalledWith({
-        $or: [{ sampleID: 'sample-1' }, { barcode: 'sample-1' }]
+        $or: [{ specimenId: 'sample-1' }, { barcode: 'sample-1' }]
       });
       expect(cursor.sort).toHaveBeenCalledWith({ timestamp: -1 });
       expect(movements).toEqual([{ movementID: 2 }, { movementID: 1 }]);
@@ -690,21 +669,21 @@ describe('sample.service', () => {
 
   // -------------------------------------------------------------------
   describe('findAvailableSamplesForResearch', () => {
-    it('forces currentStatus to AVAILABLE even if the caller requests something else', async () => {
+    it('forces lifecycleStatus to AVAILABLE even if the caller requests something else', async () => {
       const db = makeDb();
-      const cursor = makeCursor([{ currentStatus: 'AVAILABLE' }]);
+      const cursor = makeCursor([{ lifecycleStatus: 'AVAILABLE' }]);
       db.collections.samples.find.mockReturnValue(cursor);
 
       const result = await sampleService.findAvailableSamplesForResearch(db, {
-        currentStatus: 'QUARANTINED',
+        lifecycleStatus: 'QUARANTINED',
         sampleType: 'PLASMA'
       });
 
       expect(db.collections.samples.find).toHaveBeenCalledWith({
         sampleType: 'PLASMA',
-        currentStatus: 'AVAILABLE'
+        lifecycleStatus: 'AVAILABLE'
       });
-      expect(result).toEqual([{ currentStatus: 'AVAILABLE' }]);
+      expect(result).toEqual([{ lifecycleStatus: 'AVAILABLE' }]);
     });
   });
 });
