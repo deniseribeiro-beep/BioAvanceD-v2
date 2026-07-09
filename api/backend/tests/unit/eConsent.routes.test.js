@@ -10,7 +10,7 @@ process.env.CONSENT_SECRET = process.env.CONSENT_SECRET || 'test-consent-secret'
 
 const PatientModel = require('../../src/models/Patient');
 const Sample = require('../../src/models/Sample');
-const connection = require('../../src/infrastructure/database/neo4j/connection');
+const consentService = require('../../src/services/consent.service');
 
 const authPath = require.resolve('../../src/infrastructure/middleware/auth');
 const rbacPath = require.resolve('../../src/infrastructure/middleware/rbac');
@@ -72,14 +72,14 @@ describe('eConsent.routes POST /generate-link', () => {
     expect(res.status).toBe(401);
   });
 
-  it('returns 400 when patientId or email is missing', async () => {
+  it('returns 400 when participantId or email is missing', async () => {
     const router = loadAuthenticatedRouter();
     const app = buildApp(router);
 
     const res = await request(app).post('/e-consent/generate-link').send({ email: 'a@b.com' });
 
     expect(res.status).toBe(400);
-    expect(res.body).toEqual({ error: 'patientId e email obrigatórios' });
+    expect(res.body).toEqual({ error: 'participantId e email obrigatórios' });
   });
 
   it('returns 404 when the patient does not exist', async () => {
@@ -90,22 +90,22 @@ describe('eConsent.routes POST /generate-link', () => {
 
     const res = await request(app)
       .post('/e-consent/generate-link')
-      .send({ patientId: '12345678', email: 'a@b.com' });
+      .send({ participantId: '12345678', email: 'a@b.com' });
 
     expect(res.status).toBe(404);
-    expect(findOne).toHaveBeenCalledWith({ patientID: '12345678' });
+    expect(findOne).toHaveBeenCalledWith({ participantId: '12345678' });
   });
 
   it('returns 403 when email does not match the patient on file', async () => {
     const router = loadAuthenticatedRouter();
-    const patient = { patientID: '12345678', email: 'real-owner@example.com' };
+    const patient = { participantId: '12345678', email: 'real-owner@example.com' };
     const findOne = vi.fn().mockResolvedValue(patient);
     const db = { collection: vi.fn().mockReturnValue({ findOne }) };
     const app = buildApp(router, db);
 
     const res = await request(app)
       .post('/e-consent/generate-link')
-      .send({ patientId: '12345678', email: 'attacker@evil.com' });
+      .send({ participantId: '12345678', email: 'attacker@evil.com' });
 
     expect(res.status).toBe(403);
   });
@@ -116,20 +116,20 @@ describe('eConsent.routes POST /generate-link', () => {
     const sendConsentEmailSpy = vi
       .spyOn(notificationService, 'sendConsentEmail')
       .mockResolvedValue({ channel: 'email', success: true, provider: 'resend' });
-    const patient = { patientID: '12345678', email: 'a@b.com' };
+    const patient = { participantId: '12345678', email: 'a@b.com' };
     const findOne = vi.fn().mockResolvedValue(patient);
     const db = { collection: vi.fn().mockReturnValue({ findOne }) };
     const app = buildApp(router, db);
 
     const res = await request(app)
       .post('/e-consent/generate-link')
-      .send({ patientId: '12345678', email: 'a@b.com' });
+      .send({ participantId: '12345678', email: 'a@b.com' });
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
     expect(res.body.link).toContain('/patient/e-consent/');
     expect(sendConsentEmailSpy).toHaveBeenCalledWith(
-      { patientID: '12345678', email: 'a@b.com' },
+      { participantId: '12345678', email: 'a@b.com' },
       res.body.link
     );
 
@@ -161,16 +161,16 @@ describe('eConsent.routes GET /validate/:token', () => {
   });
 
   it('returns the patient and consents for a valid token', async () => {
-    const patient = { patientID: '12345678', name: 'Jane Doe', consents: [{ key: 'general', status: 'ACTIVE' }] };
+    const patient = { participantId: '12345678', name: 'Jane Doe', consents: [{ key: 'general', status: 'ACTIVE' }] };
     const findOne = vi.fn().mockResolvedValue(patient);
     const db = { collection: vi.fn().mockReturnValue({ findOne }) };
     const app = buildApp(loadRealAuthRouter(), db);
-    const token = signToken({ patientId: '12345678' });
+    const token = signToken({ participantId: '12345678' });
 
     const res = await request(app).get(`/e-consent/validate/${token}`);
 
     expect(db.collection).toHaveBeenCalledWith('patients');
-    expect(findOne).toHaveBeenCalledWith({ patientID: '12345678' });
+    expect(findOne).toHaveBeenCalledWith({ participantId: '12345678' });
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ patient, consents: patient.consents });
   });
@@ -179,7 +179,7 @@ describe('eConsent.routes GET /validate/:token', () => {
     const findOne = vi.fn().mockResolvedValue(null);
     const db = { collection: vi.fn().mockReturnValue({ findOne }) };
     const app = buildApp(loadRealAuthRouter(), db);
-    const token = signToken({ patientId: 'no-such-patient' });
+    const token = signToken({ participantId: 'no-such-patient' });
 
     const res = await request(app).get(`/e-consent/validate/${token}`);
 
@@ -189,12 +189,9 @@ describe('eConsent.routes GET /validate/:token', () => {
 });
 
 describe('eConsent.routes POST /update', () => {
-  let fakeSession;
-
   beforeEach(() => {
-    fakeSession = { run: vi.fn().mockResolvedValue({}), close: vi.fn().mockResolvedValue() };
-    vi.spyOn(connection, 'getNeo4jDriver').mockReturnValue({ session: () => fakeSession });
     vi.spyOn(Sample, 'updateMany').mockResolvedValue({ modifiedCount: 1 });
+    vi.spyOn(consentService, 'recordConsentProjectionEvent').mockResolvedValue(null);
   });
 
   afterEach(() => {
@@ -211,9 +208,16 @@ describe('eConsent.routes POST /update', () => {
     expect(res.body).toEqual({ error: 'Token inválido ou expirado' });
   });
 
-  it('merges each consent via a Neo4j MERGE statement and returns success', async () => {
-    const app = buildApp(loadRealAuthRouter());
-    const token = signToken({ patientId: '12345678' });
+  // Fluxo canônico (src/routes/eConsent.js ~line 50): Mongo persistence is
+  // the source of truth; Neo4j projection happens via the outbox
+  // (consentService.recordConsentProjectionEvent), not a direct Cypher
+  // MERGE from this route. The route passes `db` from
+  // req.app.locals.mongoDb || req.app.locals.db, so a db must be present
+  // on the app for this call to fire (see the guard in the route).
+  it('records a consent projection event via consentService and returns success', async () => {
+    const db = { collection: vi.fn() };
+    const app = buildApp(loadRealAuthRouter(), db);
+    const token = signToken({ participantId: '12345678' });
 
     const res = await request(app)
       .post('/e-consent/update')
@@ -221,16 +225,15 @@ describe('eConsent.routes POST /update', () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ success: true });
-    expect(fakeSession.run).toHaveBeenCalledWith(
-      expect.stringContaining('MERGE (p:Patient'),
-      { patientId: '12345678', key: 'general', status: 'PENDING' }
-    );
-    expect(fakeSession.close).toHaveBeenCalledTimes(1);
+    expect(consentService.recordConsentProjectionEvent).toHaveBeenCalledWith(db, {
+      participantId: '12345678',
+      consents: [{ key: 'general', status: 'PENDING' }],
+    });
   });
 
-  it('quarantines samples in Neo4j and MongoDB when any consent is REVOKED', async () => {
+  it('quarantines samples in MongoDB when any consent is REVOKED', async () => {
     const app = buildApp(loadRealAuthRouter());
-    const token = signToken({ patientId: '12345678' });
+    const token = signToken({ participantId: '12345678' });
     const emit = vi.fn();
     const io = { to: vi.fn().mockReturnValue({ emit }) };
     app.set('io', io);
@@ -240,21 +243,17 @@ describe('eConsent.routes POST /update', () => {
       .send({ token, consents: [{ key: 'general', status: 'REVOKED' }] });
 
     expect(res.status).toBe(200);
-    expect(fakeSession.run).toHaveBeenCalledWith(
-      expect.stringContaining('QUARANTINED'),
-      { patientId: '12345678' }
-    );
     expect(Sample.updateMany).toHaveBeenCalledWith(
-      { patientID: '12345678' },
+      { participantId: '12345678' },
       { $set: { status: 'QUARANTINED' } }
     );
     expect(io.to).toHaveBeenCalledWith('patient-12345678');
-    expect(emit).toHaveBeenCalledWith('sample-quarantined', { patientId: '12345678' });
+    expect(emit).toHaveBeenCalledWith('sample-quarantined', { participantId: '12345678' });
   });
 
   it('releases quarantined samples when every consent is ACTIVE or GRANTED', async () => {
     const app = buildApp(loadRealAuthRouter());
-    const token = signToken({ patientId: '12345678' });
+    const token = signToken({ participantId: '12345678' });
     const emit = vi.fn();
     const io = { to: vi.fn().mockReturnValue({ emit }) };
     app.set('io', io);
@@ -270,21 +269,17 @@ describe('eConsent.routes POST /update', () => {
       });
 
     expect(res.status).toBe(200);
-    expect(fakeSession.run).toHaveBeenCalledWith(
-      expect.stringContaining('AVAILABLE'),
-      { patientId: '12345678' }
-    );
     expect(Sample.updateMany).toHaveBeenCalledWith(
-      { patientID: '12345678', status: 'QUARANTINED' },
+      { participantId: '12345678', status: 'QUARANTINED' },
       { $set: { status: 'AVAILABLE', updatedAt: expect.any(Date) } }
     );
     expect(io.to).toHaveBeenCalledWith('patient-12345678');
-    expect(emit).toHaveBeenCalledWith('sample-released', { patientId: '12345678' });
+    expect(emit).toHaveBeenCalledWith('sample-released', { participantId: '12345678' });
   });
 
   it('neither quarantines nor releases when consents are a mix of other statuses', async () => {
     const app = buildApp(loadRealAuthRouter());
-    const token = signToken({ patientId: '12345678' });
+    const token = signToken({ participantId: '12345678' });
 
     const res = await request(app)
       .post('/e-consent/update')
@@ -297,14 +292,12 @@ describe('eConsent.routes POST /update', () => {
       });
 
     expect(res.status).toBe(200);
-    // Only the per-consent MERGE calls happened; no quarantine/release run.
-    expect(fakeSession.run).toHaveBeenCalledTimes(2);
     expect(Sample.updateMany).not.toHaveBeenCalled();
   });
 
   it('no-ops the socket emit when no io instance is registered on the app', async () => {
     const app = buildApp(loadRealAuthRouter());
-    const token = signToken({ patientId: '12345678' });
+    const token = signToken({ participantId: '12345678' });
 
     const res = await request(app)
       .post('/e-consent/update')
