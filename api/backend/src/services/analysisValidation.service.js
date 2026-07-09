@@ -21,7 +21,22 @@ class AnalysisValidationService {
       // Tenta buscar por ObjectId
       if (ObjectId.isValid(sampleIdentifier)) {
         sample = await samplesCollection.findOne({ _id: new ObjectId(sampleIdentifier) });
-        if (sample) return { success: true, sample };
+        if (sample) {
+          // Um sampleID/barcode que coincide (por acaso ou de forma maliciosa) com o
+          // formato de ObjectId de OUTRA amostra não deve vencer silenciosamente: falha
+          // fechado em vez de anexar o upload à amostra errada (issue #34).
+          const collision = await samplesCollection.findOne({
+            _id: { $ne: sample._id },
+            $or: [{ sampleID: sampleIdentifier }, { barcode: sampleIdentifier }]
+          });
+          if (collision) {
+            return {
+              success: false,
+              error: `Identificador "${sampleIdentifier}" é ambíguo: corresponde ao ID interno de uma amostra e ao sampleID/barcode de outra. Contate o suporte.`
+            };
+          }
+          return { success: true, sample };
+        }
       }
 
       // Tenta buscar por sampleID (ex: "00001")

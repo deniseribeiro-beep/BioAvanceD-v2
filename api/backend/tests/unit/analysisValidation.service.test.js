@@ -36,15 +36,16 @@ describe('analysisValidationService.validateSampleExists', () => {
   it('finds a sample by ObjectId when the identifier is a valid ObjectId string', async () => {
     const oid = new ObjectId();
     const sampleDoc = { _id: oid, sampleID: '00001' };
-    const db = createDb({
-      samples: { findOne: vi.fn().mockResolvedValue(sampleDoc) }
-    });
+    const findOne = vi.fn()
+      .mockResolvedValueOnce(sampleDoc) // _id hit
+      .mockResolvedValueOnce(null); // collision check: no other sample matches
+    const db = createDb({ samples: { findOne } });
 
     const result = await analysisValidationService.validateSampleExists(db, oid.toString());
 
     expect(result).toEqual({ success: true, sample: sampleDoc });
-    expect(db.__samplesCollection.findOne).toHaveBeenCalledWith({ _id: expect.any(ObjectId) });
-    expect(db.__samplesCollection.findOne).toHaveBeenCalledTimes(1);
+    expect(findOne).toHaveBeenNthCalledWith(1, { _id: expect.any(ObjectId) });
+    expect(findOne).toHaveBeenCalledTimes(2);
   });
 
   it('falls back to sampleID lookup when identifier is not a valid ObjectId', async () => {
@@ -89,6 +90,23 @@ describe('analysisValidationService.validateSampleExists', () => {
 
     expect(result).toEqual({ success: true, sample: sampleDoc });
     expect(findOne).toHaveBeenCalledTimes(3);
+  });
+
+  it('fails closed instead of silently trusting the ObjectId match when the same identifier also matches a different sample by sampleID/barcode (issue #34)', async () => {
+    const oid = new ObjectId();
+    const idMatch = { _id: oid, sampleID: 'S-BY-ID' };
+    const otherSample = { _id: new ObjectId(), barcode: oid.toString() };
+    const findOne = vi.fn()
+      .mockResolvedValueOnce(idMatch) // _id hit
+      .mockResolvedValueOnce(otherSample); // collision check: a different sample matches by barcode/sampleID
+
+    const db = createDb({ samples: { findOne } });
+
+    const result = await analysisValidationService.validateSampleExists(db, oid.toString());
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/ambígu/i);
+    expect(findOne).toHaveBeenCalledTimes(2);
   });
 
   it('returns a not-found failure (distinct message) when no strategy matches', async () => {
