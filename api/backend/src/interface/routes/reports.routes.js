@@ -113,8 +113,8 @@ function buildSampleQuery(filters = {}) {
     const cleanedOrpha = orphaCode.replace(/^ORPHA:/i, '');
     conditions.push({
       $or: [
-        { 'clinical_data.orphaCode': cleanedOrpha },
-        { 'clinical_data.orphaCode': toRegex(cleanedOrpha) },
+        { 'clinicalData.orphaCode': cleanedOrpha },
+        { 'clinicalData.orphaCode': toRegex(cleanedOrpha) },
         { orphaCode: toRegex(cleanedOrpha) },
       ],
     });
@@ -126,17 +126,16 @@ function buildSampleQuery(filters = {}) {
     const drugRegex = toRegex(cleanedDrug);
     conditions.push({
       $or: [
-        { 'pharmacology_data.atc_code': drugRegex },
-        { 'pharmacology_data.medication_code': drugRegex },
-        { 'pharmacology_data.drug_name': drugRegex },
-        { 'pharmacology_data.medication_name': drugRegex },
+        { 'pharmacologyData.atcCode': drugRegex },
+        { 'pharmacologyData.medicationName': drugRegex },
+        { 'pharmacologyData.atcClass': drugRegex },
       ],
     });
   }
 
   const treatmentStatus = normalizeTreatmentStatus(filters.treatmentStatus);
   if (treatmentStatus) {
-    conditions.push({ 'pharmacology_data.treatment_status': treatmentStatus });
+    conditions.push({ 'pharmacologyData.treatmentStatus': treatmentStatus });
   }
 
   const sprecMatrix = normalizeFilterText(filters.sprecMatrixType || filters.sprecMatrix || filters.matrixType).toLowerCase();
@@ -197,7 +196,7 @@ async function getMatchingPatientIds(samplesCollection, sampleQuery) {
     return [];
   }
 
-  const patientIds = await samplesCollection.distinct('patientID', sampleQuery);
+  const patientIds = await samplesCollection.distinct('participantId', sampleQuery);
   return Array.isArray(patientIds)
     ? patientIds.map((patientID) => String(patientID || '').trim()).filter(Boolean)
     : [];

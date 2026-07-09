@@ -39,9 +39,9 @@ class BiomarkerObservationModel {
   static validate(data = {}) {
     const errors = [];
 
-    const patientID = String(data.patientID || '').trim();
-    if (!/^\d{8}$/.test(patientID)) {
-      errors.push('patientID deve conter exatamente 8 dígitos numéricos');
+    const participantId = String(data.participantId || '').trim();
+    if (!participantId) {
+      errors.push('participantId é obrigatório');
     }
 
     const biomarkerType = String(data.biomarkerType || '').trim();
@@ -90,7 +90,7 @@ class BiomarkerObservationModel {
       isValid: errors.length === 0,
       errors,
       normalized: {
-        patientID,
+        participantId,
         biomarkerType,
         value: Number.isFinite(valueNumber) ? valueNumber : null,
         unit,
@@ -102,7 +102,7 @@ class BiomarkerObservationModel {
         patientObjectId: data.patientObjectId ? String(data.patientObjectId).trim() : null,
         specimenObjectId: data.specimenObjectId ? String(data.specimenObjectId).trim() : null,
         linkedResourceType: data.linkedResourceType ? String(data.linkedResourceType).trim() : 'Patient',
-        linkedResourceId: data.linkedResourceId ? String(data.linkedResourceId).trim() : patientID,
+        linkedResourceId: data.linkedResourceId ? String(data.linkedResourceId).trim() : participantId,
         sampleID: sampleID || null,
         sampleId: sampleID || null,
         specimenID: sampleID || null,
@@ -117,7 +117,7 @@ class BiomarkerObservationModel {
 
   static buildIdempotencyKey(normalized = {}) {
     return [
-      normalized.patientID,
+      normalized.participantId,
       normalized.sampleID || normalized.specimenID || normalized.linkedResourceId || '',
       normalized.biomarkerType,
       normalized.collectedAt?.toISOString() || '',
@@ -135,7 +135,7 @@ class BiomarkerObservationModel {
     const normalized = validation.normalized;
 
     return {
-      patientID: normalized.patientID,
+      participantId: normalized.participantId,
       biomarkerType: normalized.biomarkerType,
       value: normalized.value,
       unit: normalized.unit,

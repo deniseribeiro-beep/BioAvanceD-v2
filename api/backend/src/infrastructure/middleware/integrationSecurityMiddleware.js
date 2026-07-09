@@ -41,12 +41,12 @@ function consentBlockAlertWrapper(middleware) {
           if (db) {
             securityAlertsService.init(db);
             
-            const patientID = req.body?.patientID || req.params?.patientID || 'unknown';
+            const participantId = req.body?.participantId || req.params?.participantId || 'unknown';
             const userID = req.user?._id?.toString() || req.user?.id || 'anomino';
             
             // Registra alerta
             securityAlertsService.alertConsentBlocked(
-              patientID,
+              participantId,
               req.originalUrl,
               data.code || 'UNKNOWN_REASON',
               req.ip,
@@ -54,7 +54,7 @@ function consentBlockAlertWrapper(middleware) {
             ).catch(err => logger.error('[INTEGRATION] Erro ao registrar alerta:', err.message));
 
             // Detecção de atividades suspeitas (múltiplas tentativas)
-            const attemptKey = `${userID}:${patientID}`;
+            const attemptKey = `${userID}:${participantId}`;
             const attempts = req.app.locals.blockedAttempts.get(attemptKey) || [];
             attempts.push({ timestamp: new Date(), reason: data.code });
             req.app.locals.blockedAttempts.set(attemptKey, attempts);
@@ -65,7 +65,7 @@ function consentBlockAlertWrapper(middleware) {
 
             if (recentAttempts.length >= 3) {
               securityAlertsService.detectSuspiciousActivity(
-                patientID,
+                participantId,
                 userID,
                 recentAttempts,
                 req.ip,
@@ -95,7 +95,7 @@ function createSecurityIntegration(options = {}) {
   const {
     consentRequired = true,
     allowedScopes = ['uso_pesquisa'],
-    patientIdResolver = 'patientID',
+    participantIdResolver = 'participantId',
     alertOnBlock = true
   } = options;
 
@@ -111,7 +111,7 @@ function createSecurityIntegration(options = {}) {
       // Se consent é requerido, aplica middleware
       if (consentRequired) {
         const middleware = authConsent({
-          patientIdResolver,
+          participantIdResolver,
           allowedScopes,
           strictMode: true
         });
@@ -189,7 +189,7 @@ function applySecurityToAllCriticalRoutes(app) {
       integrateSecurityIntoRoute(app, route.path, route.method, {
         consentRequired: true,
         allowedScopes: route.scopes,
-        patientIdResolver: 'patientID',
+        participantIdResolver: 'participantId',
         alertOnBlock: true
       });
     } catch (error) {

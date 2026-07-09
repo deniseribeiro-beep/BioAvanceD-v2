@@ -218,7 +218,7 @@ export default function SamplesPageView({
               <th>{t('samples.tableHeaders.status')}</th>
               <th>{t('samples.tableHeaders.consent', 'TCLE')}</th>
               <th>{t('samples.volume')}</th>
-              <th>{t('samples.patientIdColumn')}</th>
+              <th>{t('samples.participantIdColumn')}</th>
               <th>{t('samples.tableHeaders.storage', 'Armazenagem')}</th>
               <th>{t('samples.tableHeaders.actions')}</th>
             </tr>
@@ -253,7 +253,7 @@ export default function SamplesPageView({
             ) : (
               filteredSamples.map((sample) => {
                 const { initial, current } = computeVolume(sample);
-                const patientId = sample.patientID ?? (sample as any).patient?.patientID;
+                const participantId = sample.participantId ?? (sample as any).patient?.participantId;
                 const isExpanded = expandedStorageSample?.id === sample.id;
 
                 return (
@@ -290,7 +290,7 @@ export default function SamplesPageView({
                           {initial.toLocaleString(language, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}
                         </strong>
                       </td>
-                      <td>{patientId ?? 'N/A'}</td>
+                      <td>{participantId ?? 'N/A'}</td>
                       <td style={{ fontSize: '0.92rem' }}>{getStorageLabel(sample, t)}</td>
                       <td>
                         <div className="samples-row-actions" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '0.4rem' }}>
@@ -382,7 +382,7 @@ export default function SamplesPageView({
           <div id="printable-area">
             {selectedSamples.map((sample) => {
               const barcodeValue = sample.barcode || sample.sampleID || sample.id;
-              const patientId = sample.patientID ?? (sample as any).patient?.patientID;
+              const participantId = sample.participantId ?? (sample as any).patient?.participantId;
 
               return (
                 <div key={sample.id} className="qr-label">
@@ -393,7 +393,7 @@ export default function SamplesPageView({
                       <Barcode value={String(barcodeValue)} height={42} width={1.4} displayValue={false} margin={0} />
                     </div>
                   )}
-                  <div className="qr-label__patient">{patientId ?? 'N/A'}</div>
+                  <div className="qr-label__patient">{participantId ?? 'N/A'}</div>
                 </div>
               );
             })}
@@ -461,3 +461,4 @@ function renderSampleBadges(sample: SampleWithId, t: TranslatorFn) {
     </span>
   ));
 }
+

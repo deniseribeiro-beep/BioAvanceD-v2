@@ -43,7 +43,7 @@ export function validateUserStatus(user: User): string {
  */
 export function registerPatient(patientData: Partial<Patient>): Patient {
   const newPatient: Patient = {
-    patientID: 0, // Será definido pelo backend
+    participantId: '',
     patientName: patientData.patientName || '',
     birthDate: patientData.birthDate || new Date().toISOString(),
     sex: patientData.sex || '',
@@ -82,7 +82,7 @@ export function registerPatient(patientData: Partial<Patient>): Patient {
  */
 export function registerSample(sampleData: Partial<Sample>): Sample {
   const newSample: Sample = {
-    patientID: sampleData.patientID || 0,
+    participantId: sampleData.participantId || '',
     sampleID: 0, // Será definido pelo backend
     sampleType: sampleData.sampleType || '',
     sampleOrigin: sampleData.sampleOrigin || '',

@@ -314,7 +314,7 @@ function buildImportConsentToken(record, batchId) {
       scope: 'fhir-import-consent',
       batchId: String(batchId || ''),
       recordId: String(record._id || ''),
-      patientId: String(record.normalized?.patientID || ''),
+      participantId: String(record.normalized?.participantId || ''),
     },
     getConsentSecret(),
     { expiresIn: '2h' }
@@ -345,7 +345,7 @@ function ensureImportConsentPayload(payload = {}) {
   return {
     batchId: String(payload.batchId || '').trim(),
     recordId: String(payload.recordId || '').trim(),
-    patientId: String(payload.patientId || '').trim(),
+    participantId: String(payload.participantId || '').trim(),
   };
 }
 
@@ -425,10 +425,10 @@ function buildBundleIndex(resources) {
 function normalizeSpecimen(specimen, index, bundleIndex) {
   const patientRef = normalizePatientRef(specimen.subject?.reference);
   const patient = bundleIndex.patients.get(patientRef) || null;
-  const sampleID = String(specimen.id || extractIdentifier(specimen) || '').trim();
-  const patientID = String(patient?.id || patientRef || extractIdentifier(patient || {}) || '').trim();
+  const specimenId = String(specimen.id || extractIdentifier(specimen) || '').trim();
+  const participantId = String(patient?.id || patientRef || extractIdentifier(patient || {}) || '').trim();
   const sampleType = String(specimen.type?.text || specimen.type?.coding?.[0]?.display || specimen.type?.coding?.[0]?.code || '').trim();
-  const collectionDate = specimen.collection?.collectedDateTime || specimen.collection?.collectedDate || specimen.receivedTime || null;
+  const collectionDate = specimen.collection?.collectedDateTime || specimen.collection?.collectedDate || specimen.receivedAt || null;
   const matrix = extensionValue(specimen, 'matrix');
   const storageTemperature = extensionValue(specimen, 'storage-temperature');
   const sprecsRaw = extensionValue(specimen, 'sprecs');
@@ -445,13 +445,13 @@ function normalizeSpecimen(specimen, index, bundleIndex) {
   const conditions = normalizeConditions(bundleIndex.conditionsByPatient.get(patientRef) || []);
   const observations = [
     ...(bundleIndex.observationsByPatient.get(patientRef) || []),
-    ...(bundleIndex.observationsBySpecimen.get(sampleID) || []),
+    ...(bundleIndex.observationsBySpecimen.get(specimenId) || []),
   ];
   const { biomarkers, phenotypes } = normalizeObservations(observations);
 
   const errors = [];
-  if (!sampleID) errors.push({ field: 'sampleID', message: 'sampleID é obrigatório no Specimen.id ou identifier.value.' });
-  if (!patientID) errors.push({ field: 'patientID', message: 'patientID é obrigatório em Specimen.subject.reference.' });
+  if (!specimenId) errors.push({ field: 'specimenId', message: 'specimenId é obrigatório no Specimen.id ou identifier.value.' });
+  if (!participantId) errors.push({ field: 'participantId', message: 'participantId é obrigatório em Specimen.subject.reference.' });
   if (!patient) errors.push({ field: 'patient', message: 'Specimen.subject.reference deve apontar para um recurso Patient no Bundle.' });
   if (!patientName) errors.push({ field: 'patientName', message: 'Nome do paciente é obrigatório no recurso Patient.' });
   if (!patientDocument) errors.push({ field: 'document', message: 'Documento/identificador do paciente é obrigatório.' });
@@ -478,14 +478,14 @@ function normalizeSpecimen(specimen, index, bundleIndex) {
     validationErrors: errors,
     warnings: consentSigned || errors.length > 0 ? [] : [{ field: 'consent', message: hasEmail ? 'TCLE ainda não enviado para assinatura.' : 'Registro sem e-mail fica em revisão.' }],
     normalized: {
-      patientID,
+      participantId,
       patientName,
       patientDocument,
       patientBirthDate: patient?.birthDate || null,
       patientSex: patient?.gender || null,
       patientEmail,
       patientPhone,
-      sampleID,
+      specimenId,
       sampleType,
       collectionDate,
       matrix,
@@ -713,7 +713,7 @@ async function sendConsents(db, batchIdRaw, options = {}) {
     try {
       const emailResult = await notificationService.sendConsentEmail(
         {
-          patientID: normalized.patientID,
+          participantId: normalized.participantId,
           patientName: normalized.patientName,
           email: normalized.patientEmail,
         },
@@ -729,7 +729,7 @@ async function sendConsents(db, batchIdRaw, options = {}) {
         tokenScope: 'fhir-import-consent',
         batchId: String(batchId),
         recordId: String(record._id),
-        patientId: String(normalized.patientID || ''),
+        participantId: String(normalized.participantId || ''),
         sentAt: new Date(),
         sentBy: options.userID || null,
         email: normalized.patientEmail,
@@ -753,7 +753,7 @@ async function sendConsents(db, batchIdRaw, options = {}) {
           },
         }
       );
-      await audit(db, 'FHIR_IMPORT_CONSENT_SENT', { batchId, recordId: record._id, patientID: normalized.patientID });
+      await audit(db, 'FHIR_IMPORT_CONSENT_SENT', { batchId, recordId: record._id, participantId: normalized.participantId });
       results.push({ recordId: record._id, status: STATUS.PENDING_CONSENT, sent: true });
     } catch (error) {
       logger.warn('[FHIR_IMPORT] Falha ao enviar TCLE do registro staging', {
@@ -790,11 +790,11 @@ async function sendConsents(db, batchIdRaw, options = {}) {
 async function validateImportConsentToken(db, tokenRaw) {
   const token = String(tokenRaw || '').trim();
   const payload = parseConsentToken(token);
-  const { batchId, recordId, patientId } = ensureImportConsentPayload(payload);
+  const { batchId, recordId, participantId } = ensureImportConsentPayload(payload);
   const batch = await collection(db, 'import_batches').findOne({ _id: toObjectId(batchId) });
   const record = await collection(db, 'import_staging_records').findOne({ _id: toObjectId(recordId), batchId: toObjectId(batchId) });
 
-  if (!batch || !record || String(record.normalized?.patientID || '') !== patientId) {
+  if (!batch || !record || String(record.normalized?.participantId || '') !== participantId) {
     const error = new Error('Registro FHIR de importação não encontrado.');
     error.statusCode = 404;
     throw error;
@@ -855,7 +855,7 @@ async function acceptImportConsentToken(db, tokenRaw) {
   await audit(db, 'FHIR_IMPORT_CONSENT_SIGNED', {
     batchId: record.batchId,
     recordId: record._id,
-    patientID: record.normalized?.patientID || null,
+    participantId: record.normalized?.participantId || null,
   });
 
   const refreshedRecord = await staging.findOne({ _id: record._id, batchId: record.batchId });
@@ -870,8 +870,8 @@ async function getConsentStatus(db, batchIdRaw) {
     records: records.map((record) => ({
       recordId: record._id,
       rowNumber: record.rowNumber,
-      sampleID: record.normalized?.sampleID || null,
-      patientID: record.normalized?.patientID || null,
+      specimenId: record.normalized?.specimenId || null,
+      participantId: record.normalized?.participantId || null,
       patientEmail: record.normalized?.patientEmail || null,
       status: record.status,
       consentTracking: record.consentTracking || null,
@@ -904,10 +904,10 @@ async function commitBatch(db, batchIdRaw) {
     const importedAt = new Date();
     const importedBy = String(batchInfo?.createdBy || record.createdBy || record.importedBy || '').trim() || null;
     await patients.updateOne(
-      { patientID: normalized.patientID },
+      { participantId: normalized.participantId },
       {
         $setOnInsert: {
-          patientID: normalized.patientID,
+          participantId: normalized.participantId,
           patientName: normalized.patientName,
           cpf: normalized.patientDocument,
           createdAt: new Date(),
@@ -920,11 +920,11 @@ async function commitBatch(db, batchIdRaw) {
     );
 
     await samples.updateOne(
-      { sampleID: normalized.sampleID },
+      { specimenId: normalized.specimenId },
       {
         $setOnInsert: {
-          sampleID: normalized.sampleID,
-          patientID: normalized.patientID,
+          specimenId: normalized.specimenId,
+          participantId: normalized.participantId,
           sampleType: normalized.sampleType,
           collectionDate: normalized.collectionDate,
           sprec: normalized.rcsPreview?.calculation_trace?.sprec || {},
@@ -944,7 +944,7 @@ async function commitBatch(db, batchIdRaw) {
           importBatchId: String(batchId),
           importedAt,
           importedBy,
-          release_status: workflow.quarantineStatus === 'RELEASED' ? 'AVAILABLE' : 'QUARANTINE',
+          releaseStatus: workflow.quarantineStatus === 'RELEASED' ? 'AVAILABLE' : 'QUARANTINE',
           createdAt: new Date(),
         },
         $set: {
@@ -955,7 +955,7 @@ async function commitBatch(db, batchIdRaw) {
           importBatchId: String(batchId),
           importedAt,
           importedBy,
-          release_status: workflow.quarantineStatus === 'RELEASED' ? 'AVAILABLE' : 'QUARANTINE',
+          releaseStatus: workflow.quarantineStatus === 'RELEASED' ? 'AVAILABLE' : 'QUARANTINE',
           updatedAt: new Date(),
         },
       },
@@ -976,7 +976,7 @@ async function commitBatch(db, batchIdRaw) {
         },
       }
     );
-    await audit(db, 'FHIR_IMPORT_RECORD_COMMITTED', { batchId, recordId: record._id, patientID: normalized.patientID, sampleID: normalized.sampleID });
+    await audit(db, 'FHIR_IMPORT_RECORD_COMMITTED', { batchId, recordId: record._id, participantId: normalized.participantId, specimenId: normalized.specimenId });
     committed += 1;
   }
 
@@ -1017,20 +1017,20 @@ async function attachExternalDocument(db, batchIdRaw, recordIdRaw, options = {})
 
   await staging.updateOne({ _id: recordId, batchId }, { $set: updatedRecord });
   await samples.updateOne(
-    { sampleID: normalized.sampleID },
+    { specimenId: normalized.specimenId },
     {
       $set: {
         consentStatus: 'EXTERNAL_ATTACHED',
         quarantineStatus: 'RELEASED',
         quarantineReason: null,
         availabilityStatus: 'AVAILABLE',
-        release_status: 'AVAILABLE',
+        releaseStatus: 'AVAILABLE',
         updatedAt: now,
       },
     }
   );
 
-  await audit(db, 'FHIR_IMPORT_EXTERNAL_DOCUMENT_ATTACHED', { batchId, recordId, patientID: normalized.patientID, sampleID: normalized.sampleID });
+  await audit(db, 'FHIR_IMPORT_EXTERNAL_DOCUMENT_ATTACHED', { batchId, recordId, participantId: normalized.participantId, specimenId: normalized.specimenId });
 
   return getConsentStatus(db, batchId);
 }

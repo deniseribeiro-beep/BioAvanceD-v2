@@ -18,17 +18,17 @@ const { getUserAnonId } = require('../utils/userAnonymization');
 class SampleFileController {
   constructor() {
     // Configuração do multer para upload de arquivos de análise
-    // Organiza arquivos por sampleID: storage/samples/<sampleID>/files/
+    // Organiza arquivos por specimenId: storage/samples/<specimenId>/files/
     this.storage = multer.diskStorage({
       destination: async (req, file, cb) => {
         try {
-          const { sampleID } = req.params;
-          if (!sampleID) {
-            return cb(new Error('sampleID é obrigatório'), null);
+          const { specimenId } = req.params;
+          if (!specimenId) {
+            return cb(new Error('specimenId é obrigatório'), null);
           }
 
-          // Cria diretório organizado por sampleID
-          const sampleDir = path.join(__dirname, '../../storage/samples', String(sampleID), 'files');
+          // Cria diretório organizado por specimenId
+          const sampleDir = path.join(__dirname, '../../storage/samples', String(specimenId), 'files');
           if (!fs.existsSync(sampleDir)) {
             fs.mkdirSync(sampleDir, { recursive: true });
           }
@@ -81,7 +81,7 @@ class SampleFileController {
 
   /**
    * Upload de arquivo de análise para uma amostra
-   * POST /api/samples/:sampleID/files/upload
+   * POST /api/samples/:specimenId/files/upload
    * Permissão: Admin (4) ou Coordenador (3)
    */
   async uploadFile(req, res) {
@@ -94,7 +94,7 @@ class SampleFileController {
         });
       }
 
-      const { sampleID } = req.params;
+      const { specimenId } = req.params;
       const file = req.file;
 
       if (!file) {
@@ -109,10 +109,10 @@ class SampleFileController {
       let sample;
       try {
         // Tenta buscar por ObjectId primeiro
-        sample = await samplesCollection.findOne({ _id: new ObjectId(sampleID) });
+        sample = await samplesCollection.findOne({ _id: new ObjectId(specimenId) });
       } catch (idError) {
-        // Se não for ObjectId válido, tenta buscar por sampleID numérico
-        sample = await samplesCollection.findOne({ sampleID: Number(sampleID) });
+        // Se não for ObjectId válido, tenta buscar por specimenId numérico
+        sample = await samplesCollection.findOne({ specimenId: Number(specimenId) });
       }
 
       if (!sample) {
@@ -149,7 +149,7 @@ class SampleFileController {
       // Cria registro na collection sample_files
       const sampleFilesCollection = db.collection('sample_files');
       const sampleFileData = {
-        sampleID: sample._id.toString(), // Usa _id da amostra como referência principal
+        specimenId: sample._id.toString(), // Usa _id da amostra como referência principal
         fileName: file.originalname,
         fileType: fileType,
         fileSize: file.size,
@@ -191,7 +191,7 @@ class SampleFileController {
             fileName: file.originalname,
             fileSize: file.size,
             fileType: fileType,
-            sampleID: sample._id.toString()
+            specimenId: sample._id.toString()
             // Não inclui dados sensíveis
           },
           req: req,
@@ -205,7 +205,7 @@ class SampleFileController {
         message: req.t ? req.t('sampleFiles.uploadSuccess') : 'Arquivo enviado com sucesso',
         data: {
           _id: insertResult.insertedId,
-          sampleID: sampleFile.sampleID,
+          specimenId: sampleFile.specimenId,
           fileName: sampleFile.fileName,
           fileType: sampleFile.fileType,
           fileSize: sampleFile.fileSize,
@@ -236,7 +236,7 @@ class SampleFileController {
 
   /**
    * Lista arquivos de análise de uma amostra
-   * GET /api/samples/:sampleID/files
+   * GET /api/samples/:specimenId/files
    * Permissão: Todos os perfis autenticados
    */
   async listFiles(req, res) {
@@ -249,15 +249,15 @@ class SampleFileController {
         });
       }
 
-      const { sampleID } = req.params;
+      const { specimenId } = req.params;
 
       // Valida se a amostra existe
       const samplesCollection = db.collection('amostras');
       let sample;
       try {
-        sample = await samplesCollection.findOne({ _id: new ObjectId(sampleID) });
+        sample = await samplesCollection.findOne({ _id: new ObjectId(specimenId) });
       } catch (idError) {
-        sample = await samplesCollection.findOne({ sampleID: Number(sampleID) });
+        sample = await samplesCollection.findOne({ specimenId: Number(specimenId) });
       }
 
       if (!sample) {
@@ -269,13 +269,13 @@ class SampleFileController {
 
       // Busca arquivos da amostra
       const sampleFilesCollection = db.collection('sample_files');
-      const sampleIDString = sample._id.toString();
-      const files = await sampleFilesCollection.find({ sampleID: sampleIDString }).toArray();
+      const specimenIdString = sample._id.toString();
+      const files = await sampleFilesCollection.find({ specimenId: specimenIdString }).toArray();
 
       // Remove caminhos sensíveis da resposta (LGPD)
       const sanitizedFiles = files.map(file => ({
         _id: file._id,
-        sampleID: file.sampleID,
+        specimenId: file.specimenId,
         fileName: file.fileName,
         fileType: file.fileType,
         fileSize: file.fileSize,
@@ -294,9 +294,9 @@ class SampleFileController {
           entity: 'SampleFile',
           result: 'success',
           severity: 'info',
-          message: `Consulta de arquivos de análise - Amostra: ${sampleID}, Total: ${files.length}`,
+          message: `Consulta de arquivos de análise - Amostra: ${specimenId}, Total: ${files.length}`,
           payload: {
-            sampleID: sampleIDString,
+            specimenId: specimenIdString,
             filesCount: files.length
           },
           req: req,
@@ -320,7 +320,7 @@ class SampleFileController {
 
   /**
    * Download de arquivo de análise
-   * GET /api/samples/:sampleID/files/:fileID/download
+   * GET /api/samples/:specimenId/files/:fileID/download
    * Permissão: Todos os perfis autenticados
    */
   async downloadFile(req, res) {
@@ -333,7 +333,7 @@ class SampleFileController {
         });
       }
 
-      const { sampleID, fileID } = req.params;
+      const { specimenId, fileID } = req.params;
 
       // Busca registro do arquivo
       const sampleFilesCollection = db.collection('sample_files');
@@ -355,11 +355,11 @@ class SampleFileController {
       }
 
       // Verifica se o arquivo pertence à amostra correta
-      const sampleIDString = typeof sampleID === 'string' && ObjectId.isValid(sampleID) 
-        ? new ObjectId(sampleID).toString()
-        : String(sampleID);
+      const specimenIdString = typeof specimenId === 'string' && ObjectId.isValid(specimenId) 
+        ? new ObjectId(specimenId).toString()
+        : String(specimenId);
       
-      if (fileRecord.sampleID !== sampleIDString) {
+      if (fileRecord.specimenId !== specimenIdString) {
         return res.status(403).json({
           success: false,
           error: req.t ? req.t('sampleFiles.fileNotBelongToSample') : 'Arquivo não pertence a esta amostra'
@@ -390,7 +390,7 @@ class SampleFileController {
             fileName: fileRecord.fileName,
             fileType: fileRecord.fileType,
             fileSize: fileRecord.fileSize,
-            sampleID: sampleIDString
+            specimenId: specimenIdString
             // Não inclui dados sensíveis
           },
           req: req,
@@ -422,7 +422,7 @@ class SampleFileController {
 
   /**
    * Deleta arquivo de análise
-   * DELETE /api/samples/:sampleID/files/:fileID
+   * DELETE /api/samples/:specimenId/files/:fileID
    * Permissão: Admin (4) ou Coordenador (3) apenas
    */
   async deleteFile(req, res) {
@@ -435,7 +435,7 @@ class SampleFileController {
         });
       }
 
-      const { sampleID, fileID } = req.params;
+      const { specimenId, fileID } = req.params;
 
       // Busca registro do arquivo
       const sampleFilesCollection = db.collection('sample_files');
@@ -457,11 +457,11 @@ class SampleFileController {
       }
 
       // Verifica se o arquivo pertence à amostra correta
-      const sampleIDString = typeof sampleID === 'string' && ObjectId.isValid(sampleID) 
-        ? new ObjectId(sampleID).toString()
-        : String(sampleID);
+      const specimenIdString = typeof specimenId === 'string' && ObjectId.isValid(specimenId) 
+        ? new ObjectId(specimenId).toString()
+        : String(specimenId);
       
-      if (fileRecord.sampleID !== sampleIDString) {
+      if (fileRecord.specimenId !== specimenIdString) {
         return res.status(403).json({
           success: false,
           error: req.t ? req.t('sampleFiles.fileNotBelongToSample') : 'Arquivo não pertence a esta amostra'
@@ -497,7 +497,7 @@ class SampleFileController {
             fileName: fileRecord.fileName,
             fileType: fileRecord.fileType,
             fileSize: fileRecord.fileSize,
-            sampleID: sampleIDString
+            specimenId: specimenIdString
             // Não inclui dados sensíveis
           },
           req: req,
@@ -521,7 +521,7 @@ class SampleFileController {
 
   /**
    * Exporta arquivo em formato HL7 v2.x
-   * GET /api/samples/:sampleID/files/:fileID/export/hl7
+   * GET /api/samples/:specimenId/files/:fileID/export/hl7
    */
   async exportHL7v2(req, res) {
     try {
@@ -533,7 +533,7 @@ class SampleFileController {
         });
       }
 
-      const { sampleID, fileID } = req.params;
+      const { specimenId, fileID } = req.params;
 
       // Busca arquivo
       const sampleFilesCollection = db.collection('sample_files');
@@ -547,8 +547,8 @@ class SampleFileController {
       }
 
       // Valida vinculação à amostra
-      const sampleIDString = String(sampleID);
-      if (String(fileRecord.sampleID) !== sampleIDString) {
+      const specimenIdString = String(specimenId);
+      if (String(fileRecord.specimenId) !== specimenIdString) {
         return res.status(400).json({
           success: false,
           error: req.t ? req.t('sampleFiles.sampleMismatch') : 'Arquivo não está vinculado a esta amostra'
@@ -557,7 +557,7 @@ class SampleFileController {
 
       // Busca amostra
       const samplesCollection = db.collection('samples');
-      const sample = await samplesCollection.findOne({ _id: new ObjectId(sampleID) });
+      const sample = await samplesCollection.findOne({ _id: new ObjectId(specimenId) });
 
       if (!sample) {
         return res.status(404).json({
@@ -566,12 +566,12 @@ class SampleFileController {
         });
       }
 
-      // LGPD: Usa apenas patientID anonimizado (8 dígitos)
-      const patientID = String(sample.patientID || '');
+      // LGPD: Usa apenas participantId anonimizado (8 dígitos)
+      const participantId = String(sample.participantId || '');
 
       // Gera mensagem HL7 v2.x
       const hl7Service = require('../services/hl7.service');
-      const hl7Message = await hl7Service.generateHL7v2Message(db, fileRecord, sample, patientID);
+      const hl7Message = await hl7Service.generateHL7v2Message(db, fileRecord, sample, participantId);
 
       // Registra log de exportação
       if (req.user) {
@@ -588,7 +588,7 @@ class SampleFileController {
           payload: {
             fileName: fileRecord.fileName,
             fileType: fileRecord.fileType,
-            sampleID: sampleIDString,
+            specimenId: specimenIdString,
             exportFormat: 'HL7v2.x'
           },
           req: req,
@@ -613,7 +613,7 @@ class SampleFileController {
 
   /**
    * Exporta arquivo em formato FHIR R4 JSON
-   * GET /api/samples/:sampleID/files/:fileID/export/fhir
+   * GET /api/samples/:specimenId/files/:fileID/export/fhir
    */
   async exportFHIR(req, res) {
     try {
@@ -625,7 +625,7 @@ class SampleFileController {
         });
       }
 
-      const { sampleID, fileID } = req.params;
+      const { specimenId, fileID } = req.params;
 
       // Busca arquivo
       const sampleFilesCollection = db.collection('sample_files');
@@ -639,8 +639,8 @@ class SampleFileController {
       }
 
       // Valida vinculação à amostra
-      const sampleIDString = String(sampleID);
-      if (String(fileRecord.sampleID) !== sampleIDString) {
+      const specimenIdString = String(specimenId);
+      if (String(fileRecord.specimenId) !== specimenIdString) {
         return res.status(400).json({
           success: false,
           error: req.t ? req.t('sampleFiles.sampleMismatch') : 'Arquivo não está vinculado a esta amostra'
@@ -649,7 +649,7 @@ class SampleFileController {
 
       // Busca amostra
       const samplesCollection = db.collection('samples');
-      const sample = await samplesCollection.findOne({ _id: new ObjectId(sampleID) });
+      const sample = await samplesCollection.findOne({ _id: new ObjectId(specimenId) });
 
       if (!sample) {
         return res.status(404).json({
@@ -658,12 +658,12 @@ class SampleFileController {
         });
       }
 
-      // LGPD: Usa apenas patientID anonimizado (8 dígitos)
-      const patientID = String(sample.patientID || '');
+      // LGPD: Usa apenas participantId anonimizado (8 dígitos)
+      const participantId = String(sample.participantId || '');
 
       // Gera resource FHIR
       const hl7Service = require('../services/hl7.service');
-      const fhirBundle = await hl7Service.generateFHIRResource(db, fileRecord, sample, patientID);
+      const fhirBundle = await hl7Service.generateFHIRResource(db, fileRecord, sample, participantId);
 
       // Registra log de exportação
       if (req.user) {
@@ -679,7 +679,7 @@ class SampleFileController {
           payload: {
             fileName: fileRecord.fileName,
             fileType: fileRecord.fileType,
-            sampleID: sampleIDString,
+            specimenId: specimenIdString,
             exportFormat: 'FHIR R4'
           },
           req: req,
@@ -704,7 +704,7 @@ class SampleFileController {
 
   /**
    * Exporta arquivo em formato CDA (Clinical Document Architecture)
-   * GET /api/samples/:sampleID/files/:fileID/export/cda
+   * GET /api/samples/:specimenId/files/:fileID/export/cda
    */
   async exportCDA(req, res) {
     try {
@@ -716,7 +716,7 @@ class SampleFileController {
         });
       }
 
-      const { sampleID, fileID } = req.params;
+      const { specimenId, fileID } = req.params;
 
       // Busca arquivo
       const sampleFilesCollection = db.collection('sample_files');
@@ -730,8 +730,8 @@ class SampleFileController {
       }
 
       // Valida vinculação à amostra
-      const sampleIDString = String(sampleID);
-      if (String(fileRecord.sampleID) !== sampleIDString) {
+      const specimenIdString = String(specimenId);
+      if (String(fileRecord.specimenId) !== specimenIdString) {
         return res.status(400).json({
           success: false,
           error: req.t ? req.t('sampleFiles.sampleMismatch') : 'Arquivo não está vinculado a esta amostra'
@@ -740,7 +740,7 @@ class SampleFileController {
 
       // Busca amostra
       const samplesCollection = db.collection('samples');
-      const sample = await samplesCollection.findOne({ _id: new ObjectId(sampleID) });
+      const sample = await samplesCollection.findOne({ _id: new ObjectId(specimenId) });
 
       if (!sample) {
         return res.status(404).json({
@@ -749,12 +749,12 @@ class SampleFileController {
         });
       }
 
-      // LGPD: Usa apenas patientID anonimizado (8 dígitos)
-      const patientID = String(sample.patientID || '');
+      // LGPD: Usa apenas participantId anonimizado (8 dígitos)
+      const participantId = String(sample.participantId || '');
 
       // Gera documento CDA
       const hl7Service = require('../services/hl7.service');
-      const cdaDocument = await hl7Service.generateCDA(db, fileRecord, sample, patientID);
+      const cdaDocument = await hl7Service.generateCDA(db, fileRecord, sample, participantId);
 
       // Registra log de exportação
       if (req.user) {
@@ -770,7 +770,7 @@ class SampleFileController {
           payload: {
             fileName: fileRecord.fileName,
             fileType: fileRecord.fileType,
-            sampleID: sampleIDString,
+            specimenId: specimenIdString,
             exportFormat: 'CDA'
           },
           req: req,

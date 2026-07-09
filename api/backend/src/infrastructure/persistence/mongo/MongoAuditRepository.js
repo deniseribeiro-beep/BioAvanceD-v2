@@ -16,7 +16,7 @@ class MongoAuditRepository {
   }
 
   /**
-   * @param {{ sampleId: string, barcode?: string|null, eventType: string, before: object, after: object, context: object, timestamp: Date }} input
+   * @param {{ specimenId: string, barcode?: string|null, eventType: string, before: object, after: object, context: object, timestamp: Date }} input
    * @param {import('mongodb').ClientSession} [session]
    * @returns {Promise<{ movementID: number }>}
    */
@@ -31,7 +31,7 @@ class MongoAuditRepository {
       movementsCollection,
       {
         movementID,
-        sampleID: input.sampleId,
+        specimenId: input.specimenId,
         barcode: input.barcode || null,
         type: input.eventType,
         quantity: null,

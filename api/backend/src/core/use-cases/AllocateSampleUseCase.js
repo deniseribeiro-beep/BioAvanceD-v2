@@ -15,13 +15,13 @@ class AllocateSampleUseCase {
   }
 
   /**
-   * @param {{ sampleId: string, boxId: string, position: string, actor: { userId?: string|null, userName?: string|null, userRole?: string|null, ipAddress?: string|null, userAgent?: string|null } }} command
+   * @param {{ specimenId: string, boxId: string, position: string, actor: { userId?: string|null, userName?: string|null, userRole?: string|null, ipAddress?: string|null, userAgent?: string|null } }} command
    */
   async execute(command) {
     this.validateCommand(command);
 
     const normalizedPosition = String(command.position).trim().toUpperCase();
-    const sample = await this.storageRepository.findSampleById(command.sampleId);
+    const sample = await this.storageRepository.findSampleById(command.specimenId);
     if (!sample) {
       throw new Error('Amostra não encontrada');
     }
@@ -34,7 +34,7 @@ class AllocateSampleUseCase {
       : null;
 
     const lineageResult = await this.ensureLineageBeforeMongo({
-      sampleId: String(sample._id),
+      specimenId: String(sample._id),
       barcode: sample.barcode || null,
       eventType: 'allocate',
       from: beforeLocation,
@@ -48,7 +48,7 @@ class AllocateSampleUseCase {
 
     try {
       await this.storageRepository.withTransaction(async (session) => {
-        const sample = await this.storageRepository.findSampleById(command.sampleId, session);
+        const sample = await this.storageRepository.findSampleById(command.specimenId, session);
         if (!sample) {
           throw new Error('Amostra não encontrada');
         }
@@ -62,7 +62,7 @@ class AllocateSampleUseCase {
 
         await this.storageRepository.allocateSamplePosition(
           {
-            sampleId: command.sampleId,
+            specimenId: command.specimenId,
             boxId: command.boxId,
             position: normalizedPosition
           },
@@ -71,7 +71,7 @@ class AllocateSampleUseCase {
 
         await this.auditRepository.appendImmutableAudit(
           {
-            sampleId: String(sample._id),
+            specimenId: String(sample._id),
             barcode: sample.barcode || null,
             eventType: 'allocate',
             before: {
@@ -100,7 +100,7 @@ class AllocateSampleUseCase {
     return {
       success: true,
       sampleLocation: {
-        sampleId: String(command.sampleId),
+        specimenId: String(command.specimenId),
         boxId: String(command.boxId),
         position: normalizedPosition
       },
@@ -114,8 +114,8 @@ class AllocateSampleUseCase {
    * @param {any} command
    */
   validateCommand(command) {
-    if (!command?.sampleId || !command?.boxId || !command?.position) {
-      throw new Error('sampleId, boxId e position são obrigatórios');
+    if (!command?.specimenId || !command?.boxId || !command?.position) {
+      throw new Error('specimenId, boxId e position são obrigatórios');
     }
   }
 
@@ -144,7 +144,7 @@ class AllocateSampleUseCase {
     }
   }
 
-  async compensateLineageIfNeeded(lineageResult, sampleId) {
+  async compensateLineageIfNeeded(lineageResult, specimenId) {
     if (!lineageResult?.lineagePersisted || !lineageResult?.eventId || !this.lineageRepository) {
       return;
     }
@@ -152,7 +152,7 @@ class AllocateSampleUseCase {
     try {
       await this.lineageRepository.compensateCustodyEvent({
         eventId: lineageResult.eventId,
-        sampleId,
+        specimenId,
         reason: 'mongo_transaction_failed'
       });
       logger.warn('[ISO20387][SAGA] Compensação Neo4j concluída após falha Mongo (allocate)');

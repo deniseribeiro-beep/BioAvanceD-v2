@@ -241,7 +241,7 @@ export default function InlineStorageMovementPanel({ sample, t, onCancel, onComp
           <h3>{sample.barcode || sample.sampleID || sample.id}</h3>
           <p>{t('samples.storageInline.subtitle')}</p>
           <div className="samples-inline-storage-summary__meta">
-            <span>{t('samples.patientIdColumn')}: {sample.patientID || 'N/A'}</span>
+            <span>{t('samples.participantIdColumn')}: {sample.participantId || 'N/A'}</span>
             <span>{t('samples.tableHeaders.type')}: {sample.sampleType || 'N/A'}</span>
             <span>{t('samples.storageInline.destination')}: {selectedPath || t('samples.storageInline.selectDestination')}</span>
           </div>

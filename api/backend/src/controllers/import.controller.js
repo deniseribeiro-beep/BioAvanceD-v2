@@ -391,7 +391,7 @@ async function importFhirBundle(req, res) {
       switch (resource.resourceType) {
         case 'Specimen': {
           const patientRef = resource.subject?.reference?.replace('Patient/', '');
-          const patientId = patientMap[patientRef];
+          const participantId = patientMap[patientRef];
           const sprec = resolveSprecAxisFromSpecimen(resource);
           const qualityAssessment = calculateMethodologyQualityFromSprec(sprec);
           const penaltyLog = buildPenaltyLog(qualityAssessment);
@@ -409,7 +409,7 @@ async function importFhirBundle(req, res) {
           }
 
           const sampleDoc = {
-            patientId,
+            participantId,
             specimenType: resource.type?.text || '',
             // Canonical RCS-GOV fields
             model_version: qualityAssessment.model_version,
@@ -425,12 +425,12 @@ async function importFhirBundle(req, res) {
             axis_penalties: qualityAssessment.axis_penalties,
             calculation_trace: qualityAssessment.calculation_trace,
             rcs_evaluation: qualityAssessment,
-            legacy_compat: {
-              quality_score: qualityAssessment.rcs_score,
-              quality_category: qualityAssessment.final_grade,
-              penalty_log: penaltyLog,
+            canonical: {
+              rcsScore: qualityAssessment.rcs_score,
+              scoreBasedGrade: qualityAssessment.final_grade,
+              axisPenalties: penaltyLog,
             },
-            release_status: qualityAssessment.governance_status === 1 && qualityAssessment.final_grade !== 'E' ? 'AVAILABLE' : 'QUARANTINE',
+            releaseStatus: qualityAssessment.governance_status === 1 && qualityAssessment.final_grade !== 'E' ? 'AVAILABLE' : 'QUARANTINE',
             sprec,
             fhir: resource
           };
@@ -438,17 +438,17 @@ async function importFhirBundle(req, res) {
           sampleCount++;
           logger.info('[FHIR_IMPORT] Specimen processado', {
             resourceId: resource.id || null,
-            patientLinked: Boolean(patientId),
+            patientLinked: Boolean(participantId),
             final_grade: sampleDoc.final_grade,
-            release_status: sampleDoc.release_status,
+            releaseStatus: sampleDoc.releaseStatus,
           });
           break;
         }
         case 'Consent': {
           const patientRef = resource.patient?.reference?.replace('Patient/', '');
-          const patientId = patientMap[patientRef];
+          const participantId = patientMap[patientRef];
           const consentDoc = {
-            patientId,
+            participantId,
             status: resource.status,
             fhir: resource
           };
@@ -456,16 +456,16 @@ async function importFhirBundle(req, res) {
           consentCount++;
           logger.info('[FHIR_IMPORT] Consent processado', {
             resourceId: resource.id || null,
-            patientLinked: Boolean(patientId),
+            patientLinked: Boolean(participantId),
             status: consentDoc.status,
           });
           break;
         }
         case 'Observation': {
           const patientRef = resource.subject?.reference?.replace('Patient/', '');
-          const patientId = patientMap[patientRef];
+          const participantId = patientMap[patientRef];
           const obsDoc = {
-            patientId,
+            participantId,
             code: resource.code?.text || '',
             value: resource.valueQuantity?.value,
             fhir: resource
@@ -473,23 +473,23 @@ async function importFhirBundle(req, res) {
           // await observationsCol.insertOne(obsDoc);
           logger.info('[FHIR_IMPORT] Observation processada', {
             resourceId: resource.id || null,
-            patientLinked: Boolean(patientId),
+            patientLinked: Boolean(participantId),
             hasNumericValue: obsDoc.value !== undefined && obsDoc.value !== null,
           });
           break;
         }
         case 'Condition': {
           const patientRef = resource.subject?.reference?.replace('Patient/', '');
-          const patientId = patientMap[patientRef];
+          const participantId = patientMap[patientRef];
           const condDoc = {
-            patientId,
+            participantId,
             code: resource.code?.text || '',
             fhir: resource
           };
           // await conditionsCol.insertOne(condDoc);
           logger.info('[FHIR_IMPORT] Condition processada', {
             resourceId: resource.id || null,
-            patientLinked: Boolean(patientId),
+            patientLinked: Boolean(participantId),
           });
           break;
         }

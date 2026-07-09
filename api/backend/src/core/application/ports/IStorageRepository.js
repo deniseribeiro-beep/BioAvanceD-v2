@@ -13,11 +13,11 @@ class IStorageRepository {
 
   /**
    * Busca uma amostra por ID.
-   * @param {string} sampleId
+   * @param {string} specimenId
    * @param {import('mongodb').ClientSession} [session]
    * @returns {Promise<object|null>}
    */
-  async findSampleById(sampleId, session) {
+  async findSampleById(specimenId, session) {
     throw new Error('Not implemented');
   }
 
@@ -33,7 +33,7 @@ class IStorageRepository {
 
   /**
    * Move a amostra entre posições físicas (origem -> destino).
-   * @param {{ sampleId: string, fromBoxId: string, fromPosition: string, toBoxId: string, toPosition: string }} input
+   * @param {{ specimenId: string, fromBoxId: string, fromPosition: string, toBoxId: string, toPosition: string }} input
    * @param {import('mongodb').ClientSession} session
    * @returns {Promise<void>}
    */
@@ -43,7 +43,7 @@ class IStorageRepository {
 
   /**
    * Aloca uma amostra em posição física.
-   * @param {{ sampleId: string, boxId: string, position: string }} input
+   * @param {{ specimenId: string, boxId: string, position: string }} input
    * @param {import('mongodb').ClientSession} session
    * @returns {Promise<void>}
    */
@@ -53,7 +53,7 @@ class IStorageRepository {
 
   /**
    * Libera a posição física atual de uma amostra.
-   * @param {{ sampleId: string }} input
+   * @param {{ specimenId: string }} input
    * @param {import('mongodb').ClientSession} session
    * @returns {Promise<{ from: { boxId: string, position: string }, barcode?: string|null, quantity?: number|null, unit?: string|null }>}
    */
@@ -81,7 +81,7 @@ class IStorageRepository {
 
   /**
    * Obtém localização de armazenamento da amostra.
-   * @param {{ sampleId: string }} input
+   * @param {{ specimenId: string }} input
    * @returns {Promise<{ found: boolean, location?: object, error?: string, message?: string }>}
    */
   async getSampleStorageLocation(input) {

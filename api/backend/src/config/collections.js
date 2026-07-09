@@ -13,9 +13,6 @@ const CANONICAL_COLLECTIONS = Object.freeze({
   medicationDictionary: env.COLL_MEDICATION_DICTIONARY || 'medication_dictionary'
 });
 
-const COLLECTION_ALIASES = Object.freeze({});
-
 module.exports = {
-  CANONICAL_COLLECTIONS,
-  COLLECTION_ALIASES
+  CANONICAL_COLLECTIONS
 };

@@ -184,28 +184,28 @@ class ResultWorker {
 
     try {
       // Valida campos obrigatórios
-      if (!row.sampleID && !row.sampleId && !row.barcode) {
-        throw new Error('sampleID, sampleId ou barcode é obrigatório');
+      if (!row.specimenId && !row.specimenId && !row.barcode) {
+        throw new Error('specimenId, specimenId ou barcode é obrigatório');
       }
 
       // Busca amostra
       const samplesCollection = db.collection('amostras');
       const sample = await samplesCollection.findOne({
         $or: [
-          { sampleID: row.sampleID || row.sampleId },
+          { specimenId: row.specimenId || row.specimenId },
           { barcode: row.barcode },
         ],
       });
 
       if (!sample) {
         throw new Error(
-          `Amostra não encontrada: ${row.sampleID || row.sampleId || row.barcode}`
+          `Amostra não encontrada: ${row.specimenId || row.specimenId || row.barcode}`
         );
       }
 
       // Cria resultado
       const resultData = {
-        sampleID: sample.sampleID || sample._id,
+        specimenId: sample.specimenId || sample._id,
         testName: row.testName || row.test || 'Unknown Test',
         testCode: row.testCode || row.code || 'UNKNOWN',
         resultValue: row.resultValue || row.value || null,
@@ -221,7 +221,7 @@ class ResultWorker {
 
       // Converte para FHIR
       const sampleReference = {
-        reference: `Specimen/${sample.sampleID || sample._id}`,
+        reference: `Specimen/${sample.specimenId || sample._id}`,
       };
 
       const fhirResult = fhirService.resultToFHIR(

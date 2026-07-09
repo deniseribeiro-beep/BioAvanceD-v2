@@ -14,14 +14,14 @@ function normalizeString(value) {
 
 function buildSampleQuery(sample = {}) {
   const id = normalizeString(sample?._id?.toString?.() || sample?._id);
-  const sampleID = normalizeString(sample?.sampleID || sample?.sampleId);
+  const sampleID = normalizeString(sample?.specimenId || sample?.sampleID || sample?.sampleId);
   const barcode = normalizeString(sample?.barcode);
   const queries = [];
 
   if (id && ObjectId.isValid(id)) {
     queries.push({ _id: new ObjectId(id) });
   }
-  if (sampleID) queries.push({ sampleID });
+  if (sampleID) queries.push({ specimenId: sampleID });
   if (barcode) queries.push({ barcode });
 
   return queries.length > 0 ? { $or: queries } : null;
@@ -30,14 +30,14 @@ function buildSampleQuery(sample = {}) {
 function resolveGovernanceStatus(body = {}) {
   const sample = body?.sample || {};
   const consent = body?.consent || {};
-  const rawReleaseStatus = normalizeString(sample.release_status || sample.releaseStatus || body.release_status).toUpperCase();
+  const rawReleaseStatus = normalizeString(sample.lifecycleStatus || sample.release_status || sample.releaseStatus || body.release_status).toUpperCase();
   const hasActiveConsent = consent.active !== false;
 
   if (!hasActiveConsent || rawReleaseStatus === 'BLOCKED') {
     return {
       status: 'BLOCKED',
       currentStatus: 'Blocked',
-      release_status: 'BLOCKED',
+      lifecycleStatus: 'BLOCKED',
       availabilityStatus: 'BLOCKED',
       quarantineStatus: 'QUARANTINED',
       quarantineReason: sample.quarantineReason || consent.reason || 'CONSENT_PENDING',
@@ -48,7 +48,7 @@ function resolveGovernanceStatus(body = {}) {
     return {
       status: 'QUARANTINE',
       currentStatus: 'Quarantine',
-      release_status: 'QUARANTINE',
+      lifecycleStatus: 'QUARANTINE',
       availabilityStatus: 'BLOCKED',
       quarantineStatus: 'QUARANTINED',
       quarantineReason: sample.quarantineReason || 'QUALITY_GOVERNANCE_FAILURE',
@@ -58,7 +58,7 @@ function resolveGovernanceStatus(body = {}) {
   return {
     status: 'AVAILABLE',
     currentStatus: 'Available',
-    release_status: 'AVAILABLE',
+    lifecycleStatus: 'AVAILABLE',
     availabilityStatus: 'AVAILABLE',
     quarantineStatus: 'RELEASED',
     quarantineReason: null,
@@ -68,11 +68,11 @@ function resolveGovernanceStatus(body = {}) {
 function buildSafeSampleSummary(sample = {}, governanceStatus = {}) {
   return {
     _id: normalizeString(sample?._id?.toString?.() || sample?._id) || null,
-    sampleID: normalizeString(sample.sampleID || sample.sampleId) || null,
+    specimenId: normalizeString(sample.specimenId || sample.sampleID || sample.sampleId) || null,
     barcode: normalizeString(sample.barcode) || null,
     status: governanceStatus.status || normalizeString(sample.status) || null,
     currentStatus: governanceStatus.currentStatus || normalizeString(sample.currentStatus) || null,
-    release_status: governanceStatus.release_status || normalizeString(sample.release_status) || null,
+    lifecycleStatus: governanceStatus.lifecycleStatus || normalizeString(sample.lifecycleStatus) || null,
     availabilityStatus: governanceStatus.availabilityStatus || normalizeString(sample.availabilityStatus) || null,
     quarantineStatus: governanceStatus.quarantineStatus || normalizeString(sample.quarantineStatus) || null,
     quarantineReason: governanceStatus.quarantineReason || sample.quarantineReason || null,
@@ -101,7 +101,7 @@ async function enforcePersistedGovernanceStatus(req, body) {
     $set: {
       status: governanceStatus.status,
       currentStatus: governanceStatus.currentStatus,
-      release_status: governanceStatus.release_status,
+      lifecycleStatus: governanceStatus.lifecycleStatus,
       availabilityStatus: governanceStatus.availabilityStatus,
       quarantineStatus: governanceStatus.quarantineStatus,
       quarantineReason: governanceStatus.quarantineReason,

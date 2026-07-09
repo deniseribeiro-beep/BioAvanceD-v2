@@ -39,13 +39,13 @@ class Neo4jQuarantineService {
       throw new Error('Transação topológica inválida para quarentena');
     }
 
-    const sampleId = transaction.sampleId || transaction.sampleMongoId;
-    if (!sampleId) {
-      throw new Error('sampleId é obrigatório para quarentena topológica');
+    const specimenId = transaction.specimenId || transaction.sampleMongoId;
+    if (!specimenId) {
+      throw new Error('specimenId é obrigatório para quarentena topológica');
     }
 
     const item = {
-      sampleId: String(sampleId),
+      specimenId: String(specimenId),
       transaction,
       context: {
         reason: context.reason || 'neo4j_unavailable_permissive_mode',
@@ -59,7 +59,7 @@ class Neo4jQuarantineService {
     try {
       await this.redis.rpush(this.queueKey, JSON.stringify(item));
       this.logger.warn(
-        `[SMART-BLOCKING][QUARANTINE] Transação enfileirada. sampleId=${item.sampleId}, reason=${item.context.reason}`
+        `[SMART-BLOCKING][QUARANTINE] Transação enfileirada. specimenId=${item.specimenId}, reason=${item.context.reason}`
       );
       return { queued: true, queueKey: this.queueKey, item };
     } catch (error) {

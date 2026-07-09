@@ -1,4 +1,3 @@
-const fhirService = require('./fhir.service');
 const logger = require('../utils/logger');
 const { getQueue } = require('../config/queue');
 const influxTelemetryWriteRepository = require('../infrastructure/persistence/influxdb/InfluxTelemetryWriteRepository');
@@ -186,47 +185,6 @@ class IoTStreamingService {
           ...temperatureData
         });
       });
-
-      // Converte para FHIR
-      const fhirTemperature = fhirService.temperatureToFHIR(temperatureData);
-      fhirService.validateFHIRResource(fhirTemperature.device);
-      fhirService.validateFHIRResource(fhirTemperature.observation);
-
-      // Atualiza com FHIR
-      await temperaturesCollection.updateOne(
-        { _id: result.insertedId },
-        {
-          $set: {
-            fhir: fhirTemperature.observation,
-            fhirDevice: fhirTemperature.device,
-          },
-        }
-      );
-
-      // Atualiza/Insere device
-      const devicesCollection = db.collection('devices');
-      const existingDevice = await devicesCollection.findOne({
-        'fhir.identifier.value': temperatureData.sensorId?.toString(),
-      });
-
-      if (existingDevice) {
-        await devicesCollection.updateOne(
-          { _id: existingDevice._id },
-          {
-            $set: {
-              fhir: fhirTemperature.device,
-              updatedAt: new Date(),
-            },
-          }
-        );
-      } else {
-        await devicesCollection.insertOne({
-          sensorId: temperatureData.sensorId,
-          fhir: fhirTemperature.device,
-          createdAt: new Date(),
-          updatedAt: new Date(),
-        });
-      }
 
       logger.debug(`✅ Dados de temperatura processados: ${result.insertedId}`);
       return result.insertedId;

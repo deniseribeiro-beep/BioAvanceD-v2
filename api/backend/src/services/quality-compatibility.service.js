@@ -9,11 +9,11 @@ function normalizeSample(sample = {}) {
   // Mapeamentos simples: preserve legacy fields, mas promova valores para nomes canônicos
   // Do not promote legacy `quality_*` fields automatically into canonical decision fields.
   // Preserve legacy values under a compatibility namespace for auditing and migration.
-  if ((normalized.quality_score !== undefined || normalized.quality_category !== undefined || normalized.penalty_log !== undefined)) {
-    normalized.legacy_compat = normalized.legacy_compat || {};
-    if (normalized.quality_score !== undefined) normalized.legacy_compat.quality_score = normalized.quality_score;
-    if (normalized.quality_category !== undefined) normalized.legacy_compat.quality_category = normalized.quality_category;
-    if (normalized.penalty_log !== undefined) normalized.legacy_compat.penalty_log = normalized.penalty_log;
+  if ((normalized.rcsScore !== undefined || normalized.scoreBasedGrade !== undefined || normalized.axisPenalties !== undefined)) {
+    normalized.canonical = normalized.canonical || {};
+    if (normalized.rcsScore !== undefined) normalized.canonical.rcsScore = normalized.rcsScore;
+    if (normalized.scoreBasedGrade !== undefined) normalized.canonical.scoreBasedGrade = normalized.scoreBasedGrade;
+    if (normalized.axisPenalties !== undefined) normalized.canonical.axisPenalties = normalized.axisPenalties;
   }
 
   // Ensure canonical fields exist
