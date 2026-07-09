@@ -84,6 +84,25 @@ One iteration = one issue, sized to finish in the iteration:
   it was removed by the project owner, referencing the deleting
   commit. Only fall back to "reimplement" or "ask Dennis" if no such
   removal commit exists.
+- **When a canonicalization/rename merge breaks a test file, don't stop
+  at the rename — check whether the same commit silently dropped a
+  whole function or guard clause, not just relabeled fields.** A
+  refactor commit that touches a file end-to-end can lose code that had
+  nothing to do with the rename, and it only surfaces as an unrelated
+  `TypeError`/missing-behavior once you actually run the suite (confirmed
+  2026-07-09, issues #119→#126/#127: fixing `sample.service.test.js`'s
+  stale `patientID`/`sampleID` fixture for the `e2549bee`
+  canonicalization merge uncovered that the same commit had deleted
+  `enforceAppendOnlyCollection`/`guardBulkWrite` from
+  `sampleMovementLedger.js` entirely — breaking 3 live call sites, not
+  just tests — and separately deleted `withdrawSample`'s terminal-status
+  guard, leaving its `invalidStatuses` array declared but unused).
+  `git show <hash> -- <file>` on the full diff (not just the hunks you
+  expect) is what catches this; grepping only for the renamed field
+  will miss it. Each such drop is its own issue and its own fix, even
+  when discovered mid-iteration on an unrelated pick — `git show
+  <hash>` against the pre-merge version tells you whether it's safe to
+  restore verbatim.
 - If the issue is ambiguous (can't tell what correct behavior *should*
   be from the code, tests, or issue thread), ask on the issue / ask
   Dennis rather than guessing at intended behavior.
