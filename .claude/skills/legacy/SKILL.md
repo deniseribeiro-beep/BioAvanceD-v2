@@ -28,6 +28,12 @@ documents. Signs worth weighing:
 - Logic clearly mid-migration (old and new implementations both
   present).
 
+Before calling something's legacy status ambiguous, check `docs/architecture/`
+and `docs/inventory/` at the repo root — Denise's own architecture
+contracts and inventory snapshots sometimes state the intended direction
+directly (see `bioavanced-conventions`'s "`docs/` may already answer a
+design question" section for the confirmed example, issue #111).
+
 ## How this should shape work
 
 - **Picking a test slice** (`test-loop`, `parallel-test-agents`): a

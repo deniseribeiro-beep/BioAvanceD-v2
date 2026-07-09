@@ -68,6 +68,22 @@ Run `npm install` at root AND `npm --prefix frontend ci` AND
 `npm --prefix api/backend ci` when setting up — the three roots don't
 share `node_modules`.
 
+## `docs/` may already answer a design question
+
+`docs/` at the repo root (`docs/architecture/`, `docs/inventory/`) holds
+Denise's own architecture contracts and inventory/audit snapshots — check
+there before treating something as ambiguous, legacy-status-unclear, or
+"needs Dennis's judgment." Confirmed 2026-07-09, issue #111: a "use the
+FHIR payload or remove the dead call, whichever matches what main's
+rewrite intends" question — the kind that would normally get punted —
+was answered directly by `docs/architecture/canonical-data-cleanup.md`
+("No duplicate operational FHIR collections; FHIR is an interoperability
+boundary"). Check it whenever a call would otherwise be deferred to
+Dennis — `fix-bugs`'s trace-and-repro checklist and `legacy`'s
+judgment-call guidance both point back here for the mechanics; don't
+skip the check just because a design-call label already exists on an
+issue, since the label may predate the doc (or predate you finding it).
+
 ## Git hygiene
 
 - Create a branch per logical unit of work **before the first Edit/Write
