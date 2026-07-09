@@ -346,7 +346,7 @@ class ConsentService {
         content: htmlContent,
         version: `v${nextVersionNumber}`,
         versionGroupId,
-        previousconsentTemplateId: String(objectId),
+        previousTemplateId: String(objectId),
         caae: typeof existingTemplate.caae === 'string' ? existingTemplate.caae.trim() : '',
         active,
         permissions

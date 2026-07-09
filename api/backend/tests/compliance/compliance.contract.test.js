@@ -95,7 +95,7 @@ describe('Compliance Gate - ISO 20387 Custody Logs', () => {
     });
 
     await allocateUseCase.execute({
-      sampleId: 'sample-1',
+      specimenId: 'sample-1',
       boxId: 'BOX-02',
       position: 'B2',
       actor
@@ -108,7 +108,7 @@ describe('Compliance Gate - ISO 20387 Custody Logs', () => {
     });
 
     await releaseUseCase.execute({
-      sampleId: 'sample-1',
+      specimenId: 'sample-1',
       actor
     });
 

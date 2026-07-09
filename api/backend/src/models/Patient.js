@@ -14,11 +14,17 @@ class ParticipantModel {
 
   static validate(data = {}) {
     const errors = [];
-    const requiredText = ['participantId', 'patientName', 'birthDate', 'sex', 'consentTemplateId'];
+    const requiredText = ['participantId', 'patientName', 'sex', 'consentTemplateId'];
     for (const field of requiredText) {
       if (!data[field] || typeof data[field] !== 'string' || String(data[field]).trim() === '') {
         errors.push(`${field} é obrigatório`);
       }
+    }
+    const isValidBirthDate = data.birthDate instanceof Date
+      ? !Number.isNaN(data.birthDate.getTime())
+      : typeof data.birthDate === 'string' && data.birthDate.trim() !== '';
+    if (!isValidBirthDate) {
+      errors.push('birthDate é obrigatório');
     }
     const allowed = new Set([
       'participantId','patientName','birthDate','sex','email','phone','identityDocument','recordNumber','clinicalUnitId','clinicalUnit','unitAcronym','isDeceased','representativeName','representativeEmail','representativeIdentityDocument','representativePhone','consentTemplateId','status','consentToken','consentTokenCreatedAt','consentTokenExpiresAt','consentNotifiedAt','consentAcceptedAt','createdAt','updatedAt','anamneseGeral','dadosEspecificos'
@@ -78,6 +84,10 @@ class ParticipantModel {
       throw new Error(validation.errors.join(', '));
     }
     return normalized;
+  }
+
+  static validateUnit(clinicalUnit) {
+    return Boolean(clinicalUnit) && typeof clinicalUnit === 'string' && clinicalUnit.length > 0;
   }
 
   static fillAcronym(clinicalUnit) {
