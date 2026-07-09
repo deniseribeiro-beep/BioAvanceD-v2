@@ -86,6 +86,10 @@ describe('sample.service', () => {
       const db = makeDb();
       db.collections.patients.findOne.mockResolvedValue({ patientID: '12345678' });
 
+      // NOTE: this test is currently blocked by #119 (validSampleData() predates
+      // the now-required locationID/location validation chain) and fails before
+      // reaching the assertions below regardless of this fix — tracked separately,
+      // not fixed here to stay scoped to #111.
       const result = await sampleService.createSample(db, validSampleData());
 
       expect(result._id).toBe('generated-id');
@@ -94,7 +98,26 @@ describe('sample.service', () => {
       expect(db.collections.sample_movements.insertOne).toHaveBeenCalledTimes(1);
       const [movementArg] = db.collections.sample_movements.insertOne.mock.calls[0];
       expect(movementArg.type).toBe('create');
-      expect(fhirSyncService.upsertSampleFromLegacy).toHaveBeenCalledTimes(1);
+      // Issue #111: upsertSampleFromLegacy is a no-op boundary stub (fhir-sync.service.js)
+      // since main's canonical-cleanup rewrite; sample creation no longer calls it.
+      expect(fhirSyncService.upsertSampleFromLegacy).not.toHaveBeenCalled();
+    });
+
+    it('does not call the FHIR boundary stub on creation (#111)', async () => {
+      // Self-contained repro for #111 that doesn't depend on validSampleData()
+      // (blocked separately by #119) — mocks the full location/sensor chain so
+      // createSample actually reaches the code path the fix touches.
+      const db = makeDb();
+      db.collections.patients.findOne.mockResolvedValue({ patientID: '12345678' });
+      db.collections.locations.findOne.mockResolvedValue({ locationID: 1 });
+      db.collection.mockImplementation((name) => {
+        if (name === 'sensors') return { findOne: vi.fn().mockResolvedValue({ status: 'ok' }) };
+        return db.collections[name] || (db.collections[name] = makeCollection(name));
+      });
+
+      await sampleService.createSample(db, validSampleData({ locationID: 1 }));
+
+      expect(fhirSyncService.upsertSampleFromLegacy).not.toHaveBeenCalled();
     });
 
     it('rejects with 422 when required MIABIS fields are missing', async () => {
