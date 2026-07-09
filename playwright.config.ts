@@ -35,7 +35,6 @@ export default defineConfig({
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
     executablePath: process.env.PLAYWRIGHT_EXECUTABLE_PATH,
-    storageState: 'playwright/.auth/user.json',
   },
   projects: [
     {
