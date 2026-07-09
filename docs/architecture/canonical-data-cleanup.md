@@ -11,6 +11,7 @@ This branch establishes the foundation of the canonical data contract and remove
 5. Neo4j remains a projection fed by the outbox.
 6. No executable seed or automatic population is introduced.
 7. The cleanup is incremental and domain-scoped.
+8. Reference data seeding is split into a manual essential seed and deferred large imports.
 
 ## Preserved Canonical Surface
 
@@ -21,6 +22,7 @@ This branch establishes the foundation of the canonical data contract and remove
 - canonical graph nodes and relations for donor, consent, specimen lineage, quality and telemetry incidents
 - `api/backend/src/contracts/canonical/v1/index.js`
 - `api/backend/src/resources/fhir/profiles/*.schema.json`
+- `docs/architecture/reference-data-seeding.md`
 
 ## Removed from runtime
 
@@ -41,6 +43,7 @@ This branch establishes the foundation of the canonical data contract and remove
 - aliases remain in some active runtime modules and are intentionally deferred
 - mixed-domain cleanup across participant, specimen, storage, reports and frontend views remains pending
 - some runtime code still carries transitional alias reads for compatibility
+- large reference imports are not modeled yet and remain deferred to later scripts
 
 ## Known residual legacy surfaces
 

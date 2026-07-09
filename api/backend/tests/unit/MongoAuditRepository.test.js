@@ -1,18 +1,20 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+const sampleMovementLedger = require('../../src/utils/sampleMovementLedger');
 const MongoAuditRepository = require('../../src/infrastructure/persistence/mongo/MongoAuditRepository');
 
 /**
- * We deliberately do NOT mock ../../src/utils/sampleMovementLedger.
- * MongoAuditRepository.js destructures appendMovementWithHashChain,
+ * MongoAuditRepository.js used to destructure appendMovementWithHashChain,
  * enforceAppendOnlyCollection and ensureSampleMovementIndexes at module
- * scope (`const { ... } = require(...)`), so vi.mock()/vi.spyOn() on that
- * module would silently fail to be observed (see testing-conventions skill:
- * "Mocking gotcha" — CommonJS destructuring at module scope defeats spies).
- * Instead we run the REAL sampleMovementLedger implementation against a
- * fully mocked mongo collection (find/sort/limit/next, insertOne,
- * createIndex, findOneAndUpdate, and the mutating methods it wraps). This
- * gives an honest, non-tautological test of the integration.
+ * scope, which defeated vi.mock()/vi.spyOn() (see testing-conventions
+ * skill: "Mocking gotcha"). As of the "isolate append-only audit ledger
+ * protection" fix it references sampleMovementLedger.<fn> at call time
+ * instead, so mocking works now — but the bulk of this suite still runs
+ * the REAL sampleMovementLedger implementation against a fully mocked
+ * mongo collection, for an honest, non-tautological test of the
+ * integration. Only the isolation-regression describe block below mocks
+ * sampleMovementLedger, and it's scoped so that mocking doesn't leak into
+ * the rest of the suite.
  */
 
 let movementsCollectionCounter = 0;
@@ -64,6 +66,19 @@ function makeDb({ movements, counters }) {
       if (name === 'counters') return counters.collection;
       throw new Error(`unexpected collection requested: ${name}`);
     })
+  };
+}
+
+function makeSharedCollection() {
+  return {
+    createIndex: vi.fn().mockResolvedValue('idx'),
+    find: vi.fn().mockReturnValue({
+      sort: vi.fn().mockReturnThis(),
+      limit: vi.fn().mockReturnThis(),
+      next: vi.fn().mockResolvedValue(null),
+    }),
+    insertOne: vi.fn().mockResolvedValue({ insertedId: 'movement-id' }),
+    findOneAndUpdate: vi.fn().mockResolvedValue({ value: { seq: 7 } }),
   };
 }
 
@@ -155,11 +170,14 @@ describe('MongoAuditRepository', () => {
       expect(insertedDoc.barcode).toBeNull();
     });
 
-    it('invokes enforceAppendOnlyCollection (mutating methods on the sample_movements collection become blocked) and ensureSampleMovementIndexes (createIndex called) as part of the flow', async () => {
+    it('invokes enforceAppendOnlyCollection and ensureSampleMovementIndexes (createIndex called) as part of the flow, without leaking append-only overrides onto the raw collection', async () => {
       const movements = makeMovementsCollection();
       const counters = makeCountersCollection(1);
       const db = makeDb({ movements, counters });
       const repo = new MongoAuditRepository(db);
+
+      const rawUpdateOne = movements.collection.updateOne;
+      const rawDeleteOne = movements.collection.deleteOne;
 
       const input = {
         specimenId: 'S-3',
@@ -175,10 +193,14 @@ describe('MongoAuditRepository', () => {
       expect(movements.createIndex).toHaveBeenCalled();
       expect(movements.createIndex.mock.calls.length).toBeGreaterThanOrEqual(4);
 
-      // enforceAppendOnlyCollection actually ran: mutating methods are now
-      // replaced with functions that reject with the append-only policy error
-      await expect(movements.collection.updateOne()).rejects.toThrow(/POLICY_APPEND_ONLY/);
-      await expect(movements.collection.deleteOne()).rejects.toThrow(/POLICY_APPEND_ONLY/);
+      // enforceAppendOnlyCollection actually ran, but since the "isolate
+      // append-only audit ledger protection" fix, it wraps the collection
+      // in an isolated Proxy view rather than mutating the shared object
+      // directly, so the raw collection's mutating methods stay exactly
+      // as they were (that isolation is what the append-only-isolation
+      // regression describe block below verifies end to end).
+      expect(movements.collection.updateOne).toBe(rawUpdateOne);
+      expect(movements.collection.deleteOne).toBe(rawDeleteOne);
     });
 
     it('passes the session through to appendMovementWithHashChain\'s insertOne call', async () => {
@@ -242,6 +264,53 @@ describe('MongoAuditRepository', () => {
       expect(result).toBe(1);
       const [, , options] = counters.findOneAndUpdate.mock.calls[0];
       expect(options.session).toBeUndefined();
+    });
+  });
+
+  describe('append-only isolation regression (fix: isolate append-only audit ledger protection)', () => {
+    beforeEach(() => {
+      vi.clearAllMocks();
+      sampleMovementLedger.enforceAppendOnlyCollection = vi.fn((collection) => {
+        collection.findOneAndUpdate = vi.fn(() => Promise.reject(new Error('POLICY_APPEND_ONLY')));
+      });
+      sampleMovementLedger.ensureSampleMovementIndexes = vi.fn().mockResolvedValue(undefined);
+      sampleMovementLedger.appendMovementWithHashChain = vi.fn().mockResolvedValue({ movementId: 123, hash: 'hash', previousHash: null });
+    });
+
+    it('isola a protecao append-only do ledger e preserva o contador', async () => {
+      const sharedCollection = makeSharedCollection();
+      const db = {
+        collection: vi.fn(() => sharedCollection),
+      };
+      const repository = new MongoAuditRepository(db);
+
+      const result = await repository.appendImmutableAudit({
+        specimenId: 'spec-001',
+        eventType: 'audit',
+        before: { a: 1 },
+        after: { a: 2 },
+        context: { actor: { userName: 'tester', userId: 'u1' } },
+        timestamp: new Date('2026-07-02T10:00:00.000Z'),
+      });
+
+      expect(result).toEqual({ movementID: 7 });
+      expect(db.collection).toHaveBeenNthCalledWith(1, 'sample_movements');
+      expect(db.collection).toHaveBeenNthCalledWith(2, 'counters');
+      expect(sampleMovementLedger.enforceAppendOnlyCollection).toHaveBeenCalledTimes(1);
+      expect(sampleMovementLedger.enforceAppendOnlyCollection).toHaveBeenCalledWith(expect.any(Object), 'sample_movements');
+      expect(sharedCollection.findOneAndUpdate).toHaveBeenCalledTimes(1);
+      expect(sharedCollection.findOneAndUpdate).toHaveBeenCalledWith(
+        { _id: 'sample_movements' },
+        expect.objectContaining({
+          $inc: { seq: 1 },
+        }),
+        expect.objectContaining({
+          upsert: true,
+          returnDocument: 'after',
+        })
+      );
+      expect(sampleMovementLedger.appendMovementWithHashChain).toHaveBeenCalledTimes(1);
+      expect(sampleMovementLedger.ensureSampleMovementIndexes).toHaveBeenCalledTimes(1);
     });
   });
 });
