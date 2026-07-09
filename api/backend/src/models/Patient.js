@@ -79,6 +79,26 @@ class ParticipantModel {
     }
     return normalized;
   }
+
+  static fillAcronym(clinicalUnit) {
+    if (!clinicalUnit) return null;
+
+    const stopWords = new Set(['DE', 'DA', 'DO', 'DAS', 'DOS', 'E', 'OF', 'THE', 'DEL', 'LA', 'EL', 'Y']);
+    const normalized = String(clinicalUnit)
+      .trim()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toUpperCase();
+
+    if (!normalized) return null;
+
+    const words = normalized.split(/\s+/).filter(Boolean);
+    const relevantWords = words.filter((word) => !stopWords.has(word));
+    const source = relevantWords.length > 0 ? relevantWords : words;
+
+    const initials = source.map((word) => word[0]).join('').slice(0, 6);
+    return initials || null;
+  }
 }
 
 module.exports = ParticipantModel;
