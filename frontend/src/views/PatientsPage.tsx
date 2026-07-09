@@ -55,7 +55,7 @@ export default function PatientsPage() {
   const [showSearchResults, setShowSearchResults] = useState(false);
   const [resendingConsentFor, setResendingConsentFor] = useState<string | null>(null);
   const [isSignatureModalOpen, setIsSignatureModalOpen] = useState(false);
-  const [activeparticipantId, setActiveparticipantId] = useState<string | null>(null);
+  const [activeParticipantId, setActiveParticipantId] = useState<string | null>(null);
   const [consentOverrides, setConsentOverrides] = useState<Record<string, ConsentStatus>>({});
   const canImportPatients = user?.roleName === 'Administrador' || user?.roleName === 'Coordenador' || user?.accessType === 3 || user?.accessType === 4;
 
@@ -73,23 +73,23 @@ export default function PatientsPage() {
   };
 
   const handleOpenSignatureModal = (participantId: string) => {
-    setActiveparticipantId(participantId);
+    setActiveParticipantId(participantId);
     setIsSignatureModalOpen(true);
   };
 
   const handleCloseSignatureModal = () => {
     setIsSignatureModalOpen(false);
-    setActiveparticipantId(null);
+    setActiveParticipantId(null);
   };
 
   const handleConfirmSignature = (_dataUrl: string) => {
-    if (!activeparticipantId) return;
+    if (!activeParticipantId) return;
     setConsentOverrides((prev) => ({
       ...prev,
-      [activeparticipantId]: 'GRANTED'
+      [activeParticipantId]: 'GRANTED'
     }));
     setIsSignatureModalOpen(false);
-    setActiveparticipantId(null);
+    setActiveParticipantId(null);
   };
   
   // Handler para busca de pacientes

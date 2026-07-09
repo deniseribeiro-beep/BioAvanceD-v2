@@ -1,5 +1,5 @@
 const { getCollection } = require('../utils/collectionResolver');
-const { generateUniqueparticipantId } = require('../utils/patientAnonymization');
+const { generateUniqueParticipantId } = require('../utils/patientAnonymization');
 
 function normalizeString(value) {
   return String(value || '').trim();
@@ -46,7 +46,7 @@ class participantIdentityService {
       return { created: false, matchType: participantId ? 'participantId' : 'name+birthDate', patient: { ...existing, ...update, participantId: existing.participantId || participantId } };
     }
 
-    const generatedParticipantId = participantId || await generateUniqueparticipantId(db);
+    const generatedParticipantId = participantId || await generateUniqueParticipantId(db);
     const toInsert = {
       participantId: generatedParticipantId,
       patientName: patientName || 'PACIENTE SEM NOME',

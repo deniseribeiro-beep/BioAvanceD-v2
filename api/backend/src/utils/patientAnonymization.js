@@ -19,6 +19,8 @@ async function generateUniqueParticipantId(db, collectionName = DEFAULT_PARTICIP
   throw new Error('Não foi possível gerar um participantId único após múltiplas tentativas.');
 }
 
+const generateUniqueparticipantId = generateUniqueParticipantId;
+
 async function validateParticipantId(db, participantId, collectionName = DEFAULT_PARTICIPANT_COLLECTION) {
   try {
     if (!participantId || typeof participantId !== 'string' || !/^\d{8}$/.test(participantId)) return false;
@@ -38,6 +40,7 @@ function sanitizePatientForLogs(participant) {
 
 module.exports = {
   generateUniqueParticipantId,
+  generateUniqueparticipantId,
   validateParticipantId,
   sanitizePatientForLogs
 };
