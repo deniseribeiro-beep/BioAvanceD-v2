@@ -481,6 +481,12 @@ function makeMovementsCollection() {
   };
 }
 
+function makeCountersCollection() {
+  return {
+    findOneAndUpdate: vi.fn().mockResolvedValue({ value: { seq: 1 } })
+  };
+}
+
 function makeSession() {
   return {
     withTransaction: vi.fn(async (fn) => { await fn(); }),
@@ -509,6 +515,7 @@ describe('StorageService.allocateSampleToPosition', () => {
         if (name === 'storageBoxes') return { findOne: boxesFindOne, updateOne: boxesUpdateOne };
         if (name === 'samples') return { findOne: samplesFindOne, updateOne: samplesUpdateOne };
         if (name === 'sample_movements') return movements;
+        if (name === 'counters') return makeCountersCollection();
         throw new Error(`unexpected collection: ${name}`);
       }),
       getMongo: vi.fn(() => ({ startSession: vi.fn(() => makeSession()) }))
@@ -537,7 +544,7 @@ describe('StorageService.allocateSampleToPosition', () => {
     const result = await service.allocateSampleToPosition(sampleId, boxId, 'A1');
 
     expect(result.success).toBe(true);
-    expect(result.sampleLocation).toEqual({ sampleId, boxId, position: 'A1' });
+    expect(result.sampleLocation).toEqual({ specimenId: sampleId, boxId, position: 'A1' });
 
     // Box occupancyGrid gets the sample written at the position, sample gets storageLocation+status
     const boxUpdateCall = boxesUpdateOne.mock.calls[0];
@@ -1015,6 +1022,7 @@ describe('StorageService.releaseSampleFromPosition', () => {
         if (name === 'samples') return { findOne: samplesFindOne, updateOne: samplesUpdateOne };
         if (name === 'storageBoxes') return { updateOne: boxesUpdateOne };
         if (name === 'sample_movements') return movements;
+        if (name === 'counters') return makeCountersCollection();
         throw new Error(`unexpected collection: ${name}`);
       })
     });
@@ -1036,7 +1044,7 @@ describe('StorageService.releaseSampleFromPosition', () => {
     const result = await service.releaseSampleFromPosition(sampleId);
 
     expect(result.success).toBe(true);
-    expect(result.releasedFrom).toEqual({ sampleId, boxId, position: 'C3' });
+    expect(result.releasedFrom).toEqual({ specimenId: sampleId, boxId, position: 'C3' });
 
     const boxUpdateCall = boxesUpdateOne.mock.calls[0];
     expect(boxUpdateCall[1].$unset[`occupancyGrid.C3`]).toBe('');
