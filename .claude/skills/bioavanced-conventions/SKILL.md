@@ -87,8 +87,18 @@ issue, since the label may predate the doc (or predate you finding it).
 ## Git hygiene
 
 - Create a branch per logical unit of work **before the first Edit/Write
-  call**, not just before the first commit. Never work directly on
-  `main`. **`main` is currently frozen — do not branch off it, merge
+  call**, not just before the first commit. This is easy to slip on
+  mid-session when triaging several issues in a row and editing a file
+  the moment its root cause is confirmed, before consciously deciding
+  "this is its own branch" (observed 2026-07-09: two files were edited
+  for issue #125 directly on `feature/docker-e2e-backend-integration`
+  before a `fix/` branch existed; the branch created moments later for
+  an unrelated issue ended up carrying both by accident). Not harmful
+  when the fixes are genuinely related (same file family, same root
+  cause) and end up sharing one branch anyway, but treat that as luck,
+  not the plan — branch the instant you know you're about to fix
+  something, before the first Edit, even mid-triage. Never work
+  directly on `main`. **`main` is currently frozen — do not branch off it, merge
   into it, or push to it for any reason until Dennis lifts the freeze.**
   Base new branches off `feature/docker-e2e-backend-integration` instead
   (it's ahead of `main` and carries the in-flight test-loop/fix-bugs
