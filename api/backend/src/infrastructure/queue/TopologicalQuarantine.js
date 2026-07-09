@@ -29,7 +29,7 @@ class TopologicalQuarantine {
   }
 
   async enqueue(payload, context = {}) {
-    if (!payload || !payload.sampleId || !payload.eventType) {
+    if (!payload || !payload.specimenId || !payload.eventType) {
       logger.warn('[ISO20387][QUARANTINE] Payload inválido ignorado');
       return false;
     }
@@ -46,7 +46,7 @@ class TopologicalQuarantine {
     try {
       await this.redis.rpush(this.queueKey, JSON.stringify(item));
       this.metrics.enqueuedTotal += 1;
-      logger.warn(`[ISO20387][QUARANTINE] Evento enfileirado para retry: sampleId=${payload.sampleId}, eventType=${payload.eventType}`);
+      logger.warn(`[ISO20387][QUARANTINE] Evento enfileirado para retry: specimenId=${payload.specimenId}, eventType=${payload.eventType}`);
       return true;
     } catch (error) {
       logger.error('[ISO20387][QUARANTINE] Falha ao enfileirar evento topológico:', error.message || error);
@@ -107,7 +107,7 @@ class TopologicalQuarantine {
           const attempts = Number(item?.attempts || 0) + 1;
           if (attempts >= this.maxAttempts) {
             this.metrics.discardedTotal += 1;
-            logger.error(`[ISO20387][QUARANTINE] Item descartado após ${attempts} tentativas: sampleId=${item?.payload?.sampleId || 'unknown'}`);
+            logger.error(`[ISO20387][QUARANTINE] Item descartado após ${attempts} tentativas: specimenId=${item?.payload?.specimenId || 'unknown'}`);
             continue;
           }
 
@@ -143,7 +143,7 @@ class TopologicalQuarantine {
       await lineageRepository.recordCustodyEvent(item.payload);
 
       this.metrics.replaySuccessTotal += 1;
-      logger.info(`[ISO20387][QUARANTINE] Reprocessamento OK: sampleId=${item.payload.sampleId}, eventType=${item.payload.eventType}`);
+      logger.info(`[ISO20387][QUARANTINE] Reprocessamento OK: specimenId=${item.payload.specimenId}, eventType=${item.payload.eventType}`);
       return true;
     } catch (error) {
       this.metrics.replayFailureTotal += 1;

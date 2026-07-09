@@ -9,7 +9,7 @@ export type SampleMovement = SampleMovementItem;
 export type SampleCustodyRow = Sample & {
   _id?: string;
   id?: string;
-  patientId?: string;
+  participantId?: string;
   patient?: { id?: string };
   code?: string;
 };
@@ -28,8 +28,8 @@ export function resolveSampleId(sample: SampleRecord): string {
   return String(sample?.sampleID || sample?.id || sample?._id || '—');
 }
 
-export function resolvePatientId(sample: SampleRecord): string {
-  return String(sample?.patientId || sample?.patientID || sample?.patient?.id || '—');
+export function resolveParticipantId(sample: SampleRecord): string {
+  return String(sample?.participantId || sample?.patient?.id || '—');
 }
 
 export function useSampleCustodyReports() {
@@ -99,3 +99,4 @@ export function useSampleCustodyReports() {
     toggleMovements,
   };
 }
+

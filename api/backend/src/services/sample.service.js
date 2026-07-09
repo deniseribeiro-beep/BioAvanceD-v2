@@ -1,16 +1,15 @@
 const { SampleModel } = require('../models/Sample');
 const SampleMovementModel = require('../models/SampleMovement');
 const logger = require('../utils/logger');
-const { validatePatientID } = require('../utils/patientAnonymization');
+const { validateParticipantId } = require('../utils/patientAnonymization');
 const { generateUniqueBarcode } = require('../utils/barcodeGenerator');
 const {
   generateBarcodeSymbologies,
   generateIndustrialBarcodeArtifacts,
   parseScannedBarcode
 } = require('../utils/barcodeSymbology');
-const { generateUniqueSampleID } = require('../utils/sampleIDGenerator');
+const { generateUniqueSpecimenId } = require('../utils/sampleIDGenerator');
 const { appendMovementWithHashChain } = require('../utils/sampleMovementLedger');
-const fhirSyncService = require('./fhir-sync.service');
 const { getCollection } = require('../utils/collectionResolver');
 
 const LOCATION_REQUIRED_MESSAGE = 'Localização física obrigatória para cadastro de amostra';
@@ -100,25 +99,21 @@ class SampleService {
       
       const samplesCollection = await getCollection(db, 'samples');
 
-      // VALIDAÇÃO DE ID DE PACIENTE (LGPD)
-      // O ID de paciente é obrigatório e deve existir no banco
-      if (!sampleData.patientID) {
-        const patientIdError = new Error('ID de paciente é obrigatório para cadastrar amostra');
-        patientIdError.statusCode = 400;
-        throw patientIdError;
+      if (!sampleData.participantId) {
+        const participantIdError = new Error('participantId é obrigatório para cadastrar espécime');
+        participantIdError.statusCode = 400;
+        throw participantIdError;
       }
 
-      // Valida formato do patientID (8 dígitos)
-      if (typeof sampleData.patientID !== 'string' || sampleData.patientID.length !== 8 || !/^\d{8}$/.test(sampleData.patientID)) {
-        const patientIdFormatError = new Error('ID de paciente deve ser um ID anonimizado de 8 dígitos numéricos');
-        patientIdFormatError.statusCode = 400;
-        throw patientIdFormatError;
+      if (typeof sampleData.participantId !== 'string' || !validateParticipantId(sampleData.participantId)) {
+        const participantIdError = new Error('participantId inválido');
+        participantIdError.statusCode = 400;
+        throw participantIdError;
       }
 
-      // Valida se o ID de paciente existe (sem expor dados sensíveis)
-      const patientExists = await validatePatientID(db, sampleData.patientID);
-      if (!patientExists) {
-        const notFoundError = new Error(`ID de paciente ${sampleData.patientID} não encontrado. Verifique se o ID está correto.`);
+      const participantExists = await validateParticipantId(db, sampleData.participantId);
+      if (!participantExists) {
+        const notFoundError = new Error(`participantId ${sampleData.participantId} não encontrado. Verifique se o ID está correto.`);
         notFoundError.statusCode = 404;
         throw notFoundError;
       }
@@ -134,10 +129,6 @@ class SampleService {
 
       if (sampleData.extractionProtocol && !SampleModel.validateExtractionType(sampleData.extractionProtocol)) {
         throw new Error('Protocolo de extração inválido conforme MIABIS');
-      }
-
-      if (sampleData.currentStatus && !SampleModel.validateSampleStatus(sampleData.currentStatus)) {
-        throw new Error('Status da amostra inválido conforme MIABIS');
       }
 
       // RF004 - Validação de quantidade
@@ -199,7 +190,7 @@ class SampleService {
         });
 
         if (conflict) {
-          const err = new Error(`Posição [${sampleData.location.position}] já ocupada pela amostra [${conflict.sampleID || conflict._id?.toString()}]`);
+          const err = new Error(`Posição [${sampleData.location.position}] já ocupada pelo espécime [${conflict.specimenId || conflict._id?.toString()}]`);
           err.status = 409;
           throw err;
         }
@@ -224,14 +215,13 @@ class SampleService {
       }
 
       // Gera ID único para a amostra
-      if (!sampleData.sampleID) {
-        sampleData.sampleID = await generateUniqueSampleID(db, 'samples');
-        logger.info(`ID único de amostra gerado automaticamente: ${sampleData.sampleID}`);
+      if (!sampleData.specimenId) {
+        sampleData.specimenId = await generateUniqueSpecimenId(db, 'samples');
+        logger.info(`ID único de espécime gerado automaticamente: ${sampleData.specimenId}`);
       } else {
-        // Verifica se o sampleID fornecido já existe
-        const existingSample = await samplesCollection.findOne({ sampleID: sampleData.sampleID });
+        const existingSample = await samplesCollection.findOne({ specimenId: sampleData.specimenId });
         if (existingSample) {
-          throw new Error(`Já existe uma amostra com o ID ${sampleData.sampleID}`);
+          throw new Error(`Já existe um espécime com o ID ${sampleData.specimenId}`);
         }
       }
 
@@ -250,8 +240,8 @@ class SampleService {
 
       try {
         await appendMovementWithHashChain(movementsCollection, SampleMovementModel.create({
-          movementID: createMovementID,
-          sampleID: result.insertedId.toString(),
+          movementId: createMovementID,
+          specimenId: sample.specimenId,
           barcode: sample.barcode,
           type: 'create',
           quantity: createdQuantity,
@@ -275,9 +265,9 @@ class SampleService {
       }
 
       // Log sanitizado (apenas ID, sem dados sensíveis)
-      logger.info('Amostra criada:', { 
-        sampleID: result.insertedId,
-        patientID: sample.patientID // Apenas ID, sem dados sensíveis
+      logger.info('Amostra criada:', {
+        specimenId: sample.specimenId,
+        participantId: sample.participantId
       });
 
       return {
@@ -290,18 +280,18 @@ class SampleService {
     }
   }
 
-  async withdrawSample(db, sampleID, withdrawalData, auditInfo = {}) {
+  async withdrawSample(db, specimenId, withdrawalData, auditInfo = {}) {
     try {
       const samplesCollection = await getCollection(db, 'samples');
       const movementsCollection = await getCollection(db, 'sampleMovements');
       
       // Busca a amostra (suporta ObjectId ou barcode)
-      let sample = await samplesCollection.findOne({ _id: sampleID });
+      let sample = await samplesCollection.findOne({ specimenId });
       
       if (!sample) {
         // Tenta buscar por barcode se não encontrou por ID
-        if (typeof sampleID === 'string' && !sampleID.match(/^[0-9a-fA-F]{24}$/)) {
-          const result = await this.getSampleByBarcode(db, sampleID);
+        if (typeof specimenId === 'string' && !specimenId.match(/^[0-9a-fA-F]{24}$/)) {
+          const result = await this.getSpecimenByBarcode(db, specimenId);
           sample = result.sample;
         }
       }
@@ -312,10 +302,6 @@ class SampleService {
 
       // Validações de status
       const invalidStatuses = ['TotallyWithdrawn', 'Destroyed', 'Unusable', 'Expired'];
-      if (invalidStatuses.includes(sample.currentStatus)) {
-        throw new Error(`Amostra não está disponível para retirada (Status: ${sample.currentStatus})`);
-      }
-
       // Validações MIABIS
       if (!SampleModel.validateWithdrawalType(withdrawalData.withdrawalType)) {
         throw new Error('Tipo de retirada inválido. Deve ser: Parcial ou Total');
@@ -353,18 +339,13 @@ class SampleService {
       const newAvailableQty = availableQty - withdrawQty;
       const totalWithdrawn = (sample.totalWithdrawn || 0) + withdrawQty;
 
-      const lifecycleStatus = SampleModel.computeStatus(
-        sample.originalQuantity || sample.quantity,
-        newAvailableQty,
-        sample.status
-      );
-      const legacyStatus = SampleModel.mapLifecycleToLegacy(lifecycleStatus);
+      const lifecycleStatus = SampleModel.computeStatus(sample.originalQuantity || sample.quantity, newAvailableQty, sample.lifecycleStatus);
 
       // Registrar movimentação no ledger (imutável)
       const movementID = await SampleMovementModel.generateMovementID(db);
       const movement = SampleMovementModel.create({
-        movementID,
-        sampleID: sample._id.toString(),
+        movementId: movementID,
+        specimenId: sample.specimenId,
         barcode: sample.barcode,
         type: 'withdraw',
         quantity: withdrawQty,
@@ -387,21 +368,20 @@ class SampleService {
 
       // Atualizar amostra
       const update = {
-        currentStatus: legacyStatus,
         availableQuantity: newAvailableQty,
         totalWithdrawn: totalWithdrawn,
-        withdrawalDate: new Date(),
+        withdrawnAt: new Date(),
         withdrawalType: withdrawalData.withdrawalType,
         withdrawalResponsible: withdrawalData.withdrawalResponsible,
         sampleDestination: withdrawalData.sampleDestination || withdrawalData.withdrawalDestination,
         linkedProject: withdrawalData.linkedProject || sample.linkedProject,
         lastWithdrawalID: movementID,
-        status: lifecycleStatus,
+        lifecycleStatus,
         updatedAt: new Date()
       };
 
       await samplesCollection.updateOne(
-        { _id: sample._id },
+        { specimenId: sample.specimenId },
         { $set: update }
       );
 
@@ -420,15 +400,10 @@ class SampleService {
     }
   }
 
-  async getSample(db, sampleID) {
+  async getSample(db, specimenId) {
     try {
-      const sampleFromFhir = await fhirSyncService.getSampleFhirFirst(db, sampleID);
-      if (sampleFromFhir) {
-        return sampleFromFhir;
-      }
-
       const samplesCollection = await getCollection(db, 'samples');
-      return await samplesCollection.findOne({ _id: sampleID });
+      return await samplesCollection.findOne({ specimenId });
     } catch (error) {
       logger.error('Erro ao buscar amostra:', error.message);
       throw error;
@@ -437,20 +412,15 @@ class SampleService {
 
   async listSamples(db, filters = {}) {
     try {
-      const listFromFhir = await fhirSyncService.listSamplesFhirFirst(db, filters);
-      if (listFromFhir) {
-        return listFromFhir;
-      }
-
       const samplesCollection = await getCollection(db, 'samples');
       const query = {};
 
-      if (filters.patientID) {
-        query.patientID = filters.patientID;
+      if (filters.participantId) {
+        query.participantId = filters.participantId;
       }
 
-      if (filters.currentStatus) {
-        query.currentStatus = filters.currentStatus;
+      if (filters.lifecycleStatus) {
+        query.lifecycleStatus = filters.lifecycleStatus;
       }
 
       if (filters.sampleType) {
@@ -475,10 +445,10 @@ class SampleService {
     }
   }
 
-  async updateSample(db, sampleID, updateData) {
+  async updateSample(db, specimenId, updateData) {
     try {
       const samplesCollection = await getCollection(db, 'samples');
-      const existing = await samplesCollection.findOne({ _id: sampleID });
+      const existing = await samplesCollection.findOne({ specimenId });
       if (!existing) {
         return null;
       }
@@ -493,18 +463,17 @@ class SampleService {
       const lifecycleStatus = SampleModel.computeStatus(
         nextOriginal,
         nextAvailable,
-        updateData.status || existing.status
+        updateData.lifecycleStatus || existing.lifecycleStatus
       );
 
       const payload = {
         ...updateData,
-        status: lifecycleStatus,
-        currentStatus: SampleModel.mapLifecycleToLegacy(lifecycleStatus),
+        lifecycleStatus,
         updatedAt: new Date()
       };
       
       const result = await samplesCollection.updateOne(
-        { _id: sampleID },
+        { specimenId },
         { $set: payload }
       );
 
@@ -512,17 +481,17 @@ class SampleService {
         return null;
       }
 
-      return await samplesCollection.findOne({ _id: sampleID });
+      return await samplesCollection.findOne({ specimenId });
     } catch (error) {
       logger.error('Erro ao atualizar amostra:', error.message);
       throw error;
     }
   }
 
-  async deleteSample(db, sampleID) {
+  async deleteSample(db, specimenId) {
     try {
       const samplesCollection = await getCollection(db, 'samples');
-      const result = await samplesCollection.deleteOne({ _id: sampleID });
+      const result = await samplesCollection.deleteOne({ specimenId });
       return result.deletedCount > 0;
     } catch (error) {
       logger.error('Erro ao deletar amostra:', error.message);
@@ -542,11 +511,6 @@ class SampleService {
       // Tenta múltiplas estratégias de busca para garantir compatibilidade
       let sample = null;
 
-      sample = await fhirSyncService.getSampleByBarcodeFhirFirst(db, barcodeStr);
-      if (sample) {
-        logger.info(`Amostra encontrada (FHIR-first): ${sample._id}, barcode: ${sample.barcode}`);
-      }
-      
       // 1. Busca exata (string)
       if (!sample) {
         sample = await samplesCollection.findOne({ barcode: barcodeStr });
@@ -599,44 +563,43 @@ class SampleService {
           .project({ barcode: 1, _id: 0 })
           .toArray();
         logger.warn(`Amostra não encontrada com código de barras: "${barcodeStr}". Total de amostras: ${sampleCount}. Exemplos de barcodes: ${JSON.stringify(sampleExamples.map(s => s.barcode))}`);
-        return { sample: null, patient: null };
+        return { sample: null, participant: null };
       }
-      let patient = null;
-      if (sample.patientID) {
-        patient = await patientsCollection.findOne({ patientID: sample.patientID });
-        if (patient) {
-          // LGPD: Anonimizar nome do paciente - mostrar apenas iniciais
+      let participant = null;
+      if (sample.participantId) {
+        participant = await patientsCollection.findOne({ participantId: sample.participantId });
+        if (participant) {
           const anonymizeName = (name) => {
             if (!name) return '***';
             const parts = name.trim().split(' ');
             if (parts.length === 1) return parts[0].charAt(0) + '***';
             return parts[0].charAt(0) + '. ' + parts[parts.length - 1].charAt(0) + '.';
           };
-          patient = {
-            patientID: patient.patientID,
-            patientName: anonymizeName(patient.patientName),
-            recordNumber: patient.recordNumber
+          participant = {
+            participantId: participant.participantId,
+            patientName: anonymizeName(participant.patientName),
+            recordNumber: participant.recordNumber
           };
         }
       }
 
-      return { sample, patient };
+      return { sample, participant };
     } catch (error) {
       logger.error('Erro ao buscar amostra por código de barras:', error.message);
       throw error;
     }
   }
 
-  async getSampleResults(db, sampleID) {
+  async getSampleResults(db, specimenId) {
     try {
       const resultsCollection = db.collection('results');
-      const sample = await this.getSample(db, sampleID);
+      const sample = await this.getSample(db, specimenId);
       
       if (!sample) {
         throw new Error('Amostra não encontrada');
       }
 
-      const results = await resultsCollection.find({ sampleID: sample.sampleID }).toArray();
+      const results = await resultsCollection.find({ specimenId: sample.specimenId }).toArray();
       return results;
     } catch (error) {
       logger.error('Erro ao buscar arquivos de analise da amostra:', error.message);
@@ -655,18 +618,18 @@ class SampleService {
     });
   }
 
-  async returnSample(db, sampleID, returnData, auditInfo = {}) {
+  async returnSample(db, specimenId, returnData, auditInfo = {}) {
     try {
       const samplesCollection = await getCollection(db, 'samples');
       const movementsCollection = await getCollection(db, 'sampleMovements');
       
       // Busca a amostra (suporta ObjectId ou barcode)
-      let sample = await samplesCollection.findOne({ _id: sampleID });
+      let sample = await samplesCollection.findOne({ specimenId });
       
       if (!sample) {
         // Tenta buscar por barcode se não encontrou por ID
-        if (typeof sampleID === 'string' && !sampleID.match(/^[0-9a-fA-F]{24}$/)) {
-          const result = await this.getSampleByBarcode(db, sampleID);
+        if (typeof specimenId === 'string' && !specimenId.match(/^[0-9a-fA-F]{24}$/)) {
+          const result = await this.getSampleByBarcode(db, specimenId);
           sample = result.sample;
         }
       }
@@ -725,18 +688,13 @@ class SampleService {
         newAvailableQty += returnQty;
       }
 
-      const lifecycleStatus = SampleModel.computeStatus(
-        sample.originalQuantity || sample.quantity,
-        newAvailableQty,
-        sample.status
-      );
-      const legacyStatus = SampleModel.mapLifecycleToLegacy(lifecycleStatus);
+      const lifecycleStatus = SampleModel.computeStatus(sample.originalQuantity || sample.quantity, newAvailableQty, sample.lifecycleStatus);
 
       // Registrar movimentação no ledger (imutável)
       const movementID = await SampleMovementModel.generateMovementID(db);
       const movement = SampleMovementModel.create({
-        movementID,
-        sampleID: sample._id.toString(),
+        movementId: movementID,
+        specimenId: sample.specimenId,
         barcode: sample.barcode,
         type: 'return',
         quantity: returnQty,
@@ -745,7 +703,7 @@ class SampleService {
         condition: returnData.condition,
         linkedProject: returnData.linkedProject || sample.linkedProject,
         observations: returnData.observations || returnData.notes,
-        relatedWithdrawalID: sample.lastWithdrawalID || null,
+        relatedWithdrawalId: sample.lastWithdrawalID || null,
         userId: auditInfo.userId || null,
         userName: auditInfo.userName || null,
         userRole: auditInfo.userRole || null,
@@ -759,23 +717,21 @@ class SampleService {
 
       // Atualizar amostra
       const update = {
-        currentStatus: legacyStatus,
         availableQuantity: newAvailableQty,
         totalReturned: newTotalReturned,
-        status: lifecycleStatus,
+        lifecycleStatus,
         updatedAt: new Date()
       };
 
-      // Limpar campos de retirada se voltou ao estado disponível
-      if (legacyStatus === 'Available') {
-        update.withdrawalDate = null;
+      if (lifecycleStatus === 'AVAILABLE') {
+        update.withdrawnAt = null;
         update.withdrawalType = null;
         update.withdrawalResponsible = null;
         update.sampleDestination = null;
       }
 
       await samplesCollection.updateOne(
-        { _id: sample._id },
+        { specimenId: sample.specimenId },
         { $set: update }
       );
 
@@ -798,18 +754,18 @@ class SampleService {
   /**
    * Obtém histórico de movimentações de uma amostra
    */
-  async getSampleMovements(db, sampleID) {
+  async getSampleMovements(db, specimenId) {
     try {
       const movementsCollection = await getCollection(db, 'sampleMovements');
       
       // Suporta busca por ObjectId ou string de ID
-      const sampleIDStr = sampleID.toString ? sampleID.toString() : sampleID;
+      const specimenIdStr = specimenId.toString ? specimenId.toString() : specimenId;
       
       const movements = await movementsCollection
         .find({ 
           $or: [
-            { sampleID: sampleIDStr },
-            { barcode: sampleIDStr }
+            { specimenId: specimenIdStr },
+            { barcode: specimenIdStr }
           ]
         })
         .sort({ timestamp: -1 })
@@ -828,7 +784,7 @@ class SampleService {
   async findAvailableSamplesForResearch(db, query = {}) {
     const samplesCollection = await getCollection(db, 'samples');
     // Garante que só retorna amostras AVAILABLE
-    const finalQuery = { ...query, currentStatus: 'AVAILABLE' };
+    const finalQuery = { ...query, lifecycleStatus: 'AVAILABLE' };
     return samplesCollection.find(finalQuery).toArray();
   }
 }

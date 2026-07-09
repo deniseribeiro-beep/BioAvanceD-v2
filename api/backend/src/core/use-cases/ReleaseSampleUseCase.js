@@ -15,14 +15,14 @@ class ReleaseSampleUseCase {
   }
 
   /**
-   * @param {{ sampleId: string, actor: { userId?: string|null, userName?: string|null, userRole?: string|null, ipAddress?: string|null, userAgent?: string|null } }} command
+   * @param {{ specimenId: string, actor: { userId?: string|null, userName?: string|null, userRole?: string|null, ipAddress?: string|null, userAgent?: string|null } }} command
    */
   async execute(command) {
-    if (!command?.sampleId) {
-      throw new Error('sampleId é obrigatório');
+    if (!command?.specimenId) {
+      throw new Error('specimenId é obrigatório');
     }
 
-    const sampleSnapshot = await this.storageRepository.findSampleById(command.sampleId);
+    const sampleSnapshot = await this.storageRepository.findSampleById(command.specimenId);
     if (!sampleSnapshot) {
       throw new Error('Amostra não encontrada');
     }
@@ -33,7 +33,7 @@ class ReleaseSampleUseCase {
     }
 
     const lineageResult = await this.ensureLineageBeforeMongo({
-      sampleId: String(sampleSnapshot._id),
+      specimenId: String(sampleSnapshot._id),
       barcode: sampleSnapshot.barcode || null,
       eventType: 'release',
       from: {
@@ -50,25 +50,25 @@ class ReleaseSampleUseCase {
 
     try {
       await this.storageRepository.withTransaction(async (session) => {
-        const sample = await this.storageRepository.findSampleById(command.sampleId, session);
+        const sample = await this.storageRepository.findSampleById(command.specimenId, session);
         if (!sample) {
           throw new Error('Amostra não encontrada');
         }
 
         const release = await this.storageRepository.releaseSamplePosition(
-          { sampleId: command.sampleId },
+          { specimenId: command.specimenId },
           session
         );
 
         releasedFrom = {
-          sampleId: String(command.sampleId),
+          specimenId: String(command.specimenId),
           boxId: release.from.boxId,
           position: release.from.position
         };
 
         await this.auditRepository.appendImmutableAudit(
           {
-            sampleId: String(sample._id),
+            specimenId: String(sample._id),
             barcode: sample.barcode || null,
             eventType: 'release',
             before: {
@@ -128,7 +128,7 @@ class ReleaseSampleUseCase {
     }
   }
 
-  async compensateLineageIfNeeded(lineageResult, sampleId) {
+  async compensateLineageIfNeeded(lineageResult, specimenId) {
     if (!lineageResult?.lineagePersisted || !lineageResult?.eventId || !this.lineageRepository) {
       return;
     }
@@ -136,7 +136,7 @@ class ReleaseSampleUseCase {
     try {
       await this.lineageRepository.compensateCustodyEvent({
         eventId: lineageResult.eventId,
-        sampleId,
+        specimenId,
         reason: 'mongo_transaction_failed'
       });
       logger.warn('[ISO20387][SAGA] Compensação Neo4j concluída após falha Mongo (release)');

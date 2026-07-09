@@ -27,19 +27,19 @@ class MoveSampleUseCase {
 
   /**
    * @param {{
-   *  sampleId: string,
+   *  specimenId: string,
    *  targetBoxId: string,
    *  targetPosition: string,
    *  reason?: string,
    *  notes?: string,
    *  actor: { userId?: string|null, userName?: string|null, userRole?: string|null, ipAddress?: string|null, userAgent?: string|null }
    * }} command
-   * @returns {Promise<{ success: boolean, movementID: number, sampleId: string, from: { boxId: string, position: string }, to: { boxId: string, position: string }, movedAt: Date, lineageSynced: boolean }>}
+   * @returns {Promise<{ success: boolean, movementID: number, specimenId: string, from: { boxId: string, position: string }, to: { boxId: string, position: string }, movedAt: Date, lineageSynced: boolean }>}
    */
   async execute(command) {
     this.validateCommand(command);
 
-    const snapshotSample = await this.storageRepository.findSampleById(command.sampleId);
+    const snapshotSample = await this.storageRepository.findSampleById(command.specimenId);
     if (!snapshotSample) {
       throw new Error('Amostra não encontrada');
     }
@@ -70,7 +70,7 @@ class MoveSampleUseCase {
     }
 
     const lineageResult = await this.ensureLineageBeforeMongo({
-      sampleId: String(snapshotSample._id),
+      specimenId: String(snapshotSample._id),
       barcode: snapshotSample.barcode || null,
       eventType: 'move',
       from,
@@ -86,7 +86,7 @@ class MoveSampleUseCase {
 
     try {
       await this.storageRepository.withTransaction(async (session) => {
-        const sample = await this.storageRepository.findSampleById(command.sampleId, session);
+        const sample = await this.storageRepository.findSampleById(command.specimenId, session);
         if (!sample) {
           throw new Error('Amostra não encontrada');
         }
@@ -104,7 +104,7 @@ class MoveSampleUseCase {
 
         await this.storageRepository.moveSamplePosition(
           {
-            sampleId: command.sampleId,
+            specimenId: command.specimenId,
             fromBoxId: from.boxId,
             fromPosition: from.position,
             toBoxId: to.boxId,
@@ -115,13 +115,13 @@ class MoveSampleUseCase {
 
         movedAt = new Date();
         sampleSnapshot = {
-          sampleId: String(sample._id),
+          specimenId: String(sample._id),
           barcode: sample.barcode || null
         };
 
         const auditResult = await this.auditRepository.appendImmutableAudit(
           {
-            sampleId: String(sample._id),
+            specimenId: String(sample._id),
             barcode: sample.barcode || null,
             eventType: 'move',
             before: {
@@ -156,7 +156,7 @@ class MoveSampleUseCase {
     return {
       success: true,
       movementID,
-      sampleId: sampleSnapshot.sampleId,
+      specimenId: sampleSnapshot.specimenId,
       from,
       to,
       movedAt,
@@ -175,8 +175,8 @@ class MoveSampleUseCase {
       throw new Error('Comando de movimentação inválido');
     }
 
-    if (!command.sampleId) {
-      throw new Error('sampleId é obrigatório');
+    if (!command.specimenId) {
+      throw new Error('specimenId é obrigatório');
     }
 
     if (!command.targetBoxId) {
@@ -218,7 +218,7 @@ class MoveSampleUseCase {
     }
   }
 
-  async compensateLineageIfNeeded(lineageResult, sampleId) {
+  async compensateLineageIfNeeded(lineageResult, specimenId) {
     if (!lineageResult?.lineagePersisted || !lineageResult?.eventId || !this.lineageRepository) {
       return;
     }
@@ -226,7 +226,7 @@ class MoveSampleUseCase {
     try {
       await this.lineageRepository.compensateCustodyEvent({
         eventId: lineageResult.eventId,
-        sampleId,
+        specimenId,
         reason: 'mongo_transaction_failed'
       });
       logger.warn('[ISO20387][SAGA] Compensação Neo4j concluída após falha Mongo (move)');

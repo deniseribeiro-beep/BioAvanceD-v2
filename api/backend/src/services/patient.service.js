@@ -1,10 +1,9 @@
 const PatientModel = require('../models/Patient');
 const ClinicalUnitModel = require('../models/ClinicalUnit');
 const logger = require('../utils/logger');
-const { generateUniquePatientID, sanitizePatientForLogs } = require('../utils/patientAnonymization');
+const { generateUniqueParticipantId, sanitizePatientForLogs } = require('../utils/patientAnonymization');
 const { encryptValue, decryptValue } = require('../utils/fieldEncryption');
 const notificationService = require('./notification.service');
-const fhirSyncService = require('./fhir-sync.service');
 const patientBiomarkerTimeseriesService = require('./patientBiomarkerTimeseries.service');
 const biomarkerObservationService = require('./biomarker-observation.service');
 const { getCollection } = require('../utils/collectionResolver');
@@ -19,8 +18,8 @@ class PatientService {
   async createBiomarkerObservationsFromPatient(db, patient, eventType = 'manual') {
     if (!db || !patient) return;
 
-    const patientID = String(patient.patientID || '').trim();
-    if (!/^\d{8}$/.test(patientID)) return;
+    const participantId = String(patient.participantId || '').trim();
+    if (!/^\d{8}$/.test(participantId)) return;
 
     const collectedAt = patient.updatedAt || patient.createdAt || new Date();
 
@@ -43,7 +42,7 @@ class PatientService {
       if (!Number.isFinite(numericValue) || numericValue < 0) continue;
 
       await biomarkerObservationService.createObservation(db, {
-        patientID,
+        participantId,
         biomarkerType: input.biomarkerType,
         value: numericValue,
         unit: input.unit,
@@ -52,7 +51,7 @@ class PatientService {
         source: 'patient',
         eventType,
         linkedResourceType: 'Patient',
-        linkedResourceId: patientID
+        linkedResourceId: participantId
       });
     }
   }
@@ -61,7 +60,7 @@ class PatientService {
     return {
       alphaGal: 'alphaGalEncrypted',
       lysoGb3: 'lysoGb3Encrypted',
-      representativeCpf: 'representativeCpfEncrypted'
+      representativeIdentityDocument: 'representativeIdentityDocumentEncrypted'
     };
   }
 
@@ -153,7 +152,7 @@ class PatientService {
           }
         }
       ],
-      [{ patientName: 'text', recordNumber: 'text', cpf: 'text' }, { name: 'patients_name_document_text_v1' }],
+      [{ patientName: 'text', recordNumber: 'text', identityDocument: 'text' }, { name: 'patients_name_document_text_v1' }],
       [{ patientName: 1 }, { name: 'patients_name_idx_v1' }],
       [{ recordNumber: 1 }, { name: 'patients_record_number_idx_v1' }]
     ];
@@ -185,32 +184,6 @@ class PatientService {
     const duplicateError = new Error(`Telefone ${String(keyValue.phone || '').trim()} já cadastrado no sistema.`);
     duplicateError.statusCode = 409;
     throw duplicateError;
-  }
-
-  async syncPatientPhoneToGraph(neo4jDriver, patientID, phone) {
-    const normalizedPatientId = String(patientID || '').trim();
-    if (!neo4jDriver || typeof neo4jDriver.session !== 'function' || !normalizedPatientId) return;
-
-    const session = neo4jDriver.session();
-    try {
-      await session.run(
-        `
-          MATCH (node)
-          WHERE node.patientId = $patientId OR node.patientID = $patientId
-          SET node.phone = $phone,
-              node.lastPhoneSyncAt = datetime()
-          RETURN count(node) AS updated
-        `,
-        {
-          patientId: normalizedPatientId,
-          phone: phone || null
-        }
-      );
-    } catch (error) {
-      logger.warn(`[ISO20387][NEO4J][PATIENT_PHONE_SYNC] Falha ao sincronizar telefone do paciente ${normalizedPatientId}: ${error.message}`);
-    } finally {
-      await session.close();
-    }
   }
 
   normalizeClinicalUnit(value) {
@@ -299,7 +272,7 @@ class PatientService {
     };
   }
 
-  normalizeRepresentativeCpf(value) {
+  normalizerepresentativeIdentityDocument(value) {
     if (value === undefined || value === null) return null;
     const normalized = String(value).replace(/\D/g, '').trim();
     return normalized || null;
@@ -316,26 +289,26 @@ class PatientService {
     if (!isDeceased) {
       payload.representativeName = null;
       payload.representativeEmail = null;
-      payload.representativeCpf = null;
+      payload.representativeIdentityDocument = null;
       payload.representativePhone = null;
       return;
     }
 
     const representativeName = typeof payload.representativeName === 'string' ? payload.representativeName.trim() : '';
     const representativeEmail = this.normalizeEmail(payload.representativeEmail);
-    const representativeCpf = this.normalizeRepresentativeCpf(payload.representativeCpf);
+    const representativeIdentityDocument = this.normalizerepresentativeIdentityDocument(payload.representativeIdentityDocument);
     const representativePhone = this.normalizeRepresentativePhone(payload.representativePhone);
 
-    if (!representativeName || !representativeEmail || !representativeCpf || !representativePhone) {
-      throw new Error('Para paciente falecido, nome, e-mail, CPF e telefone do representante legal são obrigatórios');
+    if (!representativeName || !representativeEmail || !representativeIdentityDocument || !representativePhone) {
+      throw new Error('Para paciente falecido, nome, e-mail, identityDocument e telefone do representante legal são obrigatórios');
     }
 
     if (!PatientModel.isValidEmail(representativeEmail)) {
       throw new Error('Email do representante legal inválido');
     }
 
-    if (representativeCpf.length !== 11) {
-      throw new Error('CPF do representante legal inválido. Informe 11 dígitos');
+    if (representativeIdentityDocument.length !== 11) {
+      throw new Error('identityDocument do representante legal inválido. Informe 11 dígitos');
     }
 
     if (representativePhone.length < 10 || representativePhone.length > 15) {
@@ -344,7 +317,7 @@ class PatientService {
 
     payload.representativeName = representativeName;
     payload.representativeEmail = representativeEmail;
-    payload.representativeCpf = representativeCpf;
+    payload.representativeIdentityDocument = representativeIdentityDocument;
     payload.representativePhone = representativePhone;
   }
 
@@ -361,9 +334,9 @@ class PatientService {
     return digits;
   }
 
-  normalizeCpf(cpf) {
-    if (cpf === undefined || cpf === null) return null;
-    const normalized = String(cpf).replace(/\D/g, '').trim();
+  normalizeidentityDocument(identityDocument) {
+    if (identityDocument === undefined || identityDocument === null) return null;
+    const normalized = String(identityDocument).replace(/\D/g, '').trim();
     return normalized || null;
   }
 
@@ -375,12 +348,12 @@ class PatientService {
 
   async checkIdentifierConflict(db, patientData) {
     const patientsCollection = await this.getPatientsCollection(db);
-    const normalizedCpf = this.normalizeCpf(patientData?.cpf);
+    const normalizedidentityDocument = this.normalizeidentityDocument(patientData?.identityDocument);
     const normalizedRecordNumber = this.normalizeRecordNumber(patientData?.recordNumber);
 
     const orFilters = [];
-    if (normalizedCpf) {
-      orFilters.push({ cpf: normalizedCpf });
+    if (normalizedidentityDocument) {
+      orFilters.push({ identityDocument: normalizedidentityDocument });
     }
     if (normalizedRecordNumber) {
       orFilters.push({ recordNumber: normalizedRecordNumber });
@@ -395,8 +368,8 @@ class PatientService {
       return null;
     }
 
-    if (normalizedCpf && String(existing.cpf || '').replace(/\D/g, '') === normalizedCpf) {
-      return { field: 'cpf', value: normalizedCpf, existing };
+    if (normalizedidentityDocument && String(existing.identityDocument || '').replace(/\D/g, '') === normalizedidentityDocument) {
+      return { field: 'identityDocument', value: normalizedidentityDocument, existing };
     }
 
     if (normalizedRecordNumber && String(existing.recordNumber || '').trim() === normalizedRecordNumber) {
@@ -521,14 +494,14 @@ class PatientService {
         throw new Error(validation.errors.join(', '));
       }
 
-      patientData.cpf = this.normalizeCpf(patientData.cpf);
+      patientData.identityDocument = this.normalizeidentityDocument(patientData.identityDocument);
       patientData.recordNumber = this.normalizeRecordNumber(patientData.recordNumber);
 
       const identifierConflict = await this.checkIdentifierConflict(db, patientData);
       if (identifierConflict) {
         const conflictError = new Error(
-          identifierConflict.field === 'cpf'
-            ? `CPF ${identifierConflict.value} já cadastrado no sistema.`
+          identifierConflict.field === 'identityDocument'
+            ? `identityDocument ${identifierConflict.value} já cadastrado no sistema.`
             : identifierConflict.field === 'recordNumber'
               ? `Prontuário ${identifierConflict.value} já cadastrado no sistema.`
               : 'Paciente com identificadores já cadastrado no sistema.'
@@ -557,15 +530,15 @@ class PatientService {
       }
 
       // GERA ID ÚNICO DE 8 DÍGITOS AUTOMATICAMENTE (LGPD)
-      // Remove patientID se fornecido - será gerado automaticamente
-      delete patientData.patientID;
+      // Remove participantId se fornecido - será gerado automaticamente
+      delete patientData.participantId;
       
       // Remove campo height se existir (não deve ser salvo no banco)
       delete patientData.height;
       
       // Gera ID único criptograficamente seguro
-      const patientID = await generateUniquePatientID(db);
-      patientData.patientID = patientID;
+      const participantId = await generateUniqueParticipantId(db);
+      patientData.participantId = participantId;
 
       const consentMetadata = notificationService.buildConsentMetadata();
       patientData.status = 'PENDING_CONSENT';
@@ -596,13 +569,6 @@ class PatientService {
       const sanitizedData = sanitizePatientForLogs(patient);
       logger.info('Paciente criado:', sanitizedData);
 
-      await fhirSyncService.upsertPatientFromLegacy(db, {
-        _id: result.insertedId,
-        ...patient
-      });
-
-      await this.syncPatientPhoneToGraph(options?.neo4jDriver, patient.patientID, patient.phone);
-
       if (options.skipBiomarkerArtifacts !== true) {
         await patientBiomarkerTimeseriesService.writePatientBiomarkers({
           db,
@@ -623,7 +589,7 @@ class PatientService {
       return {
         _id: result.insertedId,
         ...patient,
-        patientID: patientID // ID gerado automaticamente
+        participantId: participantId // ID gerado automaticamente
       };
     } catch (error) {
       if (error?.code === 11000) {
@@ -634,23 +600,18 @@ class PatientService {
     }
   }
 
-  async getPatient(db, patientID) {
+  async getPatient(db, participantId) {
     try {
-      const patientFromFhir = await fhirSyncService.getPatientFhirFirst(db, patientID);
-      if (patientFromFhir) {
-        return this.decryptSensitivePatientFields(patientFromFhir);
-      }
-
       const patientsCollection = await this.getPatientsCollection(db);
-      // Busca por patientID (string de 8 dígitos) ou _id (ObjectId)
+      // Busca por participantId (string de 8 dígitos) ou _id (ObjectId)
       let patient;
-      if (typeof patientID === 'string' && patientID.length === 8 && /^\d{8}$/.test(patientID)) {
-        // É um patientID de 8 dígitos
-        patient = await patientsCollection.findOne({ patientID });
+      if (typeof participantId === 'string' && participantId.length === 8 && /^\d{8}$/.test(participantId)) {
+        // É um participantId de 8 dígitos
+        patient = await patientsCollection.findOne({ participantId });
       } else {
         // É um ObjectId
         const { ObjectId } = require('mongodb');
-        patient = await patientsCollection.findOne({ _id: new ObjectId(patientID) });
+        patient = await patientsCollection.findOne({ _id: new ObjectId(participantId) });
       }
       return this.decryptSensitivePatientFields(patient);
     } catch (error) {
@@ -661,12 +622,6 @@ class PatientService {
 
   async listPatients(db, filters = {}) {
     try {
-      const listFromFhir = await fhirSyncService.listPatientsFhirFirst(db, filters);
-      if (listFromFhir) {
-        listFromFhir.patients = (listFromFhir.patients || []).map((patient) => this.decryptSensitivePatientFields(patient));
-        return listFromFhir;
-      }
-
       const patientsCollection = await this.getPatientsCollection(db);
       const query = {};
 
@@ -698,16 +653,10 @@ class PatientService {
 
   /**
    * Busca pacientes por múltiplos critérios (exceto nome e histórico clínico)
-   * Permite busca por: patientID, recordNumber, birthDate, clinicalUnit, unitAcronym, icdCode, etc.
+   * Permite busca por: participantId, recordNumber, birthDate, clinicalUnit, unitAcronym, icdCode, etc.
    */
   async searchPatients(db, searchTerm) {
     try {
-      const searchFromFhir = await fhirSyncService.searchPatientsFhirFirst(db, searchTerm);
-      if (searchFromFhir) {
-        searchFromFhir.patients = (searchFromFhir.patients || []).map((patient) => this.decryptSensitivePatientFields(patient));
-        return searchFromFhir;
-      }
-
       const patientsCollection = await this.getPatientsCollection(db);
       
       if (!searchTerm || typeof searchTerm !== 'string' || searchTerm.trim().length === 0) {
@@ -717,9 +666,9 @@ class PatientService {
       const term = searchTerm.trim();
       const query = { $or: [] };
 
-      // Busca por patientID (8 dígitos)
+      // Busca por participantId (8 dígitos)
       if (/^\d{8}$/.test(term)) {
-        query.$or.push({ patientID: term });
+        query.$or.push({ participantId: term });
       }
 
       // Busca por recordNumber (número ou string)
@@ -806,7 +755,7 @@ class PatientService {
     }
   }
 
-  async updatePatient(db, patientID, updateData, options = {}) {
+  async updatePatient(db, participantId, updateData, options = {}) {
     try {
       const patientsCollection = await this.getPatientsCollection(db);
 
@@ -854,14 +803,14 @@ class PatientService {
       if (updateData.isDeceased !== undefined ||
         updateData.representativeName !== undefined ||
         updateData.representativeEmail !== undefined ||
-        updateData.representativeCpf !== undefined ||
+        updateData.representativeIdentityDocument !== undefined ||
         updateData.representativePhone !== undefined) {
-        const existingPatient = await this.getPatient(db, patientID);
+        const existingPatient = await this.getPatient(db, participantId);
         const mergedPayload = {
           isDeceased: existingPatient?.isDeceased,
           representativeName: existingPatient?.representativeName,
           representativeEmail: existingPatient?.representativeEmail,
-          representativeCpf: existingPatient?.representativeCpf,
+          representativeIdentityDocument: existingPatient?.representativeIdentityDocument,
           representativePhone: existingPatient?.representativePhone,
           ...updateData
         };
@@ -869,14 +818,14 @@ class PatientService {
         updateData.isDeceased = mergedPayload.isDeceased;
         updateData.representativeName = mergedPayload.representativeName;
         updateData.representativeEmail = mergedPayload.representativeEmail;
-        updateData.representativeCpf = mergedPayload.representativeCpf;
+        updateData.representativeIdentityDocument = mergedPayload.representativeIdentityDocument;
         updateData.representativePhone = mergedPayload.representativePhone;
       }
       
       // Validação antes de atualizar
-      if (updateData.patientID) {
-        // Não permite alterar o patientID (é imutável por LGPD)
-        delete updateData.patientID;
+      if (updateData.participantId) {
+        // Não permite alterar o participantId (é imutável por LGPD)
+        delete updateData.participantId;
       }
       
       // Remove campo height se existir (não deve ser salvo no banco)
@@ -895,15 +844,15 @@ class PatientService {
       // Atualiza updatedAt
       updateData.updatedAt = new Date();
 
-      // Busca por patientID (string de 8 dígitos) ou _id (ObjectId)
+      // Busca por participantId (string de 8 dígitos) ou _id (ObjectId)
       let query;
-      if (typeof patientID === 'string' && patientID.length === 8 && /^\d{8}$/.test(patientID)) {
-        // É um patientID de 8 dígitos
-        query = { patientID };
+      if (typeof participantId === 'string' && participantId.length === 8 && /^\d{8}$/.test(participantId)) {
+        // É um participantId de 8 dígitos
+        query = { participantId };
       } else {
         // É um ObjectId
         const { ObjectId } = require('mongodb');
-        query = { _id: new ObjectId(patientID) };
+        query = { _id: new ObjectId(participantId) };
       }
 
       const result = await patientsCollection.updateOne(
@@ -916,11 +865,10 @@ class PatientService {
       }
 
       // Log sanitizado
-      const sanitizedData = sanitizePatientForLogs({ patientID: typeof patientID === 'string' && patientID.length === 8 ? patientID : 'N/A' });
+      const sanitizedData = sanitizePatientForLogs({ participantId: typeof participantId === 'string' && participantId.length === 8 ? participantId : 'N/A' });
       logger.info('Paciente atualizado:', sanitizedData);
 
       const updatedPatient = await patientsCollection.findOne(query);
-      await this.syncPatientPhoneToGraph(options?.neo4jDriver, updatedPatient?.patientID || patientID, updatedPatient?.phone || null);
       const decryptedUpdatedPatient = this.decryptSensitivePatientFields(updatedPatient);
 
       await patientBiomarkerTimeseriesService.writePatientBiomarkers({
@@ -941,13 +889,13 @@ class PatientService {
     }
   }
 
-  async validateConsentToken(db, patientID, token) {
-    if (!patientID || !token) {
-      throw new Error('patientId e token são obrigatórios');
+  async validateConsentToken(db, participantId, token) {
+    if (!participantId || !token) {
+      throw new Error('participantId e token são obrigatórios');
     }
 
     const patientsCollection = await this.getPatientsCollection(db);
-    const query = { patientID };
+    const query = { participantId };
     const patient = await patientsCollection.findOne(query);
 
     if (!patient) {
@@ -966,15 +914,15 @@ class PatientService {
       throw new Error('Token expirado');
     }
 
-    return { valid: true, patientID: patient.patientID };
+    return { valid: true, participantId: patient.participantId };
   }
 
-  async acceptConsentToken(db, patientID, token) {
-    await this.validateConsentToken(db, patientID, token);
+  async acceptConsentToken(db, participantId, token) {
+    await this.validateConsentToken(db, participantId, token);
 
     const patientsCollection = await this.getPatientsCollection(db);
     await patientsCollection.updateOne(
-      { patientID },
+      { participantId },
       {
         $set: {
           status: 'ACTIVE',
@@ -986,16 +934,16 @@ class PatientService {
       }
     );
 
-    return { success: true, patientID };
+    return { success: true, participantId };
   }
 
-  async resendConsentNotification(db, patientID) {
-    if (!patientID) {
-      throw new Error('patientId é obrigatório');
+  async resendConsentNotification(db, participantId) {
+    if (!participantId) {
+      throw new Error('participantId é obrigatório');
     }
 
     const patientsCollection = await this.getPatientsCollection(db);
-    const patient = await patientsCollection.findOne({ patientID });
+    const patient = await patientsCollection.findOne({ participantId });
 
     if (!patient) {
       throw new Error('Paciente não encontrado');
@@ -1041,31 +989,31 @@ class PatientService {
 
     return {
       success: true,
-      patientID,
+      participantId,
       reusedToken: hasValidToken,
       consentTokenExpiresAt: tokenExpiresAt
     };
   }
 
-  async deletePatient(db, patientID) {
+  async deletePatient(db, participantId) {
     try {
       const patientsCollection = await this.getPatientsCollection(db);
       
-      // Busca por patientID (string de 8 dígitos) ou _id (ObjectId)
+      // Busca por participantId (string de 8 dígitos) ou _id (ObjectId)
       let query;
-      if (typeof patientID === 'string' && patientID.length === 8 && /^\d{8}$/.test(patientID)) {
-        // É um patientID de 8 dígitos
-        query = { patientID };
+      if (typeof participantId === 'string' && participantId.length === 8 && /^\d{8}$/.test(participantId)) {
+        // É um participantId de 8 dígitos
+        query = { participantId };
       } else {
         // É um ObjectId
         const { ObjectId } = require('mongodb');
-        query = { _id: new ObjectId(patientID) };
+        query = { _id: new ObjectId(participantId) };
       }
       
       const result = await patientsCollection.deleteOne(query);
       
       // Log sanitizado
-      const sanitizedData = sanitizePatientForLogs({ patientID: typeof patientID === 'string' && patientID.length === 8 ? patientID : 'N/A' });
+      const sanitizedData = sanitizePatientForLogs({ participantId: typeof participantId === 'string' && participantId.length === 8 ? participantId : 'N/A' });
       logger.info('Paciente deletado:', sanitizedData);
       
       return result.deletedCount > 0;
@@ -1077,4 +1025,6 @@ class PatientService {
 }
 
 module.exports = new PatientService();
+
+
 

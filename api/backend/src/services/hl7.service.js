@@ -51,12 +51,12 @@ class HL7Service {
    * 
    * Segmentos:
    * - MSH: Message Header
-   * - PID: Patient Identification (apenas patientID anonimizado)
+   * - PID: Patient Identification (apenas participantId anonimizado)
    * - OBR: Observation Request
    * - OBX: Observation/Result
    * - SPM: Specimen
    */
-  async generateHL7v2Message(db, sampleFile, sample, patientID) {
+  async generateHL7v2Message(db, sampleFile, sample, participantId) {
     try {
       const messageID = this.generateMessageID();
       const timestamp = this.formatHL7DateTime(new Date());
@@ -65,8 +65,8 @@ class HL7Service {
       // MSH - Message Header
       const msh = this.buildMSH(messageID, timestamp);
       
-      // PID - Patient Identification (LGPD: apenas patientID anonimizado)
-      const pid = this.buildPID(patientID);
+      // PID - Patient Identification (LGPD: apenas participantId anonimizado)
+      const pid = this.buildPID(participantId);
       
       // SPM - Specimen
       const spm = this.buildSPM(sampleFile, sample);
@@ -112,11 +112,11 @@ class HL7Service {
 
   /**
    * PID - Patient Identification
-   * LGPD: Apenas patientID anonimizado (8 dígitos), sem dados pessoais
+   * LGPD: Apenas participantId anonimizado (8 dígitos), sem dados pessoais
    */
-  buildPID(patientID) {
+  buildPID(participantId) {
     const pid2 = ''; // Patient ID (Internal)
-    const pid3 = `${patientID}^^^BioAdvanceD^MR`; // Patient Identifier List (anonimizado)
+    const pid3 = `${participantId}^^^BioAdvanceD^MR`; // Patient Identifier List (anonimizado)
     const pid5 = '^^^' ; // Patient Name (vazio - LGPD)
     const pid7 = ''; // Date/Time of Birth (vazio - LGPD)
     const pid8 = ''; // Administrative Sex (vazio - LGPD)
@@ -128,11 +128,11 @@ class HL7Service {
    * SPM - Specimen
    */
   buildSPM(sampleFile, sample) {
-    const spmId = sample._id?.toString() || sample.sampleID || '';
+    const spmId = sample._id?.toString() || sample.specimenId || '';
     const specimenType = sample.sampleType || '';
     const collectionDateTime = sampleFile.collectionDateTime 
       ? this.formatHL7DateTime(sampleFile.collectionDateTime)
-      : (sample.registrationDate ? this.formatHL7DateTime(sample.registrationDate) : '');
+      : (sample.registeredAt ? this.formatHL7DateTime(sample.registeredAt) : '');
     
     return `SPM|1|${spmId}||${specimenType}|||${collectionDateTime}|||||||`;
   }
@@ -217,7 +217,7 @@ class HL7Service {
   /**
    * Gera Resource FHIR R4 (DiagnosticReport + Observation + Specimen)
    */
-  async generateFHIRResource(db, sampleFile, sample, patientID) {
+  async generateFHIRResource(db, sampleFile, sample, participantId) {
     try {
       const baseUrl = process.env.API_BASE_URL || 'http://localhost:3000';
       const fileID = sampleFile._id?.toString() || '';
@@ -248,10 +248,10 @@ class HL7Service {
           }]
         },
         subject: {
-          reference: `Patient/${patientID}`,
+          reference: `Patient/${participantId}`,
           identifier: {
             system: `${baseUrl}/fhir/Patient`,
-            value: patientID
+            value: participantId
           }
         },
         effectiveDateTime: sampleFile.analysisDateTime 
@@ -261,7 +261,7 @@ class HL7Service {
           ? (sampleFile.uploadDate instanceof Date ? sampleFile.uploadDate.toISOString() : new Date(sampleFile.uploadDate).toISOString())
           : new Date().toISOString(),
         specimen: [{
-          reference: `Specimen/${sample._id?.toString() || sample.sampleID}`
+          reference: `Specimen/${sample._id?.toString() || sample.specimenId}`
         }],
         result: [{
           reference: `Observation/${fileID}`
@@ -310,10 +310,10 @@ class HL7Service {
           }]
         },
         subject: {
-          reference: `Patient/${patientID}`,
+          reference: `Patient/${participantId}`,
           identifier: {
             system: `${baseUrl}/fhir/Patient`,
-            value: patientID
+            value: participantId
           }
         },
         effectiveDateTime: sampleFile.analysisDateTime 
@@ -331,7 +331,7 @@ class HL7Service {
           }]
         }] : [],
         specimen: {
-          reference: `Specimen/${sample._id?.toString() || sample.sampleID}`
+          reference: `Specimen/${sample._id?.toString() || sample.specimenId}`
         },
         meta: {
           versionId: '1',
@@ -342,7 +342,7 @@ class HL7Service {
       // Specimen
       const specimen = {
         resourceType: 'Specimen',
-        id: sample._id?.toString() || sample.sampleID?.toString() || '',
+        id: sample._id?.toString() || sample.specimenId?.toString() || '',
         type: {
           coding: [{
             system: 'http://snomed.info/sct',
@@ -351,15 +351,15 @@ class HL7Service {
           }]
         },
         subject: {
-          reference: `Patient/${patientID}`,
+          reference: `Patient/${participantId}`,
           identifier: {
             system: `${baseUrl}/fhir/Patient`,
-            value: patientID
+            value: participantId
           }
         },
         collection: {
-          collectedDateTime: sample.registrationDate
-            ? (sample.registrationDate instanceof Date ? sample.registrationDate.toISOString() : new Date(sample.registrationDate).toISOString())
+          collectedDateTime: sample.registeredAt
+            ? (sample.registeredAt instanceof Date ? sample.registeredAt.toISOString() : new Date(sample.registeredAt).toISOString())
             : new Date().toISOString()
         },
         identifier: sample.barcode ? [{
@@ -388,7 +388,7 @@ class HL7Service {
             resource: observation
           },
           {
-            fullUrl: `${baseUrl}/fhir/Specimen/${sample._id?.toString() || sample.sampleID}`,
+            fullUrl: `${baseUrl}/fhir/Specimen/${sample._id?.toString() || sample.specimenId}`,
             resource: specimen
           }
         ],
@@ -408,7 +408,7 @@ class HL7Service {
   /**
    * Gera documento CDA (Clinical Document Architecture)
    */
-  async generateCDA(db, sampleFile, sample, patientID) {
+  async generateCDA(db, sampleFile, sample, participantId) {
     try {
       const timestamp = new Date().toISOString();
       const fileID = sampleFile._id?.toString() || '';
@@ -427,7 +427,7 @@ class HL7Service {
   <languageCode code="pt-BR"/>
   <recordTarget>
     <patientRole>
-      <id extension="${patientID}" root="2.16.840.1.113883.3.933"/>
+      <id extension="${participantId}" root="2.16.840.1.113883.3.933"/>
       <!-- LGPD: Apenas ID anonimizado, sem dados pessoais -->
     </patientRole>
   </recordTarget>
@@ -493,10 +493,10 @@ class HL7Service {
           <title>Specimen Information</title>
           <text>
             <paragraph>
-              <content>Sample ID: ${this.escapeXML(String(sample._id || sample.sampleID || ''))}</content>
+              <content>Sample ID: ${this.escapeXML(String(sample._id || sample.specimenId || ''))}</content>
               <content>Sample Type: ${this.escapeXML(sample.sampleType || '')}</content>
               ${sample.barcode ? `<content>Barcode: ${this.escapeXML(sample.barcode)}</content>` : ''}
-              ${sample.registrationDate ? `<content>Collection Date: ${this.formatHL7Date(sample.registrationDate)}</content>` : ''}
+              ${sample.registeredAt ? `<content>Collection Date: ${this.formatHL7Date(sample.registeredAt)}</content>` : ''}
             </paragraph>
           </text>
         </section>

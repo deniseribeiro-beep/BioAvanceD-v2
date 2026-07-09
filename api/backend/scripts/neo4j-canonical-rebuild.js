@@ -8,18 +8,18 @@ const { Neo4jCanonicalProjectionService } = require('../src/services/neo4jCanoni
 const { runProjectionOnce } = require('../src/workers/neo4jProjection.worker');
 
 async function seedCanonicalOutbox(db, outbox) {
-  const patients = await db.collection('patients').find({}, { projection: { _id: 1, patientID: 1, patientId: 1 } }).toArray();
-  const consents = await db.collection('consents').find({}, { projection: { _id: 1, patientId: 1, patientID: 1, status: 1, signedAt: 1, updatedAt: 1 } }).toArray();
-  const samples = await db.collection('samples').find({}, { projection: { _id: 1, patientID: 1, sampleID: 1, quality: 1, updatedAt: 1 } }).toArray();
+  const patients = await db.collection('patients').find({}, { projection: { _id: 1, participantId: 1, participantId: 1 } }).toArray();
+  const consents = await db.collection('consents').find({}, { projection: { _id: 1, participantId: 1, participantId: 1, status: 1, signedAt: 1, updatedAt: 1 } }).toArray();
+  const samples = await db.collection('samples').find({}, { projection: { _id: 1, participantId: 1, specimenId: 1, quality: 1, updatedAt: 1 } }).toArray();
 
   const donorKeyByPatient = new Map();
   for (const patient of patients) {
-    const donorKey = String(patient.patientID || patient.patientId || patient._id).trim();
-    donorKeyByPatient.set(String(patient.patientID || patient.patientId || patient._id), donorKey);
+    const donorKey = String(patient.participantId || patient.participantId || patient._id).trim();
+    donorKeyByPatient.set(String(patient.participantId || patient.participantId || patient._id), donorKey);
   }
 
   for (const consent of consents) {
-    const donorKey = String(consent.patientId || consent.patientID || '').trim();
+    const donorKey = String(consent.participantId || consent.participantId || '').trim();
     await outbox.appendEvent(db, {
       eventType: consent.status === 'REVOKED' ? 'CONSENT_REVOKED' : 'CONSENT_UPSERTED',
       aggregateType: 'EthicalConsent',
@@ -27,7 +27,7 @@ async function seedCanonicalOutbox(db, outbox) {
       payload: {
         ethicalConsentId: String(consent._id),
         donorKey,
-        patientId: donorKey,
+        participantId: donorKey,
         status: consent.status || 'ACTIVE',
         signedAt: consent.signedAt || consent.updatedAt || new Date(),
       },
@@ -36,14 +36,14 @@ async function seedCanonicalOutbox(db, outbox) {
   }
 
   for (const sample of samples) {
-    const donorKey = String(sample.patientID || sample.patientId || '').trim();
+    const donorKey = String(sample.participantId || sample.participantId || '').trim();
     const donorIdentity = donorKeyByPatient.get(donorKey) || donorKey;
     await outbox.appendEvent(db, {
       eventType: 'CONSENT_UPSERTED',
       aggregateType: 'Sample',
       aggregateId: String(sample._id),
       payload: {
-        sampleId: String(sample._id),
+        specimenId: String(sample._id),
         donorKey: donorIdentity || donorKey,
       },
       sourceService: 'neo4j-canonical-rebuild'
@@ -54,10 +54,10 @@ async function seedCanonicalOutbox(db, outbox) {
         aggregateType: 'Sample',
         aggregateId: String(sample._id),
         payload: {
-          sampleId: String(sample._id),
+          specimenId: String(sample._id),
           qualityAssessmentId: `QA_${String(sample._id)}`,
           status: String(sample.quality || 'UNKNOWN'),
-          score: sample.quality_score ?? null,
+          score: sample.rcsScore ?? null,
           evaluatedAt: sample.updatedAt || new Date(),
         },
         sourceService: 'neo4j-canonical-rebuild'

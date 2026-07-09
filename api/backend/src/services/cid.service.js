@@ -1,4 +1,4 @@
-const { resolveSourceCollectionName } = require('../utils/collectionResolver');
+const { resolveCollectionName } = require('../utils/collectionResolver');
 const logger = require('../utils/logger');
 
 const indexedCollections = new Set();
@@ -196,7 +196,7 @@ class CidService {
     const normalizedTerm = String(term || '').trim();
     const normalizedPage = Math.max(1, Number(page) || 1);
     const cappedLimit = Math.max(1, Math.min(Number(limit) || 10, 100));
-    const sourceCollectionName = await resolveSourceCollectionName(db, 'cids');
+    const sourceCollectionName = await resolveCollectionName(db, 'cids');
     const cidsCollection = db.collection(sourceCollectionName);
 
     await this.ensureIndexes(cidsCollection, sourceCollectionName);

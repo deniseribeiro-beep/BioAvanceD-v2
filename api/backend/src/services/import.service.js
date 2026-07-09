@@ -158,9 +158,9 @@ class ImportService {
   getRequiredFields(dataType) {
     const fields = {
       'patients': ['patientName', 'birthDate', 'sex'],
-      'samples': ['patientID', 'sampleType', 'sampleOrigin'],
+      'samples': ['participantId', 'sampleType', 'sampleOrigin'],
       'temperature': ['sensorId', 'temperatureValue', 'timestamp'],
-      'results': ['sampleID', 'fileType', 'filePath'],
+      'results': ['specimenId', 'fileType', 'filePath'],
       'locations': ['equipmentType', 'block', 'rack', 'drawer', 'box']
     };
     return fields[dataType] || [];
@@ -259,7 +259,7 @@ class ImportService {
           patientData.consentTokenExpiresAt = consentMetadata.expiresAt;
           const patient = PatientModel.create(patientData);
           const insertResult = await patientsCollection.insertOne(patient);
-          if (patient.patientID) {
+          if (patient.participantId) {
             try {
               const consentLink = notificationService.buildConsentLink(patient, consentMetadata.token);
               await notificationService.enqueueConsentNotification(patientData, consentLink);
@@ -406,27 +406,27 @@ class ImportService {
             const insertResult = await samplesCollection.insertOne(sample);
             try {
               const report = await validator.validateSampleCompliance(String(insertResult.insertedId));
-              const missingEthicsOrSprec = !sampleData.tcle_id
+              const missingEthicsOrSprec = !sampleData.consentTemplateId
                 || !sampleData.sprec
                 || !sampleData.sprec.sampleType
                 || !sampleData.sprec.primaryContainer;
               const resolvedStatus = missingEthicsOrSprec
                 ? 'QUARANTINE'
-                : String(report?.suggestedStatus || sample.release_status || 'QUARANTINE').toUpperCase();
-              if (resolvedStatus !== String(sample.release_status || 'QUARANTINE').toUpperCase()) {
+                : String(report?.suggestedStatus || sample.releaseStatus || 'QUARANTINE').toUpperCase();
+              if (resolvedStatus !== String(sample.releaseStatus || 'QUARANTINE').toUpperCase()) {
                 await samplesCollection.updateOne(
                   { _id: insertResult.insertedId },
-                  { $set: { release_status: resolvedStatus, updatedAt: new Date() } }
+                  { $set: { releaseStatus: resolvedStatus, updatedAt: new Date() } }
                 );
               }
             } catch (validationError) {
               logger.warn('[IMPORT_SERVICE] Falha ao validar compliance após importação JSON, mantendo em quarentena', {
-                sampleId: String(insertResult.insertedId),
+                specimenId: String(insertResult.insertedId),
                 error: validationError?.message || String(validationError),
               });
               await samplesCollection.updateOne(
                 { _id: insertResult.insertedId },
-                { $set: { release_status: 'QUARANTINE', updatedAt: new Date() } }
+                { $set: { releaseStatus: 'QUARANTINE', updatedAt: new Date() } }
               );
             }
             results.success++;
@@ -489,27 +489,27 @@ class ImportService {
             const insertResult = await samplesCollection.insertOne(sample);
             try {
               const report = await validator.validateSampleCompliance(String(insertResult.insertedId));
-              const missingEthicsOrSprec = !sampleData.tcle_id
+              const missingEthicsOrSprec = !sampleData.consentTemplateId
                 || !sampleData.sprec
                 || !sampleData.sprec.sampleType
                 || !sampleData.sprec.primaryContainer;
               const resolvedStatus = missingEthicsOrSprec
                 ? 'QUARANTINE'
-                : String(report?.suggestedStatus || sample.release_status || 'QUARANTINE').toUpperCase();
-              if (resolvedStatus !== String(sample.release_status || 'QUARANTINE').toUpperCase()) {
+                : String(report?.suggestedStatus || sample.releaseStatus || 'QUARANTINE').toUpperCase();
+              if (resolvedStatus !== String(sample.releaseStatus || 'QUARANTINE').toUpperCase()) {
                 await samplesCollection.updateOne(
                   { _id: insertResult.insertedId },
-                  { $set: { release_status: resolvedStatus, updatedAt: new Date() } }
+                  { $set: { releaseStatus: resolvedStatus, updatedAt: new Date() } }
                 );
               }
             } catch (validationError) {
               logger.warn('[IMPORT_SERVICE] Falha ao validar compliance após importação tabular, mantendo em quarentena', {
-                sampleId: String(insertResult.insertedId),
+                specimenId: String(insertResult.insertedId),
                 error: validationError?.message || String(validationError),
               });
               await samplesCollection.updateOne(
                 { _id: insertResult.insertedId },
-                { $set: { release_status: 'QUARANTINE', updatedAt: new Date() } }
+                { $set: { releaseStatus: 'QUARANTINE', updatedAt: new Date() } }
               );
             }
             results.success++;
@@ -793,19 +793,19 @@ class ImportService {
       return parsed;
     };
 
-    const patientIDRaw = this.getRowValue(row, ['patientID', 'patientId', 'patient_id', 'idPaciente']);
+    const participantIdRaw = this.getRowValue(row, ['participantId', 'participantId', 'patient_id', 'idPaciente']);
     const sampleTypeRaw = this.getRowValue(row, ['sampleType', 'tipoAmostra']);
     const sampleOriginRaw = this.getRowValue(row, ['sampleOrigin', 'origemAmostra']);
     const extractionRaw = this.getRowValue(row, ['extractionProtocol', 'protocoloExtracao']);
     const barcodeRaw = this.getRowValue(row, ['barcode', 'codigoBarras']);
     const qualityRaw = this.getRowValue(row, ['quality', 'qualidade']);
-    const qualityScoreRaw = this.getRowValue(row, ['quality_score', 'qualityScore', 'scoreQualidade']);
-    const qualityCategoryRaw = this.getRowValue(row, ['quality_category', 'qualityCategory', 'categoriaQualidade']);
-    const registrationRaw = this.getRowValue(row, ['registerDate', 'registrationDate', 'dataRegistro']);
+    const qualityScoreRaw = this.getRowValue(row, ['rcsScore', 'qualityScore', 'scoreQualidade']);
+    const qualityCategoryRaw = this.getRowValue(row, ['scoreBasedGrade', 'qualityCategory', 'categoriaQualidade']);
+    const registrationRaw = this.getRowValue(row, ['registeredAt', 'registeredAt', 'dataRegistro']);
     const locationRaw = this.getRowValue(row, ['locationID', 'locationId']);
     const linkedProjectRaw = this.getRowValue(row, ['linkedProject', 'projeto']);
-    const tcleRaw = this.getRowValue(row, ['tcle_id', 'consentTemplateId', 'selected_tcle']);
-    const merkleRaw = this.getRowValue(row, ['merkle_root', 'merkleRoot']);
+    const tcleRaw = this.getRowValue(row, ['consentTemplateId', 'consentTemplateId', 'consentTemplateId']);
+    const merkleRaw = this.getRowValue(row, ['merkleRoot', 'merkleRoot']);
 
     const sprec = {
       matrixType: normalizeString(this.getRowValue(row, ['sprec_matrix_type', 'sprecMatrixType'])),
@@ -818,17 +818,17 @@ class ImportService {
       longTermStorage: normalizeString(this.getRowValue(row, ['sprec_long_term_storage', 'sprecLongTermStorage'])),
     };
 
-    const clinical_data = {
+    const clinicalData = {
       orphaCode: normalizeString(this.getRowValue(row, ['orphaCode', 'orpha', 'orpha_code'])),
       omimCode: normalizeString(this.getRowValue(row, ['omimCode', 'omim', 'omim_code'])),
       cid: normalizeString(this.getRowValue(row, ['cid', 'cidCode', 'diagnosisCidCode'])),
       phenotypes: [],
       charlsonComorbidities: [],
-      biomarkers_values: {},
+      biomarkerValues: {},
     };
 
     const externalQualityAssessment = {
-      score: toFloat(qualityScoreRaw, 'quality_score'),
+      score: toFloat(qualityScoreRaw, 'rcsScore'),
       category: normalizeString(qualityCategoryRaw),
       source: 'external-import',
       canonical: false,
@@ -840,12 +840,12 @@ class ImportService {
       : 'QUARANTINE';
 
     const sampleData = {
-      patientID: normalizeString(patientIDRaw),
+      participantId: normalizeString(participantIdRaw),
       sampleType: normalizeString(sampleTypeRaw),
       sampleOrigin: normalizeString(sampleOriginRaw),
       extractionProtocol: normalizeString(extractionRaw),
       barcode: normalizeString(barcodeRaw),
-      registrationDate: toDate(registrationRaw, 'registerDate') || new Date(),
+      registeredAt: toDate(registrationRaw, 'registeredAt') || new Date(),
       quantity: toFloat(this.getRowValue(row, ['quantity', 'volume']), 'quantity'),
       quality: normalizeString(qualityRaw),
       // Canonical RCS-GOV fields (do not rely on legacy `quality_*` for decisioning)
@@ -863,21 +863,21 @@ class ImportService {
       calculation_trace: canonicalQualityAssessment.calculation_trace || {},
       rcs_evaluation: canonicalQualityAssessment,
       // Legacy compatibility bucket (non-decisional)
-      legacy_compat: {
-        quality_score: externalQualityAssessment.score,
-        quality_category: externalQualityAssessment.category || '',
-        penalty_log: [],
+      canonical: {
+        rcsScore: externalQualityAssessment.score,
+        scoreBasedGrade: externalQualityAssessment.category || '',
+        axisPenalties: [],
       },
       external_quality_assessment: externalQualityAssessment,
       locationID: toInt(locationRaw, 'locationID'),
       linkedProject: normalizeString(linkedProjectRaw),
-      currentStatus: normalizeString(this.getRowValue(row, ['currentStatus', 'statusAtual'])) || 'Available',
-      release_status: releaseStatus,
+      lifecycleStatus: normalizeString(this.getRowValue(row, ['lifecycleStatus', 'statusAtual'])) || 'Available',
+      releaseStatus: releaseStatus,
       sprec,
-      clinical_data,
-      tcle_id: normalizeString(tcleRaw),
+      clinicalData,
       consentTemplateId: normalizeString(tcleRaw),
-      merkle_root: normalizeString(merkleRaw),
+      consentTemplateId: normalizeString(tcleRaw),
+      merkleRoot: normalizeString(merkleRaw),
     };
 
     return { data: sampleData, parseErrors };

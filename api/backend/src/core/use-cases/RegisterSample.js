@@ -44,7 +44,7 @@ class RegisterSample {
       createdSample = await sampleService.createSample(this.db, sampleData, command?.options || {});
 
       const lineagePayload = {
-        sampleId: String(createdSample._id),
+        specimenId: String(createdSample._id),
         barcode: createdSample.barcode || sampleData.barcode || null,
         eventType: 'register',
         actorId: command?.actor?.userId || null,
@@ -114,10 +114,10 @@ class RegisterSample {
   }
 
   async assertConsent(sampleData, strictMode) {
-    const patientId = sampleData?.patientID ? String(sampleData.patientID).trim() : null;
-    if (!patientId) {
+    const participantId = sampleData?.participantId ? String(sampleData.participantId).trim() : null;
+    if (!participantId) {
       if (strictMode) {
-        throw new RegisterSampleForbiddenError('Consentimento inválido: patientID ausente');
+        throw new RegisterSampleForbiddenError('Consentimento inválido: participantId ausente');
       }
       return;
     }
@@ -125,7 +125,7 @@ class RegisterSample {
     const consentsCollection = await getCollection(this.db, 'consents');
     const activeConsent = await consentsCollection.findOne(
       {
-        patientId: patientId,
+        participantId: participantId,
         status: { $in: ['ACTIVE', 'VALID', 'GRANTED'] }
       },
       {
@@ -156,7 +156,7 @@ class RegisterSample {
         throw new RegisterSampleForbiddenError('Strict mode ativo: validação topológica falhou');
       }
 
-      logger.warn(`[ISO20387][REGISTER_SAMPLE] Neo4j indisponível em modo permissivo. sampleId=${lineagePayload.sampleId}`);
+      logger.warn(`[ISO20387][REGISTER_SAMPLE] Neo4j indisponível em modo permissivo. specimenId=${lineagePayload.specimenId}`);
       await this.enqueueQuarantine(lineagePayload, error?.message || 'neo4j_validation_failed');
     }
   }
@@ -173,21 +173,21 @@ class RegisterSample {
     });
   }
 
-  async rollbackMongoSample(sampleId) {
+  async rollbackMongoSample(specimenId) {
     try {
       const samplesCollection = await getCollection(this.db, 'samples');
-      const objectId = this.tryObjectId(sampleId);
-      const filter = objectId ? { _id: objectId } : { _id: sampleId };
+      const objectId = this.tryObjectId(specimenId);
+      const filter = objectId ? { _id: objectId } : { _id: specimenId };
       await samplesCollection.deleteOne(filter);
-      logger.warn(`[ISO20387][REGISTER_SAMPLE] Rollback Mongo aplicado para sampleId=${sampleId}`);
+      logger.warn(`[ISO20387][REGISTER_SAMPLE] Rollback Mongo aplicado para specimenId=${specimenId}`);
     } catch (error) {
       logger.error('[ISO20387][REGISTER_SAMPLE] Falha ao aplicar rollback de amostra:', error.message || error);
     }
   }
 
-  tryObjectId(sampleId) {
+  tryObjectId(specimenId) {
     try {
-      return ObjectId.isValid(sampleId) ? new ObjectId(sampleId) : null;
+      return ObjectId.isValid(specimenId) ? new ObjectId(specimenId) : null;
     } catch (_) {
       return null;
     }

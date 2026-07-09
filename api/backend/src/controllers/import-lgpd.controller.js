@@ -574,7 +574,7 @@ class ImportLGPDController {
           errorsDetails: results.errors.map(err => ({
             row: err.row,
             errors: err.errors,
-            patientID: err.data?.patientID || null // Apenas ID, sem dados sensíveis
+            participantId: err.data?.participantId || null // Apenas ID, sem dados sensíveis
           }))
         }
       });
@@ -611,7 +611,7 @@ class ImportLGPDController {
         ['INSTRUÇÕES PARA PREENCHIMENTO DO TEMPLATE DE PACIENTES'],
         [],
         ['IMPORTANTE:'],
-        ['• O ID do paciente (patientID) será gerado automaticamente pelo sistema - NÃO preencha esta coluna'],
+        ['• O ID do paciente (participantId) será gerado automaticamente pelo sistema - NÃO preencha esta coluna'],
         ['• O TCLE (consentTemplateId) é obrigatório e deve ser selecionado no modal de importação em lote'],
         ['• Campos marcados com (*) são OBRIGATÓRIOS'],
         ['• Campos não marcados são OPCIONAIS'],
@@ -677,7 +677,7 @@ class ImportLGPDController {
         ['diabetesType2: Não'],
         [],
         ['OBSERVAÇÕES IMPORTANTES:'],
-        ['• Não inclua a coluna patientID - ela será gerada automaticamente'],
+        ['• Não inclua a coluna participantId - ela será gerada automaticamente'],
         ['• Mantenha os nomes das colunas exatamente como aparecem no template'],
         ['• Não deixe linhas vazias entre os registros'],
         ['• Certifique-se de que as datas estão no formato DD/MM/YYYY'],
@@ -815,21 +815,21 @@ class ImportLGPDController {
         }
       }
       
-      // Headers do template (incluindo patientID obrigatório)
+      // Headers do template (incluindo participantId obrigatório)
       // quality usa ids MIABIS canônicos
       // locationID e barcode são opcionais - barcode será gerado automaticamente se não fornecido
       const headers = [
-        'patientID',
+        'participantId',
         'sampleType',
         'sampleOrigin',
         'extractionProtocol',
         'barcode', // opcional - gerado automaticamente se vazio
-        'registrationDate',
+        'registeredAt',
         'quantity',
         'quality', // MIABIS: GOOD, COMPROMISED ou UNKNOWN
         'locationID', // opcional - pode ser selecionado após upload
         'linkedProject',
-        'currentStatus'
+        'lifecycleStatus'
       ];
 
       // Linha de exemplo com valores do banco ou padrão
@@ -849,7 +849,7 @@ class ImportLGPDController {
 
       // Adiciona comentários com valores válidos
       const comments = [];
-      comments.push('# Instruções: patientID obrigatório (8 dígitos); barcode e locationID são opcionais; quality usa GOOD, COMPROMISED ou UNKNOWN; registrationDate no formato YYYY-MM-DD');
+      comments.push('# Instruções: participantId obrigatório (8 dígitos); barcode e locationID são opcionais; quality usa GOOD, COMPROMISED ou UNKNOWN; registeredAt no formato YYYY-MM-DD');
       if (sampleTypes.length > 0) {
         comments.push(`# Valores válidos para sampleType: ${sampleTypes.map(t => t.id || t.description).join(', ')}`);
       }
@@ -930,23 +930,23 @@ class ImportLGPDController {
         [],
         ['IMPORTANTE:'],
         ['• A maioria dos campos são OBRIGATÓRIOS, exceto locationID e barcode que são OPCIONAIS'],
-        ['• O patientID deve ser um ID anonimizado de 8 dígitos numéricos (ex: 12345678)'],
-        ['• O patientID deve existir no sistema (cadastrado previamente)'],
+        ['• O participantId deve ser um ID anonimizado de 8 dígitos numéricos (ex: 12345678)'],
+        ['• O participantId deve existir no sistema (cadastrado previamente)'],
         ['• Mantenha o formato das colunas conforme especificado abaixo'],
         ['• O barcode é OPCIONAL - será gerado automaticamente se não fornecido'],
         ['• Se fornecido, o barcode deve ser único (não pode estar duplicado)'],
         ['• locationID é OPCIONAL - se não fornecido, você poderá selecionar após o upload'],
         [],
         ['CAMPOS OBRIGATÓRIOS:'],
-        ['• patientID: ID anonimizado de 8 dígitos do paciente (Texto) - Ex: 12345678'],
+        ['• participantId: ID anonimizado de 8 dígitos do paciente (Texto) - Ex: 12345678'],
         ['• sampleType: Tipo de amostra conforme MIABIS (id canônico)'],
         ['• sampleOrigin: Origem da amostra conforme MIABIS (id canônico)'],
         ['• extractionProtocol: Protocolo de extração conforme MIABIS (id canônico)'],
-        ['• registrationDate: Data de registro no formato DD/MM/YYYY ou YYYY-MM-DD (Data)'],
+        ['• registeredAt: Data de registro no formato DD/MM/YYYY ou YYYY-MM-DD (Data)'],
         ['• quantity: Quantidade em microlitros (µL) - Número decimal maior que zero'],
         ['• quality: Qualidade conforme MIABIS (GOOD, COMPROMISED ou UNKNOWN)'],
         ['• linkedProject: Nome do projeto vinculado (Texto)'],
-        ['• currentStatus: Status atual - Available, Withdrawn, Expired ou Destroyed'],
+        ['• lifecycleStatus: Status atual - Available, Withdrawn, Expired ou Destroyed'],
         [],
         ['CAMPOS OPCIONAIS:'],
         ['• barcode: Código de barras único (Texto) - OPCIONAL. Se não fornecido, será gerado automaticamente no formato BR-YYYY-NNN'],
@@ -981,28 +981,28 @@ class ImportLGPDController {
         ['• UNKNOWN - Desconhecida / Não Avaliada'],
         ['• IMPORTANTE: Apenas os ids canônicos são aceitos'],
         [],
-        ['VALORES ACEITOS PARA currentStatus:'],
+        ['VALORES ACEITOS PARA lifecycleStatus:'],
         ['• Available (Disponível)'],
         ['• Withdrawn (Retirada)'],
         ['• Expired (Expirada)'],
         ['• Destroyed (Destruída)'],
         [],
         ['EXEMPLO DE PREENCHIMENTO:'],
-        ['patientID: 12345678'],
+        ['participantId: 12345678'],
         ['sampleType: PLASMA'],
         ['sampleOrigin: VENOUS_BLOOD'],
         ['extractionProtocol: TUBE_EDTA'],
         ['barcode: BR-2024-001'],
-        ['registrationDate: 15/03/2024'],
+        ['registeredAt: 15/03/2024'],
         ['quantity: 500.5'],
         ['quality: GOOD'],
         ['locationID: (deixe vazio para selecionar após upload)'],
         ['linkedProject: Projeto Genoma'],
-        ['currentStatus: Available'],
+        ['lifecycleStatus: Available'],
         [],
         ['OBSERVAÇÕES IMPORTANTES:'],
-        ['• O patientID deve ter exatamente 8 dígitos numéricos'],
-        ['• O patientID deve existir no sistema (cadastrado previamente)'],
+        ['• O participantId deve ter exatamente 8 dígitos numéricos'],
+        ['• O participantId deve existir no sistema (cadastrado previamente)'],
         ['• O barcode é OPCIONAL - se não fornecido, será gerado automaticamente no formato BR-YYYY-NNN'],
         ['• Se você fornecer um barcode, ele deve ser único (não pode estar duplicado)'],
         ['• A quantidade deve ser maior que zero'],
@@ -1023,32 +1023,32 @@ class ImportLGPDController {
       // quality usa ids MIABIS canônicos
       // barcode é opcional - será gerado automaticamente se não fornecido
       const headers = [
-        'patientID',
+        'participantId',
         'sampleType',
         'sampleOrigin',
         'extractionProtocol',
         'barcode (opcional - será gerado automaticamente se não fornecido)',
-        'registrationDate',
+        'registeredAt',
         'quantity',
         'quality (MIABIS GOOD, COMPROMISED ou UNKNOWN)',
         'locationID (opcional - pode ser selecionado após upload)',
         'linkedProject',
-        'currentStatus'
+        'lifecycleStatus'
       ];
       
       // Linha de exemplo (primeira linha de dados) - usa valores do banco
       const exampleRow = [
-        '12345678',              // patientID (8 dígitos)
+        '12345678',              // participantId (8 dígitos)
         (sampleTypes.length > 0 && (sampleTypes[0]?.id || sampleTypes[0]?.description)) ? (sampleTypes[0].id || sampleTypes[0].description) : SPECIMEN_TYPES[0].id,                // sampleType
         (sampleOrigins.length > 0 && (sampleOrigins[0]?.id || sampleOrigins[0]?.description)) ? (sampleOrigins[0].id || sampleOrigins[0].description) : SAMPLE_ORIGINS[0].id,                // sampleOrigin
         (extractionProtocols.length > 0 && (extractionProtocols[0]?.id || extractionProtocols[0]?.description)) ? (extractionProtocols[0].id || extractionProtocols[0].description) : EXTRACTION_PROTOCOLS[0].id,                // extractionProtocol
         '',                      // barcode (opcional - deixado vazio para demonstrar geração automática)
-        new Date().toLocaleDateString('pt-BR'),            // registrationDate
+        new Date().toLocaleDateString('pt-BR'),            // registeredAt
         '500.5',                 // quantity (µL)
         MIABIS_QUALITY[0].id,                     // quality (ID)
         '',                      // locationID (opcional - deixado vazio no exemplo)
         'Projeto Genoma',        // linkedProject
-        'Available'              // currentStatus
+        'Available'              // lifecycleStatus
       ];
       
       // Cria planilha apenas com headers e exemplo

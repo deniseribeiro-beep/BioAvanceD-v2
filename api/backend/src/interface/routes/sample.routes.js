@@ -73,9 +73,26 @@ const {
 function validateCreateSamplePayload(req, res, next) {
   const payload = req.body || {};
   const errors = [];
+  const aliasFields = [];
 
-  if (!payload.patientID || typeof payload.patientID !== 'string' || !/^\d{8}$/.test(payload.patientID)) {
-    errors.push('patientID deve ser uma string com 8 dígitos');
+  if (Object.prototype.hasOwnProperty.call(payload, 'patientID')) aliasFields.push('patientID');
+  if (Object.prototype.hasOwnProperty.call(payload, 'sampleID')) aliasFields.push('sampleID');
+  if (Object.prototype.hasOwnProperty.call(payload, 'sampleId')) aliasFields.push('sampleId');
+  if (Object.prototype.hasOwnProperty.call(payload, 'registerDate')) aliasFields.push('registerDate');
+  if (Object.prototype.hasOwnProperty.call(payload, 'registrationDate')) aliasFields.push('registrationDate');
+  if (Object.prototype.hasOwnProperty.call(payload, 'currentStatus')) aliasFields.push('currentStatus');
+  if (Object.prototype.hasOwnProperty.call(payload, 'merkle_root')) aliasFields.push('merkle_root');
+
+  if (aliasFields.length > 0) {
+    return res.status(422).json({
+      success: false,
+      error: 'NON_CANONICAL_FIELD',
+      fields: [...new Set(aliasFields)]
+    });
+  }
+
+  if (!payload.participantId || typeof payload.participantId !== 'string' || !/^\d{8}$/.test(payload.participantId)) {
+    errors.push('participantId deve ser uma string com 8 dígitos');
   }
 
   if (!payload.sampleType || typeof payload.sampleType !== 'string') {
@@ -126,8 +143,8 @@ function validateCreateSamplePayload(req, res, next) {
     }
   }
 
-  if (!payload.registerDate && !payload.registrationDate) {
-    errors.push('registerDate é obrigatório');
+  if (!payload.registeredAt) {
+    errors.push('registeredAt é obrigatório');
   }
 
   if (errors.length > 0) {

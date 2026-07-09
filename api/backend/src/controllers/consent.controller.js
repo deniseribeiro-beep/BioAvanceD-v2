@@ -23,8 +23,8 @@ class ConsentController {
         const patientsCollection = db.collection('patients');
         const pendingPatients = await patientsCollection.find({
           status: 'PENDING_CONSENT',
-          consentTemplateId: policyId
-        }).project({ patientID: 1, patientName: 1, email: 1, clinicalUnit: 1, consentNotifiedAt: 1 }).toArray();
+          consentconsentTemplateId: policyId
+        }).project({ participantId: 1, patientName: 1, email: 1, clinicalUnit: 1, consentNotifiedAt: 1 }).toArray();
         return res.status(200).json({
           success: true,
           data: pendingPatients
@@ -482,7 +482,7 @@ class ConsentController {
 
       const payload = {
         ...req.body,
-        patientId: req.body.patientId || req.body.patientID,
+        participantId: req.body.participantId || req.body.participantId,
         ipAddress: req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress,
         userAgent: req.headers['user-agent']
       };
@@ -498,10 +498,10 @@ class ConsentController {
           entityID: consent._id.toString(),
           result: 'success',
           severity: 'info',
-          message: `Consentimento assinado para paciente ${consent.patientId}`,
+          message: `Consentimento assinado para paciente ${consent.participantId}`,
           payload: {
-            patientId: consent.patientId,
-            templateId: consent.templateId,
+            participantId: consent.participantId,
+            consentTemplateId: consent.consentTemplateId,
             status: consent.status
           },
           req: req,
@@ -551,10 +551,10 @@ class ConsentController {
           entityID: req.params.id,
           result: 'success',
           severity: 'warning',
-          message: `Consentimento revogado para paciente ${consent.patientId}`,
+          message: `Consentimento revogado para paciente ${consent.participantId}`,
           payload: {
-            patientId: consent.patientId,
-            templateId: consent.templateId,
+            participantId: consent.participantId,
+            consentTemplateId: consent.consentTemplateId,
             status: 'REVOKED'
           },
           req: req,
@@ -587,7 +587,7 @@ class ConsentController {
         });
       }
 
-      const consent = await consentService.getPatientConsent(db, req.params.patientId);
+      const consent = await consentService.getPatientConsent(db, req.params.participantId);
       if (!consent) {
         return res.status(404).json({
           success: false,
@@ -619,10 +619,10 @@ class ConsentController {
         });
       }
 
-      const patientId = req.body.patientId || req.body.patientID || req.query.patientId || req.query.patientID;
+      const participantId = req.body.participantId || req.body.participantId || req.query.participantId || req.query.participantId;
       const token = req.body.token || req.query.token;
 
-      const result = await patientService.validateConsentToken(db, String(patientId), String(token));
+      const result = await patientService.validateConsentToken(db, String(participantId), String(token));
 
       return res.status(200).json({
         success: true,
@@ -648,10 +648,10 @@ class ConsentController {
         });
       }
 
-      const patientId = req.body.patientId || req.body.patientID || req.query.patientId || req.query.patientID;
+      const participantId = req.body.participantId || req.body.participantId || req.query.participantId || req.query.participantId;
       const token = req.body.token || req.query.token;
 
-      const result = await patientService.acceptConsentToken(db, String(patientId), String(token));
+      const result = await patientService.acceptConsentToken(db, String(participantId), String(token));
 
       return res.status(200).json({
         success: true,
@@ -670,3 +670,4 @@ class ConsentController {
 }
 
 module.exports = new ConsentController();
+

@@ -10,7 +10,7 @@ export type SampleWithId = Sample & {
 };
 
 function getSampleId(sample: Sample): string {
-  return (sample as any)._id || String(sample.sampleID ?? sample.barcode ?? sample.patientID);
+  return (sample as any)._id || String(sample.sampleID ?? sample.barcode ?? sample.participantId);
 }
 
 export function useSamplesPage() {
@@ -40,7 +40,7 @@ export function useSamplesPage() {
         const sampleId = String(sample.sampleID || '');
         const labelCode = String((sample as any).labelData?.code || (sample as any).labelCode || '');
         const qrPayload = String((sample as any).labelData?.qrPayload || (sample as any).barcodeIndustrial?.payload || '');
-        const patientId = String(sample.patientID || (sample as any).patient?.patientID || '');
+        const participantId = String(sample.participantId || (sample as any).patient?.participantId || '');
         const patientName =
           String(
             (sample as any).patient?.name ||
@@ -62,7 +62,7 @@ export function useSamplesPage() {
           barcode.toLowerCase().includes(term) ||
           labelCode.toLowerCase().includes(term) ||
           qrPayload.toLowerCase().includes(term) ||
-          patientId.toLowerCase().includes(term) ||
+          participantId.toLowerCase().includes(term) ||
           patientName.toLowerCase().includes(term) ||
           recordNumber.toLowerCase().includes(term) ||
           type.toLowerCase().includes(term) ||
@@ -126,3 +126,4 @@ export function useSamplesPage() {
     closePrintModal: () => setPrintModalOpen(false),
   };
 }
+

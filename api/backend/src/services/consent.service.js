@@ -5,9 +5,8 @@ const { ObjectId } = require('mongodb');
 const ConsentTemplateModel = require('../models/ConsentTemplate');
 const ConsentPolicyModel = require('../models/ConsentPolicy');
 const PatientConsentModel = require('../models/PatientConsent');
-const { validatePatientID } = require('../utils/patientAnonymization');
+const { validateParticipantId } = require('../utils/patientAnonymization');
 const logger = require('../utils/logger');
-const fhirSyncService = require('./fhir-sync.service');
 const { getCollection } = require('../utils/collectionResolver');
 const { GraphProjectionService } = require('./graphProjection.service');
 
@@ -72,10 +71,10 @@ const consentPolicySchema = {
 
 const patientConsentSchema = {
   type: 'object',
-  required: ['patientId', 'templateId', 'responses'],
+  required: ['participantId', 'consentTemplateId', 'responses'],
   properties: {
-    patientId: { type: 'string', minLength: 1 },
-    templateId: { type: 'string', minLength: 1 },
+    participantId: { type: 'string', minLength: 1 },
+    consentTemplateId: { type: 'string', minLength: 1 },
     signatureName: { type: 'string', minLength: 1 },
     signatureImageBase64: { type: 'string', minLength: 1 },
     signatureMimeType: { type: 'string' },
@@ -278,12 +277,12 @@ class ConsentService {
     }
   }
 
-  async getTemplateById(db, templateId) {
+  async getTemplateById(db, consentTemplateId) {
     const templatesCollection = await getCollection(db, 'consentTemplates');
 
     let objectId;
     try {
-      objectId = new ObjectId(String(templateId || '').trim());
+      objectId = new ObjectId(String(consentTemplateId || '').trim());
     } catch {
       throw new Error('ID do template de consentimento inválido');
     }
@@ -292,13 +291,13 @@ class ConsentService {
     return template || null;
   }
 
-  async updateTemplate(db, templateId, payload) {
+  async updateTemplate(db, consentTemplateId, payload) {
     try {
       const templatesCollection = await getCollection(db, 'consentTemplates');
 
       let objectId;
       try {
-        objectId = new ObjectId(String(templateId || '').trim());
+        objectId = new ObjectId(String(consentTemplateId || '').trim());
       } catch {
         throw new Error('ID do template de consentimento inválido');
       }
@@ -347,7 +346,7 @@ class ConsentService {
         content: htmlContent,
         version: `v${nextVersionNumber}`,
         versionGroupId,
-        previousTemplateId: String(objectId),
+        previousconsentTemplateId: String(objectId),
         caae: typeof existingTemplate.caae === 'string' ? existingTemplate.caae.trim() : '',
         active,
         permissions
@@ -657,21 +656,21 @@ class ConsentService {
         throw new Error(validation.errors.join(', '));
       }
 
-      const patientId = normalizedPayload.patientId;
-      const patientExists = await validatePatientID(db, patientId);
+      const participantId = normalizedPayload.participantId;
+      const patientExists = await validateParticipantId(db, participantId);
       if (!patientExists) {
-        throw new Error(`Paciente ${patientId} não encontrado`);
+        throw new Error(`Paciente ${participantId} não encontrado`);
       }
 
-      let templateId;
+      let consentTemplateId;
       try {
-        templateId = new ObjectId(normalizedPayload.templateId);
+        consentTemplateId = new ObjectId(normalizedPayload.consentTemplateId);
       } catch (error) {
-        throw new Error('templateId inválido');
+        throw new Error('consentTemplateId inválido');
       }
 
       const templatesCollection = await getCollection(db, 'consentTemplates');
-      const template = await templatesCollection.findOne({ _id: templateId });
+      const template = await templatesCollection.findOne({ _id: consentTemplateId });
       if (!template) {
         throw new Error('Template de consentimento não encontrado');
       }
@@ -696,34 +695,29 @@ class ConsentService {
 
       const consentsCollection = await getCollection(db, 'consents');
       await consentsCollection.updateMany(
-        { patientId, status: 'ACTIVE' },
+        { participantId, status: 'ACTIVE' },
         { $set: { status: 'REVOKED', revokedAt: new Date(), updatedAt: new Date() } }
       );
 
       // Logar apenas o tamanho da assinatura, se existir
       if (normalizedPayload.signatureImageBase64) {
         logger.info(
-          `Assinatura recebida para paciente ${patientId}: tamanho ${normalizedPayload.signatureImageBase64.length} caracteres.`
+          `Assinatura recebida para paciente ${participantId}: tamanho ${normalizedPayload.signatureImageBase64.length} caracteres.`
         );
       }
 
       const consent = PatientConsentModel.create({
         ...normalizedPayload,
-        templateId: templateId.toString(),
+        consentTemplateId: consentTemplateId.toString(),
         status: 'ACTIVE'
       });
 
       const insertResult = await consentsCollection.insertOne(consent);
       await this.recordConsentProjectionEvent(db, {
-        patientId,
+        participantId,
         consentId: insertResult.insertedId.toString(),
         status: 'ACTIVE',
         signedAt: consent.signedAt || new Date(),
-      });
-
-      await fhirSyncService.upsertConsentFromLegacy(db, {
-        _id: insertResult.insertedId,
-        ...consent
       });
 
       return {
@@ -761,7 +755,7 @@ class ConsentService {
     );
 
     await this.recordConsentProjectionEvent(db, {
-      patientId: consent.patientId || consent.patientID || null,
+      participantId: consent.participantId || consent.participantId || null,
       consentId: objectId.toString(),
       status: 'REVOKED',
       signedAt: consent.signedAt || consent.createdAt || new Date(),
@@ -774,25 +768,15 @@ class ConsentService {
       updatedAt: new Date()
     };
 
-    await fhirSyncService.upsertConsentFromLegacy(db, {
-      _id: objectId,
-      ...revokedConsent
-    });
-
     return {
       ...revokedConsent
     };
   }
 
-  async getPatientConsent(db, patientId) {
-    const consentFromFhir = await fhirSyncService.getPatientConsentFhirFirst(db, patientId);
-    if (consentFromFhir) {
-      return consentFromFhir;
-    }
-
+  async getPatientConsent(db, participantId) {
     const consentsCollection = await getCollection(db, 'consents');
     const consent = await consentsCollection
-      .find({ patientId })
+      .find({ participantId })
       .sort({ signedAt: -1, createdAt: -1 })
       .limit(1)
       .toArray();
@@ -800,11 +784,11 @@ class ConsentService {
     return consent[0] || null;
   }
 
-  async recordConsentProjectionEvent(db, { patientId, consentId, status, signedAt }) {
+  async recordConsentProjectionEvent(db, { participantId, consentId, status, signedAt }) {
     if (!db) return null;
     return this.graphProjectionService.appendConsentEvent(db, {
-      donorKey: patientId,
-      sampleId: null,
+      participantId,
+      specimenId: null,
       ethicalConsentId: consentId,
       status,
       signedAt,
@@ -814,3 +798,6 @@ class ConsentService {
 }
 
 module.exports = new ConsentService();
+
+
+

@@ -16,7 +16,7 @@ const {
 } = require('../config/constants/specimen.constants');
 const SampleGraphValidator = require('./SampleGraphValidator');
 const DrugService = require('./DrugService');
-const patientIdentityService = require('./PatientIdentityService');
+const participantIdentityService = require('./PatientIdentityService');
 const { generateSampleHash } = require('./MerkleService');
 const qualityDomain = require('./quality-domain.service');
 
@@ -289,7 +289,7 @@ class ImportLGPDService {
       }
 
       if (headerRowIndex === -1) {
-        const requiredField = dataType === 'patients' ? 'patientName' : 'patientID ou sampleType';
+        const requiredField = dataType === 'patients' ? 'patientName' : 'participantId ou sampleType';
         throw new Error(`Não foi possível encontrar a linha de cabeçalhos (headers) na planilha. Certifique-se de que a coluna "${requiredField}" está presente.`);
       }
 
@@ -381,7 +381,7 @@ class ImportLGPDService {
         throw new Error('Arquivo está vazio ou não contém dados válidos');
       }
 
-      // Campos obrigatórios para pacientes (sem patientID, pois será gerado)
+      // Campos obrigatórios para pacientes (sem participantId, pois será gerado)
       const requiredFields = ['patientName', 'birthDate', 'sex', 'email'];
       
       // Valida headers - verifica se há dados válidos
@@ -418,9 +418,9 @@ class ImportLGPDService {
         throw new Error(`Campos obrigatórios ausentes: ${missingFields.join(', ')}. Campos encontrados: ${foundHeaders.slice(0, 10).join(', ')}${foundHeaders.length > 10 ? '...' : ''}`);
       }
       
-      // Verifica se patientID está presente (não deve estar)
+      // Verifica se participantId está presente (não deve estar)
       if (normalizedHeaders.includes('patientid')) {
-        logger.warn('Arquivo contém coluna patientID - será ignorada. IDs serão gerados automaticamente.');
+        logger.warn('Arquivo contém coluna participantId - será ignorada. IDs serão gerados automaticamente.');
       }
 
       for (let i = 0; i < rows.length; i++) {
@@ -448,8 +448,8 @@ class ImportLGPDService {
             patientData.consentTemplateId = String(groupFields.consentTemplateId).trim();
           }
 
-          // Remove patientID se fornecido (será gerado automaticamente)
-          delete patientData.patientID;
+          // Remove participantId se fornecido (será gerado automaticamente)
+          delete patientData.participantId;
                     if (!patientData.email || !PatientModel.isValidEmail(patientData.email)) {
                       const receivedValue = row.email || 'não informado';
                       results.errors.push({
@@ -557,8 +557,8 @@ class ImportLGPDService {
           }
 
           // GERA ID ÚNICO DE 8 DÍGITOS AUTOMATICAMENTE (LGPD)
-          const patientID = await generateUniquePatientID(db, 'pacientes');
-          patientData.patientID = patientID;
+          const participantId = await generateUniquePatientID(db, 'pacientes');
+          patientData.participantId = participantId;
 
           const consentMetadata = notificationService.buildConsentMetadata();
           patientData.status = 'PENDING_CONSENT';
@@ -714,14 +714,14 @@ class ImportLGPDService {
       if (rows.length > 0) {
         const headers = Object.keys(rows[0]);
         const missingFields = requiredFields.filter(field => !headers.includes(field));
-        const hasPatientIdHeader = headers.includes('patientID') || headers.includes('patientId') || headers.includes('patient_id');
+        const hasPatientIdHeader = headers.includes('participantId') || headers.includes('participantId') || headers.includes('patient_id');
         const hasPatientNameHeader = headers.includes('patientName') || headers.includes('nomePaciente') || headers.includes('nome');
         const hasBirthDateHeader = headers.includes('birthDate') || headers.includes('dataNascimento') || headers.includes('patientBirthDate');
         if (missingFields.length > 0) {
           throw new Error(`Campos obrigatórios ausentes: ${missingFields.join(', ')}`);
         }
         if (!hasPatientIdHeader && !(hasPatientNameHeader && hasBirthDateHeader)) {
-          throw new Error('Identificação do paciente ausente: informe patientID ou as colunas patientName + birthDate.');
+          throw new Error('Identificação do paciente ausente: informe participantId ou as colunas patientName + birthDate.');
         }
       }
 
@@ -744,8 +744,8 @@ class ImportLGPDService {
             sampleData.extractionProtocol = String(groupFields.extractionProtocol).trim();
           }
 
-          const matchedPatient = await patientIdentityService.matchOrUpsertPatient(db, {
-            patientID: sampleData.patientID,
+          const matchedPatient = await participantIdentityService.matchOrUpsertPatient(db, {
+            participantId: sampleData.participantId,
             patientName: sampleData.patientName,
             birthDate: sampleData.patientBirthDate,
             email: sampleData.patientEmail,
@@ -758,44 +758,44 @@ class ImportLGPDService {
             status: 'ACTIVE',
           });
 
-          sampleData.patientID = String(matchedPatient?.patient?.patientID || '').trim();
+          sampleData.participantId = String(matchedPatient?.patient?.participantId || '').trim();
           sampleData.patientObjectId = matchedPatient?.patient?._id || null;
           sampleData.patientName = sampleData.patientName || matchedPatient?.patient?.patientName || null;
 
-          if (!sampleData.patientID) {
+          if (!sampleData.participantId) {
             results.errors.push({
               row: rowNumber,
               errors: ['Nao foi possivel resolver a identidade do paciente para a amostra'],
-              data: { patientID: null }
+              data: { participantId: null }
             });
             continue;
           }
 
           // Valida formato do ID (8 dígitos)
-          const patientIDStr = String(sampleData.patientID).trim();
-          if (patientIDStr.length !== 8 || !/^\d{8}$/.test(patientIDStr)) {
+          const participantIdStr = String(sampleData.participantId).trim();
+          if (participantIdStr.length !== 8 || !/^\d{8}$/.test(participantIdStr)) {
             results.errors.push({
               row: rowNumber,
               errors: [`ID de paciente inválido: deve ter exatamente 8 dígitos numéricos`],
-              data: { patientID: patientIDStr }
+              data: { participantId: participantIdStr }
             });
             continue;
           }
 
           // Resolve/valida ATC por código ou nome do fármaco.
-          const pharmacology = sampleData.pharmacology_data && typeof sampleData.pharmacology_data === 'object'
-            ? sampleData.pharmacology_data
+          const pharmacology = sampleData.pharmacologyData && typeof sampleData.pharmacologyData === 'object'
+            ? sampleData.pharmacologyData
             : {};
-          const treatmentStatus = String(pharmacology.treatment_status || '').trim().toUpperCase();
+          const treatmentStatus = String(pharmacology.treatmentStatus || '').trim().toUpperCase();
           const isTreated = treatmentStatus === 'TREATED' || treatmentStatus === 'ON_TREATMENT';
-          const currentAtcCode = String(pharmacology.atc_code || '').trim().replace(/^ATC:/i, '').toUpperCase();
-          const currentDrugName = String(pharmacology.drug_name || '').trim();
+          const currentAtcCode = String(pharmacology.atcCode || '').trim().replace(/^ATC:/i, '').toUpperCase();
+          const currentDrugName = String(pharmacology.medicationName || '').trim();
 
           if (currentAtcCode && !/^[A-Z]\d{2}[A-Z]{0,2}\d{0,2}$/.test(currentAtcCode)) {
             results.errors.push({
               row: rowNumber,
-              errors: [`atc_code inválido: ${currentAtcCode}`],
-              data: { patientID: patientIDStr }
+              errors: [`atcCode inválido: ${currentAtcCode}`],
+              data: { participantId: participantIdStr }
             });
             continue;
           }
@@ -804,14 +804,14 @@ class ImportLGPDService {
             const drugCandidates = await drugService.searchAndCacheDrug(currentDrugName, { limit: 5 });
             const selectedDrug = Array.isArray(drugCandidates) && drugCandidates.length > 0 ? drugCandidates[0] : null;
             if (selectedDrug) {
-              sampleData.pharmacology_data = {
+              sampleData.pharmacologyData = {
                 ...pharmacology,
-                drug_name: String(selectedDrug.generic_name || selectedDrug.name || currentDrugName).trim(),
-                atc_code: String(selectedDrug.atc_code || '').trim().replace(/^ATC:/i, '').toUpperCase(),
-                atc_level_1: String(selectedDrug.atc_level_1 || '').trim().toUpperCase(),
-                medication_name: String(selectedDrug.generic_name || selectedDrug.name || currentDrugName).trim(),
-                medication_code: String(selectedDrug.atc_code || '').trim().replace(/^ATC:/i, '').toUpperCase(),
-                medication_drug_class: String(selectedDrug.drug_class || selectedDrug.atc_level_1 || '').trim(),
+                medicationName: String(selectedDrug.generic_name || selectedDrug.name || currentDrugName).trim(),
+                atcCode: String(selectedDrug.atcCode || '').trim().replace(/^ATC:/i, '').toUpperCase(),
+                atcClass: String(selectedDrug.atcClass || '').trim().toUpperCase(),
+                medicationName: String(selectedDrug.generic_name || selectedDrug.name || currentDrugName).trim(),
+                atcCode: String(selectedDrug.atcCode || '').trim().replace(/^ATC:/i, '').toUpperCase(),
+                atcClass: String(selectedDrug.drug_class || selectedDrug.atcClass || '').trim(),
                 drug_class: String(selectedDrug.drug_class || '').trim(),
               };
             }
@@ -824,7 +824,7 @@ class ImportLGPDService {
               results.errors.push({
                 row: rowNumber,
                 errors: [`quality deve estar no conjunto MIABIS canônico: GOOD, COMPROMISED ou UNKNOWN. Valor recebido: ${sampleData.quality}`],
-                data: { patientID: patientIDStr } // Apenas ID, sem dados sensíveis
+                data: { participantId: participantIdStr } // Apenas ID, sem dados sensíveis
               });
               continue;
             }
@@ -836,7 +836,7 @@ class ImportLGPDService {
             results.errors.push({
               row: rowNumber,
               errors: validation.errors,
-              data: { patientID: patientIDStr } // Apenas ID, sem dados sensíveis
+              data: { participantId: participantIdStr } // Apenas ID, sem dados sensíveis
             });
             continue;
           }
@@ -849,7 +849,7 @@ class ImportLGPDService {
               results.errors.push({
                 row: rowNumber,
                 errors: [`Tipo de amostra "${sampleData.sampleType}" não encontrado no banco de dados. Use um valor cadastrado.`],
-                data: { patientID: patientIDStr }
+                data: { participantId: participantIdStr }
               });
               continue;
             }
@@ -862,7 +862,7 @@ class ImportLGPDService {
               results.errors.push({
                 row: rowNumber,
                 errors: [`Origem "${sampleData.sampleOrigin}" não encontrada no banco de dados. Use um valor cadastrado.`],
-                data: { patientID: patientIDStr }
+                data: { participantId: participantIdStr }
               });
               continue;
             }
@@ -875,7 +875,7 @@ class ImportLGPDService {
               results.errors.push({
                 row: rowNumber,
                 errors: [`Protocolo de extração "${sampleData.extractionProtocol}" não encontrado no banco de dados. Use um valor cadastrado.`],
-                data: { patientID: patientIDStr }
+                data: { participantId: participantIdStr }
               });
               continue;
             }
@@ -888,7 +888,7 @@ class ImportLGPDService {
               results.errors.push({
                 row: rowNumber,
                 errors: [`Já existe uma amostra com o código de barras ${sampleData.barcode}`],
-                data: { patientID: patientIDStr, barcode: sampleData.barcode }
+                data: { participantId: participantIdStr, barcode: sampleData.barcode }
               });
               continue;
             }
@@ -906,7 +906,7 @@ class ImportLGPDService {
                 results.errors.push({
                   row: rowNumber,
                   errors: ['Não há mais localizações disponíveis para incremento automático'],
-                  data: { patientID: patientIDStr }
+                  data: { participantId: participantIdStr }
                 });
                 continue;
               }
@@ -931,13 +931,13 @@ class ImportLGPDService {
           sample.patientName = sampleData.patientName || matchedPatient?.patient?.patientName || null;
           sample.patient_name_confirmed = sample.patientName;
           sample.patientObjectId = sampleData.patientObjectId || null;
-          sample.merkle_root = generateSampleHash(sample);
+          sample.merkleRoot = generateSampleHash(sample);
           
           // Insere no banco
           const insertResult = await samplesCollection.insertOne(sample);
           results.importedSampleIds.push(insertResult.insertedId);
 
-          const hasMissingEthicsOrSprec = !sampleData.tcle_id
+          const hasMissingEthicsOrSprec = !sampleData.consentTemplateId
             || !sampleData.sprec
             || !sampleData.sprec.sampleType
             || !sampleData.sprec.primaryContainer;
@@ -946,7 +946,7 @@ class ImportLGPDService {
             await validator.validateSampleCompliance(String(insertResult.insertedId));
           } catch (validationError) {
             logger.warn('[IMPORT_LGPD] Falha no SampleGraphValidator durante importação', {
-              sampleId: String(insertResult.insertedId),
+              specimenId: String(insertResult.insertedId),
               row: rowNumber,
               error: validationError?.message || String(validationError),
             });
@@ -955,7 +955,7 @@ class ImportLGPDService {
           if (hasMissingEthicsOrSprec) {
             await samplesCollection.updateOne(
               { _id: insertResult.insertedId },
-              { $set: { release_status: 'QUARANTINE', updatedAt: new Date() } }
+              { $set: { releaseStatus: 'QUARANTINE', updatedAt: new Date() } }
             );
           }
 
@@ -965,7 +965,7 @@ class ImportLGPDService {
               $set: {
                 patientName: sample.patientName || matchedPatient.patient.patientName,
                 updatedAt: new Date(),
-                lastClinicalData: sample.clinical_data || {},
+                lastClinicalData: sample.clinicalData || {},
               },
               $addToSet: {
                 linkedSampleIds: String(insertResult.insertedId),
@@ -979,7 +979,7 @@ class ImportLGPDService {
           results.errors.push({
             row: rowNumber,
             errors: [error.message],
-            data: { patientID: sampleData?.patientID || null }
+            data: { participantId: sampleData?.participantId || null }
           });
         }
 
@@ -1137,7 +1137,7 @@ class ImportLGPDService {
     }
     
     return {
-      patientID: row.patientID?.trim() || row.patientId?.trim() || row.patient_id?.trim() || null,
+      participantId: row.participantId?.trim() || null,
       patientName: row.patientName?.trim() || null,
       email: row.email ? String(row.email).trim().toLowerCase() : null,
       phone: row.phone ? String(row.phone).trim() : null,
@@ -1176,17 +1176,17 @@ class ImportLGPDService {
   parseSampleRow(row) {
     const { parseQualityMIABIS } = require('../utils/qualityMIABISValidator');
     // Parse de data de registro
-    let registerDate = null;
-    if (row.registerDate) {
-      registerDate = this.parseBirthDate(row.registerDate);
-    } else if (row.registrationDate) {
-      registerDate = this.parseBirthDate(row.registrationDate);
+    let registeredAt = null;
+    if (row.registeredAt) {
+      registeredAt = this.parseBirthDate(row.registeredAt);
+    } else if (row.registeredAt) {
+      registeredAt = this.parseBirthDate(row.registeredAt);
     }
-    if (!registerDate) {
-      registerDate = new Date(); // Padrão: hoje
+    if (!registeredAt) {
+      registeredAt = new Date(); // Padrão: hoje
     }
 
-    const tcleId = row.tcle_id || row.consentTemplateId || row.selected_tcle || null;
+    const tcleId = row.consentTemplateId || null;
     const sprec = {
       matrixType: row.sprec_matrix_type || row.sprecMatrixType || null,
       sampleType: row.sprec_sample_type || row.sprecSampleType || row.sprecSampleTypeCode || null,
@@ -1204,29 +1204,29 @@ class ImportLGPDService {
       cid: row.cid || row.cidCode || row.diagnosisCidCode || null,
       phenotypes: [],
       charlsonComorbidities: [],
-      biomarkers_values: {},
+      biomarkerValues: {},
     };
 
-    const treatmentStatus = String(row.treatment_status || row.treatmentStatus || '').trim().toUpperCase();
-    const atcCode = String(row.atc_code || row.medication_code || row.medicationCode || '').trim().replace(/^ATC:/i, '').toUpperCase();
-    const medicationName = String(row.drug_name || row.medication_name || row.medicationName || '').trim();
-    const atcLevel1 = String(row.atc_level_1 || row.medication_drug_class || row.medicationDrugClass || '').trim().toUpperCase() || (atcCode ? atcCode.charAt(0) : '');
+    const treatmentStatus = String(row.treatmentStatus || '').trim().toUpperCase();
+    const atcCode = String(row.atcCode || '').trim().replace(/^ATC:/i, '').toUpperCase();
+    const medicationName = String(row.medicationName || '').trim();
+    const atcLevel1 = String(row.atcClass || '').trim().toUpperCase() || (atcCode ? atcCode.charAt(0) : '');
 
     const pharmacologyData = {
-      treatment_status: ['NAIVE', 'TREATED', 'ON_TREATMENT', 'WASHOUT'].includes(treatmentStatus) ? treatmentStatus : '',
-      drug_name: medicationName || null,
-      atc_code: atcCode || null,
-      atc_level_1: atcLevel1 || null,
-      medication_name: medicationName || null,
-      medication_code: atcCode || null,
-      medication_drug_class: atcLevel1 || null,
-      last_dose_date: row.last_dose_date || row.lastDoseDate || null,
-      washout_start_date: row.washout_start_date || row.washoutStartDate || null,
-      washout_end_date: row.washout_end_date || row.washoutEndDate || null,
+      treatmentStatus: ['NAIVE', 'TREATED', 'ON_TREATMENT', 'WASHOUT'].includes(treatmentStatus) ? treatmentStatus : '',
+      medicationName: medicationName || null,
+      atcCode: atcCode || null,
+      atcClass: atcLevel1 || null,
+      medicationName: medicationName || null,
+      atcCode: atcCode || null,
+      atcClass: atcLevel1 || null,
+      lastDoseDate: row.lastDoseDate || null,
+      washoutStartDate: row.washoutStartDate || null,
+      washoutEndDate: row.washoutEndDate || null,
     };
     const externalQualityAssessment = {
-      score: row.quality_score !== undefined && row.quality_score !== null && row.quality_score !== '' ? parseFloat(row.quality_score) : null,
-      category: row.quality_category ? String(row.quality_category).trim().toUpperCase() : '',
+      score: row.rcsScore !== undefined && row.rcsScore !== null && row.rcsScore !== '' ? parseFloat(row.rcsScore) : null,
+      category: row.scoreBasedGrade ? String(row.scoreBasedGrade).trim().toUpperCase() : '',
       source: 'external-lgpd-import',
       canonical: false,
     };
@@ -1237,22 +1237,22 @@ class ImportLGPDService {
       : 'QUARANTINE';
 
     return {
-      patientID: row.patientID?.trim() || row.patientId?.trim() || row.patient_id?.trim() || null, // Aceita patientID, patientId ou patient_id
+      participantId: row.participantId?.trim() || null, // Aceita participantId, participantId ou patient_id
       patientName: row.patientName?.trim() || row.nomePaciente?.trim() || row.nome?.trim() || null,
       patientBirthDate: this.parseBirthDate(row.birthDate || row.dataNascimento || row.patientBirthDate),
       patientEmail: row.email ? String(row.email).trim().toLowerCase() : null,
       patientSex: this.parseSex(row.sex || row.gender || row.sexo),
-      patientCpf: row.cpf ? String(row.cpf).trim() : null,
+      identityDocument: row.identityDocument ? String(row.identityDocument).trim() : null,
       patientIsDeceased: this.parseBoolean(row.isDeceased),
       representativeName: row.representativeName?.trim() || row.responsavelNome?.trim() || null,
       representativeEmail: row.representativeEmail ? String(row.representativeEmail).trim().toLowerCase() : null,
-      representativeCpf: row.representativeCpf ? String(row.representativeCpf).trim() : null,
+      representativeIdentityDocument: row.representativeIdentityDocument ? String(row.representativeIdentityDocument).trim() : null,
       sampleType: row.sampleType?.trim() || null,
       sampleOrigin: this.normalizeCatalogValue(row.sampleOrigin, SAMPLE_ORIGINS),
       extractionProtocol: this.normalizeCatalogValue(row.extractionProtocol, EXTRACTION_PROTOCOLS),
       barcode: row.barcode ? String(row.barcode).trim() : null, // RF004 - barcode como string
-      registerDate: registerDate,
-      registrationDate: registerDate,
+      registeredAt: registeredAt,
+      registeredAt: registeredAt,
       quantity: row.quantity ? parseFloat(row.quantity) : null,
       quality: parseQualityMIABIS(row.quality), // Valida e converte para id MIABIS canônico
       model_version: canonicalQualityAssessment.model_version,
@@ -1268,22 +1268,22 @@ class ImportLGPDService {
       axis_penalties: canonicalQualityAssessment.axis_penalties || [],
       calculation_trace: canonicalQualityAssessment.calculation_trace || {},
       rcs_evaluation: canonicalQualityAssessment,
-      legacy_compat: {
-        quality_score: externalQualityAssessment.score,
-        quality_category: externalQualityAssessment.category || '',
-        penalty_log: [],
+      canonical: {
+        rcsScore: externalQualityAssessment.score,
+        scoreBasedGrade: externalQualityAssessment.category || '',
+        axisPenalties: [],
       },
       external_quality_assessment: externalQualityAssessment,
-      release_status: releaseStatus,
+      releaseStatus: releaseStatus,
       locationID: row.locationID || row.locationId ? parseInt(row.locationID || row.locationId) : null,
       linkedProject: row.linkedProject?.trim() || null,
-      currentStatus: row.currentStatus?.trim() || 'Available',
-      tcle_id: tcleId ? String(tcleId).trim() : null,
+      lifecycleStatus: row.lifecycleStatus?.trim() || 'Available',
       consentTemplateId: tcleId ? String(tcleId).trim() : null,
-      merkle_root: row.merkle_root ? String(row.merkle_root).trim() : null,
+      consentTemplateId: tcleId ? String(tcleId).trim() : null,
+      merkleRoot: row.merkleRoot ? String(row.merkleRoot).trim() : null,
       sprec,
-      clinical_data: clinicalData,
-      pharmacology_data: pharmacologyData,
+      clinicalData: clinicalData,
+      pharmacologyData: pharmacologyData,
     };
   }
 
@@ -1337,7 +1337,7 @@ class ImportLGPDService {
 
     const knownPatientFields = new Set([
       'patientName',
-      'patientID',
+      'participantId',
       'email',
       'cpf',
       'birthDate',
@@ -1378,8 +1378,8 @@ class ImportLGPDService {
       patientname: 'patientName',
       nomepaciente: 'patientName',
       name: 'patientName',
-      patientid: 'patientID',
-      patient_id: 'patientID',
+      patientid: 'participantId',
+      patient_id: 'participantId',
       email: 'email',
       cpf: 'cpf',
       birthdate: 'birthDate',
@@ -1564,8 +1564,8 @@ class ImportLGPDService {
           continue;
         }
 
-        const patientID = await generateUniquePatientID(db, 'pacientes');
-        patientData.patientID = patientID;
+        const participantId = await generateUniquePatientID(db, 'pacientes');
+        patientData.participantId = participantId;
 
         const consentMetadata = notificationService.buildConsentMetadata();
         patientData.status = 'PENDING_CONSENT';

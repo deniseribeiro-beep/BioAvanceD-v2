@@ -16,14 +16,14 @@ const { getCollection } = require('../../utils/collectionResolver');
  * Middleware que valida consentimento ético antes de permitir operações
  * 
  * @param {Object} options - Configurações do middleware
- * @param {string|Function} options.patientIdResolver - Campo contendo patientID ou função para extrair
+ * @param {string|Function} options.participantIdResolver - Campo contendo participantId ou função para extrair
  * @param {string[]} options.allowedScopes - Escopos de consentimento necessários
  * @param {boolean} options.strictMode - Se true, revoga acesso mesmo sem consentimento (padrão: true)
  * @returns {Function} Middleware Express
  */
 function authConsent(options = {}) {
   const {
-    patientIdResolver = 'patientID',
+    participantIdResolver = 'participantId',
     allowedScopes = ['uso_pesquisa'], // Scopes padrão
     strictMode = true
   } = options;
@@ -42,20 +42,20 @@ function authConsent(options = {}) {
       }
 
       // 1. EXTRAÇÃO DO PATIENT ID
-      let patientID = null;
+      let participantId = null;
 
-      if (typeof patientIdResolver === 'function') {
-        patientID = patientIdResolver(req);
-      } else if (typeof patientIdResolver === 'string') {
+      if (typeof participantIdResolver === 'function') {
+        participantId = participantIdResolver(req);
+      } else if (typeof participantIdResolver === 'string') {
         // Tenta extrair do body, params ou locals
-        patientID = 
-          req.body?.[patientIdResolver] ||
-          req.params?.[patientIdResolver] ||
-          req.query?.[patientIdResolver] ||
-          req.locals?.[patientIdResolver];
+        participantId = 
+          req.body?.[participantIdResolver] ||
+          req.params?.[participantIdResolver] ||
+          req.query?.[participantIdResolver] ||
+          req.locals?.[participantIdResolver];
       }
 
-      if (!patientID) {
+      if (!participantId) {
         logger.warn('[AUTHCONSENT] PatientID não encontrado no request');
         return res.status(400).json({
           success: false,
@@ -65,9 +65,9 @@ function authConsent(options = {}) {
         });
       }
 
-      // Sanitiza o patientID
-      const sanitizedPatientID = sanitizeInput(patientID.toString());
-      logger.debug(`[AUTHCONSENT] Validando consentimento para patientID: ${sanitizedPatientID}`);
+      // Sanitiza o participantId
+      const sanitizedPatientID = sanitizeInput(participantId.toString());
+      logger.debug(`[AUTHCONSENT] Validando consentimento para participantId: ${sanitizedPatientID}`);
 
       // 2. BUSCAR CONSENTIMENTO NO BANCO
       const patientConsentsCollection = await getCollection(db, 'consents', 'findOne');
@@ -75,7 +75,7 @@ function authConsent(options = {}) {
       // Busca o consentimento mais recente do paciente
       const activeConsent = await patientConsentsCollection.findOne(
         {
-          patientId: patientID.toString(),
+          participantId: participantId.toString(),
           status: 'ACTIVE'
         },
         {
@@ -103,7 +103,7 @@ function authConsent(options = {}) {
             severity: 'warning',
             message: logMessage,
             payload: {
-              patientID: sanitizedPatientID,
+              participantId: sanitizedPatientID,
               reason: 'NO_ACTIVE_CONSENT',
               requestMethod: req.method,
               requestPath: req.path,
@@ -151,7 +151,7 @@ function authConsent(options = {}) {
                 severity: 'warning',
                 message: logMessage,
                 payload: {
-                  patientID: sanitizedPatientID,
+                  participantId: sanitizedPatientID,
                   reason: 'INSUFFICIENT_SCOPE',
                   grantedScopes: Object.keys(responses).filter(k => responses[k] === true),
                   requiredScopes: allowedScopes,
@@ -196,7 +196,7 @@ function authConsent(options = {}) {
               severity: 'warning',
               message: logMessage,
               payload: {
-                patientID: sanitizedPatientID,
+                participantId: sanitizedPatientID,
                 reason: 'CONSENT_REVOKED',
                 revokedAt: activeConsent.revokedAt,
                 requestMethod: req.method,
@@ -233,7 +233,7 @@ function authConsent(options = {}) {
           severity: 'info',
           message: `Acesso concedido - Validação de consentimento passou`,
           payload: {
-            patientID: sanitizedPatientID,
+            participantId: sanitizedPatientID,
             requestMethod: req.method,
             requestPath: req.path,
             allowedScopes: allowedScopes
@@ -247,7 +247,7 @@ function authConsent(options = {}) {
 
       // 7. ANEXAR DADOS DE CONSENTIMENTO AO REQUEST
       req.consent = {
-        patientID: sanitizedPatientID,
+        participantId: sanitizedPatientID,
         consentID: activeConsent?._id.toString() || null,
         status: activeConsent?.status || null,
         signedAt: activeConsent?.signedAt || null,
@@ -256,7 +256,7 @@ function authConsent(options = {}) {
         validatedAt: new Date()
       };
 
-      logger.debug(`[AUTHCONSENT] Consentimento validado com sucesso para patientID: ${sanitizedPatientID}`);
+      logger.debug(`[AUTHCONSENT] Consentimento validado com sucesso para participantId: ${sanitizedPatientID}`);
       return next();
 
     } catch (error) {

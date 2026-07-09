@@ -25,7 +25,7 @@ class LineageRepository {
   async validateBeforePersistence(input) {
     this.ensureDriver();
 
-    const sampleId = this.normalizePointerId(input?.sampleId, 'sampleId');
+    const specimenId = this.normalizePointerId(input?.specimenId, 'specimenId');
 
     if (!input?.eventType) {
       throw new Error('[ISO20387][NEO4J] eventType obrigatório para trilha de custódia');
@@ -38,19 +38,19 @@ class LineageRepository {
     try {
       const result = await session.run(
         `
-          MERGE (sample:Sample {id: $sampleId})
+          MERGE (sample:Sample {id: $specimenId})
           ON CREATE SET sample.createdAt = datetime(), sample.source = 'BioAvanceD'
           SET sample.updatedAt = datetime(),
               sample.barcode = coalesce($barcode, sample.barcode)
 
           OPTIONAL MATCH (sample)-[:GOVERNED_BY]->(consent:EthicalConsent)
 
-          RETURN sample.id AS sampleId,
+          RETURN sample.id AS specimenId,
                  coalesce(sample.consentStatus, 'UNKNOWN') AS sampleConsentStatus,
                  [status IN collect(DISTINCT consent.status) WHERE status IS NOT NULL] AS consentStatuses
         `,
         {
-          sampleId,
+          specimenId,
           barcode: input?.barcode || null
         }
       );
@@ -79,7 +79,7 @@ class LineageRepository {
   async createSampleNodeWithParent(input) {
     this.ensureDriver();
 
-    const sampleId = this.normalizePointerId(input?.sampleId, 'sampleId');
+    const specimenId = this.normalizePointerId(input?.specimenId, 'specimenId');
     const parentSampleId = this.normalizePointerId(input?.parentSampleId, 'parentSampleId');
 
     const session = this.driver.session({ database: this.database });
@@ -91,7 +91,7 @@ class LineageRepository {
           WITH parent, coalesce(parent.consentStatus, 'UNKNOWN') AS parentConsentStatus
           WHERE parentConsentStatus IN $activeConsentStatuses
 
-          MERGE (child:Sample {id: $sampleId})
+          MERGE (child:Sample {id: $specimenId})
           ON CREATE SET child.createdAt = datetime(), child.source = 'BioAvanceD'
           SET child.updatedAt = datetime(),
               child.barcode = coalesce($barcode, child.barcode),
@@ -104,10 +104,10 @@ class LineageRepository {
           ON CREATE SET r.createdAt = datetime(), r.relationshipType = $relationshipType
           SET r.updatedAt = datetime(), r.relationshipType = $relationshipType
 
-          RETURN child.id AS sampleId, parent.id AS parentId, r.relationshipType AS relationshipType
+          RETURN child.id AS specimenId, parent.id AS parentId, r.relationshipType AS relationshipType
         `,
         {
-          sampleId,
+          specimenId,
           parentSampleId,
           barcode: input?.barcode || null,
           status: input?.status || null,
@@ -121,7 +121,7 @@ class LineageRepository {
       }
 
       return result.records[0]?.toObject() || {
-        sampleId,
+        specimenId,
         parentId: parentSampleId,
         relationshipType: input?.relationshipType || 'TOPOLOGICAL_PARENT'
       };
@@ -136,19 +136,18 @@ class LineageRepository {
   async recordCustodyEvent(input) {
     this.ensureDriver();
 
-    const sampleId = this.normalizePointerId(input?.sampleId, 'sampleId');
-
     if (!input?.eventType) {
       throw new Error('[ISO20387][NEO4J] eventType obrigatório para trilha de custódia');
     }
 
     const session = this.driver.session({ database: this.database });
-    const eventId = `${input.eventType}-${sampleId}-${Date.now()}`;
+    const specimenId = this.normalizePointerId(input?.specimenId, 'specimenId');
+    const eventId = `${input.eventType}-${specimenId}-${Date.now()}`;
 
     try {
       await session.run(
         `
-          MERGE (sample:Sample {id: $sampleId})
+          MERGE (sample:Sample {id: $specimenId})
           ON CREATE SET sample.createdAt = datetime(), sample.source = 'BioAvanceD'
           SET sample.updatedAt = datetime(),
               sample.barcode = coalesce($barcode, sample.barcode)
@@ -182,7 +181,7 @@ class LineageRepository {
         `,
         {
           eventId,
-          sampleId,
+          specimenId,
           barcode: input.barcode || null,
           eventType: String(input.eventType),
           happenedAt: (input.happenedAt || new Date()).toISOString(),

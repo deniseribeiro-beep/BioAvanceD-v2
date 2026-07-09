@@ -52,7 +52,7 @@ REQUIRE r.id IS UNIQUE;
 
 CREATE INDEX sample_mongo_sample_id_idx IF NOT EXISTS
 FOR (s:Sample)
-ON (s.mongoSampleId);
+ON (s.specimenId);
 
 CREATE INDEX donor_last_projection_at_idx IF NOT EXISTS
 FOR (d:Donor)

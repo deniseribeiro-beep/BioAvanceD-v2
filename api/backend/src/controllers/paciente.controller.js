@@ -9,8 +9,49 @@ const { getCollection } = require('../utils/collectionResolver');
  * Controller para operações relacionadas a pacientes
  */
 class PacienteController {
+  rejectCanonicalAliases(payload = {}) {
+    const allowed = new Set([
+      'participantId',
+      'patientName',
+      'birthDate',
+      'sex',
+      'email',
+      'phone',
+      'identityDocument',
+      'recordNumber',
+      'clinicalUnitId',
+      'clinicalUnit',
+      'unitAcronym',
+      'isDeceased',
+      'representativeName',
+      'representativeEmail',
+      'representativeIdentityDocument',
+      'representativePhone',
+      'consentTemplateId',
+      'status',
+      'consentToken',
+      'consentTokenCreatedAt',
+      'consentTokenExpiresAt',
+      'consentNotifiedAt',
+      'consentAcceptedAt',
+      'createdAt',
+      'updatedAt',
+      'anamneseGeral',
+      'dadosEspecificos'
+    ]);
+    const fields = Object.keys(payload).filter((field) => !allowed.has(field));
+    if (fields.length > 0) {
+      const error = new Error('Payload contém campos não canônicos');
+      error.statusCode = 422;
+      error.code = 'NON_CANONICAL_FIELD';
+      error.fields = fields;
+      throw error;
+    }
+  }
+
   sanitizePatientPayload(payload = {}) {
     const nextPayload = { ...payload };
+    this.rejectCanonicalAliases(nextPayload);
 
     if (nextPayload.clinicalUnit !== undefined && nextPayload.clinicalUnit !== null) {
       nextPayload.clinicalUnit = String(nextPayload.clinicalUnit).trim().toUpperCase();
@@ -36,11 +77,11 @@ class PacienteController {
 
     const representativeName = typeof payload.representativeName === 'string' ? payload.representativeName.trim() : '';
     const representativeEmail = typeof payload.representativeEmail === 'string' ? payload.representativeEmail.trim() : '';
-    const representativeCpf = String(payload.representativeCpf || '').replace(/\D/g, '').trim();
+    const representativeIdentityDocument = String(payload.representativeIdentityDocument || '').replace(/\D/g, '').trim();
     const representativePhone = String(payload.representativePhone || '').replace(/\D/g, '').trim();
 
-    if (!representativeName || !representativeEmail || !representativeCpf || !representativePhone) {
-      const error = new Error('Para paciente falecido, nome, e-mail, CPF e telefone do representante legal são obrigatórios');
+    if (!representativeName || !representativeEmail || !representativeIdentityDocument || !representativePhone) {
+      const error = new Error('Para paciente falecido, nome, e-mail, identityDocument e telefone do representante legal são obrigatórios');
       error.statusCode = 400;
       throw error;
     }
@@ -83,10 +124,10 @@ class PacienteController {
         await auditLogger.log({
           action: 'CREATE',
           entity: 'Patient',
-          entityID: sanitizedPatient.patientID, // Apenas ID, sem dados sensíveis
+          entityID: sanitizedPatient.participantId, // Apenas ID, sem dados sensíveis
           result: 'success',
           severity: 'info',
-          message: `Paciente cadastrado - ID: ${sanitizedPatient.patientID}`, // Log sem dados sensíveis
+          message: `Paciente cadastrado - ID: ${sanitizedPatient.participantId}`, // Log sem dados sensíveis
           payload: sanitizedPatient, // Apenas ID sanitizado
           req: req,
           module: 'Cadastro'
@@ -98,7 +139,7 @@ class PacienteController {
         success: true,
         message: req.t('users.registerPatientSuccess'),
         data: {
-          patientID: paciente.patientID // Apenas o ID, sem dados sensíveis
+          participantId: paciente.participantId // Apenas o ID, sem dados sensíveis
         }
       });
     } catch (error) {
@@ -165,7 +206,7 @@ class PacienteController {
 
         const patientsCollection = await getCollection(db, 'patients');
         const patients = await patientsCollection
-          .find({}, { projection: { patientID: 1, status: 1, consentNotifiedAt: 1, consentTokenExpiresAt: 1, _id: 0 } })
+          .find({}, { projection: { participantId: 1, status: 1, consentNotifiedAt: 1, consentTokenExpiresAt: 1, _id: 0 } })
           .limit(filters.limit)
           .skip(filters.skip)
           .toArray();
@@ -189,7 +230,7 @@ class PacienteController {
         return res.status(200).json({
           success: true,
           data: {
-            patients: patients.map(p => ({ patientID: p.patientID, status: p.status || 'PENDING_CONSENT', consentNotifiedAt: p.consentNotifiedAt || null, consentTokenExpiresAt: p.consentTokenExpiresAt || null })),
+            patients: patients.map(p => ({ participantId: p.participantId, status: p.status || 'PENDING_CONSENT', consentNotifiedAt: p.consentNotifiedAt || null, consentTokenExpiresAt: p.consentTokenExpiresAt || null })),
             total,
             limit: filters.limit,
             skip: filters.skip
@@ -248,7 +289,7 @@ class PacienteController {
       const { id } = req.params;
       const { sanitizePatientForLogs } = require('../utils/patientAnonymization');
       
-      // Verifica se é patientID (8 dígitos) ou ObjectId
+      // Verifica se é participantId (8 dígitos) ou ObjectId
       const patient = await patientService.getPatient(db, id);
 
       if (!patient) {
@@ -286,7 +327,7 @@ class PacienteController {
         await auditLogger.log({
           action: 'QUERY',
           entity: 'Patient',
-          entityID: sanitizedPatient.patientID,
+          entityID: sanitizedPatient.participantId,
           result: 'success',
           severity: 'info',
           message: 'Consulta de paciente (módulo operacional) - apenas ID retornado',
@@ -297,7 +338,7 @@ class PacienteController {
         return res.status(200).json({
           success: true,
           data: {
-            patientID: patient.patientID,
+            participantId: patient.participantId,
             status: patient.status || 'PENDING_CONSENT',
             consentNotifiedAt: patient.consentNotifiedAt || null,
             consentTokenExpiresAt: patient.consentTokenExpiresAt || null
@@ -312,7 +353,7 @@ class PacienteController {
       await auditLogger.log({
         action: 'QUERY',
         entity: 'Patient',
-        entityID: sanitizedPatient.patientID,
+        entityID: sanitizedPatient.participantId,
         result: 'success',
         severity: 'info',
         message: 'Paciente consultado (módulo cadastro)',
@@ -345,16 +386,16 @@ class PacienteController {
         });
       }
 
-      const patientID = String(req.params.id || req.body.patientID || req.body.patientId || '').trim();
-      if (!patientID) {
+      const participantId = String(req.params.id || req.body.participantId || '').trim();
+      if (!participantId) {
         return res.status(400).json({
           success: false,
-          error: 'patientId é obrigatório'
+          error: 'participantId é obrigatório'
         });
       }
 
-      const result = await patientService.resendConsentNotification(db, patientID);
-      await revalidateSamplesByPatientID(db, patientID);
+      const result = await patientService.resendConsentNotification(db, participantId);
+      await revalidateSamplesByPatientID(db, participantId);
 
       return res.status(200).json({
         success: true,
@@ -384,11 +425,11 @@ class PacienteController {
       const { id } = req.params;
       const { sanitizePatientForLogs } = require('../utils/patientAnonymization');
       
-      // Valida que não está tentando alterar o patientID (imutável por LGPD)
-      if (req.body.patientID && req.body.patientID !== id) {
+      // Valida que não está tentando alterar o participantId (imutável por LGPD)
+      if (req.body.participantId && req.body.participantId !== id) {
         return res.status(400).json({
           success: false,
-          error: 'Não é permitido alterar o patientID',
+          error: 'Não é permitido alterar o participantId',
           message: 'O ID do paciente é imutável por questões de LGPD'
         });
       }
@@ -413,7 +454,7 @@ class PacienteController {
           result: 'success',
           severity: 'info',
           message: 'Paciente atualizado',
-          payload: sanitizePatientForLogs({ patientID: sanitizedID }),
+          payload: sanitizePatientForLogs({ participantId: sanitizedID }),
           req: req,
           module: 'Cadastro'
         });
@@ -432,7 +473,7 @@ class PacienteController {
         const auditLogger = require('../utils/auditLogger');
         auditLogger.init(db);
         await auditLogger.logError(req, 'Patient', error, {
-          patientID: req.params.id,
+          participantId: req.params.id,
           action: 'UPDATE'
         });
       }
@@ -494,7 +535,7 @@ class PacienteController {
           result: 'success',
           severity: 'warning',
           message: 'Paciente deletado',
-          payload: sanitizePatientForLogs({ patientID: sanitizedID }),
+          payload: sanitizePatientForLogs({ participantId: sanitizedID }),
           req: req,
           module: 'Cadastro'
         });
@@ -512,7 +553,7 @@ class PacienteController {
         const auditLogger = require('../utils/auditLogger');
         auditLogger.init(db);
         await auditLogger.logError(req, 'Patient', error, {
-          patientID: req.params.id,
+          participantId: req.params.id,
           action: 'DELETE'
         });
       }
@@ -535,16 +576,18 @@ class PacienteController {
         });
       }
 
-      const patientID = String(req.body?.patientID || '').trim();
-      if (!patientID) {
+      this.rejectCanonicalAliases(req.body || {});
+
+      const participantId = String(req.body?.participantId || '').trim();
+      if (!participantId) {
         return res.status(400).json({
           success: false,
-          error: 'patientID é obrigatório'
+          error: 'participantId é obrigatório'
         });
       }
 
       // Valida formato do ID (8 dígitos numéricos)
-      if (typeof patientID !== 'string' || patientID.length !== 8 || !/^\d{8}$/.test(patientID)) {
+      if (typeof participantId !== 'string' || participantId.length !== 8 || !/^\d{8}$/.test(participantId)) {
         return res.status(400).json({
           success: false,
           error: 'ID inválido',
@@ -553,8 +596,8 @@ class PacienteController {
       }
 
       // Valida se o ID existe (sem expor dados sensíveis)
-      const { validatePatientID: validatePatientIDUtil } = require('../utils/patientAnonymization');
-      const exists = await validatePatientIDUtil(db, patientID, 'pacientes');
+      const { validateParticipantId: validateParticipantIdUtil } = require('../utils/patientAnonymization');
+      const exists = await validateParticipantIdUtil(db, participantId, 'pacientes');
       
       // Registra log de validação de ID
       const auditLogger = require('../utils/auditLogger');
@@ -564,8 +607,8 @@ class PacienteController {
         entity: 'Patient',
         result: exists ? 'success' : 'error',
         severity: exists ? 'info' : 'warning',
-        message: `Validação de ID de paciente: ${patientID} - ${exists ? 'válido' : 'inválido'}`,
-        payload: { patientID, exists },
+        message: `Validação de ID de paciente: ${participantId} - ${exists ? 'válido' : 'inválido'}`,
+        payload: { participantId, exists },
         req: req,
         module: 'Cadastro'
       });
@@ -574,7 +617,7 @@ class PacienteController {
         success: true,
         data: {
           valid: exists, // true se existe, false se não existe
-          patientID
+          participantId
         }
       });
     } catch (error) {
@@ -597,24 +640,26 @@ class PacienteController {
         });
       }
 
-      const { patientID } = req.body;
-      if (!patientID) {
+      this.rejectCanonicalAliases(req.body || {});
+
+      const { participantId } = req.body;
+      if (!participantId) {
         return res.status(400).json({
           success: false,
-          error: 'patientID é obrigatório'
+          error: 'participantId é obrigatório'
         });
       }
 
       const { getCollection } = require('../utils/collectionResolver');
       const patientsCollection = await getCollection(db, 'patients');
-      const patient = await patientsCollection.findOne({ patientID });
+      const patient = await patientsCollection.findOne({ participantId });
 
       if (!patient) {
         // Registra tentativa de busca para edição de paciente inexistente (sanitizado)
         const auditLogger = require('../utils/auditLogger');
         auditLogger.init(db);
         const { sanitizePatientForLogs } = require('../utils/patientAnonymization');
-        const sanitizedID = patientID.length === 8 && /^\d{8}$/.test(patientID) ? patientID : 'N/A';
+        const sanitizedID = participantId.length === 8 && /^\d{8}$/.test(participantId) ? participantId : 'N/A';
         await auditLogger.log({
           action: 'QUERY',
           entity: 'Patient',
@@ -622,7 +667,7 @@ class PacienteController {
           result: 'error',
           severity: 'warning',
           message: `Tentativa de buscar paciente para edição: ID ${sanitizedID} não encontrado`,
-          payload: sanitizePatientForLogs({ patientID: sanitizedID }),
+          payload: sanitizePatientForLogs({ participantId: sanitizedID }),
           req: req,
           module: 'Cadastro'
         });
@@ -641,10 +686,10 @@ class PacienteController {
       await auditLogger.log({
         action: 'QUERY',
         entity: 'Patient',
-        entityID: sanitizedPatient.patientID,
+        entityID: sanitizedPatient.participantId,
         result: 'success',
         severity: 'info',
-        message: `Paciente buscado para edição: ID ${sanitizedPatient.patientID}`,
+        message: `Paciente buscado para edição: ID ${sanitizedPatient.participantId}`,
         payload: sanitizedPatient, // Apenas ID sanitizado
         req: req,
         module: 'Cadastro'
@@ -734,11 +779,11 @@ class PacienteController {
         });
       }
 
-      const patientID = String(req.params.id || '').trim();
-      if (!/^\d{8}$/.test(patientID)) {
+      const participantId = String(req.params.id || '').trim();
+      if (!/^\d{8}$/.test(participantId)) {
         return res.status(400).json({
           success: false,
-          error: 'patientID inválido. Deve ter 8 dígitos numéricos'
+          error: 'participantId inválido. Deve ter 8 dígitos numéricos'
         });
       }
 
@@ -751,7 +796,7 @@ class PacienteController {
         skip: req.query.skip
       };
 
-      const result = await biomarkerObservationService.listPatientObservations(db, patientID, filters);
+      const result = await biomarkerObservationService.listPatientObservations(db, participantId, filters);
 
       const { permissions } = require('../infrastructure/middleware/rbac');
       const userRole = req.user?.accessType || 1;
@@ -761,7 +806,7 @@ class PacienteController {
         ? result.observations
         : result.observations.map((item) => ({
           _id: item._id,
-          patientID: item.patientID,
+          participantId: item.participantId,
           biomarkerType: item.biomarkerType,
           collectedAt: item.collectedAt,
           status: item.status,
@@ -797,16 +842,16 @@ class PacienteController {
         });
       }
 
-      const patientID = String(req.params.id || '').trim();
-      if (!/^\d{8}$/.test(patientID)) {
+      const participantId = String(req.params.id || '').trim();
+      if (!/^\d{8}$/.test(participantId)) {
         return res.status(400).json({
           success: false,
-          error: 'patientID inválido. Deve ter 8 dígitos numéricos'
+          error: 'participantId inválido. Deve ter 8 dígitos numéricos'
         });
       }
 
       const payload = {
-        patientID,
+        participantId,
         biomarkerType: req.body?.biomarkerType,
         value: req.body?.value,
         unit: req.body?.unit,
@@ -815,16 +860,13 @@ class PacienteController {
         source: req.body?.source || 'manual',
         eventType: req.body?.eventType || 'manual',
         notes: req.body?.notes,
-        sampleID: req.body?.sampleID || req.body?.sampleId || req.body?.specimenID || req.body?.specimenId || null,
-        sampleId: req.body?.sampleId || req.body?.sampleID || req.body?.specimenId || req.body?.specimenID || null,
-        specimenID: req.body?.specimenID || req.body?.sampleID || req.body?.sampleId || null,
-        specimenId: req.body?.specimenId || req.body?.sampleID || req.body?.sampleId || null,
+        specimenId: req.body?.specimenId || null,
         resourceType: req.body?.resourceType || 'Observation',
-        subject: req.body?.subject || { reference: `Patient/${patientID}` },
-        specimen: req.body?.specimen || (req.body?.sampleID || req.body?.specimenID ? { reference: `Specimen/${String(req.body?.sampleID || req.body?.specimenID || '').trim()}` } : null),
+        subject: req.body?.subject || { reference: `Patient/${participantId}` },
+        specimen: req.body?.specimen || (req.body?.specimenId ? { reference: `Specimen/${String(req.body?.specimenId).trim()}` } : null),
         effectiveDateTime: req.body?.effectiveDateTime || req.body?.collectedAt,
         linkedResourceType: 'Patient',
-        linkedResourceId: patientID
+        linkedResourceId: participantId
       };
 
       const created = await biomarkerObservationService.createObservation(db, payload);
@@ -847,4 +889,5 @@ class PacienteController {
 }
 
 module.exports = new PacienteController();
+
 

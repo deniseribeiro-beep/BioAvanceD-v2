@@ -10,8 +10,8 @@ class BiomarkerObservationService {
     if (!collection || !collectionName || indexedObservationCollections.has(collectionName)) return;
 
     const indexDefinitions = [
-      [{ patientID: 1, biomarkerType: 1, collectedAt: -1 }, { name: 'biomarker_obs_patient_type_collected_idx_v1' }],
-      [{ patientID: 1, collectedAt: -1 }, { name: 'biomarker_obs_patient_collected_idx_v1' }],
+      [{ participantId: 1, biomarkerType: 1, collectedAt: -1 }, { name: 'biomarker_obs_participant_type_collected_idx_v1' }],
+      [{ participantId: 1, collectedAt: -1 }, { name: 'biomarker_obs_participant_collected_idx_v1' }],
       [{ biomarkerType: 1, collectedAt: -1 }, { name: 'biomarker_obs_type_collected_idx_v1' }],
       [{ status: 1, collectedAt: -1 }, { name: 'biomarker_obs_status_collected_idx_v1' }],
       [{ idempotencyKey: 1 }, { name: 'biomarker_obs_idempotency_unique_v1', unique: true }]
@@ -89,14 +89,14 @@ class BiomarkerObservationService {
     }
   }
 
-  async listPatientObservations(db, patientID, filters = {}) {
-    const normalizedPatientID = String(patientID || '').trim();
-    if (!/^\d{8}$/.test(normalizedPatientID)) {
-      throw new Error('patientID inválido. Deve ter 8 dígitos numéricos');
+  async listPatientObservations(db, participantId, filters = {}) {
+    const normalizedParticipantId = String(participantId || '').trim();
+    if (!/^\d{8}$/.test(normalizedParticipantId)) {
+      throw new Error('participantId inválido. Deve ter 8 dígitos numéricos');
     }
 
     const collection = await this.getObservationsCollection(db);
-    const query = { patientID: normalizedPatientID };
+    const query = { participantId: normalizedParticipantId };
 
     if (filters.biomarkerType) {
       query.biomarkerType = String(filters.biomarkerType).trim();

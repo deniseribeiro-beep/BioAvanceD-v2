@@ -4,14 +4,14 @@ import { patientService } from '@/services/api';
 import './PatientSearchInput.css';
 
 interface Patient {
-  patientID: string;
+  participantId: string;
   recordNumber?: string | number | null;
   _id?: string;
 }
 
 interface PatientSearchInputProps {
   value: string;
-  onChange: (patientID: string) => void;
+  onChange: (participantId: string) => void;
   onValidationChange?: (isValid: boolean | null) => void;
   label?: string;
   required?: boolean;
@@ -63,10 +63,10 @@ export default function PatientSearchInput({
     };
   }, []);
 
-  // Valida patientID quando value muda
+  // Valida participantId quando value muda
   useEffect(() => {
     if (value && value.length === 8 && /^\d{8}$/.test(value)) {
-      validatePatientID(value);
+      validateparticipantId(value);
     } else if (value) {
       setIsValid(false);
       onValidationChange?.(false);
@@ -76,10 +76,10 @@ export default function PatientSearchInput({
     }
   }, [value]);
 
-  const validatePatientID = async (patientID: string) => {
+  const validateparticipantId = async (participantId: string) => {
     setValidating(true);
     try {
-      const response = await patientService.validateID(patientID);
+      const response = await patientService.validateID(participantId);
       const valid = response.data.valid;
       setIsValid(valid);
       onValidationChange?.(valid);
@@ -172,8 +172,8 @@ export default function PatientSearchInput({
   };
 
   const handleSelectPatient = (patient: Patient) => {
-    setSearchTerm(patient.patientID);
-    onChange(patient.patientID);
+    setSearchTerm(patient.participantId);
+    onChange(patient.participantId);
     setShowResults(false);
     setIsValid(true);
     onValidationChange?.(true);
@@ -209,7 +209,7 @@ export default function PatientSearchInput({
           />
           <input
             id={inputId}
-            name="patientID"
+            name="participantId"
             type="text"
             value={searchTerm || value || ''}
             onChange={handleInputChange}
@@ -292,12 +292,12 @@ export default function PatientSearchInput({
           <div className="patient-search-results">
             {results.slice(0, 10).map((patient, idx) => (
               <div
-                key={patient.patientID || patient._id || idx}
+                key={patient.participantId || patient._id || idx}
                 className="patient-search-result-item"
                 onClick={() => handleSelectPatient(patient)}
               >
                 <div className="patient-result-info">
-                  <div className="patient-result-id">ID: {patient.patientID}</div>
+                  <div className="patient-result-id">ID: {patient.participantId}</div>
                   {patient.recordNumber && (
                     <div className="patient-result-record">
                       Prontuário: {patient.recordNumber}
@@ -355,4 +355,5 @@ export default function PatientSearchInput({
     </div>
   );
 }
+
 

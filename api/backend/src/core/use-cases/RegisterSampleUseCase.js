@@ -89,7 +89,7 @@ class RegisterSampleUseCase {
 
   buildLineagePayload(createdSample, sampleData, command) {
     return {
-      sampleId: String(createdSample?._id || createdSample?.id || sampleData?.id),
+      specimenId: String(createdSample?._id || createdSample?.id || sampleData?.id),
       barcode: createdSample?.barcode || sampleData?.barcode || null,
       eventType: 'register',
       actorId: command?.actor?.userId || null,
@@ -126,14 +126,14 @@ class RegisterSampleUseCase {
   }
 
   async rollbackMongoSample(createdSample) {
-    const sampleId = createdSample?._id || createdSample?.id;
-    if (!sampleId || typeof this.sampleRepository.deleteById !== 'function') {
+    const specimenId = createdSample?._id || createdSample?.id;
+    if (!specimenId || typeof this.sampleRepository.deleteById !== 'function') {
       return;
     }
 
     try {
-      await this.sampleRepository.deleteById(String(sampleId));
-      this.logger.warn(`[RegisterSampleUseCase] Rollback do MongoDB aplicado para sampleId=${sampleId}`);
+      await this.sampleRepository.deleteById(String(specimenId));
+      this.logger.warn(`[RegisterSampleUseCase] Rollback do MongoDB aplicado para specimenId=${specimenId}`);
     } catch (rollbackError) {
       this.logger.error('[RegisterSampleUseCase] Falha ao executar rollback no MongoDB:', rollbackError.message || rollbackError);
     }
