@@ -70,6 +70,11 @@ const COLLECTIONS = [
     description: 'Terminologias SPREC/HPO minimas',
   },
   {
+    name: 'referenceSeedRuns',
+    indexes: [{ key: 1 }, { version: 1 }, { executedAt: -1 }, { checksum: 1 }],
+    description: 'Execucoes do seed essencial de referencia',
+  },
+  {
     name: 'sampleTypes',
     indexes: [{ id: 1 }],
     description: 'MIABIS sample types',
