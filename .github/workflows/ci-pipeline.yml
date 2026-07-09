@@ -52,6 +52,14 @@ jobs:
       - name: Backend typecheck
         run: npm --prefix api/backend run typecheck
 
+      - name: Backend architecture tests
+        run: npm --prefix api/backend run test:architecture
+
+      - name: Essential reference seed validation
+        run: |
+          npm --prefix api/backend run seed:validate:essential
+          npm --prefix api/backend run seed:essential:dry-run
+
       - name: Frontend lint
         run: npm --prefix frontend run lint
 
