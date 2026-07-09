@@ -79,6 +79,23 @@ different handling:
     that determines what the merged branch actually looks like going
     forward.
 
+## Conflicts filed as issues still resolve inside the one merge commit
+
+When a conflict is non-trivial enough to file as its own GitHub issue
+(confirmed pattern, 2026-07-09, issues #120-#124: main's single
+"canonicalize participant flow" commit silently dropped functionality
+still needed elsewhere — an auth guard, a validation check, a bugfix
+config value — while renaming fields), don't try to run the normal
+`fix-bugs` one-issue-per-branch-per-commit loop on them. A `git merge`
+can't be committed until *every* conflict is resolved, so there's no
+way to land one issue's fix as its own commit while the others still
+have `<<<<<<<` markers in the tree. Resolve all the filed conflicts in
+the merge's working tree, land them together in the single merge
+commit (list the issue numbers and what each resolution does in the
+commit message), then `gh issue close <N> --comment "..."` each one
+individually pointing at that merge commit's hash — same closing
+discipline as `fix-bugs`, just not the same branching discipline.
+
 ## Lockfiles: regenerate, don't hand-merge
 
 For `package-lock.json` conflicts (root, `api/backend/`, `frontend/`),
