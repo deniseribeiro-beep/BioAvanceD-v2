@@ -76,7 +76,7 @@ describe('MongoAuditRepository', () => {
       const repo = new MongoAuditRepository(db);
 
       const input = {
-        sampleId: 'S-1',
+        specimenId: 'S-1',
         barcode: 'BC-1',
         eventType: 'MOVE',
         before: { status: 'A' },
@@ -102,7 +102,7 @@ describe('MongoAuditRepository', () => {
       const [insertedDoc] = movements.insertOne.mock.calls[0];
 
       expect(insertedDoc.movementID).toBe(42);
-      expect(insertedDoc.sampleID).toBe('S-1');
+      expect(insertedDoc.specimenId).toBe('S-1');
       expect(insertedDoc.barcode).toBe('BC-1');
       expect(insertedDoc.type).toBe('MOVE');
       expect(insertedDoc.quantity).toBeNull();
@@ -131,7 +131,7 @@ describe('MongoAuditRepository', () => {
       const repo = new MongoAuditRepository(db);
 
       const input = {
-        sampleId: 'S-2',
+        specimenId: 'S-2',
         eventType: 'CREATE',
         before: null,
         after: { status: 'NEW' },
@@ -162,7 +162,7 @@ describe('MongoAuditRepository', () => {
       const repo = new MongoAuditRepository(db);
 
       const input = {
-        sampleId: 'S-3',
+        specimenId: 'S-3',
         eventType: 'MOVE',
         before: {},
         after: {},
@@ -189,7 +189,7 @@ describe('MongoAuditRepository', () => {
 
       const fakeSession = { id: 'session-123' };
       const input = {
-        sampleId: 'S-4',
+        specimenId: 'S-4',
         eventType: 'MOVE',
         before: {},
         after: {},
