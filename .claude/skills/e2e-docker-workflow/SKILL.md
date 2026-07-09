@@ -75,6 +75,15 @@ access doesn't mean we should use them freely. Always do work locally, show Denn
 and only push or open PRs when he explicitly says to. If something was pushed/opened by
 mistake, convert the PR to draft immediately: `gh pr ready --undo <number>`.
 
+### `npm run seed` doesn't exist yet — it's in progress on another branch, don't reinvent it
+`scripts/start-local-stack.ps1` and `tests/e2e/backend-integration.spec.ts` both assume a
+`npm run seed` script creates a known admin user, but neither root nor `api/backend/package.json`
+has one (confirmed 2026-07-09, filed as issue #144). Before adding one yourself, check
+`origin/chore/reference-seed-stack-and-ci` — it has active commits aligning a reference seed + CI
+contract — and `origin/release/inpi-v1.1.0-rcs-gov`, which already has a working `seed` script in
+both package.jsons. Real-backend/login-driven e2e specs should wait on or pull from that branch's
+seed work rather than a second seed mechanism getting built here.
+
 ### Backend crashes on startup with missing RESEND_API_KEY and CONSENT_SECRET
 Two services (`sendCriticalAlertEmail.js`, `sendIncidentAlertEmail.js`) called `new Resend(key)`
 at module load time — throws immediately if `RESEND_API_KEY` is empty/unset even though the
