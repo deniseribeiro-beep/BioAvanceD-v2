@@ -30,15 +30,15 @@ function createCoordinatorToken() {
 
 function buildValidPatientPayload(overrides = {}) {
   return {
+    participantId: '12345678',
     patientName: 'Paciente QA Integração',
     birthDate: '1990-01-20',
     sex: 'F',
     email: 'paciente.qa@example.test',
     consentTemplateId,
     recordNumber: 'PRONT-0001',
-    cpf: '52998224725',
+    identityDocument: '52998224725',
     clinicalUnit: 'Genética',
-    geneticVariant: 'GLA-c.123A>G',
     ...overrides,
   };
 }
@@ -97,7 +97,7 @@ describe('RF005 - POST /api/v1/patients', () => {
     const patientsCollection = {
       createIndex: vi.fn().mockResolvedValue('idx'),
       findOne: vi.fn().mockImplementation(async (query) => {
-        if (query && query.patientID) return null;
+        if (query && query.participantId) return null;
         if (query && query.$or) return null;
         return null;
       }),
@@ -120,7 +120,7 @@ describe('RF005 - POST /api/v1/patients', () => {
 
     expect(response.status).toBe(201);
     expect(response.body.success).toBe(true);
-    expect(response.body.data.patientID).toMatch(/^\d{8}$/);
+    expect(response.body.data.participantId).toMatch(/^\d{8}$/);
     expect(insertOne).toHaveBeenCalledTimes(1);
   });
 
@@ -133,12 +133,12 @@ describe('RF005 - POST /api/v1/patients', () => {
         if (query && query.$or) {
           return {
             _id: 'existing-patient-1',
-            patientID: '12345678',
+            participantId: '12345678',
             recordNumber: 'PRONT-DUP-01',
-            cpf: '52998224725',
+            identityDocument: '52998224725',
           };
         }
-        if (query && query.patientID) return null;
+        if (query && query.participantId) return null;
         return null;
       }),
       find: vi.fn().mockReturnValue({

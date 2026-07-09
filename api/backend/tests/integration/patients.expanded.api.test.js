@@ -82,11 +82,12 @@ function createTechnicianToken() {
 // Helpers para payloads
 function buildValidPatientPayload(overrides = {}) {
   return {
+    participantId: '12345678',
     patientName: 'Paciente QA Teste',
     birthDate: '1990-01-20',
     sex: 'F',
     recordNumber: 'PRONT-' + Math.random().toString(36).substring(7),
-    cpf: '11144477735',
+    identityDocument: '11144477735',
     email: 'paciente.qa+test@example.com',
     consentTemplateId: '60b8d295f1bfdc3b8c8f9b01',
     clinicalUnit: 'Genética Médica',
@@ -97,18 +98,19 @@ function buildValidPatientPayload(overrides = {}) {
 
 function buildDeceasedPatientPayload() {
   return {
+    participantId: '87654321',
     patientName: 'Paciente Falecido QA',
     birthDate: '1950-01-20',
     sex: 'M',
     recordNumber: 'PRONT-FALECIDO-001',
-    cpf: '98765432100',
+    identityDocument: '98765432100',
     email: 'falecido.qa@example.com',
     consentTemplateId: '60b8d295f1bfdc3b8c8f9b01',
     clinicalUnit: 'Oncologia',
     isDeceased: true,
     representativeName: 'João Silva Representante',
     representativeEmail: 'representante@email.com',
-    representativeCpf: '11122233344',
+    representativeIdentityDocument: '11122233344',
     representativePhone: '11987654321',
   };
 }
@@ -163,7 +165,7 @@ describe('📦 Pacientes e Observacoes de Biomarcadores - Testes de Integracao',
 
       expect(response.status).toBe(201);
       expect(response.body.success).toBe(true);
-      expect(response.body.data.patientID).toMatch(/^\d{8}$/);
+      expect(response.body.data.participantId).toMatch(/^\d{8}$/);
     });
 
     it('Given: usuário não autenticado | When: tenta criar paciente | Then: retorna 401', async () => {
@@ -206,7 +208,7 @@ describe('📦 Pacientes e Observacoes de Biomarcadores - Testes de Integracao',
         .send(buildDeceasedPatientPayload());
 
       expect(response.status).toBe(201);
-      expect(response.body.data.patientID).toMatch(/^\d{8}$/);
+      expect(response.body.data.participantId).toMatch(/^\d{8}$/);
     });
 
     it('Given: paciente falecido SEM representante | When: submete payload | Then: retorna 400 ou 422', async () => {
@@ -224,7 +226,7 @@ describe('📦 Pacientes e Observacoes de Biomarcadores - Testes de Integracao',
     });
 
     it('Given: CPF já cadastrado | When: tenta registrar novo paciente com mesmo CPF | Then: retorna 409', async () => {
-      const existingPatient = { patientID: '12345678', cpf: '12345678901' };
+      const existingPatient = { participantId: '12345678', identityDocument: '12345678901' };
       const patientsCollection = {
         findOne: vi.fn().mockResolvedValueOnce(existingPatient),
         countDocuments: vi.fn().mockResolvedValue(1),
@@ -239,7 +241,7 @@ describe('📦 Pacientes e Observacoes de Biomarcadores - Testes de Integracao',
       const response = await request(app)
         .post('/api/patients')
         .set('Authorization', `Bearer ${createCoordinatorToken()}`)
-        .send(buildValidPatientPayload({ cpf: '12345678901' }));
+        .send(buildValidPatientPayload({ identityDocument: '12345678901' }));
 
       expect(response.status).toBe(409);
       expect(response.body.message).toMatch(/já existe|duplicado|conflict|já cadastrado/i);
@@ -437,8 +439,8 @@ describe('📦 Pacientes e Observacoes de Biomarcadores - Testes de Integracao',
     });
 
     it('Given: atualização que geraria duplicidade de CPF | When: submete | Then: retorna 409', async () => {
-      const patient = { patientID: '12345678', cpf: '11111111111' };
-      const existingWithNewCpf = { patientID: '87654321', cpf: '99999999999' };
+      const patient = { participantId: '12345678', identityDocument: '11111111111' };
+      const existingWithNewCpf = { participantId: '87654321', identityDocument: '99999999999' };
 
       const patientsCollection = {
         findOne: vi.fn()
@@ -452,7 +454,7 @@ describe('📦 Pacientes e Observacoes de Biomarcadores - Testes de Integracao',
       const response = await request(app)
         .put('/api/patients/12345678')
         .set('Authorization', `Bearer ${createCoordinatorToken()}`)
-        .send({ cpf: '99999999999' });
+        .send({ identityDocument: '99999999999' });
 
       expect([200, 409]).toContain(response.status);
     });
@@ -642,9 +644,9 @@ describe('📦 Pacientes e Observacoes de Biomarcadores - Testes de Integracao',
       vi.restoreAllMocks();
     });
 
-    it('Given: patientID válido e existente | When: requisita validação | Then: retorna 200 com available=false', async () => {
+    it('Given: participantId válido e existente | When: requisita validação | Then: retorna 200 com available=false', async () => {
       const patientsCollection = {
-        findOne: vi.fn().mockResolvedValue({ patientID: '12345678' }),
+        findOne: vi.fn().mockResolvedValue({ participantId: '12345678' }),
       };
 
       app.locals.db = createDbMock({ patients: patientsCollection });
@@ -652,14 +654,14 @@ describe('📦 Pacientes e Observacoes de Biomarcadores - Testes de Integracao',
       const response = await request(app)
         .post('/api/patients/validate-id')
         .set('Authorization', `Bearer ${createCoordinatorToken()}`)
-        .send({ patientID: '12345678' });
+        .send({ participantId: '12345678' });
 
       expect(response.status).toBe(200);
       // Controller returns `data.valid` indicating existence
       expect(response.body.data.valid).toBe(true);
     });
 
-    it('Given: patientID novo e disponível | When: requisita validação | Then: retorna 200 com available=true', async () => {
+    it('Given: participantId novo e disponível | When: requisita validação | Then: retorna 200 com available=true', async () => {
       const patientsCollection = {
         findOne: vi.fn().mockResolvedValue(null),
       };
@@ -669,19 +671,19 @@ describe('📦 Pacientes e Observacoes de Biomarcadores - Testes de Integracao',
       const response = await request(app)
         .post('/api/patients/validate-id')
         .set('Authorization', `Bearer ${createCoordinatorToken()}`)
-        .send({ patientID: '99999999' });
+        .send({ participantId: '99999999' });
 
       expect(response.status).toBe(200);
       expect(response.body.data.valid).toBe(false);
     });
 
-    it('Given: patientID com formato inválido | When: requisita | Then: retorna erro de validação', async () => {
+    it('Given: participantId com formato inválido | When: requisita | Then: retorna erro de validação', async () => {
       app.locals.db = createDbMock({});
 
       const response = await request(app)
         .post('/api/patients/validate-id')
         .set('Authorization', `Bearer ${createCoordinatorToken()}`)
-        .send({ patientID: 'INVALID' });
+        .send({ participantId: 'INVALID' });
 
       expect([400, 422]).toContain(response.status);
     });

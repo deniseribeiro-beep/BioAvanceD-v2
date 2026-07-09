@@ -107,6 +107,7 @@ describe('PatientService module rules', () => {
     const created = await patientService.createPatient(
       db,
       {
+        participantId: '12345678',
         patientName: 'Paciente QA',
         birthDate: '1990-05-10',
         sex: 'F',
@@ -121,7 +122,7 @@ describe('PatientService module rules', () => {
       }
     );
 
-    expect(String(created.patientID)).toMatch(/^\d{8}$/);
+    expect(String(created.participantId)).toMatch(/^\d{8}$/);
     expect(created.status).toBe('PENDING_CONSENT');
     expect(typeof created.consentToken).toBe('string');
     expect(created.consentToken.length).toBeGreaterThan(10);

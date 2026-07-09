@@ -35,7 +35,7 @@ describe('PatientService.getEncryptedFieldMap', () => {
     const map = patientService.getEncryptedFieldMap();
     expect(map).toHaveProperty('alphaGal', 'alphaGalEncrypted');
     expect(map).toHaveProperty('lysoGb3', 'lysoGb3Encrypted');
-    expect(map).toHaveProperty('representativeCpf', 'representativeCpfEncrypted');
+    expect(map).toHaveProperty('representativeIdentityDocument', 'representativeIdentityDocumentEncrypted');
   });
 });
 
@@ -62,11 +62,11 @@ describe('PatientService.encryptSensitivePatientFields', () => {
     expect(result.lysoGb3Encrypted).toBeDefined();
   });
 
-  it('encrypts representativeCpf field', () => {
-    const patient = { representativeCpf: '123.456.789-00' };
+  it('encrypts representativeIdentityDocument field', () => {
+    const patient = { representativeIdentityDocument: '123.456.789-00' };
     const result = patientService.encryptSensitivePatientFields(patient);
-    expect(result.representativeCpf).toBeNull();
-    expect(result.representativeCpfEncrypted).toBeDefined();
+    expect(result.representativeIdentityDocument).toBeNull();
+    expect(result.representativeIdentityDocumentEncrypted).toBeDefined();
   });
 
   it('does not mutate original patient object', () => {
@@ -96,10 +96,10 @@ describe('PatientService.decryptSensitivePatientFields', () => {
   });
 
   it('roundtrip for string field', () => {
-    const patient = { representativeCpf: '529.982.247-25' };
+    const patient = { representativeIdentityDocument: '529.982.247-25' };
     const encrypted = patientService.encryptSensitivePatientFields(patient);
     const decrypted = patientService.decryptSensitivePatientFields(encrypted);
-    expect(decrypted.representativeCpf).toBe('529.982.247-25');
+    expect(decrypted.representativeIdentityDocument).toBe('529.982.247-25');
   });
 
   it('preserves plain field when it already has a value', () => {
@@ -198,6 +198,7 @@ describe('PatientService.createBiomarkerObservationsFromPatient', () => {
 describe('PatientService.createPatient', () => {
   function validPatientData(overrides = {}) {
     return {
+      participantId: '12345678',
       patientName: 'Maria Silva',
       birthDate: '01/01/1990',
       sex: 'F',
@@ -220,22 +221,22 @@ describe('PatientService.createPatient', () => {
       isDeceased: true,
       representativeName: 'João Representante',
       representativeEmail: 'joao@example.com',
-      representativeCpf: '529.982.247-25',
+      representativeIdentityDocument: '529.982.247-25',
       representativePhone: '11988887777'
     }), {
       skipConsentNotification: true,
       skipBiomarkerArtifacts: true
     });
 
-    expect(result.patientID).toMatch(/^\d{8}$/);
+    expect(result.participantId).toMatch(/^\d{8}$/);
     expect(result.status).toBe('PENDING_CONSENT');
     expect(patientsCollection.insertOne).toHaveBeenCalledTimes(1);
     expect(encryptSpy).toHaveBeenCalled();
 
     const insertedDoc = patientsCollection.insertOne.mock.calls[0][0];
     // Sensitive field must be encrypted (nulled out in plain form) before insert.
-    expect(insertedDoc.representativeCpf).toBeNull();
-    expect(insertedDoc.representativeCpfEncrypted).toBeDefined();
+    expect(insertedDoc.representativeIdentityDocument).toBeNull();
+    expect(insertedDoc.representativeIdentityDocumentEncrypted).toBeDefined();
 
     encryptSpy.mockRestore();
   });
@@ -268,9 +269,9 @@ describe('PatientService.createPatient', () => {
     expect(insertedDoc.lysoGb3 ?? null).toBeNull();
   });
 
-  it('rejects creation when an identifier conflict (duplicate CPF) exists', async () => {
+  it('rejects creation when an identifier conflict (duplicate identityDocument) exists', async () => {
     const patientsCollection = makeFakeCollection({
-      findOne: vi.fn().mockResolvedValue({ _id: 'x', cpf: '52998224725' })
+      findOne: vi.fn().mockResolvedValue({ _id: 'x', identityDocument: '52998224725' })
     });
     const consentTemplatesCollection = makeFakeCollection({
       findOne: vi.fn().mockResolvedValue({ _id: '507f1f77bcf86cd799439011' })
@@ -278,25 +279,25 @@ describe('PatientService.createPatient', () => {
     const db = makeFakeDb({ patients: patientsCollection, consent_templates: consentTemplatesCollection });
 
     await expect(
-      patientService.createPatient(db, validPatientData({ cpf: '529.982.247-25' }), {
+      patientService.createPatient(db, validPatientData({ identityDocument: '529.982.247-25' }), {
         skipConsentNotification: true,
         skipBiomarkerArtifacts: true
       })
-    ).rejects.toMatchObject({ statusCode: 409, message: expect.stringContaining('CPF') });
+    ).rejects.toMatchObject({ statusCode: 409, message: expect.stringContaining('identityDocument') });
 
     expect(patientsCollection.insertOne).not.toHaveBeenCalled();
   });
 });
 
 describe('PatientService.getPatient', () => {
-  it('returns a decrypted patient when found by 8-digit patientID', async () => {
-    const encrypted = patientService.encryptSensitivePatientFields({ patientID: '12345678', alphaGal: 4.2 });
+  it('returns a decrypted patient when found by 8-digit participantId', async () => {
+    const encrypted = patientService.encryptSensitivePatientFields({ participantId: '12345678', alphaGal: 4.2 });
     const patientsCollection = makeFakeCollection({ findOne: vi.fn().mockResolvedValue(encrypted) });
     const db = makeFakeDb({ patients: patientsCollection });
 
     const result = await patientService.getPatient(db, '12345678');
 
-    expect(patientsCollection.findOne).toHaveBeenCalledWith({ patientID: '12345678' });
+    expect(patientsCollection.findOne).toHaveBeenCalledWith({ participantId: '12345678' });
     expect(result.alphaGal).toBe(4.2);
   });
 
@@ -420,7 +421,7 @@ describe('PatientService.deletePatient', () => {
 
     const result = await patientService.deletePatient(db, '12345678');
 
-    expect(patientsCollection.deleteOne).toHaveBeenCalledWith({ patientID: '12345678' });
+    expect(patientsCollection.deleteOne).toHaveBeenCalledWith({ participantId: '12345678' });
     expect(result).toBe(true);
   });
 
@@ -485,7 +486,7 @@ describe('PatientService.validateConsentToken', () => {
   it('returns valid:true for a matching, unexpired token', async () => {
     const patientsCollection = makeFakeCollection({
       findOne: vi.fn().mockResolvedValue({
-        patientID: '12345678',
+        participantId: '12345678',
         status: 'PENDING_CONSENT',
         consentToken: 'tok',
         consentTokenExpiresAt: new Date(Date.now() + 100000).toISOString(),
@@ -495,7 +496,7 @@ describe('PatientService.validateConsentToken', () => {
 
     const result = await patientService.validateConsentToken(db, '12345678', 'tok');
 
-    expect(result).toEqual({ valid: true, patientID: '12345678' });
+    expect(result).toEqual({ valid: true, participantId: '12345678' });
   });
 });
 
@@ -503,7 +504,7 @@ describe('PatientService.acceptConsentToken', () => {
   it('validates the token then activates the patient and clears the token', async () => {
     const patientsCollection = makeFakeCollection({
       findOne: vi.fn().mockResolvedValue({
-        patientID: '12345678',
+        participantId: '12345678',
         status: 'PENDING_CONSENT',
         consentToken: 'tok',
       }),
@@ -513,9 +514,9 @@ describe('PatientService.acceptConsentToken', () => {
 
     const result = await patientService.acceptConsentToken(db, '12345678', 'tok');
 
-    expect(result).toEqual({ success: true, patientID: '12345678' });
+    expect(result).toEqual({ success: true, participantId: '12345678' });
     expect(patientsCollection.updateOne).toHaveBeenCalledWith(
-      { patientID: '12345678' },
+      { participantId: '12345678' },
       { $set: expect.objectContaining({ status: 'ACTIVE', consentToken: null, consentTokenExpiresAt: null }) }
     );
   });

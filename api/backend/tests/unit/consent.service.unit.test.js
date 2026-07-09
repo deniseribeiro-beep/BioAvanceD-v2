@@ -159,21 +159,21 @@ describe('ConsentService.validatePolicyPayload', () => {
 });
 
 describe('ConsentService.validatePatientConsentPayload', () => {
-  const validConsent = { patientId: 'P12345678', templateId: 'abc123', responses: {} };
+  const validConsent = { participantId: 'P12345678', consentTemplateId: 'abc123', responses: {} };
 
   it('does not throw for valid consent', () => {
     expect(() => consentService.validatePatientConsentPayload(validConsent)).not.toThrow();
   });
 
-  it('throws when patientId is missing', () => {
+  it('throws when participantId is missing', () => {
     expect(() =>
-      consentService.validatePatientConsentPayload({ templateId: 'abc', responses: {} })
+      consentService.validatePatientConsentPayload({ consentTemplateId: 'abc', responses: {} })
     ).toThrow();
   });
 
-  it('throws when templateId is missing', () => {
+  it('throws when consentTemplateId is missing', () => {
     expect(() =>
-      consentService.validatePatientConsentPayload({ patientId: 'P1', responses: {} })
+      consentService.validatePatientConsentPayload({ participantId: 'P1', responses: {} })
     ).toThrow();
   });
 });
@@ -595,14 +595,14 @@ describe('ConsentService.createPatientConsent', () => {
   });
 
   it('creates a consent when patient and template are valid', async () => {
-    const patients = makeCollection({ findOne: vi.fn(async () => ({ patientID: '12345678' })) });
+    const patients = makeCollection({ findOne: vi.fn(async () => ({ participantId: '12345678' })) });
     const templates = makeCollection({ findOne: vi.fn(async () => activeTemplate) });
     const consents = makeCollection({ insertOne: vi.fn(async () => ({ insertedId: new ObjectId() })) });
     const db = makeDb({ patients, consent_templates: templates, patientConsents: consents });
 
     const result = await consentService.createPatientConsent(db, {
-      patientId: '12345678',
-      templateId: templateId.toString(),
+      participantId: '12345678',
+      consentTemplateId: templateId.toString(),
       responses: { analytics: true },
       ...validSignature,
     });
@@ -610,7 +610,7 @@ describe('ConsentService.createPatientConsent', () => {
     expect(result._id).toBeDefined();
     expect(result.status).toBe('ACTIVE');
     expect(consents.updateMany).toHaveBeenCalledWith(
-      { patientId: '12345678', status: 'ACTIVE' },
+      { participantId: '12345678', status: 'ACTIVE' },
       expect.objectContaining({ $set: expect.objectContaining({ status: 'REVOKED' }) })
     );
   });
@@ -621,8 +621,8 @@ describe('ConsentService.createPatientConsent', () => {
 
     await expect(
       consentService.createPatientConsent(db, {
-        patientId: '12345678',
-        templateId: templateId.toString(),
+        participantId: '12345678',
+        consentTemplateId: templateId.toString(),
         responses: {},
         ...validSignature,
       })
@@ -630,15 +630,15 @@ describe('ConsentService.createPatientConsent', () => {
   });
 
   it('rejects when the template is not active', async () => {
-    const patients = makeCollection({ findOne: vi.fn(async () => ({ patientID: '12345678' })) });
+    const patients = makeCollection({ findOne: vi.fn(async () => ({ participantId: '12345678' })) });
     const inactiveTemplate = { ...activeTemplate, active: false };
     const templates = makeCollection({ findOne: vi.fn(async () => inactiveTemplate) });
     const db = makeDb({ patients, consent_templates: templates, patientConsents: makeCollection() });
 
     await expect(
       consentService.createPatientConsent(db, {
-        patientId: '12345678',
-        templateId: templateId.toString(),
+        participantId: '12345678',
+        consentTemplateId: templateId.toString(),
         responses: { analytics: true },
         ...validSignature,
       })
@@ -655,14 +655,14 @@ describe('ConsentService.createPatientConsent', () => {
       ...activeTemplate,
       permissions: [{ key: 'analytics', required: true }],
     };
-    const patients = makeCollection({ findOne: vi.fn(async () => ({ patientID: '12345678' })) });
+    const patients = makeCollection({ findOne: vi.fn(async () => ({ participantId: '12345678' })) });
     const templates = makeCollection({ findOne: vi.fn(async () => templateWithRequiredPermission) });
     const consents = makeCollection({ insertOne: vi.fn(async () => ({ insertedId: new ObjectId() })) });
     const db = makeDb({ patients, consent_templates: templates, patientConsents: consents });
 
     const result = await consentService.createPatientConsent(db, {
-      patientId: '12345678',
-      templateId: templateId.toString(),
+      participantId: '12345678',
+      consentTemplateId: templateId.toString(),
       responses: { analytics: true },
       ...validSignature,
     });
@@ -675,33 +675,33 @@ describe('ConsentService.createPatientConsent', () => {
       ...activeTemplate,
       permissions: [{ key: 'analytics', required: true }],
     };
-    const patients = makeCollection({ findOne: vi.fn(async () => ({ patientID: '12345678' })) });
+    const patients = makeCollection({ findOne: vi.fn(async () => ({ participantId: '12345678' })) });
     const templates = makeCollection({ findOne: vi.fn(async () => templateWithRequiredPermission) });
     const consents = makeCollection();
     const db = makeDb({ patients, consent_templates: templates, patientConsents: consents });
 
     await expect(
       consentService.createPatientConsent(db, {
-        patientId: '12345678',
-        templateId: templateId.toString(),
+        participantId: '12345678',
+        consentTemplateId: templateId.toString(),
         responses: {},
         ...validSignature,
       })
     ).rejects.toThrow('inválidas');
   });
 
-  it('rejects an invalid templateId format', async () => {
-    const patients = makeCollection({ findOne: vi.fn(async () => ({ patientID: '12345678' })) });
+  it('rejects an invalid consentTemplateId format', async () => {
+    const patients = makeCollection({ findOne: vi.fn(async () => ({ participantId: '12345678' })) });
     const db = makeDb({ patients, consent_templates: makeCollection(), patientConsents: makeCollection() });
 
     await expect(
       consentService.createPatientConsent(db, {
-        patientId: '12345678',
-        templateId: 'not-a-valid-object-id',
+        participantId: '12345678',
+        consentTemplateId: 'not-a-valid-object-id',
         responses: {},
         ...validSignature,
       })
-    ).rejects.toThrow('templateId inválido');
+    ).rejects.toThrow('consentTemplateId inválido');
   });
 });
 

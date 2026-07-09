@@ -32,6 +32,7 @@ function makeFakeDb(collectionsByName = {}) {
 
 function validPatientData(overrides = {}) {
   return {
+    participantId: '12345678',
     patientName: 'Maria Silva',
     birthDate: '01/01/1990',
     sex: 'F',
@@ -137,7 +138,7 @@ describe('PatientService.createPatient additional branches', () => {
 
     const result = await patientService.createPatient(db, validPatientData(), { skipBiomarkerArtifacts: true });
 
-    expect(result.patientID).toMatch(/^\d{8}$/);
+    expect(result.participantId).toMatch(/^\d{8}$/);
 
     enqueueSpy.mockRestore();
   });
@@ -224,7 +225,7 @@ describe('PatientService.updatePatient additional branches', () => {
         isDeceased: true,
         representativeName: 'João Representante',
         representativeEmail: 'joao@example.com',
-        representativeCpf: '52998224725',
+        representativeIdentityDocument: '52998224725',
         representativePhone: '11988887777'
       })
     });
