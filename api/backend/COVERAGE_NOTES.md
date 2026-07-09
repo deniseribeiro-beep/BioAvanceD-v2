@@ -24,45 +24,65 @@ stale as slices land and as source files change. Keep it honest:
 
 ## Last full reconcile
 
-**2026-07-05**, snapshot from commit `aef22577` (user-run
-`npx vitest run --coverage --reporter=basic`, full suite; only
-`coverage/coverage-summary.json` was read and re-derived from, exit
-status not independently captured this reconcile).
+**2026-07-09**, snapshot from commit `2848ab1f` on
+`feature/docker-e2e-backend-integration` (`npx vitest run --coverage`,
+full suite; `coverage/coverage-summary.json` read and re-derived from).
 
-Statements 87.61%, Branches 78.51%, Functions 88.83%, **Lines 88.13%**
-(15275/17331) — up from the prior reconcile's 81.63% lines (commit
-`393edf91`). The jump reflects the full run of slices landed between the
-two reconciles (see `COVERAGE_HISTORY.md` for the per-slice list,
-including the `patient.service.js` `createPatient`/`updatePatient` slice
-and issue #90). ZERO bucket is unchanged (20 files, none touched). LOW
-and MID-LOW are both now confirmed **empty** — every previously-tracked
-MID-LOW file has moved to MID-HIGH/GOOD or higher.
+Statements 79.71% (14764/18521), Branches 69.34% (11566/16678), Functions
+82.36% (1849/2245), **Lines 80.25%** (14228/17728) — **down** from the
+prior reconcile's 88.13% lines (commit `aef22577`, 2026-07-05).
+
+**This drop is not a real coverage regression — read before picking a
+slice from the buckets below.** The same full-suite run backing this
+reconcile also showed 92/264 test files (629/4692 tests) failing — see
+issues #146-#164, filed the same session. Those failures are almost
+entirely product code drifting out from under still-passing-shaped test
+files (a `sampleId`->`specimenId`/`patientID`->`participantId` canonical
+rename in #146, a handful of rewritten service APIs, etc.), not files
+that were never tested. A failing/erroring test file contributes ~0
+coverage for the source it targets even though a real test suite exists
+for it — so several files below (`MoveSampleUseCase.js`,
+`AllocateSampleUseCase.js`, `ReleaseSampleUseCase.js`,
+`LineageRepository.js`, `Neo4jQuarantineService.js`, `fhir.service.js`,
+`patient.service.js`, `PatientIdentityService.js`,
+`daily-merkle.job.js`, `mqtt-telemetry.service.js`, `scheduler.service.js`,
+`result-worker.js`) look like fresh coverage gaps but are actually
+**already-tested files whose tests are currently broken**. Fixing the
+filed issues first, then re-reconciling, will very likely restore most
+of the 88.13% baseline without writing a single new test. Don't spend a
+test-loop slice writing new tests for those specific files until their
+linked issue is resolved and a fresh run confirms they're still low.
 
 ## How to use this when picking a slice
 
-1. With ZERO the only non-empty bucket now, prefer its one real-logic
-   file (`worker.js`) over the models/interfaces/scripts also listed
-   there — bigger jump per slice, and those low-priority entries are
-   thin/non-request-path by design (see note below).
-2. Skip `src/scripts/*` (one-off migration/seed scripts, not exercised in
-   prod request paths) and `src/core/application/ports/*` (interfaces,
-   zero logic) unless a slice specifically needs them — low value.
-3. With LOW/MID-LOW empty, the next tier for a slice with a meaningful
-   jump is picking a MID-HIGH (70-84%) file via a fresh isolated run —
-   this file doesn't track individual MID-HIGH files (see that section
-   below), so ask for a quick `--coverage` run scoped to a candidate
-   file/directory if you want a specific number before committing to it.
-4. After landing a slice, delete the file's line from whichever bucket it
+1. **Check whether a candidate file is on the list above (broken by a
+   filed issue) before treating its low number as an untested gap** —
+   if so, skip it for slice-picking; it needs a fix, not a new test.
+2. Among genuinely low-coverage files, prefer real-logic files over thin
+   ones: `src/core/application/ports/*` (interfaces, zero logic) and
+   `src/scripts/*` (one-off migration/seed scripts, not exercised in prod
+   request paths) are low priority regardless of bucket.
+3. This reconcile has real (non-drift) entries in every bucket again —
+   ZERO/LOW/MID-LOW are no longer empty. Pick from LOW or MID-LOW first
+   for the biggest jump per slice, same as before the 2026-07-05
+   reconcile emptied them.
+4. For a MID-HIGH (70-84%) file not already flagged above as
+   issue-linked, the number here is trustworthy — no fresh isolated run
+   needed before committing to it.
+5. After landing a slice, delete the file's line from whichever bucket it
    was in (or move it, if now partial). Don't leave stale entries. Add a
    short entry to `COVERAGE_HISTORY.md` for what the slice covered/found
    — not here.
 
-## ZERO coverage (0% lines) — 20 files, re-measured 2026-07-05
+## ZERO coverage (0% lines) — 19 files, full reconcile 2026-07-09, commit `2848ab1f`
 
-Real logic, worth prioritizing:
+Real logic, but broken-by-issue — see caveat above, not a real gap:
+- `src/services/scheduler.service.js` (issue #147 — cascading
+  module-not-found from deleted `consentNeo4jSync.service`)
 - `src/workers/worker.js` (self-executing bootstrap entrypoint — calls
   `startWorker()`/`process.exit` at module load; disproportionately
-  expensive to test honestly, lower priority than it looks)
+  expensive to test honestly, lower priority than it looks even once
+  untangled from #147)
 
 Low priority (models/interfaces/one-off scripts — thin or non-request-path):
 - `src/core/application/ports/IAuditRepository.js`
@@ -71,7 +91,6 @@ Low priority (models/interfaces/one-off scripts — thin or non-request-path):
 - `src/core/application/ports/IStorageRepository.js`
 - `src/core/application/ports/IStorageTopologyReadRepository.js`
 - `src/models/Cid.js`
-- `src/models/ClinicalRecord.js`
 - `src/models/Disease.js`
 - `src/models/DrugDictionary.js`
 - `src/models/Equipment.schema.js`
@@ -80,72 +99,126 @@ Low priority (models/interfaces/one-off scripts — thin or non-request-path):
 - `src/models/Withdrawal.js`
 - `src/scripts/migrate-rcs-governance-indexes.js`
 - `src/scripts/migrateUserAnonIds.js`
-- `src/scripts/seed-admin.js`
 - `src/scripts/seedDiseaseValidationRules.js`
-- `src/scripts/seedOrphanetCid.js`
-- `src/scripts/seeder.js`
+- `src/scripts/testEnvironment.js`
+- `src/services/orphanet/orphacodeApiClient.js` (issue #163 — routes.js
+  returning 503 may be the same terminologySync gate; check before
+  treating as a genuine gap)
 
-## LOW coverage (1-49% lines) — confirmed empty, full reconcile 2026-07-05, commit `aef22577`
+## LOW coverage (1-49% lines) — 15 files, full reconcile 2026-07-09, commit `2848ab1f`
 
-**Empty.** No file below 50% lines across the whole suite.
-
-## MID-LOW coverage (50-69% lines) — confirmed empty, full reconcile 2026-07-05, commit `aef22577`
-
-**Empty.** `patient.service.js` was the last file in this bucket (see
-`COVERAGE_HISTORY.md` for its slice); the full-suite reconcile confirms
-no other file has since dropped into this range either. With LOW and
-MID-LOW both empty, the next slice-picking tier is ZERO's one
-real-logic file (`worker.js`) or a MID-HIGH file below.
-
-## MID-HIGH coverage (70-84% lines) — 35 files, full reconcile 2026-07-05, commit `aef22577`
-
-Sorted ascending (worst first) — lines% / branches%. The next tier up
-once ZERO's `worker.js` is done; a lower branch% relative to lines%
-usually means untested error paths, a good tie-breaker when picking
-among these.
+Sorted ascending (worst first) — lines% / branches%. Most of these are
+broken-by-issue, not genuinely untested — check the caveat above before
+picking one for a slice.
 
 ```
-src/models/PatientConsent.js                                70.83 / 85.24
-src/interface/routes/equipment.routes.js                     70.93 / 61.05
-src/utils/fieldEncryption.js                                 71.42 / 69.56
-src/infrastructure/middleware/auth.js                         71.66 / 67.44
-src/interface/routes/reports.routes.js                       77.41 / 66.43
-src/interface/routes/cid.routes.js                            72.09 / 46.47
-src/services/auditRoot.service.js                             73.33 / 54.54
-src/services/hl7.service.js                                   73.45 / 46.85
-src/services/patient.service.js                                74.15 / 59.95
-src/models/MeasurementUnit.js                                  75.00 / 40.00
-src/controllers/sensor.controller.js                           75.29 / 68.18
-src/services/mqtt-telemetry.service.js                         75.94 / 79.61
-src/interface/routes/terminologies.routes.js                   76.12 / 51.09
-src/services/SampleGraphValidator.js                           76.25 / 66.04
-src/controllers/analysis-type.controller.js                    77.14 / 57.14
-src/core/use-cases/RegisterSampleUseCase.js                    77.33 / 69.31
-src/database/mongo.js                                          79.22 / 76.00
-src/models/User.js                                             79.59 / 53.68
-src/interface/routes/clinical-unit.routes.js                   79.76 / 63.15
-src/models/AnalysisType.js                                     80.00 / 75.00
-src/controllers/iot.controller.js                              80.88 / 66.66
-src/interface/routes/analysis-file.routes.js                   80.95 / 87.50
-src/interface/routes/result.routes.js                          80.97 / 54.54
-src/interface/routes/master-data.routes.js                     81.42 / 68.75
-src/models/SampleMovement.js                                   81.57 / 82.71
-src/interface/routes/logs.routes.js                            82.17 / 61.19
-src/services/security.service.js                               82.51 / 72.26
-src/utils/collectionResolver.js                                82.69 / 78.94
-src/config/redis.js                                            83.01 / 72.72
-src/infrastructure/queue/Neo4jQuarantineService.js             83.33 / 82.75
-src/controllers/import-lgpd.controller.js                      83.64 / 57.26
-src/utils/auditLogger.js                                       83.67 / 70.87
-src/controllers/import.controller.js                           83.85 / 75.25
-src/controllers/import-async.controller.js                     84.29 / 79.66
-src/config/queue.js                                            84.50 / 50.00
+src/services/auditRoot.service.js                6.95 / 0        (issue #146 cluster — audit/rename drift)
+src/services/audit-tree.service.js               7.89 / 0        (issue #146 cluster)
+src/services/PatientIdentityService.js          11.53 / 0        (issue #146 — matchOrUpsertPatient rename)
+src/interface/routes/label.routes.js            11.76 / 0
+src/services/audit-signing.provider.js          14.81 / 0        (issue #146 cluster)
+src/interface/routes/intakeWizard.routes.js     16.98 / 0        (issue #146 cluster)
+src/core/use-cases/MoveSampleUseCase.js         18.18 / 14.49    (issue #146 — specimenId rename)
+src/services/audit-tsa.service.js               21.42 / 0        (issue #146 cluster)
+src/utils/sampleIDGenerator.js                  21.42 / 0        (issue #146 cluster)
+src/core/use-cases/ReleaseSampleUseCase.js      22.91 / 13.51    (issue #146 — specimenId rename)
+src/services/audit-witness.service.js           27.27 / 0        (issue #146 cluster)
+src/controllers/fhir-import-staging.controller.js 30.23 / 41.17  (issue #146 cluster)
+src/core/use-cases/AllocateSampleUseCase.js     31.91 / 12.5     (issue #146 — specimenId rename)
+src/infrastructure/middleware/authConsent.js    34.24 / 55.1     (issue #146 cluster)
+src/services/patientBiomarkerTimeseries.service.js 46.34 / 51.35 (issue #146 cluster)
 ```
 
-Note: `patient.service.js` already has substantial partial coverage from
-the 2026-07-05 slice (see `COVERAGE_HISTORY.md`) — its remaining gap is
-`getPatient`/`listPatients`/`searchPatients`'s FHIR-first branches and
-`validateConsentToken`/`acceptConsentToken`/`resendConsentNotification`.
+Genuinely low (no matching filed issue found) — real slice candidates:
+`label.routes.js`.
+
+## MID-LOW coverage (50-69% lines) — 20 files, full reconcile 2026-07-09, commit `2848ab1f`
+
+Sorted ascending (worst first) — lines% / branches%. Same caveat: check
+against #146-#164 before picking.
+
+```
+src/services/graphProjection.service.js         50.00 / 19.71
+src/routes/intakeWizard.js                      50.19 / 41.43
+src/services/neo4jOutbox.service.js             52.45 / 54.92
+src/workers/jobs/daily-merkle.job.js            55.17 / 45       (issue #159 — stale test mock)
+src/utils/fieldEncryption.js                    57.14 / 60.86
+src/services/audit-v2.service.js                60.81 / 43.75   (issue #146/#152 cluster)
+src/services/rfc3161-adapter.service.js         64.00 / 54.16
+src/services/neo4jCanonicalProjection.service.js 65.00 / 63.36  (issue #146 cluster)
+src/interface/routes/equipment.routes.js        65.66 / 65.88
+src/workers/neo4jProjection.worker.js           65.95 / 41.02
+src/services/fhir.service.js                    66.66 / 27.27   (issue #149 — API shrunk)
+src/workers/workers/result-worker.js            67.36 / 48      (issue #146/#164 — rename + yauzl)
+src/infrastructure/database/neo4j/LineageRepository.js 67.69 / 58.33 (issue #146 — specimenId rename)
+src/services/analysisValidation.service.js      68.08 / 53.84   (issue #146 cluster)
+src/services/SampleGraphValidator.js            68.34 / 59.25   (issue #151 — collectionResolver)
+src/services/import-lgpd.service.js             68.52 / 64.17   (issue #146 cluster)
+src/services/mqtt-telemetry.service.js          68.60 / 78.18   (issue #160 — HMAC bypass bug)
+src/config/keyRegistry.js                       68.96 / 50
+src/services/patient.service.js                 69.14 / 50.72   (issue #146 cluster)
+src/services/consent.validator.js               69.69 / 54.16   (issue #146 cluster)
+```
+
+Genuinely low (no matching filed issue found) — real slice candidates:
+`graphProjection.service.js`, `routes/intakeWizard.js`,
+`neo4jOutbox.service.js`, `fieldEncryption.js`,
+`rfc3161-adapter.service.js`, `equipment.routes.js`,
+`neo4jProjection.worker.js`, `config/keyRegistry.js`.
+
+## MID-HIGH coverage (70-84% lines) — 44 files, full reconcile 2026-07-09, commit `2848ab1f`
+
+Sorted ascending (worst first) — lines% / branches%. Not cross-checked
+against filed issues line-by-line (MID-HIGH files are closer to "done"
+regardless); a lower branch% relative to lines% usually means untested
+error paths, a good tie-breaker when picking among these.
+
+```
+src/controllers/iot.controller.js                70.00 / 58.82
+src/services/import.service.js                   70.36 / 64.55
+src/core/use-cases/RegisterSampleUseCase.js       70.66 / 64.77
+src/models/PatientConsent.js                      70.83 / 85.24
+src/services/quality-compatibility.service.js     71.42 / 65.51
+src/infrastructure/middleware/auth.js             71.66 / 68.18
+src/core/use-cases/RegisterSample.js              71.95 / 54.76
+src/controllers/upload.controller.js              73.17 / 53.84
+src/services/hl7.service.js                       73.45 / 46.59
+src/models/MeasurementUnit.js                     75.00 / 40.00
+src/controllers/sensor.controller.js              75.29 / 68.18
+src/infrastructure/persistence/mongo/MongoAuditRepository.js 76.66 / 84.61
+src/interface/routes/terminologies.routes.js      76.66 / 51.50
+src/interface/routes/reports.routes.js            76.83 / 65.75
+src/controllers/analysis-type.controller.js       77.14 / 57.14
+src/scripts/createFirstAdmin.js                   77.27 / 65.00
+src/infrastructure/queue/Neo4jQuarantineService.js 77.77 / 75.86
+src/interface/routes/sample.routes.js             78.09 / 37.90
+src/utils/portManager.js                          78.48 / 62.85
+src/models/User.js                                79.59 / 53.68
+src/services/NotificationService.js               79.61 / 66.36
+src/interface/routes/clinical-unit.routes.js      79.76 / 63.15
+src/core/use-cases/GetSampleStorageLocationUseCase.js 80.00 / 50.00
+src/models/AnalysisType.js                        80.00 / 75.00
+src/reference-data/essential/manifest.js          80.00 / 0
+src/database/mongo.js                             80.10 / 76.51
+src/services/merkle-envelope.service.js           80.30 / 66.21
+src/interface/routes/analysis-file.routes.js      80.95 / 87.50
+src/interface/routes/result.routes.js             80.97 / 55.45
+src/interface/routes/master-data.routes.js        81.42 / 68.75
+src/config/redis.js                               81.76 / 70.45
+src/interface/routes/logs.routes.js               81.81 / 61.19
+src/services/audit-canonicalization.service.js    81.81 / 65.71
+src/controllers/import.controller.js              82.23 / 75.86
+src/services/security.service.js                  82.51 / 72.26   (issue #157 — missing useAssistant key)
+src/utils/auditLogger.js                          82.65 / 69.60
+src/controllers/import-lgpd.controller.js         82.66 / 54.41
+src/services/batch-validation-engine.service.js   83.52 / 80.39   (issue #162 — ReferenceError bug)
+src/services/fhir-import-staging.service.js       84.15 / 77.11
+src/controllers/sample-file.controller.js         84.23 / 53.93
+src/controllers/import-async.controller.js        84.29 / 79.66
+src/controllers/audit.controller.js               84.54 / 48.64   (issue #152 — contract changed)
+src/services/sample.service.js                    84.54 / 72.83
+src/routes/orphanet.js                            84.87 / 65.49   (issue #163 — always 503)
+```
 
 ## GOOD coverage (>=85% lines)
 
