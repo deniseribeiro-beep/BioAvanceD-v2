@@ -122,6 +122,48 @@ One iteration = one issue, sized to finish in the iteration:
 - Skim whether another in-flight fix touches the same files — cheap
   insurance against tangled diffs.
 
+### Verifying before deferring — no silent dismissals
+
+This is a recurring failure mode, not a one-off (2026-07-08, issue #77 →
+#105 near-miss; 2026-07-09, issues #20/#34/#36 all initially waved off as
+"already flagged, needs Dennis" in the first pass of a session — only
+re-checked after the user pushed back, and two of the three turned out to
+have safe, unambiguous fixes). The pattern: a label or a prior comment
+says "needs maintainer input" or "design fork," and that gets treated as
+settled fact instead of a claim to verify. **Trust the label only as a
+starting hypothesis, never as a finding.**
+
+Before treating *any* issue as blocked-on-Dennis, ambiguous, or
+not-worth-fixing — whether it's freshly picked or carries an existing
+"needs design call" label from a prior session — do the actual work
+first, every time:
+
+1. **Grep every real call site** of the function/branch in question
+   (not just the ones mentioned in the issue) and read what each one
+   passes in.
+2. **Write and run the reproduction** — even a quick one — before
+   concluding the ambiguity is real. If you can construct a case where
+   the "design fork" actually can't be reached, or where a defensive
+   fix is safe regardless of which fork Dennis would pick, that's a
+   real fix, not a design call.
+3. Only *after* steps 1–2 actually ran (not "I recall this was already
+   checked") may you conclude an issue is genuinely blocked.
+
+**If, after doing that, it's still genuinely blocked:** post (or
+re-post) a `gh issue comment` explaining specifically what you traced
+and ran this time, and why it's still ambiguous — even if a near-
+identical comment already exists on the issue from a prior session.
+A fresh comment each time an issue is touched is the audit trail that
+proves the check happened rather than being assumed from memory. Do not
+present an issue to the user as "blocked, needs your call" in chat
+without having posted that comment on the issue itself first.
+
+**Never present a batch of issues to the user as "nothing fixable this
+iteration" based on reading titles/labels/past comments alone.** Do the
+trace-and-repro pass on each candidate first. If that pass turns up
+zero fixable issues, say so and show the trace you did for each one —
+not just "these were already flagged."
+
 ## Branch
 
 Follow `bioavanced-conventions` git hygiene: branch before the first
