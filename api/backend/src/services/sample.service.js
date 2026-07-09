@@ -302,6 +302,10 @@ class SampleService {
 
       // Validações de status
       const invalidStatuses = ['TotallyWithdrawn', 'Destroyed', 'Unusable', 'Expired'];
+      if (invalidStatuses.includes(sample.currentStatus)) {
+        throw new Error(`Amostra não está disponível para retirada (Status: ${sample.currentStatus})`);
+      }
+
       // Validações MIABIS
       if (!SampleModel.validateWithdrawalType(withdrawalData.withdrawalType)) {
         throw new Error('Tipo de retirada inválido. Deve ser: Parcial ou Total');
