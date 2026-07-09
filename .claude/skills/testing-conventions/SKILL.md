@@ -101,10 +101,17 @@ single biggest context sink in a loop session. Rules:
   combined run only needs pass/fail.
 - **Full-suite runs** (coverage reconcile / ship-to-main gate only):
   never stream the output into the conversation. Redirect to a file in
-  the scratchpad (or `api/backend/coverage/` — gitignored), then read
-  back only the tail summary and grep the file for `FAIL`/`✗` if the
-  summary shows failures. Same for full Playwright runs — and remember
-  failed-run detail is already on disk in `test-results/`.
+  the scratchpad, then read back only the tail summary and grep the file
+  for `FAIL`/`✗` if the summary shows failures. Same for full Playwright
+  runs — and remember failed-run detail is already on disk in
+  `test-results/`. **Never redirect the log into `api/backend/coverage/`
+  itself when running `--coverage`** — Vitest clears that directory
+  before writing its own reports, which deletes your in-progress log file
+  out from under the running process (confirmed 2026-07-09: the run had
+  to be restarted after `coverage/vitest-coverage.log` vanished mid-run).
+  `api/backend/coverage/coverage-summary.json` (the file `COVERAGE_NOTES.md`
+  reconciles from) survives fine since Vitest itself writes it after the
+  clear — it's only a log you redirect there yourself that's at risk.
 - **Reading sources under test:** read the file once, in full, when
   writing its tests (you need the real branch structure); but don't
   re-`Read` a test file you just wrote/edited, and don't cat large
