@@ -1,11 +1,42 @@
 /**
  * Repositório de auditoria imutável em MongoDB.
  */
-const {
-  appendMovementWithHashChain,
-  enforceAppendOnlyCollection,
-  ensureSampleMovementIndexes
-} = require('../../../utils/sampleMovementLedger');
+const sampleMovementLedger = require('../../../utils/sampleMovementLedger');
+
+function assertExpectedCollectionName(actualName, expectedName) {
+  if (actualName !== expectedName) {
+    throw new Error(`MongoAuditRepository expected collection "${expectedName}" but received "${actualName}"`);
+  }
+}
+
+function createIsolatedCollectionView(collection) {
+  const overrides = new Map();
+
+  return new Proxy(collection, {
+    get(target, prop, receiver) {
+      if (overrides.has(prop)) {
+        return overrides.get(prop);
+      }
+
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+    set(_target, prop, value) {
+      overrides.set(prop, value);
+      return true;
+    },
+    defineProperty(_target, prop, descriptor) {
+      if ('value' in descriptor) {
+        overrides.set(prop, descriptor.value);
+      }
+      return true;
+    },
+    deleteProperty(_target, prop) {
+      overrides.delete(prop);
+      return true;
+    }
+  });
+}
 
 class MongoAuditRepository {
   /**
@@ -21,13 +52,15 @@ class MongoAuditRepository {
    * @returns {Promise<{ movementID: number }>}
    */
   async appendImmutableAudit(input, session) {
-    const movementsCollection = this.db.collection('sample_movements');
-    enforceAppendOnlyCollection(movementsCollection, 'sample_movements');
-    await ensureSampleMovementIndexes(movementsCollection);
+    const movementsCollectionName = 'sample_movements';
+    assertExpectedCollectionName(movementsCollectionName, 'sample_movements');
+    const movementsCollection = createIsolatedCollectionView(this.db.collection(movementsCollectionName));
+    sampleMovementLedger.enforceAppendOnlyCollection(movementsCollection, 'sample_movements');
+    await sampleMovementLedger.ensureSampleMovementIndexes(movementsCollection);
 
     const movementID = await this.generateMovementID(session);
 
-    await appendMovementWithHashChain(
+    await sampleMovementLedger.appendMovementWithHashChain(
       movementsCollection,
       {
         movementID,
@@ -62,7 +95,8 @@ class MongoAuditRepository {
    * @param {import('mongodb').ClientSession} [session]
    */
   async generateMovementID(session) {
-    const countersCollection = this.db.collection('counters');
+    const countersCollectionName = 'counters';
+    const countersCollection = this.db.collection(countersCollectionName);
     const counter = await countersCollection.findOneAndUpdate(
       { _id: 'sample_movements' },
       {
