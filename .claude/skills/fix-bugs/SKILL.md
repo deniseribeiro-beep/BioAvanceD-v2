@@ -141,12 +141,28 @@ first, every time:
 1. **Grep every real call site** of the function/branch in question
    (not just the ones mentioned in the issue) and read what each one
    passes in.
-2. **Write and run the reproduction** — even a quick one — before
+2. **Check `docs/` at the repo root** (`docs/architecture/`,
+   `docs/inventory/`) for a document that already answers the design
+   question — Denise's own architecture contracts and inventory
+   snapshots live there and can turn a "needs Dennis's judgment" issue
+   into a traceable fact. Confirmed 2026-07-09, issue #111: the issue
+   read as "use the payload or remove the call, whichever matches what
+   main's rewrite intends" — exactly the kind of call this skill would
+   normally punt to Dennis. `docs/architecture/canonical-data-cleanup.md`
+   turned out to state the intent directly ("No duplicate operational
+   FHIR collections; FHIR is an interoperability boundary"), which
+   combined with `fhir-sync.service.js`'s own code (all
+   `*FromLegacy`/`*FhirFirst` methods are stubs returning the built
+   payload or `null`, with a comment saying no secondary FHIR
+   collection is written) settled it without needing to ask. Don't
+   skip this check only because a design-call label already exists —
+   the label may predate the doc, or predate you finding it.
+3. **Write and run the reproduction** — even a quick one — before
    concluding the ambiguity is real. If you can construct a case where
    the "design fork" actually can't be reached, or where a defensive
    fix is safe regardless of which fork Dennis would pick, that's a
    real fix, not a design call.
-3. Only *after* steps 1–2 actually ran (not "I recall this was already
+4. Only *after* steps 1–3 actually ran (not "I recall this was already
    checked") may you conclude an issue is genuinely blocked.
 
 **If, after doing that, it's still genuinely blocked:** post (or
