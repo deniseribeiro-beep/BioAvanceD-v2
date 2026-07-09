@@ -4,7 +4,7 @@ const { computeMovementChainHash, enforceAppendOnlyCollection } = require('../..
 describe('computeMovementChainHash', () => {
   const baseMovement = {
     movementID: 1,
-    sampleID: 'SMP-001',
+    specimenId: 'SMP-001',
     barcode: 'BAR-001',
     type: 'INTAKE',
     quantity: 5,
@@ -32,13 +32,13 @@ describe('computeMovementChainHash', () => {
     expect(h1).not.toBe(h2);
   });
 
-  it('differs for different sampleIDs', () => {
-    const mov2 = { ...baseMovement, sampleID: 'SMP-002' };
+  it('differs for different specimenIds', () => {
+    const mov2 = { ...baseMovement, specimenId: 'SMP-002' };
     expect(computeMovementChainHash(baseMovement, null)).not.toBe(computeMovementChainHash(mov2, null));
   });
 
   it('handles missing fields gracefully', () => {
-    const minimal = { sampleID: 'SMP-999' };
+    const minimal = { specimenId: 'SMP-999' };
     const hash = computeMovementChainHash(minimal, null);
     expect(hash).toHaveLength(64);
   });
