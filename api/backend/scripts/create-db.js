@@ -66,8 +66,13 @@ const COLLECTIONS = [
   },
   {
     name: 'terminologies',
-    indexes: [{ sistema: 1, codigo: 1 }, { label: 1 }],
+    indexes: [{ sistema: 1, code: 1 }, { label: 1 }],
     description: 'Terminologias SPREC/HPO minimas',
+  },
+  {
+    name: 'referenceSeedRuns',
+    indexes: [{ key: 1 }, { version: 1 }, { executedAt: -1 }, { checksum: 1 }],
+    description: 'Execucoes do seed essencial de referencia',
   },
   {
     name: 'sampleTypes',

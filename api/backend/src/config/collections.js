@@ -10,7 +10,8 @@ const CANONICAL_COLLECTIONS = Object.freeze({
   cids: env.COLL_CIDS || 'cids',
   clinicalUnits: env.COLL_CLINICAL_UNITS || 'clinical_units',
   diseaseDictionary: env.COLL_DISEASE_DICTIONARY || 'disease_dictionary',
-  medicationDictionary: env.COLL_MEDICATION_DICTIONARY || 'medication_dictionary'
+  medicationDictionary: env.COLL_MEDICATION_DICTIONARY || 'medication_dictionary',
+  referenceSeedRuns: env.COLL_REFERENCE_SEED_RUNS || 'referenceSeedRuns'
 });
 
 module.exports = {
