@@ -9,7 +9,6 @@ process.env.JWT_SECRET = process.env.JWT_SECRET || 'vitest-secret-key';
 
 const app = require('../../app');
 const sessionService = require('../../src/services/session.service');
-const fhirSyncService = require('../../src/services/fhir-sync.service');
 const auditLogger = require('../../src/utils/auditLogger');
 const notificationService = require('../../src/services/notification.service');
 
@@ -49,7 +48,6 @@ describe('RF005 - POST /api/v1/patients', () => {
     app.locals.db = null;
     vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 'session-rf005-1' } });
     vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 'session-rf005-1' });
-    vi.spyOn(fhirSyncService, 'upsertPatientFromLegacy').mockResolvedValue({});
     vi.spyOn(notificationService, 'enqueueConsentNotification').mockResolvedValue(undefined);
 
     vi.spyOn(auditLogger, 'init').mockImplementation(() => undefined);
