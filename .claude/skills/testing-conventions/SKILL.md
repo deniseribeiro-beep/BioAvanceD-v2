@@ -7,7 +7,9 @@ description: BioAvanceD-v2 testing & verification conventions — test tiers and
 
 For repo layout, git hygiene, and the end-loaded Docker/CI gate order,
 see `bioavanced-conventions` — read both for any test work. For anything
-Docker-specific, see `e2e-docker-workflow`.
+Docker-specific, see `e2e-docker-workflow`. For writing or editing a
+Playwright spec file itself (selectors, mocked auth, config gotchas),
+see `playwright-specs`.
 
 ## Test tiers — where tests live
 
@@ -203,15 +205,13 @@ not this one.
   expects a live stack at `localhost:5173`/`localhost:3000`. This is the
   end-of-loop Docker gate only (see `ship-to-main`), never a
   per-iteration run.
-- There is no real-login global setup for real-backend specs — a prior
-  version of this note pointed at `frontend/playwright/global.setup.ts`,
-  but that file was deleted in the same main-merge that emptied
-  `tests/e2e/` (see `e2e-docker-workflow`'s gotcha on this, and issue
-  #95). Mocked specs don't need real login at all — see
-  `tests/e2e/helpers/mockAuth.ts`, which seeds a client-decodable JWT via
-  `addInitScript` instead. A real login flow for real-backend specs
-  still needs to be built from scratch, and blocks on #144 (no seed
-  script yet for a known test user).
+- There is no real-login global setup for real-backend specs — see
+  `playwright-specs`' gotcha on this (the file it used to point to was
+  deleted in the same main-merge that emptied `tests/e2e/`, issue #95).
+  Mocked specs use `tests/e2e/helpers/mockAuth.ts` instead, which seeds a
+  client-decodable JWT via `addInitScript`. A real login flow for
+  real-backend specs still needs to be built from scratch, and blocks on
+  #144 (no seed script yet for a known test user).
 
 ## Debugging e2e failures fast
 

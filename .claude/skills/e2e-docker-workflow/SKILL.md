@@ -8,49 +8,27 @@ description: Notes on running this repo's Docker-based e2e stack (backend + fron
 Tracking issue: https://github.com/deniseribeiro-beep/BioAvanceD-v2/issues/3
 Branch: feature/docker-e2e-backend-integration
 
-This is the single source of truth for Docker in this repo — anything
-Docker-specific (setup, compose services, Windows gotchas) lives here, not
-duplicated into the other skills. Where it fits: `bioavanced-conventions`
-sets the end-loaded gate order (no Docker per iteration), `test-loop` is
-the native per-slice loop, and `ship-to-main`'s one-time Docker gate is
-what actually consumes this skill's setup checklist and gotchas. When a
+This is the single source of truth for Docker/compose/CI infra in this
+repo — anything about running the stack (setup, compose services, env
+vars, Windows gotchas) lives here, not duplicated into the other skills.
+Playwright *spec-authoring* concerns (selectors, config/module-resolution
+gotchas, mocked auth, frontend-behavior surprises) live in
+`playwright-specs` instead — this skill only covers what's needed to get
+the stack itself running. Where it fits: `bioavanced-conventions` sets
+the end-loaded gate order (no Docker per iteration), `test-loop` is the
+native per-slice loop, and `ship-to-main`'s one-time Docker gate is what
+actually consumes this skill's setup checklist and gotchas. When a
 session that used this skill finishes, run `wrap-up` before the final
-summary; new Docker lessons get appended to the gotchas below.
+summary; new Docker/infra lessons get appended to the gotchas below —
+new Playwright spec/config lessons go in `playwright-specs` instead.
 
 ## Setup checklist
 1. Docker Desktop must be running (`docker version` must reach the engine, not just the CLI).
 2. Copy `.env.docker.example` -> `.env.docker` and fill in real values. Never commit `.env.docker`.
-3. Playwright config lives at repo root (`playwright.config.ts`), not under `frontend/` — see gotchas below for why.
+3. Playwright config lives at repo root (`playwright.config.ts`), not under `frontend/` — see `playwright-specs` for the module-resolution reason why.
 4. `npm install` at repo root (for `@playwright/test`) AND `npm --prefix frontend ci` AND `npm --prefix api/backend ci`.
 
 ## Gotchas
-
-### `@playwright/test` module resolution fails when config lives in `frontend/` but specs live in root `tests/e2e/`
-Node's module resolution walks up from the *importing file's* location looking for `node_modules`.
-`tests/e2e/*.spec.ts` is a sibling of `frontend/`, not a descendant, so `frontend/node_modules`
-is never in its ancestor chain — `import { test } from '@playwright/test'` fails with
-`ERR_MODULE_NOT_FOUND` even though `testDir` correctly points Playwright at the files.
-Fix: keep the Playwright config (and the `@playwright/test` devDependency) at the repo root,
-since that's the common ancestor of both `tests/e2e/` and `frontend/`.
-
-### `playwright.config.ts`'s `testDir` resolves relative to the config file, not the cwd
-Easy to misread `testDir: './tests/e2e'` as "relative to wherever you run the command from."
-It's actually relative to the config file's own directory. Always verify with
-`npx playwright test --list` after moving either the config or the specs.
-
-### `frontend/playwright/global.setup.ts` does NOT exist — this note was stale, don't reuse it
-An earlier version of this skill said this file "already supports real-backend login" via
-`PLAYWRIGHT_USE_REAL_LOGIN=1`/`TEST_USER`/`TEST_PASS`. Confirmed 2026-07-09: the file was deleted
-in commit `b69513a5` (the same main-side "Ambiente sanitizado e reestruturado" pass that emptied
-`tests/e2e/` per issue #95) and nothing recreated it — there is no global-setup project wired into
-`playwright.config.ts` at all. Root config's `use.storageState: 'playwright/.auth/user.json'`
-default was a leftover pointing at output this now-gone setup would have produced; it threw
-`ENOENT` for every UI spec using the `page` fixture and was removed in the #95 scaffolding work.
-Mocked specs seed auth via `page.addInitScript` writing a client-decodable JWT to localStorage
-(see `tests/e2e/helpers/mockAuth.ts`) — no live login needed since `ProtectedRoute` only gates on
-`AuthContext`'s `isLoading` flag, not on the deferred `/api/auth/verify` call resolving. If a real
-login flow is needed for real-backend specs later, it has to be built fresh (and blocks on #144's
-seed-script gap for a known test user) — don't assume the old mechanism is still there.
 
 ### `package.json` referenced files that didn't exist (as of 2026-06-30)
 `scripts/start-local-stack.ps1`, `scripts/stop-local-stack.ps1`, `docker-compose.test.yml` were

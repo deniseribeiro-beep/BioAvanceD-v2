@@ -22,6 +22,10 @@ relying on memory:
   type). Legacy-code judgment calls → `legacy`. Shipping → `ship-to-main`.
   Pulling Denise's `main`-branch updates into our feature branch →
   `merge-from-main`.
+- Writing or editing a Playwright spec (`tests/e2e/*.spec.ts`) →
+  `playwright-specs` for selectors/mocked-auth/config quirks, alongside
+  `e2e-docker-workflow` for the Docker/CI stack itself and
+  `testing-conventions` for what to run and when.
 - Every non-trivial task ends with the `wrap-up` skill *before* the
   final summary is drafted — the workflow skills invoke it as a step;
   treat it as blocking, including once per iteration in loops and when

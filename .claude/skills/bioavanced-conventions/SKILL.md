@@ -12,7 +12,8 @@ given file/flow is legacy and how that should shape your approach, see the
 `legacy` skill. This skill
 captures conventions that apply to *any* work here. For what to run and
 when, see `testing-conventions`; for anything Docker, see
-`e2e-docker-workflow`; for the test-building loop itself, see `test-loop`.
+`e2e-docker-workflow`; for writing/editing a Playwright spec file itself,
+see `playwright-specs`; for the test-building loop itself, see `test-loop`.
 
 ## This is Denise's repo — the hard rules
 
