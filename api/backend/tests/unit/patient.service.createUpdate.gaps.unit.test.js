@@ -4,7 +4,6 @@ process.env.ENCRYPTION_KEY = 'dGVzdGtleXRlc3RrZXl0ZXN0a2V5dGVzdGtleXQ=';
 process.env.ENCRYPTION_KEY_ID = 'test-key-1';
 
 const patientService = require('../../src/services/patient.service');
-const fhirSyncService = require('../../src/services/fhir-sync.service');
 const notificationService = require('../../src/services/notification.service');
 const patientBiomarkerTimeseriesService = require('../../src/services/patientBiomarkerTimeseries.service');
 
@@ -43,18 +42,6 @@ function validPatientData(overrides = {}) {
 }
 
 describe('PatientService.createPatient additional branches', () => {
-  let fhirGetSpy, fhirUpsertSpy;
-
-  beforeEach(() => {
-    fhirGetSpy = vi.spyOn(fhirSyncService, 'getPatientFhirFirst').mockResolvedValue(null);
-    fhirUpsertSpy = vi.spyOn(fhirSyncService, 'upsertPatientFromLegacy').mockResolvedValue(undefined);
-  });
-
-  afterEach(() => {
-    fhirGetSpy.mockRestore();
-    fhirUpsertSpy.mockRestore();
-  });
-
   it('rejects when consentTemplateId is not a valid ObjectId', async () => {
     const db = makeFakeDb();
 
@@ -195,16 +182,6 @@ describe('PatientService.createPatient additional branches', () => {
 });
 
 describe('PatientService.updatePatient additional branches', () => {
-  let fhirGetSpy;
-
-  beforeEach(() => {
-    fhirGetSpy = vi.spyOn(fhirSyncService, 'getPatientFhirFirst').mockResolvedValue(null);
-  });
-
-  afterEach(() => {
-    fhirGetSpy.mockRestore();
-  });
-
   it('rejects when the new email is invalid', async () => {
     const db = makeFakeDb();
     await expect(

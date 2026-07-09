@@ -28,13 +28,6 @@ vi.mock('../../src/services/notification.service', () => ({
   enqueueConsentNotification: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock('../../src/services/fhir-sync.service', () => ({
-  default: {
-    upsertPatientFromLegacy: vi.fn().mockResolvedValue(undefined),
-  },
-  upsertPatientFromLegacy: vi.fn().mockResolvedValue(undefined),
-}));
-
 vi.mock('../../src/services/patientBiomarkerTimeseries.service', () => ({
   default: {
     writePatientBiomarkers: vi.fn().mockResolvedValue(undefined),

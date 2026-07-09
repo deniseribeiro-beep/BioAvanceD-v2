@@ -8,7 +8,6 @@ process.env.CONSENT_SECRET = process.env.CONSENT_SECRET || 'test-consent-secret'
 
 const app = require('../../app');
 const sessionService = require('../../src/services/session.service');
-const fhirSyncService = require('../../src/services/fhir-sync.service');
 const auditLogger = require('../../src/utils/auditLogger');
 const notificationService = require('../../src/services/notification.service');
 const { createCollectionMock, createDbMock } = require('../factories/db.factory');
@@ -121,10 +120,6 @@ function setupMocks() {
     session: { sessionID: 'session-test-1', userID: 'qa-coord-1' }
   });
   vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 'session-test-1' });
-  vi.spyOn(fhirSyncService, 'upsertPatientFromLegacy').mockResolvedValue({});
-  vi.spyOn(fhirSyncService, 'getPatientFhirFirst').mockResolvedValue(null);
-  vi.spyOn(fhirSyncService, 'listPatientsFhirFirst').mockResolvedValue(null);
-  vi.spyOn(fhirSyncService, 'searchPatientsFhirFirst').mockResolvedValue(null);
   vi.spyOn(notificationService, 'enqueueConsentNotification').mockResolvedValue(undefined);
   vi.spyOn(auditLogger, 'init').mockImplementation(() => undefined);
   vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);

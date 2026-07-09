@@ -2,7 +2,6 @@ process.env.ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || '0123456789abcdef0123
 process.env.ENCRYPTION_KEY_ID = process.env.ENCRYPTION_KEY_ID || 'vitest-key-001';
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import fhirBoundaryService from '../../src/services/fhir-sync.service';
 import patientService from '../../src/services/patient.service';
 import { encryptValue } from '../../src/utils/fieldEncryption';
 import mqttSignatureService from '../../src/services/mqtt-signature.service';
@@ -10,52 +9,12 @@ import { generateIndustrialBarcodeArtifacts, parseScannedBarcode } from '../../s
 import AllocateSampleUseCase from '../../src/core/use-cases/AllocateSampleUseCase';
 import ReleaseSampleUseCase from '../../src/core/use-cases/ReleaseSampleUseCase';
 
-describe('Compliance Gate - HL7 FHIR R4 boundary', () => {
-  it('serializa Patient sem persistir uma representação operacional paralela', () => {
-    const resource = fhirBoundaryService.buildPatientFhirPayload({
-      patientID: '12345678',
-      patientName: 'Participante Compliance',
-      email: 'compliance@bioavanced.local',
-      phone: '11999990000',
-      sex: 'F',
-      birthDate: '1990-01-20'
-    });
-
-    expect(resource.resourceType).toBe('Patient');
-    expect(resource.identifier[0].value).toBe('12345678');
-    expect(resource.gender).toBe('female');
-    expect(resource.birthDate).toBe('1990-01-20');
-    expect(resource.clinicalProfile).toBeUndefined();
-    expect(resource.semanticPointers).toBeUndefined();
-  });
-
-  it('serializa Specimen a partir do documento canônico', () => {
-    const resource = fhirBoundaryService.buildSampleFhirPayload({
-      _id: '507f1f77bcf86cd799439011',
-      sampleID: 'SMP-001',
-      patientID: '12345678',
-      sampleType: 'PLASMA',
-      quantity: 3,
-      unit: 'mL',
-      registrationDate: new Date('2026-01-10T10:00:00.000Z'),
-      status: 'AVAILABLE'
-    });
-
-    expect(resource.resourceType).toBe('Specimen');
-    expect(resource.identifier[0].value).toBe('SMP-001');
-    expect(resource.subject.reference).toBe('Patient/12345678');
-    expect(resource.status).toBe('available');
-    expect(resource.type?.text).toBe('PLASMA');
-    expect(resource.quantity?.value).toBe(3);
-    expect(resource.semanticPointers).toBeUndefined();
-  });
-
-  it('não utiliza coleções FHIR como fonte de leitura', async () => {
-    await expect(fhirBoundaryService.getPatientFhirFirst()).resolves.toBeNull();
-    await expect(fhirBoundaryService.getSampleFhirFirst()).resolves.toBeNull();
-    await expect(fhirBoundaryService.getPatientConsentFhirFirst()).resolves.toBeNull();
-  });
-});
+// The HL7 FHIR R4 boundary compliance gate previously tested here relied
+// on fhir-sync.service.js, deleted in e2549bee (FHIR is now a pure
+// serialization boundary with no persistence path — see
+// docs/architecture/canonical-data-cleanup.md). The "no operational FHIR
+// collections" property is enforced statically by
+// tests/architecture/fhir-boundary.arch.test.js instead.
 
 describe('Compliance Gate - LGPD AES-256-GCM', () => {
   it('garante criptografia ativa para campos sensíveis definidos no domínio atual', () => {
