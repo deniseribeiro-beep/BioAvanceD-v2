@@ -158,6 +158,22 @@ exercises real OS processes/commands rather than mocking them, check whether
 the code under test is itself cross-platform before trusting a green local run
 as CI-green.
 
+## Checking an old commit's version of a file — don't use `checkout -- .`
+
+To compare a test's current behavior against a parent/pre-fix commit
+(e.g. confirming a failure is pre-existing, not a regression from your
+change), never run `git checkout <commit> -- .` (whole tree) on your
+working branch — it silently restores *every* tracked file to that
+commit's state, including ones you just `git rm`'d, and stages them as
+if new (confirmed 2026-07-09: resurrected two just-deleted files back
+into the working tree mid-verification, caught only by `git status`
+before committing, fixed with `git reset --hard HEAD`). Use
+`git show <commit>:<path>` to read one file's old content, or `git
+worktree add` for a real side-by-side run — and if you reach for a
+worktree, confirm it actually has `node_modules` (or run `npm install`
+in it) before trusting it can execute tests; an empty worktree is dead
+weight, not a shortcut.
+
 ## Known pre-existing failures (don't chase, don't hide)
 
 `tests/compliance/compliance.contract.test.js` has 2 AES-256-GCM
