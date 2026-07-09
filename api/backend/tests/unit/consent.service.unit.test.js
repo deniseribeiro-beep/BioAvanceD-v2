@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 const consentService = require('../../src/services/consent.service');
-const fhirSyncService = require('../../src/services/fhir-sync.service');
 const notificationService = require('../../src/services/notification.service');
 const { ObjectId } = require('mongodb');
 
@@ -591,10 +590,6 @@ describe('ConsentService.createPatientConsent', () => {
   // report. Work around it here by always supplying a valid signature image.
   const validSignature = { signatureImageBase64: Buffer.from('sig').toString('base64'), signatureName: 'Jane Doe' };
 
-  beforeEach(() => {
-    vi.spyOn(fhirSyncService, 'upsertConsentFromLegacy').mockResolvedValue(undefined);
-  });
-
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -618,7 +613,6 @@ describe('ConsentService.createPatientConsent', () => {
       { patientId: '12345678', status: 'ACTIVE' },
       expect.objectContaining({ $set: expect.objectContaining({ status: 'REVOKED' }) })
     );
-    expect(fhirSyncService.upsertConsentFromLegacy).toHaveBeenCalled();
   });
 
   it('rejects when the patient does not exist', async () => {
@@ -712,10 +706,6 @@ describe('ConsentService.createPatientConsent', () => {
 });
 
 describe('ConsentService.revokeConsent', () => {
-  beforeEach(() => {
-    vi.spyOn(fhirSyncService, 'upsertConsentFromLegacy').mockResolvedValue(undefined);
-  });
-
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -733,7 +723,6 @@ describe('ConsentService.revokeConsent', () => {
       { _id: consentId },
       expect.objectContaining({ $set: expect.objectContaining({ status: 'REVOKED' }) })
     );
-    expect(fhirSyncService.upsertConsentFromLegacy).toHaveBeenCalled();
   });
 
   it('returns the consent unchanged when it is already revoked', async () => {
@@ -762,24 +751,16 @@ describe('ConsentService.revokeConsent', () => {
   });
 });
 
+// FHIR is a pure serialization boundary (docs/architecture/canonical-data-cleanup.md)
+// — getPatientConsent reads directly from the canonical Mongo collection,
+// no FHIR-first read path exists (fhir-sync.service.js was removed entirely
+// in e2549bee).
 describe('ConsentService.getPatientConsent', () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it('returns the FHIR-first consent when available', async () => {
-    const fhirConsent = { _id: 'fhir-1', status: 'ACTIVE' };
-    vi.spyOn(fhirSyncService, 'getPatientConsentFhirFirst').mockResolvedValue(fhirConsent);
-    const consents = makeCollection();
-    const db = makeDb({ patientConsents: consents });
-
-    const result = await consentService.getPatientConsent(db, '12345678');
-    expect(result).toBe(fhirConsent);
-    expect(consents.find).not.toHaveBeenCalled();
-  });
-
-  it('falls back to the raw collection when FHIR has nothing', async () => {
-    vi.spyOn(fhirSyncService, 'getPatientConsentFhirFirst').mockResolvedValue(null);
+  it('returns the most recent consent from the collection', async () => {
     const legacyConsent = { _id: 'legacy-1', status: 'ACTIVE' };
     const consents = makeCollection({ find: vi.fn(() => makeCursor([legacyConsent])) });
     const db = makeDb({ patientConsents: consents });
@@ -788,8 +769,7 @@ describe('ConsentService.getPatientConsent', () => {
     expect(result).toBe(legacyConsent);
   });
 
-  it('returns null when nothing is found anywhere', async () => {
-    vi.spyOn(fhirSyncService, 'getPatientConsentFhirFirst').mockResolvedValue(null);
+  it('returns null when nothing is found', async () => {
     const consents = makeCollection({ find: vi.fn(() => makeCursor([])) });
     const db = makeDb({ patientConsents: consents });
 
