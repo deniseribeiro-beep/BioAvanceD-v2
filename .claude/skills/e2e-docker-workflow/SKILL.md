@@ -38,10 +38,19 @@ Easy to misread `testDir: './tests/e2e'` as "relative to wherever you run the co
 It's actually relative to the config file's own directory. Always verify with
 `npx playwright test --list` after moving either the config or the specs.
 
-### `frontend/playwright/global.setup.ts` already supports real-backend login
-It checks `PLAYWRIGHT_USE_REAL_LOGIN=1` and `TEST_USER`/`TEST_PASS` env vars to perform a real
-login flow against a live backend, instead of writing a mocked JWT into storage state. Reuse this
-for the new real-backend e2e specs instead of building a second auth mechanism.
+### `frontend/playwright/global.setup.ts` does NOT exist — this note was stale, don't reuse it
+An earlier version of this skill said this file "already supports real-backend login" via
+`PLAYWRIGHT_USE_REAL_LOGIN=1`/`TEST_USER`/`TEST_PASS`. Confirmed 2026-07-09: the file was deleted
+in commit `b69513a5` (the same main-side "Ambiente sanitizado e reestruturado" pass that emptied
+`tests/e2e/` per issue #95) and nothing recreated it — there is no global-setup project wired into
+`playwright.config.ts` at all. Root config's `use.storageState: 'playwright/.auth/user.json'`
+default was a leftover pointing at output this now-gone setup would have produced; it threw
+`ENOENT` for every UI spec using the `page` fixture and was removed in the #95 scaffolding work.
+Mocked specs seed auth via `page.addInitScript` writing a client-decodable JWT to localStorage
+(see `tests/e2e/helpers/mockAuth.ts`) — no live login needed since `ProtectedRoute` only gates on
+`AuthContext`'s `isLoading` flag, not on the deferred `/api/auth/verify` call resolving. If a real
+login flow is needed for real-backend specs later, it has to be built fresh (and blocks on #144's
+seed-script gap for a known test user) — don't assume the old mechanism is still there.
 
 ### `package.json` referenced files that didn't exist (as of 2026-06-30)
 `scripts/start-local-stack.ps1`, `scripts/stop-local-stack.ps1`, `docker-compose.test.yml` were
