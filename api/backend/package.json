@@ -41,7 +41,8 @@
     "test": "vitest run",
     "test:unit": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "test:ci": "vitest run && node tests/compliance/generate-compliance-evidence.js",
+    "test:arch": "node --test tests/architecture/*.arch.test.js",
+    "test:ci": "vitest run && node tests/compliance/generate-compliance-evidence.js && npm run test:arch",
     "lint": "node scripts/lint.js",
     "typecheck": "node scripts/lint.js"
   },
