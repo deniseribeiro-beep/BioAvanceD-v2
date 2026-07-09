@@ -97,7 +97,7 @@ no other file has since dropped into this range either. With LOW and
 MID-LOW both empty, the next slice-picking tier is ZERO's one
 real-logic file (`worker.js`) or a MID-HIGH file below.
 
-## MID-HIGH coverage (70-84% lines) — 36 files, full reconcile 2026-07-05, commit `aef22577`
+## MID-HIGH coverage (70-84% lines) — 35 files, full reconcile 2026-07-05, commit `aef22577`
 
 Sorted ascending (worst first) — lines% / branches%. The next tier up
 once ZERO's `worker.js` is done; a lower branch% relative to lines%
@@ -121,7 +121,6 @@ src/interface/routes/terminologies.routes.js                   76.12 / 51.09
 src/services/SampleGraphValidator.js                           76.25 / 66.04
 src/controllers/analysis-type.controller.js                    77.14 / 57.14
 src/core/use-cases/RegisterSampleUseCase.js                    77.33 / 69.31
-src/interface/routes/assistant.routes.js                       78.64 / 63.76
 src/database/mongo.js                                          79.22 / 76.00
 src/models/User.js                                             79.59 / 53.68
 src/interface/routes/clinical-unit.routes.js                   79.76 / 63.15
