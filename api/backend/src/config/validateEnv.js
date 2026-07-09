@@ -43,6 +43,12 @@ function validateRedisEnv() {
 
   if (!process.env.REDIS_PASSWORD && !isLocalEnv && !isLocalHost) {
     errors.push('REDIS_PASSWORD não está definido no .env');
+  } else if (!process.env.REDIS_PASSWORD && isLocalEnv && !isLocalHost) {
+    // NODE_ENV=development/test não garante que o host seja de fato local (ex.: Redis
+    // remoto de staging, ou um hostname de rede Docker). Não bloqueia o startup — isso
+    // quebraria docker-compose.test.yml, que aponta REDIS_HOST=redis sem senha — mas
+    // avisa, já que NODE_ENV sozinho não deveria decidir silenciosamente essa exceção.
+    warnings.push(`REDIS_PASSWORD não está definido e o host Redis ("${host}") não é local; isso só passa porque NODE_ENV=${nodeEnv}`);
   }
 
   if (!redisUrl && !isLocalEnv) {

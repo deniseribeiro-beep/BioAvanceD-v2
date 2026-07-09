@@ -88,28 +88,45 @@ describe('validateEnv', () => {
       expect(errors).toContain('REDIS_PASSWORD não está definido no .env');
     });
 
-    it('does not require REDIS_PASSWORD when isLocalEnv (NODE_ENV=development)', () => {
+    it('does not hard-error but warns REDIS_PASSWORD is missing against a non-local host when isLocalEnv (NODE_ENV=development) (issue #20)', () => {
       process.env.NODE_ENV = 'development';
       delete process.env.REDIS_URL;
       process.env.REDIS_HOST = 'remote-redis.example.com';
       process.env.REDIS_PORT = '6379';
       delete process.env.REDIS_PASSWORD;
 
-      const { errors } = validateRedisEnv();
+      const { errors, warnings } = validateRedisEnv();
 
       expect(errors).not.toContain('REDIS_PASSWORD não está definido no .env');
+      expect(warnings.some((w) => w.includes('REDIS_PASSWORD') && w.includes('remote-redis.example.com'))).toBe(true);
     });
 
-    it('does not require REDIS_PASSWORD when isLocalEnv (NODE_ENV=test)', () => {
+    it('does not hard-error but warns REDIS_PASSWORD is missing against a non-local host when isLocalEnv (NODE_ENV=test) (issue #20)', () => {
       process.env.NODE_ENV = 'test';
       delete process.env.REDIS_URL;
       process.env.REDIS_HOST = 'remote-redis.example.com';
       process.env.REDIS_PORT = '6379';
       delete process.env.REDIS_PASSWORD;
 
-      const { errors } = validateRedisEnv();
+      const { errors, warnings } = validateRedisEnv();
 
       expect(errors).not.toContain('REDIS_PASSWORD não está definido no .env');
+      expect(warnings.some((w) => w.includes('REDIS_PASSWORD') && w.includes('remote-redis.example.com'))).toBe(true);
+    });
+
+    it('does not warn about REDIS_PASSWORD when isLocalEnv and host is a docker-network service name matching docker-compose.test.yml (REDIS_HOST=redis)', () => {
+      process.env.NODE_ENV = 'test';
+      delete process.env.REDIS_URL;
+      process.env.REDIS_HOST = 'redis';
+      process.env.REDIS_PORT = '6379';
+      delete process.env.REDIS_PASSWORD;
+
+      const { errors, warnings } = validateRedisEnv();
+
+      expect(errors).not.toContain('REDIS_PASSWORD não está definido no .env');
+      // 'redis' isn't isLocalHost either, so this documents that the warning still fires
+      // for the docker-compose case — it's advisory only, so it doesn't break that startup.
+      expect(warnings.some((w) => w.includes('REDIS_PASSWORD'))).toBe(true);
     });
 
     it('does not require REDIS_PASSWORD when isLocalHost even if NODE_ENV=production', () => {
@@ -214,6 +231,7 @@ describe('validateEnv', () => {
     it('returns true when there are no errors and no warnings', () => {
       process.env.NODE_ENV = 'test';
       process.env.REDIS_URL = 'redis://:pass@redis-host:6379';
+      process.env.REDIS_PASSWORD = 'pass';
       process.env.MONGO_URI = 'mongodb://localhost:27017/db';
 
       const result = validateAndHalt(true);
@@ -264,6 +282,7 @@ describe('validateEnv', () => {
     it('returns true when Redis config is clean', () => {
       process.env.NODE_ENV = 'test';
       process.env.REDIS_URL = 'redis://:pass@redis-host:6379';
+      process.env.REDIS_PASSWORD = 'pass';
 
       const result = validateRedisOnly(true, false);
 
