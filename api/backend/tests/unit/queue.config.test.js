@@ -144,6 +144,20 @@ describe('config/queue', () => {
       expect(fakeValidateEnv.validateRedisOnly).toHaveBeenCalledTimes(2);
     });
 
+    it('returns null when validateRedisOnly reports invalid regardless of NODE_ENV (#22)', () => {
+      // validateRedisOnly can only actually return false in development (any
+      // other NODE_ENV throws first) — but initRedis's own null-return guard
+      // should not additionally gate on NODE_ENV itself, since nothing about
+      // the guard's purpose (don't init Redis with an invalid config) is
+      // development-specific. Simulated here via a direct mock since the real
+      // validateRedisOnly can't produce this combination.
+      process.env.NODE_ENV = 'test';
+      fakeValidateEnv.validateRedisOnly.mockReturnValue(false);
+      const queue = freshQueueModule();
+
+      expect(queue.initRedis()).toBeNull();
+    });
+
     it('propagates an error thrown by validateRedisOnly (e.g. invalid config in non-development)', () => {
       process.env.NODE_ENV = 'production';
       const boom = new Error('Redis configurado incorretamente: REDIS_HOST não está definido');
