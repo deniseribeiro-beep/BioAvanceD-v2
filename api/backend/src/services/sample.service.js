@@ -280,11 +280,6 @@ class SampleService {
         patientID: sample.patientID // Apenas ID, sem dados sensíveis
       });
 
-      await fhirSyncService.upsertSampleFromLegacy(db, {
-        _id: result.insertedId,
-        ...sample
-      });
-
       return {
         _id: result.insertedId,
         ...sample
