@@ -8,11 +8,10 @@ const sprecSeed = require('../src/reference-data/sprec.min.json');
 const rcsReferenceData = require('../src/services/rcs-reference-data');
 
 function parseArgs(argv) {
-  const args = { dryRun: false, list: false, strict: false, only: null };
+  const args = { dryRun: false, list: false, only: null };
   for (const token of argv) {
     if (token === '--dry-run') args.dryRun = true;
     else if (token === '--list') args.list = true;
-    else if (token === '--strict') args.strict = true;
     else if (token.startsWith('--only=')) args.only = token.slice('--only='.length);
   }
   return args;
@@ -80,12 +79,13 @@ function loadByKey(key) {
   throw new Error(`Loader not implemented for seed key: ${key}`);
 }
 
-async function upsertDocs(db, collectionName, docs) {
+async function upsertDocs(db, collectionName, docs, uniqueKeys = []) {
   const collection = db.collection(collectionName);
   let planned = 0;
   for (const doc of docs) {
-    const key = doc.key || doc.id || doc.code || doc.axis;
-    const filter = key ? { [doc.key ? 'key' : doc.id ? 'id' : doc.code ? 'code' : 'axis']: key } : { _id: doc._id };
+    const filter = uniqueKeys.length
+      ? Object.fromEntries(uniqueKeys.map((key) => [key, doc[key]]))
+      : { _id: doc._id };
     await collection.updateOne(filter, { $setOnInsert: { ...doc } }, { upsert: true });
     planned += 1;
   }
@@ -117,7 +117,7 @@ async function main() {
       console.log(JSON.stringify({ key: entry.key, dryRun: args.dryRun, plannedCounts }, null, 2));
       if (!args.dryRun) {
         for (const [collectionName, docs] of Object.entries(docsByCollection)) {
-          await upsertDocs(db, collectionName, docs);
+          await upsertDocs(db, collectionName, docs, entry.uniqueKeys || []);
         }
       }
     }

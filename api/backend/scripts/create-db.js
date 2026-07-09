@@ -66,7 +66,7 @@ const COLLECTIONS = [
   },
   {
     name: 'terminologies',
-    indexes: [{ sistema: 1, codigo: 1 }, { label: 1 }],
+    indexes: [{ sistema: 1, code: 1 }, { label: 1 }],
     description: 'Terminologias SPREC/HPO minimas',
   },
   {

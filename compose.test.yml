@@ -212,7 +212,7 @@ services:
       dockerfile: Dockerfile.dev
     environment:
       <<: *test-env
-    command: ["npm", "run", "test:ci"]
+    command: ["npm", "run", "current-state:ci"]
     depends_on:
       mongodb-test:
         condition: service_healthy
