@@ -4,7 +4,6 @@ process.env.ENCRYPTION_KEY = 'dGVzdGtleXRlc3RrZXl0ZXN0a2V5dGVzdGtleXQ=';
 process.env.ENCRYPTION_KEY_ID = 'test-key-1';
 
 const patientService = require('../../src/services/patient.service');
-const fhirSyncService = require('../../src/services/fhir-sync.service');
 const notificationService = require('../../src/services/notification.service');
 const patientBiomarkerTimeseriesService = require('../../src/services/patientBiomarkerTimeseries.service');
 
@@ -197,22 +196,6 @@ describe('PatientService.createBiomarkerObservationsFromPatient', () => {
 });
 
 describe('PatientService.createPatient', () => {
-  let fhirGetSpy, fhirListSpy, fhirSearchSpy, fhirUpsertSpy;
-
-  beforeEach(() => {
-    fhirGetSpy = vi.spyOn(fhirSyncService, 'getPatientFhirFirst').mockResolvedValue(null);
-    fhirListSpy = vi.spyOn(fhirSyncService, 'listPatientsFhirFirst').mockResolvedValue(null);
-    fhirSearchSpy = vi.spyOn(fhirSyncService, 'searchPatientsFhirFirst').mockResolvedValue(null);
-    fhirUpsertSpy = vi.spyOn(fhirSyncService, 'upsertPatientFromLegacy').mockResolvedValue(undefined);
-  });
-
-  afterEach(() => {
-    fhirGetSpy.mockRestore();
-    fhirListSpy.mockRestore();
-    fhirSearchSpy.mockRestore();
-    fhirUpsertSpy.mockRestore();
-  });
-
   function validPatientData(overrides = {}) {
     return {
       patientName: 'Maria Silva',
@@ -306,16 +289,6 @@ describe('PatientService.createPatient', () => {
 });
 
 describe('PatientService.getPatient', () => {
-  let fhirGetSpy;
-
-  beforeEach(() => {
-    fhirGetSpy = vi.spyOn(fhirSyncService, 'getPatientFhirFirst').mockResolvedValue(null);
-  });
-
-  afterEach(() => {
-    fhirGetSpy.mockRestore();
-  });
-
   it('returns a decrypted patient when found by 8-digit patientID', async () => {
     const encrypted = patientService.encryptSensitivePatientFields({ patientID: '12345678', alphaGal: 4.2 });
     const patientsCollection = makeFakeCollection({ findOne: vi.fn().mockResolvedValue(encrypted) });
@@ -338,16 +311,6 @@ describe('PatientService.getPatient', () => {
 });
 
 describe('PatientService.listPatients', () => {
-  let fhirListSpy;
-
-  beforeEach(() => {
-    fhirListSpy = vi.spyOn(fhirSyncService, 'listPatientsFhirFirst').mockResolvedValue(null);
-  });
-
-  afterEach(() => {
-    fhirListSpy.mockRestore();
-  });
-
   it('passes patientName and clinicalUnit filters into the collection query and returns pagination shape', async () => {
     const toArrayMock = vi.fn().mockResolvedValue([{ patientID: '12345678' }]);
     const findMock = vi.fn().mockReturnValue({
@@ -391,16 +354,6 @@ describe('PatientService.listPatients', () => {
 });
 
 describe('PatientService.searchPatients', () => {
-  let fhirSearchSpy;
-
-  beforeEach(() => {
-    fhirSearchSpy = vi.spyOn(fhirSyncService, 'searchPatientsFhirFirst').mockResolvedValue(null);
-  });
-
-  afterEach(() => {
-    fhirSearchSpy.mockRestore();
-  });
-
   it('returns empty result for an empty search term without querying the collection', async () => {
     const patientsCollection = makeFakeCollection();
     const db = makeFakeDb({ patients: patientsCollection });
