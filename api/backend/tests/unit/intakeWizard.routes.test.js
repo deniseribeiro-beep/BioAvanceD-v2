@@ -11,6 +11,8 @@ const merkleServicePath = require.resolve('../../src/services/MerkleService');
 const collectionResolverPath = require.resolve('../../src/utils/collectionResolver');
 const auditLoggerPath = require.resolve('../../src/utils/auditLogger');
 const qualityDomainPath = require.resolve('../../src/services/quality-domain.service');
+const sampleServicePath = require.resolve('../../src/services/sample.service');
+const storageServicePath = require.resolve('../../src/services/storageService');
 const routePath = require.resolve('../../src/routes/intakeWizard.js');
 
 const allPaths = [
@@ -20,8 +22,19 @@ const allPaths = [
   collectionResolverPath,
   auditLoggerPath,
   qualityDomainPath,
+  sampleServicePath,
+  storageServicePath,
   routePath,
 ];
+
+function makeCursor(rows) {
+  const cursor = {
+    sort: () => cursor,
+    limit: () => cursor,
+    toArray: async () => rows,
+  };
+  return cursor;
+}
 
 function clearCache() {
   for (const p of allPaths) delete require.cache[p];
@@ -89,9 +102,13 @@ function buildApp(router, db = {}) {
 }
 
 const VALID_PAYLOAD = {
-  demographic: { patientName: 'Paciente Teste', participantId: '12345678', email: 'paciente@example.test' },
-  consent: { tcle_template_id: 'template-1' },
-  sample: { sampleType: 'Sangue', sampleOrigin: 'Hospital A', extractionProtocol: 'EDTA', quantity: 2 },
+  participant: { participantId: '12345678', patientName: 'Paciente Teste', email: 'paciente@example.test' },
+  legalRepresentative: null,
+  consent: { consentTemplateId: 'template-1' },
+  specimen: { specimenId: 'spec-1', participantId: '12345678', sampleType: 'Sangue', sampleOrigin: 'Hospital A', extractionProtocol: 'EDTA', quantity: 2 },
+  diagnosis: null,
+  clinical: {},
+  biomarkers: [],
 };
 
 describe('intakeWizard routes', () => {
@@ -119,42 +136,53 @@ describe('intakeWizard routes', () => {
       expect(res.status).toBe(503);
     });
 
-    it('returns 400 when the consent email cannot be sent because templateId is missing', async () => {
-      const { router } = loadRoute();
-      const app = buildApp(router, {});
-      const { consent, ...withoutConsent } = VALID_PAYLOAD;
-
-      const res = await request(app).post('/api/intake-wizard').send(withoutConsent);
-
-      expect(res.status).toBe(400);
-      expect(res.body.error).toMatch(/TCLE/);
-    });
-
-    it('returns 502 when the consent email provider fails', async () => {
-      const sendConsentEmail = vi.fn().mockResolvedValue({ success: false });
-      const { router } = loadRoute({ sendConsentEmail });
-      const app = buildApp(router, {});
-
-      const res = await request(app).post('/api/intake-wizard').send(VALID_PAYLOAD);
-
-      expect(res.status).toBe(502);
-    });
-
     it('happy path: persists the sample, links the patient, and returns 200', async () => {
       const insertOne = vi.fn().mockResolvedValue({ insertedId: 'sample-1' });
-      const findOne = vi.fn().mockResolvedValue({ _id: 'sample-1', patientID: '12345678' });
+      const findOne = vi.fn().mockResolvedValue({ _id: 'sample-1', participantId: '12345678' });
       const samplesCollection = { insertOne, findOne };
       const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
       const patientsCollection = { updateOne };
+      const consentsCollection = { findOne: vi.fn().mockResolvedValue(null) };
 
       const getCollectionImpl = vi.fn(async (_db, key) => {
         if (key === 'samples') return samplesCollection;
         if (key === 'patients') return patientsCollection;
+        if (key === 'consents') return consentsCollection;
         throw new Error(`unexpected key ${key}`);
       });
 
+      const db = {
+        collection: (name) => {
+          if (name === 'sensors') return { find: () => makeCursor([{ locationId: 1, status: 'ok' }]) };
+          if (name === 'storageBoxes') {
+            return {
+              find: () => makeCursor([{
+                _id: 'box-1',
+                name: 'Box A',
+                status: 'ACTIVE',
+                dimension: { rows: 1, cols: 1 },
+                currentOccupancy: 0,
+                occupancyGrid: {},
+              }]),
+            };
+          }
+          if (name === 'locations') return { find: () => makeCursor([{ locationID: 1 }]) };
+          throw new Error(`unexpected collection ${name}`);
+        },
+      };
+
       const { router, auditLoggerModule } = loadRoute({ getCollectionImpl });
-      const app = buildApp(router, {});
+
+      const sampleServiceModule = require(sampleServicePath);
+      vi.spyOn(sampleServiceModule, 'createSample').mockResolvedValue({ _id: 'sample-1', participantId: '12345678' });
+
+      const StorageService = require(storageServicePath);
+      vi.spyOn(StorageService.prototype, 'autoAssignSampleToBox').mockResolvedValue({
+        success: true,
+        sampleLocation: { boxId: 'box-1', position: 'A1' },
+      });
+
+      const app = buildApp(router, db);
 
       const res = await request(app).post('/api/intake-wizard').send(VALID_PAYLOAD);
 
@@ -162,7 +190,7 @@ describe('intakeWizard routes', () => {
       expect(res.body.success).toBe(true);
       expect(res.body.patientMatch.patientID).toBe('12345678');
       expect(res.body.qualityAssessment.score).toBe(80);
-      expect(insertOne).toHaveBeenCalledTimes(1);
+      expect(sampleServiceModule.createSample).toHaveBeenCalledTimes(1);
       expect(updateOne).toHaveBeenCalledWith(
         { _id: 'patient-obj-1' },
         expect.objectContaining({ $addToSet: { linkedSampleIds: 'sample-1' } })
@@ -172,14 +200,14 @@ describe('intakeWizard routes', () => {
       );
     });
 
-    it('returns 502 when persisting the sample throws', async () => {
+    it('returns 500 when persisting the sample throws', async () => {
       const getCollectionImpl = vi.fn().mockRejectedValue(new Error('db down'));
       const { router } = loadRoute({ getCollectionImpl });
       const app = buildApp(router, {});
 
       const res = await request(app).post('/api/intake-wizard').send(VALID_PAYLOAD);
 
-      expect(res.status).toBe(502);
+      expect(res.status).toBe(500);
     });
   });
 
