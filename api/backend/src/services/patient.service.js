@@ -451,6 +451,30 @@ class PatientService {
 
   async createPatient(db, patientData, options = {}) {
     try {
+      // PatientModel no longer folds alphaGal/lysoGb3 into dadosEspecificos itself
+      // (dropped in e2549bee's canonicalization rewrite), so a caller submitting them
+      // top-level would otherwise fail PatientModel.validate()'s canonical-field check.
+      // Fold them here before validation, matching the Fabry dadosEspecificos shape
+      // encryptSensitivePatientFields() already knows how to encrypt (#70).
+      if (patientData.alphaGal !== undefined || patientData.lysoGb3 !== undefined) {
+        const dadosEspecificos = Array.isArray(patientData.dadosEspecificos)
+          ? [...patientData.dadosEspecificos]
+          : [];
+        const fabryIndex = dadosEspecificos.findIndex((entry) => entry && entry.tipo === 'Fabry');
+        const fabryDados = fabryIndex >= 0 ? { ...dadosEspecificos[fabryIndex].dados } : {};
+        if (patientData.alphaGal !== undefined) fabryDados.alphaGal = patientData.alphaGal;
+        if (patientData.lysoGb3 !== undefined) fabryDados.lysoGb3 = patientData.lysoGb3;
+        const fabryEntry = { tipo: 'Fabry', dados: fabryDados };
+        if (fabryIndex >= 0) {
+          dadosEspecificos[fabryIndex] = fabryEntry;
+        } else {
+          dadosEspecificos.push(fabryEntry);
+        }
+        patientData.dadosEspecificos = dadosEspecificos;
+        delete patientData.alphaGal;
+        delete patientData.lysoGb3;
+      }
+
       patientData.email = this.normalizeEmail(patientData.email);
       patientData.phone = this.normalizePhone(patientData.phone);
 

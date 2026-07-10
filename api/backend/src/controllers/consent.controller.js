@@ -23,7 +23,7 @@ class ConsentController {
         const patientsCollection = db.collection('patients');
         const pendingPatients = await patientsCollection.find({
           status: 'PENDING_CONSENT',
-          consentconsentTemplateId: policyId
+          consentTemplateId: policyId
         }).project({ participantId: 1, patientName: 1, email: 1, clinicalUnit: 1, consentNotifiedAt: 1 }).toArray();
         return res.status(200).json({
           success: true,
@@ -482,7 +482,7 @@ class ConsentController {
 
       const payload = {
         ...req.body,
-        participantId: req.body.participantId || req.body.participantId,
+        patientId: req.body.patientId || req.body.patientID,
         ipAddress: req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress,
         userAgent: req.headers['user-agent']
       };
@@ -619,10 +619,10 @@ class ConsentController {
         });
       }
 
-      const participantId = req.body.participantId || req.body.participantId || req.query.participantId || req.query.participantId;
+      const patientId = req.body.patientId || req.body.patientID || req.query.patientId || req.query.patientID;
       const token = req.body.token || req.query.token;
 
-      const result = await patientService.validateConsentToken(db, String(participantId), String(token));
+      const result = await patientService.validateConsentToken(db, String(patientId), String(token));
 
       return res.status(200).json({
         success: true,
@@ -648,10 +648,10 @@ class ConsentController {
         });
       }
 
-      const participantId = req.body.participantId || req.body.participantId || req.query.participantId || req.query.participantId;
+      const patientId = req.body.patientId || req.body.patientID || req.query.patientId || req.query.patientID;
       const token = req.body.token || req.query.token;
 
-      const result = await patientService.acceptConsentToken(db, String(participantId), String(token));
+      const result = await patientService.acceptConsentToken(db, String(patientId), String(token));
 
       return res.status(200).json({
         success: true,
