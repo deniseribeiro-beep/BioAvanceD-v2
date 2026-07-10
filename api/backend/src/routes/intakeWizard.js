@@ -105,17 +105,16 @@ function buildFallbackPatientID() {
 }
 
 function resolveRecipientAndTemplate(data = {}) {
-  const demographic = data?.demographic || {};
-  const representativeLegal = data?.representativeLegal || {};
+  const participant = data?.participant || {};
+  const legalRepresentative = data?.legalRepresentative || {};
   const consent = data?.consent || {};
-  const sample = data?.sample || {};
 
-  const patientName = normalizeString(demographic.patientName);
-  const patientId = normalizeString(demographic.pseudoId || demographic.patientID || demographic.cpf || data?.pseudoId);
-  const patientEmail = normalizeString(demographic.email);
-  const representativeEmail = normalizeString(representativeLegal.email);
+  const patientName = normalizeString(participant.patientName);
+  const patientId = normalizeString(participant.participantId);
+  const patientEmail = normalizeString(participant.email);
+  const representativeEmail = normalizeString(legalRepresentative.email);
   const recipientEmail = patientEmail || representativeEmail;
-  const templateId = normalizeString(consent.tcle_template_id || sample.selected_tcle);
+  const templateId = normalizeString(consent.consentTemplateId);
 
   return {
     patientName,
@@ -126,15 +125,8 @@ function resolveRecipientAndTemplate(data = {}) {
 }
 
 function resolvePatientID(data = {}) {
-  const demographic = normalizeObject(data?.demographic);
-  const sample = normalizeObject(data?.sample);
-  const patientID = normalizeString(
-    demographic.patientID
-    || demographic.patientId
-    || demographic.pseudoId
-    || sample.patientID
-    || sample.patientId
-  );
+  const participant = normalizeObject(data?.participant);
+  const patientID = normalizeString(participant.participantId);
 
   if (/^\d{8}$/.test(patientID)) {
     return patientID;
@@ -146,7 +138,6 @@ function resolvePatientID(data = {}) {
 function buildClinicalData(data = {}) {
   const diagnosis = normalizeObject(data?.diagnosis);
   const clinical = normalizeObject(data?.clinical);
-  const integrity = normalizeObject(data?.integrity);
 
   return {
     orphaCode: normalizeString(diagnosis.orphaCode),
@@ -154,14 +145,13 @@ function buildClinicalData(data = {}) {
     cid: normalizeString(diagnosis.icdCode),
     phenotypes: normalizeArray(clinical.diseasePhenotypes),
     charlsonComorbidities: normalizeArray(clinical.charlsonConditions),
-    biomarkerValues: normalizeObject(clinical.biomarkersValues || integrity.biomarkers_values),
+    biomarkerValues: normalizeObject(clinical.biomarkersValues),
   };
 }
 
 function buildPharmacologyData(data = {}) {
   const clinical = normalizeObject(data?.clinical);
-  const integrity = normalizeObject(data?.integrity);
-  const pharmacology = normalizeObject(clinical.pharmacologyData || integrity.pharmacology_data);
+  const pharmacology = normalizeObject(clinical.pharmacologyData);
 
   const treatmentStatusRaw = normalizeString(pharmacology.treatmentStatus).toUpperCase();
   const treatmentStatus = ['NAIVE', 'TREATED', 'ON_TREATMENT', 'WASHOUT'].includes(treatmentStatusRaw) ? treatmentStatusRaw : '';
@@ -184,30 +174,29 @@ function buildPharmacologyData(data = {}) {
 }
 
 function buildSampleDocumentFromIntake(data = {}, matchedPatient = null) {
-  const sample = normalizeObject(data?.sample);
+  const specimen = normalizeObject(data?.specimen);
   const consent = normalizeObject(data?.consent);
-  const integrity = normalizeObject(data?.integrity);
-  const releaseStatusRaw = normalizeString(sample.lifecycleStatus).toUpperCase();
+  const releaseStatusRaw = normalizeString(specimen.lifecycleStatus).toUpperCase();
   const releaseStatus = ['QUARANTINE', 'AVAILABLE', 'BLOCKED'].includes(releaseStatusRaw) ? releaseStatusRaw : 'QUARANTINE';
-  const registrationDate = sample.registeredAt || new Date().toISOString();
+  const registrationDate = specimen.registeredAt || new Date().toISOString();
   const confirmedPatientID = normalizeString(matchedPatient?.participantId) || resolvePatientID(data);
-  const confirmedPatientName = normalizeString(matchedPatient?.patientName || data?.demographic?.patientName);
+  const confirmedPatientName = normalizeString(matchedPatient?.patientName || data?.participant?.patientName);
 
   return {
     participantId: confirmedPatientID,
     participantName: confirmedPatientName || null,
     patientObjectId: matchedPatient?._id || null,
-    sampleType: normalizeString(sample.sampleType || sample.sprec?.sampleType || 'UNKNOWN'),
-    sampleOrigin: normalizeString(sample.sampleOrigin || sample.sampleType || 'UNKNOWN'),
-    extractionProtocol: normalizeString(sample.extractionProtocol || sample.protocolApplied || 'UNKNOWN'),
-    barcode: normalizeString(sample.barcode) || null,
+    sampleType: normalizeString(specimen.sampleType || specimen.sprec?.sampleType || 'UNKNOWN'),
+    sampleOrigin: normalizeString(specimen.sampleOrigin || specimen.sampleType || 'UNKNOWN'),
+    extractionProtocol: normalizeString(specimen.extractionProtocol || 'UNKNOWN'),
+    barcode: normalizeString(specimen.barcode) || null,
     registeredAt: new Date(registrationDate),
-    quantity: normalizeNumber(sample.quantity, 0),
-    unit: normalizeString(sample.unit) || null,
+    quantity: normalizeNumber(specimen.quantity, 0),
+    unit: normalizeString(specimen.unit) || null,
     lifecycleStatus: releaseStatus,
-    linkedProject: normalizeString(sample.linkedProject || sample.linked_project) || 'INTAKE_WIZARD',
-    sprec: normalizeObject(sample.sprec),
-    consentTemplateId: normalizeString(consent.tcle_template_id || sample.selected_tcle || integrity.selected_tcle) || null,
+    linkedProject: normalizeString(specimen.linkedProject) || 'INTAKE_WIZARD',
+    sprec: normalizeObject(specimen.sprec),
+    consentTemplateId: normalizeString(consent.consentTemplateId) || null,
     clinicalData: buildClinicalData(data),
     pharmacologyData: buildPharmacologyData(data),
     merkleRoot: null,
@@ -217,14 +206,13 @@ function buildSampleDocumentFromIntake(data = {}, matchedPatient = null) {
 }
 
 async function resolveMatchedPatient(db, data = {}) {
-  const demographic = normalizeObject(data?.demographic);
-  const representative = normalizeObject(data?.representativeLegal);
+  const participant = normalizeObject(data?.participant);
 
   const result = await patientIdentityService.matchOrUpsertParticipant(db, {
-    participantId: demographic.participantId || demographic.patientId || demographic.pseudoId,
-    patientName: demographic.patientName,
-    birthDate: parseBirthDate(demographic.birthDate),
-    identityDocument: normalizeString(demographic.identityDocument || demographic.cpf || demographic.documento) || null,
+    participantId: participant.participantId,
+    patientName: participant.patientName,
+    birthDate: parseBirthDate(participant.birthDate),
+    identityDocument: normalizeString(participant.identityDocument) || null,
   });
 
   return result;
@@ -484,16 +472,16 @@ function calcularQualidade(samplePayloadOrTempo, temperatura) {
 async function handleIntakeWizard(req, res) {
   const data = req.body;
 
-  if (!data || typeof data !== 'object') {
+  if (!data || typeof data !== 'object' || Object.keys(data).length === 0) {
     return res.status(400).json({ error: 'Dados inválidos para intake wizard.' });
   }
 
   try {
     const canonicalViolations = [
-      ...collectCanonicalViolations(data?.demographic, {
+      ...collectCanonicalViolations(data?.participant, {
         participantId: ['patientID', 'patientId', 'pseudoId', 'mongoPatientId'],
       }),
-      ...collectCanonicalViolations(data?.sample, {
+      ...collectCanonicalViolations(data?.specimen, {
         specimenId: ['sampleID', 'sampleId', 'specimenID', 'mongoSampleId'],
         parentSpecimenId: ['parentSampleId'],
         registeredAt: ['registerDate', 'registrationDate'],
@@ -511,12 +499,6 @@ async function handleIntakeWizard(req, res) {
         clinicalData: ['clinical_data'],
         pharmacologyData: ['pharmacology_data'],
         biomarkerValues: ['biomarkers_values'],
-      }),
-      ...collectCanonicalViolations(data?.integrity, {
-        clinicalData: ['clinical_data'],
-        pharmacologyData: ['pharmacology_data'],
-        merkleRoot: ['merkle_root'],
-        consentTemplateId: ['selected_tcle'],
       }),
     ];
 
@@ -545,7 +527,7 @@ async function handleIntakeWizard(req, res) {
     const matchOutcome = await resolveMatchedPatient(db, data);
     const consentDecision = await resolveConsentDecision(db, matchOutcome.patient);
     const automaticLocation = await resolveAutomaticLocation(db);
-    const qualidade = resolverQualidadeMetodologica(data?.sample || {});
+    const qualidade = resolverQualidadeMetodologica(data?.specimen || {});
 
     auditLogger.init(db);
     await auditLogger.log({

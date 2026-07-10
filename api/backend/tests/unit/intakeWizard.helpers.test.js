@@ -17,8 +17,8 @@ describe('intakeWizard helpers', () => {
 
   it('resolvePatientID retorna fallback de 8 dígitos quando não há ID válido', () => {
     const resolved = helpers.resolvePatientID({
-      demographic: { patientName: 'Paciente Exemplo' },
-      sample: {},
+      participant: { patientName: 'Paciente Exemplo' },
+      specimen: {},
     });
 
     expect(resolved).toMatch(/^\d{8}$/);
@@ -40,55 +40,53 @@ describe('intakeWizard helpers', () => {
       cid: 'A01',
       phenotypes: ['p1'],
       charlsonComorbidities: ['c1'],
-      biomarkers_values: { foo: 1 },
+      biomarkerValues: { foo: 1 },
     });
   });
 
-  it('buildPharmacologyData normaliza aliases legacy e novos', () => {
+  it('buildPharmacologyData normaliza campos canônicos', () => {
     const pharmacology = helpers.buildPharmacologyData({
       clinical: {
         pharmacologyData: {
-          treatment_status: 'on_treatment',
-          drug_name: 'Migalastat',
-          atc_code: 'a16ax27',
+          treatmentStatus: 'on_treatment',
+          medicationName: 'Migalastat',
+          atcCode: 'a16ax27',
         },
       },
     });
 
-    expect(pharmacology.treatment_status).toBe('ON_TREATMENT');
-    expect(pharmacology.drug_name).toBe('Migalastat');
-    expect(pharmacology.atc_code).toBe('A16AX27');
-    expect(pharmacology.atc_level_1).toBe('A');
-    expect(pharmacology.medication_name).toBe('Migalastat');
+    expect(pharmacology.treatmentStatus).toBe('ON_TREATMENT');
+    expect(pharmacology.medicationName).toBe('Migalastat');
+    expect(pharmacology.atcCode).toBe('A16AX27');
+    expect(pharmacology.atcClass).toBe('A');
   });
 
   it('buildSampleDocumentFromIntake usa matched patient quando disponível', () => {
     const document = helpers.buildSampleDocumentFromIntake(
       {
-        demographic: { patientName: 'Paciente Teste', patientID: '12345678' },
-        sample: {
+        participant: { patientName: 'Paciente Teste', participantId: '12345678' },
+        specimen: {
           sampleType: 'Sangue',
           sampleOrigin: 'Hospital A',
           extractionProtocol: 'EDTA',
           quantity: 2,
-          quality: 'GOOD',
           linkedProject: 'Projeto X',
-          registrationDate: '2026-04-13T10:00:00.000Z',
+          registeredAt: '2026-04-13T10:00:00.000Z',
         },
-        consent: { tcle_template_id: 'template-1' },
+        consent: { consentTemplateId: 'template-1' },
       },
       {
         _id: 'patient-object-1',
-        patientID: '12345678',
+        participantId: '12345678',
         patientName: 'Paciente Teste',
       }
     );
 
-    expect(document.patientID).toBe('12345678');
+    expect(document.participantId).toBe('12345678');
     expect(document.patientObjectId).toBe('patient-object-1');
     expect(document.sampleType).toBe('Sangue');
     expect(document.consentTemplateId).toBe('template-1');
-    expect(document.status).toBe('AVAILABLE');
+    expect(document.lifecycleStatus).toBe('QUARANTINE');
   });
 
   it('calcularQualidade nao usa mais heuristica legada numerica', () => {
@@ -101,12 +99,12 @@ describe('intakeWizard helpers', () => {
 
   it('resolveRecipientAndTemplate prioriza email do paciente e seleciona template do consentimento', () => {
     const result = helpers.resolveRecipientAndTemplate({
-      demographic: {
+      participant: {
         patientName: 'Paciente Teste',
-        pseudoId: '12345678',
+        participantId: '12345678',
         email: 'paciente@example.test',
       },
-      consent: { tcle_template_id: 'template-42' },
+      consent: { consentTemplateId: 'template-42' },
     });
 
     expect(result.patientName).toBe('Paciente Teste');
@@ -127,13 +125,13 @@ describe('intakeWizard helpers', () => {
     const db = { collection: () => patientsCollection };
 
     const result = await helpers.resolveMatchedPatient(db, {
-      demographic: {
+      participant: {
         participantId: '12345678',
         patientName: 'Paciente Teste',
         birthDate: '2000-01-01',
         identityDocument: '11122233344',
       },
-      representativeLegal: {},
+      legalRepresentative: {},
     });
 
     expect(result.created).toBe(true);

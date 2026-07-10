@@ -73,8 +73,7 @@ const consentSchema = {
     consentTemplateId: { type: 'string' },
     consentGranted: { type: 'boolean' },
     consentAcceptedAt: { type: 'string' }
-  },
-  required: ['consentTemplateId']
+  }
 };
 
 const intakeSchema = {
@@ -116,7 +115,32 @@ const intakeSchema = {
         }
       ]
     },
-    clinical: { type: 'object', additionalProperties: false },
+    clinical: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        comorbidities: { type: 'object' },
+        bloodPressure: { type: 'string' },
+        clinicalObservations: { type: 'string' },
+        diseasePhenotypes: { type: 'array' },
+        diseaseBiomarkers: { type: 'array' },
+        biomarkersValues: { type: 'object' },
+        diagnosisDefinition: { type: 'string' },
+        pharmacologyData: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            treatmentStatus: { type: 'string' },
+            medicationName: { type: 'string' },
+            atcCode: { type: 'string' },
+            atcClass: { type: 'string' },
+            lastDoseDate: { type: 'string' },
+            washoutStartDate: { type: 'string' },
+            washoutEndDate: { type: 'string' }
+          }
+        }
+      }
+    },
     biomarkers: { type: 'array' }
   },
   required: ['participant', 'consent', 'specimen', 'clinical', 'biomarkers']
