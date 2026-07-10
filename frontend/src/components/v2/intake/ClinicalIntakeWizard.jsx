@@ -1360,14 +1360,11 @@ function buildSubmissionPayload(formData, clinicalComorbidityItems = [], biomark
   const sampleUnit = getSampleQuantityUnit(formData.sprecSampleType, SPREC_FLUID_DICTIONARY.sampleType.options);
   const patientDocument = normalizeDocumentForPayload(formData.documento);
   const diagnosis = formData.isHealthyControl ? null : {
-    diagnosis_name: String(formData.diagnosisCidDescription || formData.diagnosisDefinition || '').trim() || null,
-    icd_code: String(formData.diagnosisCidCode || '').trim() || null,
-    orpha_code: String(formData.diagnosisOrphaCode || '').trim() || null,
-    omim_code: String(formData.diagnosisOmimCode || '').trim() || null,
-    definition: String(formData.diagnosisDefinition || '').trim() || null,
+    diagnosisName: String(formData.diagnosisCidDescription || formData.diagnosisDefinition || '').trim() || null,
     icdCode: String(formData.diagnosisCidCode || '').trim() || null,
     orphaCode: String(formData.diagnosisOrphaCode || '').trim() || null,
     omimCode: String(formData.diagnosisOmimCode || '').trim() || null,
+    definition: String(formData.diagnosisDefinition || '').trim() || null,
   };
   const biomarkers = (Array.isArray(biomarkerItems) ? biomarkerItems : []).flatMap((biomarker) => {
     const biomarkerSlug = getDictionarySlug(biomarker);
@@ -1490,6 +1487,8 @@ function buildSubmissionPayload(formData, clinicalComorbidityItems = [], biomark
     biomarkers: biomarkers.concat(diseaseBiomarkers),
   };
 }
+
+export const _test = { buildSubmissionPayload };
 
 export default function ClinicalIntakeWizard(props) {
   const { t } = useLanguage();
