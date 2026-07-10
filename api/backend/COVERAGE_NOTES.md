@@ -217,7 +217,7 @@ src/controllers/sample-file.controller.js         84.23 / 53.93
 src/controllers/import-async.controller.js        84.29 / 79.66
 src/controllers/audit.controller.js               84.54 / 48.64   (issue #152 — contract changed)
 src/services/sample.service.js                    84.54 / 72.83
-src/routes/orphanet.js                            84.87 / 65.49   (issue #163 — always 503)
+src/routes/orphanet.js                            84.87 / 65.49
 ```
 
 ## GOOD coverage (>=85% lines)
