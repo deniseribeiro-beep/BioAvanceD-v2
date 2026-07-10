@@ -60,8 +60,8 @@ describe('paciente.controller', () => {
     });
 
     it('leaves undefined/null fields untouched', () => {
-      const result = controller.sanitizePatientPayload({ name: 'Foo' });
-      expect(result).toEqual({ name: 'Foo' });
+      const result = controller.sanitizePatientPayload({ patientName: 'Foo' });
+      expect(result).toEqual({ patientName: 'Foo' });
     });
   });
 
@@ -83,7 +83,7 @@ describe('paciente.controller', () => {
           isDeceased: true,
           representativeName: 'Jane',
           representativeEmail: 'jane@example.com',
-          representativeCpf: '123.456.789-00',
+          representativeIdentityDocument: '123.456.789-00',
           representativePhone: '(11) 91234-5678'
         })
       ).not.toThrow();
@@ -110,7 +110,7 @@ describe('paciente.controller', () => {
     });
 
     it('returns 400 when deceased representative data is missing', async () => {
-      const req = createReq({ body: { name: 'Foo', isDeceased: true } });
+      const req = createReq({ body: { patientName: 'Foo', isDeceased: true } });
       const res = createRes();
 
       await controller.cadastrar(req, res);
@@ -122,8 +122,8 @@ describe('paciente.controller', () => {
     });
 
     it('creates a patient and returns only the patientID', async () => {
-      vi.spyOn(patientService, 'createPatient').mockResolvedValue({ patientID: '12345678', name: 'Foo' });
-      const req = createReq({ body: { name: 'Foo' } });
+      vi.spyOn(patientService, 'createPatient').mockResolvedValue({ participantId: '12345678', patientName: 'Foo' });
+      const req = createReq({ body: { patientName: 'Foo' } });
       const res = createRes();
 
       await controller.cadastrar(req, res);
@@ -131,15 +131,15 @@ describe('paciente.controller', () => {
       expect(patientService.createPatient).toHaveBeenCalled();
       expect(res.status).toHaveBeenCalledWith(201);
       expect(res.json).toHaveBeenCalledWith(
-        expect.objectContaining({ success: true, data: { patientID: '12345678' } })
+        expect.objectContaining({ success: true, data: { participantId: '12345678' } })
       );
     });
 
     it('logs audit entry when req.user is set', async () => {
-      vi.spyOn(patientService, 'createPatient').mockResolvedValue({ patientID: '12345678' });
+      vi.spyOn(patientService, 'createPatient').mockResolvedValue({ participantId: '12345678' });
       const logSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue();
       vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
-      const req = createReq({ body: { name: 'Foo' }, user: { id: 'u1' } });
+      const req = createReq({ body: { patientName: 'Foo' }, user: { id: 'u1' } });
       const res = createRes();
 
       await controller.cadastrar(req, res);
@@ -150,7 +150,7 @@ describe('paciente.controller', () => {
     it('maps duplicate-patient error message to 409', async () => {
       const error = new Error('Paciente já cadastrado');
       vi.spyOn(patientService, 'createPatient').mockRejectedValue(error);
-      const req = createReq({ body: { name: 'Foo' } });
+      const req = createReq({ body: { patientName: 'Foo' } });
       const res = createRes();
 
       await controller.cadastrar(req, res);
@@ -161,7 +161,7 @@ describe('paciente.controller', () => {
     it('maps required-field error message to 400', async () => {
       const error = new Error('Campo obrigatório ausente');
       vi.spyOn(patientService, 'createPatient').mockRejectedValue(error);
-      const req = createReq({ body: { name: 'Foo' } });
+      const req = createReq({ body: { patientName: 'Foo' } });
       const res = createRes();
 
       await controller.cadastrar(req, res);
@@ -171,7 +171,7 @@ describe('paciente.controller', () => {
 
     it('defaults to 500 for unrecognized errors', async () => {
       vi.spyOn(patientService, 'createPatient').mockRejectedValue(new Error('boom'));
-      const req = createReq({ body: { name: 'Foo' } });
+      const req = createReq({ body: { patientName: 'Foo' } });
       const res = createRes();
 
       await controller.cadastrar(req, res);
@@ -263,7 +263,7 @@ describe('paciente.controller', () => {
     });
 
     it('returns only ID+status for operational role', async () => {
-      vi.spyOn(patientService, 'getPatient').mockResolvedValue({ patientID: '12345678', name: 'Foo' });
+      vi.spyOn(patientService, 'getPatient').mockResolvedValue({ participantId: '12345678', patientName: 'Foo' });
       vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
       vi.spyOn(auditLogger, 'log').mockResolvedValue();
       const req = createReq({ params: { id: '12345678' }, user: { accessType: 1 } });
@@ -273,10 +273,10 @@ describe('paciente.controller', () => {
 
       expect(res.status).toHaveBeenCalledWith(200);
       expect(res.json).toHaveBeenCalledWith(
-        expect.objectContaining({ data: expect.objectContaining({ patientID: '12345678' }) })
+        expect.objectContaining({ data: expect.objectContaining({ participantId: '12345678' }) })
       );
       const jsonArg = res.json.mock.calls[0][0];
-      expect(jsonArg.data.name).toBeUndefined();
+      expect(jsonArg.data.patientName).toBeUndefined();
     });
 
     it('returns full patient data for cadastro role', async () => {
@@ -357,7 +357,7 @@ describe('paciente.controller', () => {
     });
 
     it('returns 400 when trying to change patientID', async () => {
-      const req = createReq({ params: { id: '1' }, body: { patientID: '2' } });
+      const req = createReq({ params: { id: '1' }, body: { participantId: '2' } });
       const res = createRes();
 
       await controller.atualizar(req, res);
@@ -366,9 +366,9 @@ describe('paciente.controller', () => {
     });
 
     it('updates patient and revalidates samples', async () => {
-      vi.spyOn(patientService, 'updatePatient').mockResolvedValue({ patientID: '12345678' });
+      vi.spyOn(patientService, 'updatePatient').mockResolvedValue({ participantId: '12345678' });
       const { freshController, spy } = reloadControllerWithFreshCompliancySpy();
-      const req = createReq({ params: { id: '12345678' }, body: { name: 'Foo' } });
+      const req = createReq({ params: { id: '12345678' }, body: { patientName: 'Foo' } });
       const res = createRes();
 
       await freshController.atualizar(req, res);
@@ -460,7 +460,7 @@ describe('paciente.controller', () => {
     });
 
     it('returns 400 when patientID format is invalid', async () => {
-      const req = createReq({ body: { patientID: 'abc' } });
+      const req = createReq({ body: { participantId: 'abc' } });
       const res = createRes();
 
       await controller.validateID(req, res);
@@ -470,24 +470,24 @@ describe('paciente.controller', () => {
 
     it('returns valid:true when patientID exists', async () => {
       const patientAnonymization = require('../../src/utils/patientAnonymization');
-      vi.spyOn(patientAnonymization, 'validatePatientID').mockResolvedValue(true);
+      vi.spyOn(patientAnonymization, 'validateParticipantId').mockResolvedValue(true);
       vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
       vi.spyOn(auditLogger, 'log').mockResolvedValue();
-      const req = createReq({ body: { patientID: '12345678' } });
+      const req = createReq({ body: { participantId: '12345678' } });
       const res = createRes();
 
       await controller.validateID(req, res);
 
       expect(res.status).toHaveBeenCalledWith(200);
       expect(res.json).toHaveBeenCalledWith(
-        expect.objectContaining({ data: { valid: true, patientID: '12345678' } })
+        expect.objectContaining({ data: { valid: true, participantId: '12345678' } })
       );
     });
 
     it('returns 500 on unexpected error', async () => {
       const patientAnonymization = require('../../src/utils/patientAnonymization');
-      vi.spyOn(patientAnonymization, 'validatePatientID').mockRejectedValue(new Error('boom'));
-      const req = createReq({ body: { patientID: '12345678' } });
+      vi.spyOn(patientAnonymization, 'validateParticipantId').mockRejectedValue(new Error('boom'));
+      const req = createReq({ body: { participantId: '12345678' } });
       const res = createRes();
 
       await controller.validateID(req, res);
@@ -520,7 +520,7 @@ describe('paciente.controller', () => {
       const db = { collection: vi.fn().mockReturnValue(patientsCollection) };
       vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
       vi.spyOn(auditLogger, 'log').mockResolvedValue();
-      const req = createReq({ app: { locals: { db } }, body: { patientID: '12345678' } });
+      const req = createReq({ app: { locals: { db } }, body: { participantId: '12345678' } });
       const res = createRes();
 
       await controller.findForEdit(req, res);
@@ -529,24 +529,24 @@ describe('paciente.controller', () => {
     });
 
     it('returns patient data when found', async () => {
-      const patientsCollection = { findOne: vi.fn().mockResolvedValue({ patientID: '12345678', name: 'Foo' }) };
+      const patientsCollection = { findOne: vi.fn().mockResolvedValue({ participantId: '12345678', patientName: 'Foo' }) };
       const db = { collection: vi.fn().mockReturnValue(patientsCollection) };
       vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
       vi.spyOn(auditLogger, 'log').mockResolvedValue();
-      const req = createReq({ app: { locals: { db } }, body: { patientID: '12345678' } });
+      const req = createReq({ app: { locals: { db } }, body: { participantId: '12345678' } });
       const res = createRes();
 
       await controller.findForEdit(req, res);
 
       expect(res.status).toHaveBeenCalledWith(200);
       expect(res.json).toHaveBeenCalledWith(
-        expect.objectContaining({ data: expect.objectContaining({ patientID: '12345678' }) })
+        expect.objectContaining({ data: expect.objectContaining({ participantId: '12345678' }) })
       );
     });
 
     it('returns 500 on unexpected error', async () => {
       const db = { collection: vi.fn().mockImplementation(() => { throw new Error('boom'); }) };
-      const req = createReq({ app: { locals: { db } }, body: { patientID: '12345678' } });
+      const req = createReq({ app: { locals: { db } }, body: { participantId: '12345678' } });
       const res = createRes();
 
       await controller.findForEdit(req, res);
@@ -705,7 +705,7 @@ describe('paciente.controller', () => {
 
       expect(biomarkerObservationService.createObservation).toHaveBeenCalledWith(
         req.app.locals.db,
-        expect.objectContaining({ patientID: '12345678', source: 'manual', eventType: 'manual', resourceType: 'Observation' })
+        expect.objectContaining({ participantId: '12345678', source: 'manual', eventType: 'manual', resourceType: 'Observation' })
       );
       expect(res.status).toHaveBeenCalledWith(201);
     });
