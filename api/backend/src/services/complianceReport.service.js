@@ -12,6 +12,12 @@ class ComplianceReportService {
     this.db = null;
   }
 
+  _assertReportAvailable(report) {
+    if (!report) {
+      throw new Error('Relatório de conformidade indisponível: dados-base não foram gerados');
+    }
+  }
+
   init(db) {
     this.db = db;
   }
@@ -365,6 +371,7 @@ class ComplianceReportService {
    */
   async exportReportJSON(startDate, endDate) {
     const report = await this.generateComplianceReport(startDate, endDate);
+    this._assertReportAvailable(report);
     return JSON.stringify(report, null, 2);
   }
 
@@ -373,20 +380,7 @@ class ComplianceReportService {
    */
   async exportReportCSV(startDate, endDate) {
     const report = await this.generateComplianceReport(startDate, endDate);
-    if (!report) {
-      return [
-        'Relatório de Conformidade',
-        `Período: ${startDate} a ${endDate}`,
-        'Data de Geração: indisponível',
-        '',
-        'Resumo Executivo',
-        'Score de Conformidade: indisponível',
-        'Total de Alertas: indisponível',
-        'Alertas Críticos: indisponível',
-        'Consentimentos Ativos: indisponível',
-        'Tentativas Bloqueadas: indisponível'
-      ].join('\n');
-    }
+    this._assertReportAvailable(report);
 
     const csv = [
       'Relatório de Conformidade',
@@ -434,6 +428,7 @@ class ComplianceReportService {
     const startDate = new Date(endDate.getTime() - daysBack * 24 * 60 * 60 * 1000);
 
     const report = await this.generateComplianceReport(startDate, endDate);
+    this._assertReportAvailable(report);
 
     return {
       complianceScore: report.complianceScore,

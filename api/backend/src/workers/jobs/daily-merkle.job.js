@@ -15,6 +15,11 @@ const logger = require('../../utils/logger');
 const RUN_HOUR_UTC = 2; // 02:30 UTC
 const RUN_MINUTE_UTC = 30;
 const BACKFILL_DAYS = 7;
+const ENABLE_DAILY_MERKLE_JOB = String(process.env.ENABLE_DAILY_MERKLE_JOB || '').toLowerCase() === 'true';
+
+function isValidMerkleResult(result) {
+  return Boolean(result && result.root && Array.isArray(result.leaves));
+}
 
 function toUtcDateString(date) {
   return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate())).toISOString().slice(0, 10);
@@ -34,10 +39,13 @@ async function recoverMissingDates(db, upToDateInclusive) {
     if (existing) continue;
     logger.info(`[daily-merkle] Recuperando data sem root: ${date}`);
     const result = await integrityService.buildMerkleForDate(date, db, { persistMissing: true });
-    if (result && result.root) {
-      await auditRootService.saveDailyRoot({ date, root: result.root, treeSize: result.leaves.length, db });
-      await anchorV2ForDate(db, date, result);
+    if (!isValidMerkleResult(result)) {
+      logger.warn(`[daily-merkle] Resultado Merkle inválido ao recuperar ${date}; root/leaves ausentes`);
+      continue;
     }
+
+    await auditRootService.saveDailyRoot({ date, root: result.root, treeSize: result.leaves.length, db });
+    await anchorV2ForDate(db, date, result);
   }
 }
 
@@ -57,8 +65,9 @@ async function runOnce() {
     db = await connectDB();
     logger.info(`[daily-merkle] Gerando Merkle Root para ${targetDate}`);
     const result = await integrityService.buildMerkleForDate(targetDate, db, { persistMissing: true });
-    if (!result || !result.root) {
-      logger.warn(`[daily-merkle] Nenhuma root gerada para ${targetDate}`);
+    if (!isValidMerkleResult(result)) {
+      logger.warn(`[daily-merkle] Resultado Merkle inválido para ${targetDate}; job encerrado sem persistência`);
+      return;
     }
 
     await auditRootService.saveDailyRoot({ date: targetDate, root: result.root, treeSize: result.leaves.length, db });
@@ -74,6 +83,10 @@ async function runOnce() {
 }
 
 async function anchorV2ForDate(db, date, result) {
+  if (!isValidMerkleResult(result)) {
+    throw new Error(`[daily-merkle] Resultado Merkle inválido para ancoragem v2 em ${date}`);
+  }
+
   const logId = `audit-${date}`;
   const previous = await db.collection('audit_tree_heads').find({ logId }).sort({ treeSize: -1 }).limit(1).toArray();
   const previousTreeHeadHash = previous[0]?.rootHash || null;
@@ -105,7 +118,9 @@ function scheduleNextRun() {
   }, delay + 1000); // slight buffer
 }
 
-// Auto-start schedule when required
-scheduleNextRun();
+// Auto-start schedule only in explicit worker/runtime mode
+if (ENABLE_DAILY_MERKLE_JOB) {
+  scheduleNextRun();
+}
 
 module.exports = { runOnce, scheduleNextRun };

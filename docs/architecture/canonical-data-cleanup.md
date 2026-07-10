@@ -53,6 +53,14 @@ This branch establishes the foundation of the canonical data contract and remove
 - `frontend/src/views/SampleDetailsPage.tsx`
 - `frontend/src/components/v2/intake/ClinicalIntakeWizard.jsx`
 - services and core modules that still accept transitional aliases
+- legacy Orphanet Vitest route tests were removed in favor of the current `node:test` architecture boundary checks
+- issue #146 was closed as removal of the legacy Vitest suite; canonical `participantId` and `specimenId` contracts remain the only runtime contract and must not be softened for old aliases
+
+## eConsent update deferment
+
+- `POST /update` keeps only the MongoDB quarantine/release side effects for the current key-based consent flow.
+- The route must not emit Neo4j outbox events until a canonical `consentId` exists for that write path.
+- Consent graph projection for this legacy update flow is intentionally deferred until the consent model is redesigned.
 
 ## Deferred cleanup plan
 

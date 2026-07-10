@@ -735,13 +735,11 @@ class ImportService {
       alcoholUse: row.alcoholUse === 'true' || row.alcoholUse === '1',
       asthma: row.asthma === 'true' || row.asthma === '1',
       antibioticUse: row.antibioticUse === 'true' || row.antibioticUse === '1',
-      insulinUse: row.insulinUse === 'true' || row.insulinUse === '1',
-      antiviralUse: row.antiviralUse === 'true' || row.antiviralUse === '1',
-      geneticVariant: row.geneticVariant || null,
-      alphaGal: row.alphaGal ? parseFloat(row.alphaGal) : null,
-      lysoGb3: row.lysoGb3 ? parseFloat(row.lysoGb3) : null,
-      notes: row.notes || null
-    };
+        insulinUse: row.insulinUse === 'true' || row.insulinUse === '1',
+        antiviralUse: row.antiviralUse === 'true' || row.antiviralUse === '1',
+        geneticVariant: row.geneticVariant || null,
+        notes: row.notes || null
+      };
   }
 
   /**

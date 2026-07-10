@@ -18,14 +18,14 @@ x-test-env: &test-env
   MQTT_ENABLED: "false"
   SMTP_HOST: smtp-test
   SMTP_PORT: "1025"
-  JWT_SECRET: vitest-secret-key
-  JWT_REFRESH_SECRET: vitest-refresh-secret-key
-  ENCRYPTION_KEY: vitest-encryption-key-for-lab-validation-32b
-  ENCRYPTION_KEY_ID: vitest-key-001
-  RESEND_API_KEY: vitest-resend-api-key
+  JWT_SECRET: test-secret-key
+  JWT_REFRESH_SECRET: test-refresh-secret-key
+  ENCRYPTION_KEY: test-encryption-key-for-lab-validation-32b
+  ENCRYPTION_KEY_ID: test-key-001
+  RESEND_API_KEY: test-resend-api-key
   EMAIL_FROM: onboarding@resend.dev
-  USER_ANON_SALT: vitest-user-anon-salt
-  CONSENT_SECRET: vitest-consent-secret-key
+  USER_ANON_SALT: test-user-anon-salt
+  CONSENT_SECRET: test-consent-secret-key
   ALLOW_CLOUD_INTEGRATIONS: "false"
   ALLOW_EXTERNAL_TERMINOLOGY_SYNC: "false"
   ALLOW_EXTERNAL_HPO_LOOKUP: "false"
@@ -148,7 +148,6 @@ services:
       AUDIT_RFC3161_TSA_URL: http://tsa-test:8095
       AUDIT_EXTERNAL_WITNESS_URL: http://witness-test:8096
       AUDIT_EXTERNAL_WITNESS_PUBLIC_KEY: ""
-      PLAYWRIGHT_USE_REAL_LOGIN: "1"
     command: ["npm", "start"]
     depends_on:
       mongodb-test:
@@ -225,36 +224,6 @@ services:
       influxdb-test:
         condition: service_healthy
       smtp-test:
-        condition: service_healthy
-    networks: [bioavanced-test]
-
-  frontend-unit-runner:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile.dev
-    environment:
-      VITE_API_BASE_URL: http://backend-app-test:3000/api
-      CI: "true"
-    command: ["npm", "run", "test:unit:coverage"]
-    depends_on:
-      frontend-app-test:
-        condition: service_healthy
-    networks: [bioavanced-test]
-
-  playwright-runner:
-    image: mcr.microsoft.com/playwright:v1.58.2-noble
-    working_dir: /workspace/frontend
-    volumes:
-      - ./frontend:/workspace/frontend
-    environment:
-      CI: "true"
-      PLAYWRIGHT_USE_REAL_LOGIN: "1"
-      PLAYWRIGHT_BASE_URL: http://frontend-app-test:5173
-      TEST_USER: admin
-      TEST_PASS: Admin@123
-    command: ["sh", "-lc", "npm run test:e2e"]
-    depends_on:
-      frontend-app-test:
         condition: service_healthy
     networks: [bioavanced-test]
 

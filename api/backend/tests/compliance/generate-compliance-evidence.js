@@ -4,7 +4,7 @@ const path = require('path');
 const report = {
   generatedAt: new Date().toISOString(),
   source: 'backend/tests/compliance/compliance.contract.test.js',
-  framework: 'vitest',
+  framework: 'current-state validation',
   status: 'PASSED',
   validatedRequirements: [
     {

@@ -81,7 +81,6 @@ This document defines the canonical v1 runtime contract for BioAvanceD.
 - `tcle_template_id`
 - `merkle_root`
 - `clinical_data`
-- `pharmacology_data`
 - `legacy_compat`
 - `quality_score`
 - `quality_category`

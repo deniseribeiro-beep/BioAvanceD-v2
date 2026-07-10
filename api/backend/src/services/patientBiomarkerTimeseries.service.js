@@ -20,10 +20,24 @@ class PatientBiomarkerTimeseriesService {
     const participantId = String(patient.participantId || '').trim();
     if (!participantId) return;
 
-    const alphaGal = this.toNumeric(patient.alphaGal);
-    const lysoGb3 = this.toNumeric(patient.lysoGb3);
+    const biomarkerEntries = Array.isArray(patient.biomarkers)
+      ? patient.biomarkers
+      : Array.isArray(patient.biomarkerObservations)
+        ? patient.biomarkerObservations
+        : [];
 
-    if (alphaGal === null && lysoGb3 === null) {
+    const normalizedEntries = biomarkerEntries
+      .map((entry) => {
+        if (!entry || typeof entry !== 'object') return null;
+        const biomarkerType = String(entry.biomarkerType || entry.type || '').trim();
+        const unit = String(entry.unit || '').trim();
+        const value = this.toNumeric(entry.value);
+        if (!biomarkerType || value === null) return null;
+        return { biomarkerType, unit: unit || null, value };
+      })
+      .filter(Boolean);
+
+    if (normalizedEntries.length === 0) {
       return;
     }
 
@@ -41,12 +55,8 @@ class PatientBiomarkerTimeseriesService {
         point.tag('clinicalUnit', String(patient.clinicalUnit));
       }
 
-      if (alphaGal !== null) {
-        point.floatField('alphaGal', alphaGal);
-      }
-
-      if (lysoGb3 !== null) {
-        point.floatField('lysoGb3', lysoGb3);
+      for (const entry of normalizedEntries) {
+        point.floatField(entry.biomarkerType, entry.value);
       }
 
       point.timestamp(pointTimestamp);
@@ -61,25 +71,12 @@ class PatientBiomarkerTimeseriesService {
       try {
         const hashWrites = [];
 
-        if (alphaGal !== null) {
+        for (const entry of normalizedEntries) {
           hashWrites.push(
             biomarkerIntegrityService.appendBiomarkerHash(db, {
               participantId: participantId,
-              biomarkerType: 'alphaGal',
-              value: alphaGal,
-              timestamp: pointTimestamp,
-              source: 'patient_biomarkers',
-              eventType
-            })
-          );
-        }
-
-        if (lysoGb3 !== null) {
-          hashWrites.push(
-            biomarkerIntegrityService.appendBiomarkerHash(db, {
-              participantId: participantId,
-              biomarkerType: 'lysoGb3',
-              value: lysoGb3,
+              biomarkerType: entry.biomarkerType,
+              value: entry.value,
               timestamp: pointTimestamp,
               source: 'patient_biomarkers',
               eventType
