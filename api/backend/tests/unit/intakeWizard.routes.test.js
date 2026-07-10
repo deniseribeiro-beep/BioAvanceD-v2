@@ -106,7 +106,7 @@ const VALID_PAYLOAD = {
   legalRepresentative: null,
   consent: { consentTemplateId: 'template-1' },
   specimen: { specimenId: 'spec-1', participantId: '12345678', sampleType: 'Sangue', sampleOrigin: 'Hospital A', extractionProtocol: 'EDTA', quantity: 2 },
-  diagnosis: null,
+  diagnosis: { orphaCode: 'ORPHA:123' },
   clinical: {},
   biomarkers: [],
 };
@@ -193,7 +193,10 @@ describe('intakeWizard routes', () => {
       expect(sampleServiceModule.createSample).toHaveBeenCalledTimes(1);
       expect(updateOne).toHaveBeenCalledWith(
         { _id: 'patient-obj-1' },
-        expect.objectContaining({ $addToSet: { linkedSampleIds: 'sample-1' } })
+        expect.objectContaining({
+          $set: expect.objectContaining({ lastClinicalData: expect.objectContaining({ orphaCode: 'ORPHA:123' }) }),
+          $addToSet: { linkedSampleIds: 'sample-1' },
+        })
       );
       expect(auditLoggerModule.log).toHaveBeenCalledWith(
         expect.objectContaining({ action: 'PATIENT_MATCH_UPSERT' })
