@@ -21,7 +21,9 @@ function normalizeString(value) {
 }
 
 function normalizePharmacologyData(raw = {}) {
+  const source = raw && typeof raw === 'object' ? { ...raw } : {};
   return {
+    ...source,
     treatmentStatus: normalizeString(raw.treatmentStatus || raw.treatment_status).toUpperCase(),
     medicationName: normalizeString(raw.medicationName || raw.medication_name || raw.drug_name),
     atcCode: normalizeString(raw.atcCode || raw.atc_code || raw.medication_code).toUpperCase().replace(/^ATC:/i, ''),
