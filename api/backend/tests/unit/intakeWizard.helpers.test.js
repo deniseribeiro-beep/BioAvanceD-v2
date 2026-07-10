@@ -114,4 +114,31 @@ describe('intakeWizard helpers', () => {
     expect(result.recipientEmail).toBe('paciente@example.test');
     expect(result.templateId).toBe('template-42');
   });
+
+  it('resolveMatchedPatient calls the real PatientIdentityService method (regression for #165)', async () => {
+    const insertedDocs = [];
+    const patientsCollection = {
+      findOne: async () => null,
+      insertOne: async (doc) => {
+        insertedDocs.push(doc);
+        return { insertedId: 'patient-object-1' };
+      },
+    };
+    const db = { collection: () => patientsCollection };
+
+    const result = await helpers.resolveMatchedPatient(db, {
+      demographic: {
+        participantId: '12345678',
+        patientName: 'Paciente Teste',
+        birthDate: '2000-01-01',
+        identityDocument: '11122233344',
+      },
+      representativeLegal: {},
+    });
+
+    expect(result.created).toBe(true);
+    expect(result.patient.participantId).toBe('12345678');
+    expect(insertedDocs).toHaveLength(1);
+    expect(insertedDocs[0].participantId).toBe('12345678');
+  });
 });

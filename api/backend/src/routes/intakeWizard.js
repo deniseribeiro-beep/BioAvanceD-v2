@@ -190,7 +190,7 @@ function buildSampleDocumentFromIntake(data = {}, matchedPatient = null) {
   const releaseStatusRaw = normalizeString(sample.lifecycleStatus).toUpperCase();
   const releaseStatus = ['QUARANTINE', 'AVAILABLE', 'BLOCKED'].includes(releaseStatusRaw) ? releaseStatusRaw : 'QUARANTINE';
   const registrationDate = sample.registeredAt || new Date().toISOString();
-  const confirmedPatientID = normalizeString(matchedPatient?.patientID) || resolvePatientID(data);
+  const confirmedPatientID = normalizeString(matchedPatient?.participantId) || resolvePatientID(data);
   const confirmedPatientName = normalizeString(matchedPatient?.patientName || data?.demographic?.patientName);
 
   return {
@@ -220,17 +220,11 @@ async function resolveMatchedPatient(db, data = {}) {
   const demographic = normalizeObject(data?.demographic);
   const representative = normalizeObject(data?.representativeLegal);
 
-  const result = await patientIdentityService.matchOrUpsertPatient(db, {
-    patientID: demographic.patientID || demographic.patientId || demographic.pseudoId,
+  const result = await patientIdentityService.matchOrUpsertParticipant(db, {
+    participantId: demographic.participantId || demographic.patientId || demographic.pseudoId,
     patientName: demographic.patientName,
     birthDate: parseBirthDate(demographic.birthDate),
-    email: normalizeString(demographic.email || representative.email).toLowerCase() || null,
-    sex: normalizeString(demographic.gender || demographic.sex).toUpperCase() || null,
-    cpf: normalizeString(demographic.cpf || demographic.documento) || null,
-    isDeceased: Boolean(demographic.isDeceased),
-    representativeName: normalizeString(representative.name || demographic.representativeName) || null,
-    representativeEmail: normalizeString(representative.email || demographic.representativeEmail).toLowerCase() || null,
-    representativeCpf: normalizeString(representative.cpf || demographic.representativeCpf) || null,
+    identityDocument: normalizeString(demographic.identityDocument || demographic.cpf || demographic.documento) || null,
   });
 
   return result;
@@ -280,7 +274,7 @@ async function ensureConsentEmailSent(payload) {
 }
 
 async function resolveConsentDecision(db, patient) {
-  const patientIDs = buildIdVariants(patient?.patientID, patient?._id?.toString()).map(String);
+  const patientIDs = buildIdVariants(patient?.participantId, patient?._id?.toString()).map(String);
   if (patientIDs.length === 0) {
     const error = new Error('Paciente sem identificador para validar consentimento ativo.');
     error.statusCode = 400;
@@ -557,9 +551,9 @@ async function handleIntakeWizard(req, res) {
     await auditLogger.log({
       action: 'PATIENT_MATCH_UPSERT',
       entity: 'Patient',
-      entityID: matchOutcome?.patient?.patientID || null,
+      entityID: matchOutcome?.patient?.participantId || null,
       resourceType: 'Patient',
-      resourceId: matchOutcome?.patient?.patientID || null,
+      resourceId: matchOutcome?.patient?.participantId || null,
       status: 'success',
       result: 'success',
       severity: 'info',
@@ -570,7 +564,7 @@ async function handleIntakeWizard(req, res) {
         created: Boolean(matchOutcome?.created),
         matched: !Boolean(matchOutcome?.created),
         matchType: matchOutcome?.matchType || null,
-        patientID: matchOutcome?.patient?.patientID || null,
+        patientID: matchOutcome?.patient?.participantId || null,
       },
       req,
       module: 'Cadastro'
@@ -661,7 +655,7 @@ async function handleIntakeWizard(req, res) {
         matched: !matchOutcome.created,
         created: matchOutcome.created,
         matchType: matchOutcome.matchType,
-        patientID: matchOutcome.patient?.patientID || null,
+        patientID: matchOutcome.patient?.participantId || null,
       },
       consent: {
         active: consentDecision.active,

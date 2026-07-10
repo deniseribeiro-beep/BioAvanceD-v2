@@ -33,14 +33,14 @@ const patientIdentityService = require('../../src/services/PatientIdentityServic
 const qualityDomain = require('../../src/services/quality-domain.service');
 
 const MATCHED_PATIENT = {
-  patient: { _id: 'patient-obj-1', patientID: '12345678', patientName: 'Maria Silva' },
+  patient: { _id: 'patient-obj-1', participantId: '12345678', patientName: 'Maria Silva' },
 };
 
 const VALID_ROW = {
   sampleType: 'PLASMA',
   sampleOrigin: 'VENOUS_BLOOD',
   extractionProtocol: 'TUBE_EDTA',
-  patientID: '12345678',
+  participantId: '12345678',
   quantity: '5',
   quality: 'GOOD',
   linkedProject: 'Proj1',
@@ -96,7 +96,7 @@ describe('ImportLGPDService.importSamples', () => {
   beforeEach(() => {
     ({ db, samplesCollection, patientsCollection } = makeDb());
 
-    vi.spyOn(patientIdentityService, 'matchOrUpsertPatient').mockResolvedValue(MATCHED_PATIENT);
+    vi.spyOn(patientIdentityService, 'matchOrUpsertParticipant').mockResolvedValue(MATCHED_PATIENT);
     vi.spyOn(qualityDomain, 'resolveMethodologicalQuality').mockReturnValue({
       governance_status: 1,
       final_grade: 'A',
@@ -110,7 +110,7 @@ describe('ImportLGPDService.importSamples', () => {
   });
 
   it('throws when required sample fields are missing from the headers', async () => {
-    vi.spyOn(service, 'readFile').mockResolvedValue([{ sampleOrigin: 'VENOUS_BLOOD', patientID: '12345678' }]);
+    vi.spyOn(service, 'readFile').mockResolvedValue([{ sampleOrigin: 'VENOUS_BLOOD', participantId: '12345678' }]);
     await expect(
       service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' })
     ).rejects.toThrow(/Campos obrigatórios ausentes/);
@@ -124,7 +124,7 @@ describe('ImportLGPDService.importSamples', () => {
   });
 
   it('records a per-row error when patient identity resolution comes back empty', async () => {
-    patientIdentityService.matchOrUpsertPatient.mockResolvedValue({ patient: null });
+    patientIdentityService.matchOrUpsertParticipant.mockResolvedValue({ patient: null });
     vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW]);
 
     const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' });
@@ -135,8 +135,8 @@ describe('ImportLGPDService.importSamples', () => {
   });
 
   it('records a per-row error when the resolved patientID is not exactly 8 digits', async () => {
-    patientIdentityService.matchOrUpsertPatient.mockResolvedValue({
-      patient: { _id: 'p1', patientID: '123', patientName: 'X' },
+    patientIdentityService.matchOrUpsertParticipant.mockResolvedValue({
+      patient: { _id: 'p1', participantId: '123', patientName: 'X' },
     });
     vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW]);
 

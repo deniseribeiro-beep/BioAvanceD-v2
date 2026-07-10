@@ -744,18 +744,11 @@ class ImportLGPDService {
             sampleData.extractionProtocol = String(groupFields.extractionProtocol).trim();
           }
 
-          const matchedPatient = await participantIdentityService.matchOrUpsertPatient(db, {
+          const matchedPatient = await participantIdentityService.matchOrUpsertParticipant(db, {
             participantId: sampleData.participantId,
             patientName: sampleData.patientName,
             birthDate: sampleData.patientBirthDate,
-            email: sampleData.patientEmail,
-            sex: sampleData.patientSex,
-            cpf: sampleData.patientCpf,
-            isDeceased: sampleData.patientIsDeceased,
-            representativeName: sampleData.representativeName,
-            representativeEmail: sampleData.representativeEmail,
-            representativeCpf: sampleData.representativeCpf,
-            status: 'ACTIVE',
+            identityDocument: sampleData.identityDocument,
           });
 
           sampleData.participantId = String(matchedPatient?.patient?.participantId || '').trim();
