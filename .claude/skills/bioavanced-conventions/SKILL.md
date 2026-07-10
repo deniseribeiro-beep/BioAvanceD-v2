@@ -85,6 +85,23 @@ judgment-call guidance both point back here for the mechanics; don't
 skip the check just because a design-call label already exists on an
 issue, since the label may predate the doc (or predate you finding it).
 
+**For anything touching quality/scoring logic (`rcsScore`, `finalGrade`,
+penalty axes, SPREC codes, `quality.routes.js`,
+`quality-compatibility.service.js`, or the RCS-GOV/MIABIS/SPREC seed data
+in `reference-data-seeding.md`), the ground truth is not in
+`docs/architecture/` — it's `docs/research/cmpb-submission/manuscript/00_Manuscript.tex`**
+(plain LaTeX, readable directly, no unpacking needed), Denise's CMPB
+submission defining the RCS (Ribeiro Classification Score) model: a
+non-compensable governance gate, SPREC-informed weighted penalties per
+biospecimen matrix (fluid/solid), and a deterministic five-level A–E
+grade (confirmed 2026-07-10, while auditing recent fixes for a study
+task — no fix has touched RCS/quality code yet, but a future one will
+need this doc, not the architecture folder, to judge correctness).
+`docs/mestrado/PROJETO-DE-PESQUISA-L2-MESTRADO-DENISE_v5.2.docx` is the
+earlier, broader research-proposal version of the same vision — lower
+priority than the manuscript unless the manuscript is silent on
+something.
+
 ## Git hygiene
 
 - Create a branch per logical unit of work **before the first Edit/Write
