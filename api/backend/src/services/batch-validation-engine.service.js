@@ -862,15 +862,7 @@ class BatchValidationEngine {
 
         const rowResult = dataType === 'samples'
           ? await this.persistSample(db, rawRow, rowNumber)
-          : await this.persistPatient(
-            db,
-            rawRow,
-            rowNumber,
-            {},
-            patientPrediction?.suggestedMapping
-              ? importLGPDService.buildMappedPatientRow(rawRow, patientPrediction.suggestedMapping)
-              : rawRow
-          );
+          : await this.persistPatient(db, rawRow, rowNumber);
 
         result.processedRows += 1;
 
