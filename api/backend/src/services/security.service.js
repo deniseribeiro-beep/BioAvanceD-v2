@@ -369,7 +369,8 @@ class SecurityService {
       // Permissões padrão baseadas em accessType
       const defaultPermissions = {
         '1': { // Usuário Externo
-          viewReports: true
+          viewReports: true,
+          useAssistant: true
         },
         '2': { // Técnico
           createSample: true,

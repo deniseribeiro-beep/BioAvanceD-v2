@@ -208,7 +208,7 @@ src/config/redis.js                               81.76 / 70.45
 src/interface/routes/logs.routes.js               81.81 / 61.19
 src/services/audit-canonicalization.service.js    81.81 / 65.71
 src/controllers/import.controller.js              82.23 / 75.86
-src/services/security.service.js                  82.51 / 72.26   (issue #157 — missing useAssistant key)
+src/services/security.service.js                  82.51 / 72.26
 src/utils/auditLogger.js                          82.65 / 69.60
 src/controllers/import-lgpd.controller.js         82.66 / 54.41
 src/services/batch-validation-engine.service.js   83.52 / 80.39   (issue #162 — ReferenceError bug)
