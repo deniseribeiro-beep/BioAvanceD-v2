@@ -114,7 +114,7 @@ describe('PatientService.resolveClinicalUnitSnapshot', () => {
 });
 
 describe('PatientService.checkIdentifierConflict', () => {
-  it('returns null when neither cpf nor recordNumber is provided', async () => {
+  it('returns null when neither identityDocument nor recordNumber is provided', async () => {
     const db = makeFakeDb();
     const result = await patientService.checkIdentifierConflict(db, {});
     expect(result).toBeNull();
@@ -122,16 +122,16 @@ describe('PatientService.checkIdentifierConflict', () => {
 
   it('returns null when no existing patient matches', async () => {
     const db = makeFakeDb({ patients: makeFakeCollection({ findOne: vi.fn().mockResolvedValue(null) }) });
-    const result = await patientService.checkIdentifierConflict(db, { cpf: '123.456.789-00' });
+    const result = await patientService.checkIdentifierConflict(db, { identityDocument: '123.456.789-00' });
     expect(result).toBeNull();
   });
 
-  it('reports a cpf conflict when the existing patient matches by cpf', async () => {
+  it('reports an identityDocument conflict when the existing patient matches by identityDocument', async () => {
     const db = makeFakeDb({
-      patients: makeFakeCollection({ findOne: vi.fn().mockResolvedValue({ cpf: '12345678900' }) })
+      patients: makeFakeCollection({ findOne: vi.fn().mockResolvedValue({ identityDocument: '12345678900' }) })
     });
-    const result = await patientService.checkIdentifierConflict(db, { cpf: '123.456.789-00' });
-    expect(result).toEqual({ field: 'cpf', value: '12345678900', existing: { cpf: '12345678900' } });
+    const result = await patientService.checkIdentifierConflict(db, { identityDocument: '123.456.789-00' });
+    expect(result).toEqual({ field: 'identityDocument', value: '12345678900', existing: { identityDocument: '12345678900' } });
   });
 
   it('reports a recordNumber conflict when the existing patient matches by recordNumber', async () => {
@@ -144,10 +144,10 @@ describe('PatientService.checkIdentifierConflict', () => {
 
   it('reports a generic identifier conflict when the match is by $or but neither field matches directly', async () => {
     const db = makeFakeDb({
-      patients: makeFakeCollection({ findOne: vi.fn().mockResolvedValue({ cpf: '00000000000', recordNumber: 'OTHER' }) })
+      patients: makeFakeCollection({ findOne: vi.fn().mockResolvedValue({ identityDocument: '00000000000', recordNumber: 'OTHER' }) })
     });
-    const result = await patientService.checkIdentifierConflict(db, { cpf: '11111111111' });
-    expect(result).toEqual({ field: 'identifier', value: null, existing: { cpf: '00000000000', recordNumber: 'OTHER' } });
+    const result = await patientService.checkIdentifierConflict(db, { identityDocument: '11111111111' });
+    expect(result).toEqual({ field: 'identifier', value: null, existing: { identityDocument: '00000000000', recordNumber: 'OTHER' } });
   });
 });
 
@@ -253,7 +253,7 @@ describe('PatientService.applyDeceasedRepresentativeRules', () => {
       isDeceased: false,
       representativeName: 'Someone',
       representativeEmail: 'a@b.com',
-      representativeCpf: '12345678900',
+      representativeIdentityDocument: '12345678900',
       representativePhone: '11999999999'
     };
     patientService.applyDeceasedRepresentativeRules(payload);
@@ -261,15 +261,15 @@ describe('PatientService.applyDeceasedRepresentativeRules', () => {
       isDeceased: false,
       representativeName: null,
       representativeEmail: null,
-      representativeCpf: null,
+      representativeIdentityDocument: null,
       representativePhone: null
     });
   });
 
   it('throws when required representative fields are missing', () => {
-    const payload = { isDeceased: true, representativeName: '', representativeEmail: '', representativeCpf: '', representativePhone: '' };
+    const payload = { isDeceased: true, representativeName: '', representativeEmail: '', representativeIdentityDocument: '', representativePhone: '' };
     expect(() => patientService.applyDeceasedRepresentativeRules(payload))
-      .toThrow('Para paciente falecido, nome, e-mail, CPF e telefone do representante legal são obrigatórios');
+      .toThrow('Para paciente falecido, nome, e-mail, identityDocument e telefone do representante legal são obrigatórios');
   });
 
   it('throws when representative email is invalid', () => {
@@ -277,21 +277,21 @@ describe('PatientService.applyDeceasedRepresentativeRules', () => {
       isDeceased: true,
       representativeName: 'Rep Name',
       representativeEmail: 'not-an-email',
-      representativeCpf: '12345678900',
+      representativeIdentityDocument: '12345678900',
       representativePhone: '11999999999'
     };
     expect(() => patientService.applyDeceasedRepresentativeRules(payload)).toThrow('Email do representante legal inválido');
   });
 
-  it('throws when representative cpf does not have 11 digits', () => {
+  it('throws when representative identityDocument does not have 11 digits', () => {
     const payload = {
       isDeceased: true,
       representativeName: 'Rep Name',
       representativeEmail: 'rep@example.com',
-      representativeCpf: '123',
+      representativeIdentityDocument: '123',
       representativePhone: '11999999999'
     };
-    expect(() => patientService.applyDeceasedRepresentativeRules(payload)).toThrow('CPF do representante legal inválido. Informe 11 dígitos');
+    expect(() => patientService.applyDeceasedRepresentativeRules(payload)).toThrow('identityDocument do representante legal inválido. Informe 11 dígitos');
   });
 
   it('throws when representative phone length is out of range', () => {
@@ -299,7 +299,7 @@ describe('PatientService.applyDeceasedRepresentativeRules', () => {
       isDeceased: true,
       representativeName: 'Rep Name',
       representativeEmail: 'rep@example.com',
-      representativeCpf: '12345678900',
+      representativeIdentityDocument: '12345678900',
       representativePhone: '123'
     };
     expect(() => patientService.applyDeceasedRepresentativeRules(payload)).toThrow('Telefone do representante legal inválido. Informe de 10 a 15 dígitos');
@@ -310,13 +310,13 @@ describe('PatientService.applyDeceasedRepresentativeRules', () => {
       isDeceased: true,
       representativeName: '  Rep Name  ',
       representativeEmail: 'REP@Example.com',
-      representativeCpf: '123.456.789-00',
+      representativeIdentityDocument: '123.456.789-00',
       representativePhone: '(11) 99999-9999'
     };
     patientService.applyDeceasedRepresentativeRules(payload);
     expect(payload.representativeName).toBe('Rep Name');
     expect(payload.representativeEmail).toBe('rep@example.com');
-    expect(payload.representativeCpf).toBe('12345678900');
+    expect(payload.representativeIdentityDocument).toBe('12345678900');
     expect(payload.representativePhone).toBe('11999999999');
   });
 });
