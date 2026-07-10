@@ -16,6 +16,21 @@ issue actually requires.
 
 ## Where the work is tracked
 
+- **`test-merge` label = stale test, not a product bug.** These issues
+  are filed when a native vitest sweep after merging `origin/main`
+  turns up a test whose mocks/fixtures/expectations no longer match
+  product code Denise changed in her own commit (rename, added
+  pre-check, changed response shape, etc.). Confirm the product change
+  is Denise's and intentional with `git log --all -- <file>` /
+  `git show --stat <hash>` before touching anything — if so, the fix is
+  to update the test to match her new behavior, **not** to change
+  product code to match the old test. This is the opposite direction
+  from a normal `bug` pick (fix product code, leave/un-weaken the
+  test); get the direction right before editing (confirmed 2026-07-10,
+  issue #158: `resolveIncident`'s `findOne` pre-check and
+  `postIncidentReview` field were added in Denise's `5ae645e9`
+  cold-chain-quarantine feature commit — the test just hadn't been
+  updated for it).
 - GitHub Issues on `deniseribeiro-beep/BioAvanceD-v2` are the tracker.
   `gh issue list --state open --label bug` is the backlog;
   `--label test-branch` surfaces findings filed from test-loop sessions
