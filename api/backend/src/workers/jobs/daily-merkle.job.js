@@ -15,7 +15,6 @@ const logger = require('../../utils/logger');
 const RUN_HOUR_UTC = 2; // 02:30 UTC
 const RUN_MINUTE_UTC = 30;
 const BACKFILL_DAYS = 7;
-const ENABLE_DAILY_MERKLE_JOB = String(process.env.ENABLE_DAILY_MERKLE_JOB || '').toLowerCase() === 'true';
 
 function isValidMerkleResult(result) {
   return Boolean(result && result.root && Array.isArray(result.leaves));
@@ -118,8 +117,8 @@ function scheduleNextRun() {
   }, delay + 1000); // slight buffer
 }
 
-// Auto-start schedule only in explicit worker/runtime mode
-if (ENABLE_DAILY_MERKLE_JOB) {
+// Auto-start only when executed directly
+if (require.main === module) {
   scheduleNextRun();
 }
 

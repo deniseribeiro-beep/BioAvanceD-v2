@@ -36,7 +36,7 @@ O projeto combina:
 
 - suíte Vitest legada como contrato oficial;
 - suíte Playwright legada como contrato oficial;
-- aliases antigos como `patientID`, `patientId`, `sampleID` e `sampleId` no contrato runtime canônico;
+- aliases antigos como `patientID`, `patientId`, `sampleID` e `sampleId`;
 - coleções legadas como contrato de runtime;
 - suposições Fabry-specific sobre biomarcadores;
 - serviços removidos sem consumidor runtime ativo;
@@ -60,6 +60,7 @@ O projeto combina:
 - Neo4j: projeção e linhagem, alimentada por outbox.
 - InfluxDB: telemetria e séries temporais.
 - Redis: filas, cache e suporte operacional.
+- Worker runtime: `src/workers/worker.js` registra explicitamente o daily Merkle schedule ao iniciar; o módulo do job permanece seguro para importação em testes.
 
 ### Boundary rules
 
@@ -95,7 +96,7 @@ npm --prefix frontend run build
 Notas:
 
 - `test:architecture` usa `node --test`.
-- Vitest e Playwright legados não são mais contrato oficial.
+- Vitest e Playwright legados permanecem fora do contrato atual.
 - As suítes reconstruídas no futuro deverão partir do estado canônico atual.
 
 ## Bootstrap and Seeds
@@ -154,7 +155,7 @@ A documentação não deve afirmar imutabilidade absoluta enquanto as raízes de
 
 - `docs/` reúne documentação técnica de operação, importação, deploy e desenvolvimento.
 - IA/XAI/Assistente Inteligente devem ser tratados como roadmap, não como funcionalidade já entregue.
-- Compatibilidade com aliases legados e coleções antigas não deve ser reintroduzida como contrato oficial.
+- Compatibilidade com aliases legados e coleções antigas não deve ser reintroduzida.
 
 ## Cleanup and Exit
 
