@@ -66,7 +66,12 @@ class ResultWorker {
    */
   async processZip(db, filePath, results, fhirResources) {
     return new Promise((resolve, reject) => {
-      yauzl.open(filePath, { lazyEntries: true }, (err, zipfile) => {
+      // validateEntrySizes: false — some zip writers (e.g. streamed
+      // archives using data descriptors) report an uncompressedSize of 0
+      // in the central directory even though the entry has real content;
+      // yauzl's AssertByteCountStream then throws "too many bytes in the
+      // stream" while decompressing perfectly valid data.
+      yauzl.open(filePath, { lazyEntries: true, validateEntrySizes: false }, (err, zipfile) => {
         if (err) {
           return reject(err);
         }
@@ -93,9 +98,22 @@ class ResultWorker {
                 `temp_${Date.now()}_${entry.fileName}`
               );
               const writeStream = fs.createWriteStream(tempPath);
+              let entryHandled = false;
+
+              readStream.on('error', (streamErr) => {
+                if (entryHandled) return;
+                entryHandled = true;
+                results.errors.push({
+                  error: `Erro ao ler ${entry.fileName}: ${streamErr.message}`,
+                });
+                writeStream.destroy();
+                zipfile.readEntry();
+              });
 
               readStream.pipe(writeStream);
               writeStream.on('close', async () => {
+                if (entryHandled) return;
+                entryHandled = true;
                 try {
                   await this.processFile(db, tempPath, results, fhirResources);
                   fs.unlinkSync(tempPath); // Remove arquivo temporário
