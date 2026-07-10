@@ -106,11 +106,11 @@ const intakeSchema = {
           type: 'object',
           additionalProperties: false,
           properties: {
-            diagnosisName: { type: 'string' },
-            icdCode: { type: 'string' },
-            orphaCode: { type: 'string' },
-            omimCode: { type: 'string' },
-            definition: { type: 'string' }
+            diagnosisName: { type: ['string', 'null'] },
+            icdCode: { type: ['string', 'null'] },
+            orphaCode: { type: ['string', 'null'] },
+            omimCode: { type: ['string', 'null'] },
+            definition: { type: ['string', 'null'] }
           }
         }
       ]
