@@ -96,7 +96,7 @@ describe('sensor.service (non-quarantine paths)', () => {
       expect(result).toEqual({ sensors: [{ sensorId: 'S-1' }], total: 1, limit: 50, skip: 0 });
     });
 
-    it('builds a locationId $or query when locationId filter given', async () => {
+    it('builds a locationId $or/$in query when locationId filter given', async () => {
       const { db, collection } = makeDb();
       const chain = makeFindChain([]);
       collection.find = chain.find;
@@ -105,7 +105,10 @@ describe('sensor.service (non-quarantine paths)', () => {
       await sensorService.listSensors(db, { locationId: 'LOC-1' });
 
       expect(chain.find).toHaveBeenCalledWith({
-        $or: [{ locationId: 'LOC-1' }, { locationID: 'LOC-1' }]
+        $or: [
+          { locationId: { $in: ['LOC-1'] } },
+          { locationID: { $in: ['LOC-1'] } }
+        ]
       });
     });
 
