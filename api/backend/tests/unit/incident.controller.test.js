@@ -352,7 +352,19 @@ describe('incident.controller.acknowledgeIncident', () => {
 });
 
 describe('incident.controller.resolveIncident', () => {
-  it('returns 404 when no incident matches', async () => {
+  it('returns 404 when no incident matches the pre-check findOne', async () => {
+    tempCollection.findOne.mockResolvedValue(null);
+
+    const req = { params: { incidentId: '507f1f77bcf86cd799439011' }, body: { userId: 'u1' } };
+    const res = buildRes();
+
+    await incidentController.resolveIncident(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(404);
+  });
+
+  it('returns 404 when the update matches nothing after the findOne pre-check passed', async () => {
+    tempCollection.findOne.mockResolvedValue({ _id: '507f1f77bcf86cd799439011', sensorKey: 's1' });
     tempCollection.updateOne.mockResolvedValue({ matchedCount: 0 });
 
     const req = { params: { incidentId: '507f1f77bcf86cd799439011' }, body: { userId: 'u1' } };
@@ -364,6 +376,7 @@ describe('incident.controller.resolveIncident', () => {
   });
 
   it('returns 200 and resolves the incident when found', async () => {
+    tempCollection.findOne.mockResolvedValue({ _id: '507f1f77bcf86cd799439011', sensorKey: 's1' });
     tempCollection.updateOne.mockResolvedValue({ matchedCount: 1 });
 
     const req = { params: { incidentId: '507f1f77bcf86cd799439011' }, body: { userId: 'u1' } };
@@ -372,13 +385,16 @@ describe('incident.controller.resolveIncident', () => {
     await incidentController.resolveIncident(req, res);
 
     expect(res.status).toHaveBeenCalledWith(200);
-    expect(res.json).toHaveBeenCalledWith({ success: true, message: 'Incidente resolvido' });
+    const payload = res.json.mock.calls[0][0];
+    expect(payload.success).toBe(true);
+    expect(payload.message).toBe('Incidente resolvido; amostras afetadas permanecem bloqueadas para revisão pós-incidente.');
+    expect(payload.postIncidentReview).toBeDefined();
     const [, update] = tempCollection.updateOne.mock.calls[0];
     expect(update.$set.status).toBe('resolved');
   });
 
-  it('returns 500 when the DB update rejects', async () => {
-    tempCollection.updateOne.mockRejectedValue(new Error('write failed'));
+  it('returns 500 when the findOne pre-check rejects', async () => {
+    tempCollection.findOne.mockRejectedValue(new Error('write failed'));
 
     const req = { params: { incidentId: '507f1f77bcf86cd799439011' }, body: { userId: 'u1' } };
     const res = buildRes();
