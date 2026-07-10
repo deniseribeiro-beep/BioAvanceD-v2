@@ -318,7 +318,15 @@ with `git branch -vv`, then run the merge as its own call.
    `bioavanced-conventions`): `git checkout feature/docker-e2e-backend-integration`,
    `git pull`, `git merge --no-ff fix/<slug> -m "..."`, re-run the
    targeted tests against the merged tree, then
-   `git push origin feature/docker-e2e-backend-integration`. Then delete
+   `git push origin feature/docker-e2e-backend-integration`. If the fix
+   branch has no commits other than the fix itself (branched straight
+   off the integration branch's current tip, nothing else landed on
+   either side since), `git pull` may fast-forward the integration
+   branch straight to the fix commit before the explicit `--no-ff`
+   merge ever runs — there's nothing left to merge at that point. This
+   is fine (single commit, no divergence, same net result); don't
+   re-run `git merge --no-ff` to force a merge commit onto an already-
+   fast-forwarded tree (confirmed 2026-07-10, issue #161). Then delete
    the fix branch, local and remote (`git branch -d fix/<slug>` +
    `git push origin --delete fix/<slug>`) — it's fully absorbed into the
    integration branch at that point. This is distinct from opening a PR
