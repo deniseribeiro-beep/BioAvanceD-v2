@@ -13,16 +13,13 @@ describe('MerkleService - Pharmacology Integrity & Tampering Detection', () => {
   beforeEach(() => {
     validSample = {
       sampleID: 'S-1001',
-      patientID: '12345678',
-      patient_identity: {
-        patient_id: '12345678',
-        patient_name: 'Paciente Teste',
-      },
+      participantId: '12345678',
+      participantName: 'Paciente Teste',
       sprec: {
         specimen_type: 'PLASMA',
         collection_date: '2024-01-15',
       },
-      clinical_data: {
+      clinicalData: {
         orphaCode: 'ORPHA:324',
         cid: 'E75.2',
         biomarkers_values: {
@@ -30,11 +27,11 @@ describe('MerkleService - Pharmacology Integrity & Tampering Detection', () => {
           'Atividade de Alfa-galactosidase A': '2.1',
         },
       },
-      pharmacology_data: {
-        treatment_status: 'ON_TREATMENT',
-        drug_name: 'Migalastat',
-        atc_code: 'A16AX27',
-        atc_level_1: 'A',
+      pharmacologyData: {
+        treatmentStatus: 'ON_TREATMENT',
+        medicationName: 'Migalastat',
+        atcCode: 'A16AX27',
+        atcClass: 'A',
       },
     };
   });
@@ -48,15 +45,15 @@ describe('MerkleService - Pharmacology Integrity & Tampering Detection', () => {
       expect(hash1).toMatch(/^[a-f0-9]{64}$/); // 64-char hex SHA256
     });
 
-    it('deve incluir todos os campos de pharmacology_data no hash', () => {
+    it('deve incluir todos os campos de pharmacologyData no hash', () => {
       const hash1 = generateSampleHash(validSample);
 
-      // Altere cada campo de pharmacology_data individualmente
+      // Altere cada campo de pharmacologyData individualmente
       const tamperedSamples = [
-        { ...validSample, pharmacology_data: { ...validSample.pharmacology_data, treatment_status: 'NAIVE' } },
-        { ...validSample, pharmacology_data: { ...validSample.pharmacology_data, drug_name: 'Ataluren' } },
-        { ...validSample, pharmacology_data: { ...validSample.pharmacology_data, atc_code: 'C01BD01' } },
-        { ...validSample, pharmacology_data: { ...validSample.pharmacology_data, atc_level_1: 'C' } },
+        { ...validSample, pharmacologyData: { ...validSample.pharmacologyData, treatmentStatus: 'NAIVE' } },
+        { ...validSample, pharmacologyData: { ...validSample.pharmacologyData, medicationName: 'Ataluren' } },
+        { ...validSample, pharmacologyData: { ...validSample.pharmacologyData, atcCode: 'C01BD01' } },
+        { ...validSample, pharmacologyData: { ...validSample.pharmacologyData, atcClass: 'C' } },
       ];
 
       tamperedSamples.forEach((tampered) => {
@@ -65,14 +62,14 @@ describe('MerkleService - Pharmacology Integrity & Tampering Detection', () => {
       });
     });
 
-    it('deve ser sensível a alterações no atc_code', () => {
+    it('deve ser sensível a alterações no atcCode', () => {
       const hash1 = generateSampleHash(validSample);
 
       const tampered = {
         ...validSample,
-        pharmacology_data: {
-          ...validSample.pharmacology_data,
-          atc_code: 'A16AX28', // Mudança de 1 dígito
+        pharmacologyData: {
+          ...validSample.pharmacologyData,
+          atcCode: 'A16AX28', // Mudança de 1 dígito
         },
       };
 
@@ -80,14 +77,14 @@ describe('MerkleService - Pharmacology Integrity & Tampering Detection', () => {
       expect(hash2).not.toBe(hash1);
     });
 
-    it('deve ser sensível a alterações no drug_name', () => {
+    it('deve ser sensível a alterações no medicationName', () => {
       const hash1 = generateSampleHash(validSample);
 
       const tampered = {
         ...validSample,
-        pharmacology_data: {
-          ...validSample.pharmacology_data,
-          drug_name: 'Migalastat Hydrochloride', // Nome alterado
+        pharmacologyData: {
+          ...validSample.pharmacologyData,
+          medicationName: 'Migalastat Hydrochloride', // Nome alterado
         },
       };
 
@@ -98,17 +95,17 @@ describe('MerkleService - Pharmacology Integrity & Tampering Detection', () => {
     it('deve normalizar ATC codes removendo prefixo "ATC:"', () => {
       const sample1 = {
         ...validSample,
-        pharmacology_data: {
-          ...validSample.pharmacology_data,
-          atc_code: 'A16AX27',
+        pharmacologyData: {
+          ...validSample.pharmacologyData,
+          atcCode: 'A16AX27',
         },
       };
 
       const sample2 = {
         ...validSample,
-        pharmacology_data: {
-          ...validSample.pharmacology_data,
-          atc_code: 'ATC:A16AX27', // Com prefixo
+        pharmacologyData: {
+          ...validSample.pharmacologyData,
+          atcCode: 'ATC:A16AX27', // Com prefixo
         },
       };
 
@@ -120,12 +117,12 @@ describe('MerkleService - Pharmacology Integrity & Tampering Detection', () => {
   });
 
   describe('Tampering detection scenarios', () => {
-    it('Cenário: Alterar um valor de atc_code diretamente no mock - deve quebrar Merkle Root', () => {
+    it('Cenário: Alterar um valor de atcCode diretamente no mock - deve quebrar Merkle Root', () => {
       const originalHash = generateSampleHash(validSample);
 
       // Simular tampering no banco de dados
       const tamperedSample = JSON.parse(JSON.stringify(validSample));
-      tamperedSample.pharmacology_data.atc_code = 'C01AA01'; // Valor completamente diferente
+      tamperedSample.pharmacologyData.atcCode = 'C01AA01'; // Valor completamente diferente
 
       const tamperedHash = generateSampleHash(tamperedSample);
 
@@ -138,13 +135,13 @@ describe('MerkleService - Pharmacology Integrity & Tampering Detection', () => {
       expect(originalHash).not.toEqual(tamperedHash);
     });
 
-    it('deve detectar adição de novo campo em pharmacology_data', () => {
+    it('deve detectar adição de novo campo em pharmacologyData', () => {
       const hash1 = generateSampleHash(validSample);
 
       const withNewField = {
         ...validSample,
-        pharmacology_data: {
-          ...validSample.pharmacology_data,
+        pharmacologyData: {
+          ...validSample.pharmacologyData,
           custom_field: 'malicious_value',
         },
       };
@@ -153,15 +150,15 @@ describe('MerkleService - Pharmacology Integrity & Tampering Detection', () => {
       expect(hash2).not.toBe(hash1);
     });
 
-    it('deve detectar remoção de campo em pharmacology_data', () => {
+    it('deve detectar remoção de campo em pharmacologyData', () => {
       const hash1 = generateSampleHash(validSample);
 
       const withoutField = {
         ...validSample,
-        pharmacology_data: {
-          treatment_status: validSample.pharmacology_data.treatment_status,
-          drug_name: validSample.pharmacology_data.drug_name,
-          // Faltando atc_code e atc_level_1
+        pharmacologyData: {
+          treatmentStatus: validSample.pharmacologyData.treatmentStatus,
+          medicationName: validSample.pharmacologyData.medicationName,
+          // Faltando atcCode e atcClass
         },
       };
 
@@ -169,13 +166,13 @@ describe('MerkleService - Pharmacology Integrity & Tampering Detection', () => {
       expect(hash2).not.toBe(hash1);
     });
 
-    it('deve detectar alteração em clinical_data que afeta hash geral', () => {
+    it('deve detectar alteração em clinicalData que afeta hash geral', () => {
       const hash1 = generateSampleHash(validSample);
 
       const tamperedClinical = {
         ...validSample,
-        clinical_data: {
-          ...validSample.clinical_data,
+        clinicalData: {
+          ...validSample.clinicalData,
           'Lyso-Gb3': '999.9', // Valor suspeito alterado
         },
       };
@@ -184,15 +181,13 @@ describe('MerkleService - Pharmacology Integrity & Tampering Detection', () => {
       expect(hash2).not.toBe(hash1);
     });
 
-    it('deve detectar alteração em patient_identity', () => {
+    it('deve detectar alteração em participant identity', () => {
       const hash1 = generateSampleHash(validSample);
 
       const tamperedIdentity = {
         ...validSample,
-        patient_identity: {
-          patient_id: '99999999', // Paciente alterado
-          patient_name: 'Outro Paciente',
-        },
+        participantId: '99999999', // Paciente alterado
+        participantName: 'Outro Paciente',
       };
 
       const hash2 = generateSampleHash(tamperedIdentity);
@@ -204,22 +199,22 @@ describe('MerkleService - Pharmacology Integrity & Tampering Detection', () => {
     it('deve serializar de forma determinística independente da ordem das chaves', () => {
       const sample1 = {
         sampleID: 'S-1',
-        patientID: '12345678',
-        pharmacology_data: {
-          atc_code: 'A16AX27',
-          drug_name: 'Migalastat',
-          treatment_status: 'ON_TREATMENT',
-          atc_level_1: 'A',
+        participantId: '12345678',
+        pharmacologyData: {
+          atcCode: 'A16AX27',
+          medicationName: 'Migalastat',
+          treatmentStatus: 'ON_TREATMENT',
+          atcClass: 'A',
         },
       };
 
       const sample2 = {
-        patientID: '12345678',
-        pharmacology_data: {
-          drug_name: 'Migalastat',
-          atc_level_1: 'A',
-          atc_code: 'A16AX27',
-          treatment_status: 'ON_TREATMENT',
+        participantId: '12345678',
+        pharmacologyData: {
+          medicationName: 'Migalastat',
+          atcClass: 'A',
+          atcCode: 'A16AX27',
+          treatmentStatus: 'ON_TREATMENT',
         },
         sampleID: 'S-1',
       };
@@ -232,7 +227,7 @@ describe('MerkleService - Pharmacology Integrity & Tampering Detection', () => {
       const sample2 = JSON.parse(JSON.stringify(validSample));
 
       // Se mudar o tratamento para um diferente
-      sample2.pharmacology_data.treatment_status = 'TREATED';
+      sample2.pharmacologyData.treatmentStatus = 'TREATED';
 
       expect(generateSampleHash(sample1)).not.toBe(generateSampleHash(sample2));
     });
@@ -246,25 +241,25 @@ describe('MerkleService - Pharmacology Integrity & Tampering Detection', () => {
       expect(hash1).toBe(hash2);
     });
 
-    it('deve falhar integridade se clinical_data OU pharmacology_data for alterada', () => {
+    it('deve falhar integridade se clinicalData OU pharmacologyData for alterada', () => {
       const originalHash = buildClinicalPharmacologyHash(validSample);
 
-      // Alterar clinical_data
+      // Alterar clinicalData
       const clinicalTampered = {
         ...validSample,
-        clinical_data: {
-          ...validSample.clinical_data,
+        clinicalData: {
+          ...validSample.clinicalData,
           cid: 'E75.9', // Código alterado
         },
       };
       expect(buildClinicalPharmacologyHash(clinicalTampered)).not.toBe(originalHash);
 
-      // Alterar pharmacology_data
+      // Alterar pharmacologyData
       const pharmacoTampered = {
         ...validSample,
-        pharmacology_data: {
-          ...validSample.pharmacology_data,
-          atc_code: 'C01AA01', // Código alterado
+        pharmacologyData: {
+          ...validSample.pharmacologyData,
+          atcCode: 'C01AA01', // Código alterado
         },
       };
       expect(buildClinicalPharmacologyHash(pharmacoTampered)).not.toBe(originalHash);
@@ -272,20 +267,20 @@ describe('MerkleService - Pharmacology Integrity & Tampering Detection', () => {
   });
 
   describe('Edge cases', () => {
-    it('deve lidar com null/undefined em pharmacology_data', () => {
+    it('deve lidar com null/undefined em pharmacologyData', () => {
       const sample1 = {
         ...validSample,
-        pharmacology_data: null,
+        pharmacologyData: null,
       };
 
       const sample2 = {
         ...validSample,
-        pharmacology_data: undefined,
+        pharmacologyData: undefined,
       };
 
       const sample3 = {
         ...validSample,
-        pharmacology_data: {},
+        pharmacologyData: {},
       };
 
       const hash1 = generateSampleHash(sample1);

@@ -36,29 +36,30 @@ describe('merkleTree utils', () => {
 
 describe('MerkleService.generateSampleHash', () => {
   const baseSample = {
-    patient_identity: { patient_id: 'P1', patient_name: 'John' },
-    clinical_data: { foo: 'bar' },
+    participantId: 'P1',
+    participantName: 'John',
+    clinicalData: { foo: 'bar' },
     sprec: { sprec_field: 1 },
-    pharmacology_data: { drug_name: 'aspirin', atc_code: 'ATC:A01' },
-    rcs_score: 0.95,
-    final_grade: 'A',
-    calculation_trace: [{ step: 'x' }],
-    axis_penalties: { axis1: 0 }
+    pharmacologyData: { medicationName: 'aspirin', atcCode: 'ATC:A01' },
+    rcsScore: 0.95,
+    finalGrade: 'A',
+    calculationTrace: [{ step: 'x' }],
+    axisPenalties: { axis1: 0 }
   };
 
-  it('changes when pharmacology_data changes', () => {
+  it('changes when pharmacologyData changes', () => {
     const h1 = generateSampleHash(baseSample);
-    const s2 = { ...baseSample, pharmacology_data: { drug_name: 'ibuprofen', atc_code: 'ATC:B01' } };
+    const s2 = { ...baseSample, pharmacologyData: { medicationName: 'ibuprofen', atcCode: 'ATC:B01' } };
     const h2 = generateSampleHash(s2);
     expect(h1).not.toBe(h2);
   });
 
-  it('changes when rcs-related fields change (rcs_score, final_grade, calculation_trace, axis_penalties)', () => {
+  it('changes when rcs-related fields change (rcsScore, finalGrade, calculationTrace, axisPenalties)', () => {
     const baseHash = generateSampleHash(baseSample);
-    const sRcs = { ...baseSample, rcs_score: 0.5 };
-    const sGrade = { ...baseSample, final_grade: 'B' };
-    const sTrace = { ...baseSample, calculation_trace: [{ step: 'y' }] };
-    const sAxis = { ...baseSample, axis_penalties: { axis1: 1 } };
+    const sRcs = { ...baseSample, rcsScore: 0.5 };
+    const sGrade = { ...baseSample, finalGrade: 'B' };
+    const sTrace = { ...baseSample, calculationTrace: [{ step: 'y' }] };
+    const sAxis = { ...baseSample, axisPenalties: { axis1: 1 } };
 
     expect(generateSampleHash(sRcs)).not.toBe(baseHash);
     expect(generateSampleHash(sGrade)).not.toBe(baseHash);
@@ -75,7 +76,7 @@ describe('MerkleService.generateSampleHash', () => {
   it('detects relevant payload changes', () => {
     const baseHash = generateSampleHash(baseSample);
     const modified = JSON.parse(JSON.stringify(baseSample));
-    modified.clinical_data.new_field = 'x';
+    modified.clinicalData.new_field = 'x';
     expect(generateSampleHash(modified)).not.toBe(baseHash);
   });
 });
