@@ -31,7 +31,7 @@ function loadRoute({
   buildConsentMetadata,
   buildConsentLink,
   sendConsentEmail,
-  matchOrUpsertPatient,
+  matchOrUpsertParticipant,
   generateSampleHash,
   getCollectionImpl,
   resolveMethodologicalQuality,
@@ -44,11 +44,13 @@ function loadRoute({
   notificationServiceModule.sendConsentEmail = sendConsentEmail || vi.fn().mockResolvedValue({ success: true, channel: 'email' });
 
   const patientIdentityServiceModule = require(patientIdentityServicePath);
-  patientIdentityServiceModule.matchOrUpsertPatient = matchOrUpsertPatient || vi.fn().mockResolvedValue({
-    created: true,
-    matchType: 'new',
-    patient: { _id: 'patient-obj-1', patientID: '12345678' },
-  });
+  vi.spyOn(patientIdentityServiceModule, 'matchOrUpsertParticipant').mockImplementation(
+    matchOrUpsertParticipant || vi.fn().mockResolvedValue({
+      created: true,
+      matchType: 'new',
+      patient: { _id: 'patient-obj-1', participantId: '12345678' },
+    })
+  );
 
   const merkleServiceModule = require(merkleServicePath);
   merkleServiceModule.generateSampleHash = generateSampleHash || vi.fn(() => 'hash-1');
@@ -87,7 +89,7 @@ function buildApp(router, db = {}) {
 }
 
 const VALID_PAYLOAD = {
-  demographic: { patientName: 'Paciente Teste', patientID: '12345678', email: 'paciente@example.test' },
+  demographic: { patientName: 'Paciente Teste', participantId: '12345678', email: 'paciente@example.test' },
   consent: { tcle_template_id: 'template-1' },
   sample: { sampleType: 'Sangue', sampleOrigin: 'Hospital A', extractionProtocol: 'EDTA', quantity: 2 },
 };
