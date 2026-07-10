@@ -134,7 +134,7 @@ class MqttTelemetryService {
         return;
       }
 
-      if (payloadSignature && !signatureVerified && signatureRequired) {
+      if (payloadSignature && !signatureVerified) {
         await mqttIngestionAuditService.append(db, {
           topic,
           payloadHash,
@@ -146,10 +146,6 @@ class MqttTelemetryService {
         });
         logger.warn('[ISO20387][MQTT] Payload rejeitado: assinatura inválida');
         return;
-      }
-
-      if (payloadSignature && !signatureVerified) {
-        logger.warn('[ISO20387][MQTT] Assinatura inválida recebida, mas assinatura não é obrigatória; seguindo processamento');
       }
 
       const temperatureData = {
