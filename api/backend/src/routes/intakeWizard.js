@@ -606,7 +606,7 @@ async function handleIntakeWizard(req, res) {
       { _id: matchOutcome.patient._id },
       {
         $set: {
-          lastClinicalData: sampleToPersist.clinical_data || {},
+          lastClinicalData: sampleToPersist.clinicalData || {},
           updatedAt: new Date(),
         },
         $addToSet: {
