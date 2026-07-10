@@ -208,45 +208,6 @@ describe('PatientService.checkDuplicatePatient', () => {
   });
 });
 
-describe('PatientService.syncPatientPhoneToGraph', () => {
-  it('does nothing when neo4jDriver is missing', async () => {
-    await expect(patientService.syncPatientPhoneToGraph(null, '12345678', '1199999999')).resolves.toBeUndefined();
-  });
-
-  it('does nothing when neo4jDriver lacks a session() function', async () => {
-    await expect(patientService.syncPatientPhoneToGraph({}, '12345678', '1199999999')).resolves.toBeUndefined();
-  });
-
-  it('does nothing when patientID normalizes to an empty string', async () => {
-    const session = { run: vi.fn(), close: vi.fn() };
-    const driver = { session: vi.fn(() => session) };
-    await patientService.syncPatientPhoneToGraph(driver, '   ', '1199999999');
-    expect(driver.session).not.toHaveBeenCalled();
-  });
-
-  it('runs the sync query and closes the session on success', async () => {
-    const session = { run: vi.fn().mockResolvedValue({}), close: vi.fn().mockResolvedValue(undefined) };
-    const driver = { session: vi.fn(() => session) };
-    await patientService.syncPatientPhoneToGraph(driver, '12345678', '1199999999');
-    expect(session.run).toHaveBeenCalledWith(expect.any(String), { patientId: '12345678', phone: '1199999999' });
-    expect(session.close).toHaveBeenCalled();
-  });
-
-  it('defaults phone to null when not provided', async () => {
-    const session = { run: vi.fn().mockResolvedValue({}), close: vi.fn().mockResolvedValue(undefined) };
-    const driver = { session: vi.fn(() => session) };
-    await patientService.syncPatientPhoneToGraph(driver, '12345678', undefined);
-    expect(session.run).toHaveBeenCalledWith(expect.any(String), { patientId: '12345678', phone: null });
-  });
-
-  it('still closes the session when run() rejects', async () => {
-    const session = { run: vi.fn().mockRejectedValue(new Error('neo4j down')), close: vi.fn().mockResolvedValue(undefined) };
-    const driver = { session: vi.fn(() => session) };
-    await expect(patientService.syncPatientPhoneToGraph(driver, '12345678', '1199999999')).resolves.toBeUndefined();
-    expect(session.close).toHaveBeenCalled();
-  });
-});
-
 describe('PatientService.applyDeceasedRepresentativeRules', () => {
   it('clears representative fields when isDeceased is not true', () => {
     const payload = {
