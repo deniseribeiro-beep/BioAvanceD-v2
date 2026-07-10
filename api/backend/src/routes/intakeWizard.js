@@ -111,7 +111,7 @@ function resolveRecipientAndTemplate(data = {}) {
   const sample = data?.sample || {};
 
   const patientName = normalizeString(demographic.patientName);
-  const patientId = normalizeString(demographic.pseudoId || demographic.patientID || demographic.cpf || data?.pseudoId);
+  const participantId = normalizeString(demographic.participantId || sample.participantId || data?.participantId);
   const patientEmail = normalizeString(demographic.email);
   const representativeEmail = normalizeString(representativeLegal.email);
   const recipientEmail = patientEmail || representativeEmail;
@@ -119,7 +119,7 @@ function resolveRecipientAndTemplate(data = {}) {
 
   return {
     patientName,
-    patientId,
+    participantId,
     recipientEmail,
     templateId
   };
@@ -128,19 +128,13 @@ function resolveRecipientAndTemplate(data = {}) {
 function resolvePatientID(data = {}) {
   const demographic = normalizeObject(data?.demographic);
   const sample = normalizeObject(data?.sample);
-  const patientID = normalizeString(
-    demographic.patientID
-    || demographic.patientId
-    || demographic.pseudoId
-    || sample.patientID
-    || sample.patientId
-  );
+  const participantId = normalizeString(demographic.participantId || sample.participantId || data?.participantId);
 
-  if (/^\d{8}$/.test(patientID)) {
-    return patientID;
+  if (/^\d{8}$/.test(participantId)) {
+    return participantId;
   }
 
-  return buildFallbackPatientID();
+  return participantId || buildFallbackPatientID();
 }
 
 function buildClinicalData(data = {}) {
@@ -160,8 +154,7 @@ function buildClinicalData(data = {}) {
 
 function buildPharmacologyData(data = {}) {
   const clinical = normalizeObject(data?.clinical);
-  const integrity = normalizeObject(data?.integrity);
-  const pharmacology = normalizeObject(clinical.pharmacologyData || integrity.pharmacology_data);
+  const pharmacology = normalizeObject(clinical.pharmacologyData);
 
   const treatmentStatusRaw = normalizeString(pharmacology.treatmentStatus).toUpperCase();
   const treatmentStatus = ['NAIVE', 'TREATED', 'ON_TREATMENT', 'WASHOUT'].includes(treatmentStatusRaw) ? treatmentStatusRaw : '';
@@ -190,7 +183,7 @@ function buildSampleDocumentFromIntake(data = {}, matchedPatient = null) {
   const releaseStatusRaw = normalizeString(sample.lifecycleStatus).toUpperCase();
   const releaseStatus = ['QUARANTINE', 'AVAILABLE', 'BLOCKED'].includes(releaseStatusRaw) ? releaseStatusRaw : 'QUARANTINE';
   const registrationDate = sample.registeredAt || new Date().toISOString();
-  const confirmedPatientID = normalizeString(matchedPatient?.patientID) || resolvePatientID(data);
+  const confirmedPatientID = normalizeString(matchedPatient?.participantId) || resolvePatientID(data);
   const confirmedPatientName = normalizeString(matchedPatient?.patientName || data?.demographic?.patientName);
 
   return {
@@ -219,9 +212,10 @@ function buildSampleDocumentFromIntake(data = {}, matchedPatient = null) {
 async function resolveMatchedPatient(db, data = {}) {
   const demographic = normalizeObject(data?.demographic);
   const representative = normalizeObject(data?.representativeLegal);
+  const sample = normalizeObject(data?.sample);
 
-  const result = await patientIdentityService.matchOrUpsertPatient(db, {
-    patientID: demographic.patientID || demographic.patientId || demographic.pseudoId,
+  const result = await patientIdentityService.matchOrUpsertParticipant(db, {
+    participantId: demographic.participantId || sample.participantId || data?.participantId,
     patientName: demographic.patientName,
     birthDate: parseBirthDate(demographic.birthDate),
     email: normalizeString(demographic.email || representative.email).toLowerCase() || null,
@@ -237,7 +231,7 @@ async function resolveMatchedPatient(db, data = {}) {
 }
 
 async function ensureConsentEmailSent(payload) {
-  const { patientName, patientId, recipientEmail, templateId } = resolveRecipientAndTemplate(payload);
+  const { patientName, participantId, recipientEmail, templateId } = resolveRecipientAndTemplate(payload);
 
   if (!patientName) {
     return { ok: false, status: 400, message: 'Nome do paciente é obrigatório para envio do TCLE.' };
@@ -252,7 +246,7 @@ async function ensureConsentEmailSent(payload) {
   }
 
   const patientData = {
-    patientID: patientId || `INTAKE-${Date.now()}`,
+    participantId: participantId || `INTAKE-${Date.now()}`,
     patientName,
     email: recipientEmail,
   };

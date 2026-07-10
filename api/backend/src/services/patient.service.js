@@ -4,8 +4,6 @@ const logger = require('../utils/logger');
 const { generateUniqueParticipantId, sanitizePatientForLogs } = require('../utils/patientAnonymization');
 const { encryptValue, decryptValue } = require('../utils/fieldEncryption');
 const notificationService = require('./notification.service');
-const patientBiomarkerTimeseriesService = require('./patientBiomarkerTimeseries.service');
-const biomarkerObservationService = require('./biomarker-observation.service');
 const { getCollection } = require('../utils/collectionResolver');
 
 const indexedPatientCollections = new Set();
@@ -15,51 +13,8 @@ const indexedPatientCollections = new Set();
  * RF005 - Cadastro de Paciente com Anonimização LGPD
  */
 class PatientService {
-  async createBiomarkerObservationsFromPatient(db, patient, eventType = 'manual') {
-    if (!db || !patient) return;
-
-    const participantId = String(patient.participantId || '').trim();
-    if (!/^\d{8}$/.test(participantId)) return;
-
-    const collectedAt = patient.updatedAt || patient.createdAt || new Date();
-
-    const observationInputs = [
-      {
-        biomarkerType: 'alphaGal',
-        value: patient.alphaGal,
-        unit: 'U/mL'
-      },
-      {
-        biomarkerType: 'lysoGb3',
-        value: patient.lysoGb3,
-        unit: 'ng/mL'
-      }
-    ];
-
-    for (const input of observationInputs) {
-      if (input.value === undefined || input.value === null || input.value === '') continue;
-      const numericValue = Number(input.value);
-      if (!Number.isFinite(numericValue) || numericValue < 0) continue;
-
-      await biomarkerObservationService.createObservation(db, {
-        participantId,
-        biomarkerType: input.biomarkerType,
-        value: numericValue,
-        unit: input.unit,
-        collectedAt,
-        status: 'final',
-        source: 'patient',
-        eventType,
-        linkedResourceType: 'Patient',
-        linkedResourceId: participantId
-      });
-    }
-  }
-
   getEncryptedFieldMap() {
     return {
-      alphaGal: 'alphaGalEncrypted',
-      lysoGb3: 'lysoGb3Encrypted',
       representativeIdentityDocument: 'representativeIdentityDocumentEncrypted'
     };
   }
@@ -541,22 +496,6 @@ class PatientService {
       const sanitizedData = sanitizePatientForLogs(patient);
       logger.info('Paciente criado:', sanitizedData);
 
-      if (options.skipBiomarkerArtifacts !== true) {
-        await patientBiomarkerTimeseriesService.writePatientBiomarkers({
-          db,
-          patient: {
-            ...patient,
-            _id: result.insertedId
-          },
-          eventType: 'create'
-        });
-
-        await this.createBiomarkerObservationsFromPatient(db, {
-          ...patient,
-          _id: result.insertedId
-        }, 'create');
-      }
-
       // Retorna paciente com ID gerado
       return {
         _id: result.insertedId,
@@ -839,14 +778,6 @@ class PatientService {
 
       const updatedPatient = await patientsCollection.findOne(query);
       const decryptedUpdatedPatient = this.decryptSensitivePatientFields(updatedPatient);
-
-      await patientBiomarkerTimeseriesService.writePatientBiomarkers({
-        db,
-        patient: decryptedUpdatedPatient,
-        eventType: 'update'
-      });
-
-      await this.createBiomarkerObservationsFromPatient(db, decryptedUpdatedPatient, 'update');
 
       return { success: true };
     } catch (error) {

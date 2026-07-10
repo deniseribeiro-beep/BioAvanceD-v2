@@ -44,12 +44,6 @@ router.post('/update', async (req, res) => {
   try {
     const payload = jwt.verify(token, CONSENT_SECRET);
     const participantId = payload.participantId;
-    // Fluxo canônico: persistência Mongo é a origem; projeção Neo4j ocorre pela outbox.
-    const consentService = require('../services/consent.service');
-    const db = req.app.locals.mongoDb || req.app.locals.db;
-    if (db && typeof consentService?.recordConsentProjectionEvent === 'function') {
-      await consentService.recordConsentProjectionEvent(db, { participantId, consents });
-    }
 
     // Se algum consentimento foi revogado, coloca amostras em quarentena
     if (consents.some(c => c.status === 'REVOKED')) {

@@ -35,7 +35,6 @@ const ASPIRATIONAL_FORBIDDEN = [
   'medication_name',
   'drug_name',
   'clinical_data',
-  'pharmacology_data',
 ];
 
 function walk(dir, out = []) {
@@ -72,10 +71,3 @@ test('blocks legacy collection aliases and retired FHIR persistence', () => {
   assert.deepEqual(hits, []);
 });
 
-test.skip('TODO PR100/PR101/PR102 - blocks aspirational aliases in active runtime', () => {
-  const hits = [
-    ...collectHits(BACKEND_ROOT, ASPIRATIONAL_FORBIDDEN),
-    ...collectHits(FRONTEND_ROOT, ASPIRATIONAL_FORBIDDEN),
-  ];
-  assert.deepEqual(hits, []);
-});

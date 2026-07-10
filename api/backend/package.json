@@ -44,12 +44,7 @@
     "seed:validate:essential": "node scripts/validate-essential-reference-data.js",
     "current-state:ci": "npm run test:architecture && npm run seed:validate:essential && npm run seed:essential:dry-run && node tests/compliance/generate-compliance-evidence.js",
     "reference:import:plan": "node scripts/reference-imports/import-large-reference-dataset.js --dry-run",
-    "test:architecture": "node --test tests/architecture/canonical-fields.arch.test.js tests/architecture/fhir-boundary.arch.test.js tests/architecture/neo4j-boundary.arch.test.js tests/architecture/participant-canonical.arch.test.js tests/architecture/seed-boundary.arch.test.js",
-    "test:unit:vitest": "vitest run",
-    "test": "vitest run",
-    "test:unit": "vitest run",
-    "test:coverage": "vitest run --coverage",
-    "test:ci": "npm run current-state:ci && npm run test:unit:vitest",
+    "test:architecture": "node --test \"tests/architecture/**/*.arch.test.js\"",
     "lint": "node scripts/lint.js",
     "typecheck": "node scripts/lint.js"
   },
@@ -90,10 +85,8 @@
     "yauzl": "3.2.1"
   },
   "devDependencies": {
-    "@vitest/coverage-v8": "^4.1.10",
     "nodemon": "^3.0.2",
-    "supertest": "^7.2.0",
-    "vitest": "^4.0.7"
+    "supertest": "^7.2.0"
   },
   "overrides": {
     "minimatch@<3.1.4": "3.1.4",

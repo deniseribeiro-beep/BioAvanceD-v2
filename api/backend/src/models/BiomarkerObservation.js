@@ -1,5 +1,5 @@
 class BiomarkerObservationModel {
-  static VALID_TYPES = ['alphaGal', 'lysoGb3'];
+  static VALID_TYPES = null;
 
   static VALID_STATUSES = ['final', 'preliminary', 'amended', 'cancelled'];
 
@@ -22,12 +22,9 @@ class BiomarkerObservationModel {
   }
 
   static normalizeUnit(input = {}) {
-    const biomarkerType = String(input.biomarkerType || '').trim();
     const rawUnit = String(input.unit || '').trim();
 
     if (rawUnit) return rawUnit;
-    if (biomarkerType === 'alphaGal') return 'U/mL';
-    if (biomarkerType === 'lysoGb3') return 'ng/mL';
     return null;
   }
 
@@ -45,8 +42,8 @@ class BiomarkerObservationModel {
     }
 
     const biomarkerType = String(data.biomarkerType || '').trim();
-    if (!this.VALID_TYPES.includes(biomarkerType)) {
-      errors.push(`biomarkerType inválido. Valores permitidos: ${this.VALID_TYPES.join(', ')}`);
+    if (!biomarkerType) {
+      errors.push('biomarkerType é obrigatório');
     }
 
     const valueNumber = Number(data.value);

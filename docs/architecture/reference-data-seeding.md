@@ -1,6 +1,16 @@
 # Reference Data Seeding
 
 MongoDB remains the operational source of truth. Neo4j remains an outbox-fed projection. FHIR stays a serialization and interoperability boundary.
+The backend architecture and contract checks in this repo use Node's native `node:test` runner, not Vitest.
+
+The canonical `api/backend/src/services/fhir.service.js` surface is intentionally reduced to:
+
+- `toFhirPatient`
+- `toFhirSpecimen`
+- `toFhirConsent`
+- `resultToFHIR`
+- `temperatureToFHIR`
+- `validateFHIRResource`
 
 ## Strategy
 
@@ -26,6 +36,7 @@ The essential seed is manual, idempotent, and never runs automatically at startu
 - `npm --prefix api/backend run seed:essential:dry-run`
 - `npm --prefix api/backend run seed:essential`
 - `npm --prefix api/backend run seed:validate:essential`
+- `npm --prefix api/backend run test:architecture` runs architecture/contract checks with `node --test`
 
 ## Large imports
 

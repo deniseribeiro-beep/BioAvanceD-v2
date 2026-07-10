@@ -5,13 +5,6 @@ const logger = require('../utils/logger');
 const search = async (req, res) => {
   try {
     const db = req.app.locals.db;
-    if (!db) {
-      return res.status(503).json({
-        success: false,
-        error: 'Banco de dados não disponível'
-      });
-    }
-
     const q = String(req.query.q || '').trim();
     const page = parseInt(req.query.page, 10) || 1;
     const limit = parseInt(req.query.limit, 10) || 10;

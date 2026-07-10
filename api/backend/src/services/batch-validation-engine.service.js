@@ -453,46 +453,48 @@ class BatchValidationEngine {
       || new Date()
     ) || new Date();
 
-    const biomarkerDefinitions = [
-      {
-        biomarkerType: 'alphaGal',
-        unit: 'U/mL',
-        fields: ['alphagal', 'alphaGal', 'alpha_gal', 'alpha-gal', 'alphaGalactosidase'],
-      },
-      {
-        biomarkerType: 'lysoGb3',
-        unit: 'ng/mL',
-        fields: ['lysogb3', 'lysoGb3', 'lyso_gb3', 'lyso-gb3'],
-      },
-    ];
+    const biomarkerSource = this.normalizeText(
+      normalizedRow.biomarkers
+      || normalizedRow.biomarcadores
+      || normalizedRow.biomarker
+      || normalizedRow.biomarcador
+    );
 
-    for (const definition of biomarkerDefinitions) {
-      let rawValue;
+    if (!biomarkerSource) {
+      return {
+        payloads,
+        warnings,
+      };
+    }
 
-      for (const fieldName of definition.fields) {
-        const normalizedField = this.normalizeHeader(fieldName);
-        if (normalizedRow[normalizedField] !== undefined && normalizedRow[normalizedField] !== null && String(normalizedRow[normalizedField]).trim() !== '') {
-          rawValue = normalizedRow[normalizedField];
-          break;
-        }
-      }
+    const biomarkerTokens = biomarkerSource
+      .split(/[;,|]/)
+      .map((token) => this.normalizeText(token))
+      .filter(Boolean);
 
-      if (rawValue === undefined || rawValue === null || String(rawValue).trim() === '') {
+    for (const token of biomarkerTokens) {
+      const codeParts = token.split(/[:=]/).map((part) => this.normalizeText(part)).filter(Boolean);
+      const biomarkerType = codeParts[0];
+      const rawValue = codeParts[1] || null;
+
+      if (!biomarkerType) continue;
+      if (!rawValue) {
+        warnings.push(`Biomarcador ${biomarkerType} foi ignorado por não informar valor.`);
         continue;
       }
 
       const numericValue = this.parseNumericValue(rawValue);
       if (!Number.isFinite(numericValue) || numericValue < 0) {
-        warnings.push(`Biomarcador ${definition.biomarkerType} foi ignorado por conter valor inválido.`);
+        warnings.push(`Biomarcador ${biomarkerType} foi ignorado por conter valor inválido.`);
         continue;
       }
 
       payloads.push({
         patientID: patientIdentifier,
         patientObjectId,
-        biomarkerType: definition.biomarkerType,
+        biomarkerType,
         value: numericValue,
-        unit: definition.unit,
+        unit: null,
         collectedAt,
         status: 'final',
         source: 'batch-import',
@@ -533,8 +535,7 @@ class BatchValidationEngine {
       'linkedproject',
       'barcode',
       'quality',
-      'alphagal',
-      'lysogb3',
+      'biomarkers',
       'specimenid',
       'sampleid',
     ];
