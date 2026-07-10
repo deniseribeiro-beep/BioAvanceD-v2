@@ -57,8 +57,19 @@ see the file's own header for the regenerate command and cadence.
   `npx playwright test tests/e2e/<spec>.spec.ts --reporter=list`. Don't
   run the full e2e suite per iteration either — same reasoning as
   backend above.
-- Frontend-touching changes: `npm --prefix frontend run typecheck` (no
-  frontend test script exists yet — if one gets added, record it here).
+- Frontend-touching changes: `npm --prefix frontend run typecheck`.
+  `frontend/vitest.config.js` exists and works (`npx vitest run <path>`
+  from `frontend/`) but had zero tests and a `setupFiles` entry
+  (`tests/unit/setup.ts`) pointing at a file that didn't exist until
+  2026-07-10, issue #167's fix — that file now exists (imports
+  `@testing-library/jest-dom/vitest`, already a devDependency) and
+  `frontend/src/components/v2/intake/ClinicalIntakeWizard.test.jsx` is
+  the first real frontend unit test in the repo. No `npm test` script
+  wraps it yet — invoke `npx vitest run <path>` directly, same as
+  before. Follow the same `_test`-export pattern backend routes use
+  (see `intakeWizard.js`'s `router._test`) to reach non-exported
+  helpers inside a component file for targeted unit tests without
+  rendering the component.
 
 ## `import` of a CJS class file under-reports V8 coverage — use `require()` instead
 
