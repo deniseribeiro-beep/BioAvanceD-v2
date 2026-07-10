@@ -1,152 +1,116 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { createRequire } from 'module';
 import express from 'express';
 import request from 'supertest';
+import router from '../../../src/routes/orphanet.js';
 
-// NOTE on why this file does NOT use vi.mock('mongodb', ...):
-// src/routes/orphanet.js does `const { MongoClient } = require('mongodb')` at
-// module scope (plain CommonJS require, inside a CJS source file). Verified in
-// this repo/vitest version that vi.mock('mongodb', factory) does NOT intercept
-// that require call -- even when *this test file* is loaded as ESM and even
-// when the router itself is loaded via an ESM `import` of the .js file. A
-// throwaway debug test confirmed the real `mongodb` driver got constructed
-// (it threw MongoParseError for a bogus connection string) despite an active
-// vi.mock('mongodb', ...) mock and vi.hoisted() wiring. So instead we patch
-// the `mongodb` module's own MongoClient export in place (its property
-// descriptor is a configurable getter-only accessor, so we override it with
-// Object.defineProperty) BEFORE requiring the router via createRequire. Since
-// the router's destructuring `const { MongoClient } = require('mongodb')`
-// runs at router-require-time and reads off the (now patched) property, this
-// reliably swaps in our fake constructor.
-const require = createRequire(import.meta.url);
-const mongodb = require('mongodb');
+// src/routes/orphanet.js reads its db connection from req.app.locals.db
+// (a shared connection set up once at server startup, not a per-request
+// MongoClient) -- see git history of the file, commit e9fc064c switched
+// it from `new MongoClient(MONGO_URI)` per request to `req.app.locals.db`.
+// So tests here set app.locals.db directly, mirroring
+// tests/unit/routes/orphanet-count.test.js's pattern for the sibling route.
 
-const connectMock = vi.fn(async () => {});
-const closeMock = vi.fn(async () => {});
-const findMock = vi.fn();
-const collectionMock = vi.fn(() => ({ find: findMock }));
-const dbMock = vi.fn(() => ({ collection: collectionMock }));
-
-function FakeMongoClient() {
-  return {
-    connect: connectMock,
-    db: dbMock,
-    close: closeMock,
-  };
+function emptyFind() {
+  return vi.fn(() => ({ limit: vi.fn(() => ({ toArray: vi.fn(async () => []) })) }));
 }
 
-Object.defineProperty(mongodb, 'MongoClient', {
-  value: FakeMongoClient,
-  configurable: true,
-  writable: true,
-  enumerable: true,
-});
+function findReturning(results) {
+  return vi.fn(() => ({ limit: vi.fn(() => ({ toArray: vi.fn(async () => results) })) }));
+}
 
-const router = require('../../../src/routes/orphanet.js');
+function buildDb({ cidsFind = emptyFind(), orphanetFind = emptyFind() } = {}) {
+  const collection = vi.fn((name) => {
+    if (name === 'cids') return { find: cidsFind };
+    if (name === 'orphanet_diseases') return { find: orphanetFind };
+    throw new Error(`unexpected collection ${name}`);
+  });
+  return { collection };
+}
 
-function buildApp() {
+function buildApp(db) {
   const app = express();
+  if (db) app.locals.db = db;
   app.use('/api/orphanet', router);
   return app;
 }
 
-function makeFind(results) {
-  return vi.fn(() => ({
-    limit: vi.fn(() => ({
-      toArray: vi.fn(async () => results),
-    })),
-  }));
-}
-
 describe('orphanet route GET /search', () => {
   beforeEach(() => {
-    connectMock.mockClear();
-    closeMock.mockClear();
-    findMock.mockReset();
-    collectionMock.mockClear();
-    dbMock.mockClear();
+    vi.clearAllMocks();
   });
 
-  it('returns 400 with Missing query when q is absent, without connecting to the db', async () => {
-    const app = buildApp();
+  it('returns 400 with Missing query when q is absent', async () => {
+    const app = buildApp(buildDb());
     const res = await request(app).get('/api/orphanet/search');
 
     expect(res.status).toBe(400);
     expect(res.body).toEqual({ error: 'Missing query' });
-    expect(connectMock).not.toHaveBeenCalled();
+  });
+
+  it('returns 503 when app.locals.db is not set', async () => {
+    const app = buildApp(null);
+    const res = await request(app).get('/api/orphanet/search').query({ q: 'disease' });
+
+    expect(res.status).toBe(503);
+    expect(res.body).toEqual({ error: 'Database unavailable' });
   });
 
   it('defaults lang to pt and returns lang-scoped results without falling back', async () => {
-    const results = [{ name: 'Disease A', lang: 'pt' }];
-    findMock.mockImplementation(makeFind(results));
+    const orphanetFind = findReturning([{ ORPHA: '166024', name: 'Disease A', lang: 'pt' }]);
+    const app = buildApp(buildDb({ orphanetFind }));
 
-    const app = buildApp();
     const res = await request(app).get('/api/orphanet/search').query({ q: 'disease' });
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual(results);
-    expect(findMock).toHaveBeenCalledTimes(1);
-    const filterArg = findMock.mock.calls[0][0];
-    expect(filterArg.lang).toBe('pt');
-    expect(filterArg.$or).toEqual([
-      { name: expect.any(RegExp) },
-      { code: expect.any(RegExp) },
-      { synonyms: expect.any(RegExp) },
+    expect(res.body).toEqual([
+      expect.objectContaining({ code: '166024', name: 'Disease A', lang: 'pt' }),
     ]);
+    expect(orphanetFind).toHaveBeenCalledTimes(1);
+    const filterArg = orphanetFind.mock.calls[0][0];
+    expect(filterArg.lang).toEqual({ $in: ['pt', '', null] });
   });
 
   it('falls back to the lang-less query when the lang-scoped query returns empty results', async () => {
-    const fallbackResults = [{ name: 'Disease B', lang: 'en' }];
-    const emptyFind = vi.fn(() => ({
-      limit: vi.fn(() => ({ toArray: vi.fn(async () => []) })),
-    }));
-    const fallbackFind = vi.fn(() => ({
-      limit: vi.fn(() => ({ toArray: vi.fn(async () => fallbackResults) })),
-    }));
-    findMock.mockImplementationOnce(emptyFind).mockImplementationOnce(fallbackFind);
+    const fallbackDoc = { ORPHA: '166025', name: 'Disease B', lang: 'en' };
+    const orphanetFind = vi.fn()
+      .mockImplementationOnce(() => ({ limit: vi.fn(() => ({ toArray: vi.fn(async () => []) })) }))
+      .mockImplementationOnce(() => ({ limit: vi.fn(() => ({ toArray: vi.fn(async () => [fallbackDoc]) })) }));
+    const app = buildApp(buildDb({ orphanetFind }));
 
-    const app = buildApp();
     const res = await request(app).get('/api/orphanet/search').query({ q: 'disease', lang: 'fr' });
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual(fallbackResults);
-    expect(findMock).toHaveBeenCalledTimes(2);
+    expect(res.body).toEqual([
+      expect.objectContaining({ code: '166025', name: 'Disease B', lang: 'en' }),
+    ]);
+    expect(orphanetFind).toHaveBeenCalledTimes(2);
     // second call must be the plain base filter, without a lang key
-    const secondFilter = findMock.mock.calls[1][0];
+    const secondFilter = orphanetFind.mock.calls[1][0];
     expect(secondFilter.lang).toBeUndefined();
   });
 
   it('does not run the fallback query when the lang-scoped query returns results', async () => {
-    const results = [{ name: 'Disease C', lang: 'es' }];
-    findMock.mockImplementation(makeFind(results));
+    const orphanetFind = findReturning([{ ORPHA: '166026', name: 'Disease C', lang: 'es' }]);
+    const app = buildApp(buildDb({ orphanetFind }));
 
-    const app = buildApp();
     const res = await request(app).get('/api/orphanet/search').query({ q: 'disease', lang: 'es' });
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual(results);
-    expect(findMock).toHaveBeenCalledTimes(1);
+    expect(res.body).toEqual([
+      expect.objectContaining({ code: '166026', name: 'Disease C', lang: 'es' }),
+    ]);
+    expect(orphanetFind).toHaveBeenCalledTimes(1);
   });
 
-  it('returns 500 when the query throws, and still closes the client', async () => {
-    findMock.mockImplementation(() => {
+  it('returns 500 when both the primary search and the fallback search throw', async () => {
+    const throwingFind = vi.fn(() => {
       throw new Error('boom');
     });
+    const app = buildApp(buildDb({ cidsFind: throwingFind }));
 
-    const app = buildApp();
     const res = await request(app).get('/api/orphanet/search').query({ q: 'disease' });
 
     expect(res.status).toBe(500);
     expect(res.body).toEqual({ error: 'Failed to search orphanet diseases' });
-    expect(closeMock).toHaveBeenCalledTimes(1);
-  });
-
-  it('closes the client on the success path too', async () => {
-    findMock.mockImplementation(makeFind([{ name: 'Disease D', lang: 'pt' }]));
-
-    const app = buildApp();
-    await request(app).get('/api/orphanet/search').query({ q: 'disease' });
-
-    expect(closeMock).toHaveBeenCalledTimes(1);
   });
 });
