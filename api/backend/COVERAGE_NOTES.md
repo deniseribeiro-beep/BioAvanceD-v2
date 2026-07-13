@@ -105,7 +105,7 @@ Low priority (models/interfaces/one-off scripts — thin or non-request-path):
   returning 503 may be the same terminologySync gate; check before
   treating as a genuine gap)
 
-## LOW coverage (1-49% lines) — 15 files, full reconcile 2026-07-09, commit `2848ab1f`
+## LOW coverage (1-49% lines) — 14 files, full reconcile 2026-07-09, commit `2848ab1f`
 
 Sorted ascending (worst first) — lines% / branches%. Most of these are
 broken-by-issue, not genuinely untested — check the caveat above before
@@ -115,7 +115,6 @@ picking one for a slice.
 src/services/auditRoot.service.js                6.95 / 0        (issue #146 cluster — audit/rename drift)
 src/services/audit-tree.service.js               7.89 / 0        (issue #146 cluster)
 src/services/PatientIdentityService.js          11.53 / 0        (issue #146 — matchOrUpsertPatient rename)
-src/interface/routes/label.routes.js            11.76 / 0
 src/services/audit-signing.provider.js          14.81 / 0        (issue #146 cluster)
 src/interface/routes/intakeWizard.routes.js     16.98 / 0        (issue #146 cluster)
 src/core/use-cases/MoveSampleUseCase.js         18.18 / 14.49    (issue #146 — specimenId rename)
@@ -129,8 +128,8 @@ src/infrastructure/middleware/authConsent.js    34.24 / 55.1     (issue #146 clu
 src/services/patientBiomarkerTimeseries.service.js 46.34 / 51.35 (issue #146 cluster)
 ```
 
-Genuinely low (no matching filed issue found) — real slice candidates:
-`label.routes.js`.
+Genuinely low (no matching filed issue found) — real slice candidates: none
+currently listed (`label.routes.js` covered 2026-07-13, now >=85%).
 
 ## MID-LOW coverage (50-69% lines) — 20 files, full reconcile 2026-07-09, commit `2848ab1f`
 
