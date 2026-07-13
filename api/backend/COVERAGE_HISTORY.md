@@ -9,18 +9,34 @@ ZERO/LOW buckets and reconcile numbers. Do not read this file as part
 of normal slice-picking.
 
 **Slice (2026-07-13):** `src/interface/routes/equipment.routes.js`, 65.66% →
-77.1% lines (67.05% branches), extended existing
-`tests/integration/equipment.api.test.js` (6 new tests) covering the
-previously-untested catch/error branches: 500s from `find().toArray()`
-rejecting on `GET /` and `GET /analytical`, a 500 from `findOne` rejecting
-on `GET /:id`, the numeric-`equipmentID` fallback lookup succeeding on
-`GET /:id`, the 400 (outer catch) path when `findOne` rejects mid-update
-on `PUT /:id` (falls through the inner ObjectId/numeric-fallback catch
-into the outer route catch), and a 400 when `deleteOne` rejects on
-`DELETE /:id`. No product bugs found. Remaining gap in this file: the
-`session.withTransaction` inner callback's own try/catch paths and a few
-audit-logging branches are still thin — a reasonable next micro-slice if
-revisited, but not blocking.
+100% lines/statements/functions (90.58% branches), extended existing
+`tests/integration/equipment.api.test.js` (13 new tests total across two
+passes) covering: 500s from `find().toArray()` rejecting on `GET /` and
+`GET /analytical`; a 500 from `findOne` rejecting on `GET /:id`; the
+numeric-`equipmentID` fallback lookup succeeding on `GET /:id`; the 400
+(outer catch) path when `findOne` rejects mid-update on `PUT /:id` (falls
+through the inner ObjectId/numeric-fallback catch into the outer route
+catch); a 400 when `deleteOne` rejects on `DELETE /:id`;
+`purchaseDate`-to-`Date` conversion on both `POST /` and `PUT /:id`; the
+404 numeric-fallback-not-found path on both `PUT /:id` and
+`DELETE /:id`; and a real Mongo-transaction path on `PUT /:id`
+(`db.client.startSession`/`session.withTransaction`/`endSession`) driving
+the quarantine-trigger branch that the existing unit test only exercised
+against a router built in isolation. No product bugs found. Remaining
+branch gap (90.58%) is the `req.user` falsy branches ahead of each audit
+log call — unreachable in practice since `authenticate` always populates
+`req.user` before the route body runs — and the `userName`/`userRole`
+`||` fallback arm in the quarantine audit-info payload, not worth chasing
+further. Note: measuring this file's coverage by running
+`tests/integration/equipment.api.test.js` together with
+`tests/unit/equipment.routes.quarantine.test.js` in one vitest invocation
+undercounts badly (e.g. reported 81.92% lines when the true number is
+100%) — the per-file v8 coverage merge across the two test files'
+worker threads is unreliable in this repo's vitest config. Measure a
+single route file's coverage from the integration spec alone (it already
+imports the full `app`, so it exercises the same router); don't trust a
+narrowed multi-file `--coverage.include` run as a source of truth without
+cross-checking against the single-file number.
 
 **Slice (2026-07-13):** `src/config/keyRegistry.js`, 68.96% → 100% lines
 (93.75% branches), new `tests/unit/keyRegistry.test.js` (15 tests)

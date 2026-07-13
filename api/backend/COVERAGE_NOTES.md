@@ -154,8 +154,8 @@ src/services/consent.validator.js               69.69 / 54.16   (issue #146 clus
 
 Genuinely low (no matching filed issue found) — real slice candidates:
 `neo4jProjection.worker.js`.
-(`interface/routes/equipment.routes.js` covered 2026-07-13, now 77.1% lines,
-moved to MID-HIGH bucket.
+(`interface/routes/equipment.routes.js` covered 2026-07-13, now 100% lines,
+moved to GOOD bucket.
 `routes/intakeWizard.js` covered 2026-07-13, now 92.82% lines.
 `neo4jOutbox.service.js` covered 2026-07-13, now 100% lines.
 `utils/fieldEncryption.js` covered 2026-07-13, now 100% lines.
@@ -170,7 +170,6 @@ regardless); a lower branch% relative to lines% usually means untested
 error paths, a good tie-breaker when picking among these.
 
 ```
-src/interface/routes/equipment.routes.js         77.10 / 67.05
 src/controllers/iot.controller.js                70.00 / 58.82
 src/services/import.service.js                   70.36 / 64.55
 src/core/use-cases/RegisterSampleUseCase.js       70.66 / 64.77

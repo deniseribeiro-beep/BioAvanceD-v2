@@ -218,6 +218,26 @@ describe('POST /api/equipment validation and duplicate-ID paths', () => {
     expect(typeof res.body.data.equipmentID).toBe('number');
   });
 
+  it('converts a provided purchaseDate string to a Date before creating', async () => {
+    const insertOne = vi.fn().mockResolvedValue({ insertedId: '507f1f77bcf86cd799439013' });
+    const coll = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue(null),
+      insertOne,
+      find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }),
+      countDocuments: vi.fn().mockResolvedValue(0),
+    });
+    app.locals.db = createDbMock({ equipment: coll });
+
+    const res = await request(app)
+      .post('/api/equipment')
+      .set('Authorization', `Bearer ${makeToken(3)}`)
+      .send({ equipmentDescription: 'desc', equipmentID: 88, purchaseDate: '2024-01-15' });
+
+    expect(res.status).toBe(201);
+    const insertedDoc = insertOne.mock.calls[0][0];
+    expect(insertedDoc.purchaseDate).toBeInstanceOf(Date);
+  });
+
   it('returns 500 when the collection throws during insertOne (infra failure, not a validation error)', async () => {
     // insertOne failing is a DB-layer/infra failure, not a client validation
     // error; it must not be conflated with the 400s returned above for bad
@@ -394,6 +414,79 @@ describe('PUT /api/equipment/:id with a non-ObjectId, non-numeric id', () => {
     delete app.locals.quarantineService;
   });
 
+  it('converts a provided purchaseDate string to a Date before updating', async () => {
+    const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 });
+    const coll = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue(FAKE_EQ),
+      updateOne,
+    });
+    app.locals.db = createDbMock({ equipment: coll });
+
+    const res = await request(app)
+      .put('/api/equipment/507f1f77bcf86cd799439011')
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({ purchaseDate: '2024-01-15' });
+
+    expect(res.status).toBe(200);
+    const setDoc = updateOne.mock.calls[0][1].$set;
+    expect(setDoc.purchaseDate).toBeInstanceOf(Date);
+  });
+
+  it('returns 404 when a numeric id parses but matches no equipmentID (numeric-fallback not-found)', async () => {
+    const coll = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue(null),
+    });
+    app.locals.db = createDbMock({ equipment: coll });
+
+    const res = await request(app)
+      .put('/api/equipment/999')
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({ status: 'Active' });
+    expect(res.status).toBe(404);
+    expect(coll.findOne).toHaveBeenCalledWith({ equipmentID: 999 });
+  });
+
+  it('uses a real Mongo transaction (session.startSession/withTransaction/endSession) when quarantine triggers', async () => {
+    const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 });
+    const coll = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue(FAKE_EQ),
+      updateOne,
+    });
+    const dbMock = createDbMock({ equipment: coll });
+
+    const withTransaction = vi.fn(async (cb) => cb());
+    const endSession = vi.fn().mockResolvedValue(undefined);
+    const startSession = vi.fn(() => ({ withTransaction, endSession }));
+    app.locals.db = { ...dbMock, client: { startSession } };
+
+    const quarantineByEquipmentStatus = vi.fn().mockResolvedValue({
+      triggered: true, matched: 1, quarantined: 1, movements: 1, reason: 'status:inactive'
+    });
+    app.locals.quarantineService = {
+      isQuarantineTriggerStatus: vi.fn().mockReturnValue(true),
+      quarantineByEquipmentStatus,
+    };
+
+    const res = await request(app)
+      .put('/api/equipment/507f1f77bcf86cd799439011')
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({ status: 'Inactive' });
+
+    expect(res.status).toBe(200);
+    expect(startSession).toHaveBeenCalledTimes(1);
+    expect(withTransaction).toHaveBeenCalledTimes(1);
+    expect(endSession).toHaveBeenCalledTimes(1);
+    expect(quarantineByEquipmentStatus).toHaveBeenCalledWith(
+      app.locals.db,
+      expect.objectContaining({ equipmentID: FAKE_EQ.equipmentID }),
+      'Inactive',
+      expect.objectContaining({ session: expect.objectContaining({ withTransaction, endSession }) })
+    );
+    expect(res.body.quarantine.triggered).toBe(true);
+
+    delete app.locals.quarantineService;
+  });
+
   it('returns 400 (caught error) when findOne throws unexpectedly inside the update flow', async () => {
     const coll = createCollectionMock({
       findOne: vi.fn().mockRejectedValue(new Error('unexpected findOne failure')),
@@ -489,6 +582,19 @@ describe('DELETE /api/equipment/:id', () => {
       .delete('/api/equipment/507f1f77bcf86cd799439099')
       .set('Authorization', `Bearer ${makeToken(4)}`);
     expect(res.status).toBe(404);
+  });
+
+  it('returns 404 when a numeric id parses but matches no equipmentID', async () => {
+    const coll = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue(null),
+    });
+    app.locals.db = createDbMock({ equipment: coll });
+
+    const res = await request(app)
+      .delete('/api/equipment/999')
+      .set('Authorization', `Bearer ${makeToken(4)}`);
+    expect(res.status).toBe(404);
+    expect(coll.findOne).toHaveBeenCalledWith({ equipmentID: 999 });
   });
 
   it('returns 400 (caught error) when deleteOne throws unexpectedly', async () => {
