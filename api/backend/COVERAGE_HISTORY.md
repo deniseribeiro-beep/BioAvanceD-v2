@@ -8,6 +8,19 @@ per-session read is `COVERAGE_NOTES.md`, which holds only the current
 ZERO/LOW buckets and reconcile numbers. Do not read this file as part
 of normal slice-picking.
 
+**Slice (2026-07-13):** `src/services/rfc3161-adapter.service.js`, 64.00% →
+100% lines (93.75% branches), extended `tests/unit/rfc3161-adapter.service.test.js`
+(12 new tests, 15 total) covering `mode()`'s fallback to `disabled` on an
+invalid value, `anchorEnvelopeDigest`'s `disabled` short-circuit,
+`remote` mode's `missing_tsa_url` guard, HTTP non-ok response,
+`invalid_tsa_response` (missing token/messageImprint), the success path
+including the `authorization` header when `AUDIT_RFC3161_TSA_AUTH_TOKEN`
+is set (via `vi.stubGlobal('fetch', ...)`), and `verifyTimestamp`'s
+`disabled` short-circuit, `missing_timestamp`, `invalid_timestamp_material`,
+mock-mode `invalid_mock_token` and `message_imprint_mismatch`, and
+remote-mode `message_imprint_mismatch`/match. No product bugs found this
+slice.
+
 **Slice (2026-07-13):** `src/utils/fieldEncryption.js`, 57.14% → 100%
 lines (86.95% branches), new `tests/unit/utils/fieldEncryption.test.js`
 (13 tests) covering `encryptValue`'s no-active-key warning path,
