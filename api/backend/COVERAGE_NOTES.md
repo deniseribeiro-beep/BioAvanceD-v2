@@ -140,7 +140,6 @@ against #146-#164 before picking.
 src/workers/jobs/daily-merkle.job.js            55.17 / 45       (issue #159 — stale test mock)
 src/services/audit-v2.service.js                60.81 / 43.75   (issue #146/#152 cluster)
 src/services/neo4jCanonicalProjection.service.js 65.00 / 63.36  (issue #146 cluster)
-src/interface/routes/equipment.routes.js        65.66 / 65.88
 src/workers/neo4jProjection.worker.js           65.95 / 41.02
 src/services/fhir.service.js                    66.66 / 27.27   (issue #149 — API shrunk)
 src/workers/workers/result-worker.js            67.36 / 48      (issue #146/#164 — rename + yauzl)
@@ -154,8 +153,10 @@ src/services/consent.validator.js               69.69 / 54.16   (issue #146 clus
 ```
 
 Genuinely low (no matching filed issue found) — real slice candidates:
-`equipment.routes.js`, `neo4jProjection.worker.js`.
-(`routes/intakeWizard.js` covered 2026-07-13, now 92.82% lines.
+`neo4jProjection.worker.js`.
+(`interface/routes/equipment.routes.js` covered 2026-07-13, now 77.1% lines,
+moved to MID-HIGH bucket.
+`routes/intakeWizard.js` covered 2026-07-13, now 92.82% lines.
 `neo4jOutbox.service.js` covered 2026-07-13, now 100% lines.
 `utils/fieldEncryption.js` covered 2026-07-13, now 100% lines.
 `rfc3161-adapter.service.js` covered 2026-07-13, now 100% lines.
@@ -169,6 +170,7 @@ regardless); a lower branch% relative to lines% usually means untested
 error paths, a good tie-breaker when picking among these.
 
 ```
+src/interface/routes/equipment.routes.js         77.10 / 67.05
 src/controllers/iot.controller.js                70.00 / 58.82
 src/services/import.service.js                   70.36 / 64.55
 src/core/use-cases/RegisterSampleUseCase.js       70.66 / 64.77

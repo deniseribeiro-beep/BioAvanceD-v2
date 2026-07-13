@@ -239,6 +239,56 @@ describe('POST /api/equipment validation and duplicate-ID paths', () => {
   });
 });
 
+describe('GET /api/equipment error branches', () => {
+  it('returns 500 when listing equipment fails', async () => {
+    const coll = createCollectionMock({
+      find: vi.fn().mockReturnValue({ toArray: vi.fn().mockRejectedValue(new Error('list failed')) }),
+    });
+    app.locals.db = createDbMock({ equipment: coll });
+
+    const res = await request(app).get('/api/equipment').set('Authorization', `Bearer ${makeToken(2)}`);
+    expect(res.status).toBe(500);
+    expect(res.body.success).toBe(false);
+    expect(res.body.message).toBe('list failed');
+  });
+
+  it('returns 500 when listing analytical equipment fails', async () => {
+    const coll = createCollectionMock({
+      find: vi.fn().mockReturnValue({ toArray: vi.fn().mockRejectedValue(new Error('analytical failed')) }),
+    });
+    app.locals.db = createDbMock({ equipment: coll });
+
+    const res = await request(app).get('/api/equipment/analytical').set('Authorization', `Bearer ${makeToken(2)}`);
+    expect(res.status).toBe(500);
+    expect(res.body.message).toBe('analytical failed');
+  });
+
+  it('returns 500 when findOne by id fails', async () => {
+    const coll = createCollectionMock({
+      findOne: vi.fn().mockRejectedValue(new Error('findOne failed')),
+    });
+    app.locals.db = createDbMock({ equipment: coll });
+
+    const res = await request(app)
+      .get('/api/equipment/507f1f77bcf86cd799439011')
+      .set('Authorization', `Bearer ${makeToken(2)}`);
+    expect(res.status).toBe(500);
+    expect(res.body.message).toBe('findOne failed');
+  });
+
+  it('falls back to numeric equipmentID lookup and returns the equipment', async () => {
+    const findOne = vi.fn().mockResolvedValue({ ...FAKE_EQ, equipmentID: 77 });
+    const coll = createCollectionMock({ findOne });
+    app.locals.db = createDbMock({ equipment: coll });
+
+    const res = await request(app)
+      .get('/api/equipment/77')
+      .set('Authorization', `Bearer ${makeToken(2)}`);
+    expect(res.status).toBe(200);
+    expect(findOne).toHaveBeenCalledWith({ equipmentID: 77 });
+  });
+});
+
 describe('GET /api/equipment/:id with an invalid ObjectId', () => {
   it('returns 400 "ID inválido" when id is neither a valid ObjectId nor parseable as a number', async () => {
     // req.params.id = 'not-a-valid-id' cannot be cast to ObjectId and is not
@@ -344,6 +394,21 @@ describe('PUT /api/equipment/:id with a non-ObjectId, non-numeric id', () => {
     delete app.locals.quarantineService;
   });
 
+  it('returns 400 (caught error) when findOne throws unexpectedly inside the update flow', async () => {
+    const coll = createCollectionMock({
+      findOne: vi.fn().mockRejectedValue(new Error('unexpected findOne failure')),
+    });
+    app.locals.db = createDbMock({ equipment: coll });
+
+    const res = await request(app)
+      .put('/api/equipment/507f1f77bcf86cd799439011')
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({ status: 'Active' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('Erro ao atualizar equipamento');
+    expect(res.body.message).toBe('unexpected findOne failure');
+  });
+
   it('returns 500 when updateOne matches no documents (found but not updatable)', async () => {
     const coll = createCollectionMock({
       findOne: vi.fn().mockResolvedValue(FAKE_EQ),
@@ -424,5 +489,20 @@ describe('DELETE /api/equipment/:id', () => {
       .delete('/api/equipment/507f1f77bcf86cd799439099')
       .set('Authorization', `Bearer ${makeToken(4)}`);
     expect(res.status).toBe(404);
+  });
+
+  it('returns 400 (caught error) when deleteOne throws unexpectedly', async () => {
+    const coll = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue(FAKE_EQ),
+      deleteOne: vi.fn().mockRejectedValue(new Error('delete failed')),
+    });
+    app.locals.db = createDbMock({ equipment: coll });
+
+    const res = await request(app)
+      .delete('/api/equipment/507f1f77bcf86cd799439011')
+      .set('Authorization', `Bearer ${makeToken(4)}`);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('Erro ao deletar equipamento');
+    expect(res.body.message).toBe('delete failed');
   });
 });

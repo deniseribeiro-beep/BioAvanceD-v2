@@ -8,6 +8,20 @@ per-session read is `COVERAGE_NOTES.md`, which holds only the current
 ZERO/LOW buckets and reconcile numbers. Do not read this file as part
 of normal slice-picking.
 
+**Slice (2026-07-13):** `src/interface/routes/equipment.routes.js`, 65.66% →
+77.1% lines (67.05% branches), extended existing
+`tests/integration/equipment.api.test.js` (6 new tests) covering the
+previously-untested catch/error branches: 500s from `find().toArray()`
+rejecting on `GET /` and `GET /analytical`, a 500 from `findOne` rejecting
+on `GET /:id`, the numeric-`equipmentID` fallback lookup succeeding on
+`GET /:id`, the 400 (outer catch) path when `findOne` rejects mid-update
+on `PUT /:id` (falls through the inner ObjectId/numeric-fallback catch
+into the outer route catch), and a 400 when `deleteOne` rejects on
+`DELETE /:id`. No product bugs found. Remaining gap in this file: the
+`session.withTransaction` inner callback's own try/catch paths and a few
+audit-logging branches are still thin — a reasonable next micro-slice if
+revisited, but not blocking.
+
 **Slice (2026-07-13):** `src/config/keyRegistry.js`, 68.96% → 100% lines
 (93.75% branches), new `tests/unit/keyRegistry.test.js` (15 tests)
 covering `getActiveKeyId`'s default and trimmed-env-var cases,
