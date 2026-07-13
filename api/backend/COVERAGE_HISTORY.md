@@ -8,6 +8,17 @@ per-session read is `COVERAGE_NOTES.md`, which holds only the current
 ZERO/LOW buckets and reconcile numbers. Do not read this file as part
 of normal slice-picking.
 
+**Slice (2026-07-13):** `src/services/neo4jOutbox.service.js`, 52.45% →
+100% lines (85.91% branches), extended `tests/unit/neo4j-outbox.service.test.js`
+(11 new tests) covering `ensureIndexes`, `getCollection`'s missing-db
+error and custom-collectionName option, `leaseNextBatch`'s populated and
+empty-batch paths, `markProjected`/`markRetrying` (Error instance and
+fallback message)/`markDeadLetter`/`recoverProcessing`, and
+`stableStringify`'s Date/array/nested-object handling via `hashPayload`.
+Remaining gaps (not covered, low value): a couple of defensive branches
+in the stale-processing update queries. No product bugs found this
+slice.
+
 **Slice (2026-07-13):** `src/routes/intakeWizard.js`, 50.19% → 92.82%
 lines (77.66% branches), extended `tests/unit/intakeWizard.routes.test.js`
 (9 new integration tests via supertest) and `tests/unit/intakeWizard.helpers.test.js`
