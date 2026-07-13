@@ -9,22 +9,39 @@ ZERO/LOW buckets and reconcile numbers. Do not read this file as part
 of normal slice-picking.
 
 **Slice (2026-07-13):** `src/workers/neo4jProjection.worker.js`, 65.95% →
-85.1% lines (58.97% branches), extended existing
-`tests/unit/neo4jProjection.worker.test.js` (2 → 6 tests) covering: the
-`markRetrying` branch in `runProjectionOnce` (a failed event with
-attempts remaining below `maxAttempts`, previously only the dead-letter
-branch was exercised); the empty-batch early return shape; and
-`runProjectionWorker` — both the `once: true` single-pass path and the
-`once: false` daemon loop's backoff-on-empty-batch branch (forced to
-exit via a mocked `leaseNextBatch` rejection on the third poll, since
-`stopAfterOne` is captured once at call time and the loop has no other
-exit — `setTimeout` mocked to fire synchronously so the test doesn't
-actually sleep). No product bugs found. Remaining gap (lines 10-11,
-82-89) is the module-level `connectDB`/`connectNeo4j` default-argument
-fallbacks and the `require.main === module` bootstrap block — not
-practically unit-testable without mocking the database connection
-modules, and low value given the bootstrap block only wires
-`runProjectionWorker` to process exit codes.
+89.36% lines (69.23% branches), extended existing
+`tests/unit/neo4jProjection.worker.test.js` (2 → 7 tests) across two
+passes. First pass covered: the `markRetrying` branch in
+`runProjectionOnce` (a failed event with attempts remaining below
+`maxAttempts`, previously only the dead-letter branch was exercised);
+the empty-batch early return shape; and `runProjectionWorker` — both
+the `once: true` single-pass path and the `once: false` daemon loop's
+backoff-on-empty-batch branch (forced to exit via a mocked
+`leaseNextBatch` rejection on the third poll, since `stopAfterOne` is
+captured once at call time and the loop has no other exit —
+`setTimeout` mocked to fire synchronously so the test doesn't actually
+sleep). Second pass covered the module-level `connectDB`/`connectNeo4j`
+default-argument fallbacks (lines 10-11): `vi.mock()` doesn't reliably
+intercept this file's CJS `require()` call sites (same gotcha as
+`daily-merkle.job.test.js`), so the fix was to require the real
+`src/database/mongo` and
+`src/infrastructure/database/neo4j/connection` modules first, `vi.spyOn`
+their exports, and only then require the worker — so its own
+destructuring captures the already-patched functions.
+
+**Product bug found (not fixed — filed as issue #177):** the
+`require.main === module` bootstrap block (lines 81-91) calls
+`runProjectionWorker()` with no arguments, so `options.once` is always
+`undefined` and the loop's `stopAfterOne` is always `false`. Its
+`do...while` loop can therefore only exit via a thrown error — the
+`.then()` success branch (`'Worker finalizado'` + clean `process.exit(0)`)
+is dead code under the current wiring; a real run of this script can
+only ever end via `.catch()` (logged as a failure, `process.exit(1)`),
+even on what should be a graceful shutdown. This is also why lines
+82-89 are left uncovered here: exercising that block honestly would
+mean spawning a child process against real Mongo/Neo4j infra (the
+`.then()` branch can't be reached at all as currently written), which
+is out of scope for native unit tests.
 
 **Slice (2026-07-13):** `src/interface/routes/equipment.routes.js`, 65.66% →
 100% lines/statements/functions (90.58% branches), extended existing

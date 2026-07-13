@@ -151,8 +151,8 @@ src/services/patient.service.js                 69.14 / 50.72   (issue #146 clus
 src/services/consent.validator.js               69.69 / 54.16   (issue #146 cluster)
 ```
 
-Genuinely low (no matching filed issue found) — real slice candidates:
-`neo4jProjection.worker.js`.
+Genuinely low (no matching filed issue found) — real slice candidates: none
+currently listed.
 (`interface/routes/equipment.routes.js` covered 2026-07-13, now 100% lines,
 moved to GOOD bucket.
 `routes/intakeWizard.js` covered 2026-07-13, now 92.82% lines.
@@ -160,9 +160,11 @@ moved to GOOD bucket.
 `utils/fieldEncryption.js` covered 2026-07-13, now 100% lines.
 `rfc3161-adapter.service.js` covered 2026-07-13, now 100% lines.
 `config/keyRegistry.js` covered 2026-07-13, now 100% lines.
-`neo4jProjection.worker.js` covered 2026-07-13, now 85.1% lines (moved to
-MID-HIGH bucket; remaining gap is the module-level connectDB/connectNeo4j
-defaults and the require.main bootstrap block, not practically unit-testable).)
+`neo4jProjection.worker.js` covered 2026-07-13, now 89.36% lines (moved to
+GOOD bucket; remaining gap is the require.main bootstrap block — its
+success `.then()` branch is dead code given a real bug filed as issue
+#177, so it can't be meaningfully exercised without spawning a child
+process against real infra).)
 
 ## MID-HIGH coverage (70-84% lines) — 44 files, full reconcile 2026-07-09, commit `2848ab1f`
 

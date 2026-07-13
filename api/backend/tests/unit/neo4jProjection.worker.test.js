@@ -1,3 +1,17 @@
+// neo4jProjection.worker.js destructures connectDB/connectNeo4j at require-time
+// (`const { connectDB } = require(...)`), so vi.mock() factories don't reliably
+// intercept these CJS require() call sites in this repo's vitest setup (confirmed
+// pattern documented in tests/unit/daily-merkle.job.test.js). Instead: require the
+// real singleton modules first, spy on their exports BEFORE requiring the worker,
+// so the worker's own destructuring captures the already-patched functions.
+const mongo = require('../../src/database/mongo');
+const neo4jConnection = require('../../src/infrastructure/database/neo4j/connection');
+
+vi.spyOn(mongo, 'connectDB').mockResolvedValue({ __fakeDb: true });
+vi.spyOn(neo4jConnection, 'connectNeo4j').mockResolvedValue({
+  session: () => ({ close: async () => undefined }),
+});
+
 const { runProjectionOnce, runProjectionWorker } = require('../../src/workers/neo4jProjection.worker');
 
 describe('neo4jProjection.worker', () => {
@@ -83,6 +97,26 @@ describe('neo4jProjection.worker', () => {
     expect(result.failed).toBe(1);
     expect(state.retrying).toEqual(['evt-3']);
     expect(state.dead).toEqual([]);
+  });
+
+  it('falls back to connectDB()/connectNeo4j() when options.db/neo4jDriver are not provided', async () => {
+    mongo.connectDB.mockClear();
+    neo4jConnection.connectNeo4j.mockClear();
+
+    const outboxService = {
+      rescheduleStaleProcessing: async () => 0,
+      leaseNextBatch: async () => [],
+      markProjected: async () => undefined,
+      markRetrying: async () => undefined,
+      markDeadLetter: async () => undefined,
+    };
+    const projector = { applyEvent: async () => ({ projected: true }) };
+
+    const result = await runProjectionOnce({ outboxService, projector, maxAttempts: 8 });
+
+    expect(mongo.connectDB).toHaveBeenCalledTimes(1);
+    expect(neo4jConnection.connectNeo4j).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ processed: 0, projected: 0, failed: 0 });
   });
 
   it('returns default processed/projected/failed counts when the batch is empty', async () => {
