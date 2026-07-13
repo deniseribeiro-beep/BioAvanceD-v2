@@ -8,6 +8,22 @@ per-session read is `COVERAGE_NOTES.md`, which holds only the current
 ZERO/LOW buckets and reconcile numbers. Do not read this file as part
 of normal slice-picking.
 
+**Slice (2026-07-13):** `src/utils/fieldEncryption.js`, 57.14% → 100%
+lines (86.95% branches), new `tests/unit/utils/fieldEncryption.test.js`
+(13 tests) covering `encryptValue`'s no-active-key warning path,
+empty-ish-value (`undefined`/`null`/`''`) short-circuit, successful
+payload shape, and falsy-but-defined values (`0`/`false`); and
+`decryptValue`'s non-object-payload guard, keyed round-trip, unknown-keyId
+warning, tampered-ciphertext failure, fallback-key iteration (both a
+matching and no-matching fallback key), and keyId-whitespace trimming.
+Had to discover the CJS-mocking gotcha firsthand: `vi.mock` on
+`keyRegistry`/`logger` silently no-op'd because `fieldEncryption.js`
+loads them via plain `require()`, not ESM `import` — rewrote to
+`createRequire(import.meta.url)` + `vi.spyOn` on the real singleton
+modules per `testing-conventions/references/cjs-mocking.md`, which
+already documented this exact pattern. No product bugs found this
+slice.
+
 **Slice (2026-07-13):** `src/services/neo4jOutbox.service.js`, 52.45% →
 100% lines (85.91% branches), extended `tests/unit/neo4j-outbox.service.test.js`
 (11 new tests) covering `ensureIndexes`, `getCollection`'s missing-db
