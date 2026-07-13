@@ -8,6 +8,24 @@ per-session read is `COVERAGE_NOTES.md`, which holds only the current
 ZERO/LOW buckets and reconcile numbers. Do not read this file as part
 of normal slice-picking.
 
+**Slice (2026-07-13):** `src/workers/neo4jProjection.worker.js`, 65.95% →
+85.1% lines (58.97% branches), extended existing
+`tests/unit/neo4jProjection.worker.test.js` (2 → 6 tests) covering: the
+`markRetrying` branch in `runProjectionOnce` (a failed event with
+attempts remaining below `maxAttempts`, previously only the dead-letter
+branch was exercised); the empty-batch early return shape; and
+`runProjectionWorker` — both the `once: true` single-pass path and the
+`once: false` daemon loop's backoff-on-empty-batch branch (forced to
+exit via a mocked `leaseNextBatch` rejection on the third poll, since
+`stopAfterOne` is captured once at call time and the loop has no other
+exit — `setTimeout` mocked to fire synchronously so the test doesn't
+actually sleep). No product bugs found. Remaining gap (lines 10-11,
+82-89) is the module-level `connectDB`/`connectNeo4j` default-argument
+fallbacks and the `require.main === module` bootstrap block — not
+practically unit-testable without mocking the database connection
+modules, and low value given the bootstrap block only wires
+`runProjectionWorker` to process exit codes.
+
 **Slice (2026-07-13):** `src/interface/routes/equipment.routes.js`, 65.66% →
 100% lines/statements/functions (90.58% branches), extended existing
 `tests/integration/equipment.api.test.js` (13 new tests total across two

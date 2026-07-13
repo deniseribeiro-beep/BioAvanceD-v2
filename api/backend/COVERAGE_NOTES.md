@@ -140,7 +140,6 @@ against #146-#164 before picking.
 src/workers/jobs/daily-merkle.job.js            55.17 / 45       (issue #159 — stale test mock)
 src/services/audit-v2.service.js                60.81 / 43.75   (issue #146/#152 cluster)
 src/services/neo4jCanonicalProjection.service.js 65.00 / 63.36  (issue #146 cluster)
-src/workers/neo4jProjection.worker.js           65.95 / 41.02
 src/services/fhir.service.js                    66.66 / 27.27   (issue #149 — API shrunk)
 src/workers/workers/result-worker.js            67.36 / 48      (issue #146/#164 — rename + yauzl)
 src/infrastructure/database/neo4j/LineageRepository.js 67.69 / 58.33 (issue #146 — specimenId rename)
@@ -160,7 +159,10 @@ moved to GOOD bucket.
 `neo4jOutbox.service.js` covered 2026-07-13, now 100% lines.
 `utils/fieldEncryption.js` covered 2026-07-13, now 100% lines.
 `rfc3161-adapter.service.js` covered 2026-07-13, now 100% lines.
-`config/keyRegistry.js` covered 2026-07-13, now 100% lines.)
+`config/keyRegistry.js` covered 2026-07-13, now 100% lines.
+`neo4jProjection.worker.js` covered 2026-07-13, now 85.1% lines (moved to
+MID-HIGH bucket; remaining gap is the module-level connectDB/connectNeo4j
+defaults and the require.main bootstrap block, not practically unit-testable).)
 
 ## MID-HIGH coverage (70-84% lines) — 44 files, full reconcile 2026-07-09, commit `2848ab1f`
 
