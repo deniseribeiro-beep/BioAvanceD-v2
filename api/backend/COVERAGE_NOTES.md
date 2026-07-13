@@ -149,17 +149,17 @@ src/services/analysisValidation.service.js      68.08 / 53.84   (issue #146 clus
 src/services/SampleGraphValidator.js            68.34 / 59.25   (issue #151 — collectionResolver)
 src/services/import-lgpd.service.js             68.52 / 64.17   (issue #146 cluster)
 src/services/mqtt-telemetry.service.js          68.60 / 78.18   (issue #160 — HMAC bypass bug)
-src/config/keyRegistry.js                       68.96 / 50
 src/services/patient.service.js                 69.14 / 50.72   (issue #146 cluster)
 src/services/consent.validator.js               69.69 / 54.16   (issue #146 cluster)
 ```
 
 Genuinely low (no matching filed issue found) — real slice candidates:
-`equipment.routes.js`, `neo4jProjection.worker.js`, `config/keyRegistry.js`.
+`equipment.routes.js`, `neo4jProjection.worker.js`.
 (`routes/intakeWizard.js` covered 2026-07-13, now 92.82% lines.
 `neo4jOutbox.service.js` covered 2026-07-13, now 100% lines.
 `utils/fieldEncryption.js` covered 2026-07-13, now 100% lines.
-`rfc3161-adapter.service.js` covered 2026-07-13, now 100% lines.)
+`rfc3161-adapter.service.js` covered 2026-07-13, now 100% lines.
+`config/keyRegistry.js` covered 2026-07-13, now 100% lines.)
 
 ## MID-HIGH coverage (70-84% lines) — 44 files, full reconcile 2026-07-09, commit `2848ab1f`
 

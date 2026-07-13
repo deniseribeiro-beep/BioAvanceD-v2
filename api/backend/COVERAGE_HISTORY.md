@@ -8,6 +8,19 @@ per-session read is `COVERAGE_NOTES.md`, which holds only the current
 ZERO/LOW buckets and reconcile numbers. Do not read this file as part
 of normal slice-picking.
 
+**Slice (2026-07-13):** `src/config/keyRegistry.js`, 68.96% → 100% lines
+(93.75% branches), new `tests/unit/keyRegistry.test.js` (15 tests)
+covering `getActiveKeyId`'s default and trimmed-env-var cases,
+`getKeyEntries`'s empty/whitespace-only `ENCRYPTION_KEY` short-circuit
+and single-active-entry derivation, `getActiveKey`'s null and derived-key
+cases (including determinism), `getKeyById`'s falsy-keyId guard,
+matching/trimmed/no-match/no-key-configured cases, and `getFallbackKeys`'
+empty and single-unique-key cases. Reloads the module fresh per test via
+`require.cache` deletion so env-var changes take effect (module-level
+`process.env` reads happen at call time here, not import time, so this
+wasn't strictly required, but keeps tests isolated regardless). No
+product bugs found this slice.
+
 **Slice (2026-07-13):** `src/services/rfc3161-adapter.service.js`, 64.00% →
 100% lines (93.75% branches), extended `tests/unit/rfc3161-adapter.service.test.js`
 (12 new tests, 15 total) covering `mode()`'s fallback to `disabled` on an
