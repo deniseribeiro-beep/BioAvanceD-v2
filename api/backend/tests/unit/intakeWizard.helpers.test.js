@@ -113,6 +113,39 @@ describe('intakeWizard helpers', () => {
     expect(result.templateId).toBe('template-42');
   });
 
+  it('ensureConsentEmailSent rejeita quando falta nome do paciente', async () => {
+    const result = await helpers.ensureConsentEmailSent({
+      participant: {},
+      consent: { consentTemplateId: 'template-1' },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe(400);
+    expect(result.message).toMatch(/Nome do paciente/);
+  });
+
+  it('ensureConsentEmailSent rejeita quando falta o template de TCLE', async () => {
+    const result = await helpers.ensureConsentEmailSent({
+      participant: { patientName: 'Paciente Teste' },
+      consent: {},
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe(400);
+    expect(result.message).toMatch(/TCLE/);
+  });
+
+  it('ensureConsentEmailSent rejeita quando falta e-mail do destinatario', async () => {
+    const result = await helpers.ensureConsentEmailSent({
+      participant: { patientName: 'Paciente Teste' },
+      consent: { consentTemplateId: 'template-1' },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe(400);
+    expect(result.message).toMatch(/E-mail/);
+  });
+
   it('resolveMatchedPatient calls the real PatientIdentityService method (regression for #165)', async () => {
     const insertedDocs = [];
     const patientsCollection = {

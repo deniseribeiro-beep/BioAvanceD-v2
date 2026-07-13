@@ -8,6 +8,20 @@ per-session read is `COVERAGE_NOTES.md`, which holds only the current
 ZERO/LOW buckets and reconcile numbers. Do not read this file as part
 of normal slice-picking.
 
+**Slice (2026-07-13):** `src/routes/intakeWizard.js`, 50.19% → 92.82%
+lines (77.66% branches), extended `tests/unit/intakeWizard.routes.test.js`
+(9 new integration tests via supertest) and `tests/unit/intakeWizard.helpers.test.js`
+(3 new tests for `ensureConsentEmailSent`'s validation-error branches).
+Covered the canonical-alias/schema-validation 422 rejections, the
+ACTIVE/REVOKED/PENDING consent-decision branches, the automatic-location
+resolver's sensor-not-operational and equipment-blocked skip-and-continue
+paths, the 422 "no qualifying location" and 409 "no available storage
+box" error paths inside `resolveAutomaticLocation`, and the box-allocation
+failure path that deletes the just-created sample and returns 409.
+Remaining gaps (not covered, lower value): a few defensive branches in
+`buildIdVariants`/`findFirstAvailablePosition` (Map-based `occupancyGrid`
+variant). No product bugs found this slice.
+
 Entries below predate the 2026-07-04 reconcile; percentages mentioned
 inline were provisional at the time and have since been superseded by
 that reconcile's real `coverage-summary.json` numbers (see

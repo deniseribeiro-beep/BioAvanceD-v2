@@ -212,6 +212,280 @@ describe('intakeWizard routes', () => {
 
       expect(res.status).toBe(500);
     });
+
+    it('returns 422 NON_CANONICAL_FIELD when a legacy alias field is present', async () => {
+      const { router } = loadRoute();
+      const app = buildApp(router, {});
+
+      const payload = {
+        ...VALID_PAYLOAD,
+        participant: { ...VALID_PAYLOAD.participant, patientID: '99999999' },
+      };
+
+      const res = await request(app).post('/api/intake-wizard').send(payload);
+
+      expect(res.status).toBe(422);
+      expect(res.body.error).toBe('NON_CANONICAL_FIELD');
+      expect(res.body.fields).toContain('patientID');
+    });
+
+    it('returns 422 NON_CANONICAL_FIELD when the payload fails canonical schema validation', async () => {
+      const { router } = loadRoute();
+      const app = buildApp(router, {});
+
+      const payload = {
+        ...VALID_PAYLOAD,
+        specimen: { ...VALID_PAYLOAD.specimen, participantId: undefined },
+      };
+      delete payload.specimen.participantId;
+
+      const res = await request(app).post('/api/intake-wizard').send(payload);
+
+      expect(res.status).toBe(422);
+      expect(res.body.error).toBe('NON_CANONICAL_FIELD');
+      expect(res.body.fields).toContain('specimen');
+    });
+
+    function buildHappyPathDb({ sensorsFind, equipmentFindOne, storageBoxesFind, locationsFind, consentsFindOneQueue } = {}) {
+      const consentsCollection = {
+        findOne: consentsFindOneQueue
+          ? vi.fn(() => Promise.resolve(consentsFindOneQueue.shift() ?? null))
+          : vi.fn().mockResolvedValue(null),
+      };
+
+      const db = {
+        collection: (name) => {
+          if (name === 'sensors') return { find: sensorsFind || (() => makeCursor([{ locationId: 1, status: 'ok' }])) };
+          if (name === 'equipment') return { findOne: equipmentFindOne || vi.fn().mockResolvedValue(null) };
+          if (name === 'storageBoxes') {
+            return {
+              find: storageBoxesFind || (() => makeCursor([{
+                _id: 'box-1',
+                name: 'Box A',
+                status: 'ACTIVE',
+                dimension: { rows: 1, cols: 1 },
+                currentOccupancy: 0,
+                occupancyGrid: {},
+              }])),
+            };
+          }
+          if (name === 'locations') return { find: locationsFind || (() => makeCursor([{ locationID: 1 }])) };
+          throw new Error(`unexpected collection ${name}`);
+        },
+      };
+
+      return { db, consentsCollection };
+    }
+
+    function setupHappyMocks({ getCollectionImplExtra, allocationResult, resolveMethodologicalQuality } = {}) {
+      const insertOne = vi.fn().mockResolvedValue({ insertedId: 'sample-1' });
+      const findOne = vi.fn().mockResolvedValue({ _id: 'sample-1', participantId: '12345678' });
+      const samplesCollection = { insertOne, findOne };
+      const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
+      const patientsCollection = { updateOne };
+
+      return { samplesCollection, patientsCollection, updateOne };
+    }
+
+    it('releases the sample when an ACTIVE consent exists and quality allows release', async () => {
+      const { db, consentsCollection } = buildHappyPathDb({
+        consentsFindOneQueue: [{ _id: 'consent-1', patientId: '12345678', signedAt: new Date() }],
+      });
+      const { samplesCollection, patientsCollection } = setupHappyMocks();
+
+      const getCollectionImpl = vi.fn(async (_db, key) => {
+        if (key === 'samples') return samplesCollection;
+        if (key === 'patients') return patientsCollection;
+        if (key === 'consents') return consentsCollection;
+        throw new Error(`unexpected key ${key}`);
+      });
+
+      const { router } = loadRoute({
+        getCollectionImpl,
+        resolveMethodologicalQuality: () => ({ governance_status: 1, final_grade: 'A', sprec: {} }),
+      });
+
+      const sampleServiceModule = require(sampleServicePath);
+      vi.spyOn(sampleServiceModule, 'createSample').mockResolvedValue({ _id: 'sample-1', participantId: '12345678' });
+
+      const StorageService = require(storageServicePath);
+      vi.spyOn(StorageService.prototype, 'autoAssignSampleToBox').mockResolvedValue({
+        success: true,
+        sampleLocation: { boxId: 'box-1', position: 'A1' },
+      });
+
+      const app = buildApp(router, db);
+      const res = await request(app).post('/api/intake-wizard').send(VALID_PAYLOAD);
+
+      expect(res.status).toBe(200);
+      expect(res.body.consent.active).toBe(true);
+      expect(res.body.storageLocation.position).toBe('A1');
+    });
+
+    it('blocks the sample when consent is REVOKED', async () => {
+      const { db, consentsCollection } = buildHappyPathDb({
+        consentsFindOneQueue: [null, { _id: 'consent-revoked', patientId: '12345678', revokedAt: new Date() }],
+      });
+      const { samplesCollection, patientsCollection } = setupHappyMocks();
+
+      const getCollectionImpl = vi.fn(async (_db, key) => {
+        if (key === 'samples') return samplesCollection;
+        if (key === 'patients') return patientsCollection;
+        if (key === 'consents') return consentsCollection;
+        throw new Error(`unexpected key ${key}`);
+      });
+
+      const { router } = loadRoute({ getCollectionImpl });
+
+      const sampleServiceModule = require(sampleServicePath);
+      vi.spyOn(sampleServiceModule, 'createSample').mockResolvedValue({ _id: 'sample-1', participantId: '12345678' });
+
+      const StorageService = require(storageServicePath);
+      vi.spyOn(StorageService.prototype, 'autoAssignSampleToBox').mockResolvedValue({
+        success: true,
+        sampleLocation: { boxId: 'box-1', position: 'A1' },
+      });
+
+      const app = buildApp(router, db);
+      const res = await request(app).post('/api/intake-wizard').send(VALID_PAYLOAD);
+
+      expect(res.status).toBe(200);
+      expect(res.body.consent.active).toBe(false);
+      expect(res.body.consent.status).toBe('REVOKED');
+      expect(res.body.sample).toBeDefined();
+    });
+
+    it('skips a location whose sensor is not operational and uses the next one', async () => {
+      const sensorsFind = vi.fn()
+        .mockReturnValueOnce(makeCursor([{ locationId: 1, status: 'maintenance' }]))
+        .mockReturnValueOnce(makeCursor([{ locationId: 2, status: 'ok' }]));
+      const locationsFind = () => makeCursor([{ locationID: 1 }, { locationID: 2 }]);
+
+      const { db, consentsCollection } = buildHappyPathDb({ sensorsFind, locationsFind });
+      const { samplesCollection, patientsCollection } = setupHappyMocks();
+
+      const getCollectionImpl = vi.fn(async (_db, key) => {
+        if (key === 'samples') return samplesCollection;
+        if (key === 'patients') return patientsCollection;
+        if (key === 'consents') return consentsCollection;
+        throw new Error(`unexpected key ${key}`);
+      });
+
+      const { router } = loadRoute({ getCollectionImpl });
+
+      const sampleServiceModule = require(sampleServicePath);
+      vi.spyOn(sampleServiceModule, 'createSample').mockResolvedValue({ _id: 'sample-1', participantId: '12345678' });
+
+      const StorageService = require(storageServicePath);
+      vi.spyOn(StorageService.prototype, 'autoAssignSampleToBox').mockResolvedValue({
+        success: true,
+        sampleLocation: { boxId: 'box-1', position: 'A1' },
+      });
+
+      const app = buildApp(router, db);
+      const res = await request(app).post('/api/intake-wizard').send(VALID_PAYLOAD);
+
+      expect(res.status).toBe(200);
+      expect(res.body.storageLocation.locationID).toBe(2);
+    });
+
+    it('skips a location whose linked equipment is blocked and uses the next one', async () => {
+      const equipmentFindOne = vi.fn()
+        .mockResolvedValueOnce({ equipmentID: 'EQ-1', status: 'maintenance' });
+      const locationsFind = () => makeCursor([{ locationID: 1, equipmentID: 'EQ-1' }, { locationID: 2 }]);
+
+      const { db, consentsCollection } = buildHappyPathDb({ equipmentFindOne, locationsFind });
+      const { samplesCollection, patientsCollection } = setupHappyMocks();
+
+      const getCollectionImpl = vi.fn(async (_db, key) => {
+        if (key === 'samples') return samplesCollection;
+        if (key === 'patients') return patientsCollection;
+        if (key === 'consents') return consentsCollection;
+        throw new Error(`unexpected key ${key}`);
+      });
+
+      const { router } = loadRoute({ getCollectionImpl });
+
+      const sampleServiceModule = require(sampleServicePath);
+      vi.spyOn(sampleServiceModule, 'createSample').mockResolvedValue({ _id: 'sample-1', participantId: '12345678' });
+
+      const StorageService = require(storageServicePath);
+      vi.spyOn(StorageService.prototype, 'autoAssignSampleToBox').mockResolvedValue({
+        success: true,
+        sampleLocation: { boxId: 'box-1', position: 'A1' },
+      });
+
+      const app = buildApp(router, db);
+      const res = await request(app).post('/api/intake-wizard').send(VALID_PAYLOAD);
+
+      expect(res.status).toBe(200);
+      expect(res.body.storageLocation.locationID).toBe(2);
+    });
+
+    it('returns 422 when no location has both operational equipment and sensor', async () => {
+      const equipmentFindOne = vi.fn().mockResolvedValue(null);
+      const locationsFind = () => makeCursor([{ locationID: 1, equipmentID: 'EQ-missing' }]);
+
+      const { db, consentsCollection } = buildHappyPathDb({ equipmentFindOne, locationsFind });
+      const getCollectionImpl = vi.fn(async (_db, key) => {
+        if (key === 'consents') return consentsCollection;
+        throw new Error(`unexpected key ${key}`);
+      });
+      const { router } = loadRoute({ getCollectionImpl });
+
+      const app = buildApp(router, db);
+      const res = await request(app).post('/api/intake-wizard').send(VALID_PAYLOAD);
+
+      expect(res.status).toBe(422);
+      expect(res.body.success).toBe(false);
+    });
+
+    it('returns 409 when a qualifying location has no available storage box', async () => {
+      const storageBoxesFind = () => makeCursor([]);
+      const { db, consentsCollection } = buildHappyPathDb({ storageBoxesFind });
+      const getCollectionImpl = vi.fn(async (_db, key) => {
+        if (key === 'consents') return consentsCollection;
+        throw new Error(`unexpected key ${key}`);
+      });
+      const { router } = loadRoute({ getCollectionImpl });
+
+      const app = buildApp(router, db);
+      const res = await request(app).post('/api/intake-wizard').send(VALID_PAYLOAD);
+
+      expect(res.status).toBe(409);
+      expect(res.body.success).toBe(false);
+    });
+
+    it('deletes the created sample and returns 409 when box allocation fails', async () => {
+      const { db, consentsCollection } = buildHappyPathDb();
+      const { samplesCollection, patientsCollection } = setupHappyMocks();
+
+      const getCollectionImpl = vi.fn(async (_db, key) => {
+        if (key === 'samples') return samplesCollection;
+        if (key === 'patients') return patientsCollection;
+        if (key === 'consents') return consentsCollection;
+        throw new Error(`unexpected key ${key}`);
+      });
+
+      const { router } = loadRoute({ getCollectionImpl });
+
+      const sampleServiceModule = require(sampleServicePath);
+      vi.spyOn(sampleServiceModule, 'createSample').mockResolvedValue({ _id: 'sample-1', participantId: '12345678' });
+      const deleteSampleSpy = vi.spyOn(sampleServiceModule, 'deleteSample').mockResolvedValue(undefined);
+
+      const StorageService = require(storageServicePath);
+      vi.spyOn(StorageService.prototype, 'autoAssignSampleToBox').mockResolvedValue({
+        success: false,
+        message: 'Sem posição livre',
+      });
+
+      const app = buildApp(router, db);
+      const res = await request(app).post('/api/intake-wizard').send(VALID_PAYLOAD);
+
+      expect(res.status).toBe(409);
+      expect(res.body.success).toBe(false);
+      expect(deleteSampleSpy).toHaveBeenCalledWith(db, 'sample-1');
+    });
   });
 
   describe('GET /patient-match', () => {

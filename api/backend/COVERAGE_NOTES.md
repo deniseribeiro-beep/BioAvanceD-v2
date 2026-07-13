@@ -137,7 +137,6 @@ Sorted ascending (worst first) — lines% / branches%. Same caveat: check
 against #146-#164 before picking.
 
 ```
-src/routes/intakeWizard.js                      50.19 / 41.43
 src/services/neo4jOutbox.service.js             52.45 / 54.92
 src/workers/jobs/daily-merkle.job.js            55.17 / 45       (issue #159 — stale test mock)
 src/utils/fieldEncryption.js                    57.14 / 60.86
@@ -159,10 +158,10 @@ src/services/consent.validator.js               69.69 / 54.16   (issue #146 clus
 ```
 
 Genuinely low (no matching filed issue found) — real slice candidates:
-`routes/intakeWizard.js`,
 `neo4jOutbox.service.js`, `fieldEncryption.js`,
 `rfc3161-adapter.service.js`, `equipment.routes.js`,
 `neo4jProjection.worker.js`, `config/keyRegistry.js`.
+(`routes/intakeWizard.js` covered 2026-07-13, now 92.82% lines.)
 
 ## MID-HIGH coverage (70-84% lines) — 44 files, full reconcile 2026-07-09, commit `2848ab1f`
 
