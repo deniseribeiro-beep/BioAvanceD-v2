@@ -163,6 +163,9 @@ class AuditLogger {
     if (pathLower.includes('/config') || pathLower.includes('/settings')) {
       return 'Configurações';
     }
+    if (pathLower.includes('/assistant')) {
+      return 'IA Assistente';
+    }
     if (pathLower.includes('/ia')) {
       return 'Sistema';
     }
