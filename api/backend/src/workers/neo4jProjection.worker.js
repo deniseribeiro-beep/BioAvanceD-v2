@@ -66,20 +66,29 @@ async function runProjectionOnce(options = {}) {
 async function runProjectionWorker(options = {}) {
   const intervalMs = Number(options.intervalMs || env.GRAPH_OUTBOX_RETRY_BACKOFF_MS || 1000);
   const stopAfterOne = options.once === true;
+  const shouldStop = typeof options.shouldStop === 'function' ? options.shouldStop : () => false;
 
   do {
     const result = await runProjectionOnce(options);
-    if (stopAfterOne) {
+    if (stopAfterOne || shouldStop()) {
       return result;
     }
     if (!result.processed) {
       await new Promise((resolve) => setTimeout(resolve, intervalMs));
     }
-  } while (!stopAfterOne);
+  } while (!stopAfterOne && !shouldStop());
 }
 
 if (require.main === module) {
-  runProjectionWorker()
+  let stopRequested = false;
+  const requestStop = (signal) => {
+    logger.info(`[GRAPH_OUTBOX] ${signal} recebido, encerrando worker...`);
+    stopRequested = true;
+  };
+  process.on('SIGTERM', () => requestStop('SIGTERM'));
+  process.on('SIGINT', () => requestStop('SIGINT'));
+
+  runProjectionWorker({ shouldStop: () => stopRequested })
     .then(() => {
       logger.info('[GRAPH_OUTBOX] Worker finalizado');
       process.exit(0);
