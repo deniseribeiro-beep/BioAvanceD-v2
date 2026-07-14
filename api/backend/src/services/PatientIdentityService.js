@@ -62,6 +62,10 @@ class participantIdentityService {
       birthDate: birthDate || null,
       birthDateKey: birthDate ? birthDate.toISOString().slice(0, 10) : '',
       identityDocument: identityDocument || null,
+      email: email || null,
+      phone: phone || null,
+      sex: sex || null,
+      cpf: cpf || null,
       createdAt: new Date(),
       updatedAt: new Date()
     };
