@@ -26,7 +26,7 @@ class UploadController {
       }
 
       const file = req.file;
-      const specimenId = req.body.specimenId || req.body.specimenId || null;
+      const specimenId = req.body.specimenId || null;
 
       if (!file) {
         return res.status(400).json({
