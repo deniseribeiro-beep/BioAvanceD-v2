@@ -83,7 +83,7 @@ describe('PatientIdentityService - Heuristic Patient Matching', () => {
 
       const result = await patientIdentityService.matchOrUpsertParticipant(db, {
         patientName: 'Novo Paciente',
-        birthDate: '2000-01-20',
+        birthDate: '20/01/2000',
         email: 'novo.paciente@test.com',
         phone: '+5511988887777',
         sex: 'F',
