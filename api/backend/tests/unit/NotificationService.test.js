@@ -28,9 +28,13 @@ describe('NotificationService', () => {
   });
 
   describe('getFrontendUrl', () => {
-    it('returns the default frontend URL when FRONTEND_URL is not set', () => {
+    // No default fallback (intentionally removed in 5e571099, see issue #180)
+    // — an unset FRONTEND_URL must throw, not silently resolve to a default.
+    it('throws when FRONTEND_URL is not set', () => {
       delete process.env.FRONTEND_URL;
-      expect(notificationService.getFrontendUrl()).toBe('http://localhost:5173');
+      expect(() => notificationService.getFrontendUrl()).toThrow(
+        'FRONTEND_URL é obrigatório para gerar links de consentimento'
+      );
     });
 
     it('returns the configured FRONTEND_URL when set', () => {
