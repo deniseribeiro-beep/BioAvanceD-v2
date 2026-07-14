@@ -26,7 +26,7 @@ function makeAuditRepository() {
   return { appendImmutableAudit: vi.fn(() => Promise.resolve()) };
 }
 
-const baseCommand = { sampleId: 'sample-1', actor: { userId: 'user-1' } };
+const baseCommand = { specimenId: 'sample-1', actor: { userId: 'user-1' } };
 
 describe('ReleaseSampleUseCase', () => {
   const originalLineageMode = env.LINEAGE_MODE;
@@ -50,7 +50,7 @@ describe('ReleaseSampleUseCase', () => {
 
     expect(result).toEqual({
       success: true,
-      releasedFrom: { sampleId: 'sample-1', boxId: 'box-1', position: 'A1' },
+      releasedFrom: { specimenId: 'sample-1', boxId: 'box-1', position: 'A1' },
       lineageValidated: true,
       lineagePersisted: true,
       lineageEventId: 'evt-1'
@@ -65,7 +65,7 @@ describe('ReleaseSampleUseCase', () => {
     const auditRepository = makeAuditRepository();
     const useCase = new ReleaseSampleUseCase({ storageRepository, auditRepository });
 
-    await expect(useCase.execute(undefined)).rejects.toThrow('sampleId é obrigatório');
+    await expect(useCase.execute(undefined)).rejects.toThrow('specimenId é obrigatório');
     expect(storageRepository.findSampleById).not.toHaveBeenCalled();
   });
 
@@ -74,16 +74,16 @@ describe('ReleaseSampleUseCase', () => {
     const auditRepository = makeAuditRepository();
     const useCase = new ReleaseSampleUseCase({ storageRepository, auditRepository });
 
-    await expect(useCase.execute(null)).rejects.toThrow('sampleId é obrigatório');
+    await expect(useCase.execute(null)).rejects.toThrow('specimenId é obrigatório');
     expect(storageRepository.findSampleById).not.toHaveBeenCalled();
   });
 
-  it('throws when sampleId is an empty string', async () => {
+  it('throws when specimenId is an empty string', async () => {
     const storageRepository = makeStorageRepository({ sampleSnapshot: makeSampleSnapshot() });
     const auditRepository = makeAuditRepository();
     const useCase = new ReleaseSampleUseCase({ storageRepository, auditRepository });
 
-    await expect(useCase.execute({ sampleId: '' })).rejects.toThrow('sampleId é obrigatório');
+    await expect(useCase.execute({ specimenId: '' })).rejects.toThrow('specimenId é obrigatório');
     expect(storageRepository.findSampleById).not.toHaveBeenCalled();
   });
 
@@ -245,7 +245,7 @@ describe('ReleaseSampleUseCase', () => {
     expect(lineageRepository.compensateCustodyEvent).toHaveBeenCalledTimes(1);
     expect(lineageRepository.compensateCustodyEvent).toHaveBeenCalledWith({
       eventId: 'evt-comp',
-      sampleId: 'sample-1',
+      specimenId: 'sample-1',
       reason: 'mongo_transaction_failed'
     });
   });
