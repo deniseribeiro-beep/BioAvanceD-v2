@@ -83,13 +83,20 @@ describe('PatientIdentityService - Heuristic Patient Matching', () => {
 
       const result = await patientIdentityService.matchOrUpsertParticipant(db, {
         patientName: 'Novo Paciente',
-        birthDate: '20/01/2000',
+        birthDate: '2000-01-20',
+        email: 'novo.paciente@test.com',
+        phone: '+5511988887777',
         sex: 'F',
         cpf: '98765432100',
       });
 
       expect(result.created).toBe(true);
       expect(patientsCollection.insertOne).toHaveBeenCalled();
+      const insertedDoc = patientsCollection.insertOne.mock.calls[0][0];
+      expect(insertedDoc.email).toBe('novo.paciente@test.com');
+      expect(insertedDoc.phone).toBe('+5511988887777');
+      expect(insertedDoc.sex).toBe('F');
+      expect(insertedDoc.cpf).toBe('98765432100');
     });
   });
 
