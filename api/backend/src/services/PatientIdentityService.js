@@ -23,6 +23,10 @@ class participantIdentityService {
     const birthDate = parseBirthDate(payload.birthDate);
     const normalizedName = normalizeName(patientName);
     const identityDocument = normalizeString(payload.identityDocument);
+    const email = normalizeString(payload.email);
+    const phone = normalizeString(payload.phone);
+    const sex = normalizeString(payload.sex);
+    const cpf = normalizeString(payload.cpf);
 
     if (!participantId && (!normalizedName || !birthDate)) {
       throw new Error('Identificação insuficiente: informe participantId ou (patientName + birthDate).');
@@ -40,6 +44,10 @@ class participantIdentityService {
         birthDate: birthDate || existing.birthDate,
         birthDateKey: birthDate ? birthDate.toISOString().slice(0, 10) : existing.birthDateKey,
         identityDocument: identityDocument || existing.identityDocument || null,
+        email: email || existing.email || null,
+        phone: phone || existing.phone || null,
+        sex: sex || existing.sex || null,
+        cpf: cpf || existing.cpf || null,
         updatedAt: new Date()
       };
       await participants.updateOne({ _id: existing._id }, { $set: update });
