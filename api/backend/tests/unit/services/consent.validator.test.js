@@ -53,19 +53,19 @@ describe('consent.validator - validateAccess', () => {
     );
   });
 
-  it('throws when sampleId is missing/falsy', async () => {
+  it('throws when specimenId is missing/falsy', async () => {
     const samplesCollection = makeSamplesCollection(async () => null);
     const consentsCollection = makeConsentsCollection();
     consentValidator.init(makeFakeDb({ samplesCollection, consentsCollection }));
 
     await expect(consentValidator.validateAccess(null)).rejects.toThrow(
-      'sampleId é obrigatório para validar consentimento'
+      'specimenId é obrigatório para validar consentimento'
     );
   });
 
   it('finds the sample via the valid ObjectId path', async () => {
     const objectId = new ObjectId();
-    const sample = { _id: objectId, patientID: 'p1' };
+    const sample = { _id: objectId, participantId: 'p1' };
     const samplesCollection = makeSamplesCollection(async (query) => {
       if (query._id) return sample;
       return null;
@@ -80,65 +80,37 @@ describe('consent.validator - validateAccess', () => {
     expect(samplesCollection.findOne).toHaveBeenCalledTimes(1);
   });
 
-  it('falls through to numeric sampleID lookup when ObjectId lookup misses', async () => {
-    // A 24-digit numeric string is valid hex (ObjectId.isValid true) AND parses
-    // to a finite Number, so it genuinely exercises the ObjectId stage (miss)
-    // before falling through to the numeric-sampleID stage (hit).
-    const sampleIdStr = '999999999999999999999999';
+  it('falls through to specimenId lookup when ObjectId lookup misses', async () => {
+    const specimenIdStr = 'SPEC-001';
     const samplesCollection = makeSamplesCollection(async (query) => {
-      if (query._id) return null; // stage 1: ObjectId lookup misses
-      if (query.$or && query.$or.length === 2 && typeof query.$or[0].sampleID === 'number') {
-        // stage 2: numeric sampleID lookup query shape: { $or: [{ sampleID: number }, { sampleID: string }] }
-        return { sampleID: Number(sampleIdStr), patientID: 'p2' };
-      }
+      if (query._id) return null; // stage 1: ObjectId lookup skipped (not valid hex)
+      if (query.specimenId) return { specimenId: specimenIdStr, participantId: 'p2' };
       return null;
     });
     const consentsCollection = makeConsentsCollection([{ responses: {} }]);
     consentValidator.init(makeFakeDb({ samplesCollection, consentsCollection }));
 
-    const result = await consentValidator.validateAccess(sampleIdStr);
+    const result = await consentValidator.validateAccess(specimenIdStr);
 
     expect(result).toBe(true);
-    expect(samplesCollection.findOne).toHaveBeenCalledTimes(2);
-  });
-
-  it('falls through to numeric sampleID lookup when sampleId is not a valid ObjectId string', async () => {
-    // 'abc' is not 24-hex, so ObjectId.isValid is false and the first lookup is skipped entirely.
-    const samplesCollection = makeSamplesCollection(async (query) => {
-      if (query.$or && typeof query.$or[0].sampleID !== 'undefined') {
-        return null; // numeric parse of 'abc' is NaN, so this branch shouldn't even be queried
-      }
-      return null;
-    });
-    const consentsCollection = makeConsentsCollection([]);
-    consentValidator.init(makeFakeDb({ samplesCollection, consentsCollection }));
-
-    await expect(consentValidator.validateAccess('abc')).rejects.toThrow(
-      'Amostra não encontrada para validação de consentimento'
-    );
-    // Only the third (string) lookup should have run, since ObjectId is invalid and Number('abc') is NaN.
     expect(samplesCollection.findOne).toHaveBeenCalledTimes(1);
   });
 
-  it('falls through to the third barcode/sampleID/sampleId string lookup', async () => {
-    // Same 24-digit trick as above so both the ObjectId stage and the numeric
-    // sampleID stage genuinely run (and miss) before the third string-based
-    // (sampleID/sampleId/barcode) lookup hits.
-    const sampleIdStr = '888888888888888888888888';
+  it('falls through to barcode lookup when both ObjectId and specimenId lookups miss', async () => {
+    // A 24-digit numeric string is valid hex (ObjectId.isValid true), so it
+    // genuinely exercises the ObjectId stage (miss) before falling through to
+    // the specimenId stage (miss) and then the barcode stage (hit).
+    const idStr = '888888888888888888888888';
     const samplesCollection = makeSamplesCollection(async (query) => {
       if (query._id) return null; // stage 1: ObjectId lookup misses
-      if (query.$or && query.$or.length === 2 && typeof query.$or[0].sampleID === 'number') {
-        return null; // stage 2: numeric sampleID lookup misses
-      }
-      if (query.$or && query.$or.some((c) => 'barcode' in c)) {
-        return { barcode: sampleIdStr, patientId: 'p3' }; // stage 3: barcode lookup hits
-      }
+      if (query.specimenId) return null; // stage 2: specimenId lookup misses
+      if (query.barcode) return { barcode: idStr, participantId: 'p3' }; // stage 3: barcode lookup hits
       return null;
     });
     const consentsCollection = makeConsentsCollection([{ responses: {} }]);
     consentValidator.init(makeFakeDb({ samplesCollection, consentsCollection }));
 
-    const result = await consentValidator.validateAccess(sampleIdStr);
+    const result = await consentValidator.validateAccess(idStr);
 
     expect(result).toBe(true);
     expect(samplesCollection.findOne).toHaveBeenCalledTimes(3);
@@ -154,34 +126,32 @@ describe('consent.validator - validateAccess', () => {
     );
   });
 
-  it('throws when sample is found but has neither patientID nor patientId', async () => {
+  it('throws when sample is found but has no participantId', async () => {
     const samplesCollection = makeSamplesCollection(async (query) => {
-      if (query.$or && query.$or.some((c) => 'barcode' in c)) {
-        return { barcode: 'BC-2' }; // no patientID/patientId
-      }
+      if (query.barcode) return { barcode: 'BC-2' }; // no participantId
       return null;
     });
     const consentsCollection = makeConsentsCollection([]);
     consentValidator.init(makeFakeDb({ samplesCollection, consentsCollection }));
 
     await expect(consentValidator.validateAccess('BC-2')).rejects.toThrow(
-      'Amostra sem patientID para validação de consentimento'
+      'Amostra sem participantId para validação de consentimento'
     );
   });
 
   it('throws "Consentimento inexistente ou revogado" when consents query returns empty', async () => {
-    const sample = { _id: new ObjectId(), patientID: 'p4' };
+    const sample = { _id: new ObjectId(), participantId: 'p4' };
     const samplesCollection = makeSamplesCollection(async (query) => (query._id ? sample : null));
     const consentsCollection = makeConsentsCollection([]);
     consentValidator.init(makeFakeDb({ samplesCollection, consentsCollection }));
 
     await expect(consentValidator.validateAccess(sample._id.toString())).rejects.toThrow(
-      'Consentimento inexistente ou revogado para este paciente'
+      'Consentimento inexistente ou revogado para este participante'
     );
   });
 
   it('succeeds (returns true) with a valid active consent and no requiredScope', async () => {
-    const sample = { _id: new ObjectId(), patientID: 'p5' };
+    const sample = { _id: new ObjectId(), participantId: 'p5' };
     const samplesCollection = makeSamplesCollection(async (query) => (query._id ? sample : null));
     const consentsCollection = makeConsentsCollection([{ responses: { genetic: true } }]);
     consentValidator.init(makeFakeDb({ samplesCollection, consentsCollection }));
@@ -192,7 +162,7 @@ describe('consent.validator - validateAccess', () => {
   });
 
   it('succeeds when requiredScope is present and true in responses', async () => {
-    const sample = { _id: new ObjectId(), patientID: 'p6' };
+    const sample = { _id: new ObjectId(), participantId: 'p6' };
     const samplesCollection = makeSamplesCollection(async (query) => (query._id ? sample : null));
     const consentsCollection = makeConsentsCollection([{ responses: { genetic: true } }]);
     consentValidator.init(makeFakeDb({ samplesCollection, consentsCollection }));
@@ -203,7 +173,7 @@ describe('consent.validator - validateAccess', () => {
   });
 
   it('throws with the exact scope name when requiredScope is false in responses', async () => {
-    const sample = { _id: new ObjectId(), patientID: 'p7' };
+    const sample = { _id: new ObjectId(), participantId: 'p7' };
     const samplesCollection = makeSamplesCollection(async (query) => (query._id ? sample : null));
     const consentsCollection = makeConsentsCollection([{ responses: { genetic: false } }]);
     consentValidator.init(makeFakeDb({ samplesCollection, consentsCollection }));
@@ -214,7 +184,7 @@ describe('consent.validator - validateAccess', () => {
   });
 
   it('throws with the exact scope name when requiredScope is missing from responses', async () => {
-    const sample = { _id: new ObjectId(), patientID: 'p8' };
+    const sample = { _id: new ObjectId(), participantId: 'p8' };
     const samplesCollection = makeSamplesCollection(async (query) => (query._id ? sample : null));
     const consentsCollection = makeConsentsCollection([{ responses: {} }]);
     consentValidator.init(makeFakeDb({ samplesCollection, consentsCollection }));
@@ -225,7 +195,7 @@ describe('consent.validator - validateAccess', () => {
   });
 
   it('queries consents sorted by signedAt/createdAt desc and limited to 1', async () => {
-    const sample = { _id: new ObjectId(), patientID: 'p9' };
+    const sample = { _id: new ObjectId(), participantId: 'p9' };
     const samplesCollection = makeSamplesCollection(async (query) => (query._id ? sample : null));
     const consentsCollection = makeConsentsCollection([{ responses: {} }]);
     consentValidator.init(makeFakeDb({ samplesCollection, consentsCollection }));

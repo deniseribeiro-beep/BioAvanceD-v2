@@ -3,12 +3,12 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 const TopologicalQuarantine = require('../../src/infrastructure/queue/TopologicalQuarantine');
 
 describe('TopologicalQuarantine - enqueue', () => {
-  it('ignora payload inválido (sem sampleId/eventType) e retorna false', async () => {
+  it('ignora payload inválido (sem specimenId/eventType) e retorna false', async () => {
     const redisMock = { rpush: vi.fn() };
     const quarantine = new TopologicalQuarantine({ redisClient: redisMock });
 
     expect(await quarantine.enqueue(null)).toBe(false);
-    expect(await quarantine.enqueue({ sampleId: 'x' })).toBe(false);
+    expect(await quarantine.enqueue({ specimenId: 'x' })).toBe(false);
     expect(await quarantine.enqueue({ eventType: 'register' })).toBe(false);
     expect(redisMock.rpush).not.toHaveBeenCalled();
   });
@@ -18,7 +18,7 @@ describe('TopologicalQuarantine - enqueue', () => {
     const quarantine = new TopologicalQuarantine({ redisClient: redisMock, queueKey: 'q1' });
 
     const ok = await quarantine.enqueue(
-      { sampleId: 's1', eventType: 'register' },
+      { specimenId: 's1', eventType: 'register' },
       { reason: 'custom_reason', neo4jError: 'boom', attempts: 2 }
     );
 
@@ -37,7 +37,7 @@ describe('TopologicalQuarantine - enqueue', () => {
     const redisMock = { rpush: vi.fn().mockRejectedValue(new Error('redis down')) };
     const quarantine = new TopologicalQuarantine({ redisClient: redisMock });
 
-    const ok = await quarantine.enqueue({ sampleId: 's1', eventType: 'register' });
+    const ok = await quarantine.enqueue({ specimenId: 's1', eventType: 'register' });
 
     expect(ok).toBe(false);
   });
@@ -148,7 +148,7 @@ describe('TopologicalQuarantine - reprocessItem factory failures', () => {
   it('falha quando getLineageRepository não está configurada', async () => {
     const quarantine = new TopologicalQuarantine({ redisClient: {} });
 
-    const ok = await quarantine.reprocessItem({ payload: { sampleId: 's1', eventType: 'register' } });
+    const ok = await quarantine.reprocessItem({ payload: { specimenId: 's1', eventType: 'register' } });
 
     expect(ok).toBe(false);
     expect(quarantine.metrics.replayFailureTotal).toBe(1);
@@ -160,7 +160,7 @@ describe('TopologicalQuarantine - reprocessItem factory failures', () => {
       getLineageRepository: vi.fn().mockResolvedValue(null),
     });
 
-    const ok = await quarantine.reprocessItem({ payload: { sampleId: 's1', eventType: 'register' } });
+    const ok = await quarantine.reprocessItem({ payload: { specimenId: 's1', eventType: 'register' } });
 
     expect(ok).toBe(false);
   });
@@ -176,7 +176,7 @@ describe('TopologicalQuarantine - reprocessItem factory failures', () => {
     });
 
     const ok = await quarantine.reprocessItem({
-      payload: { sampleId: 's1', eventType: 'register', requireEthicalConsent: false },
+      payload: { specimenId: 's1', eventType: 'register', requireEthicalConsent: false },
     });
 
     expect(ok).toBe(true);
