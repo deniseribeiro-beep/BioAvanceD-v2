@@ -250,10 +250,14 @@ describe('NotificationService - buildConsentMetadata', () => {
 });
 
 describe('NotificationService - buildConsentLink', () => {
-  it('uses the default frontend URL when FRONTEND_URL is unset', () => {
+  // getFrontendUrl has no default fallback (intentionally removed in 5e571099,
+  // see issue #180) — an unset FRONTEND_URL must throw, not silently link to
+  // http://localhost:5173.
+  it('throws when FRONTEND_URL is unset', () => {
     delete process.env.FRONTEND_URL;
-    const link = notificationService.buildConsentLink({ patientID: 'P1' }, 'tok en');
-    expect(link).toBe('http://localhost:5173/patients/P1/consent?token=tok%20en');
+    expect(() => notificationService.buildConsentLink({ patientID: 'P1' }, 'tok en')).toThrow(
+      'FRONTEND_URL deve ser uma URL absoluta válida'
+    );
   });
 
   it('honors FRONTEND_URL and strips a trailing slash', () => {
@@ -263,7 +267,7 @@ describe('NotificationService - buildConsentLink', () => {
   });
 
   it('prefers patientID, then patientId, then id', () => {
-    delete process.env.FRONTEND_URL;
+    process.env.FRONTEND_URL = 'https://app.example.com';
     expect(
       notificationService.buildConsentLink({ patientID: 'A', patientId: 'B', id: 'C' }, 'tok')
     ).toContain('/patients/A/');
@@ -274,9 +278,9 @@ describe('NotificationService - buildConsentLink', () => {
   });
 
   it('URL-encodes the token', () => {
-    delete process.env.FRONTEND_URL;
+    process.env.FRONTEND_URL = 'https://app.example.com';
     const link = notificationService.buildConsentLink({ id: 'X' }, 'a/b c&d');
-    expect(link).toBe('http://localhost:5173/patients/X/consent?token=a%2Fb%20c%26d');
+    expect(link).toBe('https://app.example.com/patients/X/consent?token=a%2Fb%20c%26d');
   });
 });
 
