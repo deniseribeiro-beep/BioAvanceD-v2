@@ -10,12 +10,14 @@ describe('NotificationService', () => {
   let originalIsDevelopment;
   let originalAdminEmail;
   let originalResendClient;
+  let originalEmailFrom;
 
   beforeEach(() => {
     originalEnv = { ...process.env };
     originalIsDevelopment = notificationService.isDevelopment;
     originalAdminEmail = notificationService.adminEmail;
     originalResendClient = notificationService.resendClient;
+    originalEmailFrom = notificationService.emailFrom;
   });
 
   afterEach(() => {
@@ -23,6 +25,7 @@ describe('NotificationService', () => {
     notificationService.isDevelopment = originalIsDevelopment;
     notificationService.adminEmail = originalAdminEmail;
     notificationService.resendClient = originalResendClient;
+    notificationService.emailFrom = originalEmailFrom;
     notificationService.io = null;
     vi.restoreAllMocks();
   });
@@ -111,11 +114,13 @@ describe('NotificationService', () => {
   });
 
   describe('getResendClient', () => {
-    it('returns null in development mode when RESEND_API_KEY is absent', () => {
+    // No development-mode fallback (intentionally removed in 5e571099, see issue #181)
+    // — a missing RESEND_API_KEY must throw regardless of environment.
+    it('throws in development mode when RESEND_API_KEY is absent', () => {
       notificationService.isDevelopment = true;
       notificationService.resendClient = null;
       delete process.env.RESEND_API_KEY;
-      expect(notificationService.getResendClient()).toBeNull();
+      expect(() => notificationService.getResendClient()).toThrow('RESEND_API_KEY');
     });
 
     it('throws in non-development mode when RESEND_API_KEY is absent', () => {
@@ -195,12 +200,17 @@ describe('NotificationService', () => {
       );
     });
 
-    it('sends via the mocked dev path when in development with no resend client available', async () => {
+    // getResendClient no longer has a development-mode null fallback
+    // (intentionally removed in 5e571099, see issue #181) — sendEmail always
+    // routes through a real resend client, even in development; only the
+    // recipient redirection is dev-mode-specific.
+    it('redirects to ADMIN_EMAIL in development mode while still sending via the resend client', async () => {
       notificationService.isDevelopment = true;
       notificationService.adminEmail = 'admin@example.com';
-      vi.spyOn(notificationService, 'getResendClient').mockReturnValue(null);
+      notificationService.emailFrom = 'notifications@example.com';
+      const sendMock = vi.fn().mockResolvedValue({ data: { id: 'msg-123' }, error: null });
+      vi.spyOn(notificationService, 'getResendClient').mockReturnValue({ emails: { send: sendMock } });
       vi.spyOn(notificationService, 'persistComplianceLog').mockResolvedValue(undefined);
-      const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
 
       const result = await notificationService.sendEmail({
         to: 'patient@example.com',
@@ -209,16 +219,17 @@ describe('NotificationService', () => {
         notificationType: 'TEST'
       });
 
+      expect(sendMock).toHaveBeenCalledWith(
+        expect.objectContaining({ to: 'admin@example.com', subject: 'Hello' })
+      );
       expect(result.success).toBe(true);
-      expect(result.mocked).toBe(true);
-      expect(result.provider).toBe('resend-mock');
       expect(result.to).toBe('admin@example.com');
       expect(result.redirectedByEnvironment).toBe(true);
-      expect(warnSpy).toHaveBeenCalled();
     });
 
     it('sends via the real resend client and returns the messageId when a client is available', async () => {
       notificationService.isDevelopment = false;
+      notificationService.emailFrom = 'notifications@example.com';
       const sendMock = vi.fn().mockResolvedValue({ data: { id: 'msg-123' }, error: null });
       vi.spyOn(notificationService, 'getResendClient').mockReturnValue({ emails: { send: sendMock } });
       vi.spyOn(notificationService, 'persistComplianceLog').mockResolvedValue(undefined);
@@ -240,6 +251,7 @@ describe('NotificationService', () => {
 
     it('throws when the resend client responds with an error', async () => {
       notificationService.isDevelopment = false;
+      notificationService.emailFrom = 'notifications@example.com';
       const sendMock = vi.fn().mockResolvedValue({ error: { message: 'invalid domain' } });
       vi.spyOn(notificationService, 'getResendClient').mockReturnValue({ emails: { send: sendMock } });
       vi.spyOn(notificationService, 'persistComplianceLog').mockResolvedValue(undefined);
@@ -303,15 +315,28 @@ describe('NotificationService', () => {
   });
 
   describe('sendConsentEmail', () => {
-    it('returns missing_email failure when the patient has no resolvable email', async () => {
-      const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
-      const result = await notificationService.sendConsentEmail({ patientID: 'P-1' }, 'http://link');
-      expect(result).toEqual({ channel: 'email', success: false, reason: 'missing_email' });
-      expect(warnSpy).toHaveBeenCalled();
+    // sendConsentEmail no longer swallows a missing email into a soft
+    // {success:false} result (intentionally removed in 5e571099, see issue
+    // #181) — it now throws, and persists a delivery-failure record via the
+    // catch block. notifyPatientConsent (the caller) is what turns this
+    // throw back into a {channel:'unknown', success:false} entry.
+    it('throws and records a delivery failure when the patient has no resolvable email', async () => {
+      vi.spyOn(notificationService, 'validateFrontendUrl').mockReturnValue(new URL('https://app.example.com'));
+      const persistFailureSpy = vi
+        .spyOn(notificationService, 'persistConsentDeliveryFailure')
+        .mockResolvedValue(undefined);
+
+      await expect(
+        notificationService.sendConsentEmail({ patientID: 'P-1' }, 'http://link')
+      ).rejects.toThrow('E-mail do participante é obrigatório para convite remoto');
+      expect(persistFailureSpy).toHaveBeenCalledWith({ patientID: 'P-1' }, expect.any(Error));
     });
 
     it('sends the consent email through sendEmail and returns success', async () => {
-      const sendEmailSpy = vi.spyOn(notificationService, 'sendEmail').mockResolvedValue({ success: true });
+      vi.spyOn(notificationService, 'validateFrontendUrl').mockReturnValue(new URL('https://app.example.com'));
+      const sendEmailSpy = vi
+        .spyOn(notificationService, 'sendEmail')
+        .mockResolvedValue({ success: true, channel: 'email', provider: 'resend' });
       const result = await notificationService.sendConsentEmail(
         { patientID: 'P-1', patientName: 'Maria', email: 'maria@example.com' },
         'http://link'
