@@ -112,6 +112,7 @@ describe('SampleGraphValidator', () => {
       findOne: vi.fn().mockResolvedValue(null),
       insertOne: vi.fn().mockResolvedValue({ insertedId: 'movement-1' }),
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
+      createIndex: vi.fn().mockResolvedValue(undefined),
     };
 
     const countersCollection = {
@@ -222,6 +223,9 @@ describe('SampleGraphValidator', () => {
     samplesCollection.findOne.mockResolvedValue(tampered);
 
     const failReport = await validator.validateSampleCompliance(tampered._id);
+    // #221: MerkleService.generateSampleHash reads camelCase clinicalData/pharmacologyData,
+    // sample docs use snake_case clinical_data/pharmacology_data, so tampering here is
+    // never reflected in the recomputed hash and this currently fails.
     expect(failReport.graphPath.integrity.valid).toBe(false);
     expect(failReport.suggestedStatus).toBe('BLOCKED');
   });
