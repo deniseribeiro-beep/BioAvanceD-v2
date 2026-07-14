@@ -299,14 +299,18 @@ async function syncFromOrphadata(db = null) {
     '/rd-classification/orphacodes?limit=1000',
   ];
 
+  const consulted = [];
+
   for (const endpoint of endpoints) {
     try {
       const url = `${ORPHADATA_BASE_URL.replace(/\/$/, '')}${endpoint}`;
       const responseData = await fetchJsonWithTimeout(url, DEFAULT_TIMEOUT_MS);
       const records = extractRecords(responseData?.data?.results ?? responseData);
       if (!records.length) {
+        consulted.push({ endpoint, recordCount: 0 });
         continue;
       }
+      consulted.push({ endpoint, recordCount: records.length });
 
       const stats = { attempted: endpoint, upserted: 0, skipped: 0 };
       for (const record of records) {
@@ -330,13 +334,14 @@ async function syncFromOrphadata(db = null) {
         stats.upserted += 1;
       }
 
-      return { success: true, ...stats };
+      return { success: true, ...stats, consulted };
     } catch (error) {
+      consulted.push({ endpoint, recordCount: 0, error: error.message });
       logger.warn(`Falha ao sincronizar terminologias via ${endpoint}: ${error.message}`);
     }
   }
 
-  return { success: false, attempted: endpoints, upserted: 0, skipped: 0 };
+  return { success: false, attempted: endpoints, upserted: 0, skipped: 0, consulted };
 }
 
 async function seedTerminologies(records = []) {
