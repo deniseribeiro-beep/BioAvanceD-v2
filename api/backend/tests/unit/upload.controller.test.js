@@ -48,7 +48,7 @@ describe('upload.controller - uploadAnalysisFile', () => {
     });
   });
 
-  it('returns 400 and cleans up temp file when sampleId (camelCase) is missing', async () => {
+  it('returns 400 and cleans up temp file when specimenId is missing', async () => {
     vi.spyOn(fs, 'existsSync').mockReturnValue(true);
     const unlinkSpy = vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {});
 
@@ -65,11 +65,11 @@ describe('upload.controller - uploadAnalysisFile', () => {
     expect(res.status).toHaveBeenCalledWith(400);
     expect(res.json).toHaveBeenCalledWith({
       success: false,
-      error: 'sampleId é obrigatório'
+      error: 'specimenId é obrigatório'
     });
   });
 
-  it('accepts sampleID (uppercase D) alias when present, skipping the missing-sampleId branch', async () => {
+  it('accepts specimenId when present, skipping the missing-specimenId branch', async () => {
     vi.spyOn(fs, 'existsSync').mockReturnValue(false);
     vi.spyOn(analysisValidationService, 'validateUploadEligibility').mockResolvedValue({
       success: false,
@@ -79,7 +79,7 @@ describe('upload.controller - uploadAnalysisFile', () => {
 
     const req = {
       app: { locals: { db: {} } },
-      body: { sampleID: 'S-123' },
+      body: { specimenId: 'S-123' },
       file: { path: '/tmp/fake-file.txt' }
     };
     const res = buildRes();
@@ -87,9 +87,9 @@ describe('upload.controller - uploadAnalysisFile', () => {
     await uploadController.uploadAnalysisFile(req, res);
 
     expect(analysisValidationService.validateUploadEligibility).toHaveBeenCalledWith({}, 'S-123');
-    // Confirms it did NOT hit the "sampleId é obrigatório" branch
+    // Confirms it did NOT hit the "specimenId é obrigatório" branch
     expect(res.json).not.toHaveBeenCalledWith(
-      expect.objectContaining({ error: 'sampleId é obrigatório' })
+      expect.objectContaining({ error: 'specimenId é obrigatório' })
     );
   });
 
@@ -106,7 +106,7 @@ describe('upload.controller - uploadAnalysisFile', () => {
 
     const req = {
       app: { locals: { db: {} } },
-      body: { sampleId: 'S-1' },
+      body: { specimenId: 'S-1' },
       file: { path: '/tmp/pending.txt' }
     };
     const res = buildRes();
@@ -133,7 +133,7 @@ describe('upload.controller - uploadAnalysisFile', () => {
 
     const req = {
       app: { locals: { db: {} } },
-      body: { sampleId: 'S-404' },
+      body: { specimenId: 'S-404' },
       file: { path: '/tmp/notfound.txt' }
     };
     const res = buildRes();
@@ -160,7 +160,7 @@ describe('upload.controller - uploadAnalysisFile', () => {
 
     const req = {
       app: { locals: { db: {} } },
-      body: { sampleId: 'S-404' },
+      body: { specimenId: 'S-404' },
       file: { path: '/tmp/gone.txt' }
     };
     const res = buildRes();
@@ -175,9 +175,9 @@ describe('upload.controller - uploadAnalysisFile', () => {
       success: true,
       sample: {
         _id: 'sample-object-id',
-        sampleID: 'SMP-001',
+        specimenId: 'SMP-001',
         barcode: 'BC-001',
-        patientID: 'PAT-001'
+        participantId: 'PAT-001'
       }
     });
 
@@ -186,7 +186,7 @@ describe('upload.controller - uploadAnalysisFile', () => {
 
     const req = {
       app: { locals: { db: { collection } } },
-      body: { sampleId: 'SMP-001' },
+      body: { specimenId: 'SMP-001' },
       user: { id: 'user-123' },
       file: {
         path: '/whatever/uploads/2026/07/file.txt',
@@ -205,9 +205,9 @@ describe('upload.controller - uploadAnalysisFile', () => {
         originalName: 'analysis.pdf',
         mimeType: 'application/pdf',
         size: 1024,
-        sampleId: 'sample-object-id',
-        sampleIdentifier: 'SMP-001',
-        patientID: 'PAT-001',
+        specimenId: 'sample-object-id',
+        specimenIdentifier: 'SMP-001',
+        participantId: 'PAT-001',
         uploadedBy: 'user-123'
       })
     );
@@ -218,7 +218,7 @@ describe('upload.controller - uploadAnalysisFile', () => {
         message: 'Arquivo enviado com sucesso',
         data: expect.objectContaining({
           _id: 'inserted-id-1',
-          sampleID: 'SMP-001',
+          specimenId: 'SMP-001',
           barcode: 'BC-001',
           fileName: 'analysis.pdf',
           fileSize: 1024
@@ -232,9 +232,9 @@ describe('upload.controller - uploadAnalysisFile', () => {
       success: true,
       sample: {
         _id: 'sample-object-id-2',
-        sampleID: 'SMP-002',
+        specimenId: 'SMP-002',
         barcode: 'BC-002',
-        patientID: 'PAT-002'
+        participantId: 'PAT-002'
       }
     });
 
@@ -243,7 +243,7 @@ describe('upload.controller - uploadAnalysisFile', () => {
 
     const req = {
       app: { locals: { db: { collection } } },
-      body: { sampleId: 'SMP-002' },
+      body: { specimenId: 'SMP-002' },
       user: { _id: { toString: () => 'mongo-object-id-string' } },
       file: {
         path: '/whatever/uploads/2026/07/file2.txt',
@@ -266,9 +266,9 @@ describe('upload.controller - uploadAnalysisFile', () => {
       success: true,
       sample: {
         _id: 'sample-object-id-3',
-        sampleID: 'SMP-003',
+        specimenId: 'SMP-003',
         barcode: 'BC-003',
-        patientID: 'PAT-003'
+        participantId: 'PAT-003'
       }
     });
 
@@ -277,7 +277,7 @@ describe('upload.controller - uploadAnalysisFile', () => {
 
     const req = {
       app: { locals: { db: { collection } } },
-      body: { sampleId: 'SMP-003' },
+      body: { specimenId: 'SMP-003' },
       file: {
         path: '/whatever/uploads/2026/07/file3.txt',
         originalname: 'analysis3.pdf',
@@ -299,9 +299,9 @@ describe('upload.controller - uploadAnalysisFile', () => {
       success: true,
       sample: {
         _id: 'sample-object-id-4',
-        sampleID: 'SMP-004',
+        specimenId: 'SMP-004',
         barcode: 'BC-004',
-        patientID: 'PAT-004'
+        participantId: 'PAT-004'
       }
     });
     vi.spyOn(fs, 'existsSync').mockReturnValue(false);
@@ -312,7 +312,7 @@ describe('upload.controller - uploadAnalysisFile', () => {
 
     const req = {
       app: { locals: { db: { collection } } },
-      body: { sampleId: 'SMP-004' },
+      body: { specimenId: 'SMP-004' },
       file: {
         path: '/whatever/uploads/2026/07/file4.txt',
         originalname: 'analysis4.pdf',
@@ -337,9 +337,9 @@ describe('upload.controller - uploadAnalysisFile', () => {
       success: true,
       sample: {
         _id: 'sample-object-id-5',
-        sampleID: 'SMP-005',
+        specimenId: 'SMP-005',
         barcode: 'BC-005',
-        patientID: 'PAT-005'
+        participantId: 'PAT-005'
       }
     });
     vi.spyOn(fs, 'existsSync').mockReturnValue(true);
@@ -351,7 +351,7 @@ describe('upload.controller - uploadAnalysisFile', () => {
 
     const req = {
       app: { locals: { db: { collection } } },
-      body: { sampleId: 'SMP-005' },
+      body: { specimenId: 'SMP-005' },
       file: {
         path: '/whatever/uploads/2026/07/file5.txt',
         originalname: 'analysis5.pdf',
@@ -372,9 +372,9 @@ describe('upload.controller - uploadAnalysisFile', () => {
       success: true,
       sample: {
         _id: 'sample-object-id-6',
-        sampleID: 'SMP-006',
+        specimenId: 'SMP-006',
         barcode: 'BC-006',
-        patientID: 'PAT-006'
+        participantId: 'PAT-006'
       }
     });
     vi.spyOn(fs, 'existsSync').mockReturnValue(true);
@@ -388,7 +388,7 @@ describe('upload.controller - uploadAnalysisFile', () => {
 
     const req = {
       app: { locals: { db: { collection } } },
-      body: { sampleId: 'SMP-006' },
+      body: { specimenId: 'SMP-006' },
       file: {
         path: '/whatever/uploads/2026/07/file6.txt',
         originalname: 'analysis6.pdf',

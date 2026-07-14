@@ -28,31 +28,31 @@ afterEach(() => {
 });
 
 describe('revalidateSamplesByPatientID', () => {
-  it('returns zeroed result and skips getCollection when patientID is null', async () => {
+  it('returns zeroed result and skips getCollection when participantId is null', async () => {
     const result = await revalidateSamplesByPatientID({}, null);
     expect(result).toEqual({ total: 0, validated: 0, failed: 0 });
     expect(collectionResolverModule.getCollection).not.toHaveBeenCalled();
   });
 
-  it('returns zeroed result and skips getCollection when patientID is undefined', async () => {
+  it('returns zeroed result and skips getCollection when participantId is undefined', async () => {
     const result = await revalidateSamplesByPatientID({}, undefined);
     expect(result).toEqual({ total: 0, validated: 0, failed: 0 });
     expect(collectionResolverModule.getCollection).not.toHaveBeenCalled();
   });
 
-  it('returns zeroed result and skips getCollection when patientID is empty string', async () => {
+  it('returns zeroed result and skips getCollection when participantId is empty string', async () => {
     const result = await revalidateSamplesByPatientID({}, '');
     expect(result).toEqual({ total: 0, validated: 0, failed: 0 });
     expect(collectionResolverModule.getCollection).not.toHaveBeenCalled();
   });
 
-  it('returns zeroed result and skips getCollection when patientID is whitespace-only', async () => {
+  it('returns zeroed result and skips getCollection when participantId is whitespace-only', async () => {
     const result = await revalidateSamplesByPatientID({}, '   ');
     expect(result).toEqual({ total: 0, validated: 0, failed: 0 });
     expect(collectionResolverModule.getCollection).not.toHaveBeenCalled();
   });
 
-  it('queries the samples collection with the normalized patientID and projection', async () => {
+  it('queries the samples collection with the normalized participantId and projection', async () => {
     const toArray = vi.fn().mockResolvedValue([]);
     const find = vi.fn().mockReturnValue({ toArray });
     const collection = { find };
@@ -63,8 +63,8 @@ describe('revalidateSamplesByPatientID', () => {
 
     expect(collectionResolverModule.getCollection).toHaveBeenCalledWith(db, 'samples');
     expect(find).toHaveBeenCalledWith(
-      { patientID: 'P123' },
-      { projection: { _id: 1, sampleID: 1 } }
+      { participantId: 'P123' },
+      { projection: { _id: 1, specimenId: 1 } }
     );
   });
 
@@ -81,10 +81,10 @@ describe('revalidateSamplesByPatientID', () => {
     expect(ctorSpy).not.toHaveBeenCalled();
   });
 
-  it('validates each sample, preferring _id over sampleID, and counts successes', async () => {
+  it('validates each sample, preferring _id over specimenId, and counts successes', async () => {
     const samples = [
-      { _id: 'idA', sampleID: 'sA' },
-      { sampleID: 'sB' },
+      { _id: 'idA', specimenId: 'sA' },
+      { specimenId: 'sB' },
       {},
     ];
     const toArray = vi.fn().mockResolvedValue(samples);
@@ -128,7 +128,7 @@ describe('revalidateSamplesByPatientID', () => {
     expect(result).toEqual({ total: 3, validated: 2, failed: 1 });
     expect(warnSpy).toHaveBeenCalledWith(
       '[SAMPLE_COMPLIANCE_SYNC] Falha ao revalidar amostra vinculada ao paciente',
-      { patientID: 'P9', sampleId: 'bad1', error: 'boom' }
+      { participantId: 'P9', specimenId: 'bad1', error: 'boom' }
     );
   });
 
@@ -145,11 +145,11 @@ describe('revalidateSamplesByPatientID', () => {
 
     expect(infoSpy).toHaveBeenCalledWith(
       '[SAMPLE_COMPLIANCE_SYNC] Revalidação ética concluída para paciente',
-      { patientID: 'P5', total: 1, validated: 1, failed: 0 }
+      { participantId: 'P5', total: 1, validated: 1, failed: 0 }
     );
   });
 
-  it('falls back to an empty-string sample id when a rejecting sample has neither _id nor sampleID', async () => {
+  it('falls back to an empty-string sample id when a rejecting sample has neither _id nor specimenId', async () => {
     const samples = [{}];
     const toArray = vi.fn().mockResolvedValue(samples);
     const find = vi.fn().mockReturnValue({ toArray });
@@ -165,7 +165,7 @@ describe('revalidateSamplesByPatientID', () => {
     expect(result).toEqual({ total: 1, validated: 0, failed: 1 });
     expect(warnSpy).toHaveBeenCalledWith(
       expect.any(String),
-      { patientID: 'P7', sampleId: '', error: 'no id' }
+      { participantId: 'P7', specimenId: '', error: 'no id' }
     );
   });
 
@@ -185,7 +185,7 @@ describe('revalidateSamplesByPatientID', () => {
     expect(result).toEqual({ total: 1, validated: 0, failed: 1 });
     expect(warnSpy).toHaveBeenCalledWith(
       expect.any(String),
-      { patientID: 'P8', sampleId: 'z1', error: 'plain string failure' }
+      { participantId: 'P8', specimenId: 'z1', error: 'plain string failure' }
     );
   });
 });
