@@ -183,4 +183,35 @@ describe('neo4jProjection.worker - runProjectionWorker', () => {
 
     setTimeoutSpy.mockRestore();
   });
+
+  it('stops gracefully and returns normally once options.shouldStop() reports true (issue #177)', async () => {
+    const setTimeoutSpy = vi.spyOn(global, 'setTimeout').mockImplementation((fn) => { fn(); return 0; });
+
+    let calls = 0;
+    const outboxService = {
+      rescheduleStaleProcessing: async () => 0,
+      leaseNextBatch: async () => {
+        calls += 1;
+        // Safety net: if shouldStop isn't honored the loop would spin forever;
+        // fail fast with a clear error instead of hanging the test run.
+        if (calls > 5) throw new Error('shouldStop was not honored');
+        return [];
+      },
+      markProjected: async () => undefined,
+      markRetrying: async () => undefined,
+      markDeadLetter: async () => undefined,
+    };
+    const projector = { applyEvent: async () => ({ projected: true }) };
+    const neo4jDriver = { session: () => ({ close: async () => undefined }) };
+
+    const result = await runProjectionWorker({
+      db: {}, neo4jDriver, outboxService, projector, maxAttempts: 8, intervalMs: 1, once: false,
+      shouldStop: () => calls >= 3,
+    });
+
+    expect(calls).toBe(3);
+    expect(result).toEqual({ processed: 0, projected: 0, failed: 0 });
+
+    setTimeoutSpy.mockRestore();
+  });
 });
