@@ -32,6 +32,16 @@ with push access. Having credentials does not mean using them freely:
   and no per-issue sign-off needed. Still never open a *PR* without his
   explicit go (that rule is unchanged); issues and PRs are different
   levels of visibility.
+- **Any use of the Agent tool goes through the `agent-delegation` skill
+  first** — agent-type choice, what a brief may delegate (never `gh
+  issue create`, never PR/push/main), and verification. A mechanical
+  hook (`.claude/hooks/agent-delegation-guard.cjs`) backs the two known
+  failure modes but doesn't replace reading it. (Corrected 2026-07-14 —
+  incident `general-purpose-agent-filed-issues-and-could-subspawn`,
+  `references/incidents.md`: a 72-file failing-test triage was launched
+  as one `general-purpose` agent briefed to `gh issue create` directly;
+  it spawned four sub-agents of its own before the user caught it from
+  the status line and had it stopped.)
 
 ## Issue tracking — GitHub Issues
 

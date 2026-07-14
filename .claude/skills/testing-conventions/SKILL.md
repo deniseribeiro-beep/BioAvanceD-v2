@@ -24,6 +24,15 @@ see `playwright-specs`.
   `tcle-dinamico`). Config is root `playwright.config.ts`; `testDir`
   resolves relative to the config file, not the cwd.
 
+**Route integration-test naming:** a backend route's integration test
+consistently lands at `tests/integration/<name>.api.test.js`, not
+`<name>.routes.test.js` — a filename built from the source basename by
+pattern-guessing misses it. Always confirm whether a target test file
+already exists by listing the actual `tests/` directory (`ls`/a broad
+glob), never by constructing a filename to grep for (missed twice:
+incidents `brief-assumed-fresh-file` and `test-filename-convention-miss`,
+`bioavanced-conventions/references/incidents.md`).
+
 **Do NOT run the root `test:browser:*` scripts as they stand.** There is
 no vitest config at the repo root, so root `npx vitest run` sweeps up
 backend tests without backend's `vitest.setup.js` env and fails

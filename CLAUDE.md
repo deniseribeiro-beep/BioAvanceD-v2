@@ -14,14 +14,21 @@ relying on memory:
   git hygiene, the hard rules for working in Denise's repo (never open a
   PR or touch `main` without Dennis's explicit go), and the end-loaded
   Docker/CI gate order.
+- **Any use of the Agent tool — any workflow, any skill — goes through
+  `agent-delegation` first.** It is the one gate for agent-type choice,
+  what a brief may delegate (never `gh issue create`, never PR/push/main),
+  and verification, regardless of which workflow triggered the task; a
+  mechanical hook backs it but does not replace reading it.
+  `parallel-test-agents` covers the test-writing fan-out mechanics
+  specifically (leaf workers launch as the `test-writer` agent type) and
+  is the worked example `agent-delegation` points to.
 - Bug-fix work on filed issues → `fix-bugs` (one issue per iteration,
   reproduce-first; the counterpart to `test-loop`).
 - Test work → `test-loop` (one iteration of the coverage push) with
   `testing-conventions` for mechanics; parallel fan-out →
-  `parallel-test-agents` (leaf workers launch as the `test-writer` agent
-  type). Legacy-code judgment calls → `legacy`. Shipping → `ship-to-main`.
-  Pulling Denise's `main`-branch updates into our feature branch →
-  `merge-from-main`.
+  `parallel-test-agents`. Legacy-code judgment calls → `legacy`.
+  Shipping → `ship-to-main`. Pulling Denise's `main`-branch updates into
+  our feature branch → `merge-from-main`.
 - Writing or editing a Playwright spec (`tests/e2e/*.spec.ts`) →
   `playwright-specs` for selectors/mocked-auth/config quirks, alongside
   `e2e-docker-workflow` for the Docker/CI stack itself and

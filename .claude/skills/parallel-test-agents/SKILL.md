@@ -10,7 +10,10 @@ slices at once instead of one at a time. The speedup is in authoring;
 verification stays serial and stays with you — this skill does not
 change who is responsible for confirming the tests are real and green.
 
-This skill covers the fan-out/fan-in mechanics. Project-specific rules
+This is the worked example for `agent-delegation`, which is the
+mandatory pre-check for *any* Agent tool call in this repo, not just
+test-writing fan-out — read that first if you haven't already this
+session. This skill covers the fan-out/fan-in mechanics. Project-specific rules
 (tiering, honest-test rules, where issues get filed, git hygiene) live
 in this repo's own conventions skills (`bioavanced-conventions`,
 `testing-conventions`, `test-loop`) — read those first and pass their
@@ -40,15 +43,11 @@ instead — coordination overhead isn't worth it for a single slice.
    review honestly). Pick a number you can actually verify afterward;
    the bottleneck is your review capacity, not agent capacity.
 4. **Check whether each slice's target test file already exists**
-   before telling the agent to "write a new file at X" — and check by
-   listing the target `tests/` directory itself (`ls` or a broad glob),
-   not by constructing a filename to grep for: route files consistently
-   get `<name>.api.test.js` for integration tests, not
-   `<name>.routes.test.js`, so a grep built from the source basename
-   misses them. Briefs have wrongly claimed "confirmed no existing
-   file" twice (2026-07-03 and 2026-07-04 — incidents
-   `brief-assumed-fresh-file` and `test-filename-convention-miss`,
-   `bioavanced-conventions/references/incidents.md`).
+   before telling the agent to "write a new file at X" — list the
+   target `tests/` directory itself rather than guessing a filename to
+   grep for. `testing-conventions`' "Test tiers" section has the actual
+   naming convention that trips this up (route integration tests) and
+   the incident history.
 5. **Don't assert a file's specific structural details (which imports it
    destructures, whether a value is module-scope-cached) from earlier
    general reading — re-check the exact lines
@@ -78,10 +77,10 @@ agent owns and delivers, not a litany of prohibitions), and include:
 
 - The exact file/module/route it owns and the exact path its test file
   goes to — its scope stated as its whole world, not as a fence.
-- The project's test-tier placement rules and honest-test rules (no
-  tautological assertions, name real invariants, don't weaken
-  assertions to get green) — copy these in, don't assume the agent will
-  find the project's conventions unprompted.
+- The project's test-tier placement rules and honest-test rules — copy
+  `testing-conventions`' "Test tiers" and "Tests are honest or they're
+  worthless" sections into the brief verbatim, don't assume the agent
+  will find the project's conventions unprompted.
 - Project-specific tooling quirks (mocking gotchas, runner traps,
   framework behavior) must reach the agent as the project's own
   documented wording, never your paraphrase from memory — a from-memory
@@ -107,32 +106,25 @@ agent owns and delivers, not a litany of prohibitions), and include:
   handling affirmatively — "findings described in your report are
   triaged and filed by me after review" — rather than as a prohibition.
 
-**Findings reported back are yours to triage and file.** The subagent's
-report is where a finding *starts*; `gh issue create` after your own
-review is your job as orchestrator (authorized per
-`bioavanced-conventions`), and nothing about the leaf agent's
-containment restricts you.
+**Findings reported back are yours to triage and file** — see
+`agent-delegation` for the full rule (never the leaf agent's job,
+regardless of containment).
 
 ## After they report back
 
 Verification is never delegated — a subagent's "tests pass" is a claim,
 not a result:
 
-1. Re-run each new test file individually yourself. Confirm it's
-   actually discovered by the runner (watch for fixed-list/allowlist
-   runners that silently skip new files — a green run that never loaded
-   the file is a false positive).
+1. Re-run each new test file individually yourself. `testing-conventions`'
+   "fixed-list runner trap" section covers the specific failure mode to
+   watch for (a runner that silently skips new files — a green run that
+   never loaded the file is a false positive).
 2. Run all the slices' new/touched test files together in one command
    (not the full backend suite) to catch cross-slice interaction the
-   parallel authoring couldn't see — e.g. `npx vitest run <file1>
-   <file2> <file3> --reporter=dot` (per-test detail was already seen on
-   the individual runs; see `testing-conventions`' context-economy
-   section). This repo's "run the full relevant suite" step means the
-   slices together, not literally everything — a bare `npx vitest run`
-   with no path is hard-blocked mid-loop (incident
-   `bare-vitest-mid-loop`,
-   `bioavanced-conventions/references/incidents.md`); the full suite is
-   reserved for `ship-to-main`'s coverage-reconcile phase.
+   parallel authoring couldn't see — `testing-conventions`' "context
+   economy" section has the exact invocation and output-handling rules,
+   and `bioavanced-conventions` covers why a bare full-suite run is
+   blocked mid-loop.
 3. Triage any real bug a test surfaced per the project's rule for
    in-scope-fix vs. file-as-finding — do this yourself, don't ask the
    agent that found it to also fix it blind.

@@ -13,6 +13,15 @@
             "command": "node .claude/hooks/branch-guard.cjs"
           }
         ]
+      },
+      {
+        "matcher": "Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .claude/hooks/agent-delegation-guard.cjs"
+          }
+        ]
       }
     ],
     "PostToolUse": [

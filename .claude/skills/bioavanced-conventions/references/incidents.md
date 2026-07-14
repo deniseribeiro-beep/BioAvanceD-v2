@@ -16,6 +16,48 @@ rule is later removed, remove its entry here in the same edit.
 
 ---
 
+## general-purpose-agent-filed-issues-and-could-subspawn (2026-07-14)
+
+A 72-file failing-test triage was fanned out to a single background
+agent launched as `subagent_type: general-purpose` with
+`isolation: "worktree"`, briefed to run each failing file, group by
+root cause, and call `gh issue create` itself for each distinct cause.
+This was wrong on two independent axes, not one:
+
+1. **Wrong agent type for the job.** `parallel-test-agents` already
+   existed and specifies exactly this kind of fan-out — but as multiple
+   `test-writer` leaf workers (2-4, each a small independent slice),
+   never a single big one. `test-writer` is mechanically contained: no
+   `Agent` tool (cannot spawn further sub-agents), and a Bash hook
+   blocks `gh`/git-writes/docker outright. `general-purpose` has none of
+   that containment — full tool access including `Agent` itself. The
+   orchestrating session had read the skill in a prior session but
+   didn't reach for it this time; nothing forced the check.
+2. **Issue-filing put in the agent's own hands.** Even setting aside
+   agent type, the brief told the agent to `gh issue create` directly
+   instead of reporting findings back for the primary session to file
+   after review — the opposite of `parallel-test-agents`' explicit
+   "findings reported back are yours to triage and file" rule.
+
+The user caught it from the agent's own status line ("I'll wait for the
+four background agents to finish") — the general-purpose agent had
+already spawned four sub-agents of its own, each a further hop away
+from oversight and each theoretically capable of calling `gh issue
+create` with no review in between. Killing the top-level task
+(`TaskStop`) did not surface IDs for those four children; they were
+orphaned rather than confirmed stopped, and the only verification
+available afterward was `gh issue list` showing no new issues had
+landed yet. Caught by luck of timing, not by any mechanical guardrail.
+
+Rule: any task shaped like "run/triage N things and report structured
+findings" gets checked against `parallel-test-agents` (or another named
+fan-out skill) *before* picking an agent type — don't default to
+`general-purpose` for multi-item fan-out just because it's the
+catch-all. If a task's own shape calls for parallel leaf workers, the
+leaf type must be one without `Agent` tool access, full stop — that
+containment is the actual guardrail, not a instruction in the brief
+asking it to behave.
+
 ## dismissed-subagent-findings (2026-07-02)
 
 Three parallel test-writing subagents each surfaced a real behavioral
