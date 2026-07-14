@@ -42,7 +42,7 @@ describe('POST /api/samples - Smart Blocking e Topological Quarantine', () => {
 
     vi.spyOn(sampleService, 'createSample').mockResolvedValue({
       _id: '507f1f77bcf86cd799439011',
-      patientID: '12345678',
+      participantId: '12345678',
       sampleType: 'Sangue',
       barcode: 'BR-TEST-0001',
     });
@@ -68,13 +68,13 @@ describe('POST /api/samples - Smart Blocking e Topological Quarantine', () => {
       .post('/api/samples')
       .set('Authorization', `Bearer ${createAuthToken()}`)
       .send({
-        patientID: '12345678',
+        participantId: '12345678',
         sampleType: 'PLASMA', // valid MIABIS ID
         sampleOrigin: 'VENOUS_BLOOD', // valid MIABIS ID
         extractionProtocol: 'TUBE_EDTA', // valid MIABIS ID
         quantity: 1,
         quality: 'GOOD', // valid MIABIS ID
-        registerDate: new Date().toISOString(),
+        registeredAt: new Date().toISOString(),
         locationID: 101,
         linkedProject: 'Projeto QA',
         isRareDisease: true,
@@ -103,13 +103,13 @@ describe('POST /api/samples - Smart Blocking e Topological Quarantine', () => {
       .post('/api/samples')
       .set('Authorization', `Bearer ${createAuthToken()}`)
       .send({
-        patientID: '12345678',
+        participantId: '12345678',
         sampleType: 'PLASMA', // valid MIABIS ID
         sampleOrigin: 'VENOUS_BLOOD', // valid MIABIS ID
         extractionProtocol: 'TUBE_EDTA', // valid MIABIS ID
         quantity: 1,
         quality: 'GOOD', // valid MIABIS ID
-        registerDate: new Date().toISOString(),
+        registeredAt: new Date().toISOString(),
         locationID: 101,
         linkedProject: 'Projeto QA',
         isRareDisease: false,
@@ -139,13 +139,13 @@ describe('POST /api/samples - Smart Blocking e Topological Quarantine', () => {
       .post('/api/samples')
       .set('Authorization', `Bearer ${createAuthToken()}`)
       .send({
-        patientID: '12345678',
+        participantId: '12345678',
         sampleType: 'PLASMA', // valid MIABIS ID
         sampleOrigin: 'VENOUS_BLOOD', // valid MIABIS ID
         extractionProtocol: 'TUBE_EDTA', // valid MIABIS ID
         quantity: 1,
         quality: 'GOOD', // valid MIABIS ID
-        registerDate: new Date().toISOString(),
+        registeredAt: new Date().toISOString(),
         locationID: 101,
         linkedProject: 'Projeto QA',
         isRareDisease: true,

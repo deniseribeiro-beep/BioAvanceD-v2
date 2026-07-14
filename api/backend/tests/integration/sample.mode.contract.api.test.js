@@ -30,13 +30,13 @@ function createAuthToken() {
 
 function buildPayload(overrides = {}) {
   return {
-    patientID: '12345678',
+    participantId: '12345678',
     sampleType: 'PLASMA', // valid MIABIS ID
     sampleOrigin: 'VENOUS_BLOOD', // valid MIABIS ID
     extractionProtocol: 'TUBE_EDTA', // valid MIABIS ID
     quantity: 1,
     quality: 'GOOD', // valid MIABIS ID
-    registerDate: new Date().toISOString(),
+    registeredAt: new Date().toISOString(),
     locationID: 101,
     linkedProject: 'Projeto QA Modos',
     ...overrides,

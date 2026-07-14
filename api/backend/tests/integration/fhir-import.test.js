@@ -229,8 +229,8 @@ describe('FHIR import staging', () => {
     expect(result.records[0]).toMatchObject({
       status: 'VALID',
       normalized: {
-        patientID: 'P-MIN',
-        sampleID: 'S-MIN',
+        participantId: 'P-MIN',
+        specimenId: 'S-MIN',
       },
     });
     expect(db.collections.import_batches.docs).toHaveLength(1);
@@ -250,7 +250,7 @@ describe('FHIR import staging', () => {
       patientSex: 'female',
       patientEmail: 'paciente@example.org',
       patientPhone: '+5511999999999',
-      sampleID: 'S-001',
+      specimenId: 'S-001',
       sampleType: 'PLASMA',
       matrix: 'Plasma',
       storageTemperature: '-20C',
@@ -342,11 +342,11 @@ describe('FHIR import staging', () => {
 
     const result = await fhirImportStagingService.stageBundle(db, bundle, { fileName: 'bundle.json' });
     const errorsBySample = Object.fromEntries(
-      result.records.map((record) => [record.normalized.sampleID, record.validationErrors.map((error) => error.field)])
+      result.records.map((record) => [record.normalized.specimenId, record.validationErrors.map((error) => error.field)])
     );
 
     expect(errorsBySample['S-002']).toEqual(expect.arrayContaining(['patientEmail', 'collectionDate', 'matrix', 'sprecsRaw']));
-    expect(errorsBySample['S-003']).toEqual(expect.arrayContaining(['patientID', 'patient']));
+    expect(errorsBySample['S-003']).toEqual(expect.arrayContaining(['participantId', 'patient']));
   });
 
   it('calcula preview RCS-GOV no staging e não trata processamento desconhecido como severidade zero', async () => {
@@ -455,7 +455,7 @@ describe('FHIR import staging', () => {
       scope: 'fhir-import-consent',
       batchId: String(staged.batch._id),
       recordId: String(db.collections.import_staging_records.docs[0]._id),
-      patientId: 'P-EMAIL',
+      participantId: 'P-EMAIL',
     });
     expect(sent.records[0].status).toBe('PENDING_CONSENT');
     expect(sent.records[0].consentTracking.provider).toBe('resend');
@@ -502,7 +502,7 @@ describe('FHIR import staging', () => {
         scope: 'fhir-import-consent',
         batchId: String(staged.batch._id),
         recordId: String(db.collections.import_staging_records.docs[0]._id),
-        patientId: 'P-STAGING',
+        participantId: 'P-STAGING',
       },
       process.env.CONSENT_SECRET,
       { expiresIn: '-1s' }
@@ -514,7 +514,7 @@ describe('FHIR import staging', () => {
         scope: 'fhir-consent',
         batchId: String(staged.batch._id),
         recordId: String(db.collections.import_staging_records.docs[0]._id),
-        patientId: 'P-STAGING',
+        participantId: 'P-STAGING',
       },
       process.env.CONSENT_SECRET,
       { expiresIn: '2h' }
@@ -599,7 +599,7 @@ describe('FHIR import staging', () => {
 
     const committed = await fhirImportStagingService.commitBatch(db, staged.batch._id);
     expect(committed.committed).toBe(1);
-    expect(db.collections.samples.docs[0].sampleID).toBe('S-SIGNED-LATER');
+    expect(db.collections.samples.docs[0].specimenId).toBe('S-SIGNED-LATER');
     expect(db.collections.audit_logs.docs.some((doc) => doc.action === 'FHIR_IMPORT_RECORD_COMMITTED')).toBe(true);
   });
 
@@ -647,9 +647,9 @@ describe('FHIR import staging', () => {
     expect(result.committed).toBe(1);
     expect(db.collections.patients.updateOne).toHaveBeenCalledTimes(1);
     expect(db.collections.samples.updateOne).toHaveBeenCalledTimes(1);
-    expect(db.collections.samples.updateOne.mock.calls[0][0]).toEqual({ sampleID: 'S-001' });
+    expect(db.collections.samples.updateOne.mock.calls[0][0]).toEqual({ specimenId: 'S-001' });
     expect(db.collections.samples.docs).toHaveLength(1);
-    expect(db.collections.samples.docs[0].sampleID).toBe('S-001');
+    expect(db.collections.samples.docs[0].specimenId).toBe('S-001');
     expect(db.collections.samples.docs[0].final_grade).toBe('A');
     expect(db.collections.samples.docs[0].axis_penalties.length).toBeGreaterThan(0);
     expect(db.collections.samples.docs[0].calculation_trace.axes.length).toBeGreaterThan(0);

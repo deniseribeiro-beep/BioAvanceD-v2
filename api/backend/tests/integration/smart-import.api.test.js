@@ -60,7 +60,7 @@ João Silva,01/05/1990,M,98745612303,PLASMA,TREATED,Ataluren,A16AX27,ORPHA:324,L
         .mockResolvedValueOnce(null) // Verificação de duplicata
         .mockResolvedValueOnce({      // Linha 2: Encontra o paciente criado na linha 1
           _id: '507f1f77bcf86cd799439011',
-          patientID: '11111111',
+          participantId: '11111111',
           patientName: 'João Silva',
           patientNameNormalized: 'joao silva',
           birthDate: new Date('1990-05-01'),
@@ -107,7 +107,7 @@ João Silva,01/05/1990,M,98745612303,PLASMA,TREATED,Ataluren,A16AX27,ORPHA:324,L
       };
 
       // Import row 1 - should create new patient
-      const result1 = await PatientIdentityService.matchOrUpsertPatient(db, {
+      const result1 = await PatientIdentityService.matchOrUpsertParticipant(db, {
         patientName: row1.patientName,
         birthDate: row1.birthDate,
         sex: row1.sex,
@@ -124,7 +124,7 @@ João Silva,01/05/1990,M,98745612303,PLASMA,TREATED,Ataluren,A16AX27,ORPHA:324,L
       // Mock: Linha 2 deve encontrar o paciente pela normalização de nome + data
       const existingPatient = {
         _id: '507f1f77bcf86cd799439011',
-        patientID: '11111111',
+        participantId: '11111111',
         patientName: 'João Silva',
         patientNameNormalized: 'joao silva',
         birthDate: new Date('1990-05-01'),
@@ -134,7 +134,7 @@ João Silva,01/05/1990,M,98745612303,PLASMA,TREATED,Ataluren,A16AX27,ORPHA:324,L
       patientsCollection.updateOne.mockResolvedValueOnce({ matchedCount: 1, modifiedCount: 1 });
 
       // Import row 2 - should find existing patient
-      const result2 = await PatientIdentityService.matchOrUpsertPatient(db, {
+      const result2 = await PatientIdentityService.matchOrUpsertParticipant(db, {
         patientName: row2.patientName,
         birthDate: row2.birthDate,
         sex: row2.sex,
@@ -142,7 +142,7 @@ João Silva,01/05/1990,M,98745612303,PLASMA,TREATED,Ataluren,A16AX27,ORPHA:324,L
       });
 
       expect(result2.created).toBe(false);
-      expect(result2.patient.patientID).toBe('11111111');
+      expect(result2.patient.participantId).toBe('11111111');
       expect(patientsCollection.insertOne).not.toHaveBeenCalled(); // Não deve inserir novo
       expect(patientsCollection.updateOne).toHaveBeenCalled(); // Deve atualizar
 
@@ -219,7 +219,7 @@ João Silva,01/05/1990,M,98745612303,PLASMA,TREATED,Ataluren,A16AX27,ORPHA:324,L
       // Processar fila
       let patientsCreated = 0;
       for (const item of importQueue) {
-        const result = await PatientIdentityService.matchOrUpsertPatient(db, item);
+        const result = await PatientIdentityService.matchOrUpsertParticipant(db, item);
         if (result.created) patientsCreated++;
       }
 

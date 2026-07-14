@@ -26,14 +26,14 @@ function createTechnicianToken() {
 
 function buildValidSamplePayload(overrides = {}) {
   return {
-    patientID: '12345678',
+    participantId: '12345678',
     sampleType: 'PLASMA',
     sampleOrigin: 'VENOUS_BLOOD',
     extractionProtocol: 'TUBE_EDTA',
     quantity: 1,
     quality: 'GOOD',
     linkedProject: 'Projeto QA RNF011',
-    registerDate: new Date().toISOString(),
+    registeredAt: new Date().toISOString(),
     locationID: 101,
     ...overrides,
   };
@@ -50,7 +50,7 @@ describe('RF004/RNF011 - POST /api/samples validações de integridade', () => {
     vi.restoreAllMocks();
   });
 
-  it('deve barrar vínculo obrigatório quando patientID não existe (404 ou 400)', async () => {
+  it('deve barrar vínculo obrigatório quando participantId não existe (404 ou 400)', async () => {
     app.locals.db = {
       collection: (name) => {
         if (name === 'patients' || name === 'pacientes') {
@@ -82,7 +82,7 @@ describe('RF004/RNF011 - POST /api/samples validações de integridade', () => {
     const response = await request(app)
       .post('/api/samples')
       .set('Authorization', `Bearer ${createTechnicianToken()}`)
-      .send(buildValidSamplePayload({ patientID: '99999999' }));
+      .send(buildValidSamplePayload({ participantId: '99999999' }));
 
     expect([404, 400]).toContain(response.status);
     expect(response.body.success).toBe(false);
