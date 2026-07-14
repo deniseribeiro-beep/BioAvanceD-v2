@@ -24,34 +24,36 @@ stale as slices land and as source files change. Keep it honest:
 
 ## Last full reconcile
 
-**2026-07-09**, snapshot from commit `2848ab1f` on
-`feature/docker-e2e-backend-integration` (`npx vitest run --coverage`,
-full suite; `coverage/coverage-summary.json` read and re-derived from).
+**2026-07-14**, snapshot from commit `28adc855` on
+`feature/docker-e2e-backend-integration` (`npx vitest run --coverage
+--reporter=verbose`, full suite; summary read off the run's own printed
+totals, not yet re-derived file-by-file from
+`coverage/coverage-summary.json` — see caveat below).
 
-Statements 79.71% (14764/18521), Branches 69.34% (11566/16678), Functions
-82.36% (1849/2245), **Lines 80.25%** (14228/17728) — **down** from the
-prior reconcile's 88.13% lines (commit `aef22577`, 2026-07-05).
+Statements 81.87% (15199/18563), Branches 71.98% (11982/16645), Functions
+84.49% (1908/2258), **Lines 82.4%** (14639/17765) — **up** from the prior
+reconcile's 80.25% lines (commit `2848ab1f`, 2026-07-09), consistent with
+#146-#164 fixes landing since.
 
-**This drop is not a real coverage regression — read before picking a
-slice from the buckets below.** The same full-suite run backing this
-reconcile also showed 92/264 test files (629/4692 tests) failing — see
-issues #146-#164, filed the same session. Those failures are almost
-entirely product code drifting out from under still-passing-shaped test
-files (a `sampleId`->`specimenId`/`patientID`->`participantId` canonical
-rename in #146, a handful of rewritten service APIs, etc.), not files
-that were never tested. A failing/erroring test file contributes ~0
-coverage for the source it targets even though a real test suite exists
-for it — so several files below (`MoveSampleUseCase.js`,
-`AllocateSampleUseCase.js`, `ReleaseSampleUseCase.js`,
-`LineageRepository.js`, `Neo4jQuarantineService.js`, `fhir.service.js`,
-`patient.service.js`, `PatientIdentityService.js`,
-`daily-merkle.job.js`, `mqtt-telemetry.service.js`, `scheduler.service.js`,
-`result-worker.js`) look like fresh coverage gaps but are actually
-**already-tested files whose tests are currently broken**. Fixing the
-filed issues first, then re-reconciling, will very likely restore most
-of the 88.13% baseline without writing a single new test. Don't spend a
-test-loop slice writing new tests for those specific files until their
-linked issue is resolved and a fresh run confirms they're still low.
+The same run showed 74/268 test files (541/4782 tests) failing — down
+from 92/264 files (629/4692 tests) at the 2026-07-09 reconcile, so the
+overall trend is the #146-#164 cluster shrinking as expected, not a new
+regression. One failure looks newly worth a look rather than
+already-covered by those issues: `tests/unit/services/NotificationService.test.js`
+> `buildConsentLink` — three cases throw `FRONTEND_URL deve ser uma URL
+absoluta válida` out of `NotificationService.validateFrontendUrl`
+(`src/services/NotificationService.js:51`) even though
+`tests/vitest.setup.js:12` seeds a valid default
+(`https://localhost:5173`) — not yet triaged or filed as an issue.
+
+**The bucket lists below (ZERO/LOW/MID-LOW/MID-HIGH) were NOT
+regenerated this session** — they still reflect the 2026-07-09 run and
+are now one reconcile stale. Given failures net-decreased since then,
+some files below may already read higher than listed; don't trust a
+bucket entry here over a fresh isolated run if it disagrees. Full
+per-file bucket regeneration from `coverage/coverage-summary.json` is
+still owed — do it next time this file is touched for a real slice pick,
+or at the next `ship-to-main` gate.
 
 ## How to use this when picking a slice
 
