@@ -144,3 +144,6 @@ frontend/playwright/.auth/
 # Claude Code local-only files (machine-specific, not repo conventions)
 .claude/skills/local-env/
 .claude/settings.local.json
+
+# Session handoffs (ephemeral cross-session notes, not durable conventions)
+.claude/handoffs/
