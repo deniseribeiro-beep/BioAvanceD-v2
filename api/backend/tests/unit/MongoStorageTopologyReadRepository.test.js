@@ -253,7 +253,7 @@ describe('MongoStorageTopologyReadRepository', () => {
       const storageBoxes = makeCollection();
       storageBoxes.findOne.mockResolvedValue(null);
       const samples = makeCollection();
-      const db = makeDb({ storageBoxes, amostras: samples });
+      const db = makeDb({ storageBoxes, samples });
 
       const repo = new MongoStorageTopologyReadRepository(db);
       const result = await repo.checkBoxIntegrity({ boxId: new ObjectId().toString() });
@@ -280,7 +280,7 @@ describe('MongoStorageTopologyReadRepository', () => {
       const samples = makeCollection();
       samples.findOne.mockResolvedValue(sample);
 
-      const db = makeDb({ storageBoxes, amostras: samples });
+      const db = makeDb({ storageBoxes, samples });
       const repo = new MongoStorageTopologyReadRepository(db);
       const result = await repo.checkBoxIntegrity({ boxId: boxId.toString() });
 
@@ -310,7 +310,7 @@ describe('MongoStorageTopologyReadRepository', () => {
       const samples = makeCollection();
       samples.findOne.mockResolvedValue(null);
 
-      const db = makeDb({ storageBoxes, amostras: samples });
+      const db = makeDb({ storageBoxes, samples });
       const repo = new MongoStorageTopologyReadRepository(db);
       const result = await repo.checkBoxIntegrity({ boxId: boxId.toString() });
 
@@ -341,7 +341,7 @@ describe('MongoStorageTopologyReadRepository', () => {
       const samples = makeCollection();
       samples.findOne.mockResolvedValue(sample);
 
-      const db = makeDb({ storageBoxes, amostras: samples });
+      const db = makeDb({ storageBoxes, samples });
       const repo = new MongoStorageTopologyReadRepository(db);
       const result = await repo.checkBoxIntegrity({ boxId: boxId.toString() });
 
@@ -365,7 +365,7 @@ describe('MongoStorageTopologyReadRepository', () => {
       storageBoxes.findOne.mockResolvedValue(box);
       const samples = makeCollection();
 
-      const db = makeDb({ storageBoxes, amostras: samples });
+      const db = makeDb({ storageBoxes, samples });
       const repo = new MongoStorageTopologyReadRepository(db);
       const result = await repo.checkBoxIntegrity({ boxId: boxId.toString() });
 
@@ -391,7 +391,7 @@ describe('MongoStorageTopologyReadRepository', () => {
       storageBoxes.findOne.mockResolvedValue(box);
       const samples = makeCollection();
 
-      const db = makeDb({ storageBoxes, amostras: samples });
+      const db = makeDb({ storageBoxes, samples });
       const repo = new MongoStorageTopologyReadRepository(db);
       const result = await repo.checkBoxIntegrity({ boxId: boxId.toString() });
 
