@@ -2,7 +2,8 @@ const crypto = require('crypto');
 const { Neo4jOutboxService } = require('./neo4jOutbox.service');
 
 function stableHash(payload) {
-  const ordered = JSON.stringify(payload, Object.keys(payload || {}).sort());
+  const safePayload = payload || {};
+  const ordered = JSON.stringify(safePayload, Object.keys(safePayload).sort());
   return crypto.createHash('sha256').update(ordered).digest('hex');
 }
 

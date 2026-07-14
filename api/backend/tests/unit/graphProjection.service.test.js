@@ -22,17 +22,14 @@ describe('graphProjection.service', () => {
       expect(a).not.toBe(b);
     });
 
-    it('throws on an undefined payload (issue #176 — JSON.stringify(undefined) yields undefined, crypto.update rejects it)', () => {
-      expect(() => stableHash(undefined)).toThrow(TypeError);
+    it('hashes an undefined payload the same as an empty object (issue #176 fix)', () => {
+      expect(() => stableHash(undefined)).not.toThrow();
+      expect(stableHash(undefined)).toBe(stableHash({}));
     });
 
-    it('hashes a null payload as the literal string "null" rather than an empty object', () => {
-      // JSON.stringify(null, replacer) returns the string "null" (not undefined),
-      // so this doesn't hit issue #176 — but it's a distinct oddity: null and {}
-      // hash differently even though the `payload || {}` guard treats them the same
-      // for Object.keys purposes.
-      expect(stableHash(null)).not.toBe(stableHash({}));
+    it('hashes a null payload the same as an empty object', () => {
       expect(() => stableHash(null)).not.toThrow();
+      expect(stableHash(null)).toBe(stableHash({}));
     });
 
     it('returns a 64-char hex sha256 digest', () => {
