@@ -25,11 +25,11 @@ describe('PatientIdentityService - Heuristic Patient Matching', () => {
     vi.clearAllMocks();
   });
 
-  describe('Scenario 1: Patient with patientID - should find by ID', () => {
-    it('deve encontrar paciente existente pelo patientID', async () => {
+  describe('Scenario 1: Patient with participantId - should find by ID', () => {
+    it('deve encontrar paciente existente pelo participantId', async () => {
       const existingPatient = {
         _id: '507f1f77bcf86cd799439011',
-        patientID: '12345678',
+        participantId: '12345678',
         patientName: 'Paciente Existente',
         birthDate: new Date('1990-01-20'),
       };
@@ -37,30 +37,24 @@ describe('PatientIdentityService - Heuristic Patient Matching', () => {
       patientsCollection.findOne.mockResolvedValueOnce(existingPatient);
       patientsCollection.updateOne.mockResolvedValueOnce({ matchedCount: 1, modifiedCount: 1 });
 
-      const result = await patientIdentityService.matchOrUpsertPatient(db, {
-        patientID: '12345678',
+      const result = await patientIdentityService.matchOrUpsertParticipant(db, {
+        participantId: '12345678',
         patientName: 'Paciente Existente Updated',
         email: 'updated@test.com',
       });
 
       expect(result.created).toBe(false);
-      expect(result.patient.patientID).toBe('12345678');
-      expect(patientsCollection.findOne).toHaveBeenCalledWith(
-        expect.objectContaining({
-          $or: expect.arrayContaining([
-            { patientID: '12345678' },
-          ]),
-        })
-      );
+      expect(result.patient.participantId).toBe('12345678');
+      expect(patientsCollection.findOne).toHaveBeenCalledWith({ participantId: '12345678' });
       expect(patientsCollection.updateOne).toHaveBeenCalled();
     });
   });
 
-  describe('Scenario 2: Patient without patientID but with Name + BirthDate - should find or create', () => {
+  describe('Scenario 2: Patient without participantId but with Name + BirthDate - should find or create', () => {
     it('deve deduplicar pacientes com o mesmo nome normalizado e data de nascimento', async () => {
       const existingPatient = {
         _id: '507f1f77bcf86cd799439011',
-        patientID: '87654321',
+        participantId: '87654321',
         patientName: 'João Silva Santos',
         patientNameNormalized: 'joao silva santos',
         birthDate: new Date('1990-05-15'),
@@ -71,7 +65,7 @@ describe('PatientIdentityService - Heuristic Patient Matching', () => {
       patientsCollection.findOne.mockResolvedValueOnce(existingPatient);
       patientsCollection.updateOne.mockResolvedValueOnce({ matchedCount: 1, modifiedCount: 1 });
 
-      const result = await patientIdentityService.matchOrUpsertPatient(db, {
+      const result = await patientIdentityService.matchOrUpsertParticipant(db, {
         patientName: 'Joao Silva Santos', // Sem acento
         birthDate: '15/05/1990', // Formato diferente
         sex: 'M',
@@ -79,7 +73,7 @@ describe('PatientIdentityService - Heuristic Patient Matching', () => {
       });
 
       expect(result.created).toBe(false);
-      expect(result.patient.patientID).toBe('87654321');
+      expect(result.patient.participantId).toBe('87654321');
       expect(patientsCollection.updateOne).toHaveBeenCalled();
     });
 
@@ -87,7 +81,7 @@ describe('PatientIdentityService - Heuristic Patient Matching', () => {
       patientsCollection.findOne.mockResolvedValueOnce(null);
       patientsCollection.insertOne.mockResolvedValueOnce({ insertedId: '999f1f77bcf86cd799439999' });
 
-      const result = await patientIdentityService.matchOrUpsertPatient(db, {
+      const result = await patientIdentityService.matchOrUpsertParticipant(db, {
         patientName: 'Novo Paciente',
         birthDate: '20/01/2000',
         sex: 'F',
@@ -103,7 +97,7 @@ describe('PatientIdentityService - Heuristic Patient Matching', () => {
     it('Cenário: Tentar cadastrar dois pacientes com mesmo nome e data, IDs diferentes - deve retornar existente', async () => {
       const existingPatient = {
         _id: '507f1f77bcf86cd799439011',
-        patientID: '11111111',
+        participantId: '11111111',
         patientName: 'Maria Silva',
         patientNameNormalized: 'maria silva',
         birthDate: new Date('1985-03-10'),
@@ -115,8 +109,8 @@ describe('PatientIdentityService - Heuristic Patient Matching', () => {
       patientsCollection.findOne.mockResolvedValueOnce(existingPatient);
       patientsCollection.updateOne.mockResolvedValueOnce({ matchedCount: 1, modifiedCount: 1 });
 
-      // Tentativa 1 com novo patientID (diferente, simulando tentativa de criar novo)
-      const result1 = await patientIdentityService.matchOrUpsertPatient(db, {
+      // Tentativa 1 com novo participantId (diferente, simulando tentativa de criar novo)
+      const result1 = await patientIdentityService.matchOrUpsertParticipant(db, {
         patientName: 'Maria Silva',
         birthDate: '10/03/1985',
         sex: 'F',
@@ -124,7 +118,7 @@ describe('PatientIdentityService - Heuristic Patient Matching', () => {
       });
 
       expect(result1.created).toBe(false);
-      expect(result1.patient.patientID).toBe('11111111'); // Deve retornar ID existente, não criar novo
+      expect(result1.patient.participantId).toBe('11111111'); // Deve retornar ID existente, não criar novo
 
       // Reset mocks
       patientsCollection.findOne.mockClear();
@@ -135,7 +129,7 @@ describe('PatientIdentityService - Heuristic Patient Matching', () => {
       patientsCollection.updateOne.mockResolvedValueOnce({ matchedCount: 1, modifiedCount: 1 });
 
       // Tentativa 2 mesmo paciente, mesmo resultado
-      const result2 = await patientIdentityService.matchOrUpsertPatient(db, {
+      const result2 = await patientIdentityService.matchOrUpsertParticipant(db, {
         patientName: 'Maria Silva',
         birthDate: '10/03/1985',
         sex: 'F',
@@ -143,7 +137,7 @@ describe('PatientIdentityService - Heuristic Patient Matching', () => {
       });
 
       expect(result2.created).toBe(false);
-      expect(result2.patient.patientID).toBe('11111111'); // Mesmo ID
+      expect(result2.patient.participantId).toBe('11111111'); // Mesmo ID
       expect(patientsCollection.insertOne).not.toHaveBeenCalled(); // Não deve inserir novo
     });
   });
@@ -160,7 +154,7 @@ describe('PatientIdentityService - Heuristic Patient Matching', () => {
         patientsCollection.findOne.mockResolvedValueOnce(null);
         patientsCollection.insertOne.mockResolvedValueOnce({ insertedId: '999f1f77bcf86cd799439999' });
 
-        const result = await patientIdentityService.matchOrUpsertPatient(db, {
+        const result = await patientIdentityService.matchOrUpsertParticipant(db, {
           patientName: pattern.input,
           birthDate: '01/01/1990',
         });
@@ -171,12 +165,12 @@ describe('PatientIdentityService - Heuristic Patient Matching', () => {
   });
 
   describe('Error handling', () => {
-    it('deve lançar erro se não houver patientID e nem (patientName + birthDate)', async () => {
+    it('deve lançar erro se não houver participantId e nem (patientName + birthDate)', async () => {
       await expect(
-        patientIdentityService.matchOrUpsertPatient(db, {
+        patientIdentityService.matchOrUpsertParticipant(db, {
           sex: 'M',
           cpf: '12345678900',
-          // Sem patientID, patientName ou birthDate
+          // Sem participantId, patientName ou birthDate
         })
       ).rejects.toThrow('Identificação insuficiente');
     });
@@ -186,14 +180,14 @@ describe('PatientIdentityService - Heuristic Patient Matching', () => {
     it('deve atualizar campos demográficos permitidos no upsert', async () => {
       const existingPatient = {
         _id: '507f1f77bcf86cd799439011',
-        patientID: '22222222',
+        participantId: '22222222',
         patientName: 'John Doe',
       };
 
       patientsCollection.findOne.mockResolvedValueOnce(existingPatient);
 
-      await patientIdentityService.matchOrUpsertPatient(db, {
-        patientID: '22222222',
+      await patientIdentityService.matchOrUpsertParticipant(db, {
+        participantId: '22222222',
         email: 'john@test.com',
         phone: '+5511987654321',
         sex: 'M',
