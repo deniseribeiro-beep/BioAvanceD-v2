@@ -144,31 +144,31 @@ describe('HL7Service.buildPID', () => {
 });
 
 describe('HL7Service.buildSPM', () => {
-  it('uses sample._id when present, over sampleID', () => {
-    const result = hl7Service.buildSPM({}, { _id: 'objid123', sampleID: 'SMP-1', sampleType: 'PLASMA' });
+  it('uses sample._id when present, over specimenId', () => {
+    const result = hl7Service.buildSPM({}, { _id: 'objid123', specimenId: 'SMP-1', sampleType: 'PLASMA' });
     expect(result).toMatch(/^SPM\|1\|objid123\|\|PLASMA\|/);
   });
 
-  it('falls back to sampleID when _id is absent', () => {
-    const result = hl7Service.buildSPM({}, { sampleID: 'SMP-1', sampleType: 'SERUM' });
+  it('falls back to specimenId when _id is absent', () => {
+    const result = hl7Service.buildSPM({}, { specimenId: 'SMP-1', sampleType: 'SERUM' });
     expect(result).toContain('SPM|1|SMP-1||SERUM|');
   });
 
-  it('uses sampleFile.collectionDateTime over sample.registrationDate when both present', () => {
+  it('uses sampleFile.collectionDateTime over sample.registeredAt when both present', () => {
     const collectionDate = new Date('2026-01-01T10:00:00.000Z');
-    const registrationDate = new Date('2025-01-01T10:00:00.000Z');
+    const registeredAt = new Date('2025-01-01T10:00:00.000Z');
     const result = hl7Service.buildSPM(
       { collectionDateTime: collectionDate },
-      { sampleID: 'SMP-1', sampleType: 'URINE', registrationDate }
+      { specimenId: 'SMP-1', sampleType: 'URINE', registeredAt }
     );
     expect(result).toContain(hl7Service.formatHL7DateTime(collectionDate));
-    expect(result).not.toContain(hl7Service.formatHL7DateTime(registrationDate));
+    expect(result).not.toContain(hl7Service.formatHL7DateTime(registeredAt));
   });
 
-  it('falls back to sample.registrationDate when sampleFile has no collectionDateTime', () => {
-    const registrationDate = new Date('2025-01-01T10:00:00.000Z');
-    const result = hl7Service.buildSPM({}, { sampleID: 'SMP-1', sampleType: 'URINE', registrationDate });
-    expect(result).toContain(hl7Service.formatHL7DateTime(registrationDate));
+  it('falls back to sample.registeredAt when sampleFile has no collectionDateTime', () => {
+    const registeredAt = new Date('2025-01-01T10:00:00.000Z');
+    const result = hl7Service.buildSPM({}, { specimenId: 'SMP-1', sampleType: 'URINE', registeredAt });
+    expect(result).toContain(hl7Service.formatHL7DateTime(registeredAt));
   });
 
   it('uses empty strings when specimen id, type and dates are all absent', () => {
