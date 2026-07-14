@@ -284,6 +284,13 @@ describe('terminologySync.service', () => {
       expect(result.attempted).toBe('/rd-phenotypes/orphacodes?limit=1000');
       expect(result.upserted).toBe(1);
       expect(result.skipped).toBe(0);
+      // issue #115: surface which endpoint(s) were actually consulted and how
+      // many records each yielded, so a small/partial result from an earlier
+      // endpoint isn't silently indistinguishable from a complete one.
+      expect(result.consulted).toEqual([
+        { endpoint: '/rd-cross-referencing/orphacodes?limit=1000', recordCount: 0, error: 'network down' },
+        { endpoint: '/rd-phenotypes/orphacodes?limit=1000', recordCount: 1 },
+      ]);
     });
 
     it('does not try the third endpoint once the second one already yielded records', async () => {
@@ -309,9 +316,15 @@ describe('terminologySync.service', () => {
 
       vi.stubGlobal('fetch', fetchMock);
 
-      await freshSvc.syncFromOrphadata();
+      const result = await freshSvc.syncFromOrphadata();
 
       expect(fetchMock).toHaveBeenCalledTimes(2);
+      // issue #115: the third endpoint is never consulted, and that's visible
+      // in the report rather than silently indistinguishable from "checked but empty".
+      expect(result.consulted).toEqual([
+        { endpoint: '/rd-cross-referencing/orphacodes?limit=1000', recordCount: 0 },
+        { endpoint: '/rd-phenotypes/orphacodes?limit=1000', recordCount: 1 },
+      ]);
     });
 
     it('returns success:false with all endpoints attempted when every endpoint fails or is empty', async () => {
@@ -336,6 +349,12 @@ describe('terminologySync.service', () => {
         ],
         upserted: 0,
         skipped: 0,
+        // issue #115: every attempted endpoint is reported, all failed here.
+        consulted: [
+          { endpoint: '/rd-cross-referencing/orphacodes?limit=1000', recordCount: 0, error: 'always fails' },
+          { endpoint: '/rd-phenotypes/orphacodes?limit=1000', recordCount: 0, error: 'always fails' },
+          { endpoint: '/rd-classification/orphacodes?limit=1000', recordCount: 0, error: 'always fails' },
+        ],
       });
     });
 
