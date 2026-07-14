@@ -10,9 +10,11 @@ const { testConnection } = require('../config/queue');
 const logger = require('../utils/logger');
 
 // Register background jobs
-// daily-merkle schedules itself when required
 try {
-  require('./jobs/daily-merkle.job');
+  const dailyMerkleJob = require('./jobs/daily-merkle.job');
+  if (dailyMerkleJob && typeof dailyMerkleJob.scheduleNextRun === 'function') {
+    dailyMerkleJob.scheduleNextRun();
+  }
 } catch (err) {
   logger.warn('Job daily-merkle não registrado:', err.message || err);
 }

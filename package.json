@@ -20,13 +20,11 @@
     "@istanbuljs/nyc-config-babel": "^3.0.0",
     "@playwright/test": "^1.58.2",
     "@vitejs/plugin-react": "^5.1.4",
-    "@vitest/coverage-v8": "^4.1.2",
     "baseline-browser-mapping": "^2.9.16",
     "cross-env": "^10.1.0",
     "nyc": "^18.0.0",
     "supertest": "^7.2.2",
-    "vite-plugin-istanbul": "^8.0.0",
-    "vitest": "^4.0.7"
+    "vite-plugin-istanbul": "^8.0.0"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",

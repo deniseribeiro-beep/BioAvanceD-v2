@@ -143,22 +143,6 @@ describe('PatientService.createPatient additional branches', () => {
     enqueueSpy.mockRestore();
   });
 
-  it('writes biomarker timeseries and observation artifacts when not skipped', async () => {
-    const consentTemplatesCollection = makeFakeCollection({
-      findOne: vi.fn().mockResolvedValue({ _id: '507f1f77bcf86cd799439011' })
-    });
-    const patientsCollection = makeFakeCollection();
-    const db = makeFakeDb({ patients: patientsCollection, consent_templates: consentTemplatesCollection });
-
-    const tsSpy = vi.spyOn(patientBiomarkerTimeseriesService, 'writePatientBiomarkers').mockResolvedValue(undefined);
-
-    await patientService.createPatient(db, validPatientData({ alphaGal: 3.1 }), { skipConsentNotification: true });
-
-    expect(tsSpy).toHaveBeenCalledWith(expect.objectContaining({ eventType: 'create' }));
-
-    tsSpy.mockRestore();
-  });
-
   it('converts a phone duplicate-key error surfaced during insert into a 409', async () => {
     const consentTemplatesCollection = makeFakeCollection({
       findOne: vi.fn().mockResolvedValue({ _id: '507f1f77bcf86cd799439011' })

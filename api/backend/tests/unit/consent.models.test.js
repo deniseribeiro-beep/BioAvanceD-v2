@@ -8,8 +8,8 @@ describe('Consent models', () => {
   describe('PatientConsentModel', () => {
     it('valida um consentimento ativo com respostas válidas', () => {
       const result = PatientConsentModel.validate({
-        patientId: 'patient-001',
-        templateId: 'template-001',
+        participantId: 'patient-001',
+        consentTemplateId: 'template-001',
         status: 'ACTIVE',
         responses: { research: true },
         ipAddress: '127.0.0.1',
@@ -22,21 +22,21 @@ describe('Consent models', () => {
       expect(result.errors).toHaveLength(0);
     });
 
-    it('rejeita payload sem patientId/templateId/responses', () => {
+    it('rejeita payload sem participantId/consentTemplateId/responses', () => {
       const result = PatientConsentModel.validate({});
 
       expect(result.isValid).toBe(false);
       expect(result.errors).toEqual(expect.arrayContaining([
-        'patientId é obrigatório e deve ser string',
-        'templateId é obrigatório e deve ser string',
+        'participantId é obrigatório e deve ser string',
+        'consentTemplateId é obrigatório e deve ser string',
         'responses é obrigatório e deve ser um objeto'
       ]));
     });
 
     it('normaliza status default para ACTIVE ao criar', () => {
       const consent = PatientConsentModel.create({
-        patientId: 'patient-001',
-        templateId: 'template-001',
+        participantId: 'patient-001',
+        consentTemplateId: 'template-001',
         responses: { research: true },
       });
 

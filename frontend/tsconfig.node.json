@@ -8,5 +8,5 @@
       "strict": true,
       "forceConsistentCasingInFileNames": true
     },
-    "include": ["vitest.config.ts"]
+    "include": ["vite.config.js"]
   }

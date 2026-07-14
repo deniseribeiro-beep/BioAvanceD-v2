@@ -1,65 +1,111 @@
 # BioAvanceD
 
-BioAvanceD é um protótipo de sistema médico-informacional para gestão digital de biobancos, desenvolvido para validar uma arquitetura poliglota, orientada a eventos e governada em tempo de execução para biospecímenes, consentimento, rastreabilidade, qualidade pré-analítica, cadeia fria e interoperabilidade semântica.
+BioAvanceD é uma arquitetura e sistema para biobanco digital, com foco atual em eConsent, governança de consentimento em tempo de execução, rastreabilidade de eventos, interoperabilidade e arquitetura poliglota.
 
-O projeto combina frontend React/Vite, backend Node.js/Express e persistência com MongoDB, Neo4j, InfluxDB e Redis.
+O projeto combina:
 
-## Escopo atual do protótipo
+- frontend React/Vite;
+- backend Node.js;
+- MongoDB como fonte operacional principal;
+- Neo4j como projeção e linhagem;
+- InfluxDB para telemetria;
+- Redis para suporte operacional.
 
-O protótipo atual tem foco em validação técnica e sistêmica com dados fictícios ou sintéticos. Ele não deve iniciar com dados reais nem com dados operacionais pré-carregados.
+## Current Implementation Status
 
-Módulos centrais:
+### Active scope
 
-1. Cadastro e governança de pacientes/doadores.
-2. Consentimento dinâmico e TCLE.
-3. Intake clínico e cadastro integrado de amostras.
-4. Governança pré-analítica RCS-GOV, SPREC e MIABIS.
-5. Rastreabilidade e cadeia de custódia append-only.
-6. Armazenamento físico, etiquetas e localização.
-7. Equipamentos, sensores, políticas de temperatura e cadeia fria.
-8. Quarentena lógica por consentimento, qualidade e incidente de cadeia fria.
-9. Terminologias clínicas e semânticas: ORPHA, OMIM, CID, HPO, ATC e FHIR.
-10. RBAC, auditoria, segurança e bootstrap controlado.
+- eConsent e consentimento dinâmico;
+- governança de consentimento em runtime;
+- IDs canônicos de participante e espécime;
+- rastreabilidade e auditoria de eventos;
+- current-state CI;
+- testes de arquitetura e contrato com `node:test`;
+- seed validation essencial e dry-run;
+- hardening de auditoria, conformidade e jobs críticos.
 
-Módulos de inteligência artificial assistiva ou preditiva devem ser tratados como escopo futuro, exceto quando houver implementação e validação específicas.
+### Stabilization
 
-## Stack
+- saneamento do backend por issues pontuais;
+- refinamento gradual do modelo canônico;
+- endurecimento de auditoria e Merkle;
+- validação de terminologias e contratos de fronteira;
+- limpeza de superfícies legadas sem restaurar compatibilidade falsa.
 
-- Frontend: React, TypeScript e Vite.
-- Backend: Node.js 22 e Express.
-- Banco documental: MongoDB.
-- Grafo de linhagem e consentimento: Neo4j.
-- Telemetria e séries temporais: InfluxDB.
-- Cache, filas e eventos: Redis.
-- Orquestração: Docker Compose.
-- Testes: Vitest, Supertest, Playwright e scripts de auditoria.
+### Removed or legacy
 
-## Documentos acadêmicos e científicos
+- suíte Vitest legada como contrato oficial;
+- suíte Playwright legada como contrato oficial;
+- aliases antigos como `patientID`, `patientId`, `sampleID` e `sampleId`;
+- coleções legadas como contrato de runtime;
+- suposições Fabry-specific sobre biomarcadores;
+- serviços removidos sem consumidor runtime ativo;
+- fallback silencioso para contratos antigos em fluxos já canonicalizados.
 
-Documentos científicos, submissões, materiais de pesquisa, CEP, figuras e pacotes de registro INPI ficam em `academico/`.
+### Future scope
 
-O diretório `docs/` é reservado para documentação técnica de operação, importação, deploy e desenvolvimento.
+- Intelligent Assistant;
+- XAI / explicabilidade;
+- interpretação avançada assistida por IA de biomarcadores;
+- sincronização ampliada de terminologias;
+- reconstrução futura de suites unitárias e E2E sobre o contrato estabilizado.
 
-## Princípio de bootstrap limpo
+## Architecture
 
-O sistema deve iniciar em banco limpo com apenas dados estruturais e dados de referência essenciais.
+### Runtime layers
 
-O bootstrap essencial não deve criar por padrão:
+- Backend: Node.js/Express.
+- Frontend: React/Vite.
+- MongoDB: fonte operacional principal.
+- Neo4j: projeção e linhagem, alimentada por outbox.
+- InfluxDB: telemetria e séries temporais.
+- Redis: filas, cache e suporte operacional.
+- Worker runtime: `src/workers/worker.js` registra explicitamente o daily Merkle schedule ao iniciar; o módulo do job permanece seguro para importação em testes.
 
-- pacientes;
-- amostras;
-- consentimentos assinados;
-- resultados;
-- observações clínicas reais;
-- biomarcadores reais;
-- incidentes;
-- sensores, freezers ou localizações preenchidas;
-- usuário administrador com credencial fixa;
-- dumps ou dados de demonstração.
+### Boundary rules
 
-Dados operacionais devem ser criados pelo fluxo da aplicação ou por fixtures de teste e migrations explícitas, nunca por seed automático.
+- MongoDB continua sendo a fonte de verdade operacional.
+- Neo4j não é persistência primária; é projeção.
+- FHIR é fronteira de interoperabilidade e serialização, não etapa obrigatória de persistência operacional.
+- Outbox e projeções são usados para integração entre domínios quando aplicável.
 
-## Execução reproduzível com Docker Compose
+### Canonical contract
+
+- participante usa `participantId`;
+- espécime/amostra usa `specimenId`;
+- coleções e contratos devem seguir os nomes canônicos definidos no backend;
+- aliases antigos não fazem parte do contrato runtime.
+
+## Test Strategy
+
+Os comandos prioritários deste branch são:
+
+```bash
+npm --prefix api/backend run lint
+npm --prefix api/backend run typecheck
+npm --prefix api/backend run test:architecture
+npm --prefix api/backend run seed:validate:essential
+npm --prefix api/backend run seed:essential:dry-run
+npm --prefix api/backend run current-state:ci
+
+npm --prefix frontend run lint
+npm --prefix frontend run typecheck
+npm --prefix frontend run build
+```
+
+Notas:
+
+- `test:architecture` usa `node --test`.
+- Vitest e Playwright legados permanecem fora do contrato atual.
+- As suítes reconstruídas no futuro deverão partir do estado canônico atual.
+
+## Bootstrap and Seeds
+
+- O sistema deve iniciar sem dados operacionais reais pré-carregados.
+- O bootstrap essencial é manual, idempotente e restrito a dados estruturais mínimos.
+- Dados de domínio reais, consentimentos assinados e artefatos operacionais não devem surgir automaticamente no startup.
+
+## Local Development
 
 Pré-requisitos:
 
@@ -67,7 +113,7 @@ Pré-requisitos:
 - Docker Engine ou Docker Desktop;
 - Docker Compose v2.
 
-Não é necessário instalar Node.js, MongoDB, Neo4j, Redis ou InfluxDB diretamente no host.
+Não é necessário instalar Node.js, MongoDB, Neo4j, Redis ou InfluxDB diretamente no host para a execução via Compose.
 
 ```bash
 git clone https://github.com/deniseribeiro-beep/BioAvanceD-v2.git
@@ -75,18 +121,12 @@ cd BioAvanceD-v2
 cp .env.docker.example .env.docker
 ```
 
-Preencha `.env.docker` com valores próprios do ambiente. Não versione arquivos de ambiente reais, chaves, tokens, certificados ou dumps.
-
-Integrações externas devem permanecer desabilitadas durante a validação local, salvo quando um cenário exigir ativação explícita.
-
-Valide e inicie a pilha:
+Depois:
 
 ```bash
 npm run compose:config
 npm run compose:up
 ```
-
-O Compose utiliza volumes nomeados e não depende de caminhos absolutos, usuário do host ou infraestrutura institucional específica.
 
 Serviços padrão:
 
@@ -98,124 +138,31 @@ Serviços padrão:
 - Neo4j Bolt: localhost:7687
 - InfluxDB: http://localhost:8086
 
-As portas podem ser substituídas por variáveis no arquivo de ambiente.
+## Security and Auditability
 
-Estado, logs e smoke test:
-
-```bash
-npm run compose:ps
-npm run compose:logs
-```
-
-## Inicialização limpa do banco
-
-Após os serviços estarem saudáveis, a base deve ser inicializada apenas por migrations e bootstrap estrutural explícito, sem população automática de entidades de domínio.
-
-## Histórico do pipeline Orphanet
-
-O pipeline anterior foi descontinuado e não integra o runtime ou os procedimentos atuais. A documentação histórica está disponível em `docs/orphanet-artifact-pipeline.md`.
-
-## Criar o primeiro administrador
-
-O sistema não cria administrador por padrão. A criação do primeiro administrador deve ser uma ação explícita, com dados temporários fornecidos por variáveis seguras do ambiente.
-
-```bash
-docker compose --env-file .env.docker.example -f compose.yml -f compose.dev.yml exec backend npm run admin:create-first
-```
-
-O script só deve criar o primeiro administrador quando a coleção de usuários estiver vazia e deve exigir troca da credencial temporária no primeiro acesso.
-
-## Testes
-
-Backend:
-
-```bash
-docker compose --env-file .env.docker.example -f compose.yml -f compose.dev.yml exec backend npm run test:ci
-```
-
-Frontend:
-
-```bash
-docker compose --env-file .env.docker.example -f compose.yml -f compose.dev.yml exec frontend npm run typecheck
-docker compose --env-file .env.docker.example -f compose.yml -f compose.dev.yml exec frontend npm run build
-```
-
-Testes da pilha:
-
-```bash
-npm run test:integration
-npm run test:e2e
-```
-
-Auditoria completa:
-
-```bash
-npm run audit:full
-```
-
-## Incidentes de cadeia fria
-
-Fluxo esperado:
-
-```text
-telemetria fora da política
-→ incidente COLD_CHAIN aberto ou atualizado
-→ resolução do sensor, equipamento ou localização afetada
-→ amostras vinculadas entram em QUARANTINE/BLOCKED
-→ resolução do incidente não libera automaticamente as amostras
-→ amostras permanecem como PENDING_REVIEW até avaliação pós-incidente
-```
-
-## Segurança e auditabilidade
-
-O protótipo inclui:
+O sistema inclui:
 
 - RBAC;
-- criptografia AES-256-GCM para campos sensíveis;
-- pseudonimização e referências indiretas;
 - logs estruturados;
 - hashes SHA-256;
 - Merkle trees e provas de inclusão;
-- cadeia append-only para movimentações de amostras.
+- cadeia append-only para movimentações de amostras;
+- mecanismos de conformidade e evidência.
 
 A documentação não deve afirmar imutabilidade absoluta enquanto as raízes de Merkle não estiverem assinadas e ancoradas em um domínio de confiança independente.
 
-## Política de versionamento
+## Documentation and Scope
 
-Versionar:
+- `docs/` reúne documentação técnica de operação, importação, deploy e desenvolvimento.
+- IA/XAI/Assistente Inteligente devem ser tratados como roadmap, não como funcionalidade já entregue.
+- Compatibilidade com aliases legados e coleções antigas não deve ser reintroduzida.
 
-- código-fonte;
-- testes automatizados;
-- Dockerfiles e Compose;
-- scripts portáveis;
-- configurações sem segredo;
-- documentação técnica essencial;
-- fontes oficiais necessárias à reprodução dos seeds, quando permitido;
-- dados mínimos explicitamente sanitizados.
-
-Manter fora do repositório:
-
-- arquivos de ambiente reais;
-- chaves, certificados e tokens;
-- dados operacionais reais;
-- dependências instaladas;
-- logs e relatórios temporários;
-- conteúdo persistente dos bancos.
-
-## Integrações externas
-
-Integrações externas devem ser habilitadas apenas por flags explícitas e variáveis fornecidas fora do repositório.
-
-## Alinhamento científico
-
-O protótipo está alinhado à validação técnica de uma arquitetura para biobancos digitais, com ênfase em persistência poliglota, interoperabilidade FHIR/MIABIS/SPREC, consentimento dinâmico, RCS-GOV, rastreabilidade, cadeia fria, quarentena e pipelines semânticos versionados.
-
-## Encerramento
+## Cleanup and Exit
 
 ```bash
 npm run compose:down
 ```
 
-## Licença
+## License
 
 Projeto desenvolvido para fins acadêmicos, científicos e de demonstração técnica.

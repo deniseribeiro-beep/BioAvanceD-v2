@@ -17,7 +17,7 @@ const DEFAULT_RULES = {
 
 const DISEASE_RULES = {
   '324': {
-    name: 'Doenca de Fabry',
+    name: 'Doenca lisossomica',
     disease_category: 'Erros Inatos do Metabolismo',
     drug_classes: ['enzyme_replacement_therapy', 'pharmacological_chaperone'],
     validation_requirements: {

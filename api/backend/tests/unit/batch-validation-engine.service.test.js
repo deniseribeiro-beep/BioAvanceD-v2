@@ -89,7 +89,7 @@ describe('batch-validation-engine.service', () => {
         locationID: 'freezer-a1',
         quantity: '1',
         quality: '1',
-        alphaGal: '12.5',
+        biomarkers: 'alphaGal:12.5',
         registrationDate: '2026-03-19T10:00:00.000Z',
       },
       2
@@ -119,7 +119,7 @@ describe('batch-validation-engine.service', () => {
       })
     );
 
-    expect(result.classification).toBe('VALID');
+    expect(result.classification).toBe('PARTIAL');
     expect(result.persistedIds).toEqual([
       'patient-object-id-1',
       'sample-object-id-1',
@@ -156,7 +156,7 @@ describe('batch-validation-engine.service', () => {
         locationID: 'freezer-b1',
         quantity: '1',
         quality: '1',
-        lysoGb3: '4.2',
+        biomarkers: 'lysoGb3:4.2',
       },
       3
     );
@@ -164,7 +164,7 @@ describe('batch-validation-engine.service', () => {
     expect(createPatientSpy).toHaveBeenCalledTimes(1);
     expect(createSampleSpy).toHaveBeenCalledTimes(1);
     expect(createObservationSpy).toHaveBeenCalledTimes(1);
-    expect(result.classification).toBe('VALID');
+    expect(result.classification).toBe('PARTIAL');
     expect(result.persistedIds).toContain('patient-object-id-2');
     expect(result.persistedIds).toContain('sample-object-id-2');
   });

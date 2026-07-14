@@ -117,8 +117,8 @@ describe('dictionary suggest fallback', () => {
     );
     expect(response.body.biomarkers).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ code: 'alphaGal', display: 'Alpha-galactosidase A' }),
-        expect.objectContaining({ code: 'lysoGb3', display: 'Lyso-Gb3' }),
+        expect.objectContaining({ code: 'alphaGal', display: 'alphaGal' }),
+        expect.objectContaining({ code: 'lysoGb3', display: 'lysoGb3' }),
       ])
     );
   });

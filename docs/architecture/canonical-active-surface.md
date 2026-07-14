@@ -94,8 +94,6 @@ Classification:
 
 ### Backend legacy / cleanup candidates
 
-- `api/backend/src/routes/import.ts` - legacy FHIR import boundary candidate; verify against active imports before deleting.
-- `api/backend/src/services/FhirImportService.ts` - legacy FHIR-related candidate; verify usage before deleting.
 - `api/backend/src/services/fhir-import-staging.service.js` - active boundary helper, but keep as narrow boundary only.
 - `api/backend/src/services/quality-compatibility.service.js` - likely compatibility surface; review for runtime use.
 - `api/backend/src/controllers/import-async.controller.js` - verify active imports.
@@ -177,8 +175,6 @@ Classification:
 
 ### B - dead / delete after import verification
 
-- `api/backend/src/routes/import.ts`
-- `api/backend/src/services/FhirImportService.ts`
 - `api/backend/src/controllers/import-async.controller.js`
 - `api/backend/src/controllers/import-batch.controller.js`
 - `api/backend/src/controllers/fhir-import-staging.controller.js`

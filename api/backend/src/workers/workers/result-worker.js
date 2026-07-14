@@ -100,27 +100,58 @@ class ResultWorker {
               const writeStream = fs.createWriteStream(tempPath);
               let entryHandled = false;
 
-              readStream.on('error', (streamErr) => {
-                if (entryHandled) return;
+              const finishEntry = (errorMessage) => {
+                if (entryHandled) {
+                  return;
+                }
                 entryHandled = true;
-                results.errors.push({
-                  error: `Erro ao ler ${entry.fileName}: ${streamErr.message}`,
-                });
-                writeStream.destroy();
-                zipfile.readEntry();
-              });
 
+                if (errorMessage) {
+                  results.errors.push({ error: errorMessage });
+                }
+
+                try {
+                  if (!writeStream.destroyed) {
+                    writeStream.destroy();
+                  }
+                } catch (streamError) {
+                  logger.warn(`Falha ao encerrar stream temporário de ${entry.fileName}: ${streamError.message}`);
+                }
+
+                try {
+                  if (fs.existsSync(tempPath)) {
+                    fs.unlinkSync(tempPath);
+                  }
+                } catch (cleanupError) {
+                  logger.warn(`Falha ao remover arquivo temporário ${tempPath}: ${cleanupError.message}`);
+                }
+
+                zipfile.readEntry();
+              };
+
+              readStream.on('error', (streamError) => {
+                finishEntry(`Erro ao ler ${entry.fileName}: ${streamError.message}`);
+              });
+              writeStream.on('error', (streamError) => {
+                finishEntry(`Erro ao gravar ${entry.fileName}: ${streamError.message}`);
+              });
               readStream.pipe(writeStream);
               writeStream.on('close', async () => {
-                if (entryHandled) return;
+                if (entryHandled) {
+                  return;
+                }
                 entryHandled = true;
                 try {
                   await this.processFile(db, tempPath, results, fhirResources);
-                  fs.unlinkSync(tempPath); // Remove arquivo temporário
                 } catch (error) {
                   results.errors.push({
                     error: `Erro ao processar ${entry.fileName}: ${error.message}`,
                   });
+                }
+                try {
+                  fs.unlinkSync(tempPath); // Remove arquivo temporário
+                } catch (cleanupError) {
+                  logger.warn(`Falha ao remover arquivo temporário ${tempPath}: ${cleanupError.message}`);
                 }
                 zipfile.readEntry();
               });

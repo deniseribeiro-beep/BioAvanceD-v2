@@ -87,8 +87,6 @@ function normalizeBiomarkerCode(value) {
 function biomarkerDisplayName(code) {
   const normalized = normalizeBiomarkerCode(code);
   const known = {
-    alphaGal: 'Alpha-galactosidase A',
-    lysoGb3: 'Lyso-Gb3',
   };
   return known[normalized] || normalized;
 }

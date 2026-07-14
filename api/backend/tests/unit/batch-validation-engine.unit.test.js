@@ -341,7 +341,7 @@ describe('BatchValidationEngine.buildPatientLinkageQuery', () => {
 describe('BatchValidationEngine.buildBiomarkerObservationPayloads', () => {
   it('returns a payload per valid biomarker field', () => {
     const { payloads, warnings } = engine.buildBiomarkerObservationPayloads(
-      { alphaGal: '12.5', lysoGb3: '4.2' },
+      { biomarkers: 'alphaGal:12.5,lysoGb3:4.2' },
       { patientID: 'P1', _id: 'patient-1' },
       { sampleID: 'S1', _id: 'sample-1' }
     );
@@ -350,14 +350,13 @@ describe('BatchValidationEngine.buildBiomarkerObservationPayloads', () => {
     expect(warnings).toEqual([]);
     const alpha = payloads.find((p) => p.biomarkerType === 'alphaGal');
     expect(alpha.value).toBe(12.5);
-    expect(alpha.unit).toBe('U/mL');
     expect(alpha.patientObjectId).toBe('patient-1');
     expect(alpha.specimenObjectId).toBe('sample-1');
   });
 
   it('warns and skips a biomarker with a negative or non-finite value', () => {
     const { payloads, warnings } = engine.buildBiomarkerObservationPayloads(
-      { alphaGal: '-5' },
+      { biomarkers: 'alphaGal:-5' },
       {},
       {}
     );

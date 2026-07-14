@@ -649,9 +649,7 @@ class ImportLGPDController {
         ['• insulinUse: Sim/Não ou true/false (opcional) - Uso de insulina'],
         ['• antiviralUse: Sim/Não ou true/false (opcional) - Uso de antivirais'],
         ['• geneticVariant: Texto (opcional) - Variante genética identificada'],
-        ['• alphaGal: Número decimal (opcional) - Resultado de α-Galactosidase (U/mL)'],
-        ['• lysoGb3: Número decimal (opcional) - Resultado de Lyso-Gb3 (ng/mL)'],
-        ['• notes: Texto (opcional) - Observações adicionais'],
+          ['• notes: Texto (opcional) - Observações adicionais'],
         [],
         ['VALORES ACEITOS PARA CAMPOS BOOLEANOS:'],
         ['• true, false (recomendado)'],
@@ -717,8 +715,6 @@ class ImportLGPDController {
         'insulinUse',
         'antiviralUse',
         'geneticVariant',
-        'alphaGal',
-        'lysoGb3',
         'notes'
       ];
       
@@ -734,7 +730,7 @@ class ImportLGPDController {
         '2024001',                   // recordNumber
         'Hospital Universitário São Francisco de Assis', // clinicalUnit
         'HUSF',                      // unitAcronym
-        'Doença de Fabry',           // diagnosticHypothesis
+          'Doença lisossômica',        // diagnosticHypothesis
         'E75.21',                    // icdCode
         'false',                     // hypertension (boolean)
         'false',                     // obesity (boolean)
@@ -749,8 +745,6 @@ class ImportLGPDController {
         'true',                      // insulinUse (boolean)
         'false',                     // antiviralUse (boolean)
         'GLA337T>C, p.Ala143Thr',    // geneticVariant
-        '0.15',                      // alphaGal
-        '7.5',                       // lysoGb3
         'Paciente em acompanhamento regular' // notes
       ];
       

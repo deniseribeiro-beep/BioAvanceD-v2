@@ -33,8 +33,6 @@ function makeFakeDb(collectionsByName = {}) {
 describe('PatientService.getEncryptedFieldMap', () => {
   it('returns map with expected fields', () => {
     const map = patientService.getEncryptedFieldMap();
-    expect(map).toHaveProperty('alphaGal', 'alphaGalEncrypted');
-    expect(map).toHaveProperty('lysoGb3', 'lysoGb3Encrypted');
     expect(map).toHaveProperty('representativeIdentityDocument', 'representativeIdentityDocumentEncrypted');
   });
 });
@@ -45,21 +43,6 @@ describe('PatientService.encryptSensitivePatientFields', () => {
     const result = patientService.encryptSensitivePatientFields(patient);
     expect(result.patientID).toBe('12345678');
     expect(result.name).toBe('João');
-  });
-
-  it('encrypts alphaGal field and sets it to null', () => {
-    const patient = { patientID: '12345678', alphaGal: 3.5 };
-    const result = patientService.encryptSensitivePatientFields(patient);
-    expect(result.alphaGal).toBeNull();
-    expect(result.alphaGalEncrypted).toBeDefined();
-    expect(typeof result.alphaGalEncrypted).toBe('object');
-  });
-
-  it('encrypts lysoGb3 field and sets it to null', () => {
-    const patient = { patientID: '12345678', lysoGb3: 1.2 };
-    const result = patientService.encryptSensitivePatientFields(patient);
-    expect(result.lysoGb3).toBeNull();
-    expect(result.lysoGb3Encrypted).toBeDefined();
   });
 
   it('encrypts representativeIdentityDocument field', () => {
@@ -167,34 +150,6 @@ describe('PatientService.handlePhoneUniqueConstraint', () => {
   });
 });
 
-describe('PatientService.createBiomarkerObservationsFromPatient', () => {
-  it('returns early when db is null', async () => {
-    await expect(patientService.createBiomarkerObservationsFromPatient(null, {})).resolves.toBeUndefined();
-  });
-
-  it('returns early when patient is null', async () => {
-    const db = {};
-    await expect(patientService.createBiomarkerObservationsFromPatient(db, null)).resolves.toBeUndefined();
-  });
-
-  it('returns early when patientID is not 8 digits', async () => {
-    const db = {};
-    const patient = { patientID: '123', alphaGal: 2.0 };
-    await expect(patientService.createBiomarkerObservationsFromPatient(db, patient)).resolves.toBeUndefined();
-  });
-
-  it('skips biomarker when value is null', async () => {
-    const biomarkerObservationService = require('../../src/services/biomarker-observation.service');
-    const createSpy = vi.spyOn(biomarkerObservationService, 'createObservation').mockResolvedValue({});
-
-    const db = { collection: vi.fn() };
-    const patient = { patientID: '12345678', alphaGal: null, lysoGb3: null };
-    await patientService.createBiomarkerObservationsFromPatient(db, patient);
-    expect(createSpy).not.toHaveBeenCalled();
-    createSpy.mockRestore();
-  });
-});
-
 describe('PatientService.createPatient', () => {
   function validPatientData(overrides = {}) {
     return {
@@ -239,34 +194,6 @@ describe('PatientService.createPatient', () => {
     expect(insertedDoc.representativeIdentityDocumentEncrypted).toBeDefined();
 
     encryptSpy.mockRestore();
-  });
-
-  it('encrypts alphaGal/lysoGb3 at rest even though PatientModel.create nests them under dadosEspecificos (#70)', async () => {
-    const patientsCollection = makeFakeCollection();
-    const consentTemplatesCollection = makeFakeCollection({
-      findOne: vi.fn().mockResolvedValue({ _id: '507f1f77bcf86cd799439011', name: 'Template' })
-    });
-    const db = makeFakeDb({ patients: patientsCollection, consent_templates: consentTemplatesCollection });
-
-    await patientService.createPatient(db, validPatientData({
-      alphaGal: 3.5,
-      lysoGb3: 1.2
-    }), {
-      skipConsentNotification: true,
-      skipBiomarkerArtifacts: true
-    });
-
-    const insertedDoc = patientsCollection.insertOne.mock.calls[0][0];
-
-    expect(insertedDoc.alphaGalEncrypted).toBeDefined();
-    expect(insertedDoc.lysoGb3Encrypted).toBeDefined();
-
-    const fabryEntry = (insertedDoc.dadosEspecificos || []).find((e) => e.tipo === 'Fabry');
-    // The plaintext values must not survive anywhere in the persisted document.
-    expect(fabryEntry?.dados?.alphaGal ?? null).toBeNull();
-    expect(fabryEntry?.dados?.lysoGb3 ?? null).toBeNull();
-    expect(insertedDoc.alphaGal ?? null).toBeNull();
-    expect(insertedDoc.lysoGb3 ?? null).toBeNull();
   });
 
   it('rejects creation when an identifier conflict (duplicate identityDocument) exists', async () => {
@@ -391,13 +318,13 @@ describe('PatientService.updatePatient', () => {
     const db = makeFakeDb({ patients: patientsCollection });
     const tsSpy = vi.spyOn(patientBiomarkerTimeseriesService, 'writePatientBiomarkers').mockResolvedValue(undefined);
 
-    const result = await patientService.updatePatient(db, '12345678', { alphaGal: 2.2 });
+    const result = await patientService.updatePatient(db, '12345678', { representativeIdentityDocument: '529.982.247-25' });
 
     expect(result).toEqual({ success: true });
-    // First updateOne call is the actual patient update; its $set must have alphaGal encrypted.
+    // First updateOne call is the actual patient update; its $set must have the sensitive field encrypted.
     const firstUpdateCall = patientsCollection.updateOne.mock.calls[0];
-    expect(firstUpdateCall[1].$set.alphaGal).toBeNull();
-    expect(firstUpdateCall[1].$set.alphaGalEncrypted).toBeDefined();
+    expect(firstUpdateCall[1].$set.representativeIdentityDocument).toBeNull();
+    expect(firstUpdateCall[1].$set.representativeIdentityDocumentEncrypted).toBeDefined();
 
     tsSpy.mockRestore();
   });
