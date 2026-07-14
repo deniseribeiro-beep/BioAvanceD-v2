@@ -71,7 +71,7 @@ function makeDeps({
 }
 
 const baseCommand = () => ({
-  sampleId: 'sample-1',
+  specimenId: 'sample-1',
   targetBoxId: 'box-dest',
   targetPosition: 'b2',
   reason: 'relocation',
@@ -88,7 +88,7 @@ describe('MoveSampleUseCase', () => {
     expect(result).toEqual({
       success: true,
       movementID: 42,
-      sampleId: 'sample-1',
+      specimenId: 'sample-1',
       from: { boxId: 'box-src', position: 'A1' },
       to: { boxId: 'box-dest', position: 'B2' },
       movedAt: expect.any(Date),
@@ -106,11 +106,11 @@ describe('MoveSampleUseCase', () => {
     await expect(useCase.execute(null)).rejects.toThrow('Comando de movimentação inválido');
   });
 
-  it('rejects a command missing sampleId', async () => {
+  it('rejects a command missing specimenId', async () => {
     const { useCase } = makeDeps();
     const cmd = baseCommand();
-    delete cmd.sampleId;
-    await expect(useCase.execute(cmd)).rejects.toThrow('sampleId é obrigatório');
+    delete cmd.specimenId;
+    await expect(useCase.execute(cmd)).rejects.toThrow('specimenId é obrigatório');
   });
 
   it('rejects a command missing targetBoxId', async () => {
@@ -322,7 +322,7 @@ describe('MoveSampleUseCase', () => {
     expect(lineageRepository.compensateCustodyEvent).toHaveBeenCalledTimes(1);
     expect(lineageRepository.compensateCustodyEvent).toHaveBeenCalledWith({
       eventId: 'evt-compensate',
-      sampleId: 'sample-1',
+      specimenId: 'sample-1',
       reason: 'mongo_transaction_failed'
     });
   });

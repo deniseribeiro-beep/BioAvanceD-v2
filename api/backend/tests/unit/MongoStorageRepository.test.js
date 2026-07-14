@@ -715,11 +715,11 @@ describe('MongoStorageRepository', () => {
       expect(filter.$and).toHaveLength(3);
       expect(filter.$and[0].$or).toEqual([
         { barcode: expect.any(RegExp) },
-        { patientID: expect.any(RegExp) },
-        { sampleID: expect.any(RegExp) }
+        { participantId: expect.any(RegExp) },
+        { specimenId: expect.any(RegExp) }
       ]);
       expect(filter.$and[1]).toEqual({
-        currentStatus: { $in: ['Available', 'Registered', 'pending'] }
+        lifecycleStatus: { $in: ['Available', 'Registered', 'pending'] }
       });
       expect(filter.$and[2].$or).toEqual([
         { 'storageLocation.boxId': { $exists: false } },

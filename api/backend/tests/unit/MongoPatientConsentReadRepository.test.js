@@ -39,12 +39,12 @@ function makeSample(overrides = {}) {
   return {
     _id: 's1',
     barcode: 'BC1',
-    patientID: 'P1',
+    participantId: 'P1',
     sampleType: 'blood',
     sampleOrigin: 'clinic',
     currentStatus: 'stored',
     quantity: 5,
-    registrationDate: '2024-01-01',
+    registeredAt: '2024-01-01',
     ...overrides
   };
 }
@@ -72,10 +72,10 @@ describe('MongoPatientConsentReadRepository', () => {
     const patientObjId = { toString: () => 'patient-id-1' };
     const db = createDb({
       patients: {
-        findOne: vi.fn().mockResolvedValue({ _id: patientObjId, patientID: 'P1' })
+        findOne: vi.fn().mockResolvedValue({ _id: patientObjId, participantId: 'P1' })
       },
       consents: {
-        findOne: vi.fn().mockResolvedValue({ patientId: 'patient-id-1', status: 'ACTIVE' }),
+        findOne: vi.fn().mockResolvedValue({ participantId: 'patient-id-1', status: 'ACTIVE' }),
         countDocuments: vi.fn().mockResolvedValue(5)
       }
     });
@@ -89,10 +89,10 @@ describe('MongoPatientConsentReadRepository', () => {
       consentMessage: 'Consentimento ativo',
       canAllocate: true,
       barcode: 'BC1',
-      patientID: 'P1'
+      participantId: 'P1'
     });
     expect(db.__consentsCollection.findOne).toHaveBeenCalledWith({
-      patientId: { $in: ['P1', 'patient-id-1'] },
+      participantId: { $in: ['P1', 'patient-id-1'] },
       status: 'ACTIVE'
     });
   });
@@ -101,7 +101,7 @@ describe('MongoPatientConsentReadRepository', () => {
     const patientObjId = { toString: () => 'patient-id-2' };
     const db = createDb({
       patients: {
-        findOne: vi.fn().mockResolvedValue({ _id: patientObjId, patientID: 'P2' })
+        findOne: vi.fn().mockResolvedValue({ _id: patientObjId, participantId: 'P2' })
       },
       consents: {
         findOne: vi.fn().mockResolvedValue(null),
@@ -110,7 +110,7 @@ describe('MongoPatientConsentReadRepository', () => {
     });
     const repo = new MongoPatientConsentReadRepository(db);
 
-    const result = await repo.enrichSamplesWithConsent([makeSample({ patientID: 'P2' })]);
+    const result = await repo.enrichSamplesWithConsent([makeSample({ participantId: 'P2' })]);
 
     // An empty consents collection is no longer an escape hatch (fixed in 5e571099):
     // the sample is rejected and filtered out like any other missing-consent case.
@@ -121,7 +121,7 @@ describe('MongoPatientConsentReadRepository', () => {
     const patientObjId = { toString: () => 'patient-id-3' };
     const db = createDb({
       patients: {
-        findOne: vi.fn().mockResolvedValue({ _id: patientObjId, patientID: 'P3' })
+        findOne: vi.fn().mockResolvedValue({ _id: patientObjId, participantId: 'P3' })
       },
       consents: {
         findOne: vi.fn().mockResolvedValue(null),
@@ -130,7 +130,7 @@ describe('MongoPatientConsentReadRepository', () => {
     });
     const repo = new MongoPatientConsentReadRepository(db);
 
-    const result = await repo.enrichSamplesWithConsent([makeSample({ patientID: 'P3' })]);
+    const result = await repo.enrichSamplesWithConsent([makeSample({ participantId: 'P3' })]);
 
     // The rejected sample is filtered out of the final array entirely.
     expect(result).toEqual([]);
@@ -143,7 +143,7 @@ describe('MongoPatientConsentReadRepository', () => {
     });
     const repo = new MongoPatientConsentReadRepository(db);
 
-    const result = await repo.enrichSamplesWithConsent([makeSample({ patientID: 'unknown-patient' })]);
+    const result = await repo.enrichSamplesWithConsent([makeSample({ participantId: 'unknown-patient' })]);
 
     // A missing patient record no longer bypasses consent (fixed in 5e571099):
     // it fails closed and is filtered out of the result.
@@ -152,17 +152,17 @@ describe('MongoPatientConsentReadRepository', () => {
     expect(db.__consentsCollection.findOne).not.toHaveBeenCalled();
   });
 
-  it('looks up the patient via $or matching either patientID or _id', async () => {
+  it('looks up the patient via $or matching either participantId or _id', async () => {
     const db = createDb({
       patients: { findOne: vi.fn().mockResolvedValue(null) }
     });
     const repo = new MongoPatientConsentReadRepository(db);
 
-    await repo.enrichSamplesWithConsent([makeSample({ patientID: 'some-value' })]);
+    await repo.enrichSamplesWithConsent([makeSample({ participantId: 'some-value' })]);
 
     expect(db.__patientsCollection.findOne).toHaveBeenCalledWith({
       $or: [
-        { patientID: 'some-value' },
+        { participantId: 'some-value' },
         { _id: 'some-value' }
       ]
     });
@@ -175,20 +175,20 @@ describe('MongoPatientConsentReadRepository', () => {
     const db = createDb({
       patients: {
         findOne: vi.fn((query) => {
-          const target = query.$or[0].patientID;
+          const target = query.$or[0].participantId;
           if (target === 'accept-me') {
-            return Promise.resolve({ _id: acceptedPatientId, patientID: 'accept-me' });
+            return Promise.resolve({ _id: acceptedPatientId, participantId: 'accept-me' });
           }
           if (target === 'reject-me') {
-            return Promise.resolve({ _id: rejectedPatientId, patientID: 'reject-me' });
+            return Promise.resolve({ _id: rejectedPatientId, participantId: 'reject-me' });
           }
           return Promise.resolve(null);
         })
       },
       consents: {
         findOne: vi.fn((query) => {
-          if (query.patientId?.$in?.includes('accepted-id')) {
-            return Promise.resolve({ patientId: 'accepted-id', status: 'ACTIVE' });
+          if (query.participantId?.$in?.includes('accepted-id')) {
+            return Promise.resolve({ participantId: 'accepted-id', status: 'ACTIVE' });
           }
           return Promise.resolve(null);
         }),
@@ -198,8 +198,8 @@ describe('MongoPatientConsentReadRepository', () => {
     const repo = new MongoPatientConsentReadRepository(db);
 
     const samples = [
-      makeSample({ _id: 'sample-accepted', patientID: 'accept-me' }),
-      makeSample({ _id: 'sample-rejected', patientID: 'reject-me' })
+      makeSample({ _id: 'sample-accepted', participantId: 'accept-me' }),
+      makeSample({ _id: 'sample-rejected', participantId: 'reject-me' })
     ];
 
     const result = await repo.enrichSamplesWithConsent(samples);
@@ -216,17 +216,17 @@ describe('MongoPatientConsentReadRepository', () => {
     const db = createDb({
       patients: {
         findOne: vi.fn((query) => {
-          const target = query.$or[0].patientID;
-          if (target === 'A') return Promise.resolve({ _id: patientA, patientID: 'A' });
-          if (target === 'B') return Promise.resolve({ _id: patientB, patientID: 'B' });
-          if (target === 'C') return Promise.resolve({ _id: patientC, patientID: 'C' });
+          const target = query.$or[0].participantId;
+          if (target === 'A') return Promise.resolve({ _id: patientA, participantId: 'A' });
+          if (target === 'B') return Promise.resolve({ _id: patientB, participantId: 'B' });
+          if (target === 'C') return Promise.resolve({ _id: patientC, participantId: 'C' });
           return Promise.resolve(null);
         })
       },
       consents: {
         findOne: vi.fn((query) => {
-          if (query.patientId?.$in?.includes('id-a')) {
-            return Promise.resolve({ patientId: 'id-a', status: 'ACTIVE' });
+          if (query.participantId?.$in?.includes('id-a')) {
+            return Promise.resolve({ participantId: 'id-a', status: 'ACTIVE' });
           }
           return Promise.resolve(null); // B and C have no active consent
         }),
@@ -236,9 +236,9 @@ describe('MongoPatientConsentReadRepository', () => {
     const repo = new MongoPatientConsentReadRepository(db);
 
     const samples = [
-      makeSample({ _id: 'sample-A', patientID: 'A' }),
-      makeSample({ _id: 'sample-B', patientID: 'B' }),
-      makeSample({ _id: 'sample-C', patientID: 'C' })
+      makeSample({ _id: 'sample-A', participantId: 'A' }),
+      makeSample({ _id: 'sample-B', participantId: 'B' }),
+      makeSample({ _id: 'sample-C', participantId: 'C' })
     ];
 
     const result = await repo.enrichSamplesWithConsent(samples);
@@ -256,10 +256,10 @@ describe('MongoPatientConsentReadRepository', () => {
     const repo = new MongoPatientConsentReadRepository(db);
 
     const samples = [
-      makeSample({ _id: 's1', patientID: 'P1' }),
-      makeSample({ _id: 's2', patientID: 'P2' }),
-      makeSample({ _id: 's3', patientID: 'P3' }),
-      makeSample({ _id: 's4', patientID: 'P4' })
+      makeSample({ _id: 's1', participantId: 'P1' }),
+      makeSample({ _id: 's2', participantId: 'P2' }),
+      makeSample({ _id: 's3', participantId: 'P3' }),
+      makeSample({ _id: 's4', participantId: 'P4' })
     ];
 
     await repo.enrichSamplesWithConsent(samples);
