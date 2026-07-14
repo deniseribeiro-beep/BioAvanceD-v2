@@ -32,7 +32,7 @@ describe('LineageRepository', () => {
   describe('constructor / ensureDriver', () => {
     it('throws if driver missing session method', async () => {
       const repo = new LineageRepository({});
-      await expect(repo.validateBeforePersistence({ sampleId: '1', eventType: 'X' })).rejects.toThrow(
+      await expect(repo.validateBeforePersistence({ specimenId: '1', eventType: 'X' })).rejects.toThrow(
         'Driver não inicializado'
       );
     });
@@ -51,12 +51,12 @@ describe('LineageRepository', () => {
   describe('normalizePointerId', () => {
     it('trims and stringifies a valid pointer', () => {
       const repo = new LineageRepository({ session: vi.fn() });
-      expect(repo.normalizePointerId('  abc  ', 'sampleId')).toBe('abc');
+      expect(repo.normalizePointerId('  abc  ', 'specimenId')).toBe('abc');
     });
 
     it('throws for null/undefined/empty pointer', () => {
       const repo = new LineageRepository({ session: vi.fn() });
-      expect(() => repo.normalizePointerId(null, 'sampleId')).toThrow('sampleId obrigatório');
+      expect(() => repo.normalizePointerId(null, 'specimenId')).toThrow('specimenId obrigatório');
       expect(() => repo.normalizePointerId(undefined, 'parentSampleId')).toThrow('parentSampleId obrigatório');
       expect(() => repo.normalizePointerId('   ', 'eventId')).toThrow('eventId obrigatório');
     });
@@ -69,7 +69,7 @@ describe('LineageRepository', () => {
       const driver = makeDriver(session);
       const repo = new LineageRepository(driver);
 
-      const result = await repo.validateBeforePersistence({ sampleId: 's1', eventType: 'CREATE' });
+      const result = await repo.validateBeforePersistence({ specimenId: 's1', eventType: 'CREATE' });
 
       expect(result).toBe(true);
       expect(session.close).toHaveBeenCalled();
@@ -80,7 +80,7 @@ describe('LineageRepository', () => {
       const driver = makeDriver(session);
       const repo = new LineageRepository(driver);
 
-      await expect(repo.validateBeforePersistence({ sampleId: 's1' })).rejects.toThrow('eventType obrigatório');
+      await expect(repo.validateBeforePersistence({ specimenId: 's1' })).rejects.toThrow('eventType obrigatório');
     });
 
     it('rejects when consent is required but no active status found', async () => {
@@ -90,7 +90,7 @@ describe('LineageRepository', () => {
       const repo = new LineageRepository(driver);
 
       await expect(
-        repo.validateBeforePersistence({ sampleId: 's1', eventType: 'CREATE' })
+        repo.validateBeforePersistence({ specimenId: 's1', eventType: 'CREATE' })
       ).rejects.toThrow('Consentimento ético ativo não encontrado');
       expect(session.close).toHaveBeenCalled();
     });
@@ -102,7 +102,7 @@ describe('LineageRepository', () => {
       const repo = new LineageRepository(driver);
 
       const result = await repo.validateBeforePersistence({
-        sampleId: 's1',
+        specimenId: 's1',
         eventType: 'CREATE',
         requireEthicalConsent: false
       });
@@ -115,7 +115,7 @@ describe('LineageRepository', () => {
       const driver = makeDriver(session);
       const repo = new LineageRepository(driver);
 
-      await expect(repo.validateBeforePersistence({ sampleId: 's1', eventType: 'CREATE' })).rejects.toThrow(
+      await expect(repo.validateBeforePersistence({ specimenId: 's1', eventType: 'CREATE' })).rejects.toThrow(
         'db down'
       );
       expect(session.close).toHaveBeenCalled();
@@ -124,18 +124,18 @@ describe('LineageRepository', () => {
 
   describe('createSampleNodeWithParent', () => {
     it('returns the created relationship data on success', async () => {
-      const record = makeRecord({ sampleId: 'child1', parentId: 'parent1', relationshipType: 'ALIQUOT' });
+      const record = makeRecord({ specimenId: 'child1', parentId: 'parent1', relationshipType: 'ALIQUOT' });
       const session = makeSession({ records: [record] });
       const driver = makeDriver(session);
       const repo = new LineageRepository(driver);
 
       const result = await repo.createSampleNodeWithParent({
-        sampleId: 'child1',
+        specimenId: 'child1',
         parentSampleId: 'parent1',
         relationshipType: 'ALIQUOT'
       });
 
-      expect(result).toEqual({ sampleId: 'child1', parentId: 'parent1', relationshipType: 'ALIQUOT' });
+      expect(result).toEqual({ specimenId: 'child1', parentId: 'parent1', relationshipType: 'ALIQUOT' });
     });
 
     it('throws when parent has no active consent (no records returned)', async () => {
@@ -144,18 +144,18 @@ describe('LineageRepository', () => {
       const repo = new LineageRepository(driver);
 
       await expect(
-        repo.createSampleNodeWithParent({ sampleId: 'child1', parentSampleId: 'parent1' })
+        repo.createSampleNodeWithParent({ specimenId: 'child1', parentSampleId: 'parent1' })
       ).rejects.toThrow('Amostra pai sem consentimento ativo');
     });
 
-    it('throws when sampleId is missing', async () => {
+    it('throws when specimenId is missing', async () => {
       const session = makeSession();
       const driver = makeDriver(session);
       const repo = new LineageRepository(driver);
 
       await expect(
         repo.createSampleNodeWithParent({ parentSampleId: 'parent1' })
-      ).rejects.toThrow('sampleId obrigatório');
+      ).rejects.toThrow('specimenId obrigatório');
     });
 
     it('propagates and logs errors from session.run', async () => {
@@ -164,7 +164,7 @@ describe('LineageRepository', () => {
       const repo = new LineageRepository(driver);
 
       await expect(
-        repo.createSampleNodeWithParent({ sampleId: 'child1', parentSampleId: 'parent1' })
+        repo.createSampleNodeWithParent({ specimenId: 'child1', parentSampleId: 'parent1' })
       ).rejects.toThrow('cypher error');
       expect(session.close).toHaveBeenCalled();
     });
@@ -176,7 +176,7 @@ describe('LineageRepository', () => {
       const driver = makeDriver(session);
       const repo = new LineageRepository(driver);
 
-      const result = await repo.recordCustodyEvent({ sampleId: 's1', eventType: 'MOVE' });
+      const result = await repo.recordCustodyEvent({ specimenId: 's1', eventType: 'MOVE' });
 
       expect(result.eventId).toMatch(/^MOVE-s1-\d+$/);
       expect(session.run).toHaveBeenCalled();
@@ -188,7 +188,7 @@ describe('LineageRepository', () => {
       const repo = new LineageRepository(driver);
 
       await repo.recordCustodyEvent({
-        sampleId: 's1',
+        specimenId: 's1',
         eventType: 'MOVE',
         from: { boxId: 'boxA', position: 'a1' },
         to: { boxId: 'boxB', position: 'b2' }
@@ -201,12 +201,12 @@ describe('LineageRepository', () => {
       expect(params.toPosition).toBe('B2');
     });
 
-    it('throws when sampleId is missing', async () => {
+    it('throws when specimenId is missing', async () => {
       const session = makeSession();
       const driver = makeDriver(session);
       const repo = new LineageRepository(driver);
 
-      await expect(repo.recordCustodyEvent({ eventType: 'MOVE' })).rejects.toThrow('sampleId obrigatório');
+      await expect(repo.recordCustodyEvent({ eventType: 'MOVE' })).rejects.toThrow('specimenId obrigatório');
     });
 
     it('throws when eventType is missing instead of writing a malformed eventId', async () => {
@@ -214,7 +214,7 @@ describe('LineageRepository', () => {
       const driver = makeDriver(session);
       const repo = new LineageRepository(driver);
 
-      await expect(repo.recordCustodyEvent({ sampleId: 's1' })).rejects.toThrow('eventType obrigatório');
+      await expect(repo.recordCustodyEvent({ specimenId: 's1' })).rejects.toThrow('eventType obrigatório');
       expect(session.run).not.toHaveBeenCalled();
     });
 
@@ -223,7 +223,7 @@ describe('LineageRepository', () => {
       const driver = makeDriver(session);
       const repo = new LineageRepository(driver);
 
-      await expect(repo.recordCustodyEvent({ sampleId: 's1', eventType: 'MOVE' })).rejects.toThrow('write failed');
+      await expect(repo.recordCustodyEvent({ specimenId: 's1', eventType: 'MOVE' })).rejects.toThrow('write failed');
       expect(session.close).toHaveBeenCalled();
     });
   });

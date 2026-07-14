@@ -71,7 +71,7 @@ function makeDeps({
 }
 
 const baseCommand = () => ({
-  sampleId: 'sample-1',
+  specimenId: 'sample-1',
   boxId: 'box-new',
   position: 'b2',
   actor: { userId: 'user-1' }
@@ -79,25 +79,25 @@ const baseCommand = () => ({
 
 describe('AllocateSampleUseCase', () => {
   describe('validateCommand', () => {
-    it('throws when sampleId is missing', async () => {
+    it('throws when specimenId is missing', async () => {
       const { useCase } = makeDeps();
       const cmd = baseCommand();
-      delete cmd.sampleId;
-      await expect(useCase.execute(cmd)).rejects.toThrow('sampleId, boxId e position são obrigatórios');
+      delete cmd.specimenId;
+      await expect(useCase.execute(cmd)).rejects.toThrow('specimenId, boxId e position são obrigatórios');
     });
 
     it('throws when boxId is missing', async () => {
       const { useCase } = makeDeps();
       const cmd = baseCommand();
       delete cmd.boxId;
-      await expect(useCase.execute(cmd)).rejects.toThrow('sampleId, boxId e position são obrigatórios');
+      await expect(useCase.execute(cmd)).rejects.toThrow('specimenId, boxId e position são obrigatórios');
     });
 
     it('throws when position is missing', async () => {
       const { useCase } = makeDeps();
       const cmd = baseCommand();
       delete cmd.position;
-      await expect(useCase.execute(cmd)).rejects.toThrow('sampleId, boxId e position são obrigatórios');
+      await expect(useCase.execute(cmd)).rejects.toThrow('specimenId, boxId e position são obrigatórios');
     });
   });
 
@@ -110,7 +110,7 @@ describe('AllocateSampleUseCase', () => {
     expect(result).toEqual({
       success: true,
       sampleLocation: {
-        sampleId: 'sample-1',
+        specimenId: 'sample-1',
         boxId: 'box-new',
         position: 'B2'
       },
@@ -218,7 +218,7 @@ describe('AllocateSampleUseCase', () => {
     expect(lineageRepository.compensateCustodyEvent).toHaveBeenCalledTimes(1);
     expect(lineageRepository.compensateCustodyEvent).toHaveBeenCalledWith({
       eventId: 'evt-compensate',
-      sampleId: 'sample-1',
+      specimenId: 'sample-1',
       reason: 'mongo_transaction_failed'
     });
   });

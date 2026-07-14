@@ -12,26 +12,26 @@ function makeUseCase(getSampleStorageLocationImpl) {
 
 describe('GetSampleStorageLocationUseCase', () => {
   it('returns the storage location computed by the repository on the happy path', async () => {
-    const location = { sampleId: 'sample-1', boxId: 'box-1', position: 'A1' };
+    const location = { specimenId: 'sample-1', boxId: 'box-1', position: 'A1' };
     const { useCase, storageRepository } = makeUseCase(() =>
       Promise.resolve(location)
     );
 
-    const result = await useCase.execute({ sampleId: 'sample-1' });
+    const result = await useCase.execute({ specimenId: 'sample-1' });
 
     expect(result).toBe(location);
     expect(storageRepository.getSampleStorageLocation).toHaveBeenCalledTimes(1);
     expect(storageRepository.getSampleStorageLocation).toHaveBeenCalledWith({
-      sampleId: 'sample-1'
+      specimenId: 'sample-1'
     });
   });
 
-  it('throws when sampleId is missing from the query', async () => {
+  it('throws when specimenId is missing from the query', async () => {
     const { useCase, storageRepository } = makeUseCase(() =>
       Promise.resolve({})
     );
 
-    await expect(useCase.execute({})).rejects.toThrow('sampleId é obrigatório');
+    await expect(useCase.execute({})).rejects.toThrow('specimenId é obrigatório');
     expect(storageRepository.getSampleStorageLocation).not.toHaveBeenCalled();
   });
 
@@ -40,7 +40,7 @@ describe('GetSampleStorageLocationUseCase', () => {
       Promise.resolve({})
     );
 
-    await expect(useCase.execute(undefined)).rejects.toThrow('sampleId é obrigatório');
+    await expect(useCase.execute(undefined)).rejects.toThrow('specimenId é obrigatório');
     expect(storageRepository.getSampleStorageLocation).not.toHaveBeenCalled();
   });
 });
