@@ -67,7 +67,7 @@ describe('eConsent contract', () => {
 
     expect(response.status).toBe(400);
     expect(response.body).toMatchObject({
-      error: 'patientId e email obrigatórios',
+      error: 'participantId e email obrigatórios',
     });
   });
 
