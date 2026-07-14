@@ -30,9 +30,10 @@ function buildDb(collection) {
 }
 
 const VALID_PAYLOAD = {
-  patientID: '12345678',
+  participantId: '12345678',
   biomarkerType: 'alphaGal',
   value: 4.2,
+  unit: 'kU/L',
   collectedAt: '2026-01-01T00:00:00.000Z'
 };
 
@@ -157,7 +158,7 @@ describe('biomarker-observation.service', () => {
       expect(insertedDoc.value).toBeNull();
       expect(insertedDoc.valueEncrypted).toMatchObject({ alg: 'aes-256-gcm' });
       expect(result._id).toBe('id-1');
-      expect(result.patientID).toBe('12345678');
+      expect(result.participantId).toBe('12345678');
     });
 
     it('throws when the payload fails model validation', async () => {
@@ -165,8 +166,8 @@ describe('biomarker-observation.service', () => {
       const db = buildDb(collection);
 
       await expect(
-        biomarkerObservationService.createObservation(db, { patientID: 'bad' })
-      ).rejects.toThrow(/patientID/);
+        biomarkerObservationService.createObservation(db, { participantId: 'bad' })
+      ).rejects.toThrow(/biomarkerType é obrigatório/);
       expect(collection.insertOne).not.toHaveBeenCalled();
     });
 
@@ -220,16 +221,16 @@ describe('biomarker-observation.service', () => {
       });
     }
 
-    it('throws when patientID is not 8 digits', async () => {
+    it('throws when participantId is not 8 digits', async () => {
       await expect(
         biomarkerObservationService.listPatientObservations({}, '123')
-      ).rejects.toThrow(/patientID inválido/);
+      ).rejects.toThrow(/participantId inválido/);
     });
 
-    it('throws when patientID is missing', async () => {
+    it('throws when participantId is missing', async () => {
       await expect(
         biomarkerObservationService.listPatientObservations({})
-      ).rejects.toThrow(/patientID inválido/);
+      ).rejects.toThrow(/participantId inválido/);
     });
 
     it('builds a base query and applies default limit/skip', async () => {
@@ -238,7 +239,7 @@ describe('biomarker-observation.service', () => {
 
       const result = await biomarkerObservationService.listPatientObservations(db, '12345678');
 
-      expect(collection.find).toHaveBeenCalledWith({ patientID: '12345678' });
+      expect(collection.find).toHaveBeenCalledWith({ participantId: '12345678' });
       expect(result.limit).toBe(50);
       expect(result.skip).toBe(0);
       expect(result.total).toBe(1);
