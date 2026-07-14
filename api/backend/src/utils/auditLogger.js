@@ -120,7 +120,7 @@ class AuditLogger {
     });
 
     // Se for entidade Patient, sanitiza usando utilitário específico
-    if (entity === 'Patient' && sanitized.patientID) {
+    if (entity === 'Patient' && sanitized.participantId) {
       return sanitizePatientForLogs(sanitized);
     }
 

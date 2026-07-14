@@ -48,7 +48,7 @@ describe('analysisValidationService.validateSampleExists', () => {
     expect(findOne).toHaveBeenCalledTimes(2);
   });
 
-  it('falls back to sampleID lookup when identifier is not a valid ObjectId', async () => {
+  it('falls back to specimenId lookup when identifier is not a valid ObjectId', async () => {
     const sampleDoc = { _id: new ObjectId(), sampleID: '00001' };
     const findOne = vi.fn().mockResolvedValue(sampleDoc);
     const db = createDb({ samples: { findOne } });
@@ -58,13 +58,13 @@ describe('analysisValidationService.validateSampleExists', () => {
     expect(result).toEqual({ success: true, sample: sampleDoc });
     // Only one call: the invalid-ObjectId branch must not attempt new ObjectId(...) at all.
     expect(findOne).toHaveBeenCalledTimes(1);
-    expect(findOne).toHaveBeenCalledWith({ sampleID: '00001' });
+    expect(findOne).toHaveBeenCalledWith({ specimenId: '00001' });
   });
 
-  it('falls back to barcode lookup as the third strategy when sampleID lookup misses', async () => {
+  it('falls back to barcode lookup as the third strategy when specimenId lookup misses', async () => {
     const sampleDoc = { _id: new ObjectId(), barcode: 'BR-2025-001' };
     const findOne = vi.fn()
-      .mockResolvedValueOnce(null) // sampleID miss
+      .mockResolvedValueOnce(null) // specimenId miss
       .mockResolvedValueOnce(sampleDoc); // barcode hit
     const db = createDb({ samples: { findOne } });
 
@@ -72,16 +72,16 @@ describe('analysisValidationService.validateSampleExists', () => {
 
     expect(result).toEqual({ success: true, sample: sampleDoc });
     expect(findOne).toHaveBeenCalledTimes(2);
-    expect(findOne).toHaveBeenNthCalledWith(1, { sampleID: 'BR-2025-001' });
+    expect(findOne).toHaveBeenNthCalledWith(1, { specimenId: 'BR-2025-001' });
     expect(findOne).toHaveBeenNthCalledWith(2, { barcode: 'BR-2025-001' });
   });
 
-  it('tries ObjectId lookup first, then still falls through to sampleID/barcode if that misses', async () => {
+  it('tries ObjectId lookup first, then still falls through to specimenId/barcode if that misses', async () => {
     const oid = new ObjectId();
     const sampleDoc = { _id: new ObjectId(), barcode: oid.toString() };
     const findOne = vi.fn()
       .mockResolvedValueOnce(null) // ObjectId miss
-      .mockResolvedValueOnce(null) // sampleID miss
+      .mockResolvedValueOnce(null) // specimenId miss
       .mockResolvedValueOnce(sampleDoc); // barcode hit
     const db = createDb({ samples: { findOne } });
 
@@ -139,10 +139,10 @@ describe('analysisValidationService.validateSampleExists', () => {
 });
 
 describe('analysisValidationService.validatePatientConsent', () => {
-  it('short-circuits with no-patientID error and never touches the collection', async () => {
+  it('short-circuits with no-participantId error and never touches the collection', async () => {
     const db = createDb();
 
-    const result = await analysisValidationService.validatePatientConsent(db, { patientID: '' });
+    const result = await analysisValidationService.validatePatientConsent(db, { participantId: '' });
 
     expect(result).toEqual({
       success: false,
@@ -151,23 +151,23 @@ describe('analysisValidationService.validatePatientConsent', () => {
     expect(db.collection).not.toHaveBeenCalled();
   });
 
-  it('returns a not-found error including the patientID when patient is missing', async () => {
+  it('returns a not-found error including the participantId when patient is missing', async () => {
     const db = createDb({
       patients: { findOne: vi.fn().mockResolvedValue(null) }
     });
 
-    const result = await analysisValidationService.validatePatientConsent(db, { patientID: 'P123' });
+    const result = await analysisValidationService.validatePatientConsent(db, { participantId: 'P123' });
 
     expect(result.success).toBe(false);
-    expect(result.error).toBe('Paciente P123 não encontrado no sistema');
+    expect(result.error).toBe('Participante P123 não encontrado no sistema');
   });
 
   it('rejects with wrong-status failure and defaults displayed status to NÃO DEFINIDO when status is missing', async () => {
     const db = createDb({
-      patients: { findOne: vi.fn().mockResolvedValue({ patientID: 'P1' }) } // no status field
+      patients: { findOne: vi.fn().mockResolvedValue({ participantId: 'P1' }) } // no status field
     });
 
-    const result = await analysisValidationService.validatePatientConsent(db, { patientID: 'P1' });
+    const result = await analysisValidationService.validatePatientConsent(db, { participantId: 'P1' });
 
     expect(result.success).toBe(false);
     expect(result.patientStatus).toBe('NÃO DEFINIDO');
@@ -176,10 +176,10 @@ describe('analysisValidationService.validatePatientConsent', () => {
 
   it('rejects with wrong-status failure reflecting the actual status when present but not ACCEPTED_CONSENT', async () => {
     const db = createDb({
-      patients: { findOne: vi.fn().mockResolvedValue({ patientID: 'P1', status: 'PENDING' }) }
+      patients: { findOne: vi.fn().mockResolvedValue({ participantId: 'P1', status: 'PENDING' }) }
     });
 
-    const result = await analysisValidationService.validatePatientConsent(db, { patientID: 'P1' });
+    const result = await analysisValidationService.validatePatientConsent(db, { participantId: 'P1' });
 
     expect(result.success).toBe(false);
     expect(result.patientStatus).toBe('PENDING');
@@ -188,10 +188,10 @@ describe('analysisValidationService.validatePatientConsent', () => {
 
   it('rejects with a distinct message when status is ACCEPTED_CONSENT but consentAcceptedAt is missing', async () => {
     const db = createDb({
-      patients: { findOne: vi.fn().mockResolvedValue({ patientID: 'P1', status: 'ACCEPTED_CONSENT' }) }
+      patients: { findOne: vi.fn().mockResolvedValue({ participantId: 'P1', status: 'ACCEPTED_CONSENT' }) }
     });
 
-    const result = await analysisValidationService.validatePatientConsent(db, { patientID: 'P1' });
+    const result = await analysisValidationService.validatePatientConsent(db, { participantId: 'P1' });
 
     expect(result.success).toBe(false);
     expect(result.error).toBe('Consentimento aceito mas data de aceitação não registrada. Contate o suporte.');
@@ -201,7 +201,7 @@ describe('analysisValidationService.validatePatientConsent', () => {
   it('succeeds with a reshaped patient subset when status is accepted and date is present', async () => {
     const rawPatient = {
       _id: new ObjectId(),
-      patientID: 'P1',
+      participantId: 'P1',
       status: 'ACCEPTED_CONSENT',
       consentAcceptedAt: '2025-01-01T00:00:00Z',
       cpf: '123.456.789-00', // PII that must not leak into the reshaped output
@@ -211,12 +211,12 @@ describe('analysisValidationService.validatePatientConsent', () => {
       patients: { findOne: vi.fn().mockResolvedValue(rawPatient) }
     });
 
-    const result = await analysisValidationService.validatePatientConsent(db, { patientID: 'P1' });
+    const result = await analysisValidationService.validatePatientConsent(db, { participantId: 'P1' });
 
     expect(result).toEqual({
       success: true,
       patient: {
-        patientID: 'P1',
+        participantId: 'P1',
         consentStatus: 'ACCEPTED_CONSENT',
         consentAcceptedAt: '2025-01-01T00:00:00Z'
       }
@@ -232,7 +232,7 @@ describe('analysisValidationService.validatePatientConsent', () => {
       patients: { findOne: vi.fn().mockRejectedValue(new Error('boom')) }
     });
 
-    const result = await analysisValidationService.validatePatientConsent(db, { patientID: 'P1' });
+    const result = await analysisValidationService.validatePatientConsent(db, { participantId: 'P1' });
 
     expect(result).toEqual({
       success: false,
@@ -258,10 +258,10 @@ describe('analysisValidationService.validateUploadEligibility', () => {
   });
 
   it('short-circuits and returns the consent-validation failure as-is when consent is invalid', async () => {
-    const sampleDoc = { _id: new ObjectId(), sampleID: '00001', patientID: 'P1' };
+    const sampleDoc = { _id: new ObjectId(), specimenId: '00001', participantId: 'P1' };
     const db = createDb({
       samples: { findOne: vi.fn().mockResolvedValue(sampleDoc) },
-      patients: { findOne: vi.fn().mockResolvedValue({ patientID: 'P1', status: 'PENDING' }) }
+      patients: { findOne: vi.fn().mockResolvedValue({ participantId: 'P1', status: 'PENDING' }) }
     });
 
     const result = await analysisValidationService.validateUploadEligibility(db, '00001');
@@ -275,16 +275,16 @@ describe('analysisValidationService.validateUploadEligibility', () => {
     const oid = new ObjectId();
     const sampleDoc = {
       _id: oid,
-      sampleID: '00001',
+      specimenId: '00001',
       barcode: 'BR-2025-001',
-      patientID: 'P1',
+      participantId: 'P1',
       sampleType: 'blood',
-      currentStatus: 'stored',
+      lifecycleStatus: 'stored',
       extraField: 'should-not-leak'
     };
     const patientDoc = {
       _id: new ObjectId(),
-      patientID: 'P1',
+      participantId: 'P1',
       status: 'ACCEPTED_CONSENT',
       consentAcceptedAt: '2025-01-01T00:00:00Z'
     };
@@ -301,15 +301,15 @@ describe('analysisValidationService.validateUploadEligibility', () => {
     expect(result.sample._id).toBe(oid.toString());
     expect(result.sample).toEqual({
       _id: oid.toString(),
-      sampleID: '00001',
+      specimenId: '00001',
       barcode: 'BR-2025-001',
-      patientID: 'P1',
+      participantId: 'P1',
       sampleType: 'blood',
-      currentStatus: 'stored'
+      lifecycleStatus: 'stored'
     });
     expect(result.sample.extraField).toBeUndefined();
     expect(result.patient).toEqual({
-      patientID: 'P1',
+      participantId: 'P1',
       consentStatus: 'ACCEPTED_CONSENT',
       consentAcceptedAt: '2025-01-01T00:00:00Z'
     });

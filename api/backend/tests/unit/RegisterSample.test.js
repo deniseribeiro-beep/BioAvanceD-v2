@@ -102,29 +102,29 @@ describe('RegisterSample', () => {
   });
 
   describe('assertConsent', () => {
-    it('throws RegisterSampleForbiddenError in strict mode when patientID is missing', async () => {
+    it('throws RegisterSampleForbiddenError in strict mode when participantId is missing', async () => {
       const useCase = new RegisterSample({ db });
       await expect(useCase.assertConsent({}, true)).rejects.toThrow(RegisterSampleForbiddenError);
     });
 
-    it('does not throw and skips consent lookup in permissive mode when patientID is missing', async () => {
+    it('does not throw and skips consent lookup in permissive mode when participantId is missing', async () => {
       const noLookupDb = makeDb({});
       const useCase = new RegisterSample({ db: noLookupDb });
       await expect(useCase.assertConsent({}, false)).resolves.toBeUndefined();
       expect(noLookupDb.collection).not.toHaveBeenCalled();
     });
 
-    it('looks up the consents collection with patientID and allowed statuses when patientID is present', async () => {
-      const consentsCollection = makeConsentsCollection({ _id: 'c1', patientId: 'P1', status: 'ACTIVE' });
+    it('looks up the consents collection with participantId and allowed statuses when participantId is present', async () => {
+      const consentsCollection = makeConsentsCollection({ _id: 'c1', participantId: 'P1', status: 'ACTIVE' });
       const consentsDb = makeDb({ patientConsents: consentsCollection });
       const useCase = new RegisterSample({ db: consentsDb });
 
-      await useCase.assertConsent({ patientID: 'P1' }, true);
+      await useCase.assertConsent({ participantId: 'P1' }, true);
 
       expect(consentsDb.collection).toHaveBeenCalledWith('patientConsents');
       expect(consentsCollection.findOne).toHaveBeenCalledWith(
         expect.objectContaining({
-          patientId: 'P1',
+          participantId: 'P1',
           status: { $in: ['ACTIVE', 'VALID', 'GRANTED'] }
         }),
         expect.any(Object)
@@ -136,7 +136,7 @@ describe('RegisterSample', () => {
       const consentsDb = makeDb({ patientConsents: consentsCollection });
       const useCase = new RegisterSample({ db: consentsDb });
 
-      await expect(useCase.assertConsent({ patientID: 'P1' }, true)).rejects.toThrow(
+      await expect(useCase.assertConsent({ participantId: 'P1' }, true)).rejects.toThrow(
         RegisterSampleForbiddenError
       );
     });
@@ -146,7 +146,7 @@ describe('RegisterSample', () => {
       const consentsDb = makeDb({ patientConsents: consentsCollection });
       const useCase = new RegisterSample({ db: consentsDb });
 
-      await expect(useCase.assertConsent({ patientID: 'P1' }, false)).resolves.toBeUndefined();
+      await expect(useCase.assertConsent({ participantId: 'P1' }, false)).resolves.toBeUndefined();
     });
   });
 
@@ -173,7 +173,7 @@ describe('RegisterSample', () => {
       expect(sampleService.createSample).toHaveBeenCalledWith(db, command.sampleData, command.options);
       expect(lineageRepository.validateBeforePersistence).toHaveBeenCalledWith(
         expect.objectContaining({
-          sampleId: String(createdSample._id),
+          specimenId: String(createdSample._id),
           barcode: 'BC-1',
           eventType: 'register',
           actorId: 'U1'
@@ -198,7 +198,7 @@ describe('RegisterSample', () => {
   describe('handleLineage', () => {
     it('throws forbidden when no lineageRepository and strict mode', async () => {
       const useCase = new RegisterSample({ db });
-      await expect(useCase.handleLineage({ sampleId: '1' }, true)).rejects.toThrow(
+      await expect(useCase.handleLineage({ specimenId: '1' }, true)).rejects.toThrow(
         RegisterSampleForbiddenError
       );
     });
@@ -207,10 +207,10 @@ describe('RegisterSample', () => {
       const quarantineQueue = { enqueue: vi.fn().mockResolvedValue(undefined) };
       const useCase = new RegisterSample({ db, quarantineQueue });
 
-      await expect(useCase.handleLineage({ sampleId: '1' }, false)).resolves.toBeUndefined();
+      await expect(useCase.handleLineage({ specimenId: '1' }, false)).resolves.toBeUndefined();
 
       expect(quarantineQueue.enqueue).toHaveBeenCalledWith(
-        expect.objectContaining({ sampleId: '1' }),
+        expect.objectContaining({ specimenId: '1' }),
         expect.objectContaining({ reason: 'lineage_repository_unavailable' })
       );
     });
@@ -227,7 +227,7 @@ describe('RegisterSample', () => {
       };
       const useCase = new RegisterSample({ db, lineageRepository });
 
-      await useCase.handleLineage({ sampleId: '1' }, false);
+      await useCase.handleLineage({ specimenId: '1' }, false);
 
       expect(calls).toEqual(['validate', 'record']);
     });
@@ -239,7 +239,7 @@ describe('RegisterSample', () => {
       };
       const useCase = new RegisterSample({ db, lineageRepository });
 
-      await expect(useCase.handleLineage({ sampleId: '1' }, true)).rejects.toThrow(
+      await expect(useCase.handleLineage({ specimenId: '1' }, true)).rejects.toThrow(
         RegisterSampleForbiddenError
       );
       expect(lineageRepository.recordCustodyEvent).not.toHaveBeenCalled();
@@ -253,10 +253,10 @@ describe('RegisterSample', () => {
       const quarantineQueue = { enqueue: vi.fn().mockResolvedValue(undefined) };
       const useCase = new RegisterSample({ db, lineageRepository, quarantineQueue });
 
-      await expect(useCase.handleLineage({ sampleId: '1' }, false)).resolves.toBeUndefined();
+      await expect(useCase.handleLineage({ specimenId: '1' }, false)).resolves.toBeUndefined();
 
       expect(quarantineQueue.enqueue).toHaveBeenCalledWith(
-        expect.objectContaining({ sampleId: '1' }),
+        expect.objectContaining({ specimenId: '1' }),
         expect.objectContaining({ reason: 'neo4j down' })
       );
     });
@@ -265,12 +265,12 @@ describe('RegisterSample', () => {
   describe('enqueueQuarantine', () => {
     it('logs a warning and does not throw when no quarantineQueue is configured', async () => {
       const useCase = new RegisterSample({ db });
-      await expect(useCase.enqueueQuarantine({ sampleId: '1' }, 'some_reason')).resolves.toBeUndefined();
+      await expect(useCase.enqueueQuarantine({ specimenId: '1' }, 'some_reason')).resolves.toBeUndefined();
     });
 
     it('logs a warning and does not throw when quarantineQueue lacks an enqueue function', async () => {
       const useCase = new RegisterSample({ db, quarantineQueue: {} });
-      await expect(useCase.enqueueQuarantine({ sampleId: '1' }, 'some_reason')).resolves.toBeUndefined();
+      await expect(useCase.enqueueQuarantine({ specimenId: '1' }, 'some_reason')).resolves.toBeUndefined();
     });
   });
 
@@ -288,7 +288,7 @@ describe('RegisterSample', () => {
       const useCase = new RegisterSample({ db: rollbackDb }); // no lineageRepository -> strict throws forbidden in handleLineage
 
       const command = {
-        sampleData: { barcode: 'BC-3', patientID: 'P1' },
+        sampleData: { barcode: 'BC-3', participantId: 'P1' },
         options: {}
       };
 
@@ -322,7 +322,7 @@ describe('RegisterSample', () => {
       const useCase = new RegisterSample({ db: rollbackDb, lineageRepository });
 
       const command = {
-        sampleData: { barcode: 'BC-9', patientID: 'P1' },
+        sampleData: { barcode: 'BC-9', participantId: 'P1' },
         options: {}
       };
 

@@ -53,7 +53,7 @@ describe('authConsent middleware', () => {
   });
 
   it('returns 503 DB_UNAVAILABLE and does not call next when db is missing', async () => {
-    const req = createReq({ body: { patientID: 'p1' } });
+    const req = createReq({ body: { participantId: 'p1' } });
     // no db set on app.locals
     const res = createRes();
 
@@ -65,8 +65,8 @@ describe('authConsent middleware', () => {
     expect(next).not.toHaveBeenCalled();
   });
 
-  it('resolves patientID from req.body when patientIdResolver is a string', async () => {
-    const req = createReq({ app: { locals: { db: fakeDb } }, body: { patientID: 'bodyPatient' } });
+  it('resolves participantId from req.body when participantIdResolver is a string', async () => {
+    const req = createReq({ app: { locals: { db: fakeDb } }, body: { participantId: 'bodyPatient' } });
     const res = createRes();
     fakeConsentsCollection.findOne.mockResolvedValue({
       _id: { toString: () => 'c1' },
@@ -79,14 +79,14 @@ describe('authConsent middleware', () => {
     await middleware(req, res, next);
 
     expect(fakeConsentsCollection.findOne).toHaveBeenCalledWith(
-      expect.objectContaining({ patientId: 'bodyPatient' }),
+      expect.objectContaining({ participantId: 'bodyPatient' }),
       expect.anything()
     );
     expect(next).toHaveBeenCalled();
   });
 
-  it('resolves patientID from req.params when not present in body', async () => {
-    const req = createReq({ app: { locals: { db: fakeDb } }, params: { patientID: 'paramsPatient' } });
+  it('resolves participantId from req.params when not present in body', async () => {
+    const req = createReq({ app: { locals: { db: fakeDb } }, params: { participantId: 'paramsPatient' } });
     const res = createRes();
     fakeConsentsCollection.findOne.mockResolvedValue({
       _id: { toString: () => 'c1' },
@@ -99,14 +99,14 @@ describe('authConsent middleware', () => {
     await middleware(req, res, next);
 
     expect(fakeConsentsCollection.findOne).toHaveBeenCalledWith(
-      expect.objectContaining({ patientId: 'paramsPatient' }),
+      expect.objectContaining({ participantId: 'paramsPatient' }),
       expect.anything()
     );
     expect(next).toHaveBeenCalled();
   });
 
-  it('resolves patientID from req.query when not present in body/params', async () => {
-    const req = createReq({ app: { locals: { db: fakeDb } }, query: { patientID: 'queryPatient' } });
+  it('resolves participantId from req.query when not present in body/params', async () => {
+    const req = createReq({ app: { locals: { db: fakeDb } }, query: { participantId: 'queryPatient' } });
     const res = createRes();
     fakeConsentsCollection.findOne.mockResolvedValue({
       _id: { toString: () => 'c1' },
@@ -119,14 +119,14 @@ describe('authConsent middleware', () => {
     await middleware(req, res, next);
 
     expect(fakeConsentsCollection.findOne).toHaveBeenCalledWith(
-      expect.objectContaining({ patientId: 'queryPatient' }),
+      expect.objectContaining({ participantId: 'queryPatient' }),
       expect.anything()
     );
     expect(next).toHaveBeenCalled();
   });
 
-  it('resolves patientID from req.locals when not present in body/params/query', async () => {
-    const req = createReq({ app: { locals: { db: fakeDb } }, locals: { patientID: 'localsPatient' } });
+  it('resolves participantId from req.locals when not present in body/params/query', async () => {
+    const req = createReq({ app: { locals: { db: fakeDb } }, locals: { participantId: 'localsPatient' } });
     const res = createRes();
     fakeConsentsCollection.findOne.mockResolvedValue({
       _id: { toString: () => 'c1' },
@@ -139,7 +139,7 @@ describe('authConsent middleware', () => {
     await middleware(req, res, next);
 
     expect(fakeConsentsCollection.findOne).toHaveBeenCalledWith(
-      expect.objectContaining({ patientId: 'localsPatient' }),
+      expect.objectContaining({ participantId: 'localsPatient' }),
       expect.anything()
     );
     expect(next).toHaveBeenCalled();
@@ -148,10 +148,10 @@ describe('authConsent middleware', () => {
   it('honors precedence body > params > query > locals', async () => {
     const req = createReq({
       app: { locals: { db: fakeDb } },
-      body: { patientID: 'fromBody' },
-      params: { patientID: 'fromParams' },
-      query: { patientID: 'fromQuery' },
-      locals: { patientID: 'fromLocals' }
+      body: { participantId: 'fromBody' },
+      params: { participantId: 'fromParams' },
+      query: { participantId: 'fromQuery' },
+      locals: { participantId: 'fromLocals' }
     });
     const res = createRes();
     fakeConsentsCollection.findOne.mockResolvedValue({
@@ -165,12 +165,12 @@ describe('authConsent middleware', () => {
     await middleware(req, res, next);
 
     expect(fakeConsentsCollection.findOne).toHaveBeenCalledWith(
-      expect.objectContaining({ patientId: 'fromBody' }),
+      expect.objectContaining({ participantId: 'fromBody' }),
       expect.anything()
     );
   });
 
-  it('uses patientIdResolver as a function, calling it with req', async () => {
+  it('uses participantIdResolver as a function, calling it with req', async () => {
     const resolverFn = vi.fn().mockReturnValue('fnPatient');
     const req = createReq({ app: { locals: { db: fakeDb } } });
     const res = createRes();
@@ -181,18 +181,18 @@ describe('authConsent middleware', () => {
       signedAt: new Date()
     });
 
-    const middleware = authConsent({ patientIdResolver: resolverFn });
+    const middleware = authConsent({ participantIdResolver: resolverFn });
     await middleware(req, res, next);
 
     expect(resolverFn).toHaveBeenCalledWith(req);
     expect(fakeConsentsCollection.findOne).toHaveBeenCalledWith(
-      expect.objectContaining({ patientId: 'fnPatient' }),
+      expect.objectContaining({ participantId: 'fnPatient' }),
       expect.anything()
     );
     expect(next).toHaveBeenCalled();
   });
 
-  it('returns 400 PATIENT_ID_MISSING when no patientID can be resolved', async () => {
+  it('returns 400 PATIENT_ID_MISSING when no participantId can be resolved', async () => {
     const req = createReq({ app: { locals: { db: fakeDb } } });
     const res = createRes();
 
@@ -205,7 +205,7 @@ describe('authConsent middleware', () => {
   });
 
   it('returns 403 CONSENT_REQUIRED when no active consent found and strictMode is true', async () => {
-    const req = createReq({ app: { locals: { db: fakeDb } }, body: { patientID: 'p1' } });
+    const req = createReq({ app: { locals: { db: fakeDb } }, body: { participantId: 'p1' } });
     const res = createRes();
     fakeConsentsCollection.findOne.mockResolvedValue(null);
 
@@ -218,7 +218,7 @@ describe('authConsent middleware', () => {
   });
 
   it('falls through to next() when no active consent found and strictMode is false', async () => {
-    const req = createReq({ app: { locals: { db: fakeDb } }, body: { patientID: 'p1' } });
+    const req = createReq({ app: { locals: { db: fakeDb } }, body: { participantId: 'p1' } });
     const res = createRes();
     fakeConsentsCollection.findOne.mockResolvedValue(null);
 
@@ -230,7 +230,7 @@ describe('authConsent middleware', () => {
   });
 
   it('returns 403 INSUFFICIENT_SCOPE when active consent lacks required scope and strictMode is true', async () => {
-    const req = createReq({ app: { locals: { db: fakeDb } }, body: { patientID: 'p1' } });
+    const req = createReq({ app: { locals: { db: fakeDb } }, body: { participantId: 'p1' } });
     const res = createRes();
     fakeConsentsCollection.findOne.mockResolvedValue({
       _id: { toString: () => 'c1' },
@@ -248,7 +248,7 @@ describe('authConsent middleware', () => {
   });
 
   it('falls through to next() when scope insufficient but strictMode is false', async () => {
-    const req = createReq({ app: { locals: { db: fakeDb } }, body: { patientID: 'p1' } });
+    const req = createReq({ app: { locals: { db: fakeDb } }, body: { participantId: 'p1' } });
     const res = createRes();
     fakeConsentsCollection.findOne.mockResolvedValue({
       _id: { toString: () => 'c1' },
@@ -265,7 +265,7 @@ describe('authConsent middleware', () => {
   });
 
   it('returns 403 CONSENT_REVOKED when consent status is REVOKED, regardless of strictMode', async () => {
-    const req = createReq({ app: { locals: { db: fakeDb } }, body: { patientID: 'p1' } });
+    const req = createReq({ app: { locals: { db: fakeDb } }, body: { participantId: 'p1' } });
     const res = createRes();
     fakeConsentsCollection.findOne.mockResolvedValue({
       _id: { toString: () => 'c1' },
@@ -283,7 +283,7 @@ describe('authConsent middleware', () => {
   });
 
   it('returns 403 CONSENT_REVOKED when revokedAt is truthy, regardless of strictMode', async () => {
-    const req = createReq({ app: { locals: { db: fakeDb } }, body: { patientID: 'p1' } });
+    const req = createReq({ app: { locals: { db: fakeDb } }, body: { participantId: 'p1' } });
     const res = createRes();
     fakeConsentsCollection.findOne.mockResolvedValue({
       _id: { toString: () => 'c1' },
@@ -303,7 +303,7 @@ describe('authConsent middleware', () => {
 
   it('calls next() and populates req.consent for a fully valid consent', async () => {
     const signedAt = new Date('2025-05-01');
-    const req = createReq({ app: { locals: { db: fakeDb } }, body: { patientID: 'p1' } });
+    const req = createReq({ app: { locals: { db: fakeDb } }, body: { participantId: 'p1' } });
     const res = createRes();
     fakeConsentsCollection.findOne.mockResolvedValue({
       _id: { toString: () => 'consent-id-1' },
@@ -317,7 +317,7 @@ describe('authConsent middleware', () => {
 
     expect(next).toHaveBeenCalled();
     expect(req.consent).toEqual(expect.objectContaining({
-      patientID: 'p1',
+      participantId: 'p1',
       consentID: 'consent-id-1',
       status: 'ACTIVE',
       signedAt,
@@ -328,7 +328,7 @@ describe('authConsent middleware', () => {
   });
 
   it('returns 500 CONSENT_VALIDATION_ERROR when an unexpected error is thrown', async () => {
-    const req = createReq({ app: { locals: { db: fakeDb } }, body: { patientID: 'p1' } });
+    const req = createReq({ app: { locals: { db: fakeDb } }, body: { participantId: 'p1' } });
     const res = createRes();
     fakeDb.collection.mockImplementation(() => {
       throw new Error('boom');
@@ -362,7 +362,7 @@ describe('createConsentMiddleware factories', () => {
   });
 
   it('research() merges uso_pesquisa into allowedScopes and allows next() when granted', async () => {
-    const req = createReq({ app: { locals: { db: fakeDb } }, body: { patientID: 'p1' } });
+    const req = createReq({ app: { locals: { db: fakeDb } }, body: { participantId: 'p1' } });
     const res = createRes();
     fakeConsentsCollection.findOne.mockResolvedValue({
       _id: { toString: () => 'c1' },
@@ -378,7 +378,7 @@ describe('createConsentMiddleware factories', () => {
   });
 
   it('commercial() merges uso_comercial into allowedScopes and blocks with INSUFFICIENT_SCOPE when missing', async () => {
-    const req = createReq({ app: { locals: { db: fakeDb } }, body: { patientID: 'p1' } });
+    const req = createReq({ app: { locals: { db: fakeDb } }, body: { participantId: 'p1' } });
     const res = createRes();
     fakeConsentsCollection.findOne.mockResolvedValue({
       _id: { toString: () => 'c1' },
@@ -396,7 +396,7 @@ describe('createConsentMiddleware factories', () => {
   });
 
   it('generic() uses exactly the provided allowedScopes', async () => {
-    const req = createReq({ app: { locals: { db: fakeDb } }, body: { patientID: 'p1' } });
+    const req = createReq({ app: { locals: { db: fakeDb } }, body: { participantId: 'p1' } });
     const res = createRes();
     fakeConsentsCollection.findOne.mockResolvedValue({
       _id: { toString: () => 'c1' },

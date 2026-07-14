@@ -63,32 +63,32 @@ describe('Neo4jQuarantineService', () => {
       expect(redisClient.rpush).not.toHaveBeenCalled();
     });
 
-    it('throws when neither sampleId nor sampleMongoId is present', async () => {
+    it('throws when neither specimenId nor sampleMongoId is present', async () => {
       const service = new Neo4jQuarantineService({ redisClient, logger });
       await expect(service.enqueueTopologicalTransaction({ foo: 'bar' })).rejects.toThrow(
-        'sampleId é obrigatório para quarentena topológica'
+        'specimenId é obrigatório para quarentena topológica'
       );
       expect(redisClient.rpush).not.toHaveBeenCalled();
     });
 
-    it('falls back to sampleMongoId when sampleId is missing', async () => {
+    it('falls back to sampleMongoId when specimenId is missing', async () => {
       const service = new Neo4jQuarantineService({ redisClient, logger });
       const transaction = { sampleMongoId: 'mongo-123' };
       const result = await service.enqueueTopologicalTransaction(transaction);
       expect(result.queued).toBe(true);
-      expect(result.item.sampleId).toBe('mongo-123');
+      expect(result.item.specimenId).toBe('mongo-123');
       expect(redisClient.rpush).toHaveBeenCalledTimes(1);
     });
 
     it('enqueues a valid transaction with correct item shape and context defaults', async () => {
       const service = new Neo4jQuarantineService({ redisClient, logger, queueKey: 'my:queue' });
-      const transaction = { sampleId: 'sample-1', payload: { a: 1 } };
+      const transaction = { specimenId: 'sample-1', payload: { a: 1 } };
 
       const result = await service.enqueueTopologicalTransaction(transaction);
 
       expect(result.queued).toBe(true);
       expect(result.queueKey).toBe('my:queue');
-      expect(result.item.sampleId).toBe('sample-1');
+      expect(result.item.specimenId).toBe('sample-1');
       expect(result.item.transaction).toBe(transaction);
       expect(result.item.context).toEqual({
         reason: 'neo4j_unavailable_permissive_mode',
@@ -103,7 +103,7 @@ describe('Neo4jQuarantineService', () => {
       const [calledKey, calledPayload] = redisClient.rpush.mock.calls[0];
       expect(calledKey).toBe('my:queue');
       expect(JSON.parse(calledPayload)).toMatchObject({
-        sampleId: 'sample-1',
+        specimenId: 'sample-1',
         context: {
           reason: 'neo4j_unavailable_permissive_mode',
           strictMode: false,
@@ -118,7 +118,7 @@ describe('Neo4jQuarantineService', () => {
 
     it('applies custom context values over defaults', async () => {
       const service = new Neo4jQuarantineService({ redisClient, logger });
-      const transaction = { sampleId: 'sample-2' };
+      const transaction = { specimenId: 'sample-2' };
       const context = { reason: 'custom_reason', strictMode: true, neo4jError: 'boom', attempt: 3 };
 
       const result = await service.enqueueTopologicalTransaction(transaction, context);
@@ -131,18 +131,18 @@ describe('Neo4jQuarantineService', () => {
       });
     });
 
-    it('coerces sampleId to a string', async () => {
+    it('coerces specimenId to a string', async () => {
       const service = new Neo4jQuarantineService({ redisClient, logger });
-      const transaction = { sampleId: 12345 };
+      const transaction = { specimenId: 12345 };
       const result = await service.enqueueTopologicalTransaction(transaction);
-      expect(result.item.sampleId).toBe('12345');
+      expect(result.item.specimenId).toBe('12345');
     });
 
     it('throws and logs an error when redis.rpush fails', async () => {
       const failure = new Error('redis connection lost');
       redisClient.rpush.mockRejectedValueOnce(failure);
       const service = new Neo4jQuarantineService({ redisClient, logger });
-      const transaction = { sampleId: 'sample-3' };
+      const transaction = { specimenId: 'sample-3' };
 
       await expect(service.enqueueTopologicalTransaction(transaction)).rejects.toThrow('redis connection lost');
 

@@ -31,18 +31,18 @@ describe('AuditLogger.sanitizePayload', () => {
     expect(result).toMatchObject(payload);
   });
 
-  it('sanitizes Patient entity with patientID to just patientID', () => {
-    const payload = { patientID: '12345678', patientName: 'João', extra: 'data' };
+  it('sanitizes Patient entity with participantId to just participantId', () => {
+    const payload = { participantId: '12345678', patientName: 'João', extra: 'data' };
     const result = auditLogger.sanitizePayload(payload, 'Patient');
-    expect(result.patientID).toBe('12345678');
+    expect(result.participantId).toBe('12345678');
     expect(result.patientName).toBeUndefined();
     expect(result.extra).toBeUndefined();
   });
 
   it('does not apply Patient sanitization when entity is not Patient', () => {
-    const payload = { patientID: '12345678', status: 'active' };
+    const payload = { participantId: '12345678', status: 'active' };
     const result = auditLogger.sanitizePayload(payload, 'Sample');
-    expect(result.patientID).toBe('12345678');
+    expect(result.participantId).toBe('12345678');
     expect(result.status).toBe('active');
   });
 });
