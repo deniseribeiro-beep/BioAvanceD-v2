@@ -5,7 +5,7 @@ const { generateUniqueOriginID } = require('../../src/utils/originIDGenerator');
 const { generateUniqueProtocolID } = require('../../src/utils/protocolIDGenerator');
 const { generateUniqueQualityID } = require('../../src/utils/qualityIDGenerator');
 const { generateUniqueSampleTypeID } = require('../../src/utils/sampleTypeIDGenerator');
-const { generateUniqueSampleID } = require('../../src/utils/sampleIDGenerator');
+const { generateUniqueSpecimenId } = require('../../src/utils/sampleIDGenerator');
 
 function makeDbMock(findOneResults) {
   let callCount = 0;
@@ -208,14 +208,14 @@ describe('generateUniqueSampleTypeID', () => {
   });
 });
 
-// ── generateUniqueSampleID ─────────────────────────────────
+// ── generateUniqueSpecimenId ─────────────────────────────────
 // Different shape: crypto.randomInt with collision-retry loop, not sequential.
 
-describe('generateUniqueSampleID', () => {
+describe('generateUniqueSpecimenId', () => {
   it('returns a 7-digit ID when no collision occurs', async () => {
     const findOne = vi.fn().mockResolvedValue(null);
     const db = { collection: () => ({ findOne }) };
-    const id = await generateUniqueSampleID(db);
+    const id = await generateUniqueSpecimenId(db);
     expect(id).toBeGreaterThanOrEqual(1000000);
     expect(id).toBeLessThan(9999999);
     expect(findOne).toHaveBeenCalledTimes(1);
@@ -224,18 +224,18 @@ describe('generateUniqueSampleID', () => {
   it('retries when the generated ID already exists, then succeeds', async () => {
     const findOne = vi
       .fn()
-      .mockResolvedValueOnce({ sampleID: 1234567 })
+      .mockResolvedValueOnce({ specimenId: 1234567 })
       .mockResolvedValueOnce(null);
     const db = { collection: () => ({ findOne }) };
-    const id = await generateUniqueSampleID(db);
+    const id = await generateUniqueSpecimenId(db);
     expect(findOne).toHaveBeenCalledTimes(2);
     expect(typeof id).toBe('number');
   });
 
   it('throws after exhausting max attempts on persistent collisions', async () => {
-    const findOne = vi.fn().mockResolvedValue({ sampleID: 1234567 });
+    const findOne = vi.fn().mockResolvedValue({ specimenId: 1234567 });
     const db = { collection: () => ({ findOne }) };
-    await expect(generateUniqueSampleID(db)).rejects.toThrow('múltiplas tentativas');
+    await expect(generateUniqueSpecimenId(db)).rejects.toThrow('múltiplas tentativas');
     expect(findOne).toHaveBeenCalledTimes(100);
   });
 
@@ -247,7 +247,7 @@ describe('generateUniqueSampleID', () => {
         return { findOne: vi.fn().mockResolvedValue(null) };
       },
     };
-    await generateUniqueSampleID(db, 'custom_samples');
+    await generateUniqueSpecimenId(db, 'custom_samples');
     expect(usedName).toBe('custom_samples');
   });
 });
