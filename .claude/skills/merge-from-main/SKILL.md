@@ -35,6 +35,34 @@ changes, not just unrelated file edits.
    user first (confirmed 2026-07-07: the user stopped a same-turn `git
    merge --no-edit` specifically to review step by step first).
 
+## Watch for git's directory-rename heuristic inflating the conflict count
+
+If a large batch of our files under one directory got deleted on main's side while a
+couple of new files landed in a sibling directory (e.g. most of `tests/unit/` deleted,
+two new files added under `tests/architecture/`), git's rename detection infers a
+*directory* rename and tries to relocate every file we added under the old directory
+into the new one — producing a "file location" conflict per file, even for files with
+no real content conflict (confirmed 2026-07-14: ~170 false-positive conflicts from this
+alone). Re-run with directory-rename detection off before trusting a large conflict
+count: `git -c merge.directoryRenames=false merge origin/main --no-edit` (note: `-X
+no-renames` does *not* suppress this — it has to be the `merge.directoryRenames` config,
+not a merge strategy option).
+
+## Never `git checkout` another branch mid-merge, even after stashing
+
+Comparing the in-progress merge against a pre-merge baseline (e.g. to isolate which test
+failures the merge itself caused) is a legitimate thing to want mid-merge. Doing it by
+`git stash` + `git checkout <other-branch>` is not safe: checking out another branch
+silently drops `.git/MERGE_HEAD`, even though the stash preserves the working-tree
+changes. The subsequent `git commit` then produces a normal single-parent commit instead
+of a real merge commit — with no error or warning (confirmed 2026-07-14: caught only by
+checking `git log --oneline -1 --parents` after the fact). Recovery is possible (`git
+reset --soft <pre-merge-commit>`, manually write `.git/MERGE_HEAD` back with the
+original `origin/main` SHA, then commit again), but avoid the need: use `git worktree
+add` for the comparison checkout instead of switching branches in the merge worktree.
+Always verify the final merge commit has two parents (`git log --oneline -1 --parents`)
+before fast-forwarding the feature branch onto it.
+
 ## Do the merge on a throwaway branch, not the feature branch directly
 
 Branch-naming is enforced by a repo hook (only
