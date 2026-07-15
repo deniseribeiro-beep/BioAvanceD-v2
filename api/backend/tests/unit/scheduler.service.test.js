@@ -15,7 +15,6 @@ const cron = require('node-cron');
 const logger = require('../../src/utils/logger');
 const env = require('../../src/config/env');
 const backupService = require('../../src/services/backup.service');
-const consentNeo4jSyncService = require('../../src/services/consentNeo4jSync.service');
 const scheduler = require('../../src/services/scheduler.service');
 
 function makeCollection(overrides = {}) {
@@ -214,13 +213,10 @@ describe('scheduler.service - initScheduler / stopScheduler', () => {
   let loggerWarnSpy;
   let loggerErrorSpy;
   let runBackupSpy;
-  let consentSyncSpy;
 
   const originalEnv = {
     TEMP_MONITOR_CRON: env.TEMP_MONITOR_CRON,
-    BACKUP_CRON: env.BACKUP_CRON,
-    ENABLE_CONSENT_SYNC: env.ENABLE_CONSENT_SYNC,
-    CONSENT_SYNC_CRON: env.CONSENT_SYNC_CRON
+    BACKUP_CRON: env.BACKUP_CRON
   };
 
   beforeEach(() => {
@@ -234,12 +230,9 @@ describe('scheduler.service - initScheduler / stopScheduler', () => {
     loggerWarnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
     loggerErrorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
     runBackupSpy = vi.spyOn(backupService, 'runBackup').mockResolvedValue(undefined);
-    consentSyncSpy = vi.spyOn(consentNeo4jSyncService, 'sync').mockResolvedValue({ processed: 0, updated: 0 });
 
     env.TEMP_MONITOR_CRON = undefined;
     env.BACKUP_CRON = undefined;
-    env.ENABLE_CONSENT_SYNC = false;
-    env.CONSENT_SYNC_CRON = undefined;
   });
 
   afterEach(() => {
@@ -247,42 +240,36 @@ describe('scheduler.service - initScheduler / stopScheduler', () => {
     vi.restoreAllMocks();
     env.TEMP_MONITOR_CRON = originalEnv.TEMP_MONITOR_CRON;
     env.BACKUP_CRON = originalEnv.BACKUP_CRON;
-    env.ENABLE_CONSENT_SYNC = originalEnv.ENABLE_CONSENT_SYNC;
-    env.CONSENT_SYNC_CRON = originalEnv.CONSENT_SYNC_CRON;
   });
 
-  it('schedules the temperature monitor and backup jobs, but not consent sync when disabled', () => {
-    env.ENABLE_CONSENT_SYNC = false;
-
+  it('schedules the temperature monitor and backup jobs; legacy consent sync is a no-op', () => {
     scheduler.initScheduler({ db: {}, neo4jDriver: {} });
 
-    // temperature monitor + backup only (consent sync disabled)
+    // temperature monitor + backup only; startConsentSyncSchedule is a logged no-op stub.
     expect(cronScheduleSpy).toHaveBeenCalledTimes(2);
     expect(cronScheduleSpy.mock.calls[0][0]).toBe('*/10 * * * *');
     expect(cronScheduleSpy.mock.calls[1][0]).toBe('0 3 * * *');
+    expect(loggerInfoSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Sincronização legada de consentimento removida')
+    );
   });
 
   it('uses cron expressions from env when provided', () => {
     env.TEMP_MONITOR_CRON = '*/5 * * * *';
     env.BACKUP_CRON = '0 1 * * *';
-    env.ENABLE_CONSENT_SYNC = true;
-    env.CONSENT_SYNC_CRON = '*/15 * * * *';
 
     scheduler.initScheduler({ db: {}, neo4jDriver: {} });
 
-    expect(cronScheduleSpy).toHaveBeenCalledTimes(3);
+    expect(cronScheduleSpy).toHaveBeenCalledTimes(2);
     expect(cronScheduleSpy.mock.calls[0][0]).toBe('*/5 * * * *');
     expect(cronScheduleSpy.mock.calls[1][0]).toBe('0 1 * * *');
-    expect(cronScheduleSpy.mock.calls[2][0]).toBe('*/15 * * * *');
   });
 
   it('stopScheduler stops all previously scheduled tasks', () => {
-    env.ENABLE_CONSENT_SYNC = true;
-
     scheduler.initScheduler({ db: {}, neo4jDriver: {} });
     scheduler.stopScheduler();
 
-    expect(scheduledTasks).toHaveLength(3);
+    expect(scheduledTasks).toHaveLength(2);
     scheduledTasks.forEach((task) => expect(task.stop).toHaveBeenCalledTimes(1));
   });
 
@@ -339,53 +326,13 @@ describe('scheduler.service - initScheduler / stopScheduler', () => {
     expect(loggerErrorSpy).toHaveBeenCalledWith('Erro ao executar backup agendado:', 'backup failed');
   });
 
-  it('consent sync task callback warns and skips when db or neo4jDriver are missing', async () => {
-    env.ENABLE_CONSENT_SYNC = true;
+  it('startConsentSyncSchedule is a logged no-op (legacy Mongo→Neo4j consent sync removed)', () => {
+    const result = scheduler.startConsentSyncSchedule({ db: {}, neo4jDriver: {} });
 
-    scheduler.initScheduler({ db: null, neo4jDriver: null });
-    const consentTask = scheduledTasks[2];
-
-    await consentTask.fn();
-
-    expect(loggerWarnSpy).toHaveBeenCalledWith(expect.stringContaining('Skip sincronização de consentimento'));
-    expect(consentSyncSpy).not.toHaveBeenCalled();
-  });
-
-  it('consent sync task callback calls sync and logs results when dependencies are present', async () => {
-    env.ENABLE_CONSENT_SYNC = true;
-    consentSyncSpy.mockResolvedValue({ processed: 5, updated: 2 });
-
-    const db = {};
-    const neo4jDriver = {};
-    scheduler.initScheduler({ db, neo4jDriver });
-    const consentTask = scheduledTasks[2];
-
-    await consentTask.fn();
-
-    expect(consentSyncSpy).toHaveBeenCalledWith({ db, neo4jDriver });
-    expect(loggerInfoSpy).toHaveBeenCalledWith(expect.stringContaining('processadas=5, atualizadas=2'));
-  });
-
-  it('consent sync task callback logs an error instead of throwing when sync rejects', async () => {
-    env.ENABLE_CONSENT_SYNC = true;
-    consentSyncSpy.mockRejectedValue(new Error('sync failed'));
-
-    scheduler.initScheduler({ db: {}, neo4jDriver: {} });
-    const consentTask = scheduledTasks[2];
-
-    await expect(consentTask.fn()).resolves.not.toThrow();
-    expect(loggerErrorSpy).toHaveBeenCalledWith(
-      '[ISO20387][SYNC] Erro no job agendado de sincronização de consentimento:',
-      'sync failed'
+    expect(result).toBeNull();
+    expect(loggerInfoSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Sincronização legada de consentimento removida')
     );
-  });
-
-  it('consent sync scheduling is skipped entirely when ENABLE_CONSENT_SYNC is disabled', () => {
-    env.ENABLE_CONSENT_SYNC = false;
-
-    scheduler.initScheduler({ db: {}, neo4jDriver: {} });
-
-    expect(loggerInfoSpy).toHaveBeenCalledWith(expect.stringContaining('Sincronização Mongo→Neo4j de consentimento desativada'));
-    expect(scheduledTasks).toHaveLength(2);
+    expect(cronScheduleSpy).not.toHaveBeenCalled();
   });
 });
