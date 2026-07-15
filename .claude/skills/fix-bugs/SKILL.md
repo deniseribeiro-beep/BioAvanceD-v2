@@ -212,7 +212,11 @@ first, every time:
    payload or `null`, with a comment saying no secondary FHIR
    collection is written) settled it without needing to ask. Don't
    skip this check only because a design-call label already exists —
-   the label may predate the doc, or predate you finding it.
+   the label may predate the doc, or predate you finding it. `docs/`
+   can itself be stale — see `verify-against-main` for how to
+   corroborate a doc, a schema-file rename, or any other "this must be
+   Denise's intent" inference against her actual commits before
+   trusting it, especially for canonical-field-naming fixes.
 3. **Write and run the reproduction** — even a quick one — before
    concluding the ambiguity is real. If you can construct a case where
    the "design fork" actually can't be reached, or where a defensive

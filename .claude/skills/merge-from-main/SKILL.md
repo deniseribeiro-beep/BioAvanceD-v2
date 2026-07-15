@@ -13,6 +13,16 @@ This is a bigger, higher-stakes operation than a normal `fix-bugs`
 merge-back — main can carry dozens of commits and genuine architectural
 changes, not just unrelated file edits.
 
+## A single file drifting from main, mid-fix, is not this skill
+
+If a `fix-bugs`/`test-loop` iteration discovers that one specific file
+has moved further on `main` than what's in the feature branch, don't
+reach for a full merge — see `verify-against-main` for the lightweight,
+scoped single-file pull instead, and for when that scoped check should
+escalate into the full workflow below (drift entangled across several
+files, or more commits between the branches than expected once you
+look).
+
 ## Before merging: survey, don't dive in
 
 1. `git fetch origin`, then `git log --oneline

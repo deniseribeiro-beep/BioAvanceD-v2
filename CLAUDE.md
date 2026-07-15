@@ -28,7 +28,10 @@ relying on memory:
   `testing-conventions` for mechanics; parallel fan-out →
   `parallel-test-agents`. Legacy-code judgment calls → `legacy`.
   Shipping → `ship-to-main`. Pulling Denise's `main`-branch updates into
-  our feature branch → `merge-from-main`.
+  our feature branch → `merge-from-main`, or `verify-against-main` for
+  a single drifted file / for corroborating that a fix actually matches
+  Denise's intent rather than just a local schema file's self-
+  consistency.
 - Writing or editing a Playwright spec (`tests/e2e/*.spec.ts`) →
   `playwright-specs` for selectors/mocked-auth/config quirks, alongside
   `e2e-docker-workflow` for the Docker/CI stack itself and
