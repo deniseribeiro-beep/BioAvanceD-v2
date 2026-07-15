@@ -27,7 +27,7 @@ const logger = require('../../src/utils/logger');
 
 vi.spyOn(mongo, 'connectDB').mockResolvedValue({ __fakeDb: true });
 vi.spyOn(mongo, 'closeConnection').mockResolvedValue(undefined);
-vi.spyOn(integrityService, 'buildMerkleForDate').mockResolvedValue({ root: 'deadbeef' });
+vi.spyOn(integrityService, 'buildMerkleForDate').mockResolvedValue({ root: 'deadbeef', leaves: ['leaf1', 'leaf2', 'leaf3'] });
 vi.spyOn(auditRootService, 'saveDailyRoot').mockResolvedValue({ ok: true });
 vi.spyOn(logger, 'info').mockImplementation(() => {});
 vi.spyOn(logger, 'warn').mockImplementation(() => {});
@@ -40,7 +40,7 @@ const job = require('../../src/workers/jobs/daily-merkle.job');
 function resetAllMocks() {
   mongo.connectDB.mockClear().mockResolvedValue({ __fakeDb: true });
   mongo.closeConnection.mockClear().mockResolvedValue(undefined);
-  integrityService.buildMerkleForDate.mockClear().mockResolvedValue({ root: 'deadbeef' });
+  integrityService.buildMerkleForDate.mockClear().mockResolvedValue({ root: 'deadbeef', leaves: ['leaf1', 'leaf2', 'leaf3'] });
   auditRootService.saveDailyRoot.mockClear().mockResolvedValue({ ok: true });
   logger.info.mockClear();
   logger.warn.mockClear();
@@ -62,12 +62,13 @@ describe('daily-merkle.job', () => {
     vi.useRealTimers();
   });
 
-  it('module load side effect: the top-level auto scheduleNextRun() call is captured by fake timers, not a real setTimeout', () => {
-    // If fake timers were NOT active at require() time, this would have scheduled a real
-    // callback in the live process. Since we called vi.useFakeTimers() before the very
-    // first require above, vi.getTimerCount() must report at least one pending fake timer
-    // (the one registered by the module's own top-level scheduleNextRun() call).
-    expect(vi.getTimerCount()).toBeGreaterThanOrEqual(1);
+  it('module load side effect: require.main !== module in a test context, so the top-level auto-start guard does not fire', () => {
+    // daily-merkle.job.js gates its top-level scheduleNextRun() call behind
+    // `if (require.main === module)` (Denise's 8b0bf61e, replacing an env-var flag)
+    // specifically so it only auto-starts when run directly as the process entry point.
+    // Under vitest, require.main is the test runner's own entry script, not this module,
+    // so the guard is false and require()'ing the module registers no timer at all.
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   describe('runOnce', () => {
@@ -84,23 +85,22 @@ describe('daily-merkle.job', () => {
       expect(auditRootService.saveDailyRoot).toHaveBeenCalledWith({
         date: '2026-07-01',
         root: 'deadbeef',
+        treeSize: 3,
         db: { __fakeDb: true },
       });
       expect(mongo.closeConnection).toHaveBeenCalledTimes(1);
       expect(logger.warn).not.toHaveBeenCalled();
     });
 
-    it('warns when buildMerkleForDate resolves without a root, but still saves and closes', async () => {
-      integrityService.buildMerkleForDate.mockResolvedValue({ root: null });
+    it('warns and skips persistence when buildMerkleForDate resolves without a root, but still closes the connection', async () => {
+      integrityService.buildMerkleForDate.mockResolvedValue({ root: null, leaves: [] });
 
       await job.runOnce();
 
+      // isValidMerkleResult() requires a truthy root; runOnce() returns before
+      // saveDailyRoot when the result is invalid, so nothing gets persisted.
       expect(logger.warn).toHaveBeenCalledTimes(1);
-      expect(auditRootService.saveDailyRoot).toHaveBeenCalledWith({
-        date: '2026-07-01',
-        root: null,
-        db: { __fakeDb: true },
-      });
+      expect(auditRootService.saveDailyRoot).not.toHaveBeenCalled();
       expect(mongo.closeConnection).toHaveBeenCalledTimes(1);
     });
 
