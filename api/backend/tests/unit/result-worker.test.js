@@ -53,9 +53,9 @@ describe('ResultWorker.process — CSV path (processResultRow)', () => {
       diagnosticReport: { id: 'dr-1' },
     });
 
-    const sample = { _id: 'samp-1', sampleID: 'SMP-001' };
+    const sample = { _id: 'samp-1', specimenId: 'SMP-001' };
     const db = makeDb({ sample });
-    const csvFile = writeCsv(['sampleID,testName,resultValue', 'SMP-001,Glicose,95']);
+    const csvFile = writeCsv(['specimenId,testName,resultValue', 'SMP-001,Glicose,95']);
 
     const result = await resultWorker.process(db, 'job-1', csvFile);
     fs.unlinkSync(csvFile);
@@ -79,12 +79,12 @@ describe('ResultWorker.process — CSV path (processResultRow)', () => {
     expect(result.total).toBe(1);
     expect(result.success).toBe(0);
     expect(result.errors).toHaveLength(1);
-    expect(result.errors[0].error).toMatch(/sampleID, sampleId ou barcode é obrigatório/);
+    expect(result.errors[0].error).toMatch(/specimenId ou barcode é obrigatório/);
   });
 
   it('records a row error when the referenced sample is not found', async () => {
     const db = makeDb({ sample: null });
-    const csvFile = writeCsv(['sampleID,testName,resultValue', 'SMP-404,Glicose,95']);
+    const csvFile = writeCsv(['specimenId,testName,resultValue', 'SMP-404,Glicose,95']);
 
     const result = await resultWorker.process(db, 'job-1', csvFile);
     fs.unlinkSync(csvFile);
@@ -117,10 +117,10 @@ describe('ResultWorker.process — ZIP path', () => {
       observation: { id: 'obs-2' },
       diagnosticReport: { id: 'dr-2' },
     });
-    const sample = { _id: 'samp-2', sampleID: 'SMP-002' };
+    const sample = { _id: 'samp-2', specimenId: 'SMP-002' };
     const db = makeDb({ sample });
 
-    const zipFile = await writeZipWithEntry('data.csv', 'sampleID,testName,resultValue\nSMP-002,Colesterol,180');
+    const zipFile = await writeZipWithEntry('data.csv', 'specimenId,testName,resultValue\nSMP-002,Colesterol,180');
     const result = await resultWorker.process(db, 'job-3', zipFile);
     fs.unlinkSync(zipFile);
 
@@ -149,7 +149,7 @@ describe('ResultWorker.process — top-level error handling', () => {
         throw new Error('collection blew up');
       }),
     };
-    const csvFile = writeCsv(['sampleID,testName,resultValue', 'SMP-500,Glicose,95']);
+    const csvFile = writeCsv(['specimenId,testName,resultValue', 'SMP-500,Glicose,95']);
 
     await expect(resultWorker.process(badDb, 'job-4', csvFile)).rejects.toThrow('collection blew up');
     fs.unlinkSync(csvFile);
