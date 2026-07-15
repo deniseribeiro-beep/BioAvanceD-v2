@@ -156,6 +156,17 @@ for. (Confirmed 2026-07-02, three subagent findings dismissed until the user pus
 incident `dismissed-subagent-findings`,
 `bioavanced-conventions/references/incidents.md`.)
 
+**"Actually checked for" means running a search before `gh issue create`, not after.**
+`gh issue list --state all --search "<key file/symbol>"` on the finding's file name or
+the failing property/function name, every time, before filing — not just before *picking*
+a bug to fix. Confirmed 2026-07-15: a wrap-up audit found `workers.unit.test.js`'s
+SampleWorker FHIR-conversion gap and filed it as #223 without searching first; it turned
+out #212 (filed the day before, broader scope — PatientWorker/TemperatureWorker/
+SampleWorker together) already covered it, caught only because the user asked "did no
+other issue already address this?" after the fact. Closing a same-session duplicate is
+cheap, but the search that would have prevented it takes one command and should run
+before the `gh issue create`, not be reconstructed afterward when asked.
+
 ## How to report it
 
 State findings plainly in the final response to the user — don't bury them in a footnote or
