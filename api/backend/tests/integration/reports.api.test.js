@@ -368,7 +368,14 @@ describe('Reports API integration', () => {
       const query = capturedQueries.samples;
       expect(query.$and).toEqual(
         expect.arrayContaining([
-          { 'pharmacology_data.treatment_status': 'ON_TREATMENT' },
+          {
+            $or: [
+              { 'pharmacologyData.atcCode': expect.any(RegExp) },
+              { 'pharmacologyData.medicationName': expect.any(RegExp) },
+              { 'pharmacologyData.atcClass': expect.any(RegExp) },
+            ],
+          },
+          { 'pharmacologyData.treatmentStatus': 'ON_TREATMENT' },
           { 'sprec.matrixType': 'plasma' },
           { release_status: 'AVAILABLE' },
         ])

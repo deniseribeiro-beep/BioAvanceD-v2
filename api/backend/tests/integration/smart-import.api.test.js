@@ -165,11 +165,11 @@ João Silva,01/05/1990,M,98745612303,PLASMA,TREATED,Ataluren,A16AX27,ORPHA:324,L
         clinical_data: {
           orphaCode: 'ORPHA:324', // Doença de Fabry
         },
-        pharmacology_data: {
-          treatment_status: 'ON_TREATMENT',
-          drug_name: 'Migalastat',
-          atc_code: 'A16AX27',
-          atc_level_1: 'A',
+        pharmacologyData: {
+          treatmentStatus: 'ON_TREATMENT',
+          medicationName: 'Migalastat',
+          atcCode: 'A16AX27',
+          atcClass: 'A',
         },
       };
 
@@ -181,9 +181,9 @@ João Silva,01/05/1990,M,98745612303,PLASMA,TREATED,Ataluren,A16AX27,ORPHA:324,L
       // Alterar ATC deve quebrar o hash
       const tamperedSample = {
         ...sampleWithATC,
-        pharmacology_data: {
-          ...sampleWithATC.pharmacology_data,
-          atc_code: 'C01AA01', // Código diferente
+        pharmacologyData: {
+          ...sampleWithATC.pharmacologyData,
+          atcCode: 'C01AA01', // Código diferente
         },
       };
 
