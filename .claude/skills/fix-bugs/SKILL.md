@@ -118,6 +118,28 @@ One iteration = one issue, sized to finish in the iteration:
   when discovered mid-iteration on an unrelated pick — `git show
   <hash>` against the pre-merge version tells you whether it's safe to
   restore verbatim.
+- **A canonicalization/rename commit can rename fields on one model but leave a
+  *different*, dependent service's output on the old naming convention — a
+  straightforward-looking identifier rename then isn't the whole fix.** Confirmed
+  2026-07-15, issue #205: `rcs-certification.service.test.js` looked like the
+  same sampleId→specimenId/patientID→participantId swap as the rest of the
+  #146 family, but even after that rename the test still failed — `certify()`
+  in `rcs-certification.service.js` returns a snake_case evaluation object
+  (`model_version`, `governance_status`, `final_grade`, ...) left over from
+  before `e2549bee`, while that same commit renamed `Sample.js`'s matching
+  fields to camelCase (`modelVersion`, `governanceStatus`, `finalGrade`).
+  `SampleModel.create()` silently drops unrecognized keys, so spreading the
+  snake_case evaluation object into it just produces nulls/defaults, not a
+  `TypeError` — nothing loudly signals the mismatch. `git show <hash> -- <file>`
+  on the *consumer* (the model) catches the renamed field list, but only
+  checking `git log --all -- <the failing test's own service>` (as the
+  `test-merge` label's own guidance says) will miss it, because the service
+  file itself was never touched by the canonicalization commit — the drift is
+  in what it feeds into, not in its own history. When a rename-family fixture
+  fix still fails after the identifier swap, check whether the values being
+  asserted come from a *different* file's output shape, and diff that file's
+  field names against the consuming model's current schema before assuming
+  the test still needs more identifier renames.
 - If the issue is ambiguous (can't tell what correct behavior *should*
   be from the code, tests, or issue thread), ask on the issue / ask
   Dennis rather than guessing at intended behavior.
