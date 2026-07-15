@@ -53,41 +53,140 @@ describe('audit.controller.getMerkleRoot', () => {
 });
 
 describe('audit.controller.verifyAudit', () => {
-  it('returns 200 with verified:true when the proof checks out', async () => {
-    const merkleTree = require('../../src/utils/merkleTree');
-    vi.spyOn(merkleTree, 'verifyProof').mockReturnValue(true);
-    const req = { body: { hash: 'h', proof: [], root: 'r' } };
+  function buildDb({ event, treeHead, olderTreeHead, token, witnessRecord, leaves } = {}) {
+    const events = {
+      findOne: vi.fn().mockResolvedValue(event ?? null),
+      find: vi.fn().mockReturnValue({ sort: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue(leaves ?? []) }) }),
+    };
+    const heads = {
+      findOne: vi.fn((query) => {
+        if (query && Object.prototype.hasOwnProperty.call(query, 'treeSize') && olderTreeHead !== undefined && query.treeSize !== treeHead?.treeSize) {
+          return Promise.resolve(olderTreeHead);
+        }
+        return Promise.resolve(treeHead ?? null);
+      }),
+    };
+    const tokens = { findOne: vi.fn().mockResolvedValue(token ?? null) };
+    const witnesses = { findOne: vi.fn().mockResolvedValue(witnessRecord ?? null) };
+    const collections = {
+      audit_events: events,
+      audit_tree_heads: heads,
+      audit_timestamp_tokens: tokens,
+      audit_witnesses: witnesses,
+    };
+    return { collection: vi.fn((name) => collections[name]) };
+  }
+
+  it('returns 400 when the request carries the retired hash/proof/root/date contract', async () => {
+    const req = { body: { eventId: 'evt-1', hash: 'h', proof: [], root: 'r' } };
     const res = buildRes();
 
     await auditController.verifyAudit(req, res);
 
-    expect(res.status).toHaveBeenCalledWith(200);
-    expect(res.json).toHaveBeenCalledWith({ success: true, verified: true });
-  });
-
-  it('coerces a falsy verification result to verified:false', async () => {
-    const merkleTree = require('../../src/utils/merkleTree');
-    vi.spyOn(merkleTree, 'verifyProof').mockReturnValue(undefined);
-    const req = { body: { hash: 'h', proof: [], root: 'r' } };
-    const res = buildRes();
-
-    await auditController.verifyAudit(req, res);
-
-    expect(res.json).toHaveBeenCalledWith({ success: true, verified: false });
-  });
-
-  it('returns 400 when verifyProof throws', async () => {
-    const merkleTree = require('../../src/utils/merkleTree');
-    vi.spyOn(merkleTree, 'verifyProof').mockImplementation(() => {
-      throw new Error('malformed proof');
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json).toHaveBeenCalledWith({
+      success: false,
+      error: 'Contrato inválido: envie apenas eventId e, opcionalmente, treeHeadId.',
     });
+  });
+
+  it('returns 400 when eventId is missing', async () => {
     const req = { body: {} };
     const res = buildRes();
 
     await auditController.verifyAudit(req, res);
 
     expect(res.status).toHaveBeenCalledWith(400);
-    expect(res.json).toHaveBeenCalledWith({ success: false, error: 'malformed proof' });
+    expect(res.json).toHaveBeenCalledWith({ success: false, error: 'eventId é obrigatório.' });
+  });
+
+  it('returns 404 when the audit event is not found', async () => {
+    const req = { body: { eventId: 'missing' }, app: { locals: { db: buildDb({ event: null }) } } };
+    const res = buildRes();
+
+    await auditController.verifyAudit(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(res.json).toHaveBeenCalledWith({ success: false, error: 'Evento de auditoria não encontrado.' });
+  });
+
+  it('returns 200 with overallStatus VALID when every check passes', async () => {
+    const auditTreeService = require('../../src/services/audit-tree.service');
+    const signingProvider = require('../../src/services/audit-signing.provider');
+    vi.spyOn(auditTreeService, 'verifyInclusion').mockReturnValue(true);
+    vi.spyOn(auditTreeService, 'verifyConsistency').mockReturnValue(true);
+    vi.spyOn(signingProvider, 'verify').mockReturnValue({ ok: true });
+
+    const event = {
+      eventId: 'evt-1',
+      logId: 'log-1',
+      treeSize: 1,
+      sequenceNumber: 0,
+      eventHash: 'hash-1',
+      payloadDigest: 'digest-1',
+      canonicalLeaf: { eventHash: 'hash-1' },
+      inclusionProof: [],
+    };
+    const treeHead = {
+      _id: 'th-1', logId: 'log-1', treeSize: 1, rootHash: 'root-1', signature: 'sig', keyId: 'key-1',
+      schemaVersion: 1, previousTreeHeadHash: null, periodStart: null, periodEnd: null,
+      createdAt: '2026-07-04T00:00:00.000Z', hashAlgorithm: 'sha256', merkleAlgorithm: 'sha256', signatureAlgorithm: 'ed25519', status: 'ANCHORED',
+    };
+    const token = { token: 'tk-1' };
+    const witnessRecord = { receipt: 'r-1' };
+    const db = buildDb({ event, treeHead, token, witnessRecord, leaves: [event] });
+    const req = { body: { eventId: 'evt-1' }, app: { locals: { db } } };
+    const res = buildRes();
+
+    await auditController.verifyAudit(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    const payload = res.json.mock.calls[0][0];
+    expect(payload.success).toBe(true);
+    expect(payload.data.overallStatus).toBe('VALID');
+    expect(payload.data.failures).toEqual([]);
+    expect(payload.data.eventIntegrity).toBe(true);
+    expect(payload.data.inclusionValid).toBe(true);
+    expect(payload.data.treeHeadSignatureValid).toBe(true);
+    expect(payload.data.timestampValid).toBe(true);
+    expect(payload.data.externalWitnessValid).toBe(true);
+    expect(payload.data.consistencyValid).toBe(true);
+  });
+
+  it('returns 200 with overallStatus INVALID and lists failures when checks fail', async () => {
+    const auditTreeService = require('../../src/services/audit-tree.service');
+    const signingProvider = require('../../src/services/audit-signing.provider');
+    vi.spyOn(auditTreeService, 'verifyInclusion').mockReturnValue(false);
+    vi.spyOn(auditTreeService, 'verifyConsistency').mockReturnValue(false);
+    vi.spyOn(signingProvider, 'verify').mockReturnValue({ ok: false });
+
+    const event = {
+      eventId: 'evt-2',
+      logId: 'log-2',
+      treeSize: 1,
+      sequenceNumber: 0,
+      eventHash: null,
+      payloadDigest: null,
+      canonicalLeaf: { eventHash: 'hash-2' },
+      inclusionProof: [],
+    };
+    const treeHead = {
+      _id: 'th-2', logId: 'log-2', treeSize: 1, rootHash: 'root-2', signature: 'sig', keyId: 'key-2',
+      schemaVersion: 1, previousTreeHeadHash: null, periodStart: null, periodEnd: null,
+      createdAt: '2026-07-04T00:00:00.000Z', hashAlgorithm: 'sha256', merkleAlgorithm: 'sha256', signatureAlgorithm: 'ed25519', status: 'ANCHORED',
+    };
+    const db = buildDb({ event, treeHead, token: null, witnessRecord: null, leaves: [event] });
+    const req = { body: { eventId: 'evt-2' }, app: { locals: { db } } };
+    const res = buildRes();
+
+    await auditController.verifyAudit(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    const payload = res.json.mock.calls[0][0];
+    expect(payload.data.overallStatus).toBe('INVALID');
+    expect(payload.data.failures).toEqual(
+      expect.arrayContaining(['eventIntegrity', 'inclusion', 'treeHeadSignature', 'timestamp', 'witness', 'consistency'])
+    );
   });
 });
 
