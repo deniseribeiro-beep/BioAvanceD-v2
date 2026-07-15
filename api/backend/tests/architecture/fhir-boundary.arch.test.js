@@ -1,5 +1,5 @@
-const test = require('node:test');
-const assert = require('node:assert/strict');
+import { test, expect } from 'vitest';
+
 const fs = require('fs');
 const path = require('path');
 
@@ -30,5 +30,5 @@ test('does not contain legacy FHIR persistence references', () => {
       }
     }
   }
-  assert.deepEqual(hits, []);
+  expect(hits).toEqual([]);
 });
