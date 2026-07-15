@@ -93,32 +93,23 @@ describe('PatientWorker', () => {
     expect(result).toHaveProperty('success', 0);
     expect(result).toHaveProperty('errors');
     expect(result).toHaveProperty('processingTime');
-    expect(result.fhirResourcesCreated).toBe(0);
+    expect(result.fhirResourcesCreated).toBeUndefined();
   });
 
-  it('converts recent patients to FHIR', async () => {
+  it('does not perform FHIR conversion (removed from executable path, see #212/canonical-data-cleanup)', async () => {
     const fakePatient = { _id: 'p1', patientID: '12345678' };
     importLGPDService.importPatients.mockResolvedValue({ total: 1, success: 1, errors: [] });
-    fhirService.patientToFHIR.mockReturnValue({ resourceType: 'Patient', id: 'p1' });
-    fhirService.validateFHIRResource.mockReturnValue(true);
-    fhirService.findResourceByIdentifier.mockResolvedValue(null);
 
     const db = makeDb([fakePatient]);
     const result = await patientWorker.process(db, 'job-1', tmpFile, { fileName: 'patients.csv' });
 
-    expect(fhirService.patientToFHIR).toHaveBeenCalledWith(fakePatient);
-    expect(result.fhirResourcesCreated).toBe(1);
-  });
-
-  it('handles per-patient FHIR conversion error gracefully', async () => {
-    const fakePatient = { _id: 'p2', patientID: '99999999' };
-    importLGPDService.importPatients.mockResolvedValue({ total: 1, success: 1, errors: [] });
-    fhirService.patientToFHIR.mockImplementation(() => { throw new Error('FHIR conversion failed'); });
-
-    const db = makeDb([fakePatient]);
-    const result = await patientWorker.process(db, 'job-1', tmpFile);
-
-    expect(result).toHaveProperty('processingTime');
+    expect(fhirService.patientToFHIR).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      total: 1,
+      success: 1,
+      errors: [],
+      processingTime: expect.any(Number),
+    });
   });
 });
 
@@ -136,36 +127,24 @@ describe('TemperatureWorker', () => {
     const result = await temperatureWorker.process(makeDb([]), 'job-2', tmpFile);
 
     expect(result).toHaveProperty('total', 0);
-    expect(result).toHaveProperty('fhirResourcesCreated', 0);
+    expect(result.fhirResourcesCreated).toBeUndefined();
     expect(typeof result.processingTime).toBe('number');
   });
 
-  it('converts recent temperature readings to FHIR', async () => {
+  it('does not perform FHIR conversion (removed from executable path, see #212/canonical-data-cleanup)', async () => {
     const fakeTemp = { _id: 't1', sensorId: 'S-001', value: 4.5 };
     importService.importTemperature.mockResolvedValue({ total: 1, success: 1, errors: [] });
-    fhirService.temperatureToFHIR.mockReturnValue({
-      device: { resourceType: 'Device', id: 'd1' },
-      observation: { resourceType: 'Observation', id: 'o1' },
+
+    const db = makeDb([fakeTemp]);
+    const result = await temperatureWorker.process(db, 'job-2', tmpFile);
+
+    expect(fhirService.temperatureToFHIR).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      total: 1,
+      success: 1,
+      errors: [],
+      processingTime: expect.any(Number),
     });
-    fhirService.validateFHIRResource.mockReturnValue(true);
-
-    const db = makeDb([fakeTemp]);
-    const result = await temperatureWorker.process(db, 'job-2', tmpFile);
-
-    expect(fhirService.temperatureToFHIR).toHaveBeenCalledWith(fakeTemp);
-    expect(result.fhirResourcesCreated).toBe(1);
-    expect(result.fhirResources.length).toBeGreaterThan(0);
-  });
-
-  it('handles per-reading FHIR conversion error gracefully', async () => {
-    const fakeTemp = { _id: 't2', sensorId: 'S-002', value: 99 };
-    importService.importTemperature.mockResolvedValue({ total: 1, success: 1, errors: [] });
-    fhirService.temperatureToFHIR.mockImplementation(() => { throw new Error('FHIR failed'); });
-
-    const db = makeDb([fakeTemp]);
-    const result = await temperatureWorker.process(db, 'job-2', tmpFile);
-
-    expect(result).toHaveProperty('processingTime');
   });
 });
 
@@ -183,22 +162,25 @@ describe('SampleWorker', () => {
     const result = await sampleWorker.process(makeDb([]), 'job-3', tmpFile);
 
     expect(result).toHaveProperty('total', 0);
-    expect(result).toHaveProperty('fhirResourcesCreated', 0);
+    expect(result.fhirResourcesCreated).toBeUndefined();
   });
 
-  it('converts imported samples to FHIR', async () => {
+  it('does not perform FHIR conversion (removed from executable path, see #212/canonical-data-cleanup)', async () => {
     const fakeSample = { _id: 's1', sampleID: 'SMP-001' };
     importLGPDService.importSamples.mockResolvedValue({
       total: 1, success: 1, errors: [], importedSampleIds: ['s1']
     });
-    fhirService.sampleToFHIR.mockReturnValue({ resourceType: 'Specimen', id: 's1' });
-    fhirService.validateFHIRResource.mockReturnValue(true);
-    fhirService.findResourceByIdentifier.mockResolvedValue(null);
 
     const db = makeDb([fakeSample]);
     const result = await sampleWorker.process(db, 'job-3', tmpFile);
 
-    expect(result).toHaveProperty('fhirResourcesCreated');
+    expect(fhirService.sampleToFHIR).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      total: 1,
+      success: 1,
+      errors: [],
+      processingTime: expect.any(Number),
+    });
   });
 });
 
