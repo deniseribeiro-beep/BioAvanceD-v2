@@ -27,7 +27,8 @@ describe('ImportLGPDService quality import hardening', () => {
     expect(parsed.rcsScore).toBeUndefined();
     expect(parsed.scoreBasedGrade).toBeUndefined();
     expect(parsed.releaseStatus).toBe('QUARANTINE');
-    expect(parsed.external_quality_assessment).toMatchObject({
+    expect(parsed.external_quality_assessment).toBeUndefined();
+    expect(parsed.externalQualityAssessment).toMatchObject({
       score: 100,
       category: 'A',
       source: 'external-lgpd-import',

@@ -1292,7 +1292,7 @@ class ImportLGPDService {
         scoreBasedGrade: externalQualityAssessment.category || '',
         axisPenalties: [],
       },
-      external_quality_assessment: externalQualityAssessment,
+      externalQualityAssessment: externalQualityAssessment,
       releaseStatus: releaseStatus,
       locationID: row.locationID || row.locationId ? parseInt(row.locationID || row.locationId) : null,
       linkedProject: row.linkedProject?.trim() || null,

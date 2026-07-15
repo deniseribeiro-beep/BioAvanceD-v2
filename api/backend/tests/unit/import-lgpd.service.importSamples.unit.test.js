@@ -196,6 +196,24 @@ describe('ImportLGPDService.importSamples', () => {
     expect(samplesCollection.insertOne).toHaveBeenCalledTimes(1);
   });
 
+  it('persists externalQualityAssessment (camelCase) on the inserted document when rcsScore/scoreBasedGrade columns are present (#226)', async () => {
+    vi.spyOn(service, 'readFile').mockResolvedValue([
+      { ...VALID_ROW, rcsScore: '100', scoreBasedGrade: 'A' },
+    ]);
+
+    const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' });
+
+    expect(result.success).toBe(1);
+    const inserted = samplesCollection.insertOne.mock.calls[0][0];
+    expect(inserted.external_quality_assessment).toBeUndefined();
+    expect(inserted.externalQualityAssessment).toMatchObject({
+      score: 100,
+      category: 'A',
+      source: 'external-lgpd-import',
+      canonical: false,
+    });
+  });
+
   it('rejects a row whose barcode already exists (the duplicate-barcode check now runs after real validation)', async () => {
     ({ db, samplesCollection } = makeDb({ existingBarcode: { barcode: 'BR-2026-001' } }));
     vi.spyOn(service, 'readFile').mockResolvedValue([{ ...VALID_ROW, barcode: 'BR-2026-001' }]);
