@@ -85,11 +85,10 @@ describe('POST /api/audit/verify', () => {
     expect(res.status).toBe(401);
   });
 
-  it('verifies valid proof and returns verified: true', async () => {
+  it('returns 400 when the request carries the retired hash/proof/root contract', async () => {
     const coll = createCollectionMock();
     app.locals.db = createDbMock({ auditLogs: coll });
 
-    // Build real merkle proof for verification
     const merkle = require('../../src/utils/merkleTree');
     const leaves = ['a', 'b', 'c'].map((x) => merkle.sha256Hex(x));
     const tree = merkle.buildMerkleTree(leaves);
@@ -101,21 +100,120 @@ describe('POST /api/audit/verify', () => {
       .post('/api/audit/verify')
       .set('Authorization', `Bearer ${makeToken(4)}`)
       .send({ hash, proof, root });
-    expect(res.status).toBe(200);
-    expect(res.body.success).toBe(true);
-    expect(typeof res.body.verified).toBe('boolean');
+    expect(res.status).toBe(400);
+    expect(res.body.success).toBe(false);
   });
 
-  it('returns verified: false for bad proof', async () => {
-    const coll = createCollectionMock();
-    app.locals.db = createDbMock({ auditLogs: coll });
+  it('verifies a stored event by eventId and returns overallStatus VALID', async () => {
+    const auditTreeService = require('../../src/services/audit-tree.service');
+    const signingProvider = require('../../src/services/audit-signing.provider');
+    vi.spyOn(auditTreeService, 'verifyInclusion').mockReturnValue(true);
+    vi.spyOn(auditTreeService, 'verifyConsistency').mockReturnValue(true);
+    vi.spyOn(signingProvider, 'verify').mockReturnValue({ ok: true });
+
+    const event = {
+      eventId: 'evt-1',
+      logId: 'log-1',
+      treeSize: 1,
+      sequenceNumber: 0,
+      eventHash: 'hash-1',
+      payloadDigest: 'digest-1',
+      canonicalLeaf: { eventHash: 'hash-1' },
+      inclusionProof: [],
+    };
+    const treeHead = {
+      _id: 'th-1', logId: 'log-1', treeSize: 1, rootHash: 'root-1', signature: 'sig', keyId: 'key-1',
+      schemaVersion: 1, previousTreeHeadHash: null, periodStart: null, periodEnd: null,
+      createdAt: '2026-07-04T00:00:00.000Z', hashAlgorithm: 'sha256', merkleAlgorithm: 'sha256', signatureAlgorithm: 'ed25519', status: 'ANCHORED',
+    };
+    const token = { token: 'tk-1' };
+    const witnessRecord = { receipt: 'r-1' };
+
+    const eventsColl = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue(event),
+      find: vi.fn().mockReturnValue({ sort: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([event]) }) }),
+    });
+    const headsColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(treeHead) });
+    const tokensColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(token) });
+    const witnessesColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(witnessRecord) });
+    app.locals.db = createDbMock({
+      audit_events: eventsColl,
+      audit_tree_heads: headsColl,
+      audit_timestamp_tokens: tokensColl,
+      audit_witnesses: witnessesColl,
+    });
 
     const res = await request(app)
       .post('/api/audit/verify')
       .set('Authorization', `Bearer ${makeToken(4)}`)
-      .send({ hash: 'abc', proof: [], root: 'bad-root' });
+      .send({ eventId: 'evt-1' });
+
     expect(res.status).toBe(200);
-    expect(res.body.verified).toBe(false);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.overallStatus).toBe('VALID');
+    expect(res.body.data.failures).toEqual([]);
+  });
+
+  it('returns overallStatus INVALID with failures when checks fail', async () => {
+    const auditTreeService = require('../../src/services/audit-tree.service');
+    const signingProvider = require('../../src/services/audit-signing.provider');
+    vi.spyOn(auditTreeService, 'verifyInclusion').mockReturnValue(false);
+    vi.spyOn(auditTreeService, 'verifyConsistency').mockReturnValue(false);
+    vi.spyOn(signingProvider, 'verify').mockReturnValue({ ok: false });
+
+    const event = {
+      eventId: 'evt-2',
+      logId: 'log-2',
+      treeSize: 1,
+      sequenceNumber: 0,
+      eventHash: null,
+      payloadDigest: null,
+      canonicalLeaf: { eventHash: 'hash-2' },
+      inclusionProof: [],
+    };
+    const treeHead = {
+      _id: 'th-2', logId: 'log-2', treeSize: 1, rootHash: 'root-2', signature: 'sig', keyId: 'key-2',
+      schemaVersion: 1, previousTreeHeadHash: null, periodStart: null, periodEnd: null,
+      createdAt: '2026-07-04T00:00:00.000Z', hashAlgorithm: 'sha256', merkleAlgorithm: 'sha256', signatureAlgorithm: 'ed25519', status: 'ANCHORED',
+    };
+
+    const eventsColl = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue(event),
+      find: vi.fn().mockReturnValue({ sort: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([event]) }) }),
+    });
+    const headsColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(treeHead) });
+    const tokensColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(null) });
+    const witnessesColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(null) });
+    app.locals.db = createDbMock({
+      audit_events: eventsColl,
+      audit_tree_heads: headsColl,
+      audit_timestamp_tokens: tokensColl,
+      audit_witnesses: witnessesColl,
+    });
+
+    const res = await request(app)
+      .post('/api/audit/verify')
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({ eventId: 'evt-2' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.overallStatus).toBe('INVALID');
+    expect(res.body.data.failures).toEqual(
+      expect.arrayContaining(['eventIntegrity', 'inclusion', 'treeHeadSignature', 'timestamp', 'witness', 'consistency'])
+    );
+  });
+
+  it('returns 404 when the audit event is not found', async () => {
+    const eventsColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(null) });
+    app.locals.db = createDbMock({ audit_events: eventsColl });
+
+    const res = await request(app)
+      .post('/api/audit/verify')
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({ eventId: 'missing' });
+
+    expect(res.status).toBe(404);
+    expect(res.body.success).toBe(false);
   });
 });
 
