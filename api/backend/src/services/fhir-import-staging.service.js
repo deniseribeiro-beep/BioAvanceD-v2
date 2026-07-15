@@ -428,7 +428,7 @@ function normalizeSpecimen(specimen, index, bundleIndex) {
   const specimenId = String(specimen.id || extractIdentifier(specimen) || '').trim();
   const participantId = String(patient?.id || patientRef || extractIdentifier(patient || {}) || '').trim();
   const sampleType = String(specimen.type?.text || specimen.type?.coding?.[0]?.display || specimen.type?.coding?.[0]?.code || '').trim();
-  const collectionDate = specimen.collection?.collectedDateTime || specimen.collection?.collectedDate || specimen.receivedAt || null;
+  const collectionDate = specimen.collection?.collectedDateTime || specimen.collection?.collectedDate || specimen.receivedTime || null;
   const matrix = extensionValue(specimen, 'matrix');
   const storageTemperature = extensionValue(specimen, 'storage-temperature');
   const sprecsRaw = extensionValue(specimen, 'sprecs');
