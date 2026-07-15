@@ -515,7 +515,7 @@ describe('import-lgpd.controller', () => {
       expect(importSamplesSpy).toHaveBeenCalledWith(db, file, expect.objectContaining({ autoIncrement: expected }));
     });
 
-    it('happy path returns 200 with errorsDetails mapped to row/errors/patientID', async () => {
+    it('happy path returns 200 with errorsDetails mapped to row/errors/participantId', async () => {
       const db = createDb();
       const file = { path: '/tmp/s.csv', originalname: 's.csv' };
       const req = { app: { locals: { db } }, file, body: { locationID: '3' } };
@@ -525,7 +525,7 @@ describe('import-lgpd.controller', () => {
       vi.spyOn(importLGPDService, 'importSamples').mockResolvedValue({
         total: 2,
         success: 1,
-        errors: [{ row: 2, errors: ['dup barcode'], data: { patientID: '12345678' } }]
+        errors: [{ row: 2, errors: ['dup barcode'], data: { participantId: '12345678' } }]
       });
       const cleanupSpy = vi.spyOn(importLGPDService, 'cleanupFile').mockImplementation(() => {});
 
@@ -541,7 +541,7 @@ describe('import-lgpd.controller', () => {
         total: 2,
         success: 1,
         errors: 1,
-        errorsDetails: [{ row: 2, errors: ['dup barcode'], patientID: '12345678' }]
+        errorsDetails: [{ row: 2, errors: ['dup barcode'], participantId: '12345678' }]
       });
     });
 

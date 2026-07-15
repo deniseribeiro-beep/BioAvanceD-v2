@@ -172,7 +172,7 @@ describe('ImportLGPDService.importPatients', () => {
 
     expect(patientsCollection.insertOne).toHaveBeenCalledTimes(1);
     const insertedPatient = patientsCollection.insertOne.mock.calls[0][0];
-    expect(insertedPatient.patientID).toMatch(/^\d{8}$/);
+    expect(insertedPatient.participantId).toMatch(/^\d{8}$/);
     expect(insertedPatient.status).toBe('PENDING_CONSENT');
     expect(insertedPatient.consentToken).toBe('tok-1');
 
@@ -236,7 +236,11 @@ describe('ImportLGPDService.importPatients', () => {
     expect(result.errors[0].errors[0]).toMatch(/Sexo .* obrigatório/);
   });
 
-  it('normalizes a numeric-string recordNumber to a number, and blanks an empty/placeholder one to null', async () => {
+  // Pinned to current behavior: PatientModel.create() always stringifies
+  // recordNumber (`String(data.recordNumber).trim()`), regardless of what
+  // type importPatients parsed it to upstream — so a numeric-string input
+  // round-trips back to a string, not a number.
+  it('normalizes a numeric-string recordNumber to a string, and blanks an empty/placeholder one to null', async () => {
     vi.spyOn(service, 'readFile').mockResolvedValue([
       { ...VALID_ROW, recordNumber: '123' },
       { ...VALID_ROW, recordNumber: 'null' },
@@ -245,7 +249,7 @@ describe('ImportLGPDService.importPatients', () => {
 
     expect(result.success).toBe(2);
     const [first, second] = patientsCollection.insertOne.mock.calls;
-    expect(first[0].recordNumber).toBe(123);
+    expect(first[0].recordNumber).toBe('123');
     expect(second[0].recordNumber).toBeNull();
   });
 
