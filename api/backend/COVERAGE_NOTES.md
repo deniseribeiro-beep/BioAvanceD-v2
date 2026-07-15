@@ -79,8 +79,6 @@ or at the next `ship-to-main` gate.
 ## ZERO coverage (0% lines) — 19 files, full reconcile 2026-07-09, commit `2848ab1f`
 
 Real logic, but broken-by-issue — see caveat above, not a real gap:
-- `src/services/scheduler.service.js` (issue #147 — cascading
-  module-not-found from deleted `consentNeo4jSync.service`)
 - `src/workers/worker.js` (self-executing bootstrap entrypoint — calls
   `startWorker()`/`process.exit` at module load; disproportionately
   expensive to test honestly, lower priority than it looks even once
