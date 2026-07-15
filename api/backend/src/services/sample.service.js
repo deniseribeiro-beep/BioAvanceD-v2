@@ -82,6 +82,20 @@ class SampleService {
       const normalizedLocationID = normalizeRequiredLocationID(sampleData.locationID);
       sampleData.locationID = normalizedLocationID;
 
+      const samplesCollection = await getCollection(db, 'samples');
+
+      // Gera ID único para a amostra antes da validação, já que é gerado
+      // pelo servidor e nunca é fornecido pelo cliente no cadastro
+      if (!sampleData.specimenId) {
+        sampleData.specimenId = await generateUniqueSpecimenId(db, 'samples');
+        logger.info(`ID único de espécime gerado automaticamente: ${sampleData.specimenId}`);
+      } else {
+        const existingSpecimen = await samplesCollection.findOne({ specimenId: sampleData.specimenId });
+        if (existingSpecimen) {
+          throw new Error(`Já existe um espécime com o ID ${sampleData.specimenId}`);
+        }
+      }
+
       // RF004 - Validação completa
       const validation = SampleModel.validate(sampleData);
       if (!validation.isValid) {
@@ -96,8 +110,6 @@ class SampleService {
         validationError.statusCode = 422;
         throw validationError;
       }
-      
-      const samplesCollection = await getCollection(db, 'samples');
 
       if (!sampleData.participantId) {
         const participantIdError = new Error('participantId é obrigatório para cadastrar espécime');
@@ -211,17 +223,6 @@ class SampleService {
         const existingSample = await samplesCollection.findOne({ barcode: sampleData.barcode });
         if (existingSample) {
           throw new Error(`Já existe uma amostra com o código de barras ${sampleData.barcode}`);
-        }
-      }
-
-      // Gera ID único para a amostra
-      if (!sampleData.specimenId) {
-        sampleData.specimenId = await generateUniqueSpecimenId(db, 'samples');
-        logger.info(`ID único de espécime gerado automaticamente: ${sampleData.specimenId}`);
-      } else {
-        const existingSample = await samplesCollection.findOne({ specimenId: sampleData.specimenId });
-        if (existingSample) {
-          throw new Error(`Já existe um espécime com o ID ${sampleData.specimenId}`);
         }
       }
 

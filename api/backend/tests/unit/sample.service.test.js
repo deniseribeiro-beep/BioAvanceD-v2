@@ -123,7 +123,9 @@ describe('sample.service', () => {
     it('rejects when the barcode is already taken', async () => {
       const db = makeDb();
       mockOperationalLocation(db);
-      db.collections.samples.findOne.mockResolvedValueOnce({ barcode: 'BR-TEST-001' }); // barcode dup check
+      db.collections.samples.findOne
+        .mockResolvedValueOnce(null) // specimenId dup check passes
+        .mockResolvedValueOnce({ barcode: 'BR-TEST-001' }); // barcode dup check
 
       await expect(sampleService.createSample(db, validSampleData())).rejects.toThrow(
         /Já existe uma amostra com o código de barras/
@@ -133,9 +135,7 @@ describe('sample.service', () => {
     it('rejects when the specimenId is already taken', async () => {
       const db = makeDb();
       mockOperationalLocation(db);
-      db.collections.samples.findOne
-        .mockResolvedValueOnce(null) // barcode dup check passes
-        .mockResolvedValueOnce({ specimenId: 555001 }); // specimenId dup check
+      db.collections.samples.findOne.mockResolvedValueOnce({ specimenId: 555001 }); // specimenId dup check
 
       await expect(sampleService.createSample(db, validSampleData())).rejects.toThrow(
         /Já existe um espécime com o ID/
