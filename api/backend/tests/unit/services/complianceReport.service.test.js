@@ -393,17 +393,13 @@ describe('complianceReport.service', () => {
       expect(csv).toContain('Tentativas Bloqueadas: 5');
     });
 
-    // This test documents a real bug: exportReportCSV does not guard
-    // against generateComplianceReport() returning null (e.g. when db is
-    // not initialized), so it throws a TypeError instead of failing
-    // gracefully like generateComplianceReport itself does.
-    it('throws a TypeError when the underlying report generation returns null', async () => {
+    it('throws a clear error (not a TypeError) when the underlying report generation returns null', async () => {
       complianceReportService.db = null;
       vi.spyOn(logger, 'error').mockImplementation(() => {});
 
       await expect(
         complianceReportService.exportReportCSV('2026-01-01', '2026-01-31')
-      ).rejects.toThrow(TypeError);
+      ).rejects.toThrow('Relatório de conformidade indisponível');
     });
   });
 
@@ -439,16 +435,35 @@ describe('complianceReport.service', () => {
       expect(dashboard.alerts).toEqual({ high: 0, medium: 0, low: 0 });
     });
 
-    // This test documents a real bug: getDashboardMetrics does not guard
-    // against generateComplianceReport() returning null (same root cause
-    // as exportReportCSV above) - it throws instead of degrading gracefully.
-    it('throws a TypeError when the underlying report generation returns null', async () => {
+    // getDashboardMetrics's own `if (!this.db)` guard degrades gracefully to
+    // a default all-zeros dashboard instead of throwing. The route
+    // (compliance.routes.js) always calls init(db) with a confirmed-truthy
+    // db immediately before this call, so this branch is unreachable via the
+    // real caller, but the fail-open default is still a safe, deliberate
+    // guard (fixed per #15/#156) rather than a crash.
+    it('degrades to a default all-zeros dashboard when the db is not initialized', async () => {
       complianceReportService.db = null;
       vi.spyOn(logger, 'error').mockImplementation(() => {});
 
-      await expect(
-        complianceReportService.getDashboardMetrics(30)
-      ).rejects.toThrow(TypeError);
+      const dashboard = await complianceReportService.getDashboardMetrics(30);
+
+      expect(dashboard).toEqual({
+        complianceScore: 0,
+        metrics: {
+          totalAlerts: 0,
+          criticalAlerts: 0,
+          openAlerts: 0,
+          activeConsents: 0,
+          blockedAttempts: 0,
+          totalAuditLogs: 0
+        },
+        alerts: {
+          high: 0,
+          medium: 0,
+          low: 0
+        },
+        topIssues: []
+      });
     });
   });
 });
