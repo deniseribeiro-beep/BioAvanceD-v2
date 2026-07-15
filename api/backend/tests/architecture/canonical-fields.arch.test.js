@@ -1,5 +1,5 @@
-const test = require('node:test');
-const assert = require('node:assert/strict');
+import { test, expect } from 'vitest';
+
 const fs = require('fs');
 const path = require('path');
 
@@ -68,6 +68,6 @@ test('blocks legacy collection aliases and retired FHIR persistence', () => {
     ...collectHits(BACKEND_ROOT, REQUIRED_FORBIDDEN),
     ...collectHits(FRONTEND_ROOT, REQUIRED_FORBIDDEN),
   ];
-  assert.deepEqual(hits, []);
+  expect(hits).toEqual([]);
 });
 

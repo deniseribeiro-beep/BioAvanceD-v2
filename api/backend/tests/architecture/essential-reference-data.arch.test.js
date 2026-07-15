@@ -1,5 +1,4 @@
-const assert = require('node:assert/strict');
-const test = require('node:test');
+import { test, expect } from 'vitest';
 
 const { getManifest } = require('../../src/reference-data/essential');
 const miabis = require('../../src/reference-data/miabis.min.json');
@@ -8,38 +7,37 @@ const rcsReferenceData = require('../../src/services/rcs-reference-data');
 
 test('essential manifest loads without large datasets', () => {
   const manifest = getManifest();
-  assert.ok(Array.isArray(manifest));
-  assert.deepEqual(
-    manifest.map((entry) => entry.key).sort(),
+  expect(Array.isArray(manifest)).toBe(true);
+  expect(manifest.map((entry) => entry.key).sort()).toEqual(
     ['miabis-minimal', 'rcs-gov-1.0', 'sprec-minimal'].sort()
   );
   for (const entry of manifest) {
-    assert.ok(entry.required);
-    assert.ok(entry.loader);
-    assert.ok(entry.source);
-    assert.ok(entry.uniqueKeys.length > 0);
+    expect(entry.required).toBeTruthy();
+    expect(entry.loader).toBeTruthy();
+    expect(entry.source).toBeTruthy();
+    expect(entry.uniqueKeys.length > 0).toBe(true);
   }
 });
 
 test('miabis minimal reference data exposes expected structures', () => {
-  assert.ok(Array.isArray(miabis.sampleTypes));
-  assert.ok(Array.isArray(miabis.sampleOrigins));
-  assert.ok(Array.isArray(miabis.extractionProtocols));
-  assert.ok(Array.isArray(miabis.qualityDescriptions));
+  expect(Array.isArray(miabis.sampleTypes)).toBe(true);
+  expect(Array.isArray(miabis.sampleOrigins)).toBe(true);
+  expect(Array.isArray(miabis.extractionProtocols)).toBe(true);
+  expect(Array.isArray(miabis.qualityDescriptions)).toBe(true);
 });
 
 test('sprec minimal reference data exposes axes', () => {
-  assert.equal(sprec.sistema, 'SPREC');
-  assert.ok(sprec.fonte);
-  assert.ok(Array.isArray(sprec.axes));
-  assert.ok(sprec.axes.length > 0);
+  expect(sprec.sistema).toBe('SPREC');
+  expect(sprec.fonte).toBeTruthy();
+  expect(Array.isArray(sprec.axes)).toBe(true);
+  expect(sprec.axes.length > 0).toBe(true);
 });
 
 test('rcs reference data exposes all governance structures', () => {
-  assert.ok(Array.isArray(rcsReferenceData.catalogs.fluid));
-  assert.ok(Array.isArray(rcsReferenceData.catalogs.solid));
-  assert.ok(Array.isArray(rcsReferenceData.severityMappings));
-  assert.ok(Array.isArray(rcsReferenceData.weights));
-  assert.ok(Array.isArray(rcsReferenceData.thresholds));
-  assert.ok(Array.isArray(rcsReferenceData.governanceRules));
+  expect(Array.isArray(rcsReferenceData.catalogs.fluid)).toBe(true);
+  expect(Array.isArray(rcsReferenceData.catalogs.solid)).toBe(true);
+  expect(Array.isArray(rcsReferenceData.severityMappings)).toBe(true);
+  expect(Array.isArray(rcsReferenceData.weights)).toBe(true);
+  expect(Array.isArray(rcsReferenceData.thresholds)).toBe(true);
+  expect(Array.isArray(rcsReferenceData.governanceRules)).toBe(true);
 });
