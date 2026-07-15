@@ -140,7 +140,7 @@ describe('integrationSecurityMiddleware', () => {
       const fakeDb = { name: 'fakeDb' };
       const req = createReq({
         app: { locals: { db: fakeDb, blockedAttempts: new Map() } },
-        body: { patientID: 'p1' },
+        body: { participantId: 'p1' },
         user: { id: 'u1' }
       });
       const originalJson = vi.fn().mockReturnValue('json-result');
@@ -177,7 +177,7 @@ describe('integrationSecurityMiddleware', () => {
       const fakeDb = { name: 'fakeDb' };
       const req = createReq({
         app: { locals: { db: fakeDb, blockedAttempts: new Map() } },
-        body: { patientID: 'p1' }
+        body: { participantId: 'p1' }
       });
       const originalJson = vi.fn();
       const res = createRes({ json: originalJson, statusCode: 200 });
@@ -202,7 +202,7 @@ describe('integrationSecurityMiddleware', () => {
       const fakeDb = { name: 'fakeDb' };
       const req = createReq({
         app: { locals: { db: fakeDb, blockedAttempts: new Map() } },
-        body: { patientID: 'p1' }
+        body: { participantId: 'p1' }
       });
       const originalJson = vi.fn();
       const res = createRes({ json: originalJson, statusCode: 403 });
@@ -226,7 +226,7 @@ describe('integrationSecurityMiddleware', () => {
 
       const req = createReq({
         app: { locals: { blockedAttempts: new Map() } },
-        body: { patientID: 'p1' }
+        body: { participantId: 'p1' }
       });
       const originalJson = vi.fn();
       const res = createRes({ json: originalJson, statusCode: 403 });
@@ -258,7 +258,7 @@ describe('integrationSecurityMiddleware', () => {
       ]);
       const req = createReq({
         app: { locals: { db: fakeDb, blockedAttempts: existingAttempts } },
-        body: { patientID: 'p1' },
+        body: { participantId: 'p1' },
         user: { id: 'u1' }
       });
       const originalJson = vi.fn();
@@ -298,7 +298,7 @@ describe('integrationSecurityMiddleware', () => {
       ]);
       const req = createReq({
         app: { locals: { db: fakeDb, blockedAttempts: existingAttempts } },
-        body: { patientID: 'p1' },
+        body: { participantId: 'p1' },
         user: { id: 'u1' }
       });
       const originalJson = vi.fn();
@@ -334,7 +334,7 @@ describe('integrationSecurityMiddleware', () => {
 
       const req = createReq({
         app: { locals: { db: fakeDb, blockedAttempts: new Map() } },
-        body: { patientID: 'p1' }
+        body: { participantId: 'p1' }
       });
       const jsonMock = vi.fn();
       const res = createRes({ json: jsonMock });
@@ -364,7 +364,7 @@ describe('integrationSecurityMiddleware', () => {
 
       const req = createReq({
         app: { locals: { db: fakeDb, blockedAttempts: new Map() } },
-        body: { patientID: 'p1' }
+        body: { participantId: 'p1' }
       });
       const res = createRes();
       const next = vi.fn();
@@ -400,7 +400,7 @@ describe('integrationSecurityMiddleware', () => {
 
       const req = createReq({
         app: { locals: { db: throwingDb, blockedAttempts: new Map() } },
-        body: { patientID: 'p1' }
+        body: { participantId: 'p1' }
       });
       const res = createRes();
       const next = vi.fn();
