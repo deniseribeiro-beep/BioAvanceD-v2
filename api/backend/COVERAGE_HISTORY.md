@@ -8,6 +8,26 @@ per-session read is `COVERAGE_NOTES.md`, which holds only the current
 ZERO/LOW buckets and reconcile numbers. Do not read this file as part
 of normal slice-picking.
 
+**Reconcile (2026-07-15, commit `94e2fc62`):** Full-suite regenerate of
+`COVERAGE_NOTES.md`, owed since the 2026-07-14 reconcile's bucket lists
+went stale without a fresh per-file re-derivation (per that reconcile's
+own note). Lines 82.4% → 86.33%, statements 81.87% → 85.73%, branches
+71.98% → 75.66%, functions 84.49% → 86.58% — consistent with #146-#164
+and #203/#212/#227 landing since. Bucket counts shrank across the board
+(ZERO 19→18, LOW 14→7, MID-LOW 20→3 listed/12 shown→3, MID-HIGH 44→39)
+as #146-family fixes pushed files like `PatientIdentityService.js`,
+`MoveSampleUseCase.js`, `sampleIDGenerator.js`, `fhir.service.js`,
+`LineageRepository.js`, `analysisValidation.service.js`,
+`import-lgpd.service.js`, `consent.validator.js`, `sample.service.js`,
+and `import.service.js` into the GOOD (>=85%) bucket, no longer worth
+individually tracking. No fixable bug surfaced by this reconcile — the
+run's 5 failing test files (123/4739 tests) are entirely the already-open
+design-fork backlog (#208/#218/#222/#224, re-traced and commented on
+fresh the same day in the fix-bugs loop, see that session's handoff). The
+`NotificationService.test.js` > `buildConsentLink` failure flagged at the
+2026-07-14 reconcile as "not yet triaged" is gone in this run — resolved
+incidentally by an intervening fix, no issue was needed.
+
 **Slice (2026-07-13):** `src/workers/neo4jProjection.worker.js`, 65.95% →
 89.36% lines (69.23% branches), extended existing
 `tests/unit/neo4jProjection.worker.test.js` (2 → 7 tests) across two
