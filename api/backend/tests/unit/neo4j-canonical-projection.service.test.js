@@ -33,7 +33,7 @@ describe('Neo4jCanonicalProjectionService', () => {
       occurredAt: '2026-07-01T12:00:00.000Z',
       payload: {
         donorKey: 'patient-123',
-        sampleId: 'sample-1',
+        specimenId: 'sample-1',
         status: 'ACTIVE',
       }
     });
@@ -41,7 +41,7 @@ describe('Neo4jCanonicalProjectionService', () => {
     expect(runs).toHaveLength(1);
     expect(runs[0].cypher).not.toMatch(/cpf|email|prontu|nome|patientId/i);
     expect(runs[0].params.donorId).toMatch(/^DONOR_[a-f0-9]{24}$/);
-    expect(runs[0].params.sampleId).toBe('sample-1');
+    expect(runs[0].params.specimenId).toBe('sample-1');
     expect(runs[0].params.consentId).toBe('consent-1');
   });
 
@@ -57,7 +57,7 @@ describe('Neo4jCanonicalProjectionService', () => {
       aggregateId: 'sample-child',
       schemaVersion: 1,
       sourceService: 'unit-test',
-      payload: { sampleId: 'sample-child', parentSampleId: 'sample-parent' }
+      payload: { specimenId: 'sample-child', parentSpecimenId: 'sample-parent' }
     });
 
     await service.applyQualityProjection(session, {
@@ -67,7 +67,7 @@ describe('Neo4jCanonicalProjectionService', () => {
       aggregateId: 'sample-child',
       schemaVersion: 1,
       sourceService: 'unit-test',
-      payload: { sampleId: 'sample-child', qualityAssessmentId: 'qa-1', status: 'GOOD', score: 98 }
+      payload: { specimenId: 'sample-child', qualityAssessmentId: 'qa-1', status: 'GOOD', score: 98 }
     });
 
     await service.applyTelemetryProjection(session, {
@@ -77,12 +77,12 @@ describe('Neo4jCanonicalProjectionService', () => {
       aggregateId: 'sample-child',
       schemaVersion: 1,
       sourceService: 'unit-test',
-      payload: { sampleId: 'sample-child', telemetryIncidentId: 'ti-1', severity: 'HIGH', status: 'OPEN' }
+      payload: { specimenId: 'sample-child', telemetryIncidentId: 'ti-1', severity: 'HIGH', status: 'OPEN' }
     });
 
     expect(calls).toHaveLength(3);
-    expect(calls[0].params.sampleId).toBe('sample-child');
-    expect(calls[0].params.parentSampleId).toBe('sample-parent');
+    expect(calls[0].params.specimenId).toBe('sample-child');
+    expect(calls[0].params.parentSpecimenId).toBe('sample-parent');
     expect(calls[1].params.assessmentId).toBe('qa-1');
     expect(calls[2].params.incidentId).toBe('ti-1');
   });
