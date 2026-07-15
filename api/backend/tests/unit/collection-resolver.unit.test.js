@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-const { resolveCollectionName, resolveSourceCollectionName, getCollection } = require('../../src/utils/collectionResolver');
+const { resolveCollectionName, getCollection } = require('../../src/utils/collectionResolver');
 
 function makeDb(existingCollections = [], countMap = {}) {
   return {
@@ -36,46 +36,15 @@ describe('resolveCollectionName', () => {
     expect(name).toBe('patients');
   });
 
-  it('falls back to alias when preferred collection not found but alias is', async () => {
-    const db = makeDb(['pacientes']); // alias for 'patients'
+  it('returns preferred name even when only an alias-like collection exists (no alias fallback)', async () => {
+    const db = makeDb(['pacientes']); // legacy alias name; alias subsystem was removed
     const name = await resolveCollectionName(db, 'patients');
-    expect(name).toBe('pacientes');
+    expect(name).toBe('patients');
   });
 
-  it('returns preferred name when neither preferred nor alias found', async () => {
+  it('returns preferred name when neither preferred nor any other collection is found', async () => {
     const db = makeDb([]); // empty db
     const name = await resolveCollectionName(db, 'patients');
-    expect(name).toBe('patients');
-  });
-});
-
-describe('resolveSourceCollectionName', () => {
-  it('throws for invalid key', async () => {
-    const db = makeDb();
-    await expect(resolveSourceCollectionName(db, 'nonExistentKey')).rejects.toThrow('inválida');
-  });
-
-  it('returns preferred name when db has no listCollections', async () => {
-    const db = { collection: vi.fn() };
-    const name = await resolveSourceCollectionName(db, 'patients');
-    expect(name).toBe('patients');
-  });
-
-  it('returns preferred when it has the most documents', async () => {
-    const db = makeDb(['patients', 'pacientes'], { patients: 100, pacientes: 5 });
-    const name = await resolveSourceCollectionName(db, 'patients');
-    expect(name).toBe('patients');
-  });
-
-  it('returns alias when alias has the most documents', async () => {
-    const db = makeDb(['patients', 'pacientes'], { patients: 2, pacientes: 99 });
-    const name = await resolveSourceCollectionName(db, 'patients');
-    expect(name).toBe('pacientes');
-  });
-
-  it('returns preferred when no collection exists (fallback)', async () => {
-    const db = makeDb([]); // nothing in db
-    const name = await resolveSourceCollectionName(db, 'patients');
     expect(name).toBe('patients');
   });
 });
