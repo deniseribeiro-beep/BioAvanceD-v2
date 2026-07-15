@@ -233,22 +233,22 @@ class ResultWorker {
 
     try {
       // Valida campos obrigatórios
-      if (!row.specimenId && !row.specimenId && !row.barcode) {
-        throw new Error('specimenId, specimenId ou barcode é obrigatório');
+      if (!row.specimenId && !row.barcode) {
+        throw new Error('specimenId ou barcode é obrigatório');
       }
 
       // Busca amostra
       const samplesCollection = db.collection('amostras');
       const sample = await samplesCollection.findOne({
         $or: [
-          { specimenId: row.specimenId || row.specimenId },
+          { specimenId: row.specimenId },
           { barcode: row.barcode },
         ],
       });
 
       if (!sample) {
         throw new Error(
-          `Amostra não encontrada: ${row.specimenId || row.specimenId || row.barcode}`
+          `Amostra não encontrada: ${row.specimenId || row.barcode}`
         );
       }
 

@@ -201,13 +201,23 @@ describe('RcsCertificationService RCS-GOV 1.0', () => {
   it('persiste eixos solidos e avaliacao canonica completa no modelo de amostra', () => {
     const evaluation = certify(solidSprec());
     const sample = SampleModel.create({
-      patientID: '12345678', sampleType: 'TIS', sampleOrigin: 'TIS', extractionProtocol: 'SNP',
-      quantity: 1, linkedProject: 'RCS-CONTRACT', sprec: solidSprec(), ...evaluation,
-      rcs_evaluation: evaluation,
+      specimenId: 'SPZ-001', participantId: '12345678', sampleType: 'TIS', sampleOrigin: 'TIS', extractionProtocol: 'SNP',
+      quantity: 1, linkedProject: 'RCS-CONTRACT', sprec: solidSprec(),
+      modelVersion: evaluation.model_version,
+      governanceStatus: evaluation.governance_status,
+      governanceFailureReasons: evaluation.governance_failure_reasons,
+      governanceRuleCodes: evaluation.governance_rule_codes,
+      rcsScore: evaluation.rcs_score,
+      scoreBasedGrade: evaluation.score_based_grade,
+      finalGrade: evaluation.final_grade,
+      gradeRoute: evaluation.grade_route,
+      axisPenalties: evaluation.axis_penalties,
+      calculationTrace: evaluation.calculation_trace,
+      rcsEvaluation: evaluation,
     });
     expect(sample.sprec).toMatchObject({ warmIschemia: 'A', coldIschemia: 'A', fixationType: 'SNP', fixationTime: 'B' });
-    expect(sample).toMatchObject({ model_version: 'RCS-GOV-1.0', governance_status: 1, final_grade: 'A' });
-    expect(sample.axis_penalties).toHaveLength(5);
-    expect(sample.calculation_trace.axes).toHaveLength(5);
+    expect(sample).toMatchObject({ modelVersion: 'RCS-GOV-1.0', governanceStatus: 1, finalGrade: 'A' });
+    expect(sample.axisPenalties).toHaveLength(5);
+    expect(sample.calculationTrace.axes).toHaveLength(5);
   });
 });
