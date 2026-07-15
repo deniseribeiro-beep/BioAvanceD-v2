@@ -132,14 +132,15 @@ function buildApp(router, db = {}) {
 }
 
 const VALID_PAYLOAD = {
-  patientID: '12345678',
+  participantId: '12345678',
   sampleType: 'PLASMA',
   sampleOrigin: 'VENOUS_BLOOD',
   extractionProtocol: 'TUBE_EDTA',
   quantity: 5,
   quality: 'GOOD',
   linkedProject: 'Projeto X',
-  registerDate: '2026-01-01',
+  registeredAt: '2026-01-01',
+  locationID: 1,
 };
 
 describe('sample.routes', () => {
@@ -162,32 +163,30 @@ describe('sample.routes', () => {
       expect(executeMock).not.toHaveBeenCalled();
     });
 
-    it('rejects a patientID that is not 8 digits', async () => {
+    it('rejects a participantId that is not 8 digits', async () => {
       const { router } = loadRoute({ registerSampleUseCaseExecute: vi.fn() });
       const app = buildApp(router, {});
 
       const res = await request(app)
         .post('/api/samples')
-        .send({ ...VALID_PAYLOAD, patientID: '123' });
+        .send({ ...VALID_PAYLOAD, participantId: '123' });
 
       expect(res.status).toBe(422);
-      expect(res.body.details).toContain('patientID deve ser uma string com 8 dígitos');
+      expect(res.body.details).toContain('participantId deve ser uma string com 8 dígitos');
     });
 
-    it('accepts registrationDate as an alternative to registerDate', async () => {
-      const executeMock = vi.fn().mockResolvedValue({
-        sample: { _id: { toString: () => 'sample-1' }, patientID: '12345678' },
-        strictMode: false,
-      });
-      const { router } = loadRoute({ registerSampleUseCaseExecute: executeMock });
+    it('rejects registrationDate as a non-canonical alias of registeredAt', async () => {
+      const { router } = loadRoute({ registerSampleUseCaseExecute: vi.fn() });
       const app = buildApp(router, {});
-      const { registerDate, ...withoutRegisterDate } = VALID_PAYLOAD;
+      const { registeredAt, ...withoutRegisteredAt } = VALID_PAYLOAD;
 
       const res = await request(app)
         .post('/api/samples')
-        .send({ ...withoutRegisterDate, registrationDate: '2026-01-01' });
+        .send({ ...withoutRegisteredAt, registrationDate: '2026-01-01' });
 
-      expect(res.status).toBe(201);
+      expect(res.status).toBe(422);
+      expect(res.body.error).toBe('NON_CANONICAL_FIELD');
+      expect(res.body.fields).toContain('registrationDate');
     });
   });
 
@@ -530,7 +529,7 @@ describe('sample.routes', () => {
       );
     });
 
-    it('allows use when the patient cannot be found', async () => {
+    it('blocks use when the patient cannot be found (fail-closed, matches MongoPatientConsentReadRepository)', async () => {
       const listSamples = vi.fn().mockResolvedValue({
         samples: [{ patientID: 'MISSING' }],
         total: 1,
@@ -548,7 +547,7 @@ describe('sample.routes', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.data[0]).toEqual(
-        expect.objectContaining({ consentValid: true, consentMessage: 'Paciente não encontrado', canUse: true })
+        expect.objectContaining({ consentValid: false, consentMessage: 'Paciente não encontrado', canUse: false })
       );
     });
 
