@@ -23,6 +23,7 @@ function makeSamplesCollection() {
   return {
     inserted,
     updates,
+    findOne: async () => null,
     insertOne: async (doc) => {
       inserted.push(doc);
       return { insertedId: `sample-${inserted.length}` };
@@ -39,14 +40,14 @@ function makeDb(collection) {
 }
 
 const validSample = (overrides = {}) => ({
-  patientID: '12345678',
+  participantId: '12345678',
   sampleType: 'PLASMA',
   sampleOrigin: 'VENOUS_BLOOD',
   extractionProtocol: 'TUBE_EDTA',
   quantity: 1.5,
   quality: 'GOOD',
   linkedProject: 'Projeto QA',
-  registerDate: '2026-01-01',
+  registeredAt: '2026-01-01',
   ...overrides,
 });
 
@@ -62,7 +63,7 @@ describe('ImportService.importSamples (JSON)', () => {
   it('inserts a valid sample and upgrades release_status to AVAILABLE when ethics/sprec are complete', async () => {
     vi.spyOn(SampleGraphValidator.prototype, 'validateSampleCompliance').mockResolvedValue({ suggestedStatus: 'AVAILABLE' });
     const filePath = writeTmpFile('valid.json', JSON.stringify(validSample({
-      tcle_id: 'tcle-1',
+      consentTemplateId: 'tcle-1',
       sprec: { sampleType: 'BLD', primaryContainer: 'PED' },
     })));
     const collection = makeSamplesCollection();
@@ -72,7 +73,7 @@ describe('ImportService.importSamples (JSON)', () => {
     expect(result).toEqual({ success: 1, errors: [], total: 1 });
     expect(collection.inserted).toHaveLength(1);
     expect(collection.updates).toHaveLength(1);
-    expect(collection.updates[0].update.$set.release_status).toBe('AVAILABLE');
+    expect(collection.updates[0].update.$set.releaseStatus).toBe('AVAILABLE');
   });
 
   it('forces QUARANTINE (no update needed) when tcle_id/sprec ethics data is missing, since it defaults to QUARANTINE already', async () => {
@@ -89,7 +90,7 @@ describe('ImportService.importSamples (JSON)', () => {
   it('keeps the sample in QUARANTINE and logs a warning when compliance validation throws', async () => {
     vi.spyOn(SampleGraphValidator.prototype, 'validateSampleCompliance').mockRejectedValue(new Error('graph unavailable'));
     const filePath = writeTmpFile('compliance-fails.json', JSON.stringify(validSample({
-      tcle_id: 'tcle-1',
+      consentTemplateId: 'tcle-1',
       sprec: { sampleType: 'BLD', primaryContainer: 'PED' },
     })));
     const collection = makeSamplesCollection();
@@ -98,10 +99,10 @@ describe('ImportService.importSamples (JSON)', () => {
 
     expect(result.success).toBe(1);
     expect(collection.updates).toHaveLength(1);
-    expect(collection.updates[0].update.$set.release_status).toBe('QUARANTINE');
+    expect(collection.updates[0].update.$set.releaseStatus).toBe('QUARANTINE');
   });
 
-  it('records a model-validation error and does not insert when patientID is missing', async () => {
+  it('records a model-validation error and does not insert when participantId is missing', async () => {
     const filePath = writeTmpFile('invalid.json', JSON.stringify({ sampleType: 'PLASMA' }));
     const collection = makeSamplesCollection();
 
@@ -150,14 +151,14 @@ describe('ImportService.importSamples (CSV)', () => {
 
     const result = await importService.importSamples(makeDb(collection), { path: filePath, originalname: 'bad-structure.csv' });
 
-    expect(result).toEqual({ success: 0, errors: [{ row: 0, error: expect.stringContaining('patientID') }], total: 0 });
+    expect(result).toEqual({ success: 0, errors: [{ row: 0, error: expect.stringContaining('participantId') }], total: 0 });
     expect(collection.inserted).toHaveLength(0);
   });
 
   it('records a parse error (non-numeric quantity) without stopping the batch, counting it in total', async () => {
     const filePath = writeTmpFile(
       'parse-error.csv',
-      'patientID,sampleType,sampleOrigin,extractionProtocol,quantity,quality,linkedProject,registerDate\n12345678,PLASMA,VENOUS_BLOOD,TUBE_EDTA,notanumber,GOOD,Projeto QA,2026-01-01\n',
+      'participantId,sampleType,sampleOrigin,extractionProtocol,quantity,quality,linkedProject,registeredAt\n12345678,PLASMA,VENOUS_BLOOD,TUBE_EDTA,notanumber,GOOD,Projeto QA,2026-01-01\n',
     );
     const collection = makeSamplesCollection();
 
@@ -172,7 +173,7 @@ describe('ImportService.importSamples (CSV)', () => {
   it('records a model-validation error for a row with an invalid sampleType, counting it in total', async () => {
     const filePath = writeTmpFile(
       'invalid-row.csv',
-      'patientID,sampleType,sampleOrigin,extractionProtocol,quantity,quality,linkedProject,registerDate\n12345678,NOT_A_TYPE,VENOUS_BLOOD,TUBE_EDTA,1.5,GOOD,Projeto QA,2026-01-01\n',
+      'participantId,sampleType,sampleOrigin,extractionProtocol,quantity,quality,linkedProject,registeredAt\n12345678,NOT_A_TYPE,VENOUS_BLOOD,TUBE_EDTA,1.5,GOOD,Projeto QA,2026-01-01\n',
     );
     const collection = makeSamplesCollection();
 
@@ -188,7 +189,7 @@ describe('ImportService.importSamples (CSV)', () => {
     vi.spyOn(SampleGraphValidator.prototype, 'validateSampleCompliance').mockRejectedValue(new Error('graph down'));
     const filePath = writeTmpFile(
       'valid-row.csv',
-      'patientID,sampleType,sampleOrigin,extractionProtocol,quantity,quality,linkedProject,registerDate\n12345678,PLASMA,VENOUS_BLOOD,TUBE_EDTA,1.5,GOOD,Projeto QA,2026-01-01\n',
+      'participantId,sampleType,sampleOrigin,extractionProtocol,quantity,quality,linkedProject,registeredAt\n12345678,PLASMA,VENOUS_BLOOD,TUBE_EDTA,1.5,GOOD,Projeto QA,2026-01-01\n',
     );
     const collection = makeSamplesCollection();
 
@@ -196,7 +197,7 @@ describe('ImportService.importSamples (CSV)', () => {
 
     expect(result.success).toBe(1);
     expect(collection.updates).toHaveLength(1);
-    expect(collection.updates[0].update.$set.release_status).toBe('QUARANTINE');
+    expect(collection.updates[0].update.$set.releaseStatus).toBe('QUARANTINE');
   });
 });
 

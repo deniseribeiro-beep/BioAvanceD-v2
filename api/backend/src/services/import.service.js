@@ -14,6 +14,7 @@ const { getCollection } = require('../utils/collectionResolver');
 const SampleGraphValidator = require('./SampleGraphValidator');
 const qualityDomain = require('./quality-domain.service');
 const qualityCompatibility = require('./quality-compatibility.service');
+const { generateUniqueSpecimenId } = require('../utils/sampleIDGenerator');
 
 /**
  * Service de Importação de Dados
@@ -392,6 +393,9 @@ class ImportService {
           try {
             // Normalize legacy quality fields to canonical names (non-destructive)
             const sampleData = qualityCompatibility.normalizeSample(sampleDataRaw || {});
+            if (!sampleData.specimenId) {
+              sampleData.specimenId = await generateUniqueSpecimenId(db, 'samples');
+            }
             const validation = SampleModel.validate(sampleData);
             if (!validation.isValid) {
               results.errors.push({
@@ -474,8 +478,12 @@ class ImportService {
               continue;
             }
 
+            if (!sampleData.specimenId) {
+              sampleData.specimenId = await generateUniqueSpecimenId(db, 'samples');
+            }
+
             const validation = SampleModel.validate(sampleData);
-            
+
             if (!validation.isValid) {
               results.errors.push({
                 row: results.total + 1,
@@ -847,29 +855,28 @@ class ImportService {
       quantity: toFloat(this.getRowValue(row, ['quantity', 'volume']), 'quantity'),
       quality: normalizeString(qualityRaw),
       // Canonical RCS-GOV fields (do not rely on legacy `quality_*` for decisioning)
-      model_version: canonicalQualityAssessment.model_version,
-      matrix_type: canonicalQualityAssessment.matrix_type,
-      governance_status: canonicalQualityAssessment.governance_status,
-      governance_failure_reasons: canonicalQualityAssessment.governance_failure_reasons || [],
-      governance_rule_codes: canonicalQualityAssessment.governance_rule_codes || [],
-      p_bio: canonicalQualityAssessment.p_bio,
-      rcs_score: canonicalQualityAssessment.rcs_score,
-      score_based_grade: canonicalQualityAssessment.score_based_grade,
-      final_grade: canonicalQualityAssessment.final_grade || '',
-      grade_route: canonicalQualityAssessment.grade_route,
-      axis_penalties: canonicalQualityAssessment.axis_penalties || [],
-      calculation_trace: canonicalQualityAssessment.calculation_trace || {},
-      rcs_evaluation: canonicalQualityAssessment,
+      modelVersion: canonicalQualityAssessment.model_version,
+      matrixType: canonicalQualityAssessment.matrix_type,
+      governanceStatus: canonicalQualityAssessment.governance_status,
+      governanceFailureReasons: canonicalQualityAssessment.governance_failure_reasons || [],
+      governanceRuleCodes: canonicalQualityAssessment.governance_rule_codes || [],
+      rcsScore: canonicalQualityAssessment.rcs_score,
+      scoreBasedGrade: canonicalQualityAssessment.score_based_grade,
+      finalGrade: canonicalQualityAssessment.final_grade || '',
+      gradeRoute: canonicalQualityAssessment.grade_route,
+      axisPenalties: canonicalQualityAssessment.axis_penalties || [],
+      calculationTrace: canonicalQualityAssessment.calculation_trace || {},
+      rcsEvaluation: canonicalQualityAssessment,
       // Legacy compatibility bucket (non-decisional)
       canonical: {
         rcsScore: externalQualityAssessment.score,
         scoreBasedGrade: externalQualityAssessment.category || '',
         axisPenalties: [],
       },
-      external_quality_assessment: externalQualityAssessment,
+      externalQualityAssessment,
       locationID: toInt(locationRaw, 'locationID'),
       linkedProject: normalizeString(linkedProjectRaw),
-      lifecycleStatus: normalizeString(this.getRowValue(row, ['lifecycleStatus', 'statusAtual'])) || 'Available',
+      lifecycleStatus: normalizeString(this.getRowValue(row, ['lifecycleStatus', 'statusAtual'])) || 'AVAILABLE',
       releaseStatus: releaseStatus,
       sprec,
       clinicalData,
