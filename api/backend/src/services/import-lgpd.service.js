@@ -7,7 +7,7 @@ const PatientModel = require('../models/Patient');
 const { SampleModel } = require('../models/Sample');
 const patientService = require('./patient.service');
 const notificationService = require('./notification.service');
-const { generateUniquePatientID } = require('../utils/patientAnonymization');
+const { generateUniqueParticipantId } = require('../utils/patientAnonymization');
 const { getCollection } = require('../utils/collectionResolver');
 const {
   SPECIMEN_TYPES,
@@ -491,8 +491,30 @@ class ImportLGPDService {
                     }
 
           
-          // Remove campo height se existir (não deve ser salvo no banco)
+          // Remove campos clínicos legados que parsePatientRow ainda gera mas
+          // que ParticipantModel não aceita mais como top-level (decisão de
+          // #142: o fluxo de criação de paciente é disease-agnostic; dados
+          // clínicos/biomarcadores devem ser vinculados via diagnóstico
+          // canônico depois, não aceitos aqui como campos soltos).
           delete patientData.height;
+          delete patientData.weight;
+          delete patientData.heightCm;
+          delete patientData.diagnosticHypothesis;
+          delete patientData.icdCode;
+          delete patientData.hypertension;
+          delete patientData.obesity;
+          delete patientData.diabetesType1;
+          delete patientData.diabetesType2;
+          delete patientData.copd;
+          delete patientData.ckd;
+          delete patientData.smoking;
+          delete patientData.alcoholUse;
+          delete patientData.asthma;
+          delete patientData.antibioticUse;
+          delete patientData.insulinUse;
+          delete patientData.antiviralUse;
+          delete patientData.geneticVariant;
+          delete patientData.notes;
 
           // Valida dados básicos antes da validação do modelo
           if (!patientData.patientName || (typeof patientData.patientName === 'string' && patientData.patientName.trim().length === 0)) {
@@ -543,6 +565,11 @@ class ImportLGPDService {
             patientData.recordNumber = null;
           }
           
+          // GERA ID ÚNICO DE 8 DÍGITOS AUTOMATICAMENTE (LGPD) - antes da
+          // validação, pois PatientModel.validate() exige participantId
+          const participantId = await generateUniqueParticipantId(db, 'pacientes');
+          patientData.participantId = participantId;
+
           // Valida dados
           const validation = PatientModel.validate(patientData);
           if (!validation.isValid) {
@@ -555,10 +582,6 @@ class ImportLGPDService {
             });
             continue;
           }
-
-          // GERA ID ÚNICO DE 8 DÍGITOS AUTOMATICAMENTE (LGPD)
-          const participantId = await generateUniquePatientID(db, 'pacientes');
-          patientData.participantId = participantId;
 
           const consentMetadata = notificationService.buildConsentMetadata();
           patientData.status = 'PENDING_CONSENT';
@@ -733,6 +756,11 @@ class ImportLGPDService {
         try {
           // Parse dos dados do CSV/Excel
           sampleData = this.parseSampleRow(row);
+
+          if (!sampleData.specimenId) {
+            const { generateUniqueSpecimenId } = require('../utils/sampleIDGenerator');
+            sampleData.specimenId = await generateUniqueSpecimenId(db, 'samples');
+          }
 
           if (!sampleData.sampleType && groupFields?.sampleType) {
             sampleData.sampleType = String(groupFields.sampleType).trim();
@@ -1268,7 +1296,7 @@ class ImportLGPDService {
       releaseStatus: releaseStatus,
       locationID: row.locationID || row.locationId ? parseInt(row.locationID || row.locationId) : null,
       linkedProject: row.linkedProject?.trim() || null,
-      lifecycleStatus: row.lifecycleStatus?.trim() || 'Available',
+      lifecycleStatus: row.lifecycleStatus?.trim() || 'AVAILABLE',
       consentTemplateId: tcleId ? String(tcleId).trim() : null,
       consentTemplateId: tcleId ? String(tcleId).trim() : null,
       merkleRoot: row.merkleRoot ? String(row.merkleRoot).trim() : null,
@@ -1539,20 +1567,45 @@ class ImportLGPDService {
           }
         }
 
-        const validation = PatientModel.validate(patientData);
-        if (!validation.isValid) {
-          results.errors.push({ row: rowNumber, errors: validation.errors.map((error) => `Linha ${rowNumber}: ${error}`) });
-          continue;
-        }
-
         const duplicate = await patientService.checkDuplicatePatient(db, patientData);
         if (duplicate) {
           results.errors.push({ row: rowNumber, errors: [`Linha ${rowNumber}: Paciente duplicado detectado`] });
           continue;
         }
 
-        const participantId = await generateUniquePatientID(db, 'pacientes');
+        // GERA ID ÚNICO ANTES DA VALIDAÇÃO (PatientModel.validate() exige
+        // participantId) e remove campos clínicos legados/CPF que
+        // parsePatientRow/esta função ainda geram mas que ParticipantModel
+        // não aceita mais como top-level (decisão de #142: fluxo de
+        // criação de paciente é disease-agnostic).
+        const participantId = await generateUniqueParticipantId(db, 'pacientes');
         patientData.participantId = participantId;
+        delete patientData.cpf;
+        delete patientData.height;
+        delete patientData.weight;
+        delete patientData.heightCm;
+        delete patientData.diagnosticHypothesis;
+        delete patientData.icdCode;
+        delete patientData.hypertension;
+        delete patientData.obesity;
+        delete patientData.diabetesType1;
+        delete patientData.diabetesType2;
+        delete patientData.copd;
+        delete patientData.ckd;
+        delete patientData.smoking;
+        delete patientData.alcoholUse;
+        delete patientData.asthma;
+        delete patientData.antibioticUse;
+        delete patientData.insulinUse;
+        delete patientData.antiviralUse;
+        delete patientData.geneticVariant;
+        delete patientData.notes;
+
+        const validation = PatientModel.validate(patientData);
+        if (!validation.isValid) {
+          results.errors.push({ row: rowNumber, errors: validation.errors.map((error) => `Linha ${rowNumber}: ${error}`) });
+          continue;
+        }
 
         const consentMetadata = notificationService.buildConsentMetadata();
         patientData.status = 'PENDING_CONSENT';

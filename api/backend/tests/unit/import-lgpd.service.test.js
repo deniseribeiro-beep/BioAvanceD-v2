@@ -294,7 +294,7 @@ describe('ImportLGPDService', () => {
   describe('parseSampleRow', () => {
     it('parses core identity and specimen fields', () => {
       const row = {
-        patientID: ' 12345678 ',
+        participantId: ' 12345678 ',
         patientName: ' João  ',
         birthDate: '01/01/1990',
         email: 'joao@example.com',
@@ -307,7 +307,7 @@ describe('ImportLGPDService', () => {
       };
       const result = importLgpdService.parseSampleRow(row);
 
-      expect(result.patientID).toBe('12345678');
+      expect(result.participantId).toBe('12345678');
       expect(result.patientName).toBe('João');
       expect(result.patientBirthDate.getFullYear()).toBe(1990);
       expect(result.sampleType).toBe('Plasma');
@@ -317,25 +317,25 @@ describe('ImportLGPDService', () => {
       expect(result.quantity).toBe(5.5);
     });
 
-    it('defaults registerDate to now when no date columns are supplied', () => {
+    it('defaults registeredAt to now when no date columns are supplied', () => {
       const before = Date.now();
       const result = importLgpdService.parseSampleRow({});
       const after = Date.now();
-      expect(result.registerDate.getTime()).toBeGreaterThanOrEqual(before);
-      expect(result.registerDate.getTime()).toBeLessThanOrEqual(after);
+      expect(result.registeredAt.getTime()).toBeGreaterThanOrEqual(before);
+      expect(result.registeredAt.getTime()).toBeLessThanOrEqual(after);
     });
 
-    it('only accepts a whitelisted set of pharmacology treatment_status values', () => {
-      const valid = importLgpdService.parseSampleRow({ treatment_status: 'TREATED' });
-      expect(valid.pharmacology_data.treatment_status).toBe('TREATED');
+    it('only accepts a whitelisted set of pharmacology treatmentStatus values', () => {
+      const valid = importLgpdService.parseSampleRow({ treatmentStatus: 'TREATED' });
+      expect(valid.pharmacologyData.treatmentStatus).toBe('TREATED');
 
-      const invalid = importLgpdService.parseSampleRow({ treatment_status: 'BOGUS_STATUS' });
-      expect(invalid.pharmacology_data.treatment_status).toBe('');
+      const invalid = importLgpdService.parseSampleRow({ treatmentStatus: 'BOGUS_STATUS' });
+      expect(invalid.pharmacologyData.treatmentStatus).toBe('');
     });
 
-    it('strips an ATC: prefix and uppercases the atc_code', () => {
-      const result = importLgpdService.parseSampleRow({ atc_code: 'atc:a10bx02' });
-      expect(result.pharmacology_data.atc_code).toBe('A10BX02');
+    it('strips an ATC: prefix and uppercases the atcCode', () => {
+      const result = importLgpdService.parseSampleRow({ atcCode: 'atc:a10bx02' });
+      expect(result.pharmacologyData.atcCode).toBe('A10BX02');
     });
   });
 
