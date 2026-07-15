@@ -2,7 +2,6 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const service = require('../../src/services/iot-streaming.service');
 const queueConfig = require('../../src/config/queue');
-const fhirService = require('../../src/services/fhir.service');
 const influxTelemetryWriteRepository = require('../../src/infrastructure/persistence/influxdb/InfluxTelemetryWriteRepository');
 const logger = require('../../src/utils/logger');
 
@@ -150,24 +149,17 @@ describe('iot-streaming.service', () => {
   });
 
   describe('processTemperatureData', () => {
-    function makeDb({ existingDevice = null } = {}) {
+    function makeDb() {
       const temperaturesCollection = {
         insertOne: vi.fn().mockResolvedValue({ insertedId: 'temp-id-1' }),
-        updateOne: vi.fn().mockResolvedValue({}),
-      };
-      const devicesCollection = {
-        findOne: vi.fn().mockResolvedValue(existingDevice),
-        updateOne: vi.fn().mockResolvedValue({}),
-        insertOne: vi.fn().mockResolvedValue({ insertedId: 'device-id-1' }),
       };
       const db = {
         collection: vi.fn((name) => {
           if (name === 'temperatures') return temperaturesCollection;
-          if (name === 'devices') return devicesCollection;
           throw new Error(`unexpected collection ${name}`);
         }),
       };
-      return { db, temperaturesCollection, devicesCollection };
+      return { db, temperaturesCollection };
     }
 
     const baseTemperatureData = {
@@ -183,37 +175,19 @@ describe('iot-streaming.service', () => {
       vi.spyOn(influxTelemetryWriteRepository, 'enqueueTemperatureReading').mockImplementation(() => {});
     });
 
-    it('inserts, converts to FHIR, updates the record, and inserts a new device when none exists', async () => {
-      const { db, temperaturesCollection, devicesCollection } = makeDb({ existingDevice: null });
-      const validateSpy = vi.spyOn(fhirService, 'validateFHIRResource');
+    it('inserts the reading and enqueues an Influx telemetry write, without any FHIR conversion or device collection access', async () => {
+      const { db, temperaturesCollection } = makeDb();
 
       const insertedId = await service.processTemperatureData(db, baseTemperatureData);
 
       expect(insertedId).toBe('temp-id-1');
       expect(temperaturesCollection.insertOne).toHaveBeenCalledWith(baseTemperatureData);
-      expect(validateSpy).toHaveBeenCalledTimes(2);
-      expect(temperaturesCollection.updateOne).toHaveBeenCalledWith(
-        { _id: 'temp-id-1' },
-        expect.objectContaining({ $set: expect.objectContaining({ fhir: expect.any(Object), fhirDevice: expect.any(Object) }) })
+      expect(db.collection).not.toHaveBeenCalledWith('devices');
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(influxTelemetryWriteRepository.enqueueTemperatureReading).toHaveBeenCalledWith(
+        expect.objectContaining({ _id: 'temp-id-1', sensorId: 'sensor-1' })
       );
-      expect(devicesCollection.findOne).toHaveBeenCalledWith({ 'fhir.identifier.value': 'sensor-1' });
-      expect(devicesCollection.insertOne).toHaveBeenCalledWith(
-        expect.objectContaining({ sensorId: 'sensor-1', fhir: expect.any(Object) })
-      );
-      expect(devicesCollection.updateOne).not.toHaveBeenCalled();
-    });
-
-    it('updates the existing device when one is found', async () => {
-      const existingDevice = { _id: 'existing-device-id' };
-      const { db, devicesCollection } = makeDb({ existingDevice });
-
-      await service.processTemperatureData(db, baseTemperatureData);
-
-      expect(devicesCollection.updateOne).toHaveBeenCalledWith(
-        { _id: 'existing-device-id' },
-        expect.objectContaining({ $set: expect.objectContaining({ fhir: expect.any(Object) }) })
-      );
-      expect(devicesCollection.insertOne).not.toHaveBeenCalled();
     });
 
     it('logs and re-throws when insertOne rejects', async () => {
