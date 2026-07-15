@@ -78,18 +78,20 @@ describe('patientBiomarkerTimeseries.service', () => {
       expect(connectSpy).not.toHaveBeenCalled();
     });
 
-    it('is a no-op when patient.patientID trims to empty string', async () => {
+    it('is a no-op when patient.participantId trims to empty string', async () => {
       const connectSpy = vi.spyOn(connectionModule, 'connectInfluxDB');
-      await service.writePatientBiomarkers({ patient: { patientID: '   ', alphaGal: 5 } });
+      await service.writePatientBiomarkers({
+        patient: { participantId: '   ', biomarkers: [{ biomarkerType: 'alphaGal', value: 5 }] }
+      });
       expect(connectSpy).not.toHaveBeenCalled();
     });
 
-    it('is a no-op when both alphaGal and lysoGb3 resolve to null', async () => {
+    it('is a no-op when biomarkers array normalizes to empty', async () => {
       const connectSpy = vi.spyOn(connectionModule, 'connectInfluxDB');
       const appendSpy = vi.spyOn(biomarkerIntegrityService, 'appendBiomarkerHash');
       await service.writePatientBiomarkers({
         db: {},
-        patient: { patientID: 'P1', alphaGal: '', lysoGb3: null }
+        patient: { participantId: 'P1', biomarkers: [{ biomarkerType: 'alphaGal', value: '' }] }
       });
       expect(connectSpy).not.toHaveBeenCalled();
       expect(appendSpy).not.toHaveBeenCalled();
@@ -104,9 +106,11 @@ describe('patientBiomarkerTimeseries.service', () => {
       const updatedAt = new Date('2024-01-01T00:00:00.000Z');
       await service.writePatientBiomarkers({
         patient: {
-          patientID: 'P42',
-          alphaGal: '3.5',
-          lysoGb3: '7.1',
+          participantId: 'P42',
+          biomarkers: [
+            { biomarkerType: 'alphaGal', value: '3.5' },
+            { biomarkerType: 'lysoGb3', value: '7.1' }
+          ],
           clinicalUnit: 'CU-1',
           updatedAt
         },
@@ -119,7 +123,7 @@ describe('patientBiomarkerTimeseries.service', () => {
       const point = fakeWriteApi.writePoint.mock.calls[0][0];
       const line = point.toLineProtocol();
       expect(line).toContain('patient_biomarkers');
-      expect(line).toContain('patientId=P42');
+      expect(line).toContain('participantId=P42');
       expect(line).toContain('eventType=create');
       expect(line).toContain('clinicalUnit=CU-1');
       expect(line).toContain('alphaGal=3.5');
@@ -133,7 +137,7 @@ describe('patientBiomarkerTimeseries.service', () => {
       const service = freshService();
 
       await service.writePatientBiomarkers({
-        patient: { patientID: 'P43', alphaGal: '1' }
+        patient: { participantId: 'P43', biomarkers: [{ biomarkerType: 'alphaGal', value: '1' }] }
       });
 
       const point = fakeWriteApi.writePoint.mock.calls[0][0];
@@ -154,7 +158,7 @@ describe('patientBiomarkerTimeseries.service', () => {
       await expect(
         service.writePatientBiomarkers({
           db: {},
-          patient: { patientID: 'P44', alphaGal: '2' }
+          patient: { participantId: 'P44', biomarkers: [{ biomarkerType: 'alphaGal', value: '2' }] }
         })
       ).resolves.toBeUndefined();
 
@@ -162,7 +166,7 @@ describe('patientBiomarkerTimeseries.service', () => {
       expect(appendSpy).toHaveBeenCalledTimes(1);
     });
 
-    it('calls appendBiomarkerHash once per non-null biomarker when db is provided', async () => {
+    it('calls appendBiomarkerHash once per normalized biomarker entry when db is provided', async () => {
       const fakeWriteApi = makeFakeWriteApi();
       vi.spyOn(connectionModule, 'connectInfluxDB').mockResolvedValue(undefined);
       vi.spyOn(connectionModule, 'getInfluxWriteApi').mockReturnValue(fakeWriteApi);
@@ -175,13 +179,20 @@ describe('patientBiomarkerTimeseries.service', () => {
       const updatedAt = new Date('2024-02-02T00:00:00.000Z');
       await service.writePatientBiomarkers({
         db,
-        patient: { patientID: 'P45', alphaGal: '4', lysoGb3: '8', updatedAt },
+        patient: {
+          participantId: 'P45',
+          biomarkers: [
+            { biomarkerType: 'alphaGal', value: '4' },
+            { biomarkerType: 'lysoGb3', value: '8' }
+          ],
+          updatedAt
+        },
         eventType: 'update'
       });
 
       expect(appendSpy).toHaveBeenCalledTimes(2);
       expect(appendSpy).toHaveBeenCalledWith(db, {
-        patientId: 'P45',
+        participantId: 'P45',
         biomarkerType: 'alphaGal',
         value: 4,
         timestamp: updatedAt,
@@ -189,13 +200,30 @@ describe('patientBiomarkerTimeseries.service', () => {
         eventType: 'update'
       });
       expect(appendSpy).toHaveBeenCalledWith(db, {
-        patientId: 'P45',
+        participantId: 'P45',
         biomarkerType: 'lysoGb3',
         value: 8,
         timestamp: updatedAt,
         source: 'patient_biomarkers',
         eventType: 'update'
       });
+    });
+
+    it('reads from patient.biomarkerObservations when patient.biomarkers is absent', async () => {
+      const fakeWriteApi = makeFakeWriteApi();
+      vi.spyOn(connectionModule, 'connectInfluxDB').mockResolvedValue(undefined);
+      vi.spyOn(connectionModule, 'getInfluxWriteApi').mockReturnValue(fakeWriteApi);
+      const service = freshService();
+
+      await service.writePatientBiomarkers({
+        patient: {
+          participantId: 'P50',
+          biomarkerObservations: [{ biomarkerType: 'alphaGal', value: '1' }]
+        }
+      });
+
+      const point = fakeWriteApi.writePoint.mock.calls[0][0];
+      expect(point.toLineProtocol()).toContain('alphaGal=1');
     });
 
     it('skips the hash block entirely when db is falsy', async () => {
@@ -206,7 +234,7 @@ describe('patientBiomarkerTimeseries.service', () => {
       const service = freshService();
 
       await service.writePatientBiomarkers({
-        patient: { patientID: 'P46', alphaGal: '1' }
+        patient: { participantId: 'P46', biomarkers: [{ biomarkerType: 'alphaGal', value: '1' }] }
       });
 
       expect(appendSpy).not.toHaveBeenCalled();
@@ -225,7 +253,7 @@ describe('patientBiomarkerTimeseries.service', () => {
       await expect(
         service.writePatientBiomarkers({
           db: {},
-          patient: { patientID: 'P47', alphaGal: '1' }
+          patient: { participantId: 'P47', biomarkers: [{ biomarkerType: 'alphaGal', value: '1' }] }
         })
       ).resolves.toBeUndefined();
 
@@ -240,7 +268,7 @@ describe('patientBiomarkerTimeseries.service', () => {
 
       const before = Date.now();
       await service.writePatientBiomarkers({
-        patient: { patientID: 'P48', alphaGal: '1' }
+        patient: { participantId: 'P48', biomarkers: [{ biomarkerType: 'alphaGal', value: '1' }] }
       });
       const after = Date.now();
 
