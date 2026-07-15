@@ -135,7 +135,12 @@ something.
   cut from `main` and had to be redone). Existing naming: `feature/<slug>`
   (e.g. `feature/docker-e2e-backend-integration`); use `test/<slug>` for
   test-loop slices if a new branch is needed, `fix/<slug>` for
-  bug-fix work (see `fix-bugs`). Exception: maintenance of
+  bug-fix work (see `fix-bugs`). A permission hook rejects any other
+  prefix (e.g. `chore/<slug>`) outright — confirmed 2026-07-15 while
+  regenerating `COVERAGE_NOTES.md`, a doc-only maintenance task with no
+  natural home in `feature`/`fix`/`test`; `test/<slug>` is the fallback
+  for this kind of non-code, non-bugfix maintenance since it's the
+  closest fit and the hook allows it. Exception: maintenance of
   `.claude/skills/`, agent defs, and hooks (the workflow tooling itself)
   rides the currently-active work branch in its own commit — the loop
   reads skills from the branch it runs on, so parking them on a separate
