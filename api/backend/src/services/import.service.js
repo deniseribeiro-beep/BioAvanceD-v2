@@ -15,6 +15,7 @@ const SampleGraphValidator = require('./SampleGraphValidator');
 const qualityDomain = require('./quality-domain.service');
 const qualityCompatibility = require('./quality-compatibility.service');
 const { generateUniqueSpecimenId } = require('../utils/sampleIDGenerator');
+const { generateUniqueParticipantId } = require('../utils/patientAnonymization');
 
 /**
  * Service de Importação de Dados
@@ -243,14 +244,53 @@ class ImportService {
         return merged;
       }
 
-      async function upsertPatient(patientData) {
-        // Identificador único: CPF OU recordNumber
+      // Remove campos legados/clínicos que ParticipantModel não aceita mais
+      // como top-level (decisão de #142: fluxo de criação de paciente é
+      // disease-agnostic) e migra o identificador legado CPF para o campo
+      // canônico identityDocument.
+      function stripLegacyPatientFields(patientData) {
+        if (patientData.cpf && !patientData.identityDocument) {
+          patientData.identityDocument = patientData.cpf;
+        }
+        delete patientData.cpf;
+        delete patientData.weight;
+        delete patientData.heightCm;
+        delete patientData.diagnosticHypothesis;
+        delete patientData.icdCode;
+        delete patientData.hypertension;
+        delete patientData.obesity;
+        delete patientData.diabetesType1;
+        delete patientData.diabetesType2;
+        delete patientData.copd;
+        delete patientData.ckd;
+        delete patientData.smoking;
+        delete patientData.alcoholUse;
+        delete patientData.asthma;
+        delete patientData.antibioticUse;
+        delete patientData.insulinUse;
+        delete patientData.antiviralUse;
+        delete patientData.geneticVariant;
+        delete patientData.notes;
+        return patientData;
+      }
+
+      // Encontra o paciente existente (por identityDocument OU recordNumber,
+      // já que ParticipantModel.validate() exige participantId e rejeita
+      // qualquer campo fora do allowlist canônico) e gera/preserva o
+      // participantId ANTES da validação, mesmo padrão adotado em
+      // import-lgpd.service.js para #199/#226.
+      async function prepareParticipantId(db, patientData) {
         const query = {};
-        if (patientData.cpf) query.cpf = patientData.cpf;
+        if (patientData.identityDocument) query.identityDocument = patientData.identityDocument;
         else if (patientData.recordNumber) query.recordNumber = patientData.recordNumber;
-        else return { action: 'skip', reason: 'Sem identificador único (CPF ou Prontuário)' };
+        else return { existing: null, error: 'Sem identificador único (Documento de identidade ou Prontuário)' };
 
         const existing = await patientsCollection.findOne(query);
+        patientData.participantId = existing ? existing.participantId : await generateUniqueParticipantId(db);
+        return { existing };
+      }
+
+      async function upsertPatient(patientData, existing) {
         if (!existing) {
           // Novo cadastro
           const consentMetadata = notificationService.buildConsentMetadata();
@@ -291,9 +331,15 @@ class ImportService {
         const data = JSON.parse(fs.readFileSync(file.path, 'utf8'));
         const patients = Array.isArray(data) ? data : [data];
 
-        for (const patientData of patients) {
+        for (const rawPatientData of patients) {
           results.total++;
           try {
+            const patientData = stripLegacyPatientFields({ ...rawPatientData });
+            const { existing, error: idError } = await prepareParticipantId(db, patientData);
+            if (idError) {
+              results.errors.push({ row: results.total, error: idError });
+              continue;
+            }
             const validation = PatientModel.validate(patientData);
             if (!validation.isValid) {
               results.errors.push({
@@ -302,7 +348,7 @@ class ImportService {
               });
               continue;
             }
-            const upsertResult = await upsertPatient(patientData);
+            const upsertResult = await upsertPatient(patientData, existing);
             if (upsertResult.action === 'error') {
               results.errors.push({
                 row: results.total,
@@ -336,7 +382,12 @@ class ImportService {
         for (const row of rows) {
           results.total++;
           try {
-            const patientData = this.parsePatientCSV(row);
+            const patientData = stripLegacyPatientFields(this.parsePatientCSV(row));
+            const { existing, error: idError } = await prepareParticipantId(db, patientData);
+            if (idError) {
+              results.errors.push({ row: results.total, error: idError });
+              continue;
+            }
             const validation = PatientModel.validate(patientData);
             if (!validation.isValid) {
               results.errors.push({
@@ -345,7 +396,7 @@ class ImportService {
               });
               continue;
             }
-            const upsertResult = await upsertPatient(patientData);
+            const upsertResult = await upsertPatient(patientData, existing);
             if (upsertResult.action === 'error') {
               results.errors.push({
                 row: results.total,
