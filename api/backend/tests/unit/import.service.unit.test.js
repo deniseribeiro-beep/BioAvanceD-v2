@@ -82,7 +82,7 @@ describe('ImportService.getRequiredFields', () => {
 
   it('returns sample fields for samples type', () => {
     const fields = importService.getRequiredFields('samples');
-    expect(fields).toContain('patientID');
+    expect(fields).toContain('participantId');
     expect(fields).toContain('sampleType');
   });
 
@@ -261,7 +261,7 @@ describe('ImportService.parsePatientCSV', () => {
 describe('ImportService.parseSampleCSV', () => {
   it('parses core identifying fields and defaults release_status to QUARANTINE without SPREC/consent data', () => {
     const row = {
-      patientID: '12345678',
+      participantId: '12345678',
       sampleType: 'Blood',
       sampleOrigin: 'Venous',
       barcode: 'BC-001',
@@ -269,13 +269,13 @@ describe('ImportService.parseSampleCSV', () => {
     };
     const { data, parseErrors } = importService.parseSampleCSV(row);
     expect(parseErrors).toEqual([]);
-    expect(data.patientID).toBe('12345678');
+    expect(data.participantId).toBe('12345678');
     expect(data.sampleType).toBe('Blood');
     expect(data.sampleOrigin).toBe('Venous');
     expect(data.barcode).toBe('BC-001');
     expect(data.quantity).toBe(5.5);
-    expect(data.release_status).toBe('QUARANTINE');
-    expect(data.registrationDate instanceof Date).toBe(true);
+    expect(data.releaseStatus).toBe('QUARANTINE');
+    expect(data.registeredAt instanceof Date).toBe(true);
   });
 
   it('resolves aliased column names (e.g. tipoAmostra) via getRowValue', () => {
@@ -283,7 +283,7 @@ describe('ImportService.parseSampleCSV', () => {
     const { data } = importService.parseSampleCSV(row);
     expect(data.sampleType).toBe('Plasma');
     expect(data.sampleOrigin).toBe('Arterial');
-    expect(data.patientID).toBe('P-9');
+    expect(data.participantId).toBe('P-9');
   });
 
   it('collects a parse error and returns null for a non-numeric quantity', () => {
@@ -292,14 +292,14 @@ describe('ImportService.parseSampleCSV', () => {
     expect(parseErrors).toEqual(expect.arrayContaining([expect.stringContaining('quantity')]));
   });
 
-  it('collects a parse error for an unparseable registerDate', () => {
-    const { parseErrors } = importService.parseSampleCSV({ registerDate: 'bogus-date' });
-    expect(parseErrors).toEqual(expect.arrayContaining([expect.stringContaining('registerDate')]));
+  it('collects a parse error for an unparseable registeredAt', () => {
+    const { parseErrors } = importService.parseSampleCSV({ registeredAt: 'bogus-date' });
+    expect(parseErrors).toEqual(expect.arrayContaining([expect.stringContaining('registeredAt')]));
   });
 
   it('defaults blank/whitespace-only string fields to null via normalizeString', () => {
-    const { data } = importService.parseSampleCSV({ patientID: '   ', barcode: '' });
-    expect(data.patientID).toBeNull();
+    const { data } = importService.parseSampleCSV({ participantId: '   ', barcode: '' });
+    expect(data.participantId).toBeNull();
     expect(data.barcode).toBeNull();
   });
 });

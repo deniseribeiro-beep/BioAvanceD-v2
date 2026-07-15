@@ -15,6 +15,7 @@ describe('ImportService SPREC import', () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bioavanced-import-'));
 
     samplesCollection = {
+      findOne: vi.fn().mockResolvedValue(null),
       insertOne: vi.fn().mockResolvedValue({ insertedId: '507f1f77bcf86cd799439011' }),
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
     };
@@ -48,7 +49,7 @@ describe('ImportService SPREC import', () => {
   it('importa CSV fake com colunas SPREC', async () => {
     const csvPath = path.join(tempDir, 'samples.csv');
     const csvContent = [
-      'patientID,sampleType,sampleOrigin,extractionProtocol,quantity,quality,registerDate,linkedProject,sprec_matrix_type,sprec_sample_type,sprec_primary_container,sprec_pre_centrifugation,sprec_centrifugation,sprec_second_centrifugation,sprec_post_centrifugation_delay,sprec_long_term_storage',
+      'participantId,sampleType,sampleOrigin,extractionProtocol,quantity,quality,registeredAt,linkedProject,sprec_matrix_type,sprec_sample_type,sprec_primary_container,sprec_pre_centrifugation,sprec_centrifugation,sprec_second_centrifugation,sprec_post_centrifugation_delay,sprec_long_term_storage',
       '12345678,PLASMA,VENOUS_BLOOD,TUBE_EDTA,1.5,GOOD,2026-01-01,Projeto QA,fluid,BLD,PED,C,A,D,E,F',
     ].join('\n');
 
@@ -65,7 +66,7 @@ describe('ImportService SPREC import', () => {
     expect(samplesCollection.insertOne).toHaveBeenCalledTimes(1);
 
     const inserted = samplesCollection.insertOne.mock.calls[0][0];
-    expect(inserted.patientID).toBe('12345678');
+    expect(inserted.participantId).toBe('12345678');
     expect(inserted.sprec.sampleType).toBe('BLD');
     expect(inserted.sprec.primaryContainer).toBe('PED');
   });
@@ -76,13 +77,13 @@ describe('ImportService SPREC import', () => {
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet('Samples');
     sheet.addRow([
-      'patientID',
+      'participantId',
       'sampleType',
       'sampleOrigin',
       'extractionProtocol',
       'quantity',
       'quality',
-      'registerDate',
+      'registeredAt',
       'linkedProject',
       'sprec_matrix_type',
       'sprec_sample_type',
@@ -125,7 +126,7 @@ describe('ImportService SPREC import', () => {
     expect(samplesCollection.insertOne).toHaveBeenCalledTimes(1);
 
     const inserted = samplesCollection.insertOne.mock.calls[0][0];
-    expect(inserted.patientID).toBe('87654321');
+    expect(inserted.participantId).toBe('87654321');
     expect(inserted.sprec.sampleType).toBe('SER');
     expect(inserted.sprec.primaryContainer).toBe('SST');
   });
@@ -133,7 +134,7 @@ describe('ImportService SPREC import', () => {
   it('mapeia a ontologia SPREC completa preservando os 7 eixos', async () => {
     const csvPath = path.join(tempDir, 'samples-sprec-complete.csv');
     const csvContent = [
-      'patientID,sampleType,sampleOrigin,extractionProtocol,quantity,quality,registerDate,linkedProject,tcle_id,sprec_matrix_type,sprec_sample_type,sprec_primary_container,sprec_pre_centrifugation,sprec_centrifugation,sprec_second_centrifugation,sprec_post_centrifugation_delay,sprec_long_term_storage',
+      'participantId,sampleType,sampleOrigin,extractionProtocol,quantity,quality,registeredAt,linkedProject,consentTemplateId,sprec_matrix_type,sprec_sample_type,sprec_primary_container,sprec_pre_centrifugation,sprec_centrifugation,sprec_second_centrifugation,sprec_post_centrifugation_delay,sprec_long_term_storage',
       '11223344,PLASMA,VENOUS_BLOOD,TUBE_EDTA,2.5,GOOD,2026-03-03,Projeto Ontologia,tcle-ontology-1,fluid,BLD,PED,A,B,C,D,E',
     ].join('\n');
 
@@ -159,14 +160,14 @@ describe('ImportService SPREC import', () => {
       postCentrifugationDelay: 'D',
       longTermStorage: 'E',
     });
-    expect(inserted.tcle_id).toBe('tcle-ontology-1');
-    expect(inserted.release_status).toBe('AVAILABLE');
+    expect(inserted.consentTemplateId).toBe('tcle-ontology-1');
+    expect(inserted.releaseStatus).toBe('AVAILABLE');
   });
 
   it('preserva quality_score/category externos como sugestão não canônica', async () => {
     const csvPath = path.join(tempDir, 'samples-external-quality.csv');
     const csvContent = [
-      'patientID,sampleType,sampleOrigin,extractionProtocol,quantity,quality,quality_score,quality_category,registerDate,linkedProject,sprec_matrix_type,sprec_sample_type,sprec_primary_container,sprec_pre_centrifugation,sprec_centrifugation,sprec_second_centrifugation,sprec_post_centrifugation_delay,sprec_long_term_storage',
+      'participantId,sampleType,sampleOrigin,extractionProtocol,quantity,quality,quality_score,quality_category,registeredAt,linkedProject,sprec_matrix_type,sprec_sample_type,sprec_primary_container,sprec_pre_centrifugation,sprec_centrifugation,sprec_second_centrifugation,sprec_post_centrifugation_delay,sprec_long_term_storage',
       '12345678,PLASMA,VENOUS_BLOOD,TUBE_EDTA,1.5,GOOD,100,A,2026-01-01,Projeto QA,fluid,BLD,PED,X,A,A,A,C',
     ].join('\n');
 
@@ -180,10 +181,10 @@ describe('ImportService SPREC import', () => {
 
     expect(result.success).toBe(1);
     const inserted = samplesCollection.insertOne.mock.calls[0][0];
-    expect(inserted.quality_score).toBeNull();
-    expect(inserted.quality_category).toBe('');
-    expect(inserted.release_status).toBe('QUARANTINE');
-    expect(inserted.external_quality_assessment).toMatchObject({
+    expect(inserted.rcsScore).toBeNull();
+    expect(inserted.scoreBasedGrade).toBe('');
+    expect(inserted.releaseStatus).toBe('QUARANTINE');
+    expect(inserted.externalQualityAssessment).toMatchObject({
       score: 100,
       category: 'A',
       source: 'external-import',
