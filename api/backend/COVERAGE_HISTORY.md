@@ -28,6 +28,18 @@ fresh the same day in the fix-bugs loop, see that session's handoff). The
 2026-07-14 reconcile as "not yet triaged" is gone in this run — resolved
 incidentally by an intervening fix, no issue was needed.
 
+**Slice (2026-07-21):** `src/services/hl7.service.js`, 73.45% lines /
+47.15% branches → 100% lines / 81.81% branches, extended
+`tests/unit/hl7.service.unit.test.js` (47 → 91 tests). Added coverage
+for the three previously-untested async top-level generators —
+`generateHL7v2Message`, `generateFHIRResource`, `generateCDA` — for
+their success paths (segment/resource assembly, optional-field
+branches like loincCode/accessionNumber/barcode/registeredAt/resultValue
+presence-absence) and their `catch`-and-rethrow error paths (forced via
+`vi.spyOn` on an internal helper to throw). No product bugs found; the
+remaining ~18% branch gap is deep optional-field permutations in the CDA
+XML template not worth chasing further for a bug-fixing return.
+
 **Slice (2026-07-13):** `src/workers/neo4jProjection.worker.js`, 65.95% →
 89.36% lines (69.23% branches), extended existing
 `tests/unit/neo4jProjection.worker.test.js` (2 → 7 tests) across two

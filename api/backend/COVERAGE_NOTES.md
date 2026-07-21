@@ -151,7 +151,7 @@ src/services/patient.service.js                  70.64 / 60.63
 src/models/PatientConsent.js                      70.83 / 85.24
 src/services/mqtt-telemetry.service.js            71.42 / 78.09   (issue #160 — HMAC bypass bug)
 src/infrastructure/middleware/auth.js             71.66 / 68.18
-src/services/hl7.service.js                       73.45 / 47.15
+src/services/hl7.service.js                       100.0 / 81.81  (covered — see history archive)
 src/controllers/sensor.controller.js              75.29 / 68.18
 src/utils/fieldEncryption.js                      76.19 / 69.56
 src/infrastructure/persistence/mongo/MongoAuditRepository.js 76.66 / 84.61

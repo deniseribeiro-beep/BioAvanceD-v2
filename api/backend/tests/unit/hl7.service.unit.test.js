@@ -417,6 +417,154 @@ describe('HL7Service.escapeXML', () => {
   });
 });
 
+describe('HL7Service.generateHL7v2Message', () => {
+  const sampleFile = {
+    orderNumber: 'ORD-1',
+    fileType: 'PDF',
+    fileName: 'report.pdf',
+    resultStatus: 'F'
+  };
+  const sample = { _id: 'SAMPLE1', sampleType: 'PLASMA' };
+
+  it('assembles MSH/PID/SPM/OBR/OBX segments joined by \\r', async () => {
+    const message = await hl7Service.generateHL7v2Message(null, sampleFile, sample, '12345678');
+    const segments = message.split('\r');
+    expect(segments).toHaveLength(5);
+    expect(segments[0]).toMatch(/^MSH\|/);
+    expect(segments[1]).toMatch(/^PID\|/);
+    expect(segments[2]).toMatch(/^SPM\|/);
+    expect(segments[3]).toMatch(/^OBR\|/);
+    expect(segments[4]).toMatch(/^OBX\|/);
+  });
+
+  it('propagates errors from a failing segment builder', async () => {
+    const spy = vi.spyOn(hl7Service, 'buildOBX').mockImplementation(() => {
+      throw new Error('boom');
+    });
+    await expect(
+      hl7Service.generateHL7v2Message(null, sampleFile, sample, '12345678')
+    ).rejects.toThrow('boom');
+    spy.mockRestore();
+  });
+});
+
+describe('HL7Service.generateFHIRResource', () => {
+  const baseSampleFile = {
+    _id: 'FILE1',
+    fileType: 'PDF',
+    fileName: 'report.pdf',
+    resultStatus: 'F',
+    uploadDate: new Date('2026-01-01T00:00:00.000Z'),
+    accessionNumber: 'ACC-1'
+  };
+  const baseSample = { _id: 'SAMPLE1', sampleType: 'PLASMA', registeredAt: new Date('2026-01-01T00:00:00.000Z'), barcode: 'BAR-1' };
+
+  it('builds a Bundle with DiagnosticReport, Observation, and Specimen entries', async () => {
+    const bundle = await hl7Service.generateFHIRResource(null, baseSampleFile, baseSample, '12345678');
+    expect(bundle.resourceType).toBe('Bundle');
+    expect(bundle.entry).toHaveLength(3);
+    expect(bundle.entry[0].resource.resourceType).toBe('DiagnosticReport');
+    expect(bundle.entry[1].resource.resourceType).toBe('Observation');
+    expect(bundle.entry[2].resource.resourceType).toBe('Specimen');
+  });
+
+  it('uses loincCode-based coding when present', async () => {
+    const bundle = await hl7Service.generateFHIRResource(
+      null,
+      { ...baseSampleFile, loincCode: '12345-6' },
+      baseSample,
+      '12345678'
+    );
+    expect(bundle.entry[0].resource.code.coding[0].code).toBe('12345-6');
+  });
+
+  it('falls back to generic LAB coding and empty identifier when loincCode/accessionNumber absent', async () => {
+    const { accessionNumber, ...sampleFileWithoutAccession } = baseSampleFile;
+    const bundle = await hl7Service.generateFHIRResource(null, sampleFileWithoutAccession, baseSample, '12345678');
+    expect(bundle.entry[0].resource.code.coding[0].code).toBe('LAB');
+    expect(bundle.entry[0].resource.identifier).toEqual([]);
+  });
+
+  it('propagates errors thrown while building the resource', async () => {
+    const spy = vi.spyOn(hl7Service, 'mapStatusToFHIR').mockImplementation(() => {
+      throw new Error('fhir boom');
+    });
+    await expect(
+      hl7Service.generateFHIRResource(null, baseSampleFile, baseSample, '12345678')
+    ).rejects.toThrow('fhir boom');
+    spy.mockRestore();
+  });
+});
+
+describe('HL7Service.generateCDA', () => {
+  const sampleFile = {
+    _id: 'FILE1',
+    fileName: 'report.pdf',
+    fileType: 'PDF',
+    fileSize: 1024,
+    resultStatus: 'F',
+    uploadDate: new Date('2026-01-01T00:00:00.000Z')
+  };
+  const sample = { _id: 'SAMPLE1', sampleType: 'PLASMA' };
+
+  it('generates a well-formed CDA XML document with core fields', async () => {
+    const cda = await hl7Service.generateCDA(null, sampleFile, sample, '12345678');
+    expect(cda).toContain('<?xml version="1.0" encoding="UTF-8"?>');
+    expect(cda).toContain('<ClinicalDocument');
+    expect(cda).toContain('extension="12345678"');
+    expect(cda).toContain('File: report.pdf');
+  });
+
+  it('includes optional loincCode/procedureCode/interpretation content when present', async () => {
+    const cda = await hl7Service.generateCDA(
+      null,
+      { ...sampleFile, loincCode: '99999-9', procedureCode: 'PROC-1', interpretation: 'HIGH' },
+      sample,
+      '12345678'
+    );
+    expect(cda).toContain('LOINC Code: 99999-9');
+    expect(cda).toContain('Procedure Code: PROC-1');
+    expect(cda).toContain('Interpretation: HIGH');
+    expect(cda).toContain('interpretationCode code="H"');
+  });
+
+  it('escapes unsafe characters in the file name via escapeXML', async () => {
+    const cda = await hl7Service.generateCDA(null, { ...sampleFile, fileName: '<r&d>' }, sample, '12345678');
+    expect(cda).toContain('&lt;r&amp;d&gt;');
+    expect(cda).not.toContain('<r&d>');
+  });
+
+  it('embeds resultValue as a PQ value with unit when present', async () => {
+    const cda = await hl7Service.generateCDA(
+      null,
+      { ...sampleFile, resultValue: 42, unitOfMeasure: 'mg/dL' },
+      sample,
+      '12345678'
+    );
+    expect(cda).toContain('<value xsi:type="PQ" value="42" unit="mg/dL"/>');
+  });
+
+  it('omits optional CDA content and specimen barcode/collection date when absent', async () => {
+    const cda = await hl7Service.generateCDA(null, sampleFile, { sampleType: 'PLASMA' }, '12345678');
+    expect(cda).not.toContain('LOINC Code:');
+    expect(cda).not.toContain('Procedure Code:');
+    expect(cda).not.toContain('Interpretation:');
+    expect(cda).not.toContain('interpretationCode');
+    expect(cda).not.toContain('Barcode:');
+    expect(cda).not.toContain('Collection Date:');
+  });
+
+  it('propagates errors thrown while building the document', async () => {
+    const spy = vi.spyOn(hl7Service, 'formatHL7DateTime').mockImplementation(() => {
+      throw new Error('cda boom');
+    });
+    await expect(
+      hl7Service.generateCDA(null, sampleFile, sample, '12345678')
+    ).rejects.toThrow('cda boom');
+    spy.mockRestore();
+  });
+});
+
 describe('HL7Service.formatFileSize', () => {
   it('returns "0 bytes" for zero, null, or undefined', () => {
     expect(hl7Service.formatFileSize(0)).toBe('0 bytes');
