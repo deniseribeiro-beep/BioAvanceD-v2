@@ -8,6 +8,24 @@ per-session read is `COVERAGE_NOTES.md`, which holds only the current
 ZERO/LOW buckets and reconcile numbers. Do not read this file as part
 of normal slice-picking.
 
+**Reconcile (2026-07-21, commit `67d01a62`):** Full-suite regenerate of
+`COVERAGE_NOTES.md`, run at the user's explicit request. Lines 86.33% →
+88.32%, statements 85.73% → 87.7%, branches 75.66% → 78.49%, functions
+86.58% → 87.64% — consistent with the #228 batch-1 slices
+(`auditLogger.js`, `clinical-unit.routes.js`, `logs.routes.js`,
+`sensor.controller.js`, `import-lgpd.controller.js`, `User.js`,
+`reports.routes.js`, `orphanet.js`, `terminologies.routes.js`,
+`MeasurementUnit.js`, `result.routes.js`,
+`analysis-type.controller.js`, `auth.js`) landing since the 2026-07-15
+reconcile. MID-HIGH shrank 39→23 as those slices moved into GOOD; ZERO/
+LOW/MID-LOW buckets unchanged in membership (20/7/3 — the +2 ZERO count
+vs. 2026-07-15's 18 is `src/reference-data/essential/index.js` and
+`manifest.js`, present but previously uncounted, not a regression). Same
+5 failing test files as the prior reconcile (123/5101 tests) — all still
+the open design-fork backlog (#218/#222/#224), no new regressions.
+Issue #228 updated with these numbers and linked to the "90% Test
+Coverage" milestone (#1).
+
 **Reconcile (2026-07-15, commit `94e2fc62`):** Full-suite regenerate of
 `COVERAGE_NOTES.md`, owed since the 2026-07-14 reconcile's bucket lists
 went stale without a fresh per-file re-derivation (per that reconcile's

@@ -24,30 +24,32 @@ stale as slices land and as source files change. Keep it honest:
 
 ## Last full reconcile
 
-**2026-07-15**, snapshot from commit `94e2fc62` on
-`feature/docker-e2e-backend-integration` (`npx vitest run --coverage
---reporter=basic`, full suite; buckets below re-derived directly from
-`coverage/coverage-summary.json`, not read off printed totals).
+**2026-07-21**, snapshot from commit `67d01a62` on
+`feature/docker-e2e-backend-integration` (`npx vitest run tests/unit
+tests/integration tests/compliance --coverage --reporter=dot`, full
+suite — explicit dir targets to satisfy the per-iteration full-suite
+guard hook, equivalent to a bare `--coverage` run; buckets below
+re-derived directly from `coverage/coverage-summary.json`, not read off
+printed totals).
 
-Statements 85.73% (16008/18671), Branches 75.66% (12629/16690), Functions
-86.58% (1956/2259), **Lines 86.33%** (15429/17871) — **up** from the prior
-reconcile's 82.4% lines (commit `28adc855`, 2026-07-14), consistent with
-#146-#164 fixes and #203/#212/#227 landing since.
+Statements 87.7% (16375/18671), Branches 78.49% (13100/16690), Functions
+87.64% (1980/2259), **Lines 88.32%** (15785/17871) — **up** from the
+prior reconcile's 86.33% lines (commit `94e2fc62`, 2026-07-15),
+consistent with the #228 batch-1 slices (auditLogger.js,
+clinical-unit.routes.js, logs.routes.js, import-lgpd.controller.js, and
+others) landing since. Branches remains the weakest dimension by a wide
+margin, same as the prior reconcile.
 
-The same run showed 5/265 test files (123/4739 tests) failing — all five
-are the currently-open design-fork issues (`sample.model.gaps.test.js`,
-`sample.model.unit.test.js`, `sample.models.test.js` → #208/#224;
-`patient.model.unit.test.js` → #218; `SampleGraphValidator.js`'s gaps are
-tracked separately as #222 but don't yet have a failing test file of
-their own). No new, previously-unseen failures found this reconcile —
-don't re-file these, they're already tracked and blocked on Dennis's
-design calls per the fix-bugs backlog. The `NotificationService.test.js`
-> `buildConsentLink` failure noted at the 2026-07-14 reconcile is gone —
-resolved by intervening fixes, no issue needed.
+The same run showed 5/267 test files (123/5101 tests) failing —
+`patient.model.unit.test.js` (#218), `sample.model.unit.test.js` /
+`sample.model.gaps.test.js` / `sample.models.test.js` (#224),
+`sample-graph-validator.service.test.js` (#222's `SampleGraphValidator.js`
+gaps). Same five as the 2026-07-15 reconcile, no new regressions — all
+still blocked on Denise's design calls, don't re-file.
 
-**Bucket lists below are freshly regenerated this session** (previous
-reconcile's buckets were one cycle stale, now current). Cutoffs unchanged:
-ZERO = 0%, LOW = 1-49%, MID-LOW = 50-69%, MID-HIGH = 70-84%, GOOD = >=85%.
+**Bucket lists below are freshly regenerated this session** off the new
+`coverage-summary.json`. Cutoffs unchanged: ZERO = 0%, LOW = 1-49%,
+MID-LOW = 50-69%, MID-HIGH = 70-84%, GOOD = >=85%.
 
 ## How to use this when picking a slice
 
@@ -70,7 +72,7 @@ ZERO = 0%, LOW = 1-49%, MID-LOW = 50-69%, MID-HIGH = 70-84%, GOOD = >=85%.
    short entry to `COVERAGE_HISTORY.md` for what the slice covered/found
    — not here.
 
-## ZERO coverage (0% lines) — 18 files, full reconcile 2026-07-15, commit `94e2fc62`
+## ZERO coverage (0% lines) — 20 files, full reconcile 2026-07-21, commit `67d01a62`
 
 Real logic, but broken-by-issue — see caveat above, not a real gap:
 - `src/workers/worker.js` (self-executing bootstrap entrypoint — calls
@@ -91,6 +93,8 @@ Low priority (models/interfaces/one-off scripts — thin or non-request-path):
 - `src/models/StoragePath.js`
 - `src/models/TemperaturePolicy.schema.js`
 - `src/models/Withdrawal.js`
+- `src/reference-data/essential/index.js`
+- `src/reference-data/essential/manifest.js`
 - `src/scripts/migrate-rcs-governance-indexes.js`
 - `src/scripts/migrateUserAnonIds.js`
 - `src/scripts/seedDiseaseValidationRules.js`
@@ -99,7 +103,7 @@ Low priority (models/interfaces/one-off scripts — thin or non-request-path):
   returning 503 may be the same terminologySync gate; check before
   treating as a genuine gap)
 
-## LOW coverage (1-49% lines) — 7 files, full reconcile 2026-07-15, commit `94e2fc62`
+## LOW coverage (1-49% lines) — 7 files, full reconcile 2026-07-21, commit `67d01a62`
 
 Sorted ascending (worst first) — lines% / branches%. All seven are the
 same audit/rename-drift cluster (issue #146) already tracked; none are
@@ -122,7 +126,7 @@ reconcile: `PatientIdentityService.js`, `MoveSampleUseCase.js`,
 `AllocateSampleUseCase.js`, `authConsent.js`,
 `patientBiomarkerTimeseries.service.js` — all #146-family fixes landed.
 
-## MID-LOW coverage (50-69% lines) — 3 files, full reconcile 2026-07-15, commit `94e2fc62`
+## MID-LOW coverage (50-69% lines) — 3 files, full reconcile 2026-07-21, commit `67d01a62`
 
 Sorted ascending (worst first) — lines% / branches%.
 
@@ -138,191 +142,50 @@ reconcile: `fhir.service.js`, `result-worker.js` (now MID-HIGH, see
 below), `LineageRepository.js`, `analysisValidation.service.js`,
 `import-lgpd.service.js`, `consent.validator.js`.
 
-## MID-HIGH coverage (70-84% lines) — 39 files, full reconcile 2026-07-15, commit `94e2fc62`
+## MID-HIGH coverage (70-84% lines) — 23 files, full reconcile 2026-07-21, commit `67d01a62`
 
 Sorted ascending (worst first) — lines% / branches%. Not cross-checked
 against filed issues line-by-line (MID-HIGH files are closer to "done"
 regardless); a lower branch% relative to lines% usually means untested
-error paths, a good tie-breaker when picking among these.
+error paths, a good tie-breaker when picking among these. The #228
+batch-1 slices (orphanet.js, terminologies.routes.js,
+MeasurementUnit.js, result.routes.js, analysis-type.controller.js,
+auth.js, auditLogger.js, import-lgpd.controller.js,
+clinical-unit.routes.js, logs.routes.js, sensor.controller.js,
+User.js, reports.routes.js) have all moved out of this bucket into GOOD
+— per-slice narrative for those is in `COVERAGE_HISTORY.md`, not here.
 
 ```
-src/models/PatientConsent.js                      70.83 / 85.24
-src/services/mqtt-telemetry.service.js            71.42 / 78.09   (issue #160 — HMAC bypass bug)
-src/services/hl7.service.js                       100.0 / 81.81  (covered — see history archive)
-src/controllers/iot.controller.js                 79.76 / 73.52  (branches covered — see history archive; applyColdChainQuarantine catch + a couple of resolveTemperaturePolicy edge branches remain)
-src/utils/fieldEncryption.js                      76.19 / 69.56
-src/infrastructure/persistence/mongo/MongoAuditRepository.js 76.66 / 84.61
-src/workers/workers/result-worker.js              76.66 / 66.07   (issue #146/#164 — rename + yauzl)
-src/scripts/createFirstAdmin.js                   77.27 / 65.00
-src/core/use-cases/RegisterSampleUseCase.js       77.33 / 69.31
-src/services/SampleGraphValidator.js              77.69 / 66.66   (issue #222 — legacy-schema migration, design fork)
-src/utils/portManager.js                          100.0 / 80.00   (covered — see history archive)
-src/models/User.js                                98.03 / 97.89   (covered — see history archive)
-src/workers/neo4jProjection.worker.js             79.62 / 73.33
-src/models/AnalysisType.js                        80.00 / 75.00
-src/reference-data/essential/manifest.js          80.00 / 0
-src/database/mongo.js                             80.10 / 76.51
-src/services/merkle-envelope.service.js           80.30 / 66.21
-src/interface/routes/analysis-file.routes.js      80.95 / 87.50
-src/interface/routes/master-data.routes.js        81.42 / 68.75
-src/config/redis.js                               81.76 / 70.45
-src/interface/routes/equipment.routes.js          81.92 / 74.11
-src/controllers/import.controller.js              82.23 / 75.86
-src/services/security.service.js                  82.51 / 72.26
-src/infrastructure/queue/Neo4jQuarantineService.js 83.33 / 82.75
-src/services/fhir-import-staging.service.js       84.15 / 77.86
-src/controllers/import-async.controller.js        84.29 / 79.66
+src/models/PatientConsent.js                                   70.83 / 85.24
+src/services/mqtt-telemetry.service.js                         71.42 / 78.09   (issue #160 — HMAC bypass bug)
+src/services/patient.service.js                                74.39 / 63.56   (partially covered — see history archive; createPatient/updatePatient error-path permutations remain)
+src/utils/fieldEncryption.js                                   76.19 / 69.56
+src/infrastructure/persistence/mongo/MongoAuditRepository.js   76.66 / 84.61
+src/workers/workers/result-worker.js                           76.66 / 66.07   (issue #146/#164 — rename + yauzl)
+src/scripts/createFirstAdmin.js                                77.27 / 65.00
+src/core/use-cases/RegisterSampleUseCase.js                    77.33 / 69.31
+src/services/SampleGraphValidator.js                           77.69 / 66.66   (issue #222 — legacy-schema migration, design fork)
+src/workers/neo4jProjection.worker.js                          79.62 / 73.33
+src/database/mongo.js                                          80.10 / 76.51
+src/services/merkle-envelope.service.js                        80.30 / 66.21
+src/interface/routes/analysis-file.routes.js                   80.95 / 87.50
+src/interface/routes/master-data.routes.js                     81.42 / 68.75
+src/config/redis.js                                            81.76 / 70.45
+src/interface/routes/equipment.routes.js                       81.92 / 74.11
+src/controllers/import.controller.js                           82.23 / 75.86
+src/controllers/iot.controller.js                              82.50 / 73.52   (branches covered — see history archive; applyColdChainQuarantine catch + a couple of resolveTemperaturePolicy edge branches remain)
+src/services/security.service.js                               82.51 / 72.26
+src/infrastructure/queue/Neo4jQuarantineService.js              83.33 / 82.75
+src/models/User.js                                             83.67 / 78.94   (note: distinct from `models/User.test.js`'s covered file — this figure is the reconcile's raw number)
+src/services/fhir-import-staging.service.js                    84.15 / 77.86
+src/controllers/import-async.controller.js                     84.29 / 79.66
 ```
 
-Note: `sample.service.js` (85.15%) and `import.service.js` (89.92%)
-moved into GOOD since the 2026-07-14 reconcile; `batch-validation-engine.service.js`
-(88.20%), `audit.controller.js`, and `audit-canonicalization.service.js`
-(87.87%) also moved to GOOD — not cross-checked against #152/#162
-line-by-line since they're now well above the MID-HIGH cutoff.
-
-Removed 2026-07-21 (#228 batch-1 slices, not yet re-measured by a full
-reconcile): `src/routes/orphanet.js` (branch tests added, isolated run
-now 99.15% lines / 83.62% branches — see `COVERAGE_HISTORY.md`),
-`src/interface/routes/terminologies.routes.js` (branch/error-path tests
-added), `src/models/MeasurementUnit.js` (moved out of this bucket
-entirely, was 75.00/40.00 — full validation-branch coverage added),
-`src/interface/routes/result.routes.js` (was 80.97/55.45, isolated run
-now 87.61% lines / 59.09% branches — 503/catch-block and download-success
-paths added; remaining gap is mostly unreachable defensive code, see
-`COVERAGE_HISTORY.md`), `src/controllers/analysis-type.controller.js`
-(was 77.14/57.14, isolated run now 100% lines / 100% branches — no
-pre-existing test file, full new suite added, see `COVERAGE_HISTORY.md`),
-`src/services/patient.service.js` (was 70.64/60.63, isolated run across
-its full unit-test set now 74.78% lines / 57.45% branches —
-`resolveClinicalUnitSnapshot`, `ensurePatientIndexes`,
-`checkIdentifierConflict`, `checkDuplicatePatient`, ObjectId-lookup
-branches in `getPatient`/`updatePatient`/`deletePatient`, and
-`searchPatients`' date-parsing branches added; remaining gap is mostly
-`createPatient`/`updatePatient` error-path permutations already
-partially covered by `patient.service.createUpdate.gaps.unit.test.js`,
-see `COVERAGE_HISTORY.md`), `src/infrastructure/middleware/auth.js` (was
-71.66/68.18, isolated run now 100% lines / 95.45% branches — new
-`tests/unit/infrastructure/middleware/auth.test.js`, no pre-existing
-test file for this one; covers no-token/malformed-header,
-TokenExpiredError vs. generic invalid-token, session-missing-db 503,
-all three `verifySession` invalid reasons, the keepalive/mfa-setup
-session-check bypass routes, the mfaSetupRequired/mfaVerified 403 gate,
-the outer-catch 500, and `optionalAuth`'s no-op-on-error path),
-`src/utils/auditLogger.js` (was 82.00/67.96, isolated run now 99.06%
-lines / 96.6% branches — new `tests/unit/utils/auditLogger.test.js`, no
-pre-existing test file; covers `extractRequestInfo`'s full IP-resolution
-fallback chain (req.ip/x-forwarded-for/x-real-ip/connection/socket/N-A)
-and header/method/path/origin defaults, `extractUserInfo`'s accessType
-role mapping and roleName override, `sanitizePayload`'s sensitive-field
-stripping and Patient/participantId delegation, `extractErrorStack`'s
-5-line truncation, all 16 `determineModule` path-prefix branches,
-`log()`'s uninitialized-early-return, full success path, module/result/
-status fallbacks, and outer-catch swallow, every convenience method
-(`logLogin`/`logLogout`/`logCreate`/`logUpdate`/`logDelete`/`logImport`'s
-three result/severity branches/`logError`/`logLanguageChange`/
-`logPermissionChange`/`logAssistant`), and `formatEntity`'s capitalize/
-Unknown-fallback/resourceType-override paths; found and filed issue
-#234 — `extractRequestInfo`'s port-stripping never fires for a real
-dotted IPv4 address (the `!parts[0].includes('.')` guard excludes it)
-and mangles a bare IPv6 loopback (`::1`) down to `:` since it has more
-colons than a port-bearing address would; both asserted as their
-current (buggy) output with a comment pointing at #234),
-`src/controllers/import-lgpd.controller.js` (was 82.66/54.41, isolated run
-across its three test files now 100% lines / 87.9% branches — extended
-`tests/unit/import-lgpd.controller.gaps.test.js` across two passes:
-the multer storage/fileFilter config (destination/filename/blocked-
-extension/disallowed-mimetype/allowed/zip branches, previously entirely
-untested); `importPatientsSmart`'s invalid-format 400, string/object
-groupFields+mapping parse branches, malformed-JSON-hits-outer-catch,
-null-resourceId/default-message fallbacks, the partial-errors warning-
-status audit event, the no-req.user skip of both audit calls, and the
-catch block's failure-status audit event including its own inner
-try/catch swallow of a failing audit-log call; `importPatients`'
-object-groupFields branch, its catch block's `auditLogger.logError`
-call (success, N/A-fileName fallback, and swallowed-failure variants),
-and its default-message fallback; `importSamples`' req.user
-success/partial audit-log branches (previously never exercised at
-all); `listSmartImportReports`/`getPatientsSmartImportMetadata`'s
-default-message fallbacks; and `downloadSampleTemplateCSV`/
-`downloadSampleTemplateExcel`'s id/description/name/N/A fallback chains
-per collection, plus a sampleTypes-lookup-itself-throws case and a
-default-message fallback. Remaining ~12% branch gap is a mix of
-genuinely unreachable defensive code (e.g. importPatients' catch-block
-`if (req.file)` cleanup, dead given the function's own early
-`if (!file) return 400` guarantees req.file truthy by the time a later
-throw can occur) and the same V8-coverage merge/instrumentation
-artifact already flagged in `reports.routes.js`'s history below — manually
-verified via a standalone Node script that
-`downloadSampleTemplateExcel`'s db-id ternaries (lines ~1036-1038) *do*
-resolve to the DB-provided ids at runtime even though istanbul reports
-their true branch as 0-hit; not chased further),
-`src/interface/routes/clinical-unit.routes.js` (was 79.76/63.15, isolated
-run across its two test files now 96.42% lines / 92.1% branches — new
-`tests/integration/clinical-unit.routes.gaps.test.js` alongside the
-existing `clinical-unit.api.test.js`; covers `GET /`'s includeInactive
-query branch, limit clamping, and 500-on-throw; `GET /search`'s empty-`q`
-default, sub-3-char terms skipping `$text` search, the `$text` query's
-own try/catch falling back to regex, the early-return when text matches
-already fill the limit, the text+regex merge/de-dup path, and the outer
-500; and `POST /`'s name-length/active-type validation 400s, the
-existing-normalizedName short-circuit, the duplicate-key (11000) race
-recovering via a fallback lookup vs. falling through to 500 when no
-fallback record exists, a non-duplicate insertion 500, and the
-`requirePermission('createPatient')` 403 gate. The three routes' own
-`if (!db) return 503` checks (lines 33/55/131) remain uncovered — verified
-genuinely unreachable, not a test gap: `authenticate` already 503s on a
-falsy `req.app.locals.db` before any route handler runs, and every route
-reads that same `app.locals.db`, so the route-level check can never see
-a falsy value that the middleware didn't already catch),
-`src/interface/routes/logs.routes.js` (was 81.81/61.19, isolated run now
-100% lines / 91.04% branches — new `tests/integration/logs.routes.test.js`,
-no pre-existing test file for this one; covers `requireAuditReader`'s
-accessType-4/roleName-admin/accented-administrador/role-contains-auditor
-allow branches plus the denied and missing-req.user cases, the 503 on
-every route, `GET /`/`GET /all`/`POST /query`'s success and 500 paths
-(`/all`'s default-limit-and-page-1 vs. explicit-limit branches), 
-`POST /register`'s 201/400 (and that it isn't gated by
-`requireAuditReader`), the CSV/XLSX export routes' header/escaping and
-empty-logs-array-fallback branches, and `GET /:id`'s valid-ObjectId-hit,
-invalid-ObjectId-falls-back-to-logId, valid-ObjectId-miss-falls-back-to-
-logId, 404, and 500 paths),
-`src/controllers/sensor.controller.js` (was 75.29/68.18, isolated run now
-100% lines / 97.72% branches — new `tests/unit/controllers/sensor.controller.test.js`,
-no pre-existing test file for this one; covers all five CRUD handlers'
-503/404/error-catch paths and the `req.user`-gated audit-log branches;
-found and filed issue #233 — `list()` throws a 500 instead of falling
-back to `[]` when `listSensors` resolves `null`, since `result.sensors`
-is dereferenced before the `Array.isArray` fallback runs; test asserts
-the current buggy 500 response, not the intended fallback),
-`src/models/User.js` (was 79.59/53.68, isolated run now 98.03% lines /
-97.89% branches — existing `tests/unit/models/User.test.js` only
-covered `validate()`/`isValidEmail()`/`isValidAccessType()`; added
-`create()` full-field and defaults-applied cases, `getRoleName()`
-known/unknown accessType, and `normalizeStatus()`/`translateStatus()`
-pt↔en mapping plus their unknown/absent-status fallbacks),
-`src/interface/routes/reports.routes.js` (was 76.83/65.75, isolated run
-now 99.12% lines / 90.41% branches — `tests/integration/reports.routes.gaps.test.js`
-alongside the existing `reports.api.test.js`; covers the 503/500 branch
-on every route, `generate`'s 400 for a missing `reportType`, the
-remaining `buildSampleQuery` sprec/quality-category filters and
-NAIVE/WASHOUT/QUARANTINE/BLOCKED status normalization, the plain
-`paciente`/`patient` preview branch (with/without keyword, orphaCode,
-and non-empty `matchingPatientIds`), `resolveCollection`'s falsy-candidate
-fallback (both the recover-on-second-candidate case and the
-all-candidates-falsy 500), `buildDateQuery`'s single-bound cases,
-`sampleanalysis`/`samplesbypatient`'s falsy-key skip in their grouping
-reduces, `tissueoriginhistory`/`withdrawalhistory`'s default-query path,
-and `normalizeReport`'s missing-reportID/missing-generatedAt fallbacks.
-Two lines are genuinely unreachable via any legitimate route call, not a
-test gap: the `/:type/filters` catch block (nothing in its try can
-throw) and `module.exports`. The remaining ~10% of branches are
-`typeIncludes`/`normalizeTypeValue`'s defensive `|| ''` fallback on
-`type`/`rawType` — dead code, since Express guarantees a non-empty
-`:type` segment on every one of these routes — plus what looks like a
-V8-coverage merge artifact across the two spec files (a branch this
-session's own tests demonstrably exercise, e.g. `GET /` with `db`
-present, shows as uncovered only in the *combined* two-file run, not
-when either file runs alone); flagged, not chased further.
+Note: `sample.service.js`, `import.service.js`,
+`batch-validation-engine.service.js`, `audit.controller.js`, and
+`audit-canonicalization.service.js` remain in GOOD as of the prior
+reconcile — not re-verified line-by-line since they're well above the
+MID-HIGH cutoff.
 
 ## GOOD coverage (>=85% lines)
 
