@@ -212,15 +212,34 @@ all three `verifySession` invalid reasons, the keepalive/mfa-setup
 session-check bypass routes, the mfaSetupRequired/mfaVerified 403 gate,
 the outer-catch 500, and `optionalAuth`'s no-op-on-error path),
 `src/controllers/import-lgpd.controller.js` (was 82.66/54.41, isolated run
-across its three test files now 92.66% lines / 68.37% branches — new
-`tests/unit/import-lgpd.controller.gaps.test.js` covers the multer
-storage/fileFilter config (destination/filename/blocked-extension/
-disallowed-mimetype/allowed/zip branches, previously entirely untested)
-and `importPatientsSmart`'s invalid-format 400, string groupFields/mapping
-JSON-parse success and malformed-JSON-hits-outer-catch paths, the
-partial-errors warning-status audit event, the no-req.user skip of both
-audit calls, and the catch block's failure-status audit event including
-its own inner try/catch swallow of a failing audit-log call),
+across its three test files now 100% lines / 87.9% branches — extended
+`tests/unit/import-lgpd.controller.gaps.test.js` across two passes:
+the multer storage/fileFilter config (destination/filename/blocked-
+extension/disallowed-mimetype/allowed/zip branches, previously entirely
+untested); `importPatientsSmart`'s invalid-format 400, string/object
+groupFields+mapping parse branches, malformed-JSON-hits-outer-catch,
+null-resourceId/default-message fallbacks, the partial-errors warning-
+status audit event, the no-req.user skip of both audit calls, and the
+catch block's failure-status audit event including its own inner
+try/catch swallow of a failing audit-log call; `importPatients`'
+object-groupFields branch, its catch block's `auditLogger.logError`
+call (success, N/A-fileName fallback, and swallowed-failure variants),
+and its default-message fallback; `importSamples`' req.user
+success/partial audit-log branches (previously never exercised at
+all); `listSmartImportReports`/`getPatientsSmartImportMetadata`'s
+default-message fallbacks; and `downloadSampleTemplateCSV`/
+`downloadSampleTemplateExcel`'s id/description/name/N/A fallback chains
+per collection, plus a sampleTypes-lookup-itself-throws case and a
+default-message fallback. Remaining ~12% branch gap is a mix of
+genuinely unreachable defensive code (e.g. importPatients' catch-block
+`if (req.file)` cleanup, dead given the function's own early
+`if (!file) return 400` guarantees req.file truthy by the time a later
+throw can occur) and the same V8-coverage merge/instrumentation
+artifact already flagged in `reports.routes.js`'s history below — manually
+verified via a standalone Node script that
+`downloadSampleTemplateExcel`'s db-id ternaries (lines ~1036-1038) *do*
+resolve to the DB-provided ids at runtime even though istanbul reports
+their true branch as 0-hit; not chased further),
 `src/controllers/sensor.controller.js` (was 75.29/68.18, isolated run now
 100% lines / 97.72% branches — new `tests/unit/controllers/sensor.controller.test.js`,
 no pre-existing test file for this one; covers all five CRUD handlers'
