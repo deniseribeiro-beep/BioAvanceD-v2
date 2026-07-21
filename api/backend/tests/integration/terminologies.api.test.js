@@ -331,6 +331,256 @@ describe('GET /api/terminologies - Orphadata live fallback (fresh module, base U
   });
 });
 
+describe('GET /api/terminologies - additional branch coverage', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('returns 500 when the terminologies collection throws', async () => {
+    const coll = createCollectionMock({
+      find: vi.fn().mockImplementation(() => { throw new Error('boom - mongo down'); }),
+      countDocuments: vi.fn().mockResolvedValue(0),
+    });
+    app.locals.db = createDbMock({ terminologies: coll });
+
+    const res = await request(app).get('/api/terminologies');
+    expect(res.status).toBe(500);
+    expect(res.body.success).toBe(false);
+    expect(res.body.error).toBe('Erro ao listar terminologias');
+  });
+
+  it('hits the code-prefix regex branch when q has an ORPHA: prefix and items already exist', async () => {
+    const coll = createCollectionMock({
+      find: vi.fn().mockReturnValue({ sort: vi.fn().mockReturnValue({ limit: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([FAKE_TERM]) }) }) }),
+      countDocuments: vi.fn().mockResolvedValue(1),
+    });
+    app.locals.db = createDbMock({ terminologies: coll });
+
+    const res = await request(app).get('/api/terminologies?q=ORPHA:123');
+    expect(res.status).toBe(200);
+    expect(res.body.data).toHaveLength(1);
+  });
+
+  it('does not query Orphadata when sistema is a non-ORPHA system and local db/redundancy are empty', async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const coll = createCollectionMock({
+      find: vi.fn().mockReturnValue({
+        sort: vi.fn().mockReturnValue({ limit: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }) }),
+        limit: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }),
+      }),
+      countDocuments: vi.fn().mockResolvedValue(0),
+    });
+    // cids/orphanet_diseases collections should not even be queried since
+    // hydrateFromLocalRedundancy's ORPHA-only block is skipped for sistema=OMIM.
+    const cidsColl = createCollectionMock({ find: vi.fn().mockReturnValue({ limit: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }) }) });
+    const orphaColl = createCollectionMock({ find: vi.fn().mockReturnValue({ limit: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }) }) });
+    app.locals.db = createDbMock({ terminologies: coll, cids: cidsColl, orphanet_diseases: orphaColl });
+
+    const res = await request(app).get('/api/terminologies?q=some-omim-term&sistema=OMIM');
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data).toEqual([]);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('hydrates from the local "cids" redundancy collection when it has a matching document', async () => {
+    const cidsDoc = {
+      ORPHA: 'ORPHA:777',
+      Descricao: 'Redundant CID Disease',
+      Codigos_CID10: 'X99.9',
+    };
+    const upsertedDoc = {
+      _id: 'redundancy-doc-id',
+      sistema: 'ORPHA',
+      codigo: 'ORPHA:777',
+      descricao: 'Redundant CID Disease',
+      label: 'Redundant CID Disease',
+      sinonimos: [],
+      aliases: [],
+      relacoes: { cid: 'X99.9', omim: '', orpha: 'ORPHA:777', hpo: '' },
+      ativo: true,
+      lang: 'pt',
+      sincronizadoEm: new Date(),
+    };
+
+    let findCallCount = 0;
+    const bulkWriteSpy = vi.fn().mockResolvedValue({ ok: 1 });
+    const coll = createCollectionMock({
+      find: vi.fn().mockImplementation(() => {
+        findCallCount += 1;
+        const docs = findCallCount >= 2 ? [upsertedDoc] : [];
+        return {
+          sort: vi.fn().mockReturnValue({ limit: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue(docs) }) }),
+        };
+      }),
+      countDocuments: vi.fn().mockResolvedValue(findCallCount >= 2 ? 1 : 0),
+      bulkWrite: bulkWriteSpy,
+    });
+    const cidsColl = createCollectionMock({
+      find: vi.fn().mockReturnValue({ limit: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([cidsDoc]) }) }),
+    });
+    const orphaColl = createCollectionMock({
+      find: vi.fn().mockReturnValue({ limit: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }) }),
+    });
+    app.locals.db = createDbMock({ terminologies: coll, cids: cidsColl, orphanet_diseases: orphaColl });
+
+    const res = await request(app).get('/api/terminologies?q=redundant');
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data).toHaveLength(1);
+    expect(res.body.data[0].codigo).toBe('ORPHA:777');
+    expect(bulkWriteSpy).toHaveBeenCalled();
+  });
+
+  it('falls back to the "orphanet_diseases" redundancy collection when cids has no matches', async () => {
+    const orphanetDoc = {
+      code: '888',
+      name: 'Orphanet-only Disease',
+    };
+    const upsertedDoc = {
+      _id: 'orphanet-doc-id',
+      sistema: 'ORPHA',
+      codigo: 'ORPHA:888',
+      descricao: 'Orphanet-only Disease',
+      label: 'Orphanet-only Disease',
+      sinonimos: [],
+      aliases: [],
+      relacoes: { cid: '', omim: '', orpha: 'ORPHA:888', hpo: '' },
+      ativo: true,
+      lang: 'pt',
+      sincronizadoEm: new Date(),
+    };
+
+    let findCallCount = 0;
+    const coll = createCollectionMock({
+      find: vi.fn().mockImplementation(() => {
+        findCallCount += 1;
+        const docs = findCallCount >= 2 ? [upsertedDoc] : [];
+        return {
+          sort: vi.fn().mockReturnValue({ limit: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue(docs) }) }),
+        };
+      }),
+      countDocuments: vi.fn().mockResolvedValue(findCallCount >= 2 ? 1 : 0),
+      bulkWrite: vi.fn().mockResolvedValue({ ok: 1 }),
+    });
+    const cidsColl = createCollectionMock({
+      find: vi.fn().mockReturnValue({ limit: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }) }),
+    });
+    const orphaColl = createCollectionMock({
+      find: vi.fn().mockReturnValue({ limit: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([orphanetDoc]) }) }),
+    });
+    app.locals.db = createDbMock({ terminologies: coll, cids: cidsColl, orphanet_diseases: orphaColl });
+
+    const res = await request(app).get('/api/terminologies?q=orphanetonly');
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data).toHaveLength(1);
+    expect(res.body.data[0].codigo).toBe('ORPHA:888');
+  });
+});
+
+describe('GET /api/terminologies - Orphadata live fallback edge cases (fresh module)', () => {
+  let freshApp;
+  let previousAllow;
+  let previousBaseUrl;
+  const routesModulePath = require.resolve('../../src/interface/routes/terminologies.routes');
+
+  beforeEach(() => {
+    previousAllow = process.env.ALLOW_EXTERNAL_TERMINOLOGY_SYNC;
+    previousBaseUrl = process.env.ORPHADATA_BASE_URL;
+    process.env.ALLOW_EXTERNAL_TERMINOLOGY_SYNC = 'true';
+    process.env.ORPHADATA_BASE_URL = 'https://fake-orphadata.test';
+
+    delete require.cache[routesModulePath];
+    const freshRouter = require('../../src/interface/routes/terminologies.routes');
+
+    freshApp = express();
+    freshApp.use((req, res, next) => { next(); });
+    freshApp.use('/api/terminologies', freshRouter);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    process.env.ALLOW_EXTERNAL_TERMINOLOGY_SYNC = previousAllow;
+    process.env.ORPHADATA_BASE_URL = previousBaseUrl;
+    delete require.cache[routesModulePath];
+    require('../../src/interface/routes/terminologies.routes');
+  });
+
+  function emptyDbMock() {
+    const coll = createCollectionMock({
+      find: vi.fn().mockReturnValue({
+        sort: vi.fn().mockReturnValue({ limit: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }) }),
+        limit: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }),
+      }),
+      countDocuments: vi.fn().mockResolvedValue(0),
+    });
+    const cidsColl = createCollectionMock({ find: vi.fn().mockReturnValue({ limit: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }) }) });
+    const orphaColl = createCollectionMock({ find: vi.fn().mockReturnValue({ limit: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }) }) });
+    return createDbMock({ terminologies: coll, cids: cidsColl, orphanet_diseases: orphaColl });
+  }
+
+  it('discards Orphadata results with no resolvable ORPHA code and returns an empty list without upserting', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ data: { results: [{ 'Preferred term': 'No Code Disease' }] } }),
+    }));
+    freshApp.locals.db = emptyDbMock();
+
+    const res = await request(freshApp).get('/api/terminologies?q=nocodeterm');
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data).toEqual([]);
+  });
+
+  it('treats a non-2xx HTTP response from Orphadata as a swallowed per-URL error, still returning 200', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      json: async () => ({ message: 'upstream failure' }),
+    }));
+    freshApp.locals.db = emptyDbMock();
+
+    const res = await request(freshApp).get('/api/terminologies?q=upstreamfailterm');
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data).toEqual([]);
+  });
+
+  it('reports a timeout-specific message when fetch aborts, without crashing the request', async () => {
+    const abortError = new Error('The operation was aborted');
+    abortError.name = 'AbortError';
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(abortError));
+    freshApp.locals.db = emptyDbMock();
+
+    const res = await request(freshApp).get('/api/terminologies?q=timeoutterm');
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data).toEqual([]);
+  });
+
+  it('does not prepend the numeric orphacode lookup URL for a non-numeric search term', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ data: { results: [] } }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    freshApp.locals.db = emptyDbMock();
+
+    const res = await request(freshApp).get('/api/terminologies?q=notanumber');
+    expect(res.status).toBe(200);
+    // Only the /names/:term lookup should fire, not the numeric /orphacodes/:code one.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toContain('/names/notanumber');
+  });
+});
+
 describe('POST /api/terminologies/sync', () => {
   it('returns success when sync runs without error', async () => {
     syncFromOrphadataMock.mockResolvedValue({ synced: 0, errors: 0 });
@@ -350,6 +600,18 @@ describe('POST /api/terminologies/sync', () => {
     const res = await request(app).post('/api/terminologies/sync');
     expect(res.status).toBe(503);
     expect(res.body.success).toBe(false);
+  });
+
+  it('returns 500 when syncFromOrphadata rejects', async () => {
+    syncFromOrphadataMock.mockRejectedValue(new Error('orphadata unreachable'));
+
+    const coll = createCollectionMock();
+    app.locals.db = createDbMock({ terminologies: coll });
+
+    const res = await request(app).post('/api/terminologies/sync');
+    expect(res.status).toBe(500);
+    expect(res.body.success).toBe(false);
+    expect(res.body.error).toBe('Erro ao sincronizar terminologias');
   });
 
   it('returns 200 with sync result fields', async () => {
