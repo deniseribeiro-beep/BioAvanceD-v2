@@ -172,7 +172,6 @@ src/interface/routes/equipment.routes.js          81.92 / 74.11
 src/utils/auditLogger.js                          82.00 / 67.96
 src/controllers/import.controller.js              82.23 / 75.86
 src/services/security.service.js                  82.51 / 72.26
-src/controllers/import-lgpd.controller.js         82.66 / 54.41
 src/infrastructure/queue/Neo4jQuarantineService.js 83.33 / 82.75
 src/services/fhir-import-staging.service.js       84.15 / 77.86
 src/controllers/import-async.controller.js        84.29 / 79.66
@@ -212,6 +211,16 @@ TokenExpiredError vs. generic invalid-token, session-missing-db 503,
 all three `verifySession` invalid reasons, the keepalive/mfa-setup
 session-check bypass routes, the mfaSetupRequired/mfaVerified 403 gate,
 the outer-catch 500, and `optionalAuth`'s no-op-on-error path),
+`src/controllers/import-lgpd.controller.js` (was 82.66/54.41, isolated run
+across its three test files now 92.66% lines / 68.37% branches — new
+`tests/unit/import-lgpd.controller.gaps.test.js` covers the multer
+storage/fileFilter config (destination/filename/blocked-extension/
+disallowed-mimetype/allowed/zip branches, previously entirely untested)
+and `importPatientsSmart`'s invalid-format 400, string groupFields/mapping
+JSON-parse success and malformed-JSON-hits-outer-catch paths, the
+partial-errors warning-status audit event, the no-req.user skip of both
+audit calls, and the catch block's failure-status audit event including
+its own inner try/catch swallow of a failing audit-log call),
 `src/controllers/sensor.controller.js` (was 75.29/68.18, isolated run now
 100% lines / 97.72% branches — new `tests/unit/controllers/sensor.controller.test.js`,
 no pre-existing test file for this one; covers all five CRUD handlers'
