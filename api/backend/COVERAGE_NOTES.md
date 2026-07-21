@@ -158,7 +158,7 @@ src/scripts/createFirstAdmin.js                   77.27 / 65.00
 src/core/use-cases/RegisterSampleUseCase.js       77.33 / 69.31
 src/services/SampleGraphValidator.js              77.69 / 66.66   (issue #222 — legacy-schema migration, design fork)
 src/utils/portManager.js                          100.0 / 80.00   (covered — see history archive)
-src/models/User.js                                79.59 / 53.68
+src/models/User.js                                98.03 / 97.89   (covered — see history archive)
 src/workers/neo4jProjection.worker.js             79.62 / 73.33
 src/interface/routes/clinical-unit.routes.js      79.76 / 63.15
 src/models/AnalysisType.js                        80.00 / 75.00
@@ -220,7 +220,13 @@ no pre-existing test file for this one; covers all five CRUD handlers'
 found and filed issue #233 — `list()` throws a 500 instead of falling
 back to `[]` when `listSensors` resolves `null`, since `result.sensors`
 is dereferenced before the `Array.isArray` fallback runs; test asserts
-the current buggy 500 response, not the intended fallback).
+the current buggy 500 response, not the intended fallback),
+`src/models/User.js` (was 79.59/53.68, isolated run now 98.03% lines /
+97.89% branches — existing `tests/unit/models/User.test.js` only
+covered `validate()`/`isValidEmail()`/`isValidAccessType()`; added
+`create()` full-field and defaults-applied cases, `getRoleName()`
+known/unknown accessType, and `normalizeStatus()`/`translateStatus()`
+pt↔en mapping plus their unknown/absent-status fallbacks).
 
 ## GOOD coverage (>=85% lines)
 
