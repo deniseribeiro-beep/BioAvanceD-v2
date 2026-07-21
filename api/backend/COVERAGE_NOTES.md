@@ -151,13 +151,10 @@ src/services/patient.service.js                  70.64 / 60.63
 src/models/PatientConsent.js                      70.83 / 85.24
 src/services/mqtt-telemetry.service.js            71.42 / 78.09   (issue #160 — HMAC bypass bug)
 src/infrastructure/middleware/auth.js             71.66 / 68.18
-src/routes/orphanet.js                            72.26 / 52.04
 src/services/hl7.service.js                       73.45 / 47.15
-src/models/MeasurementUnit.js                     75.00 / 40.00
 src/controllers/sensor.controller.js              75.29 / 68.18
 src/utils/fieldEncryption.js                      76.19 / 69.56
 src/infrastructure/persistence/mongo/MongoAuditRepository.js 76.66 / 84.61
-src/interface/routes/terminologies.routes.js      76.66 / 51.50
 src/workers/workers/result-worker.js              76.66 / 66.07   (issue #146/#164 — rename + yauzl)
 src/interface/routes/reports.routes.js            76.83 / 65.75
 src/controllers/analysis-type.controller.js       77.14 / 57.14
@@ -192,6 +189,13 @@ moved into GOOD since the 2026-07-14 reconcile; `batch-validation-engine.service
 (88.20%), `audit.controller.js`, and `audit-canonicalization.service.js`
 (87.87%) also moved to GOOD — not cross-checked against #152/#162
 line-by-line since they're now well above the MID-HIGH cutoff.
+
+Removed 2026-07-21 (#228 batch-1 slices, not yet re-measured by a full
+reconcile): `src/routes/orphanet.js` (branch tests added, isolated run
+now 99.15% lines / 83.62% branches — see `COVERAGE_HISTORY.md`),
+`src/interface/routes/terminologies.routes.js` (branch/error-path tests
+added), `src/models/MeasurementUnit.js` (moved out of this bucket
+entirely, was 75.00/40.00 — full validation-branch coverage added).
 
 ## GOOD coverage (>=85% lines)
 
