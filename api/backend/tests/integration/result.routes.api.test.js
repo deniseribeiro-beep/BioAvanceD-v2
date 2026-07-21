@@ -78,6 +78,17 @@ describe('GET /api/results', () => {
     expect(res.status).toBe(500);
     expect(res.body.message).toBe('db down');
   });
+
+  it('returns the full list when no importJobID filter is supplied', async () => {
+    const findSpy = vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([FAKE_RESULT]) });
+    const resultsColl = createCollectionMock({ find: findSpy });
+    app.locals.db = createDbMock({ results: resultsColl });
+
+    const res = await request(app).get('/api/results').set('Authorization', `Bearer ${makeToken(4)}`);
+
+    expect(res.status).toBe(200);
+    expect(findSpy).toHaveBeenCalledWith({});
+  });
 });
 
 describe('GET /api/results/:id', () => {
@@ -110,6 +121,15 @@ describe('GET /api/results/:id', () => {
     const res = await request(app).get('/api/results/not-a-valid-id').set('Authorization', `Bearer ${makeToken(4)}`);
     expect(res.status).toBe(500);
     expect(res.body.success).toBe(false);
+  });
+
+  it('returns 500 when the results collection throws', async () => {
+    const resultsColl = createCollectionMock({ findOne: vi.fn().mockRejectedValue(new Error('lookup failed')) });
+    app.locals.db = createDbMock({ results: resultsColl });
+
+    const res = await request(app).get(`/api/results/${RESULT_OID}`).set('Authorization', `Bearer ${makeToken(4)}`);
+    expect(res.status).toBe(500);
+    expect(res.body.message).toBe('lookup failed');
   });
 });
 
@@ -149,6 +169,21 @@ describe('GET /api/results/:id/download', () => {
     expect(res.status).toBe(500);
     expect(res.body.message).toBe('boom');
   });
+
+  it('streams the file when the local path exists on disk', async () => {
+    const filePath = path.join(__dirname, 'download-fixture.pdf');
+    fs.writeFileSync(filePath, '%PDF-1.4 fixture');
+    const localResult = { ...FAKE_RESULT, filePath };
+    const resultsColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(localResult) });
+    app.locals.db = createDbMock({ results: resultsColl });
+
+    try {
+      const res = await request(app).get(`/api/results/${RESULT_OID}/download`).set('Authorization', `Bearer ${makeToken(4)}`);
+      expect(res.status).toBe(200);
+    } finally {
+      fs.rmSync(filePath, { force: true });
+    }
+  });
 });
 
 describe('POST /api/results/upload', () => {
@@ -164,6 +199,61 @@ describe('POST /api/results/upload', () => {
       .set('Authorization', `Bearer ${makeToken(1)}`)
       .field('sampleID', SAMPLE_OID);
     expect(res.status).toBe(403);
+  });
+
+  it('returns 503 when db is unavailable', async () => {
+    app.locals.db = null;
+    const res = await request(app)
+      .post('/api/results/upload')
+      .set('Authorization', `Bearer ${makeToken(2)}`)
+      .field('sampleID', SAMPLE_OID)
+      .attach('file', Buffer.from('%PDF-1.4 test'), 'test.pdf');
+
+    expect(res.status).toBe(503);
+
+    const resultDir = path.join(__dirname, '../../src/storage/results', SAMPLE_OID);
+    if (fs.existsSync(resultDir)) fs.rmSync(resultDir, { recursive: true, force: true });
+  });
+
+  it('falls back to a numeric sampleID lookup when the value is not a valid ObjectId', async () => {
+    const sampleDoc = { _id: new ObjectId(), sampleID: 42 };
+    const findOneSpy = vi.fn().mockResolvedValue(sampleDoc);
+    const amostrasColl = createCollectionMock({ findOne: findOneSpy });
+    const insertOne = vi.fn().mockResolvedValue({ insertedId: new ObjectId() });
+    app.locals.db = createDbMock({ amostras: amostrasColl, results: createCollectionMock({ insertOne }) });
+    vi.spyOn(consentValidator, 'validateAccess').mockResolvedValue(true);
+
+    const res = await request(app)
+      .post('/api/results/upload')
+      .set('Authorization', `Bearer ${makeToken(2)}`)
+      .field('sampleID', '42')
+      .attach('file', Buffer.from('%PDF-1.4 test'), 'test.pdf');
+
+    expect(res.status).toBe(201);
+    expect(findOneSpy).toHaveBeenCalledWith({ sampleID: 42 });
+
+    const resultDir = path.join(__dirname, '../../src/storage/results', '42');
+    if (fs.existsSync(resultDir)) fs.rmSync(resultDir, { recursive: true, force: true });
+  });
+
+  it('returns 400 and cleans up the temp file when the insert throws', async () => {
+    const sampleDoc = { _id: new ObjectId(SAMPLE_OID) };
+    const amostrasColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(sampleDoc) });
+    const insertOne = vi.fn().mockRejectedValue(new Error('insert failed'));
+    app.locals.db = createDbMock({ amostras: amostrasColl, results: createCollectionMock({ insertOne }) });
+    vi.spyOn(consentValidator, 'validateAccess').mockResolvedValue(true);
+
+    const res = await request(app)
+      .post('/api/results/upload')
+      .set('Authorization', `Bearer ${makeToken(2)}`)
+      .field('sampleID', SAMPLE_OID)
+      .attach('file', Buffer.from('%PDF-1.4 test'), 'test.pdf');
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toBe('insert failed');
+
+    const resultDir = path.join(__dirname, '../../src/storage/results', SAMPLE_OID);
+    if (fs.existsSync(resultDir)) fs.rmSync(resultDir, { recursive: true, force: true });
   });
 
   it('resolves sampleID from the parsed multipart body when checking commercial consent', async () => {
@@ -355,6 +445,29 @@ describe('POST /api/results', () => {
     expect(res.body.success).toBe(true);
     expect(insertOne).toHaveBeenCalledTimes(1);
   });
+
+  it('returns 503 when db is unavailable', async () => {
+    app.locals.db = null;
+    const res = await request(app)
+      .post('/api/results')
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({ sampleID: SAMPLE_OID, fileType: 'PDF', resultFilePath: '/x.pdf' });
+    expect(res.status).toBe(503);
+  });
+
+  it('returns 400 when the insert throws', async () => {
+    const insertOne = vi.fn().mockRejectedValue(new Error('insert failed'));
+    app.locals.db = createDbMock({ results: createCollectionMock({ insertOne }) });
+    vi.spyOn(consentValidator, 'validateAccess').mockResolvedValue(true);
+
+    const res = await request(app)
+      .post('/api/results')
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({ sampleID: SAMPLE_OID, fileType: 'PDF', resultFilePath: '/x.pdf' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toBe('insert failed');
+  });
 });
 
 describe('PUT /api/results/:id', () => {
@@ -395,6 +508,28 @@ describe('PUT /api/results/:id', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
+  });
+
+  it('returns 503 when db is unavailable', async () => {
+    app.locals.db = null;
+    const res = await request(app)
+      .put(`/api/results/${RESULT_OID}`)
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({ description: 'new' });
+    expect(res.status).toBe(503);
+  });
+
+  it('returns 400 when the update throws', async () => {
+    const resultsColl = createCollectionMock({ updateOne: vi.fn().mockRejectedValue(new Error('update failed')) });
+    app.locals.db = createDbMock({ results: resultsColl });
+
+    const res = await request(app)
+      .put(`/api/results/${RESULT_OID}`)
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({ description: 'new' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toBe('update failed');
   });
 });
 
@@ -438,6 +573,28 @@ describe('PUT /api/results/:id/link-sample', () => {
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
   });
+
+  it('returns 503 when db is unavailable', async () => {
+    app.locals.db = null;
+    const res = await request(app)
+      .put(`/api/results/${RESULT_OID}/link-sample`)
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({ sampleID: SAMPLE_OID });
+    expect(res.status).toBe(503);
+  });
+
+  it('returns 400 when the update throws', async () => {
+    const resultsColl = createCollectionMock({ updateOne: vi.fn().mockRejectedValue(new Error('link failed')) });
+    app.locals.db = createDbMock({ results: resultsColl });
+
+    const res = await request(app)
+      .put(`/api/results/${RESULT_OID}/link-sample`)
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({ sampleID: SAMPLE_OID });
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toBe('link failed');
+  });
 });
 
 describe('DELETE /api/results/:id', () => {
@@ -475,5 +632,25 @@ describe('DELETE /api/results/:id', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
+  });
+
+  it('returns 503 when db is unavailable', async () => {
+    app.locals.db = null;
+    const res = await request(app)
+      .delete(`/api/results/${RESULT_OID}`)
+      .set('Authorization', `Bearer ${makeToken(4)}`);
+    expect(res.status).toBe(503);
+  });
+
+  it('returns 400 when the delete throws', async () => {
+    const resultsColl = createCollectionMock({ deleteOne: vi.fn().mockRejectedValue(new Error('delete failed')) });
+    app.locals.db = createDbMock({ results: resultsColl });
+
+    const res = await request(app)
+      .delete(`/api/results/${RESULT_OID}`)
+      .set('Authorization', `Bearer ${makeToken(4)}`);
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toBe('delete failed');
   });
 });

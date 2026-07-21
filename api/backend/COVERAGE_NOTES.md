@@ -170,7 +170,6 @@ src/reference-data/essential/manifest.js          80.00 / 0
 src/database/mongo.js                             80.10 / 76.51
 src/services/merkle-envelope.service.js           80.30 / 66.21
 src/interface/routes/analysis-file.routes.js      80.95 / 87.50
-src/interface/routes/result.routes.js             80.97 / 55.45
 src/interface/routes/master-data.routes.js        81.42 / 68.75
 src/config/redis.js                               81.76 / 70.45
 src/interface/routes/logs.routes.js               81.81 / 61.19
@@ -195,7 +194,11 @@ reconcile): `src/routes/orphanet.js` (branch tests added, isolated run
 now 99.15% lines / 83.62% branches — see `COVERAGE_HISTORY.md`),
 `src/interface/routes/terminologies.routes.js` (branch/error-path tests
 added), `src/models/MeasurementUnit.js` (moved out of this bucket
-entirely, was 75.00/40.00 — full validation-branch coverage added).
+entirely, was 75.00/40.00 — full validation-branch coverage added),
+`src/interface/routes/result.routes.js` (was 80.97/55.45, isolated run
+now 87.61% lines / 59.09% branches — 503/catch-block and download-success
+paths added; remaining gap is mostly unreachable defensive code, see
+`COVERAGE_HISTORY.md`).
 
 ## GOOD coverage (>=85% lines)
 
