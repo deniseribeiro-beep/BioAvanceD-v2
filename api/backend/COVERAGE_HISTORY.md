@@ -28,6 +28,15 @@ fresh the same day in the fix-bugs loop, see that session's handoff). The
 2026-07-14 reconcile as "not yet triaged" is gone in this run — resolved
 incidentally by an intervening fix, no issue was needed.
 
+**Slice (2026-07-21):** `src/controllers/analysis-type.controller.js`,
+77.14% lines / 57.14% branches → 100% lines / 100% branches, new
+`tests/unit/analysis-type.controller.test.js` (10 tests, no prior test
+file existed). Covers both handlers' full branch sets: `getAnalysisTypes`
+503-no-db / 200-success / 500-on-throw, and `createAnalysisType`
+503-no-db / code-derived-from-name-via-slugify / explicit-code-lowercased
+/ 400-validation-failure / 409-duplicate-code / 201-success /
+400-on-insert-throw. No product bugs found.
+
 **Slice (2026-07-21):** `src/services/hl7.service.js`, 73.45% lines /
 47.15% branches → 100% lines / 81.81% branches, extended
 `tests/unit/hl7.service.unit.test.js` (47 → 91 tests). Added coverage

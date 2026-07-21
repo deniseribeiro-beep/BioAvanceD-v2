@@ -157,7 +157,6 @@ src/utils/fieldEncryption.js                      76.19 / 69.56
 src/infrastructure/persistence/mongo/MongoAuditRepository.js 76.66 / 84.61
 src/workers/workers/result-worker.js              76.66 / 66.07   (issue #146/#164 — rename + yauzl)
 src/interface/routes/reports.routes.js            76.83 / 65.75
-src/controllers/analysis-type.controller.js       77.14 / 57.14
 src/scripts/createFirstAdmin.js                   77.27 / 65.00
 src/core/use-cases/RegisterSampleUseCase.js       77.33 / 69.31
 src/services/SampleGraphValidator.js              77.69 / 66.66   (issue #222 — legacy-schema migration, design fork)
@@ -198,7 +197,9 @@ entirely, was 75.00/40.00 — full validation-branch coverage added),
 `src/interface/routes/result.routes.js` (was 80.97/55.45, isolated run
 now 87.61% lines / 59.09% branches — 503/catch-block and download-success
 paths added; remaining gap is mostly unreachable defensive code, see
-`COVERAGE_HISTORY.md`).
+`COVERAGE_HISTORY.md`), `src/controllers/analysis-type.controller.js`
+(was 77.14/57.14, isolated run now 100% lines / 100% branches — no
+pre-existing test file, full new suite added, see `COVERAGE_HISTORY.md`).
 
 ## GOOD coverage (>=85% lines)
 
