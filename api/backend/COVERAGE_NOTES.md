@@ -153,7 +153,6 @@ src/controllers/iot.controller.js                 79.76 / 73.52  (branches cover
 src/utils/fieldEncryption.js                      76.19 / 69.56
 src/infrastructure/persistence/mongo/MongoAuditRepository.js 76.66 / 84.61
 src/workers/workers/result-worker.js              76.66 / 66.07   (issue #146/#164 — rename + yauzl)
-src/interface/routes/reports.routes.js            76.83 / 65.75
 src/scripts/createFirstAdmin.js                   77.27 / 65.00
 src/core/use-cases/RegisterSampleUseCase.js       77.33 / 69.31
 src/services/SampleGraphValidator.js              77.69 / 66.66   (issue #222 — legacy-schema migration, design fork)
@@ -226,7 +225,18 @@ the current buggy 500 response, not the intended fallback),
 covered `validate()`/`isValidEmail()`/`isValidAccessType()`; added
 `create()` full-field and defaults-applied cases, `getRoleName()`
 known/unknown accessType, and `normalizeStatus()`/`translateStatus()`
-pt↔en mapping plus their unknown/absent-status fallbacks).
+pt↔en mapping plus their unknown/absent-status fallbacks),
+`src/interface/routes/reports.routes.js` (was 76.83/65.75, isolated run
+now 95.01% lines / 82.19% branches — new
+`tests/integration/reports.routes.gaps.test.js` alongside the existing
+`reports.api.test.js`; covers the 503/500 branch on every route,
+`generate`'s 400 for a missing `reportType`, the remaining
+`buildSampleQuery` sprec/quality-category filters and
+WASHOUT/QUARANTINE/BLOCKED status normalization, the plain
+`paciente`/`patient` preview branch, `sampleanalysis`'s no-sampleID
+skip, and the no-filters/no-critical-alert temperature branch; remaining
+gap is `resolveCollection`'s all-candidates-throw fallback and a few
+unreachable defensive lines).
 
 ## GOOD coverage (>=85% lines)
 
