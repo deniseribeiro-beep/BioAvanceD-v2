@@ -1,0 +1,18 @@
+﻿# installed from dyeallpies-skills-pack (do not commit)
+skills/agent-delegation/
+skills/clean-up/
+skills/docker-workflow/
+skills/fix-bugs/
+skills/merge-from-main/
+skills/parallel-test-agents/
+skills/playwright-specs/
+skills/resolve-issue/
+skills/ship-integration-branch/
+skills/test-loop/
+skills/verify-intent/
+skills/work-issue/
+skills/wrap-up/
+skills/bioavanced-v2-conventions/
+skills/bioavanced-v2-legacy/
+skills/bioavanced-v2-testing-conventions/
+skills/dennis-windows/

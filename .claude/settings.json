@@ -34,6 +34,34 @@
           }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .claude/hooks/session-cleanup-checkpoint.cjs"
+          },
+          {
+            "type": "command",
+            "command": "node .claude/hooks/wrapup-checkpoint.cjs"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .claude/hooks/session-cleanup-checkpoint.cjs"
+          },
+          {
+            "type": "command",
+            "command": "node .claude/hooks/wrapup-checkpoint.cjs"
+          }
+        ]
+      }
     ]
   }
 }
