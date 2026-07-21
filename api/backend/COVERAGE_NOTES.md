@@ -146,12 +146,12 @@ regardless); a lower branch% relative to lines% usually means untested
 error paths, a good tie-breaker when picking among these.
 
 ```
-src/controllers/iot.controller.js                70.00 / 58.82
 src/services/patient.service.js                  70.64 / 60.63
 src/models/PatientConsent.js                      70.83 / 85.24
 src/services/mqtt-telemetry.service.js            71.42 / 78.09   (issue #160 — HMAC bypass bug)
 src/infrastructure/middleware/auth.js             71.66 / 68.18
 src/services/hl7.service.js                       100.0 / 81.81  (covered — see history archive)
+src/controllers/iot.controller.js                 79.76 / 73.52  (branches covered — see history archive; applyColdChainQuarantine catch + a couple of resolveTemperaturePolicy edge branches remain)
 src/controllers/sensor.controller.js              75.29 / 68.18
 src/utils/fieldEncryption.js                      76.19 / 69.56
 src/infrastructure/persistence/mongo/MongoAuditRepository.js 76.66 / 84.61
