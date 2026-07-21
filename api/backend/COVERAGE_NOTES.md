@@ -146,7 +146,6 @@ regardless); a lower branch% relative to lines% usually means untested
 error paths, a good tie-breaker when picking among these.
 
 ```
-src/services/patient.service.js                  70.64 / 60.63
 src/models/PatientConsent.js                      70.83 / 85.24
 src/services/mqtt-telemetry.service.js            71.42 / 78.09   (issue #160 — HMAC bypass bug)
 src/infrastructure/middleware/auth.js             71.66 / 68.18
@@ -199,7 +198,16 @@ now 87.61% lines / 59.09% branches — 503/catch-block and download-success
 paths added; remaining gap is mostly unreachable defensive code, see
 `COVERAGE_HISTORY.md`), `src/controllers/analysis-type.controller.js`
 (was 77.14/57.14, isolated run now 100% lines / 100% branches — no
-pre-existing test file, full new suite added, see `COVERAGE_HISTORY.md`).
+pre-existing test file, full new suite added, see `COVERAGE_HISTORY.md`),
+`src/services/patient.service.js` (was 70.64/60.63, isolated run across
+its full unit-test set now 74.78% lines / 57.45% branches —
+`resolveClinicalUnitSnapshot`, `ensurePatientIndexes`,
+`checkIdentifierConflict`, `checkDuplicatePatient`, ObjectId-lookup
+branches in `getPatient`/`updatePatient`/`deletePatient`, and
+`searchPatients`' date-parsing branches added; remaining gap is mostly
+`createPatient`/`updatePatient` error-path permutations already
+partially covered by `patient.service.createUpdate.gaps.unit.test.js`,
+see `COVERAGE_HISTORY.md`).
 
 ## GOOD coverage (>=85% lines)
 
