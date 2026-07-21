@@ -46,6 +46,11 @@ function buildCollectionDb(collections = {}) {
           capturedQueries[`${name}.distinct`] = query;
           return [...new Set(docs.map((doc) => doc[field]).filter((value) => value !== undefined))];
         },
+        async insertOne(doc) {
+          const inserted = { ...doc, _id: `generated-${docs.length + 1}` };
+          docs.push(inserted);
+          return { insertedId: inserted._id };
+        },
       };
     },
   };
@@ -312,5 +317,247 @@ describe('reports.routes.js gaps', () => {
     expect(response.status).toBe(200);
     expect(response.body.data.mode).toBe('report');
     expect(capturedQueries.temperature).toEqual({});
+  });
+
+  describe('normalizeReport: fallbacks de reportID/generatedAt ausentes', () => {
+    it('lista relatório sem reportID (default 0) e sem generatedAt (usa createdAt)', async () => {
+      const { db } = buildCollectionDb({
+        reports: [{ _id: '1', reportType: 'x', createdAt: new Date('2026-01-01') }],
+      });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).get('/api/reports');
+
+      expect(response.status).toBe(200);
+      expect(response.body[0].reportID).toBe(0);
+      expect(new Date(response.body[0].generatedAt)).toEqual(new Date('2026-01-01'));
+    });
+
+    it('lista relatório sem generatedAt nem createdAt (usa new Date())', async () => {
+      const { db } = buildCollectionDb({
+        reports: [{ _id: '1', reportID: 5, reportType: 'x' }],
+      });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).get('/api/reports');
+
+      expect(response.status).toBe(200);
+      expect(response.body[0].generatedAt).toBeTruthy();
+    });
+  });
+
+  describe('resolveCollection: candidato falsy sem lançar', () => {
+    it('cai para o segundo candidato quando o primeiro collection() retorna falsy', async () => {
+      const db = {
+        collection(name) {
+          if (name === 'patients') return undefined;
+          if (name === 'pacientes') {
+            return {
+              find() {
+                const chain = {
+                  toArray: async () => [{ patientID: 'P1', patientName: 'Ana' }],
+                  limit() {
+                    return chain;
+                  },
+                };
+                return chain;
+              },
+              async countDocuments() {
+                return 1;
+              },
+            };
+          }
+          if (name === 'samples' || name === 'amostras') {
+            return { distinct: async () => [] };
+          }
+          return { find: () => ({ toArray: async () => [] }), async countDocuments() { return 0; } };
+        },
+      };
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).post('/api/reports/paciente/preview').send({ filters: {} });
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.total).toBe(1);
+    });
+
+    it('todos os candidatos falsy resulta em 500 ao tentar usar a coleção indefinida', async () => {
+      const db = { collection: () => undefined };
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).post('/api/reports/sensor/preview').send({ filters: {} });
+
+      expect(response.status).toBe(500);
+    });
+  });
+
+  describe('buildDateQuery: apenas um limite informado', () => {
+    it('apenas startDate aplica somente $gte', async () => {
+      const { db, capturedQueries } = buildCollectionDb({ withdrawals: [{ withdrawalDate: new Date('2026-01-05') }] });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp)
+        .post('/api/reports/withdrawal%20history/preview')
+        .send({ filters: { startDate: '2026-01-01' } });
+
+      expect(response.status).toBe(200);
+      expect(capturedQueries.withdrawals.$or[0].withdrawalDate).toEqual({ $gte: new Date('2026-01-01') });
+    });
+
+    it('apenas endDate aplica somente $lte', async () => {
+      const { db, capturedQueries } = buildCollectionDb({ withdrawals: [{ withdrawalDate: new Date('2026-01-05') }] });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp)
+        .post('/api/reports/withdrawal%20history/preview')
+        .send({ filters: { endDate: '2026-01-31' } });
+
+      expect(response.status).toBe(200);
+      expect(capturedQueries.withdrawals.$or[0].withdrawalDate.$gte).toBeUndefined();
+      expect(capturedQueries.withdrawals.$or[0].withdrawalDate.$lte).toBeDefined();
+    });
+  });
+
+  it('amostra: treatmentStatus e status desconhecidos retornam o valor normalizado bruto', async () => {
+    const { db, capturedQueries } = buildCollectionDb({ samples: [{ sampleID: 'S1' }] });
+    const testApp = appWithDb(db);
+
+    const response = await request(testApp).post('/api/reports/amostra/preview').send({
+      filters: { treatmentStatus: 'foo bar', status: 'baz qux' },
+    });
+
+    expect(response.status).toBe(200);
+    expect(capturedQueries.samples.$and).toEqual(
+      expect.arrayContaining([
+        { 'pharmacologyData.treatmentStatus': 'FOO_BAR' },
+        { release_status: 'BAZ_QUX' },
+      ])
+    );
+  });
+
+  it('samplesbypatient: sem orphaCode, com keyword e matchingPatientIds não vazio', async () => {
+    const { db } = buildCollectionDb({
+      patients: [{ patientID: 'P1', patientName: 'Ana' }],
+      samples: [
+        { patientID: 'P1', sampleID: 'S1', participantId: 'P1' },
+        { patientID: '', sampleID: 'S2', participantId: 'P2' },
+      ],
+    });
+    const testApp = appWithDb(db);
+
+    const response = await request(testApp)
+      .post('/api/reports/samplesbypatient/preview')
+      .send({ filters: { keyword: 'Ana', atcCode: 'ATC:N02' } });
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.total).toBe(1);
+    const p1 = response.body.data.patients.find((p) => p.patientID === 'P1');
+    expect(p1.sampleCount).toBe(1);
+  });
+
+  it('paciente: com orphaCode (sem keyword) e matchingPatientIds não vazio', async () => {
+    const { db } = buildCollectionDb({
+      patients: [{ patientID: 'P1', patientName: 'Ana' }],
+      samples: [{ patientID: 'P1', sampleID: 'S1', participantId: 'P1' }],
+    });
+    const testApp = appWithDb(db);
+
+    const response = await request(testApp)
+      .post('/api/reports/paciente/preview')
+      .send({ filters: { orphaCode: 'ORPHA:558', atcCode: 'ATC:N02' } });
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.total).toBe(1);
+  });
+
+  it('sampleanalysis: resultado sem sampleID é ignorado no agrupamento', async () => {
+    const { db } = buildCollectionDb({
+      samples: [{ sampleID: 'S1', barcode: 'B1' }],
+      results: [{ sampleID: 'S1' }, { sampleID: null }],
+    });
+    const testApp = appWithDb(db);
+
+    const response = await request(testApp).post('/api/reports/sampleanalysis/preview').send({ filters: {} });
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.analysis[0].hasResults).toBe(true);
+  });
+
+  it('samplesbypatient: amostra com patientID vazio não é agrupada', async () => {
+    const { db } = buildCollectionDb({
+      patients: [{ patientID: 'P1', patientName: 'Ana' }],
+      samples: [
+        { patientID: 'P1', sampleID: 'S1' },
+        { patientID: '', sampleID: 'S2' },
+      ],
+    });
+    const testApp = appWithDb(db);
+
+    const response = await request(testApp)
+      .post('/api/reports/samplesbypatient/preview')
+      .send({ filters: {} });
+
+    expect(response.status).toBe(200);
+    const p1 = response.body.data.patients.find((p) => p.patientID === 'P1');
+    expect(p1.sampleCount).toBe(1);
+  });
+
+  it('logs/audit: aplica intervalo de datas na query', async () => {
+    const { db, capturedQueries } = buildCollectionDb({ logs: [{ dateTime: new Date('2026-01-05') }] });
+    const testApp = appWithDb(db);
+
+    const response = await request(testApp)
+      .post('/api/reports/audit/preview')
+      .send({ filters: { startDate: '2026-01-01', endDate: '2026-01-31' } });
+
+    expect(response.status).toBe(200);
+    expect(capturedQueries.logs.$or).toBeDefined();
+  });
+
+  it('amostra: treatmentStatus NAIVE/INICIAL é normalizado', async () => {
+    const { db, capturedQueries } = buildCollectionDb({ samples: [{ sampleID: 'S1' }] });
+    const testApp = appWithDb(db);
+
+    const response = await request(testApp).post('/api/reports/amostra/preview').send({
+      filters: { treatmentStatus: 'inicial' },
+    });
+
+    expect(response.status).toBe(200);
+    expect(capturedQueries.samples.$and).toEqual(
+      expect.arrayContaining([{ 'pharmacologyData.treatmentStatus': 'NAIVE' }])
+    );
+  });
+
+  it('tissueoriginhistory: filtra amostras com sampleOrigin/linkedProject existentes', async () => {
+    const { db, capturedQueries } = buildCollectionDb({
+      samples: [{ sampleID: 'S1', sampleOrigin: 'Fígado' }],
+    });
+    const testApp = appWithDb(db);
+
+    const response = await request(testApp).post('/api/reports/tissueoriginhistory/preview').send({ filters: {} });
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.total).toBe(1);
+    expect(capturedQueries.samples.$or).toBeDefined();
+  });
+
+  it('withdrawalhistory: sem filtros de data usa query vazia', async () => {
+    const { db, capturedQueries } = buildCollectionDb({ withdrawals: [{ withdrawalDate: new Date('2026-01-05') }] });
+    const testApp = appWithDb(db);
+
+    const response = await request(testApp).post('/api/reports/withdrawal%20history/preview').send({ filters: {} });
+
+    expect(response.status).toBe(200);
+    expect(capturedQueries.withdrawals).toEqual({});
+  });
+
+  it('generate: usa reportID 1 quando não há relatórios anteriores', async () => {
+    const { db } = buildCollectionDb({});
+    const testApp = appWithDb(db);
+
+    const response = await request(testApp).post('/api/reports/generate').send({ reportType: 'auditoria' });
+
+    expect(response.status).toBe(201);
+    expect(response.body.reportID).toBe(1);
   });
 });

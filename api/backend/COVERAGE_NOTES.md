@@ -227,16 +227,28 @@ covered `validate()`/`isValidEmail()`/`isValidAccessType()`; added
 known/unknown accessType, and `normalizeStatus()`/`translateStatus()`
 pt↔en mapping plus their unknown/absent-status fallbacks),
 `src/interface/routes/reports.routes.js` (was 76.83/65.75, isolated run
-now 95.01% lines / 82.19% branches — new
-`tests/integration/reports.routes.gaps.test.js` alongside the existing
-`reports.api.test.js`; covers the 503/500 branch on every route,
-`generate`'s 400 for a missing `reportType`, the remaining
-`buildSampleQuery` sprec/quality-category filters and
-WASHOUT/QUARANTINE/BLOCKED status normalization, the plain
-`paciente`/`patient` preview branch, `sampleanalysis`'s no-sampleID
-skip, and the no-filters/no-critical-alert temperature branch; remaining
-gap is `resolveCollection`'s all-candidates-throw fallback and a few
-unreachable defensive lines).
+now 99.12% lines / 90.41% branches — `tests/integration/reports.routes.gaps.test.js`
+alongside the existing `reports.api.test.js`; covers the 503/500 branch
+on every route, `generate`'s 400 for a missing `reportType`, the
+remaining `buildSampleQuery` sprec/quality-category filters and
+NAIVE/WASHOUT/QUARANTINE/BLOCKED status normalization, the plain
+`paciente`/`patient` preview branch (with/without keyword, orphaCode,
+and non-empty `matchingPatientIds`), `resolveCollection`'s falsy-candidate
+fallback (both the recover-on-second-candidate case and the
+all-candidates-falsy 500), `buildDateQuery`'s single-bound cases,
+`sampleanalysis`/`samplesbypatient`'s falsy-key skip in their grouping
+reduces, `tissueoriginhistory`/`withdrawalhistory`'s default-query path,
+and `normalizeReport`'s missing-reportID/missing-generatedAt fallbacks.
+Two lines are genuinely unreachable via any legitimate route call, not a
+test gap: the `/:type/filters` catch block (nothing in its try can
+throw) and `module.exports`. The remaining ~10% of branches are
+`typeIncludes`/`normalizeTypeValue`'s defensive `|| ''` fallback on
+`type`/`rawType` — dead code, since Express guarantees a non-empty
+`:type` segment on every one of these routes — plus what looks like a
+V8-coverage merge artifact across the two spec files (a branch this
+session's own tests demonstrably exercise, e.g. `GET /` with `db`
+present, shows as uncovered only in the *combined* two-file run, not
+when either file runs alone); flagged, not chased further.
 
 ## GOOD coverage (>=85% lines)
 
