@@ -12,9 +12,14 @@ stale as slices land and as source files change. Keep it honest:
   iteration: at the `ship-to-main` gate, or if a session's own targeted
   runs stop matching what this file claims (a sign of drift). Full
   regenerate command:
-  `cd api/backend && npx vitest run --coverage --reporter=basic`, then
-  re-derive buckets from `coverage/coverage-summary.json` (`lines.pct`
-  per file). `coverage/` is gitignored — this file is the durable record.
+  `cd api/backend && npx vitest run tests/unit tests/integration
+  tests/compliance --coverage --reporter=dot` — a bare `--coverage` run
+  with no dir targets is blocked by `.claude/hooks/full-suite-guard.cjs`
+  (per-iteration full-suite guard); explicit dir targets are the hook's
+  own documented exception and produce an equivalent full-suite result.
+  Then re-derive buckets from `coverage/coverage-summary.json`
+  (`lines.pct` per file). `coverage/` is gitignored — this file is the
+  durable record.
 - **This file stays lean on purpose** — only the current buckets and the
   latest reconcile numbers. Slice-by-slice narrative history (what each
   past slice covered, which issues it filed) lives in
