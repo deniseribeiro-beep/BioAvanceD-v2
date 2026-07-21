@@ -2,6 +2,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import express from 'express';
 import request from 'supertest';
 
+const COLLECTION_NAME = 'orphanet_diseases';
+
 function cursor(rows) {
   return {
     limit: vi.fn().mockReturnThis(),
@@ -183,5 +185,374 @@ describe('orphanet.routes', () => {
       Codigos_CID10: 'E75.2',
       OMIM: 'OMIM:301500',
     });
+  });
+
+  it('retorna 400 quando o parametro q esta ausente', async () => {
+    loadRouteWithEnv({ ALLOW_EXTERNAL_TERMINOLOGY_SYNC: 'false' });
+    const app = buildApp({ collection: vi.fn(() => ({ find: vi.fn(() => cursor([])) })) });
+
+    const response = await request(app).get('/api/orphanet/search');
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({ error: 'Missing query' });
+  });
+
+  it('retorna 503 quando app.locals.db esta indefinido', async () => {
+    loadRouteWithEnv({ ALLOW_EXTERNAL_TERMINOLOGY_SYNC: 'false' });
+    const app = buildApp(undefined);
+
+    const response = await request(app).get('/api/orphanet/search?q=Fabry');
+
+    expect(response.status).toBe(503);
+    expect(response.body).toEqual({ error: 'Database unavailable' });
+  });
+
+  it('retorna 503 quando db.collection nao e uma funcao', async () => {
+    loadRouteWithEnv({ ALLOW_EXTERNAL_TERMINOLOGY_SYNC: 'false' });
+    const app = buildApp({ collection: 'not-a-function' });
+
+    const response = await request(app).get('/api/orphanet/search?q=Fabry');
+
+    expect(response.status).toBe(503);
+    expect(response.body).toEqual({ error: 'Database unavailable' });
+  });
+
+  it('limita o parametro limit ao maximo de 50 e passa isso para as queries', async () => {
+    loadRouteWithEnv({ ALLOW_EXTERNAL_TERMINOLOGY_SYNC: 'false' });
+    const cidsCursor = cursor([]);
+    const orphanetCursor = cursor([]);
+    const db = {
+      collection: vi.fn((name) => {
+        if (name === 'cids') return { find: vi.fn(() => cidsCursor) };
+        return { find: vi.fn(() => orphanetCursor) };
+      }),
+    };
+
+    const app = buildApp(db);
+    const response = await request(app).get('/api/orphanet/search?q=Fabry&limit=99999');
+
+    expect(response.status).toBe(200);
+    expect(cidsCursor.limit).toHaveBeenCalledWith(50);
+    expect(orphanetCursor.limit).toHaveBeenCalledWith(50);
+  });
+
+  it('usa limit padrao de 20 quando o parametro limit nao e numerico', async () => {
+    loadRouteWithEnv({ ALLOW_EXTERNAL_TERMINOLOGY_SYNC: 'false' });
+    const cidsCursor = cursor([]);
+    const db = {
+      collection: vi.fn((name) => {
+        if (name === 'cids') return { find: vi.fn(() => cidsCursor) };
+        return { find: vi.fn(() => cursor([])) };
+      }),
+    };
+
+    const app = buildApp(db);
+    const response = await request(app).get('/api/orphanet/search?q=Fabry&limit=not-a-number');
+
+    expect(response.status).toBe(200);
+    expect(cidsCursor.limit).toHaveBeenCalledWith(20);
+  });
+
+  it('impoe limit minimo de 1 quando o parametro limit e zero ou negativo', async () => {
+    loadRouteWithEnv({ ALLOW_EXTERNAL_TERMINOLOGY_SYNC: 'false' });
+    const cidsCursor = cursor([]);
+    const db = {
+      collection: vi.fn((name) => {
+        if (name === 'cids') return { find: vi.fn(() => cidsCursor) };
+        return { find: vi.fn(() => cursor([])) };
+      }),
+    };
+
+    const app = buildApp(db);
+    const response = await request(app).get('/api/orphanet/search?q=Fabry&limit=-5');
+
+    expect(response.status).toBe(200);
+    expect(cidsCursor.limit).toHaveBeenCalledWith(1);
+  });
+
+  it('amplia a busca sem filtro de idioma quando nenhum resultado bate com o lang solicitado', async () => {
+    loadRouteWithEnv({ ALLOW_EXTERNAL_TERMINOLOGY_SYNC: 'false' });
+
+    let orphanetCallCount = 0;
+    const orphanetFind = vi.fn(() => {
+      orphanetCallCount += 1;
+      if (orphanetCallCount === 1) return cursor([]);
+      return cursor([{
+        ORPHA: '324',
+        name: 'Fabry disease',
+        lang: 'en',
+      }]);
+    });
+
+    const db = {
+      collection: vi.fn((name) => {
+        if (name === 'cids') return { find: vi.fn(() => cursor([])) };
+        if (name === COLLECTION_NAME) return { find: orphanetFind };
+        return { find: vi.fn(() => cursor([])) };
+      }),
+    };
+
+    const app = buildApp(db);
+    const response = await request(app).get('/api/orphanet/search?q=Fabry&lang=fr');
+
+    expect(response.status).toBe(200);
+    expect(orphanetFind).toHaveBeenCalledTimes(2);
+    expect(response.body).toHaveLength(1);
+    expect(response.body[0].orphaCode).toBe('ORPHA:324');
+  });
+
+  it('nao filtra por idioma quando o parametro lang e apenas espacos em branco', async () => {
+    loadRouteWithEnv({ ALLOW_EXTERNAL_TERMINOLOGY_SYNC: 'false' });
+
+    const orphanetFind = vi.fn(() => cursor([{ ORPHA: '324', name: 'Fabry disease' }]));
+    const db = {
+      collection: vi.fn((name) => {
+        if (name === 'cids') return { find: vi.fn(() => cursor([])) };
+        if (name === COLLECTION_NAME) return { find: orphanetFind };
+        return { find: vi.fn(() => cursor([])) };
+      }),
+    };
+
+    const app = buildApp(db);
+    const response = await request(app).get('/api/orphanet/search?q=Fabry&lang=%20');
+
+    expect(response.status).toBe(200);
+    expect(orphanetFind).toHaveBeenCalledTimes(1);
+    const calledFilter = orphanetFind.mock.calls[0][0];
+    expect(calledFilter.lang).toBeUndefined();
+  });
+
+  it('retorna lista vazia quando nao ha resultados locais nem externos', async () => {
+    loadRouteWithEnv({ ALLOW_EXTERNAL_TERMINOLOGY_SYNC: 'false' });
+
+    const db = {
+      collection: vi.fn(() => ({ find: vi.fn(() => cursor([])) })),
+    };
+
+    const app = buildApp(db);
+    const response = await request(app).get('/api/orphanet/search?q=NoMatchTerm');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual([]);
+  });
+
+  it('adiciona o filtro numerico de ORPHA no $or quando a busca e puramente numerica', async () => {
+    loadRouteWithEnv({ ALLOW_EXTERNAL_TERMINOLOGY_SYNC: 'false' });
+
+    const cidsFind = vi.fn(() => cursor([]));
+    const db = {
+      collection: vi.fn((name) => {
+        if (name === 'cids') return { find: cidsFind };
+        return { find: vi.fn(() => cursor([])) };
+      }),
+    };
+
+    const app = buildApp(db);
+    const response = await request(app).get('/api/orphanet/search?q=324');
+
+    expect(response.status).toBe(200);
+    const filter = cidsFind.mock.calls[0][0];
+    // Base $or has 19 entries; a purely-numeric search adds exactly 1 more
+    // (the numericOrpha boundary regex), since stripKnownCodePrefix is a no-op here.
+    expect(filter.$or).toHaveLength(20);
+  });
+
+  it('adiciona filtros extras de codigo no $or quando a busca tem prefixo ORPHA/OMIM conhecido', async () => {
+    loadRouteWithEnv({ ALLOW_EXTERNAL_TERMINOLOGY_SYNC: 'false' });
+
+    const cidsFind = vi.fn(() => cursor([]));
+    const db = {
+      collection: vi.fn((name) => {
+        if (name === 'cids') return { find: cidsFind };
+        return { find: vi.fn(() => cursor([])) };
+      }),
+    };
+
+    const app = buildApp(db);
+    const response = await request(app).get('/api/orphanet/search?q=ORPHA:324');
+
+    expect(response.status).toBe(200);
+    const filter = cidsFind.mock.calls[0][0];
+    // Base 19 + 4 (codeRegex clauses, since stripped "324" !== "ORPHA:324") + 1 (numericOrpha) = 24
+    expect(filter.$or).toHaveLength(24);
+  });
+
+  it('funde registros duplicados preservando CID e OMIM do registro anterior quando o novo os omite', async () => {
+    loadRouteWithEnv({ ALLOW_EXTERNAL_TERMINOLOGY_SYNC: 'false' });
+
+    const db = {
+      collection: vi.fn((name) => {
+        if (name === 'cids') {
+          return { find: vi.fn(() => cursor([{ ORPHA: '324', Codigos_CID10: 'E75.2', Descricao: 'Fabry' }])) };
+        }
+        if (name === COLLECTION_NAME) {
+          return { find: vi.fn(() => cursor([{ ORPHA: '324', OMIM: '301500', name: 'Fabry disease' }])) };
+        }
+        return { find: vi.fn(() => cursor([])) };
+      }),
+    };
+
+    const app = buildApp(db);
+    const response = await request(app).get('/api/orphanet/search?q=Fabry');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toHaveLength(1);
+    expect(response.body[0]).toMatchObject({
+      orphaCode: 'ORPHA:324',
+      Codigos_CID10: 'E75.2',
+      OMIM: 'OMIM:301500',
+    });
+  });
+
+  it('nao consulta a API externa quando ORPHADATA_BASE_URL nao esta configurada, mesmo com sync habilitado', async () => {
+    loadRouteWithEnv({ ALLOW_EXTERNAL_TERMINOLOGY_SYNC: 'true', ORPHADATA_BASE_URL: '' });
+
+    const fetchSpy = vi.fn();
+    global.fetch = fetchSpy;
+
+    const db = {
+      collection: vi.fn(() => ({ find: vi.fn(() => cursor([])) })),
+    };
+
+    const app = buildApp(db);
+    const response = await request(app).get('/api/orphanet/search?q=Fabry');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual([]);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('ignora resultado remoto quando a API externa responde com status de erro', async () => {
+    loadRouteWithEnv({ ALLOW_EXTERNAL_TERMINOLOGY_SYNC: 'true', ORPHADATA_BASE_URL: 'https://orphadata.test' });
+
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      json: async () => ({ message: 'internal error' }),
+    });
+
+    const db = {
+      collection: vi.fn(() => ({ find: vi.fn(() => cursor([])) })),
+    };
+
+    const app = buildApp(db);
+    const response = await request(app).get('/api/orphanet/search?q=Fabry');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual([]);
+  });
+
+  it('trata timeout (AbortError) da API externa sem propagar erro ao cliente', async () => {
+    loadRouteWithEnv({ ALLOW_EXTERNAL_TERMINOLOGY_SYNC: 'true', ORPHADATA_BASE_URL: 'https://orphadata.test' });
+
+    const abortError = new Error('The operation was aborted');
+    abortError.name = 'AbortError';
+    global.fetch = vi.fn().mockRejectedValue(abortError);
+
+    const db = {
+      collection: vi.fn(() => ({ find: vi.fn(() => cursor([])) })),
+    };
+
+    const app = buildApp(db);
+    const response = await request(app).get('/api/orphanet/search?q=Fabry');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual([]);
+  });
+
+  it('consulta duas URLs externas (codigo e nome) quando a busca e um ORPHA numerico', async () => {
+    loadRouteWithEnv({ ALLOW_EXTERNAL_TERMINOLOGY_SYNC: 'true', ORPHADATA_BASE_URL: 'https://orphadata.test' });
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ results: [] }),
+    });
+    global.fetch = fetchMock;
+
+    const db = {
+      collection: vi.fn(() => ({ find: vi.fn(() => cursor([])) })),
+    };
+
+    const app = buildApp(db);
+    const response = await request(app).get('/api/orphanet/search?q=324');
+
+    expect(response.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[0][0]).toContain('/rd-cross-referencing/orphacodes/324');
+  });
+
+  it('interpreta payload externo como objeto unico quando a API retorna dados sem envelope de lista', async () => {
+    loadRouteWithEnv({ ALLOW_EXTERNAL_TERMINOLOGY_SYNC: 'true', ORPHADATA_BASE_URL: 'https://orphadata.test' });
+
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        ORPHAcode: '324',
+        'Preferred term': 'Fabry disease',
+      }),
+    });
+
+    const db = {
+      collection: vi.fn(() => ({ find: vi.fn(() => cursor([])) })),
+    };
+
+    const app = buildApp(db);
+    const response = await request(app).get('/api/orphanet/search?q=Fabry');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toHaveLength(1);
+    expect(response.body[0].orphaCode).toBe('ORPHA:324');
+  });
+
+  it('retorna 500 quando a busca local falha inicialmente e o fallback local tambem falha', async () => {
+    loadRouteWithEnv({ ALLOW_EXTERNAL_TERMINOLOGY_SYNC: 'false' });
+
+    const db = {
+      collection: vi.fn((name) => {
+        if (name === 'cids') {
+          return {
+            find: vi.fn(() => {
+              throw new Error('cids query failed');
+            }),
+          };
+        }
+        return { find: vi.fn(() => cursor([])) };
+      }),
+    };
+
+    const app = buildApp(db);
+    const response = await request(app).get('/api/orphanet/search?q=Fabry');
+
+    expect(response.status).toBe(500);
+    expect(response.body).toEqual({ error: 'Failed to search orphanet diseases' });
+  });
+
+  it('recupera via fallback local quando a primeira tentativa de busca local lanca erro', async () => {
+    loadRouteWithEnv({ ALLOW_EXTERNAL_TERMINOLOGY_SYNC: 'false' });
+
+    let cidsCallCount = 0;
+    const db = {
+      collection: vi.fn((name) => {
+        if (name === 'cids') {
+          return {
+            find: vi.fn(() => {
+              cidsCallCount += 1;
+              if (cidsCallCount === 1) {
+                throw new Error('transient failure');
+              }
+              return cursor([{ ORPHA: '324', Codigos_CID10: 'E75.2', Descricao: 'Fabry' }]);
+            }),
+          };
+        }
+        return { find: vi.fn(() => cursor([])) };
+      }),
+    };
+
+    const app = buildApp(db);
+    const response = await request(app).get('/api/orphanet/search?q=Fabry');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toHaveLength(1);
+    expect(response.body[0].orphaCode).toBe('ORPHA:324');
   });
 });
