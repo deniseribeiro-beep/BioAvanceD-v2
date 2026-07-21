@@ -167,7 +167,6 @@ src/services/merkle-envelope.service.js           80.30 / 66.21
 src/interface/routes/analysis-file.routes.js      80.95 / 87.50
 src/interface/routes/master-data.routes.js        81.42 / 68.75
 src/config/redis.js                               81.76 / 70.45
-src/interface/routes/logs.routes.js               81.81 / 61.19
 src/interface/routes/equipment.routes.js          81.92 / 74.11
 src/utils/auditLogger.js                          82.00 / 67.96
 src/controllers/import.controller.js              82.23 / 75.86
@@ -240,6 +239,18 @@ verified via a standalone Node script that
 `downloadSampleTemplateExcel`'s db-id ternaries (lines ~1036-1038) *do*
 resolve to the DB-provided ids at runtime even though istanbul reports
 their true branch as 0-hit; not chased further),
+`src/interface/routes/logs.routes.js` (was 81.81/61.19, isolated run now
+100% lines / 91.04% branches — new `tests/integration/logs.routes.test.js`,
+no pre-existing test file for this one; covers `requireAuditReader`'s
+accessType-4/roleName-admin/accented-administrador/role-contains-auditor
+allow branches plus the denied and missing-req.user cases, the 503 on
+every route, `GET /`/`GET /all`/`POST /query`'s success and 500 paths
+(`/all`'s default-limit-and-page-1 vs. explicit-limit branches), 
+`POST /register`'s 201/400 (and that it isn't gated by
+`requireAuditReader`), the CSV/XLSX export routes' header/escaping and
+empty-logs-array-fallback branches, and `GET /:id`'s valid-ObjectId-hit,
+invalid-ObjectId-falls-back-to-logId, valid-ObjectId-miss-falls-back-to-
+logId, 404, and 500 paths),
 `src/controllers/sensor.controller.js` (was 75.29/68.18, isolated run now
 100% lines / 97.72% branches — new `tests/unit/controllers/sensor.controller.test.js`,
 no pre-existing test file for this one; covers all five CRUD handlers'
