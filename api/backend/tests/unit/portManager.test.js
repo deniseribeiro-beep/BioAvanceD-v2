@@ -1,6 +1,7 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 const net = require('net');
-const { spawn } = require('child_process');
+const childProcess = require('child_process');
+const { spawn } = childProcess;
 
 vi.mock('../../src/utils/logger', () => ({
   info: vi.fn(),
@@ -10,6 +11,19 @@ vi.mock('../../src/utils/logger', () => ({
 }));
 
 const portManager = require('../../src/utils/portManager');
+const portManagerPath = require.resolve('../../src/utils/portManager');
+
+/**
+ * `exec` is destructured at module scope in portManager.js
+ * (`const { exec } = require('child_process')`), so spying on
+ * `child_process.exec` only takes effect for a *fresh* require of the
+ * module obtained after the spy is installed - the destructuring has to
+ * re-run against the mocked export (see cjs-mocking.md).
+ */
+function freshPortManagerWithMockedExec() {
+  delete require.cache[portManagerPath];
+  return require(portManagerPath);
+}
 
 /** Helper: occupy a port with a raw net server, returns the server (caller must close it) */
 function occupyPort(port) {
@@ -204,6 +218,140 @@ describe('portManager', () => {
       isPortAvailableSpy.mockRestore();
       killSpy.mockRestore();
       findSpy.mockRestore();
+    });
+  });
+
+  describe('_getProcessUsingPortPosix (direct, exec mocked)', () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+      delete require.cache[portManagerPath];
+    });
+
+    it('returns pid and processName when lsof and ps both succeed', async () => {
+      vi.spyOn(childProcess, 'exec').mockImplementation((cmd, cb) => {
+        if (cmd.startsWith('lsof')) {
+          cb(null, { stdout: '4242\n', stderr: '' });
+        } else {
+          cb(null, { stdout: 'node\n', stderr: '' });
+        }
+      });
+
+      const pm = freshPortManagerWithMockedExec();
+      const result = await pm._getProcessUsingPortPosix(9999);
+
+      expect(result).toEqual({ pid: '4242', processName: 'node' });
+    });
+
+    it('returns just the pid when ps fails to resolve the process name', async () => {
+      vi.spyOn(childProcess, 'exec').mockImplementation((cmd, cb) => {
+        if (cmd.startsWith('lsof')) {
+          cb(null, { stdout: '4242\n', stderr: '' });
+        } else {
+          cb(new Error('ps failed'));
+        }
+      });
+
+      const pm = freshPortManagerWithMockedExec();
+      const result = await pm._getProcessUsingPortPosix(9999);
+
+      expect(result).toEqual({ pid: '4242' });
+    });
+
+    it('returns null when lsof itself fails (nothing listening)', async () => {
+      vi.spyOn(childProcess, 'exec').mockImplementation((cmd, cb) => {
+        cb(new Error('command not found'));
+      });
+
+      const pm = freshPortManagerWithMockedExec();
+      const result = await pm._getProcessUsingPortPosix(9999);
+
+      expect(result).toBeNull();
+    });
+
+    it('getProcessUsingPort dispatches to the posix implementation on a non-win32 platform', async () => {
+      const original = Object.getOwnPropertyDescriptor(process, 'platform');
+      Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
+      try {
+        vi.spyOn(childProcess, 'exec').mockImplementation((cmd, cb) => {
+          if (cmd.startsWith('lsof')) cb(null, { stdout: '4242\n', stderr: '' });
+          else cb(null, { stdout: 'node\n', stderr: '' });
+        });
+
+        const pm = freshPortManagerWithMockedExec();
+        const result = await pm.getProcessUsingPort(9999);
+
+        expect(result).toEqual({ pid: '4242', processName: 'node' });
+      } finally {
+        Object.defineProperty(process, 'platform', original);
+      }
+    });
+  });
+
+  describe('_getProcessUsingPortWindows (direct, exec mocked)', () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+      delete require.cache[portManagerPath];
+    });
+
+    it('returns just the pid when tasklist fails to resolve the process name', async () => {
+      vi.spyOn(childProcess, 'exec').mockImplementation((cmd, cb) => {
+        if (cmd.startsWith('netstat')) cb(null, { stdout: 'TCP 0.0.0.0:9999 LISTENING 4242\n', stderr: '' });
+        else cb(new Error('tasklist failed'));
+      });
+
+      const pm = freshPortManagerWithMockedExec();
+      const result = await pm._getProcessUsingPortWindows(9999);
+
+      expect(result).toEqual({ pid: '4242' });
+    });
+  });
+
+  describe('killProcessOnPort on a non-win32 platform (process.kill path)', () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+      delete require.cache[portManagerPath];
+    });
+
+    function withPlatform(value, fn) {
+      const original = Object.getOwnPropertyDescriptor(process, 'platform');
+      Object.defineProperty(process, 'platform', { value, configurable: true });
+      return fn().finally(() => {
+        Object.defineProperty(process, 'platform', original);
+      });
+    }
+
+    it('calls process.kill with SIGKILL and returns true on success', () =>
+      withPlatform('linux', async () => {
+        const pm = freshPortManagerWithMockedExec();
+        vi.spyOn(pm, 'getProcessUsingPort').mockResolvedValue({ pid: '555', processName: 'node' });
+        const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+
+        const result = await pm.killProcessOnPort(9999);
+
+        expect(result).toBe(true);
+        expect(killSpy).toHaveBeenCalledWith(555, 'SIGKILL');
+      }), 10000);
+
+    it('returns false when process.kill throws', () =>
+      withPlatform('linux', async () => {
+        const pm = freshPortManagerWithMockedExec();
+        vi.spyOn(pm, 'getProcessUsingPort').mockResolvedValue({ pid: '555', processName: 'node' });
+        vi.spyOn(process, 'kill').mockImplementation(() => {
+          throw new Error('ESRCH');
+        });
+
+        const result = await pm.killProcessOnPort(9999);
+
+        expect(result).toBe(false);
+      }));
+
+    it('returns false when getProcessUsingPort itself throws', async () => {
+      const pm = freshPortManagerWithMockedExec();
+      vi.spyOn(pm, 'getProcessUsingPort').mockRejectedValue(new Error('unexpected failure'));
+
+      const result = await pm.killProcessOnPort(9999);
+
+      expect(result).toBe(false);
     });
   });
 });
