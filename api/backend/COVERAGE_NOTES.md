@@ -167,7 +167,6 @@ src/interface/routes/analysis-file.routes.js      80.95 / 87.50
 src/interface/routes/master-data.routes.js        81.42 / 68.75
 src/config/redis.js                               81.76 / 70.45
 src/interface/routes/equipment.routes.js          81.92 / 74.11
-src/utils/auditLogger.js                          82.00 / 67.96
 src/controllers/import.controller.js              82.23 / 75.86
 src/services/security.service.js                  82.51 / 72.26
 src/infrastructure/queue/Neo4jQuarantineService.js 83.33 / 82.75
@@ -209,6 +208,25 @@ TokenExpiredError vs. generic invalid-token, session-missing-db 503,
 all three `verifySession` invalid reasons, the keepalive/mfa-setup
 session-check bypass routes, the mfaSetupRequired/mfaVerified 403 gate,
 the outer-catch 500, and `optionalAuth`'s no-op-on-error path),
+`src/utils/auditLogger.js` (was 82.00/67.96, isolated run now 99.06%
+lines / 96.6% branches — new `tests/unit/utils/auditLogger.test.js`, no
+pre-existing test file; covers `extractRequestInfo`'s full IP-resolution
+fallback chain (req.ip/x-forwarded-for/x-real-ip/connection/socket/N-A)
+and header/method/path/origin defaults, `extractUserInfo`'s accessType
+role mapping and roleName override, `sanitizePayload`'s sensitive-field
+stripping and Patient/participantId delegation, `extractErrorStack`'s
+5-line truncation, all 16 `determineModule` path-prefix branches,
+`log()`'s uninitialized-early-return, full success path, module/result/
+status fallbacks, and outer-catch swallow, every convenience method
+(`logLogin`/`logLogout`/`logCreate`/`logUpdate`/`logDelete`/`logImport`'s
+three result/severity branches/`logError`/`logLanguageChange`/
+`logPermissionChange`/`logAssistant`), and `formatEntity`'s capitalize/
+Unknown-fallback/resourceType-override paths; found and filed issue
+#234 — `extractRequestInfo`'s port-stripping never fires for a real
+dotted IPv4 address (the `!parts[0].includes('.')` guard excludes it)
+and mangles a bare IPv6 loopback (`::1`) down to `:` since it has more
+colons than a port-bearing address would; both asserted as their
+current (buggy) output with a comment pointing at #234),
 `src/controllers/import-lgpd.controller.js` (was 82.66/54.41, isolated run
 across its three test files now 100% lines / 87.9% branches — extended
 `tests/unit/import-lgpd.controller.gaps.test.js` across two passes:
