@@ -150,7 +150,6 @@ src/models/PatientConsent.js                      70.83 / 85.24
 src/services/mqtt-telemetry.service.js            71.42 / 78.09   (issue #160 — HMAC bypass bug)
 src/services/hl7.service.js                       100.0 / 81.81  (covered — see history archive)
 src/controllers/iot.controller.js                 79.76 / 73.52  (branches covered — see history archive; applyColdChainQuarantine catch + a couple of resolveTemperaturePolicy edge branches remain)
-src/controllers/sensor.controller.js              75.29 / 68.18
 src/utils/fieldEncryption.js                      76.19 / 69.56
 src/infrastructure/persistence/mongo/MongoAuditRepository.js 76.66 / 84.61
 src/workers/workers/result-worker.js              76.66 / 66.07   (issue #146/#164 — rename + yauzl)
@@ -213,7 +212,15 @@ test file for this one; covers no-token/malformed-header,
 TokenExpiredError vs. generic invalid-token, session-missing-db 503,
 all three `verifySession` invalid reasons, the keepalive/mfa-setup
 session-check bypass routes, the mfaSetupRequired/mfaVerified 403 gate,
-the outer-catch 500, and `optionalAuth`'s no-op-on-error path).
+the outer-catch 500, and `optionalAuth`'s no-op-on-error path),
+`src/controllers/sensor.controller.js` (was 75.29/68.18, isolated run now
+100% lines / 97.72% branches — new `tests/unit/controllers/sensor.controller.test.js`,
+no pre-existing test file for this one; covers all five CRUD handlers'
+503/404/error-catch paths and the `req.user`-gated audit-log branches;
+found and filed issue #233 — `list()` throws a 500 instead of falling
+back to `[]` when `listSensors` resolves `null`, since `result.sensors`
+is dereferenced before the `Array.isArray` fallback runs; test asserts
+the current buggy 500 response, not the intended fallback).
 
 ## GOOD coverage (>=85% lines)
 
