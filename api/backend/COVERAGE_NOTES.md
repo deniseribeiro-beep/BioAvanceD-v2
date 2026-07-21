@@ -148,7 +148,6 @@ error paths, a good tie-breaker when picking among these.
 ```
 src/models/PatientConsent.js                      70.83 / 85.24
 src/services/mqtt-telemetry.service.js            71.42 / 78.09   (issue #160 — HMAC bypass bug)
-src/infrastructure/middleware/auth.js             71.66 / 68.18
 src/services/hl7.service.js                       100.0 / 81.81  (covered — see history archive)
 src/controllers/iot.controller.js                 79.76 / 73.52  (branches covered — see history archive; applyColdChainQuarantine catch + a couple of resolveTemperaturePolicy edge branches remain)
 src/controllers/sensor.controller.js              75.29 / 68.18
@@ -207,7 +206,14 @@ branches in `getPatient`/`updatePatient`/`deletePatient`, and
 `searchPatients`' date-parsing branches added; remaining gap is mostly
 `createPatient`/`updatePatient` error-path permutations already
 partially covered by `patient.service.createUpdate.gaps.unit.test.js`,
-see `COVERAGE_HISTORY.md`).
+see `COVERAGE_HISTORY.md`), `src/infrastructure/middleware/auth.js` (was
+71.66/68.18, isolated run now 100% lines / 95.45% branches — new
+`tests/unit/infrastructure/middleware/auth.test.js`, no pre-existing
+test file for this one; covers no-token/malformed-header,
+TokenExpiredError vs. generic invalid-token, session-missing-db 503,
+all three `verifySession` invalid reasons, the keepalive/mfa-setup
+session-check bypass routes, the mfaSetupRequired/mfaVerified 403 gate,
+the outer-catch 500, and `optionalAuth`'s no-op-on-error path).
 
 ## GOOD coverage (>=85% lines)
 
