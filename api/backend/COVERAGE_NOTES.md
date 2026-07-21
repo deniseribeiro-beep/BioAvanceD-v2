@@ -159,7 +159,6 @@ src/services/SampleGraphValidator.js              77.69 / 66.66   (issue #222 �
 src/utils/portManager.js                          100.0 / 80.00   (covered — see history archive)
 src/models/User.js                                98.03 / 97.89   (covered — see history archive)
 src/workers/neo4jProjection.worker.js             79.62 / 73.33
-src/interface/routes/clinical-unit.routes.js      79.76 / 63.15
 src/models/AnalysisType.js                        80.00 / 75.00
 src/reference-data/essential/manifest.js          80.00 / 0
 src/database/mongo.js                             80.10 / 76.51
@@ -239,6 +238,24 @@ verified via a standalone Node script that
 `downloadSampleTemplateExcel`'s db-id ternaries (lines ~1036-1038) *do*
 resolve to the DB-provided ids at runtime even though istanbul reports
 their true branch as 0-hit; not chased further),
+`src/interface/routes/clinical-unit.routes.js` (was 79.76/63.15, isolated
+run across its two test files now 96.42% lines / 92.1% branches — new
+`tests/integration/clinical-unit.routes.gaps.test.js` alongside the
+existing `clinical-unit.api.test.js`; covers `GET /`'s includeInactive
+query branch, limit clamping, and 500-on-throw; `GET /search`'s empty-`q`
+default, sub-3-char terms skipping `$text` search, the `$text` query's
+own try/catch falling back to regex, the early-return when text matches
+already fill the limit, the text+regex merge/de-dup path, and the outer
+500; and `POST /`'s name-length/active-type validation 400s, the
+existing-normalizedName short-circuit, the duplicate-key (11000) race
+recovering via a fallback lookup vs. falling through to 500 when no
+fallback record exists, a non-duplicate insertion 500, and the
+`requirePermission('createPatient')` 403 gate. The three routes' own
+`if (!db) return 503` checks (lines 33/55/131) remain uncovered — verified
+genuinely unreachable, not a test gap: `authenticate` already 503s on a
+falsy `req.app.locals.db` before any route handler runs, and every route
+reads that same `app.locals.db`, so the route-level check can never see
+a falsy value that the middleware didn't already catch),
 `src/interface/routes/logs.routes.js` (was 81.81/61.19, isolated run now
 100% lines / 91.04% branches — new `tests/integration/logs.routes.test.js`,
 no pre-existing test file for this one; covers `requireAuditReader`'s
