@@ -32,33 +32,41 @@ stale as slices land and as source files change. Keep it honest:
 
 ## Last full reconcile
 
-**2026-07-22 (afternoon)**, snapshot from `test/mid-high-coverage-batch-1`
-commit `fdd37e10` (`npx vitest run tests/unit tests/integration
-tests/compliance --coverage --reporter=dot`, full suite).
+**2026-07-22 (evening)**, snapshot from `test/withdrawal-model-coverage`
+(`npx vitest run tests/unit tests/integration tests/compliance
+--coverage --reporter=dot`, full suite).
 
-Statements **90.33%** (16866/18671), Branches **81.3%** (13570/16691),
-Functions **90.34%** (2041/2259), Lines **90.9%** (16245/17871) — up
-from the morning reconcile's 88.8/79.71/88.44/89.44 (commit `67d01a62`),
-driven by this session's `fhir-import-staging.controller.js`,
-`intakeWizard.routes.js`, and `audit-tsa.service.js` slices all landing
-at 100%. **Three of four dimensions (statements/functions/lines) are now
-past the 90% milestone** (`bioavanced-v2-conventions`); branches (81.3%)
-remains the sole laggard, up from the stale 79.71% figure.
+Statements **90.8%** (16955/18672), Branches **81.84%** (13660/16691),
+Functions **90.83%** (2052/2259), Lines **91.31%** (16319/17872) — up
+from the afternoon reconcile's 90.33/81.3/90.34/90.9 (commit `fdd37e10`).
+**Three of four dimensions (statements/functions/lines) remain past the
+90% milestone** (`bioavanced-v2-conventions`); branches (81.84%) is
+still the sole laggard, though it moved up 0.54pt this session.
 
-Run also surfaced **123 failing tests across 5 files** — not the 2 known
-pre-existing AES-256-GCM failures. Confirmed real (fails in isolation
-too, not cross-file pollution): `patient.model.unit.test.js`,
+Only **1 failing test** this run (`sample-graph-validator.service.test.js`
+> "valida o nó de Integridade com sucesso e falha por tampering") — the
+123-failures-across-5-files issue #244 called out in the prior
+(afternoon) reconcile is **not reproducing**: `patient.model.unit.test.js`,
 `sample.model.gaps.test.js`, `sample.model.unit.test.js`,
-`sample.models.test.js`, `sample-graph-validator.service.test.js` all
-still use pre-rename field names (`patientID`/`cpf` instead of
-`participantId`/`identityDocument`, and the Sample-side equivalents) —
-the same participantId/specimenId/identityDocument canonicalization
-rename that commit `dbf0f448` fixed in 7 *other* files for
-#133/#134/#136/#137/#139 back on 2026-07-09, just missing these 5. Filed
-as **issue #244**; un-staling these fixtures (no product change
-expected) is a strong next-slice candidate, not just for coverage but
-because 123 red tests understate real product health in any future
-reconcile that trusts pass/fail counts.
+`sample.models.test.js` all pass now. Something between `fdd37e10` and
+this session's HEAD fixed the participantId/identityDocument rename
+drift in those 4 files (or the prior reconcile's failure was
+environment-specific) — worth a quick look at whether issue #244 should
+be closed; not re-investigated further this session since it's not
+blocking coverage work.
+
+This session's slice, `src/infrastructure/middleware/consent.enforcement.js`
+(34 lines, no dedicated test file previously — only indirectly exercised
+via `sample.routes.test.js`), moved from 86.66/41.66 (lines/branches) to
+100/100/100/100 isolated. It was never listed in the buckets below
+because those cutoffs are lines-based (>=85% lines = GOOD, not tracked);
+its branch% was the real gap. **Since branches is the one lagging
+dimension, a lines-only bucket sweep will keep missing files like this
+one** — files at or above 85% lines but with a large lines/branches gap
+are worth spot-checking directly via the reconcile's coverage-summary.json
+sorted by branch%, not just by picking from the ZERO/LOW/MID-LOW buckets
+below. Bucket lists below otherwise unchanged from the afternoon
+reconcile (spot-checked; no bucket-membership shifts besides this file).
 
 **Known limitation of this reconcile method — see issue #242**: for
 files whose tests span both a Vitest-isolated unit test (plain ESM
