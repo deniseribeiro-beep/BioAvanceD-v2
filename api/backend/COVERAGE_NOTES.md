@@ -211,9 +211,7 @@ is mounted 5 times). `quality.routes.js` (50/100 branches/lines,
 flagged by the branch-sort as another candidate) was checked and ruled
 out: its `req.body || {}` fallback is unreachable dead code too since
 `express.json()` is applied globally in `app.js` before any route runs,
-so `req.body` is never falsy — not filed as a new issue since it's a
-single untestable line, not worth the pattern-tracking overhead of the
-5-per-file cases above.
+so `req.body` is never falsy — filed as issue #249.
 
 **Bucket lists below are freshly regenerated this session** off the new
 `coverage-summary.json`, then corrected per the drift check above.
