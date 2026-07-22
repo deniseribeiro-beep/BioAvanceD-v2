@@ -1,7 +1,7 @@
 # HANDOFF
 
 **Written:** 2026-07-22, end of a test-loop iteration.
-**Branch:** `test/mid-high-coverage-batch-1` (pushed, commit `1d95a6ff`).
+**Branch:** `test/mid-high-coverage-batch-1` (pushed, commit `8d7a4c75`).
 **No issue was resolved this session** — one test-writing slice landed,
 picked from `api/backend/COVERAGE_NOTES.md`'s MID-HIGH bucket.
 
@@ -16,29 +16,31 @@ picked from `api/backend/COVERAGE_NOTES.md`'s MID-HIGH bucket.
 
 ## This session's slice
 
-- Extended `api/backend/tests/unit/createFirstAdmin.script.test.js`
-  (4 → 12 tests, all passing): `requireBootstrapEnv` missing-env
-  permutations (all-missing message, whitespace-only value) and
-  normalization (trim, email lowercase, password preserved verbatim),
-  weak-password rejection before any DB access, and the no-`options.db`
-  path — `connectDB` fallback plus `closeConnection` in the `finally`
-  on both success and error, via require-cache re-require against
-  patched `mongo` exports (source destructures at module scope; see
-  `cjs-mocking.md`'s destructure gotcha).
-- Isolated coverage on `src/scripts/createFirstAdmin.js`:
-  77.27%/65% → 90.9%/75% (lines/branches). Remaining lines 108-112 are
-  the `require.main` CLI entry block — not coverable in-process
-  (subprocess coverage isn't collected); accepted gap, recorded in the
-  commit message. Removed from `COVERAGE_NOTES.md`'s MID-HIGH bucket in
-  the same commit.
+- Extended `api/backend/tests/unit/database-mongo.test.js` (20 → 30
+  tests, all passing): `connectDB`'s auth-retry-also-fails propagation
+  path (lines 282-284), `connectNewDB`'s client/newDb reuse branch
+  (line 308) and its full auth-failure retry cycle — success and
+  double-failure (lines 340-373), and `closeConnection`'s error
+  propagation when `client.close()` rejects (line 395).
+- Isolated coverage on `src/database/mongo.js`: 80.10%/76.51% →
+  88.14%/80.3% (lines/branches). Remaining uncovered lines are
+  `encodeMongoURI`'s debug-flag-only logging branches (171-172,
+  179-180, 185-186) — low-value padding for a debug flag, not pursued.
+  Removed from `COVERAGE_NOTES.md`'s MID-HIGH bucket in the same
+  commit.
+- Also measured `src/workers/neo4jProjection.worker.js` (79.62/73.33)
+  before picking mongo.js instead: its only remaining gap is the
+  `require.main === module` CLI entry block (lines 82-99, SIGTERM/SIGINT
+  handlers + worker start/stop) — same not-coverable-in-process pattern
+  as `createFirstAdmin.js`'s CLI block. Recorded as an accepted gap in
+  `COVERAGE_NOTES.md` rather than picked as a separate slice; skip it
+  in future passes unless someone finds a subprocess-coverage approach.
 - No bugs found; nothing filed.
-- Loader-style note: the existing test file loads sources via bare
-  `require` (works under this vitest setup). The slice **extended that
-  file** rather than adding a `.gaps` file with `createRequire`, to
-  avoid the mixed-loader coverage under-report trap
-  (`cjs-mocking.md`, `sensor.service.js` incident). If a future slice
-  adds a second test file for a source, match the existing file's
-  loading style first.
+- Mocking pattern: `mongo.js`'s existing test file already uses the
+  `installFakeMongoClient()` + `require.cache` re-require pattern for
+  the CJS `MongoClient` destructure — this slice's new tests followed
+  the same fixture (`FakeClientInstance.connectBehavior` /
+  `.prototype.close` overrides), no new mocking approach introduced.
 
 ## Recommended next slices
 
@@ -46,21 +48,21 @@ Still open in `COVERAGE_NOTES.md`'s MID-HIGH (70-84% lines) bucket, not
 issue-tagged — worst-first by lines% (`patient.service.js` excluded from
 a quick pick; it needs a fan-out, see its bucket note):
 
-1. `src/workers/neo4jProjection.worker.js` — 79.62 / 73.33
-2. `src/database/mongo.js` — 80.10 / 76.51
-3. `src/interface/routes/analysis-file.routes.js` — 80.95 / 87.50
-4. `src/interface/routes/master-data.routes.js` — 81.42 / 68.75
-5. `src/config/redis.js` — 81.76 / 70.45
-6. `src/interface/routes/equipment.routes.js` — 81.92 / 74.11
-7. `src/controllers/import.controller.js` — 82.23 / 75.86
-8. `src/services/security.service.js` — 82.51 / 72.26
-9. `src/infrastructure/queue/Neo4jQuarantineService.js` — 83.33 / 82.75
-10. `src/models/User.js` — 83.67 / 78.94 (reconcile's raw number)
-11. `src/services/fhir-import-staging.service.js` — 84.15 / 77.86
-12. `src/controllers/import-async.controller.js` — 84.29 / 79.66
+1. `src/interface/routes/analysis-file.routes.js` — 80.95 / 87.50
+2. `src/interface/routes/master-data.routes.js` — 81.42 / 68.75
+3. `src/config/redis.js` — 81.76 / 70.45
+4. `src/interface/routes/equipment.routes.js` — 81.92 / 74.11
+5. `src/controllers/import.controller.js` — 82.23 / 75.86
+6. `src/services/security.service.js` — 82.51 / 72.26
+7. `src/infrastructure/queue/Neo4jQuarantineService.js` — 83.33 / 82.75
+8. `src/models/User.js` — 83.67 / 78.94 (reconcile's raw number)
+9. `src/services/fhir-import-staging.service.js` — 84.15 / 77.86
+10. `src/controllers/import-async.controller.js` — 84.29 / 79.66
 
 Skip anything issue-tagged in that bucket: `mqtt-telemetry.service.js`
 (#160), `result-worker.js` (#146/#164), `SampleGraphValidator.js` (#222).
+Skip `neo4jProjection.worker.js` — remaining gap is an accepted,
+not-coverable-in-process CLI entry block (see above).
 
 **Before picking any of the above, measure isolated coverage first**
 (`npx vitest run <existing test files> --coverage
