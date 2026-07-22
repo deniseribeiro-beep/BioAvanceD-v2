@@ -1,92 +1,79 @@
 # HANDOFF
 
 **Written:** 2026-07-22, end of a test-loop iteration.
-**Branch:** `test/mid-high-coverage-batch-1` (pushed, commit `a4d0e5a7`).
+**Branch:** `test/mid-high-coverage-batch-1` (pushed, commit `98c426de`).
 
 ## What happened this session
 
-Read the prior HANDOFF (from the `audit-tsa.service.js` slice) and its
-"recommended next steps": continue the `#146`-cluster LOW-bucket files,
-`intakeWizard.routes.js` (16.98%/0% lines/branches) now the lowest
-remaining. Picked it and added
-`api/backend/tests/unit/intakeWizard.routes.governance.test.js` — 14
+Read the prior HANDOFF (from the `intakeWizard.routes.js` slice) and its
+"recommended next steps": `fhir-import-staging.controller.js` (30.23%/
+41.17% lines/branches) was the last remaining file in the `#146`-cluster
+LOW bucket. Picked it and added
+`api/backend/tests/unit/fhir-import-staging.controller.test.js` — 21
 tests.
 
-Note the naming collision: `src/interface/routes/intakeWizard.routes.js`
-(the thin auth/rbac wrapper + `intakeGovernanceResponseGuard`, the file
-actually listed in COVERAGE_NOTES.md) is a *different* file from
-`src/routes/intakeWizard.js` (the intake-handling logic, already covered
-by the pre-existing `tests/unit/intakeWizard.routes.test.js`). The new
-test file targets the wrapper specifically: `buildSampleQuery`,
-`resolveGovernanceStatus` (BLOCKED/QUARANTINE/AVAILABLE branches),
-`buildSafeSampleSummary`, `enforcePersistedGovernanceStatus`, and the
-response-guard's try/catch.
+The controller is a thin delegator to `fhir-import-staging.service.js`
+(stage/getBatch/validate/sendConsents/consentStatus/commit/
+attachExternalDocument, plus a multer upload middleware and a
+`parseJsonFile`/`sendError` pair of module-private helpers). Mocked the
+service directly with `vi.spyOn` (no `require.cache` tricks needed —
+simpler than the `intakeWizard.routes.js` slice since there's no
+auth/rbac wrapping here). Covered: `stage`'s file-vs-`req.body` payload
+branch, the JSON-parse-failure 400 path, every method's happy path, and
+every method's `sendError` fallback (typed `error.statusCode`/message vs.
+the default 500/'Erro no staging FHIR' when the rejection has neither).
 
-Mocking approach: rather than going through real JWT/session auth (the
-`equipment.routes.quarantine.test.js` pattern), mocked `auth.js`'s
-`authenticate` and `rbac.js`'s `requirePermission` to pass-through via
-`require.cache` injection, and stubbed the inner `src/routes/intakeWizard`
-router with a two-route test double (POST echoes body, GET proves
-non-POST bypass) — isolates the wrapper's own logic instead of
-re-exercising auth/rbac or the already-tested inner router. Consistent
-with this repo's established CJS-mocking-via-require.cache pattern.
+One test initially asserted the wrong fallback message for a bare
+`new Error()` (empty string is falsy, so `error?.message || 'default'`
+resolves to the default, not `''`) — caught by the actual first test run
+and fixed before committing; no real bug, just my own assertion error.
 
-File moved from LOW to 100/90.9/100/100 (stmts/branches/funcs/lines) in
-isolation. Remaining branch gap (`buildSafeSampleSummary`'s
-`governanceStatus.field || sample.field` fallbacks, lines 73-77) is
-genuinely unreachable — `resolveGovernanceStatus` always returns fully
-populated status fields on every one of its three branches, so the
-`sample.field` half of each fallback can never execute. Filed as
-[BioAvanceD-v2 issue #243](https://github.com/deniseribeiro-beep/BioAvanceD-v2/issues/243)
-(same dead-code pattern as #238/#236/#237), not left as an unfiled note.
+File moved from LOW to 100/100/100/100 (stmts/branches/funcs/lines) in
+isolation. LOW bucket is now empty (was 1 file at session start).
 
-Removed `intakeWizard.routes.js`'s line from `COVERAGE_NOTES.md`'s LOW
-bucket (now 1 file, was 2) and added a note pointing at #243.
-
-No product code touched; no bugs found in the wrapper itself (the one
-"finding" was the dead-code branch, filed rather than fixed per this
-loop's never-touch-product-code rule).
+No product code touched; no bugs found in the controller itself.
 
 ## Repo state
 
 - Working tree clean; `test/mid-high-coverage-batch-1` up to date with
-  origin at `a4d0e5a7`. Nothing pending to merge/delete.
+  origin at `98c426de`. Nothing pending to merge/delete.
 - `main` remains frozen — do not branch off it, merge into it, or push
   to it. `feature/docker-e2e-backend-integration` is the base for new
   integration work per prior sessions' convention (unchanged this
   session).
-- One BioAvanceD-v2 issue opened this session: #243 (dead fallback
-  branches in `intakeWizard.routes.js`, see above).
+- No new issues opened this session (no bugs/dead-code found in this
+  slice).
 
 ## Milestone (set 2026-07-22 by Dennis, still current)
 
 **Target: 90% across all four coverage dimensions** — statements,
 branches, functions, lines. Branches remains the laggard (~79.71% at the
-last full reconcile, commit `5f91e9fd`, now increasingly stale after six
-slices' branch-heavy additions since) and the metric to prioritize;
-prefer branch-heavy gaps over line-heavy ones. Frontend remains out of
-scope per that same direction.
+last full reconcile, commit `5f91e9fd`, now stale after seven slices'
+branch-heavy additions since) and the metric to prioritize.
+Frontend remains out of scope per that same direction.
 
 ## Recommended next steps
 
-`fhir-import-staging.controller.js` (30.23/41.17) is now the last
-`#146`-cluster LOW-bucket file remaining.
+The `#146`-cluster LOW bucket is now empty — **a fresh full coverage
+reconcile is due before picking another ad-hoc slice**, per
+`COVERAGE_NOTES.md`'s own cadence guidance and the prior HANDOFF's
+explicit trigger ("sooner if the LOW bucket empties out this next
+slice"). Run the full native coverage report, regenerate the
+ZERO/LOW/MID-LOW/MID-HIGH buckets in `COVERAGE_NOTES.md` against current
+`main`-branch reality, and re-check the ~79.71% branches figure (stale
+since commit `5f91e9fd`) before choosing the next slice from the
+refreshed buckets.
 
 `#222` (`SampleGraphValidator.js`) — still a legacy-schema
 migration/design fork per `bioavanced-v2-legacy`; check that skill
 before committing to it. `#238`/`#240`/`#241`/`#243` remain accepted
 unreachable-branch gaps, not real 90%-branches levers.
 
-Six slices of the #146 LOW bucket have now landed across recent
-sessions — a fresh full reconcile (per `COVERAGE_NOTES.md`'s own cadence
-guidance) is due; do it before/at the next `ship-integration-branch`
-gate if not sooner, or sooner if the LOW bucket empties out this next
-slice.
-
 ## Which skills to use
 
-`bioavanced-v2-conventions` first. `test-loop` for
-`fhir-import-staging.controller.js` next. `bioavanced-v2-legacy` before
+`bioavanced-v2-conventions` first. `test-loop` for the next slice, but
+run the full reconcile (per `bioavanced-v2-testing-conventions`) before
+picking one — the bucket lists are stale. `bioavanced-v2-legacy` before
 `#222`. `wrap-up` every iteration.
 
 ## Dependency notes
@@ -95,9 +82,8 @@ None queued.
 
 ## Session note
 
-Confirmed this session: when a coverage-notes entry and an actual source
-file both share a near-identical name across two directories
-(`src/interface/routes/X.routes.js` vs `src/routes/X.js`), double-check
-which one COVERAGE_NOTES.md's path actually points at before assuming an
-existing test file already covers it — they can have completely
-different logic and only one may be tested.
+`new Error()` (no message argument) has `.message === ''`, which is
+falsy — code using `error?.message || 'default'` (this repo's standard
+`sendError` pattern) will resolve to the default string, not `''`, for a
+bare `new Error()`. Worth remembering when writing the "message-less
+rejection" test case for any controller using this pattern.
