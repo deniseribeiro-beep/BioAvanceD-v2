@@ -115,7 +115,7 @@ Low priority (models/interfaces/one-off scripts — thin or non-request-path):
   returning 503 may be the same terminologySync gate; check before
   treating as a genuine gap)
 
-## LOW coverage (1-49% lines) — 5 files, full reconcile 2026-07-21, commit `67d01a62`
+## LOW coverage (1-49% lines) — 3 files, full reconcile 2026-07-21, commit `67d01a62`
 
 Sorted ascending (worst first) — lines% / branches%. All are the
 same audit/rename-drift cluster (issue #146) already tracked; none are
@@ -127,11 +127,13 @@ mock. `audit-signing.provider.js` moved to GOOD (100/100/100/100,
 isolated run) — mocked `env` module in place (mutable object, no
 `vi.mock` needed), real Ed25519 keypairs via `crypto.generateKeyPairSync`
 for the sign/verify roundtrips, and a real temp file for `loadPrivateKey`.
+`audit-witness.service.js` moved to GOOD (100/100/100/100, isolated run)
+— thin `fetch`-only singleton, `vi.stubGlobal('fetch', ...)` same as
+`rfc3161-adapter.service.test.js`, no `vi.mock` needed.
 
 ```
 src/interface/routes/intakeWizard.routes.js     16.98 / 0        (issue #146 cluster)
 src/services/audit-tsa.service.js               21.42 / 0        (issue #146 cluster)
-src/services/audit-witness.service.js           27.27 / 0        (issue #146 cluster)
 src/controllers/fhir-import-staging.controller.js 30.23 / 41.17  (issue #146 cluster)
 ```
 
