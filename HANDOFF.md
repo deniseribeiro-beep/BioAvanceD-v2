@@ -1,62 +1,56 @@
 # HANDOFF
 
 **Written:** 2026-07-22, end of a test-loop iteration.
-**Branch:** `test/withdrawal-model-coverage` (commit `007ed74f`, pushed
+**Branch:** `test/withdrawal-model-coverage` (commit `481ddf56`, pushed
 this session), based off `feature/docker-e2e-backend-integration`.
 
 ## What happened this session
 
-Routed via `work-issue` → `test-loop`. Continued the branch%-sorted
-spot-check method from the prior handoff's candidate list.
+Routed via `test-loop`. Continued the prior handoff's remaining
+candidate list (branch%-sorted spot-check method).
 
-Checked `src/interface/routes/quality.routes.js` (50.00 branch) first —
-turned out to be unreachable dead code, not a real gap: its
-`req.body || {}` fallback can never fire because `express.json()`/
-`express.urlencoded()` (mounted globally in `app.js`) always initialize
-`req.body` to `{}` even for empty/no bodies, confirmed with a standalone
-repro. No test added, no issue filed (this specific one-liner isn't
-worth its own issue — see the broader pattern filed below).
+Picked `src/interface/routes/phone-codes.routes.js` (60.86/93.61
+branches/lines merged — already >=85% lines so invisible to the
+lines-only bucket sweep, same class as `consent.service.js` in an
+earlier session). Confirmed it as a real gap, not drift. Extended
+`tests/integration/phone-codes.api.test.js` (+7 tests, 11 total)
+covering: the 503 (no-db) and 500 (query throws) error paths, the
+short-search-term (<2 chars) branch that skips the `$text` search and
+falls through to regex-only matching, the text/regex match dedup
+(`Set`-based merge), `normalizePhoneCodeDocument`'s field-fallback
+variants (`name`/`code`/`countryCode` vs. the primary field names) and
+its missing-dialCode/countryName filter branch, and the `limit` query
+param's clamp-to-1 / clamp-to-50 / default-to-20 branches. Moved
+isolated coverage to 97.95/89.13/100/97.87.
 
-Moved to `src/interface/routes/result.routes.js` (87.61/59.09
-lines/branches isolated) — a real, substantial gap. Extended
-`tests/integration/result.routes.api.test.js` (+3 tests, 55 total)
-covering `getResultFileType`'s `.zip`/`.csv`/`.raw` branches, the
-`equipmentID ? Number(equipmentID) : null` conversion, and the download
-route's no-`filePath`-at-all 404 branch. Moved isolated coverage to
-87.93/62.72/100/87.61.
+While verifying, found the remaining branch gap is the same
+authenticate-shadows-route 503 dead-code pattern already tracked on
+#67/#76/#236/#246: `authenticate` (`auth.js:66-73`) already returns 503
+when `req.app.locals.db` is falsy, before the route body's own `if
+(!db)` check at line 48-50 ever runs — confirmed by isolated coverage
+still showing that line unhit despite a passing "returns 503" test.
+Filed **issue #247** (fifth occurrence of the pattern), following the
+existing #67/#76/#236/#246 naming/body convention.
 
-While tracing the remaining gap, found the same dead-code pattern
-already on record for other route files (#67/#76/#236): every
-route-level `if (!db) return res.status(503)` in `result.routes.js` is
-pre-empted by `authenticate`'s own `if (!db)` 503 check, confirmed via
-branch coverage showing 0 hits on those branches despite the
-corresponding tests passing (the 503 they observe comes from the
-middleware, not the route body). Also found two smaller dead branches
-in the same file: the multer `destination` callback's own
-`if (!sampleID)` error (which pre-empts the route body's separate
-`!sampleID` check once a file is attached) and a `sample._id ? ... :
-sampleID` fallback that requires a Mongo doc without `_id`, which
-doesn't happen via `findOne`. Filed **issue #246** documenting all
-three, following the existing #67/#76/#236 naming/body convention.
-COVERAGE_NOTES.md's new note also flags this as a likely recurring
-pattern worth watching for across the rest of `src/interface/routes/*`.
+Updated `COVERAGE_NOTES.md` with a follow-up-slice #4 note (same style
+as prior sessions) documenting the slice and the #247 finding.
 
-Updated `COVERAGE_NOTES.md` with a follow-up-slice note (same style as
-prior sessions) documenting the reconcile-vs-real-gap check, the
-quality.routes.js false-positive, and the result.routes.js slice.
-
-`wrap-up` ran: one finding (issue #246, filed). No scope violations, no
+`wrap-up` ran: one finding (issue #247, filed). No scope violations, no
 lazy fixes, no other stale instructions. The uncommitted
 `.claude/hooks/branch-guard.cjs` change present at session start
-(line-ending-only diff, empty `git diff` output) was left untouched —
-not part of this session's work.
+(line-ending-only diff, empty `git diff` output) was left untouched
+again — not part of this session's work, carried from at least two
+prior sessions now.
 
 ## Repo state
 
 - Working tree has one pre-existing uncommitted change:
   `.claude/hooks/branch-guard.cjs` (line-ending-only, `git diff` shows
-  no content diff) — not touched this session, not mine to resolve.
-- `test/withdrawal-model-coverage` is current and pushed (`007ed74f`),
+  no content diff) — not touched this or the prior session, not mine to
+  resolve. Worth a direct question to Dennis if it persists past another
+  session, since `git diff` showing nothing suggests it may just need a
+  `git add`/normalize-and-commit rather than continued carrying.
+- `test/withdrawal-model-coverage` is current and pushed (`481ddf56`),
   based off `feature/docker-e2e-backend-integration`.
 - `main` remains frozen — do not branch off it, merge into it, or push
   to it.
@@ -66,9 +60,9 @@ not part of this session's work.
 **Target: 90% across all four coverage dimensions.** Last full
 reconcile (evening of 2026-07-22): statements 90.89%, branches
 **81.96%** (the one dimension left), functions 90.88%, lines 91.34%.
-This session's `result.routes.js` slice isn't yet folded into a fresh
-full reconcile — one is due at the usual cadence per
-`COVERAGE_NOTES.md`.
+This session's `phone-codes.routes.js` slice (and the prior session's
+`result.routes.js` slice) aren't yet folded into a fresh full
+reconcile — one is due at the usual cadence per `COVERAGE_NOTES.md`.
 
 ## Recommended next steps
 
@@ -78,8 +72,7 @@ re-run `node <sort-by-branch-script>` against
 `coverage/coverage-summary.json` (gitignored, regenerate via the full
 reconcile command in `COVERAGE_NOTES.md`) and work down the list,
 skipping anything already flagged as issue-linked drift or dead code.
-Remaining candidates from the prior session's sort, not yet checked:
-`src/interface/routes/phone-codes.routes.js` (60.86/93.61),
+Remaining candidates from two sessions ago's sort, not yet checked:
 `src/core/use-cases/AllocateSampleUseCase.js` (64.58/91.48, but flagged
 in `COVERAGE_NOTES.md` as already GOOD from a prior session's #146 fix —
 check for drift first), `src/services/quality-compatibility.service.js`
@@ -90,8 +83,10 @@ re-verified in isolation this session — treat the merged number as a
 starting hypothesis only, same caveat as always. Also worth: after
 picking up any route file, check first whether its remaining branch gap
 is the same authenticate-shadows-route 503 dead-code pattern (#67/#76/
-#236/#246) before spending effort trying to test it — it's shown up
-four times now.
+#236/#246/#247) before spending effort trying to test it — it's shown
+up five times now, strongly suggesting a repo-wide sweep (not a
+per-file fix) is the efficient resolution, worth surfacing to Dennis as
+a suggestion rather than picking off one file at a time.
 
 No bug-fix backlog item is queued — re-triage the open backlog per
 `fix-bugs`' verify-before-deferring rule if picking that route.
