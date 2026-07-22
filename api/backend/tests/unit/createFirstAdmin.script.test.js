@@ -1,7 +1,7 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 
 const bcrypt = require('bcryptjs');
-const { createFirstAdmin } = require('../../src/scripts/createFirstAdmin');
+const { createFirstAdmin, requireBootstrapEnv } = require('../../src/scripts/createFirstAdmin');
 
 function createMockDb(usersCount = 0) {
   const users = {
@@ -86,5 +86,109 @@ describe('createFirstAdmin', () => {
 
     const logs = logger.info.mock.calls.flat().join(' ');
     expect(logs).not.toContain(validEnv.BOOTSTRAP_ADMIN_TEMP_PASSWORD);
+  });
+
+  it('rejeita senha temporaria fraca antes de tocar o banco', async () => {
+    const { db, users } = createMockDb(0);
+    const env = { ...validEnv, BOOTSTRAP_ADMIN_TEMP_PASSWORD: 'fraca' };
+
+    await expect(createFirstAdmin({ db, env, logger: { info: vi.fn() } })).rejects.toThrow();
+    expect(db.collection).not.toHaveBeenCalled();
+    expect(users.countDocuments).not.toHaveBeenCalled();
+  });
+});
+
+describe('requireBootstrapEnv', () => {
+  it('lista todas as variaveis ausentes na mensagem de erro', () => {
+    expect(() => requireBootstrapEnv({})).toThrow(
+      'Variaveis obrigatorias ausentes: BOOTSTRAP_ADMIN_NAME, BOOTSTRAP_ADMIN_EMAIL, BOOTSTRAP_ADMIN_USERNAME, BOOTSTRAP_ADMIN_TEMP_PASSWORD'
+    );
+  });
+
+  it('trata valor apenas com espacos como ausente', () => {
+    const env = { ...validEnv, BOOTSTRAP_ADMIN_USERNAME: '   ' };
+    expect(() => requireBootstrapEnv(env)).toThrow('BOOTSTRAP_ADMIN_USERNAME');
+  });
+
+  it('normaliza os valores: trim em nome/username, email em minusculas', () => {
+    const config = requireBootstrapEnv({
+      BOOTSTRAP_ADMIN_NAME: '  Primeiro Admin  ',
+      BOOTSTRAP_ADMIN_EMAIL: '  Admin.Seguro@BioAvanceD.test  ',
+      BOOTSTRAP_ADMIN_USERNAME: '  admin-seguro  ',
+      BOOTSTRAP_ADMIN_TEMP_PASSWORD: 'SenhaForte@123',
+    });
+
+    expect(config).toEqual({
+      name: 'Primeiro Admin',
+      email: 'admin.seguro@bioavanced.test',
+      username: 'admin-seguro',
+      password: 'SenhaForte@123',
+    });
+  });
+
+  it('nao aplica trim na senha (preservada verbatim)', () => {
+    const config = requireBootstrapEnv({ ...validEnv, BOOTSTRAP_ADMIN_TEMP_PASSWORD: ' Senha@123 ' });
+    expect(config.password).toBe(' Senha@123 ');
+  });
+});
+
+describe('createFirstAdmin sem options.db (conexao propria)', () => {
+  // O source destrutura { connectDB, closeConnection } no escopo de modulo,
+  // entao os fakes precisam estar em vigor ANTES de um re-require do script
+  // (ver .claude/skills/bioavanced-v2-testing-conventions/references/cjs-mocking.md).
+  const mongoPath = require.resolve('../../src/database/mongo');
+  const scriptPath = require.resolve('../../src/scripts/createFirstAdmin');
+  const realMongo = require('../../src/database/mongo');
+  const originalConnectDB = realMongo.connectDB;
+  const originalCloseConnection = realMongo.closeConnection;
+
+  function loadScriptWithMongoFakes(db) {
+    realMongo.connectDB = vi.fn().mockResolvedValue(db);
+    realMongo.closeConnection = vi.fn().mockResolvedValue(undefined);
+    delete require.cache[scriptPath];
+    const fresh = require(scriptPath);
+    return { fresh, connectDB: realMongo.connectDB, closeConnection: realMongo.closeConnection };
+  }
+
+  afterEach(() => {
+    realMongo.connectDB = originalConnectDB;
+    realMongo.closeConnection = originalCloseConnection;
+    delete require.cache[scriptPath];
+    require(scriptPath);
+    expect(require.cache[mongoPath]).toBeDefined();
+  });
+
+  it('usa connectDB e fecha a conexao no sucesso', async () => {
+    const { db, users } = createMockDb(0);
+    const { fresh, connectDB, closeConnection } = loadScriptWithMongoFakes(db);
+
+    const result = await fresh.createFirstAdmin({ env: validEnv, logger: { info: vi.fn() } });
+
+    expect(result.status).toBe('created');
+    expect(users.insertOne).toHaveBeenCalledTimes(1);
+    expect(connectDB).toHaveBeenCalledTimes(1);
+    expect(closeConnection).toHaveBeenCalledTimes(1);
+  });
+
+  it('fecha a conexao mesmo quando o corpo lanca erro', async () => {
+    const { db, users } = createMockDb(0);
+    users.countDocuments.mockRejectedValue(new Error('mongo indisponivel'));
+    const { fresh, closeConnection } = loadScriptWithMongoFakes(db);
+
+    await expect(
+      fresh.createFirstAdmin({ env: validEnv, logger: { info: vi.fn() } })
+    ).rejects.toThrow('mongo indisponivel');
+    expect(closeConnection).toHaveBeenCalledTimes(1);
+  });
+
+  it('nao fecha a conexao quando options.db foi fornecido', async () => {
+    const { db } = createMockDb(1);
+    const { fresh, connectDB, closeConnection } = loadScriptWithMongoFakes(db);
+
+    const result = await fresh.createFirstAdmin({ db, env: validEnv, logger: { info: vi.fn() } });
+
+    expect(result.status).toBe('skipped');
+    expect(connectDB).not.toHaveBeenCalled();
+    expect(closeConnection).not.toHaveBeenCalled();
   });
 });
