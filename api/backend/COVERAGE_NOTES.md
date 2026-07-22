@@ -165,7 +165,7 @@ User.js, reports.routes.js) have all moved out of this bucket into GOOD
 
 ```
 src/services/mqtt-telemetry.service.js                         71.42 / 78.09   (issue #160 — HMAC bypass bug)
-src/services/patient.service.js                                74.39 / 63.56   (partially covered — see history archive; createPatient/updatePatient error-path permutations remain)
+src/services/patient.service.js                                74.39 / 63.56   (large gap despite 5 existing test files/118 tests — isolated run confirmed the number; nearly every method (encrypt/decryptSensitivePatientFields, resolveClinicalUnitSnapshot, applyDeceasedRepresentativeRules, checkIdentifierConflict, createPatient, listPatients, searchPatients, updatePatient, consent-token flows, deletePatient) has uncovered branches, not just createPatient/updatePatient error paths — likely needs its own multi-file fan-out, not a single slice)
 src/infrastructure/persistence/mongo/MongoAuditRepository.js   76.66 / 84.61
 src/workers/workers/result-worker.js                           76.66 / 66.07   (issue #146/#164 — rename + yauzl)
 src/scripts/createFirstAdmin.js                                77.27 / 65.00
