@@ -21,11 +21,14 @@ stale as slices land and as source files change. Keep it honest:
   (`lines.pct` per file). `coverage/` is gitignored — this file is the
   durable record.
 - **This file stays lean on purpose** — only the current buckets and the
-  latest reconcile numbers. Slice-by-slice narrative history (what each
-  past slice covered, which issues it filed) lives in
-  `COVERAGE_HISTORY.md` instead, so a normal test-loop session doesn't
-  pay to read hundreds of lines of past-slice prose it doesn't need.
-  Append new slice narrative there, not here.
+  latest reconcile numbers. Slice-by-slice narrative (what each past
+  slice covered, which issues it filed) is no longer duplicated into a
+  separate history file — that content already lives permanently in
+  `git log`/commit diffs and in filed GitHub issues, which don't rot the
+  way a hand-maintained log does. `COVERAGE_HISTORY.md` was deleted
+  2026-07-22 for exactly this reason; see
+  `dyeallpies-skills-pack#95` for the rationale and the pending
+  `test-loop`/testing-conventions skill update.
 
 ## Last full reconcile
 
@@ -73,9 +76,9 @@ MID-LOW = 50-69%, MID-HIGH = 70-84%, GOOD = >=85%.
    issue-linked, the number here is trustworthy — no fresh isolated run
    needed before committing to it.
 5. After landing a slice, delete the file's line from whichever bucket it
-   was in (or move it, if now partial). Don't leave stale entries. Add a
-   short entry to `COVERAGE_HISTORY.md` for what the slice covered/found
-   — not here.
+   was in (or move it, if now partial). Don't leave stale entries. The
+   slice's own commit message is the narrative record now — don't add
+   one here or to a separate history file.
 
 ## ZERO coverage (0% lines) — 20 files, full reconcile 2026-07-21, commit `67d01a62`
 
@@ -158,7 +161,7 @@ MeasurementUnit.js, result.routes.js, analysis-type.controller.js,
 auth.js, auditLogger.js, import-lgpd.controller.js,
 clinical-unit.routes.js, logs.routes.js, sensor.controller.js,
 User.js, reports.routes.js) have all moved out of this bucket into GOOD
-— per-slice narrative for those is in `COVERAGE_HISTORY.md`, not here.
+— per-slice narrative for those is in their commit history, not here.
 
 ```
 src/models/PatientConsent.js                                   70.83 / 85.24
@@ -203,5 +206,5 @@ If `test-loop` finds this file stale (a listed ZERO/LOW file turns out
 already well-tested, or vice versa), fix the entry in the same commit —
 don't just work around it. If the reconcile cadence above stops making
 sense (too frequent/rare), update it and say why in the session's
-wrap-up. Detailed per-slice writeups go in `COVERAGE_HISTORY.md`, never
-back into this file.
+wrap-up. Detailed per-slice writeups belong in the slice's own commit
+message, never back into this file.
