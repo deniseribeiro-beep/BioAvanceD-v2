@@ -170,6 +170,15 @@ describe('GET /api/results/:id/download', () => {
     expect(res.body.message).toBe('boom');
   });
 
+  it('returns 404 when the result has no filePath at all', async () => {
+    const noPathResult = { ...FAKE_RESULT, filePath: undefined };
+    const resultsColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(noPathResult) });
+    app.locals.db = createDbMock({ results: resultsColl });
+
+    const res = await request(app).get(`/api/results/${RESULT_OID}/download`).set('Authorization', `Bearer ${makeToken(4)}`);
+    expect(res.status).toBe(404);
+  });
+
   it('streams the file when the local path exists on disk', async () => {
     const filePath = path.join(__dirname, 'download-fixture.pdf');
     fs.writeFileSync(filePath, '%PDF-1.4 fixture');
@@ -366,6 +375,50 @@ describe('POST /api/results/upload', () => {
     const resultDir = path.join(__dirname, '../../src/storage/results', SAMPLE_OID);
     expect(fs.existsSync(resultDir)).toBe(true);
     fs.rmSync(resultDir, { recursive: true, force: true });
+  });
+
+  it('accepts .zip, .csv, and .raw as valid result file extensions', async () => {
+    const sampleDoc = { _id: new ObjectId(SAMPLE_OID) };
+    const amostrasColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(sampleDoc) });
+    vi.spyOn(consentValidator, 'validateAccess').mockResolvedValue(true);
+
+    for (const [ext, expectedType] of [['zip', 'ZIP'], ['csv', 'CSV'], ['raw', 'RAW']]) {
+      const insertOne = vi.fn().mockResolvedValue({ insertedId: new ObjectId() });
+      app.locals.db = createDbMock({ amostras: amostrasColl, results: createCollectionMock({ insertOne }) });
+
+      const res = await request(app)
+        .post('/api/results/upload')
+        .set('Authorization', `Bearer ${makeToken(2)}`)
+        .field('sampleID', SAMPLE_OID)
+        .attach('file', Buffer.from('content'), `test.${ext}`);
+
+      expect(res.status).toBe(201);
+      expect(res.body.data.fileType).toBe(expectedType);
+    }
+
+    const resultDir = path.join(__dirname, '../../src/storage/results', SAMPLE_OID);
+    if (fs.existsSync(resultDir)) fs.rmSync(resultDir, { recursive: true, force: true });
+  });
+
+  it('stores equipmentID as a number when provided', async () => {
+    const sampleDoc = { _id: new ObjectId(SAMPLE_OID) };
+    const amostrasColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(sampleDoc) });
+    const insertOne = vi.fn().mockResolvedValue({ insertedId: new ObjectId() });
+    app.locals.db = createDbMock({ amostras: amostrasColl, results: createCollectionMock({ insertOne }) });
+    vi.spyOn(consentValidator, 'validateAccess').mockResolvedValue(true);
+
+    const res = await request(app)
+      .post('/api/results/upload')
+      .set('Authorization', `Bearer ${makeToken(2)}`)
+      .field('sampleID', SAMPLE_OID)
+      .field('equipmentID', '7')
+      .attach('file', Buffer.from('%PDF-1.4 test'), 'test.pdf');
+
+    expect(res.status).toBe(201);
+    expect(res.body.data.equipmentID).toBe(7);
+
+    const resultDir = path.join(__dirname, '../../src/storage/results', SAMPLE_OID);
+    if (fs.existsSync(resultDir)) fs.rmSync(resultDir, { recursive: true, force: true });
   });
 
   it('rejects unsupported file extensions with a 400 from multer fileFilter', async () => {

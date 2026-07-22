@@ -124,6 +124,32 @@ to 97.51/81.58/97.43/97.42. Remaining gap (lines 447,558,643,656) is
 deeper error-path combinations, not whole untested methods — optional, not
 urgent, same tier as `patient.service.js`'s note below.
 
+**Follow-up slice #3 (same branch, later commit, not yet reconciled into
+the numbers above):** next candidate from the same branch%-sorted list
+was `src/interface/routes/result.routes.js` (87.61/59.09 lines/branches
+isolated), confirmed as a real gap, not drift. Extended
+`tests/integration/result.routes.api.test.js` (+3 tests, 55 total)
+covering `getResultFileType`'s `.zip`/`.csv`/`.raw` branches (only
+`.pdf`/an invalid extension were previously exercised), the
+`equipmentID ? Number(equipmentID) : null` conversion branch, and the
+download route's no-`filePath`-at-all 404 branch. Moved isolated
+coverage to 87.93/62.72/100/87.61. **Most of the remaining branch gap in
+this file is dead code, not a real gap**: the route-level `if (!db)`
+503 checks (GET /, POST /upload, GET /:id, GET /:id/download, POST /,
+PUT /:id, PUT /:id/link-sample, DELETE /:id) are all pre-empted by
+`auth.js`'s own `if (!db)` 503 check inside `authenticate` — confirmed
+by tracing one of the existing "503 when db unavailable" tests, which
+passes but never actually executes the route body per branch coverage.
+Likewise the multer `destination` callback's `if (!sampleID)` error
+path pre-empts the route's own `!sampleID` check in `POST /upload`
+before the route handler ever runs, and `sample._id ? ... : sampleID`
+in the same route requires a Mongo doc without `_id`, which doesn't
+happen in practice. None of these are worth chasing further in this
+file — flag the same "route-level db-unavailable check is pre-empted
+by auth middleware" pattern if it recurs in other route files during
+future branch%-sorted spot-checks, since it likely caps achievable
+branch% below 100 across most of `src/interface/routes/*`.
+
 **Bucket lists below are freshly regenerated this session** off the new
 `coverage-summary.json`, then corrected per the drift check above.
 Cutoffs unchanged: ZERO = 0%, LOW = 1-49%, MID-LOW = 50-69%,
