@@ -1,13 +1,12 @@
 # HANDOFF
 
 **Written:** 2026-07-22, end of a test-loop iteration.
-**Branch:** `test/mid-high-coverage-batch-1` (pushed, commit `5187ec12`).
+**Branch:** `test/mid-high-coverage-batch-1` (pushed, commit `9da77199`).
 **No issue was resolved this session** — one test-writing slice landed,
 picked from `api/backend/COVERAGE_NOTES.md`'s MID-HIGH bucket. Filed
-issue #236 (dead/unreachable db-check code in analysis-file.routes.js's
-`/validate` handler, superseded by an identical check in the
-`authenticate` middleware) — not fixed, per test-loop's no-product-code
-rule.
+issue #237 (dead/unreachable duplicate `logger.error` guards in
+`redis.js`'s `createRedisConnection`, same pattern as #236) — not fixed,
+per test-loop's no-product-code rule.
 
 ## Repo state
 
@@ -20,22 +19,29 @@ rule.
 
 ## This session's slice
 
-- Extended `api/backend/tests/integration/analysis-file.api.test.js`
-  (4 → 6 tests, all passing): added `GET /validate/:sampleIdentifier`
-  cases for db-not-available (503) and validation-service-throws (500).
-- Isolated coverage on `src/interface/routes/analysis-file.routes.js`:
-  80.95%/87.50% → 90.47%/87.50% (lines/branches) — clears the GOOD
-  (>=85%) threshold, so the entry was removed from `COVERAGE_NOTES.md`'s
-  MID-HIGH bucket (23 → 22 files) in the same commit. The route's own
-  db-not-available guard (line 16) stays structurally uncovered — see
-  filed issue below; the `/upload` route (line 54) is intentionally
-  untested here since it's covered by `upload.controller.test.js`.
-- **Bug/gap found and filed:** issue #236 — the route's own
-  `if (!db)` 503 guard in the `/validate` handler is unreachable, since
-  `authenticate` middleware performs the identical check first for this
-  route and returns 503 before the handler runs. Not fixed (test-only
-  loop); owner's call whether to remove it or accept it as defensive
-  dead code.
+- Extended `api/backend/tests/unit/redis.test.js` (24 → 28 tests, all
+  passing): added direct coverage of the `retryStrategy`/
+  `reconnectOnError` config callbacks (previously never invoked by any
+  test) and a `testRedisConnection` catch-block case exercising the
+  code/syscall/address logging plus both hint messages.
+- Isolated coverage on `src/config/redis.js`: 81.76%/70.45% →
+  87.42%/80.3% (lines/branches) — clears the GOOD (>=85%) threshold, so
+  the entry was removed from `COVERAGE_NOTES.md`'s MID-HIGH bucket
+  (22 → 21 files) in the same commit.
+- **Bug/gap found and filed:** issue #237 — `createRedisConnection`
+  has two back-to-back checks for `!redisUrl && !REDIS_HOST` /
+  `!redisUrl && !REDIS_PORT`: the first pair throws (lines ~56/60), the
+  second pair only `logger.error`s (lines ~75/79). By the time execution
+  reaches the second pair, either condition being true would already
+  have thrown — the `logger.error` calls are unreachable dead code, same
+  shape as #236. Not fixed (test-only loop); left uncovered and noted in
+  the commit message rather than chased further.
+- The remaining ~13% gap on `redis.js` is mostly that dead-code block
+  plus an async-Promise-executor coverage-tool artifact inside
+  `testRedisConnection`'s "wait for ready" branch (statements inside the
+  callback show hits, the enclosing `await new Promise(...)` statement
+  itself doesn't, despite the code demonstrably running) — not further
+  actionable via more tests.
 
 ## Recommended next slices
 
@@ -43,27 +49,34 @@ Still open in `COVERAGE_NOTES.md`'s MID-HIGH (70-84% lines) bucket, not
 issue-tagged — worst-first by lines% (`patient.service.js` excluded from
 a quick pick; it needs a fan-out, see its bucket note):
 
-1. `src/interface/routes/master-data.routes.js` — 81.42 / 68.75
-2. `src/config/redis.js` — 81.76 / 70.45
-3. `src/interface/routes/equipment.routes.js` — 81.92 / 74.11
-4. `src/controllers/import.controller.js` — 82.23 / 75.86
-5. `src/services/security.service.js` — 82.51 / 72.26
-6. `src/infrastructure/queue/Neo4jQuarantineService.js` — 83.33 / 82.75
-7. `src/models/User.js` — 83.67 / 78.94 (reconcile's raw number)
-8. `src/services/fhir-import-staging.service.js` — 84.15 / 77.86
-9. `src/controllers/import-async.controller.js` — 84.29 / 79.66
+1. `src/interface/routes/equipment.routes.js` — 81.92 / 74.11
+2. `src/controllers/import.controller.js` — 82.23 / 75.86
+3. `src/controllers/iot.controller.js` — 82.50 / 73.52
+4. `src/services/security.service.js` — 82.51 / 72.26
+5. `src/infrastructure/queue/Neo4jQuarantineService.js` — 83.33 / 82.75
+6. `src/models/User.js` — 83.67 / 78.94 (reconcile's raw number)
+7. `src/services/fhir-import-staging.service.js` — 84.15 / 77.86
+8. `src/controllers/import-async.controller.js` — 84.29 / 79.66
 
 Skip anything issue-tagged in that bucket: `mqtt-telemetry.service.js`
 (#160), `result-worker.js` (#146/#164), `SampleGraphValidator.js` (#222).
 Skip `neo4jProjection.worker.js` — remaining gap is an accepted,
-not-coverable-in-process CLI entry block (see above).
+not-coverable-in-process CLI entry block (see prior handoffs).
 
 **Before picking any of the above, measure isolated coverage first**
 (`npx vitest run <existing test files> --coverage
 --coverage.include='<source path>'`) — the reconcile percentage is
-reliable, the prose guess at *why* isn't always. Route tests land at
-`tests/integration/<name>.api.test.js` — list the actual directory, and
-check the existing file's loader style before adding a sibling file.
+usually reliable per `COVERAGE_NOTES.md`'s own note (#4 under "How to
+use this when picking a slice"), but this session's redis.js slice
+showed it's still worth finding the *exact* uncovered lines/branches
+(via `--coverage.reporter=json` and reading
+`coverage/coverage-final.json`'s `statementMap`/`branchMap`/`fnMap`,
+since the terminal `text` reporter truncates the uncovered-lines
+column). Route tests land at `tests/integration/<name>.api.test.js`,
+config/service tests at `tests/unit/<name>.test.js` — list the actual
+directory and check the existing file's loader style (e.g. the
+require.cache-swap mocking pattern in `redis.test.js` and
+`database-mongo.test.js`) before adding a sibling file or extending one.
 
 ## Which skills to use
 
@@ -75,3 +88,11 @@ iteration.
 ## Dependency notes
 
 None queued.
+
+## Session note
+
+Piping `git push` output through `tail` confused the
+push-wrapup-checkpoint hook (it misread the shell pipe as a branch name
+and blocked the push with a bogus "wrong branch" error). Re-running a
+bare `git push` succeeded immediately. Not a real block — just avoid
+piping `git push`'s own output in this repo.
