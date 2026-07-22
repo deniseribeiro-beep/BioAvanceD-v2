@@ -172,7 +172,6 @@ src/services/patient.service.js                                74.39 / 63.56   (
 src/workers/workers/result-worker.js                           76.66 / 66.07   (issue #146/#164 — rename + yauzl)
 src/services/SampleGraphValidator.js                           77.69 / 66.66   (issue #222 — legacy-schema migration, design fork)
 src/workers/neo4jProjection.worker.js                          79.62 / 73.33   (remaining gap is the `require.main === module` CLI entry block, lines 82-99 — not coverable in-process, same accepted-gap pattern as createFirstAdmin.js)
-src/controllers/import-async.controller.js                     84.29 / 79.66
 ```
 
 Note: `sample.service.js`, `import.service.js`,

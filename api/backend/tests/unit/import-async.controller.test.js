@@ -3,10 +3,17 @@ import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
 
+const express = require('express');
+const request = require('supertest');
+const fs = require('fs');
+const path = require('path');
+
 const controller = require('../../src/controllers/import-async.controller');
 const importAsyncService = require('../../src/services/import-async.service');
 const logger = require('../../src/utils/logger');
 const auditLogger = require('../../src/utils/auditLogger');
+
+const uploadsDir = path.join(__dirname, '../../uploads/temp');
 
 function createRes() {
   return {
@@ -806,6 +813,89 @@ describe('import-async.controller', () => {
     it('returns a multer single-file middleware function', () => {
       const middleware = controller.uploadMiddleware();
       expect(typeof middleware).toBe('function');
+    });
+  });
+
+  describe('uploadMiddleware multer storage/fileFilter (real disk write)', () => {
+    function buildApp() {
+      const app = express();
+      app.post('/upload', controller.uploadMiddleware(), (req, res) => {
+        res.status(200).json({ file: req.file });
+      });
+      return app;
+    }
+
+    afterEach(() => {
+      if (fs.existsSync(uploadsDir)) {
+        fs.rmSync(uploadsDir, { recursive: true, force: true });
+      }
+    });
+
+    it('creates uploads/temp on demand and writes an allowed file to it', async () => {
+      if (fs.existsSync(uploadsDir)) {
+        fs.rmSync(uploadsDir, { recursive: true, force: true });
+      }
+      expect(fs.existsSync(uploadsDir)).toBe(false);
+
+      const res = await request(buildApp())
+        .post('/upload')
+        .attach('file', Buffer.from('a,b,c'), {
+          filename: 'data.csv',
+          contentType: 'text/csv',
+        });
+
+      expect(res.status).toBe(200);
+      expect(fs.existsSync(uploadsDir)).toBe(true);
+      expect(fs.existsSync(res.body.file.path)).toBe(true);
+      expect(path.extname(res.body.file.path)).toBe('.csv');
+    });
+
+    it('reuses uploads/temp when it already exists', async () => {
+      fs.mkdirSync(uploadsDir, { recursive: true });
+
+      const res = await request(buildApp())
+        .post('/upload')
+        .attach('file', Buffer.from('{}'), {
+          filename: 'data.json',
+          contentType: 'application/json',
+        });
+
+      expect(res.status).toBe(200);
+      expect(fs.existsSync(res.body.file.path)).toBe(true);
+    });
+
+    it('rejects a blocked extension (.exe) before the mimetype check', async () => {
+      const res = await request(buildApp())
+        .post('/upload')
+        .attach('file', Buffer.from('MZ'), {
+          filename: 'malware.exe',
+          contentType: 'application/vnd.ms-excel',
+        });
+
+      expect(res.status).toBeGreaterThanOrEqual(400);
+    });
+
+    it('rejects a disallowed mimetype even with an allowed extension', async () => {
+      const res = await request(buildApp())
+        .post('/upload')
+        .attach('file', Buffer.from('not really a csv'), {
+          filename: 'data.csv',
+          contentType: 'text/plain',
+        });
+
+      expect(res.status).toBeGreaterThanOrEqual(400);
+    });
+
+    it('accepts a zip mimetype/extension combination', async () => {
+      const res = await request(buildApp())
+        .post('/upload')
+        .attach('file', Buffer.from('PK\x03\x04'), {
+          filename: 'bundle.zip',
+          contentType: 'application/zip',
+        });
+
+      expect(res.status).toBe(200);
+      expect(path.extname(res.body.file.path)).toBe('.zip');
     });
   });
 });
