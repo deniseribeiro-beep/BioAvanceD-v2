@@ -172,7 +172,6 @@ src/scripts/createFirstAdmin.js                                77.27 / 65.00
 src/services/SampleGraphValidator.js                           77.69 / 66.66   (issue #222 — legacy-schema migration, design fork)
 src/workers/neo4jProjection.worker.js                          79.62 / 73.33
 src/database/mongo.js                                          80.10 / 76.51
-src/services/merkle-envelope.service.js                        80.30 / 66.21
 src/interface/routes/analysis-file.routes.js                   80.95 / 87.50
 src/interface/routes/master-data.routes.js                     81.42 / 68.75
 src/config/redis.js                                            81.76 / 70.45
