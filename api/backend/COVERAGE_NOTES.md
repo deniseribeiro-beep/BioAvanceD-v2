@@ -167,6 +167,25 @@ authenticate-shadows-route 503 dead-code pattern as #67/#76/#236/#246**
 (!db)` line as unhit despite a passing "returns 503" test; filed as
 issue #247 (fifth occurrence of the pattern).
 
+**Follow-up slice #5 (same branch, later commit, not yet reconciled into
+the numbers above):** next candidate from the prior handoff's remaining
+list was `src/services/quality-compatibility.service.js` (65.51/100
+lines/branches merged), flagged there as touching RCS/quality logic
+(ground truth `docs/research/cmpb-submission/manuscript/00_Manuscript.tex`,
+not `docs/architecture/`). On inspection it's a thin, pure legacy-field
+compatibility shim (`normalizeSample`) with no scoring/grading math of
+its own — the manuscript wasn't needed. No prior test file existed. Added
+`tests/unit/quality-compatibility.service.unit.test.js` (11 tests)
+covering: bare-call defaults, the no-legacy-fields no-op path, each of
+`rcsScore`/`scoreBasedGrade`/`axisPenalties` promoting into `canonical`
+individually and together, merging into a pre-existing `canonical`
+object, not overwriting already-set `rcs_score`/`final_grade`/`p_bio`/
+`grade_route`, preserving vs. defaulting `calculation_trace.compatibility`,
+and no-mutation of the input. Every branch in the ~30-line function is
+now exercised by inspection (isolated coverage run not re-confirmed
+against a fresh full-suite reconcile this session — see next full
+reconcile).
+
 **Bucket lists below are freshly regenerated this session** off the new
 `coverage-summary.json`, then corrected per the drift check above.
 Cutoffs unchanged: ZERO = 0%, LOW = 1-49%, MID-LOW = 50-69%,
