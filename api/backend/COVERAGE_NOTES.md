@@ -115,14 +115,17 @@ Low priority (models/interfaces/one-off scripts — thin or non-request-path):
   returning 503 may be the same terminologySync gate; check before
   treating as a genuine gap)
 
-## LOW coverage (1-49% lines) — 7 files, full reconcile 2026-07-21, commit `67d01a62`
+## LOW coverage (1-49% lines) — 6 files, full reconcile 2026-07-21, commit `67d01a62`
 
-Sorted ascending (worst first) — lines% / branches%. All seven are the
+Sorted ascending (worst first) — lines% / branches%. All are the
 same audit/rename-drift cluster (issue #146) already tracked; none are
 genuinely untested slice candidates.
 
+`audit-tree.service.js` moved to GOOD (100/100 lines/branches, isolated
+run) this session — pure-function merkle-tree helper, no singleton
+dependencies to mock.
+
 ```
-src/services/audit-tree.service.js               7.89 / 0        (issue #146 cluster)
 src/services/audit-signing.provider.js          14.81 / 0        (issue #146 cluster)
 src/interface/routes/intakeWizard.routes.js     16.98 / 0        (issue #146 cluster)
 src/services/audit-tsa.service.js               21.42 / 0        (issue #146 cluster)
