@@ -66,11 +66,9 @@ describe('auditLogger', () => {
       expect(info.ipOriginal).toBe('N/A');
     });
 
-    // Issue #234: extractRequestInfo's port-strip only fires when parts[0]
-    // has no '.', so a real dotted IPv4 address is never stripped in practice.
-    it('does not strip the port from a dotted IPv4 address (bug, see #234)', () => {
+    it('strips the port from a dotted IPv4 address', () => {
       const info = auditLogger.extractRequestInfo({ ip: '192.168.1.1:12345', headers: {} });
-      expect(info.ip).toBe('192.168.1.1:12345');
+      expect(info.ip).toBe('192.168.1.1');
     });
 
     it('strips the port from a dotless host:port pair', () => {
@@ -83,11 +81,9 @@ describe('auditLogger', () => {
       expect(info.ip).toBe('::ffff:192.168.1.1');
     });
 
-    // Issue #234: a bare IPv6 loopback ("::1") has more than one colon, so
-    // it's treated as "IPv6 with port" and mangled down to ":".
-    it('mangles a bare IPv6 loopback address (bug, see #234)', () => {
+    it('leaves a bare IPv6 loopback address untouched', () => {
       const info = auditLogger.extractRequestInfo({ ip: '::1', headers: {} });
-      expect(info.ip).toBe(':');
+      expect(info.ip).toBe('::1');
     });
 
     it('fills header/method/path/origin fields with defaults when absent', () => {

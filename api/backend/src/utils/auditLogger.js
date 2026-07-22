@@ -1,3 +1,4 @@
+const net = require('net');
 const logService = require('../services/log.service');
 const { sanitizePatientForLogs } = require('./patientAnonymization');
 const { getUserAnonId, anonymizeLogUser } = require('./userAnonymization');
@@ -44,15 +45,15 @@ class AuditLogger {
       ip = req.socket.remoteAddress;
     }
 
-    // Remove porta do IP se presente (ex: ::ffff:192.168.1.1:12345 -> ::ffff:192.168.1.1)
-    if (ip && ip.includes(':')) {
-      const parts = ip.split(':');
-      if (parts.length > 2) {
-        // IPv6 com porta
-        ip = parts.slice(0, -1).join(':');
-      } else if (parts.length === 2 && !parts[0].includes('.')) {
-        // IPv4 com porta
-        ip = parts[0];
+    // Remove porta do IP se presente (ex: ::ffff:192.168.1.1:12345 -> ::ffff:192.168.1.1,
+    // 192.168.1.1:12345 -> 192.168.1.1). Não mexe em endereços IPv6 "nus" (sem porta),
+    // já que net.isIP() os reconhece como válidos por inteiro (ex: "::1").
+    if (ip && ip.includes(':') && net.isIP(ip) === 0) {
+      const lastColon = ip.lastIndexOf(':');
+      const host = ip.slice(0, lastColon);
+      const port = ip.slice(lastColon + 1);
+      if (/^\d{1,5}$/.test(port) && (net.isIP(host) !== 0 || !host.includes(':'))) {
+        ip = host;
       }
     }
 
