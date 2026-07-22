@@ -1,46 +1,51 @@
 # HANDOFF
 
 **Written:** 2026-07-22, end of a test-loop iteration.
-**Branch:** `test/withdrawal-model-coverage` (commit `2b12cc41`, pushed this session), branched off `feature/docker-e2e-backend-integration`.
+**Branch:** `test/withdrawal-model-coverage` (commit `a769e4b5`, pushed this session), branched off `feature/docker-e2e-backend-integration`.
 
 ## What happened this session
 
 Routed via `work-issue`: no open `bug`-labeled issue exists (same
-backlog state as last session — #236/#238/#243 are owner's-call dead
+backlog state as prior sessions — #236/#238/#243 are owner's-call dead
 code, #218/#222/#224 assigned to Denise, #242 is a methodology note).
 Routed to `test-loop`.
 
-Per `COVERAGE_NOTES.md`'s ZERO bucket "low priority (thin
-models/interfaces)" list, picked `src/models/Withdrawal.js` (64 lines,
-largest of the remaining thin models — `normalizeWithdrawalType` alias
-resolution, `validate` static with error accumulation, `create` static
-with defaulting).
+Per `COVERAGE_NOTES.md`'s ZERO bucket "low priority" list, surveyed the
+remaining thin-model candidates (`Cid.js`, `Disease.js`,
+`DrugDictionary.js`, `Equipment.schema.js`, `TemperaturePolicy.schema.js`,
+the `IStorageRepository`-family port interfaces) — those are pure
+mongoose schema declarations or abstract "Not implemented" method stubs
+with no real branching logic. Picked
+`src/reference-data/essential/manifest.js` (51 lines) instead: it has
+actual logic worth asserting (`getManifest()` shallow-copies a frozen
+array so callers can't mutate shared state; `getManifestByKey()` does a
+`find`/null-fallback lookup).
 
-Wrote `tests/unit/Withdrawal.model.test.js` (19 tests) following the
-same plain-pure-function pattern as `Result.model.test.js` — no
-mongoose/DB involved, straightforward static-method testing. Covers:
-- `normalizeWithdrawalType`: alias resolution (`parcial`→`partial`),
-  pass-through, whitespace/case normalization, unrecognized values,
-  null/undefined/empty input
-- `validate`: fully-valid payload, alias-as-valid, `sampleID: 0`
-  (falsy-but-provided) accepted, each individual missing/invalid field,
-  and full error accumulation
-- `create`: full-input normalization and default-field/`withdrawalDate`
-  behavior when fields are omitted
+Wrote `tests/unit/reference-data.manifest.test.js` (10 tests) covering:
+- `getManifest()`: returns the 3 known entries in order, correct shape
+  (`required: true`, string/array field types), absolute `source` paths,
+  and copy-isolation (mutating a returned entry/array doesn't affect
+  subsequent calls)
+- `getManifestByKey()`: known-key lookups for all three manifest entries
+  (asserting their distinguishing fields), unknown-key → `null`,
+  undefined/empty-string key → `null`
 
 Isolated coverage: 100% statements/branches/functions/lines. Updated
-`COVERAGE_NOTES.md`'s ZERO bucket (19 → 18 files, noted the move to
+`COVERAGE_NOTES.md`'s ZERO bucket (18 → 17 files, noted the move to
 GOOD) in the same commit. No product code touched — confirmed via
 `git status`/`git diff --stat` before committing.
 
-Committed as `2b12cc41` and pushed. New branch created (`test/<slug>`
-per convention) since the prior iteration's `feature/docker-e2e-backend-integration`
-work was already closed out with its own handoff/commit.
+Committed as `a769e4b5` and pushed to the existing
+`test/withdrawal-model-coverage` branch (continued rather than
+branching again, since this iteration's slice was closely related —
+same ZERO-bucket sweep).
+
+`wrap-up` ran: no friction this session, nothing new to file.
 
 ## Repo state
 
 - Working tree clean; `test/withdrawal-model-coverage` is current and
-  pushed (`2b12cc41`), based off `feature/docker-e2e-backend-integration`.
+  pushed (`a769e4b5`), based off `feature/docker-e2e-backend-integration`.
 - `main` remains frozen — do not branch off it, merge into it, or push
   to it.
 
@@ -55,15 +60,20 @@ not a full reconcile).
 ## Recommended next steps
 
 None queued explicitly by Dennis. For coverage work: the ZERO bucket's
-remaining low-priority thin files (`src/models/Cid.js`,
-`src/models/Disease.js`, `src/models/DrugDictionary.js`,
-`src/models/Equipment.schema.js`, `src/models/TemperaturePolicy.schema.js`,
-the `src/core/application/ports/I*.js` interfaces, `src/reference-data/essential/*`,
-and the one-off `src/scripts/*` files) are the remaining real slice
-candidates — `Withdrawal.js` was the largest/most logic-bearing of that
-group and is now done. A fresh full reconcile is due at some point per
-the cadence note in `COVERAGE_NOTES.md` (last one was `fdd37e10`, same
-day) — the branches dimension (81.3%) is the one still short of 90%.
+remaining low-priority thin files are now mostly pure mongoose schemas
+(`src/models/Cid.js`, `src/models/Disease.js`,
+`src/models/DrugDictionary.js`, `src/models/Equipment.schema.js`,
+`src/models/TemperaturePolicy.schema.js`) and abstract port interfaces
+(`src/core/application/ports/I*.js`) whose bodies are all
+`throw new Error('Not implemented')` stubs — genuinely low logic
+content, lower priority than equivalent-effort work elsewhere. The
+remaining real-logic candidates in that bucket are thinner still
+(`src/reference-data/essential/index.js`, one-off `src/scripts/*`
+files). A fresh full reconcile is due at some point per the cadence
+note in `COVERAGE_NOTES.md` (last one was `fdd37e10`, 2026-07-22) — the
+branches dimension (81.3%) is the one still short of 90%; a reconcile
+would likely be more productive than continuing to pick individual
+ZERO-bucket files, since most of what's left there is low-value.
 
 No bug-fix backlog item is queued — re-triage the open backlog per
 `fix-bugs`' verify-before-deferring rule if picking that route.
