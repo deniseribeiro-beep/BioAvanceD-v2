@@ -76,4 +76,24 @@ describe('GET /api/analysis-files/validate/:sampleIdentifier', () => {
     expect(res.body.eligible).toBe(true);
     expect(res.body.success).toBe(true);
   });
+
+  it('returns 503 when db is not available', async () => {
+    app.locals.db = undefined;
+
+    const res = await request(app)
+      .get('/api/analysis-files/validate/SMP-001')
+      .set('Authorization', `Bearer ${makeToken()}`);
+    expect(res.status).toBe(503);
+    expect(res.body.success).toBe(false);
+  });
+
+  it('returns 500 when validation service throws', async () => {
+    vi.spyOn(analysisValidationService, 'validateUploadEligibility').mockRejectedValue(new Error('boom'));
+
+    const res = await request(app)
+      .get('/api/analysis-files/validate/SMP-001')
+      .set('Authorization', `Bearer ${makeToken()}`);
+    expect(res.status).toBe(500);
+    expect(res.body.success).toBe(false);
+  });
 });
