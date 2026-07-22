@@ -150,6 +150,23 @@ by auth middleware" pattern if it recurs in other route files during
 future branch%-sorted spot-checks, since it likely caps achievable
 branch% below 100 across most of `src/interface/routes/*`.
 
+**Follow-up slice #4 (same branch, later commit, not yet reconciled into
+the numbers above):** next candidate from the prior handoff's remaining
+list was `src/interface/routes/phone-codes.routes.js` (60.86/93.61
+branches/lines merged — already >=85% lines so invisible to the
+lines-only bucket sweep, same class as `consent.service.js` above),
+confirmed as a real gap. Extended `tests/integration/phone-codes.api.test.js`
+(+7 tests, 11 total) covering the 503/500 error paths, the
+short-term (<2 chars) regex-only branch, text/regex match dedup, the
+`normalizePhoneCodeDocument` field-fallback and missing-dialCode/
+countryName filter branches, and the limit query param's clamp-to-1/
+clamp-to-50/default-to-20 branches. Moved isolated coverage to
+97.95/89.13/100/97.87. **Remaining branch gap is the same
+authenticate-shadows-route 503 dead-code pattern as #67/#76/#236/#246**
+— confirmed by isolated coverage still showing the route's own `if
+(!db)` line as unhit despite a passing "returns 503" test; filed as
+issue #247 (fifth occurrence of the pattern).
+
 **Bucket lists below are freshly regenerated this session** off the new
 `coverage-summary.json`, then corrected per the drift check above.
 Cutoffs unchanged: ZERO = 0%, LOW = 1-49%, MID-LOW = 50-69%,
