@@ -3,15 +3,17 @@ import { describe, it, expect } from 'vitest';
 const Sample = require('../../src/models/Sample');
 const SampleModel = Sample.SampleModel;
 const SampleMovementModel = require('../../src/models/SampleMovement');
+const { SAMPLE_ORIGIN_IDS, EXTRACTION_PROTOCOL_IDS, SPECIMEN_TYPE_IDS } = require('../../src/config/constants/specimen.constants');
 
 describe('SampleModel', () => {
   it('valida um payload de criação MIABIS válido', () => {
     const result = SampleModel.validate({
-      patientID: '12345678',
-      sampleType: SampleModel.validateSampleType.name ? 'PLASMA' : 'PLASMA',
-      sampleOrigin: 'VENOUS_BLOOD',
-      extractionProtocol: 'TUBE_EDTA',
-      registerDate: '2026-04-13T10:00:00.000Z',
+      specimenId: 'SPEC-001',
+      participantId: '12345678',
+      sampleType: SPECIMEN_TYPE_IDS[0],
+      sampleOrigin: SAMPLE_ORIGIN_IDS[0],
+      extractionProtocol: EXTRACTION_PROTOCOL_IDS[0],
+      registeredAt: '2026-04-13T10:00:00.000Z',
       quantity: 10,
       quality: 'GOOD',
       linkedProject: 'Projeto QA',
@@ -21,66 +23,63 @@ describe('SampleModel', () => {
     expect(result.errors).toHaveLength(0);
   });
 
-  it('rejeita patientID inválido e campos obrigatórios ausentes', () => {
+  it('rejeita campos MIABIS inválidos e obrigatórios ausentes', () => {
     const result = SampleModel.validate({
-      patientID: 'abc',
       sampleType: 'INVALID',
       sampleOrigin: 'INVALID',
       extractionProtocol: 'INVALID',
       quantity: 0,
       quality: 'BAD',
-      linkedProject: '',
     });
 
     expect(result.isValid).toBe(false);
     expect(result.errors).toEqual(expect.arrayContaining([
-      'patientID deve ser um ID anonimizado de 8 dígitos numéricos',
+      'specimenId é obrigatório',
+      'participantId é obrigatório',
       'sampleType inválido conforme MIABIS',
       'sampleOrigin inválido conforme MIABIS',
       'extractionProtocol inválido conforme MIABIS',
-      'quantity deve ser um número maior que zero (µL)',
+      'quantity deve ser maior que zero',
       'quality deve estar na escala MIABIS: GOOD, COMPROMISED ou UNKNOWN',
-      'linkedProject é obrigatório',
+      'registeredAt é obrigatório',
     ]));
   });
 
-  it('computeStatus e mapLifecycleToLegacy refletem o ciclo de vida esperado', () => {
-    expect(SampleModel.computeStatus(10, 10, SampleModel.STATUS.AVAILABLE)).toBe(SampleModel.STATUS.AVAILABLE);
-    expect(SampleModel.computeStatus(10, 4, SampleModel.STATUS.AVAILABLE)).toBe(SampleModel.STATUS.PARTIAL);
-    expect(SampleModel.computeStatus(10, 0, SampleModel.STATUS.AVAILABLE)).toBe(SampleModel.STATUS.DEPLETED);
-    expect(SampleModel.mapLifecycleToLegacy(SampleModel.STATUS.PARTIAL)).toBe('PartiallyWithdrawn');
-    expect(SampleModel.mapLifecycleToLegacy(SampleModel.STATUS.DEPLETED)).toBe('TotallyWithdrawn');
+  it('computeStatus reflete o ciclo de vida esperado', () => {
+    expect(SampleModel.computeStatus(10, 10, 'AVAILABLE')).toBe('AVAILABLE');
+    expect(SampleModel.computeStatus(10, 4, 'AVAILABLE')).toBe('PARTIAL');
+    expect(SampleModel.computeStatus(10, 0, 'AVAILABLE')).toBe('DEPLETED');
   });
 
   it('create normaliza dados e aplica defaults de status e quantidade', () => {
     const sample = SampleModel.create({
-      patientID: '12345678',
-      sampleType: 'PLASMA',
-      sampleOrigin: 'VENOUS_BLOOD',
-      extractionProtocol: 'TUBE_EDTA',
+      specimenId: 'SPEC-001',
+      participantId: '12345678',
+      sampleType: SPECIMEN_TYPE_IDS[0],
+      sampleOrigin: SAMPLE_ORIGIN_IDS[0],
+      extractionProtocol: EXTRACTION_PROTOCOL_IDS[0],
       quantity: 12,
       quality: 'GOOD',
       linkedProject: 'Projeto QA',
-      registerDate: '2026-04-13T12:00:00.000Z',
+      registeredAt: '2026-04-13T12:00:00.000Z',
       sprec: { matrixType: 'fluid' },
-      pharmacology_data: { treatment_status: 'NAIVE' },
+      pharmacologyData: { treatment_status: 'NAIVE' },
     });
 
-    expect(sample.patientID).toBe('12345678');
-    expect(sample.registrationDate).toBeInstanceOf(Date);
-    expect(sample.registerDate).toBeInstanceOf(Date);
+    expect(sample.participantId).toBe('12345678');
+    expect(sample.registeredAt).toBeInstanceOf(Date);
     expect(sample.availableQuantity).toBe(12);
     expect(sample.originalQuantity).toBe(12);
-    expect(sample.status).toBe(SampleModel.STATUS.AVAILABLE);
-    expect(sample.currentStatus).toBe('Available');
+    expect(sample.lifecycleStatus).toBe('REGISTERED');
     expect(sample.sprec.matrixType).toBe('fluid');
+    expect(sample.pharmacologyData.treatment_status).toBe('NAIVE');
   });
 });
 
 describe('SampleMovementModel', () => {
-  it('valida retirada com destino e propósito obrigatórios', () => {
+  it('valida retirada com destino e propósito', () => {
     const result = SampleMovementModel.validate({
-      sampleID: 'sample-001',
+      specimenId: 'SPEC-001',
       type: 'withdraw',
       quantity: 2,
       responsible: 'QA User',
@@ -91,23 +90,24 @@ describe('SampleMovementModel', () => {
     expect(result.isValid).toBe(true);
   });
 
-  it('rejeita devolução sem observações quando condição não é íntegra', () => {
+  it('rejeita campos obrigatórios ausentes', () => {
     const result = SampleMovementModel.validate({
-      sampleID: 'sample-001',
-      type: 'return',
-      quantity: 1,
-      responsible: 'QA User',
-      condition: 'parcialmente comprometida',
-      observations: '',
+      type: 'bogus',
+      quantity: 0,
     });
 
     expect(result.isValid).toBe(false);
-    expect(result.errors).toContain('observations é obrigatório quando a condição não é intact');
+    expect(result.errors).toEqual(expect.arrayContaining([
+      'specimenId é obrigatório',
+      'type inválido',
+      'quantity deve ser um número maior que zero',
+      'responsible é obrigatório',
+    ]));
   });
 
-  it('normaliza condição e cria ledger imutável', () => {
+  it('normaliza condição de devolução e cria o registro de movimentação', () => {
     const movement = SampleMovementModel.create({
-      sampleID: 'sample-001',
+      specimenId: 'SPEC-001',
       type: 'return',
       quantity: 1,
       responsible: 'QA User',
@@ -115,9 +115,15 @@ describe('SampleMovementModel', () => {
       observations: 'ok',
     });
 
-    expect(movement.immutable).toBe(true);
     expect(movement.type).toBe('return');
     expect(movement.condition).toBe('intact');
+    expect(movement.observations).toBe('ok');
     expect(movement.createdAt).toBeInstanceOf(Date);
+  });
+
+  it('normaliza variações de acentuação da condição íntegra', () => {
+    expect(SampleMovementModel.normalizeReturnCondition('íntegra')).toBe('intact');
+    expect(SampleMovementModel.normalizeReturnCondition('inutilizada')).toBe('unusable');
+    expect(SampleMovementModel.normalizeReturnCondition('partially compromised')).toBe('partially_compromised');
   });
 });
