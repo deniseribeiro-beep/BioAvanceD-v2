@@ -1,95 +1,88 @@
 # HANDOFF
 
-**Written:** 2026-07-21, end of skills-migration + coverage-check session.
-**Branch:** `feature/docker-e2e-backend-integration` (pushed, commit `e381e1d5` and later).
-**No issue was resolved this session** — this handoff exists because the
-user explicitly asked for test/skill recommendations for next time.
+**Written:** 2026-07-22, end of a test-loop iteration.
+**Branch:** `test/mid-high-coverage-batch-1` (pushed, commit `8e179896`).
+**No issue was resolved this session** — one test-writing slice landed,
+picked directly from `api/backend/COVERAGE_NOTES.md`'s MID-HIGH bucket.
 
 ## Repo state
 
-- `.claude/skills/` now junctions `dyeallpies-skills-pack` (gitignored via
-  `.claude/.gitignore`); the old committed flat-file skills are gone.
-  `CLAUDE.md` points at the renamed skills (`bioavanced-v2-conventions`,
-  `bioavanced-v2-legacy`, `bioavanced-v2-testing-conventions`,
-  `docker-workflow`, `ship-integration-branch`, `verify-intent`, plus the
-  new `work-issue`/`resolve-issue`/`clean-up`).
-- **Rule going forward: never edit a file reached through the skills
-  junction.** Any problem with a skill (wrong instruction, stale
-  reference, missing case) gets filed as an issue on
-  `DyeAllPies/dyeallpies-skills-pack`, not patched locally. See pack
-  issues #58, #59, #60 for the precedent/rationale.
-- Nothing pending to merge/delete; working tree was clean as of this
-  write.
+- Working tree clean, `test/mid-high-coverage-batch-1` up to date with
+  `origin/test/mid-high-coverage-batch-1`.
+- `main` remains frozen — do not branch off it, merge into it, or push
+  to it. `feature/docker-e2e-backend-integration` is the base for new
+  branches; `test/mid-high-coverage-batch-1` is the active work branch
+  for this coverage push.
+- Nothing pending to merge/delete.
 
-## Coverage snapshot (full run, commit `ac13965b`, 2026-07-21)
+## This session's slice
 
-Lines 86.33% (15429/17871), Statements 85.73%, Functions 86.58%,
-**Branches 75.66%** (12629/16690) — the weakest dimension by a wide
-margin and the best general signal for where to spend the next slices.
-Flat vs. the prior 2026-07-15 reconcile. Full detail in
-`api/backend/COVERAGE_NOTES.md`; tracked in
-[issue #228](https://github.com/deniseribeiro-beep/BioAvanceD-v2/issues/228).
+- Added `api/backend/tests/unit/RegisterSampleUseCase.test.js` (41
+  tests, all passing). `src/core/use-cases/RegisterSampleUseCase.js`
+  had no dedicated unit test before — it was only incidentally
+  exercised via `sample.routes.test.js`. Note: this file is easy to
+  confuse with the similarly-named but unrelated `RegisterSample.js`
+  (different constructor shape, its own suite `RegisterSample.test.js`)
+  — don't assume one file's test file covers the other.
+- Isolated coverage on that file moved from 77.33%/69.31%
+  (lines/branches) to 100%/95.45%. `COVERAGE_NOTES.md`'s MID-HIGH
+  bucket entry for it was removed in the same commit.
+- No bugs found; nothing filed.
 
-**6 test files failed** this run — all already filed, already assigned to
-Denise for a design call, no fix-loop work available on them right now:
-`patient.model.unit.test.js` (#218), `sample.model.unit.test.js` /
-`sample.model.gaps.test.js` / `sample.models.test.js` (#224),
-`sample-graph-validator.service.test.js` (#222). The 6th,
-`intakeWizard.routes.test.js`, was a flaky 5s timeout under full-suite
-load — passed clean in isolation, not a real regression, no issue filed.
+## Recommended next slices
 
-## Recommended next test-writing slices
+Still open in `COVERAGE_NOTES.md`'s MID-HIGH (70-84% lines) bucket, not
+already tagged to a design-call issue — pick from here first, sorted
+worst-first by lines%:
 
-`COVERAGE_NOTES.md`'s ZERO/LOW/MID-LOW buckets are current empty of
-*genuine* gaps — everything in them is already explained by a filed
-issue (the #146 rename-drift cluster or a design-fork issue) and isn't a
-real slice candidate; don't re-pick from those buckets without checking
-the issue first. The real hunting ground right now is **MID-HIGH
-(70-84% lines) files not already issue-tagged, prioritized by the
-weakest branch% relative to lines%** (untested error paths):
+1. `src/services/patient.service.js` — 74.39 / 63.56 (partial —
+   createPatient/updatePatient error-path permutations remain)
+2. `src/infrastructure/persistence/mongo/MongoAuditRepository.js` —
+   76.66 / 84.61 (existing suite is already thorough; remaining gap
+   looks like the Proxy's `defineProperty`/`deleteProperty` traps in
+   `createIsolatedCollectionView`, plus `assertExpectedCollectionName`'s
+   throw branch, which may be genuinely dead code given the single
+   hardcoded call site — check before spending a slice chasing it)
+3. `src/scripts/createFirstAdmin.js` — 77.27 / 65.00 (existing suite
+   covers the core flow; missing-env-var permutations beyond the one
+   tested, and the `shouldClose`/`closeConnection` finally-block path
+   when no `options.db` is passed, look like the real gaps)
+4. `src/workers/neo4jProjection.worker.js` — 79.62 / 73.33
+5. `src/database/mongo.js` — 80.10 / 76.51
+6. `src/services/merkle-envelope.service.js` — 80.30 / 66.21
+7. `src/interface/routes/analysis-file.routes.js` — 80.95 / 87.50
+8. `src/interface/routes/master-data.routes.js` — 81.42 / 68.75
+9. `src/config/redis.js` — 81.76 / 70.45
+10. `src/interface/routes/equipment.routes.js` — 81.92 / 74.11
+11. `src/controllers/import.controller.js` — 82.23 / 75.86
+12. `src/services/security.service.js` — 82.51 / 72.26
+13. `src/infrastructure/queue/Neo4jQuarantineService.js` — 83.33 / 82.75
+14. `src/models/User.js` — 83.67 / 78.94 (distinct from `User.test.js`'s
+    already-covered figure — this is the reconcile's raw number)
+15. `src/services/fhir-import-staging.service.js` — 84.15 / 77.86
+16. `src/controllers/import-async.controller.js` — 84.29 / 79.66
 
-1. `src/models/MeasurementUnit.js` — 75.00% lines / **40.00% branches**
-2. `src/routes/orphanet.js` — 72.26% / 52.04%
-3. `src/interface/routes/terminologies.routes.js` — 76.66% / 51.50%
-4. `src/services/hl7.service.js` — 73.45% / 47.15%
-5. `src/interface/routes/result.routes.js` — 80.97% / 55.45%
-6. `src/controllers/analysis-type.controller.js` — 77.14% / 57.14%
-7. `src/controllers/iot.controller.js` — 70.00% / 58.82%
-8. `src/services/patient.service.js` — 70.64% / 60.63%
-9. `src/infrastructure/middleware/auth.js` — 71.66% / 68.18% (security-
-   relevant middleware — worth prioritizing even though the branch gap
-   is smaller than others above)
-10. `src/utils/portManager.js` — 78.48% / 62.85% (note: shells out to
-    real OS commands — check cross-platform behavior before trusting a
-    green local run as CI-green, see `bioavanced-v2-testing-conventions`)
+Skip anything issue-tagged in that bucket: `mqtt-telemetry.service.js`
+(#160), `result-worker.js` (#146/#164), `SampleGraphValidator.js` (#222).
 
-Skip anything already carrying an issue tag in `COVERAGE_NOTES.md`'s
-MID-HIGH list (e.g. `mqtt-telemetry.service.js` #160,
-`SampleGraphValidator.js` #222, anything marked #146/#164) — those need a
-fix, not a new test.
+Most of the files above (unlike this session's `RegisterSampleUseCase.js`)
+already have an existing partial test file — **check the actual
+`tests/unit`/`tests/integration` listing before assuming a slice needs a
+brand-new file**; several of these are "extend the existing suite's
+branch coverage," not "write from scratch."
+
+**`parallel-test-agents` is a good fit if 2-4 of the files above are
+picked at once** — they're independent (no shared state). Fan out as
+`test-writer` leaf agents per that skill; `agent-delegation` is the
+mandatory read first, regardless.
 
 ## Which skills to use
 
-- **`bioavanced-v2-conventions`** first, always — branch naming
-  (`test/<slug>`), the ask-Dennis-first PR rule, issue-filing discipline.
-- **`test-loop`** for each slice above, one file (or a few related ones)
-  per iteration, native runs only per
-  **`bioavanced-v2-testing-conventions`** (targeted `vitest run`, no
-  Docker/full-suite mid-loop).
-- **`parallel-test-agents`** is a good fit for this batch specifically —
-  the 10 files above are independent (no shared state), which is exactly
-  its trigger condition. Fan out 2-4 at a time as `test-writer` leaf
-  agents, verify + commit yourself. **`agent-delegation` is the mandatory
-  read before any Agent tool call**, regardless.
-- No `fix-bugs`/`resolve-issue`/`work-issue` work is available right now
-  — everything currently failing is blocked on Denise's design calls
-  (#208, #218, #222, #224, all assigned to her). Check back once she's
-  weighed in.
-- **`wrap-up`** ends every iteration, not just the session.
-- **`ship-integration-branch`** only once the coverage push is judged
-  done — not per iteration.
+Same as last handoff: `bioavanced-v2-conventions` first, `test-loop` per
+slice, `bioavanced-v2-testing-conventions` for mechanics, `wrap-up` every
+iteration. No `fix-bugs`/`resolve-issue` work is available — nothing new
+surfaced this session that needs a fix.
 
 ## Dependency notes
 
-None queued beyond "wait for Denise" on the four design-call issues —
-test-loop work above doesn't depend on her and can proceed in parallel.
+None queued.
