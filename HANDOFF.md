@@ -1,94 +1,101 @@
 # HANDOFF
 
 **Written:** 2026-07-22, end of a test-loop iteration.
-**Branch:** `test/withdrawal-model-coverage` (commit `f2e44989`, pushed this
+**Branch:** `test/withdrawal-model-coverage` (commit `13fff995`, pushed this
 session), branched off `feature/docker-e2e-backend-integration`.
 
 ## What happened this session
 
-Routed via `work-issue` → `test-loop` (same backlog state as prior
-sessions: no open `bug`-labeled issue; #236/#238/#243 are owner's-call
-dead code, #218/#222/#224 assigned to Denise, #242 is a methodology
-note).
+Routed via `work-issue` → `test-loop`. Backlog re-triaged fresh: no
+open `bug`-labeled issue; #236/#238/#243 remain owner's-call dead code;
+#218/#222/#224 remain assigned to Denise; #242 is a methodology note.
+Also read #240 and #241 (unlabeled patient.service.js findings from a
+prior session) — both are design-call/dead-code observations, not
+reproducible defects, so they don't route to `fix-bugs` either.
 
-Per the prior handoff's recommendation, ran a fresh full reconcile
-instead of picking another ZERO-bucket file (most of that bucket is now
-thin mongoose schemas/port interfaces/one-off scripts — low value, and
-branches is the one dimension still short of 90%):
+Per the prior handoff's recommendation, spot-checked
+`src/infrastructure/middleware/` for a branch%-vs-lines% gap (the same
+method that found `consent.enforcement.js` last session) and found
+`audit.middleware.js` (243 lines, real branching logic for
+entity/action/module resolution from the request path) had no dedicated
+test file — only indirectly exercised via route-level integration
+tests. The directory's other files (`auth.js`, `authConsent.js`,
+`rbac.js`, `integrationSecurityMiddleware.js`) already have dedicated
+test files.
 
-```
-cd api/backend && npx vitest run tests/unit tests/integration tests/compliance --coverage --reporter=dot
-```
+Wrote `tests/unit/infrastructure/middleware/audit.middleware.test.js`
+(26 tests) covering: the health/keepalive path bypass, the missing-db
+no-op path, HTTP-method-to-action normalization (GET/POST/PUT/PATCH/
+DELETE plus the special-path overrides: login/logout/register/import/
+export/query/generate/validate/mfa), status-code branching (2xx/401/
+403/generic 4xx/5xx), entity resolution (direct map, ObjectId-prefix
+recursion, ObjectId-only path, VALID_ENTITIES capitalized fallback,
+unmapped default), module resolution across all its path-substring
+branches, query-param presence in the payload, and the log-failure
+swallow path (`console.error`, doesn't block the response). Followed
+this repo's established `vi.spyOn`-on-real-singleton pattern (same as
+`consent.enforcement.test.js`) rather than `vi.mock()`. Landed at
+100% lines / 94.31% branches / 100% functions isolated.
 
-Result: statements 90.8%, branches **81.84%** (up from 81.3%), functions
-90.83%, lines 91.31%. Also surfaced that issue #244's "123 failing
-tests across 5 files" is **not reproducing** — only 1 test now fails
-(`sample-graph-validator.service.test.js`'s tampering test, which is the
-already-tracked #221/#222 SampleGraphValidator legacy-schema gap, not
-new). #244 is closed already; worth a quick look at whether its closing
-comment needs a follow-up note, but not blocking.
+Updated `COVERAGE_NOTES.md` with a follow-up-slice note (same style as
+last session's `consent.enforcement.js` entry) documenting the file
+wasn't in any lines-based bucket for the same reason as before, and
+that the rest of the middleware directory already has coverage.
 
-Sorted `coverage-summary.json` by branch% directly (not just the
-lines-based ZERO/LOW/MID-LOW buckets) and found
-`src/infrastructure/middleware/consent.enforcement.js` (34 lines,
-86.66% lines but only 41.66% branches, no dedicated test file) — a real
-gap invisible to the lines-only bucket sweep since 86.66% lines puts it
-in GOOD. Wrote `tests/unit/consent.enforcement.test.js` (8 tests)
-covering: the db-missing 503, every specimenId-resolution fallback
-(body → params.specimenId → params.id → null), custom `scope` and
-`resolveSampleId` options, and the validator-failure 403 path. Followed
-this repo's established `vi.spyOn`-on-real-singleton pattern (vi.mock()
-doesn't intercept CJS require() here) rather than `vi.mock()`, matching
-`tests/unit/controllers/consent.controller.test.js`. Landed at
-100/100/100/100 isolated.
+Ran the full native unit suite once (not a per-iteration habit, but
+worth a sanity check before ending the session): 4765/4766 pass. The
+one failure is the already-tracked `sample-graph-validator.service.test.js`
+tampering test (#221/#222 SampleGraphValidator legacy-schema gap) — no
+new regressions from this session's test file.
 
-Updated `COVERAGE_NOTES.md`'s reconcile section with the new numbers,
-the #244 non-repro note, and a callout that lines-only bucketing misses
-files like this one — a branch%-sorted spot-check is worth doing
-alongside the buckets when branches is the lagging dimension. No product
-code touched — confirmed via `git status` before and after committing.
+Committed as `13fff995` and pushed to the existing
+`test/withdrawal-model-coverage` branch. No product code touched —
+confirmed via `git diff --stat` against the session-start commit before
+wrap-up.
 
-Committed as `f2e44989` and pushed to the existing
-`test/withdrawal-model-coverage` branch.
-
-`wrap-up` ran: no new friction — the one thing that looked like a
-finding (the remaining sample-graph-validator failure) turned out to
-already be covered by #221/#222 (Denise's assigned legacy-schema
-migration), not a new bug.
+`wrap-up` ran: no new friction. Core audit clean (scope guard confirmed
+no `api/backend/src`/`frontend/src` diff; no lazy fixes; no permission
+denials; no stale instructions; no user corrections). Not a shipping
+session (no issue closed/merged), so the shipping addendum didn't apply.
 
 ## Repo state
 
 - Working tree clean; `test/withdrawal-model-coverage` is current and
-  pushed (`f2e44989`), based off `feature/docker-e2e-backend-integration`.
+  pushed (`13fff995`), based off `feature/docker-e2e-backend-integration`.
 - `main` remains frozen — do not branch off it, merge into it, or push
   to it.
 
 ## Milestone (set 2026-07-22 by Dennis, still current)
 
-**Target: 90% across all four coverage dimensions.** Per this session's
-full reconcile: statements 90.8%, branches **81.84%** (the one dimension
-left), functions 90.83%, lines 91.31%.
+**Target: 90% across all four coverage dimensions.** Per the prior
+session's full reconcile (still the latest full-suite `--coverage` run):
+statements 90.8%, branches **81.84%** (the one dimension left), functions
+90.83%, lines 91.31%. This session's slice isn't yet folded into a fresh
+full reconcile — one is due at the usual cadence per `COVERAGE_NOTES.md`.
 
 ## Recommended next steps
 
 None queued explicitly by Dennis. For coverage work: branches is still
-the lagging dimension. This session's approach — sorting
-`coverage-summary.json` by branch% directly rather than only working the
-lines-based ZERO/LOW/MID-LOW buckets — turned up a real gap
-(`consent.enforcement.js`) that the buckets alone would have missed;
-worth repeating that sort before the next slice. Files still standing
-out with a lines/branches gap worth a look: `src/config/queue.js`
-(88.73/50.00), `src/routes/eConsent.js` (89.02/43.93),
-`src/infrastructure/middleware/*` siblings (worth checking the rest of
-that directory), `src/services/neo4jCanonicalProjection.service.js`
+the lagging dimension. Continue sorting `coverage-summary.json` by
+branch% directly (not just the lines-based ZERO/LOW/MID-LOW buckets) —
+it's now found two real gaps in a row
+(`consent.enforcement.js`, `audit.middleware.js`) that the bucket sweep
+alone would have missed. Files still worth a look per the prior
+handoff: `src/config/queue.js` (88.73/50.00), `src/routes/eConsent.js`
+(89.02/43.93, though it already has dedicated unit + integration test
+files — check isolated, not merged, coverage first per the #242 drift
+note), `src/services/neo4jCanonicalProjection.service.js`
 (65.00/58.41, but issue #146-cluster — check first),
 `src/services/audit-v2.service.js` (60.81/43.75, also #146/#152
-cluster — check first). A fresh full reconcile is still due at the
-usual cadence (`COVERAGE_NOTES.md`'s own note) once a few more slices
-land.
+cluster — check first). A fresh full-suite `--coverage` reconcile is
+due once a few more slices land, per `COVERAGE_NOTES.md`'s own cadence
+note.
 
 No bug-fix backlog item is queued — re-triage the open backlog per
-`fix-bugs`' verify-before-deferring rule if picking that route.
+`fix-bugs`' verify-before-deferring rule if picking that route. #240/
+#241 (patient.service.js design-call findings) were reviewed this
+session and correctly don't route anywhere actionable yet — they're
+already filed and awaiting an owner design call, not new work.
 
 ## Which skills to use
 
@@ -102,12 +109,6 @@ None queued.
 
 ## Session note
 
-Issue #244 (123 failing tests across 5 files, filed in the prior
-afternoon reconcile) did not reproduce this session — 4 of the 5 files
-now pass. Not re-investigated (not blocking), but if a future session
-hits stale-fixture failures in `patient.model.unit.test.js` /
-`sample.model.gaps.test.js` / `sample.model.unit.test.js` /
-`sample.models.test.js` again, check `git log` on those files first —
-something already fixed them between the afternoon and evening
-reconciles this session, so re-diagnosing from scratch would be
-redundant.
+None carried forward — the prior session's #244 non-repro note is
+resolved (this session's full unit run confirms the same single
+known failure, no sign of the old 123-failures issue recurring).
