@@ -169,7 +169,6 @@ src/services/patient.service.js                                74.39 / 63.56   (
 src/infrastructure/persistence/mongo/MongoAuditRepository.js   76.66 / 84.61
 src/workers/workers/result-worker.js                           76.66 / 66.07   (issue #146/#164 — rename + yauzl)
 src/scripts/createFirstAdmin.js                                77.27 / 65.00
-src/core/use-cases/RegisterSampleUseCase.js                    77.33 / 69.31
 src/services/SampleGraphValidator.js                           77.69 / 66.66   (issue #222 — legacy-schema migration, design fork)
 src/workers/neo4jProjection.worker.js                          79.62 / 73.33
 src/database/mongo.js                                          80.10 / 76.51
