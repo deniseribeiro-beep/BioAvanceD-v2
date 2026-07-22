@@ -130,10 +130,16 @@ for the sign/verify roundtrips, and a real temp file for `loadPrivateKey`.
 `audit-witness.service.js` moved to GOOD (100/100/100/100, isolated run)
 — thin `fetch`-only singleton, `vi.stubGlobal('fetch', ...)` same as
 `rfc3161-adapter.service.test.js`, no `vi.mock` needed.
+`audit-tsa.service.js` moved to GOOD (100/100/100/100, isolated run) —
+destructured `const { execFile } = require('child_process')` at module
+scope, so mocked by overriding `child_process.execFile` directly
+(built-in modules are real Node singletons — the override is visible to
+the destructuring at require-time of the service) before the service's
+first `require`, plus `vi.stubGlobal('fetch', ...)` for the TSA POST and
+real `fs`/tmp-dir I/O (no fs mocking needed).
 
 ```
 src/interface/routes/intakeWizard.routes.js     16.98 / 0        (issue #146 cluster)
-src/services/audit-tsa.service.js               21.42 / 0        (issue #146 cluster)
 src/controllers/fhir-import-staging.controller.js 30.23 / 41.17  (issue #146 cluster)
 ```
 
