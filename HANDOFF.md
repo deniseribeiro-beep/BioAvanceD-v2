@@ -1,81 +1,86 @@
 # HANDOFF
 
-**Written:** 2026-07-22, end of a test-loop iteration.
-**Branch:** `test/mid-high-coverage-batch-1` (pushed, commit `5f91e9fd`).
-**No issue was resolved this session, and no new test file landed** — a
-full coverage reconcile (as the prior handoff recommended) turned up a
-methodology bug in the reconcile itself rather than a real slice. One
-informational finding filed (#242); no product bugs.
+**Written:** 2026-07-22, end of a fix-bugs iteration.
+**Branch:** `test/mid-high-coverage-batch-1` (pushed, commit `6fae2ff4`).
+
+## What happened this session
+
+Resumed from a HANDOFF that named `#146`/`#159`/`#160` as the blocking
+cluster to clear before more test-loop slices could be picked. **All
+three were already closed** (verified via `gh issue view`) — the prior
+handoff's "next steps toward 90%" section was stale, not current state.
+Re-traced the actual `#146`-cluster files it named
+(`auditRoot.service.js`, `audit-tree.service.js`,
+`audit-signing.provider.js`, `intakeWizard.routes.js`,
+`audit-tsa.service.js`, `audit-witness.service.js`,
+`audit-v2.service.js`, `neo4jCanonicalProjection.service.js`,
+`result-worker.js`): none have a currently-failing test, and most
+(`auditRoot.service.js`, `audit-tree.service.js`,
+`audit-signing.provider.js`, `audit-tsa.service.js`,
+`audit-witness.service.js`) have **no test file at all** — their low
+coverage is just an untested-file gap, not a rename-drift bug. These are
+genuine `test-loop` slices, not `fix-bugs` targets; `#146`'s own
+resolution (closed as "remove obsolete legacy tests, don't mass-rename")
+never touched these files since none of them had legacy-named tests to
+begin with.
+
+Picked a real, still-open bug instead: **`#233`**
+(`sensor.controller.js` `list()` threw `TypeError` on a null
+`listSensors` result instead of falling back to `[]`) — had a pinned
+failing-on-purpose test already in place from the `#228` coverage batch.
+Fixed the guard (`(result && result.sensors) || ...`), un-weakened the
+pinned test to assert the correct `200`/`{data: []}` response, verified
+against the full `sensor.controller.test.js` + `sensor.api.test.js`
+suites (43 tests, all passing). Merged `fix/sensor-controller-null-result`
+into `test/mid-high-coverage-batch-1` at `6fae2ff4`, fix branch deleted
+both sides, issue closed.
 
 ## Repo state
 
 - Working tree clean; `test/mid-high-coverage-batch-1` up to date with
-  origin. Nothing pending to merge/delete.
+  origin at `6fae2ff4`. Nothing pending to merge/delete.
 - `main` remains frozen — do not branch off it, merge into it, or push
   to it. `feature/docker-e2e-backend-integration` is the base for new
-  branches; `test/mid-high-coverage-batch-1` is the active work branch
-  for this coverage push.
+  integration work per prior sessions' convention (unchanged this
+  session).
+- `#233` closed. No new issues filed this session (the #146-cluster
+  files are documented above as clear `test-loop` slices, not filed as
+  new issues since `COVERAGE_NOTES.md` already tracks them by name).
 
-## This session's work
+## Milestone (set 2026-07-22 by Dennis, still current)
 
-- Ran the full reconcile the prior handoff called for:
-  `npx vitest run tests/unit tests/integration tests/compliance
-  --coverage --reporter=dot`. Lines 88.32% → **89.44%**, branches
-  78.49% → **79.71%**.
-- Re-derived buckets from `coverage-summary.json` and found three files
-  that looked like new MID-HIGH regressions: `equipment.routes.js`
-  (81.92/76.47, down from its previously-recorded 100/92.94),
-  `fieldEncryption.js` (76.19/82.6, never listed before), `User.js`
-  (83.67/78.94, previously GOOD).
-- **Before writing tests for any of them, verified each in isolation**
-  (`--coverage.include="<path>"` against just that file's own test
-  file(s)) — all three came back essentially fully covered: 100/92.94,
-  100/100, 98.03/97.89 respectively. The merged full-suite number was
-  wrong, not the code's real coverage. This is the same drift class as
-  `dyeallpies-skills-pack#99` (mixing an isolation-heavy unit test with
-  an integration test that loads the real `app.js` makes the merged
-  number swing non-additively, sometimes by ~20 points) — confirmed
-  here for the first time on files *outside* patient.service.js's
-  sibling-file cluster, so it's broader than previously scoped.
-- Filed **#242** documenting the three repro cases and adding a
-  cross-check step to `COVERAGE_NOTES.md`'s reconcile guidance: for any
-  MID-HIGH file with both a unit and an integration test, re-verify in
-  isolation before treating the merged number as a real slice
-  candidate.
-- Corrected `COVERAGE_NOTES.md` accordingly (commit `5f91e9fd`):
-  `equipment.routes.js`/`User.js` moved back out of MID-HIGH,
-  `patient.service.js`'s number updated to the fresh reconcile's
-  77.92/65.52 (still optional, unchanged conclusion), reconcile date
-  bumped to 2026-07-22.
-- **No test file was written this session** — every MID-HIGH candidate
-  checked out as either issue-linked (mqtt-telemetry #160, result-worker
-  #146/#164, SampleGraphValidator #222, neo4jProjection.worker.js's
-  accepted CLI-entry gap, patient.service.js optional) or this drift
-  artifact. LOW/MID-LOW/ZERO buckets remain the same issue-linked-drift
-  or low-priority set as before — no change there.
+**Target: 90% across all four coverage dimensions** — statements,
+branches, functions, lines. Branches remains the laggard
+(~79.71% as of the last full reconcile, commit `5f91e9fd`) and the
+metric to prioritize; prefer branch-heavy gaps over line-heavy ones.
+Frontend remains out of scope per that same direction.
 
-## Recommended next slices
+## Recommended next steps
 
-`COVERAGE_NOTES.md`'s MID-HIGH bucket is now fully accounted for (all
-five entries are issue-linked or accepted-gap; `patient.service.js` is
-optional-only). **There is currently no genuinely untested real-logic
-slice candidate in the tracked buckets.** Options for the next session,
-roughly in order:
-1. Re-run the reconcile once #242's fix (if any tooling change comes of
-   it) or Denise's own work lands — buckets may shift.
-2. Consider whether any of the issue-linked LOW/MID-LOW files (the
-   audit/rename-drift #146 cluster) are now unblocked — check the
-   issues fresh rather than trusting this note.
-3. Look outside the backend unit/integration tiers entirely — e2e
-   (`tests/e2e/*.spec.ts`) or frontend coverage haven't been reconciled
-   in this push's cadence; may be worth a first pass if backend truly
-   has nothing left.
+`test-loop` has real slices available again — the #146-cluster files
+named above (`auditRoot.service.js`, `audit-tree.service.js`,
+`audit-signing.provider.js`, `audit-tsa.service.js`,
+`audit-witness.service.js` first — all zero-test, real logic, no
+existing failures to work around). Do **not** re-treat them as blocked;
+that framing is resolved as of this session. `intakeWizard.routes.js`,
+`audit-v2.service.js`, `neo4jCanonicalProjection.service.js`, and
+`result-worker.js` already have passing test files — check
+`COVERAGE_NOTES.md`'s current bucket listing before assuming they still
+need a slice; some may just need branch-focused additions to their
+existing suites rather than net-new files.
+
+`#222` (`SampleGraphValidator.js`) — still a legacy-schema
+migration/design fork per `bioavanced-v2-legacy`; check that skill
+before committing to it. `#238`/`#240`/`#241` remain accepted
+unreachable-branch gaps, not real 90%-branches levers.
 
 ## Which skills to use
 
-Same as last handoff: `bioavanced-v2-conventions` first, `test-loop` per
-slice, `bioavanced-v2-testing-conventions` for mechanics,
-`parallel-test-agents`/`agent-delegation` for any future fan-out,
+`bioavanced-v2-conventions` first. `test-loop` for the now-unblocked
+#146-cluster files, prioritizing branch-heavy gaps. `fix-bugs` for the
+remaining open `bug`-labeled issues (`#234` HMAC/IP-mangling bugs in
+`auditLogger.js`, others per `gh issue list --label bug`) once a
+test-loop pass isn't in progress. `bioavanced-v2-legacy` before `#222`.
 `wrap-up` every iteration.
 
 ## Dependency notes
@@ -84,11 +89,9 @@ None queued.
 
 ## Session note
 
-Running the full-suite `--coverage` command twice near the start of the
-session (once for the reconcile, once trying to grep test-file/test
-counts from a re-run instead of the already-captured output) cost ~5
-extra minutes for no new information — the counts were available in the
-first run's output, just not grepped for on the first pass. Next time:
-capture the full tail/summary once and search within it rather than
-re-invoking the (slow) full suite a second time for a different slice
-of the same output.
+**Lesson for future sessions:** a HANDOFF's "next steps" section can go
+stale between sessions if issues it names get closed by other work in
+the interim (or, per this session, were already closed and the framing
+was simply wrong going in). Before treating a HANDOFF's blocking-issue
+list as current, `gh issue view` each one — don't assume open state
+from a prior write-up.
