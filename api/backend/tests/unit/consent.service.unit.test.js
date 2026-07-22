@@ -322,6 +322,55 @@ describe('ConsentService.createTemplate', () => {
     await expect(consentService.createTemplate(db, { title: '' })).rejects.toThrow();
     expect(templates.insertOne).not.toHaveBeenCalled();
   });
+
+  it('auto-generates a version when none is provided', async () => {
+    const templates = makeCollection({
+      find: vi.fn(() => makeCursor([{ version: 'v4' }])),
+      insertOne: vi.fn(async () => ({ insertedId: new ObjectId() })),
+    });
+    const db = makeDb({ consent_templates: templates });
+
+    const result = await consentService.createTemplate(db, { title: 'T', content: 'C' });
+
+    expect(result.version).toBe('v5');
+  });
+
+  it('falls back to content when htmlContent is not provided', async () => {
+    const templates = makeCollection({
+      find: vi.fn(() => makeCursor([])),
+      insertOne: vi.fn(async () => ({ insertedId: new ObjectId() })),
+    });
+    const db = makeDb({ consent_templates: templates });
+
+    const result = await consentService.createTemplate(db, { title: 'T', content: 'Body content' });
+
+    expect(result.htmlContent).toBe('Body content');
+  });
+
+  it('generates a random versionGroupId when none is provided', async () => {
+    const templates = makeCollection({
+      find: vi.fn(() => makeCursor([])),
+      insertOne: vi.fn(async () => ({ insertedId: new ObjectId() })),
+    });
+    const db = makeDb({ consent_templates: templates });
+
+    const result = await consentService.createTemplate(db, { title: 'T', content: 'C' });
+
+    expect(typeof result.versionGroupId).toBe('string');
+    expect(result.versionGroupId.length).toBeGreaterThan(0);
+  });
+
+  it('omits caae when not a string in the payload', async () => {
+    const templates = makeCollection({
+      find: vi.fn(() => makeCursor([])),
+      insertOne: vi.fn(async () => ({ insertedId: new ObjectId() })),
+    });
+    const db = makeDb({ consent_templates: templates });
+
+    const result = await consentService.createTemplate(db, { title: 'T', content: 'C' });
+
+    expect(result.caae).toBe('');
+  });
 });
 
 describe('ConsentService.getTemplateById', () => {
@@ -386,6 +435,68 @@ describe('ConsentService.updateTemplate', () => {
       expect.objectContaining({ $set: expect.objectContaining({ active: false }) })
     );
     expect(templates.insertOne).toHaveBeenCalled();
+  });
+
+  it('throws for a malformed template id', async () => {
+    const db = makeDb({ consent_templates: makeCollection() });
+    await expect(consentService.updateTemplate(db, 'not-an-object-id', { title: 'x' })).rejects.toThrow('inválido');
+  });
+
+  it('reuses the existing permissions when the payload omits them', async () => {
+    const existingId = new ObjectId();
+    const existing = {
+      _id: existingId,
+      title: 'Old title',
+      content: 'Old content',
+      htmlContent: 'Old content',
+      version: 'v1',
+      active: true,
+      permissions: [{ key: 'analytics', label: 'Analytics', required: false }],
+    };
+    const templates = makeCollection({ findOne: vi.fn(async () => existing) });
+    const db = makeDb({ consent_templates: templates });
+
+    const result = await consentService.updateTemplate(db, existingId.toString(), { title: 'New title' });
+
+    expect(result.permissions).toEqual([{ key: 'analytics', label: 'Analytics', required: false }]);
+  });
+
+  it('falls back to the existing htmlContent/content when the payload has neither', async () => {
+    const existingId = new ObjectId();
+    const existing = {
+      _id: existingId,
+      title: 'Old title',
+      content: 'Existing body',
+      htmlContent: 'Existing body',
+      version: 'v1',
+      active: true,
+      permissions: [],
+    };
+    const templates = makeCollection({ findOne: vi.fn(async () => existing) });
+    const db = makeDb({ consent_templates: templates });
+
+    const result = await consentService.updateTemplate(db, existingId.toString(), { title: 'New title' });
+
+    expect(result.htmlContent).toBe('Existing body');
+  });
+
+  it('defaults caae to empty string when the existing template has none', async () => {
+    const existingId = new ObjectId();
+    const existing = {
+      _id: existingId,
+      title: 'Old title',
+      content: 'Old content',
+      htmlContent: 'Old content',
+      version: 'v1',
+      active: true,
+      permissions: [],
+    };
+    const templates = makeCollection({ findOne: vi.fn(async () => existing) });
+    const db = makeDb({ consent_templates: templates });
+
+    const result = await consentService.updateTemplate(db, existingId.toString(), { title: 'New title' });
+
+    expect(result.caae).toBe('');
   });
 });
 
@@ -466,6 +577,90 @@ describe('ConsentService.createPolicy', () => {
     const result = await consentService.createPolicy(db, payload);
     expect(result._id).toBeDefined();
   });
+
+  it('rejects an unparseable validFrom/validTo period', async () => {
+    const templates = makeCollection({ find: vi.fn(() => makeCursor([])) });
+    const db = makeDb({ consent_templates: templates });
+
+    await expect(
+      consentService.createPolicy(db, {
+        title: 'Policy',
+        htmlContent: '<p>content</p>',
+        validFrom: 'not-a-date',
+        validTo: '2026-12-31T23:59:59.000Z',
+        granularPermissions: [{ key: 'analytics', label: 'Analytics' }],
+      })
+    ).rejects.toThrow('Período de vigência inválido');
+
+    expect(templates.insertOne).not.toHaveBeenCalled();
+  });
+
+  it('rejects an invalid previousPolicyId format', async () => {
+    const templates = makeCollection({ find: vi.fn(() => makeCursor([])) });
+    const db = makeDb({ consent_templates: templates });
+
+    await expect(
+      consentService.createPolicy(
+        db,
+        {
+          title: 'Policy',
+          htmlContent: '<p>content</p>',
+          validFrom: '2026-01-01T00:00:00.000Z',
+          validTo: '2026-12-31T23:59:59.000Z',
+          granularPermissions: [{ key: 'analytics', label: 'Analytics' }],
+        },
+        { previousPolicyId: 'not-an-object-id' }
+      )
+    ).rejects.toThrow('ID do TCLE para atualização é inválido');
+  });
+
+  it('rejects when previousPolicyId does not match an existing policy', async () => {
+    const templates = makeCollection({
+      find: vi.fn(() => makeCursor([])),
+      findOne: vi.fn(async () => null),
+    });
+    const db = makeDb({ consent_templates: templates });
+
+    await expect(
+      consentService.createPolicy(
+        db,
+        {
+          title: 'Policy',
+          htmlContent: '<p>content</p>',
+          validFrom: '2026-01-01T00:00:00.000Z',
+          validTo: '2026-12-31T23:59:59.000Z',
+          granularPermissions: [{ key: 'analytics', label: 'Analytics' }],
+        },
+        { previousPolicyId: new ObjectId().toString() }
+      )
+    ).rejects.toThrow('TCLE anterior não encontrado para atualização');
+  });
+
+  it('inherits versionGroupId from the previous policy when not explicitly provided', async () => {
+    const previousId = new ObjectId();
+    const previousPolicy = { _id: previousId, versionGroupId: 'group-xyz' };
+    const templates = makeCollection({
+      find: vi.fn(() => makeCursor([])),
+      findOne: vi.fn(async () => previousPolicy),
+      insertOne: vi.fn(async () => ({ insertedId: new ObjectId() })),
+    });
+    const db = makeDb({ consent_templates: templates });
+
+    const result = await consentService.createPolicy(
+      db,
+      {
+        title: 'Policy',
+        htmlContent: '<p>content</p>',
+        validFrom: '2026-01-01T00:00:00.000Z',
+        validTo: '2026-12-31T23:59:59.000Z',
+        granularPermissions: [{ key: 'analytics', label: 'Analytics' }],
+      },
+      { previousPolicyId: previousId.toString() }
+    );
+
+    expect(result.versionGroupId).toBe('group-xyz');
+    expect(result.revisionType).toBe('update');
+  });
 });
 
 describe('ConsentService.getActiveTemplate / getAllTemplates / getLatestTemplate', () => {
@@ -543,6 +738,37 @@ describe('ConsentService.getActivePolicy / getAllPolicies / getPoliciesHistory /
 
     await consentService.getPoliciesHistory(db, { groupId: 'group-1' });
     expect(templates.find).toHaveBeenCalledWith({ versionGroupId: 'group-1' });
+  });
+
+  it('getPoliciesHistory builds a generic $or search filter for free text', async () => {
+    const templates = makeCollection({ find: vi.fn(() => makeCursor([])) });
+    const db = makeDb({ consent_templates: templates });
+
+    await consentService.getPoliciesHistory(db, { search: 'privacy' });
+
+    const filter = templates.find.mock.calls[0][0];
+    expect(filter.$or).toBeDefined();
+    expect(filter.$and).toBeUndefined();
+  });
+
+  it('getPoliciesHistory narrows the search to active items for "ativo"', async () => {
+    const templates = makeCollection({ find: vi.fn(() => makeCursor([])) });
+    const db = makeDb({ consent_templates: templates });
+
+    await consentService.getPoliciesHistory(db, { search: 'ativo' });
+
+    const filter = templates.find.mock.calls[0][0];
+    expect(filter.$and).toEqual([{ active: true }, { $or: expect.any(Array) }]);
+  });
+
+  it('getPoliciesHistory narrows the search to inactive items for "inactive"', async () => {
+    const templates = makeCollection({ find: vi.fn(() => makeCursor([])) });
+    const db = makeDb({ consent_templates: templates });
+
+    await consentService.getPoliciesHistory(db, { search: 'inactive' });
+
+    const filter = templates.find.mock.calls[0][0];
+    expect(filter.$and).toEqual([{ active: false }, { $or: expect.any(Array) }]);
   });
 
   it('getActivePoliciesWithCaae only queries active items with a caae', async () => {
@@ -688,6 +914,53 @@ describe('ConsentService.createPatientConsent', () => {
         ...validSignature,
       })
     ).rejects.toThrow('inválidas');
+  });
+
+  it('rejects when the consentTemplateId matches no template', async () => {
+    const patients = makeCollection({ findOne: vi.fn(async () => ({ participantId: '12345678' })) });
+    const templates = makeCollection({ findOne: vi.fn(async () => null) });
+    const db = makeDb({ patients, consent_templates: templates, patientConsents: makeCollection() });
+
+    await expect(
+      consentService.createPatientConsent(db, {
+        participantId: '12345678',
+        consentTemplateId: templateId.toString(),
+        responses: {},
+        ...validSignature,
+      })
+    ).rejects.toThrow('Template de consentimento não encontrado');
+  });
+
+  it('rejects when the template is not yet in force', async () => {
+    const futureTemplate = { ...activeTemplate, validFrom: '2999-01-01T00:00:00.000Z' };
+    const patients = makeCollection({ findOne: vi.fn(async () => ({ participantId: '12345678' })) });
+    const templates = makeCollection({ findOne: vi.fn(async () => futureTemplate) });
+    const db = makeDb({ patients, consent_templates: templates, patientConsents: makeCollection() });
+
+    await expect(
+      consentService.createPatientConsent(db, {
+        participantId: '12345678',
+        consentTemplateId: templateId.toString(),
+        responses: { analytics: true },
+        ...validSignature,
+      })
+    ).rejects.toThrow('ainda não está vigente');
+  });
+
+  it('rejects when the template has expired', async () => {
+    const expiredTemplate = { ...activeTemplate, validTo: '2000-01-01T00:00:00.000Z' };
+    const patients = makeCollection({ findOne: vi.fn(async () => ({ participantId: '12345678' })) });
+    const templates = makeCollection({ findOne: vi.fn(async () => expiredTemplate) });
+    const db = makeDb({ patients, consent_templates: templates, patientConsents: makeCollection() });
+
+    await expect(
+      consentService.createPatientConsent(db, {
+        participantId: '12345678',
+        consentTemplateId: templateId.toString(),
+        responses: { analytics: true },
+        ...validSignature,
+      })
+    ).rejects.toThrow('expirado');
   });
 
   it('rejects an invalid consentTemplateId format', async () => {

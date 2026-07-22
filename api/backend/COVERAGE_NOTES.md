@@ -98,6 +98,32 @@ note recommends. The rest of `src/infrastructure/middleware/` (`auth.js`,
 `authConsent.js`, `rbac.js`, `integrationSecurityMiddleware.js`) already
 has dedicated test files and wasn't re-checked this slice.
 
+**Follow-up slice #2 (same branch, later commit, not yet reconciled into
+the numbers above):** a fresh full reconcile run (`npx vitest run
+tests/unit tests/integration tests/compliance --coverage
+--reporter=dot`) confirmed the prior evening snapshot is still accurate
+(90.89/81.96/90.88/91.34, +0.1pt drift, no bucket-membership changes) and
+gave a live `coverage-summary.json` to branch%-sort directly. Top of that
+sort was `src/routes/eConsent.js` (43.93 branch — already flagged above
+as issue-#242 drift, not re-checked) and `src/config/queue.js` (50.00
+branch — has a dedicated, comprehensive `queue.config.test.js`; confirmed
+via an isolated re-run this is the same merged-vs-isolated drift class,
+not a real gap). The next genuine (non-drift, no filed issue) candidate
+was `src/services/consent.service.js` (87.86/68.61 lines/branches,
+already >=85% lines so invisible to the lines-only bucket sweep, same as
+the two middleware files above). Extended the existing
+`tests/unit/consent.service.unit.test.js` (+29 tests, 88 total) covering:
+`createTemplate`'s version/htmlContent/versionGroupId/caae fallback
+branches, `updateTemplate`'s malformed-id throw and its
+permissions/htmlContent/caae fallback-to-existing branches, `createPolicy`'s
+invalid-period throw, previousPolicyId invalid-format/not-found throws and
+its versionGroupId inheritance, `getPoliciesHistory`'s free-text/ativo/
+inactive search-filter branches, and `createPatientConsent`'s
+template-not-found/not-yet-vigente/expired throws. Moved isolated coverage
+to 97.51/81.58/97.43/97.42. Remaining gap (lines 447,558,643,656) is
+deeper error-path combinations, not whole untested methods — optional, not
+urgent, same tier as `patient.service.js`'s note below.
+
 **Bucket lists below are freshly regenerated this session** off the new
 `coverage-summary.json`, then corrected per the drift check above.
 Cutoffs unchanged: ZERO = 0%, LOW = 1-49%, MID-LOW = 50-69%,
