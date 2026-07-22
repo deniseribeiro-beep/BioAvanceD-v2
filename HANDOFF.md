@@ -1,82 +1,94 @@
 # HANDOFF
 
 **Written:** 2026-07-22, end of a test-loop iteration.
-**Branch:** `test/withdrawal-model-coverage` (commit `7d9a8f40`, pushed
+**Branch:** `test/withdrawal-model-coverage` (commit `dcf7f01b`, pushed
 this session), based off `feature/docker-e2e-backend-integration`.
 
 ## What happened this session
 
-Routed via `test-loop`. Continued the prior handoff's remaining
-candidate list.
+Routed via `test-loop`. A fresh full coverage reconcile ran (since the
+MID-LOW/MID-HIGH buckets in `COVERAGE_NOTES.md` had no unflagged
+candidates left) and gave a live `coverage-summary.json` to branch%-sort
+directly, per the file's own recommended method.
 
-Picked `src/services/quality-compatibility.service.js` (65.51/100
-lines/branches merged), flagged in the prior handoff as touching
-RCS/quality logic (ground truth `docs/research/cmpb-submission/manuscript/00_Manuscript.tex`,
-not `docs/architecture/`). On inspection it turned out to be a thin,
-~30-line pure legacy-field compatibility shim (`normalizeSample`) with
-no scoring/grading math of its own, so the manuscript ground-truth rule
-didn't end up needed. No prior test file existed. Added
-`tests/unit/quality-compatibility.service.unit.test.js` (11 tests)
-covering: bare-call defaults, the no-legacy-fields no-op path, each of
-`rcsScore`/`scoreBasedGrade`/`axisPenalties` promoting into `canonical`
-individually and together, merging into a pre-existing `canonical`
-object, not overwriting already-set `rcs_score`/`final_grade`/`p_bio`/
-`grade_route`, preserving vs. defaulting `calculation_trace.compatibility`,
-and no-mutation of the input. Every branch in the function is now
-exercised by inspection.
+Top unflagged candidate was `src/interface/routes/master-data.routes.js`
+(71.87/91.42 branches/lines isolated — already >=85% lines so invisible
+to the lines-only bucket sweep, same class as several prior sessions'
+slices). Confirmed a real gap (36 existing tests, but genuinely missing
+branches — not merged-vs-isolated drift). Extended
+`tests/integration/master-data.api.test.js` (+3 tests, 39 total)
+covering the `Number.isFinite(numericId)` fallback in the shared
+`createMasterDataRouter` factory's `$or` id-lookup query (GET/PUT/DELETE
+`/:id` with a non-ObjectId numeric id string, previously only exercised
+with valid ObjectId strings). Moved isolated coverage to
+91.42/84.37/100/91.42. Remaining gap is the authenticate-shadows-route
+503 dead-code pattern (all 5 mounted routes' own `if (!db)` guards are
+unreachable — `authenticate` already 503s first) — filed as **issue
+#248**, sixth occurrence of #67/#76/#236/#246/#247, and notable because
+one file/factory accounts for 5 of the pattern's instances at once.
 
-`wrap-up` ran: no findings this session (no scope violations, no lazy
-fixes, no stale instructions, nothing to file). The uncommitted
-`.claude/hooks/branch-guard.cjs` change present at session start
-(line-ending-only diff, empty `git diff` output) was left untouched
-again — not part of this session's work, now carried across at least
-three prior sessions.
+Also checked `quality.routes.js` (50/100 branches/lines from the same
+sort) — its `req.body || {}` fallback turned out unreachable too
+(`express.json()` is mounted globally before any route, so `req.body`
+is never falsy). A test was written, found not to move coverage,
+reverted rather than kept as non-functional padding.
+
+`wrap-up` ran and caught a real gap in its own audit: the reverted
+`quality.routes.js` finding had been left undocumented instead of
+filed. Filed as **issue #249** and linked from `COVERAGE_NOTES.md` in a
+follow-up commit — this is the one piece of friction from this session,
+now closed out.
 
 ## Repo state
 
 - Working tree has one pre-existing uncommitted change:
   `.claude/hooks/branch-guard.cjs` (line-ending-only, `git diff` shows
   no content diff) — not touched this or prior sessions, not mine to
-  resolve. Worth a direct question to Dennis if it persists past another
-  session, since `git diff` showing nothing suggests it may just need a
-  `git add`/normalize-and-commit rather than continued carrying.
-- `test/withdrawal-model-coverage` is current and pushed (`7d9a8f40`),
+  resolve. Now carried across at least four prior sessions; worth a
+  direct question to Dennis rather than continued silent carrying —
+  `git diff` showing nothing suggests it may just need a
+  `git add`/normalize-and-commit.
+- `test/withdrawal-model-coverage` is current and pushed (`dcf7f01b`),
   based off `feature/docker-e2e-backend-integration`.
 - `main` remains frozen — do not branch off it, merge into it, or push
   to it.
-- A full-suite coverage reconcile was kicked off this session (checking
-  isolated coverage for the new slice) but not waited on — the targeted
-  test-file run already gave enough signal to commit. Its log and the
-  regenerated `coverage/` dir were removed during session clean-up; the
-  next full reconcile should just be re-run fresh per `COVERAGE_NOTES.md`.
+- A full-suite coverage reconcile ran this session (statements 91.05%,
+  branches 82.3%, functions 90.88%, lines 91.5% — before this session's
+  `master-data.routes.js` slice was folded in). Its `coverage/` dir was
+  used for the branch%-sort then left in place this time (gitignored,
+  regenerate any time via the full reconcile command in
+  `COVERAGE_NOTES.md` if it's gone by next session).
 
 ## Milestone (set 2026-07-22 by Dennis, still current)
 
 **Target: 90% across all four coverage dimensions.** Last full
-reconcile (evening of 2026-07-22): statements 90.89%, branches
-**81.96%** (the one dimension left), functions 90.88%, lines 91.34%.
-This session's `quality-compatibility.service.js` slice (and the two
-prior sessions' `result.routes.js`/`phone-codes.routes.js` slices)
-aren't yet folded into a fresh full reconcile — one is due at the usual
+reconcile (this session): statements 91.05%, branches **82.3%** (the
+one dimension left, up from 81.96% the prior session), functions
+90.88%, lines 91.5%. This session's `master-data.routes.js` slice isn't
+yet folded into a fresh full reconcile — one is due at the usual
 cadence per `COVERAGE_NOTES.md`.
 
 ## Recommended next steps
 
 None queued explicitly by Dennis. For coverage work: branches is still
 the lagging dimension. Continue the branch%-sorted spot-check method —
-re-run `node <sort-by-branch-script>` against
-`coverage/coverage-summary.json` (gitignored, regenerate via the full
-reconcile command in `COVERAGE_NOTES.md`) and work down the list,
-skipping anything already flagged as issue-linked drift or dead code.
-Remaining candidate from two sessions ago's sort, not yet checked:
-`src/core/use-cases/AllocateSampleUseCase.js` (64.58/91.48 merged, but
-flagged in `COVERAGE_NOTES.md` as already GOOD from a prior session's
-#146 fix — check for drift first, likely the same merged-vs-isolated
-drift class as issue #242, not a real gap). Also worth surfacing to
-Dennis (not yet done): the repeated authenticate-shadows-route 503
-dead-code pattern (#67/#76/#236/#246/#247, five occurrences across
-route files) strongly suggests a repo-wide sweep, not per-file spot
-fixes, is the efficient resolution.
+regenerate `coverage/coverage-summary.json` via the full reconcile
+command in `COVERAGE_NOTES.md` and work down the list, skipping
+anything already flagged as issue-linked drift or dead code. From this
+session's sort, `src/services/consent.service.js` and other GOOD-bucket
+files weren't re-checked; the next unflagged candidates past
+`master-data.routes.js` in the same sort were `src/services/hl7Audit.service.js`
+(66.66/92.45), `src/interface/routes/label.routes.js` (68.29/97.64),
+and `src/interface/routes/sample.routes.js` (68.62/92.21) — none
+verified for drift yet, all already have dedicated test files so check
+isolated coverage before treating the merged number as real.
+
+Also still worth surfacing to Dennis (not yet done, now six
+occurrences deep): the repeated authenticate-shadows-route 503
+dead-code pattern (#67/#76/#236/#246/#247/#248) strongly suggests a
+repo-wide sweep, not per-file spot fixes, is the efficient resolution —
+`master-data.routes.js` alone contributed 5 of the 6 filed instances
+via one shared factory.
 
 No bug-fix backlog item is queued — re-triage the open backlog per
 `fix-bugs`' verify-before-deferring rule if picking that route.
