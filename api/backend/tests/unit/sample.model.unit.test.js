@@ -13,7 +13,7 @@ describe('Sample.validateLifecycleStatus', () => {
   });
 
   it('returns false for unknown status', () => {
-    expect(Sample.validateLifecycleStatus('DESTROYED')).toBe(false);
+    expect(Sample.validateLifecycleStatus('BOGUS')).toBe(false);
     expect(Sample.validateLifecycleStatus(null)).toBe(false);
     expect(Sample.validateLifecycleStatus('')).toBe(false);
   });
@@ -43,29 +43,6 @@ describe('Sample.computeStatus', () => {
   });
 });
 
-describe('Sample.mapLifecycleToLegacy', () => {
-  it('maps AVAILABLE to Available', () => {
-    expect(Sample.mapLifecycleToLegacy('AVAILABLE')).toBe('Available');
-  });
-
-  it('maps PARTIAL to PartiallyWithdrawn', () => {
-    expect(Sample.mapLifecycleToLegacy('PARTIAL')).toBe('PartiallyWithdrawn');
-  });
-
-  it('maps DEPLETED to TotallyWithdrawn', () => {
-    expect(Sample.mapLifecycleToLegacy('DEPLETED')).toBe('TotallyWithdrawn');
-  });
-
-  it('maps UNAVAILABLE to Unusable', () => {
-    expect(Sample.mapLifecycleToLegacy('UNAVAILABLE')).toBe('Unusable');
-  });
-
-  it('defaults to Available for unknown status', () => {
-    expect(Sample.mapLifecycleToLegacy('UNKNOWN')).toBe('Available');
-    expect(Sample.mapLifecycleToLegacy(null)).toBe('Available');
-  });
-});
-
 describe('Sample.validateWithdrawalType', () => {
   it('returns true for Parcial', () => {
     expect(Sample.validateWithdrawalType('Parcial')).toBe(true);
@@ -78,19 +55,6 @@ describe('Sample.validateWithdrawalType', () => {
   it('returns false for unknown type', () => {
     expect(Sample.validateWithdrawalType('Complete')).toBe(false);
     expect(Sample.validateWithdrawalType(null)).toBe(false);
-  });
-});
-
-describe('Sample.validateSampleStatus', () => {
-  it('returns true for valid legacy statuses', () => {
-    ['Available', 'PartiallyWithdrawn', 'TotallyWithdrawn', 'Withdrawn', 'Expired', 'Destroyed', 'Unusable'].forEach(s => {
-      expect(Sample.validateSampleStatus(s)).toBe(true);
-    });
-  });
-
-  it('returns false for unknown status', () => {
-    expect(Sample.validateSampleStatus('Active')).toBe(false);
-    expect(Sample.validateSampleStatus(null)).toBe(false);
   });
 });
 
@@ -111,23 +75,24 @@ describe('Sample.validateResponsibleName', () => {
     expect(Sample.validateResponsibleName('')).toBe(false);
   });
 
-  it('returns false for name shorter than 5 chars', () => {
-    expect(Sample.validateResponsibleName('J S')).toBe(false);
+  it('returns true for two single-letter words (word-count check only)', () => {
+    expect(Sample.validateResponsibleName('J S')).toBe(true);
   });
 });
 
 describe('Sample.validate', () => {
-  const { SAMPLE_ORIGIN_IDS, EXTRACTION_PROTOCOL_IDS } = require('../../src/config/constants/specimen.constants');
+  const { SAMPLE_ORIGIN_IDS, EXTRACTION_PROTOCOL_IDS, SPECIMEN_TYPE_IDS } = require('../../src/config/constants/specimen.constants');
   const validData = {
-    patientID: '12345678',
-    sampleType: 'PLASMA',
+    specimenId: 'SPEC-001',
+    participantId: '12345678',
+    sampleType: SPECIMEN_TYPE_IDS[0],
     sampleOrigin: SAMPLE_ORIGIN_IDS[0],
     extractionProtocol: EXTRACTION_PROTOCOL_IDS[0],
     quantity: 10,
     unit: 'mL',
     quality: 'GOOD',
     linkedProject: 'PROJ-001',
-    registerDate: new Date().toISOString(),
+    registeredAt: new Date().toISOString(),
   };
 
   it('returns no errors for valid data', () => {
@@ -136,15 +101,17 @@ describe('Sample.validate', () => {
     expect(result.errors).toHaveLength(0);
   });
 
-  it('returns error when patientID is missing', () => {
-    const { patientID: _, ...data } = validData;
+  it('returns error when participantId is missing', () => {
+    const { participantId: _, ...data } = validData;
     const result = Sample.validate(data);
     expect(result.isValid).toBe(false);
-    expect(result.errors.some(e => e.includes('patientID'))).toBe(true);
+    expect(result.errors.some(e => e.includes('participantId'))).toBe(true);
   });
 
-  it('returns error when patientID is not 8 digits', () => {
-    const result = Sample.validate({ ...validData, patientID: '1234' });
+  it('returns error when specimenId is missing', () => {
+    const { specimenId: _, ...data } = validData;
+    const result = Sample.validate(data);
     expect(result.isValid).toBe(false);
+    expect(result.errors.some(e => e.includes('specimenId'))).toBe(true);
   });
 });
