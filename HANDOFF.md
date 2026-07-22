@@ -1,48 +1,46 @@
 # HANDOFF
 
 **Written:** 2026-07-22, end of a test-loop iteration.
-**Branch:** `feature/docker-e2e-backend-integration` (commit `0123814b`, pushed this session).
+**Branch:** `test/withdrawal-model-coverage` (commit `2b12cc41`, pushed this session), branched off `feature/docker-e2e-backend-integration`.
 
 ## What happened this session
 
-Routed via `work-issue`: no open `bug`-labeled issue exists. The
-dead-code findings on the backlog (#236, #238, #243) are explicitly
-"owner's call, not fixing product code" per their own bodies, and the
-remaining design-call issues (#218, #222, #224) are assigned to Denise.
-Issue #242 (coverage-reconcile drift) needs no product change — it's a
-methodology note, already filed. So routed to `test-loop` instead.
+Routed via `work-issue`: no open `bug`-labeled issue exists (same
+backlog state as last session — #236/#238/#243 are owner's-call dead
+code, #218/#222/#224 assigned to Denise, #242 is a methodology note).
+Routed to `test-loop`.
 
-Per `COVERAGE_NOTES.md`, every ZERO/LOW/MID-LOW/MID-HIGH bucket entry
-with real logic was already issue-linked, legacy, or an accepted gap
-(mqtt-telemetry.service.js, patient.service.js, etc. — see prior
-handoff). Picked from the ZERO bucket's "low priority (thin
-models/interfaces)" list: `src/models/StoragePath.js` (170 lines, most
-logic of that group — pre-save hierarchy validation, `getFullDetails`,
-`createFromBox` static, `validate` static).
+Per `COVERAGE_NOTES.md`'s ZERO bucket "low priority (thin
+models/interfaces)" list, picked `src/models/Withdrawal.js` (64 lines,
+largest of the remaining thin models — `normalizeWithdrawalType` alias
+resolution, `validate` static with error accumulation, `create` static
+with defaulting).
 
-Wrote `tests/unit/StoragePath.model.test.js` (18 tests) using the same
-pattern as the existing `StorageContainer.model.test.js` (locate the
-inline `pre('save')` hook via `schema.s.hooks._pres`, invoke it
-directly against a plain document rather than calling `.save()`, since
-there's no live DB connection in this unit tier). Covers:
-- pre-save: freezer/shelf/rack type+existence checks, box existence,
-  RACK-in-SHELF and SHELF-in-FREEZER hierarchy checks, path
-  auto-generation vs. path-already-provided
-- `getFullDetails` (all-found and all-null branches)
-- `createFromBox` (each not-found error path plus the success path)
-- static `validate` (error accumulation and the valid case)
+Wrote `tests/unit/Withdrawal.model.test.js` (19 tests) following the
+same plain-pure-function pattern as `Result.model.test.js` — no
+mongoose/DB involved, straightforward static-method testing. Covers:
+- `normalizeWithdrawalType`: alias resolution (`parcial`→`partial`),
+  pass-through, whitespace/case normalization, unrecognized values,
+  null/undefined/empty input
+- `validate`: fully-valid payload, alias-as-valid, `sampleID: 0`
+  (falsy-but-provided) accepted, each individual missing/invalid field,
+  and full error accumulation
+- `create`: full-input normalization and default-field/`withdrawalDate`
+  behavior when fields are omitted
 
 Isolated coverage: 100% statements/branches/functions/lines. Updated
-`COVERAGE_NOTES.md`'s ZERO bucket (20 → 19 files, noted the move to
+`COVERAGE_NOTES.md`'s ZERO bucket (19 → 18 files, noted the move to
 GOOD) in the same commit. No product code touched — confirmed via
 `git status`/`git diff --stat` before committing.
 
-Committed as `0123814b` and pushed.
+Committed as `2b12cc41` and pushed. New branch created (`test/<slug>`
+per convention) since the prior iteration's `feature/docker-e2e-backend-integration`
+work was already closed out with its own handoff/commit.
 
 ## Repo state
 
-- Working tree clean; `feature/docker-e2e-backend-integration` is
-  current and pushed (`0123814b`).
+- Working tree clean; `test/withdrawal-model-coverage` is current and
+  pushed (`2b12cc41`), based off `feature/docker-e2e-backend-integration`.
 - `main` remains frozen — do not branch off it, merge into it, or push
   to it.
 
@@ -60,13 +58,12 @@ None queued explicitly by Dennis. For coverage work: the ZERO bucket's
 remaining low-priority thin files (`src/models/Cid.js`,
 `src/models/Disease.js`, `src/models/DrugDictionary.js`,
 `src/models/Equipment.schema.js`, `src/models/TemperaturePolicy.schema.js`,
-`src/models/Withdrawal.js`, the `src/core/application/ports/I*.js`
-interfaces, and the one-off `src/scripts/*` files) are the remaining
-real slice candidates — `StoragePath.js` was the largest/most
-logic-bearing of that group and is now done. A fresh full reconcile is
-due at some point per the cadence note in `COVERAGE_NOTES.md` (last one
-was `fdd37e10`, same day) — the branches dimension (81.3%) is the one
-still short of 90%.
+the `src/core/application/ports/I*.js` interfaces, `src/reference-data/essential/*`,
+and the one-off `src/scripts/*` files) are the remaining real slice
+candidates — `Withdrawal.js` was the largest/most logic-bearing of that
+group and is now done. A fresh full reconcile is due at some point per
+the cadence note in `COVERAGE_NOTES.md` (last one was `fdd37e10`, same
+day) — the branches dimension (81.3%) is the one still short of 90%.
 
 No bug-fix backlog item is queued — re-triage the open backlog per
 `fix-bugs`' verify-before-deferring rule if picking that route.
