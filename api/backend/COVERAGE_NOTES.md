@@ -164,7 +164,6 @@ User.js, reports.routes.js) have all moved out of this bucket into GOOD
 — per-slice narrative for those is in their commit history, not here.
 
 ```
-src/models/PatientConsent.js                                   70.83 / 85.24
 src/services/mqtt-telemetry.service.js                         71.42 / 78.09   (issue #160 — HMAC bypass bug)
 src/services/patient.service.js                                74.39 / 63.56   (partially covered — see history archive; createPatient/updatePatient error-path permutations remain)
 src/infrastructure/persistence/mongo/MongoAuditRepository.js   76.66 / 84.61
