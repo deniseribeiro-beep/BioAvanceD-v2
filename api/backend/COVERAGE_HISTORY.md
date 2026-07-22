@@ -8,6 +8,20 @@ per-session read is `COVERAGE_NOTES.md`, which holds only the current
 ZERO/LOW buckets and reconcile numbers. Do not read this file as part
 of normal slice-picking.
 
+**Slice (2026-07-22):** `src/utils/fieldEncryption.js` (76.19%/69.56%
+lines/branches, MID-HIGH, #228 batch) — new
+`tests/unit/fieldEncryption.test.js`, 12 tests covering `encryptValue`
+(no active key, undefined/null/empty-string short-circuit, envelope
+shape, JSON-serialized non-string values, iv/ciphertext uniqueness per
+call) and `decryptValue` (null/non-object payload, happy-path round
+trip, unknown keyId, bad tag/ciphertext, keyId-absent fallback-key path
+both succeeding and exhausting all fallback keys, malformed/missing
+iv-tag-data fields). No env mocking needed — both `fieldEncryption.js`
+and `keyRegistry.js` read live `process.env`, so tests set
+`ENCRYPTION_KEY`/`ENCRYPTION_KEY_ID` directly and clear both modules'
+`require.cache` between cases, same pattern as `keyRegistry.test.js`. No
+bugs found; no issues filed.
+
 **Reconcile (2026-07-21, commit `67d01a62`):** Full-suite regenerate of
 `COVERAGE_NOTES.md`, run at the user's explicit request. Lines 86.33% →
 88.32%, statements 85.73% → 87.7%, branches 75.66% → 78.49%, functions
