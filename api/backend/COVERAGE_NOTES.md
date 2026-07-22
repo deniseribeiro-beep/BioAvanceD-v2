@@ -122,7 +122,6 @@ same audit/rename-drift cluster (issue #146) already tracked; none are
 genuinely untested slice candidates.
 
 ```
-src/services/auditRoot.service.js                6.95 / 0        (issue #146 cluster — audit/rename drift)
 src/services/audit-tree.service.js               7.89 / 0        (issue #146 cluster)
 src/services/audit-signing.provider.js          14.81 / 0        (issue #146 cluster)
 src/interface/routes/intakeWizard.routes.js     16.98 / 0        (issue #146 cluster)
