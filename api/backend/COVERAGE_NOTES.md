@@ -150,7 +150,7 @@ reconcile: `fhir.service.js`, `result-worker.js` (now MID-HIGH, see
 below), `LineageRepository.js`, `analysisValidation.service.js`,
 `import-lgpd.service.js`, `consent.validator.js`.
 
-## MID-HIGH coverage (70-84% lines) — 20 files, full reconcile 2026-07-21, commit `67d01a62`
+## MID-HIGH coverage (70-84% lines) — 19 files, full reconcile 2026-07-21, commit `67d01a62`
 
 Sorted ascending (worst first) — lines% / branches%. Not cross-checked
 against filed issues line-by-line (MID-HIGH files are closer to "done"
@@ -172,7 +172,6 @@ src/services/patient.service.js                                74.39 / 63.56   (
 src/workers/workers/result-worker.js                           76.66 / 66.07   (issue #146/#164 — rename + yauzl)
 src/services/SampleGraphValidator.js                           77.69 / 66.66   (issue #222 — legacy-schema migration, design fork)
 src/workers/neo4jProjection.worker.js                          79.62 / 73.33   (remaining gap is the `require.main === module` CLI entry block, lines 82-99 — not coverable in-process, same accepted-gap pattern as createFirstAdmin.js)
-src/controllers/import.controller.js                           82.23 / 75.86
 src/controllers/iot.controller.js                              82.50 / 73.52   (branches covered — see history archive; applyColdChainQuarantine catch + a couple of resolveTemperaturePolicy edge branches remain)
 src/services/security.service.js                               82.51 / 72.26
 src/infrastructure/queue/Neo4jQuarantineService.js              83.33 / 82.75
