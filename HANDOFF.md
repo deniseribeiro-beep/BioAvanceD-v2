@@ -45,10 +45,10 @@ three prior sessions.
 - `main` remains frozen — do not branch off it, merge into it, or push
   to it.
 - A full-suite coverage reconcile was kicked off this session (checking
-  isolated coverage for the new slice) but not waited on/read back — the
-  targeted test-file run already gave enough signal to commit. If still
-  running or its log survived, it's at `/c/tmp/cov1.log`; otherwise the
-  next full reconcile can just be re-run fresh per `COVERAGE_NOTES.md`.
+  isolated coverage for the new slice) but not waited on — the targeted
+  test-file run already gave enough signal to commit. Its log and the
+  regenerated `coverage/` dir were removed during session clean-up; the
+  next full reconcile should just be re-run fresh per `COVERAGE_NOTES.md`.
 
 ## Milestone (set 2026-07-22 by Dennis, still current)
 
