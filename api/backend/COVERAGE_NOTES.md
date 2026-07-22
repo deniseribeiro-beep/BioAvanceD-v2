@@ -103,7 +103,7 @@ MID-HIGH = 70-84%, GOOD = >=85%.
    slice's own commit message is the narrative record now — don't add
    one here or to a separate history file.
 
-## ZERO coverage (0% lines) — 20 files, confirmed unchanged in the 2026-07-22 (afternoon) reconcile, commit `fdd37e10`
+## ZERO coverage (0% lines) — 19 files, confirmed unchanged in the 2026-07-22 (afternoon) reconcile, commit `fdd37e10`; `StoragePath.js` moved to GOOD this session (100/100/100/100 isolated)
 
 Real logic, but broken-by-issue — see caveat above, not a real gap:
 - `src/workers/worker.js` (self-executing bootstrap entrypoint — calls
@@ -121,7 +121,6 @@ Low priority (models/interfaces/one-off scripts — thin or non-request-path):
 - `src/models/Disease.js`
 - `src/models/DrugDictionary.js`
 - `src/models/Equipment.schema.js`
-- `src/models/StoragePath.js`
 - `src/models/TemperaturePolicy.schema.js`
 - `src/models/Withdrawal.js`
 - `src/reference-data/essential/index.js`
