@@ -149,8 +149,8 @@ coverage isolates the wrapper's own logic: `buildSampleQuery`,
 response-guard's try/catch. Remaining branch gap (lines 73-77) is
 `buildSafeSampleSummary`'s `governanceStatus.field || sample.field`
 fallbacks — unreachable in practice since `resolveGovernanceStatus`
-always returns fully-populated status fields on every call path; not a
-real gap.
+always returns fully-populated status fields on every call path; filed as
+issue #243 (same dead-code pattern as #238), not a real gap.
 
 ```
 src/controllers/fhir-import-staging.controller.js 30.23 / 41.17  (issue #146 cluster)
