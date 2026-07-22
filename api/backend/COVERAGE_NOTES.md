@@ -115,7 +115,7 @@ Low priority (models/interfaces/one-off scripts — thin or non-request-path):
   returning 503 may be the same terminologySync gate; check before
   treating as a genuine gap)
 
-## LOW coverage (1-49% lines) — 3 files, full reconcile 2026-07-21, commit `67d01a62`
+## LOW coverage (1-49% lines) — 1 file, full reconcile 2026-07-21, commit `67d01a62`
 
 Sorted ascending (worst first) — lines% / branches%. All are the
 same audit/rename-drift cluster (issue #146) already tracked; none are
@@ -138,8 +138,21 @@ the destructuring at require-time of the service) before the service's
 first `require`, plus `vi.stubGlobal('fetch', ...)` for the TSA POST and
 real `fs`/tmp-dir I/O (no fs mocking needed).
 
+`intakeWizard.routes.js` moved to GOOD (100/90.9/100/100, isolated run) —
+this is the thin `interface/routes` wrapper (auth/rbac wiring +
+`intakeGovernanceResponseGuard`), distinct from `src/routes/intakeWizard.js`
+which already had its own test file. New test mocks `auth`/`rbac` to
+pass-through and stubs the inner router via `require.cache` injection, so
+coverage isolates the wrapper's own logic: `buildSampleQuery`,
+`resolveGovernanceStatus` (BLOCKED/QUARANTINE/AVAILABLE branches),
+`buildSafeSampleSummary`, `enforcePersistedGovernanceStatus`, and the
+response-guard's try/catch. Remaining branch gap (lines 73-77) is
+`buildSafeSampleSummary`'s `governanceStatus.field || sample.field`
+fallbacks — unreachable in practice since `resolveGovernanceStatus`
+always returns fully-populated status fields on every call path; not a
+real gap.
+
 ```
-src/interface/routes/intakeWizard.routes.js     16.98 / 0        (issue #146 cluster)
 src/controllers/fhir-import-staging.controller.js 30.23 / 41.17  (issue #146 cluster)
 ```
 
