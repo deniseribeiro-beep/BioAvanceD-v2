@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { createRequire } from 'module';
 
-const securityServiceModule = await import('../../src/services/security.service');
-const securityService = securityServiceModule.default || securityServiceModule;
+const require = createRequire(import.meta.url);
+const securityService = require('../../src/services/security.service');
 
 describe('SecurityService', () => {
   beforeEach(() => {
