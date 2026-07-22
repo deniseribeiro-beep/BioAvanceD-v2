@@ -183,22 +183,15 @@ describe('sensor.controller', () => {
       expect(res.body).toEqual({ success: true, data: [{ id: 3 }] });
     });
 
-    it('returns 500 when listSensors resolves null (issue #233: pre-fallback null deref)', async () => {
+    it('falls back to an empty array when listSensors resolves null (issue #233)', async () => {
       listSensorsMock.mockResolvedValue(null);
       const req = createRequest();
       const res = createResponse();
 
       await sensorController.list(req, res);
 
-      // Actual (buggy) behavior: `result.sensors` throws on a null result before
-      // the Array.isArray fallback runs. Filed as issue #233 — do not "fix" this
-      // assertion to `{ success: true, data: [] }` without checking the issue.
-      expect(res.statusCode).toBe(500);
-      expect(res.body).toEqual({
-        success: false,
-        error: 'Erro ao listar sensores',
-        message: "Cannot read properties of null (reading 'sensors')",
-      });
+      expect(res.statusCode).toBe(200);
+      expect(res.body).toEqual({ success: true, data: [] });
     });
 
     it('returns 500 when listing throws', async () => {

@@ -71,7 +71,7 @@ class SensorController {
       // Registra log de consulta
       const auditLogger = require('../utils/auditLogger');
       auditLogger.init(db);
-      const sensorsArray = result.sensors || (Array.isArray(result) ? result : []);
+      const sensorsArray = (result && result.sensors) || (Array.isArray(result) ? result : []);
       await auditLogger.log({
         action: 'QUERY',
         entity: 'Sensor',
