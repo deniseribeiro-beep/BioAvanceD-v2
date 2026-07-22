@@ -160,7 +160,8 @@ batch-1 slices (orphanet.js, terminologies.routes.js,
 MeasurementUnit.js, result.routes.js, analysis-type.controller.js,
 auth.js, auditLogger.js, import-lgpd.controller.js,
 clinical-unit.routes.js, logs.routes.js, sensor.controller.js,
-User.js, reports.routes.js, MongoAuditRepository.js, createFirstAdmin.js) have all moved out
+User.js, reports.routes.js, MongoAuditRepository.js, createFirstAdmin.js,
+mongo.js) have all moved out
 of this bucket into GOOD — per-slice narrative for those is in their
 commit history, not here.
 
@@ -169,8 +170,7 @@ src/services/mqtt-telemetry.service.js                         71.42 / 78.09   (
 src/services/patient.service.js                                74.39 / 63.56   (large gap despite 5 existing test files/118 tests — isolated run confirmed the number; nearly every method (encrypt/decryptSensitivePatientFields, resolveClinicalUnitSnapshot, applyDeceasedRepresentativeRules, checkIdentifierConflict, createPatient, listPatients, searchPatients, updatePatient, consent-token flows, deletePatient) has uncovered branches, not just createPatient/updatePatient error paths — likely needs its own multi-file fan-out, not a single slice)
 src/workers/workers/result-worker.js                           76.66 / 66.07   (issue #146/#164 — rename + yauzl)
 src/services/SampleGraphValidator.js                           77.69 / 66.66   (issue #222 — legacy-schema migration, design fork)
-src/workers/neo4jProjection.worker.js                          79.62 / 73.33
-src/database/mongo.js                                          80.10 / 76.51
+src/workers/neo4jProjection.worker.js                          79.62 / 73.33   (remaining gap is the `require.main === module` CLI entry block, lines 82-99 — not coverable in-process, same accepted-gap pattern as createFirstAdmin.js)
 src/interface/routes/analysis-file.routes.js                   80.95 / 87.50
 src/interface/routes/master-data.routes.js                     81.42 / 68.75
 src/config/redis.js                                            81.76 / 70.45
