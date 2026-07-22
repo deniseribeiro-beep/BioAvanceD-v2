@@ -186,6 +186,35 @@ now exercised by inspection (isolated coverage run not re-confirmed
 against a fresh full-suite reconcile this session — see next full
 reconcile).
 
+**Follow-up slice #6 (same branch, later commit, not yet reconciled into
+the numbers above):** a fresh full reconcile (`npx vitest run tests/unit
+tests/integration tests/compliance --coverage --reporter=dot`) gave
+90.05/82.3/90.88/91.5 (statements/branches/functions/lines) and a live
+`coverage-summary.json`, branch%-sorted directly per this file's
+recommended method (buckets below no longer surface new candidates —
+MID-LOW/MID-HIGH files are all issue-linked or flagged optional). Top of
+that sort past the already-flagged/drift entries was
+`src/interface/routes/master-data.routes.js` (71.87/91.42
+branches/lines isolated), confirmed a real gap (not drift — 36 existing
+tests but real branch gaps: not merged-vs-isolated mismatch). Extended
+`tests/integration/master-data.api.test.js` (+3 tests, 39 total)
+covering the `Number.isFinite(numericId)` fallback branch in the `$or`
+id-lookup query (GET/PUT/DELETE `/:id` with a non-ObjectId numeric id
+string like `"42"`, previously only exercised with valid ObjectId
+strings). Moved isolated coverage to 91.42/84.37/100/91.42. Remaining
+branch gap is the same authenticate-shadows-route 503 dead-code pattern
+as #67/#76/#236/#246/#247 — confirmed via isolated coverage still
+showing all 5 mounted routes' own `if (!db)` line as unhit despite 5
+passing "returns 503" tests; filed as issue #248 (sixth occurrence,
+accounting for 5 of the pattern's instances at once since one factory
+is mounted 5 times). `quality.routes.js` (50/100 branches/lines,
+flagged by the branch-sort as another candidate) was checked and ruled
+out: its `req.body || {}` fallback is unreachable dead code too since
+`express.json()` is applied globally in `app.js` before any route runs,
+so `req.body` is never falsy — not filed as a new issue since it's a
+single untestable line, not worth the pattern-tracking overhead of the
+5-per-file cases above.
+
 **Bucket lists below are freshly regenerated this session** off the new
 `coverage-summary.json`, then corrected per the drift check above.
 Cutoffs unchanged: ZERO = 0%, LOW = 1-49%, MID-LOW = 50-69%,

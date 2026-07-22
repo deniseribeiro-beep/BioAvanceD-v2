@@ -80,6 +80,22 @@ describe('GET /api/measurement-units/:id', () => {
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
   });
+
+  it('returns item by numeric (non-ObjectId) id, matching on idField', async () => {
+    const coll = createCollectionMock({ findOne: vi.fn().mockResolvedValue(FAKE_ITEM) });
+    app.locals.db = createDbMock({ measurementUnits: coll });
+
+    const res = await request(app)
+      .get('/api/measurement-units/42')
+      .set('Authorization', `Bearer ${makeToken(2)}`);
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(coll.findOne).toHaveBeenCalledWith(
+      expect.objectContaining({
+        $or: expect.arrayContaining([{ unitID: 42 }, { unitID: '42' }]),
+      })
+    );
+  });
 });
 
 describe('POST /api/measurement-units', () => {
@@ -169,6 +185,25 @@ describe('PUT /api/measurement-units/:id', () => {
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
   });
+
+  it('updates item by numeric (non-ObjectId) id, matching on idField', async () => {
+    const coll = createCollectionMock({ findOneAndUpdate: vi.fn().mockResolvedValue({ ...FAKE_ITEM, name: 'Updated' }) });
+    app.locals.db = createDbMock({ measurementUnits: coll });
+
+    const res = await request(app)
+      .put('/api/measurement-units/42')
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({ name: 'Updated' });
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(coll.findOneAndUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        $or: expect.arrayContaining([{ unitID: 42 }, { unitID: '42' }]),
+      }),
+      expect.anything(),
+      expect.anything()
+    );
+  });
 });
 
 describe('DELETE /api/measurement-units/:id', () => {
@@ -204,6 +239,22 @@ describe('DELETE /api/measurement-units/:id', () => {
       .set('Authorization', `Bearer ${makeToken(4)}`);
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
+  });
+
+  it('deletes item by numeric (non-ObjectId) id, matching on idField', async () => {
+    const coll = createCollectionMock({ deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }) });
+    app.locals.db = createDbMock({ measurementUnits: coll });
+
+    const res = await request(app)
+      .delete('/api/measurement-units/42')
+      .set('Authorization', `Bearer ${makeToken(4)}`);
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(coll.deleteOne).toHaveBeenCalledWith(
+      expect.objectContaining({
+        $or: expect.arrayContaining([{ unitID: 42 }, { unitID: '42' }]),
+      })
+    );
   });
 });
 
