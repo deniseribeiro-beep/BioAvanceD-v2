@@ -28,8 +28,14 @@ process.stdin.on('end', () => {
   ) || command.match(/(^|\n|&&|\|\||;|\|)\s*git\s+branch\s+([^\s-][^\s]*)/);
 
   // git push [<flags>] origin <name> / git push [<flags>] <remote> <name> [--delete <name>]
+  // Args must stay on the same line as `git push` — [ \t]+ (not \s+) so a bare
+  // `git push` (no explicit remote/branch) followed by a newline and another
+  // git command on the next line doesn't get its "target" captured from that
+  // next command's tokens (see issue: bare push in a multi-line/&&-chained
+  // command was misparsed as pushing to a branch named after the next
+  // command's second word).
   const pushMatches = [
-    ...command.matchAll(/(?:^|\n|&&|\|\||;|\|)\s*git\s+push\s+(?:-\S+\s+)*\S+\s+(?:--delete\s+)?([^\s]+)/g),
+    ...command.matchAll(/(?:^|\n|&&|\|\||;|\|)[ \t]*git[ \t]+push[ \t]+(?:-\S+[ \t]+)*\S+[ \t]+(?:--delete[ \t]+)?([^\s]+)/g),
   ];
 
   const candidates = [];
