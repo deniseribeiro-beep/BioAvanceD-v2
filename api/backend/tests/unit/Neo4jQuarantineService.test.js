@@ -1,5 +1,36 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-const Neo4jQuarantineService = require('../../src/infrastructure/queue/Neo4jQuarantineService');
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+const SERVICE_PATH = require.resolve('../../src/infrastructure/queue/Neo4jQuarantineService');
+const IOREDIS_PATH = require.resolve('ioredis');
+
+const Neo4jQuarantineService = require(SERVICE_PATH);
+
+/**
+ * `vi.mock('ioredis', ...)` does not intercept the plain `require('ioredis')`
+ * inside this CJS source file (see cjs-mocking.md's "require.cache injection
+ * also works for third-party npm packages" section) — fake it via
+ * require.cache injection, re-requiring the service fresh so its top-level
+ * `require('ioredis')` resolves to the fake.
+ */
+function withFakeRedisCtor(fn) {
+  const realIoredisModule = require.cache[IOREDIS_PATH];
+  const calls = [];
+  function FakeRedis(...args) {
+    calls.push(args);
+    this.__ctorArgs = args;
+    this.quit = vi.fn().mockResolvedValue('OK');
+  }
+  require.cache[IOREDIS_PATH] = { id: IOREDIS_PATH, filename: IOREDIS_PATH, loaded: true, exports: FakeRedis };
+  delete require.cache[SERVICE_PATH];
+  try {
+    const FreshService = require(SERVICE_PATH);
+    return fn(FreshService, calls);
+  } finally {
+    require.cache[IOREDIS_PATH] = realIoredisModule;
+    delete require.cache[SERVICE_PATH];
+    require(SERVICE_PATH);
+  }
+}
 
 function makeFakeRedis() {
   return {
@@ -48,6 +79,113 @@ describe('Neo4jQuarantineService', () => {
     it('uses the provided logger instead of the default logger', () => {
       const service = new Neo4jQuarantineService({ redisClient, logger });
       expect(service.logger).toBe(logger);
+    });
+  });
+
+  describe('constructor - own Redis client construction (no redisClient injected)', () => {
+    const ENV_KEYS = [
+      'NODE_ENV',
+      'REDIS_TLS',
+      'REDIS_URL',
+      'REDIS_HOST',
+      'REDIS_PORT',
+      'REDIS_USERNAME',
+      'REDIS_PASSWORD',
+      'NEO4J_QUARANTINE_QUEUE_KEY'
+    ];
+    let savedEnv;
+
+    beforeEach(() => {
+      savedEnv = {};
+      for (const key of ENV_KEYS) savedEnv[key] = process.env[key];
+      for (const key of ENV_KEYS) delete process.env[key];
+    });
+
+    afterEach(() => {
+      for (const key of ENV_KEYS) {
+        if (savedEnv[key] === undefined) delete process.env[key];
+        else process.env[key] = savedEnv[key];
+      }
+    });
+
+    it('uses NEO4J_QUARANTINE_QUEUE_KEY env var when no queueKey option is given', () => {
+      process.env.NEO4J_QUARANTINE_QUEUE_KEY = 'env:queue:key';
+      const service = new Neo4jQuarantineService({ logger });
+      expect(service.queueKey).toBe('env:queue:key');
+    });
+
+    it('constructs its own Redis client with default options and marks shouldCloseClient true', () => {
+      withFakeRedisCtor((FreshService, calls) => {
+        const service = new FreshService({ logger });
+        expect(service.shouldCloseClient).toBe(true);
+        expect(calls).toHaveLength(1);
+        const [options] = calls[0];
+        expect(options).toMatchObject({
+          username: 'default',
+          maxRetriesPerRequest: null,
+          enableReadyCheck: false
+        });
+        expect(options.tls).toBeUndefined();
+      });
+    });
+
+    it('constructs with new Redis(redisUrl, options) when REDIS_URL is set', () => {
+      process.env.REDIS_URL = 'redis://example.test:6379';
+      withFakeRedisCtor((FreshService, calls) => {
+        const service = new FreshService({ logger });
+        expect(service.shouldCloseClient).toBe(true);
+        expect(calls).toHaveLength(1);
+        expect(calls[0][0]).toBe('redis://example.test:6379');
+      });
+    });
+
+    it('enables tls when REDIS_TLS is truthy and NODE_ENV is not development/test', () => {
+      process.env.NODE_ENV = 'production';
+      process.env.REDIS_TLS = 'true';
+      withFakeRedisCtor((FreshService, calls) => {
+        new FreshService({ logger });
+        const [options] = calls[0];
+        expect(options.tls).toEqual({});
+      });
+    });
+
+    it('does not enable tls when NODE_ENV is development, even if REDIS_TLS is truthy', () => {
+      process.env.NODE_ENV = 'development';
+      process.env.REDIS_TLS = 'true';
+      withFakeRedisCtor((FreshService, calls) => {
+        new FreshService({ logger });
+        const [options] = calls[0];
+        expect(options.tls).toBeUndefined();
+      });
+    });
+
+    it('does not enable tls when NODE_ENV is unset (defaults to development)', () => {
+      process.env.REDIS_TLS = '1';
+      withFakeRedisCtor((FreshService, calls) => {
+        new FreshService({ logger });
+        const [options] = calls[0];
+        expect(options.tls).toBeUndefined();
+      });
+    });
+
+    it('deletes tls from a provided redisOptions object when shouldUseTls is false', () => {
+      const redisOptions = { host: 'x', tls: { rejectUnauthorized: false } };
+      withFakeRedisCtor((FreshService, calls) => {
+        new FreshService({ logger, redisOptions });
+        expect(redisOptions).not.toHaveProperty('tls');
+        const [options] = calls[0];
+        expect(options).toBe(redisOptions);
+      });
+    });
+
+    it('keeps tls on a provided redisOptions object when shouldUseTls is true', () => {
+      process.env.NODE_ENV = 'production';
+      process.env.REDIS_TLS = 'true';
+      const redisOptions = { host: 'x', tls: { rejectUnauthorized: false } };
+      withFakeRedisCtor((FreshService, calls) => {
+        new FreshService({ logger, redisOptions });
+        expect(redisOptions.tls).toEqual({ rejectUnauthorized: false });
+      });
     });
   });
 

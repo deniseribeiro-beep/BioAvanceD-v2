@@ -1,0 +1,361 @@
+import { describe, it, expect, vi } from 'vitest';
+import { createRequire } from 'module';
+
+const require = createRequire(import.meta.url);
+
+process.env.ENCRYPTION_KEY = 'dGVzdGtleXRlc3RrZXl0ZXN0a2V5dGVzdGtleXQ=';
+process.env.ENCRYPTION_KEY_ID = 'test-key-1';
+
+const patientService = require('../../src/services/patient.service');
+const { ObjectId } = require('mongodb');
+
+function makeFakeCollection(overrides = {}) {
+  return {
+    findOne: vi.fn().mockResolvedValue(null),
+    insertOne: vi.fn().mockResolvedValue({ insertedId: 'fake-id-1' }),
+    updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
+    deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }),
+    find: vi.fn().mockReturnValue({
+      limit: vi.fn().mockReturnThis(),
+      skip: vi.fn().mockReturnThis(),
+      toArray: vi.fn().mockResolvedValue([])
+    }),
+    countDocuments: vi.fn().mockResolvedValue(0),
+    createIndex: vi.fn().mockResolvedValue(undefined),
+    ...overrides
+  };
+}
+
+function makeFakeDb(collectionsByName = {}) {
+  return {
+    collection: vi.fn((name) => collectionsByName[name] || makeFakeCollection())
+  };
+}
+
+describe('PatientService.resolveClinicalUnitSnapshot', () => {
+  it('returns null when neither clinicalUnitId nor clinicalUnit is present in the payload', async () => {
+    const db = makeFakeDb({});
+    const result = await patientService.resolveClinicalUnitSnapshot(db, {});
+    expect(result).toBeNull();
+  });
+
+  it('returns all-null snapshot when both are present but normalize to empty', async () => {
+    const db = makeFakeDb({});
+    const result = await patientService.resolveClinicalUnitSnapshot(db, { clinicalUnitId: '', clinicalUnit: '' });
+    expect(result).toEqual({ clinicalUnitId: null, clinicalUnit: null, unitAcronym: null });
+  });
+
+  it('throws when clinicalUnitId is not a valid ObjectId and no clinicalUnit name is given', async () => {
+    const db = makeFakeDb({});
+    await expect(
+      patientService.resolveClinicalUnitSnapshot(db, { clinicalUnitId: 'not-an-object-id' })
+    ).rejects.toThrow('clinicalUnitId inválido');
+  });
+
+  it('resolves by valid ObjectId when the clinical unit exists', async () => {
+    const id = new ObjectId();
+    const clinicalUnitsCollection = makeFakeCollection({
+      findOne: vi.fn().mockResolvedValue({ _id: id, name: 'UTI Central', acronym: '' })
+    });
+    const db = makeFakeDb({ clinical_units: clinicalUnitsCollection });
+
+    const result = await patientService.resolveClinicalUnitSnapshot(db, { clinicalUnitId: id.toString() });
+
+    expect(result.clinicalUnitId).toBe(id.toString());
+    expect(result.clinicalUnit).toBe('UTI Central');
+    expect(result.unitAcronym).toBeTruthy();
+  });
+
+  it('throws when a valid ObjectId does not match any clinical unit', async () => {
+    const id = new ObjectId();
+    const clinicalUnitsCollection = makeFakeCollection({ findOne: vi.fn().mockResolvedValue(null) });
+    const db = makeFakeDb({ clinical_units: clinicalUnitsCollection });
+
+    await expect(
+      patientService.resolveClinicalUnitSnapshot(db, { clinicalUnitId: id.toString() })
+    ).rejects.toThrow('Unidade clínica não encontrada');
+  });
+
+  it('falls back to the clinicalUnit name lookup when clinicalUnitId is invalid but a name is provided', async () => {
+    const clinicalUnitsCollection = makeFakeCollection({
+      findOne: vi.fn().mockResolvedValue({ _id: 'x1', name: 'UTI-B', acronym: 'UB' })
+    });
+    const db = makeFakeDb({ clinical_units: clinicalUnitsCollection });
+
+    const result = await patientService.resolveClinicalUnitSnapshot(db, {
+      clinicalUnitId: 'not-an-object-id',
+      clinicalUnit: 'uti-b'
+    });
+
+    expect(result.clinicalUnitId).toBe('x1');
+    expect(result.clinicalUnit).toBe('UTI-B');
+    expect(result.unitAcronym).toBe('UB');
+  });
+
+  it('returns all-null snapshot when clinicalUnitId is absent and clinicalUnit normalizes to empty', async () => {
+    const db = makeFakeDb({});
+    const result = await patientService.resolveClinicalUnitSnapshot(db, { clinicalUnit: '   ' });
+    expect(result).toEqual({ clinicalUnitId: null, clinicalUnit: null, unitAcronym: null });
+  });
+
+  it('falls back to a normalized-name-only snapshot when no clinical unit matches by name', async () => {
+    const clinicalUnitsCollection = makeFakeCollection({ findOne: vi.fn().mockResolvedValue(null) });
+    const db = makeFakeDb({ clinical_units: clinicalUnitsCollection });
+
+    const result = await patientService.resolveClinicalUnitSnapshot(db, { clinicalUnit: 'nova unidade' });
+
+    expect(result.clinicalUnitId).toBeNull();
+    expect(result.clinicalUnit).toBe('NOVA UNIDADE');
+    expect(result.unitAcronym).toBeTruthy();
+  });
+});
+
+describe('PatientService.ensurePatientIndexes', () => {
+  it('does nothing when collection or collectionName is missing', async () => {
+    await expect(patientService.ensurePatientIndexes(null, 'patients')).resolves.toBeUndefined();
+    await expect(patientService.ensurePatientIndexes({}, null)).resolves.toBeUndefined();
+  });
+
+  it('creates all four indexes and memoizes so a second call is a no-op', async () => {
+    const collection = makeFakeCollection();
+    const collectionName = `patients_test_${Date.now()}`;
+
+    await patientService.ensurePatientIndexes(collection, collectionName);
+    expect(collection.createIndex).toHaveBeenCalledTimes(4);
+
+    await patientService.ensurePatientIndexes(collection, collectionName);
+    expect(collection.createIndex).toHaveBeenCalledTimes(4);
+  });
+
+  it('logs a warning and continues when an index creation fails', async () => {
+    const collection = makeFakeCollection({
+      createIndex: vi.fn().mockRejectedValue(new Error('index conflict'))
+    });
+    const collectionName = `patients_test_fail_${Date.now()}`;
+
+    await expect(patientService.ensurePatientIndexes(collection, collectionName)).resolves.toBeUndefined();
+    expect(collection.createIndex).toHaveBeenCalledTimes(4);
+  });
+});
+
+describe('PatientService.checkIdentifierConflict', () => {
+  it('returns null when neither identityDocument nor recordNumber is provided', async () => {
+    const db = makeFakeDb({});
+    const result = await patientService.checkIdentifierConflict(db, {});
+    expect(result).toBeNull();
+  });
+
+  it('returns null when no existing patient matches the filters', async () => {
+    const patientsCollection = makeFakeCollection({ findOne: vi.fn().mockResolvedValue(null) });
+    const db = makeFakeDb({ patients: patientsCollection });
+
+    const result = await patientService.checkIdentifierConflict(db, { identityDocument: '529.982.247-25' });
+    expect(result).toBeNull();
+  });
+
+  it('flags identityDocument conflict when the normalized digits match', async () => {
+    const patientsCollection = makeFakeCollection({
+      findOne: vi.fn().mockResolvedValue({ identityDocument: '529.982.247-25' })
+    });
+    const db = makeFakeDb({ patients: patientsCollection });
+
+    const result = await patientService.checkIdentifierConflict(db, { identityDocument: '52998224725' });
+    expect(result).toEqual({ field: 'identityDocument', value: '52998224725', existing: expect.anything() });
+  });
+
+  it('flags recordNumber conflict when identityDocument does not match but recordNumber does', async () => {
+    const patientsCollection = makeFakeCollection({
+      findOne: vi.fn().mockResolvedValue({ identityDocument: '00000000000', recordNumber: 'RN-1' })
+    });
+    const db = makeFakeDb({ patients: patientsCollection });
+
+    const result = await patientService.checkIdentifierConflict(db, {
+      identityDocument: '52998224725',
+      recordNumber: 'RN-1'
+    });
+    expect(result).toEqual({ field: 'recordNumber', value: 'RN-1', existing: expect.anything() });
+  });
+
+  it('falls back to a generic identifier conflict when neither field matches directly', async () => {
+    const patientsCollection = makeFakeCollection({
+      findOne: vi.fn().mockResolvedValue({ identityDocument: '00000000000', recordNumber: 'other' })
+    });
+    const db = makeFakeDb({ patients: patientsCollection });
+
+    const result = await patientService.checkIdentifierConflict(db, {
+      identityDocument: '52998224725',
+      recordNumber: 'RN-1'
+    });
+    expect(result.field).toBe('identifier');
+    expect(result.value).toBeNull();
+  });
+});
+
+describe('PatientService.checkDuplicatePatient', () => {
+  it('returns null when patientName or birthDate is missing', async () => {
+    const db = makeFakeDb({});
+    const result = await patientService.checkDuplicatePatient(db, { patientName: 'Maria' });
+    expect(result).toBeNull();
+  });
+
+  it('returns null when birthDate string cannot be parsed into a valid Date', async () => {
+    const db = makeFakeDb({});
+    const result = await patientService.checkDuplicatePatient(db, {
+      patientName: 'Maria',
+      birthDate: 'not-a-date'
+    });
+    expect(result).toBeNull();
+  });
+
+  it('finds a duplicate by normalized name and DD/MM/YYYY birthDate string', async () => {
+    const toArrayMock = vi.fn().mockResolvedValue([
+      { patientName: '  Maria   Silva ', birthDate: new Date(1990, 0, 1) }
+    ]);
+    const patientsCollection = makeFakeCollection({
+      find: vi.fn().mockReturnValue({ toArray: toArrayMock })
+    });
+    const db = makeFakeDb({ patients: patientsCollection });
+
+    const result = await patientService.checkDuplicatePatient(db, {
+      patientName: 'maria silva',
+      birthDate: '01/01/1990'
+    });
+
+    expect(result).not.toBeNull();
+    expect(result.patientName).toBe('  Maria   Silva ');
+  });
+
+  it('accepts a birthDate already given as a Date instance and returns null when no name matches', async () => {
+    const toArrayMock = vi.fn().mockResolvedValue([{ patientName: 'Other Person', birthDate: new Date(1990, 0, 1) }]);
+    const patientsCollection = makeFakeCollection({
+      find: vi.fn().mockReturnValue({ toArray: toArrayMock })
+    });
+    const db = makeFakeDb({ patients: patientsCollection });
+
+    const result = await patientService.checkDuplicatePatient(db, {
+      patientName: 'maria silva',
+      birthDate: new Date(1990, 0, 1)
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it('returns null and logs when the collection lookup throws', async () => {
+    const patientsCollection = makeFakeCollection({
+      find: vi.fn().mockImplementation(() => { throw new Error('db down'); })
+    });
+    const db = makeFakeDb({ patients: patientsCollection });
+
+    const result = await patientService.checkDuplicatePatient(db, { patientName: 'Maria', birthDate: '01/01/1990' });
+    expect(result).toBeNull();
+  });
+});
+
+describe('PatientService.getPatient / updatePatient / deletePatient — ObjectId lookup path', () => {
+  it('getPatient queries by ObjectId when participantId is not an 8-digit string', async () => {
+    const id = new ObjectId();
+    const patientsCollection = makeFakeCollection({ findOne: vi.fn().mockResolvedValue({ _id: id }) });
+    const db = makeFakeDb({ patients: patientsCollection });
+
+    await patientService.getPatient(db, id.toString());
+
+    expect(patientsCollection.findOne).toHaveBeenCalledWith({ _id: expect.any(ObjectId) });
+  });
+
+  it('deletePatient queries by ObjectId when participantId is not an 8-digit string', async () => {
+    const id = new ObjectId();
+    const patientsCollection = makeFakeCollection({ deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }) });
+    const db = makeFakeDb({ patients: patientsCollection });
+
+    const result = await patientService.deletePatient(db, id.toString());
+
+    expect(patientsCollection.deleteOne).toHaveBeenCalledWith({ _id: expect.any(ObjectId) });
+    expect(result).toBe(true);
+  });
+
+  it('updatePatient queries by ObjectId when participantId is not an 8-digit string', async () => {
+    const id = new ObjectId();
+    const patientsCollection = makeFakeCollection({
+      updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
+      findOne: vi.fn().mockResolvedValue({ _id: id })
+    });
+    const db = makeFakeDb({ patients: patientsCollection });
+
+    await patientService.updatePatient(db, id.toString(), { alphaGal: 1.0 });
+
+    expect(patientsCollection.updateOne).toHaveBeenCalledWith(
+      { _id: expect.any(ObjectId) },
+      expect.anything()
+    );
+  });
+});
+
+describe('PatientService.searchPatients — date-search branches', () => {
+  function findWithResults(results) {
+    return vi.fn().mockReturnValue({ limit: vi.fn().mockReturnThis(), toArray: vi.fn().mockResolvedValue(results) });
+  }
+
+  it('adds a birthDate range filter for a valid DD/MM/YYYY term', async () => {
+    const findMock = findWithResults([]);
+    const patientsCollection = makeFakeCollection({ find: findMock, countDocuments: vi.fn().mockResolvedValue(0) });
+    const db = makeFakeDb({ patients: patientsCollection });
+
+    await patientService.searchPatients(db, '15/03/2000');
+
+    const passedQuery = findMock.mock.calls[0][0];
+    expect(passedQuery.$or).toEqual(expect.arrayContaining([{ birthDate: expect.objectContaining({ $gte: expect.any(Date), $lt: expect.any(Date) }) }]));
+  });
+
+  it('does not add a birthDate filter when a slash-term does not split into 3 parts', async () => {
+    const findMock = findWithResults([]);
+    const patientsCollection = makeFakeCollection({ find: findMock, countDocuments: vi.fn().mockResolvedValue(0) });
+    const db = makeFakeDb({ patients: patientsCollection });
+
+    await patientService.searchPatients(db, '15/2000');
+
+    const passedQuery = findMock.mock.calls[0][0];
+    expect(passedQuery.$or.some((clause) => clause.birthDate)).toBe(false);
+  });
+
+  it('adds a birthDate range filter for a valid YYYY-MM-DD term', async () => {
+    const findMock = findWithResults([]);
+    const patientsCollection = makeFakeCollection({ find: findMock, countDocuments: vi.fn().mockResolvedValue(0) });
+    const db = makeFakeDb({ patients: patientsCollection });
+
+    await patientService.searchPatients(db, '2000-03-15');
+
+    const passedQuery = findMock.mock.calls[0][0];
+    expect(passedQuery.$or).toEqual(expect.arrayContaining([{ birthDate: expect.objectContaining({ $gte: expect.any(Date), $lt: expect.any(Date) }) }]));
+  });
+
+  it('does not add a birthDate filter for an unparseable YYYY-MM-DD-shaped term', async () => {
+    const findMock = findWithResults([]);
+    const patientsCollection = makeFakeCollection({ find: findMock, countDocuments: vi.fn().mockResolvedValue(0) });
+    const db = makeFakeDb({ patients: patientsCollection });
+
+    await patientService.searchPatients(db, 'not-a-date');
+
+    const passedQuery = findMock.mock.calls[0][0];
+    expect(passedQuery.$or.some((clause) => clause.birthDate)).toBe(false);
+  });
+
+  it('adds a numeric recordNumber clause when the term parses as a number', async () => {
+    const findMock = findWithResults([]);
+    const patientsCollection = makeFakeCollection({ find: findMock, countDocuments: vi.fn().mockResolvedValue(0) });
+    const db = makeFakeDb({ patients: patientsCollection });
+
+    await patientService.searchPatients(db, '42');
+
+    const passedQuery = findMock.mock.calls[0][0];
+    expect(passedQuery.$or).toEqual(expect.arrayContaining([{ recordNumber: 42 }]));
+  });
+
+  it('logs and rethrows when the collection lookup throws', async () => {
+    const patientsCollection = makeFakeCollection({
+      find: vi.fn().mockImplementation(() => { throw new Error('db down'); })
+    });
+    const db = makeFakeDb({ patients: patientsCollection });
+
+    await expect(patientService.searchPatients(db, 'UTI-A')).rejects.toThrow('db down');
+  });
+});

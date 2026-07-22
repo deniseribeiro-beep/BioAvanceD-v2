@@ -235,6 +235,41 @@ describe('config/redis.js', () => {
     });
   });
 
+  describe('config.retryStrategy', () => {
+    it('backs off linearly at 50ms per attempt, capped at 2000ms', () => {
+      setEnv({ NODE_ENV: 'test', REDIS_HOST: '127.0.0.1', REDIS_PORT: '6379' });
+      const redisMod = freshRedis();
+      redisMod.getRedisInstance();
+      const config = FakeRedisInstance.instances[0]._args[0];
+
+      expect(config.retryStrategy(1)).toBe(50);
+      expect(config.retryStrategy(10)).toBe(500);
+      expect(config.retryStrategy(100)).toBe(2000);
+    });
+  });
+
+  describe('config.reconnectOnError', () => {
+    it('returns true and logs a warning when the error message includes READONLY', () => {
+      setEnv({ NODE_ENV: 'test', REDIS_HOST: '127.0.0.1', REDIS_PORT: '6379' });
+      const redisMod = freshRedis();
+      redisMod.getRedisInstance();
+      const config = FakeRedisInstance.instances[0]._args[0];
+      const warnSpy = vi.spyOn(require('../../src/utils/logger'), 'warn');
+
+      expect(config.reconnectOnError(new Error('READONLY You can\'t write'))).toBe(true);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('READONLY'));
+    });
+
+    it('returns false for errors unrelated to READONLY', () => {
+      setEnv({ NODE_ENV: 'test', REDIS_HOST: '127.0.0.1', REDIS_PORT: '6379' });
+      const redisMod = freshRedis();
+      redisMod.getRedisInstance();
+      const config = FakeRedisInstance.instances[0]._args[0];
+
+      expect(config.reconnectOnError(new Error('some other failure'))).toBe(false);
+    });
+  });
+
   describe('error event handler: graceful local-ECONNREFUSED disconnect vs plain error log', () => {
     it('calls redis.disconnect() and logs a warning (not error) for local host + ECONNREFUSED in a local env', () => {
       setEnv({
@@ -370,6 +405,30 @@ describe('config/redis.js', () => {
       instance.emit('error', err);
 
       await expect(resultPromise).resolves.toBe(false);
+    });
+
+    it('logs code/syscall/address and both hint messages for a non-local ECONNREFUSED+ETIMEDOUT-worded error', async () => {
+      setEnv({ NODE_ENV: 'test', REDIS_HOST: 'remotehost.example.com', REDIS_PORT: '6379' });
+      const redisMod = freshRedis();
+      const instance = redisMod.getRedisInstance();
+      instance.status = 'ready';
+      const errorSpy = vi.spyOn(require('../../src/utils/logger'), 'error');
+      const err = new Error('connect ECONNREFUSED remotehost.example.com:6379 ETIMEDOUT Timeout');
+      err.code = 'ECONNREFUSED';
+      err.syscall = 'connect';
+      err.address = 'remotehost.example.com';
+      err.port = 6379;
+      FakeRedisInstance.pingBehavior = async () => {
+        throw err;
+      };
+
+      await expect(redisMod.testRedisConnection()).resolves.toBe(false);
+
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('Código do erro'));
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('Chamada de sistema'));
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('Endereço'));
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('Verifique se o Redis está rodando'));
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('firewall'));
     });
 
     it('resolves false when ping itself throws a local-ECONNREFUSED error after status is ready', async () => {

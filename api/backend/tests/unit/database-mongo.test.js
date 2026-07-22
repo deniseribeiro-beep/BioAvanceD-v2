@@ -417,6 +417,84 @@ describe('database/mongo.js', () => {
       await expect(mongo.connectDB()).rejects.toThrow('ECONNREFUSED');
       expect(constructedWith).toHaveLength(1); // no retry attempt for non-auth errors
     });
+
+    it('propagates the retry error when the unencoded-URI retry also fails with an authentication error', async () => {
+      env.MONGO_URI = 'mongodb://user:p#ss$word@localhost:27017/mydb';
+      env.MONGO_DB = 'mydb';
+      const mongo = freshMongo();
+
+      FakeClientInstance.connectBehavior = async () => {
+        throw new Error('Authentication failed');
+      };
+
+      await expect(mongo.connectDB()).rejects.toThrow('Authentication failed');
+      expect(constructedWith).toHaveLength(2); // first attempt + retry, both failed
+    });
+  });
+
+  // ---------------------------------------------------------------------
+  // connectNewDB - connection reuse / retry behavior (stretch coverage)
+  // ---------------------------------------------------------------------
+  describe('connectNewDB connection lifecycle', () => {
+    it('reuses the existing client and newDb without reconnecting on a second call', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/mydb';
+      env.MONGO_DB_NOVO = 'novodb';
+      const mongo = freshMongo();
+
+      const first = await mongo.connectNewDB();
+      expect(constructedWith).toHaveLength(1);
+
+      const second = await mongo.connectNewDB();
+      expect(constructedWith).toHaveLength(1); // no new client constructed
+      expect(second).toBe(first);
+    });
+
+    it('retries with the unencoded URI when the first attempt fails with an authentication error', async () => {
+      env.MONGO_URI = 'mongodb://user:p#ss$word@localhost:27017/mydb';
+      env.MONGO_DB_NOVO = 'novodb';
+      const mongo = freshMongo();
+
+      let attempt = 0;
+      FakeClientInstance.connectBehavior = async () => {
+        attempt += 1;
+        if (attempt === 1) {
+          throw new Error('Authentication failed');
+        }
+      };
+
+      const result = await mongo.connectNewDB();
+
+      expect(result).toBeDefined();
+      expect(result.__dbName).toBe('novodb');
+      expect(constructedWith).toHaveLength(2);
+      expect(constructedWith[1].uri).toContain('p#ss$word@');
+    });
+
+    it('propagates the retry error when the unencoded-URI retry also fails with an authentication error', async () => {
+      env.MONGO_URI = 'mongodb://user:p#ss$word@localhost:27017/mydb';
+      env.MONGO_DB_NOVO = 'novodb';
+      const mongo = freshMongo();
+
+      FakeClientInstance.connectBehavior = async () => {
+        throw new Error('bad auth');
+      };
+
+      await expect(mongo.connectNewDB()).rejects.toThrow('bad auth');
+      expect(constructedWith).toHaveLength(2);
+    });
+
+    it('propagates a non-authentication connection error without retrying', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/mydb';
+      env.MONGO_DB_NOVO = 'novodb';
+      const mongo = freshMongo();
+
+      FakeClientInstance.connectBehavior = async () => {
+        throw new Error('ECONNREFUSED');
+      };
+
+      await expect(mongo.connectNewDB()).rejects.toThrow('ECONNREFUSED');
+      expect(constructedWith).toHaveLength(1);
+    });
   });
 
   // ---------------------------------------------------------------------
@@ -435,6 +513,23 @@ describe('database/mongo.js', () => {
     it('is a no-op when there is no active client', async () => {
       const mongo = freshMongo();
       await expect(mongo.closeConnection()).resolves.toBeUndefined();
+    });
+
+    it('propagates the error when client.close() rejects', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/mydb';
+      env.MONGO_DB = 'mydb';
+      const mongo = freshMongo();
+
+      await mongo.connectDB();
+
+      const originalClose = FakeClientInstance.prototype.close;
+      FakeClientInstance.prototype.close = async () => {
+        throw new Error('close failed');
+      };
+
+      await expect(mongo.closeConnection()).rejects.toThrow('close failed');
+
+      FakeClientInstance.prototype.close = originalClose;
     });
   });
 });

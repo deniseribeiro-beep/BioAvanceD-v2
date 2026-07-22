@@ -150,6 +150,31 @@ describe('import.controller', () => {
       expect(cleanupSpy).toHaveBeenCalledWith('/tmp/f.csv');
       expect(res.status).toHaveBeenCalledWith(500);
     });
+
+    it('JSON non-FHIR happy path returns 200 with fhir:false', async () => {
+      const req = createReq({ body: { dataType: 'patients' }, file: { path: '/tmp/f.json', originalname: 'f.json' } });
+      const res = createRes();
+      vi.spyOn(importService, 'validateFileFormat').mockReturnValue(true);
+      vi.spyOn(importService, 'validateFHIRFile').mockReturnValue({ isFhir: false, valid: true });
+
+      await controller.validate(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+        success: true,
+        message: 'Arquivo válido',
+        data: expect.objectContaining({ valid: true, fhir: false, resourcesValidated: 0 })
+      }));
+    });
+  });
+
+  describe('uploadMiddleware', () => {
+    it('returns a multer single-file middleware function', () => {
+      const middleware = controller.uploadMiddleware();
+      expect(typeof middleware).toBe('function');
+      // multer's returned middleware is an Express-style (req, res, next) handler
+      expect(middleware.length).toBe(3);
+    });
   });
 
   describe('import', () => {
@@ -287,6 +312,34 @@ describe('import.controller', () => {
       expect(cleanupSpy).toHaveBeenCalledWith('/tmp/f.csv');
       expect(res.status).toHaveBeenCalledWith(500);
       expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ message: 'db down' }));
+    });
+
+    it('maps dataType "patients" to entityName "Patient" in the audit log', async () => {
+      const req = createReq({ body: { dataType: 'patients' }, user: { id: 'u1' } });
+      const res = createRes();
+      const results = { success: 1, errors: [], total: 1 };
+      vi.spyOn(importService, 'importPatients').mockResolvedValue(results);
+      vi.spyOn(importService, 'cleanupFile').mockImplementation(() => {});
+      vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+      const auditLogSpy = vi.spyOn(auditLogger, 'logImport').mockResolvedValue();
+
+      await controller.import(req, res);
+
+      expect(auditLogSpy).toHaveBeenCalledWith(req, 'Patient', 'success', 1, 1, 0);
+    });
+
+    it('maps a dataType matching none of the known keywords to entityName "Import"', async () => {
+      const req = createReq({ body: { dataType: 'locations' }, user: { id: 'u1' } });
+      const res = createRes();
+      const results = { success: 1, errors: [], total: 1 };
+      vi.spyOn(importService, 'importLocations').mockResolvedValue(results);
+      vi.spyOn(importService, 'cleanupFile').mockImplementation(() => {});
+      vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+      const auditLogSpy = vi.spyOn(auditLogger, 'logImport').mockResolvedValue();
+
+      await controller.import(req, res);
+
+      expect(auditLogSpy).toHaveBeenCalledWith(req, 'Import', 'success', 1, 1, 0);
     });
   });
 
@@ -438,6 +491,102 @@ describe('import.controller', () => {
 
       expect(res.status).toHaveBeenCalledWith(500);
       expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ message: 'Erro ao importar FHIR' }));
+    });
+
+    it('processes Observation and Condition resources, linking them to the patient map', async () => {
+      const collectionStub = { insertOne: vi.fn().mockResolvedValue({ insertedId: 'mock-id' }) };
+      const db = { collection: vi.fn().mockReturnValue(collectionStub) };
+      const req = {
+        app: { locals: { db } },
+        body: {
+          resourceType: 'Bundle',
+          entry: [
+            { resource: { resourceType: 'Patient', id: 'p1' } },
+            {
+              resource: {
+                resourceType: 'Observation',
+                id: 'o1',
+                subject: { reference: 'Patient/p1' },
+                code: { text: 'Glucose' },
+                valueQuantity: { value: 95 }
+              }
+            },
+            {
+              resource: {
+                resourceType: 'Condition',
+                id: 'c1',
+                subject: { reference: 'Patient/unknown' },
+                code: { text: 'Hypertension' }
+              }
+            }
+          ]
+        }
+      };
+      const res = createRes();
+
+      await controller.importFhirBundle(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      // Patient (1) + Observation (1) + Condition (1) inserts
+      expect(collectionStub.insertOne).toHaveBeenCalledTimes(3);
+      const observationDoc = collectionStub.insertOne.mock.calls[1][0];
+      expect(observationDoc).toEqual(expect.objectContaining({ participantId: 'mock-id', code: 'Glucose', value: 95 }));
+      const conditionDoc = collectionStub.insertOne.mock.calls[2][0];
+      // Unmatched patient reference resolves to undefined, not the mapped id
+      expect(conditionDoc).toEqual(expect.objectContaining({ participantId: undefined, code: 'Hypertension' }));
+    });
+
+    it('resolves sprec fields from a FHIR extension when no direct sprec object is present', async () => {
+      const collectionStub = { insertOne: vi.fn().mockResolvedValue({ insertedId: 'mock-id' }) };
+      const db = { collection: vi.fn().mockReturnValue(collectionStub) };
+      const qualitySpy = vi.spyOn(qualityDomain, 'calculateMethodologyQualityFromSprec').mockReturnValue({
+        final_grade: 'B', category: 'B', rcs_score: 70, governance_status: 1
+      });
+      vi.spyOn(qualityDomain, 'buildPenaltyLog').mockReturnValue([]);
+
+      const req = {
+        app: { locals: { db } },
+        body: {
+          resourceType: 'Bundle',
+          entry: [
+            { resource: { resourceType: 'Patient', id: 'p1' } },
+            {
+              resource: {
+                resourceType: 'Specimen',
+                id: 's1',
+                subject: { reference: 'Patient/p1' },
+                type: { coding: [{ code: 'BLD' }] },
+                extension: [
+                  {
+                    url: 'https://example.org/fhir/StructureDefinition/sprec',
+                    valueObject: {
+                      matrixType: 'Serum',
+                      primaryContainer: 'tube-a',
+                      preCentrifugation: 'pc1',
+                      centrifugation: 'c1',
+                      secondCentrifugation: 'c2',
+                      postCentrifugationDelay: 'delay1',
+                      longTermStorage: 'lts1',
+                      preAnalyticalUnknown: true
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      };
+      const res = createRes();
+
+      await controller.importFhirBundle(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(qualitySpy).toHaveBeenCalledWith(expect.objectContaining({
+        matrixType: 'serum',
+        sampleType: 'BLD',
+        primaryContainer: 'TUBE-A',
+        preAnalyticalUnknown: true
+      }));
     });
   });
 });

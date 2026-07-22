@@ -17,6 +17,16 @@ function makeToken(accessType = 4) {
   );
 }
 
+// Token shaped without `name`/`roleName` but with `userName`/`role` instead,
+// to exercise the audit-info fallback branches (req.user?.name || req.user?.userName; req.user?.role || null).
+function makeTokenLegacyClaims(accessType = 4) {
+  return jwt.sign(
+    { userID: 'qa-user-legacy', accessType, role: 'Coordenador', userName: 'legacyUser', mfaVerified: true },
+    process.env.JWT_SECRET,
+    { expiresIn: '1h' }
+  );
+}
+
 function givenSession() {
   vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 'sess-1' } });
   vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 'sess-1' });
@@ -483,6 +493,78 @@ describe('PUT /api/equipment/:id with a non-ObjectId, non-numeric id', () => {
       expect.objectContaining({ session: expect.objectContaining({ withTransaction, endSession }) })
     );
     expect(res.body.quarantine.triggered).toBe(true);
+
+    delete app.locals.quarantineService;
+  });
+
+  it('falls back to req.user.userName/null role in the auditInfo when req.user has no name/role claims (non-transaction path)', async () => {
+    const quarantineByEquipmentStatus = vi.fn().mockResolvedValue({
+      triggered: true, matched: 1, quarantined: 1, movements: 1, reason: 'test reason'
+    });
+    app.locals.quarantineService = {
+      isQuarantineTriggerStatus: vi.fn().mockReturnValue(true),
+      quarantineByEquipmentStatus,
+    };
+
+    const coll = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue(FAKE_EQ),
+      updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
+    });
+    app.locals.db = createDbMock({ equipment: coll });
+
+    const res = await request(app)
+      .put('/api/equipment/507f1f77bcf86cd799439011')
+      .set('Authorization', `Bearer ${makeTokenLegacyClaims(4)}`)
+      .send({ status: 'Inactive' });
+
+    expect(res.status).toBe(200);
+    expect(quarantineByEquipmentStatus).toHaveBeenCalledWith(
+      app.locals.db,
+      expect.anything(),
+      'Inactive',
+      expect.objectContaining({
+        auditInfo: expect.objectContaining({ userName: 'legacyUser', userRole: 'Coordenador' })
+      })
+    );
+
+    delete app.locals.quarantineService;
+  });
+
+  it('falls back to req.user.userName/null role in the auditInfo when req.user has no name/role claims (transaction path)', async () => {
+    const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 });
+    const coll = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue(FAKE_EQ),
+      updateOne,
+    });
+    const dbMock = createDbMock({ equipment: coll });
+
+    const withTransaction = vi.fn(async (cb) => cb());
+    const endSession = vi.fn().mockResolvedValue(undefined);
+    const startSession = vi.fn(() => ({ withTransaction, endSession }));
+    app.locals.db = { ...dbMock, client: { startSession } };
+
+    const quarantineByEquipmentStatus = vi.fn().mockResolvedValue({
+      triggered: true, matched: 1, quarantined: 1, movements: 1, reason: 'status:inactive'
+    });
+    app.locals.quarantineService = {
+      isQuarantineTriggerStatus: vi.fn().mockReturnValue(true),
+      quarantineByEquipmentStatus,
+    };
+
+    const res = await request(app)
+      .put('/api/equipment/507f1f77bcf86cd799439011')
+      .set('Authorization', `Bearer ${makeTokenLegacyClaims(4)}`)
+      .send({ status: 'Inactive' });
+
+    expect(res.status).toBe(200);
+    expect(quarantineByEquipmentStatus).toHaveBeenCalledWith(
+      app.locals.db,
+      expect.anything(),
+      'Inactive',
+      expect.objectContaining({
+        auditInfo: expect.objectContaining({ userName: 'legacyUser', userRole: 'Coordenador' })
+      })
+    );
 
     delete app.locals.quarantineService;
   });

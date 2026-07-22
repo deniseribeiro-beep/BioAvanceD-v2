@@ -275,4 +275,157 @@ describe('UserModel - Unit Tests', () => {
       expect(result2.isValid).toBe(true);
     });
   });
+
+  describe('create()', () => {
+    it('deve criar usuário com todos os campos fornecidos', () => {
+      const data = {
+        name: 'João Silva',
+        email: 'joao@example.com',
+        phone: '11987654321',
+        institution: 'Hospital XYZ',
+        username: 'joaosilva',
+        password: 'Senha@123',
+        accessType: 3,
+        status: 'Ativo',
+        mfaEnabled: true,
+        mfaSecret: 'secret123',
+        mfaActivationDate: '2026-01-01',
+        mfaFailedAttempts: 2,
+        mfaLocked: true,
+        anonId: 'anon-1',
+        passwordHistory: ['h1'],
+        lastPasswordChange: '2026-01-01',
+        forceReset: true,
+        failedLoginAttempts: 5
+      };
+
+      const user = UserModel.create(data);
+
+      expect(user.name).toBe('João Silva');
+      expect(user.email).toBe('joao@example.com');
+      expect(user.phone).toBe('11987654321');
+      expect(user.institution).toBe('Hospital XYZ');
+      expect(user.accessType).toBe(3);
+      expect(user.status).toBe('active'); // normalizado
+      expect(user.mfaEnabled).toBe(true);
+      expect(user.mfaSecret).toBe('secret123');
+      expect(user.mfaActivationDate).toBe('2026-01-01');
+      expect(user.mfaFailedAttempts).toBe(2);
+      expect(user.mfaLocked).toBe(true);
+      expect(user.anonId).toBe('anon-1');
+      expect(user.passwordHistory).toEqual(['h1']);
+      expect(user.lastPasswordChange).toBe('2026-01-01');
+      expect(user.forceReset).toBe(true);
+      expect(user.failedLoginAttempts).toBe(5);
+      expect(user.createdAt).toBeInstanceOf(Date);
+      expect(user.updatedAt).toBeInstanceOf(Date);
+      expect(user.lastLogin).toBeNull();
+    });
+
+    it('deve aplicar defaults quando campos opcionais ausentes', () => {
+      const data = {
+        name: 'Maria',
+        email: 'maria@example.com',
+        username: 'maria',
+        password: 'Senha@123'
+      };
+
+      const user = UserModel.create(data);
+
+      expect(user.phone).toBeNull();
+      expect(user.institution).toBeNull();
+      expect(user.accessType).toBe(2);
+      expect(user.status).toBe('active');
+      expect(user.mfaEnabled).toBe(false);
+      expect(user.mfaSecret).toBeNull();
+      expect(user.mfaActivationDate).toBeNull();
+      expect(user.mfaFailedAttempts).toBe(0);
+      expect(user.mfaLocked).toBe(false);
+      expect(user.anonId).toBeNull();
+      expect(user.passwordHistory).toEqual([]);
+      expect(user.lastPasswordChange).toBeInstanceOf(Date);
+      expect(user.forceReset).toBe(false);
+      expect(user.failedLoginAttempts).toBe(0);
+    });
+
+    it('deve manter passwordHistory vazio quando fornecido valor não-array', () => {
+      const data = {
+        name: 'Maria',
+        email: 'maria@example.com',
+        username: 'maria',
+        password: 'Senha@123',
+        passwordHistory: 'not-an-array'
+      };
+
+      const user = UserModel.create(data);
+
+      expect(user.passwordHistory).toEqual([]);
+    });
+  });
+
+  describe('getRoleName()', () => {
+    it('deve mapear cada accessType válido para seu nome de role', () => {
+      expect(UserModel.getRoleName(1)).toBe('UsuarioExterno');
+      expect(UserModel.getRoleName(2)).toBe('Tecnico');
+      expect(UserModel.getRoleName(3)).toBe('Coordenador');
+      expect(UserModel.getRoleName(4)).toBe('Administrador');
+    });
+
+    it('deve retornar UsuarioExterno para accessType desconhecido', () => {
+      expect(UserModel.getRoleName(99)).toBe('UsuarioExterno');
+      expect(UserModel.getRoleName(undefined)).toBe('UsuarioExterno');
+    });
+  });
+
+  describe('normalizeStatus()', () => {
+    it('deve normalizar status em português para inglês', () => {
+      expect(UserModel.normalizeStatus('Ativo')).toBe('active');
+      expect(UserModel.normalizeStatus('Inativo')).toBe('inactive');
+      expect(UserModel.normalizeStatus('Suspenso')).toBe('suspended');
+      expect(UserModel.normalizeStatus('Bloqueado')).toBe('blocked');
+    });
+
+    it('deve manter status já em inglês', () => {
+      expect(UserModel.normalizeStatus('active')).toBe('active');
+      expect(UserModel.normalizeStatus('inactive')).toBe('inactive');
+      expect(UserModel.normalizeStatus('suspended')).toBe('suspended');
+      expect(UserModel.normalizeStatus('blocked')).toBe('blocked');
+    });
+
+    it('deve retornar active quando status ausente', () => {
+      expect(UserModel.normalizeStatus(undefined)).toBe('active');
+      expect(UserModel.normalizeStatus(null)).toBe('active');
+      expect(UserModel.normalizeStatus('')).toBe('active');
+    });
+
+    it('deve retornar active para status desconhecido', () => {
+      expect(UserModel.normalizeStatus('desconhecido')).toBe('active');
+    });
+  });
+
+  describe('translateStatus()', () => {
+    it('deve traduzir status em inglês para português', () => {
+      expect(UserModel.translateStatus('active')).toBe('Ativo');
+      expect(UserModel.translateStatus('inactive')).toBe('Inativo');
+      expect(UserModel.translateStatus('suspended')).toBe('Suspenso');
+      expect(UserModel.translateStatus('blocked')).toBe('Bloqueado');
+    });
+
+    it('deve manter status já em português', () => {
+      expect(UserModel.translateStatus('Ativo')).toBe('Ativo');
+      expect(UserModel.translateStatus('Inativo')).toBe('Inativo');
+      expect(UserModel.translateStatus('Suspenso')).toBe('Suspenso');
+      expect(UserModel.translateStatus('Bloqueado')).toBe('Bloqueado');
+    });
+
+    it('deve retornar Ativo quando status ausente', () => {
+      expect(UserModel.translateStatus(undefined)).toBe('Ativo');
+      expect(UserModel.translateStatus(null)).toBe('Ativo');
+      expect(UserModel.translateStatus('')).toBe('Ativo');
+    });
+
+    it('deve retornar Ativo para status desconhecido', () => {
+      expect(UserModel.translateStatus('desconhecido')).toBe('Ativo');
+    });
+  });
 });

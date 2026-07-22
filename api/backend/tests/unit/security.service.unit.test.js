@@ -110,6 +110,18 @@ describe('SecurityService.validateConfig', () => {
     })).toThrow('inválidas');
   });
 
+  it('throws for invalid passwordRules.expirationDays', () => {
+    expect(() => securityService.validateConfig({
+      passwordRules: { expirationDays: 400 },
+    })).toThrow('inválidas');
+  });
+
+  it('throws for invalid session.maxSessionDuration', () => {
+    expect(() => securityService.validateConfig({
+      session: { maxSessionDuration: 48 },
+    })).toThrow('inválidas');
+  });
+
   it('throws for session.timeoutMinutes out of range', () => {
     expect(() => securityService.validateConfig({
       session: { timeoutMinutes: 600 },
@@ -304,6 +316,24 @@ describe('SecurityService.exportLogs', () => {
     expect(queryArg.timestamp.$lte).toEqual(new Date('2026-02-01'));
   });
 
+  it('builds a timestamp query with only $lte when only endDate is provided', async () => {
+    const { db, find } = makeDbWithLogs([]);
+
+    await securityService.exportLogs(db, { endDate: '2026-02-01' }, 'csv');
+
+    const queryArg = find.mock.calls[0][0];
+    expect(queryArg.timestamp.$lte).toEqual(new Date('2026-02-01'));
+    expect(queryArg.timestamp.$gte).toBeUndefined();
+  });
+
+  it('applies only the module filter to the query', async () => {
+    const { db, find } = makeDbWithLogs([]);
+
+    await securityService.exportLogs(db, { module: 'Segurança' }, 'csv');
+
+    expect(find).toHaveBeenCalledWith({ module: 'Segurança' });
+  });
+
   it('logs and rethrows when the logs collection query fails', async () => {
     const error = new Error('query failed');
     const find = vi.fn(() => { throw error; });
@@ -373,6 +403,18 @@ describe('SecurityService.updatePermissions', () => {
     expect(updateOne).toHaveBeenCalledTimes(1);
     expect(logSpy).toHaveBeenCalledTimes(1);
     expect(logSpy.mock.calls[0][0].severity).toBe('critical');
+  });
+
+  it('uses SYSTEM as lastUpdatedBy when req has no user', async () => {
+    const updateOne = vi.fn().mockResolvedValue({});
+    const db = { collection: vi.fn(() => ({ updateOne })) };
+    vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+    vi.spyOn(auditLogger, 'log').mockResolvedValue({});
+
+    await securityService.updatePermissions(db, { '2': { createSample: true } }, {}, {});
+
+    const setArg = updateOne.mock.calls[0][1].$set;
+    expect(setArg.lastUpdatedBy).toBe('SYSTEM');
   });
 
   it('rejects with invalid profile and does not write to db', async () => {

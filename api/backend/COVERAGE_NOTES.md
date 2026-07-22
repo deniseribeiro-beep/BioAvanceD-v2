@@ -12,42 +12,75 @@ stale as slices land and as source files change. Keep it honest:
   iteration: at the `ship-to-main` gate, or if a session's own targeted
   runs stop matching what this file claims (a sign of drift). Full
   regenerate command:
-  `cd api/backend && npx vitest run --coverage --reporter=basic`, then
-  re-derive buckets from `coverage/coverage-summary.json` (`lines.pct`
-  per file). `coverage/` is gitignored — this file is the durable record.
+  `cd api/backend && npx vitest run tests/unit tests/integration
+  tests/compliance --coverage --reporter=dot` — a bare `--coverage` run
+  with no dir targets is blocked by `.claude/hooks/full-suite-guard.cjs`
+  (per-iteration full-suite guard); explicit dir targets are the hook's
+  own documented exception and produce an equivalent full-suite result.
+  Then re-derive buckets from `coverage/coverage-summary.json`
+  (`lines.pct` per file). `coverage/` is gitignored — this file is the
+  durable record.
 - **This file stays lean on purpose** — only the current buckets and the
-  latest reconcile numbers. Slice-by-slice narrative history (what each
-  past slice covered, which issues it filed) lives in
-  `COVERAGE_HISTORY.md` instead, so a normal test-loop session doesn't
-  pay to read hundreds of lines of past-slice prose it doesn't need.
-  Append new slice narrative there, not here.
+  latest reconcile numbers. Slice-by-slice narrative (what each past
+  slice covered, which issues it filed) is no longer duplicated into a
+  separate history file — that content already lives permanently in
+  `git log`/commit diffs and in filed GitHub issues, which don't rot the
+  way a hand-maintained log does. `COVERAGE_HISTORY.md` was deleted
+  2026-07-22 for exactly this reason; see
+  `dyeallpies-skills-pack#95` for the rationale and the pending
+  `test-loop`/testing-conventions skill update.
 
 ## Last full reconcile
 
-**2026-07-15**, snapshot from commit `94e2fc62` on
-`feature/docker-e2e-backend-integration` (`npx vitest run --coverage
---reporter=basic`, full suite; buckets below re-derived directly from
-`coverage/coverage-summary.json`, not read off printed totals).
+**2026-07-22 (afternoon)**, snapshot from `test/mid-high-coverage-batch-1`
+commit `fdd37e10` (`npx vitest run tests/unit tests/integration
+tests/compliance --coverage --reporter=dot`, full suite).
 
-Statements 85.73% (16008/18671), Branches 75.66% (12629/16690), Functions
-86.58% (1956/2259), **Lines 86.33%** (15429/17871) — **up** from the prior
-reconcile's 82.4% lines (commit `28adc855`, 2026-07-14), consistent with
-#146-#164 fixes and #203/#212/#227 landing since.
+Statements **90.33%** (16866/18671), Branches **81.3%** (13570/16691),
+Functions **90.34%** (2041/2259), Lines **90.9%** (16245/17871) — up
+from the morning reconcile's 88.8/79.71/88.44/89.44 (commit `67d01a62`),
+driven by this session's `fhir-import-staging.controller.js`,
+`intakeWizard.routes.js`, and `audit-tsa.service.js` slices all landing
+at 100%. **Three of four dimensions (statements/functions/lines) are now
+past the 90% milestone** (`bioavanced-v2-conventions`); branches (81.3%)
+remains the sole laggard, up from the stale 79.71% figure.
 
-The same run showed 5/265 test files (123/4739 tests) failing — all five
-are the currently-open design-fork issues (`sample.model.gaps.test.js`,
-`sample.model.unit.test.js`, `sample.models.test.js` → #208/#224;
-`patient.model.unit.test.js` → #218; `SampleGraphValidator.js`'s gaps are
-tracked separately as #222 but don't yet have a failing test file of
-their own). No new, previously-unseen failures found this reconcile —
-don't re-file these, they're already tracked and blocked on Dennis's
-design calls per the fix-bugs backlog. The `NotificationService.test.js`
-> `buildConsentLink` failure noted at the 2026-07-14 reconcile is gone —
-resolved by intervening fixes, no issue needed.
+Run also surfaced **123 failing tests across 5 files** — not the 2 known
+pre-existing AES-256-GCM failures. Confirmed real (fails in isolation
+too, not cross-file pollution): `patient.model.unit.test.js`,
+`sample.model.gaps.test.js`, `sample.model.unit.test.js`,
+`sample.models.test.js`, `sample-graph-validator.service.test.js` all
+still use pre-rename field names (`patientID`/`cpf` instead of
+`participantId`/`identityDocument`, and the Sample-side equivalents) —
+the same participantId/specimenId/identityDocument canonicalization
+rename that commit `dbf0f448` fixed in 7 *other* files for
+#133/#134/#136/#137/#139 back on 2026-07-09, just missing these 5. Filed
+as **issue #244**; un-staling these fixtures (no product change
+expected) is a strong next-slice candidate, not just for coverage but
+because 123 red tests understate real product health in any future
+reconcile that trusts pass/fail counts.
 
-**Bucket lists below are freshly regenerated this session** (previous
-reconcile's buckets were one cycle stale, now current). Cutoffs unchanged:
-ZERO = 0%, LOW = 1-49%, MID-LOW = 50-69%, MID-HIGH = 70-84%, GOOD = >=85%.
+**Known limitation of this reconcile method — see issue #242**: for
+files whose tests span both a Vitest-isolated unit test (plain ESM
+`import`, or a `require.cache`-reload pattern) and an integration test
+that loads the real `app.js`, the merged full-suite number can
+understate real coverage significantly (not just a small swing — up to
+~20 points), the same drift class as `dyeallpies-skills-pack#99`.
+Confirmed this session for three files that looked like MID-HIGH
+regressions but are actually fine in isolation: `equipment.routes.js`
+(81.92/76.47 merged vs **100/92.94 isolated**, matches its prior
+recorded entry and issue #238), `fieldEncryption.js` (76.19/82.6 merged
+vs **100/100 isolated**), `User.js` (83.67/78.94 merged vs **98.03/97.89
+isolated**). All three are corrected back into GOOD below rather than
+listed as MID-HIGH candidates. **Before treating any MID-HIGH entry as a
+real slice candidate, re-run that file's own test(s) alone with
+`--coverage.include="<path>"` first** if it has both a unit and an
+integration test file — don't trust the merged number for those.
+
+**Bucket lists below are freshly regenerated this session** off the new
+`coverage-summary.json`, then corrected per the drift check above.
+Cutoffs unchanged: ZERO = 0%, LOW = 1-49%, MID-LOW = 50-69%,
+MID-HIGH = 70-84%, GOOD = >=85%.
 
 ## How to use this when picking a slice
 
@@ -66,11 +99,11 @@ ZERO = 0%, LOW = 1-49%, MID-LOW = 50-69%, MID-HIGH = 70-84%, GOOD = >=85%.
    issue-linked, the number here is trustworthy — no fresh isolated run
    needed before committing to it.
 5. After landing a slice, delete the file's line from whichever bucket it
-   was in (or move it, if now partial). Don't leave stale entries. Add a
-   short entry to `COVERAGE_HISTORY.md` for what the slice covered/found
-   — not here.
+   was in (or move it, if now partial). Don't leave stale entries. The
+   slice's own commit message is the narrative record now — don't add
+   one here or to a separate history file.
 
-## ZERO coverage (0% lines) — 18 files, full reconcile 2026-07-15, commit `94e2fc62`
+## ZERO coverage (0% lines) — 20 files, confirmed unchanged in the 2026-07-22 (afternoon) reconcile, commit `fdd37e10`
 
 Real logic, but broken-by-issue — see caveat above, not a real gap:
 - `src/workers/worker.js` (self-executing bootstrap entrypoint — calls
@@ -91,6 +124,8 @@ Low priority (models/interfaces/one-off scripts — thin or non-request-path):
 - `src/models/StoragePath.js`
 - `src/models/TemperaturePolicy.schema.js`
 - `src/models/Withdrawal.js`
+- `src/reference-data/essential/index.js`
+- `src/reference-data/essential/manifest.js`
 - `src/scripts/migrate-rcs-governance-indexes.js`
 - `src/scripts/migrateUserAnonIds.js`
 - `src/scripts/seedDiseaseValidationRules.js`
@@ -99,21 +134,51 @@ Low priority (models/interfaces/one-off scripts — thin or non-request-path):
   returning 503 may be the same terminologySync gate; check before
   treating as a genuine gap)
 
-## LOW coverage (1-49% lines) — 7 files, full reconcile 2026-07-15, commit `94e2fc62`
+## LOW coverage (1-49% lines) — 0 files, confirmed unchanged in the 2026-07-22 (afternoon) reconcile, commit `fdd37e10`
 
-Sorted ascending (worst first) — lines% / branches%. All seven are the
+Sorted ascending (worst first) — lines% / branches%. All are the
 same audit/rename-drift cluster (issue #146) already tracked; none are
 genuinely untested slice candidates.
 
-```
-src/services/auditRoot.service.js                6.95 / 0        (issue #146 cluster — audit/rename drift)
-src/services/audit-tree.service.js               7.89 / 0        (issue #146 cluster)
-src/services/audit-signing.provider.js          14.81 / 0        (issue #146 cluster)
-src/interface/routes/intakeWizard.routes.js     16.98 / 0        (issue #146 cluster)
-src/services/audit-tsa.service.js               21.42 / 0        (issue #146 cluster)
-src/services/audit-witness.service.js           27.27 / 0        (issue #146 cluster)
-src/controllers/fhir-import-staging.controller.js 30.23 / 41.17  (issue #146 cluster)
-```
+`audit-tree.service.js` moved to GOOD (100/100 lines/branches, isolated
+run) — pure-function merkle-tree helper, no singleton dependencies to
+mock. `audit-signing.provider.js` moved to GOOD (100/100/100/100,
+isolated run) — mocked `env` module in place (mutable object, no
+`vi.mock` needed), real Ed25519 keypairs via `crypto.generateKeyPairSync`
+for the sign/verify roundtrips, and a real temp file for `loadPrivateKey`.
+`audit-witness.service.js` moved to GOOD (100/100/100/100, isolated run)
+— thin `fetch`-only singleton, `vi.stubGlobal('fetch', ...)` same as
+`rfc3161-adapter.service.test.js`, no `vi.mock` needed.
+`audit-tsa.service.js` moved to GOOD (100/100/100/100, isolated run) —
+destructured `const { execFile } = require('child_process')` at module
+scope, so mocked by overriding `child_process.execFile` directly
+(built-in modules are real Node singletons — the override is visible to
+the destructuring at require-time of the service) before the service's
+first `require`, plus `vi.stubGlobal('fetch', ...)` for the TSA POST and
+real `fs`/tmp-dir I/O (no fs mocking needed).
+
+`intakeWizard.routes.js` moved to GOOD (100/90.9/100/100, isolated run) —
+this is the thin `interface/routes` wrapper (auth/rbac wiring +
+`intakeGovernanceResponseGuard`), distinct from `src/routes/intakeWizard.js`
+which already had its own test file. New test mocks `auth`/`rbac` to
+pass-through and stubs the inner router via `require.cache` injection, so
+coverage isolates the wrapper's own logic: `buildSampleQuery`,
+`resolveGovernanceStatus` (BLOCKED/QUARANTINE/AVAILABLE branches),
+`buildSafeSampleSummary`, `enforcePersistedGovernanceStatus`, and the
+response-guard's try/catch. Remaining branch gap (lines 73-77) is
+`buildSafeSampleSummary`'s `governanceStatus.field || sample.field`
+fallbacks — unreachable in practice since `resolveGovernanceStatus`
+always returns fully-populated status fields on every call path; filed as
+issue #243 (same dead-code pattern as #238), not a real gap.
+
+`fhir-import-staging.controller.js` moved to GOOD (100/100/100/100,
+isolated run) — thin controller delegating to
+`fhir-import-staging.service.js`; mocked the service directly (no
+`require.cache` tricks needed) and covered `stage`'s file-vs-body payload
+branch, its JSON-parse-failure 400, and every method's error-path
+statusCode/message fallback. Last file in the #146-cluster LOW bucket —
+bucket now empty; a fresh full reconcile is due per the cadence note
+below.
 
 Genuinely low (no matching filed issue found) — real slice candidates:
 none currently listed. Moved to GOOD (>=85%) since the 2026-07-14
@@ -122,7 +187,7 @@ reconcile: `PatientIdentityService.js`, `MoveSampleUseCase.js`,
 `AllocateSampleUseCase.js`, `authConsent.js`,
 `patientBiomarkerTimeseries.service.js` — all #146-family fixes landed.
 
-## MID-LOW coverage (50-69% lines) — 3 files, full reconcile 2026-07-15, commit `94e2fc62`
+## MID-LOW coverage (50-69% lines) — 3 files, confirmed unchanged in the 2026-07-22 (afternoon) reconcile, commit `fdd37e10`
 
 Sorted ascending (worst first) — lines% / branches%.
 
@@ -138,60 +203,38 @@ reconcile: `fhir.service.js`, `result-worker.js` (now MID-HIGH, see
 below), `LineageRepository.js`, `analysisValidation.service.js`,
 `import-lgpd.service.js`, `consent.validator.js`.
 
-## MID-HIGH coverage (70-84% lines) — 39 files, full reconcile 2026-07-15, commit `94e2fc62`
+## MID-HIGH coverage (70-84% lines) — 5 files (plus 3 merged-vs-isolated drift cases below), confirmed in the 2026-07-22 (afternoon) reconcile, commit `fdd37e10`
 
 Sorted ascending (worst first) — lines% / branches%. Not cross-checked
 against filed issues line-by-line (MID-HIGH files are closer to "done"
 regardless); a lower branch% relative to lines% usually means untested
-error paths, a good tie-breaker when picking among these.
+error paths, a good tie-breaker when picking among these. The #228
+batch-1 slices (orphanet.js, terminologies.routes.js,
+MeasurementUnit.js, result.routes.js, analysis-type.controller.js,
+auth.js, auditLogger.js, import-lgpd.controller.js,
+clinical-unit.routes.js, logs.routes.js, sensor.controller.js,
+User.js, reports.routes.js, MongoAuditRepository.js, createFirstAdmin.js,
+mongo.js) plus `equipment.routes.js` (100/92.94 — issue #238 filed for
+the remaining unreachable `if (req.user)` dead-code branches) have all
+moved out of this bucket into GOOD — per-slice narrative for those is
+in their commit history, not here.
 
 ```
-src/controllers/iot.controller.js                70.00 / 58.82
-src/services/patient.service.js                  70.64 / 60.63
-src/models/PatientConsent.js                      70.83 / 85.24
-src/services/mqtt-telemetry.service.js            71.42 / 78.09   (issue #160 — HMAC bypass bug)
-src/infrastructure/middleware/auth.js             71.66 / 68.18
-src/routes/orphanet.js                            72.26 / 52.04
-src/services/hl7.service.js                       73.45 / 47.15
-src/models/MeasurementUnit.js                     75.00 / 40.00
-src/controllers/sensor.controller.js              75.29 / 68.18
-src/utils/fieldEncryption.js                      76.19 / 69.56
-src/infrastructure/persistence/mongo/MongoAuditRepository.js 76.66 / 84.61
-src/interface/routes/terminologies.routes.js      76.66 / 51.50
-src/workers/workers/result-worker.js              76.66 / 66.07   (issue #146/#164 — rename + yauzl)
-src/interface/routes/reports.routes.js            76.83 / 65.75
-src/controllers/analysis-type.controller.js       77.14 / 57.14
-src/scripts/createFirstAdmin.js                   77.27 / 65.00
-src/core/use-cases/RegisterSampleUseCase.js       77.33 / 69.31
-src/services/SampleGraphValidator.js              77.69 / 66.66   (issue #222 — legacy-schema migration, design fork)
-src/utils/portManager.js                          78.48 / 62.85
-src/models/User.js                                79.59 / 53.68
-src/workers/neo4jProjection.worker.js             79.62 / 73.33
-src/interface/routes/clinical-unit.routes.js      79.76 / 63.15
-src/models/AnalysisType.js                        80.00 / 75.00
-src/reference-data/essential/manifest.js          80.00 / 0
-src/database/mongo.js                             80.10 / 76.51
-src/services/merkle-envelope.service.js           80.30 / 66.21
-src/interface/routes/analysis-file.routes.js      80.95 / 87.50
-src/interface/routes/result.routes.js             80.97 / 55.45
-src/interface/routes/master-data.routes.js        81.42 / 68.75
-src/config/redis.js                               81.76 / 70.45
-src/interface/routes/logs.routes.js               81.81 / 61.19
-src/interface/routes/equipment.routes.js          81.92 / 74.11
-src/utils/auditLogger.js                          82.00 / 67.96
-src/controllers/import.controller.js              82.23 / 75.86
-src/services/security.service.js                  82.51 / 72.26
-src/controllers/import-lgpd.controller.js         82.66 / 54.41
-src/infrastructure/queue/Neo4jQuarantineService.js 83.33 / 82.75
-src/services/fhir-import-staging.service.js       84.15 / 77.86
-src/controllers/import-async.controller.js        84.29 / 79.66
+src/services/mqtt-telemetry.service.js                         71.42 / 78.09   (issue #160 — HMAC bypass bug)
+src/services/patient.service.js                                77.92 / 65.52   (3-way test-writer fan-out landed 2026-07-22: encryption/clinical-unit, validation/duplicate, query/update/delete slices, 82 new tests across 8 test files/200 tests total. Two genuinely unreachable branches remain (issues #240, #241 filed) and branch% is still the weak dimension — remaining gaps are mostly deep error-path combinations, not whole untested methods; a further slice is optional, not urgent. Number moves slightly between this and the isolated-sibling-only run per the prior handoff — within the drift class noted above, not re-chased since both agree it's optional)
+src/workers/workers/result-worker.js                           76.66 / 66.07   (issue #146/#164 — rename + yauzl)
+src/services/SampleGraphValidator.js                           77.69 / 66.66   (issue #222 — legacy-schema migration, design fork)
+src/workers/neo4jProjection.worker.js                          79.62 / 73.33   (remaining gap is the `require.main === module` CLI entry block, lines 82-99 — not coverable in-process, same accepted-gap pattern as createFirstAdmin.js)
 ```
 
-Note: `sample.service.js` (85.15%) and `import.service.js` (89.92%)
-moved into GOOD since the 2026-07-14 reconcile; `batch-validation-engine.service.js`
-(88.20%), `audit.controller.js`, and `audit-canonicalization.service.js`
-(87.87%) also moved to GOOD — not cross-checked against #152/#162
-line-by-line since they're now well above the MID-HIGH cutoff.
+Checked and corrected out of this bucket this session (issue #242 drift,
+confirmed 100/GOOD in isolation): `equipment.routes.js`, `User.js`.
+
+Note: `sample.service.js`, `import.service.js`,
+`batch-validation-engine.service.js`, `audit.controller.js`, and
+`audit-canonicalization.service.js` remain in GOOD as of the prior
+reconcile — not re-verified line-by-line since they're well above the
+MID-HIGH cutoff.
 
 ## GOOD coverage (>=85% lines)
 
@@ -205,5 +248,5 @@ If `test-loop` finds this file stale (a listed ZERO/LOW file turns out
 already well-tested, or vice versa), fix the entry in the same commit —
 don't just work around it. If the reconcile cadence above stops making
 sense (too frequent/rare), update it and say why in the session's
-wrap-up. Detailed per-slice writeups go in `COVERAGE_HISTORY.md`, never
-back into this file.
+wrap-up. Detailed per-slice writeups belong in the slice's own commit
+message, never back into this file.
