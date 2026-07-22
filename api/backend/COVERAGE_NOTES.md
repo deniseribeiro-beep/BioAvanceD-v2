@@ -32,32 +32,36 @@ stale as slices land and as source files change. Keep it honest:
 
 ## Last full reconcile
 
-**2026-07-21**, snapshot from commit `67d01a62` on
-`feature/docker-e2e-backend-integration` (`npx vitest run tests/unit
-tests/integration tests/compliance --coverage --reporter=dot`, full
-suite — explicit dir targets to satisfy the per-iteration full-suite
-guard hook, equivalent to a bare `--coverage` run; buckets below
-re-derived directly from `coverage/coverage-summary.json`, not read off
-printed totals).
+**2026-07-22**, snapshot from `test/mid-high-coverage-batch-1`
+(`npx vitest run tests/unit tests/integration tests/compliance
+--coverage --reporter=dot`, full suite).
 
-Statements 87.7% (16375/18671), Branches 78.49% (13100/16690), Functions
-87.64% (1980/2259), **Lines 88.32%** (15785/17871) — **up** from the
-prior reconcile's 86.33% lines (commit `94e2fc62`, 2026-07-15),
-consistent with the #228 batch-1 slices (auditLogger.js,
-clinical-unit.routes.js, logs.routes.js, import-lgpd.controller.js, and
-others) landing since. Branches remains the weakest dimension by a wide
-margin, same as the prior reconcile.
+Statements 88.8% (16581/18671), Branches 79.71% (13305/16690), Functions
+88.44% (1998/2259), **Lines 89.44%** (15984/17871) — up from the prior
+reconcile's 88.32% lines (commit `67d01a62`, 2026-07-21), consistent
+with the patient.service.js 3-way fan-out landing since.
 
-The same run showed 5/267 test files (123/5101 tests) failing —
-`patient.model.unit.test.js` (#218), `sample.model.unit.test.js` /
-`sample.model.gaps.test.js` / `sample.models.test.js` (#224),
-`sample-graph-validator.service.test.js` (#222's `SampleGraphValidator.js`
-gaps). Same five as the 2026-07-15 reconcile, no new regressions — all
-still blocked on Denise's design calls, don't re-file.
+**Known limitation of this reconcile method — see issue #242**: for
+files whose tests span both a Vitest-isolated unit test (plain ESM
+`import`, or a `require.cache`-reload pattern) and an integration test
+that loads the real `app.js`, the merged full-suite number can
+understate real coverage significantly (not just a small swing — up to
+~20 points), the same drift class as `dyeallpies-skills-pack#99`.
+Confirmed this session for three files that looked like MID-HIGH
+regressions but are actually fine in isolation: `equipment.routes.js`
+(81.92/76.47 merged vs **100/92.94 isolated**, matches its prior
+recorded entry and issue #238), `fieldEncryption.js` (76.19/82.6 merged
+vs **100/100 isolated**), `User.js` (83.67/78.94 merged vs **98.03/97.89
+isolated**). All three are corrected back into GOOD below rather than
+listed as MID-HIGH candidates. **Before treating any MID-HIGH entry as a
+real slice candidate, re-run that file's own test(s) alone with
+`--coverage.include="<path>"` first** if it has both a unit and an
+integration test file — don't trust the merged number for those.
 
 **Bucket lists below are freshly regenerated this session** off the new
-`coverage-summary.json`. Cutoffs unchanged: ZERO = 0%, LOW = 1-49%,
-MID-LOW = 50-69%, MID-HIGH = 70-84%, GOOD = >=85%.
+`coverage-summary.json`, then corrected per the drift check above.
+Cutoffs unchanged: ZERO = 0%, LOW = 1-49%, MID-LOW = 50-69%,
+MID-HIGH = 70-84%, GOOD = >=85%.
 
 ## How to use this when picking a slice
 
@@ -168,11 +172,14 @@ in their commit history, not here.
 
 ```
 src/services/mqtt-telemetry.service.js                         71.42 / 78.09   (issue #160 — HMAC bypass bug)
-src/services/patient.service.js                                78.80 / 59.90   (3-way test-writer fan-out landed 2026-07-22: encryption/clinical-unit, validation/duplicate, query/update/delete slices, 82 new tests across 8 test files/200 tests total, isolated run confirmed. Two genuinely unreachable branches remain (issues #240, #241 filed) and branch% is still the weak dimension — remaining gaps are mostly deep error-path combinations, not whole untested methods; a further slice is optional, not urgent)
+src/services/patient.service.js                                77.92 / 65.52   (3-way test-writer fan-out landed 2026-07-22: encryption/clinical-unit, validation/duplicate, query/update/delete slices, 82 new tests across 8 test files/200 tests total. Two genuinely unreachable branches remain (issues #240, #241 filed) and branch% is still the weak dimension — remaining gaps are mostly deep error-path combinations, not whole untested methods; a further slice is optional, not urgent. Number moves slightly between this and the isolated-sibling-only run per the prior handoff — within the drift class noted above, not re-chased since both agree it's optional)
 src/workers/workers/result-worker.js                           76.66 / 66.07   (issue #146/#164 — rename + yauzl)
 src/services/SampleGraphValidator.js                           77.69 / 66.66   (issue #222 — legacy-schema migration, design fork)
 src/workers/neo4jProjection.worker.js                          79.62 / 73.33   (remaining gap is the `require.main === module` CLI entry block, lines 82-99 — not coverable in-process, same accepted-gap pattern as createFirstAdmin.js)
 ```
+
+Checked and corrected out of this bucket this session (issue #242 drift,
+confirmed 100/GOOD in isolation): `equipment.routes.js`, `User.js`.
 
 Note: `sample.service.js`, `import.service.js`,
 `batch-validation-engine.service.js`, `audit.controller.js`, and
