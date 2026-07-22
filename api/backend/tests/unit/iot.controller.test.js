@@ -441,4 +441,122 @@ describe('iot.controller', () => {
       );
     });
   }, 15000);
+
+  it('não notifica destinatários quando não há usuários ativos com e-mail', async () => {
+    usersCollection.find.mockReturnValue({
+      project: vi.fn().mockReturnValue({
+        toArray: vi.fn().mockResolvedValue([{ email: null }]),
+      }),
+    });
+
+    const req = { body: { sensorId: 'sensor-1', temperature: 12.5 } };
+    const res = createResponse();
+
+    await ingestTelemetry(req, res);
+
+    await vi.waitFor(() => {
+      expect(temperatureIncidentsCollection.insertOne).toHaveBeenCalled();
+    });
+    expect(sendIncidentAlertEmailMock).not.toHaveBeenCalled();
+  }, 15000);
+
+  it('loga aviso quando a quarentena de cadeia fria é acionada', async () => {
+    const loggerModule = require('../../src/utils/logger');
+    const warnSpy = vi.spyOn(loggerModule, 'warn').mockImplementation(() => undefined);
+    quarantineByColdChainIncidentMock.mockResolvedValue({
+      triggered: true,
+      incidentId: 'incident-1',
+      sensorKey: 'sensor-1',
+      matched: 2,
+      quarantined: 2,
+      movements: ['m1'],
+    });
+
+    const req = { body: { sensorId: 'sensor-1', temperature: 12.5 } };
+    const res = createResponse();
+
+    await ingestTelemetry(req, res);
+
+    await vi.waitFor(() => {
+      expect(warnSpy).toHaveBeenCalledWith(
+        '[IOT_INCIDENT] Quarentena de cadeia fria aplicada',
+        expect.objectContaining({ incidentId: 'incident-1', sensorKey: 'sensor-1' })
+      );
+    });
+    warnSpy.mockRestore();
+  }, 15000);
+
+  it('loga erro quando a aplicação da quarentena de cadeia fria falha', async () => {
+    const loggerModule = require('../../src/utils/logger');
+    const errorSpy = vi.spyOn(loggerModule, 'error').mockImplementation(() => undefined);
+    quarantineByColdChainIncidentMock.mockRejectedValue(new Error('quarantine boom'));
+
+    const req = { body: { sensorId: 'sensor-1', temperature: 12.5 } };
+    const res = createResponse();
+
+    await ingestTelemetry(req, res);
+
+    await vi.waitFor(() => {
+      expect(errorSpy).toHaveBeenCalledWith(
+        '[IOT_INCIDENT] Falha ao aplicar quarentena de cadeia fria:',
+        'quarantine boom'
+      );
+    });
+    errorSpy.mockRestore();
+  }, 15000);
+
+  it('usa sensorId como sensorName de fallback quando metadata não possui sensorName', async () => {
+    temperatureIncidentCreateMock.mockImplementation((payload) => payload);
+    sensorMetadataLeanMock.mockResolvedValueOnce({
+      sensorId: 'sensor-3',
+      temperaturePolicy: { _id: 'policy-1', minTemp: 2, maxTemp: 8 },
+    });
+
+    const req = { body: { sensorId: 'sensor-3', temperature: 12.5 } };
+    const res = createResponse();
+
+    await ingestTelemetry(req, res);
+
+    await vi.waitFor(() => {
+      expect(temperatureIncidentCreateMock).toHaveBeenCalledWith(
+        expect.objectContaining({ sensorKey: 'sensor-3', sensorName: 'sensor-3' })
+      );
+    });
+  }, 15000);
+
+  it('continua processamento quando saveTelemetryPoint falha ao persistir no InfluxDB', async () => {
+    const loggerModule = require('../../src/utils/logger');
+    const errorSpy = vi.spyOn(loggerModule, 'error').mockImplementation(() => undefined);
+    saveTelemetryPointMock.mockRejectedValue(new Error('influx boom'));
+
+    const req = { body: { sensorId: 'sensor-2', temperature: 5 } };
+    const res = createResponse();
+
+    await ingestTelemetry(req, res);
+
+    expect(res.statusCode).toBe(200);
+    await vi.waitFor(() => {
+      expect(errorSpy).toHaveBeenCalledWith(
+        '[ISO20387][IOT] Falha ao persistir telemetria no InfluxDB:',
+        'influx boom'
+      );
+    });
+    errorSpy.mockRestore();
+  }, 15000);
+
+  it('não dispara alerta quando a política de temperatura tem limites não numéricos', async () => {
+    sensorMetadataLeanMock.mockResolvedValueOnce({
+      sensorId: 'sensor-2',
+      sensorName: 'sensor-2',
+      temperaturePolicy: { _id: 'policy-1', minTemp: 'not-a-number', maxTemp: 8 },
+    });
+
+    const req = { body: { sensorId: 'sensor-2', temperature: 12.5 } };
+    const res = createResponse();
+
+    await ingestTelemetry(req, res);
+
+    expect(res.statusCode).toBe(200);
+    expect(sendCriticalAlertEmailMock).not.toHaveBeenCalled();
+  }, 15000);
 });
