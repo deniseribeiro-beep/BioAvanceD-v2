@@ -118,6 +118,18 @@ describe('POST /api/measurement-units', () => {
       .send({ name: 'µL', symbol: 'µL' });
     expect([200, 201, 422]).toContain(res.status);
   });
+
+  it('returns 422 when payload fails model validation', async () => {
+    app.locals.db = createDbMock({ measurementUnits: createCollectionMock() });
+
+    const res = await request(app)
+      .post('/api/measurement-units')
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({});
+    expect(res.status).toBe(422);
+    expect(res.body.success).toBe(false);
+    expect(Array.isArray(res.body.details)).toBe(true);
+  });
 });
 
 describe('PUT /api/measurement-units/:id', () => {
@@ -274,5 +286,118 @@ describe('GET /api/quality-descriptions', () => {
       .get('/api/quality-descriptions')
       .set('Authorization', `Bearer ${makeToken(2)}`);
     expect(res.status).toBe(200);
+  });
+});
+
+// ── db-unavailable (503) and error (500) branches ─────────
+// Exercised once via /api/measurement-units — shared factory code,
+// covers the equivalent branch for all 5 mounted instances.
+describe('db-not-available (503) branches', () => {
+  it('GET / returns 503 when db is unavailable', async () => {
+    app.locals.db = null;
+    const res = await request(app)
+      .get('/api/measurement-units')
+      .set('Authorization', `Bearer ${makeToken(2)}`);
+    expect(res.status).toBe(503);
+    expect(res.body.success).toBe(false);
+  });
+
+  it('GET /:id returns 503 when db is unavailable', async () => {
+    app.locals.db = null;
+    const res = await request(app)
+      .get('/api/measurement-units/507f1f77bcf86cd799439011')
+      .set('Authorization', `Bearer ${makeToken(2)}`);
+    expect(res.status).toBe(503);
+  });
+
+  it('POST / returns 503 when db is unavailable', async () => {
+    app.locals.db = null;
+    const res = await request(app)
+      .post('/api/measurement-units')
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({ name: 'µL', symbol: 'µL' });
+    expect(res.status).toBe(503);
+  });
+
+  it('PUT /:id returns 503 when db is unavailable', async () => {
+    app.locals.db = null;
+    const res = await request(app)
+      .put('/api/measurement-units/507f1f77bcf86cd799439011')
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({ name: 'Updated' });
+    expect(res.status).toBe(503);
+  });
+
+  it('DELETE /:id returns 503 when db is unavailable', async () => {
+    app.locals.db = null;
+    const res = await request(app)
+      .delete('/api/measurement-units/507f1f77bcf86cd799439011')
+      .set('Authorization', `Bearer ${makeToken(4)}`);
+    expect(res.status).toBe(503);
+  });
+});
+
+describe('unexpected-error (500) branches', () => {
+  it('GET / returns 500 when the query throws', async () => {
+    const coll = createCollectionMock({
+      find: vi.fn().mockImplementation(() => { throw new Error('boom'); }),
+    });
+    app.locals.db = createDbMock({ measurementUnits: coll });
+
+    const res = await request(app)
+      .get('/api/measurement-units')
+      .set('Authorization', `Bearer ${makeToken(2)}`);
+    expect(res.status).toBe(500);
+    expect(res.body.success).toBe(false);
+  });
+
+  it('GET /:id returns 500 when the query throws', async () => {
+    const coll = createCollectionMock({
+      findOne: vi.fn().mockRejectedValue(new Error('boom')),
+    });
+    app.locals.db = createDbMock({ measurementUnits: coll });
+
+    const res = await request(app)
+      .get('/api/measurement-units/507f1f77bcf86cd799439011')
+      .set('Authorization', `Bearer ${makeToken(2)}`);
+    expect(res.status).toBe(500);
+  });
+
+  it('POST / returns 500 when insertOne throws', async () => {
+    const coll = createCollectionMock({
+      insertOne: vi.fn().mockRejectedValue(new Error('boom')),
+    });
+    app.locals.db = createDbMock({ measurementUnits: coll });
+
+    const res = await request(app)
+      .post('/api/measurement-units')
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({ unitID: 99, description: 'Microlitro' });
+    expect(res.status).toBe(500);
+  });
+
+  it('PUT /:id returns 500 when findOneAndUpdate throws', async () => {
+    const coll = createCollectionMock({
+      findOneAndUpdate: vi.fn().mockRejectedValue(new Error('boom')),
+    });
+    app.locals.db = createDbMock({ measurementUnits: coll });
+
+    const res = await request(app)
+      .put('/api/measurement-units/507f1f77bcf86cd799439011')
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({ name: 'Updated' });
+    expect(res.status).toBe(500);
+  });
+
+  it('DELETE /:id returns 500 when deleteOne throws', async () => {
+    const coll = createCollectionMock({
+      deleteOne: vi.fn().mockRejectedValue(new Error('boom')),
+    });
+    app.locals.db = createDbMock({ measurementUnits: coll });
+
+    const res = await request(app)
+      .delete('/api/measurement-units/507f1f77bcf86cd799439011')
+      .set('Authorization', `Bearer ${makeToken(4)}`);
+    expect(res.status).toBe(500);
   });
 });
