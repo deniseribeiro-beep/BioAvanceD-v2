@@ -168,7 +168,7 @@ in their commit history, not here.
 
 ```
 src/services/mqtt-telemetry.service.js                         71.42 / 78.09   (issue #160 — HMAC bypass bug)
-src/services/patient.service.js                                74.39 / 63.56   (large gap despite 5 existing test files/118 tests — isolated run confirmed the number; nearly every method (encrypt/decryptSensitivePatientFields, resolveClinicalUnitSnapshot, applyDeceasedRepresentativeRules, checkIdentifierConflict, createPatient, listPatients, searchPatients, updatePatient, consent-token flows, deletePatient) has uncovered branches, not just createPatient/updatePatient error paths — likely needs its own multi-file fan-out, not a single slice)
+src/services/patient.service.js                                78.80 / 59.90   (3-way test-writer fan-out landed 2026-07-22: encryption/clinical-unit, validation/duplicate, query/update/delete slices, 82 new tests across 8 test files/200 tests total, isolated run confirmed. Two genuinely unreachable branches remain (issues #240, #241 filed) and branch% is still the weak dimension — remaining gaps are mostly deep error-path combinations, not whole untested methods; a further slice is optional, not urgent)
 src/workers/workers/result-worker.js                           76.66 / 66.07   (issue #146/#164 — rename + yauzl)
 src/services/SampleGraphValidator.js                           77.69 / 66.66   (issue #222 — legacy-schema migration, design fork)
 src/workers/neo4jProjection.worker.js                          79.62 / 73.33   (remaining gap is the `require.main === module` CLI entry block, lines 82-99 — not coverable in-process, same accepted-gap pattern as createFirstAdmin.js)
