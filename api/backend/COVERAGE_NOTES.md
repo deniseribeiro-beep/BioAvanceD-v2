@@ -115,7 +115,7 @@ Low priority (models/interfaces/one-off scripts — thin or non-request-path):
   returning 503 may be the same terminologySync gate; check before
   treating as a genuine gap)
 
-## LOW coverage (1-49% lines) — 1 file, full reconcile 2026-07-21, commit `67d01a62`
+## LOW coverage (1-49% lines) — 0 files, full reconcile 2026-07-21, commit `67d01a62`
 
 Sorted ascending (worst first) — lines% / branches%. All are the
 same audit/rename-drift cluster (issue #146) already tracked; none are
@@ -152,9 +152,14 @@ fallbacks — unreachable in practice since `resolveGovernanceStatus`
 always returns fully-populated status fields on every call path; filed as
 issue #243 (same dead-code pattern as #238), not a real gap.
 
-```
-src/controllers/fhir-import-staging.controller.js 30.23 / 41.17  (issue #146 cluster)
-```
+`fhir-import-staging.controller.js` moved to GOOD (100/100/100/100,
+isolated run) — thin controller delegating to
+`fhir-import-staging.service.js`; mocked the service directly (no
+`require.cache` tricks needed) and covered `stage`'s file-vs-body payload
+branch, its JSON-parse-failure 400, and every method's error-path
+statusCode/message fallback. Last file in the #146-cluster LOW bucket —
+bucket now empty; a fresh full reconcile is due per the cadence note
+below.
 
 Genuinely low (no matching filed issue found) — real slice candidates:
 none currently listed. Moved to GOOD (>=85%) since the 2026-07-14
