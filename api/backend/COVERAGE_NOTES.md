@@ -150,7 +150,7 @@ reconcile: `fhir.service.js`, `result-worker.js` (now MID-HIGH, see
 below), `LineageRepository.js`, `analysisValidation.service.js`,
 `import-lgpd.service.js`, `consent.validator.js`.
 
-## MID-HIGH coverage (70-84% lines) — 21 files, full reconcile 2026-07-21, commit `67d01a62`
+## MID-HIGH coverage (70-84% lines) — 20 files, full reconcile 2026-07-21, commit `67d01a62`
 
 Sorted ascending (worst first) — lines% / branches%. Not cross-checked
 against filed issues line-by-line (MID-HIGH files are closer to "done"
@@ -161,9 +161,10 @@ MeasurementUnit.js, result.routes.js, analysis-type.controller.js,
 auth.js, auditLogger.js, import-lgpd.controller.js,
 clinical-unit.routes.js, logs.routes.js, sensor.controller.js,
 User.js, reports.routes.js, MongoAuditRepository.js, createFirstAdmin.js,
-mongo.js) have all moved out
-of this bucket into GOOD — per-slice narrative for those is in their
-commit history, not here.
+mongo.js) plus `equipment.routes.js` (100/92.94 — issue #238 filed for
+the remaining unreachable `if (req.user)` dead-code branches) have all
+moved out of this bucket into GOOD — per-slice narrative for those is
+in their commit history, not here.
 
 ```
 src/services/mqtt-telemetry.service.js                         71.42 / 78.09   (issue #160 — HMAC bypass bug)
@@ -171,7 +172,6 @@ src/services/patient.service.js                                74.39 / 63.56   (
 src/workers/workers/result-worker.js                           76.66 / 66.07   (issue #146/#164 — rename + yauzl)
 src/services/SampleGraphValidator.js                           77.69 / 66.66   (issue #222 — legacy-schema migration, design fork)
 src/workers/neo4jProjection.worker.js                          79.62 / 73.33   (remaining gap is the `require.main === module` CLI entry block, lines 82-99 — not coverable in-process, same accepted-gap pattern as createFirstAdmin.js)
-src/interface/routes/equipment.routes.js                       81.92 / 74.11
 src/controllers/import.controller.js                           82.23 / 75.86
 src/controllers/iot.controller.js                              82.50 / 73.52   (branches covered — see history archive; applyColdChainQuarantine catch + a couple of resolveTemperaturePolicy edge branches remain)
 src/services/security.service.js                               82.51 / 72.26
