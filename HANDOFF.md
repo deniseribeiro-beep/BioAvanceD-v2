@@ -1,11 +1,11 @@
 # HANDOFF
 
 **Written:** 2026-07-22, end of a test-loop iteration.
-**Branch:** `test/mid-high-coverage-batch-1` (pushed, commit `87cc284d`).
-**No issue was resolved this session** — a 3-way test-writer fan-out
-landed on `patient.service.js`, the file the prior handoff flagged as
-needing its own multi-file fan-out. Two informational findings filed
-(#240, #241); no bugs.
+**Branch:** `test/mid-high-coverage-batch-1` (pushed, commit `5f91e9fd`).
+**No issue was resolved this session, and no new test file landed** — a
+full coverage reconcile (as the prior handoff recommended) turned up a
+methodology bug in the reconcile itself rather than a real slice. One
+informational finding filed (#242); no product bugs.
 
 ## Repo state
 
@@ -16,59 +16,60 @@ needing its own multi-file fan-out. Two informational findings filed
   branches; `test/mid-high-coverage-batch-1` is the active work branch
   for this coverage push.
 
-## This session's slice
+## This session's work
 
-- Fanned out 3 `test-writer` agents on `src/services/patient.service.js`
-  (flagged in the prior handoff as too big for one slice), each owning a
-  distinct, non-overlapping group of methods and its own new test file:
-  - `patient.service.encryption-clinicalunit.gaps.unit.test.js` (9
-    tests) — Fabry-nested field encryption, decrypt fallback branches,
-    pre-existing-acronym `resolveClinicalUnitSnapshot` path,
-    `getPatientsCollection` index/collectionName-fallback branches.
-  - `patient.service.validation-duplicate.gaps.unit.test.js` (42
-    tests) — representative-of-deceased-patient validation,
-    normalization helpers, `checkIdentifierConflict`'s three return
-    shapes, `checkDuplicatePatient`'s date-parsing branches,
-    `createPatient`'s consentTemplateId/identifier-conflict branches.
-  - `patient.service.query-update.gaps.unit.test.js` (31 tests) —
-    `listPatients`/`searchPatients` filter and date-search branches,
-    `updatePatient`'s remaining error/query branches, the full
-    consent-token lifecycle (validate/accept/resend), `deletePatient`'s
-    query branch.
-  - Committed as 3 separate slice commits (`861272d6`, `718956bf`,
-    `afd2b898`) plus one `COVERAGE_NOTES.md` update commit (`87cc284d`).
-- Isolated coverage on `patient.service.js` (all 8 sibling test files,
-  200 tests, matching the baseline's methodology): 74.39%/63.56% →
-  **78.80%/59.90%** (lines/branches). Still MID-HIGH — branch% is the
-  weak dimension and what's left is deep error-path combinations, not
-  whole untested methods. A further slice here is optional now, not
-  urgent.
-- Two informational findings filed (not fixed — test-only scope):
-  - #240 — `createPatient`'s `NODE_ENV=test` consentTemplateId carve-out
-    is neutralized by `PatientModel.validate()`'s own unconditional
-    requirement (different error message, same net effect).
-  - #241 — two branches (`createPatient`'s clinical-unit-invalid guard,
-    `decryptSensitivePatientFields`'s outer catch) look structurally
-    unreachable via the public API — dead code, not a behavior bug.
-- Also filed `dyeallpies-skills-pack#99`: combining a `vi.mock()`-based
-  sibling test file with `require()`-based ones in one `--coverage` run
-  makes the merged per-line number swing in confusing, non-additive
-  ways (not a real regression) — cost real investigation time this
-  session; documented so the next session doesn't re-chase it.
+- Ran the full reconcile the prior handoff called for:
+  `npx vitest run tests/unit tests/integration tests/compliance
+  --coverage --reporter=dot`. Lines 88.32% → **89.44%**, branches
+  78.49% → **79.71%**.
+- Re-derived buckets from `coverage-summary.json` and found three files
+  that looked like new MID-HIGH regressions: `equipment.routes.js`
+  (81.92/76.47, down from its previously-recorded 100/92.94),
+  `fieldEncryption.js` (76.19/82.6, never listed before), `User.js`
+  (83.67/78.94, previously GOOD).
+- **Before writing tests for any of them, verified each in isolation**
+  (`--coverage.include="<path>"` against just that file's own test
+  file(s)) — all three came back essentially fully covered: 100/92.94,
+  100/100, 98.03/97.89 respectively. The merged full-suite number was
+  wrong, not the code's real coverage. This is the same drift class as
+  `dyeallpies-skills-pack#99` (mixing an isolation-heavy unit test with
+  an integration test that loads the real `app.js` makes the merged
+  number swing non-additively, sometimes by ~20 points) — confirmed
+  here for the first time on files *outside* patient.service.js's
+  sibling-file cluster, so it's broader than previously scoped.
+- Filed **#242** documenting the three repro cases and adding a
+  cross-check step to `COVERAGE_NOTES.md`'s reconcile guidance: for any
+  MID-HIGH file with both a unit and an integration test, re-verify in
+  isolation before treating the merged number as a real slice
+  candidate.
+- Corrected `COVERAGE_NOTES.md` accordingly (commit `5f91e9fd`):
+  `equipment.routes.js`/`User.js` moved back out of MID-HIGH,
+  `patient.service.js`'s number updated to the fresh reconcile's
+  77.92/65.52 (still optional, unchanged conclusion), reconcile date
+  bumped to 2026-07-22.
+- **No test file was written this session** — every MID-HIGH candidate
+  checked out as either issue-linked (mqtt-telemetry #160, result-worker
+  #146/#164, SampleGraphValidator #222, neo4jProjection.worker.js's
+  accepted CLI-entry gap, patient.service.js optional) or this drift
+  artifact. LOW/MID-LOW/ZERO buckets remain the same issue-linked-drift
+  or low-priority set as before — no change there.
 
 ## Recommended next slices
 
-`COVERAGE_NOTES.md`'s MID-HIGH bucket: `patient.service.js` remains
-listed (78.80/59.90, optional follow-up only). Everything else in
-MID-HIGH is issue-tagged (`mqtt-telemetry.service.js` #160,
-`result-worker.js` #146/#164, `SampleGraphValidator.js` #222,
-`neo4jProjection.worker.js`'s accepted CLI-entry gap). LOW/MID-LOW
-buckets are all issue-linked drift, not real slice candidates (see the
-file's own notes). **A fresh full coverage reconcile is due** — it's
-been several sessions since the 2026-07-21 one and multiple slices have
-landed since; the next session should regenerate `coverage-summary.json`
-buckets before picking a slice rather than trusting this stale-ish
-snapshot.
+`COVERAGE_NOTES.md`'s MID-HIGH bucket is now fully accounted for (all
+five entries are issue-linked or accepted-gap; `patient.service.js` is
+optional-only). **There is currently no genuinely untested real-logic
+slice candidate in the tracked buckets.** Options for the next session,
+roughly in order:
+1. Re-run the reconcile once #242's fix (if any tooling change comes of
+   it) or Denise's own work lands — buckets may shift.
+2. Consider whether any of the issue-linked LOW/MID-LOW files (the
+   audit/rename-drift #146 cluster) are now unblocked — check the
+   issues fresh rather than trusting this note.
+3. Look outside the backend unit/integration tiers entirely — e2e
+   (`tests/e2e/*.spec.ts`) or frontend coverage haven't been reconciled
+   in this push's cadence; may be worth a first pass if backend truly
+   has nothing left.
 
 ## Which skills to use
 
@@ -83,7 +84,11 @@ None queued.
 
 ## Session note
 
-`gh issue list` was denied by the auto-mode permission classifier mid-
-session (unrelated `gh issue create` calls worked fine); worked around
-by not needing the list output. Not chased further — consistent with
-prior handoffs' notes about classifier quirks around `gh`.
+Running the full-suite `--coverage` command twice near the start of the
+session (once for the reconcile, once trying to grep test-file/test
+counts from a re-run instead of the already-captured output) cost ~5
+extra minutes for no new information — the counts were available in the
+first run's output, just not grepped for on the first pass. Next time:
+capture the full tail/summary once and search within it rather than
+re-invoking the (slow) full suite a second time for a different slice
+of the same output.
