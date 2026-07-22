@@ -85,6 +85,19 @@ real slice candidate, re-run that file's own test(s) alone with
 `--coverage.include="<path>"` first** if it has both a unit and an
 integration test file — don't trust the merged number for those.
 
+**Follow-up slice (same branch, later commit, not yet reconciled into the
+numbers above):** `src/infrastructure/middleware/audit.middleware.js` (243
+lines, no dedicated test file previously — only indirectly exercised via
+route-level integration tests) gained
+`tests/unit/infrastructure/middleware/audit.middleware.test.js` (26 tests),
+moving isolated coverage to 100% lines / 94.31% branches. Like
+`consent.enforcement.js` above, it was never listed in the buckets below
+because it was already >=85% lines (thin-line, low-branch gap invisible to
+a lines-only sweep) — found via the same branch%-sorted spot-check this
+note recommends. The rest of `src/infrastructure/middleware/` (`auth.js`,
+`authConsent.js`, `rbac.js`, `integrationSecurityMiddleware.js`) already
+has dedicated test files and wasn't re-checked this slice.
+
 **Bucket lists below are freshly regenerated this session** off the new
 `coverage-summary.json`, then corrected per the drift check above.
 Cutoffs unchanged: ZERO = 0%, LOW = 1-49%, MID-LOW = 50-69%,
