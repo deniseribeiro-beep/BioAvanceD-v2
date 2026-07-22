@@ -32,14 +32,33 @@ stale as slices land and as source files change. Keep it honest:
 
 ## Last full reconcile
 
-**2026-07-22**, snapshot from `test/mid-high-coverage-batch-1`
-(`npx vitest run tests/unit tests/integration tests/compliance
---coverage --reporter=dot`, full suite).
+**2026-07-22 (afternoon)**, snapshot from `test/mid-high-coverage-batch-1`
+commit `fdd37e10` (`npx vitest run tests/unit tests/integration
+tests/compliance --coverage --reporter=dot`, full suite).
 
-Statements 88.8% (16581/18671), Branches 79.71% (13305/16690), Functions
-88.44% (1998/2259), **Lines 89.44%** (15984/17871) — up from the prior
-reconcile's 88.32% lines (commit `67d01a62`, 2026-07-21), consistent
-with the patient.service.js 3-way fan-out landing since.
+Statements **90.33%** (16866/18671), Branches **81.3%** (13570/16691),
+Functions **90.34%** (2041/2259), Lines **90.9%** (16245/17871) — up
+from the morning reconcile's 88.8/79.71/88.44/89.44 (commit `67d01a62`),
+driven by this session's `fhir-import-staging.controller.js`,
+`intakeWizard.routes.js`, and `audit-tsa.service.js` slices all landing
+at 100%. **Three of four dimensions (statements/functions/lines) are now
+past the 90% milestone** (`bioavanced-v2-conventions`); branches (81.3%)
+remains the sole laggard, up from the stale 79.71% figure.
+
+Run also surfaced **123 failing tests across 5 files** — not the 2 known
+pre-existing AES-256-GCM failures. Confirmed real (fails in isolation
+too, not cross-file pollution): `patient.model.unit.test.js`,
+`sample.model.gaps.test.js`, `sample.model.unit.test.js`,
+`sample.models.test.js`, `sample-graph-validator.service.test.js` all
+still use pre-rename field names (`patientID`/`cpf` instead of
+`participantId`/`identityDocument`, and the Sample-side equivalents) —
+the same participantId/specimenId/identityDocument canonicalization
+rename that commit `dbf0f448` fixed in 7 *other* files for
+#133/#134/#136/#137/#139 back on 2026-07-09, just missing these 5. Filed
+as **issue #244**; un-staling these fixtures (no product change
+expected) is a strong next-slice candidate, not just for coverage but
+because 123 red tests understate real product health in any future
+reconcile that trusts pass/fail counts.
 
 **Known limitation of this reconcile method — see issue #242**: for
 files whose tests span both a Vitest-isolated unit test (plain ESM
@@ -84,7 +103,7 @@ MID-HIGH = 70-84%, GOOD = >=85%.
    slice's own commit message is the narrative record now — don't add
    one here or to a separate history file.
 
-## ZERO coverage (0% lines) — 20 files, full reconcile 2026-07-21, commit `67d01a62`
+## ZERO coverage (0% lines) — 20 files, confirmed unchanged in the 2026-07-22 (afternoon) reconcile, commit `fdd37e10`
 
 Real logic, but broken-by-issue — see caveat above, not a real gap:
 - `src/workers/worker.js` (self-executing bootstrap entrypoint — calls
@@ -115,7 +134,7 @@ Low priority (models/interfaces/one-off scripts — thin or non-request-path):
   returning 503 may be the same terminologySync gate; check before
   treating as a genuine gap)
 
-## LOW coverage (1-49% lines) — 0 files, full reconcile 2026-07-21, commit `67d01a62`
+## LOW coverage (1-49% lines) — 0 files, confirmed unchanged in the 2026-07-22 (afternoon) reconcile, commit `fdd37e10`
 
 Sorted ascending (worst first) — lines% / branches%. All are the
 same audit/rename-drift cluster (issue #146) already tracked; none are
@@ -168,7 +187,7 @@ reconcile: `PatientIdentityService.js`, `MoveSampleUseCase.js`,
 `AllocateSampleUseCase.js`, `authConsent.js`,
 `patientBiomarkerTimeseries.service.js` — all #146-family fixes landed.
 
-## MID-LOW coverage (50-69% lines) — 3 files, full reconcile 2026-07-21, commit `67d01a62`
+## MID-LOW coverage (50-69% lines) — 3 files, confirmed unchanged in the 2026-07-22 (afternoon) reconcile, commit `fdd37e10`
 
 Sorted ascending (worst first) — lines% / branches%.
 
@@ -184,7 +203,7 @@ reconcile: `fhir.service.js`, `result-worker.js` (now MID-HIGH, see
 below), `LineageRepository.js`, `analysisValidation.service.js`,
 `import-lgpd.service.js`, `consent.validator.js`.
 
-## MID-HIGH coverage (70-84% lines) — 19 files, full reconcile 2026-07-21, commit `67d01a62`
+## MID-HIGH coverage (70-84% lines) — 5 files (plus 3 merged-vs-isolated drift cases below), confirmed in the 2026-07-22 (afternoon) reconcile, commit `fdd37e10`
 
 Sorted ascending (worst first) — lines% / branches%. Not cross-checked
 against filed issues line-by-line (MID-HIGH files are closer to "done"
