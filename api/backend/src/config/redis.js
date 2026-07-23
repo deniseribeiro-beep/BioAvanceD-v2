@@ -70,16 +70,6 @@ function createRedisConnection() {
   logger.info(`   username: ${REDIS_USERNAME || 'undefined'}`);
   logger.info(`   tls: ${shouldUseTls}`);
   logger.info(`   hasPassword: ${!!REDIS_PASSWORD}`);
-  
-  // Valida variáveis undefined
-  if (!redisUrl && !REDIS_HOST) {
-    logger.error('[ERROR] Variável REDIS_HOST/REDIS_URL não definida no .env');
-  }
-  if (!redisUrl && !REDIS_PORT) {
-    logger.error('[ERROR] Variável REDIS_PORT não definida no .env');
-  }
-  // Em ambiente local/dev, não exige senha
-
 
   // Configuração Redis
   const config = {
