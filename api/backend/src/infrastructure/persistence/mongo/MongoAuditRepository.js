@@ -3,12 +3,6 @@
  */
 const sampleMovementLedger = require('../../../utils/sampleMovementLedger');
 
-function assertExpectedCollectionName(actualName, expectedName) {
-  if (actualName !== expectedName) {
-    throw new Error(`MongoAuditRepository expected collection "${expectedName}" but received "${actualName}"`);
-  }
-}
-
 function createIsolatedCollectionView(collection) {
   const overrides = new Map();
 
@@ -52,9 +46,7 @@ class MongoAuditRepository {
    * @returns {Promise<{ movementID: number }>}
    */
   async appendImmutableAudit(input, session) {
-    const movementsCollectionName = 'sample_movements';
-    assertExpectedCollectionName(movementsCollectionName, 'sample_movements');
-    const movementsCollection = createIsolatedCollectionView(this.db.collection(movementsCollectionName));
+    const movementsCollection = createIsolatedCollectionView(this.db.collection('sample_movements'));
     sampleMovementLedger.enforceAppendOnlyCollection(movementsCollection, 'sample_movements');
     await sampleMovementLedger.ensureSampleMovementIndexes(movementsCollection);
 

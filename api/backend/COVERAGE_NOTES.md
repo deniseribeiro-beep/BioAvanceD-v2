@@ -228,6 +228,20 @@ statement/line gap is line 47 (unrelated), and the 50% function gap is
 the module-level `router` factory call not counted as a hit function
 (pre-existing, unrelated to this fix).
 
+**Issue #235 resolved (later session):** removed the dead
+`assertExpectedCollectionName` self-check and its unreachable throw
+branch from `MongoAuditRepository.js`'s `appendImmutableAudit` — both
+arguments were hardcoded literals at the single call site (no way to
+reach the mismatch branch). Git history confirmed it was leftover
+defensive scaffolding added alongside the append-only isolation Proxy
+wrapper (commit `d01f7ff6`), not a stub for missing variable-collection
+wiring: the repo never used the `CANONICAL_COLLECTIONS`/env-override
+config for this collection name, before or after that commit. Isolated
+coverage on the file is now 100/95.83/100/100
+(stmts/branches/funcs/lines) with the dead branch removed; the remaining
+95.83% branch gap is an unrelated `get()` trap ternary (line 23),
+pre-existing and unrelated to this fix.
+
 **Bucket lists below are freshly regenerated this session** off the new
 `coverage-summary.json`, then corrected per the drift check above.
 Cutoffs unchanged: ZERO = 0%, LOW = 1-49%, MID-LOW = 50-69%,
