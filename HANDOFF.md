@@ -1,60 +1,49 @@
 # HANDOFF
 
 **Written:** 2026-07-23, end of a fix-bugs iteration.
-**Branch:** `feature/docker-e2e-backend-integration` (commit `d704cf65`,
-pushed this session).
+**Branch:** `feature/docker-e2e-backend-integration` (commit `6739c2b7`,
+no new commits this session — see below).
 
 ## What happened this session
 
-Routed via `fix-bugs` for **issue #240** (`patient.service.js`: a
-`NODE_ENV === 'test'` carve-out on the `consentTemplateId`-required check
-in `PatientService.createPatient` was neutralized by
-`PatientModel.validate()` re-requiring the same field unconditionally a
-few lines later).
+Routed via `fix-bugs` for **issue #218**
+(`patient.model.unit.test.js`: `Patient.js`'s `validate()` allegedly
+missing ~20 business-rule validations the test asserts — cpf format,
+weight/heightCm, alphaGal/lysoGb3, comorbidity booleans,
+geneticVariant/icdCode/orphaCode/omimCode, icdReference, status enum,
+consentToken/consentAcceptedAt, clinicalUnit/clinicalUnitId type,
+representativeName type, sex enum).
 
-Traced reachability first (per `fix-bugs`' verify-before-deferring step)
-instead of treating the issue's "design call" framing as settled: grepped
-every real caller of `createPatient` (controllers/routes always supply a
-real `consentTemplateId` from user input — the carve-out is never live
-there since `NODE_ENV` isn't `'test'` in production) and every test in
-the suite that calls `createPatient` (none omit `consentTemplateId` and
-expect *success* under `NODE_ENV=test` — the only test touching the
-omission case was the one that pinned this exact bug). So the carve-out
-never had an observable effect through any real path; extending it into
-`PatientModel.validate` would have been a real, riskier behavior change
-nothing was asking for. Removed the dead carve-out instead — the service
-now always throws its clearer, field-prefixed error
-(`Template de consentimento (consentTemplateId) é obrigatório`) rather
-than sometimes falling through to the model's generic one.
+Traced before treating the issue's "needs a design call" framing as
+settled (per `fix-bugs`' verify-before-deferring step): ran
+`npx vitest run tests/unit/patient.model.unit.test.js --reporter=verbose`
+— all 58 tests pass against the current `src/models/Patient.js`. None of
+the fields/rules #218 listed are asserted by the test file anymore; it
+explicitly documents the opposite in places (`does not restrict sex to
+an enum`, `rejects a non-canonical field` for `cpf`). `git log` on the
+test file showed why: commit `d2544fcf` (2026-07-22, "un-stale
+patient/sample model unit tests after e2549bee canonicalization",
+`Fixes #245`) already rewrote it to match the current, deliberately
+simplified model. #218 was a narrower/earlier split of the same root
+cause as #245 (both trace to the `e2549bee` canonicalization rewrite)
+that never got closed when #245 landed.
 
-Fix: `api/backend/src/services/patient.service.js` — deleted the
-`isTestEnv` branch around the missing-`consentTemplateId` check. Un-
-weakened the pinned test in
-`api/backend/tests/unit/patient.service.validation-duplicate.gaps.unit.test.js`
-(`"still rejects ... via PatientModel validation"` → renamed to
-`"rejects ... in the test environment too (no env carve-out)"`, now
-asserting the service's own clear message instead of the model's generic
-one). 161 tests across the five touched patient-service/controller test
-files pass on both the fix branch and after merge.
+**No code or test changes this session** — the fix already existed on
+this branch from a prior session. Commented the trace on #218 (which
+commit resolved it, what was verified, why the two issues overlap) and
+closed it referencing `d2544fcf`.
 
-Branched `fix/patient-consenttemplateid-carveout` off
-`feature/docker-e2e-backend-integration`, committed (`0fa2acf5`,
-`Fixes #240`), pushed, commented the hash + reachability trace on the
-issue, merged `--no-ff` into `feature/docker-e2e-backend-integration`
-(`d704cf65`), re-verified on the merged tree, pushed, deleted the fix
-branch (local+remote), and closed #240 with the merge commit hash.
-
-`wrap-up` ran: no friction worth a skill edit — the reachability trace
-resolved the issue's own "needs a design call" framing cleanly, no
-lazy fixes, no scope creep (only `patient.service.js` + its test file
-touched), nothing newly security-relevant (validation strictness stayed
-the same or tightened, never relaxed), no deferred sub-points left on a
-closed issue.
+`wrap-up` ran: no friction — `git status` confirmed the tree stayed
+clean throughout (investigation-only), no lazy fixes, nothing
+security-relevant, no sub-point left stranded on a closed issue (#218
+had exactly one point and it's fully addressed). Nothing to file: the
+underlying bug was already fixed and its own issue (#245) already
+closed correctly.
 
 ## Repo state
 
 - `feature/docker-e2e-backend-integration` is current and pushed
-  (`d704cf65`), issue #240 closed.
+  (`6739c2b7`), issue #218 closed (no merge — no code changed).
 - No uncommitted changes, working tree clean.
 - `main` remains frozen — do not branch off it, merge into it, or push
   to it.
@@ -64,8 +53,7 @@ closed issue.
 **Target: 90% across all four coverage dimensions.** Last full reconcile
 (2026-07-22, before the #231 session): statements 91.05%, branches
 **82.3%** (lagging dimension), functions 90.88%, lines 91.5%. This
-session was a bug-fix iteration, not a coverage iteration — no fresh
-reconcile run.
+session touched no product/test code — no fresh reconcile run.
 
 ## Recommended next steps
 
@@ -77,6 +65,11 @@ unprompted: the dead-code cluster (#235, #236, #241, #243, #246, #247,
 (#67/#76/#236/#246/#247/#248, six occurrences, five from
 `master-data.routes.js` alone) strongly suggests a repo-wide sweep is
 more efficient than continued per-file spot fixes.
+
+Also worth a quick pass: check whether any other open issues are, like
+#218 was, already resolved by a later commit that fixed a broader/
+overlapping issue (#245-shaped situations) — a cheap sweep before
+picking fresh work.
 
 For coverage work: resume the branch%-sorted method in
 `COVERAGE_NOTES.md`; next unflagged candidates from the last sort were
