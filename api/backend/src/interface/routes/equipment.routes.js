@@ -201,21 +201,19 @@ router.post('/', authenticate, requirePermission('createPatient'), async (req, r
     const result = await equipmentCollection.insertOne(equipment);
 
     // Registra log de criação
-    if (req.user) {
-      const auditLogger = require('../../utils/auditLogger');
-      auditLogger.init(db);
-      await auditLogger.log({
-        action: 'CREATE',
-        entity: 'Equipment',
-        entityID: result.insertedId.toString(),
-        result: 'success',
-        severity: 'info',
-        message: 'Equipamento criado',
-        payload: { equipmentName: equipment.equipmentName || equipment.name || null },
-        req: req,
-        module: 'Equipamentos'
-      });
-    }
+    const auditLogger = require('../../utils/auditLogger');
+    auditLogger.init(db);
+    await auditLogger.log({
+      action: 'CREATE',
+      entity: 'Equipment',
+      entityID: result.insertedId.toString(),
+      result: 'success',
+      severity: 'info',
+      message: 'Equipamento criado',
+      payload: { equipmentName: equipment.equipmentName || equipment.name || null },
+      req: req,
+      module: 'Equipamentos'
+    });
 
     return res.status(201).json({
       success: true,
@@ -375,29 +373,27 @@ router.put('/:id', authenticate, requirePermission('createPatient'), async (req,
     logger.info(`Equipamento atualizado com sucesso: ${req.params.id}`);
 
     // Registra log de atualização
-    if (req.user) {
-      const auditLogger = require('../../utils/auditLogger');
-      auditLogger.init(db);
-      await auditLogger.log({
-        action: 'UPDATE',
-        entity: 'Equipment',
-        entityID: req.params.id,
-        result: 'success',
-        severity: 'info',
-        message: 'Equipamento atualizado',
-        payload: quarantineResult && quarantineResult.triggered
-          ? {
-            quarantineTriggered: true,
-            samplesMatched: quarantineResult.matched,
-            samplesQuarantined: quarantineResult.quarantined,
-            movementsCreated: quarantineResult.movements,
-            reason: quarantineResult.reason
-          }
-          : { quarantineTriggered: false },
-        req: req,
-        module: 'Equipamentos'
-      });
-    }
+    const auditLogger = require('../../utils/auditLogger');
+    auditLogger.init(db);
+    await auditLogger.log({
+      action: 'UPDATE',
+      entity: 'Equipment',
+      entityID: req.params.id,
+      result: 'success',
+      severity: 'info',
+      message: 'Equipamento atualizado',
+      payload: quarantineResult && quarantineResult.triggered
+        ? {
+          quarantineTriggered: true,
+          samplesMatched: quarantineResult.matched,
+          samplesQuarantined: quarantineResult.quarantined,
+          movementsCreated: quarantineResult.movements,
+          reason: quarantineResult.reason
+        }
+        : { quarantineTriggered: false },
+      req: req,
+      module: 'Equipamentos'
+    });
 
     return res.status(200).json({
       success: true,
@@ -459,20 +455,18 @@ router.delete('/:id', authenticate, requirePermission('createPatient'), async (r
     }
 
     // Registra log de deleção
-    if (req.user) {
-      const auditLogger = require('../../utils/auditLogger');
-      auditLogger.init(db);
-      await auditLogger.log({
-        action: 'DELETE',
-        entity: 'Equipment',
-        entityID: req.params.id,
-        result: 'success',
-        severity: 'warning',
-        message: 'Equipamento deletado',
-        req: req,
-        module: 'Equipamentos'
-      });
-    }
+    const auditLogger = require('../../utils/auditLogger');
+    auditLogger.init(db);
+    await auditLogger.log({
+      action: 'DELETE',
+      entity: 'Equipment',
+      entityID: req.params.id,
+      result: 'success',
+      severity: 'warning',
+      message: 'Equipamento deletado',
+      req: req,
+      module: 'Equipamentos'
+    });
 
     return res.status(200).json({
       success: true,
