@@ -3,6 +3,7 @@ import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
 const jwt = require('jsonwebtoken');
+const { ObjectId } = require('mongodb');
 const fhirImportStagingService = require('../../src/services/fhir-import-staging.service');
 const notificationService = require('../../src/services/NotificationService');
 const qualityDomain = require('../../src/services/quality-domain.service');
@@ -653,5 +654,362 @@ describe('FHIR import staging', () => {
     expect(db.collections.samples.docs[0].final_grade).toBe('A');
     expect(db.collections.samples.docs[0].axis_penalties.length).toBeGreaterThan(0);
     expect(db.collections.samples.docs[0].calculation_trace.axes.length).toBeGreaterThan(0);
+  });
+
+  it('rejeita staging quando banco de dados não está disponível', async () => {
+    await expect(
+      fhirImportStagingService.stageBundle(null, signedBundle, { fileName: 'bundle.json' })
+    ).rejects.toThrow('Banco de dados não disponível');
+  });
+
+  it('aceita batchId como instância de ObjectId em getBatch', async () => {
+    const staged = await fhirImportStagingService.stageBundle(db, signedBundle, { fileName: 'bundle.json' });
+    const objectIdBatchId = new ObjectId();
+    db.collections.import_batches.docs[0]._id = objectIdBatchId;
+    db.collections.import_staging_records.docs.forEach((doc) => { doc.batchId = objectIdBatchId; });
+
+    const result = await fhirImportStagingService.getBatch(db, objectIdBatchId);
+    expect(result.batch._id).toBe(objectIdBatchId);
+  });
+
+  it('getBatch rejeita lote inexistente com 404', async () => {
+    await expect(fhirImportStagingService.getBatch(db, 'lote-inexistente')).rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  describe('getConsentStatus', () => {
+    it('usa fallback de buildWorkflowSnapshot quando o registro ainda não tem campos de workflow persistidos', async () => {
+      const staged = await fhirImportStagingService.stageBundle(db, signedBundle, { fileName: 'bundle.json' });
+
+      const status = await fhirImportStagingService.getConsentStatus(db, staged.batch._id);
+
+      expect(status.records[0].consentStatus).toBe('SIGNED');
+      expect(status.records[0].workflowStatus).toBe('SIGNED');
+      expect(status.records[1].consentStatus).toBe('NOT_REQUIRED');
+      expect(status.records[1].workflowStatus).toBe('NEEDS_REVIEW');
+    });
+
+    it('usa os campos de workflow já persistidos no registro quando presentes', async () => {
+      const bundle = {
+        resourceType: 'Bundle',
+        entry: [
+          {
+            resource: {
+              resourceType: 'Patient',
+              id: 'P-STATUS',
+              name: [{ text: 'Paciente Status' }],
+              identifier: [{ value: 'DOC-STATUS' }],
+              telecom: [{ system: 'email', value: 'status@example.org' }],
+            },
+          },
+          { resource: { resourceType: 'Specimen', id: 'S-STATUS', subject: { reference: 'Patient/P-STATUS' }, type: { text: 'SANGUE' } } },
+        ],
+      };
+      const staged = await fhirImportStagingService.stageBundle(db, bundle, { fileName: 'bundle.json' });
+      await fhirImportStagingService.sendConsents(db, staged.batch._id, { userID: 'admin' });
+
+      const status = await fhirImportStagingService.getConsentStatus(db, staged.batch._id);
+
+      expect(status.records[0].consentStatus).toBe('PENDING');
+      expect(status.records[0].workflowStatus).toBe('TCLE_SENT');
+    });
+  });
+
+  describe('attachExternalDocument', () => {
+    it('rejeita quando o registro de staging não é encontrado', async () => {
+      const staged = await fhirImportStagingService.stageBundle(db, signedBundle, { fileName: 'bundle.json' });
+
+      await expect(
+        fhirImportStagingService.attachExternalDocument(db, staged.batch._id, 'registro-inexistente', { userID: 'admin' })
+      ).rejects.toMatchObject({ statusCode: 404 });
+    });
+
+    it('anexa documentação externa, libera o registro e atualiza a amostra correspondente', async () => {
+      const bundle = {
+        resourceType: 'Bundle',
+        entry: [
+          {
+            resource: {
+              resourceType: 'Patient',
+              id: 'P-EXT',
+              name: [{ text: 'Paciente Externo' }],
+              identifier: [{ value: 'DOC-EXT' }],
+            },
+          },
+          { resource: { resourceType: 'Specimen', id: 'S-EXT', subject: { reference: 'Patient/P-EXT' }, type: { text: 'SANGUE' } } },
+        ],
+      };
+      const staged = await fhirImportStagingService.stageBundle(db, bundle, { fileName: 'bundle.json' });
+      const recordId = db.collections.import_staging_records.docs[0]._id;
+      db.collections.samples.docs.push({ _id: 'sample-ext', specimenId: 'S-EXT' });
+
+      const result = await fhirImportStagingService.attachExternalDocument(db, staged.batch._id, recordId, {});
+
+      const updatedRecord = db.collections.import_staging_records.docs.find((doc) => doc._id === recordId);
+      expect(updatedRecord.status).toBe('COMMITTED');
+      expect(updatedRecord.consentStatus).toBe('EXTERNAL_ATTACHED');
+      expect(updatedRecord.externalDocument).toMatchObject({ attachedBy: null, validatedBy: null, note: null });
+      const updatedSample = db.collections.samples.docs.find((doc) => doc.specimenId === 'S-EXT');
+      expect(updatedSample.consentStatus).toBe('EXTERNAL_ATTACHED');
+      expect(updatedSample.availabilityStatus).toBe('AVAILABLE');
+      expect(db.collections.audit_logs.docs.some((doc) => doc.action === 'FHIR_IMPORT_EXTERNAL_DOCUMENT_ATTACHED')).toBe(true);
+      expect(result.records[0].workflowStatus).toBe('EXTERNAL_ATTACHED');
+    });
+
+    it('registra attachedBy/validatedBy e a nota quando fornecidos', async () => {
+      const bundle = {
+        resourceType: 'Bundle',
+        entry: [
+          { resource: { resourceType: 'Patient', id: 'P-EXT2', name: [{ text: 'Paciente Externo 2' }], identifier: [{ value: 'DOC-EXT2' }] } },
+          { resource: { resourceType: 'Specimen', id: 'S-EXT2', subject: { reference: 'Patient/P-EXT2' }, type: { text: 'SANGUE' } } },
+        ],
+      };
+      const staged = await fhirImportStagingService.stageBundle(db, bundle, { fileName: 'bundle.json' });
+      const recordId = db.collections.import_staging_records.docs[0]._id;
+
+      await fhirImportStagingService.attachExternalDocument(db, staged.batch._id, recordId, { userID: 'admin-1', note: '  Documento validado manualmente  ' });
+
+      const updatedRecord = db.collections.import_staging_records.docs.find((doc) => doc._id === recordId);
+      expect(updatedRecord.externalDocument).toMatchObject({
+        attachedBy: 'admin-1',
+        validatedBy: 'admin-1',
+        note: 'Documento validado manualmente',
+      });
+    });
+  });
+
+  describe('validateBatch', () => {
+    it('ignora registros já COMMITTED ou CONSENT_SEND_FAILED e recalcula os demais', async () => {
+      const bundle = {
+        resourceType: 'Bundle',
+        entry: [
+          { resource: { resourceType: 'Patient', id: 'P-VB1', name: [{ text: 'Paciente VB1' }], identifier: [{ value: 'DOC-VB1' }], telecom: [{ system: 'email', value: 'vb1@example.org' }] } },
+          { resource: { resourceType: 'Specimen', id: 'S-VB1', subject: { reference: 'Patient/P-VB1' }, type: { text: 'SANGUE' } } },
+        ],
+      };
+      const staged = await fhirImportStagingService.stageBundle(db, bundle, { fileName: 'bundle.json' });
+      const record = db.collections.import_staging_records.docs[0];
+      record.status = 'COMMITTED';
+
+      const result = await fhirImportStagingService.validateBatch(db, staged.batch._id);
+
+      expect(result.records[0].status).toBe('COMMITTED');
+    });
+
+    it('marca PENDING_CONSENT quando TCLE já foi enviado mas ainda não assinado', async () => {
+      const bundle = {
+        resourceType: 'Bundle',
+        entry: [
+          { resource: { resourceType: 'Patient', id: 'P-VB2', name: [{ text: 'Paciente VB2' }], identifier: [{ value: 'DOC-VB2' }], telecom: [{ system: 'email', value: 'vb2@example.org' }] } },
+          { resource: { resourceType: 'Specimen', id: 'S-VB2', subject: { reference: 'Patient/P-VB2' }, type: { text: 'SANGUE' } } },
+        ],
+      };
+      const staged = await fhirImportStagingService.stageBundle(db, bundle, { fileName: 'bundle.json' });
+      await fhirImportStagingService.sendConsents(db, staged.batch._id, { userID: 'admin' });
+
+      const result = await fhirImportStagingService.validateBatch(db, staged.batch._id);
+
+      expect(result.records[0].status).toBe('PENDING_CONSENT');
+      expect(result.records[0].warnings[0].message).toBe('TCLE assinado não encontrado para este paciente.');
+    });
+
+    it('marca VALID com aviso de TCLE pendente quando não há erro, assinatura nem envio', async () => {
+      const bundle = {
+        resourceType: 'Bundle',
+        entry: [
+          { resource: { resourceType: 'Patient', id: 'P-VB3', name: [{ text: 'Paciente VB3' }], identifier: [{ value: 'DOC-VB3' }], telecom: [{ system: 'email', value: 'vb3@example.org' }] } },
+          { resource: { resourceType: 'Specimen', id: 'S-VB3', subject: { reference: 'Patient/P-VB3' }, type: { text: 'SANGUE' } } },
+        ],
+      };
+      const staged = await fhirImportStagingService.stageBundle(db, bundle, { fileName: 'bundle.json' });
+
+      const result = await fhirImportStagingService.validateBatch(db, staged.batch._id);
+
+      expect(result.records[0].status).toBe('VALID');
+      expect(result.records[0].warnings[0].message).toBe('TCLE ainda não enviado para assinatura.');
+    });
+  });
+
+  describe('sendConsents branches adicionais', () => {
+    it('pula registros já COMMITTED ou READY_TO_COMMIT', async () => {
+      const staged = await fhirImportStagingService.stageBundle(db, signedBundle, { fileName: 'bundle.json' });
+
+      const result = await fhirImportStagingService.sendConsents(db, staged.batch._id, { userID: 'admin' });
+
+      expect(result.consentResults[0]).toMatchObject({ status: 'READY_TO_COMMIT', skipped: true });
+    });
+
+    it('pula registros com erros de validação bloqueantes (não apenas e-mail ausente)', async () => {
+      const bundle = {
+        resourceType: 'Bundle',
+        entry: [
+          { resource: { resourceType: 'Specimen', id: 'S-BLOCKED', type: { text: 'SANGUE' } } },
+        ],
+      };
+      const staged = await fhirImportStagingService.stageBundle(db, bundle, { fileName: 'bundle.json' });
+
+      const result = await fhirImportStagingService.sendConsents(db, staged.batch._id, { userID: 'admin' });
+
+      expect(result.consentResults[0]).toMatchObject({ status: 'ERROR', skipped: true, reason: 'validation_errors' });
+    });
+
+    it('marca NEEDS_REVIEW quando o e-mail do paciente está ausente ou inválido no momento do envio', async () => {
+      const bundle = {
+        resourceType: 'Bundle',
+        entry: [
+          { resource: { resourceType: 'Patient', id: 'P-NOEMAIL', name: [{ text: 'Paciente Sem Email' }], identifier: [{ value: 'DOC-NOEMAIL' }] } },
+          { resource: { resourceType: 'Consent', status: 'active', patient: { reference: 'Patient/P-NOEMAIL' } } },
+          { resource: { resourceType: 'Specimen', id: 'S-NOEMAIL', subject: { reference: 'Patient/P-NOEMAIL' }, type: { text: 'SANGUE' } } },
+        ],
+      };
+      const staged = await fhirImportStagingService.stageBundle(db, bundle, { fileName: 'bundle.json' });
+      const record = db.collections.import_staging_records.docs[0];
+      expect(record.status).toBe('READY_TO_COMMIT');
+      record.status = 'VALID';
+      record.errors = [];
+
+      const result = await fhirImportStagingService.sendConsents(db, staged.batch._id, { userID: 'admin' });
+
+      expect(result.consentResults[0]).toMatchObject({ status: 'NEEDS_REVIEW', sent: false });
+      const updatedRecord = db.collections.import_staging_records.docs[0];
+      expect(updatedRecord.consentStatus).toBe('NOT_REQUIRED');
+      expect(updatedRecord.availabilityStatus).toBe('BLOCKED');
+      expect(notificationService.sendConsentEmail).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('helpers de normalização com formatos FHIR alternativos', () => {
+    it('resolve identificador por fallback quando nenhum identifier bate com o sistema preferido', async () => {
+      const bundle = {
+        resourceType: 'Bundle',
+        entry: [
+          {
+            resource: {
+              resourceType: 'Patient',
+              id: 'P-ALTID',
+              name: [{ text: 'Paciente Alt' }],
+              identifier: [{ system: 'rg', value: 'RG-999' }],
+            },
+          },
+          { resource: { resourceType: 'Specimen', id: 'S-ALTID', subject: { reference: 'Patient/P-ALTID' }, type: { text: 'SANGUE' } } },
+        ],
+      };
+      const result = await fhirImportStagingService.stageBundle(db, bundle, { fileName: 'bundle.json' });
+
+      expect(result.records[0].normalized.patientDocument).toBe('RG-999');
+    });
+
+    it('lê extensões via valueCode e ignora extensão sem nenhum valor conhecido', async () => {
+      const bundle = {
+        resourceType: 'Bundle',
+        entry: [
+          { resource: { resourceType: 'Patient', id: 'P-EXTVAL', name: [{ text: 'Paciente ExtVal' }], identifier: [{ value: 'DOC-EXTVAL' }] } },
+          {
+            resource: {
+              resourceType: 'Specimen',
+              id: 'S-EXTVAL',
+              subject: { reference: 'Patient/P-EXTVAL' },
+              type: { text: 'SANGUE' },
+              extension: [
+                { url: 'urn:bioavanced:matrix', valueCode: 'plasma-code' },
+                { url: 'urn:bioavanced:unrelated-field' },
+              ],
+            },
+          },
+        ],
+      };
+      const result = await fhirImportStagingService.stageBundle(db, bundle, { fileName: 'bundle.json' });
+
+      expect(result.records[0].normalized.matrix).toBe('plasma-code');
+    });
+
+    it('usa fallback de coding para diseaseName, hpoLabel, biomarkerType, value e unit quando os campos de texto estão ausentes', async () => {
+      const bundle = {
+        resourceType: 'Bundle',
+        entry: [
+          { resource: { resourceType: 'Patient', id: 'P-FALLBACK', name: [{ text: 'Paciente Fallback' }], identifier: [{ value: 'DOC-FALLBACK' }] } },
+          { resource: { resourceType: 'Specimen', id: 'S-FALLBACK', subject: { reference: 'Patient/P-FALLBACK' }, type: { text: 'SANGUE' } } },
+          {
+            resource: {
+              resourceType: 'Condition',
+              subject: { reference: 'Patient/P-FALLBACK' },
+              code: { coding: [{ system: 'http://hl7.org/fhir/sid/icd-10', code: 'Q90', display: 'Coding Display Only' }] },
+            },
+          },
+          {
+            resource: {
+              resourceType: 'Observation',
+              subject: { reference: 'Patient/P-FALLBACK' },
+              specimen: { reference: 'Specimen/S-FALLBACK' },
+              code: { coding: [{ code: 'BIOM-1' }] },
+              valueString: 'positivo',
+            },
+          },
+          {
+            resource: {
+              resourceType: 'Observation',
+              subject: { reference: 'Patient/P-FALLBACK' },
+              specimen: { reference: 'Specimen/S-FALLBACK' },
+              code: { coding: [{ code: 'BIOM-2' }] },
+              valueQuantity: { value: 3, code: 'mg/dL' },
+            },
+          },
+        ],
+      };
+      const result = await fhirImportStagingService.stageBundle(db, bundle, { fileName: 'bundle.json' });
+      const record = result.records[0];
+
+      expect(record.normalized.diseases[0]).toMatchObject({ diseaseName: 'Coding Display Only', cid10: 'Q90' });
+      expect(record.normalized.biomarkers[0]).toMatchObject({ biomarkerType: 'BIOM-1', value: 'positivo' });
+      const unitFallbackBiomarker = record.normalized.biomarkers.find((biomarker) => biomarker.unit === 'mg/dL');
+      expect(unitFallbackBiomarker).toMatchObject({ biomarkerType: 'BIOM-2' });
+    });
+
+    it('calcula SPREC no formato sólido (tecido) e no modo de processamento desconhecido para matriz sólida', async () => {
+      const bundle = {
+        resourceType: 'Bundle',
+        entry: [
+          { resource: { resourceType: 'Patient', id: 'P-SOLID', name: [{ text: 'Paciente Sólido' }], identifier: [{ value: 'DOC-SOLID' }] } },
+          {
+            resource: {
+              resourceType: 'Specimen',
+              id: 'S-SOLID',
+              subject: { reference: 'Patient/P-SOLID' },
+              type: { text: 'TECIDO' },
+              extension: [
+                { url: 'urn:bioavanced:matrix', valueString: 'Tecido' },
+                { url: 'urn:bioavanced:sprecs-raw', valueString: 'TIS-EXC-A-A-FFPE-24H-C' },
+              ],
+            },
+          },
+        ],
+      };
+      const result = await fhirImportStagingService.stageBundle(db, bundle, { fileName: 'bundle.json' });
+
+      expect(result.records[0].normalized.rcsPreview.calculation_trace.sprec).toMatchObject({ matrix_type: 'solid' });
+    });
+
+    it('modo de processamento desconhecido para matriz sólida usa o payload sólido de X', async () => {
+      const bundle = {
+        resourceType: 'Bundle',
+        entry: [
+          { resource: { resourceType: 'Patient', id: 'P-SOLID-UNK', name: [{ text: 'Paciente Sólido Desconhecido' }], identifier: [{ value: 'DOC-SOLID-UNK' }] } },
+          {
+            resource: {
+              resourceType: 'Specimen',
+              id: 'S-SOLID-UNK',
+              subject: { reference: 'Patient/P-SOLID-UNK' },
+              type: { text: 'TECIDO' },
+              extension: [
+                { url: 'urn:bioavanced:matrix', valueString: 'Tecido' },
+                { url: 'urn:bioavanced:processing-unknown', valueBoolean: true },
+              ],
+            },
+          },
+        ],
+      };
+      const result = await fhirImportStagingService.stageBundle(db, bundle, { fileName: 'bundle.json' });
+
+      expect(result.records[0].normalized.rcsPreview.calculation_trace.sprec).toMatchObject({ matrix_type: 'solid', sampleType: 'X' });
+    });
   });
 });

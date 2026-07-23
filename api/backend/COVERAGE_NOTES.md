@@ -87,7 +87,6 @@ either).
 gap  branch% lines%  file
 141  82.5%   93.9%   src/services/import-lgpd.service.js  (partial slice landed 2026-07-23, session 4: importPatientsSmart/buildMappedPatientRow branches — clinicalUnit-present fillAcronym call, PatientModel.validate() rejection path (e.g. missing sex), and the responsavelNome/responsavelEmail explicit-mapping-target fallback (set vs. already-mapped) — via tests/unit/import-lgpd.service.importPatientsSmart.unit.test.js. Note: the fallback only fires when a mapping explicitly targets the literal key `responsavelNome`/`responsavelEmail` — the more common accented-column path (`responsavelnome` etc.) resolves straight to `representativeName`/`representativeEmail` via canonicalHeaderMap and never touches that fallback. File is 1693 lines; remaining gap is scattered across earlier parse helpers (parseSampleRow ~1150-1310, parsePatientRow ~1160-1200) plus a few defensive branches — no single large block left.)
  86  77.66%  92.8%   src/routes/intakeWizard.js  (partial slice landed 2026-07-23, session 6: isolated branches 77.66% -> 86.49% (299/385 -> 333/385) via tests/unit/intakeWizard.helpers.test.js + tests/unit/intakeWizard.routes.test.js — buildSampleDocumentFromIntake/buildPharmacologyData/normalizeNumber fallback branches, ensureConsentEmailSent's success/failure paths, resolveConsentDecision's no-identifier throw, sensor/equipment maintenanceStatus-fallback matching, storage-box BLOCKED/full-occupancy skip + Map-based occupancyGrid, canonicalViolations non-object guard, and patient-match's $or/ACTIVE-status-default branches. Filed #255: `collectNonCanonicalFields` and `ensureConsentEmailSent` are dead code (never called from any route, only reachable via `router._test`) — accounts for part of the remaining gap. Remainder is a mix of genuine small gaps (e.g. equipment status via maintenanceStatus-only fallback, empty box rows/cols, non-numeric locationID skip) and likely some `@vitest/coverage-v8` phantom-branch artifacts on guard-clause `if`s without `else` blocks (same class as the `sample.routes.js` follow-up noted above) — not re-verified this session.)
- 78  85.40%  92.6%   src/services/fhir-import-staging.service.js
  68  79.14%  89.9%   src/services/import.service.js
  56  74.54%  89.2%   src/services/NotificationService.js
  54  69.66%  98.8%   src/controllers/sample-file.controller.js
@@ -669,6 +668,33 @@ pattern to Dennis if the 90% branches milestone needs literal 100% on
 this file — it would require adding real `else` blocks to ~14 guard
 clauses in `sample.routes.js`, a product-code change out of test-loop's
 scope.
+
+`src/services/fhir-import-staging.service.js` closed out most of its Phase 1
+branch gap 2026-07-23 session 9: extended `tests/integration/fhir-import.test.js`
+(+20 tests, 35 total — no dedicated unit test file existed; controller/consent
+tests already mocked the service directly). Covered: `stageBundle` with an
+unavailable db, `getBatch` with an `ObjectId` instance and a not-found batch,
+`getConsentStatus`'s persisted-vs-fallback-to-`buildWorkflowSnapshot` field
+resolution, `attachExternalDocument` end-to-end (not-found 404, success with/
+without `note`/`userID`) — previously entirely untested at the service level,
+`validateBatch`'s COMMITTED/CONSENT_SEND_FAILED skip and its PENDING_CONSENT/
+VALID-with-warning branches, `sendConsents`'s COMMITTED/READY_TO_COMMIT skip,
+blocking-validation-error skip, and missing/invalid-email-at-send-time
+NEEDS_REVIEW path, plus several pure-helper fallback chains (`extractIdentifier`
+without a preferred-system match, `extensionValue` via `valueCode`, disease/
+biomarker/phenotype coding-only fallbacks, and `parseSprecRaw`'s solid/tissue
+branch including solid+processing-unknown). Moved isolated coverage
+91.26/85.36/95.16/92.62 -> 95.14/89.30/96.77/96.17 (stmts/branches/funcs/lines).
+**Filed issue #256**: `decorateRecord()` is dead code — defined but never
+called anywhere in `src/` or `tests/`, its logic already duplicated inline at
+each real call site. Remaining branch gap is a mix of that dead function
+(lines 287-297), the `audit()` helper's insert-failure catch branch (not
+exercised since the mock `audit_logs.insertOne` never rejects), a couple of
+`?? '')` optional-value fallbacks on rarely-populated fields, and what looks
+like more instances of the guard-clause-with-no-real-else phantom-branch
+artifact already documented elsewhere in this file (e.g. `attachExternalDocument`'s
+own `if (!record)` still shows as branch-incomplete despite both outcomes
+having a passing test) — not chased further this session.
 
 ## Maintaining this file
 
