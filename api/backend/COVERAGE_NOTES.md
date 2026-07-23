@@ -410,6 +410,25 @@ Not listed here (lower priority for slice-picking by a wide margin; a
 full reconcile regenerates this if needed). Ask for a fresh
 `--coverage --reporter=basic` run if you need this detail.
 
+**Follow-up slice #7 (2026-07-23, same branch):** a fresh full reconcile
+(`npx vitest run tests/unit tests/integration tests/compliance --coverage
+--reporter=dot`) gave 91.34/82.77/90.96/91.81
+(statements/branches/functions/lines), 1 known pre-existing failure
+(`sample-graph-validator.service.test.js` tampering test, same as prior
+reconciles). Branch%-sorted directly per this file's method; next
+candidate off the prior handoff's remaining list was
+`src/services/hl7Audit.service.js` (66.66/92.45 branches/lines isolated
+— confirmed real gap, not drift, via an isolated re-run first). Extended
+`tests/unit/hl7Audit.service.test.js` (+7 tests, 17 total) covering:
+`_hashFHIRResources`'s catch branch (both an `Error`-with-`.message` and
+a plain-string throw, to hit the `err.message || err` fallback),
+`_hashHL7Files`'s equivalent catch branch for a disk-read failure, and
+`buildHL7HashesForDate`'s item-without-sampleId/fileId skip branch (logs
+a warning via `continue`, doesn't block remaining items). Moved isolated
+coverage to 100/100/100/100. `label.routes.js` (68.29/97.64) and
+`sample.routes.js` (68.62/92.21) were also confirmed real gaps (not
+drift) this session but not yet worked — next candidates.
+
 ## Maintaining this file
 
 If `test-loop` finds this file stale (a listed ZERO/LOW file turns out
