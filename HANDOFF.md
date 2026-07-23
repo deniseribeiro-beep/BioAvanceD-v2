@@ -1,104 +1,121 @@
 # HANDOFF
 
-**Written:** 2026-07-23, end of a work-issue → resolve-issue (#242) +
-test-loop iteration.
-**Branch:** `feature/docker-e2e-backend-integration` (commit `e85e112a`,
+**Written:** 2026-07-23, end of a test-loop session (label.routes.js +
+sample.routes.js branch-coverage slices).
+**Branch:** `feature/docker-e2e-backend-integration` (commit `18ba9f35`,
 pushed).
 
 ## What happened this session
 
-Backlog had no issue named by Dennis; asked which of the open items to
-work (#250 needed an owner call, #242 was a pure docs/methodology fix,
-#228 a housekeeping pointer) — Dennis picked **#242** (full-suite
-`--coverage` reconcile understates several files' real coverage due to
-merged-vs-isolated drift, not real gaps).
+Dennis asked to raise both `label.routes.js` and `sample.routes.js`
+(the prior session's named next candidates, 68.29% and 68.62% branches
+isolated respectively) to 100%.
 
-The specific drift instance (`equipment.routes.js`, `fieldEncryption.js`,
-`User.js`) was already documented in the 2026-07-22 reconcile note in
-`api/backend/COVERAGE_NOTES.md`, but the *general* slice-picking guidance
-(item 4 under "How to use this when picking a slice") still made an
-unqualified claim — "the number here is trustworthy — no fresh isolated
-run needed" for MID-HIGH files. Added the merged-vs-isolated caveat
-directly to that guidance item. Committed on
-`fix/coverage-notes-drift-caveat` (`c44cd1bd`), merged (`7ea676b0`),
-issue #242 closed.
+Worked on branch `test/label-sample-routes-branch-coverage` (based on
+this integration branch), then merged back in with Dennis's explicit
+go-ahead (`git merge --no-ff` + push to `origin/feature/docker-e2e-
+backend-integration` — **not** to `main`, which stays frozen).
 
-Dennis then asked for a fresh full coverage run to find real branch%
-gaps. Ran `npx vitest run tests/unit tests/integration tests/compliance
---coverage --reporter=dot`: **91.34% statements / 82.77% branches /
-90.96% functions / 91.81% lines** (branches still the lagging dimension,
-up from 82.3%), 1 known pre-existing failure
-(`sample-graph-validator.service.test.js` tampering test, unchanged from
-prior reconciles). Branch%-sorted `coverage-summary.json`; the prior
-handoff's named candidates (`hl7Audit.service.js`, `label.routes.js`,
-`sample.routes.js`) were all confirmed real gaps via isolated re-runs
-(not merged-vs-isolated drift). Worked `hl7Audit.service.js`
-(66.66→100% branches isolated): extended
-`tests/unit/hl7Audit.service.test.js` (+7 tests, 17 total) covering both
-services' catch branches (including the `err.message || err` fallback
-for non-Error throws) and the sourceId/fileId dedup-skip branch.
-Committed on `test/hl7-audit-branch-coverage` (`6c0adec9`), merged
-(`e85e112a`), pushed.
+- **`label.routes.js`**: 68.29% -> **100%** branches isolated (all four
+  dimensions). Extended `tests/unit/label.routes.test.js` (+19 tests,
+  32 total): the ObjectId `_id` query variant in `findSample`,
+  `resolveStoragePathText`'s guard/legacy-field/readable-fallback
+  branches, `buildLocationText`'s segment branches, both routes'
+  `error.status`-vs-`statusCode`-vs-default-500 and message-fallback
+  branches, and `buildLabel`'s sampleId fallback chain. Added a
+  `router._test` export (`findSample`, `resolveStoragePathText`,
+  `buildLocationText`, `normalizeString`) — same pattern
+  `intakeWizard.js` already uses, no product behavior changed.
 
-`wrap-up` ran each iteration: no scope creep (only touched
-`COVERAGE_NOTES.md` + the one test file for the test-loop slice), no
-product code edited in test-loop per its rule, nothing security-relevant.
-One minor friction on the #242 iteration: my first branch name
-(`docs/...`) was blocked by the repo's branch-naming guard (only
-`fix/<slug>`/`test/<slug>` allowed off this integration branch) —
-corrected and proceeded, not a skill gap.
+- **`sample.routes.js`** (repo's largest route file, ~1090 lines / 25
+  routes): 68.62% -> **90.84%** branches isolated, 99.43% statements,
+  **100%** functions, 99.42% lines. Extended
+  `tests/unit/sample.routes.test.js` (+50 tests, 104 total): the full
+  `validateCreateSamplePayload` branch set, `POST /`'s actor/error/
+  message fallback chains, `GET /:id/label`'s sampleId fallback chain,
+  `PUT /:id`'s `sample_release` audit branches, and four previously-
+  missing 503/500 tests. Added a `router._test` export
+  (`validateCreateSamplePayload`) for the one branch unreachable
+  through HTTP (Express defaults `req.body` to `{}`, so the
+  `req.body || {}` fallback needs a direct call). Also restructured
+  the test file's `loadRoute()` to require every dependency and the
+  route exactly once (stable proxies/constructors reading a mutable
+  `current*` variable) instead of clearing `require.cache` and
+  re-requiring the route fresh per test — faster, and ruled out (but
+  did not fix) a suspected coverage-measurement quirk.
 
-`clean-up` ran at session end: deleted `api/backend/coverage/` (this
-session's `--coverage` output, gitignored) and a `/tmp/vitest_full.log`
-redirect target. Left `playwright-report/`/`test-results/` alone (dated
-Jul 9, predate this session).
+  **The remaining ~9% branch gap on `sample.routes.js` is not a real
+  test gap** — confirmed `@vitest/coverage-v8` reports a no-`else`
+  `if`'s implicit alternate branch as 0 hits even when the fall-through
+  path is demonstrably exercised (its `branchMap` location is a
+  zero-width phantom `{"start":{},"end":{}}`). Closing it for real
+  would need real `else` blocks added to ~14 guard clauses in product
+  code — out of scope for a test-only loop. Full writeup in
+  `api/backend/COVERAGE_NOTES.md` (slice #9 entry).
+
+`wrap-up` ran after each commit and after the merge: no scope creep
+beyond the two `router._test` product-file additions (flagged
+explicitly both times as a judgment call — established repo pattern,
+zero behavior change, but still a product-file touch worth surfacing
+under test-loop's "never edit product code" rule). No lazy fixes, no
+bugs found in product code this session (pure coverage work). One real
+friction point worth recording: a long detour chasing what looked like
+a "re-require-per-test loses V8 coverage" artifact turned out to be a
+red herring (the require-once refactor didn't change the numbers) —
+the actual cause (documented above) was found afterward and is now in
+`COVERAGE_NOTES.md` so a future session doesn't re-walk that
+investigation.
 
 ## Repo state
 
 - `feature/docker-e2e-backend-integration` current and pushed
-  (`e85e112a`). Working tree clean.
-- Issue #242 closed.
-- No merge to main pending beyond the usual integration-branch backlog.
-- `main` remains frozen — do not branch off it, merge into it, or push
-  to it.
+  (`18ba9f35`). Working tree clean.
+- No issue was opened or closed this session (pure coverage work, no
+  bugs found).
+- No merge to `main` pending beyond the usual integration-branch
+  backlog. `main` remains frozen — do not branch off it, merge into
+  it, or push to it.
 
 ## Milestone (set 2026-07-22 by Dennis, still current)
 
-**Target: 90% across all four coverage dimensions.** Latest full
-reconcile (this session, 2026-07-23): statements **91.34%**, branches
-**82.77%** (lagging dimension, up from 82.3%), functions **90.96%**,
-lines **91.81%**. Three of four dimensions past 90%; branches is the
-sole remaining gap.
+**Target: 90% across all four coverage dimensions.** Last full-suite
+reconcile was 2026-07-23 (see `COVERAGE_NOTES.md`'s "Last full
+reconcile" section for the authoritative numbers): statements 91.34%,
+branches 82.77% (lagging dimension), functions 90.96%, lines 91.81%.
+This session's two isolated-file slices (label.routes.js to 100%,
+sample.routes.js to 90.84%) are **not yet folded into a fresh full-
+suite reconcile** — the milestone numbers above predate them. A fresh
+full reconcile would be a reasonable next step to see how much this
+session moved the overall branches number.
 
 ## Recommended next steps
 
 No next issue explicitly named by Dennis this session — none queued.
 
-For coverage work: resume the branch%-sorted method in
-`COVERAGE_NOTES.md`. Next candidates, **already confirmed as real gaps
-(not merged-vs-isolated drift) via isolated re-runs this session, not
-yet worked**:
-- `src/interface/routes/label.routes.js` (68.29% branches / 97.64% lines
-  isolated, uncovered lines 33,53)
-- `src/interface/routes/sample.routes.js` (68.62% branches / 92.21%
-  lines isolated)
+For coverage work: run a fresh full reconcile
+(`cd api/backend && npx vitest run tests/unit tests/integration
+tests/compliance --coverage --reporter=dot`) to fold in this session's
+gains and find the next branch%-sorted candidate, per
+`COVERAGE_NOTES.md`'s method. The prior handoff's two named candidates
+(`label.routes.js`, `sample.routes.js`) are both now done.
 
-Remaining open backlog (`gh issue list --state open`): #250
-(`MongoAuditRepository.js` collection-name config divergence — needs an
-owner call on wiring vs. documenting immutability), #228 (coverage
-snapshot pointer to COVERAGE_NOTES.md), #224 (`Sample.validate`/`create`
-genuine gaps beyond #146 rename — needs a design call, cross-reference
-#208), #222 (`SampleGraphValidator.js` never migrated to canonical field
-naming), #115 (`syncFromOrphadata` partial-coverage signal, `test-branch`
-label — needs Orphadata domain knowledge).
+Remaining open backlog (`gh issue list --state open`, not re-checked
+this session): #250 (`MongoAuditRepository.js` collection-name config
+divergence — needs an owner call), #228 (coverage snapshot pointer),
+#224 (`Sample.validate`/`create` genuine gaps — needs a design call,
+cross-reference #208), #222 (`SampleGraphValidator.js` never migrated
+to canonical field naming), #115 (`syncFromOrphadata` partial-coverage
+signal — needs Orphadata domain knowledge).
 
 ## Which skills to use
 
-`bioavanced-v2-conventions` first. `fix-bugs` +
-`bioavanced-v2-testing-conventions` for bug work. `test-loop` for
-coverage work (this session's model: isolated-verify before trusting a
-branch% number, per the #242 caveat). `resolve-issue` for docs/
-housekeeping items. `wrap-up` every iteration, `clean-up` at session end.
+`bioavanced-v2-conventions` first. `test-loop` for coverage work — this
+session reinforced the "if it's a `router._test` export for an
+unreachable branch, that's an established pattern, not a violation"
+judgment call, and added the coverage-v8 phantom-branch lesson to
+`COVERAGE_NOTES.md` rather than a skill file (it's a fact about a
+specific file's coverage ceiling, not a repo-wide process rule).
+`wrap-up` every iteration.
 
 ## Dependency notes
 
