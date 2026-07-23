@@ -429,6 +429,21 @@ coverage to 100/100/100/100. `label.routes.js` (68.29/97.64) and
 `sample.routes.js` (68.62/92.21) were also confirmed real gaps (not
 drift) this session but not yet worked — next candidates.
 
+**Follow-up slice #8 (2026-07-23, same branch):** worked
+`label.routes.js` (68.29/97.64 branches/lines isolated). Extended
+`tests/unit/label.routes.test.js` (+19 tests, 32 total): the ObjectId
+`_id` query variant in `findSample`, `resolveStoragePathText`'s
+box-not-found/no-storageLocation/boxID-legacy-field/readable-fallback
+branches, `buildLocationText`'s locationID/position/all-absent
+branches, both routes' `error.status`-vs-`statusCode`-vs-default-500 and
+message-fallback branches, and `buildLabel`'s sampleId
+fallback chain (`sampleID` -> `_id.toString()` -> raw `_id` -> `''`).
+Added a `router._test` export (`findSample`, `resolveStoragePathText`,
+`buildLocationText`, `normalizeString`) for branches unreachable through
+the two HTTP routes alone (the same pattern `intakeWizard.js` already
+uses) — no product behavior changed. Moved isolated coverage to
+100/100/100/100.
+
 ## Maintaining this file
 
 If `test-loop` finds this file stale (a listed ZERO/LOW file turns out
