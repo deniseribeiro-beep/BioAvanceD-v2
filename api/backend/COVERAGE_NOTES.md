@@ -87,9 +87,24 @@ either).
 gap  branch% lines%  file
 141  82.5%   93.9%   src/services/import-lgpd.service.js  (partial slice landed 2026-07-23, session 4: importPatientsSmart/buildMappedPatientRow branches — clinicalUnit-present fillAcronym call, PatientModel.validate() rejection path (e.g. missing sex), and the responsavelNome/responsavelEmail explicit-mapping-target fallback (set vs. already-mapped) — via tests/unit/import-lgpd.service.importPatientsSmart.unit.test.js. Note: the fallback only fires when a mapping explicitly targets the literal key `responsavelNome`/`responsavelEmail` — the more common accented-column path (`responsavelnome` etc.) resolves straight to `representativeName`/`representativeEmail` via canonicalHeaderMap and never touches that fallback. File is 1693 lines; remaining gap is scattered across earlier parse helpers (parseSampleRow ~1150-1310, parsePatientRow ~1160-1200) plus a few defensive branches — no single large block left.)
  86  77.66%  92.8%   src/routes/intakeWizard.js  (partial slice landed 2026-07-23, session 6: isolated branches 77.66% -> 86.49% (299/385 -> 333/385) via tests/unit/intakeWizard.helpers.test.js + tests/unit/intakeWizard.routes.test.js — buildSampleDocumentFromIntake/buildPharmacologyData/normalizeNumber fallback branches, ensureConsentEmailSent's success/failure paths, resolveConsentDecision's no-identifier throw, sensor/equipment maintenanceStatus-fallback matching, storage-box BLOCKED/full-occupancy skip + Map-based occupancyGrid, canonicalViolations non-object guard, and patient-match's $or/ACTIVE-status-default branches. Filed #255: `collectNonCanonicalFields` and `ensureConsentEmailSent` are dead code (never called from any route, only reachable via `router._test`) — accounts for part of the remaining gap. Remainder is a mix of genuine small gaps (e.g. equipment status via maintenanceStatus-only fallback, empty box rows/cols, non-numeric locationID skip) and likely some `@vitest/coverage-v8` phantom-branch artifacts on guard-clause `if`s without `else` blocks (same class as the `sample.routes.js` follow-up noted above) — not re-verified this session.)
- 51  78.66%  96.2%   src/routes/dictionary.js
  47  69.67%  86.0%   src/interface/routes/auth.routes.js
 ```
+
+`src/routes/dictionary.js` closed out 2026-07-23 session 12: extended
+`tests/unit/dictionary-medications-disease-profile.test.js` and
+`tests/unit/dictionary-search-suggest.test.js`, and added
+`tests/unit/dictionary.branch-coverage.test.js` (+22 tests) covering
+`normalizeMedicationRecord`'s field-fallback chains (code/name/generic_name/
+atc_level_1/atc_classifications derivation, falsy-array-item filtering),
+`normalizeLocalPhenotype`/`normalizeLocalBiomarker`'s code/display fallback
+chains, `buildLocalSemanticSuggestions`'s terminology-row `system`/`sistema`
+and dedup/no-data-found paths, and the `/suggest` Neo4j-success-path
+display fallbacks plus its nested fallback-error-message branch. Isolated
+branches 78.66% -> 97.07% (188/239 -> 232/239). Filed #261 for the
+remaining 7-branch gap: 3 confirmed structurally unreachable (dead
+defensive code, same class as #260) and the rest are the usual
+guard-clause-with-no-else phantom-branch artifact plus one unexplained
+single branch not worth chasing further.
 
 `src/controllers/sample-file.controller.js` closed out 2026-07-23 session 11: extended
 `tests/unit/sample-file.controller.test.js` (+21 tests, 67 total) covering the
