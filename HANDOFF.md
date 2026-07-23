@@ -1,103 +1,93 @@
 # HANDOFF
 
-**Written:** 2026-07-22, end of a test-loop iteration.
-**Branch:** `test/withdrawal-model-coverage` (commit `dcf7f01b`, pushed
-this session), based off `feature/docker-e2e-backend-integration`.
+**Written:** 2026-07-23, end of a fix-bugs iteration.
+**Branch:** `feature/docker-e2e-backend-integration` (commit `4ebcb6f8`,
+pushed this session). Dennis merged the prior test-loop test branch into
+this branch before the session started, so work now happens directly
+here rather than on a separate test/coverage branch.
 
 ## What happened this session
 
-Routed via `test-loop`. A fresh full coverage reconcile ran (since the
-MID-LOW/MID-HIGH buckets in `COVERAGE_NOTES.md` had no unflagged
-candidates left) and gave a live `coverage-summary.json` to branch%-sort
-directly, per the file's own recommended method.
+Routed via `fix-bugs`. Reviewed the open issue backlog (`gh issue list`)
+for anything fixable; most open issues are dead-code/coverage findings
+(#235-249 range) rather than correctness bugs. Picked **issue #231**
+(`orphanet.js`: `lang=<whitespace>` bypassed the language filter while
+an omitted `lang` correctly defaulted to `'pt'`) as a clear, isolated,
+reproducible bug.
 
-Top unflagged candidate was `src/interface/routes/master-data.routes.js`
-(71.87/91.42 branches/lines isolated — already >=85% lines so invisible
-to the lines-only bucket sweep, same class as several prior sessions'
-slices). Confirmed a real gap (36 existing tests, but genuinely missing
-branches — not merged-vs-isolated drift). Extended
-`tests/integration/master-data.api.test.js` (+3 tests, 39 total)
-covering the `Number.isFinite(numericId)` fallback in the shared
-`createMasterDataRouter` factory's `$or` id-lookup query (GET/PUT/DELETE
-`/:id` with a non-ObjectId numeric id string, previously only exercised
-with valid ObjectId strings). Moved isolated coverage to
-91.42/84.37/100/91.42. Remaining gap is the authenticate-shadows-route
-503 dead-code pattern (all 5 mounted routes' own `if (!db)` guards are
-unreachable — `authenticate` already 503s first) — filed as **issue
-#248**, sixth occurrence of #67/#76/#236/#246/#247, and notable because
-one file/factory accounts for 5 of the pattern's instances at once.
+Root cause: `src/routes/orphanet.js`'s `GET /search` computed
+`const lang = normalizeText(req.query.lang || 'pt')` — the `'pt'`
+default was applied to the *raw* query param before trimming, so a
+whitespace-only `lang` (e.g. `lang=%20`) survived as truthy, skipped the
+default, and trimmed down to `''`, which downstream in `searchLocal` is
+falsy for the `requestedLang` check and skips the `$in` language filter
+entirely (unfiltered results) instead of applying the `'pt'` default.
 
-Also checked `quality.routes.js` (50/100 branches/lines from the same
-sort) — its `req.body || {}` fallback turned out unreachable too
-(`express.json()` is mounted globally before any route, so `req.body`
-is never falsy). A test was written, found not to move coverage,
-reverted rather than kept as non-functional padding.
+Fix: reordered to `const lang = normalizeText(req.query.lang) || 'pt'`
+(trim first, then default) in `api/backend/src/routes/orphanet.js`.
+Added a reproduction test in `tests/unit/routes/orphanet.test.js` and
+un-weakened the pre-existing pinned test in
+`tests/unit/orphanet.routes.test.js` (previously asserted
+`calledFilter.lang` was `undefined` for whitespace-only `lang` — that
+was asserting the *bug*; now asserts the correct `{ $in: ['pt', '',
+null] }` filter). All 34 tests across the three orphanet test files
+pass on both the fix branch and after merge.
 
-`wrap-up` ran and caught a real gap in its own audit: the reverted
-`quality.routes.js` finding had been left undocumented instead of
-filed. Filed as **issue #249** and linked from `COVERAGE_NOTES.md` in a
-follow-up commit — this is the one piece of friction from this session,
-now closed out.
+Branched `fix/orphanet-whitespace-lang-bypass` off
+`feature/docker-e2e-backend-integration`, committed (`25c3c442`,
+`Fixes #231`), pushed, commented the hash on the issue, merged
+`--no-ff` into `feature/docker-e2e-backend-integration` (`4ebcb6f8`),
+re-verified on the merged tree, pushed, deleted the fix branch
+(local+remote), and closed #231 with the merge commit hash.
+
+`wrap-up` ran: no friction this session — the reproduce-fix-verify-merge
+sequence matched the `fix-bugs` skill exactly, no permission denials, no
+scope creep (only `orphanet.js` + its 2 test files touched), nothing
+security-relevant.
 
 ## Repo state
 
-- Working tree has one pre-existing uncommitted change:
-  `.claude/hooks/branch-guard.cjs` (line-ending-only, `git diff` shows
-  no content diff) — not touched this or prior sessions, not mine to
-  resolve. Now carried across at least four prior sessions; worth a
-  direct question to Dennis rather than continued silent carrying —
-  `git diff` showing nothing suggests it may just need a
-  `git add`/normalize-and-commit.
-- `test/withdrawal-model-coverage` is current and pushed (`dcf7f01b`),
-  based off `feature/docker-e2e-backend-integration`.
+- `feature/docker-e2e-backend-integration` is current and pushed
+  (`4ebcb6f8`), issue #231 closed.
+- No uncommitted changes, working tree clean.
 - `main` remains frozen — do not branch off it, merge into it, or push
   to it.
-- A full-suite coverage reconcile ran this session (statements 91.05%,
-  branches 82.3%, functions 90.88%, lines 91.5% — before this session's
-  `master-data.routes.js` slice was folded in). Its `coverage/` dir was
-  used for the branch%-sort then left in place this time (gitignored,
-  regenerate any time via the full reconcile command in
-  `COVERAGE_NOTES.md` if it's gone by next session).
+- The `.claude/hooks/branch-guard.cjs` line-ending-only uncommitted diff
+  noted in prior handoffs is no longer present in `git status` — appears
+  resolved (or was carried in a branch state not currently checked out).
 
 ## Milestone (set 2026-07-22 by Dennis, still current)
 
-**Target: 90% across all four coverage dimensions.** Last full
-reconcile (this session): statements 91.05%, branches **82.3%** (the
-one dimension left, up from 81.96% the prior session), functions
-90.88%, lines 91.5%. This session's `master-data.routes.js` slice isn't
-yet folded into a fresh full reconcile — one is due at the usual
-cadence per `COVERAGE_NOTES.md`.
+**Target: 90% across all four coverage dimensions.** Last full reconcile
+(2026-07-22, before this session): statements 91.05%, branches **82.3%**
+(lagging dimension), functions 90.88%, lines 91.5%. This session was a
+bug-fix iteration, not a coverage iteration — no fresh reconcile run.
 
 ## Recommended next steps
 
-None queued explicitly by Dennis. For coverage work: branches is still
-the lagging dimension. Continue the branch%-sorted spot-check method —
-regenerate `coverage/coverage-summary.json` via the full reconcile
-command in `COVERAGE_NOTES.md` and work down the list, skipping
-anything already flagged as issue-linked drift or dead code. From this
-session's sort, `src/services/consent.service.js` and other GOOD-bucket
-files weren't re-checked; the next unflagged candidates past
-`master-data.routes.js` in the same sort were `src/services/hl7Audit.service.js`
-(66.66/92.45), `src/interface/routes/label.routes.js` (68.29/97.64),
-and `src/interface/routes/sample.routes.js` (68.62/92.21) — none
-verified for drift yet, all already have dedicated test files so check
-isolated coverage before treating the merged number as real.
+None queued explicitly by Dennis. Backlog still has the dead-code
+cluster (#235, #236, #241, #243, #246, #247, #248, #249) — the repeated
+authenticate-shadows-route 503 pattern (#67/#76/#236/#246/#247/#248,
+six occurrences, five from `master-data.routes.js` alone) strongly
+suggests a repo-wide sweep is more efficient than continued per-file
+spot fixes; still not actioned, worth raising with Dennis directly.
+Issue #232 (orphanet.js misleading retry log + duplicate query) and
+#240 (patient.service.js consentTemplateId carve-out neutralized) are
+untried candidates for the next fix-bugs iteration — both need the
+verify-before-deferring trace (grep real callers, check `docs/`) before
+picking, per the skill.
 
-Also still worth surfacing to Dennis (not yet done, now six
-occurrences deep): the repeated authenticate-shadows-route 503
-dead-code pattern (#67/#76/#236/#246/#247/#248) strongly suggests a
-repo-wide sweep, not per-file spot fixes, is the efficient resolution —
-`master-data.routes.js` alone contributed 5 of the 6 filed instances
-via one shared factory.
-
-No bug-fix backlog item is queued — re-triage the open backlog per
-`fix-bugs`' verify-before-deferring rule if picking that route.
+For coverage work: resume the branch%-sorted method in
+`COVERAGE_NOTES.md`; next unflagged candidates from the last sort were
+`src/services/hl7Audit.service.js`, `src/interface/routes/label.routes.js`,
+and `src/interface/routes/sample.routes.js` — none verified for drift
+yet.
 
 ## Which skills to use
 
-`bioavanced-v2-conventions` first. `test-loop` +
-`bioavanced-v2-testing-conventions` for coverage work. `fix-bugs` if the
-backlog turns up a real bug. `wrap-up` every iteration.
+`bioavanced-v2-conventions` first. `fix-bugs` +
+`bioavanced-v2-testing-conventions` for bug work. `test-loop` for
+coverage work. `wrap-up` every iteration.
 
 ## Dependency notes
 
