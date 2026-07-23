@@ -2,6 +2,7 @@ import { afterEach, describe, it, expect, vi } from 'vitest';
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const ExcelJS = require('exceljs');
 const engine = require('../../src/services/batch-validation-engine.service');
 const patientService = require('../../src/services/patient.service');
 
@@ -336,6 +337,16 @@ describe('BatchValidationEngine.buildPatientLinkageQuery', () => {
     const criteria = engine.buildPatientLinkageQuery({}, { _id: 'not-an-object-id' });
     expect(criteria).toEqual([]);
   });
+
+  it('skips the numeric recordNumber variant when the recordNumber is non-numeric text', () => {
+    const criteria = engine.buildPatientLinkageQuery({}, { recordNumber: 'RN-ABC' });
+    expect(criteria).toEqual([{ recordNumber: 'RN-ABC' }]);
+  });
+
+  it('falls back to rawRow objectId fields when patientData lacks an _id', () => {
+    const criteria = engine.buildPatientLinkageQuery({ patientObjectId: '507f1f77bcf86cd799439011' }, {});
+    expect(criteria).toEqual([{ _id: expect.anything() }]);
+  });
 });
 
 describe('BatchValidationEngine.buildBiomarkerObservationPayloads', () => {
@@ -370,6 +381,48 @@ describe('BatchValidationEngine.buildBiomarkerObservationPayloads', () => {
     expect(payloads).toEqual([]);
     expect(warnings).toEqual([]);
   });
+
+  it('warns and skips a biomarker token with no value (no colon separator)', () => {
+    const { payloads, warnings } = engine.buildBiomarkerObservationPayloads(
+      { biomarkers: 'alphaGal' },
+      {},
+      {}
+    );
+
+    expect(payloads).toHaveLength(0);
+    expect(warnings).toEqual(['Biomarcador alphaGal foi ignorado por não informar valor.']);
+  });
+
+  it('falls back through specimen sampleId/barcode and patient rawRow.patientID identifiers', () => {
+    const { payloads } = engine.buildBiomarkerObservationPayloads(
+      { patientID: 'raw-patient-id', biomarkers: 'alphaGal:1' },
+      {},
+      { sampleId: 'specimen-sample-id' }
+    );
+
+    expect(payloads[0].patientID).toBe('raw-patient-id');
+    expect(payloads[0].sampleID).toBe('specimen-sample-id');
+  });
+
+  it('falls back to specimen.barcode when no other specimen identifier is present', () => {
+    const { payloads } = engine.buildBiomarkerObservationPayloads(
+      { biomarkers: 'alphaGal:1' },
+      {},
+      { barcode: 'BC-9' }
+    );
+
+    expect(payloads[0].sampleID).toBe('BC-9');
+  });
+
+  it('uses collectedAt from the specimen registrationDate when the row has no date fields', () => {
+    const { payloads } = engine.buildBiomarkerObservationPayloads(
+      { biomarkers: 'alphaGal:1' },
+      {},
+      { registrationDate: '2026-02-01T00:00:00.000Z' }
+    );
+
+    expect(payloads[0].collectedAt.toISOString()).toBe('2026-02-01T00:00:00.000Z');
+  });
 });
 
 describe('BatchValidationEngine.detectDataType', () => {
@@ -386,6 +439,10 @@ describe('BatchValidationEngine.detectDataType', () => {
   it('defaults to patients when nothing matches', () => {
     const result = engine.detectDataType([{ unknownColumn: 'x' }], 'export.csv');
     expect(result).toBe('patients');
+  });
+
+  it('defaults to patients when called with no rows or fileName', () => {
+    expect(engine.detectDataType()).toBe('patients');
   });
 });
 
@@ -465,6 +522,64 @@ describe('BatchValidationEngine.persistPatient', () => {
     expect(result.classification).toBe('INVALID');
     expect(result.errors).toEqual(['duplicate email']);
   });
+
+  it('returns INVALID when email is present but has no "@"', async () => {
+    const result = await engine.persistPatient(
+      {},
+      {
+        patientName: 'Dan Souza',
+        birthDate: '1990-01-01',
+        sex: 'M',
+        email: 'not-an-email',
+        consentTemplateId: 'template-1',
+      },
+      10
+    );
+
+    expect(result.classification).toBe('INVALID');
+    expect(result.errors).toContain('email é obrigatório e deve ser válido');
+  });
+
+  it('returns INVALID when birthDate is present but not a parseable date', async () => {
+    const result = await engine.persistPatient(
+      {},
+      {
+        patientName: 'Elis Souza',
+        birthDate: 'not-a-date',
+        sex: 'F',
+        email: 'elis@example.com',
+        consentTemplateId: 'template-1',
+      },
+      11
+    );
+
+    expect(result.classification).toBe('INVALID');
+    expect(result.errors).toContain('birthDate é obrigatório e deve ser válida');
+  });
+
+  it('uses the mappedRow over rawRow when both are supplied', async () => {
+    vi.spyOn(patientService, 'createPatient').mockResolvedValue({ _id: 'mapped-id' });
+
+    const result = await engine.persistPatient(
+      {},
+      { patientName: 'Ignored Raw Row' },
+      12,
+      {},
+      {
+        patientName: 'Mapped Row',
+        birthDate: '1990-01-01',
+        sex: 'F',
+        email: 'mapped@example.com',
+        consentTemplateId: 'template-1',
+      }
+    );
+
+    expect(patientService.createPatient).toHaveBeenCalledWith(
+      {},
+      expect.objectContaining({ patientName: 'Mapped Row' }),
+      expect.anything()
+    );
+  });
 });
 
 describe('BatchValidationEngine file readers', () => {
@@ -523,5 +638,101 @@ describe('BatchValidationEngine file readers', () => {
     const filePath = writeTmpFile('rows.csv', 'a,b\n1,2\n');
     const rows = await engine.readRowsFromFile(filePath, 'rows.csv');
     expect(rows).toEqual([{ a: '1', b: '2' }]);
+  });
+
+  it('readJsonRows returns an empty array for a non-object, non-array JSON payload', async () => {
+    const filePath = writeTmpFile('scalar.json', JSON.stringify(42));
+    const rows = await engine.readJsonRows(filePath);
+    expect(rows).toEqual([]);
+  });
+
+  async function writeXlsxFile(sheets) {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'batch-validation-xlsx-'));
+    const filePath = path.join(tmpDir, 'rows.xlsx');
+    const workbook = new ExcelJS.Workbook();
+    sheets.forEach(({ name, rows }) => {
+      const worksheet = workbook.addWorksheet(name);
+      rows.forEach((row) => worksheet.addRow(row));
+    });
+    await workbook.xlsx.writeFile(filePath);
+    return filePath;
+  }
+
+  it('readXlsxRows maps header row to values across worksheet rows', async () => {
+    const filePath = await writeXlsxFile([
+      { name: 'Sheet1', rows: [['patientID', 'sampleType'], ['12345678', 'Sangue'], ['87654321', 'Plasma']] },
+    ]);
+
+    const rows = await engine.readXlsxRows(filePath);
+
+    expect(rows).toEqual([
+      { patientID: '12345678', sampleType: 'Sangue' },
+      { patientID: '87654321', sampleType: 'Plasma' },
+    ]);
+  });
+
+  it('readXlsxRows skips worksheets with no header row', async () => {
+    const filePath = await writeXlsxFile([
+      { name: 'Empty', rows: [] },
+      { name: 'Data', rows: [['a'], ['1']] },
+    ]);
+
+    const rows = await engine.readXlsxRows(filePath);
+    expect(rows).toEqual([{ a: '1' }]);
+  });
+
+  it('readXlsxRows skips fully empty data rows and cells with only-blank values', async () => {
+    const filePath = await writeXlsxFile([
+      { name: 'Sheet1', rows: [['a', 'b'], [null, null], ['1', '']] },
+    ]);
+
+    const rows = await engine.readXlsxRows(filePath);
+    expect(rows).toEqual([{ a: '1' }]);
+  });
+
+  it('readRowsFromFile dispatches by extension to XLSX parsing', async () => {
+    const filePath = await writeXlsxFile([{ name: 'Sheet1', rows: [['a'], ['1']] }]);
+    const rows = await engine.readRowsFromFile(filePath, 'rows.xlsx');
+    expect(rows).toEqual([{ a: '1' }]);
+  });
+
+  it('readRowsFromFile falls back to JSON when the CSV attempt fails for an unrecognized extension', async () => {
+    const filePath = writeTmpFile('data.unknownext', JSON.stringify([{ a: 1 }]));
+
+    // Force the CSV attempt's own detectCsvSeparator read to fail so the
+    // dispatch falls through to readJsonRows, which succeeds on this content.
+    const readFileSyncSpy = vi.spyOn(fs, 'readFileSync').mockImplementationOnce(() => {
+      throw new Error('forced CSV read failure for test');
+    });
+
+    const rows = await engine.readRowsFromFile(filePath, 'data.unknownext');
+
+    readFileSyncSpy.mockRestore();
+    expect(rows).toEqual([{ a: 1 }]);
+  });
+
+  it('readRowsFromFile falls back to XLSX when both CSV and JSON parsing of an unrecognized extension fail', async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'batch-validation-xlsx-'));
+    const filePath = path.join(tmpDir, 'data.unknownext');
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('Sheet1');
+    worksheet.addRow(['a']);
+    worksheet.addRow(['1']);
+    await workbook.xlsx.writeFile(filePath);
+
+    // detectCsvSeparator (called first, inside readCsvRows) reads the file itself,
+    // so failing that one readFileSync call is enough to make the CSV attempt reject.
+    const readFileSyncSpy = vi.spyOn(fs, 'readFileSync').mockImplementationOnce(() => {
+      throw new Error('forced CSV read failure for test');
+    });
+    const jsonParseSpy = vi.spyOn(JSON, 'parse').mockImplementationOnce(() => {
+      throw new SyntaxError('forced invalid JSON for test');
+    });
+
+    const rows = await engine.readRowsFromFile(filePath, 'data.unknownext');
+
+    readFileSyncSpy.mockRestore();
+    jsonParseSpy.mockRestore();
+    expect(rows).toEqual([{ a: '1' }]);
   });
 });

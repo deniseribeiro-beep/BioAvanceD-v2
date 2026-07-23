@@ -87,7 +87,6 @@ either).
 gap  branch% lines%  file
 141  82.5%   93.9%   src/services/import-lgpd.service.js  (partial slice landed 2026-07-23, session 4: importPatientsSmart/buildMappedPatientRow branches — clinicalUnit-present fillAcronym call, PatientModel.validate() rejection path (e.g. missing sex), and the responsavelNome/responsavelEmail explicit-mapping-target fallback (set vs. already-mapped) — via tests/unit/import-lgpd.service.importPatientsSmart.unit.test.js. Note: the fallback only fires when a mapping explicitly targets the literal key `responsavelNome`/`responsavelEmail` — the more common accented-column path (`responsavelnome` etc.) resolves straight to `representativeName`/`representativeEmail` via canonicalHeaderMap and never touches that fallback. File is 1693 lines; remaining gap is scattered across earlier parse helpers (parseSampleRow ~1150-1310, parsePatientRow ~1160-1200) plus a few defensive branches — no single large block left.)
  86  77.66%  92.8%   src/routes/intakeWizard.js  (partial slice landed 2026-07-23, session 6: isolated branches 77.66% -> 86.49% (299/385 -> 333/385) via tests/unit/intakeWizard.helpers.test.js + tests/unit/intakeWizard.routes.test.js — buildSampleDocumentFromIntake/buildPharmacologyData/normalizeNumber fallback branches, ensureConsentEmailSent's success/failure paths, resolveConsentDecision's no-identifier throw, sensor/equipment maintenanceStatus-fallback matching, storage-box BLOCKED/full-occupancy skip + Map-based occupancyGrid, canonicalViolations non-object guard, and patient-match's $or/ACTIVE-status-default branches. Filed #255: `collectNonCanonicalFields` and `ensureConsentEmailSent` are dead code (never called from any route, only reachable via `router._test`) — accounts for part of the remaining gap. Remainder is a mix of genuine small gaps (e.g. equipment status via maintenanceStatus-only fallback, empty box rows/cols, non-numeric locationID skip) and likely some `@vitest/coverage-v8` phantom-branch artifacts on guard-clause `if`s without `else` blocks (same class as the `sample.routes.js` follow-up noted above) — not re-verified this session.)
- 80  82.40%  88.2%   src/services/batch-validation-engine.service.js
  78  85.40%  92.6%   src/services/fhir-import-staging.service.js
  68  79.14%  89.9%   src/services/import.service.js
  56  74.54%  89.2%   src/services/NotificationService.js
@@ -114,6 +113,29 @@ lines remain uncovered (159, 212, 387) — each is a `.length === 0` early
 return that's unreachable given the callers' own truthy-payload guards
 (same guard-clause-with-no-real-else class documented elsewhere in this
 file); not chased further.
+
+`src/services/batch-validation-engine.service.js` closed out 2026-07-23
+session 8: extended `tests/unit/batch-validation-engine.service.test.js`
+and `tests/unit/batch-validation-engine.unit.test.js` (+34 tests, 109
+total) covering the entire, previously-untested `readXlsxRows` block
+(header-row mapping, empty-worksheet skip, blank-cell/blank-row skip),
+`readRowsFromFile`'s unrecognized-extension fallback chain (CSV fails ->
+JSON succeeds; CSV and JSON both fail -> XLSX succeeds), `readJsonRows`'s
+scalar-payload `[]` return, `buildPatientLinkageQuery`'s non-numeric
+recordNumber skip and rawRow-objectId fallback, `buildBiomarkerObservationPayloads`'s
+no-value-token warning and specimen/patient identifier fallback chains,
+`persistPatient`'s malformed-email and unparseable-birthDate rejections
+plus the mappedRow-over-rawRow precedence, a non-`Error` rejection's
+message fallback in `persistSample`'s catch, `detectDataType`'s
+no-args-supplied default, and `processBatchImport`'s `samples`-dataType
+dispatch with a fully-valid warning-free row (VALID branch, previously
+only PARTIAL/INVALID were exercised at that level). Isolated coverage
+87.63/82.40/93.33/88.20 -> 98.65/90.52/100/99.15 (stmts/branches/funcs/lines).
+Remaining 3 uncovered lines (431, 715, 939) are a `forEach` default-param
+guard, a compound optional-chaining fallback (`patient._id || ''`), and
+the file's own `module.exports` line — same always-executed-but-reported-0
+`@vitest/coverage-v8` artifact class documented elsewhere in this file;
+not chased further.
 
 Phase 1 alone covers ~943 of the ~1100-branch gap if fully closed —
 in practice expect a meaningfully smaller real yield, since some
@@ -503,11 +525,11 @@ src/workers/neo4jProjection.worker.js                          79.62 / 73.33   (
 Checked and corrected out of this bucket this session (issue #242 drift,
 confirmed 100/GOOD in isolation): `equipment.routes.js`, `User.js`.
 
-Note: `sample.service.js`, `import.service.js`,
-`batch-validation-engine.service.js`, `audit.controller.js`, and
+Note: `sample.service.js`, `import.service.js`, `audit.controller.js`, and
 `audit-canonicalization.service.js` remain in GOOD as of the prior
 reconcile — not re-verified line-by-line since they're well above the
-MID-HIGH cutoff.
+MID-HIGH cutoff. `batch-validation-engine.service.js` closed out its own
+Phase 1 branch-gap entry this session (see note above).
 
 ## GOOD coverage (>=85% lines)
 

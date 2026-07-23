@@ -237,6 +237,29 @@ describe('batch-validation-engine.service', () => {
     expect(result.classification).toBe('INVALID');
     expect(result.errors).toEqual(['storage collision']);
   });
+
+  it('returns INVALID with a fallback message when the persist step throws a non-Error value', async () => {
+    const db = createDb({
+      patientID: '12345678',
+      patient: { _id: 'patient-object-id-4', patientID: '12345678' },
+    });
+
+    vi.spyOn(sampleService, 'createSample').mockRejectedValue('a plain string rejection');
+
+    const result = await batchValidationEngine.persistSample(
+      db,
+      {
+        patientID: '12345678',
+        sampleType: 'Sangue',
+        sampleOrigin: 'Coleta',
+        quantity: '1',
+      },
+      9
+    );
+
+    expect(result.classification).toBe('INVALID');
+    expect(result.errors).toEqual(['Erro ao processar follow-up clínico']);
+  });
 });
 
 describe('batch-validation-engine.service processBatchImport', () => {
@@ -375,5 +398,36 @@ describe('batch-validation-engine.service processBatchImport', () => {
     await batchValidationEngine.processBatchImport({}, 'job-5', { updateProgress });
 
     expect(updateProgress).toHaveBeenCalledWith(100);
+  });
+
+  it('processes a samples JSON file end to end with a fully-valid, warning-free row', async () => {
+    const filePath = writeTmpFile('samples.json', JSON.stringify([
+      {
+        patientID: '12345678',
+        sampleType: 'Sangue',
+        sampleOrigin: 'Coleta',
+        extractionProtocol: 'Protocolo A',
+        quantity: '1',
+      },
+    ]));
+
+    vi.spyOn(StagingImport, 'findOne').mockResolvedValue({
+      jobId: 'job-6',
+      fileName: 'samples.json',
+      rawData: { storagePath: filePath },
+    });
+    vi.spyOn(StagingImport, 'updateOne').mockResolvedValue({});
+    const db = createDb({
+      patientID: '12345678',
+      patient: { _id: 'patient-object-id-5', patientID: '12345678' },
+    });
+    vi.spyOn(sampleService, 'createSample').mockResolvedValue({ _id: 'sample-object-id-5' });
+
+    const result = await batchValidationEngine.processBatchImport(db, 'job-6');
+
+    expect(result.dataType).toBe('samples');
+    expect(result.validRows).toBe(1);
+    expect(result.partialRows).toBe(0);
+    expect(result.invalidRows).toBe(0);
   });
 });
