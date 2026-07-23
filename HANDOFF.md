@@ -65,17 +65,29 @@ bug-fix iteration, not a coverage iteration — no fresh reconcile run.
 
 ## Recommended next steps
 
-None queued explicitly by Dennis. Backlog still has the dead-code
-cluster (#235, #236, #241, #243, #246, #247, #248, #249) — the repeated
-authenticate-shadows-route 503 pattern (#67/#76/#236/#246/#247/#248,
-six occurrences, five from `master-data.routes.js` alone) strongly
-suggests a repo-wide sweep is more efficient than continued per-file
-spot fixes; still not actioned, worth raising with Dennis directly.
-Issue #232 (orphanet.js misleading retry log + duplicate query) and
-#240 (patient.service.js consentTemplateId carve-out neutralized) are
-untried candidates for the next fix-bugs iteration — both need the
-verify-before-deferring trace (grep real callers, check `docs/`) before
-picking, per the skill.
+**Next queued: issue #232** (`orphanet.js`: the outer try/catch's retry
+path re-invokes `searchLocal` from scratch in its `catch` block
+regardless of whether the *original* failure was in the external/remote
+lookup or in `searchLocal` itself — misleading "Busca externa/local
+falhou; tentando fallback local" log plus a redundant identical-query
+retry when the local search itself was what threw). Same file just
+touched this session, same test file
+(`tests/unit/routes/orphanet.test.js`) already has a pinned test —
+`returns 500 when both the primary search and the fallback search
+throw` — that exercises this path and can likely be extended/split
+rather than needing a new harness. Not yet traced against real callers;
+do that trace (per `fix-bugs`' verify-before-deferring step) before
+concluding it's a genuine two-path fork rather than one that collapses
+to a single fix.
+
+Also still open: the dead-code cluster (#235, #236, #241, #243, #246,
+#247, #248, #249) — the repeated authenticate-shadows-route 503 pattern
+(#67/#76/#236/#246/#247/#248, six occurrences, five from
+`master-data.routes.js` alone) strongly suggests a repo-wide sweep is
+more efficient than continued per-file spot fixes; still not actioned,
+worth raising with Dennis directly. Issue #240 (patient.service.js
+consentTemplateId carve-out neutralized) is another untried candidate
+after #232.
 
 For coverage work: resume the branch%-sorted method in
 `COVERAGE_NOTES.md`; next unflagged candidates from the last sort were
