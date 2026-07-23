@@ -1,45 +1,47 @@
 # HANDOFF
 
-**Written:** 2026-07-23, end of a work-issue → fix-bugs iteration.
-**Branch:** `feature/docker-e2e-backend-integration` (commit `af7f05a0`,
+**Written:** 2026-07-23, end of a work-issue → resolve-issue (docs fix)
+iteration.
+**Branch:** `feature/docker-e2e-backend-integration` (commit `7ea676b0`,
 pushed).
 
 ## What happened this session
 
-Routed via `work-issue` → `fix-bugs` for **issue #229**
-(`api/backend/src/interface/routes/terminologies.routes.js` —
-`hydrateFromLocalRedundancy`'s code-prefix check compared
-`strippedSearch !== normalizeText(search)`, while the main `GET /`
-route's equivalent check compared `strippedSearch !== search` — reported
-as accidental normalization drift, same file just touched for #230).
+Backlog had no issue named by Dennis; asked which of the open items to
+work (#250 needed an owner call, #242 was a pure docs/methodology fix,
+#228 a housekeeping pointer) — Dennis picked **#242** (full-suite
+`--coverage` reconcile understates several files' real coverage due to
+merged-vs-isolated drift, not real gaps).
 
-Verified before editing: `search` is trimmed once (`String(...).trim()`)
-before either call site runs, and `normalizeText` is
-`String(value || '').trim()`, so `normalizeText(search) === search`
-always for the one real caller — the two checks were behaviorally
-identical for every reachable input. Confirmed reachability by grepping
-all callers of `hydrateFromLocalRedundancy` (exactly one, in this same
-file). Unified `hydrateFromLocalRedundancy` to the raw-`search`
-comparison used by `GET /`. Ran
-`tests/integration/terminologies.api.test.js` (22 tests) before and
-after — unchanged, all pass on the fix branch and the merged integration
-branch.
+The specific drift instance (`equipment.routes.js`, `fieldEncryption.js`,
+`User.js`) was already documented in the 2026-07-22 reconcile note in
+`api/backend/COVERAGE_NOTES.md`, but the *general* slice-picking guidance
+(item 4 under "How to use this when picking a slice") still made an
+unqualified claim — "the number here is trustworthy — no fresh isolated
+run needed" for MID-HIGH files — which is exactly what the issue flagged
+as needing a caveat. Added the merged-vs-isolated caveat directly to that
+guidance item so it applies to future reconciles, not just this
+session's specific findings.
 
-Committed on `fix/terminologies-search-normalization-drift` (`ab61c96d`),
-merged into `feature/docker-e2e-backend-integration` (`af7f05a0`),
-pushed, branch deleted (local and remote). Issue #229 closed with a
-comment citing the merge commit and verification.
+Committed on `fix/coverage-notes-drift-caveat` (`c44cd1bd`), merged into
+`feature/docker-e2e-backend-integration` (`7ea676b0`), pushed, local
+branch deleted (no remote branch had been pushed, so nothing to delete
+there). Issue #242 closed with a comment citing the merge commit.
 
-`wrap-up` ran: no process friction worth a skill edit. Scope stayed to
-the one line in one file; no lazy fix; no ambiguous sub-point left on a
-closed issue; nothing security-relevant touched.
+`wrap-up` ran: no scope creep (touched only `COVERAGE_NOTES.md`), no lazy
+fix, nothing security-relevant. One minor friction: my first branch name
+(`docs/coverage-notes-drift-caveat-242`) was blocked by the repo's
+branch-naming guard, which only allows `fix/<slug>` or `test/<slug>` off
+this integration branch — re-created as `fix/coverage-notes-drift-caveat`
+and proceeded. Not a skill gap, just used the wrong prefix on the first
+try.
 
 ## Repo state
 
 - `feature/docker-e2e-backend-integration` current and pushed
-  (`af7f05a0`). Working tree clean.
-- Issue #229 closed. Issue #230 (same file) closed last session. No
-  further known drift flagged in `terminologies.routes.js`.
+  (`7ea676b0`). Working tree clean.
+- Issue #242 closed. No further known drift-caveat gaps flagged in
+  `COVERAGE_NOTES.md`.
 - No merge to main pending beyond the usual integration-branch backlog.
 - `main` remains frozen — do not branch off it, merge into it, or push
   to it.
@@ -49,9 +51,8 @@ closed issue; nothing security-relevant touched.
 **Target: 90% across all four coverage dimensions.** Last full reconcile
 (2026-07-22, before the #231 session): statements 91.05%, branches
 **82.3%** (lagging dimension), functions 90.88%, lines 91.5%. This
-session's fix touched an already-covered line in a file with no new
-branches added — no fresh full-suite reconcile run, milestone numbers
-unchanged.
+session's fix was docs-only (no source/test changes) — no fresh
+full-suite reconcile run, milestone numbers unchanged.
 
 ## Recommended next steps
 
@@ -59,12 +60,13 @@ No next issue explicitly named by Dennis this session — none queued.
 
 Remaining open backlog as of this session (`gh issue list --state open`):
 #250 (`MongoAuditRepository.js` collection-name config divergence — still
-needs an owner call on wiring vs. documenting immutability), #242 (full-
-suite coverage reconcile drift), #228 (coverage snapshot pointer to
-COVERAGE_NOTES.md), #224 (`Sample.validate`/`create` genuine gaps beyond
-#146 rename), #222 (`SampleGraphValidator.js` never migrated to canonical
-field naming), #115 (`syncFromOrphadata` partial-coverage signal,
-`test-branch` label).
+needs an owner call on wiring vs. documenting immutability), #228
+(coverage snapshot pointer to COVERAGE_NOTES.md), #224 (`Sample.validate`/
+`create` genuine gaps beyond #146 rename — needs a design call per its own
+text, cross-reference #208), #222 (`SampleGraphValidator.js` never
+migrated to canonical field naming), #115 (`syncFromOrphadata`
+partial-coverage signal, `test-branch` label — needs Orphadata domain
+knowledge to resolve).
 
 For coverage work: resume the branch%-sorted method in
 `COVERAGE_NOTES.md`; next unflagged candidates from the last sort were
@@ -76,7 +78,8 @@ yet.
 
 `bioavanced-v2-conventions` first. `fix-bugs` +
 `bioavanced-v2-testing-conventions` for bug work. `test-loop` for
-coverage work. `wrap-up` every iteration.
+coverage work. `resolve-issue` for docs/housekeeping items like this
+session's. `wrap-up` every iteration.
 
 ## Dependency notes
 
