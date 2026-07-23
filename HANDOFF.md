@@ -1,36 +1,42 @@
 # HANDOFF
 
 **Written:** 2026-07-23, end of a resolve-issue iteration.
-**Branch:** `feature/docker-e2e-backend-integration` (commit `ccec84f2`,
+**Branch:** `feature/docker-e2e-backend-integration` (commit `b1591df1`,
 pushed).
 
 ## What happened this session
 
-Routed via `work-issue` → `resolve-issue` for **issue #249**
-(`quality.routes.js:8`, `qualityDomain.evaluateQuality(req.body || {})`
-— unreachable `|| {}` fallback since `express.json()` is mounted
-globally in `app.js:166` before any route, so `req.body` is always an
-object).
+Routed via `work-issue` → `resolve-issue` for **issue #246**
+(`result.routes.js` — 7 unreachable route-level `if (!db) return 503`
+guards shadowed by `authenticate`'s own db-unavailable 503, same pattern
+as #67/#76/#236/#249).
 
-Applied the issue's own suggested fix: dropped the fallback
-(`qualityDomain.evaluateQuality(req.body)`). Verified against
-`tests/integration/quality.preview.api.test.js` (2 tests, unchanged,
-still pass). Committed on `fix/quality-routes-dead-fallback`
-(`ccec84f2`), fast-forward merged into
-`feature/docker-e2e-backend-integration`, pushed, branch deleted
-(local + remote). Issue #249 closed with a comment citing the commit
-and verification.
+Applied the issue's suggested fix: dropped all 7 dead per-route guards
+(GET /, POST /upload, GET /:id, GET /:id/download, POST /, PUT /:id,
+PUT /:id/link-sample, DELETE /:id). Also removed the two related dead
+branches the issue flagged: POST /upload's route-body `if (!sampleID)`
+check (pre-empted by multer's `storage.destination` callback validating
+`sampleID` first) and the `sample._id ? sample._id.toString() :
+sampleID` fallback (`sample` always comes from `findOne`, which never
+omits `_id`). Verified against `tests/integration/result.routes.api.test.js`
+(55 tests, unchanged, still pass); v8 branch-coverage isolation run
+confirmed the file's real branch coverage post-fix (78.4%). Committed
+on `fix/result-routes-dead-503-guards` (`d09f2149`), merged into
+`feature/docker-e2e-backend-integration` (`b1591df1`), pushed, branch
+deleted (local only — never pushed to remote). Issue #246 closed with
+a comment citing the commit/merge and verification.
 
-`wrap-up` ran: no friction beyond an expected branch-naming rejection
-(`issue-249-...` isn't a valid prefix; `fix/<slug>` is, per
-`bioavanced-v2-conventions`) — not a gap, just the documented rule
-doing its job. Nothing filed.
+`wrap-up` ran: no friction beyond a `perl` encoding mismatch on the
+`não` (Unicode) string that made a bulk multi-block removal silently
+match zero occurrences — worked around with individual `Edit` calls
+per route block instead. Not worth a skill change; a one-off tooling
+quirk, not a recurring pattern.
 
 ## Repo state
 
 - `feature/docker-e2e-backend-integration` current and pushed
-  (`ccec84f2`). Working tree clean.
-- Issue #249 closed, no merge to main pending beyond the usual
+  (`b1591df1`). Working tree clean.
+- Issue #246 closed, no merge to main pending beyond the usual
   integration-branch backlog.
 - `main` remains frozen — do not branch off it, merge into it, or push
   to it.
@@ -40,24 +46,25 @@ doing its job. Nothing filed.
 **Target: 90% across all four coverage dimensions.** Last full reconcile
 (2026-07-22, before the #231 session): statements 91.05%, branches
 **82.3%** (lagging dimension), functions 90.88%, lines 91.5%. This
-session touched one line of dead code in an already-100%-line-covered
-file — no fresh reconcile run, milestone numbers unchanged.
+session touched dead-code branches in one already-well-covered file
+(result.routes.js) — no fresh full-suite reconcile run, milestone
+numbers unchanged.
 
 ## Recommended next steps
 
 No next issue explicitly named by Dennis this session — none queued.
 
 Still open, worth raising with Dennis directly rather than picking
-unprompted: the dead-code cluster (#235, #236, #241, #243, #246, #247,
-#248) — #249 was one member, now resolved. The repeated
-authenticate-shadows-route 503 pattern (#67/#76/#236/#246/#247/#248,
-still six occurrences, five from `master-data.routes.js` alone)
-strongly suggests a repo-wide sweep is more efficient than continued
-per-file spot fixes.
+unprompted: the dead-code cluster (#235, #236 [now #246 done],
+#238, #241, #243, #247, #248) — the repeated authenticate-shadows-route
+503 pattern (#67/#76/#236/#246-done/#247/#248, five remaining
+occurrences, five from `master-data.routes.js` alone in #248 plus
+`phone-codes.routes.js` in #247) strongly suggests a repo-wide sweep is
+more efficient than continued per-file spot fixes.
 
 Also worth a quick pass: check whether any other open issues are
 already resolved by a later commit that fixed a broader/overlapping
-issue (the #218/#245 pattern from the prior session) — a cheap sweep
+issue (the #218/#245 pattern from a prior session) — a cheap sweep
 before picking fresh work.
 
 For coverage work: resume the branch%-sorted method in
