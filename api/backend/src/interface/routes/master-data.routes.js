@@ -11,9 +11,6 @@ function createMasterDataRouter({ collectionName, idField, model }) {
   router.get('/', async (req, res) => {
     try {
       const db = req.app.locals.db;
-      if (!db) {
-        return res.status(503).json({ success: false, error: 'Banco de dados não disponível' });
-      }
 
       const items = await db.collection(collectionName).find({}).sort({ createdAt: -1, _id: -1 }).toArray();
       return res.status(200).json({ success: true, data: items });
@@ -25,9 +22,6 @@ function createMasterDataRouter({ collectionName, idField, model }) {
   router.get('/:id', async (req, res) => {
     try {
       const db = req.app.locals.db;
-      if (!db) {
-        return res.status(503).json({ success: false, error: 'Banco de dados não disponível' });
-      }
 
       const rawId = String(req.params.id);
       const numericId = Number(rawId);
@@ -53,9 +47,6 @@ function createMasterDataRouter({ collectionName, idField, model }) {
   router.post('/', requireRole(3, 4), async (req, res) => {
     try {
       const db = req.app.locals.db;
-      if (!db) {
-        return res.status(503).json({ success: false, error: 'Banco de dados não disponível' });
-      }
 
       const payload = {
         ...req.body,
@@ -77,9 +68,6 @@ function createMasterDataRouter({ collectionName, idField, model }) {
   router.put('/:id', requireRole(3, 4), async (req, res) => {
     try {
       const db = req.app.locals.db;
-      if (!db) {
-        return res.status(503).json({ success: false, error: 'Banco de dados não disponível' });
-      }
 
       const rawId = String(req.params.id);
       const numericId = Number(rawId);
@@ -112,9 +100,6 @@ function createMasterDataRouter({ collectionName, idField, model }) {
   router.delete('/:id', requireRole(3, 4), async (req, res) => {
     try {
       const db = req.app.locals.db;
-      if (!db) {
-        return res.status(503).json({ success: false, error: 'Banco de dados não disponível' });
-      }
 
       const rawId = String(req.params.id);
       const numericId = Number(rawId);
