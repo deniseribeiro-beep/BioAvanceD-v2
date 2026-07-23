@@ -1,108 +1,87 @@
 # HANDOFF
 
-**Written:** 2026-07-23, end of a board-hygiene session (issue #228
-coverage reconcile + a branches-to-90% plan).
-**Branch:** `feature/docker-e2e-backend-integration` (commit
-`763c3244`, pushed).
+**Written:** 2026-07-23, end of a test-loop iteration on
+`src/services/import-lgpd.service.js` (Phase 1, item 1 of the
+branches-to-90% list).
+**Branch:** `feature/docker-e2e-backend-integration` (commit `19bcf9dc`,
+pushed). Merged from `test/import-lgpd-service-branch-coverage`
+(now fully merged, safe to delete).
 
 ## What happened this session
 
-Dennis asked to resolve an issue from the open backlog. Routed #228
-(coverage snapshot pointer — a recurring board-hygiene issue, not a
-bug/test-gap/rewrite item) to `resolve-issue`.
+Picked up the branches-to-90% plan's Phase 1 list from the prior
+session's `COVERAGE_NOTES.md`. Started on the top item,
+`import-lgpd.service.js` (isolated branches 75.06%, ~199-branch gap on
+a 1693-line file).
 
-- Ran a fresh full-suite coverage reconcile (`npx vitest run tests/unit
-  tests/integration tests/compliance --coverage --reporter=dot`, exit
-  0, no failing tests): **Statements 91.54%, Branches 83.37%, Functions
-  90.96%, Lines 91.98%** — up from the 2026-07-22 evening snapshot
-  (90.8/81.84/90.83/91.31). Folds in the `label.routes.js`/
-  `sample.routes.js` session merged at `18ba9f35`.
-- Updated `api/backend/COVERAGE_NOTES.md`'s "Last full reconcile"
-  section with the new numbers. Committed directly to the integration
-  branch (doc-only change, `763c3244`) and pushed.
-- Commented the update on issue #228 and left it **open** — it's a
-  running snapshot pointer (matches its established comment-history
-  pattern), not a one-off fix to close.
-- Dennis then asked for a plan to reach 90% branches. Added a
-  **"Branch-focused priority list toward the 90% branches milestone"**
-  section to `COVERAGE_NOTES.md` (right after the reconcile section):
-  branches needs ~1100 more covered branches to cross 90%
-  (14950/16611). Sorted every file by absolute branch gap (not
-  percentage — gap size moves the aggregate fastest), excluded files
-  already blocked by a filed issue or documented design call (the
-  #146/#152 cluster, #222 `SampleGraphValidator.js` design fork,
-  #240/#241 `patient.service.js`, the `mqtt-telemetry.service.js`
-  accepted-gap note, #146/#164/#159 worker files, and the #242
-  merged-vs-isolated drift pair `queue.js`/`eConsent.js`), and split
-  the rest into two ordered phases (Phase 1: 12 files, ~943-branch
-  gross gap; Phase 2: 13 more files, ~472-branch gross gap). Full list
-  with per-file branch%/lines% is in `COVERAGE_NOTES.md` — don't
-  duplicate it here.
-- Ran `clean-up` after the reconcile runs: deleted the session-generated
-  `api/backend/coverage/` (22M, gitignored). Left `playwright-report/`
-  and `test-results/` alone — both predate this session, no Playwright
-  ran here.
-
-No bugs found, no product code touched, no scope creep (only
-`COVERAGE_NOTES.md` and this file). `wrap-up` ran after the push: one
-minor self-corrected friction (tried branch names outside the repo's
-`fix/<slug>`/`test/<slug>`/integration-branch convention before
-re-checking `bioavanced-v2-conventions`; not a skill/hook gap, just my
-own miss) — nothing else to report.
+- Confirmed the gap was real via an isolated coverage run (not a
+  merged-vs-isolated drift case).
+- The file is too large to close in one iteration (180 uncovered
+  branches spread across readCSV/readExcel, importPatients,
+  importSamples, and several parsing helpers). Per `test-loop`'s
+  "slice turns out too big" guidance, delivered a small, correct,
+  self-contained dent rather than forcing the whole file:
+  - `getNextAvailableLocation`'s sort-comparator branches
+    (block/rack/drawer tie-breaking) — existing tests only ever
+    differed by `box`, so the `!==` true branches for block/rack/drawer
+    were never taken.
+  - `recordNumber` parsing's `'undefined'`/`'NaN'` placeholder strings
+    (only `'null'` was previously tested; same code branch, different
+    literal).
+  - Isolated branch coverage for the file: 75.06% -> 75.43%
+    (605/806 -> 608/806).
+- Updated `COVERAGE_NOTES.md`'s Phase 1 table row for this file (gap
+  199 -> 198, branch% 75.30 -> 75.43) with a note that it's a partial
+  slice and several more sessions are needed on this one file before
+  moving to `sample.service.js`.
+- No bugs found, no product code touched, no dead code discovered.
+  `wrap-up` ran: nothing else to report — scope stayed to the two test
+  files + `COVERAGE_NOTES.md`.
 
 ## Repo state
 
 - `feature/docker-e2e-backend-integration` current and pushed
-  (`763c3244`). Working tree clean.
-- Issue #228 stays open (running pointer). No other issue opened or
-  closed this session.
+  (`19bcf9dc`). Working tree clean.
+- `test/import-lgpd-service-branch-coverage` merged in; can be deleted
+  locally/remotely whenever convenient (not done this session).
 
 ## Milestone (set 2026-07-22 by Dennis, still current)
 
-**Target: 90% across all four coverage dimensions.** Current: Statements
-91.54%, Branches **83.37%** (lagging dimension, ~1100 branches short of
-90%), Functions 90.96%, Lines 91.98%. Three of four dimensions already
-clear the milestone.
+**Target: 90% across all four coverage dimensions.** As of the
+2026-07-23 morning reconcile (`763c3244`): Statements 91.54%, Branches
+**83.37%** (lagging dimension), Functions 90.96%, Lines 91.98%. This
+session's slice moves one file's isolated branches by +3 (aggregate
+reconcile not re-run — too small a change to be worth a full-suite run
+mid-Phase-1; the next full reconcile should happen once Phase 1 is
+further along or complete).
 
 ## Recommended next steps
 
-**Work the Phase 1 list in `COVERAGE_NOTES.md`'s new "Branch-focused
-priority list" section**, in the order given (largest real branch gap
-first): `import-lgpd.service.js` (199), `sample.service.js` (90),
-`intakeWizard.js` (86), `terminologies.routes.js` (82),
-`batch-validation-engine.service.js` (80),
-`fhir-import-staging.service.js` (78), `import.service.js` (68),
-`NotificationService.js` (56), `sample-file.controller.js` (54),
-`orphanet.js` (52), `dictionary.js` (51), `auth.routes.js` (47).
+**Keep working `import-lgpd.service.js`** before moving down the Phase 1
+list — it's the single largest gap (198 branches) and this session only
+closed 3. Remaining uncovered areas in the file (grep `COVERAGE_NOTES.md`
+gap note, or re-run the isolated coverage command below for exact line
+numbers): `readCSV`'s stream-error handler, large chunks of
+`importSamples`'s per-row validation (lines ~750-1000), and the
+`importPatientsSmart` mapping/validation logic (lines ~1150-1520).
 
-Per-file, confirm the gap is real before committing test time: check
-isolated coverage first (the repo's #242 merged-vs-isolated drift class
-inflates some MID-HIGH-looking files) and expect some of each file's
-gap to turn out to be dead/unreachable code (the `if (!db)` 503-guard
-pattern has recurred 6 times already — #67/#76/#236/#246/#247/#248) —
-that's a legitimate resolution too (file the dead-code issue, remove
-it, move on), not a failure to hit the numeric target.
+Isolated coverage command for this file:
+```
+cd api/backend && npx vitest run tests/unit/import-lgpd.service.importPatients.unit.test.js tests/unit/import-lgpd.service.importPatientsSmart.unit.test.js tests/unit/import-lgpd.service.importSamples.unit.test.js tests/unit/import-lgpd.service.readers.test.js tests/unit/import-lgpd.service.test.js tests/unit/import-lgpd.service.unit.test.js --coverage --coverage.include='src/services/import-lgpd.service.js' --reporter=dot
+```
 
-**Regenerate the priority list after Phase 1 lands** rather than
-working stale numbers into Phase 2 — the plan itself says so, don't
-skip that step. This is a multi-session push; don't expect one session
-to close the ~1100-branch gap.
+Once this file is reasonably closed (or the remaining gap turns out to
+be dead code / a design-call punt, both legitimate outcomes per
+`test-loop`), move to `sample.service.js` (90-branch gap), then the rest
+of the Phase 1 list in `COVERAGE_NOTES.md`.
 
-Remaining open backlog beyond this (`gh issue list --state open`, not
-re-checked this session): #250 (`MongoAuditRepository.js`
-collection-name config divergence — needs an owner call), #224
-(`Sample.validate`/`create` genuine gaps — needs a design call,
-cross-reference #208), #222 (`SampleGraphValidator.js` legacy-schema
-migration — same design fork blocking it from the branches plan above),
-#115 (`syncFromOrphadata` partial-coverage signal — needs Orphadata
-domain knowledge).
+Remaining open backlog beyond this (not re-checked this session):
+#250, #224, #222, #115 — see prior handoff / `gh issue list --state open`.
 
 ## Which skills to use
 
-`bioavanced-v2-conventions` first (re-check branch-naming rules before
-creating a branch — this session's one friction point). `resolve-issue`
-for board-hygiene issues like #228. `test-loop` for the branches-to-90%
-push. `wrap-up` and `clean-up` every iteration.
+`test-loop` for this file's continuation. `bioavanced-v2-conventions` and
+`bioavanced-v2-testing-conventions` as always. `wrap-up` every iteration.
 
 ## Dependency notes
 
