@@ -45,10 +45,6 @@ async function ensureIndexes(collection) {
 router.get('/search', authenticate, async (req, res) => {
   try {
     const db = req.app.locals.db;
-    if (!db) {
-      return res.status(503).json({ success: false, error: 'Banco de dados não disponível' });
-    }
-
     const collection = db.collection('phoneCodes');
     await ensureIndexes(collection);
 
