@@ -56,6 +56,82 @@ them). Next session picking a slice should regenerate off a fresh
 buckets blind, since two sessions' worth of slices have landed since
 the 2026-07-22 afternoon regeneration.
 
+## Branch-focused priority list toward the 90% branches milestone
+
+Branches (83.37%, 13850/16611) needs **~1100 more covered branches**
+to cross 90% (14950/16611) — a multi-session lift, not a single slice.
+This list exists because the lines-based ZERO/LOW/MID-LOW/MID-HIGH/GOOD
+buckets below miss it: a file can sit at 90%+ lines and still carry a
+large branch gap (same pattern as the `consent.enforcement.js` /
+`audit.middleware.js` follow-ups earlier in this file). Regenerated
+2026-07-23 from a fresh `coverage-summary.json`, sorted by absolute
+branch gap (`total - covered`) — gap size, not percentage, is what
+moves the aggregate number fastest per slice.
+
+**Excluded — already blocked by a filed issue or a documented design
+call, don't re-pick these as "genuinely low" candidates without first
+reading the linked context:**
+`audit-v2.service.js` / `neo4jCanonicalProjection.service.js` (issue
+#146/#152 cluster), `SampleGraphValidator.js` (issue #222, legacy-schema
+design fork), `patient.service.js` (issues #240/#241, optional/deep
+error-path only), `mqtt-telemetry.service.js` (accepted gap — `mqtt`'s
+`connect` export can't be mocked, see MID-HIGH entry above),
+`result-worker.js` / `daily-merkle.job.js` (issue #146/#164/#159),
+`queue.js` / `eConsent.js` (issue #242 merged-vs-isolated drift class —
+re-check isolated coverage before trusting the merged number for
+either).
+
+**Phase 1 (top gap, unblocked, real candidates — pick in this order):**
+
+```
+gap  branch% lines%  file
+199  75.30%  90.2%   src/services/import-lgpd.service.js
+ 90  73.13%  85.2%   src/services/sample.service.js
+ 86  77.66%  92.8%   src/routes/intakeWizard.js
+ 82  68.93%  94.4%   src/interface/routes/terminologies.routes.js
+ 80  82.40%  88.2%   src/services/batch-validation-engine.service.js
+ 78  85.40%  92.6%   src/services/fhir-import-staging.service.js
+ 68  79.14%  89.9%   src/services/import.service.js
+ 56  74.54%  89.2%   src/services/NotificationService.js
+ 54  69.66%  98.8%   src/controllers/sample-file.controller.js
+ 52  69.94%  85.2%   src/routes/orphanet.js
+ 51  78.66%  96.2%   src/routes/dictionary.js
+ 47  69.67%  86.0%   src/interface/routes/auth.routes.js
+```
+
+Phase 1 alone covers ~943 of the ~1100-branch gap if fully closed —
+in practice expect a meaningfully smaller real yield, since some
+fraction of any file's branch gap turns out to be dead/unreachable code
+(the `if (!db)` 503-guard pattern already resolved 6 times — #67/#76/
+#236/#246/#247/#248 — is exactly this) rather than a genuine test gap.
+Treat each file as "confirm real gap via isolated coverage first,
+same #242 caveat as everywhere else in this file," not as guaranteed
+yield.
+
+**Phase 2 (next tier, same exclusions apply):**
+
+```
+gap  branch% lines%  file
+ 46  79.27%  92.5%   src/services/terminologySync.service.js
+ 44  81.86%  97.4%   src/services/consent.service.js
+ 44  74.71%  94.0%   src/services/equipment-sensor-quarantine.service.js
+ 43  80.09%  92.7%   src/services/user-security.service.js
+ 40  73.50%  98.4%   src/services/auth.service.js
+ 36  77.07%  90.3%   src/controllers/auth.controller.js
+ 35  76.35%  95.5%   src/controllers/audit.controller.js
+ 33  81.46%  92.5%   src/services/storageService.js
+ 32  70.09%  95.0%   src/controllers/consent.controller.js
+ 32  81.81%  100.0%  src/services/hl7.service.js
+ 30  83.24%  90.9%   src/services/rcs-certification.service.js
+ 29  87.42%  97.5%   src/controllers/paciente.controller.js
+ 28  90.42%  99.1%   src/interface/routes/reports.routes.js
+```
+
+Regenerate this list after Phase 1 lands rather than working stale
+numbers — several Phase 2 entries will shift once Phase 1's shared
+helpers (e.g. `import.service.js`/`import-lgpd.service.js` likely share
+validation branches) get exercised incidentally.
+
 Only **1 failing test** this run (`sample-graph-validator.service.test.js`
 > "valida o nó de Integridade com sucesso e falha por tampering") — the
 123-failures-across-5-files issue #244 called out in the prior
