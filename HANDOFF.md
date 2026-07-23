@@ -1,50 +1,47 @@
 # HANDOFF
 
 **Written:** 2026-07-23, end of a work-issue → fix-bugs iteration.
-**Branch:** `feature/docker-e2e-backend-integration` (commit `cfa895dc`,
+**Branch:** `feature/docker-e2e-backend-integration` (commit `a8f41b62`,
 pushed).
 
 ## What happened this session
 
-Routed via `work-issue` → `fix-bugs` for **issue #241**
-(`src/services/patient.service.js` — two branches flagged by a prior
-test-loop session as unreachable):
+Routed via `work-issue` → `fix-bugs` for **issue #243**
+(`src/interface/routes/intakeWizard.routes.js` — `buildSafeSampleSummary`'s
+five `governanceStatus.<field> || normalizeString(sample.<field>) || null`
+fallback chains, flagged by a prior test-loop session as unreachable, same
+shape as #236/#237/#238/#241).
 
-1. `createPatient`'s clinical-unit guard (`if (patientData.clinicalUnit
-   && !PatientModel.validateUnit(patientData.clinicalUnit))`, ~line 496).
-   Confirmed dead: `patientData.clinicalUnit` always arrives via
-   `resolveClinicalUnitSnapshot`/`normalizeClinicalUnit`, both of which
-   only ever produce `null` or a non-empty trimmed/uppercased string —
-   and `PatientModel.validateUnit` (`src/models/Patient.js:89`) is true
-   for any such string. Removed the guard.
-2. `decryptSensitivePatientFields`'s outer try/catch around
-   `decryptValue` (~lines 83-90). Confirmed dead: `decryptValue`
-   (`src/utils/fieldEncryption.js:46`) already catches every internal
-   failure path (unknown keyId, malformed payload, decrypt error) and
-   returns `null` instead of throwing. Unwrapped the call.
+Verified before editing: the only caller (`sanitizeIntakeResponse`) always
+passes a `governanceStatus` that came from (or defaults to)
+`resolveGovernanceStatus(body)`, which unconditionally returns all five
+fields (`status`, `currentStatus`, `lifecycleStatus`, `availabilityStatus`,
+`quarantineStatus`) as non-empty strings on every one of its three branches.
+So both the `normalizeString(sample.*)` fallback *and* the trailing
+`|| null` were dead — confirmed by running coverage before/after: the fix
+moved `intakeWizard.routes.js` branch coverage from 95.23% to 100% (the
+`|| null` half was still uncovered after only removing the `sample.*`
+half, so the fix simplified to direct `governanceStatus.<field>` property
+access per the issue's suggested fix, not a partial cleanup).
 
-Note: `PatientModel.validateUnit` itself is still live — it's also
-called from `import-lgpd.service.js:593` (a different, untouched code
-path with its own test coverage), so the model method was left alone.
-
-No test was pinned to issue #241. Verified against the full patient
-service unit/integration suite (240 tests, unchanged, still pass) —
-both on the fix branch and on the merged integration branch. Committed
-on `fix/patient-service-dead-branches` (`e9d50e2f`), merged into
-`feature/docker-e2e-backend-integration` (`cfa895dc`), pushed, branch
-deleted (local and remote). Issue #241 closed with a comment citing the
+No test was pinned to issue #243. Verified against the isolated
+governance test file (14 tests) plus the two sibling intakeWizard test
+files (44 tests total across 3 files), unchanged, still pass — both on
+the fix branch and on the merged integration branch. Committed on
+`fix/intake-wizard-dead-fallbacks` (`dfcd6d2b`), merged into
+`feature/docker-e2e-backend-integration` (`a8f41b62`), pushed, branch
+deleted (local and remote). Issue #243 closed with a comment citing the
 merge commit and verification.
 
-`wrap-up` ran: no process friction beyond the already-documented
-chained-command permission split (branch delete + push denied together,
-re-run as separate calls — matches the pattern `fix-bugs` already
-describes). No new issue filed, no scope creep, no lazy fix.
+`wrap-up` ran: no process friction. Scope stayed to the one file; no
+lazy fix; no ambiguous sub-point left on a closed issue; nothing
+security-relevant touched.
 
 ## Repo state
 
 - `feature/docker-e2e-backend-integration` current and pushed
-  (`cfa895dc`). Working tree clean.
-- Issue #241 closed. Issue #250 (filed 2026-07-23, still open, no owner
+  (`a8f41b62`). Working tree clean.
+- Issue #243 closed. Issue #250 (filed 2026-07-23, still open, no owner
   decision) unchanged.
 - No merge to main pending beyond the usual integration-branch backlog.
 - `main` remains frozen — do not branch off it, merge into it, or push
@@ -56,15 +53,17 @@ describes). No new issue filed, no scope creep, no lazy fix.
 (2026-07-22, before the #231 session): statements 91.05%, branches
 **82.3%** (lagging dimension), functions 90.88%, lines 91.5%. This
 session touched dead-code lines in one already-covered file
-(`patient.service.js`) — no fresh full-suite reconcile run, milestone
+(`intakeWizard.routes.js`) — no fresh full-suite reconcile run, milestone
 numbers unchanged.
 
 ## Recommended next steps
 
 No next issue explicitly named by Dennis this session — none queued.
 
-Other open dead-code issues from the same filing wave, not yet worked:
-#243 (`intakeWizard.routes.js` dead fallback).
+The dead-code filing wave (#236/#237/#238/#241/#243) is now fully worked
+through as far as the last-known list went — no more open issues of that
+exact shape are queued. Worth a fresh backlog scan next session to check
+for any newer ones before assuming the wave is done.
 
 #250 (`MongoAuditRepository.js` collection-name config divergence, filed
 2026-07-23) still needs an owner call on which of the two fixes (wire it
