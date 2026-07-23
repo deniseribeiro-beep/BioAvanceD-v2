@@ -219,6 +219,15 @@ route-level guards from `master-data.routes.js` (`authenticate` already
 98.33/100/100/98.33 branches now fully covered; remaining statement/line
 gap is line 62 (unrelated).
 
+**Issue #236 resolved (later session):** removed the dead `if (!db)`
+route-level guard from `analysis-file.routes.js`'s `GET
+/validate/:sampleIdentifier` (`authenticate` already 503s first for this
+non-keepalive/non-MFA route). Isolated coverage on the file moved to
+94.73/100/50/94.73 (branches now fully covered); remaining
+statement/line gap is line 47 (unrelated), and the 50% function gap is
+the module-level `router` factory call not counted as a hit function
+(pre-existing, unrelated to this fix).
+
 **Bucket lists below are freshly regenerated this session** off the new
 `coverage-summary.json`, then corrected per the drift check above.
 Cutoffs unchanged: ZERO = 0%, LOW = 1-49%, MID-LOW = 50-69%,
