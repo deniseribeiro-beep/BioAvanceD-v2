@@ -447,11 +447,8 @@ class PatientService {
 
       this.applyDeceasedRepresentativeRules(patientData);
 
-      const isTestEnv = String(process.env.NODE_ENV || '').toLowerCase() === 'test';
       if (!patientData.consentTemplateId || typeof patientData.consentTemplateId !== 'string') {
-        if (!isTestEnv) {
-          throw new Error('Template de consentimento (consentTemplateId) é obrigatório');
-        }
+        throw new Error('Template de consentimento (consentTemplateId) é obrigatório');
       } else {
         const consentTemplateId = patientData.consentTemplateId.trim();
         const { ObjectId } = require('mongodb');

@@ -394,11 +394,11 @@ describe('PatientService.createPatient consentTemplateId branches', () => {
     }
   });
 
-  it('still rejects when consentTemplateId is missing in the test environment, via PatientModel validation', async () => {
-    // The service's own consentTemplateId-required guard is skipped in the test
-    // environment (NODE_ENV === 'test'), but PatientModel.validate() independently
-    // requires consentTemplateId regardless of environment, so the request is still
-    // rejected -- just with a different error message/source.
+  it('rejects when consentTemplateId is missing in the test environment too (no env carve-out)', async () => {
+    // consentTemplateId is required unconditionally -- there is no NODE_ENV
+    // carve-out (issue #240: a prior test-env carve-out here was neutralized
+    // by PatientModel.validate() enforcing the field regardless of env, so it
+    // was removed rather than propagated).
     const db = makeFakeDb();
 
     await expect(
@@ -406,7 +406,7 @@ describe('PatientService.createPatient consentTemplateId branches', () => {
         skipConsentNotification: true,
         skipBiomarkerArtifacts: true
       })
-    ).rejects.toThrow('consentTemplateId é obrigatório');
+    ).rejects.toThrow('Template de consentimento (consentTemplateId) é obrigatório');
   });
 });
 
