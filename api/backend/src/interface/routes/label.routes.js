@@ -216,4 +216,11 @@ router.get('/samples/:sampleId/print-job', authenticate, requirePermission('crea
   }
 });
 
+router._test = {
+  findSample,
+  resolveStoragePathText,
+  buildLocationText,
+  normalizeString,
+};
+
 module.exports = router;

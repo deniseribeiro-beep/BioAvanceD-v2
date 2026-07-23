@@ -1087,5 +1087,9 @@ router.get('/:sampleID/files/:fileID/export/cda',
   sampleFileController.exportCDA.bind(sampleFileController)
 );
 
+router._test = {
+  validateCreateSamplePayload,
+};
+
 module.exports = router;
 

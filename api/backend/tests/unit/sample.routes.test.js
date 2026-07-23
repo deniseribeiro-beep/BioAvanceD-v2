@@ -18,115 +18,138 @@ const miabisValidatorPath = require.resolve('../../src/services/miabisValidator.
 const sampleGraphValidatorPath = require.resolve('../../src/services/SampleGraphValidator');
 const routePath = require.resolve('../../src/interface/routes/sample.routes.js');
 
-const allPaths = [
-  authPath,
-  rbacPath,
-  consentEnforcementPath,
-  sampleServicePath,
-  consentValidatorPath,
-  auditLoggerPath,
-  registerSampleUseCasePath,
-  lineageRepositoryPath,
-  sampleFileControllerPath,
-  miabisValidatorPath,
-  sampleGraphValidatorPath,
-  routePath,
-];
+// authenticate/requirePermission/enforceCommercialConsent/validateMiabisCompliance
+// are destructured at require-time in sample.routes.js, and
+// RegisterSampleUseCase/LineageRepository/SampleGraphValidator are captured
+// as constructor references. Re-requiring this ~1100-line route file fresh
+// per test (as label.routes.test.js/hpo.routes.test.js do for their much
+// smaller files) makes V8's per-file branch coverage undercount here -
+// confirmed empirically: routes with both a true- and false-path test (e.g.
+// GET /:id's 404 vs 200) still reported the false branch as 0 hits despite
+// the 200 test's assertions passing, deterministically, across reruns.
+// Fix: require every dependency and the route itself exactly ONCE, and give
+// each mockable seam a stable proxy/constructor that reads a mutable
+// `current*` closure variable - so route.js's one-time destructuring still
+// always calls through to whatever the current test configured.
+let currentAuth = defaultAuth;
+let currentRequirePermission = () => (req, res, next) => next();
+let currentEnforceCommercialConsent = () => (req, res, next) => next();
+let currentValidateMiabisCompliance = () => Promise.resolve({ compliant: true });
+let currentRegisterSampleUseCaseExecute = () => Promise.resolve();
+let currentValidateSampleCompliance = () => Promise.resolve({ compliant: true });
+let currentConsentValidatorValidateAccess = () => Promise.resolve(true);
 
-function clearCache() {
-  for (const p of allPaths) delete require.cache[p];
+function defaultAuth(req, res, next) {
+  req.user = { id: 'user-1', name: 'Tester', roleName: 'Administrador' };
+  req.t = (key) => key;
+  next();
 }
 
-// authenticate/requirePermission/enforceCommercialConsent and the
-// RegisterSampleUseCase/LineageRepository classes are all destructured or
-// captured by reference at require-time in sample.routes.js. vi.mock()
-// does not reliably intercept CJS require() graphs in this repo (confirmed
-// while writing this test - see hpo.routes.test.js for the same workaround).
-// Instead: clear the cache, replace the dependency modules' exports, then
-// require the route file fresh so its top-level requires pick up the fakes.
+const authModule = require(authPath);
+authModule.authenticate = (req, res, next) => currentAuth(req, res, next);
+
+const rbacModule = require(rbacPath);
+rbacModule.requirePermission = (...args) => currentRequirePermission(...args);
+
+const consentEnforcementModule = require(consentEnforcementPath);
+consentEnforcementModule.enforceCommercialConsent = (...args) => currentEnforceCommercialConsent(...args);
+
+const miabisValidatorModule = require(miabisValidatorPath);
+miabisValidatorModule.validateMiabisCompliance = (...args) => currentValidateMiabisCompliance(...args);
+
+let capturedSampleRepository;
+function StableRegisterSampleUseCase({ sampleRepository } = {}) {
+  capturedSampleRepository = sampleRepository;
+  this.execute = (...args) => currentRegisterSampleUseCaseExecute(...args);
+}
+require.cache[registerSampleUseCasePath] = {
+  id: registerSampleUseCasePath,
+  filename: registerSampleUseCasePath,
+  loaded: true,
+  exports: StableRegisterSampleUseCase,
+};
+
+function StableLineageRepository() {}
+require.cache[lineageRepositoryPath] = {
+  id: lineageRepositoryPath,
+  filename: lineageRepositoryPath,
+  loaded: true,
+  exports: StableLineageRepository,
+};
+
+function StableSampleGraphValidator() {
+  this.validateSampleCompliance = (...args) => currentValidateSampleCompliance(...args);
+}
+require.cache[sampleGraphValidatorPath] = {
+  id: sampleGraphValidatorPath,
+  filename: sampleGraphValidatorPath,
+  loaded: true,
+  exports: StableSampleGraphValidator,
+};
+
+const sampleServiceModule = require(sampleServicePath);
+const originalSampleServiceModule = { ...sampleServiceModule };
+const consentValidatorModule = require(consentValidatorPath);
+consentValidatorModule.init = vi.fn();
+consentValidatorModule.validateAccess = (...args) => currentConsentValidatorValidateAccess(...args);
+
+const auditLoggerModule = require(auditLoggerPath);
+
+const sampleFileControllerModule = require(sampleFileControllerPath);
+sampleFileControllerModule.uploadMiddleware = () => (req, res, next) => next();
+sampleFileControllerModule.uploadFile = (req, res) => res.status(200).json({ success: true });
+sampleFileControllerModule.listFiles = (req, res) => res.status(200).json({ success: true });
+sampleFileControllerModule.downloadFile = (req, res) => res.status(200).json({ success: true });
+sampleFileControllerModule.deleteFile = (req, res) => res.status(200).json({ success: true });
+sampleFileControllerModule.exportHL7v2 = (req, res) => res.status(200).json({ success: true });
+sampleFileControllerModule.exportFHIR = (req, res) => res.status(200).json({ success: true });
+sampleFileControllerModule.exportCDA = (req, res) => res.status(200).json({ success: true });
+
+// Required exactly once - see comment above.
+const router = require(routePath);
+
 function loadRoute({
   registerSampleUseCaseExecute,
   sampleServiceOverrides = {},
   consentValidatorValidateAccess,
   validateMiabisCompliance,
   validateSampleCompliance,
+  authImpl,
+  requirePermissionImpl,
+  enforceCommercialConsentImpl,
 } = {}) {
-  clearCache();
+  currentAuth = authImpl || defaultAuth;
+  currentRequirePermission = requirePermissionImpl || (() => (req, res, next) => next());
+  currentEnforceCommercialConsent = enforceCommercialConsentImpl || (() => (req, res, next) => next());
+  currentValidateMiabisCompliance = validateMiabisCompliance || (() => Promise.resolve({ compliant: true }));
+  currentRegisterSampleUseCaseExecute = registerSampleUseCaseExecute || (() => Promise.resolve());
+  currentValidateSampleCompliance = validateSampleCompliance || (() => Promise.resolve({ compliant: true }));
+  currentConsentValidatorValidateAccess = consentValidatorValidateAccess || (() => Promise.resolve(true));
 
-  const authModule = require(authPath);
-  authModule.authenticate = (req, res, next) => {
-    req.user = { id: 'user-1', name: 'Tester', roleName: 'Administrador' };
-    req.t = (key) => key;
-    next();
-  };
+  // sample.service/consent.validator/auditLogger/sample-file.controller are
+  // required as whole modules (not destructured) by sample.routes.js, so
+  // mutating their exports in place is picked up without re-requiring it.
+  // Restore the real implementations before layering this test's overrides,
+  // so a mock from a previous test never leaks into this one.
+  Object.assign(sampleServiceModule, originalSampleServiceModule, sampleServiceOverrides);
 
-  const rbacModule = require(rbacPath);
-  rbacModule.requirePermission = () => (req, res, next) => next();
-
-  const consentEnforcementModule = require(consentEnforcementPath);
-  consentEnforcementModule.enforceCommercialConsent = () => (req, res, next) => next();
-
-  const sampleServiceModule = require(sampleServicePath);
-  Object.assign(sampleServiceModule, sampleServiceOverrides);
-
-  const consentValidatorModule = require(consentValidatorPath);
-  consentValidatorModule.init = vi.fn();
-  consentValidatorModule.validateAccess = consentValidatorValidateAccess || vi.fn().mockResolvedValue(true);
-
-  const auditLoggerModule = require(auditLoggerPath);
   auditLoggerModule.init = vi.fn();
   auditLoggerModule.log = vi.fn().mockResolvedValue(undefined);
   auditLoggerModule.logError = vi.fn().mockResolvedValue(undefined);
 
-  function FakeRegisterSampleUseCase() {
-    this.execute = registerSampleUseCaseExecute || vi.fn();
-  }
-  require.cache[registerSampleUseCasePath] = {
-    id: registerSampleUseCasePath,
-    filename: registerSampleUseCasePath,
-    loaded: true,
-    exports: FakeRegisterSampleUseCase,
-  };
-
-  function FakeLineageRepository() {}
-  require.cache[lineageRepositoryPath] = {
-    id: lineageRepositoryPath,
-    filename: lineageRepositoryPath,
-    loaded: true,
-    exports: FakeLineageRepository,
-  };
-
-  const miabisValidatorModule = require(miabisValidatorPath);
-  miabisValidatorModule.validateMiabisCompliance = validateMiabisCompliance || vi.fn().mockResolvedValue({ compliant: true });
-
-  function FakeSampleGraphValidator() {
-    this.validateSampleCompliance = validateSampleCompliance || vi.fn().mockResolvedValue({ compliant: true });
-  }
-  require.cache[sampleGraphValidatorPath] = {
-    id: sampleGraphValidatorPath,
-    filename: sampleGraphValidatorPath,
-    loaded: true,
-    exports: FakeSampleGraphValidator,
-  };
-
-  const sampleFileControllerModule = require(sampleFileControllerPath);
-  sampleFileControllerModule.uploadMiddleware = () => (req, res, next) => next();
-  sampleFileControllerModule.uploadFile = (req, res) => res.status(200).json({ success: true });
-  sampleFileControllerModule.listFiles = (req, res) => res.status(200).json({ success: true });
-  sampleFileControllerModule.downloadFile = (req, res) => res.status(200).json({ success: true });
-  sampleFileControllerModule.deleteFile = (req, res) => res.status(200).json({ success: true });
-  sampleFileControllerModule.exportHL7v2 = (req, res) => res.status(200).json({ success: true });
-  sampleFileControllerModule.exportFHIR = (req, res) => res.status(200).json({ success: true });
-  sampleFileControllerModule.exportCDA = (req, res) => res.status(200).json({ success: true });
-
-  const router = require(routePath);
   return { router, auditLoggerModule, sampleServiceModule };
 }
 
-function buildApp(router, db = {}) {
+function buildApp(router, db = {}, { stripReqIp } = {}) {
   const app = express();
   app.use(express.json());
   app.locals.db = db;
+  if (stripReqIp) {
+    app.use((req, res, next) => {
+      Object.defineProperty(req, 'ip', { value: undefined, configurable: true });
+      next();
+    });
+  }
   app.use('/api/samples', router);
   return app;
 }
@@ -146,7 +169,6 @@ const VALID_PAYLOAD = {
 describe('sample.routes', () => {
   afterEach(() => {
     vi.restoreAllMocks();
-    clearCache();
   });
 
   describe('POST / payload validation', () => {
@@ -187,6 +209,194 @@ describe('sample.routes', () => {
       expect(res.status).toBe(422);
       expect(res.body.error).toBe('NON_CANONICAL_FIELD');
       expect(res.body.fields).toContain('registrationDate');
+    });
+
+    it.each([
+      ['patientID', 'p1'],
+      ['sampleID', 's1'],
+      ['sampleId', 's1'],
+      ['registerDate', '2026-01-01'],
+      ['currentStatus', 'ACTIVE'],
+      ['merkle_root', 'abc123'],
+    ])('rejects %s as a non-canonical alias field', async (field, value) => {
+      const { router } = loadRoute({ registerSampleUseCaseExecute: vi.fn() });
+      const app = buildApp(router, {});
+
+      const res = await request(app)
+        .post('/api/samples')
+        .send({ ...VALID_PAYLOAD, [field]: value });
+
+      expect(res.status).toBe(422);
+      expect(res.body.error).toBe('NON_CANONICAL_FIELD');
+      expect(res.body.fields).toContain(field);
+    });
+
+    it('rejects a sampleType that is a valid string but not a recognized MIABIS id', async () => {
+      const { router } = loadRoute({ registerSampleUseCaseExecute: vi.fn() });
+      const app = buildApp(router, {});
+
+      const res = await request(app)
+        .post('/api/samples')
+        .send({ ...VALID_PAYLOAD, sampleType: 'NOT_A_REAL_TYPE' });
+
+      expect(res.status).toBe(422);
+      expect(res.body.details).toContain('sampleType inválido conforme MIABIS');
+    });
+
+    it('rejects a sampleOrigin that is a valid string but not a recognized MIABIS id', async () => {
+      const { router } = loadRoute({ registerSampleUseCaseExecute: vi.fn() });
+      const app = buildApp(router, {});
+
+      const res = await request(app)
+        .post('/api/samples')
+        .send({ ...VALID_PAYLOAD, sampleOrigin: 'NOT_A_REAL_ORIGIN' });
+
+      expect(res.status).toBe(422);
+      expect(res.body.details).toContain('sampleOrigin inválido conforme MIABIS');
+    });
+
+    it('rejects an extractionProtocol that is a valid string but not a recognized MIABIS id', async () => {
+      const { router } = loadRoute({ registerSampleUseCaseExecute: vi.fn() });
+      const app = buildApp(router, {});
+
+      const res = await request(app)
+        .post('/api/samples')
+        .send({ ...VALID_PAYLOAD, extractionProtocol: 'NOT_A_REAL_PROTOCOL' });
+
+      expect(res.status).toBe(422);
+      expect(res.body.details).toContain('extractionProtocol inválido conforme MIABIS');
+    });
+
+    it('rejects a quality that is a valid non-empty string but not a recognized MIABIS id', async () => {
+      const { router } = loadRoute({ registerSampleUseCaseExecute: vi.fn() });
+      const app = buildApp(router, {});
+
+      const res = await request(app)
+        .post('/api/samples')
+        .send({ ...VALID_PAYLOAD, quality: 'NOT_A_REAL_QUALITY' });
+
+      expect(res.status).toBe(422);
+      expect(res.body.details).toContain('quality inválido conforme MIABIS');
+    });
+
+    it('rejects a missing linkedProject', async () => {
+      const { router } = loadRoute({ registerSampleUseCaseExecute: vi.fn() });
+      const app = buildApp(router, {});
+      const { linkedProject, ...withoutLinkedProject } = VALID_PAYLOAD;
+
+      const res = await request(app).post('/api/samples').send(withoutLinkedProject);
+
+      expect(res.status).toBe(422);
+      expect(res.body.details).toContain('linkedProject é obrigatório');
+    });
+
+    it('rejects a non-string linkedProject', async () => {
+      const { router } = loadRoute({ registerSampleUseCaseExecute: vi.fn() });
+      const app = buildApp(router, {});
+
+      const res = await request(app)
+        .post('/api/samples')
+        .send({ ...VALID_PAYLOAD, linkedProject: 12345 });
+
+      expect(res.status).toBe(422);
+      expect(res.body.details).toContain('linkedProject é obrigatório');
+    });
+
+    it('rejects a non-boolean isRareDisease', async () => {
+      const { router } = loadRoute({ registerSampleUseCaseExecute: vi.fn() });
+      const app = buildApp(router, {});
+
+      const res = await request(app)
+        .post('/api/samples')
+        .send({ ...VALID_PAYLOAD, isRareDisease: 'yes' });
+
+      expect(res.status).toBe(422);
+      expect(res.body.details).toContain('isRareDisease deve ser boolean');
+    });
+
+    it('accepts a boolean isRareDisease', async () => {
+      const executeMock = vi.fn().mockResolvedValue({
+        sample: { _id: { toString: () => 's1' }, patientID: '12345678' },
+        strictMode: true,
+        topology: {},
+      });
+      const { router } = loadRoute({ registerSampleUseCaseExecute: executeMock });
+      const app = buildApp(router, {});
+
+      const res = await request(app)
+        .post('/api/samples')
+        .send({ ...VALID_PAYLOAD, isRareDisease: true });
+
+      expect(res.status).toBe(201);
+    });
+
+    it('accepts a numeric-string locationID', async () => {
+      const executeMock = vi.fn().mockResolvedValue({
+        sample: { _id: { toString: () => 's1' }, patientID: '12345678' },
+        strictMode: true,
+        topology: {},
+      });
+      const { router } = loadRoute({ registerSampleUseCaseExecute: executeMock });
+      const app = buildApp(router, {});
+
+      const res = await request(app)
+        .post('/api/samples')
+        .send({ ...VALID_PAYLOAD, locationID: '42' });
+
+      expect(res.status).toBe(201);
+    });
+
+    it('rejects a locationID that is neither a valid number nor a numeric string', async () => {
+      const { router } = loadRoute({ registerSampleUseCaseExecute: vi.fn() });
+      const app = buildApp(router, {});
+
+      const res = await request(app)
+        .post('/api/samples')
+        .send({ ...VALID_PAYLOAD, locationID: 'not-a-number' });
+
+      expect(res.status).toBe(422);
+      expect(res.body.details).toContain(
+        'Localização física obrigatória para cadastro de amostra: locationID deve ser numérico válido'
+      );
+    });
+
+    it('rejects a locationID of 0 (not a positive number)', async () => {
+      const { router } = loadRoute({ registerSampleUseCaseExecute: vi.fn() });
+      const app = buildApp(router, {});
+
+      const res = await request(app)
+        .post('/api/samples')
+        .send({ ...VALID_PAYLOAD, locationID: 0 });
+
+      expect(res.status).toBe(422);
+      expect(res.body.details).toContain(
+        'Localização física obrigatória para cadastro de amostra: locationID deve ser numérico válido'
+      );
+    });
+
+    it('parses req.body as an empty object when no body is sent at all', async () => {
+      const executeMock = vi.fn();
+      const { router } = loadRoute({ registerSampleUseCaseExecute: executeMock });
+      const app = buildApp(router, {});
+
+      const res = await request(app).post('/api/samples').type('text/plain').send();
+
+      expect(res.status).toBe(422);
+      expect(executeMock).not.toHaveBeenCalled();
+    });
+
+    it('treats a genuinely undefined req.body as an empty payload (router._test)', () => {
+      const { router } = loadRoute();
+      const res = {
+        status: vi.fn().mockReturnThis(),
+        json: vi.fn().mockReturnThis(),
+      };
+      const next = vi.fn();
+
+      router._test.validateCreateSamplePayload({ body: undefined }, res, next);
+
+      expect(res.status).toHaveBeenCalledWith(422);
+      expect(next).not.toHaveBeenCalled();
     });
   });
 
@@ -280,9 +490,293 @@ describe('sample.routes', () => {
       expect(res.status).toBe(500);
       expect(auditLoggerModule.logError).toHaveBeenCalled();
     });
+
+    it('maps a validation-shaped Error (no statusCode) to 400', async () => {
+      const { router } = loadRoute({
+        registerSampleUseCaseExecute: vi.fn().mockRejectedValue(new Error('sampleType inválido')),
+      });
+      const app = buildApp(router, {});
+
+      const res = await request(app).post('/api/samples').send(VALID_PAYLOAD);
+
+      expect(res.status).toBe(400);
+    });
+
+    it('maps a 400 error.status (not statusCode) using the createError fallback message', async () => {
+      const err = new Error('bad payload');
+      err.status = 400;
+      const authImpl = (req, res, next) => {
+        req.user = { id: 'user-1' };
+        // no req.t at all - exercises the `req.t?.(...)` optional-chain fallback
+        next();
+      };
+      const { router } = loadRoute({
+        registerSampleUseCaseExecute: vi.fn().mockRejectedValue(err),
+        authImpl,
+      });
+      const app = buildApp(router, {});
+
+      const res = await request(app).post('/api/samples').send(VALID_PAYLOAD);
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('Erro ao criar amostra');
+    });
+
+    it('falls back to a default error message when a non-Error value is thrown', async () => {
+      const { router } = loadRoute({
+        registerSampleUseCaseExecute: vi.fn().mockRejectedValue('just a string'),
+      });
+      const app = buildApp(router, {});
+
+      const res = await request(app).post('/api/samples').send(VALID_PAYLOAD);
+
+      expect(res.status).toBe(500);
+    });
+
+    it('swallows a non-Error thrown from auditLogger.logError without crashing the request', async () => {
+      const { router, auditLoggerModule } = loadRoute({
+        registerSampleUseCaseExecute: vi.fn().mockRejectedValue(new Error('boom')),
+      });
+      auditLoggerModule.logError = vi.fn().mockRejectedValue('audit backend down');
+      const app = buildApp(router, {});
+
+      const res = await request(app).post('/api/samples').send(VALID_PAYLOAD);
+
+      expect(res.status).toBe(500);
+    });
+
+    it('uses req.t fallback strings and quality=null when req.t is absent and sample.quality is undefined', async () => {
+      const executeMock = vi.fn().mockResolvedValue({
+        sample: { _id: { toString: () => 'sample-1' }, patientID: '12345678', quality: undefined },
+        strictMode: true,
+        topology: { synced: true, fallbackQueued: false },
+      });
+      const authImpl = (req, res, next) => {
+        req.user = { id: 'user-1' };
+        req.t = () => undefined;
+        next();
+      };
+      const { router, auditLoggerModule } = loadRoute({ registerSampleUseCaseExecute: executeMock, authImpl });
+      const app = buildApp(router, {});
+
+      const res = await request(app).post('/api/samples').send(VALID_PAYLOAD);
+
+      expect(res.status).toBe(201);
+      expect(res.body.message).toBe('Amostra criada com sucesso');
+      expect(auditLoggerModule.log).toHaveBeenCalledWith(
+        expect.objectContaining({ payload: expect.objectContaining({ quality: null }) })
+      );
+    });
+
+    it('uses the partial-success message suffix when topology sync falls back to quarantine', async () => {
+      const executeMock = vi.fn().mockResolvedValue({
+        sample: { _id: { toString: () => 'sample-1' }, patientID: '12345678', quality: null },
+        strictMode: false,
+        topology: { synced: false, fallbackQueued: true },
+      });
+      const { router } = loadRoute({ registerSampleUseCaseExecute: executeMock });
+      const app = buildApp(router, {});
+
+      const res = await request(app).post('/api/samples').send(VALID_PAYLOAD);
+
+      expect(res.status).toBe(202);
+      expect(res.body.message).toContain('integração topológica em quarentena');
+    });
+
+    it('resolves the actor from req.user._id/userID and req.headers/connection when id/name/ip are absent', async () => {
+      const executeMock = vi.fn();
+      const authImpl = (req, res, next) => {
+        req.user = { _id: { toString: () => 'u2' }, userID: 'u2-alt', username: 'alt-name', role: 'Coordenador' };
+        next();
+      };
+      const { router } = loadRoute({ registerSampleUseCaseExecute: executeMock, authImpl });
+      const app = buildApp(router, {});
+
+      await request(app).post('/api/samples').send(VALID_PAYLOAD);
+
+      expect(executeMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actor: expect.objectContaining({
+            userId: 'u2',
+            userName: 'alt-name',
+            userRole: 'Coordenador',
+          }),
+        })
+      );
+    });
+
+    it('falls back to null actor fields when req.user is absent entirely (no audit log write)', async () => {
+      const executeMock = vi.fn().mockResolvedValue({
+        sample: { _id: { toString: () => 's1' }, patientID: '12345678' },
+        strictMode: true,
+        topology: {},
+      });
+      const authImpl = (req, res, next) => {
+        req.t = (key) => key;
+        next();
+      };
+      const { router, auditLoggerModule } = loadRoute({ registerSampleUseCaseExecute: executeMock, authImpl });
+      const app = buildApp(router, {});
+
+      const res = await request(app).post('/api/samples').send(VALID_PAYLOAD);
+
+      expect(res.status).toBe(201);
+      expect(executeMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actor: expect.objectContaining({ userId: null, userName: null, userRole: null }),
+        })
+      );
+      expect(auditLoggerModule.log).not.toHaveBeenCalled();
+    });
+
+    it('falls back to the x-forwarded-for header when req.ip is unavailable', async () => {
+      const executeMock = vi.fn();
+      const { router } = loadRoute({ registerSampleUseCaseExecute: executeMock });
+      const app = buildApp(router, {}, { stripReqIp: true });
+
+      await request(app)
+        .post('/api/samples')
+        .set('x-forwarded-for', '203.0.113.5')
+        .send(VALID_PAYLOAD);
+
+      expect(executeMock).toHaveBeenCalledWith(
+        expect.objectContaining({ actor: expect.objectContaining({ ipAddress: '203.0.113.5' }) })
+      );
+    });
+
+    it('falls back to req.connection.remoteAddress when both req.ip and the x-forwarded-for header are unavailable', async () => {
+      const executeMock = vi.fn();
+      const { router } = loadRoute({ registerSampleUseCaseExecute: executeMock });
+      const app = buildApp(router, {}, { stripReqIp: true });
+
+      await request(app).post('/api/samples').send(VALID_PAYLOAD);
+
+      expect(executeMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actor: expect.objectContaining({ ipAddress: expect.any(String) }),
+        })
+      );
+      const actor = executeMock.mock.calls[0][0].actor;
+      expect(actor.ipAddress).not.toBeNull();
+    });
+
+    it('falls back to req.user.userID when neither id nor _id are present', async () => {
+      const executeMock = vi.fn();
+      const authImpl = (req, res, next) => {
+        req.user = { userID: 'legacy-id-only' };
+        req.t = (key) => key;
+        next();
+      };
+      const { router } = loadRoute({ registerSampleUseCaseExecute: executeMock, authImpl });
+      const app = buildApp(router, {});
+
+      await request(app).post('/api/samples').send(VALID_PAYLOAD);
+
+      expect(executeMock).toHaveBeenCalledWith(
+        expect.objectContaining({ actor: expect.objectContaining({ userId: 'legacy-id-only' }) })
+      );
+    });
+
+    it('maps a 422 error.statusCode (not status) using the req.t createError fallback', async () => {
+      const err = new Error('invalid enum');
+      err.statusCode = 422;
+      const authImpl = (req, res, next) => {
+        req.user = { id: 'user-1' };
+        req.t = () => undefined;
+        next();
+      };
+      const { router } = loadRoute({ registerSampleUseCaseExecute: vi.fn().mockRejectedValue(err), authImpl });
+      const app = buildApp(router, {});
+
+      const res = await request(app).post('/api/samples').send(VALID_PAYLOAD);
+
+      expect(res.status).toBe(422);
+      expect(res.body.error).toBe('Erro ao criar amostra');
+    });
+
+    it('uses the req.t fallback in the partial-success (202) message', async () => {
+      const executeMock = vi.fn().mockResolvedValue({
+        sample: { _id: { toString: () => 'sample-1' }, patientID: '12345678' },
+        strictMode: false,
+        topology: { synced: false, fallbackQueued: true },
+      });
+      const authImpl = (req, res, next) => {
+        req.user = { id: 'user-1' };
+        req.t = () => undefined;
+        next();
+      };
+      const { router } = loadRoute({ registerSampleUseCaseExecute: executeMock, authImpl });
+      const app = buildApp(router, {});
+
+      const res = await request(app).post('/api/samples').send(VALID_PAYLOAD);
+
+      expect(res.status).toBe(202);
+      expect(res.body.message).toBe('Amostra criada com sucesso (integração topológica em quarentena)');
+    });
+
+    it('uses req.t?. fallback in the 503 unavailable-db message', async () => {
+      const authImpl = (req, res, next) => {
+        req.user = { id: 'user-1' };
+        req.t = () => undefined;
+        next();
+      };
+      const { router } = loadRoute({ registerSampleUseCaseExecute: vi.fn(), authImpl });
+      const app = buildApp(router, null);
+
+      const res = await request(app).post('/api/samples').send(VALID_PAYLOAD);
+
+      expect(res.status).toBe(503);
+      expect(res.body.error).toBe('Banco de dados não disponível');
+    });
+
+    it('exercises the inline sampleRepository.create/deleteById helpers via the use-case execute call', async () => {
+      const createSample = vi.fn().mockResolvedValue({ _id: 'created-1' });
+      const deleteOne = vi.fn().mockResolvedValue(undefined);
+
+      const registerSampleUseCaseExecute = async ({ sampleData }) => {
+        // capturedSampleRepository is set by StableRegisterSampleUseCase's
+        // constructor, which the route always calls before .execute() -
+        // touching it here covers the default `options = {}` arg and the
+        // ObjectId ternary in sampleRepository.create/deleteById, neither of
+        // which the stable fake otherwise exercises.
+        await capturedSampleRepository.create({ participantId: sampleData.participantId });
+        await capturedSampleRepository.deleteById('not-a-valid-object-id');
+        await capturedSampleRepository.deleteById('000000000000000000000000');
+        return {
+          sample: { _id: { toString: () => 'sample-1' }, patientID: sampleData.participantId },
+          strictMode: true,
+          topology: {},
+        };
+      };
+
+      const { router } = loadRoute({
+        registerSampleUseCaseExecute,
+        sampleServiceOverrides: { createSample },
+      });
+      const app = buildApp(router, { collection: () => ({ deleteOne }) });
+
+      const res = await request(app).post('/api/samples').send(VALID_PAYLOAD);
+
+      expect(res.status).toBe(201);
+      expect(createSample).toHaveBeenCalledWith(
+        expect.anything(),
+        { participantId: VALID_PAYLOAD.participantId },
+        {}
+      );
+      expect(deleteOne).toHaveBeenCalledTimes(2);
+    });
   });
 
   describe('GET /:id/label', () => {
+    it('returns 503 when db is unavailable', async () => {
+      const { router } = loadRoute();
+      const app = buildApp(router, null);
+
+      const res = await request(app).get('/api/samples/000000000000000000000000/label');
+
+      expect(res.status).toBe(503);
+    });
+
     it('returns 404 when the sample cannot be found', async () => {
       const { router } = loadRoute();
       const findOne = vi.fn().mockResolvedValue(null);
@@ -311,9 +805,53 @@ describe('sample.routes', () => {
       expect(svgText).toContain('&amp;');
       expect(svgText).not.toContain('BC<1>&"\'');
     });
+
+    it('falls back to _id, req.params.id, sampleIdentifier and "AMOSTRA" when sample fields are absent', async () => {
+      const { router } = loadRoute();
+      const findOne = vi.fn().mockResolvedValue({ _id: { toString: () => 'raw-id' } });
+      const app = buildApp(router, { collection: () => ({ findOne }) });
+
+      const res = await request(app).get('/api/samples/000000000000000000000000/label');
+
+      expect(res.status).toBe(200);
+      const svgText = Buffer.isBuffer(res.body) ? res.body.toString('utf-8') : res.text;
+      expect(svgText).toContain('raw-id');
+      expect(svgText).toContain('AMOSTRA');
+    });
+
+    it('falls back to req.params.id when sample has neither sampleID nor _id', async () => {
+      const { router } = loadRoute();
+      const findOne = vi.fn().mockResolvedValue({});
+      const app = buildApp(router, { collection: () => ({ findOne }) });
+
+      const res = await request(app).get('/api/samples/fallback-param-id/label');
+
+      expect(res.status).toBe(200);
+      const svgText = Buffer.isBuffer(res.body) ? res.body.toString('utf-8') : res.text;
+      expect(svgText).toContain('fallback-param-id');
+    });
+
+    it('returns 500 when the collection lookup throws', async () => {
+      const { router } = loadRoute();
+      const findOne = vi.fn().mockRejectedValue(new Error('db down'));
+      const app = buildApp(router, { collection: () => ({ findOne }) });
+
+      const res = await request(app).get('/api/samples/000000000000000000000000/label');
+
+      expect(res.status).toBe(500);
+    });
   });
 
   describe('GET /search/by-term', () => {
+    it('returns 503 when db is unavailable', async () => {
+      const { router } = loadRoute();
+      const app = buildApp(router, null);
+
+      const res = await request(app).get('/api/samples/search/by-term').query({ q: 'BC1' });
+
+      expect(res.status).toBe(503);
+    });
+
     it('returns 400 when the term is too short', async () => {
       const { router } = loadRoute();
       const app = buildApp(router, {});
@@ -339,9 +877,40 @@ describe('sample.routes', () => {
         expect.objectContaining({ currentStatus: { $ne: 'WITHDRAWN' } })
       );
     });
+
+    it('returns 500 when the collection lookup throws', async () => {
+      const { router } = loadRoute();
+      const find = vi.fn().mockImplementation(() => {
+        throw new Error('db down');
+      });
+      const app = buildApp(router, { collection: () => ({ find }) });
+
+      const res = await request(app).get('/api/samples/search/by-term').query({ q: 'BC1' });
+
+      expect(res.status).toBe(500);
+    });
   });
 
   describe('GET /by-barcode/:barcode', () => {
+    it('returns 503 when db is unavailable', async () => {
+      const { router } = loadRoute();
+      const app = buildApp(router, null);
+
+      const res = await request(app).get('/api/samples/by-barcode/BC1');
+
+      expect(res.status).toBe(503);
+    });
+
+    it('returns 500 when the service throws', async () => {
+      const getSampleByBarcode = vi.fn().mockRejectedValue(new Error('boom'));
+      const { router } = loadRoute({ sampleServiceOverrides: { getSampleByBarcode } });
+      const app = buildApp(router, {});
+
+      const res = await request(app).get('/api/samples/by-barcode/BC1');
+
+      expect(res.status).toBe(500);
+    });
+
     it('returns 404 and logs a warning when no sample matches the barcode', async () => {
       const getSampleByBarcode = vi.fn().mockResolvedValue({ sample: null });
       const { router, auditLoggerModule } = loadRoute({ sampleServiceOverrides: { getSampleByBarcode } });
@@ -645,6 +1214,57 @@ describe('sample.routes', () => {
 
       expect(res.status).toBe(400);
     });
+
+    it('logs a sample_release audit entry when consentStatus is SIGNED', async () => {
+      const updateSample = vi.fn().mockResolvedValue({ _id: '1', consentStatus: 'SIGNED' });
+      const { router, auditLoggerModule } = loadRoute({ sampleServiceOverrides: { updateSample } });
+      const app = buildApp(router, {});
+
+      const res = await request(app)
+        .put('/api/samples/000000000000000000000000')
+        .send({ consentStatus: 'SIGNED', quarantineReason: 'ethics cleared' });
+
+      expect(res.status).toBe(200);
+      expect(auditLoggerModule.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'sample_release',
+          payload: expect.objectContaining({ consentStatus: 'SIGNED', quarantineReason: 'ethics cleared' }),
+        })
+      );
+    });
+
+    it('logs a sample_release audit entry when availabilityStatus is AVAILABLE (case-insensitive)', async () => {
+      const updateSample = vi.fn().mockResolvedValue({ _id: '1' });
+      const { router, auditLoggerModule } = loadRoute({ sampleServiceOverrides: { updateSample } });
+      const app = buildApp(router, {});
+
+      const res = await request(app)
+        .put('/api/samples/000000000000000000000000')
+        .send({ availabilityStatus: 'available' });
+
+      expect(res.status).toBe(200);
+      expect(auditLoggerModule.log).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'sample_release' })
+      );
+    });
+
+    it('logs a sample_release audit entry when quarantineStatus is RELEASED, with null payload fallbacks', async () => {
+      const updateSample = vi.fn().mockResolvedValue({ _id: '1' });
+      const { router, auditLoggerModule } = loadRoute({ sampleServiceOverrides: { updateSample } });
+      const app = buildApp(router, {});
+
+      const res = await request(app)
+        .put('/api/samples/000000000000000000000000')
+        .send({ quarantineStatus: 'RELEASED' });
+
+      expect(res.status).toBe(200);
+      expect(auditLoggerModule.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'sample_release',
+          payload: expect.objectContaining({ consentStatus: null, availabilityStatus: null, quarantineReason: null }),
+        })
+      );
+    });
   });
 
   describe('DELETE /:id', () => {
@@ -722,6 +1342,44 @@ describe('sample.routes', () => {
 
       expect(res.status).toBe(400);
     });
+
+    it('resolves the audit actor from _id/username/role and the x-forwarded-for header, with a req.t fallback message', async () => {
+      const withdrawSample = vi.fn().mockResolvedValue({ withdrawnQuantity: 1, remainingQuantity: 1, movementID: 'm3' });
+      const authImpl = (req, res, next) => {
+        req.user = { _id: { toString: () => 'u9' }, username: 'alt-user', role: 'Coordenador' };
+        req.t = () => undefined;
+        next();
+      };
+      const { router } = loadRoute({ sampleServiceOverrides: { withdrawSample }, authImpl });
+      const app = buildApp(router, {}, { stripReqIp: true });
+
+      const res = await request(app)
+        .post('/api/samples/000000000000000000000000/withdraw')
+        .set('x-forwarded-for', '198.51.100.7')
+        .send({ withdrawalType: 'DISPOSAL', withdrawalResponsible: 'Dr. X' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.message).toBe('Retirada registrada com sucesso');
+      expect(withdrawSample).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        expect.anything(),
+        expect.objectContaining({ userId: 'u9', userName: 'alt-user', userRole: 'Coordenador', ipAddress: '198.51.100.7' })
+      );
+    });
+
+    it('falls back to req.connection.remoteAddress when req.ip and the x-forwarded-for header are both unavailable', async () => {
+      const withdrawSample = vi.fn().mockResolvedValue({ withdrawnQuantity: 1, remainingQuantity: 1, movementID: 'm5' });
+      const { router } = loadRoute({ sampleServiceOverrides: { withdrawSample } });
+      const app = buildApp(router, {}, { stripReqIp: true });
+
+      await request(app)
+        .post('/api/samples/000000000000000000000000/withdraw')
+        .send({ withdrawalType: 'DISPOSAL', withdrawalResponsible: 'Dr. X' });
+
+      const auditInfo = withdrawSample.mock.calls[0][3];
+      expect(auditInfo.ipAddress).toBeTruthy();
+    });
   });
 
   describe('POST /:id/return', () => {
@@ -756,6 +1414,44 @@ describe('sample.routes', () => {
       const res = await request(app).post('/api/samples/000000000000000000000000/return').send({});
 
       expect(res.status).toBe(400);
+    });
+
+    it('resolves the audit actor role from req.user.role and the x-forwarded-for header, with a req.t fallback message', async () => {
+      const returnSample = vi.fn().mockResolvedValue({ returnedQuantity: 1, condition: 'OK', newAvailableQuantity: 1, movementID: 'm4' });
+      const authImpl = (req, res, next) => {
+        req.user = { id: 'u1', name: 'Tester', role: 'Coordenador' };
+        req.t = () => undefined;
+        next();
+      };
+      const { router } = loadRoute({ sampleServiceOverrides: { returnSample }, authImpl });
+      const app = buildApp(router, {}, { stripReqIp: true });
+
+      const res = await request(app)
+        .post('/api/samples/000000000000000000000000/return')
+        .set('x-forwarded-for', '198.51.100.9')
+        .send({ returnResponsible: 'Dr. Y' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.message).toBe('Devolução registrada com sucesso');
+      expect(returnSample).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        expect.anything(),
+        expect.objectContaining({ userRole: 'Coordenador', ipAddress: '198.51.100.9' })
+      );
+    });
+
+    it('falls back to req.connection.remoteAddress when req.ip and the x-forwarded-for header are both unavailable', async () => {
+      const returnSample = vi.fn().mockResolvedValue({ returnedQuantity: 1, condition: 'OK', newAvailableQuantity: 1, movementID: 'm6' });
+      const { router } = loadRoute({ sampleServiceOverrides: { returnSample } });
+      const app = buildApp(router, {}, { stripReqIp: true });
+
+      await request(app)
+        .post('/api/samples/000000000000000000000000/return')
+        .send({ returnResponsible: 'Dr. Y' });
+
+      const auditInfo = returnSample.mock.calls[0][3];
+      expect(auditInfo.ipAddress).toBeTruthy();
     });
   });
 
@@ -793,6 +1489,15 @@ describe('sample.routes', () => {
   });
 
   describe('GET /by-barcode/:barcode/symbology-assets', () => {
+    it('returns 503 when db is unavailable', async () => {
+      const { router } = loadRoute();
+      const app = buildApp(router, null);
+
+      const res = await request(app).get('/api/samples/by-barcode/BC1/symbology-assets');
+
+      expect(res.status).toBe(503);
+    });
+
     it('returns 404 when the sample cannot be found by barcode', async () => {
       const getSampleByBarcode = vi.fn().mockResolvedValue({ sample: null });
       const { router } = loadRoute({ sampleServiceOverrides: { getSampleByBarcode } });

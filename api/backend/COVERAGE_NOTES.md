@@ -429,6 +429,72 @@ coverage to 100/100/100/100. `label.routes.js` (68.29/97.64) and
 `sample.routes.js` (68.62/92.21) were also confirmed real gaps (not
 drift) this session but not yet worked — next candidates.
 
+**Follow-up slice #8 (2026-07-23, same branch):** worked
+`label.routes.js` (68.29/97.64 branches/lines isolated). Extended
+`tests/unit/label.routes.test.js` (+19 tests, 32 total): the ObjectId
+`_id` query variant in `findSample`, `resolveStoragePathText`'s
+box-not-found/no-storageLocation/boxID-legacy-field/readable-fallback
+branches, `buildLocationText`'s locationID/position/all-absent
+branches, both routes' `error.status`-vs-`statusCode`-vs-default-500 and
+message-fallback branches, and `buildLabel`'s sampleId
+fallback chain (`sampleID` -> `_id.toString()` -> raw `_id` -> `''`).
+Added a `router._test` export (`findSample`, `resolveStoragePathText`,
+`buildLocationText`, `normalizeString`) for branches unreachable through
+the two HTTP routes alone (the same pattern `intakeWizard.js` already
+uses) — no product behavior changed. Moved isolated coverage to
+100/100/100/100.
+
+**Follow-up slice #9 (2026-07-23, same branch):** worked
+`sample.routes.js` (68.62/92.21 branches/lines isolated, the largest
+route file in the repo at ~1090 lines / 25 routes). Extended
+`tests/unit/sample.routes.test.js` (+50 tests, 104 total): every
+`validateCreateSamplePayload` branch (all 6 non-canonical alias fields,
+each MIABIS enum-invalid case, `isRareDisease`/`linkedProject`
+type-checks, the `locationID` numeric-string/positive-number branches,
+and a genuinely-`undefined` `req.body`), the `POST /` actor-construction
+fallback chains (`req.user` id/`_id`/`userID`, name/username,
+role/roleName, `req.ip`/`x-forwarded-for`/`req.connection.remoteAddress`)
+and its `req.t`/error-status/error-message fallback branches, the
+`GET /:id/label` sampleId/barcode/sampleType fallback chain, `PUT /:id`'s
+`sample_release` audit-log branch (all three trigger conditions), and
+four previously-missing `503`/`500` tests
+(`GET /:id/label`, `GET /search/by-term`, `GET /by-barcode/:barcode`,
+`GET /by-barcode/:barcode/symbology-assets`). Added a `router._test`
+export (`validateCreateSamplePayload`) for the one branch unreachable
+through HTTP (Express itself defaults `req.body` to `{}`, so the
+`req.body || {}` fallback needs a direct call, same `router._test`
+pattern as `label.routes.js`) — no product behavior changed. Also
+restructured the test file's `loadRoute()` to require every dependency
+and the route itself exactly once (stable proxies/constructors reading a
+mutable `current*` closure variable per test) instead of clearing
+`require.cache` and re-requiring the ~1090-line route fresh per test —
+faster, and ruled out (though did not fix, see below) a suspected
+coverage-measurement quirk.
+
+Moved isolated coverage to 99.43% statements / 90.84% branches / 100%
+functions / 99.42% lines — **not** 100% branches, and that remainder is
+not a real gap: `@vitest/coverage-v8`'s v8-to-istanbul conversion
+reports the implicit "else" of a **no-`else` `if`** as 0 hits even when
+the fall-through path is demonstrably exercised (confirmed by cross-
+checking statement-level hit counts on the lines immediately after the
+`if` block, and by testing repeated-fresh-require vs. require-once —
+identical numbers either way, ruling out the require-cache pattern as
+the cause). label.routes.js's no-`else` `if`s happened to get inferred
+correctly; sample.routes.js's ~14 near-identical `if (!db) {...}` /
+`if (!result) {...}` guards did not. Confirmed via `branchMap`: the
+phantom alternate location has `{"start":{},"end":{}}` (no real source
+range for v8 to sample), so the 0 isn't fixable by adding more tests —
+only by giving the `if` a real `else` branch in the source, which is
+out of scope for a test-only loop. 28 of the remaining uncovered
+branches are this pattern; the other 2 uncovered lines (963, 1094) are
+similarly always-executed statements (an audit-payload object literal
+immediately before a passing 200 response, and the file's own
+`module.exports`) that this tooling still reports as 0. Flag this
+pattern to Dennis if the 90% branches milestone needs literal 100% on
+this file — it would require adding real `else` blocks to ~14 guard
+clauses in `sample.routes.js`, a product-code change out of test-loop's
+scope.
+
 ## Maintaining this file
 
 If `test-loop` finds this file stale (a listed ZERO/LOW file turns out

@@ -10,8 +10,9 @@ const authPath = require.resolve('../../src/infrastructure/middleware/auth');
 const rbacPath = require.resolve('../../src/infrastructure/middleware/rbac');
 const collectionResolverPath = require.resolve('../../src/utils/collectionResolver');
 const routePath = require.resolve('../../src/interface/routes/label.routes.js');
+const qualityDomainPath = require.resolve('../../src/services/quality-domain.service');
 
-const allPaths = [authPath, rbacPath, collectionResolverPath, routePath];
+const allPaths = [authPath, rbacPath, collectionResolverPath, routePath, qualityDomainPath];
 
 function clearCache() {
   for (const p of allPaths) delete require.cache[p];
@@ -22,7 +23,7 @@ function clearCache() {
 // CJS require() graphs in this repo. Instead: clear the cache, replace the
 // dependency modules' exports, then require the route file fresh (same
 // workaround as sample.routes.test.js / hpo.routes.test.js).
-function loadRoute({ getCollectionImpl } = {}) {
+function loadRoute({ getCollectionImpl, buildSprecCodeImpl } = {}) {
   clearCache();
 
   const authModule = require(authPath);
@@ -37,8 +38,16 @@ function loadRoute({ getCollectionImpl } = {}) {
   const collectionResolverModule = require(collectionResolverPath);
   collectionResolverModule.getCollection = getCollectionImpl || vi.fn();
 
+  if (buildSprecCodeImpl) {
+    require(qualityDomainPath).buildSprecCode = buildSprecCodeImpl;
+  }
+
   const router = require(routePath);
   return { router };
+}
+
+function router_test() {
+  return loadRoute().router._test;
 }
 
 function buildApp(router, db = {}) {
@@ -207,6 +216,219 @@ describe('label routes', () => {
       expect(res.body.success).toBe(false);
       expect(res.body.error).toBe('boom');
     });
+
+    it('falls back to "SPREC N/A" and includes the locationID segment when sprecCode is empty', async () => {
+      const findOne = vi.fn().mockResolvedValue({
+        ...SAMPLE_WITH_LOCATION,
+        sprec_code: undefined,
+        locationID: 'LOC-9',
+      });
+      const getCollectionImpl = vi.fn(async (_db, key) => {
+        if (key === 'samples') return { findOne };
+        if (key === 'storagePaths') return { findOne: vi.fn().mockResolvedValue(null) };
+        throw new Error(`unexpected key ${key}`);
+      });
+      const { router } = loadRoute({ getCollectionImpl, buildSprecCodeImpl: () => '' });
+      const app = buildApp(router, {});
+
+      const res = await request(app).get('/api/labels/samples/S-001?format=zpl');
+
+      expect(res.status).toBe(200);
+      expect(res.text).toContain('SPREC N/A');
+      expect(res.text).toContain('Loc LOC-9');
+    });
+
+    it('uses error.status (not statusCode) for the response status when present', async () => {
+      const getCollectionImpl = vi.fn(async () => {
+        const error = new Error('rate limited');
+        error.status = 429;
+        throw error;
+      });
+      const { router } = loadRoute({ getCollectionImpl });
+      const app = buildApp(router, {});
+
+      const res = await request(app).get('/api/labels/samples/S-001');
+
+      expect(res.status).toBe(429);
+    });
+
+    it('falls back to a default error message when the thrown value has no message', async () => {
+      const getCollectionImpl = vi.fn(async () => {
+        throw { statusCode: 400 };
+      });
+      const { router } = loadRoute({ getCollectionImpl });
+      const app = buildApp(router, {});
+
+      const res = await request(app).get('/api/labels/samples/S-001');
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('Falha ao gerar etiqueta.');
+    });
+
+    it('falls back to "SPREC N/A" in the svg output when sprecCode is empty', async () => {
+      const findOne = vi.fn().mockResolvedValue(SAMPLE_WITH_LOCATION);
+      const getCollectionImpl = vi.fn(async (_db, key) => {
+        if (key === 'samples') return { findOne };
+        if (key === 'storagePaths') return { findOne: vi.fn().mockResolvedValue(null) };
+        throw new Error(`unexpected key ${key}`);
+      });
+      const { router } = loadRoute({ getCollectionImpl, buildSprecCodeImpl: () => '' });
+      const app = buildApp(router, {});
+
+      const res = await request(app).get('/api/labels/samples/S-001?format=svg');
+
+      expect(res.status).toBe(200);
+      expect(res.body.toString('utf8')).toContain('SPREC N/A');
+    });
+
+    it('handles a sample with no storageLocation field at all as a 409', async () => {
+      const findOne = vi.fn().mockResolvedValue({ sampleID: 'S-002', barcode: 'BC-002' });
+      const getCollectionImpl = vi.fn(async () => ({ findOne }));
+      const { router } = loadRoute({ getCollectionImpl });
+      const app = buildApp(router, {});
+
+      const res = await request(app).get('/api/labels/samples/S-002');
+
+      expect(res.status).toBe(409);
+    });
+
+    it('falls back to _id.toString() and to the raw barcode-less _id when sampleID/barcode are absent', async () => {
+      const rawId = new ObjectId();
+      const findOne = vi.fn().mockResolvedValue({
+        _id: rawId,
+        storageLocation: { boxId: 'box-1', position: 'A1' },
+      });
+      const getCollectionImpl = vi.fn(async (_db, key) => {
+        if (key === 'samples') return { findOne };
+        if (key === 'storagePaths') return { findOne: vi.fn().mockResolvedValue(null) };
+        throw new Error(`unexpected key ${key}`);
+      });
+      const { router } = loadRoute({ getCollectionImpl });
+      const app = buildApp(router, {});
+
+      const res = await request(app).get('/api/labels/samples/whatever');
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.sampleId).toBe(rawId.toString());
+      expect(res.body.data.barcode).toBe(rawId.toString());
+    });
+
+    it('falls back to an empty sampleId when neither sampleID nor _id are present', async () => {
+      const findOne = vi.fn().mockResolvedValue({
+        barcode: 'BC-003',
+        storageLocation: { boxId: 'box-1', position: 'A1' },
+      });
+      const getCollectionImpl = vi.fn(async (_db, key) => {
+        if (key === 'samples') return { findOne };
+        if (key === 'storagePaths') return { findOne: vi.fn().mockResolvedValue(null) };
+        throw new Error(`unexpected key ${key}`);
+      });
+      const { router } = loadRoute({ getCollectionImpl });
+      const app = buildApp(router, {});
+
+      const res = await request(app).get('/api/labels/samples/whatever');
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.sampleId).toBe('');
+      expect(res.body.data.barcode).toBe('BC-003');
+    });
+  });
+
+  describe('findSample (router._test)', () => {
+    it('includes an _id query variant when sampleId is a valid ObjectId', async () => {
+      const findOne = vi.fn().mockResolvedValue(null);
+      const getCollectionImpl = vi.fn(async () => ({ findOne }));
+      const { router } = loadRoute({ getCollectionImpl });
+
+      const validId = new ObjectId().toString();
+      await router._test.findSample({}, validId);
+
+      const [{ $or: queries }] = findOne.mock.calls[0];
+      expect(queries.some((q) => q._id instanceof ObjectId && q._id.toString() === validId)).toBe(true);
+    });
+  });
+
+  describe('resolveStoragePathText (router._test)', () => {
+    it('returns null when the sample has no box location or position', async () => {
+      const { router } = loadRoute();
+
+      const result = await router._test.resolveStoragePathText({}, { storageLocation: {} });
+
+      expect(result).toBeNull();
+    });
+
+    it('returns null when the sample has no storageLocation at all', async () => {
+      const { router } = loadRoute();
+
+      const result = await router._test.resolveStoragePathText({}, {});
+
+      expect(result).toBeNull();
+    });
+
+    it('resolves the box via boxID (legacy field) and a valid ObjectId boxId variant', async () => {
+      const boxObjectId = new ObjectId();
+      const storagePathsFindOne = vi.fn().mockResolvedValue({ path: 'Freezer 2 / Shelf 1' });
+      const getCollectionImpl = vi.fn(async () => ({ findOne: storagePathsFindOne }));
+      const { router } = loadRoute({ getCollectionImpl });
+
+      const result = await router._test.resolveStoragePathText({}, {
+        storageLocation: { boxID: boxObjectId.toString(), position: 'A1' },
+      });
+
+      expect(result).toBe('Freezer 2 / Shelf 1');
+      const [{ boxId: { $in: variants } }] = storagePathsFindOne.mock.calls[0];
+      expect(variants.some((v) => v instanceof ObjectId)).toBe(true);
+    });
+
+    it('falls back to storageLocation.readable when no storagePath document matches', async () => {
+      const storagePathsFindOne = vi.fn().mockResolvedValue(null);
+      const getCollectionImpl = vi.fn(async () => ({ findOne: storagePathsFindOne }));
+      const { router } = loadRoute({ getCollectionImpl });
+
+      const result = await router._test.resolveStoragePathText({}, {
+        storageLocation: { boxId: 'box-1', position: 'A1', readable: 'Freezer manual note' },
+      });
+
+      expect(result).toBe('Freezer manual note');
+    });
+  });
+
+  describe('buildLocationText (router._test)', () => {
+    it('includes the locationID segment when present', () => {
+      const text = router_test().buildLocationText(
+        { locationID: 'LOC-9', storageLocation: { boxId: 'b1', position: 'A1' } },
+        null
+      );
+
+      expect(text).toContain('Loc LOC-9');
+    });
+
+    it('omits the position segment when position is missing', () => {
+      const text = router_test().buildLocationText(
+        { storageLocation: { boxId: 'b1' } },
+        null
+      );
+
+      expect(text).not.toContain('Pos ');
+    });
+
+    it('falls back to "Localizacao pendente" when every segment is absent', () => {
+      const text = router_test().buildLocationText({ storageLocation: {} }, null);
+
+      expect(text).toBe('Localizacao pendente');
+    });
+
+    it('falls back to "Localizacao pendente" when the sample has no storageLocation field at all', () => {
+      const text = router_test().buildLocationText({}, null);
+
+      expect(text).toBe('Localizacao pendente');
+    });
+  });
+
+  describe('normalizeString (router._test)', () => {
+    it('returns an empty string for falsy input', () => {
+      expect(router_test().normalizeString(undefined)).toBe('');
+    });
   });
 
   describe('GET /samples/:sampleId/print-job', () => {
@@ -259,6 +481,33 @@ describe('label routes', () => {
       const res = await request(app).get('/api/labels/samples/S-001/print-job');
 
       expect(res.status).toBe(409);
+    });
+
+    it('uses error.status (not statusCode) for the response status when present', async () => {
+      const getCollectionImpl = vi.fn(async () => {
+        const error = new Error('rate limited');
+        error.status = 429;
+        throw error;
+      });
+      const { router } = loadRoute({ getCollectionImpl });
+      const app = buildApp(router, {});
+
+      const res = await request(app).get('/api/labels/samples/S-001/print-job');
+
+      expect(res.status).toBe(429);
+    });
+
+    it('falls back to a default error message when the thrown value has no message', async () => {
+      const getCollectionImpl = vi.fn(async () => {
+        throw { statusCode: 400 };
+      });
+      const { router } = loadRoute({ getCollectionImpl });
+      const app = buildApp(router, {});
+
+      const res = await request(app).get('/api/labels/samples/S-001/print-job');
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('Falha ao preparar job de impressão.');
     });
   });
 });
