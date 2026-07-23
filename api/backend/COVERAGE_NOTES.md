@@ -87,8 +87,39 @@ either).
 gap  branch% lines%  file
 141  82.5%   93.9%   src/services/import-lgpd.service.js  (partial slice landed 2026-07-23, session 4: importPatientsSmart/buildMappedPatientRow branches — clinicalUnit-present fillAcronym call, PatientModel.validate() rejection path (e.g. missing sex), and the responsavelNome/responsavelEmail explicit-mapping-target fallback (set vs. already-mapped) — via tests/unit/import-lgpd.service.importPatientsSmart.unit.test.js. Note: the fallback only fires when a mapping explicitly targets the literal key `responsavelNome`/`responsavelEmail` — the more common accented-column path (`responsavelnome` etc.) resolves straight to `representativeName`/`representativeEmail` via canonicalHeaderMap and never touches that fallback. File is 1693 lines; remaining gap is scattered across earlier parse helpers (parseSampleRow ~1150-1310, parsePatientRow ~1160-1200) plus a few defensive branches — no single large block left.)
  86  77.66%  92.8%   src/routes/intakeWizard.js  (partial slice landed 2026-07-23, session 6: isolated branches 77.66% -> 86.49% (299/385 -> 333/385) via tests/unit/intakeWizard.helpers.test.js + tests/unit/intakeWizard.routes.test.js — buildSampleDocumentFromIntake/buildPharmacologyData/normalizeNumber fallback branches, ensureConsentEmailSent's success/failure paths, resolveConsentDecision's no-identifier throw, sensor/equipment maintenanceStatus-fallback matching, storage-box BLOCKED/full-occupancy skip + Map-based occupancyGrid, canonicalViolations non-object guard, and patient-match's $or/ACTIVE-status-default branches. Filed #255: `collectNonCanonicalFields` and `ensureConsentEmailSent` are dead code (never called from any route, only reachable via `router._test`) — accounts for part of the remaining gap. Remainder is a mix of genuine small gaps (e.g. equipment status via maintenanceStatus-only fallback, empty box rows/cols, non-numeric locationID skip) and likely some `@vitest/coverage-v8` phantom-branch artifacts on guard-clause `if`s without `else` blocks (same class as the `sample.routes.js` follow-up noted above) — not re-verified this session.)
- 47  69.67%  86.0%   src/interface/routes/auth.routes.js
 ```
+
+`src/interface/routes/auth.routes.js` partial slice landed 2026-07-23 session
+12: extended `tests/integration/auth.routes.test.js`-adjacent coverage via new
+`tests/integration/auth.routes.branch-coverage.test.js` (+8 tests) — the
+`(req.t && req.t(key)) || '<pt fallback>'` truthy branch (same class as
+`sample-file.controller.js` session 11) across most of its ~29 occurrences,
+login's `mfaCode` compat fallback, and `DELETE /sessions/:sessionId`'s
+sessionId-matches-current-session cookie-clear branch. Isolated branches
+69.67% -> 72.9% (108/155 -> 113/155). Two real findings from this slice:
+(1) five route handlers' own `if (!db)` guards (`/two-factor/status`,
+`/verify`, `/sessions`, `/sessions/all-others`, `/sessions/:sessionId`) are
+structurally unreachable — `authenticate` middleware
+(`src/infrastructure/middleware/auth.js:64-73`) performs the identical check
+first for any non-keepalive/non-MFA-setup route and returns its own 503
+before the handler runs, so these branches can never execute via a real
+request; only `/refresh` (no `authenticate`) and `/keepalive` (middleware
+explicitly skips its own check for this route) can reach their local
+`if (!db)` guard. (2) Several other real, reachable branches (e.g. `/refresh`'s
+`if (!refreshToken)` at line 426, the token-type/session-mismatch guards at
+lines 444/454, `/sessions/:sessionId`'s cookie-clear `if` at line 387) were
+independently confirmed via a plain `node -e` script (bypassing vitest
+entirely) to execute correctly and produce the expected response — but
+`@vitest/coverage-v8` still reports 0 hits for them, including when the
+exact matching test is run in complete file isolation. Suspected root cause:
+this suite's `delete require.cache[authRoutesPath]` + fresh `require()`
+pattern (needed because `authController.*.bind()` happens at require time)
+recompiles the route module as a new V8 script per test, and coverage-v8
+doesn't reliably merge/retain branch hit-counts across those repeated
+compilations for certain multi-line `if` blocks — not a missing-test gap.
+Not chased further this session; worth a `@vitest/coverage-v8`-focused
+investigation (or an isolate-modules alternative to the require-cache-delete
+pattern) before trusting this file's branch number again.
 
 `src/routes/dictionary.js` closed out 2026-07-23 session 12: extended
 `tests/unit/dictionary-medications-disease-profile.test.js` and
