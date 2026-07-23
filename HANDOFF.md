@@ -1,59 +1,60 @@
 # HANDOFF
 
 **Written:** 2026-07-23, end of a fix-bugs iteration.
-**Branch:** `feature/docker-e2e-backend-integration` (commit `ba59f871`,
+**Branch:** `feature/docker-e2e-backend-integration` (commit `d704cf65`,
 pushed this session).
 
 ## What happened this session
 
-Routed via `fix-bugs` for **issue #232** (`orphanet.js`: outer try/catch's
-fallback path logs "Busca externa/local falhou" on every failure, even
-though the failure almost always originates in the initial `searchLocal`
-call, not the external lookup).
+Routed via `fix-bugs` for **issue #240** (`patient.service.js`: a
+`NODE_ENV === 'test'` carve-out on the `consentTemplateId`-required check
+in `PatientService.createPatient` was neutralized by
+`PatientModel.validate()` re-requiring the same field unconditionally a
+few lines later).
 
-Traced reachability first (per `fix-bugs`' verify-before-deferring step):
-`searchRemote` catches its own per-URL fetch errors internally (logs
-`warn`, never rethrows), so the outer `catch` is, in practice, reached
-almost exclusively by `searchLocal` throwing in the initial `try`. The
-existing pinned test (`recupera via fallback local quando a primeira
-tentativa de busca local lanca erro`, in
-`tests/unit/orphanet.routes.test.js`) confirmed the retry-on-transient-
-local-failure behavior is *intentional and tested*, not itself a bug —
-so the fix scope narrowed to the log-message accuracy only issue
-described, not a change to retry behavior.
+Traced reachability first (per `fix-bugs`' verify-before-deferring step)
+instead of treating the issue's "design call" framing as settled: grepped
+every real caller of `createPatient` (controllers/routes always supply a
+real `consentTemplateId` from user input — the carve-out is never live
+there since `NODE_ENV` isn't `'test'` in production) and every test in
+the suite that calls `createPatient` (none omit `consentTemplateId` and
+expect *success* under `NODE_ENV=test` — the only test touching the
+omission case was the one that pinned this exact bug). So the carve-out
+never had an observable effect through any real path; extending it into
+`PatientModel.validate` would have been a real, riskier behavior change
+nothing was asking for. Removed the dead carve-out instead — the service
+now always throws its clearer, field-prefixed error
+(`Template de consentimento (consentTemplateId) é obrigatório`) rather
+than sometimes falling through to the model's generic one.
 
-Fix: added a `failedStage` tracker (`'local'` before the local call
-resolves, flipped to `'remote'` once `searchLocal` succeeds and
-`searchRemote` starts) in `api/backend/src/routes/orphanet.js`'s
-`GET /search` handler; the catch block now logs "Busca local falhou" or
-"Busca externa falhou" based on that flag instead of the previous
-always-on "Busca externa/local falhou". Added a reproduction test in
-`tests/unit/routes/orphanet.test.js` (spies on `logger.warn` via
-`createRequire(import.meta.url)` — the repo's documented pattern for
-spying on this CJS logger singleton from an ESM test file, since
-`import logger from '.../logger.js'` + `vi.spyOn` silently doesn't
-intercept the shared instance; see
-`bioavanced-v2-testing-conventions/references/cjs-mocking.md`). All 35
-tests across the three orphanet test files pass on both the fix branch
-and after merge.
+Fix: `api/backend/src/services/patient.service.js` — deleted the
+`isTestEnv` branch around the missing-`consentTemplateId` check. Un-
+weakened the pinned test in
+`api/backend/tests/unit/patient.service.validation-duplicate.gaps.unit.test.js`
+(`"still rejects ... via PatientModel validation"` → renamed to
+`"rejects ... in the test environment too (no env carve-out)"`, now
+asserting the service's own clear message instead of the model's generic
+one). 161 tests across the five touched patient-service/controller test
+files pass on both the fix branch and after merge.
 
-Branched `fix/orphanet-fallback-log-stage` off
-`feature/docker-e2e-backend-integration`, committed (`669a17db`,
-`Fixes #232`), pushed, commented the hash on the issue, merged `--no-ff`
-into `feature/docker-e2e-backend-integration` (`ba59f871`), re-verified
-on the merged tree, pushed, deleted the fix branch (local+remote), and
-closed #232 with the merge commit hash.
+Branched `fix/patient-consenttemplateid-carveout` off
+`feature/docker-e2e-backend-integration`, committed (`0fa2acf5`,
+`Fixes #240`), pushed, commented the hash + reachability trace on the
+issue, merged `--no-ff` into `feature/docker-e2e-backend-integration`
+(`d704cf65`), re-verified on the merged tree, pushed, deleted the fix
+branch (local+remote), and closed #240 with the merge commit hash.
 
-`wrap-up` ran: no friction worth a skill edit — the ESM/CJS logger-spy
-issue hit was already documented in `cjs-mocking.md` and resolved by
-following that pattern; no scope creep (only `orphanet.js` + its test
-file touched); nothing security-relevant; no deferred sub-points left on
-a closed issue.
+`wrap-up` ran: no friction worth a skill edit — the reachability trace
+resolved the issue's own "needs a design call" framing cleanly, no
+lazy fixes, no scope creep (only `patient.service.js` + its test file
+touched), nothing newly security-relevant (validation strictness stayed
+the same or tightened, never relaxed), no deferred sub-points left on a
+closed issue.
 
 ## Repo state
 
 - `feature/docker-e2e-backend-integration` is current and pushed
-  (`ba59f871`), issue #232 closed.
+  (`d704cf65`), issue #240 closed.
 - No uncommitted changes, working tree clean.
 - `main` remains frozen — do not branch off it, merge into it, or push
   to it.
@@ -68,16 +69,14 @@ reconcile run.
 
 ## Recommended next steps
 
-**Next candidate: issue #240** (`patient.service.js`: `consentTemplateId`
-carve-out neutralized) — named as the next untried candidate after #232
-in the prior handoff. Not yet traced this session.
+No next issue explicitly named by Dennis this session — none queued.
 
-Also still open: the dead-code cluster (#235, #236, #241, #243, #246,
-#247, #248, #249) — the repeated authenticate-shadows-route 503 pattern
+Still open, worth raising with Dennis directly rather than picking
+unprompted: the dead-code cluster (#235, #236, #241, #243, #246, #247,
+#248, #249) — the repeated authenticate-shadows-route 503 pattern
 (#67/#76/#236/#246/#247/#248, six occurrences, five from
 `master-data.routes.js` alone) strongly suggests a repo-wide sweep is
-more efficient than continued per-file spot fixes; still not actioned,
-worth raising with Dennis directly.
+more efficient than continued per-file spot fixes.
 
 For coverage work: resume the branch%-sorted method in
 `COVERAGE_NOTES.md`; next unflagged candidates from the last sort were
