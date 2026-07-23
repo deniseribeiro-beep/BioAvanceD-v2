@@ -4,6 +4,7 @@ const fs = require('fs');
 
 const hl7AuditService = require('../../src/services/hl7Audit.service');
 const integrityCheckService = require('../../src/services/integrityCheckService');
+const logger = require('../../src/utils/logger');
 
 function sha256Hex(input) {
   return crypto.createHash('sha256').update(String(input)).digest('hex');
@@ -84,6 +85,32 @@ describe('hl7Audit.service', () => {
       expect(result).toEqual({ fhir: [], hl7: [], inserted: [] });
       expect(logsCol.insertOne).not.toHaveBeenCalled();
     });
+
+    it('logs the error and excludes the item when hashing a FHIR resource throws', async () => {
+      const circular = {};
+      circular.self = circular;
+      const doc = { _id: 'sample-bad', fhir: circular };
+      const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
+      const { db } = makeDb({ amostras: [doc], sampleFiles: [] });
+
+      const result = await hl7AuditService.buildHL7HashesForDate('2026-07-01', db);
+
+      expect(result.fhir).toEqual([]);
+      expect(errorSpy).toHaveBeenCalledWith('Erro ao gerar hash FHIR da amostra:', expect.any(String));
+    });
+
+    it('falls back to the raw thrown value when a FHIR hashing error has no .message', async () => {
+      const doc = { _id: 'sample-bad2', fhir: { a: 1 } };
+      const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
+      vi.spyOn(JSON, 'stringify').mockImplementation(() => { throw 'plain string failure'; });
+
+      const { db } = makeDb({ amostras: [doc], sampleFiles: [] });
+
+      const result = await hl7AuditService.buildHL7HashesForDate('2026-07-01', db);
+
+      expect(result.fhir).toEqual([]);
+      expect(errorSpy).toHaveBeenCalledWith('Erro ao gerar hash FHIR da amostra:', 'plain string failure');
+    });
   });
 
   describe('buildHL7HashesForDate - HL7 file hashing', () => {
@@ -132,6 +159,34 @@ describe('hl7Audit.service', () => {
       expect(result.hl7[0]).toMatchObject({ hash: expectedHash, note: 'arquivo não encontrado em disco' });
       // storagePath is falsy so fs.existsSync must be short-circuited and never called
       expect(existsSpy).not.toHaveBeenCalled();
+    });
+
+    it('logs the error and excludes the item when reading a storagePath file from disk throws', async () => {
+      const fileDoc = { _id: 'file-bad', storagePath: 'C:/fake/path/report.hl7', fileName: 'report.hl7', fileSize: 42 };
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      vi.spyOn(fs, 'readFileSync').mockImplementation(() => { throw new Error('disk read failed'); });
+      const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
+
+      const { db } = makeDb({ amostras: [], sampleFiles: [fileDoc] });
+
+      const result = await hl7AuditService.buildHL7HashesForDate('2026-07-01', db);
+
+      expect(result.hl7).toEqual([]);
+      expect(errorSpy).toHaveBeenCalledWith('Erro ao gerar hash do arquivo HL7:', 'disk read failed');
+    });
+
+    it('falls back to the raw thrown value when an HL7 file read error has no .message', async () => {
+      const fileDoc = { _id: 'file-bad2', storagePath: 'C:/fake/path/report2.hl7', fileName: 'report2.hl7', fileSize: 42 };
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      vi.spyOn(fs, 'readFileSync').mockImplementation(() => { throw 'plain string disk failure'; });
+      const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
+
+      const { db } = makeDb({ amostras: [], sampleFiles: [fileDoc] });
+
+      const result = await hl7AuditService.buildHL7HashesForDate('2026-07-01', db);
+
+      expect(result.hl7).toEqual([]);
+      expect(errorSpy).toHaveBeenCalledWith('Erro ao gerar hash do arquivo HL7:', 'plain string disk failure');
     });
 
     it('queries sample_files with the hl7 fileType/fileName filter and date range', async () => {
@@ -200,6 +255,20 @@ describe('hl7Audit.service', () => {
       expect(logsCol.insertOne).toHaveBeenCalledTimes(1);
       expect(result.inserted).toHaveLength(1);
       expect(result.inserted[0].payload.sourceId).toBe('sample-new');
+    });
+
+    it('skips an item lacking both sampleId and fileId and logs a warning, without stopping the rest', async () => {
+      const noIdDoc = { _id: null, fhir: { a: 1 } };
+      const goodDoc = { _id: 'sample-good', fhir: { b: 2 } };
+      const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+      const { db, logsCol } = makeDb({ amostras: [noIdDoc, goodDoc], sampleFiles: [] });
+
+      const result = await hl7AuditService.buildHL7HashesForDate('2026-07-01', db);
+
+      expect(warnSpy).toHaveBeenCalledWith('[HL7_AUDIT] Item sem sampleId/fileId ignorado para deduplicação');
+      expect(logsCol.insertOne).toHaveBeenCalledTimes(1);
+      expect(result.inserted).toHaveLength(1);
+      expect(result.inserted[0].payload.sourceId).toBe('sample-good');
     });
 
     it('queries logs with the correct sourceId and HL7_HASH action per item', async () => {
