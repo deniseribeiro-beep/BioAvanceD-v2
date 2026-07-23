@@ -1,39 +1,40 @@
 # HANDOFF
 
-**Written:** 2026-07-23, end of a resolve-issue iteration.
-**Branch:** `feature/docker-e2e-backend-integration` (commit `a3167362`,
+**Written:** 2026-07-23, end of a work-issue → fix-bugs iteration.
+**Branch:** `feature/docker-e2e-backend-integration` (commit `a23737ec`,
 pushed).
 
 ## What happened this session
 
-Routed via `work-issue` → `resolve-issue` for **issue #247**
-(`phone-codes.routes.js` — dead route-level `if (!db) return 503` guard
-shadowed by `authenticate`'s own db-unavailable 503, same pattern as
-#67/#76/#236/#246).
+Routed via `work-issue` → `fix-bugs` for **issue #248**
+(`master-data.routes.js` — 5 dead route-level `if (!db) return 503`
+guards, one per route handler in the shared `createMasterDataRouter`
+factory, shadowed by `authenticate`'s own db-unavailable 503; sixth
+occurrence of the pattern already tracked on #67/#76/#236/#246/#247).
 
-Removed the dead guard (lines 47-50) in `GET /api/phone-codes/search`.
-Verified against `tests/integration/phone-codes.api.test.js` (11 tests,
-unchanged, still pass) both on the fix branch and on the merged
-integration branch; v8 branch-coverage isolation run confirmed the
-file's real coverage post-fix: 100% statements/lines/functions, 90.9%
-branches (up from 89.13%, remaining gaps at unrelated lines 12/19/109).
-Committed on `fix/phone-codes-dead-503` (`24ab399b`), merged into
-`feature/docker-e2e-backend-integration` (`a3167362`), pushed, branch
-deleted (local only — never pushed to remote). Issue #247 closed with a
+Removed all 5 dead guards (GET `/`, GET `/:id`, POST `/`, PUT `/:id`,
+DELETE `/:id`). Verified against
+`tests/integration/master-data.api.test.js` (39 tests, unchanged, still
+pass) both on the fix branch and on the merged integration branch;
+isolated `--coverage.include` run confirmed the file's real coverage
+post-fix: 98.33% statements/lines, 100% branches/functions (up from
+84.37% branches). Updated `COVERAGE_NOTES.md` with the resolved-issue
+note. Committed on `fix/master-data-routes-dead-503-guards` (`ef952d6a`),
+merged into `feature/docker-e2e-backend-integration` (`a23737ec`),
+pushed, branch deleted (local and remote). Issue #248 closed with a
 comment citing the commit/merge and verification.
 
-`wrap-up` ran: no new friction. One self-corrected slip — initially
-tried `issue-247-<slug>` as the branch name per `resolve-issue`'s
-generic template; the repo's branch-naming hook (documented in
-`bioavanced-v2-conventions`) requires `fix/<slug>`/`test/<slug>` off
-the integration branch, corrected on the next attempt. Not a skill gap
-(the project convention already covers it), just a recall miss.
+`wrap-up` ran: no new friction beyond a harmless Bash cwd mix-up
+(assumed a `cd api/backend &&` was needed when the shell was already
+there from a prior command; self-corrected immediately, no retries
+needed). No new dead-code findings surfaced this session beyond the
+picked issue.
 
 ## Repo state
 
 - `feature/docker-e2e-backend-integration` current and pushed
-  (`a3167362`). Working tree clean.
-- Issue #247 closed, no merge to main pending beyond the usual
+  (`a23737ec`). Working tree clean.
+- Issue #248 closed, no merge to main pending beyond the usual
   integration-branch backlog.
 - `main` remains frozen — do not branch off it, merge into it, or push
   to it.
@@ -44,7 +45,7 @@ the integration branch, corrected on the next attempt. Not a skill gap
 (2026-07-22, before the #231 session): statements 91.05%, branches
 **82.3%** (lagging dimension), functions 90.88%, lines 91.5%. This
 session touched dead-code branches in one already-well-covered file
-(phone-codes.routes.js) — no fresh full-suite reconcile run, milestone
+(master-data.routes.js) — no fresh full-suite reconcile run, milestone
 numbers unchanged.
 
 ## Recommended next steps
@@ -52,11 +53,12 @@ numbers unchanged.
 No next issue explicitly named by Dennis this session — none queued.
 
 Still open, worth raising with Dennis directly rather than picking
-unprompted: the dead-code cluster (#235, #238, #241, #243, #248) — the
-repeated authenticate-shadows-route 503 pattern (#67/#76/#236/#246-done/
-#247-done, three remaining occurrences, all five from
-`master-data.routes.js` in #248) strongly suggests a repo-wide sweep is
-more efficient than continued per-file spot fixes.
+unprompted: the dead-code cluster (#235, #238, #241, #243) — the
+repeated authenticate-shadows-route 503 pattern
+(#67/#76/#236/#246/#247/#248, all done now) has no further known
+occurrences flagged, but a repo-wide grep sweep across
+`src/interface/routes/*` for the same `if (!db)` shape would confirm
+whether any are left before assuming the cluster is closed out.
 
 Also worth a quick pass: check whether any other open issues are
 already resolved by a later commit that fixed a broader/overlapping
