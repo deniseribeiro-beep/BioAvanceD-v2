@@ -146,6 +146,29 @@ describe('ImportService.importPatients (JSON)', () => {
     expect(collection.inserted).toHaveLength(0);
   });
 
+  it('appends array fields and deep-merges object fields when merging into an existing patient', async () => {
+    const filePath = writeTmpFile('merge-array-object.json', JSON.stringify(validPatient({
+      dadosEspecificos: ['item-2'],
+      anamneseGeral: { source: 'import' },
+    })));
+    const collection = makePatientsCollection({
+      existing: {
+        _id: 'existing-1',
+        participantId: '10203040',
+        identityDocument: '12345678900',
+        birthDate: '1985-05-20',
+        dadosEspecificos: ['item-1'],
+        anamneseGeral: { region: 'south' },
+      },
+    });
+
+    const result = await importService.importPatients({ collection: () => collection }, { path: filePath, originalname: 'merge-array-object.json' });
+
+    expect(result.success).toBe(1);
+    expect(collection.updates[0].update.$set.dadosEspecificos).toEqual(['item-1', 'item-2']);
+    expect(collection.updates[0].update.$set.anamneseGeral).toEqual({ region: 'south', source: 'import' });
+  });
+
   it('imports an array of JSON patients, counting successes and the invalid row in total', async () => {
     const filePath = writeTmpFile('array.json', JSON.stringify([
       validPatient({ cpf: '11111111111' }),
@@ -188,6 +211,33 @@ describe('ImportService.importPatients (CSV)', () => {
 
     expect(result.success).toBe(0);
     expect(result.errors).toHaveLength(1);
+  });
+
+  it('skips a CSV row with no identifier, recording the reason as an error', async () => {
+    const filePath = writeTmpFile('patients-no-id.csv', 'patientName,birthDate,sex\nJoão Sem Documento,1990-01-01,M\n');
+    const collection = makePatientsCollection();
+
+    const result = await importService.importPatients({ collection: () => collection }, { path: filePath, originalname: 'patients-no-id.csv' });
+
+    expect(result.success).toBe(0);
+    expect(result.errors).toEqual([
+      expect.objectContaining({ error: expect.stringContaining('Sem identificador único') }),
+    ]);
+  });
+
+  it('records a merge error when birthDate conflicts with the existing record (CSV)', async () => {
+    const filePath = writeTmpFile('patients-conflict.csv', 'patientName,birthDate,sex,consentTemplateId,cpf\nJoão Souza,1999-01-01,M,tcle-1,98765432100\n');
+    const collection = makePatientsCollection({
+      existing: { _id: 'existing-1', participantId: '10203040', identityDocument: '98765432100', birthDate: '1990-01-01' },
+    });
+
+    const result = await importService.importPatients({ collection: () => collection }, { path: filePath, originalname: 'patients-conflict.csv' });
+
+    expect(result.success).toBe(0);
+    expect(result.errors).toEqual([
+      expect.objectContaining({ error: expect.stringContaining('Data de nascimento') }),
+    ]);
+    expect(collection.updates).toHaveLength(0);
   });
 });
 

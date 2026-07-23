@@ -87,7 +87,6 @@ either).
 gap  branch% lines%  file
 141  82.5%   93.9%   src/services/import-lgpd.service.js  (partial slice landed 2026-07-23, session 4: importPatientsSmart/buildMappedPatientRow branches — clinicalUnit-present fillAcronym call, PatientModel.validate() rejection path (e.g. missing sex), and the responsavelNome/responsavelEmail explicit-mapping-target fallback (set vs. already-mapped) — via tests/unit/import-lgpd.service.importPatientsSmart.unit.test.js. Note: the fallback only fires when a mapping explicitly targets the literal key `responsavelNome`/`responsavelEmail` — the more common accented-column path (`responsavelnome` etc.) resolves straight to `representativeName`/`representativeEmail` via canonicalHeaderMap and never touches that fallback. File is 1693 lines; remaining gap is scattered across earlier parse helpers (parseSampleRow ~1150-1310, parsePatientRow ~1160-1200) plus a few defensive branches — no single large block left.)
  86  77.66%  92.8%   src/routes/intakeWizard.js  (partial slice landed 2026-07-23, session 6: isolated branches 77.66% -> 86.49% (299/385 -> 333/385) via tests/unit/intakeWizard.helpers.test.js + tests/unit/intakeWizard.routes.test.js — buildSampleDocumentFromIntake/buildPharmacologyData/normalizeNumber fallback branches, ensureConsentEmailSent's success/failure paths, resolveConsentDecision's no-identifier throw, sensor/equipment maintenanceStatus-fallback matching, storage-box BLOCKED/full-occupancy skip + Map-based occupancyGrid, canonicalViolations non-object guard, and patient-match's $or/ACTIVE-status-default branches. Filed #255: `collectNonCanonicalFields` and `ensureConsentEmailSent` are dead code (never called from any route, only reachable via `router._test`) — accounts for part of the remaining gap. Remainder is a mix of genuine small gaps (e.g. equipment status via maintenanceStatus-only fallback, empty box rows/cols, non-numeric locationID skip) and likely some `@vitest/coverage-v8` phantom-branch artifacts on guard-clause `if`s without `else` blocks (same class as the `sample.routes.js` follow-up noted above) — not re-verified this session.)
- 68  79.14%  89.9%   src/services/import.service.js
  56  74.54%  89.2%   src/services/NotificationService.js
  54  69.66%  98.8%   src/controllers/sample-file.controller.js
  52  69.94%  85.2%   src/routes/orphanet.js
@@ -695,6 +694,34 @@ like more instances of the guard-clause-with-no-real-else phantom-branch
 artifact already documented elsewhere in this file (e.g. `attachExternalDocument`'s
 own `if (!record)` still shows as branch-incomplete despite both outcomes
 having a passing test) — not chased further this session.
+
+`src/services/import.service.js` closed out most of its Phase 1 branch gap
+2026-07-23 session 9 (same session as the `fhir-import-staging.service.js`
+slice above): extended the file's five existing unit test files (+12 tests,
+102 total). Covered: the CSV-import mirror of several JSON-only branches
+(`importPatients`'s no-identifier skip, merge-birthDate-conflict error),
+`mergePatientData`'s array-append and nested-object-merge branches (both
+previously untested regardless of JSON/CSV), `importLocations`'s entire CSV
+branch beyond the two happy/structural-error paths already tested (parse
+error, model-validation error, existing-locationID conflict, auto-generated
+locationID, and a per-row `insertOne`-throws catch), a same-class per-row
+`insertOne`-throws catch for `importTemperature`, and `readSpreadsheetRows`
+(previously entirely untested) covering the empty-worksheet `[]` return and
+the rich-text/hyperlink-object and `Date`-instance cell-value normalization
+branches. Moved isolated coverage 89.93/79.14/97.82/89.92 ->
+95.65/84.35/97.82/95.78 (stmts/branches/funcs/lines). One planned assertion
+(a literal blank/null xlsx cell reading back as `''`) turned out
+unreachable via the tested construction path — `ExcelJS`'s `row.values`
+represents an explicitly-nulled cell as a sparse-array hole, not a `null`
+entry, so `Array.prototype.map`'s hole-skipping means the header key ends
+up `undefined` rather than exercising the source's `value === null -> ''`
+branch; not chased further (may still be reachable via a real hand-authored
+`.xlsx` file's genuinely-blank cell — untried). Remaining branch gap (lines
+307, 358/406, 366/414, 576, 645-647, 770-772, 824-828, 1009) is mostly
+generic per-row/outer try/catch handlers and a `results.errors.push` branch
+for an `upsertResult.action === 'skip'` outcome that `upsertPatient` never
+actually returns — confirmed dead code, same class as `decorateRecord`
+above; **filed as issue #257**.
 
 ## Maintaining this file
 

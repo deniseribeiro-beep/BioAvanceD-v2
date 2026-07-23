@@ -156,6 +156,81 @@ describe('ImportService.importLocations (CSV)', () => {
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0].row).toBe(0);
   });
+
+  it('records a parse error without stopping the batch (CSV)', async () => {
+    const filePath = writeTmpFile('bad-number.csv', 'locationID,equipmentType,block,rack,drawer,box\nnot-a-number,1,1,1,1,1\n5,1,1,1,1,1\n');
+    const collection = makeLocationsCollection();
+    const db = { collection: () => collection };
+
+    const result = await importService.importLocations(db, { path: filePath, originalname: 'bad-number.csv' });
+
+    expect(result.total).toBe(2);
+    expect(result.success).toBe(1);
+    expect(result.errors).toEqual([
+      expect.objectContaining({ row: 1, errors: ['locationID inválido'] }),
+    ]);
+  });
+
+  it('records a model-validation error when equipmentType is blank (CSV)', async () => {
+    const filePath = writeTmpFile('missing-equipment.csv', 'locationID,equipmentType,block,rack,drawer,box\n1,,1,1,1,1\n');
+    const collection = makeLocationsCollection();
+    const db = { collection: () => collection };
+
+    const result = await importService.importLocations(db, { path: filePath, originalname: 'missing-equipment.csv' });
+
+    expect(result.success).toBe(0);
+    expect(result.errors).toEqual([
+      expect.objectContaining({ errors: expect.arrayContaining(['equipmentType é obrigatório']) }),
+    ]);
+  });
+
+  it('rejects a locationID that already exists (CSV)', async () => {
+    const filePath = writeTmpFile('duplicate.csv', 'locationID,equipmentType,block,rack,drawer,box\n7,1,1,1,1,1\n');
+    const collection = makeLocationsCollection({ existingByLocationID: { 7: { locationID: 7 } } });
+    const db = { collection: () => collection };
+
+    const result = await importService.importLocations(db, { path: filePath, originalname: 'duplicate.csv' });
+
+    expect(result.success).toBe(0);
+    expect(result.errors).toEqual([
+      expect.objectContaining({ errors: ['locationID 7 já existe'] }),
+    ]);
+    expect(collection.inserted).toHaveLength(0);
+  });
+
+  it('auto-generates a locationID when none is provided (CSV)', async () => {
+    const filePath = writeTmpFile('no-id.csv', 'equipmentType,block,rack,drawer,box\n1,1,1,1,1\n');
+    const collection = makeLocationsCollection({ lastLocationID: 41 });
+    const db = { collection: () => collection };
+
+    const result = await importService.importLocations(db, { path: filePath, originalname: 'no-id.csv' });
+
+    expect(result.success).toBe(1);
+    expect(collection.inserted[0].locationID).toBe(42);
+  });
+
+  it('records a per-row error without aborting the batch when insertOne throws (CSV)', async () => {
+    const filePath = writeTmpFile('insert-throws.csv', 'locationID,equipmentType,block,rack,drawer,box\n9,1,1,1,1,1\n');
+    const collection = makeLocationsCollection();
+    collection.insertOne = async () => { throw new Error('insert falhou'); };
+    const db = { collection: () => collection };
+
+    const result = await importService.importLocations(db, { path: filePath, originalname: 'insert-throws.csv' });
+
+    expect(result.success).toBe(0);
+    expect(result.errors).toEqual([
+      expect.objectContaining({ error: 'insert falhou' }),
+    ]);
+  });
+
+  it('propagates a top-level failure (e.g. malformed JSON) as a rejected promise', async () => {
+    const filePath = writeTmpFile('malformed.json', '{not valid json');
+    const db = { collection: () => makeLocationsCollection() };
+
+    await expect(
+      importService.importLocations(db, { path: filePath, originalname: 'malformed.json' })
+    ).rejects.toThrow();
+  });
 });
 
 describe('ImportService.importTemperature', () => {
@@ -237,5 +312,21 @@ describe('ImportService.importTemperature', () => {
     expect(result.success).toBe(1);
     expect(result.errors).toHaveLength(1);
     expect(inserted).toHaveLength(1);
+  });
+
+  it('records a per-row error without aborting the batch when insertOne throws', async () => {
+    const filePath = writeTmpFile('temps-insert-throws.csv', 'sensorId,temperatureValue\nS1,-20\n');
+    const db = {
+      collection: () => ({
+        insertOne: async () => { throw new Error('insert de temperatura falhou'); },
+      }),
+    };
+
+    const result = await importService.importTemperature(db, { path: filePath, originalname: 'temps-insert-throws.csv' });
+
+    expect(result.success).toBe(0);
+    expect(result.errors).toEqual([
+      expect.objectContaining({ error: 'insert de temperatura falhou' }),
+    ]);
   });
 });

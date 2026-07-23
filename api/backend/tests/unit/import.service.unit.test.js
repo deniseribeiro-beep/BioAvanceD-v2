@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const ExcelJS = require('exceljs');
 const importService = require('../../src/services/import.service');
 
 function writeTempFile(content, ext = '.csv') {
@@ -407,5 +408,48 @@ describe('ImportService.cleanupFile', () => {
     vi.spyOn(fs, 'existsSync').mockReturnValue(true);
     vi.spyOn(fs, 'unlinkSync').mockImplementation(() => { throw new Error('EPERM: permission denied'); });
     expect(() => importService.cleanupFile('/locked/path.csv')).not.toThrow();
+  });
+});
+
+describe('ImportService.readSpreadsheetRows', () => {
+  const tmpFiles = [];
+
+  afterEach(() => {
+    while (tmpFiles.length) {
+      const f = tmpFiles.pop();
+      try { fs.unlinkSync(f); } catch (_) { /* already gone */ }
+    }
+  });
+
+  async function writeXlsx(build) {
+    const workbook = new ExcelJS.Workbook();
+    build(workbook);
+    const filePath = path.join(os.tmpdir(), `import-service-xlsx-${Date.now()}-${Math.random().toString(36).slice(2)}.xlsx`);
+    await workbook.xlsx.writeFile(filePath);
+    tmpFiles.push(filePath);
+    return filePath;
+  }
+
+  it('returns an empty array when the workbook has no worksheets', async () => {
+    const filePath = await writeXlsx(() => {});
+
+    const rows = await importService.readSpreadsheetRows(filePath);
+
+    expect(rows).toEqual([]);
+  });
+
+  it('normalizes rich-text/hyperlink objects and Date values into plain strings', async () => {
+    const filePath = await writeXlsx((workbook) => {
+      const sheet = workbook.addWorksheet('Sheet1');
+      sheet.addRow(['name', 'note', 'collectedAt']);
+      sheet.addRow(['Amostra 1', { text: 'Nota rica', hyperlink: 'https://example.org' }, new Date('2026-01-01T00:00:00.000Z')]);
+    });
+
+    const rows = await importService.readSpreadsheetRows(filePath);
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].name).toBe('Amostra 1');
+    expect(rows[0].note).toBe('Nota rica');
+    expect(rows[0].collectedAt).toBe('2026-01-01T00:00:00.000Z');
   });
 });
