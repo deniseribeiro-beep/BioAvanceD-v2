@@ -1,7 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { createRequire } from 'module';
 import express from 'express';
 import request from 'supertest';
 import router from '../../../src/routes/orphanet.js';
+
+const require2 = createRequire(import.meta.url);
+const logger = require2('../../../src/utils/logger');
 
 // src/routes/orphanet.js reads its db connection from req.app.locals.db
 // (a shared connection set up once at server startup, not a per-request
@@ -124,5 +128,23 @@ describe('orphanet route GET /search', () => {
 
     expect(res.status).toBe(500);
     expect(res.body).toEqual({ error: 'Failed to search orphanet diseases' });
+  });
+
+  it('logs the fallback warning as a local-search failure, not an external one, when searchLocal itself throws (issue #232)', async () => {
+    const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    const cidsFind = vi.fn()
+      .mockImplementationOnce(() => {
+        throw new Error('local boom');
+      })
+      .mockImplementationOnce(() => ({ limit: vi.fn(() => ({ toArray: vi.fn(async () => []) })) }));
+    const app = buildApp(buildDb({ cidsFind }));
+
+    const res = await request(app).get('/api/orphanet/search').query({ q: 'disease' });
+
+    expect(res.status).toBe(200);
+    expect(cidsFind).toHaveBeenCalledTimes(2);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Busca local falhou'));
+    expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining('Busca externa/local falhou'));
+    warnSpy.mockRestore();
   });
 });
