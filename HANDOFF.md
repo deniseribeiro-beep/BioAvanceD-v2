@@ -1,7 +1,7 @@
 # HANDOFF
 
-**Written:** 2026-07-23, end of a test-loop iteration, session 11.
-**Branch:** `feature/docker-e2e-backend-integration` (commit `1bd72036`,
+**Written:** 2026-07-23, end of a test-loop iteration, session 12.
+**Branch:** `feature/docker-e2e-backend-integration` (commit `a336dd96`,
 pushed).
 
 ## What happened this session
@@ -10,85 +10,108 @@ Worked two bundled Phase 1 branch-coverage slices, per the still-current
 bigger-iteration policy (`dyeallpies-skills-pack#107`, not yet landed
 upstream):
 
-1. **`src/controllers/sample-file.controller.js`** (54-branch gap, Phase 1
-   list). Extended `tests/unit/sample-file.controller.test.js` (+21 tests,
-   67 total). Covered the `req.t ? req.t(key) : '<pt fallback>'` truthy
-   branch across all 38 occurrences in the file (only the falsy/no-`req.t`
-   branch had ever been exercised previously) plus the `specimenIdString`
-   ternary's non-ObjectId-string fallback in `downloadFile`/`deleteFile`.
-   Isolated branches 69.66% -> 84.83% (124/178 -> 151/178). Remaining
-   27-branch gap confirmed (via direct `coverage/coverage-final.json`
-   inspection, not just inferred) to be the same phantom-branch artifact
-   noted repeatedly in this file's history: guard-clause `if`s with no
-   `else` (`if (!db) { return ...503... }` etc.) — V8 emits an uncoverable
-   synthetic "else" location with empty start/end. Not chased further.
+1. **`src/routes/dictionary.js`** (51-branch gap, Phase 1 list) — closed
+   out. Extended `tests/unit/dictionary-medications-disease-profile.test.js`
+   / `tests/unit/dictionary-search-suggest.test.js`, and added
+   `tests/unit/dictionary.branch-coverage.test.js` (+22 tests) covering
+   `normalizeMedicationRecord`'s field-fallback chains, `normalizeLocalPhenotype`/
+   `normalizeLocalBiomarker`'s code/display fallback chains,
+   `buildLocalSemanticSuggestions`'s terminology-row and dedup/no-data
+   paths, and `/suggest`'s Neo4j-success-path display fallbacks plus its
+   nested fallback-error-message branch. Isolated branches 78.66% -> 97.07%
+   (188/239 -> 232/239). Remaining 7-branch gap: 3 confirmed structurally
+   unreachable (dead code, filed as #261), rest is the usual
+   guard-clause-with-no-else phantom artifact plus one unexplained branch.
 
-2. **`src/routes/orphanet.js`** (52-branch gap, Phase 1 list). Extended
-   `tests/unit/orphanet.routes.test.js` (+5 tests, 27 total). Covered
-   `normalizeDiseaseRecord`'s name/synonym fallback chains (`Synonym`
-   entries via `Label`/`_`/plain-string instead of `label`; name
-   resolution via camelCase `preferredTerm` and finally the bare ORPHA
-   code when no name field exists at all) and `dedupeRecords`'
-   reverse-merge direction (second record supplying CID10/OMIM/
-   relacoes/synonyms/aliases the first record lacks). Isolated branches
-   82.65% -> 90.75% (143/173 -> 157/173).
+2. **`src/interface/routes/auth.routes.js`** (47-branch gap, Phase 1
+   list) — partial, not fully closed. Added
+   `tests/integration/auth.routes.branch-coverage.test.js` (+8 tests)
+   covering most of the file's ~29 `(req.t && req.t(key)) || '<pt
+   fallback>'` occurrences, login's `mfaCode` compat fallback, and
+   `DELETE /sessions/:sessionId`'s sessionId-matches-current-session
+   cookie-clear branch. Isolated branches 69.67% -> 72.9% (108/155 ->
+   113/155). Two findings from this slice, both filed:
+   - **#262**: five route handlers' own `if (!db)` guards
+     (`/two-factor/status`, `/verify`, `/sessions`, `/sessions/all-others`,
+     `/sessions/:sessionId`) are unreachable — `authenticate` middleware
+     performs the identical check first and blocks with its own 503
+     before the handler runs. Only `/refresh` and `/keepalive` can reach
+     their local guard.
+   - **`dyeallpies-skills-pack#111`**: several other real, reachable
+     branches (lines 387/426/444/454) were independently confirmed via a
+     plain `node -e` script to execute correctly, yet
+     `@vitest/coverage-v8` still reports 0 hits for them — suspected to
+     be a tooling limitation with this suite's
+     `delete require.cache` + fresh `require()` pattern (needed for
+     `.bind()`-at-require-time controllers), not a missing-test gap. Not
+     chased further; **auth.routes.js's branch number should not be
+     fully trusted until that issue is resolved or the pattern is
+     replaced** — the file may already be more covered than 72.9%
+     suggests.
 
-Both files moved off the Phase 1 gap list in `api/backend/COVERAGE_NOTES.md`
-in the same commit.
+Both files' status updated in `api/backend/COVERAGE_NOTES.md` in the
+same commits (2 commits this session, not 1 — dictionary.js closed out
+before starting auth.routes.js, each committed separately per the
+per-piece-commit guidance when a slice's scope grows).
 
 ### Bugs/findings filed this session
 
-- **Issue #259**: real bug — an `orphanet_diseases` doc with no
-  ORPHA-derivable code field crashes the whole `/api/orphanet/search`
-  request with a 500 instead of being silently excluded (`dedupeRecords`
-  re-normalizes a `null` record without a guard; the default-param
-  `item = {}` doesn't catch an explicit `null`). The new test that found
-  this asserts the actual 500, with a comment pointing at #259 (not
-  weakened to look correct).
-- **Issue #260**: two structurally-unreachable branches in `orphanet.js`
-  found while confirming the remaining coverage gap wasn't real —
-  `dedupeRecords`'s `record?.source || 'local'` fallback (every caller
-  already sets `.source` before records reach it) and `searchLocal`'s
-  `requestedLang` ternary falsy branch (the route always defaults
-  `lang` to `'pt'`, never empty). Neither is a bug; flagged as
-  possible dead-code/incomplete-wiring for the owner's call.
+- **#261**: 3 structurally-unreachable branches in `dictionary.js`
+  (normalizeCoding's dead `raw.nome||raw.name` fallback, uniqueCodings'
+  dead `!item?.code` guard, buildLocalSemanticSuggestions' dead db guard
+  — all pre-empted by earlier checks in every real call path). Owner's
+  call on trimming vs. leaving as defensive code.
+- **#262**: 5 structurally-unreachable `if (!db)` guards in
+  `auth.routes.js` (see above). Same class, owner's call.
+- **`dyeallpies-skills-pack#111`**: coverage-v8 branch-undercounting
+  quirk with the require-cache-delete test pattern — filed against the
+  skills-pack repo (not editable directly from this session, per
+  skill-maintenance Rule 0) with verbatim lesson text for a pack session
+  to land in `bioavanced-v2-testing-conventions`.
 
 No product-code edits (test-loop rule respected).
 
 ## Repo state
 
 - `feature/docker-e2e-backend-integration` current and pushed
-  (`1bd72036`). Working tree clean.
+  (`a336dd96`). Working tree clean.
 
 ## Milestone (set 2026-07-22 by Dennis, still current)
 
 **Target: 90% across all four coverage dimensions.** Last full reconcile
 was 2026-07-23 morning (`f3c258c9`): Statements 91.54%, Branches
-**83.37%** (lagging dimension), Functions 90.96%, Lines 91.98%. Seven
+**83.37%** (lagging dimension), Functions 90.96%, Lines 91.98%. Eight
 sessions' worth of slices since then (sample.service.js session 5,
 intakeWizard.js session 6, terminologies.routes.js session 7,
 batch-validation-engine.service.js session 8, fhir-import-staging.service.js
 + import.service.js session 9, NotificationService.js session 10,
-sample-file.controller.js + orphanet.js this session) aren't folded into
-that number yet — worth a fresh full reconcile once a couple more Phase-1
-files land, per the milestone note's own cadence guidance.
+sample-file.controller.js + orphanet.js session 11, dictionary.js +
+auth.routes.js this session) aren't folded into that number yet — worth
+a fresh full reconcile once a couple more Phase-1 files land, per the
+milestone note's own cadence guidance.
 
 ## Recommended next steps
 
-Continue down the Phase 1 branch-gap list in `api/backend/COVERAGE_NOTES.md`.
-Next candidates in gap order: `src/routes/dictionary.js` (51),
-`src/interface/routes/auth.routes.js` (47). Per the still-current
+`auth.routes.js` still has real, likely-reachable branch gap beyond what
+this session closed (the coverage number itself is suspect per the
+`dyeallpies-skills-pack#111` finding above — check with a `node -e`
+script before assuming a branch needs a new test vs. already being
+covered but undercounted). Otherwise continue down the Phase 1
+branch-gap list in `api/backend/COVERAGE_NOTES.md` — check the file for
+the current top-of-list candidates (dictionary.js and auth.routes.js
+were the last two entries; re-read the file fresh rather than trusting
+this note's memory of what's below them). Per the still-current
 bigger-iteration policy (`dyeallpies-skills-pack#107`, not yet landed
 upstream): bundle 2+ of these, or one much bigger slice, before stopping
 to commit/wrap-up/report.
 
 Remaining open backlog beyond this (not re-checked this session): #254,
 #253, #252, #251, #250, #224, #222, #115, #255, #256, #257, #258, #259,
-#260 — see `gh issue list --state open`. Note #250/#251/#252-254 are
-bug/design-call items outside the test-loop's scope (no-product-code-edit
-rule); #255-260 are the same class (dead-code/gap findings from this
-loop, owner's call whether to remove/wire in/refactor), except #259
-which is a genuine crash bug worth prioritizing above the dead-code
+#260, #261, #262 — see `gh issue list --state open`. #250/#251/#252-254
+are bug/design-call items outside the test-loop's scope (no-product-
+code-edit rule); #255-262 are the same class (dead-code/gap findings
+from this loop, owner's call whether to remove/wire in/refactor), except
+#259 which is a genuine crash bug worth prioritizing above the dead-code
 cluster if Dennis is triaging.
 
 ## Which skills to use
@@ -96,9 +119,10 @@ cluster if Dennis is triaging.
 `test-loop` for the next slice (with the bigger-iteration policy above
 until #107 lands upstream). `bioavanced-v2-conventions` and
 `bioavanced-v2-testing-conventions` as always (would benefit from #108,
-#109, and #110 once they land — check before reaching for
-`vi.mock`/`csv-parser`-erroring/`ExcelJS`-blank-cell assumptions).
-`wrap-up` every iteration.
+#109, #110, and now #111 once they land — check before reaching for
+`vi.mock`/`csv-parser`-erroring/`ExcelJS`-blank-cell assumptions, or
+trusting a coverage number from a require-cache-delete-pattern test
+file). `wrap-up` every iteration.
 
 ## Dependency notes
 
@@ -112,20 +136,28 @@ sample-file.controller.js-style guard-clause `if`/no-real-else and
 coverage won't move past a real assertion that clearly executes the
 "else" path, don't keep adding tests — it's the same
 `@vitest/coverage-v8` phantom-branch/unreachable-guard artifact confirmed
-six times now (verify directly against `coverage/coverage-final.json`'s
+repeatedly now (verify directly against `coverage/coverage-final.json`'s
 `branchMap` if in doubt — a `locations` entry with an empty
 `{"start":{},"end":{}}` second slot is the tell, not just a stalled
 percentage).
 
-**New this session**: when a remaining branch gap looks real but every
-plausible test still doesn't move the number, check whether the branch
-is *structurally* unreachable from any current call site (not just
-"hard to trigger") before spending more time — confirmed for
-`orphanet.js`'s `record?.source` fallback and `requestedLang` ternary
-(issue #260). This is a different class from the phantom-branch artifact
-above: the code path is real and would execute if called differently,
-it's just that no caller does. Worth a quick call-site grep before
-writing more tests against a stubborn gap.
+Before treating a remaining branch gap as "real," grep for whether the
+branch's code path is actually reachable from any call site — confirmed
+dead-code branches found in sessions 9, 11, and now 12 twice
+(dictionary.js #261, auth.routes.js #262) were sitting in files that
+otherwise looked like genuine coverage gaps. For route handlers
+specifically, check whether upstream middleware (e.g. `authenticate`)
+already performs the same guard before the handler runs — that's what
+made auth.routes.js's five `if (!db)` guards dead in #262.
+
+**New this session**: if a test file uses `delete require.cache[...]` +
+fresh `require()` per test, don't fully trust that file's reported
+branch coverage number — `@vitest/coverage-v8` has been observed to
+report 0 hits for a branch a passing test does exercise (confirmed via a
+plain `node -e` script bypassing vitest coverage entirely). See
+`dyeallpies-skills-pack#111`. Verify with a standalone script before
+concluding a test is missing or a branch is dead code, in any file using
+this pattern.
 
 If a route module needs both fresh env-var pickup via
 `delete require.cache[...]` + re-`require()` **and** a mocked
@@ -142,14 +174,6 @@ If testing an `ExcelJS`-based blank-cell branch (`value === null -> ''`),
 know that a hand-built workbook may represent that cell as a sparse-array
 hole rather than a `null` entry, which silently defeats the assertion
 (see dyeallpies-skills-pack#110, once it lands).
-
-Before treating a large chunk of a file's remaining branch gap as "real,"
-grep for whether the branch's code path is actually reachable from any
-call site — two dead-code branches found in session 9
-(`decorateRecord()` in fhir-import-staging.service.js, the `'skip'`
-action in import.service.js), and now two more in session 11
-(`orphanet.js`, issue #260) — were sitting in files that otherwise
-looked like genuine coverage gaps.
 
 When a service module `require()`-destructures its infra dependencies at
 module scope (e.g. `const { connectInfluxDB, ... } =
