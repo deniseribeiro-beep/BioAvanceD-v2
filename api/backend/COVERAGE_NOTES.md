@@ -87,7 +87,6 @@ either).
 gap  branch% lines%  file
 141  82.5%   93.9%   src/services/import-lgpd.service.js  (partial slice landed 2026-07-23, session 4: importPatientsSmart/buildMappedPatientRow branches — clinicalUnit-present fillAcronym call, PatientModel.validate() rejection path (e.g. missing sex), and the responsavelNome/responsavelEmail explicit-mapping-target fallback (set vs. already-mapped) — via tests/unit/import-lgpd.service.importPatientsSmart.unit.test.js. Note: the fallback only fires when a mapping explicitly targets the literal key `responsavelNome`/`responsavelEmail` — the more common accented-column path (`responsavelnome` etc.) resolves straight to `representativeName`/`representativeEmail` via canonicalHeaderMap and never touches that fallback. File is 1693 lines; remaining gap is scattered across earlier parse helpers (parseSampleRow ~1150-1310, parsePatientRow ~1160-1200) plus a few defensive branches — no single large block left.)
  86  77.66%  92.8%   src/routes/intakeWizard.js  (partial slice landed 2026-07-23, session 6: isolated branches 77.66% -> 86.49% (299/385 -> 333/385) via tests/unit/intakeWizard.helpers.test.js + tests/unit/intakeWizard.routes.test.js — buildSampleDocumentFromIntake/buildPharmacologyData/normalizeNumber fallback branches, ensureConsentEmailSent's success/failure paths, resolveConsentDecision's no-identifier throw, sensor/equipment maintenanceStatus-fallback matching, storage-box BLOCKED/full-occupancy skip + Map-based occupancyGrid, canonicalViolations non-object guard, and patient-match's $or/ACTIVE-status-default branches. Filed #255: `collectNonCanonicalFields` and `ensureConsentEmailSent` are dead code (never called from any route, only reachable via `router._test`) — accounts for part of the remaining gap. Remainder is a mix of genuine small gaps (e.g. equipment status via maintenanceStatus-only fallback, empty box rows/cols, non-numeric locationID skip) and likely some `@vitest/coverage-v8` phantom-branch artifacts on guard-clause `if`s without `else` blocks (same class as the `sample.routes.js` follow-up noted above) — not re-verified this session.)
- 56  74.54%  89.2%   src/services/NotificationService.js
  54  69.66%  98.8%   src/controllers/sample-file.controller.js
  52  69.94%  85.2%   src/routes/orphanet.js
  51  78.66%  96.2%   src/routes/dictionary.js
@@ -722,6 +721,32 @@ generic per-row/outer try/catch handlers and a `results.errors.push` branch
 for an `upsertResult.action === 'skip'` outcome that `upsertPatient` never
 actually returns — confirmed dead code, same class as `decorateRecord`
 above; **filed as issue #257**.
+
+`src/services/NotificationService.js` worked 2026-07-23 (session 10): extended
+`tests/unit/NotificationService.test.js` (+30 tests, 92 total). Covered, all
+previously untested/only-mocked-away: `isLoopbackHostname` (exported helper —
+case-insensitive `localhost`, `127.0.0.1`, bracketed/unbracketed `::1`,
+non-loopback, empty/undefined), `validateFrontendUrl`'s full branch set (the
+`!error?.code` wrap-vs-rethrow distinction — a plain code-less throw from
+`getFrontendUrl` gets wrapped into `CONSENT_FRONTEND_URL_INVALID`, while
+Node's own `new URL()` parse failure carries its own `ERR_INVALID_URL` code
+and is rethrown unchanged; remote+loopback-despite-https throw; non-remote
+http-on-non-loopback throw; the `isDevelopment`-gated http-loopback allow vs.
+deny), `persistConsentDeliveryFailure`'s no-patient-id early return and its
+real (unmocked) `connectDB()` rejection path (no MONGO_URI in test env, same
+established pattern as the existing `persistComplianceLog` test),
+`getNotificationQueue`'s real (unmocked) `initRedis()` failure path (no Redis
+env vars in test env — throws, doesn't return null, since `validateRedisOnly`
+only returns `false` in `NODE_ENV=development`), a real (unmocked)
+`socket.io` `Server` construction in `initSocketIO`'s previously-untested
+else-branch, and `notifyJobStarted`/`notifyJobProgress`'s no-io-initialized
+guards (only `notifyJobQueued`'s had a test). Moved isolated coverage
+89.2/74.54/? -> 91.15/75.9/93.47 (lines/branches/funcs). Remaining branch gap
+(lines ~524-525, 802-810) is `getNotificationQueue`'s successful-connection
+`new Queue(...)` construction and `sendCriticalTempAlertFromInflux` (needs a
+real or injectable Redis/InfluxDB client — same class of accepted gap as
+`mqtt-telemetry.service.js`'s `mqtt.connect()` note above, not chased further
+this slice).
 
 ## Maintaining this file
 

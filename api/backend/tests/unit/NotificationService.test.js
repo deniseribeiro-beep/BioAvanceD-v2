@@ -3,6 +3,7 @@ import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
 const notificationService = require('../../src/services/NotificationService');
+const { isLoopbackHostname } = require('../../src/services/NotificationService');
 const logger = require('../../src/utils/logger');
 
 describe('NotificationService', () => {
@@ -797,6 +798,143 @@ describe('NotificationService', () => {
         triggered: false,
         reason: 'Temperatura 0°C dentro do range -10°C..10°C'
       });
+    });
+  });
+
+  describe('isLoopbackHostname', () => {
+    it('recognizes localhost case-insensitively', () => {
+      expect(isLoopbackHostname('LOCALHOST')).toBe(true);
+    });
+
+    it('recognizes 127.0.0.1', () => {
+      expect(isLoopbackHostname('127.0.0.1')).toBe(true);
+    });
+
+    it('recognizes bracketed and unbracketed ::1', () => {
+      expect(isLoopbackHostname('::1')).toBe(true);
+      expect(isLoopbackHostname('[::1]')).toBe(true);
+    });
+
+    it('returns false for a non-loopback hostname', () => {
+      expect(isLoopbackHostname('app.example.com')).toBe(false);
+    });
+
+    it('returns false for an empty/undefined hostname', () => {
+      expect(isLoopbackHostname('')).toBe(false);
+      expect(isLoopbackHostname(undefined)).toBe(false);
+    });
+  });
+
+  describe('validateFrontendUrl', () => {
+    it('wraps getFrontendUrl\'s plain (code-less) throw into CONSENT_FRONTEND_URL_INVALID', () => {
+      process.env.FRONTEND_URL = '';
+      // getFrontendUrl throws a plain Error (no .code) when unset, so this
+      // exercises the "!error?.code" branch inside the catch, which re-wraps
+      // into the consent-specific error rather than surfacing the raw message.
+      expect(() => notificationService.validateFrontendUrl()).toThrow(
+        'FRONTEND_URL deve ser uma URL absoluta válida'
+      );
+      try {
+        notificationService.validateFrontendUrl();
+      } catch (error) {
+        expect(error.code).toBe('CONSENT_FRONTEND_URL_INVALID');
+      }
+    });
+
+    it('rethrows the native URL parse error unchanged (it already carries an ERR_INVALID_URL code)', () => {
+      process.env.FRONTEND_URL = 'not-a-url';
+      expect(() => notificationService.validateFrontendUrl()).toThrow('Invalid URL');
+    });
+
+    it('throws CONSENT_REMOTE_HTTPS_REQUIRED for a remote request against an https loopback URL', () => {
+      process.env.FRONTEND_URL = 'https://localhost:5173';
+      expect(() => notificationService.validateFrontendUrl({ remote: true })).toThrow(
+        'Convites remotos de consentimento exigem FRONTEND_URL HTTPS'
+      );
+    });
+
+    it('throws CONSENT_REMOTE_HTTPS_REQUIRED for a remote request against a non-https URL', () => {
+      notificationService.isDevelopment = true;
+      process.env.FRONTEND_URL = 'http://app.example.com';
+      expect(() => notificationService.validateFrontendUrl({ remote: true })).toThrow(
+        'Convites remotos de consentimento exigem FRONTEND_URL HTTPS'
+      );
+    });
+
+    it('passes for a remote request against a real https non-loopback URL', () => {
+      process.env.FRONTEND_URL = 'https://app.example.com';
+      const parsed = notificationService.validateFrontendUrl({ remote: true });
+      expect(parsed.hostname).toBe('app.example.com');
+    });
+
+    it('throws CONSENT_FRONTEND_HTTPS_REQUIRED for a non-remote http URL on a non-loopback host', () => {
+      process.env.FRONTEND_URL = 'http://app.example.com';
+      expect(() => notificationService.validateFrontendUrl()).toThrow(
+        'FRONTEND_URL deve usar HTTPS'
+      );
+    });
+
+    it('throws CONSENT_FRONTEND_HTTPS_REQUIRED for a non-remote http loopback URL when not in development', () => {
+      notificationService.isDevelopment = false;
+      process.env.FRONTEND_URL = 'http://localhost:5173';
+      expect(() => notificationService.validateFrontendUrl()).toThrow(
+        'FRONTEND_URL deve usar HTTPS'
+      );
+    });
+
+    it('allows a non-remote http loopback URL in development mode', () => {
+      notificationService.isDevelopment = true;
+      process.env.FRONTEND_URL = 'http://localhost:5173';
+      const parsed = notificationService.validateFrontendUrl();
+      expect(parsed.hostname).toBe('localhost');
+    });
+
+    it('passes for a non-remote https URL regardless of development mode', () => {
+      process.env.FRONTEND_URL = 'https://app.example.com';
+      const parsed = notificationService.validateFrontendUrl();
+      expect(parsed.protocol).toBe('https:');
+    });
+  });
+
+  describe('getNotificationQueue', () => {
+    it('propagates the real initRedis failure when Redis is not configured for this test environment', () => {
+      notificationService.notificationQueue = null;
+      expect(() => notificationService.getNotificationQueue()).toThrow(/Redis/);
+    });
+  });
+
+  describe('persistConsentDeliveryFailure', () => {
+    it('returns without touching the database when no patient id can be resolved', async () => {
+      await expect(
+        notificationService.persistConsentDeliveryFailure({}, new Error('boom'))
+      ).resolves.toBeUndefined();
+    });
+
+    it('rejects when the database is unavailable (no MONGO_URI configured in tests)', async () => {
+      await expect(
+        notificationService.persistConsentDeliveryFailure({ patientID: 'P-1' }, { code: 'X' })
+      ).rejects.toThrow();
+    });
+  });
+
+  describe('initSocketIO (real socket.io Server construction)', () => {
+    it('constructs a real socket.io Server when given a non-io-like argument', () => {
+      const result = notificationService.initSocketIO(undefined);
+      expect(result).toBeTruthy();
+      expect(typeof result.on).toBe('function');
+      expect(notificationService.io).toBe(result);
+    });
+  });
+
+  describe('notifyJobStarted / notifyJobProgress with no io initialized', () => {
+    it('notifyJobStarted does nothing when io has not been initialized', async () => {
+      notificationService.io = null;
+      await expect(notificationService.notifyJobStarted('u1', { jobID: 'job-1' })).resolves.toBeUndefined();
+    });
+
+    it('notifyJobProgress does nothing when io has not been initialized', async () => {
+      notificationService.io = null;
+      await expect(notificationService.notifyJobProgress('u1', { percent: 10 })).resolves.toBeUndefined();
     });
   });
 });
