@@ -32,16 +32,29 @@ stale as slices land and as source files change. Keep it honest:
 
 ## Last full reconcile
 
-**2026-07-22 (evening)**, snapshot from `test/withdrawal-model-coverage`
-(`npx vitest run tests/unit tests/integration tests/compliance
---coverage --reporter=dot`, full suite).
+**2026-07-23**, snapshot from `feature/docker-e2e-backend-integration`
+(commit `f3c258c9`, `npx vitest run tests/unit tests/integration
+tests/compliance --coverage --reporter=dot`, full suite, exit 0 — no
+failing tests).
 
-Statements **90.8%** (16955/18672), Branches **81.84%** (13660/16691),
-Functions **90.83%** (2052/2259), Lines **91.31%** (16319/17872) — up
-from the afternoon reconcile's 90.33/81.3/90.34/90.9 (commit `fdd37e10`).
-**Three of four dimensions (statements/functions/lines) remain past the
-90% milestone** (`bioavanced-v2-conventions`); branches (81.84%) is
-still the sole laggard, though it moved up 0.54pt this session.
+Statements **91.54%** (17049/18624), Branches **83.37%** (13850/16611),
+Functions **90.96%** (2053/2257), Lines **91.98%** (16396/17824) — up
+from the 2026-07-22 evening reconcile's 90.8/81.84/90.83/91.31. This
+fold-in captures the `label.routes.js` (68.29% -> 100% branches
+isolated) and `sample.routes.js` (68.62% -> 90.84% branches isolated;
+remaining gap confirmed as a `@vitest/coverage-v8` phantom-branch
+artifact, not a real gap — see the "Follow-up slice #9" note below)
+session merged at `18ba9f35`. **Three of four dimensions
+(statements/functions/lines) remain past the 90% milestone**
+(`bioavanced-v2-conventions`); branches (83.37%) is still the sole
+laggard, though it moved up 1.53pt this session.
+
+Bucket lists below were not regenerated this reconcile (board-hygiene
+pass only, done to answer issue #228 — no new slice was picked from
+them). Next session picking a slice should regenerate off a fresh
+`coverage-summary.json` per the method above rather than trust these
+buckets blind, since two sessions' worth of slices have landed since
+the 2026-07-22 afternoon regeneration.
 
 Only **1 failing test** this run (`sample-graph-validator.service.test.js`
 > "valida o nó de Integridade com sucesso e falha por tampering") — the
