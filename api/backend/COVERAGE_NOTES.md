@@ -262,7 +262,13 @@ MID-HIGH = 70-84%, GOOD = >=85%.
    reconcile emptied them.
 4. For a MID-HIGH (70-84%) file not already flagged above as
    issue-linked, the number here is trustworthy — no fresh isolated run
-   needed before committing to it.
+   needed before committing to it. **Exception (issue #242):** if the
+   file has both a Vitest-isolated unit test (plain ESM `import`, or a
+   `require.cache`-reload pattern) and an integration test that loads
+   the real `app.js`, the merged full-suite number can understate real
+   coverage by up to ~20 points — re-run that file's own test(s) alone
+   with `--coverage.include="<path>"` before treating a MID-HIGH entry
+   as a real slice candidate.
 5. After landing a slice, delete the file's line from whichever bucket it
    was in (or move it, if now partial). Don't leave stale entries. The
    slice's own commit message is the narrative record now — don't add
