@@ -150,6 +150,22 @@ describe('sample.service', () => {
       ).rejects.toMatchObject({ statusCode: 400 });
     });
 
+    it('rejects when locationID is an empty/whitespace string', async () => {
+      const db = makeDb();
+
+      await expect(
+        sampleService.createSample(db, validSampleData({ locationID: '   ' }))
+      ).rejects.toMatchObject({ statusCode: 400 });
+    });
+
+    it('rejects when locationID is not a valid number', async () => {
+      const db = makeDb();
+
+      await expect(
+        sampleService.createSample(db, validSampleData({ locationID: 'not-a-number' }))
+      ).rejects.toThrow(/locationID deve ser numérico válido/);
+    });
+
     it('rejects when locationID is provided but does not exist', async () => {
       const db = makeDb();
       db.collections.patients.findOne.mockResolvedValue({ participantId: '12345678' });
@@ -187,6 +203,117 @@ describe('sample.service', () => {
         /Falha ao registrar cadeia de custódia/
       );
       expect(db.collections.samples.deleteOne).toHaveBeenCalledWith({ _id: 'generated-id' });
+    });
+
+    it('generates a specimenId automatically when none is provided', async () => {
+      const db = makeDb();
+      mockOperationalLocation(db);
+
+      const result = await sampleService.createSample(db, validSampleData({ specimenId: undefined }));
+
+      expect(result.specimenId).toBeDefined();
+      expect(db.collections.samples.insertOne).toHaveBeenCalledTimes(1);
+    });
+
+    it('rejects when quantity is a numeric string instead of a number', async () => {
+      const db = makeDb();
+      mockOperationalLocation(db);
+
+      await expect(
+        sampleService.createSample(db, validSampleData({ quantity: '10' }))
+      ).rejects.toThrow(/Quantidade deve ser um número maior que zero/);
+    });
+
+    // Regression per issue #253: the malformed-format guard on this line is a
+    // no-op (validateParticipantId is called without `db`/await, so the
+    // `!validateParticipantId(...)` check is always false against a truthy
+    // Promise). A malformed but non-empty-string participantId falls through
+    // to the real, correctly-awaited existence check further down and comes
+    // back as a 404 "não encontrado", not the intended 400 "inválido".
+    it('returns 404 (not the intended 400) for a malformed participantId, per issue #253', async () => {
+      const db = makeDb();
+      mockOperationalLocation(db);
+
+      await expect(
+        sampleService.createSample(db, validSampleData({ participantId: 'not-8-digits' }))
+      ).rejects.toMatchObject({ statusCode: 404 });
+    });
+
+    it('rejects when the location has a linked equipment that is not registered', async () => {
+      const db = makeDb();
+      db.collections.patients.findOne.mockResolvedValue({ participantId: '12345678' });
+      db.collections.locations.findOne.mockResolvedValue({ locationID: 1, equipmentID: 'EQ-1' });
+      db.collection.mockImplementation((name) => {
+        if (name === 'equipment') return { findOne: vi.fn().mockResolvedValue(null) };
+        return db.collections[name] || (db.collections[name] = makeCollection(name));
+      });
+
+      await expect(
+        sampleService.createSample(db, validSampleData())
+      ).rejects.toThrow(/Equipamento vinculado à localização física não está cadastrado/);
+    });
+
+    it('creates the sample when the linked equipment is registered', async () => {
+      const db = makeDb();
+      db.collections.patients.findOne.mockResolvedValue({ participantId: '12345678' });
+      db.collections.locations.findOne.mockResolvedValue({ locationID: 1, equipmentID: 'EQ-1' });
+      db.collection.mockImplementation((name) => {
+        if (name === 'equipment') return { findOne: vi.fn().mockResolvedValue({ equipmentID: 'EQ-1' }) };
+        if (name === 'sensors') return { findOne: vi.fn().mockResolvedValue({ status: 'ok' }) };
+        return db.collections[name] || (db.collections[name] = makeCollection(name));
+      });
+
+      const result = await sampleService.createSample(db, validSampleData());
+      expect(result.barcode).toBe('BR-TEST-001');
+    });
+
+    it('rejects when no sensor is associated with the location', async () => {
+      const db = makeDb();
+      db.collections.patients.findOne.mockResolvedValue({ participantId: '12345678' });
+      db.collections.locations.findOne.mockResolvedValue({ locationID: 1 });
+      db.collection.mockImplementation((name) => {
+        if (name === 'sensors') return { findOne: vi.fn().mockResolvedValue(null) };
+        return db.collections[name] || (db.collections[name] = makeCollection(name));
+      });
+
+      await expect(
+        sampleService.createSample(db, validSampleData())
+      ).rejects.toThrow(/Localização física sem sensor operacional associado/);
+    });
+
+    it('rejects with the sensor status in the message when the sensor is under maintenance', async () => {
+      const db = makeDb();
+      db.collections.patients.findOne.mockResolvedValue({ participantId: '12345678' });
+      db.collections.locations.findOne.mockResolvedValue({ locationID: 1 });
+      db.collection.mockImplementation((name) => {
+        if (name === 'sensors') return { findOne: vi.fn().mockResolvedValue({ status: 'maintenance' }) };
+        return db.collections[name] || (db.collections[name] = makeCollection(name));
+      });
+
+      await expect(
+        sampleService.createSample(db, validSampleData())
+      ).rejects.toThrow(/Sensor atual está em status maintenance/);
+    });
+
+    it('marks the physical position as Occupied when no conflict exists', async () => {
+      const db = makeDb();
+      mockOperationalLocation(db);
+      const location = { freezer: 'F1', rack: 'R1', box: 'B1', position: 'A1' };
+
+      await sampleService.createSample(db, validSampleData({ location }));
+
+      const [insertedSample] = db.collections.samples.insertOne.mock.calls[0];
+      expect(insertedSample.location.status).toBe('Occupied');
+    });
+
+    it('generates a barcode automatically when none is provided', async () => {
+      const db = makeDb();
+      mockOperationalLocation(db);
+
+      const result = await sampleService.createSample(db, validSampleData({ barcode: undefined }));
+
+      expect(result.barcode).toBeDefined();
+      expect(typeof result.barcode).toBe('string');
     });
   });
 
@@ -332,6 +459,24 @@ describe('sample.service', () => {
         })
       ).rejects.toThrow(/obrigatória para retirada parcial/);
     });
+
+    // Regression per issue #252: withdrawSample's barcode-fallback lookup
+    // calls a method that doesn't exist on the class (`getSpecimenByBarcode`
+    // instead of `getSampleByBarcode`), so a barcode-style specimenId that
+    // isn't found by the direct lookup throws a TypeError instead of
+    // falling back cleanly.
+    it('throws a TypeError on the barcode-fallback lookup, per issue #252', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue(null);
+
+      await expect(
+        sampleService.withdrawSample(db, 'BR-NOT-AN-OBJECTID', {
+          withdrawalType: 'Total',
+          withdrawalResponsible: 'Jane Doe',
+          linkedProject: 'ProjectX'
+        })
+      ).rejects.toThrow(/getSpecimenByBarcode is not a function/);
+    });
   });
 
   // -------------------------------------------------------------------
@@ -343,6 +488,13 @@ describe('sample.service', () => {
       const result = await sampleService.getSample(db, 'sample-1');
       expect(result._id).toBe('sample-1');
       expect(db.collections.samples.findOne).toHaveBeenCalledWith({ specimenId: 'sample-1' });
+    });
+
+    it('propagates and logs an error from the collection lookup', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockRejectedValue(new Error('mongo down'));
+
+      await expect(sampleService.getSample(db, 'sample-1')).rejects.toThrow('mongo down');
     });
   });
 
@@ -377,6 +529,15 @@ describe('sample.service', () => {
       const result = await sampleService.listSamples(db, {});
       expect(result.limit).toBe(50);
       expect(result.skip).toBe(0);
+    });
+
+    it('propagates an error from the collection query', async () => {
+      const db = makeDb();
+      db.collections.samples.find.mockImplementation(() => {
+        throw new Error('mongo down');
+      });
+
+      await expect(sampleService.listSamples(db, {})).rejects.toThrow('mongo down');
     });
   });
 
@@ -420,6 +581,15 @@ describe('sample.service', () => {
       const result = await sampleService.updateSample(db, 'sample-1', { quantity: 5 });
       expect(result).toBeNull();
     });
+
+    it('propagates an error from the collection lookup', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockRejectedValue(new Error('mongo down'));
+
+      await expect(sampleService.updateSample(db, 'sample-1', { quantity: 5 })).rejects.toThrow(
+        'mongo down'
+      );
+    });
   });
 
   // -------------------------------------------------------------------
@@ -436,6 +606,13 @@ describe('sample.service', () => {
       db.collections.samples.deleteOne.mockResolvedValue({ deletedCount: 0 });
 
       expect(await sampleService.deleteSample(db, 'missing')).toBe(false);
+    });
+
+    it('propagates an error from the collection delete', async () => {
+      const db = makeDb();
+      db.collections.samples.deleteOne.mockRejectedValue(new Error('mongo down'));
+
+      await expect(sampleService.deleteSample(db, 'sample-1')).rejects.toThrow('mongo down');
     });
   });
 
@@ -466,6 +643,72 @@ describe('sample.service', () => {
       // examples query resolves an empty cursor by default too
       const result = await sampleService.getSampleByBarcode(db, 'DOES-NOT-EXIST');
       expect(result).toEqual({ sample: null, participant: null });
+    });
+
+    it('falls back to a case-insensitive match when the exact match misses', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne
+        .mockResolvedValueOnce(null) // exact match
+        .mockResolvedValueOnce({ _id: 's1', barcode: 'BR-UPPER' }); // case-insensitive match
+
+      const { sample } = await sampleService.getSampleByBarcode(db, 'br-upper');
+      expect(sample._id).toBe('s1');
+    });
+
+    it('falls back to a numeric match for legacy all-digit barcodes', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne
+        .mockResolvedValueOnce(null) // exact match
+        .mockResolvedValueOnce(null) // case-insensitive match
+        .mockResolvedValueOnce({ _id: 's1', barcode: 123456 }); // numeric match
+
+      const { sample } = await sampleService.getSampleByBarcode(db, '123456');
+      expect(sample._id).toBe('s1');
+      expect(db.collections.samples.findOne).toHaveBeenCalledWith({ barcode: 123456 });
+    });
+
+    it('falls back to a regex match as a last resort', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne
+        .mockResolvedValueOnce(null) // exact match
+        .mockResolvedValueOnce(null) // case-insensitive match
+        .mockResolvedValueOnce({ _id: 's1', barcode: 'BR.1' }); // regex match
+
+      const { sample } = await sampleService.getSampleByBarcode(db, 'BR.1');
+      expect(sample._id).toBe('s1');
+    });
+
+    it('returns the sample without a participant when it has no participantId', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValueOnce({ _id: 's1', barcode: 'BR-1' });
+
+      const { sample, participant } = await sampleService.getSampleByBarcode(db, 'BR-1');
+      expect(sample._id).toBe('s1');
+      expect(participant).toBeNull();
+    });
+
+    it('anonymizes a single-word participant name', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValueOnce({
+        _id: 's1',
+        barcode: 'BR-1',
+        participantId: '12345678'
+      });
+      db.collections.patients.findOne.mockResolvedValue({
+        participantId: '12345678',
+        patientName: 'Cher',
+        recordNumber: 'RN1'
+      });
+
+      const { participant } = await sampleService.getSampleByBarcode(db, 'BR-1');
+      expect(participant.patientName).toBe('C***');
+    });
+
+    it('propagates an error from the collection lookup', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockRejectedValue(new Error('mongo down'));
+
+      await expect(sampleService.getSampleByBarcode(db, 'BR-1')).rejects.toThrow('mongo down');
     });
   });
 
@@ -648,6 +891,48 @@ describe('sample.service', () => {
         })
       ).rejects.toThrow(/Quantidade excede o pendente de devolução/);
     });
+
+    it('rejects a partial return missing a quantity', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue(withdrawnSample());
+
+      await expect(
+        sampleService.returnSample(db, 'sample-1', {
+          returnResponsible: 'Jane Doe',
+          condition: 'intact',
+          observations: 'n/a',
+          returnType: 'Parcial'
+        })
+      ).rejects.toThrow(/Quantidade a devolver é obrigatória/);
+    });
+
+    it('requires observations when the condition is not "intact"', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue(withdrawnSample());
+
+      await expect(
+        sampleService.returnSample(db, 'sample-1', {
+          returnResponsible: 'Jane Doe',
+          condition: 'unusable',
+          returnType: 'Total'
+        })
+      ).rejects.toThrow(/Observações são obrigatórias quando a condição não é Íntegra/);
+    });
+
+    it('falls back to a barcode lookup when the direct specimenId lookup misses', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne
+        .mockResolvedValueOnce(null) // direct specimenId lookup misses
+        .mockResolvedValueOnce(withdrawnSample()); // barcode-lookup exact match
+
+      const result = await sampleService.returnSample(db, 'BR-NOT-AN-OBJECTID', {
+        returnResponsible: 'Jane Doe',
+        condition: 'intact',
+        returnType: 'Total'
+      });
+
+      expect(result.success).toBe(true);
+    });
   });
 
   // -------------------------------------------------------------------
@@ -664,6 +949,28 @@ describe('sample.service', () => {
       });
       expect(cursor.sort).toHaveBeenCalledWith({ timestamp: -1 });
       expect(movements).toEqual([{ movementID: 2 }, { movementID: 1 }]);
+    });
+
+    it('stringifies an object-like specimenId before querying', async () => {
+      const db = makeDb();
+      const cursor = makeCursor([]);
+      db.collections.sample_movements.find.mockReturnValue(cursor);
+      const objectIdLike = { toString: () => 'sample-1' };
+
+      await sampleService.getSampleMovements(db, objectIdLike);
+
+      expect(db.collections.sample_movements.find).toHaveBeenCalledWith({
+        $or: [{ specimenId: 'sample-1' }, { barcode: 'sample-1' }]
+      });
+    });
+
+    it('propagates an error from the collection query', async () => {
+      const db = makeDb();
+      db.collections.sample_movements.find.mockImplementation(() => {
+        throw new Error('mongo down');
+      });
+
+      await expect(sampleService.getSampleMovements(db, 'sample-1')).rejects.toThrow('mongo down');
     });
   });
 

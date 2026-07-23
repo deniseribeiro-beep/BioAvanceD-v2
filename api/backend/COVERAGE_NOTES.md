@@ -86,7 +86,6 @@ either).
 ```
 gap  branch% lines%  file
 141  82.5%   93.9%   src/services/import-lgpd.service.js  (partial slice landed 2026-07-23, session 4: importPatientsSmart/buildMappedPatientRow branches — clinicalUnit-present fillAcronym call, PatientModel.validate() rejection path (e.g. missing sex), and the responsavelNome/responsavelEmail explicit-mapping-target fallback (set vs. already-mapped) — via tests/unit/import-lgpd.service.importPatientsSmart.unit.test.js. Note: the fallback only fires when a mapping explicitly targets the literal key `responsavelNome`/`responsavelEmail` — the more common accented-column path (`responsavelnome` etc.) resolves straight to `representativeName`/`representativeEmail` via canonicalHeaderMap and never touches that fallback. File is 1693 lines; remaining gap is scattered across earlier parse helpers (parseSampleRow ~1150-1310, parsePatientRow ~1160-1200) plus a few defensive branches — no single large block left.)
- 90  73.13%  85.2%   src/services/sample.service.js
  86  77.66%  92.8%   src/routes/intakeWizard.js
  82  68.93%  94.4%   src/interface/routes/terminologies.routes.js
  80  82.40%  88.2%   src/services/batch-validation-engine.service.js
@@ -559,6 +558,54 @@ mutable `current*` closure variable per test) instead of clearing
 `require.cache` and re-requiring the ~1090-line route fresh per test —
 faster, and ruled out (though did not fix, see below) a suspected
 coverage-measurement quirk.
+
+**Follow-up slice #10 (2026-07-23, same branch, session 5):** worked
+`src/services/sample.service.js` (73.13/85.2 branches/lines isolated,
+Phase-1 list above). Extended `tests/unit/sample.service.test.js`
+(+30 tests, 46 total) covering: `normalizeRequiredLocationID`'s
+whitespace-only and non-numeric-string branches, `createSample`'s
+auto-generated `specimenId` path, the `quantity` type-strictness check
+(a numeric *string* passes the model's `Number(quantity) > 0` check but
+fails the service's own `typeof !== 'number'` re-check), the
+linked-equipment lookup (both not-found and found-and-registered), the
+sensor-operational check (missing sensor and a `maintenance`-status
+sensor, including the status-in-message branch), the physical-position
+`Occupied`-marking success path, auto-generated `barcode`, `withdrawSample`'s
+and `returnSample`'s barcode-fallback lookup, catch/error-propagation
+paths for `getSample`/`listSamples`/`updateSample`/`deleteSample`/
+`getSampleByBarcode`/`getSampleMovements`, `getSampleByBarcode`'s
+case-insensitive/numeric/regex fallback strategies and its
+no-participant and single-word-name branches, `returnSample`'s
+missing-quantity and observations-required branches, and
+`getSampleMovements`'s object-like (`toString()`) specimenId branch.
+Moved isolated coverage to 95.82/82.98/94.73/96.06.
+
+Found two real bugs while writing these, both left as-is per the
+loop's no-product-code rule — new tests assert the current (buggy)
+behavior with a comment referencing the issue:
+- **Issue #252**: `withdrawSample`'s barcode-fallback lookup calls
+  `this.getSpecimenByBarcode` (doesn't exist on the class — only
+  `getSampleByBarcode` does, which `returnSample` calls correctly) —
+  throws a `TypeError` instead of falling back.
+- **Issue #253**: `createSample`'s participantId format guard
+  (`!validateParticipantId(sampleData.participantId)`) calls the async,
+  two-arg `validateParticipantId(db, participantId)` with only one
+  argument — `!aPromise` is always `false`, so the guard never fires;
+  a malformed id falls through to the real (correctly awaited)
+  existence check two lines later and comes back as 404 "não
+  encontrado" instead of the intended 400 "inválido".
+
+Remaining branch gap (lines 105-106, 115-117, 121-123, 135, 139, 143,
+296) is dead code, not a real gap: 105-106 is an `else if
+(typeof validation.errors === 'string')` fallback that
+`SampleModel.validate` can never produce (always returns an array);
+115-117/135/139/143 are the service's own re-checks of
+participantId-presence/sampleType/sampleOrigin/extractionProtocol,
+already unreachable because `SampleModel.validate` (called first)
+rejects all of those cases itself; 121-123 (the intended 400 throw) and
+296 (the line after the #252 `TypeError`) are unreachable specifically
+*because* of issues #253 and #252 above — confirmed via the two bug
+regression tests, not assumed.
 
 Moved isolated coverage to 99.43% statements / 90.84% branches / 100%
 functions / 99.42% lines — **not** 100% branches, and that remainder is
