@@ -262,6 +262,26 @@ describe('ImportLGPDService.getNextAvailableLocation', () => {
     expect(result).toBe('L2');
   });
 
+  it('breaks block/rack/drawer ties by the next field down the sort (exercises every comparator branch)', async () => {
+    // All four fields differ pairwise so each `if (a.X !== b.X)` comparator
+    // branch actually returns instead of falling through to the next field.
+    const db = makeLocationsDb([
+      { locationID: 'L1', block: 1, rack: 2, drawer: 1, box: 1 },
+      { locationID: 'L2', block: 2, rack: 1, drawer: 1, box: 1 },
+      { locationID: 'L3', block: 2, rack: 2, drawer: 1, box: 1 },
+      { locationID: 'L4', block: 2, rack: 2, drawer: 2, box: 1 },
+    ]);
+
+    // Sorted by block asc, then rack asc, then drawer asc, then box asc:
+    // L1 (block 1) < L2 (block 2, rack 1) < L3 (block 2, rack 2, drawer 1) < L4.
+    const result = await service.getNextAvailableLocation(db, 'L1', 1);
+    expect(result).toBe('L2');
+    const result2 = await service.getNextAvailableLocation(db, 'L2', 1);
+    expect(result2).toBe('L3');
+    const result3 = await service.getNextAvailableLocation(db, 'L3', 1);
+    expect(result3).toBe('L4');
+  });
+
   it('returns null when the requested offset runs past the end of the sorted list', async () => {
     const db = makeLocationsDb([
       { locationID: 'L1', block: 1, rack: 1, drawer: 1, box: 1 },

@@ -85,7 +85,7 @@ either).
 
 ```
 gap  branch% lines%  file
-199  75.30%  90.2%   src/services/import-lgpd.service.js
+198  75.43%  90.2%   src/services/import-lgpd.service.js  (partial slice landed 2026-07-23: getNextAvailableLocation sort-comparator branches + recordNumber 'undefined'/'NaN' placeholders; file is 1693 lines / ~199-branch gap, needs several more sessions — see readSamples/importSamples/validation blocks for remaining gap)
  90  73.13%  85.2%   src/services/sample.service.js
  86  77.66%  92.8%   src/routes/intakeWizard.js
  82  68.93%  94.4%   src/interface/routes/terminologies.routes.js
