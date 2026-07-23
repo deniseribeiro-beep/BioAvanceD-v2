@@ -70,6 +70,18 @@ describe('orphanet route GET /search', () => {
     expect(filterArg.lang).toEqual({ $in: ['pt', '', null] });
   });
 
+  it('treats a whitespace-only lang the same as an omitted one, defaulting to pt (issue #231)', async () => {
+    const orphanetFind = findReturning([{ ORPHA: '166030', name: 'Disease E', lang: 'pt' }]);
+    const app = buildApp(buildDb({ orphanetFind }));
+
+    const res = await request(app).get('/api/orphanet/search').query({ q: 'disease', lang: '   ' });
+
+    expect(res.status).toBe(200);
+    expect(orphanetFind).toHaveBeenCalledTimes(1);
+    const filterArg = orphanetFind.mock.calls[0][0];
+    expect(filterArg.lang).toEqual({ $in: ['pt', '', null] });
+  });
+
   it('falls back to the lang-less query when the lang-scoped query returns empty results', async () => {
     const fallbackDoc = { ORPHA: '166025', name: 'Disease B', lang: 'en' };
     const orphanetFind = vi.fn()

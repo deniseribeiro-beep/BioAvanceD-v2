@@ -303,7 +303,7 @@ async function searchRemote(search, limit) {
 
 router.get('/search', async (req, res) => {
   const q = normalizeText(req.query.q);
-  const lang = normalizeText(req.query.lang || 'pt');
+  const lang = normalizeText(req.query.lang) || 'pt';
   const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 50);
   if (!q) return res.status(400).json({ error: 'Missing query' });
 

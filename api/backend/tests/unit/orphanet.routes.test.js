@@ -301,10 +301,10 @@ describe('orphanet.routes', () => {
     expect(response.body[0].orphaCode).toBe('ORPHA:324');
   });
 
-  it('nao filtra por idioma quando o parametro lang e apenas espacos em branco', async () => {
+  it('trata lang apenas espacos em branco como ausente, aplicando o filtro default pt (issue #231)', async () => {
     loadRouteWithEnv({ ALLOW_EXTERNAL_TERMINOLOGY_SYNC: 'false' });
 
-    const orphanetFind = vi.fn(() => cursor([{ ORPHA: '324', name: 'Fabry disease' }]));
+    const orphanetFind = vi.fn(() => cursor([{ ORPHA: '324', name: 'Fabry disease', lang: 'pt' }]));
     const db = {
       collection: vi.fn((name) => {
         if (name === 'cids') return { find: vi.fn(() => cursor([])) };
@@ -319,7 +319,7 @@ describe('orphanet.routes', () => {
     expect(response.status).toBe(200);
     expect(orphanetFind).toHaveBeenCalledTimes(1);
     const calledFilter = orphanetFind.mock.calls[0][0];
-    expect(calledFilter.lang).toBeUndefined();
+    expect(calledFilter.lang).toEqual({ $in: ['pt', '', null] });
   });
 
   it('retorna lista vazia quando nao ha resultados locais nem externos', async () => {
