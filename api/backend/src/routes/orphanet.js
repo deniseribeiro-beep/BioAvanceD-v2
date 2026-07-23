@@ -312,6 +312,7 @@ router.get('/search', async (req, res) => {
     return res.status(503).json({ error: 'Database unavailable' });
   }
 
+  let failedStage = 'local';
   try {
     const localResults = await searchLocal(db, q, lang, limit);
     if (localResults.length > 0) {
@@ -319,6 +320,7 @@ router.get('/search', async (req, res) => {
       return res.json(localResults);
     }
 
+    failedStage = 'remote';
     const remoteResults = await searchRemote(q, limit);
     if (remoteResults.length > 0) {
       const results = dedupeRecords(remoteResults, limit);
@@ -329,7 +331,8 @@ router.get('/search', async (req, res) => {
     logger.info(`[ORPHANET] Busca concluida: queryLength=${q.length}, resultados=0, origem=vazio`);
     return res.json([]);
   } catch (error) {
-    logger.warn(`[ORPHANET] Busca externa/local falhou; tentando fallback local: ${error.message}`);
+    const stageLabel = failedStage === 'remote' ? 'Busca externa' : 'Busca local';
+    logger.warn(`[ORPHANET] ${stageLabel} falhou; tentando fallback local: ${error.message}`);
     try {
       const fallbackResults = await searchLocal(db, q, lang, limit);
       res.json(fallbackResults);
