@@ -66,12 +66,6 @@ const resultUpload = multer({
 router.get('/', authenticate, async (req, res) => {
   try {
     const db = req.app.locals.db;
-    if (!db) {
-      return res.status(503).json({
-        success: false,
-        error: 'Banco de dados não disponível'
-      });
-    }
 
     const resultsCollection = db.collection('results');
     const query = {};
@@ -113,12 +107,6 @@ router.get('/', authenticate, async (req, res) => {
 router.post('/upload', authenticate, requirePermission('uploadFiles'), resultUpload.single('file'), enforceCommercialConsent({ resolveSampleId: (req) => req.body?.sampleID }), async (req, res) => {
   try {
     const db = req.app.locals.db;
-    if (!db) {
-      return res.status(503).json({
-        success: false,
-        error: 'Banco de dados não disponível'
-      });
-    }
 
     const { sampleID, description, method, responsibleResearcher, equipmentID, equipmentName, analysisType } = req.body;
     const file = req.file;
@@ -127,16 +115,6 @@ router.post('/upload', authenticate, requirePermission('uploadFiles'), resultUpl
       return res.status(400).json({
         success: false,
         error: 'Arquivo não fornecido'
-      });
-    }
-
-    if (!sampleID) {
-      if (fs.existsSync(file.path)) {
-        fs.unlinkSync(file.path);
-      }
-      return res.status(400).json({
-        success: false,
-        error: 'sampleID é obrigatório'
       });
     }
 
@@ -182,7 +160,7 @@ router.post('/upload', authenticate, requirePermission('uploadFiles'), resultUpl
 
     const resultsCollection = db.collection('results');
     const resultPayload = {
-      sampleID: sample._id ? sample._id.toString() : sampleID,
+      sampleID: sample._id.toString(),
       fileType,
       resultFilePath: file.path,
       filePath: file.path,
@@ -252,12 +230,6 @@ router.post('/upload', authenticate, requirePermission('uploadFiles'), resultUpl
 router.get('/:id', authenticate, async (req, res) => {
   try {
     const db = req.app.locals.db;
-    if (!db) {
-      return res.status(503).json({
-        success: false,
-        error: 'Banco de dados não disponível'
-      });
-    }
 
     const { ObjectId } = require('mongodb');
     const resultsCollection = db.collection('results');
@@ -314,12 +286,6 @@ router.get('/:id', authenticate, async (req, res) => {
 router.get('/:id/download', authenticate, async (req, res) => {
   try {
     const db = req.app.locals.db;
-    if (!db) {
-      return res.status(503).json({
-        success: false,
-        error: 'Banco de dados não disponível'
-      });
-    }
 
     const { ObjectId } = require('mongodb');
     const resultsCollection = db.collection('results');
@@ -391,12 +357,6 @@ router.get('/:id/download', authenticate, async (req, res) => {
 router.post('/', authenticate, requirePermission('createPatient'), enforceCommercialConsent({ resolveSampleId: (req) => req.body?.sampleID }), async (req, res) => {
   try {
     const db = req.app.locals.db;
-    if (!db) {
-      return res.status(503).json({
-        success: false,
-        error: 'Banco de dados não disponível'
-      });
-    }
 
     const validation = ResultModel.validate(req.body);
     if (!validation.isValid) {
@@ -447,12 +407,6 @@ router.post('/', authenticate, requirePermission('createPatient'), enforceCommer
 router.put('/:id', authenticate, requirePermission('createPatient'), async (req, res) => {
   try {
     const db = req.app.locals.db;
-    if (!db) {
-      return res.status(503).json({
-        success: false,
-        error: 'Banco de dados não disponível'
-      });
-    }
 
     const { ObjectId } = require('mongodb');
     const resultsCollection = db.collection('results');
@@ -503,12 +457,6 @@ router.put('/:id', authenticate, requirePermission('createPatient'), async (req,
 router.put('/:id/link-sample', authenticate, requirePermission('createPatient'), async (req, res) => {
   try {
     const db = req.app.locals.db;
-    if (!db) {
-      return res.status(503).json({
-        success: false,
-        error: 'Banco de dados não disponível'
-      });
-    }
 
     const { sampleID } = req.body;
     if (!sampleID) {
@@ -567,12 +515,6 @@ router.put('/:id/link-sample', authenticate, requirePermission('createPatient'),
 router.delete('/:id', authenticate, requirePermission('createPatient'), async (req, res) => {
   try {
     const db = req.app.locals.db;
-    if (!db) {
-      return res.status(503).json({
-        success: false,
-        error: 'Banco de dados não disponível'
-      });
-    }
 
     const { ObjectId } = require('mongodb');
     const resultsCollection = db.collection('results');
