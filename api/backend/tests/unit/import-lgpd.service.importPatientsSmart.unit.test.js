@@ -111,13 +111,31 @@ describe('ImportLGPDService.buildMappedPatientRow', () => {
     expect(mapped.patientName).toBeUndefined();
   });
 
-  it('falls back responsavelNome/responsavelEmail into representativeName/representativeEmail when those are unset', () => {
+  it('canonicalizes accented/spaced responsavel* column names straight to representativeName/representativeEmail (canonicalHeaderMap path)', () => {
     const mapped = service.buildMappedPatientRow(
       { responsavelnome: 'João', responsavelemail: 'joao@example.com' },
       {}
     );
     expect(mapped.representativeName).toBe('João');
     expect(mapped.representativeEmail).toBe('joao@example.com');
+  });
+
+  it('falls back an explicit mapping target of responsavelNome/responsavelEmail into representativeName/representativeEmail when those are unset', () => {
+    const mapped = service.buildMappedPatientRow(
+      { RespCol: 'João', RespEmailCol: 'joao@example.com' },
+      { RespCol: 'responsavelNome', RespEmailCol: 'responsavelEmail' }
+    );
+    expect(mapped.representativeName).toBe('João');
+    expect(mapped.representativeEmail).toBe('joao@example.com');
+  });
+
+  it('does not overwrite an already-mapped representativeName/representativeEmail with the responsavelNome/responsavelEmail fallback', () => {
+    const mapped = service.buildMappedPatientRow(
+      { NameCol: 'Explicit Name', EmailCol: 'explicit@example.com', RespCol: 'João', RespEmailCol: 'joao@example.com' },
+      { NameCol: 'representativeName', EmailCol: 'representativeEmail', RespCol: 'responsavelNome', RespEmailCol: 'responsavelEmail' }
+    );
+    expect(mapped.representativeName).toBe('Explicit Name');
+    expect(mapped.representativeEmail).toBe('explicit@example.com');
   });
 });
 
@@ -306,6 +324,35 @@ describe('ImportLGPDService.importPatientsSmart', () => {
     expect(result.total).toBe(2);
     expect(result.success).toBe(1);
     expect(result.errors[0].errors[0]).toMatch(/db exploded/);
+  });
+
+  it('fills unitAcronym from clinicalUnit via PatientModel.fillAcronym when clinicalUnit is present', async () => {
+    vi.spyOn(service, 'readFile').mockResolvedValue([rowFromValid({ UnidadeClinica: 'Unidade De Oncologia' })]);
+
+    const result = await service.importPatientsSmart(
+      db,
+      { path: '/x.csv', originalname: 'x.csv' },
+      { mapping: { ...MAPPING, UnidadeClinica: 'clinicalUnit' } }
+    );
+
+    expect(result.success).toBe(1);
+    const insertedPatient = patientsCollection.insertOne.mock.calls[0][0];
+    expect(insertedPatient.clinicalUnit).toBe('UNIDADE DE ONCOLOGIA');
+    expect(insertedPatient.unitAcronym).toBe('UO');
+  });
+
+  it('records a per-row error when PatientModel.validate rejects the built patient (e.g. sex missing)', async () => {
+    vi.spyOn(service, 'readFile').mockResolvedValue([rowFromValid({ Sexo: '' })]);
+
+    const result = await service.importPatientsSmart(
+      db,
+      { path: '/x.csv', originalname: 'x.csv' },
+      { mapping: MAPPING }
+    );
+
+    expect(result.success).toBe(0);
+    expect(result.errors[0].errors[0]).toMatch(/sex é obrigatório/);
+    expect(patientsCollection.insertOne).not.toHaveBeenCalled();
   });
 
   it('propagates the underlying error (and never reaches the DB) when reading the file fails', async () => {
