@@ -253,6 +253,19 @@ describe('ImportLGPDService.importPatients', () => {
     expect(second[0].recordNumber).toBeNull();
   });
 
+  it('blanks "undefined" and "NaN" placeholder recordNumber strings to null (same branch as the "null" placeholder)', async () => {
+    vi.spyOn(service, 'readFile').mockResolvedValue([
+      { ...VALID_ROW, recordNumber: 'undefined' },
+      { ...VALID_ROW, recordNumber: 'NaN' },
+    ]);
+    const result = await service.importPatients(db, { path: '/x.csv', originalname: 'x.csv' });
+
+    expect(result.success).toBe(2);
+    const [first, second] = patientsCollection.insertOne.mock.calls;
+    expect(first[0].recordNumber).toBeNull();
+    expect(second[0].recordNumber).toBeNull();
+  });
+
   it('keeps a non-numeric recordNumber string as-is', async () => {
     vi.spyOn(service, 'readFile').mockResolvedValue([{ ...VALID_ROW, recordNumber: 'ABC-1' }]);
     const result = await service.importPatients(db, { path: '/x.csv', originalname: 'x.csv' });
