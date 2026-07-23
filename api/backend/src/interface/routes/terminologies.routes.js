@@ -227,7 +227,7 @@ async function bulkUpsertOrphanetRedundancy(db, records = []) {
 async function hydrateFromLocalRedundancy(db, { search, sistema, limit }) {
   const regex = new RegExp(escapeRegex(search), 'i');
   const strippedSearch = stripKnownCodePrefix(search);
-  const codeRegex = strippedSearch && strippedSearch !== normalizeText(search)
+  const codeRegex = strippedSearch && strippedSearch !== search
     ? new RegExp(escapeRegex(strippedSearch), 'i')
     : null;
   const numericOrpha = getOrphaNumeric(search);
