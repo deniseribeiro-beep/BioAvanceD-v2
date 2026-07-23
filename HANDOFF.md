@@ -1,93 +1,83 @@
 # HANDOFF
 
 **Written:** 2026-07-23, end of a fix-bugs iteration.
-**Branch:** `feature/docker-e2e-backend-integration` (commit `4ebcb6f8`,
-pushed this session). Dennis merged the prior test-loop test branch into
-this branch before the session started, so work now happens directly
-here rather than on a separate test/coverage branch.
+**Branch:** `feature/docker-e2e-backend-integration` (commit `ba59f871`,
+pushed this session).
 
 ## What happened this session
 
-Routed via `fix-bugs`. Reviewed the open issue backlog (`gh issue list`)
-for anything fixable; most open issues are dead-code/coverage findings
-(#235-249 range) rather than correctness bugs. Picked **issue #231**
-(`orphanet.js`: `lang=<whitespace>` bypassed the language filter while
-an omitted `lang` correctly defaulted to `'pt'`) as a clear, isolated,
-reproducible bug.
+Routed via `fix-bugs` for **issue #232** (`orphanet.js`: outer try/catch's
+fallback path logs "Busca externa/local falhou" on every failure, even
+though the failure almost always originates in the initial `searchLocal`
+call, not the external lookup).
 
-Root cause: `src/routes/orphanet.js`'s `GET /search` computed
-`const lang = normalizeText(req.query.lang || 'pt')` — the `'pt'`
-default was applied to the *raw* query param before trimming, so a
-whitespace-only `lang` (e.g. `lang=%20`) survived as truthy, skipped the
-default, and trimmed down to `''`, which downstream in `searchLocal` is
-falsy for the `requestedLang` check and skips the `$in` language filter
-entirely (unfiltered results) instead of applying the `'pt'` default.
+Traced reachability first (per `fix-bugs`' verify-before-deferring step):
+`searchRemote` catches its own per-URL fetch errors internally (logs
+`warn`, never rethrows), so the outer `catch` is, in practice, reached
+almost exclusively by `searchLocal` throwing in the initial `try`. The
+existing pinned test (`recupera via fallback local quando a primeira
+tentativa de busca local lanca erro`, in
+`tests/unit/orphanet.routes.test.js`) confirmed the retry-on-transient-
+local-failure behavior is *intentional and tested*, not itself a bug —
+so the fix scope narrowed to the log-message accuracy only issue
+described, not a change to retry behavior.
 
-Fix: reordered to `const lang = normalizeText(req.query.lang) || 'pt'`
-(trim first, then default) in `api/backend/src/routes/orphanet.js`.
-Added a reproduction test in `tests/unit/routes/orphanet.test.js` and
-un-weakened the pre-existing pinned test in
-`tests/unit/orphanet.routes.test.js` (previously asserted
-`calledFilter.lang` was `undefined` for whitespace-only `lang` — that
-was asserting the *bug*; now asserts the correct `{ $in: ['pt', '',
-null] }` filter). All 34 tests across the three orphanet test files
-pass on both the fix branch and after merge.
+Fix: added a `failedStage` tracker (`'local'` before the local call
+resolves, flipped to `'remote'` once `searchLocal` succeeds and
+`searchRemote` starts) in `api/backend/src/routes/orphanet.js`'s
+`GET /search` handler; the catch block now logs "Busca local falhou" or
+"Busca externa falhou" based on that flag instead of the previous
+always-on "Busca externa/local falhou". Added a reproduction test in
+`tests/unit/routes/orphanet.test.js` (spies on `logger.warn` via
+`createRequire(import.meta.url)` — the repo's documented pattern for
+spying on this CJS logger singleton from an ESM test file, since
+`import logger from '.../logger.js'` + `vi.spyOn` silently doesn't
+intercept the shared instance; see
+`bioavanced-v2-testing-conventions/references/cjs-mocking.md`). All 35
+tests across the three orphanet test files pass on both the fix branch
+and after merge.
 
-Branched `fix/orphanet-whitespace-lang-bypass` off
-`feature/docker-e2e-backend-integration`, committed (`25c3c442`,
-`Fixes #231`), pushed, commented the hash on the issue, merged
-`--no-ff` into `feature/docker-e2e-backend-integration` (`4ebcb6f8`),
-re-verified on the merged tree, pushed, deleted the fix branch
-(local+remote), and closed #231 with the merge commit hash.
+Branched `fix/orphanet-fallback-log-stage` off
+`feature/docker-e2e-backend-integration`, committed (`669a17db`,
+`Fixes #232`), pushed, commented the hash on the issue, merged `--no-ff`
+into `feature/docker-e2e-backend-integration` (`ba59f871`), re-verified
+on the merged tree, pushed, deleted the fix branch (local+remote), and
+closed #232 with the merge commit hash.
 
-`wrap-up` ran: no friction this session — the reproduce-fix-verify-merge
-sequence matched the `fix-bugs` skill exactly, no permission denials, no
-scope creep (only `orphanet.js` + its 2 test files touched), nothing
-security-relevant.
+`wrap-up` ran: no friction worth a skill edit — the ESM/CJS logger-spy
+issue hit was already documented in `cjs-mocking.md` and resolved by
+following that pattern; no scope creep (only `orphanet.js` + its test
+file touched); nothing security-relevant; no deferred sub-points left on
+a closed issue.
 
 ## Repo state
 
 - `feature/docker-e2e-backend-integration` is current and pushed
-  (`4ebcb6f8`), issue #231 closed.
+  (`ba59f871`), issue #232 closed.
 - No uncommitted changes, working tree clean.
 - `main` remains frozen — do not branch off it, merge into it, or push
   to it.
-- The `.claude/hooks/branch-guard.cjs` line-ending-only uncommitted diff
-  noted in prior handoffs is no longer present in `git status` — appears
-  resolved (or was carried in a branch state not currently checked out).
 
 ## Milestone (set 2026-07-22 by Dennis, still current)
 
 **Target: 90% across all four coverage dimensions.** Last full reconcile
-(2026-07-22, before this session): statements 91.05%, branches **82.3%**
-(lagging dimension), functions 90.88%, lines 91.5%. This session was a
-bug-fix iteration, not a coverage iteration — no fresh reconcile run.
+(2026-07-22, before the #231 session): statements 91.05%, branches
+**82.3%** (lagging dimension), functions 90.88%, lines 91.5%. This
+session was a bug-fix iteration, not a coverage iteration — no fresh
+reconcile run.
 
 ## Recommended next steps
 
-**Next queued: issue #232** (`orphanet.js`: the outer try/catch's retry
-path re-invokes `searchLocal` from scratch in its `catch` block
-regardless of whether the *original* failure was in the external/remote
-lookup or in `searchLocal` itself — misleading "Busca externa/local
-falhou; tentando fallback local" log plus a redundant identical-query
-retry when the local search itself was what threw). Same file just
-touched this session, same test file
-(`tests/unit/routes/orphanet.test.js`) already has a pinned test —
-`returns 500 when both the primary search and the fallback search
-throw` — that exercises this path and can likely be extended/split
-rather than needing a new harness. Not yet traced against real callers;
-do that trace (per `fix-bugs`' verify-before-deferring step) before
-concluding it's a genuine two-path fork rather than one that collapses
-to a single fix.
+**Next candidate: issue #240** (`patient.service.js`: `consentTemplateId`
+carve-out neutralized) — named as the next untried candidate after #232
+in the prior handoff. Not yet traced this session.
 
 Also still open: the dead-code cluster (#235, #236, #241, #243, #246,
 #247, #248, #249) — the repeated authenticate-shadows-route 503 pattern
 (#67/#76/#236/#246/#247/#248, six occurrences, five from
 `master-data.routes.js` alone) strongly suggests a repo-wide sweep is
 more efficient than continued per-file spot fixes; still not actioned,
-worth raising with Dennis directly. Issue #240 (patient.service.js
-consentTemplateId carve-out neutralized) is another untried candidate
-after #232.
+worth raising with Dennis directly.
 
 For coverage work: resume the branch%-sorted method in
 `COVERAGE_NOTES.md`; next unflagged candidates from the last sort were
