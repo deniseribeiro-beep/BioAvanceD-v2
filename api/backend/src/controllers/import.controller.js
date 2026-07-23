@@ -269,11 +269,6 @@ function normalizeCode(value) {
   return String(value || '').trim().toUpperCase();
 }
 
-function parseNumberSafe(value, fallback = null) {
-  const numeric = Number(value);
-  return Number.isFinite(numeric) ? numeric : fallback;
-}
-
 function resolveSprecAxisFromSpecimen(specimen = {}) {
   const direct = specimen?.sprec && typeof specimen.sprec === 'object' ? specimen.sprec : {};
 
