@@ -80,13 +80,9 @@ class PatientService {
         continue;
       }
 
-      try {
-        const decryptedValue = decryptValue(payload);
-        if (decryptedValue !== null && decryptedValue !== undefined) {
-          doc[plainField] = decryptedValue;
-        }
-      } catch (error) {
-        logger.warn(`Falha ao descriptografar campo ${plainField}: ${error.message}`);
+      const decryptedValue = decryptValue(payload);
+      if (decryptedValue !== null && decryptedValue !== undefined) {
+        doc[plainField] = decryptedValue;
       }
     }
 
@@ -490,11 +486,6 @@ class PatientService {
       const duplicate = await this.checkDuplicatePatient(db, patientData);
       if (duplicate) {
         throw new Error(`Paciente duplicado: já existe um paciente com o nome "${patientData.patientName}" e data de nascimento "${patientData.birthDate}" cadastrado no sistema.`);
-      }
-
-      // Valida unidade clínica
-      if (patientData.clinicalUnit && !PatientModel.validateUnit(patientData.clinicalUnit)) {
-        throw new Error('Unidade clínica inválida');
       }
 
       // Gera sigla da unidade por iniciais e garante uppercase
