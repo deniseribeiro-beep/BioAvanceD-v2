@@ -87,11 +87,45 @@ either).
 gap  branch% lines%  file
 141  82.5%   93.9%   src/services/import-lgpd.service.js  (partial slice landed 2026-07-23, session 4: importPatientsSmart/buildMappedPatientRow branches — clinicalUnit-present fillAcronym call, PatientModel.validate() rejection path (e.g. missing sex), and the responsavelNome/responsavelEmail explicit-mapping-target fallback (set vs. already-mapped) — via tests/unit/import-lgpd.service.importPatientsSmart.unit.test.js. Note: the fallback only fires when a mapping explicitly targets the literal key `responsavelNome`/`responsavelEmail` — the more common accented-column path (`responsavelnome` etc.) resolves straight to `representativeName`/`representativeEmail` via canonicalHeaderMap and never touches that fallback. File is 1693 lines; remaining gap is scattered across earlier parse helpers (parseSampleRow ~1150-1310, parsePatientRow ~1160-1200) plus a few defensive branches — no single large block left.)
  86  77.66%  92.8%   src/routes/intakeWizard.js  (partial slice landed 2026-07-23, session 6: isolated branches 77.66% -> 86.49% (299/385 -> 333/385) via tests/unit/intakeWizard.helpers.test.js + tests/unit/intakeWizard.routes.test.js — buildSampleDocumentFromIntake/buildPharmacologyData/normalizeNumber fallback branches, ensureConsentEmailSent's success/failure paths, resolveConsentDecision's no-identifier throw, sensor/equipment maintenanceStatus-fallback matching, storage-box BLOCKED/full-occupancy skip + Map-based occupancyGrid, canonicalViolations non-object guard, and patient-match's $or/ACTIVE-status-default branches. Filed #255: `collectNonCanonicalFields` and `ensureConsentEmailSent` are dead code (never called from any route, only reachable via `router._test`) — accounts for part of the remaining gap. Remainder is a mix of genuine small gaps (e.g. equipment status via maintenanceStatus-only fallback, empty box rows/cols, non-numeric locationID skip) and likely some `@vitest/coverage-v8` phantom-branch artifacts on guard-clause `if`s without `else` blocks (same class as the `sample.routes.js` follow-up noted above) — not re-verified this session.)
- 54  69.66%  98.8%   src/controllers/sample-file.controller.js
- 52  69.94%  85.2%   src/routes/orphanet.js
  51  78.66%  96.2%   src/routes/dictionary.js
  47  69.67%  86.0%   src/interface/routes/auth.routes.js
 ```
+
+`src/controllers/sample-file.controller.js` closed out 2026-07-23 session 11: extended
+`tests/unit/sample-file.controller.test.js` (+21 tests, 67 total) covering the
+`req.t ? req.t(key) : '<pt fallback>'` truthy branch across all 38 occurrences
+(only the falsy/no-`req.t` branch had ever been exercised) plus the
+`specimenIdString` ternary's non-ObjectId-string fallback in
+`downloadFile`/`deleteFile` — isolated branches 69.66% -> 84.83% (124/178 ->
+151/178). Remaining 27-branch gap confirmed to be the same
+`@vitest/coverage-v8` phantom-branch artifact noted repeatedly in this file's
+history (guard-clause `if`s with no `else`, e.g. `if (!db) { return ... }` —
+V8 emits an uncoverable synthetic "else" location with empty start/end) —
+verified directly against `coverage/coverage-final.json`'s `branchMap`, not
+just inferred; not chased further.
+
+`src/routes/orphanet.js` closed out 2026-07-23 session 11: extended
+`tests/unit/orphanet.routes.test.js` (+5 tests, 27 total) covering
+`normalizeDiseaseRecord`'s name/synonym fallback chains (`Synonym` entries
+using `Label`/`_`/plain-string instead of `label`; name resolution via
+camelCase `preferredTerm` and finally the bare ORPHA code when no name field
+exists at all) and `dedupeRecords`' reverse-merge direction (second record
+supplying CID10/OMIM/relacoes/synonyms/aliases the first record lacks, not
+just the other way around) — isolated branches 82.65% -> 90.75% (143/173 ->
+157/173). **Filed issue #259**: a doc with no ORPHA-derivable code field
+crashes the whole `/api/orphanet/search` request with a 500 instead of being
+silently excluded — `searchLocal`'s `.map(normalizeDiseaseRecord...)` can
+produce `null` entries, and `dedupeRecords`'s loop re-normalizes each
+`record` via `normalizeDiseaseRecord(record, ...)` without a `null` guard,
+so `record = null` reaches `item = {}`'s default parameter (which only
+covers `undefined`, not `null`) and crashes on `item.ExternalReference`. The
+new test asserts the actual 500, with a comment pointing at #259. Remaining
+gap is a mix of the same phantom-branch class (`requestedLang` is always
+truthy per the route's own `lang || 'pt'` default, so its ternary's falsy
+branch is dead code reachable only by calling `searchLocal` directly) and one
+apparently-unreachable branch (`record?.source` in `dedupeRecords` — every
+caller already normalizes records before they reach it, so they always carry
+a `source`) — not chased further.
 
 `src/interface/routes/terminologies.routes.js` closed out 2026-07-23
 session 7: no prior test file existed, added

@@ -527,6 +527,135 @@ describe('orphanet.routes', () => {
     expect(response.body).toEqual({ error: 'Failed to search orphanet diseases' });
   });
 
+  it('descarta documentos do orphanet sem nenhum campo de codigo ORPHA reconhecivel', async () => {
+    loadRouteWithEnv({ ALLOW_EXTERNAL_TERMINOLOGY_SYNC: 'false' });
+
+    const db = {
+      collection: vi.fn((name) => {
+        if (name === 'cids') return { find: vi.fn(() => cursor([])) };
+        if (name === COLLECTION_NAME) {
+          return { find: vi.fn(() => cursor([{ name: 'Sem codigo orpha' }])) };
+        }
+        return { find: vi.fn(() => cursor([])) };
+      }),
+    };
+
+    const app = buildApp(db);
+    const response = await request(app).get('/api/orphanet/search?q=Fabry');
+
+    // Bug (issue #259): a doc with no ORPHA-derivable code normalizes to `null`
+    // in searchLocal's map, and dedupeRecords re-normalizes that `null` without
+    // guarding for it, crashing the whole request instead of just excluding
+    // the doc. Asserting the actual (buggy) 500, not the desired 200/[].
+    expect(response.status).toBe(500);
+    expect(response.body).toEqual({ error: 'Failed to search orphanet diseases' });
+  });
+
+  it('resolve sinonimos a partir de Label, campo _ ou string simples quando label esta ausente', async () => {
+    loadRouteWithEnv({ ALLOW_EXTERNAL_TERMINOLOGY_SYNC: 'false' });
+
+    const db = {
+      collection: vi.fn((name) => {
+        if (name === 'cids') return { find: vi.fn(() => cursor([])) };
+        if (name === COLLECTION_NAME) {
+          return {
+            find: vi.fn(() => cursor([{
+              ORPHA: '324',
+              name: 'Fabry disease',
+              Synonym: [{ Label: 'Anderson-Fabry' }, { _: 'Fabry alt' }, 'Plain synonym'],
+            }])),
+          };
+        }
+        return { find: vi.fn(() => cursor([])) };
+      }),
+    };
+
+    const app = buildApp(db);
+    const response = await request(app).get('/api/orphanet/search?q=Fabry');
+
+    expect(response.status).toBe(200);
+    expect(response.body[0].synonyms).toEqual(
+      expect.arrayContaining(['Anderson-Fabry', 'Fabry alt', 'Plain synonym'])
+    );
+  });
+
+  it('usa preferredTerm (camelCase) e por fim o proprio ORPHA como nome quando nenhum outro campo de nome existe', async () => {
+    loadRouteWithEnv({ ALLOW_EXTERNAL_TERMINOLOGY_SYNC: 'false' });
+
+    const db = {
+      collection: vi.fn((name) => {
+        if (name === 'cids') return { find: vi.fn(() => cursor([])) };
+        if (name === COLLECTION_NAME) {
+          return { find: vi.fn(() => cursor([{ ORPHA: '324', preferredTerm: 'Fabry via preferredTerm' }])) };
+        }
+        return { find: vi.fn(() => cursor([])) };
+      }),
+    };
+
+    const app = buildApp(db);
+    const response = await request(app).get('/api/orphanet/search?q=Fabry');
+
+    expect(response.status).toBe(200);
+    expect(response.body[0].name).toBe('Fabry via preferredTerm');
+  });
+
+  it('usa o proprio codigo ORPHA como nome quando nenhum campo de nome ou termo preferido existe', async () => {
+    loadRouteWithEnv({ ALLOW_EXTERNAL_TERMINOLOGY_SYNC: 'false' });
+
+    const db = {
+      collection: vi.fn((name) => {
+        if (name === 'cids') return { find: vi.fn(() => cursor([])) };
+        if (name === COLLECTION_NAME) {
+          return { find: vi.fn(() => cursor([{ ORPHA: '324' }])) };
+        }
+        return { find: vi.fn(() => cursor([])) };
+      }),
+    };
+
+    const app = buildApp(db);
+    const response = await request(app).get('/api/orphanet/search?q=Fabry');
+
+    expect(response.status).toBe(200);
+    expect(response.body[0].name).toBe('ORPHA:324');
+  });
+
+  it('funde registros preservando CID10/OMIM/relacoes/sinonimos do segundo registro quando o primeiro os omite', async () => {
+    loadRouteWithEnv({ ALLOW_EXTERNAL_TERMINOLOGY_SYNC: 'false' });
+
+    const db = {
+      collection: vi.fn((name) => {
+        if (name === 'cids') {
+          return { find: vi.fn(() => cursor([{ ORPHA: '324', name: 'Fabry disease' }])) };
+        }
+        if (name === COLLECTION_NAME) {
+          return {
+            find: vi.fn(() => cursor([{
+              ORPHA: '324',
+              Codigos_CID10: 'E75.2',
+              OMIM: '301500',
+              synonyms: ['Fabry alt'],
+              aliases: ['Fabry alias'],
+            }])),
+          };
+        }
+        return { find: vi.fn(() => cursor([])) };
+      }),
+    };
+
+    const app = buildApp(db);
+    const response = await request(app).get('/api/orphanet/search?q=Fabry');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toHaveLength(1);
+    expect(response.body[0]).toMatchObject({
+      orphaCode: 'ORPHA:324',
+      Codigos_CID10: 'E75.2',
+      OMIM: 'OMIM:301500',
+    });
+    expect(response.body[0].synonyms).toEqual(expect.arrayContaining(['Fabry alt']));
+    expect(response.body[0].aliases).toEqual(expect.arrayContaining(['Fabry alias']));
+  });
+
   it('recupera via fallback local quando a primeira tentativa de busca local lanca erro', async () => {
     loadRouteWithEnv({ ALLOW_EXTERNAL_TERMINOLOGY_SYNC: 'false' });
 

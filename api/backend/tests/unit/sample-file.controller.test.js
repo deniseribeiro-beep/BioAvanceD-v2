@@ -162,6 +162,27 @@ describe('sample-file.controller', () => {
       expect(unlinkSpy).toHaveBeenCalledWith('/tmp/file.csv');
     });
 
+    it('returns 404 and swallows unlink error when cleanup of a non-existent sample file fails', async () => {
+      const specimenId = new ObjectId().toString();
+      const db = createDb({
+        amostras: { findOne: vi.fn().mockResolvedValue(null) }
+      });
+      const req = {
+        app: { locals: { db } },
+        params: { specimenId },
+        file: { path: '/tmp/file.csv', originalname: 'file.csv', size: 100 }
+      };
+      const res = createRes();
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {
+        throw new Error('locked');
+      });
+
+      await controller.uploadFile(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(404);
+    });
+
     it('returns 400 and cleans up file when file type invalid', async () => {
       const specimenId = new ObjectId().toString();
       const sample = { _id: new ObjectId(specimenId) };
@@ -288,6 +309,28 @@ describe('sample-file.controller', () => {
       await controller.uploadFile(req, res);
 
       expect(unlinkSpy).toHaveBeenCalledWith('/tmp/file.csv');
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: false, message: 'nope' }));
+    });
+
+    it('swallows unlink error when catch-block cleanup of req.file fails', async () => {
+      const specimenId = new ObjectId().toString();
+      const db = createDb({
+        amostras: { findOne: vi.fn().mockRejectedValue(new Error('nope')) }
+      });
+      const req = {
+        app: { locals: { db } },
+        params: { specimenId },
+        file: { path: '/tmp/file.csv', originalname: 'file.csv', size: 100 }
+      };
+      const res = createRes();
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {
+        throw new Error('locked');
+      });
+
+      await controller.uploadFile(req, res);
+
       expect(res.status).toHaveBeenCalledWith(400);
       expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: false, message: 'nope' }));
     });
@@ -967,6 +1010,268 @@ describe('sample-file.controller', () => {
       await controller.exportCDA(req, res);
 
       expect(res.status).toHaveBeenCalledWith(500);
+    });
+  });
+
+  describe('req.t translation branch (truthy req.t)', () => {
+    const t = vi.fn((key) => key);
+
+    afterEach(() => {
+      t.mockClear();
+    });
+
+    it('uploadFile uses req.t across every response path', async () => {
+      // 503 db missing
+      let res = createRes();
+      await controller.uploadFile({ app: { locals: {} }, params: {}, file: null, t }, res);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: 'errors.databaseUnavailable' }));
+
+      // 400 no file
+      res = createRes();
+      const db1 = createDb();
+      await controller.uploadFile({ app: { locals: { db: db1 } }, params: { specimenId: '1' }, file: null, t }, res);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: 'sampleFiles.fileRequired' }));
+
+      // 404 sample not found
+      res = createRes();
+      const specimenId = new ObjectId().toString();
+      const db2 = createDb({ amostras: { findOne: vi.fn().mockResolvedValue(null) } });
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {});
+      await controller.uploadFile(
+        { app: { locals: { db: db2 } }, params: { specimenId }, file: { path: '/tmp/f.csv', originalname: 'f.csv', size: 1 }, t },
+        res
+      );
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: 'sampleFiles.sampleNotFound' }));
+
+      // 400 invalid file type
+      res = createRes();
+      const sample = { _id: new ObjectId(specimenId) };
+      const db3 = createDb({ amostras: { findOne: vi.fn().mockResolvedValue(sample) } });
+      vi.spyOn(SampleFileModel, 'getFileTypeFromExtension').mockReturnValue(null);
+      await controller.uploadFile(
+        { app: { locals: { db: db3 } }, params: { specimenId }, file: { path: '/tmp/f.csv', originalname: 'f.csv', size: 1 }, t },
+        res
+      );
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: 'sampleFiles.invalidFileType' }));
+
+      // 400 validation error
+      res = createRes();
+      const db4 = createDb({ amostras: { findOne: vi.fn().mockResolvedValue(sample) } });
+      vi.spyOn(SampleFileModel, 'getFileTypeFromExtension').mockReturnValue('CSV');
+      vi.spyOn(SampleFileModel, 'validate').mockReturnValue({ isValid: false, errors: ['bad'] });
+      await controller.uploadFile(
+        { app: { locals: { db: db4 } }, params: { specimenId }, file: { path: '/tmp/f.csv', originalname: 'f.csv', size: 1 }, t },
+        res
+      );
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: 'sampleFiles.validationError' }));
+
+      // 201 success message
+      res = createRes();
+      const sampleFilesCollection = { insertOne: vi.fn().mockResolvedValue({ insertedId: new ObjectId() }) };
+      const db5 = createDb({ amostras: { findOne: vi.fn().mockResolvedValue(sample) }, sample_files: sampleFilesCollection });
+      vi.spyOn(SampleFileModel, 'getFileTypeFromExtension').mockReturnValue('CSV');
+      vi.spyOn(SampleFileModel, 'validate').mockReturnValue({ isValid: true, errors: [] });
+      await controller.uploadFile(
+        { app: { locals: { db: db5 } }, params: { specimenId }, file: { path: '/tmp/f.csv', originalname: 'f.csv', size: 1 }, user: null, t },
+        res
+      );
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ message: 'sampleFiles.uploadSuccess' }));
+
+      // 400 catch block
+      res = createRes();
+      const db6 = createDb({ amostras: { findOne: vi.fn().mockRejectedValue(new Error('nope')) } });
+      await controller.uploadFile(
+        { app: { locals: { db: db6 } }, params: { specimenId }, file: { path: '/tmp/f.csv', originalname: 'f.csv', size: 1 }, t },
+        res
+      );
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: 'sampleFiles.uploadError' }));
+    });
+
+    it('listFiles uses req.t across every response path', async () => {
+      let res = createRes();
+      await controller.listFiles({ app: { locals: {} }, params: {}, t }, res);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: 'errors.databaseUnavailable' }));
+
+      res = createRes();
+      const db1 = createDb({ amostras: { findOne: vi.fn().mockResolvedValue(null) } });
+      await controller.listFiles({ app: { locals: { db: db1 } }, params: { specimenId: '1' }, t }, res);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: 'sampleFiles.sampleNotFound' }));
+
+      res = createRes();
+      const db2 = createDb({ amostras: { findOne: vi.fn().mockRejectedValue(new Error('down')) } });
+      await controller.listFiles({ app: { locals: { db: db2 } }, params: { specimenId: 'x' }, t }, res);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: 'sampleFiles.listError' }));
+    });
+
+    it('downloadFile uses req.t across every response path', async () => {
+      let res = createRes();
+      await controller.downloadFile({ app: { locals: {} }, params: {}, t }, res);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: 'errors.databaseUnavailable' }));
+
+      res = createRes();
+      const db1 = createDb();
+      await controller.downloadFile({ app: { locals: { db: db1 } }, params: { specimenId: '1', fileID: 'bad' }, t }, res);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: 'sampleFiles.invalidFileID' }));
+
+      res = createRes();
+      const db2 = createDb({ sample_files: { findOne: vi.fn().mockResolvedValue(null) } });
+      await controller.downloadFile({ app: { locals: { db: db2 } }, params: { specimenId: '1', fileID: new ObjectId().toString() }, t }, res);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: 'sampleFiles.fileNotFound' }));
+
+      res = createRes();
+      const fileID = new ObjectId().toString();
+      const otherSpecimenId = new ObjectId().toString();
+      const fileRecord = { _id: new ObjectId(fileID), specimenId: otherSpecimenId, storagePath: '/x/a.csv', fileName: 'a.csv' };
+      const db3 = createDb({ sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord) } });
+      await controller.downloadFile({ app: { locals: { db: db3 } }, params: { specimenId: new ObjectId().toString(), fileID }, t }, res);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: 'sampleFiles.fileNotBelongToSample' }));
+
+      res = createRes();
+      const specimenId = new ObjectId().toString();
+      const fileRecord2 = { _id: new ObjectId(fileID), specimenId, storagePath: '/x/a.csv', fileName: 'a.csv' };
+      const db4 = createDb({ sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord2) } });
+      vi.spyOn(fs, 'existsSync').mockReturnValue(false);
+      await controller.downloadFile({ app: { locals: { db: db4 } }, params: { specimenId, fileID }, t }, res);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: 'sampleFiles.fileNotFoundOnDisk' }));
+
+      res = createRes();
+      const db5 = createDb({ sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord2) } });
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      res.download.mockImplementation((_p, _n, cb) => cb(new Error('stream broke')));
+      await controller.downloadFile({ app: { locals: { db: db5 } }, params: { specimenId, fileID }, user: null, t }, res);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: 'sampleFiles.downloadError' }));
+
+      res = createRes();
+      const db6 = createDb({ sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord2) } });
+      vi.spyOn(fs, 'existsSync').mockImplementation(() => {
+        throw new Error('down');
+      });
+      await controller.downloadFile({ app: { locals: { db: db6 } }, params: { specimenId, fileID }, t }, res);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: 'sampleFiles.downloadError' }));
+    });
+
+    it('deleteFile uses req.t across every response path', async () => {
+      let res = createRes();
+      await controller.deleteFile({ app: { locals: {} }, params: {}, t }, res);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: 'errors.databaseUnavailable' }));
+
+      res = createRes();
+      const db1 = createDb();
+      await controller.deleteFile({ app: { locals: { db: db1 } }, params: { specimenId: '1', fileID: 'bad' }, t }, res);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: 'sampleFiles.invalidFileID' }));
+
+      res = createRes();
+      const db2 = createDb({ sample_files: { findOne: vi.fn().mockResolvedValue(null) } });
+      await controller.deleteFile({ app: { locals: { db: db2 } }, params: { specimenId: '1', fileID: new ObjectId().toString() }, t }, res);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: 'sampleFiles.fileNotFound' }));
+
+      res = createRes();
+      const fileID = new ObjectId().toString();
+      const otherSpecimenId = new ObjectId().toString();
+      const fileRecord = { _id: new ObjectId(fileID), specimenId: otherSpecimenId, storagePath: '/x/a.csv', fileName: 'a.csv' };
+      const db3 = createDb({ sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord) } });
+      await controller.deleteFile({ app: { locals: { db: db3 } }, params: { specimenId: new ObjectId().toString(), fileID }, t }, res);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: 'sampleFiles.fileNotBelongToSample' }));
+
+      res = createRes();
+      const specimenId = new ObjectId().toString();
+      const fileRecord2 = { _id: new ObjectId(fileID), specimenId, storagePath: '/x/a.csv', fileName: 'a.csv' };
+      const deleteOne = vi.fn().mockResolvedValue({ deletedCount: 1 });
+      const db4 = createDb({ sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord2), deleteOne } });
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {});
+      await controller.deleteFile({ app: { locals: { db: db4 } }, params: { specimenId, fileID }, user: null, t }, res);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ message: 'sampleFiles.deleteSuccess' }));
+
+      res = createRes();
+      const db5 = createDb({
+        sample_files: {
+          findOne: vi.fn().mockResolvedValue(fileRecord2),
+          deleteOne: vi.fn().mockRejectedValue(new Error('down'))
+        }
+      });
+      vi.spyOn(fs, 'existsSync').mockReturnValue(false);
+      await controller.deleteFile({ app: { locals: { db: db5 } }, params: { specimenId, fileID }, t }, res);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: 'sampleFiles.deleteError' }));
+    });
+
+    it('exportHL7v2/exportFHIR/exportCDA use req.t across every response path', async () => {
+      const specimenId = new ObjectId().toString();
+      const fileID = new ObjectId().toString();
+
+      for (const method of ['exportHL7v2', 'exportFHIR', 'exportCDA']) {
+        let res = createRes();
+        await controller[method]({ app: { locals: {} }, params: {}, t }, res);
+        expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: 'errors.databaseUnavailable' }));
+
+        res = createRes();
+        const db1 = createDb({ sample_files: { findOne: vi.fn().mockResolvedValue(null) } });
+        await controller[method]({ app: { locals: { db: db1 } }, params: { specimenId, fileID }, t }, res);
+        expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: 'sampleFiles.fileNotFound' }));
+
+        res = createRes();
+        const fileRecordMismatch = { _id: new ObjectId(fileID), specimenId: 'other-sample', fileName: 'a.csv' };
+        const db2 = createDb({ sample_files: { findOne: vi.fn().mockResolvedValue(fileRecordMismatch) } });
+        await controller[method]({ app: { locals: { db: db2 } }, params: { specimenId: 'sample-1', fileID }, t }, res);
+        expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: 'sampleFiles.sampleMismatch' }));
+
+        res = createRes();
+        const fileRecord = { _id: new ObjectId(fileID), specimenId, fileName: 'a.csv' };
+        const db3 = createDb({
+          sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord) },
+          samples: { findOne: vi.fn().mockResolvedValue(null) }
+        });
+        await controller[method]({ app: { locals: { db: db3 } }, params: { specimenId, fileID }, t }, res);
+        expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: 'samples.sampleNotFound' }));
+
+        res = createRes();
+        const sample = { _id: new ObjectId(specimenId), participantId: '12345678' };
+        const db4 = createDb({
+          sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord) },
+          samples: { findOne: vi.fn().mockResolvedValue(sample) }
+        });
+        const generatorByMethod = {
+          exportHL7v2: ['generateHL7v2Message'],
+          exportFHIR: ['generateFHIRResource'],
+          exportCDA: ['generateCDA']
+        };
+        const [generatorFn] = generatorByMethod[method];
+        vi.spyOn(hl7Service, generatorFn).mockRejectedValue(new Error('boom'));
+        await controller[method]({ app: { locals: { db: db4 } }, params: { specimenId, fileID }, t }, res);
+        expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: 'sampleFiles.exportError' }));
+      }
+    });
+  });
+
+  describe('specimenIdString ternary branch (non-ObjectId specimenId)', () => {
+    it('downloadFile falls back to String(specimenId) when specimenId is not a valid ObjectId', async () => {
+      const fileID = new ObjectId().toString();
+      const fileRecord = { _id: new ObjectId(fileID), specimenId: 'sample-42', storagePath: '/x/a.csv', fileName: 'a.csv' };
+      const db = createDb({ sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord) } });
+      const req = { app: { locals: { db } }, params: { specimenId: 'sample-42', fileID }, user: null };
+      const res = createRes();
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+
+      await controller.downloadFile(req, res);
+
+      expect(res.download).toHaveBeenCalledWith('/x/a.csv', 'a.csv', expect.any(Function));
+    });
+
+    it('deleteFile falls back to String(specimenId) when specimenId is not a valid ObjectId', async () => {
+      const fileID = new ObjectId().toString();
+      const fileRecord = { _id: new ObjectId(fileID), specimenId: 'sample-42', storagePath: '/x/a.csv', fileName: 'a.csv' };
+      const deleteOne = vi.fn().mockResolvedValue({ deletedCount: 1 });
+      const db = createDb({ sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord), deleteOne } });
+      const req = { app: { locals: { db } }, params: { specimenId: 'sample-42', fileID }, user: null };
+      const res = createRes();
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {});
+
+      await controller.deleteFile(req, res);
+
+      expect(deleteOne).toHaveBeenCalledWith({ _id: fileRecord._id });
+      expect(res.status).toHaveBeenCalledWith(200);
     });
   });
 });
