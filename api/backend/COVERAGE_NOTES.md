@@ -85,7 +85,7 @@ either).
 
 ```
 gap  branch% lines%  file
-195  75.80%  90.2%   src/services/import-lgpd.service.js  (partial slice landed 2026-07-23, session 2: readCSV's stream-error handler + readExcel's unknown-dataType/no-worksheet-selected branch, via tests/unit/import-lgpd.service.readers.test.js. File is 1693 lines / ~195-branch gap, needs several more sessions — remaining gap is mostly importSamples per-row validation (~750-1000) and importPatientsSmart mapping/validation (~1150-1520))
+147  81.76%  93.6%   src/services/import-lgpd.service.js  (partial slice landed 2026-07-23, session 3: importSamples per-row validation branches — groupFields fallback, drug/ATC lookup, barcode provided-vs-generated, QUARANTINE flagging, locationID auto-increment (success/exhausted/direct-assign) — via tests/unit/import-lgpd.service.importSamples.unit.test.js. Note: the sampleType/sampleOrigin/extractionProtocol "não encontrado no banco" branches (~869/882/895) are dead code — SampleModel.validate() already requires canonical values before that point, so `!validateX(...)` can never be true there; left uncovered deliberately. File is 1693 lines, needs 1-2 more sessions — remaining gap is mostly importPatientsSmart mapping/validation (~1150-1520))
  90  73.13%  85.2%   src/services/sample.service.js
  86  77.66%  92.8%   src/routes/intakeWizard.js
  82  68.93%  94.4%   src/interface/routes/terminologies.routes.js

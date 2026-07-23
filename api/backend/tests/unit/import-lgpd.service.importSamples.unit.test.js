@@ -31,6 +31,7 @@ vi.mock('../../src/services/MerkleService', () => ({ generateSampleHash: vi.fn((
 const service = require('../../src/services/import-lgpd.service');
 const patientIdentityService = require('../../src/services/PatientIdentityService');
 const qualityDomain = require('../../src/services/quality-domain.service');
+const DrugService = require('../../src/services/DrugService');
 
 const MATCHED_PATIENT = {
   patient: { _id: 'patient-obj-1', participantId: '12345678', patientName: 'Maria Silva' },
@@ -232,6 +233,168 @@ describe('ImportLGPDService.importSamples', () => {
       service.importSamples(db, { path: '/missing.csv', originalname: 'missing.csv' })
     ).rejects.toThrow('Arquivo não encontrado');
     expect(db.collection).not.toHaveBeenCalled();
+  });
+
+  // The `!validXInDb && !SampleModel.validateX(...)` DB-lookup-miss branches
+  // (sampleType/sampleOrigin/extractionProtocol "não encontrado" errors) sit
+  // *after* `SampleModel.validate(sampleData)` on line 855, which already
+  // requires `validateX` to be true to pass. So by the time this code runs,
+  // `!SampleModel.validateX(...)` is always false and the branch can never
+  // fire — confirmed empirically: a canonical-but-DB-missing value imports
+  // successfully instead of erroring, and a non-canonical value is rejected
+  // earlier by `SampleModel.validate` with a different message. Not covering
+  // this dead branch; not filing a bug since nothing user-visible is wrong
+  // (unreachable, not incorrect).
+
+  it('looks up and applies a drug candidate when treatment is active and only the drug name (not an ATC code) is given', async () => {
+    vi.spyOn(DrugService.prototype, 'searchAndCacheDrug').mockResolvedValue([
+      { generic_name: 'Paracetamol', atcCode: 'N02BE01', drug_class: 'ANALGESIC' },
+    ]);
+    vi.spyOn(service, 'readFile').mockResolvedValue([
+      { ...VALID_ROW, treatmentStatus: 'TREATED', medicationName: 'Tylenol' },
+    ]);
+
+    const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' });
+
+    expect(result.success).toBe(1);
+    const inserted = samplesCollection.insertOne.mock.calls[0][0];
+    expect(inserted.pharmacologyData).toMatchObject({
+      medicationName: 'Paracetamol',
+      atcCode: 'N02BE01',
+      atcClass: 'ANALGESIC',
+      drug_class: 'ANALGESIC',
+    });
+  });
+
+  it('leaves pharmacologyData as parsed when the drug lookup finds no candidates', async () => {
+    vi.spyOn(DrugService.prototype, 'searchAndCacheDrug').mockResolvedValue([]);
+    vi.spyOn(service, 'readFile').mockResolvedValue([
+      { ...VALID_ROW, treatmentStatus: 'TREATED', medicationName: 'UnknownDrugXYZ' },
+    ]);
+
+    const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' });
+
+    expect(result.success).toBe(1);
+    const inserted = samplesCollection.insertOne.mock.calls[0][0];
+    expect(inserted.pharmacologyData.atcCode).toBeNull();
+  });
+
+  it('uses a provided barcode as-is (string-converted) instead of auto-generating one', async () => {
+    vi.spyOn(service, 'readFile').mockResolvedValue([{ ...VALID_ROW, barcode: 'BR-CUSTOM-999' }]);
+
+    const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' });
+
+    expect(result.success).toBe(1);
+    const inserted = samplesCollection.insertOne.mock.calls[0][0];
+    expect(inserted.barcode).toBe('BR-CUSTOM-999');
+  });
+
+  // `tcle_id` on VALID_ROW is not a field parseSampleRow reads (it reads
+  // `consentTemplateId`), so every other test in this suite leaves
+  // sampleData.consentTemplateId null and already exercises this "missing"
+  // branch incidentally. This test makes that explicit and pins the actual
+  // updateOne call shape.
+  it('flags the sample for QUARANTINE when ethics/SPREC data is missing', async () => {
+    vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW]);
+
+    const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' });
+
+    expect(result.success).toBe(1);
+    expect(samplesCollection.updateOne).toHaveBeenCalledWith(
+      { _id: 'sample-id-1' },
+      { $set: { releaseStatus: 'QUARANTINE', updatedAt: expect.any(Date) } }
+    );
+  });
+
+  it('does not touch releaseStatus when consentTemplateId and SPREC data are all present', async () => {
+    vi.spyOn(service, 'readFile').mockResolvedValue([
+      { ...VALID_ROW, consentTemplateId: 'consent-1' },
+    ]);
+
+    const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' });
+
+    expect(result.success).toBe(1);
+    expect(samplesCollection.updateOne).not.toHaveBeenCalled();
+  });
+
+  describe('locationID auto-assignment', () => {
+    function makeDbWithLocations() {
+      const base = makeDb();
+      const locations = [
+        { locationID: 'L1', block: 1, rack: 1, drawer: 1, box: 1 },
+        { locationID: 'L2', block: 1, rack: 1, drawer: 1, box: 2 },
+      ];
+      base.collections = { ...base.db.collection };
+      const originalCollection = base.db.collection;
+      base.db.collection = vi.fn((name) => {
+        if (name === 'locations') {
+          return {
+            findOne: vi.fn(async (query) => locations.find((loc) => loc.locationID === query.locationID) || null),
+            find: vi.fn(() => ({ toArray: async () => locations })),
+          };
+        }
+        return originalCollection(name);
+      });
+      return base;
+    }
+
+    it('assigns the next available location when autoIncrement is on and the row has no locationID', async () => {
+      const { db, samplesCollection } = makeDbWithLocations();
+      vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW]);
+
+      const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' }, {
+        autoIncrement: true,
+        startLocationID: 'L1',
+      });
+
+      expect(result.success).toBe(1);
+      expect(samplesCollection.insertOne).toHaveBeenCalledTimes(1);
+    });
+
+    it('records a per-row error when autoIncrement is on but no more locations are available', async () => {
+      const { db, samplesCollection } = makeDbWithLocations();
+      vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW, { ...VALID_ROW }, { ...VALID_ROW }]);
+
+      const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' }, {
+        autoIncrement: true,
+        startLocationID: 'L1',
+      });
+
+      expect(result.errors.some((e) => e.errors[0].includes('Não há mais localizações disponíveis'))).toBe(true);
+    });
+
+    it('assigns startLocationID directly to every row without one when autoIncrement is off', async () => {
+      const { db, samplesCollection } = makeDbWithLocations();
+      vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW]);
+
+      const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' }, {
+        autoIncrement: false,
+        startLocationID: 'L1',
+      });
+
+      expect(result.success).toBe(1);
+      expect(samplesCollection.insertOne).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('fills in sampleType/sampleOrigin/extractionProtocol from groupFields when the row omits them', async () => {
+    vi.spyOn(service, 'readFile').mockResolvedValue([
+      { sampleType: '', sampleOrigin: '', extractionProtocol: '', participantId: '12345678', quantity: '5', quality: 'GOOD' },
+    ]);
+
+    const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' }, {
+      groupFields: {
+        sampleType: 'PLASMA',
+        sampleOrigin: 'VENOUS_BLOOD',
+        extractionProtocol: 'TUBE_EDTA',
+      },
+    });
+
+    expect(result.success).toBe(1);
+    const inserted = samplesCollection.insertOne.mock.calls[0][0];
+    expect(inserted.sampleType).toBe('PLASMA');
+    expect(inserted.sampleOrigin).toBe('VENOUS_BLOOD');
+    expect(inserted.extractionProtocol).toBe('TUBE_EDTA');
   });
 });
 
