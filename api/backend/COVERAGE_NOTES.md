@@ -87,7 +87,6 @@ either).
 gap  branch% lines%  file
 141  82.5%   93.9%   src/services/import-lgpd.service.js  (partial slice landed 2026-07-23, session 4: importPatientsSmart/buildMappedPatientRow branches — clinicalUnit-present fillAcronym call, PatientModel.validate() rejection path (e.g. missing sex), and the responsavelNome/responsavelEmail explicit-mapping-target fallback (set vs. already-mapped) — via tests/unit/import-lgpd.service.importPatientsSmart.unit.test.js. Note: the fallback only fires when a mapping explicitly targets the literal key `responsavelNome`/`responsavelEmail` — the more common accented-column path (`responsavelnome` etc.) resolves straight to `representativeName`/`representativeEmail` via canonicalHeaderMap and never touches that fallback. File is 1693 lines; remaining gap is scattered across earlier parse helpers (parseSampleRow ~1150-1310, parsePatientRow ~1160-1200) plus a few defensive branches — no single large block left.)
  86  77.66%  92.8%   src/routes/intakeWizard.js  (partial slice landed 2026-07-23, session 6: isolated branches 77.66% -> 86.49% (299/385 -> 333/385) via tests/unit/intakeWizard.helpers.test.js + tests/unit/intakeWizard.routes.test.js — buildSampleDocumentFromIntake/buildPharmacologyData/normalizeNumber fallback branches, ensureConsentEmailSent's success/failure paths, resolveConsentDecision's no-identifier throw, sensor/equipment maintenanceStatus-fallback matching, storage-box BLOCKED/full-occupancy skip + Map-based occupancyGrid, canonicalViolations non-object guard, and patient-match's $or/ACTIVE-status-default branches. Filed #255: `collectNonCanonicalFields` and `ensureConsentEmailSent` are dead code (never called from any route, only reachable via `router._test`) — accounts for part of the remaining gap. Remainder is a mix of genuine small gaps (e.g. equipment status via maintenanceStatus-only fallback, empty box rows/cols, non-numeric locationID skip) and likely some `@vitest/coverage-v8` phantom-branch artifacts on guard-clause `if`s without `else` blocks (same class as the `sample.routes.js` follow-up noted above) — not re-verified this session.)
- 82  68.93%  94.4%   src/interface/routes/terminologies.routes.js
  80  82.40%  88.2%   src/services/batch-validation-engine.service.js
  78  85.40%  92.6%   src/services/fhir-import-staging.service.js
  68  79.14%  89.9%   src/services/import.service.js
@@ -97,6 +96,24 @@ gap  branch% lines%  file
  51  78.66%  96.2%   src/routes/dictionary.js
  47  69.67%  86.0%   src/interface/routes/auth.routes.js
 ```
+
+`src/interface/routes/terminologies.routes.js` closed out 2026-07-23
+session 7: no prior test file existed, added
+`tests/unit/terminologies.routes.test.js` (33 tests) covering both routes
+(`GET /`, `POST /sync`) end-to-end with a mocked `db`/`fetch` — isolated
+branches 67.04% -> 87.12% (177/264 -> 230/264). Exercised the fallback
+chains in `buildTerminologyFromCid`/`buildTerminologyFromOrphanetDisease`/
+`normalizeExternalReferences`/`normalizeOrphaApiResult` (alternate field
+names, multi-code splitting, object-vs-array externalReferences), the
+local-redundancy hydration cascade (cids -> orphanet_diseases, capped by
+`limit`), the live Orphadata fallback (enabled/disabled, missing base
+URL, fetch rejection, AbortError timeout, non-ok HTTP response with/
+without a message field, malformed payload shapes for
+`extractOrphadataResults`), and both routes' 503/500 error paths. Three
+lines remain uncovered (159, 212, 387) — each is a `.length === 0` early
+return that's unreachable given the callers' own truthy-payload guards
+(same guard-clause-with-no-real-else class documented elsewhere in this
+file); not chased further.
 
 Phase 1 alone covers ~943 of the ~1100-branch gap if fully closed —
 in practice expect a meaningfully smaller real yield, since some
