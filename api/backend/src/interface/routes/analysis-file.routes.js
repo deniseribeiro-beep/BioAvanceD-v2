@@ -12,13 +12,6 @@ router.get(
   async (req, res) => {
     try {
       const db = req.app.locals.db;
-      if (!db) {
-        return res.status(503).json({
-          success: false,
-          error: 'Banco de dados não disponível'
-        });
-      }
-
       const { sampleIdentifier } = req.params;
       const validation = await analysisValidationService.validateUploadEligibility(db, sampleIdentifier);
 
