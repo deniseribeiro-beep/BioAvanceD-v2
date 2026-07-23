@@ -213,6 +213,12 @@ out: its `req.body || {}` fallback is unreachable dead code too since
 `express.json()` is applied globally in `app.js` before any route runs,
 so `req.body` is never falsy — filed as issue #249.
 
+**Issue #248 resolved (later session):** removed all 5 dead `if (!db)`
+route-level guards from `master-data.routes.js` (`authenticate` already
+503s first). Isolated coverage moved 91.42/84.37/100/91.42 →
+98.33/100/100/98.33 branches now fully covered; remaining statement/line
+gap is line 62 (unrelated).
+
 **Bucket lists below are freshly regenerated this session** off the new
 `coverage-summary.json`, then corrected per the drift check above.
 Cutoffs unchanged: ZERO = 0%, LOW = 1-49%, MID-LOW = 50-69%,
