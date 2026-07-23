@@ -202,7 +202,7 @@ async function bulkUpsertOrphanetRedundancy(db, records = []) {
           orpha: normalizeOrphaCode(code),
         },
         lang: 'pt',
-        source: normalizeText(item.fonte || 'terminologies-route') || 'terminologies-route',
+        source: normalizeText(item.fonte || 'terminologies-route'),
         updatedAt: new Date(),
       } : null;
     })
