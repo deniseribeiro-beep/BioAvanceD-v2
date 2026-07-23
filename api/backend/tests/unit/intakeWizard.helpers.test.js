@@ -146,6 +146,159 @@ describe('intakeWizard helpers', () => {
     expect(result.message).toMatch(/E-mail/);
   });
 
+  it('buildSampleDocumentFromIntake falls back to fallback quantity when quantity is non-numeric', () => {
+    const document = helpers.buildSampleDocumentFromIntake({
+      participant: { patientName: 'Paciente Teste' },
+      specimen: { quantity: 'not-a-number' },
+    });
+
+    expect(document.quantity).toBe(0);
+  });
+
+  it('buildSampleDocumentFromIntake accepts an explicit valid lifecycleStatus instead of defaulting', () => {
+    const document = helpers.buildSampleDocumentFromIntake({
+      participant: { patientName: 'Paciente Teste' },
+      specimen: { lifecycleStatus: 'AVAILABLE' },
+    });
+
+    expect(document.lifecycleStatus).toBe('AVAILABLE');
+  });
+
+  it('buildSampleDocumentFromIntake defaults registeredAt to now when specimen.registeredAt is absent', () => {
+    const before = Date.now();
+    const document = helpers.buildSampleDocumentFromIntake({
+      participant: { patientName: 'Paciente Teste' },
+      specimen: {},
+    });
+    const after = Date.now();
+
+    expect(document.registeredAt.getTime()).toBeGreaterThanOrEqual(before - 1000);
+    expect(document.registeredAt.getTime()).toBeLessThanOrEqual(after + 1000);
+  });
+
+  it('buildSampleDocumentFromIntake falls back to sprec.sampleType and UNKNOWN for sampleOrigin/extractionProtocol', () => {
+    const document = helpers.buildSampleDocumentFromIntake({
+      participant: { patientName: 'Paciente Teste' },
+      specimen: { sprec: { sampleType: 'Plasma' } },
+    });
+
+    expect(document.sampleType).toBe('Plasma');
+    expect(document.sampleOrigin).toBe('UNKNOWN');
+    expect(document.extractionProtocol).toBe('UNKNOWN');
+  });
+
+  it('buildSampleDocumentFromIntake defaults sampleType/sampleOrigin fully to UNKNOWN when nothing is provided', () => {
+    const document = helpers.buildSampleDocumentFromIntake({
+      participant: { patientName: 'Paciente Teste' },
+      specimen: {},
+    });
+
+    expect(document.sampleType).toBe('UNKNOWN');
+    expect(document.sampleOrigin).toBe('UNKNOWN');
+  });
+
+  it('buildPharmacologyData returns null/empty fields when nothing is set', () => {
+    const pharmacology = helpers.buildPharmacologyData({});
+
+    expect(pharmacology.treatmentStatus).toBe('');
+    expect(pharmacology.medicationName).toBeNull();
+    expect(pharmacology.atcCode).toBeNull();
+    expect(pharmacology.atcClass).toBeNull();
+    expect(pharmacology.lastDoseDate).toBeNull();
+    expect(pharmacology.washoutStartDate).toBeNull();
+    expect(pharmacology.washoutEndDate).toBeNull();
+  });
+
+  it('buildPharmacologyData discards an unrecognized treatmentStatus and derives atcClass from atcCode', () => {
+    const pharmacology = helpers.buildPharmacologyData({
+      clinical: {
+        pharmacologyData: {
+          treatmentStatus: 'BOGUS_STATUS',
+          atcCode: 'ATC:b01ac06',
+        },
+      },
+    });
+
+    expect(pharmacology.treatmentStatus).toBe('');
+    expect(pharmacology.atcCode).toBe('B01AC06');
+    expect(pharmacology.atcClass).toBe('B');
+  });
+
+  it('resolvePatientID returns the participantId as-is when it is already 8 digits', () => {
+    const resolved = helpers.resolvePatientID({ participant: { participantId: '87654321' } });
+    expect(resolved).toBe('87654321');
+  });
+
+  it('ensureConsentEmailSent returns ok:true with the email details when sending succeeds', async () => {
+    const notificationService = require('../../src/services/notification.service');
+    const buildConsentMetadataSpy = vi.spyOn(notificationService, 'buildConsentMetadata').mockReturnValue({ token: 'tok-1' });
+    const buildConsentLinkSpy = vi.spyOn(notificationService, 'buildConsentLink').mockReturnValue('https://consent.link/tok-1');
+    const sendConsentEmailSpy = vi.spyOn(notificationService, 'sendConsentEmail').mockResolvedValue({
+      success: true,
+      channel: 'whatsapp',
+      provider: 'twilio',
+      messageId: 'msg-1',
+      originalTo: '+5511999999999',
+    });
+
+    const result = await helpers.ensureConsentEmailSent({
+      participant: { patientName: 'Paciente Teste', participantId: '12345678', email: 'paciente@example.test' },
+      consent: { consentTemplateId: 'template-1' },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.consentEmail.channel).toBe('whatsapp');
+    expect(result.consentEmail.provider).toBe('twilio');
+    expect(result.consentEmail.messageId).toBe('msg-1');
+    expect(result.consentEmail.to).toBe('+5511999999999');
+
+    buildConsentMetadataSpy.mockRestore();
+    buildConsentLinkSpy.mockRestore();
+    sendConsentEmailSpy.mockRestore();
+  });
+
+  it('ensureConsentEmailSent falls back to a generated patientID and defaults when send succeeds with a minimal result', async () => {
+    const notificationService = require('../../src/services/notification.service');
+    const buildConsentMetadataSpy = vi.spyOn(notificationService, 'buildConsentMetadata').mockReturnValue({ token: 'tok-1' });
+    const buildConsentLinkSpy = vi.spyOn(notificationService, 'buildConsentLink').mockReturnValue('https://consent.link/tok-1');
+    const sendConsentEmailSpy = vi.spyOn(notificationService, 'sendConsentEmail').mockResolvedValue({ success: true });
+
+    const result = await helpers.ensureConsentEmailSent({
+      participant: { patientName: 'Paciente Teste', email: 'paciente@example.test' },
+      consent: { consentTemplateId: 'template-1' },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.consentEmail.channel).toBe('email');
+    expect(result.consentEmail.provider).toBeNull();
+    expect(result.consentEmail.messageId).toBeNull();
+    expect(result.consentEmail.to).toBe('paciente@example.test');
+
+    buildConsentMetadataSpy.mockRestore();
+    buildConsentLinkSpy.mockRestore();
+    sendConsentEmailSpy.mockRestore();
+  });
+
+  it('ensureConsentEmailSent returns 502 with null details when sendConsentEmail resolves falsy', async () => {
+    const notificationService = require('../../src/services/notification.service');
+    const buildConsentMetadataSpy = vi.spyOn(notificationService, 'buildConsentMetadata').mockReturnValue({ token: 'tok-1' });
+    const buildConsentLinkSpy = vi.spyOn(notificationService, 'buildConsentLink').mockReturnValue('https://consent.link/tok-1');
+    const sendConsentEmailSpy = vi.spyOn(notificationService, 'sendConsentEmail').mockResolvedValue(undefined);
+
+    const result = await helpers.ensureConsentEmailSent({
+      participant: { patientName: 'Paciente Teste', email: 'paciente@example.test' },
+      consent: { consentTemplateId: 'template-1' },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe(502);
+    expect(result.details).toBeNull();
+
+    buildConsentMetadataSpy.mockRestore();
+    buildConsentLinkSpy.mockRestore();
+    sendConsentEmailSpy.mockRestore();
+  });
+
   it('resolveMatchedPatient calls the real PatientIdentityService method (regression for #165)', async () => {
     const insertedDocs = [];
     const patientsCollection = {

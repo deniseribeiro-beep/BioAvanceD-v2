@@ -456,6 +456,141 @@ describe('intakeWizard routes', () => {
       expect(res.body.success).toBe(false);
     });
 
+    it('returns 400 when the matched patient has no usable identifier for consent lookup', async () => {
+      const { db, consentsCollection } = buildHappyPathDb();
+      const getCollectionImpl = vi.fn(async (_db, key) => {
+        if (key === 'consents') return consentsCollection;
+        throw new Error(`unexpected key ${key}`);
+      });
+
+      const { router } = loadRoute({
+        getCollectionImpl,
+        matchOrUpsertParticipant: vi.fn().mockResolvedValue({ created: true, matchType: 'new', patient: {} }),
+      });
+
+      const app = buildApp(router, db);
+      const res = await request(app).post('/api/intake-wizard').send(VALID_PAYLOAD);
+
+      expect(res.status).toBe(400);
+      expect(res.body.success).toBe(false);
+      expect(res.body.error).toMatch(/identificador/);
+    });
+
+    it('treats a sensor identified only by maintenanceStatus as non-operational and skips its location', async () => {
+      const sensorsFind = vi.fn()
+        .mockReturnValueOnce(makeCursor([{ locationId: 1, maintenanceStatus: 'calibration' }]))
+        .mockReturnValueOnce(makeCursor([{ locationId: 2, operationalStatus: 'ok' }]));
+      const locationsFind = () => makeCursor([{ locationID: 1 }, { locationID: 2 }]);
+
+      const { db, consentsCollection } = buildHappyPathDb({ sensorsFind, locationsFind });
+      const { samplesCollection, patientsCollection } = setupHappyMocks();
+
+      const getCollectionImpl = vi.fn(async (_db, key) => {
+        if (key === 'samples') return samplesCollection;
+        if (key === 'patients') return patientsCollection;
+        if (key === 'consents') return consentsCollection;
+        throw new Error(`unexpected key ${key}`);
+      });
+
+      const { router } = loadRoute({ getCollectionImpl });
+
+      const sampleServiceModule = require(sampleServicePath);
+      vi.spyOn(sampleServiceModule, 'createSample').mockResolvedValue({ _id: 'sample-1', participantId: '12345678' });
+
+      const StorageService = require(storageServicePath);
+      vi.spyOn(StorageService.prototype, 'autoAssignSampleToBox').mockResolvedValue({
+        success: true,
+        sampleLocation: { boxId: 'box-1', position: 'A1' },
+      });
+
+      const app = buildApp(router, db);
+      const res = await request(app).post('/api/intake-wizard').send(VALID_PAYLOAD);
+
+      expect(res.status).toBe(200);
+      expect(res.body.storageLocation.locationID).toBe(2);
+    });
+
+    it('skips a storage box that is BLOCKED/RETIRED/INACTIVE and one at full occupancy', async () => {
+      const storageBoxesFind = () => makeCursor([
+        { _id: 'box-blocked', name: 'Blocked Box', status: 'RETIRED', dimension: { rows: 1, cols: 1 }, currentOccupancy: 0, occupancyGrid: {} },
+        { _id: 'box-full', name: 'Full Box', status: 'ACTIVE', dimension: { rows: 1, cols: 1 }, currentOccupancy: 1, occupancyGrid: {} },
+        { _id: 'box-ok', name: 'OK Box', status: 'ACTIVE', dimension: { rows: 1, cols: 1 }, currentOccupancy: 0, occupancyGrid: {} },
+      ]);
+
+      const { db, consentsCollection } = buildHappyPathDb({ storageBoxesFind });
+      const { samplesCollection, patientsCollection } = setupHappyMocks();
+
+      const getCollectionImpl = vi.fn(async (_db, key) => {
+        if (key === 'samples') return samplesCollection;
+        if (key === 'patients') return patientsCollection;
+        if (key === 'consents') return consentsCollection;
+        throw new Error(`unexpected key ${key}`);
+      });
+
+      const { router } = loadRoute({ getCollectionImpl });
+
+      const sampleServiceModule = require(sampleServicePath);
+      vi.spyOn(sampleServiceModule, 'createSample').mockResolvedValue({ _id: 'sample-1', participantId: '12345678' });
+
+      const StorageService = require(storageServicePath);
+      vi.spyOn(StorageService.prototype, 'autoAssignSampleToBox').mockResolvedValue({
+        success: true,
+        sampleLocation: { boxId: 'box-ok', position: 'A1' },
+      });
+
+      const app = buildApp(router, db);
+      const res = await request(app).post('/api/intake-wizard').send(VALID_PAYLOAD);
+
+      expect(res.status).toBe(200);
+      expect(res.body.storageLocation.boxName).toBe('OK Box');
+    });
+
+    it('finds the next free position using a Map-based occupancyGrid', async () => {
+      const occupancyGrid = new Map([['A1', true]]);
+      const storageBoxesFind = () => makeCursor([
+        { _id: 'box-1', name: 'Box A', status: 'ACTIVE', dimension: { rows: 1, cols: 2 }, currentOccupancy: 1, occupancyGrid },
+      ]);
+
+      const { db, consentsCollection } = buildHappyPathDb({ storageBoxesFind });
+      const { samplesCollection, patientsCollection } = setupHappyMocks();
+
+      const getCollectionImpl = vi.fn(async (_db, key) => {
+        if (key === 'samples') return samplesCollection;
+        if (key === 'patients') return patientsCollection;
+        if (key === 'consents') return consentsCollection;
+        throw new Error(`unexpected key ${key}`);
+      });
+
+      const { router } = loadRoute({ getCollectionImpl });
+
+      const sampleServiceModule = require(sampleServicePath);
+      vi.spyOn(sampleServiceModule, 'createSample').mockResolvedValue({ _id: 'sample-1', participantId: '12345678' });
+
+      const StorageService = require(storageServicePath);
+      vi.spyOn(StorageService.prototype, 'autoAssignSampleToBox').mockResolvedValue({
+        success: true,
+        sampleLocation: { boxId: 'box-1', position: 'A2' },
+      });
+
+      const app = buildApp(router, db);
+      const res = await request(app).post('/api/intake-wizard').send(VALID_PAYLOAD);
+
+      expect(res.status).toBe(200);
+      expect(res.body.storageLocation.position).toBe('A2');
+    });
+
+    it('returns 422 NON_CANONICAL_FIELD early when a nested payload section is not an object', async () => {
+      const { router } = loadRoute();
+      const app = buildApp(router, {});
+
+      const payload = { ...VALID_PAYLOAD, participant: 'not-an-object' };
+
+      const res = await request(app).post('/api/intake-wizard').send(payload);
+
+      expect(res.status).toBe(422);
+      expect(res.body.error).toBe('NON_CANONICAL_FIELD');
+    });
+
     it('deletes the created sample and returns 409 when box allocation fails', async () => {
       const { db, consentsCollection } = buildHappyPathDb();
       const { samplesCollection, patientsCollection } = setupHappyMocks();
@@ -565,6 +700,42 @@ describe('intakeWizard routes', () => {
       const res = await request(app).get('/api/intake-wizard/patient-match').query({ patientID: '12345678' });
 
       expect(res.status).toBe(500);
+    });
+
+    it('matches by patientID OR normalized name+birthDate when both are provided', async () => {
+      const findOne = vi.fn().mockResolvedValue({ patientID: '12345678', patientName: 'Paciente Teste' });
+      const getCollectionImpl = vi.fn().mockResolvedValue({ findOne });
+      const { router } = loadRoute({ getCollectionImpl });
+      const app = buildApp(router, {});
+
+      const res = await request(app)
+        .get('/api/intake-wizard/patient-match')
+        .query({ patientID: '12345678', patientName: 'Paciente Teste', birthDate: '01/02/2000' });
+
+      expect(res.status).toBe(200);
+      expect(findOne).toHaveBeenCalledWith(
+        expect.objectContaining({
+          $or: expect.arrayContaining([
+            { patientID: '12345678' },
+            { patientNameNormalized: 'paciente teste', birthDateKey: '2000-02-01' },
+          ]),
+        }),
+        expect.anything()
+      );
+    });
+
+    it('falls back to status ACTIVE and empty patientName/patientID when the stored patient lacks them', async () => {
+      const findOne = vi.fn().mockResolvedValue({ birthDate: '2000-01-01' });
+      const getCollectionImpl = vi.fn().mockResolvedValue({ findOne });
+      const { router } = loadRoute({ getCollectionImpl });
+      const app = buildApp(router, {});
+
+      const res = await request(app).get('/api/intake-wizard/patient-match').query({ patientID: '12345678' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.patient.status).toBe('ACTIVE');
+      expect(res.body.patient.patientID).toBe('');
+      expect(res.body.patient.patientName).toBe('');
     });
   });
 });
