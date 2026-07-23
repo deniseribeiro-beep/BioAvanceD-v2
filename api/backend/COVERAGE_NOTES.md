@@ -85,7 +85,7 @@ either).
 
 ```
 gap  branch% lines%  file
-198  75.43%  90.2%   src/services/import-lgpd.service.js  (partial slice landed 2026-07-23: getNextAvailableLocation sort-comparator branches + recordNumber 'undefined'/'NaN' placeholders; file is 1693 lines / ~199-branch gap, needs several more sessions — see readSamples/importSamples/validation blocks for remaining gap)
+195  75.80%  90.2%   src/services/import-lgpd.service.js  (partial slice landed 2026-07-23, session 2: readCSV's stream-error handler + readExcel's unknown-dataType/no-worksheet-selected branch, via tests/unit/import-lgpd.service.readers.test.js. File is 1693 lines / ~195-branch gap, needs several more sessions — remaining gap is mostly importSamples per-row validation (~750-1000) and importPatientsSmart mapping/validation (~1150-1520))
  90  73.13%  85.2%   src/services/sample.service.js
  86  77.66%  92.8%   src/routes/intakeWizard.js
  82  68.93%  94.4%   src/interface/routes/terminologies.routes.js

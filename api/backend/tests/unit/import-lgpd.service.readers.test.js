@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { createRequire } from 'module';
+import { Transform } from 'stream';
 import os from 'os';
 import path from 'path';
 import fs from 'fs';
@@ -7,6 +8,9 @@ import fs from 'fs';
 const require2 = createRequire(import.meta.url);
 const importLgpdService = require2('../../src/services/import-lgpd.service');
 const ExcelJS = require2('exceljs');
+
+const csvParserPath = require2.resolve('csv-parser');
+const importLgpdServicePath = require2.resolve('../../src/services/import-lgpd.service');
 
 const tmpFiles = [];
 
@@ -72,6 +76,41 @@ describe('ImportLGPDService.readCSV', () => {
     const filePath = writeTmpFile('header-only.csv', 'patientName,birthDate\n');
 
     await expect(importLgpdService.readCSV(filePath)).rejects.toThrow('Arquivo CSV está vazio ou não contém dados válidos');
+  });
+
+  it('wraps a stream error from the underlying csv parser', async () => {
+    // csv-parser is required at module scope in import-lgpd.service.js, so
+    // the only way to make readCSV's own .pipe(...).on('error', ...) handler
+    // fire is to swap the cached csv-parser module for a fake parser that
+    // emits 'error', then re-require the service fresh (same require.cache
+    // injection pattern used by label.routes.test.js / sample.routes.test.js).
+    delete require2.cache[csvParserPath];
+    delete require2.cache[importLgpdServicePath];
+
+    require2.cache[csvParserPath] = {
+      id: csvParserPath,
+      filename: csvParserPath,
+      loaded: true,
+      exports: () => {
+        const t = new Transform({
+          transform(chunk, enc, cb) { cb(); },
+        });
+        process.nextTick(() => t.emit('error', new Error('parse boom')));
+        return t;
+      },
+    };
+
+    try {
+      const freshService = require2(importLgpdServicePath);
+      const filePath = writeTmpFile('stream-error.csv', 'patientName,birthDate\nJoão Silva,25/12/1990\n');
+
+      await expect(freshService.readCSV(filePath)).rejects.toThrow(
+        'Erro ao processar arquivo CSV: parse boom'
+      );
+    } finally {
+      delete require2.cache[csvParserPath];
+      delete require2.cache[importLgpdServicePath];
+    }
   });
 });
 
@@ -201,6 +240,19 @@ describe('ImportLGPDService.readExcel', () => {
     const rows = await importLgpdService.readExcel(filePath, 'samples');
 
     expect(rows).toEqual([{ patientID: '12345678', sampleType: 'PLASMA' }]);
+  });
+
+  it('rejects when dataType is neither "patients" nor "samples" (no sheet gets selected)', async () => {
+    const filePath = await writeTmpWorkbook('unknown-datatype.xlsx', [
+      { sheetName: 'Pacientes', rows: [
+        ['patientName', 'birthDate'],
+        ['João Silva', '25/12/1990'],
+      ] },
+    ]);
+
+    await expect(importLgpdService.readExcel(filePath, 'unknown')).rejects.toThrow(
+      /não encontrada/
+    );
   });
 
   it('reads rich-text cell values via their .text property and serializes Date cells to ISO strings', async () => {
