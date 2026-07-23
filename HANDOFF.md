@@ -1,81 +1,82 @@
 # HANDOFF
 
 **Written:** 2026-07-23, end of a test-loop iteration on
-`src/services/sample.service.js` (Phase 1 of the branches-to-90% list),
-session 5.
-**Branch:** `feature/docker-e2e-backend-integration` (commit `8c9cd888`,
+`src/routes/intakeWizard.js` (Phase 1 of the branches-to-90% list),
+session 6.
+**Branch:** `feature/docker-e2e-backend-integration` (commit `1dbce450`,
 pushed).
 
 ## What happened this session
 
-Extended `tests/unit/sample.service.test.js` (+30 tests, 46 total)
-covering most of `sample.service.js`'s branch gap: `normalizeRequiredLocationID`'s
-whitespace/non-numeric branches, `createSample`'s auto-specimenId/auto-barcode
-generation, the `quantity` type-strictness re-check, the linked-equipment
-and sensor-operational lookups, the physical-position `Occupied`-marking
-success path, `withdrawSample`/`returnSample`'s barcode-fallback lookups,
-catch/error-propagation paths across `getSample`/`listSamples`/
-`updateSample`/`deleteSample`/`getSampleByBarcode`/`getSampleMovements`,
-`getSampleByBarcode`'s case-insensitive/numeric/regex fallback strategies,
-and `returnSample`'s missing-quantity/observations-required branches.
+Extended `tests/unit/intakeWizard.helpers.test.js` (+13 tests) and
+`tests/unit/intakeWizard.routes.test.js` (+9 tests) covering a large
+chunk of `intakeWizard.js`'s branch gap: `buildSampleDocumentFromIntake`'s
+lifecycleStatus/registeredAt/sampleType/sampleOrigin/extractionProtocol
+fallback branches, `normalizeNumber`'s invalid-input fallback,
+`buildPharmacologyData`'s all-empty and unrecognized-treatmentStatus
+branches, `ensureConsentEmailSent`'s success path and the
+`sendConsentEmail` falsy-result 502 path (three new branches), the
+`resolveConsentDecision` no-identifier 400 throw, sensor matching via the
+`maintenanceStatus` fallback field, storage-box BLOCKED/RETIRED/full-
+occupancy skip plus a Map-based `occupancyGrid`, `collectCanonicalViolations`'
+non-object-payload early return, and `/patient-match`'s combined
+`patientID`-or-`name+birthDate` query plus missing-status/name/ID
+defaults.
 
-Isolated branch coverage for the file: 72.83% -> 82.98% (244/335 ->
-278/335). Updated `api/backend/COVERAGE_NOTES.md`'s Phase 1 row
-accordingly (file dropped off the list — remaining gap is dead code, see
-below).
+Isolated branch coverage for the file: 77.66% -> 86.49% (299/385 ->
+333/385). Updated `api/backend/COVERAGE_NOTES.md`'s Phase 1 row
+accordingly (file stays on the list — real remaining gap plus some
+confirmed coverage-tool artifacts, see below).
 
-Found and filed **three bugs**, all left unfixed per test-loop's
-no-product-code rule (each has a regression test asserting the current
-buggy behavior, with a comment pointing at the issue):
+Found and filed **one issue** (dead code, left unfixed per test-loop's
+no-product-code rule):
 
-- **#252** — `withdrawSample`'s barcode-fallback lookup calls
-  `this.getSpecimenByBarcode`, which doesn't exist on the class (only
-  `getSampleByBarcode` does — `returnSample` calls it correctly). Throws
-  a `TypeError` instead of falling back.
-- **#253** — `createSample`'s participantId format guard
-  (`!validateParticipantId(sampleData.participantId)`) calls the async,
-  two-arg `validateParticipantId(db, participantId)` with only one
-  argument; `!aPromise` is always `false`, so the guard is a no-op. A
-  malformed id falls through to the real existence check further down
-  and comes back as 404 instead of the intended 400.
-- **#254** — several of `createSample`'s post-model-validate re-checks
-  (participantId presence, sampleType/sampleOrigin/extractionProtocol
-  validity, and the `errors`-as-string fallback) are structurally
-  unreachable, since `SampleModel.validate` already rejects all of those
-  cases first. Dead code, not a functional bug — owner's call whether to
-  delete or keep as defensive redundancy.
+- **#255** — `collectNonCanonicalFields` and `ensureConsentEmailSent` are
+  both defined and exported via `router._test` but never called from any
+  route in the file (confirmed via repo-wide grep). Owner's call: delete
+  as unused, or wire `ensureConsentEmailSent` into the intake flow if
+  consent-email sending was actually intended there.
+
+Also **confirmed** (not filed as new, matches an existing documented
+pattern): several remaining uncovered branches are guard-clause `if`
+statements with no `else` block (`if (!box) { throw }`, `if (!db) { ...
+}`) whose implicit-else never registers as covered under
+`@vitest/coverage-v8`, even when route tests plainly execute past them
+(verified directly — see this session's commit / COVERAGE_NOTES.md
+annotation). Same artifact class already noted for `sample.routes.js` in
+an earlier session; not a real gap, not re-chased further this session.
 
 ## Repo state
 
 - `feature/docker-e2e-backend-integration` current and pushed
-  (`8c9cd888`). Working tree clean.
+  (`1dbce450`). Working tree clean.
 
 ## Milestone (set 2026-07-22 by Dennis, still current)
 
 **Target: 90% across all four coverage dimensions.** Last full reconcile
 was 2026-07-23 morning (`f3c258c9`): Statements 91.54%, Branches
-**83.37%** (lagging dimension), Functions 90.96%, Lines 91.98%. This
-session's slice (sample.service.js) isn't folded into that number yet —
-worth a fresh full reconcile once a couple more Phase-1 files land, per
-the milestone note's own cadence guidance.
+**83.37%** (lagging dimension), Functions 90.96%, Lines 91.98%. Two
+sessions' worth of slices (sample.service.js session 5, intakeWizard.js
+this session) aren't folded into that number yet — worth a fresh full
+reconcile once a couple more Phase-1 files land, per the milestone
+note's own cadence guidance.
 
 ## Recommended next steps
 
-Continue down the Phase 1 branch-gap list in `api/backend/COVERAGE_NOTES.md`
-(`sample.service.js` is now off it). Next candidates in gap order:
-`src/routes/intakeWizard.js` (86-branch gap), then
-`src/interface/routes/terminologies.routes.js` (82),
-`src/services/batch-validation-engine.service.js` (80),
-`src/services/fhir-import-staging.service.js` (78),
+Continue down the Phase 1 branch-gap list in `api/backend/COVERAGE_NOTES.md`.
+Next candidates in gap order: `src/interface/routes/terminologies.routes.js`
+(82-branch gap), then `src/services/batch-validation-engine.service.js`
+(80), `src/services/fhir-import-staging.service.js` (78),
 `src/services/import.service.js` (68). Per the still-current
 bigger-iteration policy (`dyeallpies-skills-pack#107`, not yet landed
 upstream as of this session): bundle 2+ of these, or one much bigger
-slice, before stopping to commit/wrap-up/report — this session's single
-90-branch-gap file with 30 new tests is the right size to model.
+slice, before stopping to commit/wrap-up/report.
 
-Remaining open backlog beyond this (not re-checked this session): #251,
-#250, #224, #222, #115, plus this session's #252/#253/#254 — see
-`gh issue list --state open`.
+Remaining open backlog beyond this (not re-checked this session): #254,
+#253, #252, #251, #250, #224, #222, #115, plus this session's #255 — see
+`gh issue list --state open`. Note #250/#251/#252-254 are bug/design-call
+items outside the test-loop's scope (no-product-code-edit rule); #255 is
+the same class.
 
 ## Which skills to use
 
@@ -89,4 +90,9 @@ None queued.
 
 ## Session note
 
-None carried forward.
+If chasing an intakeWizard.js/sample.routes.js-style guard-clause `if`
+with no `else` block and coverage won't move past a real assertion that
+clearly executes the "else" path, don't keep adding tests — it's likely
+the same `@vitest/coverage-v8` phantom-branch artifact confirmed twice
+now. Isolate the file/test combo and check if the branch count changes
+with more tests before spending more time on it.
