@@ -138,12 +138,95 @@ describe('terminologySync.service', () => {
       const r2 = svc.normalizeRecord({ codigo: 'A', descricao: 'd', ativo: false });
       expect(r2.ativo).toBe(false);
     });
+
+    it('does not double-prefix an OMIM code that already carries OMIM: (case-insensitive)', () => {
+      const result = svc.normalizeRecord({ codigo: 'omim:154700', sistema: 'OMIM', descricao: 'x' });
+      expect(result.codigo).toBe('OMIM:154700');
+    });
+
+    it('derives sistema from record.system/source/tipo when sistema is absent', () => {
+      expect(svc.normalizeRecord({ codigo: 'A', descricao: 'd', system: 'hpo' }).sistema).toBe('HPO');
+      expect(svc.normalizeRecord({ codigo: 'A', descricao: 'd', source: 'cid' }).sistema).toBe('CID');
+      expect(svc.normalizeRecord({ codigo: 'A', descricao: 'd', tipo: 'manual' }).sistema).toBe('MANUAL');
+    });
+
+    it('derives normalizedCodigo for OMIM system from record.OMIM/omim/omimCode fallbacks', () => {
+      expect(svc.normalizeRecord({ sistema: 'OMIM', descricao: 'd', OMIM: '1' }).codigo).toBe('OMIM:1');
+      expect(svc.normalizeRecord({ sistema: 'OMIM', descricao: 'd', omim: '2' }).codigo).toBe('OMIM:2');
+      expect(svc.normalizeRecord({ sistema: 'OMIM', descricao: 'd', omimCode: '3' }).codigo).toBe('OMIM:3');
+    });
+
+    it('builds sinonimos from a plain synonyms array when sinonimos is absent', () => {
+      const result = svc.normalizeRecord({ codigo: 'A', descricao: 'd', synonyms: ['Foo', ''] });
+      expect(result.sinonimos).toEqual(['Foo']);
+    });
+
+    it('builds sinonimos from a Synonym array of objects using Label/_/plain-string fallbacks', () => {
+      const result = svc.normalizeRecord({
+        codigo: 'A',
+        descricao: 'd',
+        Synonym: [{ Label: 'A1' }, { _: 'A2' }, 'A3', { label: 'A4' }],
+      });
+      expect(result.sinonimos).toEqual(['A1', 'A2', 'A3', 'A4']);
+    });
+
+    it('defaults sinonimos to an empty array when none of the recognized fields are present', () => {
+      const result = svc.normalizeRecord({ codigo: 'A', descricao: 'd' });
+      expect(result.sinonimos).toEqual([]);
+    });
+
+    it('resolves relacoes.cid via ICD-10 externalReference lower-cased field names too', () => {
+      const result = svc.normalizeRecord({
+        codigo: 'A',
+        descricao: 'd',
+        externalReferences: { source: 'ICD-10', reference: 'Q99.9' },
+      });
+      expect(result.relacoes.cid).toBe('Q99.9');
+    });
+
+    it('falls back to code/id/value fields on the external reference entry itself', () => {
+      const result = svc.normalizeRecord({
+        codigo: 'A',
+        descricao: 'd',
+        externalReference: [{ Source: 'ICD-10', code: 'Q11.1' }],
+      });
+      expect(result.relacoes.cid).toBe('Q11.1');
+    });
   });
 
   describe('upsertTerminology', () => {
     it('skips when required fields are missing after normalization', async () => {
       const result = await svc.upsertTerminology({});
       expect(result).toEqual({ skipped: true, reason: 'missing-required-fields' });
+    });
+
+    it('resolves normalizedCodigo via the lowercase record.orpha field when no other codigo field is present', async () => {
+      const findSpy = vi.spyOn(Terminology, 'findOneAndUpdate').mockResolvedValue({});
+      const result = await svc.upsertTerminology({ sistema: 'ORPHA', orpha: '558', descricao: 'Marfan' });
+      expect(result.skipped).toBe(false);
+      const [query] = findSpy.mock.calls[0];
+      expect(query.codigo).toBe('ORPHA:558');
+    });
+
+    it('merges aliases and sinonimos (deduped) into the orphanet_diseases redundancy document', async () => {
+      const terminologiesUpdate = vi.fn().mockResolvedValue({});
+      const orphanetUpdate = vi.fn().mockResolvedValue({});
+      const db = {
+        collection: vi.fn((name) => {
+          if (name === 'terminologies') return { updateOne: terminologiesUpdate };
+          if (name === 'orphanet_diseases') return { updateOne: orphanetUpdate };
+          throw new Error(`unexpected collection ${name}`);
+        }),
+      };
+      await svc.upsertTerminology({
+        codigo: '558',
+        sistema: 'ORPHA',
+        descricao: 'Marfan',
+        aliases: ['Marfan syndrome', 'MFS'],
+        synonyms: ['MFS'],
+      }, db);
+      const [, setDoc] = orphanetUpdate.mock.calls[0];
+      expect(setDoc.$set.aliases.sort()).toEqual(['MFS', 'Marfan syndrome'].sort());
     });
 
     it('resolves aliased raw field names (e.g. ORPHAcode) via normalizeRecord before the required-field check', async () => {
@@ -222,6 +305,19 @@ describe('terminologySync.service', () => {
       const result = await svc.seedTerminologies(records);
       expect(result).toEqual({ success: true, upserted: 1, skipped: 1 });
       expect(warnSpy).toHaveBeenCalled();
+    });
+
+    it('falls back to record.code, then "desconhecido", when logging a per-record failure', async () => {
+      const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+      vi.spyOn(Terminology, 'findOneAndUpdate').mockImplementation(() => {
+        throw new Error('boom');
+      });
+      await svc.seedTerminologies([{ code: 'C1', sistema: 'ORPHA', descricao: 'a' }]);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('C1'));
+
+      warnSpy.mockClear();
+      await svc.seedTerminologies([{ ORPHAcode: '9', sistema: 'ORPHA', descricao: 'a' }]);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('desconhecido'));
     });
   });
 
@@ -417,6 +513,98 @@ describe('terminologySync.service', () => {
       expect(result.success).toBe(false);
       const warnMessages = warnSpy.mock.calls.map((c) => c[0]);
       expect(warnMessages.some((m) => /Timeout ap.s \d+ms/.test(m))).toBe(true);
+    });
+
+    it('extracts records from a response body shaped as {data: [...]}, {items: [...]}, or {results: [...]}', async () => {
+      vi.spyOn(Terminology, 'findOneAndUpdate').mockResolvedValue({});
+      const shapes = [
+        { data: [{ ORPHAcode: '1', descricao: 'D1' }] },
+        { items: [{ ORPHAcode: '1', descricao: 'D1' }] },
+        { results: [{ ORPHAcode: '1', descricao: 'D1' }] },
+      ];
+      for (const body of shapes) {
+        const freshSvc = freshRequireWithEnv(() => {
+          process.env.ALLOW_EXTERNAL_TERMINOLOGY_SYNC = 'true';
+          process.env.ORPHADATA_BASE_URL = 'https://orphadata.example.com';
+        });
+        const fetchMock = vi.fn().mockResolvedValue({
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          headers: { get: () => 'application/json' },
+          text: async () => JSON.stringify(body),
+        });
+        vi.stubGlobal('fetch', fetchMock);
+
+        const result = await freshSvc.syncFromOrphadata();
+        expect(result.upserted).toBe(1);
+      }
+    });
+
+    it('normalizes a bare string/number record entry into an ORPHA stub before upserting', async () => {
+      const freshSvc = freshRequireWithEnv(() => {
+        process.env.ALLOW_EXTERNAL_TERMINOLOGY_SYNC = 'true';
+        process.env.ORPHADATA_BASE_URL = 'https://orphadata.example.com';
+      });
+      const updateOneSpy = vi.spyOn(Terminology, 'findOneAndUpdate').mockResolvedValue({});
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        headers: { get: () => 'application/json' },
+        text: async () => JSON.stringify([558]),
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      const result = await freshSvc.syncFromOrphadata();
+      expect(result.upserted).toBe(1);
+      expect(updateOneSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ sistema: 'ORPHA', codigo: 'ORPHA:558' }),
+        expect.anything(),
+        expect.anything()
+      );
+    });
+
+    it('surfaces the response body\'s error/message field in the thrown error when an endpoint responds non-OK', async () => {
+      const freshSvc = freshRequireWithEnv(() => {
+        process.env.ALLOW_EXTERNAL_TERMINOLOGY_SYNC = 'true';
+        process.env.ORPHADATA_BASE_URL = 'https://orphadata.example.com';
+      });
+      const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 503,
+        statusText: 'Service Unavailable',
+        headers: { get: () => 'application/json' },
+        text: async () => JSON.stringify({ error: 'orphadata is down' }),
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      const result = await freshSvc.syncFromOrphadata();
+      expect(result.success).toBe(false);
+      const warnMessages = warnSpy.mock.calls.map((c) => c[0]);
+      expect(warnMessages.some((m) => m.includes('orphadata is down'))).toBe(true);
+    });
+
+    it('falls back to a plain HTTP status message when a non-OK response has no error/message field', async () => {
+      const freshSvc = freshRequireWithEnv(() => {
+        process.env.ALLOW_EXTERNAL_TERMINOLOGY_SYNC = 'true';
+        process.env.ORPHADATA_BASE_URL = 'https://orphadata.example.com';
+      });
+      const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        statusText: 'Internal Server Error',
+        headers: { get: () => 'application/json' },
+        text: async () => '',
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      const result = await freshSvc.syncFromOrphadata();
+      expect(result.success).toBe(false);
+      const warnMessages = warnSpy.mock.calls.map((c) => c[0]);
+      expect(warnMessages.some((m) => m.includes('HTTP 500 Internal Server Error'))).toBe(true);
     });
   });
 });

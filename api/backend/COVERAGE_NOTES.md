@@ -223,12 +223,38 @@ Treat each file as "confirm real gap via isolated coverage first,
 same #242 caveat as everywhere else in this file," not as guaranteed
 yield.
 
+`src/services/terminologySync.service.js` closed out 2026-07-24: extended
+`tests/unit/terminologySync.service.test.js` (+22 tests, 45 total)
+covering `normalizeRecord`'s OMIM double-prefix guard, sistema derivation
+from `system`/`source`/`tipo`, OMIM normalizedCodigo field fallbacks
+(`OMIM`/`omim`/`omimCode`), `sinonimos`'s plain-`synonyms`-array and
+`Synonym`-object-array (`Label`/`_`/plain-string) branches and its
+none-present empty-array default, `findExternalReference`'s
+lowercase-field and `code`/`id`/`value` fallbacks, `upsertOrphanetRedundancy`'s
+aliases/sinonimos dedup-merge (the `.map` callback was never invoked
+before), the ORPHA-`normalizedCodigo` lowercase `record.orpha` fallback,
+`extractRecords`' `{data:[]}`/`{items:[]}`/`{results:[]}` body shapes, a
+bare string/number record-entry stub-normalization path, and
+`fetchJsonWithTimeout`'s non-OK-response error/message-field vs.
+plain-HTTP-status-message branches (previously entirely untested).
+Isolated branches 79.27% -> 93.24% (176/222 -> 207/222). Remaining gap is
+mostly dead code: `upsertOrphanetRedundancy`'s own `if (!db)` guard
+(line 147) is unreachable since callers always pass a valid db by the
+time it's invoked, and its `if (!code)` guard (line 151) is unreachable
+because `payload.codigo` is already guaranteed non-empty (and already
+ORPHA-normalized) by `upsertTerminology`'s required-fields check before
+this function ever runs — same dead-guard class as #67/#76/#236/#246/
+#247/#248 but not filed separately since this one isn't a route-level
+503 guard (and non-`db` callers of this internal helper don't exist —
+no HTTP-request-level fix would apply here). The one remaining uncovered function (line 229, the
+`setTimeout` abort callback in `fetchJsonWithTimeout`) needs a real
+15-second timer to fire and wasn't chased — low value for a single
+function point.
+
 **Phase 2 (next tier, same exclusions apply):**
 
 ```
 gap  branch% lines%  file
- 46  79.27%  92.5%   src/services/terminologySync.service.js
- 44  81.86%  97.4%   src/services/consent.service.js
  44  74.71%  94.0%   src/services/equipment-sensor-quarantine.service.js
  43  80.09%  92.7%   src/services/user-security.service.js
  40  73.50%  98.4%   src/services/auth.service.js
