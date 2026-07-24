@@ -1,113 +1,99 @@
 # HANDOFF
 
-**Written:** 2026-07-24, end of a `work-issue` -> `merge-from-main` ->
-`fix-bugs` iteration.
-**Branch:** `feature/docker-e2e-backend-integration` (commit `f740a316`,
+**Written:** 2026-07-24, end of a `work-issue` -> `fix-bugs` iteration.
+**Branch:** `feature/docker-e2e-backend-integration` (commit `b247dbbe`,
 pushed, working tree clean).
 
 ## What happened this session
 
-Dennis asked to continue working the issue backlog. `work-issue` scan of
-open non-`test-branch` issues found only "owner's call" dead-code/
-coverage-gap findings from prior test-loop sessions (#255, #260, #264,
-#272, #258) — none a plain reproducible bug. Asked Dennis which to work;
-he picked **#255** (`intakeWizard.js`: `collectNonCanonicalFields` and
-`ensureConsentEmailSent` unused).
+Dennis asked to read the prior handoff and resolve an issue. `work-issue`
+scan routed to `fix-bugs` for **#260** (`orphanet.js`: two
+structurally-unreachable branches, labeled `bug` but actually an
+owner's-call dead-code finding from a prior test-loop session — same
+shape as #255 last session).
 
-- First pass asked Dennis delete-vs-wire-in; he asked instead to
-  investigate Denise's actual intent via docs + latest main before
-  deciding — and to consider filing a skills-pack process gap if that
-  investigation proved valuable. Both happened:
-  - Merged `origin/main` in first (`merge-from-main`, 1 commit ahead,
-    zero conflicts, only touched docs binaries — no code). Pushed
-    `f1af40f9`.
-  - Found the deciding evidence in git history, not docs: Denise's own
-    `e9fc064c` ("stabilize intake governance") commit had *already*
-    removed `ensureConsentEmailSent`'s call site from
-    `handleIntakeWizard`; a later session's `782563e8` had *already*
-    dropped the route-level tests pinned to that dead call path. The
-    freshly-merged main's README also now states an explicit policy —
-    "serviços removidos sem consumidor runtime ativo" (services with no
-    active runtime consumer get removed) — that directly supports the
-    deletion.
-  - Filed **dyeallpies-skills-pack#124**: `fix-bugs`/`resolve-issue`
-    should check `git diff HEAD origin/main -- <file>` and grep
-    `docs/architecture/*.md` *before* presenting an owner's-call
-    dead-code question, rather than asking cold.
-  - Deleted `collectNonCanonicalFields`, `resolveRecipientAndTemplate`
-    (only caller of `ensureConsentEmailSent`, orphaned by removing it),
-    and `ensureConsentEmailSent` itself from
-    `api/backend/src/routes/intakeWizard.js`, plus the now-unused
-    `notificationService` import and 6 corresponding unit tests in
-    `intakeWizard.helpers.test.js`. Targeted tests (56, across
-    `intakeWizard.helpers/routes/routes.governance` +
-    `canonical-intake.contract`) pass; lint clean.
-  - Branched `fix/intake-wizard-dead-code` off the post-merge integration
-    branch, committed (`Fixes #255`), pushed, merged `--no-ff` into
-    `feature/docker-e2e-backend-integration` (`f740a316`), pushed,
-    deleted the fix branch (local+remote).
-  - Closed **#255** with the investigation trail and merge hash.
-- `wrap-up` core + shipping audits ran clean beyond the #124 filing
-  already done mid-session; no new findings.
+- Verified per `fix-bugs`' "verifying before deferring" section instead
+  of posing it cold:
+  - `git diff HEAD origin/main -- api/backend/src/routes/orphanet.js`
+    was empty (no upstream drift on this file; branch is current with
+    main on it).
+  - `docs/architecture/canonical-active-surface.md` confirmed
+    `src/routes/orphanet.js` is the real active route logic — it's
+    required by `src/interface/routes/orphanet.routes.js`, the file
+    `app.js` actually mounts at `/api/orphanet` — not a dead duplicate.
+  - Traced every call site of both flagged functions directly:
+    `dedupeRecords` is only ever called with records that already went
+    through `normalizeDiseaseRecord` once (which always sets `source`),
+    so the `record?.source || 'local'` fallback could never fire.
+    `searchLocal`'s `lang` param is only ever passed
+    `normalizeText(req.query.lang) || 'pt'` from its one call site, so
+    `requestedLang` is never falsy and the ternary's `: orphanetFilter`
+    branch was dead.
+  - Confirmed this was a genuine "no live caller exercises the
+    alternative branch" case, not a real design fork — simplified both
+    call sites directly rather than asking Dennis to choose.
+- Branched `fix/orphanet-dead-branches` off the integration branch,
+  removed both dead fallbacks (`api/backend/src/routes/orphanet.js`),
+  ran `tests/unit/orphanet.routes.test.js` +
+  `tests/unit/routes/orphanet.test.js` (39/39 pass) and `npm run lint`
+  (clean). Committed (`Fixes #260`, `997e2123`), pushed, merged
+  `--no-ff` into `feature/docker-e2e-backend-integration` (`b247dbbe`),
+  re-ran the same targeted tests on the merged tree (still 39/39), pushed,
+  deleted the fix branch (local+remote).
+  - Closed **#260** with the merge hash and the verification trail.
+- `wrap-up` core + shipping audits ran clean — no scope creep (only
+  `orphanet.js` touched), no lazy fixes, no unresolved sub-points left
+  on a closed issue, nothing security-relevant.
 
 ## Repo state
 
-- `feature/docker-e2e-backend-integration`, pushed at `f740a316`,
+- `feature/docker-e2e-backend-integration`, pushed at `b247dbbe`,
   working tree clean.
-- Also merged in this session: `origin/main`'s single commit
-  (`f35a033b`, docs-only — 3 new `.docx` files + one `.xlsx` update
-  under `docs/`, no code changes) via `f1af40f9`.
 
 ## Milestone (set 2026-07-22 by Dennis, still current)
 
 **Target: 90% across all four coverage dimensions.** Last full reconcile
 (2026-07-24, session 16, pre-session commit `a636b37a`): Statements
 94.01%, Branches 88.2%, Functions 92.33%, Lines 94.29%. Unaffected this
-session (dead-code deletion, no coverage-relevant behavior change) —
-worth a fresh reconcile next coverage-focused session since deleted code
-removes some previously-uncovered branch/function surface.
+session (dead-branch simplification, no coverage-relevant behavior
+change — the branches were already unreachable so coverage-final.json's
+counts for them shouldn't move).
 
 ## Recommended next steps
 
-Dennis asked to keep working the issue backlog. No specific issue named
-for next round — re-scan fresh via `work-issue`. Remaining open
-"owner's call" candidates from this session's scan (re-verify state,
-don't trust this list):
-
-- **#260** (`orphanet.js`: two structurally-unreachable branches) —
-  author's own writeup leans "dead code, safe to simplify."
-- **#264** (`user-security.service.js` `extractOS`: dead Android branch,
-  reorder-vs-leave call), **#272** (`daily-merkle.job.js`: two
-  unreachable defensive branches, remove-vs-keep call), **#258**
-  (`NotificationService.js`: infra-mocking gap, refactor-vs-accept call)
-  — all open, unworked.
-
-Per this session's precedent: before presenting any of these as a cold
-owner's-call question, check `git diff HEAD origin/main -- <file>` and
-`docs/architecture/*.md` / `git log --all --diff-filter=D -- <file>`
-first — several of these may resolve the same way #255 did (already
-decided by the codebase's own history, just not yet traced).
+Dennis asked to keep working the issue backlog (implied by "resolve
+issue" pattern across recent sessions) — no specific issue named for
+next round, so **none queued**; re-scan fresh via `work-issue` next
+session. Open backlog as of this session's scan (`gh issue list --state
+open`), mostly `test-branch`-labeled owner's-call dead-code/coverage-gap
+findings from prior test-loop sessions, largest-numbered first: #277,
+#275, #274, #273, #272, #271, #270, #269, #267, #266, #265, #264, #263,
+#262, #261, #258, #257, #256, #254, #251, #228, #224, #222, #115.
+Re-verify state, don't trust this list — several may resolve the same
+way #255 and #260 did (dead per call-site tracing, not actually
+ambiguous) once traced.
 
 ## Which skills to use
 
 `work-issue` to pick/route, `fix-bugs` for these dead-code owner's-call
-issues (verifying-before-deferring section is exactly on point),
+issues (verifying-before-deferring section is exactly on point — trace
+every real call site before treating "needs owner's call" as settled).
 `merge-from-main` first if main has moved since last checked
-(`git fetch origin && git log --oneline <branch>..origin/main | wc -l`).
-`wrap-up` every iteration.
+(`git fetch origin && git log --oneline <branch>..origin/main | wc -l`
+was 0 this session). `wrap-up` every iteration.
 
 ## Dependency notes
 
-None blocking. `dyeallpies-skills-pack#124` (this session: fold
+None blocking. `dyeallpies-skills-pack#124` (prior session: fold
 docs+main investigation into the owner's-call dead-code flow) and
-`#122`/`#123` (prior session) are pack-repo process issues, not
-BioAvanceD-v2 blockers.
+`#122`/`#123` (earlier) are pack-repo process issues, not BioAvanceD-v2
+blockers — not touched this session.
 
 ## Session note
 
-`resolveRecipientAndTemplate` was deleted alongside the two functions
-#255 named, even though the issue didn't mention it by name — it was
-`ensureConsentEmailSent`'s only caller and became fully dead the moment
-that function was removed. Disclosed in the commit message and close
-comment; this is the expected "chain of dead-only-consumer" pattern, not
-scope creep.
+`src/interface/routes/orphanet.routes.js` is a thin re-export wrapper
+(`module.exports = require('../../routes/orphanet')`) — worth
+remembering when tracing "which file is actually mounted" for any future
+orphanet-related issue: the `docs/architecture/canonical-active-surface.md`
+listing names the `interface/routes` path as the mounted one, but the
+real logic (and any future edits) belongs in `src/routes/orphanet.js`.
