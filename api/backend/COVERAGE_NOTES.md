@@ -42,39 +42,20 @@ stale as slices land and as source files change. Keep it honest:
 
 ## Last full reconcile
 
-**2026-07-24**, snapshot from `feature/docker-e2e-backend-integration`
-(commit `32d49921`, full suite, 1 pre-existing failure / 292 test files
-passed — see "Known pre-existing failures" in the testing-conventions
-skill).
+**2026-07-24 (session 15)**, snapshot from `feature/docker-e2e-backend-integration`
+(pre-session commit `1f6a3956`, full suite, 1 pre-existing failure / 295
+test files passed — see "Known pre-existing failures" in the
+testing-conventions skill).
 
-Statements **93.15%** (17355/18630), Branches **87.08%** (14467/16613),
-Functions **91.71%** (2070/2257), Lines **93.5%** (16671/17829).
+Statements **93.88%** (17490/18630), Branches **87.68%** (14567/16613),
+Functions **92.51%** (2088/2257), Lines **94.22%** (16799/17829).
 **Three of four dimensions (statements/functions/lines) remain past the
 90% milestone** (`bioavanced-v2-conventions`); branches is still the
-sole laggard, up from 83.37% at the prior reconcile.
+sole laggard, up from 87.08% at the prior reconcile.
 
 Known pre-existing failure: 1 test in `sample-graph-validator.service.test.js`
 ("valida o nó de Integridade com sucesso e falha por tampering") — not
-blocking coverage work. New this session: `terminologySync.service.test.js`
-("produces a deterministic hashConteudo for identical input") started
-failing against a real product bug (issue #268, `hashConteudo` includes
-`sincronizadoEm`/`updatedAt` timestamps) — test left unmodified, not a
-coverage gap.
-
-Checked this session (not real gaps, no test added):
-`src/utils/fieldEncryption.js` showed 76.19%/82.60% lines/branches in
-the merged run but isolates to 100%/100%/100%/100% across its three
-dedicated test files (`tests/unit/fieldEncryption.test.js`,
-`tests/unit/utils/fieldEncryption.test.js`,
-`tests/unit/field-encryption.unit.test.js`) — merged-vs-isolated drift
-(issue #242 class), not a gap.
-`src/interface/routes/equipment.routes.js` showed 81.59%/81.01% in both
-merged and isolated runs, but `tests/integration/equipment.api.test.js`
-+ `tests/unit/equipment.routes.quarantine.test.js` already assert every
-handler/branch (401/403/404/500/transaction/auditInfo-fallback paths);
-V8 reports the route-handler declaration line and catch-block opener as
-0-hit even though the body statements inside run — matches the
-documented phantom-statement pattern, not a real gap.
+blocking coverage work.
 
 ## Branch-focused priority list toward the 90% branches milestone
 
@@ -233,6 +214,12 @@ src/interface/routes/equipment.routes.js         81.59 / 81.01   (phantom-statem
 81.16%/65.83% stmts/branch, now **86.36%/77.55%** (issue #275 filed for
 an unrelated per-function 0-hit merge artifact in that same run — trust
 this top-line %, not the per-function breakdown).
+
+`consent.service.js` isolated (`tests/unit/consent.service.unit.test.js`,
+`--coverage.include`): was 97.51%/81.58% stmts/branch, now
+**98.22%/90.79%**. Remaining branch gap is mostly the documented
+implicit-else guard-clause pattern (`if (!x) throw/return` with no
+`else` — see the recurring dead-code pattern note below).
 
 `User.js` checked and closed: 78.94% merged branches was drift (issue
 #242 class); isolated run was 97.89%, gap was two real untested cases

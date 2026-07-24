@@ -371,6 +371,73 @@ describe('ConsentService.createTemplate', () => {
 
     expect(result.caae).toBe('');
   });
+
+  it('uses the explicit version when one is provided', async () => {
+    const templates = makeCollection({
+      find: vi.fn(() => makeCursor([])),
+      insertOne: vi.fn(async () => ({ insertedId: new ObjectId() })),
+    });
+    const db = makeDb({ consent_templates: templates });
+
+    const result = await consentService.createTemplate(db, { title: 'T', content: 'C', version: 'v9' });
+
+    expect(result.version).toBe('v9');
+  });
+
+  it('uses the explicit htmlContent when provided instead of falling back to content', async () => {
+    const templates = makeCollection({
+      find: vi.fn(() => makeCursor([])),
+      insertOne: vi.fn(async () => ({ insertedId: new ObjectId() })),
+    });
+    const db = makeDb({ consent_templates: templates });
+
+    const result = await consentService.createTemplate(db, {
+      title: 'T',
+      content: 'ignored',
+      htmlContent: 'Explicit HTML',
+    });
+
+    expect(result.htmlContent).toBe('Explicit HTML');
+  });
+
+  it('respects an explicit active:false without deactivating other templates', async () => {
+    const templates = makeCollection({
+      find: vi.fn(() => makeCursor([])),
+      insertOne: vi.fn(async () => ({ insertedId: new ObjectId() })),
+    });
+    const db = makeDb({ consent_templates: templates });
+
+    const result = await consentService.createTemplate(db, { title: 'T', content: 'C', active: false });
+
+    expect(result.active).toBe(false);
+    expect(templates.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('uses an explicit versionGroupId when provided', async () => {
+    const templates = makeCollection({
+      find: vi.fn(() => makeCursor([])),
+      insertOne: vi.fn(async () => ({ insertedId: new ObjectId() })),
+    });
+    const db = makeDb({ consent_templates: templates });
+
+    const result = await consentService.createTemplate(db, {
+      title: 'T',
+      content: 'C',
+      versionGroupId: 'explicit-group-id',
+    });
+
+    expect(result.versionGroupId).toBe('explicit-group-id');
+  });
+
+  it('rejects when the model validation fails on a blank-after-trim caae', async () => {
+    const templates = makeCollection({ find: vi.fn(() => makeCursor([])) });
+    const db = makeDb({ consent_templates: templates });
+
+    await expect(
+      consentService.createTemplate(db, { title: 'T', content: 'C', caae: '   ' })
+    ).rejects.toThrow('caae');
+    expect(templates.insertOne).not.toHaveBeenCalled();
+  });
 });
 
 describe('ConsentService.getTemplateById', () => {
@@ -497,6 +564,89 @@ describe('ConsentService.updateTemplate', () => {
     const result = await consentService.updateTemplate(db, existingId.toString(), { title: 'New title' });
 
     expect(result.caae).toBe('');
+  });
+
+  it('falls back to an empty permissions array when the existing template has none', async () => {
+    const existingId = new ObjectId();
+    const existing = {
+      _id: existingId,
+      title: 'Old title',
+      content: 'Old content',
+      htmlContent: 'Old content',
+      version: 'v1',
+      active: true,
+    };
+    const templates = makeCollection({ findOne: vi.fn(async () => existing) });
+    const db = makeDb({ consent_templates: templates });
+
+    const result = await consentService.updateTemplate(db, existingId.toString(), { title: 'New title' });
+
+    expect(result.permissions).toEqual([]);
+  });
+
+  it('uses the explicit htmlContent from the payload over the existing content', async () => {
+    const existingId = new ObjectId();
+    const existing = {
+      _id: existingId,
+      title: 'Old title',
+      content: 'Old content',
+      htmlContent: 'Old content',
+      version: 'v1',
+      active: true,
+      permissions: [],
+    };
+    const templates = makeCollection({ findOne: vi.fn(async () => existing) });
+    const db = makeDb({ consent_templates: templates });
+
+    const result = await consentService.updateTemplate(db, existingId.toString(), {
+      title: 'New title',
+      htmlContent: 'Brand new HTML',
+    });
+
+    expect(result.htmlContent).toBe('Brand new HTML');
+  });
+
+  it('respects an explicit active:false and skips deactivating sibling versions', async () => {
+    const existingId = new ObjectId();
+    const existing = {
+      _id: existingId,
+      title: 'Old title',
+      content: 'Old content',
+      htmlContent: 'Old content',
+      version: 'v1',
+      active: true,
+      permissions: [],
+    };
+    const templates = makeCollection({ findOne: vi.fn(async () => existing) });
+    const db = makeDb({ consent_templates: templates });
+
+    const result = await consentService.updateTemplate(db, existingId.toString(), {
+      title: 'New title',
+      active: false,
+    });
+
+    expect(result.active).toBe(false);
+    expect(templates.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('reuses the existing versionGroupId when the existing template already has one', async () => {
+    const existingId = new ObjectId();
+    const existing = {
+      _id: existingId,
+      title: 'Old title',
+      content: 'Old content',
+      htmlContent: 'Old content',
+      version: 'v1',
+      active: true,
+      permissions: [],
+      versionGroupId: 'existing-group-id',
+    };
+    const templates = makeCollection({ findOne: vi.fn(async () => existing) });
+    const db = makeDb({ consent_templates: templates });
+
+    const result = await consentService.updateTemplate(db, existingId.toString(), { title: 'New title' });
+
+    expect(result.versionGroupId).toBe('existing-group-id');
   });
 });
 
@@ -660,6 +810,102 @@ describe('ConsentService.createPolicy', () => {
 
     expect(result.versionGroupId).toBe('group-xyz');
     expect(result.revisionType).toBe('update');
+  });
+
+  it('defaults validFrom to now when the payload omits it', async () => {
+    const templates = makeCollection({
+      find: vi.fn(() => makeCursor([])),
+      insertOne: vi.fn(async () => ({ insertedId: new ObjectId() })),
+    });
+    const db = makeDb({ consent_templates: templates });
+
+    const result = await consentService.createPolicy(db, {
+      title: 'Policy',
+      htmlContent: '<p>content</p>',
+      validTo: '2999-12-31T23:59:59.000Z',
+      granularPermissions: [{ key: 'analytics', label: 'Analytics' }],
+    });
+
+    expect(result.validFrom).toBeDefined();
+    expect(Number.isNaN(new Date(result.validFrom).getTime())).toBe(false);
+  });
+
+  it('falls back to payload.permissions when granularPermissions is absent', async () => {
+    const templates = makeCollection({
+      find: vi.fn(() => makeCursor([])),
+      insertOne: vi.fn(async () => ({ insertedId: new ObjectId() })),
+    });
+    const db = makeDb({ consent_templates: templates });
+
+    const result = await consentService.createPolicy(db, {
+      title: 'Policy',
+      htmlContent: '<p>content</p>',
+      validFrom: '2026-01-01T00:00:00.000Z',
+      validTo: '2999-12-31T23:59:59.000Z',
+      permissions: [{ key: 'analytics', label: 'Analytics' }],
+    });
+
+    expect(result.granularPermissions).toEqual([{ key: 'analytics', label: 'Analytics', required: false }]);
+  });
+
+  it('trims an explicit caae on the policy', async () => {
+    const templates = makeCollection({
+      find: vi.fn(() => makeCursor([])),
+      insertOne: vi.fn(async () => ({ insertedId: new ObjectId() })),
+    });
+    const db = makeDb({ consent_templates: templates });
+
+    const result = await consentService.createPolicy(db, {
+      title: 'Policy',
+      htmlContent: '<p>content</p>',
+      caae: '  CAAE-99  ',
+      validFrom: '2026-01-01T00:00:00.000Z',
+      validTo: '2999-12-31T23:59:59.000Z',
+      granularPermissions: [{ key: 'analytics', label: 'Analytics' }],
+    });
+
+    expect(result.caae).toBe('CAAE-99');
+  });
+
+  it('uses an explicit versionGroupId option without needing a previousPolicyId', async () => {
+    const templates = makeCollection({
+      find: vi.fn(() => makeCursor([])),
+      insertOne: vi.fn(async () => ({ insertedId: new ObjectId() })),
+    });
+    const db = makeDb({ consent_templates: templates });
+
+    const result = await consentService.createPolicy(
+      db,
+      {
+        title: 'Policy',
+        htmlContent: '<p>content</p>',
+        validFrom: '2026-01-01T00:00:00.000Z',
+        validTo: '2999-12-31T23:59:59.000Z',
+        granularPermissions: [{ key: 'analytics', label: 'Analytics' }],
+      },
+      { versionGroupId: 'explicit-policy-group' }
+    );
+
+    expect(result.versionGroupId).toBe('explicit-policy-group');
+  });
+
+  it('skips deactivating other policies when active is explicitly false', async () => {
+    const templates = makeCollection({
+      find: vi.fn(() => makeCursor([])),
+      insertOne: vi.fn(async () => ({ insertedId: new ObjectId() })),
+    });
+    const db = makeDb({ consent_templates: templates });
+
+    await consentService.createPolicy(db, {
+      title: 'Policy',
+      htmlContent: '<p>content</p>',
+      active: false,
+      validFrom: '2026-01-01T00:00:00.000Z',
+      validTo: '2999-12-31T23:59:59.000Z',
+      granularPermissions: [{ key: 'analytics', label: 'Analytics' }],
+    });
+
+    expect(templates.updateMany).not.toHaveBeenCalled();
   });
 });
 
@@ -975,6 +1221,24 @@ describe('ConsentService.createPatientConsent', () => {
         ...validSignature,
       })
     ).rejects.toThrow('consentTemplateId inválido');
+  });
+
+  it('accepts signatureBase64 as an alias for signatureImageBase64 from the frontend', async () => {
+    const patients = makeCollection({ findOne: vi.fn(async () => ({ participantId: '12345678' })) });
+    const templates = makeCollection({ findOne: vi.fn(async () => activeTemplate) });
+    const consents = makeCollection({ insertOne: vi.fn(async () => ({ insertedId: new ObjectId() })) });
+    const db = makeDb({ patients, consent_templates: templates, patientConsents: consents });
+
+    const result = await consentService.createPatientConsent(db, {
+      participantId: '12345678',
+      consentTemplateId: templateId.toString(),
+      responses: { analytics: true },
+      signatureName: 'Jane Doe',
+      signatureBase64: Buffer.from('sig-via-alias').toString('base64'),
+    });
+
+    expect(result._id).toBeDefined();
+    expect(result.signatureHash).toBeDefined();
   });
 });
 
