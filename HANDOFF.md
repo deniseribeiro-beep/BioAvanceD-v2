@@ -1,57 +1,64 @@
 # HANDOFF
 
 **Written:** 2026-07-24, end of a test-loop iteration.
-**Branch:** `feature/docker-e2e-backend-integration` (commit `2fde6f92`,
+**Branch:** `feature/docker-e2e-backend-integration` (commit `f584b728`,
 pushed).
 
 ## What happened this session
 
 Read `HANDOFF.md`, routed via `work-issue` -> `test-loop`. Picked
-`mongo.js` from the prior session's branch-sort candidate list (the
-first of the three remaining: `mongo.js`, `result.routes.js`,
-`NotificationService.js` already-accepted-gap).
+`result.routes.js`, the first of the prior handoff's two remaining
+candidates (`result.routes.js`, `NotificationService.js`
+already-accepted-gap).
 
-- `mongo.js` has a 2-way test split (`database-mongo.test.js` +
-  `mongodb-connection.test.js`), flagged in the prior handoff as
-  possible issue-#242-class merged-vs-isolated drift. Ran both files
-  isolated first (`--coverage.include`): 88.14%/80.3%/100%/90.86%
-  stmts/branch/funcs/lines — close to the merged branch-sort number
-  (80.30%), so confirmed as a real gap, not drift.
-- Read `coverage/coverage-final.json`'s `branchMap`/`b` and
-  `statementMap`/`s` directly to enumerate uncovered branches by line,
-  same fast method as the prior `auditRoot.service.js` session.
-- Added 8 tests: sensitive-query-param redaction in the sanitized log
-  line (`password=***`), a protocol-less URI falling back to
-  `desconhecido` in `getMongoUriLogDetails` (and passing through
-  unmodified in `ensureMongoUri`), a `tls` param already present
-  without an `ssl` param, three `encodeMongoURI` debug-log branches
-  (`NODE_ENV=development` with an unencoded password, an
-  already-encoded password, and no credentials at all), and the
-  `env.MONGO_URI`/`env.MONGO_DB` self-heal assignment in `connectDB`
-  (process.env has the value but the shared `env` object doesn't yet).
-- Isolated coverage: 88.14%/80.3%/100%/90.86% ->
-  **96.9%/88.63%/100%/97.84%**. Remaining lines (118, 147, 185-186) are
-  defensive guard clauses in module-internal helpers
-  (`ensureMongoUri`/`getMongoUriLogDetails`/`encodeMongoURI`) that are
-  only ever called with already-validated args from the public
-  `connectDB`/`connectNewDB` surface — matches the repo's documented
-  recurring dead-guard-clause pattern (see `COVERAGE_NOTES.md`), not a
-  fresh finding, no new issue filed.
+- `result.routes.js` has a 2-way test split (`result.api.test.js` +
+  `result.routes.api.test.js`), flagged as a possible issue-#242-class
+  merged-vs-isolated drift candidate. Ran both files isolated first
+  (`--coverage.include`): 94.81%/78.4%/100%/94.66%
+  stmts/branch/funcs/lines — matched the merged branch-sort number
+  (78.40%), so confirmed as a real gap, not drift.
+- Read `coverage/coverage-final.json`'s `branchMap`/`b` directly to
+  enumerate uncovered branches by line and hit count (same method as
+  prior sessions).
+- Added 7 tests to `result.routes.api.test.js`: three multer
+  storage-callback errors on `POST /upload` (missing `sampleID` +
+  file attached, `mkdirSync` throwing, `crypto.randomBytes` throwing),
+  three `existsSync`-false cleanup-skip branches (sample-not-found,
+  invalid-analysis-method, insert-failure cleanup), and an
+  unlink-throws-inside-catch logging path.
+- Isolated coverage: 94.81%/78.4%/100%/94.66% ->
+  **96.69%/82.95%/100%/96.6%**. Remaining gap (`fileType`-null
+  re-check at line 141, upload's own `validation.isValid` guard at
+  line 178) is structurally unreachable — both re-check conditions
+  `fileFilter`/prior code on the same route already guarantee true —
+  matches the repo's documented recurring dead-guard-clause pattern,
+  not a fresh finding, no new issue filed (same precedent as the
+  `mongo.js` session).
 - No bugs found, no product source touched.
-- `COVERAGE_NOTES.md`: added `mongo.js`'s isolated number to the
-  MID-HIGH closed notes (one line, per the file's lean-on-purpose
+- Hit a real testing-mechanics gotcha: a global `vi.spyOn(crypto,
+  'randomBytes')` mock (to force multer's `filename` catch branch)
+  also broke `supertest`'s own multipart boundary generation
+  (`form-data` calls `crypto.randomBytes(12)` client-side). Fixed by
+  scoping the mock to the source-under-test's call signature
+  (`size === 16`) and falling through to the real implementation
+  otherwise. Filed as a durable lesson since it's outside this repo's
+  edit boundary: `dyeallpies-skills-pack#120` (cjs-mocking.md
+  addition, not yet applied — pack-repo session needed).
+- `COVERAGE_NOTES.md`: added `result.routes.js`'s isolated number to
+  the MID-HIGH closed notes (one line, per the file's lean-on-purpose
   rule).
 - Committed test file + coverage notes together, pushed.
 - Ran `wrap-up`'s core audit: no scope violations, no lazy fixes, no
-  permission denials, no user corrections (autonomous session), no new
-  dead code found beyond the already-documented pattern. Nothing to
-  report.
+  permission denials, no user corrections (autonomous session). One
+  friction item (the `crypto.randomBytes`/form-data collision above),
+  filed to the pack repo since the fix belongs in a skill this repo
+  can't edit directly.
 
 ## Repo state
 
 - `feature/docker-e2e-backend-integration`, pushed, working tree clean.
 - Files touched this session:
-  `api/backend/tests/unit/database-mongo.test.js` (+8 tests),
+  `api/backend/tests/integration/result.routes.api.test.js` (+7 tests),
   `api/backend/COVERAGE_NOTES.md`. No product source touched.
 
 ## Milestone (set 2026-07-22 by Dennis, still current)
@@ -60,25 +67,22 @@ first of the three remaining: `mongo.js`, `result.routes.js`,
 (2026-07-24, session 15, pre-session commit `1f6a3956`): Statements
 93.88%, Branches 87.68%, Functions 92.51%, Lines 94.22%. Three of four
 dimensions remain past 90%; branches is still the sole laggard. Not
-re-reconciled since — this session's `mongo.js` slice plus the prior two
-sessions' (`auditRoot.service.js`, `consent.service.js`) should move
-branches further, but the merged number needs a fresh full run to
-confirm. Three sessions since the last reconcile now — due soon.
+re-reconciled since — this session's `result.routes.js` slice plus the
+prior three sessions' (`mongo.js`, `auditRoot.service.js`,
+`consent.service.js`) should move branches further, but the merged
+number needs a fresh full run to confirm. Four sessions since the last
+reconcile now — due soon.
 
 ## Recommended next steps
 
-From the prior session's branch-sort (re-verify against a fresh
-`coverage-summary.json`, it's now been 3 sessions):
-`result.routes.js` (78.40%/19 gap, has `result.api.test.js` +
-`result.routes.api.test.js` — check for split-drift per issue #242's
-caveat before trusting the merged number, same as `mongo.js` this
-session), `NotificationService.js` (76.36%/52 gap — already flagged in
+`NotificationService.js` (76.36%/52 gap — already flagged in
 `COVERAGE_NOTES.md` as accepted-remaining-gap per issue #258,
-re-verify before treating as fresh). `audit-canonicalization.service.js`
-is already GOOD, don't re-pick it (still true as of this session).
+re-verify before treating as fresh) is the last item from the prior
+handoff's candidate list. `audit-canonicalization.service.js` is
+already GOOD, don't re-pick it (still true as of this session).
 
 A full reconcile (see `COVERAGE_NOTES.md`'s header for the regenerate
-command) is probably due next session or the one after — 3 sessions
+command) is probably due next session or the one after — 4 sessions
 since the 2026-07-24 session-15 reconcile.
 
 Issue #275 (`patient.service.js` per-function 0-hit merge artifact),
@@ -91,8 +95,9 @@ The excluded-by-issue list (`SampleGraphValidator.js`,
 `mqtt-telemetry.service.js`, `queue.js`, `eConsent.js`) still applies —
 see `COVERAGE_NOTES.md`'s exclusion note before re-picking these.
 
-`dyeallpies-skills-pack#116` (pack repo) is still a pack-repo
-documentation issue, not a BioAvanceD-v2 blocker.
+`dyeallpies-skills-pack#120` (this session's `crypto.randomBytes`
+gotcha, cjs-mocking.md addition) and `#116` (pack repo) are pack-repo
+documentation issues, not BioAvanceD-v2 blockers.
 
 ## Which skills to use
 
@@ -104,18 +109,23 @@ a candidate turns out to be dead code. `wrap-up` every iteration.
 
 None blocking. `dyeallpies-skills-pack#111`/`#112` (auth.routes.js
 coverage-number-suspect, 3-way-split isolation caveat) still applies
-generally to other suspect files — `result.routes.js` above is the next
-candidate to check for this. `dyeallpies-skills-pack#115`/`#116` are
-pack-repo issues, not BioAvanceD-v2 blockers.
+generally to other suspect files. `dyeallpies-skills-pack#115`/`#116`/`#120`
+are pack-repo issues, not BioAvanceD-v2 blockers.
 
 ## Session note
 
-Reading `coverage/coverage-final.json`'s `branchMap`/`b` and
-`statementMap`/`s` fields directly (after an isolated
-`--coverage.include` run) continues to be the fastest way to enumerate
-exactly which branches/lines are uncovered and at what line — used again
-this session, same payoff as last time. Node's one-liner `-e` eval
-chokes on Windows-style backslash paths in a double-quoted string
+Reading `coverage/coverage-final.json`'s `branchMap`/`b` fields directly
+(after an isolated `--coverage.include` run) continues to be the fastest
+way to enumerate exactly which branches/lines are uncovered and at what
+line/hit-count — used again this session. Node's one-liner `-e` eval
+still chokes on Windows-style backslash paths in a double-quoted string
 ("Invalid Unicode escape sequence") — write the lookup to a small script
-file in the scratchpad instead of an inline `-e` when the coverage JSON
-key is a Windows absolute path.
+file in the scratchpad instead.
+
+New this session: a global `vi.spyOn` on a Node builtin (e.g.
+`crypto.randomBytes`) is visible to the *entire process*, not just the
+source file under test — `supertest`'s multipart client (`form-data`)
+uses several of the same builtins internally. Scope such mocks to the
+specific call signature the source-under-test uses (arg count/type) and
+fall through to the real implementation for everything else. Filed as
+`dyeallpies-skills-pack#120` for `cjs-mocking.md`.
