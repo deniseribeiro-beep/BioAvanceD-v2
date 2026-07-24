@@ -101,8 +101,8 @@ worst branch% first):
 
 ```
 gap  branch% lines%  file
- 17  64.58%  91.5%   src/core/use-cases/AllocateSampleUseCase.js   -- CLOSED this session, see below
- 25  70.23%  91.5%   src/core/use-cases/RegisterSample.js
+ 17  64.58%  91.5%   src/core/use-cases/AllocateSampleUseCase.js   -- CLOSED prior session
+ 25  70.23%  91.5%   src/core/use-cases/RegisterSample.js          -- CLOSED this session, see below
   7  70.83%  98.1%   src/interface/routes/backup.routes.js
   8  72.41%  95.5%   src/infrastructure/middleware/rbac.js
   6  72.72% 100.0%   src/config/collections.js
@@ -115,13 +115,14 @@ gap  branch% lines%  file
  21  80.37% 100.0%   src/controllers/consent.controller.js         -- phantom-branch pattern, not a real gap
 ```
 
-`AllocateSampleUseCase.js` closed this session (see note below) —
-isolated run confirmed the merged 64.58% was a mix of real gap (7
-null-fallback branches: missing `storageLocation`/`barcode`/`actor.userId`,
-default `LINEAGE_MODE` fallback, two `error.message || error` fallbacks
-for non-Error rejections) plus some drift; isolated-before-fix was 75%,
-not the merged 64.58%. Next candidates to try in order:
-`RegisterSample.js`, `backup.routes.js`, `rbac.js`, `collections.js`,
+`RegisterSample.js` closed this session — isolated run matched the merged
+70.23% (no drift); real gaps closed: execute()'s catch-block lineage-vs-raw
+error split, strict-mode full-success path, sampleData/barcode fallback
+chains, `shouldForceStrictMode`'s unset-env default, `buildRiskContext`'s
+riskScore null fallback, `handleLineage`'s message-less rejection reason
+fallback, and `rollbackMongoSample`/`tryObjectId`'s invalid-id and
+message-less-error paths. Isolates to 100%/100%/100%/100%. Next candidates
+to try in order: `backup.routes.js`, `rbac.js`, `collections.js`,
 `ReleaseSampleUseCase.js`, `auth.service.js`, `security.routes.js`,
 `NotificationService.js` — none of these appear on the excluded list
 above; re-check isolated coverage before committing to one (issue #242

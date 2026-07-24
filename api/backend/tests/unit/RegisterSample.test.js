@@ -99,6 +99,24 @@ describe('RegisterSample', () => {
       const useCase = new RegisterSample({ db });
       expect(useCase.shouldForceStrictMode({ riskScore: 6.9 })).toBe(false);
     });
+
+    it('defaults to fail-open (permissive) when env.LINEAGE_MODE is unset', () => {
+      env.LINEAGE_MODE = undefined;
+      const useCase = new RegisterSample({ db });
+      expect(useCase.shouldForceStrictMode({})).toBe(false);
+    });
+  });
+
+  describe('buildRiskContext', () => {
+    it('reports riskScore as null when sampleData has no finite riskScore', () => {
+      const useCase = new RegisterSample({ db });
+      expect(useCase.buildRiskContext({}, false).riskScore).toBeNull();
+    });
+
+    it('reports the numeric riskScore when sampleData has one', () => {
+      const useCase = new RegisterSample({ db });
+      expect(useCase.buildRiskContext({ riskScore: '8' }, true).riskScore).toBe(8);
+    });
   });
 
   describe('assertConsent', () => {
@@ -193,6 +211,79 @@ describe('RegisterSample', () => {
         'Banco de dados indisponível para registro de amostra'
       );
     });
+
+    it('succeeds end-to-end in strict mode and reports lineageMode "strict"', async () => {
+      env.LINEAGE_MODE = 'fail-closed';
+      const consentsCollection = makeConsentsCollection({ _id: 'c1', status: 'ACTIVE' });
+      const consentsDb = makeDb({ patientConsents: consentsCollection });
+      const createdSample = { _id: new ObjectId() };
+      vi.spyOn(sampleService, 'createSample').mockResolvedValue(createdSample);
+
+      const lineageRepository = {
+        validateBeforePersistence: vi.fn().mockResolvedValue(undefined),
+        recordCustodyEvent: vi.fn().mockResolvedValue(undefined)
+      };
+
+      const useCase = new RegisterSample({ db: consentsDb, lineageRepository });
+      const result = await useCase.execute({ sampleData: { participantId: 'P1', barcode: 'BC-X' } });
+
+      expect(result.lineageMode).toBe('strict');
+    });
+
+    it('falls back to an empty sampleData object when the command has none', async () => {
+      env.LINEAGE_MODE = 'fail-open';
+      const createdSample = { _id: new ObjectId(), barcode: 'BC-EMPTY' };
+      vi.spyOn(sampleService, 'createSample').mockResolvedValue(createdSample);
+
+      const lineageRepository = {
+        validateBeforePersistence: vi.fn().mockResolvedValue(undefined),
+        recordCustodyEvent: vi.fn().mockResolvedValue(undefined)
+      };
+
+      const useCase = new RegisterSample({ db, lineageRepository });
+
+      const result = await useCase.execute({});
+
+      expect(result.lineageMode).toBe('permissive');
+    });
+
+    it('falls back to sampleData.barcode when createdSample has no barcode of its own', async () => {
+      env.LINEAGE_MODE = 'fail-open';
+      const createdSample = { _id: new ObjectId() };
+      vi.spyOn(sampleService, 'createSample').mockResolvedValue(createdSample);
+
+      const lineageRepository = {
+        validateBeforePersistence: vi.fn().mockResolvedValue(undefined),
+        recordCustodyEvent: vi.fn().mockResolvedValue(undefined)
+      };
+
+      const useCase = new RegisterSample({ db, lineageRepository });
+
+      await useCase.execute({ sampleData: { barcode: 'BC-FALLBACK' } });
+
+      expect(lineageRepository.validateBeforePersistence).toHaveBeenCalledWith(
+        expect.objectContaining({ barcode: 'BC-FALLBACK' })
+      );
+    });
+
+    it('falls back to null barcode when neither createdSample nor sampleData has one', async () => {
+      env.LINEAGE_MODE = 'fail-open';
+      const createdSample = { _id: new ObjectId() };
+      vi.spyOn(sampleService, 'createSample').mockResolvedValue(createdSample);
+
+      const lineageRepository = {
+        validateBeforePersistence: vi.fn().mockResolvedValue(undefined),
+        recordCustodyEvent: vi.fn().mockResolvedValue(undefined)
+      };
+
+      const useCase = new RegisterSample({ db, lineageRepository });
+
+      await useCase.execute({ sampleData: {} });
+
+      expect(lineageRepository.validateBeforePersistence).toHaveBeenCalledWith(
+        expect.objectContaining({ barcode: null })
+      );
+    });
   });
 
   describe('handleLineage', () => {
@@ -258,6 +349,22 @@ describe('RegisterSample', () => {
       expect(quarantineQueue.enqueue).toHaveBeenCalledWith(
         expect.objectContaining({ specimenId: '1' }),
         expect.objectContaining({ reason: 'neo4j down' })
+      );
+    });
+
+    it('falls back to a default quarantine reason when the rejection has no message', async () => {
+      const lineageRepository = {
+        validateBeforePersistence: vi.fn().mockRejectedValue({ code: 'ECONNRESET' }),
+        recordCustodyEvent: vi.fn()
+      };
+      const quarantineQueue = { enqueue: vi.fn().mockResolvedValue(undefined) };
+      const useCase = new RegisterSample({ db, lineageRepository, quarantineQueue });
+
+      await expect(useCase.handleLineage({ specimenId: '1' }, false)).resolves.toBeUndefined();
+
+      expect(quarantineQueue.enqueue).toHaveBeenCalledWith(
+        expect.objectContaining({ specimenId: '1' }),
+        expect.objectContaining({ reason: 'neo4j_validation_failed' })
       );
     });
   });
@@ -331,6 +438,104 @@ describe('RegisterSample', () => {
       expect(samplesCollection.deleteOne).toHaveBeenCalledWith(
         expect.objectContaining({ _id: expect.any(ObjectId) })
       );
+    });
+
+    it('re-throws the raw error in strict mode when it is not a lineage error and no sample was created', async () => {
+      env.LINEAGE_MODE = 'fail-closed';
+      const consentsCollection = makeConsentsCollection({ _id: 'c1', status: 'ACTIVE' });
+      const consentsDb = makeDb({ patientConsents: consentsCollection });
+      const rawError = new Error('unrelated db write conflict');
+      vi.spyOn(sampleService, 'createSample').mockRejectedValue(rawError);
+
+      const useCase = new RegisterSample({ db: consentsDb });
+
+      await expect(useCase.execute({ sampleData: { participantId: 'P1' } })).rejects.toThrow(
+        'unrelated db write conflict'
+      );
+    });
+
+    it('wraps a lineage-flavored error thrown before handleLineage as RegisterSampleForbiddenError in strict mode', async () => {
+      env.LINEAGE_MODE = 'fail-closed';
+      const consentsCollection = makeConsentsCollection({ _id: 'c1', status: 'ACTIVE' });
+      const consentsDb = makeDb({ patientConsents: consentsCollection });
+      const lineageError = new Error('neo4j connection refused');
+      vi.spyOn(sampleService, 'createSample').mockRejectedValue(lineageError);
+
+      const useCase = new RegisterSample({ db: consentsDb });
+
+      await expect(useCase.execute({ sampleData: { participantId: 'P1' } })).rejects.toThrow(
+        RegisterSampleForbiddenError
+      );
+    });
+
+    it('logs and swallows an error from the rollback deleteOne call itself', async () => {
+      env.LINEAGE_MODE = 'fail-closed';
+      const sampleId = new ObjectId();
+      const createdSample = { _id: sampleId, barcode: 'BC-5' };
+      vi.spyOn(sampleService, 'createSample').mockResolvedValue(createdSample);
+
+      const consentsCollection = makeConsentsCollection({ _id: 'c1', status: 'ACTIVE' });
+      const samplesCollection = {
+        deleteOne: vi.fn().mockRejectedValue(new Error('delete failed'))
+      };
+      const rollbackDb = makeDb({ patientConsents: consentsCollection, samples: samplesCollection });
+
+      const useCase = new RegisterSample({ db: rollbackDb });
+
+      await expect(
+        useCase.execute({ sampleData: { barcode: 'BC-5', participantId: 'P1' }, options: {} })
+      ).rejects.toThrow(RegisterSampleForbiddenError);
+
+      expect(samplesCollection.deleteOne).toHaveBeenCalled();
+    });
+
+    it('logs the swallowed rollback error verbatim when it has no message', async () => {
+      const samplesCollection = { deleteOne: vi.fn().mockRejectedValue('plain string failure') };
+      const rollbackDb = makeDb({ samples: samplesCollection });
+      const useCase = new RegisterSample({ db: rollbackDb });
+
+      await expect(useCase.rollbackMongoSample(String(new ObjectId()))).resolves.toBeUndefined();
+      expect(samplesCollection.deleteOne).toHaveBeenCalled();
+    });
+
+    it('rolls back using the raw specimenId as filter when it is not a valid ObjectId', async () => {
+      const samplesCollection = { deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }) };
+      const rollbackDb = makeDb({ samples: samplesCollection });
+      const useCase = new RegisterSample({ db: rollbackDb });
+
+      await useCase.rollbackMongoSample('not-a-valid-object-id');
+
+      expect(samplesCollection.deleteOne).toHaveBeenCalledWith({ _id: 'not-a-valid-object-id' });
+    });
+  });
+
+  describe('tryObjectId', () => {
+    it('returns null when ObjectId construction throws despite isValid reporting true', () => {
+      const useCase = new RegisterSample({ db });
+      const isValidSpy = vi.spyOn(ObjectId, 'isValid').mockReturnValue(true);
+
+      expect(useCase.tryObjectId('not-actually-a-valid-hex-id')).toBeNull();
+
+      isValidSpy.mockRestore();
+    });
+  });
+
+  describe('isLineageError', () => {
+    const useCase = new RegisterSample({ db: {} });
+
+    it.each([
+      ['neo4j timeout', true],
+      ['lineage repository unavailable', true],
+      ['consentimento inválido', true],
+      ['falha topológica', true],
+      ['falha topologica', true],
+      ['generic unrelated failure', false]
+    ])('classifies "%s" as lineage error = %s', (message, expected) => {
+      expect(useCase.isLineageError(new Error(message))).toBe(expected);
+    });
+
+    it('treats a missing error/message as not a lineage error', () => {
+      expect(useCase.isLineageError(undefined)).toBe(false);
     });
   });
 });
