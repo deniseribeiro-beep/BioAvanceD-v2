@@ -4,6 +4,7 @@ const auditController = require('../../src/controllers/audit.controller');
 const integrityService = require('../../src/services/integrityCheckService');
 const auditRootService = require('../../src/services/auditRoot.service');
 const hl7AuditService = require('../../src/services/hl7Audit.service');
+const logger = require('../../src/utils/logger');
 
 function buildRes() {
   const res = {};
@@ -50,6 +51,17 @@ describe('audit.controller.getMerkleRoot', () => {
     expect(res.status).toHaveBeenCalledWith(500);
     expect(res.json).toHaveBeenCalledWith({ success: false, error: 'db down' });
   });
+
+  it('logs the raw thrown value when it has no .message (falsy-message fallback)', async () => {
+    vi.spyOn(integrityService, 'buildMerkleForDate').mockRejectedValue('plain string failure');
+    vi.spyOn(logger, 'error');
+    const req = { params: { date: '2026-07-04' }, app: { locals: { db: {} } } };
+    const res = buildRes();
+
+    await auditController.getMerkleRoot(req, res);
+
+    expect(logger.error).toHaveBeenCalledWith('Erro ao obter Merkle Root:', 'plain string failure');
+  });
 });
 
 describe('audit.controller.verifyAudit', () => {
@@ -76,6 +88,138 @@ describe('audit.controller.verifyAudit', () => {
     };
     return { collection: vi.fn((name) => collections[name]) };
   }
+
+  it('returns 503 when db is unavailable', async () => {
+    const req = { body: { eventId: 'evt-1' }, app: { locals: { db: null } } };
+    const res = buildRes();
+
+    await auditController.verifyAudit(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(503);
+    expect(res.json).toHaveBeenCalledWith({ success: false, error: 'Banco de dados não disponível' });
+  });
+
+  it('returns 400 for the retired contract when only date is sent (right-hand OR branch)', async () => {
+    const req = { body: { eventId: 'evt-1', date: '2026-07-04' } };
+    const res = buildRes();
+
+    await auditController.verifyAudit(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json).toHaveBeenCalledWith({
+      success: false,
+      error: 'Contrato inválido: envie apenas eventId e, opcionalmente, treeHeadId.',
+    });
+  });
+
+  it('returns 404 when the tree head is not found', async () => {
+    const event = { eventId: 'evt-1', logId: 'log-1', treeSize: 1, sequenceNumber: 0, canonicalLeaf: {} };
+    const db = buildDb({ event, treeHead: null, leaves: [event] });
+    const req = { body: { eventId: 'evt-1' }, app: { locals: { db } } };
+    const res = buildRes();
+
+    await auditController.verifyAudit(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(res.json).toHaveBeenCalledWith({ success: false, error: 'Tree head oficial não encontrado.' });
+  });
+
+  it('looks up the tree head by treeHeadId when one is supplied', async () => {
+    const event = { eventId: 'evt-1', logId: 'log-1', treeSize: 1, sequenceNumber: 0, canonicalLeaf: {} };
+    const db = buildDb({ event, treeHead: null, leaves: [event] });
+    db.collection('audit_tree_heads').findOne.mockResolvedValueOnce(null);
+    const req = { body: { eventId: 'evt-1', treeHeadId: 'th-explicit' }, app: { locals: { db } } };
+    const res = buildRes();
+
+    await auditController.verifyAudit(req, res);
+
+    expect(db.collection('audit_tree_heads').findOne).toHaveBeenCalledWith({ _id: 'th-explicit' });
+    expect(res.status).toHaveBeenCalledWith(404);
+  });
+
+  it('falls back to an empty inclusion proof when the event has none, and to null for a missing prior tree head root', async () => {
+    const auditTreeService = require('../../src/services/audit-tree.service');
+    const signingProvider = require('../../src/services/audit-signing.provider');
+    vi.spyOn(auditTreeService, 'verifyInclusion').mockReturnValue(false);
+    vi.spyOn(auditTreeService, 'verifyConsistency').mockReturnValue(false);
+    vi.spyOn(signingProvider, 'verify').mockReturnValue({ ok: true });
+
+    const event = {
+      eventId: 'evt-3', logId: 'log-3', treeSize: 2, sequenceNumber: 1,
+      eventHash: 'h', payloadDigest: 'd', canonicalLeaf: { eventHash: 'h' },
+      // no inclusionProof field
+    };
+    const treeHead = {
+      _id: 'th-3', logId: 'log-3', treeSize: 2, rootHash: 'root-3', signature: 'sig', keyId: 'key-3',
+      schemaVersion: 1, previousTreeHeadHash: null, periodStart: null, periodEnd: null,
+      createdAt: '2026-07-04T00:00:00.000Z', hashAlgorithm: 'sha256', merkleAlgorithm: 'sha256', signatureAlgorithm: 'ed25519', status: 'ANCHORED',
+    };
+    const token = { token: 'tk-3' };
+    const witnessRecord = { receiptEnvelope: 're-3' };
+    const db = buildDb({ event, treeHead, olderTreeHead: null, token, witnessRecord, leaves: [event] });
+    const req = { body: { eventId: 'evt-3' }, app: { locals: { db } } };
+    const res = buildRes();
+
+    await auditController.verifyAudit(req, res);
+
+    expect(auditTreeService.verifyInclusion).toHaveBeenCalledWith(event.canonicalLeaf, [], treeHead.rootHash);
+    const payload = res.json.mock.calls[0][0];
+    expect(payload.data.consistencyValid).toBe(false);
+  });
+
+  it('reports PARTIALLY_ANCHORED when a timestamp token exists but no witness record does', async () => {
+    const auditTreeService = require('../../src/services/audit-tree.service');
+    const signingProvider = require('../../src/services/audit-signing.provider');
+    vi.spyOn(auditTreeService, 'verifyInclusion').mockReturnValue(true);
+    vi.spyOn(auditTreeService, 'verifyConsistency').mockReturnValue(true);
+    vi.spyOn(signingProvider, 'verify').mockReturnValue({ ok: true });
+
+    const event = {
+      eventId: 'evt-4', logId: 'log-4', treeSize: 1, sequenceNumber: 0,
+      eventHash: 'h', payloadDigest: 'd', canonicalLeaf: { eventHash: 'h' }, inclusionProof: [],
+    };
+    const treeHead = {
+      _id: 'th-4', logId: 'log-4', treeSize: 1, rootHash: 'root-4', signature: 'sig', keyId: 'key-4',
+      schemaVersion: 1, previousTreeHeadHash: null, periodStart: null, periodEnd: null,
+      createdAt: '2026-07-04T00:00:00.000Z', hashAlgorithm: 'sha256', merkleAlgorithm: 'sha256', signatureAlgorithm: 'ed25519', status: 'ANCHORED',
+    };
+    const token = { tokenDerHex: 'der-hex', status: 'TIMESTAMPED' };
+    const db = buildDb({ event, treeHead, token, witnessRecord: null, leaves: [event] });
+    const req = { body: { eventId: 'evt-4' }, app: { locals: { db } } };
+    const res = buildRes();
+
+    await auditController.verifyAudit(req, res);
+
+    const payload = res.json.mock.calls[0][0];
+    expect(payload.data.overallStatus).toBe('PARTIALLY_ANCHORED');
+    expect(payload.data.timestampValid).toBe(true);
+    expect(payload.data.externalWitnessValid).toBe(false);
+    expect(payload.data.failures).toEqual(['witness']);
+  });
+
+  it('returns 400 with a generic message when the thrown error has no .message', async () => {
+    const db = buildDb({});
+    db.collection = vi.fn(() => { throw 'boom-no-message'; });
+    const req = { body: { eventId: 'evt-5' }, app: { locals: { db } } };
+    const res = buildRes();
+
+    await auditController.verifyAudit(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json).toHaveBeenCalledWith({ success: false, error: 'Erro ao verificar prova' });
+  });
+
+  it('returns 400 with the thrown error message when one is present', async () => {
+    const db = buildDb({});
+    db.collection = vi.fn(() => { throw new Error('collection blew up'); });
+    const req = { body: { eventId: 'evt-6' }, app: { locals: { db } } };
+    const res = buildRes();
+
+    await auditController.verifyAudit(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json).toHaveBeenCalledWith({ success: false, error: 'collection blew up' });
+  });
 
   it('returns 400 when the request carries the retired hash/proof/root/date contract', async () => {
     const req = { body: { eventId: 'evt-1', hash: 'h', proof: [], root: 'r' } };
@@ -261,6 +405,38 @@ describe('audit.controller.report', () => {
     expect(res.status).toHaveBeenCalledWith(500);
     expect(res.json).toHaveBeenCalledWith({ success: false, error: 'mongo error' });
   });
+
+  it('nulls out recalculatedRoot and leafCount when the Merkle rebuild returns nothing', async () => {
+    vi.spyOn(auditRootService, 'getRootByDate').mockResolvedValue({ root: 'saved-root', previousRootHash: null });
+    vi.spyOn(integrityService, 'buildMerkleForDate').mockResolvedValue(null);
+    const req = { params: { date: '2026-07-04' }, query: {}, app: { locals: { db: {} } } };
+    const res = buildRes();
+
+    await auditController.report(req, res);
+
+    expect(res.json).toHaveBeenCalledWith({
+      success: true,
+      data: {
+        savedRoot: 'saved-root',
+        recalculatedRoot: null,
+        proof: null,
+        leafCount: 0,
+        previousRootHash: null,
+        tampered: null,
+      },
+    });
+  });
+
+  it('logs the raw thrown value when it has no .message (falsy-message fallback)', async () => {
+    vi.spyOn(auditRootService, 'getRootByDate').mockRejectedValue('plain string failure');
+    vi.spyOn(logger, 'error');
+    const req = { params: { date: '2026-07-04' }, query: {}, app: { locals: { db: {} } } };
+    const res = buildRes();
+
+    await auditController.report(req, res);
+
+    expect(logger.error).toHaveBeenCalledWith('Erro ao gerar relatório:', 'plain string failure');
+  });
 });
 
 describe('audit.controller.compare', () => {
@@ -326,6 +502,31 @@ describe('audit.controller.compare', () => {
 
     expect(res.status).toHaveBeenCalledWith(500);
   });
+
+  it('nulls out root_current when the Merkle rebuild returns nothing', async () => {
+    vi.spyOn(auditRootService, 'getRootByDate').mockResolvedValue({ root: 'saved-root' });
+    vi.spyOn(integrityService, 'buildMerkleForDate').mockResolvedValue(null);
+    const req = { params: { date: '2026-07-04' }, app: { locals: { db: {} } } };
+    const res = buildRes();
+
+    await auditController.compare(req, res);
+
+    expect(res.json).toHaveBeenCalledWith({
+      success: true,
+      data: { tampered: null, root_saved: 'saved-root', root_current: null, diff: ['no_diff'] },
+    });
+  });
+
+  it('logs the raw thrown value when it has no .message (falsy-message fallback)', async () => {
+    vi.spyOn(auditRootService, 'getRootByDate').mockRejectedValue('plain string failure');
+    vi.spyOn(logger, 'error');
+    const req = { params: { date: '2026-07-04' }, app: { locals: { db: {} } } };
+    const res = buildRes();
+
+    await auditController.compare(req, res);
+
+    expect(logger.error).toHaveBeenCalledWith('Erro ao comparar roots:', 'plain string failure');
+  });
 });
 
 describe('audit.controller.hl7Report', () => {
@@ -358,6 +559,17 @@ describe('audit.controller.hl7Report', () => {
     await auditController.hl7Report(req, res);
 
     expect(res.status).toHaveBeenCalledWith(500);
+  });
+
+  it('logs the raw thrown value when it has no .message (falsy-message fallback)', async () => {
+    vi.spyOn(hl7AuditService, 'buildHL7MerkleForDate').mockRejectedValue('plain string failure');
+    vi.spyOn(logger, 'error');
+    const req = { params: { date: '2026-07-04' }, app: { locals: { db: {} } } };
+    const res = buildRes();
+
+    await auditController.hl7Report(req, res);
+
+    expect(logger.error).toHaveBeenCalledWith('Erro ao gerar relatório HL7:', 'plain string failure');
   });
 });
 
@@ -398,6 +610,17 @@ describe('audit.controller.dashboardDates', () => {
     await auditController.dashboardDates(req, res);
 
     expect(res.status).toHaveBeenCalledWith(500);
+  });
+
+  it('logs the raw thrown value when it has no .message (falsy-message fallback)', async () => {
+    vi.spyOn(auditRootService, 'getChain').mockRejectedValue('plain string failure');
+    vi.spyOn(logger, 'error');
+    const req = { app: { locals: { db: {} } } };
+    const res = buildRes();
+
+    await auditController.dashboardDates(req, res);
+
+    expect(logger.error).toHaveBeenCalledWith('Erro ao listar datas do dashboard:', 'plain string failure');
   });
 });
 
@@ -442,6 +665,20 @@ describe('audit.controller.dashboardStats', () => {
 
     expect(res.status).toHaveBeenCalledWith(500);
   });
+
+  it('logs the raw thrown value when it has no .message (falsy-message fallback)', async () => {
+    vi.spyOn(integrityService, 'buildMerkleForDate').mockRejectedValue('plain string failure');
+    vi.spyOn(logger, 'error');
+    const req = {
+      params: { date: '2026-07-04' },
+      app: { locals: { db: { collection: vi.fn() } } },
+    };
+    const res = buildRes();
+
+    await auditController.dashboardStats(req, res);
+
+    expect(logger.error).toHaveBeenCalledWith('Erro ao obter estatísticas do dashboard:', 'plain string failure');
+  });
 });
 
 describe('audit.controller.dashboardRoots', () => {
@@ -473,5 +710,16 @@ describe('audit.controller.dashboardRoots', () => {
     await auditController.dashboardRoots(req, res);
 
     expect(res.status).toHaveBeenCalledWith(500);
+  });
+
+  it('logs the raw thrown value when it has no .message (falsy-message fallback)', async () => {
+    vi.spyOn(auditRootService, 'getChain').mockRejectedValue('plain string failure');
+    vi.spyOn(logger, 'error');
+    const req = { app: { locals: { db: {} } } };
+    const res = buildRes();
+
+    await auditController.dashboardRoots(req, res);
+
+    expect(logger.error).toHaveBeenCalledWith('Erro ao listar roots do dashboard:', 'plain string failure');
   });
 });
