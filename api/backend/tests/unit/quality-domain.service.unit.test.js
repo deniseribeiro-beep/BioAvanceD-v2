@@ -3,10 +3,16 @@ const {
   QUALITY_RULE_VERSION,
   buildPenaltyLog,
   buildSprecCode,
+  calculateMethodologyQualityFromSprec,
   evaluateQuality,
   resolveMethodologicalQuality,
   validateQualityForRelease,
 } = require('../../src/services/quality-domain.service');
+
+const validFluidSprec = {
+  sampleType: 'BLD', primaryContainer: 'SST', preCentrifugation: 'A',
+  centrifugation: 'A', secondCentrifugation: 'A', postCentrifugationDelay: 'A', longTermStorage: 'C',
+};
 
 describe('QUALITY_RULE_VERSION', () => {
   it('is a non-empty string', () => {
@@ -76,6 +82,11 @@ describe('buildSprecCode', () => {
     expect(code).toContain('B');
     expect(code).toContain('L');
   });
+
+  it('falls back to X for a whitespace-only part that trims to empty', () => {
+    const code = buildSprecCode({ sampleType: '   ' });
+    expect(code.split('-')[0]).toBe('X');
+  });
 });
 
 describe('evaluateQuality', () => {
@@ -102,6 +113,23 @@ describe('resolveMethodologicalQuality', () => {
   });
 });
 
+describe('calculateMethodologyQualityFromSprec', () => {
+  it('merges sprec into a valid context object', () => {
+    const result = calculateMethodologyQualityFromSprec(validFluidSprec, { matrixType: 'fluid' });
+    expect(result.matrix_type).toBe('fluid');
+  });
+
+  it('normalizes a null context to an empty object instead of throwing', () => {
+    const result = calculateMethodologyQualityFromSprec(validFluidSprec, null);
+    expect(result.matrix_type).toBe('solid');
+  });
+
+  it('normalizes an array context to an empty object instead of spreading array indices', () => {
+    const result = calculateMethodologyQualityFromSprec(validFluidSprec, []);
+    expect(result.matrix_type).toBe('solid');
+  });
+});
+
 describe('validateQualityForRelease', () => {
   it('returns an object with valid, reason, and assessment', () => {
     const result = validateQualityForRelease({});
@@ -113,5 +141,12 @@ describe('validateQualityForRelease', () => {
 
   it('handles null input gracefully', () => {
     expect(() => validateQualityForRelease(null)).not.toThrow();
+  });
+
+  it('returns valid: true with an approved reason when governance passes with grade A-D', () => {
+    const result = validateQualityForRelease({ matrixType: 'fluid', sprec: validFluidSprec });
+    expect(result.valid).toBe(true);
+    expect(result.reason).toContain('aprovado');
+    expect(result.assessment.final_grade).toBe('A');
   });
 });

@@ -42,16 +42,16 @@ stale as slices land and as source files change. Keep it honest:
 
 ## Last full reconcile
 
-**2026-07-24 (session 15)**, snapshot from `feature/docker-e2e-backend-integration`
-(pre-session commit `1f6a3956`, full suite, 1 pre-existing failure / 295
+**2026-07-24 (session 16)**, snapshot from `feature/docker-e2e-backend-integration`
+(pre-session commit `a636b37a`, full suite, 1 pre-existing failure / 295
 test files passed — see "Known pre-existing failures" in the
 testing-conventions skill).
 
-Statements **93.88%** (17490/18630), Branches **87.68%** (14567/16613),
-Functions **92.51%** (2088/2257), Lines **94.22%** (16799/17829).
+Statements **94.01%** (17515/18630), Branches **88.2%** (14654/16613),
+Functions **92.33%** (2084/2257), Lines **94.29%** (16812/17829).
 **Three of four dimensions (statements/functions/lines) remain past the
 90% milestone** (`bioavanced-v2-conventions`); branches is still the
-sole laggard, up from 87.08% at the prior reconcile.
+sole laggard, up from 87.68% at the prior reconcile.
 
 Known pre-existing failure: 1 test in `sample-graph-validator.service.test.js`
 ("valida o nó de Integridade com sucesso e falha por tampering") — not
@@ -243,6 +243,17 @@ Remaining gap (fileType-null re-check, upload's own `validation.isValid`
 guard) is unreachable — both are redundant re-checks of conditions
 already guaranteed true by `fileFilter`/prior validation on the same
 route — same dead-guard-clause pattern noted below, not chased further.
+
+`NotificationService.js` re-verified (`NotificationService.test.js` +
+`tests/unit/services/NotificationService.test.js`, `--coverage.include`):
+isolated matches merged exactly at 76.36%/220 branches, no drift.
+Remaining gap is the phantom-branch pattern (implicit-else guard clauses)
+plus the two infra-mocking paths already tracked in issue #258 — no new
+tests addable, closed as-is.
+
+`quality-domain.service.js` isolated (`quality-domain.service.unit.test.js`,
+`--coverage.include`): was 91.3%/73.68% stmts/branch, now
+**100%/100%/100%/100%**.
 
 Note: `sample.service.js`, `import.service.js`, `audit.controller.js`,
 `audit-canonicalization.service.js`, `equipment.routes.js`, `User.js`
