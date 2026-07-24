@@ -242,9 +242,13 @@ src/workers/workers/result-worker.js             76.66 / 66.07   (issue #146/#16
 src/services/SampleGraphValidator.js             77.69 / 66.66   (issue #222 — legacy-schema migration, design fork)
 src/workers/neo4jProjection.worker.js            79.62 / 73.33   (CLI entry block not coverable in-process, accepted gap)
 src/interface/routes/equipment.routes.js         81.59 / 81.01   (phantom-statement pattern, not a real gap — see reconcile note above)
-src/models/User.js                               83.67 / 78.94   (not re-checked this session — check for phantom pattern before treating as a real gap)
 src/services/patient.service.js                  83.89 / 74.56   (issues #240/#241 — remaining gap is deep error-path combos, optional)
 ```
+
+`User.js` checked and closed: 78.94% merged branches was drift (issue
+#242 class); isolated run was 97.89%, gap was two real untested cases
+(weak-password catch branch, phone/institution-undefined branch) — both
+now covered, isolates to 100%/100%/100%/100%.
 
 Note: `sample.service.js`, `import.service.js`, `audit.controller.js`,
 `audit-canonicalization.service.js`, `equipment.routes.js`, `User.js`

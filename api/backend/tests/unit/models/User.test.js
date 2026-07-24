@@ -100,6 +100,14 @@ describe('UserModel - Unit Tests', () => {
       expect(result.errors.some(e => e.includes('password'))).toBe(false);
     });
 
+    it('deve rejeitar quando password fornecida não atende aos requisitos de força', () => {
+      validUserData.password = 'fraca';
+      const result = UserModel.validate(validUserData);
+
+      expect(result.isValid).toBe(false);
+      expect(result.errors.some(e => e.startsWith('password: '))).toBe(true);
+    });
+
     it('deve rejeitar quando password obrigatório e ausente em novo usuário', () => {
       delete validUserData.password;
       delete validUserData._id; // Novo usuário
@@ -131,6 +139,16 @@ describe('UserModel - Unit Tests', () => {
 
       expect(result.isValid).toBe(true);
       expect(validUserData.phone).toBeNull(); // Normalizado para null
+    });
+
+    it('deve aceitar ausência de phone e institution (campos opcionais)', () => {
+      delete validUserData.phone;
+      delete validUserData.institution;
+      const result = UserModel.validate(validUserData);
+
+      expect(result.isValid).toBe(true);
+      expect(validUserData.phone).toBeUndefined();
+      expect(validUserData.institution).toBeUndefined();
     });
 
     it('deve aceitar institution vazia (campo opcional)', () => {
