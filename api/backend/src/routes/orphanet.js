@@ -135,7 +135,7 @@ function dedupeRecords(records = [], limit = 20) {
   const map = new Map();
   for (const record of records) {
     if (!record) continue;
-    const normalized = normalizeDiseaseRecord(record, record?.source || 'local');
+    const normalized = normalizeDiseaseRecord(record, record.source);
     if (!normalized) continue;
 
     const key = getOrphaNumeric(normalized.orphaCode);
@@ -229,11 +229,11 @@ async function searchLocal(db, search, lang, limit) {
   };
   const requestedLang = normalizeText(lang).toLowerCase();
   let orphanetDocs = await db.collection(COLLECTION)
-    .find(requestedLang ? { ...orphanetFilter, $or: orphanetFilter.$or, lang: { $in: [requestedLang, '', null] } } : orphanetFilter)
+    .find({ ...orphanetFilter, $or: orphanetFilter.$or, lang: { $in: [requestedLang, '', null] } })
     .limit(limit)
     .toArray();
 
-  if (requestedLang && orphanetDocs.length === 0) {
+  if (orphanetDocs.length === 0) {
     orphanetDocs = await db.collection(COLLECTION)
       .find(orphanetFilter)
       .limit(limit)
