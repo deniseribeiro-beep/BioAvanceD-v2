@@ -102,9 +102,7 @@ worst branch% first):
 ```
 gap  branch% lines%  file
  17  64.58%  91.5%   src/core/use-cases/AllocateSampleUseCase.js   -- CLOSED prior session
- 25  70.23%  91.5%   src/core/use-cases/RegisterSample.js          -- CLOSED this session, see below
-  7  70.83%  98.1%   src/interface/routes/backup.routes.js
-  8  72.41%  95.5%   src/infrastructure/middleware/rbac.js
+ 25  70.23%  91.5%   src/core/use-cases/RegisterSample.js          -- CLOSED prior session
   6  72.72% 100.0%   src/config/collections.js
  42  72.90%  89.9%   src/interface/routes/auth.routes.js          -- partial, coverage number suspect (dyeallpies-skills-pack#111)
  10  72.97%  91.7%   src/core/use-cases/ReleaseSampleUseCase.js
@@ -115,18 +113,29 @@ gap  branch% lines%  file
  21  80.37% 100.0%   src/controllers/consent.controller.js         -- phantom-branch pattern, not a real gap
 ```
 
-`RegisterSample.js` closed this session — isolated run matched the merged
-70.23% (no drift); real gaps closed: execute()'s catch-block lineage-vs-raw
-error split, strict-mode full-success path, sampleData/barcode fallback
-chains, `shouldForceStrictMode`'s unset-env default, `buildRiskContext`'s
-riskScore null fallback, `handleLineage`'s message-less rejection reason
-fallback, and `rollbackMongoSample`/`tryObjectId`'s invalid-id and
-message-less-error paths. Isolates to 100%/100%/100%/100%. Next candidates
-to try in order: `backup.routes.js`, `rbac.js`, `collections.js`,
+`backup.routes.js` closed this session — isolated run matched the merged
+70.83% (no drift); real gaps closed: `/perform`'s default-message fallback
+when `result.error` is falsy, `/restore/:fileName`'s empty-basename guard
+(hit via a `%2F`-encoded param), `/restore`'s default-message fallback
+when `restoreBackup` resolves failure without an `error` field, and the
+`error.message || String(error)` fallback for a non-`Error` rejection.
+Isolates to 91.66% branches / 100% lines — remaining 2 branches
+(`getDirSizeSync`'s `!fs.existsSync` guard on an already-`readdir`'d
+entry, and the `req.params.fileName || ''` fallback which Express never
+leaves undefined) are the documented unreachable-guard pattern, not a
+real gap. Next candidates to try in order: `rbac.js`, `collections.js`,
 `ReleaseSampleUseCase.js`, `auth.service.js`, `security.routes.js`,
 `NotificationService.js` — none of these appear on the excluded list
 above; re-check isolated coverage before committing to one (issue #242
 drift class still applies generally).
+
+`rbac.js` closed this session — isolated run matched the merged 72.41%
+(no drift); real gaps closed: `resolveUserRole`'s `user.role` fallback
+and empty-string default paths, the unmapped-`roleName`-defaults-to-1
+path, `requireRole`'s non-admin 403 branch (`allowedRoles` excludes
+`userRole`), `requirePermission`'s 401-no-user path, and the
+audit-log `setImmediate` branch (both with and without `req.app.locals.db`
+present). Isolates to 100%/100%/100%/100%.
 
 Files closed out of Phase 1/2 since the list was last regenerated
 (2026-07-23 through 2026-07-24, sessions 4-13): `import-lgpd.service.js`

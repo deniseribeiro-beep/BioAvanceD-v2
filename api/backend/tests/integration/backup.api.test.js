@@ -77,6 +77,17 @@ describe('POST /api/backup/perform', () => {
     expect(res.status).toBe(500);
     expect(res.body.success).toBe(false);
   });
+
+  it('falls back to a default error message when backup fails without an error field', async () => {
+    vi.spyOn(backupService, 'runBackup').mockResolvedValue({ success: false });
+
+    const res = await request(app)
+      .post('/api/backup/perform')
+      .set('Authorization', `Bearer ${makeToken(4)}`);
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('Não foi possível executar backup');
+  });
 });
 
 describe('GET /api/backup/list', () => {
@@ -170,6 +181,16 @@ describe('POST /api/backup/restore/:fileName', () => {
     expect(res.status).toBe(404);
   });
 
+  it('returns 400 fileName inválido when the param reduces to an empty basename', async () => {
+    const res = await request(app)
+      .post('/api/backup/restore/%2F')
+      .set('Authorization', `Bearer ${makeToken(4)}`);
+
+    // '%2F' decodes to '/', whose basename() is '' — hits the fileName-empty guard
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('fileName inválido');
+  });
+
   it('strips path segments from a traversal-style fileName (basename sanitization)', async () => {
     vi.spyOn(backupService, 'getBackupBaseDir').mockReturnValue('/nonexistent/path/backups');
 
@@ -225,6 +246,38 @@ describe('POST /api/backup/restore/:fileName', () => {
 
     expect(res.status).toBe(500);
     expect(res.body.success).toBe(false);
+
+    fs.rmSync(baseDir, { recursive: true, force: true });
+  });
+
+  it('falls back to a default error message when restoreBackup reports failure without an error field', async () => {
+    const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'backup-restore-'));
+    fs.writeFileSync(path.join(baseDir, 'backup-2026-06-30'), 'dump-contents');
+    vi.spyOn(backupService, 'getBackupBaseDir').mockReturnValue(baseDir);
+    vi.spyOn(backupService, 'restoreBackup').mockResolvedValue({ success: false });
+
+    const res = await request(app)
+      .post('/api/backup/restore/backup-2026-06-30')
+      .set('Authorization', `Bearer ${makeToken(4)}`);
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('Erro ao restaurar backup');
+
+    fs.rmSync(baseDir, { recursive: true, force: true });
+  });
+
+  it('falls back to String(error) when restoreBackup rejects with a non-Error value', async () => {
+    const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'backup-restore-'));
+    fs.writeFileSync(path.join(baseDir, 'backup-2026-06-30'), 'dump-contents');
+    vi.spyOn(backupService, 'getBackupBaseDir').mockReturnValue(baseDir);
+    vi.spyOn(backupService, 'restoreBackup').mockRejectedValue('boom');
+
+    const res = await request(app)
+      .post('/api/backup/restore/backup-2026-06-30')
+      .set('Authorization', `Bearer ${makeToken(4)}`);
+
+    expect(res.status).toBe(500);
+    expect(res.body.message).toBe('boom');
 
     fs.rmSync(baseDir, { recursive: true, force: true });
   });
