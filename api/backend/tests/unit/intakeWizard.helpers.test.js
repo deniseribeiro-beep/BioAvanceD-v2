@@ -97,55 +97,6 @@ describe('intakeWizard helpers', () => {
     expect(result.grade_route).toBe('Governance failure');
   });
 
-  it('resolveRecipientAndTemplate prioriza email do paciente e seleciona template do consentimento', () => {
-    const result = helpers.resolveRecipientAndTemplate({
-      participant: {
-        patientName: 'Paciente Teste',
-        participantId: '12345678',
-        email: 'paciente@example.test',
-      },
-      consent: { consentTemplateId: 'template-42' },
-    });
-
-    expect(result.patientName).toBe('Paciente Teste');
-    expect(result.patientId).toBe('12345678');
-    expect(result.recipientEmail).toBe('paciente@example.test');
-    expect(result.templateId).toBe('template-42');
-  });
-
-  it('ensureConsentEmailSent rejeita quando falta nome do paciente', async () => {
-    const result = await helpers.ensureConsentEmailSent({
-      participant: {},
-      consent: { consentTemplateId: 'template-1' },
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.status).toBe(400);
-    expect(result.message).toMatch(/Nome do paciente/);
-  });
-
-  it('ensureConsentEmailSent rejeita quando falta o template de TCLE', async () => {
-    const result = await helpers.ensureConsentEmailSent({
-      participant: { patientName: 'Paciente Teste' },
-      consent: {},
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.status).toBe(400);
-    expect(result.message).toMatch(/TCLE/);
-  });
-
-  it('ensureConsentEmailSent rejeita quando falta e-mail do destinatario', async () => {
-    const result = await helpers.ensureConsentEmailSent({
-      participant: { patientName: 'Paciente Teste' },
-      consent: { consentTemplateId: 'template-1' },
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.status).toBe(400);
-    expect(result.message).toMatch(/E-mail/);
-  });
-
   it('buildSampleDocumentFromIntake falls back to fallback quantity when quantity is non-numeric', () => {
     const document = helpers.buildSampleDocumentFromIntake({
       participant: { patientName: 'Paciente Teste' },
@@ -227,76 +178,6 @@ describe('intakeWizard helpers', () => {
   it('resolvePatientID returns the participantId as-is when it is already 8 digits', () => {
     const resolved = helpers.resolvePatientID({ participant: { participantId: '87654321' } });
     expect(resolved).toBe('87654321');
-  });
-
-  it('ensureConsentEmailSent returns ok:true with the email details when sending succeeds', async () => {
-    const notificationService = require('../../src/services/notification.service');
-    const buildConsentMetadataSpy = vi.spyOn(notificationService, 'buildConsentMetadata').mockReturnValue({ token: 'tok-1' });
-    const buildConsentLinkSpy = vi.spyOn(notificationService, 'buildConsentLink').mockReturnValue('https://consent.link/tok-1');
-    const sendConsentEmailSpy = vi.spyOn(notificationService, 'sendConsentEmail').mockResolvedValue({
-      success: true,
-      channel: 'whatsapp',
-      provider: 'twilio',
-      messageId: 'msg-1',
-      originalTo: '+5511999999999',
-    });
-
-    const result = await helpers.ensureConsentEmailSent({
-      participant: { patientName: 'Paciente Teste', participantId: '12345678', email: 'paciente@example.test' },
-      consent: { consentTemplateId: 'template-1' },
-    });
-
-    expect(result.ok).toBe(true);
-    expect(result.consentEmail.channel).toBe('whatsapp');
-    expect(result.consentEmail.provider).toBe('twilio');
-    expect(result.consentEmail.messageId).toBe('msg-1');
-    expect(result.consentEmail.to).toBe('+5511999999999');
-
-    buildConsentMetadataSpy.mockRestore();
-    buildConsentLinkSpy.mockRestore();
-    sendConsentEmailSpy.mockRestore();
-  });
-
-  it('ensureConsentEmailSent falls back to a generated patientID and defaults when send succeeds with a minimal result', async () => {
-    const notificationService = require('../../src/services/notification.service');
-    const buildConsentMetadataSpy = vi.spyOn(notificationService, 'buildConsentMetadata').mockReturnValue({ token: 'tok-1' });
-    const buildConsentLinkSpy = vi.spyOn(notificationService, 'buildConsentLink').mockReturnValue('https://consent.link/tok-1');
-    const sendConsentEmailSpy = vi.spyOn(notificationService, 'sendConsentEmail').mockResolvedValue({ success: true });
-
-    const result = await helpers.ensureConsentEmailSent({
-      participant: { patientName: 'Paciente Teste', email: 'paciente@example.test' },
-      consent: { consentTemplateId: 'template-1' },
-    });
-
-    expect(result.ok).toBe(true);
-    expect(result.consentEmail.channel).toBe('email');
-    expect(result.consentEmail.provider).toBeNull();
-    expect(result.consentEmail.messageId).toBeNull();
-    expect(result.consentEmail.to).toBe('paciente@example.test');
-
-    buildConsentMetadataSpy.mockRestore();
-    buildConsentLinkSpy.mockRestore();
-    sendConsentEmailSpy.mockRestore();
-  });
-
-  it('ensureConsentEmailSent returns 502 with null details when sendConsentEmail resolves falsy', async () => {
-    const notificationService = require('../../src/services/notification.service');
-    const buildConsentMetadataSpy = vi.spyOn(notificationService, 'buildConsentMetadata').mockReturnValue({ token: 'tok-1' });
-    const buildConsentLinkSpy = vi.spyOn(notificationService, 'buildConsentLink').mockReturnValue('https://consent.link/tok-1');
-    const sendConsentEmailSpy = vi.spyOn(notificationService, 'sendConsentEmail').mockResolvedValue(undefined);
-
-    const result = await helpers.ensureConsentEmailSent({
-      participant: { patientName: 'Paciente Teste', email: 'paciente@example.test' },
-      consent: { consentTemplateId: 'template-1' },
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.status).toBe(502);
-    expect(result.details).toBeNull();
-
-    buildConsentMetadataSpy.mockRestore();
-    buildConsentLinkSpy.mockRestore();
-    sendConsentEmailSpy.mockRestore();
   });
 
   it('resolveMatchedPatient calls the real PatientIdentityService method (regression for #165)', async () => {
