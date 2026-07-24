@@ -87,7 +87,6 @@ gap  branch% lines%  file
  40  73.50%  98.4%   src/services/auth.service.js
  36  77.07%  90.3%   src/controllers/auth.controller.js
  35  76.35%  95.5%   src/controllers/audit.controller.js
- 33  81.46%  92.5%   src/services/storageService.js
  32  70.09%  95.0%   src/controllers/consent.controller.js
  32  81.81%  100.0%  src/services/hl7.service.js
  30  83.24%  90.9%   src/services/rcs-certification.service.js
@@ -102,7 +101,8 @@ coverage number suspect, see `dyeallpies-skills-pack#111`),
 `dictionary.js`, `sample-file.controller.js`, `orphanet.js`,
 `terminologies.routes.js`, `batch-validation-engine.service.js`,
 `terminologySync.service.js`, `equipment-sensor-quarantine.service.js`,
-`user-security.service.js` (93.51% isolated branches).
+`user-security.service.js` (93.51% isolated branches),
+`storageService.js` (85.95% isolated branches).
 Check each file's own git log / filed issues for what remains, not this
 note.
 

@@ -215,6 +215,25 @@ describe('StorageService.validatePositionAvailability', () => {
     expect(result.error).toBe('STORAGE_COLLISION');
     expect(result.occupiedBySampleId).toBe(occupyingSampleId);
   });
+
+  it('returns INTERNAL_ERROR when the box lookup throws', async () => {
+    findOne.mockRejectedValue(new Error('db down'));
+    const result = await service.validatePositionAvailability(new ObjectId().toString(), 'A1');
+    expect(result.available).toBe(false);
+    expect(result.error).toBe('INTERNAL_ERROR');
+    expect(result.message).toMatch(/db down/);
+  });
+
+  it('falls back to the raw boxId when ObjectId.isValid throws while converting it', async () => {
+    const isValidSpy = vi.spyOn(ObjectId, 'isValid').mockImplementationOnce(() => {
+      throw new Error('isValid boom');
+    });
+    findOne.mockResolvedValue(null); // BOX_NOT_FOUND is fine, we only care boxObjId conversion didn't throw uncaught
+    const result = await service.validatePositionAvailability('some-box-id', 'A1');
+    expect(result.available).toBe(false);
+    expect(result.error).toBe('BOX_NOT_FOUND');
+    isValidSpy.mockRestore();
+  });
 });
 
 describe('StorageService.verifyBoxIntegrity', () => {
@@ -316,6 +335,16 @@ describe('StorageService.verifyBoxIntegrity', () => {
     expect(result.valid).toBe(true);
     expect(result.errors).toBeUndefined();
   });
+
+  it('falls back to the raw boxId when ObjectId.isValid throws while converting it', async () => {
+    const isValidSpy = vi.spyOn(ObjectId, 'isValid').mockImplementationOnce(() => {
+      throw new Error('isValid boom');
+    });
+    boxesFindOne.mockResolvedValue(null);
+    const result = await service.verifyBoxIntegrity('some-box-id');
+    expect(result).toEqual({ valid: false, error: 'BOX_NOT_FOUND' });
+    isValidSpy.mockRestore();
+  });
 });
 
 describe('StorageService.getFreezerOccupancyStats', () => {
@@ -362,6 +391,16 @@ describe('StorageService.getFreezerOccupancyStats', () => {
     expect(result.stats.aggregate.totalAvailable).toBe(125);
     expect(result.stats.aggregate.occupancyPercent).toBe(38); // Math.round(75/200*100) = 38
   });
+
+  it('falls back to the raw freezerId when ObjectId.isValid throws while converting it', async () => {
+    const isValidSpy = vi.spyOn(ObjectId, 'isValid').mockImplementationOnce(() => {
+      throw new Error('isValid boom');
+    });
+    containersFindOne.mockResolvedValue(null);
+    const result = await service.getFreezerOccupancyStats('some-freezer-id');
+    expect(result).toEqual({ stats: null, error: 'FREEZER_NOT_FOUND' });
+    isValidSpy.mockRestore();
+  });
 });
 
 describe('StorageService.findAvailablePosition', () => {
@@ -405,6 +444,17 @@ describe('StorageService.findAvailablePosition', () => {
     const result = await service.findAvailablePosition(new ObjectId().toString());
     expect(result.found).toBe(false);
     expect(result.boxStats.available).toBe(0);
+  });
+
+  it('falls back to the raw boxId when ObjectId.isValid throws while converting it', async () => {
+    const isValidSpy = vi.spyOn(ObjectId, 'isValid').mockImplementationOnce(() => {
+      throw new Error('isValid boom');
+    });
+    findOne.mockResolvedValue(null);
+    const result = await service.findAvailablePosition('some-box-id');
+    expect(result.found).toBe(false);
+    expect(result.error).toBe('BOX_NOT_FOUND');
+    isValidSpy.mockRestore();
   });
 });
 
@@ -460,6 +510,20 @@ describe('StorageService.getSampleStorage', () => {
     expect(result.location.box.position).toBe('A1');
     expect(result.location.path).toBe('Freezer/Shelf/Rack/Box');
     expect(result.location.fullHierarchy.freezerId).toBe('F1');
+  });
+
+  it('falls back to the raw storageLocation.boxId when `new ObjectId()` throws on an unparseable value', async () => {
+    samplesFindOne.mockResolvedValue({
+      _id: new ObjectId(),
+      barcode: 'BC-2',
+      storageLocation: { boxId: 'not-a-valid-object-id', position: 'A1' }
+    });
+    pathsFindOne.mockResolvedValue(null);
+
+    const result = await service.getSampleStorage(new ObjectId().toString());
+    expect(result.found).toBe(true);
+    expect(pathsFindOne).toHaveBeenCalledWith({ boxId: 'not-a-valid-object-id' });
+    expect(result.location.path).toBe('N/A');
   });
 });
 
@@ -704,6 +768,38 @@ describe('StorageService.allocateSampleToPosition', () => {
     expect(result.success).toBe(false);
     expect(result.message).toMatch(/Falha ao atualizar amostra/);
   });
+
+  it('falls back to the raw specimenId/boxId when ObjectId.isValid throws while converting them', async () => {
+    const boxId = new ObjectId().toString();
+    const sampleId = new ObjectId().toString();
+
+    boxesFindOne.mockResolvedValue({
+      _id: new ObjectId(boxId),
+      dimension: { rows: 2, cols: 2 },
+      occupancyGrid: new Map(),
+      currentOccupancy: 0
+    });
+    samplesFindOne.mockResolvedValue({
+      _id: new ObjectId(sampleId),
+      barcode: 'BC-1',
+      quantity: 5,
+      unit: 'mL',
+      storageLocation: null
+    });
+
+    const realIsValid = ObjectId.isValid.bind(ObjectId);
+    const isValidSpy = vi.spyOn(ObjectId, 'isValid').mockImplementation((value) => {
+      if (value === sampleId || value === boxId) {
+        throw new Error('isValid boom');
+      }
+      return realIsValid(value);
+    });
+
+    const result = await service.allocateSampleToPosition(sampleId, boxId, 'A1');
+
+    expect(result.success).toBe(true);
+    isValidSpy.mockRestore();
+  });
 });
 
 describe('StorageService.autoAssignSampleToBox', () => {
@@ -918,6 +1014,46 @@ describe('StorageService.autoAssignSampleToBox', () => {
     expect(result.message).toMatch(/Falha ao atualizar/);
   });
 
+  it('re-checks inside the transaction and returns BOX_NOT_FOUND if the box was deleted concurrently', async () => {
+    const boxId = new ObjectId();
+    const specimenId = new ObjectId();
+
+    boxesFindOne
+      .mockResolvedValueOnce({
+        _id: boxId,
+        dimension: { rows: 1, cols: 1 },
+        occupancyGrid: {},
+        currentOccupancy: 0
+      })
+      .mockResolvedValueOnce(null); // in-transaction fresh read: box gone
+    samplesFindOne.mockResolvedValue({ _id: specimenId, storageLocation: null });
+
+    const result = await service.autoAssignSampleToBox(specimenId.toString(), boxId.toString());
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('BOX_NOT_FOUND');
+    expect(boxesUpdateOne).not.toHaveBeenCalled();
+  });
+
+  it('re-checks inside the transaction and returns SAMPLE_NOT_FOUND if the specimen was deleted concurrently', async () => {
+    const boxId = new ObjectId();
+    const specimenId = new ObjectId();
+
+    boxesFindOne.mockResolvedValue({
+      _id: boxId,
+      dimension: { rows: 1, cols: 1 },
+      occupancyGrid: {},
+      currentOccupancy: 0
+    });
+    samplesFindOne
+      .mockResolvedValueOnce({ _id: specimenId, storageLocation: null })
+      .mockResolvedValueOnce(null); // in-transaction fresh read: sample gone
+
+    const result = await service.autoAssignSampleToBox(specimenId.toString(), boxId.toString());
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('SAMPLE_NOT_FOUND');
+    expect(boxesUpdateOne).not.toHaveBeenCalled();
+  });
+
   it('persists to Neo4j and reports graphPersisted:true when a driver is configured', async () => {
     const boxId = new ObjectId();
     const specimenId = new ObjectId();
@@ -1084,6 +1220,34 @@ describe('StorageService.releaseSampleFromPosition', () => {
     expect(result.success).toBe(false);
     expect(result.error).toBe('RELEASE_ERROR');
     expect(result.message).toBe('db down');
+  });
+
+  it('falls back to the raw specimenId when ObjectId.isValid throws while converting it', async () => {
+    const isValidSpy = vi.spyOn(ObjectId, 'isValid').mockImplementationOnce(() => {
+      throw new Error('isValid boom');
+    });
+    samplesFindOne.mockResolvedValue(null);
+
+    const result = await service.releaseSampleFromPosition('some-specimen-id');
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('SAMPLE_NOT_FOUND');
+    isValidSpy.mockRestore();
+  });
+
+  it('falls back to the raw storageLocation.boxId when `new ObjectId()` throws on an unparseable value', async () => {
+    samplesFindOne.mockResolvedValue({
+      _id: new ObjectId(),
+      barcode: 'BC-7',
+      quantity: 1,
+      storageLocation: { boxId: 'not-a-valid-object-id', position: 'A1' }
+    });
+
+    const result = await service.releaseSampleFromPosition(new ObjectId().toString());
+    expect(result.success).toBe(true);
+    expect(boxesUpdateOne).toHaveBeenCalledWith(
+      { _id: 'not-a-valid-object-id' },
+      expect.anything()
+    );
   });
 });
 
