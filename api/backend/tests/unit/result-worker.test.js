@@ -3,8 +3,10 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import archiver from 'archiver';
+import { EventEmitter } from 'events';
 
 const fhirService = require('../../src/services/fhir.service');
+const yauzl = require('yauzl');
 const resultWorker = require('../../src/workers/workers/result-worker');
 
 function makeDb({ sample = null, insertedId = 'result-1' } = {}) {
@@ -92,6 +94,48 @@ describe('ResultWorker.process — CSV path (processResultRow)', () => {
     expect(result.success).toBe(0);
     expect(result.errors[0].error).toMatch(/Amostra não encontrada: SMP-404/);
   });
+
+  it('reports the barcode in the not-found error when specimenId is absent', async () => {
+    const db = makeDb({ sample: null });
+    const csvFile = writeCsv(['barcode,testName,resultValue', 'BC-404,Glicose,95']);
+
+    const result = await resultWorker.process(db, 'job-1a', csvFile);
+    fs.unlinkSync(csvFile);
+
+    expect(result.success).toBe(0);
+    expect(result.errors[0].error).toMatch(/Amostra não encontrada: BC-404/);
+  });
+
+  it('resolves the sample by barcode and falls back to alternate field names (test/code/value/testDate)', async () => {
+    vi.spyOn(fhirService, 'resultToFHIR').mockReturnValue({
+      observation: { id: 'obs-3' },
+      diagnosticReport: { id: 'dr-3' },
+    });
+    const sample = { _id: 'samp-3', specimenId: 'SMP-003' };
+    const db = makeDb({ sample });
+    const csvFile = writeCsv([
+      'barcode,test,code,value,testDate',
+      'BC-001,Colesterol,COD1,180,2026-01-01',
+    ]);
+
+    const result = await resultWorker.process(db, 'job-1b', csvFile);
+    fs.unlinkSync(csvFile);
+
+    expect(result.success).toBe(1);
+    expect(result.errors).toEqual([]);
+  });
+
+  it('falls back to defaults when optional row fields are entirely absent', async () => {
+    const sample = { _id: 'samp-4', specimenId: 'SMP-004' };
+    const db = makeDb({ sample });
+    const csvFile = writeCsv(['specimenId', 'SMP-004']);
+
+    const result = await resultWorker.process(db, 'job-1c', csvFile);
+    fs.unlinkSync(csvFile);
+
+    expect(result.success).toBe(1);
+    expect(result.errors).toEqual([]);
+  });
 });
 
 describe('ResultWorker.process — RAW path', () => {
@@ -152,6 +196,455 @@ describe('ResultWorker.process — top-level error handling', () => {
     const csvFile = writeCsv(['specimenId,testName,resultValue', 'SMP-500,Glicose,95']);
 
     await expect(resultWorker.process(badDb, 'job-4', csvFile)).rejects.toThrow('collection blew up');
+    fs.unlinkSync(csvFile);
+  });
+
+  it('throws when the source file does not exist', async () => {
+    const db = makeDb();
+    await expect(
+      resultWorker.process(db, 'job-5', path.join(os.tmpdir(), 'does-not-exist-result-worker.csv'))
+    ).rejects.toThrow(/não encontrado/);
+  });
+
+  it('throws for an unsupported file extension', async () => {
+    const db = makeDb();
+    const txtFile = path.join(os.tmpdir(), `result-worker-${Date.now()}.txt`);
+    fs.writeFileSync(txtFile, 'irrelevant');
+
+    await expect(resultWorker.process(db, 'job-6', txtFile)).rejects.toThrow(
+      /Formato de arquivo não suportado/
+    );
+    fs.unlinkSync(txtFile);
+  });
+});
+
+describe('ResultWorker.process — ZIP path, yauzl-level failures (mocked)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('rejects when yauzl fails to open the archive', async () => {
+    vi.spyOn(yauzl, 'open').mockImplementation((filePath, opts, cb) => {
+      cb(new Error('bad zip'));
+    });
+    const db = makeDb();
+    const zipFile = path.join(os.tmpdir(), `result-worker-${Date.now()}.zip`);
+    fs.writeFileSync(zipFile, 'not a real zip');
+
+    await expect(resultWorker.process(db, 'job-7', zipFile)).rejects.toThrow('bad zip');
+    fs.unlinkSync(zipFile);
+  });
+
+  it('rejects when the zipfile itself emits an error event', async () => {
+    vi.spyOn(yauzl, 'open').mockImplementation((filePath, opts, cb) => {
+      const zipfile = new EventEmitter();
+      zipfile.readEntry = vi.fn(() => {
+        setImmediate(() => zipfile.emit('error', new Error('zip stream error')));
+      });
+      cb(null, zipfile);
+    });
+    const db = makeDb();
+    const zipFile = path.join(os.tmpdir(), `result-worker-${Date.now()}.zip`);
+    fs.writeFileSync(zipFile, 'not a real zip');
+
+    await expect(resultWorker.process(db, 'job-8', zipFile)).rejects.toThrow('zip stream error');
+    fs.unlinkSync(zipFile);
+  });
+
+  it('skips directory entries inside the zip', async () => {
+    vi.spyOn(yauzl, 'open').mockImplementation((filePath, opts, cb) => {
+      const zipfile = new EventEmitter();
+      let calls = 0;
+      zipfile.readEntry = vi.fn(() => {
+        calls += 1;
+        setImmediate(() => {
+          if (calls === 1) {
+            zipfile.emit('entry', { fileName: 'subdir/' });
+          } else {
+            zipfile.emit('end');
+          }
+        });
+      });
+      cb(null, zipfile);
+    });
+    const db = makeDb();
+    const zipFile = path.join(os.tmpdir(), `result-worker-${Date.now()}.zip`);
+    fs.writeFileSync(zipFile, 'not a real zip');
+
+    const result = await resultWorker.process(db, 'job-9', zipFile);
+    fs.unlinkSync(zipFile);
+
+    expect(result.total).toBe(0);
+  });
+
+  it('records an error and continues when openReadStream fails for an entry', async () => {
+    vi.spyOn(yauzl, 'open').mockImplementation((filePath, opts, cb) => {
+      const zipfile = new EventEmitter();
+      let calls = 0;
+      zipfile.readEntry = vi.fn(() => {
+        calls += 1;
+        setImmediate(() => {
+          if (calls === 1) {
+            zipfile.emit('entry', { fileName: 'broken.csv' });
+          } else {
+            zipfile.emit('end');
+          }
+        });
+      });
+      zipfile.openReadStream = vi.fn((entry, cb) => cb(new Error('cannot open stream')));
+      cb(null, zipfile);
+    });
+    const db = makeDb();
+    const zipFile = path.join(os.tmpdir(), `result-worker-${Date.now()}.zip`);
+    fs.writeFileSync(zipFile, 'not a real zip');
+
+    const result = await resultWorker.process(db, 'job-10', zipFile);
+    fs.unlinkSync(zipFile);
+
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0].error).toMatch(/Erro ao extrair broken\.csv: cannot open stream/);
+  });
+
+  function makeFakeWriteStream() {
+    const stream = new EventEmitter();
+    stream.destroyed = false;
+    stream.destroy = vi.fn(() => {
+      stream.destroyed = true;
+    });
+    return stream;
+  }
+
+  it('cleans up and records an error when the read stream emits an error, then ignores a second error on the same entry', async () => {
+    let fakeWriteStream;
+    vi.spyOn(fs, 'createWriteStream').mockImplementation(() => {
+      fakeWriteStream = makeFakeWriteStream();
+      return fakeWriteStream;
+    });
+    vi.spyOn(fs, 'existsSync').mockImplementation((p) => {
+      if (typeof p === 'string' && p.includes('temp_')) {
+        return true;
+      }
+      return true;
+    });
+    vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {});
+
+    const fakeReadStream = new EventEmitter();
+    fakeReadStream.pipe = vi.fn();
+
+    vi.spyOn(yauzl, 'open').mockImplementation((filePath, opts, cb) => {
+      const zipfile = new EventEmitter();
+      let calls = 0;
+      zipfile.readEntry = vi.fn(() => {
+        calls += 1;
+        setImmediate(() => {
+          if (calls === 1) {
+            zipfile.emit('entry', { fileName: 'broken-read.csv' });
+          } else {
+            zipfile.emit('end');
+          }
+        });
+      });
+      zipfile.openReadStream = vi.fn((entry, cb) => {
+        cb(null, fakeReadStream);
+        setImmediate(() => {
+          fakeReadStream.emit('error', new Error('read boom'));
+          // A second failure on the same entry must be a no-op (entryHandled guard).
+          fakeReadStream.emit('error', new Error('read boom again'));
+        });
+      });
+      cb(null, zipfile);
+    });
+
+    const db = makeDb();
+    const zipFile = path.join(os.tmpdir(), `result-worker-${Date.now()}.zip`);
+    fs.writeFileSync(zipFile, 'not a real zip');
+
+    const result = await resultWorker.process(db, 'job-11', zipFile);
+    fs.unlinkSync(zipFile);
+
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0].error).toMatch(/Erro ao ler broken-read\.csv: read boom/);
+    expect(fakeWriteStream.destroy).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips destroy() when the write stream is already destroyed', async () => {
+    let fakeWriteStream;
+    vi.spyOn(fs, 'createWriteStream').mockImplementation(() => {
+      fakeWriteStream = makeFakeWriteStream();
+      fakeWriteStream.destroyed = true;
+      return fakeWriteStream;
+    });
+    vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {});
+
+    const fakeReadStream = new EventEmitter();
+    fakeReadStream.pipe = vi.fn();
+
+    vi.spyOn(yauzl, 'open').mockImplementation((filePath, opts, cb) => {
+      const zipfile = new EventEmitter();
+      let calls = 0;
+      zipfile.readEntry = vi.fn(() => {
+        calls += 1;
+        setImmediate(() => {
+          if (calls === 1) {
+            zipfile.emit('entry', { fileName: 'already-destroyed.csv' });
+          } else {
+            zipfile.emit('end');
+          }
+        });
+      });
+      zipfile.openReadStream = vi.fn((entry, cb) => {
+        cb(null, fakeReadStream);
+        setImmediate(() => fakeReadStream.emit('error', new Error('read boom')));
+      });
+      cb(null, zipfile);
+    });
+
+    const db = makeDb();
+    const zipFile = path.join(os.tmpdir(), `result-worker-${Date.now()}.zip`);
+    fs.writeFileSync(zipFile, 'not a real zip');
+
+    const result = await resultWorker.process(db, 'job-11b', zipFile);
+    fs.unlinkSync(zipFile);
+
+    expect(result.errors[0].error).toMatch(/Erro ao ler already-destroyed\.csv: read boom/);
+    expect(fakeWriteStream.destroy).not.toHaveBeenCalled();
+  });
+
+  it('logs when finishEntry\'s own tempPath cleanup fails, and ignores a close event that arrives after the entry was already handled', async () => {
+    let fakeWriteStream;
+    vi.spyOn(fs, 'createWriteStream').mockImplementation(() => {
+      fakeWriteStream = makeFakeWriteStream();
+      return fakeWriteStream;
+    });
+    const realExistsSync = fs.existsSync.bind(fs);
+    vi.spyOn(fs, 'existsSync').mockImplementation((p) => {
+      if (typeof p === 'string' && p.includes('temp_')) {
+        return true;
+      }
+      return realExistsSync(p);
+    });
+    const loggerWarnSpy = vi.spyOn(require('../../src/utils/logger'), 'warn');
+    vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {
+      throw new Error('finishEntry cleanup failed');
+    });
+    const processFileSpy = vi.spyOn(resultWorker, 'processFile');
+
+    const fakeReadStream = new EventEmitter();
+    fakeReadStream.pipe = vi.fn();
+
+    vi.spyOn(yauzl, 'open').mockImplementation((filePath, opts, cb) => {
+      const zipfile = new EventEmitter();
+      let calls = 0;
+      zipfile.readEntry = vi.fn(() => {
+        calls += 1;
+        setImmediate(() => {
+          if (calls === 1) {
+            zipfile.emit('entry', { fileName: 'late-close.csv' });
+          } else {
+            zipfile.emit('end');
+          }
+        });
+      });
+      zipfile.openReadStream = vi.fn((entry, cb) => {
+        cb(null, fakeReadStream);
+        setImmediate(() => {
+          fakeReadStream.emit('error', new Error('read boom'));
+          // The close event can still fire after finishEntry already ran for this entry.
+          fakeWriteStream.emit('close');
+        });
+      });
+      cb(null, zipfile);
+    });
+
+    const db = makeDb();
+    const zipFile = path.join(os.tmpdir(), `result-worker-${Date.now()}.zip`);
+    fs.writeFileSync(zipFile, 'not a real zip');
+
+    const result = await resultWorker.process(db, 'job-14b', zipFile);
+    fs.unlinkSync.mockRestore();
+    fs.unlinkSync(zipFile);
+
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0].error).toMatch(/Erro ao ler late-close\.csv: read boom/);
+    expect(loggerWarnSpy).toHaveBeenCalledWith(expect.stringMatching(/Falha ao remover arquivo temporário/));
+    expect(processFileSpy).not.toHaveBeenCalled();
+  });
+
+  it('records an error when the write stream itself emits an error, and logs when destroy() throws', async () => {
+    let fakeWriteStream;
+    vi.spyOn(fs, 'createWriteStream').mockImplementation(() => {
+      fakeWriteStream = makeFakeWriteStream();
+      fakeWriteStream.destroy = vi.fn(() => {
+        throw new Error('destroy exploded');
+      });
+      return fakeWriteStream;
+    });
+    const realExistsSync = fs.existsSync.bind(fs);
+    vi.spyOn(fs, 'existsSync').mockImplementation((p) => {
+      if (typeof p === 'string' && p.includes('temp_')) {
+        return false;
+      }
+      return realExistsSync(p);
+    });
+    vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {});
+    const loggerWarnSpy = vi.spyOn(require('../../src/utils/logger'), 'warn');
+
+    const fakeReadStream = new EventEmitter();
+    fakeReadStream.pipe = vi.fn();
+
+    vi.spyOn(yauzl, 'open').mockImplementation((filePath, opts, cb) => {
+      const zipfile = new EventEmitter();
+      let calls = 0;
+      zipfile.readEntry = vi.fn(() => {
+        calls += 1;
+        setImmediate(() => {
+          if (calls === 1) {
+            zipfile.emit('entry', { fileName: 'broken-write.csv' });
+          } else {
+            zipfile.emit('end');
+          }
+        });
+      });
+      zipfile.openReadStream = vi.fn((entry, cb) => {
+        cb(null, fakeReadStream);
+        setImmediate(() => {
+          fakeWriteStream.emit('error', new Error('write boom'));
+        });
+      });
+      cb(null, zipfile);
+    });
+
+    const db = makeDb();
+    const zipFile = path.join(os.tmpdir(), `result-worker-${Date.now()}.zip`);
+    fs.writeFileSync(zipFile, 'not a real zip');
+
+    const result = await resultWorker.process(db, 'job-12', zipFile);
+    fs.unlinkSync(zipFile);
+
+    expect(result.errors[0].error).toMatch(/Erro ao gravar broken-write\.csv: write boom/);
+    expect(loggerWarnSpy).toHaveBeenCalledWith(expect.stringMatching(/Falha ao encerrar stream temporário/));
+  });
+
+  it('records a per-entry error and logs when cleanup unlink fails after successful processing', async () => {
+    let fakeWriteStream;
+    vi.spyOn(fs, 'createWriteStream').mockImplementation(() => {
+      fakeWriteStream = makeFakeWriteStream();
+      return fakeWriteStream;
+    });
+    const loggerWarnSpy = vi.spyOn(require('../../src/utils/logger'), 'warn');
+    vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {
+      throw new Error('cleanup unlink failed');
+    });
+    vi.spyOn(resultWorker, 'processFile').mockImplementation(async (db, filePath, results) => {
+      results.total += 1;
+      results.success += 1;
+    });
+
+    const fakeReadStream = new EventEmitter();
+    fakeReadStream.pipe = vi.fn();
+
+    vi.spyOn(yauzl, 'open').mockImplementation((filePath, opts, cb) => {
+      const zipfile = new EventEmitter();
+      let calls = 0;
+      zipfile.readEntry = vi.fn(() => {
+        calls += 1;
+        setImmediate(() => {
+          if (calls === 1) {
+            zipfile.emit('entry', { fileName: 'ok.csv' });
+          } else {
+            zipfile.emit('end');
+          }
+        });
+      });
+      zipfile.openReadStream = vi.fn((entry, cb) => {
+        cb(null, fakeReadStream);
+        setImmediate(() => fakeWriteStream.emit('close'));
+      });
+      cb(null, zipfile);
+    });
+
+    const db = makeDb();
+    const zipFile = path.join(os.tmpdir(), `result-worker-${Date.now()}.zip`);
+    fs.writeFileSync(zipFile, 'not a real zip');
+
+    const result = await resultWorker.process(db, 'job-13', zipFile);
+    fs.unlinkSync.mockRestore();
+    fs.unlinkSync(zipFile);
+
+    expect(result.total).toBe(1);
+    expect(result.success).toBe(1);
+    expect(loggerWarnSpy).toHaveBeenCalledWith(expect.stringMatching(/Falha ao remover arquivo temporário/));
+  });
+
+  it('records a per-entry error when processFile rejects after the write stream closes', async () => {
+    let fakeWriteStream;
+    vi.spyOn(fs, 'createWriteStream').mockImplementation(() => {
+      fakeWriteStream = makeFakeWriteStream();
+      return fakeWriteStream;
+    });
+    vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {});
+    vi.spyOn(resultWorker, 'processFile').mockRejectedValue(new Error('process file boom'));
+
+    const fakeReadStream = new EventEmitter();
+    fakeReadStream.pipe = vi.fn();
+
+    vi.spyOn(yauzl, 'open').mockImplementation((filePath, opts, cb) => {
+      const zipfile = new EventEmitter();
+      let calls = 0;
+      zipfile.readEntry = vi.fn(() => {
+        calls += 1;
+        setImmediate(() => {
+          if (calls === 1) {
+            zipfile.emit('entry', { fileName: 'fails.csv' });
+          } else {
+            zipfile.emit('end');
+          }
+        });
+      });
+      zipfile.openReadStream = vi.fn((entry, cb) => {
+        cb(null, fakeReadStream);
+        setImmediate(() => fakeWriteStream.emit('close'));
+      });
+      cb(null, zipfile);
+    });
+
+    const db = makeDb();
+    const zipFile = path.join(os.tmpdir(), `result-worker-${Date.now()}.zip`);
+    fs.writeFileSync(zipFile, 'not a real zip');
+
+    const result = await resultWorker.process(db, 'job-14', zipFile);
+    fs.unlinkSync(zipFile);
+
+    expect(result.errors[0].error).toMatch(/Erro ao processar fails\.csv: process file boom/);
+  });
+});
+
+describe('ResultWorker.process — ZIP path, real archives', () => {
+  it('extracts a .raw entry from the zip and routes it through processFile\'s raw branch', async () => {
+    const db = makeDb();
+    const zipFile = await writeZipWithEntry('scan.raw', Buffer.from([0x01, 0x02]));
+
+    const result = await resultWorker.process(db, 'job-15', zipFile);
+    fs.unlinkSync(zipFile);
+
+    expect(result.total).toBe(1);
+    expect(result.success).toBe(0);
+    expect(result.errors[0].error).toMatch(/RAW ainda não totalmente implementado/);
+    expect(result.errors[0].fileName).toMatch(/scan\.raw$/);
+  });
+});
+
+describe('ResultWorker.processCSV — stream-level failures', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('rejects when a row throws synchronously outside processResultRow\'s own try/catch', async () => {
+    vi.spyOn(resultWorker, 'processResultRow').mockRejectedValue(new Error('row processing exploded'));
+    const db = makeDb();
+    const csvFile = writeCsv(['specimenId,testName,resultValue', 'SMP-600,Glicose,95']);
+
+    await expect(resultWorker.process(db, 'job-16', csvFile)).rejects.toThrow('row processing exploded');
     fs.unlinkSync(csvFile);
   });
 });

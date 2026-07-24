@@ -94,12 +94,12 @@ merged-vs-isolated drift class — re-check isolated coverage before
 trusting the merged number for either).
 
 **No longer excluded — their blocking issues are now CLOSED:**
-`daily-merkle.job.js` and `audit-v2.service.js` /
-`neo4jCanonicalProjection.service.js` all closed (see MID-LOW section
-below). Remaining candidates: `patient.service.js` (#240/#241, closed),
-`result-worker.js` (#146/#164/#159, closed) — neither isolated-checked
-yet; re-run each's own test file(s) with `--coverage.include` before
-trusting their old merged numbers (issue #242 drift class may apply).
+`daily-merkle.job.js`, `audit-v2.service.js`,
+`neo4jCanonicalProjection.service.js`, and `result-worker.js` all closed
+(see MID-LOW section below). Remaining candidate: `patient.service.js`
+(#240/#241, closed) — not isolated-checked yet; re-run its test file(s)
+with `--coverage.include` before trusting its old merged number (issue
+#242 drift class may apply).
 
 **Regenerated 2026-07-24 (session 14)** from a fresh full-suite
 `coverage-summary.json`, excluded/already-documented files above
@@ -227,7 +227,6 @@ when picking among these.
 
 ```
 src/services/mqtt-telemetry.service.js           71.42 / 78.09   (accepted gap — mqtt.connect() can't be mocked, see exclusion note above)
-src/workers/workers/result-worker.js             76.66 / 66.07   (blocking issues #146/#164 CLOSED — real candidate, re-check isolated first)
 src/services/SampleGraphValidator.js             77.69 / 66.66   (issue #222 — legacy-schema migration, design fork, still open)
 src/workers/neo4jProjection.worker.js            79.62 / 73.33   (CLI entry block not coverable in-process, accepted gap)
 src/interface/routes/equipment.routes.js         81.59 / 81.01   (phantom-statement pattern, not a real gap — see reconcile note above)
