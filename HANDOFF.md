@@ -1,45 +1,56 @@
 # HANDOFF
 
 **Written:** 2026-07-24, end of a fix-bugs iteration.
-**Branch:** `feature/docker-e2e-backend-integration` (commit `1cfe3d51`,
+**Branch:** `feature/docker-e2e-backend-integration` (commit `462410d1`,
 pushed).
 
 ## What happened this session
 
 Read `HANDOFF.md`, then ran `work-issue`, which routed to `fix-bugs` for
-issue #253 (`sample.service.js` `createSample`'s participantId
-format-guard called the async `validateParticipantId` without `await`
-or `db`, so the `!validateParticipantId(...)` check was always false
-against a truthy Promise — the guard never fired, and malformed ids
-fell through to the real existence check, surfacing a misleading 404
-instead of the intended 400).
+issue #250 (`MongoAuditRepository.js`'s `appendImmutableAudit()` called
+`this.db.collection('sample_movements')` with a hardcoded literal
+instead of resolving the name via `CANONICAL_COLLECTIONS`/
+`collectionResolver` like the rest of the codebase — latent risk: if
+`COLL_SAMPLE_MOVEMENTS` were ever set, audit writes would silently split
+from every other consumer of the sampleMovements collection).
 
-Reproduced first: flipped the test-loop-pinned regression test in
-`tests/unit/sample.service.test.js` (previously asserting the buggy 404)
-to assert the correct 400 "participantId inválido" behavior, confirmed
-it failed against the unfixed code. Fixed
-`src/services/sample.service.js` line 120 by replacing the broken async
-call with a synchronous regex check (`/^\d{8}$/`) mirroring
-`validateParticipantId`'s own internal format check. Ran the full
-`sample.service.test.js` + `patientAnonymization.test.js` unit suites
-(84/84 passing), then the full `tests/` vitest run filtered to `-t
-sample` (537/537 passing, 0 failures) — no regressions.
+Considered #254 too (dead-code post-validate re-checks in
+`sample.service.js`) but routed it as owner's-call dead code, not a
+reproducible defect — left open, untouched.
 
-Committed on `fix/participant-id-format-check-await` (`c2998893`, `Fixes
-#253`), pushed, commented the hash on the issue, merged `--no-ff` into
-`feature/docker-e2e-backend-integration` (`1cfe3d51`), re-ran the unit
-suite on the merged tree, pushed, deleted the fix branch (local +
-remote), closed #253 with the merge commit hash.
+Reproduced first: added a new describe block to
+`tests/unit/MongoAuditRepository.test.js` overriding `CANONICAL_COLLECTIONS`
+via direct `require.cache` exports replacement (vi.mock/doMock/dynamic
+import all failed to intercept `require()` here — same documented CJS
+gotcha), confirmed it failed against the unfixed code (either erroring
+because `config/collections` wasn't yet in `require.cache`, or resolving
+the wrong name). Fixed `src/infrastructure/persistence/mongo/MongoAuditRepository.js`
+to import `CANONICAL_COLLECTIONS` and use `CANONICAL_COLLECTIONS.sampleMovements`
+instead of the literal, for both the `db.collection(...)` call and the
+`enforceAppendOnlyCollection` name arg. Ran the full
+`MongoAuditRepository.test.js` + `.proxy.unit.test.js` suites (9/9
+passing), plus `sample.service.test.js` + `storageService.test.js`
+(155/155 passing total) — no regressions.
 
-No scope creep, no lazy fixes, no new findings this session — the fix
-matched the issue's own diagnosis exactly (a regex mirroring the
-existing internal check in `validateParticipantId`).
+Committed on `fix/mongo-audit-repository-canonical-collection` (`bc27dd28`,
+`Fixes #250`), pushed, commented the hash on the issue, merged `--no-ff`
+into `feature/docker-e2e-backend-integration` (`462410d1`), re-ran the
+targeted tests on the merged tree, pushed, deleted the fix branch (local
++ remote), closed #250 with the merge commit hash.
+
+Filed a skills-pack issue (`dyeallpies-skills-pack#115`) instead of
+editing the installed `cjs-mocking.md` skill file directly (junction —
+Rule 0): documents that the existing "require.cache injection for a
+whole dependency module" pattern also works for a frozen plain
+data-object config export (not just classes-by-reference), with the
+exact section text to add.
 
 ## Repo state
 
 - `feature/docker-e2e-backend-integration` current and pushed
-  (`1cfe3d51`) — includes this session's #253 fix, merged from
-  `fix/participant-id-format-check-await` (branch deleted after merge).
+  (`462410d1`) — includes this session's #250 fix, merged from
+  `fix/mongo-audit-repository-canonical-collection` (branch deleted
+  after merge).
 - Working tree clean.
 
 ## Milestone (set 2026-07-22 by Dennis, still current)
@@ -47,41 +58,45 @@ existing internal check in `validateParticipantId`).
 **Target: 90% across all four coverage dimensions.** Last full reconcile
 was 2026-07-23 morning (`f3c258c9`): Statements 91.54%, Branches
 **83.37%** (lagging dimension), Functions 90.96%, Lines 91.98%. Several
-sessions' worth of slices since then (including `audit.controller.js`,
-`paciente.controller.js`, `reports.routes.js`, and the last two
-sessions' bug fixes) aren't folded into that number yet — a fresh full
-reconcile is overdue.
+sessions' worth of slices since then aren't folded into that number yet
+— a fresh full reconcile is still overdue (unchanged from last session's
+note; this session touched product code, not coverage).
 
 ## Recommended next steps
 
 Per prior sessions' notes, do a full coverage reconcile before picking
-the next Phase 2 test-loop slice — the `COVERAGE_NOTES.md` Phase 2 list is
-down to one stale, likely-low-yield entry (`auth.service.js`, judged
-mostly phantom-branch two sessions ago).
+the next Phase 2 test-loop slice.
 
-Remaining open backlog beyond this (not re-checked this session): #254,
-#251, #250, #224, #222, #115, #255-#267 — see `gh issue list
---state open`. #250/#251/#254 are bug/design-call items outside the
-test-loop's scope (fix-bugs candidates); #255-267 are dead-code/gap
-findings from prior test-loop sessions, owner's call whether to
-remove/wire in. #252 and #253 (last two sessions) are now closed.
+Remaining open backlog beyond this (not re-checked further this
+session): #254, #251, #224, #222, #115, #255-#267 — see `gh issue list
+--state open`. #254 and #251 are dead-code/owner's-call items (post-
+validate re-checks and DB-lookup-miss branches respectively), not
+reproducible bugs — `fix-bugs` isn't the right route for them without a
+fresh reachability trace; #255-267 are similar dead-code/gap findings
+from prior test-loop sessions, owner's call whether to remove/wire in.
+#250 (this session) and #252/#253 (prior two sessions) are now closed.
 
 ## Which skills to use
 
-`work-issue` to route the next pick. `fix-bugs` for the next bug-backlog
-item (e.g. #254, in `sample.service.js`, bug-labeled with a clear repro
-description already on the issue). `test-loop` for the next coverage
-slice once a fresh reconcile identifies one.
-`bioavanced-v2-conventions` and `bioavanced-v2-testing-conventions` as
-always. `wrap-up` every iteration.
+`work-issue` to route the next pick. `fix-bugs` if a reachability trace
+on one of the remaining dead-code issues (#254, #251, #255-267) turns up
+a live caller after all. `test-loop` for the next coverage slice once a
+fresh reconcile identifies one. `bioavanced-v2-conventions` and
+`bioavanced-v2-testing-conventions` as always — the latter's
+`cjs-mocking.md` will gain a new section once `dyeallpies-skills-pack#115`
+is applied. `wrap-up` every iteration.
 
 ## Dependency notes
 
 None blocking. A full coverage reconcile is recommended (not required)
-before the next test-loop slice.
+before the next test-loop slice. `dyeallpies-skills-pack#115` is a
+pack-repo issue, not a BioAvanceD-v2 blocker.
 
 ## Session note
 
-No new pattern discovered this session — the fix matched the issue's
-own diagnosis exactly (mirror the existing regex check inside
-`validateParticipantId` rather than fixing the broken async call).
+New pattern this session: `require.cache` exports overwrite (not
+`vi.mock`/`vi.doMock`/dynamic `import` + `resetModules`) is what actually
+works for asserting a source reads a frozen config data-object at
+call-time rather than a hardcoded literal. Filed as
+`dyeallpies-skills-pack#115` for the shared skill file rather than
+editing the installed junction directly.
