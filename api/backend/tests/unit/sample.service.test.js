@@ -224,19 +224,18 @@ describe('sample.service', () => {
       ).rejects.toThrow(/Quantidade deve ser um número maior que zero/);
     });
 
-    // Regression per issue #253: the malformed-format guard on this line is a
-    // no-op (validateParticipantId is called without `db`/await, so the
-    // `!validateParticipantId(...)` check is always false against a truthy
-    // Promise). A malformed but non-empty-string participantId falls through
-    // to the real, correctly-awaited existence check further down and comes
-    // back as a 404 "não encontrado", not the intended 400 "inválido".
-    it('returns 404 (not the intended 400) for a malformed participantId, per issue #253', async () => {
+    // Fixed per issue #253: the malformed-format guard now uses a synchronous
+    // regex check (mirroring validateParticipantId's own internal check)
+    // instead of calling the async validateParticipantId without db/await.
+    // A malformed participantId now correctly throws 400 "inválido" instead
+    // of falling through to the existence check's 404 "não encontrado".
+    it('returns 400 (participantId inválido) for a malformed participantId, per issue #253', async () => {
       const db = makeDb();
       mockOperationalLocation(db);
 
       await expect(
         sampleService.createSample(db, validSampleData({ participantId: 'not-8-digits' }))
-      ).rejects.toMatchObject({ statusCode: 404 });
+      ).rejects.toMatchObject({ statusCode: 400, message: expect.stringContaining('participantId inválido') });
     });
 
     it('rejects when the location has a linked equipment that is not registered', async () => {
