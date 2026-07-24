@@ -133,12 +133,12 @@ function normalizeRecord(record = {}, fallbackSystem = 'OUTRO') {
     aliases,
     relacoes,
     ativo: record.ativo !== undefined ? Boolean(record.ativo) : true,
-    sincronizadoEm: new Date(),
-    updatedAt: new Date(),
     fonte: normalizeText(record.fonte || 'orphadata') || 'orphadata',
   };
 
   normalized.hashConteudo = computeHash(normalized);
+  normalized.sincronizadoEm = new Date();
+  normalized.updatedAt = new Date();
 
   return normalized;
 }
