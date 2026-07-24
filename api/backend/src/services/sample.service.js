@@ -292,7 +292,7 @@ class SampleService {
       if (!sample) {
         // Tenta buscar por barcode se não encontrou por ID
         if (typeof specimenId === 'string' && !specimenId.match(/^[0-9a-fA-F]{24}$/)) {
-          const result = await this.getSpecimenByBarcode(db, specimenId);
+          const result = await this.getSampleByBarcode(db, specimenId);
           sample = result.sample;
         }
       }

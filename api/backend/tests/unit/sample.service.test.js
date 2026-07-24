@@ -461,13 +461,16 @@ describe('sample.service', () => {
     });
 
     // Regression per issue #252: withdrawSample's barcode-fallback lookup
-    // calls a method that doesn't exist on the class (`getSpecimenByBarcode`
-    // instead of `getSampleByBarcode`), so a barcode-style specimenId that
-    // isn't found by the direct lookup throws a TypeError instead of
-    // falling back cleanly.
-    it('throws a TypeError on the barcode-fallback lookup, per issue #252', async () => {
+    // used to call a method that doesn't exist on the class
+    // (`getSpecimenByBarcode` instead of `getSampleByBarcode`), so a
+    // barcode-style specimenId that isn't found by the direct lookup threw
+    // a TypeError instead of falling back cleanly to the barcode lookup.
+    it('falls back to the barcode lookup instead of throwing, per issue #252', async () => {
       const db = makeDb();
       db.collections.samples.findOne.mockResolvedValue(null);
+      vi
+        .spyOn(sampleService, 'getSampleByBarcode')
+        .mockResolvedValue({ sample: null });
 
       await expect(
         sampleService.withdrawSample(db, 'BR-NOT-AN-OBJECTID', {
@@ -475,7 +478,12 @@ describe('sample.service', () => {
           withdrawalResponsible: 'Jane Doe',
           linkedProject: 'ProjectX'
         })
-      ).rejects.toThrow(/getSpecimenByBarcode is not a function/);
+      ).rejects.toThrow(/Amostra não encontrada/);
+
+      expect(sampleService.getSampleByBarcode).toHaveBeenCalledWith(
+        db,
+        'BR-NOT-AN-OBJECTID'
+      );
     });
   });
 
