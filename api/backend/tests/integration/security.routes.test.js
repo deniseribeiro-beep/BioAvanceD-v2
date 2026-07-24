@@ -40,7 +40,7 @@ function createResponse() {
   };
 }
 
-function createRequest({ body = {}, query = {}, user = { userID: 'admin-1', accessType: 4, roleName: 'Administrador' } } = {}) {
+function createRequest({ body = {}, query = {}, user = { userID: 'admin-1', accessType: 4, roleName: 'Administrador' }, t = (key) => key } = {}) {
   return {
     body,
     query,
@@ -54,7 +54,7 @@ function createRequest({ body = {}, query = {}, user = { userID: 'admin-1', acce
     },
     ip: '127.0.0.1',
     connection: { remoteAddress: '127.0.0.1' },
-    t: (key) => key,
+    t,
     app: {
       locals: {
         db: {
@@ -342,6 +342,129 @@ describe('Security routes', () => {
     expect(res.statusCode).toBe(500);
     expect(res.payload.success).toBe(false);
     expect(res.payload.message).toBe('queue failed');
+  });
+
+  it('GET /config usa mensagens padrão quando req.t está ausente (sucesso, 503 e 500)', async () => {
+    const handler = getHandler(securityRoutes, 'get', '/config');
+
+    vi.spyOn(securityService, 'getConfig').mockRejectedValue(new Error('boom'));
+    const errReq = createRequest({ t: null });
+    const errRes = createResponse();
+    await handler(errReq, errRes);
+    expect(errRes.statusCode).toBe(500);
+    expect(errRes.payload.error).toBe('Erro ao buscar configurações de segurança');
+
+    const unavailableReq = createRequest({ t: null });
+    unavailableReq.app.locals.db = null;
+    const unavailableRes = createResponse();
+    await handler(unavailableReq, unavailableRes);
+    expect(unavailableRes.statusCode).toBe(503);
+    expect(unavailableRes.payload.error).toBe('Banco de dados não disponível');
+  });
+
+  it('PUT /config usa mensagens padrão quando req.t está ausente (sucesso, 503 e 400)', async () => {
+    const handler = getHandler(securityRoutes, 'put', '/config');
+    vi.spyOn(securityService, 'getConfig').mockResolvedValue({ metadata: { version: 1 } });
+
+    vi.spyOn(securityService, 'updateConfig').mockResolvedValue({ metadata: { version: 2 } });
+    const okReq = createRequest({ body: { authentication: { requireMFA: false } }, t: null });
+    const okRes = createResponse();
+    await handler(okReq, okRes);
+    expect(okRes.statusCode).toBe(200);
+    expect(okRes.payload.message).toBe('Configurações de segurança atualizadas com sucesso');
+
+    vi.spyOn(securityService, 'updateConfig').mockRejectedValue(new Error('invalid payload'));
+    const errReq = createRequest({ body: { authentication: { requireMFA: false } }, t: null });
+    const errRes = createResponse();
+    await handler(errReq, errRes);
+    expect(errRes.statusCode).toBe(400);
+    expect(errRes.payload.error).toBe('Erro ao atualizar configurações de segurança');
+
+    const unavailableReq = createRequest({ t: null });
+    unavailableReq.app.locals.db = null;
+    const unavailableRes = createResponse();
+    await handler(unavailableReq, unavailableRes);
+    expect(unavailableRes.statusCode).toBe(503);
+    expect(unavailableRes.payload.error).toBe('Banco de dados não disponível');
+  });
+
+  it('GET /logs/export usa format padrão csv e mensagens padrão quando req.t/query.format estão ausentes', async () => {
+    const handler = getHandler(securityRoutes, 'get', '/logs/export');
+    vi.spyOn(securityService, 'exportLogs').mockResolvedValue('timestamp,userID\n2026-01-01,admin');
+    vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+    const logSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
+
+    const req = createRequest({ t: null });
+    const res = createResponse();
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(200);
+    expect(securityService.exportLogs).toHaveBeenCalledWith(expect.anything(), expect.anything(), 'csv');
+    const [logPayload] = logSpy.mock.calls[0];
+    expect(logPayload.message).toBe('Exportação de logs realizada (formato: csv)');
+    expect(logPayload.module).toBe('Segurança');
+  });
+
+  it('GET /logs/export usa mensagens padrão quando req.t está ausente (503 e 500)', async () => {
+    const handler = getHandler(securityRoutes, 'get', '/logs/export');
+
+    vi.spyOn(securityService, 'exportLogs').mockRejectedValue(new Error('export failed'));
+    const errReq = createRequest({ t: null });
+    const errRes = createResponse();
+    await handler(errReq, errRes);
+    expect(errRes.statusCode).toBe(500);
+    expect(errRes.payload.error).toBe('Erro ao exportar logs');
+
+    const unavailableReq = createRequest({ t: null });
+    unavailableReq.app.locals.db = null;
+    const unavailableRes = createResponse();
+    await handler(unavailableReq, unavailableRes);
+    expect(unavailableRes.statusCode).toBe(503);
+    expect(unavailableRes.payload.error).toBe('Banco de dados não disponível');
+  });
+
+  it('GET /permissions usa mensagens padrão quando req.t está ausente (503 e 500)', async () => {
+    const handler = getHandler(securityRoutes, 'get', '/permissions');
+
+    vi.spyOn(securityService, 'getPermissions').mockRejectedValue(new Error('permissions failed'));
+    const errReq = createRequest({ t: null });
+    const errRes = createResponse();
+    await handler(errReq, errRes);
+    expect(errRes.statusCode).toBe(500);
+    expect(errRes.payload.error).toBe('Erro ao buscar permissões');
+
+    const unavailableReq = createRequest({ t: null });
+    unavailableReq.app.locals.db = null;
+    const unavailableRes = createResponse();
+    await handler(unavailableReq, unavailableRes);
+    expect(unavailableRes.statusCode).toBe(503);
+    expect(unavailableRes.payload.error).toBe('Banco de dados não disponível');
+  });
+
+  it('PUT /permissions usa mensagens padrão quando req.t está ausente (sucesso, 503 e 400)', async () => {
+    const handler = getHandler(securityRoutes, 'put', '/permissions');
+    vi.spyOn(securityService, 'getPermissions').mockResolvedValue({ '4': { manageSecurity: true } });
+
+    vi.spyOn(securityService, 'updatePermissions').mockResolvedValue({ '4': { manageSecurity: false } });
+    const okReq = createRequest({ body: { '4': { manageSecurity: false } }, t: null });
+    const okRes = createResponse();
+    await handler(okReq, okRes);
+    expect(okRes.statusCode).toBe(200);
+    expect(okRes.payload.message).toBe('Permissões atualizadas com sucesso');
+
+    vi.spyOn(securityService, 'updatePermissions').mockRejectedValue(new Error('bad permission update'));
+    const errReq = createRequest({ body: { '4': { manageSecurity: false } }, t: null });
+    const errRes = createResponse();
+    await handler(errReq, errRes);
+    expect(errRes.statusCode).toBe(400);
+    expect(errRes.payload.error).toBe('Erro ao atualizar permissões');
+
+    const unavailableReq = createRequest({ t: null });
+    unavailableReq.app.locals.db = null;
+    const unavailableRes = createResponse();
+    await handler(unavailableReq, unavailableRes);
+    expect(unavailableRes.statusCode).toBe(503);
+    expect(unavailableRes.payload.error).toBe('Banco de dados não disponível');
   });
 
   it('GET /consent-queue não deve exigir req.app.locals.db (diferente das demais rotas)', async () => {

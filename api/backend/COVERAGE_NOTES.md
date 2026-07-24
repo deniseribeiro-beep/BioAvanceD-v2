@@ -104,7 +104,6 @@ gap  branch% lines%  file
  17  64.58%  91.5%   src/core/use-cases/AllocateSampleUseCase.js   -- CLOSED prior session
  25  70.23%  91.5%   src/core/use-cases/RegisterSample.js          -- CLOSED prior session
  42  72.90%  89.9%   src/interface/routes/auth.routes.js          -- partial, coverage number suspect (dyeallpies-skills-pack#111)
- 15  73.68% 100.0%   src/interface/routes/security.routes.js
  52  76.36%  91.5%   src/services/NotificationService.js
  38  78.28%  85.4%   src/routes/orphanet.js                        -- partial, prior sessions
  21  80.37% 100.0%   src/controllers/consent.controller.js         -- phantom-branch pattern, not a real gap
@@ -152,6 +151,13 @@ message thrown from inside the line 273 branch) — matches the documented
 async-statement 0-hit artifact already seen in `auth.controller.js`
 (V8 undercounts certain awaited-statement executions inside methods with
 an outer try/catch), not a real gap.
+
+`security.routes.js` closed this session — isolated run matched the
+merged 73.68% (no drift); real gap was every `(req.t && req.t(key)) ||
+default` i18n fallback plus the `req.query.format || 'csv'` default,
+never exercised because the test helper's `createRequest` always
+supplied a truthy `req.t`. Added a `req.t: null` request variant across
+each route's success/503/400/500 paths. Isolates to 100%/100%/100%/100%.
 
 `rbac.js` closed this session — isolated run matched the merged 72.41%
 (no drift); real gaps closed: `resolveUserRole`'s `user.role` fallback
