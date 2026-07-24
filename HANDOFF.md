@@ -1,141 +1,109 @@
 # HANDOFF
 
-**Written:** 2026-07-24, end of a test-loop iteration.
-**Branch:** `feature/docker-e2e-backend-integration` (commit `4341991d`,
-pushed).
+**Written:** 2026-07-24, end of a `work-issue` -> `fix-bugs` iteration.
+**Branch:** `feature/docker-e2e-backend-integration` (commit `46042b91`,
+pushed, working tree clean — no product-source or test changes this
+session).
 
 ## What happened this session
 
-Read `HANDOFF.md`, routed via `work-issue` -> `test-loop`. Prior
-handoff's recommended-next-steps list named `BiomarkerObservation.js` as
-an untried model-file candidate (84.37%/88.46% merged) to check for
-thinness before picking.
+Dennis asked to work the stacked-up issue backlog over the next few
+rounds. Routed via `work-issue`: backlog scan showed most open issues
+carry the `test-branch` label (deferred until their originating branch
+merges to main) — skipped those. Picked **#276**
+(`full-suite-guard.cjs` false-positive: `ps aux | grep -i vitest |
+grep -v grep` got blocked by the `bareVitest` regex even though it
+never invokes vitest) as the first non-deferred, clearly-scoped bug.
 
-- Checked `iot.controller.js` first (83.82%/87.50% merged): isolated
-  single-file run confirmed no drift, but branch-level inspection of
-  `coverage-final.json` showed the entire `ingestTelemetry` function
-  (and several fire-and-forget async branches genuinely exercised by
-  its own test file) reporting 0 hits — an instrumentation artifact from
-  the test file's `vi.resetModules()` + manual `require.cache` splicing
-  per-test pattern, not a real gap. Not chased further (would require
-  restructuring the test file's module-reload approach, out of scope for
-  a coverage-only slice); moved to the next candidate instead.
-- `BiomarkerObservation.js`: no dedicated unit test file existed; found
-  it exercised across 13 other test files (a wide multi-file split, ala
-  issue #112's caveat). A 2-file isolated check first gave a misleadingly
-  low 9%, but running the full 13-file set matched the merged number
-  exactly (87.27%/84.37% stmts/branch) — no drift once the full split is
-  included.
-- Read the source: `validate()` had 4 untested branches (missing
-  `participantId`, negative `value`, invalid `status`, invalid
-  `eventType` — lines 41/53/62-64/71). Added
-  `tests/unit/BiomarkerObservation.model.test.js` (5 tests) targeting
-  exactly those branches; verified standalone that the new file hits all
-  four previously-uncovered lines.
-- Re-running the 13-file combo afterward to get a final number gave
-  **nondeterministic results across repeated identical runs** (84.37%,
-  68.75%, 61.45% branch — same command, same files, no code changes
-  between runs, `--no-file-parallelism` didn't fix it). This is a new
-  wrinkle beyond the already-documented #242/#275 merged-vs-isolated
-  drift class (this is same-command run-to-run variance, not a stable
-  merged-vs-isolated gap) — filed as **issue #277**. Documented the
-  caveat in `COVERAGE_NOTES.md`'s new `BiomarkerObservation.js` entry:
-  trust the standalone-verified number, not the flaky multi-file rerun.
-- No bugs found, no product source touched.
-- Committed test file + coverage notes together, pushed.
-- Ran `wrap-up`'s core audit: filed issue #277 for the coverage-v8
-  nondeterminism finding (see above) — that's this session's one
-  destination-having finding. No scope violations, no lazy fixes, no
-  user corrections (autonomous session), no context waste beyond the
-  necessary back-and-forth diagnosing the nondeterminism.
+- Routed to `fix-bugs`. Started reading `.claude/hooks/full-suite-guard.cjs`
+  to plan the regex fix in-repo.
+- Dennis caught mid-iteration that this was the wrong repo for the fix:
+  `.claude/hooks/` is gitignored in BioAvanceD-v2 (see
+  `.claude/.gitignore:21`, and commit `ec7f9914` which stopped tracking
+  deployed hooks) — the file is a pack-deployed asset from
+  `dyeallpies-skills-pack`'s `projects/bioavanced-v2/assets/hooks/`, not
+  editable/reviewable from this repo. Confirmed via `git check-ignore -v`
+  and finding the real source in the pack repo.
+- Per skill-maintenance's Rule 0 pattern (already documented for skill
+  files, now also applies to deployed hooks), cross-filed the exact fix
+  against the pack repo instead: **dyeallpies-skills-pack#122** — a
+  `cmdStart` regex change requiring `vitest` to appear at a shell
+  statement boundary (optionally after `npx`/`yarn`/`pnpm`/`pnpx`)
+  rather than matching the bare word anywhere. Verified by hand against
+  both the repro and legitimate invocations before filing.
+- Closed BioAvanceD-v2#276 with a comment pointing to the cross-filed
+  issue — no BioAvanceD-v2-side change was possible or needed.
+- Ran `wrap-up`'s core audit: filed **dyeallpies-skills-pack#123** — the
+  `fix-bugs` skill has no step telling you to check whether a target
+  file is gitignored/pack-deployed *before* branching to fix it; this
+  session only caught it because Dennis flagged it mid-iteration, not
+  because the skill prompted the check. No scope violations (no
+  Edit/Write ever happened against the gitignored file), no lazy fixes,
+  no context waste beyond the normal back-and-forth.
 
 ## Repo state
 
 - `feature/docker-e2e-backend-integration`, pushed, working tree clean.
-- Files touched this session:
-  `api/backend/tests/unit/BiomarkerObservation.model.test.js` (new, 5
-  tests), `api/backend/COVERAGE_NOTES.md`. No product source touched.
+- **No files touched in BioAvanceD-v2 this session** — the only change
+  was closing issue #276 with a comment. All actual fix content lives
+  in the two pack-repo issues below.
 
 ## Milestone (set 2026-07-22 by Dennis, still current)
 
 **Target: 90% across all four coverage dimensions.** Last full reconcile
 (2026-07-24, session 16, pre-session commit `a636b37a`): Statements
-94.01%, Branches 88.2%, Functions 92.33%, Lines 94.29%. Three of four
-dimensions remain past 90%; branches is still the sole laggard. This
-session's slice was a small, single-file fix (4 branches) — not yet
-re-reconciled against the full suite, so the milestone numbers above are
-still the last full-reconcile snapshot, not updated for this slice.
+94.01%, Branches 88.2%, Functions 92.33%, Lines 94.29%. Unchanged this
+session (no test-loop work happened — this was a bug-backlog round).
 
 ## Recommended next steps
 
-No specific file was named by Dennis for next session — pick per
-`test-loop`'s normal candidate-selection process. Remaining untried
-real-logic candidates from the prior sessions' regenerated list (still
-worth a fresh isolated check first per issue #242's drift caveat before
-committing to any as a slice): `auth.service.js` (73.50%/98.44% merged
-per the prior handoff, but note `COVERAGE_NOTES.md`'s "Files fully
-closed" list already includes `auth.service.js` from an earlier
-session — re-check for drift before assuming either number is current,
-and remember it has a 3-way test-file split per
-`dyeallpies-skills-pack#112`), `audit-canonicalization.service.js`
-(74.28%/87.87% merged per the prior handoff, but `COVERAGE_NOTES.md`
-already lists it as "moved to GOOD in prior sessions" — re-verify before
-assuming it's still a real gap).
+Dennis asked to keep working the issue backlog for the next couple of
+rounds — next session should resume via `work-issue`, picking the next
+non-`test-branch`-labeled issue. Candidates seen this session that are
+open now (not exhaustive — re-scan the backlog fresh, don't trust this
+list):
 
-`iot.controller.js` was checked this session and is **not** a clean
-pick: its remaining branch gap is masked by a `require.cache`-splicing
-test-instrumentation artifact (see "What happened" above) — don't
-re-pick it without first deciding whether to restructure its test file's
-module-reload pattern (a bigger, riskier change than a normal slice).
+- **#260** (`orphanet.js`: two structurally-unreachable branches,
+  `bug` label, no `test-branch` label) — read during triage but not
+  worked; author's own writeup already leans "dead code, safe to
+  simplify" rather than a real defect, so this likely routes to
+  `resolve-issue` (simplification) rather than `fix-bugs`, but re-verify
+  reachability yourself per `fix-bugs`' "verifying before deferring"
+  section rather than trusting the issue body at face value.
+- **#264** (`user-security.service.js` `extractOS`: dead Android
+  branch), **#272** (`daily-merkle.job.js`: two unreachable defensive
+  branches), **#258** (`NotificationService.js`: infra-mocking gap) —
+  all open, no `test-branch` label, unworked.
+- **#255**/**#251** carry the `bug` label but check each carefully —
+  #251 also carries `test-branch` (deferred); #255 does not.
 
-Still-excluded (per `COVERAGE_NOTES.md`'s exclusion note, don't re-pick
-without reading the linked issue): `SampleGraphValidator.js` (#222),
-`mqtt-telemetry.service.js` (accepted gap), `queue.js`/`eConsent.js`
-(#242 drift class), `neo4jProjection.worker.js` (CLI entry, accepted
-gap), `equipment.routes.js` (phantom-statement, not a real gap).
-
-Issue #277 (new this session — coverage-v8 multi-file run-to-run
-nondeterminism, see above) is unowned and open; relevant to any future
-session doing a multi-file `--coverage.include` reconcile — trust a
-standalone single-file run over a flaky multi-file rerun until this is
-root-caused.
-
-Issue #275 (`patient.service.js` per-function 0-hit merge artifact),
-#274/#273/#272 (`result-worker.js`/`daily-merkle.job.js` defensive-branch
-calls), #271 (`orphanet.js`), #269 (branch-guard.cjs misparse), #270
-(`import-lgpd.service.js` dead code, revisit post-merge-to-main), #276
-(`full-suite-guard.cjs` false-positive on a read-only diagnostic mention
-of "vitest") — all still open and unowned, unchanged this session.
-
-`dyeallpies-skills-pack#120` (`crypto.randomBytes` gotcha) and `#116`
-(pack repo) are pack-repo documentation issues, not BioAvanceD-v2
-blockers.
+No specific issue was named by Dennis for next round — pick per
+`work-issue`'s classify-and-route process, same as this session.
 
 ## Which skills to use
 
-`test-loop` for the next coverage slice. `bioavanced-v2-conventions` and
-`bioavanced-v2-testing-conventions` as always. `bioavanced-v2-legacy` if
-a candidate turns out to be dead code. `wrap-up` every iteration.
+`work-issue` to pick and route the next issue, `fix-bugs` or
+`resolve-issue` depending on classification. **New this session:** if
+the picked issue's file lives under `.claude/hooks/`, `.claude/agents/`,
+or `.claude/skills/`, run `git check-ignore -v <path>` *before*
+branching — if it's gitignored, it's a pack-deployed asset and the fix
+must be cross-filed against `dyeallpies-skills-pack` (Rule 0), not
+edited locally. `wrap-up` every iteration.
 
 ## Dependency notes
 
-None blocking. `dyeallpies-skills-pack#111`/`#112` (auth.routes.js
-coverage-number-suspect, 3-way-split isolation caveat) still applies
-generally to other suspect files, most directly to `auth.service.js`
-above if it's picked next. `dyeallpies-skills-pack#115`/`#116`/`#120`
-are pack-repo issues, not BioAvanceD-v2 blockers. Issue #277 (this
-session) is a new general caveat for any multi-file coverage reconcile.
+None blocking. `dyeallpies-skills-pack#122` (full-suite-guard.cjs
+regex fix, this session) and `#123` (fix-bugs skill gap, this session)
+are pack-repo issues, not BioAvanceD-v2 blockers, but #123 is relevant
+process guidance for the very next round if another hook/agent/skill
+bug turns up in the backlog.
 
 ## Session note
 
-A "wide multi-file split" candidate (13 test files touching
-`BiomarkerObservation.js`) needed the full set run together to match the
-merged number — a 2-file subset alone gave a wildly misleading 9%. When
-a model/service is used this broadly, don't stop at checking 2-3 obvious
-test files; grep for every file touching it first.
-
-Discovering a coverage measurement is flaky (same command, same files,
-different numbers across runs) is itself worth filing as its own issue
-even when a workaround (trust the standalone run) is available in the
-moment — the flakiness will resurface for the next session's reconcile
-if left undocumented as a one-off.
+`.claude/hooks/` (and presumably `.claude/agents/`, `.claude/skills/`)
+are gitignored in this repo as of commit `ec7f9914` — they're deployed
+copies from `dyeallpies-skills-pack`, not source. Any bug filed against
+a file under those paths needs its fix cross-filed against the pack
+repo, never edited here, even for a one-line regex change. Check
+`git check-ignore -v` on the target file as the first step whenever an
+issue's symptom lives in `.claude/`.
