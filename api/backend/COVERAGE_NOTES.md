@@ -11,10 +11,16 @@ stale as slices land and as source files change. Keep it honest:
 - **Reconcile with a real coverage run periodically**, not every
   iteration: at the `ship-to-main` gate, or if a session's own targeted
   runs stop matching what this file claims (a sign of drift). Full
-  regenerate command:
+  regenerate command (redirect to a file — the run takes 6-7 minutes and
+  streaming it into the conversation wastes context, and a truncated
+  `tail` won't show the final `Test Files`/summary line, forcing a
+  wasteful re-run):
   `cd api/backend && npx vitest run tests/unit tests/integration
-  tests/compliance --coverage --reporter=dot` — a bare `--coverage` run
-  with no dir targets is blocked by `.claude/hooks/full-suite-guard.cjs`
+  tests/compliance --coverage --reporter=dot > /tmp/covrun.log 2>&1;
+  tail -60 /tmp/covrun.log` for the coverage table, then
+  `grep -E "Test Files|^ Tests " /tmp/covrun.log` for the pass/fail
+  summary — a bare `--coverage` run with no dir targets is blocked by
+  `.claude/hooks/full-suite-guard.cjs`
   (per-iteration full-suite guard); explicit dir targets are the hook's
   own documented exception and produce an equivalent full-suite result.
   Then re-derive buckets from `coverage/coverage-summary.json`
