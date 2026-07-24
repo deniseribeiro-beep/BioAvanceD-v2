@@ -223,9 +223,10 @@ cluster) resolved to GOOD.
 Sorted ascending (worst first) — lines% / branches%.
 
 ```
-src/services/audit-v2.service.js                60.81 / 43.75   (blocking issues #146/#152 CLOSED — real candidate, re-check isolated first)
 src/services/neo4jCanonicalProjection.service.js 65.00 / 58.41  (blocking issue #146 CLOSED — real candidate, re-check isolated first)
 ```
+
+`audit-v2.service.js` closed this session: 100/100/100/100 stmts/branch/funcs/lines isolated (new `tests/unit/audit-v2.service.test.js`, no prior test file existed).
 
 Genuinely low, real slice candidates now that their blocking issues are
 closed: both above still need an isolated check before committing to a
