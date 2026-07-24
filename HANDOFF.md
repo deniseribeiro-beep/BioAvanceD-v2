@@ -1,79 +1,86 @@
 # HANDOFF
 
-**Written:** 2026-07-24, end of a test-loop iteration.
-**Branch:** `feature/docker-e2e-backend-integration` (commit `2500223b`,
+**Written:** 2026-07-24, end of a fix-bugs iteration.
+**Branch:** `feature/docker-e2e-backend-integration` (commit `5db28d0a`,
 pushed).
 
 ## What happened this session
 
-Read `HANDOFF.md`, ran `test-loop`. Picked the next two branch-priority
-candidates from `COVERAGE_NOTES.md`: `src/interface/routes/backup.routes.js`
-(70.83%/98.1% merged) and `src/infrastructure/middleware/rbac.js`
-(72.41%/95.5% merged) — both small gaps (7 and 8 branches), so bundled
-into one iteration per the loop's sizing guidance. Isolated runs matched
-the merged numbers for both (no issue-#242-class drift).
+Read `HANDOFF.md`, ran `work-issue` → routed to `fix-bugs` for issue
+#268 (`terminologySync.service.js`'s `normalizeRecord` produced a
+non-deterministic `hashConteudo` because the hash was computed after
+`sincronizadoEm`/`updatedAt` — both `new Date()` — were added to the
+normalized object).
 
-`backup.routes.js`: added tests in `tests/integration/backup.api.test.js`
-covering `/perform`'s and `/restore`'s default-error-message fallbacks
-(when the service resolves failure with no `error` field), the
-empty-basename guard on `/restore/:fileName` (hit via a `%2F`-encoded
-param), and the `error.message || String(error)` fallback for a
-non-`Error` rejection. Isolates to 91.66% branches / 100% lines; the
-remaining 2 branches are the documented unreachable-guard pattern
-(`getDirSizeSync`'s `!fs.existsSync` on an already-`readdir`'d entry, and
-`req.params.fileName || ''` which Express never leaves undefined) — not
-a real gap.
+Reproduced first (existing pinned test at
+`tests/unit/terminologySync.service.test.js:121` was already failing
+honestly against the bug, left unmodified). Fix: reordered
+`normalizeRecord` in `api/backend/src/services/terminologySync.service.js`
+so `hashConteudo` is computed over content fields only, then
+`sincronizadoEm`/`updatedAt` are added. Checked for other consumers
+relying on field order/timestamps (`terminologies.routes.js`,
+`Terminology.js` model) — none depend on hash computation order.
 
-`rbac.js`: added tests in `tests/unit/rbac.test.js` covering
-`resolveUserRole`'s `user.role` fallback and empty-string default paths,
-the unmapped-`roleName`-defaults-to-1 path, `requireRole`'s non-admin 403
-branch, `requirePermission`'s 401-no-user path, and the audit-log
-`setImmediate` branch (both with and without `req.app.locals.db`).
-Isolates to 100%/100%/100%/100%.
+Verified: `tests/unit/terminologySync.service.test.js` — 45/45 pass,
+including the deterministic-hash test and the
+changes-when-content-differs test.
 
-No product code touched; no new bugs found. Updated `COVERAGE_NOTES.md`:
-closed both files out of the branch-priority list.
+Branch `fix/hashConteudo-timestamp-nondeterminism`, commit `579ac2e8`,
+merged into `feature/docker-e2e-backend-integration` at `5db28d0a`
+(`--no-ff`, re-verified on merged tree). Fix branch deleted local+remote.
+Issue #268 commented with fix commit hash, then closed with merge
+commit hash.
 
-One commit, pushed: `2500223b`.
+Issue #269 (branch-guard.cjs pipe-misparse) still open, unowned — not
+picked up this session (tooling issue, not product code; left for a
+future session's call per `work-issue`).
+
+One friction note (not a skill gap): mid-verification I fired a bare
+`npx vitest run tests/unit/terminologySync.service.test.js tests/`
+command, which resolved to a full-suite run against the project's own
+"never run the full suite bare mid-loop" convention. Caught it via the
+120s backgrounding cutoff and stopped the task before it produced
+output; re-ran the correctly scoped targeted command instead. No output
+was consumed, no time lost beyond noticing.
 
 ## Repo state
 
 - `feature/docker-e2e-backend-integration` current and pushed
-  (`2500223b`).
-- Working tree clean. Test files + `COVERAGE_NOTES.md` touched — no
-  product code.
+  (`5db28d0a`).
+- Working tree clean. Only `api/backend/src/services/terminologySync.service.js`
+  touched (product code — appropriate for `fix-bugs`, unlike the
+  test-only prior sessions).
 
 ## Milestone (set 2026-07-22 by Dennis, still current)
 
 **Target: 90% across all four coverage dimensions.** As of the last full
 reconcile (`061ae64f`, 2026-07-24): Statements 93.06%, Branches 86.66%
-(lagging dimension), Functions 91.67%, Lines 93.41%. This session's two
-closes (7 + 8 branch gaps) should nudge branches up slightly at the next
-full reconcile (not re-measured this session — file-isolated only, same
-as prior sessions).
+(lagging dimension), Functions 91.67%, Lines 93.41%. This session was a
+bug fix, not a coverage slice — no new measurement taken; the prior
+session's backup.routes.js/rbac.js closes (2500223b) should already be
+reflected once a fresh reconcile runs.
 
 ## Recommended next steps
 
-Fresh branch-priority candidates from `COVERAGE_NOTES.md`, none on the
-excluded list, in order: `collections.js` (72.72%/100%),
-`ReleaseSampleUseCase.js` (72.97%/91.7%), `auth.service.js`
-(73.50%/98.4%), `security.routes.js` (73.68%/100%),
-`NotificationService.js` (76.36%/91.5%). Re-check isolated coverage
-before committing to one (issue #242 drift class still applies
-generally, though it did not apply to either file closed this session).
+None queued by Dennis explicitly. Candidates carried over from the
+prior handoff, still open in `COVERAGE_NOTES.md`'s branch-priority list:
+`collections.js` (72.72%/100%), `ReleaseSampleUseCase.js`
+(72.97%/91.7%), `auth.service.js` (73.50%/98.4%), `security.routes.js`
+(73.68%/100%), `NotificationService.js` (76.36%/91.5%). Re-check
+isolated coverage before committing to one (issue #242 drift class
+still applies generally).
 
-Issues #268 (hashConteudo non-determinism) and #269 (branch-guard.cjs
-misparse) are still open and unowned from several sessions ago — next
-session's call whether to route either through `fix-bugs`.
+Issue #269 (branch-guard.cjs misparse) is still open and unowned —
+next session's call whether to route it through `fix-bugs`.
 
 Consider a fresh full-suite coverage reconcile soon (last one was
 2026-07-24, commit `061ae64f`, now several slices behind) if the
-branch-priority list starts feeling stale again.
+branch-priority list starts feeling stale.
 
 ## Which skills to use
 
-`work-issue` to route #268/#269 if picked up, or straight to `test-loop`
-for the next coverage slice from the list above. `bioavanced-v2-conventions`
+`work-issue` to route #269 if picked up, or straight to `test-loop` for
+the next coverage slice from the list above. `bioavanced-v2-conventions`
 and `bioavanced-v2-testing-conventions` as always. `wrap-up` every
 iteration.
 
@@ -84,7 +91,7 @@ is a pack-repo issue, not a BioAvanceD-v2 blocker.
 
 ## Session note
 
-No friction this session. Both picked slices' isolated coverage matched
-the merged numbers exactly, and both were small enough (7 and 8 branch
-gaps) to bundle into one iteration per the loop's own sizing guidance —
-confirms that guidance works as written for small MID-HIGH candidates.
+No skill-level friction this session — `fix-bugs`' reproduce-first flow
+worked as written: the pinned test caught the bug, the fix was a
+two-line reorder, and un-weakening wasn't needed since the pinned test
+already asserted correct behavior (never weakened to begin with).
