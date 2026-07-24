@@ -494,6 +494,78 @@ describe('HL7Service.generateFHIRResource', () => {
     ).rejects.toThrow('fhir boom');
     spy.mockRestore();
   });
+
+  it('uses raw ISO-string dates (not Date instances) for analysisDateTime/uploadDate/registeredAt', async () => {
+    const bundle = await hl7Service.generateFHIRResource(
+      null,
+      { ...baseSampleFile, analysisDateTime: '2026-02-01T00:00:00.000Z', uploadDate: '2026-01-01T00:00:00.000Z' },
+      { ...baseSample, registeredAt: '2026-01-01T00:00:00.000Z' },
+      '12345678'
+    );
+    expect(bundle.entry[0].resource.effectiveDateTime).toBe('2026-02-01T00:00:00.000Z');
+    expect(bundle.entry[0].resource.issued).toBe('2026-01-01T00:00:00.000Z');
+    expect(bundle.entry[2].resource.collection.collectedDateTime).toBe('2026-01-01T00:00:00.000Z');
+  });
+
+  it('uses a raw ISO-string uploadDate (not a Date instance) for DiagnosticReport.effectiveDateTime when analysisDateTime is absent', async () => {
+    const bundle = await hl7Service.generateFHIRResource(
+      null,
+      { ...baseSampleFile, uploadDate: '2026-01-01T00:00:00.000Z' },
+      baseSample,
+      '12345678'
+    );
+    expect(bundle.entry[0].resource.effectiveDateTime).toBe('2026-01-01T00:00:00.000Z');
+  });
+
+  it('uses a real Date instance for Observation.effectiveDateTime when analysisDateTime is a Date', async () => {
+    const analysisDateTime = new Date('2026-02-01T00:00:00.000Z');
+    const bundle = await hl7Service.generateFHIRResource(
+      null, { ...baseSampleFile, analysisDateTime }, baseSample, '12345678'
+    );
+    expect(bundle.entry[1].resource.effectiveDateTime).toBe(analysisDateTime.toISOString());
+  });
+
+  it('falls back to now() for effectiveDateTime/issued/creation/collectedDateTime when no dates are provided', async () => {
+    const { uploadDate, ...sampleFileWithoutDates } = baseSampleFile;
+    const { registeredAt, ...sampleWithoutDates } = baseSample;
+    const bundle = await hl7Service.generateFHIRResource(null, sampleFileWithoutDates, sampleWithoutDates, '12345678');
+    expect(bundle.entry[0].resource.effectiveDateTime).toEqual(expect.any(String));
+    expect(bundle.entry[0].resource.issued).toEqual(expect.any(String));
+    expect(bundle.entry[0].resource.presentedForm[0].creation).toEqual(expect.any(String));
+    expect(bundle.entry[2].resource.collection.collectedDateTime).toEqual(expect.any(String));
+  });
+
+  it('falls back to specimenId (and then to empty id) when sample._id is absent', async () => {
+    const { _id, ...sampleWithoutId } = baseSample;
+    const bundleWithSpecimenId = await hl7Service.generateFHIRResource(
+      null, baseSampleFile, { ...sampleWithoutId, specimenId: 'SPEC-9' }, '12345678'
+    );
+    expect(bundleWithSpecimenId.entry[2].resource.id).toBe('SPEC-9');
+    expect(bundleWithSpecimenId.entry[0].resource.specimen[0].reference).toBe('Specimen/SPEC-9');
+
+    const bundleWithNeither = await hl7Service.generateFHIRResource(null, baseSampleFile, sampleWithoutId, '12345678');
+    expect(bundleWithNeither.entry[2].resource.id).toBe('');
+  });
+
+  it('falls back to empty fileID when sampleFile._id is absent', async () => {
+    const { _id, ...sampleFileWithoutId } = baseSampleFile;
+    const bundle = await hl7Service.generateFHIRResource(null, sampleFileWithoutId, baseSample, '12345678');
+    expect(bundle.entry[0].resource.id).toBe('');
+  });
+
+  it('includes interpretation coding on the Observation when sampleFile.interpretation is present', async () => {
+    const bundle = await hl7Service.generateFHIRResource(
+      null, { ...baseSampleFile, interpretation: 'HIGH' }, baseSample, '12345678'
+    );
+    expect(bundle.entry[1].resource.interpretation).toHaveLength(1);
+    expect(bundle.entry[1].resource.interpretation[0].coding[0].code).toBe('H');
+  });
+
+  it('returns an empty Specimen identifier array when sample.barcode is absent', async () => {
+    const { barcode, ...sampleWithoutBarcode } = baseSample;
+    const bundle = await hl7Service.generateFHIRResource(null, baseSampleFile, sampleWithoutBarcode, '12345678');
+    expect(bundle.entry[2].resource.identifier).toEqual([]);
+  });
 });
 
 describe('HL7Service.generateCDA', () => {
@@ -562,6 +634,84 @@ describe('HL7Service.generateCDA', () => {
       hl7Service.generateCDA(null, sampleFile, sample, '12345678')
     ).rejects.toThrow('cda boom');
     spy.mockRestore();
+  });
+
+  it('falls back to fileID for the extension attribute when accessionNumber is absent', async () => {
+    const cda = await hl7Service.generateCDA(null, sampleFile, sample, '12345678');
+    expect(cda).toContain(`extension="${sampleFile._id}"`);
+  });
+
+  it('falls back to an empty string extension when both accessionNumber and sampleFile._id are absent', async () => {
+    const { _id, ...sampleFileWithoutId } = sampleFile;
+    const cda = await hl7Service.generateCDA(null, sampleFileWithoutId, sample, '12345678');
+    expect(cda).toContain('id root="" extension=""');
+  });
+
+  it('uses accessionNumber for the extension attribute when present', async () => {
+    const cda = await hl7Service.generateCDA(null, { ...sampleFile, accessionNumber: 'ACC-9' }, sample, '12345678');
+    expect(cda).toContain('extension="ACC-9"');
+  });
+
+  it('falls back to new Date() for author time when uploadDate is absent', async () => {
+    const { uploadDate, ...sampleFileWithoutUpload } = sampleFile;
+    const cda = await hl7Service.generateCDA(null, sampleFileWithoutUpload, sample, '12345678');
+    expect(cda).toContain('<author>');
+  });
+
+  it('uses uploaderAnonId when present instead of the USR-SYSTEM default', async () => {
+    const cda = await hl7Service.generateCDA(null, { ...sampleFile, uploaderAnonId: 'USR-42' }, sample, '12345678');
+    expect(cda).toContain('id extension="USR-42"');
+    expect(cda).not.toContain('USR-SYSTEM');
+  });
+
+  it('includes the Status content line when resultStatus is present', async () => {
+    const cda = await hl7Service.generateCDA(null, sampleFile, sample, '12345678');
+    expect(cda).toContain('Status: F');
+  });
+
+  it('omits the Status content line when resultStatus is absent', async () => {
+    const { resultStatus, ...sampleFileWithoutStatus } = sampleFile;
+    const cda = await hl7Service.generateCDA(null, sampleFileWithoutStatus, sample, '12345678');
+    expect(cda).not.toContain('Status:');
+  });
+
+  it('uses analysisDateTime over uploadDate for the observation effectiveTime when both are present', async () => {
+    const analysisDateTime = new Date('2026-03-01T12:00:00.000Z');
+    const cda = await hl7Service.generateCDA(
+      null,
+      { ...sampleFile, analysisDateTime },
+      sample,
+      '12345678'
+    );
+    expect(cda).toContain(`<effectiveTime value="${hl7Service.formatHL7DateTime(analysisDateTime)}"/>`);
+  });
+
+  it('falls back through uploadDate then now() for the observation effectiveTime when analysisDateTime is absent', async () => {
+    const { uploadDate, ...sampleFileWithoutDates } = sampleFile;
+    const cda = await hl7Service.generateCDA(null, sampleFileWithoutDates, sample, '12345678');
+    expect(cda).toMatch(/<effectiveTime value="\d{14}"\/>/);
+  });
+
+  it('embeds an empty unit attribute on the PQ value when unitOfMeasure is absent', async () => {
+    const cda = await hl7Service.generateCDA(null, { ...sampleFile, resultValue: 7 }, sample, '12345678');
+    expect(cda).toContain('<value xsi:type="PQ" value="7" unit=""/>');
+  });
+
+  it('includes barcode and collection-date content when present on the sample', async () => {
+    const registeredAt = new Date('2026-01-05T12:00:00.000Z');
+    const cda = await hl7Service.generateCDA(
+      null,
+      sampleFile,
+      { sampleType: 'PLASMA', barcode: 'BAR-9', registeredAt },
+      '12345678'
+    );
+    expect(cda).toContain('Barcode: BAR-9');
+    expect(cda).toContain(`Collection Date: ${hl7Service.formatHL7Date(registeredAt)}`);
+  });
+
+  it('falls back to an empty string for sampleType when absent from the sample', async () => {
+    const cda = await hl7Service.generateCDA(null, sampleFile, {}, '12345678');
+    expect(cda).toContain('Sample Type: ');
   });
 });
 
