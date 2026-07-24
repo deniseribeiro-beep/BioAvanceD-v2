@@ -349,6 +349,32 @@ describe('Reports API integration', () => {
       expect(p1.samples).toHaveLength(2);
     });
 
+    it('samplesbypatient: usa fallback vazio para paciente sem patientID e sem amostras correspondentes', async () => {
+      const { db } = buildCollectionDb({
+        patients: [
+          { patientName: 'Sem ID' },
+          { patientID: 'P9', patientName: 'Sem Amostras' },
+        ],
+        samples: [
+          { patientID: 'P1', sampleID: 'S1' },
+        ],
+      });
+
+      const testApp = appWithDb(db);
+      const response = await request(testApp)
+        .post('/api/reports/samplesbypatient/preview')
+        .send({ filters: {} });
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.total).toBe(2);
+      const semId = response.body.data.patients.find((p) => p.patientName === 'Sem ID');
+      expect(semId.sampleCount).toBe(0);
+      expect(semId.samples).toEqual([]);
+      const semAmostras = response.body.data.patients.find((p) => p.patientID === 'P9');
+      expect(semAmostras.sampleCount).toBe(0);
+      expect(semAmostras.samples).toEqual([]);
+    });
+
     it('amostra: aplica buildSampleQuery com múltiplos filtros combinados via $and', async () => {
       const { db, capturedQueries } = buildCollectionDb({
         samples: [{ patientID: 'P1', sampleID: 'S1' }],
