@@ -1,7 +1,6 @@
 // backend/src/routes/intakeWizard.js
 const express = require('express');
 const router = express.Router();
-const notificationService = require('../services/notification.service');
 const patientIdentityService = require('../services/PatientIdentityService');
 const { generateSampleHash } = require('../services/MerkleService');
 const { getCollection } = require('../utils/collectionResolver');
@@ -30,17 +29,6 @@ function normalizeArray(value) {
 
 function normalizeObject(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
-}
-
-function collectNonCanonicalFields(payload, allowedKeys, path = '') {
-  const fields = [];
-  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return fields;
-  for (const key of Object.keys(payload)) {
-    if (!allowedKeys.has(key)) {
-      fields.push(path ? `${path}.${key}` : key);
-    }
-  }
-  return fields;
 }
 
 function collectCanonicalViolations(payload, aliasMap = {}) {
@@ -102,26 +90,6 @@ function parseBirthDate(value) {
 function buildFallbackPatientID() {
   const digits = String(Date.now()).replace(/\D/g, '').slice(-8);
   return digits.padStart(8, '0');
-}
-
-function resolveRecipientAndTemplate(data = {}) {
-  const participant = data?.participant || {};
-  const legalRepresentative = data?.legalRepresentative || {};
-  const consent = data?.consent || {};
-
-  const patientName = normalizeString(participant.patientName);
-  const patientId = normalizeString(participant.participantId);
-  const patientEmail = normalizeString(participant.email);
-  const representativeEmail = normalizeString(legalRepresentative.email);
-  const recipientEmail = patientEmail || representativeEmail;
-  const templateId = normalizeString(consent.consentTemplateId);
-
-  return {
-    patientName,
-    patientId,
-    recipientEmail,
-    templateId
-  };
 }
 
 function resolvePatientID(data = {}) {
@@ -216,49 +184,6 @@ async function resolveMatchedPatient(db, data = {}) {
   });
 
   return result;
-}
-
-async function ensureConsentEmailSent(payload) {
-  const { patientName, patientId, recipientEmail, templateId } = resolveRecipientAndTemplate(payload);
-
-  if (!patientName) {
-    return { ok: false, status: 400, message: 'Nome do paciente é obrigatório para envio do TCLE.' };
-  }
-
-  if (!templateId) {
-    return { ok: false, status: 400, message: 'Selecione um TCLE antes de finalizar o cadastro.' };
-  }
-
-  if (!recipientEmail) {
-    return { ok: false, status: 400, message: 'E-mail do paciente ou representante é obrigatório para envio do TCLE.' };
-  }
-
-  const patientData = {
-    patientID: patientId || `INTAKE-${Date.now()}`,
-    patientName,
-    email: recipientEmail,
-  };
-
-  const consentMetadata = notificationService.buildConsentMetadata();
-  const consentLink = notificationService.buildConsentLink(patientData, consentMetadata.token);
-  const emailResult = await notificationService.sendConsentEmail(patientData, consentLink);
-
-  if (!emailResult?.success) {
-    return { ok: false, status: 502, message: 'Não foi possível enviar o TCLE por e-mail. O cadastro não foi finalizado.', details: emailResult || null };
-  }
-
-  return {
-    ok: true,
-    consentEmail: {
-      success: true,
-      channel: emailResult.channel || 'email',
-      provider: emailResult.provider || null,
-      messageId: emailResult.messageId || null,
-      to: emailResult.originalTo || emailResult.to || recipientEmail,
-      consentLink,
-      sentAt: new Date().toISOString(),
-    }
-  };
 }
 
 async function resolveConsentDecision(db, patient) {
@@ -762,13 +687,11 @@ router._test = {
   normalizeObject,
   parseBirthDate,
   buildFallbackPatientID,
-  resolveRecipientAndTemplate,
   resolvePatientID,
   buildClinicalData,
   buildPharmacologyData,
   buildSampleDocumentFromIntake,
   resolveMatchedPatient,
-  ensureConsentEmailSent,
   calcularQualidade,
   resolverQualidadeMetodologica,
 };
