@@ -105,10 +105,29 @@ worst branch% first):
 gap  branch% lines%  file
  17  64.58%  91.5%   src/core/use-cases/AllocateSampleUseCase.js   -- CLOSED prior session
  25  70.23%  91.5%   src/core/use-cases/RegisterSample.js          -- CLOSED prior session
- 42  72.90%  89.9%   src/interface/routes/auth.routes.js          -- partial, coverage number suspect (dyeallpies-skills-pack#111)
- 38  78.28%  85.4%   src/routes/orphanet.js                        -- partial, prior sessions
+ 42  72.90%  89.9%   src/interface/routes/auth.routes.js          -- checked, not a real gap (see below)
  21  80.37% 100.0%   src/controllers/consent.controller.js         -- phantom-branch pattern, not a real gap
 ```
+
+`auth.routes.js` checked this session (no test added) — isolated run across its three
+test files matched the merged 72.9% (no drift), but every remaining uncovered
+statement/branch was verified 0-hit even when run in isolation with only the single
+test that demonstrably exercises it (e.g. the no-cookie `/refresh` 401 path) —
+confirmed instance of the async-statement-0-hit artifact already documented for
+`auth.controller.js`/`auth.service.js` (dyeallpies-skills-pack#111 class), not a real
+gap.
+
+`orphanet.js` closed this session — isolated run matched the merged 78.28% branches
+(no drift); real gaps closed in the synchronous normalization helpers
+(`normalizeReferenceList`, `normalizeExternalReferences`, `normalizeDiseaseRecord`):
+`ExternalReference` as a single object instead of an array, lowercase `source`/
+`reference` field names, `icdCode`/`relacoes.omim` fallbacks, and the
+`orpha-${orphaNumeric}` generated-id fallback when a doc has no `_id`/`id`. Isolates
+to 97.77% branches (up from 78.28%). Remaining gap is `dedupeRecords`' merge-fallback
+operands and a handful of `cond-expr` alternates in `searchLocal`/`searchRemote` —
+spot-checked as either redundant-merge dead code (same class as `import-lgpd.service.js`,
+issue #270) or inside the async route handler's phantom-statement pattern; not pursued
+further this session.
 
 `backup.routes.js` closed this session — isolated run matched the merged
 70.83% (no drift); real gaps closed: `/perform`'s default-message fallback

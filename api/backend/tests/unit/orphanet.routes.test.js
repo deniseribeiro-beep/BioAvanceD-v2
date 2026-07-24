@@ -684,4 +684,100 @@ describe('orphanet.routes', () => {
     expect(response.body).toHaveLength(1);
     expect(response.body[0].orphaCode).toBe('ORPHA:324');
   });
+
+  it('trata ExternalReference como objeto unico (nao-array) ao extrair CID/OMIM', async () => {
+    loadRouteWithEnv({ ALLOW_EXTERNAL_TERMINOLOGY_SYNC: 'true', ORPHADATA_BASE_URL: 'https://orphadata.test' });
+
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        results: [{
+          ORPHAcode: '324',
+          'Preferred term': 'Fabry disease',
+          ExternalReference: { Source: 'ICD-10', Reference: 'E75.2' },
+        }],
+      }),
+    });
+
+    const db = { collection: vi.fn(() => ({ find: vi.fn(() => cursor([])) })) };
+    const app = buildApp(db);
+    const response = await request(app).get('/api/orphanet/search?q=Fabry');
+
+    expect(response.status).toBe(200);
+    expect(response.body[0].Codigos_CID10).toBe('E75.2');
+  });
+
+  it('resolve Source/Reference de ExternalReference a partir dos campos em minusculas', async () => {
+    loadRouteWithEnv({ ALLOW_EXTERNAL_TERMINOLOGY_SYNC: 'true', ORPHADATA_BASE_URL: 'https://orphadata.test' });
+
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        results: [{
+          ORPHAcode: '324',
+          'Preferred term': 'Fabry disease',
+          ExternalReference: [
+            { source: 'ICD-10', reference: 'E75.2' },
+            { source: 'OMIM', reference: '301500' },
+          ],
+        }],
+      }),
+    });
+
+    const db = { collection: vi.fn(() => ({ find: vi.fn(() => cursor([])) })) };
+    const app = buildApp(db);
+    const response = await request(app).get('/api/orphanet/search?q=Fabry');
+
+    expect(response.status).toBe(200);
+    expect(response.body[0].Codigos_CID10).toBe('E75.2');
+    expect(response.body[0].OMIM).toBe('OMIM:301500');
+  });
+
+  it('usa icdCode e relacoes.omim como fallback quando os campos primarios de CID/OMIM estao ausentes', async () => {
+    loadRouteWithEnv({ ALLOW_EXTERNAL_TERMINOLOGY_SYNC: 'false' });
+
+    const db = {
+      collection: vi.fn((name) => {
+        if (name === 'cids') return { find: vi.fn(() => cursor([])) };
+        if (name === COLLECTION_NAME) {
+          return {
+            find: vi.fn(() => cursor([{
+              ORPHA: '324',
+              name: 'Fabry disease',
+              icdCode: 'E75.2',
+              relacoes: { omim: '301500' },
+            }])),
+          };
+        }
+        return { find: vi.fn(() => cursor([])) };
+      }),
+    };
+
+    const app = buildApp(db);
+    const response = await request(app).get('/api/orphanet/search?q=Fabry');
+
+    expect(response.status).toBe(200);
+    expect(response.body[0].Codigos_CID10).toBe('E75.2');
+    expect(response.body[0].OMIM).toBe('OMIM:301500');
+  });
+
+  it('gera o id a partir do codigo ORPHA quando o documento nao possui _id nem id', async () => {
+    loadRouteWithEnv({ ALLOW_EXTERNAL_TERMINOLOGY_SYNC: 'false' });
+
+    const db = {
+      collection: vi.fn((name) => {
+        if (name === 'cids') return { find: vi.fn(() => cursor([])) };
+        if (name === COLLECTION_NAME) {
+          return { find: vi.fn(() => cursor([{ ORPHA: '324', name: 'Fabry disease' }])) };
+        }
+        return { find: vi.fn(() => cursor([])) };
+      }),
+    };
+
+    const app = buildApp(db);
+    const response = await request(app).get('/api/orphanet/search?q=Fabry');
+
+    expect(response.status).toBe(200);
+    expect(response.body[0].id).toBe('orpha-324');
+  });
 });
