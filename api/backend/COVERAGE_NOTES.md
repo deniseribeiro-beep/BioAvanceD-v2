@@ -95,11 +95,8 @@ trusting the merged number for either).
 
 **No longer excluded — their blocking issues are now CLOSED:**
 `daily-merkle.job.js`, `audit-v2.service.js`,
-`neo4jCanonicalProjection.service.js`, and `result-worker.js` all closed
-(see MID-LOW section below). Remaining candidate: `patient.service.js`
-(#240/#241, closed) — not isolated-checked yet; re-run its test file(s)
-with `--coverage.include` before trusting its old merged number (issue
-#242 drift class may apply).
+`neo4jCanonicalProjection.service.js`, `result-worker.js`, and
+`patient.service.js` all closed (see MID-LOW/MID-HIGH sections below).
 
 **Regenerated 2026-07-24 (session 14)** from a fresh full-suite
 `coverage-summary.json`, excluded/already-documented files above
@@ -230,8 +227,12 @@ src/services/mqtt-telemetry.service.js           71.42 / 78.09   (accepted gap �
 src/services/SampleGraphValidator.js             77.69 / 66.66   (issue #222 — legacy-schema migration, design fork, still open)
 src/workers/neo4jProjection.worker.js            79.62 / 73.33   (CLI entry block not coverable in-process, accepted gap)
 src/interface/routes/equipment.routes.js         81.59 / 81.01   (phantom-statement pattern, not a real gap — see reconcile note above)
-src/services/patient.service.js                  83.89 / 74.56   (blocking issues #240/#241 CLOSED — real candidate, re-check isolated first)
 ```
+
+`patient.service.js` isolated (9 test files, `--coverage.include`): was
+81.16%/65.83% stmts/branch, now **86.36%/77.55%** (issue #275 filed for
+an unrelated per-function 0-hit merge artifact in that same run — trust
+this top-line %, not the per-function breakdown).
 
 `User.js` checked and closed: 78.94% merged branches was drift (issue
 #242 class); isolated run was 97.89%, gap was two real untested cases
