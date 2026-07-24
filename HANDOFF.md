@@ -1,82 +1,82 @@
 # HANDOFF
 
 **Written:** 2026-07-24, end of a test-loop iteration.
-**Branch:** `feature/docker-e2e-backend-integration` (commit `32d49921`,
+**Branch:** `feature/docker-e2e-backend-integration` (commit `191481c2`,
 pushed).
 
 ## What happened this session
 
-Read `HANDOFF.md`, picked up `NotificationService.js` — the next
-unclaimed branch-priority-list candidate per the prior session's note.
+Read `HANDOFF.md`. The prior session's branch-priority-list candidates
+were exhausted, so per its recommendation this session started with a
+fresh full-suite coverage reconcile instead of guessing from a stale
+list.
 
-- Isolated run (both existing test files,
-  `tests/unit/services/NotificationService.test.js` +
-  `tests/unit/NotificationService.test.js`) matched the merged 76.36%
-  branches (no drift).
-- Closed two real, previously-untested gaps: `getNotificationQueue`'s
-  `!connection` return-null path (dev mode, no Redis config — distinct
-  from the already-tested throw path) and the entire
-  `sendCriticalTempAlertFromInflux` function (no-recent-rows outcome,
-  and the delegate-to-`sendCriticalTempAlert` outcome including the
-  `locationId` Flux filter), both via the project's documented
-  require-cache-bust pattern (mirroring
-  `patientBiomarkerTimeseries.service.test.js`'s existing convention for
-  spying on destructured `connectInfluxDB`/`getInfluxQueryApi`/
-  `getInfluxConfig`).
-- Isolates to 94.07% statements / 93.84% lines (from 91.85%/91.53%).
-  Branches stayed at 76.36% even after these two new tests demonstrably
-  exercised their target code with passing assertions — confirmed via
-  isolated single-test coverage runs that the branch/function
-  hit-counters read exactly 0 despite correct runtime behavior. This is
-  the same phantom-branch artifact class already documented for
-  `consent.controller.js`/`auth.service.js`, now confirmed to occur even
-  for a synchronous function under the require-cache-bust pattern
-  specifically (not just async statements). Spot-checked the remaining
-  uncovered branches the same way (each has a passing test asserting the
-  exact behavior) — treated as the same artifact, not a real gap.
-- `COVERAGE_NOTES.md` updated in the same commit: `NotificationService.js`
-  removed from the branch-priority list with a closure note (same style
-  as prior closures — no narrative history file).
-
-Filed `dyeallpies-skills-pack#116` (pack repo) to get this artifact's
-root-cause signal (require-cache-bust + V8/vitest coverage under-reports
-the re-required module's own hits) written into the pack's
-testing-conventions reference — couldn't edit that skill directly since
-it's a junction into the pack repo (skill-maintenance Rule 0).
-
-Ran `wrap-up`'s core audit: no scope violations (test-only + coverage
-notes, no product source touched), no lazy fixes, no permission denials,
-no user corrections (autonomous session), one recurring-pattern finding
-filed as the pack issue above. Nothing else shipped (no issue closed, no
-PR/merge) so the shipping addendum didn't otherwise apply.
+- Full native suite run (`tests/unit tests/integration tests/compliance
+  --coverage`): 292 test files, 1 pre-existing failure
+  (`sample-graph-validator.service.test.js`'s tampering test, already
+  documented, not a regression). Statements **93.15%**, Branches
+  **87.08%** (up from 86.66%), Functions **91.71%**, Lines **93.5%**.
+- Sorted `coverage-summary.json` by branch gap (excluding files already
+  documented as blocked/excluded) — `import-lgpd.service.js` came up
+  top of the non-excluded list (139 branch gap merged / ~141 isolated).
+  Isolated run across its `import{Patients,Samples}` unit test files
+  matched the merged ~82.5% branches (no drift) — both methods already
+  have thorough per-row test suites from prior sessions.
+- Traced every remaining uncovered branch by reading the surrounding
+  code (not by experimenting with new tests) and confirmed each is
+  structurally unreachable dead code: `importSamples`'s
+  post-`SampleModel.validate()` re-checks of quality/sampleType/
+  sampleOrigin/extractionProtocol (the same predicate already ran
+  inside `validate()`, so the second check's `false` side can never
+  fire), `importPatients`'s `typeof birthDate === 'string'` branch
+  (birthDate is guaranteed a `Date` by an earlier guard), two duplicate
+  `rows.length === 0`/`headers.length === 0` re-checks, and
+  `parseSampleRow`'s literal duplicate `if/else-if (row.registeredAt)`.
+  Also flagged (same issue, comment) two harmless duplicate-object-key
+  reassignments (`pharmacologyData`, `consentTemplateId`) as a minor
+  cleanup note, unrelated to coverage.
+- Filed **issue #270** with the full trace and line numbers; asked for
+  reconciliation once this branch's PR merges to `main`, not a fresh
+  assignment. No test added — not a real gap, so nothing to weaken or
+  force.
+- Updated `COVERAGE_NOTES.md` in the same commit: fresh reconcile
+  numbers/date, `import-lgpd.service.js` moved from "partial" to
+  "closed — remaining gap is confirmed dead code, issue #270".
+- Ran `wrap-up`'s full audit (core + shipping addendum, since this
+  session pushed a commit): no scope violations (coverage-notes only,
+  no product source touched), no lazy fixes, no permission denials, no
+  user corrections (autonomous session), the one finding (#270) is
+  fully filed and still open — nothing left dangling. No friction.
 
 ## Repo state
 
 - `feature/docker-e2e-backend-integration`, pushed, working tree clean.
-- Files touched this session:
-  `api/backend/tests/unit/services/NotificationService.test.js`,
-  `api/backend/COVERAGE_NOTES.md`. No product source touched.
+- Files touched this session: `api/backend/COVERAGE_NOTES.md` only. No
+  product source, no new test files this session.
 
 ## Milestone (set 2026-07-22 by Dennis, still current)
 
 **Target: 90% across all four coverage dimensions.** Last full reconcile
-was `061ae64f` (2026-07-24): Statements 93.06%, Branches 86.66%
-(lagging), Functions 91.67%, Lines 93.41%. This session closed one more
-branch-priority-list file's statement/line gap (branches were already a
-phantom-artifact plateau, not a real gap) but took no fresh full-suite
-measurement — a reconcile is still due (see below, now 6 commits behind).
+is this session's, `191481c2` (2026-07-24): Statements 93.15%, Branches
+87.08% (lagging, but up from 86.66%), Functions 91.71%, Lines 93.5%.
+Branches remains the sole dimension below 90% and needs a large
+multi-session lift — this session moved it +0.42pp via dead-code
+identification (a real branch-count improvement path even without new
+tests, since excluding structurally-unreachable branches from what
+"real gap" means is itself progress on knowing where the milestone
+actually stands).
 
 ## Recommended next steps
 
-None queued by Dennis explicitly. The branch-priority list is now empty
-of unclaimed candidates from the last reconcile's top-6
-(`AllocateSampleUseCase.js`/`RegisterSample.js` closed prior sessions,
-`auth.routes.js` partial/suspect number, `NotificationService.js` closed
-this session, `orphanet.js` partial from prior sessions,
-`consent.controller.js` phantom-branch/not-real-gap). A fresh reconcile
-should run before picking the next slice — the list is stale enough
-(6 commits behind `061ae64f`) that a new top-N pull is warranted rather
-than guessing from memory.
+None queued by Dennis explicitly. The branch-priority list (in
+`COVERAGE_NOTES.md`) needs a fresh top-N pull from this session's
+reconcile — the old list's candidates (`auth.routes.js` partial/suspect
+number, `orphanet.js` partial, `consent.controller.js` phantom-branch)
+are still valid starting points, but a new sorted pull would surface
+whatever's now above them (this session only chased the single top
+non-excluded candidate, `import-lgpd.service.js`, and it turned out to
+be dead code, not new tests — so the branch-percentage movement from
+new tests specifically is still owed).
 
 The excluded-by-issue list (`audit-v2.service.js`, `SampleGraphValidator.js`,
 `patient.service.js`, `mqtt-telemetry.service.js`, `result-worker.js`,
@@ -86,33 +86,40 @@ re-pick those without reading their linked issues first.
 Issue #269 (branch-guard.cjs misparse) is still open and unowned from
 prior sessions — still nobody's picked it up.
 
-`dyeallpies-skills-pack#116` (new, this session) is a pack-repo
-documentation issue, not a BioAvanceD-v2 blocker.
+Issue #270 (new, this session) is a dead-code finding in
+`import-lgpd.service.js` — revisit once this branch's PR merges to
+`main`, per the legacy skill's filing convention; not a blocker for
+further test-loop work in the meantime.
+
+`dyeallpies-skills-pack#116` (from the prior session, pack repo) is
+still a pack-repo documentation issue, not a BioAvanceD-v2 blocker.
 
 ## Which skills to use
 
-`test-loop` for the next coverage slice — start with a fresh full-suite
-reconcile (per `COVERAGE_NOTES.md`'s own reconcile-cadence guidance)
-since the branch-priority list's top candidates are now exhausted.
+`test-loop` for the next coverage slice — this session's fresh reconcile
+means the next session can pick straight from the sorted-by-branch-gap
+list in `COVERAGE_NOTES.md` without re-running the full suite first.
 `bioavanced-v2-conventions` and `bioavanced-v2-testing-conventions` as
-always. `wrap-up` every iteration.
+always. `bioavanced-v2-legacy` when a candidate's coverage gap turns out
+to be dead code, as happened this session — the filing mechanics there
+matched cleanly. `wrap-up` every iteration.
 
 ## Dependency notes
 
 None blocking. `dyeallpies-skills-pack#111`/`#112` (auth.routes.js
 coverage-number-suspect, 3-way-split isolation caveat) still apply
 generally when picking future slices. `dyeallpies-skills-pack#115`
-(cjs-mocking skill update) and the new `#116` (phantom-branch
-root-cause) are both pack-repo issues, not BioAvanceD-v2 blockers.
+(cjs-mocking skill update) and `#116` (phantom-branch root-cause) are
+both pack-repo issues, not BioAvanceD-v2 blockers.
 
 ## Session note
 
-Main friction: confirming the phantom-branch pattern took real
-debugging time (isolated single-test coverage runs, checking function/
-statement/branch hit-maps directly via the JSON reporter) before
-concluding it was the known artifact class rather than a genuine gap —
-worth the time since it prevented chasing unfixable branches, but the
-pack issue filed this session should make that verification faster next
-time by naming the exact recipe. Otherwise no skill-level friction —
-the require-cache-bust pattern from `patientBiomarkerTimeseries.service.test.js`
-transferred cleanly to `NotificationService.js`'s influxdb mocking.
+Main friction: none of note. The full-suite reconcile run exceeded the
+foreground command timeout and moved to background automatically — not
+friction, just the expected mechanism for a 6-7 minute command; picked
+up cleanly via the task-notification. Tracing `import-lgpd.service.js`'s
+branches to confirm dead code (rather than experimenting with tests to
+see what "sticks") was straightforward once the pattern from prior
+sessions' dead-code findings (#255/#257/#261/#263/#264/#267) was
+recognized — same root cause (redundant re-validation after an earlier
+check already covered the same predicate), just a new file.
