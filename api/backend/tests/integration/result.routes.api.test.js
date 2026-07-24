@@ -3,6 +3,7 @@ const request = require('supertest');
 const jwt = require('jsonwebtoken');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const { ObjectId } = require('mongodb');
 
 process.env.NODE_ENV = 'test';
@@ -417,6 +418,160 @@ describe('POST /api/results/upload', () => {
     expect(res.status).toBe(201);
     expect(res.body.data.equipmentID).toBe(7);
 
+    const resultDir = path.join(__dirname, '../../src/storage/results', SAMPLE_OID);
+    if (fs.existsSync(resultDir)) fs.rmSync(resultDir, { recursive: true, force: true });
+  });
+
+  it('rejects the upload (multer storage error) when sampleID is missing but a file is attached', async () => {
+    app.locals.db = createDbMock({});
+    vi.spyOn(consentValidator, 'validateAccess').mockResolvedValue(true);
+
+    const res = await request(app)
+      .post('/api/results/upload')
+      .set('Authorization', `Bearer ${makeToken(2)}`)
+      .attach('file', Buffer.from('%PDF-1.4 test'), 'test.pdf');
+
+    // multer's diskStorage.destination calls cb(new Error('sampleID é
+    // obrigatório')) before any directory is created; that becomes an
+    // unhandled error passed to next(), same fallback as the fileFilter
+    // rejection case above.
+    expect(res.status).toBeGreaterThanOrEqual(400);
+  });
+
+  it('sample-not-found cleanup skips unlink when the temp file no longer exists on disk', async () => {
+    const amostrasColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(null) });
+    app.locals.db = createDbMock({ amostras: amostrasColl, results: createCollectionMock() });
+    vi.spyOn(consentValidator, 'validateAccess').mockResolvedValue(true);
+    const existsSpy = vi.spyOn(fs, 'existsSync').mockReturnValue(false);
+
+    const res = await request(app)
+      .post('/api/results/upload')
+      .set('Authorization', `Bearer ${makeToken(2)}`)
+      .field('sampleID', SAMPLE_OID)
+      .attach('file', Buffer.from('%PDF-1.4 test'), 'test.pdf');
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe('Amostra não encontrada');
+
+    existsSpy.mockRestore();
+    const resultDir = path.join(__dirname, '../../src/storage/results', SAMPLE_OID);
+    if (fs.existsSync(resultDir)) fs.rmSync(resultDir, { recursive: true, force: true });
+  });
+
+  it('invalid-method cleanup skips unlink when the temp file no longer exists on disk', async () => {
+    const sampleDoc = { _id: new ObjectId(SAMPLE_OID) };
+    const amostrasColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(sampleDoc) });
+    app.locals.db = createDbMock({ amostras: amostrasColl, results: createCollectionMock() });
+    vi.spyOn(consentValidator, 'validateAccess').mockResolvedValue(true);
+    const existsSpy = vi.spyOn(fs, 'existsSync').mockReturnValue(false);
+
+    const res = await request(app)
+      .post('/api/results/upload')
+      .set('Authorization', `Bearer ${makeToken(2)}`)
+      .field('sampleID', SAMPLE_OID)
+      .field('method', 'Método Inexistente')
+      .attach('file', Buffer.from('%PDF-1.4 test'), 'test.pdf');
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('Invalid Analysis Method');
+
+    existsSpy.mockRestore();
+    const resultDir = path.join(__dirname, '../../src/storage/results', SAMPLE_OID);
+    if (fs.existsSync(resultDir)) fs.rmSync(resultDir, { recursive: true, force: true });
+  });
+
+  it('insert-failure cleanup skips unlink when the temp file no longer exists on disk', async () => {
+    const sampleDoc = { _id: new ObjectId(SAMPLE_OID) };
+    const amostrasColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(sampleDoc) });
+    const insertOne = vi.fn().mockRejectedValue(new Error('insert failed'));
+    app.locals.db = createDbMock({ amostras: amostrasColl, results: createCollectionMock({ insertOne }) });
+    vi.spyOn(consentValidator, 'validateAccess').mockResolvedValue(true);
+    const existsSpy = vi.spyOn(fs, 'existsSync').mockReturnValue(false);
+
+    const res = await request(app)
+      .post('/api/results/upload')
+      .set('Authorization', `Bearer ${makeToken(2)}`)
+      .field('sampleID', SAMPLE_OID)
+      .attach('file', Buffer.from('%PDF-1.4 test'), 'test.pdf');
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toBe('insert failed');
+
+    existsSpy.mockRestore();
+    const resultDir = path.join(__dirname, '../../src/storage/results', SAMPLE_OID);
+    if (fs.existsSync(resultDir)) fs.rmSync(resultDir, { recursive: true, force: true });
+  });
+
+  it('logs (does not throw) when the catch-block cleanup unlink itself fails', async () => {
+    const sampleDoc = { _id: new ObjectId(SAMPLE_OID) };
+    const amostrasColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(sampleDoc) });
+    const insertOne = vi.fn().mockRejectedValue(new Error('insert failed'));
+    app.locals.db = createDbMock({ amostras: amostrasColl, results: createCollectionMock({ insertOne }) });
+    vi.spyOn(consentValidator, 'validateAccess').mockResolvedValue(true);
+    const unlinkSpy = vi.spyOn(fs, 'unlinkSync').mockImplementation(() => { throw new Error('unlink boom'); });
+
+    const res = await request(app)
+      .post('/api/results/upload')
+      .set('Authorization', `Bearer ${makeToken(2)}`)
+      .field('sampleID', SAMPLE_OID)
+      .attach('file', Buffer.from('%PDF-1.4 test'), 'test.pdf');
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toBe('insert failed');
+
+    unlinkSpy.mockRestore();
+    const resultDir = path.join(__dirname, '../../src/storage/results', SAMPLE_OID);
+    if (fs.existsSync(resultDir)) fs.rmSync(resultDir, { recursive: true, force: true });
+  });
+
+  it('rejects the upload (multer storage error) when the destination directory cannot be created', async () => {
+    const sampleDoc = { _id: new ObjectId(SAMPLE_OID) };
+    const amostrasColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(sampleDoc) });
+    app.locals.db = createDbMock({ amostras: amostrasColl, results: createCollectionMock() });
+    vi.spyOn(consentValidator, 'validateAccess').mockResolvedValue(true);
+    const mkdirSpy = vi.spyOn(fs, 'mkdirSync').mockImplementation(() => { throw new Error('mkdir boom'); });
+
+    const res = await request(app)
+      .post('/api/results/upload')
+      .set('Authorization', `Bearer ${makeToken(2)}`)
+      .field('sampleID', SAMPLE_OID)
+      .attach('file', Buffer.from('%PDF-1.4 test'), 'test.pdf');
+
+    // resultStorage.destination's own try/catch turns the mkdirSync throw
+    // into cb(error, null), which multer surfaces as an unhandled error.
+    expect(res.status).toBeGreaterThanOrEqual(400);
+
+    mkdirSpy.mockRestore();
+    const resultDir = path.join(__dirname, '../../src/storage/results', SAMPLE_OID);
+    if (fs.existsSync(resultDir)) fs.rmSync(resultDir, { recursive: true, force: true });
+  });
+
+  it('rejects the upload (multer storage error) when the unique filename cannot be generated', async () => {
+    const sampleDoc = { _id: new ObjectId(SAMPLE_OID) };
+    const amostrasColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(sampleDoc) });
+    app.locals.db = createDbMock({ amostras: amostrasColl, results: createCollectionMock() });
+    vi.spyOn(consentValidator, 'validateAccess').mockResolvedValue(true);
+    const realRandomBytes = crypto.randomBytes;
+    const randomBytesSpy = vi.spyOn(crypto, 'randomBytes').mockImplementation((size, ...rest) => {
+      // form-data's own boundary generation also calls crypto.randomBytes
+      // (with size 12) while building the multipart request client-side;
+      // only fail the server-side diskStorage call (size 16) for a
+      // filename-generation-catch test, not the client request itself.
+      if (size === 16) throw new Error('random boom');
+      return realRandomBytes(size, ...rest);
+    });
+
+    const res = await request(app)
+      .post('/api/results/upload')
+      .set('Authorization', `Bearer ${makeToken(2)}`)
+      .field('sampleID', SAMPLE_OID)
+      .attach('file', Buffer.from('%PDF-1.4 test'), 'test.pdf');
+
+    // resultStorage.filename's own try/catch turns the crypto.randomBytes
+    // throw into cb(error, null), which multer surfaces as an unhandled error.
+    expect(res.status).toBeGreaterThanOrEqual(400);
+
+    randomBytesSpy.mockRestore();
     const resultDir = path.join(__dirname, '../../src/storage/results', SAMPLE_OID);
     if (fs.existsSync(resultDir)) fs.rmSync(resultDir, { recursive: true, force: true });
   });

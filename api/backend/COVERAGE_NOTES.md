@@ -237,6 +237,13 @@ helpers only ever called with already-validated args from the public
 `connectDB`/`connectNewDB` surface) — same dead-guard-clause pattern
 noted below, not chased further.
 
+`result.routes.js` isolated (`result.api.test.js` + `result.routes.api.test.js`,
+`--coverage.include`): was 94.81%/78.4% stmts/branch, now **96.69%/82.95%**.
+Remaining gap (fileType-null re-check, upload's own `validation.isValid`
+guard) is unreachable — both are redundant re-checks of conditions
+already guaranteed true by `fileFilter`/prior validation on the same
+route — same dead-guard-clause pattern noted below, not chased further.
+
 Note: `sample.service.js`, `import.service.js`, `audit.controller.js`,
 `audit-canonicalization.service.js`, `equipment.routes.js`, `User.js`
 have moved to GOOD in prior sessions — not re-verified line-by-line since
