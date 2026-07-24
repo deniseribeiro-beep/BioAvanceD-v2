@@ -1,109 +1,113 @@
 # HANDOFF
 
-**Written:** 2026-07-24, end of a `work-issue` -> `fix-bugs` iteration.
-**Branch:** `feature/docker-e2e-backend-integration` (commit `46042b91`,
-pushed, working tree clean — no product-source or test changes this
-session).
+**Written:** 2026-07-24, end of a `work-issue` -> `merge-from-main` ->
+`fix-bugs` iteration.
+**Branch:** `feature/docker-e2e-backend-integration` (commit `f740a316`,
+pushed, working tree clean).
 
 ## What happened this session
 
-Dennis asked to work the stacked-up issue backlog over the next few
-rounds. Routed via `work-issue`: backlog scan showed most open issues
-carry the `test-branch` label (deferred until their originating branch
-merges to main) — skipped those. Picked **#276**
-(`full-suite-guard.cjs` false-positive: `ps aux | grep -i vitest |
-grep -v grep` got blocked by the `bareVitest` regex even though it
-never invokes vitest) as the first non-deferred, clearly-scoped bug.
+Dennis asked to continue working the issue backlog. `work-issue` scan of
+open non-`test-branch` issues found only "owner's call" dead-code/
+coverage-gap findings from prior test-loop sessions (#255, #260, #264,
+#272, #258) — none a plain reproducible bug. Asked Dennis which to work;
+he picked **#255** (`intakeWizard.js`: `collectNonCanonicalFields` and
+`ensureConsentEmailSent` unused).
 
-- Routed to `fix-bugs`. Started reading `.claude/hooks/full-suite-guard.cjs`
-  to plan the regex fix in-repo.
-- Dennis caught mid-iteration that this was the wrong repo for the fix:
-  `.claude/hooks/` is gitignored in BioAvanceD-v2 (see
-  `.claude/.gitignore:21`, and commit `ec7f9914` which stopped tracking
-  deployed hooks) — the file is a pack-deployed asset from
-  `dyeallpies-skills-pack`'s `projects/bioavanced-v2/assets/hooks/`, not
-  editable/reviewable from this repo. Confirmed via `git check-ignore -v`
-  and finding the real source in the pack repo.
-- Per skill-maintenance's Rule 0 pattern (already documented for skill
-  files, now also applies to deployed hooks), cross-filed the exact fix
-  against the pack repo instead: **dyeallpies-skills-pack#122** — a
-  `cmdStart` regex change requiring `vitest` to appear at a shell
-  statement boundary (optionally after `npx`/`yarn`/`pnpm`/`pnpx`)
-  rather than matching the bare word anywhere. Verified by hand against
-  both the repro and legitimate invocations before filing.
-- Closed BioAvanceD-v2#276 with a comment pointing to the cross-filed
-  issue — no BioAvanceD-v2-side change was possible or needed.
-- Ran `wrap-up`'s core audit: filed **dyeallpies-skills-pack#123** — the
-  `fix-bugs` skill has no step telling you to check whether a target
-  file is gitignored/pack-deployed *before* branching to fix it; this
-  session only caught it because Dennis flagged it mid-iteration, not
-  because the skill prompted the check. No scope violations (no
-  Edit/Write ever happened against the gitignored file), no lazy fixes,
-  no context waste beyond the normal back-and-forth.
+- First pass asked Dennis delete-vs-wire-in; he asked instead to
+  investigate Denise's actual intent via docs + latest main before
+  deciding — and to consider filing a skills-pack process gap if that
+  investigation proved valuable. Both happened:
+  - Merged `origin/main` in first (`merge-from-main`, 1 commit ahead,
+    zero conflicts, only touched docs binaries — no code). Pushed
+    `f1af40f9`.
+  - Found the deciding evidence in git history, not docs: Denise's own
+    `e9fc064c` ("stabilize intake governance") commit had *already*
+    removed `ensureConsentEmailSent`'s call site from
+    `handleIntakeWizard`; a later session's `782563e8` had *already*
+    dropped the route-level tests pinned to that dead call path. The
+    freshly-merged main's README also now states an explicit policy —
+    "serviços removidos sem consumidor runtime ativo" (services with no
+    active runtime consumer get removed) — that directly supports the
+    deletion.
+  - Filed **dyeallpies-skills-pack#124**: `fix-bugs`/`resolve-issue`
+    should check `git diff HEAD origin/main -- <file>` and grep
+    `docs/architecture/*.md` *before* presenting an owner's-call
+    dead-code question, rather than asking cold.
+  - Deleted `collectNonCanonicalFields`, `resolveRecipientAndTemplate`
+    (only caller of `ensureConsentEmailSent`, orphaned by removing it),
+    and `ensureConsentEmailSent` itself from
+    `api/backend/src/routes/intakeWizard.js`, plus the now-unused
+    `notificationService` import and 6 corresponding unit tests in
+    `intakeWizard.helpers.test.js`. Targeted tests (56, across
+    `intakeWizard.helpers/routes/routes.governance` +
+    `canonical-intake.contract`) pass; lint clean.
+  - Branched `fix/intake-wizard-dead-code` off the post-merge integration
+    branch, committed (`Fixes #255`), pushed, merged `--no-ff` into
+    `feature/docker-e2e-backend-integration` (`f740a316`), pushed,
+    deleted the fix branch (local+remote).
+  - Closed **#255** with the investigation trail and merge hash.
+- `wrap-up` core + shipping audits ran clean beyond the #124 filing
+  already done mid-session; no new findings.
 
 ## Repo state
 
-- `feature/docker-e2e-backend-integration`, pushed, working tree clean.
-- **No files touched in BioAvanceD-v2 this session** — the only change
-  was closing issue #276 with a comment. All actual fix content lives
-  in the two pack-repo issues below.
+- `feature/docker-e2e-backend-integration`, pushed at `f740a316`,
+  working tree clean.
+- Also merged in this session: `origin/main`'s single commit
+  (`f35a033b`, docs-only — 3 new `.docx` files + one `.xlsx` update
+  under `docs/`, no code changes) via `f1af40f9`.
 
 ## Milestone (set 2026-07-22 by Dennis, still current)
 
 **Target: 90% across all four coverage dimensions.** Last full reconcile
 (2026-07-24, session 16, pre-session commit `a636b37a`): Statements
-94.01%, Branches 88.2%, Functions 92.33%, Lines 94.29%. Unchanged this
-session (no test-loop work happened — this was a bug-backlog round).
+94.01%, Branches 88.2%, Functions 92.33%, Lines 94.29%. Unaffected this
+session (dead-code deletion, no coverage-relevant behavior change) —
+worth a fresh reconcile next coverage-focused session since deleted code
+removes some previously-uncovered branch/function surface.
 
 ## Recommended next steps
 
-Dennis asked to keep working the issue backlog for the next couple of
-rounds — next session should resume via `work-issue`, picking the next
-non-`test-branch`-labeled issue. Candidates seen this session that are
-open now (not exhaustive — re-scan the backlog fresh, don't trust this
-list):
+Dennis asked to keep working the issue backlog. No specific issue named
+for next round — re-scan fresh via `work-issue`. Remaining open
+"owner's call" candidates from this session's scan (re-verify state,
+don't trust this list):
 
-- **#260** (`orphanet.js`: two structurally-unreachable branches,
-  `bug` label, no `test-branch` label) — read during triage but not
-  worked; author's own writeup already leans "dead code, safe to
-  simplify" rather than a real defect, so this likely routes to
-  `resolve-issue` (simplification) rather than `fix-bugs`, but re-verify
-  reachability yourself per `fix-bugs`' "verifying before deferring"
-  section rather than trusting the issue body at face value.
-- **#264** (`user-security.service.js` `extractOS`: dead Android
-  branch), **#272** (`daily-merkle.job.js`: two unreachable defensive
-  branches), **#258** (`NotificationService.js`: infra-mocking gap) —
-  all open, no `test-branch` label, unworked.
-- **#255**/**#251** carry the `bug` label but check each carefully —
-  #251 also carries `test-branch` (deferred); #255 does not.
+- **#260** (`orphanet.js`: two structurally-unreachable branches) —
+  author's own writeup leans "dead code, safe to simplify."
+- **#264** (`user-security.service.js` `extractOS`: dead Android branch,
+  reorder-vs-leave call), **#272** (`daily-merkle.job.js`: two
+  unreachable defensive branches, remove-vs-keep call), **#258**
+  (`NotificationService.js`: infra-mocking gap, refactor-vs-accept call)
+  — all open, unworked.
 
-No specific issue was named by Dennis for next round — pick per
-`work-issue`'s classify-and-route process, same as this session.
+Per this session's precedent: before presenting any of these as a cold
+owner's-call question, check `git diff HEAD origin/main -- <file>` and
+`docs/architecture/*.md` / `git log --all --diff-filter=D -- <file>`
+first — several of these may resolve the same way #255 did (already
+decided by the codebase's own history, just not yet traced).
 
 ## Which skills to use
 
-`work-issue` to pick and route the next issue, `fix-bugs` or
-`resolve-issue` depending on classification. **New this session:** if
-the picked issue's file lives under `.claude/hooks/`, `.claude/agents/`,
-or `.claude/skills/`, run `git check-ignore -v <path>` *before*
-branching — if it's gitignored, it's a pack-deployed asset and the fix
-must be cross-filed against `dyeallpies-skills-pack` (Rule 0), not
-edited locally. `wrap-up` every iteration.
+`work-issue` to pick/route, `fix-bugs` for these dead-code owner's-call
+issues (verifying-before-deferring section is exactly on point),
+`merge-from-main` first if main has moved since last checked
+(`git fetch origin && git log --oneline <branch>..origin/main | wc -l`).
+`wrap-up` every iteration.
 
 ## Dependency notes
 
-None blocking. `dyeallpies-skills-pack#122` (full-suite-guard.cjs
-regex fix, this session) and `#123` (fix-bugs skill gap, this session)
-are pack-repo issues, not BioAvanceD-v2 blockers, but #123 is relevant
-process guidance for the very next round if another hook/agent/skill
-bug turns up in the backlog.
+None blocking. `dyeallpies-skills-pack#124` (this session: fold
+docs+main investigation into the owner's-call dead-code flow) and
+`#122`/`#123` (prior session) are pack-repo process issues, not
+BioAvanceD-v2 blockers.
 
 ## Session note
 
-`.claude/hooks/` (and presumably `.claude/agents/`, `.claude/skills/`)
-are gitignored in this repo as of commit `ec7f9914` — they're deployed
-copies from `dyeallpies-skills-pack`, not source. Any bug filed against
-a file under those paths needs its fix cross-filed against the pack
-repo, never edited here, even for a one-line regex change. Check
-`git check-ignore -v` on the target file as the first step whenever an
-issue's symptom lives in `.claude/`.
+`resolveRecipientAndTemplate` was deleted alongside the two functions
+#255 named, even though the issue didn't mention it by name — it was
+`ensureConsentEmailSent`'s only caller and became fully dead the moment
+that function was removed. Disclosed in the commit message and close
+comment; this is the expected "chain of dead-only-consumer" pattern, not
+scope creep.
