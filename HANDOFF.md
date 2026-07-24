@@ -1,83 +1,80 @@
 # HANDOFF
 
 **Written:** 2026-07-24, end of a test-loop iteration.
-**Branch:** `feature/docker-e2e-backend-integration` (commit `22544272`,
+**Branch:** `feature/docker-e2e-backend-integration` (commit `e663ed52`,
 pushed).
 
 ## What happened this session
 
-Read `HANDOFF.md`. Per its recommendation, asked Dennis whether to merge
-`test/audit-controller-branch-coverage` into
-`feature/docker-e2e-backend-integration` before starting a new slice (the
-two had diverged by one commit) — Dennis chose to merge first. Merged
-cleanly (`bb986084`, no conflicts) and pushed.
+Read `HANDOFF.md`, then ran `test-loop`. The named top candidate,
+`src/services/auth.service.js` (Phase 2, 40-branch gap, 73.50%/98.4%
+branch/lines), was investigated first: isolated coverage for its 5 test
+files matches the merged number (no #112-style drift). But the file
+already has near-exhaustive `toThrow` tests for essentially every error
+path across its 3 unit test files (confirmed by grepping every error
+message in the source against all three). A manual `node -e` repro
+(bypassing coverage instrumentation) of the top suspect branch — login
+rejecting a `suspended`-status user, line 273 — confirmed it genuinely
+throws as tested, yet `@vitest/coverage-v8` reports 0 hits on that
+branch. This is the same guard-clause-`if`-with-no-`else` phantom-branch
+pattern already documented for `consent.controller.js`/
+`audit.controller.js`/`paciente.controller.js`. Given that and the
+volume of already-passing tests, the file was judged not to have much
+real remaining test-writing value — logged this rather than forcing more
+tests, per `test-loop`'s "if a slice turns out too expensive, don't force
+it, move on" guidance. **Not chased branch-by-branch** — a future session
+could still spot-check the handful of `[N,0]`-shaped branches that
+weren't sampled, but low expected yield.
 
-Then ran `test-loop` on `src/controllers/paciente.controller.js` (Phase 2
-branch-gap list, 29-branch gap, 87.42%/97.5% branch/lines per
-`COVERAGE_NOTES.md`) — single test file for this controller, no
-isolated-vs-merged drift risk. Added 7 targeted tests to
-`tests/unit/paciente.controller.test.js` (66 tests total, all passing)
-closing: `rejectCanonicalAliases`'s non-canonical-field throw;
-`cadastrar`'s catch-block audit-error logging (req.user set) and
-generic-message fallback (empty `error.message`); `listar`'s
-operational-role field defaults (missing `status`/`consentNotifiedAt`/
-`consentTokenExpiresAt`); `atualizar`'s success-path audit logging
-(req.user set) and `error.status` fallback; `createBiomarkerObservation`'s
-specimenId-derived specimen reference.
+Pivoted to the second Phase 2 candidate, `src/interface/routes/reports.routes.js`
+(28-branch gap, 90.42%/99.1%). Isolated coverage (2 test files) matched
+merged (no drift). Found two genuinely untested (non-phantom, `[0,N]`-
+shaped) branches in `samplesbypatient`'s `buildPreviewData` grouping
+logic: a patient with no `patientID` (falls back to `''`) and a patient
+key with no matching sample group (falls back to `[]`). Added one test
+(`tests/integration/reports.api.test.js`) covering both. Isolated branch
+coverage 90.41% → 91.09%. Remaining gap in this file matches the
+already-documented `if (!db)` 503-guard-preempted-by-`authenticate`
+pattern (issues #67/#76/#236/#246/#247/#248) plus catch-block phantom
+branches — not a real test gap; removed it from the Phase 2 list.
 
-Isolated coverage for the file: **90.47% branches** (was 84.41%),
-**99.28% lines/statements** (was 93.52%/93.57%), **100% functions**
-(unchanged). Remaining gap manually verified (direct invocation outside
-the coverage instrumentation) to be the documented phantom-branch
-pattern: guard-clause `if`s with no `else`, plus a misattributed
-optional-chaining `||` chain at line 481 — both demonstrably exercised
-despite showing 0 hits. No new issue filed; this matches the
-already-documented pattern, not a new finding.
-
-Updated `COVERAGE_NOTES.md`: removed `paciente.controller.js` from the
-Phase 2 list, added it to the "closed out" note with its new isolated
-number and the phantom-branch caveat.
+Updated `COVERAGE_NOTES.md`: removed `reports.routes.js` from the Phase 2
+list (added to the closed-out note with its new isolated number and the
+db-guard/phantom-branch caveat); left `auth.service.js` on the Phase 2
+list (unchanged number) with the phantom-branch finding recorded in the
+commit message, not the notes file, per its no-narrative rule.
 
 No stale-test / lazy-fix / scope-creep findings this session. No product
-source touched. One minor tooling hiccup (Bash tool's cwd didn't match
-PowerShell's — resolved with an absolute path), not worth a skill change.
+source touched. No new issue filed — both findings this session matched
+already-documented, already-issue-linked patterns, not new gaps.
 
 ## Repo state
 
 - `feature/docker-e2e-backend-integration` current and pushed
-  (`22544272`) — now includes both the audit.controller.js branch-
-  coverage work (merged this session) and this session's
-  paciente.controller.js slice.
-- `test/audit-controller-branch-coverage` merged in, no longer needed as
-  a separate branch — Dennis's call whether to delete it.
+  (`e663ed52`) — includes this session's `reports.routes.js` branch-
+  coverage slice (merged from `test/reports-routes-branch-coverage`,
+  branch deleted after merge).
 - Working tree clean.
 
 ## Milestone (set 2026-07-22 by Dennis, still current)
 
 **Target: 90% across all four coverage dimensions.** Last full reconcile
 was 2026-07-23 morning (`f3c258c9`): Statements 91.54%, Branches
-**83.37%** (lagging dimension), Functions 90.96%, Lines 91.98%. Several
-sessions' worth of slices since then (including `audit.controller.js`
-and this session's `paciente.controller.js`) aren't folded into that
-number yet — worth a fresh full reconcile once `auth.service.js` (the
-next big one) lands, or sooner if Dennis wants an updated snapshot.
+**83.37%** (lagging dimension), Functions 90.96%, Lines 91.98%. Many
+sessions' worth of slices since then (including `audit.controller.js`,
+`paciente.controller.js`, and this session's `reports.routes.js`) aren't
+folded into that number yet — worth a fresh full reconcile soon, several
+sessions overdue.
 
 ## Recommended next steps
 
-Resume `test-loop` on the Phase 2 branch-gap list in
-`api/backend/COVERAGE_NOTES.md` (re-read fresh, it's moved this
-session):
-
-```
-gap  branch% lines%  file
- 40  73.50%  98.4%   src/services/auth.service.js
- 28  90.42%  99.1%   src/interface/routes/reports.routes.js
-```
-
-`auth.service.js` (40-branch gap) is still the top candidate but spans
-5+ test files — check each for isolated-vs-merged drift per
-`dyeallpies-skills-pack#112` before trusting any single-file number, and
-expect it to need its own full iteration or a deliberate split.
+Phase 2 branch-gap list in `api/backend/COVERAGE_NOTES.md` is now down to
+just `auth.service.js` (40-branch gap, 73.50%/98.4%) — per this session's
+finding, likely low-yield (near-exhaustive existing tests, gap mostly
+phantom-branch). Worth regenerating the Phase 2 list fresh from a new
+`coverage-summary.json` rather than picking up `auth.service.js` again on
+the same stale entry — a full reconcile is overdue anyway (see milestone
+note above) and would surface the *next* real Phase 2 tier.
 
 Remaining open backlog beyond this (not re-checked this session): #254,
 #253, #252, #251, #250, #224, #222, #115, #255-#267 — see
@@ -93,14 +90,20 @@ as always. `wrap-up` every iteration.
 
 ## Dependency notes
 
-None queued.
+Do a full coverage reconcile before picking the next Phase 2 slice —
+the current list is down to one stale, likely-low-yield entry.
 
 ## Session note
 
-The phantom-branch pattern (guard-clause `if`s with no `else`, and now
-confirmed also for chained optional-chaining `||` expressions) keeps
-recurring across controller files. Worth remembering when picking the
-next slice: don't chase every listed "uncovered branch" number — verify
-with a direct manual invocation (bypassing the coverage tool) before
-writing more tests against it, the same way this session and the prior
-`audit.controller.js`/`auth.controller.js` sessions did.
+Confirmed again (3rd+ file this project): when a branch shows as
+`[N,0]` (consequent hit N times, alternate/else 0 times) on a guard-
+clause `if` with no `else`, that's very likely the documented phantom-
+branch coverage-v8 artifact, not a real gap — verify with a `node -e`
+repro before trusting the number. The *opposite* shape, `[0,N]` (the
+branch's "taken" side never hit, its fallback/skip side hit N times), is
+a genuinely different signal and much more likely a real untested path
+worth a test — that's exactly what `reports.routes.js`'s two closed
+branches looked like this session. Worth remembering as a quick filter
+when scanning a `coverage-final.json` branch dump: `[N,0]` → suspect
+phantom, check before writing tests; `[0,N]` → likely real, write the
+test.
