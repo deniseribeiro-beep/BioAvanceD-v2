@@ -36,20 +36,33 @@ stale as slices land and as source files change. Keep it honest:
 
 ## Last full reconcile
 
-**2026-07-23**, snapshot from `feature/docker-e2e-backend-integration`
-(commit `f3c258c9`, full suite, exit 0 — no failing tests).
+**2026-07-24**, snapshot from `feature/docker-e2e-backend-integration`
+(commit `402c5359`, full suite, 1 failed / 5966 passed).
 
-Statements **91.54%** (17049/18624), Branches **83.37%** (13850/16611),
-Functions **90.96%** (2053/2257), Lines **91.98%** (16396/17824).
+Statements **93.05%** (17335/18628), Branches **86.64%** (14395/16613),
+Functions **91.67%** (2069/2257), Lines **93.40%** (16651/17827).
 **Three of four dimensions (statements/functions/lines) remain past the
 90% milestone** (`bioavanced-v2-conventions`); branches is still the
-sole laggard. ~13 sessions' worth of slices have landed since this
-reconcile (see git log on this file / `HANDOFF.md` history) — not yet
-folded in; due for a fresh full reconcile per the cadence note above.
+sole laggard, up from 83.37% at the prior reconcile.
 
-Only known pre-existing failure as of the last run: 1 test in
+Only known pre-existing failure as of this run: 1 test in
 `sample-graph-validator.service.test.js` ("valida o nó de Integridade
 com sucesso e falha por tampering") — not blocking coverage work.
+
+Checked this session (not real gaps, no test added):
+`src/utils/fieldEncryption.js` showed 76.19%/82.60% lines/branches in
+the merged run but isolates to 100%/100%/100%/100% across its three
+dedicated test files (`tests/unit/fieldEncryption.test.js`,
+`tests/unit/utils/fieldEncryption.test.js`,
+`tests/unit/field-encryption.unit.test.js`) — merged-vs-isolated drift
+(issue #242 class), not a gap.
+`src/interface/routes/equipment.routes.js` showed 81.59%/81.01% in both
+merged and isolated runs, but `tests/integration/equipment.api.test.js`
++ `tests/unit/equipment.routes.quarantine.test.js` already assert every
+handler/branch (401/403/404/500/transaction/auditInfo-fallback paths);
+V8 reports the route-handler declaration line and catch-block opener as
+0-hit even though the body statements inside run — matches the
+documented phantom-statement pattern, not a real gap.
 
 ## Branch-focused priority list toward the 90% branches milestone
 
@@ -206,10 +219,12 @@ src/services/audit-v2.service.js                60.81 / 43.75   (issue #146/#152
 src/services/neo4jCanonicalProjection.service.js 65.00 / 58.41  (issue #146 cluster)
 ```
 
+(2026-07-24 reconcile: unchanged, same three files, same numbers.)
+
 Genuinely low (no matching filed issue found) — real slice candidates:
 none currently listed.
 
-## MID-HIGH coverage (70-84% lines) — 5 files as of the 2026-07-22 reconcile
+## MID-HIGH coverage (70-84% lines) — 7 files as of the 2026-07-24 reconcile
 
 Sorted ascending (worst first) — lines% / branches%. A lower branch%
 relative to lines% usually means untested error paths, a good tie-breaker
@@ -217,10 +232,12 @@ when picking among these.
 
 ```
 src/services/mqtt-telemetry.service.js           71.42 / 78.09   (accepted gap — mqtt.connect() can't be mocked, see exclusion note above)
-src/services/patient.service.js                  77.92 / 65.52   (issues #240/#241 — remaining gap is deep error-path combos, optional)
 src/workers/workers/result-worker.js             76.66 / 66.07   (issue #146/#164 — rename + yauzl)
 src/services/SampleGraphValidator.js             77.69 / 66.66   (issue #222 — legacy-schema migration, design fork)
 src/workers/neo4jProjection.worker.js            79.62 / 73.33   (CLI entry block not coverable in-process, accepted gap)
+src/interface/routes/equipment.routes.js         81.59 / 81.01   (phantom-statement pattern, not a real gap — see reconcile note above)
+src/models/User.js                               83.67 / 78.94   (not re-checked this session — check for phantom pattern before treating as a real gap)
+src/services/patient.service.js                  83.89 / 74.56   (issues #240/#241 — remaining gap is deep error-path combos, optional)
 ```
 
 Note: `sample.service.js`, `import.service.js`, `audit.controller.js`,
