@@ -91,6 +91,20 @@ describe('ConsentController.getPendingPatientsForPolicy', () => {
       message: 'boom',
     });
   });
+
+  it('falls back to req.query.policyId when params.id is absent', async () => {
+    const toArray = vi.fn().mockResolvedValue([]);
+    const project = vi.fn().mockReturnValue({ toArray });
+    const find = vi.fn().mockReturnValue({ project });
+    const collection = vi.fn().mockReturnValue({ find });
+    const req = createReq({ params: {}, query: { policyId: 'policyFromQuery' }, app: { locals: { db: { collection } } } });
+    const res = createRes();
+
+    await consentController.getPendingPatientsForPolicy(req, res);
+
+    expect(find).toHaveBeenCalledWith({ status: 'PENDING_CONSENT', consentTemplateId: 'policyFromQuery' });
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
 });
 
 describe('ConsentController.createPolicy', () => {
@@ -156,6 +170,21 @@ describe('ConsentController.createPolicy', () => {
       payload: expect.objectContaining({ permissions: ['k1'] }),
     }));
     expect(res.status).toHaveBeenCalledWith(201);
+  });
+
+  it('logs empty permissions array when policy has no granularPermissions', async () => {
+    const policy = { _id: { toString: () => 'pid2' }, title: 't', version: 'v1', active: true };
+    vi.spyOn(consentService, 'createPolicy').mockResolvedValue(policy);
+    vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+    const logSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
+    const req = createReq({ body: { title: 't' }, user: { id: 'u1' } });
+    const res = createRes();
+
+    await consentController.createPolicy(req, res);
+
+    expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({
+      payload: expect.objectContaining({ permissions: [] }),
+    }));
   });
 });
 
@@ -320,6 +349,21 @@ describe('ConsentController.updatePolicy', () => {
       data: policy,
     });
   });
+
+  it('logs previousPolicyId in audit payload when present on the updated policy', async () => {
+    const policy = { _id: { toString: () => 'pid1' }, version: 'v2', active: true, previousPolicyId: 'prevId' };
+    vi.spyOn(consentService, 'updatePolicy').mockResolvedValue(policy);
+    vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+    const logSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
+    const req = createReq({ params: { id: '1' }, body: { title: 't' }, user: { id: 'u1' } });
+    const res = createRes();
+
+    await consentController.updatePolicy(req, res);
+
+    expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({
+      payload: expect.objectContaining({ previousPolicyId: 'prevId' }),
+    }));
+  });
 });
 
 describe('ConsentController.getActivePoliciesWithCaae', () => {
@@ -384,6 +428,40 @@ describe('ConsentController.createTemplate', () => {
       message: 'Template de consentimento criado com sucesso',
       data: template,
     });
+  });
+
+  it('logs audit entry with permissions when req.user is present', async () => {
+    const template = { _id: { toString: () => 't2' }, title: 'T', version: 'v1', active: true, permissions: [{ key: 'k1' }] };
+    vi.spyOn(consentService, 'createTemplate').mockResolvedValue(template);
+    const initSpy = vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+    const logSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
+    const req = createReq({ body: { title: 'T' }, user: { id: 'u1' } });
+    const res = createRes();
+
+    await consentController.createTemplate(req, res);
+
+    expect(initSpy).toHaveBeenCalled();
+    expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'CREATE',
+      entity: 'ConsentTemplate',
+      entityID: 't2',
+      payload: expect.objectContaining({ permissions: ['k1'] }),
+    }));
+  });
+
+  it('logs empty permissions array when template has no permissions', async () => {
+    const template = { _id: { toString: () => 't3' }, title: 'T', version: 'v1', active: true };
+    vi.spyOn(consentService, 'createTemplate').mockResolvedValue(template);
+    vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+    const logSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
+    const req = createReq({ body: { title: 'T' }, user: { id: 'u1' } });
+    const res = createRes();
+
+    await consentController.createTemplate(req, res);
+
+    expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({
+      payload: expect.objectContaining({ permissions: [] }),
+    }));
   });
 });
 
@@ -464,6 +542,26 @@ describe('ConsentController.updateTemplate', () => {
       message: 'Template de consentimento atualizado com sucesso',
       data: template,
     });
+  });
+
+  it('logs audit entry when req.user is present', async () => {
+    const template = { _id: { toString: () => 't1' }, title: 'X', version: 'v2', active: true };
+    vi.spyOn(consentService, 'updateTemplate').mockResolvedValue(template);
+    const initSpy = vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+    const logSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
+    const req = createReq({ params: { id: '1' }, body: { title: 'X' }, user: { id: 'u1' } });
+    const res = createRes();
+
+    await consentController.updateTemplate(req, res);
+
+    expect(initSpy).toHaveBeenCalledWith(req.app.locals.db);
+    expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'UPDATE',
+      entity: 'ConsentTemplate',
+      entityID: 't1',
+      payload: expect.objectContaining({ title: 'X', version: 'v2', active: true }),
+    }));
+    expect(res.status).toHaveBeenCalledWith(200);
   });
 });
 
@@ -648,6 +746,37 @@ describe('ConsentController.createPatientConsent', () => {
     await consentController.createPatientConsent(req, res);
 
     expect(res.status).toHaveBeenCalledWith(400);
+  });
+
+  it('falls back to x-forwarded-for header when req.ip is absent', async () => {
+    const consent = { _id: { toString: () => 'c2' }, patientId: 'p1', status: 'SIGNED' };
+    const createSpy = vi.spyOn(consentService, 'createPatientConsent').mockResolvedValue(consent);
+    const req = createReq({
+      body: { patientId: 'p1' },
+      ip: undefined,
+      headers: { 'x-forwarded-for': '1.2.3.4' },
+    });
+    const res = createRes();
+
+    await consentController.createPatientConsent(req, res);
+
+    expect(createSpy).toHaveBeenCalledWith(req.app.locals.db, expect.objectContaining({ ipAddress: '1.2.3.4' }));
+  });
+
+  it('falls back to req.connection.remoteAddress when req.ip and forwarded header are absent', async () => {
+    const consent = { _id: { toString: () => 'c3' }, patientId: 'p1', status: 'SIGNED' };
+    const createSpy = vi.spyOn(consentService, 'createPatientConsent').mockResolvedValue(consent);
+    const req = createReq({
+      body: { patientId: 'p1' },
+      ip: undefined,
+      headers: {},
+      connection: { remoteAddress: '5.6.7.8' },
+    });
+    const res = createRes();
+
+    await consentController.createPatientConsent(req, res);
+
+    expect(createSpy).toHaveBeenCalledWith(req.app.locals.db, expect.objectContaining({ ipAddress: '5.6.7.8' }));
   });
 
   it('logs audit entry when req.user is present', async () => {
@@ -850,5 +979,15 @@ describe('ConsentController.acceptConsentToken', () => {
       error: 'Erro ao aceitar consentimento',
       message: 'invalid token',
     });
+  });
+
+  it('falls back to query values when body is empty', async () => {
+    const acceptSpy = vi.spyOn(patientService, 'acceptConsentToken').mockResolvedValue({ accepted: true });
+    const req = createReq({ body: {}, query: { patientID: 'p2', token: 'tok2' } });
+    const res = createRes();
+
+    await consentController.acceptConsentToken(req, res);
+
+    expect(acceptSpy).toHaveBeenCalledWith(req.app.locals.db, 'p2', 'tok2');
   });
 });

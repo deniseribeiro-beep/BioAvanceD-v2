@@ -87,7 +87,6 @@ gap  branch% lines%  file
  40  73.50%  98.4%   src/services/auth.service.js
  36  77.07%  90.3%   src/controllers/auth.controller.js
  35  76.35%  95.5%   src/controllers/audit.controller.js
- 32  70.09%  95.0%   src/controllers/consent.controller.js
  29  87.42%  97.5%   src/controllers/paciente.controller.js
  28  90.42%  99.1%   src/interface/routes/reports.routes.js
 ```
@@ -101,7 +100,10 @@ coverage number suspect, see `dyeallpies-skills-pack#111`),
 `terminologySync.service.js`, `equipment-sensor-quarantine.service.js`,
 `user-security.service.js` (93.51% isolated branches),
 `storageService.js` (85.95% isolated branches), `hl7.service.js` (100%
-isolated branches).
+isolated branches), `consent.controller.js` (80.37% isolated branches,
+100% isolated lines/statements/functions — remaining gap is guard-clause
+ifs with no else, the documented phantom-branch pattern, not a real
+test gap).
 Check each file's own git log / filed issues for what remains, not this
 note.
 
