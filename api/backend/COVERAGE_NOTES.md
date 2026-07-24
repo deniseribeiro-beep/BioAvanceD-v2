@@ -43,10 +43,12 @@ stale as slices land and as source files change. Keep it honest:
 ## Last full reconcile
 
 **2026-07-24**, snapshot from `feature/docker-e2e-backend-integration`
-(commit `061ae64f`, full suite, 2 failed / 5967 passed).
+(commit `32d49921`, full suite, 1 pre-existing failure / 292 test files
+passed — see "Known pre-existing failures" in the testing-conventions
+skill).
 
-Statements **93.06%** (17337/18628), Branches **86.66%** (14398/16613),
-Functions **91.67%** (2069/2257), Lines **93.41%** (16653/17827).
+Statements **93.15%** (17355/18630), Branches **87.08%** (14467/16613),
+Functions **91.71%** (2070/2257), Lines **93.5%** (16671/17829).
 **Three of four dimensions (statements/functions/lines) remain past the
 90% milestone** (`bioavanced-v2-conventions`); branches is still the
 sole laggard, up from 83.37% at the prior reconcile.
@@ -159,6 +161,23 @@ issue #242 drift class); closed the remaining real gaps: `barcode`/
 `compensateCustodyEvent` rejecting with a non-Error value. Isolates to
 100%/100%/100%/100%.
 
+`import-lgpd.service.js` checked and closed this session (no test
+added) — isolated run across its `import{Patients,Samples}` unit test
+files matched the merged ~82.5% branches (no drift; `importPatients`
+and `importSamples` already have thorough per-row test suites). Traced
+every remaining uncovered branch by reading the surrounding code rather
+than experimenting with tests, and confirmed each is structurally
+unreachable dead code, filed as issue #270: `importSamples`'s
+post-`SampleModel.validate()` re-checks of quality/sampleType/
+sampleOrigin/extractionProtocol (validate() already guarantees the
+same predicate is true by the time these run), `importPatients`'s
+`typeof birthDate === 'string'` branch (birthDate is guaranteed a
+`Date` by an earlier guard), two duplicate `if`/`rows.length===0`
+header-validation re-checks, `parseSampleRow`'s duplicate
+`if/else-if (row.registeredAt)` (identical condition twice), and
+duplicate-key object-literal reassignments (harmless, same value both
+times) in `pharmacologyData` and `consentTemplateId`. Not a real gap.
+
 `auth.service.js` checked and closed this session (no test added) —
 isolated run across its three test files matched the merged 73.50% (no
 drift); every remaining uncovered line/branch (52, 259, 273-274, 334:
@@ -188,7 +207,8 @@ present). Isolates to 100%/100%/100%/100%.
 
 Files closed out of Phase 1/2 since the list was last regenerated
 (2026-07-23 through 2026-07-24, sessions 4-13): `import-lgpd.service.js`
-(partial), `intakeWizard.js` (partial), `auth.routes.js` (partial —
+(closed session 15 — see above, remaining gap is confirmed dead code,
+issue #270), `intakeWizard.js` (partial), `auth.routes.js` (partial —
 coverage number suspect, see `dyeallpies-skills-pack#111`),
 `dictionary.js`, `sample-file.controller.js`, `orphanet.js`,
 `terminologies.routes.js`, `batch-validation-engine.service.js`,
