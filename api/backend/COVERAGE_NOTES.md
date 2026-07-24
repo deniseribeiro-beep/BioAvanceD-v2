@@ -255,6 +255,10 @@ tests addable, closed as-is.
 `--coverage.include`): was 91.3%/73.68% stmts/branch, now
 **100%/100%/100%/100%**.
 
+`storage-query.controller.js` isolated (`storage-query.controller.test.js`,
+`--coverage.include`): was 100%/80.55% stmts/branch, now
+**100%/100%/100%/100%**.
+
 Note: `sample.service.js`, `import.service.js`, `audit.controller.js`,
 `audit-canonicalization.service.js`, `equipment.routes.js`, `User.js`
 have moved to GOOD in prior sessions — not re-verified line-by-line since

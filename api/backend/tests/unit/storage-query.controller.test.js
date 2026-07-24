@@ -63,6 +63,21 @@ describe('storage-query.controller.listFreezersController', () => {
       message: 'db down'
     });
   });
+
+  it('returns 500 instead of crashing when the use case rejects with a non-Error value', async () => {
+    vi.spyOn(ListOperationalFreezersUseCase.prototype, 'execute').mockRejectedValue('plain string rejection');
+    const req = buildReq();
+    const res = buildRes();
+
+    await controller(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(500);
+    expect(res.json).toHaveBeenCalledWith({
+      success: false,
+      error: 'INTERNAL_ERROR',
+      message: undefined
+    });
+  });
 });
 
 describe('storage-query.controller.searchSamplesController', () => {
@@ -104,6 +119,21 @@ describe('storage-query.controller.searchSamplesController', () => {
       success: false,
       error: 'INTERNAL_ERROR',
       message: 'search failed'
+    });
+  });
+
+  it('returns 500 instead of crashing when the use case rejects with a non-Error value', async () => {
+    vi.spyOn(SearchAllocatableSamplesUseCase.prototype, 'execute').mockRejectedValue('plain string rejection');
+    const req = buildReq({ query: { q: 'x' } });
+    const res = buildRes();
+
+    await controller(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(500);
+    expect(res.json).toHaveBeenCalledWith({
+      success: false,
+      error: 'INTERNAL_ERROR',
+      message: undefined
     });
   });
 });
@@ -164,6 +194,21 @@ describe('storage-query.controller.getSampleLocationController', () => {
       success: false,
       error: 'INTERNAL_ERROR',
       message: 'boom'
+    });
+  });
+
+  it('returns 500 instead of crashing when the use case rejects with a non-Error value', async () => {
+    vi.spyOn(GetSampleStorageLocationUseCase.prototype, 'execute').mockRejectedValue('plain string rejection');
+    const req = buildReq({ params: { sampleId: 's1' } });
+    const res = buildRes();
+
+    await controller(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(500);
+    expect(res.json).toHaveBeenCalledWith({
+      success: false,
+      error: 'INTERNAL_ERROR',
+      message: undefined
     });
   });
 });
@@ -262,6 +307,21 @@ describe('storage-query.controller.validatePositionController', () => {
       message: 'boom'
     });
   });
+
+  it('returns 500 instead of crashing when the use case rejects with a non-Error value', async () => {
+    vi.spyOn(ValidateStoragePositionUseCase.prototype, 'execute').mockRejectedValue('plain string rejection');
+    const req = buildReq({ params: { boxId: 'box-1', position: 'A1' } });
+    const res = buildRes();
+
+    await controller(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(500);
+    expect(res.json).toHaveBeenCalledWith({
+      success: false,
+      error: 'INTERNAL_ERROR',
+      message: undefined
+    });
+  });
 });
 
 describe('storage-query.controller.getFreezerStatsController', () => {
@@ -316,6 +376,21 @@ describe('storage-query.controller.getFreezerStatsController', () => {
 
     expect(res.status).toHaveBeenCalledWith(500);
   });
+
+  it('returns 500 instead of crashing when the use case rejects with a non-Error value', async () => {
+    vi.spyOn(GetFreezerOccupancyStatsUseCase.prototype, 'execute').mockRejectedValue('plain string rejection');
+    const req = buildReq({ params: { freezerId: 'F1' } });
+    const res = buildRes();
+
+    await controller(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(500);
+    expect(res.json).toHaveBeenCalledWith({
+      success: false,
+      error: 'INTERNAL_ERROR',
+      message: undefined
+    });
+  });
 });
 
 describe('storage-query.controller.checkBoxIntegrityController', () => {
@@ -357,6 +432,21 @@ describe('storage-query.controller.checkBoxIntegrityController', () => {
     await controller(req, res);
 
     expect(res.status).toHaveBeenCalledWith(500);
+  });
+
+  it('returns 500 instead of crashing when the use case rejects with a non-Error value', async () => {
+    vi.spyOn(CheckStorageBoxIntegrityUseCase.prototype, 'execute').mockRejectedValue('plain string rejection');
+    const req = buildReq({ params: { boxId: 'box-1' } });
+    const res = buildRes();
+
+    await controller(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(500);
+    expect(res.json).toHaveBeenCalledWith({
+      success: false,
+      error: 'INTERNAL_ERROR',
+      message: undefined
+    });
   });
 });
 
@@ -401,6 +491,21 @@ describe('storage-query.controller.getFreezerTreeController', () => {
       success: false,
       error: 'INTERNAL_ERROR',
       message: 'boom'
+    });
+  });
+
+  it('returns 500 instead of crashing when the use case rejects with a non-Error value', async () => {
+    vi.spyOn(GetFreezerTreeUseCase.prototype, 'execute').mockRejectedValue('plain string rejection');
+    const req = buildReq({ params: { freezerId: 'F1' } });
+    const res = buildRes();
+
+    await controller(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(500);
+    expect(res.json).toHaveBeenCalledWith({
+      success: false,
+      error: 'INTERNAL_ERROR',
+      message: undefined
     });
   });
 });
