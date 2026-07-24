@@ -23,12 +23,31 @@ vi.setSystemTime(new Date('2026-07-02T10:00:00.000Z'));
 const mongo = require('../../src/database/mongo');
 const integrityService = require('../../src/services/integrityCheckService');
 const auditRootService = require('../../src/services/auditRoot.service');
+const auditV2Service = require('../../src/services/audit-v2.service');
 const logger = require('../../src/utils/logger');
+
+function makeFakeDb(previousTreeHeads = []) {
+  return {
+    __fakeDb: true,
+    collection: vi.fn(() => ({
+      find: vi.fn(() => ({
+        sort: vi.fn(() => ({
+          limit: vi.fn(() => ({
+            toArray: vi.fn().mockResolvedValue(previousTreeHeads),
+          })),
+        })),
+      })),
+    })),
+  };
+}
 
 vi.spyOn(mongo, 'connectDB').mockResolvedValue({ __fakeDb: true });
 vi.spyOn(mongo, 'closeConnection').mockResolvedValue(undefined);
 vi.spyOn(integrityService, 'buildMerkleForDate').mockResolvedValue({ root: 'deadbeef', leaves: ['leaf1', 'leaf2', 'leaf3'] });
 vi.spyOn(auditRootService, 'saveDailyRoot').mockResolvedValue({ ok: true });
+vi.spyOn(auditRootService, 'getRootByDate').mockResolvedValue({ root: 'existing' });
+vi.spyOn(auditRootService, 'processTimestampBacklog').mockResolvedValue(undefined);
+vi.spyOn(auditV2Service, 'createTreeHead').mockResolvedValue({ status: 'ok' });
 vi.spyOn(logger, 'info').mockImplementation(() => {});
 vi.spyOn(logger, 'warn').mockImplementation(() => {});
 vi.spyOn(logger, 'error').mockImplementation(() => {});
@@ -42,6 +61,9 @@ function resetAllMocks() {
   mongo.closeConnection.mockClear().mockResolvedValue(undefined);
   integrityService.buildMerkleForDate.mockClear().mockResolvedValue({ root: 'deadbeef', leaves: ['leaf1', 'leaf2', 'leaf3'] });
   auditRootService.saveDailyRoot.mockClear().mockResolvedValue({ ok: true });
+  auditRootService.getRootByDate.mockClear().mockResolvedValue({ root: 'existing' });
+  auditRootService.processTimestampBacklog.mockClear().mockResolvedValue(undefined);
+  auditV2Service.createTreeHead.mockClear().mockResolvedValue({ status: 'ok' });
   logger.info.mockClear();
   logger.warn.mockClear();
   logger.error.mockClear();
@@ -132,6 +154,74 @@ describe('daily-merkle.job', () => {
 
       expect(logger.error).toHaveBeenCalledTimes(1);
       expect(mongo.closeConnection).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('anchorV2ForDate (exercised via runOnce)', () => {
+    it('creates a tree head with previousTreeHeadHash=null when no prior tree head exists for the log', async () => {
+      mongo.connectDB.mockResolvedValue(makeFakeDb([]));
+
+      await job.runOnce();
+
+      expect(auditV2Service.createTreeHead).toHaveBeenCalledWith(
+        expect.objectContaining({ logId: 'audit-2026-07-01', previousTreeHeadHash: null }),
+        expect.anything()
+      );
+    });
+
+    it('carries forward previousTreeHeadHash from the most recent existing tree head', async () => {
+      mongo.connectDB.mockResolvedValue(makeFakeDb([{ rootHash: 'priorhash' }]));
+
+      await job.runOnce();
+
+      expect(auditV2Service.createTreeHead).toHaveBeenCalledWith(
+        expect.objectContaining({ logId: 'audit-2026-07-01', previousTreeHeadHash: 'priorhash' }),
+        expect.anything()
+      );
+    });
+  });
+
+  describe('recoverMissingDates (exercised via runOnce)', () => {
+    it('skips backfill dates that already have a saved root, without recomputing them', async () => {
+      mongo.connectDB.mockResolvedValue(makeFakeDb([]));
+      auditRootService.getRootByDate.mockResolvedValue({ root: 'already-there' });
+
+      await job.runOnce();
+
+      // Only the main targetDate's buildMerkleForDate call happens; no backfill date
+      // ever reaches buildMerkleForDate since getRootByDate short-circuits every one.
+      expect(integrityService.buildMerkleForDate).toHaveBeenCalledTimes(1);
+    });
+
+    it('warns and continues for a backfill date whose recomputed Merkle result is invalid, without persisting it', async () => {
+      mongo.connectDB.mockResolvedValue(makeFakeDb([]));
+      auditRootService.getRootByDate.mockResolvedValue(null);
+      integrityService.buildMerkleForDate.mockImplementation((date) =>
+        date === '2026-07-01'
+          ? Promise.resolve({ root: 'deadbeef', leaves: ['leaf1'] })
+          : Promise.resolve({ root: null, leaves: [] })
+      );
+
+      await job.runOnce();
+
+      // 1 main date + 7 backfill dates, all invalid except the main one.
+      expect(logger.warn).toHaveBeenCalledTimes(7);
+      expect(auditRootService.saveDailyRoot).toHaveBeenCalledTimes(1);
+    });
+
+    it('recomputes, saves, and re-anchors a backfill date with no existing root and a valid Merkle result', async () => {
+      mongo.connectDB.mockResolvedValue(makeFakeDb([]));
+      auditRootService.getRootByDate.mockImplementation((date) => Promise.resolve(date === '2026-06-25' ? null : { root: 'already-there' }));
+
+      await job.runOnce();
+
+      expect(auditRootService.saveDailyRoot).toHaveBeenCalledWith(
+        expect.objectContaining({ date: '2026-06-25' })
+      );
+      expect(auditV2Service.createTreeHead).toHaveBeenCalledWith(
+        expect.objectContaining({ logId: 'audit-2026-06-25' }),
+        expect.anything()
+      );
     });
   });
 

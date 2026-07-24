@@ -223,15 +223,18 @@ cluster) resolved to GOOD.
 Sorted ascending (worst first) — lines% / branches%.
 
 ```
-src/workers/jobs/daily-merkle.job.js            60.00 / 52.17   (blocking issue #159 CLOSED — real candidate, see priority-list note above)
 src/services/audit-v2.service.js                60.81 / 43.75   (blocking issues #146/#152 CLOSED — real candidate, re-check isolated first)
 src/services/neo4jCanonicalProjection.service.js 65.00 / 58.41  (blocking issue #146 CLOSED — real candidate, re-check isolated first)
 ```
 
 Genuinely low, real slice candidates now that their blocking issues are
-closed: all three above. `daily-merkle.job.js` isolated-confirmed this
-session (matches merged, no drift). The other two still need an isolated
-check before committing to a slice.
+closed: both above still need an isolated check before committing to a
+slice. `daily-merkle.job.js` closed this session: isolated
+95.65%/78.26%/100%/95.38% stmts/branch/funcs/lines (was 60.00/52.17).
+Remaining 3 uncovered lines (86, 112, 122) are defensive/unreachable
+paths (anchorV2ForDate's redundant validity guard, scheduleNextRun's
+catch around a runOnce that never rejects, and the `require.main ===
+module` auto-start guard) — not pursued further.
 
 ## MID-HIGH coverage (70-84% lines) — 7 files as of the 2026-07-24 reconcile
 
