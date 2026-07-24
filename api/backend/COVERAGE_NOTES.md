@@ -93,23 +93,13 @@ export can't be mocked), `queue.js` / `eConsent.js` (issue #242
 merged-vs-isolated drift class — re-check isolated coverage before
 trusting the merged number for either).
 
-**No longer excluded (2026-07-24) — their blocking issues are now
-CLOSED, re-opening them as real slice candidates:** `audit-v2.service.js`
-/ `neo4jCanonicalProjection.service.js` (#146/#152, closed),
-`patient.service.js` (#240/#241, closed), `result-worker.js` /
-`daily-merkle.job.js` (#146/#164/#159, closed). Isolated single-file
-check this session: `daily-merkle.job.js` matches its merged number (no
-drift) — 59.42%/52.17%/75%/60% stmts/branch/funcs/lines via
-`npx vitest run tests/unit/daily-merkle.job.test.js --coverage
---coverage.include="src/workers/jobs/daily-merkle.job.js"` — real gap,
-untested paths include `recoverMissingDates`'s invalid-Merkle-result
-branch, `anchorV2ForDate`'s no-previous-tree-head fallback, and
-`runOnce`'s catch/finally paths. Good next-slice candidate. The other
-four (`audit-v2.service.js`, `neo4jCanonicalProjection.service.js`,
-`patient.service.js`, `result-worker.js`) haven't been isolated-checked
-yet this session — re-run each's own test file(s) with
-`--coverage.include` before treating their old merged numbers as current
-(issue #242 drift class may apply).
+**No longer excluded — their blocking issues are now CLOSED:**
+`daily-merkle.job.js` and `audit-v2.service.js` /
+`neo4jCanonicalProjection.service.js` all closed (see MID-LOW section
+below). Remaining candidates: `patient.service.js` (#240/#241, closed),
+`result-worker.js` (#146/#164/#159, closed) — neither isolated-checked
+yet; re-run each's own test file(s) with `--coverage.include` before
+trusting their old merged numbers (issue #242 drift class may apply).
 
 **Regenerated 2026-07-24 (session 14)** from a fresh full-suite
 `coverage-summary.json`, excluded/already-documented files above
@@ -218,24 +208,16 @@ Low priority (models/interfaces/one-off scripts — thin or non-request-path):
 Empty as of last reconcile; all prior entries (the #146 audit/rename-drift
 cluster) resolved to GOOD.
 
-## MID-LOW coverage (50-69% lines) — 3 files as of the 2026-07-22 reconcile
+## MID-LOW coverage (50-69% lines) — 0 files as of this session
 
-Sorted ascending (worst first) — lines% / branches%.
-
-```
-src/services/neo4jCanonicalProjection.service.js 65.00 / 58.41  (blocking issue #146 CLOSED — real candidate, re-check isolated first)
-```
-
-`audit-v2.service.js` closed this session: 100/100/100/100 stmts/branch/funcs/lines isolated (new `tests/unit/audit-v2.service.test.js`, no prior test file existed).
-
-Genuinely low, real slice candidates now that their blocking issues are
-closed: both above still need an isolated check before committing to a
-slice. `daily-merkle.job.js` closed this session: isolated
+Empty. `audit-v2.service.js` and `neo4jCanonicalProjection.service.js`
+both closed this session: 100/100/100/100 stmts/branch/funcs/lines
+isolated each (new `tests/unit/audit-v2.service.test.js` and
+`tests/unit/neo4jCanonicalProjection.service.test.js`; neither had a
+prior test file). `daily-merkle.job.js` closed a prior session: isolated
 95.65%/78.26%/100%/95.38% stmts/branch/funcs/lines (was 60.00/52.17).
 Remaining 3 uncovered lines (86, 112, 122) are defensive/unreachable
-paths (anchorV2ForDate's redundant validity guard, scheduleNextRun's
-catch around a runOnce that never rejects, and the `require.main ===
-module` auto-start guard) — not pursued further.
+paths — see issue #272.
 
 ## MID-HIGH coverage (70-84% lines) — 7 files as of the 2026-07-24 reconcile
 
