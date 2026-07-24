@@ -85,7 +85,6 @@ lands, current top-of-list as of last regeneration:**
 ```
 gap  branch% lines%  file
  40  73.50%  98.4%   src/services/auth.service.js
- 29  87.42%  97.5%   src/controllers/paciente.controller.js
  28  90.42%  99.1%   src/interface/routes/reports.routes.js
 ```
 
@@ -108,7 +107,11 @@ and a handful of statements inside async catch blocks that V8 shows as
 by tests, e.g. line 122; not a real test gap), `audit.controller.js`
 (90.54% isolated branches, 96.36% isolated lines — remaining gap is
 `isIsoDate`/`isHexHash`/`isProofValid`, unreachable dead code, issue
-#267).
+#267), `paciente.controller.js` (90.47% isolated branches, 99.28%
+isolated lines — remaining gap confirmed via manual invocation to be the
+phantom-branch pattern: guard-clause `if`s with no `else`, plus a
+misattributed optional-chaining `||` chain at line 481, both
+demonstrably exercised and asserted on by tests despite showing 0 hits).
 Check each file's own git log / filed issues for what remains, not this
 note.
 

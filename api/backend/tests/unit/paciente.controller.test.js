@@ -46,6 +46,14 @@ describe('paciente.controller', () => {
     vi.restoreAllMocks();
   });
 
+  describe('rejectCanonicalAliases', () => {
+    it('throws 422 when payload contains a non-canonical field', () => {
+      expect(() => controller.rejectCanonicalAliases({ patientName: 'Foo', legacyAlias: 'x' })).toThrowError(
+        expect.objectContaining({ statusCode: 422, code: 'NON_CANONICAL_FIELD', fields: ['legacyAlias'] })
+      );
+    });
+  });
+
   describe('sanitizePatientPayload', () => {
     it('trims/uppercases clinicalUnit, unitAcronym and trims clinicalUnitId', () => {
       const result = controller.sanitizePatientPayload({
@@ -178,6 +186,34 @@ describe('paciente.controller', () => {
 
       expect(res.status).toHaveBeenCalledWith(500);
     });
+
+    it('logs audit error when req.user is set and db is available', async () => {
+      const error = new Error('boom');
+      vi.spyOn(patientService, 'createPatient').mockRejectedValue(error);
+      const logErrorSpy = vi.spyOn(auditLogger, 'logError').mockResolvedValue();
+      vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+      const req = createReq({ body: { patientName: 'Foo' }, user: { id: 'u1' } });
+      const res = createRes();
+
+      await controller.cadastrar(req, res);
+
+      expect(logErrorSpy).toHaveBeenCalledWith(req, 'Patient', error, expect.objectContaining({ action: 'CREATE' }));
+      expect(res.status).toHaveBeenCalledWith(500);
+    });
+
+    it('falls back to a generic i18n message when the error has no message', async () => {
+      const error = new Error();
+      error.message = '';
+      vi.spyOn(patientService, 'createPatient').mockRejectedValue(error);
+      const req = createReq({ body: { patientName: 'Foo' } });
+      const res = createRes();
+
+      await controller.cadastrar(req, res);
+
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({ message: 'errors.generic' })
+      );
+    });
   });
 
   describe('listar', () => {
@@ -212,6 +248,32 @@ describe('paciente.controller', () => {
         expect.objectContaining({
           success: true,
           data: expect.objectContaining({ total: 1 })
+        })
+      );
+    });
+
+    it('defaults status/consentNotifiedAt/consentTokenExpiresAt when missing (operational role)', async () => {
+      const patientsCollection = {
+        find: vi.fn().mockReturnValue({
+          limit: vi.fn().mockReturnThis(),
+          skip: vi.fn().mockReturnThis(),
+          toArray: vi.fn().mockResolvedValue([{ participantId: '12345678' }])
+        }),
+        countDocuments: vi.fn().mockResolvedValue(1)
+      };
+      const db = { collection: vi.fn().mockReturnValue(patientsCollection) };
+      vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+      vi.spyOn(auditLogger, 'log').mockResolvedValue();
+      const req = createReq({ app: { locals: { db } }, user: { accessType: 1 } });
+      const res = createRes();
+
+      await controller.listar(req, res);
+
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            patients: [{ participantId: '12345678', status: 'PENDING_CONSENT', consentNotifiedAt: null, consentTokenExpiresAt: null }]
+          })
         })
       );
     });
@@ -390,6 +452,33 @@ describe('paciente.controller', () => {
 
       expect(logErrorSpy).toHaveBeenCalled();
       expect(res.status).toHaveBeenCalledWith(422);
+    });
+
+    it('logs audit entry when req.user is set on success', async () => {
+      vi.spyOn(patientService, 'updatePatient').mockResolvedValue({ participantId: '12345678' });
+      const { freshController, spy: complianceSpy } = reloadControllerWithFreshCompliancySpy();
+      const logSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue();
+      vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+      const req = createReq({ params: { id: '12345678' }, body: { patientName: 'Foo' }, user: { id: 'u1' } });
+      const res = createRes();
+
+      await freshController.atualizar(req, res);
+
+      expect(complianceSpy).toHaveBeenCalledWith(req.app.locals.db, '12345678');
+      expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({ action: 'UPDATE', entityID: '12345678' }));
+      expect(res.status).toHaveBeenCalledWith(200);
+    });
+
+    it('falls back to error.status when statusCode is not set', async () => {
+      const error = new Error('boom');
+      error.status = 418;
+      vi.spyOn(patientService, 'updatePatient').mockRejectedValue(error);
+      const req = createReq({ params: { id: '12345678' }, body: {} });
+      const res = createRes();
+
+      await controller.atualizar(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(418);
     });
   });
 
@@ -730,6 +819,20 @@ describe('paciente.controller', () => {
       await controller.createBiomarkerObservation(req, res);
 
       expect(res.status).toHaveBeenCalledWith(400);
+    });
+
+    it('builds a specimen reference from specimenId when specimen is not provided', async () => {
+      vi.spyOn(biomarkerObservationService, 'createObservation').mockResolvedValue({ _id: 'obs1' });
+      const req = createReq({ params: { id: '12345678' }, body: { biomarkerType: 'X', value: 1, specimenId: ' spec-1 ' } });
+      const res = createRes();
+
+      await controller.createBiomarkerObservation(req, res);
+
+      expect(biomarkerObservationService.createObservation).toHaveBeenCalledWith(
+        req.app.locals.db,
+        expect.objectContaining({ specimen: { reference: 'Specimen/spec-1' } })
+      );
+      expect(res.status).toHaveBeenCalledWith(201);
     });
   });
 });
