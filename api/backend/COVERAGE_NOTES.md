@@ -259,6 +259,16 @@ tests addable, closed as-is.
 `--coverage.include`): was 100%/80.55% stmts/branch, now
 **100%/100%/100%/100%**.
 
+`BiomarkerObservation.js` (13-file isolated baseline confirmed 87.27%/
+84.37% stmts/branch, no drift from the 84.37%/88.46% merged number). New
+`tests/unit/BiomarkerObservation.model.test.js` covers the previously-gap
+`validate()` branches (missing participantId, negative value, invalid
+status, invalid eventType — lines 41/53/62-64/71), verified standalone.
+Re-running the 13-file combo afterward gives nondeterministic lower
+numbers (61-84% branch across repeated runs, no code changed between
+runs) — a coverage-v8 multi-worker merge artifact (`#242`/`#275` class),
+not a real regression; trust the standalone/isolated per-file number.
+
 Note: `sample.service.js`, `import.service.js`, `audit.controller.js`,
 `audit-canonicalization.service.js`, `equipment.routes.js`, `User.js`
 have moved to GOOD in prior sessions — not re-verified line-by-line since
