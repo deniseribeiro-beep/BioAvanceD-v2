@@ -87,14 +87,29 @@ lines buckets below, per the "known limitation" note further down.
 **Excluded — already blocked by a filed issue or a documented design
 call, don't re-pick these as "genuinely low" candidates without first
 reading the linked issue:**
-`audit-v2.service.js` / `neo4jCanonicalProjection.service.js` (issue
-#146/#152 cluster), `SampleGraphValidator.js` (issue #222, legacy-schema
-design fork), `patient.service.js` (issues #240/#241, optional/deep
-error-path only), `mqtt-telemetry.service.js` (accepted gap — `mqtt`'s
-`connect` export can't be mocked), `result-worker.js` /
-`daily-merkle.job.js` (issue #146/#164/#159), `queue.js` / `eConsent.js`
-(issue #242 merged-vs-isolated drift class — re-check isolated coverage
-before trusting the merged number for either).
+`SampleGraphValidator.js` (issue #222, legacy-schema design fork, still
+open), `mqtt-telemetry.service.js` (accepted gap — `mqtt`'s `connect`
+export can't be mocked), `queue.js` / `eConsent.js` (issue #242
+merged-vs-isolated drift class — re-check isolated coverage before
+trusting the merged number for either).
+
+**No longer excluded (2026-07-24) — their blocking issues are now
+CLOSED, re-opening them as real slice candidates:** `audit-v2.service.js`
+/ `neo4jCanonicalProjection.service.js` (#146/#152, closed),
+`patient.service.js` (#240/#241, closed), `result-worker.js` /
+`daily-merkle.job.js` (#146/#164/#159, closed). Isolated single-file
+check this session: `daily-merkle.job.js` matches its merged number (no
+drift) — 59.42%/52.17%/75%/60% stmts/branch/funcs/lines via
+`npx vitest run tests/unit/daily-merkle.job.test.js --coverage
+--coverage.include="src/workers/jobs/daily-merkle.job.js"` — real gap,
+untested paths include `recoverMissingDates`'s invalid-Merkle-result
+branch, `anchorV2ForDate`'s no-previous-tree-head fallback, and
+`runOnce`'s catch/finally paths. Good next-slice candidate. The other
+four (`audit-v2.service.js`, `neo4jCanonicalProjection.service.js`,
+`patient.service.js`, `result-worker.js`) haven't been isolated-checked
+yet this session — re-run each's own test file(s) with
+`--coverage.include` before treating their old merged numbers as current
+(issue #242 drift class may apply).
 
 **Regenerated 2026-07-24 (session 14)** from a fresh full-suite
 `coverage-summary.json`, excluded/already-documented files above
@@ -109,154 +124,23 @@ gap  branch% lines%  file
  21  80.37% 100.0%   src/controllers/consent.controller.js         -- phantom-branch pattern, not a real gap
 ```
 
-`auth.routes.js` checked this session (no test added) — isolated run across its three
-test files matched the merged 72.9% (no drift), but every remaining uncovered
-statement/branch was verified 0-hit even when run in isolation with only the single
-test that demonstrably exercises it (e.g. the no-cookie `/refresh` 401 path) —
-confirmed instance of the async-statement-0-hit artifact already documented for
-`auth.controller.js`/`auth.service.js` (dyeallpies-skills-pack#111 class), not a real
-gap.
-
-`orphanet.js` closed this session — isolated run matched the merged 78.28% branches
-(no drift); real gaps closed in the synchronous normalization helpers
-(`normalizeReferenceList`, `normalizeExternalReferences`, `normalizeDiseaseRecord`):
-`ExternalReference` as a single object instead of an array, lowercase `source`/
-`reference` field names, `icdCode`/`relacoes.omim` fallbacks, and the
-`orpha-${orphaNumeric}` generated-id fallback when a doc has no `_id`/`id`. Isolates
-to 97.77% branches (up from 78.28%). Remaining gap is `dedupeRecords`' merge-fallback
-operands and a handful of `cond-expr` alternates in `searchLocal`/`searchRemote` —
-spot-checked as either redundant-merge dead code (same class as `import-lgpd.service.js`,
-issue #270) or inside the async route handler's phantom-statement pattern; not pursued
-further this session.
-
-`backup.routes.js` closed this session — isolated run matched the merged
-70.83% (no drift); real gaps closed: `/perform`'s default-message fallback
-when `result.error` is falsy, `/restore/:fileName`'s empty-basename guard
-(hit via a `%2F`-encoded param), `/restore`'s default-message fallback
-when `restoreBackup` resolves failure without an `error` field, and the
-`error.message || String(error)` fallback for a non-`Error` rejection.
-Isolates to 91.66% branches / 100% lines — remaining 2 branches
-(`getDirSizeSync`'s `!fs.existsSync` guard on an already-`readdir`'d
-entry, and the `req.params.fileName || ''` fallback which Express never
-leaves undefined) are the documented unreachable-guard pattern, not a
-real gap. Next candidates to try in order: `rbac.js`, `collections.js`,
-`ReleaseSampleUseCase.js`, `auth.service.js`, `security.routes.js`,
-`NotificationService.js` (closed — see below) — none of these appear on
-the excluded list above; re-check isolated coverage before committing to
-one (issue #242 drift class still applies generally).
-
-`NotificationService.js` closed this session — isolated run matched the
-merged 76.36% branches (no drift) before this session's tests; closed
-the two real statement/line gaps found: `getNotificationQueue`'s
-`!connection` return-null path (dev mode with no Redis config, vs. the
-already-tested throw path) and the entire previously-untested
-`sendCriticalTempAlertFromInflux` function (both the no-recent-rows and
-the delegate-to-`sendCriticalTempAlert` outcomes, including the
-`locationId` Flux filter). Isolates to 94.07% statements / 93.84% lines
-(from 91.85%/91.53%). Branches stayed at 76.36% even after these two
-new tests demonstrably exercised their target branches with passing
-assertions — confirmed via isolated single-test coverage runs that the
-branch/function hit-counters read 0 despite correct runtime behavior,
-the same phantom-branch/require-cache-bust artifact class already
-documented for `consent.controller.js` and `auth.service.js`. Remaining
-uncovered branches (`resolveRecipient`'s empty-`safeTo` throw,
-`sendConsentSmsFallback`'s `missing_phone` branch, `getConsentQueueStats`'
-`!queue` branch, etc.) were spot-checked the same way — each has a
-passing test asserting the exact behavior of that branch — so treated as
-the same artifact, not a real gap.
-
-`collections.js` closed this session — isolated run matched the merged
-72.72% (no drift); remaining gap is structurally unreachable: `env.js`
-never sets `COLL_CIDS`/`COLL_CLINICAL_UNITS`/`COLL_DISEASE_DICTIONARY`/
-`COLL_MEDICATION_DICTIONARY`/`COLL_REFERENCE_SEED_RUNS`, so those five
-fields' `env.X || default` truthy branch can never fire regardless of
-`process.env` — not a real test gap.
-
-`ReleaseSampleUseCase.js` closed this session — isolated run was already
-86.48% branches from existing tests (better than the merged 72.97%,
-issue #242 drift class); closed the remaining real gaps: `barcode`/
-`actorId` null-fallbacks, `recordCustodyEvent` resolving without an
-`eventId`, `LINEAGE_MODE` defaulting to fail-open when unset, and
-`compensateCustodyEvent` rejecting with a non-Error value. Isolates to
-100%/100%/100%/100%.
-
-`import-lgpd.service.js` checked and closed this session (no test
-added) — isolated run across its `import{Patients,Samples}` unit test
-files matched the merged ~82.5% branches (no drift; `importPatients`
-and `importSamples` already have thorough per-row test suites). Traced
-every remaining uncovered branch by reading the surrounding code rather
-than experimenting with tests, and confirmed each is structurally
-unreachable dead code, filed as issue #270: `importSamples`'s
-post-`SampleModel.validate()` re-checks of quality/sampleType/
-sampleOrigin/extractionProtocol (validate() already guarantees the
-same predicate is true by the time these run), `importPatients`'s
-`typeof birthDate === 'string'` branch (birthDate is guaranteed a
-`Date` by an earlier guard), two duplicate `if`/`rows.length===0`
-header-validation re-checks, `parseSampleRow`'s duplicate
-`if/else-if (row.registeredAt)` (identical condition twice), and
-duplicate-key object-literal reassignments (harmless, same value both
-times) in `pharmacologyData` and `consentTemplateId`. Not a real gap.
-
-`auth.service.js` checked and closed this session (no test added) —
-isolated run across its three test files matched the merged 73.50% (no
-drift); every remaining uncovered line/branch (52, 259, 273-274, 334:
-`issueSessionTokens`'s first statement, the failed-login `auditLogger.log`
-call, the non-active-status branch/message map, and `speakeasy.totp.verify`)
-is demonstrably exercised by an existing test (e.g. "rejects for
-inactive/suspended/blocked status" asserts the exact `Usuário suspenso`
-message thrown from inside the line 273 branch) — matches the documented
-async-statement 0-hit artifact already seen in `auth.controller.js`
-(V8 undercounts certain awaited-statement executions inside methods with
-an outer try/catch), not a real gap.
-
-`security.routes.js` closed this session — isolated run matched the
-merged 73.68% (no drift); real gap was every `(req.t && req.t(key)) ||
-default` i18n fallback plus the `req.query.format || 'csv'` default,
-never exercised because the test helper's `createRequest` always
-supplied a truthy `req.t`. Added a `req.t: null` request variant across
-each route's success/503/400/500 paths. Isolates to 100%/100%/100%/100%.
-
-`rbac.js` closed this session — isolated run matched the merged 72.41%
-(no drift); real gaps closed: `resolveUserRole`'s `user.role` fallback
-and empty-string default paths, the unmapped-`roleName`-defaults-to-1
-path, `requireRole`'s non-admin 403 branch (`allowedRoles` excludes
-`userRole`), `requirePermission`'s 401-no-user path, and the
-audit-log `setImmediate` branch (both with and without `req.app.locals.db`
-present). Isolates to 100%/100%/100%/100%.
-
-Files closed out of Phase 1/2 since the list was last regenerated
-(2026-07-23 through 2026-07-24, sessions 4-13): `import-lgpd.service.js`
-(closed session 15 — see above, remaining gap is confirmed dead code,
-issue #270), `intakeWizard.js` (partial), `auth.routes.js` (partial —
-coverage number suspect, see `dyeallpies-skills-pack#111`),
-`dictionary.js`, `sample-file.controller.js`, `orphanet.js`,
-`terminologies.routes.js`, `batch-validation-engine.service.js`,
-`terminologySync.service.js`, `equipment-sensor-quarantine.service.js`,
-`user-security.service.js` (93.51% isolated branches),
-`storageService.js` (85.95% isolated branches), `hl7.service.js` (100%
-isolated branches), `consent.controller.js` (80.37% isolated branches,
-100% isolated lines/statements/functions — remaining gap is guard-clause
-ifs with no else, the documented phantom-branch pattern, not a real
-test gap), `auth.controller.js` (78.34% isolated branches, 93.75%
-isolated lines — remaining gap is a mix of the phantom-branch pattern
-and a handful of statements inside async catch blocks that V8 shows as
-0-hit despite manual verification that they execute and are asserted on
-by tests, e.g. line 122; not a real test gap), `audit.controller.js`
-(90.54% isolated branches, 96.36% isolated lines — remaining gap is
-`isIsoDate`/`isHexHash`/`isProofValid`, unreachable dead code, issue
-#267), `paciente.controller.js` (90.47% isolated branches, 99.28%
-isolated lines — remaining gap confirmed via manual invocation to be the
-phantom-branch pattern: guard-clause `if`s with no `else`, plus a
-misattributed optional-chaining `||` chain at line 481, both
-demonstrably exercised and asserted on by tests despite showing 0 hits),
-`reports.routes.js` (91.09% isolated branches, up from 90.41% — closed a
-real gap: `samplesbypatient`'s patient-without-`patientID`/no-matching-
-samples fallback branches, previously untested; remaining gap is the
-already-documented `if (!db)` 503-guard-pre-empted-by-`authenticate`
-pattern, issues #67/#76/#236/#246/#247/#248, plus catch-block phantom
-branches — not a real test gap).
-Check each file's own git log / filed issues for what remains, not this
-note.
+Files fully closed (100% or accepted-remaining-gap, no longer bucket
+candidates) — see each file's own git log / filed issues for detail, not
+this note: `AllocateSampleUseCase.js`, `RegisterSample.js`,
+`auth.routes.js` (checked, async-statement-0-hit artifact, issue
+`dyeallpies-skills-pack#111`), `consent.controller.js`, `orphanet.js`
+(remaining gap tracked as issue #271), `backup.routes.js`,
+`NotificationService.js` (remaining branch gap tracked as issue #258),
+`collections.js`, `ReleaseSampleUseCase.js`, `import-lgpd.service.js`
+(remaining gap is dead code, issue #270), `auth.service.js`,
+`security.routes.js`, `rbac.js`, `intakeWizard.js` (partial),
+`dictionary.js`, `sample-file.controller.js`, `terminologies.routes.js`,
+`batch-validation-engine.service.js`, `terminologySync.service.js`,
+`equipment-sensor-quarantine.service.js`, `user-security.service.js`,
+`storageService.js`, `hl7.service.js`, `auth.controller.js`,
+`audit.controller.js` (remaining dead code, issue #267),
+`paciente.controller.js`, `reports.routes.js` (remaining gap: issues
+#67/#76/#236/#246/#247/#248 `if (!db)` pre-empted-guard pattern).
 
 **Known limitation of this reconcile method — see issue #242**: for
 files whose tests span both a Vitest-isolated unit test and an
@@ -339,15 +223,15 @@ cluster) resolved to GOOD.
 Sorted ascending (worst first) — lines% / branches%.
 
 ```
-src/workers/jobs/daily-merkle.job.js            60.00 / 52.17   (issue #159 — stale test mock)
-src/services/audit-v2.service.js                60.81 / 43.75   (issue #146/#152 cluster)
-src/services/neo4jCanonicalProjection.service.js 65.00 / 58.41  (issue #146 cluster)
+src/workers/jobs/daily-merkle.job.js            60.00 / 52.17   (blocking issue #159 CLOSED — real candidate, see priority-list note above)
+src/services/audit-v2.service.js                60.81 / 43.75   (blocking issues #146/#152 CLOSED — real candidate, re-check isolated first)
+src/services/neo4jCanonicalProjection.service.js 65.00 / 58.41  (blocking issue #146 CLOSED — real candidate, re-check isolated first)
 ```
 
-(2026-07-24 reconcile: unchanged, same three files, same numbers.)
-
-Genuinely low (no matching filed issue found) — real slice candidates:
-none currently listed.
+Genuinely low, real slice candidates now that their blocking issues are
+closed: all three above. `daily-merkle.job.js` isolated-confirmed this
+session (matches merged, no drift). The other two still need an isolated
+check before committing to a slice.
 
 ## MID-HIGH coverage (70-84% lines) — 7 files as of the 2026-07-24 reconcile
 
@@ -357,11 +241,11 @@ when picking among these.
 
 ```
 src/services/mqtt-telemetry.service.js           71.42 / 78.09   (accepted gap — mqtt.connect() can't be mocked, see exclusion note above)
-src/workers/workers/result-worker.js             76.66 / 66.07   (issue #146/#164 — rename + yauzl)
-src/services/SampleGraphValidator.js             77.69 / 66.66   (issue #222 — legacy-schema migration, design fork)
+src/workers/workers/result-worker.js             76.66 / 66.07   (blocking issues #146/#164 CLOSED — real candidate, re-check isolated first)
+src/services/SampleGraphValidator.js             77.69 / 66.66   (issue #222 — legacy-schema migration, design fork, still open)
 src/workers/neo4jProjection.worker.js            79.62 / 73.33   (CLI entry block not coverable in-process, accepted gap)
 src/interface/routes/equipment.routes.js         81.59 / 81.01   (phantom-statement pattern, not a real gap — see reconcile note above)
-src/services/patient.service.js                  83.89 / 74.56   (issues #240/#241 — remaining gap is deep error-path combos, optional)
+src/services/patient.service.js                  83.89 / 74.56   (blocking issues #240/#241 CLOSED — real candidate, re-check isolated first)
 ```
 
 `User.js` checked and closed: 78.94% merged branches was drift (issue
