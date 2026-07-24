@@ -1,62 +1,66 @@
 # HANDOFF
 
 **Written:** 2026-07-24, end of a test-loop iteration.
-**Branch:** `test/audit-controller-branch-coverage` (commit `0bfa2133`,
-pushed). Based off `feature/docker-e2e-backend-integration` (still
-current at `ea4ee686`, untouched this session).
+**Branch:** `feature/docker-e2e-backend-integration` (commit `22544272`,
+pushed).
 
 ## What happened this session
 
-Read `HANDOFF.md`, ran `test-loop` on `src/controllers/audit.controller.js`
-(Phase 2 branch-gap list, 35-branch gap, 76.35%/95.5% branch/lines per
-`COVERAGE_NOTES.md`) — re-verified as a real, not "moved to GOOD and
-stale" number via the file's single test file run with
-`--coverage.include` (only one test file for this controller, no
-isolated-vs-merged drift risk).
+Read `HANDOFF.md`. Per its recommendation, asked Dennis whether to merge
+`test/audit-controller-branch-coverage` into
+`feature/docker-e2e-backend-integration` before starting a new slice (the
+two had diverged by one commit) — Dennis chose to merge first. Merged
+cleanly (`bb986084`, no conflicts) and pushed.
 
-Added 17 targeted tests to `tests/unit/audit.controller.test.js` (47
-tests total, all passing) closing: `verifyAudit`'s db-unavailable/404/
-`treeHeadId`-supplied/inclusion-proof-fallback/`PARTIALLY_ANCHORED`/
-catch-block branches; the repeated `error.message || error` logger
-fallback across all seven handlers (`getMerkleRoot`, `report`, `compare`,
-`hl7Report`, `dashboardDates`, `dashboardStats`, `dashboardRoots`); and
-`report()`/`compare()`'s `recalculated ? ... : null` falsy branches.
+Then ran `test-loop` on `src/controllers/paciente.controller.js` (Phase 2
+branch-gap list, 29-branch gap, 87.42%/97.5% branch/lines per
+`COVERAGE_NOTES.md`) — single test file for this controller, no
+isolated-vs-merged drift risk. Added 7 targeted tests to
+`tests/unit/paciente.controller.test.js` (66 tests total, all passing)
+closing: `rejectCanonicalAliases`'s non-canonical-field throw;
+`cadastrar`'s catch-block audit-error logging (req.user set) and
+generic-message fallback (empty `error.message`); `listar`'s
+operational-role field defaults (missing `status`/`consentNotifiedAt`/
+`consentTokenExpiresAt`); `atualizar`'s success-path audit logging
+(req.user set) and `error.status` fallback; `createBiomarkerObservation`'s
+specimenId-derived specimen reference.
 
-Isolated coverage for the file: **90.54% branches** (was 76.35%),
-**96.36% lines/statements** (was 95.45%/92.91%), **71.42% functions**
-(unchanged). Remaining gap confirmed via grep across `api/backend/src`
-to be dead code: `isIsoDate`/`isHexHash`/`isProofValid` (lines 11-22) are
-never called anywhere in the file or repo, and are not exported — filed
-as **issue #267** rather than tested around.
+Isolated coverage for the file: **90.47% branches** (was 84.41%),
+**99.28% lines/statements** (was 93.52%/93.57%), **100% functions**
+(unchanged). Remaining gap manually verified (direct invocation outside
+the coverage instrumentation) to be the documented phantom-branch
+pattern: guard-clause `if`s with no `else`, plus a misattributed
+optional-chaining `||` chain at line 481 — both demonstrably exercised
+despite showing 0 hits. No new issue filed; this matches the
+already-documented pattern, not a new finding.
 
-Updated `COVERAGE_NOTES.md`: removed `audit.controller.js` from the
+Updated `COVERAGE_NOTES.md`: removed `paciente.controller.js` from the
 Phase 2 list, added it to the "closed out" note with its new isolated
-number and the #267 caveat.
+number and the phantom-branch caveat.
 
-No stale-test / lazy-fix / scope-creep findings this session beyond
-filing #267. No product source touched.
+No stale-test / lazy-fix / scope-creep findings this session. No product
+source touched. One minor tooling hiccup (Bash tool's cwd didn't match
+PowerShell's — resolved with an absolute path), not worth a skill change.
 
 ## Repo state
 
 - `feature/docker-e2e-backend-integration` current and pushed
-  (`ea4ee686`) — untouched this session.
-- `test/audit-controller-branch-coverage` current and pushed
-  (`0bfa2133`), branched off `feature/docker-e2e-backend-integration`.
-  Not yet merged back — Dennis's call whether it folds into the feature
-  branch or goes its own way; no PR opened (per the no-PR-without-go
-  rule).
-- Working tree clean, no dangling branches beyond the two above.
+  (`22544272`) — now includes both the audit.controller.js branch-
+  coverage work (merged this session) and this session's
+  paciente.controller.js slice.
+- `test/audit-controller-branch-coverage` merged in, no longer needed as
+  a separate branch — Dennis's call whether to delete it.
+- Working tree clean.
 
 ## Milestone (set 2026-07-22 by Dennis, still current)
 
 **Target: 90% across all four coverage dimensions.** Last full reconcile
 was 2026-07-23 morning (`f3c258c9`): Statements 91.54%, Branches
-**83.37%** (lagging dimension), Functions 90.96%, Lines 91.98%. Many
-sessions' worth of slices since then (including this one,
-`auth.controller.js`, and `consent.controller.js`) aren't folded into
-that number yet — worth a fresh full reconcile once a couple more Phase
-2 files land, or once `test/audit-controller-branch-coverage` merges
-back into the feature branch.
+**83.37%** (lagging dimension), Functions 90.96%, Lines 91.98%. Several
+sessions' worth of slices since then (including `audit.controller.js`
+and this session's `paciente.controller.js`) aren't folded into that
+number yet — worth a fresh full reconcile once `auth.service.js` (the
+next big one) lands, or sooner if Dennis wants an updated snapshot.
 
 ## Recommended next steps
 
@@ -67,7 +71,6 @@ session):
 ```
 gap  branch% lines%  file
  40  73.50%  98.4%   src/services/auth.service.js
- 29  87.42%  97.5%   src/controllers/paciente.controller.js
  28  90.42%  99.1%   src/interface/routes/reports.routes.js
 ```
 
@@ -76,27 +79,17 @@ gap  branch% lines%  file
 `dyeallpies-skills-pack#112` before trusting any single-file number, and
 expect it to need its own full iteration or a deliberate split.
 
-Before starting a fresh slice, decide (or ask Dennis) whether to keep
-working on `test/audit-controller-branch-coverage` or fold it back into
-`feature/docker-e2e-backend-integration` first — the two have diverged
-by one commit and picking a new file's tests on the wrong branch would
-compound that.
-
 Remaining open backlog beyond this (not re-checked this session): #254,
 #253, #252, #251, #250, #224, #222, #115, #255-#267 — see
 `gh issue list --state open`. #250/#251/#252-254 are bug/design-call
-items outside the test-loop's scope; #255-266 are dead-code/gap findings
-from prior test-loop sessions, owner's call whether to remove/wire in;
-#267 is this session's new dead-code finding (audit.controller.js's
-unused isIsoDate/isHexHash/isProofValid helpers).
+items outside the test-loop's scope; #255-267 are dead-code/gap findings
+from prior test-loop sessions, owner's call whether to remove/wire in.
 
 ## Which skills to use
 
 `work-issue` to route the next pick. `test-loop` for the next coverage
-slice (with the bigger-iteration policy per `dyeallpies-skills-pack#107`,
-not yet landed upstream). `bioavanced-v2-conventions` and
-`bioavanced-v2-testing-conventions` as always. `wrap-up` every
-iteration.
+slice. `bioavanced-v2-conventions` and `bioavanced-v2-testing-conventions`
+as always. `wrap-up` every iteration.
 
 ## Dependency notes
 
@@ -104,9 +97,10 @@ None queued.
 
 ## Session note
 
-No new recurring-lesson candidate this session — the branch-mapping
-technique from prior sessions (`coverage-final.json`'s `branchMap`/`b`
-arrays, cross-referenced against exact source-line columns) worked
-cleanly to pinpoint every real gap on the first pass, including
-distinguishing "real untested branch" from "dead code" for the leftover
-validator helpers.
+The phantom-branch pattern (guard-clause `if`s with no `else`, and now
+confirmed also for chained optional-chaining `||` expressions) keeps
+recurring across controller files. Worth remembering when picking the
+next slice: don't chase every listed "uncovered branch" number — verify
+with a direct manual invocation (bypassing the coverage tool) before
+writing more tests against it, the same way this session and the prior
+`audit.controller.js`/`auth.controller.js` sessions did.
