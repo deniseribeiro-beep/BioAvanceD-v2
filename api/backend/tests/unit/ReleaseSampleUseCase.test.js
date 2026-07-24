@@ -282,6 +282,73 @@ describe('ReleaseSampleUseCase', () => {
     expect(lineageRepository.compensateCustodyEvent).toHaveBeenCalledTimes(1);
   });
 
+  it('defaults barcode to null and actorId to null when both are absent', async () => {
+    const sampleSnapshot = makeSampleSnapshot({ barcode: undefined });
+    const storageRepository = makeStorageRepository({ sampleSnapshot });
+    const auditRepository = makeAuditRepository();
+    const lineageRepository = {
+      validateBeforePersistence: vi.fn(() => Promise.resolve()),
+      recordCustodyEvent: vi.fn(() => Promise.resolve({ eventId: 'evt-no-actor' }))
+    };
+    const useCase = new ReleaseSampleUseCase({ storageRepository, auditRepository, lineageRepository });
+
+    await useCase.execute({ specimenId: 'sample-1', actor: {} });
+
+    const [validatePayload] = lineageRepository.validateBeforePersistence.mock.calls[0];
+    expect(validatePayload.barcode).toBeNull();
+    expect(validatePayload.actorId).toBeNull();
+
+    const [auditPayload] = auditRepository.appendImmutableAudit.mock.calls[0];
+    expect(auditPayload.barcode).toBeNull();
+  });
+
+  it('defaults lineageEventId to null when recordCustodyEvent resolves without an eventId', async () => {
+    const sampleSnapshot = makeSampleSnapshot();
+    const storageRepository = makeStorageRepository({ sampleSnapshot });
+    const auditRepository = makeAuditRepository();
+    const lineageRepository = {
+      validateBeforePersistence: vi.fn(() => Promise.resolve()),
+      recordCustodyEvent: vi.fn(() => Promise.resolve(undefined))
+    };
+    const useCase = new ReleaseSampleUseCase({ storageRepository, auditRepository, lineageRepository });
+
+    const result = await useCase.execute(baseCommand);
+
+    expect(result.lineageEventId).toBeNull();
+  });
+
+  it('defaults LINEAGE_MODE to fail-open when the env var is unset', async () => {
+    env.LINEAGE_MODE = '';
+    const sampleSnapshot = makeSampleSnapshot();
+    const storageRepository = makeStorageRepository({ sampleSnapshot });
+    const auditRepository = makeAuditRepository();
+    const useCase = new ReleaseSampleUseCase({ storageRepository, auditRepository });
+
+    const result = await useCase.execute(baseCommand);
+
+    expect(result.success).toBe(true);
+    expect(result.lineageValidated).toBe(false);
+  });
+
+  it('falls back to the raw rejection value when compensation rejects with a non-Error', async () => {
+    const sampleSnapshot = makeSampleSnapshot();
+    const mongoError = new Error('mongo release failed once more');
+    const storageRepository = makeStorageRepository({ sampleSnapshot });
+    storageRepository.withTransaction.mockImplementation(async () => {
+      throw mongoError;
+    });
+    const auditRepository = makeAuditRepository();
+    const lineageRepository = {
+      validateBeforePersistence: vi.fn(() => Promise.resolve()),
+      recordCustodyEvent: vi.fn(() => Promise.resolve({ eventId: 'evt-comp-3' })),
+      compensateCustodyEvent: vi.fn(() => Promise.reject('raw string rejection'))
+    };
+    const useCase = new ReleaseSampleUseCase({ storageRepository, auditRepository, lineageRepository });
+
+    await expect(useCase.execute(baseCommand)).rejects.toThrow('mongo release failed once more');
+    expect(lineageRepository.compensateCustodyEvent).toHaveBeenCalledTimes(1);
+  });
+
   it('throws when the sample disappears between the initial lookup and the transactional re-fetch', async () => {
     const sampleSnapshot = makeSampleSnapshot();
     const storageRepository = makeStorageRepository({ sampleSnapshot });

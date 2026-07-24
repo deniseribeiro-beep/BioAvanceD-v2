@@ -104,7 +104,6 @@ gap  branch% lines%  file
  17  64.58%  91.5%   src/core/use-cases/AllocateSampleUseCase.js   -- CLOSED prior session
  25  70.23%  91.5%   src/core/use-cases/RegisterSample.js          -- CLOSED prior session
  42  72.90%  89.9%   src/interface/routes/auth.routes.js          -- partial, coverage number suspect (dyeallpies-skills-pack#111)
- 10  72.97%  91.7%   src/core/use-cases/ReleaseSampleUseCase.js
  40  73.50%  98.4%   src/services/auth.service.js
  15  73.68% 100.0%   src/interface/routes/security.routes.js
  52  76.36%  91.5%   src/services/NotificationService.js
@@ -134,6 +133,14 @@ never sets `COLL_CIDS`/`COLL_CLINICAL_UNITS`/`COLL_DISEASE_DICTIONARY`/
 `COLL_MEDICATION_DICTIONARY`/`COLL_REFERENCE_SEED_RUNS`, so those five
 fields' `env.X || default` truthy branch can never fire regardless of
 `process.env` — not a real test gap.
+
+`ReleaseSampleUseCase.js` closed this session — isolated run was already
+86.48% branches from existing tests (better than the merged 72.97%,
+issue #242 drift class); closed the remaining real gaps: `barcode`/
+`actorId` null-fallbacks, `recordCustodyEvent` resolving without an
+`eventId`, `LINEAGE_MODE` defaulting to fail-open when unset, and
+`compensateCustodyEvent` rejecting with a non-Error value. Isolates to
+100%/100%/100%/100%.
 
 `rbac.js` closed this session — isolated run matched the merged 72.41%
 (no drift); real gaps closed: `resolveUserRole`'s `user.role` fallback
