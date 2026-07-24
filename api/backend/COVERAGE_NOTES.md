@@ -43,17 +43,21 @@ stale as slices land and as source files change. Keep it honest:
 ## Last full reconcile
 
 **2026-07-24**, snapshot from `feature/docker-e2e-backend-integration`
-(commit `402c5359`, full suite, 1 failed / 5966 passed).
+(commit `061ae64f`, full suite, 2 failed / 5967 passed).
 
-Statements **93.05%** (17335/18628), Branches **86.64%** (14395/16613),
-Functions **91.67%** (2069/2257), Lines **93.40%** (16651/17827).
+Statements **93.06%** (17337/18628), Branches **86.66%** (14398/16613),
+Functions **91.67%** (2069/2257), Lines **93.41%** (16653/17827).
 **Three of four dimensions (statements/functions/lines) remain past the
 90% milestone** (`bioavanced-v2-conventions`); branches is still the
 sole laggard, up from 83.37% at the prior reconcile.
 
-Only known pre-existing failure as of this run: 1 test in
-`sample-graph-validator.service.test.js` ("valida o nó de Integridade
-com sucesso e falha por tampering") — not blocking coverage work.
+Known pre-existing failure: 1 test in `sample-graph-validator.service.test.js`
+("valida o nó de Integridade com sucesso e falha por tampering") — not
+blocking coverage work. New this session: `terminologySync.service.test.js`
+("produces a deterministic hashConteudo for identical input") started
+failing against a real product bug (issue #268, `hashConteudo` includes
+`sincronizadoEm`/`updatedAt` timestamps) — test left unmodified, not a
+coverage gap.
 
 Checked this session (not real gaps, no test added):
 `src/utils/fieldEncryption.js` showed 76.19%/82.60% lines/branches in
@@ -90,21 +94,38 @@ error-path only), `mqtt-telemetry.service.js` (accepted gap — `mqtt`'s
 (issue #242 merged-vs-isolated drift class — re-check isolated coverage
 before trusting the merged number for either).
 
-**Phase 1 (top gap, unblocked, real candidates):** current top entries
-are `src/services/import-lgpd.service.js` and `src/routes/intakeWizard.js`
-— both partially closed already (session 4/6), remaining gap is scattered
-across smaller helpers, no single large block left. Regenerate this list
-from a fresh `coverage-summary.json` rather than trusting it stale; many
-Phase 1 entries have closed out across sessions 4-13 (see git log for
-which).
-
-**Phase 2 (next tier, same exclusions apply) — regenerate after Phase 1
-lands, current top-of-list as of last regeneration:**
+**Regenerated 2026-07-24 (session 14)** from a fresh full-suite
+`coverage-summary.json`, excluded/already-documented files above
+filtered out — top real candidates (gap = uncovered branches, sorted
+worst branch% first):
 
 ```
 gap  branch% lines%  file
+ 17  64.58%  91.5%   src/core/use-cases/AllocateSampleUseCase.js   -- CLOSED this session, see below
+ 25  70.23%  91.5%   src/core/use-cases/RegisterSample.js
+  7  70.83%  98.1%   src/interface/routes/backup.routes.js
+  8  72.41%  95.5%   src/infrastructure/middleware/rbac.js
+  6  72.72% 100.0%   src/config/collections.js
+ 42  72.90%  89.9%   src/interface/routes/auth.routes.js          -- partial, coverage number suspect (dyeallpies-skills-pack#111)
+ 10  72.97%  91.7%   src/core/use-cases/ReleaseSampleUseCase.js
  40  73.50%  98.4%   src/services/auth.service.js
+ 15  73.68% 100.0%   src/interface/routes/security.routes.js
+ 52  76.36%  91.5%   src/services/NotificationService.js
+ 38  78.28%  85.4%   src/routes/orphanet.js                        -- partial, prior sessions
+ 21  80.37% 100.0%   src/controllers/consent.controller.js         -- phantom-branch pattern, not a real gap
 ```
+
+`AllocateSampleUseCase.js` closed this session (see note below) —
+isolated run confirmed the merged 64.58% was a mix of real gap (7
+null-fallback branches: missing `storageLocation`/`barcode`/`actor.userId`,
+default `LINEAGE_MODE` fallback, two `error.message || error` fallbacks
+for non-Error rejections) plus some drift; isolated-before-fix was 75%,
+not the merged 64.58%. Next candidates to try in order:
+`RegisterSample.js`, `backup.routes.js`, `rbac.js`, `collections.js`,
+`ReleaseSampleUseCase.js`, `auth.service.js`, `security.routes.js`,
+`NotificationService.js` — none of these appear on the excluded list
+above; re-check isolated coverage before committing to one (issue #242
+drift class still applies generally).
 
 Files closed out of Phase 1/2 since the list was last regenerated
 (2026-07-23 through 2026-07-24, sessions 4-13): `import-lgpd.service.js`

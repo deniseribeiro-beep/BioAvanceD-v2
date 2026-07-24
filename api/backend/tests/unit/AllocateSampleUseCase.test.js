@@ -253,4 +253,82 @@ describe('AllocateSampleUseCase', () => {
     await expect(useCase.execute(baseCommand())).rejects.toThrow('mongo write conflict 3');
     expect(lineageRepository.compensateCustodyEvent).toHaveBeenCalledTimes(1);
   });
+
+  it('sample with no prior storageLocation and no barcode, actor with no userId: null-fallback branches all taken', async () => {
+    const { useCase, auditRepository } = makeDeps({
+      sample: makeSample({ storageLocation: undefined, barcode: undefined })
+    });
+    const cmd = baseCommand();
+    delete cmd.actor.userId;
+
+    const result = await useCase.execute(cmd);
+
+    expect(result.success).toBe(true);
+    expect(auditRepository.appendImmutableAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        barcode: null,
+        before: { storageLocation: null }
+      }),
+      'session-token'
+    );
+  });
+
+  it('sample has a storageLocation object but boxId/position fields are falsy: beforeLocation resolves those fields to null', async () => {
+    const { useCase, auditRepository } = makeDeps({
+      sample: makeSample({ storageLocation: { boxId: '', position: '' } })
+    });
+
+    await useCase.execute(baseCommand());
+
+    expect(auditRepository.appendImmutableAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        before: { storageLocation: { boxId: null, position: null } }
+      }),
+      'session-token'
+    );
+  });
+
+  it('fail-closed with a lineageRepository, LINEAGE_MODE unset: falls back to fail-open default so it does not throw', async () => {
+    delete env.LINEAGE_MODE;
+    const { useCase } = makeDeps({ withLineageRepo: true });
+
+    const result = await useCase.execute(baseCommand());
+
+    expect(result.lineageValidated).toBe(true);
+  });
+
+  it('lineage validation rejects with a non-Error (no .message): logger.error still falls back to the raw value', async () => {
+    env.LINEAGE_MODE = 'fail-open';
+    const { useCase } = makeDeps({
+      withLineageRepo: true,
+      lineageImpl: {
+        validateBeforePersistence: async () => {
+          throw 'neo4j down (string)';
+        }
+      }
+    });
+
+    const result = await useCase.execute(baseCommand());
+
+    expect(result.lineageValidated).toBe(false);
+  });
+
+  it('compensateCustodyEvent rejects with a non-Error (no .message): logger.error still falls back to the raw value', async () => {
+    const mongoError = new Error('mongo write conflict 4');
+    const { useCase, lineageRepository } = makeDeps({
+      withLineageRepo: true,
+      lineageImpl: {
+        recordCustodyEvent: async () => ({ eventId: 'evt-compensate-fail-2' }),
+        compensateCustodyEvent: async () => {
+          throw 'compensation failed (string)';
+        }
+      },
+      transactionImpl: async () => {
+        throw mongoError;
+      }
+    });
+
+    await expect(useCase.execute(baseCommand())).rejects.toThrow('mongo write conflict 4');
+    expect(lineageRepository.compensateCustodyEvent).toHaveBeenCalledTimes(1);
+  });
 });
