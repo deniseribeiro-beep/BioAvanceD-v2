@@ -119,6 +119,35 @@ describe('equipment-sensor-quarantine.service', () => {
       );
     });
 
+    it('resolves equipment identifiers from the bare `id` field when `_id`/`equipmentID` are absent', async () => {
+      const locationsCursor = { toArray: vi.fn(async () => []) };
+      const locationsCollection = { find: vi.fn(() => locationsCursor) };
+      const db = { collection: vi.fn(() => locationsCollection) };
+
+      await service.quarantineByEquipmentStatus(db, { id: 'EQ-BARE' }, 'offline');
+
+      expect(locationsCollection.find).toHaveBeenCalledWith(
+        {
+          $or: [
+            { equipmentID: { $in: [] } },
+            { equipmentID: { $in: ['EQ-BARE'] } }
+          ]
+        },
+        undefined
+      );
+    });
+
+    it('passes options.session through to the locations query', async () => {
+      const session = { id: 'sess-1' };
+      const locationsCursor = { toArray: vi.fn(async () => []) };
+      const locationsCollection = { find: vi.fn(() => locationsCursor) };
+      const db = { collection: vi.fn(() => locationsCollection) };
+
+      await service.quarantineByEquipmentStatus(db, { equipmentID: 1 }, 'offline', { session });
+
+      expect(locationsCollection.find).toHaveBeenCalledWith(expect.anything(), { session });
+    });
+
     it('returns zero-matched result when equipment has no resolvable identifiers', async () => {
       const db = { collection: vi.fn() };
 

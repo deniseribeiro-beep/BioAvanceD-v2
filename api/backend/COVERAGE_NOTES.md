@@ -251,11 +251,42 @@ no HTTP-request-level fix would apply here). The one remaining uncovered functio
 15-second timer to fire and wasn't chased — low value for a single
 function point.
 
+`src/services/equipment-sensor-quarantine.service.js` closed out
+2026-07-24 (same session as terminologySync.service.js above): confirmed
+the tracked 74.71% branch% was real (not merged-vs-isolated drift) only
+after discovering the file is exercised across three separate test
+files (`tests/unit/equipment-sensor-quarantine.service.test.js`,
+`tests/unit/cold-chain-quarantine.service.test.js`,
+`tests/unit/iot.controller.test.js`) — isolating just the file's own
+test file alone showed a misleadingly low 53.44%, and only running all
+three together reproduced the tracked number (issue #242 drift-check
+caveat, applied here for the first time to a 3-way split rather than
+the usual 2-way unit/integration split). Extended
+`tests/unit/cold-chain-quarantine.service.test.js` (+15 tests) and
+`tests/unit/equipment-sensor-quarantine.service.test.js` (+2 tests), 50
+total across the three files. Covered: `quarantineByColdChainIncident`'s
+sensorKey-missing and incident-status-not-active early returns, its
+sensorId/sensorID field fallbacks and `_id`-absent incidentId fallback,
+`options.session` propagation through `findLocationIdsBySensorKey` and
+`quarantineSamplesByFilter`, `findEquipmentByMetadata`'s bare-`id`-field
+and ObjectId-string reference branches (plus its no-reference-found null
+return), `collectEquipmentIdentifiers`'s bare-`id`-field branch, and
+`markColdChainIncidentSamplesForReview`'s incidentId-missing return and
+its own `options.session` propagation. Isolated branches 73.56% ->
+93.67% (128/174 -> 163/174). **Filed issue #263**: `toObjectIdIfValid`
+is dead code (defined, never called anywhere) — the only remaining
+function-coverage gap. Remaining branch gap is that dead function plus
+one confirmed-unreachable fallback (`buildColdChainIncidentReason`'s own
+"sensor desconhecido" default can't fire via the public API, since
+`quarantineByColdChainIncident`'s sensorKey-missing guard already
+returns before ever calling it with an empty sensorKey) and
+`quarantineSamplesByFilter`'s `observations` default-text fallback
+(unreachable because every caller always supplies `context.reason`).
+
 **Phase 2 (next tier, same exclusions apply):**
 
 ```
 gap  branch% lines%  file
- 44  74.71%  94.0%   src/services/equipment-sensor-quarantine.service.js
  43  80.09%  92.7%   src/services/user-security.service.js
  40  73.50%  98.4%   src/services/auth.service.js
  36  77.07%  90.3%   src/controllers/auth.controller.js
