@@ -267,6 +267,50 @@ describe('MongoAuditRepository', () => {
     });
   });
 
+  describe('canonical collection resolution (fix #250: honor CANONICAL_COLLECTIONS.sampleMovements)', () => {
+    it('resolves the movements collection name from CANONICAL_COLLECTIONS instead of a hardcoded literal', async () => {
+      // vi.mock()/vi.doMock() do not reliably intercept require() in this
+      // repo's setup (same gotcha documented in daily-merkle.job.test.js),
+      // so this overrides the already-loaded config/collections module's
+      // exports object directly via Node's require.cache, then forces
+      // MongoAuditRepository to re-require it by clearing its own cache
+      // entry.
+      const collectionsPath = require.resolve('../../src/config/collections');
+      const repoPath = require.resolve('../../src/infrastructure/persistence/mongo/MongoAuditRepository');
+      const originalCollectionsExports = require.cache[collectionsPath].exports;
+
+      require.cache[collectionsPath].exports = {
+        CANONICAL_COLLECTIONS: { sampleMovements: 'sample_movements_override' }
+      };
+      delete require.cache[repoPath];
+
+      try {
+        const RepoWithOverride = require('../../src/infrastructure/persistence/mongo/MongoAuditRepository');
+        const movements = makeMovementsCollection();
+        const counters = makeCountersCollection(1);
+        const db = {
+          collection: vi.fn((name) => {
+            if (name === 'sample_movements_override') return movements.collection;
+            if (name === 'counters') return counters.collection;
+            throw new Error(`unexpected collection requested: ${name}`);
+          })
+        };
+        const repo = new RepoWithOverride(db);
+
+        await repo.appendImmutableAudit(
+          { specimenId: 'S-5', eventType: 'MOVE', before: {}, after: {}, timestamp: new Date() },
+          undefined
+        );
+
+        expect(db.collection).toHaveBeenCalledWith('sample_movements_override');
+        expect(movements.insertOne).toHaveBeenCalledTimes(1);
+      } finally {
+        require.cache[collectionsPath].exports = originalCollectionsExports;
+        delete require.cache[repoPath];
+      }
+    });
+  });
+
   describe('append-only isolation regression (fix: isolate append-only audit ledger protection)', () => {
     beforeEach(() => {
       vi.clearAllMocks();
