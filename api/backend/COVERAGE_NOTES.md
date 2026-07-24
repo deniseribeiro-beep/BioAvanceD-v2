@@ -230,6 +230,13 @@ now covered, isolates to 100%/100%/100%/100%.
 `--coverage.include`): was 91.12%/75.96% stmts/branch, now
 **99.19%/100%**.
 
+`mongo.js` isolated (`database-mongo.test.js` + `mongodb-connection.test.js`,
+`--coverage.include`): was 88.14%/80.3% stmts/branch, now **96.9%/88.63%**.
+Remaining gap is unreachable defensive guard clauses (module-internal
+helpers only ever called with already-validated args from the public
+`connectDB`/`connectNewDB` surface) — same dead-guard-clause pattern
+noted below, not chased further.
+
 Note: `sample.service.js`, `import.service.js`, `audit.controller.js`,
 `audit-canonicalization.service.js`, `equipment.routes.js`, `User.js`
 have moved to GOOD in prior sessions — not re-verified line-by-line since

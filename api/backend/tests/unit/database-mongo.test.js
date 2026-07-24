@@ -85,6 +85,8 @@ describe('database/mongo.js', () => {
       configurable: true,
     });
     delete process.env.ALLOW_CLOUD_INTEGRATIONS;
+    delete process.env.MONGO_URI;
+    delete process.env.MONGO_DB;
     vi.restoreAllMocks();
   });
 
@@ -494,6 +496,122 @@ describe('database/mongo.js', () => {
 
       await expect(mongo.connectNewDB()).rejects.toThrow('ECONNREFUSED');
       expect(constructedWith).toHaveLength(1);
+    });
+  });
+
+  // ---------------------------------------------------------------------
+  // getMongoUriLogDetails / redactSensitiveQueryParams / encodeMongoURI
+  // debug branches - exercised indirectly through the console.log output of
+  // logMongoConnectionDetails (called by connectDB on a successful connect).
+  // ---------------------------------------------------------------------
+  describe('connection-details logging (sanitization / debug branches)', () => {
+    it('redacts a sensitive query param name in the logged sanitized URI', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/mydb?password=hunter2&foo=bar';
+      env.MONGO_DB = 'mydb';
+      const mongo = freshMongo();
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+      await mongo.connectDB();
+
+      const sanitizedLine = logSpy.mock.calls
+        .map((args) => args.join(' '))
+        .find((line) => line.includes('URI sanitizada'));
+      expect(sanitizedLine).toContain('password=***');
+      expect(sanitizedLine).not.toContain('hunter2');
+    });
+
+    it('treats a protocol-less URI as unparseable, falling back to defaults for logging and leaving it unmodified for ensureMongoUri', async () => {
+      env.MONGO_URI = 'not-a-valid-mongo-uri';
+      env.MONGO_DB = 'mydb';
+      const mongo = freshMongo();
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+      await mongo.connectDB();
+
+      // ensureMongoUri leaves it unchanged (no "://" to anchor on)
+      expect(constructedWith[0].uri).toBe('not-a-valid-mongo-uri');
+      const hostLine = logSpy.mock.calls
+        .map((args) => args.join(' '))
+        .find((line) => line.includes('MongoDB host'));
+      expect(hostLine).toContain('desconhecido');
+    });
+
+    it('does not set tls when the URI already carries a tls param (no ssl param present)', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/mydb?tls=true';
+      env.MONGO_DB = 'mydb';
+      const mongo = freshMongo();
+
+      await mongo.connectDB();
+
+      const uri = constructedWith[0].uri;
+      const query = new URLSearchParams(uri.split('?')[1]);
+      expect(query.get('tls')).toBe('true');
+    });
+
+    it('logs debug details when encoding a not-yet-encoded password in development', async () => {
+      env.MONGO_URI = 'mongodb://user:p#ss$word@localhost:27017/mydb';
+      env.MONGO_DB = 'mydb';
+      env.NODE_ENV = 'development';
+      const mongo = freshMongo();
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+      await mongo.connectDB();
+
+      expect(logSpy.mock.calls.some((args) => args.join(' ').includes('[DEBUG] URI MongoDB detectada'))).toBe(true);
+      expect(logSpy.mock.calls.some((args) => args.join(' ').includes('Codificacao aplicada'))).toBe(true);
+    });
+
+    it('logs a debug message when the password is already encoded in development', async () => {
+      const encodedPassword = encodeURIComponent('p#ss$word');
+      env.MONGO_URI = `mongodb://user:${encodedPassword}@localhost:27017/mydb`;
+      env.MONGO_DB = 'mydb';
+      env.NODE_ENV = 'development';
+      const mongo = freshMongo();
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+      await mongo.connectDB();
+
+      expect(logSpy.mock.calls.some((args) => args.join(' ').includes('Senha ja esta codificada'))).toBe(true);
+    });
+
+    it('logs a debug message when the URI has no credentials to encode in development', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/mydb';
+      env.MONGO_DB = 'mydb';
+      env.NODE_ENV = 'development';
+      const mongo = freshMongo();
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+      await mongo.connectDB();
+
+      expect(logSpy.mock.calls.some((args) => args.join(' ').includes('não corresponde ao padrão esperado'))).toBe(true);
+    });
+  });
+
+  // ---------------------------------------------------------------------
+  // connectDB - env self-heal assignment (env.MONGO_URI/MONGO_DB set from
+  // process.env when the shared env object doesn't carry them directly)
+  // ---------------------------------------------------------------------
+  describe('connectDB env self-heal assignment', () => {
+    it('backfills env.MONGO_URI from process.env.MONGO_URI when env.MONGO_URI is unset', async () => {
+      process.env.MONGO_URI = 'mongodb://localhost:27017/mydb';
+      env.MONGO_URI = undefined;
+      env.MONGO_DB = 'mydb';
+      const mongo = freshMongo();
+
+      await mongo.connectDB();
+
+      expect(env.MONGO_URI).toBe('mongodb://localhost:27017/mydb');
+    });
+
+    it('backfills env.MONGO_DB from process.env.MONGO_DB when env.MONGO_DB is unset', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/mydb';
+      process.env.MONGO_DB = 'mydb';
+      env.MONGO_DB = undefined;
+      const mongo = freshMongo();
+
+      await mongo.connectDB();
+
+      expect(env.MONGO_DB).toBe('mydb');
     });
   });
 
