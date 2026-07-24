@@ -85,7 +85,6 @@ lands, current top-of-list as of last regeneration:**
 ```
 gap  branch% lines%  file
  40  73.50%  98.4%   src/services/auth.service.js
- 28  90.42%  99.1%   src/interface/routes/reports.routes.js
 ```
 
 Files closed out of Phase 1/2 since the list was last regenerated
@@ -111,7 +110,13 @@ by tests, e.g. line 122; not a real test gap), `audit.controller.js`
 isolated lines — remaining gap confirmed via manual invocation to be the
 phantom-branch pattern: guard-clause `if`s with no `else`, plus a
 misattributed optional-chaining `||` chain at line 481, both
-demonstrably exercised and asserted on by tests despite showing 0 hits).
+demonstrably exercised and asserted on by tests despite showing 0 hits),
+`reports.routes.js` (91.09% isolated branches, up from 90.41% — closed a
+real gap: `samplesbypatient`'s patient-without-`patientID`/no-matching-
+samples fallback branches, previously untested; remaining gap is the
+already-documented `if (!db)` 503-guard-pre-empted-by-`authenticate`
+pattern, issues #67/#76/#236/#246/#247/#248, plus catch-block phantom
+branches — not a real test gap).
 Check each file's own git log / filed issues for what remains, not this
 note.
 
