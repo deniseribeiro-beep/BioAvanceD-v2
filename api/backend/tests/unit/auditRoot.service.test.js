@@ -187,6 +187,86 @@ describe('auditRoot.service', () => {
       expect(mongo.closeConnection).toHaveBeenCalledTimes(1);
     });
 
+    it('defaults anchoredAt to null when the anchor response omits it', async () => {
+      rfc3161AdapterService.anchorEnvelopeDigest.mockResolvedValue({
+        mode: 'mock',
+        status: 'ANCHORED',
+        token: 'token-1',
+        tsa: 'tsa-1',
+        messageImprint: 'imprint-1',
+        anchoredAt: null,
+        error: null,
+      });
+      const coll = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce(null).mockResolvedValueOnce({ date: '2026-07-07' }),
+      });
+      const db = makeDb(coll);
+
+      await auditRootService.saveDailyRoot({ date: '2026-07-07', root: 'root-7', db });
+
+      const [, update] = coll.updateOne.mock.calls[0];
+      expect(update.$setOnInsert.timestamp.anchoredAt).toBeNull();
+    });
+
+    it('falls back to the draft error when verification fails without its own reason', async () => {
+      rfc3161AdapterService.verifyTimestamp.mockReturnValue({ ok: false, reason: null });
+      rfc3161AdapterService.anchorEnvelopeDigest.mockResolvedValue({
+        mode: 'mock',
+        status: 'FAILED',
+        token: 'token-1',
+        tsa: 'tsa-1',
+        messageImprint: 'imprint-1',
+        anchoredAt: '2026-07-08T00:00:00.000Z',
+        error: 'draft-level-error',
+      });
+      const coll = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce(null).mockResolvedValueOnce({ date: '2026-07-08' }),
+      });
+      const db = makeDb(coll);
+
+      await auditRootService.saveDailyRoot({ date: '2026-07-08', root: 'root-8', db });
+
+      const [, update] = coll.updateOne.mock.calls[0];
+      expect(update.$setOnInsert.timestamp.error).toBe('draft-level-error');
+    });
+
+    it('defaults the timestamp error to null when neither the verification reason nor the draft error is set', async () => {
+      rfc3161AdapterService.verifyTimestamp.mockReturnValue({ ok: false, reason: null });
+      rfc3161AdapterService.anchorEnvelopeDigest.mockResolvedValue({
+        mode: 'mock',
+        status: 'FAILED',
+        token: 'token-1',
+        tsa: 'tsa-1',
+        messageImprint: 'imprint-1',
+        anchoredAt: '2026-07-09T00:00:00.000Z',
+        error: null,
+      });
+      const coll = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce(null).mockResolvedValueOnce({ date: '2026-07-09' }),
+      });
+      const db = makeDb(coll);
+
+      await auditRootService.saveDailyRoot({ date: '2026-07-09', root: 'root-9', db });
+
+      const [, update] = coll.updateOne.mock.calls[0];
+      expect(update.$setOnInsert.timestamp.error).toBeNull();
+    });
+
+    it('logs the raw rejection value when logService.createLog rejects with a non-Error', async () => {
+      logService.createLog.mockRejectedValue('plain-string-rejection');
+      const coll = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce(null).mockResolvedValueOnce({ date: '2026-07-10' }),
+      });
+      const db = makeDb(coll);
+
+      await auditRootService.saveDailyRoot({ date: '2026-07-10', root: 'root-10', db });
+
+      expect(logger.warn).toHaveBeenCalledWith(
+        'Falha ao registrar evento MERKLE_ENVELOPE_GENERATED:',
+        'plain-string-rejection'
+      );
+    });
+
     it('propagates the error and still closes the connection when the collection write throws', async () => {
       const coll = makeCollection({
         findOne: vi.fn().mockResolvedValueOnce(null),
@@ -261,6 +341,20 @@ describe('auditRoot.service', () => {
       expect(sort).toHaveBeenCalledWith({ chainIndex: 1 });
       expect(result).toBe(chain);
     });
+
+    it('opens and closes its own connection when no external db is passed', async () => {
+      const chain = [{ chainIndex: 0 }];
+      const toArray = vi.fn().mockResolvedValue(chain);
+      const sort = vi.fn().mockReturnValue({ toArray });
+      const coll = makeCollection({ find: vi.fn().mockReturnValue({ sort }) });
+      mongo.connectDB.mockResolvedValue(makeDb(coll));
+
+      const result = await auditRootService.getChain();
+
+      expect(result).toBe(chain);
+      expect(mongo.connectDB).toHaveBeenCalledTimes(1);
+      expect(mongo.closeConnection).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe('verifyChainIntegrity', () => {
@@ -324,6 +418,85 @@ describe('auditRoot.service', () => {
 
       expect(result).toEqual({ ok: true, anomalies: [] });
     });
+
+    it('opens and closes its own connection when no external db is passed', async () => {
+      const toArray = vi.fn().mockResolvedValue([]);
+      const coll = makeCollection({
+        find: vi.fn().mockReturnValue({ sort: vi.fn().mockReturnValue({ toArray }) }),
+      });
+      mongo.connectDB.mockResolvedValue(makeDb(coll));
+
+      const result = await auditRootService.verifyChainIntegrity();
+
+      expect(result).toEqual({ ok: true, anomalies: [] });
+      expect(mongo.connectDB).toHaveBeenCalledTimes(1);
+      expect(mongo.closeConnection).toHaveBeenCalledTimes(1);
+    });
+
+    it('flags a divergent recomputed root when verifyRoots is true', async () => {
+      const chain = [{ date: '2026-07-01', root: 'r1', previousRootHash: null, chainIndex: 0 }];
+      const toArray = vi.fn().mockResolvedValue(chain);
+      const coll = makeCollection({
+        find: vi.fn().mockReturnValue({ sort: vi.fn().mockReturnValue({ toArray }) }),
+      });
+      const db = makeDb(coll);
+      const cjs = require('module').createRequire(require.resolve('../../src/services/auditRoot.service'));
+      const integrityCheckService = cjs('../../src/services/integrityCheckService');
+      vi.spyOn(integrityCheckService, 'buildMerkleForDate').mockResolvedValue({ root: 'different-root' });
+
+      const result = await auditRootService.verifyChainIntegrity({ verifyRoots: true, externalDb: db });
+
+      expect(result.ok).toBe(false);
+      expect(result.anomalies).toEqual([{
+        index: 0,
+        reason: 'divergência na recomputação da root',
+        date: '2026-07-01',
+        saved: 'r1',
+        recalculated: 'different-root',
+      }]);
+      integrityCheckService.buildMerkleForDate.mockRestore();
+    });
+
+    it('reports no anomaly when the recomputed root matches and verifyRoots is true', async () => {
+      const chain = [{ date: '2026-07-01', root: 'r1', previousRootHash: null, chainIndex: 0 }];
+      const toArray = vi.fn().mockResolvedValue(chain);
+      const coll = makeCollection({
+        find: vi.fn().mockReturnValue({ sort: vi.fn().mockReturnValue({ toArray }) }),
+      });
+      const db = makeDb(coll);
+      const cjs = require('module').createRequire(require.resolve('../../src/services/auditRoot.service'));
+      const integrityCheckService = cjs('../../src/services/integrityCheckService');
+      vi.spyOn(integrityCheckService, 'buildMerkleForDate').mockResolvedValue({ root: 'r1' });
+
+      const result = await auditRootService.verifyChainIntegrity({ verifyRoots: true, externalDb: db });
+
+      expect(result).toEqual({ ok: true, anomalies: [] });
+      integrityCheckService.buildMerkleForDate.mockRestore();
+    });
+
+    it('flags a null recalculated root (recompute failed) with recalculated: null', async () => {
+      const chain = [{ date: '2026-07-01', root: 'r1', previousRootHash: null, chainIndex: 0 }];
+      const toArray = vi.fn().mockResolvedValue(chain);
+      const coll = makeCollection({
+        find: vi.fn().mockReturnValue({ sort: vi.fn().mockReturnValue({ toArray }) }),
+      });
+      const db = makeDb(coll);
+      const cjs = require('module').createRequire(require.resolve('../../src/services/auditRoot.service'));
+      const integrityCheckService = cjs('../../src/services/integrityCheckService');
+      vi.spyOn(integrityCheckService, 'buildMerkleForDate').mockResolvedValue(null);
+
+      const result = await auditRootService.verifyChainIntegrity({ verifyRoots: true, externalDb: db });
+
+      expect(result.ok).toBe(false);
+      expect(result.anomalies).toEqual([{
+        index: 0,
+        reason: 'divergência na recomputação da root',
+        date: '2026-07-01',
+        saved: 'r1',
+        recalculated: null,
+      }]);
+      integrityCheckService.buildMerkleForDate.mockRestore();
+    });
   });
 
   describe('updateTimestampStatus', () => {
@@ -359,6 +532,16 @@ describe('auditRoot.service', () => {
 
       const [, update] = coll.updateOne.mock.calls[0];
       expect(update.$inc['timestamp.retries']).toBe(1);
+    });
+
+    it('opens and closes its own connection when no external db is passed', async () => {
+      const coll = makeCollection();
+      mongo.connectDB.mockResolvedValue(makeDb(coll));
+
+      await auditRootService.updateTimestampStatus({ date: '2026-07-01', status: 'FAILED' });
+
+      expect(mongo.connectDB).toHaveBeenCalledTimes(1);
+      expect(mongo.closeConnection).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -463,6 +646,96 @@ describe('auditRoot.service', () => {
 
       expect(rfc3161AdapterService.verifyTimestamp).toHaveBeenCalledWith(
         expect.objectContaining({ replayDetected: true })
+      );
+    });
+
+    it('opens and closes its own connection when no external db is passed', async () => {
+      const coll = makeCollection({
+        find: vi.fn().mockReturnValue({
+          sort: vi.fn().mockReturnThis(),
+          limit: vi.fn().mockReturnThis(),
+          toArray: vi.fn().mockResolvedValue([]),
+        }),
+      });
+      mongo.connectDB.mockResolvedValue(makeDb(coll));
+
+      const result = await auditRootService.processTimestampBacklog();
+
+      expect(result).toEqual({ processed: 0 });
+      expect(mongo.connectDB).toHaveBeenCalledTimes(1);
+      expect(mongo.closeConnection).toHaveBeenCalledTimes(1);
+    });
+
+    it('skips the replay check and defaults anchoredAt to null when the doc has no token at all', async () => {
+      rfc3161AdapterService.anchorEnvelopeDigest.mockResolvedValue({
+        mode: 'mock',
+        status: 'ANCHORED',
+        token: null,
+        tsa: 'tsa-1',
+        messageImprint: 'imprint-1',
+        anchoredAt: null,
+        error: null,
+      });
+      const pendingDoc = { _id: 'doc-5', date: '2026-07-05', envelope: {}, signature: 's', timestamp: null };
+      const coll = makeCollection({
+        find: vi.fn().mockReturnValue({
+          sort: vi.fn().mockReturnThis(),
+          limit: vi.fn().mockReturnThis(),
+          toArray: vi.fn().mockResolvedValue([pendingDoc]),
+        }),
+      });
+      const db = makeDb(coll);
+
+      const result = await auditRootService.processTimestampBacklog({ externalDb: db });
+
+      expect(result).toEqual({ processed: 1 });
+      expect(coll.countDocuments).not.toHaveBeenCalled();
+      expect(rfc3161AdapterService.verifyTimestamp).toHaveBeenCalledWith(
+        expect.objectContaining({ replayDetected: false })
+      );
+      const calls = coll.updateOne.mock.calls;
+      const setTimestampCall = calls.find((c) => c[1].$set && c[1].$set.timestamp);
+      expect(setTimestampCall[1].$set.timestamp.anchoredAt).toBeNull();
+    });
+
+    it('logs the raw rejection value when createLog rejects with a non-Error on the FAILED path', async () => {
+      logService.createLog.mockRejectedValue('plain-failed-rejection');
+      rfc3161AdapterService.verifyTimestamp.mockReturnValue({ ok: false, reason: 'expired' });
+      const pendingDoc = { _id: 'doc-6', date: '2026-07-06', envelope: {}, signature: 's', timestamp: { token: 't' } };
+      const coll = makeCollection({
+        find: vi.fn().mockReturnValue({
+          sort: vi.fn().mockReturnThis(),
+          limit: vi.fn().mockReturnThis(),
+          toArray: vi.fn().mockResolvedValue([pendingDoc]),
+        }),
+      });
+      const db = makeDb(coll);
+
+      await auditRootService.processTimestampBacklog({ externalDb: db });
+
+      expect(logger.warn).toHaveBeenCalledWith(
+        'Falha ao registrar evento MERKLE_ANCHOR_FAILED:',
+        'plain-failed-rejection'
+      );
+    });
+
+    it('logs the raw rejection value when createLog rejects with a non-Error on the VERIFIED path', async () => {
+      logService.createLog.mockRejectedValue('plain-verified-rejection');
+      const pendingDoc = { _id: 'doc-7', date: '2026-07-07', envelope: {}, signature: 's', timestamp: { token: 't' } };
+      const coll = makeCollection({
+        find: vi.fn().mockReturnValue({
+          sort: vi.fn().mockReturnThis(),
+          limit: vi.fn().mockReturnThis(),
+          toArray: vi.fn().mockResolvedValue([pendingDoc]),
+        }),
+      });
+      const db = makeDb(coll);
+
+      await auditRootService.processTimestampBacklog({ externalDb: db });
+
+      expect(logger.warn).toHaveBeenCalledWith(
+        'Falha ao registrar evento MERKLE_ANCHORED:',
+        'plain-verified-rejection'
       );
     });
   });

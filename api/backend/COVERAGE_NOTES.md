@@ -226,6 +226,10 @@ implicit-else guard-clause pattern (`if (!x) throw/return` with no
 (weak-password catch branch, phone/institution-undefined branch) — both
 now covered, isolates to 100%/100%/100%/100%.
 
+`auditRoot.service.js` isolated (`tests/unit/auditRoot.service.test.js`,
+`--coverage.include`): was 91.12%/75.96% stmts/branch, now
+**99.19%/100%**.
+
 Note: `sample.service.js`, `import.service.js`, `audit.controller.js`,
 `audit-canonicalization.service.js`, `equipment.routes.js`, `User.js`
 have moved to GOOD in prior sessions — not re-verified line-by-line since
