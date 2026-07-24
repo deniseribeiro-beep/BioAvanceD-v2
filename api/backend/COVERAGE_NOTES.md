@@ -104,7 +104,6 @@ gap  branch% lines%  file
  17  64.58%  91.5%   src/core/use-cases/AllocateSampleUseCase.js   -- CLOSED prior session
  25  70.23%  91.5%   src/core/use-cases/RegisterSample.js          -- CLOSED prior session
  42  72.90%  89.9%   src/interface/routes/auth.routes.js          -- partial, coverage number suspect (dyeallpies-skills-pack#111)
- 40  73.50%  98.4%   src/services/auth.service.js
  15  73.68% 100.0%   src/interface/routes/security.routes.js
  52  76.36%  91.5%   src/services/NotificationService.js
  38  78.28%  85.4%   src/routes/orphanet.js                        -- partial, prior sessions
@@ -141,6 +140,18 @@ issue #242 drift class); closed the remaining real gaps: `barcode`/
 `eventId`, `LINEAGE_MODE` defaulting to fail-open when unset, and
 `compensateCustodyEvent` rejecting with a non-Error value. Isolates to
 100%/100%/100%/100%.
+
+`auth.service.js` checked and closed this session (no test added) —
+isolated run across its three test files matched the merged 73.50% (no
+drift); every remaining uncovered line/branch (52, 259, 273-274, 334:
+`issueSessionTokens`'s first statement, the failed-login `auditLogger.log`
+call, the non-active-status branch/message map, and `speakeasy.totp.verify`)
+is demonstrably exercised by an existing test (e.g. "rejects for
+inactive/suspended/blocked status" asserts the exact `Usuário suspenso`
+message thrown from inside the line 273 branch) — matches the documented
+async-statement 0-hit artifact already seen in `auth.controller.js`
+(V8 undercounts certain awaited-statement executions inside methods with
+an outer try/catch), not a real gap.
 
 `rbac.js` closed this session — isolated run matched the merged 72.41%
 (no drift); real gaps closed: `resolveUserRole`'s `user.role` fallback
