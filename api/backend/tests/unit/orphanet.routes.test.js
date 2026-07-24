@@ -543,12 +543,12 @@ describe('orphanet.routes', () => {
     const app = buildApp(db);
     const response = await request(app).get('/api/orphanet/search?q=Fabry');
 
-    // Bug (issue #259): a doc with no ORPHA-derivable code normalizes to `null`
-    // in searchLocal's map, and dedupeRecords re-normalizes that `null` without
-    // guarding for it, crashing the whole request instead of just excluding
-    // the doc. Asserting the actual (buggy) 500, not the desired 200/[].
-    expect(response.status).toBe(500);
-    expect(response.body).toEqual({ error: 'Failed to search orphanet diseases' });
+    // Fixed (issue #259): a doc with no ORPHA-derivable code normalizes to
+    // `null` in searchLocal's map; dedupeRecords now guards against `null`
+    // entries instead of re-normalizing them, so the doc is silently
+    // excluded and the request still succeeds.
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual([]);
   });
 
   it('resolve sinonimos a partir de Label, campo _ ou string simples quando label esta ausente', async () => {
