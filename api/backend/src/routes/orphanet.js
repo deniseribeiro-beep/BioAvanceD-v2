@@ -134,6 +134,7 @@ function normalizeDiseaseRecord(item = {}, source = 'local') {
 function dedupeRecords(records = [], limit = 20) {
   const map = new Map();
   for (const record of records) {
+    if (!record) continue;
     const normalized = normalizeDiseaseRecord(record, record?.source || 'local');
     if (!normalized) continue;
 
