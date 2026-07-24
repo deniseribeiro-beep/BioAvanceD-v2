@@ -117,7 +117,7 @@ class SampleService {
         throw participantIdError;
       }
 
-      if (typeof sampleData.participantId !== 'string' || !validateParticipantId(sampleData.participantId)) {
+      if (typeof sampleData.participantId !== 'string' || !/^\d{8}$/.test(sampleData.participantId)) {
         const participantIdError = new Error('participantId inválido');
         participantIdError.statusCode = 400;
         throw participantIdError;
