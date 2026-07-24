@@ -103,7 +103,6 @@ worst branch% first):
 gap  branch% lines%  file
  17  64.58%  91.5%   src/core/use-cases/AllocateSampleUseCase.js   -- CLOSED prior session
  25  70.23%  91.5%   src/core/use-cases/RegisterSample.js          -- CLOSED prior session
-  6  72.72% 100.0%   src/config/collections.js
  42  72.90%  89.9%   src/interface/routes/auth.routes.js          -- partial, coverage number suspect (dyeallpies-skills-pack#111)
  10  72.97%  91.7%   src/core/use-cases/ReleaseSampleUseCase.js
  40  73.50%  98.4%   src/services/auth.service.js
@@ -128,6 +127,13 @@ real gap. Next candidates to try in order: `rbac.js`, `collections.js`,
 `NotificationService.js` — none of these appear on the excluded list
 above; re-check isolated coverage before committing to one (issue #242
 drift class still applies generally).
+
+`collections.js` closed this session — isolated run matched the merged
+72.72% (no drift); remaining gap is structurally unreachable: `env.js`
+never sets `COLL_CIDS`/`COLL_CLINICAL_UNITS`/`COLL_DISEASE_DICTIONARY`/
+`COLL_MEDICATION_DICTIONARY`/`COLL_REFERENCE_SEED_RUNS`, so those five
+fields' `env.X || default` truthy branch can never fire regardless of
+`process.env` — not a real test gap.
 
 `rbac.js` closed this session — isolated run matched the merged 72.41%
 (no drift); real gaps closed: `resolveUserRole`'s `user.role` fallback
