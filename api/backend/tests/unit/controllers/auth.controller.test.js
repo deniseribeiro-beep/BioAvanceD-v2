@@ -12,6 +12,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 const authController = require('../../../src/controllers/auth.controller');
 const authService = require('../../../src/services/auth.service');
 const auditLogger = require('../../../src/utils/auditLogger');
+const logger = require('../../../src/utils/logger');
 const bcrypt = require('bcryptjs');
 const passwordService = require('../../../src/services/password.service');
 
@@ -226,6 +227,22 @@ describe('AuthController.login', () => {
     expect(logLoginSpy).toHaveBeenCalledWith(req, false, loginError);
     vi.useRealTimers();
   });
+
+  it('logs the error stack (not just the message) when the thrown error has a stack', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(auditLogger, 'logLogin').mockResolvedValue();
+    const loginError = new Error('invalid credentials');
+    vi.spyOn(authService, 'login').mockRejectedValue(loginError);
+    const loggerSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
+    const req = createReq({ body: { username: 'alice', password: 'wrong' } });
+    const res = createRes();
+
+    await authController.login(req, res);
+
+    expect(loggerSpy).toHaveBeenCalledWith('Erro no login:', loginError.stack);
+    await vi.runAllTimersAsync();
+    vi.useRealTimers();
+  });
 });
 
 describe('AuthController.setupMFA', () => {
@@ -265,6 +282,19 @@ describe('AuthController.setupMFA', () => {
       success: false,
       error: 'Erro ao configurar MFA',
       message: 'boom',
+    });
+  });
+
+  it('uses req.t translation for the db-unavailable message when req.t is present', async () => {
+    const req = NO_DB_REQ({ user: { userID: 'u1' }, t: vi.fn(() => 'DB indisponível (traduzido)') });
+    const res = createRes();
+
+    await authController.setupMFA(req, res);
+
+    expect(req.t).toHaveBeenCalledWith('errors.databaseUnavailable');
+    expect(res.json).toHaveBeenCalledWith({
+      success: false,
+      error: 'DB indisponível (traduzido)',
     });
   });
 });
@@ -360,6 +390,23 @@ describe('AuthController.enableMFA', () => {
       success: false,
       error: 'Erro ao ativar MFA',
       message: 'invalid code',
+    });
+  });
+
+  it('uses req.t translation for the code-required message when req.t is present', async () => {
+    const req = createReq({
+      user: { userID: 'u1' },
+      body: {},
+      t: vi.fn(() => 'Código MFA obrigatório (traduzido)'),
+    });
+    const res = createRes();
+
+    await authController.enableMFA(req, res);
+
+    expect(req.t).toHaveBeenCalledWith('mfa.codeRequired');
+    expect(res.json).toHaveBeenCalledWith({
+      success: false,
+      error: 'Código MFA obrigatório (traduzido)',
     });
   });
 });
@@ -485,6 +532,19 @@ describe('AuthController.resetPassword', () => {
       message: 'token expired',
     });
   });
+
+  it('uses req.t translation for the newPassword-required message when req.t is present', async () => {
+    const req = createReq({ body: { token: 't' }, t: vi.fn(() => 'Nova senha obrigatória (traduzido)') });
+    const res = createRes();
+
+    await authController.resetPassword(req, res);
+
+    expect(req.t).toHaveBeenCalledWith('auth.newPasswordRequired');
+    expect(res.json).toHaveBeenCalledWith({
+      success: false,
+      error: 'Nova senha obrigatória (traduzido)',
+    });
+  });
 });
 
 describe('AuthController.changePassword', () => {
@@ -596,6 +656,23 @@ describe('AuthController.changePassword', () => {
     });
   });
 
+  it('uses req.t translation for the db-unavailable message when req.t is present', async () => {
+    const req = NO_DB_REQ({
+      user: { userID: 'u1' },
+      body: { oldPassword: 'a', newPassword: 'b' },
+      t: vi.fn(() => 'DB indisponível (traduzido)'),
+    });
+    const res = createRes();
+
+    await authController.changePassword(req, res);
+
+    expect(req.t).toHaveBeenCalledWith('errors.databaseUnavailable');
+    expect(res.json).toHaveBeenCalledWith({
+      success: false,
+      error: 'DB indisponível (traduzido)',
+    });
+  });
+
   it('returns 400 when passwordService.validateStrength throws', async () => {
     const user = { _id: 'u1', password: 'hashed-old', passwordHistory: [] };
     const usersCollection = createUsersCollection(user);
@@ -684,6 +761,19 @@ describe('AuthController.setupMFAFirstLogin', () => {
 
     const jsonArg = res.json.mock.calls[0][0];
     expect(jsonArg.data.manualEntryKey).toBe('TOP SECRET KEY');
+  });
+
+  it('uses req.t translation for the username/password-required message when req.t is present', async () => {
+    const req = createReq({ body: { username: 'alice' }, t: vi.fn(() => 'Usuário/senha obrigatórios (traduzido)') });
+    const res = createRes();
+
+    await authController.setupMFAFirstLogin(req, res);
+
+    expect(req.t).toHaveBeenCalledWith('auth.usernameAndPasswordRequired');
+    expect(res.json).toHaveBeenCalledWith({
+      success: false,
+      error: 'Usuário/senha obrigatórios (traduzido)',
+    });
   });
 
   it('returns 400 when authService.setupMFAFirstLogin throws', async () => {
