@@ -1,102 +1,110 @@
 # HANDOFF
 
-**Written:** 2026-07-24, end of a fix-bugs iteration.
-**Branch:** `feature/docker-e2e-backend-integration` (commit `462410d1`,
+**Written:** 2026-07-24, end of a coverage-reconcile session (no issue
+resolved).
+**Branch:** `feature/docker-e2e-backend-integration` (commit `d73e6a60`,
 pushed).
 
 ## What happened this session
 
-Read `HANDOFF.md`, then ran `work-issue`, which routed to `fix-bugs` for
-issue #250 (`MongoAuditRepository.js`'s `appendImmutableAudit()` called
-`this.db.collection('sample_movements')` with a hardcoded literal
-instead of resolving the name via `CANONICAL_COLLECTIONS`/
-`collectionResolver` like the rest of the codebase — latent risk: if
-`COLL_SAMPLE_MOVEMENTS` were ever set, audit writes would silently split
-from every other consumer of the sampleMovements collection).
+Read `HANDOFF.md`, ran `work-issue`. Scanned the open backlog
+(`gh issue list --state open`) — remaining items are almost all
+dead-code/owner's-call findings from prior sessions (#254, #251, #224,
+#222, #255-267) needing a fresh reachability trace before `fix-bugs`
+applies, except #258 (`NotificationService.js` infra-mocking gap), whose
+suggested resolution requires a product-code refactor (injectable
+Redis/Influx client) — out of scope for a test-only loop, so left open.
 
-Considered #254 too (dead-code post-validate re-checks in
-`sample.service.js`) but routed it as owner's-call dead code, not a
-reproducible defect — left open, untouched.
+Routed to `test-loop` instead: per `HANDOFF.md`'s outstanding
+recommendation, ran the overdue full coverage reconcile (last one was
+2026-07-23, ~13 sessions stale). New numbers: Statements 93.05%,
+**Branches 86.64%** (up from 83.37%), Functions 91.67%, Lines 93.40% —
+three of four dimensions still past the 90% milestone; branches remains
+the sole laggard but closing the gap. Only pre-existing failure:
+1 test in `sample-graph-validator.service.test.js` (unchanged, known).
 
-Reproduced first: added a new describe block to
-`tests/unit/MongoAuditRepository.test.js` overriding `CANONICAL_COLLECTIONS`
-via direct `require.cache` exports replacement (vi.mock/doMock/dynamic
-import all failed to intercept `require()` here — same documented CJS
-gotcha), confirmed it failed against the unfixed code (either erroring
-because `config/collections` wasn't yet in `require.cache`, or resolving
-the wrong name). Fixed `src/infrastructure/persistence/mongo/MongoAuditRepository.js`
-to import `CANONICAL_COLLECTIONS` and use `CANONICAL_COLLECTIONS.sampleMovements`
-instead of the literal, for both the `db.collection(...)` call and the
-`enforceAppendOnlyCollection` name arg. Ran the full
-`MongoAuditRepository.test.js` + `.proxy.unit.test.js` suites (9/9
-passing), plus `sample.service.test.js` + `storageService.test.js`
-(155/155 passing total) — no regressions.
+Checked the two new MID-HIGH candidates surfaced by the reconcile:
+- `src/utils/fieldEncryption.js` (76.19%/82.60% lines/branches merged) —
+  isolates to 100%/100% across its three dedicated test files; merged-
+  vs-isolated drift (#242 class), not a real gap.
+- `src/interface/routes/equipment.routes.js` (81.59%/81.01%, same
+  merged and isolated) — already exhaustively tested
+  (`equipment.api.test.js` + `equipment.routes.quarantine.test.js`
+  cover every 401/403/404/500/transaction/auditInfo path); V8 reports
+  the route-handler declaration line and catch-block opener as 0-hit
+  even though the body runs — phantom-statement pattern, not a real gap.
 
-Committed on `fix/mongo-audit-repository-canonical-collection` (`bc27dd28`,
-`Fixes #250`), pushed, commented the hash on the issue, merged `--no-ff`
-into `feature/docker-e2e-backend-integration` (`462410d1`), re-ran the
-targeted tests on the merged tree, pushed, deleted the fix branch (local
-+ remote), closed #250 with the merge commit hash.
+No new tests landed this session — both real-looking candidates turned
+out to be false positives on inspection. Updated `COVERAGE_NOTES.md`
+with the fresh numbers, the two checked-but-not-real-gap notes, and
+`User.js` flagged (not re-checked) for the same drift risk before
+anyone treats its 83.67%/78.94% as a real gap.
 
-Filed a skills-pack issue (`dyeallpies-skills-pack#115`) instead of
-editing the installed `cjs-mocking.md` skill file directly (junction —
-Rule 0): documents that the existing "require.cache injection for a
-whole dependency module" pattern also works for a frozen plain
-data-object config export (not just classes-by-reference), with the
-exact section text to add.
+Also fixed a session friction: the full-reconcile command in
+`COVERAGE_NOTES.md` had no output-redirect guidance, so this session
+tailed the live ~6-7min run, missed the final `Test Files`/`Tests`
+summary line in the truncated output, and had to re-run the whole suite
+a second time just to grep it. Documented the redirect-then-grep pattern
+in the same file so the next reconcile doesn't repeat that.
+
+Two commits, both pushed: `fdfaabf2` (reconcile numbers) and `d73e6a60`
+(regenerate-command fix).
 
 ## Repo state
 
 - `feature/docker-e2e-backend-integration` current and pushed
-  (`462410d1`) — includes this session's #250 fix, merged from
-  `fix/mongo-audit-repository-canonical-collection` (branch deleted
-  after merge).
-- Working tree clean.
+  (`d73e6a60`).
+- Working tree clean. No product code touched this session (docs only).
 
 ## Milestone (set 2026-07-22 by Dennis, still current)
 
-**Target: 90% across all four coverage dimensions.** Last full reconcile
-was 2026-07-23 morning (`f3c258c9`): Statements 91.54%, Branches
-**83.37%** (lagging dimension), Functions 90.96%, Lines 91.98%. Several
-sessions' worth of slices since then aren't folded into that number yet
-— a fresh full reconcile is still overdue (unchanged from last session's
-note; this session touched product code, not coverage).
+**Target: 90% across all four coverage dimensions.** As of this
+session's fresh reconcile (`d73e6a60`... snapshot commit `402c5359`):
+Statements 93.05%, **Branches 86.64%** (lagging dimension, up from
+83.37%), Functions 91.67%, Lines 93.40%. Reconcile is now current — no
+backlog of un-folded sessions.
 
 ## Recommended next steps
 
-Per prior sessions' notes, do a full coverage reconcile before picking
-the next Phase 2 test-loop slice.
+Real MID-HIGH gap candidates remaining, in rough priority order:
+`src/workers/workers/result-worker.js` (76.66%/66.07%, issue #146/#164),
+`src/services/SampleGraphValidator.js` (77.69%/66.66%, issue #222,
+legacy-schema design fork), `src/services/patient.service.js`
+(83.89%/74.56%, issues #240/#241, deep error-path combos, optional).
+All three are already issue-linked/owner's-call — check the linked issue
+before treating as a fresh slice. `src/models/User.js` (83.67%/78.94%)
+is unchecked — verify isolated vs. merged drift before picking it.
 
-Remaining open backlog beyond this (not re-checked further this
-session): #254, #251, #224, #222, #115, #255-#267 — see `gh issue list
---state open`. #254 and #251 are dead-code/owner's-call items (post-
-validate re-checks and DB-lookup-miss branches respectively), not
-reproducible bugs — `fix-bugs` isn't the right route for them without a
-fresh reachability trace; #255-267 are similar dead-code/gap findings
-from prior test-loop sessions, owner's call whether to remove/wire in.
-#250 (this session) and #252/#253 (prior two sessions) are now closed.
+Beyond that: `MID-LOW` bucket (`daily-merkle.job.js`,
+`audit-v2.service.js`, `neo4jCanonicalProjection.service.js`) is all
+issue-linked (#159, #146/#152 cluster) — not fresh slice candidates
+without those issues moving first.
+
+Backlog: #254, #251, #224, #222, #115, #255-#267 need a fresh
+reachability trace before `fix-bugs` applies (dead-code/owner's-call,
+not reproducible bugs). #258 needs an owner's-call on the injectable-
+client refactor before it's testable — not routable to `test-loop`
+alone.
 
 ## Which skills to use
 
-`work-issue` to route the next pick. `fix-bugs` if a reachability trace
-on one of the remaining dead-code issues (#254, #251, #255-267) turns up
-a live caller after all. `test-loop` for the next coverage slice once a
-fresh reconcile identifies one. `bioavanced-v2-conventions` and
-`bioavanced-v2-testing-conventions` as always — the latter's
-`cjs-mocking.md` will gain a new section once `dyeallpies-skills-pack#115`
-is applied. `wrap-up` every iteration.
+`work-issue` to route the next pick. `test-loop` for the next coverage
+slice — reconcile is fresh, so trust `COVERAGE_NOTES.md` directly rather
+than re-running the full suite. `fix-bugs` if a reachability trace on a
+dead-code issue turns up a live caller. `bioavanced-v2-conventions` and
+`bioavanced-v2-testing-conventions` as always. `wrap-up` every
+iteration.
 
 ## Dependency notes
 
-None blocking. A full coverage reconcile is recommended (not required)
-before the next test-loop slice. `dyeallpies-skills-pack#115` is a
-pack-repo issue, not a BioAvanceD-v2 blocker.
+None blocking. `dyeallpies-skills-pack#115` (cjs-mocking skill update)
+is a pack-repo issue, not a BioAvanceD-v2 blocker — unrelated to this
+session.
 
 ## Session note
 
-New pattern this session: `require.cache` exports overwrite (not
-`vi.mock`/`vi.doMock`/dynamic `import` + `resetModules`) is what actually
-works for asserting a source reads a frozen config data-object at
-call-time rather than a hardcoded literal. Filed as
-`dyeallpies-skills-pack#115` for the shared skill file rather than
-editing the installed junction directly.
+New pattern this session: two MID-HIGH-looking coverage-notes candidates
+both turned out to be false positives on inspection (merged-vs-isolated
+drift and V8's phantom-statement pattern respectively) — worth an
+isolated-coverage check before committing a slice to either pattern, not
+just trusting a bucket number at face value.
