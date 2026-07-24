@@ -84,7 +84,6 @@ lands, current top-of-list as of last regeneration:**
 
 ```
 gap  branch% lines%  file
- 43  80.09%  92.7%   src/services/user-security.service.js
  40  73.50%  98.4%   src/services/auth.service.js
  36  77.07%  90.3%   src/controllers/auth.controller.js
  35  76.35%  95.5%   src/controllers/audit.controller.js
@@ -102,7 +101,8 @@ Files closed out of Phase 1/2 since the list was last regenerated
 coverage number suspect, see `dyeallpies-skills-pack#111`),
 `dictionary.js`, `sample-file.controller.js`, `orphanet.js`,
 `terminologies.routes.js`, `batch-validation-engine.service.js`,
-`terminologySync.service.js`, `equipment-sensor-quarantine.service.js`.
+`terminologySync.service.js`, `equipment-sensor-quarantine.service.js`,
+`user-security.service.js` (93.51% isolated branches).
 Check each file's own git log / filed issues for what remains, not this
 note.
 

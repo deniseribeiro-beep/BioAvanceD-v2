@@ -59,6 +59,32 @@ describe('UserSecurityService.calculateSecurityScore', () => {
     );
     expect(score).toBeLessThanOrEqual(100);
   });
+
+  it('adds 15 for medium password strength', () => {
+    const medium = userSecurityService.calculateSecurityScore(baseUser, baseMfa, { strength: 'medium' });
+    const weak = userSecurityService.calculateSecurityScore(baseUser, baseMfa, { strength: 'weak' });
+    expect(medium - weak).toBe(5);
+  });
+
+  it('does not add expiration bonus when password expires within 10 days', () => {
+    const soon = userSecurityService.calculateSecurityScore(
+      baseUser,
+      baseMfa,
+      { strength: 'strong', expiresAt: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString() }
+    );
+    const later = userSecurityService.calculateSecurityScore(
+      baseUser,
+      baseMfa,
+      { strength: 'strong', expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() }
+    );
+    expect(later - soon).toBe(10);
+  });
+
+  it('treats missing recoveryCodes on mfaMethods as zero remaining', () => {
+    const score = userSecurityService.calculateSecurityScore(baseUser, {}, basePassword);
+    const withZero = userSecurityService.calculateSecurityScore(baseUser, { recoveryCodes: { remaining: 0 } }, basePassword);
+    expect(score).toBe(withZero);
+  });
 });
 
 describe('UserSecurityService.maskPhone', () => {
@@ -84,6 +110,10 @@ describe('UserSecurityService.maskPhone', () => {
     const result = userSecurityService.maskPhone('1198765432');
     expect(result).toContain('(11)');
   });
+
+  it('returns cleaned-but-unformatted phone for lengths other than 10/11', () => {
+    expect(userSecurityService.maskPhone('123456789012')).toBe('123456789012');
+  });
 });
 
 describe('UserSecurityService.calculatePasswordStrength', () => {
@@ -108,6 +138,10 @@ describe('UserSecurityService.extractDeviceName', () => {
 
   it('detects mobile device', () => {
     expect(userSecurityService.extractDeviceName('Mozilla/5.0 (iPhone; CPU iPhone OS 14_0)')).toBe('Dispositivo Móvel');
+  });
+
+  it('detects mobile device via the generic "Mobile" token', () => {
+    expect(userSecurityService.extractDeviceName('Mozilla/5.0 (Linux; Mobile)')).toBe('Dispositivo Móvel');
   });
 
   it('detects Android', () => {
@@ -151,6 +185,10 @@ describe('UserSecurityService.extractBrowser', () => {
   it('detects Safari (without Chrome)', () => {
     expect(userSecurityService.extractBrowser('Mozilla/5.0 Safari/605.1.15')).toBe('Safari');
   });
+
+  it('does not detect Safari when Chrome and Edge are also present (falls through to Edge)', () => {
+    expect(userSecurityService.extractBrowser('Mozilla/5.0 Chrome/110 Edg/110 Safari/605.1.15')).toBe('Edge');
+  });
 });
 
 describe('UserSecurityService.extractOS', () => {
@@ -172,6 +210,26 @@ describe('UserSecurityService.extractOS', () => {
 
   it('detects iOS for iPhone', () => {
     expect(userSecurityService.extractOS('Mozilla/5.0 (iPhone; CPU iPhone OS 14_0)')).toBe('iOS');
+  });
+
+  it('detects iOS for iPad', () => {
+    expect(userSecurityService.extractOS('Mozilla/5.0 (iPad; CPU OS 14_0)')).toBe('iOS');
+  });
+
+  it('detects Windows 8.1', () => {
+    expect(userSecurityService.extractOS('Mozilla/5.0 (Windows NT 6.3; Win64; x64)')).toBe('Windows 8.1');
+  });
+
+  it('detects Windows 8', () => {
+    expect(userSecurityService.extractOS('Mozilla/5.0 (Windows NT 6.2; Win64; x64)')).toBe('Windows 8');
+  });
+
+  it('detects generic Windows for unrecognized NT version', () => {
+    expect(userSecurityService.extractOS('Mozilla/5.0 (Windows NT 5.1)')).toBe('Windows');
+  });
+
+  it('detects Android when Linux is not present in the user-agent', () => {
+    expect(userSecurityService.extractOS('Mozilla/5.0 (Android 11; SM-G991B)')).toBe('Android');
   });
 });
 

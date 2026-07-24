@@ -109,6 +109,23 @@ describe('UserSecurityService DB-backed methods', () => {
 
       await expect(userSecurityService.getPasswordStatus(db, USER_ID)).rejects.toThrow('Usuário não encontrado');
     });
+
+    it('parses passwordChangedAt when stored as a non-Date value', async () => {
+      const users = buildCollection({
+        findOne: vi.fn().mockResolvedValue({
+          _id: USER_ID,
+          password: 'short',
+          passwordChangedAt: '2026-01-01T00:00:00.000Z'
+        })
+      });
+      const db = buildDb({ users });
+
+      const result = await userSecurityService.getPasswordStatus(db, USER_ID);
+
+      expect(result.expiresAt.getTime()).toBe(
+        new Date('2026-01-01T00:00:00.000Z').getTime() + 90 * 24 * 60 * 60 * 1000
+      );
+    });
   });
 
   describe('getSecurityStatus', () => {
@@ -150,6 +167,20 @@ describe('UserSecurityService DB-backed methods', () => {
       const db = buildDb({ users });
 
       await expect(userSecurityService.getSecurityStatus(db, USER_ID)).rejects.toThrow('Usuário não encontrado');
+    });
+
+    it('reports medium level for a mid-range score', async () => {
+      const users = buildCollection({
+        findOne: vi.fn().mockResolvedValue({ _id: USER_ID, mfaEnabled: true, password: null })
+      });
+      const recoveryCodes = buildCollection({ findOne: vi.fn().mockResolvedValue(null) });
+      const db = buildDb({ users, recovery_codes: recoveryCodes });
+
+      const result = await userSecurityService.getSecurityStatus(db, USER_ID);
+
+      expect(result.securityScore).toBeGreaterThanOrEqual(50);
+      expect(result.securityScore).toBeLessThan(80);
+      expect(result.overallLevel).toBe('medium');
     });
   });
 
@@ -252,6 +283,41 @@ describe('UserSecurityService DB-backed methods', () => {
 
       await expect(userSecurityService.revokeSession(db, USER_ID, 'missing')).rejects.toThrow('Sessão não encontrada');
     });
+
+    it('adds an _id clause to the query when sessionId is a valid ObjectId', async () => {
+      const validObjectId = '507f1f77bcf86cd799439099';
+      const sessions = buildCollection({ updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }) });
+      const db = buildDb({ sessions });
+
+      await userSecurityService.revokeSession(db, USER_ID, validObjectId);
+
+      const [query] = sessions.updateOne.mock.calls[0];
+      expect(query.$or).toHaveLength(2);
+    });
+
+    it('falls back to matching by sessionID/_id fields when the cache key differs from sessionId', async () => {
+      const sessions = buildCollection({ updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }) });
+      const db = buildDb({ sessions });
+      sessionService.sessions.set('cache-key', { sessionID: 'sess-1', userID: USER_ID });
+
+      await userSecurityService.revokeSession(db, USER_ID, 'sess-1');
+
+      expect(sessionService.sessions.has('cache-key')).toBe(false);
+    });
+
+    it('falls back to matching by a stringified _id when neither the cache key nor sessionID match', async () => {
+      const validObjectId = '507f1f77bcf86cd799439099';
+      const sessions = buildCollection({ updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }) });
+      const db = buildDb({ sessions });
+      sessionService.sessions.set('cache-key', {
+        userID: USER_ID,
+        _id: { toString: () => validObjectId }
+      });
+
+      await userSecurityService.revokeSession(db, USER_ID, validObjectId);
+
+      expect(sessionService.sessions.has('cache-key')).toBe(false);
+    });
   });
 
   describe('revokeAllSessions', () => {
@@ -329,6 +395,32 @@ describe('UserSecurityService DB-backed methods', () => {
         'failed_attempt'
       ]);
     });
+
+    it('falls back to a default description and derived ip/timestamp when a log entry has neither', async () => {
+      const logs = [
+        { metadata: { ip: '10.0.0.2' } },
+        { entity: 'Password', createdAt: new Date('2026-02-01T00:00:00.000Z'), requestInfo: { ip: '10.0.0.3' } },
+        {}
+      ];
+      const auditLogs = buildCollection({
+        find: vi.fn().mockReturnValue({
+          sort: vi.fn().mockReturnThis(),
+          limit: vi.fn().mockReturnThis(),
+          toArray: vi.fn().mockResolvedValue(logs)
+        })
+      });
+      const users = buildCollection({ findOne: vi.fn().mockResolvedValue({ _id: USER_ID, anonId: 'USR-TEST' }) });
+      const db = buildDb({ audit_logs: auditLogs, users });
+
+      const activities = await userSecurityService.getActivities(db, USER_ID, 5);
+
+      expect(activities[0].description).toBe('Ação realizada');
+      expect(activities[0].location).toBe('10.0.xxx.xxx');
+      expect(activities[1].timestamp).toEqual(new Date('2026-02-01T00:00:00.000Z'));
+      expect(activities[1].location).toBe('10.0.xxx.xxx');
+      expect(activities[2].timestamp).toBeInstanceOf(Date);
+      expect(activities[2].location).toBeNull();
+    });
   });
 
   describe('getSessions', () => {
@@ -372,6 +464,115 @@ describe('UserSecurityService DB-backed methods', () => {
       expect(result).toEqual([
         expect.objectContaining({ id: 'current', isCurrent: true, deviceName: 'Dispositivo Desconhecido' })
       ]);
+    });
+
+    it('returns an empty list when there are no db/cache sessions and no currentToken', async () => {
+      const sessions = buildCollection({
+        find: vi.fn().mockReturnValue({
+          sort: vi.fn().mockReturnThis(),
+          toArray: vi.fn().mockResolvedValue([])
+        })
+      });
+      const db = buildDb({ sessions });
+      sessionService.sessions.clear();
+
+      const result = await userSecurityService.getSessions(db, USER_ID, null);
+
+      expect(result).toEqual([]);
+    });
+
+    it('marks non-matching sessions as not current and falls back through metadata/requestInfo fields', async () => {
+      const dbSessions = [
+        {
+          _id: { toString: () => 'raw-id' },
+          token: 'other-token',
+          metadata: { userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)', ip: '10.0.0.9' },
+          createdAt: new Date('2026-01-01T00:00:00.000Z')
+        }
+      ];
+      const sessions = buildCollection({
+        find: vi.fn().mockReturnValue({
+          sort: vi.fn().mockReturnThis(),
+          toArray: vi.fn().mockResolvedValue(dbSessions)
+        })
+      });
+      const db = buildDb({ sessions });
+
+      const result = await userSecurityService.getSessions(db, USER_ID, 'current-token');
+
+      expect(result[0].isCurrent).toBe(false);
+      expect(result[0].id).toBe('raw-id');
+      expect(result[0].os).toBe('macOS');
+      expect(result[0].location).toBe('10.0.xxx.xxx');
+      expect(result[0].lastAccess).toEqual(new Date('2026-01-01T00:00:00.000Z'));
+    });
+
+    it('falls back to plain userAgent/ip fields and a generated id when no other source is present', async () => {
+      const dbSessions = [
+        {
+          token: 'other-token',
+          userAgent: 'Mozilla/5.0 (X11; Linux x86_64)',
+          ip: '172.16.0.5'
+        }
+      ];
+      const sessions = buildCollection({
+        find: vi.fn().mockReturnValue({
+          sort: vi.fn().mockReturnThis(),
+          toArray: vi.fn().mockResolvedValue(dbSessions)
+        })
+      });
+      const db = buildDb({ sessions });
+
+      const result = await userSecurityService.getSessions(db, USER_ID, 'current-token');
+
+      expect(result[0].id).toMatch(/^session_\d+$/);
+      expect(result[0].os).toBe('Linux');
+      expect(result[0].location).toBe('172.16.xxx.xxx');
+      expect(result[0].lastAccess).toBeInstanceOf(Date);
+    });
+
+    it('falls back to requestInfo for userAgent/ip when the session carries neither', async () => {
+      const dbSessions = [{ token: 'other-token' }];
+      const sessions = buildCollection({
+        find: vi.fn().mockReturnValue({
+          sort: vi.fn().mockReturnThis(),
+          toArray: vi.fn().mockResolvedValue(dbSessions)
+        })
+      });
+      const db = buildDb({ sessions });
+
+      const result = await userSecurityService.getSessions(
+        db,
+        USER_ID,
+        'current-token',
+        { userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)', ip: '8.8.8.8' }
+      );
+
+      expect(result[0].os).toBe('Windows 10/11');
+      expect(result[0].location).toBe('8.8.xxx.xxx');
+    });
+
+    it('reads from the in-memory session cache when there are no db sessions', async () => {
+      const sessions = buildCollection({
+        find: vi.fn().mockReturnValue({
+          sort: vi.fn().mockReturnThis(),
+          toArray: vi.fn().mockResolvedValue([])
+        })
+      });
+      const db = buildDb({ sessions });
+      sessionService.sessions.clear();
+      sessionService.sessions.set('cached-1', {
+        userID: USER_ID,
+        isActive: true,
+        token: 'current-token',
+        userAgent: 'Mozilla/5.0 (X11; Linux x86_64)'
+      });
+
+      const result = await userSecurityService.getSessions(db, USER_ID, 'current-token');
+
+      expect(result).toHaveLength(1);
+      expect(result[0].isCurrent).toBe(true);
+      expect(result[0].os).toBe('Linux');
     });
   });
 });
