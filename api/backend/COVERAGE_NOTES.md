@@ -104,7 +104,6 @@ gap  branch% lines%  file
  17  64.58%  91.5%   src/core/use-cases/AllocateSampleUseCase.js   -- CLOSED prior session
  25  70.23%  91.5%   src/core/use-cases/RegisterSample.js          -- CLOSED prior session
  42  72.90%  89.9%   src/interface/routes/auth.routes.js          -- partial, coverage number suspect (dyeallpies-skills-pack#111)
- 52  76.36%  91.5%   src/services/NotificationService.js
  38  78.28%  85.4%   src/routes/orphanet.js                        -- partial, prior sessions
  21  80.37% 100.0%   src/controllers/consent.controller.js         -- phantom-branch pattern, not a real gap
 ```
@@ -121,9 +120,29 @@ entry, and the `req.params.fileName || ''` fallback which Express never
 leaves undefined) are the documented unreachable-guard pattern, not a
 real gap. Next candidates to try in order: `rbac.js`, `collections.js`,
 `ReleaseSampleUseCase.js`, `auth.service.js`, `security.routes.js`,
-`NotificationService.js` — none of these appear on the excluded list
-above; re-check isolated coverage before committing to one (issue #242
-drift class still applies generally).
+`NotificationService.js` (closed — see below) — none of these appear on
+the excluded list above; re-check isolated coverage before committing to
+one (issue #242 drift class still applies generally).
+
+`NotificationService.js` closed this session — isolated run matched the
+merged 76.36% branches (no drift) before this session's tests; closed
+the two real statement/line gaps found: `getNotificationQueue`'s
+`!connection` return-null path (dev mode with no Redis config, vs. the
+already-tested throw path) and the entire previously-untested
+`sendCriticalTempAlertFromInflux` function (both the no-recent-rows and
+the delegate-to-`sendCriticalTempAlert` outcomes, including the
+`locationId` Flux filter). Isolates to 94.07% statements / 93.84% lines
+(from 91.85%/91.53%). Branches stayed at 76.36% even after these two
+new tests demonstrably exercised their target branches with passing
+assertions — confirmed via isolated single-test coverage runs that the
+branch/function hit-counters read 0 despite correct runtime behavior,
+the same phantom-branch/require-cache-bust artifact class already
+documented for `consent.controller.js` and `auth.service.js`. Remaining
+uncovered branches (`resolveRecipient`'s empty-`safeTo` throw,
+`sendConsentSmsFallback`'s `missing_phone` branch, `getConsentQueueStats`'
+`!queue` branch, etc.) were spot-checked the same way — each has a
+passing test asserting the exact behavior of that branch — so treated as
+the same artifact, not a real gap.
 
 `collections.js` closed this session — isolated run matched the merged
 72.72% (no drift); remaining gap is structurally unreachable: `env.js`
