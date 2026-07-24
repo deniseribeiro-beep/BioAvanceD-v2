@@ -1,75 +1,84 @@
 # HANDOFF
 
 **Written:** 2026-07-24, end of a test-loop iteration.
-**Branch:** `feature/docker-e2e-backend-integration` (commit `b6871e62`,
+**Branch:** `feature/docker-e2e-backend-integration` (commit `7502e292`,
 pushed).
 
 ## What happened this session
 
 Read `HANDOFF.md`, routed via `work-issue` -> `test-loop`. Prior
-session's handoff said the branch-priority list's easy candidates were
-exhausted and pointed at `COVERAGE_NOTES.md`'s MID-LOW bucket instead.
+session's handoff pointed at `COVERAGE_NOTES.md`'s MID-LOW bucket's two
+remaining candidates: `audit-v2.service.js` and
+`neo4jCanonicalProjection.service.js`.
 
-- Picked `daily-merkle.job.js` (MID-LOW bucket, blocking issues
-  #146/#152/#159/#164 already closed, isolated-confirmed real gap by
-  prior session: 60.00%/52.17% lines/branches, untested paths in
-  `recoverMissingDates` and `anchorV2ForDate`).
-- The existing test file never mocked `auditRootService.getRootByDate`,
-  `auditRootService.processTimestampBacklog`, or
-  `auditV2Service.createTreeHead`, and passed the job a plain
-  `{ __fakeDb: true }` object with no `.collection()` method — so every
-  existing test silently hit a thrown `TypeError` inside `anchorV2ForDate`
-  that got swallowed by `runOnce`'s own try/catch (tests never asserted
-  `logger.error` was clean, so this went unnoticed). Added a
-  `makeFakeDb()` helper with a chainable `collection().find().sort()
-  .limit().toArray()` mock plus the three missing service mocks, then
-  added 6 new tests covering `anchorV2ForDate`'s previousTreeHeadHash
-  null/present branches and `recoverMissingDates`'s skip-existing /
-  invalid-merkle-warn / recover-and-anchor branches (all exercised
-  through `runOnce`, since neither helper is exported directly).
-  Isolated branch coverage 52.17% -> **78.26%**.
-- Remaining 3 uncovered lines (86, 112, 122) are structurally
-  unreachable defensive code, not gaps — traced and filed as
-  **issue #272** rather than left as a wrap-up mention.
-- Updated `COVERAGE_NOTES.md` in the same commit: `daily-merkle.job.js`
-  removed from the MID-LOW bucket with a one-line closure note.
-- Committed and pushed (`b6871e62`).
-- Ran `wrap-up`'s core audit (session pushed a commit and filed an
-  issue, so the shipping addendum applied too): scope was test file +
-  coverage notes only (no product source touched), no lazy fixes, no
-  permission denials, no user corrections (autonomous session). Searched
-  existing issues (`gh issue list --search "daily-merkle"`) before
-  filing #272 to avoid a duplicate — none existed. No other friction.
+- Neither file had a pre-existing test file at all (unusual — both are
+  referenced by other tested code, e.g. `daily-merkle.job.js` mocks
+  `auditV2Service.createTreeHead`, but the service itself was untested).
+- `audit-v2.service.js`: new `tests/unit/audit-v2.service.test.js` (11
+  tests), following the `auditRoot.service.test.js` mock pattern
+  (`vi.spyOn` on the required singleton modules — `mongo`,
+  `audit-signing.provider`, `audit-tsa.service`, `audit-witness.service`
+  — before requiring the service under test, since `vi.mock()` doesn't
+  reliably intercept `require()` call sites in this repo's CJS setup).
+  Covers `createEvent`'s sequence chaining and externalDb-vs-default-db
+  close behavior, `ingestLogRecord`'s field mapping/defaults, and
+  `createTreeHead`'s TSA-success/TSA-throw and witness-success
+  (with/without witnessId)/witness-throw branches. Isolated coverage
+  60.81%/43.75% -> **100%/100%** (stmts/branch/funcs/lines all 100%).
+- `neo4jCanonicalProjection.service.js`: new
+  `tests/unit/neo4jCanonicalProjection.service.test.js` (24 tests). This
+  service has no mongo/connectDB dependency — just a fake Neo4j
+  `session.run` mock. Covers `pseudonymizeDonorId`'s salt fallback chain
+  and missing-salt throw, `applyEvent`'s full dispatch table (including
+  the skipped/unknown-type and missing-event optional-chaining
+  branches), all four `applyXProjection` methods' payload-present vs.
+  payload-omitted-defaults paths, and `stableStringify`'s key-sort/
+  array-recursion/Date-serialization behavior. Isolated coverage
+  65.00%/58.41% -> **100%/100%**.
+- No bugs found in either service — all new tests pass against existing
+  behavior as-is.
+- Updated `COVERAGE_NOTES.md` in the same two commits: both files moved
+  out of the MID-LOW bucket, the "no longer excluded" narrative trimmed
+  to the two still-unchecked candidates (`patient.service.js`,
+  `result-worker.js`), and a stale duplicate `daily-merkle.job.js`
+  paragraph (present twice in the file, one now-inconsistent with the
+  MID-LOW header count) cleaned up in the process.
+- Committed as two separate commits (one per slice, per the loop's
+  "commit each piece separately" guidance) and pushed.
+- Ran `wrap-up`'s core audit: scope was test files + coverage notes only
+  (no product source touched), no lazy fixes, no bugs found to file, no
+  permission denials, no stale instructions, no user corrections
+  (autonomous session). No shipping-addendum items — no issue closed
+  this session, no capability gaps promised without a tracking issue,
+  nothing security-relevant touched.
 
 ## Repo state
 
 - `feature/docker-e2e-backend-integration`, pushed, working tree clean.
-- Files touched this session: `api/backend/tests/unit/daily-merkle.job.test.js`
-  (6 new tests + fake-db/service-mock scaffolding), `api/backend/COVERAGE_NOTES.md`.
-  No product source touched.
+- Files touched this session: `api/backend/tests/unit/audit-v2.service.test.js`
+  (new), `api/backend/tests/unit/neo4jCanonicalProjection.service.test.js`
+  (new), `api/backend/COVERAGE_NOTES.md`. No product source touched.
 
 ## Milestone (set 2026-07-22 by Dennis, still current)
 
 **Target: 90% across all four coverage dimensions.** Last full reconcile
 is still the 2026-07-24 session-14 one (commit `191481c2`): Statements
 93.15%, Branches 87.08%, Functions 91.71%, Lines 93.5%. This session's
-`daily-merkle.job.js` slice (+26pp isolated branch coverage on one file)
-and the prior session's `orphanet.js` slice haven't been folded into a
-fresh full-suite reconcile yet — both files have small absolute branch
-counts, so overall-suite movement will be modest but cumulative. Branches
+two slices (each closed a small-to-mid-size file from ~55-65% to 100%)
+plus the prior sessions' `daily-merkle.job.js`/`orphanet.js` slices
+haven't been folded into a fresh full-suite reconcile yet. Branches
 remains the sole dimension below 90%.
 
 ## Recommended next steps
 
-None queued by Dennis explicitly. `COVERAGE_NOTES.md`'s MID-LOW bucket
-now has 2 remaining candidates, both still needing an isolated
-`--coverage.include` check before committing to a slice (their blocking
-issues are closed but merged-vs-isolated drift, issue #242 class, hasn't
-been ruled out yet):
-- `src/services/audit-v2.service.js` (60.81%/43.75% lines/branches merged)
-- `src/services/neo4jCanonicalProjection.service.js` (65.00%/58.41% merged)
+None queued by Dennis explicitly. `COVERAGE_NOTES.md`'s "no longer
+excluded" list now has 2 remaining candidates, neither isolated-checked
+yet this session (their blocking issues are closed, but merged-vs-
+isolated drift, issue #242 class, hasn't been ruled out):
+- `patient.service.js` (#240/#241, closed)
+- `result-worker.js` (#146/#164/#159, closed)
 
-Issue #272 (new, this session): `daily-merkle.job.js`'s 2 remaining
+Issue #272 (prior session): `daily-merkle.job.js`'s 2 remaining
 unreachable defensive branches — owner's call whether to remove the
 guards, not a test gap.
 
@@ -92,31 +101,25 @@ documentation issue, not a BioAvanceD-v2 blocker.
 
 ## Which skills to use
 
-`test-loop` for the next coverage slice — start with `audit-v2.service.js`
-or `neo4jCanonicalProjection.service.js` from the MID-LOW bucket (isolated
-check first, per issue #242's drift caveat). `bioavanced-v2-conventions`
-and `bioavanced-v2-testing-conventions` as always. `bioavanced-v2-legacy`
-if a candidate turns out to be dead code. `wrap-up` every iteration.
+`test-loop` for the next coverage slice — `patient.service.js` or
+`result-worker.js` from the "no longer excluded" list (isolated check
+first, per issue #242's drift caveat). `bioavanced-v2-conventions` and
+`bioavanced-v2-testing-conventions` as always. `bioavanced-v2-legacy` if
+a candidate turns out to be dead code. `wrap-up` every iteration.
 
 ## Dependency notes
 
 None blocking. `dyeallpies-skills-pack#111`/`#112` (auth.routes.js
 coverage-number-suspect, 3-way-split isolation caveat) still applies
-generally to other suspect files — worth checking before trusting a
-merged number on `audit-v2.service.js` /
-`neo4jCanonicalProjection.service.js` next session. `dyeallpies-skills-pack#115`/`#116`
+generally to other suspect files. `dyeallpies-skills-pack#115`/`#116`
 are pack-repo issues, not BioAvanceD-v2 blockers.
 
 ## Session note
 
-Main friction: the existing test file for `daily-merkle.job.js` had a
-latent gap of its own — three service calls (`getRootByDate`,
-`processTimestampBacklog`, `createTreeHead`) were never mocked, and the
-fake db had no `.collection()` method, so `anchorV2ForDate` was silently
-throwing inside every existing test's `runOnce()` call, swallowed by the
-job's own try/catch. None of the existing assertions checked for a clean
-`logger.error`, so this had gone unnoticed across two prior sessions
-that touched this file. Worth remembering for other files with a
-similar "job swallows all errors" shape: a passing test isn't proof the
-mocked call graph is complete — check whether an unasserted `logger.error`
-call is hiding a mock gap.
+Both files picked up this session had *no* pre-existing test file
+despite being used by other already-tested code — worth remembering
+this pattern (a service only ever exercised indirectly through a
+caller's mocks, never directly) as a place to check for hidden coverage
+gaps in other MID-LOW candidates. Neither slice needed to touch product
+source or file a new bug — both services' actual behavior matched
+straightforward expectations once mocked correctly.
