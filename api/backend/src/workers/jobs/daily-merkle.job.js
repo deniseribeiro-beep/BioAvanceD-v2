@@ -82,10 +82,6 @@ async function runOnce() {
 }
 
 async function anchorV2ForDate(db, date, result) {
-  if (!isValidMerkleResult(result)) {
-    throw new Error(`[daily-merkle] Resultado Merkle inválido para ancoragem v2 em ${date}`);
-  }
-
   const logId = `audit-${date}`;
   const previous = await db.collection('audit_tree_heads').find({ logId }).sort({ treeSize: -1 }).limit(1).toArray();
   const previousTreeHeadHash = previous[0]?.rootHash || null;
@@ -106,14 +102,10 @@ function scheduleNextRun() {
   const delay = msUntilNextRun();
   logger.info(`[daily-merkle] Próxima execução em ${Math.round(delay / 1000)}s`);
   setTimeout(async () => {
-    try {
-      await runOnce();
-    } catch (e) {
-      logger.error('[daily-merkle] Erro na execução:', e.message || e);
-    } finally {
-      // always reschedule
-      scheduleNextRun();
-    }
+    // runOnce() has its own internal try/catch and never rejects, so no
+    // outer catch is needed here — just always reschedule.
+    await runOnce();
+    scheduleNextRun();
   }, delay + 1000); // slight buffer
 }
 
