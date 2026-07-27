@@ -1,0 +1,318 @@
+# E2E Traceability Plan — docs → Playwright milestone
+
+**Written:** 2026-07-27, in response to the new doc drop in
+`docs/docs-7-27-2026/` (Requisitos v3.0.0, Plano Integrado do Foundation
+Data Pipeline v2.1.0, Dicionário Consolidado v1.3.0, `DENISE_VALIDATION_STATUS.md`,
+5 architecture/use-case diagrams). Machine-readable extractions of all of
+those live in `docs/docs-7-27-2026/extracted/` — this plan is built on
+top of them, not on the raw `.docx`/`.xlsx` files.
+
+## The new milestone
+
+Alongside the existing coverage milestone (90% statements/branches/
+functions/lines on the backend unit/integration suite — see `HANDOFF.md`),
+BioAvanceD-v2 now has a second, independent milestone:
+
+> **Translate every testable requirement in the v3.0.0 requirements doc
+> into a Playwright e2e test that proves it, not just documents it.**
+
+These are different axes on purpose. Backend coverage % proves a line of
+code *ran*; it does not prove a *use case* (RF-something) actually works
+end-to-end through the real UI/API/persistence stack. `DENISE_VALIDATION_STATUS.md`
+item 2 already flagged this gap directly: e2e specs today mostly run
+against a *mocked* backend, and the one real-backend spec
+(`tests/e2e/backend-integration.spec.ts`) is skipped unless someone
+explicitly runs the Docker gate. This milestone is how that item closes
+for good, and how it scales past the 12 items Denise originally asked
+about to the full 29 RF + 32 RNF in the new doc.
+
+> **Doc defect found during extraction:** the requirements doc's own
+> intro paragraph ("RF029 e RF030 foram adicionados...") and its
+> "Matriz de coerência do pipeline" (section 4, Fase 3 row: "RF030 e
+> requisitos de domínio RF001-RF028 aplicáveis") both reference an
+> **RF030 that does not exist** — the actual requirements table (verified
+> directly against the source `.docx`, not just the pandoc conversion)
+> stops at **RF029**. This is the same one-revision-behind pattern found
+> in the Lucidchart diagrams (see `diagrams-index.md`'s caveat): RF030
+> was apparently the old ID for what the table now calls RF029
+> ("Ingestão operacional e científica"), and the prose/matrix sections
+> never got updated when the table was renumbered. Flagging for Denise
+> rather than guessing at a fix — this plan treats **RF001-RF029 (29
+> items)** as the real, defined set.
+
+**Gate / definition of done for this milestone** (mirrors the RF012
+audit-first pattern found in the use-case diagrams — see
+`docs/docs-7-27-2026/extracted/diagrams-index.md`): a requirement counts
+as "proven" when there is a Playwright spec that (a) exercises the
+happy path AND at least one rejection/edge case from that RF's
+"Critérios de aceitação", (b) runs against the real backend at least
+once (via `test:e2e:docker`, even if the fast mocked version also
+exists for per-iteration use), and (c) asserts the AuditEvent side
+effect where the RF's criteria call for one. A spec that only smoke-
+tests that a page renders does not meet the gate — see
+`bioavanced-v2-testing-conventions`'s "Tests are honest or they're
+worthless."
+
+## Ground truth hierarchy (inherited from the docs themselves)
+
+Doc 3 section 4 ("Autoridade documental") sets this order, and this
+plan follows it for any conflict:
+
+1. `docs/docs-7-27-2026/extracted/dict-02_DICIONARIO.md` (the 929-field
+   dictionary) — normative for field names/cardinality/entities.
+2. The Foundation Data Pipeline plan (doc 3) — normative for phase
+   sequencing (Fase 1/2/3) and pipeline gates.
+3. `docs/docs-7-27-2026/extracted/requisitos-index.md` (doc 1, RF/RNF) —
+   normative for acceptance criteria. **This plan's traceability matrix
+   is keyed on this doc's IDs.**
+4. The 5 Lucidchart/use-case diagrams — useful for actor/grouping
+   structure only; their RF numbering runs ~1 behind doc 1 starting at
+   RF014 (see the caveat at the top of `diagrams-index.md`). Never cite
+   a diagram's own RF label without translating it.
+5. Code/schemas/tests — must converge to the above, never redefine them.
+   `docs/docs-7-27-2026/extracted/dict-07_ALINHAMENTO_CODIGO.md` and
+   `dict-08_MAIN_GAPS.md` are the current best record of where `main`
+   still diverges from this target model — read those before assuming a
+   spec should currently pass.
+
+## Current state (baseline, before this milestone starts)
+
+Only 4 spec files exist today, all thin:
+
+| File | Test cases | Backend | RF/RNF touched (partial only) |
+|---|---|---|---|
+| `cadastro-amostra.spec.ts` | 2 (render table, client-side filter) | mocked | RF004, RF006 (UI only, no persistence assertion) |
+| `intake-wizard.spec.ts` | 2 (render step, required-field validation) | mocked | RF004, RF005 (UI only) |
+| `tcle-dinamico.spec.ts` | 2 (render builder, submit metadata) | mocked | RF010 (UI only) |
+| `backend-integration.spec.ts` | 2 (health check, login+list) | **real**, but `test.skip`ped by default | RF001 (partial) |
+
+That's 8 test cases against 29 RF + 32 RNF = 61 requirement items. None
+of the mocked specs assert an AuditEvent was written, a Neo4j projection
+happened, or that rejected/invalid input actually gets HTTP 422 — they
+check that the page renders and a mocked API call fires. This is the
+concrete evidence behind this milestone, not an assumption.
+
+## Grouping strategy: 6 proposed spec files
+
+The three use-case diagrams already group all 29 RF into 6 coherent
+packages by actor/journey (with shared cross-cutting "controles
+incluídos"). Reusing that grouping — rather than inventing a new one —
+means the spec structure stays traceable back to the diagrams Denise
+already approved. Proposed file names follow the existing
+`kebab-case.spec.ts` convention at repo root `tests/e2e/`:
+
+| Proposed spec file | Diagram package | RFs covered |
+|---|---|---|
+| `auth-access-security.spec.ts` | Acesso e segurança | RF001, RF002, RF003, RF014 |
+| `participant-consent-studies.spec.ts` | Participante, consentimento e estudos | RF004, RF005, RF010, RF020, RF021 |
+| `specimen-quality-inventory.spec.ts` | Espécime/qualidade/inventário | RF004(shared), RF006, RF016, RF017, RF018, RF019, RF025, RF026 |
+| `interop-monitoring.spec.ts` | Interoperabilidade e monitoramento | RF009, RF011, RF015 |
+| `scientific-data-access.spec.ts` | Dados científicos e acesso | RF007, RF008, RF024, RF027 |
+| `pipeline-continuity.spec.ts` | Pipelines, continuidade e proteções | RF013, RF022, RF023, RF028, RF029 |
+
+`RF012` (AuditEvent + crypto integrity) is not its own file — per the
+diagrams it's the one use case every other group `«include»`s, so it's
+a **shared assertion helper** (`tests/e2e/helpers/assertAuditEvent.ts`,
+to be built) called from every spec above, not a standalone journey.
+
+## Full RF traceability matrix
+
+Status legend: **RED** = code doesn't implement the target model yet per
+`dict-07_ALINHAMENTO_CODIGO.md`/`dict-08_MAIN_GAPS.md` (write the test
+anyway, expect it to fail, file an issue linking the failing test — that
+*is* the proof of the gap); **PARTIAL** = existing mocked spec touches
+this but doesn't meet the gate; **MISSING** = zero e2e coverage today;
+**Wave** = suggested sequencing (1 = start now, higher = later; matches
+the "Sequencing (waves)" section below exactly — if the two ever
+disagree, that section is the one to trust and this table has drifted).
+
+**On the Priority column:** the RF table itself has no priority field —
+only RNF has one. "Priority (doc)" below is *derived*, not quoted: where
+`dict-04_PRIORIZACAO.md`'s P-items map cleanly onto an RF's domain, that
+P-item's Prioridade is used (cited inline); where nothing maps cleanly,
+it's "—". Treat every non-cited value here as a judgment call, not a
+fact from the source.
+
+| RF | Módulo | Proposed spec | Status today | Priority (doc) | Wave |
+|---|---|---|---|---|---|
+| RF001 | Segurança e autenticação | auth-access-security | PARTIAL (backend-integration, skipped) | Crítica (P-033) | 1 |
+| RF002 | Dashboard e autorização | auth-access-security | MISSING | Crítica (P-033, RBAC-enforcement) | 1 |
+| RF003 | Gestão de usuários | auth-access-security | MISSING | Crítica (P-033) | 2 |
+| RF004 | Cadastro integrado do biobanco | participant-consent-studies + specimen-quality-inventory | PARTIAL (cadastro-amostra, intake-wizard; UI only) | Crítica | 1 |
+| RF005 | Participante e dados clínicos | participant-consent-studies | PARTIAL (intake-wizard; UI only); **RED** — ParticipantIdentity segregation not implemented (dict-07 row 1) | Crítica | **2, red-first** |
+| RF006 | Rastreabilidade e cadeia de custódia | specimen-quality-inventory | MISSING | Crítica | 1 |
+| RF007 | Arquivos científicos e dados brutos | scientific-data-access | MISSING | Alta | 2 |
+| RF008 | Relatórios | scientific-data-access | MISSING | — | 4 |
+| RF009 | Telemetria e monitoramento ambiental | interop-monitoring | MISSING | Crítica | 1 |
+| RF010 | Consentimento eletrônico e dinâmico | participant-consent-studies | PARTIAL (tcle-dinamico; UI only); **RED** — ConsentTemplate/Consent split partial (dict-07 row 3) | Crítica | **2, red-first** |
+| RF011 | Interoperabilidade HL7 FHIR R4 | interop-monitoring | MISSING | — | 2 |
+| RF012 | Auditoria e integridade criptográfica | shared helper, all specs | MISSING as e2e (unit coverage exists per `DENISE_VALIDATION_STATUS.md` item 7) | Crítica | 1 (build the helper first) |
+| RF013 | Backup e restauração | pipeline-continuity | MISSING | — | 4 |
+| RF014 | Políticas de segurança | auth-access-security | MISSING | — | 3 |
+| RF015 | Alertas e notificações | interop-monitoring | MISSING | Alta | 3 |
+| RF016 | Etiquetagem | specimen-quality-inventory | MISSING | — | 3 |
+| RF017 | Equipamentos e armazenamento | specimen-quality-inventory | MISSING | Crítica (P-009 "Inventário físico" overlaps — equipment/rack/box/position) | 3 |
+| RF018 | Qualidade de biospecímenes — SPREC/RCS | specimen-quality-inventory | MISSING as e2e (unit coverage confirmed: `rcs-certification.service.test.js` + 2 more, per `DENISE_VALIDATION_STATUS.md` item 10) | Crítica | 1 |
+| RF019 | Quarentena lógica | specimen-quality-inventory | MISSING (unit coverage exists per `DENISE_VALIDATION_STATUS.md` item 9) | Crítica | 1 |
+| RF020 | Metadados institucionais e MIABIS | participant-consent-studies | MISSING | Crítica | 2 |
+| RF021 | Estudos, protocolos e ética | participant-consent-studies | MISSING | Crítica | 2 |
+| RF022 | Foundation Data Pipeline | pipeline-continuity | **RED** — legacy manual seed, not the one-shot bootstrap (dict-07/08 "Gap crítico") | Crítica | **2, but red-first** — file the gap as an issue before writing more tests against it |
+| RF023 | Outbox e projeção Neo4j | pipeline-continuity | PARTIAL (unit coverage strong per `DENISE_VALIDATION_STATUS.md` item 3; no e2e) | Crítica | 1 |
+| RF024 | Solicitações de acesso e distribuição | scientific-data-access | MISSING | Alta | 3 |
+| RF025 | Ensaios, reagentes e não conformidades | specimen-quality-inventory | MISSING | Alta | 3 |
+| RF026 | Retenção e destinação | specimen-quality-inventory | MISSING | Alta | 3 |
+| RF027 | Workflows e dados ômicos | scientific-data-access | MISSING | Alta | 4 |
+| RF028 | Importação de dados de referência | pipeline-continuity | **RED** — Fase 2 importers absent/placeholder (dict-08 row "Reference data pipeline") | Crítica | **2, but red-first** |
+| RF029 | Ingestão operacional e científica | pipeline-continuity | MISSING | — | 3 (depends on RF022/028 landing first) |
+| RF-FUT-001 | Assistente inteligente | — | **Out of scope by design** — doc 1 explicitly forbids using this as evidence of Fase 1-3 functionality | — | never |
+
+## RNF classification
+
+RNFs mostly aren't 1:1 journeys — folding all 32 into the matrix above
+as if they were RFs would misrepresent what a Playwright spec can prove.
+Split into three buckets instead:
+
+**A. Assert inside an existing RF spec (no new file needed).** The RNF
+is a property of a journey that's already being tested, so it's one more
+`expect(...)` in that spec, not a separate one:
+RNF001 (response time — wrap key actions in `page.waitForResponse` +
+duration assert), RNF007 (identity segregation — assert
+`patientName`/`birthDate` never appear in any Neo4j-facing payload or
+frontend network response outside the identity screen), RNF008 (RBAC —
+assert 403 on cross-role actions in `auth-access-security`), RNF009
+(audit — this **is** the RF012 shared helper), RNF011 (schema
+rejection — assert 422 on malformed payloads in every intake spec),
+RNF018 (multi-layer validation — same), RNF019 (outbox durability —
+assert in `pipeline-continuity`), RNF021 (session lifecycle — assert in
+`auth-access-security`), RNF024 (FHIR boundary side-effect-free —
+assert in `interop-monitoring`).
+
+**B. Needs dedicated non-functional tooling, not a functional Playwright
+spec — explicitly out of this milestone's scope, flag separately.**
+RNF002 (latency at 100k+ records — needs a seeded load-test dataset and
+a perf harness), RNF003 (99.5% monthly availability — needs uptime
+monitoring, not a test run), RNF005 (4-hour training curve — needs a
+usability study with real users), RNF010 (backup RPO/RTO — needs an
+infra drill), RNF014 (container reproducibility — CI/build concern),
+RNF016 (scalability — needs a capacity test), RNF026 (2-minute alert
+p95 — needs timing infra beyond Playwright's page timeouts), RNF027
+(accessibility AA — needs axe-core or similar, a different tool
+category worth its own small milestone), RNF015 (app/infra/queue
+monitoring — Prometheus/Grafana-shaped observability across the whole
+stack including `FoundationDataRun`/`ReferenceImportRun` metrics, not a
+single journey any one spec owns).
+
+**C. Infra/process only — not testable via e2e at all.** RNF006
+(documentation exists), RNF012/RNF013 (ISO 20387 / ISO 27001 alignment
+— audit/process, not code), RNF017's automation-gate *requirement*
+itself (that's this whole milestone, not a thing the milestone tests),
+RNF020 (secrets management — a deployment-config review), RNF022
+(retention/disposition policy — a data-governance decision, though its
+*enforcement* partly falls under bucket A once RF026 lands), RNF023
+(schema versioning discipline — a code-review practice, not a runtime
+assertion), RNF028 (architectural modularity — covered by existing
+arch tests, not e2e), RNF030 (workflow provenance — folds into RF027's
+spec once that RF is built, bucket A at that point but not before).
+
+Four more need a judgment call tied to a specific not-yet-built spec
+rather than a guess now: **RNF004** (telemetry buffering during
+connectivity loss) attaches to `interop-monitoring.spec.ts` once RF009
+lands (Wave 1, so this is close); **RNF025** (timestamp consistency
+across consent/custody/audit/telemetry/processing events) is
+cross-cutting rather than single-journey — add one assertion per spec
+that touches those timestamps rather than waiting for one RF to "own"
+it; **RNF029** (Object Storage integrity — checksum, URI, encryption)
+attaches to `scientific-data-access.spec.ts` once **RF007** (arquivos
+científicos, not RF028 — RF028 is reference-data import, a different
+domain) is built; **RNF031/RNF032** (the expanded pipeline-specific
+RNFs) attach to `pipeline-continuity.spec.ts` once **RF022**
+(Foundation Data Pipeline) and **RF028** (reference-data import)
+respectively clear their red-first gate — both RNFs' own criteria
+assume the Fase 1/Fase 2 gate they describe already passes, so writing
+them earlier would just restate the RF's own red test.
+
+## Cross-cutting rules for every new spec
+
+1. **Assert the audit trail, not just the primary outcome.** Every
+   diagram package `«include»`s RF012 — a spec that checks "specimen
+   created" without also checking "AuditEvent appended" only proves
+   half the use case. Use the shared helper once it exists.
+2. **Real backend at least once.** A spec that only ever runs against
+   the mocked backend cannot prove RF022/RF023/RF028/RF029 (pipeline,
+   outbox, Fase 2 import) — those are meaningless without real
+   Mongo/Neo4j/Redis. Follow the existing `test:e2e` (mocked, per-
+   iteration) vs `test:e2e:docker` (real, end-of-loop gate) split from
+   `bioavanced-v2-testing-conventions`; don't invent a third mode.
+3. **RED tests are legitimate deliverables, not failures to hide.**
+   Where `dict-07_ALINHAMENTO_CODIGO.md`/`dict-08_MAIN_GAPS.md` already
+   flag a gap (RF005 identity segregation, RF010 consent split, RF022
+   Foundation Pipeline, RF028 Fase 2 importers), the first honest e2e
+   test for that RF will fail against current `main`. Per
+   `bioavanced-v2-conventions`, file the gap as a GitHub issue the
+   moment the red test proves it, linking the test — don't write around
+   it, don't weaken the assertion, don't skip it silently.
+4. **Priority from the docs, not gut feel.** Wave assignment above
+   pulls from `dict-04_PRIORIZACAO.md`'s Prioridade column (Crítica
+   items first) crossed with `dict-07`/`dict-08`'s gap severity — a
+   Crítica item with a real code gap needs the issue filed and the
+   fix scoped before more tests pile up on top of a broken foundation,
+   so it's marked "red-first" rather than "wave 1."
+
+## Sequencing (waves)
+
+- **Wave 1 (start now — Crítica, code exists, just untested e2e):**
+  RF001, RF002, RF004, RF006, RF009, RF012 (helper), RF018, RF019,
+  RF023.
+- **Wave 2 (Crítica, needs new spec + likely new UI/API surface):**
+  RF003, RF007, RF011, RF020, RF021 — plus red-first issue filing for
+  RF005 (ParticipantIdentity segregation), RF010 (ConsentTemplate/Consent
+  split), RF022, and RF028 before their specs go further than the first
+  failing test. These four are the ones `dict-07_ALINHAMENTO_CODIGO.md`
+  already flags as "Parcial"/"Gap crítico" against `main` — writing past
+  the first red test on any of them without an issue filed is exactly
+  the "write around a known gap" anti-pattern `bioavanced-v2-conventions`
+  warns about.
+- **Wave 3 (Alta, after Wave 1/2 land):** RF014, RF015, RF016, RF017,
+  RF024, RF025, RF026, RF029.
+- **Wave 4 (remaining Alta/Média, lowest urgency):** RF008, RF013,
+  RF027.
+- **Never:** RF-FUT-001 (explicitly out of scope by the doc itself).
+
+## Tracking this milestone as it progresses
+
+`DENISE_VALIDATION_STATUS.md` stays as the answer to Denise's original
+12-item question — don't fold it into this file, it has its own
+audience and history. This plan's matrix is the new living tracker for
+the full 30-RF scope: update the **Status today** column in the same
+commit as the spec that changes it, same discipline as
+`api/backend/COVERAGE_NOTES.md`. When a RED test flips to green because
+the underlying gap got fixed, update both this file and close the
+linked issue in the same PR.
+
+## Docs/skills that need a second look because of the new docs
+
+Found while cross-checking the new dictionary against what
+`bioavanced-v2-conventions` currently points to as ground truth —
+flagged, not silently fixed, since it's a design document Denise/Dennis
+own:
+
+- **`docs/architecture/canonical-data-contract-v1.md` is stale against
+  the v1.3.0 dictionary.** It still lists `patientName`/`birthDate` as
+  direct fields on `Participant`, but the new dictionary (and RF005/
+  RNF007) require a segregated `ParticipantIdentity` entity — which
+  `dict-07_ALINHAMENTO_CODIGO.md` itself lists as "Parcial" against
+  `main`. Whoever picks up RF005's red test first will hit this
+  directly; worth a deliberate update to `canonical-data-contract-v1.md`
+  (or a `v2`) as part of that slice, not a surprise mid-fix.
+- **`bioavanced-v2-conventions`'s quality-scoring ground-truth pointer**
+  (`docs/research/cmpb-submission/manuscript/00_Manuscript.tex`) is
+  still correct and doesn't conflict with the new docs — RF018/RNF the
+  new dictionary's RCS treatment matches the manuscript's model. No
+  change needed there.
+- The `docs/` top-level files (`BioAvanceD_Dicionario_Dados_Consolidado_v1.0.xlsx`,
+  `BioAvanceD_Modelo_Unificado_Fase_{1,2,3}_v1.x.docx`) are now
+  superseded by `docs/docs-7-27-2026/2 - Dicionario_Dados_Consolidado_v1.3.0.xlsx`
+  and the new requirements/plan docs per those docs' own changelog
+  (`dict-09_CHANGELOG.md`). Left in place for history — not deleting
+  anything without Dennis's go — but any future read should prefer the
+  v1.3.0 set.
