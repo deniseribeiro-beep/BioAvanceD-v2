@@ -70,7 +70,13 @@ call, don't re-pick these as "genuinely low" candidates without first
 reading the linked issue:**
 `SampleGraphValidator.js` (issue #222, legacy-schema design fork, still
 open), `mqtt-telemetry.service.js` (accepted gap — `mqtt`'s `connect`
-export can't be mocked), `queue.js` / `eConsent.js` (issue #242
+export can't be mocked), `result-worker.js` (issue #274, accepted gap —
+`processCSV`'s `.on('error', ...)` handler on the `csv-parser` stream is
+unreachable under the code's actual config: `csv-parser@3.2.0` only
+emits `'error'` from one place, gated by `options.strict`, which
+defaults `false` and is never set to `true` by `result-worker.js`; no
+malformed CSV content can trigger it, only mocking the module would),
+`queue.js` / `eConsent.js` (issue #242
 merged-vs-isolated drift class — re-check isolated coverage before
 trusting the merged number for either).
 
