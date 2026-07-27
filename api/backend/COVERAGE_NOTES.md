@@ -228,7 +228,9 @@ Low priority (models/interfaces/one-off scripts — thin or non-request-path):
 - `src/reference-data/essential/index.js`
 - `src/scripts/migrate-rcs-governance-indexes.js`
 - `src/scripts/seedDiseaseValidationRules.js`
-- `src/scripts/testEnvironment.js`
+
+`src/scripts/testEnvironment.js` was 0%. New isolated coverage
+(`--coverage.include`): 93.8%/81.48%/84.61%/94.44% stmts/branch/funcs/lines.
 
 ## LOW coverage (1-49% lines) — 0 files as of the 2026-07-22 reconcile
 
