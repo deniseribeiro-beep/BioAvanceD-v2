@@ -56,10 +56,6 @@ function normalizeObject(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 }
 
-function normalizeArray(value) {
-  return Array.isArray(value) ? value : [];
-}
-
 function unique(values) {
   return [...new Set(values.filter(Boolean))];
 }
