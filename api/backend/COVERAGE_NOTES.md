@@ -176,7 +176,12 @@ Low priority (models/interfaces/one-off scripts — thin or non-request-path):
 - `src/core/application/ports/IStorageRepository.js`
 - `src/core/application/ports/IStorageTopologyReadRepository.js`
 - `src/reference-data/essential/index.js`
-- `src/scripts/migrate-rcs-governance-indexes.js`
+
+`src/scripts/migrate-rcs-governance-indexes.js` was 0%. New isolated
+coverage (`--coverage.include`): 63.15%/25%/50%/63.15%
+stmts/branch/funcs/lines; remaining gap is the unexported `main()`
+CLI-entry block, unreachable when required as a module (same pattern as
+`migrateUserAnonIds.js`).
 
 ## LOW coverage (1-49% lines) — 0 files as of the 2026-07-22 reconcile
 
