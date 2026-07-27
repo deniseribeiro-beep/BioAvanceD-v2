@@ -284,18 +284,6 @@ function buildWorkflowSnapshot(record = {}) {
   };
 }
 
-function decorateRecord(record = {}) {
-  const workflow = buildWorkflowSnapshot(record);
-  return {
-    ...record,
-    consentStatus: workflow.consentStatus,
-    quarantineStatus: workflow.quarantineStatus,
-    quarantineReason: workflow.quarantineReason,
-    availabilityStatus: workflow.availabilityStatus,
-    workflowStatus: workflow.displayStatus,
-  };
-}
-
 function createConsentToken() {
   return crypto.randomBytes(24).toString('hex');
 }
