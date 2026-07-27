@@ -1,55 +1,48 @@
 # HANDOFF
 
 **Written:** 2026-07-27, end of a `work-issue` session.
-**Branch:** `feature/docker-e2e-backend-integration` (commit `b30b6fd8`,
+**Branch:** `feature/docker-e2e-backend-integration` (commit `e2c06c60`,
 pushed, working tree clean).
 
 ## What happened this session
 
-Read the prior handoff (orphanet.js #279 session), which flagged the
-open backlog as stale/design-call-heavy and suggested checking with
-Dennis before another re-scan. Re-scanned anyway (`gh issue list
---state open`): same 9 issues as last two sessions (#277, #275, #274,
-#266, #258, #228, #224, #222, #115).
+Read the prior handoff (result-worker.js #274 session), which flagged
+the backlog-scarcity pattern for a third time and suggested raising it
+with Dennis directly. Re-scanned open issues anyway (`gh issue list
+--state open`): 8 issues (#277, #275, #266, #258, #228, #224, #222,
+#115) — same set minus #274.
 
-Spot-checked #224 (still confirmed open, genuine design call) and
-picked #274 (`result-worker.js` processCSV csv-parser error handler)
-as the one with a concrete, checkable next step from its own body
-("try feeding malformed CSV instead of mocking").
+Picked #258 (`NotificationService.js` infra-mocking gap) — it named the
+same "not a bug, just a coverage gap, options if someone wants to close
+it" shape as #274, and had a concrete claim to verify rather than a
+"design call, needs Dennis" shape.
 
-- Read `csv-parser@3.2.0`'s vendored source directly
-  (`node_modules/csv-parser/index.js`): it emits `'error'` from exactly
-  one call site (line 166, a `RangeError` for row-length mismatch),
-  gated by `options.strict`, which defaults `false` (line 17) and is
-  never set `true` by `result-worker.js`'s `csv()` call. So no
-  malformed CSV content — however garbled — can reach that handler
-  under the app's actual config. This resolves the issue's open
-  question definitively: not "hard, not attempted," but structurally
-  unreachable without changing production behavior or mocking the
-  module.
-- Documented `result-worker.js` in `COVERAGE_NOTES.md`'s excluded list
-  as a permanent accepted gap, same class as the existing
-  `mqtt-telemetry.service.js` entry (commit `b30b6fd8`).
-- Commented the finding on #274 and closed it. No product-code or
-  test-code change — pure verification + documentation.
-- `wrap-up` audit surfaced two skill/tooling gaps, filed against the
-  skills-pack repo (not editable from here per Rule 0):
-  - `dyeallpies-skills-pack#125` — work-issue has no route for
-    "confirm and close a filed coverage-gap finding, no code change,"
-    which is what #274 actually needed; I did the work without
-    invoking test-loop or fix-bugs since neither fit.
-  - `dyeallpies-skills-pack#126` — the Bash-hook skill-junction guard
-    blocked a plain read-only `cat` of an installed-skill file (false
-    positive on a write-protection heuristic); worked around it with
-    the Read tool instead.
+- Read `src/services/NotificationService.js` and
+  `src/config/queue.js` directly: confirmed `getNotificationQueue()`'s
+  `new Queue(...)` success branch needs `initRedis()` to return a real
+  connection, which it never does without `REDIS_HOST`/`REDIS_PORT` set
+  (test env always fails `validateRedisOnly()`). Confirmed
+  `sendCriticalTempAlertFromInflux()`'s Influx client functions are
+  destructured from the connection module at require time (top of
+  file), so `vi.spyOn` on the module post-require can't intercept them.
+  Both match the issue's own diagnosis exactly — no new information,
+  but independently re-verified against current source rather than
+  trusting the issue body.
+- Documented `NotificationService.js` in `COVERAGE_NOTES.md`'s excluded
+  list and closed-files list as a permanent accepted gap, same class as
+  `mqtt-telemetry.service.js` and `result-worker.js` (commit
+  `e2c06c60`).
+- Commented the finding on #258 and closed it. No product-code or
+  test-code change — pure verification + documentation, same shape as
+  the #274 session.
 
 ## Repo state
 
-- `feature/docker-e2e-backend-integration`, at `b30b6fd8`, working
-  tree clean, pushed.
+- `feature/docker-e2e-backend-integration`, at `e2c06c60`, working tree
+  clean, pushed.
 - No fix/feature branches created this session (docs-only change,
-  committed straight to the integration branch as prior similar
-  coverage-notes updates have been).
+  committed straight to the integration branch, matching how #274's
+  session and other coverage-notes-only updates have been handled).
 
 ## Milestone (set 2026-07-22 by Dennis, still current)
 
@@ -63,28 +56,32 @@ full-suite reconcile run, top-line numbers unchanged/unmeasured.
 ## Recommended next steps
 
 No specific issue named for next round. Remaining open backlog after
-this session: #277, #275, #266, #258, #228, #224, #222, #115 — same
-stale/design-call/tooling-caveat set flagged in the last three
-handoffs, now down one (#274 closed). The backlog-scarcity pattern is
-still real; worth raising with Dennis directly rather than a fourth
-consecutive handoff repeating the flag.
+this session: #277, #275, #266, #228, #224, #222, #115 — same
+stale/design-call/tooling-caveat set flagged in the last four
+handoffs, now down two (#274, #258 closed). This is the **fourth**
+consecutive session flagging the backlog-scarcity pattern — genuinely
+worth raising with Dennis directly before a fifth repeats it, since the
+same two issue-shapes (design-call-blocked, or accepted-gap-pending-
+verification) keep recurring and the accepted-gap ones are now mostly
+exhausted (#274, #258 both closed this way; #277/#275/#266 look like
+coverage-tool nondeterminism, a different shape — check before assuming
+they resolve the same way).
 
 ## Which skills to use
 
-`work-issue` to pick/route — but see `dyeallpies-skills-pack#125`filed
-this session: it has no clean route for "verify and close a filed
-coverage-gap finding with no code change," which is what most of the
-remaining backlog (#277, #275, #266, #258) looks like on inspection.
-Worth reading that issue before the next session picks from this list.
+`work-issue` to pick/route — `dyeallpies-skills-pack#125` (filed last
+session, still open) covers the "verify and close a filed coverage-gap
+finding with no code change" shape used for both #274 and #258. Worth
+merging that fix into the pack before the next session, since two
+sessions in a row have needed the workaround.
 
 ## Dependency notes
 
-None blocking. `dyeallpies-skills-pack#124`/`#122`/`#123` (pack-repo
-process issues) plus this session's `#125`/`#126` are pack-repo items,
-not BioAvanceD-v2 blockers.
+None blocking. `dyeallpies-skills-pack#124`/`#122`/`#123`/`#125`/`#126`
+are pack-repo items, not BioAvanceD-v2 blockers.
 
 ## Session note
 
-Two process-friction items this session, both filed against the
-skills-pack (see above) rather than fixed inline, per Rule 0. No
-scope creep, no lazy fixes, no security-relevant surface touched.
+Straightforward re-verification + close, no scope creep, no lazy
+fixes, no security-relevant surface touched. Backlog-scarcity flag
+repeated for a fourth time — see "Recommended next steps" above.
