@@ -166,6 +166,36 @@ adding tests chasing these specific lines once manually verified as
 already covered; this is a `@vitest/coverage-v8` instrumentation gap,
 not a real gap, and isn't fixable from this repo.
 
+A third pattern (issues #277/#275, root-caused 2026-07-27): repeated,
+identical multi-file `--coverage.include` invocations (no code changes
+between runs) can produce different stmt/branch numbers run to run —
+confirmed bimodal (not random drift) on the 9-file `patient.service.js`
+combo from #275, flipping between exactly two outcomes (391/462 stmts,
+279/401 branches vs. 399/462 stmts, 311/401 branches) across 5 back-to-
+back runs with this repo's actual config (`pool: 'forks'`,
+`isolate: true`, `fileParallelism: false`). Two candidate fixes were
+tried and ruled out/confirmed:
+- `node --no-flush-bytecode` (targets V8's GC bytecode-flush-under-
+  memory-pressure theory) — **did not fix it**; same bimodal split
+  persisted across 5 runs with the flag set.
+- `--no-isolate` — **did eliminate the drift** (391/462 stable across 4
+  runs) by removing per-file isolation entirely, but this is not a
+  viable fix: it collapses each test file into a shared module registry,
+  and with it in effect `patient.service.encryption-clinicalunit.gaps.unit.test.js`
+  fails (`expected "vi.fn()" to be called 4 times, but got 0 times`) —
+  a real test relying on fresh module/mock state per file. Isolation is
+  load-bearing for correctness, so this can't be turned off repo-wide to
+  chase stable coverage numbers.
+
+Conclusion: the drift is `@vitest/coverage-v8`'s cross-process coverage
+merge (istanbul-style merge of separate V8 script-coverage snapshots,
+one per forked/isolated test file) disagreeing with itself between
+runs, not a race fixable by config in this repo — and not a real
+regression, since single-file isolated runs (see `#242`) are stable.
+Same practical rule as the other two patterns: trust the standalone
+per-file number over a multi-file combined run's per-line/per-function
+detail; don't chase this drift with more tests or config changes.
+
 ## How to use this when picking a slice
 
 1. **Check whether a candidate file is on the excluded list above
