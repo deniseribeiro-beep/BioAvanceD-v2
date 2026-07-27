@@ -1,75 +1,80 @@
 # HANDOFF
 
-**Written:** 2026-07-27, end of a `work-issue` session.
-**Branch:** `feature/docker-e2e-backend-integration` (commit `bf4f6136`,
-pushed, working tree clean).
+**Written:** 2026-07-27, end of a `work-issue` → `resolve-issue` session.
+**Branch:** `feature/docker-e2e-backend-integration` (commit `f2ab269b`,
+pushed, working tree clean apart from a pre-existing untracked
+`docs/DENISE_VALIDATION_STATUS.md` from before this session, left alone).
 
 ## What happened this session
 
-Read the prior handoff (NotificationService.js #258 session), which
-flagged backlog scarcity for a fourth consecutive session — all 7
-remaining open issues (#277, #275, #266, #228, #224, #222, #115) were
-either design-call-blocked and assigned to Denise (#224, #222, #115,
-#228 — require asking Dennis first per repo conventions) or unassigned
-coverage-tooling nondeterminism findings (#277, #275, #266).
+Prior handoff (auth.controller.js #266 session) flagged #277 and #275 as
+the natural next pick — same coverage-tooling-nondeterminism shape,
+unassigned, not blocked on Denise. User explicitly asked to actually try
+to resolve an issue this time rather than assume it can't be done, so
+this session went past the "re-verify and document" pattern used for
+the last three sessions (#274, #258, #266) and root-caused it:
 
-Picked #266 (`@vitest/coverage-v8` undercounts statements/branches
-inside `try` blocks containing `await`s, in `auth.controller.js`) since
-it wasn't blocked on Denise and had a concrete, checkable claim.
-
-- Re-verified against current source: line 122 (catch-block
-  `logger.error`) and the false arm of the `if (!oldMatches)` branch at
-  line 325 both still show 0 hits in `coverage-final.json` despite
-  passing tests directly asserting their side effects — confirmed via
-  `statementMap`/`branchMap` inspection, not just the summary table.
-- Investigated a candidate root cause: `npm ls` flagged the installed
-  `vitest@4.1.9` / `@vitest/coverage-v8@4.1.10` pair as invalid
-  (version mismatch). Realigned `vitest` to `4.1.10` and reran coverage
-  — same 0-hit result, so the mismatch wasn't the cause. Reverted the
-  dependency change (`git checkout -- package.json package-lock.json`)
-  before committing, to keep the commit scoped to documentation.
-- Documented this as a second, distinct phantom-coverage pattern in
-  `api/backend/COVERAGE_NOTES.md` (alongside the already-documented
-  guard-clause-implicit-else pattern), commit `bf4f6136`. No product or
-  test code changed.
-- Commented the finding (including the ruled-out version-mismatch
-  theory) on #266 and closed it.
+- Reproduced the #275/#277 drift directly: ran the same 9-file
+  `patient.service.js` `--coverage.include` combo 5x back-to-back with
+  no code changes — confirmed it's **bimodal**, not random (flips
+  between exactly two outcomes: 391/462 vs 399/462 stmts, 279/401 vs
+  311/401 branches).
+- Tried `node --no-flush-bytecode` (V8 GC-bytecode-flush theory) —
+  ruled out, same bimodal split persisted across 5 runs.
+- Tried `--no-isolate` — this *does* eliminate the drift (stable across
+  4 runs), but breaks
+  `patient.service.encryption-clinicalunit.gaps.unit.test.js`
+  (`expected "vi.fn()" to be called 4 times, but got 0 times`) because
+  it removes per-file module isolation that test depends on. Confirmed
+  not viable as a repo-wide fix.
+- Concluded: this is `@vitest/coverage-v8`'s cross-process coverage
+  merge disagreeing with itself between runs, under this repo's
+  required `pool: forks` + `isolate: true` config — a real tool
+  limitation, not a regression, not fixable from this repo without
+  sacrificing test isolation.
+- Documented as a third distinct phantom-coverage pattern (alongside
+  guard-clause-implicit-else and try/await) in
+  `api/backend/COVERAGE_NOTES.md`, commit `f2ab269b`.
+- Commented the full findings on both #277 and #275 (cross-referencing
+  each other and #242) and closed both.
 
 ## Repo state
 
-- `feature/docker-e2e-backend-integration`, at `bf4f6136`, working tree
+- `feature/docker-e2e-backend-integration`, at `f2ab269b`, working tree
   clean, pushed.
-- No fix/feature branches created this session (docs-only change,
-  committed straight to the integration branch, same pattern as the
-  #274 and #258 sessions).
+- No fix/feature branches created — docs-only change, committed
+  straight to the integration branch (same pattern as #274/#258/#266
+  sessions).
 
 ## Milestone (set 2026-07-22 by Dennis, still current)
 
 **Target: 90% across all four coverage dimensions.** Last full
 reconcile (2026-07-24, session 16, pre-session commit `a636b37a`):
 Statements 94.01%, Branches 88.2%, Functions 92.33%, Lines 94.29%. This
-session made no coverage-numerator change (documented an existing gap
-as permanently accepted) — no full-suite reconcile run, top-line
-numbers unchanged/unmeasured.
+session made no coverage-numerator change (documented/closed two
+existing tooling-nondeterminism gaps) — no full-suite reconcile run,
+top-line numbers unchanged/unmeasured.
 
 ## Recommended next steps
 
-Remaining open backlog after this session: #277, #275, #228, #224,
-#222, #115 — down one (#266 closed). #277 and #275 are the same
-coverage-tooling-nondeterminism shape as #266 (unassigned, not blocked
-on Denise) and are the natural next pick if continuing this pattern.
-#228/#224/#222/#115 remain design-call-blocked and assigned to Denise —
-this is now the **fifth** consecutive session flagging that the
-design-call subset can't move without Dennis's input; worth raising
-directly rather than repeating the flag a sixth time.
+Remaining open backlog: #228, #224, #222, #115 — all design-call-blocked
+and assigned to Denise. This is now the **sixth** consecutive session
+flagging that this subset can't move without Dennis's input — the
+backlog of *unblocked* work is now exhausted (both coverage-tooling
+nondeterminism issues, #277/#275, are closed alongside #266 from last
+session). Worth raising directly with Dennis rather than continuing to
+flag it: either get a design call on #228/#224/#222/#115, or the next
+session needs a fresh source of unblocked work (new coverage gap sweep,
+new backlog items, etc.) since nothing else is currently open.
 
 ## Which skills to use
 
-`work-issue` to pick/route. `dyeallpies-skills-pack#125` (filed two
+`work-issue` to pick/route. `dyeallpies-skills-pack#125` (filed several
 sessions ago, still open per last handoff) covers the "verify and close
-a filed coverage-gap finding with no code change" shape used for #274,
-#258, and now #266 — three sessions in a row have needed this
-workaround; worth prioritizing the merge.
+a filed coverage-gap finding with no code change" shape — this session
+extended that pattern to a genuine root-cause investigation rather than
+just re-confirmation, worth folding that nuance into whichever skill
+`#125` lands as.
 
 ## Dependency notes
 
@@ -78,8 +83,9 @@ are pack-repo items, not BioAvanceD-v2 blockers.
 
 ## Session note
 
-Straightforward re-verification + close, no scope creep (a candidate
-dependency fix was tried, ruled out, and cleanly reverted before
-committing), no lazy fixes, no security-relevant surface touched.
-Design-call backlog subset flagged for a fifth consecutive session —
-see "Recommended next steps" above.
+No scope creep — docs-only change, both candidate fixes tried were
+cleanly ruled out/confirmed with actual repeated-run evidence rather
+than assumed. No lazy fixes, no security-relevant surface touched. The
+unblocked backlog is now empty; the design-call-blocked subset (#228,
+#224, #222, #115) needs Dennis's input before further sessions have
+anything to pick up.
