@@ -6,8 +6,8 @@ function buildSample(overrides = {}) {
   const sample = {
     _id: '507f1f77bcf86cd799439011',
     sampleID: 'S-0001',
-    patientID: '12345678',
-    tcle_id: 'tcle-001',
+    participantId: '12345678',
+    consentTemplateId: 'tcle-001',
     quality_category: 'A',
     sprec: {
       matrixType: 'fluid',
@@ -19,36 +19,36 @@ function buildSample(overrides = {}) {
       postCentrifugationDelay: 'A',
       longTermStorage: 'C',
     },
-    clinical_data: {
+    clinicalData: {
       orphaCode: 'ORPHA:324',
       cid: 'E75.2',
-      biomarkers_values: {
+      biomarkerValues: {
         'Lyso-Gb3': '4.2',
         'Atividade de Alfa-galactosidase A': '2.1',
       },
     },
-    pharmacology_data: {
-      treatment_status: 'ON_TREATMENT',
-      drug_name: 'Migalastat',
-      atc_code: 'A16AX27',
-      atc_level_1: 'A',
+    pharmacologyData: {
+      treatmentStatus: 'ON_TREATMENT',
+      medicationName: 'Migalastat',
+      atcCode: 'A16AX27',
+      atcClass: 'A',
     },
   };
 
   const merged = {
     ...sample,
     ...overrides,
-    clinical_data: {
-      ...sample.clinical_data,
-      ...(overrides.clinical_data || {}),
+    clinicalData: {
+      ...sample.clinicalData,
+      ...(overrides.clinicalData || {}),
     },
-    pharmacology_data: {
-      ...sample.pharmacology_data,
-      ...(overrides.pharmacology_data || {}),
+    pharmacologyData: {
+      ...sample.pharmacologyData,
+      ...(overrides.pharmacologyData || {}),
     },
   };
 
-  merged.merkle_root = generateSampleHash(merged);
+  merged.merkleRoot = generateSampleHash(merged);
   return merged;
 }
 
@@ -84,7 +84,7 @@ describe('SampleGraphValidator', () => {
             recommended: [],
           },
           pharmacology: {
-            required: ['treatment_status'],
+            required: ['treatmentStatus'],
             recommended: [],
             treatmentStatuses: ['NAIVE', 'TREATED', 'ON_TREATMENT', 'WASHOUT'],
           },
@@ -141,12 +141,12 @@ describe('SampleGraphValidator', () => {
     const validSample = buildSample();
 
     samplesCollection.findOne.mockResolvedValue(validSample);
-    consentsCollection.findOne.mockResolvedValue({ status: 'ACTIVE', patientID: '12345678' });
+    consentsCollection.findOne.mockResolvedValue({ status: 'ACTIVE', participantId: '12345678' });
 
     const successReport = await validator.validateSampleCompliance(validSample._id);
     expect(successReport.graphPath.ethics.valid).toBe(true);
 
-    consentsCollection.findOne.mockResolvedValue({ status: 'REVOKED', patientID: '12345678' });
+    consentsCollection.findOne.mockResolvedValue({ status: 'REVOKED', participantId: '12345678' });
     const failReport = await validator.validateSampleCompliance(validSample._id);
     expect(failReport.graphPath.ethics.valid).toBe(false);
   });
@@ -154,7 +154,7 @@ describe('SampleGraphValidator', () => {
   it('valida o nó de Qualidade com sucesso e falha', async () => {
     const goodSample = buildSample({ quality_category: 'B' });
     samplesCollection.findOne.mockResolvedValue(goodSample);
-    consentsCollection.findOne.mockResolvedValue({ status: 'ACTIVE', patientID: '12345678' });
+    consentsCollection.findOne.mockResolvedValue({ status: 'ACTIVE', participantId: '12345678' });
 
     const successReport = await validator.validateSampleCompliance(goodSample._id);
     expect(successReport.graphPath.quality.valid).toBe(true);
@@ -180,16 +180,16 @@ describe('SampleGraphValidator', () => {
   it('valida o nó de Clínica com sucesso e falha em Fabry sem biomarcadores', async () => {
     const completeSample = buildSample();
     samplesCollection.findOne.mockResolvedValue(completeSample);
-    consentsCollection.findOne.mockResolvedValue({ status: 'ACTIVE', patientID: '12345678' });
+    consentsCollection.findOne.mockResolvedValue({ status: 'ACTIVE', participantId: '12345678' });
 
     const successReport = await validator.validateSampleCompliance(completeSample._id);
     expect(successReport.graphPath.clinical.valid).toBe(true);
 
     const incompleteFabrySample = buildSample({
-      clinical_data: {
+      clinicalData: {
         orphaCode: 'ORPHA:324',
         cid: 'E75.2',
-        biomarkers_values: {
+        biomarkerValues: {
           'Lyso-Gb3': 'n/a',
           'Atividade de Alfa-galactosidase A': '2.1',
         },
@@ -205,17 +205,17 @@ describe('SampleGraphValidator', () => {
   it('valida o nó de Integridade com sucesso e falha por tampering', async () => {
     const validSample = buildSample();
     samplesCollection.findOne.mockResolvedValue(validSample);
-    consentsCollection.findOne.mockResolvedValue({ status: 'ACTIVE', patientID: '12345678' });
+    consentsCollection.findOne.mockResolvedValue({ status: 'ACTIVE', participantId: '12345678' });
 
     const successReport = await validator.validateSampleCompliance(validSample._id);
     expect(successReport.graphPath.integrity.valid).toBe(true);
 
     const tampered = {
       ...validSample,
-      clinical_data: {
-        ...validSample.clinical_data,
-        biomarkers_values: {
-          ...validSample.clinical_data.biomarkers_values,
+      clinicalData: {
+        ...validSample.clinicalData,
+        biomarkerValues: {
+          ...validSample.clinicalData.biomarkerValues,
           'Lyso-Gb3': '99.9',
         },
       },
@@ -223,9 +223,6 @@ describe('SampleGraphValidator', () => {
     samplesCollection.findOne.mockResolvedValue(tampered);
 
     const failReport = await validator.validateSampleCompliance(tampered._id);
-    // #221: MerkleService.generateSampleHash reads camelCase clinicalData/pharmacologyData,
-    // sample docs use snake_case clinical_data/pharmacology_data, so tampering here is
-    // never reflected in the recomputed hash and this currently fails.
     expect(failReport.graphPath.integrity.valid).toBe(false);
     expect(failReport.suggestedStatus).toBe('BLOCKED');
   });

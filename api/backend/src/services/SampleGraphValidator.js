@@ -50,8 +50,8 @@ function stableObject(value) {
 
 function hashSampleIntegrityPayload(sample = {}) {
   const canonical = JSON.stringify(stableObject({
-    clinical_data: sample?.clinical_data && typeof sample.clinical_data === 'object' ? sample.clinical_data : {},
-    pharmacology_data: sample?.pharmacology_data && typeof sample.pharmacology_data === 'object' ? sample.pharmacology_data : {},
+    clinicalData: sample?.clinicalData && typeof sample.clinicalData === 'object' ? sample.clinicalData : {},
+    pharmacologyData: sample?.pharmacologyData && typeof sample.pharmacologyData === 'object' ? sample.pharmacologyData : {},
   }));
   return crypto.createHash('sha256').update(canonical).digest('hex');
 }
@@ -85,8 +85,8 @@ function defaultRequirements() {
       recommended: [],
     },
     pharmacology: {
-      required: ['treatment_status'],
-      recommended: ['medication_name', 'last_dose_date'],
+      required: ['treatmentStatus'],
+      recommended: ['medicationName', 'lastDoseDate'],
       treatmentStatuses: ['NAIVE', 'TREATED', 'WASHOUT'],
     },
   };
@@ -146,17 +146,16 @@ class SampleGraphValidator {
   }
 
   async _validateEthics(sample, consentsCollection) {
-    const tcleId = normalizeString(sample?.tcle_id || sample?.consentTemplateId);
-    const patientID = normalizeString(sample?.patientID || sample?.patientId);
+    const tcleId = normalizeString(sample?.consentTemplateId);
+    const participantId = normalizeString(sample?.participantId);
 
-    if (!tcleId || !patientID) {
+    if (!tcleId || !participantId) {
       return { valid: false, reason: 'Consentimento Inválido ou Revogado' };
     }
 
     const consentQuery = {
       $or: [
         { _id: ObjectId.isValid(tcleId) ? new ObjectId(tcleId) : null },
-        { templateId: tcleId },
         { consentTemplateId: tcleId },
       ].filter(Boolean),
     };
@@ -168,9 +167,9 @@ class SampleGraphValidator {
     }
 
     const consentStatus = normalizeString(consent.status).toUpperCase();
-    const consentPatient = normalizeString(consent.patientId || consent.patientID);
+    const consentParticipant = normalizeString(consent.participantId);
 
-    if (consentStatus !== 'ACTIVE' || (consentPatient && consentPatient !== patientID)) {
+    if (consentStatus !== 'ACTIVE' || (consentParticipant && consentParticipant !== participantId)) {
       return { valid: false, reason: 'Consentimento Inválido ou Revogado' };
     }
 
@@ -185,11 +184,11 @@ class SampleGraphValidator {
   }
 
   _validateClinical(sample, requirements = defaultRequirements(), disease = null) {
-    const clinicalData = sample?.clinical_data && typeof sample.clinical_data === 'object'
-      ? sample.clinical_data
+    const clinicalData = sample?.clinicalData && typeof sample.clinicalData === 'object'
+      ? sample.clinicalData
       : {};
-    const pharmacologyData = sample?.pharmacology_data && typeof sample.pharmacology_data === 'object'
-      ? sample.pharmacology_data
+    const pharmacologyData = sample?.pharmacologyData && typeof sample.pharmacologyData === 'object'
+      ? sample.pharmacologyData
       : {};
 
     const orphaCode = normalizeString(clinicalData.orphaCode);
@@ -200,8 +199,8 @@ class SampleGraphValidator {
     }
 
     const biomarkerValues = normalizeBiomarkerMap(
-      clinicalData.biomarkers_values && typeof clinicalData.biomarkers_values === 'object'
-        ? clinicalData.biomarkers_values
+      clinicalData.biomarkerValues && typeof clinicalData.biomarkerValues === 'object'
+        ? clinicalData.biomarkerValues
         : {}
     );
 
@@ -218,9 +217,7 @@ class SampleGraphValidator {
       }
     }
 
-    const treatmentStatus = normalizeString(
-      pharmacologyData.treatment_status || pharmacologyData.treatmentStatus
-    ).toUpperCase();
+    const treatmentStatus = normalizeString(pharmacologyData.treatmentStatus).toUpperCase();
 
     if (requirements?.miabis?.requireTreatmentStatus && !treatmentStatus) {
       return { valid: false, reason: 'Dataset Clínico Incompleto: treatment_status (MIABIS) obrigatório' };
@@ -254,13 +251,11 @@ class SampleGraphValidator {
   }
 
   async _validatePharmacology(sample, requirements = defaultRequirements(), disease = null) {
-    const pharmacologyData = sample?.pharmacology_data && typeof sample.pharmacology_data === 'object'
-      ? sample.pharmacology_data
+    const pharmacologyData = sample?.pharmacologyData && typeof sample.pharmacologyData === 'object'
+      ? sample.pharmacologyData
       : {};
 
-    const treatmentStatus = normalizeString(
-      pharmacologyData.treatment_status || pharmacologyData.treatmentStatus
-    ).toUpperCase();
+    const treatmentStatus = normalizeString(pharmacologyData.treatmentStatus).toUpperCase();
 
     if (requirements?.miabis?.requireTreatmentStatus && !treatmentStatus) {
       return {
@@ -270,7 +265,7 @@ class SampleGraphValidator {
     }
 
     if (treatmentStatus === 'TREATED' || treatmentStatus === 'ON_TREATMENT') {
-      const atcCode = normalizeString(pharmacologyData.atc_code || pharmacologyData.medication_code).replace(/^ATC:/i, '').toUpperCase();
+      const atcCode = normalizeString(pharmacologyData.atcCode).replace(/^ATC:/i, '').toUpperCase();
       if (!atcCode) {
         return {
           valid: false,
@@ -285,7 +280,7 @@ class SampleGraphValidator {
         : [];
 
       if (diseaseDrugClasses.length > 0 && medication) {
-        const medicationDrugClass = normalizeString(medication.drug_class || pharmacologyData.drug_class).toLowerCase();
+        const medicationDrugClass = normalizeString(medication.drug_class || pharmacologyData.atcClass).toLowerCase();
         if (medicationDrugClass && !diseaseDrugClasses.includes(medicationDrugClass)) {
           return {
             valid: false,
@@ -302,7 +297,7 @@ class SampleGraphValidator {
   }
 
   _validateIntegrity(sample) {
-    const persistedRoot = normalizeString(sample?.merkle_root);
+    const persistedRoot = normalizeString(sample?.merkleRoot);
     if (!persistedRoot) {
       return { valid: false, reason: 'Violação de Integridade Criptográfica (Tampering)' };
     }
@@ -361,7 +356,7 @@ class SampleGraphValidator {
 
     const consentsCollection = await getCollection(this.db, 'consents');
 
-    const diseaseContext = await this._loadDiseaseRequirements(sample?.clinical_data?.orphaCode);
+    const diseaseContext = await this._loadDiseaseRequirements(sample?.clinicalData?.orphaCode);
 
     const graphPath = {
       ethics: await this._validateEthics(sample, consentsCollection),
@@ -376,7 +371,7 @@ class SampleGraphValidator {
 
     const report = {
       sampleId: String(sample._id || sample.sampleID || sampleId),
-      orphaCode: normalizeOrpha(sample?.clinical_data?.orphaCode),
+      orphaCode: normalizeOrpha(sample?.clinicalData?.orphaCode),
       disease: diseaseContext.disease
         ? {
           orpha_code: diseaseContext.disease.orpha_code,
