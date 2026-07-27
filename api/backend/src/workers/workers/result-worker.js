@@ -106,9 +106,7 @@ class ResultWorker {
                 }
                 entryHandled = true;
 
-                if (errorMessage) {
-                  results.errors.push({ error: errorMessage });
-                }
+                results.errors.push({ error: errorMessage });
 
                 try {
                   if (!writeStream.destroyed) {
