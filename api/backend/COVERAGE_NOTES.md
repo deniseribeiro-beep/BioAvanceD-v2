@@ -100,7 +100,7 @@ this note: `AllocateSampleUseCase.js`, `RegisterSample.js`,
 (remaining gap tracked as issue #271), `backup.routes.js`,
 `NotificationService.js` (remaining branch gap tracked as issue #258),
 `collections.js`, `ReleaseSampleUseCase.js`, `import-lgpd.service.js`
-(remaining gap is dead code, issue #270), `auth.service.js`,
+(remaining gap was dead code, simplified per issue #270), `auth.service.js`,
 `security.routes.js`, `rbac.js`, `intakeWizard.js` (partial),
 `dictionary.js`, `sample-file.controller.js`, `terminologies.routes.js`,
 `batch-validation-engine.service.js`, `terminologySync.service.js`,
