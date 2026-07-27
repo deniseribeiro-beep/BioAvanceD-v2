@@ -231,6 +231,10 @@ describe('UserSecurityService.extractOS', () => {
   it('detects Android when Linux is not present in the user-agent', () => {
     expect(userSecurityService.extractOS('Mozilla/5.0 (Android 11; SM-G991B)')).toBe('Android');
   });
+
+  it('detects Android for a real-world Android user-agent (contains "Linux")', () => {
+    expect(userSecurityService.extractOS('Mozilla/5.0 (Linux; Android 11; SM-G991B)')).toBe('Android');
+  });
 });
 
 describe('UserSecurityService.getLocationFromIP', () => {
