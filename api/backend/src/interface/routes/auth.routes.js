@@ -83,12 +83,6 @@ router.post('/two-factor/disable', authenticate, (req, res) => {
 router.get('/two-factor/status', authenticate, async (req, res) => {
   try {
     const db = req.app.locals.db;
-    if (!db) {
-      return res.status(503).json({
-        success: false,
-        error: (req.t && req.t('errors.databaseUnavailable')) || 'Banco de dados não disponível'
-      });
-    }
 
     const usersCollection = db.collection('users');
     const { ObjectId } = require('mongodb');
@@ -242,12 +236,6 @@ router.post('/logout', authenticate, async (req, res) => {
 router.get('/verify', authenticate, async (req, res) => {
   try {
     const db = req.app.locals.db;
-    if (!db) {
-      return res.status(503).json({
-        success: false,
-        error: (req.t && req.t('errors.databaseUnavailable')) || 'Banco de dados não disponível'
-      });
-    }
 
     // Busca dados completos do usuário
     const usersCollection = db.collection('users');
@@ -314,12 +302,6 @@ router.get('/verify', authenticate, async (req, res) => {
 router.get('/sessions', authenticate, async (req, res) => {
   try {
     const db = req.app.locals.db;
-    if (!db) {
-      return res.status(503).json({
-        success: false,
-        error: (req.t && req.t('errors.databaseUnavailable')) || 'Banco de dados não disponível'
-      });
-    }
 
     const token = req.headers.authorization?.substring(7);
     const sessionService = require('../../services/session.service');
@@ -343,12 +325,6 @@ router.get('/sessions', authenticate, async (req, res) => {
 router.delete('/sessions/all-others', authenticate, async (req, res) => {
   try {
     const db = req.app.locals.db;
-    if (!db) {
-      return res.status(503).json({
-        success: false,
-        error: (req.t && req.t('errors.databaseUnavailable')) || 'Banco de dados não disponível'
-      });
-    }
 
     const token = req.headers.authorization?.substring(7);
     const sessionService = require('../../services/session.service');
@@ -372,12 +348,6 @@ router.delete('/sessions/all-others', authenticate, async (req, res) => {
 router.delete('/sessions/:sessionId', authenticate, async (req, res) => {
   try {
     const db = req.app.locals.db;
-    if (!db) {
-      return res.status(503).json({
-        success: false,
-        error: (req.t && req.t('errors.databaseUnavailable')) || 'Banco de dados não disponível'
-      });
-    }
 
     const { sessionId } = req.params;
     const sessionService = require('../../services/session.service');
