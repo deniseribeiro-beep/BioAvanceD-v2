@@ -84,43 +84,6 @@ calls are destructured at module-require time so can't be spied on).
 `neo4jCanonicalProjection.service.js`, `result-worker.js`, and
 `patient.service.js` all closed (see MID-LOW/MID-HIGH sections below).
 
-**Regenerated 2026-07-24 (session 14)** from a fresh full-suite
-`coverage-summary.json`, excluded/already-documented files above
-filtered out — top real candidates (gap = uncovered branches, sorted
-worst branch% first):
-
-```
-gap  branch% lines%  file
- 17  64.58%  91.5%   src/core/use-cases/AllocateSampleUseCase.js   -- CLOSED prior session
- 25  70.23%  91.5%   src/core/use-cases/RegisterSample.js          -- CLOSED prior session
- 42  72.90%  89.9%   src/interface/routes/auth.routes.js          -- checked, not a real gap (see below)
- 21  80.37% 100.0%   src/controllers/consent.controller.js         -- phantom-branch pattern, not a real gap
-```
-
-Files fully closed (100% or accepted-remaining-gap, no longer bucket
-candidates) — see each file's own git log / filed issues for detail, not
-this note: `AllocateSampleUseCase.js`, `RegisterSample.js`,
-`auth.routes.js` (checked, async-statement-0-hit artifact, issue
-`dyeallpies-skills-pack#111`), `consent.controller.js`, `orphanet.js`
-(98.51%/98.08% isolated; real gaps from #278 closed, residual is
-coverage-tool nondeterminism, same class as #277/#275), `backup.routes.js`,
-`NotificationService.js` (remaining branch gap, issue #258 closed
-2026-07-27 — accepted gap, same class as `mqtt-telemetry.service.js`:
-`getNotificationQueue()`'s success branch needs a real Redis connection
-`initRedis()` never returns in the test env, and
-`sendCriticalTempAlertFromInflux()`'s Influx calls are destructured at
-module-require time so `vi.spyOn` on the module can't intercept them),
-`collections.js`, `ReleaseSampleUseCase.js`, `import-lgpd.service.js`
-(remaining gap was dead code, simplified per issue #270), `auth.service.js`,
-`security.routes.js`, `rbac.js`, `intakeWizard.js` (partial),
-`dictionary.js`, `sample-file.controller.js`, `terminologies.routes.js`,
-`batch-validation-engine.service.js`, `terminologySync.service.js`,
-`equipment-sensor-quarantine.service.js`, `user-security.service.js`,
-`storageService.js`, `hl7.service.js`, `auth.controller.js`,
-`audit.controller.js` (remaining dead code, issue #267),
-`paciente.controller.js`, `reports.routes.js` (remaining gap: issues
-#67/#76/#236/#246/#247/#248 `if (!db)` pre-empted-guard pattern).
-
 **Known limitation of this reconcile method — see issue #242**: for
 files whose tests span both a Vitest-isolated unit test and an
 integration test that loads the real `app.js`, the merged full-suite
@@ -166,31 +129,18 @@ A third pattern (issues #277/#275, root-caused 2026-07-27): repeated,
 identical multi-file `--coverage.include` invocations (no code changes
 between runs) can produce different stmt/branch numbers run to run —
 confirmed bimodal (not random drift) on the 9-file `patient.service.js`
-combo from #275, flipping between exactly two outcomes (391/462 stmts,
-279/401 branches vs. 399/462 stmts, 311/401 branches) across 5 back-to-
-back runs with this repo's actual config (`pool: 'forks'`,
-`isolate: true`, `fileParallelism: false`). Two candidate fixes were
-tried and ruled out/confirmed:
-- `node --no-flush-bytecode` (targets V8's GC bytecode-flush-under-
-  memory-pressure theory) — **did not fix it**; same bimodal split
-  persisted across 5 runs with the flag set.
-- `--no-isolate` — **did eliminate the drift** (391/462 stable across 4
-  runs) by removing per-file isolation entirely, but this is not a
-  viable fix: it collapses each test file into a shared module registry,
-  and with it in effect `patient.service.encryption-clinicalunit.gaps.unit.test.js`
-  fails (`expected "vi.fn()" to be called 4 times, but got 0 times`) —
-  a real test relying on fresh module/mock state per file. Isolation is
-  load-bearing for correctness, so this can't be turned off repo-wide to
-  chase stable coverage numbers.
-
-Conclusion: the drift is `@vitest/coverage-v8`'s cross-process coverage
-merge (istanbul-style merge of separate V8 script-coverage snapshots,
-one per forked/isolated test file) disagreeing with itself between
-runs, not a race fixable by config in this repo — and not a real
-regression, since single-file isolated runs (see `#242`) are stable.
-Same practical rule as the other two patterns: trust the standalone
-per-file number over a multi-file combined run's per-line/per-function
-detail; don't chase this drift with more tests or config changes.
+combo from #275 across 5 back-to-back runs with this repo's actual
+config (`pool: 'forks'`, `isolate: true`, `fileParallelism: false`).
+Root cause: `@vitest/coverage-v8`'s cross-process coverage merge
+(istanbul-style merge of separate V8 script-coverage snapshots, one per
+forked/isolated test file) disagreeing with itself between runs — not a
+race fixable by config (`--no-isolate` eliminates it but breaks a real
+test relying on fresh module state per file, so isolation stays on),
+and not a real regression, since single-file isolated runs (see `#242`)
+are stable. Same practical rule as the other two patterns: trust the
+standalone per-file number over a multi-file combined run's per-line/
+per-function detail; don't chase this drift with more tests or config
+changes.
 
 ## How to use this when picking a slice
 
@@ -228,12 +178,6 @@ Low priority (models/interfaces/one-off scripts — thin or non-request-path):
 - `src/reference-data/essential/index.js`
 - `src/scripts/migrate-rcs-governance-indexes.js`
 
-`src/scripts/testEnvironment.js` was 0%. New isolated coverage
-(`--coverage.include`): 93.8%/81.48%/84.61%/94.44% stmts/branch/funcs/lines.
-
-`src/scripts/seedDiseaseValidationRules.js` was 0%. New isolated coverage
-(`--coverage.include`): 100%/97.05%/100%/100% stmts/branch/funcs/lines.
-
 ## LOW coverage (1-49% lines) — 0 files as of the 2026-07-22 reconcile
 
 Empty as of last reconcile; all prior entries (the #146 audit/rename-drift
@@ -241,14 +185,9 @@ cluster) resolved to GOOD.
 
 ## MID-LOW coverage (50-69% lines) — 0 files as of this session
 
-Empty. `audit-v2.service.js` and `neo4jCanonicalProjection.service.js`
-both closed this session: 100/100/100/100 stmts/branch/funcs/lines
-isolated each (new `tests/unit/audit-v2.service.test.js` and
-`tests/unit/neo4jCanonicalProjection.service.test.js`; neither had a
-prior test file). `daily-merkle.job.js` closed a prior session: isolated
-95.65%/78.26%/100%/95.38% stmts/branch/funcs/lines (was 60.00/52.17).
-Remaining 3 uncovered lines (86, 112, 122) are defensive/unreachable
-paths — see issue #272.
+Empty. Prior occupants (`audit-v2.service.js`,
+`neo4jCanonicalProjection.service.js`, `daily-merkle.job.js`) closed in
+earlier sessions — see git log / issue #272 for detail.
 
 ## MID-HIGH coverage (70-84% lines) — 7 files as of the 2026-07-24 reconcile
 
@@ -262,76 +201,6 @@ src/services/SampleGraphValidator.js             77.69 / 66.66   (issue #222 —
 src/workers/neo4jProjection.worker.js            79.62 / 73.33   (CLI entry block not coverable in-process, accepted gap)
 src/interface/routes/equipment.routes.js         81.59 / 81.01   (phantom-statement pattern, not a real gap — see reconcile note above)
 ```
-
-`patient.service.js` isolated (9 test files, `--coverage.include`): was
-81.16%/65.83% stmts/branch, now **86.36%/77.55%** (issue #275 filed for
-an unrelated per-function 0-hit merge artifact in that same run — trust
-this top-line %, not the per-function breakdown).
-
-`consent.service.js` isolated (`tests/unit/consent.service.unit.test.js`,
-`--coverage.include`): was 97.51%/81.58% stmts/branch, now
-**98.22%/90.79%**. Remaining branch gap is mostly the documented
-implicit-else guard-clause pattern (`if (!x) throw/return` with no
-`else` — see the recurring dead-code pattern note below).
-
-`User.js` checked and closed: 78.94% merged branches was drift (issue
-#242 class); isolated run was 97.89%, gap was two real untested cases
-(weak-password catch branch, phone/institution-undefined branch) — both
-now covered, isolates to 100%/100%/100%/100%.
-
-`auditRoot.service.js` isolated (`tests/unit/auditRoot.service.test.js`,
-`--coverage.include`): was 91.12%/75.96% stmts/branch, now
-**99.19%/100%**.
-
-`mongo.js` isolated (`database-mongo.test.js` + `mongodb-connection.test.js`,
-`--coverage.include`): was 88.14%/80.3% stmts/branch, now **96.9%/88.63%**.
-Remaining gap is unreachable defensive guard clauses (module-internal
-helpers only ever called with already-validated args from the public
-`connectDB`/`connectNewDB` surface) — same dead-guard-clause pattern
-noted below, not chased further.
-
-`result.routes.js` isolated (`result.api.test.js` + `result.routes.api.test.js`,
-`--coverage.include`): was 94.81%/78.4% stmts/branch, now **96.69%/82.95%**.
-Remaining gap (fileType-null re-check, upload's own `validation.isValid`
-guard) is unreachable — both are redundant re-checks of conditions
-already guaranteed true by `fileFilter`/prior validation on the same
-route — same dead-guard-clause pattern noted below, not chased further.
-
-`NotificationService.js` re-verified (`NotificationService.test.js` +
-`tests/unit/services/NotificationService.test.js`, `--coverage.include`):
-isolated matches merged exactly at 76.36%/220 branches, no drift.
-Remaining gap is the phantom-branch pattern (implicit-else guard clauses)
-plus the two infra-mocking paths already tracked in issue #258 — no new
-tests addable, closed as-is.
-
-`quality-domain.service.js` isolated (`quality-domain.service.unit.test.js`,
-`--coverage.include`): was 91.3%/73.68% stmts/branch, now
-**100%/100%/100%/100%**.
-
-`storage-query.controller.js` isolated (`storage-query.controller.test.js`,
-`--coverage.include`): was 100%/80.55% stmts/branch, now
-**100%/100%/100%/100%**.
-
-`orphacodeApiClient.js` was 0% (issue #163 was about the routes layer,
-not this client — not a real blocker). New
-`tests/unit/orphacodeApiClient.test.js` isolates to
-**98.95%/97.36%/95%/100%** stmts/branch/funcs/lines.
-
-`src/scripts/migrateUserAnonIds.js` was 0%. New
-`tests/unit/migrateUserAnonIds.test.js` isolates to
-**88.09%/92.85%/50%/87.8%** stmts/branch/funcs/lines; remaining gap is
-the `require.main === module` self-executing CLI entry block, not
-reachable when required as a module.
-
-`BiomarkerObservation.js` (13-file isolated baseline confirmed 87.27%/
-84.37% stmts/branch, no drift from the 84.37%/88.46% merged number). New
-`tests/unit/BiomarkerObservation.model.test.js` covers the previously-gap
-`validate()` branches (missing participantId, negative value, invalid
-status, invalid eventType — lines 41/53/62-64/71), verified standalone.
-Re-running the 13-file combo afterward gives nondeterministic lower
-numbers (61-84% branch across repeated runs, no code changed between
-runs) — a coverage-v8 multi-worker merge artifact (`#242`/`#275` class),
-not a real regression; trust the standalone/isolated per-file number.
 
 Note: `sample.service.js`, `import.service.js`, `audit.controller.js`,
 `audit-canonicalization.service.js`, `equipment.routes.js`, `User.js`
@@ -352,5 +221,7 @@ don't just work around it. If the reconcile cadence above stops making
 sense (too frequent/rare), update it and say why in the session's
 wrap-up. Detailed per-slice writeups belong in the slice's own commit
 message, never back into this file — this file was compacted from 895
-to ~200 lines on 2026-07-24 after narrative crept back in; keep it that
-way.
+to ~200 lines on 2026-07-24, crept back up to 356 by 2026-07-27 (mostly
+resolved-slice narrative for files that had already moved to GOOD), and
+was re-compacted to ~225 the same day. Keep it that way — this is a
+recurring pattern, not a one-off.
