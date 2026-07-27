@@ -10,6 +10,7 @@ work-issue
 resolve-issue
 fix-bugs
 test-loop
+build-loop
 ship-integration-branch
 docker-workflow
 parallel-test-agents
