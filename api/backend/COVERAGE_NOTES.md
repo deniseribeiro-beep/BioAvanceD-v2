@@ -97,7 +97,8 @@ candidates) — see each file's own git log / filed issues for detail, not
 this note: `AllocateSampleUseCase.js`, `RegisterSample.js`,
 `auth.routes.js` (checked, async-statement-0-hit artifact, issue
 `dyeallpies-skills-pack#111`), `consent.controller.js`, `orphanet.js`
-(remaining gap tracked as issue #271), `backup.routes.js`,
+(98.51%/98.08% isolated; real gaps from #278 closed, residual is
+coverage-tool nondeterminism, same class as #277/#275), `backup.routes.js`,
 `NotificationService.js` (remaining branch gap tracked as issue #258),
 `collections.js`, `ReleaseSampleUseCase.js`, `import-lgpd.service.js`
 (remaining gap was dead code, simplified per issue #270), `auth.service.js`,

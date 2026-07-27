@@ -504,6 +504,103 @@ describe('orphanet.routes', () => {
     expect(response.body[0].orphaCode).toBe('ORPHA:324');
   });
 
+  it('trata Source/source ausentes em ExternalReference retornando string vazia para CID/OMIM via pickReference', async () => {
+    loadRouteWithEnv({ ALLOW_EXTERNAL_TERMINOLOGY_SYNC: 'true', ORPHADATA_BASE_URL: 'https://orphadata.test' });
+
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        results: [{
+          ORPHAcode: '324',
+          'Preferred term': 'Fabry disease',
+          ExternalReference: [{ Reference: 'no-source-here' }],
+        }],
+      }),
+    });
+
+    const db = { collection: vi.fn(() => ({ find: vi.fn(() => cursor([])) })) };
+    const app = buildApp(db);
+    const response = await request(app).get('/api/orphanet/search?q=Fabry');
+
+    expect(response.status).toBe(200);
+    expect(response.body[0].Codigos_CID10).toBe('');
+    expect(response.body[0].OMIM).toBe('');
+  });
+
+  it('usa payload.error quando a resposta externa nao-ok nao possui message', async () => {
+    loadRouteWithEnv({ ALLOW_EXTERNAL_TERMINOLOGY_SYNC: 'true', ORPHADATA_BASE_URL: 'https://orphadata.test' });
+    const warnSpy = vi.spyOn(require('../../src/utils/logger'), 'warn').mockImplementation(() => {});
+
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 502,
+      json: async () => ({ error: 'bad gateway upstream' }),
+    });
+
+    const db = { collection: vi.fn(() => ({ find: vi.fn(() => cursor([])) })) };
+    const app = buildApp(db);
+    const response = await request(app).get('/api/orphanet/search?q=Fabry');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual([]);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('bad gateway upstream'));
+    warnSpy.mockRestore();
+  });
+
+  it('usa o fallback HTTP <status> quando a resposta externa nao-ok nao possui message nem error', async () => {
+    loadRouteWithEnv({ ALLOW_EXTERNAL_TERMINOLOGY_SYNC: 'true', ORPHADATA_BASE_URL: 'https://orphadata.test' });
+    const warnSpy = vi.spyOn(require('../../src/utils/logger'), 'warn').mockImplementation(() => {});
+
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 503,
+      json: async () => ({}),
+    });
+
+    const db = { collection: vi.fn(() => ({ find: vi.fn(() => cursor([])) })) };
+    const app = buildApp(db);
+    const response = await request(app).get('/api/orphanet/search?q=Fabry');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual([]);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('HTTP 503'));
+    warnSpy.mockRestore();
+  });
+
+  it('trata payload externo nulo/nao-objeto retornando lista vazia em extractOrphadataResults', async () => {
+    loadRouteWithEnv({ ALLOW_EXTERNAL_TERMINOLOGY_SYNC: 'true', ORPHADATA_BASE_URL: 'https://orphadata.test' });
+
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => null,
+    });
+
+    const db = { collection: vi.fn(() => ({ find: vi.fn(() => cursor([])) })) };
+    const app = buildApp(db);
+    const response = await request(app).get('/api/orphanet/search?q=Fabry');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual([]);
+  });
+
+  it('nao consulta a API externa quando o sync esta desabilitado, mesmo com ORPHADATA_BASE_URL configurada', async () => {
+    loadRouteWithEnv({ ALLOW_EXTERNAL_TERMINOLOGY_SYNC: 'false', ORPHADATA_BASE_URL: 'https://orphadata.test' });
+
+    const fetchSpy = vi.fn();
+    global.fetch = fetchSpy;
+
+    const db = {
+      collection: vi.fn(() => ({ find: vi.fn(() => cursor([])) })),
+    };
+
+    const app = buildApp(db);
+    const response = await request(app).get('/api/orphanet/search?q=Fabry');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual([]);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it('retorna 500 quando a busca local falha inicialmente e o fallback local tambem falha', async () => {
     loadRouteWithEnv({ ALLOW_EXTERNAL_TERMINOLOGY_SYNC: 'false' });
 
