@@ -45,11 +45,9 @@ and clean as of this writing.
    coverage per `COVERAGE_NOTES.md`'s ZERO-coverage list) that are
    **not** merged into `feature/docker-e2e-backend-integration` or
    anywhere else — confirmed via `merge-base --is-ancestor` returning
-   `NO` both ways. This is unintegrated work, not clutter. **Flagging
-   for Dennis**: this branch's work should probably get folded into the
-   main line (PR or cherry-pick) rather than left to rot next to the
-   other now-deleted branches — nobody flagged it as abandoned, it just
-   never got merged.
+   `NO` both ways. This is unintegrated work, not clutter — filed as
+   issue #285 (searched first, no duplicate) rather than left as a
+   bare note here.
 5. **Left `worktree-agent-a8ad1494700a4a20e` alone** — authored by
    Denise, not DieAllPies, so out of scope for "stale branches by us";
    also merged already, so not urgent either way.
