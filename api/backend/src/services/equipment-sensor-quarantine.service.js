@@ -42,14 +42,6 @@ function buildColdChainIncidentReason(incident = {}) {
   return `Quarentena automática por incidente de cadeia fria (${sensorKey})${temperature}`;
 }
 
-function toObjectIdIfValid(value) {
-  const raw = normalizeString(value);
-  if (raw && ObjectId.isValid(raw)) {
-    return new ObjectId(raw);
-  }
-  return value;
-}
-
 function collectEquipmentIdentifiers(equipmentContext = {}) {
   const identifiers = new Set();
 
