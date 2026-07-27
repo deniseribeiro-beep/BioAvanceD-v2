@@ -383,25 +383,15 @@ class ImportLGPDService {
 
       // Campos obrigatórios para pacientes (sem participantId, pois será gerado)
       const requiredFields = ['patientName', 'birthDate', 'sex', 'email'];
-      
-      // Valida headers - verifica se há dados válidos
-      if (rows.length === 0) {
-        throw new Error('Arquivo está vazio ou não contém dados válidos');
-      }
-      
+
       // Pega headers da primeira linha válida
       const firstRow = rows.find(r => r && Object.keys(r).length > 0);
       if (!firstRow) {
         throw new Error('Arquivo não contém dados válidos');
       }
-      
+
       const headers = Object.keys(firstRow);
-      
-      // Verifica se há headers válidos
-      if (headers.length === 0) {
-        throw new Error('Arquivo não contém colunas válidas');
-      }
-      
+
       // Normaliza headers (remove espaços, converte para lowercase para comparação)
       const normalizedHeaders = headers.map(h => h.trim().toLowerCase());
       const normalizedRequired = requiredFields.map(f => f.toLowerCase());
@@ -607,12 +597,8 @@ class ImportLGPDService {
           // Verifica duplicidade antes de inserir
           const duplicate = await patientService.checkDuplicatePatient(db, patientData);
           if (duplicate) {
-            let birthDateStr = 'N/A';
-            if (patientData.birthDate instanceof Date) {
-              birthDateStr = patientData.birthDate.toLocaleDateString('pt-BR');
-            } else if (typeof patientData.birthDate === 'string') {
-              birthDateStr = patientData.birthDate;
-            }
+            // patientData.birthDate is guaranteed a valid Date here (row 529's guard `continue`s otherwise)
+            const birthDateStr = patientData.birthDate.toLocaleDateString('pt-BR');
             results.errors.push({
               row: rowNumber,
               errors: [`Paciente duplicado: já existe um paciente com o nome "${patientData.patientName}" e data de nascimento "${birthDateStr}" cadastrado no sistema`],
@@ -829,25 +815,9 @@ class ImportLGPDService {
                 ...pharmacology,
                 medicationName: String(selectedDrug.generic_name || selectedDrug.name || currentDrugName).trim(),
                 atcCode: String(selectedDrug.atcCode || '').trim().replace(/^ATC:/i, '').toUpperCase(),
-                atcClass: String(selectedDrug.atcClass || '').trim().toUpperCase(),
-                medicationName: String(selectedDrug.generic_name || selectedDrug.name || currentDrugName).trim(),
-                atcCode: String(selectedDrug.atcCode || '').trim().replace(/^ATC:/i, '').toUpperCase(),
                 atcClass: String(selectedDrug.drug_class || selectedDrug.atcClass || '').trim(),
                 drug_class: String(selectedDrug.drug_class || '').trim(),
               };
-            }
-          }
-
-          // Valida quality MIABIS antes da validação geral
-          const { validateQualityMIABIS } = require('../utils/qualityMIABISValidator');
-          if (sampleData.quality !== undefined && sampleData.quality !== null) {
-            if (!validateQualityMIABIS(sampleData.quality)) {
-              results.errors.push({
-                row: rowNumber,
-                errors: [`quality deve estar no conjunto MIABIS canônico: GOOD, COMPROMISED ou UNKNOWN. Valor recebido: ${sampleData.quality}`],
-                data: { participantId: participantIdStr } // Apenas ID, sem dados sensíveis
-              });
-              continue;
             }
           }
 
@@ -863,10 +833,12 @@ class ImportLGPDService {
           }
 
           // Validações específicas - verifica se os valores existem no banco
+          // (SampleModel.validate() above already confirmed sampleType/sampleOrigin/extractionProtocol
+          // are valid per SampleModel.validateXxx, so only the findOne lookup can fail here)
           if (sampleData.sampleType) {
             const sampleTypesCollection = db.collection('sampleTypes');
             const validSampleType = await sampleTypesCollection.findOne({ description: sampleData.sampleType });
-            if (!validSampleType && !SampleModel.validateSampleType(sampleData.sampleType)) {
+            if (!validSampleType) {
               results.errors.push({
                 row: rowNumber,
                 errors: [`Tipo de amostra "${sampleData.sampleType}" não encontrado no banco de dados. Use um valor cadastrado.`],
@@ -875,11 +847,11 @@ class ImportLGPDService {
               continue;
             }
           }
-          
+
           if (sampleData.sampleOrigin) {
             const sampleOriginsCollection = db.collection('sampleOrigins');
             const validOrigin = await sampleOriginsCollection.findOne({ description: sampleData.sampleOrigin });
-            if (!validOrigin && !SampleModel.validateSampleOrigin(sampleData.sampleOrigin)) {
+            if (!validOrigin) {
               results.errors.push({
                 row: rowNumber,
                 errors: [`Origem "${sampleData.sampleOrigin}" não encontrada no banco de dados. Use um valor cadastrado.`],
@@ -888,11 +860,11 @@ class ImportLGPDService {
               continue;
             }
           }
-          
+
           if (sampleData.extractionProtocol) {
             const extractionProtocolsCollection = db.collection('extractionProtocols');
             const validProtocol = await extractionProtocolsCollection.findOne({ description: sampleData.extractionProtocol });
-            if (!validProtocol && !SampleModel.validateExtractionType(sampleData.extractionProtocol)) {
+            if (!validProtocol) {
               results.errors.push({
                 row: rowNumber,
                 errors: [`Protocolo de extração "${sampleData.extractionProtocol}" não encontrado no banco de dados. Use um valor cadastrado.`],
@@ -1297,7 +1269,6 @@ class ImportLGPDService {
       locationID: row.locationID || row.locationId ? parseInt(row.locationID || row.locationId) : null,
       linkedProject: row.linkedProject?.trim() || null,
       lifecycleStatus: row.lifecycleStatus?.trim() || 'AVAILABLE',
-      consentTemplateId: tcleId ? String(tcleId).trim() : null,
       consentTemplateId: tcleId ? String(tcleId).trim() : null,
       merkleRoot: row.merkleRoot ? String(row.merkleRoot).trim() : null,
       sprec,
