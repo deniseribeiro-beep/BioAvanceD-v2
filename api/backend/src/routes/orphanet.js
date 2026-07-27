@@ -156,8 +156,8 @@ function dedupeRecords(records = [], limit = 20) {
         cid10: previous.relacoes?.cid10 || normalized.relacoes?.cid10,
         omim: previous.relacoes?.omim || normalized.relacoes?.omim,
       },
-      synonyms: Array.from(new Set([...(previous.synonyms || []), ...(normalized.synonyms || [])])),
-      aliases: Array.from(new Set([...(previous.aliases || []), ...(normalized.aliases || [])])),
+      synonyms: Array.from(new Set([...previous.synonyms, ...normalized.synonyms])),
+      aliases: Array.from(new Set([...previous.aliases, ...normalized.aliases])),
     });
   }
 
@@ -195,7 +195,7 @@ async function searchLocal(db, search, lang, limit) {
       { 'relacoes.cid10': regex },
       { 'relacoes.omim': regex },
       ...(codeRegex ? [{ ORPHA: codeRegex }, { OMIM: codeRegex }, { 'relacoes.omim': codeRegex }, { 'relacoes.orpha': codeRegex }] : []),
-      ...(numericOrpha ? [{ ORPHA: new RegExp(`(^|[;,|])\\s*${escapeRegex(numericOrpha)}\\s*($|[;,|])`, 'i') }] : []),
+      { ORPHA: new RegExp(`(^|[;,|])\\s*${escapeRegex(numericOrpha)}\\s*($|[;,|])`, 'i') },
     ],
   }).limit(limit).toArray();
 
@@ -224,7 +224,7 @@ async function searchLocal(db, search, lang, limit) {
       { 'relacoes.omim': regex },
       { 'relacoes.orpha': regex },
       ...(codeRegex ? [{ code: codeRegex }, { ORPHA: codeRegex }, { ORPHAcode: codeRegex }, { OMIM: codeRegex }, { 'relacoes.omim': codeRegex }, { 'relacoes.orpha': codeRegex }] : []),
-      ...(numericOrpha ? [{ code: numericOrpha }, { orphaCode: normalizeOrphaCode(numericOrpha) }] : []),
+      { code: numericOrpha }, { orphaCode: normalizeOrphaCode(numericOrpha) },
     ],
   };
   const requestedLang = normalizeText(lang).toLowerCase();
