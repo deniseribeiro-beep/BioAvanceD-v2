@@ -78,7 +78,10 @@ defaults `false` and is never set to `true` by `result-worker.js`; no
 malformed CSV content can trigger it, only mocking the module would),
 `queue.js` / `eConsent.js` (issue #242
 merged-vs-isolated drift class — re-check isolated coverage before
-trusting the merged number for either).
+trusting the merged number for either), `NotificationService.js` (issue
+#258, accepted gap — `getNotificationQueue()`'s success path needs a
+real Redis connection, `sendCriticalTempAlertFromInflux()`'s Influx
+calls are destructured at module-require time so can't be spied on).
 
 **No longer excluded — their blocking issues are now CLOSED:**
 `daily-merkle.job.js`, `audit-v2.service.js`,
@@ -105,7 +108,12 @@ this note: `AllocateSampleUseCase.js`, `RegisterSample.js`,
 `dyeallpies-skills-pack#111`), `consent.controller.js`, `orphanet.js`
 (98.51%/98.08% isolated; real gaps from #278 closed, residual is
 coverage-tool nondeterminism, same class as #277/#275), `backup.routes.js`,
-`NotificationService.js` (remaining branch gap tracked as issue #258),
+`NotificationService.js` (remaining branch gap, issue #258 closed
+2026-07-27 — accepted gap, same class as `mqtt-telemetry.service.js`:
+`getNotificationQueue()`'s success branch needs a real Redis connection
+`initRedis()` never returns in the test env, and
+`sendCriticalTempAlertFromInflux()`'s Influx calls are destructured at
+module-require time so `vi.spyOn` on the module can't intercept them),
 `collections.js`, `ReleaseSampleUseCase.js`, `import-lgpd.service.js`
 (remaining gap was dead code, simplified per issue #270), `auth.service.js`,
 `security.routes.js`, `rbac.js`, `intakeWizard.js` (partial),
