@@ -138,6 +138,29 @@ describe('scripts/seedDiseaseValidationRules', () => {
     }
   });
 
+  it('strips an ORPHA: prefix when the code has leading whitespace (#281)', async () => {
+    const { db, bulkWrite } = mockDb({
+      orphanetRows: [{ code: '  ORPHA:324', name: 'ignored explicit name' }],
+    });
+    const connectDB = vi.fn().mockResolvedValue(db);
+    const closeConnection = vi.fn().mockResolvedValue(undefined);
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    loadScript({ connectDB, closeConnection });
+    await vi.waitFor(() => expect(closeConnection).toHaveBeenCalledTimes(1));
+
+    const operations = bulkWrite.mock.calls[0][0];
+    // The orphanet row must merge with the explicit DISEASE_RULES entry for
+    // '324' rather than seeding a separate 'orpha:324' document.
+    const explicitOverride = operations.filter(
+      (op) => op.updateOne.filter.orpha_code === '324',
+    );
+    expect(explicitOverride).toHaveLength(2);
+    for (const op of explicitOverride) {
+      expect(op.updateOne.update.$set.name).toBe('Doenca lisossomica');
+    }
+  });
+
   it('falls back through row name fields, then ORPHA:<code>, for a non-explicit disease', async () => {
     const { db, bulkWrite } = mockDb({
       orphanetRows: [
