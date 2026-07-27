@@ -45,7 +45,7 @@ async function setCacheValue(cacheKey, ttlSeconds, value) {
 function normalizeCoding(raw = {}, fallbackSystem) {
   const system = String(raw.system || fallbackSystem || '').trim();
   const code = String(raw.code || '').trim();
-  const display = String(raw.display || raw.nome || raw.name || '').trim();
+  const display = String(raw.display || '').trim();
 
   if (!system || !code || !display) {
     return null;
@@ -106,7 +106,6 @@ function normalizeLocalBiomarker(raw) {
 function uniqueCodings(codings = []) {
   const seen = new Set();
   return codings.filter((item) => {
-    if (!item?.code) return false;
     const key = `${item.system}::${item.code}`.toLowerCase();
     if (seen.has(key)) return false;
     seen.add(key);
@@ -115,10 +114,6 @@ function uniqueCodings(codings = []) {
 }
 
 async function buildLocalSemanticSuggestions(db, orphaCode) {
-  if (!db || typeof db.collection !== 'function') {
-    return null;
-  }
-
   const normalizedOrpha = normalizeOrphaCode(orphaCode);
   if (!normalizedOrpha) {
     return null;
