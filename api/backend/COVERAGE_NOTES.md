@@ -42,20 +42,16 @@ stale as slices land and as source files change. Keep it honest:
 
 ## Last full reconcile
 
-**2026-07-24 (session 16)**, snapshot from `feature/docker-e2e-backend-integration`
-(pre-session commit `a636b37a`, full suite, 1 pre-existing failure / 295
-test files passed — see "Known pre-existing failures" in the
-testing-conventions skill).
+**2026-07-27 (session 17)**, snapshot from `feature/docker-e2e-backend-integration`
+(commit `65667eac`, full suite, **all green: 297 test files / 6158 tests
+passed, 0 failures** — the previously-tracked 1 pre-existing failure in
+`sample-graph-validator.service.test.js` did not reproduce this run).
 
-Statements **94.01%** (17515/18630), Branches **88.2%** (14654/16613),
-Functions **92.33%** (2084/2257), Lines **94.29%** (16812/17829).
+Statements **94.24%** (17467/18534), Branches **88.74%** (14584/16434),
+Functions **92.74%** (2084/2247), Lines **94.53%** (16768/17737).
 **Three of four dimensions (statements/functions/lines) remain past the
 90% milestone** (`bioavanced-v2-conventions`); branches is still the
-sole laggard, up from 87.68% at the prior reconcile.
-
-Known pre-existing failure: 1 test in `sample-graph-validator.service.test.js`
-("valida o nó de Integridade com sucesso e falha por tampering") — not
-blocking coverage work.
+sole laggard, up slightly from 88.2% at the prior (2026-07-24) reconcile.
 
 ## Branch-focused priority list toward the 90% branches milestone
 
