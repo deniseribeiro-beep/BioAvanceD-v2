@@ -354,11 +354,6 @@ class ImportService {
                 row: results.total,
                 error: upsertResult.error
               });
-            } else if (upsertResult.action === 'skip') {
-              results.errors.push({
-                row: results.total,
-                error: upsertResult.reason
-              });
             } else {
               results.success++;
             }
@@ -401,11 +396,6 @@ class ImportService {
               results.errors.push({
                 row: results.total,
                 error: upsertResult.error
-              });
-            } else if (upsertResult.action === 'skip') {
-              results.errors.push({
-                row: results.total,
-                error: upsertResult.reason
               });
             } else {
               results.success++;
