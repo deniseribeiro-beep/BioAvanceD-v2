@@ -149,6 +149,23 @@ implicit else as 0 hits even when demonstrably exercised (verified via
 the phantom location) — not fixable by adding tests, only by adding a
 real `else` in source, out of scope for a test-only loop.
 
+A second, distinct phantom-coverage pattern (issue #266, re-verified
+2026-07-27): statements/branches *inside* a `try` block that itself
+contains `await`s can report 0 hits from `@vitest/coverage-v8` even
+when a passing test directly asserts their side effect and a plain
+`node -e` invocation confirms they execute. Confirmed still present
+against current source (`src/controllers/auth.controller.js:122`, the
+`catch` block's `logger.error('Erro no login:', ...)`, and the false
+arm of the `if (!oldMatches)` branch at line 325) with `vitest@4.1.9`
+paired against `@vitest/coverage-v8@4.1.10`; realigning the installed
+`vitest` version to `4.1.10` (matching `coverage-v8`'s wanted range)
+did not change the result, so this isn't the already-invalid
+`npm ls` version-mismatch in this repo's `node_modules` — it reproduces
+either way. Same practical rule as the guard-clause pattern: don't keep
+adding tests chasing these specific lines once manually verified as
+already covered; this is a `@vitest/coverage-v8` instrumentation gap,
+not a real gap, and isn't fixable from this repo.
+
 ## How to use this when picking a slice
 
 1. **Check whether a candidate file is on the excluded list above
