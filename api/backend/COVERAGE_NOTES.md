@@ -227,7 +227,6 @@ Low priority (models/interfaces/one-off scripts — thin or non-request-path):
 - `src/core/application/ports/IStorageTopologyReadRepository.js`
 - `src/reference-data/essential/index.js`
 - `src/scripts/migrate-rcs-governance-indexes.js`
-- `src/scripts/migrateUserAnonIds.js`
 - `src/scripts/seedDiseaseValidationRules.js`
 - `src/scripts/testEnvironment.js`
 
@@ -313,6 +312,12 @@ tests addable, closed as-is.
 not this client — not a real blocker). New
 `tests/unit/orphacodeApiClient.test.js` isolates to
 **98.95%/97.36%/95%/100%** stmts/branch/funcs/lines.
+
+`src/scripts/migrateUserAnonIds.js` was 0%. New
+`tests/unit/migrateUserAnonIds.test.js` isolates to
+**88.09%/92.85%/50%/87.8%** stmts/branch/funcs/lines; remaining gap is
+the `require.main === module` self-executing CLI entry block, not
+reachable when required as a module.
 
 `BiomarkerObservation.js` (13-file isolated baseline confirmed 87.27%/
 84.37% stmts/branch, no drift from the 84.37%/88.46% merged number). New
