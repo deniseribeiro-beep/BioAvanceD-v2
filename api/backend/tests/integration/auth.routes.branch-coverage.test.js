@@ -79,10 +79,6 @@ describe('auth.routes.js branch coverage - req.t translation truthy branches', (
   });
 
   it('GET /two-factor/status uses req.t for not-found and catch-error messages', async () => {
-    // The route's own `if (!db)` guard is unreachable in practice: the
-    // `authenticate` middleware performs the identical check first for any
-    // non-keepalive/non-MFA-setup route and returns its own 503 before this
-    // handler ever runs (see src/infrastructure/middleware/auth.js:64-73).
     vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
     vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
     const authRoutes = loadAuthRoutes();
@@ -144,9 +140,6 @@ describe('auth.routes.js branch coverage - req.t translation truthy branches', (
   });
 
   it('GET /verify uses req.t for not-found (with audit message/module), catch-error, and the accessType->roleName map', async () => {
-    // Same unreachable-guard note as /two-factor/status above: /verify's
-    // own `if (!db)` check can't be reached with a no-db request because
-    // `authenticate` blocks first.
     vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
     vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
     const token = signAccessToken();
