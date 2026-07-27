@@ -102,19 +102,11 @@ class SampleService {
         let validationMessage = 'Dados da amostra inválidos conforme modelo MIABIS/BioAvanceD';
         if (Array.isArray(validation.errors) && validation.errors.length > 0) {
           validationMessage = validation.errors.join(', ');
-        } else if (typeof validation.errors === 'string' && validation.errors.trim()) {
-          validationMessage = validation.errors.trim();
         }
 
         const validationError = new Error(validationMessage);
         validationError.statusCode = 422;
         throw validationError;
-      }
-
-      if (!sampleData.participantId) {
-        const participantIdError = new Error('participantId é obrigatório para cadastrar espécime');
-        participantIdError.statusCode = 400;
-        throw participantIdError;
       }
 
       if (typeof sampleData.participantId !== 'string' || !/^\d{8}$/.test(sampleData.participantId)) {
@@ -128,19 +120,6 @@ class SampleService {
         const notFoundError = new Error(`participantId ${sampleData.participantId} não encontrado. Verifique se o ID está correto.`);
         notFoundError.statusCode = 404;
         throw notFoundError;
-      }
-
-      // RF004 - Validações MIABIS (já validadas no modelo, mas reforça aqui)
-      if (sampleData.sampleType && !SampleModel.validateSampleType(sampleData.sampleType)) {
-        throw new Error('Tipo de amostra inválido conforme MIABIS');
-      }
-
-      if (sampleData.sampleOrigin && !SampleModel.validateSampleOrigin(sampleData.sampleOrigin)) {
-        throw new Error('Origem da amostra inválida conforme MIABIS');
-      }
-
-      if (sampleData.extractionProtocol && !SampleModel.validateExtractionType(sampleData.extractionProtocol)) {
-        throw new Error('Protocolo de extração inválido conforme MIABIS');
       }
 
       // RF004 - Validação de quantidade
