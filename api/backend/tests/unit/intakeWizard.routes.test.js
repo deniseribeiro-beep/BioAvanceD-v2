@@ -289,7 +289,7 @@ describe('intakeWizard routes', () => {
 
     it('releases the sample when an ACTIVE consent exists and quality allows release', async () => {
       const { db, consentsCollection } = buildHappyPathDb({
-        consentsFindOneQueue: [{ _id: 'consent-1', patientId: '12345678', signedAt: new Date() }],
+        consentsFindOneQueue: [{ _id: 'consent-1', participantId: '12345678', signedAt: new Date() }],
       });
       const { samplesCollection, patientsCollection } = setupHappyMocks();
 
@@ -320,11 +320,18 @@ describe('intakeWizard routes', () => {
       expect(res.status).toBe(200);
       expect(res.body.consent.active).toBe(true);
       expect(res.body.storageLocation.position).toBe('A1');
+      expect(consentsCollection.findOne).toHaveBeenCalledWith(
+        expect.objectContaining({
+          participantId: { $in: expect.arrayContaining(['12345678']) },
+          status: 'ACTIVE',
+        }),
+        expect.anything()
+      );
     });
 
     it('blocks the sample when consent is REVOKED', async () => {
       const { db, consentsCollection } = buildHappyPathDb({
-        consentsFindOneQueue: [null, { _id: 'consent-revoked', patientId: '12345678', revokedAt: new Date() }],
+        consentsFindOneQueue: [null, { _id: 'consent-revoked', participantId: '12345678', revokedAt: new Date() }],
       });
       const { samplesCollection, patientsCollection } = setupHappyMocks();
 

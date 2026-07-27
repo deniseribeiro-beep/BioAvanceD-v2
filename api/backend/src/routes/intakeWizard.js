@@ -197,7 +197,7 @@ async function resolveConsentDecision(db, patient) {
   const consentsCollection = await getCollection(db, 'consents');
   const activeConsent = await consentsCollection.findOne(
     {
-      patientId: { $in: patientIDs },
+      participantId: { $in: patientIDs },
       status: 'ACTIVE',
     },
     {
@@ -209,7 +209,7 @@ async function resolveConsentDecision(db, patient) {
     return {
       active: true,
       consentId: activeConsent._id || null,
-      patientId: activeConsent.patientId || null,
+      patientId: activeConsent.participantId || null,
       status: 'SIGNED',
       releaseStatus: 'AVAILABLE',
       quarantineStatus: 'RELEASED',
@@ -221,7 +221,7 @@ async function resolveConsentDecision(db, patient) {
 
   const revokedConsent = await consentsCollection.findOne(
     {
-      patientId: { $in: patientIDs },
+      participantId: { $in: patientIDs },
       status: 'REVOKED',
     },
     {
@@ -233,7 +233,7 @@ async function resolveConsentDecision(db, patient) {
     return {
       active: false,
       consentId: revokedConsent._id || null,
-      patientId: revokedConsent.patientId || null,
+      patientId: revokedConsent.participantId || null,
       status: 'REVOKED',
       releaseStatus: 'BLOCKED',
       quarantineStatus: 'QUARANTINED',
