@@ -1,48 +1,47 @@
 # HANDOFF
 
 **Written:** 2026-07-27, end of a `work-issue` session.
-**Branch:** `feature/docker-e2e-backend-integration` (commit `e2c06c60`,
+**Branch:** `feature/docker-e2e-backend-integration` (commit `bf4f6136`,
 pushed, working tree clean).
 
 ## What happened this session
 
-Read the prior handoff (result-worker.js #274 session), which flagged
-the backlog-scarcity pattern for a third time and suggested raising it
-with Dennis directly. Re-scanned open issues anyway (`gh issue list
---state open`): 8 issues (#277, #275, #266, #258, #228, #224, #222,
-#115) — same set minus #274.
+Read the prior handoff (NotificationService.js #258 session), which
+flagged backlog scarcity for a fourth consecutive session — all 7
+remaining open issues (#277, #275, #266, #228, #224, #222, #115) were
+either design-call-blocked and assigned to Denise (#224, #222, #115,
+#228 — require asking Dennis first per repo conventions) or unassigned
+coverage-tooling nondeterminism findings (#277, #275, #266).
 
-Picked #258 (`NotificationService.js` infra-mocking gap) — it named the
-same "not a bug, just a coverage gap, options if someone wants to close
-it" shape as #274, and had a concrete claim to verify rather than a
-"design call, needs Dennis" shape.
+Picked #266 (`@vitest/coverage-v8` undercounts statements/branches
+inside `try` blocks containing `await`s, in `auth.controller.js`) since
+it wasn't blocked on Denise and had a concrete, checkable claim.
 
-- Read `src/services/NotificationService.js` and
-  `src/config/queue.js` directly: confirmed `getNotificationQueue()`'s
-  `new Queue(...)` success branch needs `initRedis()` to return a real
-  connection, which it never does without `REDIS_HOST`/`REDIS_PORT` set
-  (test env always fails `validateRedisOnly()`). Confirmed
-  `sendCriticalTempAlertFromInflux()`'s Influx client functions are
-  destructured from the connection module at require time (top of
-  file), so `vi.spyOn` on the module post-require can't intercept them.
-  Both match the issue's own diagnosis exactly — no new information,
-  but independently re-verified against current source rather than
-  trusting the issue body.
-- Documented `NotificationService.js` in `COVERAGE_NOTES.md`'s excluded
-  list and closed-files list as a permanent accepted gap, same class as
-  `mqtt-telemetry.service.js` and `result-worker.js` (commit
-  `e2c06c60`).
-- Commented the finding on #258 and closed it. No product-code or
-  test-code change — pure verification + documentation, same shape as
-  the #274 session.
+- Re-verified against current source: line 122 (catch-block
+  `logger.error`) and the false arm of the `if (!oldMatches)` branch at
+  line 325 both still show 0 hits in `coverage-final.json` despite
+  passing tests directly asserting their side effects — confirmed via
+  `statementMap`/`branchMap` inspection, not just the summary table.
+- Investigated a candidate root cause: `npm ls` flagged the installed
+  `vitest@4.1.9` / `@vitest/coverage-v8@4.1.10` pair as invalid
+  (version mismatch). Realigned `vitest` to `4.1.10` and reran coverage
+  — same 0-hit result, so the mismatch wasn't the cause. Reverted the
+  dependency change (`git checkout -- package.json package-lock.json`)
+  before committing, to keep the commit scoped to documentation.
+- Documented this as a second, distinct phantom-coverage pattern in
+  `api/backend/COVERAGE_NOTES.md` (alongside the already-documented
+  guard-clause-implicit-else pattern), commit `bf4f6136`. No product or
+  test code changed.
+- Commented the finding (including the ruled-out version-mismatch
+  theory) on #266 and closed it.
 
 ## Repo state
 
-- `feature/docker-e2e-backend-integration`, at `e2c06c60`, working tree
+- `feature/docker-e2e-backend-integration`, at `bf4f6136`, working tree
   clean, pushed.
 - No fix/feature branches created this session (docs-only change,
-  committed straight to the integration branch, matching how #274's
-  session and other coverage-notes-only updates have been handled).
+  committed straight to the integration branch, same pattern as the
+  #274 and #258 sessions).
 
 ## Milestone (set 2026-07-22 by Dennis, still current)
 
@@ -50,30 +49,27 @@ it" shape as #274, and had a concrete claim to verify rather than a
 reconcile (2026-07-24, session 16, pre-session commit `a636b37a`):
 Statements 94.01%, Branches 88.2%, Functions 92.33%, Lines 94.29%. This
 session made no coverage-numerator change (documented an existing gap
-as permanently accepted, didn't add or remove code/tests) — no
-full-suite reconcile run, top-line numbers unchanged/unmeasured.
+as permanently accepted) — no full-suite reconcile run, top-line
+numbers unchanged/unmeasured.
 
 ## Recommended next steps
 
-No specific issue named for next round. Remaining open backlog after
-this session: #277, #275, #266, #228, #224, #222, #115 — same
-stale/design-call/tooling-caveat set flagged in the last four
-handoffs, now down two (#274, #258 closed). This is the **fourth**
-consecutive session flagging the backlog-scarcity pattern — genuinely
-worth raising with Dennis directly before a fifth repeats it, since the
-same two issue-shapes (design-call-blocked, or accepted-gap-pending-
-verification) keep recurring and the accepted-gap ones are now mostly
-exhausted (#274, #258 both closed this way; #277/#275/#266 look like
-coverage-tool nondeterminism, a different shape — check before assuming
-they resolve the same way).
+Remaining open backlog after this session: #277, #275, #228, #224,
+#222, #115 — down one (#266 closed). #277 and #275 are the same
+coverage-tooling-nondeterminism shape as #266 (unassigned, not blocked
+on Denise) and are the natural next pick if continuing this pattern.
+#228/#224/#222/#115 remain design-call-blocked and assigned to Denise —
+this is now the **fifth** consecutive session flagging that the
+design-call subset can't move without Dennis's input; worth raising
+directly rather than repeating the flag a sixth time.
 
 ## Which skills to use
 
-`work-issue` to pick/route — `dyeallpies-skills-pack#125` (filed last
-session, still open) covers the "verify and close a filed coverage-gap
-finding with no code change" shape used for both #274 and #258. Worth
-merging that fix into the pack before the next session, since two
-sessions in a row have needed the workaround.
+`work-issue` to pick/route. `dyeallpies-skills-pack#125` (filed two
+sessions ago, still open per last handoff) covers the "verify and close
+a filed coverage-gap finding with no code change" shape used for #274,
+#258, and now #266 — three sessions in a row have needed this
+workaround; worth prioritizing the merge.
 
 ## Dependency notes
 
@@ -82,6 +78,8 @@ are pack-repo items, not BioAvanceD-v2 blockers.
 
 ## Session note
 
-Straightforward re-verification + close, no scope creep, no lazy
-fixes, no security-relevant surface touched. Backlog-scarcity flag
-repeated for a fourth time — see "Recommended next steps" above.
+Straightforward re-verification + close, no scope creep (a candidate
+dependency fix was tried, ruled out, and cleanly reverted before
+committing), no lazy fixes, no security-relevant surface touched.
+Design-call backlog subset flagged for a fifth consecutive session —
+see "Recommended next steps" above.
