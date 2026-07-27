@@ -8,19 +8,6 @@ const signingProvider = require('../services/audit-signing.provider');
 const auditTreeService = require('../services/audit-tree.service');
 const logger = require('../utils/logger');
 
-function isIsoDate(date) {
-  return /^\d{4}-\d{2}-\d{2}$/.test(String(date || ''));
-}
-
-function isHexHash(hash) {
-  return /^[a-f0-9]{64}$/i.test(String(hash || ''));
-}
-
-function isProofValid(proof) {
-  if (!Array.isArray(proof)) return false;
-  return proof.every((step) => step && (step.position === 'left' || step.position === 'right') && isHexHash(step.hash));
-}
-
 class AuditController {
   async getMerkleRoot(req, res) {
     try {
