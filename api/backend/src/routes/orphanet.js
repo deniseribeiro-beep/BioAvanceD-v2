@@ -313,7 +313,6 @@ router.get('/search', async (req, res) => {
     return res.status(503).json({ error: 'Database unavailable' });
   }
 
-  let failedStage = 'local';
   try {
     const localResults = await searchLocal(db, q, lang, limit);
     if (localResults.length > 0) {
@@ -321,7 +320,8 @@ router.get('/search', async (req, res) => {
       return res.json(localResults);
     }
 
-    failedStage = 'remote';
+    // searchRemote catches and logs its own per-URL errors internally and never rethrows,
+    // so only searchLocal (above) can trigger this catch block — see #279.
     const remoteResults = await searchRemote(q, limit);
     if (remoteResults.length > 0) {
       const results = dedupeRecords(remoteResults, limit);
@@ -332,8 +332,7 @@ router.get('/search', async (req, res) => {
     logger.info(`[ORPHANET] Busca concluida: queryLength=${q.length}, resultados=0, origem=vazio`);
     return res.json([]);
   } catch (error) {
-    const stageLabel = failedStage === 'remote' ? 'Busca externa' : 'Busca local';
-    logger.warn(`[ORPHANET] ${stageLabel} falhou; tentando fallback local: ${error.message}`);
+    logger.warn(`[ORPHANET] Busca local falhou; tentando fallback local: ${error.message}`);
     try {
       const fallbackResults = await searchLocal(db, q, lang, limit);
       res.json(fallbackResults);
