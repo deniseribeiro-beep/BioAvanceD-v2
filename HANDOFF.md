@@ -1,58 +1,62 @@
 # HANDOFF
 
 **Written:** 2026-07-27, end of a `work-issue` -> `fix-bugs` iteration.
-**Branch:** `feature/docker-e2e-backend-integration` (commit `fec6b0e9`,
+**Branch:** `feature/docker-e2e-backend-integration` (commit `903813ee`,
 pushed, working tree clean).
 
 ## What happened this session
 
 Dennis asked to read the prior handoff and resolve an issue. Routed to
-**#271** (`orphanet.js`: remaining branch gaps left unverified by a prior
-test-loop session).
+**#270** (`import-lgpd.service.js`: post-validation guard branches
+flagged unreachable — same dead-code class as #271, #267, #261, etc.).
 
-- Read the full issue body (5 listed candidate branches) and traced each
-  one against real call sites, per `fix-bugs`' verifying-before-deferring
-  section:
-  - `dedupeRecords` merge (`previous.synonyms || []` / `aliases || []`,
-    lines 159-160): **dead**. Every value stored in the map comes from
-    `normalizeDiseaseRecord`, which always sets `synonyms`/`aliases` to
-    an array — traced all 3 call sites of `normalizeDiseaseRecord` plus
-    `dedupeRecords` itself.
-  - `searchLocal`'s `numericOrpha ? [...] : []` ternaries (cids filter
-    and orphanet filter): **dead**. `getOrphaNumeric(search)` is
-    non-empty for any non-empty input, and every real call site passes a
-    non-empty `q` (the route 400s on empty query before `searchLocal`
-    runs).
-  - `pickReference`'s final `''` fallback, and the
-    `fetchJsonWithTimeout`/`extractOrphadataResults`/`searchRemote`/
-    route-catch branches: **real, reachable gaps** (untrusted
-    external/Mongo data shape, fetch-response variance) — not dead code,
-    need test-writing not a product fix.
-  - Ran isolated coverage twice on the same file/test combo and got
-    different branch-hit numbers both times — matches the documented
-    coverage-tooling nondeterminism (#277/#275's pattern), not a new
-    finding; traced by call-site logic instead of trusting the numbers.
-- Branched `fix/orphanet-dead-branches` off the integration branch,
-  simplified the two dead-code spots (kept exact same runtime behavior),
-  ran `tests/unit/orphanet.routes.test.js` +
-  `tests/unit/routes/orphanet.test.js` + `tests/unit/routes/orphanet-count.test.js`
-  (44/44 pass) and `npm run lint` (clean). Committed (`Refs #271`,
-  `0a7e0fd8`), pushed, merged `--no-ff` into
-  `feature/docker-e2e-backend-integration` (`fec6b0e9`), re-ran the same
-  44 tests on the merged tree (still pass), pushed, deleted the fix
+- Read the full issue body and traced every claim against real call
+  sites, per `fix-bugs`' verifying-before-deferring section (none taken
+  on the issue author's word alone):
+  - `importPatients`'s `rows.length === 0` re-check (line 388) and
+    `headers.length === 0` re-check (line 401): **dead**. Both re-test
+    values already guaranteed non-empty a few lines earlier in the same
+    function (the `rows` reference is unreassigned; `headers` comes from
+    `firstRow`, itself found via `Object.keys(r).length > 0`).
+  - `importPatients`'s duplicate-patient `birthDateStr` string branch
+    (line 613): **dead**. `patientData.birthDate` is guaranteed a valid
+    `Date` by the guard at line 529 (`continue`s otherwise), with no
+    reassignment between the two points.
+  - `importSamples`'s quality re-validation block (lines 841-852) and
+    the `sampleType`/`sampleOrigin`/`extractionProtocol` `&& !SampleModel
+    .validateXxx(...)` halves (lines 869/882/895): **dead**. Traced
+    `sampleData.quality`'s sole origin to `parseQualityMIABIS` (always
+    null or a valid MIABIS id per its own `validateQualityMIABIS` check)
+    and confirmed `SampleModel.validate()` (called just above, at line
+    855, `continue`s on failure) already checks
+    `validateSampleType`/`validateSampleOrigin`/`validateExtractionType`
+    unconditionally.
+  - Also cleaned up the two duplicate object-literal keys the issue
+    flagged in passing (`medicationName`/`atcCode` identical dupes;
+    `consentTemplateId` dedup) — checked `atcClass`'s two writes weren't
+    actually identical (issue's claim was imprecise there) and kept the
+    effective last-wins value unchanged.
+- Branched `fix/import-lgpd-dead-branches` off the integration branch,
+  simplified all confirmed-dead spots (kept exact same runtime
+  behavior), ran the 10 `import-lgpd.*` unit/controller test files
+  (271/271 pass) and `npm run lint` (clean). Updated
+  `api/backend/COVERAGE_NOTES.md`'s existing `import-lgpd.service.js`
+  note (was: "remaining gap is dead code, issue #270" → now: "was dead
+  code, simplified per issue #270"). Committed (`Fixes #270`,
+  `6e175d55`), pushed, merged `--no-ff` into
+  `feature/docker-e2e-backend-integration` (`903813ee`), re-ran the same
+  271 tests on the merged tree (still pass), pushed, deleted the fix
   branch (local+remote).
-- Filed **#278** for the real gaps split out of #271 (pickReference
-  fallback, fetch/async branches) — test-loop work, not fix-bugs.
-- Commented the trace and split on #271, closed it referencing `0a7e0fd8`
-  / `fec6b0e9`.
-- `wrap-up` core + shipping audits ran clean — no scope creep (only
-  `orphanet.js` touched, plus the new issue filing), no lazy fixes,
-  nothing deferred without a tracked issue (the real gaps landed in
-  #278), nothing security-relevant.
+- Commented the full trace on #270, closed it referencing `6e175d55` /
+  `903813ee`.
+- `wrap-up` core + shipping audits ran clean — scope matched (only
+  `import-lgpd.service.js` + `COVERAGE_NOTES.md` touched), no lazy
+  fixes, no sub-point left "ambiguous" on a closed issue (all four
+  candidates confirmed dead, none deferred), nothing security-relevant.
 
 ## Repo state
 
-- `feature/docker-e2e-backend-integration`, pushed at `fec6b0e9`,
+- `feature/docker-e2e-backend-integration`, pushed at `903813ee`,
   working tree clean.
 
 ## Milestone (set 2026-07-22 by Dennis, still current)
@@ -65,19 +69,17 @@ change — the branches were already unreachable).
 
 ## Recommended next steps
 
-Dennis asked to keep working the issue backlog (implied by "resolve
-issue" pattern across recent sessions) — no specific issue named for
-next round, so **none queued**; re-scan fresh via `work-issue` next
-session. Open backlog as of this session's scan (`gh issue list --state
-open`, largest-numbered first, before this session's #278 filing):
-#278 (new — real orphanet.js gaps, routes to test-loop), #277, #275
-(coverage-tooling nondeterminism, different shape — won't route to
-`fix-bugs` the same way), #274 (genuine untestable-branch case, needs
-malformed-CSV research, not a call-site trace), #270, #269, #267, #266,
+No specific issue named for next round — **none queued**; re-scan fresh
+via `work-issue` next session. Open backlog as of this session's scan
+(`gh issue list --state open`, largest-numbered first, before this
+session's work): #278 (real orphanet.js gaps, routes to test-loop),
+#277, #275 (coverage-tooling nondeterminism, different shape — won't
+route to `fix-bugs` the same way), #274 (genuine untestable-branch case,
+needs malformed-CSV research, not a call-site trace), #269, #267, #266,
 #265, #264, #263, #262, #261, #258, #257, #256, #254, #251, #228, #224,
 #222, #115. Re-verify state, don't trust this list — several may resolve
-the same way #255, #260, #272, #273, and #271's dead half did (dead per
-call-site tracing, not actually ambiguous) once traced.
+the same way #255, #260, #270, #271, #272, #273 did (dead per call-site
+tracing, not actually ambiguous) once traced.
 
 ## Which skills to use
 
