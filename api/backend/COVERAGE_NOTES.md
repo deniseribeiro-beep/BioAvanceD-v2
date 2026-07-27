@@ -230,9 +230,6 @@ Low priority (models/interfaces/one-off scripts — thin or non-request-path):
 - `src/scripts/migrateUserAnonIds.js`
 - `src/scripts/seedDiseaseValidationRules.js`
 - `src/scripts/testEnvironment.js`
-- `src/services/orphanet/orphacodeApiClient.js` (issue #163 — routes.js
-  returning 503 may be the same terminologySync gate; check before
-  treating as a genuine gap)
 
 ## LOW coverage (1-49% lines) — 0 files as of the 2026-07-22 reconcile
 
@@ -311,6 +308,11 @@ tests addable, closed as-is.
 `storage-query.controller.js` isolated (`storage-query.controller.test.js`,
 `--coverage.include`): was 100%/80.55% stmts/branch, now
 **100%/100%/100%/100%**.
+
+`orphacodeApiClient.js` was 0% (issue #163 was about the routes layer,
+not this client — not a real blocker). New
+`tests/unit/orphacodeApiClient.test.js` isolates to
+**98.95%/97.36%/95%/100%** stmts/branch/funcs/lines.
 
 `BiomarkerObservation.js` (13-file isolated baseline confirmed 87.27%/
 84.37% stmts/branch, no drift from the 84.37%/88.46% merged number). New
