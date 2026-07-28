@@ -1,97 +1,102 @@
 # HANDOFF
 
-**Written:** 2026-07-28, end of a `build-loop` session — Phase 1 of
-`E2E_IMPLEMENTATION_PLAN.md` begins. Landed RF002 (Dashboard e
-autorização), the second Wave 1 RF to close (RF001/RF012 landed with
-Phase 0 last session).
+**Written:** 2026-07-28, end of a `build-loop` session — continuing
+Phase 1 of `E2E_IMPLEMENTATION_PLAN.md`. Landed a chunked slice of RF004
+(Cadastro integrado do biobanco), the third Wave 1 RF touched
+(RF001/RF012/RF002 landed in prior sessions).
 
-**Branch:** `test/e2e-real-backend-foundation`, pushed and clean as of
-this writing (RF002's `test/e2e-wave1-rf002-dashboard-authz` was
-merged in and deleted).
+**Branch:** `test/e2e-real-backend-foundation`, 3 commits ahead of
+`origin/test/e2e-real-backend-foundation` (not yet pushed this session —
+confirm with Dennis before pushing, per repo convention).
 
 ## What happened this session
 
-1. **RF002 landed as a real-backend spec** in
-   `auth-access-security.spec.ts`: admin's positive path (`GET
-   /api/users`, `/system-management`) plus two backend-enforced
-   negative paths (no token → 401; a fresh non-admin's MFA-setup-only
-   `tempToken` → 401). Verified against the live `compose.test.yml`
-   stack, all 3 specs in the file pass.
-2. **Found and fixed a real RBAC gap while writing the test**:
-   `GET /api/users` had no permission middleware at all — any
-   authenticated user of any role could list every user record.
-   Fixed with `requirePermission('createUser')`, matching the existing
-   PUT/DELETE guards on the same resource
-   (`api/backend/src/interface/routes/user.routes.js`).
-3. **Hit a real scope wall, documented rather than worked around**: a
-   genuine non-admin *session* can't be exercised in e2e without first
-   completing RF001's mandatory TOTP MFA setup — only Administrador is
-   exempt from the first-login MFA gate. No TOTP generator exists in
-   the e2e helpers today. RF002's spec worked around it (unauthenticated
-   + setup-only-token checks instead of a real non-admin session);
-   `rbac.test.js`'s unit coverage backstops the role-differentiation
-   half. Filed as its own issue (#293) since it blocks more than just
-   RF002.
-4. **`E2E_TRACEABILITY_PLAN.md`'s RF002 row updated** to DONE with the
-   above nuance recorded inline.
-5. **Filed 7 issues** for everything from this session not yet
-   tracked: the remaining Wave 1 RFs — `#287` RF004, `#288` RF006,
-   `#289` RF009, `#290` RF018, `#291` RF019, `#292` RF023 — each
-   flagging `divide-and-conquer` for the ones likely to outgrow one
-   iteration (RF004 spans two spec files; RF009 needs real
-   InfluxDB/MQTT proof; RF023 needs an async outbox→projection wait
-   helper) — plus `#293` for the TOTP-generator gap above.
-6. **Ran `clean-up`** at session end: removed 6 session-tagged Docker
-   images (~2.9GB) + builder cache (869MB), tore down the compose
-   stack with `--volumes`, deleted untracked `test-results/`, removed
-   one `/tmp` redirect target. Named volumes/caches and pre-existing
-   `.claude/`/`node_modules` left untouched.
+1. **Routed issue #287 (RF004) through `work-issue` → `build-loop`.**
+   The issue itself flagged a sizing risk ("spans two spec files").
+2. **Investigated before writing anything**: RF004's full happy path
+   (specimenId generation, SPREC recording, consent-state blocking)
+   needs a real participant, and creating one via `POST /api/patients`
+   requires a `consentTemplateId` that has no clean API seed path today
+   (only a manual DB script, `create-active-tcle.js`) — it ties into
+   RF010, already flagged red-first/Wave 2. AC#3 (Study/Protocol/
+   Collection linkage) is also unimplemented — those entities don't
+   exist as real Mongoose models (`Sample.js` only has loosely-typed
+   placeholder fields).
+3. **Applied `divide-and-conquer`** rather than forcing the full RF
+   through: shipped a landable, correct-standalone slice — real-backend
+   *negative-path* coverage — and carried the rest forward as a filed
+   follow-up.
+4. **Landed `tests/e2e/specimen-quality-inventory.spec.ts`** (new spec
+   file, first content in it): 5 passing tests against the live
+   `compose.test.yml` stack — participantId existence check (AC#1,
+   404), malformed/missing participantId (AC#1, 422), invalid
+   MIABIS-controlled sampleType/sampleOrigin/extractionProtocol (AC#4,
+   422 with per-field messages), and unauthenticated rejection (401).
+   No product code changes were needed — the backend already enforces
+   all of these; only e2e coverage was missing.
+5. **Filed #294** carrying the remainder: build a participant+
+   consentTemplate e2e fixture helper, then extend the same spec file
+   with the happy-path create + AC#2 (specimenId uniqueness) + AC#5
+   (SPREC) + AC#6 (consent-state blocking). Also flagged AC#3's missing
+   entities inline in #294 rather than as a silent gap.
+6. **`E2E_TRACEABILITY_PLAN.md`'s RF004 row updated** to PARTIAL with
+   the chunking nuance recorded inline.
+7. **Closed #287** against the narrowed deliverable, naming #294 as the
+   follow-up by number in the close comment.
+8. **Ran `clean-up`** at session end (Docker stack built for this
+   iteration's real-backend run torn down, session-tagged images/cache
+   removed, `test-results/` cleared).
 
 ## Repo state
 
-- Working tree clean, `test/e2e-real-backend-foundation` matches
-  `origin/test/e2e-real-backend-foundation` (push not yet done this
-  session — confirm with Dennis before pushing, per repo convention).
-- Docker stack torn down; no `bioavanced-test-*` containers/volumes/
-  images remain.
+- Working tree clean, `test/e2e-real-backend-foundation` is 3 commits
+  ahead of `origin/test/e2e-real-backend-foundation` — push not done
+  this session, confirm with Dennis first.
+- Docker stack torn down after this iteration's real-backend run; no
+  `bioavanced-test-*` containers/volumes/images remain.
 - `test/migrate-rcs-governance-indexes-coverage` still carries the
   unmerged coverage work from issue #285 (untouched, not in scope).
 
 ## Recommended next steps
 
-Continue Wave 1: `#287` (RF004), `#288` (RF006), `#289` (RF009),
-`#290` (RF018), `#291` (RF019), `#292` (RF023), in roughly that order
-per the traceability doc's grouping (RF004/RF006/RF018/RF019 share
-`specimen-quality-inventory.spec.ts` and may be cheaper to sequence
-together once that file exists). `#293` (TOTP helper) is worth picking
-up early if any of those RFs' acceptance criteria turn out to need a
-genuine non-admin session — check before assuming the workaround
-RF002 used will suffice again.
+None queued explicitly by Dennis this session. Per the traceability
+doc's own sequencing, the natural continuation is: `#294` (RF004's
+participant/consent fixture + happy path — unblocks the rest of
+`specimen-quality-inventory.spec.ts`), then the remaining Wave 1 items
+`#288` (RF006), `#289` (RF009), `#290` (RF018), `#291` (RF019), `#292`
+(RF023), and `#293` (TOTP helper, worth pulling forward if any of those
+RFs' acceptance criteria turn out to need a genuine non-admin session).
 
 ## Which skills to use
 
-`build-loop` held up for a second slice, including the "write the
-proving test, discover the product gap, fix it same-iteration" shape
-this time (the RBAC middleware gap) rather than Phase 0's "build the
-plumbing first" shape — the skill's text already covers both. Reused
-the milestone's long-lived branch pattern again: cut
-`test/e2e-wave1-rf002-dashboard-authz` off
-`test/e2e-real-backend-foundation`, merged back in with `--no-ff`,
-deleted after. `clean-up` ran cleanly at session end.
+`work-issue` → `build-loop` → mid-work `divide-and-conquer` held up
+cleanly for a "the issue already warned it might be too big" case: the
+investigation step (read the acceptance criteria, grep the actual
+backend routes/models before writing a test) is what surfaced the real
+blocker (consentTemplateId with no seed path) fast enough to chunk
+*before* writing any test code, not mid-implementation. Reused the
+milestone's long-lived branch pattern again: cut
+`test/e2e-wave1-rf004-specimen-negative-paths` off
+`test/e2e-real-backend-foundation`, merged back with `--no-ff`, deleted
+after.
 
 ## Dependency notes
 
-RF001/RF002/RF012 done. RF003/RF005/RF010/RF020/RF021 (Wave 2) and
+RF001/RF002/RF012 done. RF004 partially done (negative paths; happy
+path carried to #294). RF003/RF005/RF010/RF020/RF021 (Wave 2) and
 RF022/RF028 (red-first, own design pass) remain untouched — not this
-session's scope. `dyeallpies-skills-pack` issues from last session
-(`#134`, `#135`, `#122`–`#129`) are pack-repo items, not
-BioAvanceD-v2 blockers.
+session's scope. `#294`'s consent-template-seeding work may want to
+check in with whatever RF010 design work happens first, rather than
+building a one-off e2e-only seed route that gets thrown away.
+`dyeallpies-skills-pack` issues from earlier sessions (`#134`, `#135`,
+`#122`–`#129`) are pack-repo items, not BioAvanceD-v2 blockers.
 
 ## Session note
 
-No direct user corrections this session. One scope judgment call
-worth flagging for whoever reads this: RF002's acceptance criteria
-describe all four roles (Técnico/Coordenador/Administrador/Usuário
-Externo), but this iteration only proved the Administrador half plus
-backend-enforcement-in-general — see issue #293 for why, and treat it
-as the honest state of RF002 rather than a silently narrowed test.
+No direct user corrections this session. One scope judgment call worth
+flagging: RF004's AC#3 (Study/Protocol/Collection linkage) was found to
+be unimplemented at the model level, not just untested — this wasn't
+filed as its own issue, just flagged inline in #294, since it's not yet
+clear whether it deserves a dedicated issue or folds into whatever lands
+Study/Protocol/Collection as real entities. Revisit that call once #294
+or a Wave 2 RF touches the same ground.
