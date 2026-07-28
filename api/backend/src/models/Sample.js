@@ -185,9 +185,10 @@ class SampleModel {
   static computeStatus(initialVolume, currentVolume, currentStatus) {
     const init = Number(initialVolume ?? 0);
     const curr = Number(currentVolume ?? 0);
+    const stickyStatuses = ['UNAVAILABLE', 'DESTROYED', 'DISPOSED', 'QUARANTINED'];
 
+    if (stickyStatuses.includes(currentStatus)) return currentStatus;
     if (curr <= 0) return 'DEPLETED';
-    if (currentStatus === 'UNAVAILABLE') return 'UNAVAILABLE';
     if (init > 0 && curr < init) return 'PARTIAL';
     return 'AVAILABLE';
   }

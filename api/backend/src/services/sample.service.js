@@ -296,10 +296,10 @@ class SampleService {
         throw new Error('Amostra não encontrada');
       }
 
-      // Validações de status
-      const invalidStatuses = ['TotallyWithdrawn', 'Destroyed', 'Unusable', 'Expired'];
-      if (invalidStatuses.includes(sample.currentStatus)) {
-        throw new Error(`Amostra não está disponível para retirada (Status: ${sample.currentStatus})`);
+      // Validações de status (RF006 AC#4)
+      const blockedLifecycleStatuses = ['UNAVAILABLE', 'DESTROYED', 'DISPOSED', 'QUARANTINED'];
+      if (blockedLifecycleStatuses.includes(sample.lifecycleStatus)) {
+        throw new Error(`Amostra não está disponível para retirada (Status: ${sample.lifecycleStatus})`);
       }
 
       // Validações MIABIS
@@ -448,7 +448,7 @@ class SampleService {
   async updateSample(db, specimenId, updateData) {
     try {
       const samplesCollection = await getCollection(db, 'samples');
-      const existing = await samplesCollection.findOne({ specimenId });
+      const existing = await findSampleByAnyId(samplesCollection, specimenId);
       if (!existing) {
         return null;
       }
@@ -473,7 +473,7 @@ class SampleService {
       };
       
       const result = await samplesCollection.updateOne(
-        { specimenId },
+        { specimenId: existing.specimenId },
         { $set: payload }
       );
 
@@ -481,7 +481,7 @@ class SampleService {
         return null;
       }
 
-      return await samplesCollection.findOne({ specimenId });
+      return await samplesCollection.findOne({ specimenId: existing.specimenId });
     } catch (error) {
       logger.error('Erro ao atualizar amostra:', error.message);
       throw error;
@@ -638,6 +638,12 @@ class SampleService {
         throw new Error('Amostra não encontrada');
       }
 
+      // Validações de status (RF006 AC#4)
+      const blockedLifecycleStatuses = ['UNAVAILABLE', 'DESTROYED', 'DISPOSED', 'QUARANTINED'];
+      if (blockedLifecycleStatuses.includes(sample.lifecycleStatus)) {
+        throw new Error(`Amostra não está disponível para devolução (Status: ${sample.lifecycleStatus})`);
+      }
+
       // Validação: só pode devolver se houver quantidade retirada
       const totalWithdrawn = sample.totalWithdrawn || 0;
       const totalReturned = sample.totalReturned || 0;
@@ -756,16 +762,23 @@ class SampleService {
    */
   async getSampleMovements(db, specimenId) {
     try {
+      const samplesCollection = await getCollection(db, 'samples');
       const movementsCollection = await getCollection(db, 'sampleMovements');
-      
-      // Suporta busca por ObjectId ou string de ID
-      const specimenIdStr = specimenId.toString ? specimenId.toString() : specimenId;
-      
+
+      // sampleID (route param) is the Mongo _id; movements store the
+      // separate server-generated specimenId field (RF006, #288) — same
+      // _id/specimenId mismatch class findSampleByAnyId already fixes
+      // for getSample/withdrawSample/returnSample.
+      const sample = await findSampleByAnyId(samplesCollection, specimenId);
+      const specimenIdStr = sample
+        ? sample.specimenId
+        : (specimenId.toString ? specimenId.toString() : specimenId);
+
       const movements = await movementsCollection
-        .find({ 
+        .find({
           $or: [
             { specimenId: specimenIdStr },
-            { barcode: specimenIdStr }
+            { barcode: (sample && sample.barcode) || specimenIdStr }
           ]
         })
         .sort({ timestamp: -1 })
