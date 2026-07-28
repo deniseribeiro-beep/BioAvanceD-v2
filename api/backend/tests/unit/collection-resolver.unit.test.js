@@ -19,9 +19,9 @@ function makeDb(existingCollections = [], countMap = {}) {
 }
 
 describe('resolveCollectionName', () => {
-  it('throws for invalid key', async () => {
+  it('throws for invalid key', () => {
     const db = makeDb();
-    await expect(resolveCollectionName(db, 'nonExistentKey')).rejects.toThrow('inválida');
+    expect(() => resolveCollectionName(db, 'nonExistentKey')).toThrow('inválida');
   });
 
   it('returns preferred name when collection exists in DB', async () => {
@@ -62,6 +62,19 @@ describe('getCollection', () => {
     expect(coll).toBeDefined();
     // append-only: updateOne should throw
     await expect(coll.updateOne({})).rejects.toThrow('POLICY_APPEND_ONLY');
+  });
+
+  it('throws synchronously for an invalid key, so an unawaited chained call fails loud and clean (#306)', () => {
+    // The original trap: getCollection(db, key).find(...) without `await`
+    // threw a *different*, misleading TypeError ("...find is not a
+    // function") at the chained call, while the real "Collection key
+    // inválida" rejection from the still-pending async getCollection()
+    // promise went unhandled and crashed the process later. Now that
+    // getCollection() throws synchronously for an invalid key (no promise
+    // is ever created), the chained call raises the real error immediately
+    // and there is nothing left to reject asynchronously.
+    const db = makeDb();
+    expect(() => getCollection(db, 'nonExistentKey').find({})).toThrow('inválida');
   });
 
   it('returns collection even when no listCollections available on db', async () => {
