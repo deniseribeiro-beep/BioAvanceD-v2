@@ -108,7 +108,10 @@ router.post('/register',
   }
 );
 
-router.get('/', authenticate, async (req, res) => {
+// RF002 - Somente Coordenador/Administrador podem listar usuários (o backend
+// deve validar a permissão independentemente da ocultação da função no
+// frontend) — mesma permissão já aplicada a PUT/DELETE deste recurso.
+router.get('/', authenticate, requirePermission('createUser'), async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {

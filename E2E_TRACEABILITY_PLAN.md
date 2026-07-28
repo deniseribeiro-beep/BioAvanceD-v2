@@ -136,7 +136,7 @@ fact from the source.
 | RF | Módulo | Proposed spec | Status today | Priority (doc) | Wave |
 |---|---|---|---|---|---|
 | RF001 | Segurança e autenticação | auth-access-security | PARTIAL (backend-integration, skipped) | Crítica (P-033) | 1 |
-| RF002 | Dashboard e autorização | auth-access-security | MISSING | Crítica (P-033, RBAC-enforcement) | 1 |
+| RF002 | Dashboard e autorização | auth-access-security | DONE (2026-07-28) — admin's positive path (GET /api/users, `/system-management`) + backend-side negative paths (no token → 401; a fresh non-admin's setup-only tempToken → 401). A genuine non-admin *session* hitting RBAC couldn't be exercised: any first-time non-admin login is gated behind RF001's mandatory MFA setup (TOTP), which this iteration didn't implement a test-side generator for — `rbac.test.js`'s unit coverage of `requirePermission` is the fallback proof for that half. Found and fixed a real gap while writing this: `GET /api/users` had no RBAC middleware at all (any authenticated user, any role, could list every user) — added `requirePermission('createUser')`, matching the existing PUT/DELETE on the same resource. | Crítica (P-033, RBAC-enforcement) | 1 |
 | RF003 | Gestão de usuários | auth-access-security | MISSING | Crítica (P-033) | 2 |
 | RF004 | Cadastro integrado do biobanco | participant-consent-studies + specimen-quality-inventory | PARTIAL (cadastro-amostra, intake-wizard; UI only) | Crítica | 1 |
 | RF005 | Participante e dados clínicos | participant-consent-studies | PARTIAL (intake-wizard; UI only); **RED** — ParticipantIdentity segregation not implemented (dict-07 row 1) | Crítica | **2, red-first** |
