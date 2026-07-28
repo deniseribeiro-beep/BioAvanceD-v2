@@ -6,6 +6,7 @@ import {
   seedOperationalLocation,
   closeSeedDb,
 } from './helpers/seedParticipant';
+import { watchAuditTrail, assertAuditEventRecorded } from './helpers/assertAuditEvent';
 
 // Real backend only — see backend-integration.spec.ts for the same skip
 // rationale. Run via `npm run test:e2e:docker` against the compose test
@@ -247,5 +248,183 @@ test.describe('Specimen registration (RF004) — real backend, happy path (#294)
     });
 
     expect(withdrawAfterConsent.status()).toBe(200);
+  });
+});
+
+test.describe('Chain of custody (RF006) — real backend', () => {
+  // No spec, mocked or real, covered this RF before (#288) — see
+  // E2E_TRACEABILITY_PLAN.md. Building this exposed that the "blocked
+  // status" guard in sample.service.js's withdrawSample checked a field
+  // (`currentStatus`) and vocabulary that don't exist on Sample.js's real
+  // schema (`lifecycleStatus`, enum incl. UNAVAILABLE/DESTROYED/DISPOSED/
+  // QUARANTINED) — the check was dead code. Fixed alongside this slice
+  // since it directly blocked proving AC#4, same "prove, then build"
+  // discipline as #294. Also fixed the same specimenId/ObjectId mismatch
+  // bug #294 found elsewhere in updateSample (PUT /api/samples/:id never
+  // matched any sample), needed here to seed a blocked lifecycle status
+  // through the real API rather than writing to Mongo directly.
+  test.afterAll(async () => {
+    await closeSeedDb();
+  });
+
+  async function seedWithdrawableSample(request: import('@playwright/test').APIRequestContext, admin: { token: string }) {
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    await seedActiveConsent(participant.participantId);
+    const locationID = await seedOperationalLocation();
+
+    const create = await request.post(`${apiBaseURL}/api/samples`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        participantId: participant.participantId,
+        ...validSampleFields(),
+        quantity: 10,
+        locationID,
+      },
+    });
+    expect([201, 202]).toContain(create.status());
+    const sampleID = (await create.json()).data.sampleID;
+    return { sampleID };
+  }
+
+  test('records origin/destination/responsible/purpose/quantity for a withdrawal, and appends to the audit trail (criteria 1, 6)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const { sampleID } = await seedWithdrawableSample(request, admin);
+
+    const watch = await watchAuditTrail(request, apiBaseURL!, admin.token);
+
+    const withdraw = await request.post(`${apiBaseURL}/api/samples/${sampleID}/withdraw`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        withdrawalType: 'Parcial',
+        withdrawalQuantity: 4,
+        withdrawalResponsible: 'Custody Test Responsible',
+        sampleDestination: 'RF006 e2e destination lab',
+        purpose: 'RF006 e2e traceability proof',
+        linkedProject: 'RF006 e2e fixture project',
+      },
+    });
+    expect(withdraw.status()).toBe(200);
+
+    await assertAuditEventRecorded(request, apiBaseURL!, admin.token, watch);
+
+    const movementsGet = await request.get(`${apiBaseURL}/api/samples/${sampleID}/movements`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect(movementsGet.status()).toBe(200);
+    const movements = (await movementsGet.json()).data;
+    const movement = movements.find((m: any) => m.type === 'withdraw');
+
+    expect(movement).toBeTruthy();
+    expect(movement.destination).toBe('RF006 e2e destination lab');
+    expect(movement.responsible).toBe('Custody Test Responsible');
+    expect(movement.purpose).toBe('RF006 e2e traceability proof');
+    expect(movement.quantity).toBe(4);
+    expect(movement.createdAt).toBeTruthy();
+  });
+
+  test('transitions to PARTIAL after a partial withdrawal, then DEPLETED once fully withdrawn (criteria 2, 3)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const { sampleID } = await seedWithdrawableSample(request, admin);
+
+    const partial = await request.post(`${apiBaseURL}/api/samples/${sampleID}/withdraw`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        withdrawalType: 'Parcial',
+        withdrawalQuantity: 4,
+        withdrawalResponsible: 'Custody Test Responsible',
+        linkedProject: 'RF006 e2e fixture project',
+      },
+    });
+    expect(partial.status()).toBe(200);
+    expect((await partial.json()).data.newStatus).toBe('PARTIAL');
+
+    const afterPartial = await request.get(`${apiBaseURL}/api/samples/${sampleID}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect((await afterPartial.json()).data.lifecycleStatus).toBe('PARTIAL');
+
+    const total = await request.post(`${apiBaseURL}/api/samples/${sampleID}/withdraw`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        withdrawalType: 'Total',
+        withdrawalResponsible: 'Custody Test Responsible',
+        linkedProject: 'RF006 e2e fixture project',
+      },
+    });
+    expect(total.status()).toBe(200);
+    expect((await total.json()).data.newStatus).toBe('DEPLETED');
+
+    const afterTotal = await request.get(`${apiBaseURL}/api/samples/${sampleID}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect((await afterTotal.json()).data.lifecycleStatus).toBe('DEPLETED');
+  });
+
+  test('blocks a withdrawal against a specimen in a blocked lifecycle status (criterion 4)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const { sampleID } = await seedWithdrawableSample(request, admin);
+
+    const block = await request.put(`${apiBaseURL}/api/samples/${sampleID}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { lifecycleStatus: 'DESTROYED' },
+    });
+    expect(block.status()).toBe(200);
+    expect((await block.json()).data.lifecycleStatus).toBe('DESTROYED');
+
+    const withdraw = await request.post(`${apiBaseURL}/api/samples/${sampleID}/withdraw`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        withdrawalType: 'Total',
+        withdrawalResponsible: 'Custody Test Responsible',
+        linkedProject: 'RF006 e2e fixture project',
+      },
+    });
+    expect(withdraw.status()).toBe(400);
+    const body = await withdraw.json();
+    expect(body.message).toMatch(/não está disponível para retirada/);
+    expect(body.message).toMatch(/DESTROYED/);
+  });
+
+  test('custody events cannot be altered or deleted — no route accepts a mutation (criterion 5)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const { sampleID } = await seedWithdrawableSample(request, admin);
+
+    const withdraw = await request.post(`${apiBaseURL}/api/samples/${sampleID}/withdraw`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        withdrawalType: 'Parcial',
+        withdrawalQuantity: 3,
+        withdrawalResponsible: 'Custody Test Responsible',
+        linkedProject: 'RF006 e2e fixture project',
+      },
+    });
+    expect(withdraw.status()).toBe(200);
+    const movementID = (await withdraw.json()).data.movementID;
+
+    const before = await request.get(`${apiBaseURL}/api/samples/${sampleID}/movements`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    const movementsBefore = (await before.json()).data;
+
+    const put = await request.put(`${apiBaseURL}/api/samples/${sampleID}/movements/${movementID}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { quantity: 999 },
+    });
+    expect(put.status()).toBe(404);
+
+    const del = await request.delete(`${apiBaseURL}/api/samples/${sampleID}/movements/${movementID}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect(del.status()).toBe(404);
+
+    const after = await request.get(`${apiBaseURL}/api/samples/${sampleID}/movements`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    const movementsAfter = (await after.json()).data;
+    expect(movementsAfter).toEqual(movementsBefore);
   });
 });

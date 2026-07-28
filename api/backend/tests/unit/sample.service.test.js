@@ -378,10 +378,10 @@ describe('sample.service', () => {
       ).rejects.toThrow('Amostra não encontrada');
     });
 
-    it('rejects when the sample is already totally withdrawn', async () => {
+    it('rejects when the sample is already destroyed (RF006 AC#4)', async () => {
       const db = makeDb();
       db.collections.samples.findOne.mockResolvedValue(
-        existingSample({ currentStatus: 'TotallyWithdrawn' })
+        existingSample({ lifecycleStatus: 'DESTROYED' })
       );
 
       await expect(
