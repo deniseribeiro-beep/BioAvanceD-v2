@@ -64,6 +64,11 @@ services:
       NEO4J_server_memory_pagecache_size: 256M
     volumes:
       - neo4j-test-data:/data
+    ports:
+      # Host-side access for e2e fixture helpers (tests/e2e/helpers/) that
+      # query Neo4j directly to prove outbox projection (RF023, #292) — same
+      # rationale as mongodb-test's/influxdb-test's published ports above.
+      - "7687:7687"
     healthcheck:
       test: ["CMD-SHELL", "cypher-shell -u neo4j -p testpassword 'RETURN 1' >/dev/null 2>&1"]
       interval: 10s
@@ -209,6 +214,22 @@ services:
     environment:
       <<: *test-env
     command: ["npm", "run", "worker"]
+    depends_on:
+      backend-app-test:
+        condition: service_healthy
+    networks: [bioavanced-test]
+
+  neo4j-projection-worker-test:
+    # Drains graph_projection_outbox into Neo4j (RF023, #292) — nothing else
+    # in this stack runs neo4jProjection.worker.js; without this service
+    # outbox rows sit PENDING forever and pipeline-continuity.spec.ts's
+    # polling assertions would time out regardless of backend correctness.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    environment:
+      <<: *test-env
+    command: ["npm", "run", "neo4j:canonical:worker"]
     depends_on:
       backend-app-test:
         condition: service_healthy
