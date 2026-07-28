@@ -323,7 +323,10 @@ describe('TelemetryMonitor', () => {
         criticalDurationHours: 2,
         expectedReadingIntervalMinutes: 15
       });
-      getCollectionSpy.mockReturnValue({ find: () => ({ toArray: async () => [{ _id: 'sample-1' }] }) });
+      // findCriticalFreezers() delegates root-sample resolution to
+      // resolveRootSamples(), which has its own dedicated tests below;
+      // stub it here so this test only asserts the streak-detection logic.
+      monitor.resolveRootSamples = vi.fn().mockResolvedValue(['sample-1']);
 
       getInfluxQueryApiSpy.mockReturnValue({
         collectRows: vi.fn().mockResolvedValue([
@@ -406,19 +409,79 @@ describe('TelemetryMonitor', () => {
   });
 
   describe('resolveRootSamples()', () => {
-    it('queries the samples collection with freezerKey/isRoot filter and maps to _id', async () => {
-      const toArray = vi.fn().mockResolvedValue([{ _id: 'id-1' }, { _id: 'id-2' }]);
-      const find = vi.fn(() => ({ toArray }));
-      getCollectionSpy.mockReturnValue({ find });
+    function fakeCollection(docsByFind) {
+      return { find: vi.fn((query) => ({ toArray: async () => docsByFind(query) })) };
+    }
 
-      const db = { name: 'fake-db' };
+    function buildDb({ sensor, shelves = [], racks = [], boxes = [] }) {
+      const sensorMetadata = { findOne: vi.fn().mockResolvedValue(sensor) };
+      const storageContainers = fakeCollection((query) => {
+        if (query.containerType === 'SHELF') return shelves;
+        if (query.containerType === 'RACK') return racks;
+        return [];
+      });
+      const storageBoxes = fakeCollection(() => boxes);
+
+      return {
+        collection: vi.fn((name) => {
+          if (name === 'sensorMetadata') return sensorMetadata;
+          if (name === 'storageContainers') return storageContainers;
+          if (name === 'storageBoxes') return storageBoxes;
+          throw new Error(`unexpected collection: ${name}`);
+        }),
+        sensorMetadata,
+        storageContainers,
+        storageBoxes
+      };
+    }
+
+    it('returns [] when no sensorMetadata doc matches the freezerKey (sensorId)', async () => {
+      const db = buildDb({ sensor: null });
       const monitor = new TelemetryMonitor({ db });
 
-      const result = await monitor.resolveRootSamples('freezer-X');
+      const result = await monitor.resolveRootSamples('sensor-unknown');
 
+      expect(db.sensorMetadata.findOne).toHaveBeenCalledWith({ sensorId: 'sensor-unknown' });
+      expect(result).toEqual([]);
+    });
+
+    it('returns [] when the matched sensor has no storageContainer link', async () => {
+      const db = buildDb({ sensor: { sensorId: 'sensor-A', storageContainer: null } });
+      const monitor = new TelemetryMonitor({ db });
+
+      const result = await monitor.resolveRootSamples('sensor-A');
+
+      expect(result).toEqual([]);
+    });
+
+    it('returns [] when the freezer container has no shelves/racks/boxes under it', async () => {
+      const db = buildDb({ sensor: { sensorId: 'sensor-A', storageContainer: 'freezer-1' }, shelves: [] });
+      const monitor = new TelemetryMonitor({ db });
+
+      const result = await monitor.resolveRootSamples('sensor-A');
+
+      expect(result).toEqual([]);
+    });
+
+    it('walks FREEZER -> SHELF -> RACK -> StorageBox and returns samples whose storageLocation.boxId matches', async () => {
+      const db = buildDb({
+        sensor: { sensorId: 'sensor-A', storageContainer: 'freezer-1' },
+        shelves: [{ _id: 'shelf-1' }],
+        racks: [{ _id: 'rack-1' }],
+        boxes: [{ _id: 'box-1' }, { _id: 'box-2' }]
+      });
+      getCollectionSpy.mockReturnValue({
+        find: vi.fn(() => ({ toArray: async () => [{ _id: 'sample-1' }, { _id: 'sample-2' }] }))
+      });
+
+      const monitor = new TelemetryMonitor({ db });
+      const result = await monitor.resolveRootSamples('sensor-A');
+
+      expect(db.storageContainers.find).toHaveBeenCalledWith({ parent_id: 'freezer-1', containerType: 'SHELF' });
+      expect(db.storageContainers.find).toHaveBeenCalledWith({ parent_id: { $in: ['shelf-1'] }, containerType: 'RACK' });
+      expect(db.storageBoxes.find).toHaveBeenCalledWith({ parent_id: { $in: ['rack-1'] } });
       expect(getCollectionSpy).toHaveBeenCalledWith(db, 'samples');
-      expect(find).toHaveBeenCalledWith({ freezerKey: 'freezer-X', isRoot: true });
-      expect(result).toEqual(['id-1', 'id-2']);
+      expect(result).toEqual(['sample-1', 'sample-2']);
     });
   });
 

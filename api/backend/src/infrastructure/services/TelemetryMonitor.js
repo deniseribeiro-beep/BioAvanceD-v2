@@ -175,10 +175,53 @@ class TelemetryMonitor {
     return criticalFreezers;
   }
 
+  // #308: freezerKey is the sensor's sensorId (see findCriticalFreezers).
+  // No sample ever carries a freezerKey field directly — the real, already
+  // populated link from a sensor to "which samples live in this freezer" is
+  // SensorMetadata.storageContainer (the FREEZER-type StorageContainer the
+  // sensor is mounted in) down through the existing storage hierarchy
+  // (FREEZER -> SHELF -> RACK -> StorageBox), joined to
+  // Sample.storageLocation.boxId. Raw db.collection() access here matches
+  // findSensorsWithMissingReadings()'s existing pattern for sensorMetadata
+  // (not in getCollection()'s canonical-name whitelist); storageContainers/
+  // storageBoxes aren't in that whitelist either.
   async resolveRootSamples(freezerKey) {
-    // Exemplo: consulta ao MongoDB para encontrar amostras raiz
-    const samples = await getCollection(this.db, 'samples').find({ freezerKey, isRoot: true }).toArray();
+    const sensor = await this.db.collection('sensorMetadata').findOne({ sensorId: freezerKey });
+    if (!sensor?.storageContainer) {
+      return [];
+    }
+
+    const boxIds = await this.resolveBoxIdsUnderFreezer(sensor.storageContainer);
+    if (boxIds.length === 0) {
+      return [];
+    }
+
+    const samples = await getCollection(this.db, 'samples')
+      .find({ 'storageLocation.boxId': { $in: boxIds } })
+      .toArray();
     return samples.map(s => s._id);
+  }
+
+  // Walks StorageContainer's FREEZER -> SHELF -> RACK chain (see
+  // StorageContainer.js/StorageBox.js) to collect every StorageBox id
+  // physically inside the given freezer container.
+  async resolveBoxIdsUnderFreezer(freezerContainerId) {
+    const containers = this.db.collection('storageContainers');
+
+    const shelves = await containers.find({ parent_id: freezerContainerId, containerType: 'SHELF' }).toArray();
+    const shelfIds = shelves.map(s => s._id);
+    if (shelfIds.length === 0) {
+      return [];
+    }
+
+    const racks = await containers.find({ parent_id: { $in: shelfIds }, containerType: 'RACK' }).toArray();
+    const rackIds = racks.map(r => r._id);
+    if (rackIds.length === 0) {
+      return [];
+    }
+
+    const boxes = await this.db.collection('storageBoxes').find({ parent_id: { $in: rackIds } }).toArray();
+    return boxes.map(b => b._id);
   }
 
   // AC#4 "leituras ausentes": per-sensor last-point-in-bucket lookup via
