@@ -8,9 +8,13 @@ const SensorMetadata = require('../models/SensorMetadata.schema');
 // for model \"TemperaturePolicy\"" (caught, logged, silently treated as
 // "no policy found").
 require('../models/TemperaturePolicy.schema');
+// Same registration requirement as TemperaturePolicy above — populate('device')
+// throws "Schema hasn't been registered for model \"Device\"" otherwise.
+require('../models/Device.schema');
 const { saveTelemetryPoint } = require('../services/saveTelemetryPoint');
 const { sendCriticalAlertEmail } = require('../services/sendCriticalAlertEmail');
 const TemperatureIncidentModel = require('../models/TemperatureIncident');
+const EnvironmentalExcursionModel = require('../models/EnvironmentalExcursion');
 const coldChainQuarantineService = require('../services/equipment-sensor-quarantine.service');
 
 const sensorPolicyCache = new Map();
@@ -34,7 +38,9 @@ async function resolveTemperaturePolicy(sensorId) {
     return value;
   }
 
-  const sensorMetadata = await SensorMetadata.findOne({ sensorId: cacheKey }).populate('temperaturePolicy').lean();
+  const sensorMetadata = await SensorMetadata.findOne({ sensorId: cacheKey })
+    .populate(['temperaturePolicy', 'device'])
+    .lean();
   const value = { sensorMetadata, temperaturePolicy: sensorMetadata?.temperaturePolicy || null, db };
   sensorPolicyCache.set(cacheKey, { value, expiresAt: Date.now() + SENSOR_POLICY_CACHE_TTL_MS });
   return value;
@@ -109,6 +115,41 @@ async function upsertTemperatureIncidentAndQuarantine(policyData, normalizedSens
   }
 }
 
+async function upsertEnvironmentalExcursion(policyData, temperaturePolicy, normalizedSensorId, normalizedTemperature, normalizedTimestamp, quarantine) {
+  const db = policyData?.db || await connectMongoDB();
+  const ExcursionCollection = db.collection('environmentalExcursions');
+  const deviceId = policyData?.sensorMetadata?.device?.deviceId || null;
+
+  const existingExcursion = await ExcursionCollection.findOne({
+    equipmentId: deviceId,
+    excursionStatus: { $in: ['open', 'under_assessment'] }
+  });
+
+  if (existingExcursion) {
+    await ExcursionCollection.updateOne({ _id: existingExcursion._id }, {
+      $set: {
+        minimumValue: Math.min(existingExcursion.minimumValue, normalizedTemperature),
+        maximumValue: Math.max(existingExcursion.maximumValue, normalizedTemperature),
+        quarantineActionId: quarantine?.triggered ? quarantine.incidentId : existingExcursion.quarantineActionId,
+        updatedAt: new Date()
+      }
+    });
+    return;
+  }
+
+  const excursion = EnvironmentalExcursionModel.create({
+    equipmentId: deviceId,
+    startDateTime: normalizedTimestamp,
+    minimumValue: normalizedTemperature,
+    maximumValue: normalizedTemperature,
+    excursionStatus: 'open',
+    triggeringPolicyId: String(temperaturePolicy._id || temperaturePolicy.id || ''),
+    originalReading: normalizedTemperature,
+    quarantineActionId: quarantine?.triggered ? quarantine.incidentId : null
+  });
+  await ExcursionCollection.insertOne(excursion);
+}
+
 async function ingestTelemetry(req, res) {
   try {
     const { sensorId, temperature, timestamp } = req.body || {};
@@ -153,6 +194,10 @@ async function ingestTelemetry(req, res) {
           .then(() => upsertTemperatureIncidentAndQuarantine(policyData, normalizedSensorId, normalizedTemperature, normalizedTimestamp))
           .catch((error) => logger.error('[IOT_INCIDENT] Falha ao registrar incidente:', error.message || error));
 
+        void Promise.resolve()
+          .then(() => upsertEnvironmentalExcursion(policyData, temperaturePolicy, normalizedSensorId, normalizedTemperature, normalizedTimestamp))
+          .catch((error) => logger.error('[IOT_EXCURSION] Falha ao registrar excursão ambiental:', error.message || error));
+
         if (recipientEmail) {
           void sendCriticalAlertEmail(normalizedSensorId, normalizedTemperature, maxTemp, recipientEmail).catch((error) => {
             logger.error('[ISO20387][IOT] Falha ao enviar e-mail crítico via Resend:', error.message || error);
@@ -168,4 +213,4 @@ async function ingestTelemetry(req, res) {
   }
 }
 
-module.exports = { ingestTelemetry, resolveTemperaturePolicy, sensorPolicyCache };
+module.exports = { ingestTelemetry, resolveTemperaturePolicy, sensorPolicyCache, upsertEnvironmentalExcursion };

@@ -33,14 +33,16 @@ export interface SeededSensor {
   policyId: string;
   minTemp: number;
   maxTemp: number;
+  deviceId: string;
 }
 
 /**
- * Seeds a TemperaturePolicy and a SensorMetadata doc bound to it, so a
- * POST /api/iot/telemetry reading for `sensorId` resolves a real policy in
- * iot.controller.js's resolveTemperaturePolicy (bypassing its NODE_ENV=test
- * hardcoded 'sensor-1' shortcut, which this deliberately avoids using so
- * the out-of-range/incident path is proven against real seeded data).
+ * Seeds a TemperaturePolicy, a Device, and a SensorMetadata doc bound to
+ * both, so a POST /api/iot/telemetry reading for `sensorId` resolves a real
+ * policy (and device) in iot.controller.js's resolveTemperaturePolicy
+ * (bypassing its NODE_ENV=test hardcoded 'sensor-1' shortcut, which this
+ * deliberately avoids using so the out-of-range/incident/excursion path is
+ * proven against real seeded data).
  */
 export async function seedSensorWithPolicy(
   minTemp: number,
@@ -49,6 +51,7 @@ export async function seedSensorWithPolicy(
   const db = await getDb();
   const suffix = Date.now();
   const sensorId = `rf009-e2e-sensor-${suffix}`;
+  const deviceId = `rf009-e2e-device-${suffix}`;
 
   const policyResult = await db.collection('temperaturePolicies').insertOne({
     name: `RF009 e2e policy ${suffix}`,
@@ -60,20 +63,35 @@ export async function seedSensorWithPolicy(
     updatedAt: new Date(),
   });
 
+  const deviceResult = await db.collection('devices').insertOne({
+    deviceId,
+    deviceType: 'freezer',
+    qualificationStatus: 'qualified',
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+
   await db.collection('sensorMetadata').insertOne({
     sensorId,
     macAddress: `AA:BB:CC:00:00:${(suffix % 100).toString().padStart(2, '0')}`,
     equipment: null,
+    device: deviceResult.insertedId,
     temperaturePolicy: policyResult.insertedId,
     createdAt: new Date(),
     updatedAt: new Date(),
   });
 
-  return { sensorId, policyId: policyResult.insertedId.toString(), minTemp, maxTemp };
+  return { sensorId, policyId: policyResult.insertedId.toString(), minTemp, maxTemp, deviceId };
 }
 
 /** Reads back the TemperatureIncident (if any) opened for a given sensor. */
 export async function findTemperatureIncident(sensorId: string): Promise<any | null> {
   const db = await getDb();
   return db.collection('temperatureIncidents').findOne({ sensorKey: sensorId });
+}
+
+/** Reads back the EnvironmentalExcursion (if any) opened for a given device. */
+export async function findEnvironmentalExcursion(deviceId: string): Promise<any | null> {
+  const db = await getDb();
+  return db.collection('environmentalExcursions').findOne({ equipmentId: deviceId });
 }
