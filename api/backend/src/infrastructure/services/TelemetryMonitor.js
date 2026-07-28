@@ -7,6 +7,8 @@ const {
   getInfluxQueryApi,
   getInfluxConfig
 } = require('../database/influxdb/connection');
+const EnvironmentalExcursionModel = require('../../models/EnvironmentalExcursion');
+const { quarantineByColdChainIncident } = require('../../services/equipment-sensor-quarantine.service');
 
 /**
  * Monitor de Telemetria (InfluxDB -> Neo4j)
@@ -23,6 +25,12 @@ class TelemetryMonitor {
     this.criticalDurationHours = Number(options.criticalDurationHours ?? process.env.TELEMETRY_CRITICAL_DURATION_HOURS ?? 2);
     this.lookbackHours = Number(options.lookbackHours ?? process.env.TELEMETRY_LOOKBACK_HOURS ?? Math.max(3, this.criticalDurationHours + 1));
     this.triggerCooldownMinutes = Number(options.triggerCooldownMinutes ?? process.env.TELEMETRY_TRIGGER_COOLDOWN_MINUTES ?? 30);
+    // AC#4 "leituras ausentes": a sensor with no InfluxDB point in this
+    // many minutes is treated as missing, distinct from criticalDurationHours
+    // (which governs the sustained out-of-range case, not absence).
+    this.expectedReadingIntervalMinutes = Number(
+      options.expectedReadingIntervalMinutes ?? process.env.TELEMETRY_EXPECTED_READING_INTERVAL_MINUTES ?? 15
+    );
     this.task = null;
     this.lastTriggeredAt = new Map();
   }
@@ -55,6 +63,16 @@ class TelemetryMonitor {
       logger.warn('[ISO20387][TELEMETRY] Banco Mongo indisponível; ciclo ignorado');
       return;
     }
+
+    // AC#4 missing-reading detection doesn't depend on Neo4j, so it runs
+    // ahead of (and independently from) the critical-freezer/propagation
+    // flow below, which does.
+    try {
+      await this.checkMissingReadings();
+    } catch (error) {
+      logger.error('[ISO20387][TELEMETRY] Falha ao verificar leituras ausentes:', error.message || error);
+    }
+
     const neo4jDriver = this.getNeo4jDriver ? await this.getNeo4jDriver() : null;
     if (!neo4jDriver) {
       logger.warn('[ISO20387][TELEMETRY] Neo4j indisponível; ciclo ignorado');
@@ -104,6 +122,104 @@ class TelemetryMonitor {
     // Exemplo: consulta ao MongoDB para encontrar amostras raiz
     const samples = await getCollection(this.db, 'samples').find({ freezerKey, isRoot: true }).toArray();
     return samples.map(s => s._id);
+  }
+
+  // AC#4 "leituras ausentes": per-sensor last-point-in-bucket lookup via
+  // Influx. Raw db.collection() access for sensorMetadata/devices/
+  // environmentalExcursions here (not the getCollection() wrapper —
+  // that resolves through a canonical-name whitelist none of these three
+  // are in, and is itself async, so `getCollection(...).find(...)`
+  // silently calls .find on a Promise; not the mongoose models
+  // iot.controller.js uses either — this file has no existing mongoose
+  // wiring). This matches iot.controller.js's own upsertEnvironmentalExcursion,
+  // which already reads/writes environmentalExcursions the same raw way.
+  async findSensorsWithMissingReadings() {
+    const sensors = await this.db.collection('sensorMetadata').find({}).toArray();
+    if (!sensors.length) {
+      return [];
+    }
+
+    const deviceIds = sensors.map(s => s.device).filter(Boolean);
+    const devices = deviceIds.length
+      ? await this.db.collection('devices').find({ _id: { $in: deviceIds } }).toArray()
+      : [];
+    const deviceById = new Map(devices.map(d => [String(d._id), d]));
+
+    await connectInfluxDB();
+    const queryApi = getInfluxQueryApi();
+    const fluxQuery = `from(bucket: \"${getInfluxConfig().bucket}\")
+      |> range(start: -${this.lookbackHours}h)
+      |> filter(fn: (r) => r._measurement == \"temperature\")
+      |> filter(fn: (r) => r._field == \"value\")
+      |> group(columns: [\"sensorId\"])
+      |> last()`;
+    const rows = await queryApi.collectRows(fluxQuery);
+
+    const lastReadingAtBySensor = new Map();
+    for (const row of rows) {
+      lastReadingAtBySensor.set(row.sensorId, new Date(row._time));
+    }
+
+    const thresholdMs = this.expectedReadingIntervalMinutes * 60 * 1000;
+    const now = Date.now();
+    const missing = [];
+    for (const sensor of sensors) {
+      const lastReadingAt = lastReadingAtBySensor.get(sensor.sensorId) || null;
+      const elapsedMs = lastReadingAt ? now - lastReadingAt.getTime() : Infinity;
+      if (elapsedMs > thresholdMs) {
+        const device = sensor.device ? deviceById.get(String(sensor.device)) : null;
+        missing.push({ sensorId: sensor.sensorId, deviceId: device?.deviceId || null, lastReadingAt });
+      }
+    }
+    return missing;
+  }
+
+  // Same open/widen pattern as iot.controller.js's upsertEnvironmentalExcursion,
+  // scoped to excursionType 'missing_reading' so it never collides with an
+  // in-flight temperature_out_of_range excursion on the same device.
+  async upsertMissingReadingExcursion({ sensorId, deviceId, lastReadingAt }) {
+    const ExcursionCollection = this.db.collection('environmentalExcursions');
+    const existingExcursion = await ExcursionCollection.findOne({
+      equipmentId: deviceId,
+      excursionType: 'missing_reading',
+      excursionStatus: { $in: ['open', 'under_assessment'] }
+    });
+
+    if (existingExcursion) {
+      await ExcursionCollection.updateOne({ _id: existingExcursion._id }, { $set: { updatedAt: new Date() } });
+    } else {
+      const excursion = EnvironmentalExcursionModel.create({
+        equipmentId: deviceId,
+        startDateTime: lastReadingAt || new Date(),
+        excursionStatus: 'open',
+        excursionType: 'missing_reading',
+        triggeringPolicyId: `missing_reading:${this.expectedReadingIntervalMinutes}m`,
+        impactAssessment: `Sensor ${sensorId} sem leitura há mais de ${this.expectedReadingIntervalMinutes} minutos.`
+      });
+      await ExcursionCollection.insertOne(excursion);
+    }
+
+    // AC#6 "acionar alerta e avaliação de quarentena" applies to the
+    // missing-reading trigger the same way it applies to the existing
+    // out-of-range one — quarantineByColdChainIncident already generalizes
+    // over any sensorKey/status shape, so no missing-reading-specific
+    // quarantine path is needed.
+    try {
+      await quarantineByColdChainIncident(this.db, { sensorKey: sensorId, status: 'open' });
+    } catch (error) {
+      logger.error('[ISO20387][TELEMETRY] Falha ao avaliar quarentena por leitura ausente:', error.message || error);
+    }
+  }
+
+  async checkMissingReadings() {
+    const missingSensors = await this.findSensorsWithMissingReadings();
+    for (const missing of missingSensors) {
+      if (!missing.deviceId) {
+        continue;
+      }
+      await this.upsertMissingReadingExcursion(missing);
+    }
+    return missingSensors;
   }
 
   async propagateCompromise({ neo4jDriver, rootSampleId, freezerKey, breachedSince, maxObservedTemp }) {

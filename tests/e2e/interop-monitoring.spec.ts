@@ -3,6 +3,8 @@ import {
   seedSensorWithPolicy,
   findTemperatureIncident,
   findEnvironmentalExcursion,
+  countEnvironmentalExcursions,
+  removeSeededSensor,
   closeSeedSensorDb,
 } from './helpers/seedSensor';
 import { queryTemperaturePoints } from './helpers/queryInflux';
@@ -20,10 +22,10 @@ test.describe('Telemetria e monitoramento ambiental (RF009) — real backend, in
   // already exists (AC#1, AC#2, AC#3-partial, AC#4-invalid, AC#4-out-of-
   // range detection, AC#6-partial via the existing TemperatureIncident +
   // quarantine-evaluation path). #298 (below) adds the real Device entity
-  // and EnvironmentalExcursion record for AC#3/AC#5/AC#7. NOT covered here,
-  // carried to #299:
-  // - AC#4's missing-reading half and AC#6's full alert/quarantine
-  //   evaluation via TelemetryMonitor (currently stubbed to a no-op).
+  // and EnvironmentalExcursion record for AC#3/AC#5/AC#7. AC#4's
+  // missing-reading half is covered further below (#299, split into #303/
+  // #304 for the real-InfluxDB critical-freezer detection and real-Neo4j
+  // propagation halves of AC#6, still stubbed).
 
   test.afterAll(async () => {
     await closeSeedSensorDb();
@@ -188,5 +190,74 @@ test.describe('Telemetria e monitoramento ambiental (RF009) — EnvironmentalExc
 
     const excursion = await findEnvironmentalExcursion(sensor.deviceId);
     expect(excursion).toBeNull();
+  });
+});
+
+test.describe('Telemetria e monitoramento ambiental (RF009) — missing-reading detection (#299)', () => {
+  test.afterAll(async () => {
+    await closeSeedSensorDb();
+  });
+
+  // TelemetryMonitor's cron defaults to a 5-minute interval, too slow for
+  // e2e assertions — /api/iot/telemetry-monitor/run-cycle (test-support
+  // only, gated out of production) runs the real runCycle() synchronously
+  // instead.
+  async function triggerMonitorCycle(request: import('@playwright/test').APIRequestContext) {
+    const response = await request.post(`${apiBaseURL}/api/iot/telemetry-monitor/run-cycle`);
+    expect(response.status()).toBe(200);
+  }
+
+  test('a sensor that has never sent a reading is flagged as missing, opening a missing_reading EnvironmentalExcursion (criteria 4, 6)', async ({
+    request,
+  }) => {
+    const sensor = await seedSensorWithPolicy(2, 8);
+    try {
+      await triggerMonitorCycle(request);
+
+      const excursion = await findEnvironmentalExcursion(sensor.deviceId);
+      expect(excursion).toBeTruthy();
+      expect(excursion.excursionType).toBe('missing_reading');
+      expect(excursion.excursionStatus).toBe('open');
+      expect(excursion.equipmentId).toBe(sensor.deviceId);
+    } finally {
+      await removeSeededSensor(sensor);
+    }
+  });
+
+  test('running the monitor cycle twice for the same never-reported sensor does not open a second excursion', async ({
+    request,
+  }) => {
+    const sensor = await seedSensorWithPolicy(2, 8);
+    try {
+      await triggerMonitorCycle(request);
+      await triggerMonitorCycle(request);
+
+      const count = await countEnvironmentalExcursions(sensor.deviceId, 'missing_reading');
+      expect(count).toBe(1);
+    } finally {
+      await removeSeededSensor(sensor);
+    }
+  });
+
+  test('a sensor with a fresh in-range reading is not flagged as missing', async ({ request }) => {
+    const sensor = await seedSensorWithPolicy(2, 8);
+    try {
+      await request.post(`${apiBaseURL}/api/iot/telemetry`, {
+        data: { sensorId: sensor.sensorId, temperature: 5, timestamp: new Date().toISOString() },
+      });
+      await expect
+        .poll(async () => {
+          const points = await queryTemperaturePoints(sensor.sensorId);
+          return points.length;
+        }, { timeout: 15_000 })
+        .toBeGreaterThan(0);
+
+      await triggerMonitorCycle(request);
+
+      const excursion = await findEnvironmentalExcursion(sensor.deviceId);
+      expect(excursion).toBeNull();
+    } finally {
+      await removeSeededSensor(sensor);
+    }
   });
 });
