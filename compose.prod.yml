@@ -140,6 +140,35 @@ services:
       retries: 20
       start_period: 30s
 
+  neo4j-projection-worker:
+    # Drains graph_projection_outbox into Neo4j (#309, follow-up from RF023/#292)
+    # — without this service, outbox rows written by consent.service.js
+    # (and future appendLineageEvent/appendQualityEvent/appendTelemetryEvent
+    # callers) sit PENDING forever and the graph projection never happens.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.prod
+    restart: unless-stopped
+    init: true
+    command: npm run neo4j:canonical:worker
+    env_file:
+      - .env.production.example
+    environment:
+      NODE_ENV: production
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+      influxdb:
+        condition: service_healthy
+    read_only: true
+    cap_drop: ["ALL"]
+    tmpfs:
+      - /tmp
+
   frontend:
     build:
       context: ./frontend

@@ -92,6 +92,31 @@ services:
       influxdb:
         condition: service_healthy
 
+  neo4j-projection-worker:
+    # Drains graph_projection_outbox into Neo4j (#309, follow-up from RF023/#292)
+    # — without this service, outbox rows written by consent.service.js
+    # (and future appendLineageEvent/appendQualityEvent/appendTelemetryEvent
+    # callers) sit PENDING forever and the graph projection never happens.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    command: npm run neo4j:canonical:worker
+    volumes:
+      - ./api/backend:/app
+      - backend_node_modules:/app/node_modules
+      - ./artifacts:/workspace/artifacts
+    env_file:
+      - .env.docker.example
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+      influxdb:
+        condition: service_healthy
+
   frontend:
     build:
       context: ./frontend
