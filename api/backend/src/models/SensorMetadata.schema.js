@@ -9,6 +9,11 @@ const SensorMetadataSchema = new mongoose.Schema(
       ref: 'Equipment',
       default: null,
     },
+    device: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Device',
+      default: null,
+    },
     temperaturePolicy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'TemperaturePolicy',

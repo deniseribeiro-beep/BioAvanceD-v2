@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 import {
   seedSensorWithPolicy,
   findTemperatureIncident,
+  findEnvironmentalExcursion,
   closeSeedSensorDb,
 } from './helpers/seedSensor';
 import { queryTemperaturePoints } from './helpers/queryInflux';
@@ -18,16 +19,11 @@ test.describe('Telemetria e monitoramento ambiental (RF009) — real backend, in
   // Chunk A of #289: proves the ingestion/persistence/rejection path that
   // already exists (AC#1, AC#2, AC#3-partial, AC#4-invalid, AC#4-out-of-
   // range detection, AC#6-partial via the existing TemperatureIncident +
-  // quarantine-evaluation path). NOT covered here, carried to follow-ups:
-  // - AC#5/AC#7 (a real EnvironmentalExcursion record with
-  //   startDateTime/endDateTime/minimumValue/maximumValue, distinct from
-  //   the TemperatureIncident shape asserted below) — issue #298.
+  // quarantine-evaluation path). #298 (below) adds the real Device entity
+  // and EnvironmentalExcursion record for AC#3/AC#5/AC#7. NOT covered here,
+  // carried to #299:
   // - AC#4's missing-reading half and AC#6's full alert/quarantine
-  //   evaluation via TelemetryMonitor (currently stubbed to a no-op) —
-  //   issue #299.
-  // - A first-class Device entity for AC#3's "vincular ao Device" (today
-  //   only a bare sensorId tag on the Influx point + a SensorMetadata doc,
-  //   no resolvable storage-location reference) — also #298.
+  //   evaluation via TelemetryMonitor (currently stubbed to a no-op).
 
   test.afterAll(async () => {
     await closeSeedSensorDb();
@@ -119,5 +115,78 @@ test.describe('Telemetria e monitoramento ambiental (RF009) — real backend, in
 
     const incident = await findTemperatureIncident(sensor.sensorId);
     expect(incident).toBeNull();
+  });
+});
+
+test.describe('Telemetria e monitoramento ambiental (RF009) — EnvironmentalExcursion (#298)', () => {
+  test.afterAll(async () => {
+    await closeSeedSensorDb();
+  });
+
+  test('an out-of-range reading opens an EnvironmentalExcursion linked to the sensor\'s Device, preserving the original reading and the policy that triggered it (criteria 5, 7)', async ({
+    request,
+  }) => {
+    const sensor = await seedSensorWithPolicy(2, 8);
+
+    const response = await request.post(`${apiBaseURL}/api/iot/telemetry`, {
+      data: { sensorId: sensor.sensorId, temperature: 25, timestamp: new Date().toISOString() },
+    });
+
+    expect(response.status()).toBe(200);
+
+    await expect
+      .poll(async () => findEnvironmentalExcursion(sensor.deviceId), { timeout: 15_000 })
+      .toBeTruthy();
+
+    const excursion = await findEnvironmentalExcursion(sensor.deviceId);
+    expect(excursion.equipmentId).toBe(sensor.deviceId);
+    expect(excursion.originalReading).toBe(25);
+    expect(excursion.minimumValue).toBe(25);
+    expect(excursion.maximumValue).toBe(25);
+    expect(excursion.triggeringPolicyId).toBe(sensor.policyId);
+    expect(excursion.excursionStatus).toBe('open');
+    expect(excursion.startDateTime).toBeTruthy();
+  });
+
+  test('a second out-of-range reading for the same device widens the existing excursion instead of opening a new one (criterion 5)', async ({
+    request,
+  }) => {
+    const sensor = await seedSensorWithPolicy(2, 8);
+
+    await request.post(`${apiBaseURL}/api/iot/telemetry`, {
+      data: { sensorId: sensor.sensorId, temperature: 25, timestamp: new Date().toISOString() },
+    });
+    await expect
+      .poll(async () => findEnvironmentalExcursion(sensor.deviceId), { timeout: 15_000 })
+      .toBeTruthy();
+
+    await request.post(`${apiBaseURL}/api/iot/telemetry`, {
+      data: { sensorId: sensor.sensorId, temperature: 30, timestamp: new Date().toISOString() },
+    });
+    await expect
+      .poll(async () => (await findEnvironmentalExcursion(sensor.deviceId))?.maximumValue, { timeout: 15_000 })
+      .toBe(30);
+
+    const excursion = await findEnvironmentalExcursion(sensor.deviceId);
+    expect(excursion.minimumValue).toBe(25);
+    expect(excursion.maximumValue).toBe(30);
+  });
+
+  test('an in-range reading never opens an EnvironmentalExcursion', async ({ request }) => {
+    const sensor = await seedSensorWithPolicy(2, 8);
+
+    await request.post(`${apiBaseURL}/api/iot/telemetry`, {
+      data: { sensorId: sensor.sensorId, temperature: 5, timestamp: new Date().toISOString() },
+    });
+
+    await expect
+      .poll(async () => {
+        const points = await queryTemperaturePoints(sensor.sensorId);
+        return points.length;
+      }, { timeout: 15_000 })
+      .toBeGreaterThan(0);
+
+    const excursion = await findEnvironmentalExcursion(sensor.deviceId);
+    expect(excursion).toBeNull();
   });
 });
