@@ -1,3 +1,4 @@
+const { ObjectId } = require('mongodb');
 const SensorModel = require('../models/Sensor');
 const logger = require('../utils/logger');
 const defaultQuarantineService = require('./equipment-sensor-quarantine.service');
@@ -29,6 +30,10 @@ class SensorService {
 
       logger.info('Sensor criado:', { sensorId: result.insertedId });
 
+      if (sensor.macAddress) {
+        await this.linkSensorMetadata(db, sensor.sensorId, sensor.macAddress, sensorData.storageContainer);
+      }
+
       return {
         _id: result.insertedId,
         ...sensor
@@ -36,6 +41,36 @@ class SensorService {
     } catch (error) {
       logger.error('Erro ao criar sensor:', error.message);
       throw error;
+    }
+  }
+
+  /**
+   * Vincula (upsert) o SensorMetadata correspondente ao Sensor recém-criado,
+   * incluindo o StorageContainer (RF009 AC#3 - vincular cada leitura ao
+   * local de armazenamento). Sem macAddress não há SensorMetadata a criar
+   * (campo obrigatório/único no schema), então o sensor básico segue criado
+   * normalmente.
+   */
+  async linkSensorMetadata(db, sensorId, macAddress, storageContainerId) {
+    try {
+      const sensorMetadataCollection = db.collection('sensorMetadata');
+      const set = { sensorId, macAddress, updatedAt: new Date() };
+      if (storageContainerId) {
+        set.storageContainer = ObjectId.isValid(storageContainerId)
+          ? new ObjectId(storageContainerId)
+          : storageContainerId;
+      }
+
+      await sensorMetadataCollection.updateOne(
+        { sensorId },
+        {
+          $set: set,
+          $setOnInsert: { equipment: null, device: null, temperaturePolicy: null, createdAt: new Date() }
+        },
+        { upsert: true }
+      );
+    } catch (error) {
+      logger.error('Erro ao vincular SensorMetadata:', error.message);
     }
   }
 

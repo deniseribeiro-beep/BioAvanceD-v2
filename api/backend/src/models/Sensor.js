@@ -34,6 +34,7 @@ class SensorModel {
       calibrationCertificate: data.calibrationCertificate || null, // String - Código ou URL do certificado
       locationId: data.locationId || data.locationID || null, // String conforme dicionário
       policyId: data.policyId || data.policyID || null, // String conforme dicionário
+      macAddress: data.macAddress || null,
       createdAt: new Date(),
       updatedAt: new Date()
     };

@@ -48,6 +48,52 @@ describe('sensor.service (non-quarantine paths)', () => {
       expect(result.sensorType).toBe('temperature');
       expect(result.maintenanceStatus).toBe('operational');
     });
+
+    it('does not touch sensorMetadata when no macAddress is provided (back-compat)', async () => {
+      const { db, collection } = makeDb();
+      collection.insertOne.mockResolvedValue({ insertedId: 'abc123' });
+
+      await sensorService.createSensor(db, { sensorId: 'S-1', sensorType: 'temperature' });
+
+      expect(db.collection).not.toHaveBeenCalledWith('sensorMetadata');
+    });
+
+    it('upserts a linked sensorMetadata doc (with storageContainer) when macAddress is provided', async () => {
+      const { db } = makeDb();
+      const sensorsCollection = { insertOne: vi.fn().mockResolvedValue({ insertedId: 'abc123' }) };
+      const sensorMetadataCollection = { updateOne: vi.fn().mockResolvedValue({ upsertedCount: 1 }) };
+      db.collection = vi.fn((name) => (name === 'sensorMetadata' ? sensorMetadataCollection : sensorsCollection));
+
+      const storageContainerId = '507f1f77bcf86cd799439099';
+      await sensorService.createSensor(db, {
+        sensorId: 'S-1',
+        sensorType: 'temperature',
+        macAddress: 'AA:BB:CC:00:00:01',
+        storageContainer: storageContainerId
+      });
+
+      expect(sensorMetadataCollection.updateOne).toHaveBeenCalledTimes(1);
+      const [filter, update, options] = sensorMetadataCollection.updateOne.mock.calls[0];
+      expect(filter).toEqual({ sensorId: 'S-1' });
+      expect(update.$set.macAddress).toBe('AA:BB:CC:00:00:01');
+      expect(update.$set.storageContainer.toString()).toBe(storageContainerId);
+      expect(options).toEqual({ upsert: true });
+    });
+
+    it('logs and does not throw when the sensorMetadata upsert fails', async () => {
+      const { db } = makeDb();
+      const sensorsCollection = { insertOne: vi.fn().mockResolvedValue({ insertedId: 'abc123' }) };
+      const sensorMetadataCollection = { updateOne: vi.fn().mockRejectedValue(new Error('E11000 duplicate key')) };
+      db.collection = vi.fn((name) => (name === 'sensorMetadata' ? sensorMetadataCollection : sensorsCollection));
+
+      const result = await sensorService.createSensor(db, {
+        sensorId: 'S-1',
+        sensorType: 'temperature',
+        macAddress: 'AA:BB:CC:00:00:01'
+      });
+
+      expect(result._id).toBe('abc123');
+    });
   });
 
   describe('getSensor', () => {

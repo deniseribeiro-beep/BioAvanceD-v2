@@ -102,6 +102,39 @@ export async function countEnvironmentalExcursions(deviceId: string, excursionTy
   return db.collection('environmentalExcursions').countDocuments({ equipmentId: deviceId, excursionType });
 }
 
+/** Seeds a bare FREEZER-type StorageContainer (collection storageContainers per StorageContainer.js) for #311 registration-flow specs. */
+export async function seedFreezerContainer(): Promise<string> {
+  const db = await getDb();
+  const result = await db.collection('storageContainers').insertOne({
+    name: `RF009 e2e freezer ${Date.now()}`,
+    containerType: 'FREEZER',
+    parent_id: null,
+    temperature: -80,
+    temperatureUnit: 'CELSIUS',
+    status: 'OPERATIONAL',
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    deletedAt: null,
+  });
+  return result.insertedId.toString();
+}
+
+/** Reads back a sensorMetadata doc by sensorId (raw, no Mongoose) for assertions against a real API-created sensor. */
+export async function findSensorMetadata(sensorId: string): Promise<any | null> {
+  const db = await getDb();
+  return db.collection('sensorMetadata').findOne({ sensorId });
+}
+
+/** Deletes a seeded freezer container and its linked sensorMetadata/sensors docs. */
+export async function removeSensorRegistration(sensorId: string, freezerId: string): Promise<void> {
+  const db = await getDb();
+  await Promise.all([
+    db.collection('sensors').deleteMany({ sensorId }),
+    db.collection('sensorMetadata').deleteMany({ sensorId }),
+    db.collection('storageContainers').deleteOne({ _id: new ObjectId(freezerId) }),
+  ]);
+}
+
 /**
  * Deletes everything seedSensorWithPolicy created for one sensor, plus any
  * excursion/incident it triggered. TelemetryMonitor's missing-reading
