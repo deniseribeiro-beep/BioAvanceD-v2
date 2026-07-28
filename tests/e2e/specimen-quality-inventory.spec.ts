@@ -428,3 +428,70 @@ test.describe('Chain of custody (RF006) — real backend', () => {
     expect(movementsAfter).toEqual(movementsBefore);
   });
 });
+
+test.describe('Specimen quality (RF018) — real backend, SPREC/RCS scoring (#290)', () => {
+  // POST /api/quality/preview (quality.routes.js) calls
+  // qualityDomain.evaluateQuality -> rcsCertificationService.certify
+  // directly against req.body — no sample/participant fixture needed,
+  // it's a pure scoring endpoint. Codes below are the same seeded fluid
+  // catalog used by rcs-certification.service.test.js's fluidSprec().
+  function fluidSprec(overrides: Record<string, unknown> = {}) {
+    return {
+      matrixType: 'fluid',
+      sampleType: 'BLD',
+      primaryContainer: 'SST',
+      preCentrifugation: 'A',
+      centrifugation: 'A',
+      secondCentrifugation: 'A',
+      postCentrifugationDelay: 'A',
+      longTermStorage: 'C',
+      ...overrides,
+    };
+  }
+
+  test('scores a well-formed SPREC payload and returns a non-compensable-free grade', async ({ request }) => {
+    const admin = await realLogin(request);
+    const sprec = fluidSprec();
+
+    const response = await request.post(`${apiBaseURL}/api/quality/preview`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { matrixType: sprec.matrixType, sprec },
+    });
+
+    expect(response.status()).toBe(200);
+    const body = await response.json();
+    expect(body.success).toBe(true);
+    expect(body.data.governance_status).toBe(1);
+    expect(body.data.final_grade).toBe('A');
+    expect(body.data.rcs_score).toBe(100);
+    expect(body.data.axis_penalties.length).toBe(5);
+  });
+
+  test('rejects an unknown SPREC code with a non-compensable Grade E governance failure', async ({ request }) => {
+    const admin = await realLogin(request);
+    const sprec = fluidSprec({ preCentrifugation: 'X' });
+
+    const response = await request.post(`${apiBaseURL}/api/quality/preview`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { matrixType: sprec.matrixType, sprec },
+    });
+
+    expect(response.status()).toBe(200);
+    const body = await response.json();
+    expect(body.data.governance_status).toBe(0);
+    expect(body.data.final_grade).toBe('E');
+    expect(body.data.rcs_score).toBeNull();
+    expect(body.data.grade_route).toBe('Governance failure');
+    expect(body.data.governance_failure_reasons).toContain('Unknown SPREC code');
+  });
+
+  test('the backend enforces auth independently of the frontend — no token is rejected on its own merits', async ({ request }) => {
+    const sprec = fluidSprec();
+
+    const response = await request.post(`${apiBaseURL}/api/quality/preview`, {
+      data: { matrixType: sprec.matrixType, sprec },
+    });
+
+    expect(response.status()).toBe(401);
+  });
+});
