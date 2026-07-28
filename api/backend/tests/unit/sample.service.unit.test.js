@@ -73,6 +73,7 @@ describe('SampleService.getSampleMovements', () => {
       collection: vi.fn().mockReturnValue({
         collectionName: 'sample_movements',
         find: vi.fn().mockReturnValue(cursor),
+        findOne: vi.fn().mockResolvedValue({ _id: 'SMP-001', specimenId: 'SMP-001' }),
         createIndex: vi.fn().mockResolvedValue(null),
         updateOne: vi.fn(),
         deleteOne: vi.fn(),
