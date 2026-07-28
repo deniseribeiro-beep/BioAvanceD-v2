@@ -1,118 +1,108 @@
 # HANDOFF
 
-**Written:** 2026-07-27, end of a housekeeping session (session 26) —
-not a `test-loop`/`fix-bugs`/`build-loop` iteration; this session pushed
-pending changes, cleaned up stale branches, and trimmed
-`COVERAGE_NOTES.md`. No product code touched.
+**Written:** 2026-07-28, end of a `build-loop` session — first real
+exercise of that skill (previously registered but untested). Delivered
+Phase 0 of `E2E_IMPLEMENTATION_PLAN.md`: the real-backend Playwright
+foundation (admin bootstrap, real login, audit assertion) that every
+RF/RNF wave depends on.
 
-**Branch:** `test/e2e-real-backend-foundation`, unchanged from last
-session (branched off `feature/docker-e2e-backend-integration`). Pushed
-and clean as of this writing.
+**Branch:** `test/e2e-real-backend-foundation` (off
+`feature/docker-e2e-backend-integration`), pushed and clean as of this
+writing, two commits ahead of last session's handoff point
+(`ab5cb575` the Phase 0 feature commit, `61e8c113` reconciling
+`E2E_IMPLEMENTATION_PLAN.md` with what actually shipped).
 
 ## What happened this session
 
-1. **Pushed pending changes**: two small commits that were sitting
-   uncommitted from the previous session — `.claude/.gitignore` +
-   `.claude/skills-manifest.txt` registering the new `build-loop` skill,
-   and a re-compaction of `api/backend/COVERAGE_NOTES.md`.
-2. **Trimmed `COVERAGE_NOTES.md`**: 356 → 225 lines. Removed
-   resolved-slice narrative for files that had already closed out to
-   GOOD/100% (a stale priority-list gap table, ~70 lines of MID-HIGH
-   per-file before/after paragraphs, a couple of stray ZERO/MID-LOW
-   notes) and condensed the #275/#277 coverage-drift essay to its
-   conclusion — per the file's own stated policy that only current
-   buckets and the latest reconcile numbers belong there. This is the
-   file's third compaction (895 → ~200 on 2026-07-24, crept to 356,
-   back to ~225 now) — logged as a recurring pattern in the file's own
-   "Maintaining this file" section this time, since it clearly isn't a
-   one-off.
-3. **Deleted 7 stale local `test/*` branches** (all authored by
-   DieAllPies, all confirmed fully merged into
-   `feature/docker-e2e-backend-integration` via
-   `git merge-base --is-ancestor` before deletion — not just `git
-   branch -d`'s default check, which only compares against a branch's
-   own possibly-stale remote-tracking ref): `test/audit-controller-
-   branch-coverage`, `test/e2e-scaffolding-95`, `test/e2e-
-   traceability-plan-docs-7-27`, `test/import-lgpd-service-branch-
-   coverage`, `test/label-sample-routes-branch-coverage`, `test/mid-
-   high-coverage-batch-1`, `test/withdrawal-model-coverage`. Also
-   deleted the 4 of those 7 that had matching `origin/*` branches (user
-   confirmed local+remote deletion explicitly this session — the other
-   3 were local-only, never pushed).
-4. **Left `test/migrate-rcs-governance-indexes-coverage` alone** —
-   looked stale by name/age but isn't: it carries 2 commits (a real
-   test file for `migrate-rcs-governance-indexes.js`, currently 0%
-   coverage per `COVERAGE_NOTES.md`'s ZERO-coverage list) that are
-   **not** merged into `feature/docker-e2e-backend-integration` or
-   anywhere else — confirmed via `merge-base --is-ancestor` returning
-   `NO` both ways. This is unintegrated work, not clutter — filed as
-   issue #285 (searched first, no duplicate) rather than left as a
-   bare note here.
-5. **Left `worktree-agent-a8ad1494700a4a20e` alone** — authored by
-   Denise, not DieAllPies, so out of scope for "stale branches by us";
-   also merged already, so not urgent either way.
+1. **Phase 0 landed and was verified against the real `compose.test.yml`
+   stack**, not just built: `BOOTSTRAP_ADMIN_*` env vars +
+   `admin-bootstrap-test` service, `playwright-runner` rebuilt from a
+   dedicated `Dockerfile.playwright`, `tests/e2e/helpers/realAuth.ts`,
+   `tests/e2e/helpers/assertAuditEvent.ts`, and
+   `tests/e2e/auth-access-security.spec.ts` (real UI login + a
+   wrong-password rejection case). Confirmed green against the live stack,
+   and confirmed the audit assertion isn't a false-pass (temporarily
+   required an impossible delta, watched it fail, reverted).
+2. **Found and fixed two pre-existing infra bugs** while bringing the full
+   stack up for the first time ever: CRLF line endings on
+   `infra/tsa`/`infra/witness`'s `entrypoint.sh` (fixed via
+   `.gitattributes` `*.sh text eol=lf`), and `frontend-app-test`'s `npm
+   ci` intermittently omitting `@rollup/rollup-linux-x64-musl` under
+   Docker Desktop for Windows even though CI doesn't hit it with the same
+   lockfile+image (mitigated with a defensive fallback install in
+   `frontend/Dockerfile.dev`; root cause not identified — tracked as
+   issue #286).
+3. **Two gaps the original plan didn't anticipate, both needed for the
+   host-based verification workflow to work at all:** host port
+   publishing (`3000:3000`/`5173:5173`) on `backend-app-test`/
+   `frontend-app-test`, and `frontend-app-test`'s `VITE_API_BASE_URL`
+   switched from the compose-internal hostname to `http://localhost:3000/api`
+   (the browser loading the app is the host browser, via the published
+   port — it can't resolve compose-internal service names).
+4. **`E2E_IMPLEMENTATION_PLAN.md`'s Phase 0 section rewritten** to match
+   what shipped rather than the original guess (4 bootstrap vars not 2,
+   the `playwright-runner` Dockerfile deviation, the two host-reachability
+   gaps above, pointers to the two infra bugs).
+5. **Filed 3 issues**: `deniseribeiro-beep/BioAvanceD-v2#286` (the
+   rollup/npm mystery, mitigated but not root-caused),
+   `DyeAllPies/dyeallpies-skills-pack#134` (three docker-workflow lessons:
+   don't auto-launch Docker Desktop, prefer a dedicated Dockerfile over a
+   bind-mount for cross-platform builds, the rollup/npm elimination
+   checklist), `DyeAllPies/dyeallpies-skills-pack#135` (Git Bash mangles
+   `docker run -v/-w` paths — needs `MSYS_NO_PATHCONV=1`).
+6. **Ran `clean-up`** at session end: removed the 7 session-tagged Docker
+   images, ran `docker builder prune -af`, cleared 2 dangling images left
+   over from iterative rebuilds (166.2MB), removed this session's
+   `playwright-report/`/`test-results/`, and the one stray temp file this
+   session left in the shared `/c/tmp` scratch area. Left `helion-v2`'s
+   images/named volumes on the same Docker daemon untouched (not this
+   session's, not this project's). WSL2 vhdx is 38GB physical vs ~27GB
+   logical — an ~11GB gap, not the extreme case the hygiene note flags,
+   so no reset run.
 
 ## Repo state
 
 - Working tree clean, `test/e2e-real-backend-foundation` pushed and
   matching `origin/test/e2e-real-backend-foundation`.
-- Local branches remaining: `main`, `feature/docker-e2e-backend-
-  integration`, `test/e2e-real-backend-foundation` (current),
-  `test/migrate-rcs-governance-indexes-coverage` (real unmerged work,
-  see above), `worktree-agent-a8ad1494700a4a20e` (Denise's, merged).
-- No product code touched this session.
+- Docker stack torn down (`down --volumes`); no `bioavanced-test-*`
+  containers/volumes/images remain.
+- `test/migrate-rcs-governance-indexes-coverage` still carries the
+  unmerged coverage work from issue #285 (untouched this session, not in
+  scope).
 
-## Recommended next steps — and this session's actual ask
+## Recommended next steps
 
-Dennis's stated goal for the *next* session is to **test the
-`build-loop` workflow** (new skill, registered in the manifest this
-session but not yet exercised end-to-end). Per `build-loop`'s own
-description, it fits "build a spec'd-but-missing capability with the
-real-backend test that proves it" — which is exactly the shape of
-**Phase 0** in `E2E_IMPLEMENTATION_PLAN.md` (repo root, written last
-session): wiring real admin bootstrap + login into the Playwright
-e2e harness before any RF/RNF wave can start. Concretely, Phase 0 is:
-
-1. Wire `BOOTSTRAP_ADMIN_USERNAME`/`BOOTSTRAP_ADMIN_TEMP_PASSWORD` into
-   `compose.test.yml`'s `&test-env` anchor to match `TEST_USER`/
-   `TEST_PASS`, and add a step running `npm run admin:create-first`
-   against `backend-app-test` before Playwright runs.
-2. Fix `compose.test.yml`'s `playwright-runner` service (wrong working
-   dir/command — see `E2E_IMPLEMENTATION_PLAN.md` Phase 0 step 2 for the
-   exact fix).
-3. Build `tests/e2e/helpers/realAuth.ts` and
-   `tests/e2e/helpers/assertAuditEvent.ts` (patterns and reference files
-   already identified in the plan).
-4. Start Wave 1 of the spec build once Phase 0 is verified.
-
-This is a real, scoped, spec'd-but-missing slice with real-backend
-involvement throughout (not just an end-of-loop gate) — a good first
-real workout for `build-loop` rather than a toy case.
+**None queued** — Dennis hasn't named a specific next task this session.
+Phase 1 of `E2E_IMPLEMENTATION_PLAN.md` (the per-wave spec build, starting
+with Wave 1: RF001, RF002, RF004, RF006, RF009, RF012, RF018, RF019,
+RF023) is the obvious next milestone now that Phase 0 unblocks it, but
+that's a plan-doc fact, not a session commitment — confirm with Dennis
+before starting a wave.
 
 ## Which skills to use
 
-Start with `build-loop` directly for Phase 0 (this is the session it
-exists to be tested against). If it doesn't fit cleanly in practice,
-that's a finding worth surfacing back to the skills pack — same as the
-`test-loop`/`fix-bugs` mismatch noted in skills-pack issue #129 last
-session. `wrap-up` still applies every session regardless. Docker stays
-opt-in-for-the-whole-milestone rather than per-session for this
-initiative (Dennis's explicit direction, unchanged from last session).
+`build-loop` is now proven against a real slice (Phase 0) — it held up
+well: the "write the failing test first" framing loosened naturally into
+"build the plumbing, then write the proving tests" for an infra-heavy
+slice, which the skill's own text already allows for. `test/<slug>` as
+the branch (no dedicated build-loop prefix) worked fine reusing the
+milestone's existing long-lived branch rather than cutting a new one per
+slice — matches the local-env overlay's guidance. `wrap-up` and
+`clean-up` both ran this session; `clean-up`'s Docker domain in
+particular earned its keep (7 tagged images + dangling layers + a build
+cache that would otherwise have sat there).
 
 ## Dependency notes
 
-Phase 0 blocks all of Phase 1+ (waves can't prove anything real without
-a working seeded login). RF022/RF028 waves each need their own focused
-design pass when they start — intentionally not pre-designed in
-`E2E_IMPLEMENTATION_PLAN.md`. `dyeallpies-skills-pack#122`/`#123`/`#124`/
-`#125`/`#126`/`#127`/`#128`/`#129` are pack-repo items, not BioAvanceD-v2
-blockers.
+Phase 0 no longer blocks anything — Phase 1 waves can start. RF022/RF028
+still need their own focused design pass when their waves start
+(intentionally not pre-designed). `dyeallpies-skills-pack#122`–`#129`,
+`#134`, `#135` are pack-repo items, not BioAvanceD-v2 blockers.
 
 ## Session note
 
-No scope creep — this was a scoped housekeeping ask (push, branch
-cleanup, coverage-notes trim, handoff rotation), verified via `git
-status`/`git branch -a -vv` before and after each step. One judgment
-call surfaced mid-session and confirmed with Dennis rather than assumed:
-whether stale-branch deletion should also cover `origin/*`, not just
-local — he confirmed local+remote for the 7 confirmed-merged branches.
+One direct user correction: an attempt to launch Docker Desktop directly
+via Bash (to unblock a "Docker isn't running" check) was rejected — the
+user started it manually instead and said to continue. Filed as part of
+`dyeallpies-skills-pack#134`: don't launch Docker Desktop (or equivalent
+GUI apps) directly, ask/wait instead.
