@@ -68,7 +68,12 @@ class SampleMovementModel {
       { $inc: { seq: 1 }, $setOnInsert: { createdAt: new Date() } },
       { upsert: true, returnDocument: 'after' }
     );
-    return counter?.value?.seq || 1;
+    // mongodb driver v5+ returns the modified document directly, not
+    // wrapped in `{ value: doc }` (that shape only applies with
+    // `includeResultMetadata: true`) — `counter.value.seq` was always
+    // undefined, so this counter never advanced past 1 and every
+    // sample after the first collided on movementId (#294).
+    return counter?.seq || 1;
   }
 }
 

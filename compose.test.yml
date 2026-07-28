@@ -42,6 +42,12 @@ services:
       MONGO_INITDB_DATABASE: bioavanced_test
     volumes:
       - mongodb-test-data:/data/db
+    ports:
+      # Host-side access for e2e fixture helpers (tests/e2e/helpers/) that
+      # seed data directly (e.g. consentTemplates — no API seed path exists,
+      # see issue #294). npm run test:e2e:docker runs Playwright from the
+      # host, mirroring backend-app-test/frontend-app-test's published ports.
+      - "27017:27017"
     healthcheck:
       test: ["CMD-SHELL", "mongosh --quiet --eval 'db.adminCommand({ ping: 1 })'"]
       interval: 10s

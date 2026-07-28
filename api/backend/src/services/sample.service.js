@@ -11,9 +11,25 @@ const {
 const { generateUniqueSpecimenId } = require('../utils/sampleIDGenerator');
 const { appendMovementWithHashChain } = require('../utils/sampleMovementLedger');
 const { getCollection } = require('../utils/collectionResolver');
+const { ObjectId } = require('mongodb');
 
 const LOCATION_REQUIRED_MESSAGE = 'Localização física obrigatória para cadastro de amostra';
 const CRITICAL_SENSOR_STATUSES = ['maintenance', 'calibration', 'error', 'offline'];
+
+/**
+ * Every caller (sample.routes.js) passes an already-cast ObjectId as
+ * `specimenId` — but that field on Sample is a separate, server-generated
+ * string (see sampleIDGenerator.js), so a bare `{ specimenId }` query never
+ * matched it. Looks up by _id first (the real intent), falling back to the
+ * specimenId field for any caller that does pass the string form.
+ */
+async function findSampleByAnyId(samplesCollection, id) {
+  if (id instanceof ObjectId || (typeof id === 'string' && ObjectId.isValid(id) && String(id).length === 24)) {
+    const sample = await samplesCollection.findOne({ _id: new ObjectId(id) });
+    if (sample) return sample;
+  }
+  return samplesCollection.findOne({ specimenId: id });
+}
 
 function createSampleValidationError(message, statusCode = 422) {
   const error = new Error(message);
@@ -266,8 +282,8 @@ class SampleService {
       const movementsCollection = await getCollection(db, 'sampleMovements');
       
       // Busca a amostra (suporta ObjectId ou barcode)
-      let sample = await samplesCollection.findOne({ specimenId });
-      
+      let sample = await findSampleByAnyId(samplesCollection, specimenId);
+
       if (!sample) {
         // Tenta buscar por barcode se não encontrou por ID
         if (typeof specimenId === 'string' && !specimenId.match(/^[0-9a-fA-F]{24}$/)) {
@@ -387,7 +403,7 @@ class SampleService {
   async getSample(db, specimenId) {
     try {
       const samplesCollection = await getCollection(db, 'samples');
-      return await samplesCollection.findOne({ specimenId });
+      return await findSampleByAnyId(samplesCollection, specimenId);
     } catch (error) {
       logger.error('Erro ao buscar amostra:', error.message);
       throw error;
@@ -608,8 +624,8 @@ class SampleService {
       const movementsCollection = await getCollection(db, 'sampleMovements');
       
       // Busca a amostra (suporta ObjectId ou barcode)
-      let sample = await samplesCollection.findOne({ specimenId });
-      
+      let sample = await findSampleByAnyId(samplesCollection, specimenId);
+
       if (!sample) {
         // Tenta buscar por barcode se não encontrou por ID
         if (typeof specimenId === 'string' && !specimenId.match(/^[0-9a-fA-F]{24}$/)) {
