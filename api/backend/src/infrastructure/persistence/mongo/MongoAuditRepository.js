@@ -104,7 +104,9 @@ class MongoAuditRepository {
       }
     );
 
-    return counter.value.seq;
+    // mongodb@6.x findOneAndUpdate returns the modified document directly
+    // (not wrapped in `{ value: doc }` as pre-v5 drivers did) — see #294.
+    return counter.seq;
   }
 }
 

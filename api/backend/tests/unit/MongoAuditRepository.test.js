@@ -55,7 +55,9 @@ function makeMovementsCollection({ previousMovement = null } = {}) {
 }
 
 function makeCountersCollection(seqValue) {
-  const findOneAndUpdate = vi.fn().mockResolvedValue({ value: { _id: 'sample_movements', seq: seqValue } });
+  // mongodb@6.x findOneAndUpdate returns the modified document directly
+  // (not wrapped in `{ value: doc }` as pre-v5 drivers did) — see #294/#296.
+  const findOneAndUpdate = vi.fn().mockResolvedValue({ _id: 'sample_movements', seq: seqValue });
   return { collection: { collectionName: 'counters', findOneAndUpdate }, findOneAndUpdate };
 }
 
@@ -78,7 +80,7 @@ function makeSharedCollection() {
       next: vi.fn().mockResolvedValue(null),
     }),
     insertOne: vi.fn().mockResolvedValue({ insertedId: 'movement-id' }),
-    findOneAndUpdate: vi.fn().mockResolvedValue({ value: { seq: 7 } }),
+    findOneAndUpdate: vi.fn().mockResolvedValue({ seq: 7 }),
   };
 }
 
@@ -228,7 +230,7 @@ describe('MongoAuditRepository', () => {
   });
 
   describe('generateMovementID', () => {
-    it('calls findOneAndUpdate with the correct filter/update/options and returns counter.value.seq', async () => {
+    it('calls findOneAndUpdate with the correct filter/update/options and returns counter.seq', async () => {
       const counters = makeCountersCollection(99);
       const db = makeDb({
         movements: makeMovementsCollection(),
