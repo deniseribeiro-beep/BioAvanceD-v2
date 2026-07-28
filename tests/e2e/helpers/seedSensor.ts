@@ -1,4 +1,4 @@
-import { MongoClient, Db } from 'mongodb';
+import { MongoClient, Db, ObjectId } from 'mongodb';
 
 /**
  * RF009 (#289) fixture: seeds a real TemperaturePolicy + SensorMetadata
@@ -94,4 +94,30 @@ export async function findTemperatureIncident(sensorId: string): Promise<any | n
 export async function findEnvironmentalExcursion(deviceId: string): Promise<any | null> {
   const db = await getDb();
   return db.collection('environmentalExcursions').findOne({ equipmentId: deviceId });
+}
+
+/** Counts EnvironmentalExcursion docs of a given type for a device — used to prove upsert (not duplicate-insert) behavior. */
+export async function countEnvironmentalExcursions(deviceId: string, excursionType: string): Promise<number> {
+  const db = await getDb();
+  return db.collection('environmentalExcursions').countDocuments({ equipmentId: deviceId, excursionType });
+}
+
+/**
+ * Deletes everything seedSensorWithPolicy created for one sensor, plus any
+ * excursion/incident it triggered. TelemetryMonitor's missing-reading
+ * detection (#299) scans every sensorMetadata doc every cycle, unlike the
+ * ingestion-path tests above — without this, fixtures from every past e2e
+ * run accumulate in the persistent mongodb-test-data volume and each one
+ * adds a real quarantine-evaluation lookup to every future run-cycle call,
+ * slowing (and eventually timing out) any test that triggers one.
+ */
+export async function removeSeededSensor(sensor: SeededSensor): Promise<void> {
+  const db = await getDb();
+  await Promise.all([
+    db.collection('sensorMetadata').deleteMany({ sensorId: sensor.sensorId }),
+    db.collection('devices').deleteMany({ deviceId: sensor.deviceId }),
+    db.collection('temperaturePolicies').deleteMany({ _id: new ObjectId(sensor.policyId) }),
+    db.collection('environmentalExcursions').deleteMany({ equipmentId: sensor.deviceId }),
+    db.collection('temperatureIncidents').deleteMany({ sensorKey: sensor.sensorId }),
+  ]);
 }
