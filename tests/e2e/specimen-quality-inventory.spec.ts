@@ -429,6 +429,108 @@ test.describe('Chain of custody (RF006) — real backend', () => {
   });
 });
 
+test.describe('Specimen quarantine (RF019) — real backend', () => {
+  // PUT /api/samples/:id (sample.routes.js) drives quarantine: a
+  // lifecycleStatus: 'QUARANTINED' update (any originating event —
+  // consent revocation, environmental excursion, RCS governance
+  // failure, critical non-conformity, criteria 1-4) blocks withdrawal
+  // via the same blockedLifecycleStatuses guard proven for RF006/#288
+  // (criterion 5), and a quarantineStatus: 'RELEASED' update logs a
+  // sample_release audit entry (criteria 7, 8). No dedicated
+  // quarantine route exists — release, like RF006's blocked-status
+  // seeding, goes through the generic update route.
+  test.afterAll(async () => {
+    await closeSeedDb();
+  });
+
+  async function seedQuarantinableSample(request: import('@playwright/test').APIRequestContext, admin: { token: string }) {
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    await seedActiveConsent(participant.participantId);
+    const locationID = await seedOperationalLocation();
+
+    const create = await request.post(`${apiBaseURL}/api/samples`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        participantId: participant.participantId,
+        ...validSampleFields(),
+        quantity: 10,
+        locationID,
+      },
+    });
+    expect([201, 202]).toContain(create.status());
+    const sampleID = (await create.json()).data.sampleID;
+    return { sampleID };
+  }
+
+  test('places a specimen into quarantine with cause and originating event recorded, and blocks withdrawal while quarantined (criteria 1, 5, 6)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const { sampleID } = await seedQuarantinableSample(request, admin);
+
+    const quarantine = await request.put(`${apiBaseURL}/api/samples/${sampleID}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        lifecycleStatus: 'QUARANTINED',
+        quarantineStatus: 'QUARANTINED',
+        quarantineReason: 'RF019 e2e: consent revocation',
+      },
+    });
+    expect(quarantine.status()).toBe(200);
+    const quarantined = (await quarantine.json()).data;
+    expect(quarantined.lifecycleStatus).toBe('QUARANTINED');
+    expect(quarantined.quarantineReason).toBe('RF019 e2e: consent revocation');
+
+    const withdraw = await request.post(`${apiBaseURL}/api/samples/${sampleID}/withdraw`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        withdrawalType: 'Total',
+        withdrawalResponsible: 'Quarantine Test Responsible',
+        linkedProject: 'RF019 e2e fixture project',
+      },
+    });
+    expect(withdraw.status()).toBe(400);
+    const body = await withdraw.json();
+    expect(body.message).toMatch(/não está disponível para retirada/);
+    expect(body.message).toMatch(/QUARANTINED/);
+  });
+
+  test('release requires an authorized actor and is audited with an evidence trail (criteria 7, 8)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const { sampleID } = await seedQuarantinableSample(request, admin);
+
+    const quarantine = await request.put(`${apiBaseURL}/api/samples/${sampleID}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        lifecycleStatus: 'QUARANTINED',
+        quarantineStatus: 'QUARANTINED',
+        quarantineReason: 'RF019 e2e: environmental excursion',
+      },
+    });
+    expect(quarantine.status()).toBe(200);
+
+    // No token — release is not open to unauthenticated callers.
+    const unauthorized = await request.put(`${apiBaseURL}/api/samples/${sampleID}`, {
+      data: { quarantineStatus: 'RELEASED', quarantineReason: 'unauthorized attempt' },
+    });
+    expect(unauthorized.status()).toBe(401);
+
+    const watch = await watchAuditTrail(request, apiBaseURL!, admin.token);
+
+    const release = await request.put(`${apiBaseURL}/api/samples/${sampleID}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        quarantineStatus: 'RELEASED',
+        quarantineReason: 'RF019 e2e: cleared after evidence review',
+      },
+    });
+    expect(release.status()).toBe(200);
+    expect((await release.json()).data.quarantineStatus).toBe('RELEASED');
+
+    await assertAuditEventRecorded(request, apiBaseURL!, admin.token, watch);
+  });
+});
+
 test.describe('Specimen quality (RF018) — real backend, SPREC/RCS scoring (#290)', () => {
   // POST /api/quality/preview (quality.routes.js) calls
   // qualityDomain.evaluateQuality -> rcsCertificationService.certify
