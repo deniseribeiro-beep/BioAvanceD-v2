@@ -19,6 +19,10 @@ module.exports = {
   NEO4J_CONNECT_MAX_RETRIES: process.env.NEO4J_CONNECT_MAX_RETRIES ? Number(process.env.NEO4J_CONNECT_MAX_RETRIES) : 8,
   NEO4J_CONNECT_INITIAL_DELAY_MS: process.env.NEO4J_CONNECT_INITIAL_DELAY_MS ? Number(process.env.NEO4J_CONNECT_INITIAL_DELAY_MS) : 1000,
   NEO4J_CONNECT_MAX_DELAY_MS: process.env.NEO4J_CONNECT_MAX_DELAY_MS ? Number(process.env.NEO4J_CONNECT_MAX_DELAY_MS) : 15000,
+  // After a connectNeo4j() attempt exhausts all retries, subsequent calls fail
+  // fast (no retry chain) until this cooldown elapses, instead of re-paying the
+  // full backoff on every caller (cron ticks, on-demand routes) while Neo4j is down.
+  NEO4J_CONNECT_FAILURE_COOLDOWN_MS: process.env.NEO4J_CONNECT_FAILURE_COOLDOWN_MS ? Number(process.env.NEO4J_CONNECT_FAILURE_COOLDOWN_MS) : 30000,
   NEO4J_CANONICAL_SALT: process.env.NEO4J_CANONICAL_SALT || process.env.GRAPH_PSEUDONYMIZATION_SALT || process.env.USER_ANON_SALT || '',
   GRAPH_OUTBOX_BATCH_SIZE: process.env.GRAPH_OUTBOX_BATCH_SIZE ? Number(process.env.GRAPH_OUTBOX_BATCH_SIZE) : 100,
   GRAPH_OUTBOX_MAX_ATTEMPTS: process.env.GRAPH_OUTBOX_MAX_ATTEMPTS ? Number(process.env.GRAPH_OUTBOX_MAX_ATTEMPTS) : 8,
