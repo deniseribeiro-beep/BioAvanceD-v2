@@ -30,6 +30,10 @@ x-test-env: &test-env
   ALLOW_EXTERNAL_TERMINOLOGY_SYNC: "false"
   ALLOW_EXTERNAL_HPO_LOOKUP: "false"
   ALLOW_EXTERNAL_DRUG_LOOKUP: "false"
+  BOOTSTRAP_ADMIN_NAME: "E2E Test Admin"
+  BOOTSTRAP_ADMIN_EMAIL: e2e-admin@bioavanced.test
+  BOOTSTRAP_ADMIN_USERNAME: admin
+  BOOTSTRAP_ADMIN_TEMP_PASSWORD: Admin@123
 
 services:
   mongodb-test:
@@ -148,7 +152,6 @@ services:
       AUDIT_RFC3161_TSA_URL: http://tsa-test:8095
       AUDIT_EXTERNAL_WITNESS_URL: http://witness-test:8096
       AUDIT_EXTERNAL_WITNESS_PUBLIC_KEY: ""
-      PLAYWRIGHT_USE_REAL_LOGIN: "1"
     command: ["npm", "start"]
     depends_on:
       mongodb-test:
@@ -165,6 +168,8 @@ services:
         condition: service_healthy
       witness-test:
         condition: service_healthy
+    ports:
+      - "3000:3000"
     expose:
       - "3000"
     healthcheck:
@@ -172,6 +177,18 @@ services:
       interval: 10s
       timeout: 5s
       retries: 20
+    networks: [bioavanced-test]
+
+  admin-bootstrap-test:
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    environment:
+      <<: *test-env
+    command: ["npm", "run", "admin:create-first"]
+    depends_on:
+      backend-app-test:
+        condition: service_healthy
     networks: [bioavanced-test]
 
   worker-test:
@@ -191,12 +208,18 @@ services:
       context: ./frontend
       dockerfile: Dockerfile.dev
     environment:
-      VITE_API_BASE_URL: http://backend-app-test:3000/api
+      # Baked in at Vite dev-server start, consumed by the browser that loads
+      # the app — that's the *host* browser via the published 5173 port for
+      # the per-spec/host-based Playwright workflow (test:e2e:docker), which
+      # can't resolve compose-internal hostnames like backend-app-test.
+      VITE_API_BASE_URL: http://localhost:3000/api
       __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS: frontend-app-test
     command: ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
     depends_on:
       backend-app-test:
         condition: service_healthy
+    ports:
+      - "5173:5173"
     expose:
       - "5173"
     healthcheck:
@@ -242,19 +265,20 @@ services:
     networks: [bioavanced-test]
 
   playwright-runner:
-    image: mcr.microsoft.com/playwright:v1.58.2-noble
-    working_dir: /workspace/frontend
-    volumes:
-      - ./frontend:/workspace/frontend
+    build:
+      context: .
+      dockerfile: Dockerfile.playwright
     environment:
       CI: "true"
-      PLAYWRIGHT_USE_REAL_LOGIN: "1"
+      PLAYWRIGHT_SKIP_WEBSERVER: "1"
       PLAYWRIGHT_BASE_URL: http://frontend-app-test:5173
+      PLAYWRIGHT_API_BASE_URL: http://backend-app-test:3000
       TEST_USER: admin
       TEST_PASS: Admin@123
-    command: ["sh", "-lc", "npm run test:e2e"]
     depends_on:
       frontend-app-test:
+        condition: service_healthy
+      backend-app-test:
         condition: service_healthy
     networks: [bioavanced-test]
 

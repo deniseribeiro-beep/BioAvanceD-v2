@@ -1,0 +1,11 @@
+FROM mcr.microsoft.com/playwright:v1.58.2-noble
+
+WORKDIR /workspace
+
+COPY package.json package-lock.json ./
+RUN npm ci --no-audit --no-fund
+
+COPY playwright.config.ts ./
+COPY tests/e2e ./tests/e2e
+
+CMD ["npx", "playwright", "test"]
