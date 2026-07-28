@@ -6,9 +6,9 @@
 Wave 1 RF touched this milestone (RF001/RF012/RF002/RF004/RF006 landed
 in earlier sessions).
 
-**Branch:** `test/e2e-real-backend-foundation`, 3 commits ahead of
-`origin/test/e2e-real-backend-foundation` (not pushed this session —
-confirm with Dennis before pushing, per repo convention).
+**Branch:** `test/e2e-real-backend-foundation`, pushed to
+`origin/test/e2e-real-backend-foundation` this session (Dennis
+confirmed the push).
 
 ## What happened this session
 
@@ -75,9 +75,8 @@ confirm with Dennis before pushing, per repo convention).
 
 ## Repo state
 
-- Working tree clean, `test/e2e-real-backend-foundation` is 3 commits
-  ahead of `origin/test/e2e-real-backend-foundation` — push not done
-  this session, confirm with Dennis first.
+- Working tree clean, `test/e2e-real-backend-foundation` is pushed and
+  up to date with `origin/test/e2e-real-backend-foundation`.
 - Docker stack torn down after this iteration's real-backend run; no
   `bioavanced-test-*` containers/volumes/images remain.
 - `test/migrate-rcs-governance-indexes-coverage` still carries the
