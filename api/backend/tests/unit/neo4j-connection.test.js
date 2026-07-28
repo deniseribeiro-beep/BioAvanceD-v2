@@ -248,7 +248,8 @@ describe('infrastructure/database/neo4j/connection.js', () => {
         NEO4J_PASSWORD: 'secret',
         NEO4J_CONNECT_MAX_RETRIES: '2',
         NEO4J_CONNECT_INITIAL_DELAY_MS: '1',
-        NEO4J_CONNECT_MAX_DELAY_MS: '5'
+        NEO4J_CONNECT_MAX_DELAY_MS: '5',
+        NEO4J_CONNECT_FAILURE_COOLDOWN_MS: '0'
       });
       const { connectionMod } = freshConnection();
       const logger = require('../../src/utils/logger');
@@ -266,11 +267,43 @@ describe('infrastructure/database/neo4j/connection.js', () => {
         'always down'
       );
 
-      // A subsequent call must be able to retry from scratch (connectingPromise was cleared).
+      // A subsequent call after the failure cooldown elapses must be able to
+      // retry from scratch (connectingPromise was cleared).
       FakeDriver.verifyConnectivityBehavior = () => Promise.resolve(true);
       const driver = await connectionMod.connectNeo4j();
       expect(driver).toBeInstanceOf(FakeDriver);
       expect(FakeDriver.instances).toHaveLength(2);
+    });
+
+    it('fails fast without retrying while a prior failure is within the cooldown window (#305)', async () => {
+      setEnv({
+        NODE_ENV: 'test',
+        NEO4J_URI: 'bolt://localhost:7687',
+        NEO4J_USERNAME: 'neo4j',
+        NEO4J_PASSWORD: 'secret',
+        NEO4J_CONNECT_MAX_RETRIES: '5',
+        NEO4J_CONNECT_INITIAL_DELAY_MS: '1',
+        NEO4J_CONNECT_MAX_DELAY_MS: '5',
+        NEO4J_CONNECT_FAILURE_COOLDOWN_MS: '100000'
+      });
+      const { connectionMod } = freshConnection();
+      const logger = require('../../src/utils/logger');
+      vi.spyOn(logger, 'warn').mockImplementation(() => {});
+      vi.spyOn(logger, 'error').mockImplementation(() => {});
+
+      FakeDriver.verifyConnectivityBehavior = () => Promise.reject(new Error('always down'));
+
+      await expect(connectionMod.connectNeo4j()).rejects.toThrow('always down');
+      expect(FakeDriver.instances).toHaveLength(1);
+
+      // Even if Neo4j would now succeed, a second call within the cooldown
+      // window must not re-pay the full retry chain: it should reject fast
+      // and must not construct a new driver at all.
+      FakeDriver.verifyConnectivityBehavior = () => Promise.resolve(true);
+      const start = Date.now();
+      await expect(connectionMod.connectNeo4j()).rejects.toThrow(/cooldown/i);
+      expect(Date.now() - start).toBeLessThan(50);
+      expect(FakeDriver.instances).toHaveLength(1);
     });
   });
 
