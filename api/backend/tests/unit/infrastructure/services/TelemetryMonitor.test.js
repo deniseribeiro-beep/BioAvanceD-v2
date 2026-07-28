@@ -42,7 +42,7 @@ const influxConnectionPath = require.resolve('../../../../src/infrastructure/dat
 const fakeInfluxConnection = {
   connectInfluxDB: vi.fn().mockResolvedValue(undefined),
   getInfluxClient: vi.fn(),
-  getInfluxQueryApi: vi.fn(() => ({ queryRows: vi.fn() })),
+  getInfluxQueryApi: vi.fn(() => ({ queryRows: vi.fn(), collectRows: vi.fn().mockResolvedValue([]) })),
   getInfluxWriteApi: vi.fn(),
   closeInfluxDBConnection: vi.fn(),
   getInfluxConfig: vi.fn(() => ({ bucket: 'test-bucket' }))
@@ -78,7 +78,10 @@ describe('TelemetryMonitor', () => {
     // must reapply default implementations here every time.
     getCollectionSpy = fakeCollectionResolver.getCollection;
     connectInfluxDBSpy = fakeInfluxConnection.connectInfluxDB.mockResolvedValue(undefined);
-    getInfluxQueryApiSpy = fakeInfluxConnection.getInfluxQueryApi.mockReturnValue({ queryRows: vi.fn() });
+    getInfluxQueryApiSpy = fakeInfluxConnection.getInfluxQueryApi.mockReturnValue({
+      queryRows: vi.fn(),
+      collectRows: vi.fn().mockResolvedValue([])
+    });
     getInfluxConfigSpy = fakeInfluxConnection.getInfluxConfig.mockReturnValue({ bucket: 'test-bucket' });
   });
 
@@ -296,13 +299,108 @@ describe('TelemetryMonitor', () => {
   });
 
   describe('findCriticalFreezers()', () => {
-    it('queries Influx via connectInfluxDB/getInfluxQueryApi/getInfluxConfig and currently always returns [] (stub)', async () => {
+    function rowAt(sensorId, isoTime, value) {
+      return { sensorId, _time: isoTime, _value: value };
+    }
+
+    it('queries Influx via connectInfluxDB/getInfluxQueryApi/getInfluxConfig and returns [] when no rows breach', async () => {
       const monitor = new TelemetryMonitor({ lookbackHours: 6, criticalTemp: -80 });
       const result = await monitor.findCriticalFreezers();
 
       expect(connectInfluxDBSpy).toHaveBeenCalledTimes(1);
       expect(getInfluxQueryApiSpy).toHaveBeenCalledTimes(1);
       expect(getInfluxConfigSpy).toHaveBeenCalled();
+      expect(result).toEqual([]);
+    });
+
+    it('flags a sensor whose above-threshold streak through to now exceeds criticalDurationHours', async () => {
+      vi.useFakeTimers();
+      const now = new Date('2026-01-01T06:00:00Z');
+      vi.setSystemTime(now);
+
+      const monitor = new TelemetryMonitor({
+        criticalTemp: -80,
+        criticalDurationHours: 2,
+        expectedReadingIntervalMinutes: 15
+      });
+      getCollectionSpy.mockReturnValue({ find: () => ({ toArray: async () => [{ _id: 'sample-1' }] }) });
+
+      getInfluxQueryApiSpy.mockReturnValue({
+        collectRows: vi.fn().mockResolvedValue([
+          rowAt('sensor-A', '2026-01-01T03:00:00Z', -70),
+          rowAt('sensor-A', '2026-01-01T03:10:00Z', -65),
+          rowAt('sensor-A', '2026-01-01T03:20:00Z', -60)
+        ])
+      });
+
+      const result = await monitor.findCriticalFreezers();
+
+      expect(result).toEqual([
+        {
+          freezerKey: 'sensor-A',
+          rootSampleId: 'sample-1',
+          breachedSince: new Date('2026-01-01T03:00:00Z'),
+          maxObservedTemp: -60
+        }
+      ]);
+    });
+
+    it('does not flag a sensor whose streak has not yet lasted criticalDurationHours', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-01-01T04:00:00Z'));
+
+      const monitor = new TelemetryMonitor({
+        criticalTemp: -80,
+        criticalDurationHours: 2,
+        expectedReadingIntervalMinutes: 15
+      });
+
+      getInfluxQueryApiSpy.mockReturnValue({
+        collectRows: vi.fn().mockResolvedValue([
+          rowAt('sensor-B', '2026-01-01T03:00:00Z', -70),
+          rowAt('sensor-B', '2026-01-01T03:10:00Z', -65)
+        ])
+      });
+
+      const result = await monitor.findCriticalFreezers();
+
+      expect(result).toEqual([]);
+    });
+
+    it('treats a gap larger than expectedReadingIntervalMinutes as the streak breaking, restarting breachedSince after the gap', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-01-01T06:00:00Z'));
+
+      const monitor = new TelemetryMonitor({
+        criticalTemp: -80,
+        criticalDurationHours: 2,
+        expectedReadingIntervalMinutes: 15
+      });
+
+      getInfluxQueryApiSpy.mockReturnValue({
+        collectRows: vi.fn().mockResolvedValue([
+          // Old streak, well over 15 min before the next row -> gap breaks it.
+          rowAt('sensor-C', '2026-01-01T01:00:00Z', -70),
+          // Current streak: only ~30 min long, short of the 2h threshold.
+          rowAt('sensor-C', '2026-01-01T05:30:00Z', -65),
+          rowAt('sensor-C', '2026-01-01T05:45:00Z', -60)
+        ])
+      });
+
+      const result = await monitor.findCriticalFreezers();
+
+      expect(result).toEqual([]);
+    });
+
+    it('ignores rows without a sensorId tag', async () => {
+      const monitor = new TelemetryMonitor({ criticalTemp: -80, criticalDurationHours: 2 });
+
+      getInfluxQueryApiSpy.mockReturnValue({
+        collectRows: vi.fn().mockResolvedValue([{ _time: '2026-01-01T00:00:00Z', _value: -70 }])
+      });
+
+      const result = await monitor.findCriticalFreezers();
+
       expect(result).toEqual([]);
     });
   });

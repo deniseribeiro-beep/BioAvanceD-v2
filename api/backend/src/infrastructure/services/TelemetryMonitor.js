@@ -104,18 +104,75 @@ class TelemetryMonitor {
     return false;
   }
 
+  // AC#6 "acionar alerta": a sensor is critical when its temperature has
+  // stayed continuously above criticalTemp through to the most recent
+  // reading for longer than criticalDurationHours. The Flux filter below
+  // only returns above-threshold points, so a dip back into range simply
+  // stops appearing as rows — we detect that by walking each sensor's
+  // points newest-first and stopping at the first gap larger than
+  // expectedReadingIntervalMinutes (same missing-reading tolerance
+  // findSensorsWithMissingReadings uses), which marks where the current
+  // above-threshold streak actually began.
   async findCriticalFreezers() {
-    // Exemplo: consulta ao InfluxDB para encontrar freezers críticos
     await connectInfluxDB();
     const queryApi = getInfluxQueryApi();
     const fluxQuery = `from(bucket: \"${getInfluxConfig().bucket}\")
       |> range(start: -${this.lookbackHours}h)
       |> filter(fn: (r) => r._measurement == \"temperature\")
       |> filter(fn: (r) => r._field == \"value\")
-      |> filter(fn: (r) => r._value > ${this.criticalTemp})`;
-    // Aqui você deve implementar a lógica para processar os resultados e identificar freezers críticos
-    // Retorne um array de objetos { freezerKey, rootSampleId, breachedSince, maxObservedTemp }
-    return [];
+      |> filter(fn: (r) => r._value > ${this.criticalTemp})
+      |> sort(columns: [\"_time\"])`;
+    const rows = await queryApi.collectRows(fluxQuery);
+
+    const pointsBySensor = new Map();
+    for (const row of rows) {
+      if (!row.sensorId) {
+        continue;
+      }
+      if (!pointsBySensor.has(row.sensorId)) {
+        pointsBySensor.set(row.sensorId, []);
+      }
+      pointsBySensor.get(row.sensorId).push({ time: new Date(row._time), value: Number(row._value) });
+    }
+
+    const gapThresholdMs = this.expectedReadingIntervalMinutes * 60 * 1000;
+    const durationThresholdMs = this.criticalDurationHours * 60 * 60 * 1000;
+    const now = Date.now();
+
+    const criticalFreezers = [];
+    for (const [sensorId, points] of pointsBySensor) {
+      points.sort((a, b) => a.time - b.time);
+
+      let streakStartIndex = points.length - 1;
+      for (let i = points.length - 1; i > 0; i--) {
+        const gapMs = points[i].time.getTime() - points[i - 1].time.getTime();
+        if (gapMs > gapThresholdMs) {
+          break;
+        }
+        streakStartIndex = i - 1;
+      }
+
+      const breachedSince = points[streakStartIndex].time;
+      if (now - breachedSince.getTime() < durationThresholdMs) {
+        continue;
+      }
+
+      const maxObservedTemp = points
+        .slice(streakStartIndex)
+        .reduce((max, point) => Math.max(max, point.value), -Infinity);
+
+      const freezerKey = sensorId;
+      const rootSampleIds = await this.resolveRootSamples(freezerKey);
+
+      criticalFreezers.push({
+        freezerKey,
+        rootSampleId: rootSampleIds[0] || null,
+        breachedSince,
+        maxObservedTemp
+      });
+    }
+
+    return criticalFreezers;
   }
 
   async resolveRootSamples(freezerKey) {

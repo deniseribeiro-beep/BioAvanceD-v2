@@ -261,3 +261,128 @@ test.describe('Telemetria e monitoramento ambiental (RF009) — missing-reading 
     }
   });
 });
+test.describe('Telemetria e monitoramento ambiental (RF009) — real findCriticalFreezers detection (#303)', () => {
+  test.afterAll(async () => {
+    await closeSeedSensorDb();
+  });
+
+  // TelemetryMonitor's real defaults (criticalDurationHours: 2h,
+  // expectedReadingIntervalMinutes: 15) would need hours of real points to
+  // exercise honestly. /api/iot/telemetry-monitor/find-critical-freezers
+  // (test-support only, gated out of production, added alongside this
+  // spec) calls the real findCriticalFreezers() directly — never touching
+  // Neo4j, unlike run-cycle above — with these thresholds temporarily
+  // overridden so a handful of one-minute-apart points can prove the same
+  // sustained-streak logic deterministically and fast.
+  async function findCriticalFreezers(
+    request: import('@playwright/test').APIRequestContext,
+    overrides: Record<string, number> = {}
+  ) {
+    const response = await request.post(`${apiBaseURL}/api/iot/telemetry-monitor/find-critical-freezers`, {
+      data: overrides,
+    });
+    expect(response.status()).toBe(200);
+    const body = await response.json();
+    expect(body.success).toBe(true);
+    return body.criticalFreezers as Array<{
+      freezerKey: string;
+      rootSampleId: string | null;
+      breachedSince: string;
+      maxObservedTemp: number;
+    }>;
+  }
+
+  async function postReadingAt(
+    request: import('@playwright/test').APIRequestContext,
+    sensorId: string,
+    temperature: number,
+    timestamp: Date
+  ) {
+    const response = await request.post(`${apiBaseURL}/api/iot/telemetry`, {
+      data: { sensorId, temperature, timestamp: timestamp.toISOString() },
+    });
+    expect(response.status()).toBe(200);
+  }
+
+  test('a sensor whose reading has stayed above criticalTemp for the full overridden duration is detected as a critical freezer', async ({
+    request,
+  }) => {
+    const sensor = await seedSensorWithPolicy(2, 8);
+    try {
+      const now = Date.now();
+      const timestamps = [3, 2, 1, 0].map((minutesAgo) => new Date(now - minutesAgo * 60_000));
+      for (const timestamp of timestamps) {
+        await postReadingAt(request, sensor.sensorId, -50, timestamp);
+      }
+
+      await expect
+        .poll(async () => {
+          const points = await queryTemperaturePoints(sensor.sensorId, 10);
+          return points.length;
+        }, { timeout: 15_000 })
+        .toBeGreaterThanOrEqual(timestamps.length);
+
+      const criticalFreezers = await findCriticalFreezers(request, {
+        // 2 minutes: shorter than the ~3-minute streak just written.
+        criticalDurationHours: 2 / 60,
+        expectedReadingIntervalMinutes: 5,
+      });
+
+      const detected = criticalFreezers.find((entry) => entry.freezerKey === sensor.sensorId);
+      expect(detected).toBeTruthy();
+      expect(detected!.maxObservedTemp).toBe(-50);
+      expect(new Date(detected!.breachedSince).getTime()).toBeLessThanOrEqual(timestamps[0].getTime());
+    } finally {
+      await removeSeededSensor(sensor);
+    }
+  });
+
+  test('a sensor whose streak has not yet lasted the overridden duration is not detected', async ({ request }) => {
+    const sensor = await seedSensorWithPolicy(2, 8);
+    try {
+      await postReadingAt(request, sensor.sensorId, -50, new Date());
+
+      await expect
+        .poll(async () => {
+          const points = await queryTemperaturePoints(sensor.sensorId, 10);
+          return points.length;
+        }, { timeout: 15_000 })
+        .toBeGreaterThan(0);
+
+      const criticalFreezers = await findCriticalFreezers(request, {
+        // 2 minutes: longer than the single just-written reading's age.
+        criticalDurationHours: 2 / 60,
+        expectedReadingIntervalMinutes: 5,
+      });
+
+      expect(criticalFreezers.find((entry) => entry.freezerKey === sensor.sensorId)).toBeUndefined();
+    } finally {
+      await removeSeededSensor(sensor);
+    }
+  });
+
+  test('a reading below criticalTemp (TelemetryMonitor default -80°C, distinct from the sensor policy range) never contributes to a critical-freezer detection', async ({
+    request,
+  }) => {
+    const sensor = await seedSensorWithPolicy(2, 8);
+    try {
+      await postReadingAt(request, sensor.sensorId, -90, new Date());
+
+      await expect
+        .poll(async () => {
+          const points = await queryTemperaturePoints(sensor.sensorId, 10);
+          return points.length;
+        }, { timeout: 15_000 })
+        .toBeGreaterThan(0);
+
+      const criticalFreezers = await findCriticalFreezers(request, {
+        criticalDurationHours: 0,
+        expectedReadingIntervalMinutes: 5,
+      });
+
+      expect(criticalFreezers.find((entry) => entry.freezerKey === sensor.sensorId)).toBeUndefined();
+    } finally {
+      await removeSeededSensor(sensor);
+    }
+  });
+});

@@ -33,6 +33,40 @@ if (process.env.NODE_ENV !== 'production') {
       return res.status(500).json({ success: false, error: error.message || String(error) });
     }
   });
+
+  // Test-support only, same rationale as run-cycle above: proves the real
+  // findCriticalFreezers() Influx detection deterministically without
+  // waiting on the cron interval. Unlike run-cycle, this deliberately does
+  // NOT go through the full runCycle() — findCriticalFreezers() itself
+  // never touches Neo4j (only propagateCompromise, called from runCycle,
+  // does), so this sidesteps the same Neo4j retry cost run-cycle avoids.
+  // Accepts optional duration/interval overrides in the body so e2e tests
+  // can prove a sustained breach without waiting out the real
+  // criticalDurationHours/expectedReadingIntervalMinutes window.
+  router.post('/telemetry-monitor/find-critical-freezers', async (req, res) => {
+    const telemetryMonitor = req.app.locals.telemetryMonitor;
+    if (!telemetryMonitor) {
+      return res.status(503).json({ success: false, error: 'telemetryMonitor não inicializado' });
+    }
+
+    const overridableFields = ['criticalDurationHours', 'lookbackHours', 'expectedReadingIntervalMinutes'];
+    const previousValues = {};
+    for (const field of overridableFields) {
+      if (req.body?.[field] !== undefined) {
+        previousValues[field] = telemetryMonitor[field];
+        telemetryMonitor[field] = Number(req.body[field]);
+      }
+    }
+
+    try {
+      const criticalFreezers = await telemetryMonitor.findCriticalFreezers();
+      return res.status(200).json({ success: true, criticalFreezers });
+    } catch (error) {
+      return res.status(500).json({ success: false, error: error.message || String(error) });
+    } finally {
+      Object.assign(telemetryMonitor, previousValues);
+    }
+  });
 }
 
 module.exports = router;
