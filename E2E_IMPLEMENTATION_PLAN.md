@@ -57,65 +57,76 @@ scope by the doc's own design).
 
 ## Phase 0 — Fix the real-backend e2e foundation (build once, blocks everything else)
 
-Everything after this phase assumes a working real login + a known
-seeded test identity. Today neither exists. Concrete fixes, in order:
+**Status: done** (2026-07-28, `test/e2e-real-backend-foundation`). Everything
+after this phase can now assume a working real login + a known seeded test
+identity, verified against the real `compose.test.yml` stack. What actually
+shipped, including drift from the original plan below:
 
-1. **Make `admin:create-first` produce the seeded test user.**
-   `api/backend/src/scripts/createFirstAdmin.js` already exists and does
-   the right thing (creates a user with hashed password, unique index)
-   but reads `BOOTSTRAP_ADMIN_USERNAME`/`BOOTSTRAP_ADMIN_TEMP_PASSWORD`,
-   not `TEST_USER`/`TEST_PASS`. Add those two env vars to
-   `compose.test.yml`'s `&test-env` anchor (`BOOTSTRAP_ADMIN_USERNAME:
-   admin`, `BOOTSTRAP_ADMIN_TEMP_PASSWORD: Admin@123`, matching the
-   `TEST_USER`/`TEST_PASS` the `playwright-runner` service already
-   expects), and add a compose step/service that runs `npm run
-   admin:create-first` against `backend-app-test` once it's healthy,
-   before Playwright runs. Reuse this script — don't write a new one.
-2. **Fix `compose.test.yml`'s `playwright-runner` service.** It's
-   currently configured for a frontend-local e2e setup that doesn't
-   exist (`working_dir: /workspace/frontend`, mounts only `./frontend`,
-   runs `npm run test:e2e` which isn't a defined script there). Per
-   `playwright-specs`' own config-location rule, the config belongs at
-   the repo root (already correct — `playwright.config.ts` + spec dir
-   `tests/e2e/` are both root-level and already working for the mocked
-   suite). Change the service to mount the whole repo, `working_dir:
-   /workspace`, and run the existing `npm run test:e2e:docker` script
-   pointed at the compose network's internal hostnames
-   (`PLAYWRIGHT_BASE_URL=http://frontend-app-test:5173`,
-   `PLAYWRIGHT_API_BASE_URL=http://backend-app-test:3000` — already set
-   correctly in the service's `environment:` block, just needs the
-   working dir/command fixed to match). Remove the dead
-   `PLAYWRIGHT_USE_REAL_LOGIN` var once the real-login helper below
-   makes it redundant, or wire it through if a spec-level conditional
-   ends up wanting it.
-3. **New helper: `tests/e2e/helpers/realAuth.ts`.** Mirrors
-   `mockAuth.ts`'s mechanism (seed `localStorage` via
-   `page.addInitScript` before `page.goto`) but the token is real: call
-   `POST /api/auth/login` via Playwright's `request` fixture with
-   `TEST_USER`/`TEST_PASS`, take the real token from the response (same
-   `body.data.token` shape `backend-integration.spec.ts` already
-   unwraps), and seed it. Fast (no UI round-trip) but genuinely
-   authenticated against the real backend — this becomes the `beforeEach`
-   for every new spec except the auth spec itself.
-4. **The auth spec drives a real UI login once.** RF001's happy path
-   *is* the login form — `auth-access-security.spec.ts`'s first test
-   should `page.goto('/login')` and actually type into the real form
-   (see `frontend/src/views/LoginPage.tsx` for current field
-   names/testids — check before assuming) rather than only using the
-   token-seeding shortcut, so the real flow through `auth.routes.js`'s
-   `/login` handler is genuinely exercised end-to-end at least once.
-5. **New helper: `tests/e2e/helpers/assertAuditEvent.ts`.** Backs RF012
-   and the "assert the audit trail" cross-cutting rule from the
-   traceability doc. Hit the real endpoints found in
-   `api/backend/src/interface/routes/audit.routes.js`: `GET
-   /api/audit/dashboard/stats/:date` (event count for a date) before and
-   after the action under test, or `POST /api/audit/verify` to confirm
-   chain integrity. `api/backend/scripts/audit-e2e-real.js` is a working
-   reference for how the real audit chain (Merkle root + RFC3161 TSA +
-   external witness, services already running in `compose.test.yml` as
-   `tsa-test`/`witness-test`) gets exercised for real — read it before
-   building the helper, don't reinvent the signing-key/env setup it
-   already solved.
+1. **`admin:create-first` produces the seeded test user.**
+   `createFirstAdmin.js` actually requires *four* env vars, not the two
+   originally assumed — `BOOTSTRAP_ADMIN_NAME`/`BOOTSTRAP_ADMIN_EMAIL` in
+   addition to `BOOTSTRAP_ADMIN_USERNAME`/`BOOTSTRAP_ADMIN_TEMP_PASSWORD`.
+   All four are in `compose.test.yml`'s `&test-env` anchor now (`admin` /
+   `Admin@123`, matching `TEST_USER`/`TEST_PASS`, plus a placeholder
+   name/email). A new one-shot `admin-bootstrap-test` service runs `npm run
+   admin:create-first` against `backend-app-test` once it's healthy — run
+   explicitly via `docker compose run --rm admin-bootstrap-test` (not
+   included in the `up -d --wait` service list, same pattern as
+   `backend-unit-runner`).
+2. **`compose.test.yml`'s `playwright-runner` service fixed, with a
+   deviation from the original plan.** Bind-mounting the whole repo into
+   the stock `mcr.microsoft.com/playwright` image (as originally planned)
+   risks shipping Windows-resolved native optional-dependency binaries into
+   a Linux container. Built a small dedicated `Dockerfile.playwright`
+   instead (fresh `npm ci` inside the image, `COPY` only
+   `playwright.config.ts` + `tests/e2e`), matching the pattern every other
+   custom service in this file already uses. Builds and is wired to the
+   internal hostnames; **not yet run end-to-end** — the actual per-spec
+   verification path (below) is host-based, and wiring this container into
+   CI is still the explicitly-deferred next milestone. `PLAYWRIGHT_USE_REAL_LOGIN`
+   removed (dead — `realAuth.ts` supersedes it).
+3. **`tests/e2e/helpers/realAuth.ts` built** as planned: `realLogin()` hits
+   `POST /api/auth/login` for a real token, `seedRealAuth()`/`realAuthLogin()`
+   seed it via `addInitScript` mirroring `mockAuth.ts`.
+4. **`auth-access-security.spec.ts` built**, RF001 happy path drives the
+   real login form once via `LoginPage.tsx`'s existing testids (already
+   present, not one of the legacy testid-less pages), plus a wrong-password
+   rejection case.
+5. **`tests/e2e/helpers/assertAuditEvent.ts` built — leaf-count diff only,
+   not the full chain-verify endpoint.** `POST /api/audit/verify` (the
+   Merkle root + RFC3161 + witness chain `audit-e2e-real.js` exercises)
+   depends on a tree head from the once-daily anchor job
+   (`daily-merkle.job.js`, ~02:30 UTC) — an event created moments ago has no
+   anchored tree head yet, so it's unusable for a per-spec assertion. Real
+   actions mirror into `audit_events`/the `logs` collection synchronously
+   (`log.service.js`'s `ingestLogRecord` call) regardless, so
+   `GET /api/audit/dashboard/stats/:date`'s live-recomputed `leafCount` is
+   the right per-spec signal — confirmed real (not a false-pass) by
+   temporarily requiring an impossible delta and watching it fail before
+   reverting.
+
+**Two things the original plan didn't anticipate, needed for the
+host-based verification workflow below to work at all:**
+
+- `backend-app-test`/`frontend-app-test` needed `ports: ["3000:3000"]` /
+  `["5173:5173"]` published to the host — they only had `expose:` before,
+  unreachable from a host-run Playwright process.
+- `frontend-app-test`'s `VITE_API_BASE_URL` had to change from
+  `http://backend-app-test:3000/api` (compose-internal hostname) to
+  `http://localhost:3000/api` — the browser that loads the app is the
+  *host* browser (via the published 5173 port), which can't resolve
+  compose-internal service names at all.
+
+**Two pre-existing infra bugs found and fixed while bringing the full
+stack up for the first time** (nothing here had ever been exercised
+end-to-end before this session): `infra/tsa`/`infra/witness`'s
+`entrypoint.sh` were checked out with CRLF line endings on Windows,
+breaking their shebang in the Linux containers (fixed: `.gitattributes`
+`*.sh text eol=lf`); `frontend-app-test`'s `npm ci` intermittently omits
+`@rollup/rollup-linux-x64-musl` under Docker Desktop for Windows even
+though CI doesn't hit it with the same lockfile+image — mitigated with a
+defensive fallback install in `frontend/Dockerfile.dev`, root cause not
+identified, tracked as issue #286.
 
 ## Phase 1+ — Per-wave spec build (reuses the traceability doc's grouping/sequencing)
 
@@ -178,7 +189,7 @@ every spec above instead (per the diagrams' `«include»` pattern).
 
 ## Verification
 
-- Per spec, while writing: `npx playwright test tests/e2e/<spec>.spec.ts --reporter=list` against the real stack (`npm run compose:up` equivalent for the test stack, i.e. `docker compose --env-file .env.test.example -f compose.test.yml up -d --wait mongodb-test neo4j-test redis-test influxdb-test smtp-test tsa-test witness-test backend-app-test worker-test frontend-app-test`, then run the seed step, then `npm run test:e2e:docker` filtered to that file).
+- Per spec, while writing: `npx playwright test tests/e2e/<spec>.spec.ts --reporter=list` against the real stack — bring it up with `docker compose --env-file .env.test.example -f compose.test.yml up -d --wait mongodb-test neo4j-test redis-test mqtt-test influxdb-test smtp-test tsa-test witness-test backend-app-test worker-test frontend-app-test`, seed the admin with `docker compose --env-file .env.test.example -f compose.test.yml run --rm admin-bootstrap-test`, then either `npm run test:e2e:docker` filtered to that file, or set the same env vars directly (`PLAYWRIGHT_BASE_URL=http://localhost:5173 PLAYWRIGHT_API_BASE_URL=http://localhost:3000 PLAYWRIGHT_SKIP_WEBSERVER=1 TEST_USER=admin TEST_PASS=Admin@123`) before `npx playwright test <file> --reporter=list` — `node_modules/.bin` isn't always on `PATH` in a Git Bash session, so a bare `cross-env ...` invocation (as opposed to via an `npm run` script) can fail with `command not found`.
 - Confirm the audit assertion actually fires (not a false-pass) by
   temporarily breaking it once per new helper usage — same "verify
   before trusting" discipline as any new assertion.
