@@ -100,6 +100,11 @@ services:
       DOCKER_INFLUXDB_INIT_ORG: bioavanced-test
       DOCKER_INFLUXDB_INIT_BUCKET: bioavanced-test
       DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: bioavanced-test-token
+    ports:
+      # Host-side access for e2e fixture helpers (tests/e2e/helpers/) that
+      # query InfluxDB directly to prove telemetry persistence (RF009, #289)
+      # — same rationale as mongodb-test's published port above.
+      - "8086:8086"
     volumes:
       - influxdb-test-data:/var/lib/influxdb2
     healthcheck:

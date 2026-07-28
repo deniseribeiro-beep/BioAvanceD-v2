@@ -1,6 +1,13 @@
 const logger = require('../utils/logger');
 const { connectMongoDB } = require('../infrastructure/database/mongodb/connection');
 const SensorMetadata = require('../models/SensorMetadata.schema');
+// Required so mongoose registers the 'TemperaturePolicy' model before
+// SensorMetadata.findOne(...).populate('temperaturePolicy') runs below —
+// nothing else on the app's boot path requires this schema module,
+// so without it every populate() throws "Schema hasn't been registered
+// for model \"TemperaturePolicy\"" (caught, logged, silently treated as
+// "no policy found").
+require('../models/TemperaturePolicy.schema');
 const { saveTelemetryPoint } = require('../services/saveTelemetryPoint');
 const { sendCriticalAlertEmail } = require('../services/sendCriticalAlertEmail');
 const TemperatureIncidentModel = require('../models/TemperatureIncident');
