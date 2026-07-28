@@ -140,6 +140,35 @@ services:
       retries: 20
       start_period: 30s
 
+  worker:
+    # Runs import-worker.js and the per-entity workers under
+    # src/workers/workers/*.js (#310, follow-up from #309) — without
+    # this service the import-worker pipeline never runs in a
+    # production compose deployment, mirroring the dev compose worker.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.prod
+    restart: unless-stopped
+    init: true
+    command: npm run worker
+    env_file:
+      - .env.production.example
+    environment:
+      NODE_ENV: production
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+      influxdb:
+        condition: service_healthy
+    read_only: true
+    cap_drop: ["ALL"]
+    tmpfs:
+      - /tmp
+
   neo4j-projection-worker:
     # Drains graph_projection_outbox into Neo4j (#309, follow-up from RF023/#292)
     # — without this service, outbox rows written by consent.service.js
