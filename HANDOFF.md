@@ -1,83 +1,81 @@
 # HANDOFF
 
-**Written:** 2026-07-28, end of a `build-loop` session — continuing
-Phase 1 of `E2E_IMPLEMENTATION_PLAN.md`. Landed RF006's real-backend e2e
-slice (#288), the fifth Wave 1 RF touched this milestone
-(RF001/RF012/RF002/RF004 landed in earlier sessions).
+**Written:** 2026-07-28, end of a `work-issue` → `build-loop` (with a
+`divide-and-conquer` detour) session — continuing Phase 1 of
+`E2E_IMPLEMENTATION_PLAN.md`. Landed chunk A of RF009 (#289), the sixth
+Wave 1 RF touched this milestone (RF001/RF012/RF002/RF004/RF006 landed
+in earlier sessions).
 
-**Branch:** `test/e2e-real-backend-foundation`, 2 commits ahead of
+**Branch:** `test/e2e-real-backend-foundation`, 3 commits ahead of
 `origin/test/e2e-real-backend-foundation` (not pushed this session —
 confirm with Dennis before pushing, per repo convention).
 
 ## What happened this session
 
-1. **Pushed the prior session's 9 commits** (RF004 happy-path work) to
-   `origin/test/e2e-real-backend-foundation` — done at the top of this
-   session per Dennis's instruction.
-2. **Routed issue #288 through `work-issue` → `build-loop`.** #288 asked
-   for a real-backend spec proving RF006 (Rastreabilidade e cadeia de
-   custódia / chain of custody), which had zero coverage (mocked or
-   real) before this session.
-3. **Extended `specimen-quality-inventory.spec.ts`** with 4 new
-   real-backend tests covering AC#1 (movement records
-   origin/destination/responsible/purpose/quantity, plus an audit-trail
-   assertion), AC#2/#3 (PARTIAL/DEPLETED lifecycle transitions), AC#4
-   (blocks withdraw/return against a blocked-status specimen), AC#5
-   (no route accepts an update/delete of a custody event — asserted as
-   404 plus a before/after equality check on the movement list). AC#6
-   (atomic quantity update) is **not** covered — see below.
-4. **Building the fixture surfaced four pre-existing backend bugs**,
-   fixed in the same commit since they directly blocked proving the
-   criteria above:
-   - `withdrawSample`'s AC#4 status guard checked a field
-     (`sample.currentStatus`) and vocabulary
-     (`TotallyWithdrawn`/`Destroyed`/`Unusable`/`Expired`) that don't
-     exist on `Sample.js`'s real schema — the real field is
-     `lifecycleStatus` with enum
-     `UNAVAILABLE/DESTROYED/DISPOSED/QUARANTINED` (among others). The
-     check was dead code; every withdrawal against a blocked specimen
-     silently succeeded.
-   - `returnSample` had no such guard at all — added one, same
-     vocabulary.
-   - `Sample.computeStatus` only treated `UNAVAILABLE` as sticky, not
-     `DESTROYED`/`DISPOSED`/`QUARANTINED` — setting one of those via
-     `updateSample` got silently overwritten by the next
-     quantity-derived status (`AVAILABLE`/`PARTIAL`/`DEPLETED`) on the
-     very next write.
-   - `updateSample` had the same `_id`/`specimenId` lookup mismatch
-     #294 fixed elsewhere (`getSample`/`withdrawSample`/`returnSample`)
-     — `PUT /api/samples/:id` queried `{specimenId: ObjectId(...)}`,
-     which never matched, so the route could never update any sample.
-   - `getSampleMovements` queried movements by the raw route param
-     (the sample's Mongo `_id`, per `sampleID: sample._id.toString()`
-     in the create route) instead of resolving to the sample's real
-     `specimenId` field first — `GET /api/samples/:id/movements`
-     returned an empty list for the exact id the create response
-     itself returns. Caught by a failing e2e assertion, not by code
-     review — fixed the same session.
-   - Verified no regressions: full backend unit suite (5461 tests
-     across 250 files) still passes; the specific
-     `sample.service`/`sample.routes`/integration files most affected
-     were also run individually before the full-suite run.
-5. **AC#6 (atomic quantity update) not addressed.** Ledger append and
-   the balance `updateOne` are two separate writes with no Mongo
-   session/transaction wrapping them — filed as **#297** rather than
-   silently deferred, since no test in this session's scope exercises a
-   crash-mid-write scenario and it needs a design call (is the hash
-   chain's own detectability an acceptable substitute for a literal
-   transaction, or does this need `client.startSession()`).
-6. **`E2E_TRACEABILITY_PLAN.md`'s RF006 row updated** — now DONE, with
-   the full writeup of what's covered and the bugs found/fixed.
-7. **Closed #288** with the merge commit hash.
-8. **Docker stack** (`compose.test.yml`, all services except unit/e2e-
-   runner jobs) was built and run for this iteration's real-backend
-   verification, including one rebuild of `backend-app-test` mid-session
-   after the `getSampleMovements` fix; torn down and cleaned (images,
-   builder cache, test-results, scratch logs) at session end.
+1. Routed issue #289 through `work-issue` → `build-loop`. #289 asked for
+   a real-backend spec proving RF009 (Telemetria e monitoramento
+   ambiental), which had zero coverage before this session.
+2. **Scoping surfaced the issue's own sizing warning was correct** —
+   RF009's 7 acceptance criteria need three things that don't exist yet:
+   a `Device` model, an `EnvironmentalExcursion` model (the closest
+   analog, `TemperatureIncident`, is a different shape), and working
+   missing-reading detection/propagation (`TelemetryMonitor`'s
+   `findCriticalFreezers`/`propagateCompromise` are no-op stubs). Routed
+   through `divide-and-conquer` — confirmed the split with Dennis before
+   filing anything.
+3. **Filed two follow-ups**, both referencing #289:
+   - **#298** — build the `EnvironmentalExcursion` model + AC#5/AC#7
+     (also flags the `Device` model question as needing a design call).
+   - **#299** — missing-reading detection + `TelemetryMonitor`'s
+     `findCriticalFreezers`/`propagateCompromise` (currently stubs) +
+     AC#6's full alert/quarantine evaluation.
+4. **Built chunk A**: new `tests/e2e/interop-monitoring.spec.ts` (5
+   tests) proving RF009's real ingestion path — AC#1/AC#2 (a reading
+   POSTed to `/api/iot/telemetry` persists as a real InfluxDB point,
+   queried back and value-matched), AC#3-partial (sensorId-tagged
+   linkage to a seeded `SensorMetadata` doc — no `Device`/storage-
+   location reference yet, that's #298), AC#4-invalid (400 on missing
+   sensorId / non-numeric temperature), AC#4-out-of-range + AC#6-partial
+   (an out-of-range reading opens a real `TemperatureIncident` via the
+   existing policy-lookup + quarantine-evaluation path; an in-range
+   reading opens none).
+5. New helpers: `tests/e2e/helpers/seedSensor.ts` (seeds a real
+   `TemperaturePolicy` + `SensorMetadata` pair directly via Mongo — no
+   API seed path exists for either) and `tests/e2e/helpers/queryInflux.ts`
+   (reads telemetry points back from the real InfluxDB bucket from the
+   host). `compose.test.yml`'s `influxdb-test` now publishes port 8086
+   to the host, same rationale as `mongodb-test`'s published port.
+6. **Building the fixture surfaced a real pre-existing bug, fixed in the
+   same commit**: `TemperaturePolicy.schema.js` was never `require`d
+   anywhere on the app's boot path, so mongoose never registered that
+   model — every `SensorMetadata.findOne(...).populate('temperaturePolicy')`
+   in `resolveTemperaturePolicy` (`iot.controller.js`) silently threw
+   "Schema hasn't been registered for model \"TemperaturePolicy\"",
+   caught and logged as a warning. **No real sensor's out-of-range
+   reading ever triggered an incident/alert/quarantine before this
+   fix** — only the `NODE_ENV=test`-hardcoded `'sensor-1'` shortcut
+   worked. Fixed by requiring the schema module in `iot.controller.js`.
+7. **Ran the full backend unit suite for regressions**: 6262/6264 pass.
+   The 2 failures are pre-existing and unrelated to this session's
+   changes (`sample.service.unit.test.js`'s `getSampleMovements` test —
+   its mock was never updated after #288's `findSampleByAnyId` fix
+   landed in a prior session). Filed as **#300** rather than silently
+   noted, per this project's "found a problem → file it" rule.
+8. **`E2E_TRACEABILITY_PLAN.md`'s RF009 row updated** — now PARTIAL,
+   with the full writeup of what's covered, the bug found/fixed, and
+   which follow-ups carry the rest.
+9. **Closed #289** with the commit hash, naming #298/#299 as the
+   follow-ups carrying the remaining scope.
+10. **Docker stack** (`compose.test.yml`, all services except unit/e2e-
+    runner jobs) was built and run for this iteration's real-backend
+    verification, including one rebuild of `backend-app-test` mid-
+    session after the `TemperaturePolicy` require fix; torn down and
+    cleaned (images, builder cache, test-results, scratch logs) at
+    session end.
 
 ## Repo state
 
-- Working tree clean, `test/e2e-real-backend-foundation` is 2 commits
+- Working tree clean, `test/e2e-real-backend-foundation` is 3 commits
   ahead of `origin/test/e2e-real-backend-foundation` — push not done
   this session, confirm with Dennis first.
 - Docker stack torn down after this iteration's real-backend run; no
@@ -88,58 +86,22 @@ confirm with Dennis before pushing, per repo convention).
 ## Recommended next steps
 
 None queued explicitly by Dennis this session. Per the traceability
-doc's own sequencing, remaining Wave 1 items: `#289` (RF009), `#290`
-(RF018), `#291` (RF019), `#292` (RF023), `#293` (TOTP helper, worth
-pulling forward if any of those RFs' acceptance criteria turn out to
-need a genuine non-admin session). `#295` (RF004 AC#3, Study/Protocol/
-Collection modeling) still needs Dennis's design call before
-implementation. `#297` (this session's new atomic-transaction issue)
-also needs a design call, same reason.
+doc's own sequencing, remaining Wave 1 items: `#290` (RF018), `#291`
+(RF019), `#292` (RF023), `#293` (TOTP helper, worth pulling forward if
+any of those RFs' acceptance criteria turn out to need a genuine
+non-admin session). This session's own follow-ups — `#298`
+(EnvironmentalExcursion model + Device design call) and `#299`
+(TelemetryMonitor stub work) — are natural next picks if continuing
+RF009 specifically. `#295` (RF004 AC#3, Study/Protocol/Collection
+modeling), `#297` (RF006 AC#6 atomic-transaction design call), and
+`#300` (stale test mock) also still need attention, none design-call-
+free enough to auto-pick without Dennis's input except #300, which is a
+same-shape mechanical fix to `fix-bugs`'s "stale test" case.
 
 ## Which skills to use
 
-`work-issue` → `build-loop` held up cleanly again — same "known-missing
-capability, build it with the real-backend test that proves it" shape as
-#294. One process slip worth flagging: this session made the first three
-product-code edits (the AC#4 guard fix, the `updateSample` lookup fix,
-`computeStatus`'s sticky-status fix) *before* creating the dedicated
-`test/e2e-wave1-rf006-custody` branch, directly on
-`test/e2e-real-backend-foundation` — build-loop's "Branch before the
-first Edit/Write" instruction was not followed in real time. Caught via
-`git status`/`git branch --show-current` right after, and recovered
-cleanly (the working-tree changes carried over onto the new branch with
-`git checkout -b`, since nothing had been committed yet) — but the
-sequencing itself was wrong, not just late-discovered. Worth an explicit
-gate (checking the current branch name before the first tool-call that
-writes to a tracked file) rather than relying on remembering the rule
-under an "auto mode" push to keep moving. `wrap-up`'s shipping addendum
-(items 10/11) caught the AC#6 gap correctly — filed #297 before closing
-#288, rather than letting a "not addressed" line in the traceability doc
-go untracked.
-
-## Dependency notes
-
-RF001/RF002/RF004/RF006/RF012 done. RF006 covers AC#1-#5 (real
-backend); AC#6 carried to #297 (needs a design call: literal Mongo
-transaction vs. relying on the hash-chain ledger's own detectability).
-RF003/RF005/RF010/RF020/RF021 (Wave 2) and RF022/RF028 (red-first, own
-design pass) remain untouched — not this session's scope.
-`dyeallpies-skills-pack` issues from earlier sessions (`#134`, `#135`,
-`#122`-`#129`, `#137`) are pack-repo items, not BioAvanceD-v2 blockers.
-
-## Session note
-
-One direct friction point this session (see "Which skills to use" above):
-edited product code before branching, caught immediately via a git-state
-check, no lasting harm since nothing was committed pre-branch. The
-`getSampleMovements` bug (#4 in the bug list above) is also worth noting
-as a *pattern*, not just an instance: this is the third route in two
-sessions (`getSample`/`withdrawSample`/`returnSample` in #294, now
-`getSampleMovements` and `updateSample` in #288) built against the
-assumption that a route's `:id` param is the same value as the
-`specimenId` field it queries against — it isn't, and isn't consistently
-guarded by `findSampleByAnyId` across all five now-fixed call sites.
-Worth a `grep -n "specimenId:" api/backend/src/services/*.js` sweep in a
-future session to check whether any *other* still-uncovered route in
-this codebase has the same bug, rather than waiting for the next e2e
-slice to trip over it one route at a time.
+`work-issue` to route the next issue; it'll land on `build-loop` for
+any remaining Wave 1 RF, `divide-and-conquer` if scoping reveals the
+same "spec names an entity that doesn't exist yet" shape again, or
+`fix-bugs` for #300. `bioavanced-v2-conventions` and
+`bioavanced-v2-testing-conventions` apply to all of the above.
