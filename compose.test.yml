@@ -307,10 +307,14 @@ services:
       PLAYWRIGHT_API_BASE_URL: http://backend-app-test:3000
       TEST_USER: admin
       TEST_PASS: Admin@123
+      E2E_MONGO_URI: mongodb://mongodb-test:27017
+      E2E_MONGO_DB: bioavanced_test
     depends_on:
       frontend-app-test:
         condition: service_healthy
       backend-app-test:
+        condition: service_healthy
+      mongodb-test:
         condition: service_healthy
     networks: [bioavanced-test]
 
