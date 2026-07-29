@@ -65,7 +65,7 @@ describe('sensor.service (non-quarantine paths)', () => {
       db.collection = vi.fn((name) => (name === 'sensorMetadata' ? sensorMetadataCollection : sensorsCollection));
 
       const storageContainerId = '507f1f77bcf86cd799439099';
-      await sensorService.createSensor(db, {
+      const result = await sensorService.createSensor(db, {
         sensorId: 'S-1',
         sensorType: 'temperature',
         macAddress: 'AA:BB:CC:00:00:01',
@@ -78,9 +78,10 @@ describe('sensor.service (non-quarantine paths)', () => {
       expect(update.$set.macAddress).toBe('AA:BB:CC:00:00:01');
       expect(update.$set.storageContainer.toString()).toBe(storageContainerId);
       expect(options).toEqual({ upsert: true });
+      expect(result.metadataLinked).toBe(true);
     });
 
-    it('logs and does not throw when the sensorMetadata upsert fails', async () => {
+    it('does not throw when the sensorMetadata upsert fails, but surfaces metadataLinked: false (#313)', async () => {
       const { db } = makeDb();
       const sensorsCollection = { insertOne: vi.fn().mockResolvedValue({ insertedId: 'abc123' }) };
       const sensorMetadataCollection = { updateOne: vi.fn().mockRejectedValue(new Error('E11000 duplicate key')) };
@@ -93,6 +94,7 @@ describe('sensor.service (non-quarantine paths)', () => {
       });
 
       expect(result._id).toBe('abc123');
+      expect(result.metadataLinked).toBe(false);
     });
   });
 
