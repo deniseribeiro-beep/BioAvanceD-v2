@@ -1,71 +1,74 @@
 # HANDOFF
 
-**Written:** 2026-07-29, a `work-issue` → `fix-bugs` session for #314.
+**Written:** 2026-07-29, a `work-issue` → `fix-bugs` session for #307.
 
-**Branch:** `test/e2e-real-backend-foundation`, now at `40c75f8b`
-(pushed, clean), 1 commit ahead of the prior handoff's `9a808373`.
+**Branch:** `test/e2e-real-backend-foundation`, now at `d75db5f8`
+(pushed, clean), 2 commits ahead of the prior handoff's `0e15952f`.
 
 ## What happened this session
 
-1. Read the prior (#313 fix-bugs) handoff, then the user asked to look at
-   a design-call issue. Handoff named #314 and #307 as the two remaining
-   genuine owner-call items; asked the user which one via
-   `AskUserQuestion` — picked #314 (SensorForm's `maintenanceStatus`
-   Portuguese labels rejected by the backend's English enum, "Novo
-   Sensor" creation always 400s).
-2. Asked the missing decision via a second `AskUserQuestion`: translate
-   on submit (keep Portuguese display labels, give each dropdown option
-   a distinct English `value`, translate before POST) vs. widen the
-   backend enum vs. something else. Dennis chose translate-on-submit;
-   backend enum (`SensorModel.validate()`) stays untouched.
-3. Routed `work-issue` → `fix-bugs` (route 1: product defect, decision
-   in hand).
-4. Fixed: added `frontend/src/config/constants/sensor.constants.ts`
-   (shared `MAINTENANCE_STATUS_OPTIONS` value/label pairs +
-   `getMaintenanceStatusLabel()` reverse lookup). Updated `SensorForm`
-   in `FacilityManagementPage.tsx` to render options from that map and
-   default to `'operational'`; updated the sensor-table status badge and
-   `ReportViewPage.tsx`'s sensor table cell to translate the stored
-   English value back to Portuguese for display. Backend
-   `Sensor.js`/`sensor.service.js` untouched.
-   - Judgment call (documented on the issue, not re-asked): the UI has 5
-     Portuguese labels but the backend enum only has 4 values, so
-     "Aguardando Reparo" and "Em Manutenção" both submit `'maintenance'`
-     — distinct display text, same backend status. Low-stakes/cosmetic,
-     not filed as a separate ambiguity.
-5. Un-weakened the pinned reproduction: removed the `page.route`
-   `maintenanceStatus` rewrite from
-   `tests/e2e/sensor-registration.spec.ts`'s #311/#312 real-backend
-   "Novo Sensor form" UI test — the form now submits a valid value
-   natively, so that test is the genuine proof once run against Docker.
-6. Verified natively only (per `fix-bugs`: Docker is end-loop, not
-   per-iteration, even though Docker was toggled on this session and the
-   gate was technically open — not the native-compile-substitution or
-   infra-change exception): `frontend` `tsc --noEmit` clean, `vite build`
-   clean. **The real-backend e2e proof
-   (`sensor-registration.spec.ts`) was not run this session** — it needs
-   the Docker/CI ship gate (`ship-integration-branch`) to actually
-   exercise the fix end-to-end.
-7. Committed on `fix/sensor-form-maintenance-status-enum` (`7fe79180`,
-   `Fixes #314`), pushed, commented the hash + the value-collision
-   judgment call on the issue. Merged `--no-ff` into
-   `test/e2e-real-backend-foundation` (`40c75f8b`), re-verified
-   (`tsc --noEmit`) on the merged tree, pushed, deleted the fix branch
-   (local + remote).
-8. Closed **#314** with the merge commit hash.
-9. `wrap-up` audit: no friction this session (one disclosed judgment
-   call, not a gap); no dead ends left on the closed issue; no unfiled
-   findings.
+1. Read the prior (#314 fix-bugs) handoff, which named **#307** as the
+   next likely design-call item.
+2. Asked the user two `AskUserQuestion` decisions: (a) how to address
+   the unauthenticated test-support route — chose "add shared-secret
+   header check" (defense in depth, over just adding gate-coverage
+   tests); (b) scope — #307 only names
+   `POST /telemetry-monitor/run-cycle`, but the identical
+   `POST /telemetry-monitor/find-critical-freezers` right below it in
+   the same file shares the same NODE_ENV-only gating pattern — user
+   chose to fix both.
+3. Routed `work-issue` → `fix-bugs` (route 1: reproducible defect,
+   decision in hand).
+4. Reproduced first: added 4 failing integration tests to
+   `api/backend/tests/integration/iot.api.test.js` (missing header,
+   wrong header, unset-secret-fails-closed) — confirmed both routes
+   returned 503 with **zero auth check** before the fix (the 503 was
+   just "telemetryMonitor not initialized" in the test harness, not an
+   auth rejection).
+5. Fixed: added a `requireTestSupportSecret` middleware in
+   `api/backend/src/interface/routes/iot.routes.js`, applied to both
+   routes. Checks an `x-test-support-secret` header against
+   `TEST_SUPPORT_SECRET` env var; **fails closed (403)** if the env var
+   is unset, so a missing secret is never silently treated as "no auth
+   needed."
+6. Wired `TEST_SUPPORT_SECRET` through: `compose.test.yml`
+   (`backend-app-test` via the `*test-env` anchor, plus
+   `playwright-runner`'s own environment block so Playwright specs can
+   read it), `.env.test.example` (vitest-side value), and
+   `.env.docker.example` (left blank/commented — dev stack stays
+   fail-closed by default, this is test-support only).
+7. Updated `tests/e2e/interop-monitoring.spec.ts`'s two helpers
+   (`triggerMonitorCycle`, `findCriticalFreezers`) to send the new
+   header via `process.env.TEST_SUPPORT_SECRET`.
+8. Verified natively (Docker was authorized this session but not
+   needed — the fix is provable without it): targeted vitest run
+   (`iot.api.test.js` + `iot.controller.test.js`), 24/24 passing,
+   including the 4 new tests going from failing to passing across the
+   fix. **The e2e spec's header addition was not run against Docker
+   this session** — same as #314's proof, it needs the
+   `ship-integration-branch` gate to actually exercise
+   `interop-monitoring.spec.ts` against the real compose stack.
+9. Committed on `fix/iot-test-support-route-auth` (`249868de`,
+   `Fixes #307`), pushed, commented the hash + test summary on the
+   issue. Merged `--no-ff` into `test/e2e-real-backend-foundation`
+   (`d75db5f8`), re-verified the targeted tests on the merged tree,
+   pushed, deleted the fix branch (local + remote).
+10. Closed **#307** with the merge commit hash.
+11. `wrap-up` audit: no friction this session — reproduction, fix,
+    un-weakened e2e helpers, verify, merge, close all matched the skill
+    as written; no scope creep (diff limited to the routes file, its
+    test, the e2e spec's two call sites, and env/compose wiring); no
+    unfiled findings.
 
 ## Repo state
 
-- `test/e2e-real-backend-foundation` at `40c75f8b`, pushed, clean.
-- **#314 closed** (was: SensorForm's Portuguese `maintenanceStatus`
-  labels rejected by the backend's English enum — now translated on
-  submit via `frontend/src/config/constants/sensor.constants.ts`).
-- **#313 closed** (carried from the prior handoff, untouched this
+- `test/e2e-real-backend-foundation` at `d75db5f8`, pushed, clean.
+- **#307 closed** (was: `POST /telemetry-monitor/run-cycle` and
+  `find-critical-freezers` gated only by `NODE_ENV`, no auth of their
+  own — now both require a shared-secret header, fail-closed if unset).
+- **#314 closed** (carried from the prior handoff, untouched this
   session).
-- **#302 closed** (carried from an earlier handoff, untouched).
+- **#313, #302** closed (carried from earlier handoffs, untouched).
 - Carried forward untouched, still open:
   `test/migrate-rcs-governance-indexes-coverage` (#285 coverage work),
   the possibly-undeleted remote
@@ -77,11 +80,6 @@
 - **#295, #297** still open with doc-evidence drafted in a prior
   session's conversation but never posted as issue comments — still
   pending a decision to de-scope them from "needs owner call."
-- **#307** still open — the one remaining genuine undocumented design
-  call from the prior handoff (test-support
-  `POST /api/iot/telemetry-monitor/run-cycle` route gated only by
-  `NODE_ENV`, no auth of its own). Not picked this session — user chose
-  #314 instead.
 - **#115** still open, not actionable (Denise's decision already on
   record).
 - **#293** still open, an implementation gap (no test-side TOTP
@@ -93,21 +91,20 @@
 
 ## Recommended next steps
 
-None queued explicitly — but **#307 is the next likely design-call
-item** if Dennis wants to keep clearing that backlog (same shape as
-#313/#314: needs one `AskUserQuestion` decision, then routes to
-`fix-bugs`). The real-backend e2e proof for #314
-(`tests/e2e/sensor-registration.spec.ts`) should be re-run once Docker
-is actually exercised at a ship gate, to confirm the "Novo Sensor form"
-test passes against the real backend without its former workaround.
+None queued explicitly. The real-backend e2e proof for both #314's
+`sensor-registration.spec.ts` fix and this session's
+`interop-monitoring.spec.ts` header addition should be re-run once
+Docker is actually exercised at a ship gate — neither has been proven
+against the real compose stack yet.
 
 ## Which skills to use
 
 `work-issue` → `fix-bugs` is the right route once an ambiguous "needs
-owner call" issue gets an actual decision from Dennis (as #313 and #314
-both did) — don't re-defer an issue that already has its design question
-answered. `work-issue` → `test-loop` for coverage-gap issues,
+owner call" issue gets an actual decision from Dennis (as #313, #314,
+and #307 all did) — don't re-defer an issue that already has its design
+question answered. `work-issue` → `test-loop` for coverage-gap issues,
 `build-loop` for capability-doesn't-exist-yet issues. `resolve-issue` for
 #295/#297 if/when de-scoped. `ship-integration-branch` once the backlog
 on this branch is judged ready to graduate to `main` — not attempted
-this session; that's also when #314's e2e proof gets its real run.
+this session; that's also when #314's and #307's e2e proofs get their
+real run.
