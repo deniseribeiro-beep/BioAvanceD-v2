@@ -1,62 +1,81 @@
 # HANDOFF
 
-**Written:** 2026-07-29, a `work-issue` → `resolve-issue` session for #285.
+**Written:** 2026-07-29, a `work-issue` → `build-loop` session for Wave 1
+of the e2e milestone (#290, #291, #292).
 
-**Branch:** `test/e2e-real-backend-foundation`, now at `fa9971bf`
-(pushed, clean), 1 commit ahead of the prior handoff's `587b044c`.
+**Branch:** `test/e2e-real-backend-foundation`, now at `3e4cbf5d`
+(pushed, clean), 1 commit ahead of the prior handoff's `98d4e607`.
 
 ## What happened this session
 
-1. Read the prior (#307 fix-bugs) handoff — no next step queued
-   explicitly. Routed via `work-issue` to pick up another issue.
-2. Scanned the open backlog (`gh issue list`). Picked **#285**
-   ("Unmerged branch `test/migrate-rcs-governance-indexes-coverage` has
-   2 real commits never integrated") — a clean, unambiguous board-hygiene
-   case, no design call needed. Routed to `resolve-issue`.
-3. Confirmed via `git merge-base --is-ancestor` that the branch's test
-   commit (`8e61dfd2`, adds coverage for
-   `src/scripts/migrate-rcs-governance-indexes.js`) was genuinely
-   unintegrated into both `main` and `feature/docker-e2e-backend-integration`.
-   The branch's second commit (`d049d211`) was only a HANDOFF rotation,
-   not substantive.
-4. Cherry-picked `8e61dfd2` onto `test/e2e-real-backend-foundation`
-   (`fa9971bf`). Hit a conflict in `api/backend/COVERAGE_NOTES.md`:
-   resolved by keeping only the still-relevant
-   `migrate-rcs-governance-indexes.js` note — the commit's other two
-   script notes (`testEnvironment.js`, `seedDiseaseValidationRules.js`)
-   had already been superseded/removed elsewhere in the file on this
-   branch, confirmed via grep before dropping them.
-5. Verified natively: ran the cherry-picked test file alone —
-   2/2 passing on the merged tree.
-6. Pushed. Asked the user before deleting the now-superseded
-   `test/migrate-rcs-governance-indexes-coverage` branch (local +
-   remote), since `git branch -d`/`git push origin --delete` were
-   blocked by the auto-mode permission classifier and needed an
-   explicit confirmation path — user approved, both deleted.
-7. Closed **#285** with the resolution summary (commit hash, conflict
-   resolution rationale, test result, branch deletion note).
-8. `wrap-up` audit: filed
-   `dyeallpies-skills-pack#144` — the branch-deletion permission-classifier
-   block from step 6 is exactly the "denial blocks a step the skill calls
-   normal" case, worth recording so future sessions don't rediscover it
-   from scratch. Also self-noted (no skill edit, no issue): I did not
-   invoke `wrap-up` unprompted after closing #285 as the skill requires;
-   the user had to ask "did you rotate handoff?" before the Stop-hook
-   checkpoint fired. No other friction — scope stayed limited to the
-   coverage-notes conflict resolution and the one test file; no lazy
-   fixes; no stale instructions found.
+1. Read the prior (#285 resolve-issue) handoff — no next step queued
+   explicitly. User asked to "work a wave 1 issue" with Docker on.
+2. Found the three Wave 1 issues via `gh issue list --search wave`:
+   #290 (RF018 SPREC/RCS), #291 (RF019 logical quarantine), #292 (RF023
+   outbox→Neo4j projection). Routed #290 through `work-issue` →
+   `build-loop` (capability-doesn't-exist-yet shape).
+3. Discovered #290's and #291's real-backend specs already existed on
+   this branch (commits 324c9931/73d120b2 — prior sessions built and
+   committed them but never closed the tracker issues). Started the
+   real `compose.test.yml` stack, ran both, confirmed 5/5 passing
+   against the real backend. Closed both as already-done.
+4. #292 (RF023) was genuinely broken — running its spec
+   (`pipeline-continuity.spec.ts`, commit c2ebab50) against the real
+   stack for the first time surfaced 3 real bugs stacked on top of each
+   other:
+   - Spec posted to `/api/consents`; the real route is
+     `/api/e-consent/consents` (eConsent.js), and
+     `createPatientConsent` requires non-empty
+     `signatureName`/`signatureImageBase64` (Ajv schema minLength,
+     even though neither is in the schema's `required` array).
+   - **Product bug**: `neo4jOutbox.service.js`'s `appendEvent()` put
+     `updatedAt` in both `$setOnInsert` (via the whole built doc) and
+     `$set` — MongoDB rejects that as a path conflict, so every outbox
+     write failed and consent creation itself 400'd.
+   - **Test-env config bug**: `compose.test.yml`/`.env.test.example`
+     set `NEO4J_DATABASE=bioavanced_test`, but `neo4j:5-community` only
+     supports the default `neo4j` database (multi-database is
+     Enterprise-only) — every Neo4j query failed with "Graph not
+     found".
+   Fixed all three (commit 3e4cbf5d). Verified: both RF023 tests pass,
+   plus the full `pipeline-continuity.spec.ts` +
+   `specimen-quality-inventory.spec.ts` suites (19/19) against the real
+   stack, no regressions. Also re-ran `neo4j-outbox.service.test.js`
+   (14/14 unit tests still pass after the `$setOnInsert` fix). Closed
+   #292 with the bug breakdown.
+5. `wrap-up` audit: filed
+   `dyeallpies-skills-pack#146` — build-loop's BioAvanceD-v2 local-env
+   says "Docker on by default" but doesn't give the actual
+   `compose.test.yml` startup recipe (had to reverse-engineer from
+   `.github/workflows/ci-pipeline.yml`), doesn't mention the separate
+   one-shot `admin-bootstrap-test` service (skip it and every
+   `realLogin()` 401s), and doesn't list the env vars a host-run
+   Playwright process needs beyond `PLAYWRIGHT_*`
+   (`TEST_USER`/`TEST_PASS`/`E2E_MONGO_URI`/`E2E_MONGO_DB`/
+   `E2E_NEO4J_DATABASE`/`TEST_SUPPORT_SECRET`). No other friction: scope
+   stayed inside build-loop's normal "prove, then build" pattern (edited
+   product code because the loop's premise allows it), no lazy fixes,
+   no ambiguous sub-points closed without a live issue.
 
 ## Repo state
 
-- `test/e2e-real-backend-foundation` at `fa9971bf`, pushed, clean.
-- **#285 closed** (was: unmerged branch with 2 real commits — the
-  substantive one is now cherry-picked in; source branch deleted
-  local + remote).
-- **#307, #314, #313, #302** closed (carried from earlier handoffs,
-  untouched this session).
+- `test/e2e-real-backend-foundation` at `3e4cbf5d`, pushed, clean.
+- **#290, #291, #292 closed** (Wave 1 of the e2e milestone — all three
+  now proven against the real `compose.test.yml` stack).
+- The real compose test stack is currently **running** on this machine
+  (started this session, includes the rebuilt `backend-app-test`/
+  `worker-test`/`neo4j-projection-worker-test` images with the
+  `neo4jOutbox.service.js` fix baked in) — not torn down; next session
+  should `docker compose --env-file .env.test.example -f
+  compose.test.yml down --volumes --remove-orphans` if it doesn't need
+  it, or reuse it if continuing e2e work immediately.
+- **#307, #314, #313, #302, #285** closed (carried from earlier
+  handoffs, untouched this session).
 - Carried forward untouched, still open: the possibly-undeleted remote
   `origin/fix/mongo-audit-repo-generate-movement-id`,
-  `dyeallpies-skills-pack#141` (unassigned).
+  `dyeallpies-skills-pack#141` (unassigned),
+  `dyeallpies-skills-pack#144` (branch-deletion permission-classifier
+  block), `dyeallpies-skills-pack#146` (this session's local-env gap).
   `test/close-environmental-excursion-301` (merged feature branch, still
   exists locally/remotely — safe to delete once confirmed no longer
   needed, not done this or prior sessions).
@@ -71,23 +90,30 @@
   `api/backend/COVERAGE_NOTES.md`).
 - **#286, #283, #282, #284** untouched (frontend Docker flake, docs
   drift, CI Playwright wiring).
+- Wave 1 of `E2E_TRACEABILITY_PLAN.md` is now fully closed (RF001,
+  RF002, RF004, RF006, RF009, RF012, RF018, RF019, RF023 per the plan's
+  wave list) — Wave 2 (RF003, RF007, RF011, RF020, RF021, plus
+  red-first issue filing for RF005/RF010/RF022/RF028) is the natural
+  next milestone slice, but not queued as a specific issue by the user
+  this session.
 
 ## Recommended next steps
 
-None queued explicitly. Still outstanding from the prior handoff: the
-real-backend e2e proof for #314's `sensor-registration.spec.ts` fix and
-#307's `interop-monitoring.spec.ts` header addition should be re-run once
-Docker is actually exercised at a ship gate — neither has been proven
+None queued explicitly by the user. Wave 2 of the e2e milestone (see
+above) is the obvious next `build-loop` target once picked up. Still
+outstanding from earlier handoffs: the real-backend e2e proof for
+#314's `sensor-registration.spec.ts` fix and #307's
+`interop-monitoring.spec.ts` header addition should be re-run now that
+Docker is actually being exercised regularly — neither has been proven
 against the real compose stack yet.
 
 ## Which skills to use
 
-`work-issue` → `resolve-issue` is the right route for board-hygiene items
-like #285 (unmerged branch, no design ambiguity) — don't over-route these
-into `fix-bugs`/`test-loop` just because the payload happens to be a
-test file. `fix-bugs` for reproducible defects with a decision in hand.
-`test-loop` for coverage-gap issues, `build-loop` for
-capability-doesn't-exist-yet issues. `resolve-issue` for #295/#297 if/when
-de-scoped. `ship-integration-branch` once the backlog on this branch is
-judged ready to graduate to `main` — not attempted this session; that's
-also when #314's and #307's e2e proofs get their real run.
+`work-issue` → `build-loop` is the right route for Wave-1/2-style e2e
+milestone issues that name a capability with existing unit coverage but
+no e2e proof (#290/#291/#292's shape) — Docker on by default, no opt-in
+gate, per `build-loop`'s BioAvanceD-v2 overlay. Don't assume a spec
+file's existence on the branch means the issue is resolved — run it
+against the real stack before closing (2 of this session's 3 issues
+were already-written-but-unverified; the third had 3 stacked bugs
+hiding behind "the spec exists").
