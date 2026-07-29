@@ -99,13 +99,38 @@ of the e2e milestone (#290, #291, #292).
 
 ## Recommended next steps
 
-None queued explicitly by the user. Wave 2 of the e2e milestone (see
-above) is the obvious next `build-loop` target once picked up. Still
-outstanding from earlier handoffs: the real-backend e2e proof for
-#314's `sensor-registration.spec.ts` fix and #307's
-`interop-monitoring.spec.ts` header addition should be re-run now that
-Docker is actually being exercised regularly — neither has been proven
-against the real compose stack yet.
+**Wave 1 is NOT actually finished yet — do not start Wave 2 or the
+integration merge until it is.** Checked this against issue #318 (the
+tracked "integrate onto `feature/docker-e2e-backend-integration`" gate,
+which explicitly says "do not start this integration before all of the
+above are closed"). #318's checklist has three items still open that
+this session's handoff previously glossed over:
+
+- **#304** — RF009 real Neo4j `propagateCompromise` + full AC#6 e2e —
+  open, not touched or even mentioned in recent handoffs. Needs a look
+  before anything else.
+- **#295** — RF004 AC#3: Study/Protocol/Collection linkage not modeled
+  (code gap, not just a missing test) — open.
+- **#297** — RF006 AC#6: sample quantity updates are not atomic (code
+  gap) — open.
+
+Next session's job is to close these three (route each through
+`work-issue` to pick the right loop — #304 looks like `build-loop` shape,
+#295/#297 are code-gap fixes so likely `fix-bugs` shape) before touching
+Wave 2 or attempting the `ship-integration-branch` merge into
+`feature/docker-e2e-backend-integration`. Once all six of #318's
+checklist items are closed, re-run `test:e2e:docker` against the merged
+tree per #318's definition of done, then proceed with the integration
+merge (fast-forward-clean as of this session — confirmed
+`feature/docker-e2e-backend-integration` is a strict ancestor of
+`test/e2e-real-backend-foundation`, no divergent history to reconcile).
+
+Also still outstanding from earlier handoffs: the real-backend e2e proof
+for #314's `sensor-registration.spec.ts` fix should be re-run now that
+Docker is actually being exercised regularly — not yet proven against
+the real compose stack. (#307's `interop-monitoring.spec.ts` header
+addition has since been confirmed already tested — no longer
+outstanding.)
 
 ## Which skills to use
 
