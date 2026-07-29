@@ -264,4 +264,49 @@ describe('IoT API integration', () => {
       maximumValue: 12.5,
     });
   });
+
+  describe('test-support telemetry-monitor routes (#307)', () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    const originalSecret = process.env.TEST_SUPPORT_SECRET;
+
+    beforeEach(() => {
+      process.env.NODE_ENV = 'test';
+      process.env.TEST_SUPPORT_SECRET = 'the-real-secret';
+    });
+
+    afterEach(() => {
+      process.env.NODE_ENV = originalNodeEnv;
+      process.env.TEST_SUPPORT_SECRET = originalSecret;
+    });
+
+    it('rejects /telemetry-monitor/run-cycle with no shared-secret header', async () => {
+      const response = await request(app).post('/api/iot/telemetry-monitor/run-cycle');
+      expect(response.status).toBe(403);
+    });
+
+    it('rejects /telemetry-monitor/run-cycle with a wrong shared-secret header', async () => {
+      const response = await request(app)
+        .post('/api/iot/telemetry-monitor/run-cycle')
+        .set('x-test-support-secret', 'wrong-secret');
+      expect(response.status).toBe(403);
+    });
+
+    it('rejects /telemetry-monitor/find-critical-freezers with no shared-secret header', async () => {
+      const response = await request(app).post('/api/iot/telemetry-monitor/find-critical-freezers');
+      expect(response.status).toBe(403);
+    });
+
+    it('rejects both test-support routes when TEST_SUPPORT_SECRET is unset, even with a header sent', async () => {
+      delete process.env.TEST_SUPPORT_SECRET;
+      const runCycleResponse = await request(app)
+        .post('/api/iot/telemetry-monitor/run-cycle')
+        .set('x-test-support-secret', 'anything');
+      expect(runCycleResponse.status).toBe(403);
+
+      const findCriticalResponse = await request(app)
+        .post('/api/iot/telemetry-monitor/find-critical-freezers')
+        .set('x-test-support-secret', 'anything');
+      expect(findCriticalResponse.status).toBe(403);
+    });
+  });
 });

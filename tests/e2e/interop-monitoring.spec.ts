@@ -243,7 +243,9 @@ test.describe('Telemetria e monitoramento ambiental (RF009) — missing-reading 
   // only, gated out of production) runs the real runCycle() synchronously
   // instead.
   async function triggerMonitorCycle(request: import('@playwright/test').APIRequestContext) {
-    const response = await request.post(`${apiBaseURL}/api/iot/telemetry-monitor/run-cycle`);
+    const response = await request.post(`${apiBaseURL}/api/iot/telemetry-monitor/run-cycle`, {
+      headers: { 'x-test-support-secret': process.env.TEST_SUPPORT_SECRET ?? '' },
+    });
     expect(response.status()).toBe(200);
   }
 
@@ -320,6 +322,7 @@ test.describe('Telemetria e monitoramento ambiental (RF009) — real findCritica
   ) {
     const response = await request.post(`${apiBaseURL}/api/iot/telemetry-monitor/find-critical-freezers`, {
       data: overrides,
+      headers: { 'x-test-support-secret': process.env.TEST_SUPPORT_SECRET ?? '' },
     });
     expect(response.status()).toBe(200);
     const body = await response.json();
