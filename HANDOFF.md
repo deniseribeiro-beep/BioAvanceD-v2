@@ -1,66 +1,71 @@
 # HANDOFF
 
-**Written:** 2026-07-29, a `work-issue` → `fix-bugs` session for #313.
+**Written:** 2026-07-29, a `work-issue` → `fix-bugs` session for #314.
 
-**Branch:** `test/e2e-real-backend-foundation`, now at `9f6e5df7`
-(pushed, clean), 2 commits ahead of the prior handoff's `bbda2cfc`.
+**Branch:** `test/e2e-real-backend-foundation`, now at `40c75f8b`
+(pushed, clean), 1 commit ahead of the prior handoff's `9a808373`.
 
 ## What happened this session
 
-1. Read the prior (#302 test-loop) handoff, then the user pointed at
-   **#313** directly ("sensor.service.linkSensorMetadata silently
-   swallows upsert failures").
-2. #313 was carried in prior handoffs as a "confirmed design call for
-   Dennis" (no owner decision on record). Asked Dennis for the missing
-   decision via `AskUserQuestion` rather than guessing: chosen fix is to
-   add `metadataLinked: false` to the sensor-creation response body when
-   the metadata link upsert fails (e.g. duplicate `macAddress` hitting
-   `SensorMetadata`'s unique index), `metadataLinked: true` on success.
-3. Routed `work-issue` → `fix-bugs` (route 1: product defect, decision in
-   hand). Found the existing pinned test in
-   `api/backend/tests/unit/sensor.service.test.js` ("logs and does not
-   throw when the sensorMetadata upsert fails") that already exercised
-   the swallow but never asserted the missing signal — strengthened it
-   plus the adjacent success-path test to assert `result.metadataLinked`,
-   confirmed both failed pre-fix.
-4. Fixed `sensor.service.js`: `linkSensorMetadata()` now returns
-   `true`/`false` instead of only logging on failure (still never
-   throws — #311's original defensive-catch intent is preserved);
-   `createSensor()` includes `metadataLinked` in its returned object
-   whenever a `macAddress` was provided.
-5. Verified: `sensor.service.test.js` +
-   `controllers/sensor.controller.test.js` +
-   `integration/sensor.api.test.js` (68 tests) green on the merged tree.
-   `COVERAGE_NOTES.md` doesn't track this file — nothing to update.
-6. Committed on `fix/sensor-metadata-link-flag` (`372d70be`, `Fixes
-   #313`), pushed, commented the hash on the issue. Merged `--no-ff`
-   into `test/e2e-real-backend-foundation` (`9f6e5df7`), re-verified on
-   the merged tree, pushed, deleted the fix branch (local + remote).
-7. Closed **#313** with the merge commit hash — after an explicit
-   `AskUserQuestion` confirmation, since `gh issue close` was blocked by
-   the auto-mode permission classifier (see friction below).
-8. `wrap-up` audit: one friction item (below), no dead ends left on
-   closed issues, no unfiled findings.
-
-## Friction this session
-
-- `gh issue close` was blocked by the Claude Code auto-mode classifier
-  (a visible, shared-state action), even though `fix-bugs`' own ending
-  sequence describes issue-close as a normal per-iteration step. Worked
-  around it with an explicit `AskUserQuestion` confirmation before
-  retrying. Not a `fix-bugs` bug — the skill's sequence is fine — but a
-  recurring classifier behavior worth knowing about for future sessions
-  on this branch: expect a confirmation prompt on `gh issue close` /
-  `gh pr merge` even under auto mode.
+1. Read the prior (#313 fix-bugs) handoff, then the user asked to look at
+   a design-call issue. Handoff named #314 and #307 as the two remaining
+   genuine owner-call items; asked the user which one via
+   `AskUserQuestion` — picked #314 (SensorForm's `maintenanceStatus`
+   Portuguese labels rejected by the backend's English enum, "Novo
+   Sensor" creation always 400s).
+2. Asked the missing decision via a second `AskUserQuestion`: translate
+   on submit (keep Portuguese display labels, give each dropdown option
+   a distinct English `value`, translate before POST) vs. widen the
+   backend enum vs. something else. Dennis chose translate-on-submit;
+   backend enum (`SensorModel.validate()`) stays untouched.
+3. Routed `work-issue` → `fix-bugs` (route 1: product defect, decision
+   in hand).
+4. Fixed: added `frontend/src/config/constants/sensor.constants.ts`
+   (shared `MAINTENANCE_STATUS_OPTIONS` value/label pairs +
+   `getMaintenanceStatusLabel()` reverse lookup). Updated `SensorForm`
+   in `FacilityManagementPage.tsx` to render options from that map and
+   default to `'operational'`; updated the sensor-table status badge and
+   `ReportViewPage.tsx`'s sensor table cell to translate the stored
+   English value back to Portuguese for display. Backend
+   `Sensor.js`/`sensor.service.js` untouched.
+   - Judgment call (documented on the issue, not re-asked): the UI has 5
+     Portuguese labels but the backend enum only has 4 values, so
+     "Aguardando Reparo" and "Em Manutenção" both submit `'maintenance'`
+     — distinct display text, same backend status. Low-stakes/cosmetic,
+     not filed as a separate ambiguity.
+5. Un-weakened the pinned reproduction: removed the `page.route`
+   `maintenanceStatus` rewrite from
+   `tests/e2e/sensor-registration.spec.ts`'s #311/#312 real-backend
+   "Novo Sensor form" UI test — the form now submits a valid value
+   natively, so that test is the genuine proof once run against Docker.
+6. Verified natively only (per `fix-bugs`: Docker is end-loop, not
+   per-iteration, even though Docker was toggled on this session and the
+   gate was technically open — not the native-compile-substitution or
+   infra-change exception): `frontend` `tsc --noEmit` clean, `vite build`
+   clean. **The real-backend e2e proof
+   (`sensor-registration.spec.ts`) was not run this session** — it needs
+   the Docker/CI ship gate (`ship-integration-branch`) to actually
+   exercise the fix end-to-end.
+7. Committed on `fix/sensor-form-maintenance-status-enum` (`7fe79180`,
+   `Fixes #314`), pushed, commented the hash + the value-collision
+   judgment call on the issue. Merged `--no-ff` into
+   `test/e2e-real-backend-foundation` (`40c75f8b`), re-verified
+   (`tsc --noEmit`) on the merged tree, pushed, deleted the fix branch
+   (local + remote).
+8. Closed **#314** with the merge commit hash.
+9. `wrap-up` audit: no friction this session (one disclosed judgment
+   call, not a gap); no dead ends left on the closed issue; no unfiled
+   findings.
 
 ## Repo state
 
-- `test/e2e-real-backend-foundation` at `9f6e5df7`, pushed, clean.
-- **#313 closed** (was: sensor.service silently swallows
-  `linkSensorMetadata` upsert failures — now surfaces
-  `metadataLinked: false`/`true` in the sensor-creation response).
-- **#302 closed** (carried from the prior handoff, untouched this
+- `test/e2e-real-backend-foundation` at `40c75f8b`, pushed, clean.
+- **#314 closed** (was: SensorForm's Portuguese `maintenanceStatus`
+  labels rejected by the backend's English enum — now translated on
+  submit via `frontend/src/config/constants/sensor.constants.ts`).
+- **#313 closed** (carried from the prior handoff, untouched this
   session).
+- **#302 closed** (carried from an earlier handoff, untouched).
 - Carried forward untouched, still open:
   `test/migrate-rcs-governance-indexes-coverage` (#285 coverage work),
   the possibly-undeleted remote
@@ -72,9 +77,11 @@
 - **#295, #297** still open with doc-evidence drafted in a prior
   session's conversation but never posted as issue comments — still
   pending a decision to de-scope them from "needs owner call."
-- **#314, #307** still open — these two (unlike #313, now resolved)
-  remain genuine undocumented design calls for Dennis, last
-  re-confirmed in the #302 session.
+- **#307** still open — the one remaining genuine undocumented design
+  call from the prior handoff (test-support
+  `POST /api/iot/telemetry-monitor/run-cycle` route gated only by
+  `NODE_ENV`, no auth of its own). Not picked this session — user chose
+  #314 instead.
 - **#115** still open, not actionable (Denise's decision already on
   record).
 - **#293** still open, an implementation gap (no test-side TOTP
@@ -86,16 +93,21 @@
 
 ## Recommended next steps
 
-None queued — no next issue was named this session. #314/#307 remain
-the next likely owner-call items if Dennis wants to clear those next.
+None queued explicitly — but **#307 is the next likely design-call
+item** if Dennis wants to keep clearing that backlog (same shape as
+#313/#314: needs one `AskUserQuestion` decision, then routes to
+`fix-bugs`). The real-backend e2e proof for #314
+(`tests/e2e/sensor-registration.spec.ts`) should be re-run once Docker
+is actually exercised at a ship gate, to confirm the "Novo Sensor form"
+test passes against the real backend without its former workaround.
 
 ## Which skills to use
 
 `work-issue` → `fix-bugs` is the right route once an ambiguous "needs
-owner call" issue gets an actual decision from Dennis (as #313 did this
-session) — don't re-defer an issue that already has its design question
+owner call" issue gets an actual decision from Dennis (as #313 and #314
+both did) — don't re-defer an issue that already has its design question
 answered. `work-issue` → `test-loop` for coverage-gap issues,
-`build-loop` for capability-doesn't-exist-yet issues. `resolve-issue`
-for #295/#297 if/when de-scoped. `ship-integration-branch` once the
-backlog on this branch is judged ready to graduate to `main` — not
-attempted this session.
+`build-loop` for capability-doesn't-exist-yet issues. `resolve-issue` for
+#295/#297 if/when de-scoped. `ship-integration-branch` once the backlog
+on this branch is judged ready to graduate to `main` — not attempted
+this session; that's also when #314's e2e proof gets its real run.
