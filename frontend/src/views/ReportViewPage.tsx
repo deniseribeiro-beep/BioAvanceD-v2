@@ -8,6 +8,7 @@ import { reportsService } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 import { getPatientDisplayName } from '../utils/patientAnonymization';
 import { getReportTypeDefinition } from '../config/constants/report.constants';
+import { getMaintenanceStatusLabel } from '../config/constants/sensor.constants';
 import './ReportViewPage.css';
 
 export default function ReportViewPage() {
@@ -359,7 +360,7 @@ export default function ReportViewPage() {
                         <tr key={s.sensorID}>
                           <td>{s.sensorID}</td>
                           <td>{s.sensorType}</td>
-                          <td>{s.maintenanceStatus}</td>
+                          <td>{getMaintenanceStatusLabel(s.maintenanceStatus)}</td>
                           <td>{formatDate(s.lastCalibration)}</td>
                         </tr>
                       ))}
