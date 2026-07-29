@@ -87,11 +87,12 @@ class Neo4jOutboxService {
       ...event,
       projectionState: event.projectionState || options.projectionState || {},
     });
+    const { updatedAt, ...docWithoutUpdatedAt } = doc;
 
     await collection.updateOne(
       { eventId: doc.eventId },
       {
-        $setOnInsert: doc,
+        $setOnInsert: docWithoutUpdatedAt,
         $set: {
           updatedAt: new Date(),
         },

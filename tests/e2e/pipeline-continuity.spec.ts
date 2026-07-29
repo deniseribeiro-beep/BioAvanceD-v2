@@ -18,22 +18,31 @@ test.describe('Outbox → Neo4j projection (RF023) — real backend', () => {
     await closeNeo4jDriver();
   });
 
-  // POST /api/consents (consent.service.js's createPatientConsent) appends a
+  // POST /api/e-consent/consents (consent.service.js's createPatientConsent,
+  // mounted under /api/e-consent — see eConsent.js/app.js) appends a
   // CONSENT_UPSERTED event to graph_projection_outbox on the same request
   // (recordConsentProjectionEvent) — proving the pipeline means polling the
   // real Neo4j instance for the projected :EthicalConsent node, not trusting
   // the 201 response (the projection itself is asynchronous, see
-  // neo4jProjection.worker.js).
+  // neo4jProjection.worker.js). signatureName/signatureImageBase64 are
+  // required by normalizeSignaturePayload's schema validation (minLength 1
+  // once the keys are present, even though they're not in the schema's
+  // `required` array) — any non-empty string passes, no real image needed.
+  function signatureFields() {
+    return { signatureName: 'RF023 e2e signer', signatureImageBase64: 'e2e-fixture-signature' };
+  }
+
   test('a signed consent projects into Neo4j as an ACTIVE EthicalConsent node', async ({ request }) => {
     const admin = await realLogin(request);
     const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
 
-    const response = await request.post(`${apiBaseURL}/api/consents`, {
+    const response = await request.post(`${apiBaseURL}/api/e-consent/consents`, {
       headers: { Authorization: `Bearer ${admin.token}` },
       data: {
         participantId: participant.participantId,
         consentTemplateId: participant.consentTemplateId,
         responses: {},
+        ...signatureFields(),
       },
     });
 
@@ -52,12 +61,13 @@ test.describe('Outbox → Neo4j projection (RF023) — real backend', () => {
     const admin = await realLogin(request);
     const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
 
-    const create = await request.post(`${apiBaseURL}/api/consents`, {
+    const create = await request.post(`${apiBaseURL}/api/e-consent/consents`, {
       headers: { Authorization: `Bearer ${admin.token}` },
       data: {
         participantId: participant.participantId,
         consentTemplateId: participant.consentTemplateId,
         responses: {},
+        ...signatureFields(),
       },
     });
     expect(create.ok()).toBe(true);
@@ -67,7 +77,7 @@ test.describe('Outbox → Neo4j projection (RF023) — real backend', () => {
 
     await waitForEthicalConsentStatus(consentId, 'ACTIVE');
 
-    const revoke = await request.post(`${apiBaseURL}/api/consents/${consentId}/revoke`, {
+    const revoke = await request.post(`${apiBaseURL}/api/e-consent/consents/${consentId}/revoke`, {
       headers: { Authorization: `Bearer ${admin.token}` },
     });
     expect(revoke.ok()).toBe(true);

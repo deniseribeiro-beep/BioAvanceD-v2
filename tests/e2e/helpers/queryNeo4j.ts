@@ -19,7 +19,10 @@ import neo4j, { Driver } from 'neo4j-driver';
 const uri = process.env.E2E_NEO4J_URI || 'bolt://localhost:7687';
 const username = process.env.E2E_NEO4J_USERNAME || 'neo4j';
 const password = process.env.E2E_NEO4J_PASSWORD || 'testpassword';
-const database = process.env.E2E_NEO4J_DATABASE || 'bioavanced_test';
+// neo4j:5-community only supports the default `neo4j` database — named
+// databases are an Enterprise-only feature (#292: compose.test.yml's
+// NEO4J_DATABASE used to say bioavanced_test, which doesn't exist).
+const database = process.env.E2E_NEO4J_DATABASE || 'neo4j';
 
 let driver: Driver | null = null;
 
