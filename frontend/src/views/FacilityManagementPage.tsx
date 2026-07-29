@@ -884,7 +884,7 @@ function SensorsSection() {
         >
           {sensorRows.length > 0 ? (
             sensorRows.map((sensor) => {
-              const sensorId = sensor.sensorID || sensor._id || 'N/A';
+              const sensorId = sensor.sensorID || (sensor as any).sensorId || sensor._id || 'N/A';
               return (
             <tr key={sensorId}>
               <td>{sensorId}</td>

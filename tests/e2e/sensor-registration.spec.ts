@@ -104,12 +104,12 @@ test.describe('Sensor registration links SensorMetadata (#311)', () => {
       await page.getByTestId('sensor-mac-address-input').fill(`AA:BB:CC:22:${sensorId.slice(-2)}:00`);
       await page.getByTestId('sensor-storage-container-select').selectOption(freezerId);
 
-      // #315: the sensors table displays the Mongo _id, not sensorId, on the
-      // freshly-created row — not what this test is proving, so wait for the
-      // modal to close (a real 201 came back) rather than asserting on the
-      // table's ID column text.
       await page.getByTestId('sensor-form-submit').click();
       await expect(page.getByTestId('sensor-form-submit')).not.toBeVisible();
+
+      // #315: the freshly-created row must show the human-readable sensorId
+      // the operator typed in, not the raw Mongo _id.
+      await expect(page.getByText(sensorId, { exact: true })).toBeVisible();
 
       const metadata = await findSensorMetadata(sensorId);
       expect(metadata).not.toBeNull();
