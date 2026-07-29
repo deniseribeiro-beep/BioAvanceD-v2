@@ -125,6 +125,136 @@ export async function findSensorMetadata(sensorId: string): Promise<any | null> 
   return db.collection('sensorMetadata').findOne({ sensorId });
 }
 
+export interface SeededFreezerSample {
+  sensorId: string;
+  deviceId: string;
+  policyId: string;
+  freezerId: string;
+  shelfId: string;
+  rackId: string;
+  boxId: string;
+  rootSampleId: string;
+}
+
+/**
+ * RF009 (#304) fixture: seeds a full FREEZER -> SHELF -> RACK -> StorageBox
+ * hierarchy (per TelemetryMonitor.resolveBoxIdsUnderFreezer) plus a real
+ * sensorMetadata doc bound to the freezer container and one Sample doc
+ * whose storageLocation.boxId matches, so findCriticalFreezers'
+ * resolveRootSamples() resolves a real rootSampleId instead of the []
+ * the plain seedSensorWithPolicy fixture produces (no storageContainer
+ * link).
+ */
+export async function seedSensorWithFreezerSample(
+  minTemp: number,
+  maxTemp: number
+): Promise<SeededFreezerSample> {
+  const db = await getDb();
+  const suffix = Date.now();
+  const sensorId = `rf009-e2e-propagate-sensor-${suffix}`;
+  const deviceId = `rf009-e2e-propagate-device-${suffix}`;
+
+  const policyResult = await db.collection('temperaturePolicies').insertOne({
+    name: `RF009 propagate e2e policy ${suffix}`,
+    targetTemp: (minTemp + maxTemp) / 2,
+    minTemp,
+    maxTemp,
+    hysteresis: 0.5,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+
+  const deviceResult = await db.collection('devices').insertOne({
+    deviceId,
+    deviceType: 'freezer',
+    qualificationStatus: 'qualified',
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+
+  const freezerResult = await db.collection('storageContainers').insertOne({
+    name: `RF009 e2e freezer ${suffix}`,
+    containerType: 'FREEZER',
+    parent_id: null,
+    temperature: minTemp,
+    temperatureUnit: 'CELSIUS',
+    status: 'OPERATIONAL',
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    deletedAt: null,
+  });
+  const shelfResult = await db.collection('storageContainers').insertOne({
+    name: `RF009 e2e shelf ${suffix}`,
+    containerType: 'SHELF',
+    parent_id: freezerResult.insertedId,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    deletedAt: null,
+  });
+  const rackResult = await db.collection('storageContainers').insertOne({
+    name: `RF009 e2e rack ${suffix}`,
+    containerType: 'RACK',
+    parent_id: shelfResult.insertedId,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    deletedAt: null,
+  });
+  const boxResult = await db.collection('storageBoxes').insertOne({
+    name: `RF009 e2e box ${suffix}`,
+    parent_id: rackResult.insertedId,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    deletedAt: null,
+  });
+
+  const sampleResult = await db.collection('samples').insertOne({
+    sampleType: 'plasma',
+    status: 'stored',
+    storageLocation: { boxId: boxResult.insertedId },
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+
+  await db.collection('sensorMetadata').insertOne({
+    sensorId,
+    macAddress: `AA:BB:CC:01:00:${(suffix % 100).toString().padStart(2, '0')}`,
+    equipment: null,
+    device: deviceResult.insertedId,
+    temperaturePolicy: policyResult.insertedId,
+    storageContainer: freezerResult.insertedId,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+
+  return {
+    sensorId,
+    deviceId,
+    policyId: policyResult.insertedId.toString(),
+    freezerId: freezerResult.insertedId.toString(),
+    shelfId: shelfResult.insertedId.toString(),
+    rackId: rackResult.insertedId.toString(),
+    boxId: boxResult.insertedId.toString(),
+    rootSampleId: sampleResult.insertedId.toString(),
+  };
+}
+
+/** Deletes everything seedSensorWithFreezerSample created (sensor, device, policy, storage hierarchy, sample, and any excursion/incident it triggered). */
+export async function removeSeededFreezerSample(sensor: SeededFreezerSample): Promise<void> {
+  const db = await getDb();
+  await Promise.all([
+    db.collection('sensorMetadata').deleteMany({ sensorId: sensor.sensorId }),
+    db.collection('devices').deleteMany({ deviceId: sensor.deviceId }),
+    db.collection('temperaturePolicies').deleteMany({ _id: new ObjectId(sensor.policyId) }),
+    db.collection('environmentalExcursions').deleteMany({ equipmentId: sensor.deviceId }),
+    db.collection('temperatureIncidents').deleteMany({ sensorKey: sensor.sensorId }),
+    db.collection('samples').deleteMany({ _id: new ObjectId(sensor.rootSampleId) }),
+    db.collection('storageBoxes').deleteMany({ _id: new ObjectId(sensor.boxId) }),
+    db.collection('storageContainers').deleteMany({
+      _id: { $in: [new ObjectId(sensor.rackId), new ObjectId(sensor.shelfId), new ObjectId(sensor.freezerId)] },
+    }),
+  ]);
+}
+
 /** Deletes a seeded freezer container and its linked sensorMetadata/sensors docs. */
 export async function removeSensorRegistration(sensorId: string, freezerId: string): Promise<void> {
   const db = await getDb();

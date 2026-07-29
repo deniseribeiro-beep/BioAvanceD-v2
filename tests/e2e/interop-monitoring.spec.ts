@@ -6,9 +6,12 @@ import {
   countEnvironmentalExcursions,
   removeSeededSensor,
   closeSeedSensorDb,
+  seedSensorWithFreezerSample,
+  removeSeededFreezerSample,
 } from './helpers/seedSensor';
 import { queryTemperaturePoints } from './helpers/queryInflux';
 import { realLogin } from './helpers/realAuth';
+import { seedSampleNode, readSampleStatus, removeSampleNodes, closeNeo4jDriver } from './helpers/queryNeo4j';
 
 // Real backend only — see backend-integration.spec.ts for the same skip
 // rationale. Run via `npm run test:e2e:docker` against the compose test
@@ -426,6 +429,113 @@ test.describe('Telemetria e monitoramento ambiental (RF009) — real findCritica
       expect(criticalFreezers.find((entry) => entry.freezerKey === sensor.sensorId)).toBeUndefined();
     } finally {
       await removeSeededSensor(sensor);
+    }
+  });
+});
+
+test.describe('Telemetria e monitoramento ambiental (RF009) — real Neo4j propagateCompromise (#304)', () => {
+  test.afterAll(async () => {
+    await closeSeedSensorDb();
+    await closeNeo4jDriver();
+  });
+
+  // /api/iot/telemetry-monitor/run-cycle-full (test-support only, gated out
+  // of production, added alongside this spec) runs the real runCycle() —
+  // findCriticalFreezers() (real InfluxDB, #303) followed by
+  // propagateCompromise() (real Neo4j, #304) — synchronously, with the
+  // same threshold overrides find-critical-freezers already uses.
+  async function runCycleFull(
+    request: import('@playwright/test').APIRequestContext,
+    overrides: Record<string, number> = {}
+  ) {
+    const response = await request.post(`${apiBaseURL}/api/iot/telemetry-monitor/run-cycle-full`, {
+      data: overrides,
+      headers: { 'x-test-support-secret': process.env.TEST_SUPPORT_SECRET ?? '' },
+    });
+    expect(response.status()).toBe(200);
+  }
+
+  async function postReadingAt(
+    request: import('@playwright/test').APIRequestContext,
+    sensorId: string,
+    temperature: number,
+    timestamp: Date
+  ) {
+    const response = await request.post(`${apiBaseURL}/api/iot/telemetry`, {
+      data: { sensorId, temperature, timestamp: timestamp.toISOString() },
+    });
+    expect(response.status()).toBe(200);
+  }
+
+  test('a sustained critical-freezer breach marks the real root Sample node COMPROMISED in Neo4j and propagates to its descendant', async ({
+    request,
+  }) => {
+    const sensor = await seedSensorWithFreezerSample(2, 8);
+    const descendantSampleId = `rf009-e2e-descendant-${Date.now()}`;
+    try {
+      await seedSampleNode(sensor.rootSampleId);
+      await seedSampleNode(descendantSampleId, sensor.rootSampleId);
+
+      const now = Date.now();
+      const timestamps = [3, 2, 1, 0].map((minutesAgo) => new Date(now - minutesAgo * 60_000));
+      for (const timestamp of timestamps) {
+        await postReadingAt(request, sensor.sensorId, -50, timestamp);
+      }
+      await expect
+        .poll(async () => {
+          const points = await queryTemperaturePoints(sensor.sensorId, 10);
+          return points.length;
+        }, { timeout: 15_000 })
+        .toBeGreaterThanOrEqual(timestamps.length);
+
+      await runCycleFull(request, {
+        // 2 minutes: shorter than the ~3-minute streak just written — same
+        // override shape as the #303 find-critical-freezers spec above.
+        criticalDurationHours: 2 / 60,
+        expectedReadingIntervalMinutes: 5,
+      });
+
+      await expect
+        .poll(async () => readSampleStatus(sensor.rootSampleId), { timeout: 15_000 })
+        .toBe('COMPROMISED');
+      await expect
+        .poll(async () => readSampleStatus(descendantSampleId), { timeout: 15_000 })
+        .toBe('COMPROMISED');
+    } finally {
+      await removeSampleNodes([sensor.rootSampleId, descendantSampleId]);
+      await removeSeededFreezerSample(sensor);
+    }
+  });
+
+  test('a freezer whose breach has not lasted the overridden duration leaves its Sample node untouched', async ({
+    request,
+  }) => {
+    const sensor = await seedSensorWithFreezerSample(2, 8);
+    try {
+      await seedSampleNode(sensor.rootSampleId);
+
+      await postReadingAt(request, sensor.sensorId, -50, new Date());
+      await expect
+        .poll(async () => {
+          const points = await queryTemperaturePoints(sensor.sensorId, 10);
+          return points.length;
+        }, { timeout: 15_000 })
+        .toBeGreaterThan(0);
+
+      await runCycleFull(request, {
+        // 2 minutes: longer than the single just-written reading's age —
+        // never crosses the sustained-breach threshold, so
+        // findCriticalFreezers should never report this sensor and
+        // propagateCompromise should never run for it.
+        criticalDurationHours: 2 / 60,
+        expectedReadingIntervalMinutes: 5,
+      });
+
+      const status = await readSampleStatus(sensor.rootSampleId);
+      expect(status).toBeNull();
+    } finally {
+      await removeSampleNodes([sensor.rootSampleId]);
+      await removeSeededFreezerSample(sensor);
     }
   });
 });

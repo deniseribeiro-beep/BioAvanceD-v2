@@ -85,3 +85,53 @@ export async function waitForEthicalConsentStatus(
       `${consentId} to reach status ${expectedStatus} (last seen: ${lastSeen ?? 'no node found'})`
   );
 }
+
+/**
+ * RF009 (#304) fixture: seeds a bare `:Sample {id}` node plus an optional
+ * `DERIVED_FROM` edge to a parent's node, so propagateCompromise's
+ * descendant-traversal write has a real graph to walk without needing the
+ * full outbox projection pipeline (RF023/#292) to run first — this issue
+ * only proves the Neo4j write itself, not the projection path.
+ */
+export async function seedSampleNode(sampleId: string, parentSampleId?: string): Promise<void> {
+  const session = getDriver().session({ database });
+  try {
+    await session.run('MERGE (s:Sample {id: $sampleId})', { sampleId });
+    if (parentSampleId) {
+      await session.run(
+        `
+          MERGE (child:Sample {id: $sampleId})
+          MERGE (parent:Sample {id: $parentSampleId})
+          MERGE (child)-[:DERIVED_FROM]->(parent)
+        `,
+        { sampleId, parentSampleId }
+      );
+    }
+  } finally {
+    await session.close();
+  }
+}
+
+/** Reads back a `:Sample` node's status property (null if the node doesn't exist). */
+export async function readSampleStatus(sampleId: string): Promise<string | null> {
+  const session = getDriver().session({ database });
+  try {
+    const result = await session.run('MATCH (s:Sample {id: $sampleId}) RETURN s.status AS status', { sampleId });
+    if (result.records.length === 0) {
+      return null;
+    }
+    return result.records[0].get('status');
+  } finally {
+    await session.close();
+  }
+}
+
+/** Deletes seeded `:Sample` nodes by id — call from a spec's cleanup so fixtures don't accumulate across runs. */
+export async function removeSampleNodes(sampleIds: string[]): Promise<void> {
+  const session = getDriver().session({ database });
+  try {
+    await session.run('MATCH (s:Sample) WHERE s.id IN $sampleIds DETACH DELETE s', { sampleIds });
+  } finally {
+    await session.close();
+  }
+}

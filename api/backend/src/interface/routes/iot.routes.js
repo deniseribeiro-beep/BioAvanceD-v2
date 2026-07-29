@@ -81,6 +81,37 @@ if (process.env.NODE_ENV !== 'production') {
       Object.assign(telemetryMonitor, previousValues);
     }
   });
+
+  // Test-support only, #304: proves the real Neo4j propagateCompromise()
+  // write end-to-end — unlike find-critical-freezers above, this
+  // deliberately DOES go through the full runCycle() (findCriticalFreezers
+  // -> propagateCompromise), since propagateCompromise is exactly what
+  // this route exists to exercise. Accepts the same threshold overrides so
+  // a handful of one-minute-apart points can prove a sustained breach fast.
+  router.post('/telemetry-monitor/run-cycle-full', requireTestSupportSecret, async (req, res) => {
+    const telemetryMonitor = req.app.locals.telemetryMonitor;
+    if (!telemetryMonitor) {
+      return res.status(503).json({ success: false, error: 'telemetryMonitor não inicializado' });
+    }
+
+    const overridableFields = ['criticalDurationHours', 'lookbackHours', 'expectedReadingIntervalMinutes'];
+    const previousValues = {};
+    for (const field of overridableFields) {
+      if (req.body?.[field] !== undefined) {
+        previousValues[field] = telemetryMonitor[field];
+        telemetryMonitor[field] = Number(req.body[field]);
+      }
+    }
+
+    try {
+      await telemetryMonitor.runCycle();
+      return res.status(200).json({ success: true });
+    } catch (error) {
+      return res.status(500).json({ success: false, error: error.message || String(error) });
+    } finally {
+      Object.assign(telemetryMonitor, previousValues);
+    }
+  });
 }
 
 module.exports = router;
