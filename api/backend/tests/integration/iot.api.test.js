@@ -52,6 +52,16 @@ function buildDb() {
     updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
   };
 
+  const excursions = [];
+  const environmentalExcursionsCollection = {
+    findOne: vi.fn().mockResolvedValue(null),
+    insertOne: vi.fn().mockImplementation(async (doc) => {
+      excursions.push({ ...doc, _id: '507f1f77bcf86cd799439066' });
+      return { insertedId: '507f1f77bcf86cd799439066' };
+    }),
+    updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
+  };
+
   const sensorsCollection = {
     find: vi.fn().mockReturnValue({
       toArray: vi.fn().mockResolvedValue([{ sensorId: 'sensor-1', locationID: 501 }]),
@@ -107,6 +117,7 @@ function buildDb() {
     db: {
       collection: vi.fn().mockImplementation((name) => {
         if (name === 'temperatureIncidents') return incidentCollection;
+        if (name === 'environmentalExcursions') return environmentalExcursionsCollection;
         if (name === 'users') return usersCollection;
         if (name === 'sensors') return sensorsCollection;
         if (name === 'sensorMetadata') return sensorMetadataCollection;
@@ -120,6 +131,8 @@ function buildDb() {
     },
     incidents,
     incidentCollection,
+    excursions,
+    environmentalExcursionsCollection,
     samplesCollection,
     sampleMovementsCollection,
   };
@@ -190,6 +203,7 @@ describe('IoT API integration', () => {
       expect(mockDb.samplesCollection.updateOne).toHaveBeenCalledTimes(1);
       expect(mockDb.sampleMovementsCollection.insertOne).toHaveBeenCalledTimes(1);
       expect(sendCriticalAlertEmail).toHaveBeenCalledTimes(1);
+      expect(mockDb.environmentalExcursionsCollection.insertOne).toHaveBeenCalledTimes(1);
     });
 
     expect(mockDb.incidents).toHaveLength(1);
@@ -210,6 +224,44 @@ describe('IoT API integration', () => {
       purpose: 'cold_chain_incident_quarantine',
       destination: 'Quarentena',
       responsible: 'SYSTEM',
+    });
+
+    expect(mockDb.excursions).toHaveLength(1);
+    expect(mockDb.excursions[0]).toMatchObject({
+      minimumValue: 12.5,
+      maximumValue: 12.5,
+      excursionStatus: 'open',
+    });
+  });
+
+  it('POST /api/iot/telemetry widens the open EnvironmentalExcursion instead of creating a new one on a repeat out-of-range reading', async () => {
+    const existingExcursion = {
+      _id: 'excursion-existing-1',
+      equipmentId: null,
+      excursionStatus: 'open',
+      minimumValue: 10,
+      maximumValue: 12.5,
+    };
+    mockDb.environmentalExcursionsCollection.findOne.mockResolvedValue(existingExcursion);
+
+    const response = await request(app).post('/api/iot/telemetry').send({
+      sensorId: 'sensor-1',
+      temperature: 9,
+      timestamp: '2026-04-10T10:05:00.000Z',
+    });
+
+    expect(response.status).toBe(200);
+
+    await vi.waitFor(() => {
+      expect(mockDb.environmentalExcursionsCollection.updateOne).toHaveBeenCalledTimes(1);
+    });
+
+    expect(mockDb.environmentalExcursionsCollection.insertOne).not.toHaveBeenCalled();
+    const [filter, update] = mockDb.environmentalExcursionsCollection.updateOne.mock.calls[0];
+    expect(filter).toEqual({ _id: existingExcursion._id });
+    expect(update.$set).toMatchObject({
+      minimumValue: 9,
+      maximumValue: 12.5,
     });
   });
 });
