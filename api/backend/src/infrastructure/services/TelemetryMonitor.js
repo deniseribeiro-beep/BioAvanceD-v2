@@ -25,6 +25,7 @@ class TelemetryMonitor {
     this.criticalDurationHours = Number(options.criticalDurationHours ?? process.env.TELEMETRY_CRITICAL_DURATION_HOURS ?? 2);
     this.lookbackHours = Number(options.lookbackHours ?? process.env.TELEMETRY_LOOKBACK_HOURS ?? Math.max(3, this.criticalDurationHours + 1));
     this.triggerCooldownMinutes = Number(options.triggerCooldownMinutes ?? process.env.TELEMETRY_TRIGGER_COOLDOWN_MINUTES ?? 30);
+    this.database = options.database || process.env.NEO4J_DATABASE || 'neo4j';
     // AC#4 "leituras ausentes": a sensor with no InfluxDB point in this
     // many minutes is treated as missing, distinct from criticalDurationHours
     // (which governs the sustained out-of-range case, not absence).
@@ -322,10 +323,49 @@ class TelemetryMonitor {
     return missingSensors;
   }
 
+  // AC#6 (real Neo4j write, #304): marks the root sample node COMPROMISED
+  // and propagates the same status to every descendant reachable via
+  // DERIVED_FROM (child -[:DERIVED_FROM]-> parent, per
+  // neo4jCanonicalProjection.service.js/LineageRepository.js — so
+  // descendants of root are matched by walking DERIVED_FROM backwards from
+  // root, `*0..` to include root itself in one write).
   async propagateCompromise({ neo4jDriver, rootSampleId, freezerKey, breachedSince, maxObservedTemp }) {
-    // Exemplo: propaga status de comprometido no grafo Neo4j
     logger.info(`[ISO20387][TELEMETRY] Propagando comprometimento: freezer=${freezerKey}, sample=${rootSampleId}`);
-    // Aqui você deve implementar a lógica de atualização no Neo4j
+
+    if (!rootSampleId) {
+      logger.warn(`[ISO20387][TELEMETRY] Nenhuma amostra raiz resolvida para freezer=${freezerKey}; propagação ignorada`);
+      return;
+    }
+
+    const session = neo4jDriver.session({ database: this.database });
+    try {
+      const result = await session.run(
+        `
+          MATCH (root:Sample {id: $rootSampleId})
+          OPTIONAL MATCH (root)<-[:DERIVED_FROM*0..]-(descendant:Sample)
+          WITH collect(DISTINCT root) + collect(DISTINCT descendant) AS samples
+          UNWIND samples AS sample
+          WITH DISTINCT sample WHERE sample IS NOT NULL
+          SET sample.status = 'COMPROMISED',
+              sample.compromisedAt = coalesce(sample.compromisedAt, datetime()),
+              sample.compromiseFreezerKey = $freezerKey,
+              sample.compromiseBreachedSince = $breachedSince,
+              sample.compromiseMaxObservedTemp = $maxObservedTemp
+          RETURN count(sample) AS compromisedCount
+        `,
+        {
+          rootSampleId: String(rootSampleId),
+          freezerKey,
+          breachedSince: breachedSince ? new Date(breachedSince).toISOString() : null,
+          maxObservedTemp: maxObservedTemp ?? null
+        }
+      );
+
+      const compromisedCount = result.records[0]?.get('compromisedCount')?.toNumber?.() ?? 0;
+      logger.info(`[ISO20387][TELEMETRY] ${compromisedCount} amostra(s) marcadas COMPROMISED para freezer=${freezerKey}`);
+    } finally {
+      await session.close();
+    }
   }
 }
 

@@ -486,13 +486,26 @@ describe('TelemetryMonitor', () => {
   });
 
   describe('propagateCompromise()', () => {
-    it('does not throw and logs the expected message shape (stub implementation)', async () => {
+    function fakeSession(records) {
+      return {
+        run: vi.fn().mockResolvedValue({ records }),
+        close: vi.fn().mockResolvedValue(undefined)
+      };
+    }
+
+    function fakeRecord(compromisedCount) {
+      return { get: vi.fn((key) => (key === 'compromisedCount' ? { toNumber: () => compromisedCount } : undefined)) };
+    }
+
+    it('logs the expected message shape and returns undefined', async () => {
+      const session = fakeSession([fakeRecord(2)]);
+      const neo4jDriver = { session: vi.fn().mockReturnValue(session) };
       const monitor = new TelemetryMonitor({});
       const args = {
-        neo4jDriver: { session: vi.fn() },
+        neo4jDriver,
         rootSampleId: 'sample-1',
         freezerKey: 'freezer-A',
-        breachedSince: 'ts-1',
+        breachedSince: '2026-01-01T00:00:00.000Z',
         maxObservedTemp: -50
       };
 
@@ -500,6 +513,70 @@ describe('TelemetryMonitor', () => {
       expect(loggerInfoSpy).toHaveBeenCalledWith(
         expect.stringContaining('Propagando comprometimento: freezer=freezer-A, sample=sample-1')
       );
+    });
+
+    it('opens a Neo4j session against the configured database and marks the root + descendant Sample nodes COMPROMISED', async () => {
+      const session = fakeSession([fakeRecord(3)]);
+      const neo4jDriver = { session: vi.fn().mockReturnValue(session) };
+      const monitor = new TelemetryMonitor({ database: 'neo4j' });
+
+      await monitor.propagateCompromise({
+        neo4jDriver,
+        rootSampleId: 'sample-1',
+        freezerKey: 'freezer-A',
+        breachedSince: '2026-01-01T00:00:00.000Z',
+        maxObservedTemp: -50
+      });
+
+      expect(neo4jDriver.session).toHaveBeenCalledWith({ database: 'neo4j' });
+      expect(session.run).toHaveBeenCalledWith(
+        expect.stringContaining('SET sample.status = \'COMPROMISED\''),
+        {
+          rootSampleId: 'sample-1',
+          freezerKey: 'freezer-A',
+          breachedSince: '2026-01-01T00:00:00.000Z',
+          maxObservedTemp: -50
+        }
+      );
+      expect(session.close).toHaveBeenCalled();
+    });
+
+    it('closes the session even when the write throws', async () => {
+      const session = {
+        run: vi.fn().mockRejectedValue(new Error('boom')),
+        close: vi.fn().mockResolvedValue(undefined)
+      };
+      const neo4jDriver = { session: vi.fn().mockReturnValue(session) };
+      const monitor = new TelemetryMonitor({});
+
+      await expect(
+        monitor.propagateCompromise({
+          neo4jDriver,
+          rootSampleId: 'sample-1',
+          freezerKey: 'freezer-A',
+          breachedSince: null,
+          maxObservedTemp: -50
+        })
+      ).rejects.toThrow('boom');
+
+      expect(session.close).toHaveBeenCalled();
+    });
+
+    it('skips the Neo4j write entirely when rootSampleId is null (no root sample resolved for the freezer)', async () => {
+      const neo4jDriver = { session: vi.fn() };
+      const monitor = new TelemetryMonitor({});
+
+      await expect(
+        monitor.propagateCompromise({
+          neo4jDriver,
+          rootSampleId: null,
+          freezerKey: 'freezer-A',
+          breachedSince: null,
+          maxObservedTemp: -50
+        })
+      ).resolves.toBeUndefined();
+
+      expect(neo4jDriver.session).not.toHaveBeenCalled();
     });
   });
 });
