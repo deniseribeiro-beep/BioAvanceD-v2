@@ -566,6 +566,8 @@ export interface Sensor {
   calibrationCertificate?: string;
   locationID?: number; // Padronizado para Number (consistente com Sample e Location)
   policyID?: number; // Padronizado para Number (consistente com Policy)
+  macAddress?: string; // Opcional: presente => backend vincula um SensorMetadata (ver #311)
+  storageContainer?: string; // ID do StorageContainer (freezer) vinculado ao SensorMetadata
   createdAt?: Date | string;
   updatedAt?: Date | string;
 }

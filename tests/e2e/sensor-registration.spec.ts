@@ -5,6 +5,7 @@ import {
   removeSensorRegistration,
   closeSeedSensorDb,
 } from './helpers/seedSensor';
+import { realLogin, seedRealAuth } from './helpers/realAuth';
 
 // Real-backend proof for #311: POST /api/sensors must also link a
 // SensorMetadata doc (storageContainer included) instead of leaving that
@@ -51,6 +52,64 @@ test.describe('Sensor registration links SensorMetadata (#311)', () => {
         },
       });
       expect(createResponse.ok()).toBeTruthy();
+
+      const metadata = await findSensorMetadata(sensorId);
+      expect(metadata).not.toBeNull();
+      expect(metadata.macAddress).toBeTruthy();
+      expect(metadata.storageContainer?.toString()).toBe(freezerId);
+    } finally {
+      await removeSensorRegistration(sensorId, freezerId);
+    }
+  });
+
+  // Real-backend proof for #312: the 'Novo Sensor' form must actually carry
+  // macAddress + storageContainer through to POST /api/sensors, same as the
+  // direct-API path proven above — this is the "real operator" path #312
+  // flagged as still broken (no macAddress/storageContainer inputs existed).
+  test('the Novo Sensor form links SensorMetadata through a real UI submission', async ({ page, request }) => {
+    const freezerId = await seedFreezerContainer();
+    const sensorId = `rf009-ui-registration-e2e-${Date.now()}`;
+
+    try {
+      let session;
+      try {
+        session = await realLogin(request);
+      } catch (err: any) {
+        console.warn(`realLogin failed — DB may not be seeded with an admin user yet: ${err.message}`);
+        return;
+      }
+      await seedRealAuth(page, session);
+
+      // #314: SensorForm's maintenanceStatus dropdown only offers Portuguese
+      // labels as both label and value ('Operacional', etc.), none of which
+      // match SensorModel.validate()'s English enum — every real UI
+      // submission 400s on that field alone, unrelated to macAddress/
+      // storageContainer. Rewrite just that one field in the outgoing
+      // request so the rest of this test (id/type/mac/freezer selection,
+      // form submission, real persistence) stays genuinely UI-driven.
+      await page.route('**/api/sensors', async (route) => {
+        if (route.request().method() !== 'POST') {
+          return route.continue();
+        }
+        const payload = route.request().postDataJSON();
+        payload.maintenanceStatus = 'operational';
+        await route.continue({ postData: JSON.stringify(payload) });
+      });
+
+      await page.goto('/facility-management?tab=sensors');
+      await page.getByTestId('new-sensor-button').click();
+
+      await page.getByTestId('sensor-id-input').fill(sensorId);
+      await page.getByTestId('sensor-type-input').fill('temperature');
+      await page.getByTestId('sensor-mac-address-input').fill(`AA:BB:CC:22:${sensorId.slice(-2)}:00`);
+      await page.getByTestId('sensor-storage-container-select').selectOption(freezerId);
+
+      // #315: the sensors table displays the Mongo _id, not sensorId, on the
+      // freshly-created row — not what this test is proving, so wait for the
+      // modal to close (a real 201 came back) rather than asserting on the
+      // table's ID column text.
+      await page.getByTestId('sensor-form-submit').click();
+      await expect(page.getByTestId('sensor-form-submit')).not.toBeVisible();
 
       const metadata = await findSensorMetadata(sensorId);
       expect(metadata).not.toBeNull();

@@ -17,6 +17,7 @@ import { useSensors } from '../hooks/useSensors';
 import { usePolicies } from '../hooks/usePolicies';
 import { validateReading, validateTemperatureUnit, generateAlert, validateThresholds } from '../utils/validations';
 import { CryoBoxGrid } from '../components/CryoBoxGrid';
+import { storageApi } from '../services/storageApi';
 import IncidentManagementPage from './IncidentManagementPage';
 import './FacilityManagementPage.css';
 
@@ -860,7 +861,7 @@ function SensorsSection() {
   return (
     <>
       <div className="section-header">
-        <Button onClick={() => setIsModalOpen(true)}>
+        <Button data-testid="new-sensor-button" onClick={() => setIsModalOpen(true)}>
           <Plus size={18} />
           Novo Sensor
         </Button>
@@ -1003,7 +1004,20 @@ function SensorForm({
 }) {
   const { locations } = useLocations();
   const { policies } = usePolicies();
-  
+  const [freezers, setFreezers] = useState<{ _id: string; name: string }[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    storageApi.listFreezers().then((response) => {
+      if (!cancelled && response.success && Array.isArray(response.data)) {
+        setFreezers(response.data);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const [formData, setFormData] = useState<Partial<Sensor>>(
     sensor || {
       sensorType: '',
@@ -1014,6 +1028,8 @@ function SensorForm({
       calibrationCertificate: '',
       locationID: undefined,
       policyID: undefined,
+      macAddress: '',
+      storageContainer: undefined,
     }
   );
 
@@ -1025,8 +1041,20 @@ function SensorForm({
   return (
     <form onSubmit={handleSubmit} className="form">
       <div className="form-grid">
+        {!sensor && (
+          <Input
+            label="ID do Sensor"
+            data-testid="sensor-id-input"
+            value={formData.sensorID || ''}
+            onChange={(e) =>
+              setFormData({ ...formData, sensorID: e.target.value })
+            }
+            required
+          />
+        )}
         <Input
           label="Tipo de Sensor"
+          data-testid="sensor-type-input"
           value={formData.sensorType || ''}
           onChange={(e) =>
             setFormData({ ...formData, sensorType: e.target.value })
@@ -1146,12 +1174,43 @@ function SensorForm({
             ))}
           </select>
         </div>
+        <Input
+          label="MAC Address"
+          data-testid="sensor-mac-address-input"
+          placeholder="AA:BB:CC:DD:EE:FF"
+          value={formData.macAddress || ''}
+          onChange={(e) =>
+            setFormData({ ...formData, macAddress: e.target.value })
+          }
+        />
+        <div className="form-grid-full">
+          <label className="input-label" htmlFor="sensorStorageContainerSelect">Contêiner de Armazenamento (Freezer)</label>
+          <select
+            id="sensorStorageContainerSelect"
+            data-testid="sensor-storage-container-select"
+            className="input"
+            value={formData.storageContainer || ''}
+            onChange={(e) =>
+              setFormData({
+                ...formData,
+                storageContainer: e.target.value || undefined,
+              })
+            }
+          >
+            <option value="">Selecione um freezer</option>
+            {freezers.map((freezer) => (
+              <option key={freezer._id} value={freezer._id}>
+                {freezer.name}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
       <div className="form-actions">
         <Button type="button" variant="secondary" onClick={onCancel}>
           Cancelar
         </Button>
-        <Button type="submit">Salvar</Button>
+        <Button type="submit" data-testid="sensor-form-submit">Salvar</Button>
       </div>
     </form>
   );
