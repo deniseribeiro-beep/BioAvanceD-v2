@@ -1,87 +1,98 @@
 # HANDOFF
 
-**Written:** 2026-07-29, a `work-issue` → `build-loop` session for Wave 1
-of the e2e milestone (#290, #291, #292).
+**Written:** 2026-07-29, a `work-issue` → `build-loop` session closing #304
+(RF009 AC#6, real Neo4j `propagateCompromise`).
 
-**Branch:** `test/e2e-real-backend-foundation`, now at `3e4cbf5d`
-(pushed, clean), 1 commit ahead of the prior handoff's `98d4e607`.
+**Branch:** `test/e2e-real-backend-foundation`, now at `93800401`
+(pushed, clean), 2 commits ahead of the prior handoff's `5c2fb60c`.
 
 ## What happened this session
 
-1. Read the prior (#285 resolve-issue) handoff — no next step queued
-   explicitly. User asked to "work a wave 1 issue" with Docker on.
-2. Found the three Wave 1 issues via `gh issue list --search wave`:
-   #290 (RF018 SPREC/RCS), #291 (RF019 logical quarantine), #292 (RF023
-   outbox→Neo4j projection). Routed #290 through `work-issue` →
-   `build-loop` (capability-doesn't-exist-yet shape).
-3. Discovered #290's and #291's real-backend specs already existed on
-   this branch (commits 324c9931/73d120b2 — prior sessions built and
-   committed them but never closed the tracker issues). Started the
-   real `compose.test.yml` stack, ran both, confirmed 5/5 passing
-   against the real backend. Closed both as already-done.
-4. #292 (RF023) was genuinely broken — running its spec
-   (`pipeline-continuity.spec.ts`, commit c2ebab50) against the real
-   stack for the first time surfaced 3 real bugs stacked on top of each
-   other:
-   - Spec posted to `/api/consents`; the real route is
-     `/api/e-consent/consents` (eConsent.js), and
-     `createPatientConsent` requires non-empty
-     `signatureName`/`signatureImageBase64` (Ajv schema minLength,
-     even though neither is in the schema's `required` array).
-   - **Product bug**: `neo4jOutbox.service.js`'s `appendEvent()` put
-     `updatedAt` in both `$setOnInsert` (via the whole built doc) and
-     `$set` — MongoDB rejects that as a path conflict, so every outbox
-     write failed and consent creation itself 400'd.
-   - **Test-env config bug**: `compose.test.yml`/`.env.test.example`
-     set `NEO4J_DATABASE=bioavanced_test`, but `neo4j:5-community` only
-     supports the default `neo4j` database (multi-database is
-     Enterprise-only) — every Neo4j query failed with "Graph not
-     found".
-   Fixed all three (commit 3e4cbf5d). Verified: both RF023 tests pass,
-   plus the full `pipeline-continuity.spec.ts` +
-   `specimen-quality-inventory.spec.ts` suites (19/19) against the real
-   stack, no regressions. Also re-ran `neo4j-outbox.service.test.js`
-   (14/14 unit tests still pass after the `$setOnInsert` fix). Closed
-   #292 with the bug breakdown.
-5. `wrap-up` audit: filed
-   `dyeallpies-skills-pack#146` — build-loop's BioAvanceD-v2 local-env
-   says "Docker on by default" but doesn't give the actual
-   `compose.test.yml` startup recipe (had to reverse-engineer from
-   `.github/workflows/ci-pipeline.yml`), doesn't mention the separate
-   one-shot `admin-bootstrap-test` service (skip it and every
-   `realLogin()` 401s), and doesn't list the env vars a host-run
-   Playwright process needs beyond `PLAYWRIGHT_*`
-   (`TEST_USER`/`TEST_PASS`/`E2E_MONGO_URI`/`E2E_MONGO_DB`/
-   `E2E_NEO4J_DATABASE`/`TEST_SUPPORT_SECRET`). No other friction: scope
-   stayed inside build-loop's normal "prove, then build" pattern (edited
-   product code because the loop's premise allows it), no lazy fixes,
-   no ambiguous sub-points closed without a live issue.
+1. Read the prior handoff — Wave 1 not fully closed, next step was #304
+   first (RF009 real Neo4j `propagateCompromise` + full AC#6 e2e),
+   depends on #303 (confirmed closed/landed).
+2. Routed #304 through `work-issue` → `build-loop` (capability-doesn't-
+   exist-yet shape — `propagateCompromise()` was a log-only stub).
+3. Implemented `propagateCompromise()` in `TelemetryMonitor.js`: opens a
+   Neo4j session (`this.database`, new field, same `NEO4J_DATABASE`
+   convention as sibling services), matches the root `:Sample {id}`
+   node plus every descendant reachable via `DERIVED_FROM` (root
+   `<-[:DERIVED_FROM*0..]-` descendant — child points at parent per
+   `neo4jCanonicalProjection.service.js`/`LineageRepository.js`), and
+   sets `status='COMPROMISED'` plus freezer/breach metadata on all of
+   them in one write. No-ops (skips the Neo4j call entirely) when
+   `rootSampleId` is null.
+4. Added 4 unit tests (`TelemetryMonitor.test.js`, replacing the old
+   stub test) covering the real write, the database-scoped session, the
+   session-closes-on-throw path, and the null-rootSampleId skip. 28/28
+   unit tests pass.
+5. Added a new test-support route,
+   `/api/iot/telemetry-monitor/run-cycle-full` (same auth/NODE_ENV gate
+   as the existing `run-cycle`/`find-critical-freezers` routes), that
+   runs the *full* `runCycle()` (unlike `run-cycle`, which deliberately
+   only calls `checkMissingReadings()`) — needed since this issue's
+   e2e proof is exactly the `findCriticalFreezers` → `propagateCompromise`
+   chain.
+6. Added e2e fixtures: `seedSensorWithFreezerSample()` /
+   `removeSeededFreezerSample()` (`tests/e2e/helpers/seedSensor.ts`) —
+   seeds a real FREEZER→SHELF→RACK→StorageBox hierarchy plus a Sample
+   doc so `resolveRootSamples()` resolves a real id (the existing
+   `seedSensorWithPolicy()` fixture has no `storageContainer` link, so
+   always resolves `[]`); and `seedSampleNode()` / `readSampleStatus()`
+   / `removeSampleNodes()` (`tests/e2e/helpers/queryNeo4j.ts`) to seed
+   bare `:Sample` graph nodes directly (not via the outbox projection
+   pipeline — out of this issue's scope) and read back `.status`.
+7. Added 2 e2e tests to `interop-monitoring.spec.ts` (new `#304`
+   `describe` block): a sustained breach marks both root and a seeded
+   descendant `COMPROMISED`; a too-short breach leaves the root
+   untouched (`null` status). Ran the **full** `interop-monitoring.spec.ts`
+   file against the real compose stack: **17/17 passing, no
+   regressions** to the existing 15 (ingestion, EnvironmentalExcursion,
+   missing-reading, #303 find-critical-freezers cases).
+8. Docker Desktop was not running at session start — started it, waited
+   for the engine, rebuilt `backend-app-test`/`worker-test`/
+   `neo4j-projection-worker-test` (this issue's code changes), brought
+   the full stack up, and ran the one-shot `admin-bootstrap-test`
+   (no-op: users collection already non-empty from a prior session).
+9. Committed on `test/rf009-propagate-compromise-304`, merged
+   (`--no-ff`) into `test/e2e-real-backend-foundation`, deleted the
+   slice branch, pushed. Closed #304 with the merge hash.
+10. `wrap-up` audit: filed
+    `deniseribeiro-beep/BioAvanceD-v2#319` — `.env.test.example`'s
+    `TEST_SUPPORT_SECRET=vitest-test-support-secret` is stale/unused;
+    `compose.test.yml`'s `x-test-env` anchor hardcodes a *different*
+    literal (`e2e-test-support-secret`) directly, not a substitution, so
+    a host process copying `.env.test.example`'s value gets 403s from
+    the `/api/iot/telemetry-monitor/*` test-support routes. No other
+    friction: scope stayed inside build-loop's normal pattern, no lazy
+    fixes, no ambiguous sub-points closed without a live issue.
 
 ## Repo state
 
-- `test/e2e-real-backend-foundation` at `3e4cbf5d`, pushed, clean.
-- **#290, #291, #292 closed** (Wave 1 of the e2e milestone — all three
-  now proven against the real `compose.test.yml` stack).
+- `test/e2e-real-backend-foundation` at `93800401`, pushed, clean.
+- **#304 closed** (RF009 AC#6, real Neo4j `propagateCompromise` —
+  proven against the real compose stack).
 - The real compose test stack is currently **running** on this machine
-  (started this session, includes the rebuilt `backend-app-test`/
-  `worker-test`/`neo4j-projection-worker-test` images with the
-  `neo4jOutbox.service.js` fix baked in) — not torn down; next session
-  should `docker compose --env-file .env.test.example -f
-  compose.test.yml down --volumes --remove-orphans` if it doesn't need
-  it, or reuse it if continuing e2e work immediately.
-- **#307, #314, #313, #302, #285** closed (carried from earlier
-  handoffs, untouched this session).
+  (rebuilt this session with the `propagateCompromise`/`run-cycle-full`
+  changes baked in) — not torn down; next session should
+  `docker compose --env-file .env.test.example -f compose.test.yml down
+  --volumes --remove-orphans` if it doesn't need it, or reuse it if
+  continuing e2e work immediately.
+- **#290, #291, #292, #307, #314, #313, #302, #285, #304** all closed.
+- New this session: **`dyeallpies-skills-pack#146`** (from the prior
+  handoff, still open — build-loop's BioAvanceD-v2 local-env gap) and
+  **`deniseribeiro-beep/BioAvanceD-v2#319`** (this session's
+  `TEST_SUPPORT_SECRET` drift finding).
 - Carried forward untouched, still open: the possibly-undeleted remote
   `origin/fix/mongo-audit-repo-generate-movement-id`,
   `dyeallpies-skills-pack#141` (unassigned),
   `dyeallpies-skills-pack#144` (branch-deletion permission-classifier
-  block), `dyeallpies-skills-pack#146` (this session's local-env gap).
-  `test/close-environmental-excursion-301` (merged feature branch, still
-  exists locally/remotely — safe to delete once confirmed no longer
-  needed, not done this or prior sessions).
-- **#295, #297** still open with doc-evidence drafted in a prior
-  session's conversation but never posted as issue comments — still
-  pending a decision to de-scope them from "needs owner call."
+  block). `test/close-environmental-excursion-301` (merged feature
+  branch, still exists locally/remotely — safe to delete once confirmed
+  no longer needed, not done this or prior sessions).
+- **#295, #297** still open, per #318's checklist — code gaps (Study/
+  Protocol/Collection linkage not modeled; sample quantity updates not
+  atomic), likely `fix-bugs` shape. Not touched this session.
 - **#115** still open, not actionable (Denise's decision already on
   record).
 - **#293** still open, an implementation gap (no test-side TOTP
@@ -90,55 +101,31 @@ of the e2e milestone (#290, #291, #292).
   `api/backend/COVERAGE_NOTES.md`).
 - **#286, #283, #282, #284** untouched (frontend Docker flake, docs
   drift, CI Playwright wiring).
-- Wave 1 of `E2E_TRACEABILITY_PLAN.md` is now fully closed (RF001,
-  RF002, RF004, RF006, RF009, RF012, RF018, RF019, RF023 per the plan's
-  wave list) — Wave 2 (RF003, RF007, RF011, RF020, RF021, plus
-  red-first issue filing for RF005/RF010/RF022/RF028) is the natural
-  next milestone slice, but not queued as a specific issue by the user
-  this session.
+- Wave 1 of `E2E_TRACEABILITY_PLAN.md` remains fully closed. #318's
+  integration-merge checklist now has **two** items left: #295, #297.
 
 ## Recommended next steps
 
-**Wave 1 is NOT actually finished yet — do not start Wave 2 or the
-integration merge until it is.** Checked this against issue #318 (the
-tracked "integrate onto `feature/docker-e2e-backend-integration`" gate,
-which explicitly says "do not start this integration before all of the
-above are closed"). #318's checklist has three items still open that
-this session's handoff previously glossed over:
-
-- **#304** — RF009 real Neo4j `propagateCompromise` + full AC#6 e2e —
-  open, not touched or even mentioned in recent handoffs. Needs a look
-  before anything else.
-- **#295** — RF004 AC#3: Study/Protocol/Collection linkage not modeled
-  (code gap, not just a missing test) — open.
-- **#297** — RF006 AC#6: sample quantity updates are not atomic (code
-  gap) — open.
-
-Next session's job is to close these three (route each through
-`work-issue` to pick the right loop — #304 looks like `build-loop` shape,
-#295/#297 are code-gap fixes so likely `fix-bugs` shape) before touching
-Wave 2 or attempting the `ship-integration-branch` merge into
-`feature/docker-e2e-backend-integration`. Once all six of #318's
-checklist items are closed, re-run `test:e2e:docker` against the merged
-tree per #318's definition of done, then proceed with the integration
-merge (fast-forward-clean as of this session — confirmed
-`feature/docker-e2e-backend-integration` is a strict ancestor of
-`test/e2e-real-backend-foundation`, no divergent history to reconcile).
+**#318's gate still isn't clear — #295 and #297 are the only remaining
+items before the integration merge onto
+`feature/docker-e2e-backend-integration`.** Both are code gaps (not
+missing tests), so route each through `work-issue` — likely `fix-bugs`
+shape, but confirm against `docs/docs-7-27-2026/extracted/` per #318's
+own checklist reasoning before assuming the fix shape. Once both close,
+re-run `test:e2e:docker` against the merged tree per #318's definition
+of done, then proceed with the integration merge (confirmed
+fast-forward-clean as of the prior session — no divergent history to
+reconcile, unless #295/#297's fixes touch files also changed upstream).
 
 Also still outstanding from earlier handoffs: the real-backend e2e proof
-for #314's `sensor-registration.spec.ts` fix should be re-run now that
-Docker is actually being exercised regularly — not yet proven against
-the real compose stack. (#307's `interop-monitoring.spec.ts` header
-addition has since been confirmed already tested — no longer
-outstanding.)
+for #314's `sensor-registration.spec.ts` fix has still not been re-run
+against the real compose stack.
 
 ## Which skills to use
 
-`work-issue` → `build-loop` is the right route for Wave-1/2-style e2e
-milestone issues that name a capability with existing unit coverage but
-no e2e proof (#290/#291/#292's shape) — Docker on by default, no opt-in
-gate, per `build-loop`'s BioAvanceD-v2 overlay. Don't assume a spec
-file's existence on the branch means the issue is resolved — run it
-against the real stack before closing (2 of this session's 3 issues
-were already-written-but-unverified; the third had 3 stacked bugs
-hiding behind "the spec exists").
+`work-issue` → `build-loop` is the right route for issues that name a
+capability with existing test/unit scaffolding but no real-backend e2e
+proof (#290/#291/#292/#304's shape) — Docker on by default, no opt-in
+gate. #295/#297 are different: described as code gaps, not missing
+proof, so check whether they're `fix-bugs` shape before defaulting to
+`build-loop` again.
