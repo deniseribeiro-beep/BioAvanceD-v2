@@ -18,6 +18,7 @@ import { usePolicies } from '../hooks/usePolicies';
 import { validateReading, validateTemperatureUnit, generateAlert, validateThresholds } from '../utils/validations';
 import { CryoBoxGrid } from '../components/CryoBoxGrid';
 import { storageApi } from '../services/storageApi';
+import { MAINTENANCE_STATUS_OPTIONS, getMaintenanceStatusLabel } from '../config/constants/sensor.constants';
 import IncidentManagementPage from './IncidentManagementPage';
 import './FacilityManagementPage.css';
 
@@ -891,8 +892,8 @@ function SensorsSection() {
               <td>{sensor.sensorType}</td>
               <td>{sensor.sensorModel}</td>
               <td>
-                <span className={`status-badge status-${(sensor.maintenanceStatus || 'Operacional').toLowerCase().replace(' ', '-')}`}>
-                  {sensor.maintenanceStatus || 'Operacional'}
+                <span className={`status-badge status-${(sensor.maintenanceStatus || 'operational').toLowerCase().replace(' ', '-')}`}>
+                  {getMaintenanceStatusLabel(sensor.maintenanceStatus)}
                 </span>
               </td>
               <td>
@@ -1022,7 +1023,7 @@ function SensorForm({
     sensor || {
       sensorType: '',
       sensorModel: '',
-      maintenanceStatus: 'Operacional',
+      maintenanceStatus: 'operational',
       lastCalibration: null,
       nextCalibration: null,
       calibrationCertificate: '',
@@ -1073,16 +1074,16 @@ function SensorForm({
           <select
             id="maintenanceStatusSelect"
             className="input"
-            value={formData.maintenanceStatus || 'Operacional'}
+            value={formData.maintenanceStatus || 'operational'}
             onChange={(e) =>
               setFormData({ ...formData, maintenanceStatus: e.target.value })
             }
           >
-            <option value="Operacional">Operacional</option>
-            <option value="Em Manutenção">Em Manutenção</option>
-            <option value="Fora de Serviço">Fora de Serviço</option>
-            <option value="Calibração Pendente">Calibração Pendente</option>
-            <option value="Aguardando Reparo">Aguardando Reparo</option>
+            {MAINTENANCE_STATUS_OPTIONS.map((option, index) => (
+              <option key={`${option.value}-${index}`} value={option.value}>
+                {option.label}
+              </option>
+            ))}
           </select>
         </div>
         <Input

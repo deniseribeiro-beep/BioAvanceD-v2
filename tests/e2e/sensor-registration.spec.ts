@@ -80,22 +80,6 @@ test.describe('Sensor registration links SensorMetadata (#311)', () => {
       }
       await seedRealAuth(page, session);
 
-      // #314: SensorForm's maintenanceStatus dropdown only offers Portuguese
-      // labels as both label and value ('Operacional', etc.), none of which
-      // match SensorModel.validate()'s English enum — every real UI
-      // submission 400s on that field alone, unrelated to macAddress/
-      // storageContainer. Rewrite just that one field in the outgoing
-      // request so the rest of this test (id/type/mac/freezer selection,
-      // form submission, real persistence) stays genuinely UI-driven.
-      await page.route('**/api/sensors', async (route) => {
-        if (route.request().method() !== 'POST') {
-          return route.continue();
-        }
-        const payload = route.request().postDataJSON();
-        payload.maintenanceStatus = 'operational';
-        await route.continue({ postData: JSON.stringify(payload) });
-      });
-
       await page.goto('/facility-management?tab=sensors');
       await page.getByTestId('new-sensor-button').click();
 
