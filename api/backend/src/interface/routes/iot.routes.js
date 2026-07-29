@@ -20,8 +20,22 @@ router.post('/telemetry', iotController.ingestTelemetry);
 // disconnected, so every runCycle() call re-pays that ~60s retry cost —
 // unrelated to and far slower than the missing-reading check itself,
 // which doesn't touch Neo4j at all).
+// Defense in depth for the test-support routes below (#307): the NODE_ENV
+// gate is the only thing keeping them unmounted in production, so they also
+// require a shared secret via header — fails closed if TEST_SUPPORT_SECRET
+// isn't configured, since an unset secret must never be treated as "no auth
+// required".
+function requireTestSupportSecret(req, res, next) {
+  const expected = process.env.TEST_SUPPORT_SECRET;
+  const provided = req.get('x-test-support-secret');
+  if (!expected || provided !== expected) {
+    return res.status(403).json({ success: false, error: 'Não autorizado' });
+  }
+  next();
+}
+
 if (process.env.NODE_ENV !== 'production') {
-  router.post('/telemetry-monitor/run-cycle', async (req, res) => {
+  router.post('/telemetry-monitor/run-cycle', requireTestSupportSecret, async (req, res) => {
     const telemetryMonitor = req.app.locals.telemetryMonitor;
     if (!telemetryMonitor) {
       return res.status(503).json({ success: false, error: 'telemetryMonitor não inicializado' });
@@ -43,7 +57,7 @@ if (process.env.NODE_ENV !== 'production') {
   // Accepts optional duration/interval overrides in the body so e2e tests
   // can prove a sustained breach without waiting out the real
   // criticalDurationHours/expectedReadingIntervalMinutes window.
-  router.post('/telemetry-monitor/find-critical-freezers', async (req, res) => {
+  router.post('/telemetry-monitor/find-critical-freezers', requireTestSupportSecret, async (req, res) => {
     const telemetryMonitor = req.app.locals.telemetryMonitor;
     if (!telemetryMonitor) {
       return res.status(503).json({ success: false, error: 'telemetryMonitor não inicializado' });

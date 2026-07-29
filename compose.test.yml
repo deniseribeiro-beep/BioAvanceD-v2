@@ -34,6 +34,7 @@ x-test-env: &test-env
   BOOTSTRAP_ADMIN_EMAIL: e2e-admin@bioavanced.test
   BOOTSTRAP_ADMIN_USERNAME: admin
   BOOTSTRAP_ADMIN_TEMP_PASSWORD: Admin@123
+  TEST_SUPPORT_SECRET: e2e-test-support-secret
 
 services:
   mongodb-test:
@@ -309,6 +310,7 @@ services:
       TEST_PASS: Admin@123
       E2E_MONGO_URI: mongodb://mongodb-test:27017
       E2E_MONGO_DB: bioavanced_test
+      TEST_SUPPORT_SECRET: e2e-test-support-secret
     depends_on:
       frontend-app-test:
         condition: service_healthy
