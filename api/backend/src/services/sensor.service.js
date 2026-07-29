@@ -30,13 +30,15 @@ class SensorService {
 
       logger.info('Sensor criado:', { sensorId: result.insertedId });
 
+      let metadataLinked;
       if (sensor.macAddress) {
-        await this.linkSensorMetadata(db, sensor.sensorId, sensor.macAddress, sensorData.storageContainer);
+        metadataLinked = await this.linkSensorMetadata(db, sensor.sensorId, sensor.macAddress, sensorData.storageContainer);
       }
 
       return {
         _id: result.insertedId,
-        ...sensor
+        ...sensor,
+        ...(metadataLinked !== undefined && { metadataLinked })
       };
     } catch (error) {
       logger.error('Erro ao criar sensor:', error.message);
@@ -50,6 +52,10 @@ class SensorService {
    * local de armazenamento). Sem macAddress não há SensorMetadata a criar
    * (campo obrigatório/único no schema), então o sensor básico segue criado
    * normalmente.
+   *
+   * Retorna true/false (nunca lança) para que o chamador possa reportar
+   * a falha (ex.: macAddress duplicado) sem reverter a criação do Sensor,
+   * que já foi concluída neste ponto (#313).
    */
   async linkSensorMetadata(db, sensorId, macAddress, storageContainerId) {
     try {
@@ -69,8 +75,10 @@ class SensorService {
         },
         { upsert: true }
       );
+      return true;
     } catch (error) {
       logger.error('Erro ao vincular SensorMetadata:', error.message);
+      return false;
     }
   }
 
