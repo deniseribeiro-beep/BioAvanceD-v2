@@ -1,96 +1,81 @@
 # HANDOFF
 
-**Written:** 2026-07-29, a docs-audit session (no issue picked via
-`work-issue` this time — Dennis asked to sweep the open "needs a design
-call" backlog against current docs first).
+**Written:** 2026-07-29, a `work-issue` → `build-loop` session for #301.
 
-**Branch:** `test/e2e-real-backend-foundation`, unchanged this session
-(still at 4212f7c2, clean, matches previous handoff).
+**Branch:** `test/e2e-real-backend-foundation`, now at `5241b9b3`
+(pushed, clean), 2 commits ahead of the prior handoff's `4212f7c2`.
 
 ## What happened this session
 
-1. Read the prior handoff (#316/#317 closed, real-backend e2e Docker
-   verification fully unblocked; recommended sweeping other specs for
-   the same env-var gap class, and re-checking the open design-call
-   backlog: #313, #314, #295, #297, #307, #293, #115).
-2. Pulled all seven issues via `gh issue view` and cross-checked each
-   against current code and the newer `docs/docs-7-27-2026/extracted/`
-   doc set (dictionary v1.3.0 + requirements v3.0.0 — the higher-
-   authority source per the project's own conventions overlay).
-3. Findings:
-   - **#295** (Study/Protocol/Collection linkage) — largely answered.
-     `dict-02_DICIONARIO.md` now defines `Study` (ELM-0053–0067),
-     `Protocol` (ELM-0068–0075), `Collection` (ELM-0039–0052) as full
-     entities, with `Specimen.collectionId`/`Specimen.studyIds` typed
-     as `Reference` to them (ELM-0118/0119). Docs say: real modeled
-     entities, not free-text fields.
-   - **#297** (RF006 AC#6 atomicity) — largely answered. The
-     requirement text itself (`requisitos-index.md`, RF006 AC#6) says
-     "Atualizar a quantidade disponível por **transação controlada**"
-     — a plain transaction requirement, not an open judgment call.
-   - **#313** (silent metadata-link failure), **#314** (maintenanceStatus
-     enum mismatch), **#307** (run-cycle route auth) — checked docs and
-     code, found nothing that answers these. Still genuine, unpicked
-     design calls for Dennis.
-   - **#115** — not a live design call; Denise already left an explicit
-     decision on the issue thread (defer union/dedupe to the canonical
-     terminology-modeling phase, Option A already implemented). Staying
-     open per her own instruction, nothing to re-ask.
-   - **#293** (TOTP helper) — an implementation gap, not a design call;
-     no doc cross-check applicable.
-4. Did **not** yet post the #295/#297 findings as issue comments —
-   paused there when Dennis redirected to a bigger-picture gap: the
-   skills pack's docs-check discipline (already solid inside
-   `fix-bugs`'s "verifying before deferring" checklist and the
-   `bioavanced-v2` conventions overlay) doesn't carry into
-   `resolve-issue`/`work-issue`, so design-call issues filed by
-   `build-loop`/`test-loop` sessions never get re-traced against docs
-   later. Filed that gap as
-   [dyeallpies-skills-pack#141](https://github.com/DyeAllPies/dyeallpies-skills-pack/issues/141),
-   citing #295/#297 as the concrete evidence.
-5. No code changes this session; no Docker used.
+1. Read the prior (docs-audit) handoff, then routed via `work-issue` →
+   `build-loop` to pick up **#301** (EnvironmentalExcursion never closed
+   when its paired TemperatureIncident resolves).
+2. Implemented the close path: `incident.controller.js`'s
+   `resolveIncident` now resolves `sensorKey` → `sensorMetadata` →
+   `devices` and closes the matching open/`under_assessment`
+   `EnvironmentalExcursion` (`endDateTime`/`excursionStatus:'resolved'`/
+   `duration`), mirroring how `iot.controller.js`'s
+   `upsertEnvironmentalExcursion` opens it.
+3. Proving this against the real backend (build-loop's Docker-by-default
+   bar) surfaced **two pre-existing, unrelated bugs** that made
+   `PUT /api/incidents/:id/{acknowledge,resolve,escalate}` a hard 500 for
+   *every* user, not just in this test:
+   - `rbac.js` never defined the `manageTemperature` permission those
+     routes require. Added it with the same role set as `viewTemperature`
+     (Técnico/Coordenador/Administrador — `[2,3,4]`).
+   - `incident.controller.js` built `ObjectId` via the top-level
+     `mongodb` package (6.21.0) while writing through mongoose's own
+     connection, which bundles an incompatible `mongodb`/bson (7.0.0) —
+     every write threw `BSONVersionError`. Switched to
+     `mongoose.Types.ObjectId` to match the connection actually in use.
+   - Both fixed and covered by tests in the same commit — no follow-up
+     issues needed, nothing deferred.
+4. Added a real-backend e2e test to `interop-monitoring.spec.ts`
+   (resolve → excursion closes) and two mocked unit tests to
+   `incident.controller.test.js` (close-path + no-linked-device path),
+   extending its fake `db.collection()` to cover `sensorMetadata`/
+   `devices`/`environmentalExcursions`.
+5. Verified: full backend vitest suite (**310 files / 6278 tests, all
+   passing**) and `interop-monitoring.spec.ts` against the real
+   `docker-compose.test.yml` stack (**15/15 passing**, including the new
+   test). Compose stack torn down (`--volumes`) after.
+6. Committed on `test/close-environmental-excursion-301`, merged
+   `--no-ff` into `test/e2e-real-backend-foundation` (`5241b9b3`),
+   pushed, closed **#301** with the merge hash and a summary of the two
+   incidental fixes.
 
 ## Repo state
 
-- Working tree clean, `test/e2e-real-backend-foundation` unchanged at
-  4212f7c2, still pushed and up to date.
-- `test/migrate-rcs-governance-indexes-coverage` (untouched, #285
-  coverage work) and the possibly-undeleted remote
-  `origin/fix/mongo-audit-repo-generate-movement-id` both carried
-  forward untouched, same as last handoff.
-- **#316, #317 closed** (from the prior session) — real-backend e2e
-  Docker verification for Mongo-seeding specs remains unblocked.
-- **#295, #297 still open** but now have doc citations ready to post
-  as comments (not yet posted) recommending they be de-scoped from
-  "needs Denise's call" and picked up directly via `build-loop`/
-  `resolve-issue` instead.
-- **#313, #314, #307** still open, confirmed still genuinely
-  undocumented — still need Dennis's call.
-- **#115** still open, not actionable — Denise's decision is already
-  on record; revisit only at the canonical terminology-modeling phase.
-- **#293** still open, an implementation gap not a design call.
-- `dyeallpies-skills-pack#141` filed this session, open, unassigned.
+- `test/e2e-real-backend-foundation` at `5241b9b3`, pushed, clean.
+- `test/close-environmental-excursion-301` (feature branch, now merged)
+  still exists locally/remotely — safe to delete once confirmed no
+  longer needed, not done this session.
+- **#301 closed.**
+- Carried forward untouched from prior handoffs, still open:
+  `test/migrate-rcs-governance-indexes-coverage` (#285 coverage work),
+  the possibly-undeleted remote
+  `origin/fix/mongo-audit-repo-generate-movement-id`,
+  `dyeallpies-skills-pack#141` (unassigned).
+- **#295, #297** still open with doc-evidence drafted in a prior
+  session's conversation but never posted as issue comments — still
+  pending a decision to de-scope them from "needs owner call."
+- **#313, #314, #307** still open, confirmed genuinely undocumented
+  design calls for Dennis (not resolvable from docs, per the prior
+  session's cross-check).
+- **#115** still open, not actionable (Denise's decision already on
+  record).
+- **#293** still open, an implementation gap (no test-side TOTP
+  generator), not a design call.
+- **#302, #304** untouched.
 
 ## Recommended next steps
 
-1. Decide whether to post the #295/#297 doc-evidence comments (drafted
-   in this session's conversation, not yet written to the issues) and
-   re-scope them out of the "needs owner call" bucket into
-   `build-loop`/`test-loop` pickups.
-2. Pick up `dyeallpies-skills-pack#141` at some point — generalizing
-   the docs-check step out of `fix-bugs` into `resolve-issue`/
-   `work-issue` is itself a small, well-scoped skill-maintenance task.
-3. Still queued from last handoff, untouched: sweep other e2e specs for
-   the same env-var-gap class #317 fixed; check
-   `E2E_TRACEABILITY_PLAN.md` fresh for the next Wave 2 RF pickup;
-   #313/#314/#307 still need Dennis's actual call (not resolvable from
-   docs); #301, #302, #304 untouched.
+None queued — no next issue was named this session.
 
 ## Which skills to use
 
-`skill-maintenance` for #141 in the pack repo. `resolve-issue` for
-#295/#297 once/if de-scoped from "needs owner." `bioavanced-v2-legacy`
-and the `bioavanced-v2` conventions overlay (docs-primacy section) are
-exactly what drove this session's cross-checks — keep leaning on them
-before labeling anything a design call. `test-loop` for whichever Wave
-2 RF comes next per `E2E_TRACEABILITY_PLAN.md`.
+`work-issue` → `build-loop` is the right route for any further
+"capability doesn't exist yet, spec says it should" issue (#301 was
+exactly this shape). `resolve-issue` for #295/#297 if/when de-scoped.
+`ship-integration-branch` once the backlog on this branch is judged
+ready to graduate to `main` — not attempted this session.
