@@ -8,6 +8,7 @@ import {
   closeSeedSensorDb,
 } from './helpers/seedSensor';
 import { queryTemperaturePoints } from './helpers/queryInflux';
+import { realLogin } from './helpers/realAuth';
 
 // Real backend only — see backend-integration.spec.ts for the same skip
 // rationale. Run via `npm run test:e2e:docker` against the compose test
@@ -190,6 +191,45 @@ test.describe('Telemetria e monitoramento ambiental (RF009) — EnvironmentalExc
 
     const excursion = await findEnvironmentalExcursion(sensor.deviceId);
     expect(excursion).toBeNull();
+  });
+
+  test('resolving the paired TemperatureIncident closes the matching open EnvironmentalExcursion (#301)', async ({
+    request,
+  }) => {
+    const sensor = await seedSensorWithPolicy(2, 8);
+
+    await request.post(`${apiBaseURL}/api/iot/telemetry`, {
+      data: { sensorId: sensor.sensorId, temperature: 25, timestamp: new Date().toISOString() },
+    });
+
+    await expect
+      .poll(async () => findEnvironmentalExcursion(sensor.deviceId), { timeout: 15_000 })
+      .toBeTruthy();
+    await expect
+      .poll(async () => findTemperatureIncident(sensor.sensorId), { timeout: 15_000 })
+      .toBeTruthy();
+
+    const incident = await findTemperatureIncident(sensor.sensorId);
+    const session = await realLogin(request);
+
+    const resolveResponse = await request.put(
+      `${apiBaseURL}/api/incidents/${incident._id}/resolve`,
+      {
+        headers: { Authorization: `Bearer ${session.token}` },
+        data: { userId: session.user._id, notes: 'RF009 e2e close' },
+      }
+    );
+    expect(resolveResponse.ok()).toBeTruthy();
+
+    await expect
+      .poll(async () => (await findEnvironmentalExcursion(sensor.deviceId))?.excursionStatus, {
+        timeout: 15_000,
+      })
+      .toBe('resolved');
+
+    const excursion = await findEnvironmentalExcursion(sensor.deviceId);
+    expect(excursion.excursionStatus).toBe('resolved');
+    expect(excursion.endDateTime).toBeTruthy();
   });
 });
 

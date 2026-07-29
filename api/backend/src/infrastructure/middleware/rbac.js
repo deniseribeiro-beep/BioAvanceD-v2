@@ -115,6 +115,9 @@ const permissions = {
   // RF009 - Visualizar temperatura
   viewTemperature: [2, 3, 4], // Técnico (2), Coordenador (3), Administrador (4)
 
+  // RF009 - Gerenciar incidentes de temperatura (reconhecer/resolver/escalar)
+  manageTemperature: [2, 3, 4], // Técnico (2), Coordenador (3), Administrador (4)
+
   // RF010 - Backup
   manageBackup: [4], // Apenas Administrador (4)
 

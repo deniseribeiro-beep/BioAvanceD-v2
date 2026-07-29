@@ -43,10 +43,28 @@ const userCollection = {
   find: vi.fn(),
 };
 
+// #301: resolveIncident's closeEnvironmentalExcursion looks up sensorMetadata
+// -> devices -> environmentalExcursions by plain collection, mirroring how
+// tempCollection/userCollection are faked above (no real Mongo/Mongoose
+// connection in this unit suite).
+const sensorMetadataCollection = {
+  findOne: vi.fn(),
+};
+const deviceCollection = {
+  findOne: vi.fn(),
+};
+const excursionCollection = {
+  findOne: vi.fn(),
+  updateOne: vi.fn(),
+};
+
 const fakeDb = {
   collection: vi.fn((name) => {
     if (name === 'temperatureIncidents') return tempCollection;
     if (name === 'users') return userCollection;
+    if (name === 'sensorMetadata') return sensorMetadataCollection;
+    if (name === 'devices') return deviceCollection;
+    if (name === 'environmentalExcursions') return excursionCollection;
     throw new Error(`unexpected collection name: ${name}`);
   }),
 };
@@ -73,6 +91,10 @@ beforeEach(() => {
   tempCollection.countDocuments.mockReset();
   tempCollection.find.mockReset();
   userCollection.find.mockReset();
+  sensorMetadataCollection.findOne.mockReset().mockResolvedValue(null);
+  deviceCollection.findOne.mockReset().mockResolvedValue(null);
+  excursionCollection.findOne.mockReset().mockResolvedValue(null);
+  excursionCollection.updateOne.mockReset();
   // default: no alert recipients unless a test overrides it
   userCollection.find.mockReturnValue(buildFindChain([]));
 
@@ -407,6 +429,54 @@ describe('incident.controller.resolveIncident', () => {
       error: 'Erro ao resolver incidente',
       details: 'write failed',
     });
+  });
+
+  it('#301: closes the matching open EnvironmentalExcursion (endDateTime/excursionStatus) when the incident resolves', async () => {
+    tempCollection.findOne.mockResolvedValue({ _id: '507f1f77bcf86cd799439011', sensorKey: 's1' });
+    tempCollection.updateOne.mockResolvedValue({ matchedCount: 1 });
+    sensorMetadataCollection.findOne.mockResolvedValue({ sensorId: 's1', device: 'device-oid-1' });
+    deviceCollection.findOne.mockResolvedValue({ _id: 'device-oid-1', deviceId: 'device-1' });
+    excursionCollection.findOne.mockResolvedValue({
+      _id: 'excursion-1',
+      equipmentId: 'device-1',
+      excursionStatus: 'open',
+      startDateTime: new Date('2026-01-01T00:00:00.000Z'),
+    });
+
+    const req = { params: { incidentId: '507f1f77bcf86cd799439011' }, body: { userId: 'u1' } };
+    const res = buildRes();
+
+    await incidentController.resolveIncident(req, res);
+
+    expect(deviceCollection.findOne).toHaveBeenCalledWith({ _id: 'device-oid-1' });
+    expect(excursionCollection.findOne).toHaveBeenCalledWith({
+      equipmentId: 'device-1',
+      excursionStatus: { $in: ['open', 'under_assessment'] },
+    });
+    const [filter, update] = excursionCollection.updateOne.mock.calls[0];
+    expect(filter).toEqual({ _id: 'excursion-1' });
+    expect(update.$set.excursionStatus).toBe('resolved');
+    expect(update.$set.endDateTime).toBeInstanceOf(Date);
+    expect(update.$set.duration).toBeGreaterThan(0);
+
+    const payload = res.json.mock.calls[0][0];
+    expect(payload.environmentalExcursion.excursionStatus).toBe('resolved');
+  });
+
+  it('#301: leaves postIncidentReview/response intact when the sensor has no linked device (no excursion to close)', async () => {
+    tempCollection.findOne.mockResolvedValue({ _id: '507f1f77bcf86cd799439011', sensorKey: 's1' });
+    tempCollection.updateOne.mockResolvedValue({ matchedCount: 1 });
+    sensorMetadataCollection.findOne.mockResolvedValue(null);
+
+    const req = { params: { incidentId: '507f1f77bcf86cd799439011' }, body: { userId: 'u1' } };
+    const res = buildRes();
+
+    await incidentController.resolveIncident(req, res);
+
+    expect(excursionCollection.updateOne).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(200);
+    const payload = res.json.mock.calls[0][0];
+    expect(payload.environmentalExcursion).toBeNull();
   });
 });
 
