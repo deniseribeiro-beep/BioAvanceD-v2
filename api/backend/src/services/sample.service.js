@@ -11,6 +11,7 @@ const {
 const { generateUniqueSpecimenId } = require('../utils/sampleIDGenerator');
 const { appendMovementWithHashChain } = require('../utils/sampleMovementLedger');
 const { getCollection } = require('../utils/collectionResolver');
+const { withMongoTransaction } = require('../utils/mongoTransaction');
 const { ObjectId } = require('mongodb');
 
 const LOCATION_REQUIRED_MESSAGE = 'Localização física obrigatória para cadastro de amostra';
@@ -388,26 +389,31 @@ class SampleService {
         newQuantity: newAvailableQty
       });
 
-      await appendMovementWithHashChain(movementsCollection, movement);
+      // RF006 AC#6: ledger append + balance update must land atomically —
+      // a crash between the two would desync the movement ledger from
+      // availableQuantity, silently.
+      await withMongoTransaction(db, async (session) => {
+        await appendMovementWithHashChain(movementsCollection, movement, { session });
 
-      // Atualizar amostra
-      const update = {
-        availableQuantity: newAvailableQty,
-        totalWithdrawn: totalWithdrawn,
-        withdrawnAt: new Date(),
-        withdrawalType: withdrawalData.withdrawalType,
-        withdrawalResponsible: withdrawalData.withdrawalResponsible,
-        sampleDestination: withdrawalData.sampleDestination || withdrawalData.withdrawalDestination,
-        linkedProject: withdrawalData.linkedProject || sample.linkedProject,
-        lastWithdrawalID: movementID,
-        lifecycleStatus,
-        updatedAt: new Date()
-      };
+        const update = {
+          availableQuantity: newAvailableQty,
+          totalWithdrawn: totalWithdrawn,
+          withdrawnAt: new Date(),
+          withdrawalType: withdrawalData.withdrawalType,
+          withdrawalResponsible: withdrawalData.withdrawalResponsible,
+          sampleDestination: withdrawalData.sampleDestination || withdrawalData.withdrawalDestination,
+          linkedProject: withdrawalData.linkedProject || sample.linkedProject,
+          lastWithdrawalID: movementID,
+          lifecycleStatus,
+          updatedAt: new Date()
+        };
 
-      await samplesCollection.updateOne(
-        { specimenId: sample.specimenId },
-        { $set: update }
-      );
+        await samplesCollection.updateOne(
+          { specimenId: sample.specimenId },
+          { $set: update },
+          { session }
+        );
+      });
 
       logger.info(`Retirada registrada: Sample ${sample.barcode || sample._id}, Qtd: ${withdrawQty}, Novo saldo: ${newAvailableQty}`);
 
@@ -743,27 +749,31 @@ class SampleService {
         newQuantity: newAvailableQty
       });
 
-      await appendMovementWithHashChain(movementsCollection, movement);
+      // RF006 AC#6: ledger append + balance update must land atomically —
+      // see the same note in withdrawSample.
+      await withMongoTransaction(db, async (session) => {
+        await appendMovementWithHashChain(movementsCollection, movement, { session });
 
-      // Atualizar amostra
-      const update = {
-        availableQuantity: newAvailableQty,
-        totalReturned: newTotalReturned,
-        lifecycleStatus,
-        updatedAt: new Date()
-      };
+        const update = {
+          availableQuantity: newAvailableQty,
+          totalReturned: newTotalReturned,
+          lifecycleStatus,
+          updatedAt: new Date()
+        };
 
-      if (lifecycleStatus === 'AVAILABLE') {
-        update.withdrawnAt = null;
-        update.withdrawalType = null;
-        update.withdrawalResponsible = null;
-        update.sampleDestination = null;
-      }
+        if (lifecycleStatus === 'AVAILABLE') {
+          update.withdrawnAt = null;
+          update.withdrawalType = null;
+          update.withdrawalResponsible = null;
+          update.sampleDestination = null;
+        }
 
-      await samplesCollection.updateOne(
-        { specimenId: sample.specimenId },
-        { $set: update }
-      );
+        await samplesCollection.updateOne(
+          { specimenId: sample.specimenId },
+          { $set: update },
+          { session }
+        );
+      });
 
       logger.info(`Devolução registrada: Sample ${sample.barcode || sample._id}, Qtd: ${returnQty}, Condição: ${returnData.condition}, Novo saldo: ${newAvailableQty}`);
 

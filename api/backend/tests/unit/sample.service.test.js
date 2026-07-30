@@ -31,6 +31,17 @@ function makeCollection(name) {
   };
 }
 
+// Mirrors the real driver closely enough to prove withMongoTransaction's
+// wiring (#297): withTransaction runs the handler and lets a thrown error
+// propagate uncommitted, same as the real session aborting on throw.
+function makeSession() {
+  const session = {
+    withTransaction: vi.fn(async (handler) => handler()),
+    endSession: vi.fn().mockResolvedValue(undefined)
+  };
+  return session;
+}
+
 function makeDb(overrides = {}) {
   const collections = {
     samples: makeCollection('samples'),
@@ -41,10 +52,15 @@ function makeDb(overrides = {}) {
     results: makeCollection('results'),
     ...overrides
   };
+  const session = makeSession();
   return {
     collections,
-    collection: vi.fn((name) => collections[name] || (collections[name] = makeCollection(name)))
+    collection: vi.fn((name) => collections[name] || (collections[name] = makeCollection(name))),
     // no listCollections -> collectionResolver falls back to canonical names directly
+    client: {
+      startSession: vi.fn(() => session)
+    },
+    session
   };
 }
 
@@ -483,6 +499,49 @@ describe('sample.service', () => {
         db,
         'BR-NOT-AN-OBJECTID'
       );
+    });
+
+    // RF006 AC#6 (#297): the ledger append and the balance update must be
+    // one atomic operation, not two independent writes a crash could split.
+    it('wraps the ledger append and balance update in a single Mongo transaction', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue(existingSample());
+
+      await sampleService.withdrawSample(db, 'sample-1', {
+        withdrawalType: 'Total',
+        withdrawalResponsible: 'Jane Doe',
+        linkedProject: 'ProjectX'
+      });
+
+      expect(db.client.startSession).toHaveBeenCalledTimes(1);
+      expect(db.session.withTransaction).toHaveBeenCalledTimes(1);
+      expect(db.session.endSession).toHaveBeenCalledTimes(1);
+
+      const [, insertOptions] = db.collections.sample_movements.insertOne.mock.calls[0];
+      const [, , updateOptions] = db.collections.samples.updateOne.mock.calls[0];
+      expect(insertOptions).toEqual({ session: db.session });
+      expect(updateOptions).toEqual({ session: db.session });
+    });
+
+    it('propagates a failed balance update without a partial write left standing', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue(existingSample());
+      db.collections.samples.updateOne.mockRejectedValue(new Error('connection dropped'));
+
+      await expect(
+        sampleService.withdrawSample(db, 'sample-1', {
+          withdrawalType: 'Total',
+          withdrawalResponsible: 'Jane Doe',
+          linkedProject: 'ProjectX'
+        })
+      ).rejects.toThrow('connection dropped');
+
+      // The ledger insert ran inside the same transaction as the failed
+      // update — real MongoDB aborts the whole transaction on throw, so
+      // the movement never actually commits even though insertOne (the
+      // mock) recorded the call.
+      expect(db.collections.sample_movements.insertOne).toHaveBeenCalledTimes(1);
+      expect(db.session.endSession).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -939,6 +998,45 @@ describe('sample.service', () => {
       });
 
       expect(result.success).toBe(true);
+    });
+
+    // RF006 AC#6 (#297): same requirement as withdrawSample — ledger append
+    // and balance update must be one atomic transaction.
+    it('wraps the ledger append and balance update in a single Mongo transaction', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue(withdrawnSample());
+
+      await sampleService.returnSample(db, 'sample-1', {
+        returnResponsible: 'Jane Doe',
+        condition: 'intact',
+        returnType: 'Total'
+      });
+
+      expect(db.client.startSession).toHaveBeenCalledTimes(1);
+      expect(db.session.withTransaction).toHaveBeenCalledTimes(1);
+      expect(db.session.endSession).toHaveBeenCalledTimes(1);
+
+      const [, insertOptions] = db.collections.sample_movements.insertOne.mock.calls[0];
+      const [, , updateOptions] = db.collections.samples.updateOne.mock.calls[0];
+      expect(insertOptions).toEqual({ session: db.session });
+      expect(updateOptions).toEqual({ session: db.session });
+    });
+
+    it('propagates a failed balance update without a partial write left standing', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue(withdrawnSample());
+      db.collections.samples.updateOne.mockRejectedValue(new Error('connection dropped'));
+
+      await expect(
+        sampleService.returnSample(db, 'sample-1', {
+          returnResponsible: 'Jane Doe',
+          condition: 'intact',
+          returnType: 'Total'
+        })
+      ).rejects.toThrow('connection dropped');
+
+      expect(db.collections.sample_movements.insertOne).toHaveBeenCalledTimes(1);
+      expect(db.session.endSession).toHaveBeenCalledTimes(1);
     });
   });
 

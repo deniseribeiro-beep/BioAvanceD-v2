@@ -7,7 +7,10 @@ import { MongoClient, Db, ObjectId } from 'mongodb';
  * in seedParticipant.ts. Shares the same connection env vars/convention.
  */
 
-const mongoUri = process.env.E2E_MONGO_URI || 'mongodb://localhost:27017';
+// directConnection=true (#297): see seedParticipant.ts — mongodb-test is
+// now a single-node replica set, so a plain localhost URI would trigger
+// topology discovery against a hostname the host machine can't resolve.
+const mongoUri = process.env.E2E_MONGO_URI || 'mongodb://localhost:27017?directConnection=true';
 const mongoDbName = process.env.E2E_MONGO_DB || 'bioavanced_test';
 
 let client: MongoClient | null = null;
