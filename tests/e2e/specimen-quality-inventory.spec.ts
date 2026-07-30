@@ -4,6 +4,9 @@ import {
   createRealParticipant,
   seedActiveConsent,
   seedOperationalLocation,
+  seedStudy,
+  seedProtocol,
+  seedCollectionEntity,
   closeSeedDb,
 } from './helpers/seedParticipant';
 import { watchAuditTrail, assertAuditEventRecorded } from './helpers/assertAuditEvent';
@@ -248,6 +251,114 @@ test.describe('Specimen registration (RF004) — real backend, happy path (#294)
     });
 
     expect(withdrawAfterConsent.status()).toBe(200);
+  });
+});
+
+test.describe('Specimen registration (RF004 AC#3) — study/protocol/collection linkage (#295)', () => {
+  // studyId/protocolId/collectionId are optional ("quando aplicável"), but
+  // once supplied each must resolve to a real, already-cadastrado document
+  // — not arbitrary client-supplied text. No CRUD API exists yet for any of
+  // the three, so the referent is seeded directly against Mongo (same
+  // pattern as seedOperationalLocation).
+  test.afterAll(async () => {
+    await closeSeedDb();
+  });
+
+  test('rejects a create when studyId does not resolve to a real Study', async ({ request }) => {
+    const admin = await realLogin(request);
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    const locationID = await seedOperationalLocation();
+
+    const response = await request.post(`${apiBaseURL}/api/samples`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        participantId: participant.participantId,
+        ...validSampleFields(),
+        locationID,
+        studyId: 'does-not-exist',
+      },
+    });
+
+    expect(response.status()).toBe(404);
+    const body = await response.json();
+    expect(body.message).toMatch(/studyId/);
+  });
+
+  test('rejects a create when protocolId does not resolve to a real Protocol', async ({ request }) => {
+    const admin = await realLogin(request);
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    const locationID = await seedOperationalLocation();
+
+    const response = await request.post(`${apiBaseURL}/api/samples`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        participantId: participant.participantId,
+        ...validSampleFields(),
+        locationID,
+        protocolId: 'does-not-exist',
+      },
+    });
+
+    expect(response.status()).toBe(404);
+    const body = await response.json();
+    expect(body.message).toMatch(/protocolId/);
+  });
+
+  test('rejects a create when collectionId does not resolve to a real Collection', async ({ request }) => {
+    const admin = await realLogin(request);
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    const locationID = await seedOperationalLocation();
+
+    const response = await request.post(`${apiBaseURL}/api/samples`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        participantId: participant.participantId,
+        ...validSampleFields(),
+        locationID,
+        collectionId: 'does-not-exist',
+      },
+    });
+
+    expect(response.status()).toBe(404);
+    const body = await response.json();
+    expect(body.message).toMatch(/collectionId/);
+  });
+
+  test('accepts and persists a create whose study/protocol/collection references all resolve', async ({ request }) => {
+    const admin = await realLogin(request);
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    const locationID = await seedOperationalLocation();
+
+    const studyId = `study-${Date.now()}`;
+    const protocolId = `protocol-${Date.now()}`;
+    const collectionId = `collection-${Date.now()}`;
+    await seedStudy(studyId);
+    await seedProtocol(protocolId);
+    await seedCollectionEntity(collectionId);
+
+    const create = await request.post(`${apiBaseURL}/api/samples`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        participantId: participant.participantId,
+        ...validSampleFields(),
+        locationID,
+        studyId,
+        protocolId,
+        collectionId,
+      },
+    });
+
+    expect([201, 202]).toContain(create.status());
+    const sampleID = (await create.json()).data.sampleID;
+
+    const get = await request.get(`${apiBaseURL}/api/samples/${sampleID}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    const persisted = (await get.json()).data;
+
+    expect(persisted.studyId).toBe(studyId);
+    expect(persisted.protocolId).toBe(protocolId);
+    expect(persisted.collectionId).toBe(collectionId);
   });
 });
 
