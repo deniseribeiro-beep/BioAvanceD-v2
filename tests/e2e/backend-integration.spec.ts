@@ -50,4 +50,53 @@ test.describe('Real backend integration', () => {
     const list = Array.isArray(samples) ? samples : samples?.data;
     expect(Array.isArray(list)).toBeTruthy();
   });
+
+  test('creates an Organization and lists it back from the real database (#346)', async ({ request }) => {
+    const testUser = process.env.TEST_USER || 'admin';
+    const testPass = process.env.TEST_PASS || 'Admin@123';
+
+    const loginResponse = await request.post(`${apiBaseURL}/api/auth/login`, {
+      data: { username: testUser, password: testPass },
+    });
+
+    if (loginResponse.status() === 401) {
+      console.warn('Login returned 401 — DB may not be seeded with an admin user yet. Run npm run seed first.');
+      return;
+    }
+    expect(loginResponse.ok()).toBeTruthy();
+
+    const loginBody = await loginResponse.json();
+    const authToken = loginBody?.data?.token ?? loginBody?.token ?? loginBody?.accessToken;
+    expect(authToken).toBeTruthy();
+
+    const officialName = `E2E Test Org ${Date.now()}`;
+    const createResponse = await request.post(`${apiBaseURL}/api/organizations`, {
+      headers: { Authorization: `Bearer ${authToken}` },
+      data: {
+        officialName,
+        acronym: 'E2E',
+        organizationType: 'biobank',
+        countryCode: 'BR',
+        website: 'https://example.org',
+        qualityStandards: ['ISO 20387'],
+      },
+    });
+    expect(createResponse.ok()).toBeTruthy();
+
+    const createBody = await createResponse.json();
+    expect(createBody.success).toBe(true);
+    expect(createBody.data.organizationId).toBeTruthy();
+    expect(createBody.data.officialName).toBe(officialName);
+    expect(createBody.data.countryCode).toBe('BR');
+
+    const listResponse = await request.get(`${apiBaseURL}/api/organizations`, {
+      headers: { Authorization: `Bearer ${authToken}` },
+    });
+    expect(listResponse.ok()).toBeTruthy();
+
+    const listBody = await listResponse.json();
+    const found = listBody.data.find((org: any) => org.organizationId === createBody.data.organizationId);
+    expect(found).toBeTruthy();
+    expect(found.officialName).toBe(officialName);
+  });
 });

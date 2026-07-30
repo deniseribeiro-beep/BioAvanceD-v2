@@ -126,6 +126,9 @@ const permissions = {
   
   // Reset MFA
   resetMFA: [4], // Apenas Administrador (4)
+
+  // Organization entity (#346) - foundational institutional-scope data
+  manageOrganizations: [4], // Apenas Administrador (4)
 };
 
 /**
