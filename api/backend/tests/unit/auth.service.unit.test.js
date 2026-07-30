@@ -97,6 +97,23 @@ describe('AuthService.issueAccessToken', () => {
     const t2 = authService.issueAccessToken(user2);
     expect(t1).not.toBe(t2);
   });
+
+  it('produces distinct tokens for two logins of the same user within the same second (#338)', () => {
+    // iat/exp are second-granularity; without a per-login nonce two calls in
+    // the same wall-clock second sign byte-identical JWTs, so their tokenHash
+    // collides in session storage and revoking one revokes both.
+    const t1 = authService.issueAccessToken(fakeUser);
+    const t2 = authService.issueAccessToken(fakeUser);
+    expect(t1).not.toBe(t2);
+  });
+
+  it('assigns a unique jti per token', () => {
+    const payload1 = jwt.decode(authService.issueAccessToken(fakeUser));
+    const payload2 = jwt.decode(authService.issueAccessToken(fakeUser));
+    expect(payload1.jti).toBeTruthy();
+    expect(payload2.jti).toBeTruthy();
+    expect(payload1.jti).not.toBe(payload2.jti);
+  });
 });
 
 // ── issueRefreshToken ─────────────────────────────────────
@@ -137,5 +154,11 @@ describe('AuthService.issueRefreshToken', () => {
     const aExp = jwt.decode(access).exp;
     const rExp = jwt.decode(refresh).exp;
     expect(rExp).toBeGreaterThan(aExp);
+  });
+
+  it('produces distinct tokens for two logins of the same user within the same second (#338)', () => {
+    const t1 = authService.issueRefreshToken(fakeUser);
+    const t2 = authService.issueRefreshToken(fakeUser);
+    expect(t1).not.toBe(t2);
   });
 });
