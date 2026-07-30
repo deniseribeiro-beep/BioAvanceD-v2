@@ -3,7 +3,7 @@ name: bioavanced-test
 x-test-env: &test-env
   NODE_ENV: test
   TEST_ENVIRONMENT: "true"
-  MONGO_URI: mongodb://mongodb-test:27017/bioavanced_test
+  MONGO_URI: mongodb://mongodb-test:27017/bioavanced_test?replicaSet=rs0
   MONGO_DB: bioavanced_test
   MONGO_DB_NOVO: bioavanced_test
   NEO4J_URI: bolt://neo4j-test:7687
@@ -44,6 +44,19 @@ services:
     image: mongo:7
     environment:
       MONGO_INITDB_DATABASE: bioavanced_test
+    # Single-node replica set (#297): sample.service.js's withdrawSample/
+    # returnSample need client.startSession()/withTransaction() to keep the
+    # ledger append and balance update atomic, and MongoDB only supports
+    # multi-document transactions on a replica set — a standalone mongod
+    # rejects sessions outright ("not running with --replSet"). rs.initiate()
+    # itself runs from the separate mongo-rs-init-test service below, not
+    # from a docker-entrypoint-initdb.d script here — running it in-process
+    # right after startup hit a reproducible "isSelf could not connect"
+    # NodeNotFound error (mongod dialing its own advertised bridge address
+    # this early gets refused, seemingly a hairpin-NAT limitation), whereas
+    # a separate container connecting in normally, after the healthcheck
+    # confirms the port is reachable, does not.
+    command: ["--replSet", "rs0", "--bind_ip_all"]
     volumes:
       - mongodb-test-data:/data/db
     ports:
@@ -57,6 +70,35 @@ services:
       interval: 10s
       timeout: 5s
       retries: 20
+    networks: [bioavanced-test]
+
+  # One-shot: initiates the single-node replica set from outside mongod's
+  # own process (see the note on mongodb-test above), then exits 0.
+  # backend-app-test and everything else that needs transactions depends on
+  # this completing, not just on mongodb-test being healthy.
+  mongo-rs-init-test:
+    image: mongo:7
+    depends_on:
+      mongodb-test:
+        condition: service_healthy
+    entrypoint: ["bash", "-c"]
+    command:
+      - |
+        set -e
+        for i in $(seq 1 20); do
+          if mongosh --host mongodb-test --quiet --eval '
+            try {
+              rs.initiate({ _id: "rs0", members: [{ _id: 0, host: "mongodb-test:27017" }] });
+            } catch (e) {
+              if (!/already initialized/.test(e.message)) { throw e; }
+            }
+            while (rs.status().myState !== 1) { sleep(500); }
+          '; then
+            exit 0
+          fi
+          sleep 1
+        done
+        exit 1
     networks: [bioavanced-test]
 
   neo4j-test:
@@ -176,6 +218,8 @@ services:
     depends_on:
       mongodb-test:
         condition: service_healthy
+      mongo-rs-init-test:
+        condition: service_completed_successfully
       neo4j-test:
         condition: service_healthy
       redis-test:

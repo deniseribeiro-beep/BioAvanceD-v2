@@ -17,7 +17,12 @@ import { MongoClient, Db } from 'mongodb';
  * not from inside the `playwright-runner` container.
  */
 
-const mongoUri = process.env.E2E_MONGO_URI || 'mongodb://localhost:27017';
+// directConnection=true (#297): mongodb-test is now a single-node replica
+// set, so a plain localhost URI triggers topology discovery against the
+// hosts advertised in rs.status() (mongodb-test:27017) — a hostname the
+// host machine can't resolve outside the compose network. Forcing a direct
+// connection to the published port skips that discovery.
+const mongoUri = process.env.E2E_MONGO_URI || 'mongodb://localhost:27017?directConnection=true';
 const mongoDbName = process.env.E2E_MONGO_DB || 'bioavanced_test';
 
 let client: MongoClient | null = null;
