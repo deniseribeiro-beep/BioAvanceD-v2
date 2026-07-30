@@ -65,12 +65,12 @@ router.post('/register',
         }
       }
       
-      // Normaliza instituição: strings vazias viram null (opcionais)
-      if (req.body.institution !== undefined) {
-        if (req.body.institution && typeof req.body.institution === 'string') {
-          req.body.institution = req.body.institution.trim() || null;
-        } else if (req.body.institution === '') {
-          req.body.institution = null;
+      // Normaliza organizationId: strings vazias viram null (opcional)
+      if (req.body.organizationId !== undefined) {
+        if (req.body.organizationId && typeof req.body.organizationId === 'string') {
+          req.body.organizationId = req.body.organizationId.trim() || null;
+        } else if (req.body.organizationId === '') {
+          req.body.organizationId = null;
         }
       }
 
@@ -270,12 +270,12 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
       }
     }
     
-    // Normaliza instituição: strings vazias viram null (opcionais)
-    if (req.body.institution !== undefined) {
-      if (req.body.institution && typeof req.body.institution === 'string') {
-        req.body.institution = req.body.institution.trim() || null;
-      } else if (req.body.institution === '') {
-        req.body.institution = null;
+    // Normaliza organizationId: strings vazias viram null (opcional)
+    if (req.body.organizationId !== undefined) {
+      if (req.body.organizationId && typeof req.body.organizationId === 'string') {
+        req.body.organizationId = req.body.organizationId.trim() || null;
+      } else if (req.body.organizationId === '') {
+        req.body.organizationId = null;
       }
     }
 
