@@ -408,16 +408,6 @@ export interface Location {
   wellPosition?: string; // Campo do backend (string) - posição do eppendorf
 }
 
-export interface ClinicalUnit {
-  _id?: string;
-  name: string;
-  normalizedName?: string;
-  acronym?: string | null;
-  active?: boolean;
-  createdAt?: Date | string;
-  updatedAt?: Date | string;
-}
-
 export interface User {
   _id?: string; // MongoDB ID
   userID?: string;

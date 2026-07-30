@@ -262,7 +262,6 @@ app.use("/api/extraction-protocols", createMasterDataRouter({
 }));
 app.use("/api/equipment", require("./src/interface/routes/equipment.routes"));
 app.use("/api/locations", require("./src/interface/routes/location.routes"));
-app.use("/api/clinical-units", require("./src/interface/routes/clinical-unit.routes"));
 app.use("/api/organizations", require("./src/interface/routes/organization.routes"));
 app.use("/api/storage", require("./src/interface/routes/storage.routes"));
 app.use("/api/policies", require("./src/interface/routes/policy.routes"));

@@ -19,7 +19,6 @@ import {
   Withdrawal,
   Return,
   CidEntry,
-  ClinicalUnit,
   PhoneCodeEntry,
 } from '../types/models';
 import { clearClientSession } from '../utils/sessionCleanup';
@@ -450,19 +449,6 @@ export const locationService = {
   update: (id: string, data: Partial<Location>) => api.put<Location>(`/locations/${id}`, data),
   delete: (id: string) => api.delete(`/locations/${id}`),
   fixMissingLocationIDs: () => api.patch<{ success: boolean; message: string; updated: number; total: number }>('/locations/fix-missing-locationids'),
-};
-
-export const clinicalUnitService = {
-  getAll: (limit = 100, includeInactive = false) =>
-    api.get<{ success: boolean; data: ClinicalUnit[] }>('/clinical-units', {
-      params: { limit, includeInactive }
-    }),
-  search: (term: string, limit = 10) =>
-    api.get<{ success: boolean; data: ClinicalUnit[] }>('/clinical-units/search', {
-      params: { q: term, limit }
-    }),
-  create: (data: Partial<ClinicalUnit>) =>
-    api.post<{ success: boolean; data: ClinicalUnit; message?: string }>('/clinical-units', data),
 };
 
 // ========== TEMPERATURE SERVICES ==========

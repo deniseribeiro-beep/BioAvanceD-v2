@@ -56,8 +56,13 @@ This document defines the canonical v1 runtime contract for BioAvanceD.
   `clinicalUnit`/`unitAcronym`, it is never case-folded) into
   `resolveClinicalUnitSnapshot` — regression-covered by
   `paciente.controller.clinicalUnitAllowlist.unit.test.js`.
-  `clinical-unit.routes.js`'s CRUD/search surface (proxy-or-retire
-  decision still open) remains — tracked as #357)
+  `clinical-unit.routes.js`'s CRUD/search surface (`/api/clinical-units`
+  and its `clinicalUnits` collection) was retired outright in #357: no
+  backend code has read/written that collection since #353, and the
+  frontend's `clinicalUnitService`/`useClinicalUnits` hook that called it
+  were themselves dead code (never imported by any component) — regression-
+  covered by `clinical-unit.routes.retirement.test.js` asserting the
+  routes now 404.
 
 ### Specimen
 
