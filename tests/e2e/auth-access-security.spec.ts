@@ -303,10 +303,84 @@ test.describe('User management (RF003) — real backend', () => {
     expect(reuseAttempt.status()).toBe(400);
   });
 
-  // AC#3 (role vigência/institutional scope) is not covered here — checked
-  // `User.js`/`user.routes.js` and neither has a validity-period or scope
-  // field to assign or enforce; that's a real product gap, not a test gap.
-  // Filed as #337; #333 stays open for it.
+  test('a role assignment carries a validity period and institutional scope, and an expired assignment is refused (criterion 3)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const watch = await watchAuditTrail(request, apiBaseURL!, admin.token);
+
+    const username = `tecnico.rf003ac3.${Date.now()}`;
+    const password = 'Tecnico@123456';
+    const registerResponse = await request.post(`${apiBaseURL}/api/users/register`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        name: 'RF003 AC3 Técnico Fixture',
+        email: `${username}@example.com`,
+        username,
+        password,
+        accessType: 2,
+        roleName: 'Técnico',
+      },
+    });
+    expect(registerResponse.ok(), await registerResponse.text()).toBeTruthy();
+    const userID = (await registerResponse.json()).data?._id || (await registerResponse.json()).data?.id;
+
+    // Admin assigns the role with a validity period (already in the past —
+    // proves enforcement, not just storage) and an institutional scope.
+    const roleValidFrom = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const roleValidUntil = new Date(Date.now() - 1000).toISOString();
+    const assignResponse = await request.put(`${apiBaseURL}/api/users/${userID}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        roleValidFrom,
+        roleValidUntil,
+        institutionalScope: ['Hospital Central', 'Biobanco Norte'],
+      },
+    });
+    expect(assignResponse.ok(), await assignResponse.text()).toBeTruthy();
+    await assertAuditEventRecorded(request, apiBaseURL!, admin.token, watch);
+
+    // Persisted and returned, not silently dropped.
+    const fetchResponse = await request.get(`${apiBaseURL}/api/users/${userID}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    const fetchedUser = (await fetchResponse.json()).data;
+    expect(new Date(fetchedUser.roleValidUntil).toISOString()).toBe(roleValidUntil);
+    expect(fetchedUser.institutionalScope).toEqual(['Hospital Central', 'Biobanco Norte']);
+
+    // The account can still log in (login itself isn't role-gated), but a
+    // session under an already-expired role assignment is refused on the
+    // very next authenticated call — the backend enforces vigência itself,
+    // not just displays it.
+    const qrResponse = await request.post(`${apiBaseURL}/api/auth/two-factor/qr-first-login`, {
+      data: { username, password },
+    });
+    expect(qrResponse.ok(), await qrResponse.text()).toBeTruthy();
+    const totpSecret = (await qrResponse.json()).data?.secret;
+    const enableResponse = await request.post(`${apiBaseURL}/api/auth/two-factor/enable-first-login`, {
+      data: { username, password, code: computeTotp(totpSecret) },
+    });
+    expect(enableResponse.ok(), await enableResponse.text()).toBeTruthy();
+    const tecnicoToken = (await enableResponse.json()).data?.token;
+    expect(tecnicoToken).toBeTruthy();
+
+    const expiredRoleAttempt = await request.get(`${apiBaseURL}/api/user/security/status`, {
+      headers: { Authorization: `Bearer ${tecnicoToken}` },
+    });
+    expect(expiredRoleAttempt.status()).toBe(403);
+
+    // Extending validity into the future lifts the block again.
+    const futureExtension = await request.put(`${apiBaseURL}/api/users/${userID}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { roleValidUntil: new Date(Date.now() + 60 * 60 * 1000).toISOString() },
+    });
+    expect(futureExtension.ok(), await futureExtension.text()).toBeTruthy();
+
+    const restoredAccess = await request.get(`${apiBaseURL}/api/user/security/status`, {
+      headers: { Authorization: `Bearer ${tecnicoToken}` },
+    });
+    expect(restoredAccess.ok(), await restoredAccess.text()).toBeTruthy();
+  });
 
   test('an account is inactivated without deleting its history (criterion 4)', async ({ request }) => {
     const admin = await realLogin(request);
