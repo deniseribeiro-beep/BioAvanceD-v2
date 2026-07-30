@@ -6,6 +6,53 @@ const logger = require('../utils/logger');
 const { ObjectId } = require('mongodb');
 const SampleFileModel = require('../models/SampleFile');
 const { getUserAnonId } = require('../utils/userAnonymization');
+const keyRegistry = require('../config/keyRegistry');
+
+const FILE_ENCRYPTION_ALGORITHM = 'aes-256-gcm';
+
+/**
+ * RF007/RNF029 - encrypts a file's plaintext bytes at rest (Object Storage
+ * integrity) using the same key registry fieldEncryption.js already relies
+ * on for sensitive field values, adapted for binary payloads.
+ */
+function encryptFileBuffer(buffer) {
+  const key = keyRegistry.getActiveKey();
+  const keyId = keyRegistry.getActiveKeyId();
+  if (!key) {
+    logger.warn('[SECURITY][AES256] ENCRYPTION_KEY ausente. Arquivo armazenado sem criptografia em repouso.');
+    return null;
+  }
+
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv(FILE_ENCRYPTION_ALGORITHM, key, iv);
+  const ciphertext = Buffer.concat([cipher.update(buffer), cipher.final()]);
+  const tag = cipher.getAuthTag();
+
+  return {
+    algorithm: FILE_ENCRYPTION_ALGORITHM,
+    keyId,
+    iv: iv.toString('base64'),
+    tag: tag.toString('base64'),
+    ciphertext
+  };
+}
+
+function decryptFileBuffer(ciphertext, envelope) {
+  const key = keyRegistry.getKeyById(envelope.encryptionKeyId);
+  if (!key) {
+    throw new Error(`Chave de criptografia desconhecida: ${envelope.encryptionKeyId}`);
+  }
+
+  const iv = Buffer.from(String(envelope.encryptionIv || ''), 'base64');
+  const tag = Buffer.from(String(envelope.encryptionTag || ''), 'base64');
+  const decipher = crypto.createDecipheriv(FILE_ENCRYPTION_ALGORITHM, key, iv);
+  decipher.setAuthTag(tag);
+  return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+}
+
+function computeChecksum(buffer) {
+  return crypto.createHash('sha256').update(buffer).digest('hex');
+}
 
 /**
  * Controller de Upload de Arquivos de Análise de Amostras
@@ -73,10 +120,27 @@ class SampleFileController {
   }
 
   /**
-   * Middleware de upload
+   * Middleware de upload.
+   * multer's fileFilter/limits rejections call next(err) with no
+   * downstream error-handling middleware registered anywhere in the app
+   * (confirmed: no `(err, req, res, next)` handler exists) — left as-is,
+   * an invalid format or oversized file crashes to Express's default HTML
+   * 500 instead of RF007 AC#1/AC#2's intended clean rejection. Caught here,
+   * scoped to this route only, rather than adding a global handler.
    */
   uploadMiddleware() {
-    return this.upload.single('file');
+    const handler = this.upload.single('file');
+    return (req, res, next) => {
+      handler(req, res, (err) => {
+        if (err) {
+          return res.status(400).json({
+            success: false,
+            error: err.message || (req.t ? req.t('sampleFiles.uploadError') : 'Erro ao processar upload do arquivo')
+          });
+        }
+        next();
+      });
+    };
   }
 
   /**
@@ -105,7 +169,7 @@ class SampleFileController {
       }
 
       // Valida se a amostra existe
-      const samplesCollection = db.collection('amostras');
+      const samplesCollection = db.collection('samples');
       let sample;
       try {
         // Tenta buscar por ObjectId primeiro
@@ -146,14 +210,39 @@ class SampleFileController {
         });
       }
 
+      // RF007 AC#3/AC#4/AC#5 - checksum do conteúdo original, cifra em
+      // repouso (RNF029) e URI estável de Object Storage. O conteúdo em
+      // disco é substituído pelo ciphertext; o checksum é sempre calculado
+      // sobre o plaintext, já que é isso que RNF029 usa para provar
+      // integridade do que o cliente enviou.
+      const plaintext = fs.readFileSync(file.path);
+      const checksum = computeChecksum(plaintext);
+      const encryption = encryptFileBuffer(plaintext);
+      if (encryption) {
+        fs.writeFileSync(file.path, encryption.ciphertext);
+      }
+      const storageUri = `objstore://samples/${sample._id.toString()}/files/${path.basename(file.path)}`;
+
       // Cria registro na collection sample_files
       const sampleFilesCollection = db.collection('sample_files');
       const sampleFileData = {
+        sampleID: sample._id.toString(), // SampleFileModel.validate requires sampleID
         specimenId: sample._id.toString(), // Usa _id da amostra como referência principal
         fileName: file.originalname,
         fileType: fileType,
         fileSize: file.size,
         storagePath: file.path,
+        storageUri,
+        checksum,
+        checksumAlgorithm: 'sha256',
+        encryptionAlgorithm: encryption ? encryption.algorithm : null,
+        encryptionKeyId: encryption ? encryption.keyId : null,
+        encryptionIv: encryption ? encryption.iv : null,
+        encryptionTag: encryption ? encryption.tag : null,
+        // Restrição de acesso vigente hoje (rbac.js/roles.min.json): leitura
+        // exige apenas autenticação, upload/exclusão exigem
+        // uploadSampleFiles/deleteSampleFiles (Admin/Coordenador).
+        accessPolicy: { view: 'authenticated', manage: ['admin', 'coordinator'] },
         uploaderAnonId: uploaderAnonId,
         uploadDate: new Date(),
         createdAt: new Date(),
@@ -191,7 +280,9 @@ class SampleFileController {
             fileName: file.originalname,
             fileSize: file.size,
             fileType: fileType,
-            specimenId: sample._id.toString()
+            specimenId: sample._id.toString(),
+            checksum,
+            checksumAlgorithm: 'sha256'
             // Não inclui dados sensíveis
           },
           req: req,
@@ -210,7 +301,15 @@ class SampleFileController {
           fileType: sampleFile.fileType,
           fileSize: sampleFile.fileSize,
           uploaderAnonId: sampleFile.uploaderAnonId,
-          uploadDate: sampleFile.uploadDate
+          uploadDate: sampleFile.uploadDate,
+          uri: sampleFile.storageUri,
+          checksum: sampleFile.checksum,
+          checksumAlgorithm: sampleFile.checksumAlgorithm,
+          encryption: {
+            encrypted: Boolean(sampleFile.encryptionAlgorithm),
+            algorithm: sampleFile.encryptionAlgorithm
+          },
+          accessPolicy: sampleFile.accessPolicy
           // storagePath não é retornado por segurança
         }
       });
@@ -252,7 +351,7 @@ class SampleFileController {
       const { specimenId } = req.params;
 
       // Valida se a amostra existe
-      const samplesCollection = db.collection('amostras');
+      const samplesCollection = db.collection('samples');
       let sample;
       try {
         sample = await samplesCollection.findOne({ _id: new ObjectId(specimenId) });
@@ -279,6 +378,14 @@ class SampleFileController {
         fileName: file.fileName,
         fileType: file.fileType,
         fileSize: file.fileSize,
+        uri: file.storageUri,
+        checksum: file.checksum,
+        checksumAlgorithm: file.checksumAlgorithm,
+        encryption: {
+          encrypted: Boolean(file.encryptionAlgorithm),
+          algorithm: file.encryptionAlgorithm
+        },
+        accessPolicy: file.accessPolicy,
         uploaderAnonId: file.uploaderAnonId, // Apenas ID anonimizado
         uploadDate: file.uploadDate,
         createdAt: file.createdAt
@@ -398,18 +505,27 @@ class SampleFileController {
         });
       }
 
-      // Faz download do arquivo
-      return res.download(fileRecord.storagePath, fileRecord.fileName, (err) => {
-        if (err) {
-          logger.error('Erro ao fazer download do arquivo:', err.message);
-          if (!res.headersSent) {
-            return res.status(500).json({
-              success: false,
-              error: req.t ? req.t('sampleFiles.downloadError') : 'Erro ao fazer download do arquivo'
-            });
-          }
+      // RNF029 - o conteúdo em disco é o ciphertext cifrado no upload;
+      // decifra antes de servir para que o download reproduza o
+      // plaintext original (round-trip prova a integridade do checksum).
+      let outputBuffer;
+      if (fileRecord.encryptionAlgorithm) {
+        const ciphertext = fs.readFileSync(fileRecord.storagePath);
+        try {
+          outputBuffer = decryptFileBuffer(ciphertext, fileRecord);
+        } catch (decryptError) {
+          logger.error('Erro ao decifrar arquivo:', decryptError.message);
+          return res.status(500).json({
+            success: false,
+            error: req.t ? req.t('sampleFiles.downloadError') : 'Erro ao fazer download do arquivo'
+          });
         }
-      });
+      } else {
+        outputBuffer = fs.readFileSync(fileRecord.storagePath);
+      }
+
+      res.setHeader('Content-Disposition', `attachment; filename="${fileRecord.fileName}"`);
+      return res.send(outputBuffer);
     } catch (error) {
       logger.error('Erro ao fazer download de arquivo:', error.message);
       return res.status(500).json({

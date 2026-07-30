@@ -145,7 +145,7 @@ describe('sample-file.controller', () => {
     it('returns 404 and cleans up file when sample not found', async () => {
       const specimenId = new ObjectId().toString();
       const db = createDb({
-        amostras: { findOne: vi.fn().mockResolvedValue(null) }
+        samples: { findOne: vi.fn().mockResolvedValue(null) }
       });
       const req = {
         app: { locals: { db } },
@@ -165,7 +165,7 @@ describe('sample-file.controller', () => {
     it('returns 404 and swallows unlink error when cleanup of a non-existent sample file fails', async () => {
       const specimenId = new ObjectId().toString();
       const db = createDb({
-        amostras: { findOne: vi.fn().mockResolvedValue(null) }
+        samples: { findOne: vi.fn().mockResolvedValue(null) }
       });
       const req = {
         app: { locals: { db } },
@@ -187,7 +187,7 @@ describe('sample-file.controller', () => {
       const specimenId = new ObjectId().toString();
       const sample = { _id: new ObjectId(specimenId) };
       const db = createDb({
-        amostras: { findOne: vi.fn().mockResolvedValue(sample) }
+        samples: { findOne: vi.fn().mockResolvedValue(sample) }
       });
       const req = {
         app: { locals: { db } },
@@ -209,7 +209,7 @@ describe('sample-file.controller', () => {
       const specimenId = new ObjectId().toString();
       const sample = { _id: new ObjectId(specimenId) };
       const db = createDb({
-        amostras: { findOne: vi.fn().mockResolvedValue(sample) }
+        samples: { findOne: vi.fn().mockResolvedValue(sample) }
       });
       const req = {
         app: { locals: { db } },
@@ -236,7 +236,7 @@ describe('sample-file.controller', () => {
         insertOne: vi.fn().mockResolvedValue({ insertedId })
       };
       const db = createDb({
-        amostras: { findOne: vi.fn().mockResolvedValue(sample) },
+        samples: { findOne: vi.fn().mockResolvedValue(sample) },
         sample_files: sampleFilesCollection
       });
       const req = {
@@ -247,6 +247,8 @@ describe('sample-file.controller', () => {
       };
       const res = createRes();
       vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('file content'));
+      vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
       vi.spyOn(SampleFileModel, 'getFileTypeFromExtension').mockReturnValue('CSV');
       vi.spyOn(SampleFileModel, 'validate').mockReturnValue({ isValid: true, errors: [] });
 
@@ -257,6 +259,9 @@ describe('sample-file.controller', () => {
       expect(body.success).toBe(true);
       expect(body.data.fileName).toBe('file.csv');
       expect(body.data.storagePath).toBeUndefined();
+      expect(body.data.checksum).toMatch(/^[a-f0-9]{64}$/);
+      expect(body.data.uri).toMatch(/^objstore:\/\/samples\//);
+      expect(body.data.encryption).toEqual({ encrypted: true, algorithm: 'aes-256-gcm' });
       expect(sampleFilesCollection.insertOne).toHaveBeenCalled();
     });
 
@@ -268,7 +273,7 @@ describe('sample-file.controller', () => {
         insertOne: vi.fn().mockResolvedValue({ insertedId })
       };
       const db = createDb({
-        amostras: { findOne: vi.fn().mockResolvedValue(sample) },
+        samples: { findOne: vi.fn().mockResolvedValue(sample) },
         sample_files: sampleFilesCollection
       });
       const req = {
@@ -279,6 +284,8 @@ describe('sample-file.controller', () => {
       };
       const res = createRes();
       vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('file content'));
+      vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
       vi.spyOn(SampleFileModel, 'getFileTypeFromExtension').mockReturnValue('CSV');
       vi.spyOn(SampleFileModel, 'validate').mockReturnValue({ isValid: true, errors: [] });
       const logSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
@@ -295,7 +302,7 @@ describe('sample-file.controller', () => {
     it('catches thrown error, cleans up req.file, and returns 400', async () => {
       const specimenId = new ObjectId().toString();
       const db = createDb({
-        amostras: { findOne: vi.fn().mockRejectedValue(new Error('nope')) }
+        samples: { findOne: vi.fn().mockRejectedValue(new Error('nope')) }
       });
       const req = {
         app: { locals: { db } },
@@ -316,7 +323,7 @@ describe('sample-file.controller', () => {
     it('swallows unlink error when catch-block cleanup of req.file fails', async () => {
       const specimenId = new ObjectId().toString();
       const db = createDb({
-        amostras: { findOne: vi.fn().mockRejectedValue(new Error('nope')) }
+        samples: { findOne: vi.fn().mockRejectedValue(new Error('nope')) }
       });
       const req = {
         app: { locals: { db } },
@@ -348,7 +355,7 @@ describe('sample-file.controller', () => {
 
     it('returns 404 when sample not found', async () => {
       const db = createDb({
-        amostras: { findOne: vi.fn().mockResolvedValue(null) }
+        samples: { findOne: vi.fn().mockResolvedValue(null) }
       });
       const req = { app: { locals: { db } }, params: { specimenId: '999' } };
       const res = createRes();
@@ -378,7 +385,7 @@ describe('sample-file.controller', () => {
         find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue(rawFiles) })
       };
       const db = createDb({
-        amostras: { findOne: vi.fn().mockResolvedValue(sample) },
+        samples: { findOne: vi.fn().mockResolvedValue(sample) },
         sample_files: sampleFilesCollection
       });
       const req = { app: { locals: { db } }, params: { specimenId }, user: null };
@@ -400,7 +407,7 @@ describe('sample-file.controller', () => {
         find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) })
       };
       const db = createDb({
-        amostras: { findOne: vi.fn().mockResolvedValue(sample) },
+        samples: { findOne: vi.fn().mockResolvedValue(sample) },
         sample_files: sampleFilesCollection
       });
       const req = { app: { locals: { db } }, params: { specimenId }, user: { id: 'u1' } };
@@ -415,7 +422,7 @@ describe('sample-file.controller', () => {
 
     it('returns 500 when an unexpected error is thrown', async () => {
       const db = createDb({
-        amostras: { findOne: vi.fn().mockRejectedValue(new Error('down')) }
+        samples: { findOne: vi.fn().mockRejectedValue(new Error('down')) }
       });
       const req = { app: { locals: { db } }, params: { specimenId: 'not-an-object-id' } };
       const res = createRes();
@@ -492,7 +499,7 @@ describe('sample-file.controller', () => {
       expect(res.status).toHaveBeenCalledWith(404);
     });
 
-    it('happy path: calls res.download with storagePath and fileName', async () => {
+    it('happy path (unencrypted record): reads the stored plaintext and sends it via res.send', async () => {
       const fileID = new ObjectId().toString();
       const specimenId = new ObjectId().toString();
       const fileRecord = { _id: new ObjectId(fileID), specimenId, storagePath: '/x/a.csv', fileName: 'a.csv' };
@@ -502,48 +509,75 @@ describe('sample-file.controller', () => {
       const req = { app: { locals: { db } }, params: { specimenId, fileID }, user: null };
       const res = createRes();
       vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      const plaintext = Buffer.from('a.csv content');
+      vi.spyOn(fs, 'readFileSync').mockReturnValue(plaintext);
 
       await controller.downloadFile(req, res);
 
-      expect(res.download).toHaveBeenCalledWith('/x/a.csv', 'a.csv', expect.any(Function));
+      expect(res.setHeader).toHaveBeenCalledWith('Content-Disposition', expect.stringContaining('a.csv'));
+      expect(res.send).toHaveBeenCalledWith(plaintext);
     });
 
-    it('logs the download and handles a download callback error', async () => {
+    it('happy path (encrypted record, RNF029): decrypts the ciphertext on disk before sending it', async () => {
       const fileID = new ObjectId().toString();
       const specimenId = new ObjectId().toString();
-      const fileRecord = { _id: new ObjectId(fileID), specimenId, storagePath: '/x/a.csv', fileName: 'a.csv' };
+      const plaintext = Buffer.from('RNF029 round-trip content');
+      const key = require('../../src/config/keyRegistry').getActiveKey();
+      const crypto = require('crypto');
+      const iv = crypto.randomBytes(12);
+      const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+      const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+      const tag = cipher.getAuthTag();
+      const fileRecord = {
+        _id: new ObjectId(fileID),
+        specimenId,
+        storagePath: '/x/a.csv',
+        fileName: 'a.csv',
+        encryptionAlgorithm: 'aes-256-gcm',
+        encryptionKeyId: require('../../src/config/keyRegistry').getActiveKeyId(),
+        encryptionIv: iv.toString('base64'),
+        encryptionTag: tag.toString('base64')
+      };
       const db = createDb({
         sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord) }
       });
       const req = { app: { locals: { db } }, params: { specimenId, fileID }, user: { id: 'u1' } };
       const res = createRes();
       vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      vi.spyOn(fs, 'readFileSync').mockReturnValue(ciphertext);
       const logSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
       vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
-      res.download.mockImplementation((_path, _name, cb) => cb(new Error('stream broke')));
 
       await controller.downloadFile(req, res);
 
       expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({ action: 'file_download' }));
-      expect(res.status).toHaveBeenCalledWith(500);
+      expect(res.send).toHaveBeenCalledWith(plaintext);
     });
 
-    it('does not double-respond when download callback errors after headers sent', async () => {
+    it('returns 500 when decryption fails (tampered/corrupt ciphertext)', async () => {
       const fileID = new ObjectId().toString();
       const specimenId = new ObjectId().toString();
-      const fileRecord = { _id: new ObjectId(fileID), specimenId, storagePath: '/x/a.csv', fileName: 'a.csv' };
+      const fileRecord = {
+        _id: new ObjectId(fileID),
+        specimenId,
+        storagePath: '/x/a.csv',
+        fileName: 'a.csv',
+        encryptionAlgorithm: 'aes-256-gcm',
+        encryptionKeyId: 'vitest-key-001',
+        encryptionIv: Buffer.alloc(12).toString('base64'),
+        encryptionTag: Buffer.alloc(16).toString('base64')
+      };
       const db = createDb({
         sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord) }
       });
-      const req = { app: { locals: { db } }, params: { specimenId, fileID }, user: null };
+      const req = { app: { locals: { db } }, params: { specimenId, fileID } };
       const res = createRes();
-      res.headersSent = true;
       vi.spyOn(fs, 'existsSync').mockReturnValue(true);
-      res.download.mockImplementation((_path, _name, cb) => cb(new Error('stream broke')));
+      vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('not really valid ciphertext bytes!!'));
 
       await controller.downloadFile(req, res);
 
-      expect(res.status).not.toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(500);
     });
 
     it('returns 500 when an unexpected error is thrown', async () => {
@@ -1032,10 +1066,13 @@ describe('sample-file.controller', () => {
       await controller.uploadFile({ app: { locals: { db: db1 } }, params: { specimenId: '1' }, file: null, t }, res);
       expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: 'sampleFiles.fileRequired' }));
 
+      vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('file content'));
+      vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
+
       // 404 sample not found
       res = createRes();
       const specimenId = new ObjectId().toString();
-      const db2 = createDb({ amostras: { findOne: vi.fn().mockResolvedValue(null) } });
+      const db2 = createDb({ samples: { findOne: vi.fn().mockResolvedValue(null) } });
       vi.spyOn(fs, 'existsSync').mockReturnValue(true);
       vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {});
       await controller.uploadFile(
@@ -1047,7 +1084,7 @@ describe('sample-file.controller', () => {
       // 400 invalid file type
       res = createRes();
       const sample = { _id: new ObjectId(specimenId) };
-      const db3 = createDb({ amostras: { findOne: vi.fn().mockResolvedValue(sample) } });
+      const db3 = createDb({ samples: { findOne: vi.fn().mockResolvedValue(sample) } });
       vi.spyOn(SampleFileModel, 'getFileTypeFromExtension').mockReturnValue(null);
       await controller.uploadFile(
         { app: { locals: { db: db3 } }, params: { specimenId }, file: { path: '/tmp/f.csv', originalname: 'f.csv', size: 1 }, t },
@@ -1057,7 +1094,7 @@ describe('sample-file.controller', () => {
 
       // 400 validation error
       res = createRes();
-      const db4 = createDb({ amostras: { findOne: vi.fn().mockResolvedValue(sample) } });
+      const db4 = createDb({ samples: { findOne: vi.fn().mockResolvedValue(sample) } });
       vi.spyOn(SampleFileModel, 'getFileTypeFromExtension').mockReturnValue('CSV');
       vi.spyOn(SampleFileModel, 'validate').mockReturnValue({ isValid: false, errors: ['bad'] });
       await controller.uploadFile(
@@ -1069,9 +1106,11 @@ describe('sample-file.controller', () => {
       // 201 success message
       res = createRes();
       const sampleFilesCollection = { insertOne: vi.fn().mockResolvedValue({ insertedId: new ObjectId() }) };
-      const db5 = createDb({ amostras: { findOne: vi.fn().mockResolvedValue(sample) }, sample_files: sampleFilesCollection });
+      const db5 = createDb({ samples: { findOne: vi.fn().mockResolvedValue(sample) }, sample_files: sampleFilesCollection });
       vi.spyOn(SampleFileModel, 'getFileTypeFromExtension').mockReturnValue('CSV');
       vi.spyOn(SampleFileModel, 'validate').mockReturnValue({ isValid: true, errors: [] });
+      vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('file content'));
+      vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
       await controller.uploadFile(
         { app: { locals: { db: db5 } }, params: { specimenId }, file: { path: '/tmp/f.csv', originalname: 'f.csv', size: 1 }, user: null, t },
         res
@@ -1080,7 +1119,7 @@ describe('sample-file.controller', () => {
 
       // 400 catch block
       res = createRes();
-      const db6 = createDb({ amostras: { findOne: vi.fn().mockRejectedValue(new Error('nope')) } });
+      const db6 = createDb({ samples: { findOne: vi.fn().mockRejectedValue(new Error('nope')) } });
       await controller.uploadFile(
         { app: { locals: { db: db6 } }, params: { specimenId }, file: { path: '/tmp/f.csv', originalname: 'f.csv', size: 1 }, t },
         res
@@ -1094,12 +1133,12 @@ describe('sample-file.controller', () => {
       expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: 'errors.databaseUnavailable' }));
 
       res = createRes();
-      const db1 = createDb({ amostras: { findOne: vi.fn().mockResolvedValue(null) } });
+      const db1 = createDb({ samples: { findOne: vi.fn().mockResolvedValue(null) } });
       await controller.listFiles({ app: { locals: { db: db1 } }, params: { specimenId: '1' }, t }, res);
       expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: 'sampleFiles.sampleNotFound' }));
 
       res = createRes();
-      const db2 = createDb({ amostras: { findOne: vi.fn().mockRejectedValue(new Error('down')) } });
+      const db2 = createDb({ samples: { findOne: vi.fn().mockRejectedValue(new Error('down')) } });
       await controller.listFiles({ app: { locals: { db: db2 } }, params: { specimenId: 'x' }, t }, res);
       expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: 'sampleFiles.listError' }));
     });
@@ -1138,7 +1177,9 @@ describe('sample-file.controller', () => {
       res = createRes();
       const db5 = createDb({ sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord2) } });
       vi.spyOn(fs, 'existsSync').mockReturnValue(true);
-      res.download.mockImplementation((_p, _n, cb) => cb(new Error('stream broke')));
+      vi.spyOn(fs, 'readFileSync').mockImplementation(() => {
+        throw new Error('read broke');
+      });
       await controller.downloadFile({ app: { locals: { db: db5 } }, params: { specimenId, fileID }, user: null, t }, res);
       expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: 'sampleFiles.downloadError' }));
 
@@ -1252,10 +1293,12 @@ describe('sample-file.controller', () => {
       const req = { app: { locals: { db } }, params: { specimenId: 'sample-42', fileID }, user: null };
       const res = createRes();
       vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      const plaintext = Buffer.from('a.csv content');
+      vi.spyOn(fs, 'readFileSync').mockReturnValue(plaintext);
 
       await controller.downloadFile(req, res);
 
-      expect(res.download).toHaveBeenCalledWith('/x/a.csv', 'a.csv', expect.any(Function));
+      expect(res.send).toHaveBeenCalledWith(plaintext);
     });
 
     it('deleteFile falls back to String(specimenId) when specimenId is not a valid ObjectId', async () => {
