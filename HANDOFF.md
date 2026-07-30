@@ -1,54 +1,65 @@
 # HANDOFF
 
-**Written:** 2026-07-30, a `build-loop` session that closed issue #322
-(Wave 2 RF003) with Docker on.
+**Written:** 2026-07-30, a `build-loop` session that closed issue #323
+(Wave 2 RF007) with Docker on.
 
 ## What happened this session
 
-1. Read the prior HANDOFF.md, which queued issue #322 (RF003 - Gestão
-   de usuários) as the next Wave 2 real-backend spec.
-2. Branched `test/322-rf003-user-management` off `test/e2e-real-backend-
-   foundation` and added a "User management (RF003)" describe block to
-   `tests/e2e/auth-access-security.spec.ts`: AC#1 happy path (admin
-   creates a user, audited) + AC#1 rejection (duplicate email/username,
-   400) + an RNF008 cross-cutting RBAC session-gate check, following the
-   same tempToken pattern RF002's existing test already used.
-3. **Found and fixed a real infra bug while bringing Docker up (#332,
-   closed):** `compose.dev.yml`'s `env_file:` entries and the
-   `compose:*` npm scripts' `--env-file` flag both pointed at the blank
-   `.env.docker.example` template instead of the real `.env.docker`
-   README.md tells devs to create — so `npm run compose:up` couldn't
-   boot from a clean checkout (neo4j/influxdb healthcheck failures,
-   backend crash on missing `CONSENT_SECRET`). Fixed in two commits,
-   merged alongside #322's work.
-4. Discovered the local dev stack (`compose.yml`/`compose.dev.yml`,
-   `npm run compose:up`) isn't actually what `test:e2e:docker` needs —
-   the backend service there has no healthcheck at all, so `frontend`'s
-   `depends_on: condition: service_healthy` can never resolve. The
-   correct stack for the real-backend e2e gate is `compose.test.yml`
-   (the same one CI's `current-state-validation` job builds), which
-   needs its own `admin-bootstrap-test` one-shot job run once
-   (`docker compose ... run --rm --no-deps admin-bootstrap-test`)
-   before any login-based test can pass — this isn't documented
-   anywhere in the skills pack yet; worth a `docker-workflow`
-   local-env update if it trips up a future session again.
-5. Ran the new + existing `auth-access-security.spec.ts` tests against
-   the real `compose.test.yml` stack — all 5 passed.
-6. Merged `test/322-rf003-user-management` into both
+1. Read the prior HANDOFF.md, which left Wave 2's remaining issues
+   unqueued (#323/#324/#325/#326/#333/#293). Dennis picked #323 (RF007 —
+   Arquivos científicos e dados brutos) explicitly.
+2. Branched `test/323-rf007-scientific-data-access` off
+   `test/e2e-real-backend-foundation` and wrote
+   `tests/e2e/scientific-data-access.spec.ts`: happy path (upload with
+   checksum/URI/encryption/access-policy recorded + audited, download
+   round-trip proving the at-rest cipher round-trips exactly, list also
+   audited) plus two rejection cases (disallowed format, oversized file).
+3. **The happy path surfaced the entire sample-file upload/list/download/
+   delete/export subsystem had never worked end-to-end**, three separate
+   pre-existing bugs, all fixed in this slice:
+   - `sample.routes.js` defined the route param as `:sampleID` but
+     `sample-file.controller.js` destructured `req.params.specimenId`
+     everywhere — always `undefined`. Renamed the route params to
+     `:specimenId` to match the controller (7 routes).
+   - The controller queried a nonexistent `amostras` Mongo collection
+     instead of the canonical `samples` (`collections.js`).
+   - `SampleFileModel.create()` never carried `specimenId` into the
+     persisted record, so `downloadFile`/`deleteFile`'s ownership check
+     (`fileRecord.specimenId !== specimenIdString`) always failed —
+     download/delete/export were unreachable for any file, ever.
+4. Also implemented RF007's real acceptance criteria while fixing the
+   above (AC#3/4/5, RNF029): SHA-256 checksum of the plaintext, at-rest
+   AES-256-GCM encryption reusing the existing `keyRegistry`/
+   `fieldEncryption.js` key pattern (adapted for binary buffers), a
+   stable `objstore://samples/<id>/files/<name>` URI, and a static
+   `accessPolicy` descriptor matching the route's actual RBAC. Also
+   fixed: multer's `fileFilter`/size-limit rejections had no downstream
+   error handler anywhere in the app (confirmed: zero `(err, req, res,
+   next)` handlers exist), so an invalid upload crashed to a raw HTML
+   500 instead of AC#1/AC#2's intended clean 400 — added a route-scoped
+   wrapper in `uploadMiddleware()`, not a global handler.
+5. Updated `tests/unit/sample-file.controller.test.js` to match: renamed
+   `amostras` mocks to `samples`, replaced the `res.download`-based
+   download tests with `res.send`-based ones (including a dedicated
+   RNF029 round-trip test and a decrypt-failure test), added
+   `fs.readFileSync`/`writeFileSync` mocks to the upload happy-path
+   tests. Full backend unit suite for the touched files: 222/222 green.
+6. Ran the new spec + all 21 `specimen-quality-inventory.spec.ts` tests
+   (shares `sample.routes.js`) against the real `compose.test.yml` stack
+   — all green, no regressions from the route param rename.
+7. Updated `E2E_TRACEABILITY_PLAN.md`'s RF007 row to PARTIAL with the
+   full rundown of what was covered/fixed.
+8. Filed #334 tracking RF007's remainder: assayId/datasetId linkage (no
+   Assay/Dataset model exists yet — a data-model change, not a test-loop
+   slice) and file-replace audit (no replace endpoint exists to audit).
+9. Merged `test/323-rf007-scientific-data-access` into both
    `test/e2e-real-backend-foundation` and
-   `feature/docker-e2e-backend-integration`, pushed both.
-7. Closed #322 (partial — AC#2/AC#3/AC#4/AC#5 not covered) and #332.
-   Filed #333 tracking the remaining RF003 criteria (blocks partly on
-   #293's already-open "no test-side TOTP generator" gap).
-8. Updated `E2E_TRACEABILITY_PLAN.md`'s RF003 row to PARTIAL, linking
-   #333 for what's left.
+   `feature/docker-e2e-backend-integration`, pushed both. Closed #323.
 
 ## Repo state
 
-- `test/e2e-real-backend-foundation` and
-  `feature/docker-e2e-backend-integration` both at `ab8f3115`/
-  `3a39ed43` respectively (same content, different merge-commit hash),
-  pushed.
+- `test/e2e-real-backend-foundation` at `95374230`,
+  `feature/docker-e2e-backend-integration` at `9ab7bb01` — pushed.
 - `main` still not touched, still frozen — do not merge into it without
   Dennis's explicit go.
 - Docker test stack (`compose.test.yml`) was torn down
@@ -58,20 +69,23 @@
 ## Recommended next steps
 
 None queued — Dennis hasn't named a specific next issue. Open Wave 2
-issues still on the board: #323 (RF007), #324 (RF011), #325 (RF020),
-#326 (RF021), plus the new #333 (RF003 remainder) and #293 (TOTP
-generator, a shared blocker for any RBAC test needing a real non-admin
-session). Tracking issue #331 covers integrating all Wave 2 specs onto
-`feature/docker-e2e-backend-integration` once they land — most of that
-integration already happened incrementally this session and the RF002
-session before it, but #331 itself is still open pending the rest of
-the wave.
+issues still on the board: #324 (RF011), #325 (RF020), #326 (RF021),
+#333 (RF003 remainder), #334 (RF007 remainder, filed this session), and
+#293 (TOTP generator, a shared blocker for any RBAC test needing a real
+non-admin session). Tracking issue #331 covers integrating all Wave 2
+specs onto `feature/docker-e2e-backend-integration` once they land —
+most of that integration keeps happening incrementally session by
+session; #331 itself is still open pending the rest of the wave.
 
 ## Which skills to use
 
-`build-loop` for any of #323/#324/#325/#326/#333. Whichever one is
-picked, budget time for the `compose.test.yml` + `admin-bootstrap-test`
-bootstrap sequence above — don't reach for `npm run compose:up` (the
-dev stack) expecting it to serve `test:e2e:docker`, it can't as
-currently configured. `ship-integration-branch` only once Wave 2 is
-fully landed and Dennis explicitly asks to graduate to `main`.
+`build-loop` for any of #324/#325/#326/#333/#334. Whichever one is
+picked, budget time up front to check whether the target capability's
+*existing* partial code actually works at all — this session's RF007
+slice needed three separate pre-existing-bug fixes (route param
+mismatch, wrong Mongo collection name, a field never persisted) before
+the real acceptance criteria could even be attempted once; a capability
+marked "MISSING"/"PARTIAL" in `E2E_TRACEABILITY_PLAN.md` is not a
+guarantee the code path that exists has ever actually run successfully.
+`ship-integration-branch` only once Wave 2 is fully landed and Dennis
+explicitly asks to graduate to `main`.
