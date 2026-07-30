@@ -1,81 +1,82 @@
 # HANDOFF
 
-**Written:** 2026-07-30, a `build-loop` session that closed issue #324
-(RF011 HL7 FHIR R4, Wave 2) with Docker on.
+**Written:** 2026-07-30, a `fix-bugs` session on
+`feature/docker-e2e-backend-integration`, Docker on (user-confirmed at
+session start, though this fix didn't end up needing it — native tests
+were sufficient to prove it).
 
 ## What happened this session
 
-1. Read the prior HANDOFF.md (left #335 closed, no next issue queued).
-   Dennis asked to pick the next Wave 2 issue with Docker on.
-2. Routed via `work-issue`: lowest-numbered open Wave 2 issue is #324
-   (RF011). Its text called RF011 "MISSING, needs new spec + likely new
-   UI/API surface" — routed to `build-loop` on that basis.
-3. Investigation found the traceability doc's "MISSING" call was stale:
-   a real FHIR bundle staging pipeline already exists
-   (`fhir-import-staging.service.js`, `POST /api/import/fhir/stage` →
-   `/validate` → `/commit`), implementing most of RF011's ACs already.
-   Reinforces the standing lesson (from the #323 session, still in the
-   skill) to check whether existing code already works before assuming
-   a capability needs building from scratch.
-4. Branched `test/324-rf011-fhir-interop` off
-   `feature/docker-e2e-backend-integration`. Added
-   `tests/e2e/helpers/queryFhirImport.ts` and new
-   `interop-monitoring.spec.ts` cases proving the pipeline end-to-end
-   against the real backend: AC#1 (reject non-Bundle payload, 400),
-   AC#2/AC#3 (Patient/Specimen/Consent/Observation mapping), AC#4 (a
-   Specimen missing `sampleType` stays ERROR/quarantined, never
-   committed), AC#5/AC#6 (provenance via `importBatchId`/`importedBy`/
-   `importedAt` + an `audit_logs` `FHIR_IMPORT_RECORD_COMMITTED` entry,
-   staging/quarantine workflow). AC#7 stays covered by the existing
-   `fhir-boundary.arch.test.js`, not re-asserted.
-5. The happy-path fixture surfaced a real bug: `commitBatch`'s
-   `samples.updateOne` upsert set the same fields
-   (`consentStatus`/`quarantineStatus`/`quarantineReason`/
-   `availabilityStatus`/`importBatchId`/`importedAt`/`importedBy`/
-   `releaseStatus`) in both `$setOnInsert` and `$set` — an illegal Mongo
-   conflict that 500'd every first-time commit of a FHIR-staged
-   specimen. Fixed by dropping the duplicated keys from
-   `$setOnInsert` (they're already covered by `$set`).
-6. Filed #336: the legacy synchronous `POST /api/import/fhir`
-   (`import.controller.js#importFhirBundle`, direct writes to
-   `patients`/`samples`/etc., "mantido para compatibilidade") looks
-   superseded by the staging pipeline and has no test coverage — flagged
-   for Dennis/Denise to reconcile, not fixed in this slice.
-7. Docker gate: brought up `compose.test.yml`, ran
-   `interop-monitoring.spec.ts` (20/20 passing, no RF009 regressions)
-   and the backend unit/architecture FHIR suites (33/33) against it,
-   then tore the stack down (`down --volumes --remove-orphans`).
-8. Updated `E2E_TRACEABILITY_PLAN.md`'s RF011 row.
-9. Merged `test/324-rf011-fhir-interop` into both
-   `test/e2e-real-backend-foundation` (`ee9ca821`) and
-   `feature/docker-e2e-backend-integration` (`05c7eee0`), pushed all
-   three branches. Closed #324.
-10. wrap-up audit: no scope/process friction beyond the stale-doc
-    pattern already noted above (reinforces an existing lesson, no new
-    skill edit needed). Legacy finding filed as #336.
+1. Read the prior HANDOFF.md (the #337 build-loop session's, which closed
+   #337/#333 — RF003 fully covered). Dennis asked to pick up #338.
+2. #338 (session tokens issued within the same second were
+   byte-identical, so revoking one session revoked both): root cause was
+   `auth.service.js`'s `issueAccessToken`/`issueRefreshToken` JWT
+   payloads having no per-login nonce, combined with `iat`/`exp` being
+   second-granularity — two logins for the same user in the same
+   wall-clock second signed identical tokens, which collided in
+   `session.service.js`'s `hashToken`-keyed session storage.
+3. Reproduced first: added failing unit tests to
+   `auth.service.unit.test.js` asserting two same-user token issuances
+   are distinct and each carries a unique `jti` — confirmed they failed
+   against the unfixed code.
+4. Fixed: added a random UUID `jti` claim to both the access and refresh
+   token payloads in `auth.service.js` (using `crypto.randomUUID()`).
+   This is the exact direction the issue itself suggested. No session
+   storage changes needed — the hash now differs because the payload
+   does.
+5. Verified: targeted run (`auth.service.unit.test.js`,
+   `session.service.unit.test.js`, `auth.routes.branch-coverage.test.js`,
+   `auth.routes.contract.test.js`, `auth-session-revocation.test.js`,
+   `auth.api.test.js`) — 97 tests green on the merged tree (140 including
+   the fix-branch-only run before merge).
+6. Committed (`16d4167b`) on `fix/338-jwt-jti-collision` (branched off
+   `feature/docker-e2e-backend-integration`), pushed, commented the hash
+   on #338.
+7. Merged `fix/338-jwt-jti-collision` into
+   `feature/docker-e2e-backend-integration` (`9250feb3`), re-ran targeted
+   tests on the merged tree, pushed. Deleted the fix branch (local +
+   remote).
+8. Closed **#338**, referencing the merge commit.
+9. wrap-up audit: no scope violations (only `auth.service.js` + its test
+   touched), no lazy fixes, no stale instructions, no permission denials,
+   no judgment calls needed — the fix matched the issue's own suggested
+   direction and fully resolved it (no residual gap, no new issue filed).
 
 ## Repo state
 
-- `test/e2e-real-backend-foundation` at `ee9ca821`,
-  `feature/docker-e2e-backend-integration` at `05c7eee0` — pushed.
-- `main` still not touched, still frozen — do not merge into it without
-  Dennis's explicit go.
-- Docker test stack torn down after the run — nothing left running.
+- `feature/docker-e2e-backend-integration` at `9250feb3`, pushed. Carries
+  the #338 fix plus everything from the prior #324 session.
+- `test/e2e-real-backend-foundation` (from the prior two sessions, at
+  `7a1de69f`) still not reconciled with this branch — the two-branch
+  divergence noted in prior HANDOFFs is still open; nobody's done the
+  merge pass yet.
+- `main` still not touched, still frozen.
+- **#338 is closed.**
+- **#339** (from the #337 session, still open): `institutionalScope` is
+  stored/validated/returned but has no enforcement anywhere — needs
+  Dennis's product call on which resources/roles it should constrain
+  before a build-loop slice could implement it.
+- **#336** (from the #324 session, still open): legacy synchronous
+  `POST /api/import/fhir` looks superseded by the FHIR staging pipeline,
+  needs Dennis/Denise reconciliation, non-blocking.
 
 ## Recommended next steps
 
-None queued — Dennis hasn't named a specific next issue. Open Wave 2
-issues still on the board: #325 (RF020), #326 (RF021), #333 (RF003
-remainder — AC#3/AC#4/AC#5), #334 (RF007 remainder). New this session:
-#336 (legacy `importFhirBundle` reconciliation, non-blocking). Tracking
-issue #331 covers integrating all Wave 2 specs onto
+None queued — Dennis hasn't named a specific next issue. Candidates,
+unranked: #339 (institutional-scope enforcement, needs Dennis's product
+call first, then `build-loop`-shaped, or `resolve-issue` first to get
+that call); reconciling the `test/e2e-real-backend-foundation` /
+`feature/docker-e2e-backend-integration` divergence; #325/#326
+(RF020/RF021) still blocked on #320's CRUD gap; #334 (RF007 remainder,
+divide-and-conquer-shaped); #336 (legacy FHIR endpoint reconciliation).
+Tracking issue #331 covers integrating all Wave 2 specs onto
 `feature/docker-e2e-backend-integration` once they land.
 
 ## Which skills to use
 
-`build-loop` for #325/#326/#333/#334 — but check whether the traceability
-doc's "MISSING"/status calls are actually current before assuming new
-product code is needed; this session and the #323 session both found
-real existing code the doc hadn't caught up to. `ship-integration-branch`
-only once Wave 2 is fully landed and Dennis explicitly asks to graduate
-to `main`.
+`build-loop` for #339 once Dennis has triaged which resources/roles
+institutional scope should constrain (or `resolve-issue` first, to get
+that call from him). `build-loop` for #325/#326 once #320's CRUD gap is
+resolved. `ship-integration-branch` only once Wave 2 is fully landed and
+Dennis explicitly asks to graduate to `main`.
