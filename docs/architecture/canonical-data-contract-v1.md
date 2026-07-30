@@ -33,6 +33,10 @@ This document defines the canonical v1 runtime contract for BioAvanceD.
 - `identityDocument`
 - `recordNumber`
 - `isDeceased`
+- `clinicalUnitId` (migrating to Reference(Organization), per dictionary
+  P1X-0356 — accepts an `organizationId` reference as of #351; the legacy
+  free-text `clinicalUnit`/`unitAcronym` + `clinicalUnits`-collection
+  lookup is still supported pending #352)
 
 ### Specimen
 
