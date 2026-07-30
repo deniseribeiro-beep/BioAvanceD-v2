@@ -303,7 +303,7 @@ test.describe('User management (RF003) — real backend', () => {
     expect(reuseAttempt.status()).toBe(400);
   });
 
-  test('a role assignment carries a validity period and institutional scope, and an expired assignment is refused (criterion 3)', async ({
+  test('a role assignment carries a validity period and organizational scope, and an expired assignment is refused (criterion 3)', async ({
     request,
   }) => {
     const admin = await realLogin(request);
@@ -325,8 +325,24 @@ test.describe('User management (RF003) — real backend', () => {
     expect(registerResponse.ok(), await registerResponse.text()).toBeTruthy();
     const userID = (await registerResponse.json()).data?._id || (await registerResponse.json()).data?.id;
 
+    // Organizational scope (#346/#347) is now a Reference[] to real Organization
+    // documents, not free-text institution names — create the two orgs first.
+    const orgSuffix = Date.now();
+    const orgA = await request.post(`${apiBaseURL}/api/organizations`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { officialName: `Hospital Central ${orgSuffix}`, countryCode: 'BR' },
+    });
+    expect(orgA.ok(), await orgA.text()).toBeTruthy();
+    const orgAId = (await orgA.json()).data?.organizationId;
+    const orgB = await request.post(`${apiBaseURL}/api/organizations`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { officialName: `Biobanco Norte ${orgSuffix}`, countryCode: 'BR' },
+    });
+    expect(orgB.ok(), await orgB.text()).toBeTruthy();
+    const orgBId = (await orgB.json()).data?.organizationId;
+
     // Admin assigns the role with a validity period (already in the past —
-    // proves enforcement, not just storage) and an institutional scope.
+    // proves enforcement, not just storage) and an organizational scope.
     const roleValidFrom = new Date(Date.now() - 60 * 60 * 1000).toISOString();
     const roleValidUntil = new Date(Date.now() - 1000).toISOString();
     const assignResponse = await request.put(`${apiBaseURL}/api/users/${userID}`, {
@@ -334,7 +350,7 @@ test.describe('User management (RF003) — real backend', () => {
       data: {
         roleValidFrom,
         roleValidUntil,
-        institutionalScope: ['Hospital Central', 'Biobanco Norte'],
+        organizationIds: [orgAId, orgBId],
       },
     });
     expect(assignResponse.ok(), await assignResponse.text()).toBeTruthy();
@@ -346,7 +362,7 @@ test.describe('User management (RF003) — real backend', () => {
     });
     const fetchedUser = (await fetchResponse.json()).data;
     expect(new Date(fetchedUser.roleValidUntil).toISOString()).toBe(roleValidUntil);
-    expect(fetchedUser.institutionalScope).toEqual(['Hospital Central', 'Biobanco Norte']);
+    expect(fetchedUser.organizationIds).toEqual([orgAId, orgBId]);
 
     // The account can still log in (login itself isn't role-gated), but a
     // session under an already-expired role assignment is refused on the

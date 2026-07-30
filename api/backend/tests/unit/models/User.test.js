@@ -36,7 +36,7 @@ describe('UserModel - Unit Tests', () => {
       password: 'Senha@123',
       accessType: 1,
       phone: '11987654321',
-      institution: 'Hospital XYZ',
+      organizationId: 'org-uuid-1',
       status: 'active'
     };
   });
@@ -141,22 +141,37 @@ describe('UserModel - Unit Tests', () => {
       expect(validUserData.phone).toBeNull(); // Normalizado para null
     });
 
-    it('deve aceitar ausência de phone e institution (campos opcionais)', () => {
+    it('deve aceitar ausência de phone e organizationId (campos opcionais)', () => {
       delete validUserData.phone;
-      delete validUserData.institution;
+      delete validUserData.organizationId;
       const result = UserModel.validate(validUserData);
 
       expect(result.isValid).toBe(true);
       expect(validUserData.phone).toBeUndefined();
-      expect(validUserData.institution).toBeUndefined();
+      expect(validUserData.organizationId).toBeUndefined();
     });
 
-    it('deve aceitar institution vazia (campo opcional)', () => {
-      validUserData.institution = '';
+    it('deve aceitar organizationId vazio (campo opcional)', () => {
+      validUserData.organizationId = '';
       const result = UserModel.validate(validUserData);
 
       expect(result.isValid).toBe(true);
-      expect(validUserData.institution).toBeNull(); // Normalizado para null
+      expect(validUserData.organizationId).toBeNull(); // Normalizado para null
+    });
+
+    it('deve rejeitar organizationIds quando não é array de strings', () => {
+      validUserData.organizationIds = 'not-an-array';
+      const result = UserModel.validate(validUserData);
+
+      expect(result.isValid).toBe(false);
+      expect(result.errors).toContain('organizationIds deve ser um array de strings');
+    });
+
+    it('deve aceitar organizationIds válido (array de strings)', () => {
+      validUserData.organizationIds = ['org-uuid-1', 'org-uuid-2'];
+      const result = UserModel.validate(validUserData);
+
+      expect(result.isValid).toBe(true);
     });
 
     it('deve validar status em português', () => {
@@ -300,7 +315,7 @@ describe('UserModel - Unit Tests', () => {
         name: 'João Silva',
         email: 'joao@example.com',
         phone: '11987654321',
-        institution: 'Hospital XYZ',
+        organizationId: 'org-uuid-1',
         username: 'joaosilva',
         password: 'Senha@123',
         accessType: 3,
@@ -322,7 +337,7 @@ describe('UserModel - Unit Tests', () => {
       expect(user.name).toBe('João Silva');
       expect(user.email).toBe('joao@example.com');
       expect(user.phone).toBe('11987654321');
-      expect(user.institution).toBe('Hospital XYZ');
+      expect(user.organizationId).toBe('org-uuid-1');
       expect(user.accessType).toBe(3);
       expect(user.status).toBe('active'); // normalizado
       expect(user.mfaEnabled).toBe(true);
@@ -351,7 +366,7 @@ describe('UserModel - Unit Tests', () => {
       const user = UserModel.create(data);
 
       expect(user.phone).toBeNull();
-      expect(user.institution).toBeNull();
+      expect(user.organizationId).toBeNull();
       expect(user.accessType).toBe(2);
       expect(user.status).toBe('active');
       expect(user.mfaEnabled).toBe(false);

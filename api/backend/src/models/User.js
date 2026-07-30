@@ -19,7 +19,7 @@ class UserModel {
       errors.push('username é obrigatório e deve ser string');
     }
 
-    // Telefone e instituição são opcionais (não validados)
+    // Telefone e organização são opcionais (não validados)
     // Normaliza strings vazias para null
     if (data.phone !== undefined && data.phone !== null && typeof data.phone === 'string') {
       const trimmedPhone = data.phone.trim();
@@ -27,10 +27,10 @@ class UserModel {
         data.phone = null;
       }
     }
-    if (data.institution !== undefined && data.institution !== null && typeof data.institution === 'string') {
-      const trimmedInstitution = data.institution.trim();
-      if (trimmedInstitution === '') {
-        data.institution = null;
+    if (data.organizationId !== undefined && data.organizationId !== null && typeof data.organizationId === 'string') {
+      const trimmedOrganizationId = data.organizationId.trim();
+      if (trimmedOrganizationId === '') {
+        data.organizationId = null;
       }
     }
 
@@ -90,12 +90,12 @@ class UserModel {
       errors.push('roleValidUntil deve ser posterior a roleValidFrom');
     }
 
-    // RF003 AC#3 - escopo institucional do papel atribuído
+    // RF003 AC#3 - escopo organizacional do papel atribuído (Reference[] -> Organization)
     if (
-      data.institutionalScope !== undefined && data.institutionalScope !== null &&
-      (!Array.isArray(data.institutionalScope) || data.institutionalScope.some((s) => typeof s !== 'string'))
+      data.organizationIds !== undefined && data.organizationIds !== null &&
+      (!Array.isArray(data.organizationIds) || data.organizationIds.some((s) => typeof s !== 'string'))
     ) {
-      errors.push('institutionalScope deve ser um array de strings');
+      errors.push('organizationIds deve ser um array de strings');
     }
 
     return {
@@ -109,7 +109,7 @@ class UserModel {
       name: data.name,
       email: data.email,
       phone: data.phone || null,
-      institution: data.institution || null,
+      organizationId: data.organizationId || null,
       username: data.username,
       password: data.password, // Será hashado no service
       accessType: data.accessType || 2, // 1=Usuário Externo, 2=Técnico, 3=Coordenador, 4=Administrador
@@ -129,7 +129,7 @@ class UserModel {
       failedLoginAttempts: data.failedLoginAttempts || 0,
       roleValidFrom: data.roleValidFrom ? new Date(data.roleValidFrom) : null,
       roleValidUntil: data.roleValidUntil ? new Date(data.roleValidUntil) : null,
-      institutionalScope: Array.isArray(data.institutionalScope) ? data.institutionalScope : []
+      organizationIds: Array.isArray(data.organizationIds) ? data.organizationIds : []
     };
   }
 

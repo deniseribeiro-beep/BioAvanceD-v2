@@ -157,7 +157,7 @@ describe('Users and Access routes', () => {
     expect(res.payload.data[0].id).toBe('user-1');
   });
 
-  it('POST /api/users/register deve normalizar status, telefone e instituição', async () => {
+  it('POST /api/users/register deve normalizar status, telefone e organizationId', async () => {
     const handler = getHandler(userRoutes, 'post', '/register');
     const req = createRequest({
       body: {
@@ -168,7 +168,7 @@ describe('Users and Access routes', () => {
         accessType: 2,
         status: 'Ativo',
         phone: '(11) 99876-5432',
-        institution: '   ',
+        organizationId: '   ',
       },
     });
     req.app.locals.db = db;
@@ -180,7 +180,7 @@ describe('Users and Access routes', () => {
     expect(res.payload.success).toBe(true);
     expect(req.body.status).toBe('active');
     expect(req.body.phone).toBe('11998765432');
-    expect(req.body.institution).toBeNull();
+    expect(req.body.organizationId).toBeNull();
   });
 
   it('POST /api/users/register deve negar usuário sem permissão', async () => {
