@@ -41,10 +41,16 @@ This document defines the canonical v1 runtime contract for BioAvanceD.
   `resolveClinicalUnitSnapshot` now resolves exclusively against
   `organizations` (by `organizationId`, then by normalized name) — the
   legacy `clinicalUnits`-collection ObjectId/name lookup was retired in
-  #353. `paciente.controller.js`'s allowlist and the free-text
-  search/filter paths on `patients.clinicalUnit`, plus
-  `clinical-unit.routes.js`'s CRUD/search surface (proxy-or-retire
-  decision still open), remain — tracked in #353's follow-up)
+  #353. `patient.service.js`'s free-text search/filter paths
+  (`listPatients`'s `filters.clinicalUnit` exact match, `searchPatients`'s
+  `clinicalUnit` regex clause) were decided (#355) to stay as-is: both
+  query `patients.clinicalUnit` directly, and that field is now reliably
+  populated from `Organization.officialName` by
+  `resolveClinicalUnitSnapshot`, so no Organization-based replacement
+  (e.g. filtering by `organizationId`) is needed — regression-covered by
+  `patient.service.clinicalUnitSearch.unit.test.js`. `paciente.controller.js`'s
+  allowlist and `clinical-unit.routes.js`'s CRUD/search surface
+  (proxy-or-retire decision still open) remain — tracked as #356, #357)
 
 ### Specimen
 
