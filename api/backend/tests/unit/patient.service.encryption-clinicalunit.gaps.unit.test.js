@@ -108,17 +108,17 @@ describe('PatientService.decryptSensitivePatientFields — extra branches', () =
 });
 
 describe('PatientService.resolveClinicalUnitSnapshot — pre-existing acronym branch', () => {
-  it('uses the clinical unit record acronym as-is (by ObjectId lookup) without falling back to fillAcronym', async () => {
-    const id = new ObjectId();
-    const clinicalUnitsCollection = makeFakeCollection({
-      findOne: vi.fn().mockResolvedValue({ _id: id, name: 'Unidade de Nefrologia', acronym: 'NEFRO' })
+  it('uses the organization record acronym as-is (by organizationId lookup) without falling back to fillAcronym', async () => {
+    const id = new ObjectId().toString();
+    const organizationsCollection = makeFakeCollection({
+      findOne: vi.fn().mockResolvedValue({ organizationId: id, officialName: 'Unidade de Nefrologia', acronym: 'NEFRO' })
     });
-    const db = makeFakeDb({ clinical_units: clinicalUnitsCollection });
+    const db = makeFakeDb({ organizations: organizationsCollection });
 
-    const result = await patientService.resolveClinicalUnitSnapshot(db, { clinicalUnitId: id.toString() });
+    const result = await patientService.resolveClinicalUnitSnapshot(db, { clinicalUnitId: id });
 
     expect(result).toEqual({
-      clinicalUnitId: id.toString(),
+      clinicalUnitId: id,
       clinicalUnit: 'Unidade de Nefrologia',
       unitAcronym: 'NEFRO'
     });

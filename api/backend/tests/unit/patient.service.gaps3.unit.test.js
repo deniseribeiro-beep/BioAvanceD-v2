@@ -195,10 +195,10 @@ describe('PatientService.deletePatient — error propagation and ObjectId branch
 
 describe('PatientService.resolveClinicalUnitSnapshot — remaining normalization branches', () => {
   it('treats a clinicalUnitId present but null the same as absent when only clinicalUnit name is given', async () => {
-    const clinicalUnitsCollection = makeFakeCollection({
-      findOne: vi.fn().mockResolvedValue({ _id: 'unit-1', name: 'Enfermaria', acronym: '' })
+    const organizationsCollection = makeFakeCollection({
+      findOne: vi.fn().mockResolvedValue({ organizationId: 'unit-1', officialName: 'Enfermaria', acronym: '' })
     });
-    const db = makeFakeDb({ clinical_units: clinicalUnitsCollection, patients: makeFakeCollection() });
+    const db = makeFakeDb({ organizations: organizationsCollection, patients: makeFakeCollection() });
 
     const result = await patientService.resolveClinicalUnitSnapshot(db, {
       clinicalUnitId: null,
@@ -215,11 +215,11 @@ describe('PatientService.resolveClinicalUnitSnapshot — remaining normalization
     expect(result).toEqual({ clinicalUnitId: null, clinicalUnit: null, unitAcronym: null });
   });
 
-  it('generates an acronym via fillAcronym when the matched-by-name unit has no stored acronym', async () => {
-    const clinicalUnitsCollection = makeFakeCollection({
-      findOne: vi.fn().mockResolvedValue({ _id: 'unit-2', name: 'Pediatria', acronym: '' })
+  it('generates an acronym via fillAcronym when the matched-by-name organization has no stored acronym', async () => {
+    const organizationsCollection = makeFakeCollection({
+      findOne: vi.fn().mockResolvedValue({ organizationId: 'unit-2', officialName: 'Pediatria', acronym: '' })
     });
-    const db = makeFakeDb({ clinical_units: clinicalUnitsCollection });
+    const db = makeFakeDb({ organizations: organizationsCollection });
 
     const result = await patientService.resolveClinicalUnitSnapshot(db, { clinicalUnit: 'pediatria' });
 

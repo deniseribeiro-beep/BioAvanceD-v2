@@ -32,21 +32,25 @@ describe('PatientService.resolveClinicalUnitSnapshot', () => {
     expect(result).toEqual({ clinicalUnitId: null, clinicalUnit: null, unitAcronym: null });
   });
 
-  it('throws when clinicalUnitId is invalid and clinicalUnit is omitted (#85)', async () => {
-    const db = makeFakeDb();
-    await expect(patientService.resolveClinicalUnitSnapshot(db, { clinicalUnitId: 'not-an-object-id' }))
-      .rejects.toThrow('clinicalUnitId inválido');
-  });
-
-  it('throws when clinicalUnitId is invalid and clinicalUnit is explicitly empty', async () => {
-    const db = makeFakeDb();
-    await expect(patientService.resolveClinicalUnitSnapshot(db, { clinicalUnitId: 'not-an-object-id', clinicalUnit: '' }))
-      .rejects.toThrow('clinicalUnitId inválido');
-  });
-
-  it('throws when a valid ObjectId clinicalUnitId does not resolve to a unit', async () => {
+  it('throws when clinicalUnitId does not resolve to an organization and clinicalUnit is omitted (#85)', async () => {
     const db = makeFakeDb({
-      clinical_units: makeFakeCollection({ findOne: vi.fn().mockResolvedValue(null) })
+      organizations: makeFakeCollection({ findOne: vi.fn().mockResolvedValue(null) })
+    });
+    await expect(patientService.resolveClinicalUnitSnapshot(db, { clinicalUnitId: 'not-an-organization-id' }))
+      .rejects.toThrow('Unidade clínica não encontrada');
+  });
+
+  it('throws when clinicalUnitId does not resolve and clinicalUnit is explicitly empty', async () => {
+    const db = makeFakeDb({
+      organizations: makeFakeCollection({ findOne: vi.fn().mockResolvedValue(null) })
+    });
+    await expect(patientService.resolveClinicalUnitSnapshot(db, { clinicalUnitId: 'not-an-organization-id', clinicalUnit: '' }))
+      .rejects.toThrow('Unidade clínica não encontrada');
+  });
+
+  it('throws when a clinicalUnitId does not resolve to an organization', async () => {
+    const db = makeFakeDb({
+      organizations: makeFakeCollection({ findOne: vi.fn().mockResolvedValue(null) })
     });
     await expect(patientService.resolveClinicalUnitSnapshot(db, { clinicalUnitId: '507f1f77bcf86cd799439011' }))
       .rejects.toThrow('Unidade clínica não encontrada');
@@ -54,51 +58,51 @@ describe('PatientService.resolveClinicalUnitSnapshot', () => {
 
   it('resolves snapshot by clinicalUnitId, falling back to a generated acronym when none stored', async () => {
     const db = makeFakeDb({
-      clinical_units: makeFakeCollection({
-        findOne: vi.fn().mockResolvedValue({ _id: '507f1f77bcf86cd799439011', name: 'Unidade Terapia Intensiva', acronym: '' })
+      organizations: makeFakeCollection({
+        findOne: vi.fn().mockResolvedValue({ organizationId: 'org-uti', officialName: 'Unidade Terapia Intensiva', acronym: '' })
       })
     });
-    const result = await patientService.resolveClinicalUnitSnapshot(db, { clinicalUnitId: '507f1f77bcf86cd799439011' });
-    expect(result.clinicalUnitId).toBe('507f1f77bcf86cd799439011');
+    const result = await patientService.resolveClinicalUnitSnapshot(db, { clinicalUnitId: 'org-uti' });
+    expect(result.clinicalUnitId).toBe('org-uti');
     expect(result.clinicalUnit).toBe('Unidade Terapia Intensiva');
     expect(result.unitAcronym).toBeTruthy();
   });
 
-  it('uses stored acronym when the unit found by id already has one', async () => {
+  it('uses stored acronym when the organization found by id already has one', async () => {
     const db = makeFakeDb({
-      clinical_units: makeFakeCollection({
-        findOne: vi.fn().mockResolvedValue({ _id: '507f1f77bcf86cd799439011', name: 'UTI', acronym: 'uti' })
+      organizations: makeFakeCollection({
+        findOne: vi.fn().mockResolvedValue({ organizationId: 'org-uti', officialName: 'UTI', acronym: 'uti' })
       })
     });
-    const result = await patientService.resolveClinicalUnitSnapshot(db, { clinicalUnitId: '507f1f77bcf86cd799439011' });
+    const result = await patientService.resolveClinicalUnitSnapshot(db, { clinicalUnitId: 'org-uti' });
     expect(result.unitAcronym).toBe('uti');
   });
 
-  it('falls through to name lookup when clinicalUnitId is invalid but a name is also given', async () => {
+  it('falls through to name lookup when clinicalUnitId does not resolve but a name is also given', async () => {
     const db = makeFakeDb({
-      clinical_units: makeFakeCollection({ findOne: vi.fn().mockResolvedValue(null) })
+      organizations: makeFakeCollection({ findOne: vi.fn().mockResolvedValue(null) })
     });
     const result = await patientService.resolveClinicalUnitSnapshot(db, {
-      clinicalUnitId: 'not-an-object-id',
+      clinicalUnitId: 'not-an-organization-id',
       clinicalUnit: 'Ambulatorio'
     });
     expect(result.clinicalUnitId).toBeNull();
     expect(result.clinicalUnit).toBe('AMBULATORIO');
   });
 
-  it('resolves snapshot by clinicalUnit name when found in collection', async () => {
+  it('resolves snapshot by clinicalUnit name when a matching organization exists', async () => {
     const db = makeFakeDb({
-      clinical_units: makeFakeCollection({
-        findOne: vi.fn().mockResolvedValue({ _id: 'unit-id-2', name: 'Ambulatorio', acronym: 'AMB' })
+      organizations: makeFakeCollection({
+        findOne: vi.fn().mockResolvedValue({ organizationId: 'org-amb', officialName: 'Ambulatorio', acronym: 'AMB' })
       })
     });
     const result = await patientService.resolveClinicalUnitSnapshot(db, { clinicalUnit: 'ambulatorio' });
-    expect(result).toEqual({ clinicalUnitId: 'unit-id-2', clinicalUnit: 'Ambulatorio', unitAcronym: 'AMB' });
+    expect(result).toEqual({ clinicalUnitId: 'org-amb', clinicalUnit: 'Ambulatorio', unitAcronym: 'AMB' });
   });
 
-  it('falls back to a normalized clinicalUnit name when no matching unit document exists', async () => {
+  it('falls back to a normalized clinicalUnit name when no matching organization exists', async () => {
     const db = makeFakeDb({
-      clinical_units: makeFakeCollection({ findOne: vi.fn().mockResolvedValue(null) })
+      organizations: makeFakeCollection({ findOne: vi.fn().mockResolvedValue(null) })
     });
     const result = await patientService.resolveClinicalUnitSnapshot(db, { clinicalUnit: '  new unit  ' });
     expect(result.clinicalUnitId).toBeNull();

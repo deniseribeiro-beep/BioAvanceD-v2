@@ -45,45 +45,45 @@ describe('PatientService.resolveClinicalUnitSnapshot', () => {
     expect(result).toEqual({ clinicalUnitId: null, clinicalUnit: null, unitAcronym: null });
   });
 
-  it('throws when clinicalUnitId is not a valid ObjectId and no clinicalUnit name is given', async () => {
-    const db = makeFakeDb({});
+  it('throws when clinicalUnitId does not resolve to an organization and no clinicalUnit name is given', async () => {
+    const db = makeFakeDb({ organizations: makeFakeCollection({ findOne: vi.fn().mockResolvedValue(null) }) });
     await expect(
-      patientService.resolveClinicalUnitSnapshot(db, { clinicalUnitId: 'not-an-object-id' })
-    ).rejects.toThrow('clinicalUnitId inválido');
+      patientService.resolveClinicalUnitSnapshot(db, { clinicalUnitId: 'not-an-organization-id' })
+    ).rejects.toThrow('Unidade clínica não encontrada');
   });
 
-  it('resolves by valid ObjectId when the clinical unit exists', async () => {
-    const id = new ObjectId();
-    const clinicalUnitsCollection = makeFakeCollection({
-      findOne: vi.fn().mockResolvedValue({ _id: id, name: 'UTI Central', acronym: '' })
+  it('resolves by organizationId when the organization exists', async () => {
+    const id = new ObjectId().toString();
+    const organizationsCollection = makeFakeCollection({
+      findOne: vi.fn().mockResolvedValue({ organizationId: id, officialName: 'UTI Central', acronym: '' })
     });
-    const db = makeFakeDb({ clinical_units: clinicalUnitsCollection });
+    const db = makeFakeDb({ organizations: organizationsCollection });
 
-    const result = await patientService.resolveClinicalUnitSnapshot(db, { clinicalUnitId: id.toString() });
+    const result = await patientService.resolveClinicalUnitSnapshot(db, { clinicalUnitId: id });
 
-    expect(result.clinicalUnitId).toBe(id.toString());
+    expect(result.clinicalUnitId).toBe(id);
     expect(result.clinicalUnit).toBe('UTI Central');
     expect(result.unitAcronym).toBeTruthy();
   });
 
-  it('throws when a valid ObjectId does not match any clinical unit', async () => {
-    const id = new ObjectId();
-    const clinicalUnitsCollection = makeFakeCollection({ findOne: vi.fn().mockResolvedValue(null) });
-    const db = makeFakeDb({ clinical_units: clinicalUnitsCollection });
+  it('throws when a clinicalUnitId does not match any organization', async () => {
+    const id = new ObjectId().toString();
+    const organizationsCollection = makeFakeCollection({ findOne: vi.fn().mockResolvedValue(null) });
+    const db = makeFakeDb({ organizations: organizationsCollection });
 
     await expect(
-      patientService.resolveClinicalUnitSnapshot(db, { clinicalUnitId: id.toString() })
+      patientService.resolveClinicalUnitSnapshot(db, { clinicalUnitId: id })
     ).rejects.toThrow('Unidade clínica não encontrada');
   });
 
-  it('falls back to the clinicalUnit name lookup when clinicalUnitId is invalid but a name is provided', async () => {
-    const clinicalUnitsCollection = makeFakeCollection({
-      findOne: vi.fn().mockResolvedValue({ _id: 'x1', name: 'UTI-B', acronym: 'UB' })
+  it('falls back to the clinicalUnit name lookup when clinicalUnitId does not resolve but a name is provided', async () => {
+    const organizationsCollection = makeFakeCollection({
+      findOne: vi.fn().mockResolvedValue({ organizationId: 'x1', officialName: 'UTI-B', acronym: 'UB' })
     });
-    const db = makeFakeDb({ clinical_units: clinicalUnitsCollection });
+    const db = makeFakeDb({ organizations: organizationsCollection });
 
     const result = await patientService.resolveClinicalUnitSnapshot(db, {
-      clinicalUnitId: 'not-an-object-id',
+      clinicalUnitId: 'not-an-organization-id',
       clinicalUnit: 'uti-b'
     });
 
@@ -128,12 +128,12 @@ describe('PatientService.resolveClinicalUnitSnapshot', () => {
 
     await expect(
       patientService.resolveClinicalUnitSnapshot(db, { clinicalUnitId: 'a1b2c3d4-e5f6-4789-a0b1-c2d3e4f5a6b7' })
-    ).rejects.toThrow('clinicalUnitId inválido');
+    ).rejects.toThrow('Unidade clínica não encontrada');
   });
 
-  it('falls back to a normalized-name-only snapshot when no clinical unit matches by name', async () => {
-    const clinicalUnitsCollection = makeFakeCollection({ findOne: vi.fn().mockResolvedValue(null) });
-    const db = makeFakeDb({ clinical_units: clinicalUnitsCollection });
+  it('falls back to a normalized-name-only snapshot when no organization matches by name', async () => {
+    const organizationsCollection = makeFakeCollection({ findOne: vi.fn().mockResolvedValue(null) });
+    const db = makeFakeDb({ organizations: organizationsCollection });
 
     const result = await patientService.resolveClinicalUnitSnapshot(db, { clinicalUnit: 'nova unidade' });
 
