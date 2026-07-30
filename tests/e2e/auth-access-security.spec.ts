@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { realLogin, realAuthLogin } from './helpers/realAuth';
 import { watchAuditTrail, assertAuditEventRecorded } from './helpers/assertAuditEvent';
+import { completeFirstLoginMfa } from './helpers/completeFirstLoginMfa';
 
 // Real backend + real frontend only — see backend-integration.spec.ts for the
 // same skip rationale. Run via `npm run test:e2e:docker` against the compose
@@ -108,6 +109,16 @@ test.describe('Dashboard & authorization (RF002) — real backend', () => {
       headers: { Authorization: `Bearer ${tecnicoTempToken}` },
     });
     expect(forbiddenListUsers.status()).toBe(401);
+
+    // Stronger proof (#335): complete the Técnico's first-login MFA to get
+    // a genuine non-admin session (see #293's completeFirstLoginMfa), and
+    // confirm the backend's RBAC gate itself refuses it with a real 403 —
+    // not just the setup-only tempToken's 401 above.
+    const tecnicoSession = await completeFirstLoginMfa(request, apiBaseURL!, username, 'Tecnico@123');
+    const forbiddenListUsersRbac = await request.get(`${apiBaseURL}/api/users`, {
+      headers: { Authorization: `Bearer ${tecnicoSession.token}` },
+    });
+    expect(forbiddenListUsersRbac.status()).toBe(403);
 
     // Criterion 3, frontend half: Administrador reaches the same console
     // through the real UI (RF001's happy path already proves the login leg;
@@ -217,5 +228,22 @@ test.describe('User management (RF003) — real backend', () => {
     // 403 the RBAC gate would otherwise apply to a real Técnico session —
     // either way the backend refuses on its own merits, per criterion 5.
     expect(forbiddenRegister.status()).toBe(401);
+
+    // Stronger proof (#335): complete the Técnico's first-login MFA to get
+    // a genuine non-admin session, and confirm createUser's RBAC gate
+    // itself refuses it with a real 403 — not just the tempToken's 401.
+    const tecnicoSession = await completeFirstLoginMfa(request, apiBaseURL!, tecnicoUsername, 'Tecnico@123');
+    const forbiddenRegisterRbac = await request.post(`${apiBaseURL}/api/users/register`, {
+      headers: { Authorization: `Bearer ${tecnicoSession.token}` },
+      data: {
+        name: 'Should Not Be Created (RBAC)',
+        email: `blocked.rbac.${Date.now()}@example.com`,
+        username: `blocked.rbac.${Date.now()}`,
+        password: 'Blocked@123',
+        accessType: 2,
+        roleName: 'Técnico',
+      },
+    });
+    expect(forbiddenRegisterRbac.status()).toBe(403);
   });
 });
