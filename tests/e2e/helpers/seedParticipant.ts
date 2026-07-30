@@ -134,6 +134,44 @@ export async function createRealParticipant(
  * createRealParticipant has none by default, so operations against
  * their specimens stay blocked (AC#6) until this is called.
  */
+/**
+ * RF004 AC#3 (#295) fixtures: seeds a real Study/Protocol/Collection
+ * document directly against Mongo — there's no CRUD API for any of the
+ * three yet (only sample.service.js's createSample resolves them by
+ * business id), so specs proving the linkage-must-resolve requirement
+ * seed the referent directly, the same way seedOperationalLocation does
+ * for locations/sensors.
+ */
+export async function seedStudy(studyId: string): Promise<void> {
+  const db = await getDb();
+  await db.collection('studies').insertOne({
+    studyId,
+    studyTitle: `RF004 e2e study ${studyId}`,
+    studyStatus: 'active',
+    createdAt: new Date(),
+  });
+}
+
+export async function seedProtocol(protocolId: string): Promise<void> {
+  const db = await getDb();
+  await db.collection('protocols').insertOne({
+    protocolId,
+    protocolName: `RF004 e2e protocol ${protocolId}`,
+    approvalStatus: 'approved',
+    createdAt: new Date(),
+  });
+}
+
+export async function seedCollectionEntity(collectionId: string): Promise<void> {
+  const db = await getDb();
+  await db.collection('collections').insertOne({
+    collectionId,
+    collectionName: `RF004 e2e collection ${collectionId}`,
+    collectionStatus: 'active',
+    createdAt: new Date(),
+  });
+}
+
 export async function seedActiveConsent(
   participantId: string,
   responses: Record<string, boolean> = {}

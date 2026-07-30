@@ -143,6 +143,30 @@ class SampleService {
         throw new Error('Quantidade deve ser um número maior que zero (µL)');
       }
 
+      // RF004 AC#3 - vínculo com estudo, protocolo e coleção, quando aplicável:
+      // se o cliente informar studyId/protocolId/collectionId, cada um deve
+      // resolver a um documento real já cadastrado (não texto livre arbitrário).
+      if (sampleData.studyId !== undefined && sampleData.studyId !== null && sampleData.studyId !== '') {
+        const study = await db.collection('studies').findOne({ studyId: String(sampleData.studyId) });
+        if (!study) {
+          throw createSampleValidationError(`studyId ${sampleData.studyId} não encontrado`, 404);
+        }
+      }
+
+      if (sampleData.protocolId !== undefined && sampleData.protocolId !== null && sampleData.protocolId !== '') {
+        const protocol = await db.collection('protocols').findOne({ protocolId: String(sampleData.protocolId) });
+        if (!protocol) {
+          throw createSampleValidationError(`protocolId ${sampleData.protocolId} não encontrado`, 404);
+        }
+      }
+
+      if (sampleData.collectionId !== undefined && sampleData.collectionId !== null && sampleData.collectionId !== '') {
+        const collectionDoc = await db.collection('collections').findOne({ collectionId: String(sampleData.collectionId) });
+        if (!collectionDoc) {
+          throw createSampleValidationError(`collectionId ${sampleData.collectionId} não encontrado`, 404);
+        }
+      }
+
       const locationsCollection = db.collection('locations');
       const location = await locationsCollection.findOne({
         locationID: { $in: buildIdVariants(sampleData.locationID) }
