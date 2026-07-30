@@ -168,6 +168,15 @@ class SampleService {
         }
       }
 
+      // ELM-0128 - collectionSite (Reference(Organization)): quando informado,
+      // deve resolver a uma Organization real já cadastrada.
+      if (sampleData.collectionSite !== undefined && sampleData.collectionSite !== null && sampleData.collectionSite !== '') {
+        const organization = await db.collection('organizations').findOne({ organizationId: String(sampleData.collectionSite) });
+        if (!organization) {
+          throw createSampleValidationError(`collectionSite ${sampleData.collectionSite} não encontrado`, 404);
+        }
+      }
+
       const locationsCollection = db.collection('locations');
       const location = await locationsCollection.findOne({
         locationID: { $in: buildIdVariants(sampleData.locationID) }
