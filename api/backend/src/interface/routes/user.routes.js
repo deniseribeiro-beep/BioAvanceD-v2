@@ -312,6 +312,14 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
     delete req.body.mfaFailedAttempts;
     delete req.body.mfaLocked;
 
+    // Normaliza vigência do papel (RF003 AC#3): strings ISO viram Date
+    if (req.body.roleValidFrom !== undefined) {
+      req.body.roleValidFrom = req.body.roleValidFrom ? new Date(req.body.roleValidFrom) : null;
+    }
+    if (req.body.roleValidUntil !== undefined) {
+      req.body.roleValidUntil = req.body.roleValidUntil ? new Date(req.body.roleValidUntil) : null;
+    }
+
     // Mapeia roleName para accessType se necessário
     if (req.body.roleName && !req.body.accessType) {
       req.body.accessType = authService.getAccessTypeForRole(req.body.roleName);

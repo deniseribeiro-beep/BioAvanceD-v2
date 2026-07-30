@@ -1,82 +1,84 @@
 # HANDOFF
 
-**Written:** 2026-07-30, a `fix-bugs` session on
-`feature/docker-e2e-backend-integration`, Docker on (user-confirmed at
-session start, though this fix didn't end up needing it — native tests
-were sufficient to prove it).
+**Written:** 2026-07-30, a `resolve-issue` session on
+`feature/docker-e2e-backend-integration`, reconciling the long-open
+two-branch divergence as part of picking up #339.
 
 ## What happened this session
 
-1. Read the prior HANDOFF.md (the #337 build-loop session's, which closed
-   #337/#333 — RF003 fully covered). Dennis asked to pick up #338.
-2. #338 (session tokens issued within the same second were
-   byte-identical, so revoking one session revoked both): root cause was
-   `auth.service.js`'s `issueAccessToken`/`issueRefreshToken` JWT
-   payloads having no per-login nonce, combined with `iat`/`exp` being
-   second-granularity — two logins for the same user in the same
-   wall-clock second signed identical tokens, which collided in
-   `session.service.js`'s `hashToken`-keyed session storage.
-3. Reproduced first: added failing unit tests to
-   `auth.service.unit.test.js` asserting two same-user token issuances
-   are distinct and each carries a unique `jti` — confirmed they failed
-   against the unfixed code.
-4. Fixed: added a random UUID `jti` claim to both the access and refresh
-   token payloads in `auth.service.js` (using `crypto.randomUUID()`).
-   This is the exact direction the issue itself suggested. No session
-   storage changes needed — the hash now differs because the payload
-   does.
-5. Verified: targeted run (`auth.service.unit.test.js`,
-   `session.service.unit.test.js`, `auth.routes.branch-coverage.test.js`,
-   `auth.routes.contract.test.js`, `auth-session-revocation.test.js`,
-   `auth.api.test.js`) — 97 tests green on the merged tree (140 including
-   the fix-branch-only run before merge).
-6. Committed (`16d4167b`) on `fix/338-jwt-jti-collision` (branched off
-   `feature/docker-e2e-backend-integration`), pushed, commented the hash
-   on #338.
-7. Merged `fix/338-jwt-jti-collision` into
-   `feature/docker-e2e-backend-integration` (`9250feb3`), re-ran targeted
-   tests on the merged tree, pushed. Deleted the fix branch (local +
-   remote).
-8. Closed **#338**, referencing the merge commit.
-9. wrap-up audit: no scope violations (only `auth.service.js` + its test
-   touched), no lazy fixes, no stale instructions, no permission denials,
-   no judgment calls needed — the fix matched the issue's own suggested
-   direction and fully resolved it (no residual gap, no new issue filed).
+1. Dennis asked to pick up #339 (institutional-scope enforcement).
+   Per #339's own text, this needed Dennis's product call first: which
+   resources should `institutionalScope` constrain, and for which
+   roles. Asked — answer: all of samples/patients/reports/dashboards,
+   for all non-superadmin roles.
+2. Sized the resulting build via a research-only Explore agent (per
+   `agent-delegation`) — its report claimed `institutionalScope` didn't
+   exist anywhere in the tree, contradicting #339's own text. Verified
+   directly (`git grep`) rather than trusting the claim: confirmed the
+   field really was absent from `feature/docker-e2e-backend-integration`,
+   but traced it to `test/e2e-real-backend-foundation`'s commit
+   `7a1de69f` (the #337 build-loop session) — the two-branch divergence
+   flagged in every prior HANDOFF since #333, never reconciled.
+3. Asked Dennis how to proceed given the divergence; he chose:
+   reconcile the branches first, then continue #339 on the merged base.
+4. Diffed the two branches (`git merge-tree`) before merging: only
+   `HANDOFF.md` had real conflicts (both sessions rewrote it); every
+   product/doc file (`auth.js`'s `roleValidUntil` gate,
+   `user.routes.js`'s `PUT /:id` normalization, `.claude/skills-manifest.txt`,
+   `E2E_TRACEABILITY_PLAN.md`'s RF003 row) merged cleanly.
+5. Merged `test/e2e-real-backend-foundation` into
+   `feature/docker-e2e-backend-integration`, resolving `HANDOFF.md` by
+   hand (this rewrite, folding both sessions' history in rather than
+   picking one side).
+6. **Not yet done this session:** run targeted tests on the merged
+   tree, push, then resume #339's actual enforcement work (add
+   institution-like fields to Sample/Patient/report models, build the
+   filter-injection middleware, wire it into
+   `sample.service.js`/`patient.service.js`/`reports.routes.js`;
+   dashboards inherit automatically per the sizing research since they
+   only compose those same endpoints).
 
 ## Repo state
 
-- `feature/docker-e2e-backend-integration` at `9250feb3`, pushed. Carries
-  the #338 fix plus everything from the prior #324 session.
-- `test/e2e-real-backend-foundation` (from the prior two sessions, at
-  `7a1de69f`) still not reconciled with this branch — the two-branch
-  divergence noted in prior HANDOFFs is still open; nobody's done the
-  merge pass yet.
+- `feature/docker-e2e-backend-integration` now carries both prior
+  divergent histories (#324/#338 plus #322/#333/#337's RF003 work,
+  including `institutionalScope`/`roleValidFrom`/`roleValidUntil` on
+  `User.js` and the `authenticate` middleware's expiry check) —
+  **pending**: post-merge targeted test run and push (interrupted by
+  context handling this session; pick up from here).
+- `test/e2e-real-backend-foundation` at `7a1de69f` — fully merged
+  forward now; safe to delete once the merge is pushed and confirmed
+  (not yet done).
 - `main` still not touched, still frozen.
-- **#338 is closed.**
-- **#339** (from the #337 session, still open): `institutionalScope` is
-  stored/validated/returned but has no enforcement anywhere — needs
-  Dennis's product call on which resources/roles it should constrain
-  before a build-loop slice could implement it.
+- **#333, #337, #338 closed** (from prior sessions). **#339 still
+  open** — product call now made (see above), enforcement not yet
+  built.
 - **#336** (from the #324 session, still open): legacy synchronous
   `POST /api/import/fhir` looks superseded by the FHIR staging pipeline,
   needs Dennis/Denise reconciliation, non-blocking.
 
 ## Recommended next steps
 
-None queued — Dennis hasn't named a specific next issue. Candidates,
-unranked: #339 (institutional-scope enforcement, needs Dennis's product
-call first, then `build-loop`-shaped, or `resolve-issue` first to get
-that call); reconciling the `test/e2e-real-backend-foundation` /
-`feature/docker-e2e-backend-integration` divergence; #325/#326
-(RF020/RF021) still blocked on #320's CRUD gap; #334 (RF007 remainder,
-divide-and-conquer-shaped); #336 (legacy FHIR endpoint reconciliation).
+1. Finish this session's merge: run the targeted test suite on the
+   merged tree (at minimum everything touching `User.js`, `auth.js`,
+   `user.routes.js`, session/auth tests, plus the RF003
+   `auth-access-security.spec.ts` e2e spec if Docker is on), then push.
+2. Resume #339 with `build-loop`: add institution fields to
+   Sample/Patient/report models, build the scope-filter middleware
+   (no existing precedent to extend — `rbac.js`'s `allowedRoles` gate
+   is the closest analogue but only allow/deny, doesn't inject query
+   filters), wire into the three services, confirm dashboards inherit
+   the filtering for free.
+3. Once #339 lands: #325/#326 (RF020/RF021, blocked on #320's CRUD
+   gap), #334 (RF007 remainder, divide-and-conquer-shaped), #336
+   (legacy FHIR endpoint reconciliation).
+
 Tracking issue #331 covers integrating all Wave 2 specs onto
 `feature/docker-e2e-backend-integration` once they land.
 
 ## Which skills to use
 
-`build-loop` for #339 once Dennis has triaged which resources/roles
-institutional scope should constrain (or `resolve-issue` first, to get
-that call from him). `build-loop` for #325/#326 once #320's CRUD gap is
-resolved. `ship-integration-branch` only once Wave 2 is fully landed and
-Dennis explicitly asks to graduate to `main`.
+`build-loop` for the rest of #339 (product call now made — see above).
+`build-loop` for #325/#326 once #320's CRUD gap is resolved.
+`ship-integration-branch` only once Wave 2 is fully landed and Dennis
+explicitly asks to graduate to `main`.

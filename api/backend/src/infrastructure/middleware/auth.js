@@ -120,6 +120,22 @@ const authenticate = async (req, res, next) => {
 
         // Atualiza última atividade
         await sessionService.updateActivity(db, token);
+
+        // RF003 AC#3 - o papel atribuído pode ter vigência (validade); uma
+        // sessão sob um papel já expirado é recusada mesmo com token/sessão
+        // válidos, já que a expiração vive no documento do usuário, não no JWT.
+        const { ObjectId } = require('mongodb');
+        if (decoded.userID && ObjectId.isValid(decoded.userID)) {
+          const currentUser = await db.collection('users').findOne({ _id: new ObjectId(decoded.userID) });
+          if (currentUser?.roleValidUntil && new Date(currentUser.roleValidUntil) <= new Date()) {
+            return res.status(403).json({
+              success: false,
+              error: 'Papel expirado',
+              message: 'A vigência do papel atribuído a este usuário expirou. Contate um administrador.',
+              roleExpired: true
+            });
+          }
+        }
       }
       
       // Verifica se é rota de setup MFA (permite token temporário)

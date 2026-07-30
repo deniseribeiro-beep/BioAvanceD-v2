@@ -75,6 +75,29 @@ class UserModel {
       errors.push('status deve ser: active/Ativo, inactive/Inativo, blocked/Bloqueado ou suspended/Suspenso');
     }
 
+    // RF003 AC#3 - vigência (validade) do papel atribuído
+    if (data.roleValidFrom !== undefined && data.roleValidFrom !== null && isNaN(new Date(data.roleValidFrom))) {
+      errors.push('roleValidFrom deve ser uma data válida');
+    }
+    if (data.roleValidUntil !== undefined && data.roleValidUntil !== null && isNaN(new Date(data.roleValidUntil))) {
+      errors.push('roleValidUntil deve ser uma data válida');
+    }
+    if (
+      data.roleValidFrom && data.roleValidUntil &&
+      !isNaN(new Date(data.roleValidFrom)) && !isNaN(new Date(data.roleValidUntil)) &&
+      new Date(data.roleValidUntil) <= new Date(data.roleValidFrom)
+    ) {
+      errors.push('roleValidUntil deve ser posterior a roleValidFrom');
+    }
+
+    // RF003 AC#3 - escopo institucional do papel atribuído
+    if (
+      data.institutionalScope !== undefined && data.institutionalScope !== null &&
+      (!Array.isArray(data.institutionalScope) || data.institutionalScope.some((s) => typeof s !== 'string'))
+    ) {
+      errors.push('institutionalScope deve ser um array de strings');
+    }
+
     return {
       isValid: errors.length === 0,
       errors
@@ -103,7 +126,10 @@ class UserModel {
       passwordHistory: Array.isArray(data.passwordHistory) ? data.passwordHistory : [],
       lastPasswordChange: data.lastPasswordChange || new Date(),
       forceReset: data.forceReset || false,
-      failedLoginAttempts: data.failedLoginAttempts || 0
+      failedLoginAttempts: data.failedLoginAttempts || 0,
+      roleValidFrom: data.roleValidFrom ? new Date(data.roleValidFrom) : null,
+      roleValidUntil: data.roleValidUntil ? new Date(data.roleValidUntil) : null,
+      institutionalScope: Array.isArray(data.institutionalScope) ? data.institutionalScope : []
     };
   }
 
