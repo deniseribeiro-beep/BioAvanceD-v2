@@ -22,3 +22,6 @@ hooks/
 agents/
 settings.json
 skills/build-loop/
+skills/unit-test-loop/
+skills/e2e-test-loop/
+skills/vitest-specs/
