@@ -36,7 +36,12 @@ This document defines the canonical v1 runtime contract for BioAvanceD.
 - `clinicalUnitId` (migrating to Reference(Organization), per dictionary
   P1X-0356 — accepts an `organizationId` reference as of #351; the legacy
   free-text `clinicalUnit`/`unitAcronym` + `clinicalUnits`-collection
-  lookup is still supported pending #352)
+  lookup is still supported pending #352. A one-time data migration,
+  `migrateClinicalUnitOrganizations.js` (#352), resolves existing
+  free-text/ObjectId values to real `Organization` docs so historical
+  patient records aren't left behind once the legacy read paths are
+  retired — the service/controller/route retirement itself is still
+  open, tracked in #352's follow-up)
 
 ### Specimen
 
