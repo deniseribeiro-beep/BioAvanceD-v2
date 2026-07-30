@@ -1,5 +1,5 @@
 const PatientModel = require('../models/Patient');
-const ClinicalUnitModel = require('../models/ClinicalUnit');
+const OrganizationModel = require('../models/Organization');
 const logger = require('../utils/logger');
 const { generateUniqueParticipantId, sanitizePatientForLogs } = require('../utils/patientAnonymization');
 const { encryptValue, decryptValue } = require('../utils/fieldEncryption');
@@ -172,41 +172,25 @@ class PatientService {
       };
     }
 
-    const { ObjectId } = require('mongodb');
-    const clinicalUnitsCollection = await getCollection(db, 'clinicalUnits');
+    const organizationsCollection = await getCollection(db, 'organizations');
 
     if (normalizedClinicalUnitId) {
-      if (!ObjectId.isValid(normalizedClinicalUnitId)) {
-        // P1X-0356: clinicalUnitId is migrating from a clinicalUnits ObjectId
-        // to a Reference(Organization). A non-ObjectId-shaped id is tried
-        // against organizations first so both forms resolve during the
-        // transition; the legacy name-based fallback below still applies.
-        const organizationsCollection = await getCollection(db, 'organizations');
-        const organization = await organizationsCollection.findOne({ organizationId: normalizedClinicalUnitId });
-        if (organization) {
-          const resolvedName = String(organization.officialName || '').trim();
-          return {
-            clinicalUnitId: String(organization.organizationId),
-            clinicalUnit: resolvedName || null,
-            unitAcronym: String(organization.acronym || '').trim() || PatientModel.fillAcronym(resolvedName)
-          };
-        }
-
-        if (!normalizedClinicalUnitName) {
-          throw new Error('clinicalUnitId inválido');
-        }
-      } else {
-        const clinicalUnitById = await clinicalUnitsCollection.findOne({ _id: new ObjectId(normalizedClinicalUnitId) });
-        if (!clinicalUnitById) {
-          throw new Error('Unidade clínica não encontrada');
-        }
-
-        const resolvedName = String(clinicalUnitById.name || '').trim();
+      // P1X-0356: clinicalUnitId now references Organization.organizationId
+      // directly (the legacy clinicalUnits ObjectId lookup was retired in
+      // #353, once migrateClinicalUnitOrganizations.js resolved existing
+      // patient data to Organization references — see #352).
+      const organization = await organizationsCollection.findOne({ organizationId: normalizedClinicalUnitId });
+      if (organization) {
+        const resolvedName = String(organization.officialName || '').trim();
         return {
-          clinicalUnitId: String(clinicalUnitById._id),
+          clinicalUnitId: String(organization.organizationId),
           clinicalUnit: resolvedName || null,
-          unitAcronym: String(clinicalUnitById.acronym || '').trim() || PatientModel.fillAcronym(resolvedName)
+          unitAcronym: String(organization.acronym || '').trim() || PatientModel.fillAcronym(resolvedName)
         };
+      }
+
+      if (!normalizedClinicalUnitName) {
+        throw new Error('Unidade clínica não encontrada');
       }
     }
 
@@ -218,15 +202,15 @@ class PatientService {
       };
     }
 
-    const normalizedName = ClinicalUnitModel.normalizeName(normalizedClinicalUnitName);
-    const clinicalUnitByName = await clinicalUnitsCollection.findOne({ normalizedName });
+    const normalizedName = OrganizationModel.normalizeName(normalizedClinicalUnitName);
+    const organizationByName = await organizationsCollection.findOne({ normalizedName });
 
-    if (clinicalUnitByName) {
-      const resolvedName = String(clinicalUnitByName.name || '').trim();
+    if (organizationByName) {
+      const resolvedName = String(organizationByName.officialName || '').trim();
       return {
-        clinicalUnitId: String(clinicalUnitByName._id),
+        clinicalUnitId: String(organizationByName.organizationId),
         clinicalUnit: resolvedName || null,
-        unitAcronym: String(clinicalUnitByName.acronym || '').trim() || PatientModel.fillAcronym(resolvedName)
+        unitAcronym: String(organizationByName.acronym || '').trim() || PatientModel.fillAcronym(resolvedName)
       };
     }
 

@@ -90,12 +90,12 @@ describe('PatientService.createPatient additional branches', () => {
     const consentTemplatesCollection = makeFakeCollection({
       findOne: vi.fn().mockResolvedValue({ _id: '507f1f77bcf86cd799439011' })
     });
-    const clinicalUnitsCollection = makeFakeCollection({ findOne: vi.fn().mockResolvedValue(null) });
+    const organizationsCollection = makeFakeCollection({ findOne: vi.fn().mockResolvedValue(null) });
     const patientsCollection = makeFakeCollection();
     const db = makeFakeDb({
       patients: patientsCollection,
       consent_templates: consentTemplatesCollection,
-      clinicalUnits: clinicalUnitsCollection
+      organizations: organizationsCollection
     });
 
     const result = await patientService.createPatient(db, validPatientData({ clinicalUnit: 'unidade de terapia intensiva' }), {
@@ -182,14 +182,14 @@ describe('PatientService.updatePatient additional branches', () => {
   });
 
   it('resolves and merges a clinicalUnit snapshot into updateData', async () => {
-    const clinicalUnitsCollection = makeFakeCollection({
-      findOne: vi.fn().mockResolvedValue({ _id: 'unit-1', name: 'UTI Adulto', acronym: 'UTIA' })
+    const organizationsCollection = makeFakeCollection({
+      findOne: vi.fn().mockResolvedValue({ organizationId: 'unit-1', officialName: 'UTI Adulto', acronym: 'UTIA' })
     });
     const patientsCollection = makeFakeCollection({
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
       findOne: vi.fn().mockResolvedValue({ patientID: '12345678' })
     });
-    const db = makeFakeDb({ patients: patientsCollection, clinical_units: clinicalUnitsCollection });
+    const db = makeFakeDb({ patients: patientsCollection, organizations: organizationsCollection });
     const tsSpy = vi.spyOn(patientBiomarkerTimeseriesService, 'writePatientBiomarkers').mockResolvedValue(undefined);
 
     await patientService.updatePatient(db, '12345678', { clinicalUnit: 'UTI Adulto' });
