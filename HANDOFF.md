@@ -1,81 +1,85 @@
 # HANDOFF
 
 **Written:** 2026-07-30, a continuation session on
-`feature/docker-e2e-backend-integration`, picking up right where the
-prior session's HANDOFF left off — #343 (Organization entity,
-foundational for institutional-scope enforcement) needed a
-`divide-and-conquer` pass and a product call with Dennis before it was
-pickup-ready.
+`feature/docker-e2e-backend-integration`, picking up the prior session's
+recommended next step: #346 (Organization entity), the first of the
+#343 divide-and-conquer split (#346 → #347 → #348).
 
 ## What happened this session
 
-1. Discussed the #343 migration approach with Dennis: since no
-   production deployment exists yet, he confirmed a **hard cutover**
-   (no legacy-alias/dual-write transition period) for migrating
-   `User.institution`/`institutionalScope` off free text — contrast
-   with the dictionary's own `institutionLegacy` guidance, which is
-   aimed at post-deployment migrations, not pre-launch ones.
-2. Ran `divide-and-conquer` on #343 per that product call. Checked dev/
-   test fixtures first: only one Playwright spec
-   (`tests/e2e/auth-access-security.spec.ts`) references
-   `institution`/`institutionalScope`, so no broad fixture-preservation
-   concern. No project board in this repo (no `local-env` overlay), so
-   no boarding step.
-3. Filed the split, confirmed with Dennis before filing:
-   - **#346** — Organization entity (foundational: model/collection +
-     create/seed path per dict-02 ELM-0024..0031 fields —
-     `organizationId`, `officialName`, `acronym`, `organizationType`,
-     `countryCode`, `website`, `contact`, `qualityStandards`).
-   - **#347** — depends on #346. User migration: one-time script
-     resolving+deduping distinct `institution`/`institutionalScope`
-     strings into `Organization` docs, rewriting `User` to
-     `organizationId`/`organizationIds`, dropping the old string
-     fields (hard cutover, no back-compat read path). Also lists the
-     other `institution`/`clinicalUnit` consumers found via grep
-     (13 files) to audit, and flags the one Playwright spec to update.
-   - **#348** — depends on #346. Sample/Patient reference wiring:
-     `Sample.collectionSite` (new field, `Reference(Organization)` per
-     ELM-0128) and upgrading `Patient.clinicalUnitId` from its current
-     free-text/`clinicalUnits`-collection lookup to a real
-     `Organization` reference.
-4. Re-pointed **#340/#341** (institutional-scope enforcement, already
-   filed from the prior session) from depending on #343 to depending on
-   #348 — they need real reference fields to filter on, which #348
-   delivers (not just the entity from #346, and not the User-side
-   migration from #347).
-5. Closed **#343** as the tracking issue, comment lists #346/#347/#348
-   by number and notes #340/#341 were re-pointed to #348. No code
-   shipped against #343 itself, consistent with last session's note
-   that it was closed against a documented-requirement deliverable.
+1. Ran `build-loop` on #346 (Organization entity — foundational,
+   unblocked). Branched `test/organization-entity` off
+   `feature/docker-e2e-backend-integration`.
+2. Implemented per dict-02 ELM-0024..0031:
+   - `api/backend/src/models/Organization.js` — `OrganizationModel`
+     (`validate`/`create`), same shape as the existing `ClinicalUnit`
+     model. Fields: `organizationId` (uuid), `officialName`,
+     `normalizedName`, `acronym`, `organizationType` (enum
+     biobank/university/hospital/laboratory/network), `countryCode`
+     (ISO 3166-1 alpha-2), `website`, `contact`, `qualityStandards[]`.
+   - `api/backend/src/interface/routes/organization.routes.js` —
+     `GET /api/organizations` (authenticated, any role),
+     `POST /api/organizations` (new `manageOrganizations` RBAC
+     permission, Administrador (4) only).
+   - Wired: `collections.js` (`organizations` canonical collection key),
+     `rbac.js` (`manageOrganizations: [4]`), `app.js` (route mount).
+3. Tests (19 total, all passing):
+   - `tests/unit/Organization.model.test.js` — validate/create, native.
+   - `tests/integration/organization.api.test.js` — mocked-db route
+     test (401/403/400/201 paths), native, per-iteration tier.
+   - Extended `tests/e2e/backend-integration.spec.ts` with a real
+     create+list round-trip against the actual Docker/Mongo stack —
+     this is the loop's proof-bar test, per Dennis's "Docker is on"
+     for the session.
+4. Brought up `npm run compose:up` (dev stack), hit the same two known
+   quirks from #342/#344 (backend has no healthcheck so `--wait` exits
+   1 though every container is actually healthy; fresh dev Mongo has no
+   admin user) — both already tracked, workarounds applied as
+   documented (ignore the `--wait` exit code once `docker ps` confirms
+   healthy; `docker exec ... createFirstAdmin.js` with the
+   `BOOTSTRAP_ADMIN_*` env vars). Ran the real-backend spec — 3/3
+   passed, including the new Organization test. Tore the stack down
+   afterward (`npm run compose:down`) per Dennis's go, so no dev
+   Mongo/admin state persists into the next session.
+5. Committed on `test/organization-entity`, merged into
+   `feature/docker-e2e-backend-integration` (merge commit `989ad7dc`),
+   deleted the merged branch. Closed **#346** with the merge hash and a
+   summary; noted #347/#348 are now unblocked.
 
 ## Repo state
 
-- `feature/docker-e2e-backend-integration` unchanged — this session
-  shipped no commits, only issue triage/splitting (same as the prior
-  session). Nothing to push.
-- Docker dev stack status not re-verified this session — per the prior
-  HANDOFF it was left **running** with a manually-bootstrapped
-  `admin`/`Admin@123` account in `bioavanced_dev` Mongo (in-memory/
-  volume-only, from the #344 workaround). Check with `docker ps` /
-  `npm run compose:down` before assuming it's still up.
-- `test/e2e-real-backend-foundation` — still not deleted; Dennis hasn't
-  confirmed yet, still safe to delete (fully merged forward).
-- **#343 closed** this session (tracking issue, no code). **#346, #347,
-  #348 open** — the actual foundational/migration/wiring split, in that
-  dependency order. **#340, #341 open**, re-pointed to depend on #348.
-  **#342, #344, #345 open** (findings from the prior session, all
-  `test-branch`-labeled, none blocking). **#336** (FHIR legacy
-  reconciliation) still open, unrelated, non-blocking.
+- `feature/docker-e2e-backend-integration` has one new merge commit
+  (`989ad7dc`) on top of prior HEAD, not yet pushed — 2 commits ahead
+  of `origin/feature/docker-e2e-backend-integration` (this session's +
+  whatever was already ahead). Nothing pushed this session.
+- Docker dev stack: **down** — `compose:down` was run at the end of
+  this session (includes `--volumes`), so a future session starting it
+  fresh will hit #344 (no admin user) again and needs the same
+  bootstrap workaround; #342 (`--wait` healthcheck) too.
+- `test/e2e-real-backend-foundation` — still not deleted, still safe to
+  delete (fully merged forward), Dennis hasn't confirmed.
+- **#346 closed** this session, merged. **#347, #348 open** (User
+  migration, Sample/Patient reference wiring — both now genuinely
+  unblocked, #347 first per the dependency chain in #343's original
+  split). **#340, #341 open**, depend on #348 (not #347) since they
+  need real reference fields to filter on. **#342, #344, #345 open**
+  (infra findings, `test-branch`-labeled, non-blocking — #342/#344 hit
+  again this session, still just workarounds, not fixed). **#336** (FHIR
+  legacy reconciliation) still open, unrelated, non-blocking.
 
 ## Recommended next steps
 
-#346 (Organization entity) is genuinely pickup-ready now — no further
-product call needed, the field list comes straight from the dictionary.
-It's the natural next `build-loop` iteration. #347 and #348 both depend
-on it and shouldn't start first.
+#347 (User migration: resolve/dedupe `institution`/`institutionalScope`
+strings into `Organization` docs, rewrite `User` to
+`organizationId`/`organizationIds`, hard cutover) is the natural next
+`build-loop` iteration — it depends on #346, which is now done. Per the
+original split, it also carries an audit of the other 13
+`institution`/`clinicalUnit`-consuming files and updating the one
+Playwright spec (`tests/e2e/auth-access-security.spec.ts`) that
+references `institution`/`institutionalScope`.
 
 ## Which skills to use
 
-`build-loop` for #346 once picked up (spec exists in dict-02_
-DICIONARIO.md, code doesn't yet). `ship-integration-branch` only once
-Wave 2 is fully landed and Dennis explicitly asks to graduate to `main`.
+`build-loop` for #347 once picked up. `ship-integration-branch` only
+once the full #346→#347→#348 wave is landed and Dennis explicitly asks
+to graduate to `main`.
