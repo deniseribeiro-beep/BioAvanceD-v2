@@ -1,10 +1,42 @@
 # HANDOFF
 
 **Written:** 2026-07-30, a same-day continuation session on
-`feature/docker-e2e-backend-integration`, picking up #353 (the
-`clinicalUnits` service/controller/routes retirement split from #352).
+`feature/docker-e2e-backend-integration`. No code changes this session —
+applied `divide-and-conquer` to split #354 (the remainder of #353,
+`clinicalUnits` controller/routes retirement) into a dependency-ordered
+issue plan, since #354 itself already read as too-big-for-one-sitting.
 
 ## What happened this session
+
+1. Reviewed #354's body — it already named four sub-scopes (service
+   search/filter paths, controller allowlist, routes retirement, 3 test
+   files) inherited from the #353 split, with an implicit build order
+   (data-model decision first, then the layers that consume it).
+2. Filed that as an explicit dependency-ordered plan, confirmed with
+   Dennis before filing:
+   - **#355** — `patient.service.js`'s `query.clinicalUnit` regex and
+     `filters.clinicalUnit` exact-match paths: decide + implement
+     whether these need an Organization-based replacement now that
+     `clinicalUnit` is populated from `Organization.officialName`
+     (per `resolveClinicalUnitSnapshot`, `fd6f5e84`). Foundational,
+     depends on nothing.
+   - **#356** — `paciente.controller.js`'s
+     `clinicalUnitId`/`clinicalUnit`/`unitAcronym` allowlist. Depends
+     on #355.
+   - **#357** — `clinical-unit.routes.js` proxy-vs-retire decision.
+     Depends on #355, #356.
+   - **#358** — rewrite/confirm the 3 remaining test files
+     (`patient.model.unit.test.js`, `paciente.controller.test.js`,
+     `patients-integration.test.js`). Depends on #355–#357.
+3. Commented on #354 listing the four numbers, left it open as the
+   tracking issue per divide-and-conquer's close discipline (this was a
+   pure plan-split, not a delivered slice, so #354 itself doesn't close
+   yet — #358 landing is what closes it).
+4. No project board in use for this repo (checked for a
+   `divide-and-conquer/local-env/BioAvanceD-v2.md` overlay — none
+   exists), so no boarding step was needed.
+
+## Previous session (2026-07-30, earlier)
 
 1. Ran `build-loop` on #353. Read its full scope: retire
    `patient.service.js`'s legacy ObjectId/name-based `clinicalUnits`
@@ -73,27 +105,29 @@
   (`--wait` healthcheck), and the frontend-container manual-start quirk.
 - `test/e2e-real-backend-foundation` — still not deleted, still safe to
   delete (fully merged forward), Dennis hasn't confirmed.
-- **#353 closed** this session (service-layer slice only), merged.
-  **#354 open** (new this session — the controller allowlist, routes
-  retirement, remaining search/filter design, and 3-file test rewrite,
-  carried forward from #353). **#340, #341 open**, still blocked (now
-  transitively on #354). **#342, #344, #345 open** (infra findings,
-  `test-branch`-labeled, non-blocking, unchanged). **#349, #350 open**
-  (from the #347 session, unrelated). **#336** (FHIR legacy
-  reconciliation) still open, unrelated, non-blocking.
+- **#353 closed** (service-layer slice only), merged. **#354 open**,
+  tracking issue for the remainder of #353, now split (this session)
+  into **#355, #356, #357, #358** — all open, dependency-chained
+  (#355 → #356 → #357 → #358) per the divide-and-conquer comment on
+  #354. **#340, #341 open**, still blocked (now transitively on #358,
+  the last link in that chain). **#342, #344, #345 open** (infra
+  findings, `test-branch`-labeled, non-blocking, unchanged). **#349,
+  #350 open** (from the #347 session, unrelated). **#336** (FHIR
+  legacy reconciliation) still open, unrelated, non-blocking.
 
 ## Recommended next steps
 
-None queued explicitly by Dennis. #354 (the controller/routes retirement
-+ remaining test rewrites) is the natural next `build-loop` iteration if
-continuing this wave — smaller than the original #353 but still touches
-a live request-path (`paciente.controller.js`'s allowlist) and a
-proxy-vs-retire architectural call for `clinical-unit.routes.js`; may
-still warrant its own `divide-and-conquer` split (controller allowlist
-first, routes decision second).
+None queued explicitly by Dennis. **#355** (`patient.service.js`'s
+`clinicalUnit` search/filter path decision) is the natural next
+`build-loop` iteration — it's the foundational link, unblocks #356 and
+#357, and is scoped to one file's two code paths plus a design decision
+(Organization-based replacement vs. leave-as-is), likely small enough
+for one sitting without needing a further split.
 
 ## Which skills to use
 
-`build-loop` for #354 if picked up next.
-`ship-integration-branch` only once the full #346→#347→#348/#351/#352/#353
-(→#354) wave is landed and Dennis explicitly asks to graduate to `main`.
+`build-loop` for #355 if picked up next (re-run `divide-and-conquer`
+only if it turns out bigger than expected).
+`ship-integration-branch` only once the full #346→#347→#348/#351/#352/
+#353→(#355→#356→#357→#358) wave is landed and Dennis explicitly asks to
+graduate to `main`.
