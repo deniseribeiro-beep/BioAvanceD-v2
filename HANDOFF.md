@@ -1,91 +1,72 @@
 # HANDOFF
 
-**Written:** 2026-07-30, a `build-loop` session that closed issue #323
-(Wave 2 RF007) with Docker on.
+**Written:** 2026-07-30, a `build-loop` session that closed issue #293
+(test-side TOTP generator) with Docker on.
 
 ## What happened this session
 
-1. Read the prior HANDOFF.md, which left Wave 2's remaining issues
-   unqueued (#323/#324/#325/#326/#333/#293). Dennis picked #323 (RF007 —
-   Arquivos científicos e dados brutos) explicitly.
-2. Branched `test/323-rf007-scientific-data-access` off
-   `test/e2e-real-backend-foundation` and wrote
-   `tests/e2e/scientific-data-access.spec.ts`: happy path (upload with
-   checksum/URI/encryption/access-policy recorded + audited, download
-   round-trip proving the at-rest cipher round-trips exactly, list also
-   audited) plus two rejection cases (disallowed format, oversized file).
-3. **The happy path surfaced the entire sample-file upload/list/download/
-   delete/export subsystem had never worked end-to-end**, three separate
-   pre-existing bugs, all fixed in this slice:
-   - `sample.routes.js` defined the route param as `:sampleID` but
-     `sample-file.controller.js` destructured `req.params.specimenId`
-     everywhere — always `undefined`. Renamed the route params to
-     `:specimenId` to match the controller (7 routes).
-   - The controller queried a nonexistent `amostras` Mongo collection
-     instead of the canonical `samples` (`collections.js`).
-   - `SampleFileModel.create()` never carried `specimenId` into the
-     persisted record, so `downloadFile`/`deleteFile`'s ownership check
-     (`fileRecord.specimenId !== specimenIdString`) always failed —
-     download/delete/export were unreachable for any file, ever.
-4. Also implemented RF007's real acceptance criteria while fixing the
-   above (AC#3/4/5, RNF029): SHA-256 checksum of the plaintext, at-rest
-   AES-256-GCM encryption reusing the existing `keyRegistry`/
-   `fieldEncryption.js` key pattern (adapted for binary buffers), a
-   stable `objstore://samples/<id>/files/<name>` URI, and a static
-   `accessPolicy` descriptor matching the route's actual RBAC. Also
-   fixed: multer's `fileFilter`/size-limit rejections had no downstream
-   error handler anywhere in the app (confirmed: zero `(err, req, res,
-   next)` handlers exist), so an invalid upload crashed to a raw HTML
-   500 instead of AC#1/AC#2's intended clean 400 — added a route-scoped
-   wrapper in `uploadMiddleware()`, not a global handler.
-5. Updated `tests/unit/sample-file.controller.test.js` to match: renamed
-   `amostras` mocks to `samples`, replaced the `res.download`-based
-   download tests with `res.send`-based ones (including a dedicated
-   RNF029 round-trip test and a decrypt-failure test), added
-   `fs.readFileSync`/`writeFileSync` mocks to the upload happy-path
-   tests. Full backend unit suite for the touched files: 222/222 green.
-6. Ran the new spec + all 21 `specimen-quality-inventory.spec.ts` tests
-   (shares `sample.routes.js`) against the real `compose.test.yml` stack
-   — all green, no regressions from the route param rename.
-7. Updated `E2E_TRACEABILITY_PLAN.md`'s RF007 row to PARTIAL with the
-   full rundown of what was covered/fixed.
-8. Filed #334 tracking RF007's remainder: assayId/datasetId linkage (no
-   Assay/Dataset model exists yet — a data-model change, not a test-loop
-   slice) and file-replace audit (no replace endpoint exists to audit).
-9. Merged `test/323-rf007-scientific-data-access` into both
+1. Read the prior HANDOFF.md, which left #324/#325/#326/#333/#334/#293
+   unqueued. Dennis picked #293 explicitly (recommended as high-leverage:
+   small, self-contained, unblocks #333 and future RBAC-as-non-admin
+   specs).
+2. Branched `test/293-totp-first-login-mfa-helper` off
+   `test/e2e-real-backend-foundation`.
+3. Confirmed the backend already uses `speakeasy` (HMAC-SHA1 TOTP,
+   base32 secrets, 6-digit codes, ±2 step window) for
+   `setupMFAFirstLogin`/`enableMFAFirstLogin` — no new backend work
+   needed, this was purely a test-side gap.
+4. Added `tests/e2e/helpers/totp.ts` (a ~50-line RFC 6238 HMAC-SHA1
+   implementation via Node's built-in `crypto`, no new dependency —
+   root `package.json` has none of speakeasy/otplib) and
+   `tests/e2e/helpers/completeFirstLoginMfa.ts` (drives
+   `POST /api/auth/two-factor/qr-first-login` →
+   `POST /api/auth/two-factor/enable-first-login` for a fresh non-admin
+   fixture user, returning the real backend-issued session).
+5. Wrote `tests/e2e/first-login-mfa-helper.spec.ts` proving it against
+   the real backend: plain login still returns only the setup-only
+   tempToken; completing MFA via the helper yields a session that
+   passes `GET /api/auth/verify` (authenticate-only); the same session
+   gets a genuine 403 (not the tempToken's 401) on `GET /api/users`
+   (admin-only, RBAC-gated) — the exact non-admin-RBAC proof #293
+   flagged as previously unprovable. Passed first try against
+   `compose.test.yml`; ran the existing `auth-access-security.spec.ts`
+   too — 5/5 still green, no regressions.
+6. Updated `E2E_TRACEABILITY_PLAN.md`'s RF002/RF003 rows to note the
+   TOTP blocker is resolved.
+7. Merged `test/293-totp-first-login-mfa-helper` into both
    `test/e2e-real-backend-foundation` and
-   `feature/docker-e2e-backend-integration`, pushed both. Closed #323.
+   `feature/docker-e2e-backend-integration`, pushed both. Closed #293.
+8. Filed #335 (wrap-up audit finding): RF002/RNF008's existing cases in
+   `auth-access-security.spec.ts` still only prove the tempToken's 401,
+   not a real non-admin 403 — narrower/lower-priority than #333, but a
+   real gap now that the helper exists to close it cheaply.
+9. Docker test stack (`compose.test.yml`) was torn down
+   (`down --volumes --remove-orphans`) after the run — nothing left
+   running.
 
 ## Repo state
 
-- `test/e2e-real-backend-foundation` at `95374230`,
-  `feature/docker-e2e-backend-integration` at `9ab7bb01` — pushed.
+- `test/e2e-real-backend-foundation` at `3810448a`,
+  `feature/docker-e2e-backend-integration` at `02a59f40` — pushed.
 - `main` still not touched, still frozen — do not merge into it without
   Dennis's explicit go.
-- Docker test stack (`compose.test.yml`) was torn down
-  (`down --volumes --remove-orphans`) after the run — nothing left
-  running.
 
 ## Recommended next steps
 
 None queued — Dennis hasn't named a specific next issue. Open Wave 2
 issues still on the board: #324 (RF011), #325 (RF020), #326 (RF021),
-#333 (RF003 remainder), #334 (RF007 remainder, filed this session), and
-#293 (TOTP generator, a shared blocker for any RBAC test needing a real
-non-admin session). Tracking issue #331 covers integrating all Wave 2
-specs onto `feature/docker-e2e-backend-integration` once they land —
-most of that integration keeps happening incrementally session by
-session; #331 itself is still open pending the rest of the wave.
+#333 (RF003 remainder — AC#3/AC#4/AC#5 are now unblocked by #293's
+helper), #334 (RF007 remainder), and #335 (RF002/RF003 retrofit, filed
+this session). Tracking issue #331 covers integrating all Wave 2 specs
+onto `feature/docker-e2e-backend-integration` once they land.
 
 ## Which skills to use
 
-`build-loop` for any of #324/#325/#326/#333/#334. Whichever one is
-picked, budget time up front to check whether the target capability's
-*existing* partial code actually works at all — this session's RF007
-slice needed three separate pre-existing-bug fixes (route param
-mismatch, wrong Mongo collection name, a field never persisted) before
-the real acceptance criteria could even be attempted once; a capability
-marked "MISSING"/"PARTIAL" in `E2E_TRACEABILITY_PLAN.md` is not a
-guarantee the code path that exists has ever actually run successfully.
-`ship-integration-branch` only once Wave 2 is fully landed and Dennis
-explicitly asks to graduate to `main`.
+`build-loop` for any of #324/#325/#326/#333/#334/#335 — #333 in
+particular can now use `tests/e2e/helpers/completeFirstLoginMfa.ts` +
+`totp.ts` directly for AC#3/AC#4/AC#5's real non-admin session
+requirement instead of re-deriving a TOTP workaround. `test-loop`'s
+"check whether existing partial code actually works at all before
+attempting real acceptance criteria" lesson from the #323 session still
+applies to any of these. `ship-integration-branch` only once Wave 2 is
+fully landed and Dennis explicitly asks to graduate to `main`.
