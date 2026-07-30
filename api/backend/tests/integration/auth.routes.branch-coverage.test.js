@@ -89,7 +89,18 @@ describe('auth.routes.js branch coverage - req.t translation truthy branches', (
     expect(notFoundRes.status).toBe(404);
     expect(notFoundRes.body.error).toBe('T:users.notFound');
 
-    const throwingDb = { collection: () => ({ findOne: vi.fn(async () => { throw new Error('mfa-status-boom'); }) }) };
+    // First findOne is authenticate's own roleValidUntil lookup (must succeed so the
+    // request reaches the route); the route's own lookup on the 2nd call is what throws.
+    let statusCalls = 0;
+    const throwingDb = {
+      collection: () => ({
+        findOne: vi.fn(async () => {
+          statusCalls += 1;
+          if (statusCalls === 1) return {};
+          throw new Error('mfa-status-boom');
+        })
+      })
+    };
     const errRes = await request(buildApp(loadAuthRoutes(), throwingDb, { withT: true }))
       .get('/api/auth/two-factor/status').set('Authorization', `Bearer ${token}`);
     expect(errRes.status).toBe(500);
@@ -154,7 +165,18 @@ describe('auth.routes.js branch coverage - req.t translation truthy branches', (
       module: 'T:common.security',
     }));
 
-    const throwingDb = { collection: () => ({ findOne: vi.fn(async () => { throw new Error('verify-boom'); }) }) };
+    // First findOne is authenticate's own roleValidUntil lookup (must succeed so the
+    // request reaches the route); the route's own lookup on the 2nd call is what throws.
+    let throwingCalls = 0;
+    const throwingDb = {
+      collection: () => ({
+        findOne: vi.fn(async () => {
+          throwingCalls += 1;
+          if (throwingCalls === 1) return {};
+          throw new Error('verify-boom');
+        })
+      })
+    };
     const errRes = await request(buildApp(loadAuthRoutes(), throwingDb, { withT: true }))
       .get('/api/auth/verify').set('Authorization', `Bearer ${token}`);
     expect(errRes.status).toBe(500);

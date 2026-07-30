@@ -278,8 +278,17 @@ describe('auth.routes.js (integration, real router mounted)', () => {
       vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
       vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
       const authRoutes = loadAuthRoutes();
+      // First findOne is authenticate's own roleValidUntil lookup (must succeed so the
+      // request reaches the route); the route's own lookup on the 2nd call is what throws.
+      let calls = 0;
       const db = {
-        collection: () => ({ findOne: vi.fn(async () => { throw new Error('db-down'); }) })
+        collection: () => ({
+          findOne: vi.fn(async () => {
+            calls += 1;
+            if (calls === 1) return {};
+            throw new Error('db-down');
+          })
+        })
       };
       const app = buildApp(authRoutes, db);
       const token = signAccessToken();
@@ -437,7 +446,18 @@ describe('auth.routes.js (integration, real router mounted)', () => {
       vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
       vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
       const authRoutes = loadAuthRoutes();
-      const db = { collection: () => ({ findOne: vi.fn(async () => { throw new Error('verify-db-boom'); }) }) };
+      // First findOne is authenticate's own roleValidUntil lookup (must succeed so the
+      // request reaches the route); the route's own lookup on the 2nd call is what throws.
+      let calls = 0;
+      const db = {
+        collection: () => ({
+          findOne: vi.fn(async () => {
+            calls += 1;
+            if (calls === 1) return {};
+            throw new Error('verify-db-boom');
+          })
+        })
+      };
       const app = buildApp(authRoutes, db);
       const token = signAccessToken();
 

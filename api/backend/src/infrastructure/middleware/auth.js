@@ -44,9 +44,25 @@ const authenticate = async (req, res, next) => {
 
     const token = authHeader.substring(7); // Remove 'Bearer '
 
+    let decoded;
     try {
-      const decoded = jwt.verify(token, env.JWT_SECRET);
-      
+      decoded = jwt.verify(token, env.JWT_SECRET);
+    } catch (error) {
+      if (error.name === 'TokenExpiredError') {
+        return res.status(401).json({
+          success: false,
+          error: 'Token expirado',
+          message: 'Faça login novamente'
+        });
+      }
+      return res.status(401).json({
+        success: false,
+        error: 'Token inválido',
+        message: 'Token de autenticação inválido'
+      });
+    }
+
+    {
       // Verifica sessão e atualiza atividade (exceto para rotas de keepalive e setup MFA)
       const isKeepAliveRoute = req.path.includes('/keepalive');
       const isMFASetupRoute = req.path.includes('/mfa/setup') ||
@@ -152,19 +168,6 @@ const authenticate = async (req, res, next) => {
       
       req.user = decoded;
       next();
-    } catch (error) {
-      if (error.name === 'TokenExpiredError') {
-        return res.status(401).json({
-          success: false,
-          error: 'Token expirado',
-          message: 'Faça login novamente'
-        });
-      }
-      return res.status(401).json({
-        success: false,
-        error: 'Token inválido',
-        message: 'Token de autenticação inválido'
-      });
     }
   } catch (error) {
     logger.error('Erro no middleware de autenticação:', error.message);
