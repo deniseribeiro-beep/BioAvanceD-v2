@@ -1,94 +1,92 @@
 # HANDOFF
 
-**Written:** 2026-07-30, a continuation session on
+**Written:** 2026-07-30, a same-day continuation session on
 `feature/docker-e2e-backend-integration`, picking up the prior session's
-recommended next step: #347 (User migration to `Organization` references),
-second of the #343 divide-and-conquer split (#346 → #347 → #348).
+recommended next step: #348 (Sample/Patient Organization reference
+wiring), third of the #343 divide-and-conquer split (#346 → #347 → #348).
 
 ## What happened this session
 
-1. Ran `build-loop` on #347. Branched `test/user-organization-migration`
-   off `feature/docker-e2e-backend-integration`.
-2. Scoped down from the issue's original 5-point plan after reconnaissance:
-   grepping `institution`/`institutionalScope` across `api/backend/src`
-   found only 3 real consumers (`User.js`, `user.routes.js`, a stale
-   comment in `rbac.js`) — the issue's "audit 11 other files" list turned
-   out to be about `clinicalUnit` (a Patient-level concept), confirmed to
-   never read `User.institution`/`institutionalScope`, so no changes were
-   needed there.
-3. Implemented the hard cutover (Dennis's product call on #347: no
-   production data yet, no legacy-alias transition):
-   - `api/backend/src/scripts/migrateUserOrganizations.js` — one-time
-     migration, resolves each distinct `institution`/`institutionalScope`
-     string to an `Organization` doc (#346), deduping by `normalizedName`
-     (follows the existing `migrateUserAnonIds.js` script/test pattern).
-   - `src/models/User.js`, `interface/routes/user.routes.js` — dropped
-     `institution`/`institutionalScope` entirely, added
-     `organizationId` (single reference) / `organizationIds` (array).
-   - Updated the 3 existing tests that referenced the old field names
-     (`user.model.unit.test.js` had none; `models/User.test.js`,
-     `users-access.routes.test.js` updated) + new
-     `tests/unit/migrateUserOrganizations.test.js` (7 tests, mocked
-     Mongo).
-   - `tests/e2e/auth-access-security.spec.ts`'s RF003 AC#3 test now
-     creates two real `Organization` docs via `POST /api/organizations`
-     and asserts `organizationIds`, not free-text `institutionalScope`.
-4. Verified: 80 targeted backend unit/integration tests green natively.
-   Brought up `npm run compose:up` (dev stack, user confirmed via
-   AskUserQuestion), hit the same #342/#344 quirks as prior sessions
-   (ignored `--wait` exit code once `docker ps` confirmed healthy;
-   frontend container needed a manual `docker start` since compose's
-   dependency chain skipped it after backend's healthcheck "failure";
-   bootstrapped admin via `createFirstAdmin.js`). Ran the updated e2e
-   test **in isolation** — passed. Running the full spec file hit a
-   pre-existing `/api/auth` rate-limiter collision unrelated to this
-   change (filed as #350, see below). Tore the stack down afterward.
-5. Committed on `test/user-organization-migration`, merged into
-   `feature/docker-e2e-backend-integration` (merge commit `38493629`),
-   deleted the merged branch. Closed **#347** with the merge hash and a
-   summary; noted #348 is next per the split.
-6. Filed two follow-up issues found while doing this work (not #347's
-   scope, not regressions from it):
-   - **#349** — frontend (`userMethods.ts`, `NewUserPage.tsx`,
-     `SystemManagementPage.tsx`) still reads/writes the old `institution`
-     field; the register/edit form now silently no-ops that input since
-     the backend drops it. Needs an Organization picker.
-   - **#350** — `auth-access-security.spec.ts` run as a full file
-     collides with `authLimiter` (10 req/min on `/api/auth`); passes in
-     isolation. Pre-existing, worth fixing before relying on this spec's
-     CI green (`e2e-docker` job runs the full file).
+1. Ran `build-loop` on #348. Read the dictionary entries backing it:
+   ELM-0128 (`Specimen.collectionSite`, `Reference(Organization)`) and
+   P1X-0356 (`Patient.clinicalUnitId` upgrade from free-text to
+   `Reference(Organization)`).
+2. Scoped down after reconnaissance: the `clinicalUnitId` half touches
+   far more surface than one iteration should carry —
+   `patient.service.js`'s `resolveClinicalUnitSnapshot` (free-text
+   name-or-id resolution against the `clinicalUnits` collection),
+   `paciente.controller.js`'s allowlist/normalization, and the entire
+   `clinical-unit.routes.js` CRUD/search surface that would need to
+   either proxy to `organizations` or be retired. Split that half out
+   to **#351** (divide-and-conquer) rather than force both halves into
+   one slice.
+3. Implemented the `Sample.collectionSite` half only, on
+   `test/sample-collection-site`:
+   - Wrote failing tests first (both `sample.model.unit.test.js` and
+     `sample.service.test.js`), confirmed they failed for the right
+     reason (field/behavior didn't exist), then implemented.
+   - `src/models/Sample.js` — added `collectionSite` to the Mongoose
+     schema and `SampleModel.create`'s mapping (defaults `null`).
+   - `src/services/sample.service.js`'s `createSample` — added a
+     resolve-or-404 check for `collectionSite` against the
+     `organizations` collection (by `organizationId`), following the
+     exact pattern already used for `studyId`/`protocolId`/
+     `collectionId` in the same function. Noted in passing: none of
+     those three had any existing test coverage of that resolution
+     path either — a pre-existing gap, not something this slice was on
+     the hook to backfill, but worth knowing if #351 or a future slice
+     touches that same function.
+   - Updated `docs/architecture/canonical-data-contract-v1.md`'s
+     Specimen field list (that doc is already known-stale against the
+     newer dictionary per issue #128 — added the one field rather than
+     reconciling the whole doc).
+4. Verified: 97/97 targeted tests green in `sample.model.unit.test.js` +
+   `sample.service.test.js` (4 were the new failing-then-passing ones),
+   plus a broader native sanity run (`sample.model.gaps.test.js`,
+   `sample.models.test.js`, `sample.validation.api.test.js`) — 34/34
+   green, no regressions. Native only, per the end-loaded gate order —
+   no Docker this iteration.
+5. Committed on `test/sample-collection-site`, merged into
+   `feature/docker-e2e-backend-integration`, deleted the merged branch.
+   Closed **#348** with the merge hash and a summary pointing to #351
+   for the remainder.
+6. Filed **#351** (`test-branch` label) — the `Patient.clinicalUnitId`
+   Organization-reference upgrade, with the specific files/functions it
+   touches and a note that #340/#341 now block on #351 instead of #348.
 
 ## Repo state
 
-- `feature/docker-e2e-backend-integration` has two new merge commits
-  (`989ad7dc` from the #346 session, `38493629` from this one) on top of
-  prior HEAD, not yet pushed — ahead of
+- `feature/docker-e2e-backend-integration` has one new merge commit
+  (this session's `test/sample-collection-site`) on top of prior HEAD
+  (`38493629`), not yet pushed — ahead of
   `origin/feature/docker-e2e-backend-integration`. Nothing pushed this
   session.
-- Docker dev stack: **down** — `compose:down` was run at the end of this
-  session (includes `--volumes`), so a future session starting it fresh
-  will hit #344 (no admin user) again and needs the same bootstrap
-  workaround; #342 (`--wait` healthcheck) and the frontend-container
-  manual-start quirk too.
+- Docker dev stack: **down**, unchanged from last session (not brought
+  up this iteration — native tests only, per the end-loaded gate order).
+  A future session bringing it up fresh still hits #344 (no admin user),
+  #342 (`--wait` healthcheck), and the frontend-container manual-start
+  quirk.
 - `test/e2e-real-backend-foundation` — still not deleted, still safe to
   delete (fully merged forward), Dennis hasn't confirmed.
-- **#347 closed** this session, merged. **#348 open** (Sample/Patient
-  reference wiring — now genuinely unblocked, next per the #343 split).
-  **#340, #341 open**, depend on #348 (not #347) since they need real
-  reference fields to filter on. **#342, #344, #345 open** (infra
-  findings, `test-branch`-labeled, non-blocking — #342/#344 hit again
-  this session, still just workarounds, not fixed). **#349, #350 open**
-  (new this session, see above). **#336** (FHIR legacy reconciliation)
-  still open, unrelated, non-blocking.
+- **#348 closed** this session, merged (Sample-side scope only).
+  **#351 open** (new this session — Patient.clinicalUnitId upgrade, the
+  carried-forward half of #348). **#340, #341 open**, now depend on
+  #351 (not #348). **#342, #344, #345 open** (infra findings,
+  `test-branch`-labeled, non-blocking, unchanged this session).
+  **#349, #350 open** (from the #347 session, unrelated to this one).
+  **#336** (FHIR legacy reconciliation) still open, unrelated,
+  non-blocking.
 
 ## Recommended next steps
 
-#348 (Sample/Patient reference wiring, the last of the #346→#347→#348
-wave) is the natural next `build-loop` iteration — it depends on #347,
-which is now done.
+None queued explicitly by Dennis. #351 (Patient.clinicalUnitId →
+Organization reference) is the natural next `build-loop` iteration if
+continuing the #343 wave, since it's the direct carry-forward of this
+session's split — but that's an inference from the split, not something
+Dennis asked for by name.
 
 ## Which skills to use
 
-`build-loop` for #348 once picked up. `ship-integration-branch` only
-once the full #346→#347→#348 wave is landed and Dennis explicitly asks
-to graduate to `main`.
+`build-loop` for #351 if picked up next. `ship-integration-branch` only
+once the full #346→#347→#348/#351 wave is landed and Dennis explicitly
+asks to graduate to `main`.
