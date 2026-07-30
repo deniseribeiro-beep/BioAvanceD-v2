@@ -9,6 +9,7 @@ const CANONICAL_COLLECTIONS = Object.freeze({
   biomarkerObservations: env.COLL_BIOMARKER_OBSERVATIONS || 'biomarker_observations',
   cids: env.COLL_CIDS || 'cids',
   clinicalUnits: env.COLL_CLINICAL_UNITS || 'clinical_units',
+  organizations: env.COLL_ORGANIZATIONS || 'organizations',
   diseaseDictionary: env.COLL_DISEASE_DICTIONARY || 'disease_dictionary',
   medicationDictionary: env.COLL_MEDICATION_DICTIONARY || 'medication_dictionary',
   referenceSeedRuns: env.COLL_REFERENCE_SEED_RUNS || 'referenceSeedRuns'
