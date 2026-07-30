@@ -1,72 +1,61 @@
 # HANDOFF
 
-**Written:** 2026-07-30, a `build-loop` session that closed issue #293
-(test-side TOTP generator) with Docker on.
+**Written:** 2026-07-30, a `test-loop` session that closed issue #335
+(RF002/RNF008 real non-admin 403 retrofit) with Docker on.
 
 ## What happened this session
 
-1. Read the prior HANDOFF.md, which left #324/#325/#326/#333/#334/#293
-   unqueued. Dennis picked #293 explicitly (recommended as high-leverage:
-   small, self-contained, unblocks #333 and future RBAC-as-non-admin
-   specs).
-2. Branched `test/293-totp-first-login-mfa-helper` off
+1. Read the prior HANDOFF.md, which left #324/#325/#326/#333/#334/#335
+   unqueued after #293 closed. Dennis picked #335 explicitly ("do the
+   follow up gap") — the wrap-up-audit finding filed while closing #293.
+2. Routed via `work-issue` → `test-loop` (existing spec retrofit, no
+   product code change, not a new capability).
+3. Branched `test/335-rbac-nonadmin-403-retrofit` off
    `test/e2e-real-backend-foundation`.
-3. Confirmed the backend already uses `speakeasy` (HMAC-SHA1 TOTP,
-   base32 secrets, 6-digit codes, ±2 step window) for
-   `setupMFAFirstLogin`/`enableMFAFirstLogin` — no new backend work
-   needed, this was purely a test-side gap.
-4. Added `tests/e2e/helpers/totp.ts` (a ~50-line RFC 6238 HMAC-SHA1
-   implementation via Node's built-in `crypto`, no new dependency —
-   root `package.json` has none of speakeasy/otplib) and
-   `tests/e2e/helpers/completeFirstLoginMfa.ts` (drives
-   `POST /api/auth/two-factor/qr-first-login` →
-   `POST /api/auth/two-factor/enable-first-login` for a fresh non-admin
-   fixture user, returning the real backend-issued session).
-5. Wrote `tests/e2e/first-login-mfa-helper.spec.ts` proving it against
-   the real backend: plain login still returns only the setup-only
-   tempToken; completing MFA via the helper yields a session that
-   passes `GET /api/auth/verify` (authenticate-only); the same session
-   gets a genuine 403 (not the tempToken's 401) on `GET /api/users`
-   (admin-only, RBAC-gated) — the exact non-admin-RBAC proof #293
-   flagged as previously unprovable. Passed first try against
-   `compose.test.yml`; ran the existing `auth-access-security.spec.ts`
-   too — 5/5 still green, no regressions.
+4. Extended RF002's cross-role case and RF003's RNF008 case in
+   `tests/e2e/auth-access-security.spec.ts`: both already proved the
+   Técnico fixture's setup-only tempToken gets a 401; each now also
+   completes first-login MFA via #293's `completeFirstLoginMfa` helper
+   and asserts the resulting genuine non-admin session gets a real 403
+   from `requirePermission` (`GET /api/users` and
+   `POST /api/users/register` respectively) — the exact stronger proof
+   #335 asked for.
+5. Docker gate: asked Dennis explicitly (this spec `test.skip`s without
+   `PLAYWRIGHT_API_BASE_URL`, so native verification isn't possible) —
+   approved. Brought up `compose.test.yml`, ran
+   `auth-access-security.spec.ts` (5/5 passing) and
+   `first-login-mfa-helper.spec.ts` (1/1, no regression) against it, then
+   tore the stack down (`down --volumes --remove-orphans`).
 6. Updated `E2E_TRACEABILITY_PLAN.md`'s RF002/RF003 rows to note the
-   TOTP blocker is resolved.
-7. Merged `test/293-totp-first-login-mfa-helper` into both
-   `test/e2e-real-backend-foundation` and
-   `feature/docker-e2e-backend-integration`, pushed both. Closed #293.
-8. Filed #335 (wrap-up audit finding): RF002/RNF008's existing cases in
-   `auth-access-security.spec.ts` still only prove the tempToken's 401,
-   not a real non-admin 403 — narrower/lower-priority than #333, but a
-   real gap now that the helper exists to close it cheaply.
-9. Docker test stack (`compose.test.yml`) was torn down
-   (`down --volumes --remove-orphans`) after the run — nothing left
-   running.
+   retrofit landed.
+7. Merged `test/335-rbac-nonadmin-403-retrofit` into both
+   `test/e2e-real-backend-foundation` (`d89b9501`) and
+   `feature/docker-e2e-backend-integration` (`b2166ba0`), pushed both.
+   Closed #335.
+8. wrap-up audit: no friction, no new findings. Nothing filed.
 
 ## Repo state
 
-- `test/e2e-real-backend-foundation` at `3810448a`,
-  `feature/docker-e2e-backend-integration` at `02a59f40` — pushed.
+- `test/e2e-real-backend-foundation` at `d89b9501`,
+  `feature/docker-e2e-backend-integration` at `b2166ba0` — pushed.
 - `main` still not touched, still frozen — do not merge into it without
   Dennis's explicit go.
+- Docker test stack torn down after the run — nothing left running.
 
 ## Recommended next steps
 
 None queued — Dennis hasn't named a specific next issue. Open Wave 2
 issues still on the board: #324 (RF011), #325 (RF020), #326 (RF021),
-#333 (RF003 remainder — AC#3/AC#4/AC#5 are now unblocked by #293's
-helper), #334 (RF007 remainder), and #335 (RF002/RF003 retrofit, filed
-this session). Tracking issue #331 covers integrating all Wave 2 specs
-onto `feature/docker-e2e-backend-integration` once they land.
+#333 (RF003 remainder — AC#3/AC#4/AC#5, unblocked by #293's helper),
+#334 (RF007 remainder). Tracking issue #331 covers integrating all
+Wave 2 specs onto `feature/docker-e2e-backend-integration` once they
+land.
 
 ## Which skills to use
 
-`build-loop` for any of #324/#325/#326/#333/#334/#335 — #333 in
-particular can now use `tests/e2e/helpers/completeFirstLoginMfa.ts` +
-`totp.ts` directly for AC#3/AC#4/AC#5's real non-admin session
-requirement instead of re-deriving a TOTP workaround. `test-loop`'s
-"check whether existing partial code actually works at all before
-attempting real acceptance criteria" lesson from the #323 session still
-applies to any of these. `ship-integration-branch` only once Wave 2 is
-fully landed and Dennis explicitly asks to graduate to `main`.
+`build-loop` for #333/#334/#324/#325/#326 (new capabilities/specs, not
+pure retrofits). `test-loop`'s "check whether existing partial code
+actually works at all before attempting real acceptance criteria"
+lesson from the #323 session still applies. `ship-integration-branch`
+only once Wave 2 is fully landed and Dennis explicitly asks to graduate
+to `main`.
