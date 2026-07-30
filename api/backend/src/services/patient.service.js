@@ -177,6 +177,21 @@ class PatientService {
 
     if (normalizedClinicalUnitId) {
       if (!ObjectId.isValid(normalizedClinicalUnitId)) {
+        // P1X-0356: clinicalUnitId is migrating from a clinicalUnits ObjectId
+        // to a Reference(Organization). A non-ObjectId-shaped id is tried
+        // against organizations first so both forms resolve during the
+        // transition; the legacy name-based fallback below still applies.
+        const organizationsCollection = await getCollection(db, 'organizations');
+        const organization = await organizationsCollection.findOne({ organizationId: normalizedClinicalUnitId });
+        if (organization) {
+          const resolvedName = String(organization.officialName || '').trim();
+          return {
+            clinicalUnitId: String(organization.organizationId),
+            clinicalUnit: resolvedName || null,
+            unitAcronym: String(organization.acronym || '').trim() || PatientModel.fillAcronym(resolvedName)
+          };
+        }
+
         if (!normalizedClinicalUnitName) {
           throw new Error('clinicalUnitId inválido');
         }

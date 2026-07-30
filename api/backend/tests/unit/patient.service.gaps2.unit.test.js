@@ -98,6 +98,39 @@ describe('PatientService.resolveClinicalUnitSnapshot', () => {
     expect(result).toEqual({ clinicalUnitId: null, clinicalUnit: null, unitAcronym: null });
   });
 
+  it('resolves clinicalUnitId against organizations when it matches an Organization reference (P1X-0356)', async () => {
+    const organizationsCollection = makeFakeCollection({
+      findOne: vi.fn().mockResolvedValue({
+        organizationId: 'a1b2c3d4-e5f6-4789-a0b1-c2d3e4f5a6b7',
+        officialName: 'Hospital das Clínicas',
+        acronym: 'HC'
+      })
+    });
+    const db = makeFakeDb({ organizations: organizationsCollection });
+
+    const result = await patientService.resolveClinicalUnitSnapshot(db, {
+      clinicalUnitId: 'a1b2c3d4-e5f6-4789-a0b1-c2d3e4f5a6b7'
+    });
+
+    expect(organizationsCollection.findOne).toHaveBeenCalledWith({
+      organizationId: 'a1b2c3d4-e5f6-4789-a0b1-c2d3e4f5a6b7'
+    });
+    expect(result).toEqual({
+      clinicalUnitId: 'a1b2c3d4-e5f6-4789-a0b1-c2d3e4f5a6b7',
+      clinicalUnit: 'Hospital das Clínicas',
+      unitAcronym: 'HC'
+    });
+  });
+
+  it('throws when clinicalUnitId is Organization-reference-shaped but matches no Organization and no name is given', async () => {
+    const organizationsCollection = makeFakeCollection({ findOne: vi.fn().mockResolvedValue(null) });
+    const db = makeFakeDb({ organizations: organizationsCollection });
+
+    await expect(
+      patientService.resolveClinicalUnitSnapshot(db, { clinicalUnitId: 'a1b2c3d4-e5f6-4789-a0b1-c2d3e4f5a6b7' })
+    ).rejects.toThrow('clinicalUnitId inválido');
+  });
+
   it('falls back to a normalized-name-only snapshot when no clinical unit matches by name', async () => {
     const clinicalUnitsCollection = makeFakeCollection({ findOne: vi.fn().mockResolvedValue(null) });
     const db = makeFakeDb({ clinical_units: clinicalUnitsCollection });
