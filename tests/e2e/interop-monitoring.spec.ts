@@ -12,6 +12,14 @@ import {
 import { queryTemperaturePoints } from './helpers/queryInflux';
 import { realLogin } from './helpers/realAuth';
 import { seedSampleNode, readSampleStatus, removeSampleNodes, closeNeo4jDriver } from './helpers/queryNeo4j';
+import {
+  findStagingRecordBySpecimenId,
+  findCommittedSample,
+  findCommittedPatient,
+  findFhirImportAuditLogs,
+  removeFhirImportFixtures,
+  closeFhirImportDb,
+} from './helpers/queryFhirImport';
 
 // Real backend only — see backend-integration.spec.ts for the same skip
 // rationale. Run via `npm run test:e2e:docker` against the compose test
@@ -536,6 +544,188 @@ test.describe('Telemetria e monitoramento ambiental (RF009) — real Neo4j propa
     } finally {
       await removeSampleNodes([sensor.rootSampleId]);
       await removeSeededFreezerSample(sensor);
+    }
+  });
+});
+
+// RF011 (#324): the FHIR bundle staging pipeline (stage -> validate ->
+// commit, see fhir-import-staging.service.js) already exists — this
+// proves it end-to-end against the real backend rather than building a
+// new surface. RNF024 (FHIR boundary side-effect-free, criterion 7) is
+// enforced separately by api/backend/tests/architecture/fhir-boundary.arch.test.js,
+// not re-asserted here.
+function buildFhirBundle(suffix: string) {
+  const patientId = `rf011-patient-${suffix}`;
+  const specimenId = `rf011-specimen-${suffix}`;
+  return {
+    patientId,
+    specimenId,
+    bundle: {
+      resourceType: 'Bundle',
+      type: 'collection',
+      entry: [
+        {
+          resource: {
+            resourceType: 'Patient',
+            id: patientId,
+            identifier: [{ system: 'urn:oid:cpf', value: `cpf-${suffix}` }],
+            name: [{ text: `RF011 e2e patient ${suffix}` }],
+            birthDate: '1990-01-01',
+            gender: 'female',
+            telecom: [{ system: 'email', value: `rf011-${suffix}@example.com` }],
+          },
+        },
+        {
+          resource: {
+            resourceType: 'Consent',
+            status: 'active',
+            patient: { reference: `Patient/${patientId}` },
+          },
+        },
+        {
+          resource: {
+            resourceType: 'Specimen',
+            id: specimenId,
+            identifier: [{ value: specimenId }],
+            subject: { reference: `Patient/${patientId}` },
+            type: { text: 'Blood' },
+            collection: { collectedDateTime: new Date().toISOString() },
+          },
+        },
+        {
+          resource: {
+            resourceType: 'Observation',
+            subject: { reference: `Patient/${patientId}` },
+            specimen: { reference: `Specimen/${specimenId}` },
+            code: { text: 'RF011 e2e biomarker' },
+            valueQuantity: { value: 1.5, unit: 'mg/dL' },
+          },
+        },
+      ],
+    },
+  };
+}
+
+test.describe('Interoperabilidade HL7 FHIR R4 (RF011) — real backend, staging pipeline', () => {
+  test.afterAll(async () => {
+    await closeFhirImportDb();
+  });
+
+  test('stages, validates and commits a FHIR Bundle — Patient/Specimen/Consent/Observation mapping and provenance (criteria 1,2,3,5,6)', async ({
+    request,
+  }) => {
+    const { token } = await realLogin(request);
+    const { patientId, specimenId, bundle } = buildFhirBundle(String(Date.now()));
+
+    try {
+      const stageResponse = await request.post(`${apiBaseURL}/api/import/fhir/stage`, {
+        headers: { Authorization: `Bearer ${token}` },
+        data: bundle,
+      });
+      expect(stageResponse.status()).toBe(201);
+      const stageBody = await stageResponse.json();
+      expect(stageBody.success).toBe(true);
+      expect(stageBody.records).toHaveLength(1);
+
+      const record = stageBody.records[0];
+      // Consent resource is active -> consentSigned, so staging resolves
+      // straight to READY_TO_COMMIT without needing the e-consent-by-email
+      // detour (criterion 6: staging + quarantine workflow evaluated).
+      expect(record.status).toBe('READY_TO_COMMIT');
+      expect(record.normalized.participantId).toBe(patientId);
+      expect(record.normalized.specimenId).toBe(specimenId);
+      expect(record.normalized.patientName).toContain('RF011 e2e patient');
+      expect(record.normalized.sampleType).toBe('Blood');
+      // The Observation matches by both patient and specimen reference,
+      // so normalizeObservations collects it via both lookups —
+      // asserting content, not count, avoids pinning that dedup gap.
+      expect(record.normalized.biomarkers.length).toBeGreaterThanOrEqual(1);
+      expect(record.normalized.biomarkers[0].biomarkerType).toBe('RF011 e2e biomarker');
+
+      const batchId = stageBody.batch._id;
+
+      const commitResponse = await request.post(`${apiBaseURL}/api/import/fhir/batches/${batchId}/commit`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      expect(commitResponse.status()).toBe(200);
+      const commitBody = await commitResponse.json();
+      expect(commitBody.committed).toBe(1);
+
+      // Criterion 2: Participant mapped from FHIR Patient.
+      await expect.poll(() => findCommittedPatient(patientId), { timeout: 10_000 }).not.toBeNull();
+      const committedPatient = await findCommittedPatient(patientId);
+      expect(committedPatient?.patientName).toContain('RF011 e2e patient');
+
+      // Criteria 3, 5, 6: Specimen mapped, provenance recorded
+      // (importBatchId/importedBy/importedAt), quarantine released once
+      // consent resolved active.
+      const committedSample = await findCommittedSample(specimenId);
+      expect(committedSample).not.toBeNull();
+      expect(committedSample?.importBatchId).toBe(String(batchId));
+      expect(committedSample?.importedBy).toBeTruthy();
+      expect(committedSample?.importedAt).toBeTruthy();
+      expect(committedSample?.quarantineStatus).toBe('RELEASED');
+      expect(committedSample?.availabilityStatus).toBe('AVAILABLE');
+
+      // Criterion 5 (origin/provenance): commit is audited.
+      const auditLogs = await findFhirImportAuditLogs(String(batchId));
+      const committedLog = auditLogs.find((log) => log.action === 'FHIR_IMPORT_RECORD_COMMITTED');
+      expect(committedLog).toBeTruthy();
+      expect(committedLog?.participantId).toBe(patientId);
+      expect(committedLog?.specimenId).toBe(specimenId);
+    } finally {
+      await removeFhirImportFixtures(specimenId, patientId);
+    }
+  });
+
+  test('rejects a non-Bundle FHIR payload (criterion 1, invalid structure)', async ({ request }) => {
+    const { token } = await realLogin(request);
+
+    const response = await request.post(`${apiBaseURL}/api/import/fhir/stage`, {
+      headers: { Authorization: `Bearer ${token}` },
+      data: { resourceType: 'Patient', id: 'not-a-bundle' },
+    });
+
+    expect(response.status()).toBe(400);
+  });
+
+  test('keeps a Specimen missing canonical required fields in error/quarantine, never commits it (criterion 4)', async ({
+    request,
+  }) => {
+    const { token } = await realLogin(request);
+    const { patientId, specimenId, bundle } = buildFhirBundle(`invalid-${Date.now()}`);
+    // Drop the Specimen's type (sampleType) — a canonical-required field —
+    // and the Consent resource, so normalizeSpecimen's own validation
+    // rejects the record instead of it sailing through to commit.
+    bundle.entry = bundle.entry.filter((entry) => entry.resource.resourceType !== 'Consent');
+    const specimenEntry = bundle.entry.find((entry) => entry.resource.resourceType === 'Specimen');
+    delete (specimenEntry!.resource as { type?: unknown }).type;
+
+    try {
+      const stageResponse = await request.post(`${apiBaseURL}/api/import/fhir/stage`, {
+        headers: { Authorization: `Bearer ${token}` },
+        data: bundle,
+      });
+      expect(stageResponse.status()).toBe(201);
+      const stageBody = await stageResponse.json();
+      const record = stageBody.records[0];
+      expect(record.status).toBe('ERROR');
+      expect(record.errors.some((error: { field: string }) => error.field === 'sampleType')).toBe(true);
+
+      const batchId = stageBody.batch._id;
+      const commitResponse = await request.post(`${apiBaseURL}/api/import/fhir/batches/${batchId}/commit`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const commitBody = await commitResponse.json();
+      expect(commitBody.committed).toBe(0);
+
+      const stagingRecord = await findStagingRecordBySpecimenId(specimenId);
+      expect(stagingRecord?.status).toBe('ERROR');
+
+      const committedSample = await findCommittedSample(specimenId);
+      expect(committedSample).toBeNull();
+    } finally {
+      await removeFhirImportFixtures(specimenId, patientId);
     }
   });
 });
