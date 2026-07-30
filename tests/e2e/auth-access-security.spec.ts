@@ -246,4 +246,59 @@ test.describe('User management (RF003) — real backend', () => {
     });
     expect(forbiddenRegisterRbac.status()).toBe(403);
   });
+
+  test('password complexity is enforced and a recently-used password is rejected (criterion 2)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+
+    // A fresh Técnico fixture, with a real (MFA-completed) session, changes
+    // its own password via PUT /api/user/security/password — the self-service
+    // route userSecurityService.updatePassword backs (see criterion 2's
+    // complexity + history requirements).
+    const username = `tecnico.rf003ac2.${Date.now()}`;
+    const initialPassword = 'Tecnico@123456';
+    const registerResponse = await request.post(`${apiBaseURL}/api/users/register`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        name: 'RF003 AC2 Técnico Fixture',
+        email: `${username}@example.com`,
+        username,
+        password: initialPassword,
+        accessType: 2,
+        roleName: 'Técnico',
+      },
+    });
+    expect(registerResponse.ok(), await registerResponse.text()).toBeTruthy();
+
+    const tecnicoSession = await completeFirstLoginMfa(request, apiBaseURL!, username, initialPassword);
+
+    // Rejection case: a new password failing PasswordValidator's complexity
+    // rules (min 12 chars, upper+lower+special) is refused — too short and
+    // missing a special character.
+    const weakAttempt = await request.put(`${apiBaseURL}/api/user/security/password`, {
+      headers: { Authorization: `Bearer ${tecnicoSession.token}` },
+      data: { currentPassword: initialPassword, newPassword: 'Weak1234567' },
+    });
+    expect(weakAttempt.status()).toBe(400);
+
+    // Happy path: a complying new password is accepted, and the change is
+    // audited.
+    const watch = await watchAuditTrail(request, apiBaseURL!, admin.token);
+    const newPassword = 'Tecnico!New456';
+    const changeResponse = await request.put(`${apiBaseURL}/api/user/security/password`, {
+      headers: { Authorization: `Bearer ${tecnicoSession.token}` },
+      data: { currentPassword: initialPassword, newPassword },
+    });
+    expect(changeResponse.ok(), await changeResponse.text()).toBeTruthy();
+    await assertAuditEventRecorded(request, apiBaseURL!, admin.token, watch);
+
+    // Reuse case: attempting to change back to a password in the last-5
+    // history (the just-replaced original password) is rejected.
+    const reuseAttempt = await request.put(`${apiBaseURL}/api/user/security/password`, {
+      headers: { Authorization: `Bearer ${tecnicoSession.token}` },
+      data: { currentPassword: newPassword, newPassword: initialPassword },
+    });
+    expect(reuseAttempt.status()).toBe(400);
+  });
 });
