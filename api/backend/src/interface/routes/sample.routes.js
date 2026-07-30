@@ -1039,7 +1039,7 @@ router.get('/:id/movements', authenticate, async (req, res) => {
 const sampleFileController = require('../../controllers/sample-file.controller');
 
 // Upload de arquivo - Apenas Admin e Coordenador
-router.post('/:sampleID/files/upload',
+router.post('/:specimenId/files/upload',
   authenticate,
   requirePermission('uploadSampleFiles'),
   sampleFileController.uploadMiddleware(),
@@ -1047,19 +1047,19 @@ router.post('/:sampleID/files/upload',
 );
 
 // Lista arquivos - Todos os perfis autenticados
-router.get('/:sampleID/files',
+router.get('/:specimenId/files',
   authenticate,
   sampleFileController.listFiles.bind(sampleFileController)
 );
 
 // Download de arquivo - Todos os perfis autenticados
-router.get('/:sampleID/files/:fileID/download',
+router.get('/:specimenId/files/:fileID/download',
   authenticate,
   sampleFileController.downloadFile.bind(sampleFileController)
 );
 
 // Deletar arquivo - Apenas Admin e Coordenador
-router.delete('/:sampleID/files/:fileID',
+router.delete('/:specimenId/files/:fileID',
   authenticate,
   requirePermission('deleteSampleFiles'),
   sampleFileController.deleteFile.bind(sampleFileController)
@@ -1067,23 +1067,23 @@ router.delete('/:sampleID/files/:fileID',
 
 // Exportação HL7 - Todos os perfis autenticados podem exportar (não contém dados sensíveis, apenas patientID anonimizado)
 // HL7 v2.x
-router.get('/:sampleID/files/:fileID/export/hl7',
+router.get('/:specimenId/files/:fileID/export/hl7',
   authenticate,
-  enforceCommercialConsent({ resolveSampleId: (req) => req.params.sampleID }),
+  enforceCommercialConsent({ resolveSampleId: (req) => req.params.specimenId }),
   sampleFileController.exportHL7v2.bind(sampleFileController)
 );
 
 // FHIR R4 JSON
-router.get('/:sampleID/files/:fileID/export/fhir',
+router.get('/:specimenId/files/:fileID/export/fhir',
   authenticate,
-  enforceCommercialConsent({ resolveSampleId: (req) => req.params.sampleID }),
+  enforceCommercialConsent({ resolveSampleId: (req) => req.params.specimenId }),
   sampleFileController.exportFHIR.bind(sampleFileController)
 );
 
 // CDA XML
-router.get('/:sampleID/files/:fileID/export/cda',
+router.get('/:specimenId/files/:fileID/export/cda',
   authenticate,
-  enforceCommercialConsent({ resolveSampleId: (req) => req.params.sampleID }),
+  enforceCommercialConsent({ resolveSampleId: (req) => req.params.specimenId }),
   sampleFileController.exportCDA.bind(sampleFileController)
 );
 

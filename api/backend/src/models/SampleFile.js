@@ -43,10 +43,19 @@ class SampleFileModel {
   static create(data) {
     const baseData = {
       sampleID: data.sampleID, // ID da amostra (pode ser ObjectId string ou número)
+      specimenId: data.specimenId || data.sampleID, // referência usada por listFiles/downloadFile/deleteFile
       fileName: data.fileName, // Nome original do arquivo
       fileType: data.fileType.toUpperCase(), // Tipo: RAW, ZIP, CSV, XLS, XLSX, PDF, TXT
       fileSize: data.fileSize, // Tamanho em bytes
       storagePath: data.storagePath, // Caminho no sistema de arquivos (não exposto ao frontend)
+      storageUri: data.storageUri || null, // RF007 - URI estável de Object Storage
+      checksum: data.checksum || null, // RF007/RNF029 - SHA-256 do conteúdo original
+      checksumAlgorithm: data.checksumAlgorithm || null,
+      encryptionAlgorithm: data.encryptionAlgorithm || null, // RNF029 - cifra em repouso
+      encryptionKeyId: data.encryptionKeyId || null,
+      encryptionIv: data.encryptionIv || null,
+      encryptionTag: data.encryptionTag || null,
+      accessPolicy: data.accessPolicy || null, // RF007 - restrições de acesso vigentes
       uploaderAnonId: data.uploaderAnonId || null, // ID anonimizado do uploader (LGPD)
       uploadDate: data.uploadDate || new Date(),
       createdAt: new Date(),
