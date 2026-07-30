@@ -1,101 +1,97 @@
 # HANDOFF
 
-**Written:** 2026-07-30, a `resolve-issue` session on
-`feature/docker-e2e-backend-integration`, reconciling the long-open
-two-branch divergence as part of picking up #339.
+**Written:** 2026-07-30, a `build-loop` session on
+`feature/docker-e2e-backend-integration`, picking up #339 (institutional-
+scope enforcement) per the prior session's HANDOFF.
 
 ## What happened this session
 
-1. Dennis asked to pick up #339 (institutional-scope enforcement). Per
-   #339's own text, this needed Dennis's product call first: which
-   resources should `institutionalScope` constrain, and for which
-   roles. Asked — answer: all of samples/patients/reports/dashboards,
-   for all non-superadmin roles.
-2. Sized the resulting build via a research-only Explore agent (per
-   `agent-delegation`) — its report claimed `institutionalScope` didn't
-   exist anywhere in the tree, contradicting #339's own text. Verified
-   directly (`git grep`) rather than trusting the claim: confirmed the
-   field really was absent from `feature/docker-e2e-backend-integration`,
-   but traced it to `test/e2e-real-backend-foundation`'s commit
-   `7a1de69f` (the #337 build-loop session) — the two-branch divergence
-   flagged in every prior HANDOFF since #333, never reconciled.
-3. Asked Dennis how to proceed given the divergence; he chose:
-   reconcile the branches first, then continue #339 on the merged base.
-4. Diffed the two branches (`git merge-tree`) before merging: only
-   `HANDOFF.md` had real conflicts (both sessions rewrote it); every
-   product/doc file merged cleanly (`auth.js`'s `roleValidUntil` gate,
-   `user.routes.js`'s `PUT /:id` normalization,
-   `.claude/skills-manifest.txt`, `E2E_TRACEABILITY_PLAN.md`'s RF003
-   row).
-5. Merged `test/e2e-real-backend-foundation` into
-   `feature/docker-e2e-backend-integration` (`ace663e4`), resolving
-   `HANDOFF.md` by hand (folding both sessions' history in rather than
-   picking one side).
-6. Ran the targeted suite on the merged tree (per `resolve-issue`'s
-   "run tests on the merged result before push") — 4 real failures
-   surfaced, none related to my merge conflict resolution:
-   `auth.js`'s `roleValidUntil` check (added in #337, on the
-   `test/e2e-real-backend-foundation` side) sat inside the same
-   try/catch as `jwt.verify()`, so any error thrown by its
-   `db.collection('users').findOne()` call got misreported as an
-   invalid token (401) instead of surfacing as a real 500. This was a
-   latent bug from #337 itself — the narrower targeted run in that
-   session never exercised these three tests together. Fixed: split
-   the JWT-verify try/catch from the rest of the middleware body so
-   only genuine JWT errors get the 401 path; other errors (including
-   this db lookup) now correctly propagate to the outer 500 handler.
-   Updated 3 tests (`auth.routes.test.js` x2,
-   `auth.routes.branch-coverage.test.js` x1) whose throwing-db mocks
-   assumed only the route handler queries `users` — the middleware now
-   queries it too on every authenticated request, so each mock needed
-   to succeed on the first call (satisfying the middleware) before
-   throwing on the route's own lookup.
-7. Verified the fix didn't regress anything else: full
-   `tests/integration/` suite (780 tests, 51 files) green.
-8. Committed (`b132411e`) and pushed both the merge and the auth fix.
+1. Sized #339 with an Explore agent (per `agent-delegation`): no
+   institution-linkage field exists anywhere on Sample/Patient, `rbac.js`
+   only allow/denies by role (no query-filtering mechanism at all), and
+   Reports has no institution concept either. No docs specified
+   enforcement — #339 itself was the spec. Confirmed too big for one
+   iteration.
+2. Per Dennis's go, split via `divide-and-conquer`: filed #340
+   (sample/patient enforcement) and #341 (reports/dashboards) as
+   dependents, planned to build a schema-only foundational slice
+   (`institution: String` on Sample/Patient) under #339 itself.
+3. Built and branch-tested (`test/339-institution-scope-schema`) that
+   plain string field end-to-end against the real Docker backend
+   (`compose:up`'s dev stack) — proved it persists on both Sample and
+   Patient via a real-backend Playwright spec added to
+   `specimen-quality-inventory.spec.ts`, confirmed the test genuinely
+   fails without the model changes.
+4. Before merging, checked `docs/docs-7-27-2026/extracted/dict-02_
+   DICIONARIO.md` (confirmed higher-authority than `docs/architecture/`
+   per #128) — it models institutional linkage as `Reference(Organization)`
+   (`Specimen.collectionSite`, `ParticipantIdentity.clinicalUnitId`,
+   `UserAccount.organizationId`), explicitly flags `User.institution` as
+   legacy, and no `Organization` entity exists anywhere in the codebase.
+   Asked Dennis: keep the simple string field (already built+proven) or
+   align to the dictionary. He chose the dictionary.
+5. Discarded the string-field implementation (`git checkout --` on all
+   four touched files, confirmed clean) rather than merge a design that
+   contradicts the canonical spec. Deleted the now-empty
+   `test/339-institution-scope-schema` branch.
+6. Re-split per `divide-and-conquer`'s "issue's subject doesn't exist
+   yet" playbook: documented the real foundational requirement as
+   **#343** (build a canonical `Organization` entity + `Reference`
+   wiring, per ELM-0024..0031 — bigger than #339's original framing,
+   since it also means migrating `User.institution`/`institutionalScope`
+   off free text). Corrected #340/#341 to depend on #343 instead of
+   #339 directly. Closed #339 against this documented-requirement
+   deliverable (no product code shipped from this session — the closing
+   comment says so explicitly).
+7. Filed 4 more findings hit along the way: #342 (`compose:up --wait`
+   fails — backend service has no healthcheck configured, container
+   itself is fine), #344 (a fresh `compose:up` dev stack has no
+   admin-bootstrap path, so any real-backend login-based e2e spec 401s
+   until `createFirstAdmin.js` is run manually), #345 (Patient's
+   canonical-field allow-list is duplicated three ways across
+   `Patient.js`/`paciente.controller.js` and can drift), and a
+   documentation-gap issue on the skills-pack repo itself
+   (`DyeAllPies/dyeallpies-skills-pack#150`, since `bioavanced-v2-
+   testing-conventions` doesn't mention the admin-bootstrap step —
+   deferred writing the actual wording until #344 picks a fix).
 
 ## Repo state
 
-- `feature/docker-e2e-backend-integration` at `b132411e`, pushed.
-  Carries both prior divergent histories in full (#324/#338 plus
-  #322/#333/#337's RF003 work, including `institutionalScope`/
-  `roleValidFrom`/`roleValidUntil` on `User.js`) plus this session's
-  auth-middleware error-handling fix.
-- `test/e2e-real-backend-foundation` at `7a1de69f` — fully merged
-  forward now; safe to delete (not yet done — leaving it for Dennis to
-  confirm, since it was a long-lived branch other sessions may still
-  reference).
-- `main` still not touched, still frozen.
-- **#333, #337, #338 closed** (from prior sessions). **#339 still
-  open** — product call now made (all 4 resource types, all
-  non-superadmin roles), enforcement itself not yet built.
-- **#336** (from the #324 session, still open): legacy synchronous
-  `POST /api/import/fhir` looks superseded by the FHIR staging pipeline,
-  needs Dennis/Denise reconciliation, non-blocking.
+- `feature/docker-e2e-backend-integration` unchanged from the prior
+  session (`b132411e`) — this session shipped no commits, only issue
+  triage/re-scoping. Nothing to push.
+- The Docker dev stack (`compose:up`, mongodb/neo4j/redis/influxdb/tsa/
+  witness/backend/worker/neo4j-projection-worker/frontend) is currently
+  **running** from this session (started to prove the schema-slice test
+  against the real backend). A manually-bootstrapped `admin`/`Admin@123`
+  account now exists in that stack's Mongo (`bioavanced_dev` db) from
+  the workaround in #344 — not present before this session, in-memory/
+  volume-only, not a code change. Left running; bring down with
+  `npm run compose:down` when done, or leave up if continuing #343 next.
+- `test/e2e-real-backend-foundation` — still not deleted (from two
+  sessions ago); Dennis hasn't confirmed yet, still safe to delete
+  (fully merged forward).
+- **#339 closed** this session (against the documented-requirement
+  deliverable, not code). **#343 open** — the real foundational issue,
+  supersedes #339's original framing. **#340, #341 open**, corrected to
+  depend on #343. **#342, #344, #345 open** (new findings, all
+  `test-branch`-labeled, none blocking). **#336** (FHIR legacy
+  reconciliation) still open, unrelated, non-blocking.
 
 ## Recommended next steps
 
-1. Resume #339 with `build-loop`: add institution fields to
-   Sample/Patient/report models (none exist yet — sizing research this
-   session found only `User.js`'s singular `institution` string, no
-   equivalent on any resource model), build the scope-filter middleware
-   (no existing precedent to extend — `rbac.js`'s `allowedRoles` gate
-   only allow/denies, doesn't inject query filters), wire into
-   `sample.service.js`/`patient.service.js`/`reports.routes.js`;
-   dashboards inherit automatically since `frontend/src/views/Dashboard.tsx`
-   only composes those same endpoints, no separate backend route.
-2. Confirm with Dennis whether `test/e2e-real-backend-foundation` can
-   be deleted now that it's fully merged forward.
-3. Once #339 lands: #325/#326 (RF020/RF021, blocked on #320's CRUD
-   gap), #334 (RF007 remainder, divide-and-conquer-shaped), #336
-   (legacy FHIR endpoint reconciliation).
-
-Tracking issue #331 covers integrating all Wave 2 specs onto
-`feature/docker-e2e-backend-integration` once they land.
+None queued by Dennis explicitly. For continuity: #343 (Organization
+entity) is the actual next foundational piece for institutional-scope
+work, but its own scope note says it likely needs another
+`divide-and-conquer` pass and a fresh product call with Dennis (migration
+path for existing `User.institution`/`institutionalScope` values) before
+a build-loop iteration can start on it — don't treat it as ready-to-pick-up
+without that conversation first.
 
 ## Which skills to use
 
-`build-loop` for the rest of #339 (product call now made — see above).
-`build-loop` for #325/#326 once #320's CRUD gap is resolved.
+`divide-and-conquer` again for #343 once Dennis has made the migration
+product call — the entity-design + User-migration + reference-wiring +
+enforcement pieces are independently sized already, per #343's own body.
 `ship-integration-branch` only once Wave 2 is fully landed and Dennis
 explicitly asks to graduate to `main`.
