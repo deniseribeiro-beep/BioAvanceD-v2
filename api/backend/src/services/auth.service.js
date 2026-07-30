@@ -1,4 +1,5 @@
 const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const speakeasy = require('speakeasy');
 const QRCode = require('qrcode');
@@ -24,7 +25,8 @@ class AuthService {
         username: user.username,
         accessType: user.accessType,
         name: user.name,
-        mfaVerified: true
+        mfaVerified: true,
+        jti: crypto.randomUUID()
       },
       env.JWT_SECRET,
       { expiresIn: ACCESS_TOKEN_TTL }
@@ -34,7 +36,8 @@ class AuthService {
   issueRefreshToken(user, sessionID = null) {
     const payload = {
       userID: user._id.toString(),
-      type: 'refresh'
+      type: 'refresh',
+      jti: crypto.randomUUID()
     };
 
     if (sessionID) {
