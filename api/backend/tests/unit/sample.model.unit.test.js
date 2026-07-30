@@ -1,6 +1,29 @@
 import { describe, it, expect } from 'vitest';
 const { SampleModel: Sample } = require('../../src/models/Sample');
 
+describe('Sample.create - collectionSite (ELM-0128)', () => {
+  const base = {
+    specimenId: 'SP-1',
+    participantId: '12345678',
+    sampleType: 'PLASMA',
+    sampleOrigin: 'VENOUS_BLOOD',
+    extractionProtocol: 'TUBE_EDTA',
+    registeredAt: new Date('2024-01-01'),
+    quantity: 10,
+    linkedProject: 'ProjectX'
+  };
+
+  it('maps collectionSite (Organization reference) onto the created document', () => {
+    const result = Sample.create({ ...base, collectionSite: 'org-uuid-123' });
+    expect(result.collectionSite).toBe('org-uuid-123');
+  });
+
+  it('defaults collectionSite to null when not provided', () => {
+    const result = Sample.create({ ...base });
+    expect(result.collectionSite).toBeNull();
+  });
+});
+
 describe('Sample.validateLifecycleStatus', () => {
   it('returns true for AVAILABLE', () => {
     expect(Sample.validateLifecycleStatus('AVAILABLE')).toBe(true);

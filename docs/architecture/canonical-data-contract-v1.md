@@ -47,6 +47,7 @@ This document defines the canonical v1 runtime contract for BioAvanceD.
 - `registeredAt`
 - `lifecycleStatus`
 - `linkedProject`
+- `collectionSite` (Reference(Organization), per dictionary ELM-0128)
 - `merkleRoot`
 - `sprec`
 

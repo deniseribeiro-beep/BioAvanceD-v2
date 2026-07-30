@@ -210,6 +210,27 @@ describe('sample.service', () => {
       ).rejects.toMatchObject({ status: 409 });
     });
 
+    it('resolves collectionSite (ELM-0128) against a real Organization and stores it', async () => {
+      const db = makeDb({ organizations: makeCollection('organizations') });
+      mockOperationalLocation(db);
+      db.collections.organizations.findOne.mockResolvedValue({ organizationId: 'org-uuid-123' });
+
+      const result = await sampleService.createSample(db, validSampleData({ collectionSite: 'org-uuid-123' }));
+
+      expect(db.collections.organizations.findOne).toHaveBeenCalledWith({ organizationId: 'org-uuid-123' });
+      expect(result.collectionSite).toBe('org-uuid-123');
+    });
+
+    it('rejects with 404 when collectionSite does not resolve to an Organization', async () => {
+      const db = makeDb({ organizations: makeCollection('organizations') });
+      mockOperationalLocation(db);
+      db.collections.organizations.findOne.mockResolvedValue(null);
+
+      await expect(
+        sampleService.createSample(db, validSampleData({ collectionSite: 'org-does-not-exist' }))
+      ).rejects.toMatchObject({ statusCode: 404 });
+    });
+
     it('rolls back the inserted sample when the ledger append fails', async () => {
       const db = makeDb();
       mockOperationalLocation(db);
