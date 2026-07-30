@@ -49,8 +49,15 @@ This document defines the canonical v1 runtime contract for BioAvanceD.
   `resolveClinicalUnitSnapshot`, so no Organization-based replacement
   (e.g. filtering by `organizationId`) is needed — regression-covered by
   `patient.service.clinicalUnitSearch.unit.test.js`. `paciente.controller.js`'s
-  allowlist and `clinical-unit.routes.js`'s CRUD/search surface
-  (proxy-or-retire decision still open) remain — tracked as #356, #357)
+  `clinicalUnitId`/`clinicalUnit`/`unitAcronym` allowlist and
+  normalization were decided (#356) to stay as-is too: the allowlist
+  already accepts `clinicalUnitId` as an opaque `organizationId`
+  reference and forwards it unmangled (in particular, unlike
+  `clinicalUnit`/`unitAcronym`, it is never case-folded) into
+  `resolveClinicalUnitSnapshot` — regression-covered by
+  `paciente.controller.clinicalUnitAllowlist.unit.test.js`.
+  `clinical-unit.routes.js`'s CRUD/search surface (proxy-or-retire
+  decision still open) remains — tracked as #357)
 
 ### Specimen
 
