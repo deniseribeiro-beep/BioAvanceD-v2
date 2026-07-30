@@ -1,94 +1,91 @@
 # HANDOFF
 
 **Written:** 2026-07-30, a same-day continuation session on
-`feature/docker-e2e-backend-integration`. Ran `build-loop` on **#357**
-(third link in the #355→#356→#357→#358 chain split from #354) and
-closed it.
+`feature/docker-e2e-backend-integration`. Picked up **#358** (last link
+in the #355→#356→#357→#358 chain split from #354) and closed it as a
+no-op — no code changed this session.
 
 ## What happened this session
 
-1. Read #357's scope: decide whether `clinical-unit.routes.js` (the
-   `clinicalUnits` collection CRUD/search surface at `/api/clinical-units`)
-   should proxy to `organizations` or be retired outright, now that
-   #355/#356 settled `clinicalUnitId`/`clinicalUnit` resolution.
-2. Investigated and found retirement was the clear call, not proxying:
-   - `patient.service.js`'s `resolveClinicalUnitSnapshot` has resolved
-     exclusively against `organizations` since #353 — grepped the whole
-     backend `src/` and confirmed `clinical-unit.routes.js` was the
-     **only** code anywhere still reading/writing the `clinicalUnits`
-     collection.
-   - `migrateClinicalUnitOrganizations.js`'s own docblock states it's
-     "Pré-requisito para retirar a coleção/rotas legadas de clinicalUnits
-     (#352)" — the codebase already expected this retirement.
-   - On the frontend, `clinicalUnitService` (services/api.ts) and the
-     `useClinicalUnits` hook that called it were themselves **dead
-     code** — grepped and confirmed no component ever imported the hook.
-3. Implemented on `test/clinical-unit-routes-retirement`:
-   - Wrote `clinical-unit.routes.retirement.test.js` first (asserting
-     GET/GET search/POST `/api/clinical-units` all now 404), confirmed
-     it failed (401, route still live) before making any change.
-   - Unmounted the route in `app.js`, deleted
-     `clinical-unit.routes.js`, deleted its two old integration test
-     files (`clinical-unit.api.test.js`,
-     `clinical-unit.routes.gaps.test.js`) since they tested behavior
-     that no longer exists.
-   - Deleted the frontend's dead `useClinicalUnits.ts` hook, the
-     `clinicalUnitService` block in `services/api.ts`, and the
-     now-unused `ClinicalUnit` type in `types/models.ts`. Verified with
-     `tsc --noEmit` — clean.
-   - Updated `docs/architecture/canonical-data-contract-v1.md`'s
-     `clinicalUnitId` entry to record the #357 retirement decision,
-     closing out the #355→#356→#357 chain's doc trail.
-4. Verified: targeted vitest run green (4 files, 18 tests), frontend
-   `tsc --noEmit` clean. No full-suite run this iteration per the
-   end-loaded gate order.
-5. Committed on `test/clinical-unit-routes-retirement`, merged into
-   `feature/docker-e2e-backend-integration`, deleted the merged branch.
-   Closed **#357**.
-6. Ran `wrap-up`: no friction to report this iteration.
+1. Read #358's scope: confirm whether `patient.model.unit.test.js`,
+   `paciente.controller.test.js`, `patients-integration.test.js` need a
+   rewrite against the new Organization-based `clinicalUnitId`
+   resolution, now that #355/#356/#357 landed.
+2. Investigated each file against current source:
+   - `patient.model.unit.test.js` / `paciente.controller.test.js` test
+     the `Patient` model's normalization and `paciente.controller.js`'s
+     `clinicalUnitId`/`clinicalUnit`/`unitAcronym` field allowlist
+     directly (`src/controllers/paciente.controller.js:22-24`) — that
+     allowlist is untouched by #355 (`patient.service.
+     resolveClinicalUnitSnapshot`) or #357 (retired
+     `clinical-unit.routes.js` + frontend dead code), still the real
+     current shape.
+   - `patients-integration.test.js` fully mocks `patientService`/
+     `mockDb` at the Express-app level; `clinicalUnitId` is just a
+     passthrough fixture field, never exercising
+     `resolveClinicalUnitSnapshot` or the retired routes — was already
+     organization-agnostic by construction.
+3. Ran all 3 files together (`api/backend`):
+   `npx vitest run tests/unit/patient.model.unit.test.js
+   tests/unit/paciente.controller.test.js
+   tests/integration/patients-integration.test.js` — **140 passed
+   (140)**, confirming no rewrite is needed.
+4. No branch created (no code edited — pure investigation +
+   confirmation, per this repo's git-hygiene rule that branching is only
+   required before the first Edit/Write).
+5. Posted the investigation findings as a comment on #358 and closed it.
+6. Ran `wrap-up`: no friction to report this iteration (see Repo state
+   below for the one open thread it surfaced — not new, already
+   tracked).
 
 ## Repo state
 
-- `feature/docker-e2e-backend-integration` has one new merge commit
-  (this session's `test/clinical-unit-routes-retirement`) on top of
-  prior HEAD (`b5f6dad6`), not yet pushed — ahead of
+- `feature/docker-e2e-backend-integration` unchanged this session (no
+  commits) — still one merge commit ahead of prior HEAD from the #357
+  session, not yet pushed, ahead of
   `origin/feature/docker-e2e-backend-integration` by several local
-  commits (nothing pushed this session).
+  commits.
 - Docker dev stack: **down**, unchanged for several sessions running
-  now — this iteration used native-only vitest proof (no live backend
-  needed for a route-removal + dead-code-removal slice). A future
-  session bringing it up fresh still hits #344 (no admin user), #342
-  (`--wait` healthcheck), and the frontend-container manual-start
-  quirk.
+  now — this iteration needed no backend at all (pure test-file
+  investigation, no product code touched).
 - `test/e2e-real-backend-foundation` — still not deleted, still safe to
   delete (fully merged forward), Dennis hasn't confirmed.
-- **#357 closed** (decision: retire outright, not proxy — regression-
-  tested, docs updated). **#354 open**, tracking issue for the #353
-  remainder, chain now at **#358** only — #358 is next, unblocked by
-  #357's close. **#340, #341 open**, still blocked (transitively on
-  #358). **#342, #344, #345 open** (infra findings, `test-branch`-
-  labeled, non-blocking, unchanged). **#349, #350 open** (from the #347
-  session, unrelated). **#336** (FHIR legacy reconciliation) still
-  open, unrelated, non-blocking.
+- **#358 closed** (no-op — all 3 files already organization-agnostic or
+  untouched by the resolution-logic change, 140/140 tests pass
+  unmodified). **#354 open** — the #355→#356→#357→#358 chain is now
+  fully resolved, but #354 itself still tracks two unrelated remainder
+  items from the original #353 split: `paciente.controller.js`'s
+  `clinicalUnitId`/`clinicalUnit`/`unitAcronym` allowlist retirement,
+  and `patient.service.js`'s free-text search/filter paths
+  (`query.clinicalUnit` regex, `filters.clinicalUnit` exact-match) that
+  still query `patients.clinicalUnit` directly — neither addressed by
+  #355/#356/#357/#358, still open design questions for #354 itself.
+  **#340, #341 open**, still blocked (transitively on #354 now that
+  #358 is done — re-check whether #354's remainder still blocks them or
+  only the chain did). **#342, #344, #345 open** (infra findings,
+  `test-branch`-labeled, non-blocking, unchanged). **#349, #350 open**
+  (from the #347 session, unrelated). **#336** (FHIR legacy
+  reconciliation) still open, unrelated, non-blocking.
 - Skills-pack: **#151 open** (documentation), build-loop real-backend
-  proof-bar ambiguity for this repo — not blocking, informational; not
-  leaned on directly this session (no service/query-logic slice this
-  time, just route removal).
+  proof-bar ambiguity for this repo — not blocking, informational; this
+  session's slice turned out to need zero backend proof (a confirm-only
+  investigation, no capability built), so it didn't engage this
+  ambiguity either.
 
 ## Recommended next steps
 
-None queued explicitly by Dennis. **#358** (last link in the
-#355→#356→#357→#358 chain split from #354) is the natural next
-`build-loop` iteration — it's now unblocked. Once #358 lands, #354
-itself (the tracking issue for the whole #353 remainder) should be
-revisited to see if it can close.
+None queued explicitly by Dennis. With the #355→#356→#357→#358 chain
+fully closed, **#354** itself is the natural next pickup — its own
+description should be re-read fresh (not just "did the chain finish")
+to judge whether the allowlist-retirement and free-text-search
+questions are ready to resolve now, or still need the "revisit once the
+branch merges to main" condition #354 names in its own body.
 
 ## Which skills to use
 
-`build-loop` for #358 if picked up next — read its BioAvanceD-v2
-overlay for the "real backend" proof-bar nuance (native-only mocks
-suffice for a backend-internal slice; literal Docker is reserved for
-the RF milestone's own e2e specs and `ship-integration-branch`).
+`build-loop` again if #354's remaining items turn out to need new
+product-code changes with real-backend proof; `resolve-issue`/`fix-bugs`
+if either sub-item resolves to "no change needed" the way #358 did.
 `ship-integration-branch` only once the full #346→#347→#348/#351/#352/
-#353→(#355→#356→#357→#358) wave is landed and Dennis explicitly asks to
-graduate to `main`.
+#353→(#355→#356→#357→#358)→#354 wave is landed and Dennis explicitly
+asks to graduate to `main`.
