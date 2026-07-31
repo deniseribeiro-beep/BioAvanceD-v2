@@ -1,79 +1,83 @@
 # HANDOFF
 
-**Written:** 2026-07-31, a `build-loop` session closing out **#329**
-(RF022 Foundation Data Pipeline, Wave 2 red-first prerequisite) on
+**Written:** 2026-07-31, a `build-loop` session closing out **#330**
+(RF028 Fase 2 reference importers, Wave 2 red-first prerequisite) on
 `feature/docker-e2e-backend-integration`, picked up directly from Dennis
-after the prior #328 close-out — Docker was already on (dev stack, not
-the test stack) for this session.
+right after the #329 close-out — dev stack (`compose.yml`) was already
+up from the prior session and left running.
 
 ## What happened this session
 
-1. Routed via `work-issue` → `build-loop`: #329 asks for the first
-   honest e2e test against the real backend for RF022, expected to fail
-   — file the actual bootstrap rework as a separate follow-up once the
-   red test shows what's missing.
-2. Scoped the gap against `dict-07_ALINHAMENTO_CODIGO.md` /
-   `dict-08_MAIN_GAPS.md` ("Gap crítico"): confirmed in code that
-   `essential/manifest.js` (3 entries) +
-   `scripts/seed-essential-reference-data.js` is a manual CLI script —
-   `current-state:ci` only ever `--dry-run`s it, `compose.test.yml`
-   never invokes it at all, and nothing in `src` wires it to
-   startup/healthchecks. No API surface exists for reference data or
-   run-tracking either.
-3. Added a new `test.describe` block to
-   `tests/e2e/pipeline-continuity.spec.ts` ("Foundation Data Pipeline
-   bootstrap (RF022) — real backend"), plus a new helper
-   `tests/e2e/helpers/queryFoundationData.ts` (same direct-Mongo pattern
-   as `seedParticipant.ts`/`queryNeo4j.ts`, since there's no API to
-   assert against): AC "reference data populated automatically" and AC
-   "bootstrap records an idempotent run" both **confirmed red** against
-   the real (already-up) dev-stack backend — 0 docs in
-   `sampleTypes`/`terminologies`, 0 docs in `referenceSeedRuns`.
-4. Caught my own process slip mid-iteration: edited the spec/helper
-   files directly on `feature/docker-e2e-backend-integration` before
-   creating the `test/<slug>` branch build-loop calls for. Fixed via
-   `git stash -u` → new branch → `git stash pop`, before any commit —
-   no lasting harm, flagged in `wrap-up`.
-5. Committed on `test/rf022-foundation-pipeline-red-first`, merged
-   `--no-ff` into `feature/docker-e2e-backend-integration` (`08e48b3e`),
-   pushed.
-6. Filed **#366** (build the actual one-shot bootstrap + `FoundationDataRun`
-   tracking, replace the manual seed script) as a separate follow-up,
-   flagged as likely needing `divide-and-conquer` and as the RF029/Wave 3
-   sequencing blocker per the plan.
-7. Closed **#329** with a comment summarizing both red assertions and
-   linking #366.
-8. `wrap-up` audit: no product source touched (`git diff --stat` against
-   `api/backend/src`/`frontend/src` empty). Only friction: the
-   branch-order slip in step 4 above (self-caught, no issue needed — it's
-   already the documented failure mode build-loop's own steps guard
-   against, not a skill gap).
+1. Routed via `work-issue` → `build-loop`: #330 asks for the first
+   honest e2e test against the real backend for RF028, expected to
+   fail — file the actual importer-build work as a separate follow-up
+   once red.
+2. Scoped the gap against `requisitos-index.md` (RF028, 10 acceptance
+   criteria) and `dict-08_MAIN_GAPS.md`'s "Reference data pipeline" row:
+   confirmed in code that no `ReferenceDatasetRelease`,
+   `ReferenceImportRun`, `ReferenceImportIssue`, `TerminologyConcept`, or
+   `TerminologyRelation` model/collection/pipeline exists anywhere in
+   `api/backend/src` — only Fase 3 operational import surfaces
+   (`import.controller.js` etc.), unrelated to reference datasets.
+3. Extended `tests/e2e/pipeline-continuity.spec.ts` with a new
+   `test.describe` block ("Reference data importers (RF028) — real
+   backend") plus two new helpers in
+   `tests/e2e/helpers/queryFoundationData.ts`
+   (`countReferenceDatasetReleases`, `countTerminologyConcepts`), same
+   direct-Mongo pattern as RF022 (#329) since there's no API surface to
+   assert against. Both ACs — "a reference dataset release has been
+   registered" and "imported terminology concepts are persisted and
+   linked to a release" — **confirmed red** against the real
+   (already-up) dev-stack backend: 0 docs in `referenceDatasetReleases`/
+   `terminologyConcepts`.
+4. Committed on `test/rf028-reference-importers-red-first`, merged
+   `--no-ff` into `feature/docker-e2e-backend-integration` (`0e414a4f`),
+   pushed both branches.
+5. Filed **#367** (build the actual RF028 importers: `ReferenceDatasetRelease`
+   + `ReferenceImportRun` + `ReferenceImportIssue` + `TerminologyConcept`
+   + `TerminologyRelation`, at least one real source e.g. LOINC/HPO end to
+   end) as a separate follow-up, flagged as likely needing
+   `divide-and-conquer` given 10 ACs and 5 new models — same shape as
+   #366 for RF022.
+6. Closed **#330** with a comment summarizing both red assertions and
+   linking #367.
+7. `wrap-up` audit: no product source touched (`git diff --stat` against
+   `api/backend/src`/`frontend/src` against `56db1237` empty). One
+   friction item found and filed upstream rather than fixed locally
+   (junction-protected skills-pack file, Rule 0): the helpers' default
+   `E2E_MONGO_URI`/`E2E_MONGO_DB` target the *test* stack, not the
+   already-up *dev* stack, so the first run failed on Mongo auth before
+   the right creds (`.env.docker`) were found — filed as
+   `dyeallpies-skills-pack#159` (quoted overlay text ready to apply
+   verbatim) rather than edited through the installed junction.
 
 ## Repo state
 
-- `feature/docker-e2e-backend-integration`: at `08e48b3e`, working tree
-  clean, pushed. Carries the new RF022 red-first spec + helper.
-- **#329 closed**, referencing follow-up **#366** (open, not started —
+- `feature/docker-e2e-backend-integration`: at `0e414a4f`, working tree
+  clean, pushed. Carries the new RF028 red-first spec + helpers.
+- **#330 closed**, referencing follow-up **#367** (open, not started —
   scope explicitly flagged as possibly needing `divide-and-conquer`).
-- Dev stack (`compose.yml`, not `compose.test.yml`) was already up this
-  session (per #327/#328's precedent) and left running — not torn down.
+- Dev stack (`compose.yml`, not `compose.test.yml`) still up from prior
+  sessions, not torn down. Direct-Mongo e2e specs against it need
+  `E2E_MONGO_URI`/`E2E_MONGO_DB` set explicitly (dev-stack creds/db,
+  see `.env.docker`) — the helpers' defaults target the test stack.
 
 ## Recommended next steps
 
 None queued explicitly by Dennis beyond "prereqs of Wave 2." Remaining
-Wave 2 red-first prerequisite per `E2E_TRACEABILITY_PLAN.md`: **#330**
-(RF028 Fase 2 importers, same `pipeline-continuity.spec.ts`, also blocks
-RF029). **#363** (ParticipantIdentity model/migration, from #327),
-**#364**/**#365** (from #328), and now **#366** (from this session) are
-separate, smaller build-loop/fix-bugs candidates once someone picks them
-up.
+Wave 2 red-first prerequisites per `E2E_TRACEABILITY_PLAN.md`: **#363**
+(ParticipantIdentity model/migration, from #327), **#364**/**#365** (from
+#328), **#366** (RF022 bootstrap build, from #329), and now **#367**
+(RF028 importer build, from this session) — separate, smaller
+build-loop/fix-bugs candidates once someone picks them up. No further
+red-first e2e gaps are queued unless the traceability plan names another
+RF beyond RF022/RF028 for Wave 2.
 
 ## Which skills to use
 
-`work-issue` → `build-loop` for #330 (same red-first shape as
-#327/#328/#329). `fix-bugs` or a small `build-loop` pass for
-#363/#364/#365/#366 once picked up — all are narrow, already-scoped gaps,
-not full-requirement builds; #366 in particular should open with a
+`fix-bugs` or a small `build-loop` pass for #363/#364/#365/#366/#367 once
+picked up — all are narrow, already-scoped gaps, not full-requirement
+builds; #366 and #367 in particular should open with a
 `divide-and-conquer` pass rather than assume one iteration. Another
 `ship-integration-branch` pass once Wave 2's red-first prerequisites and
 any build-loop follow-ups are done.
