@@ -2,6 +2,11 @@ import { test, expect } from '@playwright/test';
 import { realLogin } from './helpers/realAuth';
 import { createRealParticipant, closeSeedDb } from './helpers/seedParticipant';
 import { waitForEthicalConsentStatus, closeNeo4jDriver } from './helpers/queryNeo4j';
+import {
+  countEssentialReferenceDocs,
+  countReferenceSeedRuns,
+  closeFoundationDb,
+} from './helpers/queryFoundationData';
 
 // Real backend only — see backend-integration.spec.ts for the same skip
 // rationale. Run via `npm run test:e2e:docker` against the compose test
@@ -83,5 +88,32 @@ test.describe('Outbox → Neo4j projection (RF023) — real backend', () => {
     expect(revoke.ok()).toBe(true);
 
     await waitForEthicalConsentStatus(consentId, 'REVOKED');
+  });
+});
+
+// dict-07/dict-08 (#329, "Gap crítico"): the target Foundation Data Pipeline
+// is a one-shot, idempotent bootstrap of the full 929-element dictionary
+// across six technical entities, executed automatically after the stack's
+// healthchecks pass — not a script a human has to remember to run.
+// api/backend/scripts/seed-essential-reference-data.js is exactly that
+// legacy manual seed: current-state:ci only ever runs it with --dry-run
+// (api/backend/package.json's current-state:ci), and compose.test.yml never
+// invokes it at all. These assertions read the same reference/run-tracking
+// collections the manifest itself targets (essential/manifest.js) directly
+// from Mongo — there's no API surface for any of this yet — and are
+// expected to fail against a freshly-booted test stack, which is the gap.
+test.describe('Foundation Data Pipeline bootstrap (RF022) — real backend', () => {
+  test.afterAll(async () => {
+    await closeFoundationDb();
+  });
+
+  test('reference data is populated automatically, without running the manual seed script', async () => {
+    const count = await countEssentialReferenceDocs();
+    expect(count).toBeGreaterThan(0);
+  });
+
+  test('the bootstrap records an idempotent run, not just ad-hoc upserts', async () => {
+    const runs = await countReferenceSeedRuns();
+    expect(runs).toBeGreaterThan(0);
   });
 });
