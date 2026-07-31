@@ -1,66 +1,80 @@
 # HANDOFF
 
-**Written:** 2026-07-31, a `resolve-issue` session closing out **#361**
-(dev-stack Mongo/Neo4j volume fixture accumulation) on
-`feature/docker-e2e-backend-integration`, picked up from the same day's
-#362 close-out session's standing candidate list.
+**Written:** 2026-07-31, a `build-loop` session closing out **#327**
+(RF005/RNF007 ParticipantIdentity segregation, Wave 2 red-first
+prerequisite) on `feature/docker-e2e-backend-integration`, picked up
+directly from Dennis after the prior session's #361 close-out — Docker
+was already on for this session.
 
 ## What happened this session
 
-1. Read HANDOFF.md, routed **#361** via `work-issue` → `resolve-issue`
-   (documentation/awareness item, not a bug/coverage/build item — the
-   issue's own suggested directions left the fix choice, if any, to
-   Dennis).
-2. Confirmed #361 is a distinct problem from the already-fixed
-   #320/#318/#360 Mongo/Neo4j credential-mismatch issues: this one is
-   the dev stack's (`compose:up`) named volumes never being torn down
-   with `--volumes`, so fixture data accumulates across sessions and
-   causes intermittent failures in specs asserting "this is the
-   only/first event of its kind" (`interop-monitoring.spec.ts`,
-   `specimen-quality-inventory.spec.ts`). The credential fix cleared
-   unrelated noise (24 → 13 failures) but didn't touch this class.
-3. The actual fix — extending the `docker-workflow` overlay's existing
-   `mongodb-test-data` gotcha to cover the dev stack too — lives in the
-   `dyeallpies-skills-pack` repo (overlay files are an installed
-   junction, only editable from a pack-repo session per skill-maintenance
-   Rule 0). Filed **`dyeallpies-skills-pack#156`** with the exact
-   verbatim text to add to `local-env/BioAvanceD-v2.md`.
-4. Commented on #361 with the finding and link to #156, initially left
-   open (case 5: "cannot be resolved from this repo"). Per Dennis's
-   explicit instruction, closed #361 with a follow-up comment — the
-   documentation fix is fully tracked in the pack repo, no product-code
-   change was warranted.
-5. `wrap-up` audit: no friction. No commits/branches/pushes this
-   session — only a GitHub issue comment/close in this repo and one
-   issue filed in the pack repo.
+1. Routed via `work-issue` → `build-loop`: #327 asks for the first
+   real-backend e2e test proving RF005/RNF007's `ParticipantIdentity`
+   segregation gap, expected to fail against `main` — a missing
+   capability, not a product bug or existing-code coverage gap.
+2. Confirmed the gap directly in code: `Patient.js:55-56` keeps
+   `patientName`/`birthDate` as plain fields on the Patient document;
+   no `ParticipantIdentity` entity exists anywhere. Also confirmed
+   `neo4jCanonicalProjection.service.js` never projects these fields
+   today (only a pseudonymized `Donor.id` from `participantId`) — so
+   RNF007 AC#3 already holds, unlike AC#1/AC#2.
+3. Added a new `test.describe` block to `tests/e2e/intake-wizard.spec.ts`
+   (real-backend, `PLAYWRIGHT_API_BASE_URL`-gated, same pattern as
+   `specimen-quality-inventory.spec.ts`): AC#1/AC#2 asserts
+   `GET /api/patients/:id` never returns `patientName`/`birthDate`/
+   `identityDocument` directly (**confirmed red** against the running
+   dev stack); AC#3 asserts the `graph_projection_outbox` Mongo
+   collection never carries those fields for the participant
+   (**confirmed green**, read directly against Mongo since no API
+   route exists to inspect the outbox).
+4. Ran the new tests against the already-running dev compose stack
+   (`bioavanced-backend-1` etc., ports 3000/5173/27017) — no fresh
+   `compose:up`/`docker:e2e` needed since Docker was already on.
+   Verified `npx tsc --noEmit` clean, then the actual Playwright run:
+   1 failed (the intended red), 1 passed.
+5. Committed on `test/rf005-participant-identity-segregation`, merged
+   `--no-ff` into `feature/docker-e2e-backend-integration`
+   (`1d8875c3`), pushed.
+6. Filed **#363** (this repo) for the actual `ParticipantIdentity`
+   model/migration build, per #327's own "file the fix as a separate
+   follow-up" instruction — scoped to the entity, access controls, and
+   the stale `docs/architecture/canonical-data-contract-v1.md` (#128).
+7. Closed **#327** with a comment summarizing the red/green split and
+   linking #363.
+8. `wrap-up` audit: no friction. Only `tests/e2e/intake-wizard.spec.ts`
+   touched (in scope for `build-loop`'s "test first" step); no product
+   code edited this iteration since turning AC#1/AC#2 green is #363's
+   scope, not this one's.
 
 ## Repo state
 
-- `feature/docker-e2e-backend-integration`: unchanged this session,
-  still at `bd486ac2`, working tree clean, pushed.
-- **#361 closed** this session, referencing `dyeallpies-skills-pack#156`
-  as the tracked follow-up.
-- Standing inventory carried forward unchanged: `dyeallpies-skills-pack#154`
-  (open, #360's doc fix) and `#155` (#362's finding, now unblocked)
-  still pending in the pack repo, now joined by **`#156`** (this
-  session's dev-stack volume-accumulation overlay text) — none of the
-  three applied yet.
-- Docker Desktop / dev stack: on this session per Dennis (carried from a
-  prior session), not used for any build/run/compose this session (the
-  work was doc/tracking only, no verification needed it).
+- `feature/docker-e2e-backend-integration`: at `1d8875c3`, working tree
+  clean, pushed. Carries the new RF005/RNF007 red-first spec.
+- **#327 closed**, referencing follow-up **#363** (ParticipantIdentity
+  model/migration, open, not yet started).
+- Dev stack (`compose:up`, compose.yml+compose.dev.yml) was already up
+  this session and left running — not torn down, per Dennis's
+  "Docker is on" for the session.
+- Standing pack-repo inventory unchanged: `dyeallpies-skills-pack#154`,
+  `#155`, `#156` still open/unapplied (from prior sessions' local-env
+  overlay findings — none of the three block this repo's work, just
+  not yet landed in the pack).
 
 ## Recommended next steps
 
-None queued explicitly by Dennis this session. Wave 2 work (#325, #326,
-plus file-gap prerequisites #327–#330) remains the standing candidate
-per `E2E_TRACEABILITY_PLAN.md`.
+None queued explicitly by Dennis beyond "prereqs of Wave 2." The
+remaining Wave 2 red-first prerequisites per `E2E_TRACEABILITY_PLAN.md`
+are still open: **#328** (RF010 ConsentTemplate/Consent split,
+`tcle-dinamico.spec.ts`), **#329** (RF022 Foundation Data Pipeline,
+`pipeline-continuity.spec.ts`, blocks RF029/Wave 3), **#330** (RF028
+Fase 2 importers, same spec file, also blocks RF029). #363 (this
+session's ParticipantIdentity follow-up) is a separate, larger
+build-loop/divide-and-conquer candidate once someone picks it up.
 
 ## Which skills to use
 
-`work-issue` to route whichever open issue/track gets picked up next.
-If Wave 2 work starts, expect `e2e-test-loop` for the individual specs
-and eventually another `ship-integration-branch` pass for the Wave 2
-tracking issue (#331). A pack-repo session should apply all three
-pending pack issues (`#154`, `#155`, `#156`) to their respective
-`docker-workflow`/`resolve-issue` overlay files — they're independent
-edits and could be batched in one pack-repo session.
+`work-issue` → `build-loop` for #328/#329/#330 (same red-first shape as
+#327). `divide-and-conquer` proactively for #363 once started — it's
+explicitly flagged as a likely multi-slice migration. Another
+`ship-integration-branch` pass once Wave 2's red-first prerequisites and
+any build-loop follow-ups are done.
