@@ -5,6 +5,8 @@ import { waitForEthicalConsentStatus, closeNeo4jDriver } from './helpers/queryNe
 import {
   countEssentialReferenceDocs,
   countReferenceSeedRuns,
+  countReferenceDatasetReleases,
+  countTerminologyConcepts,
   closeFoundationDb,
 } from './helpers/queryFoundationData';
 
@@ -115,5 +117,31 @@ test.describe('Foundation Data Pipeline bootstrap (RF022) — real backend', () 
   test('the bootstrap records an idempotent run, not just ad-hoc upserts', async () => {
     const runs = await countReferenceSeedRuns();
     expect(runs).toBeGreaterThan(0);
+  });
+});
+
+// dict-08 (#330, "Reference data pipeline" row, "Importadores ausentes ou
+// placeholders"): RF028 requires explicit Fase 2 pipelines that download,
+// parse, validate, stage and promote reference datasets (MONDO, HPO, ORPHA,
+// LOINC, etc. — AC 2), recording every release in ReferenceDatasetRelease
+// (AC 1) and every persisted concept in TerminologyConcept linked to that
+// release (AC 6). No such importer exists in api/backend/src today — only
+// Fase 3 operational import.controller.js/import.service.js, which have
+// nothing to do with reference datasets — so these collections are read
+// directly from Mongo, same no-API-surface pattern as RF022 above, and are
+// expected to stay empty against the real backend.
+test.describe('Reference data importers (RF028) — real backend', () => {
+  test.afterAll(async () => {
+    await closeFoundationDb();
+  });
+
+  test('at least one reference dataset release has been registered', async () => {
+    const releases = await countReferenceDatasetReleases();
+    expect(releases).toBeGreaterThan(0);
+  });
+
+  test('imported terminology concepts are persisted and linked to a release', async () => {
+    const concepts = await countTerminologyConcepts();
+    expect(concepts).toBeGreaterThan(0);
   });
 });
