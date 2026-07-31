@@ -12,7 +12,8 @@ const CANONICAL_COLLECTIONS = Object.freeze({
   organizations: env.COLL_ORGANIZATIONS || 'organizations',
   diseaseDictionary: env.COLL_DISEASE_DICTIONARY || 'disease_dictionary',
   medicationDictionary: env.COLL_MEDICATION_DICTIONARY || 'medication_dictionary',
-  referenceSeedRuns: env.COLL_REFERENCE_SEED_RUNS || 'referenceSeedRuns'
+  referenceSeedRuns: env.COLL_REFERENCE_SEED_RUNS || 'referenceSeedRuns',
+  participantIdentities: env.COLL_PARTICIPANT_IDENTITIES || 'participantIdentities'
 });
 
 module.exports = {

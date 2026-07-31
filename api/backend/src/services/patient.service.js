@@ -1,4 +1,5 @@
 const PatientModel = require('../models/Patient');
+const ParticipantIdentityModel = require('../models/ParticipantIdentity');
 const OrganizationModel = require('../models/Organization');
 const logger = require('../utils/logger');
 const { generateUniqueParticipantId, sanitizePatientForLogs } = require('../utils/patientAnonymization');
@@ -517,6 +518,14 @@ class PatientService {
       const persistedPatient = this.encryptSensitivePatientFields(patient);
 
       const result = await patientsCollection.insertOne(persistedPatient);
+
+      // RF005/RNF007 (#363): mirror civil identity fields into the segregated
+      // ParticipantIdentity collection. Patient still carries them too for now
+      // (20+ existing consumers — search, notifications, exports — read them
+      // off the Patient doc; migrating those off is tracked separately) but the
+      // API surface (paciente.controller.js#buscar) no longer returns them.
+      const identityCollection = await getCollection(db, 'participantIdentities');
+      await identityCollection.insertOne(ParticipantIdentityModel.create({ ...patientData, participantId }));
 
       if (options.skipConsentNotification !== true) {
         try {

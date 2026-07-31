@@ -23,9 +23,11 @@ const DEFAULTS = {
   biomarkerObservations: 'biomarker_observations',
   cids: 'cids',
   clinicalUnits: 'clinical_units',
+  organizations: 'organizations',
   diseaseDictionary: 'disease_dictionary',
   medicationDictionary: 'medication_dictionary',
-  referenceSeedRuns: 'referenceSeedRuns'
+  referenceSeedRuns: 'referenceSeedRuns',
+  participantIdentities: 'participantIdentities'
 };
 
 const ORIGINAL_ENV = { ...process.env };
@@ -77,14 +79,16 @@ describe('config/collections', () => {
       consentTemplates: 'custom_coll_consent_templates',
       sampleMovements: 'custom_coll_sample_movements',
       biomarkerObservations: 'custom_coll_biomarker_observations',
-      // src/config/env.js never reads these five COLL_* vars into its
+      // src/config/env.js never reads these COLL_* vars into its
       // exports, so collections.js's `env.X ||` fallback for them always
       // takes the hardcoded default regardless of process.env.
       cids: 'cids',
       clinicalUnits: 'clinical_units',
+      organizations: 'organizations',
       diseaseDictionary: 'disease_dictionary',
       medicationDictionary: 'medication_dictionary',
-      referenceSeedRuns: 'referenceSeedRuns'
+      referenceSeedRuns: 'referenceSeedRuns',
+      participantIdentities: 'participantIdentities'
     });
   });
 
