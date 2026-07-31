@@ -25,12 +25,15 @@ This document defines the canonical v1 runtime contract for BioAvanceD.
 ### Participant
 
 - `participantId`
-- `patientName`
-- `birthDate`
+- `patientName` (segregated, see ParticipantIdentity below — not returned by
+  the `GET /api/patients/:id` participant resource as of #363)
+- `birthDate` (segregated, see ParticipantIdentity below — not returned by
+  the `GET /api/patients/:id` participant resource as of #363)
 - `sex`
 - `email`
 - `phone`
-- `identityDocument`
+- `identityDocument` (segregated, see ParticipantIdentity below — not
+  returned by the `GET /api/patients/:id` participant resource as of #363)
 - `recordNumber`
 - `isDeceased`
 - `clinicalUnitId` (migrating to Reference(Organization), per dictionary
@@ -63,6 +66,39 @@ This document defines the canonical v1 runtime contract for BioAvanceD.
   were themselves dead code (never imported by any component) — regression-
   covered by `clinical-unit.routes.retirement.test.js` asserting the
   routes now 404.
+
+### ParticipantIdentity
+
+RF005/RNF007, dict-07_ALINHAMENTO_CODIGO.md row 1 / migration table row 2
+("Segregar, cifrar e não projetar ao grafo"). Civil identity, segregated
+from the scientific `Participant` record behind reinforced access controls
+(`ParticipantIdentity.js`, `participantIdentities` collection):
+
+- `participantId` (foreign key back to `Participant`)
+- `patientName`
+- `birthDate`
+- `identityDocument`
+- `email`
+- `phone`
+- `representativeName`
+- `representativeEmail`
+- `representativeIdentityDocument`
+- `representativePhone`
+
+**Landed in #363:** the entity/collection exists and is dual-written
+alongside `Patient` at intake (`patient.service.js#createPatient`); the
+`GET /api/patients/:id` participant resource
+(`paciente.controller.js#buscar`) no longer returns `patientName`/
+`birthDate`/`identityDocument` as direct fields, for any caller regardless
+of `createPatient` permission (RNF007 AC#1/AC#2).
+
+**Not yet landed (follow-up tracked separately):** the `Patient` document
+itself still carries these fields internally — 20+ existing consumers
+(search, consent notifications, exports, FHIR/import staging, audit
+logging) still read them off `Patient`, so removing them from that
+document is a larger migration than this slice. Also outstanding: an
+authorized, audited re-identification flow (RNF007 AC#4/AC#5) and
+encryption at rest for the segregated collection ("cifrar").
 
 ### Specimen
 

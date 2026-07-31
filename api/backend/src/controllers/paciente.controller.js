@@ -361,9 +361,16 @@ class PacienteController {
         module: 'Cadastro'
       });
 
+      // RF005/RNF007 (#363): patientName/birthDate/identityDocument are civil
+      // identity — segregated into ParticipantIdentity, not returned as direct
+      // fields on the participant resource even to callers with createPatient
+      // permission. Re-identification is a separate authorized/audited flow
+      // (not yet built — tracked in the #363 follow-up).
+      const { patientName, birthDate, identityDocument, ...participantResource } = patient;
+
       return res.status(200).json({
         success: true,
-        data: patient
+        data: participantResource
       });
     } catch (error) {
       logger.error('Erro ao buscar paciente:', error.message);

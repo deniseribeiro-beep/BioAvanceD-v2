@@ -52,7 +52,7 @@ test.describe('Intake wizard (/next/intake)', () => {
   });
 });
 
-test.describe('Participant identity segregation (RF005/RNF007) — real backend, red-first (#327)', () => {
+test.describe('Participant identity segregation (RF005/RNF007) — real backend (#327, entity+read-path landed in #363)', () => {
   test.skip(!apiBaseURL, 'PLAYWRIGHT_API_BASE_URL not set — run via npm run test:e2e:docker');
 
   test.afterAll(async () => {
@@ -63,11 +63,10 @@ test.describe('Participant identity segregation (RF005/RNF007) — real backend,
   // target model requires patientName/birthDate/identityDocument to live
   // in a segregated ParticipantIdentity entity, not as direct fields on
   // the scientific Participant record — "Segregar, cifrar e não projetar
-  // ao grafo". Patient.js/patient.service.js keep them as direct fields
-  // today (Patient.js:55-56), so this is expected to fail against current
-  // main. The failure is the proof of the gap (RNF007 AC#1, AC#2) — do
-  // not weaken this assertion to make it pass; file the ParticipantIdentity
-  // model/migration as a separate follow-up once it's red.
+  // ao grafo". #363 landed the ParticipantIdentity entity/collection and
+  // stripped these fields from GET /api/patients/:id's response; the
+  // Patient document itself still carries them internally pending a
+  // larger follow-up migrating its other ~20 consumers off it.
   test('AC#1/AC#2: patientName/birthDate are not returned as direct fields on the participant resource', async ({
     request,
   }) => {
