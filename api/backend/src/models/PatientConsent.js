@@ -1,6 +1,8 @@
 /**
  * Modelo de validação e estrutura para PatientConsent
  */
+const crypto = require('crypto');
+
 class PatientConsentModel {
   static validate(data) {
     const errors = [];
@@ -53,6 +55,7 @@ class PatientConsentModel {
 
   static create(data) {
     return {
+      consentId: data.consentId || crypto.randomUUID(),
       participantId: data.participantId,
       consentTemplateId: data.consentTemplateId,
       signedAt: data.signedAt ? new Date(data.signedAt) : new Date(),
