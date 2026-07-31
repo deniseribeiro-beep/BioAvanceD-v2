@@ -1,104 +1,76 @@
 # HANDOFF
 
-**Written:** 2026-07-31, a `build-loop` session closing out **#363**
-(RF005/RNF007 ParticipantIdentity segregation, Wave 2 red-first
-prerequisite) on `feature/docker-e2e-backend-integration`, picked up
-directly from Dennis right after the #330 close-out — dev stack
-(`compose.yml`) was already up from prior sessions (~2h) and left running.
+**Written:** 2026-07-31, a `build-loop` session closing out **#364**
+(RF010 `consentId` distinct from Mongo `_id`, dict-02 ELM-0088) on
+`feature/docker-e2e-backend-integration`, picked up directly from Dennis
+right after the #363 close-out.
 
 ## What happened this session
 
-1. Routed via `work-issue` → `build-loop`: #363 asked for the
-   `ParticipantIdentity` model/migration that turns `intake-wizard.spec.ts`'s
-   RF005/RNF007 AC#1/AC#2 red assertions (#327) green — civil identity
-   (`patientName`/`birthDate`/`identityDocument`) must not appear as direct
-   fields on the participant resource.
-2. Issue itself flagged this as likely multi-slice (new entity + migrating
-   ~20 existing consumers off `Patient` + an audited re-identification
-   flow) and said to use `divide-and-conquer` if it didn't fit one
-   iteration — confirmed the blast radius via grep (20 files reference
-   `patientName`/`birthDate`/`identityDocument` in `api/backend/src`) before
-   starting, and scoped down to a landable first slice rather than
-   attempting the full migration:
-   - New `ParticipantIdentity` model (`api/backend/src/models/ParticipantIdentity.js`)
-     + `participantIdentities` collection (registered in
-     `config/collections.js`), dual-written alongside `Patient` at intake
-     (`patient.service.js#createPatient`) — `Patient` itself still keeps
-     the fields internally for now, since removing them there would break
-     the other ~20 consumers.
-   - `paciente.controller.js#buscar` (`GET /api/patients/:id`) now strips
-     `patientName`/`birthDate`/`identityDocument` from its response for
-     every caller, regardless of `createPatient` permission.
-   - Updated `docs/architecture/canonical-data-contract-v1.md` with a new
-     ParticipantIdentity section documenting what landed vs. what's
-     deferred.
-   - Fixed pre-existing staleness in
-     `tests/unit/config/collections.test.js` (missing `organizations` key
-     in its `DEFAULTS`, predating this change) while adding the new
-     `participantIdentities` key, since the test would otherwise fail on
-     an unrelated gap.
-3. Verified both AC#1/AC#2 and AC#3 (Neo4j outbox never carries identity
-   fields — was already green) pass against the real, already-up dev-stack
-   backend. Ran the full backend `vitest` suite (6319 tests): 3 failures,
-   all confirmed pre-existing/flaky in isolation (one exact-millisecond
-   timing assertion in `NotificationService.test.js`, unrelated to this
-   change) — none caused by this diff.
-4. Chased what looked like a regression in the **mocked**-auth
-   `intake-wizard.spec.ts` tests (intermittent redirect to `/login`) —
-   A/B tested via `git stash` and confirmed via isolating file groups that
-   it reproduces identically with or without this session's diff, so it's
-   pre-existing dev-stack flakiness, not a regression. Filed as **#369**
-   (audit logger flooding logs with `Tipo não suportado na canonicalização
-   JSON: object`, observed alongside the flaky mocked test, causal link
-   unconfirmed) rather than chasing the root cause further — out of scope
-   for this build-loop iteration.
-5. Committed on `test/rf005-participant-identity-segregation`, merged
-   `--no-ff` into `feature/docker-e2e-backend-integration` (`f135e396`),
-   pushed both branches.
-6. Filed **#368** (migrate the ~20 other `Patient`-field consumers off it,
-   plus the RNF007 AC#4/AC#5 authorized/audited re-identification flow and
-   encryption at rest for the segregated collection) as the follow-up for
-   the deferred scope, flagged for `divide-and-conquer`.
-7. Closed **#363** with a comment summarizing what landed vs. #368's scope.
-8. `wrap-up` audit: product source touched is in-scope for `build-loop`
-   (unlike `test-loop`). Filed **#369** for the pre-existing audit-log
-   flood / mocked-test flakiness noticed this session.
+1. Routed via `build-loop`: #364 asked for `PatientConsentModel`/
+   `consent.service.js` to assign an explicit `consentId` distinct from
+   Mongo's `_id`, to turn `tests/e2e/tcle-dinamico.spec.ts`'s RF010 AC#2
+   red-first assertion (from #328) green.
+2. `PatientConsentModel.create` (`api/backend/src/models/PatientConsent.js`)
+   now stamps `consentId: crypto.randomUUID()` on every consent document;
+   flows through `consent.service.js`'s `createPatientConsent`/
+   `revokeConsent`/`getPatientConsent` unchanged (they already spread the
+   model's object), and through `consent.controller.js` untouched (it
+   passes the service's object straight through as `data`).
+3. Docker wasn't running at session start — asked Dennis to start it per
+   `docker-workflow`'s "ask, don't launch it yourself" rule; he did, then
+   `npm run compose:up` brought the dev stack up healthy.
+4. Ran the AC#2 test against the real dev-stack backend: still red after
+   the model fix alone — traced to a **bug in the test itself**, not the
+   implementation: it compared a JSON-serialized string `consent._id`
+   against the stored `ObjectId`, so `findOne({ _id: consent._id })`
+   could never match regardless of whether `consentId` existed. Fixed by
+   wrapping in `new ObjectId(consent._id)`. AC#2 passes after that.
+5. Ran the full `tcle-dinamico.spec.ts` file: 2 unrelated failures, both
+   pre-existing/out-of-scope — RNF018 (400-vs-422, explicitly deferred
+   in #364's body, already tracked as **#365**) and a flaky mocked TCLE
+   builder test unrelated to consent creation. Ran all consent-related
+   backend unit/integration tests (256 tests, 7 files) — all green.
+6. Updated `docs/architecture/canonical-data-contract-v1.md`'s Consent
+   section with the new `consentId` field.
+7. Committed on `test/rf010-consent-id`, merged `--no-ff` into
+   `feature/docker-e2e-backend-integration` (`c396d777`), pushed both
+   branches.
+8. Closed **#364** with a comment summarizing what landed and the
+   verification run. `wrap-up` audit: no orphaned gaps (RNF018 already
+   has #365), no scope creep, no lazy fixes, nothing security-relevant.
 
 ## Repo state
 
-- `feature/docker-e2e-backend-integration`: at `f135e396`, working tree
-  clean, pushed. Carries the `ParticipantIdentity` entity + read-path
-  segregation on `GET /api/patients/:id`.
-- **#363 closed**, referencing follow-up **#368** (open, not started —
-  scope explicitly flagged as possibly needing `divide-and-conquer`) and
-  **#369** (open, unrelated pre-existing flakiness/log-flood, not started).
-- Dev stack (`compose.yml`, not `compose.test.yml`) still up from prior
-  sessions, not torn down. Backend runs via `nodemon --legacy-watch`
-  (`compose.dev.yml`) so source edits hot-reload without a manual rebuild.
+- `feature/docker-e2e-backend-integration`: at `c396d777`, working tree
+  clean, pushed. Carries the `consentId` field end-to-end.
+- **#364 closed.** **#365** (RNF018/RNF011 400-vs-422) still open, not
+  started this session.
+- Dev stack (`compose.yml` + `compose.dev.yml`) is up and healthy,
+  brought up this session via `npm run compose:up` (not torn down).
+  Backend runs via `nodemon --legacy-watch` so source edits hot-reload.
   Direct-Mongo e2e specs against it need `E2E_MONGO_URI`/`E2E_MONGO_DB`
   set explicitly (dev-stack creds/db, see `.env.docker`) — the helpers'
   defaults target the test stack.
 
 ## Recommended next steps
 
-None queued explicitly by Dennis beyond "prereqs of Wave 2." Remaining
-Wave 2 red-first prerequisites per `E2E_TRACEABILITY_PLAN.md`: **#364**/
-**#365** (from #328), **#366** (RF022 bootstrap build, from #329), **#367**
-(RF028 importer build, from #330), and now **#368** (RF005 storage
-migration + re-id flow, from this session) — separate, smaller
-build-loop/fix-bugs candidates once someone picks them up. **#369** (log
-flood / flaky mocked test) is unrelated infra hygiene, not part of the
-Wave 2 e2e traceability work. No further red-first e2e gaps are queued
-unless the traceability plan names another RF beyond RF005/RF022/RF028
-for Wave 2.
+None queued explicitly by Dennis. Remaining Wave 2 red-first
+prerequisites per `E2E_TRACEABILITY_PLAN.md`: **#365** (this session's
+RNF018 finding, from #328/#364), **#366** (RF022 bootstrap build, from
+#329), **#367** (RF028 importer build, from #330), and **#368** (RF005
+storage migration + re-id flow, from the #363 session) — separate,
+smaller build-loop/fix-bugs candidates once someone picks them up.
+**#369** (log flood / flaky mocked test, from the #363 session) is
+unrelated infra hygiene, not part of the Wave 2 e2e traceability work.
 
 ## Which skills to use
 
-`fix-bugs` or a small `build-loop` pass for #364/#365/#366/#367/#368 once
-picked up — all are narrow, already-scoped gaps, not full-requirement
-builds; #366, #367, and #368 in particular should open with a
-`divide-and-conquer` pass rather than assume one iteration. #369 is a
-plain `fix-bugs` candidate (root-cause the canonicalization failure) once
-someone wants to spend the time reproducing it deliberately. Another
+`fix-bugs` or a small `build-loop` pass for #365/#366/#367/#368 once
+picked up — #365 looks narrow (controller-level status-code fix once
+someone traces which validation path returns 400 instead of 422);
+#366/#367/#368 are already flagged for a `divide-and-conquer` pass
+rather than assumed single-iteration. #369 is a plain `fix-bugs`
+candidate (root-cause the canonicalization failure). Another
 `ship-integration-branch` pass once Wave 2's red-first prerequisites and
 any build-loop follow-ups are done.
