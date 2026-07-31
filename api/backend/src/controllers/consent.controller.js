@@ -516,7 +516,7 @@ class ConsentController {
       });
     } catch (error) {
       logger.error('Erro ao registrar consentimento:', error.message);
-      return res.status(400).json({
+      return res.status(error.statusCode || 400).json({
         success: false,
         error: 'Erro ao registrar consentimento',
         message: error.message
