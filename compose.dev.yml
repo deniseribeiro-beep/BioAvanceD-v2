@@ -98,6 +98,24 @@ services:
       influxdb:
         condition: service_healthy
 
+  foundation-bootstrap:
+    # RF022 (#366 slice 1): one-shot, idempotent essential-reference-data
+    # seed, coupled to build/startup instead of a script a human has to
+    # remember to run. Runs once per `up` after the backend is healthy;
+    # upsertDocs's $setOnInsert makes repeat runs no-ops.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    command: npm run seed:essential
+    volumes:
+      - ./api/backend:/app
+      - backend_node_modules:/app/node_modules
+    env_file:
+      - .env.docker
+    depends_on:
+      backend:
+        condition: service_healthy
+
   neo4j-projection-worker:
     # Drains graph_projection_outbox into Neo4j (#309, follow-up from RF023/#292)
     # — without this service, outbox rows written by consent.service.js

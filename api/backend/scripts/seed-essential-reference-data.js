@@ -54,24 +54,13 @@ function loadByKey(key) {
 
   if (key === 'rcs-gov-1.0') {
     return {
-      docsByCollection: {
-        referenceSeedRuns: [
-          {
-            key: 'rcs-gov-1.0',
-            version: '1.0',
-            system: 'RCS-GOV',
-            checksum: checksumFor(rcsReferenceData),
-            executedAt: new Date().toISOString(),
-            seedRun: true,
-            payload: {
-              catalogs: rcsReferenceData.catalogs,
-              severityMappings: rcsReferenceData.severityMappings,
-              weights: rcsReferenceData.weights,
-              thresholds: rcsReferenceData.thresholds,
-              governanceRules: rcsReferenceData.governanceRules,
-            },
-          },
-        ],
+      docsByCollection: {},
+      payload: {
+        catalogs: rcsReferenceData.catalogs,
+        severityMappings: rcsReferenceData.severityMappings,
+        weights: rcsReferenceData.weights,
+        thresholds: rcsReferenceData.thresholds,
+        governanceRules: rcsReferenceData.governanceRules,
       },
     };
   }
@@ -119,6 +108,15 @@ async function main() {
         for (const [collectionName, docs] of Object.entries(docsByCollection)) {
           await upsertDocs(db, collectionName, docs, entry.uniqueKeys || []);
         }
+        await upsertDocs(db, 'referenceSeedRuns', [{
+          key: entry.key,
+          version: entry.version,
+          system: entry.system,
+          checksum: checksumFor(loaded.payload || docsByCollection),
+          executedAt: new Date().toISOString(),
+          seedRun: true,
+          plannedCounts,
+        }], ['key', 'version']);
       }
     }
   } finally {
