@@ -184,7 +184,9 @@ class ConsentService {
     const valid = validatePatientConsentSchema(payload);
     if (!valid) {
       const errors = (validatePatientConsentSchema.errors || []).map(err => `${err.instancePath || 'consent'} ${err.message}`);
-      throw new Error(errors.join(', '));
+      const error = new Error(errors.join(', '));
+      error.statusCode = 422;
+      throw error;
     }
   }
 
@@ -653,7 +655,9 @@ class ConsentService {
 
       const validation = PatientConsentModel.validate(normalizedPayload);
       if (!validation.isValid) {
-        throw new Error(validation.errors.join(', '));
+        const error = new Error(validation.errors.join(', '));
+        error.statusCode = 422;
+        throw error;
       }
 
       const participantId = normalizedPayload.participantId;
