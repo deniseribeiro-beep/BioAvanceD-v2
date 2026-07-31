@@ -1,87 +1,79 @@
 # HANDOFF
 
-**Written:** 2026-07-31, a `build-loop` session closing out **#328**
-(RF010 ConsentTemplate/Consent split, Wave 2 red-first prerequisite) on
+**Written:** 2026-07-31, a `build-loop` session closing out **#329**
+(RF022 Foundation Data Pipeline, Wave 2 red-first prerequisite) on
 `feature/docker-e2e-backend-integration`, picked up directly from Dennis
-after the prior #327 close-out — Docker was already on for this session.
+after the prior #328 close-out — Docker was already on (dev stack, not
+the test stack) for this session.
 
 ## What happened this session
 
-1. Routed via `work-issue` → `build-loop`: #328 asks for the first
-   real-backend e2e test proving RF010's ConsentTemplate/Consent split
-   gap, expected to fail against `main` — a missing capability, not a
-   product bug or existing-code coverage gap.
-2. Scoped the gap against `dict-07_ALINHAMENTO_CODIGO.md` row 3 and
-   `dict-02_DICIONARIO.md` ELM-0088: the target model requires each
-   Consent to carry an explicit `consentId` distinct from Mongo `_id`.
-   Confirmed in code that `PatientConsentModel`/`consent.service.js`
-   never assign one — only `_id` is ever exposed. Also included the
-   issue's called-out cross-cutting RNF018 assertion (422 on malformed
-   payloads) in the same spec, since `consent.controller.js` always
-   responds 400 on validation failure — a repo-wide grep found zero uses
-   of status 422 anywhere in `api/backend/src`.
-3. Added a new `test.describe` block to `tests/e2e/tcle-dinamico.spec.ts`
-   (real-backend, `PLAYWRIGHT_API_BASE_URL`-gated, same pattern as
-   `intake-wizard.spec.ts`'s #327 block): AC#2 asserts a created consent's
-   response/document carries a truthy `consentId` distinct from `_id`
-   (**confirmed red** — response has no such field); RNF018 asserts a
-   malformed payload returns 422 (**confirmed red** — returns 400).
-4. Hit two known dev-stack gotchas while proving red, both already
-   documented in `docker-workflow`'s `local-env/BioAvanceD-v2.md`: Mongo
-   auth (needed `E2E_MONGO_URI` with `.env.docker`'s
-   `MONGO_ROOT_PASSWORD`, `E2E_MONGO_DB=bioavanced_dev`) and an
-   undocumented one — `consent.service.js`'s `normalizeSignaturePayload`
-   always sets empty-string `signatureName`/`signatureImageBase64`, which
-   then fails the Ajv schema's `minLength: 1` even though those fields
-   aren't in `required` — so a valid signature payload is needed on
-   every consent-creation request, not just signature-specific tests.
-   Filed as `dyeallpies-skills-pack#158` for `playwright-specs` to
-   encode this.
-5. Verified the pre-existing failing test in the same spec file
-   ("creating a template posts the filled-in metadata") predates this
-   branch (reproduced on `git stash` before any edit) — not a regression
-   from this session's change.
-6. Committed on `test/rf010-consent-consentid-red`, merged `--no-ff` into
-   `feature/docker-e2e-backend-integration` (`28ca545e`), pushed.
-7. Filed **#364** (assign an explicit `consentId`) and **#365**
-   (400-vs-422 validation status, flagged as likely cross-cutting beyond
-   consent) as separate follow-ups per #328's own divide-and-conquer
-   note — two independent sub-gaps, not one bundled fix.
-8. Closed **#328** with a comment summarizing both red assertions and
-   linking #364/#365.
-9. `wrap-up` audit: only `tests/e2e/tcle-dinamico.spec.ts` touched (in
-   scope for `build-loop`'s "test first" step, no product code edited —
-   the fixes are #364/#365's scope). One new skill-pack finding filed
-   (#158 above); no other friction.
+1. Routed via `work-issue` → `build-loop`: #329 asks for the first
+   honest e2e test against the real backend for RF022, expected to fail
+   — file the actual bootstrap rework as a separate follow-up once the
+   red test shows what's missing.
+2. Scoped the gap against `dict-07_ALINHAMENTO_CODIGO.md` /
+   `dict-08_MAIN_GAPS.md` ("Gap crítico"): confirmed in code that
+   `essential/manifest.js` (3 entries) +
+   `scripts/seed-essential-reference-data.js` is a manual CLI script —
+   `current-state:ci` only ever `--dry-run`s it, `compose.test.yml`
+   never invokes it at all, and nothing in `src` wires it to
+   startup/healthchecks. No API surface exists for reference data or
+   run-tracking either.
+3. Added a new `test.describe` block to
+   `tests/e2e/pipeline-continuity.spec.ts` ("Foundation Data Pipeline
+   bootstrap (RF022) — real backend"), plus a new helper
+   `tests/e2e/helpers/queryFoundationData.ts` (same direct-Mongo pattern
+   as `seedParticipant.ts`/`queryNeo4j.ts`, since there's no API to
+   assert against): AC "reference data populated automatically" and AC
+   "bootstrap records an idempotent run" both **confirmed red** against
+   the real (already-up) dev-stack backend — 0 docs in
+   `sampleTypes`/`terminologies`, 0 docs in `referenceSeedRuns`.
+4. Caught my own process slip mid-iteration: edited the spec/helper
+   files directly on `feature/docker-e2e-backend-integration` before
+   creating the `test/<slug>` branch build-loop calls for. Fixed via
+   `git stash -u` → new branch → `git stash pop`, before any commit —
+   no lasting harm, flagged in `wrap-up`.
+5. Committed on `test/rf022-foundation-pipeline-red-first`, merged
+   `--no-ff` into `feature/docker-e2e-backend-integration` (`08e48b3e`),
+   pushed.
+6. Filed **#366** (build the actual one-shot bootstrap + `FoundationDataRun`
+   tracking, replace the manual seed script) as a separate follow-up,
+   flagged as likely needing `divide-and-conquer` and as the RF029/Wave 3
+   sequencing blocker per the plan.
+7. Closed **#329** with a comment summarizing both red assertions and
+   linking #366.
+8. `wrap-up` audit: no product source touched (`git diff --stat` against
+   `api/backend/src`/`frontend/src` empty). Only friction: the
+   branch-order slip in step 4 above (self-caught, no issue needed — it's
+   already the documented failure mode build-loop's own steps guard
+   against, not a skill gap).
 
 ## Repo state
 
-- `feature/docker-e2e-backend-integration`: at `28ca545e`, working tree
-  clean, pushed. Carries the new RF010/RNF018 red-first spec.
-- **#328 closed**, referencing follow-ups **#364** (consentId model
-  change, open, not started) and **#365** (400-vs-422 validation
-  convention, open, not started — scope explicitly flagged as possibly
-  wider than consent alone).
-- Dev stack (`compose:up`) was already up this session and left
-  running — not torn down, per Dennis's "Docker is on" for the session.
+- `feature/docker-e2e-backend-integration`: at `08e48b3e`, working tree
+  clean, pushed. Carries the new RF022 red-first spec + helper.
+- **#329 closed**, referencing follow-up **#366** (open, not started —
+  scope explicitly flagged as possibly needing `divide-and-conquer`).
+- Dev stack (`compose.yml`, not `compose.test.yml`) was already up this
+  session (per #327/#328's precedent) and left running — not torn down.
 
 ## Recommended next steps
 
-None queued explicitly by Dennis beyond "prereqs of Wave 2." The
-remaining Wave 2 red-first prerequisites per `E2E_TRACEABILITY_PLAN.md`
-are still open: **#329** (RF022 Foundation Data Pipeline,
-`pipeline-continuity.spec.ts`, blocks RF029/Wave 3), **#330** (RF028
-Fase 2 importers, same spec file, also blocks RF029). **#363**
-(ParticipantIdentity model/migration, from #327) and now **#364**/**#365**
-(from this session) are separate, smaller build-loop/fix-bugs candidates
-once someone picks them up — #365 in particular may be worth a
-`divide-and-conquer` pass if it turns out to span more than
-`consent.controller.js`.
+None queued explicitly by Dennis beyond "prereqs of Wave 2." Remaining
+Wave 2 red-first prerequisite per `E2E_TRACEABILITY_PLAN.md`: **#330**
+(RF028 Fase 2 importers, same `pipeline-continuity.spec.ts`, also blocks
+RF029). **#363** (ParticipantIdentity model/migration, from #327),
+**#364**/**#365** (from #328), and now **#366** (from this session) are
+separate, smaller build-loop/fix-bugs candidates once someone picks them
+up.
 
 ## Which skills to use
 
-`work-issue` → `build-loop` for #329/#330 (same red-first shape as
-#327/#328). `fix-bugs` or a small `build-loop` pass for #364/#365 once
-picked up — both are narrow, already-scoped gaps, not full-requirement
-builds. Another `ship-integration-branch` pass once Wave 2's red-first
-prerequisites and any build-loop follow-ups are done.
+`work-issue` → `build-loop` for #330 (same red-first shape as
+#327/#328/#329). `fix-bugs` or a small `build-loop` pass for
+#363/#364/#365/#366 once picked up — all are narrow, already-scoped gaps,
+not full-requirement builds; #366 in particular should open with a
+`divide-and-conquer` pass rather than assume one iteration. Another
+`ship-integration-branch` pass once Wave 2's red-first prerequisites and
+any build-loop follow-ups are done.
