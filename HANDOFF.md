@@ -1,85 +1,78 @@
 # HANDOFF
 
-**Written:** 2026-07-31, a `resolve-issue` session closing out **#360**
-on `feature/docker-e2e-backend-integration`, following the same day's
-#318 `ship-integration-branch` close-out session.
+**Written:** 2026-07-31, a `resolve-issue` session closing out **#362**
+(compose-file streamlining) on `feature/docker-e2e-backend-integration`,
+picked up from the same day's #360 close-out session's recommended
+next step.
 
 ## What happened this session
 
-1. User asked "aren't there any issues related to wave 1 still?" —
-   checked; all Wave 1 spec/build issues (#287–#299 range) and the
-   Wave 1 tracking issue #318 are closed. Nothing labeled Wave 1 is
-   open. Open nearby items are Wave 2 prep (#331 tracking, #327 file
-   gap) and the two small gaps #360/#361 spun off from #318's
-   verification.
-2. User picked **#360** (docs gap: dev-stack Neo4j creds /
-   `TEST_SUPPORT_SECRET` undocumented in the `docker-workflow` overlay).
-   Routed via `work-issue` → `resolve-issue` (docs-only fix targeting a
-   skills-pack file, not this repo — not `fix-bugs`/`test-loop`/
-   `build-loop` shaped).
-3. Attempted to edit the installed skill junction directly
-   (`.claude/skills/docker-workflow/local-env/bioavanced-v2.md`); the
-   session's Rule 0 guard hook blocked it (write would resolve outside
-   the project into the `dyeallpies_skills_pack` clone). Worked as
-   designed — filed the fix in the pack repo instead.
-4. Filed **DyeAllPies/dyeallpies-skills-pack#154** with the exact
-   suggested doc addition from #360's body (Neo4j creds +
-   `TEST_SUPPORT_SECRET` dev-stack-vs-test-stack gotcha, same shape as
-   the already-resolved #153 Mongo-auth gotcha). Closed **#360** in
-   BioAvanceD-v2 with a comment cross-referencing pack#154.
-5. User raised a broader point while closing #360: BioAvanceD-v2 has
-   **zero production deployment as of 2026-07-31** — still fully in dev
-   phase — so the repo's 5 compose files (`compose.yml`,
-   `compose.dev.yml`, `compose.prod.yml`, `compose.test.yml`,
-   `docker-compose.test.yml`) are worth streamlining now, before more
-   dev-vs-test drift bugs accumulate (per #153, #360's pattern). Filed
-   two issues:
-   - **BioAvanceD-v2#362** — audit/streamline the 5 compose files
-     (which are vestigial, e.g. `docker-compose.test.yml` looking like
-     a duplicate of `compose.test.yml`; consider a shared base +
-     override-file shape for dev/test).
-   - **dyeallpies-skills-pack#155** — placeholder to revisit the
-     `docker-workflow` `local-env/bioavanced-v2.md` overlay's wording
-     once #362 has a direction, so the overlay doesn't ossify around
-     today's 5-file shape.
-
-No code, tests, or branches touched this session — issue-tracker
-bookkeeping only.
+1. Read HANDOFF.md, routed **#362** via `work-issue` → `resolve-issue`
+   (infra/consolidation task, not a bug/coverage gap; `docker-workflow`
+   gates applied since it touches compose files).
+2. Audited all 5 compose files against actual consumers
+   (`package.json` scripts, `.github/workflows/ci-pipeline.yml`):
+   - `compose.yml` + `compose.dev.yml` — genuine base+override pair
+     already, wired into `compose:*` npm scripts. No change.
+   - `compose.test.yml` — the one CI actually runs; self-contained by
+     design. No change.
+   - `docker-compose.test.yml` — confirmed dead: zero consumers
+     anywhere, and its `backend-test`/`frontend-test` services targeted
+     service names from `compose.yml`/`compose.dev.yml`, not
+     `compose.test.yml`'s `-test`-suffixed names — an abandoned separate
+     harness, not a duplicate of `compose.test.yml` as the issue had
+     guessed.
+   - `compose.prod.yml` — also has no current consumer, but kept per the
+     issue's own scope note (no prod deploy exists yet to consolidate
+     around).
+3. Confirmed scope with Dennis via AskUserQuestion before touching
+   anything (docker-workflow gate): delete `docker-compose.test.yml`
+   (yes), leave `compose.prod.yml` alone (yes), Docker is on this
+   session (yes, from a prior session).
+4. Branched `test/362-compose-streamline` off
+   `feature/docker-e2e-backend-integration`, deleted
+   `docker-compose.test.yml`, verified `docker compose config` still
+   resolves cleanly for the dev stack (`compose.yml`+`compose.dev.yml`)
+   and `compose.test.yml` both before and after the merge. Committed
+   (bd486ac2), pushed, fast-forward-merged into
+   `feature/docker-e2e-backend-integration`, pushed, closed **#362**
+   with a full audit summary, deleted the merge branch locally+remote.
+5. `wrap-up` audit: no friction, nothing needing a new issue — the
+   "no base+override merge for compose.test.yml" and "compose.prod.yml
+   kept as-is" decisions were both explicit accepted-scope calls, not
+   silent deferrals.
 
 ## Repo state
 
-- `feature/docker-e2e-backend-integration`: unchanged from the #318
-  session except this HANDOFF.md rotation — still functionally at
-  `803cf591` plus doc-only commits, working tree clean.
-- **#360 closed** this session, cross-referenced to
-  `dyeallpies-skills-pack#154` (open, pack-repo fix pending).
-- **#362 opened** this session (BioAvanceD-v2, compose-file
-  streamlining) — open, unstarted.
-- **#361** (dev-stack fixture accumulation, tracking/awareness only)
-  still open, untouched this session.
-- Standing inventory carried forward: #359 sign-off flag unchanged.
-- Docker Desktop / dev stack: confirmed "on" this session per the user,
-  but no Docker commands were actually run (all issue-tracker work).
-  Left in whatever state the #318 session left it (not torn down
-  there either).
+- `feature/docker-e2e-backend-integration`: now at `bd486ac2`
+  (`docker-compose.test.yml` removed), working tree clean, pushed.
+- **#362 closed** this session with full audit findings in the close
+  comment.
+- Compose file count: 5 → 4 (`compose.yml`, `compose.dev.yml`,
+  `compose.test.yml`, `compose.prod.yml`).
+- Standing inventory carried forward unchanged: #361 (dev-stack fixture
+  accumulation, tracking/awareness only) still open, untouched.
+  `dyeallpies-skills-pack#154` (open, #360's doc fix) and `#155`
+  (placeholder, now unblocked since #362 has a direction: compose count
+  didn't change enough to need overlay wording revisited — 4 files vs.
+  the 5 the overlay was written against, but the dev/test split it
+  documents is unchanged) still pending in the pack repo, not this one.
+- Docker Desktop / dev stack: on this session per Dennis (carried from a
+  prior session), used only for `docker compose config` validation, not
+  torn down here either.
 
 ## Recommended next steps
 
-None queued explicitly by Dennis this session beyond what's filed.
-**#362** (compose streamlining) is a real candidate given it was raised
-by Dennis directly, but wasn't picked up this session — confirm before
-starting, since it touches Docker plumbing broadly (docker-workflow
-skill gates apply). Wave 2 work (#325, #326, plus file-gap
-prerequisites #327–#330) remains the other logical candidate per
-`E2E_TRACEABILITY_PLAN.md`. #361 also still open and unpicked.
+None queued explicitly by Dennis this session. Wave 2 work (#325, #326,
+plus file-gap prerequisites #327–#330) remains the standing candidate
+per `E2E_TRACEABILITY_PLAN.md`. #361 also still open and unpicked.
 
 ## Which skills to use
 
 `work-issue` to route whichever open issue/track gets picked up next.
-If #362 is picked up, expect `docker-workflow` (compose/Dockerfile
-changes) plus likely `resolve-issue` as the base workflow — it's an
-infra/consolidation task, not a bug or coverage gap. If Wave 2 work
-starts, expect `e2e-test-loop` for the individual specs and eventually
-another `ship-integration-branch` pass for the Wave 2 tracking issue
-(#331). A pack-repo session should apply `dyeallpies-skills-pack#154`'s
-doc addition, and check #155 once #362 has a direction.
+If Wave 2 work starts, expect `e2e-test-loop` for the individual specs
+and eventually another `ship-integration-branch` pass for the Wave 2
+tracking issue (#331). A pack-repo session should still apply
+`dyeallpies-skills-pack#154`'s doc addition, and can now close or update
+`#155` with this session's finding (4-file shape, dev/test split
+unchanged) rather than leaving it as an open placeholder.
