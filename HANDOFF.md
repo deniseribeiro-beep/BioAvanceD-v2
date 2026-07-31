@@ -2,56 +2,57 @@
 
 **Written:** 2026-07-31, a `fix-bugs` iteration on
 `feature/docker-e2e-backend-integration`, immediately following the
-2026-07-31 #350 fix-bugs session.
+2026-07-31 #342 fix-bugs session.
 
 ## What happened this session
 
-1. Picked up issue **#342** (`test-branch`): `npm run compose:up`
-   (`docker compose ... up -d --wait ...`) always failed with
-   `dependency failed to start: container bioavanced-backend-1 has no
-   healthcheck configured` — `compose.dev.yml`'s `backend` service had
-   no `healthcheck:` block, but `frontend` depends on it with
-   `condition: service_healthy`, so `--wait` could never resolve.
-2. Fixed by adding a `healthcheck:` block to `backend` in
-   `compose.dev.yml`, mirroring the existing `tsa`/`witness` pattern
-   (Node's `fetch` against `http://127.0.0.1:3000/api/health`, no curl
-   needed on the `node:22-alpine` base image).
-3. Verified live (Dennis opted for live verification over static-only):
-   started Docker Desktop/WSL, ran `npm run compose:up` twice (first
-   attempt hit an unrelated one-off Docker/WSL volume-mkdir race on
-   `bioavanced_backend_node_modules`, not related to this fix — resolved
-   on retry with no code changes), confirmed `bioavanced-backend-1`
-   reports `Up ... (healthy)` and the full `--wait` chain including
-   `frontend` completes. Tore the stack down afterward
-   (`docker compose down`); named volumes remain (harmless, reused by
-   `compose:up` next time).
-4. Branched `fix/backend-compose-healthcheck` off the integration
-   branch, committed (`36c6b71b`, `Fixes #342`), pushed, merged
-   `--no-ff` into `feature/docker-e2e-backend-integration` (merge commit
-   `adf9a659`), pushed, deleted the fix branch local+remote.
-5. Closed #342 with the merge commit hash in the comment.
+1. Picked up issue **#344** (`test-branch`, docker-required): a fresh
+   `npm run compose:up` (`compose.yml`+`compose.dev.yml`) stack has zero
+   users in Mongo, so `realLogin`/`realAuthLogin`
+   (`tests/e2e/helpers/realAuth.ts`, `TEST_USER=admin`/
+   `TEST_PASS=Admin@123`) always 401s — nothing on that compose path runs
+   `api/backend/src/scripts/createFirstAdmin.js`.
+2. Fixed by adding `npm run compose:seed-admin` (a `docker compose exec
+   backend node src/scripts/createFirstAdmin.js` wrapper) plus
+   `BOOTSTRAP_ADMIN_*` defaults (`admin`/`Admin@123`, matching
+   `compose.test.yml`) in `.env.docker`/`.env.docker.example`, and
+   documented the manual step in `README.md`. Deliberately did **not**
+   wire an init step into `compose.yml`/`compose.dev.yml`'s `up` path —
+   README's existing "Bootstrap and Seeds" section states bootstrap must
+   stay manual and idempotent.
+3. Verified live: `docker compose down --volumes` for a truly fresh
+   stack, `npm run compose:up` (hit the same known one-off WSL
+   `bioavanced_backend_node_modules` mkdir race noted in #342's handoff,
+   resolved on retry, not a new issue), confirmed login 401s pre-fix,
+   ran `compose:seed-admin`, confirmed login now returns 200, confirmed
+   re-running `compose:seed-admin` is a no-op (idempotent guard already
+   in `createFirstAdmin.js`). Tore the stack down afterward (no
+   `--volumes` this time — left named volumes in place).
+4. Branched `fix/compose-seed-admin` off the integration branch,
+   committed (`91ca456c`, `Fixes #344`), pushed, merged `--no-ff` into
+   `feature/docker-e2e-backend-integration` (merge commit `f2fd520d`),
+   pushed, deleted the fix branch local+remote.
+5. Closed #344 with the merge commit hash in the comment.
 6. Wrap-up audit: no scope creep, no lazy fixes, no un-weakened tests
-   needed (issue had no test pinned to it — pure infra config). No new
-   follow-up issues filed.
+   needed (no test was pinned to this issue). No new follow-up issues
+   filed.
 
 ## Repo state
 
 - `feature/docker-e2e-backend-integration`: pushed to
-  `origin/feature/docker-e2e-backend-integration` at `adf9a659`, working
+  `origin/feature/docker-e2e-backend-integration` at `f2fd520d`, working
   tree clean, no local commits pending.
-- `fix/backend-compose-healthcheck`: merged and deleted, local+remote.
-- **Docker Desktop/WSL is now running** (started this session to verify
-  #342 live) — a change from every prior handoff's "still down" note.
-  Next session should decide whether to leave it up or shut it down;
-  not touched further this session. `docker ps -a` is empty (stack torn
-  down), but the six `bioavanced_*` named volumes from this session's
-  run still exist.
+- `fix/compose-seed-admin`: merged and deleted, local+remote.
+- Docker Desktop/WSL is running (used this session to verify #344 live).
+  `docker ps -a` should be empty (stack torn down at session end via
+  plain `docker compose down`, no `--volumes`) — the `bioavanced_*` named
+  volumes (including Mongo, now seeded with the admin user from this
+  session's live run) still exist. A future fresh-stack verification
+  should `down --volumes` first if it needs a truly clean Mongo again.
 - `test/e2e-real-backend-foundation` — still not deleted, still safe to
   delete (fully merged forward), Dennis hasn't confirmed.
-- **#342 closed** this session. Standing inventory: #359 sign-off flag
-  unchanged from prior handoff; **skills-pack#152 confirmed CLOSED**
-  (verified this session — already resolved, no follow-up needed, drop
-  from future standing-inventory notes).
+- **#344 closed** this session. Standing inventory: #359 sign-off flag
+  unchanged from prior handoffs.
 
 ## Recommended next steps
 
