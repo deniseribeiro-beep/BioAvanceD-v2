@@ -55,7 +55,9 @@
    `compose.test.yml` test stack but not for the `compose:up` dev
    stack, which needs different, auth-bearing credentials) — quoted
    the exact addition text for a pack session to apply verbatim
-   (Rule 0: can't edit the installed skill junction directly).
+   (Rule 0: can't edit the installed skill junction directly). Update
+   (later 2026-07-31 session): confirmed the issue is closed and the
+   text landed in the pack repo — see Repo state below.
 
 ## Repo state
 
@@ -75,8 +77,10 @@
 - **#320 closed** this session. Standing inventory: #359 sign-off flag
   unchanged from prior handoffs.
 - Filed `dyeallpies-skills-pack#153` (docker-workflow overlay gap,
-  documentation label) — not yet applied to the installed skill file;
-  a future pack-repo session should pick it up.
+  documentation label) — **resolved**: issue closed, and the suggested
+  addition is present in `skills/docker-workflow/local-env/
+  bioavanced-v2.md` in the pack repo (verified 2026-07-31, later
+  session). No follow-up needed.
 
 ## Recommended next steps
 
