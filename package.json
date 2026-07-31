@@ -5,6 +5,7 @@
     "compose:down": "docker compose --env-file .env.docker -f compose.yml -f compose.dev.yml down --volumes --remove-orphans",
     "compose:logs": "docker compose --env-file .env.docker -f compose.yml -f compose.dev.yml logs -f",
     "compose:ps": "docker compose --env-file .env.docker -f compose.yml -f compose.dev.yml ps",
+    "compose:seed-admin": "docker compose --env-file .env.docker -f compose.yml -f compose.dev.yml exec backend node src/scripts/createFirstAdmin.js",
     "build": "npm --prefix frontend run build",
     "build:ci": "npm run build && npm --prefix api/backend run test:ci",
     "test": "npm --prefix api/backend run test:ci && npm --prefix frontend run test:unit",
