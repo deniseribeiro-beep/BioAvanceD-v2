@@ -1,5 +1,28 @@
 # HANDOFF
 
+**Addendum (2026-07-31, later same day):** a follow-up session (not a
+`build-loop`/issue-resolution pass, so no full rotation below) recorded a
+short real-backend e2e showcase video for Denise
+(`docs/e2e-showcase-2026-07-31.mp4` — real admin login →
+system-management dashboard, a rejected login, and the RF009 "Novo
+Sensor" UI form, concatenated with 1s black gaps via
+`playwright.showcase.config.ts`, a new `video:'on'` config kept at the
+repo root for reuse). Denise saw it and liked it.
+
+**Blocking next step, ahead of everything below: #377.** Denise has a
+newer version of the requirements/dictionary docs than what's checked in
+at `docs/docs-7-27-2026/`. No session can act on this — the updated
+files exist on Denise's side, not in this repo, and a Claude Code
+session has no way to fetch them itself. **Dennis needs to get the
+updated doc(s) from Denise and add them to the repo** (same
+`docs/docs-7-27-2026/`-style pattern, or wherever fits if it's a point
+revision) before a session can re-extract/re-diff them against
+`E2E_TRACEABILITY_PLAN.md`'s traceability matrix and ground-truth
+hierarchy — see #377 for the full checklist of what to re-check once the
+files land.
+
+---
+
 **Written:** 2026-07-31, a `build-loop` session closing out **#367**
 (RF028 reference-data importers, first Fase 2 pipeline slice) on
 `feature/docker-e2e-backend-integration`, picked up directly from Dennis
