@@ -207,7 +207,11 @@ const globalLimiter = rateLimit({
 
 const authLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 10,
+  // Strict brute-force budget in production; the real Docker dev stack
+  // (compose.yml + compose.dev.yml, NODE_ENV=development) and any other
+  // non-production run need enough headroom that a real-backend e2e spec
+  // file doing several logins/2FA calls per minute doesn't 429 (#350).
+  max: isDev ? 100 : 10,
   message: "Muitas requisições para autenticação. Tente novamente mais tarde.",
   standardHeaders: true,
   legacyHeaders: false,
