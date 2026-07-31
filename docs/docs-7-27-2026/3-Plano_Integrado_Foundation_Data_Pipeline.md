@@ -1,3 +1,11 @@
+> **Superseded 2026-07-31** — v2.1.0 below predates 3 new gates
+> (`F2-G09`, `F3-G09`, `F3-G10`) and expanded CI/testing/security
+> requirements, plus the same RF numbering prose fix as the requisitos
+> doc. Fixed in **v2.1.1** at
+> `docs/docs-7-31-2026/3-Plano_Integrado_Foundation_Data_Pipeline.md`;
+> see that folder's `CHANGELOG-2026-07-31.md`. Kept here for history,
+> not deleted.
+
 **BioAvanceD**
 
 **Plano Integrado do Foundation Data Pipeline**

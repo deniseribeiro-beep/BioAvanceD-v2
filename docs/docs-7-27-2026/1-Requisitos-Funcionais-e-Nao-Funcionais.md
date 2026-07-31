@@ -1,3 +1,11 @@
+> **Superseded 2026-07-31** — v3.0.0 below has a stale prose defect
+> (Appendix B intro + "Decisões permanentes": wrong RF014/RF022/RF023/
+> RF029/RF030 narrative — the table rows themselves were always
+> correct). Fixed in **v3.0.1** at
+> `docs/docs-7-31-2026/1-Requisitos-Funcionais-e-Nao-Funcionais.md`; see
+> that folder's `CHANGELOG-2026-07-31.md`. Kept here for history, not
+> deleted.
+
 **BIOAVANCED**
 
 **Documento Unificado de Requisitos**

@@ -7,6 +7,12 @@ Data Pipeline v2.1.0, Dicionário Consolidado v1.3.0, `DENISE_VALIDATION_STATUS.
 those live in `docs/docs-7-27-2026/extracted/` — this plan is built on
 top of them, not on the raw `.docx`/`.xlsx` files.
 
+**Amended 2026-07-31** (issue #377): Requisitos bumped to v3.0.1, Plano
+Integrado to v2.1.1 — see `docs/docs-7-31-2026/CHANGELOG-2026-07-31.md`
+and the "Doc defect" note below, now marked resolved. The dictionary
+itself (v1.3.0) is unchanged; this plan's RF/RNF matrix required no
+edits.
+
 ## The new milestone
 
 Alongside the existing coverage milestone (90% statements/branches/
@@ -26,19 +32,37 @@ explicitly runs the Docker gate. This milestone is how that item closes
 for good, and how it scales past the 12 items Denise originally asked
 about to the full 29 RF + 32 RNF in the new doc.
 
-> **Doc defect found during extraction:** the requirements doc's own
-> intro paragraph ("RF029 e RF030 foram adicionados...") and its
-> "Matriz de coerência do pipeline" (section 4, Fase 3 row: "RF030 e
-> requisitos de domínio RF001-RF028 aplicáveis") both reference an
-> **RF030 that does not exist** — the actual requirements table (verified
-> directly against the source `.docx`, not just the pandoc conversion)
-> stops at **RF029**. This is the same one-revision-behind pattern found
-> in the Lucidchart diagrams (see `diagrams-index.md`'s caveat): RF030
-> was apparently the old ID for what the table now calls RF029
-> ("Ingestão operacional e científica"), and the prose/matrix sections
-> never got updated when the table was renumbered. Flagging for Denise
-> rather than guessing at a fix — this plan treats **RF001-RF029 (29
-> items)** as the real, defined set.
+> **Doc defect found during extraction (RESOLVED 2026-07-31):** the
+> requirements doc's own intro paragraph ("RF029 e RF030 foram
+> adicionados...") and its "Matriz de coerência do pipeline" (section 4,
+> Fase 3 row: "RF030 e requisitos de domínio RF001-RF028 aplicáveis")
+> both reference an **RF030 that does not exist** — the actual
+> requirements table (verified directly against the source `.docx`, not
+> just the pandoc conversion) stops at **RF029**. This is the same
+> one-revision-behind pattern found in the Lucidchart diagrams (see
+> `diagrams-index.md`'s caveat): RF030 was apparently the old ID for
+> what the table now calls RF029 ("Ingestão operacional e científica"),
+> and the prose/matrix sections never got updated when the table was
+> renumbered. Flagging for Denise rather than guessing at a fix — this
+> plan treats **RF001-RF029 (29 items)** as the real, defined set.
+>
+> Fixed upstream in Requisitos **v3.0.1** and Plano Integrado **v2.1.1**
+> (both dated 2026-07-31, see `docs/docs-7-31-2026/CHANGELOG-2026-07-31.md`)
+> — the corrected prose now matches what the table rows always said:
+> RF022 = Foundation Data Pipeline, RF023 = outbox/Neo4j projection,
+> RF028 = reference-data import, RF029 = operational/scientific
+> ingestion, RF030 confirmed not to exist. **No change to this plan's
+> matrix was needed** — the RF row content itself never changed, and
+> `docs/docs-7-27-2026/extracted/requisitos-index.md` was already built
+> from the table rows, not the buggy prose, so it was already correct.
+> The 2026-07-31 drop also added 3 new gates to the Foundation Data
+> Pipeline plan not yet cross-checked against test coverage here:
+> `F2-G09` (reference-source endpoint/asset/partition coverage
+> reconciliation — directly relevant to RF028's importers, see #367),
+> `F3-G09` (reports/exports must derive org scope from active
+> assignments), `F3-G10` (specimen custody transactions need a real
+> MongoDB replica-set transaction with proven atomicity/rollback).
+> Tracked as **#378** — not done in this pass.
 
 **Gate / definition of done for this milestone** (mirrors the RF012
 audit-first pattern found in the use-case diagrams — see
@@ -304,6 +328,12 @@ own:
   `main`. Whoever picks up RF005's red test first will hit this
   directly; worth a deliberate update to `canonical-data-contract-v1.md`
   (or a `v2`) as part of that slice, not a surprise mid-fix.
+  **2026-07-31 update:** a strong source for that fix now exists —
+  `docs/docs-7-31-2026/manuscript/2.2-Additional_file_2_Polyglot_Persistence_Data_Model.docx`
+  (v1.0.1) maps all 26 domains/79 entities with a normalized persistence
+  matrix and architecture views. Not applied here — still deliberately
+  deferred to the RF005 slice — but read that file first instead of
+  starting the rewrite from scratch.
 - **`bioavanced-v2-conventions`'s quality-scoring ground-truth pointer**
   (`docs/research/cmpb-submission/manuscript/00_Manuscript.tex`) is
   still correct and doesn't conflict with the new docs — RF018/RNF the

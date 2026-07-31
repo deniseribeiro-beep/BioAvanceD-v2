@@ -6,6 +6,17 @@ aplicativo. Transcrição textual abaixo para navegação por IA sem reabrir
 as imagens; consultar o arquivo original apenas se precisar do layout
 visual.
 
+> **2026-07-31 — versões vetoriais disponíveis, sem rótulos de RF.**
+> Novos SVGs cobrindo os mesmos três diagramas (C4 System Context, C4
+> Container e um Flowchart de caso de uso) estão em
+> `docs/architecture/diagrams/Figure_{1,2,3}_*.svg`. Diferente das
+> imagens do WhatsApp, esses SVGs **não têm bolhas rotuladas com "RFxx"**
+> (verificado por busca textual) — a ressalva de numeração abaixo é
+> específica das 5 imagens do WhatsApp e não se aplica a eles. Não foi
+> feita uma comparação bolha-a-bolha do conteúdo entre os SVGs e as
+> imagens originais; trate-os como um artefato adicional, não como
+> substituição confirmada.
+
 > **Cuidado — numeração de RF nos diagramas está ~1 versão atrás do
 > documento de requisitos v3.0.0.** Comparando o conteúdo de cada bolha
 > com `extracted/requisitos-index.md`, a regra empírica (verificada
