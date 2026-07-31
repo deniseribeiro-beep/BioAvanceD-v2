@@ -116,6 +116,25 @@ services:
       backend:
         condition: service_healthy
 
+  reference-data-bootstrap:
+    # RF028 (#367 slice 1): one-shot, idempotent HPO reference-data import —
+    # first of the 14 Fase 2 sources, runs after foundation-bootstrap so
+    # Fase 1 schemas/collections are ready first (Plano Integrado Fase 2
+    # dependency). Idempotent via the run's idempotencyKey lookup; repeat
+    # runs are no-ops.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    command: npm run reference:import:hpo
+    volumes:
+      - ./api/backend:/app
+      - backend_node_modules:/app/node_modules
+    env_file:
+      - .env.docker
+    depends_on:
+      foundation-bootstrap:
+        condition: service_completed_successfully
+
   neo4j-projection-worker:
     # Drains graph_projection_outbox into Neo4j (#309, follow-up from RF023/#292)
     # — without this service, outbox rows written by consent.service.js

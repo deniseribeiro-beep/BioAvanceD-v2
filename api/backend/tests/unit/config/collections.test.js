@@ -27,7 +27,13 @@ const DEFAULTS = {
   diseaseDictionary: 'disease_dictionary',
   medicationDictionary: 'medication_dictionary',
   referenceSeedRuns: 'referenceSeedRuns',
-  participantIdentities: 'participantIdentities'
+  participantIdentities: 'participantIdentities',
+  referenceDatasetReleases: 'referenceDatasetReleases',
+  referenceImportRuns: 'referenceImportRuns',
+  referenceImportIssues: 'referenceImportIssues',
+  referenceImportStaging: 'referenceImportStaging',
+  terminologyConcepts: 'terminologyConcepts',
+  terminologyRelations: 'terminologyRelations'
 };
 
 const ORIGINAL_ENV = { ...process.env };
@@ -88,7 +94,13 @@ describe('config/collections', () => {
       diseaseDictionary: 'disease_dictionary',
       medicationDictionary: 'medication_dictionary',
       referenceSeedRuns: 'referenceSeedRuns',
-      participantIdentities: 'participantIdentities'
+      participantIdentities: 'participantIdentities',
+      referenceDatasetReleases: 'referenceDatasetReleases',
+      referenceImportRuns: 'referenceImportRuns',
+      referenceImportIssues: 'referenceImportIssues',
+      referenceImportStaging: 'referenceImportStaging',
+      terminologyConcepts: 'terminologyConcepts',
+      terminologyRelations: 'terminologyRelations'
     });
   });
 

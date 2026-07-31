@@ -1,0 +1,10 @@
+{"id":"HP:0000001","lbl":"All","is_a":[],"synonyms":[],"obsolete":false}
+{"id":"HP:0000118","lbl":"Phenotypic abnormality","is_a":["HP:0000001"],"synonyms":[],"obsolete":false}
+{"id":"HP:0000707","lbl":"Abnormality of the nervous system","is_a":["HP:0000118"],"synonyms":[],"obsolete":false}
+{"id":"HP:0012638","lbl":"Abnormal nervous system physiology","is_a":["HP:0000707"],"synonyms":[],"obsolete":false}
+{"id":"HP:0001250","lbl":"Seizure","is_a":["HP:0012638"],"synonyms":["Seizures","Epileptic seizure"],"obsolete":false}
+{"id":"HP:0002133","lbl":"Status epilepticus","is_a":["HP:0001250"],"synonyms":[],"obsolete":false}
+{"id":"HP:0007359","lbl":"Focal seizure","is_a":["HP:0001250"],"synonyms":[],"obsolete":false}
+{"id":"HP:0001251","lbl":"Ataxia","is_a":["HP:0012638"],"synonyms":[],"obsolete":false}
+{"id":"","lbl":"Missing code term","is_a":[],"synonyms":[],"obsolete":false}
+{"id":"HP:9999999","lbl":"","is_a":[],"synonyms":[],"obsolete":false}
