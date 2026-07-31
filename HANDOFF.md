@@ -48,8 +48,10 @@
   run still exist.
 - `test/e2e-real-backend-foundation` — still not deleted, still safe to
   delete (fully merged forward), Dennis hasn't confirmed.
-- **#342 closed** this session. Standing inventory (#359 sign-off flag,
-  skills-pack#152 config/env.js trap) unchanged from prior handoff.
+- **#342 closed** this session. Standing inventory: #359 sign-off flag
+  unchanged from prior handoff; **skills-pack#152 confirmed CLOSED**
+  (verified this session — already resolved, no follow-up needed, drop
+  from future standing-inventory notes).
 
 ## Recommended next steps
 
