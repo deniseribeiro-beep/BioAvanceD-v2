@@ -128,6 +128,16 @@ npm run compose:config
 npm run compose:up
 ```
 
+Uma stack recém-criada não tem nenhum usuário no Mongo. Crie o primeiro
+administrador (idempotente — não faz nada se `users` já tiver documentos):
+
+```bash
+npm run compose:seed-admin
+```
+
+As credenciais vêm de `BOOTSTRAP_ADMIN_*` em `.env.docker` (por padrão
+`admin` / `Admin@123`, o mesmo login que `npm run test:e2e:docker` espera).
+
 Serviços padrão:
 
 - Frontend: http://localhost:5173
