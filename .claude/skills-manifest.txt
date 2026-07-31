@@ -15,6 +15,7 @@ e2e-test-loop
 build-loop
 ship-integration-branch
 docker-workflow
+ci-workflow
 parallel-test-agents
 playwright-specs
 vitest-specs
