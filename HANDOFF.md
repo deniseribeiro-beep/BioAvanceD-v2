@@ -1,93 +1,98 @@
 # HANDOFF
 
-**Written:** 2026-07-31, a `build-loop` iteration on
-`feature/docker-e2e-backend-integration`, immediately following the
-2026-07-31 #344 fix-bugs session.
+**Written:** 2026-07-31, a `ship-integration-branch` session closing out the
+Wave 1 e2e tracking issue on `feature/docker-e2e-backend-integration`,
+following the same day's #320 `build-loop` session.
 
 ## What happened this session
 
-1. Picked up issue **#320** (Study/Protocol/Collection have no CRUD
-   API — `#295`'s reference-integrity check for `Sample.studyId`/
-   `protocolId`/`collectionId` could only be seeded directly in Mongo,
-   never created through a real endpoint). Routed via `work-issue` →
-   `build-loop` (spec'd capability missing from the code, not a
-   deviation or a coverage gap).
-2. Found `api/backend/src/interface/routes/master-data.routes.js`'s
-   `createMasterDataRouter` factory already implements exactly this
-   shape (generic list/get/create/update/delete over a Mongo
-   collection + an id field + a validation model) and is already used
-   for `sampleTypes`/`sampleOrigins`/`extractionProtocols`/
-   `measurementUnits`/`qualityDescriptions`. Mounted three more uses of
-   it in `api/backend/app.js`: `/api/studies`, `/api/protocols`,
-   `/api/collections`, reusing the existing Phase-1 identity-only
-   `StudyModel`/`ProtocolModel`/`CollectionModel` from `#295` (the
-   models' own comments already scope them to "não o conjunto MIABIS
-   completo" — Phase-1, not full field set — so building CRUD on top of
-   them isn't expanding that prior scoping decision, just exposing it).
-3. Wrote `tests/e2e/study-protocol-collection-crud.spec.ts` (real
-   backend only, `PLAYWRIGHT_API_BASE_URL`-gated) proving
-   create/list/get/update plus a 422 on missing required field and a
-   404 on a nonexistent id, for all three entities.
-4. Verified live: `npm run compose:up` (dev stack), `npm run
-   compose:seed-admin` (no-op, admin already existed from a prior
-   session's named volume), ran the new spec — 9/9 passed. Also
-   re-ran the existing `specimen-quality-inventory.spec.ts` (RF004
-   AC#3 linkage tests) to check for regressions — initially saw 13
-   unrelated failures from a missing `E2E_MONGO_URI`/`E2E_MONGO_DB`
-   env var (the dev stack's Mongo requires auth per `.env.docker`;
-   `seedParticipant.ts`'s default assumes the no-auth test stack) — not
-   caused by this session's change. Re-ran with the env vars set
-   correctly: all 4 AC#3 linkage tests passed. Tore the stack down
-   afterward (no `--volumes`, named volumes including Mongo left in
-   place).
-5. Branched `test/study-protocol-collection-crud` off the integration
-   branch (no dedicated `build-loop` branch prefix exists yet — see
-   `local-env/bioavanced-v2.md`'s prefix note, `test/<slug>` is the
-   documented fallback), committed (`0f9537b7`, `Fixes #320`), merged
-   `--no-ff` into `feature/docker-e2e-backend-integration` (merge
-   commit `8091df3e`), pushed, deleted the branch local (remote branch
-   was never pushed, only the integration branch).
-6. Closed #320 with the merge commit hash in the comment.
-7. Wrap-up audit: no scope creep (only `app.js` + the new spec file),
-   no lazy fixes. One real friction point — filed
-   `dyeallpies-skills-pack#153` (docker-workflow's `bioavanced-v2.md`
-   overlay documents `E2E_MONGO_URI`/`E2E_MONGO_DB` for the
-   `compose.test.yml` test stack but not for the `compose:up` dev
-   stack, which needs different, auth-bearing credentials) — quoted
-   the exact addition text for a pack session to apply verbatim
-   (Rule 0: can't edit the installed skill junction directly). Update
-   (later 2026-07-31 session): confirmed the issue is closed and the
-   text landed in the pack repo — see Repo state below.
+1. User asked to "finish wave 1" — routed via issue triage to **#318**
+   (tracking issue: "after all Wave 1 issues land, integrate
+   `test/e2e-real-backend-foundation` onto
+   `feature/docker-e2e-backend-integration`"). Confirmed all 6 Wave 1
+   blockers (#290, #291, #292, #304, #295, #297) were already closed.
+2. Discovered the actual branch merge had already happened in an earlier
+   (2026-07-30) session — `test/e2e-real-backend-foundation` was a strict
+   ancestor of `feature/docker-e2e-backend-integration` (merge commit
+   `ace663e4`, later fast-forwarded further by normal work). `git diff`
+   between the two branches was empty. So #318's remaining work was
+   verification + bookkeeping, not a new merge.
+3. Invoked `ship-integration-branch`; its "before starting" section
+   correctly self-selected out of the PR-into-`main` flow since the named
+   target was `feature/docker-e2e-backend-integration`, not `main` — no
+   skill-gap friction this time (the `#147` gap from the prior session
+   didn't recur).
+4. Docker was off at session start; asked the user, they turned it on.
+   Ran `npm run compose:up` (dev stack) + `compose:seed-admin` (no-op,
+   admin already existed), then the full `test:e2e:docker` suite: 52
+   passed / 24 failed on the first pass.
+5. Diagnosed the 24 failures as dev-stack env-var gaps, not regressions:
+   `queryNeo4j.ts` defaults `E2E_NEO4J_PASSWORD=testpassword` (matches the
+   *test* stack, not the dev stack's real `NEO4J_PASSWORD`), and
+   `.env.docker.example`'s `TEST_SUPPORT_SECRET` ships blank so the
+   test-support routes 403 by design (#307). Set both correctly (added
+   `TEST_SUPPORT_SECRET` to local `.env.docker`, recreated `backend`) and
+   re-ran the previously-failing specs: 33 passed / 13 failed. The two
+   specs directly gated by Wave 1 issues — `pipeline-continuity.spec.ts`
+   (#292) and `scientific-data-access.spec.ts` (#323) — were fully green.
+   Remaining 13 failures (interop-monitoring, some specimen-quality-
+   inventory chain-of-custody cases) attributed to persistent-volume
+   fixture accumulation across many past sessions' dev-stack runs, not
+   this integration.
+6. Closed **#318** with the verification detail. Deleted
+   `test/e2e-real-backend-foundation` (local + origin, confirmed
+   fully-merged first). Pushed `feature/docker-e2e-backend-integration`
+   (had one unpushed local commit from the prior session, now at
+   `803cf591`).
+7. Wrap-up audit found two real gaps, both filed (not just mentioned in
+   a closed-issue comment):
+   - **#360** — docs gap: the docker-workflow overlay documents the
+     dev-stack-vs-test-stack Mongo auth difference (`#153`) but not the
+     matching Neo4j creds / `TEST_SUPPORT_SECRET` gap found this session.
+     Suggested addition text included verbatim for a pack session to
+     apply (Rule 0 — can't edit the installed skill junction directly).
+   - **#361** — the dev stack's named Mongo/Neo4j volumes accumulate e2e
+     fixtures across sessions the same way `compose.test.yml`'s
+     `mongodb-test-data` already does (documented), but the dev-stack
+     case isn't mentioned anywhere. Not prescribing a fix, just tracking
+     it so future sessions know to suspect stale fixtures before
+     regressions.
 
 ## Repo state
 
 - `feature/docker-e2e-backend-integration`: pushed to
-  `origin/feature/docker-e2e-backend-integration` at `8091df3e`,
-  working tree clean, no local commits pending.
-- `test/study-protocol-collection-crud`: merged and deleted locally
-  (was never pushed to origin, so no remote branch to clean up).
-- Docker Desktop/WSL: stack torn down at session end via plain
-  `docker compose down` (no `--volumes`) — the `bioavanced_*` named
-  volumes (Mongo included) still exist and now also contain the three
-  new `studies`/`protocols`/`collections` test documents this
-  session's spec created (harmless, same pattern as prior sessions'
-  fixture accumulation).
-- `test/e2e-real-backend-foundation` — still not deleted, still safe to
-  delete (fully merged forward), Dennis hasn't confirmed.
-- **#320 closed** this session. Standing inventory: #359 sign-off flag
-  unchanged from prior handoffs.
-- Filed `dyeallpies-skills-pack#153` (docker-workflow overlay gap,
-  documentation label) — **resolved**: issue closed, and the suggested
-  addition is present in `skills/docker-workflow/local-env/
-  bioavanced-v2.md` in the pack repo (verified 2026-07-31, later
-  session). No follow-up needed.
+  `origin/feature/docker-e2e-backend-integration` at `803cf591`, working
+  tree clean except a local-only `.env.docker` edit (gitignored, added
+  `TEST_SUPPORT_SECRET=e2e-test-support-secret` for this session's
+  verification — harmless to leave, matches what a real dev-stack setup
+  should have had per `.env.docker.example`'s documented-but-blank var).
+- `test/e2e-real-backend-foundation`: deleted, both local and origin
+  (fully merged, confirmed via empty `git diff` before deletion).
+- **#318 closed** this session (Wave 1 integration confirmed complete).
+- New this session: **#360** (docs gap, Neo4j creds/TEST_SUPPORT_SECRET),
+  **#361** (dev-stack fixture accumulation, tracking/awareness only).
+- Docker Desktop / dev stack: left running at session end (not torn
+  down) — next session can either reuse it or `compose:down` (no
+  `--volumes`, per established convention, unless deliberately resetting
+  per #361's suggestion).
+- `test/e2e-real-backend-foundation` from prior handoffs is now resolved
+  (was previously "still not deleted, safe to delete, Dennis hasn't
+  confirmed" — this session confirmed and deleted it as part of closing
+  #318, since the branch itself was the subject of the tracking issue).
+- Standing inventory carried forward: #359 sign-off flag unchanged.
 
 ## Recommended next steps
 
-None queued explicitly by Dennis this session.
+None queued explicitly by Dennis this session. Wave 2 work (#325, #326,
+plus their file-gap prerequisites #327–#330) is the logical next
+candidate per `E2E_TRACEABILITY_PLAN.md`'s wave sequencing, now that
+Wave 1's integration (#318) is closed — but confirm with Dennis before
+starting rather than assuming.
 
 ## Which skills to use
 
-`work-issue` to route whichever open issue gets picked up next.
-`ship-integration-branch` remains available if/when Dennis asks to
-graduate `feature/docker-e2e-backend-integration` to `main`.
+`work-issue` to route whichever open issue/track gets picked up next.
+If Wave 2 work starts, expect `e2e-test-loop` for the individual specs
+and eventually another `ship-integration-branch` pass for the Wave 2
+tracking issue (#331), which has the same "not `main`" shape this
+session's #318 close-out did.
