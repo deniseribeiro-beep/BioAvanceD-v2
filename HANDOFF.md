@@ -55,10 +55,22 @@ was already on for this session.
 - Dev stack (`compose:up`, compose.yml+compose.dev.yml) was already up
   this session and left running — not torn down, per Dennis's
   "Docker is on" for the session.
-- Standing pack-repo inventory unchanged: `dyeallpies-skills-pack#154`,
-  `#155`, `#156` still open/unapplied (from prior sessions' local-env
-  overlay findings — none of the three block this repo's work, just
-  not yet landed in the pack).
+- Correction to this session's earlier report: `dyeallpies-skills-pack
+  #154`, `#155`, `#156` are **already closed and applied** — verified
+  both in the pack repo checkout and by `Read`ing this repo's installed
+  junction directly (`.claude/skills/docker-workflow/local-env/
+  BioAvanceD-v2.md` carries #154's Neo4j-creds/TEST_SUPPORT_SECRET
+  section and #156's dev-stack volume-accumulation section verbatim;
+  #155 was a no-action placeholder tied to #362, which has since
+  landed). No reinstall needed — the junction is current; a plain
+  `Glob(".claude/skills/**/local-env/*.md")` from this repo returns no
+  matches (doesn't traverse this junction on Windows), which is what
+  made the previous session wrongly conclude no overlay existed. `Read`
+  on the exact path works fine and is the reliable way to check an
+  overlay here — don't trust a `local-env` glob turning up empty as
+  proof one isn't installed. Filed `dyeallpies-skills-pack#157` for the
+  `dennis-windows` skill to encode this Glob-vs-junction gotcha so it
+  isn't rediscovered next session.
 
 ## Recommended next steps
 
