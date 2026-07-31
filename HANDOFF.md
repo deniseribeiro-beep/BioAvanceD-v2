@@ -91,11 +91,13 @@ right after the #366/#372 close-out.
   `Depends on: #367`, satisfied — #374 additionally depends on #371,
   not yet landed). **#375 and #376 open** (pre-existing, unrelated —
   CI architecture-test breakage and a patients API test failure).
-- Dev stack (`compose.yml` + `compose.dev.yml`) is currently **up** —
-  brought up via `npm run compose:up` this session to verify the slice,
-  admin seeded via `npm run compose:seed-admin`. Not torn down yet as of
-  this writing; next session (or this one's `clean-up` pass) should
-  decide whether to tear it down or hand it off running.
+- Dev stack (`compose.yml` + `compose.dev.yml`) was brought up via
+  `npm run compose:up` this session to verify the slice, admin seeded
+  via `npm run compose:seed-admin`, then **torn down** (`docker compose
+  down --volumes --remove-orphans`, Dennis confirmed) by this session's
+  `clean-up` pass. Next session starts from a clean slate: `npm run
+  compose:up`, then `npm run compose:seed-admin` before any
+  `realLogin`-based spec.
 
 ## Recommended next steps
 
