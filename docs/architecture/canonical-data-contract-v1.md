@@ -119,6 +119,9 @@ encryption at rest for the segregated collection ("cifrar").
 
 ### Consent
 
+- `consentId` (internal identity of the consent instance, distinct from
+  the storage-layer `_id` — dict-02 ELM-0088; assigned at creation via
+  `crypto.randomUUID()` in `PatientConsentModel.create`, #364)
 - `consentTemplateId`
 - `consentGranted`
 - `consentAcceptedAt`

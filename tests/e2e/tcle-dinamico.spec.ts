@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 import { mockLogin } from './helpers/mockAuth';
 import { realLogin } from './helpers/realAuth';
 import { createRealParticipant, closeSeedDb } from './helpers/seedParticipant';
-import { MongoClient } from 'mongodb';
+import { MongoClient, ObjectId } from 'mongodb';
 
 // Real backend only — see specimen-quality-inventory.spec.ts for the same
 // skip rationale. Run via `npm run test:e2e:docker` (or a locally running
@@ -107,7 +107,7 @@ test.describe('RF010 Consent versioned by consentId — real backend, red-first 
     const client = new MongoClient(mongoUri);
     await client.connect();
     try {
-      const stored = await client.db(mongoDbName).collection('patientConsents').findOne({ _id: consent._id });
+      const stored = await client.db(mongoDbName).collection('patientConsents').findOne({ _id: new ObjectId(consent._id) });
       expect(stored?.consentId).toBeTruthy();
     } finally {
       await client.close();
