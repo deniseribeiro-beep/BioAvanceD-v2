@@ -264,6 +264,21 @@ app.use("/api/extraction-protocols", createMasterDataRouter({
   idField: "protocolID",
   model: require("./src/models/ExtractionProtocol")
 }));
+app.use("/api/studies", createMasterDataRouter({
+  collectionName: "studies",
+  idField: "studyId",
+  model: require("./src/models/Study")
+}));
+app.use("/api/protocols", createMasterDataRouter({
+  collectionName: "protocols",
+  idField: "protocolId",
+  model: require("./src/models/Protocol")
+}));
+app.use("/api/collections", createMasterDataRouter({
+  collectionName: "collections",
+  idField: "collectionId",
+  model: require("./src/models/Collection")
+}));
 app.use("/api/equipment", require("./src/interface/routes/equipment.routes"));
 app.use("/api/locations", require("./src/interface/routes/location.routes"));
 app.use("/api/organizations", require("./src/interface/routes/organization.routes"));
