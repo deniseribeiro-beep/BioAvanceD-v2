@@ -40,11 +40,10 @@ The essential seed is manual, idempotent, and never runs automatically at startu
 
 ## Large imports
 
-The large import scaffold is intentionally non-operational in this PR. The placeholder script only validates arguments and prints a plan.
+The large import scaffold (`scripts/reference-imports/import-large-reference-dataset.js`) is intentionally non-operational — it only validates arguments and prints a plan.
 
-Deferred datasets include:
+Deferred datasets (no operational importer yet):
 
-- HPO
 - ORPHA
 - CID / ICD
 - OMIM
@@ -54,6 +53,32 @@ Deferred datasets include:
 - UCUM
 - medications / DCB / ATC
 - disease-phenotype relations
+
+### RF028 first importer: HPO
+
+HPO is the first Fase 2 source with an operational importer (#367), per
+`docs-7-27-2026/3-Plano_Integrado_Foundation_Data_Pipeline.md` §7.4's
+recommended Fase 2 order. It lives in
+`src/reference-data/reference-imports/` (separate module from the essential
+seed) and is invoked by `scripts/reference-imports/import-hpo-reference-dataset.js`
+(`npm run reference:import:hpo` / `reference:import:hpo:dry-run`), wired into
+`compose.dev.yml` as the `reference-data-bootstrap` one-shot service (runs
+after `foundation-bootstrap` completes).
+
+It writes to five new collections — `referenceDatasetReleases`,
+`referenceImportRuns`, `referenceImportIssues`, `terminologyConcepts`,
+`terminologyRelations` — modeled in `src/models/` per
+`dict-02_DICIONARIO.md`'s ReferenceDatasetRelease/ReferenceImportRun/
+ReferenceImportIssue/TerminologyConcept/TerminologyRelation rows.
+
+This first slice imports a small bundled fixture
+(`reference-imports/fixtures/hpo-sample.jsonl`), not a live HPO release
+download — dict-01_FONTES.md's SRC_HPO row lists the license as "verify at
+ingestion time" rather than a fixed value, and this repo keeps import
+scripts free of live network calls (`reference-import-boundary.arch.test.js`).
+Live download, real license verification, checkpoint/resume, quarantine
+recovery, rollback, and Neo4j outbox projection are follow-up scope,
+together with the remaining 13 Fase 2 sources.
 
 ## Runtime guarantees
 

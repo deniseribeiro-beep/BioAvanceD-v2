@@ -13,7 +13,13 @@ const CANONICAL_COLLECTIONS = Object.freeze({
   diseaseDictionary: env.COLL_DISEASE_DICTIONARY || 'disease_dictionary',
   medicationDictionary: env.COLL_MEDICATION_DICTIONARY || 'medication_dictionary',
   referenceSeedRuns: env.COLL_REFERENCE_SEED_RUNS || 'referenceSeedRuns',
-  participantIdentities: env.COLL_PARTICIPANT_IDENTITIES || 'participantIdentities'
+  participantIdentities: env.COLL_PARTICIPANT_IDENTITIES || 'participantIdentities',
+  referenceDatasetReleases: env.COLL_REFERENCE_DATASET_RELEASES || 'referenceDatasetReleases',
+  referenceImportRuns: env.COLL_REFERENCE_IMPORT_RUNS || 'referenceImportRuns',
+  referenceImportIssues: env.COLL_REFERENCE_IMPORT_ISSUES || 'referenceImportIssues',
+  referenceImportStaging: env.COLL_REFERENCE_IMPORT_STAGING || 'referenceImportStaging',
+  terminologyConcepts: env.COLL_TERMINOLOGY_CONCEPTS || 'terminologyConcepts',
+  terminologyRelations: env.COLL_TERMINOLOGY_RELATIONS || 'terminologyRelations'
 });
 
 module.exports = {

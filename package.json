@@ -1,7 +1,7 @@
 {
   "scripts": {
     "compose:config": "docker compose --env-file .env.docker -f compose.yml -f compose.dev.yml config",
-    "compose:up": "docker compose --env-file .env.docker -f compose.yml -f compose.dev.yml up -d --wait mongodb neo4j redis influxdb tsa witness backend worker neo4j-projection-worker frontend && docker compose --env-file .env.docker -f compose.yml -f compose.dev.yml up -d --wait foundation-bootstrap",
+    "compose:up": "docker compose --env-file .env.docker -f compose.yml -f compose.dev.yml up -d --wait mongodb neo4j redis influxdb tsa witness backend worker neo4j-projection-worker frontend && docker compose --env-file .env.docker -f compose.yml -f compose.dev.yml up -d --wait foundation-bootstrap && docker compose --env-file .env.docker -f compose.yml -f compose.dev.yml up -d --wait reference-data-bootstrap",
     "compose:down": "docker compose --env-file .env.docker -f compose.yml -f compose.dev.yml down --volumes --remove-orphans",
     "compose:logs": "docker compose --env-file .env.docker -f compose.yml -f compose.dev.yml logs -f",
     "compose:ps": "docker compose --env-file .env.docker -f compose.yml -f compose.dev.yml ps",
