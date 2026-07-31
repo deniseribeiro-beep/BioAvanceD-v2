@@ -25,9 +25,23 @@ on `feature/docker-e2e-backend-integration`, following the same day's
 4. Filed **DyeAllPies/dyeallpies-skills-pack#154** with the exact
    suggested doc addition from #360's body (Neo4j creds +
    `TEST_SUPPORT_SECRET` dev-stack-vs-test-stack gotcha, same shape as
-   the already-resolved #153 Mongo-auth gotcha).
-5. Closed **#360** in BioAvanceD-v2 with a comment cross-referencing
-   pack#154.
+   the already-resolved #153 Mongo-auth gotcha). Closed **#360** in
+   BioAvanceD-v2 with a comment cross-referencing pack#154.
+5. User raised a broader point while closing #360: BioAvanceD-v2 has
+   **zero production deployment as of 2026-07-31** — still fully in dev
+   phase — so the repo's 5 compose files (`compose.yml`,
+   `compose.dev.yml`, `compose.prod.yml`, `compose.test.yml`,
+   `docker-compose.test.yml`) are worth streamlining now, before more
+   dev-vs-test drift bugs accumulate (per #153, #360's pattern). Filed
+   two issues:
+   - **BioAvanceD-v2#362** — audit/streamline the 5 compose files
+     (which are vestigial, e.g. `docker-compose.test.yml` looking like
+     a duplicate of `compose.test.yml`; consider a shared base +
+     override-file shape for dev/test).
+   - **dyeallpies-skills-pack#155** — placeholder to revisit the
+     `docker-workflow` `local-env/bioavanced-v2.md` overlay's wording
+     once #362 has a direction, so the overlay doesn't ossify around
+     today's 5-file shape.
 
 No code, tests, or branches touched this session — issue-tracker
 bookkeeping only.
@@ -35,30 +49,37 @@ bookkeeping only.
 ## Repo state
 
 - `feature/docker-e2e-backend-integration`: unchanged from the #318
-  session — still at `803cf591`, working tree clean, no new commits
-  this session (nothing to push).
+  session except this HANDOFF.md rotation — still functionally at
+  `803cf591` plus doc-only commits, working tree clean.
 - **#360 closed** this session, cross-referenced to
   `dyeallpies-skills-pack#154` (open, pack-repo fix pending).
+- **#362 opened** this session (BioAvanceD-v2, compose-file
+  streamlining) — open, unstarted.
 - **#361** (dev-stack fixture accumulation, tracking/awareness only)
   still open, untouched this session.
 - Standing inventory carried forward: #359 sign-off flag unchanged.
-- Docker Desktop / dev stack: was confirmed "on" this session per the
-  user, but no Docker commands were actually run (docs-only issue,
-  no verification needed). Left in whatever state the #318 session
-  left it (not torn down there either).
+- Docker Desktop / dev stack: confirmed "on" this session per the user,
+  but no Docker commands were actually run (all issue-tracker work).
+  Left in whatever state the #318 session left it (not torn down
+  there either).
 
 ## Recommended next steps
 
-None queued explicitly by Dennis this session. Wave 2 work (#325, #326,
-plus file-gap prerequisites #327–#330) remains the logical next
-candidate per `E2E_TRACEABILITY_PLAN.md`'s wave sequencing — confirm
-with Dennis before starting. #361 is also still open and unpicked.
+None queued explicitly by Dennis this session beyond what's filed.
+**#362** (compose streamlining) is a real candidate given it was raised
+by Dennis directly, but wasn't picked up this session — confirm before
+starting, since it touches Docker plumbing broadly (docker-workflow
+skill gates apply). Wave 2 work (#325, #326, plus file-gap
+prerequisites #327–#330) remains the other logical candidate per
+`E2E_TRACEABILITY_PLAN.md`. #361 also still open and unpicked.
 
 ## Which skills to use
 
 `work-issue` to route whichever open issue/track gets picked up next.
-If Wave 2 work starts, expect `e2e-test-loop` for the individual specs
-and eventually another `ship-integration-branch` pass for the Wave 2
-tracking issue (#331). A pack-repo session should apply
-`dyeallpies-skills-pack#154`'s doc addition when one is next running
-against that repo.
+If #362 is picked up, expect `docker-workflow` (compose/Dockerfile
+changes) plus likely `resolve-issue` as the base workflow — it's an
+infra/consolidation task, not a bug or coverage gap. If Wave 2 work
+starts, expect `e2e-test-loop` for the individual specs and eventually
+another `ship-integration-branch` pass for the Wave 2 tracking issue
+(#331). A pack-repo session should apply `dyeallpies-skills-pack#154`'s
+doc addition, and check #155 once #362 has a direction.
