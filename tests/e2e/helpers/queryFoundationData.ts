@@ -55,3 +55,26 @@ export async function countReferenceSeedRuns(): Promise<number> {
   const db = await getDb();
   return db.collection('referenceSeedRuns').countDocuments();
 }
+
+/**
+ * RF028 (#330) fixture: dict-08_MAIN_GAPS.md's "Reference data pipeline" row
+ * names ReferenceDatasetRelease as the entity a Fase 2 importer must write
+ * before any concept/relation load is considered valid (RF028 AC 1, 8) —
+ * there is no model, collection, or importer for it anywhere in
+ * api/backend/src today (grepped for ReferenceDatasetRelease/importer
+ * controllers — only Fase 3 operational import.controller.js etc. exist).
+ */
+export async function countReferenceDatasetReleases(): Promise<number> {
+  const db = await getDb();
+  return db.collection('referenceDatasetReleases').countDocuments();
+}
+
+/**
+ * RF028 AC 6: imported concepts (MONDO/HPO/ORPHA/etc., AC 2) must persist in
+ * TerminologyConcept, linked to a release. Same gap as above — no collection
+ * is ever written today, since no importer exists to write it.
+ */
+export async function countTerminologyConcepts(): Promise<number> {
+  const db = await getDb();
+  return db.collection('terminologyConcepts').countDocuments();
+}
