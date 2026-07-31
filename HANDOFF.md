@@ -1,150 +1,107 @@
 # HANDOFF
 
-**Addendum (2026-07-31, later same day):** a follow-up session (not a
-`build-loop`/issue-resolution pass, so no full rotation below) recorded a
-short real-backend e2e showcase video for Denise
-(`docs/e2e-showcase-2026-07-31.mp4` — real admin login →
-system-management dashboard, a rejected login, and the RF009 "Novo
-Sensor" UI form, concatenated with 1s black gaps via
-`playwright.showcase.config.ts`, a new `video:'on'` config kept at the
-repo root for reuse). Denise saw it and liked it.
-
-**Blocking next step, ahead of everything below: #377.** Denise has a
-newer version of the requirements/dictionary docs than what's checked in
-at `docs/docs-7-27-2026/`. No session can act on this — the updated
-files exist on Denise's side, not in this repo, and a Claude Code
-session has no way to fetch them itself. **Dennis needs to get the
-updated doc(s) from Denise and add them to the repo** (same
-`docs/docs-7-27-2026/`-style pattern, or wherever fits if it's a point
-revision) before a session can re-extract/re-diff them against
-`E2E_TRACEABILITY_PLAN.md`'s traceability matrix and ground-truth
-hierarchy — see #377 for the full checklist of what to re-check once the
-files land.
-
----
-
-**Written:** 2026-07-31, a `build-loop` session closing out **#367**
-(RF028 reference-data importers, first Fase 2 pipeline slice) on
-`feature/docker-e2e-backend-integration`, picked up directly from Dennis
-right after the #366/#372 close-out.
+**Written:** 2026-07-31, end of a same-day follow-up session (not a
+`build-loop`/issue-resolution pass) that recorded a real-backend e2e
+showcase video for Denise, on `feature/docker-e2e-backend-integration`,
+picked up directly after the #367 (RF028 HPO importer slice) close-out.
 
 ## What happened this session
 
-1. Routed via `work-issue` → `build-loop`: #367 asked for RF028's
-   reference-data importer pipeline — `ReferenceDatasetRelease`,
-   `ReferenceImportRun`, `ReferenceImportIssue`, `TerminologyConcept`,
-   `TerminologyRelation` didn't exist anywhere in `api/backend/src`, and
-   `pipeline-continuity.spec.ts`'s RF028 red-first block (from #330)
-   proved the gap.
-2. #367's own scope note flagged the full target (5 new models + 14
-   external terminology sources, each needing streaming download/parse/
-   validate/promote/rollback) as bigger than one iteration and
-   recommended `divide-and-conquer`, same shape as #366/RF022. Asked
-   Dennis via `AskUserQuestion` which source to build first — Dennis
-   redirected to check the docs before guessing, which settled it:
-   `3-Plano_Integrado_Foundation_Data_Pipeline.md` §7.4 "Ordem
-   recomendada da Fase 2" explicitly names HPO as the first source (step
-   2, right after registering sources). Also confirmed with Dennis:
-   Neo4j outbox projection (AC 9) and full AC 7 lifecycle
-   (checkpoint/resume/quarantine recovery/rollback) are both deferred to
-   the follow-up; this slice proves dry-run + idempotency only.
-3. Slice 1 (this session, landed): the 5 canonical models
-   (`api/backend/src/models/`), a generic universal-pipeline runner
-   (`api/backend/src/reference-data/reference-imports/pipeline.js` —
-   Acquire/Integrity/Parse/Normalize/Stage/Validate/Approve/Promote/
-   Verify, already reusable for the other 13 sources), and HPO wired
-   end to end against a bundled fixture
-   (`reference-imports/fixtures/hpo-sample.jsonl` — 8 valid concepts, 7
-   `is_a` relations, 2 intentionally malformed rows proving
-   `ReferenceImportIssue` recording). Wired into `compose.dev.yml` as a
-   `reference-data-bootstrap` one-shot service, running after
-   `foundation-bootstrap`. Also removed `hpo` from
-   `import-large-reference-dataset.js`'s placeholder `allowedDatasets`
-   set, since it graduated to its own operational script.
-4. Verified against the real dev-stack backend: both RF028 red
-   assertions in `pipeline-continuity.spec.ts` now pass. Confirmed
-   idempotency by re-running the bootstrap service twice against the
-   real dev-stack Mongo — second run correctly reported
-   `idempotent: true`, zero duplicate docs (1 release, 8 concepts, 7
-   relations, 1 run, 2 issues, confirmed via direct `mongosh` count).
-   Full `pipeline-continuity.spec.ts` file green (RF022/RF023/RF028; RF029
-   has no test yet — MISSING per the traceability matrix, Wave 3,
-   unrelated to this slice). 48 new unit tests + 4 new
-   architecture-boundary tests, all green.
-5. Full targeted native suite (`tests/unit tests/integration
-   tests/compliance tests/architecture`, 325 files, 6365 tests) surfaced
-   one regression I introduced (`collections.test.js`'s hardcoded
-   `DEFAULTS` list, fixed same session) and two **pre-existing, unrelated**
-   failures — confirmed via `git stash` that both reproduce without this
-   session's changes — filed rather than fixed:
-   - **#375** — `test:architecture`'s `node --test` invocation can't
-     parse the ESM-syntax arch test files (every file in
-     `tests/architecture/` fails identically); this is a hard-gating CI
-     step in `ci-pipeline.yml` that has **never actually run**, since
-     `tests/architecture/` doesn't exist on `main` yet — will break the
-     first PR that merges any of these branches. Not fixed here
-     (unrelated to RF028).
-   - **#376** — `patients.expanded.api.test.js`'s `GET /api/patients/:id`
-     returns `patientName: undefined`. Not investigated further.
-6. Committed on `test/rf028-hpo-importer-slice` (`a776e3f3`), merged
-   `--no-ff` into `feature/docker-e2e-backend-integration` (`6d83bc4d`),
-   pushed, deleted the slice branch.
-7. Closed **#367** with a comment summarizing the landed slice and
-   naming #373/#374 (RF028 follow-ups) and #375/#376 (unrelated findings)
-   as separate tracked items.
-8. `wrap-up` audit: filed **skills-pack#167** — build-loop's "Picking a
-   slice" guidance doesn't say to check spec docs for an explicit
-   recommended sequence before asking the user to pick among several
-   roughly-equal sub-items (this session asked Dennis to pick a first
-   RF028 source via `AskUserQuestion` before checking whether the docs
-   already ordered them; they did, in §7.4). Proposed exact wording in
-   the issue for a pack session to apply. No other friction; no scope
-   creep; nothing else security-relevant (the new `ReferenceImportIssue.
-   rawValue` field stores rejected-record payloads unencrypted, but
-   RF028's domain is exclusively public reference ontologies, not
-   patient/civil data, so the dictionary's own conditional
-   encryption note doesn't currently bind — considered, not actioned).
+1. Planned and recorded a short showcase reel of what's genuinely
+   proven end-to-end today: cross-checked `E2E_TRACEABILITY_PLAN.md`'s
+   DONE/COVERED rows against the actual spec files and found most
+   "done" requirements (RF003, RF004, RF006, RF007, RF011) are proven
+   only via `request.*` API calls, not real browser interaction — only
+   RF001/RF002 (login → dashboard) and RF009 (the "Novo Sensor" UI
+   form) have both real-backend proof and real UI clicks in their
+   existing tests. Scoped the showcase to those three, confirmed with
+   Dennis (Tier 1 only, plain clips + 1s gap, no title cards).
+2. Brought up the dev stack (`npm run compose:up` + `compose:seed-admin`,
+   Dennis's go-ahead per Docker's opt-in-per-session gate), added
+   `playwright.showcase.config.ts` (`video:'on'`, kept at repo root —
+   the main `playwright.config.ts` stays `retain-on-failure`,
+   untouched), recorded the 3 clips individually via `-g` + per-run
+   `--output` dirs, and concatenated them with 1s black gaps via
+   `ffmpeg` into `docs/e2e-showcase-2026-07-31.mp4`. Sanity-checked by
+   extracting and viewing frames from each clip (login page, login
+   error, the new sensor row in Facility Management) — Denise saw the
+   final video and liked it. Dev stack torn down after
+   (`compose:down`).
+3. Filed **#377**: Denise has a newer version of the requirements/
+   dictionary docs than what's checked in at `docs/docs-7-27-2026/`.
+   Nothing in this repo can act on that until the files physically
+   land here — see "Blocking next step" below.
+4. Committed (`3ac87c97`) and pushed `HANDOFF.md`, the showcase video,
+   and the showcase config together.
+5. `wrap-up` audit found two things, both filed against the
+   **skills-pack** tracker (workflow-mechanics, not BioAvanceD-v2 product
+   findings — see the "shared vs. project tracker" test in the
+   `wrap-up` skill):
+   - **skills-pack#168** — hit the exact `Glob`-doesn't-traverse-
+     installed-skill-junctions trap `#157` (closed) already diagnosed:
+     `Glob`'d for `docker-workflow`'s local-env overlay, got zero
+     matches, concluded none existed, then hand-derived the dev-stack
+     Mongo-auth fix from scratch (one failed clip-3 run + retry) —
+     `skills/docker-workflow/local-env/bioavanced-v2.md` already
+     documented that exact fix verbatim. `#157`'s fix landed in
+     `dennis-windows` but isn't cross-referenced from any of the actual
+     "Read local-env/\<project\>.md if present" pointer lines
+     (`docker-workflow`, `e2e-test-loop`, `build-loop`, `wrap-up`
+     itself), so it's a trap at every call site, not just the one
+     `#157` happened to hit.
+   - Caught and self-corrected a `wrap-up` process deviation before
+     reporting done: had appended an addendum to the top of the
+     previous `HANDOFF.md` instead of overwriting it entirely per the
+     skill's explicit "never an accumulating log" rule — this file is
+     the corrected, single-document result.
+   - No BioAvanceD-v2 product findings this session (no product code
+     touched); nothing security-relevant beyond what was already true
+     (the video shows only the `admin`/`Admin@123` dev-stack bootstrap
+     credential already hardcoded across multiple existing specs, not
+     a new exposure).
 
 ## Repo state
 
-- `feature/docker-e2e-backend-integration`: at `6d83bc4d`, working tree
-  clean, pushed. Carries the RF028 HPO importer slice on top of #366's
-  Foundation Data Pipeline bootstrap.
-- **#367 closed.** #373 and #374 open (RF028 follow-ups, both
-  `Depends on: #367`, satisfied — #374 additionally depends on #371,
-  not yet landed). **#375 and #376 open** (pre-existing, unrelated —
-  CI architecture-test breakage and a patients API test failure).
-- Dev stack (`compose.yml` + `compose.dev.yml`) was brought up via
-  `npm run compose:up` this session to verify the slice, admin seeded
-  via `npm run compose:seed-admin`, then **torn down** (`docker compose
-  down --volumes --remove-orphans`, Dennis confirmed) by this session's
-  `clean-up` pass. Next session starts from a clean slate: `npm run
+- `feature/docker-e2e-backend-integration`: at `3ac87c97`, working tree
+  clean, pushed. Carries `docs/e2e-showcase-2026-07-31.mp4` and
+  `playwright.showcase.config.ts` on top of #367's RF028 HPO importer
+  slice.
+- Dev stack is **down** (`compose:down` ran cleanly at end of this
+  session). Next real-backend work starts from a clean slate: `npm run
   compose:up`, then `npm run compose:seed-admin` before any
-  `realLogin`-based spec.
+  `realLogin`-based spec — and see skills-pack#168/the
+  `docker-workflow` local-env overlay for the dev-stack-specific
+  Mongo/Neo4j credential env vars a manual host-side Playwright run
+  needs (don't trust an empty `Glob` as proof the overlay doesn't
+  exist; `Read` the exact path).
+- **#377 open and blocking** (see below). #373/#374 (RF028 follow-ups),
+  #375 (CI `test:architecture` gate will fail first PR to `main`),
+  #376 (patients API bug), #370/#371 (RF022 follow-ups), #368/#369
+  (older RF005/infra items) all still open from before this session,
+  untouched. Not this repo's concern: skills-pack#163/#164/#165/#167/#168
+  are open in the skills-pack tracker.
 
-## Recommended next steps
+## Blocking next step
 
-None queued explicitly by Dennis. Candidates: **#373**/**#374** (RF028
-follow-ups just filed, both already flagged `divide-and-conquer`-sized —
-#373's suggested next chunk is MONDO, per §7.4 step 3, to prove
-`pipeline.js`'s genericity with a second real source), **#375** (CI's
-`test:architecture` step will hard-fail on the first PR to `main` —
-worth fixing before any `ship-integration-branch` attempt), **#376**
-(patients.expanded API test, needs a `fix-bugs` reproduction pass),
-**#370**/**#371** (RF022 follow-ups from the #366 session, still open),
-**#367**'s siblings from earlier sessions: **#368** (RF005 storage
-migration), **#369** (flaky mocked test, unrelated infra hygiene). Not
-this repo's concern: `dyeallpies-skills-pack#163`/`#164`/`#165` (from
-the #366 session) and now `#167` (this session) are open in the
-skills-pack tracker — a skills-pack session would pick those up, not a
-BioAvanceD-v2 one.
+**#377 — Dennis needs to fetch Denise's updated requirements/dictionary
+docs and add them to this repo before any doc-alignment work can
+happen.** No session can act on this until the files physically land
+under `docs/` (same `docs/docs-7-27-2026/`-style pattern, or wherever
+fits if it's a point revision). Once they're in, a session should
+re-extract/diff them and re-check `E2E_TRACEABILITY_PLAN.md`'s
+traceability matrix and ground-truth hierarchy — full checklist is on
+the issue.
+
+No other next issue queued explicitly by Dennis — "we will need to work
+on another branch" was said, but no target named yet.
 
 ## Which skills to use
 
-`#370`/`#371`/`#373`/`#374` are already flagged for a `divide-and-conquer`
-pass rather than assumed single-iteration. `#375` and `#376` are plain
-`fix-bugs` candidates (root-cause each independently — they're unrelated
-to each other and to RF028). Another `ship-integration-branch` pass once
-Wave 2's red-first prerequisites and any further build-loop follow-ups
-are done — but check **#375 first**, since it will otherwise fail that
-pass's real CI signal on the very first PR.
+Once #377's docs land: whichever skill matches what the diff actually
+shows (likely `bioavanced-v2-conventions`'s doc-alignment guidance plus
+`E2E_TRACEABILITY_PLAN.md` updates directly, not a coverage loop).
+Otherwise unchanged from before this session: `#370`/`#371`/`#373`/`#374`
+are `divide-and-conquer`-sized; `#375`/`#376` are plain `fix-bugs`
+candidates; another `ship-integration-branch` pass once Wave 2's
+red-first prerequisites land — check **#375 first**, it will otherwise
+fail that pass's real CI signal on the first PR.
