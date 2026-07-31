@@ -47,13 +47,23 @@ right after the #365 close-out.
    (`ada41703`), pushed, deleted the slice branch.
 6. Closed **#366** with a comment summarizing the landed slice and naming
    #370/#371 as the follow-ups carrying the rest.
-7. `wrap-up` audit: filed **#372** — the dev stack was found fully torn
-   down at session start for the second session in a row, despite the
-   prior session's handoff explicitly saying it wasn't. Root cause not
-   investigated (out of scope for this slice); flagged for a future
-   session since the pattern is now repeating and the handoff note is
-   actively misleading when it happens. No scope creep, no lazy fixes,
-   nothing else security-relevant.
+7. `wrap-up` audit: filed **#372** for the dev stack being found fully
+   torn down at session start for the second session in a row. `clean-up`
+   then ran (Stop-hook triggered), asked whether to tear the just-verified
+   stack down, and did (Dennis confirmed) — plus removed the session-built
+   `bioavanced-*` images and pruned build cache (~5.2GB reclaimed total).
+   Dennis then pointed out the real cause: this *is* the pattern in #372,
+   caused by `wrap-up` writing `HANDOFF.md` before `clean-up`'s teardown
+   decision runs, so the handoff goes stale within the same session it's
+   written — a skills-pack workflow bug, not a BioAvanceD-v2 one. Closed
+   **#372** here and redirected to skills-pack: `dyeallpies-skills-pack#163`
+   (the ordering bug + a proposed fix, including Dennis's suggestion to
+   make handoff rotation unconditionally the *last* step of session-end),
+   `#164` (the broader gap in `wrap-up`'s filing rule that let this get
+   misfiled as a product issue in the first place), and `#165` (a
+   "check whether `bioavanced-v2-testing-conventions` needs a further
+   split" ask, raised in the same conversation). No scope creep, no lazy
+   fixes, nothing else security-relevant.
 
 ## Repo state
 
@@ -61,31 +71,34 @@ right after the #365 close-out.
   clean, pushed. Carries the RF022 bootstrap wiring on top of #365's
   consent-422 fix.
 - **#366 closed.** #370 and #371 open, both `Depends on: #366` (satisfied).
-  #372 open (dev-stack teardown investigation).
-- Dev stack (`compose.yml` + `compose.dev.yml`) is up and healthy this
-  session — was fully down at pickup (see #372), brought up via
-  `npm run compose:up` (now includes the `foundation-bootstrap` step).
-  Admin was **not** re-seeded this session — `compose:seed-admin` wasn't
-  needed for the RF022/RF023 assertions run. If picking up next session
-  with a `realLogin`-based spec, run it before trusting auth to work.
-  Not torn down at this session's end (per #372, verify at next pickup
-  rather than trusting that).
+  **#372 closed** (redirected to skills-pack — see below; not a
+  BioAvanceD-v2 issue).
+- Dev stack (`compose.yml` + `compose.dev.yml`) was brought up via
+  `npm run compose:up` to verify this session's slice, then **torn down**
+  by `clean-up` at session end (Dennis confirmed) — genuinely down this
+  time, not another instance of the #372/skills-pack#163 pattern. Next
+  session starts from a clean slate: `npm run compose:up`, then
+  `npm run compose:seed-admin` before any `realLogin`-based spec.
 
 ## Recommended next steps
 
 None queued explicitly by Dennis. Candidates: **#370**/**#371** (RF022
 follow-ups just filed, both already flagged as `divide-and-conquer`-sized
 on their own), **#367** (RF028 importer build, from #330), **#368** (RF005
-storage migration + re-id flow, from the #363 session), **#372** (dev-stack
-teardown root-cause) — separate candidates once someone picks them up.
-**#369** (log flood / flaky mocked test, from the #363 session) remains
-unrelated infra hygiene, not part of the Wave 2 e2e traceability work.
+storage migration + re-id flow, from the #363 session) — separate
+candidates once someone picks them up. **#369** (log flood / flaky mocked
+test, from the #363 session) remains unrelated infra hygiene, not part of
+the Wave 2 e2e traceability work. Not this repo's concern, but worth
+knowing about: `dyeallpies-skills-pack#163`/`#164`/`#165` are open in the
+skills-pack tracker (wrap-up/clean-up ordering bug, a filing-heuristic
+gap, and a testing-conventions-split check) — a skills-pack session, not
+a BioAvanceD-v2 one, would pick those up.
 
 ## Which skills to use
 
 `#367`/`#368`/`#370`/`#371` are already flagged for a `divide-and-conquer`
 pass rather than assumed single-iteration (#370/#371 explicitly `Depends
-on: #366`, already satisfied). `#369` and `#372` are plain `fix-bugs`
-candidates (root-cause the canonicalization failure / the teardown
-pattern, respectively). Another `ship-integration-branch` pass once Wave 2's
-red-first prerequisites and any build-loop follow-ups are done.
+on: #366`, already satisfied). `#369` is a plain `fix-bugs` candidate
+(root-cause the canonicalization failure). Another `ship-integration-branch`
+pass once Wave 2's red-first prerequisites and any build-loop follow-ups
+are done.
