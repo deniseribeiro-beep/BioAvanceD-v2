@@ -390,7 +390,9 @@ describe('📦 Pacientes e Observacoes de Biomarcadores - Testes de Integracao',
 
       expect(response.status).toBe(200);
       expect(response.body.data.patientID).toBe('12345678');
-      expect(response.body.data.patientName).toBeDefined();
+      // RF005/RNF007 (#363): patientName is civil identity, segregated into
+      // ParticipantIdentity — not returned on the participant resource.
+      expect(response.body.data.patientName).toBeUndefined();
     });
 
     it('Given: patientID inexistente | When: requisita | Then: retorna 404', async () => {
