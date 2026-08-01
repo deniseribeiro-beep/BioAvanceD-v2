@@ -1,87 +1,112 @@
 # HANDOFF
 
-**Written:** 2026-08-01, after closing #381 (929-element canonical
-dictionary catalog, `build-loop`) on `feature/docker-e2e-backend-integration`.
+**Written:** 2026-08-01, after closing #383 (RcsAssessment entity slice,
+`divide-and-conquer` + `build-loop`) on `feature/docker-e2e-backend-integration`.
 
 ## What happened this session
 
-Picked up **#381**, the RF022 follow-up narrowed out of #370: dict-08_
-MAIN_GAPS.md's Foundation Data Pipeline gate is "929 elementos
-verificados", but nothing in the codebase made that count checkable —
-the 929 elements (423 ELM-* baseline + 506 P1X-* extensions) only
-existed as prose rows in `dict-02_DICIONARIO.md` v1.3.0.
+Picked up **#383**, an architecture-gap issue from the 2026-08-01 backlog:
+dict-07/dict-08 call for `Sample.js` to be split into four separate,
+referenced canonical entities — `Specimen` + `SPREC` + `RCS` +
+storage/custody — instead of one broad `Mixed` document. Scoping showed
+this was the same shape as the earlier #363→#368 Participant/
+ParticipantIdentity split, but four-way instead of two-way and larger
+(SPREC touches 11 files, storage/custody touches 28 and already has its
+own infra layer). Used `divide-and-conquer`: designed the four-way
+breakdown, confirmed the first slice with Dennis (RCS — smallest,
+most self-contained, and the one dict-07 explicitly calls "usar
+referências e snapshots versionados"), landed that slice, filed the
+rest as follow-ups.
 
-**Landed** (`test/canonical-dictionary-catalog` then
-`test/canonical-dictionary-drift-check`, both merged — `47eeec66`,
-`f0bddb2f`):
+**Landed** (`test/rcs-assessment-entity`, merged into
+`feature/docker-e2e-backend-integration` at `99d64d6a`):
 
-- `api/backend/scripts/generate-dictionary-catalog.js` parses the
-  markdown table (escaped-pipe aware — enum columns like
-  `active\|inactive\|...` need `\|` treated as literal, not a column
-  separator) into `src/reference-data/canonical-dictionary/
-  catalog.1.3.0.json`, one record per element with entity/field/
-  cardinality/Fase plus the full row.
-- `src/reference-data/canonical-dictionary/index.js` loads it and
-  exposes `loadCanonicalDictionary`/`getElementById`/
-  `dictionaryChecksum`/`checkCompleteness` (total count, duplicate IDs,
-  missing-required-field IDs).
-- `scripts/validate-dictionary-catalog.js`: new CI gate (`npm run
-  dictionary:validate`, wired into `current-state:ci`) — checks
-  completeness **and** re-parses `dict-02_DICIONARIO.md` live to catch
-  the checked-in JSON going stale relative to its source (proved with a
-  tamper-then-detect test before restoring the real file).
-- `seed-essential-reference-data.js`: `FoundationDataRun.dictionaryChecksum`
-  now hashes the real catalog instead of the essential-manifest stopgap;
-  `validationSummary.dictionaryCompleteness` carries the gate on every
-  run. Extracted the DB-touching logic into an exported
-  `runSeed({ db, ... })` so this is testable against a fake collection
-  instead of requiring a live Mongo connection (`require.main === module`
-  now guards the CLI `main()` call).
-- Tests: `tests/unit/reference-data/canonical-dictionary.test.js`,
-  `tests/unit/scripts/{seed-essential-reference-data,
-  generate-dictionary-catalog}.test.js` — all native, fake-collection
-  pattern matching the existing `reference-imports/pipeline.test.js`
-  precedent (no Docker needed for this slice).
+- `api/backend/src/models/RcsAssessment.js` + `rcsAssessments` collection
+  (registered in `config/collections.js`), referenced by `specimenId`,
+  one document per certification run — versioned snapshots, not a single
+  mutable copy.
+- `api/backend/src/services/rcs-assessment.service.js`:
+  `recordAssessment`/`getAssessmentsForSpecimen`.
+- `import.service.js`'s CSV/XLSX sample-import branch now records a
+  snapshot alongside every RCS certification it already computes
+  server-side (wrapped in try/catch — non-fatal if it fails, `Sample`
+  keeps its own embedded copy either way).
+- `GET /api/samples/:id/rcs-assessments` resolves the versioned history,
+  mirroring the existing `SampleMovement`/`GET /:id/movements` pattern.
+- `docs/architecture/canonical-data-contract-v1.md`: new `### RcsAssessment`
+  section with explicit "Landed in #383" / "Not yet landed" split (same
+  convention #363 used for `### ParticipantIdentity`).
+- Tests (all native, no Docker — backend-internal slice, not one of
+  `E2E_TRACEABILITY_PLAN.md`'s own e2e specs):
+  `tests/unit/models/rcsAssessment.model.test.js`,
+  `tests/unit/services/rcs-assessment.service.test.js` (real
+  query-matching fake collection), plus extensions to
+  `import.service.sprec.test.js`, `sample.service.test.js`,
+  `sample.routes.test.js` proving the write→read round trip.
 
-Full native backend suite run once at the end: 6389/6390 passed: the
-one failure (`tests/integration/patients.expanded.api.test.js` —
-`patientName` expected on `GET /api/patients/:id`) is **pre-existing**,
-confirmed via `git stash` against the base branch before this session's
-changes — it's the already-known Participant/ParticipantIdentity
-segregation gap (RF005/#363→#368), untouched by this issue.
+`Sample.js`'s own embedded RCS fields are untouched — this was additive,
+not a migration, so nothing existing broke. 212 targeted tests + 28
+broader sample-integration tests all green; full native suite not
+re-run this session (per the gate order, that's end-of-loop, and this
+was one slice, not a loop close-out).
 
-No new issues filed this session — the two follow-up gaps that would
-otherwise need filing (stale checksum-vs-source drift; testability of
-the seed script) were both fixed inline as part of #381 itself rather
-than deferred.
+**Follow-ups filed** (issue tracker, not local):
+- **#388** — SPREC as a separate referenced entity (same pattern; open
+  question flagged in the issue body about whether SPREC should be
+  versioned history like RCS or a single current record).
+- **#389** — storage/custody separation. Largest (28 files), already
+  half-separated architecturally via the existing `storageBoxes`
+  infrastructure + clean-architecture use-cases — flagged to scope with
+  `divide-and-conquer` before implementing, not attempt as one slice.
+- **#390** — migrate remaining consumers off `Sample.js`'s embedded
+  RCS/SPREC/storage copies once #388/#389 land (`Depends on: #383, #388,
+  #389`) — enumerates the known consumers (`MerkleService`, neo4j
+  projection, frontend types, the live registration path which doesn't
+  compute RCS server-side at all today, `import-lgpd.service.js`'s
+  separate RCS-computing parse logic, the JSON-import branch).
+- **#391** — unrelated repo-hygiene finding, filed separately: no
+  `.gitattributes` rule for generated `.json`, causing
+  `catalog.1.3.0.json` (from #381) to show a phantom "modified" status
+  (empty diff, LF→CRLF warning) every session on Windows. Not fixed
+  inline — shared git-config change outside this session's scope.
 
 ## Repo state
 
-- **`feature/docker-e2e-backend-integration`**: at `f0bddb2f`, working
-  tree clean, pushed — up to date with `origin`.
-- Issues: **#381 closed** (`47eeec66` + `f0bddb2f` noted in the close
-  comment). No other issues touched this session.
-- `test/canonical-dictionary-catalog` and
-  `test/canonical-dictionary-drift-check` (both merged) have been
-  deleted, locally only — no remote copies were ever pushed.
-- Carried over, still untouched: Docker dev stack (`compose.dev.yml`)
-  teardown status is unknown as of this session's start (Dennis
-  mentioned "Docker is on" but this slice never needed it — native-only
-  proof was sufficient, per `build-loop`'s real-backend bar for a
-  non-DB-dependent parsing/completeness slice).
+- **`feature/docker-e2e-backend-integration`**: at `99d64d6a`, working
+  tree clean except the pre-existing `catalog.1.3.0.json` phantom
+  line-ending diff (see #391 — safe to ignore, confirmed no-op both
+  this session and last). **Not yet pushed to origin** — branch is one
+  merge commit ahead of `origin/feature/docker-e2e-backend-integration`.
+- Issues: **#383 closed** (`99d64d6a` noted in the close comment,
+  follow-ups #388/#389/#390 named explicitly). **#388, #389, #390, #391
+  opened**, all still open. No other issues touched this session.
+- `test/rcs-assessment-entity` (merged) deleted locally — no remote copy
+  was ever pushed.
 
 ## Blocking next step
 
 None. Nothing queued as blocking.
 
-No next issue queued explicitly by Dennis.
+No next issue queued explicitly by Dennis — #388/#389/#390 are the
+natural continuation of #383's thread if picked up next, but that's an
+inference from this session's own work, not something Dennis said.
 
 ## Which skills to use
 
-Backlog unchanged from the prior handoff except #381 now closed:
-**#383–#387** (five architecture-gap issues — Specimen/SPREC separation,
-eConsent legacy route, Neo4j outbox keys, RBAC normalization, AuditEvent
-contract — each likely `divide-and-conquer` or `build-loop` sized
-individually, needs its own scoping pass). Older backlog from prior
-handoffs (`#371`/`#373`/`#374`/`#375`/`#376`/`#378`/`#379`) is unchanged
-— still open, not touched this session.
+- **#388** (SPREC entity): `build-loop`, same pattern as #383 — check
+  the open "versioned history vs. single record" question in the issue
+  body before implementing, may need a quick check with Dennis/dict-07.
+- **#389** (storage/custody entity): scope with `divide-and-conquer`
+  first — don't attempt as one slice, it's the largest of the three.
+- **#390** (multi-consumer migration): blocked on #388/#389 landing;
+  when picked up, likely its own `divide-and-conquer` pass per consumer
+  group (mirrors how #368 approached the analogous Participant migration).
+- **#391** (`.gitattributes`): small, mechanical `resolve-issue` — add
+  a line-ending rule, renormalize, done in one sitting.
+- Backlog unchanged otherwise from the prior handoff: **#384–#387** (four
+  remaining architecture-gap issues — eConsent legacy route, Neo4j
+  outbox keys, RBAC normalization, AuditEvent contract — each likely
+  `divide-and-conquer` or `build-loop` sized individually, needs its own
+  scoping pass, same as #383 needed). Older backlog from prior handoffs
+  (`#371`/`#373`/`#374`/`#375`/`#376`/`#378`/`#379`) is unchanged — still
+  open, not touched this session.
