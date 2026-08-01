@@ -108,7 +108,7 @@ class AuditV2Service {
       const event = await this.createEvent({
         logId: String(logRecord._id || logRecord.id || logRecord.resourceId || crypto.randomUUID()),
         occurredAt: logRecord.timestampISO || new Date().toISOString(),
-        recordedAt: logRecord.createdAt || new Date().toISOString(),
+        recordedAt: (logRecord.createdAt instanceof Date ? logRecord.createdAt.toISOString() : logRecord.createdAt) || new Date().toISOString(),
         actorPseudonym: logRecord.userName || logRecord.userID || 'system',
         action: logRecord.action || 'UNKNOWN',
         entityType: logRecord.entity || logRecord.resourceType || 'Log',
