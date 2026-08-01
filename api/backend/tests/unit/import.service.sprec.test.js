@@ -191,4 +191,36 @@ describe('ImportService SPREC import', () => {
       canonical: false,
     });
   });
+
+  it('records a referenced RcsAssessment snapshot for the imported specimen (#383)', async () => {
+    const rcsAssessmentsCollection = {
+      insertOne: vi.fn().mockResolvedValue({ insertedId: 'assessment-1' }),
+    };
+    db.collection = (name) => {
+      if (name === 'samples') return samplesCollection;
+      if (name === 'rcsAssessments') return rcsAssessmentsCollection;
+      throw new Error(`Unexpected collection name: ${name}`);
+    };
+
+    const csvPath = path.join(tempDir, 'samples-rcs-assessment.csv');
+    const csvContent = [
+      'participantId,sampleType,sampleOrigin,extractionProtocol,quantity,quality,registeredAt,linkedProject,sprec_matrix_type,sprec_sample_type,sprec_primary_container,sprec_pre_centrifugation,sprec_centrifugation,sprec_second_centrifugation,sprec_post_centrifugation_delay,sprec_long_term_storage',
+      '12345678,PLASMA,VENOUS_BLOOD,TUBE_EDTA,1.5,GOOD,2026-01-01,Projeto QA,fluid,BLD,PED,C,A,D,E,F',
+    ].join('\n');
+    fs.writeFileSync(csvPath, csvContent, 'utf8');
+
+    const result = await importService.importSamples(db, {
+      originalname: 'samples-rcs-assessment.csv',
+      mimetype: 'text/csv',
+      path: csvPath,
+    });
+
+    expect(result.success).toBe(1);
+    expect(rcsAssessmentsCollection.insertOne).toHaveBeenCalledTimes(1);
+
+    const insertedSample = samplesCollection.insertOne.mock.calls[0][0];
+    const recorded = rcsAssessmentsCollection.insertOne.mock.calls[0][0];
+    expect(recorded.specimenId).toBe(insertedSample.specimenId);
+    expect(recorded.calculationTrace).toEqual(insertedSample.calculationTrace);
+  });
 });

@@ -1035,6 +1035,35 @@ router.get('/:id/movements', authenticate, async (req, res) => {
   }
 });
 
+// dict-07/dict-08 (#383) - RCS certificado como entidade separada e
+// referenciada por specimenId (não duplicada em Sample). Snapshots
+// versionados, mais recente primeiro.
+router.get('/:id/rcs-assessments', authenticate, async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    if (!db) {
+      return res.status(503).json({
+        success: false,
+        error: 'Banco de dados não disponível'
+      });
+    }
+
+    const assessments = await sampleService.getRcsAssessments(db, req.params.id);
+
+    return res.status(200).json({
+      success: true,
+      data: assessments
+    });
+  } catch (error) {
+    logger.error('Erro ao buscar snapshots RCS:', error.message);
+    return res.status(500).json({
+      success: false,
+      error: 'Erro ao buscar snapshots RCS',
+      message: error.message
+    });
+  }
+});
+
 // RF007 - Upload de Arquivos de Análise
 const sampleFileController = require('../../controllers/sample-file.controller');
 

@@ -14,6 +14,7 @@ const { getCollection } = require('../utils/collectionResolver');
 const SampleGraphValidator = require('./SampleGraphValidator');
 const qualityDomain = require('./quality-domain.service');
 const qualityCompatibility = require('./quality-compatibility.service');
+const rcsAssessmentService = require('./rcs-assessment.service');
 const { generateUniqueSpecimenId } = require('../utils/sampleIDGenerator');
 const { generateUniqueParticipantId } = require('../utils/patientAnonymization');
 
@@ -536,6 +537,16 @@ class ImportService {
 
             const sample = SampleModel.create(sampleData);
             const insertResult = await samplesCollection.insertOne(sample);
+            if (sample.rcsEvaluation) {
+              try {
+                await rcsAssessmentService.recordAssessment(db, sample.specimenId, sample.rcsEvaluation);
+              } catch (assessmentError) {
+                logger.warn('[IMPORT_SERVICE] Falha ao registrar snapshot RcsAssessment referenciado, amostra mantém cópia embutida', {
+                  specimenId: sample.specimenId,
+                  error: assessmentError?.message || String(assessmentError),
+                });
+              }
+            }
             try {
               const report = await validator.validateSampleCompliance(String(insertResult.insertedId));
               const missingEthicsOrSprec = !sampleData.consentTemplateId
