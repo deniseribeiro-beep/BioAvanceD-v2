@@ -885,6 +885,9 @@ class ImportService {
       secondCentrifugation: normalizeString(this.getRowValue(row, ['sprec_second_centrifugation', 'sprecSecondCentrifugation'])),
       postCentrifugationDelay: normalizeString(this.getRowValue(row, ['sprec_post_centrifugation_delay', 'sprecPostCentrifugationDelay'])),
       longTermStorage: normalizeString(this.getRowValue(row, ['sprec_long_term_storage', 'sprecLongTermStorage'])),
+      // dict-02 ELM-0145/0146 (#392) — preserved as given, not recomputed from the axis slots above.
+      sprecCode: normalizeString(this.getRowValue(row, ['sprec_code', 'sprecCode'])),
+      sprecVersion: normalizeString(this.getRowValue(row, ['sprec_version', 'sprecVersion'])),
     };
 
     const clinicalData = {

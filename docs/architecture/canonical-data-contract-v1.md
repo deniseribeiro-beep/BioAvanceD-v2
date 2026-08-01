@@ -179,6 +179,25 @@ either (only the CSV/XLSX branch does).
   "usar referências e snapshots versionados" — row 38 groups SPREC with
   RCS under the same directive `RcsAssessment` above uses — multiple
   documents may exist per `specimenId`, newest first)
+- `sprecCode` (ELM-0145, compact original SPREC code — preserved as given
+  from `sprec_code`/`sprecCode`, never recomputed from the fields below)
+- `sprecVersion` (ELM-0146, SPREC standard version used to encode it)
+- `sprecProfileId` (P1X-0057, immutable UUID identifying this profile
+  *version* — generated per snapshot via `crypto.randomUUID()`, same
+  pattern as `PatientConsentModel`'s `consentId`, #364)
+- `profileStatus` (P1X-0059, `draft` | `validado` | `substituído` |
+  `inválido` — defaults to `draft`; nothing in the codebase confirms/
+  validates a profile yet)
+- `sprecSpecimenType` (ELM-0147, fluid/solid axis element 1 — derived
+  from `sampleType`, applies to both matrix types)
+- `sprecPrimaryContainer` (ELM-0148, fluid axis element 2 — derived from
+  `primaryContainer` when `matrixType` is `fluid`, else `null`)
+- `sprecCollectionType` (ELM-0149, solid axis element 2 — derived from
+  `primaryContainer` when `matrixType` is `solid`, else `null`)
+- `warmIschemiaTime` / `coldIschemiaTime` / `fixationStabilizationType` /
+  `fixationTime` (ELM-0154–0157, solids only — derived from
+  `preCentrifugation`/`centrifugation`/`secondCentrifugation`/
+  `postCentrifugationDelay` when `matrixType` is `solid`, else `null`)
 
 Named after dict-02's canonical entity (`SpecimenPreanalytics`,
 ELM-0145–ELM-0166/P1X-0057–P1X-0059), not the "SPREC" shorthand
@@ -192,19 +211,31 @@ referenced by `specimenId`; `GET /api/samples/:id/sprec-profiles` resolves
 the versioned history for a specimen (mirrors `RcsAssessment`/
 `GET /:id/rcs-assessments`, #383).
 
-**Not yet landed (follow-up tracked separately):** dict-02's fuller
-`SpecimenPreanalytics` field set (`sprecCode`, `sprecVersion`,
-`sprecProfileId`, `profileStatus`, `warmIschemiaTime`, `coldIschemiaTime`,
-`fixationStabilizationType`, `fixationTime`, and the solid-matrix element
-codes — ELM-0145/0146/0154–0157, P1X-0057/0059) isn't parsed or computed
-anywhere in the codebase yet; this slice only separates the fields
-`import.service.js` already computes into the referenced entity, the same
-scope discipline #383 used for RCS (tracked in #392). `Sample.js` still carries its own
-embedded `sprec` copy — removing that duplication requires migrating
-every consumer that reads it directly off `Sample` (tracked in #390,
-alongside the equivalent RCS migration). The JSON-import branch of
-`importSamples` doesn't record a profile either (only the CSV/XLSX branch
-does, the same gap #383 left for RCS).
+**Landed in #392:** dict-02's fuller field set above. `matrixType`/
+`sampleType`/`primaryContainer`/`preCentrifugation`/`centrifugation`/
+`secondCentrifugation`/`postCentrifugationDelay`/`longTermStorage` (#388)
+are generic axis-position slots (axis 1–7) populated straight from CSV
+columns regardless of matrix type — mirroring
+`frontend/src/constants/sprecDictionary.js`'s `SPREC_FLUID_DICTIONARY`
+vs `SPREC_SOLID_DICTIONARY`, which relabel the same axis 2–6 slots per
+matrix type. The new canonical fields are *derived* from those same
+slots in `SpecimenPreanalyticsModel.fieldsOf()` based on `matrixType` —
+`import.service.js`'s CSV parsing of the axis slots themselves is
+unchanged, except for `sprecCode`/`sprecVersion`, which are genuinely new
+pass-through values with no prior source. `preCentrifugationDelay`
+(ELM-0150) and `firstCentrifugation` (ELM-0151) — the fluid-specific
+canonical names for the `preCentrifugation`/`centrifugation` slots — stay
+out of scope for the same reason #392 didn't touch them: it only added
+the fields explicitly missing, not a full rename of the fluid axis to
+its canonical names.
+
+**Not yet landed (follow-up tracked separately):** `Sample.js` still
+carries its own embedded `sprec` copy (only the axis slots +
+`sprecCode`/`sprecVersion`, not the derived fields) — removing that
+duplication requires migrating every consumer that reads it directly off
+`Sample` (tracked in #390, alongside the equivalent RCS migration). The
+JSON-import branch of `importSamples` doesn't record a profile either
+(only the CSV/XLSX branch does, the same gap #383 left for RCS).
 
 ### Consent
 
