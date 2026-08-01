@@ -32,6 +32,9 @@ module.exports = defineConfig({
     exclude: [
       '**/node_modules/**',
       'tests/setup.test.js',
+      // node:test-only (#375): these call node:test's own `test()`, not
+      // vitest's, so vitest sees "no test suite found" if it picks them up.
+      'tests/architecture/**',
       'tests/e2e/**',
       'e2e/**',
       'playwright-report/**',

@@ -1,4 +1,5 @@
-import { test, expect } from 'vitest';
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
 
 const fs = require('fs');
 const path = require('path');
@@ -29,5 +30,5 @@ test('participant runtime stays canonical in active files', () => {
       }
     }
   }
-  expect(hits).toEqual([]);
+  assert.deepStrictEqual(hits, []);
 });
