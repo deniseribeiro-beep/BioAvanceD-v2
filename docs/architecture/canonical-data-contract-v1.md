@@ -198,6 +198,9 @@ either (only the CSV/XLSX branch does).
   `fixationTime` (ELM-0154–0157, solids only — derived from
   `preCentrifugation`/`centrifugation`/`secondCentrifugation`/
   `postCentrifugationDelay` when `matrixType` is `solid`, else `null`)
+- `preCentrifugationDelay` / `firstCentrifugation` (ELM-0150/0151, fluids
+  only — derived from `preCentrifugation`/`centrifugation` when
+  `matrixType` is `fluid`, else `null`)
 
 Named after dict-02's canonical entity (`SpecimenPreanalytics`,
 ELM-0145–ELM-0166/P1X-0057–P1X-0059), not the "SPREC" shorthand
@@ -224,10 +227,16 @@ slots in `SpecimenPreanalyticsModel.fieldsOf()` based on `matrixType` —
 unchanged, except for `sprecCode`/`sprecVersion`, which are genuinely new
 pass-through values with no prior source. `preCentrifugationDelay`
 (ELM-0150) and `firstCentrifugation` (ELM-0151) — the fluid-specific
-canonical names for the `preCentrifugation`/`centrifugation` slots — stay
-out of scope for the same reason #392 didn't touch them: it only added
-the fields explicitly missing, not a full rename of the fluid axis to
-its canonical names (tracked in #396).
+canonical names for the `preCentrifugation`/`centrifugation` slots — were
+out of scope for #392 (it only added the fields explicitly missing, not
+a full rename of the fluid axis to its canonical names) and landed
+separately below.
+
+**Landed in #396:** `preCentrifugationDelay`/`firstCentrifugation` above,
+the fluid-axis counterpart to #392's solid-axis derivation — same
+pattern, same `SpecimenPreanalyticsModel.fieldsOf()`, no
+`import.service.js` change needed since `preCentrifugation`/
+`centrifugation` were already parsed by #388.
 
 **Not yet landed (follow-up tracked separately):** `Sample.js` still
 carries its own embedded `sprec` copy (only the axis slots +

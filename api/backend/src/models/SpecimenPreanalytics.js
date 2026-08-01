@@ -54,6 +54,12 @@ class SpecimenPreanalyticsModel {
       coldIschemiaTime: isSolid ? (data.centrifugation ?? null) : null,
       fixationStabilizationType: isSolid ? (data.secondCentrifugation ?? null) : null,
       fixationTime: isSolid ? (data.postCentrifugationDelay ?? null) : null,
+      // dict-02's fluid-axis canonical names (#396): preCentrifugation/
+      // centrifugation are the informal predecessors of these two names
+      // specifically (unlike secondCentrifugation/postCentrifugationDelay,
+      // which already match ELM-0152/0153 exactly and need no derivation).
+      preCentrifugationDelay: isFluid ? (data.preCentrifugation ?? null) : null,
+      firstCentrifugation: isFluid ? (data.centrifugation ?? null) : null,
       sprecProfileId: data.sprecProfileId || crypto.randomUUID(),
       profileStatus: data.profileStatus ?? 'draft',
     };
