@@ -151,7 +151,10 @@ async function main() {
         completedAt: new Date(),
         steps: [...steps, { step: selected[steps.length]?.key || 'unknown', status: 'failed' }],
         validationSummary: { passed: steps.length, failed: 1 },
-        errorSummary: { fatal: 1, message: error.message || String(error) },
+        // P1X-0409: errorSummary must stay sanitized (no secrets/tokens/raw
+        // payloads) — truncate defensively since a Mongo write-error message
+        // can echo back offending field values.
+        errorSummary: { fatal: 1, message: String(error.message || error).slice(0, 300) },
         initiatedBy: 'system:foundation-data-pipeline',
         previousRunId: previousRun ? previousRun.foundationDataRunId : null,
       });
