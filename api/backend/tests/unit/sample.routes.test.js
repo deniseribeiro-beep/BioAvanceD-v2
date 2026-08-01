@@ -1001,6 +1001,39 @@ describe('sample.routes', () => {
     });
   });
 
+  describe('GET /:id/sprec-profiles', () => {
+    it('returns 503 when db is unavailable', async () => {
+      const { router } = loadRoute();
+      const app = buildApp(router, null);
+
+      const res = await request(app).get('/api/samples/s1/sprec-profiles');
+
+      expect(res.status).toBe(503);
+    });
+
+    it('returns versioned SPREC snapshots on success', async () => {
+      const getSprecProfiles = vi.fn().mockResolvedValue([{ matrixType: 'fluid', sampleType: 'BLD' }]);
+      const { router } = loadRoute({ sampleServiceOverrides: { getSprecProfiles } });
+      const app = buildApp(router, {});
+
+      const res = await request(app).get('/api/samples/s1/sprec-profiles');
+
+      expect(res.status).toBe(200);
+      expect(res.body.data).toEqual([{ matrixType: 'fluid', sampleType: 'BLD' }]);
+      expect(getSprecProfiles).toHaveBeenCalledWith({}, 's1');
+    });
+
+    it('returns 500 when the service throws', async () => {
+      const getSprecProfiles = vi.fn().mockRejectedValue(new Error('db down'));
+      const { router } = loadRoute({ sampleServiceOverrides: { getSprecProfiles } });
+      const app = buildApp(router, {});
+
+      const res = await request(app).get('/api/samples/s1/sprec-profiles');
+
+      expect(res.status).toBe(500);
+    });
+  });
+
   describe('GET /:id/miabis-compliance', () => {
     it('returns 200 with the compliance report', async () => {
       const validateMiabisCompliance = vi.fn().mockResolvedValue({ compliant: true, missing: [] });

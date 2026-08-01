@@ -1064,6 +1064,36 @@ router.get('/:id/rcs-assessments', authenticate, async (req, res) => {
   }
 });
 
+// dict-07/dict-08 (#388) - SPREC (SpecimenPreanalytics) como entidade
+// separada e referenciada por specimenId (não duplicada em Sample).
+// Snapshots versionados, mais recente primeiro — mirrors #383's
+// RcsAssessment/GET /:id/rcs-assessments pattern.
+router.get('/:id/sprec-profiles', authenticate, async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    if (!db) {
+      return res.status(503).json({
+        success: false,
+        error: 'Banco de dados não disponível'
+      });
+    }
+
+    const profiles = await sampleService.getSprecProfiles(db, req.params.id);
+
+    return res.status(200).json({
+      success: true,
+      data: profiles
+    });
+  } catch (error) {
+    logger.error('Erro ao buscar snapshots SPREC:', error.message);
+    return res.status(500).json({
+      success: false,
+      error: 'Erro ao buscar snapshots SPREC',
+      message: error.message
+    });
+  }
+});
+
 // RF007 - Upload de Arquivos de Análise
 const sampleFileController = require('../../controllers/sample-file.controller');
 

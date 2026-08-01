@@ -15,6 +15,7 @@ const SampleGraphValidator = require('./SampleGraphValidator');
 const qualityDomain = require('./quality-domain.service');
 const qualityCompatibility = require('./quality-compatibility.service');
 const rcsAssessmentService = require('./rcs-assessment.service');
+const specimenPreanalyticsService = require('./specimen-preanalytics.service');
 const { generateUniqueSpecimenId } = require('../utils/sampleIDGenerator');
 const { generateUniqueParticipantId } = require('../utils/patientAnonymization');
 
@@ -544,6 +545,16 @@ class ImportService {
                 logger.warn('[IMPORT_SERVICE] Falha ao registrar snapshot RcsAssessment referenciado, amostra mantém cópia embutida', {
                   specimenId: sample.specimenId,
                   error: assessmentError?.message || String(assessmentError),
+                });
+              }
+            }
+            if (sample.sprec) {
+              try {
+                await specimenPreanalyticsService.recordProfile(db, sample.specimenId, sample.sprec);
+              } catch (profileError) {
+                logger.warn('[IMPORT_SERVICE] Falha ao registrar snapshot SpecimenPreanalytics referenciado, amostra mantém cópia embutida', {
+                  specimenId: sample.specimenId,
+                  error: profileError?.message || String(profileError),
                 });
               }
             }

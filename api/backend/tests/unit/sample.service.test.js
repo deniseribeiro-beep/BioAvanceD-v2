@@ -1137,6 +1137,42 @@ describe('sample.service', () => {
   });
 
   // -------------------------------------------------------------------
+  describe('getSprecProfiles', () => {
+    it('resolves the specimenId from the sample document and queries specimenPreanalytics sorted by newest first', async () => {
+      const db = makeDb({ specimenPreanalytics: makeCollection('specimenPreanalytics') });
+      db.collections.samples.findOne.mockResolvedValue({ specimenId: 'sample-1', barcode: 'BR-1' });
+      const cursor = makeCursor([{ matrixType: 'solid' }, { matrixType: 'fluid' }]);
+      db.collections.specimenPreanalytics.find.mockReturnValue(cursor);
+
+      const profiles = await sampleService.getSprecProfiles(db, 'sample-1');
+
+      expect(db.collections.specimenPreanalytics.find).toHaveBeenCalledWith({ specimenId: 'sample-1' });
+      expect(cursor.sort).toHaveBeenCalledWith({ recordedAt: -1 });
+      expect(profiles).toEqual([{ matrixType: 'solid' }, { matrixType: 'fluid' }]);
+    });
+
+    it('stringifies an object-like specimenId when the sample cannot be resolved', async () => {
+      const db = makeDb({ specimenPreanalytics: makeCollection('specimenPreanalytics') });
+      const cursor = makeCursor([]);
+      db.collections.specimenPreanalytics.find.mockReturnValue(cursor);
+      const objectIdLike = { toString: () => 'sample-1' };
+
+      await sampleService.getSprecProfiles(db, objectIdLike);
+
+      expect(db.collections.specimenPreanalytics.find).toHaveBeenCalledWith({ specimenId: 'sample-1' });
+    });
+
+    it('propagates an error from the collection query', async () => {
+      const db = makeDb({ specimenPreanalytics: makeCollection('specimenPreanalytics') });
+      db.collections.specimenPreanalytics.find.mockImplementation(() => {
+        throw new Error('mongo down');
+      });
+
+      await expect(sampleService.getSprecProfiles(db, 'sample-1')).rejects.toThrow('mongo down');
+    });
+  });
+
+  // -------------------------------------------------------------------
   describe('findAvailableSamplesForResearch', () => {
     it('forces lifecycleStatus to AVAILABLE even if the caller requests something else', async () => {
       const db = makeDb();
