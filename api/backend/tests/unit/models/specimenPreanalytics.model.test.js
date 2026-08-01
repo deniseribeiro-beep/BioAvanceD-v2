@@ -125,6 +125,39 @@ describe('SpecimenPreanalyticsModel', () => {
       expect(fluid.fixationStabilizationType).toBeNull();
       expect(fluid.fixationTime).toBeNull();
     });
+
+    it('derives the fluid-only preCentrifugationDelay/firstCentrifugation (ELM-0150/0151) from the existing axis 3-4 slots only when matrixType is fluid', () => {
+      const fluid = SpecimenPreanalyticsModel.create({
+        specimenId: 'SPEC-1',
+        matrixType: 'fluid',
+        preCentrifugation: 'B',
+        centrifugation: 'C',
+      });
+
+      expect(fluid.preCentrifugationDelay).toBe('B');
+      expect(fluid.firstCentrifugation).toBe('C');
+
+      const solid = SpecimenPreanalyticsModel.create({
+        specimenId: 'SPEC-1',
+        matrixType: 'solid',
+        preCentrifugation: 'B',
+        centrifugation: 'C',
+      });
+
+      expect(solid.preCentrifugationDelay).toBeNull();
+      expect(solid.firstCentrifugation).toBeNull();
+    });
+
+    it('leaves preCentrifugationDelay/firstCentrifugation null when matrixType is unknown', () => {
+      const doc = SpecimenPreanalyticsModel.create({
+        specimenId: 'SPEC-1',
+        preCentrifugation: 'B',
+        centrifugation: 'C',
+      });
+
+      expect(doc.preCentrifugationDelay).toBeNull();
+      expect(doc.firstCentrifugation).toBeNull();
+    });
   });
 
   describe('fromSprecData', () => {
