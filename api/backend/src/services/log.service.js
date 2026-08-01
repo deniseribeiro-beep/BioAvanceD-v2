@@ -5,6 +5,7 @@ const { anonymizeLogs, anonymizeLogUser } = require('../utils/userAnonymization'
 const { serializeLogs, serializeLogSimple } = require('../utils/logSerializer');
 const ExcelJS = require('exceljs');
 const auditV2Service = require('./audit-v2.service');
+const securityAlertsService = require('./securityAlerts.service');
 
 /**
  * Service de Logs/Auditoria
@@ -86,6 +87,22 @@ class LogService {
         await auditV2Service.ingestLogRecord(createdLog, db);
       } catch (auditError) {
         logger.warn('Falha ao espelhar log em audit_events:', auditError.message || auditError);
+        // RNF009's Merkle audit trail is tamper-evident by design; a swallowed
+        // ingest failure here means it silently stops recording (#369/#394).
+        // A warn-level log line alone was proven to hide that for ~4 weeks.
+        securityAlertsService.init(db);
+        await securityAlertsService.logSecurityAlert({
+          type: 'AUDIT_TRAIL_WRITE_FAILURE',
+          severity: 'critical',
+          userID: createdLog.userId || createdLog.userID,
+          action: 'AUDIT_V2_INGEST_FAILED',
+          reason: 'Falha ao espelhar log em audit_events (trilha Merkle RNF009)',
+          details: {
+            logID: createdLog._id,
+            entity: createdLog.entity,
+            error: auditError.message || String(auditError)
+          }
+        });
       }
 
       // Serializa o log criado para converter tipos especiais

@@ -5,6 +5,8 @@ const require2 = createRequire(import.meta.url);
 const logService = require2('../../src/services/log.service');
 const LogModel = require2('../../src/models/Log');
 const logger = require2('../../src/utils/logger');
+const auditV2Service = require2('../../src/services/audit-v2.service');
+const securityAlertsService = require2('../../src/services/securityAlerts.service');
 
 function makeCollection(overrides = {}) {
   return {
@@ -96,6 +98,9 @@ describe('LogService', () => {
     it('creates and inserts a valid log, computing an audit hash when missing', async () => {
       const collection = makeCollection();
       const db = makeDb(collection);
+      // Isolate from the real audit-v2 ingest path (asserted separately below) so this
+      // test's insertOne count reflects only the primary `logs` write.
+      vi.spyOn(auditV2Service, 'ingestLogRecord').mockResolvedValue({});
 
       const result = await logService.createLog(db, {
         userID: 'user-1',
@@ -106,6 +111,32 @@ describe('LogService', () => {
       expect(collection.insertOne).toHaveBeenCalledTimes(1);
       const insertedLog = collection.insertOne.mock.calls[0][0];
       expect(insertedLog.auditHash).toBeTruthy();
+      expect(result._id).toBe('log-1');
+    });
+
+    it('raises a critical security alert (not just a log line) when audit_events mirroring fails (#394)', async () => {
+      const collection = makeCollection();
+      const db = makeDb(collection);
+      const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+      vi.spyOn(auditV2Service, 'ingestLogRecord').mockRejectedValue(new Error('recordedAt must be an ISO string'));
+      const initSpy = vi.spyOn(securityAlertsService, 'init').mockImplementation(() => {});
+      const alertSpy = vi.spyOn(securityAlertsService, 'logSecurityAlert').mockResolvedValue('alert-1');
+
+      const result = await logService.createLog(db, {
+        userID: 'user-1',
+        action: 'CREATE',
+        entity: 'Sample'
+      }, null);
+
+      expect(warnSpy).toHaveBeenCalledWith('Falha ao espelhar log em audit_events:', 'recordedAt must be an ISO string');
+      expect(initSpy).toHaveBeenCalledWith(db);
+      expect(alertSpy).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'AUDIT_TRAIL_WRITE_FAILURE',
+        severity: 'critical',
+        action: 'AUDIT_V2_INGEST_FAILED',
+        details: expect.objectContaining({ error: 'recordedAt must be an ISO string' })
+      }));
+      // The alert failing to raise must never block the primary log write from succeeding.
       expect(result._id).toBe('log-1');
     });
 
