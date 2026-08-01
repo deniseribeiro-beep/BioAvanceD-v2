@@ -1,86 +1,82 @@
 # HANDOFF
 
-**Written:** 2026-08-01, after closing #397 (security paper-trail review of
-#395's `suppressAuthRedirect` flag) on `feature/docker-e2e-backend-integration`.
+**Written:** 2026-08-01, after closing #394 (audit_events historical-gap
+follow-on from #369) on `feature/docker-e2e-backend-integration`.
 
 ## What happened this session
 
-Dennis picked "#397" directly from the prior handoff's own candidate list —
-the security-paper-trail issue filed by the previous session's `wrap-up`
-audit, asking for a second look confirming the `suppressAuthRedirect` scope
-reasoning from #395 holds. Not a known problem, just a recorded decision on
-security-adjacent code, with an explicit "close as no-action if it looks
-fine as-is."
+Dennis picked "#394" directly from the prior handoff's own candidate list.
+Invoked `resolve-issue` explicitly via the Skill tool before acting (the
+prior session's own finding, dyeallpies-skills-pack#187, was exactly a
+session that skipped that call).
 
-**Verified by reading the actual code, not just the issue's own claims:**
-- `frontend/src/services/api.ts:197-204` — the `suppressAuthRedirect` check
-  runs *before* any refresh attempt and just rejects the promise; it never
-  touches the backend's 401 decision, never retries with elevated
-  privileges, and doesn't suppress the error itself (the caller's own
-  `catch` still sees it).
-- Exactly one call site: `ClinicalIntakeWizard.jsx:1937`.
-- The sibling caller, `TcleBuilderPage.tsx:613`, passes no config —
-  unaffected, still force-logs-out on 401 as before.
-- The wizard's own `catch` (`ClinicalIntakeWizard.jsx:1960-1971`) handles
-  the failure locally: sets an error message, doesn't retry, doesn't crash.
-- On scope-creep risk: `suppressAuthRedirect` mirrors the already-widespread
-  `suppressErrorToast` convention (opt-in per-call, used in a dozen+ places
-  across the frontend) — not a new or riskier idiom.
+#394 carried two owner-decision points left open by #369 (the fix for
+`audit-v2.service.js` silently swallowing every real
+`ingestLogRecord()` call for ~4 weeks, 2026-07-03 to 2026-08-01):
 
-**Scope reasoning holds — closed #397 as no-action**, with the verification
-detail in the close comment (`gh issue close --comment`, no retry needed
-this time).
+1. **Whether any real (non-dev/non-test) deployment during that window
+   needs its audit_events data reconciled.** Asked Dennis directly
+   (only he could answer this — it's not derivable from the repo):
+   confirmed no real deployment existed yet during that window, so
+   there's no compliance gap to reconcile.
+2. **Whether the swallowed-failure path should be louder than a
+   `logger.warn` line** (the issue's own suggestion). Implemented:
+   `log.service.js`'s `ingestLogRecord` catch block now also raises a
+   critical `securityAlerts.service` alert (`AUDIT_TRAIL_WRITE_FAILURE`)
+   alongside the existing warn log, reusing the same alerting
+   infrastructure already wired into `integrationSecurityMiddleware.js`/
+   `compliance.routes.js` (so the alert surfaces via the existing
+   `/compliance` alerts endpoint, no new plumbing needed). Verified with
+   two unit tests in `log.service.test.js` (one updated to isolate from
+   the real audit-ingest crash via a mock, one new test asserting the
+   alert fires with the right type/severity and that a failed mirror
+   still lets the primary log write succeed).
 
-**Wrap-up audit caught a real process gap**: `resolve-issue`'s "confirmed,
-no change needed" close discipline requires writing the reasoning into the
-artifact that looked wrong *before* closing, not just the close comment —
-"closing with a bare 'checked, it's fine' wastes it, because the next audit
-finds the same apparent gap and re-opens it." I'd already closed #397 by the
-time this surfaced. Backfilled it: added a short comment to
-`ApiRequestConfig` in `frontend/src/services/api.ts` recording the
-security-review outcome and citing #397, landed via
-`test/397-suppress-auth-redirect-scope-note` (comment-only, `frontend`
-typecheck clean), merged into `feature/docker-e2e-backend-integration` at
-`6511d02c`, branch deleted (was local-only, never pushed). Posted a
-follow-up comment on the now-closed #397 noting the backfill and its
-commit.
+Closed #394 with both resolutions recorded in the close comment.
+Branch `fix/394-audit-ingest-failure-alert` merged (fast-forward) into
+`feature/docker-e2e-backend-integration` at `40b18055`, pushed, branch
+deleted (local + remote); merge noted as a follow-up comment on the
+now-closed #394.
 
-**New issue filed this session:**
-- **dyeallpies-skills-pack#187** (open, `bug`) — the routing gap that let
-  the above slip through: `work-issue-checkpoint.cjs` (from #178) only
-  engages if `work-issue` was invoked first; this session went straight
-  from a user-named issue number to ad-hoc review to `gh issue close`
-  without ever invoking `work-issue` *or* `resolve-issue` via the Skill
-  tool, so no mechanical check caught the missed close-discipline step.
-  Asks the pack owner to judge whether a broader "no routed skill anywhere
-  in the transcript before close/implementation activity" check is worth
-  the false-positive rate, or whether prose is the right fix instead.
-
-**No other workflow friction this session** beyond the item above (`wrap-up`
-core audit) — no scope creep, no lazy fixes, no stale instructions, no user
-corrections needed.
+**Workflow friction this session:** `full-suite-guard.cjs` (the hook
+that blocks untargeted `vitest run` calls) false-blocked two genuinely
+targeted commands — `npx vitest run tests/unit/log.service.test.js
+--reporter=dot 2>&1 | tail -80` and a two-file variant of the same
+shape. Root cause: the hook's arg-capture excludes `>` but not the bare
+digit before it in `2>&1`, so that stray `2` gets swept in as a
+non-flag "path" token with no file extension, which fails the "every
+token looks like a file" check and makes an otherwise-valid run look
+untargeted. Filed
+[dyeallpies-skills-pack#188](https://github.com/DyeAllPies/dyeallpies-skills-pack/issues/188)
+with the repro and a suggested fix. Workaround used this session: drop
+the `2>&1 | tail` piping and call `npx vitest run <file>` directly.
+No other friction — no scope creep, no lazy fixes, no user corrections.
 
 ## Repo state
 
-- **`feature/docker-e2e-backend-integration`**: at `6511d02c`, **in sync
-  with origin** (nothing outstanding to push). Working tree clean.
-- Issues: **#397 closed** (verification in the close comment plus a
-  follow-up comment noting the code-annotation backfill and its commit).
-- `test/397-suppress-auth-redirect-scope-note` (merged): deleted locally
-  (never pushed, so no remote cleanup needed).
-- `test/392-specimen-preanalytics-canonical-fields` (merged, from a much
-  earlier session): **still on origin** per the last check (carried forward
-  across multiple handoffs now) — not re-checked this session, presumed
-  still needing manual cleanup or a permission grant unless someone has
-  since removed it.
-- Untouched from before: **#389**/**#390** (storage/custody separation and
-  its dependent migration, open, `#389` needs `divide-and-conquer` scoping
-  first), **#394** (audit_events historical-gap issue — note its title still
-  reads as already describing #369's fix as having landed; worth re-reading
-  before assuming it's still purely an open question), older backlog
-  (`#371`/`#373`/`#374`/`#378`/`#379`, `#384`-`#387`). Local branch hygiene
-  otherwise unchanged: everything merged except `test/377-docs-on-main`,
-  tracked by still-open **#379**.
+- **`feature/docker-e2e-backend-integration`**: at `40b18055`, **in
+  sync with origin**. Working tree clean.
+- Issues: **#394 closed** (both owner-decision points resolved and
+  recorded in the close comment; merge noted in a follow-up comment).
+- `fix/394-audit-ingest-failure-alert` (merged): deleted both locally
+  and on origin.
+- **New issue filed this session:** dyeallpies-skills-pack#188 (open,
+  `bug`) — the `full-suite-guard.cjs` stderr-redirect parsing bug
+  above. Filed against the skills-pack tracker, not this repo, since
+  it's orchestration mechanics, not a BioAvanceD-v2 product bug.
+- `test/392-specimen-preanalytics-canonical-fields` (merged, from a
+  much earlier session): **still on origin** per the last check
+  (carried forward across multiple handoffs now) — not re-checked this
+  session, presumed still needing manual cleanup or a permission grant
+  unless someone has since removed it.
+- Untouched from before: **#389**/**#390** (storage/custody separation
+  and its dependent migration, open, `#389` needs `divide-and-conquer`
+  scoping first), older backlog (`#371`/`#373`/`#374`/`#378`/`#379`,
+  `#384`-`#387`). Local branch hygiene otherwise unchanged: everything
+  merged except `test/377-docs-on-main`, tracked by still-open **#379**.
+  This session's own `test/394-handoff-rotation` (this commit) should be
+  merged into `feature/docker-e2e-backend-integration` and deleted the
+  same way once it lands.
 
 ## Blocking next step
 
@@ -88,26 +84,19 @@ None. Nothing queued as blocking.
 
 No next issue queued explicitly by Dennis. Candidates, roughly by
 size/readiness:
-- **#394** (audit_events historical gap): re-read first — title suggests it
-  may now be scoped narrower than "owner-judgment question" (see repo state
-  note above).
 - **#389**/**#390**: unchanged from prior handoffs, see below.
+- Older backlog: **#384–#387** (four architecture-gap issues),
+  `#371`/`#373`/`#374`/`#378`/`#379` — untouched this session.
 
 ## Which skills to use
 
-- **#394** (audit_events historical gap): re-read the current issue body
-  before picking a skill — may no longer be the same "surface to Dennis"
-  situation described in earlier handoffs now that #369 has landed.
-- **#389** (storage/custody entity): scope with `divide-and-conquer` first —
-  don't attempt as one slice (28 files, already half-separated via
-  `storageBoxes`). Check dict-02's "Entidade" column for the canonical name
-  before naming anything (dyeallpies-skills-pack#179).
+- **#389** (storage/custody entity): scope with `divide-and-conquer`
+  first — don't attempt as one slice (28 files, already half-separated
+  via `storageBoxes`). Check dict-02's "Entidade" column for the
+  canonical name before naming anything (dyeallpies-skills-pack#179).
 - **#390**: blocked on #389.
-- Backlog unchanged otherwise from prior handoffs: **#384–#387** (four
-  architecture-gap issues), older backlog (`#371`/`#373`/`#374`/`#378`/
-  `#379`) — untouched this session.
+- Backlog unchanged otherwise from prior handoffs: **#384–#387**, older
+  backlog (`#371`/`#373`/`#374`/`#378`/`#379`) — untouched this session.
 - **Whichever issue is picked up next: invoke `resolve-issue` (or
   `work-issue` if routing is genuinely unclear) via the Skill tool
-  explicitly before acting** — this session's own finding
-  (dyeallpies-skills-pack#187) was exactly a session that skipped that
-  call because the user named the issue number directly.
+  explicitly before acting.**
