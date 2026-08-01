@@ -1,4 +1,4 @@
-import axios from 'axios';
+import axios, { AxiosRequestConfig } from 'axios';
 import {
   Patient,
   Sample,
@@ -22,6 +22,14 @@ import {
   PhoneCodeEntry,
 } from '../types/models';
 import { clearClientSession } from '../utils/sessionCleanup';
+
+// Opt-out for background/speculative requests (e.g. a prefetch for a later
+// wizard step) whose failure must not force-logout the user out of an
+// unrelated in-progress flow. Default (unset) keeps the existing behavior:
+// any 401 attempts a refresh, then ends the session on failure.
+export interface ApiRequestConfig extends AxiosRequestConfig {
+  suppressAuthRedirect?: boolean;
+}
 
 const NO_TOKEN_PROTECTED_REQUEST = 'NO_TOKEN_PROTECTED_REQUEST';
 const TOKEN_OPTIONAL_ROUTES = [
@@ -186,9 +194,12 @@ api.interceptors.response.use(
       const requestUrl = error.config?.url || '';
       const isRefreshEndpoint = requestUrl.includes('/auth/refresh');
       const isRetry = Boolean(error.config?._retry);
-      
-      // Rotas públicas de autenticação não devem forçar limpeza de sessão
-      if (isTokenOptionalRoute(requestUrl) || isRefreshEndpoint) {
+      const suppressAuthRedirect = Boolean((error.config as ApiRequestConfig | undefined)?.suppressAuthRedirect);
+
+      // Rotas públicas de autenticação, chamadas de refresh, e requisições
+      // que explicitamente optam por não encerrar a sessão (ex.: prefetch em
+      // segundo plano para uma etapa futura) não devem forçar limpeza de sessão
+      if (isTokenOptionalRoute(requestUrl) || isRefreshEndpoint || suppressAuthRedirect) {
         return Promise.reject(error);
       }
 
@@ -732,7 +743,7 @@ export const backupService = {
 // TCLE builder should use only ConsentTemplate endpoints for create/update/read
 export const consentService = {
   createTemplate: (data: Partial<ConsentTemplate>) => api.post<ConsentTemplate>('/e-consent/consent-templates', data),
-  getTemplates: () => api.get<{ success: boolean; data: ConsentTemplate[] }>('/e-consent/consent-templates'),
+  getTemplates: (config?: ApiRequestConfig) => api.get<{ success: boolean; data: ConsentTemplate[] }>('/e-consent/consent-templates', config),
   getActiveTemplate: () => api.get<{ success: boolean; data: ConsentTemplate | null; source?: string; message?: string }>('/e-consent/consent-templates/current'),
   getTemplateById: (id: string) => api.get<{ success: boolean; data: ConsentTemplate }>(`/e-consent/consent-templates/${id}`),
   updateTemplate: (id: string, data: Partial<ConsentTemplate>) => api.put<{ success: boolean; data: ConsentTemplate }>(`/e-consent/consent-templates/${id}`, data),

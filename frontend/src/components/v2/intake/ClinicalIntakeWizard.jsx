@@ -1930,7 +1930,11 @@ export default function ClinicalIntakeWizard(props) {
       setConsentTemplatesError('');
 
       try {
-        const response = await consentService.getTemplates();
+        // Prefetched here (mount) so it's ready by the consent step later in
+        // the wizard, while the user is still on an earlier step — a failure
+        // of this background call must not force-logout the user out from
+        // under them (#395), so it opts out of the global 401 session-kill.
+        const response = await consentService.getTemplates({ suppressAuthRedirect: true });
         const nextTemplates = extractResponseItems(response, ['templates']);
 
         if (!active) {
