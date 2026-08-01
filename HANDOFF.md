@@ -1,111 +1,103 @@
 # HANDOFF
 
-**Written:** 2026-08-01, after closing #376 (stale `patientName` assertion,
-`fix-bugs`) on `feature/docker-e2e-backend-integration`.
+**Written:** 2026-08-01, after closing #375 (arch tests node:test/ESM
+mismatch, `fix-bugs`, Docker on) on `feature/docker-e2e-backend-integration`.
 
 ## What happened this session
 
-Picked up via `work-issue` (no specific issue named — routed off the open
-backlog). Three `bug`-labeled candidates: #376 (patients API missing
-`patientName`, pinned test, clear repro), #375 (`test:architecture` can't
-parse ESM under `node --test`, CI-blocking but not reachable until the next
-`ship-integration-branch` pass), #369 (audit-logger canonicalization
-flooding logs, unpinned, needs open-ended investigation). Chose **#376**:
-strongest fit for fix-bugs' picking rules (pinned assertion, user-facing
-correctness, isolated repro) over #375 (not yet reachable) and #369
-(cosmetic/logging, no pinned test).
+Picked up via `work-issue` (no specific issue named). Fresh backlog: only
+two `bug`-labeled issues remained, #375 and #369 (same pair as the prior
+session's handoff — nothing changed upstream). Chose **#375**: clear,
+already-locally-reproduced defect with two documented candidate fixes,
+over #369 (unpinned, needs open-ended investigation, cosmetic/logging).
 
-**Root cause: stale test, not a product bug.** Traced
-`patients.expanded.api.test.js`'s failing assertion
-(`expect(response.body.data.patientName).toBeDefined()`) back through
-`paciente.controller.js#buscar` and found the field is deliberately
-stripped as of **#363** (RF005/RNF007 ParticipantIdentity segregation,
-`8ab1cf72`, my own prior session) — documented in
-`docs/architecture/canonical-data-contract-v1.md` ("Landed in #363":
-`patientName`/`birthDate`/`identityDocument` no longer returned on the
-participant resource, for any caller). `patients.expanded.api.test.js`
-predates that commit and was never updated when the behavior changed —
-the exact "stale-test issue" shape from `fix-bugs`' picking guide, not a
-regression. Fix: flip the assertion to `toBeUndefined()`, matching the
-sibling `intake-wizard.spec.ts` idiom that #363 itself used. No product
-code touched.
+**Root cause:** all 8 `tests/architecture/*.arch.test.js` files imported
+vitest's `test`/`expect` via ESM `import`, but `package.json` is
+`"type": "commonjs"` and `test:architecture` runs them via plain
+`node --test`, which can't parse ESM `import`.
 
-**Landed** (`fix/376-stale-patientname-assertion`, merged into
-`feature/docker-e2e-backend-integration` at `73658c25`):
+**Fix direction settled by checking docs first** (fix-bugs' verify-before-
+deferring rule): `README.md`'s Test Strategy section explicitly names
+`node --test` as the deliberate, canonical runner for this directory
+("Vitest e Playwright legados permanecem fora do contrato atual") — so
+converted the 8 files to `node:test`/`node:assert` (mechanical matcher
+mapping; `expect.assertions(3)` replaced with an explicit `threw`-flag
+assertion) rather than dropping the script.
 
-- `api/backend/tests/integration/patients.expanded.api.test.js`: one
-  assertion flipped + a comment citing #363.
-- Verified: `patients.expanded.api.test.js` (24/24),
-  `tests/unit/paciente.controller.test.js` (66/66),
-  `tests/unit/patient-identity.service.test.js` (7/7) — all green, both
-  pre- and post-merge.
+**Second-order break caught and fixed in the same commit:** converting
+away from vitest's own `test()` meant vitest's default glob (any
+`*.test.js`) started reporting "No test suite found in file" on all 8
+files — would have broken `npm run test:unit:vitest`/`npm test`. Fixed
+by excluding `tests/architecture/**` in `vitest.config.js`, matching the
+same file's existing `tests/e2e/**` exclusion.
 
-**Issue #376 closed**, comment notes the trace and commit hash. Fix branch
-deleted (local + remote).
+**Landed** (`fix/375-arch-tests-node-test-esm`, merged into
+`feature/docker-e2e-backend-integration` at `e9340945`):
 
-**Friction filed:** `dyeallpies-skills-pack#180` — mid-iteration I ran
-`npx vitest run tests/unit tests/integration` intending fix-bugs' "cast a
-slightly wider net" verification step; this is effectively the whole
-native suite, but `full-suite-guard.cjs` didn't block it because its
-bare-invocation matcher exempts any run with explicit directory targets
-(designed for the periodic coverage-reconcile step, doesn't distinguish
-that caller from a loop's mid-iteration guess). Caught it myself before
-reading the output (stopped the backgrounded run, reran scoped to the
-three actual files above) — no bad verification result was used, but
-filed since the gap could recur. Not something I could fix directly
-(pack files aren't editable from a consuming-project session per
-`skill-maintenance` Rule 0).
+- 8 files under `api/backend/tests/architecture/*.arch.test.js`: ported
+  to `node:test`/`node:assert`.
+- `api/backend/vitest.config.js`: added `tests/architecture/**` to
+  `exclude`.
+- Verified: `npm run test:architecture` 19/19 via `node --test`; full
+  `npm run current-state:ci` chain (architecture tests + essential-seed
+  validation + dictionary validation 929/929 + seed dry-run + compliance
+  evidence generation) green end to end, per the issue's own ask; a
+  normal vitest file run confirms the config edit didn't break vitest
+  itself; `npm run lint` clean (311 files) — both pre- and post-merge.
+
+**Issue #375 closed**, comment notes the trace, both fixes, and
+verification. Fix branch deleted (local + remote).
+
+**Significant finding filed as #393** (BioAvanceD-v2): this exact
+node:test-vs-vitest tension has now flip-flopped **four times**
+(#138→#148/#182→[undated README contract flip]→#375), each round fixing
+the symptom for whichever runner was canonical *at that moment* with no
+record of *why*, and no guard against reverting. A future session
+searching "vitest reports 0 tests in this directory" (the literal
+symptom #148/#182 describe) could easily re-port these files to vitest
+and reintroduce #375 a second time. Suggested a comment or mechanical
+guard in the affected files pointing at this history — not attempted
+this session, kept separate from #375's own scope.
 
 ## Repo state
 
-- **`feature/docker-e2e-backend-integration`**: at `73658c25`, **in sync
+- **`feature/docker-e2e-backend-integration`**: at `e9340945`, **in sync
   with origin** (nothing outstanding to push). Working tree clean except
   the pre-existing `catalog.1.3.0.json` phantom line-ending diff (#391 —
   confirmed no-op again this session, still open/unfixed).
-- Issues: **#376 closed** (`73658c25` noted in the close comment).
-  **dyeallpies-skills-pack#180 opened** (skills-pack repo, open — not a
-  BioAvanceD-v2 issue, don't look for it in this repo's tracker).
-- `fix/376-stale-patientname-assertion` (merged) deleted, local + remote.
-- Local branch hygiene: swept all local branches against the integration
-  branch this session — everything merged except
-  `test/377-docs-on-main`, which is genuinely dangling but *tracked*
-  (holds Denise's 7-31 Modelagem docs drop, referenced by still-open
-  **#379**'s "supersede the CMPB submission copies" decision) — not lost
-  work, no action needed.
+- Issues: **#375 closed** (`e9340945` noted in the close comment).
+  **#393 opened** (BioAvanceD-v2, open — the flip-flop-history finding
+  above).
+- `fix/375-arch-tests-node-test-esm` (merged) deleted, local + remote.
 - Untouched from before: **#389** (storage/custody separation, open),
   **#390** (multi-consumer migration, open, depends on #383+#388+#389),
   **#391** (`.gitattributes` phantom-diff fix, open, small/mechanical),
   **#392** (dict-02's fuller SpecimenPreanalytics fields, open,
-  build-loop sized), **#375** (CI-blocking `test:architecture` ESM
-  parse failure — not yet reachable until the next `ship-integration-branch`
-  pass, but worth fixing before then), **#369** (audit-logger log-flood,
-  needs investigation before it's fixable).
+  build-loop sized), **#369** (audit-logger log-flood, needs
+  investigation before it's fixable). Local branch hygiene (swept last
+  session): everything merged except `test/377-docs-on-main`, tracked by
+  still-open **#379** — not lost work.
 
 ## Blocking next step
 
 None. Nothing queued as blocking.
 
-No next issue queued explicitly by Dennis. #375 is the natural
-bug-backlog continuation (same discovery session as #376, same
-`fix-bugs` shape, and its "will fail on the first PR to main" framing
-means it's worth fixing before `ship-integration-branch` rather than
-after) — but that's an inference from this session's own picking
-process, not something Dennis said.
+No next issue queued explicitly by Dennis. **#393** (the flip-flop
+comment/guard) is the closest, cheapest continuation of this session's
+own find — small, in the same files just touched — but that's an
+inference, not something Dennis said. **#369** is the only other
+remaining `bug`-labeled issue.
 
 ## Which skills to use
 
-- **#375** (`test:architecture` ESM/CommonJS mismatch): `fix-bugs`. Two
-  documented candidate fixes in the issue body itself (rewrite arch tests
-  to `require()`, or drop the separate `test:architecture` script and
-  rely on `test:unit:vitest`) — pick one, re-verify `current-state:ci`
-  end to end per the issue's own note, not just the isolated script.
+- **#393** (arch-test flip-flop guard): small — `resolve-issue`. Add a
+  comment (or a lint/architecture-test guard) to the 8 files pointing at
+  this issue and #138/#148/#182/#375 so a future session doesn't re-port
+  them to vitest.
 - **#369** (audit-logger log flood): `fix-bugs`, but budget time for
   investigation first — no pinned test, root cause/call site not yet
-  identified. Per fix-bugs' picking rules, weigh whether it's actually
-  worth an iteration before committing to it (cosmetic/logging, not
-  user-facing correctness) vs. #375/#391 which are more clear-cut.
-- **#391** (`.gitattributes`): small, mechanical `resolve-issue` — add a
-  line-ending rule, renormalize, done in one sitting.
+  identified.
+- **#391** (`.gitattributes`): small, mechanical `resolve-issue`.
 - **#389** (storage/custody entity): scope with `divide-and-conquer`
   first — don't attempt as one slice (28 files, already half-separated
   via `storageBoxes`). Check dict-02's "Entidade" column for the
