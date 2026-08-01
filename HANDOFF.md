@@ -84,19 +84,17 @@ owner-authorized exception straight to `main`.
   zip-unpack commit, open as **PR #380** against `main`. Not merged.
 - `Modelagem-20260731T212528Z-1-001.zip` still sits at the repo root,
   gitignored (`*.zip`) — left for Dennis to clean up or keep.
-- Issues: **#377 still open** — the work it describes is done and
-  merged into the integration branch, but this session didn't close it
-  (Dennis hadn't confirmed yet when the session ended). **#378**,
-  **#379** open (new follow-ups). **#283** commented, still open.
-  Skills-pack **#170–#173** open (documentation fixes, not yet actioned
-  — this session can't edit those skill files directly).
+- Issues: **#377 closed** (Dennis confirmed), referencing the merge
+  commit and PR #380. **#378**, **#379** open (new follow-ups). **#283**
+  commented, still open. Skills-pack **#170–#173** open (documentation
+  fixes, not yet actioned — this session can't edit those skill files
+  directly).
 
 ## Blocking next step
 
-**Decide whether to close #377.** The docs-refresh work it describes is
-done and merged into `feature/docker-e2e-backend-integration`; the
-separate PR #380 covers Denise's direct-to-main exception. If Dennis
-confirms, close #377 referencing both the merge commit and PR #380.
+None — #377 is closed. PR #380 (the direct-to-main exception) is still
+open against `main`, unmerged; that's Denise's call on her own
+schedule, not a blocker for any other work.
 
 No other next issue queued explicitly by Dennis.
 
