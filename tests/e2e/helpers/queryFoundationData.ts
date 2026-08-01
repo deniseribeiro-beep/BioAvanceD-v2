@@ -45,15 +45,16 @@ export async function countEssentialReferenceDocs(): Promise<number> {
 }
 
 /**
- * `referenceSeedRuns` (collections.js's CANONICAL_COLLECTIONS.referenceSeedRuns)
- * is the manifest's own run-tracking target for the rcs-gov-1.0 entry — the
- * closest thing today to the target model's FoundationDataRun. It's only
- * ever written by manually running `npm run seed:essential`, never by an
- * idempotent job coupled to the build after healthchecks.
+ * `foundationDataRuns` (collections.js's CANONICAL_COLLECTIONS.foundationDataRuns,
+ * #370) is the dedicated FoundationDataRun model — one document per full
+ * Foundation Data Pipeline execution, written by
+ * seed-essential-reference-data.js after every manifest entry completes.
+ * Superseded `referenceSeedRuns`, which #366 had generalized as a stopgap
+ * (one row per manifest entry, not per pipeline run).
  */
-export async function countReferenceSeedRuns(): Promise<number> {
+export async function countFoundationDataRuns(): Promise<number> {
   const db = await getDb();
-  return db.collection('referenceSeedRuns').countDocuments();
+  return db.collection('foundationDataRuns').countDocuments();
 }
 
 /**

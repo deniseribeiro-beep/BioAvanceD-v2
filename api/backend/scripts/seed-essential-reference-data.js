@@ -1,11 +1,22 @@
 require('dotenv').config();
 
 const crypto = require('crypto');
+const os = require('os');
+const { version: pipelineVersion } = require('../package.json');
 const { connectNewDB, closeConnection } = require('../src/database/mongo');
 const { getManifest, getManifestByKey } = require('../src/reference-data/essential');
 const miabisSeed = require('../src/reference-data/miabis.min.json');
 const sprecSeed = require('../src/reference-data/sprec.min.json');
 const rcsReferenceData = require('../src/services/rcs-reference-data');
+const FoundationDataRunModel = require('../src/models/FoundationDataRun');
+const { CANONICAL_COLLECTIONS } = require('../src/config/collections');
+
+// dict-02_DICIONARIO.md is pinned at v1.3.0; this bootstrap only wires the
+// 3-entry essential manifest (#366), not the full 929-element catalog (#370
+// follow-up) — dictionaryVersion/dictionaryChecksum below describe what this
+// run actually validated against (the manifest itself), not the full
+// canonical dictionary, until that catalog exists as a consumable artifact.
+const DICTIONARY_VERSION = '1.3.0';
 
 function parseArgs(argv) {
   const args = { dryRun: false, list: false, only: null };
@@ -99,26 +110,72 @@ async function main() {
 
   const db = args.dryRun ? null : await connectNewDB();
   try {
-    for (const entry of selected) {
-      const loaded = loadByKey(entry.key);
-      const docsByCollection = loaded.docsByCollection || {};
-      const plannedCounts = Object.fromEntries(Object.entries(docsByCollection).map(([collection, docs]) => [collection, docs.length]));
-      console.log(JSON.stringify({ key: entry.key, dryRun: args.dryRun, plannedCounts }, null, 2));
-      if (!args.dryRun) {
+    if (args.dryRun) {
+      for (const entry of selected) {
+        const loaded = loadByKey(entry.key);
+        const docsByCollection = loaded.docsByCollection || {};
+        const plannedCounts = Object.fromEntries(Object.entries(docsByCollection).map(([collection, docs]) => [collection, docs.length]));
+        console.log(JSON.stringify({ key: entry.key, dryRun: true, plannedCounts }, null, 2));
+      }
+      return;
+    }
+
+    const runs = db.collection(CANONICAL_COLLECTIONS.foundationDataRuns);
+    const environment = require('../src/config/env').NODE_ENV;
+    const deploymentId = process.env.HOSTNAME || os.hostname();
+    const previousRun = await runs.find({ environment }).sort({ startedAt: -1 }).limit(1).next();
+    const steps = [];
+
+    try {
+      for (const entry of selected) {
+        const loaded = loadByKey(entry.key);
+        const docsByCollection = loaded.docsByCollection || {};
+        const plannedCounts = Object.fromEntries(Object.entries(docsByCollection).map(([collection, docs]) => [collection, docs.length]));
+        console.log(JSON.stringify({ key: entry.key, dryRun: false, plannedCounts }, null, 2));
         for (const [collectionName, docs] of Object.entries(docsByCollection)) {
           await upsertDocs(db, collectionName, docs, entry.uniqueKeys || []);
         }
-        await upsertDocs(db, 'referenceSeedRuns', [{
-          key: entry.key,
-          version: entry.version,
-          system: entry.system,
-          checksum: checksumFor(loaded.payload || docsByCollection),
-          executedAt: new Date().toISOString(),
-          seedRun: true,
-          plannedCounts,
-        }], ['key', 'version']);
+        steps.push({ step: entry.key, system: entry.system, version: entry.version, status: 'completed', plannedCounts });
       }
+    } catch (error) {
+      const failedRun = FoundationDataRunModel.create({
+        pipelineVersion,
+        schemaVersion: DICTIONARY_VERSION,
+        dictionaryVersion: DICTIONARY_VERSION,
+        environment,
+        deploymentId,
+        runStatus: 'failed',
+        executionMode: 'apply',
+        configurationChecksum: checksumFor({ selectedKeys: selected.map((entry) => entry.key), only: args.only, environment, deploymentId }),
+        dictionaryChecksum: checksumFor(manifest.map((entry) => ({ key: entry.key, system: entry.system, version: entry.version }))),
+        completedAt: new Date(),
+        steps: [...steps, { step: selected[steps.length]?.key || 'unknown', status: 'failed' }],
+        validationSummary: { passed: steps.length, failed: 1 },
+        errorSummary: { fatal: 1, message: error.message || String(error) },
+        initiatedBy: 'system:foundation-data-pipeline',
+        previousRunId: previousRun ? previousRun.foundationDataRunId : null,
+      });
+      await runs.insertOne(failedRun);
+      throw error;
     }
+
+    const completedRun = FoundationDataRunModel.create({
+      pipelineVersion,
+      schemaVersion: DICTIONARY_VERSION,
+      dictionaryVersion: DICTIONARY_VERSION,
+      environment,
+      deploymentId,
+      runStatus: 'completed',
+      executionMode: 'apply',
+      configurationChecksum: checksumFor({ selectedKeys: selected.map((entry) => entry.key), only: args.only, environment, deploymentId }),
+      dictionaryChecksum: checksumFor(manifest.map((entry) => ({ key: entry.key, system: entry.system, version: entry.version }))),
+      completedAt: new Date(),
+      steps,
+      validationSummary: { passed: steps.length, failed: 0 },
+      initiatedBy: 'system:foundation-data-pipeline',
+      previousRunId: previousRun ? previousRun.foundationDataRunId : null,
+    });
+    await runs.insertOne(completedRun);
   } finally {
     if (!args.dryRun) {
       await closeConnection().catch(() => {});
