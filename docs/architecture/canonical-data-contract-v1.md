@@ -199,7 +199,7 @@ the versioned history for a specimen (mirrors `RcsAssessment`/
 codes — ELM-0145/0146/0154–0157, P1X-0057/0059) isn't parsed or computed
 anywhere in the codebase yet; this slice only separates the fields
 `import.service.js` already computes into the referenced entity, the same
-scope discipline #383 used for RCS. `Sample.js` still carries its own
+scope discipline #383 used for RCS (tracked in #392). `Sample.js` still carries its own
 embedded `sprec` copy — removing that duplication requires migrating
 every consumer that reads it directly off `Sample` (tracked in #390,
 alongside the equivalent RCS migration). The JSON-import branch of
