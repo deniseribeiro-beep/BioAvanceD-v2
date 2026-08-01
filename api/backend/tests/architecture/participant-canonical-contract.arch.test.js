@@ -1,3 +1,7 @@
+// node:test-only by contract (README.md Test Strategy — vitest is out of
+// contract here). Do not port to vitest's import/expect: that exact swap
+// caused #375. History: #138, #148, #182, #375, #393.
+
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
