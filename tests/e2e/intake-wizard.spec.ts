@@ -50,6 +50,34 @@ test.describe('Intake wizard (/next/intake)', () => {
     await page.getByTestId('wizard-next-button').click();
     await expect(page.getByTestId('wizard-full-name')).toBeVisible();
   });
+
+  // #395: ClinicalIntakeWizard prefetches consent templates on mount (for the
+  // later consent step) via consentService, which — unlike the wizard's other
+  // background loaders (terminologies, patient-match) — uses the strict `api`
+  // instance that force-logs-out the user on any 401. A stale/rejected token
+  // on this unrelated background call must not evict the user from the
+  // demographic step they're actively filling in.
+  test('a failed background consent-template prefetch does not force-logout the user mid-step (#395)', async ({ page }) => {
+    await page.route('**/api/e-consent/consent-templates**', async (route) => {
+      await route.fulfill({
+        status: 401,
+        contentType: 'application/json',
+        body: JSON.stringify({ success: false, message: 'Unauthorized' }),
+      });
+    });
+
+    await page.goto('/next/intake');
+
+    await expect(page.getByTestId('intake-wizard-root')).toBeVisible();
+    await page.getByTestId('wizard-full-name').fill('Paciente Teste E2E');
+    await expect(page.getByTestId('wizard-full-name')).toHaveValue('Paciente Teste E2E');
+
+    // Give the (now-suppressed) refresh/redirect cascade time to run if it
+    // were still wired up — before the fix this fired a real navigation
+    // to /login within a few seconds even with no backend listening.
+    await page.waitForTimeout(3000);
+    await expect(page).toHaveURL(/\/next\/intake/);
+  });
 });
 
 test.describe('Participant identity segregation (RF005/RNF007) — real backend (#327, entity+read-path landed in #363)', () => {
