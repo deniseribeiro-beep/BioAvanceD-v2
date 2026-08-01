@@ -27,6 +27,12 @@ import { clearClientSession } from '../utils/sessionCleanup';
 // wizard step) whose failure must not force-logout the user out of an
 // unrelated in-progress flow. Default (unset) keeps the existing behavior:
 // any 401 attempts a refresh, then ends the session on failure.
+//
+// Security-reviewed (#397): only changes client-side redirect behavior for
+// requests that opt in — never touches the 401 itself or backend
+// authorization. Currently used by exactly one caller (ClinicalIntakeWizard's
+// consent-template prefetch); re-verify this same scope reasoning before a
+// second call site adopts it.
 export interface ApiRequestConfig extends AxiosRequestConfig {
   suppressAuthRedirect?: boolean;
 }
