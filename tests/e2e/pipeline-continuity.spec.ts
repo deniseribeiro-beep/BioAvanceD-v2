@@ -4,7 +4,7 @@ import { createRealParticipant, closeSeedDb } from './helpers/seedParticipant';
 import { waitForEthicalConsentStatus, closeNeo4jDriver } from './helpers/queryNeo4j';
 import {
   countEssentialReferenceDocs,
-  countReferenceSeedRuns,
+  countFoundationDataRuns,
   countReferenceDatasetReleases,
   countTerminologyConcepts,
   closeFoundationDb,
@@ -97,13 +97,16 @@ test.describe('Outbox → Neo4j projection (RF023) — real backend', () => {
 // is a one-shot, idempotent bootstrap of the full 929-element dictionary
 // across six technical entities, executed automatically after the stack's
 // healthchecks pass — not a script a human has to remember to run.
-// api/backend/scripts/seed-essential-reference-data.js is exactly that
-// legacy manual seed: current-state:ci only ever runs it with --dry-run
-// (api/backend/package.json's current-state:ci), and compose.test.yml never
-// invokes it at all. These assertions read the same reference/run-tracking
-// collections the manifest itself targets (essential/manifest.js) directly
-// from Mongo — there's no API surface for any of this yet — and are
-// expected to fail against a freshly-booted test stack, which is the gap.
+// api/backend/scripts/seed-essential-reference-data.js is wired as exactly
+// that (#366) for compose.dev.yml's `foundation-bootstrap` one-shot service,
+// writing one FoundationDataRun document per run (#370) instead of the
+// per-manifest-entry `referenceSeedRuns` rows #366 started with. Cutting
+// compose.test.yml/CI over to the same bootstrap is #371 — until that
+// lands, current-state:ci only ever runs the script with --dry-run
+// (api/backend/package.json's current-state:ci) and compose.test.yml never
+// invokes it at all, so these assertions (read directly from Mongo — there's
+// no API surface for any of this) still fail against a freshly-booted test
+// stack, only passing against the dev stack today.
 test.describe('Foundation Data Pipeline bootstrap (RF022) — real backend', () => {
   test.afterAll(async () => {
     await closeFoundationDb();
@@ -114,8 +117,8 @@ test.describe('Foundation Data Pipeline bootstrap (RF022) — real backend', () 
     expect(count).toBeGreaterThan(0);
   });
 
-  test('the bootstrap records an idempotent run, not just ad-hoc upserts', async () => {
-    const runs = await countReferenceSeedRuns();
+  test('the bootstrap records an idempotent FoundationDataRun, not just ad-hoc upserts', async () => {
+    const runs = await countFoundationDataRuns();
     expect(runs).toBeGreaterThan(0);
   });
 });

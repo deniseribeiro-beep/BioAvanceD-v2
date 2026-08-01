@@ -13,6 +13,7 @@ const CANONICAL_COLLECTIONS = Object.freeze({
   diseaseDictionary: env.COLL_DISEASE_DICTIONARY || 'disease_dictionary',
   medicationDictionary: env.COLL_MEDICATION_DICTIONARY || 'medication_dictionary',
   referenceSeedRuns: env.COLL_REFERENCE_SEED_RUNS || 'referenceSeedRuns',
+  foundationDataRuns: env.COLL_FOUNDATION_DATA_RUNS || 'foundationDataRuns',
   participantIdentities: env.COLL_PARTICIPANT_IDENTITIES || 'participantIdentities',
   referenceDatasetReleases: env.COLL_REFERENCE_DATASET_RELEASES || 'referenceDatasetReleases',
   referenceImportRuns: env.COLL_REFERENCE_IMPORT_RUNS || 'referenceImportRuns',
