@@ -1,10 +1,11 @@
-import { test, expect } from 'vitest';
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
 
 const ParticipantModel = require('../../src/models/Patient');
 const pacienteController = require('../../src/controllers/paciente.controller');
 
 test('Patient model rejects canonical aliases with 422 metadata', () => {
-  expect.assertions(3);
+  let threw = false;
   try {
     ParticipantModel.create({
       participantId: '12345678',
@@ -15,22 +16,26 @@ test('Patient model rejects canonical aliases with 422 metadata', () => {
       consentTemplateId: 'tpl-1'
     });
   } catch (error) {
-    expect(error.statusCode).toBe(422);
-    expect(error.code).toBe('NON_CANONICAL_FIELD');
-    expect(Array.isArray(error.fields)).toBe(true);
+    threw = true;
+    assert.strictEqual(error.statusCode, 422);
+    assert.strictEqual(error.code, 'NON_CANONICAL_FIELD');
+    assert.strictEqual(Array.isArray(error.fields), true);
   }
+  assert.ok(threw, 'expected ParticipantModel.create to throw for non-canonical fields');
 });
 
 test('Paciente controller rejects participant aliases before persistence', () => {
-  expect.assertions(3);
+  let threw = false;
   try {
     pacienteController.sanitizePatientPayload({
       patientId: '12345678',
       patientName: 'Paciente'
     });
   } catch (error) {
-    expect(error.statusCode).toBe(422);
-    expect(error.code).toBe('NON_CANONICAL_FIELD');
-    expect(error.fields.includes('patientId')).toBe(true);
+    threw = true;
+    assert.strictEqual(error.statusCode, 422);
+    assert.strictEqual(error.code, 'NON_CANONICAL_FIELD');
+    assert.strictEqual(error.fields.includes('patientId'), true);
   }
+  assert.ok(threw, 'expected sanitizePatientPayload to throw for non-canonical fields');
 });

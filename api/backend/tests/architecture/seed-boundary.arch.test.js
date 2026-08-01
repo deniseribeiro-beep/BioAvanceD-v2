@@ -1,4 +1,5 @@
-import { test, expect } from 'vitest';
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -14,26 +15,26 @@ function read(file) {
 
 test('seed essential is not imported by startup entrypoints', () => {
   for (const file of [path.join(repoRoot, 'app.js'), path.join(repoRoot, 'server.js'), path.join(backendRoot, 'workers', 'worker.js')]) {
-    expect(read(file).includes('seed-essential-reference-data')).toBe(false);
+    assert.strictEqual(read(file).includes('seed-essential-reference-data'), false);
   }
 });
 
 test('large import scaffolds stay non-operational', () => {
   const scaffold = read(path.join(scriptsRoot, 'reference-imports', 'import-large-reference-dataset.js'));
-  expect(scaffold).toMatch(/not implemented until data model is finalized/);
-  expect(scaffold.includes('https://')).toBe(false);
-  expect(scaffold.includes('http://')).toBe(false);
+  assert.match(scaffold, /not implemented until data model is finalized/);
+  assert.strictEqual(scaffold.includes('https://'), false);
+  assert.strictEqual(scaffold.includes('http://'), false);
 });
 
 test('essential manifest excludes large dataset keys', () => {
   const manifest = require(essentialManifest).getManifest();
   for (const blocked of ['hpo', 'orpha', 'cid', 'omim', 'mondo']) {
-    expect(manifest.some((entry) => String(entry.key).toLowerCase().includes(blocked))).toBe(false);
+    assert.strictEqual(manifest.some((entry) => String(entry.key).toLowerCase().includes(blocked)), false);
   }
 });
 
 test('seed scripts do not require network access', () => {
   const seedScript = read(path.join(scriptsRoot, 'seed-essential-reference-data.js'));
-  expect(seedScript.includes('https://')).toBe(false);
-  expect(seedScript.includes('http://')).toBe(false);
+  assert.strictEqual(seedScript.includes('https://'), false);
+  assert.strictEqual(seedScript.includes('http://'), false);
 });
