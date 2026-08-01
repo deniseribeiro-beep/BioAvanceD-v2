@@ -122,9 +122,10 @@ encryption at rest for the segregated collection ("cifrar").
 entities, referenced (not duplicated) from each other — `Sample.js` still
 carries `sprec` and the storage/custody fields (`locationId`, `location`,
 `storageLocation`, `lifecycleStatus`, `availabilityStatus`,
-`quarantineStatus`, ...) directly. `RcsAssessment` below is the first of
-the three separations to land (#383); `SPREC` and storage/custody are
-filed as their own follow-ups.
+`quarantineStatus`, ...) directly. `RcsAssessment` and
+`SpecimenPreanalytics` below are the first two of the three separations to
+land (#383, #388); storage/custody remains filed as its own follow-up
+(#389).
 
 ### RcsAssessment
 
@@ -161,6 +162,49 @@ frontend types, the live `POST /api/samples` registration path, which
 doesn't compute RCS server-side at all today). Also outstanding: the
 JSON-import branch of `importSamples` doesn't compute or record RCS
 either (only the CSV/XLSX branch does).
+
+### SpecimenPreanalytics
+
+- `specimenId` (reference to `Specimen`, not a duplicate — dict-07 row 38:
+  "Não duplicar fonte canônica"; dict-02 P1X-0058)
+- `matrixType`
+- `sampleType`
+- `primaryContainer`
+- `preCentrifugation`
+- `centrifugation`
+- `secondCentrifugation`
+- `postCentrifugationDelay`
+- `longTermStorage`
+- `recordedAt` (each import is its own versioned snapshot, per dict-07's
+  "usar referências e snapshots versionados" — row 38 groups SPREC with
+  RCS under the same directive `RcsAssessment` above uses — multiple
+  documents may exist per `specimenId`, newest first)
+
+Named after dict-02's canonical entity (`SpecimenPreanalytics`,
+ELM-0145–ELM-0166/P1X-0057–P1X-0059), not the "SPREC" shorthand
+dict-07/dict-08 and issue #388 itself use — the same substitution #383
+made for "RCS" → `RcsAssessment`.
+
+**Landed in #388:** the entity/collection (`specimenPreanalytics`) exists;
+`import.service.js`'s CSV/XLSX sample-import path records a snapshot
+alongside every SPREC profile it already parses from `sprec_*` columns,
+referenced by `specimenId`; `GET /api/samples/:id/sprec-profiles` resolves
+the versioned history for a specimen (mirrors `RcsAssessment`/
+`GET /:id/rcs-assessments`, #383).
+
+**Not yet landed (follow-up tracked separately):** dict-02's fuller
+`SpecimenPreanalytics` field set (`sprecCode`, `sprecVersion`,
+`sprecProfileId`, `profileStatus`, `warmIschemiaTime`, `coldIschemiaTime`,
+`fixationStabilizationType`, `fixationTime`, and the solid-matrix element
+codes — ELM-0145/0146/0154–0157, P1X-0057/0059) isn't parsed or computed
+anywhere in the codebase yet; this slice only separates the fields
+`import.service.js` already computes into the referenced entity, the same
+scope discipline #383 used for RCS. `Sample.js` still carries its own
+embedded `sprec` copy — removing that duplication requires migrating
+every consumer that reads it directly off `Sample` (tracked in #390,
+alongside the equivalent RCS migration). The JSON-import branch of
+`importSamples` doesn't record a profile either (only the CSV/XLSX branch
+does, the same gap #383 left for RCS).
 
 ### Consent
 
