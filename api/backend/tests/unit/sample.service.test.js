@@ -1101,6 +1101,42 @@ describe('sample.service', () => {
   });
 
   // -------------------------------------------------------------------
+  describe('getRcsAssessments', () => {
+    it('resolves the specimenId from the sample document and queries rcsAssessments sorted by newest first', async () => {
+      const db = makeDb({ rcsAssessments: makeCollection('rcsAssessments') });
+      db.collections.samples.findOne.mockResolvedValue({ specimenId: 'sample-1', barcode: 'BR-1' });
+      const cursor = makeCursor([{ rcsScore: 95 }, { rcsScore: 70 }]);
+      db.collections.rcsAssessments.find.mockReturnValue(cursor);
+
+      const assessments = await sampleService.getRcsAssessments(db, 'sample-1');
+
+      expect(db.collections.rcsAssessments.find).toHaveBeenCalledWith({ specimenId: 'sample-1' });
+      expect(cursor.sort).toHaveBeenCalledWith({ assessedAt: -1 });
+      expect(assessments).toEqual([{ rcsScore: 95 }, { rcsScore: 70 }]);
+    });
+
+    it('stringifies an object-like specimenId when the sample cannot be resolved', async () => {
+      const db = makeDb({ rcsAssessments: makeCollection('rcsAssessments') });
+      const cursor = makeCursor([]);
+      db.collections.rcsAssessments.find.mockReturnValue(cursor);
+      const objectIdLike = { toString: () => 'sample-1' };
+
+      await sampleService.getRcsAssessments(db, objectIdLike);
+
+      expect(db.collections.rcsAssessments.find).toHaveBeenCalledWith({ specimenId: 'sample-1' });
+    });
+
+    it('propagates an error from the collection query', async () => {
+      const db = makeDb({ rcsAssessments: makeCollection('rcsAssessments') });
+      db.collections.rcsAssessments.find.mockImplementation(() => {
+        throw new Error('mongo down');
+      });
+
+      await expect(sampleService.getRcsAssessments(db, 'sample-1')).rejects.toThrow('mongo down');
+    });
+  });
+
+  // -------------------------------------------------------------------
   describe('findAvailableSamplesForResearch', () => {
     it('forces lifecycleStatus to AVAILABLE even if the caller requests something else', async () => {
       const db = makeDb();

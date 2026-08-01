@@ -12,6 +12,7 @@ const { generateUniqueSpecimenId } = require('../utils/sampleIDGenerator');
 const { appendMovementWithHashChain } = require('../utils/sampleMovementLedger');
 const { getCollection } = require('../utils/collectionResolver');
 const { withMongoTransaction } = require('../utils/mongoTransaction');
+const rcsAssessmentService = require('./rcs-assessment.service');
 const { ObjectId } = require('mongodb');
 
 const LOCATION_REQUIRED_MESSAGE = 'Localização física obrigatória para cadastro de amostra';
@@ -830,6 +831,26 @@ class SampleService {
       return movements;
     } catch (error) {
       logger.error('Erro ao buscar movimentações:', error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Obtém o histórico de snapshots RCS versionados referenciados pela amostra
+   * (#383 — dict-07/dict-08: RCS certificado como entidade separada e
+   * referenciada, não duplicada em Sample). Mais recente primeiro.
+   */
+  async getRcsAssessments(db, specimenId) {
+    try {
+      const samplesCollection = await getCollection(db, 'samples');
+      const sample = await findSampleByAnyId(samplesCollection, specimenId);
+      const specimenIdStr = sample
+        ? sample.specimenId
+        : (specimenId.toString ? specimenId.toString() : specimenId);
+
+      return await rcsAssessmentService.getAssessmentsForSpecimen(db, specimenIdStr);
+    } catch (error) {
+      logger.error('Erro ao buscar snapshots RCS:', error.message);
       throw error;
     }
   }

@@ -117,6 +117,51 @@ encryption at rest for the segregated collection ("cifrar").
 - `merkleRoot`
 - `sprec`
 
+**Not yet landed (follow-up tracked separately):** dict-07/dict-08 call for
+`Specimen` + `SPREC` + `RCS` + storage/custody as four separate canonical
+entities, referenced (not duplicated) from each other — `Sample.js` still
+carries `sprec` and the storage/custody fields (`locationId`, `location`,
+`storageLocation`, `lifecycleStatus`, `availabilityStatus`,
+`quarantineStatus`, ...) directly. `RcsAssessment` below is the first of
+the three separations to land (#383); `SPREC` and storage/custody are
+filed as their own follow-ups.
+
+### RcsAssessment
+
+- `specimenId` (reference to `Specimen`, not a duplicate — dict-07 row 38:
+  "Não duplicar fonte canônica")
+- `modelVersion`
+- `matrixType`
+- `governanceStatus`
+- `governanceFailureReasons`
+- `governanceRuleCodes`
+- `rcsScore`
+- `scoreBasedGrade`
+- `finalGrade`
+- `gradeRoute`
+- `axisPenalties`
+- `calculationTrace`
+- `assessedAt` (each `certify()` run is its own versioned snapshot, per
+  dict-07's "usar referências e snapshots versionados" — multiple
+  documents may exist per `specimenId`, newest first)
+
+**Landed in #383:** the entity/collection (`rcsAssessments`) exists;
+`import.service.js`'s CSV/XLSX sample-import path records a snapshot
+alongside every RCS certification it computes, referenced by
+`specimenId`; `GET /api/samples/:id/rcs-assessments` resolves the
+versioned history for a specimen (mirrors the existing
+`SampleMovement`/`GET /:id/movements` pattern).
+
+**Not yet landed (follow-up tracked separately):** `Sample.js` still
+carries its own embedded copy of the same RCS fields (`rcsScore`,
+`rcsEvaluation`, `calculationTrace`, `axisPenalties`, ...) — removing
+that duplication requires migrating every consumer that reads RCS data
+directly off `Sample` (MerkleService, neo4j canonical projection,
+frontend types, the live `POST /api/samples` registration path, which
+doesn't compute RCS server-side at all today). Also outstanding: the
+JSON-import branch of `importSamples` doesn't compute or record RCS
+either (only the CSV/XLSX branch does).
+
 ### Consent
 
 - `consentId` (internal identity of the consent instance, distinct from
@@ -226,7 +271,9 @@ The following files still contain residual aliases or transitional naming and ar
 ## Deferred Cleanup Plan
 
 - PR 100 - Canonicalize participant flow
-- PR 101 - Canonicalize specimen, custody and storage flow
+- PR 101 - Canonicalize specimen, custody and storage flow (RCS entity
+  separation landed in #383; SPREC and storage/custody separation still
+  outstanding, see `### RcsAssessment`'s "Not yet landed" note)
 - PR 102 - Canonicalize frontend intake and active views
 - PR 103 - Remove inactive legacy runtime files
 - PR 104 - Build aggregate/domain matrix

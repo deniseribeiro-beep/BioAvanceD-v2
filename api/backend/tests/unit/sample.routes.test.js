@@ -968,6 +968,39 @@ describe('sample.routes', () => {
     });
   });
 
+  describe('GET /:id/rcs-assessments', () => {
+    it('returns 503 when db is unavailable', async () => {
+      const { router } = loadRoute();
+      const app = buildApp(router, null);
+
+      const res = await request(app).get('/api/samples/s1/rcs-assessments');
+
+      expect(res.status).toBe(503);
+    });
+
+    it('returns versioned RCS snapshots on success', async () => {
+      const getRcsAssessments = vi.fn().mockResolvedValue([{ rcsScore: 92, finalGrade: 'A' }]);
+      const { router } = loadRoute({ sampleServiceOverrides: { getRcsAssessments } });
+      const app = buildApp(router, {});
+
+      const res = await request(app).get('/api/samples/s1/rcs-assessments');
+
+      expect(res.status).toBe(200);
+      expect(res.body.data).toEqual([{ rcsScore: 92, finalGrade: 'A' }]);
+      expect(getRcsAssessments).toHaveBeenCalledWith({}, 's1');
+    });
+
+    it('returns 500 when the service throws', async () => {
+      const getRcsAssessments = vi.fn().mockRejectedValue(new Error('db down'));
+      const { router } = loadRoute({ sampleServiceOverrides: { getRcsAssessments } });
+      const app = buildApp(router, {});
+
+      const res = await request(app).get('/api/samples/s1/rcs-assessments');
+
+      expect(res.status).toBe(500);
+    });
+  });
+
   describe('GET /:id/miabis-compliance', () => {
     it('returns 200 with the compliance report', async () => {
       const validateMiabisCompliance = vi.fn().mockResolvedValue({ compliant: true, missing: [] });
