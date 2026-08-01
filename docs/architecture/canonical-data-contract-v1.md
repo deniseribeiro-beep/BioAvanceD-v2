@@ -227,7 +227,7 @@ pass-through values with no prior source. `preCentrifugationDelay`
 canonical names for the `preCentrifugation`/`centrifugation` slots — stay
 out of scope for the same reason #392 didn't touch them: it only added
 the fields explicitly missing, not a full rename of the fluid axis to
-its canonical names.
+its canonical names (tracked in #396).
 
 **Not yet landed (follow-up tracked separately):** `Sample.js` still
 carries its own embedded `sprec` copy (only the axis slots +
