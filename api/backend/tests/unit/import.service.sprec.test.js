@@ -256,4 +256,85 @@ describe('ImportService SPREC import', () => {
     expect(recorded.sampleType).toBe(insertedSample.sprec.sampleType);
     expect(recorded.primaryContainer).toBe(insertedSample.sprec.primaryContainer);
   });
+
+  it('parses sprec_code/sprec_version (ELM-0145/0146) and records dict-02\'s fuller canonical field set (#392)', async () => {
+    const specimenPreanalyticsCollection = {
+      insertOne: vi.fn().mockResolvedValue({ insertedId: 'profile-2' }),
+    };
+    db.collection = (name) => {
+      if (name === 'samples') return samplesCollection;
+      if (name === 'specimenPreanalytics') return specimenPreanalyticsCollection;
+      throw new Error(`Unexpected collection name: ${name}`);
+    };
+
+    const csvPath = path.join(tempDir, 'samples-sprec-canonical-fluid.csv');
+    const csvContent = [
+      'participantId,sampleType,sampleOrigin,extractionProtocol,quantity,quality,registeredAt,linkedProject,'
+        + 'sprec_matrix_type,sprec_sample_type,sprec_primary_container,sprec_pre_centrifugation,sprec_centrifugation,'
+        + 'sprec_second_centrifugation,sprec_post_centrifugation_delay,sprec_long_term_storage,sprec_code,sprec_version',
+      '12345678,PLASMA,VENOUS_BLOOD,TUBE_EDTA,1.5,GOOD,2026-01-01,Projeto QA,'
+        + 'fluid,BLD,PED,C,A,D,E,F,BLD-PED-C-A-D-E-F,2.0',
+    ].join('\n');
+    fs.writeFileSync(csvPath, csvContent, 'utf8');
+
+    const result = await importService.importSamples(db, {
+      originalname: 'samples-sprec-canonical-fluid.csv',
+      mimetype: 'text/csv',
+      path: csvPath,
+    });
+
+    expect(result.success).toBe(1);
+    const recorded = specimenPreanalyticsCollection.insertOne.mock.calls[0][0];
+
+    expect(recorded.sprecCode).toBe('BLD-PED-C-A-D-E-F');
+    expect(recorded.sprecVersion).toBe('2.0');
+    expect(recorded.sprecProfileId).toEqual(expect.any(String));
+    expect(recorded.sprecProfileId.length).toBeGreaterThan(0);
+    expect(recorded.profileStatus).toBe('draft');
+    expect(recorded.sprecSpecimenType).toBe('BLD');
+    expect(recorded.sprecPrimaryContainer).toBe('PED');
+    expect(recorded.sprecCollectionType).toBeNull();
+    expect(recorded.warmIschemiaTime).toBeNull();
+    expect(recorded.coldIschemiaTime).toBeNull();
+    expect(recorded.fixationStabilizationType).toBeNull();
+    expect(recorded.fixationTime).toBeNull();
+  });
+
+  it('derives the solid-matrix canonical fields (ELM-0149, 0154-0157) from the same positional columns when matrixType is solid (#392)', async () => {
+    const specimenPreanalyticsCollection = {
+      insertOne: vi.fn().mockResolvedValue({ insertedId: 'profile-3' }),
+    };
+    db.collection = (name) => {
+      if (name === 'samples') return samplesCollection;
+      if (name === 'specimenPreanalytics') return specimenPreanalyticsCollection;
+      throw new Error(`Unexpected collection name: ${name}`);
+    };
+
+    const csvPath = path.join(tempDir, 'samples-sprec-canonical-solid.csv');
+    const csvContent = [
+      'participantId,sampleType,sampleOrigin,extractionProtocol,quantity,quality,registeredAt,linkedProject,'
+        + 'sprec_matrix_type,sprec_sample_type,sprec_primary_container,sprec_pre_centrifugation,sprec_centrifugation,'
+        + 'sprec_second_centrifugation,sprec_post_centrifugation_delay,sprec_long_term_storage',
+      '87654321,TISSUE_FRESH,VENOUS_BLOOD,TUBE_EDTA,1.0,GOOD,2026-01-01,Projeto QA,'
+        + 'solid,TIS,BPS,B,C,NBF,D,G',
+    ].join('\n');
+    fs.writeFileSync(csvPath, csvContent, 'utf8');
+
+    const result = await importService.importSamples(db, {
+      originalname: 'samples-sprec-canonical-solid.csv',
+      mimetype: 'text/csv',
+      path: csvPath,
+    });
+
+    expect(result.success).toBe(1);
+    const recorded = specimenPreanalyticsCollection.insertOne.mock.calls[0][0];
+
+    expect(recorded.sprecSpecimenType).toBe('TIS');
+    expect(recorded.sprecCollectionType).toBe('BPS');
+    expect(recorded.sprecPrimaryContainer).toBeNull();
+    expect(recorded.warmIschemiaTime).toBe('B');
+    expect(recorded.coldIschemiaTime).toBe('C');
+    expect(recorded.fixationStabilizationType).toBe('NBF');
+    expect(recorded.fixationTime).toBe('D');
+  });
 });
