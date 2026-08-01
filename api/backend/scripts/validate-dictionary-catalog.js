@@ -1,4 +1,7 @@
+const fs = require('fs');
+const crypto = require('crypto');
 const canonicalDictionary = require('../src/reference-data/canonical-dictionary');
+const { parseDictionary, SOURCE_MD } = require('./generate-dictionary-catalog');
 
 /**
  * RF022 follow-up (#381): dict-08_MAIN_GAPS.md's Foundation Data Pipeline
@@ -24,6 +27,16 @@ function main() {
   }
   if (completeness.missingRequiredFieldIds.length) {
     messages.push(`Elements missing entity/field/cardinality/phase: ${completeness.missingRequiredFieldIds.join(', ')}`);
+  }
+
+  // The checksum above is computed from the checked-in catalog.1.3.0.json —
+  // it can't, by itself, tell you that JSON is stale relative to
+  // dict-02_DICIONARIO.md. Re-parse the source directly and compare so an
+  // edited dictionary with a forgotten regeneration fails here.
+  const freshCatalog = parseDictionary(fs.readFileSync(SOURCE_MD, 'utf8'));
+  const freshChecksum = crypto.createHash('sha256').update(JSON.stringify(freshCatalog)).digest('hex');
+  if (freshChecksum !== canonicalDictionary.dictionaryChecksum()) {
+    messages.push('catalog.1.3.0.json is stale relative to dict-02_DICIONARIO.md — run `npm run dictionary:generate`.');
   }
 
   if (messages.length) fail(messages);

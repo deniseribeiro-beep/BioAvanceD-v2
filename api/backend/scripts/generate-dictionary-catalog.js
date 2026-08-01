@@ -83,4 +83,4 @@ if (require.main === module) {
   main();
 }
 
-module.exports = { parseDictionary, parseRow, splitRow, COLUMNS };
+module.exports = { parseDictionary, parseRow, splitRow, COLUMNS, SOURCE_MD, OUTPUT_JSON };
