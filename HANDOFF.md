@@ -1,99 +1,78 @@
 # HANDOFF
 
-**Written:** 2026-08-01, after closing #375 (arch tests node:test/ESM
-mismatch, `fix-bugs`, Docker on) on `feature/docker-e2e-backend-integration`.
+**Written:** 2026-08-01, after closing #393 (arch-test runner flip-flop
+guard, `resolve-issue`, no Docker needed) on
+`feature/docker-e2e-backend-integration`.
 
 ## What happened this session
 
-Picked up via `work-issue` (no specific issue named). Fresh backlog: only
-two `bug`-labeled issues remained, #375 and #369 (same pair as the prior
-session's handoff — nothing changed upstream). Chose **#375**: clear,
-already-locally-reproduced defect with two documented candidate fixes,
-over #369 (unpinned, needs open-ended investigation, cosmetic/logging).
+Continuation of the same day's prior session (which closed #375 and
+filed #393 as a follow-on finding). Dennis picked up #393 directly by
+name — no backlog triage needed this time.
 
-**Root cause:** all 8 `tests/architecture/*.arch.test.js` files imported
-vitest's `test`/`expect` via ESM `import`, but `package.json` is
-`"type": "commonjs"` and `test:architecture` runs them via plain
-`node --test`, which can't parse ESM `import`.
-
-**Fix direction settled by checking docs first** (fix-bugs' verify-before-
-deferring rule): `README.md`'s Test Strategy section explicitly names
-`node --test` as the deliberate, canonical runner for this directory
-("Vitest e Playwright legados permanecem fora do contrato atual") — so
-converted the 8 files to `node:test`/`node:assert` (mechanical matcher
-mapping; `expect.assertions(3)` replaced with an explicit `threw`-flag
-assertion) rather than dropping the script.
-
-**Second-order break caught and fixed in the same commit:** converting
-away from vitest's own `test()` meant vitest's default glob (any
-`*.test.js`) started reporting "No test suite found in file" on all 8
-files — would have broken `npm run test:unit:vitest`/`npm test`. Fixed
-by excluding `tests/architecture/**` in `vitest.config.js`, matching the
-same file's existing `tests/e2e/**` exclusion.
-
-**Landed** (`fix/375-arch-tests-node-test-esm`, merged into
-`feature/docker-e2e-backend-integration` at `e9340945`):
-
-- 8 files under `api/backend/tests/architecture/*.arch.test.js`: ported
-  to `node:test`/`node:assert`.
-- `api/backend/vitest.config.js`: added `tests/architecture/**` to
-  `exclude`.
-- Verified: `npm run test:architecture` 19/19 via `node --test`; full
-  `npm run current-state:ci` chain (architecture tests + essential-seed
-  validation + dictionary validation 929/929 + seed dry-run + compliance
-  evidence generation) green end to end, per the issue's own ask; a
-  normal vitest file run confirms the config edit didn't break vitest
-  itself; `npm run lint` clean (311 files) — both pre- and post-merge.
-
-**Issue #375 closed**, comment notes the trace, both fixes, and
-verification. Fix branch deleted (local + remote).
-
-**Significant finding filed as #393** (BioAvanceD-v2): this exact
-node:test-vs-vitest tension has now flip-flopped **four times**
-(#138→#148/#182→[undated README contract flip]→#375), each round fixing
+**#393's problem:** the node:test-vs-vitest runner choice for
+`tests/architecture/*.arch.test.js` had flip-flopped four times (#138 →
+#148/#182 → an undated README contract flip → #375), each round fixing
 the symptom for whichever runner was canonical *at that moment* with no
-record of *why*, and no guard against reverting. A future session
-searching "vitest reports 0 tests in this directory" (the literal
-symptom #148/#182 describe) could easily re-port these files to vitest
-and reintroduce #375 a second time. Suggested a comment or mechanical
-guard in the affected files pointing at this history — not attempted
-this session, kept separate from #375's own scope.
+record of *why*, and no guard against reverting.
+
+**Fix, per the issue's own suggested resolution:**
+
+- Added a 3-line header comment to all 8 existing
+  `tests/architecture/*.arch.test.js` files stating they're
+  `node:test`-only per `README.md`'s Test Strategy contract, pointing at
+  #138/#148/#182/#375/#393.
+- Added a 9th file, `test-runner-contract.arch.test.js` — a mechanical
+  guard that fails if any sibling file in the directory imports from
+  `vitest`, so a future re-port attempt is caught by the test suite
+  itself, not just a comment.
+- No `vitest.config.js` change needed: its existing
+  `tests/architecture/**` exclude is directory-level and already covers
+  the new file.
+
+**Landed** (`fix/393-arch-test-runner-guard`, merged into
+`feature/docker-e2e-backend-integration` at `2f84d2cc`, commit
+`993309a1`):
+
+- Verified: `npm run test:architecture` 20/20 via `node --test` (19 → 20,
+  +1 for the new guard test), both on the fix branch and after merging;
+  `npm run lint` clean (311 files — lint only scans `src`/`scripts`, so
+  the new test file doesn't move that count).
+
+**Issue #393 closed** (had to be closed manually via
+`gh issue close --comment` — the `Closes #393` in the commit message
+only auto-closes on a direct merge to `main`, and this merged into the
+integration branch instead). Fix branch deleted (local + remote).
 
 ## Repo state
 
-- **`feature/docker-e2e-backend-integration`**: at `e9340945`, **in sync
+- **`feature/docker-e2e-backend-integration`**: at `2f84d2cc`, **in sync
   with origin** (nothing outstanding to push). Working tree clean except
   the pre-existing `catalog.1.3.0.json` phantom line-ending diff (#391 —
-  confirmed no-op again this session, still open/unfixed).
-- Issues: **#375 closed** (`e9340945` noted in the close comment).
-  **#393 opened** (BioAvanceD-v2, open — the flip-flop-history finding
-  above).
-- `fix/375-arch-tests-node-test-esm` (merged) deleted, local + remote.
+  still open/unfixed, still a no-op, untouched again this session).
+- Issues: **#393 closed** (`2f84d2cc` / `993309a1` noted in the close
+  comment).
+- `fix/393-arch-test-runner-guard` (merged) deleted, local + remote.
 - Untouched from before: **#389** (storage/custody separation, open),
   **#390** (multi-consumer migration, open, depends on #383+#388+#389),
   **#391** (`.gitattributes` phantom-diff fix, open, small/mechanical),
   **#392** (dict-02's fuller SpecimenPreanalytics fields, open,
   build-loop sized), **#369** (audit-logger log-flood, needs
-  investigation before it's fixable). Local branch hygiene (swept last
-  session): everything merged except `test/377-docs-on-main`, tracked by
-  still-open **#379** — not lost work.
+  investigation before it's fixable — now the only remaining
+  `bug`-labeled issue). Local branch hygiene unchanged: everything
+  merged except `test/377-docs-on-main`, tracked by still-open **#379**.
 
 ## Blocking next step
 
 None. Nothing queued as blocking.
 
-No next issue queued explicitly by Dennis. **#393** (the flip-flop
-comment/guard) is the closest, cheapest continuation of this session's
-own find — small, in the same files just touched — but that's an
-inference, not something Dennis said. **#369** is the only other
-remaining `bug`-labeled issue.
+No next issue queued explicitly by Dennis. **#369** (audit-logger log
+flood) is the only remaining `bug`-labeled issue, but it's unpinned and
+needs investigation before it's even fixable — not a quick pickup like
+#393 was.
 
 ## Which skills to use
 
-- **#393** (arch-test flip-flop guard): small — `resolve-issue`. Add a
-  comment (or a lint/architecture-test guard) to the 8 files pointing at
-  this issue and #138/#148/#182/#375 so a future session doesn't re-port
-  them to vitest.
 - **#369** (audit-logger log flood): `fix-bugs`, but budget time for
   investigation first — no pinned test, root cause/call site not yet
   identified.
