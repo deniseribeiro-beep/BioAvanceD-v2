@@ -193,6 +193,24 @@ describe('audit-v2.service', () => {
       expect(mongo.connectDB).not.toHaveBeenCalled();
       expect(mongo.closeConnection).not.toHaveBeenCalled();
     });
+
+    it('canonicalizes a Date instance for createdAt instead of throwing (#369 — LogModel.create() always sets createdAt to `new Date()`, not a string)', async () => {
+      const db = makeDb();
+      mongo.connectDB.mockResolvedValue(db);
+
+      const createdAt = new Date('2026-01-04T00:00:00.000Z');
+      const logRecord = {
+        _id: 'rec-2',
+        timestampISO: '2026-01-04T00:00:00.000Z',
+        createdAt,
+        action: 'CREATE',
+        entity: 'Patient',
+      };
+
+      const result = await auditV2Service.ingestLogRecord(logRecord);
+
+      expect(result.recordedAt).toBe(createdAt.toISOString());
+    });
   });
 
   describe('createTreeHead', () => {
