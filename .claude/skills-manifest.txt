@@ -23,6 +23,7 @@ agent-delegation
 merge-from-main
 verify-intent
 wrap-up
+handoff
 clean-up
 # Authoring law and scope-splitting, extracted out of 17 SKILL.md files by
 # pack #65/#66. Without these installed this repo lost the prose without
