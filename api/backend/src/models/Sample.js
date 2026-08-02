@@ -152,7 +152,7 @@ class SampleModel {
       calculationTrace: data.calculationTrace ?? null,
       rcsEvaluation: data.rcsEvaluation ?? null,
       externalQualityAssessment: data.externalQualityAssessment ?? null,
-      locationId: data.locationId ?? null,
+      locationID: data.locationID ?? null,
       linkedProject: data.linkedProject,
       collectionSite: data.collectionSite || null,
       sprec: data.sprec ?? null,

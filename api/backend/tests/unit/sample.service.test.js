@@ -115,6 +115,16 @@ describe('sample.service', () => {
       expect(movementArg.type).toBe('create');
     });
 
+    it('persists the validated locationID on the created sample, per issue #403', async () => {
+      const db = makeDb();
+      mockOperationalLocation(db);
+
+      await sampleService.createSample(db, validSampleData({ locationID: 7 }));
+
+      const [insertedSample] = db.collections.samples.insertOne.mock.calls[0];
+      expect(insertedSample.locationID).toBe(7);
+    });
+
     it('rejects with 422 when required MIABIS fields are missing', async () => {
       const db = makeDb();
       const bad = validSampleData();
