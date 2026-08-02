@@ -79,10 +79,37 @@ test narrowly; worked around by dropping `-t` and running the whole file
 repo is pack-deployed (Rule 0), so filed against the pack repo instead of
 edited through the junction.
 
-**Workflow friction this session:** the hook false-positive above (its
-own destination is the pack issue, not a rule change here). No scope
-creep, no lazy fixes — the only files touched were `Sample.js`,
-`sample.service.test.js`, plus this rotation.
+**Second, more consequential finding:**
+[dyeallpies-skills-pack#199](https://github.com/DyeAllPies/dyeallpies-skills-pack/issues/199)
+— this repo's deployed `.claude/hooks/edit-branch-guard.cjs` is stale
+relative to the pack. The very block described below (HANDOFF.md
+requiring the full branch-cycle) was already fixed upstream in
+[dyeallpies-skills-pack#190](https://github.com/DyeAllPies/dyeallpies-skills-pack/issues/190),
+closed the same day (`a52f54c`) — that fix adds a `CONTINUITY_NOTE`
+exemption letting a solo `HANDOFF.md` edit land directly on a protected
+branch. Confirmed by diffing the pack's committed
+`projects/bioavanced-v2/assets/hooks/edit-branch-guard.cjs` (has the
+exemption) against this repo's actually-deployed copy (does not) — the
+deployed file's mtime predates #190's close, so this isn't a false
+alarm. Root cause: `install-assets.ps1` was never re-run in BioAvanceD-v2
+after #190 landed, and nothing signals that drift. **This means the
+prior paragraph in this same rotation was wrong when first written** —
+the branch-cycle requirement for HANDOFF.md is *not* the deliberate,
+unexempted standard rule; the exemption exists upstream and just isn't
+synced here yet. **`install-assets.ps1` has NOT been run this
+session** — offered to Dennis, he asked to check staleness and then file
+the tracking issue instead of running it immediately, so the next
+session should either run it (`cd` to the pack repo, run
+`install-assets.ps1` against this repo) or ask Dennis whether he wants
+to do it himself.
+
+**Workflow friction this session:** the two hook findings above (their
+destination is the pack issues, not a rule change here — though #199 in
+particular means the *next* session may not need the branch-cycle
+workaround at all once `install-assets.ps1` runs). No scope creep, no
+lazy fixes — the only files touched were `Sample.js`,
+`sample.service.test.js`, plus this rotation (now split across two
+small branches, see below).
 
 ## Repo state
 
@@ -91,21 +118,21 @@ creep, no lazy fixes — the only files touched were `Sample.js`,
   `5f601172`) and pushed to origin. Branch
   `fix/403-sample-locationid-case-mismatch` merged, closed out, deleted
   (local + remote — both deletes went through clean this session, no
-  classifier block). This HANDOFF rotation landed on a fresh
-  `test/403-handoff-rotation` branch — `edit-branch-guard.cjs` blocked
-  the first attempt to write it directly on
-  `feature/docker-e2e-backend-integration`, confirming (not
-  contradicting) the standard rule: HANDOFF.md is a normal root-level
-  doc, not exempt via any `.claude/`-adjacent-maintenance carve-out —
-  should be merged in and the branch deleted once this commit lands,
-  same as prior rotations.
+  classifier block). This HANDOFF rotation landed on **two** small
+  branches in sequence, both merged and deleted the same way: an initial
+  `test/403-handoff-rotation` (blocked from a direct edit by the
+  still-undeployed `edit-branch-guard.cjs`, as described above), then a
+  follow-up `test/403-handoff-addendum` for this section's #199 update
+  after the staleness was confirmed mid-conversation.
 - Issues: **#403 closed** (merge to main still pending — noted explicitly
   in the close comment, consistent with every prior rotation). **#389
   open** (tracking issue for the storage/custody series, unchanged).
   **#398, #399, #401, #402 all still open, all unstarted** (unchanged
   from prior handoff).
-- Pack repo (`dyeallpies-skills-pack`): new issue **#198** filed (hook
-  false-positive, see above). Not this repo's concern to resolve.
+- Pack repo (`dyeallpies-skills-pack`): new issues **#198** and **#199**
+  filed (hook false-positive and deployed-hook staleness, see above).
+  Not this repo's concern to resolve, but **#199 has a concrete unfinished
+  action item for this repo**: run `install-assets.ps1` to sync.
 - No other branches created, merged, or deleted this session.
 - Untouched from before: `test/392-specimen-preanalytics-canonical-fields`
   (merged, from an earlier session) — still presumed on origin, not
