@@ -216,32 +216,6 @@ class SampleService {
         throw createSampleValidationError(`Localização física sem sensor operacional associado.${statusMessage}`);
       }
 
-      // Valida conflito físico de localização (freezer/rack/box/position)
-      const hasLocationDetails = sampleData.location &&
-        sampleData.location.freezer !== undefined &&
-        sampleData.location.rack !== undefined &&
-        sampleData.location.box !== undefined &&
-        sampleData.location.position !== undefined;
-
-      if (hasLocationDetails) {
-        const conflict = await samplesCollection.findOne({
-          'location.freezer': sampleData.location.freezer,
-          'location.rack': sampleData.location.rack,
-          'location.box': sampleData.location.box,
-          'location.position': sampleData.location.position,
-          'location.status': 'Occupied'
-        });
-
-        if (conflict) {
-          const err = new Error(`Posição [${sampleData.location.position}] já ocupada pelo espécime [${conflict.specimenId || conflict._id?.toString()}]`);
-          err.status = 409;
-          throw err;
-        }
-
-        // Marca a nova alocação como ocupada
-        sampleData.location.status = 'Occupied';
-      }
-
       // Gera código de barras automaticamente se não fornecido
       if (!sampleData.barcode || (typeof sampleData.barcode === 'string' && sampleData.barcode.trim() === '')) {
         sampleData.barcode = await generateUniqueBarcode(db, 'samples');

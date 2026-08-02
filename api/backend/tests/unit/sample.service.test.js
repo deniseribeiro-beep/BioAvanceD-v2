@@ -192,24 +192,6 @@ describe('sample.service', () => {
       ).rejects.toMatchObject({ statusCode: 422 });
     });
 
-    it('rejects with 409 when the physical storage position is already occupied', async () => {
-      const db = makeDb();
-      mockOperationalLocation(db);
-      db.collections.samples.findOne.mockImplementation((query) => {
-        if (query && query['location.status'] === 'Occupied') {
-          return Promise.resolve({ specimenId: 'other-sample' });
-        }
-        return Promise.resolve(null);
-      });
-
-      await expect(
-        sampleService.createSample(
-          db,
-          validSampleData({ location: { freezer: 'F1', rack: 'R1', box: 'B1', position: 'A1' } })
-        )
-      ).rejects.toMatchObject({ status: 409 });
-    });
-
     it('resolves collectionSite (ELM-0128) against a real Organization and stores it', async () => {
       const db = makeDb({ organizations: makeCollection('organizations') });
       mockOperationalLocation(db);
@@ -331,7 +313,7 @@ describe('sample.service', () => {
       ).rejects.toThrow(/Sensor atual está em status maintenance/);
     });
 
-    it('marks the physical position as Occupied when no conflict exists', async () => {
+    it('does not persist a client-supplied legacy location object (#400 — severed in favor of storageLocation/storageBoxes)', async () => {
       const db = makeDb();
       mockOperationalLocation(db);
       const location = { freezer: 'F1', rack: 'R1', box: 'B1', position: 'A1' };
@@ -339,7 +321,7 @@ describe('sample.service', () => {
       await sampleService.createSample(db, validSampleData({ location }));
 
       const [insertedSample] = db.collections.samples.insertOne.mock.calls[0];
-      expect(insertedSample.location.status).toBe('Occupied');
+      expect(insertedSample.location).toBeUndefined();
     });
 
     it('generates a barcode automatically when none is provided', async () => {
