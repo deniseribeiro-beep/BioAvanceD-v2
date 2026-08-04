@@ -17,6 +17,8 @@ function makeCollection(overrides = {}) {
 function makeDb(collections) {
   const defaults = {
     storagePaths: makeCollection({ findOne: vi.fn().mockResolvedValue(null) }),
+    storageContainers: makeCollection({ findOne: vi.fn().mockResolvedValue(null) }),
+    rooms: makeCollection({ findOne: vi.fn().mockResolvedValue(null) }),
     storageAssignments: makeCollection({
       insertOne: vi.fn().mockResolvedValue({ insertedId: 'stub' }),
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 })
@@ -28,6 +30,80 @@ function makeDb(collections) {
 }
 
 describe('MongoStorageRepository', () => {
+  describe('findStorageHierarchyForBox', () => {
+    // Issue #418: dict-02 StorageAssignment.facilityId/roomId (ELM-0168/0169)
+    // must resolve via the FREEZER's roomId -> Room.facilityId chain, not
+    // stay hardcoded null like #402 left them.
+    it('resolves facilityId/roomId via the freezer storageContainer and room (#418)', async () => {
+      const boxObjId = new ObjectId();
+      const freezerId = new ObjectId();
+      const roomId = new ObjectId();
+      const facilityId = new ObjectId();
+
+      const storagePaths = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce({
+          rackId: new ObjectId(),
+          shelfId: new ObjectId(),
+          freezerId
+        })
+      });
+      const storageContainers = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce({ _id: freezerId, roomId })
+      });
+      const rooms = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce({ _id: roomId, facilityId })
+      });
+      const db = makeDb({ storagePaths, storageContainers, rooms });
+      const repo = new MongoStorageRepository(db);
+
+      const result = await repo.findStorageHierarchyForBox(boxObjId, {});
+
+      expect(result.facilityId).toBe(String(facilityId));
+      expect(result.roomId).toBe(String(roomId));
+    });
+
+    it('leaves facilityId/roomId null when the freezer has no roomId', async () => {
+      const boxObjId = new ObjectId();
+      const freezerId = new ObjectId();
+
+      const storagePaths = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce({
+          rackId: new ObjectId(),
+          shelfId: new ObjectId(),
+          freezerId
+        })
+      });
+      const storageContainers = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce({ _id: freezerId, roomId: null })
+      });
+      const db = makeDb({ storagePaths, storageContainers });
+      const repo = new MongoStorageRepository(db);
+
+      const result = await repo.findStorageHierarchyForBox(boxObjId, {});
+
+      expect(result.facilityId).toBeNull();
+      expect(result.roomId).toBeNull();
+    });
+
+    it('leaves facilityId/roomId null when there is no StoragePath at all', async () => {
+      const boxObjId = new ObjectId();
+      const storagePaths = makeCollection({ findOne: vi.fn().mockResolvedValueOnce(null) });
+      const db = makeDb({ storagePaths });
+      const repo = new MongoStorageRepository(db);
+
+      const result = await repo.findStorageHierarchyForBox(boxObjId, {});
+
+      expect(result).toEqual({
+        rackId: null,
+        shelfId: null,
+        equipmentId: null,
+        roomId: null,
+        facilityId: null
+      });
+    });
+  });
+
+
   describe('toObjectId', () => {
     it('converts a valid ObjectId string', () => {
       const repo = new MongoStorageRepository(makeDb({}));
