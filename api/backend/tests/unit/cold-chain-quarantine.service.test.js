@@ -180,13 +180,20 @@ describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
 
   it('incidente resolvido mantém amostras para revisão e não libera automaticamente', async () => {
     const incidentId = new ObjectId();
+    const sampleId = new ObjectId();
     const collections = {
       samples: makeCollection([{
-        _id: new ObjectId(),
+        _id: sampleId,
         coldChainIncidentId: String(incidentId),
         quarantineReasonCode: 'COLD_CHAIN_INCIDENT',
         release_status: 'QUARANTINE',
         status: 'QUARANTINED',
+      }]),
+      quarantineActions: makeCollection([{
+        quarantineActionId: 'QA-EXISTING',
+        specimenIds: [String(sampleId)],
+        actionStatus: 'active',
+        startedAt: new Date('2026-01-01'),
       }]),
     };
     const db = buildDb(collections);
@@ -207,6 +214,8 @@ describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
     expect(update.status).not.toBe('AVAILABLE');
     expect(update.release_status).not.toBe('AVAILABLE');
     expect(update.availabilityStatus).not.toBe('AVAILABLE');
+
+    expect(collections.quarantineActions.docs[0].actionStatus).toBe('pending_review');
   });
 
   it('short-circuits with reason "missing-sensor-key" when the incident has no sensorKey/sensorId/sensorID', async () => {

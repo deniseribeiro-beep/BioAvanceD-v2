@@ -15,12 +15,21 @@ vi.spyOn(SampleMovementModel, 'generateMovementID').mockResolvedValue('MOV-1');
 vi.spyOn(SampleMovementModel, 'create').mockImplementation((payload) => payload);
 
 const servicePath = require.resolve('../../src/services/equipment-sensor-quarantine.service');
-let service = require(servicePath);
+const quarantineActionServicePath = require.resolve('../../src/services/quarantine-action.service');
 
 function reloadServiceWithFreshBinding() {
+  // quarantine-action.service.js also destructures `getCollection` at
+  // module scope, and Node's real require cache (via createRequire) is
+  // shared across test files in this worker — if it loaded before this
+  // file's spy was installed, its binding stays unspied forever unless
+  // busted here too, not just the service under test.
+  delete require.cache[quarantineActionServicePath];
   delete require.cache[servicePath];
   service = require(servicePath);
 }
+
+let service = require(servicePath);
+reloadServiceWithFreshBinding();
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -73,10 +82,12 @@ describe('equipment-sensor-quarantine.service', () => {
         updateOne: vi.fn(async () => ({ matchedCount: 1 }))
       };
       const movementsCollection = { insertOne: vi.fn(async () => ({ insertedId: 'M1' })) };
+      const quarantineActionsCollection = { insertOne: vi.fn(async () => ({ insertedId: 'QA1' })) };
 
       collectionResolverModule.getCollection.mockImplementation(async (_db, key) => {
         if (key === 'samples') return samplesCollection;
         if (key === 'sampleMovements') return movementsCollection;
+        if (key === 'quarantineActions') return quarantineActionsCollection;
         throw new Error(`unexpected key ${key}`);
       });
 
@@ -98,12 +109,23 @@ describe('equipment-sensor-quarantine.service', () => {
             status: 'QUARANTINED',
             currentStatus: 'QUARANTINED',
             release_status: 'QUARANTINE',
+            specimenStatus: 'quarantined',
+            lifecycleStatus: 'QUARANTINED',
+            availabilityStatus: 'BLOCKED',
             quarantineSource: 'equipment',
             quarantineSourceId: '42',
             location: expect.objectContaining({ area: 'Quarentena', status: 'Quarantine' })
           })
         },
         undefined
+      );
+
+      expect(quarantineActionsCollection.insertOne).toHaveBeenCalledWith(
+        expect.objectContaining({
+          specimenIds: ['S1'],
+          reasonCodes: ['equipment'],
+          actionStatus: 'active'
+        })
       );
 
       expect(SampleMovementModel.generateMovementID).toHaveBeenCalledWith(db);
@@ -179,10 +201,12 @@ describe('equipment-sensor-quarantine.service', () => {
         updateOne: vi.fn(async () => ({ matchedCount: 1 }))
       };
       const movementsCollection = { insertOne: vi.fn(async () => ({ insertedId: 'M2' })) };
+      const quarantineActionsCollection = { insertOne: vi.fn(async () => ({ insertedId: 'QA2' })) };
 
       collectionResolverModule.getCollection.mockImplementation(async (_db, key) => {
         if (key === 'samples') return samplesCollection;
         if (key === 'sampleMovements') return movementsCollection;
+        if (key === 'quarantineActions') return quarantineActionsCollection;
         throw new Error(`unexpected key ${key}`);
       });
 

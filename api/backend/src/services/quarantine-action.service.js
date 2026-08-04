@@ -45,8 +45,32 @@ async function releaseActiveAction(db, specimenId, authorizedBy, releasedAt = ne
   return released;
 }
 
+/**
+ * Cold-chain incident resolved but samples still need human review before
+ * release (RF019's AC#7 authorized-release gate isn't satisfied yet) —
+ * moves the most recent still-active action covering the specimen to
+ * `pending_review` without releasing it.
+ */
+async function markPendingReview(db, specimenId) {
+  const collection = await getCollection(db, 'quarantineActions');
+  const active = await collection
+    .find({ specimenIds: String(specimenId), actionStatus: 'active' })
+    .sort({ startedAt: -1 })
+    .toArray();
+  const current = active[0];
+  if (!current) return null;
+
+  const updated = { ...current, actionStatus: 'pending_review' };
+  await collection.updateOne(
+    { quarantineActionId: current.quarantineActionId },
+    { $set: { actionStatus: updated.actionStatus } }
+  );
+  return updated;
+}
+
 module.exports = {
   recordAction,
   getActionsForSpecimen,
   releaseActiveAction,
+  markPendingReview,
 };

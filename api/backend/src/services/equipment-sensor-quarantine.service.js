@@ -1,7 +1,9 @@
 const { ObjectId } = require('mongodb');
 const SampleMovementModel = require('../models/SampleMovement');
+const { SampleModel } = require('../models/Sample');
 const { appendMovementWithHashChain } = require('../utils/sampleMovementLedger');
 const { getCollection } = require('../utils/collectionResolver');
+const quarantineActionService = require('./quarantine-action.service');
 const logger = require('../utils/logger');
 
 const QUARANTINE_TRIGGER_STATUSES = new Set([
@@ -248,11 +250,15 @@ async function quarantineSamplesByFilter(db, filter, context = {}) {
 
   for (const sample of samples) {
     const sampleId = String(sample._id);
+    const specimenStatus = 'quarantined';
+    const { lifecycleStatus, availabilityStatus } = SampleModel.deriveLegacyStatuses(specimenStatus);
     const updatePayload = {
       status: 'QUARANTINED',
       currentStatus: 'QUARANTINED',
       release_status: 'QUARANTINE',
-      availabilityStatus: 'BLOCKED',
+      specimenStatus,
+      lifecycleStatus,
+      availabilityStatus,
       quarantineStatus: 'QUARANTINED',
       quarantineLocation: 'Quarentena',
       quarantineReason: context.reason || null,
@@ -286,6 +292,11 @@ async function quarantineSamplesByFilter(db, filter, context = {}) {
       { $set: updatePayload },
       queryOptions
     );
+
+    await quarantineActionService.recordAction(db, {
+      specimenIds: [sampleId],
+      reasonCodes: [context.coldChainIncidentId ? 'COLD_CHAIN_INCIDENT' : (context.source || 'AUTOMATIC')],
+    });
 
     quarantined += 1;
 
@@ -452,12 +463,15 @@ async function markColdChainIncidentSamplesForReview(db, incident = {}, options 
   const samplesCollection = await getCollection(db, 'samples');
   const now = new Date();
   const queryOptions = options.session ? { session: options.session } : undefined;
+  const matchFilter = {
+    coldChainIncidentId: incidentId,
+    quarantineReasonCode: 'COLD_CHAIN_INCIDENT',
+    release_status: 'QUARANTINE'
+  };
+  const matchedSamples = await samplesCollection.find(matchFilter, queryOptions).toArray();
+
   const result = await samplesCollection.updateMany(
-    {
-      coldChainIncidentId: incidentId,
-      quarantineReasonCode: 'COLD_CHAIN_INCIDENT',
-      release_status: 'QUARANTINE'
-    },
+    matchFilter,
     {
       $set: {
         availabilityStatus: 'PENDING_REVIEW',
@@ -470,6 +484,10 @@ async function markColdChainIncidentSamplesForReview(db, incident = {}, options 
     },
     queryOptions
   );
+
+  for (const sample of matchedSamples) {
+    await quarantineActionService.markPendingReview(db, String(sample._id));
+  }
 
   logger.warn('[QUARANTINE][COLD_CHAIN] Incidente resolvido; amostras mantidas para revisão pós-incidente', {
     incidentId,
