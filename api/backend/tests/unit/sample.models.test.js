@@ -45,10 +45,11 @@ describe('SampleModel', () => {
     ]));
   });
 
-  it('computeStatus reflete o ciclo de vida esperado', () => {
-    expect(SampleModel.computeStatus(10, 10, 'AVAILABLE')).toBe('AVAILABLE');
-    expect(SampleModel.computeStatus(10, 4, 'AVAILABLE')).toBe('PARTIAL');
-    expect(SampleModel.computeStatus(10, 0, 'AVAILABLE')).toBe('DEPLETED');
+  it('computeStatus reflete o ciclo de vida esperado (specimenStatus, case-folded per #405)', () => {
+    expect(SampleModel.computeStatus(10, 10, 'available')).toBe('available');
+    expect(SampleModel.computeStatus(10, 4, 'available')).toBe('partial');
+    expect(SampleModel.computeStatus(10, 0, 'available')).toBe('depleted');
+    expect(SampleModel.computeStatus(10, 4, 'quarantined')).toBe('quarantined');
   });
 
   it('create normaliza dados e aplica defaults de status e quantidade', () => {
@@ -70,7 +71,12 @@ describe('SampleModel', () => {
     expect(sample.registeredAt).toBeInstanceOf(Date);
     expect(sample.availableQuantity).toBe(12);
     expect(sample.originalQuantity).toBe(12);
-    expect(sample.lifecycleStatus).toBe('REGISTERED');
+    // REGISTERED folds into `available`/`AVAILABLE` at creation (#405) —
+    // lifecycleStatus/availabilityStatus are derived from specimenStatus,
+    // not independently defaulted.
+    expect(sample.specimenStatus).toBe('available');
+    expect(sample.lifecycleStatus).toBe('AVAILABLE');
+    expect(sample.availabilityStatus).toBe('AVAILABLE');
     expect(sample.sprec.matrixType).toBe('fluid');
     expect(sample.pharmacologyData.treatment_status).toBe('NAIVE');
   });

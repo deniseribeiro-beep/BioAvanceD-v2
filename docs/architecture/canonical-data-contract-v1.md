@@ -228,7 +228,31 @@ write, so `sample.service.js`'s movement-blocking gate silently doesn't
 fire for consent-revoked or cold-chain-quarantined samples today. That bug
 is independent of this decision, but it's a concrete argument for #399
 landing soon — a single `specimenStatus` write path eliminates this whole
-class of drift.
+class of drift. (Not yet fixed by #405 — that lands once every quarantine
+write site funnels through `specimenStatus` in #406.)
+
+**Landed in #405 (part 3a of #389 — `Sample.js`/`sample.service.js` core
+status computation only):** `Sample.js`'s schema gained `specimenStatus`
+(dict-02 ELM-0123's enum plus the local `disposed` extension);
+`SampleModel.computeStatus()` now computes case-folded `specimenStatus`
+values (same sticky-status algorithm shape, lowercase vocabulary,
+`disposed` added to the sticky/blocked list); `SampleModel.create()` folds
+`REGISTERED` into `available` and derives `lifecycleStatus`/
+`availabilityStatus` from `specimenStatus` via the new
+`SampleModel.deriveLegacyStatuses()` — a pure 1:1 derivation, not
+independently maintained. `sample.service.js`'s `withdrawSample`/
+`returnSample`/`updateSample` now compute and gate on `specimenStatus` as
+the source of truth, using a single shared `BLOCKED_SPECIMEN_STATUSES`
+constant (replacing the two duplicated `blockedLifecycleStatuses` arrays)
+and writing the derived legacy fields alongside it on every write
+(the dual-write bridge). `SampleModel.resolveSpecimenStatus()` falls back
+to a legacy sample document's `lifecycleStatus` (case-folded) when
+`specimenStatus` hasn't been written yet, so pre-#405 documents keep
+working until their next write. **Not in this phase:** `QuarantineAction`
+and the other ~10 quarantine write sites (part B/#406), frontend/e2e
+(part C/#407), removing the legacy fields (part D/#408) — every current
+reader of `lifecycleStatus`/`availabilityStatus` (routes, frontend, e2e)
+keeps working unchanged.
 
 ### QuarantineAction
 

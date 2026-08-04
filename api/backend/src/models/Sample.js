@@ -7,6 +7,25 @@ const {
   EXTRACTION_PROTOCOL_IDS,
 } = require('../config/constants/specimen.constants');
 
+// dict-02 ELM-0123 enum plus the documented local extension `disposed`
+// (RF006 AC#4 requires it distinct from `destroyed` — see
+// canonical-data-contract-v1.md's Specimen section, point 1).
+const SPECIMEN_STATUS_VALUES = [
+  'available',
+  'reserved',
+  'checked_out',
+  'partial',
+  'depleted',
+  'quarantined',
+  'destroyed',
+  'unavailable',
+  'disposed',
+];
+
+// specimenStatus's sticky/blocked values — quantity changes must not
+// override these, and write sites treat them as non-movable.
+const BLOCKED_SPECIMEN_STATUSES = ['unavailable', 'destroyed', 'disposed', 'quarantined'];
+
 const SampleSchema = new Schema({
   specimenId: { type: String, required: true, index: true },
   participantId: { type: String, required: true, index: true },
@@ -58,6 +77,11 @@ const SampleSchema = new Schema({
     enum: ['REGISTERED', 'AVAILABLE', 'PARTIAL', 'DEPLETED', 'UNAVAILABLE', 'DESTROYED', 'DISPOSED', 'QUARANTINED'],
     default: 'REGISTERED'
   },
+  specimenStatus: {
+    type: String,
+    enum: SPECIMEN_STATUS_VALUES,
+    default: 'available'
+  },
   availableQuantity: { type: Number, default: null },
   originalQuantity: { type: Number, default: null },
   totalWithdrawn: { type: Number, default: 0 },
@@ -82,6 +106,30 @@ const Sample = mongoose.models.Sample || mongoose.model('Sample', SampleSchema);
 class SampleModel {
   static validateLifecycleStatus(status) {
     return ['REGISTERED', 'AVAILABLE', 'PARTIAL', 'DEPLETED', 'UNAVAILABLE', 'DESTROYED', 'DISPOSED', 'QUARANTINED'].includes(status);
+  }
+
+  static validateSpecimenStatus(status) {
+    return SPECIMEN_STATUS_VALUES.includes(String(status || '').toLowerCase());
+  }
+
+  // Pure 1:1 derivation from specimenStatus — every write site that sets
+  // specimenStatus also derives these from it, never independently, so
+  // every current reader of lifecycleStatus/availabilityStatus keeps
+  // working unchanged (canonical-data-contract-v1.md, Specimen section).
+  static deriveLegacyStatuses(specimenStatus) {
+    const status = String(specimenStatus || '').toLowerCase();
+    return {
+      lifecycleStatus: status.toUpperCase(),
+      availabilityStatus: BLOCKED_SPECIMEN_STATUSES.includes(status) ? 'BLOCKED' : 'AVAILABLE'
+    };
+  }
+
+  // Legacy sample documents written before this field existed have no
+  // specimenStatus — fall back to their (uppercase) lifecycleStatus,
+  // case-folded, until they're next written through the dual-write bridge.
+  static resolveSpecimenStatus(sample) {
+    if (sample && sample.specimenStatus) return String(sample.specimenStatus).toLowerCase();
+    return String((sample && sample.lifecycleStatus) || 'available').toLowerCase();
   }
 
   static validateSampleType(sampleType) {
@@ -115,6 +163,9 @@ class SampleModel {
     if (data.lifecycleStatus && !this.validateLifecycleStatus(data.lifecycleStatus)) {
       errors.push('lifecycleStatus inválido');
     }
+    if (data.specimenStatus && !this.validateSpecimenStatus(data.specimenStatus)) {
+      errors.push('specimenStatus inválido');
+    }
     return { isValid: errors.length === 0, errors };
   }
 
@@ -122,6 +173,15 @@ class SampleModel {
     const registeredAt = data.registeredAt ? new Date(data.registeredAt) : new Date();
     const availableQuantity = data.availableQuantity !== undefined ? data.availableQuantity : data.quantity;
     const originalQuantity = data.originalQuantity !== undefined ? data.originalQuantity : data.quantity;
+
+    // REGISTERED has no dict-02 equivalent and was never a distinct
+    // blockable state — fold it into `available` (canonical-data-contract-v1.md
+    // Specimen section, point 1). Dual-write: lifecycleStatus/availabilityStatus
+    // are derived from specimenStatus unless the caller explicitly overrides them.
+    const specimenStatus = data.specimenStatus
+      ? String(data.specimenStatus).toLowerCase()
+      : 'available';
+    const derivedLegacy = this.deriveLegacyStatuses(specimenStatus);
 
     return {
       specimenId: String(data.specimenId),
@@ -164,11 +224,12 @@ class SampleModel {
       consentStatus: data.consentStatus || null,
       quarantineStatus: data.quarantineStatus || 'QUARANTINED',
       quarantineReason: data.quarantineReason || null,
-      availabilityStatus: data.availabilityStatus || 'BLOCKED',
       importBatchId: data.importBatchId || null,
       importedAt: data.importedAt || null,
       importedBy: data.importedBy || null,
-      lifecycleStatus: data.lifecycleStatus || 'REGISTERED',
+      specimenStatus,
+      lifecycleStatus: data.lifecycleStatus || derivedLegacy.lifecycleStatus,
+      availabilityStatus: data.availabilityStatus || derivedLegacy.availabilityStatus,
       availableQuantity,
       originalQuantity,
       totalWithdrawn: data.totalWithdrawn || 0,
@@ -189,15 +250,20 @@ class SampleModel {
     };
   }
 
+  // Computes specimenStatus (case-folded per canonical-data-contract-v1.md).
+  // Algorithm shape unchanged from the pre-#405 lifecycleStatus version —
+  // only the value vocabulary changed. Sticky/blocked statuses stop
+  // quantity from overriding them; only outside that set does quantity
+  // drive depleted/partial/available.
   static computeStatus(initialVolume, currentVolume, currentStatus) {
     const init = Number(initialVolume ?? 0);
     const curr = Number(currentVolume ?? 0);
-    const stickyStatuses = ['UNAVAILABLE', 'DESTROYED', 'DISPOSED', 'QUARANTINED'];
+    const current = String(currentStatus || '').toLowerCase();
 
-    if (stickyStatuses.includes(currentStatus)) return currentStatus;
-    if (curr <= 0) return 'DEPLETED';
-    if (init > 0 && curr < init) return 'PARTIAL';
-    return 'AVAILABLE';
+    if (BLOCKED_SPECIMEN_STATUSES.includes(current)) return current;
+    if (curr <= 0) return 'depleted';
+    if (init > 0 && curr < init) return 'partial';
+    return 'available';
   }
 
   static validateWithdrawalType(withdrawalType) {
@@ -207,3 +273,5 @@ class SampleModel {
 
 module.exports = Sample;
 module.exports.SampleModel = SampleModel;
+module.exports.SPECIMEN_STATUS_VALUES = SPECIMEN_STATUS_VALUES;
+module.exports.BLOCKED_SPECIMEN_STATUSES = BLOCKED_SPECIMEN_STATUSES;

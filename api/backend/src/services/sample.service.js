@@ -1,4 +1,4 @@
-const { SampleModel } = require('../models/Sample');
+const { SampleModel, BLOCKED_SPECIMEN_STATUSES } = require('../models/Sample');
 const SampleMovementModel = require('../models/SampleMovement');
 const logger = require('../utils/logger');
 const { validateParticipantId } = require('../utils/patientAnonymization');
@@ -307,8 +307,8 @@ class SampleService {
       }
 
       // Validações de status (RF006 AC#4)
-      const blockedLifecycleStatuses = ['UNAVAILABLE', 'DESTROYED', 'DISPOSED', 'QUARANTINED'];
-      if (blockedLifecycleStatuses.includes(sample.lifecycleStatus)) {
+      const currentSpecimenStatus = SampleModel.resolveSpecimenStatus(sample);
+      if (BLOCKED_SPECIMEN_STATUSES.includes(currentSpecimenStatus)) {
         throw new Error(`Amostra não está disponível para retirada (Status: ${sample.lifecycleStatus})`);
       }
 
@@ -349,7 +349,8 @@ class SampleService {
       const newAvailableQty = availableQty - withdrawQty;
       const totalWithdrawn = (sample.totalWithdrawn || 0) + withdrawQty;
 
-      const lifecycleStatus = SampleModel.computeStatus(sample.originalQuantity || sample.quantity, newAvailableQty, sample.lifecycleStatus);
+      const specimenStatus = SampleModel.computeStatus(sample.originalQuantity || sample.quantity, newAvailableQty, currentSpecimenStatus);
+      const { lifecycleStatus, availabilityStatus } = SampleModel.deriveLegacyStatuses(specimenStatus);
 
       // Registrar movimentação no ledger (imutável)
       const movementID = await SampleMovementModel.generateMovementID(db);
@@ -389,7 +390,9 @@ class SampleService {
           sampleDestination: withdrawalData.sampleDestination || withdrawalData.withdrawalDestination,
           linkedProject: withdrawalData.linkedProject || sample.linkedProject,
           lastWithdrawalID: movementID,
+          specimenStatus,
           lifecycleStatus,
+          availabilityStatus,
           updatedAt: new Date()
         };
 
@@ -402,8 +405,8 @@ class SampleService {
 
       logger.info(`Retirada registrada: Sample ${sample.barcode || sample._id}, Qtd: ${withdrawQty}, Novo saldo: ${newAvailableQty}`);
 
-      return { 
-        success: true, 
+      return {
+        success: true,
         movementID,
         withdrawnQuantity: withdrawQty,
         remainingQuantity: newAvailableQty,
@@ -475,15 +478,19 @@ class SampleService {
         ? updateData.originalQuantity
         : existing.originalQuantity ?? existing.quantity;
 
-      const lifecycleStatus = SampleModel.computeStatus(
+      const currentSpecimenStatus = updateData.specimenStatus || SampleModel.resolveSpecimenStatus(existing);
+      const specimenStatus = SampleModel.computeStatus(
         nextOriginal,
         nextAvailable,
-        updateData.lifecycleStatus || existing.lifecycleStatus
+        currentSpecimenStatus
       );
+      const { lifecycleStatus, availabilityStatus } = SampleModel.deriveLegacyStatuses(specimenStatus);
 
       const payload = {
         ...updateData,
+        specimenStatus,
         lifecycleStatus,
+        availabilityStatus,
         updatedAt: new Date()
       };
       
@@ -654,8 +661,8 @@ class SampleService {
       }
 
       // Validações de status (RF006 AC#4)
-      const blockedLifecycleStatuses = ['UNAVAILABLE', 'DESTROYED', 'DISPOSED', 'QUARANTINED'];
-      if (blockedLifecycleStatuses.includes(sample.lifecycleStatus)) {
+      const currentSpecimenStatus = SampleModel.resolveSpecimenStatus(sample);
+      if (BLOCKED_SPECIMEN_STATUSES.includes(currentSpecimenStatus)) {
         throw new Error(`Amostra não está disponível para devolução (Status: ${sample.lifecycleStatus})`);
       }
 
@@ -709,7 +716,8 @@ class SampleService {
         newAvailableQty += returnQty;
       }
 
-      const lifecycleStatus = SampleModel.computeStatus(sample.originalQuantity || sample.quantity, newAvailableQty, sample.lifecycleStatus);
+      const specimenStatus = SampleModel.computeStatus(sample.originalQuantity || sample.quantity, newAvailableQty, currentSpecimenStatus);
+      const { lifecycleStatus, availabilityStatus } = SampleModel.deriveLegacyStatuses(specimenStatus);
 
       // Registrar movimentação no ledger (imutável)
       const movementID = await SampleMovementModel.generateMovementID(db);
@@ -742,7 +750,9 @@ class SampleService {
         const update = {
           availableQuantity: newAvailableQty,
           totalReturned: newTotalReturned,
+          specimenStatus,
           lifecycleStatus,
+          availabilityStatus,
           updatedAt: new Date()
         };
 

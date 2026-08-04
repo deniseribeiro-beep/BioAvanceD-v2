@@ -42,27 +42,30 @@ describe('Sample.validateLifecycleStatus', () => {
   });
 });
 
+// #405: computeStatus now computes specimenStatus (case-folded per
+// canonical-data-contract-v1.md) instead of the legacy lifecycleStatus —
+// same algorithm shape, lowercase value vocabulary.
 describe('Sample.computeStatus', () => {
-  it('returns DEPLETED when currentVolume <= 0', () => {
-    expect(Sample.computeStatus(10, 0, 'AVAILABLE')).toBe('DEPLETED');
-    expect(Sample.computeStatus(10, -1, 'AVAILABLE')).toBe('DEPLETED');
+  it('returns depleted when currentVolume <= 0', () => {
+    expect(Sample.computeStatus(10, 0, 'available')).toBe('depleted');
+    expect(Sample.computeStatus(10, -1, 'available')).toBe('depleted');
   });
 
-  it('returns UNAVAILABLE when currentStatus is UNAVAILABLE', () => {
-    expect(Sample.computeStatus(10, 5, 'UNAVAILABLE')).toBe('UNAVAILABLE');
+  it('returns unavailable when currentStatus is unavailable', () => {
+    expect(Sample.computeStatus(10, 5, 'unavailable')).toBe('unavailable');
   });
 
-  it('returns PARTIAL when current < initial', () => {
-    expect(Sample.computeStatus(10, 5, 'AVAILABLE')).toBe('PARTIAL');
+  it('returns partial when current < initial', () => {
+    expect(Sample.computeStatus(10, 5, 'available')).toBe('partial');
   });
 
-  it('returns AVAILABLE when volume is full', () => {
-    expect(Sample.computeStatus(10, 10, 'AVAILABLE')).toBe('AVAILABLE');
+  it('returns available when volume is full', () => {
+    expect(Sample.computeStatus(10, 10, 'available')).toBe('available');
   });
 
-  it('returns AVAILABLE when initialVolume is 0', () => {
+  it('returns available when initialVolume is 0', () => {
     // init = 0 means condition "init > 0 && curr < init" is false
-    expect(Sample.computeStatus(0, 5, 'AVAILABLE')).toBe('AVAILABLE');
+    expect(Sample.computeStatus(0, 5, 'available')).toBe('available');
   });
 });
 
