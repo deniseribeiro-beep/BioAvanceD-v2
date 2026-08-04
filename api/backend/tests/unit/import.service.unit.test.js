@@ -303,6 +303,22 @@ describe('ImportService.parseSampleCSV', () => {
     expect(data.participantId).toBeNull();
     expect(data.barcode).toBeNull();
   });
+
+  it('maps the legacy lifecycleStatus column onto specimenStatus, not the trio', () => {
+    const { data } = importService.parseSampleCSV({ lifecycleStatus: 'QUARANTINED' });
+    expect(data.specimenStatus).toBe('quarantined');
+    expect(data.lifecycleStatus).toBeUndefined();
+  });
+
+  it('reads a specimenStatus column directly when present', () => {
+    const { data } = importService.parseSampleCSV({ specimenStatus: 'partial' });
+    expect(data.specimenStatus).toBe('partial');
+  });
+
+  it('defaults specimenStatus to available when no status column is present', () => {
+    const { data } = importService.parseSampleCSV({});
+    expect(data.specimenStatus).toBe('available');
+  });
 });
 
 describe('ImportService.parseLocationData', () => {

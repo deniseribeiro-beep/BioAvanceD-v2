@@ -942,7 +942,9 @@ class ImportService {
       externalQualityAssessment,
       locationID: toInt(locationRaw, 'locationID'),
       linkedProject: normalizeString(linkedProjectRaw),
-      lifecycleStatus: normalizeString(this.getRowValue(row, ['lifecycleStatus', 'statusAtual'])) || 'AVAILABLE',
+      specimenStatus: SampleModel.mapLegacyLifecycleStatusToSpecimenStatus(
+        this.getRowValue(row, ['specimenStatus', 'lifecycleStatus', 'statusAtual'])
+      ),
       releaseStatus: releaseStatus,
       sprec,
       clinicalData,

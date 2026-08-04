@@ -80,6 +80,18 @@ describe('FHIRService.toFhirSpecimen', () => {
   it('throws when given a non-object specimen', () => {
     expect(() => fhirService.toFhirSpecimen(null)).toThrow();
   });
+
+  it('prefers specimenStatus over the legacy lifecycleStatus when both are present', () => {
+    const specimen = {
+      specimenId: 'S1',
+      specimenStatus: 'quarantined',
+      lifecycleStatus: 'Available',
+    };
+
+    const result = fhirService.toFhirSpecimen(specimen);
+
+    expect(result.status).toBe('quarantined');
+  });
 });
 
 describe('FHIRService.toFhirConsent', () => {

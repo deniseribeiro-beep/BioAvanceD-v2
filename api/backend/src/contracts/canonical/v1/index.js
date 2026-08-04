@@ -36,7 +36,11 @@ const specimenSchema = {
     quantity: { type: 'number' },
     unit: { type: 'string' },
     registeredAt: { type: 'string' },
+    // lifecycleStatus stays accepted on the intake wire contract until the
+    // frontend (#415) switches to sending specimenStatus directly — both
+    // are declared so existing intake payloads keep validating.
     lifecycleStatus: { type: 'string' },
+    specimenStatus: { type: 'string' },
     linkedProject: { type: 'string' },
     merkleRoot: { type: 'string' },
     sprec: {

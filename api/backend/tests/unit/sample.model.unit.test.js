@@ -42,6 +42,27 @@ describe('Sample.validateLifecycleStatus', () => {
   });
 });
 
+// #413: import/FHIR write sites map their legacy lifecycleStatus vocabulary
+// onto specimenStatus through this helper instead of constructing the trio.
+describe('Sample.mapLegacyLifecycleStatusToSpecimenStatus', () => {
+  it('case-folds a directly-mapping legacy value', () => {
+    expect(Sample.mapLegacyLifecycleStatusToSpecimenStatus('AVAILABLE')).toBe('available');
+    expect(Sample.mapLegacyLifecycleStatusToSpecimenStatus('QUARANTINED')).toBe('quarantined');
+    expect(Sample.mapLegacyLifecycleStatusToSpecimenStatus('destroyed')).toBe('destroyed');
+  });
+
+  it('folds REGISTERED into available (no dict-02 equivalent)', () => {
+    expect(Sample.mapLegacyLifecycleStatusToSpecimenStatus('REGISTERED')).toBe('available');
+    expect(Sample.mapLegacyLifecycleStatusToSpecimenStatus('registered')).toBe('available');
+  });
+
+  it('defaults to available for blank or unrecognized input', () => {
+    expect(Sample.mapLegacyLifecycleStatusToSpecimenStatus('')).toBe('available');
+    expect(Sample.mapLegacyLifecycleStatusToSpecimenStatus(null)).toBe('available');
+    expect(Sample.mapLegacyLifecycleStatusToSpecimenStatus('Withdrawn')).toBe('available');
+  });
+});
+
 // #405: computeStatus now computes specimenStatus (case-folded per
 // canonical-data-contract-v1.md) instead of the legacy lifecycleStatus —
 // same algorithm shape, lowercase value vocabulary.

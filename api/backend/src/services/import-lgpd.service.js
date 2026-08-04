@@ -1268,7 +1268,7 @@ class ImportLGPDService {
       releaseStatus: releaseStatus,
       locationID: row.locationID || row.locationId ? parseInt(row.locationID || row.locationId) : null,
       linkedProject: row.linkedProject?.trim() || null,
-      lifecycleStatus: row.lifecycleStatus?.trim() || 'AVAILABLE',
+      specimenStatus: SampleModel.mapLegacyLifecycleStatusToSpecimenStatus(row.specimenStatus?.trim() || row.lifecycleStatus?.trim()),
       consentTemplateId: tcleId ? String(tcleId).trim() : null,
       merkleRoot: row.merkleRoot ? String(row.merkleRoot).trim() : null,
       sprec,

@@ -823,7 +823,7 @@ class ImportLGPDController {
         'quality', // MIABIS: GOOD, COMPROMISED ou UNKNOWN
         'locationID', // opcional - pode ser selecionado após upload
         'linkedProject',
-        'lifecycleStatus'
+        'specimenStatus'
       ];
 
       // Linha de exemplo com valores do banco ou padrão
@@ -838,7 +838,7 @@ class ImportLGPDController {
         '1',
         '', // locationID deixado vazio (opcional - pode ser selecionado após upload)
         'Projeto Genoma',
-        'Available'
+        'available'
       ];
 
       // Adiciona comentários com valores válidos
@@ -940,7 +940,7 @@ class ImportLGPDController {
         ['• quantity: Quantidade em microlitros (µL) - Número decimal maior que zero'],
         ['• quality: Qualidade conforme MIABIS (GOOD, COMPROMISED ou UNKNOWN)'],
         ['• linkedProject: Nome do projeto vinculado (Texto)'],
-        ['• lifecycleStatus: Status atual - Available, Withdrawn, Expired ou Destroyed'],
+        ['• specimenStatus: Estado operacional atual - available, reserved, checked_out, partial, depleted, quarantined, destroyed, unavailable ou disposed'],
         [],
         ['CAMPOS OPCIONAIS:'],
         ['• barcode: Código de barras único (Texto) - OPCIONAL. Se não fornecido, será gerado automaticamente no formato BR-YYYY-NNN'],
@@ -975,11 +975,16 @@ class ImportLGPDController {
         ['• UNKNOWN - Desconhecida / Não Avaliada'],
         ['• IMPORTANTE: Apenas os ids canônicos são aceitos'],
         [],
-        ['VALORES ACEITOS PARA lifecycleStatus:'],
-        ['• Available (Disponível)'],
-        ['• Withdrawn (Retirada)'],
-        ['• Expired (Expirada)'],
-        ['• Destroyed (Destruída)'],
+        ['VALORES ACEITOS PARA specimenStatus:'],
+        ['• available (Disponível)'],
+        ['• reserved (Reservada)'],
+        ['• checked_out (Retirada)'],
+        ['• partial (Parcial)'],
+        ['• depleted (Esgotada)'],
+        ['• quarantined (Em quarentena)'],
+        ['• destroyed (Destruída)'],
+        ['• unavailable (Indisponível)'],
+        ['• disposed (Descartada)'],
         [],
         ['EXEMPLO DE PREENCHIMENTO:'],
         ['participantId: 12345678'],
@@ -992,7 +997,7 @@ class ImportLGPDController {
         ['quality: GOOD'],
         ['locationID: (deixe vazio para selecionar após upload)'],
         ['linkedProject: Projeto Genoma'],
-        ['lifecycleStatus: Available'],
+        ['specimenStatus: available'],
         [],
         ['OBSERVAÇÕES IMPORTANTES:'],
         ['• O participantId deve ter exatamente 8 dígitos numéricos'],
@@ -1027,7 +1032,7 @@ class ImportLGPDController {
         'quality (MIABIS GOOD, COMPROMISED ou UNKNOWN)',
         'locationID (opcional - pode ser selecionado após upload)',
         'linkedProject',
-        'lifecycleStatus'
+        'specimenStatus'
       ];
       
       // Linha de exemplo (primeira linha de dados) - usa valores do banco
@@ -1042,7 +1047,7 @@ class ImportLGPDController {
         MIABIS_QUALITY[0].id,                     // quality (ID)
         '',                      // locationID (opcional - deixado vazio no exemplo)
         'Projeto Genoma',        // linkedProject
-        'Available'              // lifecycleStatus
+        'available'              // specimenStatus
       ];
       
       // Cria planilha apenas com headers e exemplo

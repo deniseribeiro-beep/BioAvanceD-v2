@@ -16,7 +16,7 @@ function toFhirSpecimen(specimen) {
     identifier: specimen.specimenId ? [{ value: specimen.specimenId }] : [],
     subject: specimen.participantId ? { reference: `Patient/${specimen.participantId}` } : undefined,
     receivedTime: specimen.registeredAt || undefined,
-    status: specimen.lifecycleStatus || 'available'
+    status: specimen.specimenStatus || specimen.lifecycleStatus || 'available'
   };
 }
 

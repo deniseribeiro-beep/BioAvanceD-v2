@@ -132,6 +132,18 @@ class SampleModel {
     return String((sample && sample.lifecycleStatus) || 'available').toLowerCase();
   }
 
+  // External representations (import CSVs, FHIR) still speak the legacy
+  // lifecycleStatus vocabulary — map onto specimenStatus per the case-fold
+  // rules in canonical-data-contract-v1.md's Specimen section, point 1:
+  // REGISTERED has no dict-02 equivalent and folds into available; any
+  // other unrecognized/blank value also defaults to available rather than
+  // failing the import.
+  static mapLegacyLifecycleStatusToSpecimenStatus(lifecycleStatus) {
+    const normalized = String(lifecycleStatus || '').trim().toLowerCase();
+    if (!normalized || normalized === 'registered') return 'available';
+    return this.validateSpecimenStatus(normalized) ? normalized : 'available';
+  }
+
   static validateSampleType(sampleType) {
     return typeof sampleType === 'string' && SPECIMEN_TYPE_IDS.includes(sampleType);
   }

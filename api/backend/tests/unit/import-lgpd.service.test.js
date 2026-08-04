@@ -333,6 +333,17 @@ describe('ImportLGPDService', () => {
       expect(invalid.pharmacologyData.treatmentStatus).toBe('');
     });
 
+    it('maps the legacy lifecycleStatus column onto specimenStatus, not the trio', () => {
+      const result = importLgpdService.parseSampleRow({ lifecycleStatus: 'DEPLETED' });
+      expect(result.specimenStatus).toBe('depleted');
+      expect(result.lifecycleStatus).toBeUndefined();
+    });
+
+    it('defaults specimenStatus to available when no status column is supplied', () => {
+      const result = importLgpdService.parseSampleRow({});
+      expect(result.specimenStatus).toBe('available');
+    });
+
     it('strips an ATC: prefix and uppercases the atcCode', () => {
       const result = importLgpdService.parseSampleRow({ atcCode: 'atc:a10bx02' });
       expect(result.pharmacologyData.atcCode).toBe('A10BX02');
