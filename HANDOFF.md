@@ -1,85 +1,96 @@
 # HANDOFF
 
-**Written:** 2026-08-04, after resolving #414 (part 3 of #408's
-status-trio migration) on `feature/docker-e2e-backend-integration`.
+**Written:** 2026-08-04, after resolving #415 (part 4, final phase, of
+#408's status-trio migration) on `feature/docker-e2e-backend-integration`.
 
 ## What happened this session
 
-Dennis said "Pick #414". Routed via `work-issue` → `resolve-issue` (a
-migration/refactor item, same shape as #412/#413).
+Dennis said "Pick #415". Routed via `work-issue` → `resolve-issue` (same
+migration shape as #412/#413/#414).
 
 **Pre-pickup checks:** working tree clean, local branch matched
-`origin/feature/docker-e2e-backend-integration` exactly (`5d61c217`, the
-commit #413 landed at last session), no stale `issue-414-*`/`fix/414-*`
+`origin/feature/docker-e2e-backend-integration` exactly (`adfe82e0`, the
+commit #414 landed at last session), no stale `issue-415-*`/`fix/415-*`
 branch, no dangling merged-but-open work.
 
-**Implementation:** branched
-`fix/414-econsent-equipment-quarantine-specimenstatus-migration` off the
-integration branch. Migrated the e-Consent/equipment-quarantine
-subsystem's remaining reads/writes of the legacy trio onto
-`specimenStatus`:
+**Implementation:** branched `fix/415-frontend-specimenstatus-migration`
+off the integration branch. Migrated the frontend's remaining
+reads/writes of the legacy trio onto `specimenStatus`:
 
-- **`MongoPatientConsentReadRepository.js`**: `enrichSamplesWithConsent`
-  now projects `specimenStatus` (via `SampleModel.resolveSpecimenStatus`)
-  instead of the raw `lifecycleStatus` field.
-- **`MongoStorageRepository.js`**: `searchAllocatableSampleCandidates`
-  now queries `specimenStatus in ['available','reserved']` instead of
-  `lifecycleStatus in ['Available','Registered','pending']` — the old
-  filter's casing never matched the actual (uppercase) stored
-  `lifecycleStatus` values, so this also fixes a latent dead filter as a
-  byproduct of the correct migration.
-- **`analysisValidation.service.js`**: `validateUploadEligibility`'s
-  response now carries `specimenStatus` instead of `lifecycleStatus`.
-- **`equipment-sensor-quarantine.service.js`**:
-  `markColdChainIncidentSamplesForReview` no longer sets
-  `availabilityStatus`/`quarantineStatus` to `'PENDING_REVIEW'` directly
-  on the Sample doc — that state is already tracked via
-  `quarantineActionService.markPendingReview()` on
-  `QuarantineAction.actionStatus` (per
-  `canonical-data-contract-v1.md`'s QuarantineAction section); the
-  sample's own `specimenStatus` stays `'quarantined'`, unchanged.
-- **`eConsent.js`**: **no change needed.** Its quarantine write sites
-  were already migrated in #409 (specimenStatus primary +
-  `deriveLegacyStatuses` dual-write) — the issue's original scope note
-  for this file was already stale by the time #414 was picked up
-  (confirmed via `git log` on the file).
+- **`SampleDetailsPage.tsx`**: dropped the `lifecycleStatus` fallback at
+  all three sites (lines ~133, 232, 400).
+- **Found and fixed a real precondition gap first:** the issue's own
+  acceptance criteria assumed "backend guarantees `specimenStatus` is
+  always populated," but `sample.service.js`'s `getSample`/
+  `listSamples`/`getSampleByBarcode` were returning **raw Mongo docs**
+  with no such guarantee — a legacy sample document written before the
+  field existed would come back with `specimenStatus` undefined,
+  breaking the fallback-free read. Fixed inline (in scope per
+  `resolve-issue`'s "bugs blocking the issue's own acceptance criteria"
+  exception): all three read paths now normalize
+  `specimenStatus = SampleModel.resolveSpecimenStatus(sample)` before
+  returning.
+- **`SamplesPage.tsx`**: dropped the redundant `quarantineStatus`/
+  `availabilityStatus` writes on the external-document-attach path — the
+  backend's `updateSample` already derives both server-side from
+  `specimenStatus`. `quarantineReason: null` write is kept (see below).
+- **Intake wizard chain** (`ClinicalIntakeWizard.jsx` →
+  `intake.service.js` → `routes/intakeWizard.js`): switched the
+  creation-status wire field from `lifecycleStatus` to `specimenStatus`
+  end to end — this was the read site the #414 handoff flagged as
+  blocking removal of the deprecated alias from
+  `contracts/canonical/v1/index.js`. The contract schema itself still
+  accepts `lifecycleStatus` for backward compat (unchanged; removal is
+  #408's closeout job), only its comment was updated to reflect that the
+  frontend no longer sends it.
+- **`models.ts`**: removed `quarantineStatus`/`availabilityStatus` from
+  the `Sample` type. **`quarantineReason` intentionally kept, not
+  removed** — no `specimenStatus` equivalent carries the human-readable
+  reason text; already confirmed correct/deliberate at #407 (comments in
+  both `models.ts` and `SamplesPageView.tsx` documented this before this
+  session touched either file).
+- **`FhirImportPage.tsx`**: **no change needed.** Reads
+  `import_staging_records` (a pre-commit workflow snapshot, not a
+  `Sample` doc) — has no `specimenStatus` equivalent, already flagged
+  out-of-scope by an in-file comment predating this session.
+- **`SamplesPageView.tsx`**: **no change needed.** Already reads
+  `specimenStatus` for all status/blocking logic; its only trio read is
+  `quarantineReason` for badge text, already correctly scoped per an
+  existing in-file comment.
 
-**Tests:** targeted suites only — 6 files, 103 tests, all green
-(`MongoStorageRepository`, `analysisValidation.service`,
-`MongoPatientConsentReadRepository`, `cold-chain-quarantine.service`,
-`equipment-sensor-quarantine.service`, `SearchAllocatableSamplesUseCase`
-unit tests). Re-verified green again after the fast-forward merge onto
-the integration branch.
+**Tests:** 2 stale assertions (asserting the old `lifecycleStatus`-based
+wire shape) updated to the new `specimenStatus`-based shape — targeted
+suites only: 6 backend unit test files (149 tests) +
+`ClinicalIntakeWizard.test.jsx` (1 test), all green. Frontend typecheck
+clean. Re-verified all of the above again after the fast-forward merge
+onto the integration branch.
 
-**Found and filed separately, not fixed (#416):** two pre-existing,
-unrelated integration-test failures in `incidents.api.node.test.js`
-(`POST /api/incidents/create` and `PUT /api/incidents/:id/resolve`,
-both asserting `triggered`/`reviewRequired` end up `false` instead of
-`true`) — confirmed via `git stash` that they fail identically on the
-base branch (`5d61c217`) before any #414 edits. Localized to the
-controller/route layer's call into the service (service-level unit
-tests all pass); not investigated further, out of #414's scope.
+**Closed #415** (comment on the issue documents branch, commit
+`8d258473`, and all of the above reasoning, including the precondition
+fix). Merged `fix/415-...` into `feature/docker-e2e-backend-integration`
+(fast-forward, clean, no conflicts), pushed. Issue branch not yet
+deleted — see below.
 
-**Closed #414** (comment on the issue documents branch, commit
-`892323a9`, and all of the above reasoning). Merged
-`fix/414-...` into `feature/docker-e2e-backend-integration`
-(fast-forward, clean, no conflicts), pushed, deleted the local + remote
-issue branch, and left a merge note on the issue thread.
-
-`wrap-up` surfaced one finding this session: the #416 pre-existing test
-failure above (filed, not a skill issue).
+`wrap-up` found no new friction this session; the one notable judgment
+call (fixing the backend normalization gap inline, and keeping
+`quarantineReason` un-migrated) was well-supported by pre-existing
+in-repo comments from #407/#409, not a guess.
 
 ## Repo state
 
-- **`feature/docker-e2e-backend-integration`**: now at `892323a9` (was
-  `5d61c217`), pushed to `origin`. 8 files changed (4 source, 4 test).
-- Issues: **#414 closed** (resolved this session). **#416 opened** this
-  session (pre-existing `incidents.api.node.test.js` failures, unrelated
-  to #414, not yet investigated). **#415** (frontend) now only needs
-  #414 — which is done — but its own scope also depends on #412 (done)
-  and #413 (done); it should be fully unblocked now. **#408** still open
-  as the tracking/closeout issue — unaffected this session. **#410,
-  #401, #402** unchanged from prior handoffs.
+- **`feature/docker-e2e-backend-integration`**: now at `8d258473` (was
+  `adfe82e0`), pushed to `origin`. 10 files changed (5 source, 2 test, 3
+  frontend view/type files — see commit for full list).
+- Local branch `fix/415-frontend-specimenstatus-migration` still exists
+  locally (fully merged, ff — safe to delete next session if not already
+  cleaned up).
+- Issues: **#415 closed** (resolved this session, the final part of
+  #408's frontend migration phase). **#408** (tracking/closeout issue)
+  still open — now unblocked on all four migration parts (#412, #413,
+  #414, #415 all done). **#416** (pre-existing
+  `incidents.api.node.test.js` failures, filed at #414's session, not
+  yet triaged) unchanged. **#410, #401, #402** unchanged from prior
+  handoffs.
 
 ## Blocking next step
 
@@ -87,44 +98,39 @@ None.
 
 ## Recommended next steps
 
-Dennis didn't name a specific next pick this session beyond "Pick #414",
-so per this skill's own rule: **none queued**. For reference:
+Dennis didn't name a specific next pick this session, so per this
+skill's own rule: **none queued**. For reference:
 
-- **#415** (frontend fallback-read removal) is now unblocked — #412,
-  #413, and #414 (all three backend-side dependencies) are done.
-- **#416** (pre-existing `incidents.api.node.test.js` failures) is
-  filed but not triaged — could be picked up via `fix-bugs` if the next
-  session wants to chase it; root cause not yet identified beyond
-  "controller/route layer, not the service."
+- **#408 closeout** is now fully unblocked — all four migration parts
+  (#412/#413/#414/#415) are merged into the integration branch. This is
+  the natural next pick if the migration series is being finished off.
+- **#416** (pre-existing `incidents.api.node.test.js` failures) still
+  filed but not triaged.
 
 Older backlog, unchanged: **#410, #401, #402**, **#384–#387**,
 `#371`/`#373`/`#374`/`#378`/`#379`.
 
 ## Which skills to use
 
-- **#415 (frontend), when picked up**: all three backend dependencies
-  (#412, #413, #414) are now confirmed merged. Frontend fallback reads
-  (e.g. `SampleDetailsPage.tsx` falling back to `lifecycleStatus` when
-  `specimenStatus` is absent) can now be safely dropped. **Also**:
-  `routes/intakeWizard.js` still reads `specimen.lifecycleStatus` off
-  the incoming intake request body (see #413's close comment) — #415
-  needs to switch that read site to `specimenStatus` before the wire
-  contract's `lifecycleStatus` property can be dropped from
-  `contracts/canonical/v1/index.js`.
 - **#408 closeout, when picked up**: re-run the full-repo grep
   (`lifecycleStatus|availabilityStatus|quarantineStatus|quarantineReason`
   across `api/backend/src`, `frontend/src`, `tests/e2e`) as the
   precondition check before removing the schema fields/bridge from
-  `Sample.js` — confirm hits are down to just `Sample.js`'s own
-  schema/bridge (the dual-write derivation, which now only #415's
-  frontend cutover and #408's own removal touch), the deliberately-kept
-  `eConsent.js`/`equipment-sensor-quarantine.service.js` dual-writes
+  `Sample.js`. Expect hits to now be down to: `Sample.js`'s own
+  schema/bridge (`deriveLegacyStatuses`, the dual-write derivation —
+  #408's own removal target), `contracts/canonical/v1/index.js`'s
+  `lifecycleStatus` schema property (backward-compat acceptance, also
+  #408's removal target, comment already points here), the deliberately-
+  kept `eConsent.js`/`equipment-sensor-quarantine.service.js` dual-writes
   (still needed until #408 itself removes the legacy fields),
   `fhir-import-staging.service.js`'s intentionally-kept staging-record
-  fields (per #409), and any deliberately-kept free-text
-  `quarantineReason` metadata, before deleting. Don't trust
-  #413/#414/#415's close comments alone — verify the grep yourself, same
-  lesson prior `#408`/`#409`/`#411`/`#412`/`#413` handoffs have carried.
+  fields (per #409/#415 — different collection, no specimenStatus
+  equivalent), `FhirImportPage.tsx`'s matching frontend read (same
+  reason), and the deliberately-kept `quarantineReason` free-text field
+  everywhere it appears (no specimenStatus equivalent, confirmed at
+  #407 and re-confirmed at #415). Don't trust #412/#413/#414/#415's
+  close comments alone — verify the grep yourself, same lesson every
+  prior handoff in this series has carried.
 - **#416, when picked up**: start by reading
   `src/controllers/incident.controller.js` and
   `src/interface/routes/incident.routes.js` (not
