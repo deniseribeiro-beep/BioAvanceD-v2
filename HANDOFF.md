@@ -1,98 +1,73 @@
 # HANDOFF
 
-**Written:** 2026-08-04, after resolving #384 on
+**Written:** 2026-08-04, after resolving #385 on
 `feature/docker-e2e-backend-integration`.
 
 ## What happened this session
 
-Dennis said "Pick #384". Routed via `work-issue` → `resolve-issue` (a
-dict-07 gap explicitly framed as "retire a legacy route and unify onto
-the canonical flow" — not a bug, not a coverage gap, not a missing
-capability).
+Dennis said "Pick #385". Routed via `work-issue` → traced the issue's
+real call sites before routing (per its "verify before deferring"
+step) rather than taking the dict-07 gap description at face value —
+confirmed the consumer side (`neo4jCanonicalProjection.service.js`)
+already reads canonical `participantId`/`specimenId` everywhere, and
+the only live producer caller (`consent.service.js`) already *sends*
+`participantId`/`specimenId`. The actual defect was narrower than the
+issue title suggested: `graphProjection.service.js` alone was still
+building outbox payloads on `donorKey`/`sampleId` (and
+`childSampleId`/`parentSampleId` for lineage), so `payload.participantId`
+was silently dropped on every consent projection event (the method read
+`payload.donorKey`, which the caller never sets). Routed to `fix-bugs`
+(reproducible producer/consumer field-name mismatch, not a missing
+capability — the canonical model already existed on both the caller and
+consumer sides).
 
-#384: `eConsent.js`'s legacy `POST /update` route (the patient-facing,
-JWT-link consent flow) bypassed the canonical `ConsentTemplate`/`Consent`
-flow entirely — it called `consentService.recordConsentProjectionEvent`
-directly, emitting an outbox projection event with **no real `Consent`
-document** ever created (no `consentId`, no template linkage, no
-`responses`). The frontend (`EConsentPage.tsx`) also hardcoded a static
-3-item consent-layer list (`project`/`storage`/`sharing`) unrelated to
-whatever the active `ConsentTemplate`'s actual permissions were.
+**Built:** renamed the payload/aggregateId field names across all four
+`append*Event` methods in `graphProjection.service.js`
+(`appendConsentEvent`, `appendLineageEvent`, `appendQualityEvent`,
+`appendTelemetryEvent`) from `donorKey`/`sampleId`/`childSampleId`/
+`parentSampleId` to `participantId`/`specimenId`/`childSpecimenId`/
+`parentSpecimenId`. No dual-write, per dict-07's migration-table rule.
+`appendLineageEvent`/`appendQualityEvent`/`appendTelemetryEvent` have no
+live caller yet (grepped repo-wide, confirmed) — fixed for contract
+consistency since they're the same file/same root cause, not scope
+creep.
 
-**Real design fork found mid-session, resolved via docs, not guessed:**
-`consentService.createPatientConsent` validates submitted `responses`
-against the active template's `permissions`, including a `required: true`
-gate that blocks creation if a required permission isn't granted. The
-frontend's "Revogar Todos" button submits a full revoke-all — which would
-always fail that gate if any permission is marked required. Asked Dennis
-via `AskUserQuestion`; he said to check docs first rather than pick an
-option. RF010 in `docs/docs-7-31-2026/1-Requisitos-Funcionais-e-Nao-
-Funcionais.md` settled it: revocation must never be blocked by the
-required-permission check meant for granting new consent. Implemented
-accordingly.
+**Proof bar:** `api/backend/tests/unit/graphProjection.service.test.js`
+— rewrote all field-name assertions to canonical names first (reproduced
+the bug: 6 of 17 tests failed against old product code), then fixed
+product code to make them pass (17/17 green). Also ran
+`consent.service.unit.test.js` (103), `eConsent.routes.test.js` (22),
+`neo4j-canonical-projection.service.test.js` (3),
+`neo4j-outbox.service.test.js` (14), `neo4jProjection.worker.test.js`
+(8) — all green, confirming no caller/consumer regression. Broader
+`-t "graph|consent|Consent|neo4j|Neo4j"` sweep across the full backend
+suite: 679 passed, 0 failed.
 
-**Built:**
-- `GET /api/e-consent/validate/:token` (`api/backend/src/routes/
-  eConsent.js`) now also returns the active `ConsentTemplate`'s
-  permissions and the patient's current active-consent `responses`, so
-  the frontend can render whatever the template actually asks for.
-- `POST /api/e-consent/update` now maps the submitted per-permission
-  statuses to a `responses` object: a partial/grant change goes through
-  `consentService.createPatientConsent` against the active template
-  (real `consentId`-bearing `Consent` document, outbox event via
-  `recordConsentProjectionEvent` fired internally as before); a full
-  revoke-all instead calls `consentService.revokeConsent` on the
-  patient's current active consent, sidestepping the required-permission
-  gate. Quarantine/release side effects (specimenStatus +
-  `QuarantineAction`, #409-era) are unchanged, still driven off the raw
-  per-permission statuses in the request.
-- `EConsentPage.tsx` renders the active template's permissions
-  dynamically instead of the hardcoded `project`/`storage`/`sharing`
-  list.
-
-**Proof bar:** `api/backend/tests/unit/eConsent.routes.test.js` — 22
-tests (rewrote the `/validate` and `/update` describe blocks to match
-the new canonical-flow behavior: template/responses shape,
-createPatientConsent vs revokeConsent branching, 409 when no template is
-active, 422 passthrough on template validation errors; quarantine/
-release tests kept, now exercised through the new write path).
-`consent-integration.test.js` (16 tests, a separate mocked-route suite,
-untouched) still green. Frontend typecheck clean on the changed file. Did
-not run the full backend suite this session (targeted-tests-only per the
-default execution contract) — ran the two consent-related suites plus a
-broader `-t "consent"` filter across `api/backend/tests/` in the
-background, which finished exit 0.
-
-Branched `test/384-econsent-canonical-flow` off
-`feature/docker-e2e-backend-integration`, same `test/<slug>` fallback
-prefix prior sessions used. Committed, pushed, merged `--no-ff`, pushed;
-issue branch deleted locally and on remote. Closed #384 with a comment
-summarizing the implementation and the RF010-backed revoke-vs-create
-design decision.
-
-**Process note, not a code finding:** the first wrap-up pass this
-session was run without also invoking `handoff` — Dennis had to ask why.
-`wrap-up`'s own text already says to invoke `handoff` before the final
-summary whenever a session changes committed repo state, which this one
-did (merge + push + issue close); the miss was not re-reading that line
-carefully enough at the trigger moment, not a gap in the skill text
-itself. Flagging here in case it recurs.
+Branched `fix/385-graph-outbox-canonical-fields` off
+`feature/docker-e2e-backend-integration`. Committed (`Fixes #385`),
+pushed, merged `--no-ff` into the integration branch, pushed. Issue
+branch deleted locally **and on remote** — the remote delete succeeded
+without a permission prompt this time, consistent with `fix-bugs`'
+already-documented observation that a branch pushed+merged within the
+same session deletes cleanly (the denial pattern hits *other* sessions'
+merged branches). Closed #385 with the merge-commit hash and the test
+tally.
 
 ## Repo state
 
-- **`feature/docker-e2e-backend-integration`**: now at `ce542064` (was
-  `cb1fbf09`), pushed to `origin`. One merge this session: `ce542064`
-  (eConsent canonical-flow unification, commit `9025465e`).
-- Issue branch `test/384-econsent-canonical-flow`: deleted locally and on
-  remote — nothing dangling. This handoff rotation itself lands via a
-  small `test/384-handoff-rotate` branch (the branch-guard hook requires
-  a `fix/`/`test/` branch for any edit alongside an untracked file, see
+- **`feature/docker-e2e-backend-integration`**: now at `44783dc9` (was
+  `b9ec2f28`), pushed to `origin`. One merge this session: `44783dc9`
+  (graphProjection canonical-field alignment, commit `4d06f636`).
+- No dangling branches — `fix/385-graph-outbox-canonical-fields` deleted
+  locally and on remote. This handoff rotation itself lands via a small
+  `test/385-handoff-rotate` branch (the branch-guard hook requires a
+  `fix/`/`test/` branch for any edit alongside an untracked file, see
   below), merged the same way.
-- An untracked `api/backend/src/storage/results/` directory is present
-  in the working tree — pre-existing, not created by this session, left
-  untouched.
-- Issues: **#384 closed** (this session). No new issues opened. Backlog
-  unchanged otherwise: **#385–#387**, older backlog
+- An untracked `api/backend/src/storage/` directory is still present in
+  the working tree — pre-existing, not created by this session, left
+  untouched (carried forward from prior handoffs).
+- Issues: **#385 closed** (this session). No new issues opened. Backlog
+  unchanged otherwise: **#386–#387**, older backlog
   (`#371`/`#373`/`#374`/`#378`/`#379`), and **#389** (storage/custody
   split — route through `divide-and-conquer` first per its own body, 28
   files). #419's storage-hierarchy thread remains fully closed. #389
@@ -105,20 +80,24 @@ None.
 ## Recommended next steps
 
 Dennis didn't name a specific next pick this session, so per this
-skill's own rule: **none queued**. Backlog: **#385–#387**, older backlog
+skill's own rule: **none queued**. Backlog: **#386–#387**, older backlog
 (`#371`/`#373`/`#374`/`#378`/`#379`), and **#389** (route through
 `divide-and-conquer` first, 28 files).
 
 ## Which skills to use
 
-- Backlog unchanged: **#385–#387**, older backlog
+- Backlog unchanged: **#386–#387**, older backlog
   (`#371`/`#373`/`#374`/`#378`/`#379`) — untouched this session, no new
   guidance beyond prior handoffs.
 - **#389**: if picked up next, route through `divide-and-conquer` first
   per its own body (28 files, too big for one slice) — don't attempt as
   one iteration.
-- **Any dict-07/RF gap that looks like a legacy-route removal**: check
-  `docs/docs-7-31-2026/` (the newest requirements doc set) before
-  guessing at the target model — RF010 settled #384's design fork
-  directly and is the canonical source for Consent-domain behavior
-  (versioning, required-permission semantics, revocation guarantees).
+- **Any dict-07/RF gap that names a field-alignment or canonicalization
+  issue**: don't take the issue title's framing of *which* file is wrong
+  at face value — grep every real caller and consumer first. #385's
+  title read as if the whole outbox pipeline lacked canonical fields;
+  tracing calls showed the consumer and the only live caller already
+  used them, narrowing the actual fix to one file's internal field
+  names. This is the same "verify before deferring" discipline
+  `fix-bugs` already documents, applied one step earlier, during
+  `work-issue`'s routing/classification pass.
