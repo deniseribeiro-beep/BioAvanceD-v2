@@ -1,97 +1,115 @@
 # HANDOFF
 
-**Written:** 2026-08-04, after closing #409 (write-site migration, all 5/5
-files done) and #404 (fixed by #409) on
+**Written:** 2026-08-04, after closing #407 (frontend + e2e migration to
+`specimenStatus`) and filing #411 (a backend gap it surfaced) on
 `feature/docker-e2e-backend-integration`.
 
 ## What happened this session
 
-Dennis said "Read handoff" (continuing the standing #409 backlog per the
-prior handoff's recommended next step, same pattern as four prior
-sessions). Invoked `resolve-issue`, then `build-loop`.
+Dennis said "pick #407." Routed via `work-issue` → `resolve-issue`
+(not `test-loop`/`build-loop`/`fix-bugs` — a frontend/e2e read migration
+of an already-existing backend field, not new capability or a coverage
+gap).
 
 **Pre-pickup checks:** working tree clean, local branch matched
-`origin/feature/docker-e2e-backend-integration` exactly. One stale local
-branch from the prior session (`test/409-quarantine-write-migration-econsent-js`)
-confirmed already merged via `git merge-base --is-ancestor` and deleted
-locally.
+`origin/feature/docker-e2e-backend-integration` exactly, no stale
+branches related to #407. Confirmed #407's dependency (#406) was
+already closed.
 
-**File 5 of 5**: `api/backend/src/services/fhir-import-staging.service.js`
-(branch `test/409-quarantine-write-migration-fhir-import-staging`, merged
-fast-forward at `3e399f66`, pushed):
+**#407** (branch `test/407-frontend-e2e-specimenstatus-migration`,
+merged fast-forward at `0611f18b`, pushed):
 
-- Re-grepped fresh, per the now-five-sessions-running lesson that the
-  issue's own line citations drift. Found the file's ~10
-  `quarantineStatus`/`quarantineReason`/`availabilityStatus` writers split
-  across **two different domains**: ~8 write `import_staging_records` (a
-  pre-commit workflow snapshot on the FHIR import record itself —
-  `validateBatch`, `sendConsents`, `acceptImportConsentToken`'s staging
-  update), and only **two** (`commitBatch`'s `samples.updateOne` upsert,
-  `attachExternalDocument`'s `samples.updateOne`) actually touch the
-  `samples` collection — the only ones that are real Sample governance
-  write sites in #409's sense. The issue's original "~10 write sites"
-  count conflated both domains.
-- Migrated the two real write sites onto the established pattern
-  (`SampleModel.deriveLegacyStatuses`/`resolveSpecimenStatus` +
-  `quarantine-action.service`'s `recordAction`/`releaseActiveAction`,
-  guarded by a before/after state check), same as files 1-4. Legacy
-  `quarantineStatus`/`quarantineReason`/`availabilityStatus`/`releaseStatus`
-  dual-write kept per #405's bridge (removal is #408, not this issue).
-- Added a code comment at `buildWorkflowSnapshot` recording *why* the
-  staging-record writers are correctly out of scope, per `resolve-issue`'s
-  "confirmed, no change needed" guidance — so a future audit re-grepping
-  this file doesn't re-flag them as unmigrated (separate branch
-  `test/409-fhir-import-staging-scope-comment`, merged fast-forward at
-  `0f23a81e`, pushed; this was `wrap-up`'s one finding this session).
-- Extended `tests/unit/services/fhir-import-staging-consent.service.test.js`:
-  added a `quarantineActions` fake collection, two new `commitBatch` tests
-  (new-sample-available-no-action, and existing-quarantined-sample gets
-  released + its `QuarantineAction` released), and strengthened
-  `attachExternalDocument`'s existing test to assert
-  `specimenStatus`/`lifecycleStatus` and the `QuarantineAction` release.
-  13 tests in that file (was 11), all green.
-- Re-verified on the merged integration branch:
-  `fhir-import-staging-consent.service.test.js` (13),
-  `fhir-import-staging.controller.test.js` (21, unaffected — mocks the
-  service), `fhir-import.test.js` integration (35), `eConsent.routes.test.js`
-  (16, unaffected regression check) — 85 tests green.
-- Closed **#409** (all 5/5 write-site files done) and **#404** (fixed by
-  #409, referenced per #409's own text — not #399/#406).
+- Migrated the read/decision sites in #407's scope from the legacy
+  `quarantineStatus`/`availabilityStatus` trio to `specimenStatus`:
+  `frontend/src/types/models.ts` (added the field, marked the trio
+  deprecated), `SamplesPageView.tsx`'s badge logic, `SamplesPage.tsx`'s
+  pending-summary alert, and `SampleDetailsPage.tsx`'s three
+  `currentStatus` reads (now prefer `specimenStatus` uppercased over
+  `lifecycleStatus`, itself already a 1:1 derivation).
+- Added `specimenStatus` assertions to `interop-monitoring.spec.ts` and
+  `specimen-quality-inventory.spec.ts` alongside the existing legacy-field
+  assertions, for the two real Sample write sites in play (#409's
+  `commitBatch`, and the generic `PUT /api/samples/:id` quarantine/
+  release/block path).
+- Two in-scope files confirmed **no change needed**, reasoning recorded
+  in-place (comments) rather than left implicit: `FhirImportPage.tsx`
+  reads `import_staging_records` (a pre-commit workflow snapshot,
+  `buildWorkflowSnapshot`), not `Sample` — same domain split #409's
+  file 5 already found in the backend service, so there's no
+  `specimenStatus` equivalent there. `ClinicalIntakeWizard.jsx`/
+  `intake.service.js` send a write-only creation default the backend
+  doesn't map to `specimenStatus` at all — this turned out to be a
+  real gap, filed as **#411** rather than fixed inline (backend, out of
+  #407's frontend/e2e scope).
+- **Fixed two write-site bugs inline** (resolve-issue's
+  blocks-acceptance-criteria exception): `SamplesPage.tsx`'s
+  `attachExternalDocument` wasn't sending `specimenStatus`, so the
+  backend's sticky `computeStatus` would leave a "released" sample's
+  `specimenStatus` at `'quarantined'` even though the legacy fields said
+  released — the exact case #407's own badge migration would have
+  regressed on. The RF019/RF006 e2e specs' direct `PUT` payloads had the
+  same gap in their own test fixtures; fixed both.
+- `frontend` typecheck (`tsc --noEmit`) clean on the merged branch. Both
+  e2e spec files verified to still parse/compile
+  (`playwright test --list`) but not run against a live backend — no
+  Docker this session, same rationale as the recent #409 sessions.
+- Closed **#407**.
 
-No Docker this session — same rationale as the four prior #409 sessions
-(`build-loop`'s repo overlay: backend-internal slice, proven against a
-real-query-matching mocked-Mongo fake, not literal Docker; not one of the
-milestone's own e2e Playwright specs).
+**#411 filed** (not started): `intakeWizard.js`'s
+`buildSampleDocumentFromIntake` never sets `specimenStatus` on samples
+created through the intake wizard — inserted via the native Mongo
+driver, so the Mongoose schema default doesn't apply, and the
+`lifecycleStatus`/`releaseStatus` fallback vocabulary
+(`'QUARANTINE'`/`'BLOCKED'`) doesn't match `specimenStatus`'s enum
+(`quarantined`/`unavailable`/etc.), so `resolveSpecimenStatus`'s
+fallback silently resolves to a value `BLOCKED_SPECIMEN_STATUSES`
+doesn't recognize. Concretely: an intake-wizard sample that should start
+quarantined/blocked will show as available in the badges #407 just
+migrated. Backend fix, not scoped to #407.
 
-`wrap-up` ran clean apart from the one finding above (now fixed and
-merged). No permission denials, no scope creep, no lazy fixes, nothing
-security-relevant introduced.
+`wrap-up` ran clean apart from filing #411 (now tracked, not fixed).
+No permission denials, no scope creep beyond the two in-acceptance-
+criteria bug fixes (both called out above and in the close comment), no
+lazy fixes.
 
 ## Repo state
 
-- **`feature/docker-e2e-backend-integration`**: now at `0f23a81e` (was
-  `6a4bd5a2` at session start), pushed. Both this session's `test/`
-  branches merged fast-forward and deleted (local + remote).
-- Issues: **#409 and #404 now closed.** Per the prior handoff's note,
-  closing #409 unblocks **#407, #408** (frontend/e2e coverage and legacy
-  field removal, respectively — neither started yet). **#410, #406,
-  #399, #401, #402** unchanged from the prior handoff.
+- **`feature/docker-e2e-backend-integration`**: now at `0611f18b` (was
+  `aa5f3de4` at session start), pushed. This session's `test/` branch
+  merged fast-forward and can be deleted (not yet done — see next step
+  below).
+- Issues: **#407 now closed.** **#411 newly filed, open, unstarted** —
+  a backend-only fix (`intakeWizard.js`), no frontend/e2e component.
+  **#408** (removing the legacy trio now that every *known* write site
+  derives `specimenStatus`) is still open and — per #407's own findings
+  — should re-check #411's resolution status before assuming "every
+  write site" is actually true; the intake-wizard path is a write site
+  #408 would need to audit too. **#410, #406(closed), #401, #402**
+  unchanged from the prior handoff (#406 was closed before this
+  session started, not by it).
 
 ## Blocking next step
 
-None.
+None. Local `test/407-frontend-e2e-specimenstatus-migration` branch
+should be deleted (merged + closed, per `clean-up`'s branch domain) —
+not yet done this session, purely a housekeeping step.
 
 ## Recommended next steps
 
 Dennis didn't name a specific next pick this session — no explicit
 next-issue instruction, so per this skill's own rule: **none queued**.
-For reference, the natural candidates now that #409 is fully closed:
+For reference, the natural candidates:
 
-- **#407** (frontend/e2e coverage for the quarantine write-site
-  migration) and **#408** (removing the legacy
-  `quarantineStatus`/`quarantineReason`/`availabilityStatus` fields now
-  that every write site derives `specimenStatus` first) are newly
-  unblocked — neither has been scoped or started yet this session.
+- **#411** (this session's finding): small, scoped, backend-only —
+  `buildSampleDocumentFromIntake` needs to derive `specimenStatus`
+  explicitly, same pattern #409 used everywhere else. Good `fix-bugs`
+  candidate.
+- **#408** (removing the legacy `quarantineStatus`/`quarantineReason`/
+  `availabilityStatus` fields): now that #407's frontend reads are
+  migrated, this is closer to viable — but should wait on #411, since
+  #408 needs every write site (including intake-wizard) actually
+  deriving `specimenStatus` before the legacy trio can be safely
+  dropped.
 - **#410**: pure product code, `resolve-issue` alone is enough, no
   `build-loop` needed — unchanged from prior handoffs, still untouched.
 - Older backlog, unchanged: **#401, #402**, **#384–#387**,
@@ -99,30 +117,27 @@ For reference, the natural candidates now that #409 is fully closed:
 
 ## Which skills to use
 
-- **#407/#408** haven't been scoped this session — read both fresh
-  before picking either up; #408's legacy-field removal in particular
-  should re-grep every write site #409 touched (5 files) to confirm each
-  really does derive `specimenStatus` before removing the legacy trio,
-  not assume the #409 close comment's summary is sufficient.
-- **A single service file can straddle two different write-site domains**
-  — this session's concrete lesson: `fhir-import-staging.service.js` had
-  ~10 `quarantineStatus`-shaped writes, but only 2 touched the `samples`
-  collection (the rest were a separate pre-commit staging-record
-  snapshot). Don't assume every `quarantineStatus: '...'` grep hit in a
-  file is a Sample governance write site — check which collection each
-  `updateOne`/`insertOne` targets before migrating it.
-- **`quarantine-action.service.js`'s `recordAction`/`getActionsForSpecimen`/
-  `releaseActiveAction`/`markPendingReview`** are the concrete primitives
-  — don't reinvent. **Guard every `recordAction`/`releaseActiveAction`
-  call with a before/after state comparison** (via
-  `SampleModel.resolveSpecimenStatus`) so a repeat call at the same
-  status doesn't append a duplicate `QuarantineAction`/re-release an
-  already-released one.
-- **Any vitest file using a fake `db.collection()` router for
-  `quarantine-action.service.js` coverage needs a `quarantineActions`
-  fake collection added alongside `samples`/`import_staging_records`** —
-  confirmed again this session (`fhir-import-staging-consent.service.test.js`
-  didn't have one before this session's `commitBatch`/`attachExternalDocument`
-  tests needed it).
+- **#411**: a self-contained backend write-site fix. `SampleModel`
+  already has `deriveLegacyStatuses`/an inverse-mapping shape from
+  #409's other write sites to copy — don't reinvent the pattern.
+- **#408**, when picked up: re-grep every write site #409 *and* #411
+  touch to confirm each really derives `specimenStatus` before removing
+  the legacy trio, not assume the #409/#411 close comments' summaries
+  are sufficient (this was already #409's own stated lesson, reconfirmed
+  here since #411 shows the "every write site" premise can still be
+  incomplete even after #409 closed).
+- **A frontend/e2e "migrate reads" issue can still surface real backend
+  write-site bugs** — this session's concrete lesson: two separate
+  write sites (`SamplesPage.tsx`'s `attachExternalDocument`, and the
+  RF019/RF006 e2e specs' own PUT fixtures) were silently broken by the
+  #409 backend migration because they never started sending
+  `specimenStatus` explicitly, relying on the old assumption that
+  setting the legacy trio was sufficient. When migrating a read site,
+  check every write site feeding that same UI decision, not just the
+  read expression itself.
+- **`import_staging_records` vs `samples` domain split (from #409) also
+  applies on the frontend** — `FhirImportPage.tsx` reads the staging
+  domain, which has no `specimenStatus` equivalent; don't assume every
+  `quarantineStatus`-shaped field in the frontend is Sample-backed.
 - Backlog unchanged otherwise: **#401, #402**, **#384–#387**, older
   backlog (`#371`/`#373`/`#374`/`#378`/`#379`) — untouched this session.
