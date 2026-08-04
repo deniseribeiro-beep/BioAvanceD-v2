@@ -15,6 +15,8 @@ const {
   createGetFreezerTreeController
 } = require('../controllers/storage-query.controller');
 const { authenticate } = require('../../infrastructure/middleware/auth');
+const { requirePermission } = require('../../infrastructure/middleware/rbac');
+const { ObjectId } = require('mongodb');
 const logger = require('../../utils/logger');
 
 /**
@@ -409,6 +411,88 @@ router.get('/box/:boxId/integrity', createCheckBoxIntegrityController());
  * }
  */
 router.get('/freezer/:freezerId/tree', createGetFreezerTreeController());
+
+/**
+ * PATCH /api/storage/freezer/:freezerId/room
+ * Atribuir/alterar a Room (dict-02 StorageAssignment.roomId, ELM-0169) de um
+ * FREEZER — closes the assignment-path gap #419 deferred from #418 (models
+ * existed, nothing could set them).
+ *
+ * Body:
+ * {
+ *   "roomId": "507f1f77bcf86cd799439012"
+ * }
+ *
+ * Response 200:
+ * {
+ *   "success": true,
+ *   "data": { "_id": "...", "roomId": "507f..." }
+ * }
+ *
+ * Response 404:
+ * {
+ *   "success": false,
+ *   "error": "FREEZER_NOT_FOUND" | "ROOM_NOT_FOUND"
+ * }
+ *
+ * Response 400 (container não é FREEZER):
+ * {
+ *   "success": false,
+ *   "error": "NOT_A_FREEZER"
+ * }
+ */
+router.patch('/freezer/:freezerId/room', authenticate, requirePermission('createPatient'), async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+
+    if (!ObjectId.isValid(req.params.freezerId)) {
+      return res.status(400).json({ success: false, error: 'ID inválido' });
+    }
+    const freezerObjectId = new ObjectId(req.params.freezerId);
+
+    const freezer = await db.collection('storageContainers').findOne({ _id: freezerObjectId });
+    if (!freezer) {
+      return res.status(404).json({ success: false, error: 'FREEZER_NOT_FOUND' });
+    }
+    if (freezer.containerType !== 'FREEZER') {
+      return res.status(400).json({
+        success: false,
+        error: 'NOT_A_FREEZER',
+        message: 'roomId só pode ser atribuído a containers do tipo FREEZER'
+      });
+    }
+
+    const { roomId } = req.body;
+    let roomObjectId = null;
+    if (roomId) {
+      if (!ObjectId.isValid(roomId)) {
+        return res.status(400).json({ success: false, error: 'roomId inválido' });
+      }
+      roomObjectId = new ObjectId(roomId);
+      const room = await db.collection('rooms').findOne({ _id: roomObjectId, deletedAt: null });
+      if (!room) {
+        return res.status(404).json({ success: false, error: 'ROOM_NOT_FOUND' });
+      }
+    }
+
+    await db.collection('storageContainers').updateOne(
+      { _id: freezerObjectId },
+      { $set: { roomId: roomObjectId, updatedAt: new Date() } }
+    );
+
+    return res.status(200).json({
+      success: true,
+      data: { _id: freezerObjectId, roomId: roomObjectId }
+    });
+  } catch (error) {
+    logger.error('[Storage] Erro ao atribuir room ao freezer:', error.message || error);
+    return res.status(400).json({
+      success: false,
+      error: 'INTERNAL_ERROR',
+      message: error.message
+    });
+  }
+});
 
 // ==================== ERROR HANDLING ====================
 router.use((err, req, res, next) => {
