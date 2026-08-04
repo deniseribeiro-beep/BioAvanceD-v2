@@ -179,7 +179,7 @@ describe('intakeWizard.routes.js (interface wrapper / governance guard)', () => 
     );
   });
 
-  it('persists BLOCKED status when the release status itself is BLOCKED (consent active)', async () => {
+  it('persists BLOCKED status when the persisted specimenStatus itself is unavailable (consent active)', async () => {
     const existingSample = { _id: 'sample-2', specimenId: 'spec-2', specimenStatus: 'available' };
     const samplesCollection = buildSamplesCollection({ existingSample });
     const getCollectionImpl = buildGetCollectionImpl({ samplesCollection });
@@ -188,7 +188,7 @@ describe('intakeWizard.routes.js (interface wrapper / governance guard)', () => 
 
     const res = await request(app).post('/api/intake-wizard').send({
       success: true,
-      sample: { specimenId: 'spec-2', releaseStatus: 'blocked' },
+      sample: { specimenId: 'spec-2', specimenStatus: 'unavailable' },
       consent: { active: true },
     });
 
@@ -197,7 +197,7 @@ describe('intakeWizard.routes.js (interface wrapper / governance guard)', () => 
     expect(res.body.sample.quarantineReason).toBe('CONSENT_PENDING');
   });
 
-  it('persists QUARANTINE status via release status alias and records a QuarantineAction', async () => {
+  it('persists QUARANTINE status from the persisted specimenStatus and records a QuarantineAction', async () => {
     const existingSample = { _id: 'sample-3', specimenId: 'spec-3', specimenStatus: 'available' };
     const samplesCollection = buildSamplesCollection({ existingSample });
     const quarantineActionsCollection = buildQuarantineActionsCollection();
@@ -207,7 +207,7 @@ describe('intakeWizard.routes.js (interface wrapper / governance guard)', () => 
 
     const res = await request(app).post('/api/intake-wizard').send({
       success: true,
-      sample: { specimenId: 'spec-3', release_status: 'quarantine' },
+      sample: { specimenId: 'spec-3', specimenStatus: 'quarantined' },
       consent: { active: true },
     });
 
@@ -230,7 +230,7 @@ describe('intakeWizard.routes.js (interface wrapper / governance guard)', () => 
 
     const res = await request(app).post('/api/intake-wizard').send({
       success: true,
-      sample: { specimenId: 'spec-4', quarantineStatus: 'QUARANTINED', quarantineReason: 'CUSTOM_REASON' },
+      sample: { specimenId: 'spec-4', specimenStatus: 'quarantined', quarantineReason: 'CUSTOM_REASON' },
       consent: { active: true },
     });
 

@@ -310,7 +310,7 @@ class SampleService {
       // Validações de status (RF006 AC#4)
       const currentSpecimenStatus = SampleModel.resolveSpecimenStatus(sample);
       if (BLOCKED_SPECIMEN_STATUSES.includes(currentSpecimenStatus)) {
-        throw new Error(`Amostra não está disponível para retirada (Status: ${sample.lifecycleStatus})`);
+        throw new Error(`Amostra não está disponível para retirada (Status: ${currentSpecimenStatus})`);
       }
 
       // Validações MIABIS
@@ -438,8 +438,8 @@ class SampleService {
         query.participantId = filters.participantId;
       }
 
-      if (filters.lifecycleStatus) {
-        query.lifecycleStatus = filters.lifecycleStatus;
+      if (filters.specimenStatus) {
+        query.specimenStatus = filters.specimenStatus;
       }
 
       if (filters.sampleType) {
@@ -664,7 +664,7 @@ class SampleService {
       // Validações de status (RF006 AC#4)
       const currentSpecimenStatus = SampleModel.resolveSpecimenStatus(sample);
       if (BLOCKED_SPECIMEN_STATUSES.includes(currentSpecimenStatus)) {
-        throw new Error(`Amostra não está disponível para devolução (Status: ${sample.lifecycleStatus})`);
+        throw new Error(`Amostra não está disponível para devolução (Status: ${currentSpecimenStatus})`);
       }
 
       // Validação: só pode devolver se houver quantidade retirada
@@ -757,7 +757,7 @@ class SampleService {
           updatedAt: new Date()
         };
 
-        if (lifecycleStatus === 'AVAILABLE') {
+        if (specimenStatus === 'available') {
           update.withdrawnAt = null;
           update.withdrawalType = null;
           update.withdrawalResponsible = null;
@@ -888,7 +888,7 @@ class SampleService {
   async findAvailableSamplesForResearch(db, query = {}) {
     const samplesCollection = await getCollection(db, 'samples');
     // Garante que só retorna amostras AVAILABLE
-    const finalQuery = { ...query, lifecycleStatus: 'AVAILABLE' };
+    const finalQuery = { ...query, specimenStatus: 'available' };
     return samplesCollection.find(finalQuery).toArray();
   }
 }

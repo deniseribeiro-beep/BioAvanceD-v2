@@ -651,8 +651,7 @@ router.put('/:id', authenticate, requirePermission('editSample'), async (req, re
         req: req
       });
 
-      const releaseRequested = String(req.body?.quarantineStatus || '').toUpperCase() === 'RELEASED'
-        || String(req.body?.availabilityStatus || '').toUpperCase() === 'AVAILABLE'
+      const releaseRequested = String(req.body?.specimenStatus || '').toLowerCase() === 'available'
         || String(req.body?.consentStatus || '').toUpperCase() === 'EXTERNAL_ATTACHED'
         || String(req.body?.consentStatus || '').toUpperCase() === 'SIGNED';
 
@@ -666,8 +665,7 @@ router.put('/:id', authenticate, requirePermission('editSample'), async (req, re
           message: 'Amostra liberada após validação ética',
           payload: {
             consentStatus: req.body?.consentStatus || null,
-            quarantineStatus: req.body?.quarantineStatus || null,
-            availabilityStatus: req.body?.availabilityStatus || null,
+            specimenStatus: req.body?.specimenStatus || null,
             quarantineReason: req.body?.quarantineReason || null,
           },
           req: req

@@ -592,7 +592,7 @@ describe('sample.service', () => {
 
       const result = await sampleService.listSamples(db, {
         participantId: '12345678',
-        lifecycleStatus: 'AVAILABLE',
+        specimenStatus: 'available',
         sampleType: 'PLASMA',
         limit: 5,
         skip: 1
@@ -600,7 +600,7 @@ describe('sample.service', () => {
 
       expect(db.collections.samples.find).toHaveBeenCalledWith({
         participantId: '12345678',
-        lifecycleStatus: 'AVAILABLE',
+        specimenStatus: 'available',
         sampleType: 'PLASMA'
       });
       expect(cursor.limit).toHaveBeenCalledWith(5);
@@ -1182,21 +1182,21 @@ describe('sample.service', () => {
 
   // -------------------------------------------------------------------
   describe('findAvailableSamplesForResearch', () => {
-    it('forces lifecycleStatus to AVAILABLE even if the caller requests something else', async () => {
+    it('forces specimenStatus to available even if the caller requests something else', async () => {
       const db = makeDb();
-      const cursor = makeCursor([{ lifecycleStatus: 'AVAILABLE' }]);
+      const cursor = makeCursor([{ specimenStatus: 'available' }]);
       db.collections.samples.find.mockReturnValue(cursor);
 
       const result = await sampleService.findAvailableSamplesForResearch(db, {
-        lifecycleStatus: 'QUARANTINED',
+        specimenStatus: 'quarantined',
         sampleType: 'PLASMA'
       });
 
       expect(db.collections.samples.find).toHaveBeenCalledWith({
         sampleType: 'PLASMA',
-        lifecycleStatus: 'AVAILABLE'
+        specimenStatus: 'available'
       });
-      expect(result).toEqual([{ lifecycleStatus: 'AVAILABLE' }]);
+      expect(result).toEqual([{ specimenStatus: 'available' }]);
     });
   });
 });

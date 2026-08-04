@@ -7,6 +7,7 @@ const { getCollection } = require('../utils/collectionResolver');
 const auditLogger = require('../utils/auditLogger');
 const qualityDomain = require('../services/quality-domain.service');
 const sampleService = require('../services/sample.service');
+const { SampleModel } = require('../models/Sample');
 const StorageService = require('../services/storageService');
 const { validate } = require('../contracts/canonical/v1');
 
@@ -144,9 +145,8 @@ function buildPharmacologyData(data = {}) {
 function buildSampleDocumentFromIntake(data = {}, matchedPatient = null) {
   const specimen = normalizeObject(data?.specimen);
   const consent = normalizeObject(data?.consent);
-  const releaseStatusRaw = normalizeString(specimen.lifecycleStatus).toUpperCase();
-  const releaseStatus = ['QUARANTINE', 'AVAILABLE', 'BLOCKED'].includes(releaseStatusRaw) ? releaseStatusRaw : 'QUARANTINE';
-  const specimenStatus = releaseStatus === 'AVAILABLE' ? 'available' : 'quarantined';
+  const requestedStatusRaw = normalizeString(specimen.lifecycleStatus).toUpperCase();
+  const specimenStatus = requestedStatusRaw === 'AVAILABLE' ? 'available' : 'quarantined';
   const registrationDate = specimen.registeredAt || new Date().toISOString();
   const confirmedPatientID = normalizeString(matchedPatient?.participantId) || resolvePatientID(data);
   const confirmedPatientName = normalizeString(matchedPatient?.patientName || data?.participant?.patientName);
@@ -162,7 +162,6 @@ function buildSampleDocumentFromIntake(data = {}, matchedPatient = null) {
     registeredAt: new Date(registrationDate),
     quantity: normalizeNumber(specimen.quantity, 0),
     unit: normalizeString(specimen.unit) || null,
-    lifecycleStatus: releaseStatus,
     specimenStatus,
     linkedProject: normalizeString(specimen.linkedProject) || 'INTAKE_WIZARD',
     sprec: normalizeObject(specimen.sprec),
@@ -213,9 +212,6 @@ async function resolveConsentDecision(db, patient) {
       consentId: activeConsent._id || null,
       patientId: activeConsent.participantId || null,
       status: 'SIGNED',
-      releaseStatus: 'AVAILABLE',
-      quarantineStatus: 'RELEASED',
-      availabilityStatus: 'AVAILABLE',
       quarantineReason: null,
       governanceReason: null,
     };
@@ -237,9 +233,6 @@ async function resolveConsentDecision(db, patient) {
       consentId: revokedConsent._id || null,
       patientId: revokedConsent.participantId || null,
       status: 'REVOKED',
-      releaseStatus: 'BLOCKED',
-      quarantineStatus: 'QUARANTINED',
-      availabilityStatus: 'BLOCKED',
       quarantineReason: 'CONSENT_REVOKED',
       governanceReason: 'Consentimento revogado.',
     };
@@ -250,9 +243,6 @@ async function resolveConsentDecision(db, patient) {
     consentId: null,
     patientId: null,
     status: 'PENDING',
-    releaseStatus: 'BLOCKED',
-    quarantineStatus: 'QUARANTINED',
-    availabilityStatus: 'BLOCKED',
     quarantineReason: 'CONSENT_PENDING',
     governanceReason: 'Consentimento ainda não ativo/assinado.',
   };
@@ -482,19 +472,19 @@ async function handleIntakeWizard(req, res) {
     const sampleToPersist = buildSampleDocumentFromIntake(data, matchOutcome.patient);
     sampleToPersist.locationID = Number(automaticLocation.location.locationID);
     const qualityAllowsRelease = qualidade.governance_status === 1 && qualidade.final_grade !== 'E';
-    const releaseStatus = consentDecision.active
-      ? (qualityAllowsRelease ? 'AVAILABLE' : 'QUARANTINE')
-      : consentDecision.releaseStatus;
-    const isReleased = releaseStatus === 'AVAILABLE';
+    const isReleased = consentDecision.active && qualityAllowsRelease;
+    const specimenStatus = isReleased ? 'available' : 'quarantined';
+    const { lifecycleStatus, availabilityStatus } = SampleModel.deriveLegacyStatuses(specimenStatus);
     Object.assign(sampleToPersist, {
       qualityAssessment: qualidade,
       consentStatus: consentDecision.active ? 'SIGNED' : consentDecision.status,
+      specimenStatus,
+      lifecycleStatus,
+      availabilityStatus,
       quarantineStatus: isReleased ? 'RELEASED' : 'QUARANTINED',
       quarantineReason: isReleased
         ? null
         : consentDecision.quarantineReason || (qualityAllowsRelease ? 'GOVERNANCE_BLOCKED' : 'QUALITY_GOVERNANCE_FAILURE'),
-      availabilityStatus: isReleased ? 'AVAILABLE' : 'BLOCKED',
-      lifecycleStatus: releaseStatus,
     });
     if (qualidade.sprec && Object.keys(qualidade.sprec).length > 0) {
       sampleToPersist.sprec = qualidade.sprec;
@@ -551,7 +541,7 @@ async function handleIntakeWizard(req, res) {
       readable: buildReadableStorageLocation(automaticLocation.location, allocation, automaticLocation.box),
     };
 
-    const responseMessage = releaseStatus === 'AVAILABLE'
+    const responseMessage = isReleased
       ? 'Cadastro integrado concluído com sucesso, amostra validada e localização automática atribuída.'
       : `Cadastro integrado concluído com sucesso, mas a amostra permanece bloqueada: ${consentDecision.governanceReason || 'decisão de governança do backend'}`;
 

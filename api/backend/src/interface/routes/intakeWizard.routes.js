@@ -32,38 +32,41 @@ function buildSampleQuery(sample = {}) {
 function resolveGovernanceStatus(body = {}) {
   const sample = body?.sample || {};
   const consent = body?.consent || {};
-  const rawReleaseStatus = normalizeString(sample.lifecycleStatus || sample.release_status || sample.releaseStatus || body.release_status).toUpperCase();
   const hasActiveConsent = consent.active !== false;
+  const persistedSpecimenStatus = normalizeString(sample.specimenStatus).toLowerCase() || SampleModel.resolveSpecimenStatus(sample);
 
-  if (!hasActiveConsent || rawReleaseStatus === 'BLOCKED') {
-    return {
-      status: 'BLOCKED',
-      currentStatus: 'Blocked',
-      lifecycleStatus: 'BLOCKED',
-      availabilityStatus: 'BLOCKED',
-      quarantineStatus: 'QUARANTINED',
-      quarantineReason: sample.quarantineReason || consent.reason || 'CONSENT_PENDING',
-    };
+  let specimenStatus;
+  let status;
+  let currentStatus;
+  let quarantineReason;
+
+  if (!hasActiveConsent || persistedSpecimenStatus === 'unavailable') {
+    specimenStatus = hasActiveConsent ? 'unavailable' : 'quarantined';
+    status = 'BLOCKED';
+    currentStatus = 'Blocked';
+    quarantineReason = sample.quarantineReason || consent.reason || 'CONSENT_PENDING';
+  } else if (persistedSpecimenStatus === 'quarantined') {
+    specimenStatus = 'quarantined';
+    status = 'QUARANTINE';
+    currentStatus = 'Quarantine';
+    quarantineReason = sample.quarantineReason || 'QUALITY_GOVERNANCE_FAILURE';
+  } else {
+    specimenStatus = 'available';
+    status = 'AVAILABLE';
+    currentStatus = 'Available';
+    quarantineReason = null;
   }
 
-  if (rawReleaseStatus === 'QUARANTINE' || sample.quarantineStatus === 'QUARANTINED') {
-    return {
-      status: 'QUARANTINE',
-      currentStatus: 'Quarantine',
-      lifecycleStatus: 'QUARANTINE',
-      availabilityStatus: 'BLOCKED',
-      quarantineStatus: 'QUARANTINED',
-      quarantineReason: sample.quarantineReason || 'QUALITY_GOVERNANCE_FAILURE',
-    };
-  }
+  const { lifecycleStatus, availabilityStatus } = SampleModel.deriveLegacyStatuses(specimenStatus);
 
   return {
-    status: 'AVAILABLE',
-    currentStatus: 'Available',
-    lifecycleStatus: 'AVAILABLE',
-    availabilityStatus: 'AVAILABLE',
-    quarantineStatus: 'RELEASED',
-    quarantineReason: null,
+    status,
+    currentStatus,
+    specimenStatus,
+    lifecycleStatus,
+    availabilityStatus,
+    quarantineStatus: specimenStatus === 'available' ? 'RELEASED' : 'QUARANTINED',
+    quarantineReason,
   };
 }
 
@@ -74,6 +77,7 @@ function buildSafeSampleSummary(sample = {}, governanceStatus = {}) {
     barcode: normalizeString(sample.barcode) || null,
     status: governanceStatus.status,
     currentStatus: governanceStatus.currentStatus,
+    specimenStatus: governanceStatus.specimenStatus,
     lifecycleStatus: governanceStatus.lifecycleStatus,
     availabilityStatus: governanceStatus.availabilityStatus,
     quarantineStatus: governanceStatus.quarantineStatus,
@@ -98,8 +102,7 @@ async function enforcePersistedGovernanceStatus(req, body) {
   }
 
   const governanceStatus = resolveGovernanceStatus(body);
-  const specimenStatus = governanceStatus.status === 'AVAILABLE' ? 'available' : 'quarantined';
-  const { lifecycleStatus, availabilityStatus } = SampleModel.deriveLegacyStatuses(specimenStatus);
+  const { specimenStatus, lifecycleStatus, availabilityStatus } = governanceStatus;
 
   const samplesCollection = await getCollection(db, 'samples');
   const existingSample = await samplesCollection.findOne(query);
@@ -130,7 +133,7 @@ async function enforcePersistedGovernanceStatus(req, body) {
     }
   }
 
-  return { ...governanceStatus, specimenStatus, lifecycleStatus, availabilityStatus };
+  return governanceStatus;
 }
 
 function sanitizeIntakeResponse(body = {}, governanceStatus = null) {

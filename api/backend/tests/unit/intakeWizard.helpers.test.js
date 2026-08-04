@@ -86,7 +86,6 @@ describe('intakeWizard helpers', () => {
     expect(document.patientObjectId).toBe('patient-object-1');
     expect(document.sampleType).toBe('Sangue');
     expect(document.consentTemplateId).toBe('template-1');
-    expect(document.lifecycleStatus).toBe('QUARANTINE');
     expect(document.specimenStatus).toBe('quarantined');
   });
 
@@ -113,7 +112,6 @@ describe('intakeWizard helpers', () => {
       specimen: { lifecycleStatus: 'AVAILABLE' },
     });
 
-    expect(document.lifecycleStatus).toBe('AVAILABLE');
     expect(document.specimenStatus).toBe('available');
   });
 
@@ -123,7 +121,6 @@ describe('intakeWizard helpers', () => {
       specimen: { lifecycleStatus: 'BLOCKED' },
     });
 
-    expect(document.lifecycleStatus).toBe('BLOCKED');
     expect(document.specimenStatus).toBe('quarantined');
   });
 

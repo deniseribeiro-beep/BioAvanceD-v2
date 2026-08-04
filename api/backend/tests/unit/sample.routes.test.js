@@ -1332,14 +1332,14 @@ describe('sample.routes', () => {
       );
     });
 
-    it('logs a sample_release audit entry when availabilityStatus is AVAILABLE (case-insensitive)', async () => {
+    it('logs a sample_release audit entry when specimenStatus is available (case-insensitive)', async () => {
       const updateSample = vi.fn().mockResolvedValue({ _id: '1' });
       const { router, auditLoggerModule } = loadRoute({ sampleServiceOverrides: { updateSample } });
       const app = buildApp(router, {});
 
       const res = await request(app)
         .put('/api/samples/000000000000000000000000')
-        .send({ availabilityStatus: 'available' });
+        .send({ specimenStatus: 'Available' });
 
       expect(res.status).toBe(200);
       expect(auditLoggerModule.log).toHaveBeenCalledWith(
@@ -1347,20 +1347,20 @@ describe('sample.routes', () => {
       );
     });
 
-    it('logs a sample_release audit entry when quarantineStatus is RELEASED, with null payload fallbacks', async () => {
+    it('logs a sample_release audit entry when specimenStatus is available, with null payload fallbacks', async () => {
       const updateSample = vi.fn().mockResolvedValue({ _id: '1' });
       const { router, auditLoggerModule } = loadRoute({ sampleServiceOverrides: { updateSample } });
       const app = buildApp(router, {});
 
       const res = await request(app)
         .put('/api/samples/000000000000000000000000')
-        .send({ quarantineStatus: 'RELEASED' });
+        .send({ specimenStatus: 'available' });
 
       expect(res.status).toBe(200);
       expect(auditLoggerModule.log).toHaveBeenCalledWith(
         expect.objectContaining({
           action: 'sample_release',
-          payload: expect.objectContaining({ consentStatus: null, availabilityStatus: null, quarantineReason: null }),
+          payload: expect.objectContaining({ consentStatus: null, quarantineReason: null }),
         })
       );
     });
