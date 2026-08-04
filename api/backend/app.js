@@ -283,6 +283,8 @@ app.use("/api/equipment", require("./src/interface/routes/equipment.routes"));
 app.use("/api/locations", require("./src/interface/routes/location.routes"));
 app.use("/api/organizations", require("./src/interface/routes/organization.routes"));
 app.use("/api/storage", require("./src/interface/routes/storage.routes"));
+app.use("/api/facilities", require("./src/interface/routes/facility.routes"));
+app.use("/api/rooms", require("./src/interface/routes/room.routes"));
 app.use("/api/policies", require("./src/interface/routes/policy.routes"));
 app.use("/api/sensors", require("./src/interface/routes/sensor.routes"));
 app.use("/api/iot", require("./src/interface/routes/iot.routes"));
