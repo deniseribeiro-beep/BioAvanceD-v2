@@ -1,63 +1,88 @@
 # HANDOFF
 
-**Written:** 2026-08-04, after resolving #401 on
+**Written:** 2026-08-04, after resolving #402 on
 `feature/docker-e2e-backend-integration`.
 
 ## What happened this session
 
-Dennis said "Pick #401". Routed via `work-issue` → `resolve-issue`
-(a scoping-audit "confirm or fix naming" question, not a bug/test/build
-item). #401 asked whether `Sample.js`'s `availableQuantity`/
-`originalQuantity`/`totalWithdrawn`/`totalReturned` are correctly
-ledger-backed per dict-02's `Specimen.currentQuantity`/`initialQuantity`
-(ELM-0138/ELM-0139, "Derivada de eventos; preservar ledger" — part 4 of
-#389's storage/custody split).
+Dennis said "Pick #402". Routed via `work-issue` → `build-loop` (a
+capability spec'd in dict-02 but missing from the code, per route 4 —
+not a bug and not a coverage gap for existing code).
 
-Read dict-02 (`docs/docs-7-27-2026/extracted/dict-02_DICIONARIO.md`,
-ELM-0138/ELM-0139) and `requisitos-index.md`'s RF006 (rastreabilidade e
-cadeia de custódia, AC#1-3 on quantity/state transitions) per the
-project's doc-read gate on canonical-data-model edits. Verified in
-`sample.service.js` that `withdrawSample`/`returnSample` write
-`availableQuantity`/`totalWithdrawn`/`totalReturned` atomically alongside
-the hash-chained `SampleMovement` ledger (`appendMovementWithHashChain`)
-inside a single `withMongoTransaction` call (RF006 AC#6) — confirming
-the issue's own hypothesis that this is genuinely ledger-backed, not
-naive duplicated state.
+#402: dict-02's `StorageAssignment` entity (ELM-0167–0178, P1X-0072/0073)
+models a specimen's placement *history* — one record per physical stay
+(`placedAt`/`removedAt`). The code only ever tracked current position
+(`Sample.storageLocation`); `MoveSampleUseCase`/`ReleaseSampleUseCase`
+overwrote/unset it with no history. RF017 AC#3/AC#5/AC#6
+(`requisitos-index.md`) mandate exactly this: link `StorageAssignment` to
+the specimen, record install/move/removal, preserve location history.
 
-**Resolution: "confirmed, no code change needed."** Per this repo's
-close-discipline rule, recorded the reasoning as a comment directly in
-`api/backend/src/models/Sample.js` (above the four quantity fields) so a
-future audit doesn't re-flag the same question. Did **not** rename
-`availableQuantity`→`currentQuantity`/`originalQuantity`→`initialQuantity`
-or touch `totalWithdrawn`/`totalReturned` — the issue itself flagged that
-as a separate, lower-priority call, and it's already covered by the open
-#389 umbrella issue (storage/custody split off `Sample.js`, 28 files,
-explicitly scoped for `divide-and-conquer` treatment) — no new issue
-needed.
+Read dict-02's ELM-0167–0178/P1X-0072/0073 rows and RF017's acceptance
+criteria directly (primary sources, not `docs/architecture/` — confirmed
+no existing summary there to go stale). Delegated a read-only research
+pass (`Explore` agent, gated through `agent-delegation` first) to map the
+current code and confirm no prior session had started this
+(`git log`/grep both empty).
 
-**Test impact:** none — comment-only change. Ran the two closest test
-files (`sample.service.test.js`, `sample.models.test.js`, 90/90 passing)
-as a sanity check before and after merge.
+**Built:** `StorageAssignmentModel`
+(`api/backend/src/models/StorageAssignment.js`, plain class mirroring the
+existing `SampleMovementModel` raw-driver pattern) plus three new
+`MongoStorageRepository` methods (`findStorageHierarchyForBox`,
+`openStorageAssignment`, `closeStorageAssignment`) wired into
+`allocateSamplePosition`/`moveSamplePosition`/`releaseSamplePosition` —
+each writes to a new `storageAssignments` collection inside the same
+transaction as the existing `storageBoxes`/`samples` writes. A move now
+closes the source placement record and opens a new one at the target
+instead of just overwriting `Sample.storageLocation`; a release closes
+the record instead of unsetting the field. Rack/shelf/equipment
+hierarchy is derived from the existing `StoragePath` lookup by `boxId`
+where available.
 
-Branched `fix/401-sample-quantity-ledger-confirm` off
-`feature/docker-e2e-backend-integration`, committed (`27f8023c`,
-"Confirm #401: Sample.js quantity fields are already ledger-backed"),
-pushed, merged (`--no-ff`, merge commit `b16703e6`) into the integration
-branch, pushed, closed #401 with a comment summarizing the confirmation
-and pointing the rename question at #389. Local and remote fix branches
-both deleted cleanly.
+**Scoped out, filed separately (#418):** `facilityId`/`roomId`
+(ELM-0168/0169, dict-02 1..1 Core) are left `null` — no `Facility`/`Room`
+entity exists anywhere in the codebase (`StorageContainer.containerType`
+only goes `FREEZER > SHELF > RACK`). Adding those entities is its own
+slice, sized similarly to #402 itself — filed as #418 rather than left as
+an unlinked comment, per this repo's close-discipline convention (a
+listed capability gap needs a tracking issue).
+
+**Proof bar:** per `build-loop`'s overlay, this is a backend-internal
+slice (not the milestone's own e2e spec), so "real backend" means
+in-memory collection mocks with real query-matching semantics, not
+literal Docker. Added 3 new tests to `MongoStorageRepository.test.js`
+(one per allocate/move/release, each asserting the correct
+open/close call against the `storageAssignments` collection) plus fixed
+`makeDb`'s missing-collection default so pre-existing happy-path tests
+didn't start throwing on the newly-added `storagePaths`/
+`storageAssignments` lookups. Full backend suite: 6465/6465 passing
+(one pre-existing, unrelated `iot.api.test.js` failure confirmed present
+on the base branch before this change too — not a regression).
+
+RF017's own e2e proof (`specimen-quality-inventory.spec.ts`) stays
+tracked separately in `E2E_TRACEABILITY_PLAN.md` (wave 3, still
+MISSING) — #402 covered the backend capability gap only, not e2e
+authoring.
+
+Branched `test/402-storage-assignment-history` off
+`feature/docker-e2e-backend-integration` (no `build/` prefix exists yet;
+`test/<slug>` is this loop's documented fallback), committed
+(`0b8cafc4`), pushed, merged (`--no-ff`, merge commit `1eb0f6f3`) into
+the integration branch, pushed, closed #402 with a comment summarizing
+the implementation and pointing the facility/room gap at #418. Local and
+remote fix branches both deleted cleanly.
 
 ## Repo state
 
-- **`feature/docker-e2e-backend-integration`**: now at `b16703e6` (was
-  `246ff1d8`), pushed to `origin`. 1 file changed (comment-only,
-  `Sample.js`).
-- Issue branch `fix/401-sample-quantity-ledger-confirm`: deleted both
+- **`feature/docker-e2e-backend-integration`**: now at `1eb0f6f3` (was
+  `b3d8f5b5`), pushed to `origin`. 3 files changed/added (`StorageAssignment.js`
+  new, `MongoStorageRepository.js` + its test file modified).
+- Issue branch `test/402-storage-assignment-history`: deleted both
   locally and on remote — nothing dangling.
-- Issues: **#401 closed** (this session). All other backlog items
-  unchanged from the prior handoff: **#402, #384–#387**,
-  `#371`/`#373`/`#374`/`#378`/`#379`. #389 remains open and now carries
-  the deferred rename sub-question from #401.
+- Issues: **#402 closed** (this session). **#418 opened** (this
+  session) — facility/room modeling gap, deferred from #402. All other
+  backlog items unchanged from the prior handoff: **#384–#387**,
+  `#371`/`#373`/`#374`/`#378`/`#379`. #389 remains open, still carrying
+  #401's deferred rename sub-question.
 
 ## Blocking next step
 
@@ -66,14 +91,20 @@ None.
 ## Recommended next steps
 
 Dennis didn't name a specific next pick this session, so per this
-skill's own rule: **none queued**. Backlog unchanged otherwise: **#402**,
+skill's own rule: **none queued**. Backlog: **#418** (new — StorageAssignment
+facility/room entities, low/moderate priority, similar size to #402),
 **#384–#387**, older backlog (`#371`/`#373`/`#374`/`#378`/`#379`), and
-**#389** (now with #401's rename sub-question folded in — scope with
-`divide-and-conquer` before implementing, per #389's own body).
+**#389** (storage/custody split — route through `divide-and-conquer`
+first per its own body, 28 files).
 
 ## Which skills to use
 
-- Backlog unchanged: **#402**, **#384–#387**, older backlog
+- **#418**: if picked up next, routes to `build-loop` same as #402 did —
+  it's the same capability-gap shape, just the facility/room sub-scope
+  #402 explicitly deferred. Will need a design call on how `Facility`/
+  `Room` attach above `FREEZER` in the existing `StorageContainer`
+  hierarchy before implementing.
+- Backlog unchanged: **#384–#387**, older backlog
   (`#371`/`#373`/`#374`/`#378`/`#379`) — untouched this session, no new
   guidance beyond prior handoffs.
 - **#389**: if picked up next, route through `divide-and-conquer` first
