@@ -1001,6 +1001,39 @@ describe('sample.routes', () => {
     });
   });
 
+  describe('GET /:id/quarantine-actions', () => {
+    it('returns 503 when db is unavailable', async () => {
+      const { router } = loadRoute();
+      const app = buildApp(router, null);
+
+      const res = await request(app).get('/api/samples/s1/quarantine-actions');
+
+      expect(res.status).toBe(503);
+    });
+
+    it('returns versioned quarantine actions on success', async () => {
+      const getQuarantineActions = vi.fn().mockResolvedValue([{ quarantineActionId: 'q1', actionStatus: 'active' }]);
+      const { router } = loadRoute({ sampleServiceOverrides: { getQuarantineActions } });
+      const app = buildApp(router, {});
+
+      const res = await request(app).get('/api/samples/s1/quarantine-actions');
+
+      expect(res.status).toBe(200);
+      expect(res.body.data).toEqual([{ quarantineActionId: 'q1', actionStatus: 'active' }]);
+      expect(getQuarantineActions).toHaveBeenCalledWith({}, 's1');
+    });
+
+    it('returns 500 when the service throws', async () => {
+      const getQuarantineActions = vi.fn().mockRejectedValue(new Error('db down'));
+      const { router } = loadRoute({ sampleServiceOverrides: { getQuarantineActions } });
+      const app = buildApp(router, {});
+
+      const res = await request(app).get('/api/samples/s1/quarantine-actions');
+
+      expect(res.status).toBe(500);
+    });
+  });
+
   describe('GET /:id/sprec-profiles', () => {
     it('returns 503 when db is unavailable', async () => {
       const { router } = loadRoute();

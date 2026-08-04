@@ -14,6 +14,7 @@ const { getCollection } = require('../utils/collectionResolver');
 const { withMongoTransaction } = require('../utils/mongoTransaction');
 const rcsAssessmentService = require('./rcs-assessment.service');
 const specimenPreanalyticsService = require('./specimen-preanalytics.service');
+const quarantineActionService = require('./quarantine-action.service');
 const { ObjectId } = require('mongodb');
 
 const LOCATION_REQUIRED_MESSAGE = 'Localização física obrigatória para cadastro de amostra';
@@ -856,6 +857,27 @@ class SampleService {
       return await specimenPreanalyticsService.getProfilesForSpecimen(db, specimenIdStr);
     } catch (error) {
       logger.error('Erro ao buscar snapshots SPREC:', error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Obtém o histórico de QuarantineActions referenciadas pela amostra
+   * (#406 — dict-02 P1X-0113–0119: quarentena como entidade separada e
+   * referenciada, não campos embutidos em Sample). Mais recente primeiro,
+   * mesmo padrão de #383/#388.
+   */
+  async getQuarantineActions(db, specimenId) {
+    try {
+      const samplesCollection = await getCollection(db, 'samples');
+      const sample = await findSampleByAnyId(samplesCollection, specimenId);
+      const specimenIdStr = sample
+        ? sample.specimenId
+        : (specimenId.toString ? specimenId.toString() : specimenId);
+
+      return await quarantineActionService.getActionsForSpecimen(db, specimenIdStr);
+    } catch (error) {
+      logger.error('Erro ao buscar ações de quarentena:', error.message);
       throw error;
     }
   }

@@ -1094,6 +1094,36 @@ router.get('/:id/sprec-profiles', authenticate, async (req, res) => {
   }
 });
 
+// dict-02 P1X-0113–0119 (#406) - QuarantineAction como entidade separada e
+// referenciada por specimenIds (não duplicada em Sample). Histórico
+// versionado, mais recente primeiro — mirrors #383's RcsAssessment/
+// GET /:id/rcs-assessments pattern.
+router.get('/:id/quarantine-actions', authenticate, async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    if (!db) {
+      return res.status(503).json({
+        success: false,
+        error: 'Banco de dados não disponível'
+      });
+    }
+
+    const actions = await sampleService.getQuarantineActions(db, req.params.id);
+
+    return res.status(200).json({
+      success: true,
+      data: actions
+    });
+  } catch (error) {
+    logger.error('Erro ao buscar ações de quarentena:', error.message);
+    return res.status(500).json({
+      success: false,
+      error: 'Erro ao buscar ações de quarentena',
+      message: error.message
+    });
+  }
+});
+
 // RF007 - Upload de Arquivos de Análise
 const sampleFileController = require('../../controllers/sample-file.controller');
 

@@ -265,13 +265,33 @@ keeps working unchanged.
 - `actionStatus`
 - `authorizedBy` (Reference to Actor)
 
-Per dict-02 P1X-0113–0119 ("Gestão da qualidade" domain). **Not yet
-landed** — decided in #398 as the destination for `Sample.js`'s current
+Per dict-02 P1X-0113–0119 ("Gestão da qualidade" domain), decided in #398
+as the destination for `Sample.js`'s current
 `quarantineStatus`/`quarantineReason` pair (storage/custody split, part of
 #389); implementation tracked in #399. See the `Specimen` section above
 for the full reasoning and the two acknowledged gaps (dict-02's
 `actionStatus` domain is under-specified; RF006's `DISPOSED` state has no
 `specimenStatus` equivalent and needs a local extension).
+
+**Landed in #406 (entity + read path only — foundational slice, chunked
+per `divide-and-conquer`):** the `quarantineActions` collection/entity
+exists (`api/backend/src/models/QuarantineAction.js`,
+`api/backend/src/services/quarantine-action.service.js`), mirroring the
+`RcsAssessment`/`SpecimenPreanalytics` referenced-and-versioned pattern
+(#383/#388) — `specimenIds` (1..*, batch-capable),
+`reasonCodes`/`startedAt`/`releasedAt`/`authorizedBy` per dict-02, and
+`actionStatus`'s documented local extension (`active`/`released`/
+`pending_review`, carrying today's three-state vocabulary; dict-02's own
+domain only lists `active`). `GET /api/samples/:id/quarantine-actions`
+resolves the versioned history for a specimen, mirroring
+`GET /:id/rcs-assessments`. **Not in this slice:** none of the ~25
+existing quarantine write sites
+(`equipment-sensor-quarantine.service.js`, `intakeWizard.js`/
+`.routes.js`, `eConsent.js`, `fhir-import-staging.service.js`) write to
+this entity yet — they still write the old
+`quarantineStatus`/`quarantineReason`/`availabilityStatus` trio directly,
+unchanged. That migration (and the #404 fix it enables) is carried by a
+follow-up issue referencing #406.
 
 ### RcsAssessment
 
