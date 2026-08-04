@@ -50,6 +50,10 @@ class MongoStorageRepository {
    * equipment chain for a box via its StoragePath, best-effort — a box
    * without a StoragePath record still gets a placement-history entry,
    * just without the hierarchy fields populated.
+   *
+   * facilityId/roomId (ELM-0168/0169, #418) resolve by walking up from the
+   * freezer's StorageContainer.roomId to Room.facilityId — also best-effort,
+   * since a FREEZER isn't required to have a Room assigned.
    * @param {ObjectId} boxObjId
    * @param {import('mongodb').ClientSession} [session]
    */
@@ -57,13 +61,46 @@ class MongoStorageRepository {
     const storagePathsCollection = this.db.collection('storagePaths');
     const path = await storagePathsCollection.findOne({ boxId: boxObjId }, { session });
     if (!path) {
-      return { rackId: null, shelfId: null, equipmentId: null };
+      return { rackId: null, shelfId: null, equipmentId: null, roomId: null, facilityId: null };
     }
+
+    const { roomId, facilityId } = await this.findFacilityAndRoomForFreezer(path.freezerId, session);
 
     return {
       rackId: path.rackId ? String(path.rackId) : null,
       shelfId: path.shelfId ? String(path.shelfId) : null,
-      equipmentId: path.freezerId ? String(path.freezerId) : null
+      equipmentId: path.freezerId ? String(path.freezerId) : null,
+      roomId,
+      facilityId
+    };
+  }
+
+  /**
+   * dict-02 StorageAssignment.facilityId/roomId (ELM-0168/0169, #418):
+   * resolve a FREEZER StorageContainer's Room, then that Room's Facility.
+   * @param {ObjectId} [freezerId]
+   * @param {import('mongodb').ClientSession} [session]
+   */
+  async findFacilityAndRoomForFreezer(freezerId, session) {
+    if (!freezerId) {
+      return { roomId: null, facilityId: null };
+    }
+
+    const storageContainersCollection = this.db.collection('storageContainers');
+    const freezer = await storageContainersCollection.findOne({ _id: freezerId }, { session });
+    if (!freezer || !freezer.roomId) {
+      return { roomId: null, facilityId: null };
+    }
+
+    const roomsCollection = this.db.collection('rooms');
+    const room = await roomsCollection.findOne({ _id: freezer.roomId }, { session });
+    if (!room) {
+      return { roomId: String(freezer.roomId), facilityId: null };
+    }
+
+    return {
+      roomId: String(freezer.roomId),
+      facilityId: room.facilityId ? String(room.facilityId) : null
     };
   }
 
