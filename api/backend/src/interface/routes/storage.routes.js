@@ -480,6 +480,20 @@ router.patch('/freezer/:freezerId/room', authenticate, requirePermission('create
       { $set: { roomId: roomObjectId, updatedAt: new Date() } }
     );
 
+    const auditLogger = require('../../utils/auditLogger');
+    auditLogger.init(db);
+    await auditLogger.log({
+      action: 'UPDATE',
+      entity: 'StorageContainer',
+      entityID: req.params.freezerId,
+      result: 'success',
+      severity: 'info',
+      message: 'Room atribuída ao FREEZER',
+      payload: { roomId: roomObjectId ? roomObjectId.toString() : null },
+      req: req,
+      module: 'Armazenamento'
+    });
+
     return res.status(200).json({
       success: true,
       data: { _id: freezerObjectId, roomId: roomObjectId }
