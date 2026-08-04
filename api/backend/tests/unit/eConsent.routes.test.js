@@ -284,7 +284,8 @@ describe('eConsent.routes POST /update', () => {
     );
     expect(db.quarantineActionsCollection.insertOne).toHaveBeenCalledTimes(1);
     expect(db.quarantineActionsCollection.insertOne).toHaveBeenCalledWith(
-      expect.objectContaining({ specimenIds: ['sample-1'], reasonCodes: ['CONSENT_REVOKED'] })
+      expect.objectContaining({ specimenIds: ['sample-1'], reasonCodes: ['CONSENT_REVOKED'] }),
+      undefined
     );
     expect(io.to).toHaveBeenCalledWith('patient-12345678');
     expect(emit).toHaveBeenCalledWith('sample-quarantined', { participantId: '12345678' });

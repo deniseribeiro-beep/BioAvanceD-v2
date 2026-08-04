@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
-const { recordAction, getActionsForSpecimen, releaseActiveAction } = require('../../../src/services/quarantine-action.service');
+const { recordAction, getActionsForSpecimen, releaseActiveAction, markPendingReview } = require('../../../src/services/quarantine-action.service');
 
 /**
  * Real query-matching fake — a scalar filter value against an array field
@@ -20,18 +20,23 @@ function createFakeCollection() {
       if (Array.isArray(docValue)) return docValue.includes(filterValue);
       return docValue === filterValue;
     });
+  const calls = { insertOne: [], updateOne: [], find: [] };
   return {
     docs,
-    async insertOne(doc) {
+    calls,
+    async insertOne(doc, options) {
+      calls.insertOne.push(options);
       docs.push(doc);
       return { insertedId: `fake-${docs.length}` };
     },
-    async updateOne(filter, update) {
+    async updateOne(filter, update, options) {
+      calls.updateOne.push(options);
       const doc = docs.find((d) => matches(d, filter));
       if (doc && update.$set) Object.assign(doc, update.$set);
       return { matchedCount: doc ? 1 : 0 };
     },
-    find(filter = {}) {
+    find(filter = {}, options) {
+      calls.find.push(options);
       let current = docs.filter((doc) => matches(doc, filter));
       const cursor = {
         sort(criteria = {}) {
@@ -144,6 +149,52 @@ describe('quarantine-action.service', () => {
 
       const secondAttempt = await releaseActiveAction(db, 'SPEC-1', 'user-2');
       expect(secondAttempt).toBeNull();
+    });
+  });
+
+  describe('session threading (#410)', () => {
+    it('forwards an optional Mongo session to recordAction and getActionsForSpecimen', async () => {
+      const db = createFakeDb();
+      const fakeSession = { id: 'txn-session' };
+
+      await recordAction(db, { specimenIds: ['SPEC-1'] }, fakeSession);
+      await getActionsForSpecimen(db, 'SPEC-1', fakeSession);
+
+      const { calls } = db.collections.quarantineActions;
+      expect(calls.insertOne[0]).toEqual({ session: fakeSession });
+      expect(calls.find[calls.find.length - 1]).toEqual({ session: fakeSession });
+    });
+
+    it('forwards an optional Mongo session to releaseActiveAction', async () => {
+      const db = createFakeDb();
+      const fakeSession = { id: 'txn-session' };
+      await recordAction(db, { specimenIds: ['SPEC-1'] });
+
+      await releaseActiveAction(db, 'SPEC-1', 'user-2', new Date('2026-02-01'), fakeSession);
+
+      const { calls } = db.collections.quarantineActions;
+      expect(calls.find[calls.find.length - 1]).toEqual({ session: fakeSession });
+      expect(calls.updateOne[calls.updateOne.length - 1]).toEqual({ session: fakeSession });
+    });
+
+    it('forwards an optional Mongo session to markPendingReview', async () => {
+      const db = createFakeDb();
+      const fakeSession = { id: 'txn-session' };
+      await recordAction(db, { specimenIds: ['SPEC-1'] });
+
+      await markPendingReview(db, 'SPEC-1', fakeSession);
+
+      const { calls } = db.collections.quarantineActions;
+      expect(calls.find[calls.find.length - 1]).toEqual({ session: fakeSession });
+      expect(calls.updateOne[calls.updateOne.length - 1]).toEqual({ session: fakeSession });
+    });
+
+    it('omits session options when no session is passed', async () => {
+      const db = createFakeDb();
+      await recordAction(db, { specimenIds: ['SPEC-1'] });
+
+      const { calls } = db.collections.quarantineActions;
+      expect(calls.insertOne[0]).toBeUndefined();
     });
   });
 });

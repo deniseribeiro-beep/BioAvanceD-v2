@@ -7,18 +7,18 @@ const QuarantineActionModel = require('../models/QuarantineAction');
  * sensor incident). Append-only, per dict-02's QuarantineAction entity —
  * mirrors #383/#388's RcsAssessment/SpecimenPreanalytics pattern.
  */
-async function recordAction(db, data) {
+async function recordAction(db, data, session) {
   const collection = await getCollection(db, 'quarantineActions');
   const action = QuarantineActionModel.create(data);
-  await collection.insertOne(action);
+  await collection.insertOne(action, session ? { session } : undefined);
   return action;
 }
 
 /** All quarantine actions covering a specimen, newest first. */
-async function getActionsForSpecimen(db, specimenId) {
+async function getActionsForSpecimen(db, specimenId, session) {
   const collection = await getCollection(db, 'quarantineActions');
   return collection
-    .find({ specimenIds: String(specimenId) })
+    .find({ specimenIds: String(specimenId) }, session ? { session } : undefined)
     .sort({ startedAt: -1 })
     .toArray();
 }
@@ -27,10 +27,11 @@ async function getActionsForSpecimen(db, specimenId) {
  * RF019 AC#7/AC#8 — release only by an authorized actor, audited. Releases
  * the most recent still-active action covering the specimen, if any.
  */
-async function releaseActiveAction(db, specimenId, authorizedBy, releasedAt = new Date()) {
+async function releaseActiveAction(db, specimenId, authorizedBy, releasedAt = new Date(), session) {
   const collection = await getCollection(db, 'quarantineActions');
+  const sessionOptions = session ? { session } : undefined;
   const active = await collection
-    .find({ specimenIds: String(specimenId), actionStatus: 'active' })
+    .find({ specimenIds: String(specimenId), actionStatus: 'active' }, sessionOptions)
     .sort({ startedAt: -1 })
     .toArray();
   const current = active[0];
@@ -40,7 +41,8 @@ async function releaseActiveAction(db, specimenId, authorizedBy, releasedAt = ne
   released.authorizedBy = authorizedBy ?? current.authorizedBy;
   await collection.updateOne(
     { quarantineActionId: current.quarantineActionId },
-    { $set: { actionStatus: released.actionStatus, releasedAt: released.releasedAt, authorizedBy: released.authorizedBy } }
+    { $set: { actionStatus: released.actionStatus, releasedAt: released.releasedAt, authorizedBy: released.authorizedBy } },
+    sessionOptions
   );
   return released;
 }
@@ -51,10 +53,11 @@ async function releaseActiveAction(db, specimenId, authorizedBy, releasedAt = ne
  * moves the most recent still-active action covering the specimen to
  * `pending_review` without releasing it.
  */
-async function markPendingReview(db, specimenId) {
+async function markPendingReview(db, specimenId, session) {
   const collection = await getCollection(db, 'quarantineActions');
+  const sessionOptions = session ? { session } : undefined;
   const active = await collection
-    .find({ specimenIds: String(specimenId), actionStatus: 'active' })
+    .find({ specimenIds: String(specimenId), actionStatus: 'active' }, sessionOptions)
     .sort({ startedAt: -1 })
     .toArray();
   const current = active[0];
@@ -63,7 +66,8 @@ async function markPendingReview(db, specimenId) {
   const updated = { ...current, actionStatus: 'pending_review' };
   await collection.updateOne(
     { quarantineActionId: current.quarantineActionId },
-    { $set: { actionStatus: updated.actionStatus } }
+    { $set: { actionStatus: updated.actionStatus } },
+    sessionOptions
   );
   return updated;
 }

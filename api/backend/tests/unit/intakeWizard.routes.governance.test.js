@@ -170,7 +170,8 @@ describe('intakeWizard.routes.js (interface wrapper / governance guard)', () => 
       })
     );
     expect(quarantineActionsCollection.insertOne).toHaveBeenCalledWith(
-      expect.objectContaining({ specimenIds: ['sample-1'], reasonCodes: ['PENDING_SIGNATURE'] })
+      expect.objectContaining({ specimenIds: ['sample-1'], reasonCodes: ['PENDING_SIGNATURE'] }),
+      undefined
     );
   });
 
@@ -210,7 +211,8 @@ describe('intakeWizard.routes.js (interface wrapper / governance guard)', () => 
     expect(res.body.sample.status).toBe('QUARANTINE');
     expect(res.body.sample.quarantineReason).toBe('QUALITY_GOVERNANCE_FAILURE');
     expect(quarantineActionsCollection.insertOne).toHaveBeenCalledWith(
-      expect.objectContaining({ specimenIds: ['sample-3'] })
+      expect.objectContaining({ specimenIds: ['sample-3'] }),
+      undefined
     );
   });
 
@@ -253,7 +255,8 @@ describe('intakeWizard.routes.js (interface wrapper / governance guard)', () => 
     expect(res.body.sample.status).toBe('AVAILABLE');
     expect(quarantineActionsCollection.updateOne).toHaveBeenCalledWith(
       { quarantineActionId: 'qa-9' },
-      expect.objectContaining({ $set: expect.objectContaining({ actionStatus: 'released', authorizedBy: 'user-1' }) })
+      expect.objectContaining({ $set: expect.objectContaining({ actionStatus: 'released', authorizedBy: 'user-1' }) }),
+      undefined
     );
   });
 

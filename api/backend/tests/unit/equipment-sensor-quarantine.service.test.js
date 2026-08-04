@@ -123,7 +123,8 @@ describe('equipment-sensor-quarantine.service', () => {
           specimenIds: ['S1'],
           reasonCodes: ['equipment'],
           actionStatus: 'active'
-        })
+        }),
+        undefined
       );
 
       expect(SampleMovementModel.generateMovementID).toHaveBeenCalledWith(db);

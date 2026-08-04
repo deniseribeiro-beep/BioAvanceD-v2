@@ -291,7 +291,7 @@ async function quarantineSamplesByFilter(db, filter, context = {}) {
     await quarantineActionService.recordAction(db, {
       specimenIds: [sampleId],
       reasonCodes: [context.coldChainIncidentId ? 'COLD_CHAIN_INCIDENT' : (context.source || 'AUTOMATIC')],
-    });
+    }, context.session);
 
     quarantined += 1;
 
@@ -479,7 +479,7 @@ async function markColdChainIncidentSamplesForReview(db, incident = {}, options 
   );
 
   for (const sample of matchedSamples) {
-    await quarantineActionService.markPendingReview(db, String(sample._id));
+    await quarantineActionService.markPendingReview(db, String(sample._id), options.session);
   }
 
   logger.warn('[QUARANTINE][COLD_CHAIN] Incidente resolvido; amostras mantidas para revisão pós-incidente', {
