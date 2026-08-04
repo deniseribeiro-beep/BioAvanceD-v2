@@ -236,6 +236,12 @@ function isValidEmail(email = '') {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim());
 }
 
+// quarantineStatus/quarantineReason/availabilityStatus on import_staging_records
+// (this fn, and every staging.updateOne site below) are a pre-commit workflow
+// snapshot on the FHIR import record itself, not Sample governance state —
+// intentionally left off the specimenStatus/QuarantineAction migration (#409).
+// Only commitBatch's and attachExternalDocument's `samples` collection writes
+// are real Sample write sites; those two are migrated.
 function buildWorkflowSnapshot(record = {}) {
   const normalized = record.normalized || {};
   const patientEmail = String(normalized.patientEmail || '').trim();
