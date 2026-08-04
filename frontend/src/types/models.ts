@@ -181,6 +181,12 @@ export interface Sample {
   merkle_root?: string | null;
   release_status?: 'AVAILABLE' | 'BLOCKED' | 'QUARANTINE' | string;
   consentStatus?: 'PENDING' | 'SIGNED' | 'EXTERNAL_ATTACHED' | 'WAIVED_TRANSFER' | 'NOT_REQUIRED' | string;
+  // Canonical status (storage/custody split, #389/#409) — derive quarantine/availability
+  // UI state from this, not the legacy trio below.
+  specimenStatus?: 'available' | 'reserved' | 'checked_out' | 'partial' | 'depleted' | 'quarantined' | 'destroyed' | 'unavailable' | 'disposed' | string;
+  // Deprecated: dual-written 1:1 from specimenStatus for backward compat (#405's bridge);
+  // read specimenStatus instead. quarantineReason still carries the human-readable reason
+  // text — no specimenStatus equivalent exists for that.
   quarantineStatus?: 'QUARANTINED' | 'RELEASED' | string;
   quarantineReason?: 'CONSENT_PENDING' | 'EXTERNAL_DOCUMENT_REQUIRED' | 'TRANSFER_REVIEW_REQUIRED' | null | string;
   availabilityStatus?: 'BLOCKED' | 'AVAILABLE' | 'Disponível' | 'Parcialmente Disponível' | 'Indisponível' | string;

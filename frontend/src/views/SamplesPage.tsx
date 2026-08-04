@@ -65,6 +65,12 @@ export default function SamplesPage() {
     try {
       await sampleService.update(sample.id, {
         consentStatus: 'EXTERNAL_ATTACHED',
+        // specimenStatus must be sent explicitly — the backend's generic
+        // update path (sample.service.js updateSample) is sticky for
+        // blocked statuses (computeStatus) and won't move off 'quarantined'
+        // on its own; the legacy trio below is dual-written for compat but
+        // specimenStatus is what the UI now reads (#407).
+        specimenStatus: 'available',
         quarantineStatus: 'RELEASED',
         availabilityStatus: 'AVAILABLE',
         quarantineReason: null,
@@ -79,12 +85,12 @@ export default function SamplesPage() {
   };
 
   const handleViewPending = (sample: SampleWithId) => {
-    const quarantineStatus = String((sample as any).quarantineStatus || '').toUpperCase() || 'N/A';
+    const specimenStatus = String((sample as any).specimenStatus || '').toUpperCase() || 'N/A';
     const quarantineReason = String((sample as any).quarantineReason || '').toUpperCase() || 'N/A';
     const consentStatus = String((sample as any).consentStatus || '').toUpperCase() || 'N/A';
     alert(
       t('samples.alerts.pendingSummary', 'Pendência da amostra:\nStatus: {status}\nConsentimento: {consent}\nMotivo: {reason}')
-        .replace('{status}', quarantineStatus)
+        .replace('{status}', specimenStatus)
         .replace('{consent}', consentStatus)
         .replace('{reason}', quarantineReason),
     );

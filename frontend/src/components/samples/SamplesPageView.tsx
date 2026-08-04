@@ -413,21 +413,26 @@ export default function SamplesPageView({
   );
 }
 
+// specimenStatus values that block use — mirrors backend's
+// BLOCKED_SPECIMEN_STATUSES (Sample.js), the canonical source since #409.
+const BLOCKED_SPECIMEN_STATUSES = ['unavailable', 'destroyed', 'disposed', 'quarantined'];
+
 function isQuarantined(sample: SampleWithId) {
-  const quarantineStatus = String((sample as any).quarantineStatus || '').toUpperCase();
+  const specimenStatus = String((sample as any).specimenStatus || '').toLowerCase();
   const releaseStatus = String((sample as any).release_status || '').toUpperCase();
-  return quarantineStatus === 'QUARANTINED' || releaseStatus === 'QUARANTINE' || releaseStatus === 'BLOCKED' || sample.canUse === false;
+  return specimenStatus === 'quarantined' || BLOCKED_SPECIMEN_STATUSES.includes(specimenStatus) || releaseStatus === 'QUARANTINE' || releaseStatus === 'BLOCKED' || sample.canUse === false;
 }
 
 function renderSampleBadges(sample: SampleWithId, t: TranslatorFn) {
-  const quarantineStatus = String((sample as any).quarantineStatus || '').toUpperCase();
-  const availabilityStatus = String((sample as any).availabilityStatus || '').toUpperCase();
+  const specimenStatus = String((sample as any).specimenStatus || '').toLowerCase();
   const consentStatus = String((sample as any).consentStatus || '').toUpperCase();
+  // No specimenStatus equivalent carries the human-readable reason text —
+  // quarantineReason stays legacy-sourced per #407's scope (dual-written, still correct).
   const quarantineReason = String((sample as any).quarantineReason || '').toUpperCase();
 
   const badges: Array<{ label: string; className: string; title: string }> = [];
 
-  if (quarantineStatus === 'QUARANTINED' || availabilityStatus === 'BLOCKED') {
+  if (specimenStatus === 'quarantined' || BLOCKED_SPECIMEN_STATUSES.includes(specimenStatus)) {
     badges.push({ label: t('samples.badges.quarantine', 'Quarentena'), className: 'pending', title: quarantineReason || t('samples.badges.quarantineTitle', 'Amostra bloqueada aguardando regularização ética') });
   }
 
@@ -447,7 +452,7 @@ function renderSampleBadges(sample: SampleWithId, t: TranslatorFn) {
     badges.push({ label: t('samples.badges.externalDocAttached', 'Documento anexado'), className: 'approved', title: t('samples.badges.externalDocAttachedTitle', 'Documento externo anexado e validado') });
   }
 
-  if (quarantineStatus === 'RELEASED' || availabilityStatus === 'AVAILABLE') {
+  if (specimenStatus && !BLOCKED_SPECIMEN_STATUSES.includes(specimenStatus)) {
     badges.push({ label: t('samples.badges.released', 'Liberada'), className: 'approved', title: t('samples.badges.releasedTitle', 'Disponível para uso autorizado') });
   }
 

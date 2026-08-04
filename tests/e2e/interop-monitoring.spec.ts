@@ -664,6 +664,9 @@ test.describe('Interoperabilidade HL7 FHIR R4 (RF011) — real backend, staging 
       expect(committedSample?.importBatchId).toBe(String(batchId));
       expect(committedSample?.importedBy).toBeTruthy();
       expect(committedSample?.importedAt).toBeTruthy();
+      // Canonical field (#409's commitBatch migration) — asserted alongside
+      // the legacy trio, which stays correct via the dual-write bridge.
+      expect(committedSample?.specimenStatus).toBe('available');
       expect(committedSample?.quarantineStatus).toBe('RELEASED');
       expect(committedSample?.availabilityStatus).toBe('AVAILABLE');
 
