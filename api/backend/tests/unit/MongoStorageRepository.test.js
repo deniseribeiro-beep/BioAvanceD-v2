@@ -15,8 +15,15 @@ function makeCollection(overrides = {}) {
 }
 
 function makeDb(collections) {
+  const defaults = {
+    storagePaths: makeCollection({ findOne: vi.fn().mockResolvedValue(null) }),
+    storageAssignments: makeCollection({
+      insertOne: vi.fn().mockResolvedValue({ insertedId: 'stub' }),
+      updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 })
+    })
+  };
   return {
-    collection: (name) => collections[name]
+    collection: (name) => collections[name] ?? defaults[name]
   };
 }
 
@@ -148,6 +155,7 @@ describe('MongoStorageRepository', () => {
     const toBoxId = new ObjectId().toString();
     const input = {
       sampleId,
+      specimenId: sampleId,
       fromBoxId,
       fromPosition: 'A1',
       toBoxId,
@@ -170,6 +178,54 @@ describe('MongoStorageRepository', () => {
       await expect(repo.moveSamplePosition(input, {})).resolves.toBeUndefined();
       expect(storageBoxes.updateOne).toHaveBeenCalledTimes(2);
       expect(samples.updateOne).toHaveBeenCalledTimes(1);
+    });
+
+    // Issue #402: dict-02 StorageAssignment — a move must close the
+    // placement-history record at the source position and open a new one
+    // at the target, not just overwrite Sample.storageLocation.
+    it('closes the source StorageAssignment and opens one for the target (#402)', async () => {
+      const storageBoxes = makeCollection({
+        updateOne: vi
+          .fn()
+          .mockResolvedValueOnce({ matchedCount: 1 })
+          .mockResolvedValueOnce({ matchedCount: 1 })
+      });
+      const samples = makeCollection({
+        updateOne: vi.fn().mockResolvedValueOnce({ matchedCount: 1 })
+      });
+      const storagePaths = makeCollection({ findOne: vi.fn().mockResolvedValue(null) });
+      const storageAssignmentsUpdateOne = vi.fn().mockResolvedValueOnce({ matchedCount: 1 });
+      const storageAssignmentsInsertOne = vi.fn().mockResolvedValueOnce({ insertedId: 'x' });
+      const storageAssignments = makeCollection({
+        updateOne: storageAssignmentsUpdateOne,
+        insertOne: storageAssignmentsInsertOne
+      });
+      const db = makeDb({ storageBoxes, samples, storagePaths, storageAssignments });
+      const repo = new MongoStorageRepository(db);
+
+      await repo.moveSamplePosition(input, {});
+
+      expect(storageAssignmentsUpdateOne).toHaveBeenCalledWith(
+        expect.objectContaining({
+          specimenId: sampleId,
+          boxId: fromBoxId,
+          positionCode: 'A1',
+          removedAt: null
+        }),
+        expect.objectContaining({ $set: expect.objectContaining({ removedAt: expect.any(Date), occupancyStatus: 'livre' }) }),
+        { session: {} }
+      );
+      expect(storageAssignmentsInsertOne).toHaveBeenCalledWith(
+        expect.objectContaining({
+          specimenId: sampleId,
+          boxId: toBoxId,
+          positionCode: 'B2',
+          placedAt: expect.any(Date),
+          removedAt: null,
+          occupancyStatus: 'ocupada'
+        }),
+        { session: {} }
+      );
     });
 
     it('throws "Origem inconsistente" when source update matchedCount is 0', async () => {
@@ -225,7 +281,7 @@ describe('MongoStorageRepository', () => {
   describe('allocateSamplePosition', () => {
     const sampleId = new ObjectId().toString();
     const boxId = new ObjectId().toString();
-    const baseInput = { sampleId, boxId, position: 'A1' };
+    const baseInput = { sampleId, specimenId: sampleId, boxId, position: 'A1' };
     const boxDoc = { _id: new ObjectId(boxId), dimension: { rows: 4, cols: 4 } };
 
     it('happy path allocates the position', async () => {
@@ -246,6 +302,37 @@ describe('MongoStorageRepository', () => {
       const setPayload = samples.updateOne.mock.calls[0][1].$set;
       expect(setPayload.status).toBe('AVAILABLE');
       expect(setPayload['storageLocation.position']).toBe('A1');
+    });
+
+    // Issue #402: opening a position must also open a StorageAssignment
+    // placement-history record for it.
+    it('opens a StorageAssignment for the newly allocated position (#402)', async () => {
+      const samples = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce({ _id: sampleId }),
+        updateOne: vi.fn().mockResolvedValueOnce({ matchedCount: 1 })
+      });
+      const storageBoxes = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce(boxDoc),
+        updateOne: vi.fn().mockResolvedValueOnce({ matchedCount: 1 })
+      });
+      const storageAssignmentsInsertOne = vi.fn().mockResolvedValueOnce({ insertedId: 'x' });
+      const storageAssignments = makeCollection({ insertOne: storageAssignmentsInsertOne });
+      const db = makeDb({ samples, storageBoxes, storageAssignments });
+      const repo = new MongoStorageRepository(db);
+
+      await repo.allocateSamplePosition(baseInput, {});
+
+      expect(storageAssignmentsInsertOne).toHaveBeenCalledWith(
+        expect.objectContaining({
+          specimenId: sampleId,
+          boxId,
+          positionCode: 'A1',
+          placedAt: expect.any(Date),
+          removedAt: null,
+          occupancyStatus: 'ocupada'
+        }),
+        { session: {} }
+      );
     });
 
     it('throws when sample not found', async () => {
@@ -352,6 +439,42 @@ describe('MongoStorageRepository', () => {
         quantity: 10,
         unit: 'µL'
       });
+    });
+
+    // Issue #402: release must close the placement-history StorageAssignment
+    // record instead of just unsetting Sample.storageLocation.
+    it('closes the StorageAssignment for the released position (#402)', async () => {
+      const sampleDoc = {
+        _id: sampleId,
+        barcode: 'BC-1',
+        quantity: 10,
+        unit: null,
+        storageLocation: { boxId, position: 'a1' }
+      };
+      const samples = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce(sampleDoc),
+        updateOne: vi.fn().mockResolvedValueOnce({ matchedCount: 1 })
+      });
+      const storageBoxes = makeCollection({
+        updateOne: vi.fn().mockResolvedValueOnce({ matchedCount: 1 })
+      });
+      const storageAssignmentsUpdateOne = vi.fn().mockResolvedValueOnce({ matchedCount: 1 });
+      const storageAssignments = makeCollection({ updateOne: storageAssignmentsUpdateOne });
+      const db = makeDb({ samples, storageBoxes, storageAssignments });
+      const repo = new MongoStorageRepository(db);
+
+      await repo.releaseSamplePosition({ sampleId, specimenId: sampleId }, {});
+
+      expect(storageAssignmentsUpdateOne).toHaveBeenCalledWith(
+        expect.objectContaining({
+          specimenId: sampleId,
+          boxId: String(boxId),
+          positionCode: 'A1',
+          removedAt: null
+        }),
+        expect.objectContaining({ $set: expect.objectContaining({ removedAt: expect.any(Date), occupancyStatus: 'livre' }) }),
+        { session: {} }
+      );
     });
 
     it('preserves an explicit non-falsy unit', async () => {

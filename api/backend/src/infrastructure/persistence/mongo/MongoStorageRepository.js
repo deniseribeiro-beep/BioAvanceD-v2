@@ -1,5 +1,6 @@
 const { ObjectId } = require('mongodb');
 const { getCollection } = require('../../../utils/collectionResolver');
+const StorageAssignmentModel = require('../../../models/StorageAssignment');
 
 /**
  * Repositório Mongo para operações de armazenamento físico de amostras.
@@ -42,6 +43,70 @@ class MongoStorageRepository {
     const samplesCollection = await getCollection(this.db, 'samples');
     const normalizedId = this.toObjectId(specimenId);
     return samplesCollection.findOne({ _id: normalizedId }, { session });
+  }
+
+  /**
+   * dict-02 StorageAssignment (ELM-0167-0178): resolve the rack/shelf/
+   * equipment chain for a box via its StoragePath, best-effort — a box
+   * without a StoragePath record still gets a placement-history entry,
+   * just without the hierarchy fields populated.
+   * @param {ObjectId} boxObjId
+   * @param {import('mongodb').ClientSession} [session]
+   */
+  async findStorageHierarchyForBox(boxObjId, session) {
+    const storagePathsCollection = this.db.collection('storagePaths');
+    const path = await storagePathsCollection.findOne({ boxId: boxObjId }, { session });
+    if (!path) {
+      return { rackId: null, shelfId: null, equipmentId: null };
+    }
+
+    return {
+      rackId: path.rackId ? String(path.rackId) : null,
+      shelfId: path.shelfId ? String(path.shelfId) : null,
+      equipmentId: path.freezerId ? String(path.freezerId) : null
+    };
+  }
+
+  /**
+   * dict-02 StorageAssignment (ELM-0167-0178, P1X-0072/0073): open a new
+   * placement-history record for a specimen's physical stay at a position.
+   * @param {{ specimenId: string, boxId: ObjectId, positionCode: string }} input
+   * @param {import('mongodb').ClientSession} [session]
+   */
+  async openStorageAssignment(input, session) {
+    const storageAssignmentsCollection = this.db.collection('storageAssignments');
+    const hierarchy = await this.findStorageHierarchyForBox(input.boxId, session);
+
+    const record = StorageAssignmentModel.open({
+      specimenId: input.specimenId,
+      boxId: input.boxId,
+      positionCode: input.positionCode,
+      ...hierarchy
+    });
+
+    await storageAssignmentsCollection.insertOne(record, { session });
+    return record;
+  }
+
+  /**
+   * dict-02 StorageAssignment: close the open placement-history record for
+   * a specimen's stay at a position (removedAt/occupancyStatus), rather
+   * than overwriting/discarding it.
+   * @param {{ specimenId: string, boxId: ObjectId, positionCode: string }} input
+   * @param {import('mongodb').ClientSession} [session]
+   */
+  async closeStorageAssignment(input, session) {
+    const storageAssignmentsCollection = this.db.collection('storageAssignments');
+    await storageAssignmentsCollection.updateOne(
+      {
+        specimenId: String(input.specimenId),
+        boxId: String(input.boxId),
+        positionCode: input.positionCode,
+        removedAt: null
+      },
+      { $set: StorageAssignmentModel.closeFields() },
+      { session }
+    );
   }
 
   /**
@@ -125,6 +190,15 @@ class MongoStorageRepository {
     if (sampleUpdate.matchedCount === 0) {
       throw new Error('Falha ao atualizar localização da amostra');
     }
+
+    await this.closeStorageAssignment(
+      { specimenId: input.specimenId, boxId: fromBoxObjId, positionCode: input.fromPosition },
+      session
+    );
+    await this.openStorageAssignment(
+      { specimenId: input.specimenId, boxId: toBoxObjId, positionCode: input.toPosition },
+      session
+    );
   }
 
   /**
@@ -202,6 +276,11 @@ class MongoStorageRepository {
       },
       { session }
     );
+
+    await this.openStorageAssignment(
+      { specimenId: input.specimenId, boxId: boxObjId, positionCode: normalizedPosition },
+      session
+    );
   }
 
   /**
@@ -262,6 +341,11 @@ class MongoStorageRepository {
         }
       },
       { session }
+    );
+
+    await this.closeStorageAssignment(
+      { specimenId: input.specimenId, boxId: sourceBoxObjId, positionCode: String(sourcePosition).toUpperCase() },
+      session
     );
 
     return {
