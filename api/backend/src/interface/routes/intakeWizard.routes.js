@@ -126,7 +126,7 @@ async function enforcePersistedGovernanceStatus(req, body) {
         reasonCodes: [governanceStatus.quarantineReason || 'INTAKE_GOVERNANCE'],
       });
     } else if (specimenStatus !== 'quarantined' && wasQuarantined) {
-      await quarantineActionService.releaseActiveAction(db, specimenId, 'SYSTEM');
+      await quarantineActionService.releaseActiveAction(db, specimenId, req.user?.userID || 'SYSTEM');
     }
   }
 

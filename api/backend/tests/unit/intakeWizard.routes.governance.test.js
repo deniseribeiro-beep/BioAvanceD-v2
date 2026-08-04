@@ -240,7 +240,7 @@ describe('intakeWizard.routes.js (interface wrapper / governance guard)', () => 
     expect(quarantineActionsCollection.insertOne).not.toHaveBeenCalled();
   });
 
-  it('releases the active QuarantineAction when a previously quarantined sample resolves to AVAILABLE', async () => {
+  it('releases the active QuarantineAction, attributed to the authenticated user, when a previously quarantined sample resolves to AVAILABLE', async () => {
     const existingSample = { _id: 'sample-9', specimenId: 'spec-9', specimenStatus: 'quarantined' };
     const activeAction = { quarantineActionId: 'qa-9', specimenIds: ['sample-9'], actionStatus: 'active' };
     const samplesCollection = buildSamplesCollection({ existingSample });
@@ -259,7 +259,7 @@ describe('intakeWizard.routes.js (interface wrapper / governance guard)', () => 
     expect(res.body.sample.status).toBe('AVAILABLE');
     expect(quarantineActionsCollection.updateOne).toHaveBeenCalledWith(
       { quarantineActionId: 'qa-9' },
-      expect.objectContaining({ $set: expect.objectContaining({ actionStatus: 'released' }) })
+      expect.objectContaining({ $set: expect.objectContaining({ actionStatus: 'released', authorizedBy: 'user-1' }) })
     );
   });
 
