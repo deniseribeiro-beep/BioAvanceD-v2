@@ -104,6 +104,7 @@ function buildMongoCollections(seedIncidents = []) {
     find: vi.fn().mockReturnValue({
       toArray: vi.fn().mockResolvedValue([]),
     }),
+    findOne: vi.fn().mockResolvedValue(null),
   };
 
   const locationsCollection = {
@@ -151,6 +152,40 @@ function buildMongoCollections(seedIncidents = []) {
     findOneAndUpdate: vi.fn().mockResolvedValue({ value: { seq: 1 } }),
   };
 
+  const quarantineActions = [];
+  const quarantineActionsCollection = {
+    insertOne: vi.fn().mockImplementation(async (doc) => {
+      quarantineActions.push(doc);
+      return { insertedId: doc.quarantineActionId };
+    }),
+    find: vi.fn().mockImplementation((filter = {}) => {
+      const results = quarantineActions.filter((action) => {
+        if (filter.specimenIds && !action.specimenIds.includes(filter.specimenIds)) return false;
+        if (filter.actionStatus && action.actionStatus !== filter.actionStatus) return false;
+        return true;
+      });
+      return {
+        sort() {
+          return { toArray: async () => results };
+        },
+      };
+    }),
+    updateOne: vi.fn().mockImplementation(async (filter, update) => {
+      const action = quarantineActions.find((item) => item.quarantineActionId === filter.quarantineActionId);
+      if (action && update?.$set) Object.assign(action, update.$set);
+      return { matchedCount: action ? 1 : 0, modifiedCount: action ? 1 : 0 };
+    }),
+  };
+
+  const devicesCollection = {
+    findOne: vi.fn().mockResolvedValue(null),
+  };
+
+  const environmentalExcursionsCollection = {
+    findOne: vi.fn().mockResolvedValue(null),
+    updateOne: vi.fn().mockResolvedValue({ matchedCount: 0, modifiedCount: 0 }),
+  };
+
   const usersCollection = {
     find() {
       return {
@@ -176,11 +211,14 @@ function buildMongoCollections(seedIncidents = []) {
       if (name === 'sampleMovements') return sampleMovementsCollection;
       if (name === 'sample_movements') return sampleMovementsCollection;
       if (name === 'counters') return countersCollection;
+      if (name === 'quarantineActions') return quarantineActionsCollection;
+      if (name === 'devices') return devicesCollection;
+      if (name === 'environmentalExcursions') return environmentalExcursionsCollection;
       return { find: () => ({ toArray: async () => [] }) };
     },
   };
 
-  return { db, incidents, incidentsCollection, samples, samplesCollection, sampleMovementsCollection };
+  return { db, incidents, incidentsCollection, samples, samplesCollection, sampleMovementsCollection, quarantineActionsCollection };
 }
 
 describe('Incidents API integration', () => {
@@ -270,7 +308,6 @@ describe('Incidents API integration', () => {
       status: 'QUARANTINED',
       currentStatus: 'QUARANTINED',
       release_status: 'QUARANTINE',
-      availabilityStatus: 'BLOCKED',
       quarantineReasonCode: 'COLD_CHAIN_INCIDENT',
       coldChainSensorKey: 'sensor-a1',
       coldChainStatus: 'INCIDENT_OPEN',
