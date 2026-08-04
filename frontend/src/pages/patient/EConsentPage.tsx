@@ -2,19 +2,15 @@ import React, { useEffect, useState } from 'react';
 import axios from 'axios';
 import { useParams } from 'react-router-dom';
 
-const consentLayers = [
-  { key: 'project', label: 'Aceito participar deste projeto' },
-  { key: 'storage', label: 'Aceito armazenamento futuro dos meus dados/amostras' },
-  { key: 'sharing', label: 'Aceito compartilhamento anonimizado dos meus dados' },
-];
-
 type ConsentState = Record<string, boolean>;
-type ConsentApiItem = { key: string; status: string };
 type ConsentPatient = { patientName?: string };
+type TemplatePermission = { key: string; label: string; required?: boolean };
+type ConsentTemplateSummary = { id: string; title?: string; permissions: TemplatePermission[] };
 
 export default function EConsentPage() {
   const { token } = useParams();
   const [patient, setPatient] = useState<ConsentPatient | null>(null);
+  const [template, setTemplate] = useState<ConsentTemplateSummary | null>(null);
   const [consents, setConsents] = useState<ConsentState>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -25,8 +21,10 @@ export default function EConsentPage() {
       try {
         const resp = await axios.get(`/api/e-consent/validate/${token}`);
         setPatient(resp.data.patient);
-        const consentItems: ConsentApiItem[] = Array.isArray(resp.data.consents) ? resp.data.consents : [];
-        setConsents(consentItems.reduce<ConsentState>((acc, item) => ({ ...acc, [item.key]: item.status === 'ACCEPTED' }), {}));
+        const activeTemplate: ConsentTemplateSummary | null = resp.data.template || null;
+        setTemplate(activeTemplate);
+        const responses: ConsentState = resp.data.responses || {};
+        setConsents(responses);
       } catch (err) {
         setError('Link inválido ou expirado. Solicite novo acesso.');
       } finally {
@@ -40,9 +38,13 @@ export default function EConsentPage() {
     setConsents(c => ({ ...c, [key]: value }));
   }
 
-  async function handleSubmit() {
+  async function submitConsents(nextConsents: ConsentState) {
+    if (!template) return;
     try {
-      await axios.post('/api/e-consent/update', { token, consents: consentLayers.map(l => ({ key: l.key, status: consents[l.key] ? 'ACCEPTED' : 'REVOKED' })) });
+      await axios.post('/api/e-consent/update', {
+        token,
+        consents: template.permissions.map(p => ({ key: p.key, status: nextConsents[p.key] ? 'ACCEPTED' : 'REVOKED' })),
+      });
       setSuccess(true);
     } catch {
       setError('Erro ao atualizar consentimento.');
@@ -52,6 +54,7 @@ export default function EConsentPage() {
   if (loading) return <div>Carregando...</div>;
   if (error) return <div style={{ color: 'red' }}>{error}</div>;
   if (success) return <div>Consentimento atualizado com sucesso!</div>;
+  if (!template) return <div>Nenhum termo de consentimento ativo no momento.</div>;
 
   return (
     <div style={{ maxWidth: 500, margin: 'auto', padding: 24 }}>
@@ -63,16 +66,16 @@ export default function EConsentPage() {
         {/* Aqui pode-se renderizar o texto do TCLE/política */}
         <p>Seus dados serão tratados conforme a LGPD. Você pode aceitar ou revogar cada camada de consentimento abaixo a qualquer momento.</p>
       </div>
-      <form onSubmit={e => { e.preventDefault(); handleSubmit(); }}>
-        {consentLayers.map(layer => (
-          <div key={layer.key} style={{ marginBottom: 12 }}>
+      <form onSubmit={e => { e.preventDefault(); submitConsents(consents); }}>
+        {template.permissions.map(permission => (
+          <div key={permission.key} style={{ marginBottom: 12 }}>
             <label>
               <input
                 type="checkbox"
-                checked={!!consents[layer.key]}
-                onChange={e => handleConsentChange(layer.key, e.target.checked)}
+                checked={!!consents[permission.key]}
+                onChange={e => handleConsentChange(permission.key, e.target.checked)}
               />
-              {layer.label}
+              {permission.label}
             </label>
           </div>
         ))}
@@ -80,8 +83,9 @@ export default function EConsentPage() {
       </form>
       <div style={{ marginTop: 24 }}>
         <button style={{ color: 'red' }} onClick={() => {
-          setConsents(Object.fromEntries(consentLayers.map(l => [l.key, false])));
-          handleSubmit();
+          const revoked = Object.fromEntries(template.permissions.map(p => [p.key, false]));
+          setConsents(revoked);
+          submitConsents(revoked);
         }}>Revogar Todos</button>
       </div>
     </div>

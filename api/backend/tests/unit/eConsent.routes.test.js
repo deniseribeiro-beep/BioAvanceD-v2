@@ -160,10 +160,14 @@ describe('eConsent.routes GET /validate/:token', () => {
     expect(PatientModel.findOne).toBeUndefined();
   });
 
-  it('returns the patient and consents for a valid token', async () => {
-    const patient = { participantId: '12345678', name: 'Jane Doe', consents: [{ key: 'general', status: 'ACTIVE' }] };
+  it('returns the patient, the active template and current responses for a valid token', async () => {
+    const patient = { participantId: '12345678', name: 'Jane Doe' };
     const findOne = vi.fn().mockResolvedValue(patient);
     const db = { collection: vi.fn().mockReturnValue({ findOne }) };
+    const template = { _id: 'tmpl-1', title: 'TCLE v1', permissions: [{ key: 'general', label: 'Aceito participar' }] };
+    const currentConsent = { _id: 'consent-1', status: 'ACTIVE', responses: { general: true } };
+    vi.spyOn(consentService, 'getActiveTemplate').mockResolvedValue(template);
+    vi.spyOn(consentService, 'getPatientConsent').mockResolvedValue(currentConsent);
     const app = buildApp(loadRealAuthRouter(), db);
     const token = signToken({ participantId: '12345678' });
 
@@ -172,7 +176,42 @@ describe('eConsent.routes GET /validate/:token', () => {
     expect(db.collection).toHaveBeenCalledWith('patients');
     expect(findOne).toHaveBeenCalledWith({ participantId: '12345678' });
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ patient, consents: patient.consents });
+    expect(res.body).toEqual({
+      patient,
+      template: { id: 'tmpl-1', title: 'TCLE v1', permissions: template.permissions },
+      responses: { general: true },
+    });
+  });
+
+  it('returns empty responses when the patient has no active consent', async () => {
+    const patient = { participantId: '12345678', name: 'Jane Doe' };
+    const findOne = vi.fn().mockResolvedValue(patient);
+    const db = { collection: vi.fn().mockReturnValue({ findOne }) };
+    const template = { _id: 'tmpl-1', title: 'TCLE v1', permissions: [{ key: 'general', label: 'Aceito participar' }] };
+    vi.spyOn(consentService, 'getActiveTemplate').mockResolvedValue(template);
+    vi.spyOn(consentService, 'getPatientConsent').mockResolvedValue(null);
+    const app = buildApp(loadRealAuthRouter(), db);
+    const token = signToken({ participantId: '12345678' });
+
+    const res = await request(app).get(`/e-consent/validate/${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.responses).toEqual({});
+  });
+
+  it('returns a null template when no ConsentTemplate is active', async () => {
+    const patient = { participantId: '12345678', name: 'Jane Doe' };
+    const findOne = vi.fn().mockResolvedValue(patient);
+    const db = { collection: vi.fn().mockReturnValue({ findOne }) };
+    vi.spyOn(consentService, 'getActiveTemplate').mockResolvedValue(null);
+    vi.spyOn(consentService, 'getPatientConsent').mockResolvedValue(null);
+    const app = buildApp(loadRealAuthRouter(), db);
+    const token = signToken({ participantId: '12345678' });
+
+    const res = await request(app).get(`/e-consent/validate/${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.template).toBeNull();
   });
 
   it('returns 404 when the patient does not exist', async () => {
@@ -189,12 +228,14 @@ describe('eConsent.routes GET /validate/:token', () => {
 });
 
 describe('eConsent.routes POST /update', () => {
-  // Migrated (part of #409) onto specimenStatus + QuarantineAction: the
-  // route no longer writes the legacy `status` field via the mongoose
-  // `Sample` model — it now reads/writes through `db.collection('samples')`
-  // (the same `db` gate as consentService) and records/releases a
-  // QuarantineAction per sample, guarded by a before/after status check so
-  // a repeat call at the same status doesn't double-record/re-release.
+  // Migrated off the legacy `recordConsentProjectionEvent`-only write (#384,
+  // dict-07 row 3 / RF010): every manifestation now goes through the
+  // canonical consentId-bearing flow — createPatientConsent for a
+  // grant/partial-layer change, revokeConsent for a full revoke-all (since
+  // createPatientConsent's `required`-permission gate would otherwise block
+  // a legitimate full revocation). Quarantine/release side effects
+  // (#409-era specimenStatus + QuarantineAction) stay driven off the raw
+  // `consents` payload, unchanged from before #384.
   function buildMockDb({ samples = [] } = {}) {
     const samplesCollection = {
       find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue(samples) }),
@@ -217,8 +258,13 @@ describe('eConsent.routes POST /update', () => {
     return db;
   }
 
+  const activeTemplate = { _id: 'tmpl-1', title: 'TCLE v1' };
+
   beforeEach(() => {
-    vi.spyOn(consentService, 'recordConsentProjectionEvent').mockResolvedValue(null);
+    vi.spyOn(consentService, 'getActiveTemplate').mockResolvedValue(activeTemplate);
+    vi.spyOn(consentService, 'getPatientConsent').mockResolvedValue(null);
+    vi.spyOn(consentService, 'createPatientConsent').mockResolvedValue({ _id: 'consent-1', consentId: 'uuid-1' });
+    vi.spyOn(consentService, 'revokeConsent').mockResolvedValue({ _id: 'consent-1', status: 'REVOKED' });
   });
 
   afterEach(() => {
@@ -235,27 +281,83 @@ describe('eConsent.routes POST /update', () => {
     expect(res.body).toEqual({ error: 'Token inválido ou expirado' });
   });
 
-  // Fluxo canônico (src/routes/eConsent.js ~line 50): Mongo persistence is
-  // the source of truth; Neo4j projection happens via the outbox
-  // (consentService.recordConsentProjectionEvent), not a direct Cypher
-  // MERGE from this route. The route passes `db` from
-  // req.app.locals.mongoDb || req.app.locals.db, so a db must be present
-  // on the app for this call to fire (see the guard in the route).
-  it('records a consent projection event via consentService and returns success', async () => {
-    const db = { collection: vi.fn() };
+  it('creates a canonical patient consent against the active template when at least one permission is accepted', async () => {
+    const db = buildMockDb();
     const app = buildApp(loadRealAuthRouter(), db);
     const token = signToken({ participantId: '12345678' });
 
     const res = await request(app)
       .post('/e-consent/update')
-      .send({ token, consents: [{ key: 'general', status: 'PENDING' }] });
+      .send({ token, consents: [{ key: 'general', status: 'ACCEPTED' }] });
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ success: true });
-    expect(consentService.recordConsentProjectionEvent).toHaveBeenCalledWith(db, {
+    expect(consentService.createPatientConsent).toHaveBeenCalledWith(db, expect.objectContaining({
       participantId: '12345678',
-      consents: [{ key: 'general', status: 'PENDING' }],
-    });
+      consentTemplateId: 'tmpl-1',
+      responses: { general: true },
+    }));
+    expect(consentService.revokeConsent).not.toHaveBeenCalled();
+  });
+
+  it('revokes the patient\'s active consent instead of creating a new one when every permission is revoked', async () => {
+    const db = buildMockDb();
+    consentService.getPatientConsent.mockResolvedValue({ _id: 'consent-1', status: 'ACTIVE' });
+    const app = buildApp(loadRealAuthRouter(), db);
+    const token = signToken({ participantId: '12345678' });
+
+    const res = await request(app)
+      .post('/e-consent/update')
+      .send({ token, consents: [{ key: 'general', status: 'REVOKED' }] });
+
+    expect(res.status).toBe(200);
+    expect(consentService.revokeConsent).toHaveBeenCalledWith(db, 'consent-1');
+    expect(consentService.createPatientConsent).not.toHaveBeenCalled();
+  });
+
+  it('no-ops the canonical write when a full revoke-all is submitted but the patient has no active consent', async () => {
+    const db = buildMockDb();
+    consentService.getPatientConsent.mockResolvedValue(null);
+    const app = buildApp(loadRealAuthRouter(), db);
+    const token = signToken({ participantId: '12345678' });
+
+    const res = await request(app)
+      .post('/e-consent/update')
+      .send({ token, consents: [{ key: 'general', status: 'REVOKED' }] });
+
+    expect(res.status).toBe(200);
+    expect(consentService.revokeConsent).not.toHaveBeenCalled();
+    expect(consentService.createPatientConsent).not.toHaveBeenCalled();
+  });
+
+  it('returns 409 when no ConsentTemplate is active and at least one permission is accepted', async () => {
+    const db = buildMockDb();
+    consentService.getActiveTemplate.mockResolvedValue(null);
+    const app = buildApp(loadRealAuthRouter(), db);
+    const token = signToken({ participantId: '12345678' });
+
+    const res = await request(app)
+      .post('/e-consent/update')
+      .send({ token, consents: [{ key: 'general', status: 'ACCEPTED' }] });
+
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({ error: 'Nenhum template de consentimento ativo' });
+  });
+
+  it('surfaces a validation error from createPatientConsent as 422', async () => {
+    const db = buildMockDb();
+    const validationError = new Error('responses inválidas');
+    validationError.statusCode = 422;
+    consentService.createPatientConsent.mockRejectedValue(validationError);
+    const app = buildApp(loadRealAuthRouter(), db);
+    const token = signToken({ participantId: '12345678' });
+
+    const res = await request(app)
+      .post('/e-consent/update')
+      .send({ token, consents: [{ key: 'general', status: 'ACCEPTED' }] });
+
+    expect(res.status).toBe(422);
+    expect(res.body).toEqual({ error: 'responses inválidas' });
   });
 
   it('quarantines samples and records one QuarantineAction per newly-quarantined sample when any consent is REVOKED', async () => {
@@ -269,7 +371,13 @@ describe('eConsent.routes POST /update', () => {
 
     const res = await request(app)
       .post('/e-consent/update')
-      .send({ token, consents: [{ key: 'general', status: 'REVOKED' }] });
+      .send({
+        token,
+        consents: [
+          { key: 'general', status: 'ACCEPTED' },
+          { key: 'sharing', status: 'REVOKED' },
+        ],
+      });
 
     expect(res.status).toBe(200);
     expect(db.samplesCollection.find).toHaveBeenCalledWith({ participantId: '12345678' });
@@ -294,6 +402,7 @@ describe('eConsent.routes POST /update', () => {
   it('does not record a duplicate QuarantineAction for a sample already quarantined', async () => {
     const sample = { _id: 'sample-1', participantId: '12345678', specimenStatus: 'quarantined' };
     const db = buildMockDb({ samples: [sample] });
+    consentService.getPatientConsent.mockResolvedValue({ _id: 'consent-1', status: 'ACTIVE' });
     const app = buildApp(loadRealAuthRouter(), db);
     const token = signToken({ participantId: '12345678' });
 
@@ -363,6 +472,7 @@ describe('eConsent.routes POST /update', () => {
 
   it('no-ops the socket emit when no io instance is registered on the app', async () => {
     const db = buildMockDb({ samples: [] });
+    consentService.getPatientConsent.mockResolvedValue({ _id: 'consent-1', status: 'ACTIVE' });
     const app = buildApp(loadRealAuthRouter(), db);
     const token = signToken({ participantId: '12345678' });
 

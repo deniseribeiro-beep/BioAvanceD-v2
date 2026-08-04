@@ -31,7 +31,9 @@ router.post('/generate-link', authenticate, requirePermission('createPatient'), 
   res.json({ success: true, link });
 });
 
-// Valida token e retorna dados do paciente e consentimentos
+// Valida token e retorna dados do paciente, o template de consentimento
+// ativo (para renderizar as permissões granulares dinamicamente) e as
+// respostas já registradas no Consent ativo do paciente, se houver.
 router.get('/validate/:token', async (req, res) => {
   try {
     const { token } = req.params;
@@ -39,8 +41,18 @@ router.get('/validate/:token', async (req, res) => {
     const db = req.app.locals.db;
     const patient = await db.collection('patients').findOne({ participantId: payload.participantId });
     if (!patient) return res.status(404).json({ error: 'Paciente não encontrado' });
-    // Buscar consentimentos no Neo4j (mock)
-    res.json({ patient, consents: patient.consents || [] });
+
+    const consentService = require('../services/consent.service');
+    const template = await consentService.getActiveTemplate(db);
+    const currentConsent = await consentService.getPatientConsent(db, payload.participantId);
+
+    res.json({
+      patient,
+      template: template
+        ? { id: String(template._id), title: template.title, permissions: template.permissions || [] }
+        : null,
+      responses: currentConsent && currentConsent.status === 'ACTIVE' ? (currentConsent.responses || {}) : {},
+    });
   } catch (err) {
     res.status(401).json({ error: 'Token inválido ou expirado' });
   }
@@ -49,14 +61,49 @@ router.get('/validate/:token', async (req, res) => {
 // Atualiza consentimento (aceite ou revogação)
 router.post('/update', async (req, res) => {
   const { token, consents } = req.body;
+  let participantId;
   try {
-    const payload = jwt.verify(token, CONSENT_SECRET);
-    const participantId = payload.participantId;
-    // Fluxo canônico: persistência Mongo é a origem; projeção Neo4j ocorre pela outbox.
+    participantId = jwt.verify(token, CONSENT_SECRET).participantId;
+  } catch (err) {
+    return res.status(401).json({ error: 'Token inválido ou expirado' });
+  }
+
+  try {
+    // Fluxo canônico: cada manifestação vira um Consent identificado por
+    // consentId, versionado contra o ConsentTemplate ativo (RF010 #1-#3).
+    // Uma revogação total (toda permissão marcada como não concedida) não
+    // pode passar por createPatientConsent — permissões `required` do
+    // template bloqueariam a criação — então usa revokeConsent sobre o
+    // Consent ativo em vez de tentar criar um novo.
     const consentService = require('../services/consent.service');
     const db = req.app.locals.mongoDb || req.app.locals.db;
-    if (db && typeof consentService?.recordConsentProjectionEvent === 'function') {
-      await consentService.recordConsentProjectionEvent(db, { participantId, consents });
+
+    if (db) {
+      const responses = {};
+      for (const item of Array.isArray(consents) ? consents : []) {
+        responses[item.key] = item.status === 'ACCEPTED' || item.status === 'ACTIVE' || item.status === 'GRANTED';
+      }
+      const responseKeys = Object.keys(responses);
+      const isFullRevocation = responseKeys.length > 0 && responseKeys.every(key => responses[key] === false);
+
+      if (isFullRevocation) {
+        const currentConsent = await consentService.getPatientConsent(db, participantId);
+        if (currentConsent && currentConsent.status === 'ACTIVE') {
+          await consentService.revokeConsent(db, String(currentConsent._id));
+        }
+      } else {
+        const template = await consentService.getActiveTemplate(db);
+        if (!template) {
+          return res.status(409).json({ error: 'Nenhum template de consentimento ativo' });
+        }
+        await consentService.createPatientConsent(db, {
+          participantId,
+          consentTemplateId: String(template._id),
+          responses,
+          ipAddress: req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress,
+          userAgent: req.headers['user-agent'],
+        });
+      }
     }
 
     // Se algum consentimento foi revogado, coloca amostras em quarentena
@@ -114,7 +161,7 @@ router.post('/update', async (req, res) => {
     }
     res.json({ success: true });
   } catch (err) {
-    res.status(401).json({ error: 'Token inválido ou expirado' });
+    res.status(err.statusCode || 400).json({ error: err.message || 'Erro ao atualizar consentimento' });
   }
 });
 
