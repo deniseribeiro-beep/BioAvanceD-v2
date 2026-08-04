@@ -5,6 +5,8 @@ const intakeWizardRouter = require('../../../src/routes/intakeWizard');
 const { authenticate } = require('../../infrastructure/middleware/auth');
 const { requirePermission } = require('../../infrastructure/middleware/rbac');
 const { getCollection } = require('../../utils/collectionResolver');
+const { SampleModel } = require('../../models/Sample');
+const quarantineActionService = require('../../services/quarantine-action.service');
 
 const router = express.Router();
 
@@ -96,20 +98,39 @@ async function enforcePersistedGovernanceStatus(req, body) {
   }
 
   const governanceStatus = resolveGovernanceStatus(body);
+  const specimenStatus = governanceStatus.status === 'AVAILABLE' ? 'available' : 'quarantined';
+  const { lifecycleStatus, availabilityStatus } = SampleModel.deriveLegacyStatuses(specimenStatus);
+
   const samplesCollection = await getCollection(db, 'samples');
+  const existingSample = await samplesCollection.findOne(query);
+  const wasQuarantined = existingSample ? SampleModel.resolveSpecimenStatus(existingSample) === 'quarantined' : false;
+
   await samplesCollection.updateOne(query, {
     $set: {
       status: governanceStatus.status,
       currentStatus: governanceStatus.currentStatus,
-      lifecycleStatus: governanceStatus.lifecycleStatus,
-      availabilityStatus: governanceStatus.availabilityStatus,
+      specimenStatus,
+      lifecycleStatus,
+      availabilityStatus,
       quarantineStatus: governanceStatus.quarantineStatus,
       quarantineReason: governanceStatus.quarantineReason,
       updatedAt: new Date(),
     },
   });
 
-  return governanceStatus;
+  const specimenId = existingSample?._id ? String(existingSample._id) : null;
+  if (specimenId) {
+    if (specimenStatus === 'quarantined' && !wasQuarantined) {
+      await quarantineActionService.recordAction(db, {
+        specimenIds: [specimenId],
+        reasonCodes: [governanceStatus.quarantineReason || 'INTAKE_GOVERNANCE'],
+      });
+    } else if (specimenStatus !== 'quarantined' && wasQuarantined) {
+      await quarantineActionService.releaseActiveAction(db, specimenId, 'SYSTEM');
+    }
+  }
+
+  return { ...governanceStatus, specimenStatus, lifecycleStatus, availabilityStatus };
 }
 
 function sanitizeIntakeResponse(body = {}, governanceStatus = null) {

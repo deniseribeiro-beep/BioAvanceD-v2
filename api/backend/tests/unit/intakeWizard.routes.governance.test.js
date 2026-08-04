@@ -10,11 +10,41 @@ const authPath = require.resolve('../../src/infrastructure/middleware/auth.js');
 const rbacPath = require.resolve('../../src/infrastructure/middleware/rbac.js');
 const innerRoutePath = require.resolve('../../src/routes/intakeWizard.js');
 const collectionResolverPath = require.resolve('../../src/utils/collectionResolver.js');
+const quarantineActionServicePath = require.resolve('../../src/services/quarantine-action.service.js');
 
-const allPaths = [routePath, authPath, rbacPath, innerRoutePath, collectionResolverPath];
+// quarantine-action.service.js destructures `getCollection` from
+// collectionResolver at require-time — if it's already cached from an
+// earlier-run test file (loaded before this file's mock is installed),
+// its binding stays pointed at the real getCollection forever. Bust it
+// alongside the route/auth/rbac paths so each loadRouter() re-requires
+// it fresh, picking up the currently-installed mock.
+const allPaths = [routePath, authPath, rbacPath, innerRoutePath, collectionResolverPath, quarantineActionServicePath];
 
 function clearCache() {
   for (const p of allPaths) delete require.cache[p];
+}
+
+function buildSamplesCollection({ existingSample = null } = {}) {
+  return {
+    findOne: vi.fn().mockResolvedValue(existingSample),
+    updateOne: vi.fn().mockResolvedValue({ matchedCount: existingSample ? 1 : 0 }),
+  };
+}
+
+function buildQuarantineActionsCollection({ activeAction = null } = {}) {
+  const toArray = vi.fn().mockResolvedValue(activeAction ? [activeAction] : []);
+  const sort = vi.fn().mockReturnValue({ toArray });
+  return {
+    insertOne: vi.fn().mockResolvedValue({ insertedId: 'qa-1' }),
+    find: vi.fn().mockReturnValue({ sort }),
+    updateOne: vi.fn().mockResolvedValue({ matchedCount: activeAction ? 1 : 0 }),
+  };
+}
+
+function buildGetCollectionImpl({ samplesCollection, quarantineActionsCollection } = {}) {
+  const samples = samplesCollection || buildSamplesCollection();
+  const quarantineActions = quarantineActionsCollection || buildQuarantineActionsCollection();
+  return vi.fn((db, name) => Promise.resolve(name === 'quarantineActions' ? quarantineActions : samples));
 }
 
 function loadRouter({ getCollectionImpl, innerRouterBuilder } = {}) {
@@ -97,8 +127,8 @@ describe('intakeWizard.routes.js (interface wrapper / governance guard)', () => 
   });
 
   it('skips persistence when the sample has no id/specimenId/barcode to query by', async () => {
-    const updateOne = vi.fn();
-    const getCollectionImpl = vi.fn().mockResolvedValue({ updateOne });
+    const samplesCollection = buildSamplesCollection();
+    const getCollectionImpl = buildGetCollectionImpl({ samplesCollection });
     const router = loadRouter({ getCollectionImpl });
     const app = buildApp(router, {});
 
@@ -109,13 +139,15 @@ describe('intakeWizard.routes.js (interface wrapper / governance guard)', () => 
     });
 
     expect(res.status).toBe(200);
-    expect(updateOne).not.toHaveBeenCalled();
+    expect(samplesCollection.updateOne).not.toHaveBeenCalled();
     expect(res.body.sample.status).toBe('AVAILABLE');
   });
 
-  it('persists BLOCKED status and quarantine reason when consent is inactive', async () => {
-    const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
-    const getCollectionImpl = vi.fn().mockResolvedValue({ updateOne });
+  it('persists BLOCKED status, sets specimenStatus quarantined, and records a QuarantineAction when consent is inactive', async () => {
+    const existingSample = { _id: 'sample-1', specimenId: 'spec-1', specimenStatus: 'available' };
+    const samplesCollection = buildSamplesCollection({ existingSample });
+    const quarantineActionsCollection = buildQuarantineActionsCollection();
+    const getCollectionImpl = buildGetCollectionImpl({ samplesCollection, quarantineActionsCollection });
     const router = loadRouter({ getCollectionImpl });
     const app = buildApp(router, {});
 
@@ -129,21 +161,28 @@ describe('intakeWizard.routes.js (interface wrapper / governance guard)', () => 
     expect(res.body.sample.status).toBe('BLOCKED');
     expect(res.body.sample.quarantineStatus).toBe('QUARANTINED');
     expect(res.body.sample.quarantineReason).toBe('PENDING_SIGNATURE');
-    expect(updateOne).toHaveBeenCalledWith(
+    expect(samplesCollection.updateOne).toHaveBeenCalledWith(
       { $or: [{ specimenId: 'spec-1' }] },
       expect.objectContaining({
         $set: expect.objectContaining({
           status: 'BLOCKED',
+          specimenStatus: 'quarantined',
+          lifecycleStatus: 'QUARANTINED',
+          availabilityStatus: 'BLOCKED',
           quarantineStatus: 'QUARANTINED',
           quarantineReason: 'PENDING_SIGNATURE',
         }),
       })
     );
+    expect(quarantineActionsCollection.insertOne).toHaveBeenCalledWith(
+      expect.objectContaining({ specimenIds: ['sample-1'], reasonCodes: ['PENDING_SIGNATURE'] })
+    );
   });
 
   it('persists BLOCKED status when the release status itself is BLOCKED (consent active)', async () => {
-    const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
-    const getCollectionImpl = vi.fn().mockResolvedValue({ updateOne });
+    const existingSample = { _id: 'sample-2', specimenId: 'spec-2', specimenStatus: 'available' };
+    const samplesCollection = buildSamplesCollection({ existingSample });
+    const getCollectionImpl = buildGetCollectionImpl({ samplesCollection });
     const router = loadRouter({ getCollectionImpl });
     const app = buildApp(router, {});
 
@@ -158,9 +197,11 @@ describe('intakeWizard.routes.js (interface wrapper / governance guard)', () => 
     expect(res.body.sample.quarantineReason).toBe('CONSENT_PENDING');
   });
 
-  it('persists QUARANTINE status via release status alias', async () => {
-    const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
-    const getCollectionImpl = vi.fn().mockResolvedValue({ updateOne });
+  it('persists QUARANTINE status via release status alias and records a QuarantineAction', async () => {
+    const existingSample = { _id: 'sample-3', specimenId: 'spec-3', specimenStatus: 'available' };
+    const samplesCollection = buildSamplesCollection({ existingSample });
+    const quarantineActionsCollection = buildQuarantineActionsCollection();
+    const getCollectionImpl = buildGetCollectionImpl({ samplesCollection, quarantineActionsCollection });
     const router = loadRouter({ getCollectionImpl });
     const app = buildApp(router, {});
 
@@ -174,11 +215,16 @@ describe('intakeWizard.routes.js (interface wrapper / governance guard)', () => 
     expect(res.body.sample.status).toBe('QUARANTINE');
     expect(res.body.sample.availabilityStatus).toBe('BLOCKED');
     expect(res.body.sample.quarantineReason).toBe('QUALITY_GOVERNANCE_FAILURE');
+    expect(quarantineActionsCollection.insertOne).toHaveBeenCalledWith(
+      expect.objectContaining({ specimenIds: ['sample-3'] })
+    );
   });
 
-  it('persists QUARANTINE status when sample.quarantineStatus is already QUARANTINED', async () => {
-    const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
-    const getCollectionImpl = vi.fn().mockResolvedValue({ updateOne });
+  it('persists QUARANTINE status when sample already quarantined, without recording a duplicate QuarantineAction', async () => {
+    const existingSample = { _id: 'sample-4', specimenId: 'spec-4', specimenStatus: 'quarantined' };
+    const samplesCollection = buildSamplesCollection({ existingSample });
+    const quarantineActionsCollection = buildQuarantineActionsCollection();
+    const getCollectionImpl = buildGetCollectionImpl({ samplesCollection, quarantineActionsCollection });
     const router = loadRouter({ getCollectionImpl });
     const app = buildApp(router, {});
 
@@ -191,11 +237,36 @@ describe('intakeWizard.routes.js (interface wrapper / governance guard)', () => 
     expect(res.status).toBe(200);
     expect(res.body.sample.status).toBe('QUARANTINE');
     expect(res.body.sample.quarantineReason).toBe('CUSTOM_REASON');
+    expect(quarantineActionsCollection.insertOne).not.toHaveBeenCalled();
+  });
+
+  it('releases the active QuarantineAction when a previously quarantined sample resolves to AVAILABLE', async () => {
+    const existingSample = { _id: 'sample-9', specimenId: 'spec-9', specimenStatus: 'quarantined' };
+    const activeAction = { quarantineActionId: 'qa-9', specimenIds: ['sample-9'], actionStatus: 'active' };
+    const samplesCollection = buildSamplesCollection({ existingSample });
+    const quarantineActionsCollection = buildQuarantineActionsCollection({ activeAction });
+    const getCollectionImpl = buildGetCollectionImpl({ samplesCollection, quarantineActionsCollection });
+    const router = loadRouter({ getCollectionImpl });
+    const app = buildApp(router, {});
+
+    const res = await request(app).post('/api/intake-wizard').send({
+      success: true,
+      sample: { specimenId: 'spec-9' },
+      consent: { active: true },
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body.sample.status).toBe('AVAILABLE');
+    expect(quarantineActionsCollection.updateOne).toHaveBeenCalledWith(
+      { quarantineActionId: 'qa-9' },
+      expect.objectContaining({ $set: expect.objectContaining({ actionStatus: 'released' }) })
+    );
   });
 
   it('persists AVAILABLE status and builds the query from _id when it is a valid ObjectId', async () => {
-    const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
-    const getCollectionImpl = vi.fn().mockResolvedValue({ updateOne });
+    const existingSample = { _id: '507f1f77bcf86cd799439011', barcode: 'BC-1', specimenStatus: 'available' };
+    const samplesCollection = buildSamplesCollection({ existingSample });
+    const getCollectionImpl = buildGetCollectionImpl({ samplesCollection });
     const router = loadRouter({ getCollectionImpl });
     const app = buildApp(router, {});
 
@@ -210,7 +281,7 @@ describe('intakeWizard.routes.js (interface wrapper / governance guard)', () => 
     expect(res.body.sample.quarantineStatus).toBe('RELEASED');
     expect(res.body.sample.quarantineReason).toBeNull();
 
-    const [query] = updateOne.mock.calls[0];
+    const [query] = samplesCollection.updateOne.mock.calls[0];
     expect(query.$or).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ _id: expect.anything() }),
@@ -220,8 +291,9 @@ describe('intakeWizard.routes.js (interface wrapper / governance guard)', () => 
   });
 
   it('ignores an invalid (non-ObjectId) _id when building the persistence query', async () => {
-    const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
-    const getCollectionImpl = vi.fn().mockResolvedValue({ updateOne });
+    const existingSample = { _id: 'sample-mongo-id', barcode: 'BC-2', specimenStatus: 'available' };
+    const samplesCollection = buildSamplesCollection({ existingSample });
+    const getCollectionImpl = buildGetCollectionImpl({ samplesCollection });
     const router = loadRouter({ getCollectionImpl });
     const app = buildApp(router, {});
 
@@ -232,7 +304,7 @@ describe('intakeWizard.routes.js (interface wrapper / governance guard)', () => 
     });
 
     expect(res.status).toBe(200);
-    const [query] = updateOne.mock.calls[0];
+    const [query] = samplesCollection.updateOne.mock.calls[0];
     expect(query).toEqual({ $or: [{ barcode: 'BC-2' }] });
   });
 
@@ -264,8 +336,9 @@ describe('intakeWizard.routes.js (interface wrapper / governance guard)', () => 
   });
 
   it('falls back to the raw sample.quarantineReason when governance status leaves it null (AVAILABLE)', async () => {
-    const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
-    const getCollectionImpl = vi.fn().mockResolvedValue({ updateOne });
+    const existingSample = { _id: 'sample-6', specimenId: 'spec-6', specimenStatus: 'available' };
+    const samplesCollection = buildSamplesCollection({ existingSample });
+    const getCollectionImpl = buildGetCollectionImpl({ samplesCollection });
     const router = loadRouter({ getCollectionImpl });
     const app = buildApp(router, {});
 
