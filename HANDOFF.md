@@ -1,98 +1,74 @@
 # HANDOFF
 
-**Written:** 2026-08-04, after closing #407 (frontend + e2e migration to
-`specimenStatus`) and filing #411 (a backend gap it surfaced) on
+**Written:** 2026-08-04, after closing #411 on
 `feature/docker-e2e-backend-integration`.
 
 ## What happened this session
 
-Dennis said "pick #407." Routed via `work-issue` → `resolve-issue`
-(not `test-loop`/`build-loop`/`fix-bugs` — a frontend/e2e read migration
-of an already-existing backend field, not new capability or a coverage
-gap).
+Dennis said "pick #411" (this session's own finding, filed at the end of
+the prior #407 session). Routed via `work-issue` → `fix-bugs` (a
+reproducible product defect with a clear root cause, `bug` label
+accurate on inspection).
 
 **Pre-pickup checks:** working tree clean, local branch matched
-`origin/feature/docker-e2e-backend-integration` exactly, no stale
-branches related to #407. Confirmed #407's dependency (#406) was
-already closed.
+`origin/feature/docker-e2e-backend-integration` exactly.
 
-**#407** (branch `test/407-frontend-e2e-specimenstatus-migration`,
-merged fast-forward at `0611f18b`, pushed):
+**#411** (branch `fix/411-intake-wizard-specimenstatus`, merged
+`--no-ff` at `2254f998`, pushed):
 
-- Migrated the read/decision sites in #407's scope from the legacy
-  `quarantineStatus`/`availabilityStatus` trio to `specimenStatus`:
-  `frontend/src/types/models.ts` (added the field, marked the trio
-  deprecated), `SamplesPageView.tsx`'s badge logic, `SamplesPage.tsx`'s
-  pending-summary alert, and `SampleDetailsPage.tsx`'s three
-  `currentStatus` reads (now prefer `specimenStatus` uppercased over
-  `lifecycleStatus`, itself already a 1:1 derivation).
-- Added `specimenStatus` assertions to `interop-monitoring.spec.ts` and
-  `specimen-quality-inventory.spec.ts` alongside the existing legacy-field
-  assertions, for the two real Sample write sites in play (#409's
-  `commitBatch`, and the generic `PUT /api/samples/:id` quarantine/
-  release/block path).
-- Two in-scope files confirmed **no change needed**, reasoning recorded
-  in-place (comments) rather than left implicit: `FhirImportPage.tsx`
-  reads `import_staging_records` (a pre-commit workflow snapshot,
-  `buildWorkflowSnapshot`), not `Sample` — same domain split #409's
-  file 5 already found in the backend service, so there's no
-  `specimenStatus` equivalent there. `ClinicalIntakeWizard.jsx`/
-  `intake.service.js` send a write-only creation default the backend
-  doesn't map to `specimenStatus` at all — this turned out to be a
-  real gap, filed as **#411** rather than fixed inline (backend, out of
-  #407's frontend/e2e scope).
-- **Fixed two write-site bugs inline** (resolve-issue's
-  blocks-acceptance-criteria exception): `SamplesPage.tsx`'s
-  `attachExternalDocument` wasn't sending `specimenStatus`, so the
-  backend's sticky `computeStatus` would leave a "released" sample's
-  `specimenStatus` at `'quarantined'` even though the legacy fields said
-  released — the exact case #407's own badge migration would have
-  regressed on. The RF019/RF006 e2e specs' direct `PUT` payloads had the
-  same gap in their own test fixtures; fixed both.
-- `frontend` typecheck (`tsc --noEmit`) clean on the merged branch. Both
-  e2e spec files verified to still parse/compile
-  (`playwright test --list`) but not run against a live backend — no
-  Docker this session, same rationale as the recent #409 sessions.
-- Closed **#407**.
+- Root cause: `api/backend/src/routes/intakeWizard.js`'s
+  `buildSampleDocumentFromIntake` built the new sample document with
+  `lifecycleStatus: releaseStatus` (`releaseStatus` derived from
+  `specimen.lifecycleStatus`, vocabulary `QUARANTINE`/`AVAILABLE`/
+  `BLOCKED`) but never set `specimenStatus`. Inserted via the native
+  Mongo driver, so the Mongoose schema default doesn't apply, and
+  `SampleModel.resolveSpecimenStatus`'s `lifecycleStatus` fallback used
+  a mismatched vocabulary — a sample seeded with `releaseStatus:
+  'BLOCKED'`/`'QUARANTINE'` resolved to `'blocked'`/`'quarantine'`,
+  neither of which is in `BLOCKED_SPECIMEN_STATUSES`
+  (`unavailable`/`destroyed`/`disposed`/`quarantined`) — so intake-wizard
+  samples that should start quarantined/blocked silently showed as
+  available everywhere reading `specimenStatus`, including #407's badge
+  migration.
+- Fix: derive `specimenStatus` explicitly in
+  `buildSampleDocumentFromIntake` (`AVAILABLE` → `'available'`,
+  `QUARANTINE`/`BLOCKED` → `'quarantined'`) — the same mapping
+  `api/backend/src/interface/routes/intakeWizard.routes.js`'s
+  `enforcePersistedGovernanceStatus` already uses for its own
+  `resolveGovernanceStatus` → `specimenStatus` conversion, so this
+  wasn't a novel design call.
+- Reproduced first: added a failing assertion to the existing "usa
+  matched patient" test (`document.specimenStatus === 'quarantined'`)
+  and to the "accepts an explicit valid lifecycleStatus" test
+  (`document.specimenStatus === 'available'`), plus a new test for the
+  `BLOCKED` case — all three failed with `specimenStatus: undefined`
+  before the fix, passed after.
+- Verified on the merged tree: full `intakeWizard.*.test.js` family (4
+  files, 59 tests) passing, not just the touched file.
+- Closed **#411**.
 
-**#411 filed** (not started): `intakeWizard.js`'s
-`buildSampleDocumentFromIntake` never sets `specimenStatus` on samples
-created through the intake wizard — inserted via the native Mongo
-driver, so the Mongoose schema default doesn't apply, and the
-`lifecycleStatus`/`releaseStatus` fallback vocabulary
-(`'QUARANTINE'`/`'BLOCKED'`) doesn't match `specimenStatus`'s enum
-(`quarantined`/`unavailable`/etc.), so `resolveSpecimenStatus`'s
-fallback silently resolves to a value `BLOCKED_SPECIMEN_STATUSES`
-doesn't recognize. Concretely: an intake-wizard sample that should start
-quarantined/blocked will show as available in the badges #407 just
-migrated. Backend fix, not scoped to #407.
-
-`wrap-up` ran clean apart from filing #411 (now tracked, not fixed).
-No permission denials, no scope creep beyond the two in-acceptance-
-criteria bug fixes (both called out above and in the close comment), no
-lazy fixes.
+`wrap-up` ran clean — no friction, no scope creep, no lazy fixes. Local
+and remote `fix/411-intake-wizard-specimenstatus` branch deletes both
+succeeded this session (no permission denial, unlike the #392 precedent
+noted in `fix-bugs`'s local-env).
 
 ## Repo state
 
-- **`feature/docker-e2e-backend-integration`**: now at `0611f18b` (was
-  `aa5f3de4` at session start), pushed. This session's `test/` branch
-  merged fast-forward and can be deleted (not yet done — see next step
-  below).
-- Issues: **#407 now closed.** **#411 newly filed, open, unstarted** —
-  a backend-only fix (`intakeWizard.js`), no frontend/e2e component.
-  **#408** (removing the legacy trio now that every *known* write site
-  derives `specimenStatus`) is still open and — per #407's own findings
-  — should re-check #411's resolution status before assuming "every
-  write site" is actually true; the intake-wizard path is a write site
-  #408 would need to audit too. **#410, #406(closed), #401, #402**
-  unchanged from the prior handoff (#406 was closed before this
-  session started, not by it).
+- **`feature/docker-e2e-backend-integration`**: now at `2254f998` (was
+  `9261e41c` at session start), pushed. This session's `fix/` branch
+  merged `--no-ff` and was deleted (local + remote), both cleanly.
+- Issues: **#411 now closed.** **#408** (removing the legacy
+  `quarantineStatus`/`quarantineReason`/`availabilityStatus` trio) was
+  gated on #411 per the prior handoff — that gate is now cleared, but
+  #408 should still re-grep every write site #409 *and* #411 touched to
+  confirm each really derives `specimenStatus` before removing the
+  legacy trio, not just trust the close comments' summaries (this was
+  already #409's own stated lesson). **#410, #401, #402** unchanged from
+  prior handoffs.
 
 ## Blocking next step
 
-None. Local `test/407-frontend-e2e-specimenstatus-migration` branch
-should be deleted (merged + closed, per `clean-up`'s branch domain) —
-not yet done this session, purely a housekeeping step.
+None.
 
 ## Recommended next steps
 
@@ -100,16 +76,11 @@ Dennis didn't name a specific next pick this session — no explicit
 next-issue instruction, so per this skill's own rule: **none queued**.
 For reference, the natural candidates:
 
-- **#411** (this session's finding): small, scoped, backend-only —
-  `buildSampleDocumentFromIntake` needs to derive `specimenStatus`
-  explicitly, same pattern #409 used everywhere else. Good `fix-bugs`
-  candidate.
-- **#408** (removing the legacy `quarantineStatus`/`quarantineReason`/
-  `availabilityStatus` fields): now that #407's frontend reads are
-  migrated, this is closer to viable — but should wait on #411, since
-  #408 needs every write site (including intake-wizard) actually
-  deriving `specimenStatus` before the legacy trio can be safely
-  dropped.
+- **#408** (removing the legacy trio): now unblocked now that #411 is
+  fixed — every known write site (per #409 + #411) derives
+  `specimenStatus`. Still needs the re-grep-every-write-site check
+  before removing the trio, not an assumption that "every write site" is
+  now settled.
 - **#410**: pure product code, `resolve-issue` alone is enough, no
   `build-loop` needed — unchanged from prior handoffs, still untouched.
 - Older backlog, unchanged: **#401, #402**, **#384–#387**,
@@ -117,27 +88,17 @@ For reference, the natural candidates:
 
 ## Which skills to use
 
-- **#411**: a self-contained backend write-site fix. `SampleModel`
-  already has `deriveLegacyStatuses`/an inverse-mapping shape from
-  #409's other write sites to copy — don't reinvent the pattern.
-- **#408**, when picked up: re-grep every write site #409 *and* #411
+- **#408, when picked up**: re-grep every write site #409 *and* #411
   touch to confirm each really derives `specimenStatus` before removing
-  the legacy trio, not assume the #409/#411 close comments' summaries
-  are sufficient (this was already #409's own stated lesson, reconfirmed
-  here since #411 shows the "every write site" premise can still be
-  incomplete even after #409 closed).
-- **A frontend/e2e "migrate reads" issue can still surface real backend
-  write-site bugs** — this session's concrete lesson: two separate
-  write sites (`SamplesPage.tsx`'s `attachExternalDocument`, and the
-  RF019/RF006 e2e specs' own PUT fixtures) were silently broken by the
-  #409 backend migration because they never started sending
-  `specimenStatus` explicitly, relying on the old assumption that
-  setting the legacy trio was sufficient. When migrating a read site,
-  check every write site feeding that same UI decision, not just the
-  read expression itself.
-- **`import_staging_records` vs `samples` domain split (from #409) also
-  applies on the frontend** — `FhirImportPage.tsx` reads the staging
-  domain, which has no `specimenStatus` equivalent; don't assume every
-  `quarantineStatus`-shaped field in the frontend is Sample-backed.
+  the legacy trio — don't assume the #409/#411 close-comment summaries
+  are sufficient on their own (reconfirmed lesson, carried from the
+  prior handoff).
+- **A `releaseStatus`/`lifecycleStatus`-vocabulary → `specimenStatus`
+  mapping already exists elsewhere in the codebase when a new write site
+  needs one** — this session's fix copied
+  `interface/routes/intakeWizard.routes.js`'s
+  `enforcePersistedGovernanceStatus` mapping rather than inventing a new
+  one. Check for an existing sibling mapping before treating a missing
+  `specimenStatus` write as a fresh design call.
 - Backlog unchanged otherwise: **#401, #402**, **#384–#387**, older
   backlog (`#371`/`#373`/`#374`/`#378`/`#379`) — untouched this session.
