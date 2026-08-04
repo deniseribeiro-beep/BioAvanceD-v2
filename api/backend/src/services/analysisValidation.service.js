@@ -1,6 +1,7 @@
 const logger = require('../utils/logger');
 const { ObjectId } = require('mongodb');
 const { getCollection } = require('../utils/collectionResolver');
+const { SampleModel } = require('../models/Sample');
 
 /**
  * Service para validar amostras e consentimento de pacientes antes de upload de análise
@@ -149,7 +150,7 @@ class AnalysisValidationService {
           barcode: sample.barcode,
           participantId: sample.participantId,
           sampleType: sample.sampleType,
-          lifecycleStatus: sample.lifecycleStatus
+          specimenStatus: SampleModel.resolveSpecimenStatus(sample)
         },
         patient: consentValidation.patient
       };

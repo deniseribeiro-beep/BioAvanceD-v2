@@ -279,7 +279,7 @@ describe('analysisValidationService.validateUploadEligibility', () => {
       barcode: 'BR-2025-001',
       participantId: 'P1',
       sampleType: 'blood',
-      lifecycleStatus: 'stored',
+      specimenStatus: 'available',
       extraField: 'should-not-leak'
     };
     const patientDoc = {
@@ -305,7 +305,7 @@ describe('analysisValidationService.validateUploadEligibility', () => {
       barcode: 'BR-2025-001',
       participantId: 'P1',
       sampleType: 'blood',
-      lifecycleStatus: 'stored'
+      specimenStatus: 'available'
     });
     expect(result.sample.extraField).toBeUndefined();
     expect(result.patient).toEqual({

@@ -2,6 +2,7 @@
  * Repositório de leitura Mongo para paciente/consentimento.
  */
 const { getCollection } = require('../../../utils/collectionResolver');
+const { SampleModel } = require('../../../models/Sample');
 
 class MongoPatientConsentReadRepository {
   /**
@@ -57,7 +58,7 @@ class MongoPatientConsentReadRepository {
         participantId: sample.participantId,
         sampleType: sample.sampleType,
         sampleOrigin: sample.sampleOrigin,
-        lifecycleStatus: sample.lifecycleStatus,
+        specimenStatus: SampleModel.resolveSpecimenStatus(sample),
         quantity: sample.quantity,
         registeredAt: sample.registeredAt,
         consentValid,

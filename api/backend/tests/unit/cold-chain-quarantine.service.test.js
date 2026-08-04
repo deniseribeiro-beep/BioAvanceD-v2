@@ -205,15 +205,17 @@ describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
     expect(collections.samples.updateMany).toHaveBeenCalledTimes(1);
     const update = collections.samples.updateMany.mock.calls[0][1].$set;
     expect(update).toMatchObject({
-      availabilityStatus: 'PENDING_REVIEW',
-      quarantineStatus: 'PENDING_REVIEW',
       coldChainStatus: 'INCIDENT_RESOLVED_REVIEW_REQUIRED',
       coldChainReviewRequired: true,
     });
+    // pending-review is tracked on QuarantineAction.actionStatus, not the
+    // legacy Sample trio (canonical-data-contract-v1.md, QuarantineAction
+    // section) — the sample's own specimenStatus stays 'quarantined'.
+    expect(update.availabilityStatus).toBeUndefined();
+    expect(update.quarantineStatus).toBeUndefined();
     expect(update.coldChainIncidentResolvedAt).toBeInstanceOf(Date);
     expect(update.status).not.toBe('AVAILABLE');
     expect(update.release_status).not.toBe('AVAILABLE');
-    expect(update.availabilityStatus).not.toBe('AVAILABLE');
 
     expect(collections.quarantineActions.docs[0].actionStatus).toBe('pending_review');
   });

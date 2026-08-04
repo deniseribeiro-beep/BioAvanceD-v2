@@ -474,8 +474,6 @@ async function markColdChainIncidentSamplesForReview(db, incident = {}, options 
     matchFilter,
     {
       $set: {
-        availabilityStatus: 'PENDING_REVIEW',
-        quarantineStatus: 'PENDING_REVIEW',
         coldChainStatus: 'INCIDENT_RESOLVED_REVIEW_REQUIRED',
         coldChainReviewRequired: true,
         coldChainIncidentResolvedAt: now,

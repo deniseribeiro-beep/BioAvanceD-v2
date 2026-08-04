@@ -455,7 +455,7 @@ class MongoStorageRepository {
             { specimenId: searchRegex }
           ]
         },
-        { lifecycleStatus: { $in: ['Available', 'Registered', 'pending'] } },
+        { specimenStatus: { $in: ['available', 'reserved'] } },
         {
           $or: [
             { 'storageLocation.boxId': { $exists: false } },

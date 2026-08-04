@@ -313,13 +313,14 @@ describe('Incidents API integration', () => {
     expect(incidentsState.samplesCollection.updateMany).toHaveBeenCalledTimes(1);
     const update = incidentsState.samplesCollection.updateMany.mock.calls[0][1].$set;
     expect(update).toMatchObject({
-      availabilityStatus: 'PENDING_REVIEW',
-      quarantineStatus: 'PENDING_REVIEW',
       coldChainStatus: 'INCIDENT_RESOLVED_REVIEW_REQUIRED',
       coldChainReviewRequired: true,
     });
+    // pending-review is tracked on QuarantineAction.actionStatus now, not
+    // the legacy Sample trio.
+    expect(update.availabilityStatus).toBeUndefined();
+    expect(update.quarantineStatus).toBeUndefined();
     expect(update.status).not.toBe('AVAILABLE');
     expect(update.release_status).not.toBe('AVAILABLE');
-    expect(update.availabilityStatus).not.toBe('AVAILABLE');
   });
 });
