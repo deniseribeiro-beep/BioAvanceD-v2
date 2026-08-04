@@ -113,6 +113,20 @@ router.post('/', authenticate, requirePermission('createPatient'), async (req, r
 
     const result = await db.collection('rooms').insertOne(room);
 
+    const auditLogger = require('../../utils/auditLogger');
+    auditLogger.init(db);
+    await auditLogger.log({
+      action: 'CREATE',
+      entity: 'Room',
+      entityID: result.insertedId.toString(),
+      result: 'success',
+      severity: 'info',
+      message: 'Room criada',
+      payload: { name: room.name, facilityId: room.facilityId.toString() },
+      req: req,
+      module: 'Armazenamento'
+    });
+
     return res.status(201).json({
       success: true,
       message: 'Room criada com sucesso',
@@ -174,6 +188,19 @@ router.put('/:id', authenticate, requirePermission('createPatient'), async (req,
       return res.status(404).json({ success: false, error: 'Room não encontrada' });
     }
 
+    const auditLogger = require('../../utils/auditLogger');
+    auditLogger.init(db);
+    await auditLogger.log({
+      action: 'UPDATE',
+      entity: 'Room',
+      entityID: req.params.id,
+      result: 'success',
+      severity: 'info',
+      message: 'Room atualizada',
+      req: req,
+      module: 'Armazenamento'
+    });
+
     return res.status(200).json({
       success: true,
       message: 'Room atualizada com sucesso',
@@ -208,6 +235,19 @@ router.delete('/:id', authenticate, requirePermission('createPatient'), async (r
     if (!room) {
       return res.status(404).json({ success: false, error: 'Room não encontrada' });
     }
+
+    const auditLogger = require('../../utils/auditLogger');
+    auditLogger.init(db);
+    await auditLogger.log({
+      action: 'DELETE',
+      entity: 'Room',
+      entityID: req.params.id,
+      result: 'success',
+      severity: 'warning',
+      message: 'Room removida',
+      req: req,
+      module: 'Armazenamento'
+    });
 
     return res.status(200).json({
       success: true,

@@ -96,10 +96,12 @@ describe('POST /api/facilities', () => {
     expect(res.status).toBe(403);
   });
 
-  it('creates a facility for Coordenador (accessType 3)', async () => {
+  it('creates a facility for Coordenador (accessType 3) and writes an audit log entry', async () => {
     const insertOne = vi.fn().mockResolvedValue({ insertedId: FACILITY_ID });
     const coll = createCollectionMock({ insertOne });
-    app.locals.db = createDbMock({ facilities: coll });
+    const logsInsertOne = vi.fn().mockResolvedValue({ insertedId: new ObjectId() });
+    const logsColl = createCollectionMock({ insertOne: logsInsertOne });
+    app.locals.db = createDbMock({ facilities: coll, logs: logsColl });
 
     const res = await request(app)
       .post('/api/facilities')
@@ -109,6 +111,7 @@ describe('POST /api/facilities', () => {
     expect(res.status).toBe(201);
     expect(res.body.data.name).toBe('Campus Central');
     expect(insertOne).toHaveBeenCalledWith(expect.objectContaining({ name: 'Campus Central', code: 'CC-01', deletedAt: null }));
+    expect(logsInsertOne).toHaveBeenCalledWith(expect.objectContaining({ action: 'CREATE', entity: 'Facility' }));
   });
 });
 

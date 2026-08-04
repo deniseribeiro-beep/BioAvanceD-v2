@@ -94,6 +94,20 @@ router.post('/', authenticate, requirePermission('createPatient'), async (req, r
 
     const result = await db.collection('facilities').insertOne(facility);
 
+    const auditLogger = require('../../utils/auditLogger');
+    auditLogger.init(db);
+    await auditLogger.log({
+      action: 'CREATE',
+      entity: 'Facility',
+      entityID: result.insertedId.toString(),
+      result: 'success',
+      severity: 'info',
+      message: 'Facility criada',
+      payload: { name: facility.name },
+      req: req,
+      module: 'Armazenamento'
+    });
+
     return res.status(201).json({
       success: true,
       message: 'Facility criada com sucesso',
@@ -135,6 +149,19 @@ router.put('/:id', authenticate, requirePermission('createPatient'), async (req,
       return res.status(404).json({ success: false, error: 'Facility não encontrada' });
     }
 
+    const auditLogger = require('../../utils/auditLogger');
+    auditLogger.init(db);
+    await auditLogger.log({
+      action: 'UPDATE',
+      entity: 'Facility',
+      entityID: req.params.id,
+      result: 'success',
+      severity: 'info',
+      message: 'Facility atualizada',
+      req: req,
+      module: 'Armazenamento'
+    });
+
     return res.status(200).json({
       success: true,
       message: 'Facility atualizada com sucesso',
@@ -169,6 +196,19 @@ router.delete('/:id', authenticate, requirePermission('createPatient'), async (r
     if (!facility) {
       return res.status(404).json({ success: false, error: 'Facility não encontrada' });
     }
+
+    const auditLogger = require('../../utils/auditLogger');
+    auditLogger.init(db);
+    await auditLogger.log({
+      action: 'DELETE',
+      entity: 'Facility',
+      entityID: req.params.id,
+      result: 'success',
+      severity: 'warning',
+      message: 'Facility removida',
+      req: req,
+      module: 'Armazenamento'
+    });
 
     return res.status(200).json({
       success: true,
