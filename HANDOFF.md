@@ -1,87 +1,102 @@
 # HANDOFF
 
-**Written:** 2026-08-04, after resolving #419 on
+**Written:** 2026-08-04, after resolving #384 on
 `feature/docker-e2e-backend-integration`.
 
 ## What happened this session
 
-Dennis said "Pick #419". Routed via `work-issue` → `build-loop` (same
-route as #402/#418: a capability named as deferred scope in a prior
-issue's own body, not a bug, not a coverage gap).
+Dennis said "Pick #384". Routed via `work-issue` → `resolve-issue` (a
+dict-07 gap explicitly framed as "retire a legacy route and unify onto
+the canonical flow" — not a bug, not a coverage gap, not a missing
+capability).
 
-#419 was the CRUD/assignment gap #418 explicitly deferred: `Facility`/
-`Room` mongoose models and `StorageContainer.roomId` existed (#418), but
-nothing in the app could create a `Facility`/`Room` or set/change a
-`FREEZER`'s `roomId`.
+#384: `eConsent.js`'s legacy `POST /update` route (the patient-facing,
+JWT-link consent flow) bypassed the canonical `ConsentTemplate`/`Consent`
+flow entirely — it called `consentService.recordConsentProjectionEvent`
+directly, emitting an outbox projection event with **no real `Consent`
+document** ever created (no `consentId`, no template linkage, no
+`responses`). The frontend (`EConsentPage.tsx`) also hardcoded a static
+3-item consent-layer list (`project`/`storage`/`sharing`) unrelated to
+whatever the active `ConsentTemplate`'s actual permissions were.
+
+**Real design fork found mid-session, resolved via docs, not guessed:**
+`consentService.createPatientConsent` validates submitted `responses`
+against the active template's `permissions`, including a `required: true`
+gate that blocks creation if a required permission isn't granted. The
+frontend's "Revogar Todos" button submits a full revoke-all — which would
+always fail that gate if any permission is marked required. Asked Dennis
+via `AskUserQuestion`; he said to check docs first rather than pick an
+option. RF010 in `docs/docs-7-31-2026/1-Requisitos-Funcionais-e-Nao-
+Funcionais.md` settled it: revocation must never be blocked by the
+required-permission check meant for granting new consent. Implemented
+accordingly.
 
 **Built:**
-- `POST/GET/PUT/DELETE /api/facilities` and `/api/rooms`
-  (`api/backend/src/interface/routes/facility.routes.js`,
-  `room.routes.js`, new files, mounted in `app.js`) — admin CRUD gated by
-  `requirePermission('createPatient')` (Coordenador/Administrador),
-  soft-delete via `deletedAt`. Reads/writes raw `facilities`/`rooms`
-  collections directly, **not** the mongoose `Facility`/`Room` models
-  #418 added — matches every other admin-CRUD route in this repo
-  (`equipment.routes.js`, `location.routes.js`) and matches how
-  `MongoStorageRepository` already reads Facility/Room (raw collections,
-  confirmed by reading it this session). The mongoose models from #418
-  remain unused at runtime; they exist for schema documentation only.
-- `PATCH /api/storage/freezer/:freezerId/room` (added to existing
-  `storage.routes.js`) — assign/clear a FREEZER's `roomId`, validating
-  the container is actually `containerType: 'FREEZER'` and the `roomId`
-  resolves to a real, non-deleted Room.
+- `GET /api/e-consent/validate/:token` (`api/backend/src/routes/
+  eConsent.js`) now also returns the active `ConsentTemplate`'s
+  permissions and the patient's current active-consent `responses`, so
+  the frontend can render whatever the template actually asks for.
+- `POST /api/e-consent/update` now maps the submitted per-permission
+  statuses to a `responses` object: a partial/grant change goes through
+  `consentService.createPatientConsent` against the active template
+  (real `consentId`-bearing `Consent` document, outbox event via
+  `recordConsentProjectionEvent` fired internally as before); a full
+  revoke-all instead calls `consentService.revokeConsent` on the
+  patient's current active consent, sidestepping the required-permission
+  gate. Quarantine/release side effects (specimenStatus +
+  `QuarantineAction`, #409-era) are unchanged, still driven off the raw
+  per-permission statuses in the request.
+- `EConsentPage.tsx` renders the active template's permissions
+  dynamically instead of the hardcoded `project`/`storage`/`sharing`
+  list.
 
-**Scoped out, not carried forward as an issue:** #419's second point
-(backfill existing FREEZER documents with real `roomId`s) turned out not
-to be a code gap at all — there's no source of truth for which
-pre-existing FREEZER belongs to which real Facility/Room, so no script
-could correctly infer it. Documented in the close comment as an
-operational data-entry task via the new PATCH endpoint, not a follow-up
-issue (deliberately not filed — see this session's own wrap-up
-reasoning if that judgment needs revisiting).
+**Proof bar:** `api/backend/tests/unit/eConsent.routes.test.js` — 22
+tests (rewrote the `/validate` and `/update` describe blocks to match
+the new canonical-flow behavior: template/responses shape,
+createPatientConsent vs revokeConsent branching, 409 when no template is
+active, 422 passthrough on template validation errors; quarantine/
+release tests kept, now exercised through the new write path).
+`consent-integration.test.js` (16 tests, a separate mocked-route suite,
+untouched) still green. Frontend typecheck clean on the changed file. Did
+not run the full backend suite this session (targeted-tests-only per the
+default execution contract) — ran the two consent-related suites plus a
+broader `-t "consent"` filter across `api/backend/tests/` in the
+background, which finished exit 0.
 
-**wrap-up caught a real gap before it shipped uncaught:** the first pass
-of the CRUD/PATCH routes skipped `auditLogger.log()` on writes, unlike
-every other admin-CRUD route in this repo. Fixed in a same-session
-follow-up commit (audit-log CREATE/UPDATE/DELETE on all three route
-files) rather than filed as a separate issue, since it was still
-in-progress, uncommitted-to-main work. Noted on #419 via a follow-up
-comment for discoverability.
-
-**Proof bar:** backend-internal slice (not the milestone's own e2e
-spec) → `supertest` + mocked collections with real query-matching
-semantics (`tests/factories/db.factory.js`), same bar #418 used. New
-`api/backend/tests/integration/facility-room.api.test.js` (18 tests):
-full CRUD success/failure paths for both entities, permission gating
-(403 for Técnico), the FREEZER-type/Room-existence validation on the
-PATCH endpoint, and one audit-log assertion. Full backend suite:
-6485/6486 passing both times this session ran it (the 1 failure is the
-same pre-existing, unrelated `iot.api.test.js` failure noted in #418's
-and #402's handoffs — not a regression).
-
-Branched `test/419-facility-room-crud` (main slice) then
-`test/419-audit-logging` (wrap-up follow-up) off
+Branched `test/384-econsent-canonical-flow` off
 `feature/docker-e2e-backend-integration`, same `test/<slug>` fallback
-prefix #402/#418 used (no dedicated prefix exists). Both committed,
-pushed, merged `--no-ff`, pushed; both issue branches deleted locally
-and on remote. Closed #419 with a comment summarizing the CRUD/PATCH
-implementation and the backfill judgment call, then added a follow-up
-comment noting the audit-logging fix once it landed.
+prefix prior sessions used. Committed, pushed, merged `--no-ff`, pushed;
+issue branch deleted locally and on remote. Closed #384 with a comment
+summarizing the implementation and the RF010-backed revoke-vs-create
+design decision.
+
+**Process note, not a code finding:** the first wrap-up pass this
+session was run without also invoking `handoff` — Dennis had to ask why.
+`wrap-up`'s own text already says to invoke `handoff` before the final
+summary whenever a session changes committed repo state, which this one
+did (merge + push + issue close); the miss was not re-reading that line
+carefully enough at the trigger moment, not a gap in the skill text
+itself. Flagging here in case it recurs.
 
 ## Repo state
 
-- **`feature/docker-e2e-backend-integration`**: now at `d9e5e353` (was
-  `5a37916e`), pushed to `origin`. Two merges this session:
-  `3b66541a` (Facility/Room CRUD + PATCH, commit `93a50b4d`) and
-  `d9e5e353` (audit-logging follow-up, commit `b559fdce`).
-- Issue branches `test/419-facility-room-crud` and
-  `test/419-audit-logging`: both deleted locally and on remote —
-  nothing dangling.
-- Issues: **#419 closed** (this session). No new issues opened this
-  session (the backfill point was judged not to need one — see above).
-  Backlog unchanged from prior handoff otherwise: **#384–#387**,
-  `#371`/`#373`/`#374`/`#378`/`#379`. #389 remains open, still carrying
-  #401's deferred rename sub-question.
+- **`feature/docker-e2e-backend-integration`**: now at `ce542064` (was
+  `cb1fbf09`), pushed to `origin`. One merge this session: `ce542064`
+  (eConsent canonical-flow unification, commit `9025465e`).
+- Issue branch `test/384-econsent-canonical-flow`: deleted locally and on
+  remote — nothing dangling. This handoff rotation itself lands via a
+  small `test/384-handoff-rotate` branch (the branch-guard hook requires
+  a `fix/`/`test/` branch for any edit alongside an untracked file, see
+  below), merged the same way.
+- An untracked `api/backend/src/storage/results/` directory is present
+  in the working tree — pre-existing, not created by this session, left
+  untouched.
+- Issues: **#384 closed** (this session). No new issues opened. Backlog
+  unchanged otherwise: **#385–#387**, older backlog
+  (`#371`/`#373`/`#374`/`#378`/`#379`), and **#389** (storage/custody
+  split — route through `divide-and-conquer` first per its own body, 28
+  files). #419's storage-hierarchy thread remains fully closed. #389
+  still carries #401's deferred rename sub-question.
 
 ## Blocking next step
 
@@ -90,18 +105,20 @@ None.
 ## Recommended next steps
 
 Dennis didn't name a specific next pick this session, so per this
-skill's own rule: **none queued**. Backlog: **#384–#387**, older
-backlog (`#371`/`#373`/`#374`/`#378`/`#379`), and **#389** (storage/
-custody split — route through `divide-and-conquer` first per its own
-body, 28 files). The #418/#419 storage-hierarchy thread (`Facility`/
-`Room`/`StorageContainer.roomId` + CRUD) is now fully closed — no known
-follow-up queued there unless new requirements surface.
+skill's own rule: **none queued**. Backlog: **#385–#387**, older backlog
+(`#371`/`#373`/`#374`/`#378`/`#379`), and **#389** (route through
+`divide-and-conquer` first, 28 files).
 
 ## Which skills to use
 
-- Backlog unchanged: **#384–#387**, older backlog
+- Backlog unchanged: **#385–#387**, older backlog
   (`#371`/`#373`/`#374`/`#378`/`#379`) — untouched this session, no new
   guidance beyond prior handoffs.
 - **#389**: if picked up next, route through `divide-and-conquer` first
   per its own body (28 files, too big for one slice) — don't attempt as
   one iteration.
+- **Any dict-07/RF gap that looks like a legacy-route removal**: check
+  `docs/docs-7-31-2026/` (the newest requirements doc set) before
+  guessing at the target model — RF010 settled #384's design fork
+  directly and is the canonical source for Consent-domain behavior
+  (versioning, required-permission semantics, revocation guarantees).
