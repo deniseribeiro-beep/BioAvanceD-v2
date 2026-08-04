@@ -37,7 +37,10 @@ const DEFAULTS = {
   referenceImportIssues: 'referenceImportIssues',
   referenceImportStaging: 'referenceImportStaging',
   terminologyConcepts: 'terminologyConcepts',
-  terminologyRelations: 'terminologyRelations'
+  terminologyRelations: 'terminologyRelations',
+  roles: 'roles',
+  permissions: 'permissions',
+  userRoleAssignments: 'userRoleAssignments'
 };
 
 const ORIGINAL_ENV = { ...process.env };
@@ -108,7 +111,10 @@ describe('config/collections', () => {
       referenceImportIssues: 'referenceImportIssues',
       referenceImportStaging: 'referenceImportStaging',
       terminologyConcepts: 'terminologyConcepts',
-      terminologyRelations: 'terminologyRelations'
+      terminologyRelations: 'terminologyRelations',
+      roles: 'roles',
+      permissions: 'permissions',
+      userRoleAssignments: 'userRoleAssignments'
     });
   });
 
