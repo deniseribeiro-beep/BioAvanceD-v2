@@ -87,6 +87,7 @@ describe('intakeWizard helpers', () => {
     expect(document.sampleType).toBe('Sangue');
     expect(document.consentTemplateId).toBe('template-1');
     expect(document.lifecycleStatus).toBe('QUARANTINE');
+    expect(document.specimenStatus).toBe('quarantined');
   });
 
   it('calcularQualidade nao usa mais heuristica legada numerica', () => {
@@ -113,6 +114,17 @@ describe('intakeWizard helpers', () => {
     });
 
     expect(document.lifecycleStatus).toBe('AVAILABLE');
+    expect(document.specimenStatus).toBe('available');
+  });
+
+  it('buildSampleDocumentFromIntake derives specimenStatus quarantined for an explicit BLOCKED lifecycleStatus (#411)', () => {
+    const document = helpers.buildSampleDocumentFromIntake({
+      participant: { patientName: 'Paciente Teste' },
+      specimen: { lifecycleStatus: 'BLOCKED' },
+    });
+
+    expect(document.lifecycleStatus).toBe('BLOCKED');
+    expect(document.specimenStatus).toBe('quarantined');
   });
 
   it('buildSampleDocumentFromIntake defaults registeredAt to now when specimen.registeredAt is absent', () => {

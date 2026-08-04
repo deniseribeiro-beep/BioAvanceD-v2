@@ -146,6 +146,7 @@ function buildSampleDocumentFromIntake(data = {}, matchedPatient = null) {
   const consent = normalizeObject(data?.consent);
   const releaseStatusRaw = normalizeString(specimen.lifecycleStatus).toUpperCase();
   const releaseStatus = ['QUARANTINE', 'AVAILABLE', 'BLOCKED'].includes(releaseStatusRaw) ? releaseStatusRaw : 'QUARANTINE';
+  const specimenStatus = releaseStatus === 'AVAILABLE' ? 'available' : 'quarantined';
   const registrationDate = specimen.registeredAt || new Date().toISOString();
   const confirmedPatientID = normalizeString(matchedPatient?.participantId) || resolvePatientID(data);
   const confirmedPatientName = normalizeString(matchedPatient?.patientName || data?.participant?.patientName);
@@ -162,6 +163,7 @@ function buildSampleDocumentFromIntake(data = {}, matchedPatient = null) {
     quantity: normalizeNumber(specimen.quantity, 0),
     unit: normalizeString(specimen.unit) || null,
     lifecycleStatus: releaseStatus,
+    specimenStatus,
     linkedProject: normalizeString(specimen.linkedProject) || 'INTAKE_WIZARD',
     sprec: normalizeObject(specimen.sprec),
     consentTemplateId: normalizeString(consent.consentTemplateId) || null,
