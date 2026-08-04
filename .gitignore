@@ -86,6 +86,7 @@ backend/uploads/temp/*
 !backend/uploads/temp/.gitkeep
 api/backend/uploads/temp/*
 !api/backend/uploads/temp/.gitkeep
+api/backend/src/storage/results/
 
 # =========================
 # Local runtime data (Docker volumes / databases)
