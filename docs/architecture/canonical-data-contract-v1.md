@@ -127,6 +127,128 @@ carries `sprec` and the storage/custody fields (`locationId`, `location`,
 land (#383, #388); storage/custody remains filed as its own follow-up
 (#389).
 
+**Status-field consolidation — decision recorded in #398, implementation
+tracked in #399 (storage/custody split, part 2/3 of #389):**
+`lifecycleStatus`/`availabilityStatus`/`quarantineStatus`/`quarantineReason`
+collapse onto dict-02's single `Specimen.specimenStatus` (ELM-0123) plus a
+new `QuarantineAction` referenced entity (P1X-0113–0119, section below) —
+not a straight field rename. Reasoning, traced against the current code
+(not just the issue's own scoping pass) and against both `dict-02` and
+`requisitos-index.md` (RF006):
+
+1. **`lifecycleStatus` → `specimenStatus`, case-folded, with two value-set
+   gaps:**
+   - 6 of 8 current values case-fold directly onto dict-02's enum:
+     `AVAILABLE`/`PARTIAL`/`DEPLETED`/`UNAVAILABLE`/`DESTROYED`/
+     `QUARANTINED` → `available`/`partial`/`depleted`/`unavailable`/
+     `destroyed`/`quarantined`.
+   - `REGISTERED` (current-only — `SampleModel.create()`'s pre-transaction
+     default) has no dict-02 equivalent; dict-02's own example value for a
+     newly-created specimen is `available`. Fold `REGISTERED` into
+     `available` — `SampleModel.computeStatus()`'s sticky-status list never
+     includes it, so nothing treats it as a distinct blockable state and no
+     behavior changes.
+   - `DISPOSED` (current-only) **cannot** fold into `destroyed`: RF006 AC#4
+     (`requisitos-index.md`) names both as separately-blocking states
+     ("Bloquear movimentação de espécime UNAVAILABLE, DESTROYED, DISPOSED
+     ou QUARANTINED"), and dict-02's ELM-0123 enum has no `disposed` value.
+     This is a real gap between the two Fase-1-authoritative docs
+     (dictionary vs. requirements), not a naming quibble. Resolve it as a
+     documented local extension of the `specimenStatus` domain (add
+     `disposed` alongside the ELM-0123 baseline) — the same
+     "extension beyond baseline" mechanism dict-02's own P1X-prefixed rows
+     already use elsewhere in the dictionary. #399 carries this extension
+     note to wherever `specimenStatus`'s validator/enum lives.
+   - dict-02 additionally defines `reserved` and `checked_out`, which
+     nothing in the current codebase produces yet. Not a blocker for #399 —
+     carry them as valid-but-currently-unreachable values, the same way
+     #388 left `SpecimenPreanalytics`'s fuller field set unproduced until
+     #392 built the parsers.
+   - `computeStatus()`'s sticky-quantity logic (Q3) carries over unchanged
+     in shape: while `specimenStatus` is one of the terminal/blocked values
+     (`unavailable`/`destroyed`/`disposed`/`quarantined`), quantity changes
+     must not override it; only outside that set does quantity drive
+     `depleted`/`partial`/`available`. #399 renames the sticky list's
+     contents, not the algorithm.
+
+2. **`availabilityStatus` does not survive as its own field.** Every real
+   write site (`intakeWizard.js`, `intakeWizard.routes.js`,
+   `equipment-sensor-quarantine.service.js`, `fhir-import-staging.service.js`)
+   sets it in lockstep with `quarantineStatus` — `'BLOCKED'`+`'QUARANTINED'`,
+   `'AVAILABLE'`+`'RELEASED'`, or `'PENDING_REVIEW'`+`'PENDING_REVIEW'` —
+   never independently, and dict-02 has no parallel `Specimen` field for it
+   (only `specimenStatus` and the separate `availabilityReason`, ELM-0124,
+   a reason code, not a status). This corrects #398's own scoping-pass
+   note that `availabilityStatus` was "never recomputed anywhere found" —
+   it's actively read/written across four services, just never
+   *independently* of `quarantineStatus`, which is what actually settles
+   the question: it's a redundant coarse duplicate of the same signal, so
+   nothing is lost by dropping it in favor of `specimenStatus` alone.
+   `'BLOCKED'` collapses into whichever coarse `specimenStatus` value
+   (`unavailable`/`quarantined`) it always accompanied — it was never an
+   independent value.
+
+3. **`quarantineStatus`/`quarantineReason` split across two dict-02
+   entities, both needed:**
+   - The *current-state* bit folds into `specimenStatus`'s `quarantined`
+     value — the same single field as everything else, not a parallel
+     status.
+   - The *event history* — why, when it started, when it was released, who
+     authorized it — has no home in the current flat two-field shape, and
+     real code already wants more than two fields:
+     `equipment-sensor-quarantine.service.js` also tracks `quarantinedAt`,
+     `quarantineSource`/`quarantineSourceId`, and a separate
+     `quarantineReasonCode`, none of which exist on `Sample.js`'s schema
+     (written via the native driver, so nothing validates them). This is
+     exactly what dict-02's `QuarantineAction` entity (P1X-0113–0119,
+     below) models: `specimenIds` (1..*, so one action can cover a batch —
+     matches the equipment-quarantine flow's batch-quarantine of every
+     specimen tied to one sensor incident), `reasonCodes`
+     (`CodeableConcept[]`, richer than today's single string),
+     `startedAt`/`releasedAt`, `authorizedBy`. Follow the
+     `RcsAssessment`/`SpecimenPreanalytics` pattern (#383/#388): a
+     referenced, append-only entity, not embedded fields —
+     `availabilityReason` (ELM-0124) stays the FHIR-boundary-facing coarse
+     reason on `Specimen` itself, `QuarantineAction` is the operational
+     quality/governance audit trail.
+   - Gap acknowledged, not resolved here: dict-02's own `actionStatus`
+     (P1X-0118) domain is under-specified in the dictionary (only `active`
+     is listed; no released/completed counterpart), less complete than the
+     current code's own `quarantineStatus` vocabulary
+     (`QUARANTINED`/`RELEASED`/`PENDING_REVIEW`). #399 will need its own
+     local extension of `actionStatus`'s domain to carry today's three
+     states — flag it to Dennis/Denise as a dict-02 completeness gap if
+     #399 hits it, rather than silently inventing values.
+
+**Found while researching this decision, filed separately (#404, not part
+of #398's own scope):** `intakeWizard.routes.js` and
+`equipment-sensor-quarantine.service.js` already fail to keep
+`lifecycleStatus` in sync with `quarantineStatus`/`availabilityStatus` on
+write, so `sample.service.js`'s movement-blocking gate silently doesn't
+fire for consent-revoked or cold-chain-quarantined samples today. That bug
+is independent of this decision, but it's a concrete argument for #399
+landing soon — a single `specimenStatus` write path eliminates this whole
+class of drift.
+
+### QuarantineAction
+
+- `quarantineActionId`
+- `specimenIds` (`Reference[]`, 1..* — one action may cover a batch, e.g.
+  every specimen tied to one cold-chain sensor incident)
+- `reasonCodes` (`CodeableConcept[]`)
+- `startedAt`
+- `releasedAt` (0..1, present only once released)
+- `actionStatus`
+- `authorizedBy` (Reference to Actor)
+
+Per dict-02 P1X-0113–0119 ("Gestão da qualidade" domain). **Not yet
+landed** — decided in #398 as the destination for `Sample.js`'s current
+`quarantineStatus`/`quarantineReason` pair (storage/custody split, part of
+#389); implementation tracked in #399. See the `Specimen` section above
+for the full reasoning and the two acknowledged gaps (dict-02's
+`actionStatus` domain is under-specified; RF006's `DISPOSED` state has no
+`specimenStatus` equivalent and needs a local extension).
+
 ### RcsAssessment
 
 - `specimenId` (reference to `Specimen`, not a duplicate — dict-07 row 38:
