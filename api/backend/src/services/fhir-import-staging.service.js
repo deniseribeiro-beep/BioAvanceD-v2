@@ -4,6 +4,8 @@ const jwt = require('jsonwebtoken');
 const notificationService = require('./NotificationService');
 const qualityDomain = require('./quality-domain.service');
 const logger = require('../utils/logger');
+const { SampleModel } = require('../models/Sample');
+const quarantineActionService = require('./quarantine-action.service');
 
 const STATUS = Object.freeze({
   VALID: 'VALID',
@@ -907,6 +909,11 @@ async function commitBatch(db, batchIdRaw) {
       { upsert: true }
     );
 
+    const specimenStatus = workflow.quarantineStatus === 'RELEASED' ? 'available' : 'quarantined';
+    const { lifecycleStatus, availabilityStatus: derivedAvailabilityStatus } = SampleModel.deriveLegacyStatuses(specimenStatus);
+    const existingSample = await samples.findOne({ specimenId: normalized.specimenId });
+    const wasQuarantined = existingSample ? SampleModel.resolveSpecimenStatus(existingSample) === 'quarantined' : false;
+
     await samples.updateOne(
       { specimenId: normalized.specimenId },
       {
@@ -931,7 +938,9 @@ async function commitBatch(db, batchIdRaw) {
           consentStatus: workflow.consentStatus,
           quarantineStatus: workflow.quarantineStatus,
           quarantineReason: workflow.quarantineReason,
-          availabilityStatus: workflow.availabilityStatus,
+          availabilityStatus: derivedAvailabilityStatus,
+          specimenStatus,
+          lifecycleStatus,
           importBatchId: String(batchId),
           importedAt,
           importedBy,
@@ -941,6 +950,19 @@ async function commitBatch(db, batchIdRaw) {
       },
       { upsert: true }
     );
+
+    const committedSample = await samples.findOne({ specimenId: normalized.specimenId });
+    if (committedSample) {
+      if (specimenStatus === 'quarantined' && !wasQuarantined) {
+        await quarantineActionService.recordAction(db, {
+          specimenIds: [String(committedSample._id)],
+          reasonCodes: [workflow.quarantineReason || 'FHIR_IMPORT_REVIEW_REQUIRED'],
+          authorizedBy: importedBy || 'SYSTEM',
+        });
+      } else if (specimenStatus === 'available' && wasQuarantined) {
+        await quarantineActionService.releaseActiveAction(db, String(committedSample._id), importedBy || 'SYSTEM');
+      }
+    }
 
     await staging.updateOne(
       { _id: record._id },
@@ -996,6 +1018,11 @@ async function attachExternalDocument(db, batchIdRaw, recordIdRaw, options = {})
   };
 
   await staging.updateOne({ _id: recordId, batchId }, { $set: updatedRecord });
+
+  const existingSample = await samples.findOne({ specimenId: normalized.specimenId });
+  const wasQuarantined = existingSample ? SampleModel.resolveSpecimenStatus(existingSample) === 'quarantined' : false;
+  const { lifecycleStatus, availabilityStatus } = SampleModel.deriveLegacyStatuses('available');
+
   await samples.updateOne(
     { specimenId: normalized.specimenId },
     {
@@ -1003,12 +1030,18 @@ async function attachExternalDocument(db, batchIdRaw, recordIdRaw, options = {})
         consentStatus: 'EXTERNAL_ATTACHED',
         quarantineStatus: 'RELEASED',
         quarantineReason: null,
-        availabilityStatus: 'AVAILABLE',
+        availabilityStatus,
+        specimenStatus: 'available',
+        lifecycleStatus,
         releaseStatus: 'AVAILABLE',
         updatedAt: now,
       },
     }
   );
+
+  if (existingSample && wasQuarantined) {
+    await quarantineActionService.releaseActiveAction(db, String(existingSample._id), options.userID || 'SYSTEM');
+  }
 
   await audit(db, 'FHIR_IMPORT_EXTERNAL_DOCUMENT_ATTACHED', { batchId, recordId, participantId: normalized.participantId, specimenId: normalized.specimenId });
 

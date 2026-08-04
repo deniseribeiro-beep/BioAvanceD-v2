@@ -56,6 +56,7 @@ function createDb() {
     patients: createCollection(),
     samples: createCollection(),
     audit_logs: createCollection(),
+    quarantineActions: createCollection(),
   };
   return {
     collections,
@@ -201,12 +202,84 @@ describe('fhir-import-staging.service — consent token & external document flow
     });
   });
 
+  describe('commitBatch', () => {
+    it('cria a amostra com specimenStatus available e sem QuarantineAction quando o consentimento foi assinado', async () => {
+      const { batchId, recordId } = await seedBatchAndRecord({
+        status: fhirImportStagingService.STATUS.READY_TO_COMMIT,
+        normalized: {
+          participantId: 'PART-1',
+          patientEmail: 'p@example.com',
+          specimenId: 'SPEC-COMMIT-1',
+          sampleType: 'blood',
+          consentSigned: true,
+        },
+      });
+
+      const result = await fhirImportStagingService.commitBatch(db, batchId);
+
+      expect(result.committed).toBe(1);
+      const sample = db.collections.samples.docs.find((doc) => doc.specimenId === 'SPEC-COMMIT-1');
+      expect(sample.specimenStatus).toBe('available');
+      expect(sample.lifecycleStatus).toBe('AVAILABLE');
+      expect(sample.quarantineStatus).toBe('RELEASED');
+      expect(db.collections.quarantineActions.docs).toHaveLength(0);
+
+      const committedRecord = db.collections.import_staging_records.docs.find((doc) => doc._id === recordId);
+      expect(committedRecord.status).toBe(fhirImportStagingService.STATUS.COMMITTED);
+    });
+
+    it('libera o QuarantineAction ativo quando uma amostra já quarentenada é comprometida como disponível', async () => {
+      const { batchId } = await seedBatchAndRecord({
+        status: fhirImportStagingService.STATUS.READY_TO_COMMIT,
+        normalized: {
+          participantId: 'PART-1',
+          patientEmail: 'p@example.com',
+          specimenId: 'SPEC-COMMIT-2',
+          sampleType: 'blood',
+          consentSigned: true,
+        },
+      });
+      await db.collection('samples').insertOne({
+        specimenId: 'SPEC-COMMIT-2',
+        specimenStatus: 'quarantined',
+        lifecycleStatus: 'QUARANTINED',
+      });
+      await db.collection('quarantineActions').insertOne({
+        quarantineActionId: 'qa-commit-2',
+        specimenIds: ['id-1'],
+        actionStatus: 'active',
+        startedAt: new Date(),
+        authorizedBy: 'SYSTEM',
+      });
+
+      await fhirImportStagingService.commitBatch(db, batchId);
+
+      const sample = db.collections.samples.docs.find((doc) => doc.specimenId === 'SPEC-COMMIT-2');
+      expect(sample.specimenStatus).toBe('available');
+
+      const releasedAction = db.collections.quarantineActions.docs.find((doc) => doc.quarantineActionId === 'qa-commit-2');
+      expect(releasedAction.actionStatus).toBe('released');
+    });
+  });
+
   describe('attachExternalDocument', () => {
     it('anexa documentação externa, libera o registro e atualiza a amostra', async () => {
       const { batchId, recordId } = await seedBatchAndRecord({
         normalized: { participantId: 'PART-1', patientEmail: '', specimenId: 'SPEC-1' },
       });
-      await db.collection('samples').insertOne({ specimenId: 'SPEC-1', quarantineStatus: 'QUARANTINED' });
+      await db.collection('samples').insertOne({
+        specimenId: 'SPEC-1',
+        quarantineStatus: 'QUARANTINED',
+        specimenStatus: 'quarantined',
+        lifecycleStatus: 'QUARANTINED',
+      });
+      await db.collection('quarantineActions').insertOne({
+        quarantineActionId: 'qa-1',
+        specimenIds: ['id-1'],
+        actionStatus: 'active',
+        startedAt: new Date(),
+        authorizedBy: 'SYSTEM',
+      });
 
       const result = await fhirImportStagingService.attachExternalDocument(db, batchId, recordId, { userID: 'user-1', note: 'Documento validado manualmente' });
 
@@ -225,6 +298,12 @@ describe('fhir-import-staging.service — consent token & external document flow
       expect(updatedSample.quarantineStatus).toBe('RELEASED');
       expect(updatedSample.availabilityStatus).toBe('AVAILABLE');
       expect(updatedSample.releaseStatus).toBe('AVAILABLE');
+      expect(updatedSample.specimenStatus).toBe('available');
+      expect(updatedSample.lifecycleStatus).toBe('AVAILABLE');
+
+      const releasedAction = db.collections.quarantineActions.docs.find((doc) => doc.quarantineActionId === 'qa-1');
+      expect(releasedAction.actionStatus).toBe('released');
+      expect(releasedAction.authorizedBy).toBe('user-1');
 
       const auditLogs = db.collections.audit_logs.docs;
       expect(auditLogs.some((log) => log.action === 'FHIR_IMPORT_EXTERNAL_DOCUMENT_ATTACHED')).toBe(true);
