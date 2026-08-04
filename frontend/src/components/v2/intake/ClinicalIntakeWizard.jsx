@@ -1473,12 +1473,9 @@ function buildSubmissionPayload(formData, clinicalComorbidityItems = [], biomark
       quantity: Number(formData.quantity),
       unit: sampleUnit,
       registeredAt: now,
-      // Write-only creation default, not a specimenStatus read/decision
-      // site — intakeWizard.js's buildSampleDocumentFromIntake doesn't
-      // consume a specimenStatus field at all today, so mirroring it here
-      // would be a no-op until that backend creation path is migrated
-      // (out of #407's frontend/e2e scope; confirmed, no change needed).
-      lifecycleStatus: 'AVAILABLE',
+      // Creation default — intakeWizard.js's buildSampleDocumentFromIntake
+      // reads this directly as of #415 to decide available vs quarantined.
+      specimenStatus: 'available',
       linkedProject: formData.linkedProject.trim(),
       sprec: canonicalSprec,
       merkleRoot: sampleMerkleRoot,

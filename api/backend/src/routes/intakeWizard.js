@@ -145,8 +145,8 @@ function buildPharmacologyData(data = {}) {
 function buildSampleDocumentFromIntake(data = {}, matchedPatient = null) {
   const specimen = normalizeObject(data?.specimen);
   const consent = normalizeObject(data?.consent);
-  const requestedStatusRaw = normalizeString(specimen.lifecycleStatus).toUpperCase();
-  const specimenStatus = requestedStatusRaw === 'AVAILABLE' ? 'available' : 'quarantined';
+  const requestedStatusRaw = normalizeString(specimen.specimenStatus).toLowerCase();
+  const specimenStatus = requestedStatusRaw === 'available' ? 'available' : 'quarantined';
   const registrationDate = specimen.registeredAt || new Date().toISOString();
   const confirmedPatientID = normalizeString(matchedPatient?.participantId) || resolvePatientID(data);
   const confirmedPatientName = normalizeString(matchedPatient?.patientName || data?.participant?.patientName);

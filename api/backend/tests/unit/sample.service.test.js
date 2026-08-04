@@ -605,7 +605,9 @@ describe('sample.service', () => {
       });
       expect(cursor.limit).toHaveBeenCalledWith(5);
       expect(cursor.skip).toHaveBeenCalledWith(1);
-      expect(result).toEqual({ samples: [{ specimenId: 1 }], total: 1, limit: 5, skip: 1 });
+      // specimenStatus is normalized onto every returned document (#415) —
+      // this one has none, so it falls back to the 'available' default.
+      expect(result).toEqual({ samples: [{ specimenId: 1, specimenStatus: 'available' }], total: 1, limit: 5, skip: 1 });
     });
 
     it('applies default limit/skip when not specified', async () => {

@@ -106,19 +106,19 @@ describe('intakeWizard helpers', () => {
     expect(document.quantity).toBe(0);
   });
 
-  it('buildSampleDocumentFromIntake accepts an explicit valid lifecycleStatus instead of defaulting', () => {
+  it('buildSampleDocumentFromIntake accepts an explicit valid specimenStatus instead of defaulting (#415)', () => {
     const document = helpers.buildSampleDocumentFromIntake({
       participant: { patientName: 'Paciente Teste' },
-      specimen: { lifecycleStatus: 'AVAILABLE' },
+      specimen: { specimenStatus: 'available' },
     });
 
     expect(document.specimenStatus).toBe('available');
   });
 
-  it('buildSampleDocumentFromIntake derives specimenStatus quarantined for an explicit BLOCKED lifecycleStatus (#411)', () => {
+  it('buildSampleDocumentFromIntake derives specimenStatus quarantined for any non-available specimenStatus (#415)', () => {
     const document = helpers.buildSampleDocumentFromIntake({
       participant: { patientName: 'Paciente Teste' },
-      specimen: { lifecycleStatus: 'BLOCKED' },
+      specimen: { specimenStatus: 'quarantined' },
     });
 
     expect(document.specimenStatus).toBe('quarantined');

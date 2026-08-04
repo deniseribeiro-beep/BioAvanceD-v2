@@ -182,14 +182,11 @@ export interface Sample {
   release_status?: 'AVAILABLE' | 'BLOCKED' | 'QUARANTINE' | string;
   consentStatus?: 'PENDING' | 'SIGNED' | 'EXTERNAL_ATTACHED' | 'WAIVED_TRANSFER' | 'NOT_REQUIRED' | string;
   // Canonical status (storage/custody split, #389/#409) — derive quarantine/availability
-  // UI state from this, not the legacy trio below.
+  // UI state from this.
   specimenStatus?: 'available' | 'reserved' | 'checked_out' | 'partial' | 'depleted' | 'quarantined' | 'destroyed' | 'unavailable' | 'disposed' | string;
-  // Deprecated: dual-written 1:1 from specimenStatus for backward compat (#405's bridge);
-  // read specimenStatus instead. quarantineReason still carries the human-readable reason
-  // text — no specimenStatus equivalent exists for that.
-  quarantineStatus?: 'QUARANTINED' | 'RELEASED' | string;
+  // quarantineReason still carries the human-readable reason text — no
+  // specimenStatus equivalent exists for that, so it stays legacy-sourced (#407/#415).
   quarantineReason?: 'CONSENT_PENDING' | 'EXTERNAL_DOCUMENT_REQUIRED' | 'TRANSFER_REVIEW_REQUIRED' | null | string;
-  availabilityStatus?: 'BLOCKED' | 'AVAILABLE' | 'Disponível' | 'Parcialmente Disponível' | 'Indisponível' | string;
   importBatchId?: string | null;
   importedAt?: Date | string | null;
   importedBy?: string | null;

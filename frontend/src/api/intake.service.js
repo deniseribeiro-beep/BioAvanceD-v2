@@ -39,9 +39,8 @@ export async function registerClinicalIntake(payload = {}, options = {}) {
       unit: text(payload.specimen?.unit),
       registeredAt: text(payload.specimen?.registeredAt) || nowIso(),
       // Pass-through of ClinicalIntakeWizard.jsx's creation default — see
-      // that file's comment; no specimenStatus equivalent consumed by the
-      // backend's intake-wizard creation path today (#407, out of scope).
-      lifecycleStatus: text(payload.specimen?.lifecycleStatus),
+      // that file's comment (#415).
+      specimenStatus: text(payload.specimen?.specimenStatus),
       linkedProject: text(payload.specimen?.linkedProject),
       sprec: payload.specimen?.sprec || {},
       merkleRoot: text(payload.specimen?.merkleRoot),

@@ -130,7 +130,7 @@ export default function SampleDetailsPage() {
           locationID: foundSample.locationID ? String(foundSample.locationID) : '',
           linkedProject: foundSample.linkedProject || '',
           availableQuantity: (foundSample.volumeCurrent ?? foundSample.availableQuantity ?? foundSample.quantity ?? '').toString(),
-          currentStatus: String((foundSample as any).specimenStatus || '').toUpperCase() || (foundSample as any).lifecycleStatus || foundSample.currentStatus || 'Available',
+          currentStatus: String((foundSample as any).specimenStatus || '').toUpperCase() || foundSample.currentStatus || 'Available',
           sampleOrigin: foundSample.sampleOrigin || '',
           extractionProtocol: foundSample.extractionProtocol || '',
           participantId: (foundSample as any).participantId ? String((foundSample as any).participantId) : String((foundSample as any).patientID || ''),
@@ -229,7 +229,7 @@ export default function SampleDetailsPage() {
       volumeCurrent: Number.isFinite(parsedAvailable) ? parsedAvailable : sample?.volumeCurrent,
       locationID: parsedLocation ?? sample?.locationID,
       linkedProject: form.linkedProject || sample?.linkedProject,
-      currentStatus: (form.currentStatus as Sample['currentStatus']) || (String((sample as any)?.specimenStatus || '').toUpperCase() || (sample as any)?.lifecycleStatus) as Sample['currentStatus'] || sample?.currentStatus,
+      currentStatus: (form.currentStatus as Sample['currentStatus']) || (String((sample as any)?.specimenStatus || '').toUpperCase() as Sample['currentStatus']) || sample?.currentStatus,
     } as Sample;
   }, [isEditing, sample, form.availableQuantity, form.locationID, form.linkedProject, form.currentStatus]);
 
@@ -397,7 +397,7 @@ export default function SampleDetailsPage() {
         locationID: sample.locationID ? String(sample.locationID) : '',
         linkedProject: sample.linkedProject || '',
         availableQuantity: (sample.volumeCurrent ?? sample.availableQuantity ?? sample.quantity ?? '').toString(),
-      currentStatus: String((sample as any).specimenStatus || '').toUpperCase() || (sample as any).lifecycleStatus || sample.currentStatus || 'Available',
+      currentStatus: String((sample as any).specimenStatus || '').toUpperCase() || sample.currentStatus || 'Available',
         sampleOrigin: sample.sampleOrigin || '',
         extractionProtocol: sample.extractionProtocol || '',
         participantId: sample.participantId ? String(sample.participantId) : '',

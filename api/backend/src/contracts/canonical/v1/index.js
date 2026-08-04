@@ -36,9 +36,10 @@ const specimenSchema = {
     quantity: { type: 'number' },
     unit: { type: 'string' },
     registeredAt: { type: 'string' },
-    // lifecycleStatus stays accepted on the intake wire contract until the
-    // frontend (#415) switches to sending specimenStatus directly — both
-    // are declared so existing intake payloads keep validating.
+    // lifecycleStatus stays accepted on the intake wire contract for
+    // backward compat with any caller still sending it (the frontend
+    // itself switched to specimenStatus in #415) — removal is #408's
+    // closeout job, once the whole repo's read sites are confirmed clear.
     lifecycleStatus: { type: 'string' },
     specimenStatus: { type: 'string' },
     linkedProject: { type: 'string' },

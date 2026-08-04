@@ -422,7 +422,13 @@ class SampleService {
   async getSample(db, specimenId) {
     try {
       const samplesCollection = await getCollection(db, 'samples');
-      return await findSampleByAnyId(samplesCollection, specimenId);
+      const sample = await findSampleByAnyId(samplesCollection, specimenId);
+      if (!sample) return null;
+      // Guarantee specimenStatus is populated even for legacy documents
+      // written before the field existed (#415 — frontend readers can then
+      // drop their lifecycleStatus fallback).
+      sample.specimenStatus = SampleModel.resolveSpecimenStatus(sample);
+      return sample;
     } catch (error) {
       logger.error('Erro ao buscar amostra:', error.message);
       throw error;
@@ -454,6 +460,10 @@ class SampleService {
         .limit(limit)
         .skip(skip)
         .toArray();
+      // See getSample's comment — same specimenStatus guarantee for the list view.
+      samples.forEach((sample) => {
+        sample.specimenStatus = SampleModel.resolveSpecimenStatus(sample);
+      });
 
       const total = await samplesCollection.countDocuments(query);
 
@@ -605,6 +615,9 @@ class SampleService {
           };
         }
       }
+
+      // See getSample's comment — same specimenStatus guarantee for barcode lookups.
+      sample.specimenStatus = SampleModel.resolveSpecimenStatus(sample);
 
       return { sample, participant };
     } catch (error) {
