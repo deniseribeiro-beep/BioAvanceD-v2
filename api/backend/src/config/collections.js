@@ -23,7 +23,10 @@ const CANONICAL_COLLECTIONS = Object.freeze({
   referenceImportIssues: env.COLL_REFERENCE_IMPORT_ISSUES || 'referenceImportIssues',
   referenceImportStaging: env.COLL_REFERENCE_IMPORT_STAGING || 'referenceImportStaging',
   terminologyConcepts: env.COLL_TERMINOLOGY_CONCEPTS || 'terminologyConcepts',
-  terminologyRelations: env.COLL_TERMINOLOGY_RELATIONS || 'terminologyRelations'
+  terminologyRelations: env.COLL_TERMINOLOGY_RELATIONS || 'terminologyRelations',
+  roles: env.COLL_ROLES || 'roles',
+  permissions: env.COLL_PERMISSIONS || 'permissions',
+  userRoleAssignments: env.COLL_USER_ROLE_ASSIGNMENTS || 'userRoleAssignments'
 });
 
 module.exports = {

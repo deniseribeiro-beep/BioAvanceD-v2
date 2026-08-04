@@ -1,0 +1,85 @@
+import { describe, it, expect } from 'vitest';
+import { createRequire } from 'module';
+
+const require = createRequire(import.meta.url);
+const { seedRolesAndPermissions } = require('../../../src/services/rbac-catalog-seed.service');
+
+/**
+ * Real query-matching fake (findOne exact-match, insertOne), not a canned
+ * stub — proves the seed's upsert-by-business-key idempotency actually
+ * depends on querying by roleCode/permissionCode, per build-loop's
+ * native-only "real backend" proof bar.
+ */
+function createFakeCollection() {
+  const docs = [];
+  const matches = (doc, filter) => Object.keys(filter).every((key) => doc[key] === filter[key]);
+  return {
+    docs,
+    async insertOne(doc) {
+      docs.push(doc);
+      return { insertedId: `fake-${docs.length}` };
+    },
+    async findOne(filter = {}) {
+      return docs.find((doc) => matches(doc, filter)) || null;
+    },
+  };
+}
+
+function createFakeDb() {
+  const collections = { roles: createFakeCollection(), permissions: createFakeCollection() };
+  return {
+    collections,
+    collection(name) {
+      if (!collections[name]) throw new Error(`unexpected collection: ${name}`);
+      return collections[name];
+    },
+  };
+}
+
+describe('rbac-catalog-seed.service', () => {
+  it('seeds all 4 roles.min.json roles as Role documents with dict-02 roleCodes', async () => {
+    const db = createFakeDb();
+
+    const { roles } = await seedRolesAndPermissions(db);
+
+    expect(roles).toHaveLength(4);
+    expect(roles.map((r) => r.roleCode).sort()).toEqual(['administrator', 'coordinator', 'external_user', 'technician']);
+  });
+
+  it('seeds the union of permission codes referenced across all roles, deduplicated', async () => {
+    const db = createFakeDb();
+
+    const { permissions } = await seedRolesAndPermissions(db);
+
+    const codes = permissions.map((p) => p.permissionCode);
+    expect(new Set(codes).size).toBe(codes.length);
+    expect(codes).toContain('viewReports');
+    expect(codes).toContain('manageSystem');
+  });
+
+  it('wires Role.permissionIds to the seeded Permission documents, not raw permission codes', async () => {
+    const db = createFakeDb();
+
+    const { roles, permissions } = await seedRolesAndPermissions(db);
+
+    const permissionIdByCode = Object.fromEntries(permissions.map((p) => [p.permissionCode, p.permissionId]));
+    const administrator = roles.find((r) => r.roleCode === 'administrator');
+
+    expect(administrator.permissionIds).toContain(permissionIdByCode.manageSystem);
+    expect(administrator.permissionIds).toContain(permissionIdByCode.createUser);
+  });
+
+  it('is idempotent — running twice does not duplicate or re-mint permissionIds/roleIds', async () => {
+    const db = createFakeDb();
+
+    const first = await seedRolesAndPermissions(db);
+    const second = await seedRolesAndPermissions(db);
+
+    expect(db.collections.roles.docs).toHaveLength(4);
+    expect(db.collections.permissions.docs).toHaveLength(first.permissions.length);
+
+    const firstAdminId = first.roles.find((r) => r.roleCode === 'administrator').roleId;
+    const secondAdminId = second.roles.find((r) => r.roleCode === 'administrator').roleId;
+    expect(secondAdminId).toBe(firstAdminId);
+  });
+});
