@@ -199,7 +199,7 @@ describe('intake-wizard governance write path (real wrapper + real inner router 
     expect(samplesCollection.updateOne).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
-        $set: expect.objectContaining({ specimenStatus: 'available', availabilityStatus: 'AVAILABLE' }),
+        $set: expect.objectContaining({ specimenStatus: 'available' }),
       })
     );
     expect(quarantineActionsCollection.insertOne).not.toHaveBeenCalled();
@@ -224,7 +224,7 @@ describe('intake-wizard governance write path (real wrapper + real inner router 
     expect(samplesCollection.updateOne).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
-        $set: expect.objectContaining({ specimenStatus: 'quarantined', availabilityStatus: 'BLOCKED' }),
+        $set: expect.objectContaining({ specimenStatus: 'quarantined' }),
       })
     );
     expect(quarantineActionsCollection.insertOne).toHaveBeenCalledTimes(1);

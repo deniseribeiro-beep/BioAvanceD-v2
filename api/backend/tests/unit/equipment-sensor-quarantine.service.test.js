@@ -110,8 +110,6 @@ describe('equipment-sensor-quarantine.service', () => {
             currentStatus: 'QUARANTINED',
             release_status: 'QUARANTINE',
             specimenStatus: 'quarantined',
-            lifecycleStatus: 'QUARANTINED',
-            availabilityStatus: 'BLOCKED',
             quarantineSource: 'equipment',
             quarantineSourceId: '42',
             location: expect.objectContaining({ area: 'Quarentena', status: 'Quarantine' })

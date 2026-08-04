@@ -220,8 +220,6 @@ describe('fhir-import-staging.service — consent token & external document flow
       expect(result.committed).toBe(1);
       const sample = db.collections.samples.docs.find((doc) => doc.specimenId === 'SPEC-COMMIT-1');
       expect(sample.specimenStatus).toBe('available');
-      expect(sample.lifecycleStatus).toBe('AVAILABLE');
-      expect(sample.quarantineStatus).toBe('RELEASED');
       expect(db.collections.quarantineActions.docs).toHaveLength(0);
 
       const committedRecord = db.collections.import_staging_records.docs.find((doc) => doc._id === recordId);
@@ -295,11 +293,8 @@ describe('fhir-import-staging.service — consent token & external document flow
       });
 
       const updatedSample = db.collections.samples.docs.find((doc) => doc.specimenId === 'SPEC-1');
-      expect(updatedSample.quarantineStatus).toBe('RELEASED');
-      expect(updatedSample.availabilityStatus).toBe('AVAILABLE');
       expect(updatedSample.releaseStatus).toBe('AVAILABLE');
       expect(updatedSample.specimenStatus).toBe('available');
-      expect(updatedSample.lifecycleStatus).toBe('AVAILABLE');
 
       const releasedAction = db.collections.quarantineActions.docs.find((doc) => doc.quarantineActionId === 'qa-1');
       expect(releasedAction.actionStatus).toBe('released');

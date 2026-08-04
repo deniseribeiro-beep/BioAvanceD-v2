@@ -451,12 +451,12 @@ test.describe('Chain of custody (RF006) — real backend', () => {
       },
     });
     expect(partial.status()).toBe(200);
-    expect((await partial.json()).data.newStatus).toBe('PARTIAL');
+    expect((await partial.json()).data.newStatus).toBe('partial');
 
     const afterPartial = await request.get(`${apiBaseURL}/api/samples/${sampleID}`, {
       headers: { Authorization: `Bearer ${admin.token}` },
     });
-    expect((await afterPartial.json()).data.lifecycleStatus).toBe('PARTIAL');
+    expect((await afterPartial.json()).data.specimenStatus).toBe('partial');
 
     const total = await request.post(`${apiBaseURL}/api/samples/${sampleID}/withdraw`, {
       headers: { Authorization: `Bearer ${admin.token}` },
@@ -467,30 +467,25 @@ test.describe('Chain of custody (RF006) — real backend', () => {
       },
     });
     expect(total.status()).toBe(200);
-    expect((await total.json()).data.newStatus).toBe('DEPLETED');
+    expect((await total.json()).data.newStatus).toBe('depleted');
 
     const afterTotal = await request.get(`${apiBaseURL}/api/samples/${sampleID}`, {
       headers: { Authorization: `Bearer ${admin.token}` },
     });
-    expect((await afterTotal.json()).data.lifecycleStatus).toBe('DEPLETED');
+    expect((await afterTotal.json()).data.specimenStatus).toBe('depleted');
   });
 
   test('blocks a withdrawal against a specimen in a blocked lifecycle status (criterion 4)', async ({ request }) => {
     const admin = await realLogin(request);
     const { sampleID } = await seedWithdrawableSample(request, admin);
 
-    // specimenStatus drives updateSample's derivation (#409) — the generic
-    // PUT route only honors a raw lifecycleStatus in the body if
-    // specimenStatus is also sent; otherwise it's overwritten by the
-    // derivation from the sample's unchanged specimenStatus.
     const block = await request.put(`${apiBaseURL}/api/samples/${sampleID}`, {
       headers: { Authorization: `Bearer ${admin.token}` },
-      data: { specimenStatus: 'destroyed', lifecycleStatus: 'DESTROYED' },
+      data: { specimenStatus: 'destroyed' },
     });
     expect(block.status()).toBe(200);
     const blockBody = (await block.json()).data;
     expect(blockBody.specimenStatus).toBe('destroyed');
-    expect(blockBody.lifecycleStatus).toBe('DESTROYED');
 
     const withdraw = await request.post(`${apiBaseURL}/api/samples/${sampleID}/withdraw`, {
       headers: { Authorization: `Bearer ${admin.token}` },
@@ -555,11 +550,11 @@ test.describe('Specimen quarantine (RF019) — real backend', () => {
   // (criterion 5), and a specimenStatus: 'available' update logs a
   // sample_release audit entry (criteria 7, 8). specimenStatus is what
   // updateSample's derivation and the withdraw guard actually key off
-  // since #409 — lifecycleStatus/quarantineStatus/quarantineReason are
-  // sent alongside for the dual-write bridge (#405) but don't drive
-  // either check on their own (#407). No dedicated quarantine route
-  // exists — release, like RF006's blocked-status seeding, goes through
-  // the generic update route.
+  // since #409; quarantineReason has no specimenStatus equivalent and
+  // stays legacy-sourced (#407/#408) — lifecycleStatus/quarantineStatus
+  // were the dual-write bridge (#405), removed in #408. No dedicated
+  // quarantine route exists — release, like RF006's blocked-status
+  // seeding, goes through the generic update route.
   test.afterAll(async () => {
     await closeSeedDb();
   });
@@ -593,15 +588,12 @@ test.describe('Specimen quarantine (RF019) — real backend', () => {
       headers: { Authorization: `Bearer ${admin.token}` },
       data: {
         specimenStatus: 'quarantined',
-        lifecycleStatus: 'QUARANTINED',
-        quarantineStatus: 'QUARANTINED',
         quarantineReason: 'RF019 e2e: consent revocation',
       },
     });
     expect(quarantine.status()).toBe(200);
     const quarantined = (await quarantine.json()).data;
     expect(quarantined.specimenStatus).toBe('quarantined');
-    expect(quarantined.lifecycleStatus).toBe('QUARANTINED');
     expect(quarantined.quarantineReason).toBe('RF019 e2e: consent revocation');
 
     const withdraw = await request.post(`${apiBaseURL}/api/samples/${sampleID}/withdraw`, {
@@ -626,8 +618,6 @@ test.describe('Specimen quarantine (RF019) — real backend', () => {
       headers: { Authorization: `Bearer ${admin.token}` },
       data: {
         specimenStatus: 'quarantined',
-        lifecycleStatus: 'QUARANTINED',
-        quarantineStatus: 'QUARANTINED',
         quarantineReason: 'RF019 e2e: environmental excursion',
       },
     });
@@ -635,7 +625,7 @@ test.describe('Specimen quarantine (RF019) — real backend', () => {
 
     // No token — release is not open to unauthenticated callers.
     const unauthorized = await request.put(`${apiBaseURL}/api/samples/${sampleID}`, {
-      data: { specimenStatus: 'available', quarantineStatus: 'RELEASED', quarantineReason: 'unauthorized attempt' },
+      data: { specimenStatus: 'available', quarantineReason: 'unauthorized attempt' },
     });
     expect(unauthorized.status()).toBe(401);
 
@@ -645,14 +635,12 @@ test.describe('Specimen quarantine (RF019) — real backend', () => {
       headers: { Authorization: `Bearer ${admin.token}` },
       data: {
         specimenStatus: 'available',
-        quarantineStatus: 'RELEASED',
         quarantineReason: 'RF019 e2e: cleared after evidence review',
       },
     });
     expect(release.status()).toBe(200);
     const releaseBody = (await release.json()).data;
     expect(releaseBody.specimenStatus).toBe('available');
-    expect(releaseBody.quarantineStatus).toBe('RELEASED');
 
     await assertAuditEventRecorded(request, apiBaseURL!, admin.token, watch);
   });

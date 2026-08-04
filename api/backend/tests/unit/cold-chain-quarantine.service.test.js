@@ -132,14 +132,15 @@ describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
       status: 'QUARANTINED',
       currentStatus: 'QUARANTINED',
       release_status: 'QUARANTINE',
-      availabilityStatus: 'BLOCKED',
-      quarantineStatus: 'QUARANTINED',
+      specimenStatus: 'quarantined',
       quarantineReasonCode: 'COLD_CHAIN_INCIDENT',
       coldChainIncidentId: String(incidentId),
       coldChainSensorKey: 'sensor-cold-001',
       coldChainReviewRequired: true,
       coldChainStatus: 'INCIDENT_OPEN',
     });
+    expect(update.availabilityStatus).toBeUndefined();
+    expect(update.quarantineStatus).toBeUndefined();
 
     expect(collections.sample_movements.insertOne).toHaveBeenCalledTimes(1);
     const movement = collections.sample_movements.insertOne.mock.calls[0][0];

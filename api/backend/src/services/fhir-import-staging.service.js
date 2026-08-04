@@ -916,7 +916,6 @@ async function commitBatch(db, batchIdRaw) {
     );
 
     const specimenStatus = workflow.quarantineStatus === 'RELEASED' ? 'available' : 'quarantined';
-    const { lifecycleStatus, availabilityStatus: derivedAvailabilityStatus } = SampleModel.deriveLegacyStatuses(specimenStatus);
     const existingSample = await samples.findOne({ specimenId: normalized.specimenId });
     const wasQuarantined = existingSample ? SampleModel.resolveSpecimenStatus(existingSample) === 'quarantined' : false;
 
@@ -942,11 +941,8 @@ async function commitBatch(db, batchIdRaw) {
         },
         $set: {
           consentStatus: workflow.consentStatus,
-          quarantineStatus: workflow.quarantineStatus,
           quarantineReason: workflow.quarantineReason,
-          availabilityStatus: derivedAvailabilityStatus,
           specimenStatus,
-          lifecycleStatus,
           importBatchId: String(batchId),
           importedAt,
           importedBy,
@@ -1027,18 +1023,14 @@ async function attachExternalDocument(db, batchIdRaw, recordIdRaw, options = {})
 
   const existingSample = await samples.findOne({ specimenId: normalized.specimenId });
   const wasQuarantined = existingSample ? SampleModel.resolveSpecimenStatus(existingSample) === 'quarantined' : false;
-  const { lifecycleStatus, availabilityStatus } = SampleModel.deriveLegacyStatuses('available');
 
   await samples.updateOne(
     { specimenId: normalized.specimenId },
     {
       $set: {
         consentStatus: 'EXTERNAL_ATTACHED',
-        quarantineStatus: 'RELEASED',
         quarantineReason: null,
-        availabilityStatus,
         specimenStatus: 'available',
-        lifecycleStatus,
         releaseStatus: 'AVAILABLE',
         updatedAt: now,
       },

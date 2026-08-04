@@ -123,7 +123,6 @@ describe('intakeWizard.routes.js (interface wrapper / governance guard)', () => 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
     expect(res.body.sample.status).toBe('AVAILABLE');
-    expect(res.body.sample.quarantineStatus).toBe('RELEASED');
   });
 
   it('skips persistence when the sample has no id/specimenId/barcode to query by', async () => {
@@ -159,7 +158,6 @@ describe('intakeWizard.routes.js (interface wrapper / governance guard)', () => 
 
     expect(res.status).toBe(200);
     expect(res.body.sample.status).toBe('BLOCKED');
-    expect(res.body.sample.quarantineStatus).toBe('QUARANTINED');
     expect(res.body.sample.quarantineReason).toBe('PENDING_SIGNATURE');
     expect(samplesCollection.updateOne).toHaveBeenCalledWith(
       { $or: [{ specimenId: 'spec-1' }] },
@@ -167,9 +165,6 @@ describe('intakeWizard.routes.js (interface wrapper / governance guard)', () => 
         $set: expect.objectContaining({
           status: 'BLOCKED',
           specimenStatus: 'quarantined',
-          lifecycleStatus: 'QUARANTINED',
-          availabilityStatus: 'BLOCKED',
-          quarantineStatus: 'QUARANTINED',
           quarantineReason: 'PENDING_SIGNATURE',
         }),
       })
@@ -213,7 +208,6 @@ describe('intakeWizard.routes.js (interface wrapper / governance guard)', () => 
 
     expect(res.status).toBe(200);
     expect(res.body.sample.status).toBe('QUARANTINE');
-    expect(res.body.sample.availabilityStatus).toBe('BLOCKED');
     expect(res.body.sample.quarantineReason).toBe('QUALITY_GOVERNANCE_FAILURE');
     expect(quarantineActionsCollection.insertOne).toHaveBeenCalledWith(
       expect.objectContaining({ specimenIds: ['sample-3'] })
@@ -278,7 +272,6 @@ describe('intakeWizard.routes.js (interface wrapper / governance guard)', () => 
 
     expect(res.status).toBe(200);
     expect(res.body.sample.status).toBe('AVAILABLE');
-    expect(res.body.sample.quarantineStatus).toBe('RELEASED');
     expect(res.body.sample.quarantineReason).toBeNull();
 
     const [query] = samplesCollection.updateOne.mock.calls[0];

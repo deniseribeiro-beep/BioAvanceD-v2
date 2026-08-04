@@ -377,11 +377,11 @@ describe('sample.service', () => {
       expect(db.collections.samples.updateOne).toHaveBeenCalledTimes(1);
       const [, updateArg] = db.collections.samples.updateOne.mock.calls[0];
       expect(updateArg.$set.availableQuantity).toBe(0);
-      // #405: specimenStatus is the source of truth; lifecycleStatus/
-      // availabilityStatus are mirrored from it via the dual-write bridge.
+      // #405: specimenStatus is the source of truth; the legacy
+      // lifecycleStatus/availabilityStatus dual-write was removed in #408.
       expect(updateArg.$set.specimenStatus).toBe('depleted');
-      expect(updateArg.$set.lifecycleStatus).toBe('DEPLETED');
-      expect(updateArg.$set.availabilityStatus).toBe('AVAILABLE');
+      expect(updateArg.$set.lifecycleStatus).toBeUndefined();
+      expect(updateArg.$set.availabilityStatus).toBeUndefined();
     });
 
     it('performs a partial withdrawal within available quantity', async () => {
@@ -655,11 +655,11 @@ describe('sample.service', () => {
 
       expect(db.collections.samples.updateOne).toHaveBeenCalledTimes(1);
       const [, updateArg] = db.collections.samples.updateOne.mock.calls[0];
-      expect(updateArg.$set.lifecycleStatus).toBe('PARTIAL');
-      // #405: specimenStatus is the source of truth; lifecycleStatus/
-      // availabilityStatus are mirrored from it via the dual-write bridge.
+      // #405: specimenStatus is the source of truth; the legacy
+      // lifecycleStatus/availabilityStatus dual-write was removed in #408.
       expect(updateArg.$set.specimenStatus).toBe('partial');
-      expect(updateArg.$set.availabilityStatus).toBe('AVAILABLE');
+      expect(updateArg.$set.lifecycleStatus).toBeUndefined();
+      expect(updateArg.$set.availabilityStatus).toBeUndefined();
       expect(result.availableQuantity).toBe(4);
     });
 
@@ -939,12 +939,12 @@ describe('sample.service', () => {
       expect(result.returnedQuantity).toBe(6);
       expect(result.newAvailableQuantity).toBe(10);
 
-      // #405: specimenStatus is the source of truth; lifecycleStatus/
-      // availabilityStatus are mirrored from it via the dual-write bridge.
+      // #405: specimenStatus is the source of truth; the legacy
+      // lifecycleStatus/availabilityStatus dual-write was removed in #408.
       const [, updateArg] = db.collections.samples.updateOne.mock.calls[0];
       expect(updateArg.$set.specimenStatus).toBe('available');
-      expect(updateArg.$set.lifecycleStatus).toBe('AVAILABLE');
-      expect(updateArg.$set.availabilityStatus).toBe('AVAILABLE');
+      expect(updateArg.$set.lifecycleStatus).toBeUndefined();
+      expect(updateArg.$set.availabilityStatus).toBeUndefined();
     });
 
     it('does not require observations for the "intact" condition', async () => {

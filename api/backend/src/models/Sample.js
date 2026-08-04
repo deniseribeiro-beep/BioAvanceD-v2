@@ -66,17 +66,12 @@ const SampleSchema = new Schema({
   pharmacologyData: { type: Schema.Types.Mixed, default: null },
   releaseStatus: { type: String, default: 'QUARANTINE' },
   consentStatus: { type: String, default: null },
-  quarantineStatus: { type: String, default: 'QUARANTINED' },
+  // quarantineReason has no specimenStatus equivalent — it's the only
+  // free-text field in the legacy trio, kept deliberately (#407/#415/#408).
   quarantineReason: { type: String, default: null },
-  availabilityStatus: { type: String, default: 'BLOCKED' },
   importBatchId: { type: String, default: null },
   importedAt: { type: Date, default: null },
   importedBy: { type: String, default: null },
-  lifecycleStatus: {
-    type: String,
-    enum: ['REGISTERED', 'AVAILABLE', 'PARTIAL', 'DEPLETED', 'UNAVAILABLE', 'DESTROYED', 'DISPOSED', 'QUARANTINED'],
-    default: 'REGISTERED'
-  },
   specimenStatus: {
     type: String,
     enum: SPECIMEN_STATUS_VALUES,
@@ -104,29 +99,15 @@ const SampleSchema = new Schema({
 const Sample = mongoose.models.Sample || mongoose.model('Sample', SampleSchema);
 
 class SampleModel {
-  static validateLifecycleStatus(status) {
-    return ['REGISTERED', 'AVAILABLE', 'PARTIAL', 'DEPLETED', 'UNAVAILABLE', 'DESTROYED', 'DISPOSED', 'QUARANTINED'].includes(status);
-  }
-
   static validateSpecimenStatus(status) {
     return SPECIMEN_STATUS_VALUES.includes(String(status || '').toLowerCase());
   }
 
-  // Pure 1:1 derivation from specimenStatus — every write site that sets
-  // specimenStatus also derives these from it, never independently, so
-  // every current reader of lifecycleStatus/availabilityStatus keeps
-  // working unchanged (canonical-data-contract-v1.md, Specimen section).
-  static deriveLegacyStatuses(specimenStatus) {
-    const status = String(specimenStatus || '').toLowerCase();
-    return {
-      lifecycleStatus: status.toUpperCase(),
-      availabilityStatus: BLOCKED_SPECIMEN_STATUSES.includes(status) ? 'BLOCKED' : 'AVAILABLE'
-    };
-  }
-
-  // Legacy sample documents written before this field existed have no
-  // specimenStatus — fall back to their (uppercase) lifecycleStatus,
-  // case-folded, until they're next written through the dual-write bridge.
+  // Legacy sample documents written before this field existed (and before
+  // #408 removed the lifecycleStatus dual-write bridge) may still carry a
+  // raw lifecycleStatus value on the underlying Mongo document even though
+  // it's no longer part of the schema — fall back to it, case-folded,
+  // until the document is next written and specimenStatus is populated.
   static resolveSpecimenStatus(sample) {
     if (sample && sample.specimenStatus) return String(sample.specimenStatus).toLowerCase();
     return String((sample && sample.lifecycleStatus) || 'available').toLowerCase();
@@ -172,9 +153,6 @@ class SampleModel {
     if (data.quality !== undefined && data.quality !== null && !validateQualityMIABIS(data.quality)) {
       errors.push('quality deve estar na escala MIABIS: GOOD, COMPROMISED ou UNKNOWN');
     }
-    if (data.lifecycleStatus && !this.validateLifecycleStatus(data.lifecycleStatus)) {
-      errors.push('lifecycleStatus inválido');
-    }
     if (data.specimenStatus && !this.validateSpecimenStatus(data.specimenStatus)) {
       errors.push('specimenStatus inválido');
     }
@@ -188,12 +166,10 @@ class SampleModel {
 
     // REGISTERED has no dict-02 equivalent and was never a distinct
     // blockable state — fold it into `available` (canonical-data-contract-v1.md
-    // Specimen section, point 1). Dual-write: lifecycleStatus/availabilityStatus
-    // are derived from specimenStatus unless the caller explicitly overrides them.
+    // Specimen section, point 1).
     const specimenStatus = data.specimenStatus
       ? String(data.specimenStatus).toLowerCase()
       : 'available';
-    const derivedLegacy = this.deriveLegacyStatuses(specimenStatus);
 
     return {
       specimenId: String(data.specimenId),
@@ -234,14 +210,11 @@ class SampleModel {
       pharmacologyData: data.pharmacologyData ?? null,
       releaseStatus: data.releaseStatus || 'QUARANTINE',
       consentStatus: data.consentStatus || null,
-      quarantineStatus: data.quarantineStatus || 'QUARANTINED',
       quarantineReason: data.quarantineReason || null,
       importBatchId: data.importBatchId || null,
       importedAt: data.importedAt || null,
       importedBy: data.importedBy || null,
       specimenStatus,
-      lifecycleStatus: data.lifecycleStatus || derivedLegacy.lifecycleStatus,
-      availabilityStatus: data.availabilityStatus || derivedLegacy.availabilityStatus,
       availableQuantity,
       originalQuantity,
       totalWithdrawn: data.totalWithdrawn || 0,

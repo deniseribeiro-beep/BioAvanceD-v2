@@ -52,18 +52,18 @@ describe('Sample.validate - quality branch (MIABIS scale)', () => {
   });
 });
 
-describe('Sample.validate - lifecycleStatus branch', () => {
-  it('accepts a valid lifecycleStatus', () => {
-    expect(Sample.validate({ ...validData, lifecycleStatus: 'AVAILABLE' }).isValid).toBe(true);
+describe('Sample.validate - specimenStatus branch', () => {
+  it('accepts a valid specimenStatus', () => {
+    expect(Sample.validate({ ...validData, specimenStatus: 'available' }).isValid).toBe(true);
   });
 
-  it('rejects an invalid lifecycleStatus', () => {
-    const result = Sample.validate({ ...validData, lifecycleStatus: 'BOGUS' });
+  it('rejects an invalid specimenStatus', () => {
+    const result = Sample.validate({ ...validData, specimenStatus: 'BOGUS' });
     expect(result.isValid).toBe(false);
-    expect(result.errors.some(e => e.includes('lifecycleStatus inválido'))).toBe(true);
+    expect(result.errors.some(e => e.includes('specimenStatus inválido'))).toBe(true);
   });
 
-  it('allows lifecycleStatus to be omitted', () => {
+  it('allows specimenStatus to be omitted', () => {
     expect(Sample.validate(validData).isValid).toBe(true);
   });
 });
@@ -193,22 +193,13 @@ describe('SampleModel.create - field normalization', () => {
     expect(defaultSample.processingStatus).toBeNull();
   });
 
-  it('defaults specimenStatus to available and derives lifecycleStatus/availabilityStatus from it, folding REGISTERED (#405)', () => {
+  it('defaults specimenStatus to available, folding REGISTERED (#405)', () => {
     const sample = Sample.create({ ...validData });
     expect(sample.specimenStatus).toBe('available');
-    expect(sample.lifecycleStatus).toBe('AVAILABLE');
-    expect(sample.availabilityStatus).toBe('AVAILABLE');
   });
 
-  it('respects an explicit lifecycleStatus override without touching the specimenStatus-derived default', () => {
-    expect(Sample.create({ ...validData, lifecycleStatus: 'AVAILABLE' }).lifecycleStatus).toBe('AVAILABLE');
-  });
-
-  it('derives lifecycleStatus/availabilityStatus from an explicit specimenStatus (#405 dual-write bridge)', () => {
-    const sample = Sample.create({ ...validData, specimenStatus: 'quarantined' });
-    expect(sample.specimenStatus).toBe('quarantined');
-    expect(sample.lifecycleStatus).toBe('QUARANTINED');
-    expect(sample.availabilityStatus).toBe('BLOCKED');
+  it('respects an explicit specimenStatus override', () => {
+    expect(Sample.create({ ...validData, specimenStatus: 'quarantined' }).specimenStatus).toBe('quarantined');
   });
 
   it('defaults availableQuantity/originalQuantity to quantity when absent', () => {

@@ -111,7 +111,7 @@ encryption at rest for the segregated collection ("cifrar").
 - `quantity`
 - `unit`
 - `registeredAt`
-- `lifecycleStatus`
+- `specimenStatus`
 - `linkedProject`
 - `collectionSite` (Reference(Organization), per dictionary ELM-0128)
 - `merkleRoot`
@@ -121,8 +121,7 @@ encryption at rest for the segregated collection ("cifrar").
 `Specimen` + `SPREC` + `RCS` + storage/custody as four separate canonical
 entities, referenced (not duplicated) from each other — `Sample.js` still
 carries `sprec` and the storage/custody fields (`locationId`, `location`,
-`storageLocation`, `lifecycleStatus`, `availabilityStatus`,
-`quarantineStatus`, ...) directly. `RcsAssessment` and
+`storageLocation`, ...) directly. `RcsAssessment` and
 `SpecimenPreanalytics` below are the first two of the three separations to
 land (#383, #388); storage/custody remains filed as its own follow-up
 (#389).
@@ -254,6 +253,26 @@ and the other ~10 quarantine write sites (part B/#406), frontend/e2e
 reader of `lifecycleStatus`/`availabilityStatus` (routes, frontend, e2e)
 keeps working unchanged.
 
+**Landed in #408 (part D/#389 closeout — final phase, after #412-#415
+migrated every remaining reader/writer onto `specimenStatus`):**
+`lifecycleStatus`/`availabilityStatus`/`quarantineStatus` and
+`SampleModel.deriveLegacyStatuses()`/`validateLifecycleStatus()` are
+removed from `Sample.js`'s schema and every write site
+(`sample.service.js`, `intakeWizard.js`/`.routes.js`, `eConsent.js`,
+`equipment-sensor-quarantine.service.js`, `fhir-import-staging.service.js`'s
+`samples` writes) — `specimenStatus` is now the sole persisted status
+field. **Deliberate exception, not part of this removal:**
+`quarantineReason` — the free-text quarantine reason has no
+`specimenStatus` equivalent (dict-02's `QuarantineAction.reasonCodes` is
+`CodeableConcept[]`, coded, not free text; confirmed against
+`dict-02_DICIONARIO.md` and `requisitos-index.md` RF006 while picking up
+#408 — no primary doc authorizes a `reasonCodes`/CodeableConcept redesign
+to carry it instead), so it stays on `Sample.js`'s schema exactly as
+#407/#415 already decided. `fhir-import-staging.service.js`'s
+`import_staging_records` writes (a pre-commit workflow snapshot, a
+different collection from `samples`) are unchanged, per #409's own
+scoping.
+
 ### QuarantineAction
 
 - `quarantineActionId`
@@ -292,6 +311,14 @@ this entity yet — they still write the old
 `quarantineStatus`/`quarantineReason`/`availabilityStatus` trio directly,
 unchanged. That migration (and the #404 fix it enables) is carried by a
 follow-up issue referencing #406.
+
+**Landed in #408:** every quarantine write site above now records a
+`QuarantineAction` via `quarantineActionService.recordAction`/
+`releaseActiveAction` alongside setting `specimenStatus` directly
+(no more `quarantineStatus`/`availabilityStatus` dual-write). The #404
+drift bug this enabled a fix for is resolved as a side effect —
+`specimenStatus` is the single write path now, so it cannot desync from
+itself.
 
 ### RcsAssessment
 
@@ -441,6 +468,9 @@ JSON-import branch of `importSamples` doesn't record a profile either
 - `registerDate`
 - `registrationDate`
 - `currentStatus`
+- `lifecycleStatus`
+- `availabilityStatus`
+- `quarantineStatus`
 - `selected_tcle`
 - `tcle_id`
 - `tcle_template_id`

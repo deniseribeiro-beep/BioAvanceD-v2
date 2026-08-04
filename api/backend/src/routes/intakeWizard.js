@@ -7,7 +7,6 @@ const { getCollection } = require('../utils/collectionResolver');
 const auditLogger = require('../utils/auditLogger');
 const qualityDomain = require('../services/quality-domain.service');
 const sampleService = require('../services/sample.service');
-const { SampleModel } = require('../models/Sample');
 const StorageService = require('../services/storageService');
 const { validate } = require('../contracts/canonical/v1');
 
@@ -404,7 +403,7 @@ async function handleIntakeWizard(req, res) {
         registeredAt: ['registerDate', 'registrationDate'],
         withdrawnAt: ['withdrawalDate'],
         receivedAt: ['receivedTime'],
-        lifecycleStatus: ['currentStatus'],
+        specimenStatus: ['currentStatus', 'lifecycleStatus'],
         consentTemplateId: ['tcle_id', 'tcle_template_id', 'selected_tcle'],
         merkleRoot: ['merkle_root'],
         legacyCompat: ['legacy_compat'],
@@ -474,14 +473,10 @@ async function handleIntakeWizard(req, res) {
     const qualityAllowsRelease = qualidade.governance_status === 1 && qualidade.final_grade !== 'E';
     const isReleased = consentDecision.active && qualityAllowsRelease;
     const specimenStatus = isReleased ? 'available' : 'quarantined';
-    const { lifecycleStatus, availabilityStatus } = SampleModel.deriveLegacyStatuses(specimenStatus);
     Object.assign(sampleToPersist, {
       qualityAssessment: qualidade,
       consentStatus: consentDecision.active ? 'SIGNED' : consentDecision.status,
       specimenStatus,
-      lifecycleStatus,
-      availabilityStatus,
-      quarantineStatus: isReleased ? 'RELEASED' : 'QUARANTINED',
       quarantineReason: isReleased
         ? null
         : consentDecision.quarantineReason || (qualityAllowsRelease ? 'GOVERNANCE_BLOCKED' : 'QUALITY_GOVERNANCE_FAILURE'),

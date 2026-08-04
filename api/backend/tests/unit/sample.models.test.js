@@ -71,12 +71,9 @@ describe('SampleModel', () => {
     expect(sample.registeredAt).toBeInstanceOf(Date);
     expect(sample.availableQuantity).toBe(12);
     expect(sample.originalQuantity).toBe(12);
-    // REGISTERED folds into `available`/`AVAILABLE` at creation (#405) —
-    // lifecycleStatus/availabilityStatus are derived from specimenStatus,
-    // not independently defaulted.
+    // REGISTERED folds into `available` at creation (#405); the legacy
+    // lifecycleStatus/availabilityStatus dual-write was removed in #408.
     expect(sample.specimenStatus).toBe('available');
-    expect(sample.lifecycleStatus).toBe('AVAILABLE');
-    expect(sample.availabilityStatus).toBe('AVAILABLE');
     expect(sample.sprec.matrixType).toBe('fluid');
     expect(sample.pharmacologyData.treatment_status).toBe('NAIVE');
   });

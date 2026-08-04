@@ -1,6 +1,5 @@
 const { ObjectId } = require('mongodb');
 const SampleMovementModel = require('../models/SampleMovement');
-const { SampleModel } = require('../models/Sample');
 const { appendMovementWithHashChain } = require('../utils/sampleMovementLedger');
 const { getCollection } = require('../utils/collectionResolver');
 const quarantineActionService = require('./quarantine-action.service');
@@ -251,15 +250,11 @@ async function quarantineSamplesByFilter(db, filter, context = {}) {
   for (const sample of samples) {
     const sampleId = String(sample._id);
     const specimenStatus = 'quarantined';
-    const { lifecycleStatus, availabilityStatus } = SampleModel.deriveLegacyStatuses(specimenStatus);
     const updatePayload = {
       status: 'QUARANTINED',
       currentStatus: 'QUARANTINED',
       release_status: 'QUARANTINE',
       specimenStatus,
-      lifecycleStatus,
-      availabilityStatus,
-      quarantineStatus: 'QUARANTINED',
       quarantineLocation: 'Quarentena',
       quarantineReason: context.reason || null,
       quarantineSource: context.source || null,

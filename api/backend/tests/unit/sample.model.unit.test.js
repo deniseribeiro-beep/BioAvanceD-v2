@@ -24,21 +24,21 @@ describe('Sample.create - collectionSite (ELM-0128)', () => {
   });
 });
 
-describe('Sample.validateLifecycleStatus', () => {
-  it('returns true for AVAILABLE', () => {
-    expect(Sample.validateLifecycleStatus('AVAILABLE')).toBe(true);
+describe('Sample.validateSpecimenStatus', () => {
+  it('returns true for available', () => {
+    expect(Sample.validateSpecimenStatus('available')).toBe(true);
   });
 
   it('returns true for all valid statuses', () => {
-    ['AVAILABLE', 'QUARANTINED', 'PARTIAL', 'DEPLETED', 'UNAVAILABLE'].forEach(s => {
-      expect(Sample.validateLifecycleStatus(s)).toBe(true);
+    ['available', 'quarantined', 'partial', 'depleted', 'unavailable', 'destroyed', 'disposed'].forEach(s => {
+      expect(Sample.validateSpecimenStatus(s)).toBe(true);
     });
   });
 
   it('returns false for unknown status', () => {
-    expect(Sample.validateLifecycleStatus('BOGUS')).toBe(false);
-    expect(Sample.validateLifecycleStatus(null)).toBe(false);
-    expect(Sample.validateLifecycleStatus('')).toBe(false);
+    expect(Sample.validateSpecimenStatus('BOGUS')).toBe(false);
+    expect(Sample.validateSpecimenStatus(null)).toBe(false);
+    expect(Sample.validateSpecimenStatus('')).toBe(false);
   });
 });
 

@@ -55,7 +55,7 @@ describe('FHIRService.toFhirSpecimen', () => {
       specimenId: 'S1',
       participantId: 'P100',
       registeredAt: '2026-01-01T00:00:00Z',
-      lifecycleStatus: 'Available',
+      specimenStatus: 'available',
     };
 
     const result = fhirService.toFhirSpecimen(specimen);
@@ -65,7 +65,7 @@ describe('FHIRService.toFhirSpecimen', () => {
     expect(result.identifier).toEqual([{ value: 'S1' }]);
     expect(result.subject).toEqual({ reference: 'Patient/P100' });
     expect(result.receivedTime).toBe('2026-01-01T00:00:00Z');
-    expect(result.status).toBe('Available');
+    expect(result.status).toBe('available');
   });
 
   it('falls back to empty identifier, no subject, and available status when fields are absent', () => {
@@ -81,11 +81,10 @@ describe('FHIRService.toFhirSpecimen', () => {
     expect(() => fhirService.toFhirSpecimen(null)).toThrow();
   });
 
-  it('prefers specimenStatus over the legacy lifecycleStatus when both are present', () => {
+  it('uses specimenStatus when present', () => {
     const specimen = {
       specimenId: 'S1',
       specimenStatus: 'quarantined',
-      lifecycleStatus: 'Available',
     };
 
     const result = fhirService.toFhirSpecimen(specimen);

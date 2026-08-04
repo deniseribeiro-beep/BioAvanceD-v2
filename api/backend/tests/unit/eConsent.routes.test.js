@@ -279,8 +279,6 @@ describe('eConsent.routes POST /update', () => {
         $set: expect.objectContaining({
           status: 'QUARANTINED',
           specimenStatus: 'quarantined',
-          lifecycleStatus: 'QUARANTINED',
-          availabilityStatus: 'BLOCKED',
         }),
       }
     );
@@ -335,8 +333,6 @@ describe('eConsent.routes POST /update', () => {
         $set: expect.objectContaining({
           status: 'AVAILABLE',
           specimenStatus: 'available',
-          lifecycleStatus: 'AVAILABLE',
-          availabilityStatus: 'AVAILABLE',
         }),
       }
     );

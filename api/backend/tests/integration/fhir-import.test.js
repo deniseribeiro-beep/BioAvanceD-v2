@@ -750,7 +750,7 @@ describe('FHIR import staging', () => {
       expect(updatedRecord.externalDocument).toMatchObject({ attachedBy: null, validatedBy: null, note: null });
       const updatedSample = db.collections.samples.docs.find((doc) => doc.specimenId === 'S-EXT');
       expect(updatedSample.consentStatus).toBe('EXTERNAL_ATTACHED');
-      expect(updatedSample.availabilityStatus).toBe('AVAILABLE');
+      expect(updatedSample.specimenStatus).toBe('available');
       expect(db.collections.audit_logs.docs.some((doc) => doc.action === 'FHIR_IMPORT_EXTERNAL_DOCUMENT_ATTACHED')).toBe(true);
       expect(result.records[0].workflowStatus).toBe('EXTERNAL_ATTACHED');
     });

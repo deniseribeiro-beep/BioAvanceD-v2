@@ -68,9 +68,8 @@ export default function SamplesPage() {
         // specimenStatus must be sent explicitly — the backend's generic
         // update path (sample.service.js updateSample) is sticky for
         // blocked statuses (computeStatus) and won't move off 'quarantined'
-        // on its own. lifecycleStatus/availabilityStatus are derived
-        // server-side from specimenStatus (#415); quarantineReason has no
-        // specimenStatus equivalent and stays legacy-sourced (#407).
+        // on its own. quarantineReason has no specimenStatus equivalent
+        // and stays legacy-sourced (#407/#408).
         specimenStatus: 'available',
         quarantineReason: null,
         release_status: 'AVAILABLE',

@@ -351,7 +351,6 @@ class SampleService {
       const totalWithdrawn = (sample.totalWithdrawn || 0) + withdrawQty;
 
       const specimenStatus = SampleModel.computeStatus(sample.originalQuantity || sample.quantity, newAvailableQty, currentSpecimenStatus);
-      const { lifecycleStatus, availabilityStatus } = SampleModel.deriveLegacyStatuses(specimenStatus);
 
       // Registrar movimentação no ledger (imutável)
       const movementID = await SampleMovementModel.generateMovementID(db);
@@ -392,8 +391,6 @@ class SampleService {
           linkedProject: withdrawalData.linkedProject || sample.linkedProject,
           lastWithdrawalID: movementID,
           specimenStatus,
-          lifecycleStatus,
-          availabilityStatus,
           updatedAt: new Date()
         };
 
@@ -411,7 +408,7 @@ class SampleService {
         movementID,
         withdrawnQuantity: withdrawQty,
         remainingQuantity: newAvailableQty,
-        newStatus: lifecycleStatus
+        newStatus: specimenStatus
       };
     } catch (error) {
       logger.error('Erro ao retirar amostra:', error.message);
@@ -495,13 +492,16 @@ class SampleService {
         nextAvailable,
         currentSpecimenStatus
       );
-      const { lifecycleStatus, availabilityStatus } = SampleModel.deriveLegacyStatuses(specimenStatus);
+
+      // lifecycleStatus/availabilityStatus/quarantineStatus are retired
+      // (#408) — specimenStatus is the sole source of truth, so any caller
+      // still sending the legacy fields on the wire is silently ignored
+      // rather than persisted.
+      const { lifecycleStatus, availabilityStatus, quarantineStatus, ...restUpdateData } = updateData;
 
       const payload = {
-        ...updateData,
+        ...restUpdateData,
         specimenStatus,
-        lifecycleStatus,
-        availabilityStatus,
         updatedAt: new Date()
       };
       
@@ -731,7 +731,6 @@ class SampleService {
       }
 
       const specimenStatus = SampleModel.computeStatus(sample.originalQuantity || sample.quantity, newAvailableQty, currentSpecimenStatus);
-      const { lifecycleStatus, availabilityStatus } = SampleModel.deriveLegacyStatuses(specimenStatus);
 
       // Registrar movimentação no ledger (imutável)
       const movementID = await SampleMovementModel.generateMovementID(db);
@@ -765,8 +764,6 @@ class SampleService {
           availableQuantity: newAvailableQty,
           totalReturned: newTotalReturned,
           specimenStatus,
-          lifecycleStatus,
-          availabilityStatus,
           updatedAt: new Date()
         };
 
@@ -792,7 +789,7 @@ class SampleService {
         returnedQuantity: returnQty,
         condition: returnData.condition,
         newAvailableQuantity: newAvailableQty,
-        newStatus: lifecycleStatus
+        newStatus: specimenStatus
       };
     } catch (error) {
       logger.error('Erro ao retornar amostra:', error.message);
