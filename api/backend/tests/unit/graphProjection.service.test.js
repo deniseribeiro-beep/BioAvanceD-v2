@@ -60,8 +60,8 @@ describe('graphProjection.service', () => {
 
       await service.appendConsentEvent(db, {
         ethicalConsentId: 'ec-1',
-        donorKey: 'donor-1',
-        sampleId: 'sample-1',
+        participantId: 'donor-1',
+        specimenId: 'sample-1',
         status: 'ACTIVE',
         signedAt: '2026-01-01T00:00:00Z',
         sourceService: 'custom-source',
@@ -76,8 +76,8 @@ describe('graphProjection.service', () => {
         traceId: 'trace-1',
         schemaVersion: 1,
         payload: expect.objectContaining({
-          donorKey: 'donor-1',
-          sampleId: 'sample-1',
+          participantId: 'donor-1',
+          specimenId: 'sample-1',
           ethicalConsentId: 'ec-1',
           status: 'ACTIVE',
           signedAt: '2026-01-01T00:00:00Z',
@@ -103,7 +103,7 @@ describe('graphProjection.service', () => {
       let call = outbox.appendEvent.mock.calls[0][1];
       expect(call.aggregateId).toBe('c-3');
       expect(call.payload.status).toBe('ACTIVE');
-      expect(call.payload.sampleId).toBeNull();
+      expect(call.payload.specimenId).toBeNull();
       expect(call.payload.ethicalConsentId).toBe('c-3');
       expect(call.sourceService).toBe('graph-projection-service');
       expect(call.traceId).toBeNull();
@@ -121,38 +121,38 @@ describe('graphProjection.service', () => {
   });
 
   describe('appendLineageEvent', () => {
-    it('uses sampleId for aggregateId and payload when present', async () => {
+    it('uses specimenId for aggregateId and payload when present', async () => {
       const outbox = createFakeOutbox();
       const service = new GraphProjectionService({ outbox });
 
-      await service.appendLineageEvent({}, { sampleId: 's-1', parentSampleId: 'p-1', traceId: 't-1' });
+      await service.appendLineageEvent({}, { specimenId: 's-1', parentSpecimenId: 'p-1', traceId: 't-1' });
 
       const call = outbox.appendEvent.mock.calls[0][1];
       expect(call.eventType).toBe('LINEAGE_REGISTERED');
       expect(call.aggregateType).toBe('Sample');
       expect(call.aggregateId).toBe('s-1');
-      expect(call.payload).toEqual({ sampleId: 's-1', parentSampleId: 'p-1' });
+      expect(call.payload).toEqual({ specimenId: 's-1', parentSpecimenId: 'p-1' });
       expect(call.traceId).toBe('t-1');
     });
 
-    it('falls back to childSampleId, then aggregateId, then empty string', async () => {
+    it('falls back to childSpecimenId, then aggregateId, then empty string', async () => {
       const outbox = createFakeOutbox();
       const service = new GraphProjectionService({ outbox });
 
-      await service.appendLineageEvent({}, { childSampleId: 'child-1' });
+      await service.appendLineageEvent({}, { childSpecimenId: 'child-1' });
       let call = outbox.appendEvent.mock.calls[0][1];
       expect(call.aggregateId).toBe('child-1');
-      expect(call.payload.sampleId).toBe('child-1');
+      expect(call.payload.specimenId).toBe('child-1');
 
       await service.appendLineageEvent({}, { aggregateId: 'agg-2' });
       call = outbox.appendEvent.mock.calls[1][1];
       expect(call.aggregateId).toBe('agg-2');
-      expect(call.payload.sampleId).toBeNull();
+      expect(call.payload.specimenId).toBeNull();
 
       await service.appendLineageEvent({}, {});
       call = outbox.appendEvent.mock.calls[2][1];
       expect(call.aggregateId).toBe('');
-      expect(call.payload.parentSampleId).toBeNull();
+      expect(call.payload.parentSpecimenId).toBeNull();
     });
   });
 
@@ -162,7 +162,7 @@ describe('graphProjection.service', () => {
       const service = new GraphProjectionService({ outbox });
 
       await service.appendQualityEvent({}, {
-        sampleId: 's-1',
+        specimenId: 's-1',
         qualityAssessmentId: 'qa-1',
         status: 'PASSED',
         score: 0.9,
@@ -174,7 +174,7 @@ describe('graphProjection.service', () => {
       expect(call.aggregateType).toBe('Sample');
       expect(call.aggregateId).toBe('s-1');
       expect(call.payload).toEqual({
-        sampleId: 's-1',
+        specimenId: 's-1',
         qualityAssessmentId: 'qa-1',
         status: 'PASSED',
         score: 0.9,
@@ -199,7 +199,7 @@ describe('graphProjection.service', () => {
       const outbox = createFakeOutbox();
       const service = new GraphProjectionService({ outbox });
 
-      await service.appendQualityEvent({}, { sampleId: 's-0', score: 0 });
+      await service.appendQualityEvent({}, { specimenId: 's-0', score: 0 });
 
       const call = outbox.appendEvent.mock.calls[0][1];
       expect(call.payload.score).toBe(0);
@@ -212,7 +212,7 @@ describe('graphProjection.service', () => {
       const service = new GraphProjectionService({ outbox });
 
       await service.appendTelemetryEvent({}, {
-        sampleId: 's-1',
+        specimenId: 's-1',
         telemetryIncidentId: 'ti-1',
         severity: 'HIGH',
         status: 'OPEN',
@@ -224,7 +224,7 @@ describe('graphProjection.service', () => {
       expect(call.aggregateType).toBe('Sample');
       expect(call.aggregateId).toBe('s-1');
       expect(call.payload).toEqual({
-        sampleId: 's-1',
+        specimenId: 's-1',
         telemetryIncidentId: 'ti-1',
         severity: 'HIGH',
         status: 'OPEN',

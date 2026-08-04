@@ -18,8 +18,8 @@ class GraphProjectionService {
       aggregateType: 'EthicalConsent',
       aggregateId: String(payload.ethicalConsentId || payload.consentId || payload.aggregateId || ''),
       payload: {
-        donorKey: payload.donorKey,
-        sampleId: payload.sampleId || null,
+        participantId: payload.participantId,
+        specimenId: payload.specimenId || null,
         ethicalConsentId: payload.ethicalConsentId || payload.consentId || null,
         status: payload.status || 'ACTIVE',
         signedAt: payload.signedAt || new Date(),
@@ -34,10 +34,10 @@ class GraphProjectionService {
     return this.outbox.appendEvent(db, {
       eventType: 'LINEAGE_REGISTERED',
       aggregateType: 'Sample',
-      aggregateId: String(payload.sampleId || payload.childSampleId || payload.aggregateId || ''),
+      aggregateId: String(payload.specimenId || payload.childSpecimenId || payload.aggregateId || ''),
       payload: {
-        sampleId: payload.sampleId || payload.childSampleId || null,
-        parentSampleId: payload.parentSampleId || null,
+        specimenId: payload.specimenId || payload.childSpecimenId || null,
+        parentSpecimenId: payload.parentSpecimenId || null,
       },
       sourceService: payload.sourceService || 'graph-projection-service',
       traceId: payload.traceId || null,
@@ -49,9 +49,9 @@ class GraphProjectionService {
     return this.outbox.appendEvent(db, {
       eventType: 'QUALITY_ASSESSED',
       aggregateType: 'Sample',
-      aggregateId: String(payload.sampleId || payload.aggregateId || ''),
+      aggregateId: String(payload.specimenId || payload.aggregateId || ''),
       payload: {
-        sampleId: payload.sampleId || null,
+        specimenId: payload.specimenId || null,
         qualityAssessmentId: payload.qualityAssessmentId || null,
         status: payload.status || 'UNKNOWN',
         score: payload.score ?? null,
@@ -67,9 +67,9 @@ class GraphProjectionService {
     return this.outbox.appendEvent(db, {
       eventType: 'TELEMETRY_INCIDENT_RECORDED',
       aggregateType: 'Sample',
-      aggregateId: String(payload.sampleId || payload.aggregateId || ''),
+      aggregateId: String(payload.specimenId || payload.aggregateId || ''),
       payload: {
-        sampleId: payload.sampleId || null,
+        specimenId: payload.specimenId || null,
         telemetryIncidentId: payload.telemetryIncidentId || null,
         severity: payload.severity || 'UNKNOWN',
         status: payload.status || 'OPEN',
