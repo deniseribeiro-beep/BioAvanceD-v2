@@ -9,8 +9,8 @@ const require = createRequire(import.meta.url);
 process.env.CONSENT_SECRET = process.env.CONSENT_SECRET || 'test-consent-secret';
 
 const PatientModel = require('../../src/models/Patient');
-const Sample = require('../../src/models/Sample');
 const consentService = require('../../src/services/consent.service');
+const quarantineActionService = require('../../src/services/quarantine-action.service');
 
 const authPath = require.resolve('../../src/infrastructure/middleware/auth');
 const rbacPath = require.resolve('../../src/infrastructure/middleware/rbac');
@@ -189,8 +189,35 @@ describe('eConsent.routes GET /validate/:token', () => {
 });
 
 describe('eConsent.routes POST /update', () => {
+  // Migrated (part of #409) onto specimenStatus + QuarantineAction: the
+  // route no longer writes the legacy `status` field via the mongoose
+  // `Sample` model — it now reads/writes through `db.collection('samples')`
+  // (the same `db` gate as consentService) and records/releases a
+  // QuarantineAction per sample, guarded by a before/after status check so
+  // a repeat call at the same status doesn't double-record/re-release.
+  function buildMockDb({ samples = [] } = {}) {
+    const samplesCollection = {
+      find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue(samples) }),
+      updateOne: vi.fn().mockResolvedValue({ modifiedCount: 1 }),
+    };
+    const quarantineActionsCollection = {
+      insertOne: vi.fn().mockResolvedValue({ insertedId: 'action-1' }),
+      find: vi.fn().mockReturnValue({ sort: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }) }),
+      updateOne: vi.fn().mockResolvedValue({ modifiedCount: 1 }),
+    };
+    const db = {
+      collection: vi.fn((name) => {
+        if (name === 'samples') return samplesCollection;
+        if (name === 'quarantineActions') return quarantineActionsCollection;
+        throw new Error(`unexpected collection: ${name}`);
+      }),
+      samplesCollection,
+      quarantineActionsCollection,
+    };
+    return db;
+  }
+
   beforeEach(() => {
-    vi.spyOn(Sample, 'updateMany').mockResolvedValue({ modifiedCount: 1 });
     vi.spyOn(consentService, 'recordConsentProjectionEvent').mockResolvedValue(null);
   });
 
@@ -231,8 +258,10 @@ describe('eConsent.routes POST /update', () => {
     });
   });
 
-  it('quarantines samples in MongoDB when any consent is REVOKED', async () => {
-    const app = buildApp(loadRealAuthRouter());
+  it('quarantines samples and records one QuarantineAction per newly-quarantined sample when any consent is REVOKED', async () => {
+    const sample = { _id: 'sample-1', participantId: '12345678', specimenStatus: 'available' };
+    const db = buildMockDb({ samples: [sample] });
+    const app = buildApp(loadRealAuthRouter(), db);
     const token = signToken({ participantId: '12345678' });
     const emit = vi.fn();
     const io = { to: vi.fn().mockReturnValue({ emit }) };
@@ -243,16 +272,46 @@ describe('eConsent.routes POST /update', () => {
       .send({ token, consents: [{ key: 'general', status: 'REVOKED' }] });
 
     expect(res.status).toBe(200);
-    expect(Sample.updateMany).toHaveBeenCalledWith(
-      { participantId: '12345678' },
-      { $set: { status: 'QUARANTINED' } }
+    expect(db.samplesCollection.find).toHaveBeenCalledWith({ participantId: '12345678' });
+    expect(db.samplesCollection.updateOne).toHaveBeenCalledWith(
+      { _id: 'sample-1' },
+      {
+        $set: expect.objectContaining({
+          status: 'QUARANTINED',
+          specimenStatus: 'quarantined',
+          lifecycleStatus: 'QUARANTINED',
+          availabilityStatus: 'BLOCKED',
+        }),
+      }
+    );
+    expect(db.quarantineActionsCollection.insertOne).toHaveBeenCalledTimes(1);
+    expect(db.quarantineActionsCollection.insertOne).toHaveBeenCalledWith(
+      expect.objectContaining({ specimenIds: ['sample-1'], reasonCodes: ['CONSENT_REVOKED'] })
     );
     expect(io.to).toHaveBeenCalledWith('patient-12345678');
     expect(emit).toHaveBeenCalledWith('sample-quarantined', { participantId: '12345678' });
   });
 
-  it('releases quarantined samples when every consent is ACTIVE or GRANTED', async () => {
-    const app = buildApp(loadRealAuthRouter());
+  it('does not record a duplicate QuarantineAction for a sample already quarantined', async () => {
+    const sample = { _id: 'sample-1', participantId: '12345678', specimenStatus: 'quarantined' };
+    const db = buildMockDb({ samples: [sample] });
+    const app = buildApp(loadRealAuthRouter(), db);
+    const token = signToken({ participantId: '12345678' });
+
+    const res = await request(app)
+      .post('/e-consent/update')
+      .send({ token, consents: [{ key: 'general', status: 'REVOKED' }] });
+
+    expect(res.status).toBe(200);
+    expect(db.samplesCollection.updateOne).toHaveBeenCalled();
+    expect(db.quarantineActionsCollection.insertOne).not.toHaveBeenCalled();
+  });
+
+  it('releases quarantined samples and calls releaseActiveAction when every consent is ACTIVE or GRANTED', async () => {
+    const sample = { _id: 'sample-1', participantId: '12345678', specimenStatus: 'quarantined' };
+    const db = buildMockDb({ samples: [sample] });
+    const releaseSpy = vi.spyOn(quarantineActionService, 'releaseActiveAction').mockResolvedValue(null);
+    const app = buildApp(loadRealAuthRouter(), db);
     const token = signToken({ participantId: '12345678' });
     const emit = vi.fn();
     const io = { to: vi.fn().mockReturnValue({ emit }) };
@@ -269,16 +328,26 @@ describe('eConsent.routes POST /update', () => {
       });
 
     expect(res.status).toBe(200);
-    expect(Sample.updateMany).toHaveBeenCalledWith(
-      { participantId: '12345678', status: 'QUARANTINED' },
-      { $set: { status: 'AVAILABLE', updatedAt: expect.any(Date) } }
+    expect(db.samplesCollection.find).toHaveBeenCalledWith({ participantId: '12345678', status: 'QUARANTINED' });
+    expect(db.samplesCollection.updateOne).toHaveBeenCalledWith(
+      { _id: 'sample-1' },
+      {
+        $set: expect.objectContaining({
+          status: 'AVAILABLE',
+          specimenStatus: 'available',
+          lifecycleStatus: 'AVAILABLE',
+          availabilityStatus: 'AVAILABLE',
+        }),
+      }
     );
+    expect(releaseSpy).toHaveBeenCalledWith(db, 'sample-1', 'SYSTEM');
     expect(io.to).toHaveBeenCalledWith('patient-12345678');
     expect(emit).toHaveBeenCalledWith('sample-released', { participantId: '12345678' });
   });
 
   it('neither quarantines nor releases when consents are a mix of other statuses', async () => {
-    const app = buildApp(loadRealAuthRouter());
+    const db = buildMockDb();
+    const app = buildApp(loadRealAuthRouter(), db);
     const token = signToken({ participantId: '12345678' });
 
     const res = await request(app)
@@ -292,11 +361,12 @@ describe('eConsent.routes POST /update', () => {
       });
 
     expect(res.status).toBe(200);
-    expect(Sample.updateMany).not.toHaveBeenCalled();
+    expect(db.samplesCollection.find).not.toHaveBeenCalled();
   });
 
   it('no-ops the socket emit when no io instance is registered on the app', async () => {
-    const app = buildApp(loadRealAuthRouter());
+    const db = buildMockDb({ samples: [] });
+    const app = buildApp(loadRealAuthRouter(), db);
     const token = signToken({ participantId: '12345678' });
 
     const res = await request(app)

@@ -61,21 +61,55 @@ router.post('/update', async (req, res) => {
 
     // Se algum consentimento foi revogado, coloca amostras em quarentena
     if (consents.some(c => c.status === 'REVOKED')) {
-      // Atualiza status das amostras no MongoDB
-      const Sample = require('../models/Sample');
-      await Sample.updateMany({ participantId: participantId }, { $set: { status: 'QUARANTINED' } });
+      if (db) {
+        const { SampleModel } = require('../models/Sample');
+        const { getCollection } = require('../utils/collectionResolver');
+        const quarantineActionService = require('../services/quarantine-action.service');
+        const samplesCollection = await getCollection(db, 'samples');
+        const specimenStatus = 'quarantined';
+        const { lifecycleStatus, availabilityStatus } = SampleModel.deriveLegacyStatuses(specimenStatus);
+        const samples = await samplesCollection.find({ participantId }).toArray();
+
+        for (const sample of samples) {
+          const wasQuarantined = SampleModel.resolveSpecimenStatus(sample) === 'quarantined';
+          await samplesCollection.updateOne(
+            { _id: sample._id },
+            { $set: { status: 'QUARANTINED', specimenStatus, lifecycleStatus, availabilityStatus, updatedAt: new Date() } }
+          );
+          if (!wasQuarantined) {
+            await quarantineActionService.recordAction(db, {
+              specimenIds: [String(sample._id)],
+              reasonCodes: ['CONSENT_REVOKED'],
+            });
+          }
+        }
+      }
       // Emite evento BullMQ/Socket.IO (mock)
       const io = req.app.get('io');
       if (io) io.to(`patient-${participantId}`).emit('sample-quarantined', { participantId });
     }
     // Se todos os consentimentos necessários foram aceitos, libera amostras de quarentena
     else if (consents.every(c => c.status === 'ACTIVE' || c.status === 'GRANTED')) {
-      // Atualiza status das amostras no MongoDB para manter sincronização
-      const Sample = require('../models/Sample');
-      await Sample.updateMany(
-        { participantId: participantId, status: 'QUARANTINED' },
-        { $set: { status: 'AVAILABLE', updatedAt: new Date() } }
-      );
+      if (db) {
+        const { SampleModel } = require('../models/Sample');
+        const { getCollection } = require('../utils/collectionResolver');
+        const quarantineActionService = require('../services/quarantine-action.service');
+        const samplesCollection = await getCollection(db, 'samples');
+        const specimenStatus = 'available';
+        const { lifecycleStatus, availabilityStatus } = SampleModel.deriveLegacyStatuses(specimenStatus);
+        const samples = await samplesCollection.find({ participantId, status: 'QUARANTINED' }).toArray();
+
+        for (const sample of samples) {
+          const wasQuarantined = SampleModel.resolveSpecimenStatus(sample) === 'quarantined';
+          await samplesCollection.updateOne(
+            { _id: sample._id },
+            { $set: { status: 'AVAILABLE', specimenStatus, lifecycleStatus, availabilityStatus, updatedAt: new Date() } }
+          );
+          if (wasQuarantined) {
+            await quarantineActionService.releaseActiveAction(db, String(sample._id), 'SYSTEM');
+          }
+        }
+      }
       // Emite evento de liberação
       const io = req.app.get('io');
       if (io) io.to(`patient-${participantId}`).emit('sample-released', { participantId });
