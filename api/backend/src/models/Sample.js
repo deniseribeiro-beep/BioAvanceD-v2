@@ -77,6 +77,14 @@ const SampleSchema = new Schema({
     enum: SPECIMEN_STATUS_VALUES,
     default: 'available'
   },
+  // dict-02 ELM-0138/ELM-0139 maps these to Specimen.initialQuantity/currentQuantity
+  // ("Derivada de eventos; preservar ledger"). Confirmed (#401): sample.service.js's
+  // withdrawSample/returnSample already write availableQuantity/totalWithdrawn/
+  // totalReturned atomically alongside the hash-chained SampleMovement ledger inside
+  // a single Mongo transaction (RF006 AC#6) — this is not naive duplicated state.
+  // Renaming availableQuantity->currentQuantity/originalQuantity->initialQuantity to
+  // match dict-02 exactly, and deciding the fate of totalWithdrawn/totalReturned
+  // (no direct dict-02 counterpart), is left to #389's broader storage/custody split.
   availableQuantity: { type: Number, default: null },
   originalQuantity: { type: Number, default: null },
   totalWithdrawn: { type: Number, default: 0 },
