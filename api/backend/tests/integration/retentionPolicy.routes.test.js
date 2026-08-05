@@ -113,7 +113,7 @@ function statefulAuditEventsMock() {
 const VALID_PAYLOAD = {
   applicableEntityTypes: ['AuditEvent'],
   triggerEvent: 'creation',
-  postRetentionAction: 'review',
+  postRetentionAction: 'archive',
   retentionDurationDays: 365,
   effectivePeriod: { start: '2026-01-01T00:00:00.000Z' },
 };
@@ -148,6 +148,18 @@ describe('POST /api/retention-policies', () => {
 
     expect(res.status).toBe(400);
     expect(res.body.message).toMatch(/applicableEntityTypes/);
+  });
+
+  it('rejects postRetentionAction=destroy for AuditEvent scope (#443: sweep would silently no-op instead)', async () => {
+    app.locals.db = createDbMock({ retentionPolicies: statefulRetentionPoliciesMock(), ...rbacFor(4) });
+
+    const res = await request(app)
+      .post('/api/retention-policies')
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({ ...VALID_PAYLOAD, applicableEntityTypes: ['AuditEvent'], postRetentionAction: 'destroy' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toMatch(/postRetentionAction/);
   });
 
   it('creates a versioned policy and registers a critical AuditEvent mirrored into audit_events', async () => {
