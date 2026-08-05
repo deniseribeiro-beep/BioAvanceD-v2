@@ -11,8 +11,14 @@ const rbacPath = require.resolve('../../src/infrastructure/middleware/rbac');
 const collectionResolverPath = require.resolve('../../src/utils/collectionResolver');
 const routePath = require.resolve('../../src/interface/routes/label.routes.js');
 const qualityDomainPath = require.resolve('../../src/services/quality-domain.service');
+// MongoStorageRepository destructures `getCollection` from collectionResolver
+// at require-time (same gotcha documented in intakeWizard.routes.governance.test.js)
+// — if it's already cached from an earlier-run test file, its binding stays
+// pointed at the stale getCollection forever. Bust it too so each loadRoute()
+// re-requires it fresh, picking up the currently-installed mock.
+const mongoStorageRepositoryPath = require.resolve('../../src/infrastructure/persistence/mongo/MongoStorageRepository');
 
-const allPaths = [authPath, rbacPath, collectionResolverPath, routePath, qualityDomainPath];
+const allPaths = [authPath, rbacPath, collectionResolverPath, routePath, qualityDomainPath, mongoStorageRepositoryPath];
 
 function clearCache() {
   for (const p of allPaths) delete require.cache[p];
@@ -50,9 +56,23 @@ function router_test() {
   return loadRoute().router._test;
 }
 
-function buildApp(router, db = {}) {
+// MongoStorageRepository.getSampleStorageLocation (now sitting behind
+// label.routes.js's storage-location reads, per #452) resolves the
+// 'samples' collection through the mocked getCollection above, but reads
+// 'storagePaths' directly off the raw db object (that collection has no
+// canonical-name mapping) — so the db passed to the app needs its own
+// `.collection('storagePaths')`, independent of getCollectionImpl.
+function buildApp(router, db = {}, { storagePathsFindOne } = {}) {
   const app = express();
   app.use(express.json());
+  if (db) {
+    db.collection = vi.fn((name) => {
+      if (name === 'storagePaths') {
+        return { findOne: storagePathsFindOne || vi.fn().mockResolvedValue(null) };
+      }
+      throw new Error(`unexpected raw db.collection(${name})`);
+    });
+  }
   app.locals.db = db;
   app.use('/api/labels', router);
   return app;
@@ -110,13 +130,9 @@ describe('label routes', () => {
     it('returns json (default format) with zpl/svg embedded', async () => {
       const samplesFindOne = vi.fn().mockResolvedValue(SAMPLE_WITH_LOCATION);
       const storagePathsFindOne = vi.fn().mockResolvedValue({ path: 'Freezer 1 / Shelf 2' });
-      const getCollectionImpl = vi.fn(async (_db, key) => {
-        if (key === 'samples') return { findOne: samplesFindOne };
-        if (key === 'storagePaths') return { findOne: storagePathsFindOne };
-        throw new Error(`unexpected key ${key}`);
-      });
+      const getCollectionImpl = vi.fn(async () => ({ findOne: samplesFindOne }));
       const { router } = loadRoute({ getCollectionImpl });
-      const app = buildApp(router, {});
+      const app = buildApp(router, {}, { storagePathsFindOne });
 
       const res = await request(app).get('/api/labels/samples/S-001');
 
@@ -313,24 +329,23 @@ describe('label routes', () => {
       expect(res.body.data.barcode).toBe(rawId.toString());
     });
 
-    it('falls back to an empty sampleId when neither sampleID nor _id are present', async () => {
+    it('returns 409 when the sample has no _id (storage location can no longer be resolved via the repository)', async () => {
+      // #452: storage location now resolves through GetSampleStorageLocationUseCase,
+      // which requires the sample's _id — a persisted sample document always has
+      // one, so this "no _id at all" shape is unreachable in production, but it's
+      // worth pinning: without an _id, buildLabel now treats the sample as having
+      // no persisted physical location (409) rather than trusting an inline field.
       const findOne = vi.fn().mockResolvedValue({
         barcode: 'BC-003',
         storageLocation: { boxId: 'box-1', position: 'A1' },
       });
-      const getCollectionImpl = vi.fn(async (_db, key) => {
-        if (key === 'samples') return { findOne };
-        if (key === 'storagePaths') return { findOne: vi.fn().mockResolvedValue(null) };
-        throw new Error(`unexpected key ${key}`);
-      });
+      const getCollectionImpl = vi.fn(async () => ({ findOne }));
       const { router } = loadRoute({ getCollectionImpl });
       const app = buildApp(router, {});
 
       const res = await request(app).get('/api/labels/samples/whatever');
 
-      expect(res.status).toBe(200);
-      expect(res.body.data.sampleId).toBe('');
-      expect(res.body.data.barcode).toBe('BC-003');
+      expect(res.status).toBe(409);
     });
   });
 
@@ -348,56 +363,67 @@ describe('label routes', () => {
     });
   });
 
-  describe('resolveStoragePathText (router._test)', () => {
-    it('returns null when the sample has no box location or position', async () => {
+  describe('resolveStorageLocation (router._test)', () => {
+    it('returns null when the sample has no _id', async () => {
       const { router } = loadRoute();
 
-      const result = await router._test.resolveStoragePathText({}, { storageLocation: {} });
+      const result = await router._test.resolveStorageLocation({}, {});
 
       expect(result).toBeNull();
     });
 
-    it('returns null when the sample has no storageLocation at all', async () => {
-      const { router } = loadRoute();
-
-      const result = await router._test.resolveStoragePathText({}, {});
-
-      expect(result).toBeNull();
-    });
-
-    it('resolves the box via boxID (legacy field) and a valid ObjectId boxId variant', async () => {
-      const boxObjectId = new ObjectId();
-      const storagePathsFindOne = vi.fn().mockResolvedValue({ path: 'Freezer 2 / Shelf 1' });
-      const getCollectionImpl = vi.fn(async () => ({ findOne: storagePathsFindOne }));
+    it('returns null when the persisted sample has no box location', async () => {
+      const sampleId = new ObjectId();
+      const samplesFindOne = vi.fn().mockResolvedValue({ _id: sampleId, storageLocation: {} });
+      const getCollectionImpl = vi.fn(async () => ({ findOne: samplesFindOne }));
       const { router } = loadRoute({ getCollectionImpl });
+      const db = { collection: vi.fn(() => ({ findOne: vi.fn().mockResolvedValue(null) })) };
 
-      const result = await router._test.resolveStoragePathText({}, {
-        storageLocation: { boxID: boxObjectId.toString(), position: 'A1' },
+      const result = await router._test.resolveStorageLocation(db, { _id: sampleId });
+
+      expect(result).toBeNull();
+    });
+
+    it('resolves the box and path via the storage repository (GetSampleStorageLocationUseCase)', async () => {
+      const sampleId = new ObjectId();
+      const boxObjectId = new ObjectId();
+      const samplesFindOne = vi.fn().mockResolvedValue({
+        _id: sampleId,
+        storageLocation: { boxId: boxObjectId.toString(), boxName: 'Box A', position: 'A1' },
       });
+      const getCollectionImpl = vi.fn(async () => ({ findOne: samplesFindOne }));
+      const storagePathsFindOne = vi.fn().mockResolvedValue({ path: 'Freezer 2 / Shelf 1' });
+      const { router } = loadRoute({ getCollectionImpl });
+      const db = { collection: vi.fn(() => ({ findOne: storagePathsFindOne })) };
 
-      expect(result).toBe('Freezer 2 / Shelf 1');
-      const [{ boxId: { $in: variants } }] = storagePathsFindOne.mock.calls[0];
-      expect(variants.some((v) => v instanceof ObjectId)).toBe(true);
+      const result = await router._test.resolveStorageLocation(db, { _id: sampleId });
+
+      expect(result.path).toBe('Freezer 2 / Shelf 1');
+      expect(result.box).toEqual({ boxId: boxObjectId.toString(), boxName: 'Box A', position: 'A1' });
     });
 
     it('falls back to storageLocation.readable when no storagePath document matches', async () => {
-      const storagePathsFindOne = vi.fn().mockResolvedValue(null);
-      const getCollectionImpl = vi.fn(async () => ({ findOne: storagePathsFindOne }));
-      const { router } = loadRoute({ getCollectionImpl });
-
-      const result = await router._test.resolveStoragePathText({}, {
+      const sampleId = new ObjectId();
+      const samplesFindOne = vi.fn().mockResolvedValue({
+        _id: sampleId,
         storageLocation: { boxId: 'box-1', position: 'A1', readable: 'Freezer manual note' },
       });
+      const getCollectionImpl = vi.fn(async () => ({ findOne: samplesFindOne }));
+      const { router } = loadRoute({ getCollectionImpl });
+      const db = { collection: vi.fn(() => ({ findOne: vi.fn().mockResolvedValue(null) })) };
 
-      expect(result).toBe('Freezer manual note');
+      const result = await router._test.resolveStorageLocation(db, { _id: sampleId });
+
+      expect(result.path).toBe('N/A');
+      expect(result.readable).toBe('Freezer manual note');
     });
   });
 
   describe('buildLocationText (router._test)', () => {
     it('includes the locationID segment when present', () => {
       const text = router_test().buildLocationText(
-        { locationID: 'LOC-9', storageLocation: { boxId: 'b1', position: 'A1' } },
-        null
+        { locationID: 'LOC-9' },
+        { box: { boxId: 'b1', position: 'A1' } }
       );
 
       expect(text).toContain('Loc LOC-9');
@@ -405,20 +431,20 @@ describe('label routes', () => {
 
     it('omits the position segment when position is missing', () => {
       const text = router_test().buildLocationText(
-        { storageLocation: { boxId: 'b1' } },
-        null
+        {},
+        { box: { boxId: 'b1' } }
       );
 
       expect(text).not.toContain('Pos ');
     });
 
     it('falls back to "Localizacao pendente" when every segment is absent', () => {
-      const text = router_test().buildLocationText({ storageLocation: {} }, null);
+      const text = router_test().buildLocationText({}, { box: {} });
 
       expect(text).toBe('Localizacao pendente');
     });
 
-    it('falls back to "Localizacao pendente" when the sample has no storageLocation field at all', () => {
+    it('falls back to "Localizacao pendente" when storageLocation is null', () => {
       const text = router_test().buildLocationText({}, null);
 
       expect(text).toBe('Localizacao pendente');

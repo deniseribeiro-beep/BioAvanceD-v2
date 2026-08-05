@@ -546,8 +546,11 @@ class MongoStorageRepository {
         barcode: sample.barcode,
         box: {
           boxId: sample.storageLocation.boxId,
+          boxName: sample.storageLocation.boxName || null,
           position: sample.storageLocation.position
         },
+        locationID: sample.storageLocation.locationID || null,
+        readable: sample.storageLocation.readable || null,
         path: storagePath?.path || 'N/A',
         fullHierarchy: storagePath
           ? {
