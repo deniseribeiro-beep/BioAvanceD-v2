@@ -1,2 +1,2 @@
 ﻿# assets installed from dyeallpies-skills-pack -- commit this file (#199)
-bioavanced-v2 fa8d1470c2288a88f0709e3562a77fa3c435df4c-dirty 2026-08-04T12:52:47Z
+bioavanced-v2 a47ac8f6416581f5e9370597baf76d7dbc8b31b7 2026-08-05T15:05:40Z
