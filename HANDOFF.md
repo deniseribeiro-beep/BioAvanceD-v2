@@ -63,13 +63,13 @@ one issue filed from what was learned running it.
 
 ## Dev stack state (as of session end)
 
-The dev stack (`compose.yml`+`compose.dev.yml`) is **up** as of this
-session's work (backend/frontend/mongodb/neo4j/redis/influxdb/tsa/
-witness/worker/neo4j-projection-worker all running) with **0 users** and
-the **RBAC catalog now seeded** (roles + permissions collections
-populated by this session's verification work — previously unseeded on
-this stack instance). Whether to tear it down or leave it running for a
-next session is an open call — not decided this session.
+The dev stack (`compose.yml`+`compose.dev.yml`) was brought up for this
+session's verification work, then **torn down** (`docker compose down`,
+Dennis's explicit call) before session end — no containers left running.
+Named volumes were kept, so the **RBAC catalog seeded during this
+session** (roles + permissions collections — previously unseeded on this
+stack instance) and **0 users** persist for whenever the stack is next
+brought up.
 
 ## Blocking next step
 
