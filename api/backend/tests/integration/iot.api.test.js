@@ -103,6 +103,20 @@ function buildDb() {
     findOneAndUpdate: vi.fn().mockResolvedValue({ value: { seq: 1 } }),
   };
 
+  // #430: quarantine-action.service.js's recordAction() is on the
+  // cold-chain quarantine path and needs its own collection branch --
+  // without it, db.collection('quarantineActions') fell through to the
+  // generic {find: ...} fallback (no insertOne), throwing before the
+  // sampleMovements insert this test asserts on ever ran.
+  const quarantineActionsCollection = {
+    insertOne: vi.fn().mockResolvedValue({ insertedId: 'quarantine-action-1' }),
+    find: vi.fn().mockReturnValue({
+      sort: vi.fn().mockReturnThis(),
+      toArray: vi.fn().mockResolvedValue([]),
+    }),
+    updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
+  };
+
   const usersCollection = {
     find: vi.fn().mockReturnValue({
       project: vi.fn().mockReturnValue({
@@ -145,6 +159,7 @@ function buildDb() {
         if (name === 'counters') return countersCollection;
         if (name === 'roles') return rolesCollection;
         if (name === 'userRoleAssignments') return userRoleAssignmentsCollection;
+        if (name === 'quarantineActions') return quarantineActionsCollection;
         return { find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }) };
       }),
     },
@@ -154,6 +169,7 @@ function buildDb() {
     environmentalExcursionsCollection,
     samplesCollection,
     sampleMovementsCollection,
+    quarantineActionsCollection,
   };
 }
 
@@ -229,11 +245,15 @@ describe('IoT API integration', () => {
     expect(mockDb.incidents[0].sensorKey).toBe('sensor-1');
     expect(mockDb.incidents[0].status).toBe('open');
     const update = mockDb.samplesCollection.updateOne.mock.calls[0][1].$set;
+    // #408 retired the legacy availabilityStatus field from Sample writes
+    // (specimenStatus is the sole source of truth now) -- this assertion
+    // was never updated when equipment-sensor-quarantine.service.js's
+    // write site migrated onto specimenStatus (part of #409).
     expect(update).toMatchObject({
       status: 'QUARANTINED',
       currentStatus: 'QUARANTINED',
       release_status: 'QUARANTINE',
-      availabilityStatus: 'BLOCKED',
+      specimenStatus: 'quarantined',
       quarantineReasonCode: 'COLD_CHAIN_INCIDENT',
       coldChainSensorKey: 'sensor-1',
       coldChainStatus: 'INCIDENT_OPEN',
