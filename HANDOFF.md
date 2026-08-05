@@ -1,120 +1,122 @@
 # HANDOFF
 
-**Written:** 2026-08-05, after shipping the runtime-cutover slice of #428
-on `feature/docker-e2e-backend-integration`.
+**Written:** 2026-08-05, after shipping #431 (JWT payload accessType
+staleness) on `feature/docker-e2e-backend-integration`.
 
 ## What happened this session
 
-Picked #428 ("drop `accessType`/`roleName` fields and `roles.min.json`
-entirely," depends on #427 which shipped last session), routed through
-`build-loop`. A grep sweep before writing anything showed the issue's
-literal 3 bullets (schema drop, seed-source switch, doc/test sweep)
-undersold the real scope — `accessType`/`roleName` were still
-load-bearing at runtime in `auth.routes.js` (JWT payload + `GET
-/verify` response), `auditLogger.js`'s fallback, and audit-trail
-`userRole` reads in several sample controllers. Routed through
-`divide-and-conquer` mid-session rather than forcing the full scope
-through one slice.
+Picked #431, the JWT-payload follow-up filed at the end of last session's
+#428 slice — `auth.service.js#issueAccessToken` and `auth.routes.js`'s
+`POST /refresh` both signed `accessType: user.accessType` into the JWT,
+reading a field #427 stopped persisting on new/edited users. Routed
+through `build-loop`; per the project's overlay, this backend-internal
+slice's proof bar is native supertest + mocked-Mongo-with-real-query-
+semantics, not literal Docker (Docker-on-by-default in that loop applies
+to the milestone's own e2e Playwright specs, not this kind of slice).
 
-**Landed this session** (the load-bearing, safe-to-ship-alone piece):
-- `rbac-catalog-seed.service.js`'s seed source switched off
-  `roles.min.json` onto an inlined literal table (byte-identical data)
-  — matches issue #428's 2nd bullet.
-- `auth.routes.js`'s `GET /verify` was found to still read
-  `user.accessType`/`user.roleName` straight off the User document,
-  which #427 stopped populating — already wrong for any user
-  created/edited after #427 shipped. Fixed to resolve both from the
-  active RBAC assignment via `rbac-assignment.service.js`'s
-  `resolveRoleDisplayName`/`resolveUserHierarchyLevel`, same pattern
-  #427 used for `user.routes.js`.
-- Confirmed (read `infrastructure/middleware/rbac.js`) that none of
-  this touches security enforcement — `requireRole`/`requirePermission`
-  already resolve fresh from `UserRoleAssignment -> Role` every
-  request, never from `req.user.accessType`. The stale field is a
-  display/audit-label concern only.
+**Landed:**
+- `issueAccessToken` now takes `db` and resolves `accessType` via
+  `rbac-assignment.service.resolveUserHierarchyLevel(db, userId)` instead
+  of trusting `user.accessType` — same numeric scale (`rbac.js`'s own
+  comment confirms hierarchyLevel mirrors the old accessType numbering
+  1-4). `issueSessionTokens` awaits it now.
+- `POST /refresh` now calls `authService.issueAccessToken(db, user)`
+  instead of duplicating the `jwt.sign(...)` inline (also picks up a
+  `jti` claim it didn't have before, a side-effect of reuse, not a
+  requested change).
+- Confirmed via the issue body and `rbac.js`: not a security fix —
+  `requireRole`/`requirePermission` never read `req.user.accessType`,
+  only `auditLogger.js`'s degraded fallback does (display/audit-label
+  only).
+- Updated tests: `auth.service.unit.test.js`'s `issueAccessToken`/
+  `issueRefreshToken` describes (now async, take a `db` built from
+  `rbac.factory`'s `buildRbacCollections`; added a test asserting the
+  claim follows the RBAC grant, not `user.accessType`, when the two
+  disagree) and `auth.routes.test.js`'s `/refresh` happy-path test
+  (switched from plain `makeDb` to `makeDbWithRbac`, asserts the
+  resolved `accessType` in the decoded token).
 
-Updated tests: `auth.routes.test.js`, `auth.routes.branch-coverage.test.js`
-(both had tests asserting the old accessType→roleName translation-map
-behavior; rewrote them against `rbac.factory.js`'s `buildRbacCollections`
-mock instead).
-
-Full backend suite: **6524/6525 passing** — the one failure
+Full backend suite: **6525/6526 passing** — the one failure
 (`iot.api.test.js`'s cold-chain quarantine assertion) is the
 pre-existing, already-filed **#430**, unrelated to this change.
 
-**Filed as follow-ups** (the descoped remainder of #428):
-- **#431** — JWT payload (`auth.service.js#issueAccessToken`,
-  `auth.routes.js`'s `/refresh`) still signs `accessType: user.accessType`
-  off the stale field. Confirmed not a security issue (enforcement
-  never reads it), but fixing it means threading `db` into a currently-
-  synchronous token-issuance path and touching every test in
-  `auth.service.unit.test.js` that asserts the current signature —
-  bigger and riskier than this slice.
-- **#432** — the actual schema-field drop (`User.js`), `roles.min.json`
-  file deletion, and the docs/comments/dictionary sweep. Depends on
-  #431. Also documents that `Access.js`'s `accessType` field is an
-  **unrelated concept** (report-access levels, not RBAC user roles) and
-  must NOT be touched by this series — #428's own issue text mis-scoped
-  it in.
+**Filed as follow-ups** (staleness this slice's scope didn't cover):
+- **#433** — `processLogin`'s first-login MFA-setup `tempToken` still
+  signs `accessType: user.accessType` inline (a separate `jwt.sign` call
+  site, not `issueAccessToken`) — confirmed this token IS decoded by
+  `authenticate` middleware for the MFA-setup routes, so
+  `req.user.accessType` carries the same staleness there too. Not named
+  in #431's own scope.
+- **#434** — four response bodies in `auth.service.js` (first-login MFA
+  response, successful-login response, `enableMFAFirstLogin` response,
+  `enableMFA` first-login response) still return a numeric
+  `user.accessType` straight off the User document — the sibling
+  `roleName` field right next to each was already fixed via
+  `resolveRoleDisplayName` (#427), the numeric field wasn't. Same pattern
+  #428 already applied to `GET /verify`, just not to these four sites.
 
-Committed on `test/428-rbac-retire-legacy-fields`, merged (`--no-ff`)
-into `feature/docker-e2e-backend-integration` at
-`fb2ff9fc...` (see `git log` for the full merge commit hash — check
-`git log --oneline -5` on this branch), closed #428 with that reference.
+Committed on `test/431-jwt-payload-accesstype`, merged (`--no-ff`) into
+`feature/docker-e2e-backend-integration` at `ff8a5034`, closed #431 with
+that reference.
 
 ## Repo state
 
-- **`feature/docker-e2e-backend-integration`**: now 7 commits ahead of
-  `origin/feature/docker-e2e-backend-integration` (this session's #428
-  slice + prior sessions' #426/#427 work) — not pushed yet (per
+- **`feature/docker-e2e-backend-integration`**: now 10 commits ahead of
+  `origin/feature/docker-e2e-backend-integration` (this session's #431
+  slice + prior sessions' #426/#427/#428 work) — not pushed yet (per
   convention: push is cheap/no-CI, but still confirm with Dennis before
   pushing/opening a PR).
-- **`test/428-rbac-retire-legacy-fields`**: merged, safe to delete once
+- **`test/431-jwt-payload-accesstype`**: merged, safe to delete once
   Dennis confirms; not deleted this session.
-- Issues: **#428 closed** (merged, narrowed scope, see above). **#431**
-  and **#432** opened this session as its follow-ups. **#429** (no
-  dedicated `auditor` RBAC role yet) and **#430** (pre-existing
-  `iot.api.test.js` failure) still open from earlier sessions. Older
-  backlog unchanged: **#424**, **#425**, **#387**,
+- Issues: **#431 closed** (merged, see above). **#433** and **#434**
+  opened this session as its follow-ups (both `enhancement`-labeled).
+  **#432** (the actual schema-field drop, depends on #431 which is now
+  done — unblocked) still open. **#429** (no dedicated `auditor` RBAC
+  role) and **#430** (pre-existing `iot.api.test.js` failure) still open.
+  Older backlog unchanged: **#424**, **#425**, **#387**,
   `#371`/`#373`/`#374`/`#378`/`#379`, **#389**.
-- **dyeallpies-skills-pack#210** (filed last session, asking for a
+- **dyeallpies-skills-pack#210** (filed two sessions ago, asking for a
   build-loop overlay note about this RBAC series underselling its blast
-  radius) — still open, not yet applied; this session's own
-  divide-and-conquer routing is itself further evidence for it, worth
-  mentioning if anyone follows up on that pack issue.
+  radius) — still open, not yet applied.
 
 ## Blocking next step
 
 None. **#425** (run the backfill script against any live dev stack
 before its users try to log in) remains the one real prerequisite for
 deploying #421's work to a shared environment — not blocking this
-session's close. **#432 depends on #431** — don't pick #432 first.
+session's close. **#432 now unblocked** (its dependency #431 is closed) —
+it's the natural next pick if continuing the RBAC thread, but also now
+has two siblings (#433, #434) that touch overlapping code
+(`auth.service.js`) and could reasonably be picked up alongside it or
+first, since #432 deletes the field #433/#434 still read.
 
 ## Recommended next steps
 
 Dennis didn't name a specific next pick this session, so per this
-skill's own rule: **none queued**. If continuing the RBAC thread,
-**#431** (JWT payload accessType claim) is the natural next pick — it's
-independent of everything else open and unblocks #432. Otherwise:
-**#429** (auditor role, small/well-scoped), **#430** (pre-existing test
-bug, needs investigation before it's a `fix-bugs` pick), **#424**,
-**#425** (operational, not a coding task), **#387**, older backlog
-(`#371`/`#373`/`#374`/`#378`/`#379`), or **#389** (route through
-`divide-and-conquer` first).
+skill's own rule: **none queued**. If continuing the RBAC thread, the
+three live follow-ups are **#432** (schema-field drop, now unblocked),
+**#433** (tempToken accessType), **#434** (four response-body accessType
+fields) — #433/#434 are small and independent of each other and of #432,
+but doing them *before* #432 means #432's own sweep has fewer remaining
+stale reads to find. Otherwise: **#429** (auditor role, small/
+well-scoped), **#430** (pre-existing test bug, needs investigation before
+it's a `fix-bugs` pick), **#424**, **#425** (operational, not a coding
+task), **#387**, older backlog (`#371`/`#373`/`#374`/`#378`/`#379`), or
+**#389** (route through `divide-and-conquer` first).
 
 ## Which skills to use
 
-- **#431**: `build-loop`-shaped (token-issuance behavior change with a
-  test to prove it), but likely small enough to fit one iteration
-  without its own further split — thread `db` into `issueAccessToken`,
-  resolve `resolveUserHierarchyLevel`, update
-  `tests/unit/auth.service.unit.test.js`.
-- **#432**: `build-loop`, depends on #431. Also touches
+- **#432**: `build-loop`, depends on nothing now. Touches
   `tests/factories/rbac.factory.js` (currently reads `roles.min.json`
   directly for fixture data — needs its own inline copy once the file
-  is deleted) and `docs/architecture/`,
-  `catalog.1.3.0.json`'s `accessTypeLegacy` dictionary rows. **Do not
-  touch `Access.js`** — see the issue body for why.
+  is deleted) and `docs/architecture/`, `catalog.1.3.0.json`'s
+  `accessTypeLegacy` dictionary rows. **Do not touch `Access.js`** — see
+  the issue body for why (unrelated report-access-level concept).
+- **#433**: small `build-loop` or `fix-bugs`-shaped fix — same
+  `resolveUserHierarchyLevel` pattern as #431, applied to one inline
+  `jwt.sign` call in `processLogin`.
+- **#434**: small, same `resolveUserHierarchyLevel` pattern applied to
+  four response-body fields — natural to bundle in one iteration.
 - **#429**: small, well-scoped — `build-loop` or could be folded into
   #432 if convenient, but stands alone fine.
 - **#430**: needs investigation first (is it `resolveCollectionName`
