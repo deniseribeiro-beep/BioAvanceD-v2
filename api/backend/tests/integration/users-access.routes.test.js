@@ -274,6 +274,53 @@ describe('Users and Access routes', () => {
     expect(usersCollection.updateOne).toHaveBeenCalled();
   });
 
+  // #427: PUT /:id stops dual-writing accessType/roleName onto the User
+  // document — only used to resolve the UserRoleAssignment change (#421),
+  // and the response's roleName is resolved from that assignment.
+  it('PUT /api/users/:id nao persiste accessType/roleName e resolve roleName da RBAC assignment na resposta', async () => {
+    const handler = getHandler(userRoutes, 'put', '/:id');
+    const targetUser = {
+      _id: 'user-target-3',
+      name: 'Alvo',
+      email: 'alvo@bioavanced.com.br',
+      username: 'alvo',
+      status: 'active',
+      accessType: 2,
+      roleName: 'Técnico',
+    };
+    usersCollection.findOne
+      .mockResolvedValueOnce(targetUser) // busca inicial (targetUser)
+      .mockResolvedValueOnce({ ...targetUser, accessType: 4 }); // apos update
+    usersCollection.updateOne.mockResolvedValue({ matchedCount: 1 });
+
+    const rbacCollections = buildRbacCollections([
+      { userAccountId: '507f1f77bcf86cd799439011', accessType: 4 },
+      { userAccountId: 'user-target-3', accessType: 4 },
+    ]);
+    const dbWithTarget = {
+      collection: vi.fn((name) => {
+        if (name === 'users') return usersCollection;
+        if (rbacCollections[name]) return rbacCollections[name];
+        return db.collection(name);
+      }),
+    };
+
+    const req = createRequest({
+      params: { id: 'user-target-3' },
+      body: { accessType: 4, roleName: 'Administrador' },
+    });
+    req.app.locals.db = dbWithTarget;
+    const res = createResponse();
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(200);
+    const setPayload = usersCollection.updateOne.mock.calls[0][1].$set;
+    expect(setPayload).not.toHaveProperty('accessType');
+    expect(setPayload).not.toHaveProperty('roleName');
+    expect(res.payload.data.roleName).toBe('Administrador');
+  });
+
   it('GET /api/access deve listar acessos', async () => {
     const handler = getHandler(accessRoutes, 'get', '/');
     accessCollection.find.mockReturnValue({

@@ -124,25 +124,26 @@ router.get('/', authenticate, requirePermission('createUser'), async (req, res) 
     const usersCollection = db.collection('users');
     const users = await usersCollection.find({}).toArray();
     const UserModel = require('../../models/User');
+    const { resolveRoleDisplayName } = require('../../services/rbac-assignment.service');
 
     // Remove senhas dos resultados e traduz status para português
-    const sanitizedUsers = users.map(user => {
+    const sanitizedUsers = await Promise.all(users.map(async (user) => {
       const { password, ...userWithoutPassword } = user;
       // Traduz status para português para o frontend
       if (userWithoutPassword.status) {
         userWithoutPassword.status = UserModel.translateStatus(userWithoutPassword.status);
       }
-      // Adiciona roleName se não existir, baseado no accessType
-      if (!userWithoutPassword.roleName && userWithoutPassword.accessType) {
-        const authService = require('../../services/auth.service');
-        userWithoutPassword.roleName = authService.getRoleName(userWithoutPassword.accessType);
+      // #427: roleName resolved from the active RBAC assignment — no
+      // longer persisted on the User document for new/edited users.
+      if (!userWithoutPassword.roleName) {
+        userWithoutPassword.roleName = await resolveRoleDisplayName(db, String(userWithoutPassword._id));
       }
       // Garante que o ID esteja disponível como _id e id
       if (userWithoutPassword._id && !userWithoutPassword.id) {
         userWithoutPassword.id = userWithoutPassword._id.toString();
       }
       return userWithoutPassword;
-    });
+    }));
 
     return res.status(200).json({
       success: true,
@@ -292,8 +293,16 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
     // direto no documento.
     const { isAdministrator } = require('../../services/rbac-assignment.service');
     const isAdmin = targetUser && (await isAdministrator(db, targetUser._id.toString()));
-    const isBecomingAdmin = req.body.accessType === 4 || req.body.roleName === 'Administrador';
-    
+
+    // Mapeia roleName para accessType se necessário — resolvido aqui, antes
+    // de remover os campos do payload, para uso abaixo (grant da
+    // UserRoleAssignment) e no isBecomingAdmin.
+    let requestedAccessType = req.body.accessType;
+    if (req.body.roleName && !requestedAccessType) {
+      requestedAccessType = authService.getAccessTypeForRole(req.body.roleName);
+    }
+    const isBecomingAdmin = requestedAccessType === 4 || req.body.roleName === 'Administrador';
+
     // Para Administrador, MFA é opcional e pode ser setado manualmente
     if (isAdmin || isBecomingAdmin) {
       // Se mfaEnabled foi fornecido explicitamente, mantém (admin pode setar MFA manualmente)
@@ -323,15 +332,11 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
       req.body.roleValidUntil = req.body.roleValidUntil ? new Date(req.body.roleValidUntil) : null;
     }
 
-    // Mapeia roleName para accessType se necessário
-    if (req.body.roleName && !req.body.accessType) {
-      req.body.accessType = authService.getAccessTypeForRole(req.body.roleName);
-    }
-    
-    // Se accessType foi alterado, atualiza roleName também
-    if (req.body.accessType && !req.body.roleName) {
-      req.body.roleName = authService.getRoleName(req.body.accessType);
-    }
+    // #427: accessType/roleName only resolved (above, into
+    // requestedAccessType) to grant the matching UserRoleAssignment below —
+    // no longer persisted on the User document.
+    delete req.body.accessType;
+    delete req.body.roleName;
 
     const result = await usersCollection.updateOne(
       userFilter,
@@ -356,8 +361,8 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
     
     // Detecta mudanças críticas
     const changes = {};
-    if (req.body.accessType && req.body.accessType !== targetUser.accessType) {
-      changes.accessType = { from: targetUser.accessType, to: req.body.accessType };
+    if (requestedAccessType && requestedAccessType !== targetUser.accessType) {
+      changes.accessType = { from: targetUser.accessType, to: requestedAccessType };
 
       // #421: enforcement reads UserRoleAssignment exclusively — a
       // changed accessType must revoke the old assignment and grant the
@@ -366,7 +371,7 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
       const { changeUserRole } = require('../../services/rbac-assignment.service');
       await changeUserRole(db, {
         userAccountId: targetUser._id.toString(),
-        accessType: req.body.accessType,
+        accessType: requestedAccessType,
         changedBy: req.user?.userID,
       });
     }
@@ -386,12 +391,12 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
     }
     
     const { password: __unusedPassword2, ...userWithoutPassword } = updatedUser;
-    
-    // Adiciona roleName se não existir
-    if (!userWithoutPassword.roleName && userWithoutPassword.accessType) {
-      userWithoutPassword.roleName = authService.getRoleName(userWithoutPassword.accessType);
-    }
-    
+
+    // #427: roleName resolved from the active RBAC assignment for display —
+    // no longer persisted on the User document.
+    const { resolveRoleDisplayName } = require('../../services/rbac-assignment.service');
+    userWithoutPassword.roleName = await resolveRoleDisplayName(db, targetUser._id.toString());
+
     // Traduz status para português
     if (userWithoutPassword.status) {
       userWithoutPassword.status = UserModel.translateStatus(userWithoutPassword.status);

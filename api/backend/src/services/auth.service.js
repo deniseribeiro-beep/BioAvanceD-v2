@@ -8,7 +8,7 @@ const UserModel = require('../models/User');
 const LogModel = require('../models/Log');
 const logger = require('../utils/logger');
 const sessionService = require('./session.service');
-const { grantRoleForAccessType, isAdministrator } = require('./rbac-assignment.service');
+const { grantRoleForAccessType, isAdministrator, resolveRoleDisplayName } = require('./rbac-assignment.service');
 
 const ACCESS_TOKEN_TTL = '15m';
 const REFRESH_TOKEN_TTL = '7d';
@@ -134,20 +134,23 @@ class AuthService {
         password: hashedPassword
       });
 
+      // #427: accessType/roleName resolved only to grant the matching
+      // UserRoleAssignment (#421) below — no longer persisted on the User
+      // document itself (#422/#428 retire the fields from the schema once
+      // nothing writes them).
+      const resolvedAccessType = user.accessType;
+      delete user.accessType;
+      delete user.roleName;
+
       // Para Administrador, MFA é opcional e pode ser setado manualmente
       // Se não foi fornecido explicitamente, desabilita por padrão
-      if (user.accessType === 4 || userData.roleName === 'Administrador') {
+      if (resolvedAccessType === 4 || userData.roleName === 'Administrador') {
         if (userData.mfaEnabled === undefined || userData.mfaEnabled === false) {
           user.mfaEnabled = false;
           user.mfaSecret = null;
           user.mfaActivationDate = null;
         }
         // Se mfaEnabled foi setado como true, mantém (será configurado no primeiro login se necessário)
-      }
-
-      // Adiciona roleName se não existir
-      if (!user.roleName && user.accessType) {
-        user.roleName = this.getRoleName(user.accessType);
       }
 
       const result = await usersCollection.insertOne(user);
@@ -157,7 +160,7 @@ class AuthService {
       // without a corresponding assignment.
       await grantRoleForAccessType(db, {
         userAccountId: result.insertedId.toString(),
-        accessType: user.accessType,
+        accessType: resolvedAccessType,
         grantedBy,
       });
 
@@ -173,10 +176,15 @@ class AuthService {
 
       logger.info('Usuário registrado:', { userID: result.insertedId, anonId });
 
+      // #427: roleName resolved from the granted RBAC assignment for the
+      // response, since it's no longer a field on the User document.
+      const roleName = await resolveRoleDisplayName(db, result.insertedId.toString());
+
       return {
         _id: result.insertedId,
         ...user,
         anonId,
+        roleName,
         password: undefined, // Remove senha do retorno
         id: result.insertedId.toString() // Adiciona id para compatibilidade com frontend
       };
@@ -330,7 +338,9 @@ class AuthService {
             email: user.email,
             username: user.username,
             accessType: user.accessType,
-            roleName: this.getRoleName(user.accessType)
+            // #427: resolved from the RBAC assignment — roleName is no
+            // longer persisted on the User document for new/edited users.
+            roleName: await resolveRoleDisplayName(db, user._id.toString())
           }
         };
       }
@@ -402,7 +412,9 @@ class AuthService {
           email: user.email,
           username: user.username,
           accessType: user.accessType,
-          roleName: this.getRoleName(user.accessType),
+          // #427: resolved from the RBAC assignment — roleName is no
+          // longer persisted on the User document for new/edited users.
+          roleName: await resolveRoleDisplayName(db, user._id.toString()),
           mfaEnabled: user.mfaEnabled
         }
       };
@@ -585,7 +597,9 @@ class AuthService {
           email: user.email,
           username: user.username,
           accessType: user.accessType,
-          roleName: this.getRoleName(user.accessType),
+          // #427: resolved from the RBAC assignment — roleName is no
+          // longer persisted on the User document for new/edited users.
+          roleName: await resolveRoleDisplayName(db, user._id.toString()),
           mfaEnabled: true
         }
       };
@@ -690,7 +704,9 @@ class AuthService {
             email: user.email,
             username: user.username,
             accessType: user.accessType,
-            roleName: this.getRoleName(user.accessType),
+            // #427: resolved from the RBAC assignment — roleName is no
+            // longer persisted on the User document for new/edited users.
+            roleName: await resolveRoleDisplayName(db, user._id.toString()),
             mfaEnabled: true
           }
         };

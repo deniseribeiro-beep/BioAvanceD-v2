@@ -24,6 +24,7 @@ function createMockDb(usersCount = 0) {
   return {
     users,
     systemBootstrap,
+    rbacCollections,
     db: {
       collection: vi.fn((name) => {
         if (name === 'users') return users;
@@ -62,7 +63,6 @@ describe('createFirstAdmin', () => {
     expect(users.insertOne).toHaveBeenCalledTimes(1);
     const inserted = users.insertOne.mock.calls[0][0];
     expect(inserted.email).toBe('admin.seguro@bioavanced.test');
-    expect(inserted.accessType).toBe(4);
     expect(inserted.forceReset).toBe(true);
     expect(inserted.password).not.toBe(validEnv.BOOTSTRAP_ADMIN_TEMP_PASSWORD);
     await expect(bcrypt.compare(validEnv.BOOTSTRAP_ADMIN_TEMP_PASSWORD, inserted.password)).resolves.toBe(true);
@@ -76,6 +76,23 @@ describe('createFirstAdmin', () => {
       }),
       { upsert: true }
     );
+  });
+
+  // #427: accessType/roleName are no longer written to the User document —
+  // only used transiently to grant the matching UserRoleAssignment (#421).
+  it('nao persiste accessType/roleName no documento do usuario, mas concede a UserRoleAssignment de administrator', async () => {
+    const { db, users, rbacCollections } = createMockDb(0);
+
+    await createFirstAdmin({ db, env: validEnv, logger: { info: vi.fn() } });
+
+    const inserted = users.insertOne.mock.calls[0][0];
+    expect(inserted).not.toHaveProperty('accessType');
+    expect(inserted).not.toHaveProperty('roleName');
+
+    const assignments = await rbacCollections.userRoleAssignments.find({}).toArray();
+    const roles = await rbacCollections.roles.find({}).toArray();
+    const adminRole = roles.find((r) => r.roleCode === 'administrator');
+    expect(assignments.some((a) => a.userAccountId === 'admin-user-id' && a.roleId === adminRole.roleId && a.assignmentStatus === 'active')).toBe(true);
   });
 
   it('falha se faltar variavel obrigatoria', async () => {
