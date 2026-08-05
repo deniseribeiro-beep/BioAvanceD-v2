@@ -216,6 +216,14 @@ describe('RBAC middleware (#421 - UserRoleAssignment -> Role -> Permission)', ()
     expect(permissions.manageOrganizations).toBe(true);
   });
 
+  it('#436: deve expor todas as permissões do PERMISSION_CATALOG, incluindo viewAuditLogs (#429)', () => {
+    const { PERMISSION_CATALOG } = require('../../src/services/rbac-catalog-seed.service');
+
+    for (const permissionCode of Object.keys(PERMISSION_CATALOG)) {
+      expect(permissions[permissionCode]).toBe(true);
+    }
+  });
+
   it('deve registrar tentativa de acesso negado no audit log quando db está disponível', async () => {
     const logSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue();
     vi.spyOn(auditLogger, 'init').mockImplementation(() => {});

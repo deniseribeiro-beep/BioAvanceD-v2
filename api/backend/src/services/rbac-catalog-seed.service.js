@@ -178,5 +178,6 @@ module.exports = {
   seedRolesAndPermissions,
   ROLE_CODE_BY_LEGACY_NAME,
   PERMISSION_CATALOG,
+  LEGACY_ROLES_SEED,
   ADDITIONAL_ROLES_SEED,
 };
