@@ -271,8 +271,8 @@ class SampleFileController {
         auditLogger.init(db);
         await auditLogger.log({
           action: 'file_upload',
-          entity: 'SampleFile',
-          entityID: insertResult.insertedId.toString(),
+          entityType: 'SampleFile',
+          entityId: insertResult.insertedId.toString(),
           result: 'success',
           severity: 'info',
           message: `Upload de arquivo de análise: ${file.originalname} (${(file.size / 1024).toFixed(2)} KB)`,
@@ -398,7 +398,7 @@ class SampleFileController {
         auditLogger.init(db);
         await auditLogger.log({
           action: 'QUERY',
-          entity: 'SampleFile',
+          entityType: 'SampleFile',
           result: 'success',
           severity: 'info',
           message: `Consulta de arquivos de análise - Amostra: ${specimenId}, Total: ${files.length}`,
@@ -488,8 +488,8 @@ class SampleFileController {
         auditLogger.init(db);
         await auditLogger.log({
           action: 'file_download',
-          entity: 'SampleFile',
-          entityID: fileID,
+          entityType: 'SampleFile',
+          entityId: fileID,
           result: 'success',
           severity: 'info',
           message: `Download de arquivo: ${fileRecord.fileName}`,
@@ -604,8 +604,8 @@ class SampleFileController {
         auditLogger.init(db);
         await auditLogger.log({
           action: 'file_delete',
-          entity: 'SampleFile',
-          entityID: fileID,
+          entityType: 'SampleFile',
+          entityId: fileID,
           result: 'success',
           severity: 'critical', // Alta severidade para exclusão
           message: `Arquivo excluído: ${fileRecord.fileName}`,
@@ -696,8 +696,8 @@ class SampleFileController {
         const userAnonId = await getUserAnonId(req.user, db);
         await auditLogger.log({
           action: 'file_export_hl7',
-          entity: 'SampleFile',
-          entityID: fileID,
+          entityType: 'SampleFile',
+          entityId: fileID,
           result: 'success',
           severity: 'medium',
           message: `Exportação HL7 v2.x do arquivo: ${fileRecord.fileName}`,
@@ -787,8 +787,8 @@ class SampleFileController {
         auditLogger.init(db);
         await auditLogger.log({
           action: 'file_export_fhir',
-          entity: 'SampleFile',
-          entityID: fileID,
+          entityType: 'SampleFile',
+          entityId: fileID,
           result: 'success',
           severity: 'medium',
           message: `Exportação FHIR do arquivo: ${fileRecord.fileName}`,
@@ -878,8 +878,8 @@ class SampleFileController {
         auditLogger.init(db);
         await auditLogger.log({
           action: 'file_export_cda',
-          entity: 'SampleFile',
-          entityID: fileID,
+          entityType: 'SampleFile',
+          entityId: fileID,
           result: 'success',
           severity: 'medium',
           message: `Exportação CDA do arquivo: ${fileRecord.fileName}`,

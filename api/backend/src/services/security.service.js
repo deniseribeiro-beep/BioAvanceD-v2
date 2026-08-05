@@ -167,8 +167,8 @@ class SecurityService {
         const severity = this.getSeverityForChange(change.path);
         await auditLogger.log({
           action: 'UPDATE',
-          entity: 'SecurityConfig',
-          entityID: 'main',
+          entityType: 'SecurityConfig',
+          entityId: 'main',
           result: 'success',
           severity: severity,
           message: `Configuração de segurança alterada: ${change.path}`,
@@ -464,8 +464,8 @@ class SecurityService {
       for (const change of changes) {
         await auditLogger.log({
           action: 'UPDATE',
-          entity: 'Permissions',
-          entityID: change.profile,
+          entityType: 'Permissions',
+          entityId: change.profile,
           result: 'success',
           severity: 'critical',
           message: `Permissões alteradas para perfil: ${change.profile}`,

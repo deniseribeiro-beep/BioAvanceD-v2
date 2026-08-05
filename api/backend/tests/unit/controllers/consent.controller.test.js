@@ -165,8 +165,8 @@ describe('ConsentController.createPolicy', () => {
     expect(initSpy).toHaveBeenCalledWith(req.app.locals.db);
     expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({
       action: 'CREATE',
-      entity: 'ConsentPolicy',
-      entityID: 'pid1',
+      entityType: 'ConsentPolicy',
+      entityId: 'pid1',
       payload: expect.objectContaining({ permissions: ['k1'] }),
     }));
     expect(res.status).toHaveBeenCalledWith(201);
@@ -341,7 +341,7 @@ describe('ConsentController.updatePolicy', () => {
     await consentController.updatePolicy(req, res);
 
     expect(initSpy).toHaveBeenCalled();
-    expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({ action: 'UPDATE', entity: 'ConsentPolicy' }));
+    expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({ action: 'UPDATE', entityType: 'ConsentPolicy' }));
     expect(res.status).toHaveBeenCalledWith(200);
     expect(res.json).toHaveBeenCalledWith({
       success: true,
@@ -443,8 +443,8 @@ describe('ConsentController.createTemplate', () => {
     expect(initSpy).toHaveBeenCalled();
     expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({
       action: 'CREATE',
-      entity: 'ConsentTemplate',
-      entityID: 't2',
+      entityType: 'ConsentTemplate',
+      entityId: 't2',
       payload: expect.objectContaining({ permissions: ['k1'] }),
     }));
   });
@@ -557,8 +557,8 @@ describe('ConsentController.updateTemplate', () => {
     expect(initSpy).toHaveBeenCalledWith(req.app.locals.db);
     expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({
       action: 'UPDATE',
-      entity: 'ConsentTemplate',
-      entityID: 't1',
+      entityType: 'ConsentTemplate',
+      entityId: 't1',
       payload: expect.objectContaining({ title: 'X', version: 'v2', active: true }),
     }));
     expect(res.status).toHaveBeenCalledWith(200);
@@ -790,7 +790,7 @@ describe('ConsentController.createPatientConsent', () => {
     await consentController.createPatientConsent(req, res);
 
     expect(initSpy).toHaveBeenCalled();
-    expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({ action: 'SIGN', entity: 'PatientConsent' }));
+    expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({ action: 'SIGN', entityType: 'PatientConsent' }));
   });
 });
 

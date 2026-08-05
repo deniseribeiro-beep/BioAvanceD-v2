@@ -55,8 +55,8 @@ class ConsentController {
         auditLogger.init(db);
         await auditLogger.log({
           action: 'CREATE',
-          entity: 'ConsentPolicy',
-          entityID: policy._id.toString(),
+          entityType: 'ConsentPolicy',
+          entityId: policy._id.toString(),
           result: 'success',
           severity: 'info',
           message: `Política de consentimento criada (${policy.version})`,
@@ -191,8 +191,8 @@ class ConsentController {
         auditLogger.init(db);
         await auditLogger.log({
           action: 'UPDATE',
-          entity: 'ConsentPolicy',
-          entityID: policy._id.toString(),
+          entityType: 'ConsentPolicy',
+          entityId: policy._id.toString(),
           result: 'success',
           severity: 'info',
           message: `Política de consentimento atualizada (${policy.version})`,
@@ -264,8 +264,8 @@ class ConsentController {
         auditLogger.init(db);
         await auditLogger.log({
           action: 'CREATE',
-          entity: 'ConsentTemplate',
-          entityID: template._id.toString(),
+          entityType: 'ConsentTemplate',
+          entityId: template._id.toString(),
           result: 'success',
           severity: 'info',
           message: `Template de consentimento criado (${template.version})`,
@@ -344,8 +344,8 @@ class ConsentController {
         auditLogger.init(db);
         await auditLogger.log({
           action: 'UPDATE',
-          entity: 'ConsentTemplate',
-          entityID: template._id.toString(),
+          entityType: 'ConsentTemplate',
+          entityId: template._id.toString(),
           result: 'success',
           severity: 'info',
           message: `Template de consentimento atualizado (${template.version})`,
@@ -494,15 +494,15 @@ class ConsentController {
         auditLogger.init(db);
         await auditLogger.log({
           action: 'SIGN',
-          entity: 'PatientConsent',
-          entityID: consent._id.toString(),
+          entityType: 'PatientConsent',
+          entityId: consent._id.toString(),
           result: 'success',
           severity: 'info',
           message: `Consentimento assinado para paciente ${consent.participantId}`,
           payload: {
             participantId: consent.participantId,
             consentTemplateId: consent.consentTemplateId,
-            status: consent.status
+            result: consent.status
           },
           req: req,
           module: 'Consentimento'
@@ -547,15 +547,15 @@ class ConsentController {
         auditLogger.init(db);
         await auditLogger.log({
           action: 'REVOKE',
-          entity: 'PatientConsent',
-          entityID: req.params.id,
+          entityType: 'PatientConsent',
+          entityId: req.params.id,
           result: 'success',
           severity: 'warning',
           message: `Consentimento revogado para paciente ${consent.participantId}`,
           payload: {
             participantId: consent.participantId,
             consentTemplateId: consent.consentTemplateId,
-            status: 'REVOKED'
+            result: 'REVOKED'
           },
           req: req,
           module: 'Consentimento'

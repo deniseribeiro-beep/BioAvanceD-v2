@@ -194,8 +194,8 @@ class UserSecurityController {
       auditLogger.init(db);
       await auditLogger.log({
         action: 'UPDATE',
-        entity: 'Password',
-        entityID: req.user.userID,
+        entityType: 'Password',
+        entityId: req.user.userID,
         result: 'success',
         severity: 'critical',
         message: 'Senha alterada',
@@ -237,8 +237,8 @@ class UserSecurityController {
       auditLogger.init(db);
       await auditLogger.log({
         action: 'CREATE',
-        entity: 'RecoveryCodes',
-        entityID: req.user.userID,
+        entityType: 'RecoveryCodes',
+        entityId: req.user.userID,
         result: 'success',
         severity: 'critical',
         message: 'Códigos de recuperação gerados',
@@ -286,8 +286,8 @@ class UserSecurityController {
       auditLogger.init(db);
       await auditLogger.log({
         action: 'DELETE',
-        entity: 'Session',
-        entityID: id,
+        entityType: 'Session',
+        entityId: id,
         result: 'success',
         severity: 'warning',
         message: 'Sessão revogada',
@@ -330,8 +330,8 @@ class UserSecurityController {
       auditLogger.init(db);
       await auditLogger.log({
         action: 'DELETE',
-        entity: 'Sessions',
-        entityID: req.user.userID,
+        entityType: 'Sessions',
+        entityId: req.user.userID,
         result: 'success',
         severity: 'critical',
         message: 'Todas as sessões revogadas',
@@ -383,8 +383,8 @@ class UserSecurityController {
       auditLogger.init(db);
       await auditLogger.log({
         action: 'CREATE',
-        entity: 'PasswordReset',
-        entityID: req.user.userID,
+        entityType: 'PasswordReset',
+        entityId: req.user.userID,
         result: 'success',
         severity: 'critical',
         message: 'Solicitação de reset de senha criada',

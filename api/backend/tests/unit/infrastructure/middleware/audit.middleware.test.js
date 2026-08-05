@@ -70,7 +70,7 @@ describe('auditRequest', () => {
     expect(logSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         action: 'QUERY',
-        entity: 'Sample',
+        entityType: 'Sample',
         module: 'Amostras',
         result: 'success',
         severity: 'info',
@@ -88,7 +88,7 @@ describe('auditRequest', () => {
     await flushSetImmediate();
 
     expect(logSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ action: 'READ', entity: 'Patient', module: 'Cadastro' })
+      expect.objectContaining({ action: 'READ', entityType: 'Patient', module: 'Cadastro' })
     );
   });
 
@@ -162,7 +162,7 @@ describe('auditRequest', () => {
     await flushSetImmediate();
 
     expect(logSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ action: 'LOGIN', entity: 'Authentication', module: 'Autenticação' })
+      expect.objectContaining({ action: 'LOGIN', entityType: 'Authentication', module: 'Autenticação' })
     );
   });
 
@@ -176,7 +176,7 @@ describe('auditRequest', () => {
     await flushSetImmediate();
 
     expect(logSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ action: 'DELETE', entity: 'Sistema', module: 'Sistema' })
+      expect.objectContaining({ action: 'DELETE', entityType: 'Sistema', module: 'Sistema' })
     );
   });
 
@@ -189,7 +189,7 @@ describe('auditRequest', () => {
     res.send('ok');
     await flushSetImmediate();
 
-    expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({ entity: 'Patient' }));
+    expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({ entityType: 'Patient' }));
   });
 
   it('resolves Sistema when the entire remaining path is just an ObjectId', async () => {
@@ -201,7 +201,7 @@ describe('auditRequest', () => {
     res.send('ok');
     await flushSetImmediate();
 
-    expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({ entity: 'Sistema' }));
+    expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({ entityType: 'Sistema' }));
   });
 
   it('falls back to a capitalized VALID_ENTITIES match when the resource has no explicit entityMap entry', async () => {
@@ -213,7 +213,7 @@ describe('auditRequest', () => {
     res.send('ok');
     await flushSetImmediate();
 
-    expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({ entity: 'Assistant' }));
+    expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({ entityType: 'Assistant' }));
   });
 
   it('passes through an unrecognized HTTP method verbatim as the action', async () => {

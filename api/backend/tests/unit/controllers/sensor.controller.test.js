@@ -85,7 +85,7 @@ describe('sensor.controller', () => {
       expect(createSensorMock).toHaveBeenCalledWith(req.app.locals.db, req.body);
       expect(auditLoggerInitMock).toHaveBeenCalledWith(req.app.locals.db);
       expect(auditLoggerLogMock).toHaveBeenCalledWith(
-        expect.objectContaining({ action: 'CREATE', entity: 'Sensor', entityID: 'sensor-1' })
+        expect.objectContaining({ action: 'CREATE', entityType: 'Sensor', entityId: 'sensor-1' })
       );
       expect(res.statusCode).toBe(201);
       expect(res.body).toEqual({
@@ -243,7 +243,7 @@ describe('sensor.controller', () => {
       await sensorController.get(req, res);
 
       expect(auditLoggerLogMock).toHaveBeenCalledWith(
-        expect.objectContaining({ result: 'success', entityID: 's1' })
+        expect.objectContaining({ result: 'success', entityId: 's1' })
       );
       expect(res.statusCode).toBe(200);
       expect(res.body).toEqual({ success: true, data: sensor });
@@ -349,7 +349,7 @@ describe('sensor.controller', () => {
       await sensorController.update(req, res);
 
       expect(auditLoggerLogMock).toHaveBeenCalledWith(
-        expect.objectContaining({ action: 'UPDATE', entityID: 's1' })
+        expect.objectContaining({ action: 'UPDATE', entityId: 's1' })
       );
       expect(res.statusCode).toBe(200);
       expect(res.body).toEqual({

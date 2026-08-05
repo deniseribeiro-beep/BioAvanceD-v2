@@ -231,8 +231,8 @@ router.post('/',
         auditLogger.init(db);
         await auditLogger.log({
           action: 'sample_create',
-          entity: 'Sample',
-          entityID: sample._id.toString(),
+          entityType: 'Sample',
+          entityId: sample._id.toString(),
           result: 'success',
           severity: 'info',
           message: `Amostra criada - Paciente ID: ${sample.patientID}`, // Apenas ID, sem dados sensíveis
@@ -405,7 +405,7 @@ router.get('/', authenticate, async (req, res) => {
     auditLogger.init(db);
     await auditLogger.log({
       action: 'QUERY',
-      entity: 'Sample',
+      entityType: 'Sample',
       result: 'success',
       severity: 'info',
       message: `Consulta de amostras - ${result.total || 0} registros`,
@@ -500,7 +500,7 @@ router.get('/:id', authenticate, async (req, res) => {
       auditLogger.init(db);
       await auditLogger.log({
         action: 'QUERY',
-        entity: 'Sample',
+        entityType: 'Sample',
         result: 'error',
         severity: 'warning',
         message: `Tentativa de buscar amostra inexistente: ${req.params.id}`,
@@ -519,8 +519,8 @@ router.get('/:id', authenticate, async (req, res) => {
     auditLogger.init(db);
     await auditLogger.log({
       action: 'QUERY',
-      entity: 'Sample',
-      entityID: req.params.id,
+      entityType: 'Sample',
+      entityId: req.params.id,
       result: 'success',
       severity: 'info',
       message: 'Amostra consultada',
@@ -581,8 +581,8 @@ router.post('/:id/withdraw',
         auditLogger.init(db);
         await auditLogger.log({
           action: 'WITHDRAW',
-          entity: 'Sample',
-          entityID: req.params.id,
+          entityType: 'Sample',
+          entityId: req.params.id,
           result: 'success',
           severity: 'high',
           message: `Amostra retirada - Tipo: ${req.body.withdrawalType}, Responsável: ${req.body.withdrawalResponsible}, Qtd: ${result.withdrawnQuantity}`,
@@ -643,8 +643,8 @@ router.put('/:id', authenticate, requirePermission('editSample'), async (req, re
       auditLogger.init(db);
       await auditLogger.log({
         action: 'UPDATE',
-        entity: 'Sample',
-        entityID: req.params.id,
+        entityType: 'Sample',
+        entityId: req.params.id,
         result: 'success',
         severity: 'info',
         message: 'Amostra atualizada',
@@ -658,8 +658,8 @@ router.put('/:id', authenticate, requirePermission('editSample'), async (req, re
       if (releaseRequested) {
         await auditLogger.log({
           action: 'sample_release',
-          entity: 'Sample',
-          entityID: req.params.id,
+          entityType: 'Sample',
+          entityId: req.params.id,
           result: 'success',
           severity: 'info',
           message: 'Amostra liberada após validação ética',
@@ -715,8 +715,8 @@ router.delete('/:id', authenticate, requirePermission('deleteSample'), async (re
       auditLogger.init(db);
       await auditLogger.log({
         action: 'DELETE',
-        entity: 'Sample',
-        entityID: req.params.id,
+        entityType: 'Sample',
+        entityId: req.params.id,
         result: 'success',
         severity: 'warning',
         message: 'Amostra deletada',
@@ -815,7 +815,7 @@ router.get('/by-barcode/:barcode', authenticate, async (req, res) => {
       auditLogger.init(db);
       await auditLogger.log({
         action: 'QUERY',
-        entity: 'Sample',
+        entityType: 'Sample',
         result: 'error',
         severity: 'warning',
         message: `Tentativa de buscar amostra por código de barras inexistente: ${barcode}`,
@@ -835,8 +835,8 @@ router.get('/by-barcode/:barcode', authenticate, async (req, res) => {
     auditLogger.init(db);
     await auditLogger.log({
       action: 'QUERY',
-      entity: 'Sample',
-      entityID: result.sample._id?.toString(),
+      entityType: 'Sample',
+      entityId: result.sample._id?.toString(),
       result: 'success',
       severity: 'info',
       message: `Amostra consultada por código de barras: ${barcode}`,
@@ -920,8 +920,8 @@ router.get('/:id/results', authenticate, async (req, res) => {
     auditLogger.init(db);
     await auditLogger.log({
       action: 'QUERY',
-      entity: 'Sample',
-      entityID: req.params.id,
+      entityType: 'Sample',
+      entityId: req.params.id,
       result: 'success',
       severity: 'info',
       message: `Arquivos de analise da amostra consultados - ${results.length || 0} registros`,
@@ -974,8 +974,8 @@ router.post('/:id/return', authenticate, requirePermission('withdrawSample'), as
       auditLogger.init(db);
       await auditLogger.log({
         action: 'RETURN',
-        entity: 'Sample',
-        entityID: req.params.id,
+        entityType: 'Sample',
+        entityId: req.params.id,
         result: 'success',
         severity: 'high',
         message: `Amostra devolvida - Qtd: ${result.returnedQuantity}, Condição: ${result.condition}`,

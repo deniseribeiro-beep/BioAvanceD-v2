@@ -189,7 +189,7 @@ describe('Security routes', () => {
     expect(String(res.headers['Content-Type'] || '')).toContain('text/csv');
     expect(String(res.payload)).toContain('timestamp,userID');
     expect(initSpy).toHaveBeenCalled();
-    expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({ action: 'EXPORT', entity: 'Logs' }));
+    expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({ action: 'EXPORT', entityType: 'Logs' }));
   });
 
   it('GET /logs/export deve retornar JSON e header correto quando format=json', async () => {

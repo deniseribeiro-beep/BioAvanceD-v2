@@ -110,7 +110,7 @@ const requirePermission = (permission) => {
             auditLogger.init(db);
             await auditLogger.log({
               action: 'FORBIDDEN',
-              entity: 'Access',
+              entityType: 'Access',
               result: 'error',
               severity: 'warning',
               message: `Tentativa de acesso negado: ${permission}`,

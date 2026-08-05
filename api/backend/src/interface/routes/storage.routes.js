@@ -484,8 +484,8 @@ router.patch('/freezer/:freezerId/room', authenticate, requirePermission('create
     auditLogger.init(db);
     await auditLogger.log({
       action: 'UPDATE',
-      entity: 'StorageContainer',
-      entityID: req.params.freezerId,
+      entityType: 'StorageContainer',
+      entityId: req.params.freezerId,
       result: 'success',
       severity: 'info',
       message: 'Room atribuída ao FREEZER',

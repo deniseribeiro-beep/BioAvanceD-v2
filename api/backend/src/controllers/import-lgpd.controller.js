@@ -356,10 +356,8 @@ class ImportLGPDController {
         auditLogger.init(db);
         await auditLogger.log({
           action: 'SMART_IMPORT_EXECUTION',
-          entity: 'Import',
-          resourceType: 'Import',
-          resourceId: file.originalname || null,
-          status: 'started',
+          entityType: 'Import',
+          entityId: file.originalname || null,
           result: 'success',
           severity: 'info',
           module: 'Importação',
@@ -399,10 +397,8 @@ class ImportLGPDController {
         auditLogger.init(db);
         await auditLogger.log({
           action: 'SMART_IMPORT_EXECUTION',
-          entity: 'Import',
-          resourceType: 'Import',
-          resourceId: file.originalname || null,
-          status: results.errors.length === 0 ? 'success' : 'warning',
+          entityType: 'Import',
+          entityId: file.originalname || null,
           result: results.errors.length === 0 ? 'success' : 'warning',
           severity: results.errors.length === 0 ? 'info' : 'warning',
           module: 'Importação',
@@ -453,10 +449,8 @@ class ImportLGPDController {
           auditLogger.init(db);
           await auditLogger.log({
             action: 'SMART_IMPORT_EXECUTION',
-            entity: 'Import',
-            resourceType: 'Import',
-            resourceId: req.file?.originalname || null,
-            status: 'failure',
+            entityType: 'Import',
+            entityId: req.file?.originalname || null,
             result: 'error',
             severity: 'error',
             module: 'Importação',

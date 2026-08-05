@@ -64,7 +64,7 @@ router.patch('/fix-missing-locationids', authenticate, requirePermission('create
     auditLogger.init(db);
     await auditLogger.log({
       action: 'UPDATE',
-      entity: 'Location',
+      entityType: 'Location',
       result: 'success',
       severity: 'info',
       message: `Atualização em massa: ${updatedCount} localização(ões) atualizada(s) com locationID`,
@@ -101,7 +101,7 @@ router.get('/', authenticate, async (req, res) => {
     auditLogger.init(db);
     await auditLogger.log({
       action: 'QUERY',
-      entity: 'Location',
+      entityType: 'Location',
       result: 'success',
       severity: 'info',
       message: `Consulta de localizações - ${locations.length} registros`,
@@ -138,7 +138,7 @@ router.get('/:id', authenticate, async (req, res) => {
       auditLogger.init(db);
       await auditLogger.log({
         action: 'QUERY',
-        entity: 'Location',
+        entityType: 'Location',
         result: 'error',
         severity: 'warning',
         message: `Tentativa de buscar localização inexistente: ${req.params.id}`,
@@ -157,8 +157,8 @@ router.get('/:id', authenticate, async (req, res) => {
     auditLogger.init(db);
     await auditLogger.log({
       action: 'QUERY',
-      entity: 'Location',
-      entityID: req.params.id,
+      entityType: 'Location',
+      entityId: req.params.id,
       result: 'success',
       severity: 'info',
       message: 'Localização consultada',
@@ -246,8 +246,8 @@ router.post('/', authenticate, requirePermission('createSample'), async (req, re
       auditLogger.init(db);
       await auditLogger.log({
         action: 'CREATE',
-        entity: 'Location',
-        entityID: result.insertedId.toString(),
+        entityType: 'Location',
+        entityId: result.insertedId.toString(),
         result: 'success',
         severity: 'info',
         message: 'Localização criada',
@@ -335,8 +335,8 @@ router.put('/:id', authenticate, requirePermission('createSample'), async (req, 
       auditLogger.init(db);
       await auditLogger.log({
         action: 'UPDATE',
-        entity: 'Location',
-        entityID: req.params.id,
+        entityType: 'Location',
+        entityId: req.params.id,
         result: 'success',
         severity: 'info',
         message: 'Localização atualizada',
@@ -380,8 +380,8 @@ router.delete('/:id', authenticate, requirePermission('createSample'), async (re
       auditLogger.init(db);
       await auditLogger.log({
         action: 'DELETE',
-        entity: 'Location',
-        entityID: req.params.id,
+        entityType: 'Location',
+        entityId: req.params.id,
         result: 'success',
         severity: 'warning',
         message: 'Localização deletada',

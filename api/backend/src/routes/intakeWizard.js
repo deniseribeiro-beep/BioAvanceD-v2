@@ -448,11 +448,8 @@ async function handleIntakeWizard(req, res) {
     auditLogger.init(db);
     await auditLogger.log({
       action: 'PATIENT_MATCH_UPSERT',
-      entity: 'Patient',
-      entityID: matchOutcome?.patient?.participantId || null,
-      resourceType: 'Patient',
-      resourceId: matchOutcome?.patient?.participantId || null,
-      status: 'success',
+      entityType: 'Patient',
+      entityId: matchOutcome?.patient?.participantId || null,
       result: 'success',
       severity: 'info',
       message: matchOutcome?.created
@@ -621,11 +618,8 @@ router.get('/patient-match', async (req, res) => {
     auditLogger.init(db);
     await auditLogger.log({
       action: 'PATIENT_MATCH_UPSERT',
-      entity: 'Patient',
-      entityID: patient?.patientID || patientID || null,
-      resourceType: 'Patient',
-      resourceId: patient?.patientID || patientID || null,
-      status: 'success',
+      entityType: 'Patient',
+      entityId: patient?.patientID || patientID || null,
       result: 'success',
       severity: 'info',
       message: patient

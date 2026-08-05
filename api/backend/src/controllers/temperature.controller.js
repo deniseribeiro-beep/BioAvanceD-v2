@@ -28,8 +28,8 @@ class TemperatureController {
         auditLogger.init(db);
         await auditLogger.log({
           action: 'CREATE',
-          entity: 'Temperature',
-          entityID: temperature._id.toString(),
+          entityType: 'Temperature',
+          entityId: temperature._id.toString(),
           result: 'success',
           severity: 'info',
           message: `Leitura de temperatura registrada: ${temperature.temperatureValue}${temperature.temperatureUnit}`,

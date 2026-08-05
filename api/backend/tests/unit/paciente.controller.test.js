@@ -154,7 +154,7 @@ describe('paciente.controller', () => {
 
       await controller.cadastrar(req, res);
 
-      expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({ action: 'CREATE', entity: 'Patient' }));
+      expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({ action: 'CREATE', entityType: 'Patient' }));
     });
 
     it('maps duplicate-patient error message to 409', async () => {
@@ -470,7 +470,7 @@ describe('paciente.controller', () => {
       await freshController.atualizar(req, res);
 
       expect(complianceSpy).toHaveBeenCalledWith(req.app.locals.db, '12345678');
-      expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({ action: 'UPDATE', entityID: '12345678' }));
+      expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({ action: 'UPDATE', entityId: '12345678' }));
       expect(res.status).toHaveBeenCalledWith(200);
     });
 

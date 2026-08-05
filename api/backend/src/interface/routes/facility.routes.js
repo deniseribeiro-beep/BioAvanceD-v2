@@ -98,8 +98,8 @@ router.post('/', authenticate, requirePermission('createPatient'), async (req, r
     auditLogger.init(db);
     await auditLogger.log({
       action: 'CREATE',
-      entity: 'Facility',
-      entityID: result.insertedId.toString(),
+      entityType: 'Facility',
+      entityId: result.insertedId.toString(),
       result: 'success',
       severity: 'info',
       message: 'Facility criada',
@@ -153,8 +153,8 @@ router.put('/:id', authenticate, requirePermission('createPatient'), async (req,
     auditLogger.init(db);
     await auditLogger.log({
       action: 'UPDATE',
-      entity: 'Facility',
-      entityID: req.params.id,
+      entityType: 'Facility',
+      entityId: req.params.id,
       result: 'success',
       severity: 'info',
       message: 'Facility atualizada',
@@ -201,8 +201,8 @@ router.delete('/:id', authenticate, requirePermission('createPatient'), async (r
     auditLogger.init(db);
     await auditLogger.log({
       action: 'DELETE',
-      entity: 'Facility',
-      entityID: req.params.id,
+      entityType: 'Facility',
+      entityId: req.params.id,
       result: 'success',
       severity: 'warning',
       message: 'Facility removida',

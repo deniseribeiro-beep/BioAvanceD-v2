@@ -135,7 +135,7 @@ router.post('/keepalive', authenticate, async (req, res) => {
           auditLogger.init(db);
           await auditLogger.log({
             action: 'SESSION_EXPIRED',
-            entity: 'Authentication',
+            entityType: 'Authentication',
             result: 'error',
             severity: 'warning',
             message: (req.t && req.t('auth.sessionExpiredMessage')) || 'Sessão expirada durante keepalive',
@@ -248,7 +248,7 @@ router.get('/verify', authenticate, async (req, res) => {
       auditLogger.init(db);
       await auditLogger.log({
         action: 'TOKEN_VERIFY_FAILED',
-        entity: 'Authentication',
+        entityType: 'Authentication',
         result: 'error',
         severity: 'warning',
         message: (req.t && req.t('auth.tokenVerifyFailed')) || 'Token verificado mas usuário não encontrado',

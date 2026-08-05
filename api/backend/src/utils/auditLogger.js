@@ -219,12 +219,10 @@ class AuditLogger {
 
     const {
       action,           // Tipo de ação (LOGIN, CREATE, UPDATE, etc.)
-      entity,           // Entidade afetada (Patient, Sample, User, etc.)
-      entityID,         // ID da entidade (sem dados sensíveis)
-      resourceType,     // Tipo canônico de recurso
-      resourceId,       // Identificador canônico de recurso
-      status,           // Status canônico (success, warning, failure, started)
+      entityType,       // Entidade afetada, nome canônico (Patient, Sample, User, etc.)
+      entityId,         // Identificador canônico da entidade (sem dados sensíveis)
       result,           // 'success', 'error', 'warning'
+      occurredAt,       // Momento canônico do evento (opcional, default: agora)
       severity,         // 'info', 'warning', 'error', 'critical'
       message,          // Mensagem detalhada
       payload,          // Payload relevante (sanitizado)
@@ -232,6 +230,8 @@ class AuditLogger {
       req,              // Requisição HTTP (opcional)
       module            // Módulo de origem (opcional, será determinado automaticamente)
     } = options;
+    const entity = entityType;
+    const entityID = entityId;
 
     try {
       const requestInfo = this.extractRequestInfo(req);
@@ -244,16 +244,18 @@ class AuditLogger {
       // Extrai stack de erro se houver
       const errorStack = error ? this.extractErrorStack(error) : null;
 
+      const eventTime = occurredAt ? new Date(occurredAt) : new Date();
+
       const logData = {
         userID: userInfo.userID || 'USR-SYSTEM',
         userName: userInfo.userName || 'USR-SYSTEM', // Já anonimizado pelo extractUserInfo
         action: (action || 'LOG').toString().toUpperCase(),
-        resourceType: resourceType || formatEntity(entity),
-        resourceId: resourceId || entityID || null,
-        status: status || result || 'success',
+        resourceType: formatEntity(entity),
+        resourceId: entityID || null,
+        status: result || 'success',
         entity: formatEntity(entity),
         entityID: entityID || null,
-        result: status || result || 'success',
+        result: result || 'success',
         severity: severity || 'info',
         sourceIP: requestInfo.ip, // IP principal para compatibilidade
         ipSource: requestInfo.ip, // Alias para compatibilidade
@@ -262,8 +264,8 @@ class AuditLogger {
         message: message || `${action} em ${entity}`,
         payload: sanitizedPayload,
         errorStack: errorStack,
-        timestamp: new Date(),
-        dateTime: new Date(),
+        timestamp: eventTime,
+        dateTime: eventTime,
         metadata: {
           // Dados de rastreamento completos
           tracking: {
@@ -308,7 +310,7 @@ class AuditLogger {
   async logLogin(req, success, error = null) {
     await this.log({
       action: 'LOGIN',
-      entity: 'Authentication',
+      entityType: 'Authentication',
       result: success ? 'success' : 'error',
       severity: success ? 'info' : 'warning',
       message: success 
@@ -323,7 +325,7 @@ class AuditLogger {
   async logLogout(req) {
     await this.log({
       action: 'LOGOUT',
-      entity: 'Authentication',
+      entityType: 'Authentication',
       result: 'success',
       severity: 'info',
       message: 'Logout realizado',
@@ -335,8 +337,8 @@ class AuditLogger {
   async logCreate(req, entity, entityID, payload = null) {
     await this.log({
       action: 'CREATE',
-      entity: entity,
-      entityID: entityID,
+      entityType: entity,
+      entityId: entityID,
       result: 'success',
       severity: 'info',
       message: `${entity} criado com sucesso`,
@@ -348,8 +350,8 @@ class AuditLogger {
   async logUpdate(req, entity, entityID, payload = null) {
     await this.log({
       action: 'UPDATE',
-      entity: entity,
-      entityID: entityID,
+      entityType: entity,
+      entityId: entityID,
       result: 'success',
       severity: 'info',
       message: `${entity} atualizado com sucesso`,
@@ -361,8 +363,8 @@ class AuditLogger {
   async logDelete(req, entity, entityID) {
     await this.log({
       action: 'DELETE',
-      entity: entity,
-      entityID: entityID,
+      entityType: entity,
+      entityId: entityID,
       result: 'success',
       severity: 'warning',
       message: `${entity} deletado`,
@@ -386,7 +388,7 @@ class AuditLogger {
 
     await this.log({
       action: 'IMPORT',
-      entity: entity,
+      entityType: entity,
       result: errors > 0 ? 'warning' : (result === 'pending' ? 'info' : 'success'),
       severity: errors > 0 ? 'warning' : (result === 'pending' ? 'info' : 'info'),
       message: `Importação de ${entity}: ${success}/${total} registros importados${errors > 0 ? ` com ${errors} erro(s)` : ''}${context.jobID ? ` (Job: ${context.jobID})` : ''}`,
@@ -399,7 +401,7 @@ class AuditLogger {
   async logError(req, entity, error, context = null) {
     await this.log({
       action: 'ERROR',
-      entity: entity || 'Sistema',
+      entityType: entity || 'Sistema',
       result: 'error',
       severity: 'error',
       message: `Erro: ${error?.message || 'Erro desconhecido'}`,
@@ -412,7 +414,7 @@ class AuditLogger {
   async logLanguageChange(req, language) {
     await this.log({
       action: 'CONFIG',
-      entity: 'Settings',
+      entityType: 'Settings',
       result: 'success',
       severity: 'info',
       message: `Idioma alterado para ${language}`,
@@ -425,8 +427,8 @@ class AuditLogger {
   async logPermissionChange(req, targetUser, changes) {
     await this.log({
       action: 'UPDATE',
-      entity: 'User',
-      entityID: targetUser,
+      entityType: 'User',
+      entityId: targetUser,
       result: 'success',
       severity: 'info',
       message: 'Permissões ou cargo alterados',
@@ -439,7 +441,7 @@ class AuditLogger {
   async logAssistant(req, question, response) {
     await this.log({
       action: 'QUERY',
-      entity: 'Assistant',
+      entityType: 'Assistant',
       result: 'success',
       severity: 'info',
       message: 'Consulta ao sistema',

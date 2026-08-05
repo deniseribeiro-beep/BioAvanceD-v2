@@ -30,7 +30,7 @@ class LogModel {
   static validate(data) {
     const errors = [];
 
-    const normalizedResourceType = String(data.resourceType || data.entity || '').trim();
+    const normalizedResourceType = String(data.entityType || data.resourceType || data.entity || '').trim();
 
     if (!data.userID && !data.userId) {
       errors.push('userID é obrigatório');
@@ -69,10 +69,10 @@ class LogModel {
   }
 
   static create(data, req = null) {
-    const timestamp = data.dateTime || data.timestamp || new Date();
-    const normalizedResourceType = String(data.resourceType || data.entity || 'Sistema').trim() || 'Sistema';
-    const normalizedResourceId = data.resourceId || data.entityID || null;
-    const normalizedStatus = data.status || data.result || 'success';
+    const timestamp = data.occurredAt || data.dateTime || data.timestamp || new Date();
+    const normalizedResourceType = String(data.entityType || data.resourceType || data.entity || 'Sistema').trim() || 'Sistema';
+    const normalizedResourceId = data.entityId || data.resourceId || data.entityID || null;
+    const normalizedStatus = data.result || data.status || 'success';
     const reqHeaders = req?.headers || {};
     
     // Normaliza e valida a entidade

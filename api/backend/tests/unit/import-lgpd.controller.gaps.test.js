@@ -255,7 +255,6 @@ describe('import-lgpd.controller gaps', () => {
       await controller.importPatientsSmart(req, res);
 
       const finishCall = logSpy.mock.calls.find(([payload]) => payload.payload?.stage === 'finish');
-      expect(finishCall[0].status).toBe('warning');
       expect(finishCall[0].result).toBe('warning');
       expect(finishCall[0].severity).toBe('warning');
       expect(finishCall[0].message).toContain('inconsistências');
@@ -306,7 +305,6 @@ describe('import-lgpd.controller gaps', () => {
 
       expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({
         action: 'SMART_IMPORT_EXECUTION',
-        status: 'failure',
         result: 'error'
       }));
       expect(cleanupSpy).toHaveBeenCalledWith(file.path);
@@ -491,7 +489,7 @@ describe('import-lgpd.controller gaps', () => {
     });
   });
 
-  describe('importPatientsSmart resourceId/mapping gaps', () => {
+  describe('importPatientsSmart entityId/mapping gaps', () => {
     it('accepts already-parsed object groupFields/mapping bodies without JSON.parse', async () => {
       const controller = require('../../src/controllers/import-lgpd.controller');
       const db = createDb();
@@ -520,7 +518,7 @@ describe('import-lgpd.controller gaps', () => {
       expect(res.status).toHaveBeenCalledWith(200);
     });
 
-    it('uses null resourceId in start/finish audit events when the file has no originalname', async () => {
+    it('uses null entityId in start/finish audit events when the file has no originalname', async () => {
       const controller = require('../../src/controllers/import-lgpd.controller');
       const db = createDb();
       db.__collection.insertOne.mockResolvedValue({ insertedId: 'report-1' });
@@ -541,11 +539,11 @@ describe('import-lgpd.controller gaps', () => {
 
       const startCall = logSpy.mock.calls.find(([p]) => p.payload?.stage === 'start');
       const finishCall = logSpy.mock.calls.find(([p]) => p.payload?.stage === 'finish');
-      expect(startCall[0].resourceId).toBeNull();
-      expect(finishCall[0].resourceId).toBeNull();
+      expect(startCall[0].entityId).toBeNull();
+      expect(finishCall[0].entityId).toBeNull();
     });
 
-    it('catch block: uses null resourceId and a default error message when the file has no originalname/message', async () => {
+    it('catch block: uses null entityId and a default error message when the file has no originalname/message', async () => {
       const controller = require('../../src/controllers/import-lgpd.controller');
       const db = createDb();
       const fs = require('fs');
@@ -566,7 +564,7 @@ describe('import-lgpd.controller gaps', () => {
       await controller.importPatientsSmart(req, res);
 
       expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({
-        resourceId: null,
+        entityId: null,
         payload: expect.objectContaining({ error: 'Erro desconhecido' })
       }));
       expect(res.json).toHaveBeenCalledWith({

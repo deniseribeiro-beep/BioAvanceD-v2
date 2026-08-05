@@ -80,8 +80,8 @@ class RetentionSweepService {
       auditLogger.init(db);
       await auditLogger.log({
         action: 'RETENTION_SWEEP',
-        entity: 'RetentionPolicy',
-        entityID: result.policyId,
+        entityType: 'RetentionPolicy',
+        entityId: result.policyId,
         result: 'success',
         severity: 'critical',
         message: `Sweep de retenção executado (política ${policy.version})`,
