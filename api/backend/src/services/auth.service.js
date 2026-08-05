@@ -8,7 +8,7 @@ const UserModel = require('../models/User');
 const LogModel = require('../models/Log');
 const logger = require('../utils/logger');
 const sessionService = require('./session.service');
-const { grantRoleForAccessType, isAdministrator, resolveRoleDisplayName, resolveUserHierarchyLevel } = require('./rbac-assignment.service');
+const { grantRoleForAccessType, isAdministrator, resolveRoleDisplayName, resolveUserHierarchyLevel, ROLE_CODE_BY_ACCESS_TYPE } = require('./rbac-assignment.service');
 
 const ACCESS_TOKEN_TTL = '15m';
 const REFRESH_TOKEN_TTL = '7d';
@@ -144,6 +144,14 @@ class AuthService {
       // document itself, and no longer a UserModel.create() output field
       // as of #432's schema drop.
       const resolvedAccessType = userData.accessType || 2;
+
+      // #435: reject an unrecognized accessType before any write — without
+      // this, only grantRoleForAccessType's lookup would catch it, and by
+      // then insertOne has already run, orphaning a User document with no
+      // role assignment.
+      if (!ROLE_CODE_BY_ACCESS_TYPE[Number(resolvedAccessType)]) {
+        throw new Error(`accessType inválido: ${resolvedAccessType}`);
+      }
 
       // Para Administrador, MFA é opcional e pode ser setado manualmente
       // Se não foi fornecido explicitamente, desabilita por padrão
