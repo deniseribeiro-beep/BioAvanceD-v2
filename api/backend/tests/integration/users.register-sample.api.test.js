@@ -13,6 +13,7 @@ const sessionService = require('../../src/services/session.service');
 const env = require('../../src/config/env');
 const { createCollectionMock, createDbMock } = require('../factories/db.factory');
 const { buildSamplePayload } = require('../factories/sample.factory');
+const { buildRbacCollections } = require('../factories/rbac.factory');
 
 function createAuthToken() {
   return jwt.sign(
@@ -49,6 +50,7 @@ describe('POST /api/users/register-sample - paridade de contrato com /api/sample
       logs: createCollectionMock({
         insertOne: vi.fn().mockResolvedValue({ insertedId: 'log-qa' }),
       }),
+      ...buildRbacCollections([{ userAccountId: 'qa-user-3', accessType: 2 }]),
     });
   }
 

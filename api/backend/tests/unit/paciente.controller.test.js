@@ -8,6 +8,8 @@ const patientService = require('../../src/services/patient.service');
 const biomarkerObservationService = require('../../src/services/biomarker-observation.service');
 const auditLogger = require('../../src/utils/auditLogger');
 const sampleComplianceSync = require('../../src/services/sampleComplianceSync.service');
+const { createDbMock } = require('../factories/db.factory');
+const { buildRbacCollections } = require('../factories/rbac.factory');
 
 const controllerPath = require.resolve('../../src/controllers/paciente.controller');
 
@@ -235,10 +237,10 @@ describe('paciente.controller', () => {
         }),
         countDocuments: vi.fn().mockResolvedValue(1)
       };
-      const db = { collection: vi.fn().mockReturnValue(patientsCollection) };
+      const db = createDbMock({ patients: patientsCollection });
       vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
       vi.spyOn(auditLogger, 'log').mockResolvedValue();
-      const req = createReq({ app: { locals: { db } }, user: { accessType: 1 } });
+      const req = createReq({ app: { locals: { db } }, user: { accessType: 1, userID: 'operational-user' } });
       const res = createRes();
 
       await controller.listar(req, res);
@@ -261,10 +263,10 @@ describe('paciente.controller', () => {
         }),
         countDocuments: vi.fn().mockResolvedValue(1)
       };
-      const db = { collection: vi.fn().mockReturnValue(patientsCollection) };
+      const db = createDbMock({ patients: patientsCollection });
       vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
       vi.spyOn(auditLogger, 'log').mockResolvedValue();
-      const req = createReq({ app: { locals: { db } }, user: { accessType: 1 } });
+      const req = createReq({ app: { locals: { db } }, user: { accessType: 1, userID: 'operational-user' } });
       const res = createRes();
 
       await controller.listar(req, res);
@@ -282,7 +284,8 @@ describe('paciente.controller', () => {
       vi.spyOn(patientService, 'listPatients').mockResolvedValue({ patients: [{ patientID: '1' }], total: 1 });
       vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
       vi.spyOn(auditLogger, 'log').mockResolvedValue();
-      const req = createReq({ user: { accessType: 4 }, query: { patientName: 'Foo' } });
+      const db = createDbMock({ ...buildRbacCollections([{ userAccountId: 'cadastro-user', accessType: 4 }]) });
+      const req = createReq({ app: { locals: { db } }, user: { accessType: 4, userID: 'cadastro-user' }, query: { patientName: 'Foo' } });
       const res = createRes();
 
       await controller.listar(req, res);
@@ -328,7 +331,8 @@ describe('paciente.controller', () => {
       vi.spyOn(patientService, 'getPatient').mockResolvedValue({ participantId: '12345678', patientName: 'Foo' });
       vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
       vi.spyOn(auditLogger, 'log').mockResolvedValue();
-      const req = createReq({ params: { id: '12345678' }, user: { accessType: 1 } });
+      const db = createDbMock({});
+      const req = createReq({ app: { locals: { db } }, params: { id: '12345678' }, user: { accessType: 1, userID: 'operational-user' } });
       const res = createRes();
 
       await controller.buscar(req, res);
@@ -345,7 +349,8 @@ describe('paciente.controller', () => {
       vi.spyOn(patientService, 'getPatient').mockResolvedValue({ patientID: '12345678', name: 'Foo' });
       vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
       vi.spyOn(auditLogger, 'log').mockResolvedValue();
-      const req = createReq({ params: { id: '12345678' }, user: { accessType: 4 } });
+      const db = createDbMock({ ...buildRbacCollections([{ userAccountId: 'cadastro-user', accessType: 4 }]) });
+      const req = createReq({ app: { locals: { db } }, params: { id: '12345678' }, user: { accessType: 4, userID: 'cadastro-user' } });
       const res = createRes();
 
       await controller.buscar(req, res);
@@ -729,7 +734,8 @@ describe('paciente.controller', () => {
         limit: 50,
         skip: 0
       });
-      const req = createReq({ params: { id: '12345678' }, user: { accessType: 1 } });
+      const db = createDbMock({});
+      const req = createReq({ app: { locals: { db } }, params: { id: '12345678' }, user: { accessType: 1, userID: 'operational-user' } });
       const res = createRes();
 
       await controller.listBiomarkerObservations(req, res);
@@ -746,7 +752,8 @@ describe('paciente.controller', () => {
         limit: 50,
         skip: 0
       });
-      const req = createReq({ params: { id: '12345678' }, user: { accessType: 4 } });
+      const db = createDbMock({ ...buildRbacCollections([{ userAccountId: 'cadastro-user', accessType: 4 }]) });
+      const req = createReq({ app: { locals: { db } }, params: { id: '12345678' }, user: { accessType: 4, userID: 'cadastro-user' } });
       const res = createRes();
 
       await controller.listBiomarkerObservations(req, res);

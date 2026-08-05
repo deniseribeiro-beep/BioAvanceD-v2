@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+const { buildMutableRbacCollections } = require('../factories/rbac.factory');
 
 const bcrypt = require('bcryptjs');
 const { createFirstAdmin, requireBootstrapEnv } = require('../../src/scripts/createFirstAdmin');
@@ -13,6 +16,10 @@ function createMockDb(usersCount = 0) {
   const systemBootstrap = {
     updateOne: vi.fn().mockResolvedValue({ upsertedCount: 1 }),
   };
+  // #421: createFirstAdmin now seeds the RBAC catalog (idempotent) and
+  // grants the admin's UserRoleAssignment atomically with user creation —
+  // both need a mutable roles/permissions/userRoleAssignments backing.
+  const rbacCollections = buildMutableRbacCollections();
 
   return {
     users,
@@ -21,6 +28,7 @@ function createMockDb(usersCount = 0) {
       collection: vi.fn((name) => {
         if (name === 'users') return users;
         if (name === 'systemBootstrap') return systemBootstrap;
+        if (rbacCollections[name]) return rbacCollections[name];
         throw new Error(`Unexpected collection ${name}`);
       }),
     },

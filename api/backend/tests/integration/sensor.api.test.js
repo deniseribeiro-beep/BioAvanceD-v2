@@ -9,10 +9,11 @@ const app = require('../../app');
 const sessionService = require('../../src/services/session.service');
 const sensorService = require('../../src/services/sensor.service');
 const { createDbMock } = require('../factories/db.factory');
+const { buildRbacCollections } = require('../factories/rbac.factory');
 
 function makeToken(accessType = 2) {
   return jwt.sign(
-    { userID: 'qa-tecnico-1', accessType, roleName: 'Técnico', name: 'QA Técnico', mfaVerified: true },
+    { userID: `qa-tecnico-${accessType}`, accessType, roleName: 'Técnico', name: 'QA Técnico', mfaVerified: true },
     process.env.JWT_SECRET,
     { expiresIn: '1h' }
   );
@@ -27,7 +28,12 @@ const FAKE_SENSOR = { _id: '507f1f77bcf86cd799439011', sensorId: 'S-001', type: 
 
 beforeEach(() => {
   givenSession();
-  app.locals.db = createDbMock({});
+  app.locals.db = createDbMock({
+    ...buildRbacCollections([
+      { userAccountId: 'qa-tecnico-1', accessType: 1 },
+      { userAccountId: 'qa-tecnico-2', accessType: 2 }
+    ])
+  });
 });
 afterEach(() => { vi.restoreAllMocks(); });
 

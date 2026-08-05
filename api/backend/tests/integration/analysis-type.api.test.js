@@ -8,14 +8,24 @@ process.env.JWT_SECRET = process.env.JWT_SECRET || 'vitest-secret-key';
 const app = require('../../app');
 const sessionService = require('../../src/services/session.service');
 const { createCollectionMock, createDbMock } = require('../factories/db.factory');
+const { buildRbacCollections } = require('../factories/rbac.factory');
 
+// #421: enforcement resolves permissions purely by req.user.userID (via
+// UserRoleAssignment), ignoring accessType/roleName carried in the JWT.
+// Different accessType levels therefore need distinct userIDs so each one
+// resolves to the correct seeded role.
 function makeToken(accessType = 4) {
   return jwt.sign(
-    { userID: 'qa-admin-1', accessType, roleName: 'Administrador', name: 'QA Admin', mfaVerified: true },
+    { userID: `qa-${accessType}`, accessType, roleName: accessType === 4 ? 'Administrador' : 'Técnico', name: 'QA', mfaVerified: true },
     process.env.JWT_SECRET,
     { expiresIn: '1h' }
   );
 }
+
+const rbacCollections = buildRbacCollections([
+  { userAccountId: 'qa-4', accessType: 4 },
+  { userAccountId: 'qa-2', accessType: 2 },
+]);
 
 function givenSession() {
   vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 'session-1' } });
@@ -35,7 +45,7 @@ describe('GET /api/analysis-types', () => {
       limit: vi.fn().mockReturnThis(),
       project: vi.fn().mockReturnThis(),
     }))});
-    app.locals.db = createDbMock({ analysis_types: coll, analysistypes: coll });
+    app.locals.db = createDbMock({ analysis_types: coll, analysistypes: coll, ...rbacCollections });
 
     const response = await request(app)
       .get('/api/analysis-types')
@@ -60,7 +70,7 @@ describe('POST /api/analysis-types', () => {
       findOne: vi.fn().mockResolvedValue(null),
       insertOne: vi.fn().mockResolvedValue({ insertedId: 'new-type-id' }),
     });
-    app.locals.db = createDbMock({ analysis_types: coll, analysistypes: coll });
+    app.locals.db = createDbMock({ analysis_types: coll, analysistypes: coll, ...rbacCollections });
 
     const response = await request(app)
       .post('/api/analysis-types')

@@ -74,7 +74,7 @@ router.post('/register',
         }
       }
 
-      const user = await authService.registerUser(db, req.body);
+      const user = await authService.registerUser(db, req.body, req.user?.userID);
 
       // Registra log de criação de usuário
       if (req.user) {
@@ -355,6 +355,17 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
     const changes = {};
     if (req.body.accessType && req.body.accessType !== targetUser.accessType) {
       changes.accessType = { from: targetUser.accessType, to: req.body.accessType };
+
+      // #421: enforcement reads UserRoleAssignment exclusively — a
+      // changed accessType must revoke the old assignment and grant the
+      // new one in the same request, or the user keeps the old role's
+      // permissions until this happens.
+      const { changeUserRole } = require('../../services/rbac-assignment.service');
+      await changeUserRole(db, {
+        userAccountId: targetUser._id.toString(),
+        accessType: req.body.accessType,
+        changedBy: req.user?.userID,
+      });
     }
     if (req.body.status && req.body.status !== targetUser.status) {
       changes.status = { from: targetUser.status, to: req.body.status };

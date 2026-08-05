@@ -9,6 +9,7 @@ const app = require('../../app');
 const sessionService = require('../../src/services/session.service');
 const cidService = require('../../src/services/cid.service');
 const { createCollectionMock, createDbMock } = require('../factories/db.factory');
+const { buildRbacCollections } = require('../factories/rbac.factory');
 
 function makeToken(accessType = 4) {
   return jwt.sign(
@@ -16,6 +17,17 @@ function makeToken(accessType = 4) {
     process.env.JWT_SECRET,
     { expiresIn: '1h' }
   );
+}
+
+// #421: enforcement resolves permissions via UserRoleAssignment -> Role ->
+// Permission, keyed by userID — reproduce a real assignment matching
+// whichever accessType the test's token carries so the mock behaves exactly
+// like the old accessType-based checks did.
+function dbWithRbac(collections = {}, accessType = 4) {
+  return createDbMock({
+    ...collections,
+    ...buildRbacCollections([{ userAccountId: 'qa-1', accessType }]),
+  });
 }
 
 function givenSession() {
@@ -35,7 +47,7 @@ describe('GET /api/cids', () => {
   });
 
   it('returns 403 for non-admin (requireRole(4))', async () => {
-    app.locals.db = createDbMock({});
+    app.locals.db = dbWithRbac({}, 2);
     const res = await request(app).get('/api/cids').set('Authorization', `Bearer ${makeToken(2)}`);
     expect(res.status).toBe(403);
   });
@@ -47,7 +59,7 @@ describe('GET /api/cids', () => {
         toArray: vi.fn().mockResolvedValue([FAKE_CID]),
       }),
     });
-    app.locals.db = createDbMock({ cids: coll });
+    app.locals.db = dbWithRbac({ cids: coll }, 4);
 
     const res = await request(app).get('/api/cids').set('Authorization', `Bearer ${makeToken(4)}`);
     expect(res.status).toBe(200);
@@ -63,7 +75,7 @@ describe('POST /api/cids (method not allowed)', () => {
   });
 
   it('returns 405 for admin (read-only endpoint)', async () => {
-    app.locals.db = createDbMock({});
+    app.locals.db = dbWithRbac({}, 4);
     const res = await request(app)
       .post('/api/cids')
       .set('Authorization', `Bearer ${makeToken(4)}`)
@@ -74,7 +86,7 @@ describe('POST /api/cids (method not allowed)', () => {
 
 describe('PUT /api/cids/:id (method not allowed)', () => {
   it('returns 405 for admin', async () => {
-    app.locals.db = createDbMock({});
+    app.locals.db = dbWithRbac({}, 4);
     const res = await request(app)
       .put('/api/cids/507f1f77bcf86cd799439011')
       .set('Authorization', `Bearer ${makeToken(4)}`)
@@ -90,7 +102,7 @@ describe('GET /api/cids/search', () => {
   });
 
   it('returns an empty paginated envelope for a query shorter than 2 chars, without calling the service', async () => {
-    app.locals.db = createDbMock({});
+    app.locals.db = dbWithRbac({}, 2);
     const spy = vi.spyOn(cidService, 'searchPaginated');
 
     const res = await request(app)
@@ -107,7 +119,7 @@ describe('GET /api/cids/search', () => {
   });
 
   it('defaults page/limit and trims the query when delegating to the service', async () => {
-    app.locals.db = createDbMock({});
+    app.locals.db = dbWithRbac({}, 2);
     const fakeResult = {
       items: [FAKE_CID],
       pagination: { page: 1, limit: 10, total: 1, totalPages: 1, hasNext: false, hasPrev: false, query: 'colera' },
@@ -125,7 +137,7 @@ describe('GET /api/cids/search', () => {
   });
 
   it('returns 500 with the error message when the service throws', async () => {
-    app.locals.db = createDbMock({});
+    app.locals.db = dbWithRbac({}, 2);
     vi.spyOn(cidService, 'searchPaginated').mockRejectedValue(new Error('boom'));
 
     const res = await request(app)

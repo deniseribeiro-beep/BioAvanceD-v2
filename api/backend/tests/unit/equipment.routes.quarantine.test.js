@@ -3,6 +3,9 @@ import express from 'express';
 import request from 'supertest';
 import jwt from 'jsonwebtoken';
 import router from '../../src/interface/routes/equipment.routes.js';
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+const { buildRbacCollections } = require('../factories/rbac.factory');
 
 const isQuarantineTriggerStatusMock = vi.fn();
 const quarantineByEquipmentStatusMock = vi.fn();
@@ -62,12 +65,14 @@ describe('equipment.routes quarantine flow', () => {
     };
 
     const startSession = vi.fn();
+    const rbacCollections = buildRbacCollections([{ userAccountId: 'admin-test', accessType: 4 }]);
     const db = {
       collection: vi.fn((name) => {
         if (name === 'equipment') return equipmentCollection;
         if (name === 'sessions') return sessionsCollection;
         if (name === 'users') return usersCollection;
         if (name === 'logs') return logsCollection;
+        if (rbacCollections[name]) return rbacCollections[name];
         return logsCollection;
       }),
       client: { startSession }
@@ -128,12 +133,14 @@ describe('equipment.routes quarantine flow', () => {
     const session = { withTransaction, endSession };
     const startSession = vi.fn(() => session);
 
+    const rbacCollections = buildRbacCollections([{ userAccountId: 'admin-test', accessType: 4 }]);
     const db = {
       collection: vi.fn((name) => {
         if (name === 'equipment') return equipmentCollection;
         if (name === 'sessions') return sessionsCollection;
         if (name === 'users') return usersCollection;
         if (name === 'logs') return logsCollection;
+        if (rbacCollections[name]) return rbacCollections[name];
         return logsCollection;
       }),
       client: { startSession }

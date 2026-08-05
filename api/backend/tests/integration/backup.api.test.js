@@ -12,10 +12,17 @@ const app = require('../../app');
 const sessionService = require('../../src/services/session.service');
 const backupService = require('../../src/services/backup.service');
 const { createDbMock } = require('../factories/db.factory');
+const { buildRbacCollections } = require('../factories/rbac.factory');
 
+// #421: enforcement resolves permissions via UserRoleAssignment -> Role ->
+// Permission, keyed by userID — not accessType off the JWT directly. Give
+// the admin userID a real accessType-4 assignment (backup routes are
+// admin-only); the "non-admin" token below uses a distinct userID with no
+// assignment at all, so it's denied regardless of its accessType claim.
 function makeToken(accessType = 4) {
+  const userID = accessType === 4 ? 'qa-admin-1' : 'qa-user-non-admin';
   return jwt.sign(
-    { userID: 'qa-admin-1', accessType, roleName: 'Administrador', name: 'QA Admin', mfaVerified: true },
+    { userID, accessType, roleName: accessType === 4 ? 'Administrador' : 'Técnico', name: 'QA Admin', mfaVerified: true },
     process.env.JWT_SECRET,
     { expiresIn: '1h' }
   );
@@ -28,7 +35,9 @@ function givenSession() {
 
 beforeEach(() => {
   givenSession();
-  app.locals.db = createDbMock({});
+  app.locals.db = createDbMock({
+    ...buildRbacCollections([{ userAccountId: 'qa-admin-1', accessType: 4 }]),
+  });
 });
 afterEach(() => { vi.restoreAllMocks(); });
 

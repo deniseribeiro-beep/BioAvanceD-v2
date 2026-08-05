@@ -8,14 +8,24 @@ process.env.JWT_SECRET = process.env.JWT_SECRET || 'vitest-secret-key';
 const app = require('../../app');
 const sessionService = require('../../src/services/session.service');
 const { createCollectionMock, createDbMock } = require('../factories/db.factory');
+const { buildRbacCollections } = require('../factories/rbac.factory');
 
+// #421: enforcement resolves permissions purely by req.user.userID (via
+// UserRoleAssignment), ignoring accessType/roleName carried in the JWT.
+// Different accessType levels therefore need distinct userIDs so each one
+// resolves to the correct seeded role.
 function makeToken(accessType = 4) {
   return jwt.sign(
-    { userID: 'qa-1', accessType, roleName: accessType >= 3 ? 'Coordenador' : 'Técnico', name: 'QA', mfaVerified: true },
+    { userID: `qa-${accessType}`, accessType, roleName: accessType >= 3 ? 'Coordenador' : 'Técnico', name: 'QA', mfaVerified: true },
     process.env.JWT_SECRET,
     { expiresIn: '1h' }
   );
 }
+
+const rbacCollections = buildRbacCollections([
+  { userAccountId: 'qa-2', accessType: 2 },
+  { userAccountId: 'qa-4', accessType: 4 },
+]);
 
 function givenSession() {
   vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 'sess-1' } });
@@ -36,7 +46,7 @@ describe('GET /api/access', () => {
 
   it('returns access list for authenticated user', async () => {
     const coll = createCollectionMock({ find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([FAKE_ACCESS]) }) });
-    app.locals.db = createDbMock({ access: coll });
+    app.locals.db = createDbMock({ access: coll, ...rbacCollections });
 
     const res = await request(app).get('/api/access').set('Authorization', `Bearer ${makeToken(2)}`);
     expect(res.status).toBe(200);
@@ -52,7 +62,7 @@ describe('GET /api/access/:id', () => {
 
   it('returns 404 when not found', async () => {
     const coll = createCollectionMock({ findOne: vi.fn().mockResolvedValue(null) });
-    app.locals.db = createDbMock({ access: coll });
+    app.locals.db = createDbMock({ access: coll, ...rbacCollections });
 
     const res = await request(app)
       .get('/api/access/507f1f77bcf86cd799439011')
@@ -62,7 +72,7 @@ describe('GET /api/access/:id', () => {
 
   it('returns access by id', async () => {
     const coll = createCollectionMock({ findOne: vi.fn().mockResolvedValue(FAKE_ACCESS) });
-    app.locals.db = createDbMock({ access: coll });
+    app.locals.db = createDbMock({ access: coll, ...rbacCollections });
 
     const res = await request(app)
       .get('/api/access/507f1f77bcf86cd799439011')
@@ -79,7 +89,7 @@ describe('POST /api/access', () => {
   });
 
   it('returns 403 for Técnico (no createUser permission)', async () => {
-    app.locals.db = createDbMock({});
+    app.locals.db = createDbMock({ ...rbacCollections });
     const res = await request(app)
       .post('/api/access')
       .set('Authorization', `Bearer ${makeToken(2)}`)
@@ -88,7 +98,7 @@ describe('POST /api/access', () => {
   });
 
   it('returns 400 for invalid payload (missing reportID)', async () => {
-    app.locals.db = createDbMock({});
+    app.locals.db = createDbMock({ ...rbacCollections });
     const res = await request(app)
       .post('/api/access')
       .set('Authorization', `Bearer ${makeToken(4)}`)
@@ -100,7 +110,7 @@ describe('POST /api/access', () => {
     const coll = createCollectionMock({
       insertOne: vi.fn().mockResolvedValue({ insertedId: '507f1f77bcf86cd799439011' }),
     });
-    app.locals.db = createDbMock({ access: coll });
+    app.locals.db = createDbMock({ access: coll, ...rbacCollections });
 
     const res = await request(app)
       .post('/api/access')
@@ -118,7 +128,7 @@ describe('PUT /api/access/:id', () => {
   });
 
   it('returns 403 for Técnico', async () => {
-    app.locals.db = createDbMock({});
+    app.locals.db = createDbMock({ ...rbacCollections });
     const res = await request(app)
       .put('/api/access/507f1f77bcf86cd799439011')
       .set('Authorization', `Bearer ${makeToken(2)}`)
@@ -128,7 +138,7 @@ describe('PUT /api/access/:id', () => {
 
   it('returns 404 when not found', async () => {
     const coll = createCollectionMock({ updateOne: vi.fn().mockResolvedValue({ matchedCount: 0 }) });
-    app.locals.db = createDbMock({ access: coll });
+    app.locals.db = createDbMock({ access: coll, ...rbacCollections });
 
     const res = await request(app)
       .put('/api/access/507f1f77bcf86cd799439011')
@@ -139,7 +149,7 @@ describe('PUT /api/access/:id', () => {
 
   it('updates access for admin', async () => {
     const coll = createCollectionMock({ updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }) });
-    app.locals.db = createDbMock({ access: coll });
+    app.locals.db = createDbMock({ access: coll, ...rbacCollections });
 
     const res = await request(app)
       .put('/api/access/507f1f77bcf86cd799439011')
@@ -157,7 +167,7 @@ describe('DELETE /api/access/:id', () => {
   });
 
   it('returns 403 for Técnico', async () => {
-    app.locals.db = createDbMock({});
+    app.locals.db = createDbMock({ ...rbacCollections });
     const res = await request(app)
       .delete('/api/access/507f1f77bcf86cd799439011')
       .set('Authorization', `Bearer ${makeToken(2)}`);
@@ -166,7 +176,7 @@ describe('DELETE /api/access/:id', () => {
 
   it('returns 404 when not found', async () => {
     const coll = createCollectionMock({ deleteOne: vi.fn().mockResolvedValue({ deletedCount: 0 }) });
-    app.locals.db = createDbMock({ access: coll });
+    app.locals.db = createDbMock({ access: coll, ...rbacCollections });
 
     const res = await request(app)
       .delete('/api/access/507f1f77bcf86cd799439011')
@@ -176,7 +186,7 @@ describe('DELETE /api/access/:id', () => {
 
   it('deletes access for admin', async () => {
     const coll = createCollectionMock({ deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }) });
-    app.locals.db = createDbMock({ access: coll });
+    app.locals.db = createDbMock({ access: coll, ...rbacCollections });
 
     const res = await request(app)
       .delete('/api/access/507f1f77bcf86cd799439011')

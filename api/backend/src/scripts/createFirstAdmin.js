@@ -3,6 +3,8 @@ const bcrypt = require('bcryptjs');
 const { connectDB, closeConnection } = require('../database/mongo');
 const { validateStrength } = require('../services/password.service');
 const { generateAnonId } = require('../utils/userAnonymization');
+const { grantRoleForAccessType } = require('../services/rbac-assignment.service');
+const { seedRolesAndPermissions } = require('../services/rbac-catalog-seed.service');
 
 dotenv.config();
 
@@ -75,6 +77,15 @@ async function createFirstAdmin(options = {}) {
     const result = await users.insertOne(adminUser);
     const userId = result.insertedId.toString();
     const anonId = generateAnonId(userId);
+
+    // #421: bootstrap runs on an empty DB, so the RBAC catalog (#420) may
+    // not be seeded yet — ensure it before granting the assignment.
+    await seedRolesAndPermissions(db);
+    await grantRoleForAccessType(db, {
+      userAccountId: userId,
+      accessType: adminUser.accessType,
+      grantedBy: 'BOOTSTRAP_SYSTEM',
+    });
 
     await users.updateOne(
       { _id: result.insertedId },

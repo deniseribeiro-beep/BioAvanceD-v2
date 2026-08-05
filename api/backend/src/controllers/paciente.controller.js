@@ -193,10 +193,9 @@ class PacienteController {
 
       // MÓDULO OPERACIONAL vs MÓDULO DE CADASTRO (LGPD)
       // Verifica se usuário tem permissão de createPatient
-      const { permissions } = require('../infrastructure/middleware/rbac');
-      const userRole = req.user?.accessType || 1;
-      const hasCreatePatientPermission = permissions.createPatient?.includes(userRole) || false;
-      
+      const { userHasPermission } = require('../services/rbac-assignment.service');
+      const hasCreatePatientPermission = await userHasPermission(db, req.user?.userID, 'createPatient');
+
       if (!hasCreatePatientPermission) {
         // MÓDULO OPERACIONAL: retorna apenas IDs + status de consentimento, sem dados sensíveis
         const filters = {
@@ -315,10 +314,9 @@ class PacienteController {
       }
 
       // Verifica permissões LGPD - módulo operacional vs cadastro
-      const { permissions } = require('../infrastructure/middleware/rbac');
-      const userRole = req.user?.accessType || 1;
-      const hasCreatePatientPermission = permissions.createPatient?.includes(userRole) || false;
-      
+      const { userHasPermission } = require('../services/rbac-assignment.service');
+      const hasCreatePatientPermission = await userHasPermission(db, req.user?.userID, 'createPatient');
+
       // Se não tem permissão de cadastro, retorna apenas ID (LGPD)
       if (!hasCreatePatientPermission) {
         const sanitizedPatient = sanitizePatientForLogs(patient);
@@ -805,9 +803,8 @@ class PacienteController {
 
       const result = await biomarkerObservationService.listPatientObservations(db, participantId, filters);
 
-      const { permissions } = require('../infrastructure/middleware/rbac');
-      const userRole = req.user?.accessType || 1;
-      const hasCreatePatientPermission = permissions.createPatient?.includes(userRole) || false;
+      const { userHasPermission } = require('../services/rbac-assignment.service');
+      const hasCreatePatientPermission = await userHasPermission(db, req.user?.userID, 'createPatient');
 
       const observations = hasCreatePatientPermission
         ? result.observations

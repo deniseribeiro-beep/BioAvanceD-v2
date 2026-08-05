@@ -8,6 +8,11 @@ process.env.JWT_SECRET = process.env.JWT_SECRET || 'vitest-secret-key';
 const app = require('../../app');
 const sessionService = require('../../src/services/session.service');
 const { createCollectionMock, createDbMock } = require('../factories/db.factory');
+const { buildRbacCollections } = require('../factories/rbac.factory');
+
+function rbacFor(accessType) {
+  return buildRbacCollections([{ userAccountId: 'qa-admin-1', accessType }]);
+}
 
 function makeToken(accessType = 4) {
   return jwt.sign(
@@ -49,7 +54,7 @@ describe('GET /api/results', () => {
         project: vi.fn().mockReturnThis(),
       }),
     });
-    app.locals.db = createDbMock({ results: coll });
+    app.locals.db = createDbMock({ results: coll, ...rbacFor(4) });
 
     const res = await request(app)
       .get('/api/results')
@@ -70,7 +75,7 @@ describe('GET /api/results', () => {
         project: vi.fn().mockReturnThis(),
       }),
     });
-    app.locals.db = createDbMock({ results: coll });
+    app.locals.db = createDbMock({ results: coll, ...rbacFor(4) });
 
     const res = await request(app)
       .get('/api/results?importJobID=job-123')
@@ -92,7 +97,7 @@ describe('GET /api/results/:id', () => {
 
   it('returns 404 when result not found', async () => {
     const coll = createCollectionMock({ findOne: vi.fn().mockResolvedValue(null) });
-    app.locals.db = createDbMock({ results: coll });
+    app.locals.db = createDbMock({ results: coll, ...rbacFor(4) });
 
     const res = await request(app)
       .get('/api/results/507f1f77bcf86cd799439011')
@@ -103,7 +108,7 @@ describe('GET /api/results/:id', () => {
 
   it('returns a result by id', async () => {
     const coll = createCollectionMock({ findOne: vi.fn().mockResolvedValue(FAKE_RESULT) });
-    app.locals.db = createDbMock({ results: coll });
+    app.locals.db = createDbMock({ results: coll, ...rbacFor(4) });
 
     const res = await request(app)
       .get('/api/results/507f1f77bcf86cd799439011')
@@ -124,7 +129,7 @@ describe('DELETE /api/results/:id', () => {
   });
 
   it('returns 403 for user without deleteResult permission (accessType 1)', async () => {
-    app.locals.db = createDbMock({});
+    app.locals.db = createDbMock({ ...rbacFor(1) });
     const res = await request(app)
       .delete('/api/results/507f1f77bcf86cd799439011')
       .set('Authorization', `Bearer ${makeToken(1)}`);
@@ -133,7 +138,7 @@ describe('DELETE /api/results/:id', () => {
 
   it('returns 404 when result not found', async () => {
     const coll = createCollectionMock({ findOne: vi.fn().mockResolvedValue(null) });
-    app.locals.db = createDbMock({ results: coll });
+    app.locals.db = createDbMock({ results: coll, ...rbacFor(4) });
 
     const res = await request(app)
       .delete('/api/results/507f1f77bcf86cd799439011')

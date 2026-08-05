@@ -8,6 +8,11 @@ process.env.JWT_SECRET = process.env.JWT_SECRET || 'vitest-secret-key';
 const app = require('../../app');
 const sessionService = require('../../src/services/session.service');
 const { createCollectionMock, createDbMock } = require('../factories/db.factory');
+const { buildRbacCollections } = require('../factories/rbac.factory');
+
+function rbacFor(accessType) {
+  return buildRbacCollections([{ userAccountId: 'qa-admin-1', accessType }]);
+}
 
 function makeToken(accessType = 4) {
   return jwt.sign(
@@ -43,7 +48,7 @@ describe('GET /api/policies', () => {
         project: vi.fn().mockReturnThis(),
       }),
     });
-    app.locals.db = createDbMock({ policies: coll });
+    app.locals.db = createDbMock({ policies: coll, ...rbacFor(4) });
 
     const res = await request(app)
       .get('/api/policies')
@@ -66,7 +71,7 @@ describe('GET /api/policies/:id', () => {
 
   it('returns 404 when policy not found', async () => {
     const coll = createCollectionMock({ findOne: vi.fn().mockResolvedValue(null) });
-    app.locals.db = createDbMock({ policies: coll });
+    app.locals.db = createDbMock({ policies: coll, ...rbacFor(4) });
 
     const res = await request(app)
       .get('/api/policies/1')
@@ -77,7 +82,7 @@ describe('GET /api/policies/:id', () => {
 
   it('returns policy by numeric policyId', async () => {
     const coll = createCollectionMock({ findOne: vi.fn().mockResolvedValue(FAKE_POLICY) });
-    app.locals.db = createDbMock({ policies: coll });
+    app.locals.db = createDbMock({ policies: coll, ...rbacFor(4) });
 
     const res = await request(app)
       .get('/api/policies/1')
@@ -98,7 +103,7 @@ describe('POST /api/policies', () => {
   });
 
   it('returns 403 for Pesquisador without viewTemperature permission (accessType 1)', async () => {
-    app.locals.db = createDbMock({});
+    app.locals.db = createDbMock({ ...rbacFor(1) });
     const res = await request(app)
       .post('/api/policies')
       .set('Authorization', `Bearer ${makeToken(1)}`)
@@ -119,7 +124,7 @@ describe('POST /api/policies', () => {
       }),
       countDocuments: vi.fn().mockResolvedValue(0),
     });
-    app.locals.db = createDbMock({ policies: coll });
+    app.locals.db = createDbMock({ policies: coll, ...rbacFor(4) });
 
     const res = await request(app)
       .post('/api/policies')
@@ -140,7 +145,7 @@ describe('PUT /api/policies/:id', () => {
   });
 
   it('returns 403 for Pesquisador (accessType 1)', async () => {
-    app.locals.db = createDbMock({});
+    app.locals.db = createDbMock({ ...rbacFor(1) });
     const res = await request(app)
       .put('/api/policies/507f1f77bcf86cd799439011')
       .set('Authorization', `Bearer ${makeToken(1)}`)
@@ -153,7 +158,7 @@ describe('PUT /api/policies/:id', () => {
       findOne: vi.fn().mockResolvedValue(FAKE_POLICY),
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
     });
-    app.locals.db = createDbMock({ policies: coll });
+    app.locals.db = createDbMock({ policies: coll, ...rbacFor(4) });
 
     const res = await request(app)
       .put('/api/policies/1')
@@ -174,7 +179,7 @@ describe('DELETE /api/policies/:id', () => {
   });
 
   it('returns 403 for Pesquisador (accessType 1)', async () => {
-    app.locals.db = createDbMock({});
+    app.locals.db = createDbMock({ ...rbacFor(1) });
     const res = await request(app)
       .delete('/api/policies/507f1f77bcf86cd799439011')
       .set('Authorization', `Bearer ${makeToken(1)}`);
@@ -186,7 +191,7 @@ describe('DELETE /api/policies/:id', () => {
       findOne: vi.fn().mockResolvedValue(FAKE_POLICY),
       deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }),
     });
-    app.locals.db = createDbMock({ policies: coll });
+    app.locals.db = createDbMock({ policies: coll, ...rbacFor(4) });
 
     const res = await request(app)
       .delete('/api/policies/507f1f77bcf86cd799439011')

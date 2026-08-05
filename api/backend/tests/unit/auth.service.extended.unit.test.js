@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+const { buildRbacCollections } = require('../factories/rbac.factory');
 
 const authService = require('../../src/services/auth.service');
 
@@ -6,14 +9,19 @@ afterEach(() => { vi.restoreAllMocks(); });
 
 describe('AuthService.registerUser', () => {
   function makeDb(overrides = {}) {
+    // #421: registerUser grants a UserRoleAssignment atomically via
+    // grantRoleForAccessType, which needs the Role catalog to already
+    // exist — buildRbacCollections() seeds the full legacy catalog.
+    const rbacCollections = buildRbacCollections();
+    const usersCollection = {
+      findOne: vi.fn().mockResolvedValue(null), // no existing user
+      insertOne: vi.fn().mockResolvedValue({ insertedId: { toString: () => 'new-user-id' } }),
+      updateOne: vi.fn().mockResolvedValue({ modifiedCount: 1 }),
+      find: vi.fn().mockReturnValue({ limit: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }) }),
+      ...overrides,
+    };
     return {
-      collection: vi.fn().mockReturnValue({
-        findOne: vi.fn().mockResolvedValue(null), // no existing user
-        insertOne: vi.fn().mockResolvedValue({ insertedId: { toString: () => 'new-user-id' } }),
-        updateOne: vi.fn().mockResolvedValue({ modifiedCount: 1 }),
-        find: vi.fn().mockReturnValue({ limit: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }) }),
-        ...overrides,
-      }),
+      collection: vi.fn((name) => rbacCollections[name] || usersCollection),
     };
   }
 

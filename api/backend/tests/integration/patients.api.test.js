@@ -11,6 +11,7 @@ const app = require('../../app');
 const sessionService = require('../../src/services/session.service');
 const auditLogger = require('../../src/utils/auditLogger');
 const notificationService = require('../../src/services/notification.service');
+const { buildRbacCollections } = require('../factories/rbac.factory');
 
 const consentTemplateId = new ObjectId().toString();
 
@@ -61,10 +62,14 @@ describe('RF005 - POST /api/v1/patients', () => {
   });
 
   function createDbMock(patientsCollection) {
+    const rbacCollections = buildRbacCollections([{ userAccountId: 'qa-coord-1', accessType: 3 }]);
     return {
       collection: (name) => {
         if (name === 'patients' || name === 'pacientes') {
           return patientsCollection;
+        }
+        if (rbacCollections[name]) {
+          return rbacCollections[name];
         }
         if (name === 'consent_templates') {
           return {

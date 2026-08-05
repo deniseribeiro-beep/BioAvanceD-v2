@@ -8,10 +8,15 @@ process.env.JWT_SECRET = process.env.JWT_SECRET || 'vitest-secret-key';
 const app = require('../../app');
 const sessionService = require('../../src/services/session.service');
 const { createCollectionMock, createDbMock } = require('../factories/db.factory');
+const { buildRbacCollections } = require('../factories/rbac.factory');
+
+function userIdFor(accessType) {
+  return `qa-user-at${accessType}`;
+}
 
 function makeToken(accessType = 4) {
   return jwt.sign(
-    { userID: 'qa-user-1', accessType, roleName: accessType >= 3 ? 'Coordenador' : 'Técnico', name: 'QA', mfaVerified: true },
+    { userID: userIdFor(accessType), accessType, roleName: accessType >= 3 ? 'Coordenador' : 'Técnico', name: 'QA', mfaVerified: true },
     process.env.JWT_SECRET,
     { expiresIn: '1h' }
   );
@@ -26,6 +31,17 @@ function makeTokenLegacyClaims(accessType = 4) {
     { expiresIn: '1h' }
   );
 }
+
+// #421: enforcement now resolves permissions via UserRoleAssignment -> Role
+// -> Permission, keyed by userID, not accessType directly off the JWT. Seed
+// one active assignment per distinct (userID, accessType) pair this file's
+// tokens use, reproducing the exact legacy accessType->permission mapping.
+const RBAC_COLLECTIONS = buildRbacCollections([
+  { userAccountId: userIdFor(2), accessType: 2 },
+  { userAccountId: userIdFor(3), accessType: 3 },
+  { userAccountId: userIdFor(4), accessType: 4 },
+  { userAccountId: 'qa-user-legacy', accessType: 4 },
+]);
 
 function givenSession() {
   vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 'sess-1' } });
@@ -45,7 +61,7 @@ describe('GET /api/equipment', () => {
 
   it('returns equipment list for authenticated user', async () => {
     const coll = createCollectionMock({ find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([FAKE_EQ]) }) });
-    app.locals.db = createDbMock({ equipment: coll });
+    app.locals.db = createDbMock({ ...RBAC_COLLECTIONS,  equipment: coll });
 
     const res = await request(app).get('/api/equipment').set('Authorization', `Bearer ${makeToken(2)}`);
     expect(res.status).toBe(200);
@@ -62,7 +78,7 @@ describe('GET /api/equipment/analytical', () => {
 
   it('returns analytical equipment', async () => {
     const coll = createCollectionMock({ find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }) });
-    app.locals.db = createDbMock({ equipment: coll });
+    app.locals.db = createDbMock({ ...RBAC_COLLECTIONS,  equipment: coll });
 
     const res = await request(app).get('/api/equipment/analytical').set('Authorization', `Bearer ${makeToken(2)}`);
     expect(res.status).toBe(200);
@@ -78,7 +94,7 @@ describe('GET /api/equipment/:id', () => {
 
   it('returns 404 when not found', async () => {
     const coll = createCollectionMock({ findOne: vi.fn().mockResolvedValue(null) });
-    app.locals.db = createDbMock({ equipment: coll });
+    app.locals.db = createDbMock({ ...RBAC_COLLECTIONS,  equipment: coll });
 
     const res = await request(app)
       .get('/api/equipment/507f1f77bcf86cd799439011')
@@ -88,7 +104,7 @@ describe('GET /api/equipment/:id', () => {
 
   it('returns equipment by id', async () => {
     const coll = createCollectionMock({ findOne: vi.fn().mockResolvedValue(FAKE_EQ) });
-    app.locals.db = createDbMock({ equipment: coll });
+    app.locals.db = createDbMock({ ...RBAC_COLLECTIONS,  equipment: coll });
 
     const res = await request(app)
       .get('/api/equipment/507f1f77bcf86cd799439011')
@@ -105,7 +121,7 @@ describe('POST /api/equipment', () => {
   });
 
   it('returns 403 for Técnico (accessType 2 — no createPatient permission)', async () => {
-    app.locals.db = createDbMock({});
+    app.locals.db = createDbMock({ ...RBAC_COLLECTIONS, });
     const res = await request(app)
       .post('/api/equipment')
       .set('Authorization', `Bearer ${makeToken(2)}`)
@@ -120,7 +136,7 @@ describe('POST /api/equipment', () => {
       find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }),
       countDocuments: vi.fn().mockResolvedValue(0),
     });
-    app.locals.db = createDbMock({ equipment: coll });
+    app.locals.db = createDbMock({ ...RBAC_COLLECTIONS,  equipment: coll });
 
     const res = await request(app)
       .post('/api/equipment')
@@ -137,7 +153,7 @@ describe('PUT /api/equipment/:id', () => {
   });
 
   it('returns 403 for Técnico', async () => {
-    app.locals.db = createDbMock({});
+    app.locals.db = createDbMock({ ...RBAC_COLLECTIONS, });
     const res = await request(app)
       .put('/api/equipment/507f1f77bcf86cd799439011')
       .set('Authorization', `Bearer ${makeToken(2)}`)
@@ -150,7 +166,7 @@ describe('PUT /api/equipment/:id', () => {
       findOne: vi.fn().mockResolvedValue(FAKE_EQ),
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
     });
-    app.locals.db = createDbMock({ equipment: coll });
+    app.locals.db = createDbMock({ ...RBAC_COLLECTIONS,  equipment: coll });
 
     const res = await request(app)
       .put('/api/equipment/507f1f77bcf86cd799439011')
@@ -175,7 +191,7 @@ describe('GET /api/equipment db-unavailable guard', () => {
 
 describe('POST /api/equipment validation and duplicate-ID paths', () => {
   it('returns 400 when equipmentDescription is missing', async () => {
-    app.locals.db = createDbMock({});
+    app.locals.db = createDbMock({ ...RBAC_COLLECTIONS, });
     const res = await request(app)
       .post('/api/equipment')
       .set('Authorization', `Bearer ${makeToken(3)}`)
@@ -186,7 +202,7 @@ describe('POST /api/equipment validation and duplicate-ID paths', () => {
   });
 
   it('returns 400 when type is not one of the allowed EQUIPMENT_TYPES', async () => {
-    app.locals.db = createDbMock({});
+    app.locals.db = createDbMock({ ...RBAC_COLLECTIONS, });
     const res = await request(app)
       .post('/api/equipment')
       .set('Authorization', `Bearer ${makeToken(3)}`)
@@ -199,7 +215,7 @@ describe('POST /api/equipment validation and duplicate-ID paths', () => {
     const coll = createCollectionMock({
       findOne: vi.fn().mockResolvedValue({ _id: 'existing', equipmentID: 42 }),
     });
-    app.locals.db = createDbMock({ equipment: coll });
+    app.locals.db = createDbMock({ ...RBAC_COLLECTIONS,  equipment: coll });
 
     const res = await request(app)
       .post('/api/equipment')
@@ -216,7 +232,7 @@ describe('POST /api/equipment validation and duplicate-ID paths', () => {
       find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }),
       countDocuments: vi.fn().mockResolvedValue(0),
     });
-    app.locals.db = createDbMock({ equipment: coll });
+    app.locals.db = createDbMock({ ...RBAC_COLLECTIONS,  equipment: coll });
 
     const res = await request(app)
       .post('/api/equipment')
@@ -236,7 +252,7 @@ describe('POST /api/equipment validation and duplicate-ID paths', () => {
       find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }),
       countDocuments: vi.fn().mockResolvedValue(0),
     });
-    app.locals.db = createDbMock({ equipment: coll });
+    app.locals.db = createDbMock({ ...RBAC_COLLECTIONS,  equipment: coll });
 
     const res = await request(app)
       .post('/api/equipment')
@@ -258,7 +274,7 @@ describe('POST /api/equipment validation and duplicate-ID paths', () => {
       find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }),
       countDocuments: vi.fn().mockResolvedValue(0),
     });
-    app.locals.db = createDbMock({ equipment: coll });
+    app.locals.db = createDbMock({ ...RBAC_COLLECTIONS,  equipment: coll });
 
     const res = await request(app)
       .post('/api/equipment')
@@ -274,7 +290,7 @@ describe('GET /api/equipment error branches', () => {
     const coll = createCollectionMock({
       find: vi.fn().mockReturnValue({ toArray: vi.fn().mockRejectedValue(new Error('list failed')) }),
     });
-    app.locals.db = createDbMock({ equipment: coll });
+    app.locals.db = createDbMock({ ...RBAC_COLLECTIONS,  equipment: coll });
 
     const res = await request(app).get('/api/equipment').set('Authorization', `Bearer ${makeToken(2)}`);
     expect(res.status).toBe(500);
@@ -286,7 +302,7 @@ describe('GET /api/equipment error branches', () => {
     const coll = createCollectionMock({
       find: vi.fn().mockReturnValue({ toArray: vi.fn().mockRejectedValue(new Error('analytical failed')) }),
     });
-    app.locals.db = createDbMock({ equipment: coll });
+    app.locals.db = createDbMock({ ...RBAC_COLLECTIONS,  equipment: coll });
 
     const res = await request(app).get('/api/equipment/analytical').set('Authorization', `Bearer ${makeToken(2)}`);
     expect(res.status).toBe(500);
@@ -297,7 +313,7 @@ describe('GET /api/equipment error branches', () => {
     const coll = createCollectionMock({
       findOne: vi.fn().mockRejectedValue(new Error('findOne failed')),
     });
-    app.locals.db = createDbMock({ equipment: coll });
+    app.locals.db = createDbMock({ ...RBAC_COLLECTIONS,  equipment: coll });
 
     const res = await request(app)
       .get('/api/equipment/507f1f77bcf86cd799439011')
@@ -309,7 +325,7 @@ describe('GET /api/equipment error branches', () => {
   it('falls back to numeric equipmentID lookup and returns the equipment', async () => {
     const findOne = vi.fn().mockResolvedValue({ ...FAKE_EQ, equipmentID: 77 });
     const coll = createCollectionMock({ findOne });
-    app.locals.db = createDbMock({ equipment: coll });
+    app.locals.db = createDbMock({ ...RBAC_COLLECTIONS,  equipment: coll });
 
     const res = await request(app)
       .get('/api/equipment/77')
@@ -323,7 +339,7 @@ describe('GET /api/equipment/:id with an invalid ObjectId', () => {
   it('returns 400 "ID inválido" when id is neither a valid ObjectId nor parseable as a number', async () => {
     // req.params.id = 'not-a-valid-id' cannot be cast to ObjectId and is not
     // numeric either; GET falls back the same way PUT/DELETE already do.
-    app.locals.db = createDbMock({ equipment: createCollectionMock() });
+    app.locals.db = createDbMock({ ...RBAC_COLLECTIONS,  equipment: createCollectionMock() });
     const res = await request(app)
       .get('/api/equipment/not-a-valid-id')
       .set('Authorization', `Bearer ${makeToken(2)}`);
@@ -334,7 +350,7 @@ describe('GET /api/equipment/:id with an invalid ObjectId', () => {
 
 describe('PUT /api/equipment/:id with a non-ObjectId, non-numeric id', () => {
   it('returns 400 "ID inválido" when id is neither a valid ObjectId nor parseable as a number', async () => {
-    app.locals.db = createDbMock({ equipment: createCollectionMock() });
+    app.locals.db = createDbMock({ ...RBAC_COLLECTIONS,  equipment: createCollectionMock() });
     const res = await request(app)
       .put('/api/equipment/not-a-valid-id')
       .set('Authorization', `Bearer ${makeToken(4)}`)
@@ -348,7 +364,7 @@ describe('PUT /api/equipment/:id with a non-ObjectId, non-numeric id', () => {
       findOne: vi.fn().mockResolvedValue({ _id: 'abc', equipmentID: 123, status: 'Active' }),
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
     });
-    app.locals.db = createDbMock({ equipment: coll });
+    app.locals.db = createDbMock({ ...RBAC_COLLECTIONS,  equipment: coll });
 
     const res = await request(app)
       .put('/api/equipment/123')
@@ -362,7 +378,7 @@ describe('PUT /api/equipment/:id with a non-ObjectId, non-numeric id', () => {
     const coll = createCollectionMock({
       findOne: vi.fn().mockResolvedValue(null),
     });
-    app.locals.db = createDbMock({ equipment: coll });
+    app.locals.db = createDbMock({ ...RBAC_COLLECTIONS,  equipment: coll });
 
     const res = await request(app)
       .put('/api/equipment/507f1f77bcf86cd799439011')
@@ -384,7 +400,7 @@ describe('PUT /api/equipment/:id with a non-ObjectId, non-numeric id', () => {
       findOne: vi.fn().mockResolvedValue(FAKE_EQ),
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
     });
-    app.locals.db = createDbMock({ equipment: coll });
+    app.locals.db = createDbMock({ ...RBAC_COLLECTIONS,  equipment: coll });
 
     const res = await request(app)
       .put('/api/equipment/507f1f77bcf86cd799439011')
@@ -410,7 +426,7 @@ describe('PUT /api/equipment/:id with a non-ObjectId, non-numeric id', () => {
       findOne: vi.fn().mockResolvedValue(FAKE_EQ),
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
     });
-    app.locals.db = createDbMock({ equipment: coll });
+    app.locals.db = createDbMock({ ...RBAC_COLLECTIONS,  equipment: coll });
 
     const res = await request(app)
       .put('/api/equipment/507f1f77bcf86cd799439011')
@@ -430,7 +446,7 @@ describe('PUT /api/equipment/:id with a non-ObjectId, non-numeric id', () => {
       findOne: vi.fn().mockResolvedValue(FAKE_EQ),
       updateOne,
     });
-    app.locals.db = createDbMock({ equipment: coll });
+    app.locals.db = createDbMock({ ...RBAC_COLLECTIONS,  equipment: coll });
 
     const res = await request(app)
       .put('/api/equipment/507f1f77bcf86cd799439011')
@@ -446,7 +462,7 @@ describe('PUT /api/equipment/:id with a non-ObjectId, non-numeric id', () => {
     const coll = createCollectionMock({
       findOne: vi.fn().mockResolvedValue(null),
     });
-    app.locals.db = createDbMock({ equipment: coll });
+    app.locals.db = createDbMock({ ...RBAC_COLLECTIONS,  equipment: coll });
 
     const res = await request(app)
       .put('/api/equipment/999')
@@ -462,7 +478,7 @@ describe('PUT /api/equipment/:id with a non-ObjectId, non-numeric id', () => {
       findOne: vi.fn().mockResolvedValue(FAKE_EQ),
       updateOne,
     });
-    const dbMock = createDbMock({ equipment: coll });
+    const dbMock = createDbMock({ ...RBAC_COLLECTIONS,  equipment: coll });
 
     const withTransaction = vi.fn(async (cb) => cb());
     const endSession = vi.fn().mockResolvedValue(undefined);
@@ -510,7 +526,7 @@ describe('PUT /api/equipment/:id with a non-ObjectId, non-numeric id', () => {
       findOne: vi.fn().mockResolvedValue(FAKE_EQ),
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
     });
-    app.locals.db = createDbMock({ equipment: coll });
+    app.locals.db = createDbMock({ ...RBAC_COLLECTIONS,  equipment: coll });
 
     const res = await request(app)
       .put('/api/equipment/507f1f77bcf86cd799439011')
@@ -536,7 +552,7 @@ describe('PUT /api/equipment/:id with a non-ObjectId, non-numeric id', () => {
       findOne: vi.fn().mockResolvedValue(FAKE_EQ),
       updateOne,
     });
-    const dbMock = createDbMock({ equipment: coll });
+    const dbMock = createDbMock({ ...RBAC_COLLECTIONS,  equipment: coll });
 
     const withTransaction = vi.fn(async (cb) => cb());
     const endSession = vi.fn().mockResolvedValue(undefined);
@@ -573,7 +589,7 @@ describe('PUT /api/equipment/:id with a non-ObjectId, non-numeric id', () => {
     const coll = createCollectionMock({
       findOne: vi.fn().mockRejectedValue(new Error('unexpected findOne failure')),
     });
-    app.locals.db = createDbMock({ equipment: coll });
+    app.locals.db = createDbMock({ ...RBAC_COLLECTIONS,  equipment: coll });
 
     const res = await request(app)
       .put('/api/equipment/507f1f77bcf86cd799439011')
@@ -589,7 +605,7 @@ describe('PUT /api/equipment/:id with a non-ObjectId, non-numeric id', () => {
       findOne: vi.fn().mockResolvedValue(FAKE_EQ),
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 0, modifiedCount: 0 }),
     });
-    app.locals.db = createDbMock({ equipment: coll });
+    app.locals.db = createDbMock({ ...RBAC_COLLECTIONS,  equipment: coll });
 
     const res = await request(app)
       .put('/api/equipment/507f1f77bcf86cd799439011')
@@ -607,7 +623,7 @@ describe('DELETE /api/equipment/:id', () => {
   });
 
   it('returns 403 for Técnico', async () => {
-    app.locals.db = createDbMock({});
+    app.locals.db = createDbMock({ ...RBAC_COLLECTIONS, });
     const res = await request(app)
       .delete('/api/equipment/507f1f77bcf86cd799439011')
       .set('Authorization', `Bearer ${makeToken(2)}`);
@@ -619,7 +635,7 @@ describe('DELETE /api/equipment/:id', () => {
       findOne: vi.fn().mockResolvedValue(FAKE_EQ),
       deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }),
     });
-    app.locals.db = createDbMock({ equipment: coll });
+    app.locals.db = createDbMock({ ...RBAC_COLLECTIONS,  equipment: coll });
 
     const res = await request(app)
       .delete('/api/equipment/507f1f77bcf86cd799439011')
@@ -632,7 +648,7 @@ describe('DELETE /api/equipment/:id', () => {
       findOne: vi.fn().mockResolvedValue({ _id: 'abc', equipmentID: 55 }),
       deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }),
     });
-    app.locals.db = createDbMock({ equipment: coll });
+    app.locals.db = createDbMock({ ...RBAC_COLLECTIONS,  equipment: coll });
 
     const res = await request(app)
       .delete('/api/equipment/55')
@@ -646,7 +662,7 @@ describe('DELETE /api/equipment/:id', () => {
     const coll = createCollectionMock({
       findOne: vi.fn().mockResolvedValue(null),
     });
-    app.locals.db = createDbMock({ equipment: coll });
+    app.locals.db = createDbMock({ ...RBAC_COLLECTIONS,  equipment: coll });
 
     const res = await request(app)
       .delete('/api/equipment/not-a-valid-id')
@@ -658,7 +674,7 @@ describe('DELETE /api/equipment/:id', () => {
     const coll = createCollectionMock({
       findOne: vi.fn().mockResolvedValue(null),
     });
-    app.locals.db = createDbMock({ equipment: coll });
+    app.locals.db = createDbMock({ ...RBAC_COLLECTIONS,  equipment: coll });
 
     const res = await request(app)
       .delete('/api/equipment/507f1f77bcf86cd799439099')
@@ -670,7 +686,7 @@ describe('DELETE /api/equipment/:id', () => {
     const coll = createCollectionMock({
       findOne: vi.fn().mockResolvedValue(null),
     });
-    app.locals.db = createDbMock({ equipment: coll });
+    app.locals.db = createDbMock({ ...RBAC_COLLECTIONS,  equipment: coll });
 
     const res = await request(app)
       .delete('/api/equipment/999')
@@ -684,7 +700,7 @@ describe('DELETE /api/equipment/:id', () => {
       findOne: vi.fn().mockResolvedValue(FAKE_EQ),
       deleteOne: vi.fn().mockRejectedValue(new Error('delete failed')),
     });
-    app.locals.db = createDbMock({ equipment: coll });
+    app.locals.db = createDbMock({ ...RBAC_COLLECTIONS,  equipment: coll });
 
     const res = await request(app)
       .delete('/api/equipment/507f1f77bcf86cd799439011')
