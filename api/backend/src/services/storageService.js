@@ -5,6 +5,7 @@ const logger = require('../utils/logger');
 const SampleMovementModel = require('../models/SampleMovement');
 const { appendMovementWithHashChain, enforceAppendOnlyCollection, ensureSampleMovementIndexes } = require('../utils/sampleMovementLedger');
 const { getCollection } = require('../utils/collectionResolver');
+const MongoStorageRepository = require('../infrastructure/persistence/mongo/MongoStorageRepository');
 
 /**
  * Storage Service - Núcleo de Armazenamento Físico
@@ -21,6 +22,7 @@ class StorageService {
   constructor(db, neo4jDriver = null) {
     this.db = db;
     this.neo4jDriver = neo4jDriver || db?.neo4jDriver || null;
+    this.storageRepository = new MongoStorageRepository(db);
   }
 
   _normalizeObjectId(value) {
@@ -193,7 +195,6 @@ class StorageService {
     try {
       // Iniciar transação
       await session.withTransaction(async () => {
-        const storageBoxesCollection = this.db.collection('storageBoxes');
         const samplesCollection = await getCollection(this.db, 'samples');
 
         // Validar disponibilidade primeiro (fora da transação para speedup)
@@ -233,45 +234,12 @@ class StorageService {
           );
         }
 
-        // 2. Update Box: adicionar sample ao occupancyGrid
-        const updateBoxResult = await storageBoxesCollection.updateOne(
-          {
-            _id: boxObjId,
-            [`occupancyGrid.${position}`]: { $exists: false }
-          },
-          {
-            $set: {
-              [`occupancyGrid.${position}`]: sampleObjId,
-              'updatedAt': new Date()
-            },
-            $inc: {
-              currentOccupancy: 1
-            }
-          },
-          { session }
+        // 2 e 3. Alocar posição (occupancyGrid da box + storageLocation da amostra),
+        // via MongoStorageRepository para não duplicar a lógica atômica de escrita.
+        await this.storageRepository.allocateSamplePosition(
+          { specimenId: sampleObjId, boxId: boxObjId, position },
+          session
         );
-
-        if (updateBoxResult.matchedCount === 0) {
-          throw new Error('STORAGE_COLLISION: Colisão detectada durante alocação');
-        }
-
-        // 3. Update Sample: definir storageLocation
-        const updateSampleResult = await samplesCollection.updateOne(
-          { _id: sampleObjId },
-          {
-            $set: {
-              'storageLocation.boxId': boxObjId,
-              'storageLocation.position': position,
-              'status': 'AVAILABLE', // Amostra agora tem localização
-              'updatedAt': new Date()
-            }
-          },
-          { session }
-        );
-
-        if (updateSampleResult.modifiedCount === 0) {
-          throw new Error('Falha ao atualizar amostra');
-        }
 
         // 4. Criar/atualizar SampleMovement (auditoria)
         const movementsCollection = this.db.collection('sample_movements');
@@ -600,7 +568,6 @@ class StorageService {
   async releaseSampleFromPosition(specimenId) {
     try {
       const samplesCollection = await getCollection(this.db, 'samples');
-      const storageBoxesCollection = this.db.collection('storageBoxes');
 
       // Converter specimenId
       let sampleObjId;
@@ -632,39 +599,9 @@ class StorageService {
 
       const { boxId, position } = sample.storageLocation;
 
-      // Remover de occupancyGrid
-      let boxObjId;
-      try {
-        boxObjId = new ObjectId(boxId);
-      } catch (err) {
-        console.error('[Storage] Erro ao converter boxId:', err);
-        boxObjId = boxId;
-      }
-      
-      const updateBoxResult = await storageBoxesCollection.updateOne(
-        { _id: boxObjId },
-        {
-          $unset: {
-            [`occupancyGrid.${position}`]: ''
-          },
-          $set: {
-            'updatedAt': new Date()
-          }
-        }
-      );
-
-      // Limpar storageLocation em Sample
-      await samplesCollection.updateOne(
-        { _id: sampleObjId },
-        {
-          $unset: {
-            'storageLocation': ''
-          },
-          $set: {
-            'updatedAt': new Date()
-          }
-        }
-      );
+      // Liberar posição (occupancyGrid da box + storageLocation da amostra),
+      // via MongoStorageRepository para não duplicar a lógica atômica de escrita.
+      await this.storageRepository.releaseSamplePosition({ specimenId: sampleObjId });
 
       // Criar movimento de auditoria
       const movementsCollection = this.db.collection('sample_movements');
