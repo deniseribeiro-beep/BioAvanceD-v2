@@ -301,7 +301,7 @@ class MongoStorageRepository {
       throw new Error('STORAGE_COLLISION: posição já ocupada');
     }
 
-    await samplesCollection.updateOne(
+    const updateSample = await samplesCollection.updateOne(
       { _id: sampleObjId },
       {
         $set: {
@@ -313,6 +313,10 @@ class MongoStorageRepository {
       },
       { session }
     );
+
+    if (updateSample.modifiedCount === 0) {
+      throw new Error('Falha ao atualizar amostra');
+    }
 
     await this.openStorageAssignment(
       { specimenId: input.specimenId, boxId: boxObjId, positionCode: normalizedPosition },
@@ -592,8 +596,12 @@ class MongoStorageRepository {
    */
   toObjectId(id) {
     if (id instanceof ObjectId) return id;
-    if (typeof id === 'string' && ObjectId.isValid(id)) {
-      return new ObjectId(id);
+    try {
+      if (typeof id === 'string' && ObjectId.isValid(id)) {
+        return new ObjectId(id);
+      }
+    } catch (err) {
+      return id;
     }
     return id;
   }

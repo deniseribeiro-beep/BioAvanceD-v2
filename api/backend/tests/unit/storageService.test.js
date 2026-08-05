@@ -580,6 +580,8 @@ describe('StorageService.allocateSampleToPosition', () => {
         if (name === 'samples') return { findOne: samplesFindOne, updateOne: samplesUpdateOne };
         if (name === 'sample_movements') return movements;
         if (name === 'counters') return makeCountersCollection();
+        if (name === 'storageAssignments') return { insertOne: vi.fn().mockResolvedValue({}) };
+        if (name === 'storagePaths') return { findOne: vi.fn().mockResolvedValue(null) };
         throw new Error(`unexpected collection: ${name}`);
       }),
       getMongo: vi.fn(() => ({ startSession: vi.fn(() => makeSession()) }))
@@ -1159,6 +1161,7 @@ describe('StorageService.releaseSampleFromPosition', () => {
         if (name === 'storageBoxes') return { updateOne: boxesUpdateOne };
         if (name === 'sample_movements') return movements;
         if (name === 'counters') return makeCountersCollection();
+        if (name === 'storageAssignments') return { updateOne: vi.fn().mockResolvedValue({}) };
         throw new Error(`unexpected collection: ${name}`);
       })
     });
@@ -1245,7 +1248,8 @@ describe('StorageService.releaseSampleFromPosition', () => {
     const result = await service.releaseSampleFromPosition(new ObjectId().toString());
     expect(result.success).toBe(true);
     expect(boxesUpdateOne).toHaveBeenCalledWith(
-      { _id: 'not-a-valid-object-id' },
+      expect.objectContaining({ _id: 'not-a-valid-object-id' }),
+      expect.anything(),
       expect.anything()
     );
   });
