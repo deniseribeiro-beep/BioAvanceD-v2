@@ -326,12 +326,15 @@ class AuthService {
       if (!isAdmin && isFirstLogin && mfaNotConfigured) {
         // Primeiro login - MFA obrigatório
         // Gera token temporário apenas para setup MFA
+        // #433: accessType resolved from the live RBAC assignment, not the
+        // stale unpopulated user.accessType field (#427) — same pattern
+        // #431 used for issueAccessToken.
         const tempToken = jwt.sign(
           {
             userID: user._id.toString(),
             email: user.email,
             username: user.username,
-            accessType: user.accessType,
+            accessType: await resolveUserHierarchyLevel(db, user._id.toString()),
             name: user.name,
             mfaSetupRequired: true // Flag para indicar que MFA é obrigatório
           },

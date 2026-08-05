@@ -89,6 +89,24 @@ describe('AuthService.processLogin', () => {
     expect(result.tempToken).toBeTruthy();
   });
 
+  // #433: tempToken's accessType claim must come from the live RBAC
+  // assignment (resolveUserHierarchyLevel), not the stale unpopulated
+  // user.accessType field (#427) — same bug #431 fixed for issueAccessToken.
+  it('resolves tempToken accessType from the live RBAC assignment, not stale user.accessType', async () => {
+    vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
+    const db = makeDb();
+    db.collection.mockImplementation((name) => {
+      if (name === 'roles') return { findOne: vi.fn(), find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([{ roleId: 'role-x', roleCode: 'gestor', roleStatus: 'active', hierarchyLevel: 3 }]) }) };
+      if (name === 'userRoleAssignments') return { findOne: vi.fn(), find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([{ userAccountId: 'user-1', roleId: 'role-x', assignmentStatus: 'active', validUntil: null }]) }) };
+      return db._collectionApi;
+    });
+    const user = { ...BASE_USER, accessType: 2, lastLogin: null, mfaEnabled: false };
+    const result = await authService.processLogin(db, user, 'pw', null, db.collection(), {});
+    expect(result.requiresMFASetup).toBe(true);
+    const decoded = jwt.decode(result.tempToken);
+    expect(decoded.accessType).toBe(3);
+  });
+
   it('skips mandatory MFA setup for admin on first login', async () => {
     vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
     const db = makeDb();
