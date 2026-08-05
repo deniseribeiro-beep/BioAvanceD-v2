@@ -115,9 +115,19 @@ describe('logs.routes.js', () => {
       expect(response.status).toBe(403);
     });
 
-    it('permite acesso via role contendo auditor (sem role dedicada no catálogo RBAC ainda)', async () => {
+    // #429: the roleName/role substring fallback is retired -- a real
+    // active `auditor` RBAC role assignment is required now.
+    it('nega acesso via role contendo auditor sem assignment RBAC dedicada', async () => {
       currentUser = { userID: TOKEN_USER_ID, accessType: 1, role: 'Auditor Sênior' };
       const response = await request(appWithDb(dbWithRbac({ accessType: 1 }))).get('/api/logs');
+      expect(response.status).toBe(403);
+    });
+
+    it('permite acesso via assignment RBAC dedicada de auditor, sem role administrator', async () => {
+      currentUser = { userID: TOKEN_USER_ID, accessType: 1, role: 'Pesquisador' };
+      const rbac = buildRbacCollections([{ userAccountId: TOKEN_USER_ID, roleCodes: ['auditor'] }]);
+      const db = { collection: (name) => rbac[name] || createCollectionMock() };
+      const response = await request(appWithDb(db)).get('/api/logs');
       expect(response.status).toBe(200);
     });
 

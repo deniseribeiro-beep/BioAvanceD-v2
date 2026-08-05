@@ -231,6 +231,12 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
     delete req.body.createdAt;
     delete req.body.lastLogin;
     delete req.body.accessIDs; // Campo não é mais usado
+
+    // #429: `auditorRole` grants/revokes the additive `auditor` RBAC role —
+    // not a User document field, resolved below via
+    // grantAdditionalRole/revokeAdditionalRole, same pattern as accessType.
+    const requestedAuditorRole = req.body.auditorRole;
+    delete req.body.auditorRole;
     
     // Prepara dados para validação (mescla dados existentes com novos)
     // Remove campos que não devem ser validados na atualização
@@ -374,6 +380,23 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
         accessType: requestedAccessType,
         changedBy: req.user?.userID,
       });
+    }
+    if (requestedAuditorRole !== undefined) {
+      const { grantAdditionalRole, revokeAdditionalRole } = require('../../services/rbac-assignment.service');
+      if (requestedAuditorRole) {
+        await grantAdditionalRole(db, {
+          userAccountId: targetUser._id.toString(),
+          roleCode: 'auditor',
+          grantedBy: req.user?.userID,
+        });
+      } else {
+        await revokeAdditionalRole(db, {
+          userAccountId: targetUser._id.toString(),
+          roleCode: 'auditor',
+          revokedBy: req.user?.userID,
+        });
+      }
+      changes.auditorRole = Boolean(requestedAuditorRole);
     }
     if (req.body.status && req.body.status !== targetUser.status) {
       changes.status = { from: targetUser.status, to: req.body.status };
