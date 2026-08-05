@@ -353,8 +353,8 @@ describe('sample.service', () => {
         barcode: 'BR-1',
         currentStatus: 'Available',
         quantity: 10,
-        originalQuantity: 10,
-        availableQuantity: 10,
+        initialQuantity: 10,
+        currentQuantity: 10,
         totalWithdrawn: 0,
         unit: 'µL',
         ...overrides
@@ -376,7 +376,7 @@ describe('sample.service', () => {
       expect(result.remainingQuantity).toBe(0);
       expect(db.collections.samples.updateOne).toHaveBeenCalledTimes(1);
       const [, updateArg] = db.collections.samples.updateOne.mock.calls[0];
-      expect(updateArg.$set.availableQuantity).toBe(0);
+      expect(updateArg.$set.currentQuantity).toBe(0);
       // #405: specimenStatus is the source of truth; the legacy
       // lifecycleStatus/availabilityStatus dual-write was removed in #408.
       expect(updateArg.$set.specimenStatus).toBe('depleted');
@@ -643,15 +643,15 @@ describe('sample.service', () => {
       const existing = {
         _id: 'sample-1',
         quantity: 10,
-        originalQuantity: 10,
-        availableQuantity: 10,
+        initialQuantity: 10,
+        currentQuantity: 10,
         lifecycleStatus: 'AVAILABLE'
       };
       db.collections.samples.findOne
         .mockResolvedValueOnce(existing) // initial lookup
-        .mockResolvedValueOnce({ ...existing, availableQuantity: 4 }); // post-update re-fetch
+        .mockResolvedValueOnce({ ...existing, currentQuantity: 4 }); // post-update re-fetch
 
-      const result = await sampleService.updateSample(db, 'sample-1', { availableQuantity: 4 });
+      const result = await sampleService.updateSample(db, 'sample-1', { currentQuantity: 4 });
 
       expect(db.collections.samples.updateOne).toHaveBeenCalledTimes(1);
       const [, updateArg] = db.collections.samples.updateOne.mock.calls[0];
@@ -660,7 +660,7 @@ describe('sample.service', () => {
       expect(updateArg.$set.specimenStatus).toBe('partial');
       expect(updateArg.$set.lifecycleStatus).toBeUndefined();
       expect(updateArg.$set.availabilityStatus).toBeUndefined();
-      expect(result.availableQuantity).toBe(4);
+      expect(result.currentQuantity).toBe(4);
     });
 
     it('returns null when updateOne matches nothing', async () => {
@@ -847,8 +847,8 @@ describe('sample.service', () => {
         _id: 'sample-1',
         barcode: 'BR-1',
         quantity: 10,
-        originalQuantity: 10,
-        availableQuantity: 4,
+        initialQuantity: 10,
+        currentQuantity: 4,
         totalWithdrawn: 6,
         totalReturned: 0,
         unit: 'µL',

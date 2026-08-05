@@ -242,7 +242,7 @@ class SampleService {
       const result = await samplesCollection.insertOne(sample);
 
       const movementsCollection = await getCollection(db, 'sampleMovements');
-      const createdQuantity = Number(sample.availableQuantity ?? sample.quantity ?? 0);
+      const createdQuantity = Number(sample.currentQuantity ?? sample.quantity ?? 0);
       const createMovementID = await SampleMovementModel.generateMovementID(db);
 
       try {
@@ -327,8 +327,8 @@ class SampleService {
       }
 
       // Calcular quantidade disponível atual
-      const availableQty = sample.availableQuantity !== undefined 
-        ? sample.availableQuantity 
+      const availableQty = sample.currentQuantity !== undefined 
+        ? sample.currentQuantity 
         : sample.quantity;
       
       // Determinar quantidade a retirar
@@ -350,7 +350,7 @@ class SampleService {
       const newAvailableQty = availableQty - withdrawQty;
       const totalWithdrawn = (sample.totalWithdrawn || 0) + withdrawQty;
 
-      const specimenStatus = SampleModel.computeStatus(sample.originalQuantity || sample.quantity, newAvailableQty, currentSpecimenStatus);
+      const specimenStatus = SampleModel.computeStatus(sample.initialQuantity || sample.quantity, newAvailableQty, currentSpecimenStatus);
 
       // Registrar movimentação no ledger (imutável)
       const movementID = await SampleMovementModel.generateMovementID(db);
@@ -377,12 +377,12 @@ class SampleService {
 
       // RF006 AC#6: ledger append + balance update must land atomically —
       // a crash between the two would desync the movement ledger from
-      // availableQuantity, silently.
+      // currentQuantity, silently.
       await withMongoTransaction(db, async (session) => {
         await appendMovementWithHashChain(movementsCollection, movement, { session });
 
         const update = {
-          availableQuantity: newAvailableQty,
+          currentQuantity: newAvailableQty,
           totalWithdrawn: totalWithdrawn,
           withdrawnAt: new Date(),
           withdrawalType: withdrawalData.withdrawalType,
@@ -479,12 +479,12 @@ class SampleService {
         return null;
       }
 
-      const nextAvailable = updateData.availableQuantity !== undefined
-        ? updateData.availableQuantity
-        : existing.availableQuantity ?? existing.quantity;
-      const nextOriginal = updateData.originalQuantity !== undefined
-        ? updateData.originalQuantity
-        : existing.originalQuantity ?? existing.quantity;
+      const nextAvailable = updateData.currentQuantity !== undefined
+        ? updateData.currentQuantity
+        : existing.currentQuantity ?? existing.quantity;
+      const nextOriginal = updateData.initialQuantity !== undefined
+        ? updateData.initialQuantity
+        : existing.initialQuantity ?? existing.quantity;
 
       const currentSpecimenStatus = updateData.specimenStatus || SampleModel.resolveSpecimenStatus(existing);
       const specimenStatus = SampleModel.computeStatus(
@@ -722,7 +722,7 @@ class SampleService {
       }
 
       // Calcular novos saldos
-      let newAvailableQty = (sample.availableQuantity || 0);
+      let newAvailableQty = (sample.currentQuantity || 0);
       let newTotalReturned = totalReturned + returnQty;
       
       // Se condição é inutilizada, a quantidade não retorna ao estoque
@@ -730,7 +730,7 @@ class SampleService {
         newAvailableQty += returnQty;
       }
 
-      const specimenStatus = SampleModel.computeStatus(sample.originalQuantity || sample.quantity, newAvailableQty, currentSpecimenStatus);
+      const specimenStatus = SampleModel.computeStatus(sample.initialQuantity || sample.quantity, newAvailableQty, currentSpecimenStatus);
 
       // Registrar movimentação no ledger (imutável)
       const movementID = await SampleMovementModel.generateMovementID(db);
@@ -751,7 +751,7 @@ class SampleService {
         userRole: auditInfo.userRole || null,
         ipAddress: auditInfo.ipAddress || null,
         userAgent: auditInfo.userAgent || null,
-        previousQuantity: sample.availableQuantity || 0,
+        previousQuantity: sample.currentQuantity || 0,
         newQuantity: newAvailableQty
       });
 
@@ -761,7 +761,7 @@ class SampleService {
         await appendMovementWithHashChain(movementsCollection, movement, { session });
 
         const update = {
-          availableQuantity: newAvailableQty,
+          currentQuantity: newAvailableQty,
           totalReturned: newTotalReturned,
           specimenStatus,
           updatedAt: new Date()

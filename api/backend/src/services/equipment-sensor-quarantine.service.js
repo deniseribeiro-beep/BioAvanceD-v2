@@ -295,7 +295,7 @@ async function quarantineSamplesByFilter(db, filter, context = {}) {
 
     quarantined += 1;
 
-    const quantitySnapshot = Number(sample.availableQuantity ?? sample.quantity ?? 0);
+    const quantitySnapshot = Number(sample.currentQuantity ?? sample.quantity ?? 0);
     const movementID = await SampleMovementModel.generateMovementID(db);
 
     await appendMovementWithHashChain(

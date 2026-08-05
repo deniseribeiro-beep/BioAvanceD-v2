@@ -60,8 +60,8 @@ function mapStatus(sample: Sample): Sample['status'] {
 }
 
 function computeVolume(sample: Sample) {
-  const initial = sample.volumeInitial ?? sample.originalQuantity ?? sample.quantity ?? 0;
-  const current = sample.volumeCurrent ?? sample.availableQuantity ?? sample.quantity ?? 0;
+  const initial = sample.volumeInitial ?? sample.initialQuantity ?? sample.quantity ?? 0;
+  const current = sample.volumeCurrent ?? sample.currentQuantity ?? sample.quantity ?? 0;
   return { initial, current };
 }
 
