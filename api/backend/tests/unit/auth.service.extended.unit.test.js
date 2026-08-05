@@ -86,6 +86,22 @@ describe('AuthService.registerUser', () => {
     expect(inserted).not.toHaveProperty('accessType');
     expect(inserted).not.toHaveProperty('roleName');
   });
+
+  // #435: an invalid accessType must be rejected before any write — the
+  // old UserModel.isValidAccessType check (retired in #432) used to catch
+  // this in UserModel.validate(); grantRoleForAccessType's own lookup
+  // still rejects it, but only after insertOne had already run, orphaning
+  // a User document with no role assignment.
+  it('rejects an invalid accessType before inserting the user', async () => {
+    const insertOne = vi.fn().mockResolvedValue({ insertedId: { toString: () => 'new-user-id' } });
+    const db = makeDb({ insertOne });
+
+    await expect(
+      authService.registerUser(db, { ...VALID_USER, accessType: 99 })
+    ).rejects.toThrow();
+
+    expect(insertOne).not.toHaveBeenCalled();
+  });
 });
 
 describe('AuthService.login', () => {
