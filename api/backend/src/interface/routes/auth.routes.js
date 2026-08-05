@@ -261,16 +261,14 @@ router.get('/verify', authenticate, async (req, res) => {
       });
     }
 
-    // Mapeia accessType para roleName usando traduções
-    const roleNameMap = {
-      1: (req.t && req.t('roles.externalUser')) || 'Usuário Externo',
-      2: (req.t && req.t('roles.technician')) || 'Técnico',
-      3: (req.t && req.t('roles.coordinator')) || 'Coordenador',
-      4: (req.t && req.t('roles.administrator')) || 'Administrador'
-    };
-
-    // Usa roleName do banco se existir, senão mapeia do accessType
-    const roleName = user.roleName || roleNameMap[user.accessType] || ((req.t && req.t('roles.technician')) || 'Técnico');
+    // #428: accessType/roleName no longer persisted on the User document
+    // (#427) — resolve both display values from the active RBAC assignment,
+    // same pattern as user.routes.js's resolveRoleDisplayName since #427.
+    const { resolveRoleDisplayName, resolveUserHierarchyLevel } = require('../../services/rbac-assignment.service');
+    const [roleName, accessType] = await Promise.all([
+      resolveRoleDisplayName(db, req.user.userID),
+      resolveUserHierarchyLevel(db, req.user.userID)
+    ]);
 
     return res.status(200).json({
       success: true,
@@ -280,8 +278,8 @@ router.get('/verify', authenticate, async (req, res) => {
           userID: req.user.userID,
           email: user.email,
           username: user.username,
-          accessType: user.accessType,
-          roleName: roleName,
+          accessType,
+          roleName,
           name: user.name,
           mfaEnabled: user.mfaEnabled || false
         },

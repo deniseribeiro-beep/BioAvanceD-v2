@@ -59,6 +59,23 @@ function makeDb(userDoc) {
   };
 }
 
+/**
+ * #428: GET /verify resolves accessType/roleName from the active RBAC
+ * assignment (rbac-assignment.service.js), not the User document's own
+ * (unpopulated since #427) fields — routes `roles`/`permissions`/
+ * `userRoleAssignments` collection calls to buildRbacCollections' mocks,
+ * `users` to a plain findOne returning userDoc, same as makeDb above.
+ */
+function makeDbWithRbac(userDoc, rbacUsers = []) {
+  const { buildRbacCollections } = require('../factories/rbac.factory');
+  const rbac = buildRbacCollections(rbacUsers);
+  const findOne = vi.fn(async () => userDoc);
+  return {
+    collection: vi.fn((name) => rbac[name] || { findOne }),
+    __findOne: findOne
+  };
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -429,16 +446,21 @@ describe('auth.routes.js (integration, real router mounted)', () => {
     it.each([
       [1, 'Usuário Externo'],
       [3, 'Coordenador']
-    ])('maps accessType %s to roleName "%s" when the user has no stored roleName', async (accessType, expectedRole) => {
+    ])('resolves accessType %s to roleName "%s" via the active RBAC role assignment', async (accessType, expectedRole) => {
       vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
       vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
       const authRoutes = loadAuthRoutes();
-      const app = buildApp(authRoutes, makeDb({ accessType, email: 'a@b.com', username: 'u' }));
-      const token = signAccessToken();
+      const userID = makeUserId();
+      const app = buildApp(
+        authRoutes,
+        makeDbWithRbac({ email: 'a@b.com', username: 'u' }, [{ userAccountId: userID, accessType }])
+      );
+      const token = signAccessToken({ userID });
 
       const res = await request(app).get('/api/auth/verify').set('Authorization', `Bearer ${token}`);
       expect(res.status).toBe(200);
       expect(res.body.data.user.roleName).toBe(expectedRole);
+      expect(res.body.data.user.accessType).toBe(accessType);
       expect(res.body.data.valid).toBe(true);
     });
 
