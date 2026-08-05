@@ -40,6 +40,18 @@ class RetentionPolicyService {
     }
   }
 
+  // #443: destroy (or any non-archive action) would break audit_events' hash
+  // chain, so the sweep (#441) already refuses to apply it -- but silently,
+  // which lets a policy look active/effective when it never runs. Reject the
+  // unsafe combination at creation time instead.
+  validateAuditEventRetentionAction(applicableEntityTypes, postRetentionAction) {
+    if ((applicableEntityTypes || []).includes('AuditEvent') && postRetentionAction !== 'archive') {
+      throw new Error(
+        `postRetentionAction "${postRetentionAction}" não é suportado para AuditEvent: apenas "archive" preserva a cadeia de hash.`
+      );
+    }
+  }
+
   async createPolicy(db, payload, options = {}) {
     try {
       const previousPolicyId = options?.previousPolicyId ? String(options.previousPolicyId).trim() : '';
@@ -55,6 +67,7 @@ class RetentionPolicyService {
       };
 
       this.validateEntityTypes(normalizedPayload.applicableEntityTypes);
+      this.validateAuditEventRetentionAction(normalizedPayload.applicableEntityTypes, normalizedPayload.postRetentionAction);
 
       const validation = RetentionPolicyModel.validate(normalizedPayload);
       if (!validation.isValid) {
