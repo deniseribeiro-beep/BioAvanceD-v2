@@ -61,6 +61,16 @@ function makeDb(userDoc) {
   return { collection: vi.fn(() => ({ findOne })) };
 }
 
+// #428: GET /verify resolves accessType/roleName from the active RBAC
+// assignment, not the User document — see auth.routes.test.js's own
+// makeDbWithRbac for the full rationale.
+function makeDbWithRbac(userDoc, rbacUsers = []) {
+  const { buildRbacCollections } = require('../factories/rbac.factory');
+  const rbac = buildRbacCollections(rbacUsers);
+  const findOne = vi.fn(async () => userDoc);
+  return { collection: vi.fn((name) => rbac[name] || { findOne }) };
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -150,7 +160,7 @@ describe('auth.routes.js branch coverage - req.t translation truthy branches', (
     expect(res.body.message).toBe('T:auth.logoutSuccess');
   });
 
-  it('GET /verify uses req.t for not-found (with audit message/module), catch-error, and the accessType->roleName map', async () => {
+  it('GET /verify uses req.t for not-found (with audit message/module) and catch-error, and resolves roleName from the RBAC assignment', async () => {
     vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
     vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
     const token = signAccessToken();
@@ -182,15 +192,21 @@ describe('auth.routes.js branch coverage - req.t translation truthy branches', (
     expect(errRes.status).toBe(500);
     expect(errRes.body.error).toBe('T:auth.verifyTokenError');
 
-    const adminRes = await request(buildApp(loadAuthRoutes(), makeDb({ accessType: 4, email: 'a@b.com' }), { withT: true }))
-      .get('/api/auth/verify').set('Authorization', `Bearer ${token}`);
+    const decoded = jwt.decode(token);
+    const adminRes = await request(buildApp(
+      loadAuthRoutes(),
+      makeDbWithRbac({ email: 'a@b.com' }, [{ userAccountId: decoded.userID, accessType: 4 }]),
+      { withT: true }
+    )).get('/api/auth/verify').set('Authorization', `Bearer ${token}`);
     expect(adminRes.status).toBe(200);
-    expect(adminRes.body.data.user.roleName).toBe('T:roles.administrator');
+    expect(adminRes.body.data.user.roleName).toBe('Administrador');
 
-    const defaultRoleRes = await request(buildApp(loadAuthRoutes(), makeDb({ accessType: 999, email: 'a@b.com' }), { withT: true }))
+    // No active RBAC assignment for this user — resolves to the same
+    // 'Técnico' default resolveRoleDisplayName falls back to.
+    const defaultRoleRes = await request(buildApp(loadAuthRoutes(), makeDbWithRbac({ email: 'a@b.com' }, []), { withT: true }))
       .get('/api/auth/verify').set('Authorization', `Bearer ${token}`);
     expect(defaultRoleRes.status).toBe(200);
-    expect(defaultRoleRes.body.data.user.roleName).toBe('T:roles.technician');
+    expect(defaultRoleRes.body.data.user.roleName).toBe('Técnico');
   });
 
   it('POST /refresh uses req.t for the db-unavailable error', async () => {

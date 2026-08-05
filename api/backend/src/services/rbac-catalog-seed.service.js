@@ -1,15 +1,18 @@
 const { getCollection } = require('../utils/collectionResolver');
 const RoleModel = require('../models/Role');
 const PermissionModel = require('../models/Permission');
-const rolesSeed = require('../reference-data/roles.min.json');
 
 /**
  * dict-02 P1X-0209..0224 (#420): one-time idempotent seed of the Role and
- * Permission catalogs from roles.min.json's 4 hardcoded roles. dict-02
- * itself only specifies permissionCode from this source — resourceType and
- * allowedActions aren't derivable from roles.min.json, so this table is the
- * seed's own best-effort mapping onto dict-02's resourceType/allowedActions
- * vocabulary, not a value copied from any source document.
+ * Permission catalogs. Originally seeded from roles.min.json's 4 hardcoded
+ * roles; #428 retired that file as a runtime dependency, so the same 4
+ * roles/permissions are now inlined here directly (byte-for-byte the same
+ * roleName/accessType/permissions data roles.min.json held). dict-02 itself
+ * only specifies permissionCode from this source — resourceType and
+ * allowedActions aren't derivable from it, so PERMISSION_CATALOG below is
+ * the seed's own best-effort mapping onto dict-02's
+ * resourceType/allowedActions vocabulary, not a value copied from any
+ * source document.
  */
 const ROLE_CODE_BY_LEGACY_NAME = {
   UsuarioExterno: 'external_user',
@@ -23,6 +26,31 @@ const ROLE_DISPLAY_NAMES = {
   technician: 'Técnico',
   coordinator: 'Coordenador',
   administrator: 'Administrador',
+};
+
+const LEGACY_ROLES_SEED = {
+  roles: [
+    {
+      accessType: 1,
+      roleName: 'UsuarioExterno',
+      permissions: ['viewReports'],
+    },
+    {
+      accessType: 2,
+      roleName: 'Tecnico',
+      permissions: ['createSample', 'withdrawSample', 'viewTemperature', 'manageTemperature', 'uploadFiles', 'viewReports'],
+    },
+    {
+      accessType: 3,
+      roleName: 'Coordenador',
+      permissions: ['createUser', 'createSample', 'editSample', 'createPatient', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'viewReports'],
+    },
+    {
+      accessType: 4,
+      roleName: 'Administrador',
+      permissions: ['createUser', 'createSample', 'editSample', 'deleteSample', 'createPatient', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'viewReports', 'manageBackup', 'manageSystem', 'resetMFA', 'manageOrganizations'],
+    },
+  ],
 };
 
 const PERMISSION_CATALOG = {
@@ -46,7 +74,7 @@ const PERMISSION_CATALOG = {
 
 function buildPermissionDocs() {
   const codes = new Set();
-  for (const role of rolesSeed.roles) {
+  for (const role of LEGACY_ROLES_SEED.roles) {
     for (const code of role.permissions) codes.add(code);
   }
   return [...codes].map((permissionCode) => {
@@ -64,7 +92,7 @@ function buildPermissionDocs() {
 }
 
 function buildRoleDocs(permissionIdByCode) {
-  return rolesSeed.roles.map((role) => {
+  return LEGACY_ROLES_SEED.roles.map((role) => {
     const roleCode = ROLE_CODE_BY_LEGACY_NAME[role.roleName];
     if (!roleCode) {
       throw new Error(`roles.min.json referencia papel sem mapeamento de roleCode: ${role.roleName}`);
