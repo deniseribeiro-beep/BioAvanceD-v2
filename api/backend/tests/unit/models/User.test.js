@@ -125,14 +125,6 @@ describe('UserModel - Unit Tests', () => {
       expect(result.isValid).toBe(true);
     });
 
-    it('deve rejeitar accessType inválido', () => {
-      validUserData.accessType = 99;
-      const result = UserModel.validate(validUserData);
-
-      expect(result.isValid).toBe(false);
-      expect(result.errors.some(e => e.includes('accessType inválido'))).toBe(true);
-    });
-
     it('deve aceitar phone vazio (campo opcional)', () => {
       validUserData.phone = '';
       const result = UserModel.validate(validUserData);
@@ -275,40 +267,6 @@ describe('UserModel - Unit Tests', () => {
     });
   });
 
-  describe('isValidAccessType()', () => {
-    it('deve aceitar access types válidos (1-4)', () => {
-      for (let i = 1; i <= 4; i++) {
-        validUserData.accessType = i;
-        const result = UserModel.validate(validUserData);
-        expect(result.isValid).toBe(true);
-      }
-    });
-
-    it('deve rejeitar access types inválidos quando fornecidos', () => {
-      // Note: O modelo só valida accessType se for truthy
-      // Valores falsy (0, undefined, null) passam na validação
-      const invalidButTruthyTypes = [5, 99, -1, 'admin'];
-
-      invalidButTruthyTypes.forEach(type => {
-        validUserData.accessType = type;
-        const result = UserModel.validate(validUserData);
-        expect(result.isValid).toBe(false);
-        expect(result.errors.some(e => e.includes('accessType inválido'))).toBe(true);
-      });
-    });
-
-    it('deve aceitar accessType undefined ou null (usa default 2)', () => {
-      // O modelo não valida falsy values, então undefined/null passam
-      validUserData.accessType = undefined;
-      const result1 = UserModel.validate(validUserData);
-      expect(result1.isValid).toBe(true);
-
-      validUserData.accessType = null;
-      const result2 = UserModel.validate(validUserData);
-      expect(result2.isValid).toBe(true);
-    });
-  });
-
   describe('create()', () => {
     it('deve criar usuário com todos os campos fornecidos', () => {
       const data = {
@@ -318,7 +276,6 @@ describe('UserModel - Unit Tests', () => {
         organizationId: 'org-uuid-1',
         username: 'joaosilva',
         password: 'Senha@123',
-        accessType: 3,
         status: 'Ativo',
         mfaEnabled: true,
         mfaSecret: 'secret123',
@@ -338,7 +295,6 @@ describe('UserModel - Unit Tests', () => {
       expect(user.email).toBe('joao@example.com');
       expect(user.phone).toBe('11987654321');
       expect(user.organizationId).toBe('org-uuid-1');
-      expect(user.accessType).toBe(3);
       expect(user.status).toBe('active'); // normalizado
       expect(user.mfaEnabled).toBe(true);
       expect(user.mfaSecret).toBe('secret123');
@@ -367,7 +323,6 @@ describe('UserModel - Unit Tests', () => {
 
       expect(user.phone).toBeNull();
       expect(user.organizationId).toBeNull();
-      expect(user.accessType).toBe(2);
       expect(user.status).toBe('active');
       expect(user.mfaEnabled).toBe(false);
       expect(user.mfaSecret).toBeNull();
@@ -393,20 +348,6 @@ describe('UserModel - Unit Tests', () => {
       const user = UserModel.create(data);
 
       expect(user.passwordHistory).toEqual([]);
-    });
-  });
-
-  describe('getRoleName()', () => {
-    it('deve mapear cada accessType válido para seu nome de role', () => {
-      expect(UserModel.getRoleName(1)).toBe('UsuarioExterno');
-      expect(UserModel.getRoleName(2)).toBe('Tecnico');
-      expect(UserModel.getRoleName(3)).toBe('Coordenador');
-      expect(UserModel.getRoleName(4)).toBe('Administrador');
-    });
-
-    it('deve retornar UsuarioExterno para accessType desconhecido', () => {
-      expect(UserModel.getRoleName(99)).toBe('UsuarioExterno');
-      expect(UserModel.getRoleName(undefined)).toBe('UsuarioExterno');
     });
   });
 

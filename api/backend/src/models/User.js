@@ -49,10 +49,6 @@ class UserModel {
       }
     }
 
-    if (data.accessType && !this.isValidAccessType(data.accessType)) {
-      errors.push('accessType inválido');
-    }
-
     if (data.passwordHistory && !Array.isArray(data.passwordHistory)) {
       errors.push('passwordHistory deve ser um array');
     }
@@ -112,7 +108,6 @@ class UserModel {
       organizationId: data.organizationId || null,
       username: data.username,
       password: data.password, // Será hashado no service
-      accessType: data.accessType || 2, // 1=Usuário Externo, 2=Técnico, 3=Coordenador, 4=Administrador
       status: this.normalizeStatus(data.status || 'active'), // Normaliza status para formato inglês
       mfaEnabled: data.mfaEnabled || false,
       mfaSecret: data.mfaSecret || null,
@@ -136,23 +131,6 @@ class UserModel {
   static isValidEmail(email) {
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     return emailRegex.test(email);
-  }
-
-  static isValidAccessType(accessType) {
-    return [1, 2, 3, 4].includes(accessType);
-  }
-
-  /**
-   * Retorna o nome do role baseado no accessType
-   */
-  static getRoleName(accessType) {
-    const roles = {
-      1: 'UsuarioExterno',
-      2: 'Tecnico',
-      3: 'Coordenador',
-      4: 'Administrador'
-    };
-    return roles[accessType] || 'UsuarioExterno';
   }
 
   /**
