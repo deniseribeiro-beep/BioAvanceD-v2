@@ -111,8 +111,11 @@ class AuditV2Service {
         recordedAt: (logRecord.createdAt instanceof Date ? logRecord.createdAt.toISOString() : logRecord.createdAt) || new Date().toISOString(),
         actorPseudonym: logRecord.userName || logRecord.userID || 'system',
         action: logRecord.action || 'UNKNOWN',
-        entityType: logRecord.entity || logRecord.resourceType || 'Log',
-        entityId: logRecord.entityID || logRecord.resourceId || null,
+        // resourceType/resourceId are the canonical Log fields (dict-02_DICIONARIO.md
+        // P1X-0326/P1X-0327: "Substitui o alias entity"/"Substitui entityID") -- prefer
+        // them over the entity/entityID aliases (#447).
+        entityType: logRecord.resourceType || logRecord.entity || 'Log',
+        entityId: logRecord.resourceId || logRecord.entityID || null,
         result: logRecord.result || logRecord.status || 'success',
         source: logRecord.module || 'backend',
         correlationId: logRecord.correlationId || logRecord.requestId || null,
