@@ -77,16 +77,16 @@ const SampleSchema = new Schema({
     enum: SPECIMEN_STATUS_VALUES,
     default: 'available'
   },
-  // dict-02 ELM-0138/ELM-0139 maps these to Specimen.initialQuantity/currentQuantity
-  // ("Derivada de eventos; preservar ledger"). Confirmed (#401): sample.service.js's
-  // withdrawSample/returnSample already write availableQuantity/totalWithdrawn/
+  // dict-02 ELM-0138 (initialQuantity)/ELM-0139 (currentQuantity, "Derivada de
+  // eventos; preservar ledger"). Confirmed (#401): sample.service.js's
+  // withdrawSample/returnSample already write currentQuantity/totalWithdrawn/
   // totalReturned atomically alongside the hash-chained SampleMovement ledger inside
   // a single Mongo transaction (RF006 AC#6) — this is not naive duplicated state.
-  // Renaming availableQuantity->currentQuantity/originalQuantity->initialQuantity to
-  // match dict-02 exactly, and deciding the fate of totalWithdrawn/totalReturned
-  // (no direct dict-02 counterpart), is left to #389's broader storage/custody split.
-  availableQuantity: { type: Number, default: null },
-  originalQuantity: { type: Number, default: null },
+  // totalWithdrawn/totalReturned have no direct dict-02 counterpart; #449 decided
+  // to keep them as Sample-level running totals (cheap to keep in sync with the
+  // ledger, per #401) rather than compute on read from SampleMovement.
+  currentQuantity: { type: Number, default: null },
+  initialQuantity: { type: Number, default: null },
   totalWithdrawn: { type: Number, default: 0 },
   totalReturned: { type: Number, default: 0 },
   accessionNumber: { type: String, default: null },
@@ -169,8 +169,8 @@ class SampleModel {
 
   static create(data) {
     const registeredAt = data.registeredAt ? new Date(data.registeredAt) : new Date();
-    const availableQuantity = data.availableQuantity !== undefined ? data.availableQuantity : data.quantity;
-    const originalQuantity = data.originalQuantity !== undefined ? data.originalQuantity : data.quantity;
+    const currentQuantity = data.currentQuantity !== undefined ? data.currentQuantity : data.quantity;
+    const initialQuantity = data.initialQuantity !== undefined ? data.initialQuantity : data.quantity;
 
     // REGISTERED has no dict-02 equivalent and was never a distinct
     // blockable state — fold it into `available` (canonical-data-contract-v1.md
@@ -223,8 +223,8 @@ class SampleModel {
       importedAt: data.importedAt || null,
       importedBy: data.importedBy || null,
       specimenStatus,
-      availableQuantity,
-      originalQuantity,
+      currentQuantity,
+      initialQuantity,
       totalWithdrawn: data.totalWithdrawn || 0,
       totalReturned: data.totalReturned || 0,
       accessionNumber: data.accessionNumber || null,

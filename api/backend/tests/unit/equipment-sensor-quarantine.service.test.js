@@ -72,7 +72,7 @@ describe('equipment-sensor-quarantine.service', () => {
       const sample = {
         _id: 'S1',
         barcode: 'BC-1',
-        availableQuantity: 5,
+        currentQuantity: 5,
         unit: 'mL',
         location: { area: 'A1' }
       };

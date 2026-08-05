@@ -217,8 +217,8 @@ export interface Sample {
   // Campos de movimentação
   movementType?: 'Armazenamento' | 'Transferência';
   // Controle de quantidade (novos campos)
-  availableQuantity?: number; // Quantidade disponível após retiradas
-  originalQuantity?: number; // Quantidade original (nunca muda)
+  currentQuantity?: number; // Quantidade disponível após retiradas (dict-02 ELM-0139)
+  initialQuantity?: number; // Quantidade original (nunca muda; dict-02 ELM-0138)
   totalWithdrawn?: number; // Total já retirado
   totalReturned?: number; // Total já devolvido
   lastWithdrawalID?: number; // ID da última retirada

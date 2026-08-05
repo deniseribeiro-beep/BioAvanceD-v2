@@ -55,7 +55,7 @@ export default function SampleDetailsPage() {
   const [form, setForm] = useState({
     locationID: '',
     linkedProject: '',
-    availableQuantity: '',
+    currentQuantity: '',
     currentStatus: '',
     sampleOrigin: '',
     extractionProtocol: '',
@@ -65,8 +65,8 @@ export default function SampleDetailsPage() {
   const canEdit = hasRole(['Administrador', 'Coordenador']) || user?.roleName === 'Administrador' || user?.roleName === 'Coordenador';
 
   const computeAvailability = (s: Sample | null | undefined) => {
-    const initial = s?.volumeInitial ?? s?.originalQuantity ?? s?.quantity ?? 0;
-    const current = s?.volumeCurrent ?? s?.availableQuantity ?? s?.quantity ?? 0;
+    const initial = s?.volumeInitial ?? s?.initialQuantity ?? s?.quantity ?? 0;
+    const current = s?.volumeCurrent ?? s?.currentQuantity ?? s?.quantity ?? 0;
 
     if (current <= 0) {
       return {
@@ -129,7 +129,7 @@ export default function SampleDetailsPage() {
         setForm({
           locationID: foundSample.locationID ? String(foundSample.locationID) : '',
           linkedProject: foundSample.linkedProject || '',
-          availableQuantity: (foundSample.volumeCurrent ?? foundSample.availableQuantity ?? foundSample.quantity ?? '').toString(),
+          currentQuantity: (foundSample.volumeCurrent ?? foundSample.currentQuantity ?? foundSample.quantity ?? '').toString(),
           currentStatus: String((foundSample as any).specimenStatus || '').toUpperCase() || foundSample.currentStatus || 'Available',
           sampleOrigin: foundSample.sampleOrigin || '',
           extractionProtocol: foundSample.extractionProtocol || '',
@@ -221,17 +221,17 @@ export default function SampleDetailsPage() {
 
   const effectiveSample = useMemo(() => {
     if (!isEditing) return sample;
-    const parsedAvailable = Number(form.availableQuantity);
+    const parsedAvailable = Number(form.currentQuantity);
     const parsedLocation = form.locationID ? Number(form.locationID) : undefined;
     return {
       ...sample,
-      availableQuantity: Number.isFinite(parsedAvailable) ? parsedAvailable : sample?.availableQuantity,
+      currentQuantity: Number.isFinite(parsedAvailable) ? parsedAvailable : sample?.currentQuantity,
       volumeCurrent: Number.isFinite(parsedAvailable) ? parsedAvailable : sample?.volumeCurrent,
       locationID: parsedLocation ?? sample?.locationID,
       linkedProject: form.linkedProject || sample?.linkedProject,
       currentStatus: (form.currentStatus as Sample['currentStatus']) || (String((sample as any)?.specimenStatus || '').toUpperCase() as Sample['currentStatus']) || sample?.currentStatus,
     } as Sample;
-  }, [isEditing, sample, form.availableQuantity, form.locationID, form.linkedProject, form.currentStatus]);
+  }, [isEditing, sample, form.currentQuantity, form.locationID, form.linkedProject, form.currentStatus]);
 
   const availabilityPreview = computeAvailability(effectiveSample);
   const sprecSummary = useMemo(() => {
@@ -396,7 +396,7 @@ export default function SampleDetailsPage() {
       setForm({
         locationID: sample.locationID ? String(sample.locationID) : '',
         linkedProject: sample.linkedProject || '',
-        availableQuantity: (sample.volumeCurrent ?? sample.availableQuantity ?? sample.quantity ?? '').toString(),
+        currentQuantity: (sample.volumeCurrent ?? sample.currentQuantity ?? sample.quantity ?? '').toString(),
       currentStatus: String((sample as any).specimenStatus || '').toUpperCase() || sample.currentStatus || 'Available',
         sampleOrigin: sample.sampleOrigin || '',
         extractionProtocol: sample.extractionProtocol || '',
@@ -412,7 +412,7 @@ export default function SampleDetailsPage() {
     setSaving(true);
     setSaveError(null);
 
-    const parsedAvailable = form.availableQuantity === '' ? null : Number(form.availableQuantity);
+    const parsedAvailable = form.currentQuantity === '' ? null : Number(form.currentQuantity);
     if (parsedAvailable !== null && (!Number.isFinite(parsedAvailable) || parsedAvailable < 0)) {
       setSaveError('Quantidade disponível inválida');
       setSaving(false);
@@ -430,7 +430,7 @@ export default function SampleDetailsPage() {
     };
 
     if (parsedAvailable !== null) {
-      payload.availableQuantity = parsedAvailable;
+      payload.currentQuantity = parsedAvailable;
       payload.volumeCurrent = parsedAvailable;
     }
 
@@ -441,7 +441,7 @@ export default function SampleDetailsPage() {
       setSample(prev => ({
         ...prev!,
         ...payload,
-        availableQuantity: payload.availableQuantity ?? prev?.availableQuantity,
+        currentQuantity: payload.currentQuantity ?? prev?.currentQuantity,
         volumeCurrent: payload.volumeCurrent ?? prev?.volumeCurrent,
       }));
       // Se backend retornou amostra, sincroniza
@@ -680,15 +680,15 @@ export default function SampleDetailsPage() {
               </span>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', backgroundColor: 'var(--surface)', borderRadius: '4px' }}>
-              <span style={{ fontWeight: 500, color: 'var(--text-light)' }}>{t('samples.detail.availableQuantity', 'Quantidade Disponível')}:</span>
+              <span style={{ fontWeight: 500, color: 'var(--text-light)' }}>{t('samples.detail.currentQuantity', 'Quantidade Disponível')}:</span>
               {isEditing ? (
                 <div style={{ width: '180px' }}>
                   <Input
                     type="number"
                     step="0.1"
                     min="0"
-                    value={form.availableQuantity}
-                    onChange={(e) => handleChange('availableQuantity', e.target.value)}
+                    value={form.currentQuantity}
+                    onChange={(e) => handleChange('currentQuantity', e.target.value)}
                     placeholder={t('samples.quantity', 'Quantidade') || 'Quantidade'}
                   />
                 </div>

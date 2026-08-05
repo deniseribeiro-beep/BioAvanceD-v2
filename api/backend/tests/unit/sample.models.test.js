@@ -69,8 +69,8 @@ describe('SampleModel', () => {
 
     expect(sample.participantId).toBe('12345678');
     expect(sample.registeredAt).toBeInstanceOf(Date);
-    expect(sample.availableQuantity).toBe(12);
-    expect(sample.originalQuantity).toBe(12);
+    expect(sample.currentQuantity).toBe(12);
+    expect(sample.initialQuantity).toBe(12);
     // REGISTERED folds into `available` at creation (#405); the legacy
     // lifecycleStatus/availabilityStatus dual-write was removed in #408.
     expect(sample.specimenStatus).toBe('available');

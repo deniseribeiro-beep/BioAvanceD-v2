@@ -202,16 +202,16 @@ describe('SampleModel.create - field normalization', () => {
     expect(Sample.create({ ...validData, specimenStatus: 'quarantined' }).specimenStatus).toBe('quarantined');
   });
 
-  it('defaults availableQuantity/originalQuantity to quantity when absent', () => {
+  it('defaults currentQuantity/initialQuantity to quantity when absent', () => {
     const sample = Sample.create({ ...validData, quantity: 5 });
-    expect(sample.availableQuantity).toBe(5);
-    expect(sample.originalQuantity).toBe(5);
+    expect(sample.currentQuantity).toBe(5);
+    expect(sample.initialQuantity).toBe(5);
   });
 
-  it('respects explicit availableQuantity/originalQuantity overrides', () => {
-    const sample = Sample.create({ ...validData, quantity: 10, availableQuantity: 3, originalQuantity: 10 });
-    expect(sample.availableQuantity).toBe(3);
-    expect(sample.originalQuantity).toBe(10);
+  it('respects explicit currentQuantity/initialQuantity overrides', () => {
+    const sample = Sample.create({ ...validData, quantity: 10, currentQuantity: 3, initialQuantity: 10 });
+    expect(sample.currentQuantity).toBe(3);
+    expect(sample.initialQuantity).toBe(10);
   });
 
   it('defaults totalWithdrawn/totalReturned to 0', () => {

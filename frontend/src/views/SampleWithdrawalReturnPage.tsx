@@ -159,7 +159,7 @@ export default function SampleWithdrawalReturnPage() {
     const totalReturned = sample.totalReturned || 0;
     // Se status é Withdrawn mas totalWithdrawn é 0, usa quantidade original (dados legados)
     if ((sample.currentStatus === 'Withdrawn' || sample.currentStatus === 'TotallyWithdrawn') && totalWithdrawn === 0) {
-      return sample.originalQuantity ?? sample.quantity ?? 0;
+      return sample.initialQuantity ?? sample.quantity ?? 0;
     }
     return totalWithdrawn - totalReturned;
   };
@@ -181,7 +181,7 @@ export default function SampleWithdrawalReturnPage() {
       if (!qty || qty <= 0) {
         return 'Quantidade é obrigatória para retirada parcial';
       }
-      const available = sample?.availableQuantity ?? sample?.quantity ?? 0;
+      const available = sample?.currentQuantity ?? sample?.quantity ?? 0;
       if (qty > available) {
         return `Quantidade indisponível. Disponível: ${available} ${sample?.unit || 'µL'}`;
       }
@@ -441,12 +441,12 @@ export default function SampleWithdrawalReturnPage() {
                 <h4>Controle Físico</h4>
                 <div className="info-row">
                   <span className="info-label">Quantidade Original:</span>
-                  <span className="info-value">{sample.originalQuantity ?? sample.quantity ?? '-'} {sample.unit || 'µL'}</span>
+                  <span className="info-value">{sample.initialQuantity ?? sample.quantity ?? '-'} {sample.unit || 'µL'}</span>
                 </div>
                 <div className="info-row highlight">
                   <span className="info-label">Quantidade Disponível:</span>
                   <span className="info-value available-qty">
-                    {sample.availableQuantity ?? sample.quantity ?? '-'} {sample.unit || 'µL'}
+                    {sample.currentQuantity ?? sample.quantity ?? '-'} {sample.unit || 'µL'}
                   </span>
                 </div>
                 <div className="info-row">
@@ -530,10 +530,10 @@ export default function SampleWithdrawalReturnPage() {
                     type="number"
                     step="0.01"
                     min="0.01"
-                    max={sample.availableQuantity ?? sample.quantity}
+                    max={sample.currentQuantity ?? sample.quantity}
                     value={withdrawForm.withdrawalQuantity}
                     onChange={(e) => setWithdrawForm({ ...withdrawForm, withdrawalQuantity: e.target.value })}
-                    helperText={`Disponível: ${sample.availableQuantity ?? sample.quantity} ${sample.unit || 'µL'}`}
+                    helperText={`Disponível: ${sample.currentQuantity ?? sample.quantity} ${sample.unit || 'µL'}`}
                   />
                 )}
 
@@ -727,7 +727,7 @@ export default function SampleWithdrawalReturnPage() {
             </p>
             {pendingAction === 'withdraw' && (
               <div className="confirm-details">
-                <p><strong>Quantidade:</strong> {withdrawForm.withdrawalType === 'Total' ? (sample?.availableQuantity ?? sample?.quantity) : withdrawForm.withdrawalQuantity} {sample?.unit || 'µL'}</p>
+                <p><strong>Quantidade:</strong> {withdrawForm.withdrawalType === 'Total' ? (sample?.currentQuantity ?? sample?.quantity) : withdrawForm.withdrawalQuantity} {sample?.unit || 'µL'}</p>
                 <p><strong>Responsável:</strong> {withdrawForm.withdrawalResponsible}</p>
                 <p><strong>Destino:</strong> {withdrawForm.sampleDestination}</p>
               </div>

@@ -441,7 +441,7 @@ describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
     expect(collections.samples.updateMany).toHaveBeenCalledWith(expect.anything(), expect.anything(), { session });
   });
 
-  it('defaults quantitySnapshot to 0 when neither availableQuantity nor quantity is set on the sample', async () => {
+  it('defaults quantitySnapshot to 0 when neither currentQuantity nor quantity is set on the sample', async () => {
     const sampleId = new ObjectId();
     const collections = {
       sensors: makeCollection([{ sensorId: 'sensor-qty', locationID: 55 }]),

@@ -327,8 +327,8 @@ class SampleGraphValidator {
       responsible: 'SampleGraphValidator',
       purpose: 'compliance_graph_validation',
       observations: 'Perfil Clínico/Farmacológico selado via Merkle Root',
-      previousQuantity: Number(sample?.availableQuantity || sample?.quantity || 0),
-      newQuantity: Number(sample?.availableQuantity || sample?.quantity || 0),
+      previousQuantity: Number(sample?.currentQuantity || sample?.quantity || 0),
+      newQuantity: Number(sample?.currentQuantity || sample?.quantity || 0),
       timestamp: new Date(),
     });
 
