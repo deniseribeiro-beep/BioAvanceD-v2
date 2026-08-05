@@ -1,140 +1,124 @@
 # HANDOFF
 
-**Written:** 2026-08-05, after landing #440 (RetentionPolicy model + admin
-CRUD, RF014 foundation) on `feature/docker-e2e-backend-integration`.
+**Written:** 2026-08-05, after landing #441 (retention sweep job, RF014)
+on `feature/docker-e2e-backend-integration`.
 
 ## What happened this session
 
-Dennis picked #440 explicitly ("Pick #440"). Routed `build-loop`.
+Dennis picked #441 explicitly ("Pick #441"). Routed `build-loop`, which
+this issue's own body flagged as needing its own design pass before
+implementation ("the hard part").
 
-Read both of #440's primary spec docs directly this session (not just
-`docs/architecture/`'s paraphrase, per #205's rule): `requisitos-index.md`
-confirmed RF014 criteria 5 (versioning) and 7 (critical AuditEvent) match
-#440's scope; `dict-02_DICIONARIO.md`'s P1X-0152..P1X-0155 rows gave the
-canonical RetentionPolicy field set (`triggerEvent`, `applicableEntityTypes`,
-`postRetentionAction`, `effectivePeriod`) — used those names instead of the
-issue's own ad hoc phrasing ("which collection", "retention window"),
-consistent with the #383/#388 precedent for naming split-out entities.
+**Design decision (the hard part):** `audit_events` (`audit-v2.service.js`)
+is hash-chained per `logId` (`sequenceNumber` + `previousEventHash`) and
+anchored by immutable `audit_tree_heads` snapshots — deleting an expired
+event would break inclusion proofs for every later event in its chain.
+Resolved by making the sweep support **only** `postRetentionAction:
+'archive'` for `AuditEvent` scope: matching events move verbatim into a
+new `audit_events_archive` collection instead of being deleted, so
+nothing is ever mutated and the chain stays fully verifiable (tree heads
+untouched, archived events still hash/proof-checkable). Any other
+`postRetentionAction` (`destroy` in particular) is refused for
+`AuditEvent` — logged and skipped, not silently downgraded. `Log` has no
+such constraint, so plain timestamp-based `deleteMany` applies there
+under any `postRetentionAction`.
 
-**Built** (branch `test/440-retention-policy-model`, merged into
-`feature/docker-e2e-backend-integration` at `4bbf63a2`):
-- `api/backend/src/models/RetentionPolicy.js` — validation/create,
-  dictionary field names plus one draft extension
-  (`retentionDurationDays`, not yet in the consolidated dictionary — see
-  #442 below).
-- `api/backend/src/services/retentionPolicy.service.js` — versioned CRUD
-  (`ConsentPolicy`'s create-supersedes-active pattern), scoped to
-  `AuditEvent`/`Log` targets only (#441's sweep-job scope).
-- `api/backend/src/controllers/retentionPolicy.controller.js` +
-  `src/routes/retentionPolicy.js`, mounted at `/api/retention-policies`,
-  gated `requireRole(4)` (Administrator — same gate as eConsent's
-  policy-admin routes).
-- Every create/update writes a **critical** AuditEvent via the existing
-  `auditLogger` → `log.service` → `audit-v2.service` pipeline, mirrored
-  into the hash-chained `audit_events` collection (RF014 #7).
-- Registered `retentionPolicies` in `src/config/collections.js`
-  (`CANONICAL_COLLECTIONS`) — updated `tests/unit/config/collections.test.js`
-  accordingly.
-- 11 new tests (5 integration against the real Express app with a
-  stateful, real-query-semantics Mongo mock; 6 unit on the model),
-  all passing. Full native backend suite run clean otherwise — one
-  **pre-existing, unrelated** failure in `tests/unit/user.model.unit.test.js`
-  (`UserModel.getRoleName is not a function`), confirmed present on
-  `feature/docker-e2e-backend-integration` before this branch too (not
-  filed — likely already known; check before assuming it's new).
-
-**No deletion/sweep logic** — that's #441, unchanged, still depends on
-#440 (now satisfied).
+**Built** (branch `test/441-retention-sweep-job`, merged into
+`feature/docker-e2e-backend-integration` at `b176f75b`):
+- `api/backend/src/services/retentionSweep.service.js` — reads the
+  active `RetentionPolicy` (#440's `retentionPolicy.service.js`), applies
+  the archive-not-delete logic above per `applicableEntityTypes`, writes
+  a critical AuditEvent recording what was archived/deleted and under
+  which policy version (RF014 #7).
+- Wired into `scheduler.service.js` as a third node-cron job
+  (`RETENTION_SWEEP_CRON`, default `0 4 * * *`), following the existing
+  `temperatureTask`/`backupTask` registration pattern (init/stop, timezone,
+  try/catch-and-log).
+- 4 new unit tests on the sweep service (stateful mocks with real
+  query-matching semantics — cutoff filtering, archive-vs-refuse
+  branching) + `tests/unit/scheduler.service.test.js` updated (task
+  count/indices shifted from 2→3 scheduled tasks, plus 3 new tests for
+  the sweep task's cron callback). All passing.
+- **Backend-internal-slice exception used** (same as #440's session): no
+  literal Docker — mocked-Mongo with real query semantics, per the
+  testing overlay's exception for slices proving service/query logic
+  rather than one of the milestone's own e2e specs.
+- Full native backend suite run clean otherwise — same pre-existing,
+  unrelated `user.model.unit.test.js` failure (`UserModel.getRoleName is
+  not a function`) noted in #440's handoff, confirmed present here too
+  (still not filed — likely already known; check before assuming new).
 
 **Filed:**
-- **dyeallpies-skills-pack#216** — `docs-primacy-guard.cjs` only
-  recognizes a primary-doc read via the `Read` tool or `Bash`
-  cat/grep/head/tail, not the dedicated `Grep` tool this environment
-  recommends using instead of raw bash grep. Hit this directly: grepped
-  `dict-02_DICIONARIO.md` via `Grep`, the guard still blocked the model
-  edit as "unread" until a `Read` call satisfied it. Low severity
-  (one blocked edit, easy workaround), filed as a hook fix suggestion.
-- **BioAvanceD-v2#442** — `dict-02_DICIONARIO.md`'s RetentionPolicy rows
-  (P1X-0152..0155) have no retention-*duration* field, only
-  `effectivePeriod` (the policy revision's own versioning window) and a
-  related-but-distinct `SecurityConfiguration.logging.retentionDays`.
-  `retentionDurationDays` was added to the model as a documented Fase-1
-  draft extension; #442 asks Denise to decide the canonical name/type
-  when the P1X rows get formally consolidated.
+- **BioAvanceD-v2#443** — found during this session's `wrap-up`:
+  `retentionPolicy.service.js#createPolicy` doesn't reject a policy with
+  `applicableEntityTypes: ['AuditEvent']` + `postRetentionAction:
+  'destroy'` at creation time; the sweep silently no-ops on it instead
+  (correct behavior for safety, but the admin gets no validation error
+  when saving the unsafe policy). Suggested fix: reject that combination
+  in `createPolicy`. Low severity, no data-integrity risk.
 
-**Closed:** #440, comment includes merge commit + test summary.
+**Closed:** #441, comment includes merge commit + design rationale + test
+summary.
 
 ## Repo state
 
-- **`feature/docker-e2e-backend-integration`**: has #440's merge commit
-  (`4bbf63a2`) locally. **Not yet pushed to origin** — origin is still at
-  the commit this session started from. Push when ready (pushing this
-  branch is cheap and doesn't trigger CI per this repo's conventions).
-- `test/440-retention-policy-model` branch still exists locally
-  (merged, not deleted) — safe to delete once the merge is pushed and
-  confirmed.
-- Issues: **#440 closed**. **#441 open** (retention sweep job,
-  dependency now satisfied — hash-chain-safe deletion design still
-  needed before implementation). **#442 open** (dictionary gap, new
-  this session). **#439 still open** (alias-removal follow-up, untouched
-  again). dyeallpies-skills-pack#216 open (hook fix suggestion).
+- **`feature/docker-e2e-backend-integration`**: has #441's merge commit
+  (`b176f75b`) and is **pushed to origin** (confirmed this session).
+- `test/441-retention-sweep-job` branch still exists locally (merged, not
+  deleted) — safe to delete once confirmed no longer needed.
+- Issues: **#441 closed**. **#443 open** (new this session, validation
+  gap). **#442 still open** (dictionary gap for `retentionDurationDays`,
+  from #440's session — Denise still needs to decide the canonical
+  name/type). **#439 still open** (alias-removal follow-up, untouched
+  again). dyeallpies-skills-pack#216 open (hook fix suggestion, from
+  #440's session).
 - Backlog otherwise unchanged: older backlog (`#371`/`#373`/`#374`/
   `#378`/`#379`), **#389**.
 - **dyeallpies-skills-pack#210** (RBAC blast-radius overlay note) —
   still open, not yet applied.
-- The `user.accessType` grep sweep carried forward seven handoffs now —
-  still not done, and this session found the `user.model.unit.test.js`
-  failure that might be related to it (not investigated — just noted as
-  pre-existing).
+- The `user.accessType` grep sweep carried forward eight handoffs now —
+  still not done, and `user.model.unit.test.js`'s `getRoleName` failure
+  (confirmed pre-existing again this session) might be related — not
+  investigated.
 
 ## Dev stack state
 
-Untouched this session — no Docker involved (this slice used the
-backend-internal-slice exception: mocked-Mongo with real query semantics,
-per the testing overlay, not literal Docker). Last known state (from
-#425's session): dev stack torn down, named volumes kept, RBAC catalog
-seeded on that stack instance, 0 real users.
+Untouched this session — no Docker involved (backend-internal-slice
+exception, see above). Last known state (from #425's session): dev stack
+torn down, named volumes kept, RBAC catalog seeded on that stack
+instance, 0 real users.
 
 ## Blocking next step
 
-**Push `feature/docker-e2e-backend-integration` to origin** before
-starting new work on it, or the next session's diff-against-origin
-assumptions will be wrong.
+None. Branch is pushed and clean.
 
 ## Recommended next steps
 
-Dennis picked #440 explicitly but didn't name a next pick after it, so
+Dennis picked #441 explicitly but didn't name a next pick after it, so
 per this skill's own rule: **none queued** as an explicit instruction.
 Backlog candidates:
-- **#441** (retention sweep job) — now unblocked (#440 landed). Its own
-  design pass for hash-chain-safe deletion (archive-not-delete or a
-  chain-segment/checkpoint scheme) still needs to happen before writing
-  the sweep job, not mid-implementation.
+- **#443** (new this session) — small, well-scoped validation fix in
+  `retentionPolicy.service.js#createPolicy`.
+- **#442** (dictionary gap) — blocked on Denise's decision, not
+  actionable by a session alone.
 - **#439** (alias removal, 131 call sites, atomic) — still open from
-  two sessions back.
+  three sessions back.
 - Older backlog (`#371`/`#373`/`#374`/`#378`/`#379`), or **#389**
   (route through `divide-and-conquer` first, 28 files)
-- The carried-forward `user.accessType` grep sweep (seven handoffs now)
+- The carried-forward `user.accessType` grep sweep (eight handoffs now)
   — maybe worth pairing with a look at the `user.model.unit.test.js`
-  failure noticed this session.
+  failure noticed again this session.
 
 ## Which skills to use
 
-- #441: `build-loop` — treat the hash-chain-safe deletion design as its
-  own sub-problem to resolve before writing the sweep job. Read
-  `retentionPolicy.service.js`'s `ALLOWED_ENTITY_TYPES` scope
-  (`AuditEvent`/`Log`) before assuming the sweep needs to handle
-  anything broader.
+- #443: `fix-bugs` or `resolve-issue` — small, single-file validation
+  change with a clear repro (create a policy with `AuditEvent` +
+  `destroy`, assert it's rejected).
 - #439: `resolve-issue`, atomic per the note left on the issue itself —
   no incremental chunking, confirm the canonical field set before
   touching any of the 131 call sites.
 - Otherwise unchanged from prior handoffs for older backlog/#389.
-- New this session: `docs-primacy-guard.cjs`'s Read/Bash-grep-only
-  detection (dyeallpies-skills-pack#216) — until that lands, use the
-  `Read` tool (not `Grep`) for a canonical-data-model surface's primary
-  docs, or expect a blocked edit even after grepping them.
 - No local-env gotchas changed — the `gh repo view --json
   nameWithOwner -q .nameWithOwner` note still holds (repo slug is
   `deniseribeiro-beep/BioAvanceD-v2`, not `DieAllPies/...`); skills-pack
-  issues go to `DyeAllPies/dyeallpies-skills-pack` (confirmed this
-  session — `DieAllPies/...` 404s, case-sensitive org mismatch).
+  issues go to `DyeAllPies/dyeallpies-skills-pack`.
