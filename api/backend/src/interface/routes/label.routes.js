@@ -4,6 +4,8 @@ const { authenticate } = require('../../infrastructure/middleware/auth');
 const { requirePermission } = require('../../infrastructure/middleware/rbac');
 const { getCollection } = require('../../utils/collectionResolver');
 const qualityDomain = require('../../services/quality-domain.service');
+const MongoStorageRepository = require('../../infrastructure/persistence/mongo/MongoStorageRepository');
+const GetSampleStorageLocationUseCase = require('../../core/use-cases/GetSampleStorageLocationUseCase');
 
 const router = express.Router();
 
@@ -44,40 +46,34 @@ async function findSample(db, sampleId) {
   return samplesCollection.findOne({ $or: queries });
 }
 
-async function resolveStoragePathText(db, sample) {
-  const storageLocation = sample?.storageLocation || {};
-  const hasBoxLocation = Boolean(storageLocation.boxId || storageLocation.boxID);
-  const hasPosition = Boolean(storageLocation.position);
-
-  if (!hasBoxLocation || !hasPosition) {
+async function resolveStorageLocation(db, sample) {
+  if (!sample?._id) {
     return null;
   }
 
-  const storagePathsCollection = await getCollection(db, 'storagePaths');
-  const boxId = storageLocation.boxId || storageLocation.boxID;
-  const boxVariants = ObjectId.isValid(String(boxId)) ? [new ObjectId(String(boxId)), String(boxId)] : [String(boxId)];
-  const storagePath = await storagePathsCollection.findOne({
-    boxId: { $in: boxVariants },
+  const useCase = new GetSampleStorageLocationUseCase({
+    storageRepository: new MongoStorageRepository(db),
   });
-
-  return storagePath?.path || storageLocation.readable || null;
+  const result = await useCase.execute({ specimenId: sample._id });
+  return result?.found ? result.location : null;
 }
 
-function buildLocationText(sample, storagePathText) {
-  const storageLocation = sample?.storageLocation || {};
+function buildLocationText(sample, storageLocation) {
+  const box = storageLocation?.box || {};
+  const storagePathText = storageLocation && storageLocation.path !== 'N/A' ? storageLocation.path : storageLocation?.readable || null;
   const parts = [
     storagePathText ? `Localização ${storagePathText}` : null,
     sample?.locationID ? `Loc ${sample.locationID}` : null,
-    storageLocation.boxName || storageLocation.boxID || storageLocation.boxId ? `Box ${storageLocation.boxName || storageLocation.boxID || storageLocation.boxId}` : null,
-    storageLocation.position ? `Pos ${storageLocation.position}` : null,
+    box.boxName || box.boxId ? `Box ${box.boxName || box.boxId}` : null,
+    box.position ? `Pos ${box.position}` : null,
   ].filter(Boolean);
 
   return parts.join(' / ') || 'Localizacao pendente';
 }
 
 async function buildLabel(db, sample) {
-  const storageLocation = sample?.storageLocation || {};
-  if (!storageLocation.boxId || !storageLocation.position) {
+  const storageLocation = await resolveStorageLocation(db, sample);
+  if (!storageLocation?.box?.boxId || !storageLocation?.box?.position) {
     const error = new Error('Amostra sem localização física persistida para geração de etiqueta.');
     error.statusCode = 409;
     throw error;
@@ -86,8 +82,7 @@ async function buildLabel(db, sample) {
   const sampleId = normalizeString(sample?.sampleID || sample?._id?.toString?.() || sample?._id);
   const barcode = normalizeString(sample?.barcode || sampleId);
   const sprecCode = qualityDomain.buildSprecCode(sample?.sprec || {});
-  const storagePathText = await resolveStoragePathText(db, sample);
-  const location = buildLocationText(sample, storagePathText);
+  const location = buildLocationText(sample, storageLocation);
 
   return {
     sampleId,
@@ -218,7 +213,7 @@ router.get('/samples/:sampleId/print-job', authenticate, requirePermission('crea
 
 router._test = {
   findSample,
-  resolveStoragePathText,
+  resolveStorageLocation,
   buildLocationText,
   normalizeString,
 };
