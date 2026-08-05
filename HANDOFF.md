@@ -1,77 +1,64 @@
 # HANDOFF
 
-**Written:** 2026-08-05, after closing #433 (processLogin's first-login
-MFA-setup `tempToken` still signing a stale `accessType` claim) on
-`feature/docker-e2e-backend-integration`.
+**Written:** 2026-08-05, after closing #434 (login/MFA response bodies'
+stale `user.accessType`) on `feature/docker-e2e-backend-integration`.
 
 ## What happened this session
 
-Picked #433 explicitly (Dennis: "Pick #433"). Routed through `fix-bugs`
-— filed by a prior session while fixing #431, with a suggested fix
-already in the issue body.
+Picked #434 explicitly (Dennis: "Pick #434"). Routed through `fix-bugs`
+— filed by a prior session while fixing #431, same family as #433
+(closed the prior session) but for response-body fields instead of the
+JWT claim.
 
-**Root cause:** #431 fixed the stale `accessType` JWT claim for
-`issueAccessToken`/`POST /refresh` (resolving it from the live RBAC
-assignment via `resolveUserHierarchyLevel` instead of the unpopulated
-`user.accessType` field, per #427). `auth.service.js#processLogin`'s
-first-login MFA-setup branch (`mfaSetupRequired`, ~line 329) signs its
-own `tempToken` inline with `jwt.sign(...)` rather than going through
-`issueAccessToken`, and still put `accessType: user.accessType` into
-that payload — same stale-field bug, different token-issuance site
-#431's text didn't name. Confirmed `authenticate` middleware decodes
-this token for MFA-setup routes, so `req.user.accessType` on those
-requests carried the same stale value downstream (`auditLogger.js`'s
-degraded fallback), same consumer as #431.
+**Root cause:** `auth.service.js` returned `accessType: user.accessType`
+straight off the unpopulated User document (stale since #427) in four
+response bodies, each sitting right next to an already-correct
+`roleName: await resolveRoleDisplayName(...)` (the #427 fix) — the
+string field was fixed at each site, the numeric field wasn't. Same
+pattern #428 already established for `GET /verify` and #433 fixed for
+`processLogin`'s `tempToken` JWT claim, just not yet applied to these
+four response-body sites.
 
-**Scope check before fixing:** the same branch also returns a stale
-`user.accessType` in its *response body* (~line 351, next to the
-already-correct `roleName: await resolveRoleDisplayName(...)`) — but
-that's #434's territory (four response-body `accessType` fields across
-`processLogin`/`enableMFAFirstLogin`/`enableMFA`), confirmed by reading
-#434's issue body before touching anything. Left that line untouched;
-fixed only the JWT claim #433 names.
-
-**Landed** (`fix/433-processlogin-temptoken-accesstype`, commit
-`8f81180e`, merged `--no-ff` into
-`feature/docker-e2e-backend-integration` at `b39e7fe4`):
-- `api/backend/src/services/auth.service.js`: `tempToken`'s `accessType`
-  now resolved via `resolveUserHierarchyLevel(db, user._id.toString())`
-  (already imported from `rbac-assignment.service.js`, used by
-  `issueAccessToken` since #431) instead of `user.accessType`.
+**Landed** (`fix/434-login-mfa-response-body-accesstype`, commit
+`72bb5d9e`, merged `--no-ff` into `feature/docker-e2e-backend-integration`
+at `d2f1bcb5`):
+- `api/backend/src/services/auth.service.js`: all four sites now resolve
+  `accessType` via `resolveUserHierarchyLevel(db, user._id.toString())`
+  instead of `user.accessType`:
+  - `processLogin`'s first-login MFA-setup response (was ~line 354)
+  - `processLogin`'s successful-login response (was ~line 428)
+  - `enableMFAFirstLogin`'s response (was ~line 613)
+  - `enableMFA`'s first-login response (was ~line 720)
 - `api/backend/tests/unit/auth.service.processLogin.unit.test.js`: added
-  `resolves tempToken accessToken from the live RBAC assignment, not
-  stale user.accessType` — sets `user.accessType = 2` but grants a role
-  with `hierarchyLevel: 3`, decodes the returned `tempToken` with
-  `jwt.decode`, asserts `decoded.accessType === 3`. Confirmed it failed
-  before the fix (`decoded.accessType` was `2`) and passes after.
+  one pinned test per site (4 total), each granting a role with
+  `hierarchyLevel: 3` while `user.accessType` stays `2`, asserting
+  `result.user.accessType === 3`. Confirmed all four failed before the
+  fix (`2` instead of `3`) and pass after.
 
-Verified: 150/150 targeted tests passing on the merged integration
-branch (`auth.service.processLogin.unit.test.js`,
+Verified: 181/181 targeted tests passing on the merged integration
+branch (`auth.service.processLogin.unit.test.js` (48),
 `auth.service.extended.unit.test.js`, `auth.service.unit.test.js`,
 `controllers/auth.controller.test.js`,
-`infrastructure/middleware/auth.test.js`).
+`infrastructure/middleware/auth.test.js` — 133 combined).
 
-Pushed. Closed #433 with the merge commit hash. Local + remote
-`fix/433-processlogin-temptoken-accesstype` branch deleted (both
-succeeded this session — no permission-classifier denial, unlike the
-#392 precedent noted in `fix-bugs`).
+Pushed. Closed #434 with the merge commit hash. Local + remote
+`fix/434-login-mfa-response-body-accesstype` branch deleted (both
+succeeded this session, same-session-push precedent from `fix-bugs`).
 
 `wrap-up` ran: no friction, nothing deferred, no new issues filed.
 
 ## Repo state
 
 - **`feature/docker-e2e-backend-integration`**: pushed, up to date with
-  `origin` as of this session's merge (`b39e7fe4`). Includes this
-  session's #433 fix plus all prior sessions' work (through #435).
-- **`fix/433-processlogin-temptoken-accesstype`**: merged, deleted
+  `origin` as of this session's merge (`d2f1bcb5`). Includes this
+  session's #434 fix plus all prior sessions' work (through #433).
+- **`fix/434-login-mfa-response-body-accesstype`**: merged, deleted
   (local + remote).
-- Issues: **#433 closed** (merged, see above). No new issues filed this
+- Issues: **#434 closed** (merged, see above). No new issues filed this
   session.
-- Backlog otherwise unchanged from prior handoff: **#434** (four
-  response-body `accessType` fields, same family as #433, explicitly
-  scoped out of this session's fix), **#429** (no dedicated `auditor`
-  RBAC role), **#424**, **#425** (backfill script, operational not
-  coding), **#387**, `#371`/`#373`/`#374`/`#378`/`#379`, **#389**.
+- Backlog otherwise unchanged from prior handoff: **#429** (no dedicated
+  `auditor` RBAC role), **#424**, **#425** (backfill script, operational
+  not coding), **#387**, `#371`/`#373`/`#374`/`#378`/`#379`, **#389**.
 - **dyeallpies-skills-pack#210** (RBAC blast-radius overlay note) —
   still open, not yet applied.
 
@@ -84,17 +71,19 @@ environment, not blocking this session's close.
 
 ## Recommended next steps
 
-Dennis picked #433 explicitly this session but didn't name a next pick
+Dennis picked #434 explicitly this session but didn't name a next pick
 after it, so per this skill's own rule: **none queued** as an explicit
-instruction. Continuing the RBAC thread from prior handoffs: **#434**
-(small, same family as #433, now unblocked/fully independent). Otherwise:
-**#429** (small, well-scoped), **#424** (straightforward `fix-bugs`),
-**#425** (operational), **#387**, older backlog
+instruction. The #427/#428/#431/#433/#434 stale-`accessType` family
+looks closed out now (JWT claims and response bodies both covered) —
+worth a quick grep sweep (`user.accessType`) next session before
+assuming the family is fully done. Otherwise: **#429** (small,
+well-scoped), **#424** (straightforward `fix-bugs`), **#425**
+(operational), **#387**, older backlog
 (`#371`/`#373`/`#374`/`#378`/`#379`), or **#389** (route through
 `divide-and-conquer` first, 28 files).
 
 ## Which skills to use
 
-- Unchanged from prior handoffs for #434/#429/#424/#425/#387/older
+- Unchanged from prior handoffs for #429/#424/#425/#387/older
   backlog/#389 — see git history of this file if needed, or the issues
   themselves for current guidance.
