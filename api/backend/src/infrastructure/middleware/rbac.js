@@ -75,6 +75,9 @@ const permissions = {
   manageSystem: true,
   resetMFA: true,
   manageOrganizations: true,
+  createResult: true,
+  editResult: true,
+  deleteResult: true,
 };
 
 /**
