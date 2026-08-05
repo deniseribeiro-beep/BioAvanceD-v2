@@ -627,7 +627,12 @@ describe('auth.routes.js (integration, real router mounted)', () => {
       const userId = new ObjectId();
       vi.spyOn(sessionService, 'getSessionByRefreshToken').mockResolvedValue({ userID: userId.toString(), sessionID: 's9' });
       const rotateSpy = vi.spyOn(sessionService, 'rotateSessionTokens').mockResolvedValue(true);
-      const db = makeDb({ _id: userId, email: 'a@b.com', username: 'u', accessType: 2, name: 'A' });
+      // #431: the new access token's accessType is resolved from the RBAC
+      // assignment, not the User document's (no-longer-populated) field.
+      const db = makeDbWithRbac(
+        { _id: userId, email: 'a@b.com', username: 'u', accessType: 2, name: 'A' },
+        [{ userAccountId: userId.toString(), accessType: 3 }]
+      );
       const app = appWithDb(db);
       const refreshToken = jwt.sign({ userID: userId.toString(), type: 'refresh' }, JWT_REFRESH_SECRET, { expiresIn: '7d' });
 
@@ -639,6 +644,7 @@ describe('auth.routes.js (integration, real router mounted)', () => {
       expect(typeof res.body.data.token).toBe('string');
       const decodedAccess = jwt.verify(res.body.data.token, JWT_SECRET);
       expect(decodedAccess.userID).toBe(userId.toString());
+      expect(decodedAccess.accessType).toBe(3);
       expect(rotateSpy).toHaveBeenCalledTimes(1);
       expect(res.headers['set-cookie']?.some((c) => c.startsWith('refresh_token='))).toBe(true);
     });

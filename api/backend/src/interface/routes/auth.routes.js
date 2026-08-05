@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const authController = require('../../controllers/auth.controller');
+const authService = require('../../services/auth.service');
 const { authenticate } = require('../../infrastructure/middleware/auth');
 const logger = require('../../utils/logger');
 const auditLogger = require('../../utils/auditLogger');
@@ -438,18 +439,10 @@ router.post('/refresh', async (req, res) => {
       });
     }
 
-    const accessToken = jwt.sign(
-      {
-        userID: user._id.toString(),
-        email: user.email,
-        username: user.username,
-        accessType: user.accessType,
-        name: user.name,
-        mfaVerified: true
-      },
-      env.JWT_SECRET,
-      { expiresIn: '15m' }
-    );
+    // #431: accessType resolved fresh from the RBAC assignment via
+    // authService.issueAccessToken, not read off the (no-longer-populated,
+    // since #427) User document field.
+    const accessToken = await authService.issueAccessToken(db, user);
 
     const newRefreshToken = jwt.sign(
       {

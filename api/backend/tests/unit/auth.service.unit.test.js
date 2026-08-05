@@ -51,6 +51,7 @@ describe('AuthService.getAccessTypeForRole', () => {
 // ── issueAccessToken ──────────────────────────────────────
 describe('AuthService.issueAccessToken', () => {
   const jwt = require('jsonwebtoken');
+  const { buildRbacCollections } = require('../factories/rbac.factory');
 
   const fakeUser = {
     _id: { toString: () => 'user-id-123' },
@@ -61,55 +62,79 @@ describe('AuthService.issueAccessToken', () => {
     mfaEnabled: false,
   };
 
-  it('returns a JWT string', () => {
-    const token = authService.issueAccessToken(fakeUser);
+  // #431: accessType is resolved fresh from the RBAC assignment
+  // (rbac-assignment.service.resolveUserHierarchyLevel), not read off
+  // `user.accessType` — `db` now stands in for the stale field, keyed by
+  // whatever userAccountId/accessType pairs the test needs granted.
+  function makeDb(grants = [{ userAccountId: 'user-id-123', accessType: 2 }]) {
+    const rbac = buildRbacCollections(grants);
+    return { collection: (name) => rbac[name] };
+  }
+
+  it('returns a JWT string', async () => {
+    const token = await authService.issueAccessToken(makeDb(), fakeUser);
     expect(typeof token).toBe('string');
     expect(token.split('.')).toHaveLength(3);
   });
 
-  it('encodes userID in payload', () => {
-    const token = authService.issueAccessToken(fakeUser);
+  it('encodes userID in payload', async () => {
+    const token = await authService.issueAccessToken(makeDb(), fakeUser);
     const payload = jwt.decode(token);
     expect(payload.userID).toBe('user-id-123');
   });
 
-  it('encodes accessType in payload', () => {
-    const token = authService.issueAccessToken(fakeUser);
+  it('encodes accessType resolved from the RBAC assignment in payload', async () => {
+    const token = await authService.issueAccessToken(makeDb(), fakeUser);
     const payload = jwt.decode(token);
     expect(payload.accessType).toBe(2);
   });
 
-  it('encodes email in payload', () => {
-    const token = authService.issueAccessToken(fakeUser);
+  it('resolves accessType from the live assignment, not the stale user.accessType field', async () => {
+    // fakeUser.accessType is 2, but the granted assignment is 4 (Administrador)
+    // — the claim must follow the RBAC grant, not the User document field.
+    const db = makeDb([{ userAccountId: 'user-id-123', accessType: 4 }]);
+    const token = await authService.issueAccessToken(db, fakeUser);
+    const payload = jwt.decode(token);
+    expect(payload.accessType).toBe(4);
+  });
+
+  it('encodes email in payload', async () => {
+    const token = await authService.issueAccessToken(makeDb(), fakeUser);
     const payload = jwt.decode(token);
     expect(payload.email).toBe('qa@example.com');
   });
 
-  it('token expires (has exp claim)', () => {
-    const token = authService.issueAccessToken(fakeUser);
+  it('token expires (has exp claim)', async () => {
+    const token = await authService.issueAccessToken(makeDb(), fakeUser);
     const payload = jwt.decode(token);
     expect(payload.exp).toBeGreaterThan(Date.now() / 1000);
   });
 
-  it('produces different tokens for different users', () => {
+  it('produces different tokens for different users', async () => {
     const user2 = { ...fakeUser, _id: { toString: () => 'other-user-456' } };
-    const t1 = authService.issueAccessToken(fakeUser);
-    const t2 = authService.issueAccessToken(user2);
+    const db = makeDb([
+      { userAccountId: 'user-id-123', accessType: 2 },
+      { userAccountId: 'other-user-456', accessType: 2 },
+    ]);
+    const t1 = await authService.issueAccessToken(db, fakeUser);
+    const t2 = await authService.issueAccessToken(db, user2);
     expect(t1).not.toBe(t2);
   });
 
-  it('produces distinct tokens for two logins of the same user within the same second (#338)', () => {
+  it('produces distinct tokens for two logins of the same user within the same second (#338)', async () => {
     // iat/exp are second-granularity; without a per-login nonce two calls in
     // the same wall-clock second sign byte-identical JWTs, so their tokenHash
     // collides in session storage and revoking one revokes both.
-    const t1 = authService.issueAccessToken(fakeUser);
-    const t2 = authService.issueAccessToken(fakeUser);
+    const db = makeDb();
+    const t1 = await authService.issueAccessToken(db, fakeUser);
+    const t2 = await authService.issueAccessToken(db, fakeUser);
     expect(t1).not.toBe(t2);
   });
 
-  it('assigns a unique jti per token', () => {
-    const payload1 = jwt.decode(authService.issueAccessToken(fakeUser));
-    const payload2 = jwt.decode(authService.issueAccessToken(fakeUser));
+  it('assigns a unique jti per token', async () => {
+    const db = makeDb();
+    const payload1 = jwt.decode(await authService.issueAccessToken(db, fakeUser));
+    const payload2 = jwt.decode(await authService.issueAccessToken(db, fakeUser));
     expect(payload1.jti).toBeTruthy();
     expect(payload2.jti).toBeTruthy();
     expect(payload1.jti).not.toBe(payload2.jti);
@@ -148,8 +173,11 @@ describe('AuthService.issueRefreshToken', () => {
     expect(() => authService.issueRefreshToken(fakeUser)).not.toThrow();
   });
 
-  it('has longer expiry than access token', () => {
-    const access = authService.issueAccessToken(fakeUser);
+  it('has longer expiry than access token', async () => {
+    const { buildRbacCollections } = require('../factories/rbac.factory');
+    const rbac = buildRbacCollections([{ userAccountId: 'user-id-123', accessType: 2 }]);
+    const db = { collection: (name) => rbac[name] };
+    const access = await authService.issueAccessToken(db, fakeUser);
     const refresh = authService.issueRefreshToken(fakeUser);
     const aExp = jwt.decode(access).exp;
     const rExp = jwt.decode(refresh).exp;
