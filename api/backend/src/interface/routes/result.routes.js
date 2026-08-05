@@ -354,7 +354,7 @@ router.get('/:id/download', authenticate, async (req, res) => {
   }
 });
 
-router.post('/', authenticate, requirePermission('createPatient'), enforceCommercialConsent({ resolveSampleId: (req) => req.body?.sampleID }), async (req, res) => {
+router.post('/', authenticate, requirePermission('createResult'), enforceCommercialConsent({ resolveSampleId: (req) => req.body?.sampleID }), async (req, res) => {
   try {
     const db = req.app.locals.db;
 
@@ -404,7 +404,7 @@ router.post('/', authenticate, requirePermission('createPatient'), enforceCommer
   }
 });
 
-router.put('/:id', authenticate, requirePermission('createPatient'), async (req, res) => {
+router.put('/:id', authenticate, requirePermission('editResult'), async (req, res) => {
   try {
     const db = req.app.locals.db;
 
@@ -454,7 +454,7 @@ router.put('/:id', authenticate, requirePermission('createPatient'), async (req,
   }
 });
 
-router.put('/:id/link-sample', authenticate, requirePermission('createPatient'), async (req, res) => {
+router.put('/:id/link-sample', authenticate, requirePermission('editResult'), async (req, res) => {
   try {
     const db = req.app.locals.db;
 
@@ -512,7 +512,7 @@ router.put('/:id/link-sample', authenticate, requirePermission('createPatient'),
   }
 });
 
-router.delete('/:id', authenticate, requirePermission('createPatient'), async (req, res) => {
+router.delete('/:id', authenticate, requirePermission('deleteResult'), async (req, res) => {
   try {
     const db = req.app.locals.db;
 

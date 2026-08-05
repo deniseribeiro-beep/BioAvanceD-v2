@@ -617,7 +617,7 @@ describe('POST /api/results', () => {
     expect(res.status).toBe(401);
   });
 
-  it('returns 403 for a role without createPatient permission (accessType 2)', async () => {
+  it('returns 403 for a role without createResult permission (accessType 2)', async () => {
     app.locals.db = createDbMock({});
     const res = await request(app)
       .post('/api/results')
@@ -697,7 +697,7 @@ describe('PUT /api/results/:id', () => {
     expect(res.status).toBe(401);
   });
 
-  it('returns 403 for a role without createPatient permission', async () => {
+  it('returns 403 for a role without editResult permission', async () => {
     app.locals.db = createDbMock({});
     const res = await request(app)
       .put(`/api/results/${RESULT_OID}`)
@@ -758,6 +758,15 @@ describe('PUT /api/results/:id/link-sample', () => {
   it('returns 401 without token', async () => {
     const res = await request(app).put(`/api/results/${RESULT_OID}/link-sample`).send({});
     expect(res.status).toBe(401);
+  });
+
+  it('returns 403 for a role without editResult permission', async () => {
+    app.locals.db = createDbMock({});
+    const res = await request(app)
+      .put(`/api/results/${RESULT_OID}/link-sample`)
+      .set('Authorization', `Bearer ${makeToken(1)}`)
+      .send({ sampleID: SAMPLE_OID });
+    expect(res.status).toBe(403);
   });
 
   it('returns 400 when sampleID is missing', async () => {
@@ -824,7 +833,7 @@ describe('DELETE /api/results/:id', () => {
     expect(res.status).toBe(401);
   });
 
-  it('returns 403 for a role without createPatient permission', async () => {
+  it('returns 403 for a role without deleteResult permission', async () => {
     app.locals.db = createDbMock({});
     const res = await request(app)
       .delete(`/api/results/${RESULT_OID}`)
