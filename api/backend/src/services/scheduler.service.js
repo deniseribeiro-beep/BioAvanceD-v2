@@ -2,12 +2,14 @@ const cron = require('node-cron');
 const logger = require('../utils/logger');
 const env = require('../config/env');
 const backupService = require('./backup.service');
+const retentionSweepService = require('./retentionSweep.service');
 
 const DEFAULT_STALE_MINUTES = 20;
 
 let temperatureTask = null;
 let backupTask = null;
 let consentSyncTask = null;
+let retentionSweepTask = null;
 
 function normalizeDate(value) {
   if (!value) return null;
@@ -144,16 +146,35 @@ function startConsentSyncSchedule() {
   return null;
 }
 
+function startRetentionSweepSchedule(db) {
+  const cronExpr = env.RETENTION_SWEEP_CRON || '0 4 * * *';
+  const timezone = process.env.TZ || 'America/Sao_Paulo';
+
+  retentionSweepTask = cron.schedule(cronExpr, async () => {
+    try {
+      if (!db) return;
+      const result = await retentionSweepService.runSweep(db);
+      logger.info(`🗑️ Sweep de retenção executado: ${JSON.stringify(result)}`);
+    } catch (error) {
+      logger.error('Erro no sweep de retenção:', error.message);
+    }
+  }, { timezone });
+
+  logger.info(`⏱️ Sweep de retenção agendado (${cronExpr})`);
+}
+
 function initScheduler({ db, neo4jDriver }) {
   startTemperatureMonitor(db);
   startBackupSchedule();
   startConsentSyncSchedule({ db, neo4jDriver });
+  startRetentionSweepSchedule(db);
 }
 
 function stopScheduler() {
   if (temperatureTask) temperatureTask.stop();
   if (backupTask) backupTask.stop();
   if (consentSyncTask) consentSyncTask.stop();
+  if (retentionSweepTask) retentionSweepTask.stop();
 }
 
 module.exports = {
