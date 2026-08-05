@@ -1,11 +1,11 @@
 const { createCollectionMock } = require('./db.factory');
-const { ROLE_CODE_BY_LEGACY_NAME, PERMISSION_CATALOG, ADDITIONAL_ROLES_SEED } = require('../../src/services/rbac-catalog-seed.service');
+const { ROLE_CODE_BY_LEGACY_NAME, PERMISSION_CATALOG, LEGACY_ROLES_SEED, ADDITIONAL_ROLES_SEED } = require('../../src/services/rbac-catalog-seed.service');
 
 /**
  * #421: real query-matching mocks (findOne/find honor the actual filter) for
- * `roles`/`permissions`/`userRoleAssignments`, built from the legacy
- * accessType->permission mapping below (formerly `roles.min.json`, retired
- * as a runtime file by #432 — this fixture is now its only consumer). Test
+ * `roles`/`permissions`/`userRoleAssignments`, built from the real
+ * LEGACY_ROLES_SEED (#436: previously a hand-copied duplicate here, now
+ * imported directly so this fixture can't drift from the real seed). Test
  * files that build a mock DB for a route guarded by requireRole/
  * requirePermission need this since #421's cutover: enforcement resolves
  * via UserRoleAssignment -> Role -> Permission, not accessType/roleName
@@ -13,30 +13,7 @@ const { ROLE_CODE_BY_LEGACY_NAME, PERMISSION_CATALOG, ADDITIONAL_ROLES_SEED } = 
  *
  * Usage: `createDbMock({ ...yourCollections, ...buildRbacCollections([{ userAccountId: 'admin-test', accessType: 4 }]) })`
  */
-const rolesSeed = {
-  roles: [
-    {
-      accessType: 1,
-      roleName: 'UsuarioExterno',
-      permissions: ['viewReports'],
-    },
-    {
-      accessType: 2,
-      roleName: 'Tecnico',
-      permissions: ['createSample', 'withdrawSample', 'viewTemperature', 'manageTemperature', 'uploadFiles', 'viewReports'],
-    },
-    {
-      accessType: 3,
-      roleName: 'Coordenador',
-      permissions: ['createUser', 'createSample', 'editSample', 'createPatient', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'viewReports', 'createResult', 'editResult', 'deleteResult'],
-    },
-    {
-      accessType: 4,
-      roleName: 'Administrador',
-      permissions: ['createUser', 'createSample', 'editSample', 'deleteSample', 'createPatient', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'viewReports', 'manageBackup', 'manageSystem', 'resetMFA', 'manageOrganizations', 'createResult', 'editResult', 'deleteResult'],
-    },
-  ],
-};
+const rolesSeed = LEGACY_ROLES_SEED;
 
 function matchesQuery(doc, query = {}) {
   return Object.entries(query).every(([key, cond]) => {

@@ -11,6 +11,7 @@
 
 const logger = require('../../utils/logger');
 const { resolveUserHierarchyLevel, userHasPermission } = require('../../services/rbac-assignment.service');
+const { PERMISSION_CATALOG } = require('../../services/rbac-catalog-seed.service');
 
 function getDb(req) {
   return req.app && req.app.locals && req.app.locals.db;
@@ -56,29 +57,13 @@ const requireRole = (...allowedRoles) => {
 
 /**
  * Permissões específicas por funcionalidade (nomes usados como
- * permissionCode no catálogo Permission — ver rbac-catalog-seed.service.js)
+ * permissionCode no catálogo Permission). Derivado de PERMISSION_CATALOG
+ * (rbac-catalog-seed.service.js) em vez de listado à parte, para que um
+ * novo permissionCode só precise ser adicionado uma vez (#436).
  */
-const permissions = {
-  createUser: true,
-  createSample: true,
-  editSample: true,
-  deleteSample: true,
-  createPatient: true,
-  withdrawSample: true,
-  uploadSampleFiles: true,
-  deleteSampleFiles: true,
-  uploadFiles: true,
-  viewReports: true,
-  viewTemperature: true,
-  manageTemperature: true,
-  manageBackup: true,
-  manageSystem: true,
-  resetMFA: true,
-  manageOrganizations: true,
-  createResult: true,
-  editResult: true,
-  deleteResult: true,
-};
+const permissions = Object.fromEntries(
+  Object.keys(PERMISSION_CATALOG).map((code) => [code, true])
+);
 
 /**
  * Middleware para verificar permissão específica
