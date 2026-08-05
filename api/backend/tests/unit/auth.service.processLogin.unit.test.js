@@ -107,6 +107,25 @@ describe('AuthService.processLogin', () => {
     expect(decoded.accessType).toBe(3);
   });
 
+  // #434: processLogin's first-login MFA-setup response body's
+  // user.accessType must come from the live RBAC assignment
+  // (resolveUserHierarchyLevel), not the stale unpopulated
+  // user.accessType field (#427) — same family as #433's tempToken fix,
+  // but the response body field, not the JWT claim.
+  it('resolves the MFA-setup response body accessType from the live RBAC assignment, not stale user.accessType', async () => {
+    vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
+    const db = makeDb();
+    db.collection.mockImplementation((name) => {
+      if (name === 'roles') return { findOne: vi.fn(), find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([{ roleId: 'role-x', roleCode: 'gestor', roleStatus: 'active', hierarchyLevel: 3 }]) }) };
+      if (name === 'userRoleAssignments') return { findOne: vi.fn(), find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([{ userAccountId: 'user-1', roleId: 'role-x', assignmentStatus: 'active', validUntil: null }]) }) };
+      return db._collectionApi;
+    });
+    const user = { ...BASE_USER, accessType: 2, lastLogin: null, mfaEnabled: false };
+    const result = await authService.processLogin(db, user, 'pw', null, db.collection(), {});
+    expect(result.requiresMFASetup).toBe(true);
+    expect(result.user.accessType).toBe(3);
+  });
+
   it('skips mandatory MFA setup for admin on first login', async () => {
     vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
     const db = makeDb();
@@ -180,6 +199,22 @@ describe('AuthService.processLogin', () => {
     const result = await authService.processLogin(db, BASE_USER, 'pw', null, db.collection(), {});
     expect(result.token).toBeTruthy();
     expect(result.sessionID).toBeTruthy();
+  });
+
+  // #434: successful-login response body's user.accessType must come from
+  // the live RBAC assignment, not the stale unpopulated user.accessType
+  // field (#427).
+  it('resolves the successful-login response body accessType from the live RBAC assignment, not stale user.accessType', async () => {
+    vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
+    const db = makeDb();
+    db.collection.mockImplementation((name) => {
+      if (name === 'roles') return { findOne: vi.fn(), find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([{ roleId: 'role-x', roleCode: 'gestor', roleStatus: 'active', hierarchyLevel: 3 }]) }) };
+      if (name === 'userRoleAssignments') return { findOne: vi.fn(), find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([{ userAccountId: 'user-1', roleId: 'role-x', assignmentStatus: 'active', validUntil: null }]) }) };
+      return db._collectionApi;
+    });
+    const user = { ...BASE_USER, accessType: 2 };
+    const result = await authService.processLogin(db, user, 'pw', null, db.collection(), {});
+    expect(result.user.accessType).toBe(3);
   });
 });
 
@@ -287,6 +322,21 @@ describe('AuthService.enableMFAFirstLogin', () => {
     expect(result.token).toBeTruthy();
     expect(result.user.mfaEnabled).toBe(true);
   });
+
+  // #434: response body's user.accessType must come from the live RBAC
+  // assignment, not the stale unpopulated user.accessType field (#427).
+  it('resolves the response body accessType from the live RBAC assignment, not stale user.accessType', async () => {
+    vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
+    vi.spyOn(speakeasy.totp, 'verify').mockReturnValue(true);
+    const db = makeDb({ findOne: vi.fn().mockResolvedValue({ ...BASE_USER, accessType: 2, mfaSecret: 'SECRET' }) });
+    db.collection.mockImplementation((name) => {
+      if (name === 'roles') return { findOne: vi.fn(), find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([{ roleId: 'role-x', roleCode: 'gestor', roleStatus: 'active', hierarchyLevel: 3 }]) }) };
+      if (name === 'userRoleAssignments') return { findOne: vi.fn(), find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([{ userAccountId: 'user-1', roleId: 'role-x', assignmentStatus: 'active', validUntil: null }]) }) };
+      return db._collectionApi;
+    });
+    const result = await authService.enableMFAFirstLogin(db, { username: 'user1', password: 'pw' }, '123456', {});
+    expect(result.user.accessType).toBe(3);
+  });
 });
 
 describe('AuthService.setupMFA', () => {
@@ -331,6 +381,21 @@ describe('AuthService.enableMFA', () => {
     const result = await authService.enableMFA(db, '507f1f77bcf86cd799439011', '123456');
     expect(result.success).toBe(true);
     expect(result.token).toBeTruthy();
+  });
+
+  // #434: first-login response body's user.accessType must come from the
+  // live RBAC assignment, not the stale unpopulated user.accessType field
+  // (#427).
+  it('resolves the first-login response body accessType from the live RBAC assignment, not stale user.accessType', async () => {
+    vi.spyOn(speakeasy.totp, 'verify').mockReturnValue(true);
+    const db = makeDb({ findOne: vi.fn().mockResolvedValue({ ...BASE_USER, accessType: 2, mfaSecret: 'SECRET', lastLogin: null }) });
+    db.collection.mockImplementation((name) => {
+      if (name === 'roles') return { findOne: vi.fn(), find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([{ roleId: 'role-x', roleCode: 'gestor', roleStatus: 'active', hierarchyLevel: 3 }]) }) };
+      if (name === 'userRoleAssignments') return { findOne: vi.fn(), find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([{ userAccountId: 'user-1', roleId: 'role-x', assignmentStatus: 'active', validUntil: null }]) }) };
+      return db._collectionApi;
+    });
+    const result = await authService.enableMFA(db, '507f1f77bcf86cd799439011', '123456');
+    expect(result.user.accessType).toBe(3);
   });
 });
 
