@@ -190,6 +190,62 @@ async function changeUserRole(db, { userAccountId, accessType, changedBy }) {
   return grantRoleForAccessType(db, { userAccountId, accessType, grantedBy: changedBy });
 }
 
+/**
+ * #429: grants an additive role (one with no `accessType` slot, e.g.
+ * `auditor`) alongside whatever role(s) `userAccountId` already holds —
+ * unlike `grantRoleForAccessType`/`changeUserRole`, this never revokes an
+ * existing assignment. Idempotent: an existing active assignment for the
+ * same (userAccountId, roleCode) is returned as-is.
+ */
+async function grantAdditionalRole(db, { userAccountId, roleCode, grantedBy }) {
+  const roles = await getCollection(db, 'roles');
+  const roleDoc = await roles.findOne({ roleCode });
+  if (!roleDoc) {
+    throw new Error(`Role não encontrado para roleCode: ${roleCode} (catálogo RBAC não semeado?)`);
+  }
+
+  const assignments = await getCollection(db, 'userRoleAssignments');
+  const existing = await assignments.findOne({
+    userAccountId: String(userAccountId),
+    roleId: roleDoc.roleId,
+    assignmentStatus: 'active',
+  });
+  if (existing) return existing;
+
+  const doc = UserRoleAssignmentModel.create({
+    userAccountId: String(userAccountId),
+    roleId: roleDoc.roleId,
+    scopeType: 'global',
+    grantedBy: String(grantedBy || 'system'),
+  });
+  await assignments.insertOne(doc);
+  return doc;
+}
+
+/**
+ * #429: revokes `userAccountId`'s active assignment(s) for the given
+ * additive `roleCode`, if any. No-op (returns an empty array) if the user
+ * doesn't currently hold that role.
+ */
+async function revokeAdditionalRole(db, { userAccountId, roleCode, revokedBy }) {
+  const roles = await getCollection(db, 'roles');
+  const roleDoc = await roles.findOne({ roleCode });
+  if (!roleDoc) return [];
+
+  const assignments = await getCollection(db, 'userRoleAssignments');
+  const activeDocs = await getActiveAssignments(db, userAccountId);
+  const toRevoke = activeDocs.filter((doc) => doc.roleId === roleDoc.roleId);
+
+  const now = new Date();
+  for (const doc of toRevoke) {
+    await assignments.updateOne(
+      { assignmentId: doc.assignmentId },
+      { $set: { assignmentStatus: 'revoked', revokedBy: String(revokedBy || 'system'), revokedAt: now, revocationReason: 'role_changed' } }
+    );
+  }
+  return toRevoke;
+}
+
 module.exports = {
   ROLE_CODE_BY_ACCESS_TYPE,
   getActiveAssignments,
@@ -203,4 +259,6 @@ module.exports = {
   grantRoleForAccessType,
   changeUserRole,
   backfillUserRoleAssignments,
+  grantAdditionalRole,
+  revokeAdditionalRole,
 };

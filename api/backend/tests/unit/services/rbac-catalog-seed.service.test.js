@@ -42,8 +42,23 @@ describe('rbac-catalog-seed.service', () => {
 
     const { roles } = await seedRolesAndPermissions(db);
 
-    expect(roles).toHaveLength(4);
-    expect(roles.map((r) => r.roleCode).sort()).toEqual(['administrator', 'coordinator', 'external_user', 'technician']);
+    expect(roles).toHaveLength(5);
+    expect(roles.map((r) => r.roleCode).sort()).toEqual(['administrator', 'auditor', 'coordinator', 'external_user', 'technician']);
+  });
+
+  // #429: `auditor` has no accessType slot -- it's granted additively
+  // alongside a user's primary role, not in place of it.
+  it('seeds the additive "auditor" role with no hierarchyLevel and the viewAuditLogs permission', async () => {
+    const db = createFakeDb();
+
+    const { roles, permissions } = await seedRolesAndPermissions(db);
+
+    const auditor = roles.find((r) => r.roleCode === 'auditor');
+    expect(auditor).toBeDefined();
+    expect(auditor.hierarchyLevel).toBeNull();
+
+    const permissionIdByCode = Object.fromEntries(permissions.map((p) => [p.permissionCode, p.permissionId]));
+    expect(auditor.permissionIds).toEqual([permissionIdByCode.viewAuditLogs]);
   });
 
   it('seeds the union of permission codes referenced across all roles, deduplicated', async () => {
@@ -75,7 +90,7 @@ describe('rbac-catalog-seed.service', () => {
     const first = await seedRolesAndPermissions(db);
     const second = await seedRolesAndPermissions(db);
 
-    expect(db.collections.roles.docs).toHaveLength(4);
+    expect(db.collections.roles.docs).toHaveLength(5);
     expect(db.collections.permissions.docs).toHaveLength(first.permissions.length);
 
     const firstAdminId = first.roles.find((r) => r.roleCode === 'administrator').roleId;

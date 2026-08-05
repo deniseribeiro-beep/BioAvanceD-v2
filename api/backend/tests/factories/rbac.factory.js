@@ -1,5 +1,5 @@
 const { createCollectionMock } = require('./db.factory');
-const { ROLE_CODE_BY_LEGACY_NAME, PERMISSION_CATALOG } = require('../../src/services/rbac-catalog-seed.service');
+const { ROLE_CODE_BY_LEGACY_NAME, PERMISSION_CATALOG, ADDITIONAL_ROLES_SEED } = require('../../src/services/rbac-catalog-seed.service');
 
 /**
  * #421: real query-matching mocks (findOne/find honor the actual filter) for
@@ -69,7 +69,7 @@ function allRoleDocs() {
   const permissionIdByCode = Object.fromEntries(
     Object.keys(PERMISSION_CATALOG).map((code) => [code, `perm-${code}`])
   );
-  return rolesSeed.roles.map((role) => {
+  const legacyDocs = rolesSeed.roles.map((role) => {
     const roleCode = ROLE_CODE_BY_LEGACY_NAME[role.roleName];
     return {
       roleId: `role-${roleCode}`,
@@ -79,6 +79,15 @@ function allRoleDocs() {
       permissionIds: role.permissions.map((code) => permissionIdByCode[code]),
     };
   });
+  // #429: additive roles (e.g. `auditor`) have no accessType slot.
+  const additionalDocs = ADDITIONAL_ROLES_SEED.map((role) => ({
+    roleId: `role-${role.roleCode}`,
+    roleCode: role.roleCode,
+    hierarchyLevel: null,
+    roleStatus: 'active',
+    permissionIds: role.permissions.map((code) => permissionIdByCode[code]),
+  }));
+  return [...legacyDocs, ...additionalDocs];
 }
 
 const ROLE_ID_BY_ACCESS_TYPE = Object.fromEntries(
@@ -86,17 +95,33 @@ const ROLE_ID_BY_ACCESS_TYPE = Object.fromEntries(
 );
 
 /**
- * `users`: array of `{ userAccountId, accessType }` — one active
- * UserRoleAssignment is synthesized per entry, granting exactly the legacy
- * role/permission set `rolesSeed` above defines for that accessType.
+ * `users`: array of `{ userAccountId, accessType, roleCodes }` — one active
+ * UserRoleAssignment is synthesized per entry for the legacy
+ * accessType-derived role, plus one more per entry in `roleCodes` (#429:
+ * additive roles like `auditor`, granted alongside the accessType role, not
+ * instead of it — omit `accessType` to grant only the additive role(s)).
  */
 function buildRbacCollections(users = []) {
-  const assignments = users.map(({ userAccountId, accessType }) => ({
-    userAccountId: String(userAccountId),
-    roleId: ROLE_ID_BY_ACCESS_TYPE[Number(accessType)],
-    assignmentStatus: 'active',
-    validUntil: null,
-  }));
+  const assignments = users.flatMap(({ userAccountId, accessType, roleCodes = [] }) => {
+    const docs = [];
+    if (accessType != null) {
+      docs.push({
+        userAccountId: String(userAccountId),
+        roleId: ROLE_ID_BY_ACCESS_TYPE[Number(accessType)],
+        assignmentStatus: 'active',
+        validUntil: null,
+      });
+    }
+    for (const roleCode of roleCodes) {
+      docs.push({
+        userAccountId: String(userAccountId),
+        roleId: `role-${roleCode}`,
+        assignmentStatus: 'active',
+        validUntil: null,
+      });
+    }
+    return docs;
+  });
 
   return {
     roles: queryableCollectionMock(allRoleDocs()),

@@ -6,18 +6,6 @@ const logService = require('../../services/log.service');
 const logger = require('../../utils/logger');
 const { isAdministrator, getActiveRoleCodes } = require('../../services/rbac-assignment.service');
 
-// #426: "auditor" has no dedicated roleCode in the RBAC catalog (roles.min.json
-// never defined one) -- normalizedRoleName's substring check is the only
-// existing signal for it, so it's kept as a fallback until #427/#428 either
-// add a real "auditor" role or retire the concept.
-function normalizeRoleName(value) {
-  return String(value || '')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .trim()
-    .toLowerCase();
-}
-
 async function requireAuditReader(req, res, next) {
   try {
     const db = req.app.locals.db;
@@ -27,8 +15,11 @@ async function requireAuditReader(req, res, next) {
     const isAdmin = await isAdministrator(db, req.user?.userID);
     if (isAdmin) return next();
 
+    // #429: a real `auditor` roleCode now exists in the RBAC catalog --
+    // the unauthenticated-source `roleName`/`role` substring fallback
+    // (#426) is retired.
     const roleCodes = await getActiveRoleCodes(db, req.user?.userID);
-    const isAuditor = roleCodes.includes('auditor') || normalizeRoleName(req.user?.roleName || req.user?.role).includes('auditor');
+    const isAuditor = roleCodes.includes('auditor');
 
     if (!isAuditor) {
       return res.status(403).json({

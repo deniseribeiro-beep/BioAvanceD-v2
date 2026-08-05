@@ -9,6 +9,8 @@ const {
   getActiveRoleCodes,
   isAdministrator,
   findUserAccountIdsByRoleCodes,
+  grantAdditionalRole,
+  revokeAdditionalRole,
 } = require('../../src/services/rbac-assignment.service');
 const { createCollectionMock } = require('../factories/db.factory');
 const { buildRbacCollections } = require('../factories/rbac.factory');
@@ -61,7 +63,8 @@ function buildDb({ users = [], roles = [], permissionDocs = [], assignments = []
 
 const coordinatorRole = { roleId: 'role-coord', roleCode: 'coordinator', hierarchyLevel: 3, roleStatus: 'active', permissionIds: ['perm-createUser'] };
 const technicianRole = { roleId: 'role-tech', roleCode: 'technician', hierarchyLevel: 2, roleStatus: 'active', permissionIds: [] };
-const roles = [coordinatorRole, technicianRole];
+const auditorRole = { roleId: 'role-auditor', roleCode: 'auditor', hierarchyLevel: null, roleStatus: 'active', permissionIds: ['perm-viewAuditLogs'] };
+const roles = [coordinatorRole, technicianRole, auditorRole];
 
 describe('rbac-assignment.service (#421)', () => {
   it('grantRoleForAccessType cria uma assignment ativa para o roleCode correspondente', async () => {
@@ -191,5 +194,60 @@ describe('rbac-assignment.service readers (#426)', () => {
     const ids = await findUserAccountIdsByRoleCodes(db, ['nonexistent-role']);
 
     expect(ids).toEqual([]);
+  });
+});
+
+describe('rbac-assignment.service additive roles (#429)', () => {
+  it('grantAdditionalRole concede a role auditor sem revogar a role de accessType existente', async () => {
+    const assignments = [{ assignmentId: 'a1', userAccountId: 'u1', roleId: 'role-tech', assignmentStatus: 'active', validUntil: null }];
+    const db = buildDb({ roles, assignments });
+
+    const doc = await grantAdditionalRole(db, { userAccountId: 'u1', roleCode: 'auditor', grantedBy: 'admin1' });
+
+    expect(doc.roleId).toBe('role-auditor');
+    const active = assignments.filter((a) => a.userAccountId === 'u1' && a.assignmentStatus === 'active');
+    expect(active.map((a) => a.roleId).sort()).toEqual(['role-auditor', 'role-tech'].sort());
+  });
+
+  it('grantAdditionalRole é idempotente: chamar duas vezes não duplica a assignment', async () => {
+    const assignments = [];
+    const db = buildDb({ roles, assignments });
+
+    await grantAdditionalRole(db, { userAccountId: 'u1', roleCode: 'auditor', grantedBy: 'admin1' });
+    await grantAdditionalRole(db, { userAccountId: 'u1', roleCode: 'auditor', grantedBy: 'admin1' });
+
+    expect(assignments.filter((a) => a.userAccountId === 'u1' && a.assignmentStatus === 'active')).toHaveLength(1);
+  });
+
+  it('grantAdditionalRole lança erro se o roleCode não existir no catálogo', async () => {
+    const db = buildDb({ roles, assignments: [] });
+
+    await expect(grantAdditionalRole(db, { userAccountId: 'u1', roleCode: 'nonexistent', grantedBy: 'admin1' }))
+      .rejects.toThrow(/Role não encontrado/);
+  });
+
+  it('revokeAdditionalRole revoga apenas a assignment do roleCode informado', async () => {
+    const assignments = [
+      { assignmentId: 'a1', userAccountId: 'u1', roleId: 'role-tech', assignmentStatus: 'active', validUntil: null },
+      { assignmentId: 'a2', userAccountId: 'u1', roleId: 'role-auditor', assignmentStatus: 'active', validUntil: null },
+    ];
+    const db = buildDb({ roles, assignments });
+
+    await revokeAdditionalRole(db, { userAccountId: 'u1', roleCode: 'auditor', revokedBy: 'admin1' });
+
+    const tech = assignments.find((a) => a.assignmentId === 'a1');
+    const auditor = assignments.find((a) => a.assignmentId === 'a2');
+    expect(tech.assignmentStatus).toBe('active');
+    expect(auditor.assignmentStatus).toBe('revoked');
+  });
+
+  it('revokeAdditionalRole é no-op quando o usuário não tem a role', async () => {
+    const assignments = [{ assignmentId: 'a1', userAccountId: 'u1', roleId: 'role-tech', assignmentStatus: 'active', validUntil: null }];
+    const db = buildDb({ roles, assignments });
+
+    const revoked = await revokeAdditionalRole(db, { userAccountId: 'u1', roleCode: 'auditor', revokedBy: 'admin1' });
+
+    expect(revoked).toEqual([]);
+    expect(assignments.find((a) => a.assignmentId === 'a1').assignmentStatus).toBe('active');
   });
 });

@@ -321,6 +321,55 @@ describe('Users and Access routes', () => {
     expect(res.payload.data.roleName).toBe('Administrador');
   });
 
+  // #429: PUT /:id's `auditorRole` flag grants/revokes the additive
+  // `auditor` RBAC role via grantAdditionalRole/revokeAdditionalRole,
+  // stacking alongside (not replacing) the user's accessType-derived role,
+  // and is never persisted onto the User document.
+  it('PUT /api/users/:id com auditorRole=true concede a role auditor sem persistir o campo no documento', async () => {
+    const handler = getHandler(userRoutes, 'put', '/:id');
+    const targetUser = {
+      _id: 'user-target-4',
+      name: 'Alvo Auditor',
+      email: 'alvo-auditor@bioavanced.com.br',
+      username: 'alvoauditor',
+      status: 'active',
+      accessType: 2,
+      roleName: 'Técnico',
+    };
+    usersCollection.findOne
+      .mockResolvedValueOnce(targetUser)
+      .mockResolvedValueOnce(targetUser);
+    usersCollection.updateOne.mockResolvedValue({ matchedCount: 1 });
+
+    const rbacCollections = buildRbacCollections([
+      { userAccountId: '507f1f77bcf86cd799439011', accessType: 4 },
+      { userAccountId: 'user-target-4', accessType: 2 },
+    ]);
+    const dbWithTarget = {
+      collection: vi.fn((name) => {
+        if (name === 'users') return usersCollection;
+        if (rbacCollections[name]) return rbacCollections[name];
+        return db.collection(name);
+      }),
+    };
+
+    const req = createRequest({
+      params: { id: 'user-target-4' },
+      body: { auditorRole: true },
+    });
+    req.app.locals.db = dbWithTarget;
+    const res = createResponse();
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(200);
+    const setPayload = usersCollection.updateOne.mock.calls[0][1].$set;
+    expect(setPayload).not.toHaveProperty('auditorRole');
+    expect(rbacCollections.userRoleAssignments.insertOne).toHaveBeenCalledWith(
+      expect.objectContaining({ userAccountId: 'user-target-4', roleId: 'role-auditor', assignmentStatus: 'active' })
+    );
+  });
+
   it('GET /api/access deve listar acessos', async () => {
     const handler = getHandler(accessRoutes, 'get', '/');
     accessCollection.find.mockReturnValue({

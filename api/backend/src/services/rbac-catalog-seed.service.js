@@ -53,6 +53,21 @@ const LEGACY_ROLES_SEED = {
   ],
 };
 
+/**
+ * #429: roles not tied to any `accessType` slot — granted additively
+ * alongside a user's primary (accessType-derived) role via
+ * `grantAdditionalRole`, not as a replacement for it. `auditor` closes the
+ * gap `logs.routes.js`'s `requireAuditReader` used to fill with an
+ * unauthenticated-source `roleName` substring check (#426).
+ */
+const ADDITIONAL_ROLES_SEED = [
+  {
+    roleCode: 'auditor',
+    displayName: 'Auditor',
+    permissions: ['viewAuditLogs'],
+  },
+];
+
 const PERMISSION_CATALOG = {
   viewReports: { resourceType: 'Report', allowedActions: ['READ'], displayName: 'Visualizar relatórios' },
   createSample: { resourceType: 'Sample', allowedActions: ['CREATE'], displayName: 'Criar amostra' },
@@ -70,11 +85,16 @@ const PERMISSION_CATALOG = {
   resetMFA: { resourceType: 'User', allowedActions: ['UPDATE'], displayName: 'Redefinir MFA' },
   manageTemperature: { resourceType: 'Temperature', allowedActions: ['UPDATE'], displayName: 'Gerenciar incidentes de temperatura' },
   manageOrganizations: { resourceType: 'Organization', allowedActions: ['UPDATE'], displayName: 'Gerenciar organizações' },
+  viewAuditLogs: { resourceType: 'AuditLog', allowedActions: ['READ'], displayName: 'Visualizar trilhas de auditoria' },
 };
+
+function allSeedRoles() {
+  return [...LEGACY_ROLES_SEED.roles, ...ADDITIONAL_ROLES_SEED];
+}
 
 function buildPermissionDocs() {
   const codes = new Set();
-  for (const role of LEGACY_ROLES_SEED.roles) {
+  for (const role of allSeedRoles()) {
     for (const code of role.permissions) codes.add(code);
   }
   return [...codes].map((permissionCode) => {
@@ -92,7 +112,7 @@ function buildPermissionDocs() {
 }
 
 function buildRoleDocs(permissionIdByCode) {
-  return LEGACY_ROLES_SEED.roles.map((role) => {
+  const legacyDocs = LEGACY_ROLES_SEED.roles.map((role) => {
     const roleCode = ROLE_CODE_BY_LEGACY_NAME[role.roleName];
     if (!roleCode) {
       throw new Error(`LEGACY_ROLES_SEED referencia papel sem mapeamento de roleCode: ${role.roleName}`);
@@ -104,6 +124,17 @@ function buildRoleDocs(permissionIdByCode) {
       permissionIds: role.permissions.map((code) => permissionIdByCode[code]),
     });
   });
+
+  // #429: additive roles have no `accessType` slot, so no hierarchyLevel —
+  // they never replace a user's primary role, only stack alongside it.
+  const additionalDocs = ADDITIONAL_ROLES_SEED.map((role) => RoleModel.create({
+    roleCode: role.roleCode,
+    displayName: role.displayName,
+    hierarchyLevel: null,
+    permissionIds: role.permissions.map((code) => permissionIdByCode[code]),
+  }));
+
+  return [...legacyDocs, ...additionalDocs];
 }
 
 /**
@@ -144,4 +175,5 @@ module.exports = {
   seedRolesAndPermissions,
   ROLE_CODE_BY_LEGACY_NAME,
   PERMISSION_CATALOG,
+  ADDITIONAL_ROLES_SEED,
 };

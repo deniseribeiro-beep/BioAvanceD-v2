@@ -69,11 +69,10 @@ describe('requireAuditReader (via GET /api/logs)', () => {
     expect(res.status).toBe(200);
   });
 
-  // #426: admission is no longer decided by the JWT's roleName text --
-  // only an active `administrator` role assignment (or the `auditor`
-  // substring fallback below) grants access, so a JWT merely *claiming*
-  // roleName "Admin"/"Administrador" without a matching RBAC assignment is
-  // now correctly denied.
+  // #426/#429: admission is no longer decided by the JWT's roleName text --
+  // only an active `administrator` or `auditor` role assignment grants
+  // access, so a JWT merely *claiming* roleName "Admin"/"Administrador"
+  // without a matching RBAC assignment is correctly denied.
   it('denies a user whose JWT claims roleName "Admin" but has no administrator role assignment', async () => {
     app.locals.db = dbForAccessType(1);
     const res = await request(app)
@@ -90,12 +89,23 @@ describe('requireAuditReader (via GET /api/logs)', () => {
     expect(res.status).toBe(403);
   });
 
-  it('allows a roleName merely containing "auditor" as a substring (no dedicated RBAC role yet)', async () => {
-    vi.spyOn(logService, 'getLogs').mockResolvedValue({ logs: [], total: 0 });
+  // #429: the `roleName` substring fallback is retired -- only a real
+  // active `auditor` RBAC role assignment grants access now, regardless of
+  // what the JWT's roleName claims.
+  it('denies a roleName merely containing "auditor" as a substring with no dedicated RBAC role assignment', async () => {
     app.locals.db = dbForAccessType(1);
     const res = await request(app)
       .get('/api/logs')
       .set('Authorization', `Bearer ${makeToken({ accessType: 1, roleName: 'Auditor Clínico' })}`);
+    expect(res.status).toBe(403);
+  });
+
+  it('allows a user with an active auditor role assignment, without an administrator assignment', async () => {
+    vi.spyOn(logService, 'getLogs').mockResolvedValue({ logs: [], total: 0 });
+    app.locals.db = createDbMock(buildRbacCollections([{ userAccountId: TOKEN_USER_ID, roleCodes: ['auditor'] }]));
+    const res = await request(app)
+      .get('/api/logs')
+      .set('Authorization', `Bearer ${makeToken({ accessType: 1, roleName: 'Pesquisador' })}`);
     expect(res.status).toBe(200);
   });
 
