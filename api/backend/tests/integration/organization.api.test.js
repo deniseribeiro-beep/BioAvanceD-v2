@@ -8,6 +8,7 @@ process.env.JWT_SECRET = process.env.JWT_SECRET || 'vitest-secret-key';
 const app = require('../../app');
 const sessionService = require('../../src/services/session.service');
 const { createCollectionMock, createDbMock } = require('../factories/db.factory');
+const { buildRbacCollections } = require('../factories/rbac.factory');
 
 function makeToken(accessType = 4) {
   return jwt.sign(
@@ -42,7 +43,10 @@ describe('GET /api/organizations', () => {
         project: vi.fn().mockReturnThis(),
       }),
     });
-    app.locals.db = createDbMock({ organizations: coll });
+    app.locals.db = createDbMock({
+      organizations: coll,
+      ...buildRbacCollections([{ userAccountId: 'qa-admin-1', accessType: 4 }]),
+    });
 
     const res = await request(app)
       .get('/api/organizations')
@@ -64,6 +68,10 @@ describe('POST /api/organizations', () => {
   });
 
   it('returns 403 for a role below Administrador', async () => {
+    app.locals.db = createDbMock({
+      ...buildRbacCollections([{ userAccountId: 'qa-admin-1', accessType: 3 }]),
+    });
+
     const res = await request(app)
       .post('/api/organizations')
       .set('Authorization', `Bearer ${makeToken(3)}`)
@@ -85,7 +93,10 @@ describe('POST /api/organizations', () => {
         project: vi.fn().mockReturnThis(),
       }),
     });
-    app.locals.db = createDbMock({ organizations: coll });
+    app.locals.db = createDbMock({
+      organizations: coll,
+      ...buildRbacCollections([{ userAccountId: 'qa-admin-1', accessType: 4 }]),
+    });
 
     const res = await request(app)
       .post('/api/organizations')
@@ -97,7 +108,9 @@ describe('POST /api/organizations', () => {
   });
 
   it('returns 400 for missing required fields', async () => {
-    app.locals.db = createDbMock({});
+    app.locals.db = createDbMock({
+      ...buildRbacCollections([{ userAccountId: 'qa-admin-1', accessType: 4 }]),
+    });
     const res = await request(app)
       .post('/api/organizations')
       .set('Authorization', `Bearer ${makeToken(4)}`)

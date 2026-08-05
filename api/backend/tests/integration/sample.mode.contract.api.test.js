@@ -12,6 +12,7 @@ const LineageRepository = require('../../src/infrastructure/database/neo4j/Linea
 const auditLogger = require('../../src/utils/auditLogger');
 const sessionService = require('../../src/services/session.service');
 const env = require('../../src/config/env');
+const { buildRbacCollections } = require('../factories/rbac.factory');
 
 function createAuthToken() {
   return jwt.sign(
@@ -50,14 +51,16 @@ describe('POST /api/samples - matriz STRICT/PERMISSIVE e contrato de resposta', 
     previousLineageMode = env.LINEAGE_MODE;
     env.LINEAGE_MODE = 'fail-open';
 
+    const genericCollection = {
+      deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }),
+      updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
+      insertOne: vi.fn().mockResolvedValue({ insertedId: 'sample-2' }),
+      findOne: vi.fn().mockResolvedValue(null),
+      find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }),
+    };
+    const rbacCollections = buildRbacCollections([{ userAccountId: 'qa-user-2', accessType: 2 }]);
     app.locals.db = {
-      collection: () => ({
-        deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }),
-        updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
-        insertOne: vi.fn().mockResolvedValue({ insertedId: 'sample-2' }),
-        findOne: vi.fn().mockResolvedValue(null),
-        find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }),
-      }),
+      collection: (name) => rbacCollections[name] || genericCollection,
     };
     app.locals.neo4jDriver = null;
     app.locals.neo4jQuarantineService = null;

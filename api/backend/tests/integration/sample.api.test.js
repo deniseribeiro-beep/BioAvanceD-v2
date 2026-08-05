@@ -11,6 +11,7 @@ const sampleService = require('../../src/services/sample.service');
 const LineageRepository = require('../../src/infrastructure/database/neo4j/LineageRepository');
 const auditLogger = require('../../src/utils/auditLogger');
 const sessionService = require('../../src/services/session.service');
+const { buildRbacCollections } = require('../factories/rbac.factory');
 
 function createAuthToken() {
   return jwt.sign(
@@ -28,14 +29,16 @@ function createAuthToken() {
 
 describe('POST /api/samples - Smart Blocking e Topological Quarantine', () => {
   beforeEach(() => {
+    const genericCollection = {
+      deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }),
+      updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
+      insertOne: vi.fn().mockResolvedValue({ insertedId: 'sample-1' }),
+      findOne: vi.fn().mockResolvedValue(null),
+      find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }),
+    };
+    const rbacCollections = buildRbacCollections([{ userAccountId: 'qa-user-1', accessType: 2 }]);
     app.locals.db = {
-      collection: () => ({
-        deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }),
-        updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
-        insertOne: vi.fn().mockResolvedValue({ insertedId: 'sample-1' }),
-        findOne: vi.fn().mockResolvedValue(null),
-        find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }),
-      }),
+      collection: (name) => rbacCollections[name] || genericCollection,
     };
     app.locals.neo4jDriver = null;
     app.locals.neo4jQuarantineService = null;

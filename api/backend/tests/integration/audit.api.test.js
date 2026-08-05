@@ -8,6 +8,12 @@ process.env.JWT_SECRET = process.env.JWT_SECRET || 'vitest-secret-key';
 const app = require('../../app');
 const sessionService = require('../../src/services/session.service');
 const { createCollectionMock, createDbMock } = require('../factories/db.factory');
+const { buildRbacCollections } = require('../factories/rbac.factory');
+
+const rbacCollections = buildRbacCollections([
+  { userAccountId: 'qa-admin-1', accessType: 4 },
+  { userAccountId: 'qa-user-1', accessType: 2 },
+]);
 
 function makeToken(accessType = 4) {
   return jwt.sign(
@@ -55,7 +61,7 @@ describe('GET /api/audit/root/:date', () => {
     vi.spyOn(integrityService, 'buildMerkleForDate').mockResolvedValue({ root: 'abc123', leaves: [] });
 
     const coll = createCollectionMock();
-    app.locals.db = createDbMock({ auditLogs: coll });
+    app.locals.db = createDbMock({ auditLogs: coll, ...rbacCollections });
 
     const res = await request(app)
       .get('/api/audit/root/2026-01-01')
@@ -69,7 +75,7 @@ describe('GET /api/audit/root/:date', () => {
     vi.spyOn(integrityService, 'buildMerkleForDate').mockResolvedValue({ root: 'xyz', leaves: [] });
 
     const coll = createCollectionMock();
-    app.locals.db = createDbMock({ auditLogs: coll });
+    app.locals.db = createDbMock({ auditLogs: coll, ...rbacCollections });
 
     const res = await request(app)
       .get('/api/audit/root/2026-01-01')
@@ -87,7 +93,7 @@ describe('POST /api/audit/verify', () => {
 
   it('returns 400 when the request carries the retired hash/proof/root contract', async () => {
     const coll = createCollectionMock();
-    app.locals.db = createDbMock({ auditLogs: coll });
+    app.locals.db = createDbMock({ auditLogs: coll, ...rbacCollections });
 
     const merkle = require('../../src/utils/merkleTree');
     const leaves = ['a', 'b', 'c'].map((x) => merkle.sha256Hex(x));
@@ -141,6 +147,7 @@ describe('POST /api/audit/verify', () => {
       audit_tree_heads: headsColl,
       audit_timestamp_tokens: tokensColl,
       audit_witnesses: witnessesColl,
+      ...rbacCollections,
     });
 
     const res = await request(app)
@@ -189,6 +196,7 @@ describe('POST /api/audit/verify', () => {
       audit_tree_heads: headsColl,
       audit_timestamp_tokens: tokensColl,
       audit_witnesses: witnessesColl,
+      ...rbacCollections,
     });
 
     const res = await request(app)
@@ -205,7 +213,7 @@ describe('POST /api/audit/verify', () => {
 
   it('returns 404 when the audit event is not found', async () => {
     const eventsColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(null) });
-    app.locals.db = createDbMock({ audit_events: eventsColl });
+    app.locals.db = createDbMock({ audit_events: eventsColl, ...rbacCollections });
 
     const res = await request(app)
       .post('/api/audit/verify')
@@ -238,7 +246,7 @@ describe('GET /api/audit/report/:date', () => {
     vi.spyOn(auditRootService, 'getRootByDate').mockResolvedValue({ root: 'r1', previousRootHash: null });
 
     const coll = createCollectionMock();
-    app.locals.db = createDbMock({ auditLogs: coll });
+    app.locals.db = createDbMock({ auditLogs: coll, ...rbacCollections });
 
     const res = await request(app)
       .get('/api/audit/report/2026-01-01')
@@ -262,7 +270,7 @@ describe('GET /api/audit/compare/:date', () => {
     vi.spyOn(auditRootService, 'getRootByDate').mockResolvedValue({ root: 'same-root' });
 
     const coll = createCollectionMock();
-    app.locals.db = createDbMock({ auditLogs: coll });
+    app.locals.db = createDbMock({ auditLogs: coll, ...rbacCollections });
 
     const res = await request(app)
       .get('/api/audit/compare/2026-01-01')
@@ -278,7 +286,7 @@ describe('GET /api/audit/compare/:date', () => {
     vi.spyOn(auditRootService, 'getRootByDate').mockResolvedValue({ root: 'original-root' });
 
     const coll = createCollectionMock();
-    app.locals.db = createDbMock({ auditLogs: coll });
+    app.locals.db = createDbMock({ auditLogs: coll, ...rbacCollections });
 
     const res = await request(app)
       .get('/api/audit/compare/2026-01-01')

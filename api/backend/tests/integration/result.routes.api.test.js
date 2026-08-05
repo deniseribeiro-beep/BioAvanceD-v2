@@ -12,11 +12,24 @@ process.env.JWT_SECRET = process.env.JWT_SECRET || 'vitest-secret-key';
 const app = require('../../app');
 const sessionService = require('../../src/services/session.service');
 const consentValidator = require('../../src/services/consent.validator');
-const { createCollectionMock, createDbMock } = require('../factories/db.factory');
+const { createCollectionMock, createDbMock: baseCreateDbMock } = require('../factories/db.factory');
+const { buildRbacCollections } = require('../factories/rbac.factory');
+
+// #421: every accessType this file's tokens use (1, 2, 4) needs its own
+// UserRoleAssignment so requireRole/requirePermission resolve correctly
+// regardless of which accessType a given test authenticates as. Each
+// accessType gets its own synthesized userAccountId (see makeToken) so the
+// assignments don't collide/union permissions for a single userID.
+const RBAC_USERS = [1, 2, 3, 4].map((accessType) => ({ userAccountId: `qa-1-${accessType}`, accessType }));
+const rbacCollections = buildRbacCollections(RBAC_USERS);
+
+function createDbMock(collections = {}) {
+  return baseCreateDbMock({ ...collections, ...rbacCollections });
+}
 
 function makeToken(accessType = 4) {
   return jwt.sign(
-    { userID: 'qa-1', accessType, roleName: undefined, name: 'QA', mfaVerified: true },
+    { userID: `qa-1-${accessType}`, accessType, roleName: undefined, name: 'QA', mfaVerified: true },
     process.env.JWT_SECRET,
     { expiresIn: '1h' }
   );

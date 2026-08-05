@@ -3,12 +3,81 @@ import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 const { requireRole, requirePermission, permissions } = require('../../src/infrastructure/middleware/rbac');
 const auditLogger = require('../../src/utils/auditLogger');
+const { createCollectionMock } = require('../factories/db.factory');
 
 function flushSetImmediate() {
   return new Promise((resolve) => setImmediate(resolve));
 }
 
-describe('RBAC middleware', () => {
+function matchesQuery(doc, query = {}) {
+  return Object.entries(query).every(([key, cond]) => {
+    if (cond && typeof cond === 'object' && '$in' in cond) {
+      return cond.$in.includes(doc[key]);
+    }
+    return doc[key] === cond;
+  });
+}
+
+/**
+ * #421: real query-matching mocks (findOne/find honor the actual filter,
+ * not canned data) for roles/permissions/userRoleAssignments — this repo's
+ * "real backend" proof bar for a backend-internal slice (no live-Mongo
+ * tier exists here; see build-loop's local-env overlay).
+ */
+function buildRbacDb({ roles = [], permissionDocs = [], assignments = [] } = {}) {
+  const rolesCollection = createCollectionMock({
+    findOne: vi.fn(async (query = {}) => roles.find((r) => matchesQuery(r, query)) || null),
+    find: vi.fn((query = {}) => ({
+      toArray: vi.fn().mockResolvedValue(roles.filter((r) => matchesQuery(r, query))),
+    })),
+  });
+  const permissionsCollection = createCollectionMock({
+    findOne: vi.fn(async (query = {}) => permissionDocs.find((p) => matchesQuery(p, query)) || null),
+    find: vi.fn((query = {}) => ({
+      toArray: vi.fn().mockResolvedValue(permissionDocs.filter((p) => matchesQuery(p, query))),
+    })),
+  });
+  const assignmentsCollection = createCollectionMock({
+    findOne: vi.fn(async (query = {}) => assignments.find((a) => matchesQuery(a, query)) || null),
+    find: vi.fn((query = {}) => ({
+      toArray: vi.fn().mockResolvedValue(assignments.filter((a) => matchesQuery(a, query))),
+    })),
+  });
+
+  return {
+    collection: (name) => {
+      if (name === 'roles') return rolesCollection;
+      if (name === 'permissions') return permissionsCollection;
+      if (name === 'userRoleAssignments') return assignmentsCollection;
+      return createCollectionMock();
+    },
+  };
+}
+
+const coordinatorRole = {
+  roleId: 'role-coordinator',
+  roleCode: 'coordinator',
+  hierarchyLevel: 3,
+  roleStatus: 'active',
+  permissionIds: ['perm-createUser'],
+};
+const externalRole = {
+  roleId: 'role-external',
+  roleCode: 'external_user',
+  hierarchyLevel: 1,
+  roleStatus: 'active',
+  permissionIds: ['perm-viewReports'],
+};
+const permissionDocs = [
+  { permissionId: 'perm-createUser', permissionCode: 'createUser' },
+  { permissionId: 'perm-viewReports', permissionCode: 'viewReports' },
+];
+
+function activeAssignment(userAccountId, roleId) {
+  return { userAccountId, roleId, assignmentStatus: 'active', validUntil: null };
+}
+
+describe('RBAC middleware (#421 - UserRoleAssignment -> Role -> Permission)', () => {
   const createRes = () => ({
     status: vi.fn().mockReturnThis(),
     json: vi.fn().mockReturnThis(),
@@ -28,141 +97,141 @@ describe('RBAC middleware', () => {
     vi.restoreAllMocks();
   });
 
-  it('deve negar acesso sem usuário autenticado em requireRole', () => {
-    requireRole(4)(req, res, next);
+  it('deve negar acesso sem usuário autenticado em requireRole', async () => {
+    await requireRole(4)(req, res, next);
 
     expect(res.status).toHaveBeenCalledWith(401);
     expect(next).not.toHaveBeenCalled();
   });
 
-  it('deve permitir administrador em requireRole(4)', () => {
-    req.user = { userID: '1', accessType: 4, roleName: 'Administrador' };
+  it('deve negar acesso sem usuário autenticado em requirePermission', async () => {
+    await requirePermission('createUser')(req, res, next);
 
-    requireRole(4)(req, res, next);
-
-    expect(next).toHaveBeenCalled();
-    expect(res.status).not.toHaveBeenCalled();
-  });
-
-  it('deve negar técnico em requireRole(4)', () => {
-    req.user = { userID: '2', accessType: 2, roleName: 'Técnico' };
-
-    requireRole(4)(req, res, next);
-
-    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.status).toHaveBeenCalledWith(401);
     expect(next).not.toHaveBeenCalled();
   });
 
-  it('deve permitir coordenador em requirePermission(createUser)', () => {
-    req.user = { userID: '3', accessType: 3, roleName: 'Coordenador' };
+  it('deve retornar 500 quando req.app.locals.db está indisponível', async () => {
+    req.user = { userID: 'u1' };
 
-    requirePermission('createUser')(req, res, next);
-
-    expect(next).toHaveBeenCalled();
-    expect(res.status).not.toHaveBeenCalled();
-  });
-
-  it('deve negar usuário externo em requirePermission(createUser)', () => {
-    req.user = { userID: '4', accessType: 1, roleName: 'Usuário Externo' };
-
-    requirePermission('createUser')(req, res, next);
-
-    expect(res.status).toHaveBeenCalledWith(403);
-    expect(next).not.toHaveBeenCalled();
-  });
-
-  it('deve retornar 500 para permissão inexistente', () => {
-    req.user = { userID: '5', accessType: 4, roleName: 'Administrador' };
-
-    requirePermission('doesNotExist')(req, res, next);
+    await requireRole(3)(req, res, next);
 
     expect(res.status).toHaveBeenCalledWith(500);
     expect(next).not.toHaveBeenCalled();
   });
 
-  it('deve expor mapa de permissões esperado', () => {
-    expect(permissions.createUser).toEqual([3, 4]);
-    expect(permissions.manageBackup).toEqual([4]);
-    expect(permissions.viewReports).toEqual([1, 2, 3, 4]);
-  });
+  it('deve permitir coordenador em requireRole(3) via UserRoleAssignment ativo', async () => {
+    req.user = { userID: 'u1' };
+    req.app.locals.db = buildRbacDb({
+      roles: [coordinatorRole],
+      assignments: [activeAssignment('u1', 'role-coordinator')],
+    });
 
-  it('deve resolver role via roleName (accentuated) quando accessType está ausente', () => {
-    req.user = { userID: '6', roleName: 'Coordenador' };
-
-    requireRole(3)(req, res, next);
+    await requireRole(3)(req, res, next);
 
     expect(next).toHaveBeenCalled();
     expect(res.status).not.toHaveBeenCalled();
   });
 
-  it('deve negar acesso quando userRole não está entre allowedRoles (caminho não-admin)', () => {
-    req.user = { userID: '7', accessType: 1, roleName: 'Usuário Externo' };
+  it('deve negar em requireRole quando a assignment ativa aponta para outro nível', async () => {
+    req.user = { userID: 'u2' };
+    req.app.locals.db = buildRbacDb({
+      roles: [externalRole],
+      assignments: [activeAssignment('u2', 'role-external')],
+    });
 
-    requireRole(2, 3)(req, res, next);
+    await requireRole(4)(req, res, next);
 
     expect(res.status).toHaveBeenCalledWith(403);
-    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
-      message: 'Você não tem permissão para acessar este recurso'
-    }));
     expect(next).not.toHaveBeenCalled();
   });
 
-  it('deve negar acesso sem usuário autenticado em requirePermission', () => {
-    requirePermission('createUser')(req, res, next);
+  it('deve negar em requireRole quando não há nenhuma assignment ativa', async () => {
+    req.user = { userID: 'u3' };
+    req.app.locals.db = buildRbacDb({});
 
-    expect(res.status).toHaveBeenCalledWith(401);
+    await requireRole(1)(req, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(403);
     expect(next).not.toHaveBeenCalled();
+  });
+
+  it('deve permitir requirePermission(createUser) quando o papel ativo tem a permissão', async () => {
+    req.user = { userID: 'u1' };
+    req.app.locals.db = buildRbacDb({
+      roles: [coordinatorRole],
+      permissionDocs,
+      assignments: [activeAssignment('u1', 'role-coordinator')],
+    });
+
+    await requirePermission('createUser')(req, res, next);
+
+    expect(next).toHaveBeenCalled();
+    expect(res.status).not.toHaveBeenCalled();
+  });
+
+  it('deve negar requirePermission(createUser) quando o papel ativo não tem a permissão', async () => {
+    req.user = { userID: 'u2' };
+    req.app.locals.db = buildRbacDb({
+      roles: [externalRole],
+      permissionDocs,
+      assignments: [activeAssignment('u2', 'role-external')],
+    });
+
+    await requirePermission('createUser')(req, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it('deve ignorar assignment expirada (validUntil no passado)', async () => {
+    req.user = { userID: 'u4' };
+    req.app.locals.db = buildRbacDb({
+      roles: [coordinatorRole],
+      permissionDocs,
+      assignments: [{ userAccountId: 'u4', roleId: 'role-coordinator', assignmentStatus: 'active', validUntil: new Date('2020-01-01') }],
+    });
+
+    await requirePermission('createUser')(req, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it('deve retornar 500 para permissão inexistente', async () => {
+    req.user = { userID: 'u5' };
+    req.app.locals.db = buildRbacDb({});
+
+    await requirePermission('doesNotExist')(req, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(500);
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it('deve expor mapa de permissões esperado (nomes válidos)', () => {
+    expect(permissions.createUser).toBe(true);
+    expect(permissions.manageBackup).toBe(true);
+    expect(permissions.viewReports).toBe(true);
+    expect(permissions.manageTemperature).toBe(true);
+    expect(permissions.manageOrganizations).toBe(true);
   });
 
   it('deve registrar tentativa de acesso negado no audit log quando db está disponível', async () => {
     const logSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue();
     vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
-    req.user = { userID: '8', accessType: 1, roleName: 'Usuário Externo' };
-    req.app.locals.db = {};
+    req.user = { userID: 'u2' };
+    req.app.locals.db = buildRbacDb({
+      roles: [externalRole],
+      permissionDocs,
+      assignments: [activeAssignment('u2', 'role-external')],
+    });
 
-    requirePermission('createUser')(req, res, next);
+    await requirePermission('createUser')(req, res, next);
     await flushSetImmediate();
 
     expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({
       action: 'FORBIDDEN',
       entity: 'Access'
     }));
-  });
-
-  it('deve resolver role via user.role quando roleName está ausente', () => {
-    req.user = { userID: '10', role: 'tecnico' };
-
-    requireRole(2)(req, res, next);
-
-    expect(next).toHaveBeenCalled();
-    expect(res.status).not.toHaveBeenCalled();
-  });
-
-  it('deve assumir role 1 (padrão) quando nenhum accessType/role/roleName reconhecido está presente', () => {
-    req.user = { userID: '11' };
-
-    requireRole(1)(req, res, next);
-
-    expect(next).toHaveBeenCalled();
-    expect(res.status).not.toHaveBeenCalled();
-  });
-
-  it('deve assumir role 1 (padrão) para roleName não mapeado', () => {
-    req.user = { userID: '12', roleName: 'Gerente' };
-
-    requireRole(1)(req, res, next);
-
-    expect(next).toHaveBeenCalled();
-    expect(res.status).not.toHaveBeenCalled();
-  });
-
-  it('não deve registrar audit log quando db não está disponível', async () => {
-    const logSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue();
-    req.user = { userID: '9', accessType: 1, roleName: 'Usuário Externo' };
-
-    requirePermission('createUser')(req, res, next);
-    await flushSetImmediate();
-
-    expect(logSpy).not.toHaveBeenCalled();
   });
 });

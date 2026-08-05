@@ -8,6 +8,7 @@ const UserModel = require('../models/User');
 const LogModel = require('../models/Log');
 const logger = require('../utils/logger');
 const sessionService = require('./session.service');
+const { grantRoleForAccessType } = require('./rbac-assignment.service');
 
 const ACCESS_TOKEN_TTL = '15m';
 const REFRESH_TOKEN_TTL = '7d';
@@ -98,7 +99,7 @@ class AuthService {
   /**
    * Registra um novo usuário
    */
-  async registerUser(db, userData) {
+  async registerUser(db, userData, grantedBy = 'system') {
     try {
       const validation = UserModel.validate(userData);
       if (!validation.isValid) {
@@ -150,6 +151,15 @@ class AuthService {
       }
 
       const result = await usersCollection.insertOne(user);
+
+      // #421: grants the UserRoleAssignment matching accessType atomically
+      // with user creation — no dual-write window where a user exists
+      // without a corresponding assignment.
+      await grantRoleForAccessType(db, {
+        userAccountId: result.insertedId.toString(),
+        accessType: user.accessType,
+        grantedBy,
+      });
 
       // Gera e salva identificador anonimizado para LGPD
       const { generateAnonId } = require('../utils/userAnonymization');

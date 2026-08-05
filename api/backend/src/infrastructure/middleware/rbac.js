@@ -1,49 +1,26 @@
 /**
  * Middleware RBAC (Role-Based Access Control)
  * RNF008 - Controle de Acesso Baseado em Função
- * 
- * AccessTypes (corrigidos):
- * 1 = UsuarioExterno
- * 2 = Tecnico
- * 3 = Coordenador
- * 4 = Administrador
+ *
+ * #421: enforcement resolves via UserRoleAssignment -> Role -> Permission
+ * (see rbac-assignment.service.js), not accessType/roleName — atomic
+ * cutover per dict-07's migration-table rule, no dual-read of the old
+ * fields here. hierarchyLevel mirrors the old accessType numbering:
+ * 1 = UsuarioExterno, 2 = Tecnico, 3 = Coordenador, 4 = Administrador.
  */
 
 const logger = require('../../utils/logger');
+const { resolveUserHierarchyLevel, userHasPermission } = require('../../services/rbac-assignment.service');
 
-function resolveUserRole(user = {}) {
-  const roleFromAccessType = Number(user.accessType || user.role || 0);
-  if ([1, 2, 3, 4].includes(roleFromAccessType)) {
-    return roleFromAccessType;
-  }
-
-  const normalizedRoleName = String(user.roleName || user.role || '')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .trim()
-    .toLowerCase();
-
-  const roleNameToAccessType = {
-    administrador: 4,
-    admin: 4,
-    coordenador: 3,
-    tecnico: 2,
-    pesquisador: 1,
-    pesquisadora: 1,
-    researcher: 1,
-    'usuario externo': 1,
-    'usuário externo': 1,
-    external: 1,
-  };
-
-  return roleNameToAccessType[normalizedRoleName] || 1;
+function getDb(req) {
+  return req.app && req.app.locals && req.app.locals.db;
 }
 
 /**
  * Verifica se o usuário tem o nível de acesso necessário
  */
 const requireRole = (...allowedRoles) => {
-  return (req, res, next) => {
+  return async (req, res, next) => {
     if (!req.user) {
       return res.status(401).json({
         success: false,
@@ -52,25 +29,20 @@ const requireRole = (...allowedRoles) => {
       });
     }
 
-    const userRole = resolveUserRole(req.user);
-    
-    // Verifica se é administrador também por roleName (fallback)
-    const isAdminByRoleName = req.user.roleName === 'Administrador';
-    const isAdminByAccessType = userRole === 4;
-    const isAdmin = isAdminByRoleName || isAdminByAccessType;
-
-    // Se a rota requer administrador (4), verifica ambos os métodos
-    if (allowedRoles.includes(4) && !isAdmin) {
-      logger.warn(`Acesso negado para usuário ${req.user.userID} - Role: ${userRole}, RoleName: ${req.user.roleName}, Requerido: ${allowedRoles.join(', ')}`);
-      return res.status(403).json({
+    const db = getDb(req);
+    if (!db) {
+      logger.error('requireRole: req.app.locals.db indisponível');
+      return res.status(500).json({
         success: false,
-        error: 'Acesso negado',
-        message: 'Apenas administradores podem acessar este recurso'
+        error: 'Erro interno',
+        message: 'Erro ao verificar permissões'
       });
     }
 
-    if (!allowedRoles.includes(userRole)) {
-      logger.warn(`Acesso negado para usuário ${req.user.userID} - Role: ${userRole}, RoleName: ${req.user.roleName}, Requerido: ${allowedRoles.join(', ')}`);
+    const userLevel = await resolveUserHierarchyLevel(db, req.user.userID);
+
+    if (userLevel === null || !allowedRoles.includes(userLevel)) {
+      logger.warn(`Acesso negado para usuário ${req.user.userID} - Nível: ${userLevel}, Requerido: ${allowedRoles.join(', ')}`);
       return res.status(403).json({
         success: false,
         error: 'Acesso negado',
@@ -83,59 +55,33 @@ const requireRole = (...allowedRoles) => {
 };
 
 /**
- * Permissões específicas por funcionalidade
+ * Permissões específicas por funcionalidade (nomes usados como
+ * permissionCode no catálogo Permission — ver rbac-catalog-seed.service.js)
  */
 const permissions = {
-  // RF003 - Cadastro de usuário
-  createUser: [3, 4], // Coordenador (3), Administrador (4)
-
-  // RF004 - Cadastro de amostra
-  createSample: [2, 3, 4], // Técnico (2), Coordenador (3), Administrador (4)
-  
-  // Editar e deletar amostra
-  editSample: [3, 4], // Coordenador (3), Administrador (4)
-  deleteSample: [4], // Least privilege: apenas Administrador (4)
-
-  // RF005 - Cadastro de paciente
-  createPatient: [3, 4], // Coordenador (3), Administrador (4)
-
-  // RF006 - Retirada de amostra
-  withdrawSample: [2, 3, 4], // Técnico (2), Coordenador (3), Administrador (4)
-
-  // RF007 - Upload de arquivos de análise (apenas Admin e Coordenador)
-  uploadSampleFiles: [3, 4], // Coordenador (3), Administrador (4)
-  deleteSampleFiles: [3, 4], // Coordenador (3), Administrador (4)
-  
-  // RF007 - Upload de arquivos (geral - mantido para compatibilidade)
-  uploadFiles: [2, 3, 4], // Técnico (2), Coordenador (3), Administrador (4)
-
-  // RF008 - Relatórios
-  viewReports: [1, 2, 3, 4], // Todos: Usuário Externo (1), Técnico (2), Coordenador (3), Administrador (4)
-
-  // RF009 - Visualizar temperatura
-  viewTemperature: [2, 3, 4], // Técnico (2), Coordenador (3), Administrador (4)
-
-  // RF009 - Gerenciar incidentes de temperatura (reconhecer/resolver/escalar)
-  manageTemperature: [2, 3, 4], // Técnico (2), Coordenador (3), Administrador (4)
-
-  // RF010 - Backup
-  manageBackup: [4], // Apenas Administrador (4)
-
-  // Gerenciar sistema
-  manageSystem: [4], // Apenas Administrador (4)
-  
-  // Reset MFA
-  resetMFA: [4], // Apenas Administrador (4)
-
-  // Organization entity (#346) - foundational institutional-scope data
-  manageOrganizations: [4], // Apenas Administrador (4)
+  createUser: true,
+  createSample: true,
+  editSample: true,
+  deleteSample: true,
+  createPatient: true,
+  withdrawSample: true,
+  uploadSampleFiles: true,
+  deleteSampleFiles: true,
+  uploadFiles: true,
+  viewReports: true,
+  viewTemperature: true,
+  manageTemperature: true,
+  manageBackup: true,
+  manageSystem: true,
+  resetMFA: true,
+  manageOrganizations: true,
 };
 
 /**
  * Middleware para verificar permissão específica
  */
 const requirePermission = (permission) => {
-  return (req, res, next) => {
+  return async (req, res, next) => {
     if (!req.user) {
       return res.status(401).json({
         success: false,
@@ -144,10 +90,7 @@ const requirePermission = (permission) => {
       });
     }
 
-    const userRole = resolveUserRole(req.user);
-    const allowedRoles = permissions[permission];
-
-    if (!allowedRoles) {
+    if (!permissions[permission]) {
       logger.error(`Permissão não definida: ${permission}`);
       return res.status(500).json({
         success: false,
@@ -156,13 +99,24 @@ const requirePermission = (permission) => {
       });
     }
 
-    if (!allowedRoles.includes(userRole)) {
-      logger.warn(`Permissão negada: ${permission} para usuário ${req.user.userID} (Role: ${userRole})`);
-      
+    const db = getDb(req);
+    if (!db) {
+      logger.error('requirePermission: req.app.locals.db indisponível');
+      return res.status(500).json({
+        success: false,
+        error: 'Erro interno',
+        message: 'Erro ao verificar permissões'
+      });
+    }
+
+    const hasPermission = await userHasPermission(db, req.user.userID, permission);
+
+    if (!hasPermission) {
+      logger.warn(`Permissão negada: ${permission} para usuário ${req.user.userID}`);
+
       // Registra tentativa de acesso negado
       setImmediate(async () => {
         try {
-          const db = req.app.locals.db;
           if (db) {
             const auditLogger = require('../../utils/auditLogger');
             auditLogger.init(db);
@@ -171,7 +125,7 @@ const requirePermission = (permission) => {
               entity: 'Access',
               result: 'error',
               severity: 'warning',
-              message: `Tentativa de acesso negado: ${permission} (Role: ${userRole})`,
+              message: `Tentativa de acesso negado: ${permission}`,
               req: req,
               module: 'Segurança'
             });
@@ -180,7 +134,7 @@ const requirePermission = (permission) => {
           // Não bloqueia se houver erro no log
         }
       });
-      
+
       return res.status(403).json({
         success: false,
         error: 'Acesso negado',
@@ -197,4 +151,3 @@ module.exports = {
   requirePermission,
   permissions
 };
-

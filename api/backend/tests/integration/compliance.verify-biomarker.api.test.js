@@ -10,6 +10,7 @@ const app = require('../../app');
 const biomarkerIntegrityService = require('../../src/services/biomarker-integrity.service');
 const sessionService = require('../../src/services/session.service');
 const auditLogger = require('../../src/utils/auditLogger');
+const { buildRbacCollections } = require('../factories/rbac.factory');
 
 function createAdminToken() {
   return jwt.sign(
@@ -28,16 +29,24 @@ function createAdminToken() {
 
 describe('GET /api/compliance/verify-biomarker/:id', () => {
   beforeEach(() => {
+    // #421: enforcement resolves permissions via UserRoleAssignment -> Role
+    // -> Permission, keyed by userID, not accessType off the JWT directly —
+    // wire in real query-matching mocks for those three collections, seeded
+    // with an active admin (accessType 4) assignment for qa-admin-1, so the
+    // route's requireRole/requirePermission guard behaves like the old
+    // accessType-based check did.
+    const rbacCollections = buildRbacCollections([{ userAccountId: 'qa-admin-1', accessType: 4 }]);
+    const genericCollection = () => ({
+      findOne: vi.fn(),
+      find: vi.fn(() => ({
+        sort: vi.fn(() => ({
+          toArray: vi.fn().mockResolvedValue([])
+        }))
+      })),
+      createIndex: vi.fn().mockResolvedValue(undefined)
+    });
     app.locals.db = {
-      collection: vi.fn(() => ({
-        findOne: vi.fn(),
-        find: vi.fn(() => ({
-          sort: vi.fn(() => ({
-            toArray: vi.fn().mockResolvedValue([])
-          }))
-        })),
-        createIndex: vi.fn().mockResolvedValue(undefined)
-      }))
+      collection: vi.fn((name) => rbacCollections[name] || genericCollection())
     };
 
     vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 'compliance-session-1' } });

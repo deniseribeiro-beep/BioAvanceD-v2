@@ -1,4 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { createRequire } from 'module';
+const require2 = createRequire(import.meta.url);
+const { buildRbacCollections } = require2('../factories/rbac.factory');
 
 const authServiceMock = vi.hoisted(() => ({
   registerUser: vi.fn(async (_db, body) => ({
@@ -110,11 +113,17 @@ describe('Users and Access routes', () => {
       insertOne: vi.fn().mockResolvedValue({ insertedId: 'log-1' }),
     };
 
+    const rbacCollections = buildRbacCollections([
+      { userAccountId: '507f1f77bcf86cd799439011', accessType: 4 },
+      { userAccountId: '507f1f77bcf86cd799439012', accessType: 2 },
+    ]);
+
     db = {
       collection: vi.fn((name) => {
         if (name === 'users') return usersCollection;
         if (name === 'access') return accessCollection;
         if (name === 'logs') return logsCollection;
+        if (rbacCollections[name]) return rbacCollections[name];
         return {
           find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }),
           findOne: vi.fn(),

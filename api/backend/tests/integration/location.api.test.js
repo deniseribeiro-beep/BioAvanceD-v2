@@ -8,6 +8,9 @@ process.env.JWT_SECRET = process.env.JWT_SECRET || 'vitest-secret-key';
 const app = require('../../app');
 const sessionService = require('../../src/services/session.service');
 const { createCollectionMock, createDbMock } = require('../factories/db.factory');
+const { buildRbacCollections } = require('../factories/rbac.factory');
+
+const rbacCollectionsAdmin = buildRbacCollections([{ userAccountId: 'qa-admin-1', accessType: 4 }]);
 
 function makeToken(accessType = 4) {
   return jwt.sign(
@@ -47,7 +50,7 @@ describe('GET /api/locations', () => {
         project: vi.fn().mockReturnThis(),
       }),
     });
-    app.locals.db = createDbMock({ locations: coll });
+    app.locals.db = createDbMock({ locations: coll, ...rbacCollectionsAdmin });
 
     const res = await request(app)
       .get('/api/locations')
@@ -90,7 +93,7 @@ describe('POST /api/locations', () => {
       }),
       countDocuments: vi.fn().mockResolvedValue(0),
     });
-    app.locals.db = createDbMock({ locations: coll });
+    app.locals.db = createDbMock({ locations: coll, ...rbacCollectionsAdmin });
 
     const res = await request(app)
       .post('/api/locations')
@@ -109,7 +112,7 @@ describe('POST /api/locations', () => {
         return Promise.resolve({ insertedId: 'new-loc-id-2' });
       }),
     });
-    app.locals.db = createDbMock({ locations: coll });
+    app.locals.db = createDbMock({ locations: coll, ...rbacCollectionsAdmin });
 
     const res = await request(app)
       .post('/api/locations')
@@ -129,7 +132,7 @@ describe('POST /api/locations', () => {
 
   it('returns 400 when equipmentType is missing (validation failure)', async () => {
     const coll = createCollectionMock({});
-    app.locals.db = createDbMock({ locations: coll });
+    app.locals.db = createDbMock({ locations: coll, ...rbacCollectionsAdmin });
 
     const res = await request(app)
       .post('/api/locations')
@@ -146,7 +149,7 @@ describe('POST /api/locations', () => {
     const coll = createCollectionMock({
       findOne: vi.fn().mockResolvedValue({ _id: 'existing-1', locationID: 42 }),
     });
-    app.locals.db = createDbMock({ locations: coll });
+    app.locals.db = createDbMock({ locations: coll, ...rbacCollectionsAdmin });
 
     const res = await request(app)
       .post('/api/locations')
@@ -169,7 +172,7 @@ describe('POST /api/locations', () => {
         return Promise.resolve({ insertedId: 'new-loc-id-3' });
       }),
     });
-    app.locals.db = createDbMock({ locations: coll });
+    app.locals.db = createDbMock({ locations: coll, ...rbacCollectionsAdmin });
 
     const res = await request(app)
       .post('/api/locations')
@@ -188,7 +191,7 @@ describe('GET /api/locations/:id', () => {
 
   it('returns 404 when the location does not exist', async () => {
     const coll = createCollectionMock({ findOne: vi.fn().mockResolvedValue(null) });
-    app.locals.db = createDbMock({ locations: coll });
+    app.locals.db = createDbMock({ locations: coll, ...rbacCollectionsAdmin });
 
     const res = await request(app)
       .get('/api/locations/507f1f77bcf86cd799439011')
@@ -201,7 +204,7 @@ describe('GET /api/locations/:id', () => {
   it('returns 200 with the found location', async () => {
     const loc = { _id: '507f1f77bcf86cd799439011', locationID: 5, equipmentType: 1 };
     const coll = createCollectionMock({ findOne: vi.fn().mockResolvedValue(loc) });
-    app.locals.db = createDbMock({ locations: coll });
+    app.locals.db = createDbMock({ locations: coll, ...rbacCollectionsAdmin });
 
     const res = await request(app)
       .get('/api/locations/507f1f77bcf86cd799439011')
@@ -214,7 +217,7 @@ describe('GET /api/locations/:id', () => {
 
   it('returns 500 when findOne rejects', async () => {
     const coll = createCollectionMock({ findOne: vi.fn().mockRejectedValue(new Error('db exploded')) });
-    app.locals.db = createDbMock({ locations: coll });
+    app.locals.db = createDbMock({ locations: coll, ...rbacCollectionsAdmin });
 
     const res = await request(app)
       .get('/api/locations/507f1f77bcf86cd799439011')
@@ -239,7 +242,7 @@ describe('PUT /api/locations/:id', () => {
         return Promise.resolve({ matchedCount: 1, modifiedCount: 1 });
       }),
     });
-    app.locals.db = createDbMock({ locations: coll });
+    app.locals.db = createDbMock({ locations: coll, ...rbacCollectionsAdmin });
 
     const res = await request(app)
       .put('/api/locations/507f1f77bcf86cd799439011')
@@ -259,7 +262,7 @@ describe('PUT /api/locations/:id', () => {
         return Promise.resolve({ matchedCount: 1, modifiedCount: 1 });
       }),
     });
-    app.locals.db = createDbMock({ locations: coll });
+    app.locals.db = createDbMock({ locations: coll, ...rbacCollectionsAdmin });
 
     const res = await request(app)
       .put('/api/locations/507f1f77bcf86cd799439011')
@@ -278,7 +281,7 @@ describe('PUT /api/locations/:id', () => {
         return Promise.resolve({ matchedCount: 1, modifiedCount: 1 });
       }),
     });
-    app.locals.db = createDbMock({ locations: coll });
+    app.locals.db = createDbMock({ locations: coll, ...rbacCollectionsAdmin });
 
     const res = await request(app)
       .put('/api/locations/507f1f77bcf86cd799439011')
@@ -298,7 +301,7 @@ describe('PUT /api/locations/:id', () => {
     const coll = createCollectionMock({
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 0, modifiedCount: 0 }),
     });
-    app.locals.db = createDbMock({ locations: coll });
+    app.locals.db = createDbMock({ locations: coll, ...rbacCollectionsAdmin });
 
     const res = await request(app)
       .put('/api/locations/507f1f77bcf86cd799439011')
@@ -313,7 +316,7 @@ describe('PUT /api/locations/:id', () => {
     const coll = createCollectionMock({
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
     });
-    app.locals.db = createDbMock({ locations: coll });
+    app.locals.db = createDbMock({ locations: coll, ...rbacCollectionsAdmin });
 
     const res = await request(app)
       .put('/api/locations/507f1f77bcf86cd799439011')
@@ -328,7 +331,7 @@ describe('PUT /api/locations/:id', () => {
     const coll = createCollectionMock({
       updateOne: vi.fn().mockRejectedValue(new Error('update failed')),
     });
-    app.locals.db = createDbMock({ locations: coll });
+    app.locals.db = createDbMock({ locations: coll, ...rbacCollectionsAdmin });
 
     const res = await request(app)
       .put('/api/locations/507f1f77bcf86cd799439011')
@@ -348,7 +351,7 @@ describe('DELETE /api/locations/:id', () => {
 
   it('returns 404 when nothing is deleted', async () => {
     const coll = createCollectionMock({ deleteOne: vi.fn().mockResolvedValue({ deletedCount: 0 }) });
-    app.locals.db = createDbMock({ locations: coll });
+    app.locals.db = createDbMock({ locations: coll, ...rbacCollectionsAdmin });
 
     const res = await request(app)
       .delete('/api/locations/507f1f77bcf86cd799439011')
@@ -360,7 +363,7 @@ describe('DELETE /api/locations/:id', () => {
 
   it('returns 200 on successful delete', async () => {
     const coll = createCollectionMock({ deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }) });
-    app.locals.db = createDbMock({ locations: coll });
+    app.locals.db = createDbMock({ locations: coll, ...rbacCollectionsAdmin });
 
     const res = await request(app)
       .delete('/api/locations/507f1f77bcf86cd799439011')
@@ -372,7 +375,7 @@ describe('DELETE /api/locations/:id', () => {
 
   it('returns 400 when deleteOne rejects', async () => {
     const coll = createCollectionMock({ deleteOne: vi.fn().mockRejectedValue(new Error('delete failed')) });
-    app.locals.db = createDbMock({ locations: coll });
+    app.locals.db = createDbMock({ locations: coll, ...rbacCollectionsAdmin });
 
     const res = await request(app)
       .delete('/api/locations/507f1f77bcf86cd799439011')
@@ -393,7 +396,7 @@ describe('PATCH /api/locations/fix-missing-locationids', () => {
     const coll = createCollectionMock({
       find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }),
     });
-    app.locals.db = createDbMock({ locations: coll });
+    app.locals.db = createDbMock({ locations: coll, ...rbacCollectionsAdmin });
 
     const res = await request(app)
       .patch('/api/locations/fix-missing-locationids')
@@ -419,7 +422,7 @@ describe('PATCH /api/locations/fix-missing-locationids', () => {
         return Promise.resolve({ matchedCount: 1, modifiedCount: 1 });
       }),
     });
-    app.locals.db = createDbMock({ locations: coll });
+    app.locals.db = createDbMock({ locations: coll, ...rbacCollectionsAdmin });
 
     const res = await request(app)
       .patch('/api/locations/fix-missing-locationids')

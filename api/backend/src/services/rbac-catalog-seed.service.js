@@ -40,6 +40,8 @@ const PERMISSION_CATALOG = {
   manageBackup: { resourceType: 'System', allowedActions: ['UPDATE'], displayName: 'Gerenciar backup' },
   manageSystem: { resourceType: 'System', allowedActions: ['UPDATE'], displayName: 'Gerenciar sistema' },
   resetMFA: { resourceType: 'User', allowedActions: ['UPDATE'], displayName: 'Redefinir MFA' },
+  manageTemperature: { resourceType: 'Temperature', allowedActions: ['UPDATE'], displayName: 'Gerenciar incidentes de temperatura' },
+  manageOrganizations: { resourceType: 'Organization', allowedActions: ['UPDATE'], displayName: 'Gerenciar organizações' },
 };
 
 function buildPermissionDocs() {

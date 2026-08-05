@@ -9,6 +9,9 @@ const app = require('../../app');
 const sessionService = require('../../src/services/session.service');
 const sampleService = require('../../src/services/sample.service');
 const LineageRepository = require('../../src/infrastructure/database/neo4j/LineageRepository');
+const { buildRbacCollections } = require('../factories/rbac.factory');
+
+const rbacCollections = buildRbacCollections([{ userAccountId: 'qa-tech-1', accessType: 2 }]);
 
 function createTechnicianToken() {
   return jwt.sign(
@@ -53,6 +56,7 @@ describe('RF004/RNF011 - POST /api/samples validações de integridade', () => {
   it('deve barrar vínculo obrigatório quando participantId não existe (404 ou 400)', async () => {
     app.locals.db = {
       collection: (name) => {
+        if (rbacCollections[name]) return rbacCollections[name];
         if (name === 'patients' || name === 'pacientes') {
           return {
             findOne: vi.fn().mockResolvedValue(null),
@@ -93,6 +97,7 @@ describe('RF004/RNF011 - POST /api/samples validações de integridade', () => {
     const touchedCollections = [];
     const dbCollection = vi.fn((name) => {
       touchedCollections.push(name);
+      if (rbacCollections[name]) return rbacCollections[name];
       return {
         findOne: vi.fn().mockResolvedValue(null),
         insertOne: vi.fn().mockResolvedValue({ insertedId: 'ignored' }),

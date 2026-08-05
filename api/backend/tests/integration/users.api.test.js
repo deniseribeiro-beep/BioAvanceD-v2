@@ -9,6 +9,7 @@ const app = require('../../app');
 const sessionService = require('../../src/services/session.service');
 const { createCollectionMock, createDbMock } = require('../factories/db.factory');
 const { buildUser, buildUserRegistrationPayload } = require('../factories/user.factory');
+const { buildRbacCollections } = require('../factories/rbac.factory');
 
 function createCoordinatorToken() {
   return jwt.sign(
@@ -32,7 +33,10 @@ describe('RF003 - POST /api/users/register', () => {
 
   function givenUsersCollection(overrides = {}) {
     const usersCollection = createCollectionMock(overrides);
-    app.locals.db = createDbMock({ users: usersCollection });
+    app.locals.db = createDbMock({
+      users: usersCollection,
+      ...buildRbacCollections([{ userAccountId: 'qa-coord-1', accessType: 3 }]),
+    });
     return usersCollection;
   }
 

@@ -11,6 +11,20 @@ const sessionService = require('../../src/services/session.service');
 const auditLogger = require('../../src/utils/auditLogger');
 const notificationService = require('../../src/services/notification.service');
 const { createCollectionMock, createDbMock } = require('../factories/db.factory');
+const { buildRbacCollections } = require('../factories/rbac.factory');
+
+const RBAC_TEST_USERS = [
+  { userAccountId: 'qa-admin-1', accessType: 4 },
+  { userAccountId: 'qa-coord-1', accessType: 3 },
+  { userAccountId: 'qa-tech-1', accessType: 2 },
+];
+
+function dbWithRbac(collections = {}) {
+  return createDbMock({
+    ...collections,
+    ...buildRbacCollections(RBAC_TEST_USERS),
+  });
+}
 
 /**
  * MÓDULO: Pacientes e Observações de Biomarcadores
@@ -156,7 +170,7 @@ describe('📦 Pacientes e Observacoes de Biomarcadores - Testes de Integracao',
         findOne: vi.fn().mockResolvedValue({ _id: '60b8d295f1bfdc3b8c8f9b01', title: 'TCLE QA' }),
       };
 
-      app.locals.db = createDbMock({ patients: patientsCollection, consentTemplates: consentTemplatesCollection, consent_templates: consentTemplatesCollection });
+      app.locals.db = dbWithRbac({ patients: patientsCollection, consentTemplates: consentTemplatesCollection, consent_templates: consentTemplatesCollection });
 
       const response = await request(app)
         .post('/api/patients')
@@ -177,7 +191,7 @@ describe('📦 Pacientes e Observacoes de Biomarcadores - Testes de Integracao',
     });
 
     it('Given: técnico com permissão insuficiente | When: tenta criar paciente | Then: retorna 403', async () => {
-      app.locals.db = createDbMock({});
+      app.locals.db = dbWithRbac({});
 
       const response = await request(app)
         .post('/api/patients')
@@ -200,7 +214,7 @@ describe('📦 Pacientes e Observacoes de Biomarcadores - Testes de Integracao',
         findOne: vi.fn().mockResolvedValue({ _id: '60b8d295f1bfdc3b8c8f9b01', title: 'TCLE QA' }),
       };
 
-      app.locals.db = createDbMock({ patients: patientsCollection, consentTemplates: consentTemplatesCollection, consent_templates: consentTemplatesCollection });
+      app.locals.db = dbWithRbac({ patients: patientsCollection, consentTemplates: consentTemplatesCollection, consent_templates: consentTemplatesCollection });
 
       const response = await request(app)
         .post('/api/patients')
@@ -212,7 +226,7 @@ describe('📦 Pacientes e Observacoes de Biomarcadores - Testes de Integracao',
     });
 
     it('Given: paciente falecido SEM representante | When: submete payload | Then: retorna 400 ou 422', async () => {
-      app.locals.db = createDbMock({});
+      app.locals.db = dbWithRbac({});
 
       const deceasedNoRep = buildDeceasedPatientPayload();
       delete deceasedNoRep.representativeName;
@@ -236,7 +250,7 @@ describe('📦 Pacientes e Observacoes de Biomarcadores - Testes de Integracao',
         findOne: vi.fn().mockResolvedValue({ _id: '60b8d295f1bfdc3b8c8f9b01' }),
       };
 
-      app.locals.db = createDbMock({ patients: patientsCollection, consentTemplates: consentTemplatesCollection, consent_templates: consentTemplatesCollection });
+      app.locals.db = dbWithRbac({ patients: patientsCollection, consentTemplates: consentTemplatesCollection, consent_templates: consentTemplatesCollection });
 
       const response = await request(app)
         .post('/api/patients')
@@ -267,7 +281,7 @@ describe('📦 Pacientes e Observacoes de Biomarcadores - Testes de Integracao',
         findOne: vi.fn().mockResolvedValue({ _id: '60b8d295f1bfdc3b8c8f9b01' }),
       };
 
-      app.locals.db = createDbMock({ patients: patientsCollection, consentTemplates: consentTemplatesCollection, consent_templates: consentTemplatesCollection });
+      app.locals.db = dbWithRbac({ patients: patientsCollection, consentTemplates: consentTemplatesCollection, consent_templates: consentTemplatesCollection });
 
       const response = await request(app)
         .post('/api/patients')
@@ -282,7 +296,7 @@ describe('📦 Pacientes e Observacoes de Biomarcadores - Testes de Integracao',
         findOne: vi.fn().mockResolvedValue({ _id: '60b8d295f1bfdc3b8c8f9b01' }),
       };
 
-      app.locals.db = createDbMock({ consentTemplates: consentTemplatesCollection, consent_templates: consentTemplatesCollection });
+      app.locals.db = dbWithRbac({ consentTemplates: consentTemplatesCollection, consent_templates: consentTemplatesCollection });
 
       const invalidPayload = buildValidPatientPayload();
       delete invalidPayload.patientName;
@@ -319,7 +333,7 @@ describe('📦 Pacientes e Observacoes de Biomarcadores - Testes de Integracao',
         countDocuments: vi.fn().mockResolvedValue(patientsList.length),
       };
 
-      app.locals.db = createDbMock({ patients: patientsCollection });
+      app.locals.db = dbWithRbac({ patients: patientsCollection });
 
       const response = await request(app)
         .get('/api/patients')
@@ -346,7 +360,7 @@ describe('📦 Pacientes e Observacoes de Biomarcadores - Testes de Integracao',
         countDocuments: vi.fn().mockResolvedValue(filteredList.length),
       };
 
-      app.locals.db = createDbMock({ patients: patientsCollection });
+      app.locals.db = dbWithRbac({ patients: patientsCollection });
 
       const response = await request(app)
         .get('/api/patients?status=PENDING_CONSENT')
@@ -382,7 +396,7 @@ describe('📦 Pacientes e Observacoes de Biomarcadores - Testes de Integracao',
         deleteOne: vi.fn().mockResolvedValue({ deletedCount: 0 }),
       };
 
-      app.locals.db = createDbMock({ patients: patientsCollection });
+      app.locals.db = dbWithRbac({ patients: patientsCollection });
 
       const response = await request(app)
         .get('/api/patients/12345678')
@@ -400,7 +414,7 @@ describe('📦 Pacientes e Observacoes de Biomarcadores - Testes de Integracao',
         findOne: vi.fn().mockResolvedValue(null),
       };
 
-      app.locals.db = createDbMock({ patients: patientsCollection });
+      app.locals.db = dbWithRbac({ patients: patientsCollection });
 
       const response = await request(app)
         .get('/api/patients/99999999')
@@ -429,7 +443,7 @@ describe('📦 Pacientes e Observacoes de Biomarcadores - Testes de Integracao',
         updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
       };
 
-      app.locals.db = createDbMock({ patients: patientsCollection });
+      app.locals.db = dbWithRbac({ patients: patientsCollection });
 
       const response = await request(app)
         .put('/api/patients/12345678')
@@ -451,7 +465,7 @@ describe('📦 Pacientes e Observacoes de Biomarcadores - Testes de Integracao',
         updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
       };
 
-      app.locals.db = createDbMock({ patients: patientsCollection });
+      app.locals.db = dbWithRbac({ patients: patientsCollection });
 
       const response = await request(app)
         .put('/api/patients/12345678')
@@ -485,7 +499,7 @@ describe('📦 Pacientes e Observacoes de Biomarcadores - Testes de Integracao',
         countDocuments: vi.fn().mockResolvedValue(0),
       };
 
-      app.locals.db = createDbMock({
+      app.locals.db = dbWithRbac({
         patients: patientsCollection,
         samples: samplesCollection,
       });
@@ -509,7 +523,7 @@ describe('📦 Pacientes e Observacoes de Biomarcadores - Testes de Integracao',
         countDocuments: vi.fn().mockResolvedValue(3), // 3 amostras
       };
 
-      app.locals.db = createDbMock({
+      app.locals.db = dbWithRbac({
         patients: patientsCollection,
         samples: samplesCollection,
       });
@@ -546,7 +560,7 @@ describe('📦 Pacientes e Observacoes de Biomarcadores - Testes de Integracao',
         }),
       };
 
-      app.locals.db = createDbMock({ patients: patientsCollection, samples: samplesCollection });
+      app.locals.db = dbWithRbac({ patients: patientsCollection, samples: samplesCollection });
 
       const response = await request(app)
         .post('/api/patients/12345678/consent/resend')
@@ -562,7 +576,7 @@ describe('📦 Pacientes e Observacoes de Biomarcadores - Testes de Integracao',
         findOne: vi.fn().mockResolvedValue(patient),
       };
 
-      app.locals.db = createDbMock({ patients: patientsCollection });
+      app.locals.db = dbWithRbac({ patients: patientsCollection });
 
       const response = await request(app)
         .post('/api/patients/12345678/consent/resend')
@@ -600,7 +614,7 @@ describe('📦 Pacientes e Observacoes de Biomarcadores - Testes de Integracao',
       };
 
       // Provide both collections the backend may query
-      app.locals.db = createDbMock({ observations: observationsCollection, biomarker_observations: observationsCollection });
+      app.locals.db = dbWithRbac({ observations: observationsCollection, biomarker_observations: observationsCollection });
 
       const response = await request(app)
         .get('/api/patients/12345678/observations')
@@ -615,7 +629,7 @@ describe('📦 Pacientes e Observacoes de Biomarcadores - Testes de Integracao',
         insertOne: vi.fn().mockResolvedValue({ insertedId: 'obs-1' }),
       };
 
-      app.locals.db = createDbMock({ observations: observationsCollection, biomarker_observations: observationsCollection });
+      app.locals.db = dbWithRbac({ observations: observationsCollection, biomarker_observations: observationsCollection });
 
       const payload = {
         biomarkerType: 'alphaGal',
@@ -651,7 +665,7 @@ describe('📦 Pacientes e Observacoes de Biomarcadores - Testes de Integracao',
         findOne: vi.fn().mockResolvedValue({ participantId: '12345678' }),
       };
 
-      app.locals.db = createDbMock({ patients: patientsCollection });
+      app.locals.db = dbWithRbac({ patients: patientsCollection });
 
       const response = await request(app)
         .post('/api/patients/validate-id')
@@ -668,7 +682,7 @@ describe('📦 Pacientes e Observacoes de Biomarcadores - Testes de Integracao',
         findOne: vi.fn().mockResolvedValue(null),
       };
 
-      app.locals.db = createDbMock({ patients: patientsCollection });
+      app.locals.db = dbWithRbac({ patients: patientsCollection });
 
       const response = await request(app)
         .post('/api/patients/validate-id')
@@ -680,7 +694,7 @@ describe('📦 Pacientes e Observacoes de Biomarcadores - Testes de Integracao',
     });
 
     it('Given: participantId com formato inválido | When: requisita | Then: retorna erro de validação', async () => {
-      app.locals.db = createDbMock({});
+      app.locals.db = dbWithRbac({});
 
       const response = await request(app)
         .post('/api/patients/validate-id')

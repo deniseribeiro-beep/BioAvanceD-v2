@@ -9,6 +9,13 @@ process.env.JWT_SECRET = process.env.JWT_SECRET || 'vitest-secret-key';
 const app = require('../../app');
 const sampleService = require('../../src/services/sample.service');
 const sessionService = require('../../src/services/session.service');
+const { buildRbacCollections } = require('../factories/rbac.factory');
+
+const rbacCollections = buildRbacCollections([
+  { userAccountId: 'qa-pesquisador-1', accessType: 1 },
+  { userAccountId: 'qa-tecnico-1', accessType: 2 },
+  { userAccountId: 'qa-admin-1', accessType: 4 },
+]);
 
 function createToken(payload) {
   return jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '1h' });
@@ -17,11 +24,14 @@ function createToken(payload) {
 describe('RNF008 - RBAC (Least Privilege) em DELETE /api/samples/:id', () => {
   beforeEach(() => {
     app.locals.db = {
-      collection: () => ({
-        insertOne: vi.fn(),
-        updateOne: vi.fn(),
-        findOne: vi.fn(),
-      }),
+      collection: (name) => {
+        if (rbacCollections[name]) return rbacCollections[name];
+        return {
+          insertOne: vi.fn(),
+          updateOne: vi.fn(),
+          findOne: vi.fn(),
+        };
+      },
     };
 
     vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 'session-rbac-1' } });

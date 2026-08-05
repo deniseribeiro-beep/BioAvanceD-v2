@@ -8,6 +8,7 @@ process.env.JWT_SECRET = process.env.JWT_SECRET || 'vitest-secret-key';
 const app = require('../../app');
 const sessionService = require('../../src/services/session.service');
 const { createCollectionMock, createDbMock } = require('../factories/db.factory');
+const { buildRbacCollections } = require('../factories/rbac.factory');
 
 function makeToken(accessType = 2) {
   return jwt.sign(
@@ -24,7 +25,11 @@ function givenSession() {
 
 function givenTemperatureCollection(overrides = {}) {
   const coll = createCollectionMock(overrides);
-  app.locals.db = createDbMock({ temperature_readings: coll, temperaturereadings: coll });
+  app.locals.db = createDbMock({
+    temperature_readings: coll,
+    temperaturereadings: coll,
+    ...buildRbacCollections([{ userAccountId: 'qa-tecnico-1', accessType: 2 }])
+  });
   return coll;
 }
 

@@ -9,6 +9,7 @@ process.env.JWT_SECRET = process.env.JWT_SECRET || 'vitest-secret-key';
 const app = require('../../app');
 const sessionService = require('../../src/services/session.service');
 const { createCollectionMock, createDbMock } = require('../factories/db.factory');
+const { buildRbacCollections } = require('../factories/rbac.factory');
 
 function makeToken(accessType = 4) {
   return jwt.sign(
@@ -16,6 +17,13 @@ function makeToken(accessType = 4) {
     process.env.JWT_SECRET,
     { expiresIn: '1h' }
   );
+}
+
+function dbWithRbac(collections, accessType = 4) {
+  return createDbMock({
+    ...collections,
+    ...buildRbacCollections([{ userAccountId: 'qa-user-1', accessType }]),
+  });
 }
 
 function givenSession() {
@@ -43,7 +51,7 @@ describe('GET /api/facilities', () => {
 
   it('returns facility list', async () => {
     const coll = createCollectionMock({ find: vi.fn().mockReturnValue({ sort: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([FAKE_FACILITY]) }) }) });
-    app.locals.db = createDbMock({ facilities: coll });
+    app.locals.db = dbWithRbac({ facilities: coll }, 2);
 
     const res = await request(app).get('/api/facilities').set('Authorization', `Bearer ${makeToken(2)}`);
     expect(res.status).toBe(200);
@@ -54,7 +62,7 @@ describe('GET /api/facilities', () => {
 describe('GET /api/facilities/:id', () => {
   it('returns 404 when not found', async () => {
     const coll = createCollectionMock({ findOne: vi.fn().mockResolvedValue(null) });
-    app.locals.db = createDbMock({ facilities: coll });
+    app.locals.db = dbWithRbac({ facilities: coll }, 2);
 
     const res = await request(app)
       .get(`/api/facilities/${new ObjectId()}`)
@@ -64,7 +72,7 @@ describe('GET /api/facilities/:id', () => {
 
   it('returns 400 on malformed id', async () => {
     const coll = createCollectionMock();
-    app.locals.db = createDbMock({ facilities: coll });
+    app.locals.db = dbWithRbac({ facilities: coll }, 2);
 
     const res = await request(app)
       .get('/api/facilities/not-an-object-id')
@@ -76,7 +84,7 @@ describe('GET /api/facilities/:id', () => {
 describe('POST /api/facilities', () => {
   it('rejects missing name with 400', async () => {
     const coll = createCollectionMock();
-    app.locals.db = createDbMock({ facilities: coll });
+    app.locals.db = dbWithRbac({ facilities: coll }, 4);
 
     const res = await request(app)
       .post('/api/facilities')
@@ -87,7 +95,7 @@ describe('POST /api/facilities', () => {
 
   it('rejects Tecnico (accessType 2) with 403 — createPatient requires Coordenador/Administrador', async () => {
     const coll = createCollectionMock();
-    app.locals.db = createDbMock({ facilities: coll });
+    app.locals.db = dbWithRbac({ facilities: coll }, 2);
 
     const res = await request(app)
       .post('/api/facilities')
@@ -101,7 +109,7 @@ describe('POST /api/facilities', () => {
     const coll = createCollectionMock({ insertOne });
     const logsInsertOne = vi.fn().mockResolvedValue({ insertedId: new ObjectId() });
     const logsColl = createCollectionMock({ insertOne: logsInsertOne });
-    app.locals.db = createDbMock({ facilities: coll, logs: logsColl });
+    app.locals.db = dbWithRbac({ facilities: coll, logs: logsColl }, 3);
 
     const res = await request(app)
       .post('/api/facilities')
@@ -118,7 +126,7 @@ describe('POST /api/facilities', () => {
 describe('PUT /api/facilities/:id', () => {
   it('returns 404 when facility does not exist', async () => {
     const coll = createCollectionMock({ findOneAndUpdate: vi.fn().mockResolvedValue(null) });
-    app.locals.db = createDbMock({ facilities: coll });
+    app.locals.db = dbWithRbac({ facilities: coll }, 4);
 
     const res = await request(app)
       .put(`/api/facilities/${new ObjectId()}`)
@@ -130,7 +138,7 @@ describe('PUT /api/facilities/:id', () => {
   it('updates a facility', async () => {
     const findOneAndUpdate = vi.fn().mockResolvedValue({ ...FAKE_FACILITY, name: 'Renamed' });
     const coll = createCollectionMock({ findOneAndUpdate });
-    app.locals.db = createDbMock({ facilities: coll });
+    app.locals.db = dbWithRbac({ facilities: coll }, 4);
 
     const res = await request(app)
       .put(`/api/facilities/${FACILITY_ID}`)
@@ -145,7 +153,7 @@ describe('DELETE /api/facilities/:id', () => {
   it('soft-deletes a facility (sets deletedAt, does not remove it)', async () => {
     const findOneAndUpdate = vi.fn().mockResolvedValue({ ...FAKE_FACILITY, deletedAt: new Date() });
     const coll = createCollectionMock({ findOneAndUpdate });
-    app.locals.db = createDbMock({ facilities: coll });
+    app.locals.db = dbWithRbac({ facilities: coll }, 4);
 
     const res = await request(app)
       .delete(`/api/facilities/${FACILITY_ID}`)
@@ -163,7 +171,7 @@ describe('POST /api/rooms', () => {
   it('rejects a room whose facilityId does not resolve to a real Facility', async () => {
     const facilitiesColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(null) });
     const roomsColl = createCollectionMock();
-    app.locals.db = createDbMock({ facilities: facilitiesColl, rooms: roomsColl });
+    app.locals.db = dbWithRbac({ facilities: facilitiesColl, rooms: roomsColl }, 4);
 
     const res = await request(app)
       .post('/api/rooms')
@@ -178,7 +186,7 @@ describe('POST /api/rooms', () => {
     const facilitiesColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(FAKE_FACILITY) });
     const insertOne = vi.fn().mockResolvedValue({ insertedId: ROOM_ID });
     const roomsColl = createCollectionMock({ insertOne });
-    app.locals.db = createDbMock({ facilities: facilitiesColl, rooms: roomsColl });
+    app.locals.db = dbWithRbac({ facilities: facilitiesColl, rooms: roomsColl }, 4);
 
     const res = await request(app)
       .post('/api/rooms')
@@ -194,7 +202,7 @@ describe('GET /api/rooms?facilityId=', () => {
   it('filters rooms by facilityId', async () => {
     const find = vi.fn().mockReturnValue({ sort: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([FAKE_ROOM]) }) });
     const roomsColl = createCollectionMock({ find });
-    app.locals.db = createDbMock({ rooms: roomsColl });
+    app.locals.db = dbWithRbac({ rooms: roomsColl }, 2);
 
     const res = await request(app)
       .get(`/api/rooms?facilityId=${FACILITY_ID}`)
@@ -208,7 +216,7 @@ describe('GET /api/rooms?facilityId=', () => {
 describe('PATCH /api/storage/freezer/:freezerId/room', () => {
   it('returns 404 when freezer does not exist', async () => {
     const storageColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(null) });
-    app.locals.db = createDbMock({ storageContainers: storageColl });
+    app.locals.db = dbWithRbac({ storageContainers: storageColl }, 4);
 
     const res = await request(app)
       .patch(`/api/storage/freezer/${FREEZER_ID}/room`)
@@ -220,7 +228,7 @@ describe('PATCH /api/storage/freezer/:freezerId/room', () => {
 
   it('rejects a non-FREEZER container with 400', async () => {
     const storageColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(FAKE_SHELF) });
-    app.locals.db = createDbMock({ storageContainers: storageColl });
+    app.locals.db = dbWithRbac({ storageContainers: storageColl }, 4);
 
     const res = await request(app)
       .patch(`/api/storage/freezer/${FAKE_SHELF._id}/room`)
@@ -233,7 +241,7 @@ describe('PATCH /api/storage/freezer/:freezerId/room', () => {
   it('returns 404 when roomId does not resolve to a real Room', async () => {
     const storageColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(FAKE_FREEZER) });
     const roomsColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(null) });
-    app.locals.db = createDbMock({ storageContainers: storageColl, rooms: roomsColl });
+    app.locals.db = dbWithRbac({ storageContainers: storageColl, rooms: roomsColl }, 4);
 
     const res = await request(app)
       .patch(`/api/storage/freezer/${FREEZER_ID}/room`)
@@ -247,7 +255,7 @@ describe('PATCH /api/storage/freezer/:freezerId/room', () => {
     const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 });
     const storageColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(FAKE_FREEZER), updateOne });
     const roomsColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(FAKE_ROOM) });
-    app.locals.db = createDbMock({ storageContainers: storageColl, rooms: roomsColl });
+    app.locals.db = dbWithRbac({ storageContainers: storageColl, rooms: roomsColl }, 4);
 
     const res = await request(app)
       .patch(`/api/storage/freezer/${FREEZER_ID}/room`)
@@ -264,7 +272,7 @@ describe('PATCH /api/storage/freezer/:freezerId/room', () => {
   it('clears roomId when body omits it (unassign)', async () => {
     const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 });
     const storageColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue({ ...FAKE_FREEZER, roomId: ROOM_ID }), updateOne });
-    app.locals.db = createDbMock({ storageContainers: storageColl });
+    app.locals.db = dbWithRbac({ storageContainers: storageColl }, 4);
 
     const res = await request(app)
       .patch(`/api/storage/freezer/${FREEZER_ID}/room`)
