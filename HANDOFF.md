@@ -1,91 +1,108 @@
 # HANDOFF
 
-**Written:** 2026-08-04, after splitting #422 into a 3-issue dependency
-chain on `feature/docker-e2e-backend-integration`.
+**Written:** 2026-08-05, after shipping #426 (RBAC reader migration) on
+`feature/docker-e2e-backend-integration`.
 
 ## What happened this session
 
-Dennis said "Pick #422". Routed via `build-loop`, but before writing any
-code the scope check showed #422 ("migrate write paths off accessType,
-retire roles.min.json") was bigger than one slice: `accessType`/
-`roleName` are still read *directly* (not via the new RBAC model from
-#420/#421) in several security-relevant places — JWT payload
-construction, admin-gate checks, notification-recipient queries, and
-audit logging. Retiring the field before those reads migrate would
-silently break admin/notification behavior, so this wasn't safely
-chunkable as "just do write paths" — routed through `divide-and-conquer`
-instead (design-split playbook) and confirmed the breakdown with Dennis
-before filing.
+Picked #426 (slice 1 of #422's split), routed through `build-loop`.
+Migrated the six consumer areas the issue named off reading
+`accessType`/`roleName` directly onto `rbac-assignment.service.js`'s
+UserRoleAssignment -> Role model (the one #421 introduced):
 
-Filed a 3-issue dependency chain, foundational piece first:
-- **#426** — migrate remaining `accessType`/`roleName` readers onto the
-  RBAC model (`auth.service.js` JWT payload, `auth.routes.js` login
-  response, `user.routes.js`/`logs.routes.js` admin-gate checks,
-  `incident.controller.js`/`iot.controller.js` notification queries,
-  `auditLogger.js`). Flags that the JWT payload change is
-  frontend-visible and may need a transition period.
-- **#427** — stop writing `accessType`/`roleName` on write paths
-  (`registerUser`, `createFirstAdmin.js`, `PUT /api/users/:id`). Depends
-  on #426.
-- **#428** — retire the fields from `User.js`/`Access.js` schema and
-  retire `roles.min.json` as a runtime dependency (switch
-  `rbac-catalog-seed.service.js`'s seed source). Depends on #427.
+- `auth.service.js`'s `processLogin` admin check
+- `logs.routes.js`'s `requireAuditReader` admin gate (kept a
+  roleName-substring fallback for "auditor" — no dedicated RBAC role
+  exists for it yet, see #429)
+- `user.routes.js`'s admin-gate checks (`PUT /:id` MFA handling,
+  `reset-mfa`, `disable-mfa`)
+- `incident.controller.js` / `iot.controller.js` notification-recipient
+  queries (now resolve via `findUserAccountIdsByRoleCodes`, added to
+  `rbac-assignment.service.js` alongside `getActiveRoleCodes`/
+  `isAdministrator`)
+- `auditLogger.js`'s role label (falls back to the old accessType
+  heuristic when `db` isn't wired — same defensive pattern
+  `getUserAnonId` already used)
 
-Commented the breakdown onto #422 (referencing all three numbers) and
-closed it as the narrowed/split tracking issue; #386 stays open as the
-top-level RBAC tracker. No project board in use in this repo (confirmed
-via `gh issue view --json projectItems`), so no boarding step needed.
+Per the issue's own note, JWT payload construction and login/verify
+response shaping still embed `accessType`/`roleName` as before — kept
+deliberately for the frontend transition period, not touched this slice.
 
-No code was touched this session — pure issue-tracker work, no branch
-created, nothing to merge.
+Updated every test file whose mocks assumed the old
+accessType/roleName-direct reads (`logs.routes.test.js`,
+`logs.api.test.js`, `users-access.routes.test.js`,
+`auth.service.processLogin.unit.test.js`, `incident.controller.test.js`,
+`iot.controller.test.js`, `iot.api.test.js`,
+`utils/auditLogger.test.js`) plus new unit coverage for the three new
+`rbac-assignment.service.js` helpers.
+
+Full backend suite: **6521/6522 passing** — the one failure
+(`iot.api.test.js`'s cold-chain quarantine assertion) is pre-existing
+and unrelated, confirmed via `git stash` against the pre-#426 tree, then
+filed as **#430**.
+
+Also filed **#429** (no dedicated `auditor` RBAC role yet — the
+substring fallback in `logs.routes.js` is a real, if narrow, gap that
+needs its own role before #428 retires `roleName` reads entirely).
+
+Committed on `test/426-rbac-reader-migration`, merged (`--no-ff`) into
+`feature/docker-e2e-backend-integration` at `b6487ba2`, closed #426 with
+that hash.
 
 ## Repo state
 
-- **`feature/docker-e2e-backend-integration`**: unchanged this session,
-  still at `51b5a373` (contains #421's RBAC enforcement cutover).
-- No dangling branches from this session (none were created).
-- Issues: **#422 closed** (split, not implemented). **#426**, **#427**,
-  **#428** opened this session, chained via `Depends on:`. **#424**
-  (result-permission copy-paste bug) and **#425** (backfill script
-  needs to run against the dev stack) remain open from last session,
-  unrelated to this split. **#386** (top-level RBAC tracking issue)
-  stays open. Older backlog unchanged: **#387**, `#371`/`#373`/`#374`/
-  `#378`/`#379`, **#389** (route through `divide-and-conquer` first, 28
-  files).
+- **`feature/docker-e2e-backend-integration`**: now at the #426 merge
+  commit (`b6487ba2`), ahead of `origin/feature/docker-e2e-backend-integration`
+  by this session's commits — not pushed yet (per convention: push is
+  cheap/no-CI, but still confirm with Dennis before pushing/opening a PR).
+- **`test/426-rbac-reader-migration`**: merged, safe to delete once
+  Dennis confirms; not deleted this session.
+- Issues: **#426 closed** (merged, see above). **#429**, **#430** opened
+  this session. **#427** (stop writing accessType/roleName on write
+  paths) is now unblocked — its dependency (#426) is done. **#428**
+  still depends on #427. Older backlog unchanged: **#424**, **#425**,
+  **#387**, `#371`/`#373`/`#374`/`#378`/`#379`, **#389**.
 
 ## Blocking next step
 
 None. **#425** (run the backfill script against any live dev stack
-before its users try to log in) is still the one real prerequisite for
-anyone deploying last session's #421 work to a shared environment — not
-blocking this session's close.
+before its users try to log in) remains the one real prerequisite for
+deploying #421's work to a shared environment — not blocking this
+session's close.
 
 ## Recommended next steps
 
 Dennis didn't name a specific next pick this session, so per this
-skill's own rule: **none queued**. If continuing the RBAC thread, **#426**
-is the correct next pick (foundational, unblocks #427 → #428). Otherwise:
-**#424** (quick `fix-bugs` pick), **#425** (operational, not a coding
-task), **#387**, older backlog (`#371`/`#373`/`#374`/`#378`/`#379`), or
-**#389** (route through `divide-and-conquer` first).
+skill's own rule: **none queued**. If continuing the RBAC thread,
+**#427** is the natural next pick (depends on #426, now satisfied) —
+route through `build-loop`. Otherwise: **#429** (add a real `auditor`
+RBAC role — small, well-scoped), **#430** (pre-existing test bug, needs
+investigation before it's a `fix-bugs` pick), **#424**, **#425**
+(operational, not a coding task), **#387**, older backlog
+(`#371`/`#373`/`#374`/`#378`/`#379`), or **#389** (route through
+`divide-and-conquer` first).
 
 ## Which skills to use
 
-- **#426**: route through `build-loop` — it's the foundational slice of
-  the split, touches JWT/admin-gate/notification logic across ~6 files.
-  Check frontend impact of the JWT payload change before removing
-  `accessType`/`roleName` from the response shape (issue body flags
-  this explicitly).
-- **#427**: `build-loop` again, once #426 is merged — straightforward
-  once nothing reads the fields directly.
-- **#428**: `build-loop`, once #427 is merged — schema/seed cleanup,
-  should be the smallest of the three.
+- **#427**: `build-loop` — depends on #426 (done). Should be
+  straightforward now that nothing reads `accessType`/`roleName`
+  directly for gating decisions; still needs the frontend-impact check
+  the issue flags for JWT/response-shape changes.
+- **#428**: `build-loop`, once #427 is merged. Note: should probably
+  land after or alongside #429 (auditor role), since #428 retiring
+  `roleName` entirely would silently break the auditor substring
+  fallback in `logs.routes.js`.
+- **#429**: small, well-scoped — `build-loop` or could be folded into
+  #427/#428 if convenient, but stands alone fine.
+- **#430**: needs investigation first (is it `resolveCollectionName`
+  aliasing, or a test-mock gap?) before it's clearly a `fix-bugs` pick —
+  the issue body has a `console.log`-the-resolved-name suggestion to
+  start with.
 - **#424**: straightforward `fix-bugs` pick — reproduce with a test
   asserting the correct permission name, fix the route.
-- **#425**: not really a coding task — run the backfill script against
+- **#425**: not a coding task — run the backfill script against
   whatever stack needs it, verify via the direct-Mongo-query pattern
-  from the #421 session (`db.userRoleAssignments.countDocuments()`
-  before/after).
+  from the #421 session.
 - **#387**, older backlog (`#371`/`#373`/`#374`/`#378`/`#379`) —
   untouched this session, no new guidance beyond prior handoffs.
 - **#389**: if picked up next, route through `divide-and-conquer` first
