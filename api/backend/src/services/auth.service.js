@@ -351,7 +351,10 @@ class AuthService {
             name: user.name,
             email: user.email,
             username: user.username,
-            accessType: user.accessType,
+            // #434: resolved from the live RBAC assignment, not the stale
+            // unpopulated user.accessType field (#427) — same pattern as
+            // #433's tempToken fix, applied to the response body.
+            accessType: await resolveUserHierarchyLevel(db, user._id.toString()),
             // #427: resolved from the RBAC assignment — roleName is no
             // longer persisted on the User document for new/edited users.
             roleName: await resolveRoleDisplayName(db, user._id.toString())
@@ -425,7 +428,10 @@ class AuthService {
           name: user.name,
           email: user.email,
           username: user.username,
-          accessType: user.accessType,
+          // #434: resolved from the live RBAC assignment, not the stale
+          // unpopulated user.accessType field (#427) — same pattern as
+          // #433's tempToken fix, applied to the response body.
+          accessType: await resolveUserHierarchyLevel(db, user._id.toString()),
           // #427: resolved from the RBAC assignment — roleName is no
           // longer persisted on the User document for new/edited users.
           roleName: await resolveRoleDisplayName(db, user._id.toString()),
@@ -610,7 +616,10 @@ class AuthService {
           name: user.name,
           email: user.email,
           username: user.username,
-          accessType: user.accessType,
+          // #434: resolved from the live RBAC assignment, not the stale
+          // unpopulated user.accessType field (#427) — same pattern as
+          // #433's tempToken fix, applied to the response body.
+          accessType: await resolveUserHierarchyLevel(db, user._id.toString()),
           // #427: resolved from the RBAC assignment — roleName is no
           // longer persisted on the User document for new/edited users.
           roleName: await resolveRoleDisplayName(db, user._id.toString()),
@@ -717,7 +726,10 @@ class AuthService {
             name: user.name,
             email: user.email,
             username: user.username,
-            accessType: user.accessType,
+            // #434: resolved from the live RBAC assignment, not the stale
+            // unpopulated user.accessType field (#427) — same pattern as
+            // #433's tempToken fix, applied to the response body.
+            accessType: await resolveUserHierarchyLevel(db, user._id.toString()),
             // #427: resolved from the RBAC assignment — roleName is no
             // longer persisted on the User document for new/edited users.
             roleName: await resolveRoleDisplayName(db, user._id.toString()),
