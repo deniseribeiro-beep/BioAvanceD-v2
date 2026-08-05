@@ -8,7 +8,7 @@ const UserModel = require('../models/User');
 const LogModel = require('../models/Log');
 const logger = require('../utils/logger');
 const sessionService = require('./session.service');
-const { grantRoleForAccessType } = require('./rbac-assignment.service');
+const { grantRoleForAccessType, isAdministrator } = require('./rbac-assignment.service');
 
 const ACCESS_TOKEN_TTL = '15m';
 const REFRESH_TOKEN_TTL = '7d';
@@ -293,7 +293,9 @@ class AuthService {
       }
 
       // Verifica se é admin
-      const isAdmin = user.accessType === 4 || user.roleName === 'Administrador';
+      // #426: resolve via UserRoleAssignment -> Role, não accessType/roleName
+      // direto (a fonte de verdade desde #421).
+      const isAdmin = await isAdministrator(db, user._id.toString());
       
       // Para admin, MFA é opcional - se estiver habilitado, verifica; se não, pula
       // Para não-admin, MFA é obrigatório no primeiro login

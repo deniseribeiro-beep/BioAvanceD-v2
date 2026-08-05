@@ -58,6 +58,20 @@ const excursionCollection = {
   updateOne: vi.fn(),
 };
 
+// #426: getAlertRecipients now resolves notifiable users via
+// UserRoleAssignment -> Role instead of accessType directly. These two
+// collections back that lookup; the default beforeEach setup grants a
+// single active `technician` assignment to NOTIFIABLE_USER_ID so
+// downstream tests that only configure `userCollection.find` (the actual
+// email projection) keep working unchanged.
+const rolesCollection = {
+  find: vi.fn(),
+};
+const assignmentsCollection = {
+  find: vi.fn(),
+};
+const NOTIFIABLE_USER_ID = '507f1f77bcf86cd799439011';
+
 const fakeDb = {
   collection: vi.fn((name) => {
     if (name === 'temperatureIncidents') return tempCollection;
@@ -65,6 +79,8 @@ const fakeDb = {
     if (name === 'sensorMetadata') return sensorMetadataCollection;
     if (name === 'devices') return deviceCollection;
     if (name === 'environmentalExcursions') return excursionCollection;
+    if (name === 'roles') return rolesCollection;
+    if (name === 'userRoleAssignments') return assignmentsCollection;
     throw new Error(`unexpected collection name: ${name}`);
   }),
 };
@@ -97,6 +113,12 @@ beforeEach(() => {
   excursionCollection.updateOne.mockReset();
   // default: no alert recipients unless a test overrides it
   userCollection.find.mockReturnValue(buildFindChain([]));
+  rolesCollection.find.mockReset().mockReturnValue(
+    buildFindChain([{ roleId: 'role-tech', roleCode: 'technician', roleStatus: 'active' }])
+  );
+  assignmentsCollection.find.mockReset().mockReturnValue(
+    buildFindChain([{ userAccountId: NOTIFIABLE_USER_ID, roleId: 'role-tech', assignmentStatus: 'active', validUntil: null }])
+  );
 
   connectMongoDBSpy.mockClear().mockResolvedValue(fakeDb);
   sendEmailSpy.mockClear().mockResolvedValue();
@@ -118,10 +140,12 @@ describe('incident.controller.getAlertRecipients', () => {
 
     const result = await incidentController.getAlertRecipients();
 
-    expect(userCollection.find).toHaveBeenCalledWith({
-      accessType: { $in: [2, 3, 4] },
-      status: 'active',
-    });
+    // #426: recipients are resolved via UserRoleAssignment -> Role (the
+    // default beforeEach setup grants NOTIFIABLE_USER_ID an active
+    // `technician` assignment) rather than an accessType $in query.
+    const [userQuery] = userCollection.find.mock.calls[0];
+    expect(userQuery.status).toBe('active');
+    expect(userQuery._id.$in.map((id) => id.toString())).toEqual([NOTIFIABLE_USER_ID]);
     expect(result).toEqual(['a@x.com', 'b@x.com']);
   });
 

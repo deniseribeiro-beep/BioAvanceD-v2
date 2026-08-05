@@ -2,6 +2,14 @@ const net = require('net');
 const logService = require('../services/log.service');
 const { sanitizePatientForLogs } = require('./patientAnonymization');
 const { getUserAnonId, anonymizeLogUser } = require('./userAnonymization');
+const { getActiveRoleCodes } = require('../services/rbac-assignment.service');
+
+const ROLE_LABEL_BY_CODE = {
+  administrator: 'Administrador',
+  coordinator: 'Coordenador',
+  technician: 'Técnico',
+  external_user: 'Usuário Externo',
+};
 
 /**
  * Logger Central de Auditoria
@@ -86,16 +94,33 @@ class AuditLogger {
     if (!req || !req.user) return {};
 
     const userID = req.user.userID || req.user._id?.toString() || null;
-    
+
     // Obtém identificador anonimizado
     const anonId = await getUserAnonId(req.user, db);
+
+    // #426: resolve o rótulo de papel via UserRoleAssignment -> Role quando
+    // possível; accessType/roleName do req.user ficam como fallback quando
+    // db não está disponível (ex.: chamadores que nunca chamaram init(db)).
+    let userRole = req.user.roleName;
+    if (!userRole && db && userID) {
+      try {
+        const roleCodes = await getActiveRoleCodes(db, userID);
+        userRole = roleCodes.map((code) => ROLE_LABEL_BY_CODE[code]).find(Boolean);
+      } catch (error) {
+        // db não totalmente configurado (ex.: mock parcial em teste) -- cai
+        // para a heurística de accessType abaixo.
+      }
+    }
+    if (!userRole) {
+      userRole = req.user.accessType === 4 ? 'Administrador' :
+        req.user.accessType === 3 ? 'Coordenador' :
+        req.user.accessType === 2 ? 'Técnico' : 'Usuário Externo';
+    }
 
     return {
       userID: anonId, // Usa identificador anonimizado
       userName: anonId, // Usa identificador anonimizado em vez de nome
-      userRole: req.user.roleName || (req.user.accessType === 4 ? 'Administrador' : 
-              req.user.accessType === 3 ? 'Coordenador' : 
-              req.user.accessType === 2 ? 'Técnico' : 'Usuário Externo')
+      userRole
     };
   }
 

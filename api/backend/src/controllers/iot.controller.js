@@ -100,11 +100,18 @@ async function upsertTemperatureIncidentAndQuarantine(policyData, normalizedSens
   const persistedIncident = { ...newIncident, _id: result.insertedId };
   await applyColdChainQuarantine(db, persistedIncident);
 
+  // #426: resolve via UserRoleAssignment -> Role, não accessType direto.
+  const { findUserAccountIdsByRoleCodes } = require('../services/rbac-assignment.service');
+  const { ObjectId } = require('mongodb');
+  const userAccountIds = await findUserAccountIdsByRoleCodes(db, ['technician', 'coordinator', 'administrator']);
+  const objectIds = userAccountIds.filter((id) => ObjectId.isValid(id)).map((id) => new ObjectId(id));
   const UserCollection = db.collection('users');
-  const recipientsCursor = UserCollection.find({ accessType: { $in: [2, 3, 4] }, status: 'active' });
-  const recipients = typeof recipientsCursor.project === 'function'
-    ? await recipientsCursor.project({ email: 1 }).toArray()
-    : await recipientsCursor.toArray();
+  const recipientsCursor = UserCollection.find({ _id: { $in: objectIds }, status: 'active' });
+  const recipients = objectIds.length === 0
+    ? []
+    : typeof recipientsCursor.project === 'function'
+      ? await recipientsCursor.project({ email: 1 }).toArray()
+      : await recipientsCursor.toArray();
   const recipientEmails = recipients.map(u => u.email).filter(e => e);
 
   if (recipientEmails.length > 0) {

@@ -6,8 +6,12 @@ const {
   changeUserRole,
   backfillUserRoleAssignments,
   userHasPermission,
+  getActiveRoleCodes,
+  isAdministrator,
+  findUserAccountIdsByRoleCodes,
 } = require('../../src/services/rbac-assignment.service');
 const { createCollectionMock } = require('../factories/db.factory');
+const { buildRbacCollections } = require('../factories/rbac.factory');
 
 function matchesQuery(doc, query = {}) {
   return Object.entries(query).every(([key, cond]) => {
@@ -132,5 +136,60 @@ describe('rbac-assignment.service (#421)', () => {
     const result = await userHasPermission(db, 'u1', 'createUser');
 
     expect(result).toBe(false);
+  });
+});
+
+describe('rbac-assignment.service readers (#426)', () => {
+  function buildDbWithRbac(users = []) {
+    const collections = buildRbacCollections(users);
+    return { collection: (name) => collections[name] || createCollectionMock() };
+  }
+
+  it('getActiveRoleCodes retorna os roleCodes das assignments ativas do usuário', async () => {
+    const db = buildDbWithRbac([{ userAccountId: 'admin-1', accessType: 4 }]);
+
+    const codes = await getActiveRoleCodes(db, 'admin-1');
+
+    expect(codes).toEqual(['administrator']);
+  });
+
+  it('getActiveRoleCodes retorna array vazio para usuário sem assignment ativa', async () => {
+    const db = buildDbWithRbac([]);
+
+    const codes = await getActiveRoleCodes(db, 'nobody');
+
+    expect(codes).toEqual([]);
+  });
+
+  it('isAdministrator retorna true apenas para usuário com role administrator ativa', async () => {
+    const db = buildDbWithRbac([
+      { userAccountId: 'admin-1', accessType: 4 },
+      { userAccountId: 'tech-1', accessType: 2 },
+    ]);
+
+    expect(await isAdministrator(db, 'admin-1')).toBe(true);
+    expect(await isAdministrator(db, 'tech-1')).toBe(false);
+    expect(await isAdministrator(db, 'nobody')).toBe(false);
+  });
+
+  it('findUserAccountIdsByRoleCodes retorna userAccountIds com assignment ativa em qualquer dos roleCodes', async () => {
+    const db = buildDbWithRbac([
+      { userAccountId: 'admin-1', accessType: 4 },
+      { userAccountId: 'coord-1', accessType: 3 },
+      { userAccountId: 'tech-1', accessType: 2 },
+      { userAccountId: 'ext-1', accessType: 1 },
+    ]);
+
+    const ids = await findUserAccountIdsByRoleCodes(db, ['technician', 'coordinator', 'administrator']);
+
+    expect(ids.sort()).toEqual(['admin-1', 'coord-1', 'tech-1'].sort());
+  });
+
+  it('findUserAccountIdsByRoleCodes retorna array vazio quando nenhum roleCode do catálogo bate', async () => {
+    const db = buildDbWithRbac([{ userAccountId: 'admin-1', accessType: 4 }]);
+
+    const ids = await findUserAccountIdsByRoleCodes(db, ['nonexistent-role']);
+
+    expect(ids).toEqual([]);
   });
 });

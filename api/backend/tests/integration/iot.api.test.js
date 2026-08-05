@@ -113,6 +113,23 @@ function buildDb() {
     }),
   };
 
+  // #426: notification-recipient resolution goes through
+  // UserRoleAssignment -> Role, not an accessType $in query -- grant a
+  // valid ObjectId hex string an active `technician` assignment so the
+  // recipient-notification path stays exercised.
+  const rolesCollection = {
+    find: vi.fn().mockReturnValue({
+      toArray: vi.fn().mockResolvedValue([{ roleId: 'role-tech', roleCode: 'technician', roleStatus: 'active' }]),
+    }),
+  };
+  const userRoleAssignmentsCollection = {
+    find: vi.fn().mockReturnValue({
+      toArray: vi.fn().mockResolvedValue([
+        { userAccountId: '507f1f77bcf86cd799439099', roleId: 'role-tech', assignmentStatus: 'active', validUntil: null },
+      ]),
+    }),
+  };
+
   return {
     db: {
       collection: vi.fn().mockImplementation((name) => {
@@ -126,6 +143,8 @@ function buildDb() {
         if (name === 'sampleMovements') return sampleMovementsCollection;
         if (name === 'sample_movements') return sampleMovementsCollection;
         if (name === 'counters') return countersCollection;
+        if (name === 'roles') return rolesCollection;
+        if (name === 'userRoleAssignments') return userRoleAssignmentsCollection;
         return { find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }) };
       }),
     },

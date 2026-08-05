@@ -4,7 +4,12 @@ const router = express.Router();
 const { authenticate } = require('../../infrastructure/middleware/auth');
 const logService = require('../../services/log.service');
 const logger = require('../../utils/logger');
+const { isAdministrator, getActiveRoleCodes } = require('../../services/rbac-assignment.service');
 
+// #426: "auditor" has no dedicated roleCode in the RBAC catalog (roles.min.json
+// never defined one) -- normalizedRoleName's substring check is the only
+// existing signal for it, so it's kept as a fallback until #427/#428 either
+// add a real "auditor" role or retire the concept.
 function normalizeRoleName(value) {
   return String(value || '')
     .normalize('NFD')
@@ -13,21 +18,31 @@ function normalizeRoleName(value) {
     .toLowerCase();
 }
 
-function requireAuditReader(req, res, next) {
-  const accessType = Number(req.user?.accessType || req.user?.role || 0);
-  const normalizedRoleName = normalizeRoleName(req.user?.roleName || req.user?.role);
-  const isAdmin = accessType === 4 || normalizedRoleName === 'admin' || normalizedRoleName === 'administrador';
-  const isAuditor = normalizedRoleName.includes('auditor');
+async function requireAuditReader(req, res, next) {
+  try {
+    const db = req.app.locals.db;
+    if (!db) {
+      return res.status(503).json({ success: false, error: 'Banco de dados não disponível' });
+    }
+    const isAdmin = await isAdministrator(db, req.user?.userID);
+    if (isAdmin) return next();
 
-  if (!isAdmin && !isAuditor) {
-    return res.status(403).json({
-      success: false,
-      error: 'Acesso negado',
-      message: 'Apenas perfis Admin ou Auditor podem acessar trilhas de auditoria.'
-    });
+    const roleCodes = await getActiveRoleCodes(db, req.user?.userID);
+    const isAuditor = roleCodes.includes('auditor') || normalizeRoleName(req.user?.roleName || req.user?.role).includes('auditor');
+
+    if (!isAuditor) {
+      return res.status(403).json({
+        success: false,
+        error: 'Acesso negado',
+        message: 'Apenas perfis Admin ou Auditor podem acessar trilhas de auditoria.'
+      });
+    }
+
+    return next();
+  } catch (error) {
+    logger.error('Erro ao verificar permissao de auditoria:', error.message || error);
+    return res.status(500).json({ success: false, error: 'Erro ao verificar permissao' });
   }
-
-  return next();
 }
 
 function buildCsv(logs = []) {

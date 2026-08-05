@@ -288,7 +288,10 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
     }
 
     // Verifica se é admin (já buscamos targetUser acima)
-    const isAdmin = targetUser && (targetUser.accessType === 4 || targetUser.roleName === 'Administrador');
+    // #426: resolve via UserRoleAssignment -> Role, não accessType/roleName
+    // direto no documento.
+    const { isAdministrator } = require('../../services/rbac-assignment.service');
+    const isAdmin = targetUser && (await isAdministrator(db, targetUser._id.toString()));
     const isBecomingAdmin = req.body.accessType === 4 || req.body.roleName === 'Administrador';
     
     // Para Administrador, MFA é opcional e pode ser setado manualmente
@@ -766,11 +769,13 @@ router.post('/:id/reset-mfa', authenticate, async (req, res) => {
     }
 
     // Verifica se o usuário atual é administrador
-    const { ObjectId } = require('mongodb');
+    // #426: resolve via UserRoleAssignment -> Role, não accessType/roleName
+    // direto no documento.
+    const { isAdministrator } = require('../../services/rbac-assignment.service');
     const usersCollection = db.collection('users');
-    const currentUser = await usersCollection.findOne({ _id: new ObjectId(req.user.userID) });
-    
-    if (!currentUser || (currentUser.accessType !== 4 && currentUser.roleName !== 'Administrador')) {
+
+    const isCurrentUserAdmin = await isAdministrator(db, req.user.userID);
+    if (!isCurrentUserAdmin) {
       return res.status(403).json({
         success: false,
         error: req.t('users.resetMFAAccessDenied'),
@@ -781,7 +786,7 @@ router.post('/:id/reset-mfa', authenticate, async (req, res) => {
     // Busca o usuário alvo
     const userFilter = buildUserFilterById(req.params.id);
     const targetUser = await usersCollection.findOne(userFilter);
-    
+
     if (!targetUser) {
       return res.status(404).json({
         success: false,
@@ -790,7 +795,7 @@ router.post('/:id/reset-mfa', authenticate, async (req, res) => {
     }
 
     // Não permite resetar MFA de administrador
-    if (targetUser.accessType === 4 || targetUser.roleName === 'Administrador') {
+    if (await isAdministrator(db, targetUser._id.toString())) {
       return res.status(400).json({
         success: false,
         error: req.t('users.resetMFANotAllowed'),
@@ -840,11 +845,13 @@ router.post('/:id/disable-mfa', authenticate, async (req, res) => {
     }
 
     // Verifica se o usuário atual é administrador
-    const { ObjectId } = require('mongodb');
+    // #426: resolve via UserRoleAssignment -> Role, não accessType/roleName
+    // direto no documento.
+    const { isAdministrator } = require('../../services/rbac-assignment.service');
     const usersCollection = db.collection('users');
-    const currentUser = await usersCollection.findOne({ _id: new ObjectId(req.user.userID) });
-    
-    if (!currentUser || (currentUser.accessType !== 4 && currentUser.roleName !== 'Administrador')) {
+
+    const isCurrentUserAdmin = await isAdministrator(db, req.user.userID);
+    if (!isCurrentUserAdmin) {
       return res.status(403).json({
         success: false,
         error: req.t('users.disableMFAAccessDenied'),
@@ -855,7 +862,7 @@ router.post('/:id/disable-mfa', authenticate, async (req, res) => {
     // Busca o usuário alvo
     const userFilter = buildUserFilterById(req.params.id);
     const targetUser = await usersCollection.findOne(userFilter);
-    
+
     if (!targetUser) {
       return res.status(404).json({
         success: false,
@@ -865,7 +872,7 @@ router.post('/:id/disable-mfa', authenticate, async (req, res) => {
 
     // Verifica se o usuário alvo é administrador
     // Este endpoint permite desativar MFA apenas de outros administradores
-    const isTargetAdmin = targetUser.accessType === 4 || targetUser.roleName === 'Administrador';
+    const isTargetAdmin = await isAdministrator(db, targetUser._id.toString());
     
     if (!isTargetAdmin) {
       return res.status(403).json({
