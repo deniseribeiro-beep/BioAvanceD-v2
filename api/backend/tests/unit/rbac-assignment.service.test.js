@@ -32,9 +32,17 @@ function buildDb({ users = [], roles = [], permissionDocs = [], assignments = []
   const rolesCollection = createCollectionMock({
     findOne: vi.fn(async (query = {}) => roles.find((r) => matchesQuery(r, query)) || null),
     find: vi.fn((query = {}) => ({ toArray: vi.fn().mockResolvedValue(roles.filter((r) => matchesQuery(r, query))) })),
+    insertOne: vi.fn(async (doc) => {
+      roles.push(doc);
+      return { insertedId: doc.roleId };
+    }),
   });
   const permissionsCollection = createCollectionMock({
     findOne: vi.fn(async (query = {}) => permissionDocs.find((p) => matchesQuery(p, query)) || null),
+    insertOne: vi.fn(async (doc) => {
+      permissionDocs.push(doc);
+      return { insertedId: doc.permissionId };
+    }),
   });
   const assignmentsCollection = createCollectionMock({
     findOne: vi.fn(async (query = {}) => assignments.find((a) => matchesQuery(a, query)) || null),
@@ -131,6 +139,16 @@ describe('rbac-assignment.service (#421)', () => {
     await backfillUserRoleAssignments(db);
 
     expect(assignments.filter((a) => a.assignmentStatus === 'active')).toHaveLength(1);
+  });
+
+  it('backfillUserRoleAssignments semeia o catálogo RBAC automaticamente quando ainda não foi semeado (#437)', async () => {
+    const users = [{ _id: { toString: () => 'u1' }, accessType: 4 }];
+    const db = buildDb({ users, roles: [], permissionDocs: [], assignments: [] });
+
+    const result = await backfillUserRoleAssignments(db);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].roleId).toBeTruthy();
   });
 
   it('userHasPermission retorna false quando o usuário não tem nenhuma assignment ativa', async () => {
