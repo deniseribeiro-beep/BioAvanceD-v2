@@ -8,7 +8,7 @@ const UserModel = require('../models/User');
 const LogModel = require('../models/Log');
 const logger = require('../utils/logger');
 const sessionService = require('./session.service');
-const { grantRoleForAccessType, isAdministrator, resolveRoleDisplayName } = require('./rbac-assignment.service');
+const { grantRoleForAccessType, isAdministrator, resolveRoleDisplayName, resolveUserHierarchyLevel } = require('./rbac-assignment.service');
 
 const ACCESS_TOKEN_TTL = '15m';
 const REFRESH_TOKEN_TTL = '7d';
@@ -18,13 +18,18 @@ const REFRESH_TOKEN_TTL = '7d';
  * RF001 - Login com MFA
  */
 class AuthService {
-  issueAccessToken(user) {
+  // #431: accessType is no longer persisted on the User document (#427) —
+  // resolve the live value from the RBAC assignment instead of trusting the
+  // stale field, same pattern #427/#428 used for display reads. Keeps the
+  // `accessType` claim key name; only its source changed.
+  async issueAccessToken(db, user) {
+    const accessType = await resolveUserHierarchyLevel(db, user._id.toString());
     return jwt.sign(
       {
         userID: user._id.toString(),
         email: user.email,
         username: user.username,
-        accessType: user.accessType,
+        accessType,
         name: user.name,
         mfaVerified: true,
         jti: crypto.randomUUID()
@@ -54,7 +59,7 @@ class AuthService {
 
   async issueSessionTokens(db, user, req) {
     const refreshToken = this.issueRefreshToken(user);
-    const accessToken = this.issueAccessToken(user);
+    const accessToken = await this.issueAccessToken(db, user);
 
     const session = await sessionService.createSession(
       db,
