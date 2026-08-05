@@ -21,6 +21,7 @@
 const retentionPolicyService = require('./retentionPolicy.service');
 const auditLogger = require('./../utils/auditLogger');
 const logger = require('../utils/logger');
+const { iso8601DurationToMs } = require('../utils/iso8601Duration');
 
 const AUDIT_EVENTS_COLLECTION = 'audit_events';
 const AUDIT_EVENTS_ARCHIVE_COLLECTION = 'audit_events_archive';
@@ -60,7 +61,7 @@ class RetentionSweepService {
       return { ranAt: new Date().toISOString(), skipped: true, reason: 'no_active_policy' };
     }
 
-    const cutoff = new Date(Date.now() - policy.retentionDurationDays * 24 * 60 * 60 * 1000);
+    const cutoff = new Date(Date.now() - iso8601DurationToMs(policy.retentionPeriod));
     const result = {
       ranAt: new Date().toISOString(),
       policyId: String(policy._id),

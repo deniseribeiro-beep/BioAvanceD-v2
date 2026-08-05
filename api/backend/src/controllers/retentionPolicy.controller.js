@@ -25,7 +25,7 @@ class RetentionPolicyController {
             applicableEntityTypes: policy.applicableEntityTypes,
             triggerEvent: policy.triggerEvent,
             postRetentionAction: policy.postRetentionAction,
-            retentionDurationDays: policy.retentionDurationDays,
+            retentionPeriod: policy.retentionPeriod,
             version: policy.version,
             active: policy.active
           },
@@ -72,7 +72,7 @@ class RetentionPolicyController {
             applicableEntityTypes: policy.applicableEntityTypes,
             triggerEvent: policy.triggerEvent,
             postRetentionAction: policy.postRetentionAction,
-            retentionDurationDays: policy.retentionDurationDays,
+            retentionPeriod: policy.retentionPeriod,
             version: policy.version,
             active: policy.active,
             previousPolicyId: policy.previousPolicyId || null
