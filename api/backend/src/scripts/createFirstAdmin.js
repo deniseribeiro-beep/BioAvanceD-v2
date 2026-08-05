@@ -53,13 +53,14 @@ async function createFirstAdmin(options = {}) {
 
     const now = new Date();
     const passwordHash = await bcrypt.hash(config.password, 10);
+    // #427: accessType is only used below to grant the matching
+    // UserRoleAssignment — no longer persisted on the User document.
+    const ADMIN_ACCESS_TYPE = 4;
     const adminUser = {
       name: config.name,
       email: config.email,
       username: config.username,
       password: passwordHash,
-      accessType: 4,
-      roleName: 'Administrador',
       status: 'active',
       mfaEnabled: false,
       mfaSecret: null,
@@ -83,7 +84,7 @@ async function createFirstAdmin(options = {}) {
     await seedRolesAndPermissions(db);
     await grantRoleForAccessType(db, {
       userAccountId: userId,
-      accessType: adminUser.accessType,
+      accessType: ADMIN_ACCESS_TYPE,
       grantedBy: 'BOOTSTRAP_SYSTEM',
     });
 

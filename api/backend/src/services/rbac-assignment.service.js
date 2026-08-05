@@ -70,6 +70,25 @@ async function isAdministrator(db, userAccountId) {
   return roleCodes.includes('administrator');
 }
 
+const ROLE_CODE_DISPLAY_NAME = {
+  external_user: 'Usuário Externo',
+  technician: 'Técnico',
+  coordinator: 'Coordenador',
+  administrator: 'Administrador',
+};
+
+/**
+ * #427: display roleName resolved from a user's active RBAC assignment, for
+ * response/list shaping that used to read the `roleName` written directly
+ * onto the User document — write paths stopped populating that field this
+ * slice, so it can no longer be trusted as a source for display either.
+ */
+async function resolveRoleDisplayName(db, userAccountId) {
+  const roleCodes = await getActiveRoleCodes(db, userAccountId);
+  const primary = roleCodes.find((code) => ROLE_CODE_DISPLAY_NAME[code]);
+  return primary ? ROLE_CODE_DISPLAY_NAME[primary] : 'Técnico';
+}
+
 /**
  * #426: userAccountIds of every user with a currently active assignment to
  * any of `roleCodes` — replaces `User.find({ accessType: { $in: [...] } })`
@@ -179,6 +198,7 @@ module.exports = {
   userHasPermission,
   getActiveRoleCodes,
   isAdministrator,
+  resolveRoleDisplayName,
   findUserAccountIdsByRoleCodes,
   grantRoleForAccessType,
   changeUserRole,

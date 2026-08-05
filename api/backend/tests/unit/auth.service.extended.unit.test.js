@@ -72,6 +72,20 @@ describe('AuthService.registerUser', () => {
     const result = await authService.registerUser(db, { ...VALID_USER, accessType: 3 });
     expect(result.roleName).toBeTruthy();
   });
+
+  // #427: accessType/roleName no longer persisted on the User document —
+  // only used transiently to grant the matching UserRoleAssignment (#421).
+  it('does not persist accessType/roleName on the inserted user document', async () => {
+    const insertOne = vi.fn().mockResolvedValue({ insertedId: { toString: () => 'new-user-id' } });
+    const db = makeDb({ insertOne });
+
+    await authService.registerUser(db, { ...VALID_USER, accessType: 4, roleName: 'Administrador' });
+
+    expect(insertOne).toHaveBeenCalledTimes(1);
+    const inserted = insertOne.mock.calls[0][0];
+    expect(inserted).not.toHaveProperty('accessType');
+    expect(inserted).not.toHaveProperty('roleName');
+  });
 });
 
 describe('AuthService.login', () => {
