@@ -10,13 +10,26 @@ const app = require('../../app');
 const sessionService = require('../../src/services/session.service');
 const logService = require('../../src/services/log.service');
 const { createCollectionMock, createDbMock } = require('../factories/db.factory');
+const { buildRbacCollections } = require('../factories/rbac.factory');
+
+const TOKEN_USER_ID = 'qa-user-1';
 
 function makeToken({ accessType = 4, roleName = 'Administrador' } = {}) {
   return jwt.sign(
-    { userID: 'qa-user-1', accessType, roleName, name: 'QA User', mfaVerified: true },
+    { userID: TOKEN_USER_ID, accessType, roleName, name: 'QA User', mfaVerified: true },
     process.env.JWT_SECRET,
     { expiresIn: '1h' }
   );
+}
+
+// #426: requireAuditReader now resolves admin status via
+// UserRoleAssignment -> Role, not the accessType/roleName the JWT carries —
+// `createDbMock` merged with `buildRbacCollections` grants
+// `TOKEN_USER_ID` the assignment matching `accessType` so admin-gated tests
+// keep exercising the real RBAC read path instead of a stubbed shortcut.
+function dbForAccessType(accessType, extraCollections = {}) {
+  const rbac = buildRbacCollections(accessType == null ? [] : [{ userAccountId: TOKEN_USER_ID, accessType }]);
+  return createDbMock({ ...rbac, ...extraCollections });
 }
 
 function givenSession() {
@@ -47,36 +60,39 @@ describe('requireAuditReader (via GET /api/logs)', () => {
     expect(res.status).toBe(401);
   });
 
-  it('allows accessType 4 through', async () => {
+  it('allows a user with an active administrator role assignment through', async () => {
     vi.spyOn(logService, 'getLogs').mockResolvedValue({ logs: [], total: 0 });
-    app.locals.db = createDbMock({});
+    app.locals.db = dbForAccessType(4);
     const res = await request(app)
       .get('/api/logs')
       .set('Authorization', `Bearer ${makeToken({ accessType: 4, roleName: 'Pesquisador' })}`);
     expect(res.status).toBe(200);
   });
 
-  it('allows roleName "Admin" through', async () => {
-    vi.spyOn(logService, 'getLogs').mockResolvedValue({ logs: [], total: 0 });
-    app.locals.db = createDbMock({});
+  // #426: admission is no longer decided by the JWT's roleName text --
+  // only an active `administrator` role assignment (or the `auditor`
+  // substring fallback below) grants access, so a JWT merely *claiming*
+  // roleName "Admin"/"Administrador" without a matching RBAC assignment is
+  // now correctly denied.
+  it('denies a user whose JWT claims roleName "Admin" but has no administrator role assignment', async () => {
+    app.locals.db = dbForAccessType(1);
     const res = await request(app)
       .get('/api/logs')
       .set('Authorization', `Bearer ${makeToken({ accessType: 1, roleName: 'Admin' })}`);
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(403);
   });
 
-  it('allows accented roleName "Administrador" through', async () => {
-    vi.spyOn(logService, 'getLogs').mockResolvedValue({ logs: [], total: 0 });
-    app.locals.db = createDbMock({});
+  it('denies a user whose JWT claims accented roleName "Administrador" but has no administrator role assignment', async () => {
+    app.locals.db = dbForAccessType(1);
     const res = await request(app)
       .get('/api/logs')
       .set('Authorization', `Bearer ${makeToken({ accessType: 1, roleName: 'Administrador' })}`);
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(403);
   });
 
-  it('allows a roleName merely containing "auditor" as a substring', async () => {
+  it('allows a roleName merely containing "auditor" as a substring (no dedicated RBAC role yet)', async () => {
     vi.spyOn(logService, 'getLogs').mockResolvedValue({ logs: [], total: 0 });
-    app.locals.db = createDbMock({});
+    app.locals.db = dbForAccessType(1);
     const res = await request(app)
       .get('/api/logs')
       .set('Authorization', `Bearer ${makeToken({ accessType: 1, roleName: 'Auditor Clínico' })}`);
@@ -84,7 +100,7 @@ describe('requireAuditReader (via GET /api/logs)', () => {
   });
 
   it('rejects a plain user role with exact 403 error shape', async () => {
-    app.locals.db = createDbMock({});
+    app.locals.db = dbForAccessType(1);
     const res = await request(app)
       .get('/api/logs')
       .set('Authorization', `Bearer ${makeToken({ accessType: 1, roleName: 'Pesquisador' })}`);
@@ -113,7 +129,7 @@ describe('GET /api/logs', () => {
   it('wraps logService.getLogs result in {success, data}', async () => {
     const fakeResult = { logs: [{ logId: 'l1' }], total: 1 };
     vi.spyOn(logService, 'getLogs').mockResolvedValue(fakeResult);
-    app.locals.db = createDbMock({});
+    app.locals.db = dbForAccessType(4);
     const res = await request(app)
       .get('/api/logs?severity=high')
       .set('Authorization', `Bearer ${makeToken()}`);
@@ -129,7 +145,7 @@ describe('GET /api/logs/all', () => {
 
   it('forces limit:5000 and page:1 regardless of query params', async () => {
     vi.spyOn(logService, 'getLogs').mockResolvedValue({ logs: [], total: 0 });
-    app.locals.db = createDbMock({});
+    app.locals.db = dbForAccessType(4);
     const res = await request(app)
       .get('/api/logs/all?limit=10&page=3&severity=low')
       .set('Authorization', `Bearer ${makeToken()}`);
@@ -142,7 +158,7 @@ describe('GET /api/logs/all', () => {
 
   it('defaults limit to 5000 when none supplied', async () => {
     vi.spyOn(logService, 'getLogs').mockResolvedValue({ logs: [], total: 0 });
-    app.locals.db = createDbMock({});
+    app.locals.db = dbForAccessType(4);
     const res = await request(app)
       .get('/api/logs/all')
       .set('Authorization', `Bearer ${makeToken()}`);
@@ -157,7 +173,7 @@ describe('POST /api/logs/query', () => {
 
   it('reads filters from req.body, not query', async () => {
     vi.spyOn(logService, 'getLogs').mockResolvedValue({ logs: [], total: 0 });
-    app.locals.db = createDbMock({});
+    app.locals.db = dbForAccessType(4);
     const res = await request(app)
       .post('/api/logs/query?ignored=true')
       .set('Authorization', `Bearer ${makeToken()}`)
@@ -207,7 +223,7 @@ describe('GET /api/logs/export/csv', () => {
   afterEach(() => { vi.restoreAllMocks(); });
 
   it('rejects non-admin/non-auditor user', async () => {
-    app.locals.db = createDbMock({});
+    app.locals.db = dbForAccessType(2);
     const res = await request(app)
       .get('/api/logs/export/csv')
       .set('Authorization', `Bearer ${makeToken({ accessType: 2, roleName: 'Técnico' })}`);
@@ -229,7 +245,7 @@ describe('GET /api/logs/export/csv', () => {
       },
     ];
     vi.spyOn(logService, 'getLogs').mockResolvedValue({ logs });
-    app.locals.db = createDbMock({});
+    app.locals.db = dbForAccessType(4);
     const res = await request(app)
       .get('/api/logs/export/csv')
       .set('Authorization', `Bearer ${makeToken()}`);
@@ -248,7 +264,7 @@ describe('GET /api/logs/export/csv', () => {
 
   it('returns just the header row when there are no logs', async () => {
     vi.spyOn(logService, 'getLogs').mockResolvedValue({ logs: [] });
-    app.locals.db = createDbMock({});
+    app.locals.db = dbForAccessType(4);
     const res = await request(app)
       .get('/api/logs/export/csv')
       .set('Authorization', `Bearer ${makeToken()}`);
@@ -264,7 +280,7 @@ describe('GET /api/logs/export/xlsx', () => {
   it('returns the same CSV-shaped bytes as the csv endpoint, with xlsx headers', async () => {
     const logs = [{ timestamp: 't1', userName: 'Bob', action: 'READ', entity: 'e', result: 'ok', severity: 'low', module: 'm', ipSource: '1.1.1.1', message: 'hi' }];
     vi.spyOn(logService, 'getLogs').mockResolvedValue({ logs });
-    app.locals.db = createDbMock({});
+    app.locals.db = dbForAccessType(4);
     const res = await request(app)
       .get('/api/logs/export/xlsx')
       .set('Authorization', `Bearer ${makeToken()}`);
@@ -286,7 +302,7 @@ describe('GET /api/logs/:id', () => {
     const log = { logId: 'my-log-id', action: 'X' };
     const findOne = vi.fn().mockResolvedValue(log);
     const coll = createCollectionMock({ findOne });
-    app.locals.db = createDbMock({ logs: coll });
+    app.locals.db = dbForAccessType(4, { logs: coll });
 
     const res = await request(app)
       .get('/api/logs/my-log-id')
@@ -302,7 +318,7 @@ describe('GET /api/logs/:id', () => {
     const log = { _id: objId, action: 'Y' };
     const findOne = vi.fn().mockResolvedValue(log);
     const coll = createCollectionMock({ findOne });
-    app.locals.db = createDbMock({ logs: coll });
+    app.locals.db = dbForAccessType(4, { logs: coll });
 
     const res = await request(app)
       .get(`/api/logs/${objId.toString()}`)
@@ -323,7 +339,7 @@ describe('GET /api/logs/:id', () => {
       .mockResolvedValueOnce(null)
       .mockResolvedValueOnce(log);
     const coll = createCollectionMock({ findOne });
-    app.locals.db = createDbMock({ logs: coll });
+    app.locals.db = dbForAccessType(4, { logs: coll });
 
     const res = await request(app)
       .get(`/api/logs/${objIdLikeLogId}`)
@@ -336,7 +352,7 @@ describe('GET /api/logs/:id', () => {
 
   it('returns 404 when no log is found', async () => {
     const coll = createCollectionMock({ findOne: vi.fn().mockResolvedValue(null) });
-    app.locals.db = createDbMock({ logs: coll });
+    app.locals.db = dbForAccessType(4, { logs: coll });
 
     const res = await request(app)
       .get('/api/logs/nonexistent-id')

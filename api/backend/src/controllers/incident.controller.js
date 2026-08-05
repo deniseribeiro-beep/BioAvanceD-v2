@@ -4,6 +4,9 @@ const { connectMongoDB } = require('../infrastructure/database/mongodb/connectio
 const TemperatureIncidentModel = require('../models/TemperatureIncident');
 const { sendIncidentAlertEmail } = require('../services/sendIncidentAlertEmail');
 const coldChainQuarantineService = require('../services/equipment-sensor-quarantine.service');
+const { findUserAccountIdsByRoleCodes } = require('../services/rbac-assignment.service');
+
+const NOTIFIABLE_ROLE_CODES = ['technician', 'coordinator', 'administrator'];
 
 let TemperatureIncidentCollection = null;
 let UserCollection = null;
@@ -21,10 +24,15 @@ async function getCollections() {
 
 async function getAlertRecipients() {
   try {
-    const { UserCollection } = await getCollections();
+    const { db, UserCollection } = await getCollections();
+    // #426: resolve via UserRoleAssignment -> Role, não accessType direto.
+    const userAccountIds = await findUserAccountIdsByRoleCodes(db, NOTIFIABLE_ROLE_CODES);
+    if (!userAccountIds.length) return [];
+    const { ObjectId } = require('mongodb');
+    const objectIds = userAccountIds.filter((id) => ObjectId.isValid(id)).map((id) => new ObjectId(id));
     const recipients = await UserCollection
-      .find({ accessType: { $in: [2, 3, 4] }, status: 'active' })
-      .project({ email: 1, username: 1, accessType: 1 })
+      .find({ _id: { $in: objectIds }, status: 'active' })
+      .project({ email: 1, username: 1 })
       .toArray();
     return recipients.map(u => u.email).filter(e => e);
   } catch (error) {

@@ -11,12 +11,27 @@ afterEach(() => { vi.restoreAllMocks(); });
 function makeDb(overrides = {}) {
   const collectionApi = {
     findOne: vi.fn().mockResolvedValue(null),
-    find: vi.fn().mockReturnValue({ limit: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }) }),
+    find: vi.fn().mockReturnValue({
+      limit: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }),
+      toArray: vi.fn().mockResolvedValue([]),
+    }),
     updateOne: vi.fn().mockResolvedValue({ modifiedCount: 1 }),
     insertOne: vi.fn().mockResolvedValue({ insertedId: { toString: () => 'sess-id' } }),
     ...overrides,
   };
-  return { collection: vi.fn().mockReturnValue(collectionApi), _collectionApi: collectionApi };
+  // #426: processLogin resolves admin status via rbac-assignment.service
+  // (roles/userRoleAssignments), not accessType/roleName directly — those
+  // collections need a real find().toArray() regardless of what the
+  // `users` collection override looks like for a given test.
+  const rbacCollectionApi = {
+    findOne: vi.fn().mockResolvedValue(null),
+    find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }),
+  };
+  const RBAC_COLLECTIONS = new Set(['roles', 'permissions', 'userRoleAssignments']);
+  return {
+    collection: vi.fn((name) => (RBAC_COLLECTIONS.has(name) ? rbacCollectionApi : collectionApi)),
+    _collectionApi: collectionApi,
+  };
 }
 
 const HASHED = 'a'.repeat(60); // 20+ chars to pass length check
@@ -77,6 +92,11 @@ describe('AuthService.processLogin', () => {
   it('skips mandatory MFA setup for admin on first login', async () => {
     vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
     const db = makeDb();
+    db.collection.mockImplementation((name) => {
+      if (name === 'roles') return { findOne: vi.fn(), find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([{ roleId: 'role-admin', roleCode: 'administrator', roleStatus: 'active' }]) }) };
+      if (name === 'userRoleAssignments') return { findOne: vi.fn(), find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([{ userAccountId: 'user-1', roleId: 'role-admin', assignmentStatus: 'active', validUntil: null }]) }) };
+      return db._collectionApi;
+    });
     const user = { ...BASE_USER, lastLogin: null, accessType: 4, roleName: 'Administrador', mfaEnabled: false };
     const result = await authService.processLogin(db, user, 'pw', null, db.collection(), {});
     expect(result.requiresMFASetup).toBeUndefined();

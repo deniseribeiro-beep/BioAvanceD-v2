@@ -105,10 +105,32 @@ describe('iot.controller', () => {
       }),
     };
 
+    // #426: notification-recipient resolution now goes through
+    // UserRoleAssignment -> Role instead of an accessType $in query on
+    // `users` directly. Grant NOTIFIABLE_USER_ID (a valid ObjectId hex
+    // string) an active `technician` assignment by default so tests that
+    // only configure `usersCollection.find` (the final email projection)
+    // keep exercising the recipient-notification path unchanged.
+    const NOTIFIABLE_USER_ID = '507f1f77bcf86cd799439011';
+    const rolesCollection = {
+      find: vi.fn().mockReturnValue({
+        toArray: vi.fn().mockResolvedValue([{ roleId: 'role-tech', roleCode: 'technician', roleStatus: 'active' }]),
+      }),
+    };
+    const assignmentsCollection = {
+      find: vi.fn().mockReturnValue({
+        toArray: vi.fn().mockResolvedValue([
+          { userAccountId: NOTIFIABLE_USER_ID, roleId: 'role-tech', assignmentStatus: 'active', validUntil: null },
+        ]),
+      }),
+    };
+
     const fakeConnection = {
       collection: vi.fn().mockImplementation((name) => {
         if (name === 'temperatureIncidents') return temperatureIncidentsCollection;
         if (name === 'users') return usersCollection;
+        if (name === 'roles') return rolesCollection;
+        if (name === 'userRoleAssignments') return assignmentsCollection;
         return {
           findOne: vi.fn().mockResolvedValue(null),
           updateOne: vi.fn().mockResolvedValue({ modifiedCount: 1 }),

@@ -5,6 +5,7 @@ const require = createRequire(import.meta.url);
 
 const logService = require('../../../src/services/log.service');
 const auditLogger = require('../../../src/utils/auditLogger');
+const { buildRbacCollections } = require('../../factories/rbac.factory');
 
 const ANON_ID_RE = /^USR-[0-9A-F]{8}$/;
 
@@ -163,6 +164,23 @@ describe('auditLogger', () => {
         user: { userID: 'u', roleName: 'CustomRole', accessType: 4 },
       });
       expect(info.userRole).toBe('CustomRole');
+    });
+
+    // #426: when a db with real RBAC collections is passed and req.user
+    // carries no roleName, the label is resolved via UserRoleAssignment ->
+    // Role instead of the JWT's accessType.
+    it('resolves userRole via RBAC when db is available and roleName is absent', async () => {
+      const rbac = buildRbacCollections([{ userAccountId: 'u1', accessType: 3 }]);
+      const db = { collection: (name) => rbac[name] };
+      const info = await auditLogger.extractUserInfo({ user: { userID: 'u1' } }, db);
+      expect(info.userRole).toBe('Coordenador');
+    });
+
+    it('falls back to the accessType mapping when db has no matching assignment', async () => {
+      const rbac = buildRbacCollections([]);
+      const db = { collection: (name) => rbac[name] };
+      const info = await auditLogger.extractUserInfo({ user: { userID: 'u1', accessType: 2 } }, db);
+      expect(info.userRole).toBe('Técnico');
     });
   });
 

@@ -56,6 +56,42 @@ async function userHasPermission(db, userAccountId, permissionCode) {
 }
 
 /**
+ * #426: roleCodes of a user's currently active roles, for callers that need
+ * to gate on role identity (admin checks, notification-recipient queries)
+ * without reading `accessType`/`roleName` off the User document directly.
+ */
+async function getActiveRoleCodes(db, userAccountId) {
+  const roleDocs = await getActiveRoles(db, userAccountId);
+  return roleDocs.map((role) => role.roleCode);
+}
+
+async function isAdministrator(db, userAccountId) {
+  const roleCodes = await getActiveRoleCodes(db, userAccountId);
+  return roleCodes.includes('administrator');
+}
+
+/**
+ * #426: userAccountIds of every user with a currently active assignment to
+ * any of `roleCodes` — replaces `User.find({ accessType: { $in: [...] } })`
+ * for notification-recipient-style queries.
+ */
+async function findUserAccountIdsByRoleCodes(db, roleCodes) {
+  const roles = await getCollection(db, 'roles');
+  const roleDocs = await roles.find({ roleCode: { $in: roleCodes }, roleStatus: 'active' }).toArray();
+  const roleIds = roleDocs.map((role) => role.roleId);
+  if (!roleIds.length) return [];
+
+  const assignments = await getCollection(db, 'userRoleAssignments');
+  const now = new Date();
+  const docs = await assignments.find({
+    roleId: { $in: roleIds },
+    assignmentStatus: 'active',
+  }).toArray();
+  const active = docs.filter((doc) => !doc.validUntil || new Date(doc.validUntil) > now);
+  return [...new Set(active.map((doc) => doc.userAccountId))];
+}
+
+/**
  * Grants the legacy role matching `accessType` to `userAccountId`, upserting
  * by (userAccountId, roleId) so calling this more than once for the same
  * user/role is a no-op — required for the backfill script to be idempotent
@@ -141,6 +177,9 @@ module.exports = {
   getActiveRoles,
   resolveUserHierarchyLevel,
   userHasPermission,
+  getActiveRoleCodes,
+  isAdministrator,
+  findUserAccountIdsByRoleCodes,
   grantRoleForAccessType,
   changeUserRole,
   backfillUserRoleAssignments,

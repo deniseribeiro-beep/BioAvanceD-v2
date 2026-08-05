@@ -214,13 +214,11 @@ describe('Users and Access routes', () => {
   });
 
   it('POST /api/users/:id/reset-mfa deve resetar MFA de usuário não-admin', async () => {
+    // #426: o admin-gate agora resolve via UserRoleAssignment (o requester
+    // '...011' já tem role administrator ativa no rbacCollections do
+    // beforeEach) -- não é mais lido de volta de um findOne('users').
     const handler = getHandler(userRoutes, 'post', '/:id/reset-mfa');
     usersCollection.findOne
-      .mockResolvedValueOnce({
-        _id: '507f1f77bcf86cd799439011',
-        accessType: 4,
-        roleName: 'Administrador',
-      })
       .mockResolvedValueOnce({
         _id: 'user-target-1',
         accessType: 2,
@@ -240,13 +238,12 @@ describe('Users and Access routes', () => {
   });
 
   it('POST /api/users/:id/disable-mfa deve desativar MFA de admin', async () => {
+    // #426: both the requester ('...011') and the target ('user-target-2')
+    // need an active administrator UserRoleAssignment for this scenario --
+    // the shared beforeEach rbacCollections only grants '...011', so this
+    // test builds its own db with both.
     const handler = getHandler(userRoutes, 'post', '/:id/disable-mfa');
     usersCollection.findOne
-      .mockResolvedValueOnce({
-        _id: '507f1f77bcf86cd799439011',
-        accessType: 4,
-        roleName: 'Administrador',
-      })
       .mockResolvedValueOnce({
         _id: 'user-target-2',
         accessType: 4,
@@ -255,8 +252,20 @@ describe('Users and Access routes', () => {
       });
     usersCollection.updateOne.mockResolvedValue({ matchedCount: 1 });
 
+    const rbacCollections = buildRbacCollections([
+      { userAccountId: '507f1f77bcf86cd799439011', accessType: 4 },
+      { userAccountId: 'user-target-2', accessType: 4 },
+    ]);
+    const dbWithTargetAdmin = {
+      collection: vi.fn((name) => {
+        if (name === 'users') return usersCollection;
+        if (rbacCollections[name]) return rbacCollections[name];
+        return db.collection(name);
+      }),
+    };
+
     const req = createRequest({ params: { id: 'user-target-2' } });
-    req.app.locals.db = db;
+    req.app.locals.db = dbWithTargetAdmin;
     const res = createResponse();
 
     await handler(req, res);
