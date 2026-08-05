@@ -1,146 +1,117 @@
 # HANDOFF
 
 **Written:** 2026-08-05, end of session on `feature/docker-e2e-backend-integration`,
-after splitting #389.
+after closing #449.
 
 ## What happened this session
 
-Dennis asked to pick #390 (Sample.js Specimen/SPREC/RCS/storage consumer
-migration). Reading it surfaced that #390 explicitly depends on #389
-(storage/custody entity separation), which is still open and unstarted
-— #388 (SPREC) and #383 (RCS) are landed/closed, but #389 is not. Asked
-Dennis how to proceed; picked #389 instead.
+Dennis said "Pick #449". Routed via `work-issue` -> `resolve-issue` (rename/
+decision task, no reproduction or coverage gap involved).
 
-Routed #389 via `work-issue` → `divide-and-conquer` (its own issue text
-says "largest of the three separations (28 files)... scope it with
-divide-and-conquer before implementing"). Surveyed the actual field
-consumers directly (grep, not delegated — see friction note below) and
-found the real picture narrower/different than the issue's own
-non-exhaustive list suggested:
+Read the two primary docs the `canonical-data-model` guard requires before
+touching `Sample.js` (`docs/docs-7-27-2026/extracted/dict-02_DICIONARIO.md`,
+`requisitos-index.md`) and confirmed ELM-0138 = `initialQuantity`,
+ELM-0139 = `currentQuantity`, matching #449's own scope description exactly.
 
-- `availableQuantity`/`originalQuantity`/`totalWithdrawn`/`totalReturned`
-  are **not** naive duplicated state — `Sample.js`'s own code comments
-  (lines 80-91) already confirm (#401) they're written atomically with
-  the `SampleMovement` ledger in one transaction. This is a rename/decision
-  task (dict-02 alignment), not a migration task.
-- `lifecycleStatus`'s dual-write bridge was already removed (#408) — it's
-  now just a legacy-document fallback, near-dead code.
-- Several files that string-matched the field names (`sensor.controller.js`,
-  `Temperature.js`, `Sensor.js`, `mqtt-telemetry.service.js`,
-  `iot-streaming.service.js`, `TelemetryMonitor.js`,
-  `InfluxTelemetryWriteRepository.js`, `NotificationService.js`) turned out
-  to be unrelated Sensor/IoT-telemetry `locationId` usage, not `Sample`'s —
-  excluded from scope.
+Renamed `availableQuantity` -> `currentQuantity` and `originalQuantity` ->
+`initialQuantity` across:
+- Backend: `api/backend/src/models/Sample.js`,
+  `api/backend/src/services/sample.service.js`,
+  `api/backend/src/services/SampleGraphValidator.js`,
+  `api/backend/src/services/equipment-sensor-quarantine.service.js`, and
+  their unit tests (`sample.service.test.js`, `sample.models.test.js`,
+  `sample.model.gaps.test.js`, `equipment-sensor-quarantine.service.test.js`,
+  `cold-chain-quarantine.service.test.js`).
+- Frontend: `frontend/src/types/models.ts`,
+  `frontend/src/views/SampleDetailsPage.tsx`,
+  `frontend/src/views/SampleWithdrawalReturnPage.tsx`,
+  `frontend/src/components/samples/SamplesPageView.tsx`, and the
+  `en-US`/`es-ES`/`pt-BR` i18n key names (`availableQuantity`/
+  `originalQuantity` keys, previously unreferenced by any `t()` call under
+  their actual namespace `samples.*`, renamed for naming consistency anyway
+  since the issue said to update i18n keys that reference the field names
+  directly).
 
-Proposed a 3-issue split to Dennis (confirmed via AskUserQuestion), filed
-all three, referencing #389 as originating issue, and left #389 open as
-the tracking issue with a comment listing them:
+Decided the fate of `totalWithdrawn`/`totalReturned` per #449's own options:
+kept as Sample-level running totals (no dict-02 counterpart; #401 already
+confirmed they're written atomically alongside the `SampleMovement` ledger
+in one Mongo transaction, cheap to keep in sync) rather than computing on
+read from the ledger. Documented that decision in `Sample.js`'s field
+comment.
 
-- **#449** — quantity ledger field rename/decision (`availableQuantity`→
-  `currentQuantity`, `originalQuantity`→`initialQuantity`, decide fate of
-  `totalWithdrawn`/`totalReturned`). Self-contained, no dependency.
-- **#450** — `locationId`/`location`/`storageLocation` migration onto the
-  existing `MongoStorageRepository`/use-case layer (`MoveSampleUseCase`,
-  `AllocateSampleUseCase`, `GetSampleStorageLocationUseCase`,
-  `SearchAllocatableSamplesUseCase`, `ReleaseSampleUseCase` already
-  partly resolve through it). Largest piece, carries the real consumer
-  list (both backend and frontend). Should land before #390 can close
-  out the storage half of its own sweep.
-- **#451** — `lifecycleStatus`/`availabilityStatus`/`quarantineStatus`
-  consolidation onto `specimenStatus`/`releaseStatus`, plus the open
-  design question #389 raised: should custody (`SampleMovement`, an
-  append-only ledger) and storage (current location) be one entity or
-  two — current code already treats them as separate, suggesting two.
+Ran the full affected-suite slice (10 unit test files, 368 tests) on both
+the `fix/449-quantity-ledger-rename` branch and after merging into
+`feature/docker-e2e-backend-integration` — all passing. Also ran
+`tsc --noEmit` on the frontend to confirm no type errors from the rename.
 
-Ran `wrap-up`: no out-of-scope edits (issue-tracker actions only, no code
-touched), no lazy fixes, nothing security-relevant, no sub-point stranded
-on a closed issue (#389 stayed open). One friction finding: the
-`agent-delegation-guard.cjs` hook blocked a single, coherent read-only
-`Explore` investigation (one grep-and-categorize survey, not parallel
-fan-out) because the brief's prose happened to quote the issue's own
-"~28 files" figure — its digit-matcher can't distinguish a fan-out size
-from a codebase fact being investigated. Filed as
-`dyeallpies-skills-pack#218` (with a suggested refinement: only trigger
-on fan-out-adjacent language, or only for unrestricted agent types, not
-`Explore`). Worked around by doing the grep directly in the primary
-session instead — correct call here, but cost a wasted Agent-tool round
-trip and kept the survey work in the main transcript instead of a
-subagent's.
+Merged cleanly (`--no-ff`), pushed, closed #449 with a comment summarizing
+the rename/decision and the test result, deleted the local and remote
+`fix/449-quantity-ledger-rename` branches. Ran `wrap-up`: no out-of-scope
+edits, no lazy fixes, no security-relevant changes, nothing deferred in the
+close comment without a tracking issue. One minor self-corrected slip (tried
+`jest` before checking `package.json`'s `test` script, which is `vitest run`)
+— not worth filing, just used the right command.
 
 ## Repo state
 
-- **`feature/docker-e2e-backend-integration`**: clean working tree
-  (`git status`/`git diff --stat` both empty aside from the pre-existing
-  untracked `api/backend/out.txt`, not touched this session, not
-  investigated — flagging in case it's stray output worth cleaning up
-  next pickup). No commits made this session (issue-tracker-only
-  session); branch position vs. origin unchanged from last handoff
-  (pushed through `aa29b532`).
-- Issues: **#449, #450, #451 opened** (all `enhancement`, all reference
-  #389 as originating issue). **#389 left open** as tracking issue, one
-  comment added listing the split. **#390 not picked up** — still
-  blocked on #450 landing. `dyeallpies-skills-pack#218` opened (hook
-  false-positive finding, see above).
-- Backlog otherwise unchanged from last handoff: older backlog (`#371`/
-  `#373`/`#374`/`#378`/`#379`). dyeallpies-skills-pack#216, #210 still
-  open, not yet applied (now #218 too).
-- Carried-forward `user.accessType` grep sweep — still not done. Prior
-  note: check against `tests/unit/user.model.unit.test.js`'s
-  `isValidAccessType`/`getRoleName` failures first when picked up.
-- Local branches `test/440-retention-policy-model` and
-  `test/441-retention-sweep-job` are merged and could be deleted per
-  `clean-up`'s branch domain — still not done, still flagging.
-- `fix/444-retention-period-iso8601` branch housekeeping — still carried
-  forward, not re-checked.
+- **`feature/docker-e2e-backend-integration`**: clean, pushed through
+  `ae2c7ff0` (merge commit of #449's rename). Untracked `api/backend/out.txt`
+  still present, still not investigated — carried forward again, flagging
+  once more in case it's worth a `clean-up` look.
+- Issues: **#449 closed** (rename done, merged, tests green). No new issues
+  filed this session.
+- Backlog otherwise unchanged from last handoff:
+  - **#450** (location/storageLocation migration) — largest of the #389
+    split, blocks #390. Good next pickup per last session's priority order.
+  - **#451** (status consolidation + custody/storage entity design question).
+  - **#390** — still blocked until #450 lands.
+  - Older backlog: `#371`/`#373`/`#374`/`#378`/`#379`, `user.accessType` grep
+    sweep (still not done), `test/440-retention-policy-model` and
+    `test/441-retention-sweep-job` branches (merged, still not deleted),
+    `fix/444-retention-period-iso8601` branch housekeeping (still carried
+    forward, not re-checked).
+  - dyeallpies-skills-pack#216, #210, #218 still open, not yet applied.
 
 ## Dev stack state
 
-Untouched this session — no Docker involved, no code run. Last known
-dev-stack state unchanged from prior handoffs (dev stack torn down,
-named volumes kept, RBAC catalog seeded, 0 real users).
+Untouched this session — no Docker involved (this task ran entirely against
+native unit tests via `vitest`/`tsc`). Last known dev-stack state unchanged
+from prior handoffs (dev stack torn down, named volumes kept, RBAC catalog
+seeded, 0 real users).
 
 ## Blocking next step
 
-None. #390 is blocked on #450 (not on this session, on a future one
-picking up #450's actual implementation).
+None.
 
 ## Recommended next steps
 
-None explicitly queued by Dennis beyond "pick #390" (redirected to #389,
-done via split). Candidates, in likely priority order (all carried
-forward, untriaged this session except #389's split):
+None explicitly queued by Dennis beyond "pick #449" (done). Candidates, in
+likely priority order, carried forward from last session:
 
-1. **#449** (quantity ledger rename) — smallest, self-contained, no
-   dependency. Good next pickup.
-2. **#450** (location/storageLocation migration) — largest of the three,
-   blocks #390. Its own text says to audit the existing use-cases first
-   before assuming the full consumer list needs work.
-3. **#451** (status consolidation + custody/storage entity decision) —
-   has a real design question to settle (one entity vs. two) before/
-   alongside #450.
-4. **#390** itself — still blocked until #450 lands.
-5. Older backlog: `#371`/`#373`/`#374`/`#378`/`#379`, `user.accessType`
-   grep sweep, `test/440-*`/`test/441-*` branch deletion,
-   `fix/444-retention-period-iso8601` housekeeping.
+1. **#450** (location/storageLocation migration) — largest of the three
+   #389-split issues, blocks #390. Audit the existing use-case layer first
+   per its own text.
+2. **#451** (status consolidation + custody/storage entity decision) — has
+   a real design question to settle (one entity vs. two).
+3. **#390** itself — still blocked until #450 lands.
+4. Older backlog: `#371`/`#373`/`#374`/`#378`/`#379`, `user.accessType` grep
+   sweep, `test/440-*`/`test/441-*` branch deletion,
+   `fix/444-retention-period-iso8601` housekeeping, stray
+   `api/backend/out.txt`.
 
 ## Which skills to use
 
-- `divide-and-conquer`'s design-split playbook (issue too big → plan of
-  issues, confirm with user, file with `Depends on:`/`Originating issue:`
-  lines, leave original open as tracker) worked cleanly end-to-end this
-  session — confirms the playbook as written, nothing to change there.
-- New this session: `dyeallpies-skills-pack#218` — `Explore`-type agent
-  briefs that quote a source-material count (not a fan-out size) can get
-  false-positive blocked by `agent-delegation-guard.cjs`. Until that's
-  fixed upstream, expect to fall back to doing single-investigation greps
-  directly in the primary session rather than delegating, when the brief
-  needs to reference a number from the issue/ticket being investigated.
+- `resolve-issue`'s rename/decision flow (branch per issue, read primary
+  spec docs before touching the canonical-data-model surface, rename +
+  update all consumers + tests, merge into the integration branch, close
+  with a summary comment, delete the branch) worked cleanly end-to-end —
+  confirms the playbook as written, nothing to change there.
 - Same two open flags carried from prior handoffs, still not filed
   anywhere new this session:
-  - A plain "these are closed"/"this reproduces" factual claim that
-    turns out false isn't obviously covered by `work-issue`/
-    `resolve-issue`'s existing "verify a prior handoff's settled claims"
-    guidance (scoped to "needs owner/design call" claims specifically).
+  - A plain "these are closed"/"this reproduces" factual claim that turns
+    out false isn't obviously covered by `work-issue`/`resolve-issue`'s
+    existing "verify a prior handoff's settled claims" guidance (scoped to
+    "needs owner/design call" claims specifically).
   - `resolve-issue`'s close-discipline case 3 covers both "already-
     implemented" tracking issues and "I couldn't reproduce this" flake
     reports — wording currently reads as only the former.
