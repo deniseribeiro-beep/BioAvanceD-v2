@@ -1,129 +1,147 @@
 # HANDOFF
 
-**Written:** 2026-08-05, mid-session on `feature/docker-e2e-backend-integration`,
-after splitting #439 into a plan of issues (no code changed yet).
+**Written:** 2026-08-05, end of session on `feature/docker-e2e-backend-integration`,
+after landing and merging #446.
 
 ## What happened this session
 
-Dennis picked #439 explicitly ("Pick #439") — the alias-removal issue
-carried forward from several prior handoffs (`Log.js`/`auditLogger.js`
-dual field names vs. the canonical AuditEvent contract already live in
-`audit-v2.service.js`).
+Picked up **#446** (Dennis: "Pick #446"), the first of the three-way split
+of #439 filed last session (#446/#447/#448). Routed via `resolve-issue`
+directly (already classified as a refactor/rename issue).
 
-Routed `work-issue` -> `resolve-issue`. Pre-pickup hygiene: working tree
-clean, no stale `issue-439-*`/`fix/439-*`/`test/439-*` branch existed,
-nothing dangling.
+**Migrated `Log.js`/`auditLogger.js`'s input contract to canonical
+AuditEvent field names** (`entityType`/`entityId`/`result`/`occurredAt`,
+matching `audit-v2.service.js`'s existing schema), replacing the
+`resourceType`/`entity`, `resourceId`/`entityID`, `status` aliases at
+their source:
 
-**Investigated the actual scope before doing anything** (per
-`resolve-issue`'s deferral-evaluation habit — confirm before trusting
-the issue body's own estimate):
-- Confirmed the canonical field set: `audit-v2.service.js`'s
-  `createEvent`/`ingestLogRecord` already use `entityType`/`entityId`/
-  `result`/`occurredAt`. This is the target shape.
-- The issue's "131 call sites" grep (`auditLogger\.(logLogin|...|log\()`)
-  turned out to conflate two very different things: the convenience
-  methods (`logCreate`/`logUpdate`/`logDelete`/etc., ~131 of the 134
-  matches) take **positional args** (`req, entity, entityID, payload`)
-  and don't need touching at all — only the **26 files** that build a
-  raw `auditLogger.log({...})` **options object** using the old key
-  names (`entity:`, `entityID:`, `resourceType:`, `resourceId:`,
-  `status:`, `result:`) are actual call sites needing a rename.
-- This narrower-but-still-real scope (core schema in `Log.js`/
-  `auditLogger.js` + 26 call sites + downstream readers in
-  `log.service.js`/`logSerializer.js`/`audit-v2.service.js`'s
-  `ingestLogRecord` fallback reads, all audit/LGPD-relevant) is still
-  too large/security-sensitive for one sitting per Dennis's own call —
-  asked via `AskUserQuestion` (do-it-directly vs. split-via-plan vs.
-  delegate-call-sites-to-agents); **Dennis chose "split into a plan
-  first via divide-and-conquer."**
+- `auditLogger.js`'s `log(options)` now destructures the canonical keys
+  only; its own convenience methods (`logCreate`/`logUpdate`/`logDelete`/
+  `logImport`/`logError`/`logLanguageChange`/`logPermissionChange`/
+  `logAssistant`/`logLogin`/`logLogout`) were updated too, since they call
+  `this.log()` internally with the old `entity`/`entityID` keys — the
+  issue's "convenience methods are unaffected" note was about their own
+  call signatures (still positional), not their internal implementation.
+- `Log.js`'s `validate`/`create` now accept `entityType`/`entityId`/
+  `occurredAt`/`result` as the primary input names (old aliases still
+  read as fallback, so nothing upstream breaks).
+- **Storage output is intentionally left dual-aliased** — `Log.js` still
+  writes `entity`/`entityID`/`resourceType`/`resourceId`/`status`
+  alongside the new canonical fields, because `log.service.js`,
+  `logSerializer.js`, and `audit-v2.service.js`'s `ingestLogRecord`
+  fallback reads all depend on the old field names and are explicitly
+  **#447**'s job, not this one.
+- Migrated all **26 call sites** listed in the issue body that build a
+  raw `auditLogger.log({...})` options object (routes, controllers,
+  middleware, services, `intakeWizard.js`) via a targeted script that
+  only rewrote keys inside `auditLogger.log(...)` call blocks (left
+  unrelated `entity`/`status`/`resourceType` business-domain fields
+  elsewhere in the same files untouched).
 
-**Filed the breakdown** (design-split playbook, confirmed with Dennis
-before filing per the skill's own rule — he picked the split option,
-which was itself the confirmation):
-- **#446** (foundational, atomic): migrate `Log.js`/`auditLogger.js`
-  internal schema to canonical fields + all 26 `auditLogger.log({...})`
-  call sites in the same PR (listed explicitly in the issue body — routes,
-  controllers, middleware, services, `intakeWizard.js`).
-- **#447** (depends on #446): migrate downstream Log-document readers
-  (`log.service.js`, `logSerializer.js`, `audit-v2.service.js`'s
-  `ingestLogRecord` alias-fallback reads) and remove the dual-alias
-  fallback code paths.
-- **#448** (depends on #446, #447): final repo-wide sweep for any
-  remaining alias references (tests/fixtures/docs) + close #439.
-- Left **#439 open** as the tracking issue, commented with the three
-  new numbers and the dependency chain (`resolve-issue`'s close-
-  discipline case 6 / the design-split playbook's numbered-close rule).
+**Caught and fixed a self-introduced bug before committing**: the
+mechanical rename script collapsed pre-existing *intentional* dual keys
+(e.g. a call site that had both `entity:` and `resourceType:` as
+separate properties) into literal duplicate object keys in 3 spots
+across `import-lgpd.controller.js` (×2 blocks) and `intakeWizard.js`
+(×2 blocks). Found via a duplicate-key scan script before running tests;
+fixed by hand, re-verified no duplicates remain.
 
-**No code changed yet this session** — filing only, per the plan Dennis
-approved. Said in the #439 comment "Picking up #446 now" — that pickup
-has not started as of this handoff (interrupted by the wrap-up/handoff
-checkpoint hooks firing on the `gh issue comment` call, which is
-correct/expected behavior, not friction).
+**Updated pinned test assertions** in 8 test files that exercised
+`auditLogger.log()`'s old input contract directly (not just the call
+sites): `tests/unit/utils/auditLogger.test.js`,
+`tests/unit/infrastructure/middleware/audit.middleware.test.js`,
+`tests/unit/rbac.test.js`, `tests/unit/paciente.controller.test.js`,
+`tests/unit/sample-file.controller.test.js`,
+`tests/unit/controllers/consent.controller.test.js`,
+`tests/unit/controllers/sensor.controller.test.js`,
+`tests/unit/import-lgpd.controller.gaps.test.js`,
+`tests/integration/logger-audit-trail.test.js`,
+`tests/integration/security.routes.test.js`.
 
-**No friction this session** — `wrap-up`'s core audit and shipping
-addendum both came back clean: no code edited outside scope (none
-edited at all), no lazy fixes, no stale instructions, no permission
-denials, no deferral-language gap (all three follow-ups got their own
-issue number rather than living only in a comment), nothing security-
-relevant landed yet (planning only).
+**Verification:** targeted test run first (146+762+122 tests across the
+touched files, all passing), then a full `vitest run` sweep: **6549/6557
+passing**. The 8 failures are `tests/unit/user.model.unit.test.js`
+(`UserModel.getRoleName` — pre-existing, already flagged in prior
+handoffs as tied to the still-open `user.accessType` grep sweep) and
+`tests/unit/scripts/generate-dictionary-catalog.test.js` (checksum
+drift against the checked-in dictionary artifact — pre-existing,
+unrelated). Neither touched by this session.
+
+**Shipped:** committed on `fix/446-audit-canonical-fields`
+(`ea628c56`), pushed, issue commented and closed. Fast-forward merged
+into `feature/docker-e2e-backend-integration`, pushed. Branch deleted
+(local + remote). `#447` is now unblocked.
+
+**No friction of note** beyond a self-corrected slip: started editing
+before creating the `fix/446-*` branch; the branch-guard hook blocked
+the first `Edit` cleanly (no lost work), branch was created and the
+edit re-applied. `wrap-up`'s full audit came back otherwise clean — no
+out-of-scope edits, no lazy fixes, no stale instructions, no unresolved
+deferral language in the close comment.
 
 ## Repo state
 
-- **`feature/docker-e2e-backend-integration`**: unchanged this session,
-  clean working tree, up to date with `origin`. No branch created yet
-  for #446.
-- Issues: **#439 still open** (now the tracking issue for the 3-way
-  split, comment posted with the breakdown). **#446, #447, #448 open**
-  (new this session). #445, #444 closed (prior sessions). #439's
-  predecessor context otherwise unchanged.
+- **`feature/docker-e2e-backend-integration`**: has #446's commit
+  (`ea628c56`), pushed, clean working tree, up to date with `origin`.
+- Issues: **#446 closed** (merged, commented). **#447** (downstream
+  Log-document reader migration: `log.service.js`, `logSerializer.js`,
+  `audit-v2.service.js`'s `ingestLogRecord` alias-fallback removal) is
+  now unblocked — its dependency on #446 is satisfied. **#448** still
+  blocked on #447. **#439** still open as the tracking issue for the
+  3-way split.
 - Backlog otherwise unchanged: older backlog (`#371`/`#373`/`#374`/
   `#378`/`#379`), **#389**. dyeallpies-skills-pack#216, #210 still open,
   not yet applied.
 - Carried-forward `user.accessType` grep sweep — still not done, still
-  possibly related to `user.model.unit.test.js`'s `getRoleName` failure
-  (not investigated again this session).
+  tied to `user.model.unit.test.js`'s `getRoleName` failure (reconfirmed
+  present in this session's full-suite run, not re-investigated).
 - Merged remote branch `fix/444-retention-period-iso8601` — not
   re-checked this session, carried forward as still-probably-safe-to-
   delete housekeeping.
 
 ## Dev stack state
 
-Untouched this session — no Docker involved (planning/issue-filing
-only, no code or tests touched). Last known state (from #425's
-session): dev stack torn down, named volumes kept, RBAC catalog seeded
-on that stack instance, 0 real users.
+Untouched this session — all verification was native `vitest run`, no
+Docker involved. Last known state (from #425's session): dev stack torn
+down, named volumes kept, RBAC catalog seeded on that stack instance, 0
+real users.
 
 ## Blocking next step
 
-None technically blocking, but the natural continuation is **#446**,
-which Dennis has already effectively greenlit by choosing the split
-plan — the #439 comment says "picking up #446 now." A fresh session (or
-this one, resumed) should start there: branch `fix/446-<slug>` off
-`feature/docker-e2e-backend-integration`, migrate `Log.js`/
-`auditLogger.js`'s schema and the 26 listed call sites together, run
-targeted `api/backend` audit/log unit tests, then follow `resolve-issue`
-close discipline (#447 stays blocked on #446 merging).
+None technically blocking. The natural continuation is **#447**
+(downstream Log-document reader migration + removing the dual-alias
+fallback reads), now unblocked by #446 landing. A fresh session (or
+this one, resumed) should start there: branch `fix/447-<slug>` off
+`feature/docker-e2e-backend-integration`, migrate `log.service.js`'s
+query/read paths, `logSerializer.js`, and `audit-v2.service.js`'s
+`ingestLogRecord` to read the canonical fields as primary, then remove
+the alias-fallback reads once confirmed safe — **only after** verifying
+Log.js's dual-write output (still active, per this session's scope
+decision) actually populates both field sets for every code path.
 
 ## Recommended next steps
 
-- **#446** — pick this up next; it's the piece Dennis is waiting on,
-  explicitly the next slice of the #439 split he just approved.
-- Everything else unchanged from the prior handoff: **#439**'s original
-  backlog neighbors, **#389** (route through `divide-and-conquer`
-  first), the `user.accessType` grep sweep, and the
+- **#447** — pick this up next; it's the direct continuation of #446
+  and now unblocked.
+- Everything else unchanged from the prior handoff: **#448** (blocked
+  on #447), **#439**'s backlog neighbors, **#389** (route through
+  `divide-and-conquer` first), the `user.accessType` grep sweep, and the
   `fix/444-retention-period-iso8601` branch housekeeping — none of these
   were touched this session.
 
 ## Which skills to use
 
-- #446: `resolve-issue` directly (not `work-issue` — already classified
-  as a refactor/rename-family issue this session). Branch
-  `fix/446-<slug>` per the branch-guard allowlist (not `feature/`, not
-  `issue-446-*`). This is the atomic core slice — don't land it partial;
-  the issue body lists the 26 call-site files to keep the pass
-  complete.
-- #447/#448: same as #446 once unblocked — `resolve-issue`, each
-  respecting its `Depends on:` line.
+- #447: `resolve-issue` directly, same pattern as #446 (already
+  classified, not a `work-issue` dispatch). Branch `fix/447-<slug>` per
+  the branch-guard allowlist. Read `Log.js`'s current dual-write output
+  (this session's diff) before touching readers, since the exact set of
+  fields available to migrate *from* is now different than what #439's
+  original filing assumed.
+- #448: same as #447 once unblocked — `resolve-issue`, respecting its
+  `Depends on:` line.
 - No new local-env or repo-slug gotchas this session. Repo slug
-  (`deniseribeiro-beep/BioAvanceD-v2`) confirmed still correct for all
-  four issue operations (3 creates, 1 comment) — no classifier denials.
+  (`deniseribeiro-beep/BioAvanceD-v2`) confirmed correct for all issue
+  operations (1 comment on pickup, 1 close via comment, 1 comment on
+  merge) — no classifier denials this time (last session's branch-guard
+  block on `Edit` before branch creation was a build-workflow hook, not
+  the gh-comment classifier).
