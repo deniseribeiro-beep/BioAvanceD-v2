@@ -1,117 +1,118 @@
 # HANDOFF
 
-**Written:** 2026-08-04, after shipping #420 (RBAC foundational slice) on
+**Written:** 2026-08-05, after shipping #421 (RBAC enforcement cutover) on
 `feature/docker-e2e-backend-integration`.
 
 ## What happened this session
 
-Dennis said "Pick #420". Routed via `work-issue` → `build-loop` (dict-02
-P1X-0209..0237: additive `Role`/`Permission`/`UserRoleAssignment`
-models + seed, slice 1 of 3 from #386's `divide-and-conquer` split
-filed last session).
+Dennis said "Pick #421". Routed via `build-loop` (Docker on by default,
+per that loop's overlay). #421 was slice 2 of 3 from #386's split:
+cut `requirePermission`/`requireRole` (and every read path that used
+them) over from `accessType`/`roleName` to resolving via
+`UserRoleAssignment -> Role -> Permission` (the models #420 added last
+session), and re-prove RF002/RF003's real-backend RBAC e2e coverage
+against the new model.
 
-Confirmed target fields against the primary docs (`dict-02_DICIONARIO.md`
-rows P1X-0209..0238, `requisitos-index.md` RNF008) before writing any
-code, per `build-loop`'s primary-source-over-paraphrase rule — no
-`docs/architecture/` summary exists for RBAC yet, so nothing to update
-there.
+Built on branch `test/421-rbac-enforcement-cutover`:
+- **`api/backend/src/services/rbac-assignment.service.js`** (new) — the
+  one place that resolves a user's active roles/permissions from the new
+  model (`resolveUserHierarchyLevel`, `userHasPermission`) and the one
+  place that grants/revokes a `UserRoleAssignment`
+  (`grantRoleForAccessType`, `changeUserRole`, `backfillUserRoleAssignments`).
+- **`api/backend/src/infrastructure/middleware/rbac.js`** — rewritten to
+  call the above (async, via `req.app.locals.db`) instead of reading
+  `accessType`/`roleName` directly; exported shape (`requireRole`,
+  `requirePermission`, `permissions`) kept identical so the ~24 route
+  files that consume it needed no changes.
+- **`api/backend/src/reference-data/roles.min.json`** +
+  **`rbac-catalog-seed.service.js`**'s `PERMISSION_CATALOG` — filled two
+  gaps left from #420 (`manageTemperature`, `manageOrganizations` weren't
+  in either), so the new model has exact behavior parity with the old
+  accessType table.
+- **User-creation/role-change atomicity**: `auth.service.js#registerUser`,
+  `scripts/createFirstAdmin.js`, and `PUT /api/users/:id`
+  (`user.routes.js`) now grant/revoke the corresponding
+  `UserRoleAssignment` in the same request as the accessType write — no
+  dual-write window, per dict-07's migration-table rule.
+- **`api/backend/src/controllers/paciente.controller.js`** — 3 inline
+  `permissions.createPatient.includes(userRole)` LGPD-masking checks
+  switched to `userHasPermission(db, userID, 'createPatient')` (these
+  weren't behind the `rbac.js` middleware, so the cutover had to reach
+  them directly too).
+- **`api/backend/src/scripts/backfillUserRoleAssignments.js`** (new) —
+  one-time idempotent backfill for users that predate #420/#421. **Not
+  yet run against the shared dev stack — see #425, blocking for anyone
+  pulling this onto a stack with real pre-existing users.**
+- **Test fallout**: the cutover broke 30 test files (196 tests) whose
+  mock DBs assumed the old accessType-in-JWT trust model. Fixed via a
+  shared fixture helper, **`api/backend/tests/factories/rbac.factory.js`**
+  (`buildRbacCollections`/`buildMutableRbacCollections`, built from
+  `roles.min.json` so it can't drift from the real seed), fanned out
+  across 6 parallel `test-writer` agents (grouped ~5 files each) — no
+  test assertions changed, only mock-db setup. Also added
+  `tests/unit/rbac-assignment.service.test.js` and rewrote
+  `tests/unit/rbac.test.js` as this slice's own proving tests.
+- **Verified**: all 30 previously-broken files + the 2 new ones pass
+  together (`iot.api.test.js`'s one remaining failure confirmed
+  pre-existing via `git stash` diff against pre-cutover state — unrelated
+  cold-chain mock-shape bug). Lint clean (325 files). RF002/RF003
+  (`tests/e2e/auth-access-security.spec.ts`, 9/9) re-proven against a
+  live `compose.test.yml` Docker/Mongo stack, including the
+  Técnico-cannot-create-user RBAC gate — confirmed via direct Mongo query
+  that the bootstrap admin's real `UserRoleAssignment` was granted
+  correctly (4 roles, 16 permissions, 1 assignment).
 
-Built on branch `test/420-rbac-role-permission-models` (this repo's
-no-dedicated-prefix fallback):
-- **`api/backend/src/models/Role.js`**, **`Permission.js`**,
-  **`UserRoleAssignment.js`** — plain validator-class models (this
-  repo's convention for additive collection entities — see
-  `RcsAssessment.js`/`ConsentTemplate.js` precedent, not literal
-  Mongoose schemas), matching every dict-02 field, with `randomUUID()`
-  defaults for the id fields.
-- **`api/backend/src/config/collections.js`** — added `roles`,
-  `permissions`, `userRoleAssignments` canonical collection keys.
-- **`api/backend/src/services/rbac-catalog-seed.service.js`** —
-  `seedRolesAndPermissions(db)`, idempotent (upserts by
-  `roleCode`/`permissionCode`, dict-02's own "índice único" fields, not
-  `_id`), populating Role/Permission from `roles.min.json`'s 4 legacy
-  roles. `resourceType`/`allowedActions` per permission aren't in
-  `roles.min.json` — seeded from a hand-built `PERMISSION_CATALOG`
-  mapping table in the service file (documented in-file as this seed's
-  own best-effort mapping, not a copied source value).
-- **`api/backend/src/scripts/seedRbacCatalog.js`** — thin CLI entrypoint
-  wrapping the service (`connectDB`/`closeConnection`), same shape as
-  `seedDiseaseValidationRules.js`.
-- Unit tests (19 new, all passing): one file per model plus a seed
-  service test using a real-query-matching fake collection
-  (`findOne`/`insertOne`), proving idempotency (second seed run doesn't
-  duplicate or re-mint ids) — this repo's native-only "real backend"
-  proof bar for a backend-internal slice (no live Mongo tier exists
-  here).
-- Fixed **`tests/unit/config/collections.test.js`**: its `DEFAULTS` and
-  one exhaustive-shape assertion hardcoded every `CANONICAL_COLLECTIONS`
-  key — adding the 3 new keys broke it (3 assertions failed on the
-  first full-suite run) until the 3 new keys were added there too. This
-  is the one existing-test edit in the diff; everything else is new
-  files, per #420's additive-only scope boundary.
+Committed (`1058626e`), merged into `feature/docker-e2e-backend-integration`
+(merge commit `51b5a373`), pushed. Closed #421 referencing both hashes.
+Docker test stack torn down after the e2e run.
 
-Verified: targeted vitest runs for all new/changed files pass; repo
-lint (`node scripts/lint.js`) passes; a plain full `npx vitest run`
-(no `--coverage`) showed the same 4 failures (now fixed) and nothing
-else — confirming the slice doesn't regress anything else. **Filed
-#423** for an unrelated finding: the documented coverage-reconcile
-exemption command (`--coverage` over 3 dirs) reported 76 failures
-(JWT/encryption null-secret errors) that don't reproduce in a plain
-run — looks like a `--coverage`-specific env-loading issue, not a real
-regression, but makes that verification step unreliable as currently
-documented. Not investigated further (out of scope, touches no
-crypto/JWT code).
-
-Committed, merged `test/420-rbac-role-permission-models` into
-`feature/docker-e2e-backend-integration` (merge commit `f5c38df7`),
-pushed, closed #420 referencing the merge hash. Deleted the merged
-local branch.
+Filed two follow-ups found along the way (not blocking, both real):
+- **#424** — pre-existing, unrelated bug: `result.routes.api.test.js`
+  denial logs show `PUT`/`DELETE /api/results/:id` checking
+  `requirePermission('createPatient')` instead of a result-specific
+  permission (likely copy-paste). Tests still pass by coincidence.
+- **#425** — operational: the backfill script (above) needs to run
+  against the dev stack (or any stack with real pre-existing users)
+  before/after this merge lands there, or those users get locked out.
 
 ## Repo state
 
-- **`feature/docker-e2e-backend-integration`**: at `f5c38df7`, pushed
-  (was `795b3849`). Contains #420's RBAC models/seed, additive only —
-  no runtime behavior change (`accessType`/`roleName` still sole
-  enforcement authority).
-- No dangling branches.
-- Issues: **#420 closed** (merged, referenced merge hash in close
-  comment). **#423 opened** this session (coverage-run env flakiness,
-  unrelated finding, not blocking). Backlog otherwise unchanged:
-  **#421** (blocked on #420 — now unblocked), **#422** (blocked on
-  #421), **#386** (tracking issue, stays open per prior session's
-  divide-and-conquer split), **#387**, older backlog
-  (`#371`/`#373`/`#374`/`#378`/`#379`), **#389** (route through
-  `divide-and-conquer` first, 28 files).
+- **`feature/docker-e2e-backend-integration`**: at `51b5a373`, pushed
+  (was `8df6850a`). Contains #421's RBAC enforcement cutover.
+- No dangling branches (`test/421-rbac-enforcement-cutover` merged, not
+  deleted locally yet — safe to delete).
+- Issues: **#421 closed** (merged, referenced both hashes). **#424**,
+  **#425** opened this session. **#422** (the atomic `requirePermission`
+  integration issue — depends on #421, which is done) is now unblocked.
+  Backlog otherwise unchanged: **#386** (tracking issue, stays open),
+  **#387**, older backlog (`#371`/`#373`/`#374`/`#378`/`#379`), **#389**
+  (route through `divide-and-conquer` first, 28 files).
 
 ## Blocking next step
 
-None.
+None for picking up new work. **#425 should be run against any
+already-running dev stack before that stack's users try to log in** —
+not blocking this session's close, but a real prerequisite for anyone
+else pulling this branch onto a live environment.
 
 ## Recommended next steps
 
 Dennis didn't name a specific next pick this session, so per this
 skill's own rule: **none queued**. If continuing the RBAC thread,
-**#421** is now unblocked (depends on #420, which is done) — it's the
-atomic `requirePermission` + read-path cutover, security-relevant, and
-must re-prove RF002/RF003's e2e RBAC coverage against the new model
-before being considered done (not just unit-test the new middleware
-path in isolation). Otherwise backlog: **#387**, older backlog
-(`#371`/`#373`/`#374`/`#378`/`#379`), and **#389** (route through
-`divide-and-conquer` first, 28 files).
+**#422** is now unblocked (depends on #421, done). Otherwise backlog:
+**#387**, older backlog (`#371`/`#373`/`#374`/`#378`/`#379`), and
+**#389** (route through `divide-and-conquer` first, 28 files).
 
 ## Which skills to use
 
-- **#421**: route through `build-loop` when picked up (Docker on by
-  default per that loop's overlay, since #421 does need to re-prove
-  e2e RBAC coverage — unlike #420, which was correctly scoped as a
-  backend-internal slice not needing Docker). Depends only on #420,
-  now merged.
-- **#422**: depends on #421 — don't pick up before #421 lands.
-- **#423**: whoever picks this up should check whether it's really a
-  `--coverage` config/env-loading bug (vitest workers not inheriting
-  `.env`) before assuming it's flaky-test noise — the failure pattern
-  (consistently null JWT/encryption secrets, only under `--coverage`)
-  looks systematic, not random.
+- **#422**: route through `build-loop` when picked up (check its own
+  body for whether it still needs Docker-on-by-default — likely yes,
+  same reasoning as #421).
+- **#424**: straightforward `fix-bugs` pick — reproduce with a test
+  asserting the correct permission name, fix the route.
+- **#425**: not really a coding task — run the backfill script against
+  whatever stack needs it, verify via the same direct-Mongo-query pattern
+  this session used (`db.userRoleAssignments.countDocuments()` before/after).
 - **#387**, older backlog
   (`#371`/`#373`/`#374`/`#378`/`#379`) — untouched this session, no new
   guidance beyond prior handoffs.
