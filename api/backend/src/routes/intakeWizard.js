@@ -448,9 +448,9 @@ async function handleIntakeWizard(req, res) {
     auditLogger.init(db);
     await auditLogger.log({
       action: 'PATIENT_MATCH_UPSERT',
-      entityType: 'Patient',
-      entityId: matchOutcome?.patient?.participantId || null,
-      result: 'success',
+      resourceType: 'Patient',
+      resourceId: matchOutcome?.patient?.participantId || null,
+      status: 'success',
       severity: 'info',
       message: matchOutcome?.created
         ? 'Novo paciente criado durante intake wizard.'
@@ -618,9 +618,9 @@ router.get('/patient-match', async (req, res) => {
     auditLogger.init(db);
     await auditLogger.log({
       action: 'PATIENT_MATCH_UPSERT',
-      entityType: 'Patient',
-      entityId: patient?.patientID || patientID || null,
-      result: 'success',
+      resourceType: 'Patient',
+      resourceId: patient?.patientID || patientID || null,
+      status: 'success',
       severity: 'info',
       message: patient
         ? 'Heurística de intake encontrou paciente existente para upsert.'

@@ -920,7 +920,7 @@ describe('sample.routes', () => {
 
       expect(res.status).toBe(404);
       expect(auditLoggerModule.log).toHaveBeenCalledWith(
-        expect.objectContaining({ result: 'error' })
+        expect.objectContaining({ status: 'error' })
       );
     });
 
@@ -1248,7 +1248,7 @@ describe('sample.routes', () => {
       const res = await request(app).get('/api/samples/000000000000000000000000');
 
       expect(res.status).toBe(404);
-      expect(auditLoggerModule.log).toHaveBeenCalledWith(expect.objectContaining({ result: 'error' }));
+      expect(auditLoggerModule.log).toHaveBeenCalledWith(expect.objectContaining({ status: 'error' }));
     });
 
     it('returns 200 with the sample', async () => {

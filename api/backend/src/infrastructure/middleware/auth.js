@@ -22,8 +22,8 @@ const authenticate = async (req, res, next) => {
             auditLogger.init(db);
             await auditLogger.log({
               action: 'UNAUTHORIZED',
-              entityType: 'Authentication',
-              result: 'error',
+              resourceType: 'Authentication',
+              status: 'error',
               severity: 'warning',
               message: `Tentativa de acesso sem token: ${req.method} ${req.path}`,
               req: req,
@@ -98,8 +98,8 @@ const authenticate = async (req, res, next) => {
               auditLogger.init(db);
               await auditLogger.log({
                 action: 'SESSION_EXPIRED',
-                entityType: 'Authentication',
-                result: 'error',
+                resourceType: 'Authentication',
+                status: 'error',
                 severity: 'warning',
                 message: `Sessão ${sessionCheck.reason === 'session_expired' ? 'expirada' : 'inválida'}: ${req.method} ${req.path}`,
                 req: req,

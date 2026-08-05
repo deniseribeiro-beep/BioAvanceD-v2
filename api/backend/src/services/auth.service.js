@@ -290,8 +290,8 @@ class AuthService {
         const auditLogger = require('../utils/auditLogger');
         await auditLogger.log({
           action: 'LOGIN',
-          entityType: 'Authentication',
-          result: 'error',
+          resourceType: 'Authentication',
+          status: 'error',
           severity: 'warning',
           message: 'Tentativa de login com senha incorreta',
           req: req,
@@ -598,8 +598,8 @@ class AuthService {
       auditLogger.init(db);
       await auditLogger.log({
         action: 'CONFIG',
-        entityType: 'User',
-        result: 'success',
+        resourceType: 'User',
+        status: 'success',
         severity: 'info',
         message: 'MFA configurado no primeiro login',
         req: req,
@@ -809,8 +809,8 @@ class AuthService {
       auditLogger.init(db);
       await auditLogger.log({
         action: 'PASSWORD_RESET_REQUEST',
-        entityType: 'User',
-        result: 'success',
+        resourceType: 'User',
+        status: 'success',
         severity: 'info',
         message: 'Solicitação de recuperação de senha',
         req: req,
@@ -914,8 +914,8 @@ class AuthService {
       auditLogger.init(db);
       await auditLogger.log({
         action: 'PASSWORD_RESET',
-        entityType: 'User',
-        result: 'success',
+        resourceType: 'User',
+        status: 'success',
         severity: 'info',
         message: 'Senha redefinida com sucesso',
         req: req,

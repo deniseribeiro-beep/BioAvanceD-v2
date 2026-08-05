@@ -255,7 +255,7 @@ describe('import-lgpd.controller gaps', () => {
       await controller.importPatientsSmart(req, res);
 
       const finishCall = logSpy.mock.calls.find(([payload]) => payload.payload?.stage === 'finish');
-      expect(finishCall[0].result).toBe('warning');
+      expect(finishCall[0].status).toBe('warning');
       expect(finishCall[0].severity).toBe('warning');
       expect(finishCall[0].message).toContain('inconsistências');
       expect(res.json.mock.calls[0][0].success).toBe(false);
@@ -305,7 +305,7 @@ describe('import-lgpd.controller gaps', () => {
 
       expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({
         action: 'SMART_IMPORT_EXECUTION',
-        result: 'error'
+        status: 'error'
       }));
       expect(cleanupSpy).toHaveBeenCalledWith(file.path);
       expect(res.status).toHaveBeenCalledWith(500);
@@ -539,8 +539,8 @@ describe('import-lgpd.controller gaps', () => {
 
       const startCall = logSpy.mock.calls.find(([p]) => p.payload?.stage === 'start');
       const finishCall = logSpy.mock.calls.find(([p]) => p.payload?.stage === 'finish');
-      expect(startCall[0].entityId).toBeNull();
-      expect(finishCall[0].entityId).toBeNull();
+      expect(startCall[0].resourceId).toBeNull();
+      expect(finishCall[0].resourceId).toBeNull();
     });
 
     it('catch block: uses null entityId and a default error message when the file has no originalname/message', async () => {
@@ -564,7 +564,7 @@ describe('import-lgpd.controller gaps', () => {
       await controller.importPatientsSmart(req, res);
 
       expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({
-        entityId: null,
+        resourceId: null,
         payload: expect.objectContaining({ error: 'Erro desconhecido' })
       }));
       expect(res.json).toHaveBeenCalledWith({

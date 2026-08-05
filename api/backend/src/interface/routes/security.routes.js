@@ -108,8 +108,8 @@ router.get('/logs/export', async (req, res) => {
     auditLogger.init(db);
     await auditLogger.log({
       action: 'EXPORT',
-      entityType: 'Logs',
-      result: 'success',
+      resourceType: 'Logs',
+      status: 'success',
       severity: 'info',
       message: (req.t && req.t('security.logsExportMessage')) ? req.t('security.logsExportMessage').replace('{format}', format) : `Exportação de logs realizada (formato: ${format})`,
       payload: { format, filters },

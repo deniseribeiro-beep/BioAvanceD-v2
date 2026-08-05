@@ -25,9 +25,9 @@ class SensorController {
         auditLogger.init(db);
         await auditLogger.log({
           action: 'CREATE',
-          entityType: 'Sensor',
-          entityId: sensor._id.toString(),
-          result: 'success',
+          resourceType: 'Sensor',
+          resourceId: sensor._id.toString(),
+          status: 'success',
           severity: 'info',
           message: `Sensor ${sensor.sensorId || sensor.sensorID} criado`,
           req: req
@@ -74,8 +74,8 @@ class SensorController {
       const sensorsArray = (result && result.sensors) || (Array.isArray(result) ? result : []);
       await auditLogger.log({
         action: 'QUERY',
-        entityType: 'Sensor',
-        result: 'success',
+        resourceType: 'Sensor',
+        status: 'success',
         severity: 'info',
         message: `Consulta de sensores - ${sensorsArray.length || 0} registros`,
         payload: { total: sensorsArray.length || 0, filters },
@@ -116,8 +116,8 @@ class SensorController {
         auditLogger.init(db);
         await auditLogger.log({
           action: 'QUERY',
-          entityType: 'Sensor',
-          result: 'error',
+          resourceType: 'Sensor',
+          status: 'error',
           severity: 'warning',
           message: `Tentativa de buscar sensor inexistente: ${req.params.id}`,
           req: req,
@@ -135,9 +135,9 @@ class SensorController {
       auditLogger.init(db);
       await auditLogger.log({
         action: 'QUERY',
-        entityType: 'Sensor',
-        entityId: req.params.id,
-        result: 'success',
+        resourceType: 'Sensor',
+        resourceId: req.params.id,
+        status: 'success',
         severity: 'info',
         message: 'Sensor consultado',
         req: req,
@@ -176,9 +176,9 @@ class SensorController {
         auditLogger.init(db);
         await auditLogger.log({
           action: 'READ',
-          entityType: 'Sensor',
-          entityId: req.params.id,
-          result: 'success',
+          resourceType: 'Sensor',
+          resourceId: req.params.id,
+          status: 'success',
           severity: 'info',
           message: `Leitura coletada do sensor: ${req.params.id}`,
           payload: { temperature: reading?.temperatureValue || null },
@@ -226,9 +226,9 @@ class SensorController {
         auditLogger.init(db);
         await auditLogger.log({
           action: 'UPDATE',
-          entityType: 'Sensor',
-          entityId: req.params.id,
-          result: 'success',
+          resourceType: 'Sensor',
+          resourceId: req.params.id,
+          status: 'success',
           severity: 'info',
           message: 'Sensor atualizado',
           req: req
@@ -275,9 +275,9 @@ class SensorController {
         auditLogger.init(db);
         await auditLogger.log({
           action: 'DELETE',
-          entityType: 'Sensor',
-          entityId: req.params.id,
-          result: 'success',
+          resourceType: 'Sensor',
+          resourceId: req.params.id,
+          status: 'success',
           severity: 'warning',
           message: 'Sensor deletado',
           req: req

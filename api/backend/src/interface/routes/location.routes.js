@@ -64,8 +64,8 @@ router.patch('/fix-missing-locationids', authenticate, requirePermission('create
     auditLogger.init(db);
     await auditLogger.log({
       action: 'UPDATE',
-      entityType: 'Location',
-      result: 'success',
+      resourceType: 'Location',
+      status: 'success',
       severity: 'info',
       message: `Atualização em massa: ${updatedCount} localização(ões) atualizada(s) com locationID`,
       payload: { updated: updatedCount, total: locationsWithoutID.length },
@@ -101,8 +101,8 @@ router.get('/', authenticate, async (req, res) => {
     auditLogger.init(db);
     await auditLogger.log({
       action: 'QUERY',
-      entityType: 'Location',
-      result: 'success',
+      resourceType: 'Location',
+      status: 'success',
       severity: 'info',
       message: `Consulta de localizações - ${locations.length} registros`,
       payload: { total: locations.length },
@@ -138,8 +138,8 @@ router.get('/:id', authenticate, async (req, res) => {
       auditLogger.init(db);
       await auditLogger.log({
         action: 'QUERY',
-        entityType: 'Location',
-        result: 'error',
+        resourceType: 'Location',
+        status: 'error',
         severity: 'warning',
         message: `Tentativa de buscar localização inexistente: ${req.params.id}`,
         req: req,
@@ -157,9 +157,9 @@ router.get('/:id', authenticate, async (req, res) => {
     auditLogger.init(db);
     await auditLogger.log({
       action: 'QUERY',
-      entityType: 'Location',
-      entityId: req.params.id,
-      result: 'success',
+      resourceType: 'Location',
+      resourceId: req.params.id,
+      status: 'success',
       severity: 'info',
       message: 'Localização consultada',
       req: req,
@@ -246,9 +246,9 @@ router.post('/', authenticate, requirePermission('createSample'), async (req, re
       auditLogger.init(db);
       await auditLogger.log({
         action: 'CREATE',
-        entityType: 'Location',
-        entityId: result.insertedId.toString(),
-        result: 'success',
+        resourceType: 'Location',
+        resourceId: result.insertedId.toString(),
+        status: 'success',
         severity: 'info',
         message: 'Localização criada',
         payload: { 
@@ -335,9 +335,9 @@ router.put('/:id', authenticate, requirePermission('createSample'), async (req, 
       auditLogger.init(db);
       await auditLogger.log({
         action: 'UPDATE',
-        entityType: 'Location',
-        entityId: req.params.id,
-        result: 'success',
+        resourceType: 'Location',
+        resourceId: req.params.id,
+        status: 'success',
         severity: 'info',
         message: 'Localização atualizada',
         req: req,
@@ -380,9 +380,9 @@ router.delete('/:id', authenticate, requirePermission('createSample'), async (re
       auditLogger.init(db);
       await auditLogger.log({
         action: 'DELETE',
-        entityType: 'Location',
-        entityId: req.params.id,
-        result: 'success',
+        resourceType: 'Location',
+        resourceId: req.params.id,
+        status: 'success',
         severity: 'warning',
         message: 'Localização deletada',
         req: req,

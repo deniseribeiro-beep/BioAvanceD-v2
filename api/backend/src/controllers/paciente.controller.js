@@ -123,9 +123,9 @@ class PacienteController {
         auditLogger.init(db);
         await auditLogger.log({
           action: 'CREATE',
-          entityType: 'Patient',
-          entityId: sanitizedPatient.participantId, // Apenas ID, sem dados sensíveis
-          result: 'success',
+          resourceType: 'Patient',
+          resourceId: sanitizedPatient.participantId, // Apenas ID, sem dados sensíveis
+          status: 'success',
           severity: 'info',
           message: `Paciente cadastrado - ID: ${sanitizedPatient.participantId}`, // Log sem dados sensíveis
           payload: sanitizedPatient, // Apenas ID sanitizado
@@ -217,8 +217,8 @@ class PacienteController {
         auditLogger.init(db);
         await auditLogger.log({
           action: 'QUERY',
-          entityType: 'Patient',
-          result: 'success',
+          resourceType: 'Patient',
+          status: 'success',
           severity: 'info',
           message: `Consulta de pacientes (módulo operacional) - ${total} registros`,
           payload: { total, limit: filters.limit, skip: filters.skip },
@@ -251,8 +251,8 @@ class PacienteController {
         auditLogger.init(db);
         await auditLogger.log({
           action: 'QUERY',
-          entityType: 'Patient',
-          result: 'success',
+          resourceType: 'Patient',
+          status: 'success',
           severity: 'info',
           message: `Consulta de pacientes (módulo cadastro) - ${result.total || 0} registros`,
           payload: { total: result.total || 0, filters: { patientName: filters.patientName, clinicalUnit: filters.clinicalUnit } },
@@ -298,9 +298,9 @@ class PacienteController {
         const sanitizedID = id.length === 8 && /^\d{8}$/.test(id) ? id : 'N/A';
         await auditLogger.log({
           action: 'QUERY',
-          entityType: 'Patient',
-          entityId: sanitizedID,
-          result: 'error',
+          resourceType: 'Patient',
+          resourceId: sanitizedID,
+          status: 'error',
           severity: 'warning',
           message: `Tentativa de buscar paciente inexistente: ID ${sanitizedID}`,
           req: req,
@@ -324,9 +324,9 @@ class PacienteController {
         auditLogger.init(db);
         await auditLogger.log({
           action: 'QUERY',
-          entityType: 'Patient',
-          entityId: sanitizedPatient.participantId,
-          result: 'success',
+          resourceType: 'Patient',
+          resourceId: sanitizedPatient.participantId,
+          status: 'success',
           severity: 'info',
           message: 'Consulta de paciente (módulo operacional) - apenas ID retornado',
           req: req,
@@ -350,9 +350,9 @@ class PacienteController {
       const sanitizedPatient = sanitizePatientForLogs(patient);
       await auditLogger.log({
         action: 'QUERY',
-        entityType: 'Patient',
-        entityId: sanitizedPatient.participantId,
-        result: 'success',
+        resourceType: 'Patient',
+        resourceId: sanitizedPatient.participantId,
+        status: 'success',
         severity: 'info',
         message: 'Paciente consultado (módulo cadastro)',
         req: req,
@@ -454,9 +454,9 @@ class PacienteController {
         const sanitizedID = id.length === 8 && /^\d{8}$/.test(id) ? id : 'N/A';
         await auditLogger.log({
           action: 'UPDATE',
-          entityType: 'Patient',
-          entityId: sanitizedID,
-          result: 'success',
+          resourceType: 'Patient',
+          resourceId: sanitizedID,
+          status: 'success',
           severity: 'info',
           message: 'Paciente atualizado',
           payload: sanitizePatientForLogs({ participantId: sanitizedID }),
@@ -513,9 +513,9 @@ class PacienteController {
         const sanitizedID = id.length === 8 && /^\d{8}$/.test(id) ? id : 'N/A';
         await auditLogger.log({
           action: 'DELETE',
-          entityType: 'Patient',
-          entityId: sanitizedID,
-          result: 'error',
+          resourceType: 'Patient',
+          resourceId: sanitizedID,
+          status: 'error',
           severity: 'warning',
           message: `Tentativa de deletar paciente inexistente: ID ${sanitizedID}`,
           req: req,
@@ -535,9 +535,9 @@ class PacienteController {
         const sanitizedID = id.length === 8 && /^\d{8}$/.test(id) ? id : 'N/A';
         await auditLogger.log({
           action: 'DELETE',
-          entityType: 'Patient',
-          entityId: sanitizedID,
-          result: 'success',
+          resourceType: 'Patient',
+          resourceId: sanitizedID,
+          status: 'success',
           severity: 'warning',
           message: 'Paciente deletado',
           payload: sanitizePatientForLogs({ participantId: sanitizedID }),
@@ -609,8 +609,8 @@ class PacienteController {
       auditLogger.init(db);
       await auditLogger.log({
         action: 'VALIDATE',
-        entityType: 'Patient',
-        result: exists ? 'success' : 'error',
+        resourceType: 'Patient',
+        status: exists ? 'success' : 'error',
         severity: exists ? 'info' : 'warning',
         message: `Validação de ID de paciente: ${participantId} - ${exists ? 'válido' : 'inválido'}`,
         payload: { participantId, exists },
@@ -667,9 +667,9 @@ class PacienteController {
         const sanitizedID = participantId.length === 8 && /^\d{8}$/.test(participantId) ? participantId : 'N/A';
         await auditLogger.log({
           action: 'QUERY',
-          entityType: 'Patient',
-          entityId: sanitizedID,
-          result: 'error',
+          resourceType: 'Patient',
+          resourceId: sanitizedID,
+          status: 'error',
           severity: 'warning',
           message: `Tentativa de buscar paciente para edição: ID ${sanitizedID} não encontrado`,
           payload: sanitizePatientForLogs({ participantId: sanitizedID }),
@@ -690,9 +690,9 @@ class PacienteController {
       const sanitizedPatient = sanitizePatientForLogs(patient);
       await auditLogger.log({
         action: 'QUERY',
-        entityType: 'Patient',
-        entityId: sanitizedPatient.participantId,
-        result: 'success',
+        resourceType: 'Patient',
+        resourceId: sanitizedPatient.participantId,
+        status: 'success',
         severity: 'info',
         message: `Paciente buscado para edição: ID ${sanitizedPatient.participantId}`,
         payload: sanitizedPatient, // Apenas ID sanitizado
@@ -740,8 +740,8 @@ class PacienteController {
       auditLogger.init(db);
       await auditLogger.log({
         action: 'SEARCH',
-        entityType: 'Patient',
-        result: 'success',
+        resourceType: 'Patient',
+        status: 'success',
         severity: 'info',
         message: `Busca de pacientes: "${searchTerm}" - ${result.total} resultado(s) encontrado(s)`,
         payload: { searchTerm, total: result.total },

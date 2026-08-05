@@ -20,8 +20,8 @@ router.get('/', authenticate, async (req, res) => {
     auditLogger.init(db);
     await auditLogger.log({
       action: 'QUERY',
-      entityType: 'Equipment',
-      result: 'success',
+      resourceType: 'Equipment',
+      status: 'success',
       severity: 'info',
       message: `Consulta de equipamentos - ${equipment.length} registros`,
       payload: { total: equipment.length },
@@ -65,8 +65,8 @@ router.get('/analytical', authenticate, async (req, res) => {
     auditLogger.init(db);
     await auditLogger.log({
       action: 'QUERY',
-      entityType: 'Equipment',
-      result: 'success',
+      resourceType: 'Equipment',
+      status: 'success',
       severity: 'info',
       message: `Consulta de equipamentos analíticos - ${analyticalEquipment.length} registros`,
       payload: { total: analyticalEquipment.length },
@@ -117,8 +117,8 @@ router.get('/:id', authenticate, async (req, res) => {
       auditLogger.init(db);
       await auditLogger.log({
         action: 'QUERY',
-        entityType: 'Equipment',
-        result: 'error',
+        resourceType: 'Equipment',
+        status: 'error',
         severity: 'warning',
         message: `Tentativa de buscar equipamento inexistente: ${req.params.id}`,
         req: req,
@@ -136,9 +136,9 @@ router.get('/:id', authenticate, async (req, res) => {
     auditLogger.init(db);
     await auditLogger.log({
       action: 'QUERY',
-      entityType: 'Equipment',
-      entityId: req.params.id,
-      result: 'success',
+      resourceType: 'Equipment',
+      resourceId: req.params.id,
+      status: 'success',
       severity: 'info',
       message: 'Equipamento consultado',
       req: req,
@@ -205,9 +205,9 @@ router.post('/', authenticate, requirePermission('createPatient'), async (req, r
     auditLogger.init(db);
     await auditLogger.log({
       action: 'CREATE',
-      entityType: 'Equipment',
-      entityId: result.insertedId.toString(),
-      result: 'success',
+      resourceType: 'Equipment',
+      resourceId: result.insertedId.toString(),
+      status: 'success',
       severity: 'info',
       message: 'Equipamento criado',
       payload: { equipmentName: equipment.equipmentName || equipment.name || null },
@@ -377,9 +377,9 @@ router.put('/:id', authenticate, requirePermission('createPatient'), async (req,
     auditLogger.init(db);
     await auditLogger.log({
       action: 'UPDATE',
-      entityType: 'Equipment',
-      entityId: req.params.id,
-      result: 'success',
+      resourceType: 'Equipment',
+      resourceId: req.params.id,
+      status: 'success',
       severity: 'info',
       message: 'Equipamento atualizado',
       payload: quarantineResult && quarantineResult.triggered
@@ -459,9 +459,9 @@ router.delete('/:id', authenticate, requirePermission('createPatient'), async (r
     auditLogger.init(db);
     await auditLogger.log({
       action: 'DELETE',
-      entityType: 'Equipment',
-      entityId: req.params.id,
-      result: 'success',
+      resourceType: 'Equipment',
+      resourceId: req.params.id,
+      status: 'success',
       severity: 'warning',
       message: 'Equipamento deletado',
       req: req,

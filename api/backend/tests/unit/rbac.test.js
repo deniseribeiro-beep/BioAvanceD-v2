@@ -239,7 +239,7 @@ describe('RBAC middleware (#421 - UserRoleAssignment -> Role -> Permission)', ()
 
     expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({
       action: 'FORBIDDEN',
-      entityType: 'Access'
+      resourceType: 'Access'
     }));
   });
 });

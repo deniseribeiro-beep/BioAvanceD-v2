@@ -16,9 +16,9 @@ class RetentionPolicyController {
         auditLogger.init(db);
         await auditLogger.log({
           action: 'CREATE',
-          entityType: 'RetentionPolicy',
-          entityId: policy._id.toString(),
-          result: 'success',
+          resourceType: 'RetentionPolicy',
+          resourceId: policy._id.toString(),
+          status: 'success',
           severity: 'critical',
           message: `Política de retenção criada (${policy.version})`,
           payload: {
@@ -63,9 +63,9 @@ class RetentionPolicyController {
         auditLogger.init(db);
         await auditLogger.log({
           action: 'UPDATE',
-          entityType: 'RetentionPolicy',
-          entityId: policy._id.toString(),
-          result: 'success',
+          resourceType: 'RetentionPolicy',
+          resourceId: policy._id.toString(),
+          status: 'success',
           severity: 'critical',
           message: `Política de retenção atualizada (${policy.version})`,
           payload: {

@@ -356,9 +356,9 @@ class ImportLGPDController {
         auditLogger.init(db);
         await auditLogger.log({
           action: 'SMART_IMPORT_EXECUTION',
-          entityType: 'Import',
-          entityId: file.originalname || null,
-          result: 'success',
+          resourceType: 'Import',
+          resourceId: file.originalname || null,
+          status: 'success',
           severity: 'info',
           module: 'Importação',
           message: 'Execução de importação inteligente iniciada.',
@@ -397,9 +397,9 @@ class ImportLGPDController {
         auditLogger.init(db);
         await auditLogger.log({
           action: 'SMART_IMPORT_EXECUTION',
-          entityType: 'Import',
-          entityId: file.originalname || null,
-          result: results.errors.length === 0 ? 'success' : 'warning',
+          resourceType: 'Import',
+          resourceId: file.originalname || null,
+          status: results.errors.length === 0 ? 'success' : 'warning',
           severity: results.errors.length === 0 ? 'info' : 'warning',
           module: 'Importação',
           message: results.errors.length === 0
@@ -449,9 +449,9 @@ class ImportLGPDController {
           auditLogger.init(db);
           await auditLogger.log({
             action: 'SMART_IMPORT_EXECUTION',
-            entityType: 'Import',
-            entityId: req.file?.originalname || null,
-            result: 'error',
+            resourceType: 'Import',
+            resourceId: req.file?.originalname || null,
+            status: 'error',
             severity: 'error',
             module: 'Importação',
             message: 'Falha na execução de importação inteligente.',

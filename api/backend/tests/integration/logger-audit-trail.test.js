@@ -122,9 +122,9 @@ describe('Audit Logging - PATIENT_MATCH_UPSERT', () => {
     const logPayload = {
       userID: 'qa-tech-logger-1',
       action: 'PATIENT_MATCH_UPSERT',
-      entityType: 'Patient',
-      entityId: '12345678',
-      result: 'success',
+      resourceType: 'Patient',
+      resourceId: '12345678',
+      status: 'success',
       severity: 'info',
       message: 'Paciente criado via Match Heurístico',
       payload: {
@@ -181,9 +181,9 @@ describe('Audit Logging - PATIENT_MATCH_UPSERT', () => {
     await auditLogger.log({
       userID: 'qa-coord-logger-1',
       action: 'PATIENT_MATCH_UPSERT',
-      entityType: 'Patient',
-      entityId: '87654321',
-      result: 'success',
+      resourceType: 'Patient',
+      resourceId: '87654321',
+      status: 'success',
       severity: 'info',
       message: 'Paciente correspondência atualizada',
       req: {
@@ -214,9 +214,9 @@ describe('Audit Logging - PATIENT_MATCH_UPSERT', () => {
     // When
     await auditLogger.log({
       action: 'PATIENT_MATCH_UPSERT',
-      entityType: 'Patient',
-      entityId: '99999999',
-      result: 'success',
+      resourceType: 'Patient',
+      resourceId: '99999999',
+      status: 'success',
       severity: 'info',
       message: 'Teste de entityID',
       req: {
@@ -266,9 +266,9 @@ describe('Audit Logging - PATIENT_MATCH_UPSERT', () => {
 
     await auditLogger.log({
       action: 'PATIENT_MATCH_UPSERT',
-      entityType: 'Patient',
-      entityId: '11111111',
-      result: 'success',
+      resourceType: 'Patient',
+      resourceId: '11111111',
+      status: 'success',
       severity: 'info',
       message: 'Log com dados sensíveis',
       payload: sensitivePayload,
@@ -331,9 +331,9 @@ describe('Audit Logging - PATIENT_MATCH_UPSERT', () => {
 
     await auditLogger.log({
       action: 'PATIENT_MATCH_UPSERT',
-      entityType: 'Patient',
-      entityId: '55555555',
-      result: 'success',
+      resourceType: 'Patient',
+      resourceId: '55555555',
+      status: 'success',
       severity: 'info',
       message: 'Log com metadata completa',
       req: testReq
@@ -416,9 +416,9 @@ describe('Audit Log Integrity', () => {
 
     await auditLogger.log({
       action: 'PATIENT_MATCH_UPSERT',
-      entityType: 'Patient',
-      entityId: '11111111',
-      result: 'success',
+      resourceType: 'Patient',
+      resourceId: '11111111',
+      status: 'success',
       severity: 'info',
       message: 'Log para verificação de hash',
       req: {

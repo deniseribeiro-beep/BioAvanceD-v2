@@ -58,8 +58,8 @@ const auditRequest = async (req, res, next) => {
           
           await auditLogger.log({
             action: action,
-            entityType: entity,
-            result: result,
+            resourceType: entity,
+            status: result,
             severity: severity,
             message: `${req.method} ${req.path} - ${statusCode} (${duration}ms)`,
             req: req,

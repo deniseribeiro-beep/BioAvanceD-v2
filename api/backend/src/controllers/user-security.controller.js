@@ -194,9 +194,9 @@ class UserSecurityController {
       auditLogger.init(db);
       await auditLogger.log({
         action: 'UPDATE',
-        entityType: 'Password',
-        entityId: req.user.userID,
-        result: 'success',
+        resourceType: 'Password',
+        resourceId: req.user.userID,
+        status: 'success',
         severity: 'critical',
         message: 'Senha alterada',
         req: req,
@@ -237,9 +237,9 @@ class UserSecurityController {
       auditLogger.init(db);
       await auditLogger.log({
         action: 'CREATE',
-        entityType: 'RecoveryCodes',
-        entityId: req.user.userID,
-        result: 'success',
+        resourceType: 'RecoveryCodes',
+        resourceId: req.user.userID,
+        status: 'success',
         severity: 'critical',
         message: 'Códigos de recuperação gerados',
         req: req,
@@ -286,9 +286,9 @@ class UserSecurityController {
       auditLogger.init(db);
       await auditLogger.log({
         action: 'DELETE',
-        entityType: 'Session',
-        entityId: id,
-        result: 'success',
+        resourceType: 'Session',
+        resourceId: id,
+        status: 'success',
         severity: 'warning',
         message: 'Sessão revogada',
         req: req,
@@ -330,9 +330,9 @@ class UserSecurityController {
       auditLogger.init(db);
       await auditLogger.log({
         action: 'DELETE',
-        entityType: 'Sessions',
-        entityId: req.user.userID,
-        result: 'success',
+        resourceType: 'Sessions',
+        resourceId: req.user.userID,
+        status: 'success',
         severity: 'critical',
         message: 'Todas as sessões revogadas',
         req: req,
@@ -383,9 +383,9 @@ class UserSecurityController {
       auditLogger.init(db);
       await auditLogger.log({
         action: 'CREATE',
-        entityType: 'PasswordReset',
-        entityId: req.user.userID,
-        result: 'success',
+        resourceType: 'PasswordReset',
+        resourceId: req.user.userID,
+        status: 'success',
         severity: 'critical',
         message: 'Solicitação de reset de senha criada',
         payload: {

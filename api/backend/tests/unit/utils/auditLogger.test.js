@@ -262,7 +262,7 @@ describe('auditLogger', () => {
   describe('log', () => {
     it('logs an error to console and returns early when not initialized', async () => {
       const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-      await auditLogger.log({ action: 'CREATE', entityType: 'Patient' });
+      await auditLogger.log({ action: 'CREATE', resourceType: 'Patient' });
       expect(errSpy).toHaveBeenCalledWith(
         expect.stringContaining('AuditLogger não foi inicializado')
       );
@@ -282,8 +282,8 @@ describe('auditLogger', () => {
 
       await auditLogger.log({
         action: 'create',
-        entityType: 'Patient',
-        entityId: 'e1',
+        resourceType: 'Patient',
+        resourceId: 'e1',
         payload: { name: 'John', keep: 'k' },
         req,
       });
@@ -303,14 +303,14 @@ describe('auditLogger', () => {
 
     it('uses the provided module over the auto-determined one', async () => {
       auditLogger.init({});
-      await auditLogger.log({ action: 'X', entityType: 'Y', module: 'Custom', req: { headers: {} } });
+      await auditLogger.log({ action: 'X', resourceType: 'Y', module: 'Custom', req: { headers: {} } });
       const [, logData] = logService.createLog.mock.calls[0];
       expect(logData.module).toBe('Custom');
     });
 
     it('falls back to Sistema module when there is no req', async () => {
       auditLogger.init({});
-      await auditLogger.log({ action: 'X', entityType: 'Y' });
+      await auditLogger.log({ action: 'X', resourceType: 'Y' });
       const [, logData] = logService.createLog.mock.calls[0];
       expect(logData.module).toBe('Sistema');
       expect(logData.userID).toMatch(ANON_ID_RE);
@@ -319,15 +319,15 @@ describe('auditLogger', () => {
     it('builds errorStack and default message when an error is passed without a message', async () => {
       auditLogger.init({});
       const error = { message: 'boom', stack: 'l1\nl2' };
-      await auditLogger.log({ action: 'ERROR', entityType: 'Sistema', error });
+      await auditLogger.log({ action: 'ERROR', resourceType: 'Sistema', error });
       const [, logData] = logService.createLog.mock.calls[0];
       expect(logData.errorStack).toBe('l1\nl2');
       expect(logData.message).toBe('ERROR em Sistema');
     });
 
-    it('uses result as a fallback for status', async () => {
+    it('writes status to both canonical status and legacy result dual-write fields', async () => {
       auditLogger.init({});
-      await auditLogger.log({ action: 'X', entityType: 'Y', result: 'error' });
+      await auditLogger.log({ action: 'X', resourceType: 'Y', status: 'error' });
       const [, logData] = logService.createLog.mock.calls[0];
       expect(logData.status).toBe('error');
       expect(logData.result).toBe('error');
@@ -338,7 +338,7 @@ describe('auditLogger', () => {
       const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
       logService.createLog.mockRejectedValueOnce(new Error('createLog failed'));
 
-      await expect(auditLogger.log({ action: 'X', entityType: 'Y' })).resolves.toBeUndefined();
+      await expect(auditLogger.log({ action: 'X', resourceType: 'Y' })).resolves.toBeUndefined();
       expect(errSpy).toHaveBeenCalledWith(
         'Erro ao registrar log de auditoria:',
         'createLog failed'
@@ -472,32 +472,32 @@ describe('auditLogger', () => {
     });
   });
 
-  describe('formatEntity (via log() entityType field)', () => {
+  describe('formatEntity (via log() resourceType field)', () => {
     beforeEach(() => {
       auditLogger.init({});
     });
 
     it('capitalizes the first letter of the entity', async () => {
-      await auditLogger.log({ action: 'X', entityType: 'patient' });
+      await auditLogger.log({ action: 'X', resourceType: 'patient' });
       const [, logData] = logService.createLog.mock.calls[0];
       expect(logData.entity).toBe('Patient');
       expect(logData.resourceType).toBe('Patient');
     });
 
-    it('defaults to Unknown when entityType is missing', async () => {
-      await auditLogger.log({ action: 'X', entityType: undefined });
+    it('defaults to Unknown when resourceType is missing', async () => {
+      await auditLogger.log({ action: 'X', resourceType: undefined });
       const [, logData] = logService.createLog.mock.calls[0];
       expect(logData.entity).toBe('Unknown');
     });
 
-    it('defaults to Unknown when entityType is an empty string', async () => {
-      await auditLogger.log({ action: 'X', entityType: '   ' });
+    it('defaults to Unknown when resourceType is an empty string', async () => {
+      await auditLogger.log({ action: 'X', resourceType: '   ' });
       const [, logData] = logService.createLog.mock.calls[0];
       expect(logData.entity).toBe('Unknown');
     });
 
-    it('derives resourceType from entityType (single canonical source, no independent override)', async () => {
-      await auditLogger.log({ action: 'X', entityType: 'sample' });
+    it('derives entity/resourceType from a single canonical source, no independent override', async () => {
+      await auditLogger.log({ action: 'X', resourceType: 'sample' });
       const [, logData] = logService.createLog.mock.calls[0];
       expect(logData.entity).toBe('Sample');
       expect(logData.resourceType).toBe('Sample');

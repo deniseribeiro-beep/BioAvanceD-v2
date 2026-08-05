@@ -70,9 +70,9 @@ describe('auditRequest', () => {
     expect(logSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         action: 'QUERY',
-        entityType: 'Sample',
+        resourceType: 'Sample',
         module: 'Amostras',
-        result: 'success',
+        status: 'success',
         severity: 'info',
       })
     );
@@ -88,7 +88,7 @@ describe('auditRequest', () => {
     await flushSetImmediate();
 
     expect(logSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ action: 'READ', entityType: 'Patient', module: 'Cadastro' })
+      expect.objectContaining({ action: 'READ', resourceType: 'Patient', module: 'Cadastro' })
     );
   });
 
@@ -103,7 +103,7 @@ describe('auditRequest', () => {
     await flushSetImmediate();
 
     expect(logSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ action: 'CREATE_ERROR', result: 'error', severity: 'error' })
+      expect.objectContaining({ action: 'CREATE_ERROR', status: 'error', severity: 'error' })
     );
   });
 
@@ -118,7 +118,7 @@ describe('auditRequest', () => {
     await flushSetImmediate();
 
     expect(logSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ action: 'UNAUTHORIZED', result: 'error', severity: 'warning' })
+      expect.objectContaining({ action: 'UNAUTHORIZED', status: 'error', severity: 'warning' })
     );
   });
 
@@ -133,7 +133,7 @@ describe('auditRequest', () => {
     await flushSetImmediate();
 
     expect(logSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ action: 'FORBIDDEN', result: 'error', severity: 'warning' })
+      expect.objectContaining({ action: 'FORBIDDEN', status: 'error', severity: 'warning' })
     );
   });
 
@@ -148,7 +148,7 @@ describe('auditRequest', () => {
     await flushSetImmediate();
 
     expect(logSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ action: 'UPDATE_FAILED', result: 'error', severity: 'warning' })
+      expect.objectContaining({ action: 'UPDATE_FAILED', status: 'error', severity: 'warning' })
     );
   });
 
@@ -162,7 +162,7 @@ describe('auditRequest', () => {
     await flushSetImmediate();
 
     expect(logSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ action: 'LOGIN', entityType: 'Authentication', module: 'Autenticação' })
+      expect.objectContaining({ action: 'LOGIN', resourceType: 'Authentication', module: 'Autenticação' })
     );
   });
 
@@ -176,7 +176,7 @@ describe('auditRequest', () => {
     await flushSetImmediate();
 
     expect(logSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ action: 'DELETE', entityType: 'Sistema', module: 'Sistema' })
+      expect.objectContaining({ action: 'DELETE', resourceType: 'Sistema', module: 'Sistema' })
     );
   });
 
@@ -189,7 +189,7 @@ describe('auditRequest', () => {
     res.send('ok');
     await flushSetImmediate();
 
-    expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({ entityType: 'Patient' }));
+    expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({ resourceType: 'Patient' }));
   });
 
   it('resolves Sistema when the entire remaining path is just an ObjectId', async () => {
@@ -201,7 +201,7 @@ describe('auditRequest', () => {
     res.send('ok');
     await flushSetImmediate();
 
-    expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({ entityType: 'Sistema' }));
+    expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({ resourceType: 'Sistema' }));
   });
 
   it('falls back to a capitalized VALID_ENTITIES match when the resource has no explicit entityMap entry', async () => {
@@ -213,7 +213,7 @@ describe('auditRequest', () => {
     res.send('ok');
     await flushSetImmediate();
 
-    expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({ entityType: 'Assistant' }));
+    expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({ resourceType: 'Assistant' }));
   });
 
   it('passes through an unrecognized HTTP method verbatim as the action', async () => {

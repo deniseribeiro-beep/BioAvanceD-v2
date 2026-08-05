@@ -295,7 +295,7 @@ describe('sample-file.controller', () => {
 
       expect(res.status).toHaveBeenCalledWith(201);
       expect(logSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ action: 'file_upload', entityId: insertedId.toString() })
+        expect.objectContaining({ action: 'file_upload', resourceId: insertedId.toString() })
       );
     });
 
@@ -417,7 +417,7 @@ describe('sample-file.controller', () => {
 
       await controller.listFiles(req, res);
 
-      expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({ action: 'QUERY', entityType: 'SampleFile' }));
+      expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({ action: 'QUERY', resourceType: 'SampleFile' }));
     });
 
     it('returns 500 when an unexpected error is thrown', async () => {
@@ -767,7 +767,7 @@ describe('sample-file.controller', () => {
       await controller.exportHL7v2(req, res);
 
       expect(logSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ action: 'file_export_hl7', entityId: fileID })
+        expect.objectContaining({ action: 'file_export_hl7', resourceId: fileID })
       );
     });
 
@@ -913,7 +913,7 @@ describe('sample-file.controller', () => {
       await controller.exportFHIR(req, res);
 
       expect(logSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ action: 'file_export_fhir', entityId: fileID })
+        expect.objectContaining({ action: 'file_export_fhir', resourceId: fileID })
       );
     });
 
@@ -1024,7 +1024,7 @@ describe('sample-file.controller', () => {
       await controller.exportCDA(req, res);
 
       expect(logSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ action: 'file_export_cda', entityId: fileID })
+        expect.objectContaining({ action: 'file_export_cda', resourceId: fileID })
       );
     });
 

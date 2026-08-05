@@ -82,9 +82,9 @@ router.post('/register',
         auditLogger.init(db);
         await auditLogger.log({
           action: 'CREATE',
-          entityType: 'User',
-          entityId: user._id?.toString() || user.id,
-          result: 'success',
+          resourceType: 'User',
+          resourceId: user._id?.toString() || user.id,
+          status: 'success',
           severity: 'info',
           message: 'Usuário registrado com sucesso',
           req: req,

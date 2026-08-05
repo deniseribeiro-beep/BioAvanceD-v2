@@ -81,8 +81,8 @@ router.get('/', authenticate, async (req, res) => {
     auditLogger.init(db);
     await auditLogger.log({
       action: 'QUERY',
-      entityType: 'Result',
-      result: 'success',
+      resourceType: 'Result',
+      status: 'success',
       severity: 'info',
       message: `Consulta de arquivos de analise - ${results.length} registros`,
       payload: { total: results.length, filters: query },
@@ -194,9 +194,9 @@ router.post('/upload', authenticate, requirePermission('uploadFiles'), resultUpl
       auditLogger.init(db);
       await auditLogger.log({
         action: 'CREATE',
-        entityType: 'Result',
-        entityId: insertResult.insertedId.toString(),
-        result: 'success',
+        resourceType: 'Result',
+        resourceId: insertResult.insertedId.toString(),
+        status: 'success',
         severity: 'info',
         message: 'Arquivo de analise criado via upload',
         payload: { sampleID: result.sampleID || null },
@@ -241,8 +241,8 @@ router.get('/:id', authenticate, async (req, res) => {
       auditLogger.init(db);
       await auditLogger.log({
         action: 'QUERY',
-        entityType: 'Result',
-        result: 'error',
+        resourceType: 'Result',
+        status: 'error',
         severity: 'warning',
         message: `Tentativa de buscar arquivo de analise inexistente: ${req.params.id}`,
         req: req,
@@ -260,9 +260,9 @@ router.get('/:id', authenticate, async (req, res) => {
     auditLogger.init(db);
     await auditLogger.log({
       action: 'QUERY',
-      entityType: 'Result',
-      entityId: req.params.id,
-      result: 'success',
+      resourceType: 'Result',
+      resourceId: req.params.id,
+      status: 'success',
       severity: 'info',
       message: 'Arquivo de analise consultado',
       req: req,
@@ -297,8 +297,8 @@ router.get('/:id/download', authenticate, async (req, res) => {
       auditLogger.init(db);
       await auditLogger.log({
         action: 'DOWNLOAD',
-        entityType: 'Result',
-        result: 'error',
+        resourceType: 'Result',
+        status: 'error',
         severity: 'warning',
         message: `Tentativa de download de arquivo de analise inexistente: ${req.params.id}`,
         req: req,
@@ -316,9 +316,9 @@ router.get('/:id/download', authenticate, async (req, res) => {
     auditLogger.init(db);
     await auditLogger.log({
       action: 'DOWNLOAD',
-      entityType: 'Result',
-      entityId: req.params.id,
-      result: 'success',
+      resourceType: 'Result',
+      resourceId: req.params.id,
+      status: 'success',
       severity: 'info',
       message: 'Download de arquivo de analise solicitado',
       req: req,
@@ -378,9 +378,9 @@ router.post('/', authenticate, requirePermission('createResult'), enforceCommerc
       auditLogger.init(db);
       await auditLogger.log({
         action: 'CREATE',
-        entityType: 'Result',
-        entityId: insertResult.insertedId.toString(),
-        result: 'success',
+        resourceType: 'Result',
+        resourceId: insertResult.insertedId.toString(),
+        status: 'success',
         severity: 'info',
         message: 'Arquivo de analise criado',
         payload: { sampleID: result.sampleID || null },
@@ -430,9 +430,9 @@ router.put('/:id', authenticate, requirePermission('editResult'), async (req, re
       auditLogger.init(db);
       await auditLogger.log({
         action: 'UPDATE',
-        entityType: 'Result',
-        entityId: req.params.id,
-        result: 'success',
+        resourceType: 'Result',
+        resourceId: req.params.id,
+        status: 'success',
         severity: 'info',
         message: 'Arquivo de analise atualizado',
         req: req,
@@ -487,9 +487,9 @@ router.put('/:id/link-sample', authenticate, requirePermission('editResult'), as
       auditLogger.init(db);
       await auditLogger.log({
         action: 'UPDATE',
-        entityType: 'Result',
-        entityId: req.params.id,
-        result: 'success',
+        resourceType: 'Result',
+        resourceId: req.params.id,
+        status: 'success',
         severity: 'info',
         message: `Arquivo de analise vinculado à amostra: ${sampleID}`,
         payload: { sampleID },
@@ -533,9 +533,9 @@ router.delete('/:id', authenticate, requirePermission('deleteResult'), async (re
       auditLogger.init(db);
       await auditLogger.log({
         action: 'DELETE',
-        entityType: 'Result',
-        entityId: req.params.id,
-        result: 'success',
+        resourceType: 'Result',
+        resourceId: req.params.id,
+        status: 'success',
         severity: 'warning',
         message: 'Arquivo de analise deletado',
         req: req,
