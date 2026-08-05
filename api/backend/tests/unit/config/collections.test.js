@@ -40,7 +40,8 @@ const DEFAULTS = {
   terminologyRelations: 'terminologyRelations',
   roles: 'roles',
   permissions: 'permissions',
-  userRoleAssignments: 'userRoleAssignments'
+  userRoleAssignments: 'userRoleAssignments',
+  retentionPolicies: 'retentionPolicies'
 };
 
 const ORIGINAL_ENV = { ...process.env };
@@ -114,7 +115,10 @@ describe('config/collections', () => {
       terminologyRelations: 'terminologyRelations',
       roles: 'roles',
       permissions: 'permissions',
-      userRoleAssignments: 'userRoleAssignments'
+      userRoleAssignments: 'userRoleAssignments',
+      // COLL_RETENTION_POLICIES isn't in ENV_KEYS/read by env.js either, same
+      // hardcoded-default reasoning as cids/clinicalUnits/etc. above.
+      retentionPolicies: 'retentionPolicies'
     });
   });
 
