@@ -15,6 +15,7 @@ const cron = require('node-cron');
 const logger = require('../../src/utils/logger');
 const env = require('../../src/config/env');
 const backupService = require('../../src/services/backup.service');
+const retentionSweepService = require('../../src/services/retentionSweep.service');
 const scheduler = require('../../src/services/scheduler.service');
 
 function makeCollection(overrides = {}) {
@@ -213,10 +214,12 @@ describe('scheduler.service - initScheduler / stopScheduler', () => {
   let loggerWarnSpy;
   let loggerErrorSpy;
   let runBackupSpy;
+  let runSweepSpy;
 
   const originalEnv = {
     TEMP_MONITOR_CRON: env.TEMP_MONITOR_CRON,
-    BACKUP_CRON: env.BACKUP_CRON
+    BACKUP_CRON: env.BACKUP_CRON,
+    RETENTION_SWEEP_CRON: env.RETENTION_SWEEP_CRON
   };
 
   beforeEach(() => {
@@ -230,9 +233,11 @@ describe('scheduler.service - initScheduler / stopScheduler', () => {
     loggerWarnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
     loggerErrorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
     runBackupSpy = vi.spyOn(backupService, 'runBackup').mockResolvedValue(undefined);
+    runSweepSpy = vi.spyOn(retentionSweepService, 'runSweep').mockResolvedValue({ skipped: true, reason: 'no_active_policy' });
 
     env.TEMP_MONITOR_CRON = undefined;
     env.BACKUP_CRON = undefined;
+    env.RETENTION_SWEEP_CRON = undefined;
   });
 
   afterEach(() => {
@@ -240,15 +245,17 @@ describe('scheduler.service - initScheduler / stopScheduler', () => {
     vi.restoreAllMocks();
     env.TEMP_MONITOR_CRON = originalEnv.TEMP_MONITOR_CRON;
     env.BACKUP_CRON = originalEnv.BACKUP_CRON;
+    env.RETENTION_SWEEP_CRON = originalEnv.RETENTION_SWEEP_CRON;
   });
 
-  it('schedules the temperature monitor and backup jobs; legacy consent sync is a no-op', () => {
+  it('schedules the temperature monitor, backup, and retention sweep jobs; legacy consent sync is a no-op', () => {
     scheduler.initScheduler({ db: {}, neo4jDriver: {} });
 
-    // temperature monitor + backup only; startConsentSyncSchedule is a logged no-op stub.
-    expect(cronScheduleSpy).toHaveBeenCalledTimes(2);
+    // temperature monitor + backup + retention sweep; startConsentSyncSchedule is a logged no-op stub.
+    expect(cronScheduleSpy).toHaveBeenCalledTimes(3);
     expect(cronScheduleSpy.mock.calls[0][0]).toBe('*/10 * * * *');
     expect(cronScheduleSpy.mock.calls[1][0]).toBe('0 3 * * *');
+    expect(cronScheduleSpy.mock.calls[2][0]).toBe('0 4 * * *');
     expect(loggerInfoSpy).toHaveBeenCalledWith(
       expect.stringContaining('Sincronização legada de consentimento removida')
     );
@@ -257,20 +264,51 @@ describe('scheduler.service - initScheduler / stopScheduler', () => {
   it('uses cron expressions from env when provided', () => {
     env.TEMP_MONITOR_CRON = '*/5 * * * *';
     env.BACKUP_CRON = '0 1 * * *';
+    env.RETENTION_SWEEP_CRON = '0 2 * * *';
 
     scheduler.initScheduler({ db: {}, neo4jDriver: {} });
 
-    expect(cronScheduleSpy).toHaveBeenCalledTimes(2);
+    expect(cronScheduleSpy).toHaveBeenCalledTimes(3);
     expect(cronScheduleSpy.mock.calls[0][0]).toBe('*/5 * * * *');
     expect(cronScheduleSpy.mock.calls[1][0]).toBe('0 1 * * *');
+    expect(cronScheduleSpy.mock.calls[2][0]).toBe('0 2 * * *');
   });
 
   it('stopScheduler stops all previously scheduled tasks', () => {
     scheduler.initScheduler({ db: {}, neo4jDriver: {} });
     scheduler.stopScheduler();
 
-    expect(scheduledTasks).toHaveLength(2);
+    expect(scheduledTasks).toHaveLength(3);
     scheduledTasks.forEach((task) => expect(task.stop).toHaveBeenCalledTimes(1));
+  });
+
+  it('retention sweep task callback runs the sweep and logs the result when db is present', async () => {
+    scheduler.initScheduler({ db: {}, neo4jDriver: null });
+    const sweepTask = scheduledTasks[2];
+
+    await sweepTask.fn();
+
+    expect(runSweepSpy).toHaveBeenCalledTimes(1);
+    expect(loggerInfoSpy).toHaveBeenCalledWith(expect.stringContaining('Sweep de retenção executado'));
+  });
+
+  it('retention sweep task callback does nothing when db is missing', async () => {
+    scheduler.initScheduler({ db: null, neo4jDriver: null });
+    const sweepTask = scheduledTasks[2];
+
+    await sweepTask.fn();
+
+    expect(runSweepSpy).not.toHaveBeenCalled();
+  });
+
+  it('retention sweep task callback logs an error instead of throwing when the sweep rejects', async () => {
+    runSweepSpy.mockRejectedValue(new Error('sweep failed'));
+
+    scheduler.initScheduler({ db: {}, neo4jDriver: null });
+    const sweepTask = scheduledTasks[2];
+
+    await expect(sweepTask.fn()).resolves.not.toThrow();
+    expect(loggerErrorSpy).toHaveBeenCalledWith('Erro no sweep de retenção:', 'sweep failed');
   });
 
   it('temperature monitor task callback does nothing (and does not log success) when db is missing', async () => {
