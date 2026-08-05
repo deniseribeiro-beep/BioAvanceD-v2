@@ -142,6 +142,26 @@ standalone per-file number over a multi-file combined run's per-line/
 per-function detail; don't chase this drift with more tests or config
 changes.
 
+A fourth report (issue #423, filed 2026-08-04): a `--coverage` run over
+`tests/unit tests/integration tests/compliance` showed 76 failed tests
+across 57 files, all null/undefined JWT or encryption secrets (e.g.
+`jwt.sign` rejecting `secretOrPrivateKey`), where a plain `vitest run`
+(no `--coverage`) over the same dirs right before showed none. Re-run
+2026-08-05 with the exact documented reconcile command (see above): 8
+failed tests / 2 failed files, identical to a coverage-free baseline and
+unrelated to JWT/encryption (`user.model.unit.test.js` access-type
+mapping, `generate-dictionary-catalog` checksum drift) — the reported 76
+failures did not reproduce. Consistent with the third pattern above
+(coverage-v8's cross-process merge/instrumentation being non-deterministic
+under this repo's `pool: 'forks'` + `isolate: true` + `fileParallelism:
+false` config) rather than a permanent config defect — `vitest.setup.js`'s
+per-file `process.env.X || default` fallback pattern should re-arm secrets
+every isolated file regardless, so a real config bug would need to defeat
+that on every file, which a one-off 76/6551 flake doesn't fit. Same
+practical rule: don't chase this with config changes; if the
+coverage-reconcile command shows secret-null failures again, re-run once
+before trusting the number.
+
 ## How to use this when picking a slice
 
 1. **Check whether a candidate file is on the excluded list above
