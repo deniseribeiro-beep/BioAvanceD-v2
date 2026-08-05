@@ -1,76 +1,67 @@
 # HANDOFF
 
-**Written:** 2026-08-05, after closing #424 (result-mutation routes
-gated on a result-specific permission instead of `createPatient`) on
+**Written:** 2026-08-05, after closing #436 (permission-catalog
+duplication + latent `viewAuditLogs` gap, found via #424) on
 `feature/docker-e2e-backend-integration`.
 
 ## What happened this session
 
-Picked #424 explicitly (Dennis: "Pick #424"). Routed via `work-issue` ->
-`fix-bugs` (reproducible defect, denial logs already showed the wrong
-permission name being checked).
+Picked #436 explicitly (Dennis: "Pick #436"). Routed via `work-issue` ->
+`fix-bugs` — a structural drift bug, not ambiguous, no design call
+needed.
 
-**What #424 asked for:** `result.routes.js`'s `POST /`, `PUT /:id`,
-`PUT /:id/link-sample`, and `DELETE /:id` all called
-`requirePermission('createPatient')` — a copy-paste leftover. 403s still
-happened in prior tests only because the accessTypes exercised lacked
-both `createPatient` and the correct permission, masking the bug.
+**What #436 asked for:** three independently-maintained copies of the
+RBAC permission catalog had to be edited in lockstep (as #424 found the
+hard way): `rbac-catalog-seed.service.js`'s real `PERMISSION_CATALOG` /
+`LEGACY_ROLES_SEED`, `rbac.js`'s hardcoded `permissions` allowlist
+gating `requirePermission()`, and `rbac.factory.js`'s hand-copied test
+`rolesSeed`. Also flagged: `viewAuditLogs` (added by #429) was missing
+from `rbac.js`'s allowlist — latent, would 500 instead of enforcing if
+anything ever called `requirePermission('viewAuditLogs')`.
 
-**Landed** (`fix/424-result-permission-name`, commit `34754b96`, merged
-`--no-ff` into `feature/docker-e2e-backend-integration` at `d8c4603c`):
-- `api/backend/src/services/rbac-catalog-seed.service.js`: added
-  `createResult`/`editResult`/`deleteResult` to `PERMISSION_CATALOG`
-  (resourceType `Result`), granted to `Coordenador` and `Administrador`
-  — the same two roles `createPatient` was already granted to, so no
-  role's actual access changes, only the permission *name* being checked.
-- `api/backend/src/interface/routes/result.routes.js`: `POST /` ->
-  `createResult`; `PUT /:id` and `PUT /:id/link-sample` -> `editResult`;
-  `DELETE /:id` -> `deleteResult`.
-- `api/backend/src/infrastructure/middleware/rbac.js`: added the three
-  new codes to the `permissions` allowlist object `requirePermission()`
-  checks before hitting the DB — missing this makes a route 500
-  ("Permissão não definida") instead of enforcing. This is a **second,
-  independently-maintained copy** of the permission set (see below).
-- `api/backend/tests/factories/rbac.factory.js`: its own hand-copied
-  `rolesSeed` (a **third** copy of the legacy role->permission mapping)
-  also needed the three new codes added to Coordenador/Administrador,
-  or fixture-backed tests would silently drift from real seeded roles.
-- Tests updated: `result.routes.api.test.js` (3 test titles renamed off
-  `createPatient`, one new 403 test added for `link-sample`'s
-  previously-untested permission gate), `result.api.test.js` (no
-  behavior change, its one pinned `deleteResult` test already asserted
-  the correct permission name by title even though the code checked the
-  wrong one).
+**Landed** (`fix/436-rbac-catalog-dedup`, commit `833ea91e`, merged
+`--no-ff` into `feature/docker-e2e-backend-integration` at `e4ec70d0`):
+- `api/backend/src/infrastructure/middleware/rbac.js`: `permissions`
+  allowlist now derives its keys from `PERMISSION_CATALOG` (imported
+  from `rbac-catalog-seed.service.js`) instead of a separately
+  maintained literal — collapses the 2nd copy and fixes the
+  `viewAuditLogs` gap as a side effect (it's already in the catalog).
+- `api/backend/src/services/rbac-catalog-seed.service.js`: now exports
+  `LEGACY_ROLES_SEED` (previously internal-only).
+- `api/backend/tests/factories/rbac.factory.js`: `rolesSeed` now points
+  at the imported `LEGACY_ROLES_SEED` instead of a hand-copied literal
+  — collapses the 3rd copy.
+- `api/backend/tests/unit/rbac.test.js`: added a test asserting every
+  `PERMISSION_CATALOG` key is present in the exported `permissions` map
+  (this is the reproduction — failed pre-fix on `viewAuditLogs`, passes
+  post-fix).
+- Only one real source of truth left: `PERMISSION_CATALOG` /
+  `LEGACY_ROLES_SEED` in `rbac-catalog-seed.service.js`. No role's
+  actual granted permissions changed.
 
-Verified: targeted suite (94 tests across the 4 touched/adjacent files)
-green pre-merge and post-merge. Wider sweep of every test file that
-references `rbac.js`/`rbac-catalog-seed`/`rbac.factory` (36 files, 623
-tests) also green post-merge — no fixture drift elsewhere.
+Verified: targeted `rbac.test.js` green pre/post-fix (reproduction
+failed correctly before the fix). Wider sweep of the same 36-file/623+
+test set from #424's session (every file referencing
+`rbac.js`/`rbac-catalog-seed`/`rbac.factory`) — 50 test files, 1004
+tests, all green post-merge.
 
-Pushed. Closed #424 with the merge commit hash. Local + remote
-`fix/424-result-permission-name` branch deleted (both succeeded this
-session — no permission-classifier denial, unlike some prior sessions'
-remote-delete experience).
-
-**`wrap-up` filed #436**: the permission catalog is duplicated across 3
-files (`rbac-catalog-seed.service.js`'s real seed, `rbac.js`'s hardcoded
-allowlist, `rbac.factory.js`'s hand-copied test fixture) — all three had
-to be edited in lockstep for this fix. Also flagged as latent in the
-same issue: `viewAuditLogs` (added by #429) is missing from `rbac.js`'s
-allowlist — nothing currently calls `requirePermission('viewAuditLogs')`
-so it's not live, but would 500 if something did.
+Pushed. Closed #436 with the merge commit hash. Local + remote
+`fix/436-rbac-catalog-dedup` branch deleted — both succeeded this
+session with no permission-classifier denial (prior handoffs noted
+remote-delete is sometimes denied for branches not pushed this same
+session; this branch was pushed and merged within this session, matching
+the pattern where it succeeds).
 
 ## Repo state
 
 - **`feature/docker-e2e-backend-integration`**: pushed, up to date with
-  `origin` as of this session's merge (`d8c4603c`). Includes this
-  session's #424 fix plus all prior sessions' work (through #429).
-- **`fix/424-result-permission-name`**: merged, deleted (local + remote).
-- Issues: **#424 closed** (merged, see above). **#436 opened** this
-  session (permission-catalog duplication + latent `viewAuditLogs` gap).
+  `origin` as of this session's merge (`e4ec70d0`). Includes this
+  session's #436 fix plus all prior sessions' work (through #424/#429).
+- **`fix/436-rbac-catalog-dedup`**: merged, deleted (local + remote).
+- Issues: **#436 closed** (merged, see above).
 - Backlog otherwise unchanged from prior handoff: **#425** (backfill
   script, operational not coding), **#387**,
-  `#371`/`#373`/`#374`/`#378`/`#379`, **#389**, plus the new **#436**.
+  `#371`/`#373`/`#374`/`#378`/`#379`, **#389**.
 - **dyeallpies-skills-pack#210** (RBAC blast-radius overlay note) —
   still open, not yet applied.
 
@@ -83,26 +74,20 @@ a shared environment, not blocking this session's close.
 
 ## Recommended next steps
 
-Dennis picked #424 explicitly this session but didn't name a next pick
+Dennis picked #436 explicitly this session but didn't name a next pick
 after it, so per this skill's own rule: **none queued** as an explicit
 instruction. Backlog candidates:
-- **#436** (this session's own finding — permission-catalog dedup +
-  `viewAuditLogs` allowlist gap; straightforward `fix-bugs`, and worth
-  doing soon since it's exactly the kind of drift that produced #424 in
-  the first place)
 - **#425** (operational), **#387**, older backlog
   (`#371`/`#373`/`#374`/`#378`/`#379`), or **#389** (route through
   `divide-and-conquer` first, 28 files)
 - The prior handoff's `user.accessType` grep sweep (confirming the
   #427/#428/#431/#433/#434 stale-`accessType` family is fully closed
-  out) still hasn't been done.
+  out) still hasn't been done — carried forward two handoffs now.
 
 ## Which skills to use
 
 - Unchanged from prior handoffs for #425/#387/older backlog/#389.
-- **#436's shape** (multiple independently-maintained copies of the same
-  config/catalog data, one of them a hardcoded allowlist gating access)
-  is a `fix-bugs` pickup once picked — likely worth collapsing `rbac.js`'s
-  literal `permissions` object to derive from `PERMISSION_CATALOG`
-  instead of removing the duplication piecemeal again next time a
-  permission is added.
+- The RBAC-catalog dedup pattern from #436 (one real source of truth,
+  everything else derives/imports from it) is now in place — if a
+  future permission is added, only `rbac-catalog-seed.service.js` needs
+  editing; `rbac.js` and `rbac.factory.js` pick it up automatically.
