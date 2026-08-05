@@ -139,13 +139,11 @@ class AuthService {
         password: hashedPassword
       });
 
-      // #427: accessType/roleName resolved only to grant the matching
-      // UserRoleAssignment (#421) below — no longer persisted on the User
-      // document itself (#422/#428 retire the fields from the schema once
-      // nothing writes them).
-      const resolvedAccessType = user.accessType;
-      delete user.accessType;
-      delete user.roleName;
+      // #427/#432: accessType/roleName resolved only to grant the matching
+      // UserRoleAssignment (#421) below — never persisted on the User
+      // document itself, and no longer a UserModel.create() output field
+      // as of #432's schema drop.
+      const resolvedAccessType = userData.accessType || 2;
 
       // Para Administrador, MFA é opcional e pode ser setado manualmente
       // Se não foi fornecido explicitamente, desabilita por padrão

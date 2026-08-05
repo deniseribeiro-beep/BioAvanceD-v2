@@ -80,7 +80,7 @@ function buildPermissionDocs() {
   return [...codes].map((permissionCode) => {
     const catalogEntry = PERMISSION_CATALOG[permissionCode];
     if (!catalogEntry) {
-      throw new Error(`roles.min.json referencia permissão sem mapeamento no catálogo: ${permissionCode}`);
+      throw new Error(`LEGACY_ROLES_SEED referencia permissão sem mapeamento no catálogo: ${permissionCode}`);
     }
     return PermissionModel.create({
       permissionCode,
@@ -95,7 +95,7 @@ function buildRoleDocs(permissionIdByCode) {
   return LEGACY_ROLES_SEED.roles.map((role) => {
     const roleCode = ROLE_CODE_BY_LEGACY_NAME[role.roleName];
     if (!roleCode) {
-      throw new Error(`roles.min.json referencia papel sem mapeamento de roleCode: ${role.roleName}`);
+      throw new Error(`LEGACY_ROLES_SEED referencia papel sem mapeamento de roleCode: ${role.roleName}`);
     }
     return RoleModel.create({
       roleCode,

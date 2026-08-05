@@ -11,7 +11,7 @@ const auditLogger = require('../../utils/auditLogger');
  * Todas as rotas de segurança requerem autenticação e perfil Administrador
  */
 router.use(authenticate);
-router.use(requireRole(4)); // Apenas Administrador (accessType 4)
+router.use(requireRole(4)); // Apenas Administrador (hierarchyLevel 4)
 
 /**
  * GET /api/security/config

@@ -1,6 +1,7 @@
-// dict-02 P1X-0209..0216 (#420): additive RBAC catalog entity. Seeded from
-// roles.min.json's 4 hardcoded roles — does not replace accessType/roleName
-// as enforcement authority yet (see #386/#421 for the atomic cutover).
+// dict-02 P1X-0209..0216 (#420): additive RBAC catalog entity. Originally
+// seeded from the retired roles.min.json's 4 hardcoded roles (#432); the
+// atomic cutover to UserRoleAssignment -> Role -> Permission as sole
+// enforcement authority landed in #386/#421.
 const { randomUUID } = require('crypto');
 
 const ROLE_STATUSES = ['active', 'inactive', 'deprecated'];

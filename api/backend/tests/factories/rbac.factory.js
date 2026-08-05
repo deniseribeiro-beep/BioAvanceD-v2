@@ -1,18 +1,42 @@
 const { createCollectionMock } = require('./db.factory');
-const rolesSeed = require('../../src/reference-data/roles.min.json');
 const { ROLE_CODE_BY_LEGACY_NAME, PERMISSION_CATALOG } = require('../../src/services/rbac-catalog-seed.service');
 
 /**
  * #421: real query-matching mocks (findOne/find honor the actual filter) for
- * `roles`/`permissions`/`userRoleAssignments`, built from roles.min.json —
- * this repo's single source of truth for the legacy accessType->permission
- * mapping (see rbac-catalog-seed.service.js). Test files that build a mock
- * DB for a route guarded by requireRole/requirePermission need this since
- * #421's cutover: enforcement resolves via UserRoleAssignment -> Role ->
- * Permission, not accessType/roleName directly.
+ * `roles`/`permissions`/`userRoleAssignments`, built from the legacy
+ * accessType->permission mapping below (formerly `roles.min.json`, retired
+ * as a runtime file by #432 — this fixture is now its only consumer). Test
+ * files that build a mock DB for a route guarded by requireRole/
+ * requirePermission need this since #421's cutover: enforcement resolves
+ * via UserRoleAssignment -> Role -> Permission, not accessType/roleName
+ * directly.
  *
  * Usage: `createDbMock({ ...yourCollections, ...buildRbacCollections([{ userAccountId: 'admin-test', accessType: 4 }]) })`
  */
+const rolesSeed = {
+  roles: [
+    {
+      accessType: 1,
+      roleName: 'UsuarioExterno',
+      permissions: ['viewReports'],
+    },
+    {
+      accessType: 2,
+      roleName: 'Tecnico',
+      permissions: ['createSample', 'withdrawSample', 'viewTemperature', 'manageTemperature', 'uploadFiles', 'viewReports'],
+    },
+    {
+      accessType: 3,
+      roleName: 'Coordenador',
+      permissions: ['createUser', 'createSample', 'editSample', 'createPatient', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'viewReports'],
+    },
+    {
+      accessType: 4,
+      roleName: 'Administrador',
+      permissions: ['createUser', 'createSample', 'editSample', 'deleteSample', 'createPatient', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'viewReports', 'manageBackup', 'manageSystem', 'resetMFA', 'manageOrganizations'],
+    },
+  ],
+};
 
 function matchesQuery(doc, query = {}) {
   return Object.entries(query).every(([key, cond]) => {
@@ -64,7 +88,7 @@ const ROLE_ID_BY_ACCESS_TYPE = Object.fromEntries(
 /**
  * `users`: array of `{ userAccountId, accessType }` — one active
  * UserRoleAssignment is synthesized per entry, granting exactly the legacy
- * role/permission set roles.min.json defines for that accessType.
+ * role/permission set `rolesSeed` above defines for that accessType.
  */
 function buildRbacCollections(users = []) {
   const assignments = users.map(({ userAccountId, accessType }) => ({
