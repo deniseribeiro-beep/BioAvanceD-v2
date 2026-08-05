@@ -114,7 +114,7 @@ const VALID_PAYLOAD = {
   applicableEntityTypes: ['AuditEvent'],
   triggerEvent: 'creation',
   postRetentionAction: 'archive',
-  retentionDurationDays: 365,
+  retentionPeriod: 'P365D',
   effectivePeriod: { start: '2026-01-01T00:00:00.000Z' },
 };
 
@@ -212,12 +212,12 @@ describe('POST /api/retention-policies', () => {
     const updateRes = await request(app)
       .put(`/api/retention-policies/${firstId}`)
       .set('Authorization', `Bearer ${makeToken(4)}`)
-      .send({ ...VALID_PAYLOAD, retentionDurationDays: 730 });
+      .send({ ...VALID_PAYLOAD, retentionPeriod: 'P730D' });
 
     expect(updateRes.status).toBe(200);
     expect(updateRes.body.data.version).toBe('v2');
     expect(updateRes.body.data.previousPolicyId).toBe(firstId);
-    expect(updateRes.body.data.retentionDurationDays).toBe(730);
+    expect(updateRes.body.data.retentionPeriod).toBe('P730D');
 
     const activeRes = await request(app)
       .get('/api/retention-policies/active')

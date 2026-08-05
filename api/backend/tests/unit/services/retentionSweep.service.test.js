@@ -101,7 +101,7 @@ describe('retentionSweep.service', () => {
       active: true,
       applicableEntityTypes: ['Log'],
       postRetentionAction: 'destroy',
-      retentionDurationDays: 30,
+      retentionPeriod: 'P30D',
     };
 
     const logsCollection = statefulLogsMock([oldLog, recentLog]);
@@ -131,7 +131,7 @@ describe('retentionSweep.service', () => {
       active: true,
       applicableEntityTypes: ['AuditEvent'],
       postRetentionAction: 'archive',
-      retentionDurationDays: 365,
+      retentionPeriod: 'P365D',
     };
 
     const eventsCollection = statefulAuditEventsMock([oldEvent, recentEvent]);
@@ -157,7 +157,7 @@ describe('retentionSweep.service', () => {
       active: true,
       applicableEntityTypes: ['AuditEvent'],
       postRetentionAction: 'destroy',
-      retentionDurationDays: 30,
+      retentionPeriod: 'P30D',
     };
 
     const eventsCollection = statefulAuditEventsMock([
