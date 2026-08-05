@@ -1,5 +1,6 @@
 const { getCollection } = require('../utils/collectionResolver');
 const UserRoleAssignmentModel = require('../models/UserRoleAssignment');
+const { seedRolesAndPermissions } = require('./rbac-catalog-seed.service');
 
 /**
  * #421: atomic cutover of `requirePermission`/`requireRole` from
@@ -150,8 +151,15 @@ async function grantRoleForAccessType(db, { userAccountId, accessType, grantedBy
  * One-time idempotent backfill: grants every existing `users` document its
  * UserRoleAssignment from its current accessType, since UserRoleAssignment
  * didn't exist before #420 and roles.min.json has no per-user data.
+ *
+ * #437: ensures the RBAC catalog is seeded before granting, mirroring
+ * `createFirstAdmin.js` (#421) — a shared/dev stack with pre-existing users
+ * never reaches `createFirstAdmin`'s own seed call (it aborts early when
+ * users already exist), so this is the only remaining path that grants a
+ * role and must be self-sufficient rather than assuming the catalog exists.
  */
 async function backfillUserRoleAssignments(db) {
+  await seedRolesAndPermissions(db);
   const users = db.collection('users');
   const userDocs = await users.find({}).toArray();
 
