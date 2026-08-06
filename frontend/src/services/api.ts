@@ -6,7 +6,6 @@ import {
   ConsentTemplate,
   PatientConsent,
   Equipment,
-  Location,
   Temperature,
   Sensor,
   Policy,
@@ -456,16 +455,6 @@ export const equipmentService = {
   create: (data: Partial<Equipment>) => api.post<Equipment>('/equipment', data),
   update: (id: number | string, data: Partial<Equipment>) => api.put<Equipment>(`/equipment/${id}`, data),
   delete: (id: number | string) => api.delete(`/equipment/${id}`),
-};
-
-// ========== LOCATION SERVICES ==========
-export const locationService = {
-  getAll: () => api.get<Location[]>('/locations'),
-  getById: (id: string) => api.get<Location>(`/locations/${id}`),
-  create: (data: Partial<Location>) => api.post<Location>('/locations', data),
-  update: (id: string, data: Partial<Location>) => api.put<Location>(`/locations/${id}`, data),
-  delete: (id: string) => api.delete(`/locations/${id}`),
-  fixMissingLocationIDs: () => api.patch<{ success: boolean; message: string; updated: number; total: number }>('/locations/fix-missing-locationids'),
 };
 
 // ========== TEMPERATURE SERVICES ==========

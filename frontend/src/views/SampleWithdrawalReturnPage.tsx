@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useLanguage } from '../contexts/LanguageContext';
 import { sampleService } from '../services/api';
-import { Sample, SampleMovement } from '../types/models';
+import { Sample, SampleEmbeddedStorageLocation, SampleMovement } from '../types/models';
 import Button from '../components/UI/Button';
 import Input from '../components/UI/Input';
 import Select from '../components/UI/Select';
@@ -26,6 +26,24 @@ interface ReturnFormData {
   returnResponsible: string;
   condition: 'Íntegra' | 'Parcialmente comprometida' | 'Inutilizada' | '';
   observations: string;
+}
+
+function getStorageLabel(sample: Sample): string {
+  const storageLocation: SampleEmbeddedStorageLocation | null | undefined = sample.storageLocation;
+  const boxName = storageLocation?.boxName ? String(storageLocation.boxName) : '';
+  const position = storageLocation?.position ? String(storageLocation.position) : '';
+  const path = storageLocation?.path ? String(storageLocation.path) : '';
+
+  if (!boxName && !path && !position) {
+    return 'Aguardando Armazenagem';
+  }
+  if (path) {
+    return position ? `${path} / Posição ${position}` : path;
+  }
+  if (boxName) {
+    return position ? `${boxName} / Posição ${position}` : boxName;
+  }
+  return `Posição ${position}`;
 }
 
 export default function SampleWithdrawalReturnPage() {
@@ -460,7 +478,7 @@ export default function SampleWithdrawalReturnPage() {
                 <div className="info-row">
                   <span className="info-label">Armazenagem:</span>
                   <span className="info-value">
-                    {sample.locationID ? `ID: ${sample.locationID}` : 'Aguardando Armazenagem'}
+                    {getStorageLabel(sample)}
                   </span>
                 </div>
               </div>

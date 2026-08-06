@@ -7,13 +7,13 @@ import Input from '../components/UI/Input';
 import Select from '../components/UI/Select';
 import Table from '../components/UI/Table';
 import { useSamples } from '../hooks/useSamples';
-import { useLocations } from '../hooks/useLocations';
 import { useResults } from '../hooks/useResults';
 import { useEquipment } from '../hooks/useEquipment';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useAuth } from '../contexts/AuthContext';
 import AnalysisUploadModal from '../components/AnalysisUploadModal';
-import { Sample } from '../types/models';
+import InlineStorageMovementPanel from '../components/samples/InlineStorageMovementPanel';
+import { Sample, SampleEmbeddedStorageLocation } from '../types/models';
 import { resultService, sampleService } from '../services/api';
 import './SamplesPage.css';
 
@@ -40,10 +40,9 @@ export default function SampleDetailsPage() {
   const { t, language } = useLanguage();
   const locale = language;
   const { user, hasRole } = useAuth();
-  const { samples, loading, error, updateSample } = useSamples();
+  const { samples, loading, error, updateSample, loadSamples } = useSamples();
   const { results, loadResults } = useResults();
   const { equipment } = useEquipment();
-  const { locations = [], loadLocations } = useLocations();
   const [sample, setSample] = useState<Sample | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -52,8 +51,8 @@ export default function SampleDetailsPage() {
   const [complianceLoading, setComplianceLoading] = useState(false);
   const [complianceError, setComplianceError] = useState<string | null>(null);
   const [showUploadModal, setShowUploadModal] = useState(false);
+  const [showStoragePanel, setShowStoragePanel] = useState(false);
   const [form, setForm] = useState({
-    locationID: '',
     linkedProject: '',
     currentQuantity: '',
     currentStatus: '',
@@ -94,15 +93,6 @@ export default function SampleDetailsPage() {
     };
   };
 
-  // Carrega localizações ao montar
-  useEffect(() => {
-    if (loadLocations) {
-      loadLocations().catch(err => {
-        console.error('Erro ao carregar localizações:', err);
-      });
-    }
-  }, [loadLocations]);
-
   // Busca a amostra quando os dados são carregados
   useEffect(() => {
     if (!loading && id && samples !== undefined) {
@@ -127,7 +117,6 @@ export default function SampleDetailsPage() {
       if (foundSample) {
         setSample(foundSample);
         setForm({
-          locationID: foundSample.locationID ? String(foundSample.locationID) : '',
           linkedProject: foundSample.linkedProject || '',
           currentQuantity: (foundSample.volumeCurrent ?? foundSample.currentQuantity ?? foundSample.quantity ?? '').toString(),
           currentStatus: String((foundSample as any).specimenStatus || '').toUpperCase() || foundSample.currentStatus || 'Available',
@@ -182,56 +171,35 @@ export default function SampleDetailsPage() {
     };
   }, [sample?._id, sample?.sampleID, id]);
 
-  const getLocationInfo = (locationID?: number): { summary: string; details: string } => {
-    if (locationID === undefined || locationID === null) {
+  const getStorageInfo = (s: Sample | null | undefined): { summary: string; details: string } => {
+    const storageLocation: SampleEmbeddedStorageLocation | null | undefined = s?.storageLocation;
+    const boxName = storageLocation?.boxName ? String(storageLocation.boxName) : '';
+    const position = storageLocation?.position ? String(storageLocation.position) : '';
+    const path = storageLocation?.path ? String(storageLocation.path) : '';
+
+    if (!boxName && !path && !position) {
       return {
         summary: t('samples.detail.storage.awaiting', 'Aguardando Armazenagem'),
         details: t('samples.detail.storage.awaitingDescription', 'A amostra já foi recebida e aguarda atribuição de localização física.'),
       };
     }
 
-    if (!locations || !Array.isArray(locations) || locations.length === 0) {
-      return { summary: t('samples.detail.storage.idLabel', 'ID: {id}').replace('{id}', String(locationID)), details: t('samples.detail.storage.unavailable', 'Informações de localização não disponíveis') };
-    }
-
-    const location = locations.find(loc => loc.locationID === locationID);
-    if (!location) {
-      return { summary: t('samples.detail.storage.idLabel', 'ID: {id}').replace('{id}', String(locationID)), details: t('samples.detail.storage.notFound', 'Localização não encontrada') };
-    }
-
-    const parts: string[] = [];
-    if (location.block) parts.push(`${t('samples.detail.storage.block', 'Bloco')}: ${location.block}`);
-    if (location.rack) parts.push(`${t('samples.detail.storage.rack', 'Prateleira')}: ${location.rack}`);
-    if (location.drawer) parts.push(`${t('samples.detail.storage.drawer', 'Gaveta')}: ${location.drawer}`);
-    if (location.box) parts.push(`${t('samples.detail.storage.box', 'Caixa')}: ${location.box}`);
-    if (location.wellPosition || location.eppendorfWell) {
-      parts.push(`${t('samples.detail.storage.well', 'Poço')}: ${location.wellPosition || location.eppendorfWell}`);
-    }
-
-    const summary = parts.length > 0 
-      ? parts.slice(0, 2).join(' | ') 
-      : t('samples.detail.storage.idLabel', 'ID: {id}').replace('{id}', String(locationID));
-
-    const details = parts.length > 0 
-      ? parts.join(' • ') 
-      : t('samples.detail.storage.locationId', 'Localização ID: {id}').replace('{id}', String(locationID));
-
-    return { summary, details };
+    const readable = path || boxName;
+    const summary = position ? `${readable} / ${t('samples.detail.storage.well', 'Poço')} ${position}` : readable;
+    return { summary, details: summary };
   };
 
   const effectiveSample = useMemo(() => {
     if (!isEditing) return sample;
     const parsedAvailable = Number(form.currentQuantity);
-    const parsedLocation = form.locationID ? Number(form.locationID) : undefined;
     return {
       ...sample,
       currentQuantity: Number.isFinite(parsedAvailable) ? parsedAvailable : sample?.currentQuantity,
       volumeCurrent: Number.isFinite(parsedAvailable) ? parsedAvailable : sample?.volumeCurrent,
-      locationID: parsedLocation ?? sample?.locationID,
       linkedProject: form.linkedProject || sample?.linkedProject,
       currentStatus: (form.currentStatus as Sample['currentStatus']) || (String((sample as any)?.specimenStatus || '').toUpperCase() as Sample['currentStatus']) || sample?.currentStatus,
     } as Sample;
-  }, [isEditing, sample, form.currentQuantity, form.locationID, form.linkedProject, form.currentStatus]);
+  }, [isEditing, sample, form.currentQuantity, form.linkedProject, form.currentStatus]);
 
   const availabilityPreview = computeAvailability(effectiveSample);
   const sprecSummary = useMemo(() => {
@@ -266,21 +234,6 @@ export default function SampleDetailsPage() {
       .map(([label, value]) => `${label}:${String(value || '').trim() || t('common.notAvailable', 'N/A')}`)
       .join(' | ');
   }, [effectiveSample]);
-
-  const locationOptions = useMemo(() => {
-    if (!locations || locations.length === 0) {
-      return [{ value: '', label: t('samples.detail.storage.awaiting', 'Aguardando Armazenagem') }];
-    }
-    return [
-      { value: '', label: t('samples.detail.storage.unassigned', 'Sem armazenagem atribuída') },
-      ...locations
-        .filter(loc => loc.locationID != null)
-        .map(loc => ({
-          value: String(loc.locationID),
-          label: `${loc.locationID} - ${t('samples.detail.storage.block', 'Bloco')} ${loc.block} / ${t('samples.detail.storage.shelfAbbr', 'Prat.')} ${loc.rack} / ${t('samples.detail.storage.drawerAbbr', 'Gav.')} ${loc.drawer} / ${t('samples.detail.storage.box', 'Caixa')} ${loc.box}`,
-        })),
-    ];
-  }, [locations, t]);
 
   const statusOptions = useMemo(() => ([
     { value: 'Available', label: t('samples.status.available', 'Disponível') },
@@ -394,7 +347,6 @@ export default function SampleDetailsPage() {
   const handleCancel = () => {
     if (sample) {
       setForm({
-        locationID: sample.locationID ? String(sample.locationID) : '',
         linkedProject: sample.linkedProject || '',
         currentQuantity: (sample.volumeCurrent ?? sample.currentQuantity ?? sample.quantity ?? '').toString(),
       currentStatus: String((sample as any).specimenStatus || '').toUpperCase() || sample.currentStatus || 'Available',
@@ -419,10 +371,8 @@ export default function SampleDetailsPage() {
       return;
     }
 
-    const locationIdNum = form.locationID && form.locationID !== '' ? Number(form.locationID) : undefined;
     const payload: Partial<Sample> = {
       linkedProject: form.linkedProject?.trim() || undefined,
-      locationID: Number.isFinite(locationIdNum) ? locationIdNum : undefined,
       currentStatus: (form.currentStatus as Sample['currentStatus']) || undefined,
       sampleOrigin: form.sampleOrigin?.trim() || undefined,
       extractionProtocol: form.extractionProtocol?.trim() || undefined,
@@ -722,7 +672,7 @@ export default function SampleDetailsPage() {
           <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '0.75rem', color: 'var(--text)' }}>
             {t('samples.detail.storage.storageProjectTitle', 'Armazenagem e Projeto')}
           </h3>
-          {sample?.locationID == null && (
+          {!sample?.storageLocation?.boxId && (
             <div style={{ marginBottom: '0.75rem', padding: '0.75rem 1rem', borderRadius: '8px', backgroundColor: 'rgba(37, 99, 235, 0.08)', color: 'var(--text)' }}>
               <strong>{t('samples.detail.storage.awaiting', 'Aguardando Armazenagem')}.</strong> {t('samples.detail.storage.storageAwaitingMessage', 'A amostra está registrada, mas ainda não foi atribuída a uma posição física.')}
             </div>
@@ -731,42 +681,42 @@ export default function SampleDetailsPage() {
             <div style={{ padding: '0.75rem', backgroundColor: 'var(--surface)', borderRadius: '4px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
                 <span style={{ fontWeight: 500, color: 'var(--text-light)' }}>{t('samples.detail.storage.storageLabel', 'Armazenagem')}:</span>
-                {isEditing ? (
-                  <div style={{ minWidth: '260px' }}>
-                    <Select
-                      value={form.locationID}
-                      onChange={(e) => handleChange('locationID', e.target.value)}
-                      options={locationOptions}
-                    />
-                    <div style={{ marginTop: '0.35rem', fontSize: '0.75rem', color: 'var(--text-light)' }}>
-                      {t('samples.detail.storage.storageOptional', 'Opcional. A amostra pode permanecer sem localização até ser armazenada.')}
-                    </div>
-                  </div>
-                ) : (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                   <span style={{
                     display: 'inline-flex',
                     alignItems: 'center',
                     padding: '0.35rem 0.75rem',
                     borderRadius: '999px',
-                    backgroundColor: effectiveSample?.locationID == null ? 'rgba(37, 99, 235, 0.10)' : 'rgba(16, 185, 129, 0.10)',
-                    color: effectiveSample?.locationID == null ? 'var(--primary)' : 'var(--text)',
+                    backgroundColor: !effectiveSample?.storageLocation?.boxId ? 'rgba(37, 99, 235, 0.10)' : 'rgba(16, 185, 129, 0.10)',
+                    color: !effectiveSample?.storageLocation?.boxId ? 'var(--primary)' : 'var(--text)',
                     fontWeight: 600,
                     fontSize: '0.875rem'
                   }}>
-                    {getLocationInfo(effectiveSample?.locationID).summary}
+                    {getStorageInfo(effectiveSample).summary}
                   </span>
-                )}
-              </div>
-              <div style={{ 
-                fontSize: '0.8125rem', 
-                color: 'var(--text)', 
-                lineHeight: '1.6',
-                paddingTop: '0.5rem',
-                borderTop: '1px solid var(--border)'
-              }}>
-                {getLocationInfo(effectiveSample?.locationID).details}
+                  {canEdit && (
+                    <Button
+                      variant="secondary"
+                      onClick={() => setShowStoragePanel((prev) => !prev)}
+                      style={{ padding: '0.25rem 0.5rem', fontSize: '0.8rem' }}
+                    >
+                      {t('samples.detail.storage.manage', 'Gerenciar Armazenagem')}
+                    </Button>
+                  )}
+                </div>
               </div>
             </div>
+            {showStoragePanel && sample && (
+              <InlineStorageMovementPanel
+                sample={{ ...sample, id: String(sample._id || (sample as any).specimenId || id || '') }}
+                t={(key: string) => t(key) || key}
+                onCancel={() => setShowStoragePanel(false)}
+                onCompleted={() => {
+                  setShowStoragePanel(false);
+                  loadSamples();
+                }}
+              />
+            )}
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', backgroundColor: 'var(--surface)', borderRadius: '4px' }}>
               <span style={{ fontWeight: 500, color: 'var(--text-light)' }}>{t('samples.detail.linkedProject', 'Projeto Vinculado')}:</span>
               {isEditing ? (
