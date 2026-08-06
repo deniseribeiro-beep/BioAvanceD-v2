@@ -344,3 +344,29 @@ unsupported-`dataType` job now throws the existing generic error.
 place (not deleted, no longer referenced by the dispatcher) since #466
 didn't ask for its removal. #460 (retiring the `locations` collection)
 is now unblocked on this half.
+
+**#467 resolved 2026-08-06:** checked RF004/RF029 in
+`docs-7-31-2026/1-Requisitos-Funcionais-e-Nao-Funcionais.md`,
+`canonical-data-contract-v1.md`, and this doc's own #459 entry (which
+first raised the question) — nothing settles whether bulk LGPD import
+should be exempt from RF004's operational-sensor/equipment-readiness
+gate; RF029 ("Ingestão operacional e científica") only requires reusing
+earlier-phase structure/references and real-or-synthetic-test data, not
+readiness at ingestion time. Genuinely Dennis's call. Dennis chose
+**add the gate**: `ImportLGPDService.importSamples` now runs the same
+RF004 check `sample.service.js`'s `createSample`/`intakeWizard.js` run
+(equipment-level granularity, per #465) before placing a bulk-imported
+sample — a new `isPlacementReady(db, freezer)` helper (equipment not in
+`maintenance`/`inactive`/`needs calibration`/`error`/`retired`, plus at
+least one operational sensor matched on `freezer.containerID`), checked
+both by `getNextAvailableStorageSlot` (auto-increment candidates skip
+straight to `null`/exhausted rather than looping to the next box — a
+narrower behavior than `intakeWizard.js`'s `resolveAutomaticLocation`,
+which tries the next candidate box; not changed, since #467's scope was
+adding the gate, not matching that skip-ahead shape) and directly in
+`importSamples` for CSV-provided `boxId` and fixed `startBoxId` rows,
+which fail the row with a per-row error rather than throwing. Tests:
+`tests/unit/import-lgpd.service.importSamples.unit.test.js` (3 new
+cases: blocked equipment, no operational sensor, retired equipment via
+fixed startBoxId) and its `getNextAvailableStorageSlot` describe block
+(2 new cases) — 31 tests green in the touched file.

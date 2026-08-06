@@ -345,7 +345,11 @@ describe('ImportLGPDService.importSamples', () => {
       return { freezerId, shelfId, rackId, containers, boxes };
     }
 
-    function makeDbWithStorageChain(chain) {
+    // #467: RF004 gate — a ready equipment (not in a blocked status) with an
+    // operational sensor matching `containerID: 42` (the chain's freezer),
+    // so existing boxId-assignment tests keep passing without asserting on
+    // the gate itself; readiness-specific behavior gets its own tests below.
+    function makeDbWithStorageChain(chain, { equipmentStatus = 'active', sensorStatus = 'ok', hasSensor = true } = {}) {
       const base = makeDb();
       const originalCollection = base.db.collection;
       const storageContainersCollection = {
@@ -356,6 +360,16 @@ describe('ImportLGPDService.importSamples', () => {
           sort: () => ({ toArray: async () => [...chain.boxes] }),
         })),
         findOne: vi.fn(async ({ _id }) => chain.boxes.find((b) => String(b._id) === String(_id)) || null),
+      };
+      const equipmentCollection = {
+        findOne: vi.fn(async () => ({ equipmentID: 42, status: equipmentStatus })),
+      };
+      const sensorsCollection = {
+        find: vi.fn(() => ({
+          limit: () => ({
+            toArray: async () => (hasSensor ? [{ locationId: 42, status: sensorStatus }] : []),
+          }),
+        })),
       };
       const storageAssignments = [];
       const storageAssignmentsCollection = {
@@ -368,6 +382,8 @@ describe('ImportLGPDService.importSamples', () => {
         if (name === 'storageContainers') return storageContainersCollection;
         if (name === 'storageBoxes') return storageBoxesCollection;
         if (name === 'storageAssignments') return storageAssignmentsCollection;
+        if (name === 'equipment') return equipmentCollection;
+        if (name === 'sensors') return sensorsCollection;
         return originalCollection(name);
       });
       base.storageAssignments = storageAssignments;
@@ -437,6 +453,51 @@ describe('ImportLGPDService.importSamples', () => {
       const inserted = samplesCollection.insertOne.mock.calls[0][0];
       expect(String(inserted.storageLocation.boxId)).toBe(String(chain.boxes[1]._id));
     });
+
+    // #467: bulk LGPD import previously placed samples without checking
+    // RF004's operational-sensor/equipment-readiness gate at all.
+    it('rejects a row (CSV-provided boxId) whose freezer equipment is in a blocked status', async () => {
+      const chain = makeStorageChain(2);
+      const { db, samplesCollection } = makeDbWithStorageChain(chain, { equipmentStatus: 'maintenance' });
+      vi.spyOn(service, 'readFile').mockResolvedValue([
+        { ...VALID_ROW, boxId: String(chain.boxes[0]._id), positionCode: 'A1' },
+      ]);
+
+      const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' });
+
+      expect(result.success).toBe(0);
+      expect(result.errors[0].errors[0]).toMatch(/equipamento pronto ou sensor operacional/);
+      expect(samplesCollection.insertOne).not.toHaveBeenCalled();
+    });
+
+    it('rejects a row (CSV-provided boxId) whose freezer has no operational sensor', async () => {
+      const chain = makeStorageChain(2);
+      const { db, samplesCollection } = makeDbWithStorageChain(chain, { hasSensor: false });
+      vi.spyOn(service, 'readFile').mockResolvedValue([
+        { ...VALID_ROW, boxId: String(chain.boxes[0]._id), positionCode: 'A1' },
+      ]);
+
+      const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' });
+
+      expect(result.success).toBe(0);
+      expect(result.errors[0].errors[0]).toMatch(/equipamento pronto ou sensor operacional/);
+      expect(samplesCollection.insertOne).not.toHaveBeenCalled();
+    });
+
+    it('rejects a row (fixed startBoxId, autoIncrement off) whose freezer equipment is retired', async () => {
+      const chain = makeStorageChain(2);
+      const { db, samplesCollection } = makeDbWithStorageChain(chain, { equipmentStatus: 'retired' });
+      vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW]);
+
+      const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' }, {
+        autoIncrement: false,
+        startBoxId: String(chain.boxes[0]._id),
+      });
+
+      expect(result.success).toBe(0);
+      expect(result.errors[0].errors[0]).toMatch(/equipamento pronto ou sensor operacional/);
+      expect(samplesCollection.insertOne).not.toHaveBeenCalled();
+    });
   });
 
   it('fills in sampleType/sampleOrigin/extractionProtocol from groupFields when the row omits them', async () => {
@@ -463,7 +524,7 @@ describe('ImportLGPDService.importSamples', () => {
 describe('ImportLGPDService.getNextAvailableStorageSlot (#459)', () => {
   const { ObjectId } = require('mongodb');
 
-  function makeStorageDb({ freezerId = new ObjectId(), boxes = [] } = {}) {
+  function makeStorageDb({ freezerId = new ObjectId(), boxes = [], equipmentStatus = 'active', hasSensor = true } = {}) {
     const shelfId = new ObjectId();
     const rackId = new ObjectId();
     const containers = [
@@ -480,6 +541,17 @@ describe('ImportLGPDService.getNextAvailableStorageSlot (#459)', () => {
         if (name === 'storageBoxes') {
           return {
             find: vi.fn(() => ({ sort: () => ({ toArray: async () => [...chainedBoxes] }) })),
+          };
+        }
+        // #467: RF004 gate collections.
+        if (name === 'equipment') {
+          return { findOne: vi.fn(async () => ({ equipmentID: 42, status: equipmentStatus })) };
+        }
+        if (name === 'sensors') {
+          return {
+            find: vi.fn(() => ({
+              limit: () => ({ toArray: async () => (hasSensor ? [{ locationId: 42, status: 'ok' }] : []) }),
+            })),
           };
         }
         throw new Error(`unexpected collection requested: ${name}`);
@@ -538,6 +610,24 @@ describe('ImportLGPDService.getNextAvailableStorageSlot (#459)', () => {
     const { db } = makeStorageDb({ boxes: [b1] });
 
     const result = await service.getNextAvailableStorageSlot(db, String(b1._id), 5);
+    expect(result).toBeNull();
+  });
+
+  // #467: RF004 gate — a box in a freezer whose equipment isn't ready, or
+  // has no operational sensor, is not a valid auto-increment target.
+  it('returns null when the resolved freezer equipment is in a blocked status', async () => {
+    const b1 = box({ name: 'B1' });
+    const { db } = makeStorageDb({ boxes: [b1], equipmentStatus: 'maintenance' });
+
+    const result = await service.getNextAvailableStorageSlot(db, String(b1._id), 0);
+    expect(result).toBeNull();
+  });
+
+  it('returns null when the resolved freezer has no operational sensor', async () => {
+    const b1 = box({ name: 'B1' });
+    const { db } = makeStorageDb({ boxes: [b1], hasSensor: false });
+
+    const result = await service.getNextAvailableStorageSlot(db, String(b1._id), 0);
     expect(result).toBeNull();
   });
 
