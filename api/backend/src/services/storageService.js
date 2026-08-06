@@ -2,10 +2,9 @@ const mongoose = require('mongoose');
 const { ObjectId } = require('mongodb'); // Native MongoDB driver para evitar conflitos BSON
 const env = require('../config/env');
 const logger = require('../utils/logger');
-const SampleMovementModel = require('../models/SampleMovement');
-const { appendMovementWithHashChain, enforceAppendOnlyCollection, ensureSampleMovementIndexes } = require('../utils/sampleMovementLedger');
 const { getCollection } = require('../utils/collectionResolver');
 const MongoStorageRepository = require('../infrastructure/persistence/mongo/MongoStorageRepository');
+const MongoAuditRepository = require('../infrastructure/persistence/mongo/MongoAuditRepository');
 
 /**
  * Storage Service - Núcleo de Armazenamento Físico
@@ -23,6 +22,7 @@ class StorageService {
     this.db = db;
     this.neo4jDriver = neo4jDriver || db?.neo4jDriver || null;
     this.storageRepository = new MongoStorageRepository(db);
+    this.auditRepository = new MongoAuditRepository(db);
   }
 
   _normalizeObjectId(value) {
@@ -241,32 +241,26 @@ class StorageService {
           session
         );
 
-        // 4. Criar/atualizar SampleMovement (auditoria)
-        const movementsCollection = this.db.collection('sample_movements');
-        enforceAppendOnlyCollection(movementsCollection, 'sample_movements');
-        await ensureSampleMovementIndexes(movementsCollection);
-
-        const movementID = await SampleMovementModel.generateMovementID(this.db);
-        await appendMovementWithHashChain(
-          movementsCollection,
+        // 4. Registrar auditoria (mesmo ledger sample_movements usado pelos use-cases)
+        await this.auditRepository.appendImmutableAudit(
           {
-            movementID,
             specimenId: sampleObjId.toString(),
             barcode: existingSample.barcode,
-            type: 'allocate',
-            quantity: existingSample.quantity,
-            unit: existingSample.unit || 'µL',
-            responsible: 'SYSTEM',
-            userId: null,
-            timestamp: new Date(),
-            storageAction: {
-              boxId: boxObjId,
-              position: position
+            eventType: 'allocate',
+            before: {
+              storageLocation: null,
+              quantity: existingSample.quantity,
+              unit: existingSample.unit || 'µL'
             },
-            createdAt: new Date(),
-            immutable: true
+            after: {
+              storageLocation: { boxId: boxObjId.toString(), position }
+            },
+            context: {
+              actor: { userName: 'SYSTEM' }
+            },
+            timestamp: new Date()
           },
-          { session }
+          session
         );
       });
 
@@ -603,28 +597,23 @@ class StorageService {
       // via MongoStorageRepository para não duplicar a lógica atômica de escrita.
       await this.storageRepository.releaseSamplePosition({ specimenId: sampleObjId });
 
-      // Criar movimento de auditoria
-      const movementsCollection = this.db.collection('sample_movements');
-      enforceAppendOnlyCollection(movementsCollection, 'sample_movements');
-      await ensureSampleMovementIndexes(movementsCollection);
-
-      const movementID = await SampleMovementModel.generateMovementID(this.db);
-      await appendMovementWithHashChain(movementsCollection, {
-        movementID,
+      // Registrar auditoria (mesmo ledger sample_movements usado pelos use-cases)
+      await this.auditRepository.appendImmutableAudit({
         specimenId: sampleObjId.toString(),
         barcode: sample.barcode,
-        type: 'release',
-        quantity: sample.quantity,
-        unit: sample.unit || 'µL',
-        responsible: 'SYSTEM',
-        timestamp: new Date(),
-        storageAction: {
-          boxId: boxId,
-          position: position,
-          action: 'released'
+        eventType: 'release',
+        before: {
+          storageLocation: { boxId, position },
+          quantity: sample.quantity,
+          unit: sample.unit || 'µL'
         },
-        createdAt: new Date(),
-        immutable: true
+        after: {
+          storageLocation: null
+        },
+        context: {
+          actor: { userName: 'SYSTEM' }
+        },
+        timestamp: new Date()
       });
 
       logger.info(`✅ Amostra ${specimenId} liberada de ${boxId}/${position}`);
