@@ -1,98 +1,83 @@
 # HANDOFF
 
 **Written:** 2026-08-06, end of session on `feature/docker-e2e-backend-integration`,
-after closing #472.
+after closing #468.
 
 ## What happened this session
 
-Dennis said "Pick #472." Routed via `work-issue` -> `resolve-issue`.
-#472 (filed while working #460) asked to migrate
-`FacilityManagementPage.tsx`'s location `<select>` off
-`useLocations()`/`locationService` (the legacy `Location`
-entity/`/api/locations` route) onto "the canonical Facility/Room/Storage
-hierarchy API," then drop `useLocations`/`locationService` if nothing
-else used them.
+Dennis said "Pick #468." Routed via `work-issue` -> `fix-bugs` (stale-test
+regression, not a product bug).
 
-Confirmed #450/#452/#454/#455 (the dependency chain #472 needed) were
-all closed. Found the actual consumer: `SensorForm` inside
-`FacilityManagementPage.tsx`, a "Localização" select populating
-`Sensor.locationID` from legacy `Location` documents
-(block/rack/drawer/box/wellPosition) — nothing to do with `Sample`
-storage at all (#450/#454's audits never covered it, hence #472 being
-filed separately).
+#468: `tests/integration/incidents.api.node.test.js` and
+`tests/integration/iot.api.test.js` were broken by #464's landing (same
+day, earlier session). #464 replaced
+`equipment-sensor-quarantine.service.js`'s legacy `locations`-collection
+lookup with a walk from a FREEZER `StorageContainer` (matched via
+`freezer.containerID === Equipment.equipmentID`) down through
+`SHELF`/`RACK` to `StorageBox`, then filters samples on
+`storageLocation.boxId`. Both integration tests' mocked db still seeded
+the retiring `locations`-collection shape and a bare `sample.locationID`
+field, so the walk resolved zero boxes and quarantine matched zero
+samples — a silent 0-match instead of an error.
 
-Tracing `sensor.locationId`/`locationID`'s actual backend consumer
-(`equipment-sensor-quarantine.service.js`'s `findBoxIdsBySensorKey`,
-with its own `#464` doc comment) found the field's semantics had already
-changed under #464: it's read as an **equipment identifier**, matched
-against `StorageContainer.containerID` for a FREEZER
-(`freezer.containerID === Equipment.equipmentID`) to resolve which
-storage boxes a cold-chain incident should quarantine — not a pointer
-into the retiring `locations` collection at all. So the old select
-wasn't just reading a soon-to-be-retired API, it was writing
-`Location._id`/`Location.locationID` values that could never match
-`containerID` — a live latent bug on top of the stale read path.
+Fix: both fixtures now seed a `storageContainers`
+FREEZER->SHELF->RACK chain and a `storageBoxes` box, matching the
+pattern already established in
+`tests/unit/equipment-sensor-quarantine.service.test.js` and
+`tests/unit/cold-chain-quarantine.service.test.js` (`seedStorageHierarchy`
+helper). Each sample's fixture now carries `storageLocation: { boxId,
+position }` instead of `locationID`. `locationsCollection` mocks and the
+`'locations'` branch of each `db.collection` dispatcher were removed
+(nothing else in either file referenced them).
 
-Fix:
-- `frontend/src/views/FacilityManagementPage.tsx`: `SensorForm`'s
-  "Localização" select now reuses the same `freezers` list already
-  fetched via `storageApi.listFreezers()` for the sibling "Contêiner de
-  Armazenamento" field (canonical `/storage` topology read path,
-  `storageContainers` filtered to `containerType: 'FREEZER'`), and sets
-  `formData.locationID` to `freezer.containerID` instead of a `Location`
-  id. Dropped the now-unused `useLocations` import and the `Location`
-  type import from this file (nothing else in the file used them).
-  `useLocations`/`locationService` themselves were **not** removed —
-  `SampleDetailsPage.tsx` still legitimately depends on them for
-  `Sample.locationID` display (confirmed against
-  `docs/architecture/legacy-location-migration-mapping.md`'s existing
-  #454 note, which already established that consumer as intentionally
-  out of scope until #460).
-- `docs/architecture/legacy-location-migration-mapping.md`: added a
-  `#472` note recording the fix and the #464-semantics discovery, next
-  to the existing #454 note it builds on.
+Verified: 41/41 tests green across the 4 targeted files
+(`incidents.api.node.test.js`, `iot.api.test.js`,
+`equipment-sensor-quarantine.service.test.js`,
+`cold-chain-quarantine.service.test.js`) — both on the fix branch and
+again on the merged integration-branch tree. Did not run the full
+`tests/unit tests/integration tests/compliance` sweep the issue was
+originally filed against (that's a near-full-suite directory target,
+explicit-request/ship-gate only per `fix-bugs`); a session doing the
+ship-gate run should re-verify the other ~10 pre-existing unrelated
+failures noted in #468's body (`UserModel.getRoleName` default-role
+test, `generate-dictionary-catalog` checksum drift) are still the only
+ones outstanding.
 
-`npx tsc --noEmit` clean on the merged branch. No dedicated unit/e2e
-test exists for `FacilityManagementPage.tsx`; the one e2e spec that
-touches this form (`tests/e2e/sensor-registration.spec.ts`) only
-exercises the sibling `sensor-storage-container-select`, confirmed
-unaffected by grep before editing.
-
-Branch `fix/472-facility-page-canonical-storage`, commit `9178f9a9`,
+Branch `fix/468-quarantine-integration-fixtures`, commit `76843708`,
 pushed, merged `--no-ff` into `feature/docker-e2e-backend-integration`
-(merge commit `1936da6d`), pushed. Issue #472 closed with a comment
-recording the merge commit and the #464-semantics finding. Branch
-deleted locally and on origin.
+(merge commit `b74094b3`), pushed. Issue #468 closed with a comment
+recording both hashes. Branch deleted locally and on origin (both
+deletes succeeded this session — same-session-push exception, per
+`fix-bugs`' branch-deletion precedent).
 
-Wrap-up audit ran clean: the one blocked `Edit` (protected-branch guard,
-`feature/docker-e2e-backend-integration`) resolved exactly as designed
-(branch first). One real judgment call this session (what "canonical
-Facility/Room/Storage hierarchy API" meant for a `Sensor`, which has no
-Facility/Room fields of its own) was resolved by tracing the actual
-backend consumer rather than guessing, and the reasoning is now recorded
-in the doc rather than left as an unrecorded call.
+Wrap-up audit: one self-corrected slip (briefly ran a near-full-suite
+directory-target vitest command before catching it and switching to
+named-file targets — no lasting effect, background job killed before
+producing output). No product-source edits, no lazy fixes, nothing
+security-relevant, no deferred sub-points left unfiled.
 
 ## Repo state
 
 - **`feature/docker-e2e-backend-integration`**: clean, pushed through
-  `1936da6d` (merge of `fix/472-...`).
-- Issues this session: **#472 closed** (fixed — see commit `9178f9a9`,
-  merge `1936da6d`).
-- `fix/472-facility-page-canonical-storage`: merged, closed, deleted
+  `b74094b3` (merge of `fix/468-...`).
+- Issues this session: **#468 closed** (fixed — see commit `76843708`,
+  merge `b74094b3`).
+- `fix/468-quarantine-integration-fixtures`: merged, closed, deleted
   (local + remote) — fully wrapped up, nothing dangling from this
   session.
 
 ## Which issue is next
 
 None queued by Dennis. Candidates, in likely priority order (unchanged
-from last session — #472 wasn't on that list, it was picked directly):
+from last session — #468 wasn't on that list either, it was picked
+directly):
 
 1. **#390** — downstream of #450 (closed); check whether #460 (retiring
    the legacy `locations` collection) is still its only remaining
    blocker. Note: #460 is still blocked — `SampleDetailsPage.tsx` still
    reads `useLocations()`/`locationService` for `Sample.locationID`
-   display (confirmed again this session), and that consumer is not
-   what #472 was scoped to touch.
+   display, and that consumer is out of scope for both #472 and this
+   session's #468.
 2. Older backlog: `#371`/`#373`/`#374`/`#378`/`#379`, `user.accessType`
    grep sweep, `test/440-*`/`test/441-*` branch deletion,
    `fix/444-retention-period-iso8601` housekeeping, stray
@@ -103,23 +88,27 @@ from last session — #472 wasn't on that list, it was picked directly):
 
 ## Dev stack state
 
-Untouched this session — resolution verified via `npx tsc --noEmit`
-(frontend-only TypeScript change, no backend/schema touched, no new
-Mongo access pattern introduced) and a grep-confirmed check that the
-one e2e spec touching this form doesn't exercise the changed select.
+Untouched this session — verification was native vitest only (no Docker
+authorized or needed), scoped to the 4 fixture-touching test files, run
+twice (fix branch, then merged tree).
 
 ## Which skills to use
 
-- `resolve-issue`'s "check docs before trusting a framing" guidance
-  applied in reverse this time: #472's own body suggested a
-  straightforward read-path swap, but tracing the actual backend
-  consumer (`equipment-sensor-quarantine.service.js`) surfaced that the
-  field's *semantics* had already changed under a different issue
-  (#464) than the one #472 named as blocking (#450) — worth grepping a
-  changed field's actual backend consumers, not just its declared
-  dependency chain, before assuming a "migrate the read source" issue is
-  purely mechanical.
-- `docs/architecture/legacy-location-migration-mapping.md` continues to
-  be the right home for every `Location`-retirement-adjacent finding
-  (#454, #471, now #472) — check it first, append to it, rather than
-  starting a new doc.
+- `work-issue` -> `fix-bugs` route 2 (stale test, not a product bug)
+  applied cleanly: #464's product-code change was intentional and
+  already landed; the fix was updating the two integration tests'
+  fixtures to the new `storageContainers`/`storageBoxes` shape, not
+  touching product code.
+- The existing `seedStorageHierarchy` pattern in
+  `cold-chain-quarantine.service.test.js` was the right reference to
+  copy from for both integration fixtures — worth checking that file
+  first for any future fixture broken by a #46x-family storage-hierarchy
+  change, before re-deriving the FREEZER->SHELF->RACK->box shape from
+  the service source.
+- `fix-bugs`' "name specific files, not a top-level directory" rule for
+  the verification pass earned its keep again this session — briefly ran
+  the wider `tests/unit tests/integration tests/compliance` sweep before
+  self-catching and switching to the 4 named files; no lasting harm, but
+  a reminder that the issue body's own repro command (which itself uses
+  the full-suite invocation) is not a license to reuse it verbatim
+  mid-loop.
