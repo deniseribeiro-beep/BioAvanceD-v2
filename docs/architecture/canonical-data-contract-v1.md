@@ -143,6 +143,16 @@ independent system. Migration plan filed as #457 (mapping design,
 foundational) → #458/#459 (consumer migration) → #460 (retire the legacy
 API surface).
 
+**#457 field mapping resolved 2026-08-06:** see
+`docs/architecture/legacy-location-migration-mapping.md` for the
+field-by-field mapping (`equipmentType` dropped as redundant/undocumented,
+`equipmentID` joins directly to `Equipment.equipmentID` — no bridging table
+needed, `block`/`rack` map onto existing `SHELF`/`RACK` container types,
+`drawer` needs a new optional `DRAWER` container type with no current
+equivalent, `box`/`wellPosition` map onto the existing `StorageBox`/
+`positionCode`) and the one-time-backfill migration plan (not a read-time
+translation layer).
+
 **Status-field consolidation — decision recorded in #398, implementation
 tracked in #399 (storage/custody split, part 2/3 of #389):**
 `lifecycleStatus`/`availabilityStatus`/`quarantineStatus`/`quarantineReason`
