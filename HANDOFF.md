@@ -1,98 +1,116 @@
 # HANDOFF
 
 **Written:** 2026-08-06, end of session on `feature/docker-e2e-backend-integration`,
-after investigating #460.
+after closing #485.
 
 ## What happened this session
 
-Dennis said "Pick #460." Routed via `work-issue`; no implementation
-route was taken — the issue turned out to still be genuinely blocked, so
-the resolvable work was confirming and recording that (resolve-issue
-case 5: cannot be resolved from this repo/issue yet, leave open with a
-concrete blocker comment), not code.
+Dennis said "Pick #485." Routed via `work-issue` -> `resolve-issue`
+(feature/refactor: migrate remaining frontend Location consumers onto
+the canonical `StorageLocation`/`StorageAssignment` hierarchy).
 
-#460 ("Retire legacy Location API surface") depends on #458 and #459
-("all consumers must be migrated first"). Both #458 and #459 are closed,
-but reading their bodies shows they only ever covered backend
-service-layer and import-path consumers — frontend was explicitly out of
-scope in both. Grepped `frontend/src` for
-`useLocations|locationService|locationID|locationId` and confirmed real,
-non-trivial frontend consumers still exist:
+Read `docs/architecture/legacy-location-migration-mapping.md` (the
+#457 design doc, kept up to date through the whole #458-#476 migration
+family) before touching code — it already recorded that
+`FacilityManagementPage.tsx` was migrated by #472, narrowing #485's
+five-file list down to two real remaining consumers. Confirmed with a
+fresh grep (`useLocations|locationService|locationID` across
+`frontend/src`) before starting, rather than trusting the doc's file
+list at face value.
 
-- `frontend/src/views/SampleDetailsPage.tsx` — full view/edit UI keyed on
-  `sample.locationID` (dropdown from `useLocations()`, display/edit logic
-  at ~lines 46, 130, 185-234, 277-280, 397-425, 725-767)
-- `frontend/src/hooks/useLocations.ts` — 25 references, the hook itself
-- `frontend/src/views/FacilityManagementPage.tsx`
-- `frontend/src/views/SampleWithdrawalReturnPage.tsx`
-- `frontend/src/services/api.ts` — `locationService`
+Branch `fix/485-sample-details-storage-migration` (commit `86e25e2f`):
 
-This matches (and confirms with a fresh grep, rather than just
-re-asserting) last session's carried-forward note that
-`SampleDetailsPage.tsx` still reads `useLocations()`/`locationService`.
-#453's split into #458/#459 never produced a frontend-consumer
-counterpart, so #460's own precondition ("no code should reference the
-legacy `locationID`/`locations` collection") can't be met yet — and
-nothing tracked that gap as its own issue.
+- **`SampleWithdrawalReturnPage.tsx`**: the "Armazenagem" display read
+  `sample.locationID`, a field `createSample`/`intakeWizard` stopped
+  writing back in #462/#463 — every migrated sample showed "Aguardando
+  Armazenagem" regardless of actual storage state, a real display bug
+  from the earlier migration slices, not just legacy-code residue. Now
+  reads `sample.storageLocation` (boxName/path/position), mirroring
+  `SamplesPageView.tsx`'s existing `getStorageLabel` helper.
+- **`SampleDetailsPage.tsx`**: the full view/edit UI (`useLocations()`
+  hook, `getLocationInfo`, `locationOptions` Select, `form.locationID`
+  round-trip through `updateSample`) is replaced. Display now reads
+  `sample.storageLocation` via the same `getStorageLabel`-style helper.
+  Editing now reuses the existing `InlineStorageMovementPanel` component
+  (already built for `SamplesPageView.tsx`, calls
+  `storageApi.autoAssignSampleToBox`) behind a new "Gerenciar
+  Armazenagem" toggle button, rather than writing to the deprecated
+  `locationID` field via the generic edit form.
+- `frontend/src/hooks/useLocations.ts` and `services/api.ts`'s
+  `locationService` had zero remaining callers after the above (grepped
+  repo-wide) — deleted, per the migration family's established "no
+  compatibility shim / no dead code" rule (#472's precedent).
+- Frontend `tsc --noEmit` clean before and after merge into
+  `feature/docker-e2e-backend-integration`.
 
-Filed **#485** ("Migrate frontend Location consumers onto
-StorageLocation hierarchy"), mirroring #458/#459's shape, listing all
-five files above. Commented on #460 recording the check and pointing at
-#485 as the new blocker. Did not attempt the frontend migration itself
-this session — it's multi-file, UI-behavior-bearing work, out of scope
-for a single iteration and out of scope for what #460 itself asked for.
+Filed **#486**: `storageApi.ts` has no `moveSample()` wrapper for the
+backend's explicit-position `POST /api/storage/move` endpoint (only
+`allocateSample`/`autoAssignSampleToBox`, next-free-slot only) —
+`InlineStorageMovementPanel` (and so `SampleDetailsPage`'s new action)
+can place an unplaced sample but can't move an already-stored one to a
+specific corrected position. Real gap noticed while scoping, not fixed
+inline (genuine new capability, not a consumer-migration fix).
 
-No code changes, no test runs, no branch work — this was an
-investigation-and-filing session only.
+Merged `fix/485-...` into `feature/docker-e2e-backend-integration`
+(fast-forward, `86e25e2f`) and pushed. #485 closed with a summary
+comment.
 
-Wrap-up audit: no product edits, no lazy fixes, nothing
-security-relevant. The finding (frontend gap) has a destination (#485,
-plus the #460 comment) rather than living only in this note.
+Wrap-up audit: no scope creep (touched exactly the files #485/#472's
+prior art named), no lazy fixes, the one found gap (#486) got its own
+issue rather than a buried note. No security-relevant surface touched.
 
 ## Repo state
 
-- **`feature/docker-e2e-backend-integration`**: unchanged from last
-  session, still at `b74094b3`, clean, nothing pending.
-- Issues this session: **#485 opened** (new — frontend Location-consumer
-  migration, blocks #460). **#460 commented** (still open, blocker
-  clarified/re-pointed at #485, not closed).
+- **`feature/docker-e2e-backend-integration`**: at `86e25e2f`, pushed,
+  clean.
+- **`fix/485-sample-details-storage-migration`**: merged in, safe to
+  delete (not yet deleted this session — low-priority housekeeping,
+  same as the other merged/dangling branches below).
+- Issues this session: **#485 closed** (implemented + merged + pushed).
+  **#486 opened** (new — `storageApi.ts` missing an explicit-position
+  move wrapper; not blocking anything, a real but non-urgent gap).
 
 ## Which issue is next
 
 None queued by Dennis. Candidates, in likely priority order:
 
-1. **#485** (new) — migrate the five frontend files above onto
-   `StorageLocation`/`StorageAssignment`. Natural next step if continuing
-   the #453/#460 thread; #460 itself stays blocked until this lands.
-2. **#390** — downstream of #450 (closed); still blocked on #460, which
-   is now transitively blocked on #485.
+1. **#390** — downstream of #450 (closed); was blocked on #460, which
+   was blocked on #485 (now closed). Worth re-checking whether #460
+   itself is unblocked now, or whether it still needs a Dennis go-ahead
+   for the destructive `locations`-collection drop (per the mapping
+   doc's explicit flag on that).
+2. **#486** (new) — add `storageApi.moveSample()` + extend
+   `InlineStorageMovementPanel` (or a dedicated picker) with an
+   explicit position field, for correcting an already-placed sample's
+   location.
 3. Older backlog: `#371`/`#373`/`#374`/`#378`/`#379`, `user.accessType`
    grep sweep, `test/440-*`/`test/441-*` branch deletion,
    `fix/444-retention-period-iso8601` housekeeping, stray
    `api/backend/out.txt` (still not investigated, many sessions running
-   now), deleting `fix/450-storageservice-repository-migration` and
-   `fix/476-quarantine-status-design-call` (both merged and dangling,
+   now), deleting `fix/450-storageservice-repository-migration`,
+   `fix/476-quarantine-status-design-call`, and now
+   `fix/485-sample-details-storage-migration` (all merged and dangling,
    safe to delete, low priority housekeeping).
 
 ## Dev stack state
 
-Untouched this session — no Docker, no test runs; this was a
-read/grep-only investigation plus two `gh` calls (issue create, issue
-comment).
+Untouched this session beyond `npx tsc --noEmit` (native, no Docker) —
+no Docker, no test-container runs. No unit/e2e test suite in this repo
+references `SampleDetailsPage.tsx`/`SampleWithdrawalReturnPage.tsx`/
+`useLocations.ts` by name (grepped `tests/` and `frontend/src/**/*.test.*`
+before/after), so nothing needed updating or ran red.
 
 ## Which skills to use
 
-- `work-issue`'s step 1 guidance ("if a prior HANDOFF.md asserts a
-  'needs owner/design call' conclusion without a matching label,
-  re-check before routing it onward") is exactly what fired here, and it
-  held up: last session's carried-forward note about
-  `SampleDetailsPage.tsx` was re-verified with a fresh grep across all of
-  `frontend/src`, not just cited from memory — and the grep surfaced
-  four more consumer files the note hadn't named (`useLocations.ts`,
-  `FacilityManagementPage.tsx`, `SampleWithdrawalReturnPage.tsx`,
-  `api.ts`).
-- Confirms the general lesson from #141/#142 (cited in `work-issue`):
-  closed dependency issues (#458/#459) can still leave a real gap when
-  their own scope text explicitly excluded a consumer class — reading
-  the *bodies* of the depended-on issues, not just their closed state,
-  is what caught this.
+- `resolve-issue`'s "check `docs/` before treating something as
+  ambiguous" guidance paid off directly: `legacy-location-migration-
+  mapping.md` already answered which of #485's five listed files were
+  actually still unmigrated (only 2 of 5), turning what looked like a
+  five-file UI rewrite into a two-file one plus cleanup.
+- `agent-delegation`'s gate fired correctly on the first `Agent` call
+  this session (backend route/use-case research) — invoked the skill
+  fresh before the call, as required.
+- Confirms the general #472/#476-era pattern in this migration family:
+  a prior slice's own doc updates (the mapping doc's running "Landed"
+  log) are more reliable scoping input than an issue's original file
+  list, which can go stale as sibling issues land.
