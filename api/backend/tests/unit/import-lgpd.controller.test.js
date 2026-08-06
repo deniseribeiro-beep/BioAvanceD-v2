@@ -518,7 +518,7 @@ describe('import-lgpd.controller', () => {
     it('happy path returns 200 with errorsDetails mapped to row/errors/participantId', async () => {
       const db = createDb();
       const file = { path: '/tmp/s.csv', originalname: 's.csv' };
-      const req = { app: { locals: { db } }, file, body: { locationID: '3' } };
+      const req = { app: { locals: { db } }, file, body: { boxId: 'box-3' } };
       const res = createRes();
 
       vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(true);
@@ -532,7 +532,7 @@ describe('import-lgpd.controller', () => {
       await controller.importSamples(req, res);
 
       expect(importLGPDService.importSamples).toHaveBeenCalledWith(db, file, expect.objectContaining({
-        startLocationID: 3
+        startBoxId: 'box-3'
       }));
       expect(cleanupSpy).toHaveBeenCalledWith(file.path);
       expect(res.status).toHaveBeenCalledWith(200);

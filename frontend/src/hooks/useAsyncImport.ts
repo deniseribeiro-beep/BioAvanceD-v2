@@ -3,7 +3,7 @@ import { importService } from '../services/api';
 import { useImportJob, ImportJob } from './useImportJob';
 
 export interface AsyncImportOptions {
-  startLocationID?: number;
+  startBoxId?: string;
   autoIncrement?: boolean;
   groupFields?: Record<string, any>;
   onValidationSuccess?: (metadata: any) => void;
@@ -84,7 +84,7 @@ export function useAsyncImport() {
 
     try {
       const response = await importService.createImportJob(file, dataType, {
-        startLocationID: options.startLocationID,
+        startBoxId: options.startBoxId,
         autoIncrement: options.autoIncrement,
         groupFields: options.groupFields,
       });

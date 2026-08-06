@@ -513,7 +513,8 @@ class ImportLGPDController {
       }
 
       // Obtém parâmetros de localização e auto-incremento do FormData
-      const startLocationID = req.body.locationID ? parseInt(req.body.locationID) : null;
+      // #459: boxId (StorageBox _id) replaces the legacy numeric locationID
+      const startBoxId = req.body.boxId || null;
       const autoIncrement = req.body.autoIncrement === 'true' || req.body.autoIncrement === true || req.body.autoIncrement === '1';
 
       let groupFields = {};
@@ -532,11 +533,11 @@ class ImportLGPDController {
         }
       }
       
-      logger.debug('Parâmetros de importação:', { startLocationID, autoIncrement });
+      logger.debug('Parâmetros de importação:', { startBoxId, autoIncrement });
 
       // Processa importação
       const results = await importLGPDService.importSamples(db, file, {
-        startLocationID,
+        startBoxId,
         autoIncrement,
         groupFields
       });

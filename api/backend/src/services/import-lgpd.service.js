@@ -654,42 +654,103 @@ class ImportLGPDService {
   }
 
   /**
-   * Encontra a próxima localização disponível baseada na localização inicial
+   * #462/#463: walks the StorageContainer chain up from a StorageBox's
+   * `parent_id` (RACK, optionally through a DRAWER) to SHELF then FREEZER —
+   * mirrors `intakeWizard.js`'s helper of the same name (duplicated here
+   * rather than imported, matching #464's precedent of mirroring the shape
+   * rather than sharing a cross-service module).
    */
-  async getNextAvailableLocation(db, startLocationID, index) {
+  async resolveStorageHierarchyForBox(db, box) {
+    const storageContainersCollection = db.collection('storageContainers');
+
+    let rack = box.parent_id ? await storageContainersCollection.findOne({ _id: box.parent_id }) : null;
+    if (rack && rack.containerType === 'DRAWER') {
+      rack = rack.parent_id ? await storageContainersCollection.findOne({ _id: rack.parent_id }) : null;
+    }
+
+    const shelf = rack?.parent_id ? await storageContainersCollection.findOne({ _id: rack.parent_id }) : null;
+    const freezer = shelf?.parent_id ? await storageContainersCollection.findOne({ _id: shelf.parent_id }) : null;
+
+    return { rack, shelf, freezer };
+  }
+
+  findFirstAvailablePositionInBox(box) {
+    const rows = Number(box?.dimension?.rows || 0);
+    const cols = Number(box?.dimension?.cols || 0);
+    if (rows < 1 || cols < 1) return null;
+
+    const occupancyGrid = box?.occupancyGrid || {};
+    for (let row = 0; row < rows; row += 1) {
+      for (let col = 1; col <= cols; col += 1) {
+        const position = `${String.fromCharCode(65 + row)}${col}`;
+        const occupied = typeof occupancyGrid.has === 'function'
+          ? occupancyGrid.has(position) && occupancyGrid.get(position)
+          : occupancyGrid[position];
+        if (!occupied) return position;
+      }
+    }
+
+    return null;
+  }
+
+  isBoxAvailable(box) {
+    const status = String(box?.status || '').trim().toUpperCase();
+    if (status && ['FULL', 'RETIRED', 'INACTIVE'].includes(status)) return false;
+    const capacity = Number(box?.dimension?.rows || 0) * Number(box?.dimension?.cols || 0);
+    if (capacity < 1) return false;
+    if (Number(box?.currentOccupancy || 0) >= capacity) return false;
+    return Boolean(this.findFirstAvailablePositionInBox(box));
+  }
+
+  /**
+   * #459: replaces the legacy `locations`-collection scan
+   * (`getNextAvailableLocation`). Enumerates `storageBoxes` sorted by
+   * `name`/`boxID`/`_id` — the same deterministic order
+   * `intakeWizard.js`'s `resolveAutomaticLocation` scans in — resolving
+   * each candidate's FREEZER/SHELF/RACK/[DRAWER] chain via
+   * `resolveStorageHierarchyForBox`. Legacy `getNextAvailableLocation`
+   * advanced by `index` full *location* documents (one per box —
+   * `wellPosition` was descriptive metadata, not itself a sort key in the
+   * legacy sort). The canonical equivalent advances by `index` *available*
+   * (non-full, active) boxes in that same order, returning that box's own
+   * first free position rather than a legacy `wellPosition` value that no
+   * longer exists.
+   */
+  async getNextAvailableStorageSlot(db, startBoxId, index) {
     try {
-      const locationsCollection = db.collection('locations');
-      
-      // Encontra a localização inicial
-      const startLocation = await locationsCollection.findOne({ locationID: startLocationID });
-      if (!startLocation) {
+      const { ObjectId } = require('mongodb');
+      if (!startBoxId || !ObjectId.isValid(String(startBoxId))) {
         return null;
       }
 
-      // Busca todas as localizações e ordena por block, rack, drawer, box
-      const allLocations = await locationsCollection.find({}).toArray();
-      const sortedLocations = allLocations.sort((a, b) => {
-        if (a.block !== b.block) return (a.block || 0) - (b.block || 0);
-        if (a.rack !== b.rack) return (a.rack || 0) - (b.rack || 0);
-        if (a.drawer !== b.drawer) return (a.drawer || 0) - (b.drawer || 0);
-        return (a.box || 0) - (b.box || 0);
-      });
+      const boxesCollection = db.collection('storageBoxes');
+      const boxes = await boxesCollection.find({}).sort({ name: 1, boxID: 1, _id: 1 }).toArray();
 
-      // Encontra o índice da localização inicial
-      const startIndex = sortedLocations.findIndex(loc => loc.locationID === startLocationID);
+      const startIndex = boxes.findIndex((box) => String(box._id) === String(startBoxId));
       if (startIndex === -1) {
         return null;
       }
 
-      // Retorna a localização no índice startIndex + index (ou null se não existir)
-      const nextIndex = startIndex + index;
-      if (nextIndex < sortedLocations.length) {
-        return sortedLocations[nextIndex].locationID;
+      const availableBoxes = boxes
+        .slice(startIndex)
+        .filter((box) => this.isBoxAvailable(box));
+
+      const target = availableBoxes[index];
+      if (!target) {
+        return null;
       }
 
-      return null;
+      const { freezer } = await this.resolveStorageHierarchyForBox(db, target);
+      if (!freezer) {
+        return null;
+      }
+
+      return {
+        boxId: target._id,
+        position: this.findFirstAvailablePositionInBox(target),
+      };
     } catch (error) {
-      logger.error('Erro ao buscar próxima localização:', error.message);
+      logger.error('Erro ao buscar próxima localização de armazenamento:', error.message);
       return null;
     }
   }
@@ -698,10 +759,10 @@ class ImportLGPDService {
    * Importa amostras com validação de ID de paciente (LGPD)
    * @param {Object} db - Instância do banco de dados
    * @param {Object} file - Arquivo a ser importado
-   * @param {Object} options - Opções de importação { startLocationID, autoIncrement }
+   * @param {Object} options - Opções de importação { startBoxId, autoIncrement }
    */
   async importSamples(db, file, options = {}) {
-    const { startLocationID = null, autoIncrement = false, groupFields = {} } = options;
+    const { startBoxId = null, autoIncrement = false, groupFields = {} } = options;
     const results = {
       total: 0,
       success: 0,
@@ -887,26 +948,48 @@ class ImportLGPDService {
             }
           }
 
-          // Processa localização: se autoIncrement estiver ativo e startLocationID fornecido
-          if (autoIncrement && startLocationID) {
-            // Se a linha não tem locationID ou está vazia, usa incremento automático
-            if (!sampleData.locationID || sampleData.locationID === null || sampleData.locationID === '') {
-              const nextLocationID = await this.getNextAvailableLocation(db, startLocationID, results.success);
-              if (nextLocationID) {
-                sampleData.locationID = nextLocationID;
-                logger.debug(`Localização automática atribuída: ${nextLocationID} para linha ${rowNumber}`);
-              } else {
-                results.errors.push({
-                  row: rowNumber,
-                  errors: ['Não há mais localizações disponíveis para incremento automático'],
-                  data: { participantId: participantIdStr }
-                });
-                continue;
-              }
+          // #459: resolve a canonical storageLocation (boxId/positionCode)
+          // for this row — CSV-provided boxId first, then auto-increment
+          // from the StorageBox sequence, then a single fixed startBoxId
+          // applied to every location-less row — same precedence the legacy
+          // `getNextAvailableLocation`/`startLocationID` path used.
+          if (sampleData.boxId) {
+            const { ObjectId } = require('mongodb');
+            const boxesCollection = db.collection('storageBoxes');
+            const providedBoxId = ObjectId.isValid(String(sampleData.boxId))
+              ? new ObjectId(String(sampleData.boxId))
+              : null;
+            const providedBox = providedBoxId ? await boxesCollection.findOne({ _id: providedBoxId }) : null;
+            if (providedBox) {
+              sampleData.storageLocation = {
+                boxId: providedBox._id,
+                position: sampleData.positionCode || this.findFirstAvailablePositionInBox(providedBox),
+              };
             }
-          } else if (startLocationID && (!sampleData.locationID || sampleData.locationID === null || sampleData.locationID === '')) {
-            // Se não for autoIncrement mas startLocationID foi fornecido, usa ele para todas as amostras sem locationID
-            sampleData.locationID = startLocationID;
+          }
+
+          if (!sampleData.storageLocation && autoIncrement && startBoxId) {
+            const nextSlot = await this.getNextAvailableStorageSlot(db, startBoxId, results.success);
+            if (nextSlot && nextSlot.position) {
+              sampleData.storageLocation = { boxId: nextSlot.boxId, position: nextSlot.position };
+              logger.debug(`Localização automática atribuída: caixa ${nextSlot.boxId} posição ${nextSlot.position} para linha ${rowNumber}`);
+            } else {
+              results.errors.push({
+                row: rowNumber,
+                errors: ['Não há mais localizações de armazenamento disponíveis para incremento automático'],
+                data: { participantId: participantIdStr }
+              });
+              continue;
+            }
+          } else if (!sampleData.storageLocation && !autoIncrement && startBoxId) {
+            const { ObjectId } = require('mongodb');
+            const boxesCollection = db.collection('storageBoxes');
+            const startBoxObjectId = ObjectId.isValid(String(startBoxId)) ? new ObjectId(String(startBoxId)) : null;
+            const startBox = startBoxObjectId ? await boxesCollection.findOne({ _id: startBoxObjectId }) : null;
+            const position = startBox ? this.findFirstAvailablePositionInBox(startBox) : null;
+            if (startBox && position) {
+              sampleData.storageLocation = { boxId: startBox._id, position };
+            }
           }
 
           // Gera código de barras automaticamente se não fornecido
@@ -929,6 +1012,31 @@ class ImportLGPDService {
           // Insere no banco
           const insertResult = await samplesCollection.insertOne(sample);
           results.importedSampleIds.push(insertResult.insertedId);
+
+          // #459: dict-02 StorageAssignment (ELM-0167-0178) — open the
+          // placement-history record for the specimen's stay at
+          // boxId/positionCode, same convention #461/#462 use
+          // (equipmentId = the FREEZER StorageContainer's _id).
+          if (sample.storageLocation?.boxId) {
+            const StorageAssignmentModel = require('../models/StorageAssignment');
+            const storageBoxesCollection = db.collection('storageBoxes');
+            const assignedBox = await storageBoxesCollection.findOne({ _id: sample.storageLocation.boxId });
+            const { rack, shelf, freezer } = assignedBox
+              ? await this.resolveStorageHierarchyForBox(db, assignedBox)
+              : {};
+            if (freezer) {
+              const storageAssignmentsCollection = db.collection('storageAssignments');
+              await storageAssignmentsCollection.insertOne(StorageAssignmentModel.open({
+                specimenId: insertResult.insertedId,
+                boxId: sample.storageLocation.boxId,
+                positionCode: sample.storageLocation.position,
+                equipmentId: freezer._id,
+                shelfId: shelf?._id || null,
+                rackId: rack?._id || null,
+                placedAt: sample.registeredAt
+              }));
+            }
+          }
 
           const hasMissingEthicsOrSprec = !sampleData.consentTemplateId
             || !sampleData.sprec
@@ -1266,7 +1374,12 @@ class ImportLGPDService {
       },
       externalQualityAssessment: externalQualityAssessment,
       releaseStatus: releaseStatus,
-      locationID: row.locationID || row.locationId ? parseInt(row.locationID || row.locationId) : null,
+      // #459: CSV rows carry the canonical boxId/positionCode pair directly —
+      // no compatibility field for the legacy numeric locationID, matching
+      // #462's createSample input-contract change (`no legacy field aliases
+      // in runtime persistence`, canonical-data-cleanup.md rule 2).
+      boxId: row.boxId || row.boxID || null,
+      positionCode: row.positionCode || row.position || row.wellPosition || null,
       linkedProject: row.linkedProject?.trim() || null,
       specimenStatus: SampleModel.mapLegacyLifecycleStatusToSpecimenStatus(row.specimenStatus?.trim() || row.lifecycleStatus?.trim()),
       consentTemplateId: tcleId ? String(tcleId).trim() : null,

@@ -317,63 +317,125 @@ describe('ImportLGPDService.importSamples', () => {
     expect(samplesCollection.updateOne).not.toHaveBeenCalled();
   });
 
-  describe('locationID auto-assignment', () => {
-    function makeDbWithLocations() {
-      const base = makeDb();
-      const locations = [
-        { locationID: 'L1', block: 1, rack: 1, drawer: 1, box: 1 },
-        { locationID: 'L2', block: 1, rack: 1, drawer: 1, box: 2 },
+  // #459: replaces the legacy `locations`-collection scan with a
+  // FREEZER->SHELF->RACK->StorageBox chain, same hierarchy the #461
+  // backfill script materializes and #462/#463/#464 already walk.
+  describe('boxId auto-assignment (#459)', () => {
+    const { ObjectId } = require('mongodb');
+
+    function makeStorageChain(boxCount = 2) {
+      const freezerId = new ObjectId();
+      const shelfId = new ObjectId();
+      const rackId = new ObjectId();
+      const containers = [
+        { _id: freezerId, containerType: 'FREEZER', containerID: 42, parent_id: null },
+        { _id: shelfId, containerType: 'SHELF', parent_id: freezerId },
+        { _id: rackId, containerType: 'RACK', parent_id: shelfId },
       ];
-      base.collections = { ...base.db.collection };
+      const boxes = Array.from({ length: boxCount }, (_, i) => ({
+        _id: new ObjectId(),
+        name: `B${i + 1}`,
+        boxID: i + 1,
+        parent_id: rackId,
+        dimension: { rows: 1, cols: 1 },
+        occupancyGrid: {},
+        currentOccupancy: 0,
+        status: 'ACTIVE',
+      }));
+      return { freezerId, shelfId, rackId, containers, boxes };
+    }
+
+    function makeDbWithStorageChain(chain) {
+      const base = makeDb();
       const originalCollection = base.db.collection;
+      const storageContainersCollection = {
+        findOne: vi.fn(async ({ _id }) => chain.containers.find((c) => String(c._id) === String(_id)) || null),
+      };
+      const storageBoxesCollection = {
+        find: vi.fn(() => ({
+          sort: () => ({ toArray: async () => [...chain.boxes] }),
+        })),
+        findOne: vi.fn(async ({ _id }) => chain.boxes.find((b) => String(b._id) === String(_id)) || null),
+      };
+      const storageAssignments = [];
+      const storageAssignmentsCollection = {
+        insertOne: vi.fn(async (doc) => {
+          storageAssignments.push(doc);
+          return { insertedId: new ObjectId() };
+        }),
+      };
       base.db.collection = vi.fn((name) => {
-        if (name === 'locations') {
-          return {
-            findOne: vi.fn(async (query) => locations.find((loc) => loc.locationID === query.locationID) || null),
-            find: vi.fn(() => ({ toArray: async () => locations })),
-          };
-        }
+        if (name === 'storageContainers') return storageContainersCollection;
+        if (name === 'storageBoxes') return storageBoxesCollection;
+        if (name === 'storageAssignments') return storageAssignmentsCollection;
         return originalCollection(name);
       });
+      base.storageAssignments = storageAssignments;
       return base;
     }
 
-    it('assigns the next available location when autoIncrement is on and the row has no locationID', async () => {
-      const { db, samplesCollection } = makeDbWithLocations();
+    it('assigns the next available box when autoIncrement is on and the row has no boxId', async () => {
+      const chain = makeStorageChain(2);
+      const { db, samplesCollection, storageAssignments } = makeDbWithStorageChain(chain);
       vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW]);
 
       const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' }, {
         autoIncrement: true,
-        startLocationID: 'L1',
+        startBoxId: String(chain.boxes[0]._id),
       });
 
       expect(result.success).toBe(1);
       expect(samplesCollection.insertOne).toHaveBeenCalledTimes(1);
+      const inserted = samplesCollection.insertOne.mock.calls[0][0];
+      expect(String(inserted.storageLocation.boxId)).toBe(String(chain.boxes[0]._id));
+      expect(inserted.storageLocation.position).toBe('A1');
+      expect(storageAssignments).toHaveLength(1);
     });
 
-    it('records a per-row error when autoIncrement is on but no more locations are available', async () => {
-      const { db, samplesCollection } = makeDbWithLocations();
+    it('records a per-row error when autoIncrement is on but no more boxes are available', async () => {
+      const chain = makeStorageChain(2);
+      const { db } = makeDbWithStorageChain(chain);
       vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW, { ...VALID_ROW }, { ...VALID_ROW }]);
 
       const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' }, {
         autoIncrement: true,
-        startLocationID: 'L1',
+        startBoxId: String(chain.boxes[0]._id),
       });
 
-      expect(result.errors.some((e) => e.errors[0].includes('Não há mais localizações disponíveis'))).toBe(true);
+      expect(result.errors.some((e) => e.errors[0].includes('Não há mais localizações de armazenamento disponíveis'))).toBe(true);
     });
 
-    it('assigns startLocationID directly to every row without one when autoIncrement is off', async () => {
-      const { db, samplesCollection } = makeDbWithLocations();
+    it('assigns startBoxId directly to every row without one when autoIncrement is off', async () => {
+      const chain = makeStorageChain(2);
+      const { db, samplesCollection } = makeDbWithStorageChain(chain);
       vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW]);
 
       const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' }, {
         autoIncrement: false,
-        startLocationID: 'L1',
+        startBoxId: String(chain.boxes[0]._id),
       });
 
       expect(result.success).toBe(1);
       expect(samplesCollection.insertOne).toHaveBeenCalledTimes(1);
+      const inserted = samplesCollection.insertOne.mock.calls[0][0];
+      expect(String(inserted.storageLocation.boxId)).toBe(String(chain.boxes[0]._id));
+    });
+
+    it('resolves a CSV-provided boxId directly, without consulting startBoxId/autoIncrement', async () => {
+      const chain = makeStorageChain(2);
+      const { db, samplesCollection } = makeDbWithStorageChain(chain);
+      vi.spyOn(service, 'readFile').mockResolvedValue([
+        { ...VALID_ROW, boxId: String(chain.boxes[1]._id), positionCode: 'A1' },
+      ]);
+
+      const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' }, {
+        autoIncrement: true,
+        startBoxId: String(chain.boxes[0]._id),
+      });
+
+      expect(result.success).toBe(1);
+      const inserted = samplesCollection.insertOne.mock.calls[0][0];
+      expect(String(inserted.storageLocation.boxId)).toBe(String(chain.boxes[1]._id));
     });
   });
 
@@ -398,70 +460,95 @@ describe('ImportLGPDService.importSamples', () => {
   });
 });
 
-describe('ImportLGPDService.getNextAvailableLocation', () => {
-  function makeLocationsDb(locations) {
+describe('ImportLGPDService.getNextAvailableStorageSlot (#459)', () => {
+  const { ObjectId } = require('mongodb');
+
+  function makeStorageDb({ freezerId = new ObjectId(), boxes = [] } = {}) {
+    const shelfId = new ObjectId();
+    const rackId = new ObjectId();
+    const containers = [
+      { _id: freezerId, containerType: 'FREEZER', containerID: 42, parent_id: null },
+      { _id: shelfId, containerType: 'SHELF', parent_id: freezerId },
+      { _id: rackId, containerType: 'RACK', parent_id: shelfId },
+    ];
+    const chainedBoxes = boxes.map((box) => ({ parent_id: rackId, ...box }));
+    const db = {
+      collection: vi.fn((name) => {
+        if (name === 'storageContainers') {
+          return { findOne: vi.fn(async ({ _id }) => containers.find((c) => String(c._id) === String(_id)) || null) };
+        }
+        if (name === 'storageBoxes') {
+          return {
+            find: vi.fn(() => ({ sort: () => ({ toArray: async () => [...chainedBoxes] }) })),
+          };
+        }
+        throw new Error(`unexpected collection requested: ${name}`);
+      }),
+    };
+    return { db, rackId, shelfId, freezerId, boxes: chainedBoxes };
+  }
+
+  function box(overrides = {}) {
     return {
-      collection: vi.fn(() => ({
-        findOne: vi.fn(async (query) => locations.find((loc) => loc.locationID === query.locationID) || null),
-        find: vi.fn(() => ({ toArray: async () => locations })),
-      })),
+      _id: new ObjectId(),
+      name: 'B1',
+      dimension: { rows: 1, cols: 1 },
+      occupancyGrid: {},
+      currentOccupancy: 0,
+      status: 'ACTIVE',
+      ...overrides,
     };
   }
 
-  it('returns null when the start location does not exist', async () => {
-    const db = makeLocationsDb([]);
-    const result = await service.getNextAvailableLocation(db, 'L1', 1);
+  it('returns null when the start box does not exist', async () => {
+    const { db } = makeStorageDb({ boxes: [] });
+    const result = await service.getNextAvailableStorageSlot(db, String(new ObjectId()), 1);
     expect(result).toBeNull();
   });
 
-  it('returns the location N steps after the start location, sorted by block/rack/drawer/box', async () => {
-    const db = makeLocationsDb([
-      { locationID: 'L1', block: 1, rack: 1, drawer: 1, box: 1 },
-      { locationID: 'L2', block: 1, rack: 1, drawer: 1, box: 2 },
-      { locationID: 'L3', block: 1, rack: 1, drawer: 1, box: 3 },
-    ]);
-
-    const result = await service.getNextAvailableLocation(db, 'L1', 1);
-    expect(result).toBe('L2');
+  it('returns null when startBoxId is not a valid ObjectId', async () => {
+    const { db } = makeStorageDb({ boxes: [box()] });
+    const result = await service.getNextAvailableStorageSlot(db, 'not-an-object-id', 0);
+    expect(result).toBeNull();
   });
 
-  it('breaks block/rack/drawer ties by the next field down the sort (exercises every comparator branch)', async () => {
-    // All four fields differ pairwise so each `if (a.X !== b.X)` comparator
-    // branch actually returns instead of falling through to the next field.
-    const db = makeLocationsDb([
-      { locationID: 'L1', block: 1, rack: 2, drawer: 1, box: 1 },
-      { locationID: 'L2', block: 2, rack: 1, drawer: 1, box: 1 },
-      { locationID: 'L3', block: 2, rack: 2, drawer: 1, box: 1 },
-      { locationID: 'L4', block: 2, rack: 2, drawer: 2, box: 1 },
-    ]);
+  it('returns the box N steps after the start box, sorted by name/boxID/_id', async () => {
+    const b1 = box({ name: 'B1' });
+    const b2 = box({ name: 'B2' });
+    const b3 = box({ name: 'B3' });
+    const { db } = makeStorageDb({ boxes: [b1, b2, b3] });
 
-    // Sorted by block asc, then rack asc, then drawer asc, then box asc:
-    // L1 (block 1) < L2 (block 2, rack 1) < L3 (block 2, rack 2, drawer 1) < L4.
-    const result = await service.getNextAvailableLocation(db, 'L1', 1);
-    expect(result).toBe('L2');
-    const result2 = await service.getNextAvailableLocation(db, 'L2', 1);
-    expect(result2).toBe('L3');
-    const result3 = await service.getNextAvailableLocation(db, 'L3', 1);
-    expect(result3).toBe('L4');
+    const result = await service.getNextAvailableStorageSlot(db, String(b1._id), 1);
+    expect(String(result.boxId)).toBe(String(b2._id));
+    expect(result.position).toBe('A1');
   });
 
-  it('returns null when the requested offset runs past the end of the sorted list', async () => {
-    const db = makeLocationsDb([
-      { locationID: 'L1', block: 1, rack: 1, drawer: 1, box: 1 },
-    ]);
+  it('skips full/retired boxes when advancing the sequence', async () => {
+    const b1 = box({ name: 'B1' });
+    const bFull = box({ name: 'B2', status: 'FULL' });
+    const b3 = box({ name: 'B3' });
+    const { db } = makeStorageDb({ boxes: [b1, bFull, b3] });
 
-    const result = await service.getNextAvailableLocation(db, 'L1', 5);
+    const result = await service.getNextAvailableStorageSlot(db, String(b1._id), 1);
+    expect(String(result.boxId)).toBe(String(b3._id));
+  });
+
+  it('returns null when the requested offset runs past the end of the available-box sequence', async () => {
+    const b1 = box({ name: 'B1' });
+    const { db } = makeStorageDb({ boxes: [b1] });
+
+    const result = await service.getNextAvailableStorageSlot(db, String(b1._id), 5);
     expect(result).toBeNull();
   });
 
   it('returns null (and logs) instead of throwing when the query rejects', async () => {
     const db = {
       collection: vi.fn(() => ({
-        findOne: vi.fn().mockRejectedValue(new Error('mongo down')),
+        find: vi.fn(() => { throw new Error('mongo down'); }),
       })),
     };
 
-    const result = await service.getNextAvailableLocation(db, 'L1', 1);
+    const result = await service.getNextAvailableStorageSlot(db, String(new ObjectId()), 1);
     expect(result).toBeNull();
   });
 });
