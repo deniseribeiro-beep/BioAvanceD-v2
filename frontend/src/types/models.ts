@@ -151,6 +151,42 @@ export interface RcsEvaluation {
   calculation_trace: Record<string, any>;
 }
 
+// Campo embutido em Sample, gravado por AllocateSampleUseCase/MoveSampleUseCase/
+// ReleaseSampleUseCase (só boxId/position são garantidos; boxName/locationID/readable
+// dependem de qual caminho de escrita alocou a amostra). Não carrega freezer/shelf/rack
+// nem path — para isso, use SampleStorageLocationDTO via GET /storage/sample/:sampleId.
+export interface SampleEmbeddedStorageLocation {
+  boxId?: string | null;
+  boxName?: string | null;
+  position?: string | null;
+  locationID?: number | null;
+  readable?: string | null;
+  path?: string | null;
+}
+
+// Resposta de GET /storage/sample/:sampleId (GetSampleStorageLocationUseCase /
+// MongoStorageRepository.getSampleStorageLocation). `path` é a hierarquia legível
+// separada por "/" (ex: "FREEZER_01/SHELF_1/RACK_A/BOX_01"); fullHierarchy carrega
+// apenas IDs, não nomes.
+export interface SampleStorageLocationDTO {
+  specimenId: string;
+  barcode?: string | null;
+  box: {
+    boxId: string;
+    boxName: string | null;
+    position: string | null;
+  };
+  locationID?: number | null;
+  readable?: string | null;
+  path: string;
+  fullHierarchy: {
+    freezerId: string;
+    shelfId: string;
+    rackId: string;
+    boxId: string;
+  } | null;
+}
+
 export interface Sample {
   _id?: string; // MongoDB ID
   participantId: string;
@@ -234,18 +270,7 @@ export interface Sample {
   withdrawalType?: 'Parcial' | 'Total';
   withdrawalResponsible?: string;
   sampleDestination?: string;
-  storageLocation?: {
-    freezerId?: string | null;
-    freezerName?: string | null;
-    shelfId?: string | null;
-    shelfName?: string | null;
-    rackId?: string | null;
-    rackName?: string | null;
-    boxId?: string | null;
-    boxName?: string | null;
-    position?: string | null;
-    path?: string | null;
-  } | null;
+  storageLocation?: SampleEmbeddedStorageLocation | null;
   // Soft delete fields
   deleted?: boolean;
   deletedAt?: Date | string;

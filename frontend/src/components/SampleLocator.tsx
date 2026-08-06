@@ -1,28 +1,15 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Search, MapPin, AlertCircle, Loader, QrCode } from 'lucide-react';
 import { storageApi } from '../services/storageApi';
+import type { SampleStorageLocationDTO } from '../types/models';
 import './SampleLocator.css';
-
-interface SampleLocation {
-  sampleID: string;
-  barcode: string;
-  storageLocation: {
-    freezerName: string;
-    shelfName: string;
-    rackName: string;
-    boxName: string;
-    boxID: number;
-    position: string;
-    dimension: { rows: number; cols: number };
-  };
-}
 
 interface SampleLocatorProps {}
 
 export const SampleLocator: React.FC<SampleLocatorProps> = () => {
   const [searchInput, setSearchInput] = useState('');
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<SampleLocation | null>(null);
+  const [result, setResult] = useState<SampleStorageLocationDTO | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [releasing, setReleasing] = useState(false);
   const [scanMode, setScanMode] = useState(false);
@@ -47,7 +34,7 @@ export const SampleLocator: React.FC<SampleLocatorProps> = () => {
     try {
       const response = await storageApi.getSampleLocation(searchInput);
       if (response.success && response.data) {
-        setResult(response.data as SampleLocation);
+        setResult(response.data as SampleStorageLocationDTO);
       } else {
         setError(`Amostra "${searchInput}" não encontrada no banco de dados.`);
       }
@@ -77,7 +64,7 @@ export const SampleLocator: React.FC<SampleLocatorProps> = () => {
     setError(null);
 
     try {
-      const response = await storageApi.releaseSample(result.sampleID);
+      const response = await storageApi.releaseSample(result.specimenId);
       if (response.success) {
         setResult(null);
         setSearchInput('');
@@ -175,7 +162,7 @@ export const SampleLocator: React.FC<SampleLocatorProps> = () => {
           <div className="result-content" data-testid="sample-locator-result-content">
             <div className="info-row">
               <span className="label">ID</span>
-              <code>{result.sampleID}</code>
+              <code>{result.specimenId}</code>
             </div>
             <div className="info-row">
               <span className="label">Barcode</span>
@@ -185,29 +172,22 @@ export const SampleLocator: React.FC<SampleLocatorProps> = () => {
             <div className="hierarchy-section">
               <h5>Hierarquia</h5>
               <div className="hierarchy-badges">
-                <span className="badge freezer-badge">{result.storageLocation.freezerName}</span>
-                <span className="hierarchy-arrow">→</span>
-                <span className="badge shelf-badge">{result.storageLocation.shelfName}</span>
-                <span className="hierarchy-arrow">→</span>
-                <span className="badge rack-badge">{result.storageLocation.rackName}</span>
-                <span className="hierarchy-arrow">→</span>
-                <span className="badge box-badge">{result.storageLocation.boxName}</span>
+                {result.path.split('/').filter(Boolean).map((segment, index) => (
+                  <React.Fragment key={`${segment}-${index}`}>
+                    {index > 0 && <span className="hierarchy-arrow">→</span>}
+                    <span className="badge">{segment}</span>
+                  </React.Fragment>
+                ))}
               </div>
             </div>
 
             <div className="info-row">
               <span className="label">Caixa</span>
-              <code>#{result.storageLocation.boxID}</code>
-            </div>
-            <div className="info-row">
-              <span className="label">Grade</span>
-              <code>
-                {result.storageLocation.dimension.rows}x{result.storageLocation.dimension.cols}
-              </code>
+              <code>{result.box.boxName || result.box.boxId}</code>
             </div>
             <div className="info-row highlight">
               <span className="label">Posição</span>
-              <span className="position-badge">{result.storageLocation.position}</span>
+              <span className="position-badge">{result.box.position}</span>
             </div>
           </div>
 

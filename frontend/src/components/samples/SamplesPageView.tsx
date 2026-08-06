@@ -8,7 +8,7 @@ import Modal from '../UI/Modal';
 import Table from '../UI/Table';
 import SampleStatusBadge from '../SampleStatusBadge';
 import InlineStorageMovementPanel from './InlineStorageMovementPanel';
-import type { Sample } from '../../types/models';
+import type { Sample, SampleEmbeddedStorageLocation } from '../../types/models';
 import type { SampleWithId } from '../../hooks/samples/useSamplesPage';
 
 type TranslatorFn = (key: string, fallback?: string) => string;
@@ -66,17 +66,12 @@ function computeVolume(sample: Sample) {
 }
 
 function getStorageLabel(sample: SampleWithId, t: TranslatorFn) {
-  const storageLocation = (sample as any).storageLocation;
-  const freezerName = storageLocation?.freezerName ? String(storageLocation.freezerName) : '';
-  const shelfName = storageLocation?.shelfName ? String(storageLocation.shelfName) : '';
-  const rackName = storageLocation?.rackName ? String(storageLocation.rackName) : '';
+  const storageLocation: SampleEmbeddedStorageLocation | null | undefined = sample.storageLocation;
   const boxName = storageLocation?.boxName ? String(storageLocation.boxName) : '';
   const position = storageLocation?.position ? String(storageLocation.position) : '';
   const path = storageLocation?.path ? String(storageLocation.path) : '';
 
-  const hierarchy = [freezerName, shelfName, rackName, boxName].filter(Boolean).join(' > ');
-
-  if (!hierarchy && !position) {
+  if (!boxName && !path && !position) {
     return t('samples.storage.awaiting', 'Aguardando Armazenagem');
   }
 
@@ -84,8 +79,8 @@ function getStorageLabel(sample: SampleWithId, t: TranslatorFn) {
     return position ? `${path} / ${t('samples.storage.position', 'Posição')} ${position}` : path;
   }
 
-  if (hierarchy) {
-    return position ? `${hierarchy} / ${t('samples.storage.position', 'Posição')} ${position}` : hierarchy;
+  if (boxName) {
+    return position ? `${boxName} / ${t('samples.storage.position', 'Posição')} ${position}` : boxName;
   }
 
   if (position) {
