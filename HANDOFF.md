@@ -1,118 +1,98 @@
 # HANDOFF
 
 **Written:** 2026-08-06, end of session on `feature/docker-e2e-backend-integration`,
-after picking up #477.
+after picking up #478.
 
 ## What happened this session
 
-Dennis said "Pick #477." Routed via `work-issue` -> `resolve-issue`
-(refactor/migration item, extending #450's split, same shape as the
-last two sessions' #473/#474).
+Dennis said "Pick #478." Routed via `work-issue` -> `resolve-issue`
+(frontend refactor item, last piece of #450's split besides #475/#476).
 
 **Landed (merged to `feature/docker-e2e-backend-integration`, pushed,
-commit `abcc5d8a`):**
+commit `18918785`):**
 
-- `import-lgpd.service.js`'s `importSamples()` no longer writes
-  `storageLocation` directly onto the create doc or manually opens a
-  `StorageAssignment` record. The sample is inserted unallocated, then
-  `AllocateSampleUseCase.execute()` performs the atomic occupancyGrid
-  write, `storageLocation` update, `StorageAssignment` record, and
-  audit/lineage trail — same use case `sample.service.js`'s
-  `createSample` already reuses (#474). Since this import loop is
-  already per-row, no batched use-case was needed — the issue's own
-  "existing use-cases may not fit" concern didn't materialize. The
-  existing 3-branch candidate-location logic (CSV-provided `boxId`,
-  auto-increment across boxes, fixed `startBoxId`) is unchanged for
-  *picking* a candidate position, but it's no longer written straight
-  onto the box.
-- **Found and fixed a real latent bug** while doing this: the old code
-  never persisted the chosen candidate onto the box's `occupancyGrid`
-  (only the `StorageAssignment` record was written), so a *fixed*
-  (non-auto-increment) target box silently double-booked its first free
-  position across every row in the same import. `AllocateSampleUseCase`'s
-  atomic occupancyGrid write fixes this as a byproduct. Fixed inline
-  per the "bugs blocking the issue's own acceptance criteria" exception
-  in `resolve-issue` — this was the exact class of bug #477 was
-  reworking the write path to prevent.
-- Controller (`import-lgpd.controller.js`) and worker
-  (`sample-worker.js`) both updated to pass `neo4jDriver`/`actor`
-  options through, mirroring `sample.routes.js`'s pattern from #474.
-- #477's own text raised a possible `locationID`/`locationId`
-  field-name mismatch in `import.service.js`. Investigated and it's
-  **not a bug**: `import.service.js` writes `locationID` (capital ID)
-  via the raw MongoDB driver, consistent with the app-wide convention
-  for this legacy numeric field (`label.routes.js` reads it,
-  `location-storage-backfill.service.js`'s #461 backfill queries it,
-  `sample.service.js` deletes it on cleanup). The actual outlier is
-  `Sample.js`'s Mongoose schema field `locationId` (lowercase d),
-  which appears unused for writes anywhere — a separate, non-blocking
-  housekeeping question, not this write path. Documented inline in
-  `import.service.js` so the next audit doesn't re-flag it.
-  `import.service.js` has no `storageLocation` writes at all (it never
-  had a box-based storage path), so its own migration scope ended
-  there.
-- Closed **#477** with a comment summarizing the above.
-- Filed **#483**: while wiring `neo4jDriver`/`actor` through, found the
-  BullMQ worker path (`sample-worker.js`/`import-worker.js`) has no
-  Neo4j driver connection anywhere in that process and never threads
-  `job.data.userID` into the options passed to `sampleWorker.process`.
-  So it's the first real caller of `AllocateSampleUseCase` that always
-  fails open on lineage recording and can't attribute an audit-trail
-  actor. Pre-existing gap (the old direct-write code never touched
-  lineage/audit machinery from this path at all), just made concrete by
-  this migration — not blocking, filed rather than fixed inline since
-  it needs a design call (wire a driver + actor into the worker, or
-  document worker imports as lineage/actor-exempt by design).
-- Tests: rewrote `import-lgpd.service.importSamples.unit.test.js`'s
-  storage-chain harness to match `AllocateSampleUseCase`'s real write
-  path — added `client.startSession`/`withTransaction`, a stateful
-  `samples._id` lookup (for the use case's post-insert
-  `findSampleById`), a `storageBoxes.updateOne` that actually mutates
-  `occupancyGrid` (so a genuine collision test would be possible), and
-  `storagePaths`/`sample_movements`/`counters` collections
-  (`MongoStorageRepository`/`MongoAuditRepository` dependencies). All
-  32 tests in that file pass, plus the full import-lgpd
-  controller/service suite (177 tests total) and `import-worker.test.js`
-  (19 tests) green.
+- Added two exported types to `frontend/src/types/models.ts`:
+  `SampleStorageLocationDTO` (the real shape `GET
+  /storage/sample/:sampleId` returns via `GetSampleStorageLocationUseCase`
+  / `MongoStorageRepository.getSampleStorageLocation` —
+  `{specimenId, barcode, box:{boxId,boxName,position}, locationID,
+  readable, path, fullHierarchy}`) and `SampleEmbeddedStorageLocation`
+  (the lighter field `AllocateSampleUseCase`/`MoveSampleUseCase`/
+  `ReleaseSampleUseCase` write directly onto `Sample.storageLocation` —
+  only `boxId`/`position` guaranteed, no freezer/shelf/rack names, no
+  `path`).
+- **Found and fixed a real bug** while doing this:
+  `frontend/src/components/SampleLocator.tsx` read
+  `result.storageLocation.{freezerName,shelfName,rackName,boxID,dimension}`
+  — a shape the backend endpoint it calls has never returned. The real
+  response has no top-level `storageLocation` key at all (it's `box`,
+  `path`, `fullHierarchy`), so every successful search threw a
+  `TypeError` reading properties off `undefined`. Fixed inline per
+  resolve-issue's "bugs blocking the issue's own acceptance criteria"
+  exception — this was exactly the class of drift #478 exists to close.
+  Hierarchy display now derives from the DTO's `path` string
+  (`"FREEZER_01/SHELF_1/RACK_A/BOX_01"`, split on `/`); dropped the
+  "Grade" (box dimension) row since the endpoint doesn't return
+  dimensions and adding a second request for it was out of scope.
+- Retyped `frontend/src/components/samples/SamplesPageView.tsx`'s
+  `getStorageLabel` against `SampleEmbeddedStorageLocation` instead of
+  an `any` cast, dropping the `freezerName`/`shelfName`/`rackName` reads
+  that never populated at runtime (no behavior change — those were
+  always empty strings; `path`/`boxName`/`position` fallback chain
+  unchanged).
+- Audited the two follow-ups #478 flagged as "not yet audited in
+  detail": `frontend/src/views/FacilityManagementPage.tsx` has no
+  `storageLocation` reference at all (grep false positive in the
+  original issue). `frontend/src/components/v2/intake/ClinicalIntakeWizard.jsx`
+  already reads `.readable`/`.position`, which matches the real DTO —
+  no change needed for either, recorded in the close comment.
+  `frontend/src/views/SampleDetailsPage.tsx`'s `locationID` reads
+  (flagged in #478's body) are a separate legacy locations lookup
+  (block/rack/drawer/box/well fields), not this box-based storage
+  system — also out of scope, also recorded in the close comment.
+- Closed **#478** with a comment summarizing the above.
+- Verification: `npx tsc --noEmit -p .` (frontend) clean before and
+  after the merge. No existing unit tests reference `SampleLocator.tsx`
+  or `SamplesPageView.tsx` (frontend unit-test coverage here is sparse —
+  only one `.test.jsx` file in the whole tree); relied on the typecheck
+  catching the shape mismatches plus manual code reading against the
+  actual backend response, not a new test file, given the scope.
 
-Ran `wrap-up` at the end: filed #483 for the worker-path lineage/actor
-gap surfaced above (see "Which skills to use" below); no other friction
-beyond what's already folded into the close comment and this note.
+No `wrap-up` friction beyond what's already folded into the close
+comment and this note — branch `fix/478-frontend-storage-location-dto`
+was local-only (created and merged same session), so its deletion after
+merge didn't need a remote push.
 
 ## Repo state
 
 - **`feature/docker-e2e-backend-integration`**: clean, pushed through
-  `abcc5d8a` (this session's #477 migration, fast-forward merge from
-  `fix/477-bulk-import-storage-allocation`, not yet deleted — safe to
-  delete, same as prior sessions' issue branches once confirmed).
+  `18918785` (this session's #478 fix, fast-forward merge from
+  `fix/478-frontend-storage-location-dto`, already deleted locally —
+  never pushed to remote).
 - **`fix/450-storageservice-repository-migration`**: still merged,
-  still not deleted — carried forward again from prior sessions, still
-  safe to delete.
-- Issues this session: **#477 closed** (this session's work). **#483
-  opened** (worker-path lineage/actor gap, needs a design call, not
-  blocking). **#450** still open (tracking issue for the 6-piece
-  split; #473/#474/#477 now done — 3 remain: #475, #476, #478).
+  still not deleted — carried forward again, still safe to delete.
+- Issues this session: **#478 closed** (this session's work). No new
+  issues filed. **#450** still open (tracking issue for the 6-piece
+  split; #473/#474/#477/#478 now done — 2 remain: #475, #476).
 - Backlog otherwise unchanged from last handoff except as noted:
-  - **#478** — depends on #473/#474, both done, so unblocked for
-    pickup (same status as last handoff).
-  - **#475** — independent, was already unblocked (`label.routes.js`'s
-    helper can migrate to `GetSampleStorageLocationUseCase`).
-  - **#476** — needs Dennis's actual design call (quarantine =
+  - **#475** — independent, unblocked (`label.routes.js`'s helper can
+    migrate to `GetSampleStorageLocationUseCase`). Now the only
+    #450-split item with no open design question.
+  - **#476** — still needs Dennis's actual design call (quarantine =
     storage-position vs. separate state), not resolvable from docs
     alone per prior session's read.
   - **#482** — `allocate-sample.controller.js` sampleId/specimenId
-    mismatch (filed last session on #474's work), still open, still
-    low urgency.
-  - **#483** (new) — worker-path lineage/actor gap, needs a design
-    call, low urgency (not on the main controller-driven import path).
+    mismatch (filed on #474's work), still open, still low urgency.
+  - **#483** — worker-path lineage/actor gap (filed on #477's work),
+    still open, needs a design call, low urgency.
   - **#479, #480, #481** — filed on #473's work, still open, still
     lower-priority.
   - **#451** (status consolidation + custody/storage entity design
     question) — still open, still a real design question.
   - **#454** — depends on #450/#452/#453 (#452/#453 done, #450 open,
     itself a multi-issue tracking chain).
-  - **#390** — still blocked (#460 remains; #450's split still has 3
-    issues left before it can close).
+  - **#390** — still blocked (#460 remains; #450's split now has only
+    2 issues left before it can close).
   - Older backlog: `#371`/`#373`/`#374`/`#378`/`#379`, `user.accessType`
     grep sweep (still not done), `test/440-retention-policy-model` and
     `test/441-retention-sweep-job` branches (merged, still not deleted),
@@ -123,8 +103,9 @@ beyond what's already folded into the close comment and this note.
 
 ## Dev stack state
 
-Untouched this session — Docker was not in scope (native vitest runs
-only, per resolve-issue's default execution contract).
+Untouched this session — Docker was not in scope (native `tsc`
+typecheck only, per `resolve-issue`'s default execution contract; this
+was a frontend-only TypeScript change, nothing needing a live backend).
 
 ## Blocking next step
 
@@ -132,21 +113,20 @@ None.
 
 ## Recommended next steps
 
-None explicitly queued by Dennis beyond "pick #477" (done — migrated,
-tested, merged, closed, one follow-up filed). Candidates, in likely
+None explicitly queued by Dennis beyond "pick #478" (done — fixed,
+typechecked, merged, closed, no follow-ups filed). Candidates, in likely
 priority order:
 
-1. **#478** — now the only #450-split item left besides #475/#476,
-   unblocked since #473/#474 both landed.
-2. **#475** — independent, no blocker found per prior sessions' read.
-3. **#476** — needs Dennis's design call (quarantine state), worth
-   surfacing directly.
-4. **#479, #480, #481, #482, #483** — lower-priority follow-ups from
-   this and recent sessions, safe to defer.
-5. **#451** (status consolidation + custody/storage entity decision).
-6. **#454**, **#390** — unchanged from last handoff, downstream of the
-   #450 family.
-7. Older backlog: `#371`/`#373`/`#374`/`#378`/`#379`, `user.accessType`
+1. **#475** — now the only #450-split item left with no open design
+   question, unblocked since #473/#474 both landed.
+2. **#476** — needs Dennis's design call (quarantine state), worth
+   surfacing directly; the last #450-split item.
+3. **#479, #480, #481, #482, #483** — lower-priority follow-ups from
+   recent sessions, safe to defer.
+4. **#451** (status consolidation + custody/storage entity decision).
+5. **#454**, **#390** — unchanged from last handoff, downstream of the
+   #450 family; #390 now one #450-close away from just needing #460.
+6. Older backlog: `#371`/`#373`/`#374`/`#378`/`#379`, `user.accessType`
    grep sweep, `test/440-*`/`test/441-*` branch deletion,
    `fix/444-retention-period-iso8601` housekeeping, stray
    `api/backend/out.txt` (still not investigated, many sessions running
@@ -154,18 +134,26 @@ priority order:
 
 ## Which skills to use
 
-- Same pattern as #473/#474: an issue's own audit text is a claim to
-  verify against current code, not a settled fact. #477 cited a
-  `locationID`/`locationId` mismatch as likely worth fixing; a
-  cross-file grep showed the app-wide convention already agreed with
-  `import.service.js`'s write, and the real outlier was an unused
-  Mongoose schema field. Recorded the "confirmed correct, here's why"
-  finding inline in the file per `resolve-issue`'s case-3 guidance
-  (comment in place, not just this note) so the next audit doesn't
-  re-flag it.
-- Worth remembering for future storage/allocation migrations in this
-  family (#478 is the next such item): a direct-write path replaced by
-  `AllocateSampleUseCase` often turns up a real occupancyGrid-tracking
-  bug as a byproduct, because the old code frequently computed a
-  candidate position without ever persisting occupancy back to the box
-  document. Check for that pattern specifically when picking up #478.
+- Same "audit text is a claim to verify" pattern continues to pay off:
+  #478's own body flagged `FacilityManagementPage.tsx` and
+  `ClinicalIntakeWizard.jsx` as "not yet audited in detail" (broad grep
+  hits). Both turned out fine on inspection — one was a grep false
+  positive, the other already matched the real backend DTO. Recorded
+  as "confirmed, no change needed" in the close comment per
+  `resolve-issue`'s case 3, rather than silently skipping them.
+- Worth remembering for #475 (the next #450-split item): the pattern
+  from #477/#478 continues — a component/route that reads a storage
+  field directly instead of going through a use-case-backed DTO is
+  worth diffing against the *actual* runtime response shape, not just
+  the type it currently declares. #478's real bug (`SampleLocator.tsx`)
+  existed because the type declared alongside the broken code was never
+  checked against what the endpoint actually returns — a `.test.tsx`
+  or even a quick manual curl against a running backend would have
+  caught it earlier than a full typecheck pass did.
+- Frontend unit-test coverage in this repo is thin (one `.test.jsx`
+  file total, no tests for either component touched this session) — if
+  a future test-loop session is looking for frontend slices, this is a
+  real coverage gap worth flagging, though no issue was filed for it
+  this session (it didn't block #478, and filing a broad "frontend has
+  no unit tests" issue felt more like `test-loop`'s slice-picking job
+  than a fitting-out-of-scope-finding for a DTO-cleanup issue).
