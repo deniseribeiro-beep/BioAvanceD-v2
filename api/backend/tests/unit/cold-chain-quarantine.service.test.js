@@ -84,31 +84,55 @@ function buildDb(collections) {
   };
 }
 
+/**
+ * #464: seeds a FREEZER -> SHELF -> RACK -> StorageBox chain for a given
+ * equipment/containerID, the down-walk mirror of #462's up-walk fixture
+ * shape — returns the box `_id` so a test can put it on a sample's
+ * `storageLocation.boxId`.
+ */
+function seedStorageHierarchy(collections, containerID) {
+  const freezerId = new ObjectId();
+  const shelfId = new ObjectId();
+  const rackId = new ObjectId();
+  const boxId = new ObjectId();
+
+  collections.storageContainers = makeCollection([
+    ...(collections.storageContainers?.docs || []),
+    { _id: freezerId, containerID, containerType: 'FREEZER', parent_id: null },
+    { _id: shelfId, containerType: 'SHELF', parent_id: freezerId },
+    { _id: rackId, containerType: 'RACK', parent_id: shelfId },
+  ]);
+  collections.storageBoxes = makeCollection([
+    ...(collections.storageBoxes?.docs || []),
+    { _id: boxId, parent_id: rackId },
+  ]);
+
+  return { freezerId, shelfId, rackId, boxId };
+}
+
 describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
-  it('quarentena amostra vinculada por sensor -> locationID e registra movimento', async () => {
-    const sampleId = new ObjectId();
+  it('quarentena amostra vinculada por sensor -> storageLocation.boxId e registra movimento', async () => {
     const incidentId = new ObjectId();
     const collections = {
-      sensors: makeCollection([{ sensorId: 'sensor-cold-001', locationID: 501 }]),
+      sensors: makeCollection([{ sensorId: 'sensor-cold-001', locationID: 9001 }]),
       sensorMetadata: makeCollection([]),
-      equipment: makeCollection([{ equipmentID: 9001 }]),
-      locations: makeCollection([{ locationID: 501, equipmentID: 9001 }]),
-      samples: makeCollection([{
-        _id: sampleId,
-        sampleID: 'BIO-SAMPLE-001',
-        barcode: 'BC-COLD-001',
-        locationID: 501,
-        status: 'AVAILABLE',
-        currentStatus: 'Available',
-        release_status: 'AVAILABLE',
-        availabilityStatus: 'AVAILABLE',
-        quantity: 1,
-        unit: 'mL',
-      }]),
       sampleMovements: makeCollection([]),
       sample_movements: makeCollection([]),
       counters: makeCollection([]),
     };
+    const { boxId } = seedStorageHierarchy(collections, 9001);
+    collections.samples = makeCollection([{
+      _id: new ObjectId(),
+      sampleID: 'BIO-SAMPLE-001',
+      barcode: 'BC-COLD-001',
+      storageLocation: { boxId, position: 'A1' },
+      status: 'AVAILABLE',
+      currentStatus: 'Available',
+      release_status: 'AVAILABLE',
+      availabilityStatus: 'AVAILABLE',
+      quantity: 1,
+      unit: 'mL',
+    }]);
     const db = buildDb(collections);
 
     const result = await quarantineService.quarantineByColdChainIncident(db, {
@@ -124,7 +148,7 @@ describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
     expect(result.matched).toBe(1);
     expect(result.quarantined).toBe(1);
     expect(result.movements).toBe(1);
-    expect(result.locationIds).toContain(501);
+    expect(result.boxIds.map(String)).toContain(String(boxId));
 
     expect(collections.samples.updateOne).toHaveBeenCalledTimes(1);
     const update = collections.samples.updateOne.mock.calls[0][1].$set;
@@ -151,18 +175,28 @@ describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
     });
   });
 
-  it('encontra amostra por sensorMetadata -> equipment -> locations -> samples', async () => {
-    const equipmentId = new ObjectId();
+  it('encontra amostra por sensorMetadata -> equipment -> freezer -> box -> samples', async () => {
+    const equipmentObjectId = new ObjectId();
     const collections = {
       sensors: makeCollection([]),
-      sensorMetadata: makeCollection([{ sensorId: 'sensor-freezer-002', equipment: equipmentId }]),
-      equipment: makeCollection([{ _id: equipmentId, equipmentID: 9100 }]),
-      locations: makeCollection([{ equipmentID: 9100, locationID: 777 }]),
-      samples: makeCollection([{ _id: new ObjectId(), sampleID: 'BIO-SAMPLE-002', barcode: 'BC-COLD-002', locationID: 777, status: 'AVAILABLE', currentStatus: 'Available', release_status: 'AVAILABLE', quantity: 1, unit: 'mL' }]),
+      sensorMetadata: makeCollection([{ sensorId: 'sensor-freezer-002', equipment: equipmentObjectId }]),
+      equipment: makeCollection([{ _id: equipmentObjectId, equipmentID: 9100 }]),
       sampleMovements: makeCollection([]),
       sample_movements: makeCollection([]),
       counters: makeCollection([]),
     };
+    const { boxId } = seedStorageHierarchy(collections, 9100);
+    collections.samples = makeCollection([{
+      _id: new ObjectId(),
+      sampleID: 'BIO-SAMPLE-002',
+      barcode: 'BC-COLD-002',
+      storageLocation: { boxId, position: 'A1' },
+      status: 'AVAILABLE',
+      currentStatus: 'Available',
+      release_status: 'AVAILABLE',
+      quantity: 1,
+      unit: 'mL',
+    }]);
     const db = buildDb(collections);
 
     const result = await quarantineService.quarantineByColdChainIncident(db, {
@@ -173,7 +207,7 @@ describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
     });
 
     expect(result.triggered).toBe(true);
-    expect(result.locationIds).toContain(777);
+    expect(result.boxIds.map(String)).toContain(String(boxId));
     expect(result.matched).toBe(1);
     expect(result.quarantined).toBe(1);
     expect(collections.samples.updateOne).toHaveBeenCalledTimes(1);
@@ -238,7 +272,7 @@ describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
       sensors: makeCollection([{ sensorId: 'sensor-9', locationID: 42 }]),
     };
     const db = buildDb(collections);
-    const result = await quarantineService.findLocationIdsBySensorKey(db, undefined);
+    const result = await quarantineService.findBoxIdsBySensorKey(db, undefined);
     expect(result).toEqual([]);
 
     const byId = await quarantineService.quarantineByColdChainIncident(buildDb({
@@ -267,7 +301,6 @@ describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
     const collections = {
       sensors: makeCollection([]),
       sensorMetadata: makeCollection([]),
-      locations: makeCollection([]),
       samples: makeCollection([]),
     };
     const db = buildDb(collections);
@@ -280,7 +313,7 @@ describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
   });
 
   it('includes the temperature suffix in the reason when currentTemperature is defined', async () => {
-    const collections = { sensors: makeCollection([]), sensorMetadata: makeCollection([]), locations: makeCollection([]), samples: makeCollection([]) };
+    const collections = { sensors: makeCollection([]), sensorMetadata: makeCollection([]), samples: makeCollection([]) };
     const db = buildDb(collections);
     const result = await quarantineService.quarantineByColdChainIncident(db, {
       sensorKey: 'sensor-temp',
@@ -290,9 +323,9 @@ describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
     expect(result.reason).toContain('temperatura=8.2');
   });
 
-  it('findLocationIdsBySensorKey returns [] immediately for a blank/whitespace sensorKey', async () => {
+  it('findBoxIdsBySensorKey returns [] immediately for a blank/whitespace sensorKey', async () => {
     const db = buildDb({});
-    const result = await quarantineService.findLocationIdsBySensorKey(db, '   ');
+    const result = await quarantineService.findBoxIdsBySensorKey(db, '   ');
     expect(result).toEqual([]);
   });
 
@@ -301,11 +334,11 @@ describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
       sensors: makeCollection([]),
       sensorMetadata: makeCollection([{ sensorId: 'sensor-alias', equipmentId: '9200' }]),
       equipment: makeCollection([{ equipmentID: 9200 }]),
-      locations: makeCollection([{ equipmentID: 9200, locationID: 888 }]),
     };
+    const { boxId } = seedStorageHierarchy(collections, 9200);
     const db = buildDb(collections);
-    const result = await quarantineService.findLocationIdsBySensorKey(db, 'sensor-alias');
-    expect(result).toContain(888);
+    const result = await quarantineService.findBoxIdsBySensorKey(db, 'sensor-alias');
+    expect(result.map(String)).toContain(String(boxId));
   });
 
   it('markColdChainIncidentSamplesForReview short-circuits when neither incident._id nor a sensor key is present', async () => {
@@ -323,12 +356,11 @@ describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
     expect(result.reviewRequired).toBe(true);
   });
 
-  it('quarantineByColdChainIncident is a no-op (matched:0) when the sensor resolves no locations', async () => {
+  it('quarantineByColdChainIncident is a no-op (matched:0) when the sensor resolves no boxes', async () => {
     const collections = {
       sensors: makeCollection([]),
       sensorMetadata: makeCollection([]),
-      locations: makeCollection([]),
-      samples: makeCollection([{ _id: new ObjectId(), locationID: 999, status: 'AVAILABLE' }]),
+      samples: makeCollection([{ _id: new ObjectId(), storageLocation: { boxId: new ObjectId(), position: 'A1' }, status: 'AVAILABLE' }]),
     };
     const db = buildDb(collections);
     const result = await quarantineService.quarantineByColdChainIncident(db, {
@@ -341,7 +373,7 @@ describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
   });
 
   it('falls back to incident.sensorID (third field) when sensorKey and sensorId are both absent', async () => {
-    const collections = { sensors: makeCollection([]), sensorMetadata: makeCollection([]), locations: makeCollection([]), samples: makeCollection([]) };
+    const collections = { sensors: makeCollection([]), sensorMetadata: makeCollection([]), samples: makeCollection([]) };
     const db = buildDb(collections);
     const result = await quarantineService.quarantineByColdChainIncident(db, {
       sensorID: 'sensor-caps-id',
@@ -350,15 +382,14 @@ describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
     expect(result.sensorKey).toBe('sensor-caps-id');
   });
 
-  it('finds locations by equipment.id (bare id field) via findLocationIdsBySensorKey -> sensorMetadata -> equipment lookup', async () => {
+  it('finds boxes by equipment.id (bare id field) via findBoxIdsBySensorKey -> sensorMetadata -> equipment lookup', async () => {
     const collections = {
       sensors: makeCollection([]),
       sensorMetadata: makeCollection([{ sensorId: 'sensor-bareid', equipmentId: 'EQ-1' }]),
       equipment: makeCollection([{ id: 'EQ-1' }]),
-      locations: makeCollection([]),
     };
     const db = buildDb(collections);
-    const result = await quarantineService.findLocationIdsBySensorKey(db, 'sensor-bareid');
+    const result = await quarantineService.findBoxIdsBySensorKey(db, 'sensor-bareid');
     expect(result).toEqual([]);
     expect(collections.equipment.findOne).toHaveBeenCalled();
   });
@@ -368,10 +399,9 @@ describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
       sensors: makeCollection([]),
       sensorMetadata: makeCollection([{ sensorId: 'sensor-noref' }]),
       equipment: makeCollection([]),
-      locations: makeCollection([]),
     };
     const db = buildDb(collections);
-    const result = await quarantineService.findLocationIdsBySensorKey(db, 'sensor-noref');
+    const result = await quarantineService.findBoxIdsBySensorKey(db, 'sensor-noref');
     expect(result).toEqual([]);
   });
 
@@ -380,11 +410,11 @@ describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
     const collections = {
       sensors: makeCollection([{ _id: new ObjectId(objectIdSensorKey), locationID: 321 }]),
       sensorMetadata: makeCollection([]),
-      locations: makeCollection([]),
     };
+    const { boxId } = seedStorageHierarchy(collections, 321);
     const db = buildDb(collections);
-    const result = await quarantineService.findLocationIdsBySensorKey(db, objectIdSensorKey);
-    expect(result).toContain(321);
+    const result = await quarantineService.findBoxIdsBySensorKey(db, objectIdSensorKey);
+    expect(result.map(String)).toContain(String(boxId));
   });
 
   it('passes options.session through to the underlying find/findOne calls', async () => {
@@ -392,25 +422,23 @@ describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
     const collections = {
       sensors: makeCollection([]),
       sensorMetadata: makeCollection([]),
-      locations: makeCollection([]),
     };
     const db = buildDb(collections);
-    await quarantineService.findLocationIdsBySensorKey(db, 'sensor-session', { session });
+    await quarantineService.findBoxIdsBySensorKey(db, 'sensor-session', { session });
     expect(collections.sensors.find).toHaveBeenCalledWith(expect.anything(), { session });
   });
 
   it('quarantineByColdChainIncident propagates options.session down into quarantineSamplesByFilter\'s query/ledger calls', async () => {
     const session = { id: 'session-2' };
-    const sampleId = new ObjectId();
     const collections = {
       sensors: makeCollection([{ sensorId: 'sensor-session-2', locationID: 66 }]),
       sensorMetadata: makeCollection([]),
-      locations: makeCollection([]),
-      samples: makeCollection([{ _id: sampleId, locationID: 66, status: 'AVAILABLE', quantity: 2 }]),
       sampleMovements: makeCollection([]),
       sample_movements: makeCollection([]),
       counters: makeCollection([]),
     };
+    const { boxId } = seedStorageHierarchy(collections, 66);
+    collections.samples = makeCollection([{ _id: new ObjectId(), storageLocation: { boxId, position: 'A1' }, status: 'AVAILABLE', quantity: 2 }]);
     const db = buildDb(collections);
     await quarantineService.quarantineByColdChainIncident(db, {
       sensorKey: 'sensor-session-2',
@@ -426,11 +454,11 @@ describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
       sensors: makeCollection([]),
       sensorMetadata: makeCollection([{ sensorId: 'sensor-eqoid', equipment: equipmentObjectId.toString() }]),
       equipment: makeCollection([{ _id: equipmentObjectId, equipmentID: 555 }]),
-      locations: makeCollection([{ equipmentID: 555, locationID: 44 }]),
     };
+    const { boxId } = seedStorageHierarchy(collections, 555);
     const db = buildDb(collections);
-    const result = await quarantineService.findLocationIdsBySensorKey(db, 'sensor-eqoid');
-    expect(result).toContain(44);
+    const result = await quarantineService.findBoxIdsBySensorKey(db, 'sensor-eqoid');
+    expect(result.map(String)).toContain(String(boxId));
   });
 
   it('markColdChainIncidentSamplesForReview passes options.session through to the updateMany call', async () => {
@@ -442,16 +470,15 @@ describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
   });
 
   it('defaults quantitySnapshot to 0 when neither currentQuantity nor quantity is set on the sample', async () => {
-    const sampleId = new ObjectId();
     const collections = {
       sensors: makeCollection([{ sensorId: 'sensor-qty', locationID: 55 }]),
       sensorMetadata: makeCollection([]),
-      locations: makeCollection([]),
-      samples: makeCollection([{ _id: sampleId, locationID: 55, status: 'AVAILABLE' }]),
       sampleMovements: makeCollection([]),
       sample_movements: makeCollection([]),
       counters: makeCollection([]),
     };
+    const { boxId } = seedStorageHierarchy(collections, 55);
+    collections.samples = makeCollection([{ _id: new ObjectId(), storageLocation: { boxId, position: 'A1' }, status: 'AVAILABLE' }]);
     const db = buildDb(collections);
     const result = await quarantineService.quarantineByColdChainIncident(db, {
       sensorKey: 'sensor-qty',

@@ -65,16 +65,43 @@ describe('equipment-sensor-quarantine.service', () => {
       expect(db.collection).not.toHaveBeenCalled();
     });
 
-    it('finds locations by equipment identifiers, quarantines matching samples, and records a movement', async () => {
-      const locationsCursor = { toArray: vi.fn(async () => [{ locationID: 10 }, { locationID: 20 }]) };
-      const locationsCollection = { find: vi.fn(() => locationsCursor) };
+    // #464: equipment -> FREEZER StorageContainer (containerID join) ->
+    // SHELF -> RACK -> StorageBox, mirroring #462/#463's upward walk.
+    it('resolves the freezer by equipmentID, walks down to its boxes, quarantines matching samples, and records a movement', async () => {
+      const freezerId = 'FRZ-1';
+      const shelfId = 'SHF-1';
+      const rackId = 'RCK-1';
+      const boxId = 'BOX-1';
+
+      const storageContainersCollection = {
+        find: vi.fn((filter) => {
+          if (filter.containerType === 'FREEZER') {
+            return { toArray: vi.fn(async () => [{ _id: freezerId, containerID: 42 }]) };
+          }
+          if (filter.containerType === 'SHELF') {
+            return { toArray: vi.fn(async () => (filter.parent_id === freezerId ? [{ _id: shelfId }] : [])) };
+          }
+          if (filter.containerType === 'RACK') {
+            return { toArray: vi.fn(async () => (filter.parent_id.$in.includes(shelfId) ? [{ _id: rackId }] : [])) };
+          }
+          if (filter.containerType === 'DRAWER') {
+            return { toArray: vi.fn(async () => []) };
+          }
+          return { toArray: vi.fn(async () => []) };
+        })
+      };
+      const storageBoxesCollection = {
+        find: vi.fn((filter) => ({
+          toArray: vi.fn(async () => (filter.parent_id.$in.includes(rackId) ? [{ _id: boxId }] : []))
+        }))
+      };
 
       const sample = {
         _id: 'S1',
         barcode: 'BC-1',
         currentQuantity: 5,
         unit: 'mL',
-        location: { area: 'A1' }
+        storageLocation: { boxId, position: 'A1' }
       };
       const samplesCursor = { toArray: vi.fn(async () => [sample]) };
       const samplesCollection = {
@@ -91,7 +118,13 @@ describe('equipment-sensor-quarantine.service', () => {
         throw new Error(`unexpected key ${key}`);
       });
 
-      const db = { collection: vi.fn(() => locationsCollection) };
+      const db = {
+        collection: vi.fn((name) => {
+          if (name === 'storageContainers') return storageContainersCollection;
+          if (name === 'storageBoxes') return storageBoxesCollection;
+          throw new Error(`unexpected collection ${name}`);
+        })
+      };
 
       const result = await service.quarantineByEquipmentStatus(db, { equipmentID: 42 }, 'offline');
 
@@ -99,8 +132,17 @@ describe('equipment-sensor-quarantine.service', () => {
       expect(result.matched).toBe(1);
       expect(result.quarantined).toBe(1);
       expect(result.movements).toBe(1);
-      expect(result.locationIds).toEqual([10, 20]);
+      expect(result.boxIds).toEqual([boxId]);
       expect(result.reason).toMatch(/Quarentena automática por equipamento 42 com status offline/);
+
+      expect(samplesCollection.find).toHaveBeenCalledWith(
+        expect.objectContaining({
+          $and: expect.arrayContaining([
+            { 'storageLocation.boxId': { $in: [boxId] } }
+          ])
+        }),
+        undefined
+      );
 
       expect(samplesCollection.updateOne).toHaveBeenCalledWith(
         { _id: 'S1' },
@@ -112,7 +154,7 @@ describe('equipment-sensor-quarantine.service', () => {
             specimenStatus: 'quarantined',
             quarantineSource: 'equipment',
             quarantineSourceId: '42',
-            location: expect.objectContaining({ area: 'Quarentena', status: 'Quarantine' })
+            locationStatus: 'Quarantine'
           })
         },
         undefined
@@ -141,32 +183,28 @@ describe('equipment-sensor-quarantine.service', () => {
     });
 
     it('resolves equipment identifiers from the bare `id` field when `_id`/`equipmentID` are absent', async () => {
-      const locationsCursor = { toArray: vi.fn(async () => []) };
-      const locationsCollection = { find: vi.fn(() => locationsCursor) };
-      const db = { collection: vi.fn(() => locationsCollection) };
+      const storageContainersCollection = { find: vi.fn(() => ({ toArray: vi.fn(async () => []) })) };
+      const db = { collection: vi.fn(() => storageContainersCollection) };
 
       await service.quarantineByEquipmentStatus(db, { id: 'EQ-BARE' }, 'offline');
 
-      expect(locationsCollection.find).toHaveBeenCalledWith(
+      expect(storageContainersCollection.find).toHaveBeenCalledWith(
         {
-          $or: [
-            { equipmentID: { $in: [] } },
-            { equipmentID: { $in: ['EQ-BARE'] } }
-          ]
+          containerType: 'FREEZER',
+          containerID: { $in: ['EQ-BARE'] }
         },
         undefined
       );
     });
 
-    it('passes options.session through to the locations query', async () => {
+    it('passes options.session through to the freezer lookup', async () => {
       const session = { id: 'sess-1' };
-      const locationsCursor = { toArray: vi.fn(async () => []) };
-      const locationsCollection = { find: vi.fn(() => locationsCursor) };
-      const db = { collection: vi.fn(() => locationsCollection) };
+      const storageContainersCollection = { find: vi.fn(() => ({ toArray: vi.fn(async () => []) })) };
+      const db = { collection: vi.fn(() => storageContainersCollection) };
 
       await service.quarantineByEquipmentStatus(db, { equipmentID: 1 }, 'offline', { session });
 
-      expect(locationsCollection.find).toHaveBeenCalledWith(expect.anything(), { session });
+      expect(storageContainersCollection.find).toHaveBeenCalledWith(expect.anything(), { session });
     });
 
     it('returns zero-matched result when equipment has no resolvable identifiers', async () => {
@@ -180,7 +218,7 @@ describe('equipment-sensor-quarantine.service', () => {
         quarantined: 0,
         movements: 0,
         reason: expect.stringContaining('desconhecido'),
-        locationIds: []
+        boxIds: []
       });
       expect(db.collection).not.toHaveBeenCalled();
     });
@@ -192,7 +230,35 @@ describe('equipment-sensor-quarantine.service', () => {
       expect(result).toEqual({ triggered: false, matched: 0, quarantined: 0, movements: 0 });
     });
 
-    it('derives location candidates from sensorContext and options.updateData, quarantines samples without a location object', async () => {
+    // #464: sensorContext.locationId/locationID (and options.updateData's
+    // mirror fields) are equipment-level identifiers (#462/#463's
+    // interim call), matched straight against FREEZER.containerID.
+    it('derives equipment candidates from sensorContext and options.updateData, resolves their freezers boxes, quarantines samples without a location object', async () => {
+      const boxId = 'BOX-9';
+      const storageContainersCollection = {
+        find: vi.fn((filter) => {
+          if (filter.containerType === 'FREEZER') {
+            const variants = filter.containerID.$in;
+            if (variants.includes(5) || variants.includes(7)) {
+              return { toArray: vi.fn(async () => [{ _id: 'FRZ-9', containerID: 5 }]) };
+            }
+            return { toArray: vi.fn(async () => []) };
+          }
+          if (filter.containerType === 'SHELF') {
+            return { toArray: vi.fn(async () => (filter.parent_id === 'FRZ-9' ? [{ _id: 'SHF-9' }] : [])) };
+          }
+          if (filter.containerType === 'RACK') {
+            return { toArray: vi.fn(async () => (filter.parent_id.$in.includes('SHF-9') ? [{ _id: 'RCK-9' }] : [])) };
+          }
+          return { toArray: vi.fn(async () => []) };
+        })
+      };
+      const storageBoxesCollection = {
+        find: vi.fn((filter) => ({
+          toArray: vi.fn(async () => (filter.parent_id.$in.includes('RCK-9') ? [{ _id: boxId }] : []))
+        }))
+      };
+
       const sample = { _id: 'S9', quantity: 3 };
       const samplesCursor = { toArray: vi.fn(async () => [sample]) };
       const samplesCollection = {
@@ -209,7 +275,13 @@ describe('equipment-sensor-quarantine.service', () => {
         throw new Error(`unexpected key ${key}`);
       });
 
-      const db = {};
+      const db = {
+        collection: vi.fn((name) => {
+          if (name === 'storageContainers') return storageContainersCollection;
+          if (name === 'storageBoxes') return storageBoxesCollection;
+          throw new Error(`unexpected collection ${name}`);
+        })
+      };
 
       const result = await service.quarantineBySensorStatus(
         db,
@@ -220,7 +292,7 @@ describe('equipment-sensor-quarantine.service', () => {
 
       expect(result.triggered).toBe(true);
       expect(result.matched).toBe(1);
-      expect(result.locationIds).toEqual([5, 7]);
+      expect(result.boxIds).toEqual([boxId]);
       expect(result.reason).toMatch(/Quarentena automática por sensor SEN-1 com status repair/);
 
       expect(samplesCollection.updateOne).toHaveBeenCalledWith(
@@ -236,7 +308,7 @@ describe('equipment-sensor-quarantine.service', () => {
       );
     });
 
-    it('returns no-op result when no location candidates resolve to a usable filter', async () => {
+    it('returns no-op result when no equipment candidates resolve to a usable filter', async () => {
       const db = {};
 
       const result = await service.quarantineBySensorStatus(db, {}, 'offline', {});
@@ -247,7 +319,7 @@ describe('equipment-sensor-quarantine.service', () => {
         quarantined: 0,
         movements: 0,
         reason: expect.stringContaining('desconhecido'),
-        locationIds: []
+        boxIds: []
       });
       expect(collectionResolverModule.getCollection).not.toHaveBeenCalled();
     });

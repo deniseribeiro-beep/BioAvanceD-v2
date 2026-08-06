@@ -184,3 +184,52 @@ now the same box's own freezer is what's gated, since the canonical model
 ties a box to exactly one physical chain. Not a behavior this issue asked
 to fix, but a direct consequence of gating on the box's own hierarchy
 instead of a decoupled `locations` scan.
+
+**Landed 2026-08-06 (#464, `equipment-sensor-quarantine.service.js` slice):**
+the automatic-quarantine service's three `locations`-collection consumers
+(equipment status change, sensor status change, cold-chain incident) now
+walk down from a FREEZER `StorageContainer` (found by
+`freezer.containerID === Equipment.equipmentID`, #462's join reused in
+reverse) through `SHELF` -> `RACK` -> optional `DRAWER` to the linked
+`StorageBox`es, then filter samples on `storageLocation.boxId` instead of
+the legacy `locationID`/`location.locationID` pair. New helpers
+`resolveFreezersByEquipmentIdentifiers` and `findBoxIdsUnderFreezer`
+mirror #462's `resolveStorageHierarchyForBox` walk but run top-down
+instead of bottom-up (quarantine starts from equipment/sensor, not from a
+specimen's own box). `findLocationIdsByEquipment`/
+`findLocationIdsBySensorKey`/`buildSampleFilterFromLocationIds` are
+replaced outright by `findBoxIdsByEquipment`/`findBoxIdsBySensorKey`/
+`buildSampleFilterFromBoxIds` — no compatibility shim reading both, per
+rule 2. Each function's result field renamed `locationIds` -> `boxIds`
+accordingly (internal only; grepped `api/backend/src` for external
+readers, none found).
+
+Reused #465's already-tracked equipment-level granularity call exactly as
+#462/#463 did: `sensorContext.locationId`/`locationID` (and
+`sensorMetadata.locationId`/`locationID`) are treated as the same
+equipment-level identifier matched against `freezer.containerID`, not a
+pointer into the retiring `locations` collection — so
+`findBoxIdsBySensorKey`'s legacy fallback block (a reverse `locations`
+lookup keyed on `sensorId`/`sensorKey` fields embedded in a location
+document) is dropped rather than kept as a compatibility path, since the
+function no longer needs the `locations` collection at all.
+
+Left unmigrated, deliberately: `quarantineSamplesByFilter`'s
+`sample.location` branch (mutates whichever `location` object shape is
+already on the doc being quarantined, falling back to a bare
+`locationStatus` flag for docs without one). This isn't a `locations`-
+collection consumer — it never queries that collection — it's a
+display-field mutation keyed on the shape of the sample document already
+in hand, and post-migration samples (no `location` object set by
+`createSample`/`intakeWizard` since #462/#463) already take the
+`locationStatus` branch correctly without any change here.
+
+Proven with the strongest native-only bar this repo's build-loop overlay
+recognizes: a fixture that seeds a real FREEZER->SHELF->RACK->StorageBox
+chain in an in-memory collection fake with `$in`/exact-match query
+semantics (not a stub returning canned data), asserting the hierarchy
+walk actually resolves the right box — `tests/unit/
+equipment-sensor-quarantine.service.test.js` (10 cases) and `tests/unit/
+cold-chain-quarantine.service.test.js` (22 cases). Consumer migration
+family (#462/#463/#464) complete; retiring `locations` (#460) remains a
+separate follow-up depending on #459 + #464 (now done).
