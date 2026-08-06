@@ -26,6 +26,30 @@ afterEach(() => {
 describe('move-sample.controller', () => {
   const controller = createMoveSampleController();
 
+  it('passes a command that satisfies the real MoveSampleUseCase.validateCommand (regression: #487)', async () => {
+    // Exercises the real validateCommand instead of a mocked execute(), so a
+    // controller/use-case field-name mismatch (sampleId vs specimenId) fails
+    // this test instead of silently 400ing on every real request.
+    const validateSpy = vi.spyOn(MoveSampleUseCase.prototype, 'validateCommand');
+    vi.spyOn(MoveSampleUseCase.prototype, 'execute').mockImplementation(function (command) {
+      this.validateCommand(command);
+      return Promise.resolve({});
+    });
+
+    const req = buildReq({
+      body: { sampleId: 'S1', targetBoxId: 'B1', targetPosition: 'A1' }
+    });
+    const res = buildRes();
+
+    await controller(req, res);
+
+    expect(validateSpy).toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({ success: true })
+    );
+  });
+
   it('returns 503 when the db is not available', async () => {
     const req = buildReq({ app: { locals: {} } });
     const res = buildRes();
@@ -55,7 +79,7 @@ describe('move-sample.controller', () => {
     await controller(req, res);
 
     expect(executeSpy).toHaveBeenCalledWith({
-      sampleId: 'S1',
+      specimenId: 'S1',
       targetBoxId: 'B1',
       targetPosition: 'A1',
       reason: 'relocation',
@@ -90,6 +114,7 @@ describe('move-sample.controller', () => {
 
     expect(executeSpy).toHaveBeenCalledWith(
       expect.objectContaining({
+        specimenId: 'S1',
         actor: {
           userId: 'u2',
           userName: 'bob',
@@ -130,7 +155,7 @@ describe('move-sample.controller', () => {
 
     expect(executeSpy).toHaveBeenCalledWith(
       expect.objectContaining({
-        sampleId: undefined,
+        specimenId: undefined,
         targetBoxId: undefined,
         targetPosition: undefined
       })

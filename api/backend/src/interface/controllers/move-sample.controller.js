@@ -45,7 +45,7 @@ function createMoveSampleController() {
       });
 
       const result = await useCase.execute({
-        sampleId,
+        specimenId: sampleId,
         targetBoxId,
         targetPosition,
         reason,

@@ -2,10 +2,13 @@ import { useEffect, useMemo, useState } from 'react';
 import { AlertCircle, Layers3, RefreshCw } from 'lucide-react';
 import Button from '../UI/Button';
 import Card from '../UI/Card';
+import Input from '../UI/Input';
 import Select from '../UI/Select';
 import { notifyApiToast } from '@/api/client';
 import { storageApi } from '@/services/storageApi';
 import { SampleWithId } from '@/hooks/samples/useSamplesPage';
+
+const POSITION_PATTERN = /^[A-Za-z]\d+$/;
 
 type TranslatorFn = (key: string) => string;
 
@@ -74,6 +77,10 @@ export default function InlineStorageMovementPanel({ sample, t, onCancel, onComp
   const [selectedShelfIndex, setSelectedShelfIndex] = useState('');
   const [selectedRackIndex, setSelectedRackIndex] = useState('');
   const [selectedBoxId, setSelectedBoxId] = useState('');
+  const [useSpecificPosition, setUseSpecificPosition] = useState(false);
+  const [targetPosition, setTargetPosition] = useState('');
+
+  const isAlreadyStored = Boolean(sample.storageLocation?.boxId && sample.storageLocation?.position);
 
   useEffect(() => {
     let active = true;
@@ -161,7 +168,12 @@ export default function InlineStorageMovementPanel({ sample, t, onCancel, onComp
     [freezerTree, selectedShelfIndex, selectedRackIndex, selectedBoxId]
   );
 
-  const canConfirm = Boolean(selectedFreezerId && selectedBoxId && !saving && !error && !treeLoading);
+  const normalizedTargetPosition = targetPosition.trim().toUpperCase();
+  const positionValid = !useSpecificPosition || POSITION_PATTERN.test(normalizedTargetPosition);
+
+  const canConfirm = Boolean(
+    selectedFreezerId && selectedBoxId && positionValid && !saving && !error && !treeLoading
+  );
 
   const handleConfirm = async () => {
     if (!selectedBoxId) {
@@ -169,11 +181,20 @@ export default function InlineStorageMovementPanel({ sample, t, onCancel, onComp
       return;
     }
 
+    if (useSpecificPosition && !positionValid) {
+      setError(t('samples.storageInline.invalidPosition'));
+      return;
+    }
+
     setSaving(true);
     setError(null);
 
     try {
-      const response = await storageApi.autoAssignSampleToBox(sample.id, selectedBoxId);
+      const response = useSpecificPosition
+        ? isAlreadyStored
+          ? await storageApi.moveSample(sample.id, selectedBoxId, normalizedTargetPosition)
+          : await storageApi.allocateSample(sample.id, selectedBoxId, normalizedTargetPosition)
+        : await storageApi.autoAssignSampleToBox(sample.id, selectedBoxId);
       if (response.success) {
         const assignedPosition = response.data?.position || response.sampleLocation?.position || '';
         notifyApiToast({
@@ -304,9 +325,35 @@ export default function InlineStorageMovementPanel({ sample, t, onCancel, onComp
                 </div>
 
                 <div className="samples-inline-storage-position-note">
-                  <span>
-                    A caixa selecionada será preenchida automaticamente pela próxima posição vazia disponível.
-                  </span>
+                  <label className="samples-inline-storage-position-toggle">
+                    <input
+                      type="checkbox"
+                      checked={useSpecificPosition}
+                      onChange={(event) => {
+                        setUseSpecificPosition(event.target.checked);
+                        setTargetPosition('');
+                      }}
+                    />
+                    <span>{t('samples.storageInline.specifyPosition')}</span>
+                  </label>
+
+                  {useSpecificPosition ? (
+                    <Input
+                      label={t('samples.storageInline.targetPosition')}
+                      value={targetPosition}
+                      onChange={(event) => setTargetPosition(event.target.value)}
+                      placeholder="A1"
+                      error={
+                        targetPosition && !positionValid
+                          ? t('samples.storageInline.invalidPosition')
+                          : undefined
+                      }
+                    />
+                  ) : (
+                    <span>
+                      A caixa selecionada será preenchida automaticamente pela próxima posição vazia disponível.
+                    </span>
+                  )}
                 </div>
               </>
             ) : null}

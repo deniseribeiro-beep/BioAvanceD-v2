@@ -1397,6 +1397,7 @@
       "confirm": "Confirmar Movimentação",
       "destination": "Destino selecionado",
       "freezer": "Freezer",
+      "invalidPosition": "Posição inválida. Use o formato Letra+Número (ex: A1).",
       "loadError": "Erro ao carregar freezers",
       "loadingPositions": "Carregando posições...",
       "loadingTree": "Carregando árvore de armazenagem...",
@@ -1411,8 +1412,10 @@
       "selectRack": "Selecione um rack",
       "selectShelf": "Selecione uma prateleira",
       "shelf": "Prateleira",
+      "specifyPosition": "Especificar posição exata",
       "subtitle": "Selecione freezer > rack > box > posição sem sair da tabela.",
       "success": "Movimentação concluída com sucesso",
+      "targetPosition": "Posição de destino",
       "title": "Armazenagem física inline",
       "treeLoadError": "Erro ao carregar árvore de armazenagem"
     },

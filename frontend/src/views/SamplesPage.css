@@ -430,14 +430,22 @@
 }
 
 .samples-inline-storage-position-note {
-	display: inline-flex;
-	align-items: center;
-	gap: 0.45rem;
+	display: flex;
+	flex-direction: column;
+	align-items: stretch;
+	gap: 0.6rem;
 	padding: 0.7rem 0.85rem;
 	border-radius: var(--radius-control);
 	background: #f8fafc;
 	color: var(--text-secondary);
 	font-size: 0.85rem;
+}
+
+.samples-inline-storage-position-toggle {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.4rem;
+	cursor: pointer;
 }
 
 .samples-inline-storage-state {

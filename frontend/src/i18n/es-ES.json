@@ -1397,6 +1397,7 @@
       "confirm": "Confirmar movimiento",
       "destination": "Destino seleccionado",
       "freezer": "Freezer",
+      "invalidPosition": "Posición inválida. Usa el formato Letra+Número (ej: A1).",
       "loadError": "Error al cargar freezers",
       "loadingPositions": "Cargando posiciones...",
       "loadingTree": "Cargando árbol de almacenamiento...",
@@ -1411,8 +1412,10 @@
       "selectRack": "Selecciona un rack",
       "selectShelf": "Selecciona un estante",
       "shelf": "Estante",
+      "specifyPosition": "Especificar posición exacta",
       "subtitle": "Selecciona freezer > rack > box > posición sin salir de la tabla.",
       "success": "Movimiento completado con éxito",
+      "targetPosition": "Posición de destino",
       "title": "Almacenamiento físico inline",
       "treeLoadError": "Error al cargar el árbol de almacenamiento"
     },
