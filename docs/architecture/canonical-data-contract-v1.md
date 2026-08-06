@@ -298,7 +298,24 @@ to carry it instead), so it stays on `Sample.js`'s schema exactly as
 #407/#415 already decided. `fhir-import-staging.service.js`'s
 `import_staging_records` writes (a pre-commit workflow snapshot, a
 different collection from `samples`) are unchanged, per #409's own
-scoping.
+scoping. `eConsent.js`'s own `quarantineStatus`/`availabilityStatus`
+response fields (`POST /import/fhir/consent/:token/accept`) read off
+that same `import_staging_records` snapshot via
+`acceptImportConsentToken`, not `Sample` directly — also out of #408's
+scope, confirmed while picking up #451.
+
+**#451 (status-field audit, closed as confirmed-resolved by the above):**
+re-verified against current code that every `lifecycleStatus`/
+`availabilityStatus`/`quarantineStatus` write site listed here really is
+gone from the `samples` collection (no live write path sets
+`lifecycleStatus` anymore — only import/FHIR readers map it as a legacy
+*input* alias into `specimenStatus` via
+`mapLegacyLifecycleStatusToSpecimenStatus`). `SampleModel.
+resolveSpecimenStatus()`'s `lifecycleStatus` fallback (for documents
+predating #405) was confirmed dead in production and removed — it now
+defaults straight to `'available'` when `specimenStatus` is absent,
+same as `SampleModel.create()`'s handling of an unrecognized/blank
+legacy value.
 
 ### QuarantineAction
 

@@ -545,7 +545,7 @@ describe('sample.service', () => {
     it('rejects when the sample is already destroyed (RF006 AC#4)', async () => {
       const db = makeDb();
       db.collections.samples.findOne.mockResolvedValue(
-        existingSample({ lifecycleStatus: 'DESTROYED' })
+        existingSample({ specimenStatus: 'destroyed' })
       );
 
       await expect(

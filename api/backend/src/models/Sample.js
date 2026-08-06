@@ -111,14 +111,9 @@ class SampleModel {
     return SPECIMEN_STATUS_VALUES.includes(String(status || '').toLowerCase());
   }
 
-  // Legacy sample documents written before this field existed (and before
-  // #408 removed the lifecycleStatus dual-write bridge) may still carry a
-  // raw lifecycleStatus value on the underlying Mongo document even though
-  // it's no longer part of the schema — fall back to it, case-folded,
-  // until the document is next written and specimenStatus is populated.
   static resolveSpecimenStatus(sample) {
     if (sample && sample.specimenStatus) return String(sample.specimenStatus).toLowerCase();
-    return String((sample && sample.lifecycleStatus) || 'available').toLowerCase();
+    return 'available';
   }
 
   // External representations (import CSVs, FHIR) still speak the legacy
