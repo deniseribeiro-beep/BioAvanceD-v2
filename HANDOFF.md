@@ -101,10 +101,10 @@ None queued by Dennis. Candidates, in likely priority order:
    re-checking whether #460 itself is unblocked now, or whether it
    still needs a Dennis go-ahead for the destructive `locations`-
    collection drop (per the mapping doc's explicit flag on that).
-2. A Playwright spec for `InlineStorageMovementPanel` (see above) —
-   no tracker issue yet, would need one filed first if picked up
-   outside a test-loop session that's already scanning for gaps like
-   this.
+2. **#488** (new) — Playwright spec for `InlineStorageMovementPanel`
+   (see above): auto-assign path, explicit-position path (both the
+   moveSample and allocateSample branches), invalid-position client
+   validation. Natural `test-loop`/`e2e-test-loop` pickup.
 3. Older backlog: `#371`/`#373`/`#374`/`#378`/`#379`, `user.accessType`
    grep sweep, `test/440-*`/`test/441-*` branch deletion,
    `fix/444-retention-period-iso8601` housekeeping, stray
