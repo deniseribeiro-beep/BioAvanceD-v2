@@ -1,71 +1,91 @@
 # HANDOFF
 
 **Written:** 2026-08-06, end of session on `feature/docker-e2e-backend-integration`,
-after picking up #479.
+after picking up #480.
 
 ## What happened this session
 
-Dennis said "Pick #479." Routed via `fix-bugs`.
+Dennis said "Pick #480." Routed via `work-issue` -> `resolve-issue`
+(dead-code/duplication cleanup, not a bug or coverage gap).
 
-**#479** ("storageService.autoAssignSampleToBox: success response can
-report the pre-transaction scan position, not the actually-committed
-one") — confirmed root cause in `api/backend/src/services/storageService.js`:
-the success response and log line used `nextPosition` (the pre-transaction
-`_findFirstAvailablePosition` scan) instead of `assignedPosition` (the
-value actually committed by `MongoStorageRepository.autoAssignSamplePosition`'s
-in-transaction re-scan). Under a race — a concurrent write freeing/taking
-a different position between the two scans — the caller could be told the
-sample landed somewhere other than where it was actually written.
+**#480** ("storageService.js: validatePositionAvailability/
+findAvailablePosition/getSampleStorage/getFreezerOccupancyStats still
+duplicate repository logic (test-only, no route callers)") — verified
+the issue's own claim via `grep -rn` across `api/backend/src`: all four
+methods had zero route/controller callers, confirmed against
+`api/backend/src/services/storageService.js`.
 
-Reproduced first: added a new test to
-`api/backend/tests/unit/storageService.test.js`
-(`StorageService.autoAssignSampleToBox`, `#479: reports the
-transaction-committed position...`) that mocks the box's `occupancyGrid`
-differently across the two `boxesFindOne` calls (pre-scan sees A2 free,
-in-transaction re-scan finds it taken and commits A3) — asserted the
-response should report A3, confirmed it failed pre-fix (returned A2).
-Fixed by swapping both the log line and `sampleLocation.position` to use
-`assignedPosition`. Full `storageService.test.js` suite (77 tests) passes
-post-fix.
+Removed three of the four outright: `findAvailablePosition`,
+`getSampleStorage`, `getFreezerOccupancyStats` — each had zero callers,
+route or internal, and their repository/use-case equivalents
+(`MongoStorageRepository.getBoxAvailablePositions`/
+`getSampleStorageLocation`, `MongoStorageTopologyReadRepository.getFreezerOccupancyStats`)
+already have dedicated test coverage
+(`MongoStorageRepository.test.js`, `MongoStorageTopologyReadRepository.test.js`,
+and the matching use-case tests). Deleted the three methods and their
+`storageService.test.js` coverage (77 -> 63 tests, all passing).
 
-Branch `fix/479-autoassign-stale-position-in-response`, commit
-`4d970d72`, merged `--no-ff` into `feature/docker-e2e-backend-integration`
-(merge commit `494fd908`), pushed, both local and remote fix branches
-deleted. Issue #479 closed with the merge commit hash.
+Left `validatePositionAvailability` in place — **do not delegate it to
+`MongoStorageRepository.validatePositionAvailability` without fixing the
+repository first.** It has a real internal caller
+(`allocateSampleToPosition`), and the repository's version checks
+collision via `box.occupancyGrid?.[position]` (plain-object bracket
+access only), while `storageService`'s version uses the polymorphic
+`_isPositionOccupied` helper that correctly handles both `Map`-based and
+plain-object `occupancyGrid` (a fix from #23). Delegating as-is would
+regress Map-based occupancy grids. Filed **#484** to track resolving
+that divergence (either confirm the Map case is unreachable in
+production reads, or align the repository's collision check first, then
+delegate).
 
-No `wrap-up` friction this session — scope stayed to exactly the product
-file + its test file, reproduction-first worked cleanly against the
-existing test-mock shape (`boxesFindOne.mockResolvedValueOnce` twice to
-simulate the pre-scan/re-scan divergence), no permission denials, no
-deferred/ambiguous sub-points.
+Branch `fix/480-storageservice-dead-duplicate-methods`, commit
+`52817c8c`, merged `--no-ff` into `feature/docker-e2e-backend-integration`
+(merge commit `a1f0cd02`), pushed. Local fix branch deleted (was never
+pushed remotely, so no remote delete needed). Issue #480 closed with a
+summary comment; #484 opened and left open.
+
+No `wrap-up` friction of note beyond one tool-level hiccup: the first
+`Edit` attempt on `storageService.test.js` failed to match (`old_string`
+not found) despite being copy-pasted from a fresh `Read` — likely an
+accented-character (`localização`, `disponível`) encoding mismatch
+between the Edit tool's string matching and the file's UTF-8 content.
+Worked around it with a small Python script deleting the exact line
+range instead. Not filed as a skill/pack issue since it's a single data
+point on one file with non-ASCII content, not a confirmed reproducible
+pattern.
 
 ## Repo state
 
 - **`feature/docker-e2e-backend-integration`**: clean, pushed through
-  `494fd908` (merge of `fix/479-...`).
+  `a1f0cd02` (merge of `fix/480-...`).
 - **`fix/450-storageservice-repository-migration`**: still merged, still
   not deleted — carried forward again, still safe to delete.
 - **`fix/476-quarantine-status-design-call`**: still merged, still not
   deleted — carried forward again, still safe to delete.
-- `fix/479-autoassign-stale-position-in-response` was merged and deleted
-  this session (both local and remote).
-- Issues this session: **#479 closed** (fixed — see commit `4d970d72`,
-  merge `494fd908`).
+- `fix/480-storageservice-dead-duplicate-methods` was merged and deleted
+  this session (local only — never existed on remote).
+- Issues this session: **#480 closed** (partially resolved — see commit
+  `52817c8c`, merge `a1f0cd02`); **#484 opened** (follow-up: align
+  `MongoStorageRepository.validatePositionAvailability`'s occupancy-grid
+  handling before delegating `storageService`'s copy to it).
 
 ## Which issue is next
 
-None queued by Dennis. Candidates, in likely priority order (carried
-from last session, #479 now resolved):
+None queued by Dennis. Candidates, in likely priority order:
 
-1. **#480, #481, #482, #483** — remaining lower-priority follow-ups from
+1. **#484** (new this session) — the `validatePositionAvailability`
+   Map/plain-object divergence between `storageService.js` and
+   `MongoStorageRepository`. Two resolution paths documented in the
+   issue itself.
+2. **#481, #482, #483** — remaining lower-priority follow-ups from
    recent sessions, safe to defer.
-2. **#451** (status consolidation + custody/storage entity decision).
-3. **#390** — downstream of #450 (closed); check whether #460 (retiring
+3. **#451** (status consolidation + custody/storage entity decision).
+4. **#390** — downstream of #450 (closed); check whether #460 (retiring
    the legacy `locations` collection) is still its only remaining
    blocker. Note: #460 depends on #458 (done) and #464 (done) per the
    `docs/architecture/legacy-location-migration-mapping.md` doc — worth
    checking if #460 itself is now unblocked.
-4. Older backlog: `#371`/`#373`/`#374`/`#378`/`#379`, `user.accessType`
+5. Older backlog: `#371`/`#373`/`#374`/`#378`/`#379`, `user.accessType`
    grep sweep, `test/440-*`/`test/441-*` branch deletion,
    `fix/444-retention-period-iso8601` housekeeping, stray
    `api/backend/out.txt` (still not investigated, many sessions running
@@ -75,18 +95,19 @@ from last session, #479 now resolved):
 
 ## Dev stack state
 
-Untouched this session — fix verified via targeted `vitest run` on
-`tests/unit/storageService.test.js` only (native, no Docker needed for a
-unit-test-only fix).
+Untouched this session — resolution verified via targeted `vitest run`
+on `tests/unit/storageService.test.js` only (native, no Docker needed
+for a dead-code-removal change with no production callers).
 
 ## Which skills to use
 
-- `fix-bugs`'s reproduce-first flow worked exactly as documented against
-  a service method with a real (non-mocked) internal repository
-  (`MongoStorageRepository`) instantiated in the constructor: the
-  existing test suite's `boxesFindOne`/`samplesFindOne` mocks are shared
-  across the outer pre-transaction scan and the repository's in-transaction
-  re-scan (both call the same mocked `findOne`), so `mockResolvedValueOnce`
-  chained twice was enough to simulate the two scans diverging — no need
-  to mock `MongoStorageRepository` itself. Worth remembering as the
-  pattern for any future storageService race-condition bug in this file.
+- `work-issue` correctly routed #480 to `resolve-issue` rather than
+  `test-loop`/`fix-bugs`: it was framed as a duplication/dead-code
+  cleanup with no reproducible bug and no coverage gap.
+- When a "resolve the duplication" issue turns out to have one method
+  with a real internal caller and a genuine behavioral divergence from
+  its proposed replacement (not just cosmetic duplication), that's the
+  `resolve-issue` "scope differed" close case (case 2), not a reason to
+  force the full migration in one sitting — split the safe part out,
+  file the risky part as its own issue. Confirmed working as intended
+  this session (#480 -> #484 split).
