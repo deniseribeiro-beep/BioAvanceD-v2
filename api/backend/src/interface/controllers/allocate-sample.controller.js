@@ -25,7 +25,7 @@ function createAllocateSampleController() {
       });
 
       const result = await useCase.execute({
-        sampleId,
+        specimenId: sampleId,
         boxId,
         position,
         actor: {

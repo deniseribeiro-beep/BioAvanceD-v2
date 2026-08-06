@@ -53,6 +53,25 @@ describe('allocate-sample.controller', () => {
     });
   });
 
+  it('maps the wire-contract sampleId onto the use case command as specimenId (#482)', async () => {
+    const executeSpy = vi.spyOn(AllocateSampleUseCase.prototype, 'execute')
+      .mockResolvedValue({ sampleLocation: { position: 'A1' } });
+    const req = {
+      app: { locals: { db: {} } },
+      body: { sampleId: 's1', boxId: 'box-1', position: 'A1' },
+      headers: {}
+    };
+    const res = buildRes();
+
+    await controller(req, res);
+
+    expect(executeSpy).toHaveBeenCalledWith(expect.objectContaining({
+      specimenId: 's1',
+      boxId: 'box-1',
+      position: 'A1'
+    }));
+  });
+
   it('builds the actor from req.user/req.ip/req.headers using the primary fallbacks', async () => {
     const executeSpy = vi.spyOn(AllocateSampleUseCase.prototype, 'execute')
       .mockResolvedValue({ sampleLocation: { position: 'A1' } });
