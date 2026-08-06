@@ -28,13 +28,25 @@ function setCachedModule(modulePath, exportsObject) {
   };
 }
 
+// #464: equipment-sensor-quarantine.service.js resolves sensor.locationID
+// as an equipment identifier matched against a FREEZER StorageContainer's
+// containerID, then walks FREEZER -> SHELF -> RACK -> StorageBox and
+// filters samples on storageLocation.boxId -- the direct successor to
+// #430's now-retired `locations`-collection lookup this fixture used to
+// seed.
+const FREEZER_CONTAINER_ID = 501;
+const FREEZER_ID = 'FRZ-IOT-1';
+const SHELF_ID = 'SHF-IOT-1';
+const RACK_ID = 'RCK-IOT-1';
+const BOX_ID = 'BOX-IOT-1';
+
 function buildDb() {
   const incidents = [];
   const samples = [{
     _id: '507f1f77bcf86cd799439055',
     sampleID: 'BIO-IOT-001',
     barcode: 'BC-IOT-001',
-    locationID: 501,
+    storageLocation: { boxId: BOX_ID, position: 'A1' },
     status: 'AVAILABLE',
     currentStatus: 'Available',
     release_status: 'AVAILABLE',
@@ -64,7 +76,7 @@ function buildDb() {
 
   const sensorsCollection = {
     find: vi.fn().mockReturnValue({
-      toArray: vi.fn().mockResolvedValue([{ sensorId: 'sensor-1', locationID: 501 }]),
+      toArray: vi.fn().mockResolvedValue([{ sensorId: 'sensor-1', locationID: FREEZER_CONTAINER_ID }]),
     }),
   };
 
@@ -74,10 +86,26 @@ function buildDb() {
     }),
   };
 
-  const locationsCollection = {
-    find: vi.fn().mockReturnValue({
-      toArray: vi.fn().mockResolvedValue([{ locationID: 501, equipmentID: 9001 }]),
+  const storageContainersCollection = {
+    find: vi.fn((filter) => {
+      if (filter.containerType === 'FREEZER') {
+        const matches = filter.containerID.$in.some((id) => String(id) === String(FREEZER_CONTAINER_ID));
+        return { toArray: vi.fn().mockResolvedValue(matches ? [{ _id: FREEZER_ID, containerID: FREEZER_CONTAINER_ID }] : []) };
+      }
+      if (filter.containerType === 'SHELF') {
+        return { toArray: vi.fn().mockResolvedValue(filter.parent_id === FREEZER_ID ? [{ _id: SHELF_ID }] : []) };
+      }
+      if (filter.containerType === 'RACK') {
+        return { toArray: vi.fn().mockResolvedValue(filter.parent_id.$in.includes(SHELF_ID) ? [{ _id: RACK_ID }] : []) };
+      }
+      return { toArray: vi.fn().mockResolvedValue([]) };
     }),
+  };
+
+  const storageBoxesCollection = {
+    find: vi.fn((filter) => ({
+      toArray: vi.fn().mockResolvedValue(filter.parent_id.$in.includes(RACK_ID) ? [{ _id: BOX_ID }] : []),
+    })),
   };
 
   const samplesCollection = {
@@ -152,7 +180,8 @@ function buildDb() {
         if (name === 'users') return usersCollection;
         if (name === 'sensors') return sensorsCollection;
         if (name === 'sensorMetadata') return sensorMetadataCollection;
-        if (name === 'locations') return locationsCollection;
+        if (name === 'storageContainers') return storageContainersCollection;
+        if (name === 'storageBoxes') return storageBoxesCollection;
         if (name === 'samples') return samplesCollection;
         if (name === 'sampleMovements') return sampleMovementsCollection;
         if (name === 'sample_movements') return sampleMovementsCollection;
