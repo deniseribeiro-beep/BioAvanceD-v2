@@ -157,6 +157,24 @@ slice) will face the identical question for its own sensor-to-location
 resolution and should reuse whichever answer #465 settles on rather than
 re-deriving it independently.
 
+**#465 resolved 2026-08-06: confirmed, no change needed.** The
+"real-world sensor placement granularity" question above is answered by
+the requirements docs, not just a judgment call — checked
+`docs/docs-7-27-2026/1-Requisitos-Funcionais-e-Nao-Funcionais.md`'s
+RF017 item 4 ("Vincular sensor ou dispositivo **ao equipamento**" — link
+sensor/device *to the equipment*, listed separately from the Freezer >
+Prateleira > Rack > Caixa > Posição hierarchy) and
+`dict-02_DICIONARIO.md`'s `TelemetryReading` entity (ELM-0357/ELM-0358:
+`sensorId` is `Reference(Device)`, `equipmentId` is the equipment the
+sensor is linked to, mapped to `Device.parent`) — no dictionary field
+anywhere links a sensor/device to a `Rack`/`Box`/`Location`. Both are
+unchanged across the `docs-7-27-2026` and `docs-7-31-2026` revisions, so
+this isn't a doc that appeared after the migrations landed. Per-freezer
+sensor coverage is the canonical model, not a legacy quirk: the
+equipment-level check #462/#463/#464/#459 all landed matches the spec
+exactly. No `containerId`/finer-grained link needs adding to
+`Sensor`/`Device`.
+
 Frontend impact: nil for this slice — no UI call site invokes `useSamples
 .ts`'s `createSample` hook yet (grepped `frontend/src`), so the payload
 contract change has no live caller to update.
@@ -171,8 +189,8 @@ lookup, reusing #462's `resolveStorageHierarchyForBox` walk and its
 `freezer.containerID === Equipment.equipmentID` join. Equipment-readiness
 and operational-sensor gating (`isEquipmentReadyForContainer`/
 `hasOperationalSensorForContainer`) key off the same resolved freezer,
-applying #465's not-yet-settled equipment-level granularity call exactly as
-#462 did. The wizard's `sampleToPersist` now sets `boxId`/`positionCode`
+applying #465's equipment-level granularity call (confirmed correct,
+see the #462 entry above) exactly as #462 did. The wizard's `sampleToPersist` now sets `boxId`/`positionCode`
 (no `locationID`) before calling `sampleService.createSample`, and the
 response's `storageLocation.equipmentID` is now the freezer's `containerID`
 instead of a legacy `Location.equipmentID`; `storageLocation.locationID` is
@@ -268,9 +286,10 @@ replacement advances by `index` *available* (non-full, non-retired,
 non-inactive) boxes in the same freezer/shelf/rack/[drawer]/box order,
 returning that box's own first free position rather than a legacy
 `wellPosition` value that no longer exists. Unlike #462/#463's
-equipment-level sensor-granularity call (#465), this doesn't need
-Dennis's confirmation — it's a translation of an enumeration order, not
-a safety-gate precision reduction.
+equipment-level sensor-granularity call (#465, confirmed correct — see
+the #462 entry above), this never needed Dennis's confirmation in the
+first place — it's a translation of an enumeration order, not a
+safety-gate precision reduction.
 
 **Input-contract change (no compatibility shim, per rule 2):**
 `importSamples`'s `options.startLocationID` (numeric) is now
