@@ -577,6 +577,13 @@ class MongoStorageRepository {
       };
     }
 
+    // Plain-object bracket access is safe here even though `occupancyGrid`
+    // is declared as a Mongoose Map in the schema (StorageBox.js): `box` is
+    // fetched via the native driver's `findOne` above, never via the
+    // Mongoose model, so `occupancyGrid` is always a plain BSON object on
+    // this path. See #484 (split from #480/#23) — storageService.js's
+    // sibling method uses a polymorphic Map/object check because it fetches
+    // the same way; that extra branch is defensive, not load-bearing.
     const occupiedSampleId = box.occupancyGrid?.[position] || null;
     if (occupiedSampleId) {
       return {
