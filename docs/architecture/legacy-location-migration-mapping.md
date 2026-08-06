@@ -150,10 +150,12 @@ both"), the check now matches `sensors.locationId`/`locationID` against
 the resolved freezer's `containerID` (equipment-level granularity)
 instead of the specific rack/drawer/box. This is a real precision
 reduction versus the legacy behavior, not a data-preserving translation —
-flagged here rather than assumed silently correct, since `equipment-
-sensor-quarantine.service.js` (#464, out of scope for this slice) will
-need to make the same call for its own sensor-to-location resolution,
-and should reuse this decision rather than re-deriving it independently.
+tracked as #465 (needs Dennis's confirmation on real-world sensor
+placement granularity) rather than assumed silently correct, since
+`equipment-sensor-quarantine.service.js` (#464, out of scope for this
+slice) will face the identical question for its own sensor-to-location
+resolution and should reuse whichever answer #465 settles on rather than
+re-deriving it independently.
 
 Frontend impact: nil for this slice — no UI call site invokes `useSamples
 .ts`'s `createSample` hook yet (grepped `frontend/src`), so the payload
