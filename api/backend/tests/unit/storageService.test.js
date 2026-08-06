@@ -863,6 +863,39 @@ describe('StorageService.autoAssignSampleToBox', () => {
     expect(sampleUpdateCall[1].$set['status']).toBe('AVAILABLE');
   });
 
+  it('#479: reports the transaction-committed position, not the stale pre-transaction scan, when they diverge', async () => {
+    const boxId = new ObjectId();
+    const specimenId = new ObjectId();
+
+    // Pre-transaction scan sees only A1 occupied -> would pick A2.
+    boxesFindOne.mockResolvedValueOnce({
+      _id: boxId,
+      name: 'Box A',
+      dimension: { rows: 1, cols: 3 },
+      occupancyGrid: { A1: new ObjectId() },
+      currentOccupancy: 1
+    });
+    // In-transaction re-scan finds A2 has since been taken by a concurrent
+    // write -> the actually committed position is A3.
+    boxesFindOne.mockResolvedValueOnce({
+      _id: boxId,
+      name: 'Box A',
+      dimension: { rows: 1, cols: 3 },
+      occupancyGrid: { A1: new ObjectId(), A2: new ObjectId() },
+      currentOccupancy: 2
+    });
+    samplesFindOne.mockResolvedValue({
+      _id: specimenId,
+      barcode: 'BC-9',
+      storageLocation: null
+    });
+
+    const result = await service.autoAssignSampleToBox(specimenId.toString(), boxId.toString());
+
+    expect(result.success).toBe(true);
+    expect(result.sampleLocation.position).toBe('A3');
+  });
+
   it('returns BOX_FULL when the box has no available position', async () => {
     const boxId = new ObjectId();
     const specimenId = new ObjectId();
