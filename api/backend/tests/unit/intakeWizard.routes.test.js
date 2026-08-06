@@ -663,7 +663,7 @@ function defaultStorageContainersFindOne({ _id }) {
       expect(res.body.error).toBe('NON_CANONICAL_FIELD');
     });
 
-    it('deletes the created sample and returns 409 when box allocation fails', async () => {
+    it('returns 409 when box allocation fails, per issue #474 (allocation now happens inside createSample itself)', async () => {
       const { db, consentsCollection } = buildHappyPathDb();
       const { samplesCollection, patientsCollection } = setupHappyMocks();
 
@@ -676,22 +676,21 @@ function defaultStorageContainersFindOne({ _id }) {
 
       const { router } = loadRoute({ getCollectionImpl });
 
+      // #474: sampleService.createSample now routes storage allocation
+      // through AllocateSampleUseCase as part of the create call itself —
+      // it already deletes the inserted sample and rejects with a 409-coded
+      // error on a collision, so the route no longer runs a separate
+      // assignSampleToBox/deleteSample cleanup step.
       const sampleServiceModule = require(sampleServicePath);
-      vi.spyOn(sampleServiceModule, 'createSample').mockResolvedValue({ _id: 'sample-1', participantId: '12345678' });
-      const deleteSampleSpy = vi.spyOn(sampleServiceModule, 'deleteSample').mockResolvedValue(undefined);
-
-      const StorageService = require(storageServicePath);
-      vi.spyOn(StorageService.prototype, 'autoAssignSampleToBox').mockResolvedValue({
-        success: false,
-        message: 'Sem posição livre',
-      });
+      const allocationError = new Error('Falha ao alocar amostra na posição de armazenamento: STORAGE_COLLISION: posição já ocupada');
+      allocationError.statusCode = 409;
+      vi.spyOn(sampleServiceModule, 'createSample').mockRejectedValue(allocationError);
 
       const app = buildApp(router, db);
       const res = await request(app).post('/api/intake-wizard').send(VALID_PAYLOAD);
 
       expect(res.status).toBe(409);
       expect(res.body.success).toBe(false);
-      expect(deleteSampleSpy).toHaveBeenCalledWith(db, 'sample-1');
     });
   });
 

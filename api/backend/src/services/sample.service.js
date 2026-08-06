@@ -1,6 +1,5 @@
 const { SampleModel, BLOCKED_SPECIMEN_STATUSES } = require('../models/Sample');
 const SampleMovementModel = require('../models/SampleMovement');
-const StorageAssignmentModel = require('../models/StorageAssignment');
 const logger = require('../utils/logger');
 const { validateParticipantId } = require('../utils/patientAnonymization');
 const { generateUniqueBarcode } = require('../utils/barcodeGenerator');
@@ -16,6 +15,10 @@ const { withMongoTransaction } = require('../utils/mongoTransaction');
 const rcsAssessmentService = require('./rcs-assessment.service');
 const specimenPreanalyticsService = require('./specimen-preanalytics.service');
 const quarantineActionService = require('./quarantine-action.service');
+const AllocateSampleUseCase = require('../core/use-cases/AllocateSampleUseCase');
+const MongoStorageRepository = require('../infrastructure/persistence/mongo/MongoStorageRepository');
+const MongoAuditRepository = require('../infrastructure/persistence/mongo/MongoAuditRepository');
+const LineageRepository = require('../infrastructure/database/neo4j/LineageRepository');
 const { ObjectId } = require('mongodb');
 
 const LOCATION_REQUIRED_MESSAGE = 'Localização física obrigatória para cadastro de amostra';
@@ -132,7 +135,7 @@ class SampleService {
     try {
       const { boxId, positionCode } = normalizeRequiredStorageBoxAssignment(sampleData.boxId, sampleData.positionCode);
       delete sampleData.locationID;
-      sampleData.storageLocation = { boxId, position: positionCode };
+      delete sampleData.storageLocation;
 
       const samplesCollection = await getCollection(db, 'samples');
 
@@ -299,9 +302,7 @@ class SampleService {
           quantity: createdQuantity,
           unit: sample.unit || 'µL',
           responsible: options?.auditInfo?.userName || options?.auditInfo?.actorName || 'SYSTEM',
-          destination: sample.storageLocation?.boxId
-            ? `storage:${sample.storageLocation.boxId}:${sample.storageLocation.position}`
-            : null,
+          destination: `storage:${boxId}:${positionCode}`,
           purpose: 'sample_birth',
           linkedProject: sample.linkedProject || null,
           observations: options?.auditInfo?.notes || null,
@@ -318,20 +319,39 @@ class SampleService {
         throw new Error(`Falha ao registrar cadeia de custódia no nascimento da amostra: ${ledgerError.message || ledgerError}`);
       }
 
-      // #462: dict-02 StorageAssignment (ELM-0167-0178) — open the
-      // placement-history record for the specimen's stay at boxId/positionCode,
-      // same convention the #461 backfill script uses (equipmentId = the
-      // FREEZER StorageContainer's _id, not its containerID).
-      const storageAssignmentsCollection = db.collection('storageAssignments');
-      await storageAssignmentsCollection.insertOne(StorageAssignmentModel.open({
-        specimenId: result.insertedId,
-        boxId,
-        positionCode,
-        equipmentId: freezer._id,
-        shelfId: shelf?._id || null,
-        rackId: rack?._id || null,
-        placedAt: sample.registeredAt
-      }));
+      // #474: storageLocation is no longer written directly onto the create
+      // doc — the sample is inserted unallocated, then AllocateSampleUseCase
+      // performs the atomic occupancyGrid write, storageLocation update,
+      // StorageAssignment record, and audit/lineage trail (same use case
+      // allocate-sample.controller.js and RegisterSampleUseCase reuse).
+      const allocateUseCase = new AllocateSampleUseCase({
+        storageRepository: new MongoStorageRepository(db),
+        auditRepository: new MongoAuditRepository(db),
+        lineageRepository: new LineageRepository(options?.neo4jDriver || null)
+      });
+
+      try {
+        await allocateUseCase.execute({
+          specimenId: result.insertedId,
+          boxId: String(boxId),
+          position: positionCode,
+          actor: {
+            userId: options?.auditInfo?.userId || null,
+            userName: options?.auditInfo?.userName || options?.auditInfo?.actorName || null,
+            userRole: options?.auditInfo?.userRole || null,
+            ipAddress: options?.auditInfo?.ipAddress || null,
+            userAgent: options?.auditInfo?.userAgent || null
+          }
+        });
+      } catch (allocationError) {
+        await samplesCollection.deleteOne({ _id: result.insertedId });
+        const message = allocationError?.message || String(allocationError);
+        const wrapped = new Error(`Falha ao alocar amostra na posição de armazenamento: ${message}`);
+        wrapped.statusCode = message.includes('STORAGE_COLLISION') || message.includes('já está alocada') ? 409 : 422;
+        throw wrapped;
+      }
+
+      sample.storageLocation = { boxId, position: positionCode };
 
       // Log sanitizado (apenas ID, sem dados sensíveis)
       logger.info('Amostra criada:', {

@@ -763,7 +763,10 @@ describe('sample.routes', () => {
       expect(createSample).toHaveBeenCalledWith(
         expect.anything(),
         { participantId: VALID_PAYLOAD.participantId },
-        {}
+        // #474: the route's sampleRepository.create wrapper now also
+        // forwards neo4jDriver so createSample can pass it through to
+        // AllocateSampleUseCase's lineage repository.
+        { neo4jDriver: null }
       );
       expect(deleteOne).toHaveBeenCalledTimes(2);
     });

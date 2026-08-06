@@ -103,16 +103,41 @@ function mockOperationalStorage(db) {
   ]);
 
   const mocked = {
-    storageBoxes: { findOne: vi.fn().mockResolvedValue({ _id: BOX_ID, parent_id: RACK_ID }) },
+    // dimension is required by MongoStorageRepository.allocateSamplePosition's
+    // in-bounds check (#474) — a box without it always fails "posição fora dos
+    // limites", so it must be present even though the pre-#474 gating code
+    // never looked at it.
+    storageBoxes: {
+      findOne: vi.fn().mockResolvedValue({ _id: BOX_ID, parent_id: RACK_ID, dimension: { rows: 8, cols: 12 } }),
+      updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 })
+    },
     storageContainers: { findOne: vi.fn((query) => Promise.resolve(containersById.get(String(query._id)) || null)) },
     equipment: { findOne: vi.fn().mockResolvedValue({ equipmentID: 'EQ-1' }) },
     sensors: { findOne: vi.fn().mockResolvedValue({ status: 'ok' }) },
+    // #474: AllocateSampleUseCase's openStorageAssignment resolves hierarchy
+    // via storagePaths (not the parent_id walk resolveStorageHierarchyForBox
+    // still uses for the pre-allocation equipment/sensor gate above).
+    storagePaths: {
+      findOne: vi.fn().mockResolvedValue({ boxId: BOX_ID, rackId: RACK_ID, shelfId: SHELF_ID, freezerId: FREEZER_ID })
+    },
     storageAssignments: { insertOne: vi.fn().mockResolvedValue({ insertedId: 'assignment-1' }) }
   };
 
   db.collection.mockImplementation((name) => {
     if (mocked[name]) return mocked[name];
     return db.collections[name] || (db.collections[name] = makeCollection(name));
+  });
+
+  // #474: AllocateSampleUseCase looks the sample back up by _id (once before
+  // the Mongo transaction for the lineage payload, once inside it) after
+  // createSample's own insertOne — distinct from the specimenId/barcode
+  // duplicate-check lookups earlier in the same call, which keep resolving
+  // null (the default from makeCollection) unless a test overrides them.
+  db.collections.samples.findOne.mockImplementation((query) => {
+    if (query && query._id !== undefined) {
+      return Promise.resolve({ _id: query._id, barcode: null, storageLocation: null });
+    }
+    return Promise.resolve(null);
   });
 }
 
@@ -136,7 +161,12 @@ describe('sample.service', () => {
       expect(result._id).toBe('generated-id');
       expect(result.barcode).toBe('BR-TEST-001');
       expect(db.collections.samples.insertOne).toHaveBeenCalledTimes(1);
-      expect(db.collections.sample_movements.insertOne).toHaveBeenCalledTimes(1);
+      // #474: AllocateSampleUseCase's audit repository appends its own
+      // 'allocate' movement to the same ledger, alongside the birth
+      // 'create' movement createSample already wrote — two inserts, not one.
+      expect(db.collections.sample_movements.insertOne).toHaveBeenCalledTimes(2);
+      const movementTypes = db.collections.sample_movements.insertOne.mock.calls.map(([arg]) => arg.type);
+      expect(movementTypes).toEqual(['create', 'allocate']);
       const [movementArg] = db.collections.sample_movements.insertOne.mock.calls[0];
       expect(movementArg.type).toBe('create');
       expect(movementArg.destination).toBe(`storage:${BOX_ID.toString()}:A1`);
@@ -153,7 +183,7 @@ describe('sample.service', () => {
       expect(insertedSample.locationID).toBeNull();
     });
 
-    it('opens a StorageAssignment for the specimen at boxId/positionCode, per issue #462', async () => {
+    it('opens a StorageAssignment for the specimen at boxId/positionCode, per issue #462/#474', async () => {
       const db = makeDb();
       mockOperationalStorage(db);
 
@@ -162,13 +192,17 @@ describe('sample.service', () => {
       const storageAssignments = db.collection('storageAssignments');
       expect(storageAssignments.insertOne).toHaveBeenCalledTimes(1);
       const [assignmentArg] = storageAssignments.insertOne.mock.calls[0];
+      // #474: routed through AllocateSampleUseCase/MongoStorageRepository's
+      // openStorageAssignment, which resolves the hierarchy via storagePaths
+      // (mocked above) rather than sample.service.js's own parent_id walk —
+      // fields come back as strings (StorageAssignmentModel.open casts them).
       expect(assignmentArg).toMatchObject({
         specimenId: 'generated-id',
         boxId: BOX_ID.toString(),
         positionCode: 'A1',
-        equipmentId: FREEZER_ID,
-        shelfId: SHELF_ID,
-        rackId: RACK_ID,
+        equipmentId: String(FREEZER_ID),
+        shelfId: String(SHELF_ID),
+        rackId: String(RACK_ID),
         occupancyStatus: 'ocupada'
       });
     });

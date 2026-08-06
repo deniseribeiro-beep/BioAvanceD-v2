@@ -7,7 +7,6 @@ const { getCollection } = require('../utils/collectionResolver');
 const auditLogger = require('../utils/auditLogger');
 const qualityDomain = require('../services/quality-domain.service');
 const sampleService = require('../services/sample.service');
-const StorageService = require('../services/storageService');
 const { validate } = require('../contracts/canonical/v1');
 
 const CRITICAL_SENSOR_STATUSES = ['maintenance', 'calibration', 'error', 'offline'];
@@ -387,11 +386,6 @@ function buildReadableStorageLocation(automaticLocation, allocation) {
   ].filter(Boolean).join(' / ');
 }
 
-async function assignSampleToBox(db, sampleId, boxId, neo4jDriver = null) {
-  const storageService = new StorageService(db, neo4jDriver);
-  return storageService.autoAssignSampleToBox(sampleId, boxId);
-}
-
 function buildLabelLinks(sample) {
   const sampleId = normalizeString(sample?._id?.toString?.() || sample?._id || sample?.sampleID || sample?.barcode);
   return {
@@ -519,6 +513,13 @@ async function handleIntakeWizard(req, res) {
       sampleToPersist.sprec = qualidade.sprec;
     }
     sampleToPersist.merkleRoot = generateSampleHash(sampleToPersist);
+    // #474: sampleService.createSample now allocates boxId/positionCode
+    // atomically via AllocateSampleUseCase as part of the create call
+    // itself (occupancyGrid write, StorageAssignment, audit/lineage trail)
+    // instead of writing storageLocation directly — the wizard's own
+    // separate assignSampleToBox step this used to run afterward is gone,
+    // since the position is already committed by the time createSample
+    // returns (and re-running it here would now fail as ALREADY_ALLOCATED).
     const createdSample = await sampleService.createSample(db, sampleToPersist, {
       auditInfo: {
         userId: req.user?.id || req.user?._id || null,
@@ -528,21 +529,10 @@ async function handleIntakeWizard(req, res) {
         userAgent: req.get('user-agent') || null,
         notes: 'Cadastro integrado via Intake Wizard',
       },
+      neo4jDriver: req.app.locals.neo4jDriver || null,
     });
 
-    const allocation = await assignSampleToBox(
-      db,
-      createdSample._id,
-      automaticLocation.box._id,
-      req.app.locals.neo4jDriver || null
-    );
-
-    if (!allocation?.success) {
-      await sampleService.deleteSample(db, createdSample._id);
-      const error = new Error(allocation?.message || 'Falha ao alocar automaticamente a amostra em posição livre.');
-      error.statusCode = 409;
-      throw error;
-    }
+    const allocation = { sampleLocation: createdSample.storageLocation || null };
 
     const samplesCollection = await getCollection(db, 'samples');
     const allocatedSample = await samplesCollection.findOne({ _id: createdSample._id }) || createdSample;

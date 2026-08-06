@@ -196,7 +196,10 @@ router.post('/',
       }
 
       const sampleRepository = {
-        create: async (sampleData, options = {}) => sampleService.createSample(db, sampleData, options),
+        create: async (sampleData, options = {}) => sampleService.createSample(db, sampleData, {
+          ...options,
+          neo4jDriver: req.app.locals.neo4jDriver || null
+        }),
         deleteById: async (sampleId) => {
           const samplesCollection = await getCollection(db, 'samples');
           const filter = ObjectId.isValid(sampleId)
