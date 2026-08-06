@@ -21,13 +21,25 @@ function setCachedModule(modulePath, exportsObject) {
   };
 }
 
+// #464: equipment-sensor-quarantine.service.js resolves sensor.locationID
+// as an equipment identifier matched against a FREEZER StorageContainer's
+// containerID, then walks FREEZER -> SHELF -> RACK -> StorageBox and
+// filters samples on storageLocation.boxId -- the direct successor to
+// #430's now-retired `locations`-collection lookup this fixture used to
+// seed.
+const FREEZER_CONTAINER_ID = 321;
+const FREEZER_ID = 'FRZ-INC-1';
+const SHELF_ID = 'SHF-INC-1';
+const RACK_ID = 'RCK-INC-1';
+const BOX_ID = 'BOX-INC-1';
+
 function buildMongoCollections(seedIncidents = []) {
   const incidents = [...seedIncidents];
   const samples = [{
     _id: '507f1f77bcf86cd799439088',
     sampleID: 'BIO-INC-001',
     barcode: 'BC-INC-001',
-    locationID: 321,
+    storageLocation: { boxId: BOX_ID, position: 'A1' },
     status: 'AVAILABLE',
     currentStatus: 'Available',
     release_status: 'AVAILABLE',
@@ -96,7 +108,7 @@ function buildMongoCollections(seedIncidents = []) {
 
   const sensorsCollection = {
     find: vi.fn().mockReturnValue({
-      toArray: vi.fn().mockResolvedValue([{ sensorId: 'sensor-a1', locationID: 321 }]),
+      toArray: vi.fn().mockResolvedValue([{ sensorId: 'sensor-a1', locationID: FREEZER_CONTAINER_ID }]),
     }),
   };
 
@@ -107,19 +119,41 @@ function buildMongoCollections(seedIncidents = []) {
     findOne: vi.fn().mockResolvedValue(null),
   };
 
-  const locationsCollection = {
-    find: vi.fn().mockReturnValue({
-      toArray: vi.fn().mockResolvedValue([{ locationID: 321, equipmentID: 9001 }]),
+  const storageContainersCollection = {
+    find: vi.fn((filter) => {
+      if (filter.containerType === 'FREEZER') {
+        const matches = filter.containerID.$in.some((id) => String(id) === String(FREEZER_CONTAINER_ID));
+        return { toArray: vi.fn().mockResolvedValue(matches ? [{ _id: FREEZER_ID, containerID: FREEZER_CONTAINER_ID }] : []) };
+      }
+      if (filter.containerType === 'SHELF') {
+        return { toArray: vi.fn().mockResolvedValue(filter.parent_id === FREEZER_ID ? [{ _id: SHELF_ID }] : []) };
+      }
+      if (filter.containerType === 'RACK') {
+        return { toArray: vi.fn().mockResolvedValue(filter.parent_id.$in.includes(SHELF_ID) ? [{ _id: RACK_ID }] : []) };
+      }
+      return { toArray: vi.fn().mockResolvedValue([]) };
     }),
+  };
+
+  const storageBoxesCollection = {
+    find: vi.fn((filter) => ({
+      toArray: vi.fn().mockResolvedValue(filter.parent_id.$in.includes(RACK_ID) ? [{ _id: BOX_ID }] : []),
+    })),
   };
 
   const samplesCollection = {
     find: vi.fn().mockImplementation((filter = {}) => {
       const coldChainIncidentId = filter?.coldChainIncidentId;
       const releaseStatus = filter?.release_status;
-      const results = coldChainIncidentId
-        ? samples.filter((sample) => sample.coldChainIncidentId === String(coldChainIncidentId) && (!releaseStatus || sample.release_status === releaseStatus))
-        : samples.filter((sample) => sample.locationID === 321 && sample.release_status !== 'QUARANTINE');
+      const boxIdFilter = filter?.$and?.find((clause) => clause?.['storageLocation.boxId'])?.['storageLocation.boxId'];
+      let results;
+      if (coldChainIncidentId) {
+        results = samples.filter((sample) => sample.coldChainIncidentId === String(coldChainIncidentId) && (!releaseStatus || sample.release_status === releaseStatus));
+      } else if (boxIdFilter) {
+        results = samples.filter((sample) => boxIdFilter.$in.includes(sample.storageLocation?.boxId) && sample.release_status !== 'QUARANTINE');
+      } else {
+        results = [];
+      }
       return { toArray: vi.fn().mockResolvedValue(results) };
     }),
     updateOne: vi.fn().mockImplementation(async (filter, update) => {
@@ -206,7 +240,8 @@ function buildMongoCollections(seedIncidents = []) {
       if (name === 'users') return usersCollection;
       if (name === 'sensors') return sensorsCollection;
       if (name === 'sensorMetadata') return sensorMetadataCollection;
-      if (name === 'locations') return locationsCollection;
+      if (name === 'storageContainers') return storageContainersCollection;
+      if (name === 'storageBoxes') return storageBoxesCollection;
       if (name === 'samples') return samplesCollection;
       if (name === 'sampleMovements') return sampleMovementsCollection;
       if (name === 'sample_movements') return sampleMovementsCollection;
