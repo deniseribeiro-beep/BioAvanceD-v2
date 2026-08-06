@@ -252,6 +252,28 @@ cold-chain-quarantine.service.test.js` (22 cases). Consumer migration
 family (#462/#463/#464) complete; retiring `locations` (#460) remains a
 separate follow-up depending on #459 + #464 (now done).
 
+**#476 resolved 2026-08-06: confirmed, no change needed.** #476 asked
+whether the `sample.location` mutation above should be reframed as it's
+implemented — is quarantine a *storage-position* change (route through
+`MongoStorageRepository`/a use-case) or a *status* change conceptually
+separate from physical storage location? The design was already settled
+before #476 was filed, just not written down as an answer: quarantine is
+a status change. `quarantineSamplesByFilter` (same function as above,
+`equipment-sensor-quarantine.service.js` L339-372) sets it via dedicated
+status fields — `status: 'QUARANTINED'`, `currentStatus`, `release_status`,
+`specimenStatus`, `quarantineLocation: 'Quarentena'` (a display label, not
+a `StorageContainer`/box pointer), `quarantineReason`,
+`quarantineSource(Id)`, `quarantinedAt` — none of which touch
+`storageLocation.boxId` or any other physical-storage field; the sample's
+actual box/rack/shelf placement is untouched by quarantine. The
+`sample.location`/`locationStatus` write this doc already flags as
+"deliberately left unmigrated" (paragraph above) is exactly this same
+status concept, just echoed into the legacy display field for docs that
+still carry one — not a second, competing storage-position write. So
+`location`'s removal (this doc's overall subject) doesn't need a
+"narrower replacement" for quarantine's sake, and no quarantine-move
+use-case is needed: quarantine was never modeled as a storage move.
+
 **Landed 2026-08-06 (#459, `import-lgpd.service.js` slice — partial, see
 below):** #459's issue body named four files; only one of them,
 `import-lgpd.service.js`, is an actual `locations`-collection *consumer*
