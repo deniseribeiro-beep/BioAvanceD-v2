@@ -22,7 +22,7 @@ const StorageContainerSchema = new mongoose.Schema(
     // Tipo de container na hierarquia ISO 20387
     containerType: {
       type: String,
-      enum: ["FREEZER", "SHELF", "RACK"],
+      enum: ["FREEZER", "SHELF", "RACK", "DRAWER"],
       required: true,
     },
 
@@ -102,8 +102,8 @@ StorageContainerSchema.pre("save", async function (next) {
     throw new Error("FREEZER não pode ter pai (parent_id deve ser null)");
   }
 
-  // Validação: SHELF e RACK devem ter parent_id
-  if (["SHELF", "RACK"].includes(this.containerType) && !this.parent_id) {
+  // Validação: SHELF, RACK e DRAWER devem ter parent_id
+  if (["SHELF", "RACK", "DRAWER"].includes(this.containerType) && !this.parent_id) {
     throw new Error(`${this.containerType} deve ter um parent_id`);
   }
 
@@ -135,6 +135,16 @@ StorageContainerSchema.pre("save", async function (next) {
     }
     if (parent.containerType !== "FREEZER") {
       throw new Error("SHELF só pode ter FREEZER como pai");
+    }
+  }
+
+  if (this.containerType === "DRAWER" && this.parent_id) {
+    const parent = await mongoose.model("StorageContainer").findById(this.parent_id);
+    if (!parent) {
+      throw new Error("Container pai não encontrado");
+    }
+    if (parent.containerType !== "RACK") {
+      throw new Error("DRAWER só pode ter RACK como pai");
     }
   }
 
@@ -177,6 +187,16 @@ StorageContainerSchema.methods.getChildren = async function () {
   }
 
   if (this.containerType === "RACK") {
+    // Buscar DRAWERs e Boxes (DRAWER é um nível opcional entre RACK e BOX)
+    const drawers = await mongoose.model("StorageContainer").find({
+      parent_id: this._id,
+      containerType: "DRAWER",
+    });
+    const boxes = await StorageBox.find({ parent_id: this._id });
+    return [...drawers, ...boxes];
+  }
+
+  if (this.containerType === "DRAWER") {
     // Buscar Boxes
     return await StorageBox.find({ parent_id: this._id });
   }
@@ -192,7 +212,7 @@ StorageContainerSchema.statics.validate = function (data) {
 
   if (!data.name) errors.push("name é obrigatório");
   if (!data.containerType) errors.push("containerType é obrigatório");
-  if (!["FREEZER", "SHELF", "RACK"].includes(data.containerType)) {
+  if (!["FREEZER", "SHELF", "RACK", "DRAWER"].includes(data.containerType)) {
     errors.push("containerType inválido");
   }
 
