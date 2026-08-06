@@ -9,9 +9,8 @@ import Modal from '../components/UI/Modal';
 import Input from '../components/UI/Input';
 import { Plus, Edit, Trash2, Radio, AlertCircle, CheckCircle, Box, Thermometer, Radio as RadioIcon, Shield, Download, Filter, X } from 'lucide-react';
 import { TrendingUp, TrendingDown, Minus } from 'lucide-react';
-import { Equipment, Location, Temperature, Sensor, Policy } from '../types/models';
+import { Equipment, Temperature, Sensor, Policy } from '../types/models';
 import { useEquipment } from '../hooks/useEquipment';
-import { useLocations } from '../hooks/useLocations';
 import { useTemperature } from '../hooks/useTemperature';
 import { useSensors } from '../hooks/useSensors';
 import { usePolicies } from '../hooks/usePolicies';
@@ -1003,9 +1002,8 @@ function SensorForm({
   onSave: (data: Partial<Sensor>) => void;
   onCancel: () => void;
 }) {
-  const { locations } = useLocations();
   const { policies } = usePolicies();
-  const [freezers, setFreezers] = useState<{ _id: string; name: string }[]>([]);
+  const [freezers, setFreezers] = useState<{ _id: string; name: string; containerID?: number }[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1139,19 +1137,14 @@ function SensorForm({
               })
             }
           >
-            {locations.map((location) => {
-            const locationId = (location as any)._id || location.locationID;
-            const valueId = location.locationID || locationId; // garante valor único
-            const wellInfo = location.wellPosition || location.eppendorfWell || 'N/A';
-  
-           return (
-             <option key={String(locationId)} value={String(valueId)}>
-                Bloco {location.block}, Prateleira {location.rack}, Gaveta {location.drawer}, Caixa {location.box}
-               {wellInfo !== 'N/A' ? `, Poço ${wellInfo}` : ''}
-             </option>
-         );
-        })}
-
+            <option value="">Selecione um freezer</option>
+            {freezers
+              .filter((freezer) => freezer.containerID !== undefined && freezer.containerID !== null)
+              .map((freezer) => (
+                <option key={freezer._id} value={String(freezer.containerID)}>
+                  {freezer.name}
+                </option>
+              ))}
           </select>
         </div>
         <div className="form-grid-full">
