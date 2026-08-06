@@ -813,6 +813,16 @@ class ImportService {
         axisPenalties: [],
       },
       externalQualityAssessment,
+      // #477 audit: `locationID` (capital ID) here is not a mismatch with
+      // Sample.js's Mongoose schema field `locationId` (line 58) — this
+      // service inserts via the raw MongoDB driver (bypasses that schema
+      // entirely) and `locationID` is the legacy numeric location field
+      // consistently read elsewhere (label.routes.js, sample.service.js's
+      // cleanup, location-storage-backfill.service.js's #461 backfill
+      // query). The Mongoose schema's `locationId` field is the actual
+      // outlier — appears unused for writes anywhere in the codebase —
+      // but that's a separate, non-blocking housekeeping question, not
+      // this write path.
       locationID: toInt(locationRaw, 'locationID'),
       linkedProject: normalizeString(linkedProjectRaw),
       specimenStatus: SampleModel.mapLegacyLifecycleStatusToSpecimenStatus(

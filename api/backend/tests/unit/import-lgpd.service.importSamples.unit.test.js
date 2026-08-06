@@ -50,17 +50,36 @@ const VALID_ROW = {
   sprec_primary_container: 'PC1',
 };
 
+// Mirrors the real driver closely enough to prove AllocateSampleUseCase's
+// withTransaction wiring (#477, same pattern sample.service.test.js's #474
+// coverage uses): withTransaction just runs the handler, same as the real
+// session aborting uncommitted on a thrown error.
+function makeSession() {
+  return {
+    withTransaction: vi.fn(async (handler) => handler()),
+    endSession: vi.fn().mockResolvedValue(undefined),
+  };
+}
+
 function makeDb({ sampleTypeFound = true, sampleOriginFound = true, protocolFound = true, existingBarcode = null } = {}) {
+  // Stateful enough for AllocateSampleUseCase's post-insert
+  // findSampleById(insertedId) lookup to resolve the row it just inserted.
+  let insertedSample = null;
   const samplesCollection = {
-    insertOne: vi.fn().mockResolvedValue({ insertedId: 'sample-id-1' }),
-    updateOne: vi.fn().mockResolvedValue({}),
-    // Backs both the barcode-duplicate check and generateUniqueSpecimenId's
-    // own collision check (`{ specimenId }`) — only the barcode query should
-    // resolve `existingBarcode`, or the specimenId generator spins until it
-    // exhausts its retry budget.
+    insertOne: vi.fn().mockImplementation((doc) => {
+      insertedSample = { _id: 'sample-id-1', ...doc };
+      return Promise.resolve({ insertedId: 'sample-id-1' });
+    }),
+    updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
+    // Backs the barcode-duplicate check, generateUniqueSpecimenId's own
+    // collision check (`{ specimenId }`), and AllocateSampleUseCase's
+    // findSampleById(insertedId) lookup (`{ _id }`).
     findOne: vi.fn().mockImplementation((query) => {
       if (query && Object.prototype.hasOwnProperty.call(query, 'specimenId')) {
         return Promise.resolve(null);
+      }
+      if (query && Object.prototype.hasOwnProperty.call(query, '_id')) {
+        return Promise.resolve(insertedSample);
       }
       return Promise.resolve(existingBarcode);
     }),
@@ -76,6 +95,19 @@ function makeDb({ sampleTypeFound = true, sampleOriginFound = true, protocolFoun
     find: vi.fn(() => ({ sort: () => ({ limit: () => ({ toArray: async () => [] }) }) })),
     findOne: vi.fn().mockResolvedValue(null),
   };
+  // AllocateSampleUseCase's audit trail (MongoAuditRepository) and
+  // storagePaths hierarchy lookup (MongoStorageRepository.openStorageAssignment).
+  const sampleMovementsCollection = {
+    insertOne: vi.fn().mockResolvedValue({ insertedId: 'movement-1' }),
+    find: vi.fn(() => ({ sort: () => ({ limit: () => ({ toArray: async () => [], next: async () => null }) }) })),
+    createIndex: vi.fn().mockResolvedValue(true),
+  };
+  const countersCollection = {
+    findOneAndUpdate: vi.fn().mockResolvedValue({ seq: 1 }),
+  };
+  const storagePathsCollection = {
+    findOne: vi.fn().mockResolvedValue(null),
+  };
 
   const collections = {
     samples: samplesCollection,
@@ -84,8 +116,12 @@ function makeDb({ sampleTypeFound = true, sampleOriginFound = true, protocolFoun
     sampleOrigins: sampleOriginsCollection,
     extractionProtocols: extractionProtocolsCollection,
     amostras: amostrasCollection,
+    sample_movements: sampleMovementsCollection,
+    counters: countersCollection,
+    storagePaths: storagePathsCollection,
   };
 
+  const session = makeSession();
   const db = {
     collection: vi.fn((name) => {
       if (!collections[name]) {
@@ -93,6 +129,9 @@ function makeDb({ sampleTypeFound = true, sampleOriginFound = true, protocolFoun
       }
       return collections[name];
     }),
+    client: {
+      startSession: vi.fn(() => session),
+    },
   };
 
   return { db, samplesCollection, patientsCollection };
@@ -360,6 +399,31 @@ describe('ImportLGPDService.importSamples', () => {
           sort: () => ({ toArray: async () => [...chain.boxes] }),
         })),
         findOne: vi.fn(async ({ _id }) => chain.boxes.find((b) => String(b._id) === String(_id)) || null),
+        // Real-enough occupancyGrid write for AllocateSampleUseCase's
+        // atomic reservation (#477) — mutates the shared box object in
+        // place (same instance `findOne` returns), so a second row against
+        // an already-occupied position genuinely collides (matchedCount 0)
+        // instead of silently reusing the same slot like the pre-#477
+        // direct-write path did.
+        updateOne: vi.fn(async (filter, update) => {
+          const target = chain.boxes.find((b) => String(b._id) === String(filter._id));
+          if (!target) return { matchedCount: 0, modifiedCount: 0 };
+          const positionKey = Object.keys(filter).find((key) => key.startsWith('occupancyGrid.'));
+          const position = positionKey ? positionKey.split('.')[1] : null;
+          if (position && target.occupancyGrid?.[position]) {
+            return { matchedCount: 0, modifiedCount: 0 };
+          }
+          const setFields = update.$set || {};
+          for (const [key, value] of Object.entries(setFields)) {
+            if (key.startsWith('occupancyGrid.')) {
+              target.occupancyGrid[key.split('.')[1]] = value;
+            }
+          }
+          if (update.$inc?.currentOccupancy) {
+            target.currentOccupancy = (target.currentOccupancy || 0) + update.$inc.currentOccupancy;
+          }
+          return { matchedCount: 1, modifiedCount: 1 };
+        }),
       };
       const equipmentCollection = {
         findOne: vi.fn(async () => ({ equipmentID: 42, status: equipmentStatus })),

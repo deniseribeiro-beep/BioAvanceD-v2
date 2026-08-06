@@ -19,6 +19,10 @@ const DrugService = require('./DrugService');
 const participantIdentityService = require('./PatientIdentityService');
 const { generateSampleHash } = require('./MerkleService');
 const qualityDomain = require('./quality-domain.service');
+const AllocateSampleUseCase = require('../core/use-cases/AllocateSampleUseCase');
+const MongoStorageRepository = require('../infrastructure/persistence/mongo/MongoStorageRepository');
+const MongoAuditRepository = require('../infrastructure/persistence/mongo/MongoAuditRepository');
+const LineageRepository = require('../infrastructure/database/neo4j/LineageRepository');
 
 const CRITICAL_SENSOR_STATUSES = ['maintenance', 'calibration', 'error', 'offline'];
 const BLOCKED_EQUIPMENT_STATUSES = ['maintenance', 'inactive', 'needs calibration', 'error', 'retired'];
@@ -834,7 +838,7 @@ class ImportLGPDService {
    * @param {Object} options - Opções de importação { startBoxId, autoIncrement }
    */
   async importSamples(db, file, options = {}) {
-    const { startBoxId = null, autoIncrement = false, groupFields = {} } = options;
+    const { startBoxId = null, autoIncrement = false, groupFields = {}, neo4jDriver = null, actor = {} } = options;
     const results = {
       total: 0,
       success: 0,
@@ -848,6 +852,19 @@ class ImportLGPDService {
       const patientsCollection = await getCollection(db, 'patients');
       const validator = new SampleGraphValidator(db);
       const drugService = new DrugService(db);
+      // #477: samples are inserted unallocated, then AllocateSampleUseCase
+      // performs the atomic occupancyGrid write, storageLocation update,
+      // StorageAssignment record and audit/lineage trail — same use case
+      // sample.service.js's createSample reuses (#474). Replaces this
+      // loop's old direct storageLocation write + manual StorageAssignment
+      // insert, which never updated the box's occupancyGrid, so a fixed
+      // (non-auto-increment) target box silently double-booked its first
+      // free position across every row.
+      const allocateUseCase = new AllocateSampleUseCase({
+        storageRepository: new MongoStorageRepository(db),
+        auditRepository: new MongoAuditRepository(db),
+        lineageRepository: new LineageRepository(neo4jDriver)
+      });
 
       // Campos obrigatórios para amostras.
       const requiredFields = ['sampleType', 'sampleOrigin'];
@@ -1020,11 +1037,15 @@ class ImportLGPDService {
             }
           }
 
-          // #459: resolve a canonical storageLocation (boxId/positionCode)
+          // #459/#477: resolve a candidate storageLocation (boxId/positionCode)
           // for this row — CSV-provided boxId first, then auto-increment
           // from the StorageBox sequence, then a single fixed startBoxId
           // applied to every location-less row — same precedence the legacy
-          // `getNextAvailableLocation`/`startLocationID` path used.
+          // `getNextAvailableLocation`/`startLocationID` path used. Kept as a
+          // local candidate (not written onto sampleData) — the sample is
+          // inserted unallocated below, then AllocateSampleUseCase performs
+          // the actual atomic occupancyGrid reservation for this candidate.
+          let candidateLocation = null;
           if (sampleData.boxId) {
             const { ObjectId } = require('mongodb');
             const boxesCollection = db.collection('storageBoxes');
@@ -1033,17 +1054,17 @@ class ImportLGPDService {
               : null;
             const providedBox = providedBoxId ? await boxesCollection.findOne({ _id: providedBoxId }) : null;
             if (providedBox) {
-              sampleData.storageLocation = {
+              candidateLocation = {
                 boxId: providedBox._id,
                 position: sampleData.positionCode || this.findFirstAvailablePositionInBox(providedBox),
               };
             }
           }
 
-          if (!sampleData.storageLocation && autoIncrement && startBoxId) {
+          if (!candidateLocation && autoIncrement && startBoxId) {
             const nextSlot = await this.getNextAvailableStorageSlot(db, startBoxId, results.success);
             if (nextSlot && nextSlot.position) {
-              sampleData.storageLocation = { boxId: nextSlot.boxId, position: nextSlot.position };
+              candidateLocation = { boxId: nextSlot.boxId, position: nextSlot.position };
               logger.debug(`Localização automática atribuída: caixa ${nextSlot.boxId} posição ${nextSlot.position} para linha ${rowNumber}`);
             } else {
               results.errors.push({
@@ -1053,14 +1074,14 @@ class ImportLGPDService {
               });
               continue;
             }
-          } else if (!sampleData.storageLocation && !autoIncrement && startBoxId) {
+          } else if (!candidateLocation && !autoIncrement && startBoxId) {
             const { ObjectId } = require('mongodb');
             const boxesCollection = db.collection('storageBoxes');
             const startBoxObjectId = ObjectId.isValid(String(startBoxId)) ? new ObjectId(String(startBoxId)) : null;
             const startBox = startBoxObjectId ? await boxesCollection.findOne({ _id: startBoxObjectId }) : null;
             const position = startBox ? this.findFirstAvailablePositionInBox(startBox) : null;
             if (startBox && position) {
-              sampleData.storageLocation = { boxId: startBox._id, position };
+              candidateLocation = { boxId: startBox._id, position };
             }
           }
 
@@ -1069,9 +1090,9 @@ class ImportLGPDService {
           // specimen in a freezer that isn't equipment-ready or has no
           // operational sensor; bulk LGPD import bypasses `createSample`
           // entirely and previously never checked this at all.
-          if (sampleData.storageLocation?.boxId) {
+          if (candidateLocation?.boxId) {
             const storageBoxesCollection = db.collection('storageBoxes');
-            const placementBox = await storageBoxesCollection.findOne({ _id: sampleData.storageLocation.boxId });
+            const placementBox = await storageBoxesCollection.findOne({ _id: candidateLocation.boxId });
             const { freezer: placementFreezer } = placementBox
               ? await this.resolveStorageHierarchyForBox(db, placementBox)
               : {};
@@ -1102,33 +1123,30 @@ class ImportLGPDService {
           sample.patientObjectId = sampleData.patientObjectId || null;
           sample.merkleRoot = generateSampleHash(sample);
           
-          // Insere no banco
+          // Insere no banco (sem storageLocation — a amostra entra não alocada)
           const insertResult = await samplesCollection.insertOne(sample);
           results.importedSampleIds.push(insertResult.insertedId);
 
-          // #459: dict-02 StorageAssignment (ELM-0167-0178) — open the
-          // placement-history record for the specimen's stay at
-          // boxId/positionCode, same convention #461/#462 use
-          // (equipmentId = the FREEZER StorageContainer's _id).
-          if (sample.storageLocation?.boxId) {
-            const StorageAssignmentModel = require('../models/StorageAssignment');
-            const storageBoxesCollection = db.collection('storageBoxes');
-            const assignedBox = await storageBoxesCollection.findOne({ _id: sample.storageLocation.boxId });
-            const { rack, shelf, freezer } = assignedBox
-              ? await this.resolveStorageHierarchyForBox(db, assignedBox)
-              : {};
-            if (freezer) {
-              const storageAssignmentsCollection = db.collection('storageAssignments');
-              await storageAssignmentsCollection.insertOne(StorageAssignmentModel.open({
-                specimenId: insertResult.insertedId,
-                boxId: sample.storageLocation.boxId,
-                positionCode: sample.storageLocation.position,
-                equipmentId: freezer._id,
-                shelfId: shelf?._id || null,
-                rackId: rack?._id || null,
-                placedAt: sample.registeredAt
-              }));
-            }
+          // #477: AllocateSampleUseCase performs the atomic occupancyGrid
+          // write, storageLocation update, StorageAssignment record
+          // (dict-02 ELM-0167-0178) and audit/lineage trail for the
+          // candidate resolved above — replaces the old manual
+          // StorageAssignment insert, which never touched the box's
+          // occupancyGrid.
+          if (candidateLocation?.boxId) {
+            await allocateUseCase.execute({
+              specimenId: insertResult.insertedId,
+              boxId: String(candidateLocation.boxId),
+              position: candidateLocation.position,
+              actor: {
+                userId: actor?.userId || null,
+                userName: actor?.userName || 'IMPORT_LGPD',
+                userRole: actor?.userRole || null,
+                ipAddress: actor?.ipAddress || null,
+                userAgent: actor?.userAgent || null
+              }
+            });
+            sample.storageLocation = { boxId: candidateLocation.boxId, position: candidateLocation.position };
           }
 
           const hasMissingEthicsOrSprec = !sampleData.consentTemplateId

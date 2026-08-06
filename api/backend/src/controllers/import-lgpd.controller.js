@@ -539,7 +539,15 @@ class ImportLGPDController {
       const results = await importLGPDService.importSamples(db, file, {
         startBoxId,
         autoIncrement,
-        groupFields
+        groupFields,
+        neo4jDriver: req.app.locals.neo4jDriver || null,
+        actor: {
+          userId: req.user?.id || req.user?._id || null,
+          userName: req.user?.name || req.user?.email || 'IMPORT_LGPD',
+          userRole: req.user?.role || null,
+          ipAddress: req.ip || null,
+          userAgent: req.get?.('user-agent') || null
+        }
       });
 
       // Registra log sanitizado (anonimizado via auditLogger)

@@ -23,10 +23,14 @@ class SampleWorker {
       };
 
       // Processa importação
+      // #477: no Neo4j driver is available in this worker process — lineage
+      // recording falls back to fail-open (logs, doesn't block) exactly as
+      // AllocateSampleUseCase already handles a missing lineageRepository.
       const results = await importLGPDService.importSamples(db, file, {
         startBoxId: options.startBoxId,
         autoIncrement: options.autoIncrement,
         groupFields: options.groupFields || {},
+        actor: { userId: null, userName: 'IMPORT_WORKER' },
       });
 
       const processingTime = (Date.now() - startTime) / 1000;
