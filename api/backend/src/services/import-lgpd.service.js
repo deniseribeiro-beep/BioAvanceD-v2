@@ -796,24 +796,24 @@ class ImportLGPDService {
         return null;
       }
 
-      const availableBoxes = boxes
+      const boxCandidates = boxes
         .slice(startIndex)
         .filter((box) => this.isBoxAvailable(box));
 
-      const target = availableBoxes[index];
+      // #471: skip candidates whose freezer fails the RF004 readiness gate
+      // and keep advancing, matching `intakeWizard.js`'s
+      // `resolveAutomaticLocation` — a single non-ready freezer shouldn't
+      // fail rows that could be placed in a later box in the same sequence.
+      const readyBoxes = [];
+      for (const box of boxCandidates) {
+        const { freezer } = await this.resolveStorageHierarchyForBox(db, box);
+        if (!freezer) continue;
+        if (!(await this.isPlacementReady(db, freezer))) continue;
+        readyBoxes.push(box);
+      }
+
+      const target = readyBoxes[index];
       if (!target) {
-        return null;
-      }
-
-      const { freezer } = await this.resolveStorageHierarchyForBox(db, target);
-      if (!freezer) {
-        return null;
-      }
-
-      // #467: RF004 readiness gate — a box in a freezer that's not
-      // equipment-ready / has no operational sensor isn't a valid auto-
-      // increment target, same as `sample.service.js`/`intakeWizard.js`.
-      if (!(await this.isPlacementReady(db, freezer))) {
         return null;
       }
 
