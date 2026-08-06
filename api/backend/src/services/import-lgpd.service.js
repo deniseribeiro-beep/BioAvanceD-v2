@@ -20,6 +20,40 @@ const participantIdentityService = require('./PatientIdentityService');
 const { generateSampleHash } = require('./MerkleService');
 const qualityDomain = require('./quality-domain.service');
 
+const CRITICAL_SENSOR_STATUSES = ['maintenance', 'calibration', 'error', 'offline'];
+const BLOCKED_EQUIPMENT_STATUSES = ['maintenance', 'inactive', 'needs calibration', 'error', 'retired'];
+
+function buildIdVariants(...ids) {
+  const variants = [];
+  const seen = new Set();
+  const add = (value) => {
+    if (value === undefined || value === null || value === '') return;
+    const key = `${typeof value}:${String(value)}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      variants.push(value);
+    }
+  };
+
+  for (const id of ids) {
+    if (id === undefined || id === null || id === '') continue;
+    add(id);
+    add(String(id));
+
+    const numeric = Number(id);
+    if (Number.isFinite(numeric)) {
+      add(numeric);
+    }
+  }
+
+  return variants;
+}
+
+function isOperationalSensor(sensor) {
+  const status = String(sensor?.status || sensor?.maintenanceStatus || sensor?.operationalStatus || '').trim().toLowerCase();
+  return !status || !CRITICAL_SENSOR_STATUSES.includes(status);
+}
+
 /**
  * Service de Importação LGPD
  * Implementa importação de pacientes e amostras via CSV/Excel
@@ -693,6 +727,37 @@ class ImportLGPDService {
     return null;
   }
 
+  /**
+   * #467: RF004 operational-sensor/equipment-readiness gate, mirrored from
+   * `sample.service.js`'s `createSample` / `intakeWizard.js`'s
+   * `isEquipmentReadyForContainer`+`hasOperationalSensorForContainer`
+   * (equipment-level granularity, per #465). Bulk LGPD import bypasses
+   * `createSample` and previously placed samples without this check at all.
+   */
+  async isPlacementReady(db, freezer) {
+    if (!freezer?.containerID) return false;
+
+    const equipmentVariants = buildIdVariants(freezer.containerID);
+    const equipmentCollection = db.collection('equipment');
+    const equipment = await equipmentCollection.findOne({
+      equipmentID: { $in: equipmentVariants }
+    });
+    if (!equipment) return false;
+
+    const equipmentStatus = String(equipment.status || equipment.maintenanceStatus || equipment.operationalStatus || '').trim().toLowerCase();
+    if (equipmentStatus && BLOCKED_EQUIPMENT_STATUSES.includes(equipmentStatus)) return false;
+
+    const sensorsCollection = db.collection('sensors');
+    const sensors = await sensorsCollection.find({
+      $or: [
+        { locationId: { $in: equipmentVariants } },
+        { locationID: { $in: equipmentVariants } }
+      ]
+    }).limit(20).toArray();
+
+    return sensors.some(isOperationalSensor);
+  }
+
   isBoxAvailable(box) {
     const status = String(box?.status || '').trim().toUpperCase();
     if (status && ['FULL', 'RETIRED', 'INACTIVE'].includes(status)) return false;
@@ -742,6 +807,13 @@ class ImportLGPDService {
 
       const { freezer } = await this.resolveStorageHierarchyForBox(db, target);
       if (!freezer) {
+        return null;
+      }
+
+      // #467: RF004 readiness gate — a box in a freezer that's not
+      // equipment-ready / has no operational sensor isn't a valid auto-
+      // increment target, same as `sample.service.js`/`intakeWizard.js`.
+      if (!(await this.isPlacementReady(db, freezer))) {
         return null;
       }
 
@@ -989,6 +1061,27 @@ class ImportLGPDService {
             const position = startBox ? this.findFirstAvailablePositionInBox(startBox) : null;
             if (startBox && position) {
               sampleData.storageLocation = { boxId: startBox._id, position };
+            }
+          }
+
+          // #467: RF004 operational-sensor/equipment-readiness gate —
+          // `createSample`/`intakeWizard.js` both refuse to place a
+          // specimen in a freezer that isn't equipment-ready or has no
+          // operational sensor; bulk LGPD import bypasses `createSample`
+          // entirely and previously never checked this at all.
+          if (sampleData.storageLocation?.boxId) {
+            const storageBoxesCollection = db.collection('storageBoxes');
+            const placementBox = await storageBoxesCollection.findOne({ _id: sampleData.storageLocation.boxId });
+            const { freezer: placementFreezer } = placementBox
+              ? await this.resolveStorageHierarchyForBox(db, placementBox)
+              : {};
+            if (!placementFreezer || !(await this.isPlacementReady(db, placementFreezer))) {
+              results.errors.push({
+                row: rowNumber,
+                errors: ['Localização física sem equipamento pronto ou sensor operacional associado.'],
+                data: { participantId: participantIdStr }
+              });
+              continue;
             }
           }
 
