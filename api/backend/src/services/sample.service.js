@@ -20,6 +20,9 @@ const { ObjectId } = require('mongodb');
 
 const LOCATION_REQUIRED_MESSAGE = 'Localização física obrigatória para cadastro de amostra';
 const CRITICAL_SENSOR_STATUSES = ['maintenance', 'calibration', 'error', 'offline'];
+// #470: mirrors intakeWizard.js's BLOCKED_EQUIPMENT_STATUSES — the
+// equipment-readiness half of RF004's gate, missing here until now.
+const BLOCKED_EQUIPMENT_STATUSES = ['maintenance', 'inactive', 'needs calibration', 'error', 'retired'];
 
 /**
  * Every caller (sample.routes.js) passes an already-cast ObjectId as
@@ -227,6 +230,13 @@ class SampleService {
 
       if (!equipment) {
         throw createSampleValidationError('Equipamento vinculado à localização física não está cadastrado');
+      }
+
+      // #470: equipment.status must also be checked — existence alone isn't
+      // readiness (mirrors intakeWizard.js's isEquipmentReadyForContainer).
+      const equipmentStatus = String(equipment.status || equipment.maintenanceStatus || equipment.operationalStatus || '').trim().toLowerCase();
+      if (equipmentStatus && BLOCKED_EQUIPMENT_STATUSES.includes(equipmentStatus)) {
+        throw createSampleValidationError(`Equipamento vinculado à localização física não está operacional. Status atual: ${equipmentStatus}.`);
       }
 
       // #462: Sensor has no dict-02 canonical placement of its own, so the

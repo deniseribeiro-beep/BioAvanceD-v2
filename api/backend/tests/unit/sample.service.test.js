@@ -351,6 +351,28 @@ describe('sample.service', () => {
       ).rejects.toThrow(/hierarquia de armazenamento incompleta/);
     });
 
+    it('rejects when the linked equipment is in a blocked status, per issue #470', async () => {
+      const db = makeDb();
+      mockOperationalStorage(db);
+      db.collection.mockImplementation((name) => {
+        if (name === 'storageBoxes') return { findOne: vi.fn().mockResolvedValue({ _id: BOX_ID, parent_id: RACK_ID }) };
+        if (name === 'storageContainers') {
+          const containersById = new Map([
+            [String(RACK_ID), { _id: RACK_ID, containerType: 'RACK', parent_id: SHELF_ID }],
+            [String(SHELF_ID), { _id: SHELF_ID, containerType: 'SHELF', parent_id: FREEZER_ID }],
+            [String(FREEZER_ID), { _id: FREEZER_ID, containerType: 'FREEZER', containerID: 'EQ-1', parent_id: null }]
+          ]);
+          return { findOne: vi.fn((query) => Promise.resolve(containersById.get(String(query._id)) || null)) };
+        }
+        if (name === 'equipment') return { findOne: vi.fn().mockResolvedValue({ equipmentID: 'EQ-1', status: 'maintenance' }) };
+        return db.collections[name] || (db.collections[name] = makeCollection(name));
+      });
+
+      await expect(
+        sampleService.createSample(db, validSampleData())
+      ).rejects.toThrow(/Equipamento vinculado à localização física não está operacional/);
+    });
+
     it('rejects when no sensor is associated with the resolved freezer', async () => {
       const db = makeDb();
       mockOperationalStorage(db);
