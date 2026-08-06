@@ -370,3 +370,18 @@ which fail the row with a per-row error rather than throwing. Tests:
 cases: blocked equipment, no operational sensor, retired equipment via
 fixed startBoxId) and its `getNextAvailableStorageSlot` describe block
 (2 new cases) — 31 tests green in the touched file.
+
+**#471 resolved 2026-08-06:** the narrower `getNextAvailableStorageSlot`
+behavior noted above was Dennis's explicit call to make — asked whether
+auto-increment should skip a non-ready freezer and keep advancing
+(matching `resolveAutomaticLocation`) or keep failing the row on the
+first non-ready box. Dennis chose **skip-ahead**. `getNextAvailableStorageSlot`
+now filters candidate boxes down to ones whose freezer passes
+`isPlacementReady` before indexing by `index`, rather than checking
+readiness only on the already-selected target and returning `null`
+immediately. CSV-provided `boxId`/fixed `startBoxId` rows are unaffected —
+those still fail per-row on a non-ready freezer, since there's no
+"next candidate" to advance to for an explicit box. Tests: one new case
+in `getNextAvailableStorageSlot`'s describe block proving a non-ready
+freezer's box is skipped and the next ready box is returned — 32 tests
+green in the touched file.
