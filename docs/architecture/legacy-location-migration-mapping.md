@@ -87,3 +87,32 @@ service-layer consumer migration (`sample.service.js`, `intakeWizard.js`,
 `equipment-sensor-quarantine.service.js`) and the backfill script are
 carried forward as separate #458-family follow-ups (too large for one
 build-loop iteration alongside the schema change).
+
+**Landed 2026-08-06 (#461, backfill script):**
+`api/backend/src/services/location-storage-backfill.service.js` exports
+`backfillLocationsToStorage(db)`, run via the thin CLI wrapper
+`api/backend/src/scripts/backfillLocationStorage.js` (`connectDB`/
+`closeConnection`, matching `backfillUserRoleAssignments.js`'s pattern).
+Implements the plan above exactly: walks `locations` read-only, materializes
+(or reuses) the `StorageContainer`(FREEZER, keyed by `containerID` =
+`Equipment.equipmentID`) → `StorageContainer`(SHELF) →
+`StorageContainer`(RACK) → optional `StorageContainer`(DRAWER) →
+`StorageBox` chain per distinct tuple (SHELF/RACK/DRAWER found-or-created by
+a deterministic `{parent_id, containerType, name}` key, since only the
+FREEZER level has a natural numeric join key), then rewrites each
+`Sample.locationID` reference into an open `StorageAssignment` document via
+the existing `StorageAssignmentModel.open` helper. A location missing
+`equipmentID` or `rack` is skipped and recorded in the returned summary
+rather than guessing a fallback (mirrors the doc's rejection, above, of
+unverified assumptions about `drawer`). Backfilled `StorageBox` documents
+get a placeholder max-size grid (`26×100`) since legacy `locations` carries
+no box dimensions — real dimensions land whenever a consumer migration
+(#462-#464) next writes that box. Re-running is a no-op: containers/boxes
+are found-or-created by their deterministic key, and an already-open
+`StorageAssignment` for the same specimen/box/position is not duplicated.
+Proven with the strongest native-only bar this repo's build-loop overlay
+recognizes: an in-memory collection fake with real `$in`/exact-match
+query-matching semantics, not a stub returning canned data
+(`tests/unit/services/location-storage-backfill.service.test.js`, 7 cases).
+Consumer migration (#462/#463/#464) and retiring `locations` (#460) remain
+separate follow-ups.
