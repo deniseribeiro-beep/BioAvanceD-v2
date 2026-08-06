@@ -830,40 +830,6 @@ class ImportService {
   }
 
   /**
-   * Parse CSV/JSON para Location
-   */
-  parseLocationData(data) {
-    const parseErrors = [];
-
-    const toNumber = (value, fieldName) => {
-      if (value === undefined || value === null || value === '') return null;
-      const parsed = Number(String(value).trim());
-      if (Number.isNaN(parsed)) {
-        parseErrors.push(`${fieldName} inválido`);
-        return null;
-      }
-      return parsed;
-    };
-
-    const locationData = {
-      locationID: toNumber(data.locationID, 'locationID'),
-      equipmentType: toNumber(data.equipmentType, 'equipmentType'),
-      equipmentID: toNumber(data.equipmentID, 'equipmentID'),
-      block: toNumber(data.block, 'block'),
-      rack: toNumber(data.rack, 'rack'),
-      drawer: toNumber(data.drawer, 'drawer'),
-      box: toNumber(data.box, 'box'),
-      wellPosition: data.wellPosition || data.eppendorfWell || null
-    };
-
-    return { data: locationData, parseErrors };
-  }
-
-  parseLocationCSV(row) {
-    return this.parseLocationData(row);
-  }
-
-  /**
    * Parse CSV para Temperature
    */
   parseTemperatureCSV(row) {
