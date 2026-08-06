@@ -67,9 +67,8 @@ proof bar for this slice was the backend regression test (real
 `validateCommand`, not mocked) plus a clean frontend typecheck. A
 Playwright spec covering the panel (auto-assign path, explicit-position
 path, moveSample vs allocateSample branching) is a real, still-open
-coverage gap — not filed as its own issue since it's coverage work
-`test-loop`/`e2e-test-loop` would naturally pick up, not a product
-defect.
+coverage gap — filed as **#488** (coverage work for `test-loop`/
+`e2e-test-loop`, not a product defect).
 
 Both issues closed with the merge commit (`b6063a7a`) referenced in the
 close comments.
