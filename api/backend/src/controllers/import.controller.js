@@ -87,7 +87,7 @@ class ImportController {
         });
       }
 
-      if (!dataType || !['patients', 'samples', 'results', 'temperature', 'locations'].includes(dataType)) {
+      if (!dataType || !['patients', 'samples', 'results', 'temperature'].includes(dataType)) {
         return res.status(400).json({
           success: false,
           error: 'Tipo de dados inválido'
@@ -203,8 +203,14 @@ class ImportController {
             results = await importService.importTemperature(db, file);
             break;
           case 'locations':
-            results = await importService.importLocations(db, file);
-            break;
+            // Desativado (#466): a coleção legada `locations` deve
+            // permanecer somente-leitura durante a transição (#457).
+            importService.cleanupFile(file.path);
+            return res.status(400).json({
+              success: false,
+              error: "Importação de 'locations' está desativada",
+              message: 'A coleção legada locations é somente-leitura durante a transição (#457/#466).'
+            });
           case 'results':
             // TODO: Implementar importacao de arquivos de analise
             results = { success: 0, errors: [{ error: 'Importacao de arquivos de analise ainda nao implementada' }], total: 0 };

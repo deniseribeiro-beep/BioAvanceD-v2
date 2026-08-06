@@ -9,7 +9,6 @@ const patientWorker = require('./workers/patient-worker');
 const sampleWorker = require('./workers/sample-worker');
 const resultWorker = require('./workers/result-worker');
 const temperatureWorker = require('./workers/temperature-worker');
-const locationWorker = require('./workers/location-worker');
 const importAsyncService = require('../services/import-async.service');
 const batchValidationEngine = require('../services/batch-validation-engine.service');
 const { connectDB } = require('../database/mongo');
@@ -59,7 +58,7 @@ async function initWorker() {
       async (job) => {
         const { jobID, userID, dataType, filePath, fileName, options } = job.data;
         const dataTypeNormalized = (dataType || '').toString().trim().toLowerCase();
-        const allowedTypes = new Set(['patients', 'samples', 'results', 'temperature', 'temperature-iot', 'locations']);
+        const allowedTypes = new Set(['patients', 'samples', 'results', 'temperature', 'temperature-iot']);
 
         if (job.name === 'batch-import') {
           const stagingImportId = job.data?.stagingImportId || job.data?.jobId || job.id;
@@ -125,9 +124,6 @@ async function initWorker() {
               break;
             case 'temperature':
               result = await temperatureWorker.process(db, jobID, filePath, options);
-              break;
-            case 'locations':
-              result = await locationWorker.process(db, jobID, filePath, options);
               break;
             case 'temperature-iot':
               // Processa dados de IoT streaming

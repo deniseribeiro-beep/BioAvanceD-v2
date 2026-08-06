@@ -20,7 +20,6 @@ const patientWorkerPath = require.resolve('../../src/workers/workers/patient-wor
 const sampleWorkerPath = require.resolve('../../src/workers/workers/sample-worker');
 const resultWorkerPath = require.resolve('../../src/workers/workers/result-worker');
 const temperatureWorkerPath = require.resolve('../../src/workers/workers/temperature-worker');
-const locationWorkerPath = require.resolve('../../src/workers/workers/location-worker');
 const importAsyncServicePath = require.resolve('../../src/services/import-async.service');
 const batchValidationEnginePath = require.resolve('../../src/services/batch-validation-engine.service');
 const auditLoggerPath = require.resolve('../../src/utils/auditLogger');
@@ -38,7 +37,6 @@ let fakePatientWorker;
 let fakeSampleWorker;
 let fakeResultWorker;
 let fakeTemperatureWorker;
-let fakeLocationWorker;
 let fakeImportAsyncService;
 let fakeBatchValidationEngine;
 let fakeAuditLogger;
@@ -157,14 +155,6 @@ function installFakes() {
     exports: fakeTemperatureWorker,
   };
 
-  fakeLocationWorker = { process: vi.fn().mockResolvedValue(makeWorkerResult()) };
-  require.cache[locationWorkerPath] = {
-    id: locationWorkerPath,
-    filename: locationWorkerPath,
-    loaded: true,
-    exports: fakeLocationWorker,
-  };
-
   fakeImportAsyncService = { saveMetrics: vi.fn().mockResolvedValue(undefined) };
   require.cache[importAsyncServicePath] = {
     id: importAsyncServicePath,
@@ -254,7 +244,6 @@ function clearAllCaches() {
   delete require.cache[sampleWorkerPath];
   delete require.cache[resultWorkerPath];
   delete require.cache[temperatureWorkerPath];
-  delete require.cache[locationWorkerPath];
   delete require.cache[importAsyncServicePath];
   delete require.cache[batchValidationEnginePath];
   delete require.cache[auditLoggerPath];
