@@ -26,6 +26,7 @@ const auditLoggerPath = require.resolve('../../src/utils/auditLogger');
 const notificationServicePath = require.resolve('../../src/services/notification.service');
 const iotStreamingServicePath = require.resolve('../../src/services/iot-streaming.service');
 const loggerPath = require.resolve('../../src/utils/logger');
+const neo4jConnectionPath = require.resolve('../../src/infrastructure/database/neo4j/connection');
 
 let FakeWorker;
 let fakeWorkerInstances;
@@ -44,6 +45,7 @@ let fakeNotificationService;
 let fakeIotStreamingService;
 let fakeDb;
 let fakeLogger;
+let fakeNeo4jConnection;
 
 function makeWorkerResult(overrides = {}) {
   return {
@@ -226,6 +228,16 @@ function installFakes() {
     loaded: true,
     exports: fakeLogger,
   };
+
+  fakeNeo4jConnection = {
+    connectNeo4j: vi.fn().mockResolvedValue({ marker: 'fake-neo4j-driver' }),
+  };
+  require.cache[neo4jConnectionPath] = {
+    id: neo4jConnectionPath,
+    filename: neo4jConnectionPath,
+    loaded: true,
+    exports: fakeNeo4jConnection,
+  };
 }
 
 function freshImportWorkerModule() {
@@ -250,6 +262,7 @@ function clearAllCaches() {
   delete require.cache[notificationServicePath];
   delete require.cache[iotStreamingServicePath];
   delete require.cache[loggerPath];
+  delete require.cache[neo4jConnectionPath];
 }
 
 describe('workers/import-worker', () => {
@@ -384,7 +397,7 @@ describe('workers/import-worker', () => {
       expect(result).toEqual(makeWorkerResult());
     });
 
-    it('routes "samples" to the sample worker with the right args', async () => {
+    it('routes "samples" to the sample worker with userID and a connected Neo4j driver threaded through options (#483)', async () => {
       const processor = await getProcessor();
       const job = {
         id: 'j4',
@@ -395,14 +408,44 @@ describe('workers/import-worker', () => {
           dataType: 'samples',
           filePath: '/tmp/samples.csv',
           fileName: 'samples.csv',
+          options: { foo: 'bar' },
+        },
+      };
+
+      await processor(job);
+
+      expect(fakeNeo4jConnection.connectNeo4j).toHaveBeenCalledTimes(1);
+      expect(fakeSampleWorker.process).toHaveBeenCalledWith(fakeDb, 'j4', '/tmp/samples.csv', {
+        foo: 'bar',
+        userID: 'u1',
+        neo4jDriver: { marker: 'fake-neo4j-driver' },
+      });
+      expect(fakePatientWorker.process).not.toHaveBeenCalled();
+    });
+
+    it('routes "samples" with neo4jDriver: null (fail-open) when Neo4j is unavailable (#483)', async () => {
+      fakeNeo4jConnection.connectNeo4j.mockRejectedValue(new Error('Neo4j indisponível'));
+      const processor = await getProcessor();
+      const job = {
+        id: 'j4b',
+        name: 'import',
+        data: {
+          jobID: 'j4b',
+          userID: 'u1',
+          dataType: 'samples',
+          filePath: '/tmp/samples.csv',
+          fileName: 'samples.csv',
           options: {},
         },
       };
 
       await processor(job);
 
-      expect(fakeSampleWorker.process).toHaveBeenCalledWith(fakeDb, 'j4', '/tmp/samples.csv', {});
-      expect(fakePatientWorker.process).not.toHaveBeenCalled();
+      expect(fakeSampleWorker.process).toHaveBeenCalledWith(fakeDb, 'j4b', '/tmp/samples.csv', {
+        userID: 'u1',
+        neo4jDriver: null,
+      });
+      expect(fakeLogger.warn).toHaveBeenCalledWith(expect.stringContaining('Neo4j indisponível'));
     });
 
     it('routes "results" to the result worker with the right args', async () => {
