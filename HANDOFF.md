@@ -1,77 +1,84 @@
 # HANDOFF
 
 **Written:** 2026-08-06, end of session on `feature/docker-e2e-backend-integration`,
-after resolving #471 (LGPD bulk-import auto-increment skip-ahead design call).
+after picking up #460 and finding it blocked (no code changes landed).
 
 ## What happened this session
 
-Dennis said "Pick #471." Routed via `work-issue` -> `resolve-issue`
-(design question, not a defect/coverage-gap/new-capability shape).
+Dennis said "Pick #460." Routed via `work-issue` -> `resolve-issue`
+(legacy-code retirement item, not a defect/coverage-gap/new-capability
+shape).
 
-**#471** asked whether `import-lgpd.service.js`'s
-`getNextAvailableStorageSlot` (LGPD bulk-import auto-increment) should
-skip a non-ready freezer and keep advancing to the next candidate box
-(matching `intakeWizard.js`'s `resolveAutomaticLocation`), or keep
-failing the row immediately on the first non-ready box (the #467
-behavior). The docs mapping's own #467 entry had already checked
-RF004/RF029/canonical-data-contract-v1.md for this and found nothing
-settles it — genuinely Dennis's call, not resolvable from docs. Asked
-directly via `AskUserQuestion`. **Dennis chose skip-ahead.**
+**#460** ("Retire legacy Location API surface") assumed that once #458
+and #459 landed, nothing would reference the legacy `locations`
+collection anymore. Checked #458/#459 — both closed — then researched
+actual remaining references (via a read-only `Explore` agent, scoped to
+frontend + backend + tests, per `agent-delegation`) before touching
+anything.
 
-**Landed:**
-- `getNextAvailableStorageSlot` (`api/backend/src/services/import-lgpd.service.js`)
-  now builds its candidate-box list by filtering out boxes whose freezer
-  fails `isPlacementReady` *before* indexing by `index`, rather than
-  checking readiness only on the already-selected target and returning
-  `null` immediately. CSV-provided `boxId` / fixed `startBoxId` rows are
-  unchanged — those still fail per-row on a non-ready freezer, since
-  there's no "next candidate" concept for an explicit box.
-- New unit test in
-  `tests/unit/import-lgpd.service.importSamples.unit.test.js` proving a
-  non-ready freezer's box is skipped and the next ready box returned —
-  32 tests green in the touched file, on the branch and again after
-  merge.
-- Decision recorded in
-  `docs/architecture/legacy-location-migration-mapping.md` as a new
-  "#471 resolved" entry following the #467 entry (not editing #467's
-  own history).
-- Branch `fix/471-getnextavailablestorageslot-skip-nonready-freezer`
-  merged `--no-ff` into `feature/docker-e2e-backend-integration`
-  (884004fe), pushed. #471 closed with a comment carrying the merge
-  commit hash; separate "merged" comment posted after the fold-in per
-  convention. Branch deleted (local + remote), no permission-classifier
-  friction this time.
+**Finding: the premise was wrong.** #458/#459 only migrated
+service-layer and import-path consumers. Two frontend views still call
+the legacy `/api/locations` CRUD route via `locationService`/
+`useLocations` (`frontend/src/services/api.ts`,
+`frontend/src/hooks/useLocations.ts`):
+- `FacilityManagementPage.tsx` — **untracked by any existing issue**
+- `SampleDetailsPage.tsx` — nominally on #454's consumer list, but #454
+  is itself blocked on #450 (still open)
 
-Ran `wrap-up`: no friction. The branch-creation block on the protected
-`feature/docker-e2e-backend-integration` branch fired exactly as
-documented (Edit blocked, created the `fix/<slug>` branch, retried) —
-not a surprise, not worth filing. No scope drift (only the three files
-#471's fix touches), no lazy fixes, no security-relevant changes, no
-unfiled findings, no sub-point left ambiguous-and-closed.
+Deleting `location.routes.js`/`Location.js`/`locationIDGenerator.js`
+now would break both pages. Also confirmed (read-only): `import.service.js`
+still `require()`s `models/Location` as `LocationModel` but never calls
+anything on it outside the already-disabled `importLocations()` (#466) —
+dead but harmless, in scope for whenever the model itself is deleted, not
+worth touching in isolation. `audit.middleware.js` has two small
+Location-entity mapping entries (`VALID_ENTITIES`, `entityMap`) tied to
+the still-live route — same, update alongside the route deletion, not
+before.
+
+Surfaced the scope mismatch to Dennis via `AskUserQuestion` rather than
+silently deciding; he chose "file new issue + comment + defer."
+
+**Landed (tracker only, no code):**
+- Filed **#472** — "Migrate FacilityManagementPage.tsx off legacy
+  locationService/useLocations onto canonical Facility/Room/Storage API."
+  Depends on #450 (same dependency #454 has). Blocks #460.
+- Commented on **#460** recording the blocker, the corrected dependency
+  chain (#460 now also depends on #472 and #454, both ultimately on
+  #450), and the two harmless-but-in-scope dead-code notes above.
+  **#460 left open** — not resolvable this session, correctly so.
+
+Ran `wrap-up`: no friction. No code touched (research-only, matching the
+scope required once the blocker was found), no lazy fixes, both deferred
+cleanup items are tracked as part of #460's own stated scope rather than
+left dangling, #472 was filed before the #460 comment that references it
+(correct order, avoids a dangling reference).
 
 ## Repo state
 
 - **`feature/docker-e2e-backend-integration`**: clean, pushed through
-  `884004fe` (merge landing #471). Untracked `api/backend/out.txt` still
-  present, still not investigated — carried forward again (many
-  sessions running now).
+  `0d1f6b7c` (HANDOFF rotation after #471). No new commits this session —
+  #460's investigation produced only tracker writes (issue + comment), no
+  branch was created. Untracked `api/backend/out.txt` still present,
+  still not investigated — carried forward again (many sessions running
+  now).
 - **`fix/450-storageservice-repository-migration`**: still merged, still
   not deleted — carried forward again, still safe to delete.
-- Issues: **#471 closed** (this session). **#469 closed** (prior
-  session, dead-code cleanup). **#470 closed** (prior session,
-  createSample equipment-status gate). **#467 closed** (prior session,
-  RF004 gate for LGPD bulk import). **#466/#465/#459/#464/#463/#462**
+- Issues: **#472 opened** (this session, blocks #460). **#460 still
+  open**, now blocked on #472 and #454 (both on #450), not just #458/#459
+  (both closed). **#471/#469/#470/#467/#466/#465/#459/#464/#463/#462**
   closed (prior sessions). **#450** still open (umbrella tracker, by
-  design). **#451, #454** still open. **#460** (retire `locations`)
-  unblocked on both its write-path (#466) and read-path (#459/#464)
-  dependencies — still worth checking whether it's now actually
-  pickable (carried forward, not re-checked this session).
+  design — also now a transitive blocker for #460 via #454/#472).
+  **#451, #454** still open.
 - Backlog otherwise unchanged from last handoff:
   - **#451** (status consolidation + custody/storage entity design
     question) — still open, still a real design question.
-  - **#454** — depends on #450/#452/#453/#455 landing first.
+  - **#454** — depends on #450/#452/#453 (#452/#453 done, #450 open);
+    also, per this session's finding, does not cover
+    `FacilityManagementPage.tsx` (that's #472's scope, not #454's — don't
+    conflate them at pickup).
   - **#390** — still blocked (waiting on #450's follow-ups; #459/#465/
-    #466/#467/#469 done, #460 remains).
+    #466/#467/#469 done, #460 remains, now itself blocked deeper than
+    previously understood).
   - Older backlog: `#371`/`#373`/`#374`/`#378`/`#379`, `user.accessType`
     grep sweep (still not done), `test/440-retention-policy-model` and
     `test/441-retention-sweep-job` branches (merged, still not deleted),
@@ -82,44 +89,50 @@ unfiled findings, no sub-point left ambiguous-and-closed.
 
 ## Dev stack state
 
-Untouched this session — no Docker involved (native vitest only, per
-the gate-order convention: per-iteration work stays native/targeted).
+Untouched this session — no Docker involved (read-only research only).
 Last known dev-stack state unchanged from prior handoffs (dev stack torn
 down, named volumes kept, RBAC catalog seeded, 0 real users).
 
 ## Blocking next step
 
-None.
+None for picking a *different* issue. For **#460 specifically**: blocked
+on #450 landing, then #454 and #472 (frontend consumer migrations)
+landing, before the legacy Location API surface can actually be deleted.
 
 ## Recommended next steps
 
-None explicitly queued by Dennis beyond "pick #471" (done). Candidates,
-in likely priority order:
+None explicitly queued by Dennis beyond "pick #460" (done — found
+blocked, documented, deferred). Candidates, in likely priority order:
 
-1. **#460** — check whether it's now actually unblocked (both its
-   write-path and read-path dependencies are done) and, if so, whether
-   it's pickable this session or still needs its own doc/design check
-   first.
+1. **#450** — the umbrella tracker now transitively blocking #460 via
+   #454/#472 in addition to its own open scope; worth checking whether
+   it's closer to landable than previously assessed.
 2. **#451** (status consolidation + custody/storage entity decision).
 3. **#454** — re-read against the #457-#467 split before assuming
-   unblocked.
-4. **#390** — blocked until the #450 family closes out.
-5. Older backlog: `#371`/`#373`/`#374`/`#378`/`#379`, `user.accessType`
+   unblocked; still needs #450.
+4. **#472** — new, also needs #450 first.
+5. **#390** — blocked until the #450 family closes out.
+6. Older backlog: `#371`/`#373`/`#374`/`#378`/`#379`, `user.accessType`
    grep sweep, `test/440-*`/`test/441-*` branch deletion,
    `fix/444-retention-period-iso8601` housekeeping, stray
    `api/backend/out.txt`, deleting `fix/450-storageservice-repository-migration`.
 
 ## Which skills to use
 
-- The legacy-location-migration series (#457-#467, plus #469/#470/#471
-  as follow-ups) routes through `work-issue` -> `resolve-issue` for
-  design calls or `fix-bugs` for clear-cut defects. #471 is a clean
-  example of the "genuinely Dennis's call, docs already checked and
-  confirmed nothing settles it" shape from `resolve-issue`'s deferral
-  section — the right move was asking directly via `AskUserQuestion`
-  rather than re-deriving an answer from docs a prior session had
-  already exhausted.
-- No new lessons on branch/permission handling this session — the
-  protected-branch Edit block and the merge/close/branch-delete sequence
-  all behaved exactly as `bioavanced-v2-conventions`/`resolve-issue`
-  describe.
+- `resolve-issue`'s "scope turns out bigger than the issue" section
+  called this correctly: #460's stated premise (#458/#459 cover all
+  consumers) was falsifiable by checking actual code, not just issue
+  state, and turned out false. Don't trust an issue's own "depends on"
+  list as proof the dependency graph is complete — verify against the
+  live codebase before starting deletion-shaped work, especially for
+  legacy-retirement issues where "confirm frontend has no remaining
+  direct consumer first" is written into the issue body itself as a
+  precondition, not a formality.
+  - The research step (frontend + backend + tests, read-only) was
+  delegated to an `Explore` agent per `agent-delegation`, run in the
+  foreground since its findings gated the next decision — correct shape,
+  no friction.
+  - Surfaced the scope mismatch via `AskUserQuestion` rather than
+  guessing at Dennis's preference between "just defer" vs. "expand scope
+  to fix it now" — this is exactly the kind of judgment call that's
+  Dennis's to make, not a re-derivable-from-docs question.
