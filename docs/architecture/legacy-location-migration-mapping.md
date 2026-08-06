@@ -67,10 +67,23 @@ Plan:
    flagged there as needing Dennis's go-ahead before any destructive drop,
    not assumed here.
 
-## Open item carried to #458/#459
+## Open item carried to #458/#459 — resolved
 
 Extending `StorageContainer.containerType`'s enum to include `DRAWER` (and
 its parent-validation chain in the `pre("save")` hook) is real schema work,
 not just a mapping decision — left to whichever of #458/#459 first needs a
 `DRAWER`-bearing box created, so it lands next to the code that exercises
 it rather than as a speculative schema change here.
+
+**Landed 2026-08-06 (#458, first slice):** `StorageContainer.containerType`
+now includes `DRAWER` (child of `RACK`, parent of `StorageBox`), with the
+same pre-save parent-chain validation `SHELF`/`RACK` already had.
+`StorageContainer#getChildren()` on a `RACK` now returns both `DRAWER`
+containers and any `StorageBox` documents parented directly to it (`DRAWER`
+stays optional per the mapping table above), and on a `DRAWER` returns its
+`StorageBox` children. `StorageBox`'s pre-save validation now accepts a
+parent of type `RACK` or `DRAWER`. This slice only touches the schema — the
+service-layer consumer migration (`sample.service.js`, `intakeWizard.js`,
+`equipment-sensor-quarantine.service.js`) and the backfill script are
+carried forward as separate #458-family follow-ups (too large for one
+build-loop iteration alongside the schema change).

@@ -62,11 +62,18 @@ describe('StorageBox pre-save validation', () => {
     await expect(runPreSave(doc)).rejects.toThrow('Rack pai não encontrado');
   });
 
-  it('rejeita quando parent_id não referencia um RACK', async () => {
+  it('rejeita quando parent_id não referencia um RACK ou DRAWER', async () => {
     vi.spyOn(StorageContainer, 'findById').mockResolvedValue({ containerType: 'SHELF' });
     const doc = makeBox();
 
-    await expect(runPreSave(doc)).rejects.toThrow('parent_id deve referenciar um RACK');
+    await expect(runPreSave(doc)).rejects.toThrow('parent_id deve referenciar um RACK ou DRAWER');
+  });
+
+  it('aceita quando parent_id referencia um DRAWER', async () => {
+    vi.spyOn(StorageContainer, 'findById').mockResolvedValue({ containerType: 'DRAWER' });
+    const doc = makeBox();
+
+    await expect(runPreSave(doc)).resolves.toBeUndefined();
   });
 
   it('sincroniza currentOccupancy a partir do occupancyGrid', async () => {

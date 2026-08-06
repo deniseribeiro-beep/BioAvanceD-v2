@@ -22,7 +22,7 @@ const StorageBoxSchema = new mongoose.Schema(
     // Referência ao Rack pai
     parent_id: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: "StorageContainer", // Deve ser um RACK
+      ref: "StorageContainer", // Deve ser um RACK ou, quando presente, um DRAWER
       required: true,
     },
 
@@ -121,14 +121,14 @@ StorageBoxSchema.pre("save", async function (next) {
     throw new Error("cols deve estar entre 1 e 100");
   }
 
-  // Validar parent_id (deve existir e ser um RACK)
+  // Validar parent_id (deve existir e ser um RACK ou, quando presente, um DRAWER)
   const StorageContainer = mongoose.model("StorageContainer");
   const parent = await StorageContainer.findById(this.parent_id);
   if (!parent) {
     throw new Error("Rack pai não encontrado");
   }
-  if (parent.containerType !== "RACK") {
-    throw new Error("parent_id deve referenciar um RACK");
+  if (!["RACK", "DRAWER"].includes(parent.containerType)) {
+    throw new Error("parent_id deve referenciar um RACK ou DRAWER");
   }
 
   // Sincronizar currentOccupancy

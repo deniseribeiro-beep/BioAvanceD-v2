@@ -143,6 +143,48 @@ describe('StorageContainer pre-save validation', () => {
 
     await expect(runPreSave(doc)).resolves.toBeUndefined();
   });
+
+  it('rejeita DRAWER sem parent_id', async () => {
+    const doc = new StorageContainer({ name: 'D1', containerType: 'DRAWER' });
+
+    await expect(runPreSave(doc)).rejects.toThrow('DRAWER deve ter um parent_id');
+  });
+
+  it('rejeita DRAWER cujo parent_id não existe', async () => {
+    vi.spyOn(StorageContainer, 'findById').mockResolvedValue(null);
+
+    const doc = new StorageContainer({
+      name: 'D1',
+      containerType: 'DRAWER',
+      parent_id: new mongoose.Types.ObjectId(),
+    });
+
+    await expect(runPreSave(doc)).rejects.toThrow('Container pai não encontrado');
+  });
+
+  it('rejeita DRAWER cujo pai não é RACK', async () => {
+    vi.spyOn(StorageContainer, 'findById').mockResolvedValue({ containerType: 'SHELF' });
+
+    const doc = new StorageContainer({
+      name: 'D1',
+      containerType: 'DRAWER',
+      parent_id: new mongoose.Types.ObjectId(),
+    });
+
+    await expect(runPreSave(doc)).rejects.toThrow('DRAWER só pode ter RACK como pai');
+  });
+
+  it('aceita DRAWER cujo pai é RACK', async () => {
+    vi.spyOn(StorageContainer, 'findById').mockResolvedValue({ containerType: 'RACK' });
+
+    const doc = new StorageContainer({
+      name: 'D1',
+      containerType: 'DRAWER',
+      parent_id: new mongoose.Types.ObjectId(),
+    });
+
+    await expect(runPreSave(doc)).resolves.toBeUndefined();
+  });
 });
 
 describe('StorageContainer#getFullPath', () => {
@@ -218,9 +260,21 @@ describe('StorageContainer#getChildren', () => {
     expect(children).toEqual(['rack-a']);
   });
 
-  it('busca StorageBoxes filhos de um RACK', async () => {
-    const findSpy = vi.spyOn(StorageBox, 'find').mockResolvedValue(['box-a']);
+  it('busca DRAWERs e StorageBoxes filhos de um RACK', async () => {
+    const containerFindSpy = vi.spyOn(StorageContainer, 'find').mockResolvedValue(['drawer-a']);
+    const boxFindSpy = vi.spyOn(StorageBox, 'find').mockResolvedValue(['box-a']);
     const doc = new StorageContainer({ name: 'R1', containerType: 'RACK' });
+
+    const children = await doc.getChildren();
+
+    expect(containerFindSpy).toHaveBeenCalledWith({ parent_id: doc._id, containerType: 'DRAWER' });
+    expect(boxFindSpy).toHaveBeenCalledWith({ parent_id: doc._id });
+    expect(children).toEqual(['drawer-a', 'box-a']);
+  });
+
+  it('busca StorageBoxes filhos de um DRAWER', async () => {
+    const findSpy = vi.spyOn(StorageBox, 'find').mockResolvedValue(['box-a']);
+    const doc = new StorageContainer({ name: 'D1', containerType: 'DRAWER' });
 
     const children = await doc.getChildren();
 
