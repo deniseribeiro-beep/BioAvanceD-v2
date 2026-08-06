@@ -250,17 +250,21 @@ describe('import.controller', () => {
       expect(auditLogSpy).toHaveBeenCalledWith(req, 'Temperature', 'partial', 2, 1, 1);
     });
 
-    it('locations dataType calls importLocations', async () => {
+    it('locations dataType is disabled (#466) and returns 400 without calling importLocations', async () => {
       const req = createReq({ body: { dataType: 'locations' } });
       const res = createRes();
-      const results = { success: 1, errors: [], total: 1 };
-      vi.spyOn(importService, 'importLocations').mockResolvedValue(results);
-      vi.spyOn(importService, 'cleanupFile').mockImplementation(() => {});
+      const importLocationsSpy = vi.spyOn(importService, 'importLocations');
+      const cleanupSpy = vi.spyOn(importService, 'cleanupFile').mockImplementation(() => {});
 
       await controller.import(req, res);
 
-      expect(importService.importLocations).toHaveBeenCalledWith(req.app.locals.db, req.file);
-      expect(res.status).toHaveBeenCalledWith(200);
+      expect(importLocationsSpy).not.toHaveBeenCalled();
+      expect(cleanupSpy).toHaveBeenCalledWith('/tmp/f.csv');
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+        success: false,
+        error: "Importação de 'locations' está desativada"
+      }));
     });
 
     it('results dataType is a stub that does not call any import service method', async () => {
@@ -328,18 +332,16 @@ describe('import.controller', () => {
       expect(auditLogSpy).toHaveBeenCalledWith(req, 'Patient', 'success', 1, 1, 0);
     });
 
-    it('maps a dataType matching none of the known keywords to entityName "Import"', async () => {
-      const req = createReq({ body: { dataType: 'locations' }, user: { id: 'u1' } });
+    it('maps dataType "results" (the stub path) to entityName "Result" in the audit log', async () => {
+      const req = createReq({ body: { dataType: 'results' }, user: { id: 'u1' } });
       const res = createRes();
-      const results = { success: 1, errors: [], total: 1 };
-      vi.spyOn(importService, 'importLocations').mockResolvedValue(results);
       vi.spyOn(importService, 'cleanupFile').mockImplementation(() => {});
       vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
       const auditLogSpy = vi.spyOn(auditLogger, 'logImport').mockResolvedValue();
 
       await controller.import(req, res);
 
-      expect(auditLogSpy).toHaveBeenCalledWith(req, 'Import', 'success', 1, 1, 0);
+      expect(auditLogSpy).toHaveBeenCalledWith(req, 'Result', 'partial', 0, 0, 1);
     });
   });
 

@@ -325,3 +325,22 @@ describe blocks.
 import `StorageBox`/`StorageContainer` rows) that needs Dennis's input,
 not a silent removal, since it's an active feature rather than a
 read-path migration.
+
+**#466 resolved 2026-08-06:** checked `docs-7-31-2026` and
+`docs/architecture/canonical-active-surface.md` for anything that
+settled the disable/redirect/leave-as-is choice — nothing does;
+`canonical-active-surface.md` only flags `import.service.js` as a
+"known residual legacy surface" to clean up eventually, without saying
+how. Genuinely Dennis's call, not a doc gap. Dennis chose **disable
+now**: `importLocations` in `import.service.js` now unconditionally
+throws (its old body deleted, not kept as dead code);
+`import.controller.js`'s `import()` returns 400 for `dataType:
+'locations'` before calling the service, and its `validate()`
+allowlist no longer includes `'locations'`; `import-worker.js` dropped
+`'locations'` from `allowedTypes` and its `location-worker` dispatch
+case (and the now-unused `require('./workers/location-worker')`) — an
+unsupported-`dataType` job now throws the existing generic error.
+`api/backend/src/workers/workers/location-worker.js` itself is left in
+place (not deleted, no longer referenced by the dispatcher) since #466
+didn't ask for its removal. #460 (retiring the `locations` collection)
+is now unblocked on this half.
