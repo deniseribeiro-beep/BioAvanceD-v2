@@ -153,7 +153,8 @@ describe('intakeWizard routes', () => {
 
       const db = {
         collection: (name) => {
-          if (name === 'sensors') return { find: () => makeCursor([{ locationId: 1, status: 'ok' }]) };
+          if (name === 'sensors') return { find: () => makeCursor([{ locationId: 'EQ-1', status: 'ok' }]) };
+          if (name === 'equipment') return { findOne: vi.fn().mockResolvedValue({ equipmentID: 'EQ-1', status: 'active' }) };
           if (name === 'storageBoxes') {
             return {
               find: () => makeCursor([{
@@ -163,10 +164,20 @@ describe('intakeWizard routes', () => {
                 dimension: { rows: 1, cols: 1 },
                 currentOccupancy: 0,
                 occupancyGrid: {},
+                parent_id: 'rack-1',
               }]),
             };
           }
-          if (name === 'locations') return { find: () => makeCursor([{ locationID: 1 }]) };
+          if (name === 'storageContainers') {
+            return {
+              findOne: vi.fn(async ({ _id }) => {
+                if (_id === 'rack-1') return { _id: 'rack-1', containerType: 'RACK', parent_id: 'shelf-1' };
+                if (_id === 'shelf-1') return { _id: 'shelf-1', containerType: 'SHELF', parent_id: 'freezer-1' };
+                if (_id === 'freezer-1') return { _id: 'freezer-1', containerType: 'FREEZER', containerID: 'EQ-1' };
+                return null;
+              }),
+            };
+          }
           throw new Error(`unexpected collection ${name}`);
         },
       };
@@ -246,7 +257,14 @@ describe('intakeWizard routes', () => {
       expect(res.body.fields).toContain('specimen');
     });
 
-    function buildHappyPathDb({ sensorsFind, equipmentFindOne, storageBoxesFind, locationsFind, consentsFindOneQueue } = {}) {
+function defaultStorageContainersFindOne({ _id }) {
+      if (_id === 'rack-1') return { _id: 'rack-1', containerType: 'RACK', parent_id: 'shelf-1' };
+      if (_id === 'shelf-1') return { _id: 'shelf-1', containerType: 'SHELF', parent_id: 'freezer-1' };
+      if (_id === 'freezer-1') return { _id: 'freezer-1', containerType: 'FREEZER', containerID: 'EQ-1' };
+      return null;
+    }
+
+    function buildHappyPathDb({ sensorsFind, equipmentFindOne, storageBoxesFind, storageContainersFindOne, consentsFindOneQueue } = {}) {
       const consentsCollection = {
         findOne: consentsFindOneQueue
           ? vi.fn(() => Promise.resolve(consentsFindOneQueue.shift() ?? null))
@@ -255,8 +273,8 @@ describe('intakeWizard routes', () => {
 
       const db = {
         collection: (name) => {
-          if (name === 'sensors') return { find: sensorsFind || (() => makeCursor([{ locationId: 1, status: 'ok' }])) };
-          if (name === 'equipment') return { findOne: equipmentFindOne || vi.fn().mockResolvedValue(null) };
+          if (name === 'sensors') return { find: sensorsFind || (() => makeCursor([{ locationId: 'EQ-1', status: 'ok' }])) };
+          if (name === 'equipment') return { findOne: equipmentFindOne || vi.fn().mockResolvedValue({ equipmentID: 'EQ-1', status: 'active' }) };
           if (name === 'storageBoxes') {
             return {
               find: storageBoxesFind || (() => makeCursor([{
@@ -266,10 +284,13 @@ describe('intakeWizard routes', () => {
                 dimension: { rows: 1, cols: 1 },
                 currentOccupancy: 0,
                 occupancyGrid: {},
+                parent_id: 'rack-1',
               }])),
             };
           }
-          if (name === 'locations') return { find: locationsFind || (() => makeCursor([{ locationID: 1 }])) };
+          if (name === 'storageContainers') {
+            return { findOne: storageContainersFindOne ? vi.fn(storageContainersFindOne) : vi.fn(async (query) => defaultStorageContainersFindOne(query)) };
+          }
           throw new Error(`unexpected collection ${name}`);
         },
       };
@@ -362,13 +383,28 @@ describe('intakeWizard routes', () => {
       expect(res.body.sample).toBeDefined();
     });
 
-    it('skips a location whose sensor is not operational and uses the next one', async () => {
-      const sensorsFind = vi.fn()
-        .mockReturnValueOnce(makeCursor([{ locationId: 1, status: 'maintenance' }]))
-        .mockReturnValueOnce(makeCursor([{ locationId: 2, status: 'ok' }]));
-      const locationsFind = () => makeCursor([{ locationID: 1 }, { locationID: 2 }]);
+    it('skips a box whose freezer sensor is not operational and uses the next one', async () => {
+      const storageBoxesFind = () => makeCursor([
+        { _id: 'box-1', name: 'Box A', status: 'ACTIVE', dimension: { rows: 1, cols: 1 }, currentOccupancy: 0, occupancyGrid: {}, parent_id: 'rack-1' },
+        { _id: 'box-2', name: 'Box B', status: 'ACTIVE', dimension: { rows: 1, cols: 1 }, currentOccupancy: 0, occupancyGrid: {}, parent_id: 'rack-2' },
+      ]);
+      const storageContainersFindOne = async ({ _id }) => {
+        if (_id === 'rack-1') return { _id: 'rack-1', containerType: 'RACK', parent_id: 'shelf-1' };
+        if (_id === 'shelf-1') return { _id: 'shelf-1', containerType: 'SHELF', parent_id: 'freezer-1' };
+        if (_id === 'freezer-1') return { _id: 'freezer-1', containerType: 'FREEZER', containerID: 'EQ-1' };
+        if (_id === 'rack-2') return { _id: 'rack-2', containerType: 'RACK', parent_id: 'shelf-2' };
+        if (_id === 'shelf-2') return { _id: 'shelf-2', containerType: 'SHELF', parent_id: 'freezer-2' };
+        if (_id === 'freezer-2') return { _id: 'freezer-2', containerType: 'FREEZER', containerID: 'EQ-2' };
+        return null;
+      };
+      const sensorsFind = vi.fn((query) => {
+        const variants = query.$or[0].locationId.$in;
+        if (variants.includes('EQ-1')) return makeCursor([{ locationId: 'EQ-1', status: 'maintenance' }]);
+        return makeCursor([{ locationId: 'EQ-2', status: 'ok' }]);
+      });
+      const equipmentFindOne = vi.fn().mockResolvedValue({ equipmentID: 'EQ-1', status: 'active' });
 
-      const { db, consentsCollection } = buildHappyPathDb({ sensorsFind, locationsFind });
+      const { db, consentsCollection } = buildHappyPathDb({ sensorsFind, storageBoxesFind, storageContainersFindOne, equipmentFindOne });
       const { samplesCollection, patientsCollection } = setupHappyMocks();
 
       const getCollectionImpl = vi.fn(async (_db, key) => {
@@ -386,22 +422,37 @@ describe('intakeWizard routes', () => {
       const StorageService = require(storageServicePath);
       vi.spyOn(StorageService.prototype, 'autoAssignSampleToBox').mockResolvedValue({
         success: true,
-        sampleLocation: { boxId: 'box-1', position: 'A1' },
+        sampleLocation: { boxId: 'box-2', position: 'A1' },
       });
 
       const app = buildApp(router, db);
       const res = await request(app).post('/api/intake-wizard').send(VALID_PAYLOAD);
 
       expect(res.status).toBe(200);
-      expect(res.body.storageLocation.locationID).toBe(2);
+      expect(res.body.storageLocation.equipmentID).toBe('EQ-2');
     });
 
-    it('skips a location whose linked equipment is blocked and uses the next one', async () => {
-      const equipmentFindOne = vi.fn()
-        .mockResolvedValueOnce({ equipmentID: 'EQ-1', status: 'maintenance' });
-      const locationsFind = () => makeCursor([{ locationID: 1, equipmentID: 'EQ-1' }, { locationID: 2 }]);
+    it('skips a box whose linked equipment is blocked and uses the next one', async () => {
+      const storageBoxesFind = () => makeCursor([
+        { _id: 'box-1', name: 'Box A', status: 'ACTIVE', dimension: { rows: 1, cols: 1 }, currentOccupancy: 0, occupancyGrid: {}, parent_id: 'rack-1' },
+        { _id: 'box-2', name: 'Box B', status: 'ACTIVE', dimension: { rows: 1, cols: 1 }, currentOccupancy: 0, occupancyGrid: {}, parent_id: 'rack-2' },
+      ]);
+      const storageContainersFindOne = async ({ _id }) => {
+        if (_id === 'rack-1') return { _id: 'rack-1', containerType: 'RACK', parent_id: 'shelf-1' };
+        if (_id === 'shelf-1') return { _id: 'shelf-1', containerType: 'SHELF', parent_id: 'freezer-1' };
+        if (_id === 'freezer-1') return { _id: 'freezer-1', containerType: 'FREEZER', containerID: 'EQ-1' };
+        if (_id === 'rack-2') return { _id: 'rack-2', containerType: 'RACK', parent_id: 'shelf-2' };
+        if (_id === 'shelf-2') return { _id: 'shelf-2', containerType: 'SHELF', parent_id: 'freezer-2' };
+        if (_id === 'freezer-2') return { _id: 'freezer-2', containerType: 'FREEZER', containerID: 'EQ-2' };
+        return null;
+      };
+      const equipmentFindOne = vi.fn((query) => {
+        const variants = query.equipmentID.$in;
+        if (variants.includes('EQ-1')) return Promise.resolve({ equipmentID: 'EQ-1', status: 'maintenance' });
+        return Promise.resolve({ equipmentID: 'EQ-2', status: 'active' });
+      });
 
-      const { db, consentsCollection } = buildHappyPathDb({ equipmentFindOne, locationsFind });
+      const { db, consentsCollection } = buildHappyPathDb({ equipmentFindOne, storageBoxesFind, storageContainersFindOne });
       const { samplesCollection, patientsCollection } = setupHappyMocks();
 
       const getCollectionImpl = vi.fn(async (_db, key) => {
@@ -419,21 +470,20 @@ describe('intakeWizard routes', () => {
       const StorageService = require(storageServicePath);
       vi.spyOn(StorageService.prototype, 'autoAssignSampleToBox').mockResolvedValue({
         success: true,
-        sampleLocation: { boxId: 'box-1', position: 'A1' },
+        sampleLocation: { boxId: 'box-2', position: 'A1' },
       });
 
       const app = buildApp(router, db);
       const res = await request(app).post('/api/intake-wizard').send(VALID_PAYLOAD);
 
       expect(res.status).toBe(200);
-      expect(res.body.storageLocation.locationID).toBe(2);
+      expect(res.body.storageLocation.equipmentID).toBe('EQ-2');
     });
 
-    it('returns 422 when no location has both operational equipment and sensor', async () => {
+    it('returns 422 when no box has both operational equipment and sensor', async () => {
       const equipmentFindOne = vi.fn().mockResolvedValue(null);
-      const locationsFind = () => makeCursor([{ locationID: 1, equipmentID: 'EQ-missing' }]);
 
-      const { db, consentsCollection } = buildHappyPathDb({ equipmentFindOne, locationsFind });
+      const { db, consentsCollection } = buildHappyPathDb({ equipmentFindOne });
       const getCollectionImpl = vi.fn(async (_db, key) => {
         if (key === 'consents') return consentsCollection;
         throw new Error(`unexpected key ${key}`);
@@ -483,13 +533,28 @@ describe('intakeWizard routes', () => {
       expect(res.body.error).toMatch(/identificador/);
     });
 
-    it('treats a sensor identified only by maintenanceStatus as non-operational and skips its location', async () => {
-      const sensorsFind = vi.fn()
-        .mockReturnValueOnce(makeCursor([{ locationId: 1, maintenanceStatus: 'calibration' }]))
-        .mockReturnValueOnce(makeCursor([{ locationId: 2, operationalStatus: 'ok' }]));
-      const locationsFind = () => makeCursor([{ locationID: 1 }, { locationID: 2 }]);
+    it('treats a sensor identified only by maintenanceStatus as non-operational and skips its box', async () => {
+      const storageBoxesFind = () => makeCursor([
+        { _id: 'box-1', name: 'Box A', status: 'ACTIVE', dimension: { rows: 1, cols: 1 }, currentOccupancy: 0, occupancyGrid: {}, parent_id: 'rack-1' },
+        { _id: 'box-2', name: 'Box B', status: 'ACTIVE', dimension: { rows: 1, cols: 1 }, currentOccupancy: 0, occupancyGrid: {}, parent_id: 'rack-2' },
+      ]);
+      const storageContainersFindOne = async ({ _id }) => {
+        if (_id === 'rack-1') return { _id: 'rack-1', containerType: 'RACK', parent_id: 'shelf-1' };
+        if (_id === 'shelf-1') return { _id: 'shelf-1', containerType: 'SHELF', parent_id: 'freezer-1' };
+        if (_id === 'freezer-1') return { _id: 'freezer-1', containerType: 'FREEZER', containerID: 'EQ-1' };
+        if (_id === 'rack-2') return { _id: 'rack-2', containerType: 'RACK', parent_id: 'shelf-2' };
+        if (_id === 'shelf-2') return { _id: 'shelf-2', containerType: 'SHELF', parent_id: 'freezer-2' };
+        if (_id === 'freezer-2') return { _id: 'freezer-2', containerType: 'FREEZER', containerID: 'EQ-2' };
+        return null;
+      };
+      const sensorsFind = vi.fn((query) => {
+        const variants = query.$or[0].locationId.$in;
+        if (variants.includes('EQ-1')) return makeCursor([{ locationId: 'EQ-1', maintenanceStatus: 'calibration' }]);
+        return makeCursor([{ locationId: 'EQ-2', operationalStatus: 'ok' }]);
+      });
+      const equipmentFindOne = vi.fn().mockResolvedValue({ equipmentID: 'EQ-1', status: 'active' });
 
-      const { db, consentsCollection } = buildHappyPathDb({ sensorsFind, locationsFind });
+      const { db, consentsCollection } = buildHappyPathDb({ sensorsFind, storageBoxesFind, storageContainersFindOne, equipmentFindOne });
       const { samplesCollection, patientsCollection } = setupHappyMocks();
 
       const getCollectionImpl = vi.fn(async (_db, key) => {
@@ -507,21 +572,21 @@ describe('intakeWizard routes', () => {
       const StorageService = require(storageServicePath);
       vi.spyOn(StorageService.prototype, 'autoAssignSampleToBox').mockResolvedValue({
         success: true,
-        sampleLocation: { boxId: 'box-1', position: 'A1' },
+        sampleLocation: { boxId: 'box-2', position: 'A1' },
       });
 
       const app = buildApp(router, db);
       const res = await request(app).post('/api/intake-wizard').send(VALID_PAYLOAD);
 
       expect(res.status).toBe(200);
-      expect(res.body.storageLocation.locationID).toBe(2);
+      expect(res.body.storageLocation.equipmentID).toBe('EQ-2');
     });
 
     it('skips a storage box that is BLOCKED/RETIRED/INACTIVE and one at full occupancy', async () => {
       const storageBoxesFind = () => makeCursor([
-        { _id: 'box-blocked', name: 'Blocked Box', status: 'RETIRED', dimension: { rows: 1, cols: 1 }, currentOccupancy: 0, occupancyGrid: {} },
-        { _id: 'box-full', name: 'Full Box', status: 'ACTIVE', dimension: { rows: 1, cols: 1 }, currentOccupancy: 1, occupancyGrid: {} },
-        { _id: 'box-ok', name: 'OK Box', status: 'ACTIVE', dimension: { rows: 1, cols: 1 }, currentOccupancy: 0, occupancyGrid: {} },
+        { _id: 'box-blocked', name: 'Blocked Box', status: 'RETIRED', dimension: { rows: 1, cols: 1 }, currentOccupancy: 0, occupancyGrid: {}, parent_id: 'rack-1' },
+        { _id: 'box-full', name: 'Full Box', status: 'ACTIVE', dimension: { rows: 1, cols: 1 }, currentOccupancy: 1, occupancyGrid: {}, parent_id: 'rack-1' },
+        { _id: 'box-ok', name: 'OK Box', status: 'ACTIVE', dimension: { rows: 1, cols: 1 }, currentOccupancy: 0, occupancyGrid: {}, parent_id: 'rack-1' },
       ]);
 
       const { db, consentsCollection } = buildHappyPathDb({ storageBoxesFind });
@@ -555,7 +620,7 @@ describe('intakeWizard routes', () => {
     it('finds the next free position using a Map-based occupancyGrid', async () => {
       const occupancyGrid = new Map([['A1', true]]);
       const storageBoxesFind = () => makeCursor([
-        { _id: 'box-1', name: 'Box A', status: 'ACTIVE', dimension: { rows: 1, cols: 2 }, currentOccupancy: 1, occupancyGrid },
+        { _id: 'box-1', name: 'Box A', status: 'ACTIVE', dimension: { rows: 1, cols: 2 }, currentOccupancy: 1, occupancyGrid, parent_id: 'rack-1' },
       ]);
 
       const { db, consentsCollection } = buildHappyPathDb({ storageBoxesFind });

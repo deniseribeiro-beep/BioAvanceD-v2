@@ -143,8 +143,8 @@ function loadApp({ consentActive, samplesCollection, quarantineActionsCollection
   app.use(express.json());
   app.locals.db = {
     collection: (name) => {
-      if (name === 'sensors') return { find: () => makeCursor([{ locationId: 1, status: 'ok' }]) };
-      if (name === 'equipment') return { findOne: vi.fn().mockResolvedValue(null) };
+      if (name === 'sensors') return { find: () => makeCursor([{ locationId: 'EQ-1', status: 'ok' }]) };
+      if (name === 'equipment') return { findOne: vi.fn().mockResolvedValue({ equipmentID: 'EQ-1', status: 'active' }) };
       if (name === 'storageBoxes') {
         return {
           find: () => makeCursor([{
@@ -154,10 +154,20 @@ function loadApp({ consentActive, samplesCollection, quarantineActionsCollection
             dimension: { rows: 1, cols: 1 },
             currentOccupancy: 0,
             occupancyGrid: {},
+            parent_id: 'rack-1',
           }]),
         };
       }
-      if (name === 'locations') return { find: () => makeCursor([{ locationID: 1 }]) };
+      if (name === 'storageContainers') {
+        return {
+          findOne: vi.fn(async ({ _id }) => {
+            if (_id === 'rack-1') return { _id: 'rack-1', containerType: 'RACK', parent_id: 'shelf-1' };
+            if (_id === 'shelf-1') return { _id: 'shelf-1', containerType: 'SHELF', parent_id: 'freezer-1' };
+            if (_id === 'freezer-1') return { _id: 'freezer-1', containerType: 'FREEZER', containerID: 'EQ-1' };
+            return null;
+          }),
+        };
+      }
       throw new Error(`unexpected collection ${name}`);
     },
   };
