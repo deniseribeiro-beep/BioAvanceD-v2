@@ -1,155 +1,137 @@
 # HANDOFF
 
 **Written:** 2026-08-06, end of session on `feature/docker-e2e-backend-integration`,
-after picking up #450 and splitting it into a plan of follow-up issues.
+after picking up #473.
 
 ## What happened this session
 
-Dennis said "Pick #450." Routed via `work-issue` -> `resolve-issue`
-(refactor/migration item — the five clean-architecture use-cases already
-existed, so not a build-loop shape either).
+Dennis said "Pick #473." Routed via `work-issue` -> `resolve-issue`
+(refactor/migration item, extending #450's split).
 
-**#450** ("migrate Sample.js locationId/location/storageLocation onto
-MongoStorageRepository") asked, as its own first step, for an audit of
-which consumers already resolve through the repository vs. still read
-Sample's embedded fields directly. Delegated that audit to an `Explore`
-agent (read-only, foreground, per `agent-delegation` — the mandatory
-pre-check skill had to be invoked first; the guard hook blocked the
-first attempt since it hadn't been loaded yet this session).
+Read #473 closely: prior session's investigation (comment already on the
+issue) said the blocker was a test-mocking-strategy mismatch in
+`autoAssignSampleToBox`. Re-reading the actual code found the picture was
+more entangled than that comment suggested: the service's session creation
+(`db.getMongo().startSession()`) structurally differs from the
+repository's (`db.client.startSession()`), the repository's
+`allocateSamplePosition` takes an explicit position rather than scanning
+for one, and the Neo4j-failure rollback path is a third chunk of
+duplicated logic. Surfaced this via `AskUserQuestion`; Dennis chose "full
+migration this session."
 
-**Finding: the core is already done, the periphery isn't.** All five
-use-cases (MoveSampleUseCase, AllocateSampleUseCase,
-GetSampleStorageLocationUseCase, SearchAllocatableSamplesUseCase,
-ReleaseSampleUseCase) resolve exclusively through
-MongoStorageRepository/MongoStorageTopologyReadRepository — confirmed,
-none of them touch Sample's embedded fields. What remains is ~10 backend
-files and ~5 frontend files still reading/writing `storageLocation`/
-`location`/`locationId` directly, with `storageService.js` flagged as
-the single biggest remaining chunk (a large, parallel unconverted
-implementation of the repository's box/position logic).
+**Landed (merged to `feature/docker-e2e-backend-integration`, pushed,
+commit `f6da153d`):**
+- Extracted `autoAssignSampleToBox`'s in-transaction fresh-read + scan +
+  atomic-write block, and its Neo4j-failure rollback block, into two new
+  `MongoStorageRepository` methods: `autoAssignSamplePosition` and
+  `rollbackAutoAssignedPosition`. The service now delegates to both
+  instead of duplicating the Mongo access inline.
+- Moved the pure box-grid helpers (`_isPositionOccupied`,
+  `_getAllValidPositions`, `_findFirstAvailablePosition`) into a new
+  shared `api/backend/src/utils/storagePositionGrid.js`, used by both
+  `storageService.js` and `MongoStorageRepository.js`. The service kept
+  its own method names as thin wrappers, since `storageService.test.js`
+  calls them directly (`service._findFirstAvailablePosition(...)` etc.).
+- **No test-mocking rewrite was needed** — the extracted repository
+  methods reuse the identical collection-access pattern
+  (`getCollection`/`db.collection` + an externally-supplied `session`)
+  the service already used, so call order/shape stayed byte-identical.
+  All 76 `storageService.test.js` assertions and 47
+  `MongoStorageRepository.test.js` assertions passed unchanged; added 8
+  new tests directly on the two new repository methods (131 total, all
+  green). This contradicts the prior session's comment on #473 that a
+  mocking-strategy rewrite was required — it wasn't, once the extraction
+  boundary was drawn to match the existing call shape exactly.
+- Closed **#473** with a comment summarizing the above.
+- Filed **#480** (the four remaining duplicated methods —
+  `validatePositionAvailability`, `findAvailablePosition`,
+  `getSampleStorage`, `getFreezerOccupancyStats` — confirmed via `grep`
+  to have no route/controller callers, test-only, lower priority).
+- Filed **#479** (unrelated pre-existing bug found while reading the
+  code: the success response can report the pre-transaction scan
+  position rather than the actually-committed one under a race — no
+  test currently catches this).
+- Filed **#481** (found during `wrap-up`'s friction audit: the
+  pre-transaction fast-path check in `autoAssignSampleToBox`, above the
+  `session.withTransaction` call, still does its own raw
+  `findOne`/already-allocated/`BOX_FULL` checks directly against
+  `this.db.collection(...)` rather than via the repository — intentional
+  redundancy with the in-transaction re-check, so low urgency, but noted
+  so #473's close comment doesn't overstate what was migrated).
 
-Per `divide-and-conquer`'s design-split playbook, proposed a 6-piece
-breakdown to Dennis via `AskUserQuestion`; he chose "file the split, then
-implement slice 1 this session."
-
-**Landed (tracker only, plus one blocked attempt):**
-- Filed **#473** (storageService.js migration, foundational), **#474**
-  (sample.service.js + intakeWizard.routes.js create-path writes, depends
-  on #473), **#475** (label.routes.js resolveStorageLocation helper,
-  independent), **#476** (equipment-sensor-quarantine.service.js — an
-  owner design call: is quarantine state storage-position or separate
-  from Sample.location? left genuinely open, not resolved), **#477**
-  (import.service.js/import-lgpd.service.js bulk-import writes, depends
-  on #473, also flags a possible `locationID`/`locationId` field-name
-  mismatch in import.service.js worth checking), **#478** (frontend
-  consumers: SampleLocator.tsx, SamplesPageView.tsx, SampleDetailsPage.tsx,
-  types/models.ts; depends on #473/#474; also carries two not-yet-audited
-  files, FacilityManagementPage.tsx and ClinicalIntakeWizard.jsx, as
-  in-scope follow-up rather than leaving them dangling).
-- Commented on **#450** recording the split and the five issue numbers.
-  Left **#450 open** as the tracking issue, per the playbook.
-- **Attempted #473** (`fix/473-storageservice-migrate-to-repository`
-  branch, created then deleted — no commits): reading
-  `storageService.js` closely showed `allocateSampleToPosition` and
-  `releaseSampleFromPosition` were already delegating to
-  `MongoStorageRepository` (the original audit's read on those two was
-  slightly off). The real gap is `autoAssignSampleToBox` — used in
-  production by `intakeWizard.js:392` and
-  `auto-assign-sample.controller.js:26` — which duplicates the
-  repository's box-scan+atomic-write logic inline instead of delegating.
-  Blocked from migrating it safely this session: **the existing unit
-  test suite (`tests/unit/storageService.test.js`, ~1310 lines,
-  `autoAssignSampleToBox` describe block ~L807-1142) asserts exact
-  findOne/updateOne call counts and ordering via chained
-  `mockResolvedValueOnce`** (pre-check read outside the transaction, a
-  second fresh read inside it, then the atomic write). Delegating to
-  `MongoStorageRepository.allocateSamplePosition` — which does its own
-  internal re-fetch — would desync that call-count sequencing across
-  most of the "concurrent write raced us" tests, not just superficially.
-  A real migration needs the test suite's mocking strategy rewritten in
-  the same change, which didn't fit safely in the remaining session
-  budget. **Recorded this as a comment on #473** with two concrete
-  options for next pickup ((a) rewrite the test mocking strategy as part
-  of #473's scope, or (b) extract a shared low-level write helper both
-  the service and the repository call, which needs fewer call-count
-  changes). #473 left open, no code changes landed.
-
-Ran `wrap-up` twice this session (once after the issue-filing checkpoint
-fired mid-session, once at the end): no friction either time. The
-scope-discovery loop (audit → split → attempt → deeper blocker found →
-recorded, deferred) worked as intended; #473 stays open as the landing
-point rather than the finding living only in chat.
+Ran `wrap-up` once at the end: found one real gap (the pre-check
+duplication, filed as #481) that the close comment on #473 would
+otherwise have overstated. `handoff` invoked immediately after per its
+own trigger (issue closes + new issues that reshape backlog picture).
 
 ## Repo state
 
 - **`feature/docker-e2e-backend-integration`**: clean, pushed through
-  `347af745` (HANDOFF rotation after #460). No new commits this session
-  — #450's investigation and the #473 attempt produced only tracker
-  writes (5 new issues + 2 comments); the `fix/473-*` branch was created,
-  found nothing safe to commit, and was deleted again.
+  `f6da153d` (this session's #473 migration, fast-forward merge from
+  `fix/473-storageservice-migrate-autoassign`, which was deleted both
+  locally and on origin after the merge).
 - **`fix/450-storageservice-repository-migration`**: still merged, still
-  not deleted — carried forward again, still safe to delete. (Name is a
-  near-collision with this session's `fix/473-storageservice-*` — they
-  are unrelated; the old one predates this session's #450 work.)
-- Issues: **#473, #474, #475, #476, #477, #478 opened** (this session,
-  all depend-on or block #450). **#450 still open**, now the tracking
-  issue for the 6-piece split (previously it was blocked on #454/#472
-  from #460's findings last session — that dependency is unrelated to
-  this session's split and still applies on top of it). **#472, #460**
-  (from last session) still open/blocked, unaffected by this session.
-  **#471/#469/#470/#467/#466/#465/#459/#464/#463/#462** closed (prior
-  sessions). **#451, #454** still open.
+  not deleted — carried forward again from prior sessions, still safe to
+  delete. (Unrelated to this session's `fix/473-*` branch, which is
+  already gone.)
+- Issues this session: **#473 closed** (this session's work). **#479,
+  #480, #481 opened** (all follow-ups from this session, none blocking).
+  **#450 still open** (tracking issue for the 6-piece split from last
+  session; #473 was one of the six, now done — 5 remain: #474, #475,
+  #476, #477, #478).
 - Backlog otherwise unchanged from last handoff:
+  - **#474, #477, #478** — depend on #473, which is now done, so these
+    are unblocked for pickup.
+  - **#475** — independent of #473, was already unblocked.
+  - **#476** — needs Dennis's actual design call (quarantine =
+    storage-position vs. separate state), not resolvable from docs alone
+    per last session's read.
   - **#451** (status consolidation + custody/storage entity design
     question) — still open, still a real design question.
   - **#454** — depends on #450/#452/#453 (#452/#453 done, #450 open,
-    now itself a multi-issue tracking chain); doesn't cover
-    `FacilityManagementPage.tsx` (that's #472's scope).
-  - **#390** — still blocked (#460 remains, now blocked deeper than
-    previously understood; #450 now expands into 6 more issues before
-    it can close).
+    itself a multi-issue tracking chain).
+  - **#390** — still blocked (#460 remains; #450's split still has 5
+    issues left before it can close).
   - Older backlog: `#371`/`#373`/`#374`/`#378`/`#379`, `user.accessType`
     grep sweep (still not done), `test/440-retention-policy-model` and
     `test/441-retention-sweep-job` branches (merged, still not deleted),
-    `fix/444-retention-period-iso8601` branch housekeeping (still carried
-    forward, not re-checked).
+    `fix/444-retention-period-iso8601` branch housekeeping (still
+    carried forward, not re-checked).
   - dyeallpies-skills-pack#216, #210, #218, #220, #222, #223 still open,
     not yet applied.
 
 ## Dev stack state
 
-Untouched this session — no Docker involved (research + one aborted
-attempt, no runnable code changed).
+Untouched this session — Docker was not in scope (native vitest runs
+only, per resolve-issue's default execution contract).
 
 ## Blocking next step
 
-None for picking a *different* issue. For **#473 specifically**: the
-`autoAssignSampleToBox` migration needs either a test-mocking-strategy
-rewrite done in the same change, or a redesigned shared-write-helper
-approach that avoids the call-count mismatch — see #473's comment for
-the two options. Don't attempt a naive "just call the repository method"
-patch there without addressing this first; it will pass code review by
-eye and then fail (or worse, silently desync) the existing test suite's
-concurrency-race assertions.
+None. #473's actual blocker (the prior session's characterization of a
+required test-mocking-strategy rewrite) turned out to be avoidable by
+drawing the extraction boundary to match the existing call shape — this
+is worth remembering if a similar "needs a test rewrite" claim shows up
+on another issue in this backlog: re-verify against the actual code
+before treating it as settled, per `resolve-issue`'s deferral-evaluation
+step.
 
 ## Recommended next steps
 
-None explicitly queued by Dennis beyond "pick #450" (done — audited,
-split into 6 issues, attempted the foundational one, found a real
-blocker, recorded and deferred). Candidates, in likely priority order:
+None explicitly queued by Dennis beyond "pick #473" (done — migrated,
+tested, merged, closed, follow-ups filed). Candidates, in likely
+priority order:
 
-1. **#473** — re-scope with the test-mocking-strategy question resolved
-   first (see "Blocking next step"), then implement.
-2. **#475** — independent of #473, `label.routes.js`'s helper can be
-   migrated to `GetSampleStorageLocationUseCase` today, no blocker found.
-3. **#476** — needs Dennis's actual design call (quarantine =
-   storage-position vs. separate state), not resolvable from docs alone
-   per this session's read; worth surfacing directly rather than waiting
-   for it to resurface at pickup.
-4. **#474, #477, #478** — all depend on #473 landing first.
+1. **#474, #477, #478** — now unblocked now that #473 is done.
+2. **#475** — independent, `label.routes.js`'s helper can be migrated to
+   `GetSampleStorageLocationUseCase` today, no blocker found (per last
+   session's read).
+3. **#476** — needs Dennis's design call (quarantine state), worth
+   surfacing directly.
+4. **#480, #481** — this session's lower-priority follow-ups, safe to
+   defer.
 5. **#451** (status consolidation + custody/storage entity decision).
-6. **#454**, **#390**, **#472**, **#460** — unchanged from last handoff,
-   still downstream of the #450 family.
+6. **#454**, **#390** — unchanged from last handoff, downstream of the
+   #450 family.
 7. Older backlog: `#371`/`#373`/`#374`/`#378`/`#379`, `user.accessType`
    grep sweep, `test/440-*`/`test/441-*` branch deletion,
    `fix/444-retention-period-iso8601` housekeeping, stray
@@ -158,24 +140,19 @@ blocker, recorded and deferred). Candidates, in likely priority order:
 
 ## Which skills to use
 
-- `divide-and-conquer`'s design-split playbook worked as documented:
-  confirm the breakdown with the user via `AskUserQuestion` before
-  filing anything, file each piece with an explicit `Depends on:` line,
-  comment the numbers onto the tracking issue, leave the tracking issue
-  open. No friction.
-- `agent-delegation`'s guard hook fired correctly on the first `Agent`
-  call this session (blocked because the skill hadn't been invoked yet
-  this session, despite its description being in context) — confirms
-  the hook checks for an actual `Skill` tool call, not just topical
-  awareness. Re-invoking it immediately unblocked the call. This is
-  working as intended, not a bug to route around.
-- Mid-attempt on #473, `resolve-issue`'s "cheapest check that answers
-  the question" ladder paid off: reading the actual test file's exact
-  mock-call assertions *before* editing the service caught a
-  would-have-been-silent test-desync risk that a "read the service,
-  write the migration, run the tests after" ordering would have found
-  much later (or not at all, if the tests happened to still pass by
-  coincidence on a different code path). Recommend continuing to read
-  the tightly-coupled test file first whenever a service function has
-  transaction/session-based tests before attempting a delegation-style
-  refactor on it.
+- `resolve-issue`'s deferral-evaluation step ("has something it depended
+  on landed since it was written? re-verify, don't assume the issue text
+  is still accurate") paid off directly this session: the prior
+  session's own comment on #473 asserted a test-mocking rewrite was
+  required, and re-reading the actual test file's mock setup (not just
+  trusting the prior comment) found the extraction could be drawn to
+  avoid that entirely. Worth treating even a *same-backlog, one-session-
+  old* "blocked because X" comment as a claim to re-verify, not a
+  settled fact — not just claims from stale docs.
+- `wrap-up`'s shipping-addendum check #10 ("did any close comment list
+  something as not done without a matching issue") caught something
+  subtler than usual: not an unfiled gap, but an *overstatement* in the
+  close comment itself (claiming full delegation when a fast-path
+  pre-check block was still inline). Worth explicitly re-reading a just-
+  written close comment's claims against the diff, not just checking
+  whether deferred items have issues.
