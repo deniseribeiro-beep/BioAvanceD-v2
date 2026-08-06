@@ -38,7 +38,8 @@ function buildPayload(overrides = {}) {
     quantity: 1,
     quality: 'GOOD', // valid MIABIS ID
     registeredAt: new Date().toISOString(),
-    locationID: 101,
+    boxId: '507f1f77bcf86cd799439011',
+    positionCode: 'A1',
     linkedProject: 'Projeto QA Modos',
     ...overrides,
   };

@@ -1,5 +1,6 @@
 const { SampleModel, BLOCKED_SPECIMEN_STATUSES } = require('../models/Sample');
 const SampleMovementModel = require('../models/SampleMovement');
+const StorageAssignmentModel = require('../models/StorageAssignment');
 const logger = require('../utils/logger');
 const { validateParticipantId } = require('../utils/patientAnonymization');
 const { generateUniqueBarcode } = require('../utils/barcodeGenerator');
@@ -41,22 +42,49 @@ function createSampleValidationError(message, statusCode = 422) {
   return error;
 }
 
-function normalizeRequiredLocationID(rawLocationID) {
-  if (rawLocationID === undefined || rawLocationID === null) {
+/**
+ * #462: legacy `locationID` input is replaced by a `boxId` (StorageBox
+ * ObjectId) + `positionCode` pair — the canonical way a specimen's physical
+ * placement is expressed post-migration (docs/architecture/
+ * legacy-location-migration-mapping.md).
+ */
+function normalizeRequiredStorageBoxAssignment(rawBoxId, rawPositionCode) {
+  if (rawBoxId === undefined || rawBoxId === null || rawBoxId === '') {
     throw createSampleValidationError(LOCATION_REQUIRED_MESSAGE, 400);
   }
 
-  const value = typeof rawLocationID === 'string' ? rawLocationID.trim() : rawLocationID;
-  if (value === '') {
-    throw createSampleValidationError(LOCATION_REQUIRED_MESSAGE, 400);
+  const boxId = typeof rawBoxId === 'string' ? rawBoxId.trim() : String(rawBoxId);
+  if (!ObjectId.isValid(boxId)) {
+    throw createSampleValidationError(`${LOCATION_REQUIRED_MESSAGE}: boxId deve ser um identificador válido`);
   }
 
-  const normalizedLocationID = Number(value);
-  if (!Number.isFinite(normalizedLocationID) || normalizedLocationID <= 0) {
-    throw createSampleValidationError(`${LOCATION_REQUIRED_MESSAGE}: locationID deve ser numérico válido`);
+  const positionCode = typeof rawPositionCode === 'string' ? rawPositionCode.trim() : rawPositionCode;
+  if (!positionCode || typeof positionCode !== 'string') {
+    throw createSampleValidationError(`${LOCATION_REQUIRED_MESSAGE}: positionCode é obrigatório`);
   }
 
-  return normalizedLocationID;
+  return { boxId: new ObjectId(boxId), positionCode };
+}
+
+/**
+ * #462: walks the StorageContainer chain up from a StorageBox's `parent_id`
+ * (RACK, optionally through a DRAWER) to SHELF then FREEZER — the same
+ * hierarchy the #461 backfill script materializes. Best-effort: a box with a
+ * broken/incomplete chain returns whichever levels resolved, `null` above
+ * that.
+ */
+async function resolveStorageHierarchyForBox(db, box) {
+  const storageContainersCollection = db.collection('storageContainers');
+
+  let rack = box.parent_id ? await storageContainersCollection.findOne({ _id: box.parent_id }) : null;
+  if (rack && rack.containerType === 'DRAWER') {
+    rack = rack.parent_id ? await storageContainersCollection.findOne({ _id: rack.parent_id }) : null;
+  }
+
+  const shelf = rack?.parent_id ? await storageContainersCollection.findOne({ _id: rack.parent_id }) : null;
+  const freezer = shelf?.parent_id ? await storageContainersCollection.findOne({ _id: shelf.parent_id }) : null;
+
+  return { rack, shelf, freezer };
 }
 
 function buildIdVariants(...ids) {
@@ -99,8 +127,9 @@ function isOperationalSensor(sensor) {
 class SampleService {
   async createSample(db, sampleData, options = {}) {
     try {
-      const normalizedLocationID = normalizeRequiredLocationID(sampleData.locationID);
-      sampleData.locationID = normalizedLocationID;
+      const { boxId, positionCode } = normalizeRequiredStorageBoxAssignment(sampleData.boxId, sampleData.positionCode);
+      delete sampleData.locationID;
+      sampleData.storageLocation = { boxId, position: positionCode };
 
       const samplesCollection = await getCollection(db, 'samples');
 
@@ -180,30 +209,36 @@ class SampleService {
         }
       }
 
-      const locationsCollection = db.collection('locations');
-      const location = await locationsCollection.findOne({
-        locationID: { $in: buildIdVariants(sampleData.locationID) }
+      const storageBoxesCollection = db.collection('storageBoxes');
+      const box = await storageBoxesCollection.findOne({ _id: boxId });
+      if (!box) {
+        throw createSampleValidationError(`${LOCATION_REQUIRED_MESSAGE}: boxId inválido ou não cadastrado`);
+      }
+
+      const { rack, shelf, freezer } = await resolveStorageHierarchyForBox(db, box);
+      if (!freezer) {
+        throw createSampleValidationError(`${LOCATION_REQUIRED_MESSAGE}: hierarquia de armazenamento incompleta para a caixa informada`);
+      }
+
+      const equipmentCollection = db.collection('equipment');
+      const equipment = await equipmentCollection.findOne({
+        equipmentID: { $in: buildIdVariants(freezer.containerID) }
       });
-      if (!location) {
-        throw createSampleValidationError(`${LOCATION_REQUIRED_MESSAGE}: locationID inválido ou não cadastrado`);
+
+      if (!equipment) {
+        throw createSampleValidationError('Equipamento vinculado à localização física não está cadastrado');
       }
 
-      if (location.equipmentID !== undefined && location.equipmentID !== null && location.equipmentID !== '') {
-        const equipmentCollection = db.collection('equipment');
-        const equipment = await equipmentCollection.findOne({
-          equipmentID: { $in: buildIdVariants(location.equipmentID) }
-        });
-
-        if (!equipment) {
-          throw createSampleValidationError('Equipamento vinculado à localização física não está cadastrado');
-        }
-      }
-
-      const locationVariants = buildIdVariants(location.locationID, sampleData.locationID, location._id?.toString());
+      // #462: Sensor has no dict-02 canonical placement of its own, so the
+      // operational-sensor safety gate (RF004) stays keyed at equipment
+      // level (freezer.containerID === Equipment.equipmentID, per the
+      // mapping doc's already-established direct join) rather than the
+      // finer per-location granularity the legacy `locations` lookup used.
+      const equipmentVariants = buildIdVariants(freezer.containerID);
       const sensorLocationQuery = {
         $or: [
-          { locationId: { $in: locationVariants } },
-          { locationID: { $in: locationVariants } }
+          { locationId: { $in: equipmentVariants } },
+          { locationID: { $in: equipmentVariants } }
         ]
       };
       const sensorsCollection = db.collection('sensors');
@@ -254,7 +289,9 @@ class SampleService {
           quantity: createdQuantity,
           unit: sample.unit || 'µL',
           responsible: options?.auditInfo?.userName || options?.auditInfo?.actorName || 'SYSTEM',
-          destination: sample.locationID ? `location:${sample.locationID}` : null,
+          destination: sample.storageLocation?.boxId
+            ? `storage:${sample.storageLocation.boxId}:${sample.storageLocation.position}`
+            : null,
           purpose: 'sample_birth',
           linkedProject: sample.linkedProject || null,
           observations: options?.auditInfo?.notes || null,
@@ -270,6 +307,21 @@ class SampleService {
         await samplesCollection.deleteOne({ _id: result.insertedId });
         throw new Error(`Falha ao registrar cadeia de custódia no nascimento da amostra: ${ledgerError.message || ledgerError}`);
       }
+
+      // #462: dict-02 StorageAssignment (ELM-0167-0178) — open the
+      // placement-history record for the specimen's stay at boxId/positionCode,
+      // same convention the #461 backfill script uses (equipmentId = the
+      // FREEZER StorageContainer's _id, not its containerID).
+      const storageAssignmentsCollection = db.collection('storageAssignments');
+      await storageAssignmentsCollection.insertOne(StorageAssignmentModel.open({
+        specimenId: result.insertedId,
+        boxId,
+        positionCode,
+        equipmentId: freezer._id,
+        shelfId: shelf?._id || null,
+        rackId: rack?._id || null,
+        placedAt: sample.registeredAt
+      }));
 
       // Log sanitizado (apenas ID, sem dados sensíveis)
       logger.info('Amostra criada:', {

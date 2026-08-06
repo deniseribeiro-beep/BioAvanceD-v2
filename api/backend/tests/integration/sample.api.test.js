@@ -78,7 +78,8 @@ describe('POST /api/samples - Smart Blocking e Topological Quarantine', () => {
         quantity: 1,
         quality: 'GOOD', // valid MIABIS ID
         registeredAt: new Date().toISOString(),
-        locationID: 101,
+        boxId: '507f1f77bcf86cd799439011',
+        positionCode: 'A1',
         linkedProject: 'Projeto QA',
         isRareDisease: true,
         pharmacology_data: {
@@ -113,7 +114,8 @@ describe('POST /api/samples - Smart Blocking e Topological Quarantine', () => {
         quantity: 1,
         quality: 'GOOD', // valid MIABIS ID
         registeredAt: new Date().toISOString(),
-        locationID: 101,
+        boxId: '507f1f77bcf86cd799439011',
+        positionCode: 'A1',
         linkedProject: 'Projeto QA',
         isRareDisease: false,
         pharmacology_data: {
@@ -149,7 +151,8 @@ describe('POST /api/samples - Smart Blocking e Topological Quarantine', () => {
         quantity: 1,
         quality: 'GOOD', // valid MIABIS ID
         registeredAt: new Date().toISOString(),
-        locationID: 101,
+        boxId: '507f1f77bcf86cd799439011',
+        positionCode: 'A1',
         linkedProject: 'Projeto QA',
         isRareDisease: true,
         pharmacology_data: {
