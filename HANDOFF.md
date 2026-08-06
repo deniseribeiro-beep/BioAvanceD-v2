@@ -1,116 +1,113 @@
 # HANDOFF
 
 **Written:** 2026-08-06, end of session on `feature/docker-e2e-backend-integration`,
-after landing #464 (equipment-sensor-quarantine.service.js storage migration).
+after landing #459 (import-lgpd.service.js storage migration).
 
 ## What happened this session
 
-Dennis said "Pick #464". Routed via `work-issue` -> `build-loop` (spec'd
-in the mapping doc, same shape as #462/#463: a legacy allocation path
-migrating off `Location` onto `StorageAssignment`/`StorageContainer`/
-`StorageBox`).
+Dennis said "Pick #459". Routed via `work-issue` -> `build-loop` (spec'd
+in the legacy-location-migration mapping doc, #457's design decision,
+same family as #461-464).
+
+**Scope split before starting (confirmed with Dennis via AskUserQuestion):**
+#459's issue body named four files as "import-path Location consumers,"
+but only one of them was an actual allocation consumer in the #462/#463/
+#464 sense:
+
+- `import-lgpd.service.js` — a real consumer (LGPD bulk sample import's
+  auto-placement path). Migrated this session.
+- `import.service.js`/`import.controller.js`/`import-worker.js` — turned
+  out to be a *different* shape: a CSV-import feature that **writes new
+  documents into** the `locations` collection, actively violating #457's
+  "stays read-only during transition" coexistence rule. That's a design
+  call (disable now vs. redirect to import StorageBox/StorageContainer
+  rows vs. leave until #460), not a silent migration — split off as
+  **#466**, needs Dennis's input.
 
 **Landed (this session):**
-- `api/backend/src/services/equipment-sensor-quarantine.service.js`: the
-  automatic-quarantine service's three legacy-`locations`-collection
-  consumers (equipment status change, sensor status change, cold-chain
-  incident) now walk **down** from a FREEZER `StorageContainer` (found
-  by `freezer.containerID === Equipment.equipmentID`, #462's join
-  reused in reverse — equipment-to-freezer instead of freezer-to-
-  equipment) through `SHELF` -> `RACK` -> optional `DRAWER` to the
-  linked `StorageBox`es, then filters samples on `storageLocation.boxId`
-  instead of the legacy `locationID`/`location.locationID` pair. New
-  helpers `resolveFreezersByEquipmentIdentifiers` and
-  `findBoxIdsUnderFreezer` mirror #462's `resolveStorageHierarchyForBox`
-  walk but run top-down (quarantine starts from equipment/sensor, not
-  from a specimen's own box). `findLocationIdsByEquipment`/
-  `findLocationIdsBySensorKey`/`buildSampleFilterFromLocationIds` are
-  replaced outright by `findBoxIdsByEquipment`/`findBoxIdsBySensorKey`/
-  `buildSampleFilterFromBoxIds` — no compatibility shim reading both,
-  per rule 2. Each function's result field renamed `locationIds` ->
-  `boxIds` (internal only — grepped `api/backend/src` and
-  `frontend/src`, no external readers).
-- Reused #465's already-tracked equipment-level granularity call exactly
-  as #462/#463 did: `sensorContext.locationId`/`locationID` (and
-  `sensorMetadata`'s mirror fields) are treated as the same
-  equipment-level identifier matched against `freezer.containerID`, not
-  a pointer into the retiring `locations` collection — so
-  `findBoxIdsBySensorKey`'s legacy fallback block (a reverse `locations`
-  lookup keyed on `sensorId`/`sensorKey` fields embedded in a location
-  document) was dropped rather than kept as a compatibility path.
-- **Deliberately left unmigrated, documented in the mapping doc:**
-  `quarantineSamplesByFilter`'s `sample.location` branch (mutates
-  whichever `location` object shape is already on the doc being
-  quarantined, falling back to a bare `locationStatus` flag for docs
-  without one). Not a `locations`-collection consumer — it never queries
-  that collection — it's a display-field mutation keyed on the shape of
-  the sample document already in hand, and post-migration samples (no
-  `location` object set by `createSample`/`intakeWizard` since
-  #462/#463) already take the `locationStatus` branch correctly.
-- Tests rewritten in the same slice: `tests/unit/
-  equipment-sensor-quarantine.service.test.js` (10 cases) and
-  `tests/unit/cold-chain-quarantine.service.test.js` (22 cases) — both
-  now seed a real FREEZER->SHELF->RACK->StorageBox chain in the
-  in-memory collection fake (`$in`/exact-match query semantics, not a
-  stub) rather than a flat `locations` mock, so the hierarchy-walk logic
-  is actually exercised.
-- `docs/architecture/legacy-location-migration-mapping.md`: new #464
-  entry documenting the migration, the dropped-fallback and
-  left-unmigrated calls above.
-- Frontend impact: nil — grepped `frontend/src`, no `locationIds` reader.
-- Full backend suite run: 6562/6572 passing; the 10 failures are the
-  same pre-existing/unrelated ones from prior sessions
-  (`UserModel.getRoleName` default-role test, `generate-dictionary-catalog`
-  checksum drift) — not touched by this change.
-- Branch `test/464-equipment-sensor-quarantine-storage-migration`
-  (`test/` prefix, same fallback as #458/#461/#462/#463 — no dedicated
-  build-loop prefix exists yet), merged `--no-ff` into
-  `feature/docker-e2e-backend-integration` (commit `08da94d6`), pushed.
-  Local branch deleted (never pushed as its own remote branch).
-- #464 closed with the merge commit and a summary of what landed.
+- `api/backend/src/services/import-lgpd.service.js`: `ImportLGPDService.
+  importSamples`'s bulk-placement path (LGPD-consent sample import,
+  bypasses `sample.service.js`'s `createSample` entirely and inserts
+  `Sample` docs directly) now walks the FREEZER->SHELF->RACK->[DRAWER]->
+  StorageBox chain instead of scanning `locations`. Legacy
+  `getNextAvailableLocation(db, startLocationID, index)` (sorted by
+  `block`/`rack`/`drawer`/`box`) is replaced by `getNextAvailableStorageSlot
+  (db, startBoxId, index)` (sorted by `name`/`boxID`/`_id`, advancing by
+  *available* boxes rather than location documents — a deliberate
+  granularity translation, documented in the mapping doc, that doesn't
+  need Dennis's sign-off the way #465's sensor-precision call did).
+  `resolveStorageHierarchyForBox`/`findFirstAvailablePositionInBox`/
+  `isBoxAvailable` are duplicated from `intakeWizard.js` (mirrored per
+  #464's precedent, not cross-imported).
+- Input contract change (no compatibility shim, per rule 2):
+  `importSamples`'s `options.startLocationID` -> `options.startBoxId`;
+  CSV rows carry `boxId`/`positionCode` directly instead of a legacy
+  `locationID` column. Precedence preserved exactly (row's own boxId wins;
+  else autoIncrement+startBoxId sequence; else fixed startBoxId for all
+  location-less rows). After insert, opens a `StorageAssignment` (same
+  #461/#462 convention: `equipmentId` = FREEZER `StorageContainer._id`).
+- Callers updated to match: `import-lgpd.controller.js`,
+  `import-async.controller.js`, `sample-worker.js`,
+  `frontend/src/hooks/useAsyncImport.ts`, `frontend/src/services/api.ts`.
+  Frontend impact: nil for live behavior (grepped `frontend/src` — no
+  view component ever calls `useAsyncImport`/`useImportJob`), updated
+  only for type consistency.
+- Tests rewritten in `tests/unit/import-lgpd.service.importSamples.unit.test.js`
+  (`boxId auto-assignment (#459)` and `getNextAvailableStorageSlot (#459)`
+  describe blocks) plus updated field names in
+  `tests/unit/import-lgpd.controller.test.js` and
+  `tests/unit/import-async.controller.test.js`. All target files run
+  green (121 + 275 tests across the touched suites).
+- `docs/architecture/legacy-location-migration-mapping.md`: new #459
+  entry documenting the migration and the split rationale.
+- Branch `test/459-import-lgpd-location-storage-migration` (`test/`
+  prefix fallback), merged `--no-ff` into
+  `feature/docker-e2e-backend-integration` (commit `8b58dda5`), pushed.
+  Local branch deleted.
+- #459 closed with the merge commit and a summary pointing at #466.
+- **New issues filed:**
+  - **#466** — decide fate of the raw `locations`-CSV-import feature
+    (`import.service.js`/`import.controller.js`/`import-worker.js`).
+    Needs Dennis's call: disable / redirect / leave until #460.
+  - **#467** — LGPD bulk import never enforces RF004's operational-
+    sensor/equipment-readiness gate (pre-existing gap, noticed not
+    introduced during #459's migration — the legacy path never gated on
+    readiness either). Needs an owner call on whether bulk-imported
+    historical data should be exempt from that gate or not.
 
-Ran `wrap-up`: no new friction. The branch-protection hook blocking a
-direct edit on `feature/docker-e2e-backend-integration` (requiring the
-`test/464-*` branch first) is already-known, documented behavior. A
-full-suite `vitest run` piped through `grep`/`tail` a second time (to
-re-inspect truncated output) was blocked by the test-loop
-full-suite-guard hook even though the identical bare `vitest run`
-had already been permitted moments earlier in the same session — worked
-around by reading the already-completed run's output file directly
-instead of re-running. Not filed as a new issue: the hook's stated
-purpose (block per-iteration full-suite runs outside the ship-gate) was
-still served, and the workaround was trivial: rereading the on-disk
-output was not the same as adding a new pack finding.
+Ran `wrap-up`: one friction item worth flagging but not filed (couldn't
+locate the skills-pack repo checkout path this session to file against
+it directly) — `gh-issue-label-guard.cjs` blocked the *second*
+`gh issue create` call this session for missing `--label`, but let an
+identical-shape first call (#466) through unlabeled. Labeled #466
+manually after the fact (`gh issue edit 466 --add-label enhancement`).
+Inconsistent enforcement of the same guard within one session — worth a
+maintainer's look at the hook's matching logic if it recurs.
 
 ## Repo state
 
 - **`feature/docker-e2e-backend-integration`**: clean, pushed through
-  `08da94d6` (merge landing #464). Untracked `api/backend/out.txt` still
-  present, still not investigated — carried forward again (now several
-  sessions running).
+  `8b58dda5` (merge landing #459). Untracked `api/backend/out.txt` still
+  present, still not investigated — carried forward again (many sessions
+  running now).
 - **`fix/450-storageservice-repository-migration`**: still merged, still
   not deleted — carried forward again, still safe to delete.
-- Issues: **#464 closed** (this session). **#463 closed** (prior
-  session). **#462 closed** (prior session). **#465** still open — needs
-  Dennis's call on sensor placement granularity; #462/#463/#464 have all
-  now reused the same interim equipment-level call, so whenever #465
-  resolves, it may be worth revisiting all three consumers together
-  rather than as one-offs. **#450 still open** (umbrella tracker, by
-  design). **#451, #454 still open.** **#459, #460 still open** — #459
-  (import-path consumer migration) still depends only on #457 (done) and
-  is independent of the #462-#464 chain; #460 (retire `locations`) now
-  depends only on #459, since #462/#463/#464 are all done.
+- Issues: **#459 closed** (this session). **#464/#463/#462 closed**
+  (prior sessions). **#466, #467 opened** (this session, both need
+  Dennis's input — see above). **#465** still open — needs Dennis's call
+  on sensor placement granularity; #462/#463/#464 all reused the same
+  interim equipment-level call (#459 didn't need to, since the bulk-
+  import path doesn't gate on sensors at all — see #467). **#450 still
+  open** (umbrella tracker, by design). **#451, #454 still open.**
+  **#460** (retire `locations`) now depends on #466 landing too, not just
+  #459 — #459 only migrated the read-consumer half; #466 (the write path)
+  still needs to stop before `locations` can be dropped.
 - Backlog otherwise unchanged from last handoff:
   - **#451** (status consolidation + custody/storage entity design
-    question) — still open, still a real design question. Worth
-    re-checking against the same July-31 manuscript doc that resolved
-    #453/#457.
-  - **#454** — depends on #450/#452/#453/#455 landing first; #453 done,
-    #454's own body should still be re-read against the #457-#464 split
-    before assuming it's unblocked.
+    question) — still open, still a real design question.
+  - **#454** — depends on #450/#452/#453/#455 landing first.
   - **#390** — still blocked (waiting on #450's follow-ups, now
-    including #459/#460/#465; #457/#458/#461/#462/#463/#464 done,
-    #459/#460/#465 remain).
+    including #459 done, #460/#465/#466/#467 remain).
   - Older backlog: `#371`/`#373`/`#374`/`#378`/`#379`, `user.accessType`
     grep sweep (still not done), `test/440-retention-policy-model` and
     `test/441-retention-sweep-job` branches (merged, still not deleted),
@@ -129,36 +126,28 @@ stack torn down, named volumes kept, RBAC catalog seeded, 0 real users).
 
 ## Blocking next step
 
-None. **#459** (import-path consumer migration) remains independently
-pickable, depending only on #457 (done). **#460** (retire `locations`
-collection/routes) is now unblocked except for #459 — the entire
-#462-#464 consumer-migration family is done. **#465** (sensor-granularity
-decision) is a question for Dennis, not implementation work. Small
-cleanup items carried forward (not blocking): deleting
-`fix/450-storageservice-repository-migration`, finally looking at
-`api/backend/out.txt` instead of re-noting it.
+None. **#466** and **#467** both need Dennis's input before further
+implementation (design calls, not blocked-on-code). **#465** (sensor-
+granularity decision) remains a question for Dennis too. **#460**
+(retire `locations`) is now blocked on #466 landing (not just #459).
 
 ## Recommended next steps
 
-None explicitly queued by Dennis beyond "pick #464" (done). Candidates,
+None explicitly queued by Dennis beyond "pick #459" (done). Candidates,
 in likely priority order:
 
-1. **#459** — import-path consumer migration, independent of the
-   #461-#464 chain, unblocked (depends only on #457, done).
-2. **#460** — retire `locations` collection/`location.routes.js`/
-   `locationIDGenerator.js`; now unblocked except for #459.
-3. **#465** — needs Dennis's input (not implementation work): is
-   per-freezer sensor coverage the real deployment pattern, or does
-   `Sensor` need an explicit link into the `StorageContainer` hierarchy?
-   Worth resolving before #459/#460 land, since #462/#463/#464 all made
-   the same interim call and a resolution might mean revisiting them.
-4. **#451** (status consolidation + custody/storage entity decision) —
-   check against the July-31 manuscript doc first, same source that
-   resolved #453/#457.
-5. **#454** — re-read against the #457-#464 split before assuming
+1. **#466** — needs Dennis's input: disable/redirect/leave-until-#460 for
+   the raw `locations`-CSV-import feature.
+2. **#467** — needs Dennis's input: should bulk LGPD import enforce
+   RF004's operational-sensor/equipment-readiness gate or is it
+   intentionally exempt (historical-data backfill)?
+3. **#465** — needs Dennis's input: is per-freezer sensor coverage the
+   real deployment pattern, or does `Sensor` need an explicit link into
+   the `StorageContainer` hierarchy?
+4. **#451** (status consolidation + custody/storage entity decision).
+5. **#454** — re-read against the #457-#466 split before assuming
    unblocked.
-6. **#390** — blocked until the #450 family (now including
-   #459/#460/#465) closes out.
+6. **#390** — blocked until the #450 family closes out.
 7. Older backlog: `#371`/`#373`/`#374`/`#378`/`#379`, `user.accessType`
    grep sweep, `test/440-*`/`test/441-*` branch deletion,
    `fix/444-retention-period-iso8601` housekeeping, stray
@@ -166,27 +155,19 @@ in likely priority order:
 
 ## Which skills to use
 
-- `build-loop`'s "real backend" proof bar for a backend-internal slice
-  applies uniformly across the #462-#464 family: this repo's mocked-Mongo
-  supertest tier is the strongest native-only proof available, and a
-  migration slice that gates behavior on resolved `StorageContainer`
-  hierarchy needs its test fixtures to actually model that hierarchy
-  (a seeded `storageContainers`/`storageBoxes` chain with real `$in`
-  query-matching), not just swap collection names while keeping flat
-  mocks.
-- When a migration touches several independent consumers of the same
-  legacy allocation concept (#462's `sample.service.js`, #463's
-  `intakeWizard.js`, #464's `equipment-sensor-quarantine.service.js`),
-  reuse the *exact* helper shape (function names, parameter order,
-  hierarchy-walk logic) from the first slice rather than re-deriving it.
-  #464 needed the walk run in reverse (equipment -> freezer -> down to
-  boxes, since quarantine starts from equipment/sensor rather than from
-  a specimen's own box) — worth noting for any future consumer that
-  starts from the equipment side rather than the specimen side.
-- Not every "location" string match in a legacy-migration issue's line
-  numbers is actually a `locations`-collection consumer — #464's issue
-  body flagged a `sample.location` object-mutation branch that turned
-  out to be a display-field shape check on the sample doc already in
-  hand, not a query against the collection being retired. Worth
-  re-reading each flagged line for what it actually does before assuming
-  every "location" hit needs the same migration treatment.
+- The legacy-location-migration series (#457-#467) routes through
+  `work-issue` -> `build-loop` even though it predates and sits outside
+  the RF-milestone's own "known first slices" list in build-loop's
+  overlay — this is now a confirmed-twice pattern (#464 and #459 both
+  routed this way successfully), not a one-off. Worth treating as an
+  established second build-loop track alongside the RF milestone.
+- Before assuming every file an issue's body lists is the same *kind* of
+  work: #459 named four files as "consumers," but three of them were
+  actually the opposite direction (writing into the collection being
+  retired, not reading from it for allocation). Reading each file's
+  actual behavior before scoping the slice caught this — worth doing
+  even when an issue's file list looks uniform at a glance.
+- When a migration slice's input contract change has zero live frontend
+  callers (grepped, confirmed), update the frontend types anyway for
+  consistency, but don't let that block calling the slice done — same
+  precedent #462 set.
