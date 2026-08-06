@@ -300,8 +300,6 @@ class StorageService {
    * @returns {Promise<{ success: boolean, sampleLocation?: { specimenId: string, boxId: string, position: string }, graphPersisted?: boolean, error?: string, message?: string }>}
    */
   async autoAssignSampleToBox(specimenId, boxId) {
-    const samplesCollection = await getCollection(this.db, 'samples');
-    const storageBoxesCollection = this.db.collection('storageBoxes');
     const sampleObjId = this._normalizeObjectId(specimenId);
     const boxObjId = this._normalizeObjectId(boxId);
     const session = this.db.getMongo().startSession();
@@ -310,7 +308,7 @@ class StorageService {
     let sampleSnapshot = null;
 
     try {
-      boxSnapshot = await storageBoxesCollection.findOne({ _id: boxObjId });
+      boxSnapshot = await this.storageRepository.findBoxById(boxObjId);
       if (!boxSnapshot) {
         return {
           success: false,
@@ -319,7 +317,7 @@ class StorageService {
         };
       }
 
-      sampleSnapshot = await samplesCollection.findOne({ _id: sampleObjId });
+      sampleSnapshot = await this.storageRepository.findSampleById(sampleObjId);
       if (!sampleSnapshot) {
         return {
           success: false,
