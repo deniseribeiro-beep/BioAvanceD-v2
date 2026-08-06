@@ -116,3 +116,45 @@ query-matching semantics, not a stub returning canned data
 (`tests/unit/services/location-storage-backfill.service.test.js`, 7 cases).
 Consumer migration (#462/#463/#464) and retiring `locations` (#460) remain
 separate follow-ups.
+
+**Landed 2026-08-06 (#462, `sample.service.js` slice):** `createSample`'s
+input contract changes from a legacy numeric `locationID` to a
+`boxId`/`positionCode` pair (the canonical `StorageBox` reference + well
+position) — the route-level payload validator
+(`interface/routes/sample.routes.js`'s `validateCreateSamplePayload`) and
+the service both updated together, since the route rejected a missing
+`locationID` before the service ever saw the request. `createSample` now:
+resolves the `StorageBox` by `_id`, walks its `StorageContainer` chain
+(`RACK`, optionally through a `DRAWER`, then `SHELF`, then `FREEZER`) to
+find the linked equipment via `freezer.containerID` (`=== Equipment.
+equipmentID`, the mapping table's already-established direct join, so no
+new bridging lookup was needed for the equipment-registered check), sets
+`Sample.storageLocation = { boxId, position }` (no longer writes
+`locationID`), and opens a `StorageAssignment` for the new specimen after
+the birth movement is appended — matching the #461 backfill script's
+convention (`equipmentId` on the assignment is the FREEZER
+`StorageContainer`'s `_id`, not its `containerID`). The audit-ledger
+`destination` field on the birth movement changed from `location:<id>`
+to `storage:<boxId>:<positionCode>`.
+
+Open item resolved as a judgment call, since dict-02 doesn't model a
+`Sensor` entity at all (grepped `dict-02_DICIONARIO.md` — no match): the
+RF004 operational-sensor safety gate (a sample can't be created at a
+location without an operational sensor) previously matched `sensors` by
+the legacy `Location` document's own identifiers (locationID/_id) — the
+finest legacy granularity. Since there's no canonical (dict-02) place for
+a sensor to attach to `StorageContainer`/`StorageBox`, and continuing to
+read `locations` for this lookup would violate the coexistence rule above
+("consumers migrate ... they don't get a compatibility shim that reads
+both"), the check now matches `sensors.locationId`/`locationID` against
+the resolved freezer's `containerID` (equipment-level granularity)
+instead of the specific rack/drawer/box. This is a real precision
+reduction versus the legacy behavior, not a data-preserving translation —
+flagged here rather than assumed silently correct, since `equipment-
+sensor-quarantine.service.js` (#464, out of scope for this slice) will
+need to make the same call for its own sensor-to-location resolution,
+and should reuse this decision rather than re-deriving it independently.
+
+Frontend impact: nil for this slice — no UI call site invokes `useSamples
+.ts`'s `createSample` hook yet (grepped `frontend/src`), so the payload
+contract change has no live caller to update.

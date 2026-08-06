@@ -131,16 +131,17 @@ function validateCreateSamplePayload(req, res, next) {
     errors.push('isRareDisease deve ser boolean');
   }
 
-  if (payload.locationID === undefined || payload.locationID === null || payload.locationID === '') {
+  // #462: legacy `locationID` input replaced by boxId/positionCode, the
+  // canonical StorageBox placement pair (docs/architecture/
+  // legacy-location-migration-mapping.md).
+  if (payload.boxId === undefined || payload.boxId === null || payload.boxId === '') {
     errors.push('Localização física obrigatória para cadastro de amostra');
-  } else {
-    const locationValue = typeof payload.locationID === 'string' ? payload.locationID.trim() : payload.locationID;
-    const locationIsValidNumber = typeof locationValue === 'number' && Number.isFinite(locationValue) && locationValue > 0;
-    const locationIsNumericString = typeof locationValue === 'string' && /^\d+$/.test(locationValue) && Number(locationValue) > 0;
+  } else if (typeof payload.boxId !== 'string' || !ObjectId.isValid(payload.boxId)) {
+    errors.push('Localização física obrigatória para cadastro de amostra: boxId deve ser um identificador válido');
+  }
 
-    if (!locationIsValidNumber && !locationIsNumericString) {
-      errors.push('Localização física obrigatória para cadastro de amostra: locationID deve ser numérico válido');
-    }
+  if (payload.positionCode === undefined || payload.positionCode === null || String(payload.positionCode).trim() === '') {
+    errors.push('Localização física obrigatória para cadastro de amostra: positionCode é obrigatório');
   }
 
   if (!payload.registeredAt) {

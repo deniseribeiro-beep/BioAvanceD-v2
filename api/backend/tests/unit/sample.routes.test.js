@@ -163,7 +163,8 @@ const VALID_PAYLOAD = {
   quality: 'GOOD',
   linkedProject: 'Projeto X',
   registeredAt: '2026-01-01',
-  locationID: 1,
+  boxId: '507f1f77bcf86cd799439011',
+  positionCode: 'A1',
 };
 
 describe('sample.routes', () => {
@@ -330,7 +331,7 @@ describe('sample.routes', () => {
       expect(res.status).toBe(201);
     });
 
-    it('accepts a numeric-string locationID', async () => {
+    it('accepts a valid boxId/positionCode pair, per issue #462', async () => {
       const executeMock = vi.fn().mockResolvedValue({
         sample: { _id: { toString: () => 's1' }, patientID: '12345678' },
         strictMode: true,
@@ -341,36 +342,37 @@ describe('sample.routes', () => {
 
       const res = await request(app)
         .post('/api/samples')
-        .send({ ...VALID_PAYLOAD, locationID: '42' });
+        .send({ ...VALID_PAYLOAD, boxId: '507f1f77bcf86cd799439012' });
 
       expect(res.status).toBe(201);
     });
 
-    it('rejects a locationID that is neither a valid number nor a numeric string', async () => {
+    it('rejects a boxId that is not a valid ObjectId, per issue #462', async () => {
       const { router } = loadRoute({ registerSampleUseCaseExecute: vi.fn() });
       const app = buildApp(router, {});
 
       const res = await request(app)
         .post('/api/samples')
-        .send({ ...VALID_PAYLOAD, locationID: 'not-a-number' });
+        .send({ ...VALID_PAYLOAD, boxId: 'not-a-valid-object-id' });
 
       expect(res.status).toBe(422);
       expect(res.body.details).toContain(
-        'Localização física obrigatória para cadastro de amostra: locationID deve ser numérico válido'
+        'Localização física obrigatória para cadastro de amostra: boxId deve ser um identificador válido'
       );
     });
 
-    it('rejects a locationID of 0 (not a positive number)', async () => {
+    it('rejects a missing positionCode, per issue #462', async () => {
       const { router } = loadRoute({ registerSampleUseCaseExecute: vi.fn() });
       const app = buildApp(router, {});
+      const { positionCode, ...withoutPositionCode } = VALID_PAYLOAD;
 
       const res = await request(app)
         .post('/api/samples')
-        .send({ ...VALID_PAYLOAD, locationID: 0 });
+        .send(withoutPositionCode);
 
       expect(res.status).toBe(422);
       expect(res.body.details).toContain(
-        'Localização física obrigatória para cadastro de amostra: locationID deve ser numérico válido'
+        'Localização física obrigatória para cadastro de amostra: positionCode é obrigatório'
       );
     });
 

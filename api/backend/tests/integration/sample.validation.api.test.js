@@ -37,7 +37,8 @@ function buildValidSamplePayload(overrides = {}) {
     quality: 'GOOD',
     linkedProject: 'Projeto QA RNF011',
     registeredAt: new Date().toISOString(),
-    locationID: 101,
+    boxId: '507f1f77bcf86cd799439011',
+    positionCode: 'A1',
     ...overrides,
   };
 }
@@ -63,9 +64,9 @@ describe('RF004/RNF011 - POST /api/samples validações de integridade', () => {
           };
         }
 
-        if (name === 'locations') {
+        if (name === 'storageBoxes') {
           return {
-            findOne: vi.fn().mockResolvedValue({ locationID: 101 }),
+            findOne: vi.fn().mockResolvedValue({ _id: '507f1f77bcf86cd799439011' }),
           };
         }
 

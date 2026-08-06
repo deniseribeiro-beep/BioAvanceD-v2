@@ -4,6 +4,12 @@ import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 
 const sampleService = require('../../src/services/sample.service');
+const { ObjectId } = require('mongodb');
+
+const BOX_ID = new ObjectId();
+const RACK_ID = new ObjectId();
+const SHELF_ID = new ObjectId();
+const FREEZER_ID = new ObjectId();
 
 function makeCursor(docs = []) {
   const cursor = {
@@ -48,7 +54,9 @@ function makeDb(overrides = {}) {
     sample_movements: makeCollection('sample_movements'),
     counters: makeCollection('counters'),
     patients: makeCollection('patients'),
-    locations: makeCollection('locations'),
+    storageBoxes: makeCollection('storageBoxes'),
+    storageContainers: makeCollection('storageContainers'),
+    storageAssignments: makeCollection('storageAssignments'),
     results: makeCollection('results'),
     ...overrides
   };
@@ -75,17 +83,35 @@ function validSampleData(overrides = {}) {
     linkedProject: 'ProjectX',
     barcode: 'BR-TEST-001',
     specimenId: 555001,
-    locationID: 1,
+    boxId: BOX_ID.toString(),
+    positionCode: 'A1',
     registeredAt: new Date('2024-01-01'),
     ...overrides
   };
 }
 
-function mockOperationalLocation(db) {
+// #462: the storage chain a valid createSample call resolves —
+// BOX_ID -> RACK_ID -> SHELF_ID -> FREEZER_ID (containerID 'EQ-1'), mirroring
+// the hierarchy the #461 backfill script materializes.
+function mockOperationalStorage(db) {
   db.collections.patients.findOne.mockResolvedValue({ participantId: '12345678' });
-  db.collections.locations.findOne.mockResolvedValue({ locationID: 1 });
+
+  const containersById = new Map([
+    [String(RACK_ID), { _id: RACK_ID, containerType: 'RACK', parent_id: SHELF_ID }],
+    [String(SHELF_ID), { _id: SHELF_ID, containerType: 'SHELF', parent_id: FREEZER_ID }],
+    [String(FREEZER_ID), { _id: FREEZER_ID, containerType: 'FREEZER', containerID: 'EQ-1', parent_id: null }]
+  ]);
+
+  const mocked = {
+    storageBoxes: { findOne: vi.fn().mockResolvedValue({ _id: BOX_ID, parent_id: RACK_ID }) },
+    storageContainers: { findOne: vi.fn((query) => Promise.resolve(containersById.get(String(query._id)) || null)) },
+    equipment: { findOne: vi.fn().mockResolvedValue({ equipmentID: 'EQ-1' }) },
+    sensors: { findOne: vi.fn().mockResolvedValue({ status: 'ok' }) },
+    storageAssignments: { insertOne: vi.fn().mockResolvedValue({ insertedId: 'assignment-1' }) }
+  };
+
   db.collection.mockImplementation((name) => {
-    if (name === 'sensors') return { findOne: vi.fn().mockResolvedValue({ status: 'ok' }) };
+    if (mocked[name]) return mocked[name];
     return db.collections[name] || (db.collections[name] = makeCollection(name));
   });
 }
@@ -103,7 +129,7 @@ describe('sample.service', () => {
   describe('createSample', () => {
     it('creates a sample and appends a birth movement to the ledger', async () => {
       const db = makeDb();
-      mockOperationalLocation(db);
+      mockOperationalStorage(db);
 
       const result = await sampleService.createSample(db, validSampleData());
 
@@ -113,16 +139,38 @@ describe('sample.service', () => {
       expect(db.collections.sample_movements.insertOne).toHaveBeenCalledTimes(1);
       const [movementArg] = db.collections.sample_movements.insertOne.mock.calls[0];
       expect(movementArg.type).toBe('create');
+      expect(movementArg.destination).toBe(`storage:${BOX_ID.toString()}:A1`);
     });
 
-    it('persists the validated locationID on the created sample, per issue #403', async () => {
+    it('persists the resolved storageLocation (boxId/positionCode) on the created sample, per issue #462', async () => {
       const db = makeDb();
-      mockOperationalLocation(db);
+      mockOperationalStorage(db);
 
-      await sampleService.createSample(db, validSampleData({ locationID: 7 }));
+      await sampleService.createSample(db, validSampleData({ positionCode: 'B2' }));
 
       const [insertedSample] = db.collections.samples.insertOne.mock.calls[0];
-      expect(insertedSample.locationID).toBe(7);
+      expect(insertedSample.storageLocation).toEqual({ boxId: BOX_ID, position: 'B2' });
+      expect(insertedSample.locationID).toBeNull();
+    });
+
+    it('opens a StorageAssignment for the specimen at boxId/positionCode, per issue #462', async () => {
+      const db = makeDb();
+      mockOperationalStorage(db);
+
+      const result = await sampleService.createSample(db, validSampleData());
+
+      const storageAssignments = db.collection('storageAssignments');
+      expect(storageAssignments.insertOne).toHaveBeenCalledTimes(1);
+      const [assignmentArg] = storageAssignments.insertOne.mock.calls[0];
+      expect(assignmentArg).toMatchObject({
+        specimenId: 'generated-id',
+        boxId: BOX_ID.toString(),
+        positionCode: 'A1',
+        equipmentId: FREEZER_ID,
+        shelfId: SHELF_ID,
+        rackId: RACK_ID,
+        occupancyStatus: 'ocupada'
+      });
     });
 
     it('rejects with 422 when required MIABIS fields are missing', async () => {
@@ -138,7 +186,7 @@ describe('sample.service', () => {
 
     it('rejects with 404 when the participant does not exist', async () => {
       const db = makeDb();
-      mockOperationalLocation(db);
+      mockOperationalStorage(db);
       db.collections.patients.findOne.mockResolvedValue(null); // not found
 
       await expect(sampleService.createSample(db, validSampleData())).rejects.toMatchObject({
@@ -148,7 +196,7 @@ describe('sample.service', () => {
 
     it('rejects when the barcode is already taken', async () => {
       const db = makeDb();
-      mockOperationalLocation(db);
+      mockOperationalStorage(db);
       db.collections.samples.findOne
         .mockResolvedValueOnce(null) // specimenId dup check passes
         .mockResolvedValueOnce({ barcode: 'BR-TEST-001' }); // barcode dup check
@@ -160,7 +208,7 @@ describe('sample.service', () => {
 
     it('rejects when the specimenId is already taken', async () => {
       const db = makeDb();
-      mockOperationalLocation(db);
+      mockOperationalStorage(db);
       db.collections.samples.findOne.mockResolvedValueOnce({ specimenId: 555001 }); // specimenId dup check
 
       await expect(sampleService.createSample(db, validSampleData())).rejects.toThrow(
@@ -168,43 +216,43 @@ describe('sample.service', () => {
       );
     });
 
-    it('rejects when locationID is missing', async () => {
+    it('rejects when boxId is missing', async () => {
       const db = makeDb();
 
       await expect(
-        sampleService.createSample(db, validSampleData({ locationID: undefined }))
+        sampleService.createSample(db, validSampleData({ boxId: undefined }))
       ).rejects.toMatchObject({ statusCode: 400 });
     });
 
-    it('rejects when locationID is an empty/whitespace string', async () => {
+    it('rejects when positionCode is an empty/whitespace string', async () => {
       const db = makeDb();
 
       await expect(
-        sampleService.createSample(db, validSampleData({ locationID: '   ' }))
-      ).rejects.toMatchObject({ statusCode: 400 });
+        sampleService.createSample(db, validSampleData({ positionCode: '   ' }))
+      ).rejects.toMatchObject({ statusCode: 422 });
     });
 
-    it('rejects when locationID is not a valid number', async () => {
+    it('rejects when boxId is not a valid ObjectId', async () => {
       const db = makeDb();
 
       await expect(
-        sampleService.createSample(db, validSampleData({ locationID: 'not-a-number' }))
-      ).rejects.toThrow(/locationID deve ser numérico válido/);
+        sampleService.createSample(db, validSampleData({ boxId: 'not-an-object-id' }))
+      ).rejects.toThrow(/boxId deve ser um identificador válido/);
     });
 
-    it('rejects when locationID is provided but does not exist', async () => {
+    it('rejects when boxId is provided but does not exist', async () => {
       const db = makeDb();
       db.collections.patients.findOne.mockResolvedValue({ participantId: '12345678' });
-      db.collections.locations.findOne.mockResolvedValue(null);
+      db.collections.storageBoxes.findOne.mockResolvedValue(null);
 
       await expect(
-        sampleService.createSample(db, validSampleData({ locationID: 42 }))
+        sampleService.createSample(db, validSampleData())
       ).rejects.toMatchObject({ statusCode: 422 });
     });
 
     it('resolves collectionSite (ELM-0128) against a real Organization and stores it', async () => {
       const db = makeDb({ organizations: makeCollection('organizations') });
-      mockOperationalLocation(db);
+      mockOperationalStorage(db);
       db.collections.organizations.findOne.mockResolvedValue({ organizationId: 'org-uuid-123' });
 
       const result = await sampleService.createSample(db, validSampleData({ collectionSite: 'org-uuid-123' }));
@@ -215,7 +263,7 @@ describe('sample.service', () => {
 
     it('rejects with 404 when collectionSite does not resolve to an Organization', async () => {
       const db = makeDb({ organizations: makeCollection('organizations') });
-      mockOperationalLocation(db);
+      mockOperationalStorage(db);
       db.collections.organizations.findOne.mockResolvedValue(null);
 
       await expect(
@@ -225,7 +273,7 @@ describe('sample.service', () => {
 
     it('rolls back the inserted sample when the ledger append fails', async () => {
       const db = makeDb();
-      mockOperationalLocation(db);
+      mockOperationalStorage(db);
       db.collections.sample_movements.insertOne.mockRejectedValue(new Error('ledger down'));
 
       await expect(sampleService.createSample(db, validSampleData())).rejects.toThrow(
@@ -236,7 +284,7 @@ describe('sample.service', () => {
 
     it('generates a specimenId automatically when none is provided', async () => {
       const db = makeDb();
-      mockOperationalLocation(db);
+      mockOperationalStorage(db);
 
       const result = await sampleService.createSample(db, validSampleData({ specimenId: undefined }));
 
@@ -246,7 +294,7 @@ describe('sample.service', () => {
 
     it('rejects when quantity is a numeric string instead of a number', async () => {
       const db = makeDb();
-      mockOperationalLocation(db);
+      mockOperationalStorage(db);
 
       await expect(
         sampleService.createSample(db, validSampleData({ quantity: '10' }))
@@ -260,18 +308,26 @@ describe('sample.service', () => {
     // of falling through to the existence check's 404 "não encontrado".
     it('returns 400 (participantId inválido) for a malformed participantId, per issue #253', async () => {
       const db = makeDb();
-      mockOperationalLocation(db);
+      mockOperationalStorage(db);
 
       await expect(
         sampleService.createSample(db, validSampleData({ participantId: 'not-8-digits' }))
       ).rejects.toMatchObject({ statusCode: 400, message: expect.stringContaining('participantId inválido') });
     });
 
-    it('rejects when the location has a linked equipment that is not registered', async () => {
+    it('rejects when the box resolves to a hierarchy whose freezer has no linked equipment registered', async () => {
       const db = makeDb();
-      db.collections.patients.findOne.mockResolvedValue({ participantId: '12345678' });
-      db.collections.locations.findOne.mockResolvedValue({ locationID: 1, equipmentID: 'EQ-1' });
+      mockOperationalStorage(db);
       db.collection.mockImplementation((name) => {
+        if (name === 'storageBoxes') return { findOne: vi.fn().mockResolvedValue({ _id: BOX_ID, parent_id: RACK_ID }) };
+        if (name === 'storageContainers') {
+          const containersById = new Map([
+            [String(RACK_ID), { _id: RACK_ID, containerType: 'RACK', parent_id: SHELF_ID }],
+            [String(SHELF_ID), { _id: SHELF_ID, containerType: 'SHELF', parent_id: FREEZER_ID }],
+            [String(FREEZER_ID), { _id: FREEZER_ID, containerType: 'FREEZER', containerID: 'EQ-1', parent_id: null }]
+          ]);
+          return { findOne: vi.fn((query) => Promise.resolve(containersById.get(String(query._id)) || null)) };
+        }
         if (name === 'equipment') return { findOne: vi.fn().mockResolvedValue(null) };
         return db.collections[name] || (db.collections[name] = makeCollection(name));
       });
@@ -281,26 +337,35 @@ describe('sample.service', () => {
       ).rejects.toThrow(/Equipamento vinculado à localização física não está cadastrado/);
     });
 
-    it('creates the sample when the linked equipment is registered', async () => {
+    it('rejects when the box hierarchy has no FREEZER at its root', async () => {
       const db = makeDb();
-      db.collections.patients.findOne.mockResolvedValue({ participantId: '12345678' });
-      db.collections.locations.findOne.mockResolvedValue({ locationID: 1, equipmentID: 'EQ-1' });
+      mockOperationalStorage(db);
       db.collection.mockImplementation((name) => {
-        if (name === 'equipment') return { findOne: vi.fn().mockResolvedValue({ equipmentID: 'EQ-1' }) };
-        if (name === 'sensors') return { findOne: vi.fn().mockResolvedValue({ status: 'ok' }) };
+        if (name === 'storageBoxes') return { findOne: vi.fn().mockResolvedValue({ _id: BOX_ID, parent_id: RACK_ID }) };
+        if (name === 'storageContainers') return { findOne: vi.fn().mockResolvedValue(null) };
         return db.collections[name] || (db.collections[name] = makeCollection(name));
       });
 
-      const result = await sampleService.createSample(db, validSampleData());
-      expect(result.barcode).toBe('BR-TEST-001');
+      await expect(
+        sampleService.createSample(db, validSampleData())
+      ).rejects.toThrow(/hierarquia de armazenamento incompleta/);
     });
 
-    it('rejects when no sensor is associated with the location', async () => {
+    it('rejects when no sensor is associated with the resolved freezer', async () => {
       const db = makeDb();
-      db.collections.patients.findOne.mockResolvedValue({ participantId: '12345678' });
-      db.collections.locations.findOne.mockResolvedValue({ locationID: 1 });
+      mockOperationalStorage(db);
       db.collection.mockImplementation((name) => {
         if (name === 'sensors') return { findOne: vi.fn().mockResolvedValue(null) };
+        if (name === 'storageBoxes') return { findOne: vi.fn().mockResolvedValue({ _id: BOX_ID, parent_id: RACK_ID }) };
+        if (name === 'storageContainers') {
+          const containersById = new Map([
+            [String(RACK_ID), { _id: RACK_ID, containerType: 'RACK', parent_id: SHELF_ID }],
+            [String(SHELF_ID), { _id: SHELF_ID, containerType: 'SHELF', parent_id: FREEZER_ID }],
+            [String(FREEZER_ID), { _id: FREEZER_ID, containerType: 'FREEZER', containerID: 'EQ-1', parent_id: null }]
+          ]);
+          return { findOne: vi.fn((query) => Promise.resolve(containersById.get(String(query._id)) || null)) };
+        }
+        if (name === 'equipment') return { findOne: vi.fn().mockResolvedValue({ equipmentID: 'EQ-1' }) };
         return db.collections[name] || (db.collections[name] = makeCollection(name));
       });
 
@@ -311,10 +376,19 @@ describe('sample.service', () => {
 
     it('rejects with the sensor status in the message when the sensor is under maintenance', async () => {
       const db = makeDb();
-      db.collections.patients.findOne.mockResolvedValue({ participantId: '12345678' });
-      db.collections.locations.findOne.mockResolvedValue({ locationID: 1 });
+      mockOperationalStorage(db);
       db.collection.mockImplementation((name) => {
         if (name === 'sensors') return { findOne: vi.fn().mockResolvedValue({ status: 'maintenance' }) };
+        if (name === 'storageBoxes') return { findOne: vi.fn().mockResolvedValue({ _id: BOX_ID, parent_id: RACK_ID }) };
+        if (name === 'storageContainers') {
+          const containersById = new Map([
+            [String(RACK_ID), { _id: RACK_ID, containerType: 'RACK', parent_id: SHELF_ID }],
+            [String(SHELF_ID), { _id: SHELF_ID, containerType: 'SHELF', parent_id: FREEZER_ID }],
+            [String(FREEZER_ID), { _id: FREEZER_ID, containerType: 'FREEZER', containerID: 'EQ-1', parent_id: null }]
+          ]);
+          return { findOne: vi.fn((query) => Promise.resolve(containersById.get(String(query._id)) || null)) };
+        }
+        if (name === 'equipment') return { findOne: vi.fn().mockResolvedValue({ equipmentID: 'EQ-1' }) };
         return db.collections[name] || (db.collections[name] = makeCollection(name));
       });
 
@@ -325,7 +399,7 @@ describe('sample.service', () => {
 
     it('does not persist a client-supplied legacy location object (#400 — severed in favor of storageLocation/storageBoxes)', async () => {
       const db = makeDb();
-      mockOperationalLocation(db);
+      mockOperationalStorage(db);
       const location = { freezer: 'F1', rack: 'R1', box: 'B1', position: 'A1' };
 
       await sampleService.createSample(db, validSampleData({ location }));
@@ -336,7 +410,7 @@ describe('sample.service', () => {
 
     it('generates a barcode automatically when none is provided', async () => {
       const db = makeDb();
-      mockOperationalLocation(db);
+      mockOperationalStorage(db);
 
       const result = await sampleService.createSample(db, validSampleData({ barcode: undefined }));
 
