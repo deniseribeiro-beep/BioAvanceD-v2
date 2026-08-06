@@ -145,7 +145,7 @@ class ImportAsyncController {
         });
       }
 
-      const { dataType, startLocationID, autoIncrement } = req.body;
+      const { dataType, startBoxId, autoIncrement } = req.body;
       let parsedGroupFields = {};
       const file = req.file;
 
@@ -188,7 +188,7 @@ class ImportAsyncController {
         file,
         dataType,
         {
-          startLocationID: startLocationID ? parseInt(startLocationID) : null,
+          startBoxId: startBoxId || null,
           autoIncrement: autoIncrement === 'true' || autoIncrement === true,
           groupFields: parsedGroupFields,
           fileName: file.originalname,

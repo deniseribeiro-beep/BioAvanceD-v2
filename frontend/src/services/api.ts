@@ -707,13 +707,13 @@ export const importService = {
   createImportJob: (
     file: File, 
     dataType: string, 
-    options?: { startLocationID?: number; autoIncrement?: boolean; groupFields?: Record<string, any> }
+    options?: { startBoxId?: string; autoIncrement?: boolean; groupFields?: Record<string, any> }
   ) => {
     const formData = new FormData();
     formData.append('file', file);
     formData.append('dataType', dataType);
-    if (options?.startLocationID !== undefined) {
-      formData.append('startLocationID', options.startLocationID.toString());
+    if (options?.startBoxId !== undefined) {
+      formData.append('startBoxId', options.startBoxId);
     }
     if (options?.autoIncrement !== undefined) {
       formData.append('autoIncrement', options.autoIncrement.toString());

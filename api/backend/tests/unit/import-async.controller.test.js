@@ -363,13 +363,13 @@ describe('import-async.controller', () => {
       );
     });
 
-    it('parses startLocationID as int and coerces autoIncrement string "true"', async () => {
+    it('passes startBoxId through as-is and coerces autoIncrement string "true"', async () => {
       const file = { path: '/tmp/f.csv', originalname: 'f.csv' };
       const req = {
         app: { locals: { db: {} } },
         body: {
           dataType: 'patients',
-          startLocationID: '42',
+          startBoxId: 'box-42',
           autoIncrement: 'true',
         },
         file,
@@ -387,14 +387,14 @@ describe('import-async.controller', () => {
         file,
         'patients',
         expect.objectContaining({
-          startLocationID: 42,
+          startBoxId: 'box-42',
           autoIncrement: true,
           fileName: file.originalname,
         })
       );
     });
 
-    it('passes null startLocationID and false autoIncrement when absent', async () => {
+    it('passes null startBoxId and false autoIncrement when absent', async () => {
       const file = { path: '/tmp/f.csv', originalname: 'f.csv' };
       const req = {
         app: { locals: { db: {} } },
@@ -414,7 +414,7 @@ describe('import-async.controller', () => {
         file,
         'patients',
         expect.objectContaining({
-          startLocationID: null,
+          startBoxId: null,
           autoIncrement: false,
         })
       );

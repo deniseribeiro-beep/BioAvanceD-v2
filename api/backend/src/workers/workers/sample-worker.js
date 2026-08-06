@@ -24,7 +24,7 @@ class SampleWorker {
 
       // Processa importação
       const results = await importLGPDService.importSamples(db, file, {
-        startLocationID: options.startLocationID,
+        startBoxId: options.startBoxId,
         autoIncrement: options.autoIncrement,
         groupFields: options.groupFields || {},
       });

@@ -233,3 +233,76 @@ equipment-sensor-quarantine.service.test.js` (10 cases) and `tests/unit/
 cold-chain-quarantine.service.test.js` (22 cases). Consumer migration
 family (#462/#463/#464) complete; retiring `locations` (#460) remains a
 separate follow-up depending on #459 + #464 (now done).
+
+**Landed 2026-08-06 (#459, `import-lgpd.service.js` slice — partial, see
+below):** #459's issue body named four files; only one of them,
+`import-lgpd.service.js`, is an actual `locations`-collection *consumer*
+in the sense #462/#463/#464 migrated (a read path resolving physical
+placement). The other three (`import.service.js`'s `importLocations`,
+`import.controller.js`'s `'locations'` case, `import-worker.js`'s
+`location-worker` dispatch) are a CSV-import feature that **writes new
+documents into** the `locations` collection — the opposite direction,
+and one that actively violates this doc's own coexistence rule ("the
+legacy `locations` collection stays read-only ... during transition").
+Split off as a separate follow-up rather than folded into this slice
+(see below); #459 tracked here covers only the consumer half.
+
+`ImportLGPDService.importSamples`'s bulk-placement path (LGPD-consent
+sample import, bypasses `sample.service.js`'s already-migrated
+`createSample` entirely and inserts `Sample` documents directly) is
+migrated: the legacy `getNextAvailableLocation(db, startLocationID,
+index)` (a `locations`-collection scan sorted by `block`/`rack`/`drawer`/
+`box`) is replaced by `getNextAvailableStorageSlot(db, startBoxId,
+index)`, which enumerates `storageBoxes` sorted by `name`/`boxID`/`_id` —
+the same deterministic order `intakeWizard.js`'s `resolveAutomaticLocation`
+scans in — resolving each candidate's FREEZER/SHELF/RACK/[DRAWER] chain
+via a duplicated `resolveStorageHierarchyForBox` (mirrored from
+`intakeWizard.js`, per #464's precedent of mirroring shape rather than
+sharing a cross-service module).
+
+**Granularity translation, not a data-preserving one:** legacy
+`getNextAvailableLocation` advanced by `index` full *location* documents
+(one per physical box — `wellPosition` was descriptive metadata on the
+document, not itself a sort key in the legacy sort). The canonical
+replacement advances by `index` *available* (non-full, non-retired,
+non-inactive) boxes in the same freezer/shelf/rack/[drawer]/box order,
+returning that box's own first free position rather than a legacy
+`wellPosition` value that no longer exists. Unlike #462/#463's
+equipment-level sensor-granularity call (#465), this doesn't need
+Dennis's confirmation — it's a translation of an enumeration order, not
+a safety-gate precision reduction.
+
+**Input-contract change (no compatibility shim, per rule 2):**
+`importSamples`'s `options.startLocationID` (numeric) is now
+`options.startBoxId` (a `StorageBox` `_id` string) — same treatment
+#462's `createSample` gave its own `locationID` input. CSV rows carry
+`boxId`/`positionCode` directly instead of a legacy `locationID` column.
+Precedence preserved exactly: a row's own `boxId` wins; else, if
+`autoIncrement` and `startBoxId` are both given, the next available box
+in sequence; else, if only `startBoxId` is given, that fixed box is used
+for every location-less row. After insert, a `StorageAssignment` is
+opened for the placed specimen (same #461/#462 convention: `equipmentId`
+is the FREEZER `StorageContainer`'s `_id`, not its `containerID`).
+
+Frontend impact: nil for live behavior — grepped `frontend/src`, no
+view component ever calls `useAsyncImport`/`useImportJob` (the hooks
+that plumb `startLocationID` through), so the type/wire-field rename
+(`useAsyncImport.ts`'s `AsyncImportOptions`, `api.ts`'s
+`createImportJob`) has no live caller to break. Updated anyway for type
+consistency with the backend contract.
+
+Proven with the same native-only bar as #462/#463/#464: an in-memory
+`storageBoxes`/`storageContainers`/`storageAssignments` fixture with
+real `_id`/`$in`-style exact-match lookups (not a stub), seeding a
+FREEZER->SHELF->RACK->StorageBox chain — `tests/unit/
+import-lgpd.service.importSamples.unit.test.js`'s `boxId
+auto-assignment (#459)` and `getNextAvailableStorageSlot (#459)`
+describe blocks.
+
+**Split off as #466 (not this slice):** migrating/retiring the raw
+`locations`-CSV-import feature (`import.service.js`'s `importLocations`,
+`import.controller.js`'s `'locations'` dataType case, `import-worker.js`'s
+`location-worker` dispatch) — a design call (disable now vs. redirect to
+import `StorageBox`/`StorageContainer` rows) that needs Dennis's input,
+not a silent removal, since it's an active feature rather than a
+read-path migration.
