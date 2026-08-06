@@ -116,9 +116,27 @@ async function initWorker() {
             case 'patients':
               result = await patientWorker.process(db, jobID, filePath, options);
               break;
-            case 'samples':
-              result = await sampleWorker.process(db, jobID, filePath, options);
+            case 'samples': {
+              // #483: mirrors neo4jProjection.worker.js's connectNeo4j() use —
+              // this worker process never connects Neo4j on its own, so the
+              // lineage driver has to be established here, fail-open, before
+              // handing off. userID threads the queuing user through for
+              // audit-trail attribution (sample-worker.js resolves it to a
+              // name/role); options never carried it before.
+              let neo4jDriver = null;
+              try {
+                const { connectNeo4j } = require('../infrastructure/database/neo4j/connection');
+                neo4jDriver = await connectNeo4j();
+              } catch (neo4jError) {
+                logger.warn(`[WORKER] Neo4j indisponível para rastreabilidade do job ${jobID}: ${neo4jError.message}`);
+              }
+              result = await sampleWorker.process(db, jobID, filePath, {
+                ...options,
+                userID,
+                neo4jDriver,
+              });
               break;
+            }
             case 'results':
               result = await resultWorker.process(db, jobID, filePath, options);
               break;
