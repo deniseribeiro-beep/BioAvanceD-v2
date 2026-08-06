@@ -418,7 +418,7 @@ class StorageService {
         }
       }
 
-      logger.info(`✅ Alocação inteligente realizada para amostra ${specimenId} em ${boxId}/${nextPosition}`);
+      logger.info(`✅ Alocação inteligente realizada para amostra ${specimenId} em ${boxId}/${assignedPosition}`);
 
       return {
         success: true,
@@ -426,7 +426,7 @@ class StorageService {
         sampleLocation: {
           specimenId: String(sampleObjId),
           boxId: String(boxObjId),
-          position: nextPosition
+          position: assignedPosition
         }
       };
     } catch (error) {
