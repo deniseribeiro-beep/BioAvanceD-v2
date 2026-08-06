@@ -126,6 +126,23 @@ carries `sprec` and the storage/custody fields (`locationId`, `location`,
 land (#383, #388); storage/custody remains filed as its own follow-up
 (#389).
 
+**`locationId`/`location`/`locationID` are legacy, not a second storage
+system (#453, resolved 2026-08-06):** #450's audit found these fields
+alongside `storageLocation` and initially treated them as an unresolved
+"maybe two systems" question. Settled against
+`docs/docs-7-31-2026/manuscript/2.2-Additional_file_2_Polyglot_Persistence_Data_Model.docx`
+(the current canonical data model, cited by
+`docs/docs-7-31-2026/CHANGELOG-2026-07-31.md` as the fix for this file's
+own staleness): the target model defines exactly one physical/inventory
+entity pair — `StorageLocation` (physical hierarchy) + `StorageAssignment`
+(specimen-to-position link), section 7.4. The legacy `Location` model
+(`api/backend/src/models/Location.js`) — numeric
+`equipmentType`/`equipmentID`/`block`/`rack`/`drawer`/`box`/`wellPosition`
+fields — is a pre-normalization encoding of that same hierarchy, not an
+independent system. Migration plan filed as #457 (mapping design,
+foundational) → #458/#459 (consumer migration) → #460 (retire the legacy
+API surface).
+
 **Status-field consolidation — decision recorded in #398, implementation
 tracked in #399 (storage/custody split, part 2/3 of #389):**
 `lifecycleStatus`/`availabilityStatus`/`quarantineStatus`/`quarantineReason`
