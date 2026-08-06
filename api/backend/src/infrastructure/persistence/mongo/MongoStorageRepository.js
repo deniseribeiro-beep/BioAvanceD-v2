@@ -1,6 +1,7 @@
 const { ObjectId } = require('mongodb');
 const { getCollection } = require('../../../utils/collectionResolver');
 const StorageAssignmentModel = require('../../../models/StorageAssignment');
+const positionGrid = require('../../../utils/storagePositionGrid');
 
 /**
  * Repositório Mongo para operações de armazenamento físico de amostras.
@@ -321,6 +322,133 @@ class MongoStorageRepository {
     await this.openStorageAssignment(
       { specimenId: input.specimenId, boxId: boxObjId, positionCode: normalizedPosition },
       session
+    );
+  }
+
+  /**
+   * Re-checks box/sample freshness inside an already-open transaction, scans
+   * for the first free position, and performs the atomic occupancyGrid +
+   * sample write. Throws BOX_NOT_FOUND / SAMPLE_NOT_FOUND / ALREADY_ALLOCATED /
+   * BOX_FULL / STORAGE_COLLISION on failure so callers can map them to their
+   * own result shape.
+   *
+   * @param {{ specimenId: string|import('mongodb').ObjectId, boxId: string|import('mongodb').ObjectId }} input
+   * @param {import('mongodb').ClientSession} session
+   * @returns {Promise<string>} the assigned position (e.g. "A1")
+   */
+  async autoAssignSamplePosition(input, session) {
+    const samplesCollection = await getCollection(this.db, 'samples');
+    const storageBoxesCollection = this.db.collection('storageBoxes');
+    const sampleObjId = this.toObjectId(input.specimenId);
+    const boxObjId = this.toObjectId(input.boxId);
+
+    const freshBox = await storageBoxesCollection.findOne({ _id: boxObjId }, { session });
+    if (!freshBox) {
+      throw new Error('BOX_NOT_FOUND');
+    }
+
+    const freshSample = await samplesCollection.findOne({ _id: sampleObjId }, { session });
+    if (!freshSample) {
+      throw new Error('SAMPLE_NOT_FOUND');
+    }
+
+    if (freshSample.storageLocation?.boxId && freshSample.storageLocation?.position) {
+      throw new Error('ALREADY_ALLOCATED');
+    }
+
+    const lockedPosition = positionGrid.findFirstAvailablePosition(freshBox);
+    if (!lockedPosition) {
+      throw new Error('BOX_FULL');
+    }
+
+    const updateBoxResult = await storageBoxesCollection.updateOne(
+      {
+        _id: boxObjId,
+        [`occupancyGrid.${lockedPosition}`]: { $exists: false }
+      },
+      {
+        $set: {
+          [`occupancyGrid.${lockedPosition}`]: sampleObjId,
+          currentOccupancy: Number(freshBox.currentOccupancy || 0) + 1,
+          updatedAt: new Date(),
+          lastModified: new Date()
+        }
+      },
+      { session }
+    );
+
+    if (updateBoxResult.matchedCount === 0) {
+      throw new Error('STORAGE_COLLISION: Colisão detectada durante alocação automática');
+    }
+
+    const updateSampleResult = await samplesCollection.updateOne(
+      { _id: sampleObjId },
+      {
+        $set: {
+          'storageLocation.boxId': boxObjId,
+          'storageLocation.position': lockedPosition,
+          status: 'AVAILABLE',
+          updatedAt: new Date()
+        }
+      },
+      { session }
+    );
+
+    if (updateSampleResult.matchedCount === 0) {
+      throw new Error('Falha ao atualizar a amostra após alocação automática');
+    }
+
+    return lockedPosition;
+  }
+
+  /**
+   * Undoes an autoAssignSamplePosition write (used when a downstream step,
+   * e.g. the Neo4j sync, fails after the Mongo allocation already committed).
+   *
+   * @param {{ specimenId: string|import('mongodb').ObjectId, boxId: string|import('mongodb').ObjectId, position: string }} input
+   * @param {import('mongodb').ClientSession} session
+   */
+  async rollbackAutoAssignedPosition(input, session) {
+    const samplesCollection = await getCollection(this.db, 'samples');
+    const storageBoxesCollection = this.db.collection('storageBoxes');
+    const sampleObjId = this.toObjectId(input.specimenId);
+    const boxObjId = this.toObjectId(input.boxId);
+
+    await storageBoxesCollection.updateOne(
+      {
+        _id: boxObjId,
+        [`occupancyGrid.${input.position}`]: sampleObjId
+      },
+      {
+        $unset: {
+          [`occupancyGrid.${input.position}`]: ''
+        },
+        $inc: {
+          currentOccupancy: -1
+        },
+        $set: {
+          updatedAt: new Date(),
+          lastModified: new Date()
+        }
+      },
+      { session }
+    );
+
+    await samplesCollection.updateOne(
+      {
+        _id: sampleObjId,
+        'storageLocation.boxId': boxObjId,
+        'storageLocation.position': input.position
+      },
+      {
+        $unset: {
+          storageLocation: ''
+        },
+        $set: {
+          updatedAt: new Date()
+        }
+      },
+      { session }
     );
   }
 

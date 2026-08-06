@@ -486,6 +486,142 @@ describe('MongoStorageRepository', () => {
     });
   });
 
+  describe('autoAssignSamplePosition', () => {
+    const specimenId = new ObjectId();
+    const boxId = new ObjectId();
+    const boxDoc = {
+      _id: boxId,
+      dimension: { rows: 1, cols: 2 },
+      occupancyGrid: { A1: new ObjectId() }, // A1 occupied, A2 free
+      currentOccupancy: 1
+    };
+
+    it('scans for the first free position and allocates it atomically', async () => {
+      const samples = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce({ _id: specimenId, storageLocation: null }),
+        updateOne: vi.fn().mockResolvedValueOnce({ matchedCount: 1 })
+      });
+      const storageBoxes = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce(boxDoc),
+        updateOne: vi.fn().mockResolvedValueOnce({ matchedCount: 1 })
+      });
+      const db = makeDb({ samples, storageBoxes });
+      const repo = new MongoStorageRepository(db);
+
+      const position = await repo.autoAssignSamplePosition({ specimenId, boxId }, {});
+
+      expect(position).toBe('A2');
+      expect(storageBoxes.updateOne.mock.calls[0][0][`occupancyGrid.A2`]).toEqual({ $exists: false });
+      const sampleSet = samples.updateOne.mock.calls[0][1].$set;
+      expect(sampleSet['storageLocation.position']).toBe('A2');
+      expect(sampleSet.status).toBe('AVAILABLE');
+    });
+
+    it('throws BOX_NOT_FOUND when the box is missing', async () => {
+      const storageBoxes = makeCollection({ findOne: vi.fn().mockResolvedValueOnce(null) });
+      const db = makeDb({ samples: makeCollection(), storageBoxes });
+      const repo = new MongoStorageRepository(db);
+
+      await expect(repo.autoAssignSamplePosition({ specimenId, boxId }, {})).rejects.toThrow(
+        'BOX_NOT_FOUND'
+      );
+    });
+
+    it('throws SAMPLE_NOT_FOUND when the sample is missing', async () => {
+      const storageBoxes = makeCollection({ findOne: vi.fn().mockResolvedValueOnce(boxDoc) });
+      const samples = makeCollection({ findOne: vi.fn().mockResolvedValueOnce(null) });
+      const db = makeDb({ samples, storageBoxes });
+      const repo = new MongoStorageRepository(db);
+
+      await expect(repo.autoAssignSamplePosition({ specimenId, boxId }, {})).rejects.toThrow(
+        'SAMPLE_NOT_FOUND'
+      );
+    });
+
+    it('throws ALREADY_ALLOCATED when the sample already has a storageLocation', async () => {
+      const storageBoxes = makeCollection({ findOne: vi.fn().mockResolvedValueOnce(boxDoc) });
+      const samples = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce({
+          _id: specimenId,
+          storageLocation: { boxId, position: 'A1' }
+        })
+      });
+      const db = makeDb({ samples, storageBoxes });
+      const repo = new MongoStorageRepository(db);
+
+      await expect(repo.autoAssignSamplePosition({ specimenId, boxId }, {})).rejects.toThrow(
+        'ALREADY_ALLOCATED'
+      );
+    });
+
+    it('throws BOX_FULL when there is no free position', async () => {
+      const fullBox = { ...boxDoc, dimension: { rows: 1, cols: 1 }, occupancyGrid: { A1: new ObjectId() } };
+      const storageBoxes = makeCollection({ findOne: vi.fn().mockResolvedValueOnce(fullBox) });
+      const samples = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce({ _id: specimenId, storageLocation: null })
+      });
+      const db = makeDb({ samples, storageBoxes });
+      const repo = new MongoStorageRepository(db);
+
+      await expect(repo.autoAssignSamplePosition({ specimenId, boxId }, {})).rejects.toThrow(
+        'BOX_FULL'
+      );
+    });
+
+    it('throws STORAGE_COLLISION when the atomic box update matches nothing', async () => {
+      const samples = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce({ _id: specimenId, storageLocation: null })
+      });
+      const storageBoxes = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce(boxDoc),
+        updateOne: vi.fn().mockResolvedValueOnce({ matchedCount: 0 })
+      });
+      const db = makeDb({ samples, storageBoxes });
+      const repo = new MongoStorageRepository(db);
+
+      await expect(repo.autoAssignSamplePosition({ specimenId, boxId }, {})).rejects.toThrow(
+        'STORAGE_COLLISION'
+      );
+    });
+
+    it('throws when the sample update fails to match', async () => {
+      const samples = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce({ _id: specimenId, storageLocation: null }),
+        updateOne: vi.fn().mockResolvedValueOnce({ matchedCount: 0 })
+      });
+      const storageBoxes = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce(boxDoc),
+        updateOne: vi.fn().mockResolvedValueOnce({ matchedCount: 1 })
+      });
+      const db = makeDb({ samples, storageBoxes });
+      const repo = new MongoStorageRepository(db);
+
+      await expect(repo.autoAssignSamplePosition({ specimenId, boxId }, {})).rejects.toThrow(
+        'Falha ao atualizar'
+      );
+    });
+  });
+
+  describe('rollbackAutoAssignedPosition', () => {
+    it('unsets the occupancyGrid entry and the sample storageLocation', async () => {
+      const specimenId = new ObjectId();
+      const boxId = new ObjectId();
+      const samples = makeCollection({ updateOne: vi.fn().mockResolvedValueOnce({ matchedCount: 1 }) });
+      const storageBoxes = makeCollection({ updateOne: vi.fn().mockResolvedValueOnce({ matchedCount: 1 }) });
+      const db = makeDb({ samples, storageBoxes });
+      const repo = new MongoStorageRepository(db);
+
+      await repo.rollbackAutoAssignedPosition({ specimenId, boxId, position: 'A2' }, {});
+
+      const boxUnsetCall = storageBoxes.updateOne.mock.calls[0];
+      expect(boxUnsetCall[1].$unset[`occupancyGrid.A2`]).toBe('');
+      expect(boxUnsetCall[1].$inc.currentOccupancy).toBe(-1);
+
+      const sampleUnsetCall = samples.updateOne.mock.calls[0];
+      expect(sampleUnsetCall[1].$unset.storageLocation).toBe('');
+    });
+  });
+
   describe('releaseSamplePosition', () => {
     const sampleId = new ObjectId().toString();
     const boxId = new ObjectId();

@@ -5,6 +5,7 @@ const logger = require('../utils/logger');
 const { getCollection } = require('../utils/collectionResolver');
 const MongoStorageRepository = require('../infrastructure/persistence/mongo/MongoStorageRepository');
 const MongoAuditRepository = require('../infrastructure/persistence/mongo/MongoAuditRepository');
+const positionGrid = require('../utils/storagePositionGrid');
 
 /**
  * Storage Service - Núcleo de Armazenamento Físico
@@ -38,29 +39,11 @@ class StorageService {
   }
 
   _isPositionOccupied(occupancyGrid, position) {
-    if (!occupancyGrid) {
-      return false;
-    }
-
-    if (typeof occupancyGrid.has === 'function' && typeof occupancyGrid.get === 'function') {
-      return Boolean(occupancyGrid.has(position) && occupancyGrid.get(position));
-    }
-
-    return Boolean(occupancyGrid[position]);
+    return positionGrid.isPositionOccupied(occupancyGrid, position);
   }
 
   _findFirstAvailablePosition(box) {
-    const capacityRows = Number(box?.dimension?.rows || 0);
-    const capacityCols = Number(box?.dimension?.cols || 0);
-
-    if (capacityRows < 1 || capacityCols < 1) {
-      return null;
-    }
-
-    const allPositions = this._getAllValidPositions({ rows: capacityRows, cols: capacityCols });
-    const occupancyGrid = box?.occupancyGrid || {};
-
-    return allPositions.find((position) => !this._isPositionOccupied(occupancyGrid, position)) || null;
+    return positionGrid.findFirstAvailablePosition(box);
   }
 
   /**
@@ -367,63 +350,10 @@ class StorageService {
       const column = Number(positionMatch?.[2] || 1);
 
       await session.withTransaction(async () => {
-        const freshBox = await storageBoxesCollection.findOne({ _id: boxObjId }, { session });
-        if (!freshBox) {
-          throw new Error('BOX_NOT_FOUND');
-        }
-
-        const freshSample = await samplesCollection.findOne({ _id: sampleObjId }, { session });
-        if (!freshSample) {
-          throw new Error('SAMPLE_NOT_FOUND');
-        }
-
-        if (freshSample.storageLocation?.boxId && freshSample.storageLocation?.position) {
-          throw new Error('ALREADY_ALLOCATED');
-        }
-
-        const lockedPosition = this._findFirstAvailablePosition(freshBox);
-        if (!lockedPosition) {
-          throw new Error('BOX_FULL');
-        }
-
-        const updateBoxResult = await storageBoxesCollection.updateOne(
-          {
-            _id: boxObjId,
-            [`occupancyGrid.${lockedPosition}`]: { $exists: false }
-          },
-          {
-            $set: {
-              [`occupancyGrid.${lockedPosition}`]: sampleObjId,
-              currentOccupancy: Number(freshBox.currentOccupancy || 0) + 1,
-              updatedAt: new Date(),
-              lastModified: new Date()
-            }
-          },
-          { session }
+        assignedPosition = await this.storageRepository.autoAssignSamplePosition(
+          { specimenId: sampleObjId, boxId: boxObjId },
+          session
         );
-
-        if (updateBoxResult.matchedCount === 0) {
-          throw new Error('STORAGE_COLLISION: Colisão detectada durante alocação automática');
-        }
-
-        const updateSampleResult = await samplesCollection.updateOne(
-          { _id: sampleObjId },
-          {
-            $set: {
-              'storageLocation.boxId': boxObjId,
-              'storageLocation.position': lockedPosition,
-              status: 'AVAILABLE',
-              updatedAt: new Date()
-            }
-          },
-          { session }
-        );
-
-        if (updateSampleResult.matchedCount === 0) {
-          throw new Error('Falha ao atualizar a amostra após alocação automática');
-        }
-
-        assignedPosition = lockedPosition;
       });
 
       const canPersistGraph = this.neo4jDriver && typeof this.neo4jDriver.session === 'function';
@@ -473,41 +403,9 @@ class StorageService {
           const rollbackSession = this.db.getMongo().startSession();
           try {
             await rollbackSession.withTransaction(async () => {
-              await storageBoxesCollection.updateOne(
-                {
-                  _id: boxObjId,
-                  [`occupancyGrid.${assignedPosition}`]: sampleObjId
-                },
-                {
-                  $unset: {
-                    [`occupancyGrid.${assignedPosition}`]: ''
-                  },
-                  $inc: {
-                    currentOccupancy: -1
-                  },
-                  $set: {
-                    updatedAt: new Date(),
-                    lastModified: new Date()
-                  }
-                },
-                { session: rollbackSession }
-              );
-
-              await samplesCollection.updateOne(
-                {
-                  _id: sampleObjId,
-                  'storageLocation.boxId': boxObjId,
-                  'storageLocation.position': assignedPosition
-                },
-                {
-                  $unset: {
-                    storageLocation: ''
-                  },
-                  $set: {
-                    updatedAt: new Date()
-                  }
-                },
-                { session: rollbackSession }
+              await this.storageRepository.rollbackAutoAssignedPosition(
+                { specimenId: sampleObjId, boxId: boxObjId, position: assignedPosition },
+                rollbackSession
               );
             });
           } finally {
@@ -785,17 +683,7 @@ class StorageService {
    * @private
    */
   _getAllValidPositions(dimension) {
-    const positions = [];
-    const { rows, cols } = dimension;
-
-    for (let r = 0; r < rows; r++) {
-      const letter = String.fromCharCode(65 + r); // A, B, C...
-      for (let c = 1; c <= cols; c++) {
-        positions.push(`${letter}${c}`);
-      }
-    }
-
-    return positions;
+    return positionGrid.getAllValidPositions(dimension);
   }
 
   /**
