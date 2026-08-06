@@ -252,9 +252,15 @@ function isOperationalSensor(sensor) {
   return !status || !CRITICAL_SENSOR_STATUSES.includes(status);
 }
 
-async function hasOperationalSensorForLocation(db, location) {
+/**
+ * #463: Sensor has no dict-02 canonical placement of its own (#465), so the
+ * operational-sensor safety gate (RF004) matches at the resolved FREEZER
+ * StorageContainer's `containerID` — same equipment-level granularity #462
+ * established for sample.service.js's createSample gate.
+ */
+async function hasOperationalSensorForContainer(db, freezer) {
   const sensorsCollection = db.collection('sensors');
-  const variants = buildIdVariants(location?.locationID, location?._id?.toString());
+  const variants = buildIdVariants(freezer?.containerID);
   const sensors = await sensorsCollection.find({
     $or: [
       { locationId: { $in: variants } },
@@ -265,19 +271,40 @@ async function hasOperationalSensorForLocation(db, location) {
   return sensors.some(isOperationalSensor);
 }
 
-async function isEquipmentReadyForLocation(db, location) {
-  if (location?.equipmentID === undefined || location?.equipmentID === null || location?.equipmentID === '') {
-    return true;
+async function isEquipmentReadyForContainer(db, freezer) {
+  if (freezer?.containerID === undefined || freezer?.containerID === null || freezer?.containerID === '') {
+    return false;
   }
 
   const equipmentCollection = db.collection('equipment');
   const equipment = await equipmentCollection.findOne({
-    equipmentID: { $in: buildIdVariants(location.equipmentID) },
+    equipmentID: { $in: buildIdVariants(freezer.containerID) },
   });
 
   if (!equipment) return false;
   const status = normalizeString(equipment.status || equipment.maintenanceStatus || equipment.operationalStatus).toLowerCase();
   return !status || !BLOCKED_EQUIPMENT_STATUSES.includes(status);
+}
+
+/**
+ * #462/#463: walks the StorageContainer chain up from a StorageBox's
+ * `parent_id` (RACK, optionally through a DRAWER) to SHELF then FREEZER —
+ * same hierarchy the #461 backfill script materializes. Best-effort: a box
+ * with a broken/incomplete chain returns whichever levels resolved, `null`
+ * above that.
+ */
+async function resolveStorageHierarchyForBox(db, box) {
+  const storageContainersCollection = db.collection('storageContainers');
+
+  let rack = box.parent_id ? await storageContainersCollection.findOne({ _id: box.parent_id }) : null;
+  if (rack && rack.containerType === 'DRAWER') {
+    rack = rack.parent_id ? await storageContainersCollection.findOne({ _id: rack.parent_id }) : null;
+  }
+
+  const shelf = rack?.parent_id ? await storageContainersCollection.findOne({ _id: rack.parent_id }) : null;
+  const freezer = shelf?.parent_id ? await storageContainersCollection.findOne({ _id: shelf.parent_id }) : null;
+
+  return { rack, shelf, freezer };
 }
 
 function findFirstAvailablePosition(box) {
@@ -299,39 +326,47 @@ function findFirstAvailablePosition(box) {
   return null;
 }
 
-async function findAvailableStorageBox(db) {
-  const boxesCollection = db.collection('storageBoxes');
-  const boxes = await boxesCollection.find({}).sort({ name: 1, boxID: 1, _id: 1 }).limit(100).toArray();
-
-  return boxes.find((box) => {
+function findAvailableStorageBoxCandidates(boxes) {
+  return boxes.filter((box) => {
     const status = normalizeString(box?.status).toUpperCase();
     if (status && BLOCKED_BOX_STATUSES.includes(status)) return false;
     const capacity = Number(box?.dimension?.rows || 0) * Number(box?.dimension?.cols || 0);
     if (capacity < 1) return false;
     if (Number(box?.currentOccupancy || 0) >= capacity) return false;
     return Boolean(findFirstAvailablePosition(box));
-  }) || null;
+  });
 }
 
+/**
+ * #463: replaces the legacy `locations`-collection scan. A box now carries
+ * its own equipment/sensor linkage via the StorageContainer chain it sits
+ * in (RACK[/DRAWER]/SHELF/FREEZER), so candidate boxes (available capacity
+ * + free position) are gated directly on their resolved FREEZER's readiness
+ * instead of an independent `locations` lookup — same convention #462
+ * established for sample.service.js's createSample.
+ */
 async function resolveAutomaticLocation(db) {
-  const locationsCollection = db.collection('locations');
-  const locations = await locationsCollection.find({}).sort({ locationID: 1, _id: 1 }).limit(200).toArray();
+  const boxesCollection = db.collection('storageBoxes');
+  const boxes = await boxesCollection.find({}).sort({ name: 1, boxID: 1, _id: 1 }).limit(100).toArray();
+  const candidates = findAvailableStorageBoxCandidates(boxes);
 
-  for (const location of locations) {
-    if (!Number.isFinite(Number(location?.locationID))) continue;
-    if (!(await isEquipmentReadyForLocation(db, location))) continue;
-    if (!(await hasOperationalSensorForLocation(db, location))) continue;
+  if (candidates.length === 0) {
+    const error = new Error('Não há localização física disponível com sensor operacional associado para esta amostra.');
+    error.statusCode = 409;
+    throw error;
+  }
 
-    const box = await findAvailableStorageBox(db);
-    if (!box) {
-      const error = new Error('Não há localização física disponível com sensor operacional associado para esta amostra.');
-      error.statusCode = 409;
-      throw error;
-    }
+  for (const box of candidates) {
+    const { rack, shelf, freezer } = await resolveStorageHierarchyForBox(db, box);
+    if (!freezer) continue;
+    if (!(await isEquipmentReadyForContainer(db, freezer))) continue;
+    if (!(await hasOperationalSensorForContainer(db, freezer))) continue;
 
     return {
-      location,
       box,
+      rack,
+      shelf,
+      freezer,
       previewPosition: findFirstAvailablePosition(box),
     };
   }
@@ -341,11 +376,12 @@ async function resolveAutomaticLocation(db) {
   throw error;
 }
 
-function buildReadableStorageLocation(location, allocation, box) {
+function buildReadableStorageLocation(automaticLocation, allocation) {
   const storageLocation = allocation?.sampleLocation || {};
+  const box = automaticLocation?.box;
+  const freezer = automaticLocation?.freezer;
   return [
-    location?.equipmentID ? `equipamento ${location.equipmentID}` : null,
-    location?.locationID ? `localização ${location.locationID}` : null,
+    freezer?.containerID ? `equipamento ${freezer.containerID}` : null,
     box?.name || box?.boxID ? `box ${box.name || box.boxID}` : null,
     storageLocation.position ? `posição ${storageLocation.position}` : null,
   ].filter(Boolean).join(' / ');
@@ -466,7 +502,8 @@ async function handleIntakeWizard(req, res) {
     });
 
     const sampleToPersist = buildSampleDocumentFromIntake(data, matchOutcome.patient);
-    sampleToPersist.locationID = Number(automaticLocation.location.locationID);
+    sampleToPersist.boxId = automaticLocation.box._id;
+    sampleToPersist.positionCode = automaticLocation.previewPosition;
     const qualityAllowsRelease = qualidade.governance_status === 1 && qualidade.final_grade !== 'E';
     const isReleased = consentDecision.active && qualityAllowsRelease;
     const specimenStatus = isReleased ? 'available' : 'quarantined';
@@ -525,12 +562,11 @@ async function handleIntakeWizard(req, res) {
     );
 
     const storageLocation = {
-      locationID: automaticLocation.location.locationID,
-      equipmentID: automaticLocation.location.equipmentID || null,
+      equipmentID: automaticLocation.freezer?.containerID || null,
       boxId: allocation.sampleLocation?.boxId || automaticLocation.box._id,
       boxName: automaticLocation.box.name || automaticLocation.box.boxID || null,
       position: allocation.sampleLocation?.position || automaticLocation.previewPosition || null,
-      readable: buildReadableStorageLocation(automaticLocation.location, allocation, automaticLocation.box),
+      readable: buildReadableStorageLocation(automaticLocation, allocation),
     };
 
     const responseMessage = isReleased

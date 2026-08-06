@@ -160,3 +160,27 @@ re-deriving it independently.
 Frontend impact: nil for this slice — no UI call site invokes `useSamples
 .ts`'s `createSample` hook yet (grepped `frontend/src`), so the payload
 contract change has no live caller to update.
+
+**Landed 2026-08-06 (#463, `intakeWizard.js` slice):** the automatic
+placement path (`resolveAutomaticLocation`, formerly a `locations`-collection
+scan run independently of box selection) now scans `storageBoxes` directly —
+candidate boxes (active status, free capacity, an available position) are
+gated on their own resolved `StorageContainer` chain (`RACK`, optionally
+`DRAWER`, then `SHELF`, then `FREEZER`) rather than an unrelated `locations`
+lookup, reusing #462's `resolveStorageHierarchyForBox` walk and its
+`freezer.containerID === Equipment.equipmentID` join. Equipment-readiness
+and operational-sensor gating (`isEquipmentReadyForContainer`/
+`hasOperationalSensorForContainer`) key off the same resolved freezer,
+applying #465's not-yet-settled equipment-level granularity call exactly as
+#462 did. The wizard's `sampleToPersist` now sets `boxId`/`positionCode`
+(no `locationID`) before calling `sampleService.createSample`, and the
+response's `storageLocation.equipmentID` is now the freezer's `containerID`
+instead of a legacy `Location.equipmentID`; `storageLocation.locationID` is
+dropped entirely (no compat shim, per rule 2). Note this also fixes a
+latent inconsistency in the legacy code: previously a location's readiness
+gate and the box actually assigned were resolved independently (any
+available box was picked regardless of which location passed the gate) —
+now the same box's own freezer is what's gated, since the canonical model
+ties a box to exactly one physical chain. Not a behavior this issue asked
+to fix, but a direct consequence of gating on the box's own hierarchy
+instead of a decoupled `locations` scan.
