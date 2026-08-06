@@ -407,3 +407,39 @@ those still fail per-row on a non-ready freezer, since there's no
 in `getNextAvailableStorageSlot`'s describe block proving a non-ready
 freezer's box is skipped and the next ready box is returned — 32 tests
 green in the touched file.
+
+**#454 resolved 2026-08-06: confirmed, no change needed.** #454 (split
+off #450's original audit) named four frontend consumers of Sample's
+embedded location fields to migrate: `SampleLocator.tsx`,
+`SamplesPage.tsx`, `SampleDetailsPage.tsx`, `types/models.ts`. Re-audited
+at pickup per the prior session's overlap note (found while closing
+#450): all four are already in the desired end state, for two different
+reasons.
+
+`SampleLocator.tsx` and `SamplesPage.tsx` (the file #454 lists as
+`SamplesPage.tsx`, matching the current filename — no
+`SamplesPageView.tsx` exists in the repo) — zero matches for
+`location`/`storageLocation` (grepped both files directly). #478 already
+migrated both onto `SampleStorageLocationDTO`/`SampleEmbeddedStorageLocation`.
+
+`SampleDetailsPage.tsx` and `types/models.ts` — every remaining
+`location`/`locationID` reference in both files is the **separate**
+legacy `Location` entity (`api/backend/src/models/Location.js`, the
+`locations` collection this doc's mapping table covers: `block`/`rack`/
+`drawer`/`box`/`wellPosition`, fetched via `useLocations()` ->
+`locationService` -> its own CRUD API), not `Sample.storageLocation`.
+`SampleDetailsPage.tsx`'s `getLocationInfo`/`locationOptions` render
+block/rack/drawer/box/well fields pulled from that hook's `locations`
+array, keyed by the sample's own `locationID` field — exactly what
+#478's close comment already scoped *out* as "a separate legacy
+`locations`-collection lookup, not this box-based storage system."
+`types/models.ts` already carries `storageLocation?:
+SampleEmbeddedStorageLocation | null` (the correct typed DTO) alongside
+several unrelated `locationID` fields belonging to `Location` and other
+non-`Sample` types — not a stale untyped `Sample.storageLocation` field.
+
+So #454's four-file list was already fully resolved before pickup: two
+files by #478's actual migration, two files because they were never
+migrating this field in the first place (they consume the still-live,
+intentionally-uncoexisting `Location` entity, which stays as-is until
+#460 retires it). No frontend code changed for this issue.
