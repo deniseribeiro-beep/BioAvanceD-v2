@@ -62,7 +62,7 @@ function createGetSampleLocationController() {
         storageRepository: new MongoStorageRepository(db)
       });
 
-      const result = await useCase.execute({ sampleId: req.params.sampleId });
+      const result = await useCase.execute({ specimenId: req.params.sampleId });
 
       if (!result.found) {
         const statusCode = result.error === 'SAMPLE_NOT_FOUND' ? 404 : 400;
