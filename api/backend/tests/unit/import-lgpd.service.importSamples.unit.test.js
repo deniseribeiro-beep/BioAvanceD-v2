@@ -631,6 +631,68 @@ describe('ImportLGPDService.getNextAvailableStorageSlot (#459)', () => {
     expect(result).toBeNull();
   });
 
+  // #471: a non-ready freezer shouldn't fail the row outright — advance to
+  // the next available box in the sequence, matching `intakeWizard.js`'s
+  // `resolveAutomaticLocation` skip-ahead shape.
+  it('skips a box whose freezer is not ready and advances to the next available box', async () => {
+    const rackId = new ObjectId();
+    const shelfId = new ObjectId();
+    const freezerBlocked = new ObjectId();
+    const freezerReady = new ObjectId();
+    const containers = [
+      { _id: freezerBlocked, containerType: 'FREEZER', containerID: 42, parent_id: null },
+      { _id: freezerReady, containerType: 'FREEZER', containerID: 43, parent_id: null },
+      { _id: shelfId, containerType: 'SHELF', parent_id: freezerReady },
+      { _id: rackId, containerType: 'RACK', parent_id: shelfId },
+    ];
+    const shelfBlockedId = new ObjectId();
+    const rackBlockedId = new ObjectId();
+    containers.push(
+      { _id: shelfBlockedId, containerType: 'SHELF', parent_id: freezerBlocked },
+      { _id: rackBlockedId, containerType: 'RACK', parent_id: shelfBlockedId },
+    );
+
+    const b1 = box({ name: 'B1', parent_id: rackBlockedId });
+    const b2 = box({ name: 'B2', parent_id: rackId });
+
+    const db = {
+      collection: vi.fn((name) => {
+        if (name === 'storageContainers') {
+          return { findOne: vi.fn(async ({ _id }) => containers.find((c) => String(c._id) === String(_id)) || null) };
+        }
+        if (name === 'storageBoxes') {
+          return { find: vi.fn(() => ({ sort: () => ({ toArray: async () => [b1, b2] }) })) };
+        }
+        if (name === 'equipment') {
+          return {
+            findOne: vi.fn(async ({ equipmentID }) => {
+              const ids = equipmentID?.$in || [equipmentID];
+              if (ids.includes(42)) return { equipmentID: 42, status: 'maintenance' };
+              if (ids.includes(43)) return { equipmentID: 43, status: 'active' };
+              return null;
+            }),
+          };
+        }
+        if (name === 'sensors') {
+          return {
+            find: vi.fn(({ $or }) => ({
+              limit: () => ({
+                toArray: async () => {
+                  const ids = $or[0].locationId.$in;
+                  return ids.includes(43) ? [{ locationId: 43, status: 'ok' }] : [];
+                },
+              }),
+            })),
+          };
+        }
+        throw new Error(`unexpected collection requested: ${name}`);
+      }),
+    };
+
+    const result = await service.getNextAvailableStorageSlot(db, String(b1._id), 0);
+    expect(String(result.boxId)).toBe(String(b2._id));
+  });
+
   it('returns null (and logs) instead of throwing when the query rejects', async () => {
     const db = {
       collection: vi.fn(() => ({
