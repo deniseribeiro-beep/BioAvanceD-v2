@@ -1,96 +1,103 @@
 # HANDOFF
 
 **Written:** 2026-08-06, end of session on `feature/docker-e2e-backend-integration`,
-after picking up #473.
+after picking up #474.
 
 ## What happened this session
 
-Dennis said "Pick #473." Routed via `work-issue` -> `resolve-issue`
-(refactor/migration item, extending #450's split).
-
-Read #473 closely: prior session's investigation (comment already on the
-issue) said the blocker was a test-mocking-strategy mismatch in
-`autoAssignSampleToBox`. Re-reading the actual code found the picture was
-more entangled than that comment suggested: the service's session creation
-(`db.getMongo().startSession()`) structurally differs from the
-repository's (`db.client.startSession()`), the repository's
-`allocateSamplePosition` takes an explicit position rather than scanning
-for one, and the Neo4j-failure rollback path is a third chunk of
-duplicated logic. Surfaced this via `AskUserQuestion`; Dennis chose "full
-migration this session."
+Dennis said "Pick #474." Routed via `work-issue` -> `resolve-issue`
+(refactor/migration item, extending #450's split, same shape as last
+session's #473).
 
 **Landed (merged to `feature/docker-e2e-backend-integration`, pushed,
-commit `f6da153d`):**
-- Extracted `autoAssignSampleToBox`'s in-transaction fresh-read + scan +
-  atomic-write block, and its Neo4j-failure rollback block, into two new
-  `MongoStorageRepository` methods: `autoAssignSamplePosition` and
-  `rollbackAutoAssignedPosition`. The service now delegates to both
-  instead of duplicating the Mongo access inline.
-- Moved the pure box-grid helpers (`_isPositionOccupied`,
-  `_getAllValidPositions`, `_findFirstAvailablePosition`) into a new
-  shared `api/backend/src/utils/storagePositionGrid.js`, used by both
-  `storageService.js` and `MongoStorageRepository.js`. The service kept
-  its own method names as thin wrappers, since `storageService.test.js`
-  calls them directly (`service._findFirstAvailablePosition(...)` etc.).
-- **No test-mocking rewrite was needed** — the extracted repository
-  methods reuse the identical collection-access pattern
-  (`getCollection`/`db.collection` + an externally-supplied `session`)
-  the service already used, so call order/shape stayed byte-identical.
-  All 76 `storageService.test.js` assertions and 47
-  `MongoStorageRepository.test.js` assertions passed unchanged; added 8
-  new tests directly on the two new repository methods (131 total, all
-  green). This contradicts the prior session's comment on #473 that a
-  mocking-strategy rewrite was required — it wasn't, once the extraction
-  boundary was drawn to match the existing call shape exactly.
-- Closed **#473** with a comment summarizing the above.
-- Filed **#480** (the four remaining duplicated methods —
-  `validatePositionAvailability`, `findAvailablePosition`,
-  `getSampleStorage`, `getFreezerOccupancyStats` — confirmed via `grep`
-  to have no route/controller callers, test-only, lower priority).
-- Filed **#479** (unrelated pre-existing bug found while reading the
-  code: the success response can report the pre-transaction scan
-  position rather than the actually-committed one under a race — no
-  test currently catches this).
-- Filed **#481** (found during `wrap-up`'s friction audit: the
-  pre-transaction fast-path check in `autoAssignSampleToBox`, above the
-  `session.withTransaction` call, still does its own raw
-  `findOne`/already-allocated/`BOX_FULL` checks directly against
-  `this.db.collection(...)` rather than via the repository — intentional
-  redundancy with the in-transaction re-check, so low urgency, but noted
-  so #473's close comment doesn't overstate what was migrated).
+commit `48b50f42`):**
 
-Ran `wrap-up` once at the end: found one real gap (the pre-check
-duplication, filed as #481) that the close comment on #473 would
-otherwise have overstated. `handoff` invoked immediately after per its
-own trigger (issue closes + new issues that reshape backlog picture).
+- `sample.service.js`'s `createSample()` no longer writes `storageLocation`
+  directly onto the create doc or opens its own `StorageAssignment` record.
+  The sample is now inserted unallocated, then `AllocateSampleUseCase.execute()`
+  performs the atomic allocation (occupancyGrid write, storageLocation
+  update, StorageAssignment record, audit trail, ISO20387 lineage
+  recording) — the same use case `allocate-sample.controller.js` and
+  `RegisterSampleUseCase` already reuse. Allocation failure rolls back the
+  inserted sample and rethrows with a 409/422 statusCode.
+- Both callers updated to pass `neo4jDriver` through options:
+  `sample.routes.js`'s inline `sampleRepository.create` wrapper, and
+  `routes/intakeWizard.js`.
+- **Found and fixed a real latent bug** while doing this: the intake
+  wizard's separate post-creation `assignSampleToBox` step (calling
+  `storageService.autoAssignSampleToBox`) always failed with
+  `ALREADY_ALLOCATED`, because `createSample`'s old direct write had
+  already set `storageLocation` by the time that second step ran (the
+  wizard sets `boxId`/`positionCode` to the previewed position *before*
+  calling `createSample`). That redundant/broken step is now removed —
+  `createSample` allocates the previewed position itself, and the wizard
+  reads the result back from `createdSample.storageLocation`. This was a
+  standing bug in the intake wizard's happy path before this session
+  (fixed inline, not filed separately, per the "bugs blocking the
+  issue's own acceptance criteria" exception in `resolve-issue`).
+- #474's own issue text cited `interface/routes/intakeWizard.routes.js`
+  L175 as part of the write path. Turned out to be a misattribution: that
+  line only echoes `body.storageLocation` from the already-built JSON
+  response (`intakeGovernanceResponseGuard`'s sanitizer) — it's
+  response-sanitization, not a write path. Needed no change; noted in the
+  close comment so the record isn't misleading.
+- Closed **#474** with a comment summarizing the above.
+- Filed **#482**: `allocate-sample.controller.js` sends `sampleId` in its
+  command but `AllocateSampleUseCase.validateCommand` checks
+  `specimenId` — every real call through that standalone controller with
+  `{ sampleId, boxId, position }` fails validation with 400 instead of
+  allocating. Pre-existing, unrelated to #474's own path (which builds
+  its command correctly), so filed rather than fixed inline.
+- Tests: rewrote `sample.service.test.js`'s `createSample` suite (84/84
+  passing) for the new allocation call shape — StorageAssignment fields
+  now resolve via `storagePaths` (matching #473's established convention)
+  instead of the old parent_id walk, and the birth-movement ledger now
+  gets two entries (`create` + `allocate`) instead of one. Updated
+  `sample.routes.test.js` and `intakeWizard.routes.test.js` for the new
+  options shape and the collapsed allocation-failure error path. All
+  touched test files green: 345 tests across `sample.service.test.js`,
+  `sample.routes.test.js`, `intakeWizard.routes.test.js`,
+  `intakeWizard.governance-integration.test.js`,
+  `intakeWizard.routes.governance.test.js`, `intakeWizard.helpers.test.js`,
+  `RegisterSample.test.js`, `AllocateSampleUseCase.test.js`,
+  `allocate-release-sample.controller.test.js`.
+
+Ran `wrap-up` at the end: no friction beyond what's already captured
+above (the L175 misattribution and the wizard bug are both already
+folded into the close comment and this note — nothing else surfaced).
 
 ## Repo state
 
 - **`feature/docker-e2e-backend-integration`**: clean, pushed through
-  `f6da153d` (this session's #473 migration, fast-forward merge from
-  `fix/473-storageservice-migrate-autoassign`, which was deleted both
+  `48b50f42` (this session's #474 migration, fast-forward merge from
+  `fix/474-sample-service-allocate-usecase`, which was deleted both
   locally and on origin after the merge).
 - **`fix/450-storageservice-repository-migration`**: still merged, still
   not deleted — carried forward again from prior sessions, still safe to
-  delete. (Unrelated to this session's `fix/473-*` branch, which is
-  already gone.)
-- Issues this session: **#473 closed** (this session's work). **#479,
-  #480, #481 opened** (all follow-ups from this session, none blocking).
-  **#450 still open** (tracking issue for the 6-piece split from last
-  session; #473 was one of the six, now done — 5 remain: #474, #475,
+  delete.
+- Issues this session: **#474 closed** (this session's work). **#482
+  opened** (found bug in `allocate-sample.controller.js`, unrelated to
+  #474's own scope). **#450** still open (tracking issue for the
+  6-piece split; #473 and #474 are both done now — 4 remain: #475,
   #476, #477, #478).
 - Backlog otherwise unchanged from last handoff:
-  - **#474, #477, #478** — depend on #473, which is now done, so these
-    are unblocked for pickup.
-  - **#475** — independent of #473, was already unblocked.
+  - **#477, #478** — depend on #473/#474, both now done, so unblocked
+    for pickup.
+  - **#475** — independent, was already unblocked (`label.routes.js`'s
+    helper can migrate to `GetSampleStorageLocationUseCase`).
   - **#476** — needs Dennis's actual design call (quarantine =
     storage-position vs. separate state), not resolvable from docs alone
-    per last session's read.
+    per prior session's read.
+  - **#482** (new) — `allocate-sample.controller.js` sampleId/specimenId
+    mismatch, low urgency (standalone controller, not on the main
+    create-sample path).
+  - **#479, #480, #481** — this session did not touch these (filed last
+    session on #473's work), still open, still lower-priority.
   - **#451** (status consolidation + custody/storage entity design
     question) — still open, still a real design question.
   - **#454** — depends on #450/#452/#453 (#452/#453 done, #450 open,
     itself a multi-issue tracking chain).
-  - **#390** — still blocked (#460 remains; #450's split still has 5
+  - **#390** — still blocked (#460 remains; #450's split still has 4
     issues left before it can close).
   - Older backlog: `#371`/`#373`/`#374`/`#378`/`#379`, `user.accessType`
     grep sweep (still not done), `test/440-retention-policy-model` and
@@ -107,28 +114,20 @@ only, per resolve-issue's default execution contract).
 
 ## Blocking next step
 
-None. #473's actual blocker (the prior session's characterization of a
-required test-mocking-strategy rewrite) turned out to be avoidable by
-drawing the extraction boundary to match the existing call shape — this
-is worth remembering if a similar "needs a test rewrite" claim shows up
-on another issue in this backlog: re-verify against the actual code
-before treating it as settled, per `resolve-issue`'s deferral-evaluation
-step.
+None.
 
 ## Recommended next steps
 
-None explicitly queued by Dennis beyond "pick #473" (done — migrated,
-tested, merged, closed, follow-ups filed). Candidates, in likely
+None explicitly queued by Dennis beyond "pick #474" (done — migrated,
+tested, merged, closed, one follow-up filed). Candidates, in likely
 priority order:
 
-1. **#474, #477, #478** — now unblocked now that #473 is done.
-2. **#475** — independent, `label.routes.js`'s helper can be migrated to
-   `GetSampleStorageLocationUseCase` today, no blocker found (per last
-   session's read).
+1. **#477, #478** — now unblocked now that #473 and #474 are both done.
+2. **#475** — independent, no blocker found per prior session's read.
 3. **#476** — needs Dennis's design call (quarantine state), worth
    surfacing directly.
-4. **#480, #481** — this session's lower-priority follow-ups, safe to
-   defer.
+4. **#479, #480, #481, #482** — lower-priority follow-ups from this and
+   last session, safe to defer.
 5. **#451** (status consolidation + custody/storage entity decision).
 6. **#454**, **#390** — unchanged from last handoff, downstream of the
    #450 family.
@@ -140,19 +139,18 @@ priority order:
 
 ## Which skills to use
 
-- `resolve-issue`'s deferral-evaluation step ("has something it depended
-  on landed since it was written? re-verify, don't assume the issue text
-  is still accurate") paid off directly this session: the prior
-  session's own comment on #473 asserted a test-mocking rewrite was
-  required, and re-reading the actual test file's mock setup (not just
-  trusting the prior comment) found the extraction could be drawn to
-  avoid that entirely. Worth treating even a *same-backlog, one-session-
-  old* "blocked because X" comment as a claim to re-verify, not a
-  settled fact — not just claims from stale docs.
-- `wrap-up`'s shipping-addendum check #10 ("did any close comment list
-  something as not done without a matching issue") caught something
-  subtler than usual: not an unfiled gap, but an *overstatement* in the
-  close comment itself (claiming full delegation when a fast-path
-  pre-check block was still inline). Worth explicitly re-reading a just-
-  written close comment's claims against the diff, not just checking
-  whether deferred items have issues.
+- `resolve-issue`'s "bugs blocking the issue's own acceptance criteria
+  get fixed inline" exception applied cleanly here: the intake wizard's
+  `assignSampleToBox` step was already broken before this session
+  (always hit `ALREADY_ALLOCATED`), but only became *fixable* as a side
+  effect of #474's own scope (removing the direct `storageLocation`
+  write). Worth remembering as a pattern: a migration issue can silently
+  un-break a downstream caller that was already failing — check callers
+  of the method being migrated, not just the method itself, before
+  declaring the change complete.
+- Re-verifying the issue text's own claims (per #473's lesson) paid off
+  again: #474's body cited `intakeWizard.routes.js` L175 as part of the
+  write path, but reading that file showed it was response-sanitization
+  only. Treating an issue's own audit comment as a claim to verify
+  against the current code (not a settled fact) caught this before it
+  shaped the wrong fix.
