@@ -1,96 +1,98 @@
 # HANDOFF
 
 **Written:** 2026-08-06, end of session on `feature/docker-e2e-backend-integration`,
-after closing #451.
+after closing #472.
 
 ## What happened this session
 
-Dennis said "Pick #451." Routed via `work-issue` -> `resolve-issue`.
-#451 asked for two things: a "design decision needed" on custody vs
-storage entity split, and an audit of `lifecycleStatus`/
-`availabilityStatus`/`quarantineStatus`/`quarantineReason`.
+Dennis said "Pick #472." Routed via `work-issue` -> `resolve-issue`.
+#472 (filed while working #460) asked to migrate
+`FacilityManagementPage.tsx`'s location `<select>` off
+`useLocations()`/`locationService` (the legacy `Location`
+entity/`/api/locations` route) onto "the canonical Facility/Room/Storage
+hierarchy API," then drop `useLocations`/`locationService` if nothing
+else used them.
 
-Pre-routing research found both were already settled by prior work
-(`#398`, `#406`, `#408`) that #451 predates or wasn't re-checked
-against: `QuarantineAction` already exists as the custody entity
-(decided #398, landed #406/#408); `lifecycleStatus`/`availabilityStatus`/
-`quarantineStatus` are already removed from `Sample.js`'s schema and
-every `samples` write site; `quarantineReason` deliberately stays
-free-text (#407/#415/#408). Re-verified all of this against current
-code (grep for every field name across `api/backend/src`, not just
-trusting the doc summary) rather than taking the doc at face value.
+Confirmed #450/#452/#454/#455 (the dependency chain #472 needed) were
+all closed. Found the actual consumer: `SensorForm` inside
+`FacilityManagementPage.tsx`, a "Localização" select populating
+`Sensor.locationID` from legacy `Location` documents
+(block/rack/drawer/box/wellPosition) — nothing to do with `Sample`
+storage at all (#450/#454's audits never covered it, hence #472 being
+filed separately).
 
-One genuinely open thread survived the re-check: `Sample.js`'s
-`SampleModel.resolveSpecimenStatus()` had a fallback to a raw
-`lifecycleStatus` value on documents predating #405, which needed a
-yes/no answer only Dennis could give (do any pre-#405 documents still
-exist in production). Asked via `AskUserQuestion`; Dennis confirmed no
-such documents remain, so the fallback was removed (now defaults
-straight to `'available'`, matching `SampleModel.create()`'s handling
-of any other unrecognized legacy value).
-
-Also confirmed while researching: `eConsent.js`'s `quarantineStatus`/
-`availabilityStatus` response fields (`POST
-/import/fhir/consent/:token/accept`) read a `fhir-import-staging`
-snapshot record, not `Sample` directly — closes out #451's open
-question about that read path too.
+Tracing `sensor.locationId`/`locationID`'s actual backend consumer
+(`equipment-sensor-quarantine.service.js`'s `findBoxIdsBySensorKey`,
+with its own `#464` doc comment) found the field's semantics had already
+changed under #464: it's read as an **equipment identifier**, matched
+against `StorageContainer.containerID` for a FREEZER
+(`freezer.containerID === Equipment.equipmentID`) to resolve which
+storage boxes a cold-chain incident should quarantine — not a pointer
+into the retiring `locations` collection at all. So the old select
+wasn't just reading a soon-to-be-retired API, it was writing
+`Location._id`/`Location.locationID` values that could never match
+`containerID` — a live latent bug on top of the stale read path.
 
 Fix:
-- `api/backend/src/models/Sample.js`: `resolveSpecimenStatus()` no
-  longer falls back to `sample.lifecycleStatus` — defaults to
-  `'available'` when `specimenStatus` is absent.
-- `api/backend/tests/unit/sample.service.test.js`: the one test that
-  exercised the removed fallback (`rejects when the sample is already
-  destroyed (RF006 AC#4)`) now mocks `specimenStatus: 'destroyed'`
-  instead of `lifecycleStatus: 'DESTROYED'`.
-- `docs/architecture/canonical-data-contract-v1.md`: added a `#451`
-  note recording the re-verification and the fallback removal, plus a
-  note on `eConsent.js`'s `quarantineStatus`/`availabilityStatus` read
-  path, in the Specimen section alongside the existing #398/#406/#408
-  reasoning.
+- `frontend/src/views/FacilityManagementPage.tsx`: `SensorForm`'s
+  "Localização" select now reuses the same `freezers` list already
+  fetched via `storageApi.listFreezers()` for the sibling "Contêiner de
+  Armazenamento" field (canonical `/storage` topology read path,
+  `storageContainers` filtered to `containerType: 'FREEZER'`), and sets
+  `formData.locationID` to `freezer.containerID` instead of a `Location`
+  id. Dropped the now-unused `useLocations` import and the `Location`
+  type import from this file (nothing else in the file used them).
+  `useLocations`/`locationService` themselves were **not** removed —
+  `SampleDetailsPage.tsx` still legitimately depends on them for
+  `Sample.locationID` display (confirmed against
+  `docs/architecture/legacy-location-migration-mapping.md`'s existing
+  #454 note, which already established that consumer as intentionally
+  out of scope until #460).
+- `docs/architecture/legacy-location-migration-mapping.md`: added a
+  `#472` note recording the fix and the #464-semantics discovery, next
+  to the existing #454 note it builds on.
 
-151+ existing unit tests pass across `sample.models.test.js`,
-`sample.service.test.js`, `sample.model.unit.test.js`,
-`intakeWizard.governance-integration.test.js`, `import-lgpd.service.test.js`,
-`import.service.unit.test.js`, `services/fhir-import-staging-consent.service.test.js`
-(no lifecycleStatus-fallback-dependent behavior left elsewhere).
+`npx tsc --noEmit` clean on the merged branch. No dedicated unit/e2e
+test exists for `FacilityManagementPage.tsx`; the one e2e spec that
+touches this form (`tests/e2e/sensor-registration.spec.ts`) only
+exercises the sibling `sensor-storage-container-select`, confirmed
+unaffected by grep before editing.
 
-Branch `fix/451-status-consolidation-custody-storage`, commit
-`b00a128c`, pushed, merged `--no-ff` into
-`feature/docker-e2e-backend-integration` (merge commit `86064296`),
-pushed. Issue #451 closed with a comment recording the merge commit,
-the doc note, and the eConsent.js finding. Branch deleted locally and
-on origin.
+Branch `fix/472-facility-page-canonical-storage`, commit `9178f9a9`,
+pushed, merged `--no-ff` into `feature/docker-e2e-backend-integration`
+(merge commit `1936da6d`), pushed. Issue #472 closed with a comment
+recording the merge commit and the #464-semantics finding. Branch
+deleted locally and on origin.
 
-No friction this session (wrap-up audit ran clean): the two Edit
-guardrails that fired (protected-branch block, primary-doc-read-first
-block for `Sample.js`) both worked exactly as designed and were
-resolved in the expected way (branch first, grep the two named primary
-docs before editing) — not treated as friction. Nothing deferred
-without an answer; the one open design question was resolved by asking
-Dennis directly rather than guessing or leaving it as a stale "needs
-owner call" comment.
+Wrap-up audit ran clean: the one blocked `Edit` (protected-branch guard,
+`feature/docker-e2e-backend-integration`) resolved exactly as designed
+(branch first). One real judgment call this session (what "canonical
+Facility/Room/Storage hierarchy API" meant for a `Sensor`, which has no
+Facility/Room fields of its own) was resolved by tracing the actual
+backend consumer rather than guessing, and the reasoning is now recorded
+in the doc rather than left as an unrecorded call.
 
 ## Repo state
 
 - **`feature/docker-e2e-backend-integration`**: clean, pushed through
-  `86064296` (merge of `fix/451-...`).
-- Issues this session: **#451 closed** (fixed — see commit `b00a128c`,
-  merge `86064296`).
-- `fix/451-status-consolidation-custody-storage`: merged, closed,
-  deleted (local + remote) — fully wrapped up, nothing dangling from
-  this session.
+  `1936da6d` (merge of `fix/472-...`).
+- Issues this session: **#472 closed** (fixed — see commit `9178f9a9`,
+  merge `1936da6d`).
+- `fix/472-facility-page-canonical-storage`: merged, closed, deleted
+  (local + remote) — fully wrapped up, nothing dangling from this
+  session.
 
 ## Which issue is next
 
-None queued by Dennis. Candidates, in likely priority order (updated
-from last session — #451 is now done):
+None queued by Dennis. Candidates, in likely priority order (unchanged
+from last session — #472 wasn't on that list, it was picked directly):
 
 1. **#390** — downstream of #450 (closed); check whether #460 (retiring
    the legacy `locations` collection) is still its only remaining
-   blocker. Note: #460 depends on #458 (done) and #464 (done) per the
-   `docs/architecture/legacy-location-migration-mapping.md` doc — worth
-   checking if #460 itself is now unblocked.
+   blocker. Note: #460 is still blocked — `SampleDetailsPage.tsx` still
+   reads `useLocations()`/`locationService` for `Sample.locationID`
+   display (confirmed again this session), and that consumer is not
+   what #472 was scoped to touch.
 2. Older backlog: `#371`/`#373`/`#374`/`#378`/`#379`, `user.accessType`
    grep sweep, `test/440-*`/`test/441-*` branch deletion,
    `fix/444-retention-period-iso8601` housekeeping, stray
@@ -101,26 +103,23 @@ from last session — #451 is now done):
 
 ## Dev stack state
 
-Untouched this session — resolution verified via targeted `vitest run`
-on the affected/related test files only (native, no Docker needed; the
-fix removes a dead code path, no new Mongo/Neo4j access patterns
-introduced).
+Untouched this session — resolution verified via `npx tsc --noEmit`
+(frontend-only TypeScript change, no backend/schema touched, no new
+Mongo access pattern introduced) and a grep-confirmed check that the
+one e2e spec touching this form doesn't exercise the changed select.
 
 ## Which skills to use
 
-- `work-issue`/`resolve-issue`'s "check docs before trusting a 'needs
-  design call' framing" guidance paid off directly again here: #451's
-  own body framed the custody/storage split as an open design
-  question, but `docs/architecture/canonical-data-contract-v1.md`
-  already had the full decision (from #398) and implementation history
-  (#406/#408) recorded — re-reading the doc, then re-verifying its
-  claims with grep against current code (not just trusting the doc
-  summary), turned "needs a design call" into "already decided,
-  confirm and close."
-- When an issue's last open thread needs a fact only the repo owner
-  knows (here: whether legacy pre-migration documents still exist in
-  production) and the answer changes what code should do, ask via
-  `AskUserQuestion` rather than guessing conservatively or leaving it
-  as an unresolved "needs owner input" comment on a closed issue — the
-  resolve-issue close-discipline gate about deferral language exists
-  exactly to catch that pattern before it slips through.
+- `resolve-issue`'s "check docs before trusting a framing" guidance
+  applied in reverse this time: #472's own body suggested a
+  straightforward read-path swap, but tracing the actual backend
+  consumer (`equipment-sensor-quarantine.service.js`) surfaced that the
+  field's *semantics* had already changed under a different issue
+  (#464) than the one #472 named as blocking (#450) — worth grepping a
+  changed field's actual backend consumers, not just its declared
+  dependency chain, before assuming a "migrate the read source" issue is
+  purely mechanical.
+- `docs/architecture/legacy-location-migration-mapping.md` continues to
+  be the right home for every `Location`-retirement-adjacent finding
+  (#454, #471, now #472) — check it first, append to it, rather than
+  starting a new doc.
