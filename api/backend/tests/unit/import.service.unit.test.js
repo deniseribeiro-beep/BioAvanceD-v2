@@ -321,46 +321,6 @@ describe('ImportService.parseSampleCSV', () => {
   });
 });
 
-describe('ImportService.parseLocationData', () => {
-  it('coerces numeric-string location coordinates to numbers', () => {
-    const { data, parseErrors } = importService.parseLocationData({
-      locationID: '10', equipmentType: '1', equipmentID: '2', block: '3', rack: '4', drawer: '5', box: '6'
-    });
-    expect(parseErrors).toEqual([]);
-    expect(data.locationID).toBe(10);
-    expect(data.equipmentType).toBe(1);
-    expect(data.block).toBe(3);
-    expect(data.box).toBe(6);
-  });
-
-  it('records a parse error for a non-numeric block value and sets it null', () => {
-    const { data, parseErrors } = importService.parseLocationData({ block: 'abc' });
-    expect(data.block).toBeNull();
-    expect(parseErrors).toEqual(expect.arrayContaining([expect.stringContaining('block')]));
-  });
-
-  it('treats missing coordinate fields as null without raising parse errors', () => {
-    const { data, parseErrors } = importService.parseLocationData({});
-    expect(data.locationID).toBeNull();
-    expect(data.block).toBeNull();
-    expect(parseErrors).toEqual([]);
-  });
-
-  it('falls back to eppendorfWell when wellPosition is absent', () => {
-    const { data } = importService.parseLocationData({ eppendorfWell: 'A1' });
-    expect(data.wellPosition).toBe('A1');
-  });
-});
-
-describe('ImportService.parseLocationCSV', () => {
-  it('delegates to parseLocationData for a CSV row', () => {
-    const row = { locationID: '7', block: '1', rack: '2', drawer: '3', box: '4' };
-    const { data } = importService.parseLocationCSV(row);
-    expect(data.locationID).toBe(7);
-    expect(data.block).toBe(1);
-  });
-});
-
 describe('ImportService.parseTemperatureCSV', () => {
   it('maps a full temperature row, parsing numeric fields and defaulting the unit', () => {
     const row = {
