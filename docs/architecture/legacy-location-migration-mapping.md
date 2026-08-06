@@ -443,3 +443,38 @@ files by #478's actual migration, two files because they were never
 migrating this field in the first place (they consume the still-live,
 intentionally-uncoexisting `Location` entity, which stays as-is until
 #460 retires it). No frontend code changed for this issue.
+
+**#472 resolved 2026-08-06.** `FacilityManagementPage.tsx`'s `SensorForm`
+(not audited by #450/#454 — it's a `Sensor.locationID` consumer, not a
+`Sample` one) had its own `useLocations()`/`locationService` "Localização"
+`<select>`, populated from the legacy `Location` entity
+(`block`/`rack`/`drawer`/`box`/`wellPosition`), writing the picked
+`Location.locationID` into `Sensor.locationID`. Per #464's own resolution
+(see `equipment-sensor-quarantine.service.js`'s `findBoxIdsBySensorKey`
+comment), `Sensor.locationId`/`locationID` no longer means a pointer into
+`locations` — it's read as an **equipment-level identifier**, matched
+against `StorageContainer.containerID` for a FREEZER
+(`freezer.containerID === Equipment.equipmentID`) to resolve which boxes
+a cold-chain incident quarantines. The old select was therefore not just
+reading a retiring API, it was writing values (`Location._id`/
+`Location.locationID`) that the backend's #464-era matching logic can
+never match against `containerID` — a live latent bug, not just a stale
+read path.
+
+Fix: the select now reuses the same `freezers` list `SensorForm` already
+fetches via `storageApi.listFreezers()` (canonical `/storage` topology
+read path, `storageContainers` collection filtered to
+`containerType: 'FREEZER'`) for its sibling "Contêiner de Armazenamento"
+field, and sets `formData.locationID` to `freezer.containerID` instead of
+a `Location` id — restoring the value's #464-intended semantics while
+also being the canonical-hierarchy source the issue asked for (FREEZER
+already carries `roomId` -> `Room.facilityId` -> `Facility`, so this is
+the same Facility/Room/Storage chain, just not walked level-by-level in
+this particular picker since a sensor only needs the FREEZER it's
+mounted in). `useLocations`/`locationService` stay — `SampleDetailsPage.tsx`
+still legitimately depends on them per the note above, so removing them
+remains blocked on `SampleDetailsPage.tsx`'s own migration (not in
+scope here) or #460's eventual retirement path. `frontend/src/hooks/useLocations.ts`
+and the `Location` type import were dropped from
+`FacilityManagementPage.tsx` itself since nothing else in that file used
+them.
