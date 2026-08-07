@@ -373,6 +373,12 @@ class SampleService {
 
       sample.storageLocation = { boxId, position: positionCode };
 
+      // #510: expose the canonical StorageAssignment (dict-02 ELM-0167-0178)
+      // the allocation above just opened, alongside the legacy storageLocation
+      // snapshot — additive, same precedent #507 set for findSampleById.
+      sample.storageAssignment = await new MongoStorageRepository(db)
+        .findCurrentStorageAssignment(result.insertedId);
+
       // #492/#502: only recorded once the sample has fully landed (ledger +
       // allocation both succeeded) — a failure here doesn't roll back
       // sample creation, mirroring import.service.js's best-effort recording
