@@ -478,3 +478,23 @@ scope here) or #460's eventual retirement path. `frontend/src/hooks/useLocations
 and the `Location` type import were dropped from
 `FacilityManagementPage.tsx` itself since nothing else in that file used
 them.
+
+**Landed 2026-08-07 (#490, the collection drop itself):** with #460
+closed, the only remaining reader of the `locations` collection was the
+one-time #461 backfill tool itself. Dennis confirmed no real production
+deployment exists yet (student project) and gave the go-ahead to drop
+with a backup first. Added
+`api/backend/src/services/drop-legacy-locations-collection.service.js`
+(exports every document to a timestamped, gitignored JSON backup, then
+drops the collection only if it still exists — a no-op otherwise) and
+its CLI wrapper `api/backend/src/scripts/dropLegacyLocationsCollection.js`,
+mirroring the #461 backfill script's `connectDB`/`closeConnection`
+pattern. Run for real against the dev-stack Mongo: the collection held
+zero documents (it was never seeded with legacy data in this
+environment), so the drop itself was a no-op — the backfill tool
+(`location-storage-backfill.service.js`) is consequently also now
+unreachable/moot in this environment, since its one input collection is
+gone. Left in place rather than deleted, since #490 didn't ask for its
+removal and a still-legacy production dataset (if one is ever
+imported) would need it re-run first, against a restored backup, before
+the drop tool is used again.
