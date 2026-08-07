@@ -108,6 +108,9 @@ function makeDb({ sampleTypeFound = true, sampleOriginFound = true, protocolFoun
   const storagePathsCollection = {
     findOne: vi.fn().mockResolvedValue(null),
   };
+  const rcsAssessmentsCollection = {
+    insertOne: vi.fn().mockResolvedValue({ insertedId: 'assessment-1' }),
+  };
 
   const collections = {
     samples: samplesCollection,
@@ -119,6 +122,7 @@ function makeDb({ sampleTypeFound = true, sampleOriginFound = true, protocolFoun
     sample_movements: sampleMovementsCollection,
     counters: countersCollection,
     storagePaths: storagePathsCollection,
+    rcsAssessments: rcsAssessmentsCollection,
   };
 
   const session = makeSession();
@@ -134,16 +138,17 @@ function makeDb({ sampleTypeFound = true, sampleOriginFound = true, protocolFoun
     },
   };
 
-  return { db, samplesCollection, patientsCollection };
+  return { db, samplesCollection, patientsCollection, rcsAssessmentsCollection };
 }
 
 describe('ImportLGPDService.importSamples', () => {
   let db;
   let samplesCollection;
   let patientsCollection;
+  let rcsAssessmentsCollection;
 
   beforeEach(() => {
-    ({ db, samplesCollection, patientsCollection } = makeDb());
+    ({ db, samplesCollection, patientsCollection, rcsAssessmentsCollection } = makeDb());
 
     vi.spyOn(patientIdentityService, 'matchOrUpsertParticipant').mockResolvedValue(MATCHED_PATIENT);
     vi.spyOn(qualityDomain, 'resolveMethodologicalQuality').mockReturnValue({
@@ -252,6 +257,60 @@ describe('ImportLGPDService.importSamples', () => {
       source: 'external-lgpd-import',
       canonical: false,
     });
+  });
+
+  // #499: import-lgpd's own RCS-computing CSV parse logic never called
+  // rcsAssessmentService.recordAssessment — the canonical, referenced
+  // RcsAssessment snapshot import.service.js's CSV/XLSX branch already
+  // writes. Real-enough proof per the build-loop overlay's backend-internal
+  // proof bar: an in-memory collection mock, asserting the actual
+  // specimenId/certificationResult shape passed through, not a stub.
+  it('records a referenced RcsAssessment snapshot alongside the embedded copy (#499)', async () => {
+    qualityDomain.resolveMethodologicalQuality.mockReturnValue({
+      governance_status: 1,
+      final_grade: 'A',
+      category: 'A',
+      score: 90,
+      rcs_score: 87.5,
+      score_based_grade: 'A',
+      model_version: 'v1',
+      matrix_type: 'PLASMA',
+      governance_failure_reasons: [],
+      governance_rule_codes: [],
+      grade_route: 'DIRECT',
+      axis_penalties: [],
+      calculation_trace: {},
+    });
+    vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW]);
+
+    const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' });
+
+    expect(result.success).toBe(1);
+    const inserted = samplesCollection.insertOne.mock.calls[0][0];
+    expect(rcsAssessmentsCollection.insertOne).toHaveBeenCalledTimes(1);
+    const recorded = rcsAssessmentsCollection.insertOne.mock.calls[0][0];
+    expect(recorded.specimenId).toBe(inserted.specimenId);
+    expect(recorded.rcsScore).toBe(87.5);
+    expect(recorded.scoreBasedGrade).toBe('A');
+  });
+
+  it('does not fail the row import when recording the RcsAssessment snapshot rejects (#499)', async () => {
+    qualityDomain.resolveMethodologicalQuality.mockReturnValue({
+      governance_status: 1,
+      final_grade: 'A',
+      category: 'A',
+      score: 90,
+      rcs_score: 87.5,
+    });
+    const failingRcsAssessments = { insertOne: vi.fn().mockRejectedValue(new Error('mongo down')) };
+    const originalCollection = db.collection;
+    db.collection = vi.fn((name) => (name === 'rcsAssessments' ? failingRcsAssessments : originalCollection(name)));
+    vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW]);
+
+    const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' });
+
+    expect(result.success).toBe(1);
+    expect(samplesCollection.insertOne).toHaveBeenCalledTimes(1);
   });
 
   it('rejects a row whose barcode already exists (the duplicate-barcode check now runs after real validation)', async () => {

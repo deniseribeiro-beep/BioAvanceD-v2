@@ -19,6 +19,7 @@ const DrugService = require('./DrugService');
 const participantIdentityService = require('./PatientIdentityService');
 const { generateSampleHash } = require('./MerkleService');
 const qualityDomain = require('./quality-domain.service');
+const rcsAssessmentService = require('./rcs-assessment.service');
 const AllocateSampleUseCase = require('../core/use-cases/AllocateSampleUseCase');
 const MongoStorageRepository = require('../infrastructure/persistence/mongo/MongoStorageRepository');
 const MongoAuditRepository = require('../infrastructure/persistence/mongo/MongoAuditRepository');
@@ -1127,6 +1128,20 @@ class ImportLGPDService {
           const insertResult = await samplesCollection.insertOne(sample);
           results.importedSampleIds.push(insertResult.insertedId);
 
+          // #499: mirrors import.service.js's CSV/XLSX branch — records the
+          // canonical, referenced RcsAssessment snapshot alongside the
+          // embedded copy this parser already computes.
+          if (sample.rcsEvaluation) {
+            try {
+              await rcsAssessmentService.recordAssessment(db, sample.specimenId, sample.rcsEvaluation);
+            } catch (assessmentError) {
+              logger.warn('[IMPORT_LGPD] Falha ao registrar snapshot RcsAssessment referenciado, amostra mantém cópia embutida', {
+                specimenId: sample.specimenId,
+                error: assessmentError?.message || String(assessmentError),
+              });
+            }
+          }
+
           // #477: AllocateSampleUseCase performs the atomic occupancyGrid
           // write, storageLocation update, StorageAssignment record
           // (dict-02 ELM-0167-0178) and audit/lineage trail for the
@@ -1478,6 +1493,11 @@ class ImportLGPDService {
       axis_penalties: canonicalQualityAssessment.axis_penalties || [],
       calculation_trace: canonicalQualityAssessment.calculation_trace || {},
       rcs_evaluation: canonicalQualityAssessment,
+      // #499: camelCase alias SampleModel.create actually reads
+      // (`data.rcsEvaluation`) — the snake_case `rcs_evaluation` above is
+      // dropped by SampleModel.create and was never wired to
+      // rcsAssessmentService.recordAssessment below.
+      rcsEvaluation: canonicalQualityAssessment,
       canonical: {
         rcsScore: externalQualityAssessment.score,
         scoreBasedGrade: externalQualityAssessment.category || '',
