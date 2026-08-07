@@ -1,79 +1,91 @@
 # HANDOFF
 
 **Written:** 2026-08-07, end of session on `feature/docker-e2e-backend-integration`,
-after resolving #498.
+after resolving #497.
 
 ## What happened this session
 
-Dennis said "pick #498". Routed via `work-issue` -> `resolve-issue`
-(refactor migrating a backend consumer off legacy embedded RCS fields
-onto `RcsAssessment`, one of the five sub-issues #491 was split into
-last session).
+Dennis said "pick #497". Routed via `work-issue` -> `resolve-issue`
+(refactor migrating `MerkleService.js`'s RCS-half read off embedded
+`sample.rcsScore` onto `RcsAssessment`, one of the five sub-issues #491
+was split into two sessions ago).
 
-**Investigation found the issue's literal target was the wrong file.**
-`quality-compatibility.service.js`'s `normalizeSample()` (the function
-#498 named) is a pure in-memory normalizer applied to not-yet-persisted
-import/scoring payloads — at that point in the call chain (import CSV/
-XLSX/JSON parsing, `quality-domain.service#evaluateQuality`) there's no
-`specimenId` yet to resolve an `RcsAssessment` against, so "resolve
-through RcsAssessment" doesn't apply there. Traced the actual
-persisted-sample read site one layer up:
-`SampleGraphValidator._validateQuality(sample)` ->
-`quality-domain.service#validateQualityForRelease(sample)` ->
-`resolveMethodologicalQuality` -> `evaluateQuality` ->
-`normalizeSample(sample)`, called from `validateSampleCompliance`
-(invoked right after `samplesCollection.insertOne` during sample
-import) — this is where a persisted sample's legacy embedded
-`rcsScore`/`scoreBasedGrade`/`axisPenalties` actually get read.
+#497's own text asked to coordinate with #493's MerkleService item (the
+SPREC half, `sample.sprec`) so the file's hash input never lands in a
+mixed migrated/half-migrated state — so this session landed both halves
+together in one PR rather than #497 alone.
 
-**Fix:** added `quality-domain.service.js#validateQualityForReleaseFromSample(db, sample)`
-— resolves the newest `RcsAssessment` snapshot for the sample's
-`specimenId` via `rcs-assessment.service#getAssessmentsForSpecimen`
-and uses it when present; falls back to the legacy
-`validateQualityForRelease(sample)` path (embedded-field read) for
-samples with no recorded snapshot yet, preserving existing behavior.
-`SampleGraphValidator._validateQuality` now calls the new async
-resolver (made `_validateQuality` and its one call site `await`ed).
-`quality-compatibility.service.js` itself is unchanged — still the
-right tool for its actual job (normalizing raw import/scoring
-payloads).
+**Fix:** `MerkleService.js`'s `generateSampleHash(sample)` stays an
+unchanged pure sync function — still correct for write-time hashing on
+not-yet-persisted payloads in `import-lgpd.service.js`/`intakeWizard.js`,
+which (mirroring #498's finding for `_validateQuality`) have no
+specimenId to resolve a snapshot against yet at that point in the call
+chain. Added `MerkleService.js#generateSampleHashFromSample(db, sample)`
+— resolves the newest `RcsAssessment` and `SpecimenPreanalytics`
+snapshots for the sample's `specimenId` and hashes those in place of the
+legacy embedded `rcsScore`/`sprec` fields when present, falling back to
+the legacy embedded read when no snapshot is recorded yet.
+`SampleGraphValidator._validateIntegrity` — the actual persisted-sample
+read/verify site, found the same way #498 traced `_validateQuality` —
+now calls the new async resolver; its one call site is `await`ed.
 
-Added a unit test in `sample-graph-validator.service.test.js` covering
-the migrated-sample (RcsAssessment-present) path; existing tests
-(unchanged assertions) now exercise the fallback path via an added
-`rcsAssessments` collection mock that returns an empty array by
-default. Verified against baseline (`git stash`) that the pre-existing
-`Unexpected collection name: rcsAssessments` warnings in two unrelated
-import test files (`import.service.sprec.test.js`) are pre-existing,
-not a regression from this change.
+Added unit coverage: 4 new cases in
+`merkle-service.pharmacology.test.js` for
+`generateSampleHashFromSample` (legacy fallback with no snapshot, legacy
+fallback with no specimenId, resolved-RcsAssessment path, resolved-
+SpecimenPreanalytics path). Updated `sample-graph-validator.service.test.js`:
+added a `specimenPreanalytics` collection mock (needed once specimenId
+is set, since integrity resolution now looks it up too), and fixed the
+existing RcsAssessment-quality test's `merkleRoot` fixture to match the
+now-resolved hash (previously sealed via the legacy/null path, which
+started failing `_validateIntegrity` once the recompute path also
+switched to resolving through the referenced snapshot).
 
-Branch `fix/498-quality-compatibility-rcs-assessment` (off
+Targeted tests run and green: `merkle-service.pharmacology.test.js` (20),
+`sample-graph-validator.service.test.js` (5), plus regression checks —
+`import-lgpd.service.importSamples.unit.test.js`,
+`intakeWizard.routes.test.js`, `intakeWizard.governance-integration.test.js`,
+`import-lgpd.service.unit.test.js`,
+`import-lgpd.service.importPatients(Smart).unit.test.js`,
+`merkleTree.test.js`, `smart-import.api.test.js` (154 total), and
+`quality-domain.service.unit.test.js` (19) — all green, no regressions.
+
+Branch `fix/497-merkle-service-rcs-sprec-assessment` (off
 `feature/docker-e2e-backend-integration`), one commit, fast-forward
-merged back in, local branch deleted (never pushed separately, so no
-remote delete needed). Pushed `feature/docker-e2e-backend-integration`.
-Closed #498 with a comment explaining the scope difference and pointing
-at the actual fix site.
+merged back in, local branch deleted (never pushed separately). Pushed
+`feature/docker-e2e-backend-integration`. Closed #497 with a comment
+explaining the combined RCS+SPREC scope. Commented on #493 noting its
+MerkleService item is done but leaving it open — two items remain
+(`import.service.js` JSON-branch SPREC wiring, `sampleMerkleIntegrity.js`
+scope confirmation).
 
-Targeted tests run and green: `sample-graph-validator.service.test.js`
-(6 tests), `quality-domain.service.unit.test.js` (19), `quality-
-compatibility.service.unit.test.js` (11 — untouched, confirms no
-regression), `rcs-assessment.service.test.js` (4), plus the adjacent
-import suites (`import.service.importSamples`, `import-lgpd.service.*`,
-`sampleComplianceSync.service.test.js`, `import.service.sprec.test.js`)
-— all green, no regressions.
+**Filed #502** (enhancement, wrap-up finding): the resolved-snapshot
+integrity hash is only safe today because `recordAssessment`/
+`recordProfile` are each called exactly once per specimen, before
+`merkleRoot` is sealed. If a future re-assessment flow ever records a
+*second* snapshot for an already-sealed specimen, `_validateIntegrity`
+would resolve the newer snapshot and false-positive a "Violação de
+Integridade Criptográfica" for a sample that was only re-assessed, not
+tampered. Latent risk, not a live bug — needs a design call before any
+future work adds a way to re-record snapshots post-seal.
 
-No friction this session (`wrap-up` ran, nothing to file) — the
-scope-differs-from-issue-title judgment call was resolved by tracing
-the real call chain, not a skill gap.
+No other friction this session (`wrap-up` ran in full, including the
+shipping addendum) — the only judgment call (bundling #497+#493's
+MerkleService item into one PR) was directly authorized by #497's own
+text, and the one architectural risk found (the re-assessment/integrity
+interaction above) got its own tracked issue rather than staying a
+comment.
 
 ## Repo state
 
 - **`feature/docker-e2e-backend-integration`**: clean, pushed, up to
-  date with origin as of this session (commit `339d823e`, "Resolve
-  #498: resolve sample release quality via referenced RcsAssessment").
+  date with origin as of this session (commit `b2d0bd62`, "Resolve #497:
+  resolve Merkle sample hash's RCS and SPREC halves via referenced
+  snapshots").
 - No dangling branches from this session.
-- Issues this session: **#498 closed** (comment posted explaining the
-  actual fix site).
+- Issues this session: **#497 closed** (comment posted). **#493**
+  commented, left open (2 items remain). **#502 filed** (new, open —
+  integrity-hash re-assessment risk).
 
 ## Which issue is next
 
@@ -82,8 +94,6 @@ Dennis has not yet said which issue to pick up next session; per
 queued.
 
 Remaining #491 children carried forward:
-- **#497** — `MerkleService.js` RCS half. Coordinate with #493's
-  MerkleService item for the SPREC half of the same file.
 - **#499** — `import-lgpd.service.js`'s separate RCS-computing CSV
   parse logic never wired to `rcsAssessmentService.recordAssessment`.
 - **#500** — `rcs-certification.service.js` references RCS fields
@@ -94,17 +104,28 @@ Remaining #491 children carried forward:
 - **#499 and #501** share the same "wire up the missing
   `recordAssessment` call" shape — could be done together.
 
-**#491** stays open as the tracking issue — now 1 of 5 children closed
-(#498); #497, #499, #500, #501 still open.
+**#491** stays open as the tracking issue — now 2 of 5 children closed
+(#497, #498); #499, #500, #501 still open.
+
+**#493** (SPREC backend consumers, off #390) — 1 of 3 items done
+(MerkleService, via this session). Still open:
+- `import.service.js`'s JSON-import branch — needs
+  `specimenPreanalyticsService.recordProfile` wiring (pairs with #501's
+  RCS equivalent — likely the same PR touches both, per #493's own
+  text).
+- `sampleMerkleIntegrity.js` — confirm during implementation whether
+  this belongs in backend scope or the frontend follow-up (#495).
+
+**#502** (new) — design call needed before any future RcsAssessment/
+SpecimenPreanalytics re-recording flow: pin integrity verification to
+the snapshot version current at seal time, or keep integrity hashing on
+legacy embedded fields permanently.
 
 Other backlog carried forward unchanged from prior handoffs (not
 re-verified this session):
 - **#492** — design decision: should live `POST /api/samples`
   registration compute RCS server-side, or accept a pre-computed
   assessment from the client? (needs owner call before implementation)
-- **#493** — backend SPREC consumers (MerkleService, import.service
-  JSON-branch SPREC gap, sampleMerkleIntegrity) — still unsplit, may
-  warrant the same per-consumer split #491 got.
 - **#494** — storage/custody consumers (storageService, sample.service,
   Allocate/Move/Release use-cases, MongoStorageRepository*, intakeWizard,
   NotificationService, sensor services) — still unsplit.
@@ -137,17 +158,22 @@ server), per the end-loaded gate order.
 
 ## Which skills to use
 
-- `work-issue` -> `resolve-issue` was correct: #498 is a refactor
+- `work-issue` -> `resolve-issue` was correct: #497 is a refactor
   migrating a backend consumer off legacy embedded fields, not a bug,
   coverage gap, or net-new capability.
-- `resolve-issue`'s "trace before trusting the issue's own field/file
-  claims" instinct paid off here even though the issue had no
-  "needs owner call" label — the issue named the wrong file entirely
-  (a pure normalizer with no DB access), and only tracing actual
-  callers (`import.service.js` -> `quality-compatibility.service.js`
-  -> `quality-domain.service.js` -> `SampleGraphValidator.js`) found
-  the real read site. Worth remembering for #497/#499/#500/#501 too:
-  don't assume the issue's named file is where the fix belongs without
-  checking the actual call chain first.
+- When an issue's own text says "coordinate with sibling issue X so the
+  file doesn't land in a mixed state," treat that as authorization to
+  scope both halves into one PR even though only one issue was
+  explicitly picked — re-verify the sibling issue is still open/matches
+  before doing so (checked #493 fresh this session, confirmed its
+  MerkleService item description matched the actual code).
+- Migrating a *read* site to resolve through a referenced snapshot
+  instead of a legacy embedded field is not risk-free when that read
+  site is used for tamper/integrity detection (as opposed to #498's
+  quality-gate read, which has no "must match what was originally
+  sealed" constraint) — resolving the *newest* snapshot can diverge from
+  what was true when the value was sealed. Filed as #502 rather than
+  silently accepting the risk; worth checking for on any future
+  "migrate a hash/seal input off a legacy field" issue.
 - No project board found for this repo, so boarding step was skipped —
   matches prior sessions' behavior.
