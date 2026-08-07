@@ -1,91 +1,73 @@
 # HANDOFF
 
 **Written:** 2026-08-07, end of session on `feature/docker-e2e-backend-integration`,
-after resolving #497.
+after resolving #499.
 
 ## What happened this session
 
-Dennis said "pick #497". Routed via `work-issue` -> `resolve-issue`
-(refactor migrating `MerkleService.js`'s RCS-half read off embedded
-`sample.rcsScore` onto `RcsAssessment`, one of the five sub-issues #491
-was split into two sessions ago).
+Dennis said "pick #499". Routed via `work-issue` -> `build-loop` (a
+missing-wiring capability build, not a defect or coverage-only gap):
+`import-lgpd.service.js` has its own separate RCS-computing CSV parse
+logic that was never wired to `rcsAssessmentService.recordAssessment`
+(unlike `import.service.js`'s CSV/XLSX branch, which already does).
 
-#497's own text asked to coordinate with #493's MerkleService item (the
-SPREC half, `sample.sprec`) so the file's hash input never lands in a
-mixed migrated/half-migrated state — so this session landed both halves
-together in one PR rather than #497 alone.
+**Root cause:** the parser computed the certification result
+(`canonicalQualityAssessment`) and stored it under the snake_case
+`rcs_evaluation` key, but `SampleModel.create` only reads the camelCase
+`data.rcsEvaluation` — so the value was silently dropped before ever
+reaching the inserted `sample` document, and `recordAssessment` was
+never called at all.
 
-**Fix:** `MerkleService.js`'s `generateSampleHash(sample)` stays an
-unchanged pure sync function — still correct for write-time hashing on
-not-yet-persisted payloads in `import-lgpd.service.js`/`intakeWizard.js`,
-which (mirroring #498's finding for `_validateQuality`) have no
-specimenId to resolve a snapshot against yet at that point in the call
-chain. Added `MerkleService.js#generateSampleHashFromSample(db, sample)`
-— resolves the newest `RcsAssessment` and `SpecimenPreanalytics`
-snapshots for the sample's `specimenId` and hashes those in place of the
-legacy embedded `rcsScore`/`sprec` fields when present, falling back to
-the legacy embedded read when no snapshot is recorded yet.
-`SampleGraphValidator._validateIntegrity` — the actual persisted-sample
-read/verify site, found the same way #498 traced `_validateQuality` —
-now calls the new async resolver; its one call site is `await`ed.
+**Fix:** added the camelCase `rcsEvaluation` alias alongside the
+existing `rcs_evaluation` field in the row parser, and added a
+best-effort `rcsAssessmentService.recordAssessment(db, sample.specimenId,
+sample.rcsEvaluation)` call right after `samplesCollection.insertOne`,
+mirroring `import.service.js`'s pattern exactly (logs a warning and
+continues on failure rather than failing the row).
 
-Added unit coverage: 4 new cases in
-`merkle-service.pharmacology.test.js` for
-`generateSampleHashFromSample` (legacy fallback with no snapshot, legacy
-fallback with no specimenId, resolved-RcsAssessment path, resolved-
-SpecimenPreanalytics path). Updated `sample-graph-validator.service.test.js`:
-added a `specimenPreanalytics` collection mock (needed once specimenId
-is set, since integrity resolution now looks it up too), and fixed the
-existing RcsAssessment-quality test's `merkleRoot` fixture to match the
-now-resolved hash (previously sealed via the legacy/null path, which
-started failing `_validateIntegrity` once the recompute path also
-switched to resolving through the referenced snapshot).
+**Tests:** 2 new cases in
+`import-lgpd.service.importSamples.unit.test.js` — asserts the recorded
+`rcsAssessments` document shape (specimenId, rcsScore, scoreBasedGrade)
+and that a rejected `recordAssessment` write doesn't fail the row
+import. Added an `rcsAssessments` collection to the suite's `makeDb`
+mock. Full targeted run green: that file (34 tests) plus
+`import-lgpd.controller.gaps.test.js`,
+`import-lgpd.controller.importSamples-success-flag.test.js`,
+`import-lgpd.controller.test.js`, `rcs-assessment.service.test.js` (123
+total), no regressions.
 
-Targeted tests run and green: `merkle-service.pharmacology.test.js` (20),
-`sample-graph-validator.service.test.js` (5), plus regression checks —
-`import-lgpd.service.importSamples.unit.test.js`,
-`intakeWizard.routes.test.js`, `intakeWizard.governance-integration.test.js`,
-`import-lgpd.service.unit.test.js`,
-`import-lgpd.service.importPatients(Smart).unit.test.js`,
-`merkleTree.test.js`, `smart-import.api.test.js` (154 total), and
-`quality-domain.service.unit.test.js` (19) — all green, no regressions.
+Branch `test/499-import-lgpd-rcs-wiring` (off
+`feature/docker-e2e-backend-integration`, per this repo's
+`branch-guard.cjs` fallback for a build-loop slice with no dedicated
+prefix), one commit, fast-forward merged back in, local branch deleted.
+Pushed `feature/docker-e2e-backend-integration`. Closed #499 with a
+comment referencing the merge commit.
 
-Branch `fix/497-merkle-service-rcs-sprec-assessment` (off
-`feature/docker-e2e-backend-integration`), one commit, fast-forward
-merged back in, local branch deleted (never pushed separately). Pushed
-`feature/docker-e2e-backend-integration`. Closed #497 with a comment
-explaining the combined RCS+SPREC scope. Commented on #493 noting its
-MerkleService item is done but leaving it open — two items remain
-(`import.service.js` JSON-branch SPREC wiring, `sampleMerkleIntegrity.js`
-scope confirmation).
-
-**Filed #502** (enhancement, wrap-up finding): the resolved-snapshot
-integrity hash is only safe today because `recordAssessment`/
-`recordProfile` are each called exactly once per specimen, before
-`merkleRoot` is sealed. If a future re-assessment flow ever records a
-*second* snapshot for an already-sealed specimen, `_validateIntegrity`
-would resolve the newer snapshot and false-positive a "Violação de
-Integridade Criptográfica" for a sample that was only re-assessed, not
-tampered. Latent risk, not a live bug — needs a design call before any
-future work adds a way to re-record snapshots post-seal.
+**Filed #503** (enhancement, wrap-up finding): while in this file,
+noticed `sample.sprec` has the identical gap for the SPREC half —
+`import-lgpd.service.js` never calls
+`specimenPreanalyticsService.recordProfile` anywhere. #493 already
+tracks the analogous gap in `import.service.js`'s **JSON**-import
+branch specifically, but doesn't mention `import-lgpd.service.js` — this
+is a separate, previously-uncovered call site. Not fixed this session
+(out of #499's stated RCS-only scope); filed rather than silently
+expanding scope or letting it go unrecorded.
 
 No other friction this session (`wrap-up` ran in full, including the
-shipping addendum) — the only judgment call (bundling #497+#493's
-MerkleService item into one PR) was directly authorized by #497's own
-text, and the one architectural risk found (the re-assessment/integrity
-interaction above) got its own tracked issue rather than staying a
-comment.
+shipping addendum) — the only judgment call (scoping strictly to RCS per
+#499's own text, rather than also fixing the sibling SPREC gap found
+along the way) was resolved by filing #503 instead of scope-creeping or
+dropping the finding.
 
 ## Repo state
 
 - **`feature/docker-e2e-backend-integration`**: clean, pushed, up to
-  date with origin as of this session (commit `b2d0bd62`, "Resolve #497:
-  resolve Merkle sample hash's RCS and SPREC halves via referenced
-  snapshots").
+  date with origin as of this session (commit `3e58537e`, "Resolve #499:
+  wire import-lgpd's RCS CSV parse to rcsAssessmentService").
 - No dangling branches from this session.
-- Issues this session: **#497 closed** (comment posted). **#493**
-  commented, left open (2 items remain). **#502 filed** (new, open —
-  integrity-hash re-assessment risk).
+- Issues this session: **#499 closed** (comment posted, references merge
+  commit). **#503 filed** (new, open — SPREC wiring gap in
+  `import-lgpd.service.js`, parallel to #499's RCS fix).
 
 ## Which issue is next
 
@@ -94,21 +76,20 @@ Dennis has not yet said which issue to pick up next session; per
 queued.
 
 Remaining #491 children carried forward:
-- **#499** — `import-lgpd.service.js`'s separate RCS-computing CSV
-  parse logic never wired to `rcsAssessmentService.recordAssessment`.
 - **#500** — `rcs-certification.service.js` references RCS fields
   directly (own field-read audit still needed, scope not nailed down).
 - **#501** — `import.service.js`'s JSON-import branch never calls
-  `rcsAssessmentService.recordAssessment` (only CSV/XLSX does, per
-  `import.service.js` ~538-557 for the reference implementation).
-- **#499 and #501** share the same "wire up the missing
-  `recordAssessment` call" shape — could be done together.
+  `rcsAssessmentService.recordAssessment` (only CSV/XLSX does).
+- #499 (this session) and #501 shared the same "wire up the missing
+  `recordAssessment` call" shape — #501 is the one still open,
+  now for `import.service.js` specifically rather than
+  `import-lgpd.service.js`.
 
-**#491** stays open as the tracking issue — now 2 of 5 children closed
-(#497, #498); #499, #500, #501 still open.
+**#491** stays open as the tracking issue — now 3 of 5 children closed
+(#497, #498, #499); #500, #501 still open.
 
 **#493** (SPREC backend consumers, off #390) — 1 of 3 items done
-(MerkleService, via this session). Still open:
+(MerkleService, prior session). Still open:
 - `import.service.js`'s JSON-import branch — needs
   `specimenPreanalyticsService.recordProfile` wiring (pairs with #501's
   RCS equivalent — likely the same PR touches both, per #493's own
@@ -116,7 +97,13 @@ Remaining #491 children carried forward:
 - `sampleMerkleIntegrity.js` — confirm during implementation whether
   this belongs in backend scope or the frontend follow-up (#495).
 
-**#502** (new) — design call needed before any future RcsAssessment/
+**#503** (new, this session) — `import-lgpd.service.js`'s `sample.sprec`
+never wired to `specimenPreanalyticsService.recordProfile`. Same shape
+as this session's #499 fix, just the SPREC half instead of RCS. Not in
+#493's stated scope (which only names `import.service.js`'s JSON
+branch), so tracked separately.
+
+**#502** — design call needed before any future RcsAssessment/
 SpecimenPreanalytics re-recording flow: pin integrity verification to
 the snapshot version current at seal time, or keep integrity hashing on
 legacy embedded fields permanently.
@@ -154,26 +141,24 @@ re-verified this session):
 ## Dev stack state
 
 Nothing started this session — native vitest only (no Docker, no dev
-server), per the end-loaded gate order.
+server). Per the build-loop overlay, this was a backend-internal slice
+(not one of the milestone's own e2e Playwright specs), so the proof bar
+was the strongest native-only mock (an in-memory collection mock
+asserting real insertOne call shapes), not literal Docker/live Mongo.
 
 ## Which skills to use
 
-- `work-issue` -> `resolve-issue` was correct: #497 is a refactor
-  migrating a backend consumer off legacy embedded fields, not a bug,
-  coverage gap, or net-new capability.
-- When an issue's own text says "coordinate with sibling issue X so the
-  file doesn't land in a mixed state," treat that as authorization to
-  scope both halves into one PR even though only one issue was
-  explicitly picked — re-verify the sibling issue is still open/matches
-  before doing so (checked #493 fresh this session, confirmed its
-  MerkleService item description matched the actual code).
-- Migrating a *read* site to resolve through a referenced snapshot
-  instead of a legacy embedded field is not risk-free when that read
-  site is used for tamper/integrity detection (as opposed to #498's
-  quality-gate read, which has no "must match what was originally
-  sealed" constraint) — resolving the *newest* snapshot can diverge from
-  what was true when the value was sealed. Filed as #502 rather than
-  silently accepting the risk; worth checking for on any future
-  "migrate a hash/seal input off a legacy field" issue.
+- `work-issue` -> `build-loop` was correct: #499 named a capability
+  (`recordAssessment` wiring) that already exists and works elsewhere
+  (`import.service.js`) but was missing in this file — not a defect
+  deviation (`fix-bugs`) and not coverage for already-correct code
+  (`test-loop`, which never touches product code).
+- When a `build-loop` slice's fix touches a file with a sibling gap of
+  the identical shape (RCS wiring done, SPREC wiring for the same
+  parser still missing), check the tracking issue that's supposed to
+  cover it (#493 here) actually names *this* file before assuming it's
+  covered — #493 only named `import.service.js`'s JSON branch, not
+  `import-lgpd.service.js`, so the sibling gap here needed its own issue
+  (#503) rather than being assumed already tracked.
 - No project board found for this repo, so boarding step was skipped —
   matches prior sessions' behavior.
