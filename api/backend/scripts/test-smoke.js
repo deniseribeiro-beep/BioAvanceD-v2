@@ -12,11 +12,23 @@ const fs = require('fs');
 const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
-const base = process.argv[2] || process.env.SMOKE_BASE_REF || 'origin/main';
 
 function git(args) {
   return execFileSync('git', args, { cwd: ROOT, encoding: 'utf8' });
 }
+
+// #516: origin/main is only a cheap diff target when the working branch
+// is already close to it. On a long-lived integration branch that never
+// merges back to main until it ships, origin/main is a strict ancestor
+// of HEAD (not a divergence) — merge-base(HEAD, origin/main) collapses
+// to origin/main itself, so that doesn't help either. What "smoke
+// check" actually means per-iteration is "did my most recent change
+// break something," so the only base ref that's cheap on *every* branch
+// shape is HEAD: diff the working tree (uncommitted + untracked) against
+// the last commit. CI callers checking a specific PR/merge should pass
+// an explicit base ref (arg or SMOKE_BASE_REF) rather than rely on this
+// default.
+const base = process.argv[2] || process.env.SMOKE_BASE_REF || 'HEAD';
 
 function changedFiles() {
   const tracked = git(['diff', '--name-only', '--relative', base])
