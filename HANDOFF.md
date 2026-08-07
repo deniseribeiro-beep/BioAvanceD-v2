@@ -1,73 +1,71 @@
 # HANDOFF
 
 **Written:** 2026-08-07, end of session on `feature/docker-e2e-backend-integration`,
-after resolving #499.
+after resolving #501.
 
 ## What happened this session
 
-Dennis said "pick #499". Routed via `work-issue` -> `build-loop` (a
-missing-wiring capability build, not a defect or coverage-only gap):
-`import-lgpd.service.js` has its own separate RCS-computing CSV parse
-logic that was never wired to `rcsAssessmentService.recordAssessment`
-(unlike `import.service.js`'s CSV/XLSX branch, which already does).
+Dennis said "pick #501". Routed via `work-issue` -> `build-loop` (a
+missing-wiring capability build, same shape as last session's #499):
+`import.service.js`'s **JSON**-import branch of `importSamples`
+(lines ~430-486) never called `rcsAssessmentService.recordAssessment`
+after `insertOne` — only the CSV/XLSX branch (lines ~538-559) did.
 
-**Root cause:** the parser computed the certification result
-(`canonicalQualityAssessment`) and stored it under the snake_case
-`rcs_evaluation` key, but `SampleModel.create` only reads the camelCase
-`data.rcsEvaluation` — so the value was silently dropped before ever
-reaching the inserted `sample` document, and `recordAssessment` was
-never called at all.
+Unlike #499 (`import-lgpd.service.js`, which needed a camelCase
+`rcsEvaluation` alias added to its own CSV row parser before the value
+even reached `SampleModel.create`), no parser fix was needed here:
+`import.service.js`'s JSON branch passes `sampleDataRaw` straight into
+`qualityCompatibility.normalizeSample` and `SampleModel.create`, which
+already reads `data.rcsEvaluation` directly from the JSON payload. The
+gap was purely the missing `recordAssessment` call itself.
 
-**Fix:** added the camelCase `rcsEvaluation` alias alongside the
-existing `rcs_evaluation` field in the row parser, and added a
-best-effort `rcsAssessmentService.recordAssessment(db, sample.specimenId,
-sample.rcsEvaluation)` call right after `samplesCollection.insertOne`,
-mirroring `import.service.js`'s pattern exactly (logs a warning and
-continues on failure rather than failing the row).
+**Fix:** added the identical best-effort
+`rcsAssessmentService.recordAssessment(db, sample.specimenId,
+sample.rcsEvaluation)` call (guarded by `if (sample.rcsEvaluation)`,
+logs a warning and continues on failure) right after the JSON branch's
+`samplesCollection.insertOne`, mirroring the CSV/XLSX branch's existing
+block exactly.
 
-**Tests:** 2 new cases in
-`import-lgpd.service.importSamples.unit.test.js` — asserts the recorded
-`rcsAssessments` document shape (specimenId, rcsScore, scoreBasedGrade)
-and that a rejected `recordAssessment` write doesn't fail the row
-import. Added an `rcsAssessments` collection to the suite's `makeDb`
-mock. Full targeted run green: that file (34 tests) plus
-`import-lgpd.controller.gaps.test.js`,
-`import-lgpd.controller.importSamples-success-flag.test.js`,
-`import-lgpd.controller.test.js`, `rcs-assessment.service.test.js` (123
-total), no regressions.
+**Tests:** 2 new cases added to `import.service.importSamples.test.js`'s
+JSON describe block — asserts the recorded `rcsAssessments` document
+shape (specimenId, rcsScore, scoreBasedGrade) and that a rejected
+`recordAssessment` write doesn't fail the row import. Also extended
+that file's `makeDb` helper to route by collection name (added
+`makeRcsAssessmentsCollection()` + an optional second arg), since the
+old `makeDb(collection)` returned the same collection for every name
+and couldn't distinguish `samples` inserts from `rcsAssessments`
+inserts. Full targeted run green: `import.service.importSamples.test.js`
+(14 tests) plus `import.service.importPatients.test.js`,
+`import.service.sprec.test.js`, `import.service.unit.test.js`,
+`import.service.importLocationsTemperature.test.js`,
+`rcs-assessment.service.test.js` (79 total), no regressions.
 
-Branch `test/499-import-lgpd-rcs-wiring` (off
-`feature/docker-e2e-backend-integration`, per this repo's
-`branch-guard.cjs` fallback for a build-loop slice with no dedicated
-prefix), one commit, fast-forward merged back in, local branch deleted.
-Pushed `feature/docker-e2e-backend-integration`. Closed #499 with a
-comment referencing the merge commit.
+Branch `test/501-import-json-rcs-wiring` (off
+`feature/docker-e2e-backend-integration`, same `branch-guard.cjs`
+fallback as #499), one commit, fast-forward merged back in, local
+branch deleted. Pushed `feature/docker-e2e-backend-integration`. Closed
+#501 with a comment referencing the merge commit.
 
-**Filed #503** (enhancement, wrap-up finding): while in this file,
-noticed `sample.sprec` has the identical gap for the SPREC half —
-`import-lgpd.service.js` never calls
-`specimenPreanalyticsService.recordProfile` anywhere. #493 already
-tracks the analogous gap in `import.service.js`'s **JSON**-import
-branch specifically, but doesn't mention `import-lgpd.service.js` — this
-is a separate, previously-uncovered call site. Not fixed this session
-(out of #499's stated RCS-only scope); filed rather than silently
-expanding scope or letting it go unrecorded.
+No new issue filed this session: the sibling SPREC gap in this same
+JSON branch (`specimenPreanalyticsService.recordProfile` never called)
+is already covered by #493, which explicitly names
+`import.service.js`'s JSON-import branch — checked before assuming
+coverage, per last session's lesson about #503 (where the same check
+found #493 did *not* cover `import-lgpd.service.js` and a new issue was
+needed). This time it did cover the named file, so nothing new to file.
 
 No other friction this session (`wrap-up` ran in full, including the
-shipping addendum) — the only judgment call (scoping strictly to RCS per
-#499's own text, rather than also fixing the sibling SPREC gap found
-along the way) was resolved by filing #503 instead of scope-creeping or
-dropping the finding.
+shipping addendum) — no judgment calls needed beyond the #493-coverage
+check above.
 
 ## Repo state
 
 - **`feature/docker-e2e-backend-integration`**: clean, pushed, up to
-  date with origin as of this session (commit `3e58537e`, "Resolve #499:
-  wire import-lgpd's RCS CSV parse to rcsAssessmentService").
+  date with origin as of this session (commit `2cc0adb4`, "Resolve #501:
+  wire import.service.js's JSON-import branch to rcsAssessmentService").
 - No dangling branches from this session.
-- Issues this session: **#499 closed** (comment posted, references merge
-  commit). **#503 filed** (new, open — SPREC wiring gap in
-  `import-lgpd.service.js`, parallel to #499's RCS fix).
+- Issues this session: **#501 closed** (comment posted, references merge
+  commit). No new issues filed.
 
 ## Which issue is next
 
@@ -75,33 +73,24 @@ Dennis has not yet said which issue to pick up next session; per
 `handoff`'s "only if the user explicitly said so" rule, nothing is
 queued.
 
-Remaining #491 children carried forward:
-- **#500** — `rcs-certification.service.js` references RCS fields
-  directly (own field-read audit still needed, scope not nailed down).
-- **#501** — `import.service.js`'s JSON-import branch never calls
-  `rcsAssessmentService.recordAssessment` (only CSV/XLSX does).
-- #499 (this session) and #501 shared the same "wire up the missing
-  `recordAssessment` call" shape — #501 is the one still open,
-  now for `import.service.js` specifically rather than
-  `import-lgpd.service.js`.
-
-**#491** stays open as the tracking issue — now 3 of 5 children closed
-(#497, #498, #499); #500, #501 still open.
+**#491** stays open as the tracking issue — now 4 of 5 children closed
+(#497, #498, #499, #501); only **#500** still open (`rcs-certification.service.js`
+references RCS fields directly — own field-read audit still needed,
+scope not nailed down).
 
 **#493** (SPREC backend consumers, off #390) — 1 of 3 items done
 (MerkleService, prior session). Still open:
 - `import.service.js`'s JSON-import branch — needs
-  `specimenPreanalyticsService.recordProfile` wiring (pairs with #501's
-  RCS equivalent — likely the same PR touches both, per #493's own
-  text).
+  `specimenPreanalyticsService.recordProfile` wiring (pairs with this
+  session's RCS fix — likely the same shape, same file, just the SPREC
+  half instead of RCS half; this session did NOT touch it, stayed
+  strictly to #501's RCS-only scope).
 - `sampleMerkleIntegrity.js` — confirm during implementation whether
   this belongs in backend scope or the frontend follow-up (#495).
 
-**#503** (new, this session) — `import-lgpd.service.js`'s `sample.sprec`
-never wired to `specimenPreanalyticsService.recordProfile`. Same shape
-as this session's #499 fix, just the SPREC half instead of RCS. Not in
-#493's stated scope (which only names `import.service.js`'s JSON
-branch), so tracked separately.
+**#503** (filed prior session) — `import-lgpd.service.js`'s
+`sample.sprec` never wired to `specimenPreanalyticsService.recordProfile`.
+Not picked up this session.
 
 **#502** — design call needed before any future RcsAssessment/
 SpecimenPreanalytics re-recording flow: pin integrity verification to
@@ -143,22 +132,25 @@ re-verified this session):
 Nothing started this session — native vitest only (no Docker, no dev
 server). Per the build-loop overlay, this was a backend-internal slice
 (not one of the milestone's own e2e Playwright specs), so the proof bar
-was the strongest native-only mock (an in-memory collection mock
-asserting real insertOne call shapes), not literal Docker/live Mongo.
+was the strongest native-only mock (an in-memory collection mock that
+routes by collection name and asserts real insertOne call shapes), not
+literal Docker/live Mongo.
 
 ## Which skills to use
 
-- `work-issue` -> `build-loop` was correct: #499 named a capability
+- `work-issue` -> `build-loop` was correct: #501 named a capability
   (`recordAssessment` wiring) that already exists and works elsewhere
-  (`import.service.js`) but was missing in this file — not a defect
-  deviation (`fix-bugs`) and not coverage for already-correct code
-  (`test-loop`, which never touches product code).
-- When a `build-loop` slice's fix touches a file with a sibling gap of
-  the identical shape (RCS wiring done, SPREC wiring for the same
-  parser still missing), check the tracking issue that's supposed to
-  cover it (#493 here) actually names *this* file before assuming it's
-  covered — #493 only named `import.service.js`'s JSON branch, not
-  `import-lgpd.service.js`, so the sibling gap here needed its own issue
-  (#503) rather than being assumed already tracked.
+  in the same file (the CSV/XLSX branch) but was missing in the JSON
+  branch — not a defect deviation (`fix-bugs`) and not coverage for
+  already-correct code (`test-loop`, which never touches product code).
+- When a `build-loop` slice's fix has a sibling gap of the identical
+  shape (RCS wiring done, SPREC wiring for the same branch still
+  missing), check whether the tracking issue that's supposed to cover
+  it actually names *this specific file/branch* before assuming it's
+  covered or assuming it needs a new issue — this session's check of
+  #493 against `import.service.js`'s JSON branch found it *was* already
+  named, so no new issue was filed; last session's identical check
+  against `import-lgpd.service.js` found it was *not* named, so #503 was
+  filed. Same check, opposite outcome — don't skip the check either way.
 - No project board found for this repo, so boarding step was skipped —
   matches prior sessions' behavior.
