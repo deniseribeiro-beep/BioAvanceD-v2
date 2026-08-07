@@ -126,6 +126,18 @@ carries `sprec` and the storage/custody fields (`locationId`, `location`,
 land (#383, #388); storage/custody remains filed as its own follow-up
 (#389).
 
+**Landed in #507 (foundational return-shape slice, split from #494):**
+`MongoStorageRepository.findSampleById()` now attaches the current open
+`StorageAssignment` (dict-02 ELM-0167-0178) as a `storageAssignment` field
+on its return value, resolved via the new `findCurrentStorageAssignment()`
+method — additive, not a breaking change: the raw `storageLocation`
+snapshot stays on the returned object unchanged, since the three
+use-case consumers (`AllocateSampleUseCase`/`MoveSampleUseCase`/
+`ReleaseSampleUseCase`, #508) and `storageService.js` (#509) haven't been
+migrated onto the new field yet. Internal Mongo-level `storageLocation.*`
+reads/writes inside the repository itself are unaffected — they're the
+persistence-layer detail #507 explicitly left alone.
+
 **`locationId`/`location`/`locationID` are legacy, not a second storage
 system (#453, resolved 2026-08-06):** #450's audit found these fields
 alongside `storageLocation` and initially treated them as an unresolved
