@@ -383,6 +383,7 @@ describe('StorageService.allocateSampleToPosition', () => {
   let boxesUpdateOne;
   let samplesFindOne;
   let samplesUpdateOne;
+  let storageAssignmentsFindOne;
   let movements;
   let db;
   let service;
@@ -392,6 +393,8 @@ describe('StorageService.allocateSampleToPosition', () => {
     boxesUpdateOne = vi.fn().mockResolvedValue({});
     samplesFindOne = vi.fn();
     samplesUpdateOne = vi.fn().mockResolvedValue({ modifiedCount: 1 });
+    // No open StorageAssignment by default (sample not currently allocated).
+    storageAssignmentsFindOne = vi.fn().mockResolvedValue(null);
     movements = makeMovementsCollection();
 
     db = makeDb({
@@ -400,7 +403,9 @@ describe('StorageService.allocateSampleToPosition', () => {
         if (name === 'samples') return { findOne: samplesFindOne, updateOne: samplesUpdateOne };
         if (name === 'sample_movements') return movements;
         if (name === 'counters') return makeCountersCollection();
-        if (name === 'storageAssignments') return { insertOne: vi.fn().mockResolvedValue({}) };
+        if (name === 'storageAssignments') {
+          return { insertOne: vi.fn().mockResolvedValue({}), findOne: storageAssignmentsFindOne };
+        }
         if (name === 'storagePaths') return { findOne: vi.fn().mockResolvedValue(null) };
         throw new Error(`unexpected collection: ${name}`);
       }),
@@ -529,8 +534,12 @@ describe('StorageService.allocateSampleToPosition', () => {
       currentOccupancy: 0
     });
     samplesFindOne.mockResolvedValue({
-      _id: new ObjectId(sampleId),
-      storageLocation: { boxId: new ObjectId().toString(), position: 'B2' }
+      _id: new ObjectId(sampleId)
+    });
+    storageAssignmentsFindOne.mockResolvedValue({
+      boxId: new ObjectId().toString(),
+      positionCode: 'B2',
+      removedAt: null
     });
 
     const result = await service.allocateSampleToPosition(sampleId, boxId, 'A1');
@@ -629,6 +638,7 @@ describe('StorageService.autoAssignSampleToBox', () => {
   let boxesUpdateOne;
   let samplesFindOne;
   let samplesUpdateOne;
+  let storageAssignmentsFindOne;
   let movements;
   let db;
   let service;
@@ -638,6 +648,8 @@ describe('StorageService.autoAssignSampleToBox', () => {
     boxesUpdateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
     samplesFindOne = vi.fn();
     samplesUpdateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
+    // No open StorageAssignment by default (sample not currently allocated).
+    storageAssignmentsFindOne = vi.fn().mockResolvedValue(null);
     movements = makeMovementsCollection();
 
     db = makeDb({
@@ -645,6 +657,7 @@ describe('StorageService.autoAssignSampleToBox', () => {
         if (name === 'storageBoxes') return { findOne: boxesFindOne, updateOne: boxesUpdateOne };
         if (name === 'samples') return { findOne: samplesFindOne, updateOne: samplesUpdateOne };
         if (name === 'sample_movements') return movements;
+        if (name === 'storageAssignments') return { findOne: storageAssignmentsFindOne };
         throw new Error(`unexpected collection: ${name}`);
       }),
       getMongo: vi.fn(() => ({ startSession: vi.fn(() => makeSession()) }))
@@ -763,7 +776,7 @@ describe('StorageService.autoAssignSampleToBox', () => {
     expect(result.error).toBe('SAMPLE_NOT_FOUND');
   });
 
-  it('returns ALREADY_ALLOCATED on the pre-transaction check when the sample already has a storageLocation', async () => {
+  it('returns ALREADY_ALLOCATED on the pre-transaction check when the sample already has a StorageAssignment', async () => {
     boxesFindOne.mockResolvedValue({
       _id: new ObjectId(),
       dimension: { rows: 1, cols: 1 },
@@ -771,8 +784,12 @@ describe('StorageService.autoAssignSampleToBox', () => {
       currentOccupancy: 0
     });
     samplesFindOne.mockResolvedValue({
-      _id: new ObjectId(),
-      storageLocation: { boxId: new ObjectId().toString(), position: 'A1' }
+      _id: new ObjectId()
+    });
+    storageAssignmentsFindOne.mockResolvedValue({
+      boxId: new ObjectId().toString(),
+      positionCode: 'A1',
+      removedAt: null
     });
 
     const result = await service.autoAssignSampleToBox(new ObjectId().toString(), new ObjectId().toString());
@@ -998,6 +1015,7 @@ describe('StorageService.releaseSampleFromPosition', () => {
   let samplesFindOne;
   let samplesUpdateOne;
   let boxesUpdateOne;
+  let storageAssignmentsFindOne;
   let movements;
   let db;
   let service;
@@ -1006,6 +1024,8 @@ describe('StorageService.releaseSampleFromPosition', () => {
     samplesFindOne = vi.fn();
     samplesUpdateOne = vi.fn().mockResolvedValue({});
     boxesUpdateOne = vi.fn().mockResolvedValue({});
+    // No open StorageAssignment by default (sample not currently allocated).
+    storageAssignmentsFindOne = vi.fn().mockResolvedValue(null);
     movements = makeMovementsCollection();
 
     db = makeDb({
@@ -1014,7 +1034,9 @@ describe('StorageService.releaseSampleFromPosition', () => {
         if (name === 'storageBoxes') return { updateOne: boxesUpdateOne };
         if (name === 'sample_movements') return movements;
         if (name === 'counters') return makeCountersCollection();
-        if (name === 'storageAssignments') return { updateOne: vi.fn().mockResolvedValue({}) };
+        if (name === 'storageAssignments') {
+          return { updateOne: vi.fn().mockResolvedValue({}), findOne: storageAssignmentsFindOne };
+        }
         throw new Error(`unexpected collection: ${name}`);
       })
     });
@@ -1030,8 +1052,12 @@ describe('StorageService.releaseSampleFromPosition', () => {
       barcode: 'BC-5',
       quantity: 2,
       unit: 'mL',
+      // Internal Mongo-level snapshot the repository's own write path still
+      // reads/writes directly (#507's own precedent) — storageService's read
+      // now resolves boxId/position via the canonical storageAssignment below.
       storageLocation: { boxId, position: 'C3' }
     });
+    storageAssignmentsFindOne.mockResolvedValue({ boxId, positionCode: 'C3', removedAt: null });
 
     const result = await service.releaseSampleFromPosition(sampleId);
 
@@ -1047,8 +1073,7 @@ describe('StorageService.releaseSampleFromPosition', () => {
 
   it('returns NO_STORAGE_LOCATION when the sample is not currently allocated anywhere', async () => {
     samplesFindOne.mockResolvedValue({
-      _id: new ObjectId(),
-      storageLocation: null
+      _id: new ObjectId()
     });
 
     const result = await service.releaseSampleFromPosition(new ObjectId().toString());
@@ -1066,10 +1091,12 @@ describe('StorageService.releaseSampleFromPosition', () => {
   });
 
   it('returns RELEASE_ERROR when the box update rejects', async () => {
+    const boxId = new ObjectId().toString();
     samplesFindOne.mockResolvedValue({
       _id: new ObjectId(),
-      storageLocation: { boxId: new ObjectId().toString(), position: 'A1' }
+      storageLocation: { boxId, position: 'A1' }
     });
+    storageAssignmentsFindOne.mockResolvedValue({ boxId, positionCode: 'A1', removedAt: null });
     boxesUpdateOne.mockRejectedValue(new Error('db down'));
 
     const result = await service.releaseSampleFromPosition(new ObjectId().toString());
@@ -1090,12 +1117,17 @@ describe('StorageService.releaseSampleFromPosition', () => {
     isValidSpy.mockRestore();
   });
 
-  it('falls back to the raw storageLocation.boxId when `new ObjectId()` throws on an unparseable value', async () => {
+  it('falls back to the raw storageAssignment.boxId when `new ObjectId()` throws on an unparseable value', async () => {
     samplesFindOne.mockResolvedValue({
       _id: new ObjectId(),
       barcode: 'BC-7',
       quantity: 1,
       storageLocation: { boxId: 'not-a-valid-object-id', position: 'A1' }
+    });
+    storageAssignmentsFindOne.mockResolvedValue({
+      boxId: 'not-a-valid-object-id',
+      positionCode: 'A1',
+      removedAt: null
     });
 
     const result = await service.releaseSampleFromPosition(new ObjectId().toString());

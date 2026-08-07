@@ -147,6 +147,26 @@ snapshot's now-legacy `storageLocation`, so it was left alone.
 `storageService.js` (#509) is the remaining consumer not yet migrated
 onto `storageAssignment`.
 
+**Landed in #509 (consumer migration, split from #494):**
+`storageService.js`'s allocate/release orchestration
+(`allocateSampleToPosition`, `autoAssignSampleToBox`,
+`releaseSampleFromPosition`) now resolves a sample's current position via
+`MongoStorageRepository.findSampleById()`'s `storageAssignment.boxId`/
+`.positionCode` instead of reading `sample.storageLocation.boxId`/
+`.position` directly off the raw Mongo document. The service's own
+`appendImmutableAudit` payloads still write a `storageLocation: { boxId,
+position }` shape — that's the audit ledger's own field name, matching
+the precedent #508 set for the use-cases, left alone. Internal
+Mongo-level `storageLocation.*` reads/writes inside
+`MongoStorageRepository` itself (`allocateSamplePosition`,
+`autoAssignSamplePosition`, `releaseSamplePosition`, their in-transaction
+race re-checks) are unaffected — that's the persistence-layer detail
+#507 already left alone. `verifyBoxIntegrity` (an audit/consistency-check
+method, not orchestration) was also left alone, since it's explicitly
+comparing the box's `occupancyGrid` against the sample's own raw
+`storageLocation` snapshot for internal-consistency, not orchestrating a
+position change.
+
 **`locationId`/`location`/`locationID` are legacy, not a second storage
 system (#453, resolved 2026-08-06):** #450's audit found these fields
 alongside `storageLocation` and initially treated them as an unresolved
