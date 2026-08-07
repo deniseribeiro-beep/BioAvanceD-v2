@@ -400,6 +400,19 @@ doesn't compute RCS server-side at all today). Also outstanding: the
 JSON-import branch of `importSamples` doesn't compute or record RCS
 either (only the CSV/XLSX branch does).
 
+**Audited and confirmed clean (#500):** `rcs-certification.service.js`
+does *not* belong on the still-outstanding-consumers list above.
+`certify()` is a stateless calculator over an `sprec`/`matrixType`
+payload — `rcsScore`, `calculationTrace`, and `axisPenalties` are its
+own locally computed output, never a read off a `Sample` document. Its
+only backend consumer, `quality-domain.service.js`, already has the
+correct split: `resolveMethodologicalQuality`/`validateQualityForRelease`
+compute fresh from an `sprec` payload (not a persisted-field read —
+legitimate), and `validateQualityForReleaseFromSample` already resolves
+through `RcsAssessment` (#383). The actual outstanding consumers remain
+exactly the ones named above (MerkleService, neo4j projection, frontend
+types, the live registration path) — #500 named the wrong file.
+
 ### SpecimenPreanalytics
 
 - `specimenId` (reference to `Specimen`, not a duplicate — dict-07 row 38:
