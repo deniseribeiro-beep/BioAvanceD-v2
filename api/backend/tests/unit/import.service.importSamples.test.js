@@ -35,8 +35,19 @@ function makeSamplesCollection() {
   };
 }
 
-function makeDb(collection) {
-  return { collection: () => collection };
+function makeRcsAssessmentsCollection() {
+  const inserted = [];
+  return {
+    inserted,
+    insertOne: async (doc) => {
+      inserted.push(doc);
+      return { insertedId: `rcs-${inserted.length}` };
+    },
+  };
+}
+
+function makeDb(collection, rcsAssessmentsCollection = makeRcsAssessmentsCollection()) {
+  return { collection: (name) => (name === 'rcsAssessments' ? rcsAssessmentsCollection : collection) };
 }
 
 const validSample = (overrides = {}) => ({
@@ -141,6 +152,42 @@ describe('ImportService.importSamples (JSON)', () => {
     expect(result.errors).toEqual([
       expect.objectContaining({ error: 'duplicate key' }),
     ]);
+  });
+
+  it('records a referenced RcsAssessment snapshot when the imported sample carries rcsEvaluation', async () => {
+    vi.spyOn(SampleGraphValidator.prototype, 'validateSampleCompliance').mockResolvedValue({ suggestedStatus: 'QUARANTINE' });
+    const filePath = writeTmpFile('with-rcs.json', JSON.stringify(validSample({
+      specimenId: 'SPEC-JSON-1',
+      rcsEvaluation: { rcs_score: 87, score_based_grade: 'B' },
+    })));
+    const collection = makeSamplesCollection();
+    const rcsAssessmentsCollection = makeRcsAssessmentsCollection();
+
+    const result = await importService.importSamples(makeDb(collection, rcsAssessmentsCollection), { path: filePath, originalname: 'with-rcs.json' });
+
+    expect(result.success).toBe(1);
+    expect(rcsAssessmentsCollection.inserted).toHaveLength(1);
+    expect(rcsAssessmentsCollection.inserted[0]).toEqual(expect.objectContaining({
+      specimenId: 'SPEC-JSON-1',
+      rcsScore: 87,
+      scoreBasedGrade: 'B',
+    }));
+  });
+
+  it('logs a warning and still counts the row as success when recordAssessment rejects', async () => {
+    vi.spyOn(SampleGraphValidator.prototype, 'validateSampleCompliance').mockResolvedValue({ suggestedStatus: 'QUARANTINE' });
+    const filePath = writeTmpFile('rcs-record-fails.json', JSON.stringify(validSample({
+      specimenId: 'SPEC-JSON-2',
+      rcsEvaluation: { rcs_score: 50, score_based_grade: 'C' },
+    })));
+    const collection = makeSamplesCollection();
+    const rcsAssessmentsCollection = makeRcsAssessmentsCollection();
+    rcsAssessmentsCollection.insertOne = async () => { throw new Error('rcsAssessments write failed'); };
+
+    const result = await importService.importSamples(makeDb(collection, rcsAssessmentsCollection), { path: filePath, originalname: 'rcs-record-fails.json' });
+
+    expect(result.success).toBe(1);
+    expect(result.errors).toEqual([]);
   });
 });
 
