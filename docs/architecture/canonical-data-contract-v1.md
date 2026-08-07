@@ -434,6 +434,20 @@ for samples written before this pin existed (no
 `sealedRcsAssessmentId`/`sealedSpecimenPreanalyticsId` own-property at
 all).
 
+**Backfill for pre-#502 samples — landed #504:**
+`sealed-snapshot-backfill.service.js` (`backfillSealedSnapshotPins`, run
+via `src/scripts/backfillSealedSnapshotPins.js`) closes the fallback
+above: for each sample missing the `sealedRcsAssessmentId`/
+`sealedSpecimenPreanalyticsId` own-property, it resolves the newest
+`RcsAssessment`/`SpecimenPreanalytics` snapshot for that sample's
+`specimenId` (the one-and-only snapshot these pre-#502 samples have, in
+practice, since no re-assessment flow existed yet to record a second
+one) and sets the pin to that snapshot's `_id`. Idempotent — already-pinned
+samples and samples with no recorded snapshot are left untouched, so it's
+safe to re-run. Once run, `generateSampleHashFromSample`'s "resolve
+newest" fallback only ever applies to a sample with no snapshot recorded
+at all, closing the exposure window #504 described.
+
 ### SpecimenPreanalytics
 
 - `specimenId` (reference to `Specimen`, not a duplicate — dict-07 row 38:
