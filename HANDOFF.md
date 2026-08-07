@@ -1,72 +1,78 @@
 # HANDOFF
 
 **Written:** 2026-08-07, end of session on `feature/docker-e2e-backend-integration`,
-after resolving #514.
+after resolving #515.
 
 ## What happened this session
 
-Dennis said "pick #514" — the verification issue carried forward from the
-prior handoff (confirm `test:smoke`, added in #513, actually catches a
-#507-shaped cross-file break). **Routing:** `work-issue` → `resolve-issue`
-(a verification/confirmation task, not a new bug fix or new coverage —
-route 6's exception for confirming a previously-filed finding).
+Dennis said "pick #515" — the actual fix for last session's finding
+(`test:smoke` was a silent no-op because vitest 4.1.10's
+`--changed`/`related` never walks this repo's CommonJS `require()`
+graph). **Routing:** `work-issue` → `fix-bugs` (a reproducible defect in
+the `test:smoke` script itself, not new coverage or a spec'd-but-missing
+feature).
 
-**Verification required actually running the guarded command.** This
-repo's `full-suite-guard` hook blocks any bare/`--changed` vitest
-invocation regardless of args, by design (it can't tell a deliberate
-one-off check from an accidental full-suite run). Asked Dennis via
-`AskUserQuestion` for a one-time exception — approved.
+**Fix:** replaced the `vitest run --changed=origin/main` invocation with
+`api/backend/scripts/test-smoke.js`, a small grep-based CJS `require()`
+dependency-graph walker: builds the reverse-dependency graph over
+`src/` + `tests/` via static regex parsing of `require('./...')` calls,
+BFS from the changed files to their full set of transitively-dependent
+test files, then runs vitest on just that file list.
 
-**Repro:** renamed `MongoStorageRepository.findCurrentStorageAssignment`
-to `findCurrentStorageAssignmentRenamedForVerification` (definition only,
-call sites in `sample.service.js` and `findSampleById` left broken/
-untouched) — the exact #507 shape. Result:
+**Verified against the exact #507/#514/#515 repro**: renamed
+`MongoStorageRepository.findCurrentStorageAssignment` to
+`...RenamedForVerification` (definition only, call sites left broken),
+ran `SMOKE_BASE_REF=HEAD npm run test:smoke` — correctly selected and
+failed `MongoStorageRepository.test.js` plus its transitive dependents
+(`sample.service.test.js`, `storageService.test.js`, several
+integration tests, etc. — 4 failed files, 40 failed tests). Confirmed
+the fix actually catches the #507 shape that motivated #513/#514/#515.
+Break fully reverted before committing anything.
 
-- `npx vitest run --changed --passWithNoTests` (uncommitted diff): **0
-  test files selected.**
-- Same with `--changed=HEAD~1` after committing the break.
-- `npx vitest related src/infrastructure/persistence/mongo/MongoStorageRepository.js`:
-  also 0 — even though `tests/unit/MongoStorageRepository.test.js`
-  `require()`s that file **directly** (depth-1, not transitive).
-- Control: running that test file directly does correctly fail 3 tests
-  on the break (`this.findCurrentStorageAssignment is not a function`) —
-  proving the gap is entirely in vitest's `--changed`/`related`
-  selection, not in the tests themselves.
+**Hit and fixed one bug in the new script during verification**: `git
+diff --name-only` returns paths relative to the repo root, not the
+script's cwd (`api/backend`) — needed `--relative` or path resolution
+broke silently (every file resolved to a nonexistent path, so the graph
+walk found 0 affected tests on the first attempt). Also added a
+`MAX_SMOKE_FILES` (150) safety cap after the first real-world run
+against `origin/main` tried to pass 349 filenames to `npx vitest` and
+crashed with Windows' command-line-length limit.
 
-**Conclusion: `test:smoke` as configured is a no-op** — vitest 4.1.10's
-`--changed`/`related` isn't walking this repo's CommonJS `require()`
-graph at all, not even one level deep. It would pass on any pure
-cross-file break as long as no test file itself was touched — exactly
-the #507 failure mode it was built to catch.
+**New finding filed as a follow-up, not fixed this session:**
+[BioAvanceD-v2#516](https://github.com/deniseribeiro-beep/BioAvanceD-v2/issues/516)
+— `test:smoke`'s default base ref (`origin/main`) is currently
+non-functional on *this* branch: `feature/docker-e2e-backend-integration`
+is ~500 commits ahead of `origin/main` (which hasn't merged it yet), so
+the default diff picks up 349 test files and hits the new safety cap,
+erroring instead of running. The graph-walking logic itself is verified
+correct (per the repro above) — this is specifically about the *default
+base ref* choice on a long-lived integration branch. Commented on
+skills-pack#229 with the same "don't wire this in without accounting for
+X" note as last session's #514→#515 finding.
 
-**All repro changes fully reverted** (`git reset --hard HEAD~1`, working
-tree confirmed clean and matching origin) before closing anything out.
+**#515 closed**, fix merged into `feature/docker-e2e-backend-integration`
+at `d220ddc9`. Remote delete of `fix/515-test-smoke-cjs-graph` was
+blocked by the auto-mode permission classifier (same known pattern as
+BioAvanceD-v2#392/#391) — branch is merged and harmless, left in place
+for Dennis to clean up or grant permission for.
 
-**Filed:**
-- [BioAvanceD-v2#515](https://github.com/deniseribeiro-beep/BioAvanceD-v2/issues/515)
-  — fix or replace `test:smoke`'s detection mechanism; full repro and
-  findings live there.
-- Comment on
-  [skills-pack#229](https://github.com/DyeAllPies/dyeallpies-skills-pack/issues/229)
-  — stakes update: wiring `test:smoke` into the gate as currently
-  configured would give false confidence, not catch anything; that
-  should be fixed (via #515) before #229's gate-wiring work is applied.
-
-**#514 closed** with the negative result and pointer to #515.
-
-`wrap-up` ran: no friction beyond what's already noted above (the guard
-exception went exactly as the hook's own text describes). No scope creep
-— only the temporary synthetic-break commit touched anything, and that
-was reverted before the session ended.
+`wrap-up` ran: the #516 finding above is the friction/discovery worth
+noting; everything else went per the `fix-bugs` skill as written (branch
+→ reproduce → fix → verify → merge → close, in order).
 
 ## Repo state
 
-- **`feature/docker-e2e-backend-integration`**: at `55bce5c3`, clean, up
-  to date with origin. No commits landed this session (verification-only;
-  the synthetic break and its commit were both reverted).
-- Issues this session: **#514 closed**. **New:** BioAvanceD-v2#515 (open,
-  fix/replace `test:smoke`'s detection), skills-pack#229 (open, comment
-  added — now blocked-in-spirit on #515 landing first).
+- **`feature/docker-e2e-backend-integration`**: at `d220ddc9`, clean, up
+  to date with origin. Contains the merged #515 fix
+  (`api/backend/scripts/test-smoke.js`,
+  `api/backend/package.json`'s `test:smoke` script updated).
+- Remote branch `fix/515-test-smoke-cjs-graph` still exists (merged,
+  harmless) — local copy already deleted. Remote delete blocked by
+  permission classifier; safe for Dennis to delete manually.
+- Issues this session: **#515 closed** (merged at `d220ddc9`). **New:**
+  BioAvanceD-v2#516 (open — fix `test:smoke`'s default base-ref choice
+  for long-lived branches). skills-pack#229 got a second comment
+  (still open, now doubly-blocked-in-spirit pending #516 too).
 
 ## Which issue is next
 
@@ -76,14 +82,15 @@ queued.
 
 Candidates carried forward:
 
-**#515** (new, this session) — the actual fix: `test:smoke` doesn't
-detect cross-file breaks at all in this repo's CJS layout. Needs either
-a vitest config fix (if one exists for CJS `require`-graph walking) or a
-different detection mechanism entirely. Natural next pick given it's the
-direct continuation of this session's finding.
+**#516** (new, this session) — `test:smoke`'s default `base=origin/main`
+errors out on this branch specifically because of how far it's diverged
+from `origin/main`. Natural next pick if continuing this thread; likely
+fix is defaulting to something like `git merge-base HEAD origin/main`
+or letting CI callers pass an explicit base ref.
 
-**skills-pack#229** — pack-repo only, and now has a stated dependency:
-don't wire `test:smoke` into the gate until #515 lands.
+**skills-pack#229** — pack-repo only, now has two stated dependencies:
+don't wire `test:smoke` into the gate until both #515 (done) and #516
+(open) land.
 
 **#504** — the sealed-snapshot backfill script exists and is
 unit-tested, but has not been *run* against any live environment.
@@ -124,7 +131,8 @@ re-verified this session):
   `test/510-sample-service-canonical-storage-assignment`,
   `test/511-intake-wizard-canonical-storage-assignment`,
   `fix/512-quarantine-storage-scope-not-applicable`,
-  `fix/513-smoke-check-script` — all safe to delete, low priority
+  `fix/513-smoke-check-script`,
+  `fix/515-test-smoke-cjs-graph` — all safe to delete, low priority
   housekeeping).
 - **Next e2e slice** (per `E2E_TRACEABILITY_PLAN.md` and
   `playwright-specs`' spec inventory) — check issue #95's tracking
@@ -134,36 +142,24 @@ re-verified this session):
 
 ## Dev stack state
 
-Nothing started this session. Verification-only: one temporary local
-commit made and fully reverted (`git reset --hard`), no lasting code
-change. Working tree clean, matches origin.
+Nothing started this session. All verification ran vitest directly
+(targeted file lists via the new `test-smoke.js`, and a manual repro
+under `SMOKE_BASE_REF=HEAD`) — no Docker, no live app.
 
 ## Which skills to use
 
-- `work-issue` → `resolve-issue`: a "verify a prior finding" issue
-  routes to `resolve-issue` (route 3's exception), not `test-loop` or
-  `fix-bugs` — no new coverage was written and no product bug was fixed,
-  the deliverable was the confirmed-negative finding itself plus its
-  follow-up issue.
-- **New this session:** when a verification task genuinely needs to run
-  a guarded command (the `full-suite-guard` hook has no way to
-  distinguish a deliberate one-off check from an accidental full-suite
-  run), ask the user explicitly via `AskUserQuestion` rather than either
-  silently working around the guard or silently declining the task. The
-  guard's own block message already says to do this; this session is the
-  confirmation that asking-and-proceeding is the correct path, not a
-  reason to look for another way around the hook.
-- **New this session:** a negative verification result (the thing being
-  checked doesn't actually work) is still a complete resolution of the
-  issue that asked for verification — close it with the finding, and
-  open a *new* issue for the fix, rather than leaving the original open
-  "until it's actually fixed."
-- **New this session:** a finding that changes the stakes of a *different*
-  open issue (here: skills-pack#229's premise that `test:smoke` is
-  ready to wire into a gate) is worth a short comment on that issue too,
-  not just a mention in the issue actually being closed — this isn't the
-  "don't announce a merge on the tracking issue" case from
-  `resolve-issue`'s wrapping-up section, since #229 wasn't a
-  tracking/merge issue for this session's own branch; it was a
-  different issue whose correctness assumption this session's finding
-  directly undermined.
+- `work-issue` → `fix-bugs`: a reproducible defect in a repo script
+  (not product application code, but still tracked source under
+  `api/backend/scripts/`) routes to `fix-bugs` the same as any other
+  bug — reproduce first, fix, verify against the repro, merge, close.
+- **New this session:** when replacing a broken detection/tooling script,
+  verify the replacement against the *exact* prior repro before trusting
+  it — don't just trust that new logic "should" work. The first version
+  of `test-smoke.js` had its own silent bug (relative-path resolution)
+  that would have shipped undetected without re-running the #507-shaped
+  repro end to end.
+- **New this session:** a fix that works correctly in isolation can still
+  be non-functional under its *default* invocation on the specific branch
+  you're merging it into — running the actual `npm run <script>` command
+  (not just a scoped manual test) against the real branch state caught
+  #516, which a narrower verification would have missed.
