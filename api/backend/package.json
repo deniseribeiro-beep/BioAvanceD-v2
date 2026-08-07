@@ -53,7 +53,7 @@
     "test": "vitest run",
     "test:unit": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "test:smoke": "vitest run --changed=origin/main --passWithNoTests --reporter=dot",
+    "test:smoke": "node scripts/test-smoke.js",
     "test:arch": "node --test tests/architecture/*.arch.test.js",
     "test:ci": "npm run current-state:ci && npm run test:unit:vitest",
     "lint": "node scripts/lint.js",
