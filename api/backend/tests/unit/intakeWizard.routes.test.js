@@ -13,6 +13,7 @@ const auditLoggerPath = require.resolve('../../src/utils/auditLogger');
 const qualityDomainPath = require.resolve('../../src/services/quality-domain.service');
 const sampleServicePath = require.resolve('../../src/services/sample.service');
 const storageServicePath = require.resolve('../../src/services/storageService');
+const rcsAssessmentServicePath = require.resolve('../../src/services/rcs-assessment.service');
 const routePath = require.resolve('../../src/routes/intakeWizard.js');
 
 const allPaths = [
@@ -24,6 +25,7 @@ const allPaths = [
   qualityDomainPath,
   sampleServicePath,
   storageServicePath,
+  rcsAssessmentServicePath,
   routePath,
 ];
 
@@ -89,8 +91,11 @@ function loadRoute({
     quarantineReason: null,
   }));
 
+  const rcsAssessmentServiceModule = require(rcsAssessmentServicePath);
+  rcsAssessmentServiceModule.recordAssessment = vi.fn().mockResolvedValue({ _id: 'assessment-1' });
+
   const router = require(routePath);
-  return { router, notificationServiceModule, patientIdentityServiceModule, merkleServiceModule, collectionResolverModule, auditLoggerModule, qualityDomainModule };
+  return { router, notificationServiceModule, patientIdentityServiceModule, merkleServiceModule, collectionResolverModule, auditLoggerModule, qualityDomainModule, rcsAssessmentServiceModule };
 }
 
 function buildApp(router, db = {}) {
@@ -139,7 +144,7 @@ describe('intakeWizard routes', () => {
     it('happy path: persists the sample, links the patient, and returns 200', async () => {
       const insertOne = vi.fn().mockResolvedValue({ insertedId: 'sample-1' });
       const findOne = vi.fn().mockResolvedValue({ _id: 'sample-1', participantId: '12345678' });
-      const samplesCollection = { insertOne, findOne };
+      const samplesCollection = { insertOne, findOne, updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }) };
       const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
       const patientsCollection = { updateOne };
       const consentsCollection = { findOne: vi.fn().mockResolvedValue(null) };
@@ -212,6 +217,98 @@ describe('intakeWizard routes', () => {
       expect(auditLoggerModule.log).toHaveBeenCalledWith(
         expect.objectContaining({ action: 'PATIENT_MATCH_UPSERT' })
       );
+    });
+
+    // #505: intakeWizard already computed RCS via qualidade but never
+    // recorded a queryable RcsAssessment snapshot — mirrors #492's pattern
+    // in sample.service.js#createSample.
+    describe('RCS assessment recording (#505)', () => {
+      it('records an RcsAssessment and pins sealedRcsAssessmentId after a successful create', async () => {
+        const insertOne = vi.fn().mockResolvedValue({ insertedId: 'sample-1' });
+        const findOne = vi.fn().mockResolvedValue({ _id: 'sample-1', specimenId: 'spec-1', participantId: '12345678' });
+        const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
+        const samplesCollection = { insertOne, findOne, updateOne };
+        const patientsCollection = { updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }) };
+        const consentsCollection = { findOne: vi.fn().mockResolvedValue(null) };
+
+        const getCollectionImpl = vi.fn(async (_db, key) => {
+          if (key === 'samples') return samplesCollection;
+          if (key === 'patients') return patientsCollection;
+          if (key === 'consents') return consentsCollection;
+          throw new Error(`unexpected key ${key}`);
+        });
+
+        const { db } = buildHappyPathDb();
+
+        const { router, rcsAssessmentServiceModule } = loadRoute({
+          getCollectionImpl,
+          resolveMethodologicalQuality: () => ({ governance_status: 1, final_grade: 'A', rcs_score: 87.5 }),
+        });
+
+        const sampleServiceModule = require(sampleServicePath);
+        vi.spyOn(sampleServiceModule, 'createSample').mockResolvedValue({ _id: 'sample-1', specimenId: 'spec-1', participantId: '12345678' });
+
+        const StorageService = require(storageServicePath);
+        vi.spyOn(StorageService.prototype, 'autoAssignSampleToBox').mockResolvedValue({
+          success: true,
+          sampleLocation: { boxId: 'box-1', position: 'A1' },
+        });
+
+        const app = buildApp(router, db);
+        const res = await request(app).post('/api/intake-wizard').send(VALID_PAYLOAD);
+
+        expect(res.status).toBe(200);
+        expect(rcsAssessmentServiceModule.recordAssessment).toHaveBeenCalledWith(
+          db,
+          'spec-1',
+          expect.objectContaining({ final_grade: 'A', rcs_score: 87.5 })
+        );
+        expect(updateOne).toHaveBeenCalledWith(
+          { _id: 'sample-1' },
+          { $set: { sealedRcsAssessmentId: 'assessment-1' } }
+        );
+        expect(res.body.sample.sealedRcsAssessmentId).toBe('assessment-1');
+      });
+
+      it('does not fail the intake when recording the RcsAssessment snapshot rejects', async () => {
+        const insertOne = vi.fn().mockResolvedValue({ insertedId: 'sample-1' });
+        const findOne = vi.fn().mockResolvedValue({ _id: 'sample-1', specimenId: 'spec-1', participantId: '12345678' });
+        const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
+        const samplesCollection = { insertOne, findOne, updateOne };
+        const patientsCollection = { updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }) };
+        const consentsCollection = { findOne: vi.fn().mockResolvedValue(null) };
+
+        const getCollectionImpl = vi.fn(async (_db, key) => {
+          if (key === 'samples') return samplesCollection;
+          if (key === 'patients') return patientsCollection;
+          if (key === 'consents') return consentsCollection;
+          throw new Error(`unexpected key ${key}`);
+        });
+
+        const { db } = buildHappyPathDb();
+
+        const { router, rcsAssessmentServiceModule } = loadRoute({ getCollectionImpl });
+        rcsAssessmentServiceModule.recordAssessment = vi.fn().mockRejectedValue(new Error('mongo down'));
+
+        const sampleServiceModule = require(sampleServicePath);
+        vi.spyOn(sampleServiceModule, 'createSample').mockResolvedValue({ _id: 'sample-1', specimenId: 'spec-1', participantId: '12345678' });
+
+        const StorageService = require(storageServicePath);
+        vi.spyOn(StorageService.prototype, 'autoAssignSampleToBox').mockResolvedValue({
+          success: true,
+          sampleLocation: { boxId: 'box-1', position: 'A1' },
+        });
+
+        const app = buildApp(router, db);
+        const res = await request(app).post('/api/intake-wizard').send(VALID_PAYLOAD);
+
+        expect(res.status).toBe(200);
+        expect(res.body.success).toBe(true);
+        expect(updateOne).not.toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({ $set: expect.objectContaining({ sealedRcsAssessmentId: expect.anything() }) })
+        );
+      });
     });
 
     it('returns 500 when persisting the sample throws', async () => {
@@ -301,7 +398,7 @@ function defaultStorageContainersFindOne({ _id }) {
     function setupHappyMocks({ getCollectionImplExtra, allocationResult, resolveMethodologicalQuality } = {}) {
       const insertOne = vi.fn().mockResolvedValue({ insertedId: 'sample-1' });
       const findOne = vi.fn().mockResolvedValue({ _id: 'sample-1', participantId: '12345678' });
-      const samplesCollection = { insertOne, findOne };
+      const samplesCollection = { insertOne, findOne, updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }) };
       const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
       const patientsCollection = { updateOne };
 

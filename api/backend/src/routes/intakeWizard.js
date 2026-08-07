@@ -7,6 +7,8 @@ const { getCollection } = require('../utils/collectionResolver');
 const auditLogger = require('../utils/auditLogger');
 const qualityDomain = require('../services/quality-domain.service');
 const sampleService = require('../services/sample.service');
+const rcsAssessmentService = require('../services/rcs-assessment.service');
+const logger = require('../utils/logger');
 const { validate } = require('../contracts/canonical/v1');
 
 const CRITICAL_SENSOR_STATUSES = ['maintenance', 'calibration', 'error', 'offline'];
@@ -543,6 +545,22 @@ async function handleIntakeWizard(req, res) {
 
     const samplesCollection = await getCollection(db, 'samples');
     const allocatedSample = await samplesCollection.findOne({ _id: createdSample._id }) || createdSample;
+
+    // #505: intakeWizard already computes RCS via qualidade above but never
+    // recorded a queryable RcsAssessment snapshot — mirrors #492's pattern
+    // (sample.service.js#createSample), recorded once the sample has fully
+    // landed (create + allocation both already succeeded by this point) so
+    // a best-effort failure here never fails the intake itself.
+    try {
+      const assessment = await rcsAssessmentService.recordAssessment(db, allocatedSample.specimenId, qualidade);
+      await samplesCollection.updateOne(
+        { _id: createdSample._id },
+        { $set: { sealedRcsAssessmentId: assessment._id } }
+      );
+      allocatedSample.sealedRcsAssessmentId = assessment._id;
+    } catch (assessmentError) {
+      logger.error('Falha ao registrar RcsAssessment para a amostra do intake wizard:', assessmentError.message || assessmentError);
+    }
 
     const patientsCollection = await getCollection(db, 'patients');
     await patientsCollection.updateOne(

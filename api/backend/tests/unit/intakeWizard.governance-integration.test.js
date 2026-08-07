@@ -168,6 +168,9 @@ function loadApp({ consentActive, samplesCollection, quarantineActionsCollection
           }),
         };
       }
+      if (name === 'rcsAssessments') {
+        return { insertOne: vi.fn().mockResolvedValue({ insertedId: 'assessment-1' }) };
+      }
       throw new Error(`unexpected collection ${name}`);
     },
   };

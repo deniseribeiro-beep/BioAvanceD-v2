@@ -420,10 +420,26 @@ append and storage allocation both succeeded), records a referenced
 pins `sealedRcsAssessmentId` per #502's convention. A request with no
 `sprec` behaves exactly as before (no RCS computed, no assessment
 recorded) — this only activates the path when the payload actually
-carries SPREC data. `intakeWizard.js` is unaffected by this change and
-still doesn't record an `RcsAssessment` snapshot (tracked separately,
-same "no dict-02 entity ever recorded" gap the seal-time-pin note below
-already documents for that route).
+carries SPREC data. `intakeWizard.js` was unaffected by this change (it
+computes `qualidade` from `data.specimen` directly, not from a `sprec`
+field on the sample document, so `createSample`'s `sprec`-triggered
+branch never fires for it) — its own recording gap is closed separately
+below by #505.
+
+**`intakeWizard.js` RcsAssessment recording — landed #505:** confirmed
+`intakeWizard.js` already computed RCS via
+`qualityDomain.resolveMethodologicalQuality(data?.specimen || {})` and
+set it on the created sample as `qualityAssessment`, but never recorded
+a referenced `RcsAssessment` snapshot or pinned `sealedRcsAssessmentId`
+— `GET /:id/rcs-assessments` returned nothing for intake-wizard samples.
+Fixed by calling `rcsAssessmentService.recordAssessment(db,
+specimenId, qualidade)` once the sample has fully landed (create +
+allocation both already succeeded by that point in the handler) and
+pinning `sealedRcsAssessmentId`, same best-effort (caught, logged,
+doesn't fail the intake) error handling `sample.service.js#createSample`
+uses (#492). No new computation — `qualidade` is already the exact
+`certify()`-shaped result `recordAssessment` expects, computed earlier
+in the same handler.
 
 **Audited and confirmed clean (#500):** `rcs-certification.service.js`
 does *not* belong on the still-outstanding-consumers list above.
@@ -457,7 +473,11 @@ pinned snapshot by `_id` when the field is present on the sample
 document, falling back to the pre-#502 "resolve newest" behavior only
 for samples written before this pin existed (no
 `sealedRcsAssessmentId`/`sealedSpecimenPreanalyticsId` own-property at
-all).
+all). `intakeWizard.js` samples fell into this "no snapshot at all" case
+until #505 landed (see the `intakeWizard.js` RcsAssessment recording
+note above) — the #504 backfill script's own scope note calling out
+"samples with no recorded snapshot at all" was describing exactly this
+population.
 
 **Backfill for pre-#502 samples — landed #504:**
 `sealed-snapshot-backfill.service.js` (`backfillSealedSnapshotPins`, run
