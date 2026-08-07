@@ -39,9 +39,13 @@ function makeRcsAssessmentsCollection() {
   const inserted = [];
   return {
     inserted,
+    // Mirrors the real MongoDB driver, which mutates the passed document
+    // with the generated _id — recordAssessment's caller relies on this to
+    // pin the sample to the returned snapshot's _id (#502, #506).
     insertOne: async (doc) => {
+      doc._id = `rcs-${inserted.length + 1}`;
       inserted.push(doc);
-      return { insertedId: `rcs-${inserted.length}` };
+      return { insertedId: doc._id };
     },
   };
 }
@@ -50,9 +54,12 @@ function makeSpecimenPreanalyticsCollection() {
   const inserted = [];
   return {
     inserted,
+    // Same real-driver _id mutation as rcsAssessmentsCollection above, for
+    // recordProfile's caller (#502, #506).
     insertOne: async (doc) => {
+      doc._id = `preanalytics-${inserted.length + 1}`;
       inserted.push(doc);
-      return { insertedId: `preanalytics-${inserted.length}` };
+      return { insertedId: doc._id };
     },
   };
 }
@@ -103,6 +110,8 @@ describe('ImportService.importSamples (JSON)', () => {
     expect(collection.updates).toHaveLength(2);
     const releaseStatusUpdate = collection.updates.find((call) => call.update?.$set?.releaseStatus);
     expect(releaseStatusUpdate.update.$set.releaseStatus).toBe('AVAILABLE');
+    const sprecPinUpdate = collection.updates.find((call) => call.update?.$set?.sealedSpecimenPreanalyticsId);
+    expect(sprecPinUpdate.update.$set.sealedSpecimenPreanalyticsId).toBe('preanalytics-1');
   });
 
   it('forces QUARANTINE (no update needed) when tcle_id/sprec ethics data is missing, since it defaults to QUARANTINE already', async () => {
@@ -130,6 +139,8 @@ describe('ImportService.importSamples (JSON)', () => {
     expect(collection.updates).toHaveLength(2);
     const releaseStatusUpdate = collection.updates.find((call) => call.update?.$set?.releaseStatus);
     expect(releaseStatusUpdate.update.$set.releaseStatus).toBe('QUARANTINE');
+    const sprecPinUpdate = collection.updates.find((call) => call.update?.$set?.sealedSpecimenPreanalyticsId);
+    expect(sprecPinUpdate.update.$set.sealedSpecimenPreanalyticsId).toBe('preanalytics-1');
   });
 
   it('records a model-validation error and does not insert when participantId is missing', async () => {
@@ -191,6 +202,8 @@ describe('ImportService.importSamples (JSON)', () => {
       rcsScore: 87,
       scoreBasedGrade: 'B',
     }));
+    const rcsPinUpdate = collection.updates.find((call) => call.update?.$set?.sealedRcsAssessmentId);
+    expect(rcsPinUpdate.update.$set.sealedRcsAssessmentId).toBe('rcs-1');
   });
 
   it('logs a warning and still counts the row as success when recordAssessment rejects', async () => {
@@ -227,6 +240,8 @@ describe('ImportService.importSamples (JSON)', () => {
       sampleType: 'BLD',
       primaryContainer: 'PED',
     }));
+    const sprecPinUpdate = collection.updates.find((call) => call.update?.$set?.sealedSpecimenPreanalyticsId);
+    expect(sprecPinUpdate.update.$set.sealedSpecimenPreanalyticsId).toBe('preanalytics-1');
   });
 
   it('logs a warning and still counts the row as success when recordProfile rejects (#493)', async () => {
