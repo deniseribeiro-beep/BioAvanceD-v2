@@ -20,6 +20,7 @@ const participantIdentityService = require('./PatientIdentityService');
 const { generateSampleHash } = require('./MerkleService');
 const qualityDomain = require('./quality-domain.service');
 const rcsAssessmentService = require('./rcs-assessment.service');
+const specimenPreanalyticsService = require('./specimen-preanalytics.service');
 const AllocateSampleUseCase = require('../core/use-cases/AllocateSampleUseCase');
 const MongoStorageRepository = require('../infrastructure/persistence/mongo/MongoStorageRepository');
 const MongoAuditRepository = require('../infrastructure/persistence/mongo/MongoAuditRepository');
@@ -1146,6 +1147,24 @@ class ImportLGPDService {
               logger.warn('[IMPORT_LGPD] Falha ao registrar snapshot RcsAssessment referenciado, amostra mantém cópia embutida', {
                 specimenId: sample.specimenId,
                 error: assessmentError?.message || String(assessmentError),
+              });
+            }
+          }
+
+          // #503: mirrors the RCS pin above and import.service.js's
+          // CSV/XLSX branch — records the canonical, referenced
+          // SpecimenPreanalytics snapshot alongside the embedded sprec copy.
+          if (sample.sprec) {
+            try {
+              const profile = await specimenPreanalyticsService.recordProfile(db, sample.specimenId, sample.sprec);
+              await samplesCollection.updateOne(
+                { _id: insertResult.insertedId },
+                { $set: { sealedSpecimenPreanalyticsId: profile._id } }
+              );
+            } catch (profileError) {
+              logger.warn('[IMPORT_LGPD] Falha ao registrar snapshot SpecimenPreanalytics referenciado, amostra mantém cópia embutida', {
+                specimenId: sample.specimenId,
+                error: profileError?.message || String(profileError),
               });
             }
           }

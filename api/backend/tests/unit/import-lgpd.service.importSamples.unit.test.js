@@ -117,6 +117,14 @@ function makeDb({ sampleTypeFound = true, sampleOriginFound = true, protocolFoun
       return Promise.resolve({ insertedId: 'assessment-1' });
     }),
   };
+  const specimenPreanalyticsCollection = {
+    // Same real-driver _id mutation as rcsAssessmentsCollection above,
+    // for recordProfile's caller (#503).
+    insertOne: vi.fn().mockImplementation((doc) => {
+      doc._id = 'profile-1';
+      return Promise.resolve({ insertedId: 'profile-1' });
+    }),
+  };
 
   const collections = {
     samples: samplesCollection,
@@ -129,6 +137,7 @@ function makeDb({ sampleTypeFound = true, sampleOriginFound = true, protocolFoun
     counters: countersCollection,
     storagePaths: storagePathsCollection,
     rcsAssessments: rcsAssessmentsCollection,
+    specimenPreanalytics: specimenPreanalyticsCollection,
   };
 
   const session = makeSession();
@@ -144,7 +153,7 @@ function makeDb({ sampleTypeFound = true, sampleOriginFound = true, protocolFoun
     },
   };
 
-  return { db, samplesCollection, patientsCollection, rcsAssessmentsCollection };
+  return { db, samplesCollection, patientsCollection, rcsAssessmentsCollection, specimenPreanalyticsCollection };
 }
 
 describe('ImportLGPDService.importSamples', () => {
@@ -152,9 +161,10 @@ describe('ImportLGPDService.importSamples', () => {
   let samplesCollection;
   let patientsCollection;
   let rcsAssessmentsCollection;
+  let specimenPreanalyticsCollection;
 
   beforeEach(() => {
-    ({ db, samplesCollection, patientsCollection, rcsAssessmentsCollection } = makeDb());
+    ({ db, samplesCollection, patientsCollection, rcsAssessmentsCollection, specimenPreanalyticsCollection } = makeDb());
 
     vi.spyOn(patientIdentityService, 'matchOrUpsertParticipant').mockResolvedValue(MATCHED_PATIENT);
     vi.spyOn(qualityDomain, 'resolveMethodologicalQuality').mockReturnValue({
@@ -311,6 +321,41 @@ describe('ImportLGPDService.importSamples', () => {
     const failingRcsAssessments = { insertOne: vi.fn().mockRejectedValue(new Error('mongo down')) };
     const originalCollection = db.collection;
     db.collection = vi.fn((name) => (name === 'rcsAssessments' ? failingRcsAssessments : originalCollection(name)));
+    vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW]);
+
+    const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' });
+
+    expect(result.success).toBe(1);
+    expect(samplesCollection.insertOne).toHaveBeenCalledTimes(1);
+  });
+
+  // #503: mirrors #499's RCS fix but for the SPREC half — import-lgpd's
+  // sample.sprec was persisted embedded on the sample but never recorded as
+  // a canonical, referenced SpecimenPreanalytics snapshot, unlike
+  // import.service.js's CSV/XLSX branch (~line 576).
+  it('records a referenced SpecimenPreanalytics snapshot alongside the embedded copy (#503)', async () => {
+    vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW]);
+
+    const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' });
+
+    expect(result.success).toBe(1);
+    const inserted = samplesCollection.insertOne.mock.calls[0][0];
+    expect(specimenPreanalyticsCollection.insertOne).toHaveBeenCalledTimes(1);
+    const recorded = specimenPreanalyticsCollection.insertOne.mock.calls[0][0];
+    expect(recorded.specimenId).toBe(inserted.specimenId);
+    expect(recorded.sampleType).toBe('ST1');
+    expect(recorded.primaryContainer).toBe('PC1');
+    const pinUpdateCall = samplesCollection.updateOne.mock.calls.find(
+      (call) => call[1]?.$set?.sealedSpecimenPreanalyticsId
+    );
+    expect(pinUpdateCall).toBeDefined();
+    expect(pinUpdateCall[1].$set.sealedSpecimenPreanalyticsId).toBe('profile-1');
+  });
+
+  it('does not fail the row import when recording the SpecimenPreanalytics snapshot rejects (#503)', async () => {
+    const failingSpecimenPreanalytics = { insertOne: vi.fn().mockRejectedValue(new Error('mongo down')) };
+    const originalCollection = db.collection;
+    db.collection = vi.fn((name) => (name === 'specimenPreanalytics' ? failingSpecimenPreanalytics : originalCollection(name)));
     vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW]);
 
     const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' });

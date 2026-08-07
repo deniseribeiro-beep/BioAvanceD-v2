@@ -514,8 +514,16 @@ carries its own embedded `sprec` copy (only the axis slots +
 `sprecCode`/`sprecVersion`, not the derived fields) — removing that
 duplication requires migrating every consumer that reads it directly off
 `Sample` (tracked in #390, alongside the equivalent RCS migration). The
-JSON-import branch of `importSamples` doesn't record a profile either
-(only the CSV/XLSX branch does, the same gap #383 left for RCS).
+JSON-import branch of `import.service.js`'s `importSamples` doesn't
+record a profile either (only the CSV/XLSX branch does, the same gap
+#383 left for RCS; tracked in #493).
+
+**Landed in #503:** `import-lgpd.service.js`'s `importSamples` now also
+calls `specimenPreanalyticsService.recordProfile` after inserting the
+sample (best-effort — logs a warning and continues on failure), the
+SPREC counterpart to #499's RCS fix for the same file. Before this, the
+LGPD import path persisted `sample.sprec` embedded only, with no
+canonical `SpecimenPreanalytics` snapshot recorded at all.
 
 ### Consent
 
