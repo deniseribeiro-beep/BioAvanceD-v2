@@ -7,7 +7,6 @@ const PatientModel = require('../models/Patient');
 const SampleModule = require('../models/Sample');
 const SampleModel = SampleModule.SampleModel || SampleModule;
 const TemperatureModel = require('../models/Temperature');
-const LocationModel = require('../models/Location');
 const fhirValidator = require('./fhir-validator.service');
 const notificationService = require('./notification.service');
 const { getCollection } = require('../utils/collectionResolver');

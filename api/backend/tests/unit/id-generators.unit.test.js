@@ -1,6 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
 const { generateUniqueEquipmentID } = require('../../src/utils/equipmentIDGenerator');
-const { generateUniqueLocationID } = require('../../src/utils/locationIDGenerator');
 const { generateUniqueOriginID } = require('../../src/utils/originIDGenerator');
 const { generateUniqueProtocolID } = require('../../src/utils/protocolIDGenerator');
 const { generateUniqueQualityID } = require('../../src/utils/qualityIDGenerator');
@@ -58,33 +57,6 @@ describe('generateUniqueEquipmentID', () => {
     };
     await generateUniqueEquipmentID(db, 'custom_equipment');
     expect(usedName).toBe('custom_equipment');
-  });
-});
-
-// ── generateUniqueLocationID ───────────────────────────────
-
-describe('generateUniqueLocationID', () => {
-  it('returns 1 when collection is empty', async () => {
-    const db = makeDbMock([null, null]);
-    const id = await generateUniqueLocationID(db);
-    expect(id).toBe(1);
-  });
-
-  it('returns lastID + 1 for populated collection', async () => {
-    const db = makeDbMock([{ locationID: 10 }, null]);
-    const id = await generateUniqueLocationID(db);
-    expect(id).toBe(11);
-  });
-
-  it('increments again when next ID is taken', async () => {
-    const db = makeDbMock([{ locationID: 7 }, { locationID: 8 }, null]);
-    const id = await generateUniqueLocationID(db);
-    expect(id).toBe(9);
-  });
-
-  it('throws when two consecutive IDs are taken', async () => {
-    const db = makeDbMock([{ locationID: 1 }, { locationID: 2 }, { locationID: 3 }]);
-    await expect(generateUniqueLocationID(db)).rejects.toThrow('único');
   });
 });
 

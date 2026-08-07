@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 
 const EquipmentModel = require('../../src/models/Equipment');
-const LocationModel = require('../../src/models/Location');
 const ClinicalUnitModel = require('../../src/models/ClinicalUnit');
 
 describe('EquipmentModel', () => {
@@ -42,62 +41,6 @@ describe('EquipmentModel', () => {
     expect(equipment.status).toBe('Active');
     expect(equipment.purchaseDate).toBeInstanceOf(Date);
     expect(equipment.createdAt).toBeInstanceOf(Date);
-  });
-});
-
-describe('LocationModel', () => {
-  it('valida localização com equipmentType obrigatório', () => {
-    const result = LocationModel.validate({
-      equipmentType: 1,
-      block: 2,
-      rack: 3,
-      drawer: 4,
-      box: 5,
-      wellPosition: 'A1',
-    });
-
-    expect(result.isValid).toBe(true);
-  });
-
-  it('rejeita tipos inválidos para posição física', () => {
-    const result = LocationModel.validate({
-      equipmentType: '1',
-      block: '2',
-      rack: '3',
-      drawer: '4',
-      box: '5',
-      wellPosition: 1,
-      eppendorfWell: 123,
-    });
-
-    expect(result.isValid).toBe(false);
-    expect(result.errors).toEqual(expect.arrayContaining([
-      'equipmentType deve ser number',
-      'block deve ser number',
-      'rack deve ser number',
-      'drawer deve ser number',
-      'box deve ser number',
-      'wellPosition deve ser string',
-      'eppendorfWell deve ser array [M, N] ou string',
-    ]));
-  });
-
-  it('cria localização e gera string hierárquica', () => {
-    const location = LocationModel.create({
-      locationID: '101',
-      equipmentType: 1,
-      block: 2,
-      rack: 3,
-      drawer: 4,
-      box: 5,
-      eppendorfWell: ['M', 'N'],
-    });
-
-    expect(location.locationID).toBe(101);
-    expect(location.equipmentType).toBe(1);
-    expect(location.wellPosition).toBe('MxN');
-    expect(LocationModel.getLocationString(location)).toContain('Equip:1');
-    expect(LocationModel.getLocationString(location)).toContain('Caixa:5');
   });
 });
 
