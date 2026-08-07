@@ -178,8 +178,6 @@ class StorageService {
     try {
       // Iniciar transação
       await session.withTransaction(async () => {
-        const samplesCollection = await getCollection(this.db, 'samples');
-
         // Validar disponibilidade primeiro (fora da transação para speedup)
         const validation = await this.validatePositionAvailability(boxId, position);
         if (!validation.available) {
@@ -188,7 +186,7 @@ class StorageService {
 
         // Converter IDs usando MongoDB native driver
         const { ObjectId } = require('mongodb');
-        
+
         let sampleObjId, boxObjId;
         try {
           sampleObjId = ObjectId.isValid(specimenId) ? new ObjectId(specimenId) : specimenId;
@@ -201,19 +199,18 @@ class StorageService {
 
         // CRITICAL SECTION: Dentro da transação
 
-        // 1. Verificar se amostra já está em outra posição
-        const existingSample = await samplesCollection.findOne(
-          { _id: sampleObjId },
-          { session }
-        );
+        // 1. Verificar se amostra já está em outra posição, via a StorageAssignment
+        // canônica (dict-02 ELM-0167-0178, #507) em vez do snapshot legado
+        // sample.storageLocation.
+        const existingSample = await this.storageRepository.findSampleById(sampleObjId, session);
 
         if (!existingSample) {
           throw new Error(`Amostra ${specimenId} não encontrada`);
         }
 
-        if (existingSample.storageLocation?.boxId && existingSample.storageLocation?.position) {
+        if (existingSample.storageAssignment?.boxId && existingSample.storageAssignment?.positionCode) {
           throw new Error(
-            `Amostra já está alocada em ${existingSample.storageLocation.boxId} / ${existingSample.storageLocation.position}`
+            `Amostra já está alocada em ${existingSample.storageAssignment.boxId} / ${existingSample.storageAssignment.positionCode}`
           );
         }
 
@@ -326,11 +323,11 @@ class StorageService {
         };
       }
 
-      if (sampleSnapshot.storageLocation?.boxId && sampleSnapshot.storageLocation?.position) {
+      if (sampleSnapshot.storageAssignment?.boxId && sampleSnapshot.storageAssignment?.positionCode) {
         return {
           success: false,
           error: 'ALREADY_ALLOCATED',
-          message: `Amostra já está alocada em ${sampleSnapshot.storageLocation.boxId}/${sampleSnapshot.storageLocation.position}`
+          message: `Amostra já está alocada em ${sampleSnapshot.storageAssignment.boxId}/${sampleSnapshot.storageAssignment.positionCode}`
         };
       }
 
@@ -457,8 +454,6 @@ class StorageService {
    */
   async releaseSampleFromPosition(specimenId) {
     try {
-      const samplesCollection = await getCollection(this.db, 'samples');
-
       // Converter specimenId
       let sampleObjId;
       try {
@@ -468,8 +463,9 @@ class StorageService {
         sampleObjId = specimenId;
       }
 
-      // Buscar amostra e sua localização
-      const sample = await samplesCollection.findOne({ _id: sampleObjId });
+      // Buscar amostra e sua StorageAssignment canônica (dict-02 ELM-0167-0178, #507)
+      // em vez do snapshot legado sample.storageLocation.
+      const sample = await this.storageRepository.findSampleById(sampleObjId);
 
       if (!sample) {
         return {
@@ -479,7 +475,7 @@ class StorageService {
         };
       }
 
-      if (!sample.storageLocation?.boxId || !sample.storageLocation?.position) {
+      if (!sample.storageAssignment?.boxId || !sample.storageAssignment?.positionCode) {
         return {
           success: false,
           error: 'NO_STORAGE_LOCATION',
@@ -487,7 +483,8 @@ class StorageService {
         };
       }
 
-      const { boxId, position } = sample.storageLocation;
+      const boxId = sample.storageAssignment.boxId;
+      const position = sample.storageAssignment.positionCode;
 
       // Liberar posição (occupancyGrid da box + storageLocation da amostra),
       // via MongoStorageRepository para não duplicar a lógica atômica de escrita.
