@@ -1,87 +1,80 @@
 # HANDOFF
 
 **Written:** 2026-08-07, end of session on `feature/docker-e2e-backend-integration`,
-after resolving #506.
+after splitting and closing #494.
 
 ## What happened this session
 
-Dennis said "pick #506" — the `sealedSpecimenPreanalyticsId`/
-`sealedRcsAssessmentId` pin bug filed at the end of the prior session
-(#493), where `import.service.js`'s pin update appeared to always write
-`undefined` because `profile._id`/`assessment._id` looked unset on the
-model objects `recordProfile`/`recordAssessment` return.
+Dennis said "pick #494" — the storage/custody consumer-migration issue
+(9 listed files) that prior handoffs had carried forward as "still
+unsplit."
 
-**Routing:** `fix-bugs`. Before writing a fix, re-traced the claim rather
-than trusting the prior session's `node -e` fake-db repro at face value
-(per `fix-bugs`' "verify before deferring" — applies equally to "verify
-before fixing").
+**Routing:** `work-issue` → `divide-and-conquer` (design-split
+playbook). No code was edited this session; the deliverable was entirely
+tracker state.
 
-**Finding: not a product bug.** Read the real `mongodb` driver's source
-(`node_modules/mongodb/lib/utils.js#maybeAddIdToDocuments`, driver
-6.21.0) and confirmed `insertOne` mutates the passed document in place,
-assigning a generated `_id` when absent — unless `forceServerObjectId`
-is set, which this repo never sets. Since `recordProfile`/
-`recordAssessment` return that same mutated object reference,
-`profile._id`/`assessment._id` resolve correctly against real MongoDB.
-Found existing precedent already documenting this exact behavior
-elsewhere in the suite: `import-lgpd.service.importSamples.unit.test.js`
-and `sample.service.test.js`'s fake collections both carry a comment
-("Mirrors the real MongoDB driver, which mutates the passed document
-with the generated _id") and mutate `doc._id` in their fakes accordingly.
+**Re-audit before splitting:** rather than trusting the issue's own
+9-file consumer list at face value, ran a read-only Explore agent
+(gated by `agent-delegation`, invoked fresh this session) to confirm
+which consumers still actually do direct `Sample.storageLocation` field
+access. Result: 3 of the 9 were already resolved or not applicable —
+`api/backend/src/interface/routes/intakeWizard.routes.js` (migrated
+post-#450, only a passthrough remains), `NotificationService.js`,
+`sensor.controller.js`/`sensor.service.js` (their `locationId` refs are
+equipment/sensor-location filters, unrelated to Sample custody fields).
+Also surfaced a real dependency chain the flat issue-body list didn't
+show: `MongoStorageRepository.js`/`MongoStorageTopologyReadRepository.js`
+are the concrete `IStorageRepository` implementation, and their
+**return shape** is what every downstream consumer (including the
+use-cases, which already call through the port correctly) still embeds
+raw `storageLocation` fields from.
 
-**The actual bug:** `import.service.importSamples.test.js`'s own fake
-`insertOne` (added in #493) didn't follow that convention — it pushed
-the raw doc without setting `_id`, which is what made the pin look
-broken when exercised through that one test file's fakes specifically.
+**Split confirmed with Dennis via AskUserQuestion** before filing
+anything (6-issue, foundational-first option). Filed:
 
-**Fix:** updated `makeRcsAssessmentsCollection`/
-`makeSpecimenPreanalyticsCollection` in
-`api/backend/tests/unit/import.service.importSamples.test.js` to mutate
-`doc._id` like the established convention, and un-weakened the
-assertions #493 had left loose (unable to assert the pin value at the
-time) to actually check `sealedRcsAssessmentId`/
-`sealedSpecimenPreanalyticsId` now that the fake behaves correctly. No
-product source file changed — `import.service.js`'s pin logic (both
-CSV/XLSX and JSON branches) and `import-lgpd.service.js`'s equivalent
-were already correct.
+- **#507** — MongoStorageRepository/MongoStorageTopologyReadRepository
+  return-shape migration. Foundational; #508/#509 depend on it.
+- **#508** — AllocateSampleUseCase/MoveSampleUseCase/ReleaseSampleUseCase
+  consuming the new shape. Depends on #507.
+- **#509** — storageService.js allocate/release orchestration off direct
+  `storageLocation.boxId/position` access. Depends on #507, #508.
+- **#510** — sample.service.js creation-time `storageLocation` write
+  (pre-existing `#474` comment already flagged this). Independent.
+- **#511** — intakeWizard.js (route handler, not `intakeWizard.routes.js`
+  which is already migrated) raw field assembly at ~lines 579-609.
+  Independent.
+- **#512** — scope question on `equipment-sensor-quarantine.service.js`'s
+  `location`/`storageLocation` usage: looks like quarantine-domain
+  matching, not core custody-split scope, but needs an owner call before
+  a migration issue is filed for it either way.
 
-**Tests:** targeted run across the touched file plus every sibling that
-shares the pin pattern — `import.service.importSamples.test.js`,
-`import.service.sprec.test.js`,
-`import-lgpd.service.importSamples.unit.test.js`, `sample.service.test.js`,
-`rcs-assessment.service.test.js`, `specimen-preanalytics.service.test.js`
-— 159/159 passing.
+Closed **#494** with a comment naming all 6 follow-ups, the 3
+already-resolved consumers, and the target-pattern doc pointer
+(`docs/architecture/canonical-data-contract-v1.md`, "Known Residual
+Legacy Surfaces" / "Deferred Cleanup Plan", PR 101 — "Canonicalize
+specimen, custody and storage flow"). #390 remains the umbrella tracking
+issue for #491/#492/#493/#494's collective follow-ups.
 
-Branch `fix/506-import-service-test-fake-id-mutation` (off
-`feature/docker-e2e-backend-integration`), one commit, `--no-ff` merged
-back in (merge commit `61000f3f`), local and remote branch deleted.
-Pushed `feature/docker-e2e-backend-integration`. Closed #506 with a
-comment covering the driver-source trace, the precedent test files, the
-commit hashes, and the "no product change needed" conclusion.
-
-`wrap-up` ran in full: diff stayed limited to the one test file (matches
-`fix-bugs` scope for a fix that turned out to be test-only). No lazy
-fixes. No permission denials this session. One judgment call: added,
-then reverted, a same-file assertion on the pre-existing CSV
-"quarantine" test asserting *no* pin fires — reverted because that CSV
-row's own `sample.sprec` truthiness didn't match the assumption behind
-the assertion, and chasing it down was out of #506's scope. No
-unfiled promises in the close comment (issue was fully resolved, not
-partially).
+`wrap-up` ran in full: no code touched (no scope-check needed), no lazy
+fixes, no permission denials, no stale instructions, no user correction.
+One expected mechanical block — called `Agent` before invoking
+`agent-delegation` this session, got hard-blocked, then invoked it
+correctly — that's the gate working as designed, not a finding. No
+orphaned "deferred" language: the 3 not-applicable consumers were
+independently confirmed resolved (not just assumed), and the one real
+ambiguity (#512) got its own open issue rather than living only as a
+comment on the now-closed #494.
 
 ## Repo state
 
-- **`feature/docker-e2e-backend-integration`**: clean, pushed, up to
-  date with origin as of this session (merge commit `61000f3f`, "Merge
-  fix/506-import-service-test-fake-id-mutation into
-  feature/docker-e2e-backend-integration"; fix commit `cd2a70e9`,
-  "Fix #506: import.service.js's sprec/rcs pin was correct — the test
-  fake was wrong").
-- No dangling branches from this session (fix branch deleted both
-  local and remote after merge).
-- Issues this session: **#506 closed** (comment posted with the driver
-  trace, precedent-file pointers, and both commit hashes). No new issues
-  filed.
+- **`feature/docker-e2e-backend-integration`**: unchanged this session
+  — no commits, no pushes. Still clean and up to date with origin as of
+  the prior session (#506, merge commit `61000f3f`).
+- No branches created or deleted this session (tracker-only work).
+- Issues this session: **#494 closed** (split + tracking comment). New
+  issues filed: **#507, #508, #509, #510, #511, #512** (all `enhancement`
+  label, all reference #494 as originating issue, dependency chain noted
+  above).
 
 ## Which issue is next
 
@@ -89,55 +82,41 @@ Dennis has not yet said which issue to pick up next session; per
 `handoff`'s "only if the user explicitly said so" rule, nothing is
 queued.
 
-Candidates still on the table (unchanged from prior handoff except #506
-now resolved as a test-fixture fix, not a product fix):
+If picking from this session's own output: **#507 is the natural
+starting point** — it's the foundational piece #508 and #509 both
+depend on, and the return-shape decision it makes will bound how #508
+gets implemented.
+
+Other candidates carried forward from prior handoffs (not re-verified
+this session):
 
 **#504** — the sealed-snapshot backfill script exists and is
 unit-tested, but has not been *run* against any live environment.
 Whoever next stands up a real Mongo instance with pre-#502 sample data
 should run `node src/scripts/backfillSealedSnapshotPins.js` once
-(idempotent, safe to re-run). Note: intake-wizard samples predating
-#505 fall into the backfill script's own "no recorded snapshot at all"
-carve-out (left untouched by design). With #506 resolved as "the pin
-logic was always correct against real Mongo," this backfill's own
-snapshot-resolution logic (`latestProfile._id`/`latestAssessment._id`
-in `sealed-snapshot-backfill.service.js`) is now known-sound too — no
-need to re-audit it for the same suspected `_id` issue.
+(idempotent, safe to re-run).
 
-**#491** stays open as the tracking issue — the general "migrate backend
-RCS consumers off Sample.js embedded fields" umbrella should stay open
-until the real remaining consumers (MerkleService's own embedded-field
-reads outside #502's scope, neo4j projection, live registration path's
-remaining `Sample.js` duplication) are actually migrated.
+**#491** stays open as the tracking issue for the RCS-consumer
+migration (separate from #494's storage/custody scope).
 
-**#390** (the SPREC-side umbrella #493 was filed off) — worth checking
-whether #493 being fully closed (both open items resolved, plus #506's
-follow-on now also resolved) means #390 itself is now unblocked/closeable,
-or whether #390 still tracks other sibling issues beyond #493.
+**#390** — the umbrella issue; now tracks #491, #492, #493 (closed),
+and #494's 6 follow-ups (#507-#512) collectively. Worth checking next
+time whether #390 itself should be updated to reflect #494's closure
+and the new sub-issue numbers, or whether that's implicit via #494's
+close comment.
 
 Other backlog carried forward unchanged from prior handoffs (not
 re-verified this session):
 - **#492's own note (SPREC on live registration):** the live
   `POST /api/samples` path still doesn't call
   `specimenPreanalyticsService.recordProfile` for the `sprec` payload it
-  accepts for RCS computation — likely belongs under #493's former scope
-  (now closed) or a fresh issue off #390.
-- **#494** — storage/custody consumers (storageService, sample.service,
-  Allocate/Move/Release use-cases, MongoStorageRepository*, intakeWizard,
-  NotificationService, sensor services) — still unsplit.
-- **#495** — frontend consumers, including `sampleMerkleIntegrity.js`
-  (confirmed in a prior session as in-scope for #495, not #493).
-  **Depends on #491, #493 (done), #494 landing first.**
+  accepts for RCS computation.
+- **#495** — frontend consumers, including `sampleMerkleIntegrity.js`.
+  **Depends on #491, #493 (done), #494's follow-ups landing first.**
 - **#496** — remaining misc backend surfaces from
   `canonical-data-contract-v1.md`'s "Known Residual Legacy Surfaces"
   list not covered by #491-#495.
-- **#489** — full-suite vitest flakiness. Not re-verified this session
-  (this session ran targeted files only, not the full suite). Prior
-  session saw exactly 2 failing files/8 failing tests (RBAC
-  `getRoleName` retirement series, dictionary checksum script), both
-  independently explained and unrelated. Still worth a future session
-  reconciling the discrepancy against #489's original 89-file count if
-  #489 is ever picked up directly.
+- **#489** — full-suite vitest flakiness. Not re-verified this session.
 - Older backlog: `#371`/`#373`/`#374`/`#378`/`#379`, `user.accessType`
   grep sweep, dangling merged branches (`test/440-*`, `test/441-*`,
   `fix/444-retention-period-iso8601`, `fix/450-*`,
@@ -149,37 +128,24 @@ re-verified this session):
   `playwright-specs`' spec inventory) — check issue #95's tracking
   thread once skills-pack#227 lands the new spec in the inventory.
 - **#368** — the analogous Patient/ParticipantIdentity migration that
-  #390's split pattern mirrored — is itself still unsplit. Not picked up
-  this session.
+  #390's split pattern mirrored — is itself still unsplit.
 
 ## Dev stack state
 
-Nothing started this session. Same as the prior session's carve-out:
-backend-internal service/test-fixture logic only, not one of the
-milestone's own e2e Playwright specs, so the proof bar was vitest
-against in-memory fakes, not Docker/live Mongo. No `docker compose up`
-this session, nothing to tear down.
+Nothing started this session. No product code touched, no Docker/Mongo
+needed for issue triage and filing.
 
 ## Which skills to use
 
-- `fix-bugs` → the picked issue (#506) came with a plausible-looking
-  empirical repro from the filing session, but that repro used a
-  hand-rolled fake db rather than the real MongoDB driver. Re-deriving
-  the claim against the actual driver source (not re-trusting the prior
-  session's "confirmed empirically" note) dissolved the whole issue into
-  a test-fixture fix — no product code changed. This is the "verify
-  before deferring" playbook applied to a filed bug rather than a design
-  question: the same three-step trace (real call sites / project docs /
-  an actual written reproduction) applies just as well to "is this bug
-  real" as to "is this ambiguity real."
-- When a repo's test suite has an established, commented convention for
-  how a fake should behave (here: "mirrors the real MongoDB driver,
-  which mutates the passed document with the generated _id," present in
-  two sibling test files), check whether the file exhibiting the bug
-  actually follows that convention before assuming the product code is
-  wrong. A newer test file added by a recent session (#493's own
-  `import.service.importSamples.test.js`) can drift from an
-  already-established sibling-file pattern without anyone noticing,
-  since nothing forces fakes across files to stay consistent.
-- No project board found for this repo, so boarding step was skipped —
-  matches prior sessions' behavior.
+- `work-issue` → `divide-and-conquer`'s design-split playbook: when an
+  issue's own consumer list hasn't been re-audited recently, a read-only
+  Explore agent (gated through `agent-delegation`) before designing the
+  split caught 3 stale list entries and one real dependency chain the
+  flat list didn't show (repository return-shape is foundational; the
+  use-cases already call through the port correctly and just consume the
+  old snapshot shape). Re-verify a filed migration issue's file list
+  against current code before splitting it, not just before fixing it.
+- `agent-delegation`'s gate fired as designed this session (`Agent` call
+  blocked until the skill was invoked fresh) — confirms the hook is
+  live and the "invoke every session, not once" rule holds even for a
+  single research fan-out.
