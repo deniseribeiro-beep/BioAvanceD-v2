@@ -219,6 +219,88 @@ describe('intakeWizard routes', () => {
       );
     });
 
+    // #511: sample.service.js#createSample (#510) additively exposes the
+    // canonical StorageAssignment on its return value alongside the legacy
+    // storageLocation field. intakeWizard's own response builder (lines
+    // ~579-609) must forward it the same way, not just the legacy shape it
+    // reconstructs from local box/position variables.
+    it('exposes the canonical storageAssignment on the response, per #510 (#511)', async () => {
+      const insertOne = vi.fn().mockResolvedValue({ insertedId: 'sample-1' });
+      const findOne = vi.fn().mockResolvedValue({ _id: 'sample-1', participantId: '12345678' });
+      const samplesCollection = { insertOne, findOne, updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }) };
+      const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
+      const patientsCollection = { updateOne };
+      const consentsCollection = { findOne: vi.fn().mockResolvedValue(null) };
+
+      const getCollectionImpl = vi.fn(async (_db, key) => {
+        if (key === 'samples') return samplesCollection;
+        if (key === 'patients') return patientsCollection;
+        if (key === 'consents') return consentsCollection;
+        throw new Error(`unexpected key ${key}`);
+      });
+
+      const db = {
+        collection: (name) => {
+          if (name === 'sensors') return { find: () => makeCursor([{ locationId: 'EQ-1', status: 'ok' }]) };
+          if (name === 'equipment') return { findOne: vi.fn().mockResolvedValue({ equipmentID: 'EQ-1', status: 'active' }) };
+          if (name === 'storageBoxes') {
+            return {
+              find: () => makeCursor([{
+                _id: 'box-1',
+                name: 'Box A',
+                status: 'ACTIVE',
+                dimension: { rows: 1, cols: 1 },
+                currentOccupancy: 0,
+                occupancyGrid: {},
+                parent_id: 'rack-1',
+              }]),
+            };
+          }
+          if (name === 'storageContainers') {
+            return {
+              findOne: vi.fn(async ({ _id }) => {
+                if (_id === 'rack-1') return { _id: 'rack-1', containerType: 'RACK', parent_id: 'shelf-1' };
+                if (_id === 'shelf-1') return { _id: 'shelf-1', containerType: 'SHELF', parent_id: 'freezer-1' };
+                if (_id === 'freezer-1') return { _id: 'freezer-1', containerType: 'FREEZER', containerID: 'EQ-1' };
+                return null;
+              }),
+            };
+          }
+          throw new Error(`unexpected collection ${name}`);
+        },
+      };
+
+      const { router } = loadRoute({ getCollectionImpl });
+
+      const sampleServiceModule = require(sampleServicePath);
+      const canonicalStorageAssignment = {
+        _id: 'assignment-1',
+        sampleId: 'sample-1',
+        boxId: 'box-1',
+        position: 'A1',
+        status: 'ACTIVE',
+      };
+      vi.spyOn(sampleServiceModule, 'createSample').mockResolvedValue({
+        _id: 'sample-1',
+        participantId: '12345678',
+        storageAssignment: canonicalStorageAssignment,
+      });
+
+      const StorageService = require(storageServicePath);
+      vi.spyOn(StorageService.prototype, 'autoAssignSampleToBox').mockResolvedValue({
+        success: true,
+        sampleLocation: { boxId: 'box-1', position: 'A1' },
+      });
+
+      const app = buildApp(router, db);
+
+      const res = await request(app).post('/api/intake-wizard').send(VALID_PAYLOAD);
+
+      expect(res.status).toBe(200);
+      expect(res.body.storageAssignment).toEqual(canonicalStorageAssignment);
+      expect(res.body.storageLocation).toBeTruthy();
+    });
+
     // #505: intakeWizard already computed RCS via qualidade but never
     // recorded a queryable RcsAssessment snapshot — mirrors #492's pattern
     // in sample.service.js#createSample.
