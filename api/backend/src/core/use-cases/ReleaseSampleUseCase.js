@@ -27,8 +27,8 @@ class ReleaseSampleUseCase {
       throw new Error('Amostra não encontrada');
     }
 
-    const sourceLocation = sampleSnapshot?.storageLocation;
-    if (!sourceLocation?.boxId || !sourceLocation?.position) {
+    const sourceAssignment = sampleSnapshot?.storageAssignment;
+    if (!sourceAssignment?.boxId || !sourceAssignment?.positionCode) {
       throw new Error('Amostra não possui localização de armazenamento');
     }
 
@@ -37,8 +37,8 @@ class ReleaseSampleUseCase {
       barcode: sampleSnapshot.barcode || null,
       eventType: 'release',
       from: {
-        boxId: String(sourceLocation.boxId),
-        position: String(sourceLocation.position).toUpperCase()
+        boxId: String(sourceAssignment.boxId),
+        position: String(sourceAssignment.positionCode).toUpperCase()
       },
       to: null,
       actorId: command?.actor?.userId || null,

@@ -44,8 +44,8 @@ class MoveSampleUseCase {
       throw new Error('Amostra não encontrada');
     }
 
-    const sourceBoxId = snapshotSample?.storageLocation?.boxId;
-    const sourcePosition = snapshotSample?.storageLocation?.position;
+    const sourceBoxId = snapshotSample?.storageAssignment?.boxId;
+    const sourcePosition = snapshotSample?.storageAssignment?.positionCode;
     if (!sourceBoxId || !sourcePosition) {
       throw new Error('Amostra não possui localização de origem para movimentação');
     }
@@ -91,8 +91,8 @@ class MoveSampleUseCase {
           throw new Error('Amostra não encontrada');
         }
 
-        const sourceBoxId = sample?.storageLocation?.boxId;
-        const sourcePosition = sample?.storageLocation?.position;
+        const sourceBoxId = sample?.storageAssignment?.boxId;
+        const sourcePosition = sample?.storageAssignment?.positionCode;
         if (!sourceBoxId || !sourcePosition) {
           throw new Error('Amostra não possui localização de origem para movimentação');
         }

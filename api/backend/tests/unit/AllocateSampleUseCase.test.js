@@ -14,7 +14,7 @@ function makeSample(overrides = {}) {
   return {
     _id: 'sample-1',
     barcode: 'BC-1',
-    storageLocation: { boxId: 'box-old', position: 'a1' },
+    storageAssignment: { boxId: 'box-old', positionCode: 'a1' },
     ...overrides
   };
 }
@@ -254,9 +254,9 @@ describe('AllocateSampleUseCase', () => {
     expect(lineageRepository.compensateCustodyEvent).toHaveBeenCalledTimes(1);
   });
 
-  it('sample with no prior storageLocation and no barcode, actor with no userId: null-fallback branches all taken', async () => {
+  it('sample with no prior storageAssignment and no barcode, actor with no userId: null-fallback branches all taken', async () => {
     const { useCase, auditRepository } = makeDeps({
-      sample: makeSample({ storageLocation: undefined, barcode: undefined })
+      sample: makeSample({ storageAssignment: undefined, barcode: undefined })
     });
     const cmd = baseCommand();
     delete cmd.actor.userId;
@@ -273,9 +273,9 @@ describe('AllocateSampleUseCase', () => {
     );
   });
 
-  it('sample has a storageLocation object but boxId/position fields are falsy: beforeLocation resolves those fields to null', async () => {
+  it('sample has a storageAssignment object but boxId/positionCode fields are falsy: beforeLocation resolves those fields to null', async () => {
     const { useCase, auditRepository } = makeDeps({
-      sample: makeSample({ storageLocation: { boxId: '', position: '' } })
+      sample: makeSample({ storageAssignment: { boxId: '', positionCode: '' } })
     });
 
     await useCase.execute(baseCommand());
