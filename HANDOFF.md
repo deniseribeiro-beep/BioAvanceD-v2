@@ -1,80 +1,77 @@
 # HANDOFF
 
 **Written:** 2026-08-07, end of session on `feature/docker-e2e-backend-integration`,
-after splitting and closing #494.
+after resolving #507.
 
 ## What happened this session
 
-Dennis said "pick #494" — the storage/custody consumer-migration issue
-(9 listed files) that prior handoffs had carried forward as "still
-unsplit."
+Dennis said "pick #507" — the foundational storage/custody return-shape
+migration split off #494 last session.
 
-**Routing:** `work-issue` → `divide-and-conquer` (design-split
-playbook). No code was edited this session; the deliverable was entirely
-tracker state.
+**Routing:** `work-issue` → `build-loop` (capability spec'd in
+`docs/architecture/canonical-data-contract-v1.md` but not yet built, not
+a bug and not bare coverage). No Docker needed: per the build-loop
+overlay, a backend-internal slice proving repository/service logic (not
+one of the milestone's own e2e Playwright specs) only needs the
+strongest native-only proof — an in-memory collection mock with real
+query-matching semantics — not literal Docker/live Mongo.
 
-**Re-audit before splitting:** rather than trusting the issue's own
-9-file consumer list at face value, ran a read-only Explore agent
-(gated by `agent-delegation`, invoked fresh this session) to confirm
-which consumers still actually do direct `Sample.storageLocation` field
-access. Result: 3 of the 9 were already resolved or not applicable —
-`api/backend/src/interface/routes/intakeWizard.routes.js` (migrated
-post-#450, only a passthrough remains), `NotificationService.js`,
-`sensor.controller.js`/`sensor.service.js` (their `locationId` refs are
-equipment/sensor-location filters, unrelated to Sample custody fields).
-Also surfaced a real dependency chain the flat issue-body list didn't
-show: `MongoStorageRepository.js`/`MongoStorageTopologyReadRepository.js`
-are the concrete `IStorageRepository` implementation, and their
-**return shape** is what every downstream consumer (including the
-use-cases, which already call through the port correctly) still embeds
-raw `storageLocation` fields from.
+**What landed:** `MongoStorageRepository.findSampleById()`
+(`api/backend/src/infrastructure/persistence/mongo/MongoStorageRepository.js`)
+now attaches the current open `StorageAssignment` (dict-02
+ELM-0167-0178) as a canonical `storageAssignment` field, resolved via a
+new `findCurrentStorageAssignment()` method that queries the
+`storageAssignments` collection for `{ specimenId, removedAt: null }`.
+**Deliberately additive, not a breaking change:** the raw
+`storageLocation` snapshot stays untouched on the returned object, since
+the three use-case consumers (`AllocateSampleUseCase`/`MoveSampleUseCase`/
+`ReleaseSampleUseCase`, tracked as #508) and `storageService.js` (#509)
+haven't been migrated onto the new field yet — they keep reading
+`sample.storageLocation.boxId/position` exactly as before. `IStorageRepository`'s
+port doc comment and `docs/architecture/canonical-data-contract-v1.md`'s
+"Not yet landed" note (Specimen section) were both updated to record
+this as landed.
 
-**Split confirmed with Dennis via AskUserQuestion** before filing
-anything (6-issue, foundational-first option). Filed:
+**Scope check against #507's own text:** confirmed
+`MongoStorageTopologyReadRepository.checkBoxIntegrity()` (also named in
+#507's title) does its own internal `storageLocation` comparison for
+consistency-checking, but that's a Mongo-level persistence detail
+consumed only inside the repository itself — its own return shape never
+leaks raw `storageLocation` fields to callers, so it didn't need
+changing. This matches #507's own scope language ("internal Mongo-level
+field access at the persistence layer itself is fine to keep — this
+issue is about what the interface hands back to callers").
 
-- **#507** — MongoStorageRepository/MongoStorageTopologyReadRepository
-  return-shape migration. Foundational; #508/#509 depend on it.
-- **#508** — AllocateSampleUseCase/MoveSampleUseCase/ReleaseSampleUseCase
-  consuming the new shape. Depends on #507.
-- **#509** — storageService.js allocate/release orchestration off direct
-  `storageLocation.boxId/position` access. Depends on #507, #508.
-- **#510** — sample.service.js creation-time `storageLocation` write
-  (pre-existing `#474` comment already flagged this). Independent.
-- **#511** — intakeWizard.js (route handler, not `intakeWizard.routes.js`
-  which is already migrated) raw field assembly at ~lines 579-609.
-  Independent.
-- **#512** — scope question on `equipment-sensor-quarantine.service.js`'s
-  `location`/`storageLocation` usage: looks like quarantine-domain
-  matching, not core custody-split scope, but needs an owner call before
-  a migration issue is filed for it either way.
+**Proof:** 4 new unit tests in `MongoStorageRepository.test.js`
+(found+open-assignment, found+no-assignment, not-found short-circuits
+before querying `storageAssignments`, plus the pre-existing
+`findSampleById` test updated for the new field). Full backend unit
+suite run (`npx vitest run`, `api/backend`): 5 pre-existing failing test
+files / 34 failing tests, confirmed via `git stash` to already fail
+identically on the base branch before this change (`user.model.unit.test.js`,
+`generate-dictionary-catalog.test.js` — matches #489's known
+full-suite-flakiness backlog item) — nothing storage-related regressed.
 
-Closed **#494** with a comment naming all 6 follow-ups, the 3
-already-resolved consumers, and the target-pattern doc pointer
-(`docs/architecture/canonical-data-contract-v1.md`, "Known Residual
-Legacy Surfaces" / "Deferred Cleanup Plan", PR 101 — "Canonicalize
-specimen, custody and storage flow"). #390 remains the umbrella tracking
-issue for #491/#492/#493/#494's collective follow-ups.
-
-`wrap-up` ran in full: no code touched (no scope-check needed), no lazy
-fixes, no permission denials, no stale instructions, no user correction.
-One expected mechanical block — called `Agent` before invoking
-`agent-delegation` this session, got hard-blocked, then invoked it
-correctly — that's the gate working as designed, not a finding. No
-orphaned "deferred" language: the 3 not-applicable consumers were
-independently confirmed resolved (not just assumed), and the one real
-ambiguity (#512) got its own open issue rather than living only as a
-comment on the now-closed #494.
+`wrap-up` ran in full: no scope creep (diff touched exactly the 4 files
+the slice needed), no lazy fixes, no permission denials, no stale
+instructions, no ambiguous sub-point closed without its own issue (#508/
+#509 already existed from last session's split). One minor
+self-inflicted inefficiency, not filed anywhere: piping the full vitest
+run through `tail -40` discarded the complete failure list, requiring an
+extra `git stash`-based comparison to confirm the failures were
+pre-existing — redirect full test output to a file and grep it next
+time instead.
 
 ## Repo state
 
-- **`feature/docker-e2e-backend-integration`**: unchanged this session
-  — no commits, no pushes. Still clean and up to date with origin as of
-  the prior session (#506, merge commit `61000f3f`).
-- No branches created or deleted this session (tracker-only work).
-- Issues this session: **#494 closed** (split + tracking comment). New
-  issues filed: **#507, #508, #509, #510, #511, #512** (all `enhancement`
-  label, all reference #494 as originating issue, dependency chain noted
-  above).
+- **`feature/docker-e2e-backend-integration`**: pushed to origin at
+  `702e7863` (merge commit for `test/507-storage-repository-canonical-return-shape`,
+  squashed from `4aa3412f`). Clean, up to date with origin.
+- Branch `test/507-storage-repository-canonical-return-shape` created
+  and merged this session (not deleted — low-priority housekeeping,
+  same as the other merged branches listed below).
+- Issues this session: **#507 closed** (merge-hash comment naming #508/
+  #509 as the next consumers). No new issues filed.
 
 ## Which issue is next
 
@@ -82,10 +79,11 @@ Dennis has not yet said which issue to pick up next session; per
 `handoff`'s "only if the user explicitly said so" rule, nothing is
 queued.
 
-If picking from this session's own output: **#507 is the natural
-starting point** — it's the foundational piece #508 and #509 both
-depend on, and the return-shape decision it makes will bound how #508
-gets implemented.
+If picking from this session's own output: **#508** (AllocateSampleUseCase/
+MoveSampleUseCase/ReleaseSampleUseCase migrating onto the new
+`storageAssignment` field) is the natural next slice — #507's return
+shape is what it was waiting on. **#509** (storageService.js) depends on
+both #507 and #508.
 
 Other candidates carried forward from prior handoffs (not re-verified
 this session):
@@ -96,14 +94,21 @@ Whoever next stands up a real Mongo instance with pre-#502 sample data
 should run `node src/scripts/backfillSealedSnapshotPins.js` once
 (idempotent, safe to re-run).
 
+**#510** — sample.service.js creation-time `storageLocation` write
+(independent of #508/#509, also split from #494).
+
+**#511** — intakeWizard.js raw field assembly at ~lines 579-609
+(independent, also split from #494).
+
+**#512** — scope question on `equipment-sensor-quarantine.service.js`'s
+`location`/`storageLocation` usage: needs an owner call before a
+migration issue is filed (also split from #494).
+
 **#491** stays open as the tracking issue for the RCS-consumer
 migration (separate from #494's storage/custody scope).
 
-**#390** — the umbrella issue; now tracks #491, #492, #493 (closed),
-and #494's 6 follow-ups (#507-#512) collectively. Worth checking next
-time whether #390 itself should be updated to reflect #494's closure
-and the new sub-issue numbers, or whether that's implicit via #494's
-close comment.
+**#390** — the umbrella issue; tracks #491, #492, #493 (closed), and
+#494's 6 follow-ups (#507 now closed, #508-#512 open) collectively.
 
 Other backlog carried forward unchanged from prior handoffs (not
 re-verified this session):
@@ -116,14 +121,17 @@ re-verified this session):
 - **#496** — remaining misc backend surfaces from
   `canonical-data-contract-v1.md`'s "Known Residual Legacy Surfaces"
   list not covered by #491-#495.
-- **#489** — full-suite vitest flakiness. Not re-verified this session.
+- **#489** — full-suite vitest flakiness. Re-confirmed present this
+  session (5 files / 34 tests, same shape as before) but still not
+  investigated.
 - Older backlog: `#371`/`#373`/`#374`/`#378`/`#379`, `user.accessType`
   grep sweep, dangling merged branches (`test/440-*`, `test/441-*`,
   `fix/444-retention-period-iso8601`, `fix/450-*`,
   `fix/476-quarantine-status-design-call`,
   `fix/485-sample-details-storage-migration`,
-  `test/486-storage-move-sample`, `test/488-inline-storage-movement-e2e`
-  — all safe to delete, low priority housekeeping).
+  `test/486-storage-move-sample`, `test/488-inline-storage-movement-e2e`,
+  `test/507-storage-repository-canonical-return-shape` — all safe to
+  delete, low priority housekeeping).
 - **Next e2e slice** (per `E2E_TRACEABILITY_PLAN.md` and
   `playwright-specs`' spec inventory) — check issue #95's tracking
   thread once skills-pack#227 lands the new spec in the inventory.
@@ -132,20 +140,26 @@ re-verified this session):
 
 ## Dev stack state
 
-Nothing started this session. No product code touched, no Docker/Mongo
-needed for issue triage and filing.
+Nothing started this session. No Docker/Mongo needed — the build-loop
+overlay's "backend-internal slice" proof bar is a native in-memory
+collection mock, confirmed still accurate.
 
 ## Which skills to use
 
-- `work-issue` → `divide-and-conquer`'s design-split playbook: when an
-  issue's own consumer list hasn't been re-audited recently, a read-only
-  Explore agent (gated through `agent-delegation`) before designing the
-  split caught 3 stale list entries and one real dependency chain the
-  flat list didn't show (repository return-shape is foundational; the
-  use-cases already call through the port correctly and just consume the
-  old snapshot shape). Re-verify a filed migration issue's file list
-  against current code before splitting it, not just before fixing it.
-- `agent-delegation`'s gate fired as designed this session (`Agent` call
-  blocked until the skill was invoked fresh) — confirms the hook is
-  live and the "invoke every session, not once" rule holds even for a
-  single research fan-out.
+- `work-issue` → `build-loop`: for a return-shape/interface-contract
+  migration slice (not a bug, not bare coverage), build-loop routed
+  correctly and its "additive, not breaking" default (new field
+  alongside the old one, old one untouched) is the right shape whenever
+  a foundational issue's own consumers are tracked as separate
+  not-yet-landed follow-ups — don't migrate consumers early just because
+  it's easy; that's explicitly the next issue's scope, not this one's.
+- Before extending an issue's own file list (e.g. #507 named
+  `MongoStorageTopologyReadRepository.js` too), re-check each named
+  file's *actual* return shape against the issue's own scope language
+  rather than assuming every named file needs a code change — one of
+  #507's two named files needed no change at all, confirmed by reading
+  it, not by trusting the title.
+- Piping a full `vitest run` through `tail -N` for a background command
+  throws away the failure list needed to distinguish pre-existing
+  flakiness from a real regression — write full output to a file (or
+  just don't truncate) and grep it instead of tailing at capture time.
