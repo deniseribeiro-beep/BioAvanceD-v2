@@ -395,10 +395,35 @@ carries its own embedded copy of the same RCS fields (`rcsScore`,
 `rcsEvaluation`, `calculationTrace`, `axisPenalties`, ...) — removing
 that duplication requires migrating every consumer that reads RCS data
 directly off `Sample` (MerkleService, neo4j canonical projection,
-frontend types, the live `POST /api/samples` registration path, which
-doesn't compute RCS server-side at all today). Also outstanding: the
-JSON-import branch of `importSamples` doesn't compute or record RCS
-either (only the CSV/XLSX branch does).
+frontend types). Also outstanding: the JSON-import branch of
+`importSamples` doesn't compute or record RCS either (only the
+CSV/XLSX branch does).
+
+**Live registration RCS computation — landed #492:** the live
+`POST /api/samples` registration path (`sample.service.js#createSample`
+via `RegisterSampleUseCase.js`) previously didn't compute or record RCS
+at all — confirmed by #492's own audit, zero `rcs`/`sprec` references.
+Design decision: compute server-side, reusing the same pattern
+`import.service.js`'s CSV/XLSX branch already uses (#383/#499), rather
+than trusting a client-precomputed score — `intakeWizard.js` already
+established the "compute `qualityDomain.resolveMethodologicalQuality`
+server-side from a client-supplied `sprec` payload" half of this pattern
+(though it stops short of recording an `RcsAssessment`, see the caveat
+below). `createSample` now: when the request body includes a non-empty
+`sprec`, calls `qualityDomain.resolveMethodologicalQuality({ sprec })`
+and maps the canonical RCS-GOV fields (`rcsScore`, `scoreBasedGrade`,
+`finalGrade`, `governanceStatus`, `axisPenalties`, `calculationTrace`,
+`rcsEvaluation`, ...) onto the sample before insert — same field mapping
+`import.service.js` uses. Once the sample has fully landed (ledger
+append and storage allocation both succeeded), records a referenced
+`RcsAssessment` snapshot via `rcsAssessmentService.recordAssessment` and
+pins `sealedRcsAssessmentId` per #502's convention. A request with no
+`sprec` behaves exactly as before (no RCS computed, no assessment
+recorded) — this only activates the path when the payload actually
+carries SPREC data. `intakeWizard.js` is unaffected by this change and
+still doesn't record an `RcsAssessment` snapshot (tracked separately,
+same "no dict-02 entity ever recorded" gap the seal-time-pin note below
+already documents for that route).
 
 **Audited and confirmed clean (#500):** `rcs-certification.service.js`
 does *not* belong on the still-outstanding-consumers list above.

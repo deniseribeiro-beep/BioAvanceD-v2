@@ -13,6 +13,7 @@ const { appendMovementWithHashChain } = require('../utils/sampleMovementLedger')
 const { getCollection } = require('../utils/collectionResolver');
 const { withMongoTransaction } = require('../utils/mongoTransaction');
 const rcsAssessmentService = require('./rcs-assessment.service');
+const qualityDomain = require('./quality-domain.service');
 const specimenPreanalyticsService = require('./specimen-preanalytics.service');
 const quarantineActionService = require('./quarantine-action.service');
 const AllocateSampleUseCase = require('../core/use-cases/AllocateSampleUseCase');
@@ -285,6 +286,25 @@ class SampleService {
         includePayload: false
       });
 
+      // #492: live registration didn't compute RCS server-side at all —
+      // mirrors import.service.js's CSV/XLSX branch (#383), which is the
+      // only other place `sprec` -> RCS-GOV field mapping already exists.
+      if (sampleData.sprec && typeof sampleData.sprec === 'object' && Object.keys(sampleData.sprec).length > 0) {
+        const canonicalQualityAssessment = qualityDomain.resolveMethodologicalQuality({ sprec: sampleData.sprec });
+        sampleData.modelVersion = canonicalQualityAssessment.model_version;
+        sampleData.matrixType = canonicalQualityAssessment.matrix_type;
+        sampleData.governanceStatus = canonicalQualityAssessment.governance_status;
+        sampleData.governanceFailureReasons = canonicalQualityAssessment.governance_failure_reasons || [];
+        sampleData.governanceRuleCodes = canonicalQualityAssessment.governance_rule_codes || [];
+        sampleData.rcsScore = canonicalQualityAssessment.rcs_score;
+        sampleData.scoreBasedGrade = canonicalQualityAssessment.score_based_grade;
+        sampleData.finalGrade = canonicalQualityAssessment.final_grade || '';
+        sampleData.gradeRoute = canonicalQualityAssessment.grade_route;
+        sampleData.axisPenalties = canonicalQualityAssessment.axis_penalties || [];
+        sampleData.calculationTrace = canonicalQualityAssessment.calculation_trace || {};
+        sampleData.rcsEvaluation = canonicalQualityAssessment;
+      }
+
       const sample = SampleModel.create(sampleData);
 
       const result = await samplesCollection.insertOne(sample);
@@ -352,6 +372,24 @@ class SampleService {
       }
 
       sample.storageLocation = { boxId, position: positionCode };
+
+      // #492/#502: only recorded once the sample has fully landed (ledger +
+      // allocation both succeeded) — a failure here doesn't roll back
+      // sample creation, mirroring import.service.js's best-effort recording
+      // (#499), but not recording against a sample that itself got rolled
+      // back avoids a dangling RcsAssessment with no surviving sample.
+      if (sample.rcsEvaluation) {
+        try {
+          const assessment = await rcsAssessmentService.recordAssessment(db, sample.specimenId, sample.rcsEvaluation);
+          await samplesCollection.updateOne(
+            { _id: result.insertedId },
+            { $set: { sealedRcsAssessmentId: assessment._id } }
+          );
+          sample.sealedRcsAssessmentId = assessment._id;
+        } catch (assessmentError) {
+          logger.error('Falha ao registrar RcsAssessment para a amostra:', assessmentError.message || assessmentError);
+        }
+      }
 
       // Log sanitizado (apenas ID, sem dados sensíveis)
       logger.info('Amostra criada:', {

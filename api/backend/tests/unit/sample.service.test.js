@@ -4,6 +4,7 @@ import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 
 const sampleService = require('../../src/services/sample.service');
+const qualityDomain = require('../../src/services/quality-domain.service');
 const { ObjectId } = require('mongodb');
 
 const BOX_ID = new ObjectId();
@@ -472,6 +473,94 @@ describe('sample.service', () => {
 
       expect(result.barcode).toBeDefined();
       expect(typeof result.barcode).toBe('string');
+    });
+
+    // #492: live POST /api/samples registration didn't compute or record
+    // RCS at all — this mirrors the pattern import.service.js's CSV/XLSX
+    // branch already uses (qualityDomain.resolveMethodologicalQuality ->
+    // rcsAssessmentService.recordAssessment -> sealedRcsAssessmentId pin,
+    // #499/#502), applied to the live registration path.
+    describe('RCS server-side computation (#492)', () => {
+      afterEach(() => {
+        vi.restoreAllMocks();
+      });
+
+      it('computes RCS via qualityDomain when sprec is provided, records an RcsAssessment, and pins sealedRcsAssessmentId', async () => {
+        const db = makeDb();
+        mockOperationalStorage(db);
+        // Mirrors the real MongoDB driver, which mutates the passed document
+        // with the generated _id (see import-lgpd.service.importSamples.unit.test.js's
+        // rcsAssessmentsCollection for the same pattern, #499).
+        db.collections.rcsAssessments = {
+          insertOne: vi.fn().mockImplementation((doc) => {
+            doc._id = 'assessment-1';
+            return Promise.resolve({ insertedId: 'assessment-1' });
+          })
+        };
+        vi.spyOn(qualityDomain, 'resolveMethodologicalQuality').mockReturnValue({
+          governance_status: 1,
+          final_grade: 'A',
+          rcs_score: 87.5,
+          score_based_grade: 'A',
+          model_version: 'v1',
+          matrix_type: 'PLASMA',
+          governance_failure_reasons: [],
+          governance_rule_codes: [],
+          grade_route: 'DIRECT',
+          axis_penalties: [],
+          calculation_trace: {}
+        });
+
+        const sprec = { matrixType: 'PLASMA', sampleType: 'PLASMA' };
+        const result = await sampleService.createSample(db, validSampleData({ sprec }));
+
+        expect(qualityDomain.resolveMethodologicalQuality).toHaveBeenCalledWith({ sprec });
+        expect(db.collections.rcsAssessments.insertOne).toHaveBeenCalledTimes(1);
+        const recorded = db.collections.rcsAssessments.insertOne.mock.calls[0][0];
+        expect(recorded.specimenId).toBe(String(result.specimenId));
+        expect(recorded.rcsScore).toBe(87.5);
+        expect(recorded.scoreBasedGrade).toBe('A');
+        expect(db.collections.samples.updateOne).toHaveBeenCalledWith(
+          { _id: 'generated-id' },
+          { $set: { sealedRcsAssessmentId: 'assessment-1' } }
+        );
+        expect(result.sealedRcsAssessmentId).toBe('assessment-1');
+        expect(result.rcsScore).toBe(87.5);
+        expect(result.finalGrade).toBe('A');
+      });
+
+      it('does not compute or record RCS when no sprec is provided, matching current behavior', async () => {
+        const db = makeDb();
+        mockOperationalStorage(db);
+        const spy = vi.spyOn(qualityDomain, 'resolveMethodologicalQuality');
+
+        const result = await sampleService.createSample(db, validSampleData());
+
+        expect(spy).not.toHaveBeenCalled();
+        expect(db.collections.rcsAssessments).toBeUndefined();
+        expect(result.sealedRcsAssessmentId ?? null).toBeNull();
+      });
+
+      it('does not fail sample creation when recording the RcsAssessment snapshot rejects', async () => {
+        const db = makeDb();
+        mockOperationalStorage(db);
+        db.collections.rcsAssessments = {
+          insertOne: vi.fn().mockRejectedValue(new Error('mongo down'))
+        };
+        vi.spyOn(qualityDomain, 'resolveMethodologicalQuality').mockReturnValue({
+          governance_status: 1,
+          final_grade: 'A',
+          rcs_score: 87.5
+        });
+
+        const result = await sampleService.createSample(db, validSampleData({ sprec: { matrixType: 'PLASMA' } }));
+
+        expect(result._id).toBe('generated-id');
+        expect(db.collections.samples.updateOne).not.toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({ $set: expect.objectContaining({ sealedRcsAssessmentId: expect.anything() }) })
+        );
+      });
     });
   });
 
