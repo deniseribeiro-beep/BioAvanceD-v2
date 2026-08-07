@@ -12,10 +12,13 @@ class IStorageRepository {
   }
 
   /**
-   * Busca uma amostra por ID.
+   * Busca uma amostra por ID. O objeto retornado inclui `storageAssignment`
+   * (dict-02 ELM-0167-0178, #507): o registro canônico de posicionamento
+   * aberto (ou `null`), em vez de deixar quem chama ler o snapshot
+   * embutido `storageLocation.boxId/position` diretamente.
    * @param {string} specimenId
    * @param {import('mongodb').ClientSession} [session]
-   * @returns {Promise<object|null>}
+   * @returns {Promise<(object & { storageAssignment: object|null })|null>}
    */
   async findSampleById(specimenId, session) {
     throw new Error('Not implemented');

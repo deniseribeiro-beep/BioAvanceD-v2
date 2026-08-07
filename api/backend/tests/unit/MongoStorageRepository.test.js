@@ -21,7 +21,8 @@ function makeDb(collections) {
     rooms: makeCollection({ findOne: vi.fn().mockResolvedValue(null) }),
     storageAssignments: makeCollection({
       insertOne: vi.fn().mockResolvedValue({ insertedId: 'stub' }),
-      updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 })
+      updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
+      findOne: vi.fn().mockResolvedValue(null)
     })
   };
   return {
@@ -138,11 +139,74 @@ describe('MongoStorageRepository', () => {
 
       const result = await repo.findSampleById(idStr, session);
 
-      expect(result).toEqual({ _id: 'sample-doc' });
+      expect(result).toEqual({ _id: 'sample-doc', storageAssignment: null });
       expect(findOne).toHaveBeenCalledWith(
         { _id: expect.any(ObjectId) },
         { session }
       );
+    });
+
+    it('returns null without querying storageAssignments when the sample is not found', async () => {
+      const findOne = vi.fn().mockResolvedValueOnce(null);
+      const samples = makeCollection({ findOne });
+      const storageAssignmentsFindOne = vi.fn();
+      const storageAssignments = makeCollection({ findOne: storageAssignmentsFindOne });
+      const db = makeDb({ samples, storageAssignments });
+      const repo = new MongoStorageRepository(db);
+
+      const result = await repo.findSampleById(new ObjectId().toString());
+
+      expect(result).toBeNull();
+      expect(storageAssignmentsFindOne).not.toHaveBeenCalled();
+    });
+
+    // Issue #507: findSampleById's return shape must expose the canonical
+    // StorageAssignment (dict-02 ELM-0167-0178) instead of leaving callers
+    // to read the raw embedded storageLocation.boxId/position snapshot.
+    it('attaches the open StorageAssignment as the canonical storageAssignment field (#507)', async () => {
+      const sampleId = new ObjectId().toString();
+      const boxId = new ObjectId().toString();
+      const openAssignment = {
+        storageAssignmentId: 'sa-1',
+        specimenId: sampleId,
+        boxId,
+        positionCode: 'A1',
+        placedAt: new Date('2026-08-01'),
+        removedAt: null,
+        occupancyStatus: 'ocupada'
+      };
+      const samples = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce({
+          _id: sampleId,
+          storageLocation: { boxId, position: 'A1' }
+        })
+      });
+      const storageAssignmentsFindOne = vi.fn().mockResolvedValueOnce(openAssignment);
+      const storageAssignments = makeCollection({ findOne: storageAssignmentsFindOne });
+      const db = makeDb({ samples, storageAssignments });
+      const repo = new MongoStorageRepository(db);
+
+      const result = await repo.findSampleById(sampleId);
+
+      expect(result.storageAssignment).toEqual(openAssignment);
+      expect(storageAssignmentsFindOne).toHaveBeenCalledWith(
+        { specimenId: sampleId, removedAt: null },
+        { session: undefined }
+      );
+    });
+
+    it('sets storageAssignment to null when the sample has no open placement', async () => {
+      const sampleId = new ObjectId().toString();
+      const samples = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce({ _id: sampleId, storageLocation: null })
+      });
+      const storageAssignments = makeCollection({ findOne: vi.fn().mockResolvedValueOnce(null) });
+      const db = makeDb({ samples, storageAssignments });
+      const repo = new MongoStorageRepository(db);
+
+      const result = await repo.findSampleById(sampleId);
+
+      expect(result.storageAssignment).toBeNull();
     });
   });
 
