@@ -1,69 +1,54 @@
 # HANDOFF
 
 **Written:** 2026-08-07, end of session on `feature/docker-e2e-backend-integration`,
-after resolving #510.
+after resolving #511.
 
 ## What happened this session
 
-Dennis said "pick #510" — the fourth slice of #494's storage/custody
+Dennis said "pick #511" — the fifth slice of #494's storage/custody
 migration. **Routing:** `work-issue` → `build-loop` (same shape as
-#507/#508/#509: a capability spec'd in
+#507/#508/#509/#510: a capability spec'd in
 `docs/architecture/canonical-data-contract-v1.md` as a residual
-migration target). Backend-internal slice, native-only proof bar (unit
-tests with a repository-shaped in-memory mock), no Docker needed.
+migration target). Backend-internal slice, native-only proof bar
+(supertest against fully mocked Mongo collections), no Docker needed.
 
-**What landed:** `sample.service.js#createSample`'s DB write was already
-routed through `AllocateSampleUseCase` (landed in #474, prior session) —
-the remaining direct `storageLocation` write was on the **response
-object**, built from local `boxId`/`positionCode` variables, not a Mongo
-write. `createSample` now additionally resolves the just-opened
-`StorageAssignment` via `MongoStorageRepository.findCurrentStorageAssignment()`
-and exposes it as `sample.storageAssignment` on the returned object —
-additive alongside the legacy `sample.storageLocation = { boxId, position }`
-assignment, same precedent #507 set for `findSampleById()`.
+**What landed:** `api/backend/src/routes/intakeWizard.js`'s POST handler
+fabricated its own `storageLocation` response object (lines ~579-609)
+from local `automaticLocation`/`allocation.sampleLocation` variables —
+same response-shaping shape #510 found in `sample.service.js`, not a raw
+Mongo write. Now that `sample.service.js#createSample` (#510) additively
+exposes `sample.storageAssignment` on its return value, `intakeWizard.js`
+forwards it onto the intake response as top-level `storageAssignment`,
+additive alongside the unchanged legacy `storageLocation` field.
 `docs/architecture/canonical-data-contract-v1.md` got a new "Landed in
-#510" note.
+#511" note.
 
-**Also fixed (discovered mid-slice, not part of #510's own scope):** 10
-of `sample.service.test.js`'s `createSample` tests were already failing
-before this session touched anything — `mockOperationalStorage`'s
-`storageAssignments` mock had `insertOne` but no `findOne`, and #507
-added a `findCurrentStorageAssignment()` call (via
-`AllocateSampleUseCase.findSampleById`) that needs it. This had been
-silently broken since #507/#508 landed (both scoped their own test runs
-to `MongoStorageRepository.test.js`/`storageService.test.js`, never this
-file) — not caught until #510 ran `sample.service.test.js` again. Fixed
-by adding `findOne: vi.fn().mockResolvedValue(null)` to the mock.
+**Proof:** new test added to `intakeWizard.routes.test.js` asserting
+`res.body.storageAssignment` equals the canonical object `createSample`'s
+mock resolves with (confirmed failing before the fix, passing after). All
+29 tests in that file pass, plus the sibling `intakeWizard.helpers.test.js`
+(16), `intakeWizard.routes.governance.test.js` (15), and
+`intakeWizard.governance-integration.test.js` (2) re-run clean.
+Full-suite run not attempted (same per-iteration scoping as
+#507/#508/#509/#510 — reserved for `ship-integration-branch`).
 
-**Proof:** all 88 tests in `sample.service.test.js` (87 existing + 1 new,
-asserting `result.storageAssignment` resolves via real query-matching
-semantics on a mock `storageAssignments.findOne`) pass.
-`sample.service.unit.test.js` (8 tests) and `MongoStorageRepository.test.js`
-(58 tests) also re-run clean. Full-suite run not attempted (same
-per-iteration scoping as #507/#508/#509 — reserved for
-`ship-integration-branch`).
-
-`wrap-up` ran: filed **#513** for the pattern the stale-mock discovery
-exposed — a shared repository method's contract changing can silently
-break test files the changing session never runs, until something else
-touches that file later. #513 asks for an owner call on whether
-`ship-integration-branch`'s gate should add a lightweight
-smoke pass, or whether the existing #489 full-suite-flakiness tracking
-already covers this risk. No other scope creep, no lazy fixes, no stale
-instructions.
+`wrap-up` ran: no friction this session — diff scope matched #511
+exactly (one route file, one test file, one doc update), no permission
+denials, no lazy fixes, no stale instructions. The slice matched the
+#507-#510 pattern exactly as anticipated, so no new tracking issues were
+filed.
 
 ## Repo state
 
 - **`feature/docker-e2e-backend-integration`**: pushed to origin at
-  `4651066f` (merge commit for
-  `test/510-sample-service-canonical-storage-assignment`). Clean, up to
+  `9da71266` (merge commit for
+  `test/511-intake-wizard-canonical-storage-assignment`). Clean, up to
   date with origin.
-- Branch `test/510-sample-service-canonical-storage-assignment` created
+- Branch `test/511-intake-wizard-canonical-storage-assignment` created
   and merged this session (not deleted — low-priority housekeeping, same
   as other merged branches listed below).
-- Issues this session: **#510 closed** (merge-hash comment noting
-  #511/#512 remain open and untouched). **#513 filed new** (stale-mock
-  pattern, needs an owner call — see above).
+- Issues this session: **#511 closed** (merge-hash comment). No new
+  issues filed.
 
 ## Which issue is next
 
@@ -71,20 +56,18 @@ Dennis has not yet said which issue to pick up next session; per
 `handoff`'s "only if the user explicitly said so" rule, nothing is
 queued.
 
-If picking from this session's own output: with #507/#508/#509/#510 all
-now landed, the remaining #494 follow-ups are independent of each other
-and of storage/custody's core migration:
-
-**#511** — `intakeWizard.js` raw field assembly at ~lines 579-609.
+If picking from this session's own output: with #507/#508/#509/#510/#511
+all now landed, the remaining #494 follow-ups are independent of each
+other and of storage/custody's core migration:
 
 **#512** — scope question on `equipment-sensor-quarantine.service.js`'s
 `location`/`storageLocation` usage: needs an owner call before a
 migration issue is filed.
 
-**#513** (new this session) — needs an owner call on whether
-`ship-integration-branch`'s gate should add a lightweight
-per-file smoke pass, given the #507/#508 stale-mock precedent it
-documents.
+**#513** — needs an owner call on whether `ship-integration-branch`'s
+gate should add a lightweight per-file smoke pass, given the #507/#508
+stale-mock precedent it documents (filed last session, still open,
+untouched this session).
 
 Other candidates carried forward from prior handoffs (not re-verified
 this session):
@@ -99,7 +82,7 @@ should run `node src/scripts/backfillSealedSnapshotPins.js` once
 migration (separate from #494's storage/custody scope).
 
 **#390** — the umbrella issue; tracks #491, #492, #493 (closed), and
-#494's 6 follow-ups (#507/#508/#509/#510 now closed, #511/#512 open)
+#494's 6 follow-ups (#507/#508/#509/#510/#511 now closed, #512 open)
 collectively.
 
 Other backlog carried forward unchanged from prior handoffs (not
@@ -114,8 +97,8 @@ re-verified this session):
   `canonical-data-contract-v1.md`'s "Known Residual Legacy Surfaces"
   list not covered by #491-#495.
 - **#489** — full-suite vitest flakiness. Not re-confirmed this session
-  (no full-suite run attempted); #513 (new this session) is a related
-  but distinct finding — a stale mock, not flakiness.
+  (no full-suite run attempted); #513 is a related but distinct
+  finding — a stale mock, not flakiness.
 - Older backlog: `#371`/`#373`/`#374`/`#378`/`#379`, `user.accessType`
   grep sweep, dangling merged branches (`test/440-*`, `test/441-*`,
   `fix/444-retention-period-iso8601`, `fix/450-*`,
@@ -125,7 +108,8 @@ re-verified this session):
   `test/507-storage-repository-canonical-return-shape`,
   `test/508-storage-usecases-canonical-assignment`,
   `test/509-storage-service-canonical-assignment`,
-  `test/510-sample-service-canonical-storage-assignment` — all safe to
+  `test/510-sample-service-canonical-storage-assignment`,
+  `test/511-intake-wizard-canonical-storage-assignment` — all safe to
   delete, low priority housekeeping).
 - **Next e2e slice** (per `E2E_TRACEABILITY_PLAN.md` and
   `playwright-specs`' spec inventory) — check issue #95's tracking
@@ -136,8 +120,8 @@ re-verified this session):
 ## Dev stack state
 
 Nothing started this session. No Docker/Mongo needed — the build-loop
-overlay's "backend-internal slice" proof bar is a native in-memory
-collection mock / targeted vitest run, confirmed still accurate.
+overlay's "backend-internal slice" proof bar is a native supertest run
+against fully mocked Mongo collections, confirmed still accurate.
 
 ## Which skills to use
 
@@ -145,27 +129,16 @@ collection mock / targeted vitest run, confirmed still accurate.
   than the rest of #494 (one named file's response-shaping site, already
   calling through the use-case/repository abstraction for its actual DB
   write, just fabricating a legacy field on the return value), build-loop
-  routed correctly — same as #508/#509.
-- **New this session:** when a `build-loop`/`fix-bugs` slice runs a test
-  file that a *prior, already-closed* issue's own proof run never
-  touched, don't assume a clean baseline — run the file first and check
-  whether failures predate your change (`git stash`, run, `git stash
-  pop`, or just read the failure against what you haven't touched yet).
-  This session found 10 tests broken by #507/#508's mock never being
-  updated, invisible until #510 happened to run this specific file. See
-  #513 for the filed follow-up on whether the gate itself should change.
-- Same distinction #508/#509 confirmed still holds: a use-case/service's
-  own audit-log payload field name is a different contract than the
-  repository snapshot's field of the same name — left alone whenever it's
-  the audit schema's own shape, not a stale read of the migrated
-  snapshot.
-- When a repository method (`findSampleById`/`findCurrentStorageAssignment`)
-  already attaches the canonical field additively (per #507), a consumer
-  migration is often a small, mechanical fetch-and-expose at the read or
-  response-shaping site plus its test fixtures — no repository or
-  use-case changes needed. Worth checking whether a slice is this shape
-  before assuming it needs deeper surgery. #510 confirmed this can apply
-  even when the "write site" named in an issue title turns out to already
-  not be a DB write at all (a prior issue, #474, had already moved the
-  actual write elsewhere) — read the current code before assuming the
-  issue title's framing is still accurate.
+  routed correctly — same as #508/#509/#510.
+- Same pattern #510 confirmed still holds: when a repository/service
+  method (`findCurrentStorageAssignment` via `createSample`) already
+  attaches the canonical field additively, a downstream consumer's own
+  response-shaping site is often a small, mechanical fetch-and-expose —
+  no repository, use-case, or service changes needed. #511 confirmed
+  this generalizes past `sample.service.js` itself to a *caller* of it
+  (`intakeWizard.js`) that builds its own separate response object from
+  the same create-call's return value.
+- No repeat of #510's stale-mock discovery this session — worth noting
+  as a data point (not every slice that touches a previously-migrated
+  file surfaces a hidden broken baseline); still worth running the
+  target test file first before assuming a clean baseline, per #513.
