@@ -1,62 +1,73 @@
 # HANDOFF
 
 **Written:** 2026-08-07, end of session on `feature/docker-e2e-backend-integration`,
-after resolving #508.
+after resolving #509.
 
 ## What happened this session
 
-Dennis said "pick #508" — the second slice of #494's storage/custody
-migration, blocked on #507 (last session) landing the canonical return
-shape first.
+Dennis said "pick #509" — the third slice of #494's storage/custody
+migration, blocked on #507/#508 (both landed the prior session) since
+`storageService.js`'s orchestration sits on top of the repository/
+use-case layer they migrated.
 
-**Routing:** `work-issue` → `build-loop` (capability spec'd in
-`docs/architecture/canonical-data-contract-v1.md`, not yet built into
-these three use-cases — not a bug, not bare coverage). Backend-internal
-slice, native-only proof bar (unit tests with a repository-shaped
-in-memory mock), no Docker needed.
+**Routing:** `work-issue` → `build-loop` (same shape as #508: a
+capability spec'd in `docs/architecture/canonical-data-contract-v1.md`
+as a residual migration target, not yet built into this file — not a
+bug, not bare coverage). Backend-internal slice, native-only proof bar
+(unit tests with a repository-shaped in-memory mock), no Docker needed.
 
-**What landed:** `AllocateSampleUseCase.js`, `MoveSampleUseCase.js`, and
-`ReleaseSampleUseCase.js` (`api/backend/src/core/use-cases/`) now read
-`sample.storageAssignment.boxId`/`.positionCode` — the canonical
-`StorageAssignment` shape `MongoStorageRepository.findSampleById()`
-started attaching in #507 — instead of `sample.storageLocation.boxId`/
-`.position`. Each use-case's own `appendImmutableAudit` payload still
-writes a `storageLocation: { boxId, position }` field — that's the audit
-log's own schema name, not a read of the snapshot, so it was
-deliberately left alone (matches #508's own scope language: "dropping
-any remaining direct `storageLocation` field reads on the returned
-snapshot").
-`docs/architecture/canonical-data-contract-v1.md`'s "Landed in #507" note
-was split to add a new "Landed in #508" note recording this.
+**What landed:** `storageService.js`'s allocate/release orchestration
+(`allocateSampleToPosition`, `autoAssignSampleToBox`,
+`releaseSampleFromPosition`) now resolves a sample's current position via
+`MongoStorageRepository.findSampleById()`'s `storageAssignment.boxId`/
+`.positionCode` instead of reading `sample.storageLocation.boxId`/
+`.position` directly off the raw Mongo document. The service's own
+`appendImmutableAudit` payloads still write a `storageLocation: { boxId,
+position }` shape — that's the audit ledger's own field name, same
+precedent #508 set for the use-cases, left alone. Internal Mongo-level
+`storageLocation.*` reads/writes inside `MongoStorageRepository` itself
+(the actual atomic writes, and their in-transaction race re-checks) are
+unaffected — persistence-layer detail #507 already left alone.
+`verifyBoxIntegrity` (an audit/consistency-check method comparing the
+box's `occupancyGrid` against the sample's own raw `storageLocation`
+snapshot, not orchestration) was deliberately left alone too.
+`docs/architecture/canonical-data-contract-v1.md` got a new "Landed in
+#509" note.
 
-**Proof:** all 62 existing unit tests across the three use-cases'
-`*.test.js` files updated (fixtures switched from `storageLocation:
-{ boxId, position }` to `storageAssignment: { boxId, positionCode }`)
-and passing. Full-suite run not attempted this session (test-loop's
-per-iteration hook only allows targeted files; a full-suite run is
-reserved for the `ship-integration-branch` gate) — only the three
-targeted files were run.
+**Proof:** all 63 existing unit tests in
+`api/backend/tests/unit/storageService.test.js` updated (mocks now wire
+a `storageAssignments` collection `findOne` alongside `samples`, and
+fixtures that gate on current-position checks now set
+`storageAssignment: { boxId, positionCode }` instead of relying solely on
+`sample.storageLocation`) and passing. Full-suite run not attempted (same
+per-iteration scoping as #507/#508 — reserved for
+`ship-integration-branch`).
 
-`wrap-up` ran: no scope creep (diff touched exactly the 3 use-case files,
-their 3 test files, and the doc), no lazy fixes, no stale instructions,
-no ambiguous sub-point closed without its own issue. One minor
-self-inflicted note, not filed anywhere: started editing before creating
-the `test/<slug>` branch, which the protected-branch hook correctly
-blocked — build-loop's own instructions already say to branch before the
-first Edit/Write; just didn't follow that order this time. No skill fix
-needed, just an execution reminder for next time.
+Confirmed via a repo-wide grep that no other direct `sample.storageLocation`
+reads remain in `storageService.js` itself outside the audit-payload/
+`verifyBoxIntegrity` exceptions already accounted for; the other files
+still doing direct reads (`sample.service.js`, `intakeWizard.js`,
+`equipment-sensor-quarantine.service.js`) are already #510/#511/#512, out
+of this slice's scope.
+
+`wrap-up` ran: no scope creep (diff touched exactly `storageService.js`,
+its test file, and the doc), no lazy fixes, no stale instructions to fix.
+One transient note, not filed anywhere: a chained `git add && git commit`
+Bash call hit a momentary "classifier unavailable" error and silently
+didn't run either half — retried both steps individually and it worked.
+Not a recurring pattern, no skill fix needed.
 
 ## Repo state
 
 - **`feature/docker-e2e-backend-integration`**: pushed to origin at
-  `7f13dc37` (merge commit for
-  `test/508-storage-usecases-canonical-assignment`). Clean, up to date
+  `63710ccb` (merge commit for
+  `test/509-storage-service-canonical-assignment`). Clean, up to date
   with origin.
-- Branch `test/508-storage-usecases-canonical-assignment` created and
+- Branch `test/509-storage-service-canonical-assignment` created and
   merged this session (not deleted — low-priority housekeeping, same as
   other merged branches listed below).
-- Issues this session: **#508 closed** (merge-hash comment naming #509
-  as the next consumer). No new issues filed.
+- Issues this session: **#509 closed** (merge-hash comment noting
+  #510/#511/#512 remain open and untouched). No new issues filed.
 
 ## Which issue is next
 
@@ -64,10 +75,17 @@ Dennis has not yet said which issue to pick up next session; per
 `handoff`'s "only if the user explicitly said so" rule, nothing is
 queued.
 
-If picking from this session's own output: **#509** (`storageService.js`
-migrating onto the new `storageAssignment` field) is the natural next
-slice — it's the one remaining consumer #507's return shape was waiting
-on.
+If picking from this session's own output: with #507/#508/#509 all now
+landed, the remaining #494 follow-ups are independent of each other and
+of storage/custody's core migration:
+
+**#510** — `sample.service.js` creation-time `storageLocation` write.
+
+**#511** — `intakeWizard.js` raw field assembly at ~lines 579-609.
+
+**#512** — scope question on `equipment-sensor-quarantine.service.js`'s
+`location`/`storageLocation` usage: needs an owner call before a
+migration issue is filed.
 
 Other candidates carried forward from prior handoffs (not re-verified
 this session):
@@ -78,21 +96,12 @@ Whoever next stands up a real Mongo instance with pre-#502 sample data
 should run `node src/scripts/backfillSealedSnapshotPins.js` once
 (idempotent, safe to re-run).
 
-**#510** — sample.service.js creation-time `storageLocation` write
-(independent of #509, also split from #494).
-
-**#511** — intakeWizard.js raw field assembly at ~lines 579-609
-(independent, also split from #494).
-
-**#512** — scope question on `equipment-sensor-quarantine.service.js`'s
-`location`/`storageLocation` usage: needs an owner call before a
-migration issue is filed (also split from #494).
-
 **#491** stays open as the tracking issue for the RCS-consumer
 migration (separate from #494's storage/custody scope).
 
 **#390** — the umbrella issue; tracks #491, #492, #493 (closed), and
-#494's 6 follow-ups (#507/#508 now closed, #509-#512 open) collectively.
+#494's 6 follow-ups (#507/#508/#509 now closed, #510-#512 open)
+collectively.
 
 Other backlog carried forward unchanged from prior handoffs (not
 re-verified this session):
@@ -114,7 +123,8 @@ re-verified this session):
   `fix/485-sample-details-storage-migration`,
   `test/486-storage-move-sample`, `test/488-inline-storage-movement-e2e`,
   `test/507-storage-repository-canonical-return-shape`,
-  `test/508-storage-usecases-canonical-assignment` — all safe to delete,
+  `test/508-storage-usecases-canonical-assignment`,
+  `test/509-storage-service-canonical-assignment` — all safe to delete,
   low priority housekeeping).
 - **Next e2e slice** (per `E2E_TRACEABILITY_PLAN.md` and
   `playwright-specs`' spec inventory) — check issue #95's tracking
@@ -131,19 +141,19 @@ collection mock / targeted vitest run, confirmed still accurate.
 ## Which skills to use
 
 - `work-issue` → `build-loop`: for a consumer-migration slice that's
-  strictly narrower than the rest of #494 (three named use-cases already
-  calling through the port abstraction, just reading a stale field
-  shape), build-loop routed correctly.
-- A use-case's own audit-log payload field name (e.g.
-  `appendImmutableAudit`'s `storageLocation: {...}`) is a different
-  contract than the repository snapshot's field of the same name — don't
-  conflate "drop remaining `storageLocation` reads on the returned
-  snapshot" with "rename every occurrence of the string
-  `storageLocation` in the file." Confirmed this session (#508): all
-  three use-cases still write `storageLocation` into their audit
-  payloads, correctly, because that's the audit schema's own shape.
-- Branch before the first Edit/Write, not after hitting the
-  protected-branch hook's block — build-loop already says this; this
-  session did the edit first and had to redo the flow after being
-  blocked. No skill gap, just an execution order to actually follow next
-  time.
+  strictly narrower than the rest of #494 (one named file's
+  allocate/release orchestration, already calling through the repository
+  abstraction, just reading a stale field shape), build-loop routed
+  correctly — same as #508.
+- Same distinction #508 confirmed still holds here: a use-case/service's
+  own audit-log payload field name (e.g. `appendImmutableAudit`'s
+  `storageLocation: {...}`) is a different contract than the repository
+  snapshot's field of the same name — `storageService.js`'s audit
+  payloads and its `verifyBoxIntegrity` consistency check both correctly
+  kept reading/writing `storageLocation` because that's their own
+  schema's shape, not a stale read of the migrated snapshot.
+- When a repository method (`findSampleById`) already attaches the
+  canonical field additively (per #507), a consumer migration is often a
+  small, mechanical find-and-replace of the read site plus its test
+  fixtures — no repository or use-case changes needed. Worth checking
+  whether a slice is this shape before assuming it needs deeper surgery.
