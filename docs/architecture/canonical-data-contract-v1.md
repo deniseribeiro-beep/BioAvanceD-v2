@@ -216,6 +216,20 @@ equivalent, `box`/`wellPosition` map onto the existing `StorageBox`/
 `positionCode`) and the one-time-backfill migration plan (not a read-time
 translation layer).
 
+**#512 resolved 2026-08-07 — `equipment-sensor-quarantine.service.js`'s
+`location`/`storageLocation` usage is out of #390/#494's custody-split
+scope:** this file's `sensor.locationId`/`locationID`/
+`storageLocation?.locationID` reads (equipment/freezer matching for
+cold-chain incidents) are the legacy pre-normalization `Location` model
+this section already covers, not custody-state consumption — they belong
+under #458/#459 (consumer migration) if/when that reaches this file, not
+#494. Its `storageLocation.boxId` read is a Mongo query filter key only
+(finds samples under an affected box), never consumed or re-exposed on a
+response the way #507-#511's fabricated `storageLocation` objects were.
+Its `sample.location` write (on quarantine) only stamps quarantine
+status/area onto whatever the sample already had — not a custody-state
+write either. No migration issue filed against #494/#390 for this file.
+
 **Status-field consolidation — decision recorded in #398, implementation
 tracked in #399 (storage/custody split, part 2/3 of #389):**
 `lifecycleStatus`/`availabilityStatus`/`quarantineStatus`/`quarantineReason`
