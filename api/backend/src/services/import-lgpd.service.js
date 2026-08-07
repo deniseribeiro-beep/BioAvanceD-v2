@@ -1133,7 +1133,15 @@ class ImportLGPDService {
           // embedded copy this parser already computes.
           if (sample.rcsEvaluation) {
             try {
-              await rcsAssessmentService.recordAssessment(db, sample.specimenId, sample.rcsEvaluation);
+              const assessment = await rcsAssessmentService.recordAssessment(db, sample.specimenId, sample.rcsEvaluation);
+              // #502: pins integrity verification to this snapshot, the one
+              // in effect when merkleRoot was sealed above, so a later
+              // re-assessment for the same specimenId can't false-positive
+              // a tamper report.
+              await samplesCollection.updateOne(
+                { _id: insertResult.insertedId },
+                { $set: { sealedRcsAssessmentId: assessment._id } }
+              );
             } catch (assessmentError) {
               logger.warn('[IMPORT_LGPD] Falha ao registrar snapshot RcsAssessment referenciado, amostra mantém cópia embutida', {
                 specimenId: sample.specimenId,

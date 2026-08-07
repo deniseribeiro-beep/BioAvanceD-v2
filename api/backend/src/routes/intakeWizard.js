@@ -167,6 +167,13 @@ function buildSampleDocumentFromIntake(data = {}, matchedPatient = null) {
     clinicalData: buildClinicalData(data),
     pharmacologyData: buildPharmacologyData(data),
     merkleRoot: null,
+    // #502: no RcsAssessment/SpecimenPreanalytics snapshot is recorded for
+    // intake-wizard samples, so pin explicitly to "none" rather than leaving
+    // the property absent — MerkleService.generateSampleHashFromSample reads
+    // an absent property as "pre-#502 sample, resolve newest" instead of
+    // "sealed with no snapshot," which would defeat the pin.
+    sealedRcsAssessmentId: null,
+    sealedSpecimenPreanalyticsId: null,
     createdAt: new Date(),
     updatedAt: new Date(),
   };

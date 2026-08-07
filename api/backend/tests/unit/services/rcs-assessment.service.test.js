@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
-const { recordAssessment, getAssessmentsForSpecimen } = require('../../../src/services/rcs-assessment.service');
+const { recordAssessment, getAssessmentsForSpecimen, getAssessmentById } = require('../../../src/services/rcs-assessment.service');
 
 /**
  * Real query-matching fake (exact-match filter + sort), not a canned stub —
@@ -15,8 +15,15 @@ function createFakeCollection() {
   return {
     docs,
     async insertOne(doc) {
+      // Mirrors the real MongoDB driver, which mutates the passed document
+      // with the generated _id — recordAssessment's callers rely on this to
+      // pin a sample to the returned snapshot's _id (#502).
+      doc._id = `fake-${docs.length + 1}`;
       docs.push(doc);
-      return { insertedId: `fake-${docs.length}` };
+      return { insertedId: doc._id };
+    },
+    async findOne(filter = {}) {
+      return docs.find((doc) => matches(doc, filter)) || null;
     },
     find(filter = {}) {
       let current = docs.filter((doc) => matches(doc, filter));
@@ -103,6 +110,23 @@ describe('rcs-assessment.service', () => {
       const assessments = await getAssessmentsForSpecimen(db, 'SPEC-1');
 
       expect(assessments.map((a) => a.rcsScore)).toEqual([95, 70]);
+    });
+  });
+
+  describe('getAssessmentById', () => {
+    it('resolves the exact snapshot by _id, not the newest one for its specimenId (#502)', async () => {
+      const db = createFakeDb();
+      const older = await recordAssessment(db, 'SPEC-1', { rcs_score: 70 });
+      await recordAssessment(db, 'SPEC-1', { rcs_score: 95 });
+
+      const resolved = await getAssessmentById(db, older._id);
+
+      expect(resolved.rcsScore).toBe(70);
+    });
+
+    it('returns null for a null/undefined id instead of querying', async () => {
+      const db = createFakeDb();
+      expect(await getAssessmentById(db, null)).toBeNull();
     });
   });
 });

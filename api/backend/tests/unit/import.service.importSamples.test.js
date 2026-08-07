@@ -243,8 +243,11 @@ describe('ImportService.importSamples (CSV)', () => {
     const result = await importService.importSamples(makeDb(collection), { path: filePath, originalname: 'valid-row.csv' });
 
     expect(result.success).toBe(1);
-    expect(collection.updates).toHaveLength(1);
-    expect(collection.updates[0].update.$set.releaseStatus).toBe('QUARANTINE');
+    // #502: recording the RcsAssessment/SpecimenPreanalytics snapshot each
+    // pins the sample via its own updateOne — this test only asserts the
+    // releaseStatus fallback itself, not the total update count.
+    const releaseStatusUpdate = collection.updates.find((u) => 'releaseStatus' in (u.update.$set || {}));
+    expect(releaseStatusUpdate.update.$set.releaseStatus).toBe('QUARANTINE');
   });
 });
 

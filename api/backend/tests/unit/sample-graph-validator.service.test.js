@@ -127,6 +127,7 @@ describe('SampleGraphValidator', () => {
           toArray: vi.fn().mockResolvedValue([]),
         }),
       }),
+      findOne: vi.fn().mockResolvedValue(null),
     };
 
     specimenPreanalyticsCollection = {
@@ -234,6 +235,58 @@ describe('SampleGraphValidator', () => {
     expect(report.graphPath.quality.reason).toContain('bloqueado');
     expect(report.graphPath.integrity.valid).toBe(true);
     expect(report.suggestedStatus).toBe('QUARANTINE');
+  });
+
+  it('#502: pins integrity verification to the snapshot sealed at merkleRoot time, ignoring a newer snapshot recorded afterward', async () => {
+    const sealedAssessment = {
+      _id: 'assessment-sealed',
+      specimenId: 'SPEC-002',
+      governanceStatus: 1,
+      finalGrade: 'A',
+      rcsScore: 95,
+      axisPenalties: [],
+      calculationTrace: {},
+    };
+    // A later re-assessment for the same specimenId, recorded after sealing —
+    // resolving "newest" instead of the pin would surface this one and
+    // false-positive a tamper report.
+    const laterAssessment = {
+      _id: 'assessment-later',
+      specimenId: 'SPEC-002',
+      governanceStatus: 0,
+      finalGrade: 'E',
+      rcsScore: 10,
+      axisPenalties: [],
+      calculationTrace: {},
+    };
+
+    const sample = buildSample({ specimenId: 'SPEC-002', quality_category: 'A' });
+    sample.sealedRcsAssessmentId = sealedAssessment._id;
+    sample.merkleRoot = generateSampleHash({
+      ...sample,
+      rcsScore: sealedAssessment.rcsScore,
+      finalGrade: sealedAssessment.finalGrade,
+      calculationTrace: sealedAssessment.calculationTrace,
+      axisPenalties: sealedAssessment.axisPenalties,
+    });
+
+    samplesCollection.findOne.mockResolvedValue(sample);
+    consentsCollection.findOne.mockResolvedValue({ status: 'ACTIVE', participantId: '12345678' });
+
+    // "newest first" would put laterAssessment ahead of sealedAssessment.
+    rcsAssessmentsCollection.find.mockReturnValue({
+      sort: vi.fn().mockReturnValue({
+        toArray: vi.fn().mockResolvedValue([laterAssessment, sealedAssessment]),
+      }),
+    });
+    rcsAssessmentsCollection.findOne.mockImplementation(async ({ _id }) => (
+      [sealedAssessment, laterAssessment].find((a) => a._id === _id) || null
+    ));
+
+    const report = await validator.validateSampleCompliance(sample._id);
+
+    expect(rcsAssessmentsCollection.findOne).toHaveBeenCalledWith({ _id: 'assessment-sealed' });
+    expect(report.graphPath.integrity.valid).toBe(true);
   });
 
   it('valida o nó de Clínica com sucesso e falha em Fabry sem biomarcadores', async () => {

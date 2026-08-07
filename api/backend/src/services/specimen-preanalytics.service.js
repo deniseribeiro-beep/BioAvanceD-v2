@@ -25,7 +25,20 @@ async function getProfilesForSpecimen(db, specimenId) {
     .toArray();
 }
 
+/**
+ * One specific snapshot by its own _id — used to resolve the exact snapshot
+ * a sample's merkleRoot was sealed against (#502), as opposed to
+ * getProfilesForSpecimen's "newest" resolution which drifts if a later
+ * snapshot is recorded for the same specimenId after sealing.
+ */
+async function getProfileById(db, id) {
+  if (!id) return null;
+  const collection = await getCollection(db, 'specimenPreanalytics');
+  return collection.findOne({ _id: id });
+}
+
 module.exports = {
   recordProfile,
   getProfilesForSpecimen,
+  getProfileById,
 };

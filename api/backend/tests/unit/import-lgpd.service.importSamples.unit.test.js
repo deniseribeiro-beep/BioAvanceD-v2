@@ -109,7 +109,13 @@ function makeDb({ sampleTypeFound = true, sampleOriginFound = true, protocolFoun
     findOne: vi.fn().mockResolvedValue(null),
   };
   const rcsAssessmentsCollection = {
-    insertOne: vi.fn().mockResolvedValue({ insertedId: 'assessment-1' }),
+    // Mirrors the real MongoDB driver, which mutates the passed document
+    // with the generated _id — recordAssessment's caller relies on this to
+    // pin the sample to the returned snapshot's _id (#502).
+    insertOne: vi.fn().mockImplementation((doc) => {
+      doc._id = 'assessment-1';
+      return Promise.resolve({ insertedId: 'assessment-1' });
+    }),
   };
 
   const collections = {
@@ -412,7 +418,11 @@ describe('ImportLGPDService.importSamples', () => {
     const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' });
 
     expect(result.success).toBe(1);
-    expect(samplesCollection.updateOne).not.toHaveBeenCalled();
+    // #502: the RcsAssessment snapshot pin update is expected here — this
+    // test only asserts releaseStatus itself is never among the $set keys.
+    for (const call of samplesCollection.updateOne.mock.calls) {
+      expect(call[1].$set).not.toHaveProperty('releaseStatus');
+    }
   });
 
   // #459: replaces the legacy `locations`-collection scan with a

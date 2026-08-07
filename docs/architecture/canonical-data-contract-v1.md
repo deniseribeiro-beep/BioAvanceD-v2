@@ -413,6 +413,27 @@ through `RcsAssessment` (#383). The actual outstanding consumers remain
 exactly the ones named above (MerkleService, neo4j projection, frontend
 types, the live registration path) — #500 named the wrong file.
 
+**Sample seal-time snapshot pin — landed #502:** `MerkleService`'s
+resolved-snapshot integrity hash (#497) originally resolved the *newest*
+`RcsAssessment`/`SpecimenPreanalytics` snapshot for a sample's
+`specimenId`. That drifts if a later snapshot is ever recorded for the
+same `specimenId` after the sample's `merkleRoot` was sealed (e.g. a
+future re-assessment/correction/re-import flow) — verification would
+resolve the newer snapshot and report tampering for a sample that was
+only re-assessed. Fixed by pinning: `Sample.js` gained
+`sealedRcsAssessmentId`/`sealedSpecimenPreanalyticsId` (implementation
+detail, not a dict-02 entity — dict-02's own `MerkleRoot`
+P1X-0162..0167 is a separate, not-yet-built stub entity), set by
+`import.service.js`/`import-lgpd.service.js` to the `_id` of whichever
+snapshot was just recorded (or left `null` when no snapshot exists at
+seal time, e.g. `intakeWizard.js`, which doesn't record a snapshot at
+all). `MerkleService.generateSampleHashFromSample` now resolves the
+pinned snapshot by `_id` when the field is present on the sample
+document, falling back to the pre-#502 "resolve newest" behavior only
+for samples written before this pin existed (no
+`sealedRcsAssessmentId`/`sealedSpecimenPreanalyticsId` own-property at
+all).
+
 ### SpecimenPreanalytics
 
 - `specimenId` (reference to `Specimen`, not a duplicate — dict-07 row 38:

@@ -93,19 +93,37 @@ function sprecFromProfile(record) {
 
 /**
  * Same contract as generateSampleHash, but for an already-persisted sample:
- * resolves the newest referenced RcsAssessment (#383) and SpecimenPreanalytics
+ * resolves the referenced RcsAssessment (#383) and SpecimenPreanalytics
  * (#388) snapshots for the sample's specimenId and hashes those in place of
  * the legacy embedded rcsScore/sprec fields when present. Falls back to the
  * legacy embedded-field read for samples that don't have a recorded snapshot
  * yet, so the hash stays equivalent for already-migrated samples (#497/#493).
+ *
+ * Snapshot resolution is pinned to whichever RcsAssessment/SpecimenPreanalytics
+ * record the sample was *sealed* against (`sealedRcsAssessmentId`/
+ * `sealedSpecimenPreanalyticsId`, set at write time — see
+ * import.service.js/import-lgpd.service.js), not "whatever is newest right
+ * now" (#502): resolving the newest snapshot false-positives a tamper report
+ * if a later re-assessment/re-import records a new snapshot for the same
+ * specimenId after the merkleRoot was already sealed. Samples written before
+ * this pin existed (no `sealedRcsAssessmentId`/`sealedSpecimenPreanalyticsId`
+ * own-property on the document at all) keep the pre-#502 "resolve newest"
+ * behavior for backward compatibility.
  */
 async function generateSampleHashFromSample(db, sample = {}) {
   const specimenId = String(sample?.specimenId || '').trim();
   let effectiveSample = sample;
 
   if (db && specimenId) {
-    const [latestRcs] = await rcsAssessmentService.getAssessmentsForSpecimen(db, specimenId);
-    const [latestSprec] = await specimenPreanalyticsService.getProfilesForSpecimen(db, specimenId);
+    const hasPinnedRcs = Object.prototype.hasOwnProperty.call(sample, 'sealedRcsAssessmentId');
+    const hasPinnedSprec = Object.prototype.hasOwnProperty.call(sample, 'sealedSpecimenPreanalyticsId');
+
+    const latestRcs = hasPinnedRcs
+      ? await rcsAssessmentService.getAssessmentById(db, sample.sealedRcsAssessmentId)
+      : (await rcsAssessmentService.getAssessmentsForSpecimen(db, specimenId))[0];
+    const latestSprec = hasPinnedSprec
+      ? await specimenPreanalyticsService.getProfileById(db, sample.sealedSpecimenPreanalyticsId)
+      : (await specimenPreanalyticsService.getProfilesForSpecimen(db, specimenId))[0];
 
     if (latestRcs || latestSprec) {
       effectiveSample = {

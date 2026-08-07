@@ -61,6 +61,14 @@ const SampleSchema = new Schema({
   collectionSite: { type: String, default: null },
   sprec: { type: Schema.Types.Mixed, default: null },
   merkleRoot: { type: String, default: null },
+  // #502: pins integrity verification to the RcsAssessment/SpecimenPreanalytics
+  // snapshot (if any) that existed at seal time, so a later re-assessment
+  // snapshot for the same specimenId can't cause a false tamper report.
+  // No dict-02 entity covers this — it's an implementation detail of
+  // MerkleService's per-sample hash, not part of the dict-02 P1X-0162..0167
+  // MerkleRoot stub entity.
+  sealedRcsAssessmentId: { type: Schema.Types.Mixed, default: null },
+  sealedSpecimenPreanalyticsId: { type: Schema.Types.Mixed, default: null },
   consentTemplateId: { type: String, default: null },
   clinicalData: { type: Schema.Types.Mixed, default: null },
   pharmacologyData: { type: Schema.Types.Mixed, default: null },
@@ -208,6 +216,8 @@ class SampleModel {
       collectionSite: data.collectionSite || null,
       sprec: data.sprec ?? null,
       merkleRoot: data.merkleRoot || null,
+      sealedRcsAssessmentId: data.sealedRcsAssessmentId ?? null,
+      sealedSpecimenPreanalyticsId: data.sealedSpecimenPreanalyticsId ?? null,
       consentTemplateId: data.consentTemplateId || null,
       clinicalData: data.clinicalData ?? null,
       pharmacologyData: data.pharmacologyData ?? null,

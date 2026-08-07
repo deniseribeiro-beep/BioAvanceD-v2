@@ -452,7 +452,14 @@ class ImportService {
             const insertResult = await samplesCollection.insertOne(sample);
             if (sample.rcsEvaluation) {
               try {
-                await rcsAssessmentService.recordAssessment(db, sample.specimenId, sample.rcsEvaluation);
+                const assessment = await rcsAssessmentService.recordAssessment(db, sample.specimenId, sample.rcsEvaluation);
+                // #502: pins integrity verification to this snapshot so a
+                // later re-assessment for the same specimenId can't
+                // false-positive a tamper report.
+                await samplesCollection.updateOne(
+                  { _id: insertResult.insertedId },
+                  { $set: { sealedRcsAssessmentId: assessment._id } }
+                );
               } catch (assessmentError) {
                 logger.warn('[IMPORT_SERVICE] Falha ao registrar snapshot RcsAssessment referenciado, amostra mantém cópia embutida', {
                   specimenId: sample.specimenId,
@@ -549,7 +556,14 @@ class ImportService {
             const insertResult = await samplesCollection.insertOne(sample);
             if (sample.rcsEvaluation) {
               try {
-                await rcsAssessmentService.recordAssessment(db, sample.specimenId, sample.rcsEvaluation);
+                const assessment = await rcsAssessmentService.recordAssessment(db, sample.specimenId, sample.rcsEvaluation);
+                // #502: pins integrity verification to this snapshot so a
+                // later re-assessment for the same specimenId can't
+                // false-positive a tamper report.
+                await samplesCollection.updateOne(
+                  { _id: insertResult.insertedId },
+                  { $set: { sealedRcsAssessmentId: assessment._id } }
+                );
               } catch (assessmentError) {
                 logger.warn('[IMPORT_SERVICE] Falha ao registrar snapshot RcsAssessment referenciado, amostra mantém cópia embutida', {
                   specimenId: sample.specimenId,
@@ -559,7 +573,12 @@ class ImportService {
             }
             if (sample.sprec) {
               try {
-                await specimenPreanalyticsService.recordProfile(db, sample.specimenId, sample.sprec);
+                const profile = await specimenPreanalyticsService.recordProfile(db, sample.specimenId, sample.sprec);
+                // #502: same pin as above, for the SpecimenPreanalytics half.
+                await samplesCollection.updateOne(
+                  { _id: insertResult.insertedId },
+                  { $set: { sealedSpecimenPreanalyticsId: profile._id } }
+                );
               } catch (profileError) {
                 logger.warn('[IMPORT_SERVICE] Falha ao registrar snapshot SpecimenPreanalytics referenciado, amostra mantém cópia embutida', {
                   specimenId: sample.specimenId,

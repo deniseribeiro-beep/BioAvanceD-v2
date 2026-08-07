@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
-const { recordProfile, getProfilesForSpecimen } = require('../../../src/services/specimen-preanalytics.service');
+const { recordProfile, getProfilesForSpecimen, getProfileById } = require('../../../src/services/specimen-preanalytics.service');
 
 /**
  * Real query-matching fake (exact-match filter + sort), not a canned stub —
@@ -15,8 +15,15 @@ function createFakeCollection() {
   return {
     docs,
     async insertOne(doc) {
+      // Mirrors the real MongoDB driver, which mutates the passed document
+      // with the generated _id — recordProfile's callers rely on this to
+      // pin a sample to the returned snapshot's _id (#502).
+      doc._id = `fake-${docs.length + 1}`;
       docs.push(doc);
-      return { insertedId: `fake-${docs.length}` };
+      return { insertedId: doc._id };
+    },
+    async findOne(filter = {}) {
+      return docs.find((doc) => matches(doc, filter)) || null;
     },
     find(filter = {}) {
       let current = docs.filter((doc) => matches(doc, filter));
@@ -100,6 +107,23 @@ describe('specimen-preanalytics.service', () => {
       const profiles = await getProfilesForSpecimen(db, 'SPEC-1');
 
       expect(profiles.map((p) => p.matrixType)).toEqual(['solid', 'fluid']);
+    });
+  });
+
+  describe('getProfileById', () => {
+    it('resolves the exact snapshot by _id, not the newest one for its specimenId (#502)', async () => {
+      const db = createFakeDb();
+      const older = await recordProfile(db, 'SPEC-1', { matrixType: 'fluid' });
+      await recordProfile(db, 'SPEC-1', { matrixType: 'solid' });
+
+      const resolved = await getProfileById(db, older._id);
+
+      expect(resolved.matrixType).toBe('fluid');
+    });
+
+    it('returns null for a null/undefined id instead of querying', async () => {
+      const db = createFakeDb();
+      expect(await getProfileById(db, null)).toBeNull();
     });
   });
 });
