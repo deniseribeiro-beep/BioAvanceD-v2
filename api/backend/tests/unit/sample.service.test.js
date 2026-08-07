@@ -121,7 +121,13 @@ function mockOperationalStorage(db) {
     storagePaths: {
       findOne: vi.fn().mockResolvedValue({ boxId: BOX_ID, rackId: RACK_ID, shelfId: SHELF_ID, freezerId: FREEZER_ID })
     },
-    storageAssignments: { insertOne: vi.fn().mockResolvedValue({ insertedId: 'assignment-1' }) }
+    // #507: AllocateSampleUseCase's findSampleById resolves the canonical
+    // storageAssignment via findOne before the position is even open — no
+    // open assignment exists yet at create time, so this stays null.
+    storageAssignments: {
+      insertOne: vi.fn().mockResolvedValue({ insertedId: 'assignment-1' }),
+      findOne: vi.fn().mockResolvedValue(null)
+    }
   };
 
   db.collection.mockImplementation((name) => {
@@ -182,6 +188,32 @@ describe('sample.service', () => {
       const [insertedSample] = db.collections.samples.insertOne.mock.calls[0];
       expect(insertedSample.storageLocation).toEqual({ boxId: BOX_ID, position: 'B2' });
       expect(insertedSample.locationID).toBeNull();
+    });
+
+    it('exposes the canonical storageAssignment on the response, resolved from the just-opened StorageAssignment record, per issue #510', async () => {
+      const db = makeDb();
+      mockOperationalStorage(db);
+      const baseImplementation = db.collection.getMockImplementation();
+      const opened = { specimenId: 'generated-id', boxId: BOX_ID, positionCode: 'B2', removedAt: null };
+      const storageAssignmentsFindOne = vi.fn(({ specimenId, removedAt }) => {
+        if (specimenId === opened.specimenId && removedAt === null) {
+          return Promise.resolve(opened);
+        }
+        return Promise.resolve(null);
+      });
+      // Override just storageAssignments.findOne with real query-matching
+      // semantics, keeping mockOperationalStorage's other storage-chain mocks.
+      db.collection.mockImplementation((name) => {
+        if (name === 'storageAssignments') {
+          return { insertOne: vi.fn().mockResolvedValue({ insertedId: 'assignment-1' }), findOne: storageAssignmentsFindOne };
+        }
+        return baseImplementation(name);
+      });
+
+      const result = await sampleService.createSample(db, validSampleData({ positionCode: 'B2' }));
+
+      expect(result.storageAssignment).toEqual(opened);
+      expect(result.storageLocation).toEqual({ boxId: BOX_ID, position: 'B2' });
     });
 
     it('opens a StorageAssignment for the specimen at boxId/positionCode, per issue #462/#474', async () => {

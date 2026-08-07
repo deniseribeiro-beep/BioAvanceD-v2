@@ -167,6 +167,18 @@ comparing the box's `occupancyGrid` against the sample's own raw
 `storageLocation` snapshot for internal-consistency, not orchestrating a
 position change.
 
+**Landed in #510 (consumer migration, split from #494):** `sample.service.js`'s
+`createSample` no longer fabricates a `storageLocation` snapshot on the
+response object from local `boxId`/`positionCode` variables; the DB write at
+creation time was already routed through `AllocateSampleUseCase` (#474), so
+this slice was the response-shaping site, not a Mongo write. `createSample`
+now additionally resolves the just-opened record via
+`MongoStorageRepository.findCurrentStorageAssignment()` and exposes it as
+`sample.storageAssignment` on the returned object — additive, same precedent
+#507 set for `findSampleById()`. The legacy `sample.storageLocation = {
+boxId, position }` assignment stays, unchanged, for existing consumers of the
+create response.
+
 **`locationId`/`location`/`locationID` are legacy, not a second storage
 system (#453, resolved 2026-08-06):** #450's audit found these fields
 alongside `storageLocation` and initially treated them as an unresolved
