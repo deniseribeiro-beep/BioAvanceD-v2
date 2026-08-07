@@ -131,12 +131,21 @@ land (#383, #388); storage/custody remains filed as its own follow-up
 `StorageAssignment` (dict-02 ELM-0167-0178) as a `storageAssignment` field
 on its return value, resolved via the new `findCurrentStorageAssignment()`
 method — additive, not a breaking change: the raw `storageLocation`
-snapshot stays on the returned object unchanged, since the three
-use-case consumers (`AllocateSampleUseCase`/`MoveSampleUseCase`/
-`ReleaseSampleUseCase`, #508) and `storageService.js` (#509) haven't been
-migrated onto the new field yet. Internal Mongo-level `storageLocation.*`
-reads/writes inside the repository itself are unaffected — they're the
-persistence-layer detail #507 explicitly left alone.
+snapshot stays on the returned object unchanged. Internal Mongo-level
+`storageLocation.*` reads/writes inside the repository itself are
+unaffected — they're the persistence-layer detail #507 explicitly left
+alone.
+
+**Landed in #508 (consumer migration, split from #494):**
+`AllocateSampleUseCase`/`MoveSampleUseCase`/`ReleaseSampleUseCase` now
+read the canonical `sample.storageAssignment.boxId`/`.positionCode`
+instead of `sample.storageLocation.boxId`/`.position` for their
+before/current-position checks. Each use-case's own audit-log payload
+still writes a `storageLocation: { boxId, position }` shape — that's the
+`appendImmutableAudit` schema's own field name, not a read of the
+snapshot's now-legacy `storageLocation`, so it was left alone.
+`storageService.js` (#509) is the remaining consumer not yet migrated
+onto `storageAssignment`.
 
 **`locationId`/`location`/`locationID` are legacy, not a second storage
 system (#453, resolved 2026-08-06):** #450's audit found these fields

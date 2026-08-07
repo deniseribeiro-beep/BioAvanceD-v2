@@ -7,7 +7,7 @@ function makeSampleSnapshot(overrides = {}) {
   return {
     _id: 'sample-1',
     barcode: 'BC-1',
-    storageLocation: { boxId: 'box-1', position: 'a1' },
+    storageAssignment: { boxId: 'box-1', positionCode: 'a1' },
     ...overrides
   };
 }
@@ -95,8 +95,8 @@ describe('ReleaseSampleUseCase', () => {
     await expect(useCase.execute(baseCommand)).rejects.toThrow('Amostra não encontrada');
   });
 
-  it('throws when the sample has no storageLocation.boxId', async () => {
-    const sampleSnapshot = makeSampleSnapshot({ storageLocation: { position: 'A1' } });
+  it('throws when the sample has no storageAssignment.boxId', async () => {
+    const sampleSnapshot = makeSampleSnapshot({ storageAssignment: { positionCode: 'A1' } });
     const storageRepository = makeStorageRepository({ sampleSnapshot });
     const auditRepository = makeAuditRepository();
     const useCase = new ReleaseSampleUseCase({ storageRepository, auditRepository });
@@ -107,8 +107,8 @@ describe('ReleaseSampleUseCase', () => {
     expect(storageRepository.withTransaction).not.toHaveBeenCalled();
   });
 
-  it('throws when the sample has no storageLocation.position', async () => {
-    const sampleSnapshot = makeSampleSnapshot({ storageLocation: { boxId: 'box-1' } });
+  it('throws when the sample has no storageAssignment.positionCode', async () => {
+    const sampleSnapshot = makeSampleSnapshot({ storageAssignment: { boxId: 'box-1' } });
     const storageRepository = makeStorageRepository({ sampleSnapshot });
     const auditRepository = makeAuditRepository();
     const useCase = new ReleaseSampleUseCase({ storageRepository, auditRepository });

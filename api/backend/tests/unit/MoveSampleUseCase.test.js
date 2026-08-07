@@ -14,7 +14,7 @@ function makeSample(overrides = {}) {
   return {
     _id: 'sample-1',
     barcode: 'BC-1',
-    storageLocation: { boxId: 'box-src', position: 'a1' },
+    storageAssignment: { boxId: 'box-src', positionCode: 'a1' },
     ...overrides
   };
 }
@@ -161,7 +161,7 @@ describe('MoveSampleUseCase', () => {
 
   it('throws when the sample has no source boxId', async () => {
     const { useCase } = makeDeps({
-      sample: makeSample({ storageLocation: { position: 'A1' } })
+      sample: makeSample({ storageAssignment: { positionCode: 'A1' } })
     });
     await expect(useCase.execute(baseCommand())).rejects.toThrow(
       'Amostra não possui localização de origem para movimentação'
@@ -170,7 +170,7 @@ describe('MoveSampleUseCase', () => {
 
   it('throws when the sample has no source position', async () => {
     const { useCase } = makeDeps({
-      sample: makeSample({ storageLocation: { boxId: 'box-src' } })
+      sample: makeSample({ storageAssignment: { boxId: 'box-src' } })
     });
     await expect(useCase.execute(baseCommand())).rejects.toThrow(
       'Amostra não possui localização de origem para movimentação'
@@ -179,7 +179,7 @@ describe('MoveSampleUseCase', () => {
 
   it('throws when target position equals the current position (same box and position)', async () => {
     const { useCase, storageRepository } = makeDeps({
-      sample: makeSample({ storageLocation: { boxId: 'box-src', position: 'A1' } })
+      sample: makeSample({ storageAssignment: { boxId: 'box-src', positionCode: 'A1' } })
     });
     const cmd = baseCommand();
     cmd.targetBoxId = 'box-src';

@@ -26,10 +26,12 @@ class AllocateSampleUseCase {
       throw new Error('Amostra não encontrada');
     }
 
-    const beforeLocation = sample.storageLocation
+    const beforeLocation = sample.storageAssignment
       ? {
-          boxId: sample.storageLocation.boxId ? String(sample.storageLocation.boxId) : null,
-          position: sample.storageLocation.position ? String(sample.storageLocation.position).toUpperCase() : null
+          boxId: sample.storageAssignment.boxId ? String(sample.storageAssignment.boxId) : null,
+          position: sample.storageAssignment.positionCode
+            ? String(sample.storageAssignment.positionCode).toUpperCase()
+            : null
         }
       : null;
 
@@ -53,10 +55,12 @@ class AllocateSampleUseCase {
           throw new Error('Amostra não encontrada');
         }
 
-        const beforeLocation = sample.storageLocation
+        const beforeLocation = sample.storageAssignment
           ? {
-              boxId: sample.storageLocation.boxId ? String(sample.storageLocation.boxId) : null,
-              position: sample.storageLocation.position ? String(sample.storageLocation.position).toUpperCase() : null
+              boxId: sample.storageAssignment.boxId ? String(sample.storageAssignment.boxId) : null,
+              position: sample.storageAssignment.positionCode
+                ? String(sample.storageAssignment.positionCode).toUpperCase()
+                : null
             }
           : null;
 
