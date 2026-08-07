@@ -1,66 +1,101 @@
 # HANDOFF
 
 **Written:** 2026-08-07, end of session on `feature/docker-e2e-backend-integration`,
-after splitting #491 into #497-#501.
+after resolving #498.
 
 ## What happened this session
 
-Dennis said "pick #491". Routed via `work-issue` to `divide-and-conquer`
-(design-split playbook): #491 (migrate backend RCS consumers off
-`Sample.js` embedded fields onto `RcsAssessment`, one of the six
-sub-issues #390 was split into last session) lists 5 independent
-consumers. Asked Dennis via `AskUserQuestion` whether to tackle one
-consumer, all five, or split further before any code — he chose to
-split into sub-issues first, no implementation this session.
+Dennis said "pick #498". Routed via `work-issue` -> `resolve-issue`
+(refactor migrating a backend consumer off legacy embedded RCS fields
+onto `RcsAssessment`, one of the five sub-issues #491 was split into
+last session).
 
-Filed 5 child issues under #491, each independently implementable:
+**Investigation found the issue's literal target was the wrong file.**
+`quality-compatibility.service.js`'s `normalizeSample()` (the function
+#498 named) is a pure in-memory normalizer applied to not-yet-persisted
+import/scoring payloads — at that point in the call chain (import CSV/
+XLSX/JSON parsing, `quality-domain.service#evaluateQuality`) there's no
+`specimenId` yet to resolve an `RcsAssessment` against, so "resolve
+through RcsAssessment" doesn't apply there. Traced the actual
+persisted-sample read site one layer up:
+`SampleGraphValidator._validateQuality(sample)` ->
+`quality-domain.service#validateQualityForRelease(sample)` ->
+`resolveMethodologicalQuality` -> `evaluateQuality` ->
+`normalizeSample(sample)`, called from `validateSampleCompliance`
+(invoked right after `samplesCollection.insertOne` during sample
+import) — this is where a persisted sample's legacy embedded
+`rcsScore`/`scoreBasedGrade`/`axisPenalties` actually get read.
 
-- **#497** — `MerkleService.js` RCS half (hashes `sample.rcsScore`
-  directly). Coordinate with #493's MerkleService item for the SPREC
-  half of the same file — don't land one half without the other.
-- **#498** — `quality-compatibility.service.js` (reads
-  `rcsScore`/`scoreBasedGrade`/`axisPenalties` off a normalized sample
-  object).
-- **#499** — `import-lgpd.service.js` has its own separate RCS-computing
-  CSV parse logic never wired to `rcsAssessmentService` at all; needs to
-  call `recordAssessment` like `import.service.js`'s CSV/XLSX branch
-  already does.
-- **#500** — `rcs-certification.service.js` references RCS fields
-  directly.
-- **#501** — `import.service.js`'s JSON-import branch never calls
-  `rcsAssessmentService.recordAssessment`; only the CSV/XLSX branch does
-  today.
+**Fix:** added `quality-domain.service.js#validateQualityForReleaseFromSample(db, sample)`
+— resolves the newest `RcsAssessment` snapshot for the sample's
+`specimenId` via `rcs-assessment.service#getAssessmentsForSpecimen`
+and uses it when present; falls back to the legacy
+`validateQualityForRelease(sample)` path (embedded-field read) for
+samples with no recorded snapshot yet, preserving existing behavior.
+`SampleGraphValidator._validateQuality` now calls the new async
+resolver (made `_validateQuality` and its one call site `await`ed).
+`quality-compatibility.service.js` itself is unchanged — still the
+right tool for its actual job (normalizing raw import/scoring
+payloads).
 
-Commented on #491 with the breakdown; **left #491 open** as the tracking
-issue (closes once all five sub-issues land), same pattern #389/#390
-used.
+Added a unit test in `sample-graph-validator.service.test.js` covering
+the migrated-sample (RcsAssessment-present) path; existing tests
+(unchanged assertions) now exercise the fallback path via an added
+`rcsAssessments` collection mock that returns an empty array by
+default. Verified against baseline (`git stash`) that the pre-existing
+`Unexpected collection name: rcsAssessments` warnings in two unrelated
+import test files (`import.service.sprec.test.js`) are pre-existing,
+not a regression from this change.
 
-No branch created, no commits, no product code touched this session —
-pure issue-tracker filing (`gh issue create` x5, `gh issue comment` x1).
+Branch `fix/498-quality-compatibility-rcs-assessment` (off
+`feature/docker-e2e-backend-integration`), one commit, fast-forward
+merged back in, local branch deleted (never pushed separately, so no
+remote delete needed). Pushed `feature/docker-e2e-backend-integration`.
+Closed #498 with a comment explaining the scope difference and pointing
+at the actual fix site.
+
+Targeted tests run and green: `sample-graph-validator.service.test.js`
+(6 tests), `quality-domain.service.unit.test.js` (19), `quality-
+compatibility.service.unit.test.js` (11 — untouched, confirms no
+regression), `rcs-assessment.service.test.js` (4), plus the adjacent
+import suites (`import.service.importSamples`, `import-lgpd.service.*`,
+`sampleComplianceSync.service.test.js`, `import.service.sprec.test.js`)
+— all green, no regressions.
+
+No friction this session (`wrap-up` ran, nothing to file) — the
+scope-differs-from-issue-title judgment call was resolved by tracing
+the real call chain, not a skill gap.
 
 ## Repo state
 
-- **`feature/docker-e2e-backend-integration`**: unchanged this session
-  except for this HANDOFF.md rotation. Clean, pushed, up to date with
-  origin (verify before next session's push, not re-checked here).
+- **`feature/docker-e2e-backend-integration`**: clean, pushed, up to
+  date with origin as of this session (commit `339d823e`, "Resolve
+  #498: resolve sample release quality via referenced RcsAssessment").
 - No dangling branches from this session.
-- Issues this session: **#497, #498, #499, #500, #501 filed**; **#491
-  commented, left open** as their tracking issue.
+- Issues this session: **#498 closed** (comment posted explaining the
+  actual fix site).
 
 ## Which issue is next
 
-Dennis has not yet said which of #497-#501 to pick up next session; per
+Dennis has not yet said which issue to pick up next session; per
 `handoff`'s "only if the user explicitly said so" rule, nothing is
-queued. Recommended if asked: **#498 (quality-compatibility.service.js)**
-is the simplest standalone refactor (no cross-file coordination, no
-wiring gap) — good first pick. **#497 (MerkleService)** needs
-coordinating with #493's sibling item, so pair those two sessions or do
-them together. **#499 and #501** are both "wire up the missing
-`recordAssessment` call" shape and share a pattern (see #501/#499 bodies
-for the reference implementation at `import.service.js` ~538-557) — could
-be done together or by the same session for consistency. **#500**
-(rcs-certification.service.js) needs its own field-read audit first,
-scope not fully nailed down yet.
+queued.
+
+Remaining #491 children carried forward:
+- **#497** — `MerkleService.js` RCS half. Coordinate with #493's
+  MerkleService item for the SPREC half of the same file.
+- **#499** — `import-lgpd.service.js`'s separate RCS-computing CSV
+  parse logic never wired to `rcsAssessmentService.recordAssessment`.
+- **#500** — `rcs-certification.service.js` references RCS fields
+  directly (own field-read audit still needed, scope not nailed down).
+- **#501** — `import.service.js`'s JSON-import branch never calls
+  `rcsAssessmentService.recordAssessment` (only CSV/XLSX does, per
+  `import.service.js` ~538-557 for the reference implementation).
+- **#499 and #501** share the same "wire up the missing
+  `recordAssessment` call" shape — could be done together.
+
+**#491** stays open as the tracking issue — now 1 of 5 children closed
+(#498); #497, #499, #500, #501 still open.
 
 Other backlog carried forward unchanged from prior handoffs (not
 re-verified this session):
@@ -69,7 +104,7 @@ re-verified this session):
   assessment from the client? (needs owner call before implementation)
 - **#493** — backend SPREC consumers (MerkleService, import.service
   JSON-branch SPREC gap, sampleMerkleIntegrity) — still unsplit, may
-  warrant the same per-consumer split #491 just got.
+  warrant the same per-consumer split #491 got.
 - **#494** — storage/custody consumers (storageService, sample.service,
   Allocate/Move/Release use-cases, MongoStorageRepository*, intakeWizard,
   NotificationService, sensor services) — still unsplit.
@@ -97,22 +132,22 @@ re-verified this session):
 
 ## Dev stack state
 
-Nothing started this session — pure `gh issue` create/comment work, no
-native or Docker processes.
+Nothing started this session — native vitest only (no Docker, no dev
+server), per the end-loaded gate order.
 
 ## Which skills to use
 
-- `work-issue` -> `divide-and-conquer` was correct again: #491's own
-  body listed 5 independent consumers, and Dennis's own answer to the
-  scoping `AskUserQuestion` ("split into sub-issues first") confirmed
-  the route rather than tackling any implementation.
-- `divide-and-conquer`'s design-split playbook: design breakdown was
-  already spelled out in #491's body (no fresh design work needed) ->
-  confirmed with Dennis via `AskUserQuestion` -> filed with
-  `Originating issue:` lines -> commented + left #491 open as tracking
-  issue. No deviation needed.
-- No project board found for this repo (no `local-env` overlay present
-  under `.claude/skills/local-env/`), so boarding step was skipped —
+- `work-issue` -> `resolve-issue` was correct: #498 is a refactor
+  migrating a backend consumer off legacy embedded fields, not a bug,
+  coverage gap, or net-new capability.
+- `resolve-issue`'s "trace before trusting the issue's own field/file
+  claims" instinct paid off here even though the issue had no
+  "needs owner call" label — the issue named the wrong file entirely
+  (a pure normalizer with no DB access), and only tracing actual
+  callers (`import.service.js` -> `quality-compatibility.service.js`
+  -> `quality-domain.service.js` -> `SampleGraphValidator.js`) found
+  the real read site. Worth remembering for #497/#499/#500/#501 too:
+  don't assume the issue's named file is where the fix belongs without
+  checking the actual call chain first.
+- No project board found for this repo, so boarding step was skipped —
   matches prior sessions' behavior.
-- No friction this session (see `wrap-up`'s audit, run immediately
-  before this rotation) — nothing to file against the pack or the repo.
