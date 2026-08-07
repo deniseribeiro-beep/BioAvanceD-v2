@@ -1,112 +1,93 @@
 # HANDOFF
 
 **Written:** 2026-08-07, end of session on `feature/docker-e2e-backend-integration`,
-after closing #488.
+after closing #389.
 
 ## What happened this session
 
-Dennis said "pick #488" (offered via `AskUserQuestion` alongside #489 and
-#390 as candidates carried from last session's handoff). Routed via
-`work-issue` -> `e2e-test-loop` (coverage gap: zero e2e coverage for
-`InlineStorageMovementPanel`, flagged from #486).
+Dennis said "pick #390". Investigating #390 (migrate remaining
+`Sample.js` consumers off embedded Specimen/SPREC/RCS/storage fields)
+found it still genuinely blocked: it depends on #389 (storage/custody
+entity separation), which was still open. Asked Dennis how to proceed;
+chose to work #389 instead of #390 directly.
 
-Branch `test/488-inline-storage-movement-e2e` (commit `ea6100fd`, merged
-fast-forward into `feature/docker-e2e-backend-integration`, pushed):
+Reading #389 (routed via `work-issue`) showed it was a **tracking
+issue**, already split via `divide-and-conquer` across two rounds of
+follow-up issues — all of them closed:
 
-- Added `tests/e2e/inline-storage-movement.spec.ts` — mocked-mode spec
-  against `SampleDetailsPage` (`/samples/:id`), covering all four flows
-  #488 called out: auto-assign success (`storageApi.autoAssignSampleToBox`),
-  explicit-position success for both the `moveSample` (already-stored
-  sample) and `allocateSample` (unplaced sample) branches, and the
-  client-side invalid-position-format validation. `InlineStorageMovementPanel.tsx`
-  has zero `data-testid`s, so every locator is `getByLabel`/`getByRole`
-  per `playwright-specs` convention; confirmed the storageInline i18n
-  keys render identical Portuguese text regardless of detected browser
-  locale (en-US.json duplicates the pt-BR strings verbatim for this
-  section), so the hardcoded-Portuguese locators are locale-safe.
-- Product code untouched (test-only loop).
+- First round: #400, #398, #399, #401, #402
+- Second round (re-split): #449, #450, #451
 
-**Real bug found and worked around, not a product finding:** a
-`page.route('**/api/samples**', ...)` mock (the same pattern
-`cadastro-amostra.spec.ts` uses) also intercepts
-`GET /api/samples/:id/compliance-graph`, which `SampleDetailsPage.tsx`
-fires unconditionally. The wrongly-fulfilled response (samples-list
-envelope, no `graphPath`) crashed the whole page
-(`Cannot read properties of undefined (reading 'ethics')`) —
-blank screen, no console-visible test failure, just a Playwright
-timeout on the next locator. Fixed in the new spec by scoping the mock
-to the exact `**/api/samples` route and adding an explicit
-`**/api/samples/*/compliance-graph` mock. This is a test-authoring
-gotcha, not a product bug — no product-repo issue filed for it.
+#389's own text says "closes once all three [second-round issues] land"
+— they had. No code change was needed; this was pure issue-tracker
+hygiene. Routed to `resolve-issue` (close-discipline case 3: confirmed
+resolved, no change needed) and closed #389 with a comment listing all
+eight completed sub-issues.
 
-Filed `dyeallpies-skills-pack#227` (skills-pack repo, not this one) to
-carry two overlay updates a pack-repo session needs to make: add the new
-spec to `playwright-specs`' BioAvanceD-v2 spec inventory, and record the
-`compliance-graph` route-mocking gotcha above as a dated note (couldn't
-edit the overlay directly from this session — Rule 0, installed skill
-junction).
-
-Verified natively: `npx playwright test tests/e2e/inline-storage-movement.spec.ts
---reporter=list` — 4/4 passed, against `npm run dev`'s frontend dev
-server (backend intentionally not running; every network call the spec
-depends on is mocked). No Docker used this session.
-
-Closed #488 with a comment pointing at the merge commit and the
-skills-pack follow-up issue.
+No branch created, no commits, no product code touched this session.
 
 ## Repo state
 
-- **`feature/docker-e2e-backend-integration`**: at `ea6100fd`, pushed,
-  clean.
-- **`test/488-inline-storage-movement-e2e`**: merged in; not deleted
-  locally yet (safe to delete — low priority, matches the existing
-  "dangling merged branches" backlog item below).
-- Issues this session: **#488 closed** (implemented + merged + pushed +
-  natively verified). **dyeallpies-skills-pack#227 filed** (pack-repo
-  overlay follow-up, not a BioAvanceD-v2 issue).
+- **`feature/docker-e2e-backend-integration`**: at `1ba5a184`, pushed,
+  clean — unchanged this session except for this HANDOFF.md rotation.
+- No dangling branches from this session.
+- Issues this session: **#389 closed** (tracking issue, all 8
+  sub-issues already done, no code change).
 
 ## Which issue is next
 
-None queued by Dennis. Candidates, in likely priority order (#488 now
-resolved):
+**#390 is now unblocked** — its stated dependency (#389) is closed.
+Dennis has not yet said to pick it up next session; per this skill's
+"only if the user explicitly said so" rule, nothing is queued.
 
-1. **#489** — full-suite vitest flakiness (89/360 files fail on a bare
+Candidates, in likely priority order:
+
+1. **#390** — now unblocked (see above). Its own body warns it's large
+   ("Likely needs its own `divide-and-conquer` pass per consumer group,"
+   mirroring #368's approach) — scope it with `divide-and-conquer`
+   before implementing, don't attempt as one slice. Known consumer
+   groups from the issue body: `MerkleService.js`, the neo4j outbox
+   projection, `frontend/src/config/constants/specimen.constants.d.ts`
+   and its views, the live `POST /api/samples` registration path (needs
+   a design decision on RCS computation), `import-lgpd.service.js`'s
+   separate RCS-computing CSV logic, `import.service.js`'s JSON-import
+   branch, and everything in `docs/architecture/canonical-data-contract-v1.md`'s
+   "Known Residual Legacy Surfaces" section. **Re-audit the consumer
+   list at pickup time** — #389's own scoping found the field list
+   understated reality (three competing legacy schemes, not one), so
+   #390's list should get the same skepticism.
+2. **#489** — full-suite vitest flakiness (89/360 files fail on a bare
    `npx vitest run`, unrelated to any recent diff, broadened scope of
-   closed #423). Someone who owns the vitest/test-env config should
-   re-run the coverage-reconcile baseline vs. a plain full run side by
-   side; the ship-gate full-suite run depends on this baseline being
-   trustworthy.
-2. **#390** — was blocked on #460 (closed three sessions ago); worth
-   checking whether it's unblocked now. Carried forward twice without
-   being picked up.
+   closed #423). Carried forward from prior handoffs, not yet picked up.
 3. Older backlog: `#371`/`#373`/`#374`/`#378`/`#379`, `user.accessType`
    grep sweep, dangling merged branches (`test/440-*`, `test/441-*`,
    `fix/444-retention-period-iso8601`, `fix/450-*`,
    `fix/476-quarantine-status-design-call`,
    `fix/485-sample-details-storage-migration`,
    `test/486-storage-move-sample`, `test/488-inline-storage-movement-e2e`
-   — all safe to delete, low priority housekeeping, unchanged from the
-   prior handoff plus this session's branch).
-4. **Next e2e slice** (per `E2E_TRACEABILITY_PLAN.md` and `playwright-specs`'
-   spec inventory) — check issue #95's tracking thread for the next
-   wave once #488 lands there too (skills-pack#227 covers adding it).
+   — all safe to delete, low priority housekeeping, unchanged from prior
+   handoffs).
+4. **Next e2e slice** (per `E2E_TRACEABILITY_PLAN.md` and
+   `playwright-specs`' spec inventory) — check issue #95's tracking
+   thread once skills-pack#227 (filed last session) lands the new spec
+   in the inventory.
 
 ## Dev stack state
 
-Only the frontend dev server (`npm run dev`, native, not Docker) was
-started this session, to run the new Playwright spec against a live
-page — stopped (process killed by PID after the run) before the session
-ended. No backend, no Mongo, no Docker containers were started. Nothing
-left running.
+Nothing started this session — pure `gh issue` read/close work, no
+native or Docker processes.
 
 ## Which skills to use
 
-- `work-issue` -> `e2e-test-loop` routing was correct: #488 is a
-  straightforward coverage-gap issue, no ambiguity to resolve before
-  routing.
-- **Skill-orchestration finding, filed against the pack, not this repo:**
-  the `work-issue-checkpoint.cjs`-style gate on `gh issue close` needed
-  the *routed* skill (`e2e-test-loop`/`test-loop`) re-invoked immediately
-  before the close call — invoking `work-issue` itself (the dispatcher)
-  did not satisfy it, even though `work-issue` had just confirmed the
-  same route. Filed `dyeallpies-skills-pack#228`.
+- `work-issue` -> checked #390's stated dependency (#389) before
+  routing, found it unmet, escalated to the user via `AskUserQuestion`
+  rather than assuming — correct per this skill's "if the issue already
+  carries ... a design/blocker claim, re-check before routing onward"
+  spirit, applied here to a dependency claim instead.
+- `work-issue` -> `resolve-issue` was the right route for #389 once its
+  actual content turned out to be "tracking issue, all sub-issues
+  closed" rather than a #390-style migration — worth checking a tracking
+  issue's sub-issue states *before* assuming it needs the same route as
+  its subject matter.
+- No friction this session (see `wrap-up`'s audit, run immediately
+  before this rotation) — nothing to file against the pack or the repo.
