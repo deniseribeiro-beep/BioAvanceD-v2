@@ -607,6 +607,11 @@ async function handleIntakeWizard(req, res) {
         reason: consentDecision.governanceReason || null,
       },
       storageLocation,
+      // #511: canonical StorageAssignment additively exposed alongside the
+      // legacy storageLocation shape above, same precedent #507/#510 set —
+      // sample.service.js#createSample (#510) already resolves it via
+      // MongoStorageRepository.findCurrentStorageAssignment().
+      storageAssignment: createdSample.storageAssignment || null,
       label: buildLabelLinks(allocatedSample),
       data,
       sample: allocatedSample,

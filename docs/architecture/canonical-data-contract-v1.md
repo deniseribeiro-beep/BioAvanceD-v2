@@ -179,6 +179,16 @@ now additionally resolves the just-opened record via
 boxId, position }` assignment stays, unchanged, for existing consumers of the
 create response.
 
+**Landed in #511 (consumer migration, split from #494):**
+`api/backend/src/routes/intakeWizard.js`'s POST handler fabricated its own
+`storageLocation` response object (lines ~579-609) from local
+`automaticLocation`/`allocation.sampleLocation` variables — same
+response-shaping shape #510 found in `sample.service.js`, not a raw Mongo
+write. Now that `createSample` (#510) additively exposes
+`sample.storageAssignment` on its return value, `intakeWizard.js` forwards it
+onto the intake response as `storageAssignment`, additive alongside the
+unchanged legacy `storageLocation` object built from the local variables.
+
 **`locationId`/`location`/`locationID` are legacy, not a second storage
 system (#453, resolved 2026-08-06):** #450's audit found these fields
 alongside `storageLocation` and initially treated them as an unresolved
