@@ -1,80 +1,94 @@
 # HANDOFF
 
 **Written:** 2026-08-07, end of session on `feature/docker-e2e-backend-integration`,
-after resolving #503.
+after resolving #504.
 
 ## What happened this session
 
-Dennis said "pick #503". `work-issue` routed it: #503 (SPREC:
-`import-lgpd.service.js`'s `sample.sprec` never wired to
-`specimenPreanalyticsService.recordProfile`) named a missing
-capability, not a defect in existing behavior or a coverage gap in
-already-correct code, so it routed to `build-loop` (same shape as prior
-sessions' #499/#502).
+Dennis said "pick #504". `work-issue` routed it: #504 (samples written
+before #502's seal-time pin remain exposed to the original
+newest-snapshot false-tamper bug) asked for a one-time backfill script —
+a genuinely missing capability, not a defect in existing behavior or a
+coverage gap in already-correct code, so it routed to `build-loop` (same
+shape as #499/#502/#503).
 
 **Implementation** (one slice):
-- Added `require('./specimen-preanalytics.service')` to
-  `import-lgpd.service.js`.
-- After `samplesCollection.insertOne(sample)`, if `sample.sprec` is
-  present, calls `specimenPreanalyticsService.recordProfile(db,
-  sample.specimenId, sample.sprec)` and pins the sample via
-  `updateOne({ $set: { sealedSpecimenPreanalyticsId: profile._id } })`
-  — best-effort: logs a warning and continues the row on failure rather
-  than failing it. Placed immediately after the existing RCS
-  (`recordAssessment`/`sealedRcsAssessmentId`) block, same file, mirrors
-  `import.service.js`'s CSV/XLSX branch (~line 574-588) and #499's RCS
-  fix for this same file.
-- `docs/architecture/canonical-data-contract-v1.md`'s SpecimenPreanalytics
-  section got a new "Landed in #503" paragraph, same pattern #500/#502
-  used, right after the existing "Not yet landed" note (which now also
-  clarifies the JSON-import gap it's still describing belongs to
-  `import.service.js` specifically, tracked in #493 — not the
-  `import-lgpd.service.js` gap #503 just closed).
+- Added `api/backend/src/services/sealed-snapshot-backfill.service.js`
+  (`backfillSealedSnapshotPins`) and its CLI wrapper
+  `api/backend/src/scripts/backfillSealedSnapshotPins.js`, mirroring the
+  existing `location-storage-backfill.service.js`/
+  `backfillLocationStorage.js` one-time-backfill convention (found via
+  `find -iname "*backfill*"` before designing from scratch).
+- For each sample in the `samples` collection missing the
+  `sealedRcsAssessmentId`/`sealedSpecimenPreanalyticsId` own-property
+  (the same `hasOwnProperty` check `MerkleService.generateSampleHashFromSample`
+  uses), resolves the newest `RcsAssessment`/`SpecimenPreanalytics`
+  snapshot for that sample's `specimenId` via the existing
+  `rcsAssessmentService.getAssessmentsForSpecimen`/
+  `specimenPreanalyticsService.getProfilesForSpecimen` and pins it. Only
+  sets the field when a snapshot is actually found — a sample with no
+  recorded snapshot at all (e.g. `intakeWizard.js` samples, #492) is left
+  untouched, matching `generateSampleHashFromSample`'s existing
+  behavior for that case. Idempotent: already-pinned samples (including
+  ones explicitly pinned to `null`) are skipped via the
+  `hasOwnProperty` check, so it's safe to re-run.
+- `docs/architecture/canonical-data-contract-v1.md`'s RcsAssessment
+  section got a new "Backfill for pre-#502 samples — landed #504"
+  paragraph immediately after #502's own seal-time-pin note.
 
-**Tests:** two new tests in
-`import-lgpd.service.importSamples.unit.test.js`, mirroring the existing
-#499 RCS tests' shape: one asserting the referenced snapshot is recorded
-with the right `specimenId`/`sampleType`/`primaryContainer` and the pin
-`updateOne` fires with the returned `_id`, one asserting the row import
-still succeeds when `recordProfile` rejects. Added a
-`specimenPreanalyticsCollection` fake (same real-driver `_id`-mutation
-style as the existing `rcsAssessmentsCollection` fake) to the test
-file's `makeDb()`. Test written and run first against the
-unimplemented capability (failed as expected: `insertOne` called 0
-times), then implementation added, then re-run green.
+**Tests:** `api/backend/tests/unit/services/sealed-snapshot-backfill.service.test.js`,
+a real query-matching fake-collection test (mirrors
+`location-storage-backfill.service.test.js`'s fake shape, extended with
+a `find().sort().toArray()` chain for the date-sorted `rcsAssessments`/
+`specimenPreanalytics` lookups) — 4 cases: pins both fields for a
+never-pinned sample with existing snapshots; picks the newest of two
+snapshots for the same specimenId; no-ops for an already-pinned sample
+(even when the pinned value is explicitly `null`); no-ops for a sample
+with no matching snapshot in either collection. Written and run first
+against the unimplemented capability (failed: module not found), then
+implementation added, then re-run green (4/4).
 
-Ran the four `import-lgpd`-related targeted test files
-(`import-lgpd.service.importSamples.unit.test.js`,
-`import-lgpd.service.test.js`, `import-lgpd.service.unit.test.js`,
-`import-lgpd.controller.test.js`) — 176 tests, all passing, no
-regressions. Did not run the full suite (build-loop's per-iteration
-proof bar for this backend-internal, non-e2e-spec slice; full suite is
-reserved for `ship-integration-branch`).
+Ran the new test file plus `location-storage-backfill.service.test.js`
+(the template) and `import-lgpd.service.importSamples.unit.test.js` (the
+file whose `recordAssessment`/`recordProfile` pinning logic this
+backfill reverse-engineers) — 47 tests, all passing, no regressions.
+Did not run the full suite (build-loop's per-iteration proof bar for
+this backend-internal, non-e2e-spec slice; full suite is reserved for
+`ship-integration-branch`).
 
-Branch `test/503-import-lgpd-sprec-wiring` (off
+Branch `test/504-sealed-snapshot-pin-backfill` (off
 `feature/docker-e2e-backend-integration`, same fallback-prefix
 convention prior sessions used — no dedicated `build-loop` prefix
-exists yet), one commit, fast-forward merged back in, local branch
-deleted. Pushed `feature/docker-e2e-backend-integration`. Closed #503
-with a comment pointing at the commit hash and the doc section.
+exists yet; confirmed again this session when `build/504-...` was
+rejected by the branch-protection hook), one commit, fast-forward merged
+back in, local branch deleted. Pushed
+`feature/docker-e2e-backend-integration`. Closed #504 with a comment
+pointing at the commit hash and the doc section, and noting explicitly
+that this backfill is independent of any future re-assessment/
+correction/re-import flow (it doesn't need one to exist first) and that
+running it against any live environment is an operational step for
+whoever owns that, not part of this code change.
 
-`wrap-up` ran in full — no friction found this session (core audit:
-no scope creep, no lazy fixes, instructions matched what happened,
-no permission denials, no undocumented judgment calls, nothing stale,
-no retries, no user correction needed, targeted test runs kept context
-lean. Shipping addendum: no undocumented gaps left in the close comment,
-no ambiguous sub-points left open on a closed issue, nothing
-security/safety-relevant beyond the same best-effort-logging pattern
-already established for the RCS counterpart).
+`wrap-up` ran in full — no friction found this session (core audit: no
+scope creep — `git diff --stat` against `4d547cb0..HEAD` shows only the
+new service, script, test, and doc-section files; no lazy fixes;
+instructions matched what happened; no permission denials beyond the
+expected agent-delegation/work-issue-routing gates firing as designed;
+no undocumented judgment calls; nothing stale; no retries; no user
+correction needed; targeted test runs kept context lean. Shipping
+addendum: no undocumented gaps left in the close comment, no ambiguous
+sub-points left open on a closed issue, and the backfill script itself
+is security/safety-adjacent — flagged explicitly in the close comment
+that it hasn't been run against any live environment yet, that's a
+separate operational step).
 
 ## Repo state
 
 - **`feature/docker-e2e-backend-integration`**: clean, pushed, up to
-  date with origin as of this session (commit `284ac7e4`, "Resolve
-  #503: wire import-lgpd.service.js SPREC snapshots to
-  specimenPreanalyticsService.recordProfile").
+  date with origin as of this session (commit `97bbf422`, "Resolve
+  #504: one-time backfill for pre-#502 sealed snapshot pins").
 - No dangling branches from this session.
-- Issues this session: **#503 closed** (comment posted, references
+- Issues this session: **#504 closed** (comment posted, references
   commit + doc). No new issues filed.
 
 ## Which issue is next
@@ -94,23 +108,26 @@ migrated. `MerkleService.generateSampleHash` (the *base* function, not
 `calculationTrace`/`axisPenalties`/`sprec` directly off the sample
 object — intentional, still-open part of #491's scope.
 
-**#493** (SPREC backend consumers, off #390) — 2 of 3 items now done
-(MerkleService in a prior session, `import-lgpd.service.js` this
-session via #503). Still open:
+**#493** (SPREC backend consumers, off #390) — 2 of 3 items done. Still
+open:
 - `import.service.js`'s **JSON**-import branch — needs
   `specimenPreanalyticsService.recordProfile` wiring (the CSV/XLSX
-  branch already has it; #493's own text already named this as the
-  narrower remaining gap, distinct from what #503 just closed).
+  branch already has it).
 - `sampleMerkleIntegrity.js` — confirm during implementation whether
   this belongs in backend scope or the frontend follow-up (#495).
 
-**#504** (filed a prior session, resolving #502) — samples written
-before #502's seal-time pin existed remain exposed to the original
-false-tamper bug; needs a one-time backfill
-(`sealedRcsAssessmentId`/`sealedSpecimenPreanalyticsId` set to the
-existing snapshot's `_id`) whenever a re-assessment/correction/re-import
-flow is designed. No urgency today — no such flow exists yet. Not
-picked up this session.
+**#504 is now closed** — the backfill script exists and is unit-tested,
+but has not been *run* against any live environment (no live environment
+exists in this session's scope to run it against). Whoever next stands
+up a real Mongo instance with pre-#502 sample data should run
+`node src/scripts/backfillSealedSnapshotPins.js` (or invoke
+`backfillSealedSnapshotPins(db)` directly) once, and can safely re-run it
+— it's idempotent. Not itself tracked as a new issue since #504's own
+scope was "build the backfill," not "run it" — flagging here only for
+handoff continuity, per this skill's "trivial tasks don't get one"
+bar not applying (this is exactly the kind of operational follow-up the
+next session needs to know about, hence this note rather than a new
+issue).
 
 Other backlog carried forward unchanged from prior handoffs (not
 re-verified this session):
@@ -158,16 +175,17 @@ real-query-matching in-memory fakes, not literal Docker/live Mongo. No
 
 ## Which skills to use
 
-- `work-issue` -> `build-loop` was the correct routing again for #503,
-  same shape as #499/#502: a genuinely missing capability (recordProfile
-  call site never wired), not a defect (`fix-bugs`) or a coverage gap in
-  already-correct code (`test-loop`).
-- The existing RCS wiring in the same file/function (added for #499) was
-  a near-exact template for the SPREC wiring — when a prior session's
-  fix for one half of a paired RCS/SPREC gap exists in the same file,
-  check it first before designing the second half from scratch; saved
-  real time this session (found the pattern via `grep` for
-  `rcsAssessmentService`/`recordAssessment` in the target file, then
-  literally used the same shape one field-set over).
+- `work-issue` -> `build-loop` was the correct routing again for #504,
+  same shape as #499/#502/#503: a genuinely missing capability (the
+  backfill script itself), not a defect (`fix-bugs`) or a coverage gap
+  in already-correct code (`test-loop`).
+- The existing `location-storage-backfill.service.js`/
+  `backfillLocationStorage.js` pair (from #461) was an exact structural
+  template for this session's backfill — script wrapper calls
+  `connectDB`/`closeConnection` and logs a JSON summary, service does
+  the real work and returns `{ summary }`. When a backfill/migration
+  need comes up, `find api/backend -iname "*backfill*" -o -iname
+  "*migrat*"` first — this repo already has half a dozen precedents
+  under `src/scripts/`.
 - No project board found for this repo, so boarding step was skipped —
   matches prior sessions' behavior.
