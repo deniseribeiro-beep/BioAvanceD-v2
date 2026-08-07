@@ -46,8 +46,25 @@ function makeRcsAssessmentsCollection() {
   };
 }
 
-function makeDb(collection, rcsAssessmentsCollection = makeRcsAssessmentsCollection()) {
-  return { collection: (name) => (name === 'rcsAssessments' ? rcsAssessmentsCollection : collection) };
+function makeSpecimenPreanalyticsCollection() {
+  const inserted = [];
+  return {
+    inserted,
+    insertOne: async (doc) => {
+      inserted.push(doc);
+      return { insertedId: `preanalytics-${inserted.length}` };
+    },
+  };
+}
+
+function makeDb(collection, rcsAssessmentsCollection = makeRcsAssessmentsCollection(), specimenPreanalyticsCollection = makeSpecimenPreanalyticsCollection()) {
+  return {
+    collection: (name) => {
+      if (name === 'rcsAssessments') return rcsAssessmentsCollection;
+      if (name === 'specimenPreanalytics') return specimenPreanalyticsCollection;
+      return collection;
+    },
+  };
 }
 
 const validSample = (overrides = {}) => ({
@@ -83,8 +100,9 @@ describe('ImportService.importSamples (JSON)', () => {
 
     expect(result).toEqual({ success: 1, errors: [], total: 1 });
     expect(collection.inserted).toHaveLength(1);
-    expect(collection.updates).toHaveLength(1);
-    expect(collection.updates[0].update.$set.releaseStatus).toBe('AVAILABLE');
+    expect(collection.updates).toHaveLength(2);
+    const releaseStatusUpdate = collection.updates.find((call) => call.update?.$set?.releaseStatus);
+    expect(releaseStatusUpdate.update.$set.releaseStatus).toBe('AVAILABLE');
   });
 
   it('forces QUARANTINE (no update needed) when tcle_id/sprec ethics data is missing, since it defaults to QUARANTINE already', async () => {
@@ -109,8 +127,9 @@ describe('ImportService.importSamples (JSON)', () => {
     const result = await importService.importSamples(makeDb(collection), { path: filePath, originalname: 'compliance-fails.json' });
 
     expect(result.success).toBe(1);
-    expect(collection.updates).toHaveLength(1);
-    expect(collection.updates[0].update.$set.releaseStatus).toBe('QUARANTINE');
+    expect(collection.updates).toHaveLength(2);
+    const releaseStatusUpdate = collection.updates.find((call) => call.update?.$set?.releaseStatus);
+    expect(releaseStatusUpdate.update.$set.releaseStatus).toBe('QUARANTINE');
   });
 
   it('records a model-validation error and does not insert when participantId is missing', async () => {
@@ -185,6 +204,42 @@ describe('ImportService.importSamples (JSON)', () => {
     rcsAssessmentsCollection.insertOne = async () => { throw new Error('rcsAssessments write failed'); };
 
     const result = await importService.importSamples(makeDb(collection, rcsAssessmentsCollection), { path: filePath, originalname: 'rcs-record-fails.json' });
+
+    expect(result.success).toBe(1);
+    expect(result.errors).toEqual([]);
+  });
+
+  it('records a referenced SpecimenPreanalytics snapshot when the imported sample carries sprec (#493)', async () => {
+    vi.spyOn(SampleGraphValidator.prototype, 'validateSampleCompliance').mockResolvedValue({ suggestedStatus: 'QUARANTINE' });
+    const filePath = writeTmpFile('with-sprec.json', JSON.stringify(validSample({
+      specimenId: 'SPEC-JSON-3',
+      sprec: { sampleType: 'BLD', primaryContainer: 'PED' },
+    })));
+    const collection = makeSamplesCollection();
+    const specimenPreanalyticsCollection = makeSpecimenPreanalyticsCollection();
+
+    const result = await importService.importSamples(makeDb(collection, undefined, specimenPreanalyticsCollection), { path: filePath, originalname: 'with-sprec.json' });
+
+    expect(result.success).toBe(1);
+    expect(specimenPreanalyticsCollection.inserted).toHaveLength(1);
+    expect(specimenPreanalyticsCollection.inserted[0]).toEqual(expect.objectContaining({
+      specimenId: 'SPEC-JSON-3',
+      sampleType: 'BLD',
+      primaryContainer: 'PED',
+    }));
+  });
+
+  it('logs a warning and still counts the row as success when recordProfile rejects (#493)', async () => {
+    vi.spyOn(SampleGraphValidator.prototype, 'validateSampleCompliance').mockResolvedValue({ suggestedStatus: 'QUARANTINE' });
+    const filePath = writeTmpFile('sprec-record-fails.json', JSON.stringify(validSample({
+      specimenId: 'SPEC-JSON-4',
+      sprec: { sampleType: 'BLD', primaryContainer: 'PED' },
+    })));
+    const collection = makeSamplesCollection();
+    const specimenPreanalyticsCollection = makeSpecimenPreanalyticsCollection();
+    specimenPreanalyticsCollection.insertOne = async () => { throw new Error('specimenPreanalytics write failed'); };
+
+    const result = await importService.importSamples(makeDb(collection, undefined, specimenPreanalyticsCollection), { path: filePath, originalname: 'sprec-record-fails.json' });
 
     expect(result.success).toBe(1);
     expect(result.errors).toEqual([]);

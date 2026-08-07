@@ -572,10 +572,22 @@ pattern, same `SpecimenPreanalyticsModel.fieldsOf()`, no
 carries its own embedded `sprec` copy (only the axis slots +
 `sprecCode`/`sprecVersion`, not the derived fields) — removing that
 duplication requires migrating every consumer that reads it directly off
-`Sample` (tracked in #390, alongside the equivalent RCS migration). The
-JSON-import branch of `import.service.js`'s `importSamples` doesn't
-record a profile either (only the CSV/XLSX branch does, the same gap
-#383 left for RCS; tracked in #493).
+`Sample` (tracked in #390, alongside the equivalent RCS migration).
+
+**JSON-import branch landed in #493:** `import.service.js`'s JSON-import
+branch of `importSamples` now also calls
+`specimenPreanalyticsService.recordProfile` and pins
+`sealedSpecimenPreanalyticsId` when the imported sample carries `sprec`,
+same best-effort pattern (logs a warning, doesn't fail the row) the
+CSV/XLSX branch already used — closing the gap #383 left for RCS on the
+same branch (that RCS half of #493's JSON-import parity work landed
+separately, tracked as #501). `import.service.js`'s own
+`sealedSpecimenPreanalyticsId` pin (both branches) sets it to
+`profile._id`, which `SpecimenPreanalyticsModel` doesn't populate (the
+model's own identifier field is `sprecProfileId`) — the pin silently
+resolves to `undefined` on every call, a pre-existing defect predating
+this issue and out of #493's "wire JSON up to CSV/XLSX parity" scope;
+tracked separately as #506.
 
 **Landed in #503:** `import-lgpd.service.js`'s `importSamples` now also
 calls `specimenPreanalyticsService.recordProfile` after inserting the

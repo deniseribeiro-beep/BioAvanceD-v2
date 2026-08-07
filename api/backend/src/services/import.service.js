@@ -467,6 +467,21 @@ class ImportService {
                 });
               }
             }
+            if (sample.sprec) {
+              try {
+                const profile = await specimenPreanalyticsService.recordProfile(db, sample.specimenId, sample.sprec);
+                // #502: same pin as above, for the SpecimenPreanalytics half.
+                await samplesCollection.updateOne(
+                  { _id: insertResult.insertedId },
+                  { $set: { sealedSpecimenPreanalyticsId: profile._id } }
+                );
+              } catch (profileError) {
+                logger.warn('[IMPORT_SERVICE] Falha ao registrar snapshot SpecimenPreanalytics referenciado, amostra mantém cópia embutida', {
+                  specimenId: sample.specimenId,
+                  error: profileError?.message || String(profileError),
+                });
+              }
+            }
             try {
               const report = await validator.validateSampleCompliance(String(insertResult.insertedId));
               const missingEthicsOrSprec = !sampleData.consentTemplateId
