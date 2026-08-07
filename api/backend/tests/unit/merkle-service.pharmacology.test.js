@@ -1,7 +1,8 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 const {
   generateSampleHash,
+  generateSampleHashFromSample,
   stableSerialize,
   deepSort,
   buildClinicalPharmacologyHash,
@@ -297,6 +298,108 @@ describe('MerkleService - Pharmacology Integrity & Tampering Detection', () => {
     it('deve lidar com sample vazio', () => {
       const emptyHash = generateSampleHash({});
       expect(emptyHash).toMatch(/^[a-f0-9]{64}$/);
+    });
+  });
+
+  describe('generateSampleHashFromSample - referenced RcsAssessment/SpecimenPreanalytics resolution (#497/#493)', () => {
+    function buildDb({ rcsRecords = [], sprecRecords = [] } = {}) {
+      return {
+        collection: (name) => {
+          if (name === 'rcsAssessments') {
+            return {
+              find: vi.fn().mockReturnValue({
+                sort: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue(rcsRecords) }),
+              }),
+            };
+          }
+          if (name === 'specimenPreanalytics') {
+            return {
+              find: vi.fn().mockReturnValue({
+                sort: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue(sprecRecords) }),
+              }),
+            };
+          }
+          throw new Error(`Unexpected collection name: ${name}`);
+        },
+      };
+    }
+
+    it('falls back to the legacy embedded fields when no snapshot has been recorded for the specimen', async () => {
+      const sample = { ...validSample, specimenId: 'SPEC-100', rcsScore: 88, finalGrade: 'A' };
+      const db = buildDb();
+
+      const hash = await generateSampleHashFromSample(db, sample);
+
+      expect(hash).toBe(generateSampleHash(sample));
+    });
+
+    it('falls back to the legacy embedded fields when the sample carries no specimenId', async () => {
+      const db = buildDb({ rcsRecords: [{ rcsScore: 1, finalGrade: 'A' }] });
+
+      const hash = await generateSampleHashFromSample(db, validSample);
+
+      expect(hash).toBe(generateSampleHash(validSample));
+    });
+
+    it('hashes the newest referenced RcsAssessment snapshot instead of the stale embedded rcsScore', async () => {
+      const sample = { ...validSample, specimenId: 'SPEC-101', rcsScore: 999, finalGrade: 'E' };
+      const db = buildDb({
+        rcsRecords: [
+          { rcsScore: 88, finalGrade: 'A', calculationTrace: { step: 1 }, axisPenalties: [] },
+        ],
+      });
+
+      const hash = await generateSampleHashFromSample(db, sample);
+      const expected = generateSampleHash({
+        ...sample,
+        rcsScore: 88,
+        finalGrade: 'A',
+        calculationTrace: { step: 1 },
+        axisPenalties: [],
+      });
+
+      expect(hash).toBe(expected);
+      expect(hash).not.toBe(generateSampleHash(sample));
+    });
+
+    it('hashes the newest referenced SpecimenPreanalytics snapshot instead of the stale embedded sprec', async () => {
+      const sample = { ...validSample, specimenId: 'SPEC-102', sprec: { matrixType: 'stale' } };
+      const db = buildDb({
+        sprecRecords: [
+          {
+            matrixType: 'fluid',
+            sampleType: 'BLD',
+            primaryContainer: 'SST',
+            preCentrifugation: 'A',
+            centrifugation: 'A',
+            secondCentrifugation: 'A',
+            postCentrifugationDelay: 'A',
+            longTermStorage: 'C',
+            sprecCode: 'X',
+            sprecVersion: '1',
+          },
+        ],
+      });
+
+      const hash = await generateSampleHashFromSample(db, sample);
+      const expected = generateSampleHash({
+        ...sample,
+        sprec: {
+          matrixType: 'fluid',
+          sampleType: 'BLD',
+          primaryContainer: 'SST',
+          preCentrifugation: 'A',
+          centrifugation: 'A',
+          secondCentrifugation: 'A',
+          postCentrifugationDelay: 'A',
+          longTermStorage: 'C',
+          sprecCode: 'X',
+          sprecVersion: '1',
+        },
+      });
+
+      expect(hash).toBe(expected);
+      expect(hash).not.toBe(generateSampleHash(sample));
     });
   });
 });

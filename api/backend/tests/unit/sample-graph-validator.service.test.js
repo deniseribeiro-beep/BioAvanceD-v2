@@ -60,6 +60,7 @@ describe('SampleGraphValidator', () => {
   let medicationDictionaryCollection;
   let sampleMovementsCollection;
   let rcsAssessmentsCollection;
+  let specimenPreanalyticsCollection;
   let validator;
 
   beforeEach(() => {
@@ -128,6 +129,14 @@ describe('SampleGraphValidator', () => {
       }),
     };
 
+    specimenPreanalyticsCollection = {
+      find: vi.fn().mockReturnValue({
+        sort: vi.fn().mockReturnValue({
+          toArray: vi.fn().mockResolvedValue([]),
+        }),
+      }),
+    };
+
     db = {
       listCollections: () => ({
         toArray: async () => ([{ name: 'samples' }, { name: 'consents' }]),
@@ -140,6 +149,7 @@ describe('SampleGraphValidator', () => {
         if (name === 'sample_movements' || name === 'sampleMovements') return sampleMovementsCollection;
         if (name === 'counters') return countersCollection;
         if (name === 'rcsAssessments') return rcsAssessmentsCollection;
+        if (name === 'specimenPreanalytics') return specimenPreanalyticsCollection;
         throw new Error(`Unexpected collection name: ${name}`);
       },
     };
@@ -188,23 +198,32 @@ describe('SampleGraphValidator', () => {
   });
 
   it('resolves quality through a referenced RcsAssessment snapshot when one is recorded for the sample, ignoring stale embedded legacy fields', async () => {
+    const assessmentRecord = {
+      specimenId: 'SPEC-001',
+      governanceStatus: 0,
+      finalGrade: 'E',
+      rcsScore: 12,
+      gradeRoute: 'Governance failure',
+      axisPenalties: [],
+      calculationTrace: {},
+    };
     const sample = buildSample({ specimenId: 'SPEC-001', quality_category: 'A' });
+    // MerkleService's integrity check also resolves through the referenced RcsAssessment
+    // (#497) once specimenId is present, so the persisted root must reflect that same
+    // resolved snapshot rather than the sample's legacy embedded (null) rcsScore fields.
+    sample.merkleRoot = generateSampleHash({
+      ...sample,
+      rcsScore: assessmentRecord.rcsScore,
+      finalGrade: assessmentRecord.finalGrade,
+      calculationTrace: assessmentRecord.calculationTrace,
+      axisPenalties: assessmentRecord.axisPenalties,
+    });
     samplesCollection.findOne.mockResolvedValue(sample);
     consentsCollection.findOne.mockResolvedValue({ status: 'ACTIVE', participantId: '12345678' });
 
     rcsAssessmentsCollection.find.mockReturnValue({
       sort: vi.fn().mockReturnValue({
-        toArray: vi.fn().mockResolvedValue([
-          {
-            specimenId: 'SPEC-001',
-            governanceStatus: 0,
-            finalGrade: 'E',
-            rcsScore: 12,
-            gradeRoute: 'Governance failure',
-            axisPenalties: [],
-            calculationTrace: {},
-          },
-        ]),
+        toArray: vi.fn().mockResolvedValue([assessmentRecord]),
       }),
     });
 
@@ -213,6 +232,7 @@ describe('SampleGraphValidator', () => {
     expect(rcsAssessmentsCollection.find).toHaveBeenCalledWith({ specimenId: 'SPEC-001' });
     expect(report.graphPath.quality.valid).toBe(false);
     expect(report.graphPath.quality.reason).toContain('bloqueado');
+    expect(report.graphPath.integrity.valid).toBe(true);
     expect(report.suggestedStatus).toBe('QUARANTINE');
   });
 

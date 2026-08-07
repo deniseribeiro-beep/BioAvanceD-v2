@@ -2,7 +2,7 @@ const crypto = require('crypto');
 const { ObjectId } = require('mongodb');
 const logger = require('../utils/logger');
 const { getCollection } = require('../utils/collectionResolver');
-const { generateSampleHash } = require('./MerkleService');
+const { generateSampleHashFromSample } = require('./MerkleService');
 const SampleMovementModel = require('../models/SampleMovement');
 const { appendMovementWithHashChain } = require('../utils/sampleMovementLedger');
 const qualityDomain = require('./quality-domain.service');
@@ -296,13 +296,13 @@ class SampleGraphValidator {
     };
   }
 
-  _validateIntegrity(sample) {
+  async _validateIntegrity(sample) {
     const persistedRoot = normalizeString(sample?.merkleRoot);
     if (!persistedRoot) {
       return { valid: false, reason: 'Violação de Integridade Criptográfica (Tampering)' };
     }
 
-    const recomputedRoot = generateSampleHash(sample);
+    const recomputedRoot = await generateSampleHashFromSample(this.db, sample);
     if (persistedRoot !== recomputedRoot) {
       return { valid: false, reason: 'Violação de Integridade Criptográfica (Tampering)' };
     }
@@ -363,7 +363,7 @@ class SampleGraphValidator {
       quality: await this._validateQuality(sample),
       clinical: this._validateClinical(sample, diseaseContext.requirements, diseaseContext.disease),
       pharmacology: await this._validatePharmacology(sample, diseaseContext.requirements, diseaseContext.disease),
-      integrity: this._validateIntegrity(sample),
+      integrity: await this._validateIntegrity(sample),
     };
 
     const isReleasable = Object.values(graphPath).every((node) => Boolean(node?.valid));

@@ -1,4 +1,6 @@
 const crypto = require('crypto');
+const rcsAssessmentService = require('./rcs-assessment.service');
+const specimenPreanalyticsService = require('./specimen-preanalytics.service');
 
 function deepSort(value) {
   if (Array.isArray(value)) return value.map(deepSort);
@@ -63,4 +65,64 @@ function buildClinicalPharmacologyHash(sample = {}) {
   return generateSampleHash(sample);
 }
 
-module.exports = { deepSort, stableSerialize, generateSampleHash, buildClinicalPharmacologyHash };
+/** Maps a persisted RcsAssessment snapshot onto the sample's embedded RCS field shape. */
+function rcsFieldsFromAssessment(record) {
+  return {
+    rcsScore: record.rcsScore ?? null,
+    finalGrade: record.finalGrade ?? null,
+    calculationTrace: record.calculationTrace ?? null,
+    axisPenalties: record.axisPenalties ?? null,
+  };
+}
+
+/** Maps a persisted SpecimenPreanalytics snapshot onto the sample's embedded `sprec` field shape. */
+function sprecFromProfile(record) {
+  return {
+    matrixType: record.matrixType ?? null,
+    sampleType: record.sampleType ?? null,
+    primaryContainer: record.primaryContainer ?? null,
+    preCentrifugation: record.preCentrifugation ?? null,
+    centrifugation: record.centrifugation ?? null,
+    secondCentrifugation: record.secondCentrifugation ?? null,
+    postCentrifugationDelay: record.postCentrifugationDelay ?? null,
+    longTermStorage: record.longTermStorage ?? null,
+    sprecCode: record.sprecCode ?? null,
+    sprecVersion: record.sprecVersion ?? null,
+  };
+}
+
+/**
+ * Same contract as generateSampleHash, but for an already-persisted sample:
+ * resolves the newest referenced RcsAssessment (#383) and SpecimenPreanalytics
+ * (#388) snapshots for the sample's specimenId and hashes those in place of
+ * the legacy embedded rcsScore/sprec fields when present. Falls back to the
+ * legacy embedded-field read for samples that don't have a recorded snapshot
+ * yet, so the hash stays equivalent for already-migrated samples (#497/#493).
+ */
+async function generateSampleHashFromSample(db, sample = {}) {
+  const specimenId = String(sample?.specimenId || '').trim();
+  let effectiveSample = sample;
+
+  if (db && specimenId) {
+    const [latestRcs] = await rcsAssessmentService.getAssessmentsForSpecimen(db, specimenId);
+    const [latestSprec] = await specimenPreanalyticsService.getProfilesForSpecimen(db, specimenId);
+
+    if (latestRcs || latestSprec) {
+      effectiveSample = {
+        ...sample,
+        ...(latestRcs ? rcsFieldsFromAssessment(latestRcs) : {}),
+        ...(latestSprec ? { sprec: sprecFromProfile(latestSprec) } : {}),
+      };
+    }
+  }
+
+  return generateSampleHash(effectiveSample);
+}
+
+module.exports = {
+  deepSort,
+  stableSerialize,
+  generateSampleHash,
+  generateSampleHashFromSample,
+  buildClinicalPharmacologyHash,
+};
