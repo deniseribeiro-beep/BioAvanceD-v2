@@ -1,110 +1,81 @@
 # HANDOFF
 
 **Written:** 2026-08-07, end of session on `feature/docker-e2e-backend-integration`,
-after resolving #502.
+after resolving #503.
 
 ## What happened this session
 
-Dennis said "pick #502". `work-issue` routed it: #502 was a design-call
-issue (MerkleService's resolved-snapshot integrity hash resolves the
-*newest* RcsAssessment/SpecimenPreanalytics snapshot for a specimenId,
-which would false-positive a tamper report if a later re-assessment ever
-recorded a newer snapshot for an already-sealed sample). Asked Dennis to
-pick between the issue's two proposed options via `AskUserQuestion` —
-he chose (a): pin integrity verification to the snapshot that existed
-at seal time, rather than (b) keeping integrity hashing on the legacy
-embedded fields permanently.
+Dennis said "pick #503". `work-issue` routed it: #503 (SPREC:
+`import-lgpd.service.js`'s `sample.sprec` never wired to
+`specimenPreanalyticsService.recordProfile`) named a missing
+capability, not a defect in existing behavior or a coverage gap in
+already-correct code, so it routed to `build-loop` (same shape as prior
+sessions' #499/#502).
 
-With the design decided, re-routed through `work-issue` -> `build-loop`
-(the capability — seal-time snapshot pinning — didn't exist in the code
-at all yet, so this was route 4, not `fix-bugs`/`test-loop`).
+**Implementation** (one slice):
+- Added `require('./specimen-preanalytics.service')` to
+  `import-lgpd.service.js`.
+- After `samplesCollection.insertOne(sample)`, if `sample.sprec` is
+  present, calls `specimenPreanalyticsService.recordProfile(db,
+  sample.specimenId, sample.sprec)` and pins the sample via
+  `updateOne({ $set: { sealedSpecimenPreanalyticsId: profile._id } })`
+  — best-effort: logs a warning and continues the row on failure rather
+  than failing it. Placed immediately after the existing RCS
+  (`recordAssessment`/`sealedRcsAssessmentId`) block, same file, mirrors
+  `import.service.js`'s CSV/XLSX branch (~line 574-588) and #499's RCS
+  fix for this same file.
+- `docs/architecture/canonical-data-contract-v1.md`'s SpecimenPreanalytics
+  section got a new "Landed in #503" paragraph, same pattern #500/#502
+  used, right after the existing "Not yet landed" note (which now also
+  clarifies the JSON-import gap it's still describing belongs to
+  `import.service.js` specifically, tracked in #493 — not the
+  `import-lgpd.service.js` gap #503 just closed).
 
-**Implementation** (one slice, no split needed):
-- `Sample.js` gained `sealedRcsAssessmentId`/`sealedSpecimenPreanalyticsId`
-  (schema + `SampleModel.create()` defaults). Confirmed via
-  `dict-02_DICIONARIO.md`/`requisitos-index.md` (build-loop's
-  primary-doc-before-editing gate) that no dict-02 entity covers this —
-  it's an implementation detail of `MerkleService`'s per-sample hash, not
-  part of dict-02's own (separate, not-yet-built) `MerkleRoot` stub
-  entity (P1X-0162..0167).
-- `rcs-assessment.service.js`/`specimen-preanalytics.service.js` gained
-  `getAssessmentById`/`getProfileById` (resolve one snapshot by `_id`,
-  vs. the existing `getAssessmentsForSpecimen`/`getProfilesForSpecimen`'s
-  "newest first" resolution).
-- `MerkleService.generateSampleHashFromSample` now resolves the pinned
-  snapshot by `_id` when `sealedRcsAssessmentId`/
-  `sealedSpecimenPreanalyticsId` is present as an own-property on the
-  sample document (checked via `hasOwnProperty`, not truthiness — `null`
-  means "sealed with no snapshot," absent means "written before this pin
-  existed"). Falls back to the pre-#502 "resolve newest" behavior only
-  for that second case, preserving hash stability for samples already in
-  the DB.
-- `import.service.js` (both the JSON branch and the CSV/XLSX branch) and
-  `import-lgpd.service.js` now capture the `_id` of whichever
-  RcsAssessment/SpecimenPreanalytics snapshot `recordAssessment`/
-  `recordProfile` just persisted and pin the sample to it via a follow-up
-  `updateOne`.
-- `intakeWizard.js`'s `buildSampleDocumentFromIntake` explicitly sets
-  both pin fields to `null` (it never records a snapshot) so the sample
-  document carries the own-property and always falls back to the legacy
-  embedded-field hash — never accidentally picks up a later snapshot via
-  the old "resolve newest" path.
-- `docs/architecture/canonical-data-contract-v1.md`'s RcsAssessment
-  section got a new paragraph recording the landed fix, same pattern
-  #500's finding used.
+**Tests:** two new tests in
+`import-lgpd.service.importSamples.unit.test.js`, mirroring the existing
+#499 RCS tests' shape: one asserting the referenced snapshot is recorded
+with the right `specimenId`/`sampleType`/`primaryContainer` and the pin
+`updateOne` fires with the returned `_id`, one asserting the row import
+still succeeds when `recordProfile` rejects. Added a
+`specimenPreanalyticsCollection` fake (same real-driver `_id`-mutation
+style as the existing `rcsAssessmentsCollection` fake) to the test
+file's `makeDb()`. Test written and run first against the
+unimplemented capability (failed as expected: `insertOne` called 0
+times), then implementation added, then re-run green.
 
-**Tests:** added `getAssessmentById`/`getProfileById` unit tests (same
-real-query-matching-fake style as the existing
-`getAssessmentsForSpecimen`/`getProfilesForSpecimen` tests; extended the
-fakes' `insertOne` to mutate `doc._id` the way the real MongoDB driver
-does, since the pin logic depends on that). Added a
-`SampleGraphValidator` test proving the actual bug scenario: a sample
-sealed against one RcsAssessment snapshot, a second (newer) snapshot
-recorded afterward for the same specimenId, integrity check still
-passes because it resolves the pinned snapshot, not the newest.
+Ran the four `import-lgpd`-related targeted test files
+(`import-lgpd.service.importSamples.unit.test.js`,
+`import-lgpd.service.test.js`, `import-lgpd.service.unit.test.js`,
+`import-lgpd.controller.test.js`) — 176 tests, all passing, no
+regressions. Did not run the full suite (build-loop's per-iteration
+proof bar for this backend-internal, non-e2e-spec slice; full suite is
+reserved for `ship-integration-branch`).
 
-**Fixed two pre-existing tests whose assertions assumed the old
-"no extra updateOne" shape** (`import-lgpd.service.importSamples.unit.test.js`,
-`import.service.importSamples.test.js`) — both now correctly expect the
-pin's `updateOne` call to fire alongside whatever they were actually
-testing, asserting on the specific `$set` key they care about instead of
-call count/absence. Also gave `import-lgpd.service.importSamples.unit.test.js`'s
-`rcsAssessmentsCollection.insertOne` mock the same real-driver `_id`
-mutation.
+Branch `test/503-import-lgpd-sprec-wiring` (off
+`feature/docker-e2e-backend-integration`, same fallback-prefix
+convention prior sessions used — no dedicated `build-loop` prefix
+exists yet), one commit, fast-forward merged back in, local branch
+deleted. Pushed `feature/docker-e2e-backend-integration`. Closed #503
+with a comment pointing at the commit hash and the doc section.
 
-Ran the full `api/backend/tests/unit` suite (283 files, 5749 tests) —
-8 pre-existing failures, all unrelated to this change (`UserModel.getRoleName`
-missing, part of the open RBAC retirement series #427/#428; a dictionary
-generator checksum drift, unrelated script). Zero regressions from this
-session's diff.
-
-**Filed #504** (`wrap-up`'s security/safety-relevant-change rule): the
-backward-compat fallback that keeps "resolve newest" for samples written
-before this pin existed means those samples are *still* exposed to
-#502's original bug if a re-assessment flow is ever built without also
-backfilling their pin fields. No live re-assessment flow exists today
-(same as #502's own premise), so this is a flagged-for-later item, not
-an active bug.
-
-Branch `test/502-merkle-integrity-seal-time-pin` (off
-`feature/docker-e2e-backend-integration`, following the repo's `test/`
-fallback prefix — no dedicated `build-loop` prefix exists yet per the
-overlay), one commit, fast-forward merged back in, local branch deleted.
-Pushed `feature/docker-e2e-backend-integration`. Closed #502 with a
-comment summarizing the fix and pointing at the commit + doc section.
-
-No other friction this session (`wrap-up` ran in full).
+`wrap-up` ran in full — no friction found this session (core audit:
+no scope creep, no lazy fixes, instructions matched what happened,
+no permission denials, no undocumented judgment calls, nothing stale,
+no retries, no user correction needed, targeted test runs kept context
+lean. Shipping addendum: no undocumented gaps left in the close comment,
+no ambiguous sub-points left open on a closed issue, nothing
+security/safety-relevant beyond the same best-effort-logging pattern
+already established for the RCS counterpart).
 
 ## Repo state
 
 - **`feature/docker-e2e-backend-integration`**: clean, pushed, up to
-  date with origin as of this session (commit `9e04b53a`, "Resolve #502:
-  pin MerkleService integrity verification to seal-time
-  RcsAssessment/SpecimenPreanalytics snapshot").
+  date with origin as of this session (commit `284ac7e4`, "Resolve
+  #503: wire import-lgpd.service.js SPREC snapshots to
+  specimenPreanalyticsService.recordProfile").
 - No dangling branches from this session.
-- Issues this session: **#502 closed** (comment posted, references
-  commit + doc). **#504 filed** (new, open — residual risk for
-  pre-#502 samples, tracked for whenever a re-assessment flow is built).
+- Issues this session: **#503 closed** (comment posted, references
+  commit + doc). No new issues filed.
 
 ## Which issue is next
 
@@ -117,37 +88,29 @@ children resolved or closed as not-applicable (#497, #498, #499, #500,
 #501) — but #491 itself (the general "migrate backend RCS consumers off
 Sample.js embedded fields" umbrella) should stay open until the real
 remaining consumers (MerkleService's *own* embedded-field reads outside
-this session's #502 scope, neo4j projection, live registration path) are
-actually migrated; those aren't yet split into their own child issues
-beyond what #502 (now closed)/#492 already cover narrowly. Note:
-`MerkleService.generateSampleHash` (the *base* function, not
+#502's scope, neo4j projection, live registration path) are actually
+migrated. `MerkleService.generateSampleHash` (the *base* function, not
 `generateSampleHashFromSample`) still reads `sample.rcsScore`/
 `calculationTrace`/`axisPenalties`/`sprec` directly off the sample
-object — that's an intentional, still-open part of #491's scope, not
-something this session's #502 slice touched (#502 only changed which
-*snapshot* `generateSampleHashFromSample` resolves before calling the
-base function).
+object — intentional, still-open part of #491's scope.
 
-**#493** (SPREC backend consumers, off #390) — 1 of 3 items done
-(MerkleService, prior session). Still open:
-- `import.service.js`'s JSON-import branch — needs
-  `specimenPreanalyticsService.recordProfile` wiring (pairs with #501's
-  RCS fix — likely the same shape, same file, just the SPREC half
-  instead of RCS half; not picked up this session, stayed strictly to
-  #502's scope).
+**#493** (SPREC backend consumers, off #390) — 2 of 3 items now done
+(MerkleService in a prior session, `import-lgpd.service.js` this
+session via #503). Still open:
+- `import.service.js`'s **JSON**-import branch — needs
+  `specimenPreanalyticsService.recordProfile` wiring (the CSV/XLSX
+  branch already has it; #493's own text already named this as the
+  narrower remaining gap, distinct from what #503 just closed).
 - `sampleMerkleIntegrity.js` — confirm during implementation whether
   this belongs in backend scope or the frontend follow-up (#495).
 
-**#503** (filed several sessions ago) — `import-lgpd.service.js`'s
-`sample.sprec` never wired to `specimenPreanalyticsService.recordProfile`.
-Not picked up this session.
-
-**#504** (filed this session) — samples written before #502's pin
-existed remain exposed to the original false-tamper bug; needs a
-one-time backfill (`sealedRcsAssessmentId`/`sealedSpecimenPreanalyticsId`
-set to the existing snapshot's `_id`) whenever a re-assessment/
-correction/re-import flow is designed. No urgency today — no such flow
-exists yet.
+**#504** (filed a prior session, resolving #502) — samples written
+before #502's seal-time pin existed remain exposed to the original
+false-tamper bug; needs a one-time backfill
+(`sealedRcsAssessmentId`/`sealedSpecimenPreanalyticsId` set to the
+existing snapshot's `_id`) whenever a re-assessment/correction/re-import
+flow is designed. No urgency today — no such flow exists yet. Not
+picked up this session.
 
 Other backlog carried forward unchanged from prior handoffs (not
 re-verified this session):
@@ -155,9 +118,7 @@ re-verified this session):
   registration compute RCS server-side, or accept a pre-computed
   assessment from the client? (needs owner call before implementation;
   also the reason `intakeWizard.js` samples never get a
-  RcsAssessment/SpecimenPreanalytics snapshot recorded today, which is
-  why this session pinned those samples to `null` rather than wiring up
-  new recording logic there)
+  RcsAssessment/SpecimenPreanalytics snapshot recorded today)
 - **#494** — storage/custody consumers (storageService, sample.service,
   Allocate/Move/Release use-cases, MongoStorageRepository*, intakeWizard,
   NotificationService, sensor services) — still unsplit.
@@ -168,12 +129,11 @@ re-verified this session):
   list not covered by #491-#495.
 - **#489** — full-suite vitest flakiness (89/360 files fail on a bare
   `npx vitest run`, unrelated to any recent diff, broadened scope of
-  closed #423). This session's full-suite run (283 files under
-  `tests/unit` specifically) saw only 2 failing files/8 failing tests,
-  both independently explained (RBAC retirement series, dictionary
-  checksum script) — worth a future session reconciling whether #489's
-  original 89-file number was a different (broader) run scope, since
-  `tests/unit` alone came nowhere close to that count.
+  closed #423). A prior session's full-suite run under `tests/unit`
+  specifically saw only 2 failing files/8 failing tests, both
+  independently explained (RBAC retirement series, dictionary checksum
+  script) — worth a future session reconciling whether #489's original
+  89-file number was a different (broader) run scope.
 - Older backlog: `#371`/`#373`/`#374`/`#378`/`#379`, `user.accessType`
   grep sweep, dangling merged branches (`test/440-*`, `test/441-*`,
   `fix/444-retention-period-iso8601`, `fix/450-*`,
@@ -190,42 +150,24 @@ re-verified this session):
 
 ## Dev stack state
 
-Nothing started this session. Per the `build-loop` overlay, this slice
-was backend-internal service/model logic (not one of the milestone's own
-e2e Playwright specs), so the "real backend" proof bar was the strongest
-native-only option — vitest against real-query-matching in-memory fakes
-(mirroring the existing `rcs-assessment.service.test.js`/
-`specimen-preanalytics.service.test.js` pattern), not literal Docker/
-live Mongo. No `docker compose up` this session, nothing to tear down.
+Nothing started this session. Backend-internal service logic only (not
+one of the milestone's own e2e Playwright specs), so per the
+`build-loop` overlay's carve-out, the proof bar was vitest against
+real-query-matching in-memory fakes, not literal Docker/live Mongo. No
+`docker compose up` this session, nothing to tear down.
 
 ## Which skills to use
 
-- `work-issue` -> (design decision via `AskUserQuestion`) -> `build-loop`
-  was the correct routing: #502 named a genuine missing capability (the
-  seal-time pin didn't exist in the code at all), not a defect in
-  existing behavior (`fix-bugs`) or a coverage gap in already-correct
-  code (`test-loop`). The mid-routing `AskUserQuestion` call (before
-  `build-loop`, after the initial `work-issue` dispatch) is worth noting
-  as a pattern: a design-call issue doesn't map directly to any of
-  `work-issue`'s routes until the design question itself is answered —
-  answer it first, *then* classify what the resulting concrete work
-  looks like.
-- `build-loop`'s "Picking a slice" primary-doc gate fired correctly on
-  the `Sample.js` edit (a hook blocked the first attempt until
-  `dict-02_DICIONARIO.md`/`requisitos-index.md` were read directly,
-  not just `docs/architecture/`'s summary) — confirmed no dict-02 entity
-  covers this concept, so the new fields are implementation-only and the
-  doc update went to `docs/architecture/canonical-data-contract-v1.md`
-  rather than proposing a dict-02 change.
-- `build-loop`'s Docker-on-by-default note didn't apply here — the
-  overlay's own carve-out for backend-internal (non-e2e-spec) slices
-  correctly pointed at native vitest fakes instead; worth remembering
-  this carve-out exists so a future session doesn't reflexively spin up
-  Docker for every `build-loop` iteration regardless of what kind of
-  slice it is.
-- `wrap-up`'s security/safety-relevant-change rule (item 12) is what
-  produced #504 — the residual backward-compat exposure wouldn't have
-  gotten a tracked issue without that explicit checklist item; worth
-  reconfirming it's still catching real things like this.
+- `work-issue` -> `build-loop` was the correct routing again for #503,
+  same shape as #499/#502: a genuinely missing capability (recordProfile
+  call site never wired), not a defect (`fix-bugs`) or a coverage gap in
+  already-correct code (`test-loop`).
+- The existing RCS wiring in the same file/function (added for #499) was
+  a near-exact template for the SPREC wiring — when a prior session's
+  fix for one half of a paired RCS/SPREC gap exists in the same file,
+  check it first before designing the second half from scratch; saved
+  real time this session (found the pattern via `grep` for
+  `rcsAssessmentService`/`recordAssessment` in the target file, then
+  literally used the same shape one field-set over).
 - No project board found for this repo, so boarding step was skipped —
   matches prior sessions' behavior.
