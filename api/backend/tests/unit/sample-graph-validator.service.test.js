@@ -59,6 +59,7 @@ describe('SampleGraphValidator', () => {
   let diseaseDictionaryCollection;
   let medicationDictionaryCollection;
   let sampleMovementsCollection;
+  let rcsAssessmentsCollection;
   let validator;
 
   beforeEach(() => {
@@ -119,6 +120,14 @@ describe('SampleGraphValidator', () => {
       findOneAndUpdate: vi.fn().mockResolvedValue({ value: { seq: 1 } }),
     };
 
+    rcsAssessmentsCollection = {
+      find: vi.fn().mockReturnValue({
+        sort: vi.fn().mockReturnValue({
+          toArray: vi.fn().mockResolvedValue([]),
+        }),
+      }),
+    };
+
     db = {
       listCollections: () => ({
         toArray: async () => ([{ name: 'samples' }, { name: 'consents' }]),
@@ -130,6 +139,7 @@ describe('SampleGraphValidator', () => {
         if (name === 'medication_dictionary' || name === 'medicationDictionary') return medicationDictionaryCollection;
         if (name === 'sample_movements' || name === 'sampleMovements') return sampleMovementsCollection;
         if (name === 'counters') return countersCollection;
+        if (name === 'rcsAssessments') return rcsAssessmentsCollection;
         throw new Error(`Unexpected collection name: ${name}`);
       },
     };
@@ -175,6 +185,35 @@ describe('SampleGraphValidator', () => {
     const failReport = await validator.validateSampleCompliance(badSample._id);
     expect(failReport.graphPath.quality.valid).toBe(false);
     expect(failReport.suggestedStatus).toBe('QUARANTINE');
+  });
+
+  it('resolves quality through a referenced RcsAssessment snapshot when one is recorded for the sample, ignoring stale embedded legacy fields', async () => {
+    const sample = buildSample({ specimenId: 'SPEC-001', quality_category: 'A' });
+    samplesCollection.findOne.mockResolvedValue(sample);
+    consentsCollection.findOne.mockResolvedValue({ status: 'ACTIVE', participantId: '12345678' });
+
+    rcsAssessmentsCollection.find.mockReturnValue({
+      sort: vi.fn().mockReturnValue({
+        toArray: vi.fn().mockResolvedValue([
+          {
+            specimenId: 'SPEC-001',
+            governanceStatus: 0,
+            finalGrade: 'E',
+            rcsScore: 12,
+            gradeRoute: 'Governance failure',
+            axisPenalties: [],
+            calculationTrace: {},
+          },
+        ]),
+      }),
+    });
+
+    const report = await validator.validateSampleCompliance(sample._id);
+
+    expect(rcsAssessmentsCollection.find).toHaveBeenCalledWith({ specimenId: 'SPEC-001' });
+    expect(report.graphPath.quality.valid).toBe(false);
+    expect(report.graphPath.quality.reason).toContain('bloqueado');
+    expect(report.suggestedStatus).toBe('QUARANTINE');
   });
 
   it('valida o nó de Clínica com sucesso e falha em Fabry sem biomarcadores', async () => {

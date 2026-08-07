@@ -180,7 +180,7 @@ class SampleGraphValidator {
   }
 
   _validateQuality(sample) {
-    return qualityDomain.validateQualityForRelease(sample);
+    return qualityDomain.validateQualityForReleaseFromSample(this.db, sample);
   }
 
   _validateClinical(sample, requirements = defaultRequirements(), disease = null) {
@@ -360,7 +360,7 @@ class SampleGraphValidator {
 
     const graphPath = {
       ethics: await this._validateEthics(sample, consentsCollection),
-      quality: this._validateQuality(sample),
+      quality: await this._validateQuality(sample),
       clinical: this._validateClinical(sample, diseaseContext.requirements, diseaseContext.disease),
       pharmacology: await this._validatePharmacology(sample, diseaseContext.requirements, diseaseContext.disease),
       integrity: this._validateIntegrity(sample),
