@@ -1,77 +1,85 @@
 # HANDOFF
 
 **Written:** 2026-08-11, end of session on `feature/docker-e2e-backend-integration`,
-after resolving #518.
+after resolving #519.
 
 ## What happened this session
 
-Dennis said "Pick #518" (`SampleDetailsPage.tsx`'s SPREC display
-migration off embedded `sample.sprec` — the sibling follow-up to #517
-from the original #495 split, both queued in the prior handoff).
-**Routing:** `work-issue` → `resolve-issue` (refactor/enhancement, same
-shape as #517).
+Dennis said "Pick #519" (`sampleMerkleIntegrity.js` computing a
+structurally different Merkle root than the backend's `MerkleService`).
+**Routing:** `work-issue` → `resolve-issue` (bug-labeled, but the issue's
+own body flagged it as currently dead/orphaned code needing a design
+call, not a reproducible live bug — so not `fix-bugs`).
 
-`gh issue view 518 --json title,body,labels,comments` confirmed the
-issue's own text: it depended on a "current profile" resolution helper
-for `SpecimenPreanalytics` existing or being built. That helper
-(`specimen-preanalytics.service.getCurrentProfilesForSpecimens`) was
-already built last session for #517, so the dependency was already
-satisfied — no design call needed, no new backend work.
+Per `resolve-issue`'s "needs a design call" trigger, checked `docs/`
+(canonical-data-contract-v1.md, canonical-active-surface.md, dict-02)
+before treating the design call as still open — found nothing that
+settles which Merkle shape (3-leaf tree vs. flat hash) was intended;
+dict-02's `MerkleRoot` entity (P1X-0162..0167) is an unrelated
+"audit-batch root" governance concept, not this per-sample hash. So the
+design call was genuine, not stale. Read both implementations in full
+(`frontend/src/utils/sampleMerkleIntegrity.js`,
+`api/backend/src/services/MerkleService.js`) and confirmed the issue's
+claim exactly: frontend built a real 3-leaf tree over snake_case
+intake-wizard field names; backend computes one flat SHA-256 over a
+differently-shaped camelCase object. No field-mapping fix could make
+these agree.
 
-**Turned out simpler than the issue (and prior handoff) anticipated.**
-Both the issue text and the prior handoff assumed #518 would need
-wiring a per-sample profile lookup into `GET /samples/:id` or a
-dedicated endpoint. Investigating `SampleDetailsPage.tsx` showed it
-doesn't call `GET /samples/:id` at all — it sources its `sample` object
-from the shared `useSamples()` hook, which calls `GET /samples` (the
-same list endpoint #517 already enriched with
-`currentSpecimenPreanalytics`). So the resolved field was already
-present on the sample object with **zero backend changes** required;
-the fix was purely a frontend read-path change.
+**Asked Dennis via AskUserQuestion** which resolution he wanted (delete
+the dead code / rewrite frontend to mirror backend / leave as-is with a
+comment). **Dennis chose: rewrite frontend to mirror backend.**
 
-**Delivered and merged** (branch `fix/518-sample-details-sprec-migration`,
-commit `830dc19e`, merged into `feature/docker-e2e-backend-integration`
-at `91f53e4d`):
+**Delivered and merged** (branch `fix/519-sample-merkle-integrity-algorithm`,
+commit `5dbb9ab5`, merged into `feature/docker-e2e-backend-integration`
+at `e14fda88`):
 
-- `frontend/src/components/samples/sampleListFormatters.ts` — broadened
-  `getStorageLabel`/`buildSprecSummary`'s param type from `SampleWithId`
-  to the base `Sample` type (both already only touch fields defined on
-  `Sample`), and added `buildSprecAxisSummary` — the per-axis-breakdown
-  sibling to `buildSprecSummary`, same `currentSpecimenPreanalytics`
-  source, formatted as one `Label:value` pair per SPREC axis instead of
-  a single dash-joined code.
-- `frontend/src/views/SampleDetailsPage.tsx`'s `sprecSummary`/
-  `sprecAxisSummary` now call the shared formatters instead of reading
-  `effectiveSample.sprec` directly — same functions `SamplesPageView.tsx`
-  already uses for the list view, so the two views stay consistent by
-  construction rather than by parallel maintenance.
-- `frontend/src/types/models.ts` — updated `currentSpecimenPreanalytics`'s
-  doc comment; no longer "list view only" now that the details view reads
-  it too.
-- Tests: `sampleListFormatters.test.ts` extended with 5 new
-  `buildSprecAxisSummary` cases (13/13 green total). `npm run
-  typecheck:full` clean (0 errors) on the merged branch.
-- **#518 closed** against this delivered scope.
+- `frontend/src/utils/sampleMerkleIntegrity.js` — fully rewritten to
+  compute the same single flat SHA-256 as
+  `MerkleService.generateSampleHash` (ported `deepSort`/`stableSerialize`/
+  `normalizeParticipantIdentity`/`normalizePharmacologyData` field-for-field),
+  using `crypto.subtle` (WebCrypto) instead of Node's `crypto` module.
+  `buildSampleMerkleRoot`/`verifySampleIntegrity` kept their names/call
+  shape (`{ rootHash }`) so the only caller didn't need restructuring.
+- `frontend/src/components/v2/intake/ClinicalIntakeWizard.jsx`'s
+  `buildSampleIntegrityInput` updated to feed the new field shape
+  (`participant_identity`/`clinicalData`/`sprec`/`pharmacologyData` instead
+  of the old `patient_identity`/`clinical_data`/`pharmacology_data`
+  3-leaf-tree keys).
+- Tests: new `sampleMerkleIntegrity.test.js` (12 tests), including a
+  cross-check against Node's `crypto.createHash` for the same canonical
+  payload string, confirming WebCrypto/Node SHA-256 parity — not just
+  "looks similar," an actual byte-for-byte proof. `npm run typecheck:full`
+  clean (0 errors) on the merged branch.
+- **#519 closed** against this delivered scope.
 
-**No new issues filed this session** — no out-of-scope findings, no
-security-relevant changes, no deferred sub-points.
+**New issue filed — #521** (out-of-scope finding from verifying the fix
+actually mattered): even with #519's algorithm-shape fix, the frontend's
+computed hash still won't equal the backend's persisted hash for the
+same sample, because `buildSampleIntegrityInput`'s `clinicalData`
+mapping still uses `biomarkers_values` (snake_case, no
+`charlsonComorbidities`) while server-side `buildClinicalData`
+(`api/backend/src/routes/intakeWizard.js:107-118`) produces
+`biomarkerValues` (camelCase) plus `charlsonComorbidities`; also
+`pharmacologyData`'s `atcLevel1` fallback logic isn't replicated
+client-side. Not a live bug today (server always overwrites the
+frontend-submitted value, nothing compares them yet) — a latent gap for
+whoever eventually wires up client-side verification. Needs its own
+design call on whether `buildSampleIntegrityInput` should track
+`buildClinicalData`'s exact shape.
 
-**Confirmed (not new):** `gh issue view <N> --comments` again returned
-empty output despite exit 0 (same shape as `dennis-windows`'s already-
-documented finding from #187) — worked around with
-`gh issue view <N> --json title,body,labels,comments` per that skill's
-existing guidance. No skill edit needed, already covered.
+**No security-relevant findings** — this touches unused/dead
+integrity-check code, not a live trust boundary.
 
 ## Repo state
 
-- **`feature/docker-e2e-backend-integration`**: at `91f53e4d`, clean, up
-  to date with origin. Contains the merge of #518's fix (`830dc19e`).
+- **`feature/docker-e2e-backend-integration`**: at `e14fda88`, clean, up
+  to date with origin. Contains the merge of #519's fix (`5dbb9ab5`).
 - No dangling branches from this session —
-  `fix/518-sample-details-sprec-migration` deleted both locally and
-  remotely after a clean merge (no permission-classifier denial this
-  time, unlike #144/#183/#224).
-- Issues this session: **#518 closed** (delivered scope, merged at
-  `91f53e4d`). No new issues filed.
+  `fix/519-sample-merkle-integrity-algorithm` deleted both locally and
+  remotely after a clean merge.
+- Issues this session: **#519 closed** (delivered scope, merged at
+  `e14fda88`). **#521 filed** (new, open — clinicalData field-shape
+  residual gap, see above).
 
 ## Which issue is next
 
@@ -79,13 +87,15 @@ Dennis has not yet said which issue to pick up next session; per
 `handoff`'s "only if the user explicitly said so" rule, nothing is
 queued.
 
-Candidates carried forward (unchanged from prior handoff except #518's
-removal and #390's note below):
+Candidates carried forward (unchanged from prior handoff except #519's
+removal and #521's addition):
 
-**#519** — `sampleMerkleIntegrity.js` algorithm divergence (structurally
-different Merkle shape than the backend's canonical one). Needs a design
-call on which algorithm should be canonical; currently dead/orphaned
-code, not urgent.
+**#521** — new this session, see above. Needs a design call (does
+`buildSampleIntegrityInput`'s `clinicalData` need to track
+`buildClinicalData`'s exact shape, or is the variance acceptable?)
+before any code change — same "check docs first, then ask Dennis if
+docs don't settle it" pattern #519 used, since this is the direct
+sibling of that same design question.
 
 **#520** — `frontend/vitest.config.js` missing the `@` path alias
 `vite.config.js` defines. Small, mechanical fix (`resolve.alias` or
@@ -103,10 +113,10 @@ Whoever next stands up a real Mongo instance with pre-#502 sample data
 should run `node src/scripts/backfillSealedSnapshotPins.js` once
 (idempotent, safe to re-run).
 
-**#390** — umbrella issue; #491/#493/#494/#495 all closed, and both
-#517 and #518 (the #495 split-out remainder) are now also done. Worth a
-fresh look at whether #390 itself should close or get a status comment
-— nothing from the original #495 split appears to remain open.
+**#390** — umbrella issue; #491/#493/#494/#495 all closed, both #517 and
+#518 (the #495 split-out remainder) are done, and #519 (found while
+investigating #495) is now also done. Worth a fresh look at whether #390
+itself should close or get a status comment.
 
 Other backlog carried forward unchanged from prior handoffs (not
 re-verified this session):
@@ -142,27 +152,25 @@ re-verified this session):
 ## Dev stack state
 
 Nothing started this session. All verification ran targeted `npx vitest
-run src/components/samples/sampleListFormatters.test.ts` plus `npm run
+run src/utils/sampleMerkleIntegrity.test.js` plus `npm run
 typecheck:full` (0 errors) from `frontend/` — no Docker, no live app, no
 full suite.
 
 ## Which skills to use
 
-- `work-issue` → `resolve-issue`: #518 was a refactor/enhancement issue
-  carrying a stated dependency on prior work — verified the dependency
-  was already satisfied (by #517's session) before implementing, rather
-  than assuming the issue's own "depends on" note was still accurate.
-- **New this session:** when a follow-up issue assumes a specific
-  wiring point (here: "wire into `GET /samples/:id` or a dedicated
-  call"), check what the consuming frontend code actually fetches
-  before building that wiring — `SampleDetailsPage.tsx` turned out to
-  already source its data from the list endpoint a sibling issue had
-  already enriched, making the assumed backend work unnecessary
-  entirely. Don't take a "how to wire it" assumption in an issue body at
-  face value any more than a "needs design call" one.
-- **New this session:** when a list-view formatter and a details-view
-  formatter need the same derived summary from the same field, broaden
-  the shared helper's parameter type to the common base type (here:
-  `SampleWithId` → `Sample`) rather than duplicating the formatting
-  logic per view — both views end up reading the same code path instead
-  of two independently-maintained copies that can drift.
+- `work-issue` → `resolve-issue`: #519 was `bug`-labeled but its own body
+  named it dead/orphaned code needing a design call — verified the docs
+  didn't already settle the call before escalating to Dennis via
+  `AskUserQuestion`, rather than either assuming the label or silently
+  guessing an answer.
+- **New this session:** when a design call genuinely can't be resolved
+  from docs, `AskUserQuestion` with concrete options (not an open-ended
+  "what should I do?") got a fast, unambiguous answer — worth the pause
+  rather than picking a default and hoping.
+- **New this session:** when a fix is scoped as "mirror algorithm X,"
+  verify it actually would work end-to-end (traced what data the
+  algorithm would receive on both sides) rather than stopping at
+  "the hash functions now have the same shape." That check is what
+  surfaced #521 — the mirrored algorithm still receives differently-shaped
+  input data on each side, which a shallower verification would have
+  missed entirely.
