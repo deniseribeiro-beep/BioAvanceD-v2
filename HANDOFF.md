@@ -1,96 +1,77 @@
 # HANDOFF
 
 **Written:** 2026-08-11, end of session on `feature/docker-e2e-backend-integration`,
-after resolving #517.
+after resolving #518.
 
 ## What happened this session
 
-Dennis said "pick #517" (`SamplesPageView.tsx` list-view migration off
-embedded storage/SPREC shapes — the batch-resolution follow-up split out
-of #495 last session). **Routing:** `work-issue` → `resolve-issue`
-(refactor/enhancement, no specialized-loop label match).
+Dennis said "Pick #518" (`SampleDetailsPage.tsx`'s SPREC display
+migration off embedded `sample.sprec` — the sibling follow-up to #517
+from the original #495 split, both queued in the prior handoff).
+**Routing:** `work-issue` → `resolve-issue` (refactor/enhancement, same
+shape as #517).
 
-**#517 named a genuine open design call** (batch endpoint vs.
-server-side embed vs. accepted N+1) that a prior handoff had carried
-forward as unresolved. Per `work-issue`'s re-check trigger for
-carried-forward "needs design call" claims, checked
-`docs/architecture/canonical-data-contract-v1.md`'s Deferred Cleanup Plan
-(only a one-line "PR 102" bullet, no actual decision) and grepped the
-backend storage routes/controllers for any existing batch-resolution
-endpoint (none — `GET /storage/samples/search` is a different feature,
-allocation search, not batch location lookup). The design call was
-confirmed still genuinely open, not settled by docs. Also found the list
-view has **no pagination at all** (`sampleService.getAll()` hits
-`GET /samples` with no query params; the backend silently caps at its
-`limit || 50` default) — relevant context the issue itself didn't have.
+`gh issue view 518 --json title,body,labels,comments` confirmed the
+issue's own text: it depended on a "current profile" resolution helper
+for `SpecimenPreanalytics` existing or being built. That helper
+(`specimen-preanalytics.service.getCurrentProfilesForSpecimens`) was
+already built last session for #517, so the dependency was already
+satisfied — no design call needed, no new backend work.
 
-Asked Dennis directly via `AskUserQuestion` with three concrete options
-(server-side embed / new batch endpoint / accept N+1); he picked
-**server-side embed in `listSamples`**, matching a precedent already
-in that exact route handler (`sample.routes.js`'s consent-enrichment
-block already does per-row DB lookups server-side within one request).
+**Turned out simpler than the issue (and prior handoff) anticipated.**
+Both the issue text and the prior handoff assumed #518 would need
+wiring a per-sample profile lookup into `GET /samples/:id` or a
+dedicated endpoint. Investigating `SampleDetailsPage.tsx` showed it
+doesn't call `GET /samples/:id` at all — it sources its `sample` object
+from the shared `useSamples()` hook, which calls `GET /samples` (the
+same list endpoint #517 already enriched with
+`currentSpecimenPreanalytics`). So the resolved field was already
+present on the sample object with **zero backend changes** required;
+the fix was purely a frontend read-path change.
 
-**Delivered and merged** (branch `fix/517-samples-list-storage-sprec-resolution`,
-commit `90484097`, merged into `feature/docker-e2e-backend-integration`
-at `1d8abd6b`):
+**Delivered and merged** (branch `fix/518-sample-details-sprec-migration`,
+commit `830dc19e`, merged into `feature/docker-e2e-backend-integration`
+at `91f53e4d`):
 
-- `MongoStorageRepository.resolveStorageLocationsForSamples` — batched
-  form of the existing `getSampleStorageLocation` (one `storagePaths`
-  `$in` query across the whole page, not one per sample).
-- `specimen-preanalytics.service.getCurrentProfilesForSpecimens` —
-  batched "current profile" resolution (one `specimenPreanalytics` `$in`
-  query), reusing the sealed-pin-else-newest precedent
-  `MerkleService.generateSampleHashFromSample` already established for
-  integrity hashing (#502) — a sample with `sealedSpecimenPreanalyticsId`
-  set resolves that exact snapshot, otherwise newest.
-- `GET /samples` (`sample.routes.js`) now attaches
-  `resolvedStorageLocation`/`currentSpecimenPreanalytics` to each sample,
-  computed via both batched resolvers before the existing consent
-  enrichment step.
-- `SamplesPageView.tsx`'s `getStorageLabel`/`buildSprecSummary` now read
-  the resolved fields instead of the legacy embedded
-  `sample.storageLocation`/`sample.sprec`. Both were extracted into a new
-  `frontend/src/components/samples/sampleListFormatters.ts` (matching
-  the existing `movementTypeLabel.ts` precedent in the same directory)
-  so they're unit-testable without pulling in
-  `InlineStorageMovementPanel.tsx`'s `@/`-aliased imports (see #520
-  below — that alias doesn't resolve under vitest).
-- New frontend type `SpecimenPreanalyticsProfile` plus
-  `resolvedStorageLocation`/`currentSpecimenPreanalytics` fields on
-  `Sample` in `frontend/src/types/models.ts`.
-- Tests: 3 backend files extended (`MongoStorageRepository.test.js`,
-  `specimen-preanalytics.service.test.js`, `sample.routes.test.js` — 187
-  targeted tests green) plus a new
-  `frontend/src/components/samples/sampleListFormatters.test.ts` (10
-  tests green). `npm run typecheck:full` clean (0 errors) on the merged
-  branch.
-- **#517 closed** against this delivered scope.
+- `frontend/src/components/samples/sampleListFormatters.ts` — broadened
+  `getStorageLabel`/`buildSprecSummary`'s param type from `SampleWithId`
+  to the base `Sample` type (both already only touch fields defined on
+  `Sample`), and added `buildSprecAxisSummary` — the per-axis-breakdown
+  sibling to `buildSprecSummary`, same `currentSpecimenPreanalytics`
+  source, formatted as one `Label:value` pair per SPREC axis instead of
+  a single dash-joined code.
+- `frontend/src/views/SampleDetailsPage.tsx`'s `sprecSummary`/
+  `sprecAxisSummary` now call the shared formatters instead of reading
+  `effectiveSample.sprec` directly — same functions `SamplesPageView.tsx`
+  already uses for the list view, so the two views stay consistent by
+  construction rather than by parallel maintenance.
+- `frontend/src/types/models.ts` — updated `currentSpecimenPreanalytics`'s
+  doc comment; no longer "list view only" now that the details view reads
+  it too.
+- Tests: `sampleListFormatters.test.ts` extended with 5 new
+  `buildSprecAxisSummary` cases (13/13 green total). `npm run
+  typecheck:full` clean (0 errors) on the merged branch.
+- **#518 closed** against this delivered scope.
 
-**New finding, filed as #520** (BioAvanceD-v2): `frontend/vitest.config.js`
-doesn't merge/mirror `vite.config.js`'s `@` path alias, so any vitest
-test that transitively imports a `@/...`-importing module fails at
-module resolution. Hit this directly trying to test
-`SamplesPageView.tsx`'s helpers in place before extracting them out;
-the extraction is a reasonable fix on its own merits but doesn't cover
-the next test that needs to actually render a `@/`-importing component.
+**No new issues filed this session** — no out-of-scope findings, no
+security-relevant changes, no deferred sub-points.
 
-**Permission note (not new, already documented in `resolve-issue`):**
-the integration-branch merge (`git merge --no-ff fix/517-... `) was
-denied once by the auto-mode permission classifier — same known failure
-shape as prior sessions' (#144/#183/#224). Followed the documented
-fallback (`AskUserQuestion` confirmation, then proceeded on approval).
-No skill edit needed; recording only because it recurred.
+**Confirmed (not new):** `gh issue view <N> --comments` again returned
+empty output despite exit 0 (same shape as `dennis-windows`'s already-
+documented finding from #187) — worked around with
+`gh issue view <N> --json title,body,labels,comments` per that skill's
+existing guidance. No skill edit needed, already covered.
 
 ## Repo state
 
-- **`feature/docker-e2e-backend-integration`**: at `1d8abd6b`, clean, up
-  to date with origin. Contains the merge of #517's fix (`90484097`).
+- **`feature/docker-e2e-backend-integration`**: at `91f53e4d`, clean, up
+  to date with origin. Contains the merge of #518's fix (`830dc19e`).
 - No dangling branches from this session —
-  `fix/517-samples-list-storage-sprec-resolution` deleted both locally
-  and remotely after a clean merge.
-- Issues this session: **#517 closed** (delivered scope, merged at
-  `1d8abd6b`). **New:** #520 (open, BioAvanceD-v2 — vitest `@/` alias
-  gap).
+  `fix/518-sample-details-sprec-migration` deleted both locally and
+  remotely after a clean merge (no permission-classifier denial this
+  time, unlike #144/#183/#224).
+- Issues this session: **#518 closed** (delivered scope, merged at
+  `91f53e4d`). No new issues filed.
 
 ## Which issue is next
 
@@ -98,28 +79,17 @@ Dennis has not yet said which issue to pick up next session; per
 `handoff`'s "only if the user explicitly said so" rule, nothing is
 queued.
 
-Candidates carried forward:
-
-**#518** — `SampleDetailsPage.tsx`'s SPREC display, the sibling
-follow-up to #517 from the original #495 split. #517's session already
-built the "current profile" batched resolver
-(`specimen-preanalytics.service.getCurrentProfilesForSpecimens`) and
-established the sealed-pin-else-newest precedent as the canonical
-definition of "current" — #518 is now mostly a matter of resolving one
-sample's profile the same way (or reusing `getProfileById`/
-`getProfilesForSpecimen` directly, single-sample doesn't need the
-batched form) and wiring it into `GET /samples/:id` or a dedicated call,
-rather than an open design question. Worth a fresh look with this in
-mind rather than assuming it's still blocked.
+Candidates carried forward (unchanged from prior handoff except #518's
+removal and #390's note below):
 
 **#519** — `sampleMerkleIntegrity.js` algorithm divergence (structurally
 different Merkle shape than the backend's canonical one). Needs a design
 call on which algorithm should be canonical; currently dead/orphaned
 code, not urgent.
 
-**#520** — new this session: `frontend/vitest.config.js` missing the `@`
-path alias `vite.config.js` defines. Small, mechanical fix
-(`resolve.alias` or `mergeConfig`), no design call needed.
+**#520** — `frontend/vitest.config.js` missing the `@` path alias
+`vite.config.js` defines. Small, mechanical fix (`resolve.alias` or
+`mergeConfig`), no design call needed.
 
 **skills-pack#233** — pack-repo only, low priority: fix the
 BioAvanceD-v2 overlay's per-iteration typecheck guidance
@@ -132,6 +102,11 @@ unit-tested, but has not been *run* against any live environment.
 Whoever next stands up a real Mongo instance with pre-#502 sample data
 should run `node src/scripts/backfillSealedSnapshotPins.js` once
 (idempotent, safe to re-run).
+
+**#390** — umbrella issue; #491/#493/#494/#495 all closed, and both
+#517 and #518 (the #495 split-out remainder) are now also done. Worth a
+fresh look at whether #390 itself should close or get a status comment
+— nothing from the original #495 split appears to remain open.
 
 Other backlog carried forward unchanged from prior handoffs (not
 re-verified this session):
@@ -163,37 +138,31 @@ re-verified this session):
   thread.
 - **#368** — the analogous Patient/ParticipantIdentity migration that
   #390's split pattern mirrored — is itself still unsplit.
-- **#390** — umbrella issue; #491/#493/#494/#495 all closed. Worth a
-  fresh look at whether #390 itself should close or get a status
-  comment, now that #517 (one of #495's split-out remainder) is also
-  done — only #518/#519 remain of the #495 remainder.
 
 ## Dev stack state
 
 Nothing started this session. All verification ran targeted `npx vitest
-run` (backend: `sample.routes.test.js`, `MongoStorageRepository.test.js`,
-`specimen-preanalytics.service.test.js`; frontend:
-`src/components/samples`, `SampleWithdrawalReturnPage.test.tsx`) plus
-`npx tsc --noEmit` (0 errors) from `frontend/` — no Docker, no live app,
-no full suite.
+run src/components/samples/sampleListFormatters.test.ts` plus `npm run
+typecheck:full` (0 errors) from `frontend/` — no Docker, no live app, no
+full suite.
 
 ## Which skills to use
 
-- `work-issue` → `resolve-issue`: #517 was a refactor/enhancement issue
-  carrying a "needs design call" note from a prior handoff — re-checked
-  per `work-issue`'s trigger for exactly this shape rather than trusting
-  the carried-forward claim, confirmed the call was still genuinely open
-  (not settled by docs or existing code), then resolved it via
-  `AskUserQuestion` before implementing.
-- **New this session:** when investigating a "needs design call" issue,
-  checking the actual data-fetching path (here: no pagination exists at
-  all on the list view) turned up context the issue's own text didn't
-  have and that changed which option was actually viable — worth
-  digging into the calling code's real behavior, not just the docs, when
-  corroborating a design-call claim.
-- **New this session:** a component's pure formatting helpers are worth
-  extracting into their own module (this repo's `samples/` directory
-  already had one precedent, `movementTypeLabel.ts`) both for
-  testability and because it sidesteps `vitest.config.js`'s missing `@`
-  alias (#520) — a component that imports anything via `@/` currently
-  can't be unit-tested by importing the component file directly.
+- `work-issue` → `resolve-issue`: #518 was a refactor/enhancement issue
+  carrying a stated dependency on prior work — verified the dependency
+  was already satisfied (by #517's session) before implementing, rather
+  than assuming the issue's own "depends on" note was still accurate.
+- **New this session:** when a follow-up issue assumes a specific
+  wiring point (here: "wire into `GET /samples/:id` or a dedicated
+  call"), check what the consuming frontend code actually fetches
+  before building that wiring — `SampleDetailsPage.tsx` turned out to
+  already source its data from the list endpoint a sibling issue had
+  already enriched, making the assumed backend work unnecessary
+  entirely. Don't take a "how to wire it" assumption in an issue body at
+  face value any more than a "needs design call" one.
+- **New this session:** when a list-view formatter and a details-view
+  formatter need the same derived summary from the same field, broaden
+  the shared helper's parameter type to the common base type (here:
+  `SampleWithId` → `Sample`) rather than duplicating the formatting
+  logic per view — both views end up reading the same code path instead
+  of two independently-maintained copies that can drift.
