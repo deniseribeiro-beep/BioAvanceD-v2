@@ -13,8 +13,9 @@ import { useLanguage } from '../contexts/LanguageContext';
 import { useAuth } from '../contexts/AuthContext';
 import AnalysisUploadModal from '../components/AnalysisUploadModal';
 import InlineStorageMovementPanel from '../components/samples/InlineStorageMovementPanel';
-import { Sample, SampleEmbeddedStorageLocation } from '../types/models';
+import { Sample, SampleStorageLocationDTO } from '../types/models';
 import { resultService, sampleService } from '../services/api';
+import { storageApi } from '../services/storageApi';
 import './SamplesPage.css';
 
 type ComplianceNode = {
@@ -52,6 +53,7 @@ export default function SampleDetailsPage() {
   const [complianceError, setComplianceError] = useState<string | null>(null);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [showStoragePanel, setShowStoragePanel] = useState(false);
+  const [storageLocation, setStorageLocation] = useState<SampleStorageLocationDTO | null>(null);
   const [form, setForm] = useState({
     linkedProject: '',
     currentQuantity: '',
@@ -171,11 +173,10 @@ export default function SampleDetailsPage() {
     };
   }, [sample?._id, sample?.sampleID, id]);
 
-  const getStorageInfo = (s: Sample | null | undefined): { summary: string; details: string } => {
-    const storageLocation: SampleEmbeddedStorageLocation | null | undefined = s?.storageLocation;
-    const boxName = storageLocation?.boxName ? String(storageLocation.boxName) : '';
-    const position = storageLocation?.position ? String(storageLocation.position) : '';
-    const path = storageLocation?.path ? String(storageLocation.path) : '';
+  const getStorageInfo = (location: SampleStorageLocationDTO | null): { summary: string; details: string } => {
+    const boxName = location?.box?.boxName ? String(location.box.boxName) : '';
+    const position = location?.box?.position ? String(location.box.position) : '';
+    const path = location?.path ? String(location.path) : '';
 
     if (!boxName && !path && !position) {
       return {
@@ -188,6 +189,22 @@ export default function SampleDetailsPage() {
     const summary = position ? `${readable} / ${t('samples.detail.storage.well', 'Poço')} ${position}` : readable;
     return { summary, details: summary };
   };
+
+  // dict-02 StorageAssignment (ELM-0167-0178, #495) — GET /samples/:id doesn't
+  // resolve this, so it's fetched separately via GET /storage/sample/:sampleId.
+  const loadStorageLocation = async (sampleId: string) => {
+    const response = await storageApi.getSampleLocation(sampleId);
+    setStorageLocation(response.success && response.data ? (response.data as SampleStorageLocationDTO) : null);
+  };
+
+  useEffect(() => {
+    const targetId = sample?._id || (sample as any)?.specimenId || id;
+    if (!targetId) {
+      setStorageLocation(null);
+      return;
+    }
+    void loadStorageLocation(String(targetId));
+  }, [sample?._id, sample?.sampleID, id]);
 
   const effectiveSample = useMemo(() => {
     if (!isEditing) return sample;
@@ -672,7 +689,7 @@ export default function SampleDetailsPage() {
           <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '0.75rem', color: 'var(--text)' }}>
             {t('samples.detail.storage.storageProjectTitle', 'Armazenagem e Projeto')}
           </h3>
-          {!sample?.storageLocation?.boxId && (
+          {!storageLocation?.box?.boxId && (
             <div style={{ marginBottom: '0.75rem', padding: '0.75rem 1rem', borderRadius: '8px', backgroundColor: 'rgba(37, 99, 235, 0.08)', color: 'var(--text)' }}>
               <strong>{t('samples.detail.storage.awaiting', 'Aguardando Armazenagem')}.</strong> {t('samples.detail.storage.storageAwaitingMessage', 'A amostra está registrada, mas ainda não foi atribuída a uma posição física.')}
             </div>
@@ -687,12 +704,12 @@ export default function SampleDetailsPage() {
                     alignItems: 'center',
                     padding: '0.35rem 0.75rem',
                     borderRadius: '999px',
-                    backgroundColor: !effectiveSample?.storageLocation?.boxId ? 'rgba(37, 99, 235, 0.10)' : 'rgba(16, 185, 129, 0.10)',
-                    color: !effectiveSample?.storageLocation?.boxId ? 'var(--primary)' : 'var(--text)',
+                    backgroundColor: !storageLocation?.box?.boxId ? 'rgba(37, 99, 235, 0.10)' : 'rgba(16, 185, 129, 0.10)',
+                    color: !storageLocation?.box?.boxId ? 'var(--primary)' : 'var(--text)',
                     fontWeight: 600,
                     fontSize: '0.875rem'
                   }}>
-                    {getStorageInfo(effectiveSample).summary}
+                    {getStorageInfo(storageLocation).summary}
                   </span>
                   {canEdit && (
                     <Button
@@ -714,6 +731,8 @@ export default function SampleDetailsPage() {
                 onCompleted={() => {
                   setShowStoragePanel(false);
                   loadSamples();
+                  const targetId = sample?._id || (sample as any)?.specimenId || id;
+                  if (targetId) void loadStorageLocation(String(targetId));
                 }}
               />
             )}
