@@ -151,19 +151,17 @@ function parseSprecRaw(sprecsRaw = '', matrix = '') {
     ? 'solid'
     : 'fluid';
 
-  if (parts.length >= 7 && matrixType === 'solid') {
-    return {
-      matrixType,
-      sampleType: parts[0],
-      collectionType: parts[1],
-      warmIschemia: parts[2],
-      coldIschemia: parts[3],
-      fixationType: parts[4],
-      fixationTime: parts[5],
-      longTermStorage: parts[6],
-    };
-  }
-
+  // #527: axis 2-6 use the same generic axis-position field names
+  // (primaryContainer/preCentrifugation/centrifugation/secondCentrifugation/
+  // postCentrifugationDelay) for both matrix types — matching
+  // SPREC_SOLID_DICTIONARY's own axis 2-6 slots (frontend/src/constants/
+  // sprecDictionary.js, which relabels those same slots per matrixType
+  // rather than naming them differently) and import.service.js's CSV-driven
+  // parsing (also matrix-type-agnostic). SpecimenPreanalyticsModel.fieldsOf
+  // reads these generic names to derive its solid-specific dict-02 fields
+  // (sprecCollectionType/warmIschemiaTime/coldIschemiaTime/
+  // fixationStabilizationType/fixationTime); a solid-only field-name branch
+  // here left every one of those null.
   if (parts.length >= 7) {
     return {
       matrixType,
@@ -206,11 +204,15 @@ function buildRcsPayload({ sampleType, matrix, sprecsRaw, processingUnknown }) {
     const unknownSolid = {
       matrixType: 'solid',
       sampleType: sprec.sampleType || 'X',
-      collectionType: sprec.collectionType || 'X',
-      warmIschemia: 'X',
-      coldIschemia: 'X',
-      fixationType: 'X',
-      fixationTime: 'X',
+      // #527: generic axis-position names, same reasoning as parseSprecRaw's
+      // solid branch above — rcs-certification.service.js's AXES.solid still
+      // resolves these via its preCentrifugation/centrifugation/
+      // secondCentrifugation/postCentrifugationDelay aliases.
+      primaryContainer: sprec.primaryContainer || 'X',
+      preCentrifugation: 'X',
+      centrifugation: 'X',
+      secondCentrifugation: 'X',
+      postCentrifugationDelay: 'X',
       longTermStorage: 'X',
     };
     return { matrixType: sprec.matrixType === 'solid' ? 'solid' : 'fluid', sprec: sprec.matrixType === 'solid' ? unknownSolid : unknownFluid };
