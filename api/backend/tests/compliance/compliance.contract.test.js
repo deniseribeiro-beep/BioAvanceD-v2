@@ -54,16 +54,21 @@ describe('Compliance Gate - LGPD AES-256-GCM', () => {
 
 describe('Compliance Gate - ISO 20387 Custody Logs', () => {
   it('exige actorId e reason em eventos de custódia (allocate e release)', async () => {
+    // #534: ReleaseSampleUseCase/AllocateSampleUseCase read the canonical
+    // storageAssignment.boxId/.positionCode (#508's consumer migration,
+    // see docs/architecture/canonical-data-contract-v1.md) — the fixture
+    // used to provide the legacy storageLocation.boxId/.position shape
+    // and never got updated when that migration landed.
     const sampleFixture = {
       _id: 'sample-1',
       barcode: 'BR-ISO-001',
-      storageLocation: { boxId: 'BOX-01', position: 'A1' }
+      storageAssignment: { boxId: 'BOX-01', positionCode: 'A1' }
     };
 
     const storageRepository = {
       findSampleById: vi.fn().mockImplementation(async () => ({
         ...sampleFixture,
-        storageLocation: { ...sampleFixture.storageLocation }
+        storageAssignment: { ...sampleFixture.storageAssignment }
       })),
       withTransaction: vi.fn(async (cb) => cb({})),
       allocateSamplePosition: vi.fn().mockResolvedValue(undefined),
