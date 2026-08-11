@@ -29,4 +29,28 @@ describe('ClinicalIntakeWizard buildSubmissionPayload', () => {
       definition: 'A rare condition',
     });
   });
+
+  it('#522: clinical.charlsonConditions carries the checked comorbidity slugs as an array, matching what buildClinicalData reads (api/backend/src/routes/intakeWizard.js)', () => {
+    const comorbidityDefinitions = [
+      { slug: 'diabetes', label: 'Diabetes' },
+      { slug: 'hypertension', label: 'Hypertension' },
+      { slug: 'ckd', label: 'Chronic Kidney Disease' },
+    ];
+    const formData = {
+      isHealthyControl: false,
+      patientID: '12345678',
+      patientName: 'Paciente Teste',
+      collectionInstitution: 'Hospital Teste',
+      collectionInstitutionAcronym: 'HT',
+      linkedProject: 'PROJ-1',
+      diabetes: true,
+      hypertension: false,
+      ckd: true,
+    };
+
+    const payload = buildSubmissionPayload(formData, comorbidityDefinitions);
+
+    expect(payload.clinical.charlsonConditions).toEqual(['diabetes', 'ckd']);
+    expect(payload.clinical.comorbidities).toBeUndefined();
+  });
 });
