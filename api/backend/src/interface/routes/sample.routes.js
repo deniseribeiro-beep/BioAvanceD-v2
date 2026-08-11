@@ -348,9 +348,13 @@ router.get('/', authenticate, async (req, res) => {
       });
     }
 
+    // #533: currentStatus was accepted here but sample.service.js#listSamples
+    // never applied it to the query (only participantId/specimenStatus/
+    // sampleType are) — dropped rather than wired up, since no frontend
+    // caller ever sends it (see #533's follow-up for the broader
+    // status/currentStatus-vs-specimenStatus trace).
     const filters = {
       patientID: req.query.patientID,
-      currentStatus: req.query.currentStatus,
       sampleType: req.query.sampleType,
       limit: parseInt(req.query.limit) || 50,
       skip: parseInt(req.query.skip) || 0
@@ -778,12 +782,16 @@ router.get('/search/by-term', authenticate, async (req, res) => {
     const samplesCollection = db.collection('samples');
     
     // Buscar por barcode ou ID (usando regex para busca parcial)
+    // #533: excluir amostras retiradas via withdrawnAt (o sinal real que
+    // sample.service.js#withdrawSample grava) — currentStatus:'WITHDRAWN'
+    // nunca é escrito por nenhum fluxo do backend, então esse filtro nunca
+    // excluía nada.
     const query = {
       $or: [
         { barcode: { $regex: term, $options: 'i' } },
         { _id: { $regex: term, $options: 'i' } }
       ],
-      currentStatus: { $ne: 'WITHDRAWN' } // Excluir amostras retiradas
+      withdrawnAt: null
     };
 
     const samples = await samplesCollection
@@ -793,7 +801,7 @@ router.get('/search/by-term', authenticate, async (req, res) => {
         _id: 1,
         barcode: 1,
         sampleType: 1,
-        currentStatus: 1,
+        specimenStatus: 1,
         quantity: 1,
         quantityUnit: 1
       })

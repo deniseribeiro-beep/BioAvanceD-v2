@@ -878,8 +878,11 @@ describe('sample.routes', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.data).toEqual([{ _id: '1', barcode: 'BC1' }]);
+      // #533: currentStatus:'WITHDRAWN' is never written by any backend
+      // flow (sample.service.js#withdrawSample sets withdrawnAt, not a
+      // currentStatus string) — the old filter never excluded anything.
       expect(find).toHaveBeenCalledWith(
-        expect.objectContaining({ currentStatus: { $ne: 'WITHDRAWN' } })
+        expect.objectContaining({ withdrawnAt: null })
       );
     });
 
