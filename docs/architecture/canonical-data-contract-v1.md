@@ -570,6 +570,28 @@ safe to re-run. Once run, `generateSampleHashFromSample`'s "resolve
 newest" fallback only ever applies to a sample with no snapshot recorded
 at all, closing the exposure window #504 described.
 
+**#496 re-audit (2026-08-11) — the outstanding "neo4j canonical
+projection" consumer, precisely identified:** this section's own "Not
+yet landed" note above names "neo4j canonical projection" as one of the
+three outstanding `rcsScore` consumers alongside `MerkleService` and the
+frontend types. #496's own body already confirmed
+`neo4jCanonicalProjection.service.js` (the live projection service) is
+reference-based/clean — no migration needed there. The actual
+outstanding file is `api/backend/scripts/neo4j-canonical-rebuild.js`
+(the one-time outbox-rebuild script, `~line 60`, reads `sample.rcsScore`
+directly for its `QUALITY_ASSESSED` event payload) — a different file
+`#491`'s own consumer list never named. Also found in the same pass and
+not on `#491`'s list: `label.routes.js`'s `sprec` read and
+`reports.routes.js`'s `sprec.*`/`final_grade` query filters. All three
+tracked together as `#525`, alongside a fourth, storage/custody-only
+finding (`batch-validation-engine.service.js`'s legacy `locationID`
+column mapping). `import.controller.js#importFhirBundle`'s own
+direct `rcs_score`/`final_grade`/`sprec` writes were also found in this
+pass, but that whole endpoint already has an open "is this dead code"
+question (`#336`, unresolved) predating #496 — no separate migration
+issue filed for it; #336 is the right place to resolve it once that
+question is settled.
+
 ### SpecimenPreanalytics
 
 - `specimenId` (reference to `Specimen`, not a duplicate — dict-07 row 38:
@@ -689,6 +711,23 @@ sample.sprec)` and pins `sealedSpecimenPreanalyticsId`, same best-effort
 block uses. A request with no `sprec` behaves exactly as before (no
 snapshot recorded).
 
+**#496 re-audit (2026-08-11) — one more creation path found missing this
+wiring:** re-checking every file named in #390's original "Known
+Residual Legacy Surfaces" list plus the additional files #496 itself
+named, `fhir-import-staging.service.js`'s staged-sample commit path
+(`~lines 894-954`) turned out to be a fifth live sample-creation path
+that writes the legacy embedded `sprec`/`rcs_score`/`final_grade`/... fields
+directly onto the new `samples` document but never calls
+`rcsAssessmentService.recordAssessment`/`specimenPreanalyticsService.recordProfile`
+or pins `sealedRcsAssessmentId`/`sealedSpecimenPreanalyticsId` — the same
+gap #492/#502/#503/#505/#524 already closed for `sample.service.js`,
+`import.service.js`, `import-lgpd.service.js`, and `intakeWizard.js`.
+Never in scope for `#491`/`#493`'s consumer-migration umbrellas. Filed as
+`#526`. The rest of that file's other RCS/SPREC reads/writes (the
+staging-preview object on `import_staging_records`, a different
+collection from `samples`) were already covered by the "out of #408's
+scope" note above and remain unaffected.
+
 ### Consent
 
 - `consentId` (internal identity of the consent instance, distinct from
@@ -797,6 +836,42 @@ The following files still contain residual aliases or transitional naming and ar
 - `api/backend/src/services/import-lgpd.service.js`
 - `api/backend/src/services/quality-compatibility.service.js`
 - `api/backend/src/core/use-cases/*`
+
+**#496 re-audit (2026-08-11) — this list predates #491-#495 and is now
+stale; treat it as historical, not current.** #390's own pickup already
+superseded it once with a corrected 14-file list (`#496`'s own issue
+body); re-checking that corrected list against current code found:
+
+- **Confirmed already clean / no migration needed:** `sample.routes.js`
+  (fully migrated onto `MongoStorageRepository`/`specimenPreanalyticsService`
+  per `#517`), `analysisValidation.service.js` (uses
+  `SampleModel.resolveSpecimenStatus`, the canonical accessor, not a raw
+  field read), `consent.validator.js`, `hl7.service.js`,
+  `sampleComplianceSync.service.js`, `fhir-validator.service.js`,
+  `fhir.service.js` (all four touch only already-canonical fields —
+  `specimenId`/`sampleType`/`participantId`/`specimenStatus` — no
+  RCS/SPREC/storage legacy field at all).
+- **Already tracked elsewhere, no new issue needed:**
+  `intakeWizard.routes.js` (storage/status fields — listed under `#494`'s
+  own consumer scope), `import.controller.js` (its direct RCS/SPREC
+  writes are moot pending `#336`'s open "is this endpoint dead code"
+  question).
+- **Newly found, not on any prior list — filed as `#525`:**
+  `label.routes.js`, `reports.routes.js`,
+  `api/backend/scripts/neo4j-canonical-rebuild.js`,
+  `batch-validation-engine.service.js` — see the `RcsAssessment` section's
+  own `#496` note above for detail.
+- **Newly found, a missing-wiring gap rather than a read-migration item —
+  filed as `#526`:** `fhir-import-staging.service.js`'s staged-sample
+  commit path — see the `SpecimenPreanalytics` section's own `#496` note
+  above.
+
+`storageService.js`, `import.service.js`, `import-lgpd.service.js`,
+`quality-compatibility.service.js`, and `core/use-cases/*` were not
+re-verified in this pass (out of `#496`'s 14-file scope, which only
+covered the files `#390`'s follow-up audit had newly named) — see
+`#494`/`#491`/`#493`'s own closed-issue history for their migration
+status instead of this stale list.
 
 ## Deferred Cleanup Plan
 
