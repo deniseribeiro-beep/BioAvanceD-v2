@@ -33,9 +33,14 @@ function createCollection() {
   return {
     docs,
     insertOne: vi.fn(async (doc) => {
-      const inserted = { _id: doc._id || `id-${docs.length + 1}`, ...doc };
-      docs.push(inserted);
-      return { insertedId: inserted._id };
+      // Mirrors the real MongoDB driver: insertOne mutates the passed-in
+      // document in place to add the generated _id, rather than returning a
+      // detached copy — product code across this repo (e.g. rcs-assessment
+      // .service.js#recordAssessment) relies on reading `doc._id` straight
+      // off the object it passed in immediately after this call.
+      if (!doc._id) doc._id = `id-${docs.length + 1}`;
+      docs.push(doc);
+      return { insertedId: doc._id };
     }),
     insertMany: vi.fn(async (items) => {
       items.forEach((doc) => docs.push({ _id: doc._id || `id-${docs.length + 1}`, ...doc }));
@@ -45,13 +50,16 @@ function createCollection() {
     find: vi.fn((filter = {}) => createCursor(docs.filter((doc) => Object.entries(filter).every(([key, value]) => String(doc[key]) === String(value))))),
     updateOne: vi.fn(async (filter = {}, update = {}, options = {}) => {
       let doc = docs.find((item) => Object.entries(filter).every(([key, value]) => String(item[key]) === String(value)));
-      if (!doc && options.upsert) {
+      const isUpsertedInsert = !doc && options.upsert;
+      if (isUpsertedInsert) {
         doc = { _id: `id-${docs.length + 1}`, ...filter };
         docs.push(doc);
       }
       if (!doc) return { matchedCount: 0, modifiedCount: 0 };
       Object.assign(doc, update.$setOnInsert || {}, update.$set || {});
-      return { matchedCount: 1, modifiedCount: 1 };
+      return isUpsertedInsert
+        ? { matchedCount: 0, modifiedCount: 0, upsertedId: doc._id, upsertedCount: 1 }
+        : { matchedCount: 1, modifiedCount: 1 };
     }),
   };
 }
@@ -647,13 +655,48 @@ describe('FHIR import staging', () => {
 
     expect(result.committed).toBe(1);
     expect(db.collections.patients.updateOne).toHaveBeenCalledTimes(1);
-    expect(db.collections.samples.updateOne).toHaveBeenCalledTimes(1);
+    // #526: 1 upsert + 2 sealed-id pins (RcsAssessment, SpecimenPreanalytics).
+    expect(db.collections.samples.updateOne).toHaveBeenCalledTimes(3);
     expect(db.collections.samples.updateOne.mock.calls[0][0]).toEqual({ specimenId: 'S-001' });
     expect(db.collections.samples.docs).toHaveLength(1);
     expect(db.collections.samples.docs[0].specimenId).toBe('S-001');
     expect(db.collections.samples.docs[0].final_grade).toBe('A');
     expect(db.collections.samples.docs[0].axis_penalties.length).toBeGreaterThan(0);
     expect(db.collections.samples.docs[0].calculation_trace.axes.length).toBeGreaterThan(0);
+  });
+
+  it('#526: registra RcsAssessment e SpecimenPreanalytics referenciados ao comitar amostra nova', async () => {
+    const staged = await fhirImportStagingService.stageBundle(db, signedBundle, { fileName: 'bundle.json' });
+    const result = await fhirImportStagingService.commitBatch(db, staged.batch._id);
+
+    expect(result.committed).toBe(1);
+    expect(db.collections.rcsAssessments.insertOne).toHaveBeenCalledTimes(1);
+    expect(db.collections.rcsAssessments.docs[0]).toMatchObject({
+      specimenId: 'S-001',
+      finalGrade: 'A',
+    });
+    expect(db.collections.specimenPreanalytics.insertOne).toHaveBeenCalledTimes(1);
+    expect(db.collections.specimenPreanalytics.docs[0].specimenId).toBe('S-001');
+
+    const committedSample = db.collections.samples.docs[0];
+    expect(committedSample.sealedRcsAssessmentId).toBe(db.collections.rcsAssessments.docs[0]._id);
+    expect(committedSample.sealedSpecimenPreanalyticsId).toBe(db.collections.specimenPreanalytics.docs[0]._id);
+  });
+
+  it('#526: não grava novo RcsAssessment/SpecimenPreanalytics ao comitar registro que apenas atualiza amostra já existente', async () => {
+    const staged = await fhirImportStagingService.stageBundle(db, signedBundle, { fileName: 'bundle.json' });
+    await fhirImportStagingService.commitBatch(db, staged.batch._id);
+    expect(db.collections.rcsAssessments.docs).toHaveLength(1);
+    expect(db.collections.specimenPreanalytics.docs).toHaveLength(1);
+
+    // Re-staging + re-committing the same signed bundle hits samples.updateOne's
+    // $set-only (match, not upsert-insert) branch the second time around —
+    // recording should be a one-time, insert-time event, not repeated per commit.
+    const restaged = await fhirImportStagingService.stageBundle(db, signedBundle, { fileName: 'bundle-2.json' });
+    await fhirImportStagingService.commitBatch(db, restaged.batch._id);
+
+    expect(db.collections.rcsAssessments.docs).toHaveLength(1);
+    expect(db.collections.specimenPreanalytics.docs).toHaveLength(1);
   });
 
   it('rejeita staging quando banco de dados não está disponível', async () => {
