@@ -1233,6 +1233,85 @@ describe('sample.routes', () => {
 
       expect(res.status).toBe(500);
     });
+
+    it('embeds resolvedStorageLocation and currentSpecimenPreanalytics per sample, batched (#517)', async () => {
+      const boxId = 'box-1';
+      const listSamples = vi.fn().mockResolvedValue({
+        samples: [{
+          _id: 'sample-1',
+          patientID: 'P1',
+          specimenId: 'SPEC-1',
+          storageLocation: { boxId, boxName: 'Box A', position: 'A1' },
+        }],
+        total: 1,
+      });
+      const { router } = loadRoute({ sampleServiceOverrides: { listSamples } });
+
+      const patientsCollection = { findOne: vi.fn().mockResolvedValue(null) };
+      const patientConsentsCollection = { findOne: vi.fn(), countDocuments: vi.fn() };
+      const storagePathsFind = vi.fn().mockReturnValue({
+        toArray: vi.fn().mockResolvedValue([
+          { boxId, path: 'Freezer1/Shelf1/Rack1/BoxA', freezerId: 'F1', shelfId: 'S1', rackId: 'R1' },
+        ]),
+      });
+      const storagePathsCollection = { find: storagePathsFind };
+      const specimenPreanalyticsFind = vi.fn().mockReturnValue({
+        sort: vi.fn().mockReturnThis(),
+        toArray: vi.fn().mockResolvedValue([
+          { _id: 'profile-1', specimenId: 'SPEC-1', matrixType: 'fluid', recordedAt: new Date('2026-06-01') },
+        ]),
+      });
+      const specimenPreanalyticsCollection = { find: specimenPreanalyticsFind };
+      const collectionsByName = {
+        patients: patientsCollection,
+        patientConsents: patientConsentsCollection,
+        storagePaths: storagePathsCollection,
+        specimenPreanalytics: specimenPreanalyticsCollection,
+      };
+      const db = { collection: (name) => collectionsByName[name] };
+      const app = buildApp(router, db);
+
+      const res = await request(app).get('/api/samples');
+
+      expect(res.status).toBe(200);
+      expect(storagePathsFind).toHaveBeenCalledTimes(1);
+      expect(specimenPreanalyticsFind).toHaveBeenCalledTimes(1);
+      expect(res.body.data[0].resolvedStorageLocation).toEqual(
+        expect.objectContaining({ path: 'Freezer1/Shelf1/Rack1/BoxA' })
+      );
+      expect(res.body.data[0].currentSpecimenPreanalytics).toEqual(
+        expect.objectContaining({ specimenId: 'SPEC-1', matrixType: 'fluid' })
+      );
+    });
+
+    it('maps resolvedStorageLocation/currentSpecimenPreanalytics to null when a sample has no location or profile', async () => {
+      const listSamples = vi.fn().mockResolvedValue({
+        samples: [{ _id: 'sample-2', patientID: 'P1', specimenId: 'SPEC-2' }],
+        total: 1,
+      });
+      const { router } = loadRoute({ sampleServiceOverrides: { listSamples } });
+
+      const patientsCollection = { findOne: vi.fn().mockResolvedValue(null) };
+      const patientConsentsCollection = { findOne: vi.fn(), countDocuments: vi.fn() };
+      const storagePathsCollection = { find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }) };
+      const specimenPreanalyticsCollection = {
+        find: vi.fn().mockReturnValue({ sort: vi.fn().mockReturnThis(), toArray: vi.fn().mockResolvedValue([]) }),
+      };
+      const collectionsByName = {
+        patients: patientsCollection,
+        patientConsents: patientConsentsCollection,
+        storagePaths: storagePathsCollection,
+        specimenPreanalytics: specimenPreanalyticsCollection,
+      };
+      const db = { collection: (name) => collectionsByName[name] };
+      const app = buildApp(router, db);
+
+      const res = await request(app).get('/api/samples');
+
+      expect(res.status).toBe(200);
+      expect(res.body.data[0].resolvedStorageLocation).toBeNull();
+      expect(res.body.data[0].currentSpecimenPreanalytics).toBeNull();
+    });
   });
 
   describe('GET /:id', () => {

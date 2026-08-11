@@ -2,16 +2,28 @@ import { describe, it, expect } from 'vitest';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
-const { recordProfile, getProfilesForSpecimen, getProfileById } = require('../../../src/services/specimen-preanalytics.service');
+const {
+  recordProfile,
+  getProfilesForSpecimen,
+  getProfileById,
+  getCurrentProfilesForSpecimens,
+} = require('../../../src/services/specimen-preanalytics.service');
 
 /**
- * Real query-matching fake (exact-match filter + sort), not a canned stub —
- * proves getProfilesForSpecimen actually scopes by specimenId and orders by
+ * Real query-matching fake (exact-match filter + sort, plus $in for the
+ * batched getCurrentProfilesForSpecimens path), not a canned stub — proves
+ * getProfilesForSpecimen actually scopes by specimenId and orders by
  * recency, per build-loop's native-only "real backend" proof bar.
  */
 function createFakeCollection() {
   const docs = [];
-  const matches = (doc, filter) => Object.keys(filter).every((key) => doc[key] === filter[key]);
+  const matchesCondition = (value, condition) => {
+    if (condition && typeof condition === 'object' && condition.$in) {
+      return condition.$in.some((candidate) => String(value) === String(candidate));
+    }
+    return value === condition;
+  };
+  const matches = (doc, filter) => Object.keys(filter).every((key) => matchesCondition(doc[key], filter[key]));
   return {
     docs,
     async insertOne(doc) {
@@ -124,6 +136,52 @@ describe('specimen-preanalytics.service', () => {
     it('returns null for a null/undefined id instead of querying', async () => {
       const db = createFakeDb();
       expect(await getProfileById(db, null)).toBeNull();
+    });
+  });
+
+  describe('getCurrentProfilesForSpecimens', () => {
+    it('resolves the newest profile per specimenId in one batched query (#517)', async () => {
+      const db = createFakeDb();
+      await recordProfile(db, 'SPEC-1', { matrixType: 'fluid', recordedAt: '2026-01-01' });
+      await recordProfile(db, 'SPEC-1', { matrixType: 'solid', recordedAt: '2026-06-01' });
+      await recordProfile(db, 'SPEC-2', { matrixType: 'fluid', recordedAt: '2026-03-01' });
+
+      const result = await getCurrentProfilesForSpecimens(db, [
+        { specimenId: 'SPEC-1' },
+        { specimenId: 'SPEC-2' },
+      ]);
+
+      expect(result.get('SPEC-1').matrixType).toBe('solid');
+      expect(result.get('SPEC-2').matrixType).toBe('fluid');
+    });
+
+    it('resolves the sealed-pinned snapshot instead of the newest one when sealedSpecimenPreanalyticsId is set (#502 precedent)', async () => {
+      const db = createFakeDb();
+      const older = await recordProfile(db, 'SPEC-1', { matrixType: 'fluid', recordedAt: '2026-01-01' });
+      await recordProfile(db, 'SPEC-1', { matrixType: 'solid', recordedAt: '2026-06-01' });
+
+      const result = await getCurrentProfilesForSpecimens(db, [
+        { specimenId: 'SPEC-1', sealedSpecimenPreanalyticsId: older._id },
+      ]);
+
+      expect(result.get('SPEC-1').matrixType).toBe('fluid');
+    });
+
+    it('maps a specimen with no recorded profile to null rather than omitting the key', async () => {
+      const db = createFakeDb();
+
+      const result = await getCurrentProfilesForSpecimens(db, [{ specimenId: 'SPEC-NONE' }]);
+
+      expect(result.has('SPEC-NONE')).toBe(true);
+      expect(result.get('SPEC-NONE')).toBeNull();
+    });
+
+    it('returns an empty map without querying when given no samples', async () => {
+      const db = createFakeDb();
+
+      const result = await getCurrentProfilesForSpecimens(db, []);
+
+      expect(result.size).toBe(0);
     });
   });
 });

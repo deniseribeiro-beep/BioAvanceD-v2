@@ -1077,6 +1077,71 @@ describe('MongoStorageRepository', () => {
     });
   });
 
+  describe('resolveStorageLocationsForSamples', () => {
+    // #517: batched form of getSampleStorageLocation for SamplesPageView's
+    // list view — one storagePaths $in query across the page instead of
+    // one getSampleStorageLocation call per row.
+    it('resolves each sample with a boxId via a single $in query, keyed by sample _id', async () => {
+      const boxIdA = new ObjectId();
+      const boxIdB = new ObjectId();
+      const toArray = vi.fn().mockResolvedValue([
+        { boxId: boxIdA, path: 'Freezer1/Shelf1/Rack1/BoxA', freezerId: 'F1', shelfId: 'S1', rackId: 'R1' },
+        { boxId: boxIdB, path: 'Freezer1/Shelf1/Rack1/BoxB', freezerId: 'F1', shelfId: 'S1', rackId: 'R1' }
+      ]);
+      const findSpy = vi.fn().mockReturnValue({ toArray });
+      const storagePaths = makeCollection({ find: findSpy });
+      const db = makeDb({ storagePaths });
+      const repo = new MongoStorageRepository(db);
+
+      const sampleA = { _id: 'sample-a', barcode: 'BC-A', storageLocation: { boxId: boxIdA, position: 'A1' } };
+      const sampleB = { _id: 'sample-b', barcode: 'BC-B', storageLocation: { boxId: boxIdB, position: 'B2' } };
+
+      const result = await repo.resolveStorageLocationsForSamples([sampleA, sampleB]);
+
+      expect(findSpy).toHaveBeenCalledTimes(1);
+      expect(findSpy).toHaveBeenCalledWith({ boxId: { $in: [boxIdA, boxIdB] } });
+      expect(result.get('sample-a').path).toBe('Freezer1/Shelf1/Rack1/BoxA');
+      expect(result.get('sample-b').path).toBe('Freezer1/Shelf1/Rack1/BoxB');
+    });
+
+    it('maps a sample with no storageLocation.boxId to null without matching a boxId to it', async () => {
+      const toArray = vi.fn().mockResolvedValue([]);
+      const storagePaths = makeCollection({ find: vi.fn().mockReturnValue({ toArray }) });
+      const db = makeDb({ storagePaths });
+      const repo = new MongoStorageRepository(db);
+
+      const result = await repo.resolveStorageLocationsForSamples([{ _id: 'sample-c' }]);
+
+      expect(result.get('sample-c')).toBeNull();
+    });
+
+    it('returns path N/A and null fullHierarchy for a boxId with no matching storagePath', async () => {
+      const boxId = new ObjectId();
+      const toArray = vi.fn().mockResolvedValue([]);
+      const storagePaths = makeCollection({ find: vi.fn().mockReturnValue({ toArray }) });
+      const db = makeDb({ storagePaths });
+      const repo = new MongoStorageRepository(db);
+
+      const result = await repo.resolveStorageLocationsForSamples([
+        { _id: 'sample-d', storageLocation: { boxId, position: 'C3' } }
+      ]);
+
+      expect(result.get('sample-d').path).toBe('N/A');
+      expect(result.get('sample-d').fullHierarchy).toBeNull();
+    });
+
+    it('skips the storagePaths query entirely when no sample has a boxId', async () => {
+      const findSpy = vi.fn();
+      const storagePaths = makeCollection({ find: findSpy });
+      const db = makeDb({ storagePaths });
+      const repo = new MongoStorageRepository(db);
+
+      await repo.resolveStorageLocationsForSamples([{ _id: 'sample-e' }]);
+
+      expect(findSpy).not.toHaveBeenCalled();
+    });
+  });
+
   describe('searchAllocatableSampleCandidates', () => {
     it('returns [] without hitting the db when query is shorter than 2 chars', async () => {
       const samples = makeCollection();

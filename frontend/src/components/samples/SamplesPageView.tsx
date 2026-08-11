@@ -8,8 +8,9 @@ import Modal from '../UI/Modal';
 import Table from '../UI/Table';
 import SampleStatusBadge from '../SampleStatusBadge';
 import InlineStorageMovementPanel from './InlineStorageMovementPanel';
-import type { Sample, SampleEmbeddedStorageLocation } from '../../types/models';
+import type { Sample } from '../../types/models';
 import type { SampleWithId } from '../../hooks/samples/useSamplesPage';
+import { getStorageLabel, buildSprecSummary } from './sampleListFormatters';
 
 type TranslatorFn = (key: string, fallback?: string) => string;
 
@@ -63,45 +64,6 @@ function computeVolume(sample: Sample) {
   const initial = sample.volumeInitial ?? sample.initialQuantity ?? sample.quantity ?? 0;
   const current = sample.volumeCurrent ?? sample.currentQuantity ?? sample.quantity ?? 0;
   return { initial, current };
-}
-
-function getStorageLabel(sample: SampleWithId, t: TranslatorFn) {
-  const storageLocation: SampleEmbeddedStorageLocation | null | undefined = sample.storageLocation;
-  const boxName = storageLocation?.boxName ? String(storageLocation.boxName) : '';
-  const position = storageLocation?.position ? String(storageLocation.position) : '';
-  const path = storageLocation?.path ? String(storageLocation.path) : '';
-
-  if (!boxName && !path && !position) {
-    return t('samples.storage.awaiting', 'Aguardando Armazenagem');
-  }
-
-  if (path) {
-    return position ? `${path} / ${t('samples.storage.position', 'Posição')} ${position}` : path;
-  }
-
-  if (boxName) {
-    return position ? `${boxName} / ${t('samples.storage.position', 'Posição')} ${position}` : boxName;
-  }
-
-  if (position) {
-    return `${t('samples.storage.position', 'Posição')} ${position}`;
-  }
-
-  return t('samples.storage.definedBox', 'Caixa definida');
-}
-
-function buildSprecSummary(sample: SampleWithId, t: TranslatorFn) {
-  const sprec = (sample as any).sprec || {};
-  const matrixType = String((sample as any).matrix_type || sprec.matrixType || '').trim().toLowerCase();
-  const fields = matrixType === 'solid'
-    ? [sprec.sampleType, sprec.primaryContainer, sprec.warmIschemia, sprec.coldIschemia, sprec.fixationType, sprec.fixationTime, sprec.longTermStorage]
-    : [sprec.sampleType, sprec.primaryContainer, sprec.preCentrifugation, sprec.centrifugation, sprec.secondCentrifugation, sprec.postCentrifugationDelay, sprec.longTermStorage];
-  const code = String((sample as any).sprec_code || (sample as any).sprecCode || fields.map((part) => String(part || '').trim()).filter(Boolean).join('-')).trim();
-  if (!code) {
-    return t('samples.sprec.na', 'SPREC: N/A');
-  }
-
-  return `${t('samples.sprec.prefix', 'SPREC')} ${code}`;
 }
 
 export default function SamplesPageView({
