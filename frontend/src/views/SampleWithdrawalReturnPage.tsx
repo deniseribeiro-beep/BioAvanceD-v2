@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { useLanguage } from '../contexts/LanguageContext';
 import { sampleService } from '../services/api';
-import { Sample, SampleEmbeddedStorageLocation, SampleMovement } from '../types/models';
+import { storageApi } from '../services/storageApi';
+import { Sample, SampleMovement, SampleStorageLocationDTO } from '../types/models';
 import Button from '../components/UI/Button';
 import Input from '../components/UI/Input';
 import Select from '../components/UI/Select';
@@ -28,11 +29,10 @@ interface ReturnFormData {
   observations: string;
 }
 
-function getStorageLabel(sample: Sample): string {
-  const storageLocation: SampleEmbeddedStorageLocation | null | undefined = sample.storageLocation;
-  const boxName = storageLocation?.boxName ? String(storageLocation.boxName) : '';
-  const position = storageLocation?.position ? String(storageLocation.position) : '';
-  const path = storageLocation?.path ? String(storageLocation.path) : '';
+export function getStorageLabel(location: SampleStorageLocationDTO | null): string {
+  const boxName = location?.box?.boxName ? String(location.box.boxName) : '';
+  const position = location?.box?.position ? String(location.box.position) : '';
+  const path = location?.path ? String(location.path) : '';
 
   if (!boxName && !path && !position) {
     return 'Aguardando Armazenagem';
@@ -54,6 +54,7 @@ export default function SampleWithdrawalReturnPage() {
   const [sample, setSample] = useState<Sample | null>(null);
   const [patientInfo, setPatientInfo] = useState<{ patientID: string; patientName: string } | null>(null);
   const [movements, setMovements] = useState<SampleMovement[]>([]);
+  const [storageLocation, setStorageLocation] = useState<SampleStorageLocationDTO | null>(null);
   const [loading, setLoading] = useState(false);
   const [searchLoading, setSearchLoading] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -118,6 +119,7 @@ export default function SampleWithdrawalReturnPage() {
     setSample(null);
     setPatientInfo(null);
     setMovements([]);
+    setStorageLocation(null);
 
     try {
       const response = await sampleService.getByBarcode(searchBarcode.trim());
@@ -140,6 +142,8 @@ export default function SampleWithdrawalReturnPage() {
         }
         // Carregar movimentações
         await loadMovements(result.sample._id || '');
+        // Carregar localização física resolvida (dict-02 StorageAssignment, #495)
+        await loadStorageLocation(result.sample._id || '');
         // Auto-switch para aba de devolução se amostra está retirada
         const status = result.sample.currentStatus;
         if (status === 'Withdrawn' || status === 'TotallyWithdrawn' || status === 'PartiallyWithdrawn') {
@@ -168,6 +172,12 @@ export default function SampleWithdrawalReturnPage() {
     } catch (error) {
       console.error('Erro ao carregar movimentações:', error);
     }
+  };
+
+  // Carregar localização física resolvida (StorageAssignment, dict-02 ELM-0167-0178)
+  const loadStorageLocation = async (sampleId: string) => {
+    const response = await storageApi.getSampleLocation(sampleId);
+    setStorageLocation(response.success && response.data ? (response.data as SampleStorageLocationDTO) : null);
   };
 
   // Calcular quantidade pendente de devolução
@@ -478,7 +488,7 @@ export default function SampleWithdrawalReturnPage() {
                 <div className="info-row">
                   <span className="info-label">Armazenagem:</span>
                   <span className="info-value">
-                    {getStorageLabel(sample)}
+                    {getStorageLabel(storageLocation)}
                   </span>
                 </div>
               </div>

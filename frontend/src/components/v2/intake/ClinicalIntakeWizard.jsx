@@ -2442,6 +2442,10 @@ export default function ClinicalIntakeWizard(props) {
       setSampleLabel({
         ...buildSampleLabelData(createdSample, payload, formData, new Date()),
         ...(response?.data?.label || {}),
+        // dict-02 StorageAssignment (#495) — POST /intake-wizard already
+        // resolves this additively (see intakeWizard.js), prefer it over the
+        // legacy embedded storageLocation shape.
+        storageAssignment: response?.data?.storageAssignment || createdSample?.storageAssignment || null,
         storageLocation: response?.data?.storageLocation || createdSample?.storageLocation || null,
       });
 
@@ -3090,7 +3094,7 @@ export default function ClinicalIntakeWizard(props) {
                   <span data-testid="sample-label-sample-id">{t('wizard.sampleLabel.sampleId', 'Amostra')}: {sampleLabel.specimenId || 'N/A'}</span>
                   <span data-testid="sample-label-type">{t('wizard.sampleLabel.type', 'Tipo')}: {sampleLabel.sampleType || 'N/A'}</span>
                   <span data-testid="sample-label-date">{t('wizard.sampleLabel.date', 'Data')}: {sampleLabel.collectionDate || 'N/A'}</span>
-                  <span>{t('wizard.sampleLabel.location', 'Localização')}: {sampleLabel.storageLocation?.readable || sampleLabel.storageLocation?.position || 'N/A'}</span>
+                  <span>{t('wizard.sampleLabel.location', 'Localização')}: {sampleLabel.storageAssignment?.positionCode || sampleLabel.storageLocation?.readable || sampleLabel.storageLocation?.position || 'N/A'}</span>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <Button type="button" variant="secondary" className="sample-label-print-button" data-testid="sample-label-print-button" onClick={handlePrintSampleLabel}>

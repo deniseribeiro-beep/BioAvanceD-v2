@@ -164,6 +164,28 @@ export interface SampleEmbeddedStorageLocation {
   path?: string | null;
 }
 
+// dict-02 StorageAssignment (ELM-0167-0178): o registro bruto de
+// storageAssignments, anexado de forma aditiva (não substitui storageLocation)
+// em MongoStorageRepository.findSampleById/findCurrentStorageAssignment (#507,
+// #510) e em sample.service.js#createSample/intakeWizard.js no POST de criação.
+// Sem boxName/readable/path resolvidos — para isso, use SampleStorageLocationDTO.
+export interface StorageAssignmentRecord {
+  storageAssignmentId: string;
+  specimenId: string;
+  storageLocationId?: string | null;
+  facilityId?: string | null;
+  roomId?: string | null;
+  equipmentId?: string | null;
+  shelfId?: string | null;
+  rackId?: string | null;
+  boxId: string | null;
+  positionCode: string;
+  nominalTemperature?: number | null;
+  placedAt?: Date | string;
+  removedAt?: Date | string | null;
+  occupancyStatus?: 'ocupada' | 'livre' | string;
+}
+
 // Resposta de GET /storage/sample/:sampleId (GetSampleStorageLocationUseCase /
 // MongoStorageRepository.getSampleStorageLocation). `path` é a hierarquia legível
 // separada por "/" (ex: "FREEZER_01/SHELF_1/RACK_A/BOX_01"); fullHierarchy carrega
@@ -271,6 +293,11 @@ export interface Sample {
   withdrawalResponsible?: string;
   sampleDestination?: string;
   storageLocation?: SampleEmbeddedStorageLocation | null;
+  // dict-02 StorageAssignment, anexado de forma aditiva ao storageLocation
+  // acima (#495) — só presente em respostas específicas que já o resolvem
+  // (POST de criação); GET /samples/:id ainda não o resolve (ver #495 no
+  // dict-07/dict-08 tracking).
+  storageAssignment?: StorageAssignmentRecord | null;
   // Soft delete fields
   deleted?: boolean;
   deletedAt?: Date | string;

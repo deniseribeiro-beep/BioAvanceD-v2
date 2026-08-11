@@ -7,6 +7,7 @@ import Select from '../UI/Select';
 import { notifyApiToast } from '@/api/client';
 import { storageApi } from '@/services/storageApi';
 import { SampleWithId } from '@/hooks/samples/useSamplesPage';
+import type { SampleStorageLocationDTO } from '@/types/models';
 
 const POSITION_PATTERN = /^[A-Za-z]\d+$/;
 
@@ -79,8 +80,25 @@ export default function InlineStorageMovementPanel({ sample, t, onCancel, onComp
   const [selectedBoxId, setSelectedBoxId] = useState('');
   const [useSpecificPosition, setUseSpecificPosition] = useState(false);
   const [targetPosition, setTargetPosition] = useState('');
+  const [currentLocation, setCurrentLocation] = useState<SampleStorageLocationDTO | null>(null);
 
-  const isAlreadyStored = Boolean(sample.storageLocation?.boxId && sample.storageLocation?.position);
+  const isAlreadyStored = Boolean(currentLocation?.box?.boxId && currentLocation?.box?.position);
+
+  useEffect(() => {
+    let active = true;
+
+    const loadCurrentLocation = async () => {
+      const response = await storageApi.getSampleLocation(sample.id);
+      if (!active) return;
+      setCurrentLocation(response.success && response.data ? (response.data as SampleStorageLocationDTO) : null);
+    };
+
+    void loadCurrentLocation();
+
+    return () => {
+      active = false;
+    };
+  }, [sample.id]);
 
   useEffect(() => {
     let active = true;
