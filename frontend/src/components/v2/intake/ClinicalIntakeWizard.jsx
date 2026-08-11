@@ -1259,11 +1259,14 @@ function buildSampleIntegrityInput(formData) {
   const matrixType = String(formData.sprecMatrixType || 'fluid').trim().toLowerCase() === 'solid' ? 'solid' : 'fluid';
   const dictionary = matrixType === 'solid' ? SPREC_SOLID_DICTIONARY : SPREC_FLUID_DICTIONARY;
   return {
-    patient_identity: {
-      patient_id: String(formData.patientID || '').trim(),
-      patient_name: String(formData.patientName || '').trim(),
+    // Same field shape as MerkleService.generateSampleHash on the backend (#519) — rcsScore/
+    // finalGrade/calculationTrace/axisPenalties are omitted (default to null) since RCS hasn't
+    // been computed yet at intake-wizard submission time.
+    participant_identity: {
+      participantId: String(formData.patientID || '').trim(),
+      participantName: String(formData.patientName || '').trim(),
     },
-    clinical_data: {
+    clinicalData: {
       orphaCode: String(formData.diagnosisOrphaCode || '').trim(),
       omimCode: String(formData.diagnosisOmimCode || '').trim(),
       cid: String(formData.diagnosisCidCode || '').trim(),
@@ -1274,7 +1277,7 @@ function buildSampleIntegrityInput(formData) {
       ...buildCanonicalSprecPayload(formData, matrixType, dictionary),
       matrix_type: matrixType,
     },
-    pharmacology_data: {
+    pharmacologyData: {
       treatment_status: String(formData.treatmentStatus || '').trim(),
       drug_name: String(formData.medicationName || formData.medicationSearchQuery || '').trim(),
       atc_code: String(formData.medicationCode || '').trim().replace(/^ATC:/i, '').toUpperCase(),
