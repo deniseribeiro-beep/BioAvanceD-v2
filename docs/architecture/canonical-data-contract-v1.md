@@ -484,6 +484,67 @@ local extension, a new `QuarantineAction` reason code, or a genuinely
 separate canonical field is an open design question, same shape as the
 `actionStatus` gap above — #532 tracks it.
 
+**Decision recorded 2026-08-11 (#532): folds into `specimenStatus`/
+`QuarantineAction`, consolidating rather than adding a separate field —
+same direction as #531 and the #389/#398/#399/#404/#405/#406/#408
+consolidation above.** `validateSampleCompliance` now writes
+`specimenStatus` directly (`AVAILABLE`→`available`, `QUARANTINE`→
+`quarantined`, `BLOCKED`→`unavailable` — the same 3-way collapse
+`releaseStatusToSpecimenStatus` above already used for the casing-bug
+case) instead of the cosmetic `release_status` field, which is dropped.
+`resolveSuggestedStatus` also now gates on the `pharmacology` node (folded
+into `BLOCKED` alongside `ethics`/`clinical`/`integrity`) — before this
+fix it was computed into `graphPath` and included in `isReleasable`, but
+silently ignored by `resolveSuggestedStatus`, so a pharmacology-invalid
+sample (e.g. ATC drug-class incoherent with the ORPHA disease) could get
+`suggestedStatus: 'AVAILABLE'` despite `isReleasable: false`. Harmless
+while `suggestedStatus` only drove the cosmetic field; load-bearing once
+it drives `specimenStatus`, so fixed as part of this same change.
+
+Two real risks this design has to solve, since a compliance-graph
+re-evaluation can run on every `GET /:id/compliance-graph` fetch (not
+just on import/consent-update), and must not silently override a block
+from an unrelated source:
+
+- **Never downgrade a stronger active block.** An `AVAILABLE`
+  compliance-graph result must not clear a `specimenStatus` that's
+  `quarantined`/`unavailable` for an unrelated reason (a cold-chain
+  incident, equipment fault, manual action) — the write only escalates
+  (`available` → `quarantined` → `unavailable`, by
+  `SPECIMEN_STATUS_ORDER`) unconditionally; a *downgrade* (the reverse
+  direction) only applies when the specimen's most recent active
+  `QuarantineAction` was itself opened by this same validator —
+  identified by a `COMPLIANCE_GRAPH_*`-prefixed `reasonCodes` entry
+  (`COMPLIANCE_GRAPH_ETHICS`/`_CLINICAL`/`_PHARMACOLOGY`/`_INTEGRITY`/
+  `_QUALITY`, one per failing node) — in which case it releases that
+  action (`quarantineActionService.releaseActiveAction`) and downgrades.
+  An escalation over an unrelated source's active action leaves that
+  action alone and records its own `QuarantineAction` alongside it,
+  rather than releasing something it doesn't own.
+- **Never touch a terminal `specimenStatus`.** `destroyed`/`disposed`
+  are final (`Sample.js`'s `BLOCKED_SPECIMEN_STATUSES` comment: "write
+  sites treat them as non-movable") — a re-evaluation on a disposed
+  specimen still computes and persists `complianceGraph` for the audit
+  trail, but never sets `specimenStatus`.
+
+`sample-graph-validator.service.test.js`'s `#532` describe block covers
+both rules plus the pharmacology-gating fix. The side-effecting
+`GET /:id/compliance-graph` endpoint itself (every fetch re-runs and
+persists the graph) is unchanged by this fix — now that the write lands
+on the canonical `specimenStatus`/`QuarantineAction` model instead of a
+cosmetic field, that side effect has a larger blast radius than before;
+tracked as its own question, filed as #537.
+
+**Also found while tracing #532** (not part of it — a separate legacy
+field with its own writers, unrelated to `release_status`): `Sample.js`'s
+`releaseStatus` (camelCase, schema default `'QUARANTINE'`) is a *third*
+status field, written by `SampleModel.create`, `import.service.js` (its
+own reconciliation against the same compliance report, independent of
+`specimenStatus`), `import-lgpd.service.js`, and
+`fhir-import-staging.service.js`/`import.controller.js` — never folded
+into `specimenStatus` either, and no live consumer found in
+`api/backend/src` or `frontend/src`. Filed as #536.
+
 **Also noted, filed separately as #533, not investigated:**
 `equipment-sensor-quarantine.service.js` also sets `status`/
 `currentStatus` in the same `updateOne` payload as `specimenStatus` —

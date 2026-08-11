@@ -266,7 +266,6 @@ export interface Sample {
   quality_score?: number | null;
   quality_category?: 'A' | 'B' | 'C' | 'D' | 'E' | '' | string;
   merkle_root?: string | null;
-  release_status?: 'AVAILABLE' | 'BLOCKED' | 'QUARANTINE' | string;
   consentStatus?: 'PENDING' | 'SIGNED' | 'EXTERNAL_ATTACHED' | 'WAIVED_TRANSFER' | 'NOT_REQUIRED' | string;
   // Canonical status (storage/custody split, #389/#409) — derive quarantine/availability
   // UI state from this.

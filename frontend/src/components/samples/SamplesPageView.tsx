@@ -45,19 +45,18 @@ interface SamplesPageViewProps {
 }
 
 function mapStatus(sample: Sample): Sample['status'] {
-  // #531: specimenStatus is the canonical, always-populated signal (see
-  // models.ts's own comment on the field); release_status is now written
-  // by SampleGraphValidator's compliance-graph check only (#532, not yet
-  // reconciled with specimenStatus), so it's kept as a secondary signal
-  // rather than dropped outright.
+  // #532: specimenStatus is the canonical, always-populated signal (see
+  // models.ts's own comment on the field). SampleGraphValidator's
+  // compliance-graph check now writes specimenStatus directly (previously
+  // wrote a separate release_status field, dropped in #532) — no secondary
+  // signal needed here anymore.
   const specimenStatus = String((sample as any).specimenStatus || '').toLowerCase();
-  const releaseStatus = String((sample as any).release_status || '').toUpperCase();
   const consentStatus = String((sample as any).consentStatus || '').toUpperCase();
   const status = sample.status || sample.currentStatus?.toString().toUpperCase();
-  if (specimenStatus === 'quarantined' || BLOCKED_SPECIMEN_STATUSES.includes(specimenStatus) || releaseStatus === 'QUARANTINE' || releaseStatus === 'BLOCKED' || consentStatus === 'PENDING') {
+  if (specimenStatus === 'quarantined' || BLOCKED_SPECIMEN_STATUSES.includes(specimenStatus) || consentStatus === 'PENDING') {
     return 'QUARANTINED' as Sample['status'];
   }
-  if (specimenStatus === 'available' || releaseStatus === 'AVAILABLE' || consentStatus === 'SIGNED' || consentStatus === 'EXTERNAL_ATTACHED' || consentStatus === 'WAIVED_TRANSFER' || consentStatus === 'NOT_REQUIRED') {
+  if (specimenStatus === 'available' || consentStatus === 'SIGNED' || consentStatus === 'EXTERNAL_ATTACHED' || consentStatus === 'WAIVED_TRANSFER' || consentStatus === 'NOT_REQUIRED') {
     return 'AVAILABLE';
   }
   if (status === 'AVAILABLE' || status === 'PARTIAL' || status === 'DEPLETED' || status === 'UNAVAILABLE') {
@@ -382,8 +381,7 @@ const BLOCKED_SPECIMEN_STATUSES = ['unavailable', 'destroyed', 'disposed', 'quar
 
 function isQuarantined(sample: SampleWithId) {
   const specimenStatus = String((sample as any).specimenStatus || '').toLowerCase();
-  const releaseStatus = String((sample as any).release_status || '').toUpperCase();
-  return specimenStatus === 'quarantined' || BLOCKED_SPECIMEN_STATUSES.includes(specimenStatus) || releaseStatus === 'QUARANTINE' || releaseStatus === 'BLOCKED' || sample.canUse === false;
+  return specimenStatus === 'quarantined' || BLOCKED_SPECIMEN_STATUSES.includes(specimenStatus) || sample.canUse === false;
 }
 
 function renderSampleBadges(sample: SampleWithId, t: TranslatorFn) {
