@@ -699,6 +699,111 @@ describe('FHIR import staging', () => {
     expect(db.collections.specimenPreanalytics.docs).toHaveLength(1);
   });
 
+  it('#527: registra campos de eixo não nulos no snapshot SpecimenPreanalytics de amostra sólida (tecido)', async () => {
+    const solidSignedBundle = {
+      resourceType: 'Bundle',
+      entry: [
+        {
+          resource: {
+            resourceType: 'Patient',
+            id: 'P-SOLID-527',
+            name: [{ text: 'Paciente Sólido 527' }],
+            identifier: [{ system: 'cpf', value: '52752752752' }],
+          },
+        },
+        {
+          resource: {
+            resourceType: 'Consent',
+            id: 'C-SOLID-527',
+            status: 'active',
+            patient: { reference: 'Patient/P-SOLID-527' },
+          },
+        },
+        {
+          resource: {
+            resourceType: 'Specimen',
+            id: 'S-SOLID-527',
+            subject: { reference: 'Patient/P-SOLID-527' },
+            type: { text: 'TECIDO' },
+            extension: [
+              { url: 'urn:bioavanced:matrix', valueString: 'Tecido' },
+              { url: 'urn:bioavanced:sprecs-raw', valueString: 'TIS-EXC-A-A-FFPE-24H-C' },
+            ],
+          },
+        },
+      ],
+    };
+
+    const staged = await fhirImportStagingService.stageBundle(db, solidSignedBundle, { fileName: 'bundle-solid.json' });
+    await fhirImportStagingService.commitBatch(db, staged.batch._id);
+
+    const profile = db.collections.specimenPreanalytics.docs[0];
+    expect(profile.specimenId).toBe('S-SOLID-527');
+    expect(profile.matrixType).toBe('solid');
+    // Axis 2-6 for solid matrices come from parseSprecRaw's TIS-EXC-A-A-FFPE-24H-C
+    // parse; SpecimenPreanalyticsModel.fieldsOf derives its dict-02 solid-branch
+    // names (sprecCollectionType/warmIschemiaTime/coldIschemiaTime/
+    // fixationStabilizationType/fixationTime) from the same generic axis-position
+    // fields (primaryContainer/preCentrifugation/centrifugation/
+    // secondCentrifugation/postCentrifugationDelay) the fluid branch already
+    // populates — none of these should resolve to null.
+    expect(profile.sprecCollectionType).toBe('EXC');
+    expect(profile.warmIschemiaTime).toBe('A');
+    expect(profile.coldIschemiaTime).toBe('A');
+    expect(profile.fixationStabilizationType).toBe('FFPE');
+    expect(profile.fixationTime).toBe('24H');
+  });
+
+  it('#527: registra campos de eixo "X" (não nulos) para amostra sólida em modo de processamento desconhecido', async () => {
+    const solidUnknownSignedBundle = {
+      resourceType: 'Bundle',
+      entry: [
+        {
+          resource: {
+            resourceType: 'Patient',
+            id: 'P-SOLID-UNK-527',
+            name: [{ text: 'Paciente Sólido Desconhecido 527' }],
+            identifier: [{ system: 'cpf', value: '52752752753' }],
+          },
+        },
+        {
+          resource: {
+            resourceType: 'Consent',
+            id: 'C-SOLID-UNK-527',
+            status: 'active',
+            patient: { reference: 'Patient/P-SOLID-UNK-527' },
+          },
+        },
+        {
+          resource: {
+            resourceType: 'Specimen',
+            id: 'S-SOLID-UNK-527',
+            subject: { reference: 'Patient/P-SOLID-UNK-527' },
+            type: { text: 'TECIDO' },
+            extension: [
+              { url: 'urn:bioavanced:matrix', valueString: 'Tecido' },
+              { url: 'urn:bioavanced:processing-unknown', valueBoolean: true },
+            ],
+          },
+        },
+      ],
+    };
+
+    const staged = await fhirImportStagingService.stageBundle(db, solidUnknownSignedBundle, { fileName: 'bundle-solid-unk.json' });
+    await fhirImportStagingService.commitBatch(db, staged.batch._id);
+
+    const profile = db.collections.specimenPreanalytics.docs[0];
+    expect(profile.specimenId).toBe('S-SOLID-UNK-527');
+    expect(profile.matrixType).toBe('solid');
+    // buildRcsPayload's unknownSolid placeholder (processingUnknown branch) has
+    // the same generic-axis-name requirement as parseSprecRaw's solid branch —
+    // its axis 3-6 fields are the literal code 'X', not null.
+    expect(profile.warmIschemiaTime).toBe('X');
+    expect(profile.coldIschemiaTime).toBe('X');
+    expect(profile.fixationStabilizationType).toBe('X');
+    expect(profile.fixationTime).toBe('X');
+  });
+
   it('rejeita staging quando banco de dados não está disponível', async () => {
     await expect(
       fhirImportStagingService.stageBundle(null, signedBundle, { fileName: 'bundle.json' })
