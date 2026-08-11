@@ -15000,7 +15000,7 @@
     "destination": "MongoDB",
     "indexed": "Sim",
     "phase": "Fase 1",
-    "notes": "P1-Core; Adicionar ao dicionário consolidado. Draw.io: Atributo da caixa da entidade. Tela: Governança / segurança."
+    "notes": "P1-Core; Adicionar ao dicionário consolidado. Draw.io: Atributo da caixa da entidade. Tela: Governança / segurança. Consolidado em ELM-0410 (retentionPeriod): este campo é o sub-elemento \"evento inicial\" do BackboneElement canônico; não introduzir como campo separado no schema."
   },
   {
     "elementId": "P1X-0153",
@@ -15027,7 +15027,7 @@
     "destination": "MongoDB",
     "indexed": "Sim",
     "phase": "Fase 1",
-    "notes": "P1-Core; Adicionar ao dicionário consolidado. Draw.io: Atributo da caixa da entidade. Tela: Governança / segurança."
+    "notes": "P1-Core; Adicionar ao dicionário consolidado. Draw.io: Atributo da caixa da entidade. Tela: Governança / segurança. Distinto de ELM-0410 (retentionPeriod): atributo próprio de RetentionPolicy, não faz parte do prazo/vigência; mantém-se como campo separado."
   },
   {
     "elementId": "P1X-0154",
@@ -15054,7 +15054,7 @@
     "destination": "MongoDB",
     "indexed": "Sim",
     "phase": "Fase 1",
-    "notes": "P1-Core; Adicionar ao dicionário consolidado. Draw.io: Atributo da caixa da entidade. Tela: Governança / segurança."
+    "notes": "P1-Core; Adicionar ao dicionário consolidado. Draw.io: Atributo da caixa da entidade. Tela: Governança / segurança. Distinto de ELM-0410 (retentionPeriod): ação executada após o término do prazo, relacionada a DispositionAction (ELM-0411), não ao próprio prazo."
   },
   {
     "elementId": "P1X-0155",
@@ -15081,7 +15081,7 @@
     "destination": "MongoDB",
     "indexed": "Sim",
     "phase": "Fase 1",
-    "notes": "P1-Core; Adicionar ao dicionário consolidado. Draw.io: Atributo da caixa da entidade. Tela: Governança / segurança."
+    "notes": "P1-Core; Adicionar ao dicionário consolidado. Draw.io: Atributo da caixa da entidade. Tela: Governança / segurança. Não confundir com ELM-0410 (retentionPeriod): effectivePeriod é a vigência da política em si (Period), enquanto ELM-0410 é o prazo de retenção contado a partir do triggerEvent; ambos coexistem."
   },
   {
     "elementId": "P1X-0156",
