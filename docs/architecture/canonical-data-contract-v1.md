@@ -673,6 +673,22 @@ SPREC counterpart to #499's RCS fix for the same file. Before this, the
 LGPD import path persisted `sample.sprec` embedded only, with no
 canonical `SpecimenPreanalytics` snapshot recorded at all.
 
+**Live registration SpecimenPreanalytics recording — landed #524:**
+`sample.service.js#createSample` (the live `POST /api/samples`
+registration path) computes RCS server-side (#492 above) but, until this
+fix, never called `specimenPreanalyticsService.recordProfile` for the
+same `sprec` payload — the one remaining creation path without this
+wiring; `import.service.js` (#502), `import-lgpd.service.js` (#503), and
+`intakeWizard.js` (#505) all already had it. `#493` (the SPREC-consumer
+migration umbrella) never scoped this file. Fixed by mirroring #492's own
+`RcsAssessment` block in the same function: once the sample has fully
+landed (ledger append and storage allocation both succeeded), calls
+`specimenPreanalyticsService.recordProfile(db, sample.specimenId,
+sample.sprec)` and pins `sealedSpecimenPreanalyticsId`, same best-effort
+(caught, logged, doesn't fail sample creation) error handling the RCS
+block uses. A request with no `sprec` behaves exactly as before (no
+snapshot recorded).
+
 ### Consent
 
 - `consentId` (internal identity of the consent instance, distinct from

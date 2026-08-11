@@ -397,6 +397,25 @@ class SampleService {
         }
       }
 
+      // #524: mirrors the RcsAssessment pin above and import.service.js's
+      // CSV/XLSX branch (#502) — records the canonical, referenced
+      // SpecimenPreanalytics snapshot alongside the embedded sprec copy.
+      // Same best-effort semantics: a failure here doesn't roll back sample
+      // creation, and it isn't attempted against a sample that itself got
+      // rolled back above.
+      if (sample.sprec) {
+        try {
+          const profile = await specimenPreanalyticsService.recordProfile(db, sample.specimenId, sample.sprec);
+          await samplesCollection.updateOne(
+            { _id: result.insertedId },
+            { $set: { sealedSpecimenPreanalyticsId: profile._id } }
+          );
+          sample.sealedSpecimenPreanalyticsId = profile._id;
+        } catch (profileError) {
+          logger.error('Falha ao registrar SpecimenPreanalytics para a amostra:', profileError.message || profileError);
+        }
+      }
+
       // Log sanitizado (apenas ID, sem dados sensíveis)
       logger.info('Amostra criada:', {
         specimenId: sample.specimenId,

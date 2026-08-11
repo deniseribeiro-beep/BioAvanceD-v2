@@ -594,6 +594,70 @@ describe('sample.service', () => {
         );
       });
     });
+
+    // #524: live POST /api/samples registration computes RCS (#492) but never
+    // recorded a referenced SpecimenPreanalytics snapshot for the same sprec
+    // payload — unlike import.service.js (#502), import-lgpd.service.js
+    // (#503), and intakeWizard.js (#505), which all already call
+    // specimenPreanalyticsService.recordProfile.
+    describe('SpecimenPreanalytics snapshot recording (#524)', () => {
+      afterEach(() => {
+        vi.restoreAllMocks();
+      });
+
+      it('records a referenced SpecimenPreanalytics snapshot and pins sealedSpecimenPreanalyticsId when sprec is provided', async () => {
+        const db = makeDb();
+        mockOperationalStorage(db);
+        // Mirrors the real MongoDB driver, which mutates the passed document
+        // with the generated _id (same pattern the RCS test above and
+        // import.service.sprec.test.js use for their own referenced-snapshot
+        // collections).
+        db.collections.specimenPreanalytics = {
+          insertOne: vi.fn().mockImplementation((doc) => {
+            doc._id = 'profile-1';
+            return Promise.resolve({ insertedId: 'profile-1' });
+          })
+        };
+
+        const sprec = { matrixType: 'PLASMA', sampleType: 'PLASMA' };
+        const result = await sampleService.createSample(db, validSampleData({ sprec }));
+
+        expect(db.collections.specimenPreanalytics.insertOne).toHaveBeenCalledTimes(1);
+        const recorded = db.collections.specimenPreanalytics.insertOne.mock.calls[0][0];
+        expect(recorded.specimenId).toBe(String(result.specimenId));
+        expect(db.collections.samples.updateOne).toHaveBeenCalledWith(
+          { _id: 'generated-id' },
+          { $set: { sealedSpecimenPreanalyticsId: 'profile-1' } }
+        );
+        expect(result.sealedSpecimenPreanalyticsId).toBe('profile-1');
+      });
+
+      it('does not record a SpecimenPreanalytics snapshot when no sprec is provided', async () => {
+        const db = makeDb();
+        mockOperationalStorage(db);
+
+        const result = await sampleService.createSample(db, validSampleData());
+
+        expect(db.collections.specimenPreanalytics).toBeUndefined();
+        expect(result.sealedSpecimenPreanalyticsId ?? null).toBeNull();
+      });
+
+      it('does not fail sample creation when recording the SpecimenPreanalytics snapshot rejects', async () => {
+        const db = makeDb();
+        mockOperationalStorage(db);
+        db.collections.specimenPreanalytics = {
+          insertOne: vi.fn().mockRejectedValue(new Error('mongo down'))
+        };
+
+        const result = await sampleService.createSample(db, validSampleData({ sprec: { matrixType: 'PLASMA' } }));
+
+        expect(result._id).toBe('generated-id');
+        expect(db.collections.samples.updateOne).not.toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({ $set: expect.objectContaining({ sealedSpecimenPreanalyticsId: expect.anything() }) })
+        );
+      });
+    });
   });
 
   // -------------------------------------------------------------------
