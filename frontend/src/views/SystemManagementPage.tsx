@@ -5,13 +5,31 @@ import Table from '../components/UI/Table';
 import Button from '../components/UI/Button';
 import { Plus, Edit, Trash2, UserCog, Shield, Shield as ShieldIcon, RotateCcw, XCircle } from 'lucide-react';
 import { useUsers } from '../hooks/useUsers';
+import { useOrganizations } from '../hooks/useOrganizations';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import { userService } from '../services/api';
+import { Organization } from '../types/models';
 import SecurityPage from './SecurityPage';
 import './SystemManagementPage.css';
 
 type TabType = 'users' | 'security';
+
+/**
+ * Resolve o organizationId de um User para o officialName da Organization
+ * correspondente, para exibição na tabela de usuários.
+ * Implementa: leitura de User.organizationId (Reference -> Organization, #347).
+ */
+export function resolveOrganizationLabel(
+  organizations: Organization[],
+  organizationId: string | null | undefined
+): string {
+  if (!organizationId) {
+    return '-';
+  }
+  const match = organizations.find((org) => org.organizationId === organizationId);
+  return match?.officialName || '-';
+}
 
 export default function SystemManagementPage() {
   const { t } = useLanguage();
@@ -72,6 +90,7 @@ export default function SystemManagementPage() {
 // Seção de Usuários
 function UsersSection() {
   const { users, loading, error, validateUserStatus, deleteUser, loadUsers } = useUsers();
+  const { organizations } = useOrganizations();
   const { user: currentUser } = useAuth();
   const navigate = useNavigate();
   const { t } = useLanguage();
@@ -143,7 +162,7 @@ function UsersSection() {
               <tr key={userId || user.id}>
                 <td>{user.name}</td>
                 <td>{user.email}</td>
-                <td>{user.institution || '-'}</td>
+                <td>{resolveOrganizationLabel(organizations, user.organizationId)}</td>
                 <td>{user.username}</td>
                 <td>
                   <div className="role-badge-container">

@@ -19,6 +19,7 @@ import {
   Return,
   CidEntry,
   PhoneCodeEntry,
+  Organization,
 } from '../types/models';
 import { clearClientSession } from '../utils/sessionCleanup';
 
@@ -508,6 +509,11 @@ export const userService = {
   delete: (id: number | string) => api.delete(`/users/${id}`),
   resetMFA: (id: number | string) => api.post(`/users/${id}/reset-mfa`),
   disableMFA: (id: number | string) => api.post(`/users/${id}/disable-mfa`),
+};
+
+// ========== ORGANIZATION SERVICES ==========
+export const organizationService = {
+  getAll: () => api.get<Organization[]>('/organizations'),
 };
 
 // ========== ACCESS SERVICES ==========

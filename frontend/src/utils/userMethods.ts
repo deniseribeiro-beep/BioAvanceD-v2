@@ -15,7 +15,7 @@ export function createUser(userData: Partial<User>): User {
     name: userData.name || '',
     email: userData.email,
     phone: userData.phone || '',
-    institution: userData.institution || '',
+    organizationId: userData.organizationId || null,
     username: userData.username,
     password: userData.password,
     accessType: userData.accessType || 1,

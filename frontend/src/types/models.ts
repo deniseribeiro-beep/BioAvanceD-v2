@@ -503,6 +503,17 @@ export interface Location {
   wellPosition?: string; // Campo do backend (string) - posição do eppendorf
 }
 
+export interface Organization {
+  _id?: string; // MongoDB ID
+  organizationId: string;
+  officialName: string;
+  normalizedName?: string;
+  acronym?: string | null;
+  organizationType?: string | null;
+  countryCode: string;
+  website?: string | null;
+}
+
 export interface User {
   _id?: string; // MongoDB ID
   userID?: string;
@@ -510,7 +521,7 @@ export interface User {
   name: string;
   email: string;
   phone?: string;
-  institution?: string;
+  organizationId?: string | null; // Reference -> Organization.organizationId (#347 cutover, replaces the old free-text `institution` field)
   username: string;
   password?: string; // Não deve ser retornado em respostas GET
   accessType?: number; // Mantido para compatibilidade (1: Básico, 2: Intermediário, 3: Completo)
