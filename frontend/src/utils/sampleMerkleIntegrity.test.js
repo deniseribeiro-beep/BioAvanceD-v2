@@ -54,10 +54,16 @@ describe('sampleMerkleIntegrity', () => {
   it('matches a Node crypto SHA-256 of the same canonical payload (WebCrypto/Node parity)', async () => {
     const expected = nodeSha256Hex(stableSerialize({
       participant_identity: { participantId: '12345678', participantName: 'Paciente Teste' },
-      clinicalData: validSample.clinicalData,
+      clinicalData: {
+        orphaCode: 'ORPHA:324',
+        omimCode: '',
+        cid: 'E75.2',
+        phenotypes: [],
+        charlsonComorbidities: [],
+        biomarkerValues: { 'Lyso-Gb3': '4.2' },
+      },
       sprec: validSample.sprec,
       pharmacologyData: {
-        ...validSample.pharmacologyData,
         treatmentStatus: 'ON_TREATMENT',
         medicationName: 'Migalastat',
         atcCode: 'A16AX27',
@@ -146,6 +152,50 @@ describe('sampleMerkleIntegrity', () => {
   it('handles an empty sample', async () => {
     const hash = await generateSampleHash({});
     expect(hash).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  // #521: clinicalData now mirrors buildClinicalData's exact key set
+  // (api/backend/src/routes/intakeWizard.js#107-119) instead of being hashed
+  // as-is, so callers using the wizard's legacy snake_case keys still agree
+  // with callers already using the canonical camelCase ones.
+  it('normalizes clinicalData the same way whether callers use camelCase or the wizard-legacy snake_case aliases', async () => {
+    const camelCase = {
+      ...validSample,
+      clinicalData: { orphaCode: 'ORPHA:324', cid: 'E75.2', charlsonComorbidities: ['diabetes'], biomarkerValues: { 'Lyso-Gb3': '4.2' } },
+    };
+    const snakeCase = {
+      ...validSample,
+      clinicalData: { orphaCode: 'ORPHA:324', cid: 'E75.2', charlson_comorbidities: ['diabetes'], biomarkers_values: { 'Lyso-Gb3': '4.2' } },
+    };
+
+    expect(await generateSampleHash(camelCase)).toBe(await generateSampleHash(snakeCase));
+  });
+
+  it('is sensitive to charlsonComorbidities', async () => {
+    const hash1 = await generateSampleHash(validSample);
+    const withComorbidity = {
+      ...validSample,
+      clinicalData: { ...validSample.clinicalData, charlsonComorbidities: ['diabetes'] },
+    };
+
+    expect(await generateSampleHash(withComorbidity)).not.toBe(hash1);
+  });
+
+  // #521: pharmacologyData.atcClass now falls back to the ATC code's first
+  // character when no explicit class is given, mirroring buildPharmacologyData
+  // (api/backend/src/routes/intakeWizard.js#130-131) instead of hashing an
+  // empty string in that case.
+  it('derives atcClass from atcCode when no explicit atcClass is given, matching buildPharmacologyData', async () => {
+    const explicitClass = {
+      ...validSample,
+      pharmacologyData: { treatmentStatus: 'ON_TREATMENT', medicationName: 'Migalastat', atcCode: 'A16AX27', atcClass: 'A' },
+    };
+    const derivedClass = {
+      ...validSample,
+      pharmacologyData: { treatmentStatus: 'ON_TREATMENT', medicationName: 'Migalastat', atcCode: 'A16AX27' },
+    };
+
+    expect(await generateSampleHash(derivedClass)).toBe(await generateSampleHash(explicitClass));
   });
 
   it('deepSort sorts object keys recursively, including nested arrays of objects', () => {

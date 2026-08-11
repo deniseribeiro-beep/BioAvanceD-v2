@@ -27,16 +27,42 @@ function normalizeString(value) {
 }
 
 function normalizePharmacologyData(raw = {}) {
-  const source = raw && typeof raw === 'object' ? { ...raw } : {};
+  const source = raw && typeof raw === 'object' ? raw : {};
+  const atcCode = normalizeString(source.atcCode || source.atc_code || source.medication_code).toUpperCase().replace(/^ATC:/i, '');
+  // Mirrors buildPharmacologyData's atcLevel1 fallback (intakeWizard.js#121-131, #521):
+  // derive atcClass from the ATC code's first character when no explicit class was given.
+  const atcClass = normalizeString(source.atcClass || source.atc_level_1 || source.medication_drug_class).toUpperCase()
+    || (atcCode ? atcCode.charAt(0) : '');
   return {
-    ...source,
-    treatmentStatus: normalizeString(raw.treatmentStatus || raw.treatment_status).toUpperCase(),
-    medicationName: normalizeString(raw.medicationName || raw.medication_name || raw.drug_name),
-    atcCode: normalizeString(raw.atcCode || raw.atc_code || raw.medication_code).toUpperCase().replace(/^ATC:/i, ''),
-    atcClass: normalizeString(raw.atcClass || raw.atc_level_1 || raw.medication_drug_class).toUpperCase(),
-    lastDoseDate: raw.lastDoseDate || raw.last_dose_date || null,
-    washoutStartDate: raw.washoutStartDate || raw.washout_start_date || null,
-    washoutEndDate: raw.washoutEndDate || raw.washout_end_date || null,
+    treatmentStatus: normalizeString(source.treatmentStatus || source.treatment_status).toUpperCase(),
+    medicationName: normalizeString(source.medicationName || source.medication_name || source.drug_name),
+    atcCode,
+    atcClass,
+    lastDoseDate: source.lastDoseDate || source.last_dose_date || null,
+    washoutStartDate: source.washoutStartDate || source.washout_start_date || null,
+    washoutEndDate: source.washoutEndDate || source.washout_end_date || null,
+  };
+}
+
+/**
+ * Mirrors the backend's buildClinicalData (intakeWizard.js#107-119, #521) so the
+ * hashed clinicalData carries exactly the same keys, regardless of whether the
+ * caller already used the canonical camelCase field names or the wizard's
+ * legacy snake_case ones.
+ */
+function normalizeClinicalData(raw = {}) {
+  const source = raw && typeof raw === 'object' ? raw : {};
+  return {
+    orphaCode: normalizeString(source.orphaCode),
+    omimCode: normalizeString(source.omimCode),
+    cid: normalizeString(source.cid),
+    phenotypes: Array.isArray(source.phenotypes) ? source.phenotypes : [],
+    charlsonComorbidities: Array.isArray(source.charlsonComorbidities)
+      ? source.charlsonComorbidities
+      : (Array.isArray(source.charlson_comorbidities) ? source.charlson_comorbidities : []),
+    biomarkerValues: source.biomarkerValues && typeof source.biomarkerValues === 'object'
+      ? source.biomarkerValues
+      : (source.biomarkers_values && typeof source.biomarkers_values === 'object' ? source.biomarkers_values : {}),
   };
 }
 
@@ -58,7 +84,7 @@ function normalizeParticipantIdentity(sample = {}) {
 async function generateSampleHash(sample = {}) {
   const payload = {
     participant_identity: normalizeParticipantIdentity(sample),
-    clinicalData: sample?.clinicalData && typeof sample.clinicalData === 'object' ? sample.clinicalData : {},
+    clinicalData: normalizeClinicalData(sample?.clinicalData),
     sprec: sample?.sprec && typeof sample.sprec === 'object' ? sample.sprec : {},
     pharmacologyData: normalizePharmacologyData(sample?.pharmacologyData && typeof sample.pharmacologyData === 'object' ? sample.pharmacologyData : {}),
     rcsScore: sample?.rcsScore ?? null,
