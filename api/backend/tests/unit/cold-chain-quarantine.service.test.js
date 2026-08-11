@@ -128,7 +128,6 @@ describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
       storageLocation: { boxId, position: 'A1' },
       status: 'AVAILABLE',
       currentStatus: 'Available',
-      release_status: 'AVAILABLE',
       availabilityStatus: 'AVAILABLE',
       quantity: 1,
       unit: 'mL',
@@ -155,7 +154,6 @@ describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
     expect(update).toMatchObject({
       status: 'QUARANTINED',
       currentStatus: 'QUARANTINED',
-      release_status: 'QUARANTINE',
       specimenStatus: 'quarantined',
       quarantineReasonCode: 'COLD_CHAIN_INCIDENT',
       coldChainIncidentId: String(incidentId),
@@ -193,7 +191,6 @@ describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
       storageLocation: { boxId, position: 'A1' },
       status: 'AVAILABLE',
       currentStatus: 'Available',
-      release_status: 'AVAILABLE',
       quantity: 1,
       unit: 'mL',
     }]);
@@ -221,7 +218,7 @@ describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
         _id: sampleId,
         coldChainIncidentId: String(incidentId),
         quarantineReasonCode: 'COLD_CHAIN_INCIDENT',
-        release_status: 'QUARANTINE',
+        specimenStatus: 'quarantined',
         status: 'QUARANTINED',
       }]),
       quarantineActions: makeCollection([{
@@ -250,7 +247,6 @@ describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
     expect(update.quarantineStatus).toBeUndefined();
     expect(update.coldChainIncidentResolvedAt).toBeInstanceOf(Date);
     expect(update.status).not.toBe('AVAILABLE');
-    expect(update.release_status).not.toBe('AVAILABLE');
 
     expect(collections.quarantineActions.docs[0].actionStatus).toBe('pending_review');
   });

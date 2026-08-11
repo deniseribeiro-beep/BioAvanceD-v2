@@ -85,6 +85,11 @@ function isTruthyFilter(value) {
   return ['true', '1', 'yes', 'sim'].includes(String(value || '').trim().toLowerCase());
 }
 
+// #531/#532: AVAILABLE/QUARANTINE/BLOCKED is the filter's own public
+// vocabulary (frontend-facing); it maps onto specimenStatus's canonical
+// lowercase values below, the same AVAILABLE/QUARANTINE/BLOCKED->
+// available/quarantined/unavailable collapse canonical-data-contract-v1.md
+// already used for the old availabilityStatus field.
 function normalizeReleaseStatus(value) {
   const normalized = normalizeFilterText(value).toUpperCase().replace(/\s+/g, '_');
   if (!normalized) return '';
@@ -103,6 +108,21 @@ function normalizeTreatmentStatus(value) {
   return normalized;
 }
 
+// #531: maps the filter's public AVAILABLE/QUARANTINE/BLOCKED vocabulary
+// onto specimenStatus's canonical lowercase values (dict-02 ELM-0123 +
+// the documented `disposed` extension, see Sample.js). BLOCKED collapses
+// into `unavailable` — the same coarsening canonical-data-contract-v1.md
+// already applied when it retired the old `availabilityStatus` field. An
+// unrecognized raw value case-folds through as-is (matches no real
+// specimenStatus, same "filters to zero results" behavior the old
+// release_status passthrough had).
+function releaseStatusToSpecimenStatus(releaseStatus) {
+  if (releaseStatus === 'AVAILABLE') return 'available';
+  if (releaseStatus === 'QUARANTINE') return 'quarantined';
+  if (releaseStatus === 'BLOCKED') return 'unavailable';
+  return releaseStatus.toLowerCase();
+}
+
 function normalizeSprecCode(value) {
   return normalizeFilterText(value).toUpperCase();
 }
@@ -116,14 +136,15 @@ function normalizeSprecCode(value) {
  * specimen-preanalytics.service.js#findSpecimenIdsWithCurrentProfileMatching
  * for what "current" means here.
  *
- * release_status is left querying the embedded Sample field as-is — despite
- * being named alongside the SPREC/RCS fields in #525, it isn't an
- * RcsAssessment/SpecimenPreanalytics/storage-custody field at all (dict-02
- * has no canonical entity for it); it's a Sample-only quarantine/custody
- * status. It's *already* broken for a different, unrelated reason (queries
- * `release_status` but SampleModel writes `releaseStatus` — see the
- * follow-up issue filed alongside this fix) that #525 didn't ask this
- * function to fix.
+ * #531: the release/quarantine filter now queries the canonical
+ * `specimenStatus` (dict-02 ELM-0123) instead of the legacy embedded
+ * `release_status` — which was never `releaseStatus`-cased SampleModel
+ * writes, and was never folded into the #389/#398/#399/#405/#406/#408
+ * specimenStatus/QuarantineAction consolidation despite representing the
+ * same physical/consent quarantine state. See
+ * docs/architecture/canonical-data-contract-v1.md's #531 entry. The
+ * compliance-graph-driven `release_status`/`releaseStatus` write
+ * (`SampleGraphValidator.js`) is a separate, still-open question — #532.
  */
 async function buildSampleQuery(db, filters = {}) {
   const conditions = [];
@@ -191,7 +212,7 @@ async function buildSampleQuery(db, filters = {}) {
 
   const releaseStatus = normalizeReleaseStatus(filters.status || filters.releaseStatus || filters.graphStatus);
   if (releaseStatus) {
-    conditions.push({ release_status: releaseStatus });
+    conditions.push({ specimenStatus: releaseStatusToSpecimenStatus(releaseStatus) });
   }
 
   return conditions.length > 0 ? { $and: conditions } : {};

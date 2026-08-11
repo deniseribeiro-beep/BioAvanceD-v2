@@ -150,7 +150,6 @@ describe('equipment-sensor-quarantine.service', () => {
           $set: expect.objectContaining({
             status: 'QUARANTINED',
             currentStatus: 'QUARANTINED',
-            release_status: 'QUARANTINE',
             specimenStatus: 'quarantined',
             quarantineSource: 'equipment',
             quarantineSourceId: '42',

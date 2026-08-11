@@ -319,8 +319,7 @@ async function quarantineSamplesByFilter(db, filter, context = {}) {
           {
             $or: [
               { status: { $ne: 'QUARANTINED' } },
-              { currentStatus: { $ne: 'QUARANTINED' } },
-              { release_status: { $ne: 'QUARANTINE' } }
+              { currentStatus: { $ne: 'QUARANTINED' } }
             ]
           }
         ]
@@ -342,7 +341,6 @@ async function quarantineSamplesByFilter(db, filter, context = {}) {
     const updatePayload = {
       status: 'QUARANTINED',
       currentStatus: 'QUARANTINED',
-      release_status: 'QUARANTINE',
       specimenStatus,
       quarantineLocation: 'Quarentena',
       quarantineReason: context.reason || null,
@@ -562,7 +560,7 @@ async function markColdChainIncidentSamplesForReview(db, incident = {}, options 
   const matchFilter = {
     coldChainIncidentId: incidentId,
     quarantineReasonCode: 'COLD_CHAIN_INCIDENT',
-    release_status: 'QUARANTINE'
+    specimenStatus: 'quarantined'
   };
   const matchedSamples = await samplesCollection.find(matchFilter, queryOptions).toArray();
 

@@ -42,7 +42,6 @@ function buildMongoCollections(seedIncidents = []) {
     storageLocation: { boxId: BOX_ID, position: 'A1' },
     status: 'AVAILABLE',
     currentStatus: 'Available',
-    release_status: 'AVAILABLE',
     availabilityStatus: 'AVAILABLE',
     quantity: 1,
     unit: 'mL',
@@ -144,13 +143,13 @@ function buildMongoCollections(seedIncidents = []) {
   const samplesCollection = {
     find: vi.fn().mockImplementation((filter = {}) => {
       const coldChainIncidentId = filter?.coldChainIncidentId;
-      const releaseStatus = filter?.release_status;
+      const specimenStatus = filter?.specimenStatus;
       const boxIdFilter = filter?.$and?.find((clause) => clause?.['storageLocation.boxId'])?.['storageLocation.boxId'];
       let results;
       if (coldChainIncidentId) {
-        results = samples.filter((sample) => sample.coldChainIncidentId === String(coldChainIncidentId) && (!releaseStatus || sample.release_status === releaseStatus));
+        results = samples.filter((sample) => sample.coldChainIncidentId === String(coldChainIncidentId) && (!specimenStatus || sample.specimenStatus === specimenStatus));
       } else if (boxIdFilter) {
-        results = samples.filter((sample) => boxIdFilter.$in.includes(sample.storageLocation?.boxId) && sample.release_status !== 'QUARANTINE');
+        results = samples.filter((sample) => boxIdFilter.$in.includes(sample.storageLocation?.boxId) && sample.status !== 'QUARANTINED');
       } else {
         results = [];
       }
@@ -342,7 +341,6 @@ describe('Incidents API integration', () => {
     expect(update).toMatchObject({
       status: 'QUARANTINED',
       currentStatus: 'QUARANTINED',
-      release_status: 'QUARANTINE',
       quarantineReasonCode: 'COLD_CHAIN_INCIDENT',
       coldChainSensorKey: 'sensor-a1',
       coldChainStatus: 'INCIDENT_OPEN',
@@ -363,7 +361,7 @@ describe('Incidents API integration', () => {
     }]);
     incidentsState.samples[0].coldChainIncidentId = incidentId;
     incidentsState.samples[0].quarantineReasonCode = 'COLD_CHAIN_INCIDENT';
-    incidentsState.samples[0].release_status = 'QUARANTINE';
+    incidentsState.samples[0].specimenStatus = 'quarantined';
     incidentsState.samples[0].status = 'QUARANTINED';
     setCachedModule(modulePaths.connection, { connectMongoDB: async () => incidentsState.db });
 
@@ -393,6 +391,5 @@ describe('Incidents API integration', () => {
     expect(update.availabilityStatus).toBeUndefined();
     expect(update.quarantineStatus).toBeUndefined();
     expect(update.status).not.toBe('AVAILABLE');
-    expect(update.release_status).not.toBe('AVAILABLE');
   });
 });

@@ -72,7 +72,6 @@ export default function SamplesPage() {
         // and stays legacy-sourced (#407/#408).
         specimenStatus: 'available',
         quarantineReason: null,
-        release_status: 'AVAILABLE',
         importedBy: user?.userID || user?.id || user?.username || null,
       } as any);
       refreshSamples();
