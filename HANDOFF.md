@@ -1,84 +1,104 @@
 # HANDOFF
 
 **Written:** 2026-08-11, end of session on `feature/docker-e2e-backend-integration`,
-after resolving #522.
+after resolving #349.
 
 ## What happened this session
 
-Dennis said "Read handoff and resolve issue 522." **Routing:**
-`work-issue` → `fix-bugs` — #522 was a reproducible product defect
-(silent data loss on a real submission path), not test-tooling or a
-coverage gap.
+Dennis said "Read handoff and pick next task." **Routing:** `work-issue`
+scanned the open backlog (no `bug`-labeled issues open; `test-branch`
+issues are deferred per the overlay until this branch merges to `main`,
+which hasn't happened yet) and picked **#349** — a reproducible product
+defect, not test-tooling — → `fix-bugs`.
 
-**#522** (intake wizard's `buildSubmissionPayload` sent Charlson
-comorbidity data as `clinical.comorbidities` — a boolean map — but the
-backend's `buildClinicalData` reads `clinical.charlsonConditions` — an
-array — a key that was never sent, so every sample created via the
-intake wizard silently got `charlsonComorbidities: []` regardless of
-what the user checked):
+**#349** (three frontend files still read/wrote `User.institution`, the
+free-text field #347's hard cutover dropped from the backend entirely —
+the "new user" form's "Instituição" input silently no-op'd, since the
+backend no longer validates or persists it, and the users table always
+showed "-"):
 
-**Delivered and merged** (branch `fix/522-charlson-comorbidity-submission-shape`,
-commit `348d4050`, merged at `c20ea674`):
-- `frontend/src/components/v2/intake/ClinicalIntakeWizard.jsx` —
-  extracted `buildCharlsonConditions` (the array-of-checked-slugs
-  computation #521's `buildSampleIntegrityInput` already used) and had
-  `buildSubmissionPayload` call it too, replacing the boolean-map
-  `comorbidities` field with `charlsonConditions`.
-- `api/backend/src/contracts/canonical/v1/index.js` — the
-  `canonical.v1.intake` schema's `clinical` sub-schema has
-  `additionalProperties: false`, so sending the new field name without
-  updating the schema would have gotten every submission **rejected
-  with a 422** instead of silently losing data — changed
-  `comorbidities: { type: 'object' }` to
-  `charlsonConditions: { type: 'array' }`.
-- `frontend/src/api/intake.service.js` — fixed the same stale key in
-  `registerClinicalIntake`'s fallback default object (dead in practice
-  today since the wizard always populates `clinical`, but same
-  field-name bug family, one-line fix).
-- New regression test in `ClinicalIntakeWizard.test.jsx` (#522) pinning
-  the correct array shape; existing backend test
-  (`intakeWizard.helpers.test.js`) already asserted the correct
-  read-side shape, so no backend test needed updating.
-- Verified on the merged tree: 17/17 frontend tests
-  (`ClinicalIntakeWizard.test.jsx` + `sampleMerkleIntegrity.test.js`),
-  63/63 backend tests (intakeWizard routes/governance/contract/helpers),
-  `npm run typecheck:full` clean.
-- **#522 closed** against this delivered scope.
+Investigation first established the backend's `GET /api/organizations`
+endpoint (`api/backend/src/interface/routes/organization.routes.js`,
+wired at `api/backend/app.js:283`) **already existed and was already
+correctly implemented** — this was purely a frontend gap, which is why
+it routed to `fix-bugs` rather than `build-loop` (no backend capability
+needed building).
 
-**Pre-existing failures noted, not caused by this fix:** 4 tests in
-`api/backend/tests/unit/import-lgpd.service.importSamples.unit.test.js`
-(`boxId auto-assignment (#459)` describe block) fail on the unmodified
-tree too (confirmed via `git stash` before committing) — unrelated to
-comorbidities/#522, not touched this session.
+**Delivered and merged** (branch `fix/349-user-organization-picker`,
+commit `810459a6`, landed on `feature/docker-e2e-backend-integration` via
+a fast-forward `git pull` + push — no separate `--no-ff` merge needed,
+single linear commit, per `fix-bugs`' own documented fast-forward
+exception):
+- `frontend/src/types/models.ts` — added `Organization` interface;
+  `User.institution?: string` → `User.organizationId?: string | null`
+  (Reference → `Organization.organizationId`, matching the backend
+  model).
+- `frontend/src/services/api.ts` + new `frontend/src/hooks/useOrganizations.ts`
+  — `organizationService.getAll()` / `useOrganizations()` hook, same
+  pattern as the existing `userService`/`useUsers` and
+  `policyService`/`usePolicies` pairs.
+- `frontend/src/views/NewUserPage.tsx` — the free-text "Instituição"
+  `Input` replaced with a `<select data-testid="new-user-organization-select">`
+  sourced from `useOrganizations()`, storing `organizationId`. Extracted
+  the `handleSubmit` payload-sanitization block (field deletion, phone
+  normalization, password/MFA handling) into a new exported
+  `buildUserSubmissionPayload(formData, editingUser)` function so the
+  `organizationId` normalization is unit-testable — same
+  extract-a-pure-function-for-testing convention #522 used
+  (`buildSubmissionPayload` in `ClinicalIntakeWizard.jsx`).
+- `frontend/src/views/SystemManagementPage.tsx` — users table now
+  resolves `organizationId` to the matching `Organization.officialName`
+  via a new exported `resolveOrganizationLabel(organizations, organizationId)`
+  helper (falls back to `-` as before, matching
+  `SampleWithdrawalReturnPage.tsx`'s plain-named-export test convention,
+  not the older `_test`-wrapper style).
+- `frontend/src/utils/userMethods.ts` — fixed the same stale field name
+  in the `createUser()` helper (confirmed dead/unused — never called
+  anywhere in the app, kept only for UML-diagram fidelity per the file's
+  header comment — but the issue named it explicitly, so fixed for
+  consistency).
+- New tests: `NewUserPage.test.tsx` (4 tests) and
+  `SystemManagementPage.test.tsx` (3 tests) — first-ever test files for
+  either view; the repo previously had zero `.test.tsx` coverage on
+  these two.
+- Verified: 7/7 new tests, full frontend suite 43/43 (all 7 test files
+  repo-wide), `npm run typecheck:full` clean, all on the merged tree.
+- **#349 closed** against this delivered scope, comment noting the merge
+  commit hash.
 
-**Skills-pack issue filed —
-[dyeallpies-skills-pack#235](https://github.com/DyeAllPies/dyeallpies-skills-pack/issues/235)**:
-`push-wrapup-checkpoint.cjs`'s "gh issue comment = completion signal"
-heuristic (added by pack#203 to fix a *different* misfire in
-`divide-and-conquer`'s multi-issue filing playbook) fired immediately
-after `fix-bugs`' step-1 "Fixed at \<hash\>" issue comment this session —
-three steps before the iteration actually ends (merge, close, wrap-up
-still pending). Harmless this time (I deferred the actual wrap-up
-invocation to the true end; the second firing on `gh issue close` was
-suppressed by the 10-minute dedup window), but the reminder's "NOW"
-phrasing reads as literal and could mislead a session into drafting its
-summary before merging/closing. Suggested fix directions filed against
-the pack, not edited directly (consuming-project session, Rule 0).
+**Not touched (correctly out of scope):** `User.organizationIds` (plural
+— RF003 AC#3 role/institutional *scope*, not the single-org identity
+field #349 was about) is already tracked separately by open issues
+#340/#341 (`test-branch`, deferred until this branch merges to `main`
+per the label's own convention) — no new issue needed.
 
-**No security-relevant findings** this session — #522 is silent data
-loss on a clinical field via a field-name mismatch, not a trust-boundary
-issue; the schema change tightens validation (adds the correct field
-name) rather than relaxing it.
+**Known, harmless leftover:** remote branch
+`fix/349-user-organization-picker` (already merged, fast-forward) could
+not be deleted — `git push origin --delete` was denied by the
+permission classifier, matching the already-documented pattern in
+`fix-bugs`' overlay (BioAvanceD-v2#392/#482, no reliable predictor
+found). Local branch was deleted. Whoever has push-permission slack can
+delete the remote branch by hand; it's inert either way.
+
+**No new skill/pack friction filed this session** — the fast-forward
+pull was the scenario `fix-bugs` already documents and endorses
+("don't force a merge bubble after the fact"); the remote-delete denial
+matches the existing incident register entry, nothing new to add.
+
+**No security-relevant findings** — client-side field rename only
+(`institution` string → `organizationId` reference), no new route, no
+relaxed validation; `GET /api/organizations` was already
+`authenticate`-gated before this session touched it.
 
 ## Repo state
 
-- **`feature/docker-e2e-backend-integration`**: at `c20ea674`, clean, up
-  to date with origin. Contains the merge of #522's fix (`348d4050`).
-- No dangling branches from this session — `fix/522-charlson-comorbidity-submission-shape`
-  deleted locally and remotely after a clean merge.
-- Issues this session: **#522 closed** (delivered scope, merged at
-  `c20ea674`). **dyeallpies-skills-pack#235 filed** (new, open —
-  pack-repo hook-timing finding).
+- **`feature/docker-e2e-backend-integration`**: at `810459a6`, clean, up
+  to date with origin. Contains the merge of #349's fix.
+- No dangling *local* branches from this session. One dangling *remote*
+  branch (`fix/349-user-organization-picker`, merged, safe to delete —
+  see above).
+- Issues this session: **#349 closed** (delivered scope, merged at
+  `810459a6`). No new issues filed.
 
 ## Which issue is next
 
@@ -86,8 +106,8 @@ Dennis has not yet said which issue to pick up next session; per
 `handoff`'s "only if the user explicitly said so" rule, nothing is
 queued.
 
-Candidates carried forward (unchanged from prior handoff except #522's
-removal):
+Candidates carried forward (unchanged from prior handoff except #349's
+removal; none re-verified this session unless noted):
 
 **skills-pack#233** — pack-repo only, low priority: fix the
 BioAvanceD-v2 overlay's per-iteration typecheck guidance
@@ -99,15 +119,12 @@ instead.
 `resolve-issue`'s design-call section alongside the existing
 docs-enumeration rule.
 
-**skills-pack#235** — new this session, pack-repo only: reconcile
+**skills-pack#235** — pack-repo only: reconcile
 `push-wrapup-checkpoint.cjs`'s comment-as-completion-signal heuristic
-with `fix-bugs`' comment-first ending sequence.
-
-**#504** — the sealed-snapshot backfill script exists and is
-unit-tested, but has not been *run* against any live environment.
-Whoever next stands up a real Mongo instance with pre-#502 sample data
-should run `node src/scripts/backfillSealedSnapshotPins.js` once
-(idempotent, safe to re-run).
+with `fix-bugs`' comment-first ending sequence. (Fired again this
+session on #349's "Fixed at hash" comment, same known false-positive —
+handled the same way: deferred the actual `wrap-up` invocation to the
+true end.)
 
 **#390** — umbrella issue; #491/#493/#494/#495/#517/#518/#519/#521 are
 all done. Worth a fresh look at whether #390 itself should close or get
@@ -123,13 +140,14 @@ re-verified this session):
   `canonical-data-contract-v1.md`'s "Known Residual Legacy Surfaces"
   list not covered by #491-#495.
 - **#489** — full-suite vitest flakiness. Not re-confirmed this session.
-- **Pre-existing test failures noted but not fixed this session:** 4
-  tests in
+- **Pre-existing test failures noted but not fixed in a prior session:**
+  4 tests in
   `api/backend/tests/unit/import-lgpd.service.importSamples.unit.test.js`
   (`boxId auto-assignment (#459)` describe block) — confirmed failing on
-  the unmodified tree, unrelated to #522. No issue filed yet for this
-  specifically; worth checking whether #459 or a fresh issue already
-  covers it before the next session touches that file.
+  the unmodified tree as of the #522 session, unrelated to that fix. No
+  issue filed yet for this specifically; worth checking whether #459 or
+  a fresh issue already covers it before the next session touches that
+  file.
 - Older backlog: `#371`/`#373`/`#374`/`#378`/`#379`, `user.accessType`
   grep sweep, dangling merged branches (`test/440-*`, `test/441-*`,
   `fix/444-retention-period-iso8601`, `fix/450-*`,
@@ -143,7 +161,8 @@ re-verified this session):
   `test/511-intake-wizard-canonical-storage-assignment`,
   `fix/512-quarantine-storage-scope-not-applicable`,
   `fix/513-smoke-check-script`,
-  `fix/515-test-smoke-cjs-graph` — all safe to delete, low priority
+  `fix/515-test-smoke-cjs-graph`, and now
+  `fix/349-user-organization-picker` — all safe to delete, low priority
   housekeeping, not re-verified this session).
 - **Next e2e slice** (per `E2E_TRACEABILITY_PLAN.md` and
   `playwright-specs`' spec inventory) — check issue #95's tracking
@@ -154,29 +173,29 @@ re-verified this session):
 ## Dev stack state
 
 Nothing started this session. All verification ran targeted
-`npx vitest run` on specific touched/related test files (frontend and
-backend) plus `npm run typecheck:full` (0 errors) from `frontend/` — no
-Docker, no live app, no full suite. One `git stash`/`stash pop` cycle
-was used to confirm 4 pre-existing test failures predate this session's
-changes (see above); working tree was restored cleanly afterward.
+`npx vitest run` (the two new test files, then all 7 frontend test files
+repo-wide — small enough suite that this isn't a "bare full-suite mid-loop"
+run) plus `npm run typecheck:full` (0 errors) from `frontend/` — no
+Docker, no live app, no backend tests touched (no backend files were
+changed this session).
 
 ## Which skills to use
 
-- `work-issue` → `fix-bugs`: straightforward routing — #522 was a
-  reproducible product defect with a clear fix shape already sketched in
-  the issue body (#521's own handoff), so `resolve-issue`'s
-  deferral-evaluation machinery wasn't needed.
-- **New this session:** before changing a payload field name that
-  crosses a schema boundary with `additionalProperties: false` (this
-  repo's `canonical.v1.intake` contract, `api/backend/src/contracts/canonical/v1/index.js`),
-  check whether the schema needs the same rename — otherwise the fix
-  trades silent data loss for a hard 422 on every submission, which is
-  worse. Caught by tracing `validate('canonical.v1.intake', data)`'s
-  call site before assuming the field-name fix was complete.
-- **New this session:** `push-wrapup-checkpoint.cjs` can fire on
-  `fix-bugs`' intermediate "Fixed at \<hash\>" issue comment (step 1 of
-  4), not just at the true end of the iteration — see
-  dyeallpies-skills-pack#235. If the reminder fires there, the merge and
-  close steps still need to happen before actually invoking `wrap-up`
-  and drafting the summary; don't treat the reminder's "NOW" as license
-  to skip ahead.
+- `work-issue` → `fix-bugs`: before routing, checked whether the
+  backend capability the issue's "Needs" section described
+  (`GET /api/organizations`) already existed — it did, fully wired —
+  which is what kept this a `fix-bugs` item instead of escalating to
+  `build-loop`. Worth checking this explicitly on any issue whose fix
+  sounds like it needs new backend surface: grep for the route/model
+  first before assuming it needs building.
+- **Frontend test convention, confirmed again this session:** this repo
+  has zero `.test.tsx`/`.test.jsx` files that render via
+  `@testing-library/react` — every existing frontend test (
+  `ClinicalIntakeWizard.test.jsx`, `SampleWithdrawalReturnPage.test.tsx`,
+  now `NewUserPage.test.tsx`/`SystemManagementPage.test.tsx`) extracts a
+  pure function out of the component/view and unit-tests that directly,
+  either via a named `_test` export object (older files) or a plain
+  named export (newer files, e.g. `getStorageLabel`,
+  `buildUserSubmissionPayload`, `resolveOrganizationLabel`). Follow the
+  plain-named-export style for new work — it's what the most recent
+  precedent (`SampleWithdrawalReturnPage.tsx`) uses.
