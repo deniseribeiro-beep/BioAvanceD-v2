@@ -61,6 +61,7 @@ describe('SampleGraphValidator', () => {
   let sampleMovementsCollection;
   let rcsAssessmentsCollection;
   let specimenPreanalyticsCollection;
+  let quarantineActionsCollection;
   let validator;
 
   beforeEach(() => {
@@ -138,6 +139,16 @@ describe('SampleGraphValidator', () => {
       }),
     };
 
+    quarantineActionsCollection = {
+      find: vi.fn().mockReturnValue({
+        sort: vi.fn().mockReturnValue({
+          toArray: vi.fn().mockResolvedValue([]),
+        }),
+      }),
+      insertOne: vi.fn().mockResolvedValue({ insertedId: 'qa-1' }),
+      updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
+    };
+
     db = {
       listCollections: () => ({
         toArray: async () => ([{ name: 'samples' }, { name: 'consents' }]),
@@ -151,6 +162,7 @@ describe('SampleGraphValidator', () => {
         if (name === 'counters') return countersCollection;
         if (name === 'rcsAssessments') return rcsAssessmentsCollection;
         if (name === 'specimenPreanalytics') return specimenPreanalyticsCollection;
+        if (name === 'quarantineActions') return quarantineActionsCollection;
         throw new Error(`Unexpected collection name: ${name}`);
       },
     };
@@ -337,5 +349,154 @@ describe('SampleGraphValidator', () => {
     const failReport = await validator.validateSampleCompliance(tampered._id);
     expect(failReport.graphPath.integrity.valid).toBe(false);
     expect(failReport.suggestedStatus).toBe('BLOCKED');
+  });
+
+  describe('#532: writes specimenStatus/QuarantineAction instead of release_status', () => {
+    function mockActiveAction(reasonCodes) {
+      quarantineActionsCollection.find.mockReturnValue({
+        sort: vi.fn().mockReturnValue({
+          toArray: vi.fn().mockResolvedValue([
+            { quarantineActionId: 'qa-existing', actionStatus: 'active', reasonCodes },
+          ]),
+        }),
+      });
+    }
+
+    it('does not touch specimenStatus or open a QuarantineAction when the graph is fully valid on a fresh (available) sample', async () => {
+      const sample = buildSample();
+      samplesCollection.findOne.mockResolvedValue(sample);
+      consentsCollection.findOne.mockResolvedValue({ status: 'ACTIVE', participantId: '12345678' });
+
+      const report = await validator.validateSampleCompliance(sample._id);
+
+      expect(report.suggestedStatus).toBe('AVAILABLE');
+      const [, update] = samplesCollection.updateOne.mock.calls[0];
+      expect(update.$set.specimenStatus).toBeUndefined();
+      expect(quarantineActionsCollection.insertOne).not.toHaveBeenCalled();
+    });
+
+    it('escalates specimenStatus to quarantined and records a COMPLIANCE_GRAPH_QUALITY action when only quality fails', async () => {
+      const sample = buildSample({
+        sprec: {
+          matrixType: 'fluid',
+          sampleType: 'BLD',
+          primaryContainer: 'SST',
+          preCentrifugation: 'X',
+          centrifugation: 'A',
+          secondCentrifugation: 'A',
+          postCentrifugationDelay: 'A',
+          longTermStorage: 'C',
+        },
+      });
+      samplesCollection.findOne.mockResolvedValue(sample);
+      consentsCollection.findOne.mockResolvedValue({ status: 'ACTIVE', participantId: '12345678' });
+
+      const report = await validator.validateSampleCompliance(sample._id);
+
+      expect(report.suggestedStatus).toBe('QUARANTINE');
+      const [, update] = samplesCollection.updateOne.mock.calls[0];
+      expect(update.$set.specimenStatus).toBe('quarantined');
+      expect(quarantineActionsCollection.insertOne).toHaveBeenCalledWith(
+        expect.objectContaining({ reasonCodes: ['COMPLIANCE_GRAPH_QUALITY'] }),
+        undefined
+      );
+    });
+
+    it('escalates specimenStatus to unavailable when only pharmacology fails (#532: previously silently AVAILABLE)', async () => {
+      const sample = buildSample({
+        pharmacologyData: {
+          treatmentStatus: 'ON_TREATMENT',
+          medicationName: 'Migalastat',
+          atcCode: 'Z99ZZ99',
+          atcClass: 'Z',
+        },
+      });
+      samplesCollection.findOne.mockResolvedValue(sample);
+      consentsCollection.findOne.mockResolvedValue({ status: 'ACTIVE', participantId: '12345678' });
+      // Disease's drug_classes default to ['A'] (diseaseDictionaryCollection
+      // mock, above) — a found medication in an incoherent class fails the
+      // pharmacology node's ATC-vs-ORPHA coherence check.
+      medicationDictionaryCollection.findOne.mockResolvedValue({ atc_code: 'Z99ZZ99', drug_class: 'Z', active: true });
+
+      const report = await validator.validateSampleCompliance(sample._id);
+
+      expect(report.graphPath.pharmacology.valid).toBe(false);
+      expect(report.isReleasable).toBe(false);
+      expect(report.suggestedStatus).toBe('BLOCKED');
+      const [, update] = samplesCollection.updateOne.mock.calls[0];
+      expect(update.$set.specimenStatus).toBe('unavailable');
+      expect(quarantineActionsCollection.insertOne).toHaveBeenCalledWith(
+        expect.objectContaining({ reasonCodes: expect.arrayContaining(['COMPLIANCE_GRAPH_PHARMACOLOGY']) }),
+        undefined
+      );
+    });
+
+    it('never overwrites a terminal specimenStatus (disposed/destroyed)', async () => {
+      const sample = buildSample({
+        specimenStatus: 'disposed',
+        clinicalData: { orphaCode: 'ORPHA:324', cid: '' }, // fails clinical -> BLOCKED
+      });
+      samplesCollection.findOne.mockResolvedValue(sample);
+      consentsCollection.findOne.mockResolvedValue({ status: 'ACTIVE', participantId: '12345678' });
+
+      const report = await validator.validateSampleCompliance(sample._id);
+
+      expect(report.suggestedStatus).toBe('BLOCKED');
+      const [, update] = samplesCollection.updateOne.mock.calls[0];
+      expect(update.$set.specimenStatus).toBeUndefined();
+      expect(quarantineActionsCollection.insertOne).not.toHaveBeenCalled();
+    });
+
+    it('escalates over an active QuarantineAction from an unrelated source without releasing it', async () => {
+      const sample = buildSample({
+        specimenStatus: 'quarantined',
+        clinicalData: { orphaCode: 'ORPHA:324', cid: '' }, // fails clinical -> BLOCKED
+      });
+      samplesCollection.findOne.mockResolvedValue(sample);
+      consentsCollection.findOne.mockResolvedValue({ status: 'ACTIVE', participantId: '12345678' });
+      mockActiveAction(['COLD_CHAIN_INCIDENT']);
+
+      const report = await validator.validateSampleCompliance(sample._id);
+
+      expect(report.suggestedStatus).toBe('BLOCKED');
+      const [, update] = samplesCollection.updateOne.mock.calls[0];
+      expect(update.$set.specimenStatus).toBe('unavailable');
+      expect(quarantineActionsCollection.updateOne).not.toHaveBeenCalled();
+      expect(quarantineActionsCollection.insertOne).toHaveBeenCalled();
+    });
+
+    it('releases its own prior action and downgrades specimenStatus when the graph clears', async () => {
+      const sample = buildSample({ specimenStatus: 'quarantined' });
+      samplesCollection.findOne.mockResolvedValue(sample);
+      consentsCollection.findOne.mockResolvedValue({ status: 'ACTIVE', participantId: '12345678' });
+      mockActiveAction(['COMPLIANCE_GRAPH_QUALITY']);
+
+      const report = await validator.validateSampleCompliance(sample._id);
+
+      expect(report.suggestedStatus).toBe('AVAILABLE');
+      const [, update] = samplesCollection.updateOne.mock.calls[0];
+      expect(update.$set.specimenStatus).toBe('available');
+      expect(quarantineActionsCollection.updateOne).toHaveBeenCalledWith(
+        { quarantineActionId: 'qa-existing' },
+        expect.objectContaining({ $set: expect.objectContaining({ actionStatus: 'released' }) }),
+        undefined
+      );
+      expect(quarantineActionsCollection.insertOne).not.toHaveBeenCalled();
+    });
+
+    it('does not downgrade specimenStatus when the active block belongs to an unrelated source', async () => {
+      const sample = buildSample({ specimenStatus: 'quarantined' });
+      samplesCollection.findOne.mockResolvedValue(sample);
+      consentsCollection.findOne.mockResolvedValue({ status: 'ACTIVE', participantId: '12345678' });
+      mockActiveAction(['COLD_CHAIN_INCIDENT']);
+
+      const report = await validator.validateSampleCompliance(sample._id);
+
+      expect(report.suggestedStatus).toBe('AVAILABLE');
+      const [, update] = samplesCollection.updateOne.mock.calls[0];
+      expect(update.$set.specimenStatus).toBeUndefined();
+      expect(quarantineActionsCollection.updateOne).not.toHaveBeenCalled();
+      expect(quarantineActionsCollection.insertOne).not.toHaveBeenCalled();
+    });
   });
 });

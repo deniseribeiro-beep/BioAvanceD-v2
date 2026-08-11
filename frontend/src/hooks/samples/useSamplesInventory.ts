@@ -52,13 +52,16 @@ export function useSamplesInventory() {
     };
   }, []);
 
+  // #532: release_status (SampleGraphValidator's compliance-graph field) was
+  // dropped in favor of writing specimenStatus directly — this hook's own
+  // liveness is tracked separately (#535).
   const quarantined = useMemo(
-    () => allSamples.filter((sample) => String(sample.release_status || '').toUpperCase() === 'QUARANTINE'),
+    () => allSamples.filter((sample) => String(sample.specimenStatus || '').toLowerCase() === 'quarantined'),
     [allSamples]
   );
 
   const available = useMemo(
-    () => allSamples.filter((sample) => String(sample.release_status || '').toUpperCase() === 'AVAILABLE'),
+    () => allSamples.filter((sample) => String(sample.specimenStatus || '').toLowerCase() === 'available'),
     [allSamples]
   );
 

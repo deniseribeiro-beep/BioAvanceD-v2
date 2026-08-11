@@ -6,6 +6,7 @@ const { generateSampleHashFromSample } = require('./MerkleService');
 const SampleMovementModel = require('../models/SampleMovement');
 const { appendMovementWithHashChain } = require('../utils/sampleMovementLedger');
 const qualityDomain = require('./quality-domain.service');
+const quarantineActionService = require('./quarantine-action.service');
 
 function normalizeString(value) {
   return String(value || '').trim();
@@ -93,7 +94,14 @@ function defaultRequirements() {
 }
 
 function resolveSuggestedStatus(graphPath) {
-  if (!graphPath.ethics.valid || !graphPath.clinical.valid || !graphPath.integrity.valid) {
+  // pharmacology sits alongside ethics/clinical/integrity here (not just
+  // folded into `isReleasable`'s every-node check) — before #532, this
+  // function silently ignored it, so a sample could be isReleasable:false
+  // (pharmacology invalid, e.g. ATC drug-class incoherent with the ORPHA
+  // disease) yet still get suggestedStatus: 'AVAILABLE'. Harmless while
+  // suggestedStatus only fed the cosmetic release_status field; load-bearing
+  // now that #532 makes it drive specimenStatus directly.
+  if (!graphPath.ethics.valid || !graphPath.clinical.valid || !graphPath.pharmacology.valid || !graphPath.integrity.valid) {
     return 'BLOCKED';
   }
 
@@ -102,6 +110,48 @@ function resolveSuggestedStatus(graphPath) {
   }
 
   return 'AVAILABLE';
+}
+
+// #532: same 3-way collapse reports.routes.js's releaseStatusToSpecimenStatus
+// already applies for the physical/consent-quarantine case — BLOCKED is the
+// compliance-graph's hard-failure outcome, which maps onto the same
+// `unavailable` value QUARANTINE's soft-failure filter collapses BLOCKED to.
+const SUGGESTED_STATUS_TO_SPECIMEN_STATUS = {
+  AVAILABLE: 'available',
+  QUARANTINE: 'quarantined',
+  BLOCKED: 'unavailable',
+};
+
+// specimenStatus values a compliance-graph re-evaluation must never touch —
+// destroyed/disposed are final per Sample.js's BLOCKED_SPECIMEN_STATUSES
+// comment ("write sites treat them as non-movable"); this write site is no
+// exception.
+const TERMINAL_SPECIMEN_STATUSES = ['destroyed', 'disposed'];
+
+// Ordering for the escalate-vs-downgrade decision below — only these three
+// values are ever compliance-graph targets (SUGGESTED_STATUS_TO_SPECIMEN_STATUS's
+// range), so terminal states are handled separately, above.
+const SPECIMEN_STATUS_ORDER = { available: 0, quarantined: 1, unavailable: 2 };
+
+// One reasonCode per failing graph node, prefixed so a later re-evaluation
+// can recognize (and safely release) an active QuarantineAction this same
+// validator opened, without touching one opened by an unrelated quarantine
+// source (cold-chain incident, equipment fault, manual action).
+function complianceGraphReasonCodes(graphPath) {
+  const codes = [];
+  if (!graphPath.ethics.valid) codes.push('COMPLIANCE_GRAPH_ETHICS');
+  if (!graphPath.clinical.valid) codes.push('COMPLIANCE_GRAPH_CLINICAL');
+  if (!graphPath.pharmacology.valid) codes.push('COMPLIANCE_GRAPH_PHARMACOLOGY');
+  if (!graphPath.integrity.valid) codes.push('COMPLIANCE_GRAPH_INTEGRITY');
+  if (!graphPath.quality.valid) codes.push('COMPLIANCE_GRAPH_QUALITY');
+  return codes;
+}
+
+function isComplianceGraphOwnedAction(action) {
+  return Boolean(action)
+    && Array.isArray(action.reasonCodes)
+    && action.reasonCodes.length > 0
+    && action.reasonCodes.every((code) => String(code).startsWith('COMPLIANCE_GRAPH_'));
 }
 
 function normalizeSampleIdFilter(sampleId) {
@@ -384,19 +434,71 @@ class SampleGraphValidator {
       suggestedStatus,
     };
 
+    // #532: specimenStatus/QuarantineAction is the canonical status model
+    // (#389/#398/#399/#404/#405/#406/#408) — write there directly instead of
+    // the cosmetic `release_status` field, with a merge rule so this
+    // re-evaluation can only escalate a *stronger* block or release one it
+    // opened itself, never silently clear a block from an unrelated source
+    // (a cold-chain incident, equipment fault, manual action) or a terminal
+    // state (destroyed/disposed).
+    const targetSpecimenStatus = SUGGESTED_STATUS_TO_SPECIMEN_STATUS[suggestedStatus];
+    const currentSpecimenStatus = String(sample.specimenStatus || 'available').toLowerCase();
+    const setPayload = {
+      complianceGraph: {
+        ...report,
+        evaluatedAt: new Date(),
+      },
+      updatedAt: new Date(),
+    };
+
+    let escalated = false;
+    let downgraded = false;
+    let latestActiveAction = null;
+
+    if (!TERMINAL_SPECIMEN_STATUSES.includes(currentSpecimenStatus)) {
+      const targetOrder = SPECIMEN_STATUS_ORDER[targetSpecimenStatus];
+      const currentOrder = SPECIMEN_STATUS_ORDER[currentSpecimenStatus] ?? SPECIMEN_STATUS_ORDER.available;
+
+      if (targetOrder !== currentOrder) {
+        const existingActions = await quarantineActionService.getActionsForSpecimen(this.db, report.sampleId);
+        latestActiveAction = existingActions.find((action) => action.actionStatus === 'active') || null;
+      }
+
+      if (targetOrder > currentOrder) {
+        setPayload.specimenStatus = targetSpecimenStatus;
+        escalated = true;
+      } else if (targetOrder < currentOrder && isComplianceGraphOwnedAction(latestActiveAction)) {
+        setPayload.specimenStatus = targetSpecimenStatus;
+        downgraded = true;
+      }
+    }
+
     await samplesCollection.updateOne(
       { _id: sample._id },
-      {
-        $set: {
-          release_status: suggestedStatus,
-          complianceGraph: {
-            ...report,
-            evaluatedAt: new Date(),
-          },
-          updatedAt: new Date(),
-        },
-      }
+      { $set: setPayload }
     );
+
+    if (escalated) {
+      // Close out a prior self-owned action before opening the new one, so
+      // at most one compliance-graph QuarantineAction is ever active per
+      // specimen — otherwise a QUARANTINE→BLOCKED escalation would leave the
+      // superseded QUARANTINE action dangling as still "active" forever.
+      // An active action from an unrelated source (cold-chain, equipment,
+      // manual) is left untouched; this escalation's own action is recorded
+      // alongside it.
+      if (isComplianceGraphOwnedAction(latestActiveAction)) {
+        await quarantineActionService.releaseActiveAction(this.db, report.sampleId, 'SYSTEM_COMPLIANCE_GRAPH');
+      }
+      const reasonCodes = complianceGraphReasonCodes(graphPath);
+      if (reasonCodes.length > 0) {
+        await quarantineActionService.recordAction(this.db, {
+          specimenIds: [report.sampleId],
+          reasonCodes,
+        });
+      }
+    } else if (downgraded) {
+      await quarantineActionService.releaseActiveAction(this.db, report.sampleId, 'SYSTEM_COMPLIANCE_GRAPH');
+    }
 
     if (!isReleasable) {
       logger.warn('[SAMPLE_GRAPH_VALIDATOR] Amostra bloqueada/quarentenada', {

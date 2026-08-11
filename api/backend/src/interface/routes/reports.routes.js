@@ -142,9 +142,11 @@ function normalizeSprecCode(value) {
  * writes, and was never folded into the #389/#398/#399/#405/#406/#408
  * specimenStatus/QuarantineAction consolidation despite representing the
  * same physical/consent quarantine state. See
- * docs/architecture/canonical-data-contract-v1.md's #531 entry. The
- * compliance-graph-driven `release_status`/`releaseStatus` write
- * (`SampleGraphValidator.js`) is a separate, still-open question — #532.
+ * docs/architecture/canonical-data-contract-v1.md's #531 entry.
+ * `SampleGraphValidator.js`'s own compliance-graph `release_status` write —
+ * a separate, ethics/quality/clinical/pharmacology/integrity check, not
+ * this physical/consent state — is folded into specimenStatus too as of
+ * #532; see the doc's #532 entry for that write's own merge rule.
  */
 async function buildSampleQuery(db, filters = {}) {
   const conditions = [];
