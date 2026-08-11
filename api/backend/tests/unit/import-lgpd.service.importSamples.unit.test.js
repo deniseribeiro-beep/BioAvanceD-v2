@@ -555,6 +555,12 @@ describe('ImportLGPDService.importSamples', () => {
           storageAssignments.push(doc);
           return { insertedId: new ObjectId() };
         }),
+        // #523: AllocateSampleUseCase (#477) -> MongoStorageRepository
+        // .findSampleById (#507) calls findOne to resolve the specimen's
+        // current assignment before allocating; a freshly-inserted,
+        // not-yet-allocated row has none, matching sample.service.test.js's
+        // mockOperationalStorage fix in #510/#513.
+        findOne: vi.fn().mockResolvedValue(null),
       };
       base.db.collection = vi.fn((name) => {
         if (name === 'storageContainers') return storageContainersCollection;
