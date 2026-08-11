@@ -119,7 +119,7 @@ const intakeSchema = {
       type: 'object',
       additionalProperties: false,
       properties: {
-        comorbidities: { type: 'object' },
+        charlsonConditions: { type: 'array' },
         bloodPressure: { type: 'string' },
         clinicalObservations: { type: 'string' },
         diseasePhenotypes: { type: 'array' },

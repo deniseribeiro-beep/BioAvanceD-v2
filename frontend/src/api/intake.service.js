@@ -46,7 +46,7 @@ export async function registerClinicalIntake(payload = {}, options = {}) {
       merkleRoot: text(payload.specimen?.merkleRoot),
     },
     diagnosis: payload.diagnosis || null,
-    clinical: payload.clinical || { comorbidities: [], bloodPressure: '', clinicalObservations: '', diseasePhenotypes: [], diseaseBiomarkers: [], biomarkerValues: [], pharmacologyData: {} },
+    clinical: payload.clinical || { charlsonConditions: [], bloodPressure: '', clinicalObservations: '', diseasePhenotypes: [], diseaseBiomarkers: [], biomarkerValues: [], pharmacologyData: {} },
     biomarkers: Array.isArray(payload.biomarkers) ? payload.biomarkers : [],
   };
 

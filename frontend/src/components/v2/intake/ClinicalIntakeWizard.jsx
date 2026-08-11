@@ -1255,15 +1255,18 @@ function buildQualityPreviewPayload(formData, matrixType) {
   };
 }
 
+// Array-of-checked-slugs shape buildClinicalData expects for charlsonComorbidities
+// (api/backend/src/routes/intakeWizard.js#116), read from clinical.charlsonConditions.
+function buildCharlsonConditions(formData, clinicalComorbidityDefinitions = []) {
+  return (Array.isArray(clinicalComorbidityDefinitions) ? clinicalComorbidityDefinitions : [])
+    .map((option) => getDictionarySlug(option))
+    .filter((slug) => slug && Boolean(formData[slug]));
+}
+
 function buildSampleIntegrityInput(formData, clinicalComorbidityDefinitions = []) {
   const matrixType = String(formData.sprecMatrixType || 'fluid').trim().toLowerCase() === 'solid' ? 'solid' : 'fluid';
   const dictionary = matrixType === 'solid' ? SPREC_SOLID_DICTIONARY : SPREC_FLUID_DICTIONARY;
-  // Same array-of-checked-slugs shape buildClinicalData expects for charlsonComorbidities
-  // (api/backend/src/routes/intakeWizard.js#116) — sourced from the same comorbidity
-  // checkboxes buildSubmissionPayload reads (#521).
-  const charlsonComorbidities = (Array.isArray(clinicalComorbidityDefinitions) ? clinicalComorbidityDefinitions : [])
-    .map((option) => getDictionarySlug(option))
-    .filter((slug) => slug && Boolean(formData[slug]));
+  const charlsonComorbidities = buildCharlsonConditions(formData, clinicalComorbidityDefinitions);
   return {
     // Same field shape as MerkleService.generateSampleHash on the backend (#519) — rcsScore/
     // finalGrade/calculationTrace/axisPenalties are omitted (default to null) since RCS hasn't
@@ -1431,11 +1434,7 @@ function buildSubmissionPayload(formData, clinicalComorbidityItems = [], biomark
   });
 
   const clinical = {
-    comorbidities: (Array.isArray(clinicalComorbidityItems) ? clinicalComorbidityItems : []).reduce((accumulator, option) => {
-      const field = getDictionarySlug(option);
-      accumulator[field] = Boolean(formData[field]);
-      return accumulator;
-    }, {}),
+    charlsonConditions: buildCharlsonConditions(formData, clinicalComorbidityItems),
     bloodPressure: String(formData.bloodPressure || '').trim(),
     clinicalObservations: String(formData.clinicalObservations || '').trim(),
     diseasePhenotypes: Array.isArray(formData.diseasePhenotypes) ? formData.diseasePhenotypes : [],
