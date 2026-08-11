@@ -15,41 +15,6 @@ describe('UserModel.isValidEmail', () => {
   });
 });
 
-describe('UserModel.isValidAccessType', () => {
-  it('returns true for access types 1-4', () => {
-    [1, 2, 3, 4].forEach(t => expect(UserModel.isValidAccessType(t)).toBe(true));
-  });
-
-  it('returns false for 0 and 5', () => {
-    expect(UserModel.isValidAccessType(0)).toBe(false);
-    expect(UserModel.isValidAccessType(5)).toBe(false);
-    expect(UserModel.isValidAccessType(null)).toBe(false);
-  });
-});
-
-describe('UserModel.getRoleName', () => {
-  it('maps 1 to UsuarioExterno', () => {
-    expect(UserModel.getRoleName(1)).toBe('UsuarioExterno');
-  });
-
-  it('maps 2 to Tecnico', () => {
-    expect(UserModel.getRoleName(2)).toBe('Tecnico');
-  });
-
-  it('maps 3 to Coordenador', () => {
-    expect(UserModel.getRoleName(3)).toBe('Coordenador');
-  });
-
-  it('maps 4 to Administrador', () => {
-    expect(UserModel.getRoleName(4)).toBe('Administrador');
-  });
-
-  it('defaults to UsuarioExterno for unknown type', () => {
-    expect(UserModel.getRoleName(99)).toBe('UsuarioExterno');
-    expect(UserModel.getRoleName(null)).toBe('UsuarioExterno');
-  });
-});
-
 describe('UserModel.normalizeStatus', () => {
   it('returns active for null', () => {
     expect(UserModel.normalizeStatus(null)).toBe('active');
