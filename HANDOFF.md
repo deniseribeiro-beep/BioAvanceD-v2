@@ -1,85 +1,95 @@
 # HANDOFF
 
 **Written:** 2026-08-11, end of session on `feature/docker-e2e-backend-integration`,
-after resolving #519.
+after resolving #520 and #521.
 
 ## What happened this session
 
-Dennis said "Pick #519" (`sampleMerkleIntegrity.js` computing a
-structurally different Merkle root than the backend's `MerkleService`).
-**Routing:** `work-issue` → `resolve-issue` (bug-labeled, but the issue's
-own body flagged it as currently dead/orphaned code needing a design
-call, not a reproducible live bug — so not `fix-bugs`).
+Dennis said "Pick #520 and #521." **Routing:** `work-issue` → `resolve-issue`
+for both — #520 is test-tooling config (not product source, so not
+`fix-bugs`); #521 was explicitly framed as a design call, the direct
+sibling of #519's design question from the prior session.
 
-Per `resolve-issue`'s "needs a design call" trigger, checked `docs/`
-(canonical-data-contract-v1.md, canonical-active-surface.md, dict-02)
-before treating the design call as still open — found nothing that
-settles which Merkle shape (3-leaf tree vs. flat hash) was intended;
-dict-02's `MerkleRoot` entity (P1X-0162..0167) is an unrelated
-"audit-batch root" governance concept, not this per-sample hash. So the
-design call was genuine, not stale. Read both implementations in full
-(`frontend/src/utils/sampleMerkleIntegrity.js`,
-`api/backend/src/services/MerkleService.js`) and confirmed the issue's
-claim exactly: frontend built a real 3-leaf tree over snake_case
-intake-wizard field names; backend computes one flat SHA-256 over a
-differently-shaped camelCase object. No field-mapping fix could make
-these agree.
+**#520** (`frontend/vitest.config.js` missing the `@` path alias
+`vite.config.js` defines, breaking any vitest run that transitively
+imports a `@/...` module): mechanical fix, no design call needed. Added
+the same `resolve.alias` to `vitest.config.js`. Added a regression test
+(`frontend/tests/unit/viteAliasResolution.test.ts`) and verified it both
+reproduces the exact error from the issue *without* the fix and passes
+*with* it — not just "looks fixed." **#520 closed.**
 
-**Asked Dennis via AskUserQuestion** which resolution he wanted (delete
-the dead code / rewrite frontend to mirror backend / leave as-is with a
-comment). **Dennis chose: rewrite frontend to mirror backend.**
+**#521** (`sampleMerkleIntegrity.js`'s `clinicalData` still didn't match
+`buildClinicalData`'s shape, even after #519's algorithm fix): checked
+`docs/architecture/`, `docs/docs-7-27-2026/extracted/` (dict-02/03/07,
+requisitos-index), `docs/docs-7-31-2026/` — none settle the question
+(the only Merkle-related requirement, RF012, is about audit-event batch
+roots, unrelated to this per-sample intake-time preview hash). Genuine
+design call, so **asked Dennis via `AskUserQuestion`** with a first framing
+that turned out to be based on incomplete research (see "New this
+session" below) — corrected and re-asked before implementing.
 
-**Delivered and merged** (branch `fix/519-sample-merkle-integrity-algorithm`,
-commit `5dbb9ab5`, merged into `feature/docker-e2e-backend-integration`
-at `e14fda88`):
-
-- `frontend/src/utils/sampleMerkleIntegrity.js` — fully rewritten to
-  compute the same single flat SHA-256 as
-  `MerkleService.generateSampleHash` (ported `deepSort`/`stableSerialize`/
-  `normalizeParticipantIdentity`/`normalizePharmacologyData` field-for-field),
-  using `crypto.subtle` (WebCrypto) instead of Node's `crypto` module.
-  `buildSampleMerkleRoot`/`verifySampleIntegrity` kept their names/call
-  shape (`{ rootHash }`) so the only caller didn't need restructuring.
+**Delivered and merged** (branch `fix/521-sample-integrity-clinical-data-parity`,
+commit `791230f7`, merged at `6bf225e2`):
+- `frontend/src/utils/sampleMerkleIntegrity.js` — added `normalizeClinicalData`
+  (mirrors backend `buildClinicalData` field-for-field, accepts both
+  camelCase and the wizard's legacy snake_case input keys), called from
+  `generateSampleHash` instead of passing `clinicalData` through raw.
+  `normalizePharmacologyData` gained the `atcClass`-from-`atcCode` fallback
+  (`buildPharmacologyData`'s `atcCode.charAt(0)` behavior) and stopped
+  spreading raw input keys into the hashed object (was leaking
+  non-canonical snake_case keys into the payload whenever the caller
+  supplied them).
 - `frontend/src/components/v2/intake/ClinicalIntakeWizard.jsx`'s
-  `buildSampleIntegrityInput` updated to feed the new field shape
-  (`participant_identity`/`clinicalData`/`sprec`/`pharmacologyData` instead
-  of the old `patient_identity`/`clinical_data`/`pharmacology_data`
-  3-leaf-tree keys).
-- Tests: new `sampleMerkleIntegrity.test.js` (12 tests), including a
-  cross-check against Node's `crypto.createHash` for the same canonical
-  payload string, confirming WebCrypto/Node SHA-256 parity — not just
-  "looks similar," an actual byte-for-byte proof. `npm run typecheck:full`
-  clean (0 errors) on the merged branch.
-- **#519 closed** against this delivered scope.
+  `buildSampleIntegrityInput` now sources `charlsonComorbidities` from the
+  same comorbidity-checkbox definitions `buildSubmissionPayload` already
+  reads (array of checked slugs), and emits `biomarkerValues` instead of
+  `biomarkers_values`.
+- 6 new/updated tests in `sampleMerkleIntegrity.test.js` (15 total,
+  passing). `npm run typecheck:full` clean (0 errors).
+- **#521 closed** against this delivered scope.
 
-**New issue filed — #521** (out-of-scope finding from verifying the fix
-actually mattered): even with #519's algorithm-shape fix, the frontend's
-computed hash still won't equal the backend's persisted hash for the
-same sample, because `buildSampleIntegrityInput`'s `clinicalData`
-mapping still uses `biomarkers_values` (snake_case, no
-`charlsonComorbidities`) while server-side `buildClinicalData`
-(`api/backend/src/routes/intakeWizard.js:107-118`) produces
-`biomarkerValues` (camelCase) plus `charlsonComorbidities`; also
-`pharmacologyData`'s `atcLevel1` fallback logic isn't replicated
-client-side. Not a live bug today (server always overwrites the
-frontend-submitted value, nothing compares them yet) — a latent gap for
-whoever eventually wires up client-side verification. Needs its own
-design call on whether `buildSampleIntegrityInput` should track
-`buildClinicalData`'s exact shape.
+**New issue filed — #522** (out-of-scope live bug, found while tracing
+#521's data flow): the intake wizard's actual *submission* payload sends
+Charlson comorbidity data as `clinical.comorbidities` (a boolean map),
+but the backend's `buildClinicalData` reads `clinical.charlsonConditions`
+(an array) — a key that's never sent. Every sample created via the
+intake wizard today silently gets `charlsonComorbidities: []` regardless
+of what the user checked. This is a real, live bug (unlike #521, which
+was a client-side-only preview hash with zero comparison callers) — not
+fixed here since it's a different function (`buildSubmissionPayload`,
+not `buildSampleIntegrityInput`). Open, no design call needed — the fix
+shape (align both sides on the array-of-codes shape, since the backend,
+its tests, and `frontend/src/types/models.ts` all already agree on that
+shape) is reasonably clear.
 
-**No security-relevant findings** — this touches unused/dead
-integrity-check code, not a live trust boundary.
+**Skills-pack issue filed — [dyeallpies-skills-pack#234](https://github.com/DyeAllPies/dyeallpies-skills-pack/issues/234)**:
+`resolve-issue`'s design-call section has a docs-thoroughness rule but no
+equivalent for code-capability-existence claims. My first pass at #521
+told Dennis "formData has no Charlson field at all" based on one
+literal-string grep for "charlson" — wrong; the wizard already had a
+full Charlson checkbox UI under a different field name
+(`clinicalComorbidityDefinitions`/`comorbidities`), which a broader
+data-flow trace would have found. Cost a second `AskUserQuestion`
+round-trip. Suggested fix filed against the pack, not edited directly
+(consuming-project session, Rule 0).
+
+**No security-relevant findings** this session — #522 is silent data
+loss on a clinical field, not a trust-boundary issue (reasoned about
+explicitly in the issue body).
 
 ## Repo state
 
-- **`feature/docker-e2e-backend-integration`**: at `e14fda88`, clean, up
-  to date with origin. Contains the merge of #519's fix (`5dbb9ab5`).
-- No dangling branches from this session —
-  `fix/519-sample-merkle-integrity-algorithm` deleted both locally and
-  remotely after a clean merge.
-- Issues this session: **#519 closed** (delivered scope, merged at
-  `e14fda88`). **#521 filed** (new, open — clinicalData field-shape
-  residual gap, see above).
+- **`feature/docker-e2e-backend-integration`**: at `6bf225e2`, clean, up
+  to date with origin. Contains the merges of #520's fix (`51419e39`) and
+  #521's fix (`791230f7`).
+- No dangling branches from this session — both
+  `fix/520-vitest-path-alias` and
+  `fix/521-sample-integrity-clinical-data-parity` deleted locally and
+  remotely after clean merges.
+- Issues this session: **#520 closed**, **#521 closed** (both delivered
+  scope, merged at `6bf225e2`). **#522 filed** (new, open — Charlson
+  comorbidity data-loss bug in the real submission path).
+  **dyeallpies-skills-pack#234 filed** (new, open — pack-repo finding).
 
 ## Which issue is next
 
@@ -87,19 +97,14 @@ Dennis has not yet said which issue to pick up next session; per
 `handoff`'s "only if the user explicitly said so" rule, nothing is
 queued.
 
-Candidates carried forward (unchanged from prior handoff except #519's
-removal and #521's addition):
+Candidates carried forward (unchanged from prior handoff except #520/#521's
+removal and #522's addition):
 
-**#521** — new this session, see above. Needs a design call (does
-`buildSampleIntegrityInput`'s `clinicalData` need to track
-`buildClinicalData`'s exact shape, or is the variance acceptable?)
-before any code change — same "check docs first, then ask Dennis if
-docs don't settle it" pattern #519 used, since this is the direct
-sibling of that same design question.
-
-**#520** — `frontend/vitest.config.js` missing the `@` path alias
-`vite.config.js` defines. Small, mechanical fix (`resolve.alias` or
-`mergeConfig`), no design call needed.
+**#522** — new this session, see above. No design call needed; the fix
+shape is clear (align `buildSubmissionPayload`'s comorbidities output
+with what `buildClinicalData` reads), just needs picking up. Live bug,
+not cosmetic like #519/#521 were — probably worth prioritizing over the
+older backlog below.
 
 **skills-pack#233** — pack-repo only, low priority: fix the
 BioAvanceD-v2 overlay's per-iteration typecheck guidance
@@ -107,16 +112,19 @@ BioAvanceD-v2 overlay's per-iteration typecheck guidance
 which silently checks almost nothing) to point at `typecheck:full`
 instead.
 
+**skills-pack#234** — new this session, pack-repo only: add a
+data-flow-tracing rule to `resolve-issue`'s design-call section
+alongside the existing docs-enumeration rule.
+
 **#504** — the sealed-snapshot backfill script exists and is
 unit-tested, but has not been *run* against any live environment.
 Whoever next stands up a real Mongo instance with pre-#502 sample data
 should run `node src/scripts/backfillSealedSnapshotPins.js` once
 (idempotent, safe to re-run).
 
-**#390** — umbrella issue; #491/#493/#494/#495 all closed, both #517 and
-#518 (the #495 split-out remainder) are done, and #519 (found while
-investigating #495) is now also done. Worth a fresh look at whether #390
-itself should close or get a status comment.
+**#390** — umbrella issue; #491/#493/#494/#495 all closed, #517/#518/#519
+are done, #521 (this session) is now also done. Worth a fresh look at
+whether #390 itself should close or get a status comment.
 
 Other backlog carried forward unchanged from prior handoffs (not
 re-verified this session):
@@ -151,26 +159,29 @@ re-verified this session):
 
 ## Dev stack state
 
-Nothing started this session. All verification ran targeted `npx vitest
-run src/utils/sampleMerkleIntegrity.test.js` plus `npm run
-typecheck:full` (0 errors) from `frontend/` — no Docker, no live app, no
-full suite.
+Nothing started this session. All verification ran targeted
+`npx vitest run` on the specific touched test files (plus one manual
+alias-removal/restore cycle to prove #520's regression test actually
+catches the bug) and `npm run typecheck:full` (0 errors) from
+`frontend/` — no Docker, no live app, no full suite.
 
 ## Which skills to use
 
-- `work-issue` → `resolve-issue`: #519 was `bug`-labeled but its own body
-  named it dead/orphaned code needing a design call — verified the docs
-  didn't already settle the call before escalating to Dennis via
-  `AskUserQuestion`, rather than either assuming the label or silently
-  guessing an answer.
-- **New this session:** when a design call genuinely can't be resolved
-  from docs, `AskUserQuestion` with concrete options (not an open-ended
-  "what should I do?") got a fast, unambiguous answer — worth the pause
-  rather than picking a default and hoping.
-- **New this session:** when a fix is scoped as "mirror algorithm X,"
-  verify it actually would work end-to-end (traced what data the
-  algorithm would receive on both sides) rather than stopping at
-  "the hash functions now have the same shape." That check is what
-  surfaced #521 — the mirrored algorithm still receives differently-shaped
-  input data on each side, which a shallower verification would have
-  missed entirely.
+- `work-issue` → `resolve-issue`: same routing pattern as last session —
+  test-tooling config (#520) isn't `fix-bugs`' product-source territory;
+  a design-call-labeled issue (#521) still needs the docs-thoroughness
+  check before escalating to Dennis, even when a prior session already
+  established the pattern for its sibling issue (#519).
+- **New this session:** when tracing a design call's cost/scope to
+  present options to the user, a single literal-string grep for the
+  domain term ("charlson") is not enough to claim a capability "doesn't
+  exist" — field/dictionary names in this codebase don't always match
+  the domain term an issue uses. Trace the actual data pipeline (form
+  state → submission payload → backend field) before asserting absence.
+  Filed as dyeallpies-skills-pack#234 since it's a `resolve-issue`
+  gap, not a BioAvanceD-v2-specific one.
+- **New this session:** the wrong-absence-claim above also surfaced a
+  real, separate live bug (#522) purely as a side effect of tracing the
+  data flow to correct the mistake — reinforces that the broader trace
+  is worth doing even when the narrower grep would have "worked" for
+  the immediate question.
