@@ -269,7 +269,7 @@ describe('reports.routes.js gaps', () => {
       expect(capturedWashout.samples.$and).toEqual(
         expect.arrayContaining([
           { 'pharmacologyData.treatmentStatus': 'WASHOUT' },
-          { release_status: 'QUARANTINE' },
+          { specimenStatus: 'quarantined' },
         ])
       );
 
@@ -279,7 +279,7 @@ describe('reports.routes.js gaps', () => {
       });
       expect(blockedResponse.status).toBe(200);
       expect(capturedBlocked.samples.$and).toEqual(
-        expect.arrayContaining([{ release_status: 'BLOCKED' }])
+        expect.arrayContaining([{ specimenStatus: 'unavailable' }])
       );
     });
   });
@@ -442,7 +442,7 @@ describe('reports.routes.js gaps', () => {
     expect(capturedQueries.samples.$and).toEqual(
       expect.arrayContaining([
         { 'pharmacologyData.treatmentStatus': 'FOO_BAR' },
-        { release_status: 'BAZ_QUX' },
+        { specimenStatus: 'baz_qux' },
       ])
     );
   });

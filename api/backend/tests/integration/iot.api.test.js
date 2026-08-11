@@ -49,7 +49,6 @@ function buildDb() {
     storageLocation: { boxId: BOX_ID, position: 'A1' },
     status: 'AVAILABLE',
     currentStatus: 'Available',
-    release_status: 'AVAILABLE',
     availabilityStatus: 'AVAILABLE',
     quantity: 1,
     unit: 'mL',
@@ -277,11 +276,11 @@ describe('IoT API integration', () => {
     // #408 retired the legacy availabilityStatus field from Sample writes
     // (specimenStatus is the sole source of truth now) -- this assertion
     // was never updated when equipment-sensor-quarantine.service.js's
-    // write site migrated onto specimenStatus (part of #409).
+    // write site migrated onto specimenStatus (part of #409). #531 also
+    // retired the redundant release_status write from this same site.
     expect(update).toMatchObject({
       status: 'QUARANTINED',
       currentStatus: 'QUARANTINED',
-      release_status: 'QUARANTINE',
       specimenStatus: 'quarantined',
       quarantineReasonCode: 'COLD_CHAIN_INCIDENT',
       coldChainSensorKey: 'sensor-1',

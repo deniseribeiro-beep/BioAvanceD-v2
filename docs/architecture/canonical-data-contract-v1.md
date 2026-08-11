@@ -441,6 +441,56 @@ drift bug this enabled a fix for is resolved as a side effect —
 `specimenStatus` is the single write path now, so it cannot desync from
 itself.
 
+**Decision recorded 2026-08-11 (#531): `release_status`/`releaseStatus`
+was never part of the #389/#398/#399/#404/#405/#406/#408 consolidation
+above, despite representing the same physical/consent quarantine state
+`specimenStatus` already covers.** #531 was filed against
+`reports.routes.js` querying `release_status` (snake_case) while
+`SampleModel.create` only ever writes `releaseStatus` (camelCase) —
+tracing every writer of both spellings turned up more than a casing bug:
+
+- `equipment-sensor-quarantine.service.js`'s `release_status: 'QUARANTINE'`
+  write (and its matching `$ne` read guard) was a pure leftover — the
+  same `updateOne` call already sets `specimenStatus: 'quarantined'` via
+  #408, so `release_status` added nothing. Removed, not migrated (#531).
+- `frontend/src/views/SamplesPage.tsx`'s `handleAttachExternalDocument`
+  sent `release_status: 'AVAILABLE'` alongside the `specimenStatus:
+  'available'` it explicitly documents as the one that actually matters
+  (sticky-status comment, same file). Same leftover shape. Removed (#531).
+- `frontend/src/components/samples/SamplesPageView.tsx`'s `mapStatus`
+  (feeds the per-row status badge) was the one real consumer with no
+  `specimenStatus` fallback at all — unlike this same file's
+  `isQuarantined`/`renderSampleBadges`, which already treat
+  `specimenStatus` as primary. Fixed to match that existing pattern
+  (#531) — `models.ts`'s own field comment already named `specimenStatus`
+  as "the canonical status ... derive quarantine/availability UI state
+  from this", `mapStatus` just hadn't been updated to follow it.
+- `reports.routes.js`'s `buildSampleQuery` release/quarantine filter now
+  queries `specimenStatus` directly (AVAILABLE→`available`,
+  QUARANTINE→`quarantined`, BLOCKED→`unavailable` — the same collapse
+  this doc already used for the old `availabilityStatus` field, above).
+
+**Not resolved by #531, filed as #532:** `SampleGraphValidator.js#validateSampleCompliance`
+also writes `release_status` — but computes a genuinely different thing,
+an ethics+quality+clinical+pharmacology+integrity graph check
+(`AVAILABLE`/`QUARANTINE`/`BLOCKED`), not physical/consent quarantine
+state. It's called from 4 sites (`sample.routes.js`'s
+`GET /:id/compliance-graph`, both import services,
+`sampleComplianceSync.service.js`'s consent-triggered revalidation) and
+can drift from `releaseStatus`/`specimenStatus` independently of the
+casing bug (`sampleComplianceSync.service.js` updates `release_status`
+but never `releaseStatus`). Whether this becomes a new `specimenStatus`
+local extension, a new `QuarantineAction` reason code, or a genuinely
+separate canonical field is an open design question, same shape as the
+`actionStatus` gap above — #532 tracks it.
+
+**Also noted, filed separately as #533, not investigated:**
+`equipment-sensor-quarantine.service.js` also sets `status`/
+`currentStatus` in the same `updateOne` payload as `specimenStatus` —
+the same class of pre-#389 leftover duplicate `release_status` turned
+out to be, but unconfirmed (unlike `release_status`, no consumer has
+been traced yet).
+
 ### RcsAssessment
 
 - `specimenId` (reference to `Specimen`, not a duplicate — dict-07 row 38:

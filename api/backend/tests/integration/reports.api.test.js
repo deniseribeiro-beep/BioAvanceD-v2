@@ -408,7 +408,7 @@ describe('Reports API integration', () => {
           },
           { 'pharmacologyData.treatmentStatus': 'ON_TREATMENT' },
           { specimenId: { $in: ['SPEC-1'] } },
-          { release_status: 'AVAILABLE' },
+          { specimenStatus: 'available' },
         ])
       );
     });
