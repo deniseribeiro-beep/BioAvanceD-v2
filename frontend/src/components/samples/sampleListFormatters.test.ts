@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getStorageLabel, buildSprecSummary } from './sampleListFormatters';
+import { getStorageLabel, buildSprecSummary, buildSprecAxisSummary } from './sampleListFormatters';
 import type { SampleWithId } from '../../hooks/samples/useSamplesPage';
 import type { SampleStorageLocationDTO, SpecimenPreanalyticsProfile } from '../../types/models';
 
@@ -109,5 +109,48 @@ describe('buildSprecSummary', () => {
   it('reports N/A when the profile exists but has no code and no fields to derive one from', () => {
     const sample = makeSample({ currentSpecimenPreanalytics: makeProfile({ matrixType: 'fluid' }) });
     expect(buildSprecSummary(sample, t)).toBe('SPREC: N/A');
+  });
+});
+
+// #518: SampleDetailsPage's per-axis breakdown, sibling to buildSprecSummary
+// above — same currentSpecimenPreanalytics source, formatted as one
+// `Label:value` pair per axis instead of a single dash-joined code.
+describe('buildSprecAxisSummary', () => {
+  it('reports N/A for every axis when no currentSpecimenPreanalytics profile is resolved', () => {
+    expect(buildSprecAxisSummary(makeSample(), t)).toBe(
+      'Ppre:N/A | Pcent1:N/A | Pcent2:N/A | Ppost:N/A | Pstore:N/A',
+    );
+  });
+
+  it('reports the fluid axes from the generic axis fields', () => {
+    const sample = makeSample({
+      currentSpecimenPreanalytics: makeProfile({
+        matrixType: 'fluid',
+        preCentrifugation: '30',
+        centrifugation: '10',
+        secondCentrifugation: '5',
+        postCentrifugationDelay: '20',
+        longTermStorage: '-80C',
+      }),
+    });
+    expect(buildSprecAxisSummary(sample, t)).toBe(
+      'Ppre:30 | Pcent1:10 | Pcent2:5 | Ppost:20 | Pstore:-80C',
+    );
+  });
+
+  it('reports the solid-aliased canonical axes for a solid matrix profile', () => {
+    const sample = makeSample({
+      currentSpecimenPreanalytics: makeProfile({
+        matrixType: 'solid',
+        warmIschemiaTime: '15',
+        coldIschemiaTime: '45',
+        fixationStabilizationType: 'FORMALIN',
+        fixationTime: '24h',
+        longTermStorage: '-80C',
+      }),
+    });
+    expect(buildSprecAxisSummary(sample, t)).toBe(
+      'Pwarm:15 | Pcold:45 | Pfix:FORMALIN | PfixTime:24h | Pstore:-80C',
+    );
   });
 });
