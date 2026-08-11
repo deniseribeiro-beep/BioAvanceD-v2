@@ -754,6 +754,56 @@ describe('FHIR import staging', () => {
     expect(profile.fixationTime).toBe('24H');
   });
 
+  it('#527: registra campos de eixo "X" (não nulos) para amostra sólida em modo de processamento desconhecido', async () => {
+    const solidUnknownSignedBundle = {
+      resourceType: 'Bundle',
+      entry: [
+        {
+          resource: {
+            resourceType: 'Patient',
+            id: 'P-SOLID-UNK-527',
+            name: [{ text: 'Paciente Sólido Desconhecido 527' }],
+            identifier: [{ system: 'cpf', value: '52752752753' }],
+          },
+        },
+        {
+          resource: {
+            resourceType: 'Consent',
+            id: 'C-SOLID-UNK-527',
+            status: 'active',
+            patient: { reference: 'Patient/P-SOLID-UNK-527' },
+          },
+        },
+        {
+          resource: {
+            resourceType: 'Specimen',
+            id: 'S-SOLID-UNK-527',
+            subject: { reference: 'Patient/P-SOLID-UNK-527' },
+            type: { text: 'TECIDO' },
+            extension: [
+              { url: 'urn:bioavanced:matrix', valueString: 'Tecido' },
+              { url: 'urn:bioavanced:processing-unknown', valueBoolean: true },
+            ],
+          },
+        },
+      ],
+    };
+
+    const staged = await fhirImportStagingService.stageBundle(db, solidUnknownSignedBundle, { fileName: 'bundle-solid-unk.json' });
+    await fhirImportStagingService.commitBatch(db, staged.batch._id);
+
+    const profile = db.collections.specimenPreanalytics.docs[0];
+    expect(profile.specimenId).toBe('S-SOLID-UNK-527');
+    expect(profile.matrixType).toBe('solid');
+    // buildRcsPayload's unknownSolid placeholder (processingUnknown branch) has
+    // the same generic-axis-name requirement as parseSprecRaw's solid branch —
+    // its axis 3-6 fields are the literal code 'X', not null.
+    expect(profile.warmIschemiaTime).toBe('X');
+    expect(profile.coldIschemiaTime).toBe('X');
+    expect(profile.fixationStabilizationType).toBe('X');
+    expect(profile.fixationTime).toBe('X');
+  });
+
   it('rejeita staging quando banco de dados não está disponível', async () => {
     await expect(
       fhirImportStagingService.stageBundle(null, signedBundle, { fileName: 'bundle.json' })
