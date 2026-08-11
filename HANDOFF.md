@@ -1,90 +1,113 @@
 # HANDOFF
 
 **Written:** 2026-08-11, end of session on `feature/docker-e2e-backend-integration`,
-after resolving #496.
+after resolving #526.
 
 ## What happened this session
 
-Dennis said "Read handoff" (summarized the prior session's state), then
-**"Pick #496"**.
+Dennis said "Read handoff and pick next task" — no specific issue named.
+The prior handoff flagged **#526** as the freshest, most concretely
+scoped candidate (mirrors #524's fix shape almost exactly), so
+`work-issue` routed it to **`build-loop`** (route 4: names a capability
+missing from the code entirely, needs the product fix built together
+with the real-backend test proving it).
 
-`work-issue` routed #496 to **`resolve-issue`** (route 6, the default):
-the issue was labeled `enhancement` only, and its body explicitly asked
-for a per-file audit — check whether each of 14 named files still reads
-`Sample`'s embedded RCS/SPREC/storage-custody fields directly or is
-already covered by #491-#495, closing duplicates as already-covered
-rather than doing redundant work. That's board-hygiene/audit work, not
-a defect, coverage gap, or unbuilt capability.
+**#526 resolved this session** (`test/526-fhir-import-staging-rcs-sprec-wiring`,
+merge commit `29d8dd6a`, fix commit `2a8fee9d`). Mirrored #492/#502/#503/
+#505/#524's established pattern: `fhir-import-staging.service.js#commitBatch`
+now calls `rcsAssessmentService.recordAssessment`/
+`specimenPreanalyticsService.recordProfile` and pins
+`sealedRcsAssessmentId`/`sealedSpecimenPreanalyticsId` on the committed
+sample — but **only on a genuine insert** (the upsert's `upsertedId`),
+since this path uses `updateOne(..., {upsert: true})` rather than a
+plain `insertOne` like the other four creation paths, and a commit that
+only matches an already-existing `specimenId` doesn't write fresh
+`rcsPreview`/`sprec` data via `$setOnInsert` either — recording on every
+match would grow duplicate versioned snapshots for no reason. Two new
+real-backend (mocked-Mongo-with-real-matching-semantics) tests added to
+`tests/integration/fhir-import.test.js` proving both the insert-time
+recording and the no-duplicate-on-rematch behavior.
 
-**#496 resolved this session** (`test/496-canonical-contract-legacy-audit`,
-merge commit `4c6796b5`, fix commit `9e64b954`). Audited all 14 files
-against current code and #491/#493/#494's own (already-closed) consumer
-lists:
+**One bundled root-cause fix, discovered while writing the proving
+test:** `calculateRcsPreview` computed a real per-axis `sprec` object
+(via `buildRcsPayload`) but discarded it before returning —
+`rcs-certification.service.js`'s own `calculation_trace` never echoed it
+back — so the pre-existing `sprec: normalized.rcsPreview?.calculation_trace?.sprec
+|| {}` write had *always* evaluated to `{}` for every FHIR-imported
+sample, predating #526 entirely. Fixed by having `calculateRcsPreview`
+return `{ ...result, sprec: payload.sprec }`; both the embedded
+`sample.sprec` copy and the new `SpecimenPreanalytics` snapshot now
+carry real data, for fluid-matrix specimens. Kept in-scope for #526
+(not split out) because it directly blocked #526's own acceptance
+criteria — recording an empty snapshot wouldn't have proven anything.
 
-- **Confirmed clean, no migration needed:** `sample.routes.js` (fully
-  migrated onto `MongoStorageRepository`/`specimenPreanalyticsService`
-  per #517), `analysisValidation.service.js` (uses the canonical
-  `SampleModel.resolveSpecimenStatus` accessor), `consent.validator.js`,
-  `hl7.service.js`, `sampleComplianceSync.service.js`,
-  `fhir-validator.service.js`, `fhir.service.js` — all touch only
-  already-canonical fields.
-- **Already tracked elsewhere:** `intakeWizard.routes.js` (storage/status
-  fields — already in #494's own consumer scope), `import.controller.js`
-  (its direct RCS/SPREC writes are moot pending #336's still-open "is
-  this endpoint dead code" question — no new issue filed for it).
-- **Newly found, missed by #491/#493/#494's original audit — filed as
-  #525:** `label.routes.js` (direct `sample.sprec`/`sample.locationID`
-  reads), `reports.routes.js` (queries `sprec.*`/`final_grade` directly
-  as Mongo filter keys), `api/backend/scripts/neo4j-canonical-rebuild.js`
-  (reads `sample.rcsScore` directly — the actual outstanding "neo4j
-  canonical projection" consumer the doc's own prose anticipated;
-  `neo4jCanonicalProjection.service.js`, the *live* service, was
-  confirmed clean), `batch-validation-engine.service.js` (legacy
-  `locationID` column mapping).
-- **Newly found, a genuine missing-wiring gap (not just a legacy read) —
-  filed as #526:** `fhir-import-staging.service.js`'s staged-sample
-  commit path (`~lines 894-954`) is a fifth live sample-creation path
-  that writes `sprec`/`rcs_score`/`final_grade`/... straight onto the new
-  `samples` document but never calls `rcsAssessmentService.recordAssessment`/
-  `specimenPreanalyticsService.recordProfile` or pins
-  `sealedRcsAssessmentId`/`sealedSpecimenPreanalyticsId` — the same gap
-  #492/#502/#503/#505/#524 already closed for the other four creation
-  paths (`sample.service.js`, `import.service.js`,
-  `import-lgpd.service.js`, `intakeWizard.js`).
+**Filed #527** (not fixed): solid-matrix specimens still record a
+`SpecimenPreanalytics` snapshot with null axis fields — `parseSprecRaw`'s
+solid branch names its fields `collectionType`/`warmIschemia`/
+`coldIschemia`/`fixationType`/`fixationTime`, while
+`SpecimenPreanalyticsModel.fieldsOf` (and the fluid branch) expect
+`primaryContainer`/`preCentrifugation`/`centrifugation`/
+`secondCentrifugation`/`postCentrifugationDelay` regardless of matrix
+type. Same shape as #392's already-resolved fluid/solid relabeling gap;
+likely fix is wiring `frontend/src/constants/sprecDictionary.js`'s
+existing dictionaries in, not new parsing. Kept out of #526 to keep that
+slice narrow.
 
-Recorded all of the above as dated `#496` notes directly in
-`docs/architecture/canonical-data-contract-v1.md`'s `RcsAssessment`,
-`SpecimenPreanalytics`, and `Known Residual Legacy Surfaces` sections
-(the last one explicitly marked as historical/stale, superseded by
-#496's own corrected 14-file list). Closed #496 with a summary comment
-listing every file's disposition and both new issue numbers.
+**Two more issues filed from an unrelated full-suite sanity check**
+(`npx vitest run`, no directory scope, run twice this session — both
+runs reproduced the same two failures, not flaky):
+- **#528** — `tests/unit/user.model.unit.test.js` fails 6/6 with
+  `UserModel.isValidAccessType`/`getRoleName is not a function`. Both
+  methods are gone from `UserModel` (removed by #432, "drop
+  accessType/roleName fields... sweep remaining references") but this
+  test file wasn't swept. Stale-test shape, not a regression — likely
+  routes to `fix-bugs` with the "update the test, don't restore the
+  method" direction, possibly repointing at
+  `rbac-assignment.service.resolveRoleDisplayName` per #427's precedent.
+- **#529** — `tests/unit/scripts/generate-dictionary-catalog.test.js`'s
+  source-vs-artifact drift check fails: a freshly generated catalog
+  checksum doesn't match the checked-in canonical-dictionary artifact's
+  stored checksum. Not investigated further; possibly related to #391
+  (line-ending drift on the same file) but that was a git-status-noise
+  fix, not a content mismatch, so likely a separate cause.
 
-**No product code changed this session** — doc-only, so no test suite
-was run (nothing to run against).
+Neither #528 nor #529 matches #489's tracked symptom shape (JWT/
+encryption-secret failures at ~89-file scale) — confirmed by reading
+#489's own body before filing, so these are new, not duplicates.
 
-**One workflow-tooling finding, filed against the skills-pack repo (not
-this one):** `$TMPDIR` is unset in this machine's Bash-tool Git Bash
-session — a heredoc write to `"$TMPDIR/foo.md"` silently collapsed to
-an MSYS-root-relative path and failed with a misleading "permission
-denied" / "file not found" pair, costing one wasted call before the
-cause was clear. Filed as `DyeAllPies/dyeallpies-skills-pack#237`
-(worked around by using the Write tool with the session's actual
-scratchpad path instead — same fix shape `dennis-windows`'s existing
-`mktemp`/tmp-path entries already prescribe, just not yet documented for
-the `$TMPDIR` case specifically). Could not edit `dennis-windows`
-directly per Rule 0 (only editable from a session in the pack repo
-itself).
+**One workflow-tooling finding, filed against the skills-pack repo**
+(`DyeAllPies/dyeallpies-skills-pack#238`): `tests/integration/fhir-import.test.js`'s
+local hand-rolled `createCollection()` mock didn't replicate two real
+MongoDB driver behaviors product code across this repo depends on —
+`insertOne` mutating the passed-in doc in place to add `_id` (the mock
+returned a detached copy instead, so `rcsAssessmentService.recordAssessment`'s
+return value's `._id` read back `undefined`), and `updateOne(...,
+{upsert:true})` returning `upsertedId` on a genuine insert (the mock
+always returned a flat `{matchedCount:1, modifiedCount:1}`, giving
+product code no way to distinguish insert from match). Fixed locally in
+that one test file (commit `2a8fee9d`); filed for the pack's
+`vitest-specs` BioAvanceD-v2 overlay since other local (non-`db.factory.js`)
+collection mocks in this repo could have the same gap. Could not edit
+the overlay directly per Rule 0 (only editable from a session in the
+pack repo itself).
 
-**No security-relevant findings this session** — pure doc audit, no code
-or auth surface touched.
+**Also fixed while adding the two new tests:** the pre-existing "commit
+salva somente registros READY_TO_COMMIT" test's `samples.updateOne`
+call-count assertion (was 1, now 3 — the main upsert plus the two new
+sealed-id pins) — updated in the same commit, not a separate finding.
+
+**No security-relevant findings this session** — the new recording calls
+reuse the same best-effort, internal-only write path every other
+creation path already uses; no new route, no relaxed validator, no
+trust-boundary change.
 
 ## Repo state
 
-- **`feature/docker-e2e-backend-integration`**: at `4c6796b5`, clean, up
-  to date with origin. Contains the merge of #496's doc update.
+- **`feature/docker-e2e-backend-integration`**: at `29d8dd6a`, clean, up
+  to date with origin. Contains the merge of #526's fix.
 - No dangling branches from this session's own work
-  (`test/496-canonical-contract-legacy-audit` deleted locally post-merge;
-  never pushed on its own).
+  (`test/526-fhir-import-staging-rcs-sprec-wiring` deleted locally
+  post-merge; never pushed on its own).
 - **Pre-existing dangling branches, not touched this session** (carried
   forward unchanged): local — `fix/476-quarantine-status-design-call`,
   `fix/477-bulk-import-storage-allocation`,
@@ -103,68 +126,87 @@ or auth surface touched.
   `fix/349-user-organization-picker` (still present as of last check via
   `git ls-remote`; deletion denied by the permission classifier in the
   #349 session, not re-attempted since).
-- Issues this session: **#496 closed** (audited, doc updated, merged at
-  `4c6796b5`). **#525 opened** (4 missed RCS/SPREC/storage-custody
-  consumers: `label.routes.js`, `reports.routes.js`,
-  `neo4j-canonical-rebuild.js`, `batch-validation-engine.service.js`).
-  **#526 opened** (`fhir-import-staging.service.js`'s commit path missing
-  RcsAssessment/SpecimenPreanalytics wiring — same shape as #524, a real
-  build-loop candidate). **skills-pack#237 opened** against
-  `DyeAllPies/dyeallpies-skills-pack` (the `$TMPDIR` tooling finding
-  above — not a BioAvanceD-v2 issue).
+- Issues this session: **#526 closed** (fix + real-backend tests merged
+  at `29d8dd6a`). **#527 opened** (solid-matrix SpecimenPreanalytics
+  field-naming mismatch, same shape as #392). **#528 opened** (stale
+  `UserModel.isValidAccessType`/`getRoleName` test, methods removed by
+  #432). **#529 opened** (dictionary-catalog checksum drift).
+  **skills-pack#238 opened** against `DyeAllPies/dyeallpies-skills-pack`
+  (Mongo mock `insertOne`/`updateOne` semantics finding — not a
+  BioAvanceD-v2 issue).
 
 ## Which issue is next
 
 Dennis has not yet said which issue to pick up next session; per this
 skill's "only if the user explicitly said so" rule, nothing is queued.
 
-Candidates carried forward from the prior handoff, plus this session's
-two new issues:
+Candidates carried forward from prior handoffs, plus this session's new
+issues:
 
-- **#526** — `fhir-import-staging.service.js` missing RcsAssessment/
-  SpecimenPreanalytics wiring on staged-sample commit. Freshest, most
-  concretely scoped (mirrors #524 almost exactly) — likely routes to
-  `build-loop` the same way #524 did.
+- **#528** — stale `UserModel` test, methods removed by #432. Small,
+  clearly-scoped, likely a quick `fix-bugs` pickup.
+- **#529** — dictionary-catalog checksum drift. Needs investigation
+  first (re-run the generator, diff against the checked-in artifact) —
+  root cause unknown.
+- **#527** — solid-matrix `SpecimenPreanalytics` field-naming mismatch.
+  Same shape as the already-resolved #392 — check
+  `sprecDictionary.js`'s existing relabeling before writing new mapping
+  logic.
 - **#525** — 4 additional RCS/SPREC/storage-custody consumers found by
-  #496's re-audit. Likely routes to `resolve-issue`/a small migration
-  slice per file, same shape as #491/#493/#494.
+  #496's re-audit (`label.routes.js`, `reports.routes.js`,
+  `neo4j-canonical-rebuild.js`, `batch-validation-engine.service.js`).
+  Likely routes to `resolve-issue`/a small migration slice per file.
 - **#390** — umbrella; all originally-tracked sub-issues closed, plus
-  #496 (audit) now also closed. Still not re-assessed whether it should
-  close or get a status comment — carrying forward again, now with two
-  fresh children (#525/#526) that may want to hang off it too.
-- **#489** — full-suite vitest flakiness, open, not re-confirmed.
+  #496 (audit) and now #526 also closed. Still not re-assessed whether
+  it should close or get a status comment — carrying forward again, now
+  with #525/#527/#528/#529 as candidates that may want to hang off it,
+  or not, depending on scope.
+- **#489** — full-suite vitest flakiness (JWT/encryption-secret failure
+  shape, ~89 files), open, not re-confirmed. Distinct from this
+  session's #528/#529 — don't conflate.
 - **#386** — RBAC still keyed on `accessType`/`roleName` per dict-07,
   open, not re-triaged this session.
 - **#336** — still open: is `import.controller.js#importFhirBundle`
-  (the synchronous "mantido para compatibilidade" FHIR import endpoint)
-  dead code to remove, or does something still call it? #496's audit
-  found it also writes legacy RCS/SPREC fields directly, but didn't
-  investigate the dead-code question itself — that's still #336's job.
+  dead code to remove, or does something still call it?
 - Older backlog, unchanged: `#371`/`#373`/`#374`/`#378`/`#379`, `#368`,
   next e2e slice per `E2E_TRACEABILITY_PLAN.md`/`#331`.
-- **skills-pack#233/#234/#235/#236/#237** — pack-repo only, low
-  priority, unchanged (plus this session's new #237).
+- **skills-pack#233/#234/#235/#236/#237/#238** — pack-repo only, low
+  priority, unchanged (plus this session's new #238).
 
 ## Dev stack state
 
-Nothing started this session. Doc-only change (audit + `.md` edits) —
-no code touched, so no native/Docker verification was applicable.
+Nothing started this session. `build-loop`'s "real backend" proof bar
+for a backend-internal slice (not the milestone's own e2e Playwright
+spec) is a mocked-Mongo integration test with real query-matching
+semantics, not literal Docker — matches what
+`tests/integration/fhir-import.test.js` already does. No Docker/live-DB
+needed or used this session.
 
 ## Which skills to use
 
-- `work-issue` → `resolve-issue` (route 6) is the right route for a
-  labeled-`enhancement`, audit-shaped issue with no bug/test/build
-  signal — worked cleanly, no misroute.
-- `gh issue list --search "<keyword>" --state all` before filing any new
-  issue paid off twice this session: found `#336` already covering
-  `import.controller.js`'s dead-code question (avoided a duplicate
-  migration issue for it) and confirmed no prior issue existed for the
-  `fhir-import-staging.service.js` gap or the four #525 files before
-  filing.
-- Confirmed again: a fix/audit branch only merged locally (never pushed
-  on its own) needs no remote branch-delete step — same pattern prior
-  handoffs already tracked.
-- New this session: `$TMPDIR` is unset in this machine's Bash-tool Git
-  Bash session — don't use it in heredocs; use the session scratchpad
-  path directly instead (see `skills-pack#237` above, and `dennis-windows`
-  once that issue lands there).
+- `work-issue` → `build-loop` (route 4) was correct for #526 — a
+  capability named in an issue but missing from the code entirely,
+  proven with a real-backend test built alongside the fix. No misroute.
+- **New this session:** when a build-loop slice's proving test exposes a
+  second, smaller bug the fix's own test can't pass meaningfully without
+  fixing (here: `calculateRcsPreview` discarding the `sprec` object it
+  already computed) — fix it in the same commit rather than shipping a
+  technically-passing-but-empty snapshot, but stop there: a deeper,
+  separate-judgment-call issue found in the same area (the solid/fluid
+  field-naming mismatch) still gets its own issue rather than expanding
+  the slice further. The line: fix what's needed to make *this* slice's
+  own acceptance criteria real; file what would require its own design
+  call.
+- **New this session:** before trusting a hand-rolled Mongo collection
+  mock's `insertOne`/`updateOne` return values in a test file that
+  doesn't use the shared `tests/factories/db.factory.js`, check whether
+  it replicates the real driver's `insertOne`-mutates-in-place and
+  `updateOne`-returns-`upsertedId`-on-insert behaviors — confirmed via
+  skills-pack#238 this mismatch costs real debugging time and the
+  in-memory-mock convention this repo's build-loop overlay already
+  prescribes.
+- Confirmed again: a fix/build branch only merged locally (never pushed
+  on its own) needs no remote branch-delete step.
+- `gh issue list --search "<keyword>" --state all` before filing paid
+  off four times this session (#527/#528/#529, and re-checking #489's
+  own body before concluding #528/#529 were new, not duplicates).
