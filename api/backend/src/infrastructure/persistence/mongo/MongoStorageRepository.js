@@ -726,6 +726,64 @@ class MongoStorageRepository {
   }
 
   /**
+   * Batched form of getSampleStorageLocation for a page of already-fetched
+   * sample documents (#517, SamplesPageView list view): one storagePaths
+   * query across every referenced boxId instead of one getSampleStorageLocation
+   * call per row, keyed by specimenId string for O(1) attachment by callers.
+   * Same resolution source as getSampleStorageLocation (the dual-written
+   * sample.storageLocation embedded field, not the storageAssignments
+   * collection) so the two stay consistent.
+   * @param {Array<{_id: any, barcode?: string, storageLocation?: any}>} samples
+   * @returns {Promise<Map<string, object|null>>}
+   */
+  async resolveStorageLocationsForSamples(samples) {
+    const storagePathsCollection = this.db.collection('storagePaths');
+
+    const boxIds = samples
+      .map((sample) => sample?.storageLocation?.boxId)
+      .filter(Boolean)
+      .map((boxId) => this.toObjectId(boxId));
+
+    const paths = boxIds.length
+      ? await storagePathsCollection.find({ boxId: { $in: boxIds } }).toArray()
+      : [];
+    const pathByBoxId = new Map(paths.map((path) => [String(path.boxId), path]));
+
+    const result = new Map();
+    for (const sample of samples) {
+      const key = String(sample._id);
+      if (!sample?.storageLocation?.boxId) {
+        result.set(key, null);
+        continue;
+      }
+
+      const storagePath = pathByBoxId.get(String(sample.storageLocation.boxId)) || null;
+      result.set(key, {
+        specimenId: sample._id,
+        barcode: sample.barcode,
+        box: {
+          boxId: sample.storageLocation.boxId,
+          boxName: sample.storageLocation.boxName || null,
+          position: sample.storageLocation.position
+        },
+        locationID: sample.storageLocation.locationID || null,
+        readable: sample.storageLocation.readable || null,
+        path: storagePath?.path || 'N/A',
+        fullHierarchy: storagePath
+          ? {
+              freezerId: storagePath.freezerId,
+              shelfId: storagePath.shelfId,
+              rackId: storagePath.rackId,
+              boxId: storagePath.boxId
+            }
+          : null
+      });
+    }
+
+    return result;
+  }
+
+  /**
    * @param {{ query: string }} input
    */
   async searchAllocatableSampleCandidates(input) {

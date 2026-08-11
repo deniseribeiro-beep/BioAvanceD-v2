@@ -358,10 +358,22 @@ router.get('/', authenticate, async (req, res) => {
 
     const result = await sampleService.listSamples(db, filters);
 
+    // #517: resolve current storage location + SPREC profile per sample,
+    // batched (one query per collection across the whole page, not one
+    // per row) so the list view doesn't have to read the legacy embedded
+    // shape or make N per-sample follow-up requests.
+    const MongoStorageRepository = require('../../infrastructure/persistence/mongo/MongoStorageRepository');
+    const specimenPreanalyticsService = require('../../services/specimen-preanalytics.service');
+    const storageRepository = new MongoStorageRepository(db);
+    const [storageLocationsBySampleId, currentProfilesBySpecimenId] = await Promise.all([
+      storageRepository.resolveStorageLocationsForSamples(result.samples),
+      specimenPreanalyticsService.getCurrentProfilesForSpecimens(db, result.samples)
+    ]);
+
     // Enriquecer amostras com informação de consentimento
     const patientConsentsCollection = await getCollection(db, 'consents');
     const patientsCollection = await getCollection(db, 'patients');
-    
+
     const enrichedSamples = await Promise.all(result.samples.map(async (sample) => {
       let consentValid = false;
       let consentMessage = '';
@@ -400,7 +412,9 @@ router.get('/', authenticate, async (req, res) => {
         consentMessage,
         canUse,
         consentReasonCode: patient ? (consentValid ? null : 'NO_ACTIVE_CONSENT') : 'PATIENT_NOT_FOUND',
-        consentStatus: consentValid ? 'CONSENT_ACTIVE' : 'CONSENT_PENDING'
+        consentStatus: consentValid ? 'CONSENT_ACTIVE' : 'CONSENT_PENDING',
+        resolvedStorageLocation: storageLocationsBySampleId.get(String(sample._id)) || null,
+        currentSpecimenPreanalytics: currentProfilesBySpecimenId.get(String(sample.specimenId || '')) || null
       };
     }));
 

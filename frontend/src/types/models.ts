@@ -209,6 +209,35 @@ export interface SampleStorageLocationDTO {
   } | null;
 }
 
+// dict-02 SpecimenPreanalytics (ELM-0145+, #388): one versioned SPREC
+// snapshot, as persisted by specimen-preanalytics.service.js and returned
+// by GET /:id/sprec-profiles (newest first) — mirrors the generic axis
+// slots (preCentrifugation/centrifugation/secondCentrifugation/
+// postCentrifugationDelay, populated regardless of matrixType) plus their
+// solid-matrix canonical aliases (warmIschemiaTime/coldIschemiaTime/
+// fixationStabilizationType/fixationTime) used to build a display summary.
+export interface SpecimenPreanalyticsProfile {
+  _id?: string;
+  specimenId: string;
+  matrixType: 'fluid' | 'solid' | string | null;
+  sampleType?: string | null;
+  primaryContainer?: string | null;
+  preCentrifugation?: string | null;
+  centrifugation?: string | null;
+  secondCentrifugation?: string | null;
+  postCentrifugationDelay?: string | null;
+  longTermStorage?: string | null;
+  sprecCode?: string | null;
+  sprecVersion?: string | null;
+  warmIschemiaTime?: string | null;
+  coldIschemiaTime?: string | null;
+  fixationStabilizationType?: string | null;
+  fixationTime?: string | null;
+  profileStatus?: string;
+  recordedAt?: Date | string;
+  createdAt?: Date | string;
+}
+
 export interface Sample {
   _id?: string; // MongoDB ID
   participantId: string;
@@ -298,6 +327,15 @@ export interface Sample {
   // (POST de criação); GET /samples/:id ainda não o resolve (ver #495 no
   // dict-07/dict-08 tracking).
   storageAssignment?: StorageAssignmentRecord | null;
+  // GET /samples (list view) only (#517) — batched, per-row resolution of
+  // the same shape GET /storage/sample/:sampleId returns, so SamplesPageView
+  // doesn't have to read storageLocation above directly nor make one
+  // follow-up request per row.
+  resolvedStorageLocation?: SampleStorageLocationDTO | null;
+  // GET /samples (list view) only (#517) — the sample's current SPREC
+  // snapshot (sealedSpecimenPreanalyticsId-pinned if set, else newest),
+  // batched the same way as resolvedStorageLocation above.
+  currentSpecimenPreanalytics?: SpecimenPreanalyticsProfile | null;
   // Soft delete fields
   deleted?: boolean;
   deletedAt?: Date | string;
