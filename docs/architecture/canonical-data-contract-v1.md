@@ -728,6 +728,36 @@ staging-preview object on `import_staging_records`, a different
 collection from `samples`) were already covered by the "out of #408's
 scope" note above and remain unaffected.
 
+**Landed in #526 (2026-08-11):** `commitBatch`'s upsert into `samples`
+now records both snapshots — but only on a genuine insert (the upsert's
+`upsertedId`, i.e. the `$setOnInsert` branch actually fired), not on a
+commit that only matches an already-existing `specimenId`, since the
+latter doesn't write fresh `rcsPreview`/`sprec` data via `$setOnInsert`
+either; recording on every match would grow duplicate versioned
+snapshots for no reason. Same best-effort semantics as
+#492/#502/#503/#505/#524 (caught, logged, doesn't fail the commit).
+**Incidental fix bundled into the same slice:** `calculateRcsPreview`
+computed a real per-axis `sprec` object (via `buildRcsPayload`) but
+discarded it before returning — `rcs-certification.service.js`'s own
+`calculation_trace` never echoed it back, so the pre-existing
+`sprec: normalized.rcsPreview?.calculation_trace?.sprec || {}` write at
+the `$setOnInsert` site had *always* evaluated to `{}` for every
+FHIR-imported sample, predating #526. Fixed by having
+`calculateRcsPreview` return `{ ...result, sprec: payload.sprec }` and
+threading that onto `normalized.rcsPreview.sprec`; both the embedded
+`sample.sprec` copy and the new `SpecimenPreanalytics` snapshot now
+carry real data for fluid-matrix specimens. **Not fixed in this slice,
+filed as `#527`:** `parseSprecRaw`'s solid-matrix branch names its axis
+fields `collectionType`/`warmIschemia`/`coldIschemia`/`fixationType`/
+`fixationTime`, while `SpecimenPreanalyticsModel.fieldsOf` (and the
+fluid branch) expect `primaryContainer`/`preCentrifugation`/
+`centrifugation`/`secondCentrifugation`/`postCentrifugationDelay`
+regardless of matrix type — so a solid-matrix FHIR import still records
+a `SpecimenPreanalytics` snapshot with null axis fields even after this
+fix. Same shape as #392's already-resolved fluid/solid relabeling gap;
+`frontend/src/constants/sprecDictionary.js`'s dictionaries are the
+likely fix per that precedent, not new parsing.
+
 ### Consent
 
 - `consentId` (internal identity of the consent instance, distinct from

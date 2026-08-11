@@ -6,6 +6,8 @@ const qualityDomain = require('./quality-domain.service');
 const logger = require('../utils/logger');
 const { SampleModel } = require('../models/Sample');
 const quarantineActionService = require('./quarantine-action.service');
+const rcsAssessmentService = require('./rcs-assessment.service');
+const specimenPreanalyticsService = require('./specimen-preanalytics.service');
 
 const STATUS = Object.freeze({
   VALID: 'VALID',
@@ -224,7 +226,13 @@ function buildRcsPayload({ sampleType, matrix, sprecsRaw, processingUnknown }) {
 
 function calculateRcsPreview({ sampleType, matrix, sprecsRaw, processingUnknown }) {
   const payload = buildRcsPayload({ sampleType, matrix, sprecsRaw, processingUnknown });
-  return qualityDomain.resolveMethodologicalQuality(payload);
+  const result = qualityDomain.resolveMethodologicalQuality(payload);
+  // #526: the per-axis sprec object computed above is the input the RCS
+  // certification ran against, but rcs-certification.service.js's own
+  // calculation_trace never echoes it back — pass it through separately so
+  // callers (the embedded sample.sprec copy, and the SpecimenPreanalytics
+  // snapshot recorded on commit) have real data instead of always `{}`.
+  return { ...result, sprec: payload.sprec };
 }
 
 function consentIsSigned(consent = {}) {
@@ -503,6 +511,7 @@ function normalizeSpecimen(specimen, index, bundleIndex) {
         grade_route: rcsPreview.grade_route,
         axis_penalties: rcsPreview.axis_penalties || [],
         calculation_trace: rcsPreview.calculation_trace || {},
+        sprec: rcsPreview.sprec || {},
       },
       consentSigned,
     },
@@ -919,7 +928,7 @@ async function commitBatch(db, batchIdRaw) {
     const existingSample = await samples.findOne({ specimenId: normalized.specimenId });
     const wasQuarantined = existingSample ? SampleModel.resolveSpecimenStatus(existingSample) === 'quarantined' : false;
 
-    await samples.updateOne(
+    const upsertResult = await samples.updateOne(
       { specimenId: normalized.specimenId },
       {
         $setOnInsert: {
@@ -927,7 +936,7 @@ async function commitBatch(db, batchIdRaw) {
           participantId: normalized.participantId,
           sampleType: normalized.sampleType,
           collectionDate: normalized.collectionDate,
-          sprec: normalized.rcsPreview?.calculation_trace?.sprec || {},
+          sprec: normalized.rcsPreview?.sprec || {},
           rcs_score: normalized.rcsPreview?.rcs_score ?? null,
           final_grade: normalized.rcsPreview?.final_grade || '',
           p_bio: normalized.rcsPreview?.p_bio ?? null,
@@ -954,6 +963,42 @@ async function commitBatch(db, batchIdRaw) {
     );
 
     const committedSample = await samples.findOne({ specimenId: normalized.specimenId });
+
+    // #526: mirrors sample.service.js's #492/#524 pins — only recorded for a
+    // genuine insert (the $setOnInsert branch above, signaled by
+    // upsertedId), since a commit that only matches an already-existing
+    // sample doesn't write fresh rcsPreview/sprec data via $setOnInsert and
+    // would otherwise grow duplicate versioned snapshots on every re-commit
+    // that touches the same specimenId. Best-effort, same as every other
+    // creation path: a failure here doesn't roll back the commit.
+    if (upsertResult?.upsertedId && committedSample) {
+      if (normalized.rcsPreview) {
+        try {
+          const assessment = await rcsAssessmentService.recordAssessment(db, normalized.specimenId, normalized.rcsPreview);
+          await samples.updateOne(
+            { _id: committedSample._id },
+            { $set: { sealedRcsAssessmentId: assessment._id } }
+          );
+          committedSample.sealedRcsAssessmentId = assessment._id;
+        } catch (assessmentError) {
+          logger.error('Falha ao registrar RcsAssessment para a amostra importada via FHIR:', assessmentError.message || assessmentError);
+        }
+      }
+
+      const sprec = normalized.rcsPreview?.sprec;
+      if (sprec) {
+        try {
+          const profile = await specimenPreanalyticsService.recordProfile(db, normalized.specimenId, sprec);
+          await samples.updateOne(
+            { _id: committedSample._id },
+            { $set: { sealedSpecimenPreanalyticsId: profile._id } }
+          );
+          committedSample.sealedSpecimenPreanalyticsId = profile._id;
+        } catch (profileError) {
+          logger.error('Falha ao registrar SpecimenPreanalytics para a amostra importada via FHIR:', profileError.message || profileError);
+        }
+      }
+    }
     if (committedSample) {
       if (specimenStatus === 'quarantined' && !wasQuarantined) {
         await quarantineActionService.recordAction(db, {
