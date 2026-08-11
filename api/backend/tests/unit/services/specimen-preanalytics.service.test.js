@@ -7,6 +7,7 @@ const {
   getProfilesForSpecimen,
   getProfileById,
   getCurrentProfilesForSpecimens,
+  findSpecimenIdsWithCurrentProfileMatching,
 } = require('../../../src/services/specimen-preanalytics.service');
 
 /**
@@ -182,6 +183,40 @@ describe('specimen-preanalytics.service', () => {
       const result = await getCurrentProfilesForSpecimens(db, []);
 
       expect(result.size).toBe(0);
+    });
+  });
+
+  describe('findSpecimenIdsWithCurrentProfileMatching', () => {
+    it('matches on the newest profile per specimenId, not a stale earlier one (#525)', async () => {
+      const db = createFakeDb();
+      await recordProfile(db, 'SPEC-1', { matrixType: 'fluid', recordedAt: '2026-01-01' });
+      await recordProfile(db, 'SPEC-1', { matrixType: 'solid', recordedAt: '2026-06-01' });
+      await recordProfile(db, 'SPEC-2', { matrixType: 'fluid', recordedAt: '2026-03-01' });
+
+      const solidMatches = await findSpecimenIdsWithCurrentProfileMatching(db, { matrixType: 'solid' });
+      const fluidMatches = await findSpecimenIdsWithCurrentProfileMatching(db, { matrixType: 'fluid' });
+
+      expect(solidMatches).toEqual(['SPEC-1']);
+      expect(fluidMatches).toEqual(['SPEC-2']);
+    });
+
+    it('requires every given field to match on the same current profile', async () => {
+      const db = createFakeDb();
+      await recordProfile(db, 'SPEC-1', { matrixType: 'fluid', sampleType: 'BLD', recordedAt: '2026-01-01' });
+      await recordProfile(db, 'SPEC-2', { matrixType: 'fluid', sampleType: 'PLM', recordedAt: '2026-01-01' });
+
+      const matches = await findSpecimenIdsWithCurrentProfileMatching(db, { matrixType: 'fluid', sampleType: 'BLD' });
+
+      expect(matches).toEqual(['SPEC-1']);
+    });
+
+    it('returns null instead of scanning the collection when no field conditions are given', async () => {
+      const db = createFakeDb();
+      await recordProfile(db, 'SPEC-1', { matrixType: 'fluid' });
+
+      const matches = await findSpecimenIdsWithCurrentProfileMatching(db, {});
+
+      expect(matches).toBeNull();
     });
   });
 });

@@ -6,6 +6,7 @@ const { getCollection } = require('../../utils/collectionResolver');
 const qualityDomain = require('../../services/quality-domain.service');
 const MongoStorageRepository = require('../../infrastructure/persistence/mongo/MongoStorageRepository');
 const GetSampleStorageLocationUseCase = require('../../core/use-cases/GetSampleStorageLocationUseCase');
+const specimenPreanalyticsService = require('../../services/specimen-preanalytics.service');
 
 const router = express.Router();
 
@@ -58,17 +59,42 @@ async function resolveStorageLocation(db, sample) {
   return result?.found ? result.location : null;
 }
 
-function buildLocationText(sample, storageLocation) {
+function buildLocationText(storageLocation) {
   const box = storageLocation?.box || {};
   const storagePathText = storageLocation && storageLocation.path !== 'N/A' ? storageLocation.path : storageLocation?.readable || null;
   const parts = [
     storagePathText ? `Localização ${storagePathText}` : null,
-    sample?.locationID ? `Loc ${sample.locationID}` : null,
     box.boxName || box.boxId ? `Box ${box.boxName || box.boxId}` : null,
     box.position ? `Pos ${box.position}` : null,
   ].filter(Boolean);
 
   return parts.join(' / ') || 'Localizacao pendente';
+}
+
+/**
+ * Resolves the current SpecimenPreanalytics snapshot for a sample's
+ * specimenId (#388), same sealed-pin-else-newest precedent
+ * specimen-preanalytics.service.js#getCurrentProfilesForSpecimens and
+ * MerkleService#generateSampleHashFromSample already use: a sample with a
+ * sealedSpecimenPreanalyticsId own-property resolves that exact snapshot,
+ * otherwise the newest recorded one. Returns null (not the legacy `sprec`
+ * shape) when no snapshot has been recorded yet — callers fall back to the
+ * embedded field themselves so already-migrated and not-yet-migrated
+ * samples both keep working (#525).
+ */
+async function resolveCurrentSprecProfile(db, sample) {
+  const specimenId = String(sample?.specimenId || '').trim();
+  if (!db || !specimenId) return null;
+
+  const hasPinned = Object.prototype.hasOwnProperty.call(sample, 'sealedSpecimenPreanalyticsId')
+    && sample.sealedSpecimenPreanalyticsId;
+
+  if (hasPinned) {
+    return specimenPreanalyticsService.getProfileById(db, sample.sealedSpecimenPreanalyticsId);
+  }
+
+  const profiles = await specimenPreanalyticsService.getProfilesForSpecimen(db, specimenId);
+  return profiles[0] || null;
 }
 
 async function buildLabel(db, sample) {
@@ -81,15 +107,16 @@ async function buildLabel(db, sample) {
 
   const sampleId = normalizeString(sample?.sampleID || sample?._id?.toString?.() || sample?._id);
   const barcode = normalizeString(sample?.barcode || sampleId);
-  const sprecCode = qualityDomain.buildSprecCode(sample?.sprec || {});
-  const location = buildLocationText(sample, storageLocation);
+  const sprecProfile = await resolveCurrentSprecProfile(db, sample);
+  const sprecCode = qualityDomain.buildSprecCode(sprecProfile || sample?.sprec || {});
+  const location = buildLocationText(storageLocation);
 
   return {
     sampleId,
     barcode,
     qrPayload: `BIOAVANCED:SAMPLE:${barcode}`,
     location,
-    sprecCode: sprecCode || normalizeString(sample?.sprec_code),
+    sprecCode: sprecCode || normalizeString(sprecProfile?.sprecCode || sample?.sprec_code),
     generatedAt: new Date().toISOString(),
   };
 }
@@ -214,6 +241,7 @@ router.get('/samples/:sampleId/print-job', authenticate, requirePermission('crea
 router._test = {
   findSample,
   resolveStorageLocation,
+  resolveCurrentSprecProfile,
   buildLocationText,
   normalizeString,
 };

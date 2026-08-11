@@ -216,7 +216,25 @@ describe('reports.routes.js gaps', () => {
 
   describe('buildSampleQuery: filtros sprec e qualidade não cobertos no arquivo principal', () => {
     it('combina sprecSampleType, primaryContainer, preCentrifugation, centrifugation, secondCentrifugation, postCentrifugationDelay, longTermStorage e qualityCategory', async () => {
-      const { db, capturedQueries } = buildCollectionDb({ samples: [{ sampleID: 'S1' }] });
+      // #525: these filters now resolve through the canonical
+      // SpecimenPreanalytics/RcsAssessment entities instead of querying
+      // `sprec.*`/`final_grade` directly off Sample — one combined
+      // specimenId $in condition per entity, not one per field.
+      const { db, capturedQueries } = buildCollectionDb({
+        samples: [{ sampleID: 'S1' }],
+        specimenPreanalytics: [{
+          specimenId: 'SPEC-1',
+          sampleType: 'WHOLE BLOOD',
+          primaryContainer: 'EDTA TUBE',
+          preCentrifugation: '2H',
+          centrifugation: '10MIN',
+          secondCentrifugation: 'NONE',
+          postCentrifugationDelay: '30MIN',
+          longTermStorage: '-80C',
+          recordedAt: new Date('2026-01-01'),
+        }],
+        rcsAssessments: [{ specimenId: 'SPEC-2', finalGrade: 'A', assessedAt: new Date('2026-01-01') }],
+      });
       const testApp = appWithDb(db);
 
       const response = await request(testApp).post('/api/reports/amostra/preview').send({
@@ -236,14 +254,8 @@ describe('reports.routes.js gaps', () => {
       const query = capturedQueries.samples;
       expect(query.$and).toEqual(
         expect.arrayContaining([
-          { 'sprec.sampleType': 'WHOLE BLOOD' },
-          { 'sprec.primaryContainer': 'EDTA TUBE' },
-          { 'sprec.preCentrifugation': '2H' },
-          { 'sprec.centrifugation': '10MIN' },
-          { 'sprec.secondCentrifugation': 'NONE' },
-          { 'sprec.postCentrifugationDelay': '30MIN' },
-          { 'sprec.longTermStorage': '-80C' },
-          { final_grade: 'A' },
+          { specimenId: { $in: ['SPEC-1'] } },
+          { specimenId: { $in: ['SPEC-2'] } },
         ])
       );
     });

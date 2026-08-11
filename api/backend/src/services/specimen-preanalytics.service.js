@@ -86,9 +86,49 @@ async function getCurrentProfilesForSpecimens(db, samples) {
   return result;
 }
 
+/**
+ * Specimen IDs whose *current* (newest-recorded) SpecimenPreanalytics
+ * profile matches every given field condition — used by reports.routes.js's
+ * SPREC filter builder (#525) to query through the canonical entity instead
+ * of Sample's embedded `sprec.*` copy.
+ *
+ * "Current" here means newest-recorded per specimenId, not
+ * sealed-pin-else-newest (unlike getCurrentProfilesForSpecimens above) — a
+ * report filter doesn't have a specific sample's
+ * sealedSpecimenPreanalyticsId to pin against ahead of knowing which
+ * samples match. Resolved in application code (fetch + reduce) rather than
+ * a Mongo aggregation pipeline, matching this collection's existing
+ * small-scale full-scan usage elsewhere in reports.routes.js (e.g.
+ * `samples.find({}).limit(100)` for other report types).
+ *
+ * @param {import('mongodb').Db} db
+ * @param {Record<string, unknown>} matchFields exact-equality field:value pairs
+ * @returns {Promise<string[]|null>} matching specimenIds, or null if matchFields was empty
+ */
+async function findSpecimenIdsWithCurrentProfileMatching(db, matchFields = {}) {
+  const fieldEntries = Object.entries(matchFields).filter(([, value]) => value !== undefined && value !== null && value !== '');
+  if (!fieldEntries.length) return null;
+
+  const collection = await getCollection(db, 'specimenPreanalytics');
+  const rows = await collection.find({}).sort({ recordedAt: -1 }).toArray();
+
+  const seen = new Set();
+  const matchingSpecimenIds = [];
+  for (const row of rows) {
+    if (seen.has(row.specimenId)) continue;
+    seen.add(row.specimenId);
+    if (fieldEntries.every(([field, value]) => row[field] === value)) {
+      matchingSpecimenIds.push(row.specimenId);
+    }
+  }
+
+  return matchingSpecimenIds;
+}
+
 module.exports = {
   recordProfile,
   getProfilesForSpecimen,
   getProfileById,
   getCurrentProfilesForSpecimens,
+  findSpecimenIdsWithCurrentProfileMatching,
 };

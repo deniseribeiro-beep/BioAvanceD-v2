@@ -298,8 +298,14 @@ class BatchValidationEngine {
       registerdate: 'registrationDate',
       registrationdate: 'registrationDate',
       datacoleta: 'registrationDate',
-      locationid: 'locationID',
-      idlocalizacao: 'locationID',
+      // #525: no target field on purpose. import-lgpd.service.js#parseSampleRow
+      // never reads a `locationID` key (#459/#462: CSV rows carry the
+      // canonical boxId/positionCode pair directly, "no legacy field aliases
+      // in runtime persistence") — mapping these legacy headers onto
+      // `locationID` produced a value persistSample() silently discarded.
+      // Recognizing the header names is still useful for detectDataType()'s
+      // sample-vs-patient heuristic below, so they stay out of that list;
+      // they just no longer feed a dead target field here.
       linkedproject: 'linkedProject',
       projetovinculado: 'linkedProject',
       currentstatus: 'currentStatus',

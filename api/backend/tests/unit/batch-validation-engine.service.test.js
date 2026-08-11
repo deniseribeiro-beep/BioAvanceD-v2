@@ -43,6 +43,25 @@ function createDb(patientsByFilter = {}) {
   };
 }
 
+describe('batch-validation-engine.service#buildSampleRow', () => {
+  // #525: `locationid`/`idlocalizacao` headers used to map onto a
+  // `locationID` field that import-lgpd.service.js#parseSampleRow never
+  // reads (#459/#462 dropped the legacy field from runtime persistence in
+  // favor of boxId/positionCode) — the mapping produced a value that was
+  // silently discarded. Pinning that the header map no longer claims to
+  // handle these columns at all.
+  it('does not map legacy locationid/idlocalizacao headers onto any target field', () => {
+    const mapped = batchValidationEngine.buildSampleRow({
+      locationid: 'freezer-a1',
+      idlocalizacao: 'freezer-a1',
+      sampleType: 'Sangue',
+    });
+
+    expect(mapped.locationID).toBeUndefined();
+    expect(mapped.sampleType).toBe('Sangue');
+  });
+});
+
 describe('batch-validation-engine.service', () => {
   afterEach(() => {
     vi.restoreAllMocks();
