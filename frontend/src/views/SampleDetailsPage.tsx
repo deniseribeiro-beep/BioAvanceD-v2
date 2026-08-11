@@ -13,6 +13,7 @@ import { useLanguage } from '../contexts/LanguageContext';
 import { useAuth } from '../contexts/AuthContext';
 import AnalysisUploadModal from '../components/AnalysisUploadModal';
 import InlineStorageMovementPanel from '../components/samples/InlineStorageMovementPanel';
+import { buildSprecAxisSummary, buildSprecSummary } from '../components/samples/sampleListFormatters';
 import { Sample, SampleStorageLocationDTO } from '../types/models';
 import { resultService, sampleService } from '../services/api';
 import { storageApi } from '../services/storageApi';
@@ -219,38 +220,18 @@ export default function SampleDetailsPage() {
   }, [isEditing, sample, form.currentQuantity, form.linkedProject, form.currentStatus]);
 
   const availabilityPreview = computeAvailability(effectiveSample);
-  const sprecSummary = useMemo(() => {
-    const sprec = (effectiveSample as any)?.sprec || {};
-    const matrixType = String((effectiveSample as any)?.matrix_type || sprec.matrixType || '').trim().toLowerCase();
-    const parts = matrixType === 'solid'
-      ? [sprec.sampleType, sprec.primaryContainer, sprec.warmIschemia, sprec.coldIschemia, sprec.fixationType, sprec.fixationTime, sprec.longTermStorage]
-      : [sprec.sampleType, sprec.primaryContainer, sprec.preCentrifugation, sprec.centrifugation, sprec.secondCentrifugation, sprec.postCentrifugationDelay, sprec.longTermStorage];
-    const code = String((effectiveSample as any)?.sprec_code || (effectiveSample as any)?.sprecCode || parts.map((part) => String(part || '').trim()).filter(Boolean).join('-')).trim();
-    return code ? `${t('samples.detail.sprec.prefix', 'SPREC')} ${code}` : t('samples.detail.sprec.na', 'SPREC: N/A');
-  }, [effectiveSample]);
-  const sprecAxisSummary = useMemo(() => {
-    const sprec = (effectiveSample as any)?.sprec || {};
-    const matrixType = String((effectiveSample as any)?.matrix_type || sprec.matrixType || '').trim().toLowerCase();
-    const axes = matrixType === 'solid'
-      ? [
-        [t('samples.detail.sprec.axes.Pwarm', 'Pwarm'), sprec.warmIschemia],
-        [t('samples.detail.sprec.axes.Pcold', 'Pcold'), sprec.coldIschemia],
-        [t('samples.detail.sprec.axes.Pfix', 'Pfix'), sprec.fixationType],
-        [t('samples.detail.sprec.axes.PfixTime', 'PfixTime'), sprec.fixationTime],
-        [t('samples.detail.sprec.axes.Pstore', 'Pstore'), sprec.longTermStorage],
-      ]
-      : [
-        [t('samples.detail.sprec.axes.Ppre', 'Ppre'), sprec.preCentrifugation],
-        [t('samples.detail.sprec.axes.Pcent1', 'Pcent1'), sprec.centrifugation],
-        [t('samples.detail.sprec.axes.Pcent2', 'Pcent2'), sprec.secondCentrifugation],
-        [t('samples.detail.sprec.axes.Ppost', 'Ppost'), sprec.postCentrifugationDelay],
-        [t('samples.detail.sprec.axes.Pstore', 'Pstore'), sprec.longTermStorage],
-      ];
-
-    return axes
-      .map(([label, value]) => `${label}:${String(value || '').trim() || t('common.notAvailable', 'N/A')}`)
-      .join(' | ');
-  }, [effectiveSample]);
+  // #518: reads currentSpecimenPreanalytics (resolved server-side by GET
+  // /samples, sealed-pinned if set else newest — see #517) instead of the
+  // legacy embedded effectiveSample.sprec object. Shared with
+  // SamplesPageView's list-row summary via sampleListFormatters.ts.
+  const sprecSummary = useMemo(
+    () => buildSprecSummary(effectiveSample || {} as Sample, t),
+    [effectiveSample, t],
+  );
+  const sprecAxisSummary = useMemo(
+    () => buildSprecAxisSummary(effectiveSample || {} as Sample, t),
+    [effectiveSample, t],
+  );
 
   const statusOptions = useMemo(() => ([
     { value: 'Available', label: t('samples.status.available', 'Disponível') },

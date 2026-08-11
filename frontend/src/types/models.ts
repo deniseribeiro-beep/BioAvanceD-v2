@@ -334,7 +334,9 @@ export interface Sample {
   resolvedStorageLocation?: SampleStorageLocationDTO | null;
   // GET /samples (list view) only (#517) — the sample's current SPREC
   // snapshot (sealedSpecimenPreanalyticsId-pinned if set, else newest),
-  // batched the same way as resolvedStorageLocation above.
+  // batched the same way as resolvedStorageLocation above. SampleDetailsPage
+  // (#518) also reads this field, sourcing the same sample object from the
+  // shared useSamples() list rather than a dedicated per-sample fetch.
   currentSpecimenPreanalytics?: SpecimenPreanalyticsProfile | null;
   // Soft delete fields
   deleted?: boolean;
