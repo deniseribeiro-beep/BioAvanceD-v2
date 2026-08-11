@@ -1255,9 +1255,15 @@ function buildQualityPreviewPayload(formData, matrixType) {
   };
 }
 
-function buildSampleIntegrityInput(formData) {
+function buildSampleIntegrityInput(formData, clinicalComorbidityDefinitions = []) {
   const matrixType = String(formData.sprecMatrixType || 'fluid').trim().toLowerCase() === 'solid' ? 'solid' : 'fluid';
   const dictionary = matrixType === 'solid' ? SPREC_SOLID_DICTIONARY : SPREC_FLUID_DICTIONARY;
+  // Same array-of-checked-slugs shape buildClinicalData expects for charlsonComorbidities
+  // (api/backend/src/routes/intakeWizard.js#116) — sourced from the same comorbidity
+  // checkboxes buildSubmissionPayload reads (#521).
+  const charlsonComorbidities = (Array.isArray(clinicalComorbidityDefinitions) ? clinicalComorbidityDefinitions : [])
+    .map((option) => getDictionarySlug(option))
+    .filter((slug) => slug && Boolean(formData[slug]));
   return {
     // Same field shape as MerkleService.generateSampleHash on the backend (#519) — rcsScore/
     // finalGrade/calculationTrace/axisPenalties are omitted (default to null) since RCS hasn't
@@ -1271,7 +1277,8 @@ function buildSampleIntegrityInput(formData) {
       omimCode: String(formData.diagnosisOmimCode || '').trim(),
       cid: String(formData.diagnosisCidCode || '').trim(),
       phenotypes: Array.isArray(formData.diseasePhenotypes) ? formData.diseasePhenotypes : [],
-      biomarkers_values: formData.biomarkers_values && typeof formData.biomarkers_values === 'object' ? formData.biomarkers_values : {},
+      charlsonComorbidities,
+      biomarkerValues: formData.biomarkers_values && typeof formData.biomarkers_values === 'object' ? formData.biomarkers_values : {},
     },
     sprec: {
       ...buildCanonicalSprecPayload(formData, matrixType, dictionary),
@@ -1904,7 +1911,7 @@ export default function ClinicalIntakeWizard(props) {
 
     const recalculateMerkle = async () => {
       try {
-        const integrityInput = buildSampleIntegrityInput(formData);
+        const integrityInput = buildSampleIntegrityInput(formData, clinicalComorbidityDefinitions);
         const result = await buildSampleMerkleRoot(integrityInput);
         if (!active) {
           return;
@@ -1925,6 +1932,7 @@ export default function ClinicalIntakeWizard(props) {
     };
   }, [
     formData,
+    clinicalComorbidityDefinitions,
   ]);
 
   useEffect(() => {
