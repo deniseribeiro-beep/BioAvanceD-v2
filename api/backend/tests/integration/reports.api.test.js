@@ -376,8 +376,13 @@ describe('Reports API integration', () => {
     });
 
     it('amostra: aplica buildSampleQuery com múltiplos filtros combinados via $and', async () => {
+      // #525: sprecMatrixType now resolves through the canonical
+      // SpecimenPreanalytics entity instead of querying `sprec.matrixType`
+      // directly off Sample — seed a matching profile so the resolved
+      // `specimenId: { $in: [...] }` condition is non-empty.
       const { db, capturedQueries } = buildCollectionDb({
-        samples: [{ patientID: 'P1', sampleID: 'S1' }],
+        samples: [{ patientID: 'P1', sampleID: 'S1', specimenId: 'SPEC-1' }],
+        specimenPreanalytics: [{ specimenId: 'SPEC-1', matrixType: 'plasma', recordedAt: new Date('2026-01-01') }],
       });
 
       const testApp = appWithDb(db);
@@ -402,7 +407,7 @@ describe('Reports API integration', () => {
             ],
           },
           { 'pharmacologyData.treatmentStatus': 'ON_TREATMENT' },
-          { 'sprec.matrixType': 'plasma' },
+          { specimenId: { $in: ['SPEC-1'] } },
           { release_status: 'AVAILABLE' },
         ])
       );

@@ -6,11 +6,18 @@ const { connectNeo4j } = require('../src/infrastructure/database/neo4j/connectio
 const { Neo4jOutboxService } = require('../src/services/neo4jOutbox.service');
 const { Neo4jCanonicalProjectionService } = require('../src/services/neo4jCanonicalProjection.service');
 const { runProjectionOnce } = require('../src/workers/neo4jProjection.worker');
+const rcsAssessmentService = require('../src/services/rcs-assessment.service');
 
 async function seedCanonicalOutbox(db, outbox) {
   const patients = await db.collection('patients').find({}, { projection: { _id: 1, participantId: 1, participantId: 1 } }).toArray();
   const consents = await db.collection('consents').find({}, { projection: { _id: 1, participantId: 1, participantId: 1, status: 1, signedAt: 1, updatedAt: 1 } }).toArray();
-  const samples = await db.collection('samples').find({}, { projection: { _id: 1, participantId: 1, specimenId: 1, quality: 1, updatedAt: 1 } }).toArray();
+  const samples = await db.collection('samples').find({}, { projection: { _id: 1, participantId: 1, specimenId: 1, quality: 1, rcsScore: 1, sealedRcsAssessmentId: 1, updatedAt: 1 } }).toArray();
+  // #525: rcsScore for the QUALITY_ASSESSED event below resolves through the
+  // canonical RcsAssessment entity (#383) instead of trusting the legacy
+  // embedded Sample.rcsScore copy, same sealed-pin-else-newest precedent
+  // MerkleService/specimen-preanalytics.service.js use — falling back to the
+  // embedded field only for samples with no recorded snapshot yet.
+  const currentAssessmentsBySpecimenId = await rcsAssessmentService.getCurrentAssessmentsForSpecimens(db, samples);
 
   const donorKeyByPatient = new Map();
   for (const patient of patients) {
@@ -49,6 +56,7 @@ async function seedCanonicalOutbox(db, outbox) {
       sourceService: 'neo4j-canonical-rebuild'
     });
     if (sample.quality !== undefined) {
+      const currentAssessment = currentAssessmentsBySpecimenId.get(String(sample.specimenId || ''));
       await outbox.appendEvent(db, {
         eventType: 'QUALITY_ASSESSED',
         aggregateType: 'Sample',
@@ -57,7 +65,7 @@ async function seedCanonicalOutbox(db, outbox) {
           specimenId: String(sample._id),
           qualityAssessmentId: `QA_${String(sample._id)}`,
           status: String(sample.quality || 'UNKNOWN'),
-          score: sample.rcsScore ?? null,
+          score: currentAssessment?.rcsScore ?? sample.rcsScore ?? null,
           evaluatedAt: sample.updatedAt || new Date(),
         },
         sourceService: 'neo4j-canonical-rebuild'

@@ -17,8 +17,12 @@ const qualityDomainPath = require.resolve('../../src/services/quality-domain.ser
 // pointed at the stale getCollection forever. Bust it too so each loadRoute()
 // re-requires it fresh, picking up the currently-installed mock.
 const mongoStorageRepositoryPath = require.resolve('../../src/infrastructure/persistence/mongo/MongoStorageRepository');
+// specimen-preanalytics.service.js destructures `getCollection` the same way
+// (#525) — needs the same cache-busting so it re-requires fresh and picks up
+// the mocked getCollection per test.
+const specimenPreanalyticsServicePath = require.resolve('../../src/services/specimen-preanalytics.service');
 
-const allPaths = [authPath, rbacPath, collectionResolverPath, routePath, qualityDomainPath, mongoStorageRepositoryPath];
+const allPaths = [authPath, rbacPath, collectionResolverPath, routePath, qualityDomainPath, mongoStorageRepositoryPath, specimenPreanalyticsServicePath];
 
 function clearCache() {
   for (const p of allPaths) delete require.cache[p];
@@ -146,6 +150,60 @@ describe('label routes', () => {
       expect(res.body.data.svg).toContain('<svg');
     });
 
+    it('builds the SPREC code from the canonical SpecimenPreanalytics snapshot when one is recorded, not the embedded sample.sprec', async () => {
+      const specimenId = 'SPEC-CANON';
+      const samplesFindOne = vi.fn().mockResolvedValue({
+        ...SAMPLE_WITH_LOCATION,
+        specimenId,
+        sprec: { sampleType: { code: 'STALE' } },
+      });
+      const canonicalProfile = { specimenId, sampleType: 'FRESH' };
+      const profilesFind = vi.fn(() => ({
+        sort: vi.fn(() => ({ toArray: vi.fn().mockResolvedValue([canonicalProfile]) })),
+      }));
+      const getCollectionImpl = vi.fn(async (_db, key) => {
+        if (key === 'samples') return { findOne: samplesFindOne };
+        if (key === 'storagePaths') return { findOne: vi.fn().mockResolvedValue(null) };
+        if (key === 'specimenPreanalytics') return { find: profilesFind };
+        throw new Error(`unexpected key ${key}`);
+      });
+      // Real buildSprecCode (no override) so the assertion proves which
+      // sprec source actually fed it.
+      const { router } = loadRoute({ getCollectionImpl });
+      const app = buildApp(router, {});
+
+      const res = await request(app).get('/api/labels/samples/S-001');
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.sprecCode).toContain('FRESH');
+      expect(res.body.data.sprecCode).not.toContain('STALE');
+    });
+
+    it('falls back to the embedded sample.sprec when no canonical SpecimenPreanalytics snapshot has been recorded yet', async () => {
+      const specimenId = 'SPEC-NONE';
+      const samplesFindOne = vi.fn().mockResolvedValue({
+        ...SAMPLE_WITH_LOCATION,
+        specimenId,
+        sprec: { sampleType: 'LEGACY' },
+      });
+      const profilesFind = vi.fn(() => ({
+        sort: vi.fn(() => ({ toArray: vi.fn().mockResolvedValue([]) })),
+      }));
+      const getCollectionImpl = vi.fn(async (_db, key) => {
+        if (key === 'samples') return { findOne: samplesFindOne };
+        if (key === 'storagePaths') return { findOne: vi.fn().mockResolvedValue(null) };
+        if (key === 'specimenPreanalytics') return { find: profilesFind };
+        throw new Error(`unexpected key ${key}`);
+      });
+      const { router } = loadRoute({ getCollectionImpl });
+      const app = buildApp(router, {});
+
+      const res = await request(app).get('/api/labels/samples/S-001');
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.sprecCode).toContain('LEGACY');
+    });
+
     it('returns zpl format as text/plain', async () => {
       const findOne = vi.fn().mockResolvedValue(SAMPLE_WITH_LOCATION);
       const getCollectionImpl = vi.fn(async (_db, key) => {
@@ -233,11 +291,10 @@ describe('label routes', () => {
       expect(res.body.error).toBe('boom');
     });
 
-    it('falls back to "SPREC N/A" and includes the locationID segment when sprecCode is empty', async () => {
+    it('falls back to "SPREC N/A" when sprecCode is empty', async () => {
       const findOne = vi.fn().mockResolvedValue({
         ...SAMPLE_WITH_LOCATION,
         sprec_code: undefined,
-        locationID: 'LOC-9',
       });
       const getCollectionImpl = vi.fn(async (_db, key) => {
         if (key === 'samples') return { findOne };
@@ -251,7 +308,6 @@ describe('label routes', () => {
 
       expect(res.status).toBe(200);
       expect(res.text).toContain('SPREC N/A');
-      expect(res.text).toContain('Loc LOC-9');
     });
 
     it('uses error.status (not statusCode) for the response status when present', async () => {
@@ -420,34 +476,74 @@ describe('label routes', () => {
   });
 
   describe('buildLocationText (router._test)', () => {
-    it('includes the locationID segment when present', () => {
-      const text = router_test().buildLocationText(
-        { locationID: 'LOC-9' },
-        { box: { boxId: 'b1', position: 'A1' } }
-      );
-
-      expect(text).toContain('Loc LOC-9');
-    });
-
+    // #525: buildLocationText no longer takes a `sample` argument — storage
+    // location is already fully canonical via resolveStorageLocation(),
+    // and the legacy sample.locationID segment was dropped rather than
+    // migrated (there's nothing left for it to add over the canonical
+    // box/position/path already in storageLocation).
     it('omits the position segment when position is missing', () => {
-      const text = router_test().buildLocationText(
-        {},
-        { box: { boxId: 'b1' } }
-      );
+      const text = router_test().buildLocationText({ box: { boxId: 'b1' } });
 
       expect(text).not.toContain('Pos ');
     });
 
     it('falls back to "Localizacao pendente" when every segment is absent', () => {
-      const text = router_test().buildLocationText({}, { box: {} });
+      const text = router_test().buildLocationText({ box: {} });
 
       expect(text).toBe('Localizacao pendente');
     });
 
     it('falls back to "Localizacao pendente" when storageLocation is null', () => {
-      const text = router_test().buildLocationText({}, null);
+      const text = router_test().buildLocationText(null);
 
       expect(text).toBe('Localizacao pendente');
+    });
+  });
+
+  describe('resolveCurrentSprecProfile (router._test)', () => {
+    it('returns null when the sample has no specimenId', async () => {
+      const { router } = loadRoute();
+
+      const result = await router._test.resolveCurrentSprecProfile({}, {});
+
+      expect(result).toBeNull();
+    });
+
+    it('resolves the newest profile for the specimen when no sealed pin exists', async () => {
+      const specimenId = 'SPEC-1';
+      const newest = { specimenId, sampleType: 'BLD', recordedAt: new Date('2026-02-01') };
+      const older = { specimenId, sampleType: 'OLD', recordedAt: new Date('2026-01-01') };
+      const find = vi.fn(() => ({
+        sort: vi.fn(() => ({ toArray: vi.fn().mockResolvedValue([newest, older]) })),
+      }));
+      const getCollectionImpl = vi.fn(async (_db, key) => {
+        if (key === 'specimenPreanalytics') return { find };
+        throw new Error(`unexpected key ${key}`);
+      });
+      const { router } = loadRoute({ getCollectionImpl });
+
+      const result = await router._test.resolveCurrentSprecProfile({}, { specimenId });
+
+      expect(result).toBe(newest);
+    });
+
+    it('resolves the pinned snapshot by id when sealedSpecimenPreanalyticsId is present', async () => {
+      const specimenId = 'SPEC-1';
+      const pinned = { _id: 'profile-9', specimenId, sampleType: 'PINNED' };
+      const findOne = vi.fn().mockResolvedValue(pinned);
+      const getCollectionImpl = vi.fn(async (_db, key) => {
+        if (key === 'specimenPreanalytics') return { findOne };
+        throw new Error(`unexpected key ${key}`);
+      });
+      const { router } = loadRoute({ getCollectionImpl });
+
+      const result = await router._test.resolveCurrentSprecProfile(
+        {},
+        { specimenId, sealedSpecimenPreanalyticsId: 'profile-9' }
+      );
+
+      expect(result).toBe(pinned);
+      expect(findOne).toHaveBeenCalledWith({ _id: 'profile-9' });
     });
   });
 

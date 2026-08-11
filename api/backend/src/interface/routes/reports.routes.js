@@ -5,6 +5,8 @@ const { authenticate } = require('../../infrastructure/middleware/auth');
 const { requirePermission } = require('../../infrastructure/middleware/rbac');
 const ReportsModel = require('../../models/Reports');
 const logger = require('../../utils/logger');
+const specimenPreanalyticsService = require('../../services/specimen-preanalytics.service');
+const rcsAssessmentService = require('../../services/rcs-assessment.service');
 
 function normalizeReport(report) {
   return {
@@ -105,7 +107,25 @@ function normalizeSprecCode(value) {
   return normalizeFilterText(value).toUpperCase();
 }
 
-function buildSampleQuery(filters = {}) {
+/**
+ * #525: the sprec.* fields and final_grade used to be queried directly off
+ * Sample's embedded copy of those fields. Now resolves through the canonical
+ * SpecimenPreanalytics (#388) / RcsAssessment (#383) entities instead —
+ * finding which specimens' *current* snapshot matches, then restricting the
+ * sample query to `{ specimenId: { $in: [...] } }`. See
+ * specimen-preanalytics.service.js#findSpecimenIdsWithCurrentProfileMatching
+ * for what "current" means here.
+ *
+ * release_status is left querying the embedded Sample field as-is — despite
+ * being named alongside the SPREC/RCS fields in #525, it isn't an
+ * RcsAssessment/SpecimenPreanalytics/storage-custody field at all (dict-02
+ * has no canonical entity for it); it's a Sample-only quarantine/custody
+ * status. It's *already* broken for a different, unrelated reason (queries
+ * `release_status` but SampleModel writes `releaseStatus` — see the
+ * follow-up issue filed alongside this fix) that #525 didn't ask this
+ * function to fix.
+ */
+async function buildSampleQuery(db, filters = {}) {
   const conditions = [];
 
   const orphaCode = normalizeFilterText(filters.orphaCode || filters.orpha || filters.disease);
@@ -139,48 +159,34 @@ function buildSampleQuery(filters = {}) {
   }
 
   const sprecMatrix = normalizeFilterText(filters.sprecMatrixType || filters.sprecMatrix || filters.matrixType).toLowerCase();
-  if (sprecMatrix) {
-    conditions.push({ 'sprec.matrixType': sprecMatrix });
-  }
-
   const sprecSampleType = normalizeSprecCode(filters.sprecSampleType);
-  if (sprecSampleType) {
-    conditions.push({ 'sprec.sampleType': sprecSampleType });
-  }
-
   const sprecPrimaryContainer = normalizeSprecCode(filters.sprecPrimaryContainer);
-  if (sprecPrimaryContainer) {
-    conditions.push({ 'sprec.primaryContainer': sprecPrimaryContainer });
-  }
-
   const sprecPreCentrifugation = normalizeSprecCode(filters.sprecPreCentrifugation);
-  if (sprecPreCentrifugation) {
-    conditions.push({ 'sprec.preCentrifugation': sprecPreCentrifugation });
-  }
-
   const sprecCentrifugation = normalizeSprecCode(filters.sprecCentrifugation);
-  if (sprecCentrifugation) {
-    conditions.push({ 'sprec.centrifugation': sprecCentrifugation });
-  }
-
   const sprecSecondCentrifugation = normalizeSprecCode(filters.sprecSecondCentrifugation);
-  if (sprecSecondCentrifugation) {
-    conditions.push({ 'sprec.secondCentrifugation': sprecSecondCentrifugation });
-  }
-
   const sprecPostCentrifugationDelay = normalizeSprecCode(filters.sprecPostCentrifugationDelay);
-  if (sprecPostCentrifugationDelay) {
-    conditions.push({ 'sprec.postCentrifugationDelay': sprecPostCentrifugationDelay });
-  }
-
   const sprecLongTermStorage = normalizeSprecCode(filters.sprecLongTermStorage);
-  if (sprecLongTermStorage) {
-    conditions.push({ 'sprec.longTermStorage': sprecLongTermStorage });
+
+  const specimenPreanalyticsMatch = {
+    ...(sprecMatrix ? { matrixType: sprecMatrix } : {}),
+    ...(sprecSampleType ? { sampleType: sprecSampleType } : {}),
+    ...(sprecPrimaryContainer ? { primaryContainer: sprecPrimaryContainer } : {}),
+    ...(sprecPreCentrifugation ? { preCentrifugation: sprecPreCentrifugation } : {}),
+    ...(sprecCentrifugation ? { centrifugation: sprecCentrifugation } : {}),
+    ...(sprecSecondCentrifugation ? { secondCentrifugation: sprecSecondCentrifugation } : {}),
+    ...(sprecPostCentrifugationDelay ? { postCentrifugationDelay: sprecPostCentrifugationDelay } : {}),
+    ...(sprecLongTermStorage ? { longTermStorage: sprecLongTermStorage } : {}),
+  };
+
+  if (Object.keys(specimenPreanalyticsMatch).length > 0) {
+    const matchingSpecimenIds = await specimenPreanalyticsService.findSpecimenIdsWithCurrentProfileMatching(db, specimenPreanalyticsMatch);
+    conditions.push({ specimenId: { $in: matchingSpecimenIds || [] } });
   }
 
   const qualityCategory = normalizeFilterText(filters.sprecCategory || filters.qualityCategory).toUpperCase();
   if (qualityCategory) {
-    conditions.push({ final_grade: qualityCategory });
+    const matchingSpecimenIds = await rcsAssessmentService.findSpecimenIdsWithCurrentAssessmentMatching(db, { finalGrade: qualityCategory });
+    conditions.push({ specimenId: { $in: matchingSpecimenIds || [] } });
   }
 
   const releaseStatus = normalizeReleaseStatus(filters.status || filters.releaseStatus || filters.graphStatus);
@@ -236,7 +242,7 @@ async function buildPreviewData(db, rawType, filters = {}) {
   if (isSamplesByPatient) {
     const patientsCollection = resolveCollection(db, ['patients', 'pacientes']);
     const samplesCollection = resolveCollection(db, ['samples', 'amostras']);
-    const sampleQuery = buildSampleQuery(filters);
+    const sampleQuery = await buildSampleQuery(db, filters);
     const matchingPatientIds = await getMatchingPatientIds(samplesCollection, sampleQuery);
 
     const patientQueryParts = [];
@@ -313,7 +319,7 @@ async function buildPreviewData(db, rawType, filters = {}) {
   if (typeIncludes(type, ['paciente', 'patient'])) {
     const collection = resolveCollection(db, ['patients', 'pacientes']);
     const samplesCollection = resolveCollection(db, ['samples', 'amostras']);
-    const sampleQuery = buildSampleQuery(filters);
+    const sampleQuery = await buildSampleQuery(db, filters);
     const matchingPatientIds = await getMatchingPatientIds(samplesCollection, sampleQuery);
 
     const patientQueryParts = [];
@@ -398,7 +404,7 @@ async function buildPreviewData(db, rawType, filters = {}) {
 
   if (typeIncludes(type, ['amostra', 'sample'])) {
     const collection = resolveCollection(db, ['samples', 'amostras']);
-    const sampleQuery = buildSampleQuery(filters);
+    const sampleQuery = await buildSampleQuery(db, filters);
     const samples = await collection.find(sampleQuery).limit(100).toArray();
     const total = await collection.countDocuments(sampleQuery);
     return { total, samples, previewLimited: total > 100 };
