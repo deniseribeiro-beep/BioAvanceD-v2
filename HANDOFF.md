@@ -1,113 +1,82 @@
 # HANDOFF
 
 **Written:** 2026-08-11, end of session on `feature/docker-e2e-backend-integration`,
-after resolving #526.
+after resolving #527.
 
 ## What happened this session
 
-Dennis said "Read handoff and pick next task" — no specific issue named.
-The prior handoff flagged **#526** as the freshest, most concretely
-scoped candidate (mirrors #524's fix shape almost exactly), so
-`work-issue` routed it to **`build-loop`** (route 4: names a capability
-missing from the code entirely, needs the product fix built together
-with the real-backend test proving it).
+Dennis said "Pick #527" — `work-issue` classified it as a reproducible
+product defect (route 1) and routed to `fix-bugs`.
 
-**#526 resolved this session** (`test/526-fhir-import-staging-rcs-sprec-wiring`,
-merge commit `29d8dd6a`, fix commit `2a8fee9d`). Mirrored #492/#502/#503/
-#505/#524's established pattern: `fhir-import-staging.service.js#commitBatch`
-now calls `rcsAssessmentService.recordAssessment`/
-`specimenPreanalyticsService.recordProfile` and pins
-`sealedRcsAssessmentId`/`sealedSpecimenPreanalyticsId` on the committed
-sample — but **only on a genuine insert** (the upsert's `upsertedId`),
-since this path uses `updateOne(..., {upsert: true})` rather than a
-plain `insertOne` like the other four creation paths, and a commit that
-only matches an already-existing `specimenId` doesn't write fresh
-`rcsPreview`/`sprec` data via `$setOnInsert` either — recording on every
-match would grow duplicate versioned snapshots for no reason. Two new
-real-backend (mocked-Mongo-with-real-matching-semantics) tests added to
-`tests/integration/fhir-import.test.js` proving both the insert-time
-recording and the no-duplicate-on-rematch behavior.
-
-**One bundled root-cause fix, discovered while writing the proving
-test:** `calculateRcsPreview` computed a real per-axis `sprec` object
-(via `buildRcsPayload`) but discarded it before returning —
-`rcs-certification.service.js`'s own `calculation_trace` never echoed it
-back — so the pre-existing `sprec: normalized.rcsPreview?.calculation_trace?.sprec
-|| {}` write had *always* evaluated to `{}` for every FHIR-imported
-sample, predating #526 entirely. Fixed by having `calculateRcsPreview`
-return `{ ...result, sprec: payload.sprec }`; both the embedded
-`sample.sprec` copy and the new `SpecimenPreanalytics` snapshot now
-carry real data, for fluid-matrix specimens. Kept in-scope for #526
-(not split out) because it directly blocked #526's own acceptance
-criteria — recording an empty snapshot wouldn't have proven anything.
-
-**Filed #527** (not fixed): solid-matrix specimens still record a
-`SpecimenPreanalytics` snapshot with null axis fields — `parseSprecRaw`'s
-solid branch names its fields `collectionType`/`warmIschemia`/
-`coldIschemia`/`fixationType`/`fixationTime`, while
-`SpecimenPreanalyticsModel.fieldsOf` (and the fluid branch) expect
+**#527 resolved this session** (`fix/527-solid-matrix-sprec-fields`,
+merge commit `2581e871`, fix commits `4b085dda` + `e9afbb89`).
+`parseSprecRaw`'s solid-matrix branch (`fhir-import-staging.service.js`)
+named its parsed axis fields `collectionType`/`warmIschemia`/
+`coldIschemia`/`fixationType`/`fixationTime`, but
+`SpecimenPreanalyticsModel.fieldsOf` — and the fluid branch, and
+`import.service.js`'s CSV-driven parsing — expect the matrix-agnostic
 `primaryContainer`/`preCentrifugation`/`centrifugation`/
-`secondCentrifugation`/`postCentrifugationDelay` regardless of matrix
-type. Same shape as #392's already-resolved fluid/solid relabeling gap;
-likely fix is wiring `frontend/src/constants/sprecDictionary.js`'s
-existing dictionaries in, not new parsing. Kept out of #526 to keep that
-slice narrow.
+`secondCentrifugation`/`postCentrifugationDelay` names regardless of
+matrix type, mirroring `SPREC_SOLID_DICTIONARY`'s own axis 2-6
+relabeling in `frontend/src/constants/sprecDictionary.js`. Every
+solid-matrix FHIR import recorded a `SpecimenPreanalytics` snapshot with
+every axis field null. Fixed by unifying the solid branch into the
+generic-name branch (they now produce the same shape given the same
+`matrixType` variable). `rcs-certification.service.js`'s own axis
+aliases already accept either naming scheme, so RCS-GOV scoring itself
+was never affected — only the persisted snapshot was.
 
-**Two more issues filed from an unrelated full-suite sanity check**
-(`npx vitest run`, no directory scope, run twice this session — both
-runs reproduced the same two failures, not flaky):
-- **#528** — `tests/unit/user.model.unit.test.js` fails 6/6 with
-  `UserModel.isValidAccessType`/`getRoleName is not a function`. Both
-  methods are gone from `UserModel` (removed by #432, "drop
-  accessType/roleName fields... sweep remaining references") but this
-  test file wasn't swept. Stale-test shape, not a regression — likely
-  routes to `fix-bugs` with the "update the test, don't restore the
-  method" direction, possibly repointing at
-  `rbac-assignment.service.resolveRoleDisplayName` per #427's precedent.
-- **#529** — `tests/unit/scripts/generate-dictionary-catalog.test.js`'s
-  source-vs-artifact drift check fails: a freshly generated catalog
-  checksum doesn't match the checked-in canonical-dictionary artifact's
-  stored checksum. Not investigated further; possibly related to #391
-  (line-ending drift on the same file) but that was a git-status-noise
-  fix, not a content mismatch, so likely a separate cause.
+**Kept in-scope (not split out): `buildRcsPayload`'s `unknownSolid`
+placeholder** (the `processingUnknown` branch) had the exact same
+field-naming bug, in the same file, one function away from the fix's own
+call site — fixing only `parseSprecRaw` would have left solid-matrix
+"processing unknown" imports still recording null axis fields, so the
+picked issue's own acceptance criteria (no null axis fields on
+solid-matrix snapshots) wouldn't have held in all cases. Renamed to the
+same generic axis names; `rcs-certification.service.js`'s aliases still
+resolve them correctly.
 
-Neither #528 nor #529 matches #489's tracked symptom shape (JWT/
-encryption-secret failures at ~89-file scale) — confirmed by reading
-#489's own body before filing, so these are new, not duplicates.
+**Two real-backend tests added** to `tests/integration/fhir-import.test.js`:
+one proving a solid-matrix commit via the known-SPREC-code path records
+non-null axis fields, one proving the `processingUnknown` solid path
+records `'X'` (not null) on those same fields — added after noticing the
+first test only covered one of the two renamed code paths.
 
-**One workflow-tooling finding, filed against the skills-pack repo**
-(`DyeAllPies/dyeallpies-skills-pack#238`): `tests/integration/fhir-import.test.js`'s
-local hand-rolled `createCollection()` mock didn't replicate two real
-MongoDB driver behaviors product code across this repo depends on —
-`insertOne` mutating the passed-in doc in place to add `_id` (the mock
-returned a detached copy instead, so `rcsAssessmentService.recordAssessment`'s
-return value's `._id` read back `undefined`), and `updateOne(...,
-{upsert:true})` returning `upsertedId` on a genuine insert (the mock
-always returned a flat `{matchedCount:1, modifiedCount:1}`, giving
-product code no way to distinguish insert from match). Fixed locally in
-that one test file (commit `2a8fee9d`); filed for the pack's
-`vitest-specs` BioAvanceD-v2 overlay since other local (non-`db.factory.js`)
-collection mocks in this repo could have the same gap. Could not edit
-the overlay directly per Rule 0 (only editable from a session in the
-pack repo itself).
+**Investigated and ruled out, not filed:** `frontend/src/components/v2/
+intake/ClinicalIntakeWizard.jsx`'s `buildCanonicalSprecPayload` still
+builds solid-matrix sprec payloads using the old field names
+(`collectionType`/`warmIschemia`/`coldIschemia`/`fixationType`/
+`fixationTime`). Traced whether this could reintroduce #527's bug shape
+via the intake-wizard sample-creation path (`routes/intakeWizard.js`) —
+it can't: `buildSampleDocumentFromIntake`'s own comment (citing #502)
+confirms intake-wizard-created samples never get a `SpecimenPreanalytics`
+snapshot recorded at all (`sealedSpecimenPreanalyticsId` pinned to `null`
+by design), so the old field names there are inert with respect to this
+bug class. No new issue filed.
 
-**Also fixed while adding the two new tests:** the pre-existing "commit
-salva somente registros READY_TO_COMMIT" test's `samples.updateOne`
-call-count assertion (was 1, now 3 — the main upsert plus the two new
-sealed-id pins) — updated in the same commit, not a separate finding.
+**No security-relevant findings this session** — same reasoning as #526:
+the fixed code path is the same best-effort, internal-only recording
+write every other creation path already uses; no new route, no relaxed
+validator, no trust-boundary change.
 
-**No security-relevant findings this session** — the new recording calls
-reuse the same best-effort, internal-only write path every other
-creation path already uses; no new route, no relaxed validator, no
-trust-boundary change.
+**One workflow-orchestration observation, already tracked** (not
+re-filed): the `push-wrapup-checkpoint.cjs` hook fired immediately after
+`gh issue comment` (before merge/close), forcing a `wrap-up` invocation
+mid-sequence rather than at the actual end of `fix-bugs`' documented
+ending steps. This exactly matches already-open skills-pack#235
+("comment-as-completion-signal heuristic misfires on fix-bugs' ending
+sequence"), filed earlier the same day — this session's occurrence is
+corroborating evidence, not a new finding.
 
 ## Repo state
 
-- **`feature/docker-e2e-backend-integration`**: at `29d8dd6a`, clean, up
-  to date with origin. Contains the merge of #526's fix.
+- **`feature/docker-e2e-backend-integration`**: at `2581e871`, clean, up
+  to date with origin. Contains the merge of #527's fix.
 - No dangling branches from this session's own work
-  (`test/526-fhir-import-staging-rcs-sprec-wiring` deleted locally
-  post-merge; never pushed on its own).
+  (`fix/527-solid-matrix-sprec-fields` deleted both locally and on
+  origin post-merge — remote delete succeeded this time, unlike the
+  common-denial pattern the `fix-bugs` overlay documents; no reliable
+  predictor confirmed either way).
 - **Pre-existing dangling branches, not touched this session** (carried
   forward unchanged): local — `fix/476-quarantine-status-design-call`,
   `fix/477-bulk-import-storage-allocation`,
@@ -126,87 +95,78 @@ trust-boundary change.
   `fix/349-user-organization-picker` (still present as of last check via
   `git ls-remote`; deletion denied by the permission classifier in the
   #349 session, not re-attempted since).
-- Issues this session: **#526 closed** (fix + real-backend tests merged
-  at `29d8dd6a`). **#527 opened** (solid-matrix SpecimenPreanalytics
-  field-naming mismatch, same shape as #392). **#528 opened** (stale
-  `UserModel.isValidAccessType`/`getRoleName` test, methods removed by
-  #432). **#529 opened** (dictionary-catalog checksum drift).
-  **skills-pack#238 opened** against `DyeAllPies/dyeallpies-skills-pack`
-  (Mongo mock `insertOne`/`updateOne` semantics finding — not a
-  BioAvanceD-v2 issue).
+- Issues this session: **#527 closed** (fix + real-backend tests merged
+  at `2581e871`).
 
 ## Which issue is next
 
 Dennis has not yet said which issue to pick up next session; per this
 skill's "only if the user explicitly said so" rule, nothing is queued.
 
-Candidates carried forward from prior handoffs, plus this session's new
-issues:
+Candidates carried forward from the prior handoff (none newly filed this
+session):
 
-- **#528** — stale `UserModel` test, methods removed by #432. Small,
-  clearly-scoped, likely a quick `fix-bugs` pickup.
+- **#528** — stale `UserModel.isValidAccessType`/`getRoleName` test
+  (methods removed by #432). Small, clearly-scoped, likely a quick
+  `fix-bugs` pickup.
 - **#529** — dictionary-catalog checksum drift. Needs investigation
   first (re-run the generator, diff against the checked-in artifact) —
   root cause unknown.
-- **#527** — solid-matrix `SpecimenPreanalytics` field-naming mismatch.
-  Same shape as the already-resolved #392 — check
-  `sprecDictionary.js`'s existing relabeling before writing new mapping
-  logic.
 - **#525** — 4 additional RCS/SPREC/storage-custody consumers found by
   #496's re-audit (`label.routes.js`, `reports.routes.js`,
   `neo4j-canonical-rebuild.js`, `batch-validation-engine.service.js`).
   Likely routes to `resolve-issue`/a small migration slice per file.
 - **#390** — umbrella; all originally-tracked sub-issues closed, plus
-  #496 (audit) and now #526 also closed. Still not re-assessed whether
-  it should close or get a status comment — carrying forward again, now
-  with #525/#527/#528/#529 as candidates that may want to hang off it,
-  or not, depending on scope.
+  #496 (audit), #526, and now #527 also closed. Still not re-assessed
+  whether it should close or get a status comment.
 - **#489** — full-suite vitest flakiness (JWT/encryption-secret failure
-  shape, ~89 files), open, not re-confirmed. Distinct from this
-  session's #528/#529 — don't conflate.
+  shape, ~89 files), open, not re-confirmed. Distinct from #528/#529 —
+  don't conflate.
 - **#386** — RBAC still keyed on `accessType`/`roleName` per dict-07,
   open, not re-triaged this session.
-- **#336** — still open: is `import.controller.js#importFhirBundle`
-  dead code to remove, or does something still call it?
+- **#336** — still open: is `import.controller.js#importFhirBundle` dead
+  code to remove, or does something still call it?
 - Older backlog, unchanged: `#371`/`#373`/`#374`/`#378`/`#379`, `#368`,
   next e2e slice per `E2E_TRACEABILITY_PLAN.md`/`#331`.
 - **skills-pack#233/#234/#235/#236/#237/#238** — pack-repo only, low
-  priority, unchanged (plus this session's new #238).
+  priority, unchanged.
 
 ## Dev stack state
 
-Nothing started this session. `build-loop`'s "real backend" proof bar
-for a backend-internal slice (not the milestone's own e2e Playwright
-spec) is a mocked-Mongo integration test with real query-matching
-semantics, not literal Docker — matches what
-`tests/integration/fhir-import.test.js` already does. No Docker/live-DB
-needed or used this session.
+Nothing started this session. Same as prior sessions: `fix-bugs`' targeted
+native-vitest verification bar (mocked-Mongo integration tests with real
+query-matching semantics) is what `tests/integration/fhir-import.test.js`
+already uses — no Docker/live-DB needed or used.
 
 ## Which skills to use
 
-- `work-issue` → `build-loop` (route 4) was correct for #526 — a
-  capability named in an issue but missing from the code entirely,
-  proven with a real-backend test built alongside the fix. No misroute.
-- **New this session:** when a build-loop slice's proving test exposes a
-  second, smaller bug the fix's own test can't pass meaningfully without
-  fixing (here: `calculateRcsPreview` discarding the `sprec` object it
-  already computed) — fix it in the same commit rather than shipping a
-  technically-passing-but-empty snapshot, but stop there: a deeper,
-  separate-judgment-call issue found in the same area (the solid/fluid
-  field-naming mismatch) still gets its own issue rather than expanding
-  the slice further. The line: fix what's needed to make *this* slice's
-  own acceptance criteria real; file what would require its own design
-  call.
-- **New this session:** before trusting a hand-rolled Mongo collection
-  mock's `insertOne`/`updateOne` return values in a test file that
-  doesn't use the shared `tests/factories/db.factory.js`, check whether
-  it replicates the real driver's `insertOne`-mutates-in-place and
-  `updateOne`-returns-`upsertedId`-on-insert behaviors — confirmed via
-  skills-pack#238 this mismatch costs real debugging time and the
-  in-memory-mock convention this repo's build-loop overlay already
-  prescribes.
+- `work-issue` → `fix-bugs` (route 1) was correct for #527 — a
+  reproducible wrong-output defect in product source, not a stale test
+  or a missing capability. No misroute.
+- Confirmed again (mirrors #526's precedent): when a fix's proving test
+  exposes a second, sibling instance of the *exact same* root cause in
+  the same file (here: `buildRcsPayload`'s `unknownSolid` placeholder
+  sharing `parseSprecRaw`'s field-naming bug) — fix it in the same
+  commit, since leaving it would mean the picked issue's own acceptance
+  criteria don't actually hold in every case. This is different from
+  #526's "second bug, file separately" case: same root cause, same file,
+  needed for *this* issue's own claim to be true — not a new design
+  question.
+- New this session: before treating a "same-shaped field names elsewhere
+  in the codebase" sighting as a live recurrence of the bug just fixed,
+  trace whether that code path is actually reachable to the write site
+  the bug affects — don't file on pattern-match alone. Here,
+  `ClinicalIntakeWizard.jsx`'s old field names looked like a second
+  instance of #527's bug, but tracing `routes/intakeWizard.js` turned up
+  an explicit code comment (`#502`) confirming that flow never records a
+  `SpecimenPreanalytics` snapshot at all — reachability check dissolved
+  what looked like a new issue, per `fix-bugs`' existing "reachability
+  dissolving issues" precedent.
 - Confirmed again: a fix/build branch only merged locally (never pushed
-  on its own) needs no remote branch-delete step.
-- `gh issue list --search "<keyword>" --state all` before filing paid
-  off four times this session (#527/#528/#529, and re-checking #489's
-  own body before concluding #528/#529 were new, not duplicates).
+  on its own) needs no remote branch-delete step; when a branch *was*
+  pushed on its own, remote delete succeeded without denial this time
+  (contrast the #392 precedent in the `fix-bugs` overlay) — still no
+  reliable predictor for when the classifier will allow it.
+- `gh issue list --search "<keyword>" --state all` before filing didn't
+  come up this session (nothing new was filed) — the pattern from prior
+  sessions still holds when it's needed.
