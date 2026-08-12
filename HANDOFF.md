@@ -1,79 +1,62 @@
 # HANDOFF
 
 **Written:** 2026-08-12, end of session on `feature/docker-e2e-backend-integration`,
-after resolving #546 and #547 (Dennis said "Read handoff and pick issues
-#546 & #547").
+after closing #386 (Dennis said "Pick #386").
 
 ## What happened this session
 
-Dennis said "pick #546 & #547." Both were duplicate-alias dead-code
-findings in `import.service.js`'s `parseSampleCSV`, filed during the
-prior session's #536 work.
+Dennis said "Pick #386." Routed via `work-issue`: #386 was the dict-07
+RBAC-normalization tracker issue, already split (in an earlier session,
+per its own comment) into three landable slices — #420 (models), #421
+(enforcement cutover), #422 (further split into #426/#427/#428 for the
+write-path migration). All three were found **already closed**, so this
+routed to `resolve-issue` as a verification/close-discipline task, not
+new build work — no code was written this session.
 
-**#546 was already fixed before this session started** — a prior
-session (after rotating `HANDOFF.md` at commit `212f0d53`, then
-continuing to work past that point rather than stopping) had branched
-`fix/546-remove-duplicate-consenttemplateid-key`, committed the fix
-(`86b20dec`, deleted the duplicate `consentTemplateId:` key, added a
-regression test), pushed it, and commented the fix onto the issue — but
-never merged it into the integration branch, never closed the issue,
-and never re-rotated `HANDOFF.md` to reflect any of that. The prior
-handoff (as read at the start of this session) still described #546 as
-"opened, not yet acted on." `resolve-issue`'s pre-pickup dangling-branch
-check (`git branch -a` + `merge-base --is-ancestor`) caught this
-correctly — this is the mechanism working as designed, not a defect —
-but it's worth flagging that a `HANDOFF.md` rotation is not a hard stop
-on further work in the same session; if a session keeps working after
-rotating it, the file goes stale immediately. This session verified the
-fix (targeted vitest: 52/52 green before merge), merged it
-(`288b5e55`), and closed the issue against that merge — the part the
-prior session left undone.
+Verified the closure was real, not just issue-state trust:
 
-**#547** (`parseSampleCSV`'s `getRowValue(row, [...])` alias arrays had
-redundant duplicate entries, e.g. `['consentTemplateId',
-'consentTemplateId', 'consentTemplateId']`) — same root cause as #546:
-commit `e2549bee0` ("canonicalize participant flow") mechanically
-renamed legacy field names onto canonical ones, collapsing some
-previously-distinct alias-array entries onto the same string. Confirmed
-via `getRowValue`'s implementation (`import.service.js:35-44`) that it
-builds a `Set` from the alias list before checking row keys, so
-duplicates are provably inert — no different behavior was ever possible,
-this was the "behavior-invariant dead code" case (no reproduction
-needed, just static confirmation + regression coverage for the
-previously-untested paths). Two of the four affected aliases
-(`patient_id`, `dataRegistro`) had no direct test before; added one each.
+- `git log --all --oneline --grep` confirmed every slice's commits exist
+  and `git merge-base --is-ancestor test/428-rbac-retire-legacy-fields
+  feature/docker-e2e-backend-integration` confirmed they're merged into
+  the integration branch (not just pushed to a dangling branch).
+- Read the actual code: `api/backend/src/models/{Role,Permission,
+  UserRoleAssignment}.js` exist; `User.js` has no `accessType`/
+  `roleName` fields; `roles.min.json` is gone; `requirePermission`
+  (backed by the new model) gates all 24 route files.
+- Traced the input-compatibility path specifically, since
+  `tests/e2e/auth-access-security.spec.ts` (RF002/RF003) still POSTs
+  `accessType`/`roleName` in request bodies: confirmed in
+  `user.routes.js` (register + PUT `/:id`) and `auth.service.js` that
+  these are resolved into a real `UserRoleAssignment` grant
+  (`changeUserRole`/`registerUser`) and then `delete`d before
+  persistence — not silently-ignored legacy fields. This means the
+  RF002/RF003 e2e coverage genuinely re-proves enforcement against the
+  new model, not just against request-body shape.
 
-**#547 resolved** (`fix/547-remove-duplicate-getrowvalue-aliases`,
-commit `864b2ba3`, merged into the integration branch at `d584fe12`) —
-deduplicated all four alias arrays (`participantId`/`patient_id`/
-`idPaciente`; `registeredAt`/`dataRegistro`; `consentTemplateId`;
-`merkleRoot`), added the two missing regression tests. Targeted vitest
-(`import.service.unit.test.js`): 54/54 green on the merged tree.
+Closed #386 with a comment summarizing the verification and citing the
+specific commits (521f3fa8, 1058626e, a6ef9901, 65652204, 7688befe,
+fb2ff9fc).
 
-**Security/safety note:** none — both issues are pure dead-code removal
-(duplicate object key, duplicate array entries), no trust boundary
-touched, confirmed behavior-invariant before editing in both cases.
+**Security/safety note:** none new — this session made no code changes.
+The RBAC normalization itself (accessType → UserRoleAssignment) was
+already-shipped work from prior sessions; this session only confirmed
+it landed correctly and closed the stale tracker.
 
-**Workflow friction this session:** none beyond the stale-`HANDOFF.md`
-note above (which is really about the *prior* session's sequencing, not
-this one's). Both remote branch deletions (`fix/546-...`,
-`fix/547-...`) succeeded with no permission-classifier denial this
-time — consistent with `fix-bugs`'s existing "no reliable predictor
-found" framing for that denial, not a contradiction of it. No new
-skill edits needed.
+**Workflow friction this session:** none. Pure verification/close-out —
+no code edits, no branch, no merge, no permission denials, no retries.
+`wrap-up`'s core audit and shipping addendum both came back clean.
 
 ## Repo state
 
-- **`feature/docker-e2e-backend-integration`**: at `d584fe12`, clean,
-  pushed, up to date with origin. Contains #546's merge (`86b20dec`→
-  `288b5e55`) and #547's merge (`864b2ba3`→`d584fe12`).
-- `fix/546-remove-duplicate-consenttemplateid-key`: merged, closed out,
-  deleted both locally and on origin this session.
-- `fix/547-remove-duplicate-getrowvalue-aliases`: merged, closed out,
-  deleted both locally and on origin this session.
+- **`feature/docker-e2e-backend-integration`**: at `50e82ec5`, clean,
+  pushed, up to date with origin. **Unchanged this session** — no
+  commits landed (verification-only, closing #386 was a GitHub-side
+  action, not a repo write).
+- Issues this session: **#386 closed** (verified already-resolved by
+  #420/#421/#422's prior merges; no new commit).
 - **Pre-existing dangling branches, not touched this session** (carried
   forward unchanged, 16 total — see prior handoffs for the full list,
-  unchanged since #531/.../#543/#536's sessions): local —
+  unchanged since #531/.../#543/#536/#546/#547's sessions): local —
   `fix/476-quarantine-status-design-call`,
   `fix/477-bulk-import-storage-allocation`,
   `fix/481-autoassign-precheck-repository`,
@@ -95,29 +78,28 @@ skill edits needed.
   #536/#537's handoff) — both still on origin, remote-delete-denied in
   their respective sessions, still need manual cleanup or an explicit
   permission grant.
-- Issues this session: **#546 closed** (fix `86b20dec` from a prior
-  session, merge `288b5e55` this session). **#547 closed** (fix
-  `864b2ba3`, merge `d584fe12`, both this session). Confirmed **#544**
-  was already closed before this session (not by this session — no
-  record of who/when in the issue itself beyond its closed state).
+  - Note: `test/428-rbac-retire-legacy-fields` (in this list already)
+    is confirmed merged as of this session — its dangling status is
+    "not yet deleted," not "not yet merged." Same cleanup category as
+    the two `fix/541`/`fix/536` branches above.
 
 ## Which issue is next
 
 Dennis has not yet said which issue to pick up next session; per this
 skill's "only if the user explicitly said so" rule, nothing is queued.
 
-Candidates carried forward (#546/#547 now resolved, #544 confirmed
-already closed, both removed from this list):
+Candidates carried forward (#386 now resolved and closed, removed from
+this list):
 
 - **#530** — `dictionary:validate` isn't wired into `ci-pipeline.yml`,
   so #529-class drift has no CI gate. Small, well-scoped fix.
 - **#390** — umbrella; all originally-tracked sub-issues closed, plus
   #496/#525/#526/#527/#528/#529/#531 also closed. Still not re-assessed
-  whether it should close or get a status comment.
+  whether it should close or get a status comment. (Same shape #386
+  just was — worth checking with the same "read the tracker comment,
+  check its named sub-issues' actual state" approach.)
 - **#489** — full-suite vitest flakiness (JWT/encryption-secret failure
   shape, ~89 files), open, not re-confirmed.
-- **#386** — RBAC still keyed on `accessType`/`roleName` per dict-07,
-  open, not re-triaged this session.
 - **#336** — still open: is `import.controller.js#importFhirBundle` dead
   code to remove, or does something still call it?
 - Older backlog, unchanged: `#371`/`#373`/`#374`/`#378`/`#379`, `#368`,
@@ -129,34 +111,24 @@ already closed, both removed from this list):
 
 ## Dev stack state
 
-Nothing started this session. Same as prior sessions: native-only
-verification (targeted `vitest run` for backend) — no Docker/live-DB
-needed or used, consistent with `resolve-issue`'s targeted per-iteration
-default.
+Nothing started this session. Same as prior sessions: this session did
+targeted code-reading and `git log`/`grep` verification only — no
+build, no test run, no Docker/live-DB needed or used.
 
 ## Which skills to use
 
-- Reinforced this session: `resolve-issue`'s pre-pickup "check for
-  stale/dangling branches, including work belonging to an issue that's
-  still open" step is load-bearing — it caught a fully-fixed-but-
-  unmerged branch (#546) that a prior session's `HANDOFF.md` had
-  described as untouched. **New nuance worth carrying forward:**
-  `HANDOFF.md` rotation is written as an end-of-session step, but
-  nothing prevents a session from continuing to work *after* rotating
-  it (as the #536/#537 session did, picking up #546 post-rotation).
-  When that happens, the freshly-rotated file is already stale the
-  moment further work lands, and the safety net is entirely
-  `resolve-issue`'s dangling-branch check, not the handoff file itself.
-  Not treated as a skill defect worth editing — `handoff`'s trigger
-  section already frames rotation as "before the final summary," and
-  this was a case of a session continuing past that point rather than
-  the trigger firing wrong — but noting it here in case it recurs
-  enough to warrant an explicit "don't start new work after rotating
-  handoff" rule.
-- `fix-bugs`'s "behavior-invariant dead code" exception (added during
-  #536/#546's session) applied cleanly a second time for #547 — same
-  shape (duplicate array entries feeding a `Set`-based lookup), same
-  resolution path (static confirmation via reading the consuming
-  function, then regression coverage for previously-uncovered paths
-  instead of a red-then-green reproduction). No further skill edit
-  needed; this is the exception working as intended.
+- `work-issue`'s route 6 (`resolve-issue`, "anything else... board-
+  hygiene item") correctly caught #386 as a stale-tracker verification
+  task rather than routing it toward `build-loop` (which would have
+  been wrong — the build work was already done, just not confirmed).
+  Worth the same check on #390 next: don't assume an umbrella issue's
+  open state means unstarted work; read its own comments for a sub-
+  issue list first.
+- `resolve-issue`'s close-discipline case 1 ("fully resolved") applied
+  cleanly to a tracker issue whose *own* work was done by proxy (its
+  three sub-issues' merges), not by a commit on this issue's own
+  branch — confirms the case covers "verified already-resolved by
+  linked work," not just "I just implemented and merged this." No skill
+  edit needed; this is the existing case working as intended on a shape
+  it hadn't been explicitly exercised against before (in-conversation
+  memory), worth noting as a positive data point if it recurs.
