@@ -254,3 +254,19 @@ test('ATC source config only ever points at the bundled fixture file', () => {
   assert.strictEqual(atcSource.retrievalUri.startsWith('file://'), true);
   assert.strictEqual(fs.existsSync(atcSource.fixturePath), true);
 });
+
+test('DUO importer reads a bundled fixture, not a live network source (#549 twelfth slice)', () => {
+  const networkCallPatterns = [/\bfetch\(/, /require\(['"]https?['"]\)/, /require\(['"]axios['"]\)/, /\baxios\./, /XMLHttpRequest/];
+  for (const file of ['sources/duo.js', 'normalizeDuo.js']) {
+    const contents = read(path.join(importDir, file));
+    for (const pattern of networkCallPatterns) {
+      assert.doesNotMatch(contents, pattern);
+    }
+  }
+});
+
+test('DUO source config only ever points at the bundled fixture file', () => {
+  const duoSource = require(path.join(importDir, 'sources', 'duo.js'));
+  assert.strictEqual(duoSource.retrievalUri.startsWith('file://'), true);
+  assert.strictEqual(fs.existsSync(duoSource.fixturePath), true);
+});

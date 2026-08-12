@@ -1,0 +1,10 @@
+{"id":"DUO:0000001","lbl":"data use permission","is_a":[],"synonyms":[],"obsolete":false}
+{"id":"DUO:0000004","lbl":"no restriction","is_a":["DUO:0000001"],"synonyms":["NRES"],"obsolete":false}
+{"id":"DUO:0000006","lbl":"health or medical or biomedical research use","is_a":["DUO:0000001"],"synonyms":["HMB"],"obsolete":false}
+{"id":"DUO:0000007","lbl":"disease specific use","is_a":["DUO:0000006"],"synonyms":["DS"],"obsolete":false}
+{"id":"DUO:0000042","lbl":"general research use","is_a":["DUO:0000001"],"synonyms":["GRU"],"obsolete":false}
+{"id":"DUO:0000011","lbl":"population origins or ancestry research prohibited","is_a":["DUO:0000001"],"synonyms":["NPOA"],"obsolete":false}
+{"id":"DUO:9001","lbl":"geographic restriction","is_a":["DUO:0000001"],"synonyms":[],"obsolete":false}
+{"id":"DUO:9002","lbl":"time-limited use","is_a":["DUO:0000001"],"synonyms":[],"obsolete":false}
+{"id":"","lbl":"Missing code term","is_a":[],"synonyms":[],"obsolete":false}
+{"id":"DUO:9999","lbl":"","is_a":[],"synonyms":[],"obsolete":false}

@@ -21,6 +21,8 @@ const dcbSource = require('./sources/dcb');
 const { normalizeRecord: normalizeDcbRecord } = require('./normalizeDcb');
 const atcSource = require('./sources/atc');
 const { normalizeRecord: normalizeAtcRecord } = require('./normalizeAtc');
+const duoSource = require('./sources/duo');
+const { normalizeRecord: normalizeDuoRecord } = require('./normalizeDuo');
 
 /** RF028 first importer — see sources/hpo.js for why HPO and why a bundled sample. */
 async function runHpoImport(db, opts = {}) {
@@ -77,4 +79,9 @@ async function runAtcImport(db, opts = {}) {
   return runImport({ db, source: atcSource, normalizeRecord: normalizeAtcRecord, ...opts });
 }
 
-module.exports = { runHpoImport, runMondoImport, runOrphaImport, runIcd11Import, runIcd10Import, runOmimImport, runHgncImport, runLoincImport, runUcumImport, runDcbImport, runAtcImport };
+/** RF028 twelfth importer — see sources/duo.js for why DUO and why a bundled sample. */
+async function runDuoImport(db, opts = {}) {
+  return runImport({ db, source: duoSource, normalizeRecord: normalizeDuoRecord, ...opts });
+}
+
+module.exports = { runHpoImport, runMondoImport, runOrphaImport, runIcd11Import, runIcd10Import, runOmimImport, runHgncImport, runLoincImport, runUcumImport, runDcbImport, runAtcImport, runDuoImport };
