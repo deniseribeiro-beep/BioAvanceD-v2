@@ -1,166 +1,120 @@
 # HANDOFF
 
-**Written:** 2026-08-11, end of session on `feature/docker-e2e-backend-integration`,
-after resolving #532, #533, #534, #535.
+**Written:** 2026-08-12, end of session on `feature/docker-e2e-backend-integration`,
+after resolving #538 (Phase A) and filing its follow-ups.
 
 ## What happened this session
 
-Dennis said "Pick #532. If it's manageable, pick the next one up to
-#535. Avoid delegating agents." — worked all four sequentially, one at
-a time, each fully merged/closed before starting the next, no subagents
-used anywhere this session.
+Dennis said "Pick #538" — the big `currentStatus`/3-vocabulary issue
+carried forward from last session's handoff as "needs a dedicated
+session." `work-issue` routed to `resolve-issue`, which (per its own
+"needs owner design call" rule) checked `docs/` before treating the
+vocabulary question as genuinely open.
 
-**#532 resolved** (`fix/532-compliance-graph-specimen-status`, fix
-commit `59813d18`, merge commit `df4a2b74`). `work-issue` routed to
-`resolve-issue`; the issue's own body already framed it as a "needs
-owner call, same shape as #398" design question (confirmed still open
-via `docs/architecture/canonical-data-contract-v1.md`, not stale) —
-asked Dennis via `AskUserQuestion`, he picked "fold into
-specimenStatus/QuarantineAction" (consolidate, same direction as
-#398/#531) over a genuinely separate field.
+**The design question turned out to already be answered**, not actually
+needing Dennis's call on vocabulary:
+- `docs/architecture/canonical-data-contract-v1.md`'s "Legacy Fields
+  Prohibited" list already bans `currentStatus`/`lifecycleStatus`/
+  `availabilityStatus`/`quarantineStatus` outright.
+- dict-02 ELM-0123's `specimenStatus` enum already has `partial`/
+  `depleted` values, and `Sample.js#computeStatus` already derives them
+  correctly from quantity on every `withdrawSample`/`returnSample`
+  write — the withdrawal-lifecycle concept doesn't need a new field.
+- `frontend/src/types/models.ts` and `frontend/src/foundation/
+  contracts.ts` (an unmounted "Foundation"/strangler-pattern scaffold,
+  `FoundationApp.tsx`) already carry the intended `specimenStatus`→
+  legacy-label mapping, just unused by the live withdrawal page.
 
-- `SampleGraphValidator.js#validateSampleCompliance` now writes
-  `specimenStatus` directly (`AVAILABLE`/`QUARANTINE`/`BLOCKED` →
-  `available`/`quarantined`/`unavailable`, the same collapse #531 used)
-  instead of the dropped `release_status` field, and records/releases a
-  `QuarantineAction` — with a merge rule (escalate freely; downgrade
-  only a self-opened `COMPLIANCE_GRAPH_*`-reasonCode action; never
-  touch a terminal `destroyed`/`disposed` status) so a re-evaluation
-  (triggered on every `GET /:id/compliance-graph` fetch, not just
-  import/consent-update) can't silently clear a block from an unrelated
-  source.
-- Also fixed `resolveSuggestedStatus` to gate on the `pharmacology`
-  graph node — previously computed into `graphPath`/`isReleasable` but
-  silently ignored by `resolveSuggestedStatus` itself, so a
-  pharmacology-invalid sample (ATC drug-class incoherent with its ORPHA
-  disease) could get `suggestedStatus: 'AVAILABLE'` despite
-  `isReleasable: false`. Harmless while cosmetic; load-bearing once it
-  drives `specimenStatus`, so fixed inline (blocks #532's own
-  correctness, not a separate finding).
-- Frontend's now-redundant `release_status` fallbacks removed
-  (`SamplesPageView.tsx`'s `mapStatus`/`isQuarantined`, `models.ts`);
-  `useSamplesInventory.ts` (dead code, see #535 below) had its
-  `release_status` reads swapped to `specimenStatus` as a minimal
-  compile-fix, not a full resolution of that issue.
-- Decision + full rationale recorded in `canonical-data-contract-v1.md`
-  (new dated entry after #531's).
-- 13 tests added/updated in `sample-graph-validator.service.test.js`
-  covering the merge rule (escalate, terminal-skip, self-owned
-  downgrade, non-self-owned no-downgrade) and the pharmacology fix.
+Finished the trace #538 left incomplete: confirmed `Sample.js`'s
+Mongoose schema does **not** declare `status`/`currentStatus` (the
+writes land anyway via raw MongoDB driver calls that bypass schema
+validation — `equipment-sensor-quarantine.service.js`); confirmed
+`fhir-import-staging.service.js`/`import.controller.js`/`intakeWizard.js`
+(the non-`.routes.js` one) do **not** write those fields (the latter
+actively rejects them as `NON_CANONICAL_FIELD`); confirmed
+`validateSampleStatus` (frontend) is dead, zero callers.
 
-**Filed while resolving #532:**
-- **#536** (bug, open) — `Sample.releaseStatus` (camelCase, a *third*
-  legacy status field, separate from `release_status`/`specimenStatus`)
-  written by `SampleModel.create`/`import.service.js`/
-  `import-lgpd.service.js`/`fhir-import-staging.service.js`, no live
-  consumer found in `api/backend/src` or `frontend/src`.
-- **#537** (bug, open) — `GET /:id/compliance-graph`'s side effect
-  (every fetch re-evaluates and persists) now mutates
-  `specimenStatus`/`QuarantineAction` instead of a cosmetic field —
-  bigger blast radius than before, API-contract question (should GET
-  stay revalidate-and-persist?) out of #532's own scope.
-- **skills-pack#243** (enhancement, open) — a recurring vitest gotcha:
-  services forwarding an optional `session` param
-  (`session ? {session} : undefined`) still pass an explicit `undefined`
-  arg on the no-session path, so `toHaveBeenCalledWith` needs that
-  trailing `undefined` matcher too. Cost 3 avoidable test failures this
-  session before I found the existing convention in
-  `equipment-sensor-quarantine.service.test.js`. Couldn't edit
-  `vitest-specs` directly per skill-maintenance's Rule 0.
+**Confirmed too big for one sitting** (3 live writers, 5 live readers —
+same shape as the #398/#405-#408 `specimenStatus` consolidation, which
+took 4 phased issues). Confirmed the phased split with Dennis via
+`AskUserQuestion` before filing anything (`divide-and-conquer`'s
+design-split playbook) — he picked "phase it, ship one load-bearing
+slice now" and "file the two smaller side-findings separately, don't
+fold into the same branch."
 
-**#533 resolved, but not as originally scoped** (`fix/533-status-currentstatus-trace`,
-fix commit `02933ec1`, merge commit `b33ef8a6`) — `work-issue`/
-`resolve-issue` started the trace #533 asked for (is `status`/
-`currentStatus` on `Sample.js` dead legacy cruft like `release_status`
-turned out to be, or something else), and it turned out **much bigger
-than #531/#532's shape**: mid-trace, invoked `divide-and-conquer`'s
-"issue turned out too big after starting" playbook.
+**#538 resolved as Phase A** (`fix/538-withdrawal-page-specimen-status`,
+commit `83859258`, merge commit `fb39e6db`) — the one *confirmed-broken*
+real business gate: `SampleWithdrawalReturnPage.tsx`'s `canWithdraw`/
+`getPendingReturnQuantity`/initial-tab-switch used to check
+`sample.currentStatus`, a field the real withdraw/return write path
+never sets. Rewired onto `specimenStatus`, extracted as pure exported
+functions (`resolveSpecimenStatus`/`canWithdrawSample`/
+`getPendingReturnQuantity`/`resolveInitialTab`/`getSpecimenStatusColor`/
+`translateSpecimenStatus`), 18 new unit tests, `tsc --noEmit` clean.
+Also added a frontend-only guard blocking re-withdrawal of a `depleted`
+sample (the backend's own gap here is #541, filed separately per
+Dennis's call, not touched in this branch).
 
-- Confirmed **not dead**: `intakeWizard.routes.js`'s
-  `enforcePersistedGovernanceStatus` writes a real `status`/
-  `currentStatus`/`specimenStatus` trio to the Sample document on every
-  intake submission; `equipment-sensor-quarantine.service.js`/
-  `eConsent.js` write yet another casing variant; `reports.routes.js`
-  and `ReportViewPage.tsx` display the persisted value; and — the
-  serious part — `SampleWithdrawalReturnPage.tsx` (a live business page)
-  gates real withdraw/return logic on `currentStatus` values
-  (`'Withdrawn'`/`'TotallyWithdrawn'`/etc., yet a *fourth* vocabulary,
-  per `models.ts`) that `sample.service.js#withdrawSample` — the only
-  real withdrawal write path — never actually writes. That gate is
-  confirmed dead weight; whether a quantity-based safety net elsewhere
-  still prevents double-withdrawal wasn't verified either way.
-- Shipped the one confirmed, self-contained bug found along the way:
-  `GET /api/samples/search/by-term` filtered
-  `currentStatus: {$ne:'WITHDRAWN'}` to exclude withdrawn samples, but
-  nothing anywhere writes that value — the filter never excluded
-  anything. Fixed to filter on `withdrawnAt` (the real signal
-  `withdrawSample` sets). Also dropped `GET /api/samples`'
-  dead-on-arrival `currentStatus` query param
-  (`sample.service.js#listSamples` silently ignored it; no frontend
-  caller ever sent it).
-- **The full status/currentStatus-vs-specimenStatus consolidation is
-  NOT done** — filed as **#538** (bug, open) rather than attempted in
-  one sitting: it's a multi-writer, multi-reader atomic migration
-  (closer in shape to the original #389/#398/#408 specimenStatus
-  consolidation project than to #531/#532's single-field fix), and a
-  half-migrated version would leave some readers matching the new
-  vocabulary and others silently not.
+**Filed while resolving #538:**
+- **#539** (bug, open) — Phase B: migrate remaining live readers
+  (`SampleDetailsPage.tsx`, `ReportViewPage.tsx`, `reports.routes.js`,
+  `userMethods.ts`) onto `specimenStatus`. No dependency, can start
+  anytime.
+- **#540** (bug, open) — Phase C: remove the three dead writers (intake
+  wizard's `enforcePersistedGovernanceStatus`, `equipment-sensor-
+  quarantine.service.js`, `eConsent.js`). **Depends on #539** — these
+  readers still consume what the writers produce today.
+- **#541** (bug, open) — `withdrawSample`'s `BLOCKED_SPECIMEN_STATUSES`
+  doesn't include `'depleted'`, so a redundant `Total`-type re-withdrawal
+  on an already-fully-withdrawn sample silently no-ops (writes a
+  spurious zero-quantity ledger movement) instead of being rejected.
+  Doesn't lose material (balance floors at 0) but pollutes the audit
+  trail. Backend-only; the frontend already has its own guard as of
+  Phase A.
+- **#542** (bug, open) — frontend's `'Expired'` legacy status value has
+  zero producer anywhere in the codebase (backend or frontend) — looks
+  aspirational, needs Dennis's call on whether it's planned (RF014/
+  retention-policy adjacent, #440/#441) or dead.
+- **skills-pack#244** (enhancement, open) — `clean-up`'s branch domain
+  lists local-delete and remote-delete as two bullets but doesn't say to
+  issue them as two separate tool calls; chaining them with `&&` this
+  session meant the classifier's denial of the remote half also blocked
+  the (normally uncontroversial) local half, costing an extra
+  `AskUserQuestion` round-trip. Couldn't edit `clean-up` directly per
+  skill-maintenance's Rule 0.
 
-**#534 resolved** (`fix/534-compliance-contract-storageassignment-fixture`,
-fix commit `ecc9814c`, merge commit `ba7d64d9`) — exactly as scoped in
-the prior handoff. `work-issue` routed to `fix-bugs` (route 2, stale
-test): `canonical-data-contract-v1.md`'s #508 entry confirmed
-`ReleaseSampleUseCase`/`AllocateSampleUseCase` were intentionally
-migrated to read `storageAssignment.boxId`/`.positionCode`; the ISO
-20387 custody test's fixture in `compliance.contract.test.js` still
-provided the legacy `storageLocation.boxId`/`.position` shape and was
-never updated. Fixed the fixture only, not the use case. 7+21+18 tests
-green (`compliance.contract.test.js`, `ReleaseSampleUseCase.test.js`,
-`AllocateSampleUseCase.test.js`).
-
-**#535 resolved** (`fix/535-remove-dead-usesamplesinventory`, fix
-commit `95da95d8`, merge commit `cb737df8`) — re-confirmed via fresh
-grep that `useSamplesInventory.ts` is still unimported anywhere, then
-traced *why* (per this skill's own past lesson to trace instead of
-guessing): `SamplesPage.tsx`'s inventory tab is served by
-`useSamplesPage` + `SamplesPageView.tsx`'s own inline status logic, not
-this hook — it's a superseded/abandoned earlier implementation, not a
-missing-wiring gap. Removed outright. No test referenced it;
-`tsc --noEmit` clean before and after.
-
-**No security-relevant findings requiring separate filing** — #532's
-`QuarantineAction`/`specimenStatus` write and the GET side-effect
-concern are compliance/audit-trail-adjacent but already carry their own
-issue (#537); no new unauthenticated routes, relaxed validators, or
-secrets touched anywhere this session.
+**No security-relevant findings requiring separate filing** — all
+changes this session were frontend display/gating logic reading
+already-secured API responses; no new routes, no relaxed validators, no
+secrets touched.
 
 **Workflow friction this session:**
-- `push-wrapup-checkpoint.cjs` fired at each issue-close/each
-  integration-branch push, same known early-fire pattern noted in
-  #525's/#529's/#531's handoffs — not re-filed, still the expected
-  shape (fires on close *or* push now, not just before
-  close/branch-delete as earlier handoffs characterized it).
-- No remote branch-delete denials this session — but note this isn't
-  new evidence either way for the "no reliable predictor" pattern: none
-  of `fix/532..535`'s branches were ever pushed to `origin` (only the
-  integration branch was pushed each time), so no remote delete was
-  even attempted.
-- The vitest trailing-`undefined`-arg gotcha (skills-pack#243 above)
-  was the one recurring, avoidable friction — 3 failing tests before
-  finding the existing convention in a sibling test file.
+- `push-wrapup-checkpoint.cjs` fired immediately after `gh issue close
+  538`, before the merge/push/branch-delete steps — same known
+  early-fire pattern noted in #525/#529/#531's handoffs (fires on
+  close/push, not just before branch-delete). Not re-filed, still the
+  expected shape.
+- Chaining local `git branch -d` + remote `git push origin --delete` in
+  one `&&` Bash call got the whole compound command denied by the
+  permission classifier, including the local half that's never been
+  denied on its own in this project's history — filed as
+  skills-pack#244 above (with the exact suggested wording) rather than
+  editing the junctioned `clean-up` skill directly.
+- No other denials this session (merge, push to the integration branch,
+  and issue creation all went through cleanly).
 
 ## Repo state
 
-- **`feature/docker-e2e-backend-integration`**: at `cb737df8`, clean,
-  pushed, up to date with origin. Contains all four merges
-  (`59813d18`→`df4a2b74`, `02933ec1`→`b33ef8a6`, `ecc9814c`→`ba7d64d9`,
-  `95da95d8`→`cb737df8`).
-- No dangling branches from this session's own work — all four
-  `fix/53{2,3,4,5}-*` branches merged and deleted locally; none were
-  ever pushed remotely, so no remote cleanup needed.
+- **`feature/docker-e2e-backend-integration`**: at `fb39e6db`, clean,
+  pushed, up to date with origin. Contains #538 Phase A's merge
+  (`83859258`→`fb39e6db`).
+- No dangling branches from this session's own work —
+  `fix/538-withdrawal-page-specimen-status` merged, closed, and deleted
+  both locally and on `origin` (after an `AskUserQuestion` confirmation
+  per the classifier denial above).
 - **Pre-existing dangling branches, not touched this session** (carried
   forward unchanged, 16 total — see prior handoffs for the full list,
-  unchanged since #531's session): local —
+  unchanged since #531/#535's sessions): local —
   `fix/476-quarantine-status-design-call`,
   `fix/477-bulk-import-storage-allocation`,
   `fix/481-autoassign-precheck-repository`,
@@ -177,30 +131,35 @@ secrets touched anywhere this session.
   `worktree-agent-a8ad1494700a4a20e`. Remote —
   `fix/349-user-organization-picker` (last checked during #527's
   session; not re-checked this session).
-- Issues this session: **#532, #533, #534, #535 closed** (all four
-  merged into the integration branch, commits above). **#536, #537,
-  #538 filed** (new, open, this repo). **skills-pack#243 filed** (new,
-  open, pack repo).
+- Issues this session: **#538 closed** (Phase A merged, commits above).
+  **#539, #540, #541, #542 filed** (new, open, this repo — #540 depends
+  on #539). **skills-pack#244 filed** (new, open, pack repo).
 
 ## Which issue is next
 
 Dennis has not yet said which issue to pick up next session; per this
 skill's "only if the user explicitly said so" rule, nothing is queued.
 
-Candidates carried forward (#532–#535 now resolved, removed from this
-list; **#536/#537/#538 newly added**):
+Candidates carried forward (#538 now resolved as Phase A, removed from
+this list; **#539/#540/#541/#542 newly added**):
 
-- **#538** — the big one: `currentStatus`'s three-vocabulary mess and
-  `SampleWithdrawalReturnPage.tsx`'s dead status-gate. Real design work
-  plus a multi-file atomic migration — needs its own dedicated session,
-  not a quick pickup. Read its body in full before starting; it lists
-  exactly what's traced and what isn't yet.
+- **#539** — Phase B of the currentStatus migration: migrate
+  `SampleDetailsPage.tsx`/`ReportViewPage.tsx`/`reports.routes.js`/
+  `userMethods.ts` onto `specimenStatus`. Follow the pattern
+  `SampleWithdrawalReturnPage.tsx` already set (Phase A) — pure exported
+  helper functions, unit-tested. No dependency, ready to pick up.
+- **#540** — Phase C: remove the three dead writers. **Do #539 first**
+  (explicit dependency).
+- **#541** — small, well-scoped backend fix (`BLOCKED_SPECIMEN_STATUSES`
+  + `'depleted'`, or an explicit zero-quantity guard in `withdrawSample`).
 - **#536** — `Sample.releaseStatus` (camelCase) third-field cleanup.
   Likely small (probable deletion, no live consumer found) but confirm
   no external consumer first per the issue's own caveat.
 - **#537** — `GET /:id/compliance-graph`'s side-effect-on-GET API
   contract question. Needs Dennis's call on whether to split
   read/revalidate into separate endpoints.
+- **#542** — needs Dennis's call on whether `'Expired'` is planned or
+  dead; small either way once answered.
 - **#530** — `dictionary:validate` isn't wired into `ci-pipeline.yml`,
   so #529-class drift has no CI gate. Small, well-scoped fix.
 - **#390** — umbrella; all originally-tracked sub-issues closed, plus
@@ -211,43 +170,45 @@ list; **#536/#537/#538 newly added**):
 - **#386** — RBAC still keyed on `accessType`/`roleName` per dict-07,
   open, not re-triaged this session.
 - **#336** — still open: is `import.controller.js#importFhirBundle` dead
-  code to remove, or does something still call it? (Also referenced by
-  #532's #536 finding — that finding's own liveness question overlaps
-  with #336's.)
+  code to remove, or does something still call it? (Confirmed again this
+  session that it writes only `releaseStatus`/`status`-on-Consent, not
+  Sample `status`/`currentStatus` — doesn't resolve #336's own liveness
+  question, just narrows what it would affect.)
 - Older backlog, unchanged: `#371`/`#373`/`#374`/`#378`/`#379`, `#368`,
   next e2e slice per `E2E_TRACEABILITY_PLAN.md`/`#331`.
-- **skills-pack#233/#234/#235/#236/#237/#238/#239/#240/#241/#243** —
-  pack-repo only, low priority, unchanged otherwise (#243 newly added).
+- **skills-pack#233/#234/#235/#236/#237/#238/#239/#240/#241/#243/#244** —
+  pack-repo only, low priority, unchanged otherwise (#244 newly added).
 
 ## Dev stack state
 
 Nothing started this session. Same as prior sessions: native-only
-verification (mocked-Mongo unit tests, real `tsc --noEmit`) — no
-Docker/live-DB needed or used, consistent with `resolve-issue`'s
-targeted per-iteration default across all four issues.
+verification (vitest for the frontend unit tests, real
+`tsc --noEmit`) — no Docker/live-DB needed or used, consistent with
+`resolve-issue`'s targeted per-iteration default.
 
 ## Which skills to use
 
-- `divide-and-conquer`'s "issue turned out too big after starting"
-  playbook did real, load-bearing work this session (#533 → #538): the
-  re-scope-out-loud → ship-a-narrow-slice → file-the-remainder sequence
-  is worth reusing verbatim next time an issue's own "needs the same
-  trace #531 did" framing turns up something bigger than expected —
-  don't force the full scope through just because the user asked to
-  "pick up the next issue."
-- New this session: **when a `resolve-issue`/`fix-bugs` trace turns up
-  a live consumer, keep tracing until you've found the *actual* write
-  path that consumer expects** — #533's initial trace found
-  `currentStatus` had real frontend readers and almost stopped there;
-  the more useful finding (the withdrawal page's gate checks a value
-  the real withdraw flow never writes) only surfaced by also tracing
-  the *write* side for the same field. A consumer existing is not the
-  same question as whether anything produces what it expects.
+- `divide-and-conquer`'s design-split playbook (step 2, "confirm the
+  breakdown with the user before filing anything") did real work this
+  session — asking Dennis to confirm the phased split *and* how to
+  handle the two side-findings, via one `AskUserQuestion` call with two
+  questions, got a clean answer before any issue was filed. Worth
+  reusing verbatim: confirm the shape of the split, not just that a
+  split is needed.
+- Confirmed again: `resolve-issue`'s "check `docs/` before treating
+  something as needing an owner's design call" rule fully dissolved
+  what #538's own body framed as its central open question. Worth
+  restating as a pattern: when an issue's own trace already names the
+  specific docs section it *didn't* check, check that section first,
+  before reaching for `AskUserQuestion` on the design question itself.
+- New this session: when an issue's "not yet traced" list includes
+  "does the schema declare this field," don't stop at confirming it
+  doesn't — check *how* the write actually lands (raw MongoDB driver
+  call vs. Mongoose model method). A field genuinely absent from a
+  Mongoose schema can still be persisted for real if the writer bypasses
+  the ODM entirely, which changes what "the schema doesn't declare it"
+  actually implies about whether the writes are live.
 - Confirmed again: `push-wrapup-checkpoint.cjs`'s early-fire (relative
-  to merge/branch-delete) is now the *expected* shape across five
-  sessions running (#525, #529, #531, and this one) — treat it as
-  permanent behavior, not a bug to keep re-noting.
-- skills-pack#243 (vitest trailing-`undefined`-arg gotcha) — apply it
-  proactively next time a test asserts `toHaveBeenCalledWith` against
-  any service built on `collectionResolver.getCollection`'s
-  session-forwarding pattern.
+  to merge/branch-delete) is now the *expected* shape across six
+  sessions running (#525, #529, #531, and the last two including this
+  one) — treat it as permanent behavior, not a bug to keep re-noting.
