@@ -2,85 +2,100 @@
 
 **Written:** 2026-08-12, end of session on `feature/docker-e2e-backend-integration`,
 after Dennis said "Continue 549" (which the prior handoff had queued as
-the top candidate, next source Cell Ontology).
+the top candidate, next source EDAM).
 
 ## What happened this session
 
 Continued issue #549 per the prior handoff's queued next-source pointer —
-shipped **Cell Ontology**, the fifteenth of the 16 Fase 2 reference-data
-sources, via `build-loop`, in the identical shape every prior source
-(HPO through NCBI Taxonomy) established:
+shipped **EDAM**, the sixteenth and final of the 16 Fase 2 reference-data
+sources, via `build-loop`, closing out the entire RF028 Fase 2 group and
+issue #549 itself:
 
-- `sources/cl.js` + `normalizeCl.js`, a bundled `cl-sample.jsonl` fixture
-  (8 valid + 2 intentionally-invalid records), `import-cl-reference-
-  dataset.js` + `reference:import:cl`/`:dry-run` npm scripts, a
-  `reference-data-bootstrap-cl` compose.dev.yml service chained onto
-  `reference-data-bootstrap-ncbitax`, `reference-import-boundary.arch.test.js`
-  extended with a mirror pair of assertions, `normalizeCl.test.js`
-  (6 unit tests), and a new per-source assertion in
-  `pipeline-continuity.spec.ts`'s RF028 describe block.
+- `sources/edam.js` + `normalizeEdam.js`, a bundled `edam-sample.jsonl`
+  fixture (11 valid + 2 intentionally-invalid records),
+  `import-edam-reference-dataset.js` + `reference:import:edam`/
+  `:dry-run` npm scripts, a `reference-data-bootstrap-edam` compose.dev.yml
+  service chained onto `reference-data-bootstrap-cl`,
+  `reference-import-boundary.arch.test.js` extended with a mirror pair of
+  assertions, `normalizeEdam.test.js` (6 unit tests), and a new per-source
+  assertion in `pipeline-continuity.spec.ts`'s RF028 describe block.
 - **Judgment calls, checked directly against `dict-01_FONTES.md`'s
-  SRC_CL row (line 48) rather than assumed:** every value matched what
-  the prior handoff had already anticipated from a passing read of the
-  row, with no surprises — `sourceFormat` `['OWL']` (row lists
-  "OWL/OBO", same shape as DUO/Uberon). `systemUri`
-  `http://purl.obolibrary.org/obo/cl.owl` — the row's own "URL de
-  download" column already points at Cell Ontology's genuine OBO
-  Foundry PURL directly (like Uberon's row, unlike DUO's GitHub-repo
-  fallback), so no HPO/MONDO-style convention judgment call was needed.
-  `license` `'Licença indicada no OBO Foundry'` (row's literal text,
-  same shape as Uberon's row, pending real license verification at
-  real-download time, `licenseUri: null`). `semanticType` `'cell-type'`
-  — the value reserved for Cell Ontology back when Uberon shipped (per
-  Uberon's own source-file comment), matching the row's "Tipos
-  celulares" domain column and its "Não usar para: Linhagem física da
-  amostra ou anatomia completa" note.
-- Fixture content: real, publicly-known Cell Ontology terms — the genuine
-  root (CL:0000000 "cell") plus four genuine direct children (CL:0000255
-  "eukaryotic cell", CL:0000003 "native cell", CL:0000738 "leukocyte",
-  CL:0000842 "mononuclear cell") and one genuine deeper child of
-  CL:0000738 (CL:0000542 "lymphocyte", a real is_a relationship in the
-  ontology) — plus 2 disclosed fabricated placeholder leaves (CL:9001
-  "accessory cell subtype", CL:9002 "regional cell subdivision"), same
-  disclosed-fabrication pattern DCB/ATC/DUO/Uberon/NCBI Taxonomy used.
-  Like Uberon/NCBI Taxonomy, Cell Ontology's real hierarchy already has a
-  single true root, so no fabricated root ID was needed.
+  SRC_EDAM row (line 49) rather than assumed:** `sourceFormat` `['OWL']`
+  (row lists "OWL" plainly, unlike DUO/Uberon/Cell Ontology's "OWL/OBO" —
+  no interpretation judgment call needed this time, the literal value
+  already matched the stored array). `systemUri`
+  `http://edamontology.org/EDAM.owl` — the row's own "URL de download"
+  column already points at EDAM's genuine ontology PURL directly, so no
+  HPO/MONDO-style convention judgment call was needed. `license`
+  `'Licença do projeto'` (row's literal text, distinct wording from
+  Uberon/Cell Ontology's "Licença indicada no OBO Foundry" since EDAM's
+  row points at edamontology.org directly rather than an OBO Foundry
+  listing page; `licenseUri: null`, pending real license verification at
+  real-download time). `semanticType` `'bioinformatics'` — dict-01's own
+  "Bioinformática" domain column for SRC_EDAM, translated the same way
+  every prior source's domain column became its semanticType, kept as
+  one fixed value across all four EDAM branches (every normalizer in
+  this loop returns one constant semanticType regardless of the record's
+  shape — this slice followed that established pattern rather than
+  introducing per-record derivation).
+- **Structural deviation from every prior single-root OBO/OWL source in
+  this loop (DUO, Uberon, Cell Ontology):** EDAM is genuinely organized
+  into four independent branches — Data, Format, Operation, Topic — each
+  with its own root and no shared parent, matching dict-01's own "Campos
+  usados" column for SRC_EDAM ("Tipo de dado, formato de arquivo,
+  operação e tópico de análise"). Rather than force a single fabricated
+  umbrella root (which every prior single-root source didn't need
+  either, just for a different reason — they had one genuine root),
+  the fixture carries all four genuine roots.
+- **Fixture content verified against a live authoritative API, not
+  training-data recall** — EDAM's exact numeric term IDs (`data_0006`,
+  `format_1915`, etc.) are real but far less universally memorable than
+  CL:0000000/UBERON:0001062-style anchors used by prior sources, so this
+  slice used WebFetch against EBI OLS's ontology API
+  (`https://www.ebi.ac.uk/ols4/api/ontologies/edam/terms/roots` and
+  `.../terms/<url-encoded-iri>/children`) to confirm real term IDs/labels
+  before writing the fixture. Result: all four genuine branch roots
+  (`data_0006` "Data", `format_1915` "Format", `operation_0004`
+  "Operation", `topic_0003` "Topic"), one genuine direct child of each
+  (`data_2044` "Sequence", `format_3464` "JSON", `operation_2945` "Data
+  analysis", `topic_0605` "Informatics"), and one genuine narrower child
+  of `data_2044` (`data_2977` "Nucleic acid sequence", a real is_a
+  relationship in the ontology) — plus 2 disclosed fabricated placeholder
+  leaves under the Format/Topic branches (`format_9001`, `topic_9002`),
+  same disclosed-fabrication pattern DCB/ATC/DUO/Uberon/NCBI
+  Taxonomy/Cell Ontology's slices used.
 
 Verified: 6 targeted unit tests (vitest, direct file target) + full
-architecture suite (51→53) natively; then (Docker-on-by-default for this
+architecture suite (53→55) natively; then (Docker-on-by-default for this
 loop) the real dev stack brought up targeting the bootstrap chain
-directly (sixteen links deep now, `foundation-bootstrap` through
-`reference-data-bootstrap-cl`) — clean on the first try (after fixing a
-self-inflicted backgrounding mistake, see below), 10 records read / 8
-validated / 2 rejected / 15 inserted; then the real
+directly (seventeen links deep now, `foundation-bootstrap` through
+`reference-data-bootstrap-edam`) — clean on the first try (no repeat of
+the prior session's shell-`&`/`run_in_background` backgrounding mistake,
+confirming skills-pack#262's fix held), 13 records read / 11 validated /
+2 rejected / 18 inserted (11 concepts + 7 relations); then the real
 `pipeline-continuity.spec.ts -g "Reference data importers"` Playwright
-spec against that stack (15→16 passing tests).
+spec against that stack (16→17 passing tests).
 
-Own branch `test/549-cl-reference-source`, committed, merged (no-ff)
-into `feature/docker-e2e-backend-integration`, pushed (`085ad478`),
-progress comment posted on #549.
+Own branch `test/549-edam-reference-source`, committed, merged (no-ff)
+into `feature/docker-e2e-backend-integration`, pushed (`7b0c1674`),
+progress comment posted on #549, **#549 closed** (all 16 Fase 2 sources
+now shipped: MONDO under #548, the other 15 — HPO, ORPHA, ICD-11,
+ICD-10, OMIM, HGNC, LOINC, UCUM, DCB, ATC, DUO, Uberon, NCBI Taxonomy,
+Cell Ontology, EDAM — under #367/#549).
 
-**One workflow-mechanics finding filed this session** (skills-pack, not
-this repo): the first `docker compose up -d --build` attempt was
-launched as a shell background job (`... &`) *inside* a Bash tool call
-that also had `run_in_background: true` set — the tool call returned in
-seconds ("completed, exit 0"), but that was only the wrapping shell
-(launch subprocess, print pid, exit), not the real `docker compose up`.
-The actual command kept running detached from the tool's tracked
-process tree and got cut off mid-build: its log stopped mid-image-build
-with no `Container ... Started` lines, and `docker ps -a` afterward
-showed zero containers despite all 20 images having built successfully.
-Retried correctly — `run_in_background: true` on its own, no shell `&`
-— and that run completed properly (full container lifecycle in the log,
-chain ran clean to `reference-data-bootstrap-cl`). Cost one wasted
-build cycle, mostly cache-absorbed so cheap this time but wouldn't be on
-a cold cache. Filed as
-[dyeallpies-skills-pack#262](https://github.com/DyeAllPies/dyeallpies-skills-pack/issues/262)
-with proposed wording for `docker-workflow`'s Windows/Git Bash gotchas
-section (never combine a trailing shell `&` with the tool's own
-`run_in_background: true`).
+**Two findings filed this session:**
+1. [BioAvanceD-v2#554](https://github.com/deniseribeiro-beep/BioAvanceD-v2/issues/554)
+   — #550's own title ("...for all 14 Fase 2 sources") has the same
+   stale undercount #553 already flagged for compose.dev.yml's comments;
+   the real total is 16. Noticed while double-checking #549's close
+   comment's own follow-up-issue references. Low priority, wording-only.
+2. [dyeallpies-skills-pack#263](https://github.com/DyeAllPies/dyeallpies-skills-pack/issues/263)
+   — proposed a `build-loop`'s BioAvanceD-v2 overlay addition documenting
+   the live-API fixture-verification technique used for EDAM (see above),
+   since the overlay file is an installed junction and can't be edited
+   directly from a consuming-project session (Rule 0). Not yet resolved.
 
-`git diff --stat` for the merge confirmed the entire 10-file/309-line
+`git diff --stat` for the merge confirmed the entire 10-file/329-line
 diff is scoped to the reference-imports feature (source config,
 normalizer, fixture, import script, npm scripts, compose.dev.yml
 service, arch test, unit test, pipeline-continuity.spec.ts assertion) —
@@ -93,20 +108,19 @@ no secrets introduced.
 
 ## Repo state
 
-- **`feature/docker-e2e-backend-integration`**: at `085ad478`, clean,
-  pushed, up to date with origin. Carries #549's Cell Ontology source on
-  top of everything from prior sessions (HPO, MONDO, ORPHA, ICD-11,
-  ICD-10, OMIM, HGNC, LOINC, UCUM, DCB, ATC, DUO, Uberon, NCBI Taxonomy).
-- Issues this session: **#549 still open** (progress comment posted,
-  tracking the one remaining source, EDAM). One new issue filed
-  ([dyeallpies-skills-pack#262](https://github.com/DyeAllPies/dyeallpies-skills-pack/issues/262),
-  workflow mechanics only — not a BioAvanceD-v2 product issue).
+- **`feature/docker-e2e-backend-integration`**: at `7b0c1674`, clean,
+  pushed, up to date with origin. Carries #549's full 16-source Fase 2
+  group on top of everything from prior sessions.
+- Issues this session: **#549 closed** (all 16 Fase 2 sources shipped).
+  Two new issues filed: BioAvanceD-v2#554 (product repo, stale title
+  wording on #550, low priority) and dyeallpies-skills-pack#263 (pack
+  repo, build-loop overlay lesson, not a BioAvanceD-v2 product issue).
 - Docker: dev stack was brought up and torn down (`docker compose
   down`, no `-v`) once this session, targeting the bootstrap chain
-  directly through `reference-data-bootstrap-cl`. Named volumes
-  (mongodb/neo4j data) untouched. Session-built images left cached,
-  same reasoning as prior sessions (#549's last source, EDAM, is an
-  immediate rebuild otherwise).
+  directly through `reference-data-bootstrap-edam`. Named volumes
+  (mongodb/neo4j data) untouched. Session-built images left cached — no
+  more Fase 2 sources are queued, so the next rebuild benefit is smaller
+  than prior sessions', but harmless to leave.
 - **Pre-existing dangling branches, not touched this session** (carried
   forward unchanged, 16 local + remote items — see earlier handoffs for
   the full list; unchanged this session so not re-enumerated here to
@@ -118,72 +132,62 @@ Dennis has not explicitly said which issue to pick up next session — per
 this skill's "only if the user explicitly said so" rule, nothing is
 queued.
 
-Candidates carried forward (#549 still open, not resolved):
+Candidates carried forward:
 
-- **#549 continuation** — next per §7.4 step 8 is **EDAM**, the
-  fifth and last of the final five (DUO, Uberon, NCBI Taxonomy, Cell
-  Ontology done; EDAM remains), closing out the entire 16-source Fase 2
-  group. Same build-loop shape as every source shipped so far, reusing
-  `pipeline.js` as-is. Check `dict-01_FONTES.md`'s `SRC_EDAM` row
-  directly (don't assume from this handoff) for
-  `sourceFormat`/`license`/`systemUri`/`semanticType` — every prior
-  slice has needed its own per-source judgment call there, even when
-  the pattern looks predictable (this session's own SRC_CL row check
-  turned out to need no new judgment calls at all — every value matched
-  the prior handoff's anticipation exactly — so "predictable" isn't a
-  reason to skip the direct read, just a description of how it's gone
-  lately). Once EDAM lands, `import-large-reference-dataset.js`'s
-  `allowedDatasets` Set has been empty since the OMIM slice (nothing to
-  remove there), and issue **#553** (compose.dev.yml's "14 Fase 2
-  sources" comments undercounting the real total of 16) becomes ripe to
-  fix, per its own suggested target ("after EDAM closes out step 8").
-- **#550/#551/#552** — independent of #549, can be picked up in any
-  order once #367 (satisfied) is the only real dependency.
+- **#549 is now closed** — the entire RF028 Fase 2 group (16/16 sources)
+  is shipped. Explicitly out-of-scope follow-up work from #549's own
+  description is tracked separately:
+  - **#550** — live download + real license verification for all 16
+    sources (title still says "14", see BioAvanceD-v2#554 above).
+  - **#551** — full AC7 lifecycle (checkpoint/resume, quarantine
+    recovery, rollback).
+  - **#552** — Neo4j outbox projection (AC9) for TerminologyConcept/
+    TerminologyRelation.
+  - **#553** — compose.dev.yml's "14 Fase 2 sources" comments undercount
+    the real total (16) — now ripe per its own suggested target ("after
+    EDAM closes out step 8").
+  - **#554** — (new this session) #550's title has the same undercount.
+  Any of #550/#551/#552/#553/#554 can be picked up in any order; #553
+  and #554 are both small wording-only fixes if a quick win is wanted.
 - **#530** — `dictionary:validate` isn't wired into `ci-pipeline.yml`.
   Unrelated to the RF028 cluster, still open.
 - **#489** — full-suite vitest flakiness (JWT/encryption-secret failure
   shape, ~89 files), open, not re-confirmed.
 - **#336** — still open: is `import.controller.js#importFhirBundle` dead
   code to remove, or does something still call it?
-- **#553** — filed in a prior session: `compose.dev.yml`'s "14 Fase 2
-  sources" comments undercount the real total (16). Low priority, ripe
-  once EDAM (the last source) lands next session.
 - Older backlog, unchanged: `#371`/`#374`/`#378`/`#379`, `#368`, `#345`,
   `#341`/`#340`, `#334`, `#331`/`#326`/`#325`, `#321`, `#319`, `#286`,
   `#284`, `#283`, `#282`, `#228`, `#115`, next e2e slice per
   `E2E_TRACEABILITY_PLAN.md`.
-- **skills-pack#233/#234/#235/#236/#237/#238/#239/#240/#241/#243/#244/#246/#247/#250/#251/#254/#259/#260/#262**
+- **skills-pack#233/#234/#235/#236/#237/#238/#239/#240/#241/#243/#244/#246/#247/#250/#251/#254/#259/#260/#262/#263**
   — pack-repo only, low priority, unchanged this session except for
-  #262 (new, filed this session).
+  #263 (new, filed this session).
 
 ## Dev stack state
 
 Torn down at session end (`docker compose down`, no `-v`). Named volumes
 (mongodb/neo4j data) untouched — next session's `compose up` will see
 the same accumulated fixture data prior sessions' gotcha already
-documents, now including Cell Ontology's concepts/relations alongside
-every prior source's. Images left cached — a next `compose up --build`
-should be fast (cache hits) unless something invalidates a layer.
+documents, now including EDAM's concepts/relations alongside every
+prior source's. Images left cached.
 
-**Reminder for next session's first Docker command:** use
-`docker compose --env-file .env.docker -f compose.yml -f compose.dev.yml
-up -d --build <targets>` — never bare `up -d --build` — and **never
-combine that with a trailing shell `&`, even under `run_in_background:
-true`** (see dyeallpies-skills-pack#262 above — the shell `&` orphans
-the real command from the tool's process tracking and can get it killed
-mid-build while the tool reports a fast false "completed"). If targeting
-a reference-data bootstrap chain, target the chain services directly
-(`foundation-bootstrap reference-data-bootstrap reference-data-bootstrap-mondo
+**Reminder for next session's first Docker command (if any RF028-adjacent
+work resumes):** use `docker compose --env-file .env.docker -f
+compose.yml -f compose.dev.yml up -d --build <targets>` — never bare
+`up -d --build` — and never combine that with a trailing shell `&`, even
+under `run_in_background: true` (dyeallpies-skills-pack#262 — confirmed
+resolved again this session, clean run on the first try). The full
+17-link reference-data bootstrap chain is now complete end-to-end:
+`foundation-bootstrap reference-data-bootstrap reference-data-bootstrap-mondo
 reference-data-bootstrap-orpha reference-data-bootstrap-icd11
 reference-data-bootstrap-icd10 reference-data-bootstrap-omim
 reference-data-bootstrap-hgnc reference-data-bootstrap-loinc
 reference-data-bootstrap-ucum reference-data-bootstrap-dcb
 reference-data-bootstrap-atc reference-data-bootstrap-duo
 reference-data-bootstrap-uberon reference-data-bootstrap-ncbitax
-reference-data-bootstrap-cl [next-source]`), skipping `frontend`
-entirely, per the overlay's documented fix — this ran clean on the
-first try again this session (once launched correctly), sixteen links
-deep now.
+reference-data-bootstrap-cl reference-data-bootstrap-edam` — no more
+sources will be appended to this chain unless a new Fase 2 source is
+discovered/added to scope.
 
 **Reminder for a manual Playwright run against the dev stack:** on top
 of the documented `E2E_MONGO_URI`/`E2E_MONGO_DB`/Neo4j-creds env vars,
@@ -196,23 +200,23 @@ to launch a second frontend dev server on 5173. See skills-pack#258
 creds from `.env.docker` with `grep '^VARNAME=' .env.docker`
 per-credential, not by sourcing the whole file directly — it's a dotenv
 file, not valid shell, and errors on unquoted `<...>` values (e.g.
-`EMAIL_FROM`). See skills-pack#260 (filed two sessions ago, not yet
+`EMAIL_FROM`). See skills-pack#260 (filed several sessions ago, not yet
 resolved — this session used the grep workaround directly and hit no
 friction).
 
 ## Which skills to use
 
 - `build-loop` worked smoothly end-to-end again this session, including
-  the Docker section, once the self-inflicted backgrounding mistake
-  (see above) was corrected — chain targeting worked on the first
-  correctly-launched `up -d --build`, sixteen links deep by the end.
+  the Docker section — chain targeting worked on the first correctly-
+  launched `up -d --build`, seventeen links deep, closing out the whole
+  RF028 Fase 2 group.
 - `docker-workflow`'s BioAvanceD-v2 overlay's documented fixes
-  (env-file, chain-targeting, the `.env.docker`-grep workaround) continue
-  to hold across sessions and across many more chain links than when
-  first documented — worth reconfirming as a strong pattern, not just a
-  lesson learned once.
-- New friction this session: the shell-`&`-inside-`run_in_background`
-  double-backgrounding trap described above — filed as
-  dyeallpies-skills-pack#262, not yet resolved (pack skill file wasn't
-  edited this session per Rule 0 — only editable from a session working
-  in the skills-pack repo itself).
+  (env-file, chain-targeting, the `.env.docker`-grep workaround) held
+  again across the full 17-link chain — strong pattern, reconfirmed one
+  more time as this particular series wraps up.
+- New this session: EDAM's fixture needed a live-API verification step
+  (WebFetch against EBI OLS) that no prior source in this loop had
+  needed, since EDAM's real term IDs are less memorable than CL/Uberon's
+  famous anchors — proposed as a `build-loop` overlay addition via
+  dyeallpies-skills-pack#263 (not yet resolved; the pack repo owns
+  applying it).
