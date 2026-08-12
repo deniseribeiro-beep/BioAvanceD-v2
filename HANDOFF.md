@@ -1,80 +1,72 @@
 # HANDOFF
 
 **Written:** 2026-08-12, end of session on `feature/docker-e2e-backend-integration`,
-after closing #387 (Dennis said "Pick #387").
+after closing #390 (Dennis said "Read handoff and pick issue 390").
 
 ## What happened this session
 
-Dennis said "Pick #387." Routed via `work-issue`: #387 is the dict-07
-"Auditoria" tracking issue (canonical AuditEvent contract + retention
-policy). Its own first comment (2026-08-05) already asserted the
-canonical `audit_events` contract exists and is populated, and split the
-remaining work into two follow-ups: #438 (retention policy) and #439
-(remove Log.js/auditLogger.js field aliases). Both were found **already
-closed**, so this routed to `resolve-issue` as a verification/close-out
-task, same shape as #386's session.
+Read the prior HANDOFF.md, which carried #390 forward as a candidate
+with the note "worth the same read-the-tracker-comment,
+check-its-named-sub-issues'-actual-state approach" already applied to
+#386/#387. Routed via `work-issue` → `resolve-issue`, same shape as
+those two sessions.
 
-Verified the closure was real:
+#390 is the dict-07/dict-08 tracking issue for migrating
+`Sample.js`'s embedded RCS/SPREC/storage-custody fields onto the
+canonical resolved-entity contracts. Its own first comment split the
+work into six sub-issues: #491 (backend RCS consumers), #492 (RCS
+server-side-compute design call), #493 (backend SPREC consumers), #494
+(storage/custody consumers), #495 (frontend consumers), #496 (residual
+legacy-surface audit).
 
-- **#438 → #440/#441 (merged):** `RetentionPolicy.js` model + admin CRUD
-  exist; `retentionSweep.service.js` applies policy-driven retention to
-  both `logs` and `audit_events`, the latter hash-chain-safe
-  (archive-only to `audit_events_archive`; `postRetentionAction:
-  'destroy'` is explicitly refused for AuditEvent). RF014 fully
-  implemented. `git merge-base --is-ancestor` confirmed both branches
-  merged into the integration branch.
-- **#439 → #446/#447/#448 (merged):** read the full correction chain on
-  all three issues. The cluster's own investigation
-  (dict-02_DICIONARIO.md P1X-0326/P1X-0327) found `resourceType`/
-  `resourceId` — not `entityType`/`entityId` — are the actual canonical
-  Log fields, the reverse of #439's original premise.
-  `auditLogger.log()`'s options contract and all 26 call sites were
-  migrated onto the canonical names (69f1529a). `Log.js`'s dual-read/
-  dual-write (`entity`/`entityID` alongside `resourceType`/
-  `resourceId`) was **deliberately left in place** as a defensive
-  fallback for legacy raw inputs — confirmed via `git show` on 69f1529a
-  and ea628c56, a scoped, dictionary-grounded call, not an oversight.
-  `audit_events`' own `entityType`/`entityId` naming (RNF009/RF012) is a
-  separate, already-canonical, hash-chained schema and correctly
-  untouched.
+All six were already closed, but each had itself spawned further
+splits — this tree turned out three levels deep, deeper than #386/#387's
+single-level pattern. Traced the whole descendant set rather than
+stopping at the direct children:
 
-Closed #387 with a comment summarizing both verifications and the net
-effect on dict-07's ask (canonical contract exists + has retention;
-Log.js's residual aliases are an accepted backward-compat decision, not
-a gap in the contract itself).
+- #491 → #497, #498, #499, #500, #501 — all closed
+- #492 → resolved directly (ff974237)
+- #493 → resolved directly + via #497's coordinated SPREC half
+- #494 → #507, #508, #509, #510, #511, #512 — all closed
+- #495 → partial direct delivery + #517, #518, #519 — all closed
+- #496 → #525, #526 (plus #527, #528, #529, #531 surfaced along the
+  way) — all closed
 
-**Friction found in `wrap-up`'s core audit:** the reasoning for why
-Log.js keeps its dual-alias fields lived only in closed GitHub issue
-comments (#446/#447/#448) — I nearly re-diagnosed it as unfinished
-migration work before finding that history. Fixed per `resolve-issue`'s
-case-3 principle ("write why it's correct into the file that looked
-wrong"): added a 5-line comment directly above `LogModel` in `Log.js`
-recording the dict-02 citation and pointing at #439/#446/#447/#448.
-Branch `fix/387-log-alias-rationale-comment` (545ab615) — required
-reading `docs/docs-7-27-2026/extracted/requisitos-index.md` first per
-the canonical-data-model-surface edit hook (RF012/RF014/RNF009
-sections). Ran the targeted test (`tests/unit/log.model.unit.test.js`,
-13 tests, via `vitest run` — this file is vitest-authored, not
-jest-runnable) — all passing. Merged into
-`feature/docker-e2e-backend-integration` (9e78a92d), pushed, merge noted
-on #387, branch deleted (local+remote).
+Spot-checked six of the resolution commits cited across these issues
+(`ff974237`, `b2d0bd62`, `9f8abf33`, `40233640`, `8ebb0744`,
+`9e04b53a`) with `git merge-base --is-ancestor` against current HEAD —
+all confirmed merged into `feature/docker-e2e-backend-integration`, not
+just claimed-closed.
 
-**Security/safety note:** none new. The retention sweep's hash-chain
-safety (archive-only for AuditEvent, no destructive delete) was already
-shipped and verified, not introduced this session.
+The one open issue adjacent to this cluster, **#530** (`ci-pipeline.yml`
+never runs `dictionary:validate`), is unrelated — a CI-gate gap, not
+part of the Sample-field migration tree — so it was left untouched and
+stays on the candidates list below.
+
+Closed #390 with a comment naming the full verified descendant tree and
+the confirmed-merged commits.
+
+`wrap-up`'s core + shipping audits: no friction found. No file edits
+this session (`git status` stayed clean throughout — purely a
+verification-and-close session), no denials, no deferred-without-issue
+language in the close comment, nothing security-relevant touched.
+
+**Security/safety note:** none. Read-only verification session; no code
+changed.
 
 ## Repo state
 
-- **`feature/docker-e2e-backend-integration`**: at `9e78a92d`, clean,
-  pushed, up to date with origin. This session's own commits:
-  `545ab615` (doc comment on `Log.js`) and `9e78a92d` (merge).
-- Issues this session: **#387 closed** (verified already-resolved by
-  #438/#439's prior merges; comment added tracking the documentation
-  follow-up merge).
+- **`feature/docker-e2e-backend-integration`**: at `a77c548e` going in
+  (no new commits this session besides this HANDOFF.md rotation), clean,
+  pushed, up to date with origin.
+- Issues this session: **#390 closed** (verified its full three-level
+  descendant tree — #491-#496, #497-#501, #502, #507-#512, #517-#519,
+  #525-#526 — is entirely closed with merged commits; no code changes
+  needed, this was pure tracker verification).
 - **Pre-existing dangling branches, not touched this session** (carried
   forward unchanged, 16 total — see prior handoffs for the full list,
-  unchanged since #531/.../#543/#536/#546/#547/#386's sessions): local —
-  `fix/476-quarantine-status-design-call`,
+  unchanged since #531/.../#543/#536/#546/#547/#386/#387's sessions):
+  local — `fix/476-quarantine-status-design-call`,
   `fix/477-bulk-import-storage-allocation`,
   `fix/481-autoassign-precheck-repository`,
   `fix/485-sample-details-storage-migration`,
@@ -90,36 +82,35 @@ shipped and verified, not introduced this session.
   `worktree-agent-a8ad1494700a4a20e`. Remote —
   `fix/349-user-organization-picker` (last checked during #527's
   session; not re-checked this session), plus **merged-but-not-yet-
-  deleted**: `fix/541-withdraw-depleted-guard` (flagged in #541's
-  handoff) and `fix/536-remove-dead-sample-releasestatus` (flagged in
-  #536/#537's handoff) — both still on origin, remote-delete-denied in
-  their respective sessions, still need manual cleanup or an explicit
-  permission grant.
-  - Note: `test/440-retention-policy-model` and
-    `test/441-retention-sweep-job` (both in this list already) are
-    confirmed merged as of this session — their dangling status is "not
-    yet deleted," not "not yet merged." Same cleanup category as
-    `fix/541`/`fix/536` above.
+  deleted**: `fix/541-withdraw-depleted-guard` and
+  `fix/536-remove-dead-sample-releasestatus` — both still on origin,
+  remote-delete-denied in their respective sessions, still need manual
+  cleanup or an explicit permission grant.
+  - Note: several of the `test/*` branches above (`test/507`-`511`,
+    `test/440`, `test/441`) correspond to issue numbers that are now
+    confirmed closed via this session's and prior sessions' work — their
+    dangling status is almost certainly "merged, not yet deleted" like
+    `fix/541`/`fix/536`, not "unmerged," but that has not been
+    individually re-confirmed per branch this session.
 
 ## Which issue is next
 
 Dennis has not yet said which issue to pick up next session; per this
 skill's "only if the user explicitly said so" rule, nothing is queued.
 
-Candidates carried forward (#387 now resolved and closed, removed from
+Candidates carried forward (#390 now resolved and closed, removed from
 this list):
 
 - **#530** — `dictionary:validate` isn't wired into `ci-pipeline.yml`,
-  so #529-class drift has no CI gate. Small, well-scoped fix.
-- **#390** — umbrella; all originally-tracked sub-issues closed, plus
-  #496/#525/#526/#527/#528/#529/#531 also closed. Still not re-assessed
-  whether it should close or get a status comment. Same shape #386 and
-  #387 just were — worth the same "read the tracker comment, check its
-  named sub-issues' actual state" approach.
+  so #529-class drift has no CI gate. Small, well-scoped fix. Confirmed
+  this session to be unrelated to the #390 cluster it sits near
+  numerically.
 - **#489** — full-suite vitest flakiness (JWT/encryption-secret failure
   shape, ~89 files), open, not re-confirmed.
 - **#336** — still open: is `import.controller.js#importFhirBundle` dead
-  code to remove, or does something still call it?
+  code to remove, or does something still call it? (#496's closure
+  noted its RCS/SPREC direct writes are moot pending this same
+  question.)
 - Older backlog, unchanged: `#371`/`#373`/`#374`/`#378`/`#379`, `#368`,
   `#345`, `#341`/`#340`, `#334`, `#331`/`#326`/`#325`, `#321`, `#319`,
   `#286`, `#284`, `#283`, `#282`, `#228`, `#115`, next e2e slice per
@@ -129,32 +120,24 @@ this list):
 
 ## Dev stack state
 
-No Docker, no live DB. Ran one targeted vitest file
-(`tests/unit/log.model.unit.test.js`, 13 tests, all passing) to verify
-the doc-only `Log.js` edit didn't break anything. No build, no other
-test suites run.
+No Docker, no live DB, no build or test suite run — this session made
+no code changes, so there was nothing to test beyond the `gh` tracker
+verification described above.
 
 ## Which skills to use
 
-- `work-issue`'s route 6 (`resolve-issue`) correctly caught #387 as a
-  stale-tracker verification task, same pattern as #386's session —
-  second data point that this shape (umbrella issue whose own first
-  comment already named the split, both named follow-ups closed by
-  proxy through their own sub-clusters) is now recurring in this repo's
-  backlog. Worth applying the same check to #390 next.
-- `wrap-up`'s core audit item 5 ("judgment call the skill didn't cover")
-  and `resolve-issue`'s close-discipline case 3 ("record reasoning in
-  the artifact that looked wrong") combined to catch a real gap this
-  session: a prior session's carefully-derived, dictionary-grounded
-  decision (Log.js's aliases are permanent, not unfinished) existed only
-  in closed issue comments, not in the code. This is worth watching for
-  on other closed multi-issue clusters in this backlog (the #440/#441
-  retention split, the #446/#447/#448 alias split) — check whether their
-  final design decisions are similarly only recorded in GitHub comments
-  before assuming the code is self-explanatory.
-- The canonical-data-model-surface edit hook (requiring
-  `requisitos-index.md` be read before editing `Log.js`) fired even for
-  a comment-only, zero-behavior-change edit — expected per the hook's
-  own scope (it gates the *file*, not the edit's behavioral weight), not
-  a bug, but worth remembering it applies even to trivial doc comments
-  on gated files.
+- `work-issue`'s route 6 (`resolve-issue`) correctly caught #390 as a
+  stale-tracker verification task for a third consecutive session
+  (#386, #387, now #390) — this pattern (umbrella issue whose own first
+  comment already named a split, and the split's own children go on to
+  split further) is well-established in this backlog now. #390's tree
+  was notably deeper (3 levels: tracking issue → 6 first-level splits →
+  ~20 further splits) than #386/#387's single-level case; the same
+  "trace every descendant, don't stop at direct children" approach still
+  worked but took more `gh issue view` round-trips. Worth budgeting for
+  when a tracking-issue verification names sub-issues that were
+  themselves filed as "tracking issue, splits again" (visible from
+  their own first-comment phrasing) rather than terminal work items.
+- No new friction surfaced this session (see `wrap-up` audit above) —
+  the `resolve-issue`/`work-issue` combination continues to handle this
+  backlog's umbrella-issue-cleanup shape without needing edits.
