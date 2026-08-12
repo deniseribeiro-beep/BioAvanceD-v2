@@ -259,4 +259,16 @@ test.describe('Reference data importers (RF028) — real backend', () => {
     const concepts = await countTerminologyConceptsBySystemUri('https://www.gov.br/anvisa/pt-br/assuntos/farmacopeia/dcb');
     expect(concepts).toBeGreaterThan(0);
   });
+
+  // #549: same rationale as the prior per-source assertions above — the
+  // generic checks can't prove ATC specifically landed. Checks the ATC
+  // release and its concepts by name, per §7.4 step 7, closing out the
+  // "DCB e ATC/DDD" pair right after DCB.
+  test('the ATC release and its terminology concepts are persisted', async () => {
+    const releases = await countReferenceDatasetReleasesByDatasetCode('ATC');
+    expect(releases).toBeGreaterThan(0);
+
+    const concepts = await countTerminologyConceptsBySystemUri('http://www.whocc.no/atc');
+    expect(concepts).toBeGreaterThan(0);
+  });
 });
