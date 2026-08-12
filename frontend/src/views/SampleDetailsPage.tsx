@@ -242,7 +242,6 @@ export default function SampleDetailsPage() {
     { value: 'PartiallyWithdrawn', label: t('samples.status.partiallyWithdrawn', 'Parcialmente Retirada') },
     { value: 'TotallyWithdrawn', label: t('samples.status.totallyWithdrawn', 'Totalmente Retirada') },
     { value: 'Withdrawn', label: t('samples.status.withdrawn', 'Retirada') },
-    { value: 'Expired', label: t('samples.status.expired', 'Expirada') },
     { value: 'Destroyed', label: t('samples.status.destroyed', 'Destruída') },
     { value: 'Unusable', label: t('samples.status.unusable', 'Inutilizada') },
   ]), [t]);

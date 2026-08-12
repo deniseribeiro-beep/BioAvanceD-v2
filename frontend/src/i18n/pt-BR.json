@@ -1375,7 +1375,6 @@
     "statusLabels": {
       "Available": "Disponível",
       "Destroyed": "Destruída",
-      "Expired": "Expirada",
       "PartiallyWithdrawn": "Parcialmente Retirada",
       "TotallyWithdrawn": "Totalmente Retirada",
       "Unusable": "Inutilizada",
@@ -1384,7 +1383,6 @@
     "statusOptions": {
       "Available": "Disponível",
       "Destroyed": "Destruída",
-      "Expired": "Expirada",
       "Withdrawn": "Retirada"
     },
     "storageInline": {

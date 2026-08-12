@@ -9,7 +9,6 @@ export type LegacySampleStatus =
   | 'PartiallyWithdrawn'
   | 'TotallyWithdrawn'
   | 'Withdrawn'
-  | 'Expired'
   | 'Destroyed'
   | 'Unusable';
 
