@@ -27,6 +27,8 @@ const uberonSource = require('./sources/uberon');
 const { normalizeRecord: normalizeUberonRecord } = require('./normalizeUberon');
 const ncbitaxSource = require('./sources/ncbitax');
 const { normalizeRecord: normalizeNcbitaxRecord } = require('./normalizeNcbitax');
+const clSource = require('./sources/cl');
+const { normalizeRecord: normalizeClRecord } = require('./normalizeCl');
 
 /** RF028 first importer — see sources/hpo.js for why HPO and why a bundled sample. */
 async function runHpoImport(db, opts = {}) {
@@ -98,4 +100,9 @@ async function runNcbitaxImport(db, opts = {}) {
   return runImport({ db, source: ncbitaxSource, normalizeRecord: normalizeNcbitaxRecord, ...opts });
 }
 
-module.exports = { runHpoImport, runMondoImport, runOrphaImport, runIcd11Import, runIcd10Import, runOmimImport, runHgncImport, runLoincImport, runUcumImport, runDcbImport, runAtcImport, runDuoImport, runUberonImport, runNcbitaxImport };
+/** RF028 fifteenth importer — see sources/cl.js for why Cell Ontology and why a bundled sample. */
+async function runClImport(db, opts = {}) {
+  return runImport({ db, source: clSource, normalizeRecord: normalizeClRecord, ...opts });
+}
+
+module.exports = { runHpoImport, runMondoImport, runOrphaImport, runIcd11Import, runIcd10Import, runOmimImport, runHgncImport, runLoincImport, runUcumImport, runDcbImport, runAtcImport, runDuoImport, runUberonImport, runNcbitaxImport, runClImport };
