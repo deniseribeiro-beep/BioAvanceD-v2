@@ -197,4 +197,17 @@ test.describe('Reference data importers (RF028) — real backend', () => {
     const concepts = await countTerminologyConceptsBySystemUri('http://hl7.org/fhir/sid/icd-10');
     expect(concepts).toBeGreaterThan(0);
   });
+
+  // #549: same rationale as the MONDO/ORPHA/ICD-11/ICD-10 assertions above —
+  // the generic checks can't prove OMIM specifically landed. Checks the
+  // OMIM release and its concepts by name, per §7.4 step 4 (fourth and
+  // final member of the "ORPHA, CID-11, CID-10 e OMIM" group, right after
+  // ICD-10).
+  test('the OMIM release and its terminology concepts are persisted', async () => {
+    const releases = await countReferenceDatasetReleasesByDatasetCode('OMIM');
+    expect(releases).toBeGreaterThan(0);
+
+    const concepts = await countTerminologyConceptsBySystemUri('https://www.omim.org');
+    expect(concepts).toBeGreaterThan(0);
+  });
 });

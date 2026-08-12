@@ -1,0 +1,10 @@
+{"id":"PS100100","lbl":"mendelian phenotype, unspecified","is_a":[],"synonyms":[],"obsolete":false}
+{"id":"219700","lbl":"cystic fibrosis","is_a":["PS100100"],"synonyms":["CF"],"obsolete":false}
+{"id":"143890","lbl":"hypercholesterolemia, familial","is_a":["PS100100"],"synonyms":["FH"],"obsolete":false}
+{"id":"154700","lbl":"marfan syndrome","is_a":["PS100100"],"synonyms":[],"obsolete":false}
+{"id":"143100","lbl":"huntington disease","is_a":["PS100100"],"synonyms":["HD"],"obsolete":false}
+{"id":"613490","lbl":"cystic fibrosis modifier locus 1","is_a":["219700"],"synonyms":[],"obsolete":false}
+{"id":"603776","lbl":"hypercholesterolemia, autosomal dominant, 1","is_a":["143890"],"synonyms":[],"obsolete":false}
+{"id":"612300","lbl":"marfan lung disease, modifier of","is_a":["154700"],"synonyms":[],"obsolete":false}
+{"id":"","lbl":"Missing code term","is_a":[],"synonyms":[],"obsolete":false}
+{"id":"999999","lbl":"","is_a":[],"synonyms":[],"obsolete":false}
