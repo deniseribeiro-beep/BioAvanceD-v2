@@ -440,7 +440,9 @@ describe('MongoStorageRepository', () => {
       expect(storageBoxes.updateOne).toHaveBeenCalledTimes(1);
       expect(samples.updateOne).toHaveBeenCalledTimes(1);
       const setPayload = samples.updateOne.mock.calls[0][1].$set;
-      expect(setPayload.status).toBe('AVAILABLE');
+      // #544: status is a retired legacy field (specimenStatus is the sole
+      // source of truth since #408) — allocation must not write it.
+      expect(setPayload.status).toBeUndefined();
       expect(setPayload['storageLocation.position']).toBe('A1');
     });
 
@@ -578,7 +580,9 @@ describe('MongoStorageRepository', () => {
       expect(storageBoxes.updateOne.mock.calls[0][0][`occupancyGrid.A2`]).toEqual({ $exists: false });
       const sampleSet = samples.updateOne.mock.calls[0][1].$set;
       expect(sampleSet['storageLocation.position']).toBe('A2');
-      expect(sampleSet.status).toBe('AVAILABLE');
+      // #544: status is a retired legacy field (specimenStatus is the sole
+      // source of truth since #408) — auto-assign must not write it.
+      expect(sampleSet.status).toBeUndefined();
     });
 
     it('throws BOX_NOT_FOUND when the box is missing', async () => {
