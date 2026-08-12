@@ -206,3 +206,19 @@ test('LOINC source config only ever points at the bundled fixture file', () => {
   assert.strictEqual(loincSource.retrievalUri.startsWith('file://'), true);
   assert.strictEqual(fs.existsSync(loincSource.fixturePath), true);
 });
+
+test('UCUM importer reads a bundled fixture, not a live network source (#549 ninth slice)', () => {
+  const networkCallPatterns = [/\bfetch\(/, /require\(['"]https?['"]\)/, /require\(['"]axios['"]\)/, /\baxios\./, /XMLHttpRequest/];
+  for (const file of ['sources/ucum.js', 'normalizeUcum.js']) {
+    const contents = read(path.join(importDir, file));
+    for (const pattern of networkCallPatterns) {
+      assert.doesNotMatch(contents, pattern);
+    }
+  }
+});
+
+test('UCUM source config only ever points at the bundled fixture file', () => {
+  const ucumSource = require(path.join(importDir, 'sources', 'ucum.js'));
+  assert.strictEqual(ucumSource.retrievalUri.startsWith('file://'), true);
+  assert.strictEqual(fs.existsSync(ucumSource.fixturePath), true);
+});
