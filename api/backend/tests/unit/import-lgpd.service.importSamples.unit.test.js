@@ -441,18 +441,18 @@ describe('ImportLGPDService.importSamples', () => {
   // `tcle_id` on VALID_ROW is not a field parseSampleRow reads (it reads
   // `consentTemplateId`), so every other test in this suite leaves
   // sampleData.consentTemplateId null and already exercises this "missing"
-  // branch incidentally. This test makes that explicit and pins the actual
-  // updateOne call shape.
-  it('flags the sample for QUARANTINE when ethics/SPREC data is missing', async () => {
+  // branch incidentally. #536 removed the releaseStatus reconciliation
+  // that used to fire here — this test now just confirms the import
+  // still succeeds and never touches the deleted field.
+  it('does not touch releaseStatus when ethics/SPREC data is missing', async () => {
     vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW]);
 
     const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' });
 
     expect(result.success).toBe(1);
-    expect(samplesCollection.updateOne).toHaveBeenCalledWith(
-      { _id: 'sample-id-1' },
-      { $set: { releaseStatus: 'QUARANTINE', updatedAt: expect.any(Date) } }
-    );
+    for (const call of samplesCollection.updateOne.mock.calls) {
+      expect(call[1].$set).not.toHaveProperty('releaseStatus');
+    }
   });
 
   it('does not touch releaseStatus when consentTemplateId and SPREC data are all present', async () => {

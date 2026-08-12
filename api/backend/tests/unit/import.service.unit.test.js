@@ -260,7 +260,7 @@ describe('ImportService.parsePatientCSV', () => {
 });
 
 describe('ImportService.parseSampleCSV', () => {
-  it('parses core identifying fields and defaults release_status to QUARANTINE without SPREC/consent data', () => {
+  it('parses core identifying fields without SPREC/consent data', () => {
     const row = {
       participantId: '12345678',
       sampleType: 'Blood',
@@ -275,7 +275,6 @@ describe('ImportService.parseSampleCSV', () => {
     expect(data.sampleOrigin).toBe('Venous');
     expect(data.barcode).toBe('BC-001');
     expect(data.quantity).toBe(5.5);
-    expect(data.releaseStatus).toBe('QUARANTINE');
     expect(data.registeredAt instanceof Date).toBe(true);
   });
 

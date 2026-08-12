@@ -1191,11 +1191,6 @@ class ImportLGPDService {
             sample.storageLocation = { boxId: candidateLocation.boxId, position: candidateLocation.position };
           }
 
-          const hasMissingEthicsOrSprec = !sampleData.consentTemplateId
-            || !sampleData.sprec
-            || !sampleData.sprec.sampleType
-            || !sampleData.sprec.primaryContainer;
-
           try {
             await validator.validateSampleCompliance(String(insertResult.insertedId));
           } catch (validationError) {
@@ -1204,13 +1199,6 @@ class ImportLGPDService {
               row: rowNumber,
               error: validationError?.message || String(validationError),
             });
-          }
-
-          if (hasMissingEthicsOrSprec) {
-            await samplesCollection.updateOne(
-              { _id: insertResult.insertedId },
-              { $set: { releaseStatus: 'QUARANTINE', updatedAt: new Date() } }
-            );
           }
 
           await patientsCollection.updateOne(
@@ -1483,10 +1471,6 @@ class ImportLGPDService {
       canonical: false,
     };
     const canonicalQualityAssessment = qualityDomain.resolveMethodologicalQuality({ sprec });
-    const releaseStatus = canonicalQualityAssessment?.governance_status === 1
-      && ['A', 'B', 'C', 'D'].includes(String(canonicalQualityAssessment?.final_grade || '').toUpperCase())
-      ? 'AVAILABLE'
-      : 'QUARANTINE';
 
     return {
       participantId: row.participantId?.trim() || null, // Aceita participantId, participantId ou patient_id
@@ -1531,7 +1515,6 @@ class ImportLGPDService {
         axisPenalties: [],
       },
       externalQualityAssessment: externalQualityAssessment,
-      releaseStatus: releaseStatus,
       // #459: CSV rows carry the canonical boxId/positionCode pair directly —
       // no compatibility field for the legacy numeric locationID, matching
       // #462's createSample input-contract change (`no legacy field aliases

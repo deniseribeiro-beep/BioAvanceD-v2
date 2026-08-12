@@ -483,29 +483,12 @@ class ImportService {
               }
             }
             try {
-              const report = await validator.validateSampleCompliance(String(insertResult.insertedId));
-              const missingEthicsOrSprec = !sampleData.consentTemplateId
-                || !sampleData.sprec
-                || !sampleData.sprec.sampleType
-                || !sampleData.sprec.primaryContainer;
-              const resolvedStatus = missingEthicsOrSprec
-                ? 'QUARANTINE'
-                : String(report?.suggestedStatus || sample.releaseStatus || 'QUARANTINE').toUpperCase();
-              if (resolvedStatus !== String(sample.releaseStatus || 'QUARANTINE').toUpperCase()) {
-                await samplesCollection.updateOne(
-                  { _id: insertResult.insertedId },
-                  { $set: { releaseStatus: resolvedStatus, updatedAt: new Date() } }
-                );
-              }
+              await validator.validateSampleCompliance(String(insertResult.insertedId));
             } catch (validationError) {
               logger.warn('[IMPORT_SERVICE] Falha ao validar compliance após importação JSON, mantendo em quarentena', {
                 specimenId: String(insertResult.insertedId),
                 error: validationError?.message || String(validationError),
               });
-              await samplesCollection.updateOne(
-                { _id: insertResult.insertedId },
-                { $set: { releaseStatus: 'QUARANTINE', updatedAt: new Date() } }
-              );
             }
             results.success++;
           } catch (error) {
@@ -602,29 +585,12 @@ class ImportService {
               }
             }
             try {
-              const report = await validator.validateSampleCompliance(String(insertResult.insertedId));
-              const missingEthicsOrSprec = !sampleData.consentTemplateId
-                || !sampleData.sprec
-                || !sampleData.sprec.sampleType
-                || !sampleData.sprec.primaryContainer;
-              const resolvedStatus = missingEthicsOrSprec
-                ? 'QUARANTINE'
-                : String(report?.suggestedStatus || sample.releaseStatus || 'QUARANTINE').toUpperCase();
-              if (resolvedStatus !== String(sample.releaseStatus || 'QUARANTINE').toUpperCase()) {
-                await samplesCollection.updateOne(
-                  { _id: insertResult.insertedId },
-                  { $set: { releaseStatus: resolvedStatus, updatedAt: new Date() } }
-                );
-              }
+              await validator.validateSampleCompliance(String(insertResult.insertedId));
             } catch (validationError) {
               logger.warn('[IMPORT_SERVICE] Falha ao validar compliance após importação tabular, mantendo em quarentena', {
                 specimenId: String(insertResult.insertedId),
                 error: validationError?.message || String(validationError),
               });
-              await samplesCollection.updateOne(
-                { _id: insertResult.insertedId },
-                { $set: { releaseStatus: 'QUARANTINE', updatedAt: new Date() } }
-              );
             }
             results.success++;
           } catch (error) {
@@ -822,10 +788,6 @@ class ImportService {
       canonical: false,
     };
     const canonicalQualityAssessment = qualityDomain.resolveMethodologicalQuality({ sprec });
-    const releaseStatus = canonicalQualityAssessment?.governance_status === 1
-      && ['A', 'B', 'C', 'D'].includes(String(canonicalQualityAssessment?.final_grade || '').toUpperCase())
-      ? 'AVAILABLE'
-      : 'QUARANTINE';
 
     const sampleData = {
       participantId: normalizeString(participantIdRaw),
@@ -871,7 +833,6 @@ class ImportService {
       specimenStatus: SampleModel.mapLegacyLifecycleStatusToSpecimenStatus(
         this.getRowValue(row, ['specimenStatus', 'lifecycleStatus', 'statusAtual'])
       ),
-      releaseStatus: releaseStatus,
       sprec,
       clinicalData,
       consentTemplateId: normalizeString(tcleRaw),

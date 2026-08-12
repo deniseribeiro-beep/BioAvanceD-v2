@@ -95,7 +95,7 @@ afterEach(() => {
 });
 
 describe('ImportService.importSamples (JSON)', () => {
-  it('inserts a valid sample and upgrades release_status to AVAILABLE when ethics/sprec are complete', async () => {
+  it('inserts a valid sample and pins the SpecimenPreanalytics snapshot when ethics/sprec are complete', async () => {
     vi.spyOn(SampleGraphValidator.prototype, 'validateSampleCompliance').mockResolvedValue({ suggestedStatus: 'AVAILABLE' });
     const filePath = writeTmpFile('valid.json', JSON.stringify(validSample({
       consentTemplateId: 'tcle-1',
@@ -107,9 +107,7 @@ describe('ImportService.importSamples (JSON)', () => {
 
     expect(result).toEqual({ success: 1, errors: [], total: 1 });
     expect(collection.inserted).toHaveLength(1);
-    expect(collection.updates).toHaveLength(2);
-    const releaseStatusUpdate = collection.updates.find((call) => call.update?.$set?.releaseStatus);
-    expect(releaseStatusUpdate.update.$set.releaseStatus).toBe('AVAILABLE');
+    expect(collection.updates).toHaveLength(1);
     const sprecPinUpdate = collection.updates.find((call) => call.update?.$set?.sealedSpecimenPreanalyticsId);
     expect(sprecPinUpdate.update.$set.sealedSpecimenPreanalyticsId).toBe('preanalytics-1');
   });
@@ -125,7 +123,7 @@ describe('ImportService.importSamples (JSON)', () => {
     expect(collection.updates).toHaveLength(0);
   });
 
-  it('keeps the sample in QUARANTINE and logs a warning when compliance validation throws', async () => {
+  it('still pins the SpecimenPreanalytics snapshot and logs a warning when compliance validation throws', async () => {
     vi.spyOn(SampleGraphValidator.prototype, 'validateSampleCompliance').mockRejectedValue(new Error('graph unavailable'));
     const filePath = writeTmpFile('compliance-fails.json', JSON.stringify(validSample({
       consentTemplateId: 'tcle-1',
@@ -136,9 +134,7 @@ describe('ImportService.importSamples (JSON)', () => {
     const result = await importService.importSamples(makeDb(collection), { path: filePath, originalname: 'compliance-fails.json' });
 
     expect(result.success).toBe(1);
-    expect(collection.updates).toHaveLength(2);
-    const releaseStatusUpdate = collection.updates.find((call) => call.update?.$set?.releaseStatus);
-    expect(releaseStatusUpdate.update.$set.releaseStatus).toBe('QUARANTINE');
+    expect(collection.updates).toHaveLength(1);
     const sprecPinUpdate = collection.updates.find((call) => call.update?.$set?.sealedSpecimenPreanalyticsId);
     expect(sprecPinUpdate.update.$set.sealedSpecimenPreanalyticsId).toBe('preanalytics-1');
   });
@@ -302,7 +298,7 @@ describe('ImportService.importSamples (CSV)', () => {
     expect(collection.inserted).toHaveLength(0);
   });
 
-  it('inserts a valid CSV row and keeps QUARANTINE (no ethics/sprec data) after a failed compliance check, logging a warning', async () => {
+  it('inserts a valid CSV row (no ethics/sprec data) and logs a warning after a failed compliance check', async () => {
     vi.spyOn(SampleGraphValidator.prototype, 'validateSampleCompliance').mockRejectedValue(new Error('graph down'));
     const filePath = writeTmpFile(
       'valid-row.csv',
@@ -313,11 +309,11 @@ describe('ImportService.importSamples (CSV)', () => {
     const result = await importService.importSamples(makeDb(collection), { path: filePath, originalname: 'valid-row.csv' });
 
     expect(result.success).toBe(1);
-    // #502: recording the RcsAssessment/SpecimenPreanalytics snapshot each
-    // pins the sample via its own updateOne — this test only asserts the
-    // releaseStatus fallback itself, not the total update count.
-    const releaseStatusUpdate = collection.updates.find((u) => 'releaseStatus' in (u.update.$set || {}));
-    expect(releaseStatusUpdate.update.$set.releaseStatus).toBe('QUARANTINE');
+    // #536 removed the releaseStatus fallback write this test used to pin —
+    // confirm the deleted field never resurfaces.
+    for (const u of collection.updates) {
+      expect(u.update.$set || {}).not.toHaveProperty('releaseStatus');
+    }
   });
 });
 

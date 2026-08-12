@@ -957,7 +957,6 @@ async function commitBatch(db, batchIdRaw) {
           importBatchId: String(batchId),
           importedAt,
           importedBy,
-          releaseStatus: workflow.quarantineStatus === 'RELEASED' ? 'AVAILABLE' : 'QUARANTINE',
           updatedAt: new Date(),
         },
       },
@@ -1078,7 +1077,6 @@ async function attachExternalDocument(db, batchIdRaw, recordIdRaw, options = {})
         consentStatus: 'EXTERNAL_ATTACHED',
         quarantineReason: null,
         specimenStatus: 'available',
-        releaseStatus: 'AVAILABLE',
         updatedAt: now,
       },
     }

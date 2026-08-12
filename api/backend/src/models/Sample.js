@@ -72,7 +72,6 @@ const SampleSchema = new Schema({
   consentTemplateId: { type: String, default: null },
   clinicalData: { type: Schema.Types.Mixed, default: null },
   pharmacologyData: { type: Schema.Types.Mixed, default: null },
-  releaseStatus: { type: String, default: 'QUARANTINE' },
   consentStatus: { type: String, default: null },
   // quarantineReason has no specimenStatus equivalent — it's the only
   // free-text field in the legacy trio, kept deliberately (#407/#415/#408).
@@ -221,7 +220,6 @@ class SampleModel {
       consentTemplateId: data.consentTemplateId || null,
       clinicalData: data.clinicalData ?? null,
       pharmacologyData: data.pharmacologyData ?? null,
-      releaseStatus: data.releaseStatus || 'QUARANTINE',
       consentStatus: data.consentStatus || null,
       quarantineReason: data.quarantineReason || null,
       importBatchId: data.importBatchId || null,
