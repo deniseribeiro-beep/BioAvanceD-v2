@@ -50,6 +50,8 @@
     "reference:import:hpo": "node scripts/reference-imports/import-hpo-reference-dataset.js",
     "reference:import:mondo:dry-run": "node scripts/reference-imports/import-mondo-reference-dataset.js --dry-run",
     "reference:import:mondo": "node scripts/reference-imports/import-mondo-reference-dataset.js",
+    "reference:import:orpha:dry-run": "node scripts/reference-imports/import-orpha-reference-dataset.js --dry-run",
+    "reference:import:orpha": "node scripts/reference-imports/import-orpha-reference-dataset.js",
     "test:architecture": "node --test \"tests/architecture/**/*.arch.test.js\"",
     "test:unit:vitest": "vitest run",
     "test": "vitest run",

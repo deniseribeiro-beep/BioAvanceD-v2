@@ -3,6 +3,8 @@ const hpoSource = require('./sources/hpo');
 const { normalizeRecord: normalizeHpoRecord } = require('./normalizeHpo');
 const mondoSource = require('./sources/mondo');
 const { normalizeRecord: normalizeMondoRecord } = require('./normalizeMondo');
+const orphaSource = require('./sources/orpha');
+const { normalizeRecord: normalizeOrphaRecord } = require('./normalizeOrpha');
 
 /** RF028 first importer — see sources/hpo.js for why HPO and why a bundled sample. */
 async function runHpoImport(db, opts = {}) {
@@ -14,4 +16,9 @@ async function runMondoImport(db, opts = {}) {
   return runImport({ db, source: mondoSource, normalizeRecord: normalizeMondoRecord, ...opts });
 }
 
-module.exports = { runHpoImport, runMondoImport };
+/** RF028 third importer — see sources/orpha.js for why ORPHA and why a bundled sample. */
+async function runOrphaImport(db, opts = {}) {
+  return runImport({ db, source: orphaSource, normalizeRecord: normalizeOrphaRecord, ...opts });
+}
+
+module.exports = { runHpoImport, runMondoImport, runOrphaImport };

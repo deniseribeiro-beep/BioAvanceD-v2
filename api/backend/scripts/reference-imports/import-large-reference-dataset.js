@@ -1,7 +1,8 @@
 // HPO graduated to its own operational importer (import-hpo-reference-dataset.js,
-// #367) and MONDO to its own (import-mondo-reference-dataset.js, #548) —
-// both intentionally no longer listed here.
-const allowedDatasets = new Set(['orpha', 'cid', 'omim']);
+// #367), MONDO to its own (import-mondo-reference-dataset.js, #548), and
+// ORPHA to its own (import-orpha-reference-dataset.js, #549) — all three
+// intentionally no longer listed here.
+const allowedDatasets = new Set(['cid', 'omim']);
 
 function parseArgs(argv) {
   const args = { dataset: null, sourceFile: null, dryRun: false };
