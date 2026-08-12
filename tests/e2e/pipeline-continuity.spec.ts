@@ -223,4 +223,16 @@ test.describe('Reference data importers (RF028) — real backend', () => {
     const concepts = await countTerminologyConceptsBySystemUri('https://www.genenames.org');
     expect(concepts).toBeGreaterThan(0);
   });
+
+  // #549: same rationale as the prior per-source assertions above — the
+  // generic checks can't prove LOINC specifically landed. Checks the LOINC
+  // release and its concepts by name, per §7.4 step 6 ("Importar LOINC e
+  // UCUM"), leading the pair right after HGNC.
+  test('the LOINC release and its terminology concepts are persisted', async () => {
+    const releases = await countReferenceDatasetReleasesByDatasetCode('LOINC');
+    expect(releases).toBeGreaterThan(0);
+
+    const concepts = await countTerminologyConceptsBySystemUri('http://loinc.org');
+    expect(concepts).toBeGreaterThan(0);
+  });
 });

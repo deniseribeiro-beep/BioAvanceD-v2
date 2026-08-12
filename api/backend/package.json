@@ -60,6 +60,8 @@
     "reference:import:omim": "node scripts/reference-imports/import-omim-reference-dataset.js",
     "reference:import:hgnc:dry-run": "node scripts/reference-imports/import-hgnc-reference-dataset.js --dry-run",
     "reference:import:hgnc": "node scripts/reference-imports/import-hgnc-reference-dataset.js",
+    "reference:import:loinc:dry-run": "node scripts/reference-imports/import-loinc-reference-dataset.js --dry-run",
+    "reference:import:loinc": "node scripts/reference-imports/import-loinc-reference-dataset.js",
     "test:architecture": "node --test \"tests/architecture/**/*.arch.test.js\"",
     "test:unit:vitest": "vitest run",
     "test": "vitest run",
