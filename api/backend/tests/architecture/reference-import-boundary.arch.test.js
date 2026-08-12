@@ -270,3 +270,19 @@ test('DUO source config only ever points at the bundled fixture file', () => {
   assert.strictEqual(duoSource.retrievalUri.startsWith('file://'), true);
   assert.strictEqual(fs.existsSync(duoSource.fixturePath), true);
 });
+
+test('Uberon importer reads a bundled fixture, not a live network source (#549 thirteenth slice)', () => {
+  const networkCallPatterns = [/\bfetch\(/, /require\(['"]https?['"]\)/, /require\(['"]axios['"]\)/, /\baxios\./, /XMLHttpRequest/];
+  for (const file of ['sources/uberon.js', 'normalizeUberon.js']) {
+    const contents = read(path.join(importDir, file));
+    for (const pattern of networkCallPatterns) {
+      assert.doesNotMatch(contents, pattern);
+    }
+  }
+});
+
+test('Uberon source config only ever points at the bundled fixture file', () => {
+  const uberonSource = require(path.join(importDir, 'sources', 'uberon.js'));
+  assert.strictEqual(uberonSource.retrievalUri.startsWith('file://'), true);
+  assert.strictEqual(fs.existsSync(uberonSource.fixturePath), true);
+});

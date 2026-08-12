@@ -23,6 +23,8 @@ const atcSource = require('./sources/atc');
 const { normalizeRecord: normalizeAtcRecord } = require('./normalizeAtc');
 const duoSource = require('./sources/duo');
 const { normalizeRecord: normalizeDuoRecord } = require('./normalizeDuo');
+const uberonSource = require('./sources/uberon');
+const { normalizeRecord: normalizeUberonRecord } = require('./normalizeUberon');
 
 /** RF028 first importer — see sources/hpo.js for why HPO and why a bundled sample. */
 async function runHpoImport(db, opts = {}) {
@@ -84,4 +86,9 @@ async function runDuoImport(db, opts = {}) {
   return runImport({ db, source: duoSource, normalizeRecord: normalizeDuoRecord, ...opts });
 }
 
-module.exports = { runHpoImport, runMondoImport, runOrphaImport, runIcd11Import, runIcd10Import, runOmimImport, runHgncImport, runLoincImport, runUcumImport, runDcbImport, runAtcImport, runDuoImport };
+/** RF028 thirteenth importer — see sources/uberon.js for why Uberon and why a bundled sample. */
+async function runUberonImport(db, opts = {}) {
+  return runImport({ db, source: uberonSource, normalizeRecord: normalizeUberonRecord, ...opts });
+}
+
+module.exports = { runHpoImport, runMondoImport, runOrphaImport, runIcd11Import, runIcd10Import, runOmimImport, runHgncImport, runLoincImport, runUcumImport, runDcbImport, runAtcImport, runDuoImport, runUberonImport };
