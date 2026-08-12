@@ -432,7 +432,6 @@ async function importFhirBundle(req, res) {
               scoreBasedGrade: qualityAssessment.final_grade,
               axisPenalties: penaltyLog,
             },
-            releaseStatus: qualityAssessment.governance_status === 1 && qualityAssessment.final_grade !== 'E' ? 'AVAILABLE' : 'QUARANTINE',
             sprec,
             fhir: resource
           };
@@ -442,7 +441,6 @@ async function importFhirBundle(req, res) {
             resourceId: resource.id || null,
             patientLinked: Boolean(participantId),
             final_grade: sampleDoc.final_grade,
-            releaseStatus: sampleDoc.releaseStatus,
           });
           break;
         }

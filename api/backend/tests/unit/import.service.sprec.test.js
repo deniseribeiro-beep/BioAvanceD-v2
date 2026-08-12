@@ -161,7 +161,6 @@ describe('ImportService SPREC import', () => {
       longTermStorage: 'E',
     });
     expect(inserted.consentTemplateId).toBe('tcle-ontology-1');
-    expect(inserted.releaseStatus).toBe('AVAILABLE');
   });
 
   it('preserva quality_score/category externos como sugestão não canônica', async () => {
@@ -183,7 +182,6 @@ describe('ImportService SPREC import', () => {
     const inserted = samplesCollection.insertOne.mock.calls[0][0];
     expect(inserted.rcsScore).toBeNull();
     expect(inserted.scoreBasedGrade).toBe('');
-    expect(inserted.releaseStatus).toBe('QUARANTINE');
     expect(inserted.externalQualityAssessment).toMatchObject({
       score: 100,
       category: 'A',

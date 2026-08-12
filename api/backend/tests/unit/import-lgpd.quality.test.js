@@ -26,7 +26,6 @@ describe('ImportLGPDService quality import hardening', () => {
     // non-canonical suggestion, not written back as top-level fields.
     expect(parsed.rcsScore).toBeUndefined();
     expect(parsed.scoreBasedGrade).toBeUndefined();
-    expect(parsed.releaseStatus).toBe('QUARANTINE');
     expect(parsed.external_quality_assessment).toBeUndefined();
     expect(parsed.externalQualityAssessment).toMatchObject({
       score: 100,

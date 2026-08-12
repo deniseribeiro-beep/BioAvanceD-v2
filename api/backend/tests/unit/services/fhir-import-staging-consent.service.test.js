@@ -293,7 +293,6 @@ describe('fhir-import-staging.service — consent token & external document flow
       });
 
       const updatedSample = db.collections.samples.docs.find((doc) => doc.specimenId === 'SPEC-1');
-      expect(updatedSample.releaseStatus).toBe('AVAILABLE');
       expect(updatedSample.specimenStatus).toBe('available');
 
       const releasedAction = db.collections.quarantineActions.docs.find((doc) => doc.quarantineActionId === 'qa-1');
