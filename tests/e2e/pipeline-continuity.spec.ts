@@ -247,4 +247,16 @@ test.describe('Reference data importers (RF028) — real backend', () => {
     const concepts = await countTerminologyConceptsBySystemUri('http://unitsofmeasure.org');
     expect(concepts).toBeGreaterThan(0);
   });
+
+  // #549: same rationale as the prior per-source assertions above — the
+  // generic checks can't prove DCB specifically landed. Checks the DCB
+  // release and its concepts by name, per §7.4 step 7 ("Importar DCB e
+  // ATC/DDD"), leading the pair right after UCUM.
+  test('the DCB release and its terminology concepts are persisted', async () => {
+    const releases = await countReferenceDatasetReleasesByDatasetCode('DCB');
+    expect(releases).toBeGreaterThan(0);
+
+    const concepts = await countTerminologyConceptsBySystemUri('https://www.gov.br/anvisa/pt-br/assuntos/farmacopeia/dcb');
+    expect(concepts).toBeGreaterThan(0);
+  });
 });

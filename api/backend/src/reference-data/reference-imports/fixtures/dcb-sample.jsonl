@@ -1,0 +1,10 @@
+{"id":"DCB:0","lbl":"fármaco, não especificado","is_a":[],"synonyms":[],"obsolete":false}
+{"id":"DCB:ANALG","lbl":"classe analgésicos e antitérmicos","is_a":["DCB:0"],"synonyms":[],"obsolete":false}
+{"id":"DCB:ANTIHIP","lbl":"classe anti-hipertensivos","is_a":["DCB:0"],"synonyms":[],"obsolete":false}
+{"id":"DCB:0001","lbl":"paracetamol","is_a":["DCB:ANALG"],"synonyms":["acetaminofeno"],"obsolete":false}
+{"id":"DCB:0002","lbl":"dipirona sódica","is_a":["DCB:ANALG"],"synonyms":[],"obsolete":false}
+{"id":"DCB:0003","lbl":"ibuprofeno","is_a":["DCB:ANALG"],"synonyms":[],"obsolete":false}
+{"id":"DCB:0004","lbl":"captopril","is_a":["DCB:ANTIHIP"],"synonyms":[],"obsolete":false}
+{"id":"DCB:0005","lbl":"losartana potássica","is_a":["DCB:ANTIHIP"],"synonyms":[],"obsolete":false}
+{"id":"","lbl":"Missing code term","is_a":[],"synonyms":[],"obsolete":false}
+{"id":"DCB:9999","lbl":"","is_a":[],"synonyms":[],"obsolete":false}

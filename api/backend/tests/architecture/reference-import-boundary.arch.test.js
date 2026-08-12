@@ -222,3 +222,19 @@ test('UCUM source config only ever points at the bundled fixture file', () => {
   assert.strictEqual(ucumSource.retrievalUri.startsWith('file://'), true);
   assert.strictEqual(fs.existsSync(ucumSource.fixturePath), true);
 });
+
+test('DCB importer reads a bundled fixture, not a live network source (#549 tenth slice)', () => {
+  const networkCallPatterns = [/\bfetch\(/, /require\(['"]https?['"]\)/, /require\(['"]axios['"]\)/, /\baxios\./, /XMLHttpRequest/];
+  for (const file of ['sources/dcb.js', 'normalizeDcb.js']) {
+    const contents = read(path.join(importDir, file));
+    for (const pattern of networkCallPatterns) {
+      assert.doesNotMatch(contents, pattern);
+    }
+  }
+});
+
+test('DCB source config only ever points at the bundled fixture file', () => {
+  const dcbSource = require(path.join(importDir, 'sources', 'dcb.js'));
+  assert.strictEqual(dcbSource.retrievalUri.startsWith('file://'), true);
+  assert.strictEqual(fs.existsSync(dcbSource.fixturePath), true);
+});

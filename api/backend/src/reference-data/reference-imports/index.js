@@ -17,6 +17,8 @@ const loincSource = require('./sources/loinc');
 const { normalizeRecord: normalizeLoincRecord } = require('./normalizeLoinc');
 const ucumSource = require('./sources/ucum');
 const { normalizeRecord: normalizeUcumRecord } = require('./normalizeUcum');
+const dcbSource = require('./sources/dcb');
+const { normalizeRecord: normalizeDcbRecord } = require('./normalizeDcb');
 
 /** RF028 first importer — see sources/hpo.js for why HPO and why a bundled sample. */
 async function runHpoImport(db, opts = {}) {
@@ -63,4 +65,9 @@ async function runUcumImport(db, opts = {}) {
   return runImport({ db, source: ucumSource, normalizeRecord: normalizeUcumRecord, ...opts });
 }
 
-module.exports = { runHpoImport, runMondoImport, runOrphaImport, runIcd11Import, runIcd10Import, runOmimImport, runHgncImport, runLoincImport, runUcumImport };
+/** RF028 tenth importer — see sources/dcb.js for why DCB and why a bundled sample. */
+async function runDcbImport(db, opts = {}) {
+  return runImport({ db, source: dcbSource, normalizeRecord: normalizeDcbRecord, ...opts });
+}
+
+module.exports = { runHpoImport, runMondoImport, runOrphaImport, runIcd11Import, runIcd10Import, runOmimImport, runHgncImport, runLoincImport, runUcumImport, runDcbImport };
