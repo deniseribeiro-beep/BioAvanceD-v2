@@ -271,4 +271,17 @@ test.describe('Reference data importers (RF028) — real backend', () => {
     const concepts = await countTerminologyConceptsBySystemUri('http://www.whocc.no/atc');
     expect(concepts).toBeGreaterThan(0);
   });
+
+  // #549: same rationale as the prior per-source assertions above — the
+  // generic checks can't prove DUO specifically landed. Checks the DUO
+  // release and its concepts by name, per §7.4 step 8 ("Importar DUO,
+  // Uberon, NCBI Taxonomy, Cell Ontology e EDAM"), leading the final group
+  // right after ATC closes out step 7.
+  test('the DUO release and its terminology concepts are persisted', async () => {
+    const releases = await countReferenceDatasetReleasesByDatasetCode('DUO');
+    expect(releases).toBeGreaterThan(0);
+
+    const concepts = await countTerminologyConceptsBySystemUri('http://purl.obolibrary.org/obo/duo.owl');
+    expect(concepts).toBeGreaterThan(0);
+  });
 });
