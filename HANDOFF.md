@@ -1,104 +1,112 @@
 # HANDOFF
 
 **Written:** 2026-08-12, end of session on `feature/docker-e2e-backend-integration`,
-after resolving #539 (Phase B of #538's currentStatus/specimenStatus
+after resolving #540 (writer-removal phase of #538's currentStatus/specimenStatus
 vocabulary migration) and filing its follow-ups.
 
 ## What happened this session
 
-Dennis said "pick #539" (offered as the top recommendation among
-last session's #538-follow-up candidates). `work-issue` routed to
-`fix-bugs` (labeled `bug`, a concrete reader-migration with no design
+Dennis said "pick #540" (the top carried-forward candidate from last
+session's handoff, unblocked once #539 landed). `work-issue` routed to
+`fix-bugs` (labeled `bug`, a concrete writer-removal with no design
 question left open).
 
-**#539 resolved** (`fix/539-remaining-readers-specimen-status`, commit
-`6f654f4f`, merged into the integration branch at `fb2b7ff9`) — migrated
-all four readers #538's trace named onto the canonical `specimenStatus`
-(dict-02 ELM-0123), off the legacy `currentStatus`/`status` fields
-`canonical-data-contract-v1.md` bans:
-- `SampleDetailsPage.tsx`'s editable `currentStatus` form field (three
-  spots: initial load, edit-mode `effectiveSample` memo, cancel-reset) —
-  previously an ad-hoc `.toUpperCase()` blend of `specimenStatus` that
-  didn't even match the form's own option casing.
-- `ReportViewPage.tsx:277`'s report table — now renders
-  `translateSpecimenStatus(resolveSpecimenStatus(s))`.
-- `reports.routes.js`'s `sampleanalysis` endpoint — now uses the
-  existing backend helper `SampleModel.resolveSpecimenStatus(sample)`
-  instead of `sample.currentStatus || sample.status || null`.
-- `userMethods.ts`'s `registerSample()` — now derives via the new
-  `resolveLegacySampleStatus(sampleData.specimenStatus)`.
+**#540 resolved** (`fix/540-remove-legacy-status-writers`, commit
+`4b3dc167`, merged into the integration branch at `62894411`) — removed
+the `status`/`currentStatus` legacy-field writes from all four sites
+#540's body (plus #539's follow-up comment) named:
+- `equipment-sensor-quarantine.service.js`'s `quarantineSamplesByFilter`
+  — also switched its "not already quarantined" dedup guard from the
+  legacy `status`/`currentStatus` `$or` pair to `specimenStatus`, since
+  that guard would have silently stopped working (always true) once the
+  fields went unwritten.
+- `intakeWizard.routes.js`'s `enforcePersistedGovernanceStatus` — the
+  `$set` payload now only sets `specimenStatus`; `governanceStatus.status`/
+  `currentStatus` still feed `buildSafeSampleSummary`'s JSON response
+  (a display-only, already-confirmed-dead field per #538's trace, left
+  alone — it's not a Sample-document write, out of #540's scope).
+- `eConsent.js`'s consent-driven quarantine/release — the
+  release-from-quarantine `find()` query switched from
+  `{ status: 'QUARANTINED' }` to `{ specimenStatus: 'quarantined' }` for
+  the same reason (the old filter would have matched zero documents
+  forever once the writer stopped).
+- `sample.service.js#updateSample` — `currentStatus`/`status` added to
+  the existing legacy-field-strip destructure alongside
+  `lifecycleStatus`/`availabilityStatus`/`quarantineStatus`.
 
-Extracted Phase A's `resolveSpecimenStatus`/`getSpecimenStatusColor`/
-`translateSpecimenStatus` out of `SampleWithdrawalReturnPage.tsx` into
-`frontend/src/utils/sampleHelpers.ts` (shared, since #539 gave it 3+
-consumers); `SampleWithdrawalReturnPage.tsx` re-exports them so its own
-tests kept passing unchanged. Added `resolveLegacySampleStatus`/
-`resolveSampleLifecycleStatus` to `frontend/src/foundation/contracts.ts`,
-wiring in the previously-unused `LEGACY_SAMPLE_STATUS_LABELS` map #538's
-trace had flagged as "already built, just unused" — buckets the 9-state
-specimenStatus enum down to the 4-state/legacy-label shape the one
-reader that still needs it (`SampleDetailsPage`'s editable field)
-expects.
+New/updated unit tests across all four files (plus three more caught by
+the fix-bugs "wider net" sweep that weren't found by the initial
+issue-number/filename grep: `iot.api.test.js`,
+`cold-chain-quarantine.service.test.js`,
+`incidents.api.node.test.js` — all three exercise
+`quarantineSamplesByFilter` through a different entry point and had
+their own un-weakened assertions on the old `status`/`currentStatus`
+payload). 427 tests green across the 20-file wider-net sweep, re-verified
+on the merged integration-branch tree before pushing.
+`canonical-data-contract-v1.md`'s Legacy Fields Prohibited list and its
+#533/#538/#539/#540 narrative section updated in the same commit.
 
-New unit tests: `sampleHelpers.test.ts`, `contracts.test.ts`,
-`userMethods.test.ts` (frontend, 33 tests total across the 4 targeted
-files), plus a new backend case in `reports.api.test.js` proving
-`status` now derives from `specimenStatus` and ignores stale
-`currentStatus`/`status`. `tsc --noEmit` clean. All targeted suites
-re-verified on the merged integration-branch tree before pushing.
+**Two findings surfaced while closing out #540, both filed rather than
+silently patched or left in chat:**
+- **#544** (bug, open, this repo) — a 5th live writer, not on #540's
+  list: `MongoStorageRepository.js`'s `allocateSamplePosition`/
+  `autoAssignSamplePosition` (storage allocation, a different subsystem
+  #538's original trace never covered) still writes
+  `status: 'AVAILABLE'` onto the Sample document, alongside
+  `storageLocation`, with no `specimenStatus` write in either function.
+  Found during #540's own "confirm with a final grep before closing"
+  check; not folded into #540 per `fix-bugs`' "don't chain fixes into
+  the picked issue" rule.
+- **skills-pack#246** (enhancement, open) — mirror case of last
+  session's skills-pack#245 (now closed/merged into `fix-bugs`): where
+  #245 covers a *reader*-migration fix checking for a live *writer*,
+  #246 is the reverse — a *writer*-removal fix should also grep for a
+  *reader that filters a query on the field's specific value* (not just
+  one that displays it). Two of #540's four writer sites had exactly
+  this shape (the equipment-sensor-quarantine dedup guard, the eConsent
+  release query) and would have shipped a silent regression — one
+  permanently-broken dedup guard, one flow that stops finding anything
+  to release, forever, with no error — if not caught by reading the
+  surrounding code rather than by any skill step. Existing tests didn't
+  catch it either, because the mocks ignored their `find()` filter
+  argument rather than asserting its shape.
 
-**Two findings surfaced while tracing #539's readers, both filed rather
-than silently patched or left in chat:**
-- **#543** (bug, open) — `frontend/src/utils/userMethods.ts` is entirely
-  dead code: `grep -rn "utils/userMethods"` across `frontend/src`
-  returns zero hits, so all 8 exported functions (including the
-  `registerSample()` this session fixed for vocabulary consistency)
-  have no live caller. Fixed anyway since it was explicitly named in
-  #539's body, but the dead-code question (delete vs. wire-in) is the
-  owner's call, unresolved here.
-- **#540 comment** (not a new issue — #540 is still open and is
-  specifically the "writers to remove" tracking issue) — tracing
-  `SampleDetailsPage.tsx`'s *save* path (adjacent to but out of #539's
-  reader-only scope) turned up a 4th live writer #540's list misses:
-  `sample.service.js#updateSample` (reachable via `PUT /samples/:id`),
-  raw MongoDB driver `updateOne`, strips only the three already-retired
-  legacy fields and **not** `currentStatus`/`status` — so
-  `SampleDetailsPage.tsx`'s edit-and-save flow persists a real
-  `currentStatus` value. #540's own closeout check ("once these three
-  writers are removed, zero producers left") would be wrong without
-  this 4th writer also being handled. Not fixed here — #539 was
-  readers-only.
-- **skills-pack#245** (enhancement, open) — suggested `fix-bugs`
-  addition: when a reader-migration fix leaves writer-removal for a
-  later phase, grep the *same files being edited* for writes of the
-  field too (not to fix them, just to check the writer-removal issue's
-  enumerated list is complete) — the #540-writer finding above
-  would have been caught by #538's original trace if that discipline
-  had applied there.
+**Security/safety note:** the two query fixes above touch
+consent-driven and cold-chain quarantine/release logic (safety-relevant
+access control on specimens) but are behavior-*preserving* — same
+end-state, now reading the canonical field instead of a stale legacy
+one — not a new/relaxed/crossed trust boundary, and both are covered by
+new query-shape assertions (not just response-shape ones) so a future
+regression on the same field would fail loudly. No new route, no
+relaxed validator, no secret touched. Documented here per `wrap-up`'s
+"file even when confident it's correct" bar, though no new issue was
+judged necessary given the above.
 
-**No security-relevant findings requiring separate filing** — all
-changes this session were read-path display/report derivation logic
-reading already-secured API responses; no new routes, no relaxed
-validators, no secrets touched.
-
-**Workflow friction this session:** none. Push, merge, issue-close,
-local branch delete, and remote branch delete all went through with no
-permission denials — contrasts with #525/#529/#531/#538's sessions,
-where remote branch delete was denied and needed an `AskUserQuestion`
-round-trip. Still treat remote-delete denial as unpredictable (per
-`fix-bugs`' own framing), not "fixed" — this is one data point, not a
-new pattern.
+**Workflow friction this session:** none on the mechanical
+push/merge/close/branch-delete sequence — same as #539's session, a
+second data point (still not "fixed," per `fix-bugs`' own framing, just
+two clean sessions in a row). The one real friction was upstream of any
+single step: the initial "grep the test tree for existing coverage of
+these writers" pass was scoped by filename pattern matching the four
+changed source files, which structurally can't find sibling test files
+(`iot.api.test.js`, `cold-chain-quarantine.service.test.js`,
+`incidents.api.node.test.js`) that exercise the same underlying function
+through a different entry point under an unrelated name. The already-
+prescribed fix-bugs "wider net" step (run the changed modules' full
+requiring test set, not just filename-matched files) caught all three
+before merge — confirming that step earns its keep, not a new gap to
+file.
 
 ## Repo state
 
-- **`feature/docker-e2e-backend-integration`**: at `fb2b7ff9`, clean,
-  pushed, up to date with origin. Contains #539's merge (`6f654f4f`→`fb2b7ff9`).
+- **`feature/docker-e2e-backend-integration`**: at `62894411`, clean,
+  pushed, up to date with origin. Contains #540's merge (`4b3dc167`→`62894411`).
 - No dangling branches from this session's own work —
-  `fix/539-remaining-readers-specimen-status` merged, closed, and deleted
-  both locally and on `origin`, no denial this time.
+  `fix/540-remove-legacy-status-writers` merged, closed, and deleted
+  both locally and on `origin`, no denial.
 - **Pre-existing dangling branches, not touched this session** (carried
   forward unchanged, 16 total — see prior handoffs for the full list,
-  unchanged since #531/#535/#538's sessions): local —
+  unchanged since #531/#535/#538/#539's sessions): local —
   `fix/476-quarantine-status-design-call`,
   `fix/477-bulk-import-storage-allocation`,
   `fix/481-autoassign-precheck-repository`,
@@ -115,26 +123,25 @@ new pattern.
   `worktree-agent-a8ad1494700a4a20e`. Remote —
   `fix/349-user-organization-picker` (last checked during #527's
   session; not re-checked this session).
-- Issues this session: **#539 closed** (fix `6f654f4f`, merge `fb2b7ff9`).
-  **#543 filed** (new, open, this repo). **#540 commented** (still open,
-  scope expanded, not closed). **skills-pack#245 filed** (new, open,
-  pack repo).
+- Issues this session: **#540 closed** (fix `4b3dc167`, merge `62894411`).
+  **#544 filed** (new, open, this repo). **skills-pack#246 filed** (new,
+  open, pack repo).
 
 ## Which issue is next
 
 Dennis has not yet said which issue to pick up next session; per this
 skill's "only if the user explicitly said so" rule, nothing is queued.
 
-Candidates carried forward (#539 now resolved, removed from this list;
-**#543 newly added; #540's scope note updated**):
+Candidates carried forward (#540 now resolved, removed from this list;
+**#544 newly added**):
 
-- **#540** — Phase C: remove the writers. **Now four, not three** — see
-  this session's comment adding `sample.service.js#updateSample`
-  alongside the original intake-wizard/equipment-sensor-quarantine/
-  eConsent trio. Unblocked now that #539 is done.
+- **#544** — new: remove the `status: 'AVAILABLE'` write from
+  `MongoStorageRepository.js`'s `allocateSamplePosition`/
+  `autoAssignSamplePosition` (5th legacy-status writer, storage
+  allocation subsystem). Small, well-scoped, same shape as #540's fix.
 - **#541** — small, well-scoped backend fix (`BLOCKED_SPECIMEN_STATUSES`
   + `'depleted'`, or an explicit zero-quantity guard in `withdrawSample`).
-- **#543** — new: `frontend/src/utils/userMethods.ts` is dead code
+- **#543** — `frontend/src/utils/userMethods.ts` is dead code
   end-to-end (zero live callers on any export); needs the owner's call
   on delete vs. wire-in.
 - **#536** — `Sample.releaseStatus` (camelCase) third-field cleanup.
@@ -158,33 +165,34 @@ Candidates carried forward (#539 now resolved, removed from this list;
   code to remove, or does something still call it?
 - Older backlog, unchanged: `#371`/`#373`/`#374`/`#378`/`#379`, `#368`,
   next e2e slice per `E2E_TRACEABILITY_PLAN.md`/`#331`.
-- **skills-pack#233/#234/#235/#236/#237/#238/#239/#240/#241/#243/#244/#245** —
-  pack-repo only, low priority, unchanged otherwise (#245 newly added).
+- **skills-pack#233/#234/#235/#236/#237/#238/#239/#240/#241/#243/#244/#246** —
+  pack-repo only, low priority, unchanged otherwise (#245 closed this
+  session's precedent-check, #246 newly added).
 
 ## Dev stack state
 
 Nothing started this session. Same as prior sessions: native-only
-verification (vitest for frontend/backend unit + integration tests, real
-`tsc --noEmit`) — no Docker/live-DB needed or used, consistent with
-`fix-bugs`'/`resolve-issue`'s targeted per-iteration default.
+verification (vitest for backend unit + integration tests) — no
+Docker/live-DB needed or used, consistent with `fix-bugs`'/
+`resolve-issue`'s targeted per-iteration default.
 
 ## Which skills to use
 
-- Confirmed again: reading a file for one purpose (migrating its *read*
-  side onto the canonical field) put its *write* side directly in view
-  even though writers were out of scope for the issue at hand — that
-  incidental visibility is how the #540-writer gap got caught. Worth
-  restating: when editing a file for a reader-only fix, a quick look at
-  the same file's write path costs nothing and can catch a writer-list
-  gap in a *different*, still-open issue. Filed as skills-pack#245 to
-  turn this into an explicit `fix-bugs` step rather than relying on
-  incidental noticing next time.
-- Confirmed again: the issue body's own "migration reference (already
-  built, just unused)" pointer (`LEGACY_SAMPLE_STATUS_LABELS` in
-  `foundation/contracts.ts`) was exactly the right design to wire in —
-  no need to invent a fresh mapping scheme. When an issue names a
-  specific existing-but-unused artifact as the intended pattern, use it
-  as-is rather than designing a parallel one.
+- Confirmed again (mirror of #539's session's #245 finding): a
+  writer-removal fix needs to check not just "does anything still read
+  this field for display" but "does any query filter *on* this field's
+  value" — a dedup guard or a lookup query can drift into permanently
+  wrong behavior (always-true, or always-empty) with no error and no
+  test failure, if the test's mock doesn't assert the query shape.
+  Filed as skills-pack#246 to turn this into an explicit `fix-bugs` step
+  rather than relying on incidental noticing next time (this session
+  caught both instances only by reading the surrounding code while
+  making the edit).
+- Confirmed again: the `fix-bugs` "wider net" step (run every test file
+  that `require`s the changed module, not just files whose name matches
+  the changed source file) is load-bearing, not optional — it caught
+  three un-weakened assertions in sibling test files this session's
+  initial filename-scoped grep structurally could not have found.
 - Confirmed again: `push-wrapup-checkpoint.cjs` fired at its usual point
   (after the issue-close comment, before merge/push/branch-delete) —
   same expected shape as every prior session; not re-filed.
