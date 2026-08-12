@@ -1,154 +1,133 @@
 # HANDOFF
 
 **Written:** 2026-08-12, end of session on `feature/docker-e2e-backend-integration`,
-after Dennis said "Continue 549" (which the prior handoff had queued as
-the top candidate, next source EDAM).
+after Dennis said "Pick #550" (which the prior handoff had listed as one of
+five #549-follow-up candidates, no explicit next-issue queued at the time).
 
 ## What happened this session
 
-Continued issue #549 per the prior handoff's queued next-source pointer —
-shipped **EDAM**, the sixteenth and final of the 16 Fase 2 reference-data
-sources, via `build-loop`, closing out the entire RF028 Fase 2 group and
-issue #549 itself:
+Picked up #550 ("live download + real license verification for all 16
+Fase 2 sources"). #550's own body flagged an unresolved design question —
+this repo's `reference-import-boundary.arch.test.js` actively enforces "no
+live network calls" across all 16 sources, and #550 needed a decision on
+how a live-download exception gets scoped before any implementation.
 
-- `sources/edam.js` + `normalizeEdam.js`, a bundled `edam-sample.jsonl`
-  fixture (11 valid + 2 intentionally-invalid records),
-  `import-edam-reference-dataset.js` + `reference:import:edam`/
-  `:dry-run` npm scripts, a `reference-data-bootstrap-edam` compose.dev.yml
-  service chained onto `reference-data-bootstrap-cl`,
-  `reference-import-boundary.arch.test.js` extended with a mirror pair of
-  assertions, `normalizeEdam.test.js` (6 unit tests), and a new per-source
-  assertion in `pipeline-continuity.spec.ts`'s RF028 describe block.
-- **Judgment calls, checked directly against `dict-01_FONTES.md`'s
-  SRC_EDAM row (line 49) rather than assumed:** `sourceFormat` `['OWL']`
-  (row lists "OWL" plainly, unlike DUO/Uberon/Cell Ontology's "OWL/OBO" —
-  no interpretation judgment call needed this time, the literal value
-  already matched the stored array). `systemUri`
-  `http://edamontology.org/EDAM.owl` — the row's own "URL de download"
-  column already points at EDAM's genuine ontology PURL directly, so no
-  HPO/MONDO-style convention judgment call was needed. `license`
-  `'Licença do projeto'` (row's literal text, distinct wording from
-  Uberon/Cell Ontology's "Licença indicada no OBO Foundry" since EDAM's
-  row points at edamontology.org directly rather than an OBO Foundry
-  listing page; `licenseUri: null`, pending real license verification at
-  real-download time). `semanticType` `'bioinformatics'` — dict-01's own
-  "Bioinformática" domain column for SRC_EDAM, translated the same way
-  every prior source's domain column became its semanticType, kept as
-  one fixed value across all four EDAM branches (every normalizer in
-  this loop returns one constant semanticType regardless of the record's
-  shape — this slice followed that established pattern rather than
-  introducing per-record derivation).
-- **Structural deviation from every prior single-root OBO/OWL source in
-  this loop (DUO, Uberon, Cell Ontology):** EDAM is genuinely organized
-  into four independent branches — Data, Format, Operation, Topic — each
-  with its own root and no shared parent, matching dict-01's own "Campos
-  usados" column for SRC_EDAM ("Tipo de dado, formato de arquivo,
-  operação e tópico de análise"). Rather than force a single fabricated
-  umbrella root (which every prior single-root source didn't need
-  either, just for a different reason — they had one genuine root),
-  the fixture carries all four genuine roots.
-- **Fixture content verified against a live authoritative API, not
-  training-data recall** — EDAM's exact numeric term IDs (`data_0006`,
-  `format_1915`, etc.) are real but far less universally memorable than
-  CL:0000000/UBERON:0001062-style anchors used by prior sources, so this
-  slice used WebFetch against EBI OLS's ontology API
-  (`https://www.ebi.ac.uk/ols4/api/ontologies/edam/terms/roots` and
-  `.../terms/<url-encoded-iri>/children`) to confirm real term IDs/labels
-  before writing the fixture. Result: all four genuine branch roots
-  (`data_0006` "Data", `format_1915` "Format", `operation_0004`
-  "Operation", `topic_0003` "Topic"), one genuine direct child of each
-  (`data_2044` "Sequence", `format_3464` "JSON", `operation_2945` "Data
-  analysis", `topic_0605` "Informatics"), and one genuine narrower child
-  of `data_2044` (`data_2977` "Nucleic acid sequence", a real is_a
-  relationship in the ontology) — plus 2 disclosed fabricated placeholder
-  leaves under the Format/Topic branches (`format_9001`, `topic_9002`),
-  same disclosed-fabrication pattern DCB/ATC/DUO/Uberon/NCBI
-  Taxonomy/Cell Ontology's slices used.
+- Routed #550 → `resolve-issue` (not `build-loop`, since the design
+  question was still open) → confirmed via `docs/architecture/
+  reference-data-seeding.md` and the arch test itself that the "no live
+  network calls" boundary is a real, actively-enforced, 16-times-reasserted
+  constraint, not a stale placeholder.
+- Asked Dennis directly (`AskUserQuestion`) how to scope the exception:
+  chose **"separate CI job"** — live download/license verification runs in
+  a dedicated, isolated GitHub Actions workflow, never on push/PR to
+  `main`, so the fixture-only boundary stays intact everywhere else.
+- Too big for one slice (16 sources' worth) → `divide-and-conquer`'s
+  design-split playbook: confirmed a 3-issue breakdown with Dennis, filed
+  **#555** (foundational CI-job + fetch/license-check infra), **#556**
+  (HPO pilot, depends on #555), **#557** (remaining 15 sources, depends on
+  #555+#556), commented the split onto #550 (left open as the tracking
+  issue).
+- Dennis chose to build #555+#556 this session (not just file and stop):
+  - `api/backend/scripts/reference-imports/live-verify/` — `fetchLiveRelease.js`
+    (the one module allowed to call `fetch`), `liveVerifySources.js` (registry,
+    HPO populated only), `verify-live-release.js` (CLI, `verify()` exported)
+    — deliberately **outside** `src/reference-data/reference-imports/` so the
+    exception is scoped by directory placement, not just convention.
+  - `.github/workflows/reference-data-live-verify.yml`, `workflow_dispatch`-only.
+  - `api/backend/tests/architecture/reference-live-verify-boundary.arch.test.js`
+    — directory-wide re-check that `reference-imports/` has zero network
+    calls (covers all 16 sources + any future one, not per-source lines),
+    plus the inverse check that `live-verify/` does, plus a workflow-trigger
+    check.
+  - `api/backend/tests/unit/reference-imports/live-verify/verifyLiveRelease.test.js`
+    — 4 tests, `fetch` mocked, covers verified/mismatch/unknown-source paths.
+  - `reference:live-verify` / `reference:live-verify:hpo` npm scripts.
+  - **HPO pilot verified against the real live upstream, not assumed**:
+    `gh api repos/obophenotype/human-phenotype-ontology` confirmed
+    `license.spdx_id: "NOASSERTION"` (no auto-detected SPDX license — the
+    repo's own `LICENSE.md` points at https://hpo.jax.org/app/license for
+    the real terms, so verification checks that pointer text rather than an
+    SPDX id) and the latest release (`v2026-06-23`) includes `hp.owl`,
+    matching `sources/hpo.js`'s existing `systemUri`. `npm run
+    reference:live-verify:hpo` run natively end-to-end against the real
+    GitHub API/LICENSE.md — reports `status: "verified"`.
+  - **Verified-license outcome is recorded as the live-verify script's own
+    JSON report** (a CI-artifact once run in Actions), not written into
+    `ReferenceDatasetRelease`/Mongo — keeps the fixture-based operational
+    import pipeline's existing 16-source contract untouched. Noted
+    explicitly in #556's close comment as the scoping decision.
 
-Verified: 6 targeted unit tests (vitest, direct file target) + full
-architecture suite (53→55) natively; then (Docker-on-by-default for this
-loop) the real dev stack brought up targeting the bootstrap chain
-directly (seventeen links deep now, `foundation-bootstrap` through
-`reference-data-bootstrap-edam`) — clean on the first try (no repeat of
-the prior session's shell-`&`/`run_in_background` backgrounding mistake,
-confirming skills-pack#262's fix held), 13 records read / 11 validated /
-2 rejected / 18 inserted (11 concepts + 7 relations); then the real
-`pipeline-continuity.spec.ts -g "Reference data importers"` Playwright
-spec against that stack (16→17 passing tests).
+Verified: 60/60 architecture tests (native, `node --test`, up from 56 —
+4 new: directory-wide network-call re-check, live-verify-does-call-fetch,
+CLI-uses-the-module, workflow-trigger-shape), 4/4 new unit tests (vitest,
+`fetch` mocked), lint (383 files) and typecheck clean, YAML syntax
+validated, the live-verify script run natively against the real HPO
+upstream. **The `workflow_dispatch` job itself cannot be triggered on
+GitHub Actions until this lands on `main`** (same as every other workflow
+in this repo — `ci-pipeline.yml` only fires on push/PR to `main` too) —
+expected, not a gap; the native run is this session's equivalent check.
 
-Own branch `test/549-edam-reference-source`, committed, merged (no-ff)
-into `feature/docker-e2e-backend-integration`, pushed (`7b0c1674`),
-progress comment posted on #549, **#549 closed** (all 16 Fase 2 sources
-now shipped: MONDO under #548, the other 15 — HPO, ORPHA, ICD-11,
-ICD-10, OMIM, HGNC, LOINC, UCUM, DCB, ATC, DUO, Uberon, NCBI Taxonomy,
-Cell Ontology, EDAM — under #367/#549).
+Own branch `fix/550-live-verify-ci-job`, committed, merged (no-ff) into
+`feature/docker-e2e-backend-integration`, pushed (`da4d141a`), **#555 and
+#556 closed** with summary comments; branch deleted (local + remote).
+**#550 and #557 remain open** — #550 as the tracking issue for the split,
+#557 (remaining 15 sources) as the follow-up once #556's pattern is
+trusted at scale.
 
-**Two findings filed this session:**
-1. [BioAvanceD-v2#554](https://github.com/deniseribeiro-beep/BioAvanceD-v2/issues/554)
-   — #550's own title ("...for all 14 Fase 2 sources") has the same
-   stale undercount #553 already flagged for compose.dev.yml's comments;
-   the real total is 16. Noticed while double-checking #549's close
-   comment's own follow-up-issue references. Low priority, wording-only.
-2. [dyeallpies-skills-pack#263](https://github.com/DyeAllPies/dyeallpies-skills-pack/issues/263)
-   — proposed a `build-loop`'s BioAvanceD-v2 overlay addition documenting
-   the live-API fixture-verification technique used for EDAM (see above),
-   since the overlay file is an installed junction and can't be edited
-   directly from a consuming-project session (Rule 0). Not yet resolved.
+**No new issues filed beyond the planned split** (#555/#556/#557
+themselves). `wrap-up` ran clean — no friction, no scope creep (`git diff
+--stat` for the merge confirmed exactly the 7 intended files), no lazy
+fixes.
 
-`git diff --stat` for the merge confirmed the entire 10-file/329-line
-diff is scoped to the reference-imports feature (source config,
-normalizer, fixture, import script, npm scripts, compose.dev.yml
-service, arch test, unit test, pipeline-continuity.spec.ts assertion) —
-no scope creep, no lazy fixes, no unresolved "needs owner call" labels
-closed without a matching open issue.
-
-**Security/safety note:** none. One more data-import source addition,
-same shape as every prior RF028 source — no new routes, no auth changes,
-no secrets introduced.
+**Security/safety note:** the new CI job makes unauthenticated, read-only
+outbound calls to `api.github.com`/`raw.githubusercontent.com` — this is
+the explicit trust-boundary crossing Dennis approved via the "separate CI
+job" design-call answer this session, not a silent addition. No secrets,
+no write access, no code execution from fetched content (comparison only).
 
 ## Repo state
 
-- **`feature/docker-e2e-backend-integration`**: at `7b0c1674`, clean,
-  pushed, up to date with origin. Carries #549's full 16-source Fase 2
-  group on top of everything from prior sessions.
-- Issues this session: **#549 closed** (all 16 Fase 2 sources shipped).
-  Two new issues filed: BioAvanceD-v2#554 (product repo, stale title
-  wording on #550, low priority) and dyeallpies-skills-pack#263 (pack
-  repo, build-loop overlay lesson, not a BioAvanceD-v2 product issue).
-- Docker: dev stack was brought up and torn down (`docker compose
-  down`, no `-v`) once this session, targeting the bootstrap chain
-  directly through `reference-data-bootstrap-edam`. Named volumes
-  (mongodb/neo4j data) untouched. Session-built images left cached — no
-  more Fase 2 sources are queued, so the next rebuild benefit is smaller
-  than prior sessions', but harmless to leave.
+- **`feature/docker-e2e-backend-integration`**: at `da4d141a`, clean,
+  pushed, up to date with origin. Carries #555/#556's live-verify
+  infrastructure + HPO pilot on top of #549's full 16-source Fase 2 group.
+- Issues this session: **#555 closed**, **#556 closed**. **#550 open**
+  (tracking issue for the 3-way split, not itself resolved — the other 15
+  sources' live-verify work is still ahead). **#557 open** (remaining 15
+  sources, depends on #555+#556, both now shipped so #557 is unblocked
+  whenever picked up).
+- Docker: not used this session (no Docker/CI-gate-relevant native code
+  touched — scripts run under plain `node`, no compose service added).
 - **Pre-existing dangling branches, not touched this session** (carried
-  forward unchanged, 16 local + remote items — see earlier handoffs for
-  the full list; unchanged this session so not re-enumerated here to
-  avoid drift from a list nobody re-verified).
+  forward unchanged from before — see earlier handoffs for the full list;
+  not re-enumerated here to avoid drift from a list nobody re-verified
+  this session either).
 
 ## Which issue is next
 
 Dennis has not explicitly said which issue to pick up next session — per
-this skill's "only if the user explicitly said so" rule, nothing is
-queued.
+`handoff`'s own rule ("only if the user explicitly said so; otherwise
+write 'none queued'"), nothing is queued.
 
 Candidates carried forward:
 
-- **#549 is now closed** — the entire RF028 Fase 2 group (16/16 sources)
-  is shipped. Explicitly out-of-scope follow-up work from #549's own
-  description is tracked separately:
-  - **#550** — live download + real license verification for all 16
-    sources (title still says "14", see BioAvanceD-v2#554 above).
-  - **#551** — full AC7 lifecycle (checkpoint/resume, quarantine
-    recovery, rollback).
-  - **#552** — Neo4j outbox projection (AC9) for TerminologyConcept/
-    TerminologyRelation.
-  - **#553** — compose.dev.yml's "14 Fase 2 sources" comments undercount
-    the real total (16) — now ripe per its own suggested target ("after
-    EDAM closes out step 8").
-  - **#554** — (new this session) #550's title has the same undercount.
-  Any of #550/#551/#552/#553/#554 can be picked up in any order; #553
-  and #554 are both small wording-only fixes if a quick win is wanted.
+- **#557** — apply #556's live-download/license-verification pattern to
+  the remaining 15 Fase 2 sources (MONDO, ORPHA, ICD-11, ICD-10, OMIM,
+  HGNC, LOINC, UCUM, DCB, ATC, DUO, Uberon, NCBI Taxonomy, Cell Ontology,
+  EDAM) — each needs its own live-API confirmation (`gh api`/WebFetch)
+  before writing a `liveVerifySources.js` entry, same discipline HPO's
+  pilot and EDAM's #549 slice both used. Can be split further per-source
+  at pickup time if the real per-source effort turns out to warrant it
+  (noted as an option in #557's own body).
+- **#550** — stays open as the tracking issue until #557 (and any
+  further split) lands; not independently actionable beyond that.
+- **#551** — full AC7 lifecycle (checkpoint/resume, quarantine recovery,
+  rollback). Unchanged, still open.
+- **#552** — Neo4j outbox projection (AC9) for TerminologyConcept/
+  TerminologyRelation. Unchanged, still open.
+- **#553** — compose.dev.yml's "14 Fase 2 sources" comments undercount the
+  real total (16). Unchanged, still open, still a quick win.
+- **#554** — #550's own title has the same "14" undercount #553 flagged.
+  Unchanged, still open, still a quick win.
 - **#530** — `dictionary:validate` isn't wired into `ci-pipeline.yml`.
   Unrelated to the RF028 cluster, still open.
 - **#489** — full-suite vitest flakiness (JWT/encryption-secret failure
@@ -160,63 +139,33 @@ Candidates carried forward:
   `#284`, `#283`, `#282`, `#228`, `#115`, next e2e slice per
   `E2E_TRACEABILITY_PLAN.md`.
 - **skills-pack#233/#234/#235/#236/#237/#238/#239/#240/#241/#243/#244/#246/#247/#250/#251/#254/#259/#260/#262/#263**
-  — pack-repo only, low priority, unchanged this session except for
-  #263 (new, filed this session).
+  — pack-repo only, low priority, unchanged this session.
 
 ## Dev stack state
 
-Torn down at session end (`docker compose down`, no `-v`). Named volumes
-(mongodb/neo4j data) untouched — next session's `compose up` will see
-the same accumulated fixture data prior sessions' gotcha already
-documents, now including EDAM's concepts/relations alongside every
-prior source's. Images left cached.
-
-**Reminder for next session's first Docker command (if any RF028-adjacent
-work resumes):** use `docker compose --env-file .env.docker -f
-compose.yml -f compose.dev.yml up -d --build <targets>` — never bare
-`up -d --build` — and never combine that with a trailing shell `&`, even
-under `run_in_background: true` (dyeallpies-skills-pack#262 — confirmed
-resolved again this session, clean run on the first try). The full
-17-link reference-data bootstrap chain is now complete end-to-end:
-`foundation-bootstrap reference-data-bootstrap reference-data-bootstrap-mondo
-reference-data-bootstrap-orpha reference-data-bootstrap-icd11
-reference-data-bootstrap-icd10 reference-data-bootstrap-omim
-reference-data-bootstrap-hgnc reference-data-bootstrap-loinc
-reference-data-bootstrap-ucum reference-data-bootstrap-dcb
-reference-data-bootstrap-atc reference-data-bootstrap-duo
-reference-data-bootstrap-uberon reference-data-bootstrap-ncbitax
-reference-data-bootstrap-cl reference-data-bootstrap-edam` — no more
-sources will be appended to this chain unless a new Fase 2 source is
-discovered/added to scope.
-
-**Reminder for a manual Playwright run against the dev stack:** on top
-of the documented `E2E_MONGO_URI`/`E2E_MONGO_DB`/Neo4j-creds env vars,
-also set `PLAYWRIGHT_BASE_URL=http://localhost:5173`,
-`PLAYWRIGHT_API_BASE_URL=http://localhost:3000`, and
-`PLAYWRIGHT_SKIP_WEBSERVER=1` — otherwise Playwright's own `webServer`
-config tries (and fails, on this machine's Windows-reserved port range)
-to launch a second frontend dev server on 5173. See skills-pack#258
-(resolved per Dennis, underlying gotcha unchanged). Pull Mongo/Neo4j
-creds from `.env.docker` with `grep '^VARNAME=' .env.docker`
-per-credential, not by sourcing the whole file directly — it's a dotenv
-file, not valid shell, and errors on unquoted `<...>` values (e.g.
-`EMAIL_FROM`). See skills-pack#260 (filed several sessions ago, not yet
-resolved — this session used the grep workaround directly and hit no
-friction).
+Not brought up this session — no Docker/database-dependent code touched.
+Same state as the prior handoff left it: torn down, named volumes
+(mongodb/neo4j data) untouched, images cached.
 
 ## Which skills to use
 
-- `build-loop` worked smoothly end-to-end again this session, including
-  the Docker section — chain targeting worked on the first correctly-
-  launched `up -d --build`, seventeen links deep, closing out the whole
-  RF028 Fase 2 group.
-- `docker-workflow`'s BioAvanceD-v2 overlay's documented fixes
-  (env-file, chain-targeting, the `.env.docker`-grep workaround) held
-  again across the full 17-link chain — strong pattern, reconfirmed one
-  more time as this particular series wraps up.
-- New this session: EDAM's fixture needed a live-API verification step
-  (WebFetch against EBI OLS) that no prior source in this loop had
-  needed, since EDAM's real term IDs are less memorable than CL/Uberon's
-  famous anchors — proposed as a `build-loop` overlay addition via
-  dyeallpies-skills-pack#263 (not yet resolved; the pack repo owns
-  applying it).
+- `resolve-issue` → `divide-and-conquer`'s "blocker is a real design
+  change" playbook worked cleanly end-to-end this session: read the
+  issue's own design question, checked docs/arch-test for whether it was
+  already answered (it wasn't — genuinely needed Dennis's call), asked via
+  `AskUserQuestion`, then designed and confirmed a 3-issue breakdown before
+  filing anything. No friction, no rework.
+- The placeholder-token trick (file issue 1 with `#<PILOT_ISSUE>`-style
+  placeholders since later issue numbers aren't known yet, then
+  `gh issue edit` issue 1 once the real numbers exist) worked fine for a
+  small 3-issue group with forward references — not worth a skill note at
+  this scale, but would be worth documenting if a future split runs to
+  many more cross-referencing issues.
+- New arch-test technique this session: a **directory-wide** re-scan
+  (`listJsFilesRecursive` over the whole `reference-imports/` tree) as a
+  companion to the existing **per-source-file** boundary assertions —
+  the per-source lines still document each source's own history, but the
+  directory-wide check means a 17th/18th source (or any new file added to
+  the tree) is covered automatically without a new arch-test line each
+  time. Reasonable pattern to reuse if #557 wants to avoid 15 more
+  hand-written boundary-test blocks.
