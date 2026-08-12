@@ -302,3 +302,19 @@ test('NCBI Taxonomy source config only ever points at the bundled fixture file',
   assert.strictEqual(ncbitaxSource.retrievalUri.startsWith('file://'), true);
   assert.strictEqual(fs.existsSync(ncbitaxSource.fixturePath), true);
 });
+
+test('Cell Ontology importer reads a bundled fixture, not a live network source (#549 fifteenth slice)', () => {
+  const networkCallPatterns = [/\bfetch\(/, /require\(['"]https?['"]\)/, /require\(['"]axios['"]\)/, /\baxios\./, /XMLHttpRequest/];
+  for (const file of ['sources/cl.js', 'normalizeCl.js']) {
+    const contents = read(path.join(importDir, file));
+    for (const pattern of networkCallPatterns) {
+      assert.doesNotMatch(contents, pattern);
+    }
+  }
+});
+
+test('Cell Ontology source config only ever points at the bundled fixture file', () => {
+  const clSource = require(path.join(importDir, 'sources', 'cl.js'));
+  assert.strictEqual(clSource.retrievalUri.startsWith('file://'), true);
+  assert.strictEqual(fs.existsSync(clSource.fixturePath), true);
+});

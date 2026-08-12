@@ -398,6 +398,27 @@ services:
       reference-data-bootstrap-uberon:
         condition: service_completed_successfully
 
+  reference-data-bootstrap-cl:
+    # RF028 (#549): one-shot, idempotent Cell Ontology reference-data import —
+    # fifteenth of the Fase 2 sources (Plano Integrado §7.4 step 8,
+    # "Importar DUO, Uberon, NCBI Taxonomy, Cell Ontology e EDAM"), fourth
+    # of the final five-source group right after NCBI Taxonomy. Runs after
+    # reference-data-bootstrap-ncbitax completes, matching the documented
+    # recommended order. Idempotent via the run's idempotencyKey lookup;
+    # repeat runs are no-ops.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    command: npm run reference:import:cl
+    volumes:
+      - ./api/backend:/app
+      - backend_node_modules:/app/node_modules
+    env_file:
+      - .env.docker
+    depends_on:
+      reference-data-bootstrap-ncbitax:
+        condition: service_completed_successfully
+
   neo4j-projection-worker:
     # Drains graph_projection_outbox into Neo4j (#309, follow-up from RF023/#292)
     # — without this service, outbox rows written by consent.service.js
