@@ -29,6 +29,8 @@ const ncbitaxSource = require('./sources/ncbitax');
 const { normalizeRecord: normalizeNcbitaxRecord } = require('./normalizeNcbitax');
 const clSource = require('./sources/cl');
 const { normalizeRecord: normalizeClRecord } = require('./normalizeCl');
+const edamSource = require('./sources/edam');
+const { normalizeRecord: normalizeEdamRecord } = require('./normalizeEdam');
 
 /** RF028 first importer — see sources/hpo.js for why HPO and why a bundled sample. */
 async function runHpoImport(db, opts = {}) {
@@ -105,4 +107,9 @@ async function runClImport(db, opts = {}) {
   return runImport({ db, source: clSource, normalizeRecord: normalizeClRecord, ...opts });
 }
 
-module.exports = { runHpoImport, runMondoImport, runOrphaImport, runIcd11Import, runIcd10Import, runOmimImport, runHgncImport, runLoincImport, runUcumImport, runDcbImport, runAtcImport, runDuoImport, runUberonImport, runNcbitaxImport, runClImport };
+/** RF028 sixteenth and final importer — see sources/edam.js for why EDAM and why a bundled sample. */
+async function runEdamImport(db, opts = {}) {
+  return runImport({ db, source: edamSource, normalizeRecord: normalizeEdamRecord, ...opts });
+}
+
+module.exports = { runHpoImport, runMondoImport, runOrphaImport, runIcd11Import, runIcd10Import, runOmimImport, runHgncImport, runLoincImport, runUcumImport, runDcbImport, runAtcImport, runDuoImport, runUberonImport, runNcbitaxImport, runClImport, runEdamImport };

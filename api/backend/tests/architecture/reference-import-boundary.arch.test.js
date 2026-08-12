@@ -318,3 +318,19 @@ test('Cell Ontology source config only ever points at the bundled fixture file',
   assert.strictEqual(clSource.retrievalUri.startsWith('file://'), true);
   assert.strictEqual(fs.existsSync(clSource.fixturePath), true);
 });
+
+test('EDAM importer reads a bundled fixture, not a live network source (#549 sixteenth and final slice)', () => {
+  const networkCallPatterns = [/\bfetch\(/, /require\(['"]https?['"]\)/, /require\(['"]axios['"]\)/, /\baxios\./, /XMLHttpRequest/];
+  for (const file of ['sources/edam.js', 'normalizeEdam.js']) {
+    const contents = read(path.join(importDir, file));
+    for (const pattern of networkCallPatterns) {
+      assert.doesNotMatch(contents, pattern);
+    }
+  }
+});
+
+test('EDAM source config only ever points at the bundled fixture file', () => {
+  const edamSource = require(path.join(importDir, 'sources', 'edam.js'));
+  assert.strictEqual(edamSource.retrievalUri.startsWith('file://'), true);
+  assert.strictEqual(fs.existsSync(edamSource.fixturePath), true);
+});
