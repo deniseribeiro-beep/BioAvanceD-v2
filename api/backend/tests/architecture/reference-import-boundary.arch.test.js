@@ -148,3 +148,29 @@ test('large import scaffold no longer lists cid or icd10 as its own tokens (RF02
   assert.doesNotMatch(scaffold, /['"]cid['"]/);
   assert.doesNotMatch(scaffold, /['"]icd10['"]/);
 });
+
+test('OMIM importer reads a bundled fixture, not a live network source (#549 sixth slice)', () => {
+  const networkCallPatterns = [/\bfetch\(/, /require\(['"]https?['"]\)/, /require\(['"]axios['"]\)/, /\baxios\./, /XMLHttpRequest/];
+  for (const file of ['sources/omim.js', 'normalizeOmim.js']) {
+    const contents = read(path.join(importDir, file));
+    for (const pattern of networkCallPatterns) {
+      assert.doesNotMatch(contents, pattern);
+    }
+  }
+});
+
+test('OMIM source config only ever points at the bundled fixture file', () => {
+  const omimSource = require(path.join(importDir, 'sources', 'omim.js'));
+  assert.strictEqual(omimSource.retrievalUri.startsWith('file://'), true);
+  assert.strictEqual(fs.existsSync(omimSource.fixturePath), true);
+});
+
+// omim was the last token remaining in the scaffold's allowed-datasets set
+// (closing out the §7.4 step 4 group); now that it too has its own
+// operational script, the set is empty entirely, mirroring HPO/MONDO/
+// ORPHA/ICD-11/ICD-10's own removals.
+test('large import scaffold no longer lists omim as its own token (RF028 keeps OMIM a separate, operational script)', () => {
+  const scaffold = read(path.join(repoRoot, 'scripts', 'reference-imports', 'import-large-reference-dataset.js'));
+  assert.match(scaffold, /not implemented until data model is finalized/);
+  assert.doesNotMatch(scaffold, /['"]omim['"]/);
+});
