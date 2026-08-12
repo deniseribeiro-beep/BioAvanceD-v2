@@ -808,6 +808,30 @@ describe('sample.service', () => {
       ).rejects.toThrow(/obrigatória para retirada parcial/);
     });
 
+    // #541: BLOCKED_SPECIMEN_STATUSES doesn't (and can't safely, without
+    // breaking returnSample's un-deplete-on-return flow) include
+    // 'depleted', so a Total re-withdrawal on an already-depleted sample
+    // used to fall through the status gate. withdrawQty floored at 0
+    // (availableQty was already 0) so no negative balance resulted, but it
+    // silently "succeeded": a zero-quantity ledger entry plus an
+    // overwritten withdrawnAt/withdrawalResponsible/sampleDestination on
+    // the Sample document, with nothing actually withdrawn.
+    it('rejects a Total re-withdrawal on an already-depleted sample (#541)', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue(
+        existingSample({ specimenStatus: 'depleted', currentQuantity: 0 })
+      );
+
+      await expect(
+        sampleService.withdrawSample(db, 'sample-1', {
+          withdrawalType: 'Total',
+          withdrawalResponsible: 'Jane Doe',
+          linkedProject: 'ProjectX'
+        })
+      ).rejects.toThrow(/Quantidade indisponível/);
+      expect(db.collections.samples.updateOne).not.toHaveBeenCalled();
+    });
+
     // Regression per issue #252: withdrawSample's barcode-fallback lookup
     // used to call a method that doesn't exist on the class
     // (`getSpecimenByBarcode` instead of `getSampleByBarcode`), so a
