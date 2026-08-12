@@ -47,3 +47,27 @@ test('large import scaffold still excludes HPO from its allowed-datasets set (RF
   // of HPO in prose/comments explaining why it was removed.
   assert.doesNotMatch(scaffold, /['"]hpo['"]/);
 });
+
+test('MONDO importer reads a bundled fixture, not a live network source (#548 second slice)', () => {
+  const networkCallPatterns = [/\bfetch\(/, /require\(['"]https?['"]\)/, /require\(['"]axios['"]\)/, /\baxios\./, /XMLHttpRequest/];
+  for (const file of ['sources/mondo.js', 'normalizeMondo.js']) {
+    const contents = read(path.join(importDir, file));
+    for (const pattern of networkCallPatterns) {
+      assert.doesNotMatch(contents, pattern);
+    }
+  }
+});
+
+test('MONDO source config only ever points at the bundled fixture file', () => {
+  const mondoSource = require(path.join(importDir, 'sources', 'mondo.js'));
+  assert.strictEqual(mondoSource.retrievalUri.startsWith('file://'), true);
+  assert.strictEqual(fs.existsSync(mondoSource.fixturePath), true);
+});
+
+test('large import scaffold still excludes MONDO from its allowed-datasets set (RF028 keeps it a separate, operational script)', () => {
+  const scaffold = read(path.join(repoRoot, 'scripts', 'reference-imports', 'import-large-reference-dataset.js'));
+  assert.match(scaffold, /not implemented until data model is finalized/);
+  // Looks for the Set entry specifically (quoted lowercase), not any mention
+  // of MONDO in prose/comments explaining why it was removed.
+  assert.doesNotMatch(scaffold, /['"]mondo['"]/);
+});

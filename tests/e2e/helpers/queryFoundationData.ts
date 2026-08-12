@@ -79,3 +79,21 @@ export async function countTerminologyConcepts(): Promise<number> {
   const db = await getDb();
   return db.collection('terminologyConcepts').countDocuments();
 }
+
+/**
+ * #548: the generic countReferenceDatasetReleases()/countTerminologyConcepts()
+ * checks above are satisfied by HPO alone (#367) and don't prove any specific
+ * later source actually landed. This filters by datasetCode so a per-source
+ * slice (MONDO here, more to follow per #549) has its own provable assertion
+ * rather than riding on HPO's already-passing count.
+ */
+export async function countReferenceDatasetReleasesByDatasetCode(datasetCode: string): Promise<number> {
+  const db = await getDb();
+  return db.collection('referenceDatasetReleases').countDocuments({ datasetCode });
+}
+
+/** Same rationale as countReferenceDatasetReleasesByDatasetCode, for concepts — filtered by systemUri since TerminologyConcept doesn't carry datasetCode directly (dict-02_DICIONARIO.md's logical key is systemUri+code+version). */
+export async function countTerminologyConceptsBySystemUri(systemUri: string): Promise<number> {
+  const db = await getDb();
+  return db.collection('terminologyConcepts').countDocuments({ systemUri });
+}

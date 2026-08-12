@@ -7,6 +7,8 @@ import {
   countFoundationDataRuns,
   countReferenceDatasetReleases,
   countTerminologyConcepts,
+  countReferenceDatasetReleasesByDatasetCode,
+  countTerminologyConceptsBySystemUri,
   closeFoundationDb,
 } from './helpers/queryFoundationData';
 
@@ -145,6 +147,18 @@ test.describe('Reference data importers (RF028) — real backend', () => {
 
   test('imported terminology concepts are persisted and linked to a release', async () => {
     const concepts = await countTerminologyConcepts();
+    expect(concepts).toBeGreaterThan(0);
+  });
+
+  // #548: HPO alone (#367) already satisfies the two generic assertions
+  // above, so they can't prove MONDO specifically landed. This checks the
+  // MONDO release and its concepts by name, per §7.4 step 3 ("Importar
+  // MONDO e suas relações de doença").
+  test('the MONDO release and its terminology concepts are persisted', async () => {
+    const releases = await countReferenceDatasetReleasesByDatasetCode('MONDO');
+    expect(releases).toBeGreaterThan(0);
+
+    const concepts = await countTerminologyConceptsBySystemUri('http://purl.obolibrary.org/obo/mondo.owl');
     expect(concepts).toBeGreaterThan(0);
   });
 });
