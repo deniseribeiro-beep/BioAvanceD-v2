@@ -535,6 +535,16 @@ on the canonical `specimenStatus`/`QuarantineAction` model instead of a
 cosmetic field, that side effect has a larger blast radius than before;
 tracked as its own question, filed as #537.
 
+**Decision recorded 2026-08-12 (#537): `GET /:id/compliance-graph` stays
+a revalidate-and-persist endpoint — no split into a separate read/revalidate
+API.** The two rules above (never downgrade a stronger unrelated block;
+no duplicate `QuarantineAction` for a re-evaluation that lands on the same
+`specimenStatus`) already bound the blast radius this issue raised, and a
+GET/POST split would touch `sample.routes.js`, `SampleDetailsPage.tsx`
+(the only caller), and this route's tests for a behavior change judged
+not worth the API-contract churn. No code change; closing as confirmed,
+no change needed.
+
 **Also found while tracing #532** (not part of it — a separate legacy
 field with its own writers, unrelated to `release_status`): `Sample.js`'s
 `releaseStatus` (camelCase, schema default `'QUARANTINE'`) is a *third*
