@@ -275,6 +275,26 @@ services:
       reference-data-bootstrap-hgnc:
         condition: service_completed_successfully
 
+  reference-data-bootstrap-ucum:
+    # RF028 (#549): one-shot, idempotent UCUM reference-data import — ninth
+    # of the 14 Fase 2 sources (Plano Integrado §7.4 step 6, closing out
+    # the "LOINC e UCUM" pair right after LOINC). Runs after
+    # reference-data-bootstrap-loinc completes, matching the documented
+    # recommended order. Idempotent via the run's idempotencyKey lookup;
+    # repeat runs are no-ops.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    command: npm run reference:import:ucum
+    volumes:
+      - ./api/backend:/app
+      - backend_node_modules:/app/node_modules
+    env_file:
+      - .env.docker
+    depends_on:
+      reference-data-bootstrap-loinc:
+        condition: service_completed_successfully
+
   neo4j-projection-worker:
     # Drains graph_projection_outbox into Neo4j (#309, follow-up from RF023/#292)
     # — without this service, outbox rows written by consent.service.js

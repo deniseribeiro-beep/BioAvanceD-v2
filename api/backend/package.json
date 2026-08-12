@@ -62,6 +62,8 @@
     "reference:import:hgnc": "node scripts/reference-imports/import-hgnc-reference-dataset.js",
     "reference:import:loinc:dry-run": "node scripts/reference-imports/import-loinc-reference-dataset.js --dry-run",
     "reference:import:loinc": "node scripts/reference-imports/import-loinc-reference-dataset.js",
+    "reference:import:ucum:dry-run": "node scripts/reference-imports/import-ucum-reference-dataset.js --dry-run",
+    "reference:import:ucum": "node scripts/reference-imports/import-ucum-reference-dataset.js",
     "test:architecture": "node --test \"tests/architecture/**/*.arch.test.js\"",
     "test:unit:vitest": "vitest run",
     "test": "vitest run",

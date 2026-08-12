@@ -235,4 +235,16 @@ test.describe('Reference data importers (RF028) — real backend', () => {
     const concepts = await countTerminologyConceptsBySystemUri('http://loinc.org');
     expect(concepts).toBeGreaterThan(0);
   });
+
+  // #549: same rationale as the prior per-source assertions above — the
+  // generic checks can't prove UCUM specifically landed. Checks the UCUM
+  // release and its concepts by name, per §7.4 step 6, closing out the
+  // "LOINC e UCUM" pair right after LOINC.
+  test('the UCUM release and its terminology concepts are persisted', async () => {
+    const releases = await countReferenceDatasetReleasesByDatasetCode('UCUM');
+    expect(releases).toBeGreaterThan(0);
+
+    const concepts = await countTerminologyConceptsBySystemUri('http://unitsofmeasure.org');
+    expect(concepts).toBeGreaterThan(0);
+  });
 });
