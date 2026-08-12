@@ -334,7 +334,6 @@ class MongoStorageRepository {
         $set: {
           'storageLocation.boxId': boxObjId,
           'storageLocation.position': normalizedPosition,
-          status: 'AVAILABLE',
           updatedAt: new Date()
         }
       },
@@ -413,7 +412,6 @@ class MongoStorageRepository {
         $set: {
           'storageLocation.boxId': boxObjId,
           'storageLocation.position': lockedPosition,
-          status: 'AVAILABLE',
           updatedAt: new Date()
         }
       },
