@@ -744,7 +744,7 @@ class ImportService {
       return parsed;
     };
 
-    const participantIdRaw = this.getRowValue(row, ['participantId', 'participantId', 'patient_id', 'idPaciente']);
+    const participantIdRaw = this.getRowValue(row, ['participantId', 'patient_id', 'idPaciente']);
     const sampleTypeRaw = this.getRowValue(row, ['sampleType', 'tipoAmostra']);
     const sampleOriginRaw = this.getRowValue(row, ['sampleOrigin', 'origemAmostra']);
     const extractionRaw = this.getRowValue(row, ['extractionProtocol', 'protocoloExtracao']);
@@ -752,11 +752,11 @@ class ImportService {
     const qualityRaw = this.getRowValue(row, ['quality', 'qualidade']);
     const qualityScoreRaw = this.getRowValue(row, ['rcsScore', 'qualityScore', 'scoreQualidade']);
     const qualityCategoryRaw = this.getRowValue(row, ['scoreBasedGrade', 'qualityCategory', 'categoriaQualidade']);
-    const registrationRaw = this.getRowValue(row, ['registeredAt', 'registeredAt', 'dataRegistro']);
+    const registrationRaw = this.getRowValue(row, ['registeredAt', 'dataRegistro']);
     const locationRaw = this.getRowValue(row, ['locationID', 'locationId']);
     const linkedProjectRaw = this.getRowValue(row, ['linkedProject', 'projeto']);
-    const tcleRaw = this.getRowValue(row, ['consentTemplateId', 'consentTemplateId', 'consentTemplateId']);
-    const merkleRaw = this.getRowValue(row, ['merkleRoot', 'merkleRoot']);
+    const tcleRaw = this.getRowValue(row, ['consentTemplateId']);
+    const merkleRaw = this.getRowValue(row, ['merkleRoot']);
 
     const sprec = {
       matrixType: normalizeString(this.getRowValue(row, ['sprec_matrix_type', 'sprecMatrixType'])),
