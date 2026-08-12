@@ -190,3 +190,19 @@ test('HGNC source config only ever points at the bundled fixture file', () => {
   assert.strictEqual(hgncSource.retrievalUri.startsWith('file://'), true);
   assert.strictEqual(fs.existsSync(hgncSource.fixturePath), true);
 });
+
+test('LOINC importer reads a bundled fixture, not a live network source (#549 eighth slice)', () => {
+  const networkCallPatterns = [/\bfetch\(/, /require\(['"]https?['"]\)/, /require\(['"]axios['"]\)/, /\baxios\./, /XMLHttpRequest/];
+  for (const file of ['sources/loinc.js', 'normalizeLoinc.js']) {
+    const contents = read(path.join(importDir, file));
+    for (const pattern of networkCallPatterns) {
+      assert.doesNotMatch(contents, pattern);
+    }
+  }
+});
+
+test('LOINC source config only ever points at the bundled fixture file', () => {
+  const loincSource = require(path.join(importDir, 'sources', 'loinc.js'));
+  assert.strictEqual(loincSource.retrievalUri.startsWith('file://'), true);
+  assert.strictEqual(fs.existsSync(loincSource.fixturePath), true);
+});
